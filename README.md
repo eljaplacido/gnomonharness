@@ -45,10 +45,11 @@ gnomon/
 | **Rust** | `gnomon-edit` | `gnomon-edit` | 12 | ✅ |
 | **Rust** | `gnomon-exec` | `gnomon-exec` | 23 | ✅ |
 | **TypeScript** | `gnomon-natives` | — | 7 | ✅ Bindings |
-| **TypeScript** | `gnomon-core` | — | 32 | ✅ Agent loop |
+| **TypeScript** | `gnomon-core` | — | 59 | ✅ Agent loop + prompt |
 | **TypeScript** | `gnomon-cli` | `gnomon` | 9 | ✅ CLI shell |
+| **TypeScript** | `gnomon-tui` | — | 4 | ✅ Session viewer |
 
-**104 tests pass** — 46 Rust, 58 TypeScript. CI validates all contracts end-to-end.
+**109 tests pass** — 46 Rust, 63 TypeScript. CI validates all contracts end-to-end.
 
 ## Phased delivery
 

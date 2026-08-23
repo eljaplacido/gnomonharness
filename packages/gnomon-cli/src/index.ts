@@ -32,6 +32,7 @@ import {
 } from "gnomon-natives";
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { runTui } from "gnomon-tui";
 
 // ---------------------------------------------------------------------------
 // Argument parsing (minimal, no deps)
@@ -136,6 +137,10 @@ async function cmdSessionId(args: CliArgs): Promise<void> {
   } else {
     console.log("no-session");
   }
+}
+
+async function cmdTui(args: CliArgs): Promise<void> {
+  await runTui(args.dir);
 }
 
 async function cmdSession(args: CliArgs): Promise<void> {
@@ -302,6 +307,9 @@ async function main(): Promise<void> {
     case "prompt":
     case "run":
       await cmdPrompt(args);
+      break;
+    case "tui":
+      await cmdTui(args);
       break;
     default:
       console.error(`Unknown command: ${args.command}`);
