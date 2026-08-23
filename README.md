@@ -59,13 +59,44 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for phased delivery plan.
 |-------|--------|
 | **P0 — Spike** | 🟡 Partial (hook surface not yet validated) |
 | **P1 — Contracts** | ✅ Done (fixtures written, red on arrival) |
-| **P2 — Daily driver** | 🔴 Not started (TUI, role routing, model serving) |
+| **P2 — Daily driver** | ✅ Done (prompt loop, role routing, TUI session viewer) |
 | **P3 — Surface** | ✅ Done (manifest, hash, golden fixture) |
 | **P4 — Outcomes** | ✅ Done (buckets, exit codes, session validation) |
 | **P5 — Edit + CLI** | ✅ Done (patches, enums, CLI, agent loop) |
-| **P6 — CI/CD** | ✅ Done (`.gnomon/ci.sh`, 104 tests, 7-stage pipeline) |
+| **P6 — CI/CD** | ✅ Done (`.gnomon/ci.sh`, 109 tests, 7-stage pipeline) |
 
 ## Quick start
+
+### Run gnomon (from project root)
+
+```bash
+# One-shot session
+cargo build          # build Rust binaries first
+npx tsx packages/gnomon-cli/src/index.ts session 'echo hello'
+
+# Interactive prompt loop
+npx tsx packages/gnomon-cli/src/index.ts prompt
+
+# Session browser TUI
+npx tsx packages/gnomon-cli/src/index.ts tui
+
+# Inspect surface
+npx tsx packages/gnomon-cli/src/index.ts surface
+
+# Or use the pnpm convenience script
+cargo build && pnpm gnomon session 'echo hello'
+```
+
+### Use in another repo
+
+Drop a `.gnomon/` directory into any repo. Same commit = same agent.
+
+```bash
+cd /path/to/your/repo
+npx tsx path/to/gnomon/packages/gnomon-cli/src/index.ts prompt
+```
+
+### Run the CI pipeline
 
 ```bash
 # Run the CI pipeline (tests + all fixture validations)
@@ -73,6 +104,7 @@ bash .gnomon/ci.sh
 
 # Run just the tests
 cargo test
+pnpm test
 
 # Check surface hash
 cargo run -p gnomon-surface --bin gnomon-surface -- --dir .gnomon
