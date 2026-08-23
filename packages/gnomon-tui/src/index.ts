@@ -1,1 +1,2 @@
-export { runTui, TuiState, TuiMode, SessionMeta, discoverSessions } from "./tui.js";
+export { runTui, discoverSessions } from "./tui.js";
+export type { TuiState, TuiMode, SessionMeta } from "./tui.js";
