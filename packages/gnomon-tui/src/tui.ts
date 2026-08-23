@@ -79,7 +79,7 @@ function bucketColor(bucket: Bucket): string {
 }
 
 /** Discover session files from a directory */
-function discoverSessions(dir?: string): SessionMeta[] {
+export function discoverSessions(dir?: string): SessionMeta[] {
   const sessionsDir = dir || join(process.cwd(), "sessions");
   if (!existsSync(sessionsDir)) return [];
 
