@@ -1,0 +1,108 @@
+# Roadmap — gnomon
+
+Phased delivery. Each phase: specify → contract → **red fixtures** → implement → verify.
+
+## P0 — Spike (day 1–2)
+
+**Goal:** Validate the extend-vs-embed decision and serving stack.
+
+- [ ] Create repo, push to remote (not tidiness — a project whose revisions
+      exist only on one machine cannot be depended on)
+- [ ] Verify `pi-agent-core` + `pi-ai` hook surfaces:
+  - [ ] Can hooks intercept tool *definitions*, not just tool results?
+  - [ ] If not: hooks cannot reach tool definitions → must Embed, not Extend
+  - [ ] Record the finding with its falsification condition
+- [ ] Build pi packages on aarch64/DGX OS
+- [ ] Choose local serving stack by what actually builds:
+  - [ ] vLLM → behind OpenAI-compatible endpoint?
+  - [ ] llama.cpp → ggml/gguf serving?
+  - [ ] Ollama → :11434?
+  - [ ] Record the reading as a dated finding, not a preference
+- [ ] Record the surface hash of whatever agent you use to build gnomon
+      at the first commit. Keep it in the repo.
+
+**Done when:** Hook surface confirmed OR embed decision recorded. Serving
+stack chosen and builds.
+
+**Wrong if:** Hooks cannot reach tool definitions and we didn't record the
+falsification condition. Or we picked a serving stack that doesn't build.
+
+## P1 — Contracts + red fixtures (day 3–5)
+
+**Goal:** Four contracts written and versioned; `conformance/` fixtures committed and **failing**.
+
+- [ ] Exit codes contract + `conformance/exit_codes.json` fixture (red)
+- [ ] Manifest contract + `conformance/manifest_golden.json` fixture (red)
+- [ ] Enumerations contract + `conformance/enumerations_schema.json` fixture (red)
+- [ ] Session record contract + `conformance/session_golden.json` fixture (red)
+
+**Done when:** Fixtures written and failing because nothing implements them yet.
+
+**Wrong if:** Fixtures written after the code, or green on arrival.
+
+## P2 — Daily driver (week 1–2)
+
+**Goal:** TUI, sessions, `.gnomon/` resolution with **no** home-directory path,
+role routing, `hashline` edit format. You stop reaching for other agents.
+
+- [ ] TS core: agent loop, extension host, session model
+- [ ] CLI: `gnomon run`, `gnomon session`, `gnomon enumerations`
+- [ ] `.gnomon/` resolver: reads from working repo, no `~/.gnomon/` path
+- [ ] Role routing: `plan` → frontier, `implement` → large local, `critique`
+      → separate context, `smol` → small local
+- [ ] TUI: basic session view, step listing, outcome buckets
+- [ ] Edit format: `hashline` (AST format from P0 finding)
+- [ ] Manifest emitted every turn, re-asserted on changes
+
+**Done when:** A machine-scoped path survives nowhere in resolution.
+
+**Wrong if:** Any code path reads from `~/.gnomon/` or `$XDG_CONFIG_HOME`.
+
+## P3 — `gnomon-surface` (week 3)
+
+**Goal:** Static aarch64 binary. P1's manifest fixtures green byte-for-byte.
+
+- [ ] Rust crate: resolve `.gnomon/` tree, compute surface hash
+- [ ] `gnomon-surface manifest` → JSON with `build`, `surface_hash`, `sources`
+- [ ] Sources sorted by path; present + absent tracked (null for absent)
+- [ ] Build static aarch64 binary with `musl` target or aarch64 Docker
+- [ ] CI: run on known tree, diff output against golden fixture byte-for-byte
+- [ ] Assert manifest every turn in the agent loop
+
+**Done when:** Two runs over the same tree produce identical manifests.
+
+**Wrong if:** Any non-determinism in hash computation (unsorted maps, timestamps).
+
+## P4 — Outcomes (week 4)
+
+**Goal:** Three buckets recorded per step. Exit fixtures round-trip green.
+
+- [ ] Step outcome model: `native_code` → `bucket` mapping
+- [ ] Exit code handling: 0–4 → result/refusal, 10–13 → apparatus_failure
+- [ ] Session record: manifest + ordered steps with bucket per step
+- [ ] No composite verdict: carry set of outcomes, let reader decide
+- [ ] Every attempt recorded, not collapsed into one clean step
+- [ ] CI: exit code fixtures round-trip through the full pipeline
+
+**Done when:** A refusal is never recorded as a failure anywhere.
+
+**Wrong if:** `failed` (1) and `refused_by_model` (2) both map to `result`.
+
+## P5 — One-shot mode (week 5)
+
+**Goal:** `gnomon -p` for scripting and CI.
+
+- [ ] `gnomon -p surface` → print surface hash
+- [ ] `gnomon -p manifest` → print manifest JSON
+- [ ] `gnomon -p enumerations` → print enumerations JSON
+- [ ] `gnomon -p session-id` → print current session ID
+- [ ] Non-interactive exit: no TUI, just print and exit
+
+---
+
+## Two things on day one
+
+1. **Push the repo before the first real commit.** Retrofitting that is worse
+   than it sounds.
+2. **Record the surface of whatever agent you use to build this.** Take a dated
+   hash of that agent's instruction files at the first commit.
