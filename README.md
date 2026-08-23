@@ -35,16 +35,16 @@ gnomon/
 
 ## Current status
 
-| Crate | Binary | Tests | Status |
-|-------|--------|-------|--------|
-| `gnomon-surface` | `gnomon-surface`, `gnomon-enums` | 7 | ✅ Rust impl |
-| `gnommon-edit` | `gnomon-edit` | 12 | ✅ Rust impl |
-| `gnomon-exec` | `gnomon-exec` | 23 | ✅ Rust impl |
-| `gnomon-core` | — | 0 | 📋 Scaffolded (TS) |
-| `gnomon-cli` | — | 0 | 📋 Scaffolded (TS) |
-| `gnomon-natives` | — | 0 | 📋 Scaffolded (TS) |
+| Layer | Crate | Binary | Tests | Status |
+|-------|-------|--------|-------|--------|
+| **Rust** | `gnomon-surface` | `gnomon-surface`, `gnomon-enums` | 7 | ✅ |
+| **Rust** | `gnomon-edit` | `gnomon-edit` | 12 | ✅ |
+| **Rust** | `gnomon-exec` | `gnomon-exec` | 23 | ✅ |
+| **TypeScript** | `gnomon-natives` | — | 7 | ✅ Bindings |
+| **TypeScript** | `gnomon-core` | — | 32 | ✅ Agent loop |
+| **TypeScript** | `gnomon-cli` | `gnomon` | 9 | ✅ CLI shell |
 
-**46 tests pass** across 3 Rust crates. CI validates all contracts.
+**94 tests pass** — 46 Rust, 48 TypeScript. CI validates all contracts end-to-end.
 
 ## Phased delivery
 
@@ -54,11 +54,11 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for phased delivery plan.
 |-------|--------|
 | **P0 — Spike** | 🟡 Partial (hook surface not yet validated) |
 | **P1 — Contracts** | ✅ Done (fixtures written, red on arrival) |
-| **P2 — Daily driver** | 🔴 Not started (agent loop, TUI, role routing) |
+| **P2 — Daily driver** | 🔴 Not started (TUI, role routing, model serving) |
 | **P3 — Surface** | ✅ Done (manifest, hash, golden fixture) |
 | **P4 — Outcomes** | ✅ Done (buckets, exit codes, session validation) |
-| **P5 — Edit + CLI** | ✅ Done (patches, enums, one-shot mode) |
-| **P6 — CI/CD** | ✅ Done (`.gnomon/ci.sh`, 6-stage pipeline) |
+| **P5 — Edit + CLI** | ✅ Done (patches, enums, CLI, agent loop) |
+| **P6 — CI/CD** | ✅ Done (`.gnomon/ci.sh`, 94 tests, 6-stage pipeline) |
 
 ## Quick start
 

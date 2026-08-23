@@ -105,21 +105,25 @@ role routing, `hashline` edit format. You stop reaching for other agents.
 
 **Wrong if:** A patch succeeds when the target content has changed since spec.
 
-## P5 — One-shot mode (week 5)
+## P5 — One-shot mode + CLI (week 5)
 
-**Goal:** `gnomon -p` for scripting and CI.
+**Goal:** `gnomon` CLI for scripting and CI.
 
 - [x] `gnomon-enums` → print enumerations JSON
 - [x] `gnomon-surface hash` → print surface hash
 - [x] `gnomon-surface manifest` → print manifest JSON
+- [x] `gnomon session <cmd>` → run commands as a session
+- [x] `gnomon apply <patchset>` → apply patches
+- [x] `gnomon simulate <patchset>` → dry-run patches
+- [x] `gnomon prompt` → interactive mode (stub)
+- [x] Argument parsing with --dir flag
 - [ ] `gnomon -p session-id` → print current session ID
-- [ ] Non-interactive exit: no TUI, just print and exit
 
 ## P6 — CI/CD (week 6)
 
 **Goal:** `.gnomon/ci.sh` validates all contracts end-to-end.
 
-- [x] Run all tests across all crates
+- [x] Run all tests across all crates (46 Rust + 48 TS = 94)
 - [x] Manifest golden fixture match
 - [x] Enumerations schema validation
 - [x] Session golden fixture validation
