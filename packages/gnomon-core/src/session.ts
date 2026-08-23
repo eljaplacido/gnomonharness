@@ -5,7 +5,8 @@
  * Mirrors the Rust gnomon-exec SessionRecord for cross-language conformance.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import { GnomonConfig } from "./config.js";
 
 // ---------------------------------------------------------------------------
@@ -259,7 +260,6 @@ export class SessionManager {
    * @param filepath Output path
    */
   save(filepath: string): void {
-    const { writeFileSync } = require("node:fs");
     writeFileSync(filepath, this.toJSON());
   }
 }
@@ -303,7 +303,6 @@ export function validateSession(
  * Steps must be in order — reordering changes the hash.
  */
 export function hashSteps(steps: SessionStep[]): string {
-  const { createHash } = require("node:crypto");
   const hash = createHash("sha256");
 
   for (const step of steps) {

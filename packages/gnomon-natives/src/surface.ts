@@ -5,9 +5,14 @@
  * manifest generation, hash computation, and path listing.
  */
 
-import { spawnSync, SpawnSyncReturns } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { execSync } from "node:child_process";
+import { readFileSync, existsSync, statSync } from "node:fs";
+import { join, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const VERSION = "0.1.0";
 
@@ -48,7 +53,6 @@ function findBinary(name: string): string {
     const resolved = resolve(override);
     // If it looks like a directory (ends without .exe or known extension), append name
     const candidate = join(resolved, name);
-    const { existsSync } = require("node:fs");
     if (existsSync(candidate)) return candidate;
     // Otherwise use override as-is
     if (existsSync(resolved)) return resolved;
@@ -57,7 +61,7 @@ function findBinary(name: string): string {
   // 2. Check target/debug for dev builds
   const debugPath = join(__dirname, "..", "..", "target", "debug", name);
   try {
-    const stat = require("node:fs").statSync(debugPath);
+    const stat = statSync(debugPath);
     if (stat.isFile()) return debugPath;
   } catch {
     // not found — try next
@@ -66,18 +70,22 @@ function findBinary(name: string): string {
   // 3. Check target/release for release builds
   const releasePath = join(__dirname, "..", "..", "target", "release", name);
   try {
-    const stat = require("node:fs").statSync(releasePath);
+    const stat = statSync(releasePath);
     if (stat.isFile()) return releasePath;
   } catch {
     // not found — try next
   }
 
   // 4. Check PATH (system install)
-  const which = require("node:child_process").execSync(
-    `which ${name}`,
-    { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] }
-  ).trim();
-  if (which) return which;
+  try {
+    const which = execSync(
+      `which ${name}`,
+      { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] }
+    ).trim();
+    if (which) return which;
+  } catch {
+    // not in PATH
+  }
 
   throw new Error(
     `gnomon binary not found: "${name}". ` +

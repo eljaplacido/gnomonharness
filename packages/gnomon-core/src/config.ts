@@ -5,7 +5,7 @@
  * No TUI deps — pure config + validation.
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -200,7 +200,6 @@ function loadToml<T = Record<string, unknown>>(
       return {} as T;
     }
 
-    const { readdirSync } = require("node:fs");
     const files = readdirSync(profilesDir)
       .filter((f: string) => f.endsWith(".toml"))
       .sort();
