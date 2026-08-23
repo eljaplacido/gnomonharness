@@ -204,7 +204,7 @@ export class SessionManager {
         stderr += data.toString();
       });
 
-      proc.on("close", (code) => {
+      proc.on("close", (code: number | null) => {
         resolve({ code, stdout, stderr });
       });
     });

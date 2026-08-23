@@ -235,7 +235,7 @@ export function loadConfig(root?: string): GnomonConfig {
     config: loadToml<Config>(gnomonDir, "config.toml"),
     policy: loadToml<Policy>(gnomonDir, "policy.toml"),
     // roles.toml has [roles.X] headers → parseToml wraps in {roles: {...}}
-    roles: (loadToml<Record<string, unknown>>(gnomonDir, "roles.toml") as Record<string, unknown>).roles ?? {},
+    roles: ((loadToml<Record<string, unknown>>(gnomonDir, "roles.toml") as Record<string, unknown>).roles ?? {}) as Roles,
     profiles: loadToml<Profiles>(gnomonDir, "profiles") as unknown as Profiles,
     tools: loadToml<ToolsDef>(gnomonDir, "tools.toml"),
     // system.md is plain text, not TOML — read directly

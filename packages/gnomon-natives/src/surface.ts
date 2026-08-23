@@ -154,7 +154,7 @@ export function listPaths(dir?: string): string[] {
   const output = result.stdout?.toString().trim() ?? "";
   if (!output) return [];
 
-  return output.split("\n").filter((p) => p.trim().length > 0);
+  return output.split("\n").filter((p: string) => p.trim().length > 0);
 }
 
 // ---------------------------------------------------------------------------

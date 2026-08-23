@@ -19,6 +19,7 @@ import {
   Bucket,
   validateSession,
   Manifest,
+  defaultExitCodeMap,
 } from "./session.js";
 
 // ---------------------------------------------------------------------------

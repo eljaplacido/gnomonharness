@@ -21,7 +21,6 @@ import {
   Manifest,
   runPromptLoop,
 } from "gnomon-core";
-} from "gnomon-core";
 import {
   manifest as surfaceManifest,
   surfaceHash,
@@ -29,6 +28,7 @@ import {
   listPaths as nativeListPaths,
   applyPatchset,
   simulatePatch,
+  Enumerations,
 } from "gnomon-natives";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -215,7 +215,7 @@ Commands:
     Interactive agent loop — reads stdin, infers role, calls model
 
   run
-    Alias for `prompt`
+    Alias for \`prompt\`
 
 One-shot mode: gnomon <command>
 Interactive mode: gnomon prompt
