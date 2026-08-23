@@ -2,8 +2,8 @@
 
 ## Dev workflow
 
-- Python 3.12, ruff + black + mypy strict.
-- TS 5.x, pnpm, biome for lint/format.
+- Rust 1.82+, `cargo fmt` + `cargo clippy` + `cargo test`.
+- TS 5.x, pnpm, `vitest` for tests.
 - One PR = one slice of the roadmap. Keep diffs reviewable.
 - Every new contract change lands with (a) a fixture, (b) a test. No orphan contracts.
 
@@ -13,13 +13,13 @@
 # Install dependencies
 pnpm install
 
-# Build all packages
-pnpm build
+# Build all Rust crates
+cargo build --release
 
-# Run Rust crates
-cd crates/gnomon-surface && cargo build --release
-cd ../gnomon-edit && cargo build --release
-cd ../gnomon-exec && cargo build --release
+# Build TS packages
+cd packages/gnomon-core && pnpm build
+cd ../gnomon-natives && pnpm build
+cd ../gnomon-cli && pnpm build
 ```
 
 ## Running conformance tests

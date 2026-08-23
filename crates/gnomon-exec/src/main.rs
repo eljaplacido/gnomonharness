@@ -172,7 +172,7 @@ pub enum ExecError {
 // Step execution
 // ─────────────────────────────────────────────
 
-pub fn spawn_step(cmd: &str, _timeout_ms: u64, _exit_map: &ExitCodeMap) -> Result<StepResult, ExecError> {
+pub fn spawn_step(cmd: &str, timeout_ms: u64, _exit_map: &ExitCodeMap) -> Result<StepResult, ExecError> {
     let start = Instant::now();
 
     let parts: Vec<&str> = cmd.split_whitespace().collect();
@@ -191,10 +191,23 @@ pub fn spawn_step(cmd: &str, _timeout_ms: u64, _exit_map: &ExitCodeMap) -> Resul
             source: e,
         })?;
 
+    // Enforce timeout: wait in a separate thread, kill if exceeded
+    let child_handle = child.id();
+    let timeout_thread = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(timeout_ms));
+        // Try to kill the process tree
+        let _ = Command::new("pkill")
+            .args(["-P", &child_handle.to_string()])
+            .spawn();
+    });
+
     let status = match child.wait() {
         Ok(s) => s,
         Err(_) => return Err(ExecError::StepFailure("child wait failed".into())),
     };
+
+    // Join the timeout thread (it may or may not have fired)
+    let _ = timeout_thread.join();
 
     let duration_ms = start.elapsed().as_millis() as u64;
 

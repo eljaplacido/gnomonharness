@@ -19,12 +19,12 @@ import {
   SessionManager,
   resolveGnomonDir,
   Manifest,
-  Enumerations,
 } from "gnomon-core";
 import {
   manifest as surfaceManifest,
   surfaceHash,
   enumerations,
+  listPaths as nativeListPaths,
   applyPatchset,
   simulatePatch,
 } from "gnomon-natives";
@@ -87,11 +87,10 @@ async function cmdSurface(args: CliArgs): Promise<void> {
     const h = surfaceHash(dir);
     console.log(h);
   } else if (args.subcommand === "paths") {
-    // List paths from surface
-    const config = loadConfig(dir);
-    const entries = config.sources ?? [];
-    for (const e of entries) {
-      console.log(e.path);
+    // List paths from native surface
+    const paths = nativeListPaths(dir);
+    for (const p of paths) {
+      console.log(p);
     }
   } else {
     console.error("Unknown surface subcommand:", args.subcommand);

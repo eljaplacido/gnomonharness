@@ -8,7 +8,7 @@
  * - Enumerations: contract schema access
  *
  * All binaries are located via PATH, target/debug, target/release,
- * or the GNONOM_BIN_OVERRIDE environment variable.
+ * or the GNOMON_BIN_OVERRIDE environment variable.
  */
 
 export {

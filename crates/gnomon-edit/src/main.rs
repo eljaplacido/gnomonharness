@@ -122,10 +122,9 @@ fn sha256_str(s: &str) -> String {
 /// Find all non-overlapping matches of a pattern in text.
 /// Returns (matched_text, start_pos, end_pos) tuples.
 fn find_matches(text: &str, pattern: &str, mode: &str) -> Result<Vec<(String, usize, usize)>, EditError> {
-    let re = regex::Regex::new(pattern)
-        .map_err(|e| EditError::InvalidPatch { reason: format!("invalid regex: {}", e) })?;
-
     let matches: Vec<(String, usize, usize)> = if mode == "regex" {
+        let re = regex::Regex::new(pattern)
+            .map_err(|e| EditError::InvalidPatch { reason: format!("invalid regex: {}", e) })?;
         re.find_iter(text)
             .map(|m| (m.as_str().to_string(), m.start(), m.end()))
             .collect()
@@ -398,16 +397,34 @@ fn main() {
         std::process::exit(1);
     }
 
-    let repo_root = Path::new(".");
+    let mut repo_root = Path::new(".");
+    let mut i = 2;
 
-    match args[1].as_str() {
+    // Parse flags first (before command dispatch)
+    while i < args.len() {
+        match args[i].as_str() {
+            "--dir" => {
+                i += 1;
+                if i < args.len() {
+                    repo_root = Path::new(&args[i]);
+                }
+            }
+            _ => break,
+        }
+        i += 1;
+    }
+
+    let command = if i < args.len() { &args[i] } else { "" };
+    let args_start = i.saturating_add(1); // first arg after command
+
+    match command {
         "simulate" => {
-            if args.len() < 3 {
-                eprintln!("Usage: gnomon-edit simulate <patch.json>");
+            if args_start >= args.len() {
+                eprintln!("Usage: gnomon-edit simulate <patch.json> [--dir <path>]");
                 std::process::exit(1);
             }
             let patch: Patch = serde_json::from_str(
-                &fs::read_to_string(&args[2]).unwrap(),
+                &fs::read_to_string(&args[args_start]).unwrap(),
             ).unwrap();
             let result = simulate_patch(&patch, repo_root);
             match result {
@@ -424,11 +441,11 @@ fn main() {
             }
         }
         "apply" => {
-            if args.len() < 3 {
-                eprintln!("Usage: gnomon-edit apply <patches.json>");
+            if args_start >= args.len() {
+                eprintln!("Usage: gnomon-edit apply <patches.json> [--dir <path>]");
                 std::process::exit(1);
             }
-            let content = fs::read_to_string(&args[2]).unwrap();
+            let content = fs::read_to_string(&args[args_start]).unwrap();
             let patchset: PatchSet = serde_json::from_str(&content).unwrap();
             let result = apply_patches(&patchset, repo_root);
             let json = serde_json::to_string_pretty(&result).unwrap();
@@ -438,12 +455,12 @@ fn main() {
             }
         }
         "diff" => {
-            if args.len() < 3 {
-                eprintln!("Usage: gnomon-edit diff <patch.json>");
+            if args_start >= args.len() {
+                eprintln!("Usage: gnomon-edit diff <patch.json> [--dir <path>]");
                 std::process::exit(1);
             }
             let patch: Patch = serde_json::from_str(
-                &fs::read_to_string(&args[2]).unwrap(),
+                &fs::read_to_string(&args[args_start]).unwrap(),
             ).unwrap();
             let result = simulate_patch(&patch, repo_root);
             match result {
@@ -466,11 +483,11 @@ fn main() {
             }
         }
         "validate" => {
-            if args.len() < 3 {
-                eprintln!("Usage: gnomon-edit validate <patches.json>");
+            if args_start >= args.len() {
+                eprintln!("Usage: gnomon-edit validate <patches.json> [--dir <path>]");
                 std::process::exit(1);
             }
-            let content = fs::read_to_string(&args[2]).unwrap();
+            let content = fs::read_to_string(&args[args_start]).unwrap();
             let patchset: PatchSet = serde_json::from_str(&content).unwrap();
             let mut valid = true;
             for patch in &patchset.patches {

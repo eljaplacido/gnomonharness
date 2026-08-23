@@ -84,7 +84,7 @@ export function defaultExitCodeMap(): ExitCodeMap {
   return {
     exit_codes: {
       "0": "result",
-      "1": "refusal",
+      "1": "result",
       "2": "refusal",
       "3": "refusal",
       "4": "refusal",

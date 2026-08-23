@@ -8,5 +8,5 @@ const __dirname = dirname(__filename);
 const rustBinOverride = join(
   __dirname, "..", "..", "target", "debug"
 );
-console.error(`[vitest-setup] GNONOM_BIN_OVERRIDE = ${rustBinOverride}`);
-process.env.GNONOM_BIN_OVERRIDE = rustBinOverride;
+console.error(`[vitest-setup] GNOMON_BIN_OVERRIDE = ${rustBinOverride}`);
+process.env.GNOMON_BIN_OVERRIDE = rustBinOverride;

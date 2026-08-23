@@ -17,8 +17,10 @@
 
 ### Phases
 
-- P0: ❌ Not started
-- P1: ❌ Not started
-- P2: ❌ Not started
-- P3: ❌ Not started
-- P5: ❌ Not started
+- P0: 🟡 Partial (hook surface not yet validated)
+- P1: ✅ Done (fixtures written, red on arrival)
+- P2: 🔴 Not started (TUI, role routing, model serving)
+- P3: ✅ Done (manifest, hash, golden fixture)
+- P4: ✅ Done (buckets, exit codes, session validation)
+- P5: ✅ Done (patches, enums, CLI, agent loop)
+- P6: ✅ Done (`.gnomon/ci.sh`, 94 tests, 6-stage pipeline)

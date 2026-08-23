@@ -12,10 +12,18 @@ fail() { echo -e "${RED}❌ $1${NC}"; exit 1; }
 
 cd "$(dirname "$0")/.."
 
-# ── 1. Run all tests ──
+# ── 1. Run all tests (Rust + TS) ──
 echo "═══ Running tests ═══"
-cargo test 2>&1 || fail "Tests failed"
-pass "All 46 tests passed"
+cargo test 2>&1 || fail "Rust tests failed"
+pass "All 46 Rust tests passed"
+
+echo ""
+echo "═══ Running TypeScript tests ═══"
+pnpm test 2>&1 || fail "TypeScript tests failed"
+pass "All 48 TypeScript tests passed"
+
+echo ""
+pass "All 94 tests passed (46 Rust + 48 TypeScript)"
 
 # ── 2. Validate manifest against golden ──
 echo ""

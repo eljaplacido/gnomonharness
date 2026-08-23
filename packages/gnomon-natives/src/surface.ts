@@ -41,9 +41,9 @@ export interface Enumerations {
 // ---------------------------------------------------------------------------
 
 function findBinary(name: string): string {
-  // 1. Check GNONOM_BIN_OVERRIDE env var (for testing)
+  // 1. Check GNOMON_BIN_OVERRIDE env var (for testing)
   //    Can be a full path to the binary OR a directory containing it
-  const override = process.env.GNONOM_BIN_OVERRIDE;
+  const override = process.env.GNOMON_BIN_OVERRIDE;
   if (override) {
     const resolved = resolve(override);
     // If it looks like a directory (ends without .exe or known extension), append name
@@ -81,7 +81,7 @@ function findBinary(name: string): string {
 
   throw new Error(
     `gnomon binary not found: "${name}". ` +
-    "Set GNONOM_BIN_OVERRIDE to point to the binary."
+    "Set GNOMON_BIN_OVERRIDE to point to the binary."
   );
 }
 
@@ -313,7 +313,7 @@ export function runSessionStep(
   const execBin = findBinary("gnomon-exec");
   const result = spawnSync(
     execBin,
-    ["step", command],
+    ["step", "--cmd", command],
     {
       encoding: "utf-8",
       maxBuffer: 10 * 1024 * 1024,

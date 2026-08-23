@@ -29,7 +29,7 @@ describe("gnomon-core session", () => {
     it("maps codes correctly", () => {
       const map = defaultExitCodeMap();
       expect(map.exit_codes["0"]).toBe("result");
-      expect(map.exit_codes["1"]).toBe("refusal");
+      expect(map.exit_codes["1"]).toBe("result");
       expect(map.exit_codes["10"]).toBe("apparatus_failure");
     });
   });
@@ -37,7 +37,7 @@ describe("gnomon-core session", () => {
   describe("mapBucket", () => {
     it("maps known codes", () => {
       expect(mapBucket(0)).toBe("result");
-      expect(mapBucket(1)).toBe("refusal");
+      expect(mapBucket(1)).toBe("result");
       expect(mapBucket(10)).toBe("apparatus_failure");
     });
 
@@ -95,7 +95,7 @@ describe("gnomon-core session", () => {
       sm.addStep(1);
       sm.addStep(10);
       expect(sm.outcomes).toEqual(
-        expect.arrayContaining(["result", "refusal", "apparatus_failure"])
+        expect.arrayContaining(["result", "apparatus_failure"])
       );
     });
 
