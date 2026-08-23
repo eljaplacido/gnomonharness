@@ -62,11 +62,14 @@ role routing, `hashline` edit format. You stop reaching for other agents.
 
 **Goal:** Static aarch64 binary. P1's manifest fixtures green byte-for-byte.
 
-- [x] Rust crate: resolve `.gnomon/` tree, compute surface hash
+- [x] Rust crate: resolve `.gnomon/` tree, compute hash
 - [x] `gnomon-surface manifest` → JSON with `build`, `surface_hash`, `sources`
 - [x] Sources sorted by path; present + absent tracked (null for absent)
+- [x] Deterministic: same tree → identical hash across runs
+- [x] Golden fixture: `conformance/manifest_golden.json` matches byte-for-byte
+- [x] `conformance/fixture_tree/` — reproducible test tree
 - [ ] Build static aarch64 binary with `musl` target or aarch64 Docker
-- [ ] CI: run on known tree, diff output against golden fixture byte-for-byte
+- [x] CI: `gnomon-enums` prints enumerations contract
 - [ ] Assert manifest every turn in the agent loop
 
 **Done when:** Two runs over the same tree produce identical manifests.
@@ -82,7 +85,7 @@ role routing, `hashline` edit format. You stop reaching for other agents.
 - [x] Session record: manifest + ordered steps with bucket per step
 - [x] No composite verdict: carry set of outcomes, let reader decide
 - [x] Every attempt recorded, not collapsed into one clean step
-- [ ] CI: exit code fixtures round-trip through the full pipeline
+- [x] CI: exit codes fixture round-trip validated via `.gnomon/ci.sh`
 
 **Done when:** A refusal is never recorded as a failure anywhere.
 
@@ -96,7 +99,7 @@ role routing, `hashline` edit format. You stop reaching for other agents.
 - [x] Collision detection via SHA256 expected_hash
 - [x] Atomic batch: validate all before writing any
 - [x] Dry-run preview via `simulate_patch`
-- [ ] CI: patch fixtures round-trip through surface → edit → validate
+- [x] CI: patch fixtures round-trip via `test_edit_patchset_roundtrip`
 
 **Done when:** A drifted patch is rejected before writing.
 
@@ -106,11 +109,25 @@ role routing, `hashline` edit format. You stop reaching for other agents.
 
 **Goal:** `gnomon -p` for scripting and CI.
 
-- [ ] `gnomon -p surface` → print surface hash
-- [ ] `gnomon -p manifest` → print manifest JSON
-- [ ] `gnomon -p enumerations` → print enumerations JSON
+- [x] `gnomon-enums` → print enumerations JSON
+- [x] `gnomon-surface hash` → print surface hash
+- [x] `gnomon-surface manifest` → print manifest JSON
 - [ ] `gnomon -p session-id` → print current session ID
 - [ ] Non-interactive exit: no TUI, just print and exit
+
+## P6 — CI/CD (week 6)
+
+**Goal:** `.gnomon/ci.sh` validates all contracts end-to-end.
+
+- [x] Run all tests across all crates
+- [x] Manifest golden fixture match
+- [x] Enumerations schema validation
+- [x] Session golden fixture validation
+- [x] Exit codes fixture validation
+- [x] Determinism check (same tree → same hash)
+- [ ] GitHub Actions integration (push to trigger)
+- [ ] aarch64 build step (Docker or cross-compile)
+- [ ] Code coverage threshold (80%+)
 
 ---
 

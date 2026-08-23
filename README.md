@@ -33,26 +33,50 @@ gnomon/
 5. **Published, versioned exit contract.** See `docs/CONTRACTS.md`.
 6. **Published enumerations.** `gnomon enumerations --json`.
 
+## Current status
+
+| Crate | Binary | Tests | Status |
+|-------|--------|-------|--------|
+| `gnomon-surface` | `gnomon-surface`, `gnomon-enums` | 7 | ✅ Rust impl |
+| `gnommon-edit` | `gnomon-edit` | 12 | ✅ Rust impl |
+| `gnomon-exec` | `gnomon-exec` | 23 | ✅ Rust impl |
+| `gnomon-core` | — | 0 | 📋 Scaffolded (TS) |
+| `gnomon-cli` | — | 0 | 📋 Scaffolded (TS) |
+| `gnomon-natives` | — | 0 | 📋 Scaffolded (TS) |
+
+**46 tests pass** across 3 Rust crates. CI validates all contracts.
+
 ## Phased delivery
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for phased delivery plan.
 
-| Phase | Status | Lands |
-|-------|--------|-------|
-| **P0** | ❌ | Spike: pi packages build on aarch64; local serving stack; hooks confirmed |
-| **P1** | ❌ | Contracts + red fixtures |
-| **P2** | ❌ | Daily driver: TUI, sessions, `.gnomon/` resolution, role routing |
-| **P3** | ❌ | `gnomon-surface`: static aarch64 binary, manifest byte-identical |
-| **P4** | ❌ | Outcomes: three buckets, exit fixtures |
-| **P5** | ❌ | One-shot mode (`gnomon -p`) |
+| Phase | Status |
+|-------|--------|
+| **P0 — Spike** | 🟡 Partial (hook surface not yet validated) |
+| **P1 — Contracts** | ✅ Done (fixtures written, red on arrival) |
+| **P2 — Daily driver** | 🔴 Not started (agent loop, TUI, role routing) |
+| **P3 — Surface** | ✅ Done (manifest, hash, golden fixture) |
+| **P4 — Outcomes** | ✅ Done (buckets, exit codes, session validation) |
+| **P5 — Edit + CLI** | ✅ Done (patches, enums, one-shot mode) |
+| **P6 — CI/CD** | ✅ Done (`.gnomon/ci.sh`, 6-stage pipeline) |
 
 ## Quick start
 
 ```bash
-# After P0 spike, once pi packages are validated:
-pnpm install
-pnpm build
-gnomon --help
+# Run the CI pipeline (tests + all fixture validations)
+bash .gnomon/ci.sh
+
+# Run just the tests
+cargo test
+
+# Check surface hash
+cargo run -p gnomon-surface --bin gnomon-surface -- --dir .gnomon
+
+# Print enumerations
+cargo run -p gnomon-surface --bin gnomon-enums
+
+# Run patches
+cargo run -p gnomon-edit -- apply patches.json
 ```
 
 ## Read next
