@@ -129,7 +129,11 @@ role routing, `hashline` edit format. You stop reaching for other agents.
 - [x] Session golden fixture validation
 - [x] Exit codes fixture validation
 - [x] Determinism check (same tree → same hash)
-- [ ] GitHub Actions integration (push to trigger)
+- [x] GitHub Actions integration (push to trigger)
+  - [x] `ci.yml` — 7 jobs: Rust tests, TS tests, full CI script, Ubuntu build,
+        macOS build, interactive smoke test, clippy
+  - [x] Push-triggered on master/develop, PR-triggered on master
+  - [x] Build badges in README
 - [ ] aarch64 build step (Docker or cross-compile)
 - [ ] Code coverage threshold (80%+)
 

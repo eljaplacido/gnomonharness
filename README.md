@@ -4,6 +4,10 @@
 > affects what the agent does lives inside the repository the agent is working
 > on, and is content-hashed on every turn.
 
+[![CI](https://github.com/eljaplacido/gnomonharness/actions/workflows/ci.yml/badge.svg)](https://github.com/eljaplacido/gnomonharness/actions/workflows/ci.yml)
+
+> If two people check out the same commit, they get the same agent.
+
 No `~/.gnomon/`. No global settings. No tool list assembled from whatever
 happens to be installed. If two people check out the same commit, they get
 the same agent.

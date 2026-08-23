@@ -19,7 +19,7 @@
 
 - P0: 🟡 Partial (hook surface not yet validated)
 - P1: ✅ Done (fixtures written, red on arrival)
-- P2: 🔴 Not started (TUI, role routing, model serving)
+- P2: 🟡 Partial (agent loop, role routing, model serving, prompt loop — TUI pending)
 - P3: ✅ Done (manifest, hash, golden fixture)
 - P4: ✅ Done (buckets, exit codes, session validation)
 - P5: ✅ Done (patches, enums, CLI, agent loop)
