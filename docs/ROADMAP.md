@@ -123,7 +123,7 @@ role routing, `hashline` edit format. You stop reaching for other agents.
 
 **Goal:** `.gnomon/ci.sh` validates all contracts end-to-end.
 
-- [x] Run all tests across all crates (46 Rust + 48 TS = 94)
+- [x] Run all tests across all crates (46 Rust + 58 TS = 104)
 - [x] Manifest golden fixture match
 - [x] Enumerations schema validation
 - [x] Session golden fixture validation

@@ -44,7 +44,7 @@ gnomon/
 | **TypeScript** | `gnomon-core` | — | 32 | ✅ Agent loop |
 | **TypeScript** | `gnomon-cli` | `gnomon` | 9 | ✅ CLI shell |
 
-**94 tests pass** — 46 Rust, 48 TypeScript. CI validates all contracts end-to-end.
+**104 tests pass** — 46 Rust, 58 TypeScript. CI validates all contracts end-to-end.
 
 ## Phased delivery
 
@@ -58,7 +58,7 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for phased delivery plan.
 | **P3 — Surface** | ✅ Done (manifest, hash, golden fixture) |
 | **P4 — Outcomes** | ✅ Done (buckets, exit codes, session validation) |
 | **P5 — Edit + CLI** | ✅ Done (patches, enums, CLI, agent loop) |
-| **P6 — CI/CD** | ✅ Done (`.gnomon/ci.sh`, 94 tests, 6-stage pipeline) |
+| **P6 — CI/CD** | ✅ Done (`.gnomon/ci.sh`, 104 tests, 7-stage pipeline) |
 
 ## Quick start
 

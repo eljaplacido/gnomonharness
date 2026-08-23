@@ -51,7 +51,12 @@ export interface Roles {
 }
 
 export interface RoleDef {
-  profile: string;
+  model?: string;
+  temperature?: number;
+  top_p?: number;
+  description?: string;
+  // Legacy field (kept for compat with older role files)
+  profile?: string;
   allowed_edit_formats?: string[];
   max_steps?: number;
 }
@@ -229,10 +234,18 @@ export function loadConfig(root?: string): GnomonConfig {
     gnomonDir,
     config: loadToml<Config>(gnomonDir, "config.toml"),
     policy: loadToml<Policy>(gnomonDir, "policy.toml"),
-    roles: loadToml<Roles>(gnomonDir, "roles.toml"),
+    // roles.toml has [roles.X] headers → parseToml wraps in {roles: {...}}
+    roles: (loadToml<Record<string, unknown>>(gnomonDir, "roles.toml") as Record<string, unknown>).roles ?? {},
     profiles: loadToml<Profiles>(gnomonDir, "profiles") as unknown as Profiles,
     tools: loadToml<ToolsDef>(gnomonDir, "tools.toml"),
-    system: loadToml<SystemPrompt>(gnomonDir, "system.md") as unknown as SystemPrompt,
+    // system.md is plain text, not TOML — read directly
+    system: (() => {
+      const filePath = join(gnomonDir, "system.md");
+      const content = existsSync(filePath)
+        ? readFileSync(filePath, "utf-8")
+        : "";
+      return { content, version: "0.1" } as SystemPrompt;
+    })(),
   };
 }
 
@@ -278,4 +291,56 @@ export function isToolEnabled(config: GnomonConfig, toolName: string): boolean {
 
   const configEntry = config.config.tools?.find((t) => t.name === toolName);
   return configEntry?.enabled !== false;
+}
+
+/**
+ * Route a role to its model config.
+ * Returns the model string and sampling params from roles.toml,
+ * falling back to profile-level settings if role-level isn't set.
+ */
+export function routeRole(
+  config: GnomonConfig,
+  role: string
+): { model: string; temperature: number; top_p: number; description?: string } {
+  const roleDef = getRole(config, role);
+
+  // Role-level overrides take precedence
+  const model = roleDef.model ?? roleDef.profile ?? "local:default";
+  const temperature = roleDef.temperature ?? 0.2;
+  const top_p = roleDef.top_p ?? 0.9;
+  const description = roleDef.description ?? "";
+
+  return { model, temperature, top_p, description };
+}
+
+/**
+ * List available roles.
+ */
+export function listRoles(config: GnomonConfig): string[] {
+  return Object.keys(config.roles);
+}
+
+/**
+ * List available profiles.
+ */
+export function listProfiles(config: GnomonConfig): string[] {
+  return Object.keys(config.profiles);
+}
+
+/**
+ * Infer role from user input pattern (simple heuristic).
+ * "Plan:" → plan, "Implement:" → implement, "Critique:" → critique, otherwise → implement.
+ */
+export function inferRole(input: string): string {
+  const lower = input.toLowerCase().trim();
+  if (lower.startsWith("plan:") || lower.startsWith("plan ") || lower.startsWith("/plan")) {
+    return "plan";
+  }
+  if (lower.startsWith("critique:") || lower.startsWith("critique ") || lower.startsWith("/critique")) {
+    return "critique";
+  }
+  if (lower.startsWith("smol:") || lower.startsWith("smol ") || lower.startsWith("/smol")) {
+    return "smol";
+  }
+  return "implement";
 }

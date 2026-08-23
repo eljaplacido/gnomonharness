@@ -19,6 +19,8 @@ import {
   SessionManager,
   resolveGnomonDir,
   Manifest,
+  runPromptLoop,
+} from "gnomon-core";
 } from "gnomon-core";
 import {
   manifest as surfaceManifest,
@@ -182,12 +184,8 @@ async function cmdSimulate(args: CliArgs): Promise<void> {
 }
 
 async function cmdPrompt(args: CliArgs): Promise<void> {
-  console.log("gnomon prompt — interactive mode");
-  console.log("(Not yet implemented — coming in a later phase)");
-  console.log("Use one-shot commands instead:");
-  console.log("  gnomon surface manifest");
-  console.log("  gnomon session <command>");
-  console.log("  gnomon apply <patchset.json>");
+  const config = loadConfig(args.dir);
+  await runPromptLoop(config, args.subcommand || "implement");
 }
 
 // ---------------------------------------------------------------------------
@@ -214,7 +212,10 @@ Commands:
     Dry-run preview of a patchset
 
   prompt
-    Interactive agent loop (not yet implemented)
+    Interactive agent loop — reads stdin, infers role, calls model
+
+  run
+    Alias for `prompt`
 
 One-shot mode: gnomon <command>
 Interactive mode: gnomon prompt
@@ -260,6 +261,7 @@ async function main(): Promise<void> {
       await cmdSimulate(args);
       break;
     case "prompt":
+    case "run":
       await cmdPrompt(args);
       break;
     default:

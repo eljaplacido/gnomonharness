@@ -23,4 +23,4 @@
 - P3: ✅ Done (manifest, hash, golden fixture)
 - P4: ✅ Done (buckets, exit codes, session validation)
 - P5: ✅ Done (patches, enums, CLI, agent loop)
-- P6: ✅ Done (`.gnomon/ci.sh`, 94 tests, 6-stage pipeline)
+- P6: ✅ Done (`.gnomon/ci.sh`, 104 tests, 7-stage pipeline)

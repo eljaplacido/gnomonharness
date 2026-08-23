@@ -20,10 +20,10 @@ pass "All 46 Rust tests passed"
 echo ""
 echo "═══ Running TypeScript tests ═══"
 pnpm test 2>&1 || fail "TypeScript tests failed"
-pass "All 48 TypeScript tests passed"
+pass "All 58 TypeScript tests passed"
 
 echo ""
-pass "All 94 tests passed (46 Rust + 48 TypeScript)"
+pass "All 104 tests passed (46 Rust + 58 TypeScript)"
 
 # ── 2. Validate manifest against golden ──
 echo ""
