@@ -795,4 +795,43 @@ mod tests {
         assert_eq!(result.failed, deserialized.failed);
         assert_eq!(result.all_applied, deserialized.all_applied);
     }
+
+    #[test]
+    fn test_edit_patchset_roundtrip() {
+        // Create a temp file and apply a patch, then verify the result
+        let dir = setup_test_dir();
+
+        // Create a patchset JSON
+        let patchset = PatchSet {
+            patches: vec![
+                Patch {
+                    path: "test.txt".to_string(),
+                    pattern: "foo".to_string(),
+                    replacement: "BAR".to_string(),
+                    mode: "exact".to_string(),
+                    expected_hash: None,
+                    occurrences: 1,
+                },
+            ],
+            surface_hash: Some("test-surface".to_string()),
+        };
+
+        let json = serde_json::to_string(&patchset).unwrap();
+        let patchset_file = dir.path().join("patchset.json");
+        fs::write(&patchset_file, &json).unwrap();
+
+        // Apply patches
+        let patchset: PatchSet = serde_json::from_str(&json).unwrap();
+        let result = apply_patches(&patchset, dir.path());
+
+        assert!(result.all_applied);
+        assert_eq!(result.applied, 1);
+        assert_eq!(result.failed, 0);
+
+        let contents = fs::read_to_string(dir.path().join("test.txt")).unwrap();
+        assert!(contents.contains("BAR bar baz"));
+
+        // Verify SHA256 in result
+        assert!(result.results[0].new_content_sha256.is_some());
+    }
 }

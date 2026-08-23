@@ -14,8 +14,8 @@
 
 use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -226,7 +226,6 @@ fn main() {
 mod tests {
     use super::*;
     use std::fs;
-    use std::io::Write;
     use tempfile::TempDir;
 
     fn setup_test_dir() -> TempDir {
@@ -395,5 +394,51 @@ mod tests {
             hash_empty_dir, hash_with_empty,
             "A missing extension and an empty one are NOT the same surface"
         );
+    }
+
+    #[test]
+    fn test_manifest_against_golden_fixture() {
+        // Fixture tree relative to workspace root
+        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent().unwrap().parent().unwrap()
+            .join("conformance/fixture_tree/.gnomon");
+        assert!(
+            fixture_dir.exists(),
+            "Fixture tree must exist at conformance/fixture_tree/.gnomon/"
+        );
+
+        let sources = build_sources(&fixture_dir);
+        let surface_hash = compute_surface_hash(&sources);
+        let manifest = Manifest {
+            build: format!("{}+local", VERSION),
+            surface_hash,
+            sources,
+        };
+
+        let manifest_json = serde_json::to_string_pretty(&manifest).unwrap();
+
+        // Compare against golden fixture
+        let golden_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent().unwrap().parent().unwrap()
+            .join("conformance/manifest_golden.json");
+        let golden_json = fs::read_to_string(&golden_path)
+            .unwrap_or_else(|_| panic!("Golden fixture must exist at {}", golden_path.display()));
+
+        // Normalize both to compare (parse and re-serialize to ensure same formatting)
+        let parsed_manifest: Manifest = serde_json::from_str(&manifest_json).unwrap();
+        let parsed_golden: Manifest = serde_json::from_str(&golden_json).unwrap();
+
+        assert_eq!(
+            parsed_manifest.surface_hash, parsed_golden.surface_hash,
+            "Surface hash must match golden fixture"
+        );
+        assert_eq!(
+            parsed_manifest.sources.len(), parsed_golden.sources.len(),
+            "Source count must match golden fixture"
+        );
+        for (actual, expected) in parsed_manifest.sources.iter().zip(parsed_golden.sources.iter()) {
+            assert_eq!(actual.path, expected.path, "Path mismatch for {}", actual.path);
+            assert_eq!(actual.sha256, expected.sha256, "Hash mismatch for {}", actual.path);
+        }
     }
 }

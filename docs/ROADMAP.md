@@ -62,9 +62,9 @@ role routing, `hashline` edit format. You stop reaching for other agents.
 
 **Goal:** Static aarch64 binary. P1's manifest fixtures green byte-for-byte.
 
-- [ ] Rust crate: resolve `.gnomon/` tree, compute surface hash
-- [ ] `gnomon-surface manifest` → JSON with `build`, `surface_hash`, `sources`
-- [ ] Sources sorted by path; present + absent tracked (null for absent)
+- [x] Rust crate: resolve `.gnomon/` tree, compute surface hash
+- [x] `gnomon-surface manifest` → JSON with `build`, `surface_hash`, `sources`
+- [x] Sources sorted by path; present + absent tracked (null for absent)
 - [ ] Build static aarch64 binary with `musl` target or aarch64 Docker
 - [ ] CI: run on known tree, diff output against golden fixture byte-for-byte
 - [ ] Assert manifest every turn in the agent loop
@@ -77,16 +77,30 @@ role routing, `hashline` edit format. You stop reaching for other agents.
 
 **Goal:** Three buckets recorded per step. Exit fixtures round-trip green.
 
-- [ ] Step outcome model: `native_code` → `bucket` mapping
-- [ ] Exit code handling: 0–4 → result/refusal, 10–13 → apparatus_failure
-- [ ] Session record: manifest + ordered steps with bucket per step
-- [ ] No composite verdict: carry set of outcomes, let reader decide
-- [ ] Every attempt recorded, not collapsed into one clean step
+- [x] Step outcome model: `native_code` → `bucket` mapping
+- [x] Exit code handling: 0–4 → result/refusal, 10–13 → apparatus_failure
+- [x] Session record: manifest + ordered steps with bucket per step
+- [x] No composite verdict: carry set of outcomes, let reader decide
+- [x] Every attempt recorded, not collapsed into one clean step
 - [ ] CI: exit code fixtures round-trip through the full pipeline
 
 **Done when:** A refusal is never recorded as a failure anywhere.
 
 **Wrong if:** `failed` (1) and `refused_by_model` (2) both map to `result`.
+
+## P5 — Edit engine (week 5)
+
+**Goal:** Content-unsafe patch engine with collision detection.
+
+- [x] `gnomon-edit` crate: exact/regex patch modes
+- [x] Collision detection via SHA256 expected_hash
+- [x] Atomic batch: validate all before writing any
+- [x] Dry-run preview via `simulate_patch`
+- [ ] CI: patch fixtures round-trip through surface → edit → validate
+
+**Done when:** A drifted patch is rejected before writing.
+
+**Wrong if:** A patch succeeds when the target content has changed since spec.
 
 ## P5 — One-shot mode (week 5)
 

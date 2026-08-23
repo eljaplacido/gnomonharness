@@ -809,4 +809,32 @@ mod tests {
         let record = build_session(manifest, vec![step]);
         assert!(validate_session(&record, None).is_ok());
     }
+
+    #[test]
+    fn test_session_fixture_roundtrip() {
+        // Verify that the session golden fixture is valid
+        let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().join("conformance/session_golden.json");
+        let fixture_content = fs::read_to_string(&fixture_path)
+            .unwrap_or_else(|_| panic!("Golden session fixture must exist at {}", fixture_path.display()));
+
+        // Parse as generic JSON to check structure
+        let parsed: serde_json::Value = serde_json::from_str(&fixture_content)
+            .unwrap_or_else(|_| panic!("Session golden must be valid JSON"));
+
+        // Must have session object
+        let session = parsed.get("session").expect("Session must have 'session' key");
+        assert!(session.get("manifest").is_some(), "Session must have manifest");
+        assert!(session.get("steps").is_some(), "Session must have steps");
+
+        let steps = session.get("steps").unwrap().as_array().unwrap();
+        for (i, step) in steps.iter().enumerate() {
+            assert!(step.get("native_code").is_some(), "Step {} must have native_code", i);
+            assert!(step.get("bucket").is_some(), "Step {} must have bucket", i);
+            assert!(step.get("duration_ms").is_some(), "Step {} must have duration_ms", i);
+            // Bucket must be valid
+            let bucket = step.get("bucket").unwrap().as_str().unwrap();
+            assert!(matches!(bucket, "result" | "refusal" | "apparatus_failure"),
+                "Step {} bucket '{}' must be valid", i, bucket);
+        }
+    }
 }
