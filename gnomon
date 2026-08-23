@@ -7,9 +7,12 @@
 //   ./gnomon session "echo hello"
 const { spawnSync } = require("child_process");
 const { join, resolve } = require("path");
-const { existsSync, readFileSync } = require("fs");
+const { existsSync } = require("fs");
 
-const projectRoot = resolve(__dirname, "..");
+// __dirname resolves to where this script lives (the repo root)
+const projectRoot = resolve(__dirname);
+
+// Find tsx — it's a shell script, not a JS file
 const tsxBin = join(projectRoot, "node_modules", ".bin", "tsx");
 const tsxBinWin = join(projectRoot, "node_modules", ".bin", "tsx.cmd");
 const entry = join(projectRoot, "packages", "gnomon-cli", "src", "index.ts");
@@ -17,7 +20,7 @@ const entry = join(projectRoot, "packages", "gnomon-cli", "src", "index.ts");
 // Prefer tsx.cmd on Windows, tsx on Unix
 const bin = existsSync(tsxBinWin) ? tsxBinWin : tsxBin;
 
-const result = spawnSync(process.execPath, [bin, entry, ...process.argv.slice(2)], {
+const result = spawnSync(bin, [entry, ...process.argv.slice(2)], {
   stdio: "inherit",
   shell: true,
   cwd: projectRoot,

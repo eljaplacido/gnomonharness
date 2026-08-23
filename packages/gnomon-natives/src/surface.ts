@@ -59,7 +59,7 @@ function findBinary(name: string): string {
   }
 
   // 2. Check target/debug for dev builds
-  const debugPath = join(__dirname, "..", "..", "target", "debug", name);
+  const debugPath = join(__dirname, "..", "..", "..", "target", "debug", name);
   try {
     const stat = statSync(debugPath);
     if (stat.isFile()) return debugPath;
@@ -68,7 +68,7 @@ function findBinary(name: string): string {
   }
 
   // 3. Check target/release for release builds
-  const releasePath = join(__dirname, "..", "..", "target", "release", name);
+  const releasePath = join(__dirname, "..", "..", "..", "target", "release", name);
   try {
     const stat = statSync(releasePath);
     if (stat.isFile()) return releasePath;
