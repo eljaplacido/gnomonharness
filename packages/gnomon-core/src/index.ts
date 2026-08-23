@@ -12,6 +12,5 @@
 
 export * from "./config.js";
 export * from "./session.js";
-export { computeSurfaceHash, SourceEntry, Manifest } from "./session.js";
 export * from "./agent.js";
 export * from "./prompt_loop.js";

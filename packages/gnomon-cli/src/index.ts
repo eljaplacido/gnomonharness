@@ -30,7 +30,7 @@ import {
   simulatePatch,
   Enumerations,
 } from "gnomon-natives";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -41,12 +41,18 @@ interface CliArgs {
   command: string;
   subcommand?: string;
   dir?: string;
+  printSession?: boolean;
   positional: string[];
 }
 
 export function parseArgs(args: string[]): CliArgs {
   const result: CliArgs = { command: "", subcommand: "", positional: [] };
   let i = 0;
+
+  // Check for -p flag early
+  if (args.includes("-p")) {
+    result.printSession = true;
+  }
 
   // Skip program name
   if (args[0]?.startsWith("-")) {
@@ -61,6 +67,8 @@ export function parseArgs(args: string[]): CliArgs {
     if (arg === "--dir" || arg === "-d") {
       i++;
       result.dir = args[i];
+    } else if (arg === "-p") {
+      // Already handled above
     } else if (arg.startsWith("-")) {
       // Flag (ignored for now)
     } else {
@@ -103,6 +111,31 @@ async function cmdSurface(args: CliArgs): Promise<void> {
 async function cmdEnumerations(args: CliArgs): Promise<void> {
   const enums: Enumerations = enumerations();
   console.log(JSON.stringify(enums, null, 2));
+}
+
+/** Find the latest session file in the sessions directory. */
+function findLatestSession(sessionsDir: string): string | null {
+  if (!existsSync(sessionsDir)) return null;
+
+  const files = readdirSync(sessionsDir)
+    .filter((f: string) => f.endsWith(".json"))
+    .sort();
+
+  if (files.length === 0) return null;
+  return join(sessionsDir, files[files.length - 1]);
+}
+
+/** Print the session ID of the latest session, or the current run ID. */
+async function cmdSessionId(args: CliArgs): Promise<void> {
+  const dir = args.dir;
+  const sessionsDir = dir ? join(dir, "sessions") : join(process.cwd(), "sessions");
+  const latest = findLatestSession(sessionsDir);
+  if (latest) {
+    const data = JSON.parse(readFileSync(latest, "utf-8"));
+    console.log(data.session?.id ?? "unknown");
+  } else {
+    console.log("no-session");
+  }
 }
 
 async function cmdSession(args: CliArgs): Promise<void> {
@@ -235,6 +268,12 @@ async function main(): Promise<void> {
 
   if (args.command === "--help" || args.command === "-h" || args.command === "help") {
     showHelp();
+    return;
+  }
+
+  // -p flag: print latest session ID regardless of command
+  if (args.printSession) {
+    await cmdSessionId(args);
     return;
   }
 

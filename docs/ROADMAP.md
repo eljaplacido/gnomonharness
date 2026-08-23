@@ -70,7 +70,7 @@ role routing, `hashline` edit format. You stop reaching for other agents.
 - [x] `conformance/fixture_tree/` — reproducible test tree
 - [ ] Build static aarch64 binary with `musl` target or aarch64 Docker
 - [x] CI: `gnomon-enums` prints enumerations contract
-- [ ] Assert manifest every turn in the agent loop
+- [x] Assert manifest every turn in the agent loop — `reassertManifest()` in agent.ts records apparatus_failure on drift
 
 **Done when:** Two runs over the same tree produce identical manifests.
 
