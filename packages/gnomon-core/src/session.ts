@@ -316,3 +316,29 @@ export function hashSteps(steps: SessionStep[]): string {
 
   return hash.digest("hex");
 }
+
+/**
+ * Compute the surface hash from a sorted, deterministic list of sources.
+ * Mirrors gnomon-surface's compute_surface_hash.
+ * Sort order matters: sources are sorted by path for determinism.
+ */
+export function computeSurfaceHash(sources: SourceEntry[]): string {
+  const hash = createHash("sha256");
+
+  const sorted = [...sources].sort((a, b) =>
+    a.path.localeCompare(b.path)
+  );
+
+  for (const source of sorted) {
+    hash.update(source.path);
+    hash.update(":");
+    if (source.sha256) {
+      hash.update(source.sha256);
+    } else {
+      hash.update("null");
+    }
+    hash.update("\n");
+  }
+
+  return hash.digest("hex");
+}

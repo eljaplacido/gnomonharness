@@ -5,8 +5,10 @@
  * No TUI deps — pure config + validation.
  */
 
-import { readFileSync, existsSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { join, resolve, dirname, relative } from "node:path";
+import { createHash } from "node:crypto";
+import { SourceEntry } from "./session.js";
 
 // ---------------------------------------------------------------------------
 // Types — mirror Rust structs from gnomon-surface
@@ -342,4 +344,111 @@ export function inferRole(input: string): string {
     return "smol";
   }
   return "implement";
+}
+
+/**
+ * Canonical .gnomon/ surface paths — the minimum set every manifest lists.
+ * Mirrors gnomon-surface's SURFACE_PATHS.
+ */
+const SURFACE_PATHS = [
+  "config.toml",
+  "system.md",
+  "roles.toml",
+  "policy.toml",
+  "tools.toml",
+] as const;
+
+/**
+ * Compute SHA256 of file contents.
+ */
+function fileSha256(filePath: string): string | null {
+  try {
+    const content = readFileSync(filePath);
+    return createHash("sha256").update(content).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Walk .gnomon/ directory, collect files with their hashes.
+ * Only hashes — never contents.
+ */
+function collectSurface(baseDir: string): SourceEntry[] {
+  const sources: SourceEntry[] = [];
+  const gnomonDir = join(baseDir, ".gnomon");
+
+  if (!existsSync(gnomonDir)) return sources;
+
+  function walk(dir: string) {
+    if (!existsSync(dir)) return;
+    const entries = readdirSync(dir);
+    for (const entry of entries) {
+      const fullPath = join(dir, entry);
+      const relPath = relative(join(baseDir, ".gnomon"), fullPath);
+      const st = statSync(fullPath);
+      if (st.isDirectory()) {
+        walk(fullPath);
+      } else {
+        const hash = fileSha256(fullPath);
+        sources.push({ path: relPath, sha256: hash });
+      }
+    }
+  }
+
+  walk(gnomonDir);
+  return sources;
+}
+
+/**
+ * Recompute the manifest from the .gnomon/ tree on disk.
+ * Used for drift detection: compare against the cached manifest.
+ * Returns a fresh Manifest suitable for comparison.
+ */
+export function recomputeManifest(baseDir: string, build: string = "0.1.0"): {
+  manifest: SourceEntry[];
+  surface_hash: string;
+} {
+  const existing = collectSurface(baseDir);
+  const existingMap = new Map<string, SourceEntry>();
+  for (const s of existing) {
+    existingMap.set(s.path, s);
+  }
+
+  const sources: SourceEntry[] = [];
+
+  // 1. All canonical surface paths (present or absent)
+  for (const path of SURFACE_PATHS) {
+    const existing = existingMap.get(path);
+    sources.push(existing ?? { path, sha256: null });
+  }
+
+  // 2. Additional files not in SURFACE_PATHS (profiles/, skills/, etc.)
+  for (const s of existing) {
+    const isCanonical = (SURFACE_PATHS as readonly string[]).includes(s.path);
+    if (!isCanonical) {
+      if (!sources.some((ss) => ss.path === s.path)) {
+        sources.push(s);
+      }
+    }
+  }
+
+  // Sort by path for determinism
+  sources.sort((a, b) => a.path.localeCompare(b.path));
+
+  // Compute surface hash
+  const hash = createHash("sha256");
+  for (const source of sources) {
+    hash.update(source.path);
+    hash.update(":");
+    if (source.sha256) {
+      hash.update(source.sha256);
+    } else {
+      hash.update("null");
+    }
+    hash.update("\n");
+  }
+  const surface_hash = hash.digest("hex");
+
+  return { manifest: sources, surface_hash };
 }

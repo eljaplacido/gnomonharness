@@ -11,7 +11,7 @@
  * No TUI deps — pure logic layer.
  */
 
-import { GnomonConfig, loadConfig } from "./config.js";
+import { GnomonConfig, loadConfig, recomputeManifest } from "./config.js";
 import {
   SessionManager,
   SessionRecord,
@@ -221,6 +221,34 @@ export async function runAgentTurn(
         step,
         outcomes: agent.session.outcomes,
       });
+    }
+
+    // 3.5. Re-assert manifest (drift detection)
+    try {
+      const { manifest: newSources, surface_hash: newHash } = recomputeManifest(
+        agent.gnomon.gnomonDir,
+        "0.1.0"
+      );
+      const currentHash = agent.manifest.surface_hash;
+      if (currentHash && newHash && currentHash !== newHash) {
+        // Drift detected — record apparatus_failure
+        const driftStep: SessionStep = {
+          native_code: 10,
+          bucket: "apparatus_failure",
+          duration_ms: 0,
+          stdout: `Manifest hash changed: ${currentHash.slice(0, 8)}... → ${newHash.slice(0, 8)}...`,
+          stderr: "Surface drift detected — .gnomon/ files modified",
+        };
+        steps.push(driftStep);
+        agent.session.addStep(10, driftStep.stdout, driftStep.stderr, 0);
+      } else if (currentHash && !newHash) {
+        // First run — seed the manifest
+        agent.manifest.surface_hash = newHash;
+        agent.manifest.sources = newSources;
+      }
+    } catch (err) {
+      // Non-fatal — if we can't read .gnomon/ for re-assertion,
+      // just skip (the error is already logged via hooks)
     }
 
     // 4. Post-turn hooks
