@@ -1,9 +1,9 @@
-/// gnomon-enums: print the enumerations contract as JSON.
-///
-/// Usage:
-///   gnomon-enums [--json]
-///
-/// Output conforms to conformance/enumerations_schema.json.
+//! gnomon-enums: print the enumerations contract as JSON.
+//!
+//! Usage:
+//!   gnomon-enums [--json]
+//!
+//! Output conforms to conformance/enumerations_schema.json.
 
 use serde::{Deserialize, Serialize};
 

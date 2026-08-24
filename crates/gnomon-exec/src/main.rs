@@ -1,10 +1,10 @@
-/// gnomon-exec: spawn, timeout, sandbox, outcome capture.
-///
-/// This crate drives deterministic agent sessions:
-///   - Spawns commands with configurable timeouts
-///   - Maps exit codes to outcome buckets (result/refusal/apparatus_failure)
-///   - Records ordered session steps with manifest + step outcomes
-///   - Validates sessions against conformance fixtures
+//! gnomon-exec: spawn, timeout, sandbox, outcome capture.
+//!
+//! This crate drives deterministic agent sessions:
+//!   - Spawns commands with configurable timeouts
+//!   - Maps exit codes to outcome buckets (result/refusal/apparatus_failure)
+//!   - Records ordered session steps with manifest + step outcomes
+//!   - Validates sessions against conformance fixtures
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -403,8 +403,8 @@ fn main() {
             let bucket = match result.native_code {
                 0 => "result",
                 1 => "result",
-                2 | 3 | 4 => "refusal",
-                10 | 11 | 12 | 13 => "apparatus_failure",
+                2..=4 => "refusal",
+                10..=13 => "apparatus_failure",
                 _ => "result",
             };
 
@@ -468,12 +468,9 @@ fn main() {
             let mut session_path = String::new();
             let mut i = 2;
             while i < args.len() {
-                match args[i].as_str() {
-                    "--session" => {
-                        i += 1;
-                        if i < args.len() { session_path = args[i].clone(); }
-                    }
-                    _ => {}
+                if args[i] == "--session" {
+                    i += 1;
+                    if i < args.len() { session_path = args[i].clone(); }
                 }
                 i += 1;
             }

@@ -1,16 +1,16 @@
-/// gnomon-surface: resolve .gnomon/ tree, compute surface hash, emit manifests.
-///
-/// This is the static aarch64 binary that makes the surface hash verifiable
-/// without any JavaScript runtime. Every turn recomputes and asserts it.
-///
-/// Usage:
-///   gnomon-surface manifest [--dir <path>]
-///   gnomon-surface hash [--dir <path>]
-///   gnomon-surface paths [--dir <path>]
-///
-/// The manifest subcommand outputs JSON with: build, surface_hash, sources.
-/// Sources are sorted by path. Absent paths get sha256: null.
-/// Hashes only — never file contents (credentials by name, never by value).
+//! gnomon-surface: resolve .gnomon/ tree, compute surface hash, emit manifests.
+//!
+//! This is the static aarch64 binary that makes the surface hash verifiable
+//! without any JavaScript runtime. Every turn recomputes and asserts it.
+//!
+//! Usage:
+//!   gnomon-surface manifest [--dir <path>]
+//!   gnomon-surface hash [--dir <path>]
+//!   gnomon-surface paths [--dir <path>]
+//!
+//! The manifest subcommand outputs JSON with: build, surface_hash, sources.
+//! Sources are sorted by path. Absent paths get sha256: null.
+//! Hashes only — never file contents (credentials by name, never by value).
 
 use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};

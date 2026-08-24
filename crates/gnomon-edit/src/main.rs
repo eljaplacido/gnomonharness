@@ -276,10 +276,7 @@ pub fn apply_patches(patches: &PatchSet, repo_root: &Path) -> PatchSetResult {
         let simulated = simulate_patch(patch, repo_root);
         let sim_result = match simulated {
             Ok(new_content) => {
-                let old_hash = match std::fs::read(repo_root.join(&patch.path)) {
-                    Ok(h) => Some(h),
-                    Err(_) => None,
-                };
+                let old_hash = std::fs::read(repo_root.join(&patch.path)).ok();
                 let new_hash = sha256_str(&new_content);
                 PatchResult {
                     path: patch.path.clone(),
@@ -492,8 +489,8 @@ fn main() {
             let mut valid = true;
             for patch in &patchset.patches {
                 let result = apply_patch(patch, repo_root);
-                if result.error.is_some() {
-                    eprintln!("❌ {}: {}", patch.path, result.error.unwrap());
+                if let Some(error) = result.error {
+                    eprintln!("❌ {}: {}", patch.path, error);
                     valid = false;
                 }
             }
