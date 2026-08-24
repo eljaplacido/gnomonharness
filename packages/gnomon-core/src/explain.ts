@@ -107,6 +107,10 @@ const TOPICS: Record<string, Builder> = {
         "A role bundles a model, an endpoint, and a tool list. The tool list is",
         "the real boundary — a verifier has no write tool, so it cannot alter what",
         "it judges, however it is prompted.",
+        "",
+        "max_steps caps tool calls per turn. A role that does not set one gets 12,",
+        "not unlimited. Reaching it does not discard the turn: the model is asked",
+        "to answer from what it gathered and say what it could not reach.",
       ],
       here: [
         `current        ${role}`,
@@ -114,8 +118,14 @@ const TOPICS: Record<string, Builder> = {
         ...listRoles(config).map((r) => {
           const def = config.roles[r];
           const tools = Array.isArray(def.tools) ? def.tools.join(", ") : "all declared";
+          // An unset max_steps is not "unlimited" — it is a default of 12 that
+          // used to be invisible. Show the effective number either way.
+          const steps =
+            typeof def.max_steps === "number" ? `${def.max_steps}` : "12 (default)";
           return bullet(
-            `${r.padEnd(12)} ${(def.model ?? "?").padEnd(22)} ${tools}${r === role ? "  ← current" : ""}`
+            `${r.padEnd(12)} ${(def.model ?? "?").padEnd(22)} ${steps.padEnd(12)} ${tools}${
+              r === role ? "  ← current" : ""
+            }`
           );
         }),
       ],

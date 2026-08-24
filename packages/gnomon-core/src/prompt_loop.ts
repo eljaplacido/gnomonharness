@@ -519,6 +519,16 @@ export interface TurnResult {
   toolLog: string[];
 }
 
+/**
+ * Tool calls a role may make in one turn when its surface does not say.
+ *
+ * Exported because it was invisible: a role with no `max_steps` key looked
+ * unlimited — a session read roles.toml, concluded "plan has no step limit",
+ * and then hit this number. A default nobody can see is a default nobody can
+ * plan around, so /roles and /explain now show the effective value.
+ */
+export const DEFAULT_MAX_STEPS = 12;
+
 /** Severity order, so the worst outcome in a turn is the one reported. */
 function worse(a: number, b: number): number {
   const rank = (c: number) =>
@@ -569,7 +579,8 @@ export async function runAgenticTurn(
   };
 
   const roleDef = config.roles[role] ?? {};
-  const maxSteps = typeof roleDef.max_steps === "number" ? roleDef.max_steps : 12;
+  const maxSteps =
+    typeof roleDef.max_steps === "number" ? roleDef.max_steps : DEFAULT_MAX_STEPS;
 
   const working: ChatMessage[] = [...messages];
   const toolLog: string[] = [];
@@ -649,13 +660,39 @@ export async function runAgenticTurn(
 
     if (steps + result.toolCalls.length > maxSteps) {
       const note =
-        `Stopped: this turn reached max_steps (${maxSteps}) for role "${role}" ` +
-        `after ${steps} tool call(s). The work so far stands — ask again to ` +
-        `continue, or raise max_steps for "${role}" in .gnomon/roles.toml if ` +
-        `this role routinely needs more.`;
+        `Reached max_steps (${maxSteps}) for role "${role}" after ${steps} ` +
+        `tool call(s). Raise it for "${role}" in .gnomon/roles.toml if this ` +
+        `role routinely needs more.`;
       deps.say(paint(deps.ui, "yellow", `  [tools] ${note}`));
+
+      // Spend one more call — without tools — asking it to conclude. A turn
+      // that gathered eight files and then stopped mid-sentence threw that
+      // work away; the budget is on tool calls, and a wrap-up costs none.
+      deps.progress.start(`${usedModel} — wrapping up`);
+      working.push({
+        role: "system",
+        content:
+          `You have reached this turn's tool budget of ${maxSteps} calls and ` +
+          `cannot call any more. Answer now from what you already gathered. ` +
+          `State plainly what you were unable to examine, so the user knows ` +
+          `what is missing rather than assuming the answer is complete.`,
+      });
+      const closing = await callEndpoint(
+        route.target,
+        working,
+        [],
+        modelTimeoutMs(),
+        deps.signal
+      );
+      deps.progress.stop();
+
+      const content =
+        closing.code === 0 && closing.content.trim()
+          ? `${closing.content.trim()}\n\n_[${note}]_`
+          : result.content || note;
+
       return {
-        content: result.content || note,
+        content,
         code: worse(code, 4),
         model: usedModel,
         toolSteps: steps,
@@ -1266,7 +1303,11 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         const scope = Array.isArray(roleDef.tools)
           ? `  [tools: ${roleDef.tools.join(", ") || "none"}]`
           : "";
-        console.log(`  ${r}: ${model}${ep}${desc ? ` — ${desc}` : ""}${scope}${here}`);
+        const budget =
+          typeof roleDef.max_steps === "number"
+            ? `  [max_steps ${roleDef.max_steps}]`
+            : `  [max_steps ${DEFAULT_MAX_STEPS} — default, not set]`;
+        console.log(`  ${r}: ${model}${ep}${desc ? ` — ${desc}` : ""}${scope}${budget}${here}`);
       }
       console.log(`\nSwitch with: /role <name>`);
       return true;

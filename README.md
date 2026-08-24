@@ -379,7 +379,7 @@ endpoint = "zen"
 | `endpoint` | Named block from `[endpoints]`; defaults to `local`. |
 | `tools` | Tools this role may call. Absent = all declared; `[]` = none. |
 | `bash_allow` | Shell commands this role may run. See [Tools and Safety](#tools-and-safety). |
-| `max_steps` | Cap on tool calls per turn. Reaching it is reported, not silently looped. |
+| `max_steps` | Cap on tool calls per turn. **A role that omits it gets 12, not unlimited** — every scaffolded role states its own so nothing depends on that. Reaching it does not discard the turn: the model is asked to answer from what it gathered and say what it could not reach. |
 | `fallback` | Second endpoint tried when the primary fails or times out. |
 
 ### `tools.toml`

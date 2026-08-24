@@ -176,7 +176,7 @@ model = "qwen2.5:14b-instruct"
 endpoint = "local"
 temperature = 0.2
 top_p = 0.9
-max_steps = 12
+max_steps = 20
 # Reads the repo and writes specs/contracts only — never source. Keeping it
 # off \`edit\` is what stops a planning turn from quietly becoming a code change.
 tools = ["read", "write", "skill"]
@@ -196,7 +196,7 @@ model = "qwen2.5:14b-instruct"
 endpoint = "local"
 temperature = 0.1
 top_p = 0.9
-max_steps = 12
+max_steps = 20
 # No write, no edit. A verifier that can edit can make a failing suite pass
 # by changing the suite, so the capability is simply absent.
 tools = ["read", "bash"]
@@ -216,7 +216,7 @@ model = "qwen2.5:14b-instruct"
 endpoint = "local"
 temperature = 0.2
 top_p = 0.9
-max_steps = 12
+max_steps = 20
 tools = ["read", "bash"]
 description = "Hardest reasoning, lowest call volume"
 
@@ -233,7 +233,7 @@ model = "qwen2.5:14b-instruct"
 endpoint = "local"
 temperature = 0.1
 top_p = 0.9
-max_steps = 8
+max_steps = 16
 tools = ["read", "bash"]
 description = "Must not share context with the implementer"
 

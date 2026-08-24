@@ -4,6 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { loadConfig } from "./config.js";
+import { mapBucket } from "./session.js";
 import * as promptLoop from "./prompt_loop.js";
 
 // Fixture tree lives at repo root — go up 2 levels from packages/gnomon-core
@@ -503,6 +504,88 @@ describe("model API errors", () => {
         expect(said.join("\n")).toContain("tools = []");
         // Remembered, so the rejection is paid once.
         expect(state.noToolModels.has("X")).toBe(true);
+      }
+    );
+  });
+});
+
+describe("max_steps", () => {
+  const fakeProgress = { start() {}, update() {}, stop() {} } as any;
+  const fakeUi = {
+    meta: [], meta_style: "line", think: "hide", spinner: false, color: false,
+  } as any;
+
+  const withFetch = async (impl: typeof fetch, run: () => Promise<void>) => {
+    const original = globalThis.fetch;
+    globalThis.fetch = impl;
+    try {
+      await run();
+    } finally {
+      globalThis.fetch = original;
+    }
+  };
+
+  it("an unset max_steps is the default, not unlimited", () => {
+    // A session read roles.toml, saw no key, concluded "plan has no step
+    // limit", and then hit 12. The number is now exported so it can be shown.
+    expect(promptLoop.DEFAULT_MAX_STEPS).toBe(12);
+  });
+
+  it("reaching the budget still produces an answer", async () => {
+    const config: any = loadConfig("../..");
+    config.roles = { tiny: { model: "M", max_steps: 1 } };
+    const state: any = { config, exchanges: [], currentRole: "tiny" };
+
+    let calls = 0;
+    const said: string[] = [];
+
+    await withFetch(
+      (async (_u: string, init: any) => {
+        calls++;
+        const sentTools = JSON.parse(init.body).tools !== undefined;
+        // While tools are offered, keep asking for more of them.
+        if (sentTools) {
+          return {
+            ok: true,
+            json: async () => ({
+              message: {
+                content: "looking",
+                tool_calls: [
+                  { function: { name: "read", arguments: { path: "." } } },
+                  { function: { name: "read", arguments: { path: "src" } } },
+                ],
+              },
+            }),
+          } as unknown as Response;
+        }
+        // The wrap-up call carries no tools.
+        return {
+          ok: true,
+          json: async () => ({ message: { content: "Here is what I found so far." } }),
+        } as unknown as Response;
+      }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state,
+          "tiny",
+          { model: "M", temperature: 0, top_p: 1, target: { model: "M", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "audit this" }],
+          {
+            approve: async () => true,
+            progress: fakeProgress,
+            ui: fakeUi,
+            say: (l: string) => said.push(l),
+          }
+        );
+
+        // The gathered work is not thrown away mid-sentence.
+        expect(turn.content).toContain("Here is what I found so far.");
+        // And the reader is told the answer is partial, and why.
+        expect(turn.content).toContain("max_steps");
+        expect(mapBucket(turn.code)).toBe("refusal");
+        expect(said.join("\n")).toContain("Reached max_steps");
+        // A wrap-up call happened, and it carried no tools.
+        expect(calls).toBeGreaterThan(1);
       }
     );
   });

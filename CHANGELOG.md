@@ -157,6 +157,20 @@
 
 ### Fixed
 
+- **An unset `max_steps` looked unlimited.** It silently fell back to a default
+  of 12 that lived in TypeScript and appeared nowhere in the surface. A session
+  read `roles.toml`, correctly observed that `plan` had no `max_steps` key,
+  concluded there was no limit, and then hit 12. The default is now exported
+  and shown by `/roles` and `/explain roles` as "12 (default)", and every
+  scaffolded role states its own budget so nothing depends on an invisible
+  number. Survey-heavy roles raised: plan/coordinator/verifier 20,
+  critique 16, implement 28, implementor 32.
+- **Reaching `max_steps` threw the turn's work away.** A turn that had read
+  eight files stopped mid-sentence with "Let me explore the key directories".
+  The budget caps *tool calls*, and a wrap-up costs none — so one final
+  tool-free call now asks the model to answer from what it gathered and state
+  what it could not examine. The outcome stays `refusal`, because the harness
+  did refuse to continue, but the answer is no longer discarded.
 - **`/manifest` printed a pointer to another command.** "Use: gnomon surface
   manifest" — no hint what a manifest is or why anyone would want one. It now
   shows the surface hash, the files it covers, when it changes, and why that
