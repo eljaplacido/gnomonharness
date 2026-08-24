@@ -187,7 +187,7 @@ model = "qwen2.5:14b-instruct"
 endpoint = "local"
 temperature = 0.3
 top_p = 0.95
-max_steps = 24
+max_steps = 32
 tools = ["read", "write", "edit", "bash"]
 description = "Tests first, then the code that satisfies them"
 
@@ -225,7 +225,7 @@ model = "qwen2.5:14b-instruct"
 endpoint = "local"
 temperature = 0.3
 top_p = 0.95
-max_steps = 16
+max_steps = 28
 description = "Highest token volume — where local hosting pays off"
 
 [roles.critique]

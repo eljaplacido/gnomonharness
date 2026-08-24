@@ -44,7 +44,13 @@ import {
   ApprovalGate,
 } from "./tools.js";
 import { mapBucket } from "./session.js";
-import { loadSkills, loadProposedSkills, selectSkills, applySkills } from "./skills.js";
+import {
+  loadSkills,
+  loadProposedSkills,
+  selectSkills,
+  applySkills,
+  withWorkingContext,
+} from "./skills.js";
 import { AuditTrail, resolveAudit } from "./audit.js";
 import {
   resolveSessionStore,
@@ -641,8 +647,10 @@ export async function runAgenticTurn(
 
     if (steps + result.toolCalls.length > maxSteps) {
       const note =
-        `Stopped: this turn reached max_steps (${maxSteps}) for role ` +
-        `"${role}". ${steps} tool call(s) ran.`;
+        `Stopped: this turn reached max_steps (${maxSteps}) for role "${role}" ` +
+        `after ${steps} tool call(s). The work so far stands — ask again to ` +
+        `continue, or raise max_steps for "${role}" in .gnomon/roles.toml if ` +
+        `this role routinely needs more.`;
       deps.say(paint(deps.ui, "yellow", `  [tools] ${note}`));
       return {
         content: result.content || note,
@@ -660,6 +668,16 @@ export async function runAgenticTurn(
       content: result.content ?? "",
       tool_calls: result.rawToolCalls,
     });
+
+    // Models usually say why before they call something, and that text was
+    // being discarded — leaving an approval prompt that showed a command and
+    // no reason for it. Approving a row of symbols is not oversight.
+    const rationale = splitThinking(result.content ?? "").answer.trim();
+    if (rationale) {
+      for (const line of rationale.split("\n")) {
+        deps.say(paint(deps.ui, "gray", `  │ ${line}`));
+      }
+    }
 
     for (const call of result.toolCalls) {
       // Stop between tools rather than mid-write: a cancelled turn should
@@ -933,7 +951,9 @@ export async function runTask(
   const route = routeRole(config, role);
 
   const active = selectSkills(loadSkills(config), role, input);
-  const systemPrompt = applySkills(config.system.content ?? "", active);
+  const systemPrompt = withWorkingContext(
+        applySkills(config.system.content ?? "", active)
+      );
   const built = buildMessages(state, systemPrompt, input);
 
   const note = (line: string) => {
@@ -1177,23 +1197,45 @@ export function processCommand(cmd: string, state: PromptState): boolean {
     case "/skills": {
       const active = loadSkills(state.config);
       const pending = loadProposedSkills(state.config);
-      console.log(`\nActive skills (.gnomon/skills/) — loaded into the prompt:`);
-      if (active.length === 0) console.log("  (none)");
-      for (const sk of active) {
-        const scope = sk.roles ? ` [${sk.roles.join(", ")}]` : "";
-        const when = sk.match ? `  when: ${sk.match}` : "  always";
-        console.log(`  ${sk.id}${scope} — ${sk.description ?? sk.name}`);
-        console.log(`    ${when.trim()}`);
+
+      // Two empty lists and the word "surface" told a first-time reader
+      // nothing. Say what a skill IS before listing however many there are.
+      if (active.length === 0 && pending.length === 0) {
+        console.log(
+          `\nNo skills yet.\n\n` +
+            `A skill is a note this repository keeps about itself — how it builds,\n` +
+            `where things live, conventions worth not rediscovering. Matching skills\n` +
+            `are added to the prompt automatically, so the agent starts each session\n` +
+            `already knowing them.\n\n` +
+            `To create one, ask the coordinator:\n` +
+            `  /role coordinator\n` +
+            `  Propose a skill recording how this project builds and tests.\n\n` +
+            `You review the diff, then \`gnomon skill accept <id>\` makes it real.\n` +
+            `Nothing an agent proposes takes effect until you accept it.`
+        );
+        return true;
       }
-      console.log(`\nProposed (.gnomon/skills/proposed/) — NOT loaded:`);
+
+      console.log(`\nIn use — added to the prompt when they match:`);
+      if (active.length === 0) console.log("  (none yet)");
+      for (const sk of active) {
+        console.log(`  ${sk.id} — ${sk.description ?? sk.name}`);
+        console.log(
+          `      applies: ${sk.match ? `when the turn matches /${sk.match}/` : "always"}` +
+            `${sk.roles ? `, for ${sk.roles.join(", ")}` : ""}`
+        );
+      }
+
+      console.log(`\nProposed by an agent — not in use until you accept:`);
       if (pending.length === 0) console.log("  (none)");
       for (const sk of pending) {
         console.log(`  ${sk.id} — ${sk.description ?? sk.name}`);
+        console.log(`      gnomon skill accept ${sk.id}   ·   gnomon skill reject ${sk.id}`);
       }
       if (pending.length > 0) {
         console.log(
-          `\nAccept with \`gnomon skill accept <id>\`. Accepting changes the ` +
-            `surface hash and takes effect next session.`
+          `\nAccepting moves it into the surface, which changes the surface hash\n` +
+            `deliberately, and it loads from the next session.`
         );
       }
       return true;
@@ -1629,10 +1671,37 @@ export async function runPromptLoop(
     return "no";
   };
 
+  // Standing approvals. `turn` is cleared before every turn; `session` lasts
+  // until the loop exits. Approving a long read-only survey one call at a time
+  // is not oversight, it is a rhythm you stop reading — which is worse than
+  // deciding once, deliberately, with the scope stated.
+  let approveRestOfTurn = false;
+  let approveRestOfSession = false;
+
   // Approval gate. Reads from the same queue the loop uses, so a decision
   // typed while a tool is pending is picked up in order.
   const approve = async (req: ApprovalRequest): Promise<boolean> => {
     const ui = uiOf(state);
+
+    if (approveRestOfSession || approveRestOfTurn) {
+      console.log(
+        paint(
+          ui,
+          "gray",
+          `  ⤷ ${req.summary}  (standing approval: ${
+            approveRestOfSession ? "session" : "this turn"
+          })`
+        )
+      );
+      audit.write("approval", {
+        tool: req.tool,
+        summary: req.summary,
+        decision: "approved",
+        by: approveRestOfSession ? "human:standing-session" : "human:standing-turn",
+        interactive: Boolean(process.stdin.isTTY),
+      });
+      return true;
+    }
     console.log("");
     console.log(paint(ui, "yellow", `  ┌ approve: ${req.summary}`));
     for (const line of req.preview.slice(0, 60)) {
@@ -1646,7 +1715,13 @@ export async function runPromptLoop(
     if (req.preview.length > 60) {
       console.log(paint(ui, "gray", `  │ … ${req.preview.length - 60} more lines`));
     }
-    console.log(paint(ui, "yellow", "  └ [y]es / [N]o"));
+    console.log(
+      paint(
+        ui,
+        "yellow",
+        "  └ [y]es · [a]ll this turn · [s]ession · [N]o"
+      )
+    );
 
     // On a TTY, anything already typed was meant as a message, not as an
     // answer to a prompt the user had not yet seen — hold it and replay it.
@@ -1669,6 +1744,27 @@ export async function runPromptLoop(
 
       if (/^(y|yes)$/i.test(answer)) {
         yes = true;
+        break;
+      }
+      if (/^(a|all)$/i.test(answer)) {
+        approveRestOfTurn = true;
+        yes = true;
+        console.log(
+          paint(ui, "yellow", "  approving the rest of THIS TURN without asking")
+        );
+        break;
+      }
+      if (/^(s|session)$/i.test(answer)) {
+        approveRestOfSession = true;
+        yes = true;
+        console.log(
+          paint(
+            ui,
+            "red",
+            "  approving every gated call for the REST OF THE SESSION — " +
+              "writes included. /reset does not clear this; restart to revoke."
+          )
+        );
         break;
       }
       if (/^(n|no)$/i.test(answer) || answer === "") {
@@ -1978,7 +2074,9 @@ export async function runPromptLoop(
           )
         );
       }
-      const systemPrompt = applySkills(config.system.content ?? "", active);
+      const systemPrompt = withWorkingContext(
+        applySkills(config.system.content ?? "", active)
+      );
 
       // Build the window from prior turns before calling.
       const built = buildMessages(state, systemPrompt, cleanedInput);
@@ -2004,6 +2102,9 @@ export async function runPromptLoop(
           ? `${route.model} — loading model${carried}`
           : `${route.model}${carried}`
       );
+
+      // Scope check: a standing approval given for one turn ends with it.
+      approveRestOfTurn = false;
 
       const start = Date.now();
       const controller = new AbortController();

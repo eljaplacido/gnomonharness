@@ -4,6 +4,17 @@
 
 ### Added
 
+- **Standing approvals.** `[a]ll this turn` and `[s]ession` alongside yes/no.
+  A repository survey costs a dozen read-only calls before any work starts,
+  and approving each separately is a rhythm you stop reading rather than
+  oversight. Both are recorded in the audit trail as standing approvals, so
+  the record never implies each call was seen individually.
+- **The model's reasoning is shown before the approval prompt.** It was being
+  discarded, leaving a command and no reason for it.
+- **A working-context block in the system prompt** stating that tool paths are
+  relative to the repository root. Deliberately path-free: an absolute path
+  would make the prompt differ between machines.
+
 - **`zen` and `go` endpoints are declared by default**, inert until a role
   names one. They shipped commented out, so a scaffolded project's
   `/endpoints` listed only `local` with no sign the others were possible.
@@ -127,6 +138,13 @@
 
 ### Fixed
 
+- **`/skills` explained nothing when there were none.** Two empty lists and the
+  word "surface" told a first-time reader what the feature was not. It now
+  says what a skill is and how to make one.
+- **`max_steps` was too low for a survey.** A repository audit hit the cap at
+  10 calls with useful work done and nothing to show for it. Raised for the
+  high-volume roles, and the message now names the knob and says the work so
+  far stands.
 - **A model API error reported only its status.** `Model API error: 400 Bad
   Request` discarded the body, which said
   `deepseek-r1:… does not support tools`. A real session spent three turns

@@ -493,6 +493,22 @@ A real diff, before anything is applied:
   └ [y]es / [N]o
 ```
 
+The model's own reasoning is printed above the prompt, so you are approving a
+decision rather than a row of symbols.
+
+```
+  └ [y]es · [a]ll this turn · [s]ession · [N]o
+```
+
+- **`a`** approves the rest of *this turn*. A survey costs a dozen read-only
+  calls before any work starts, and approving each one separately is not
+  oversight — it is a rhythm you stop reading.
+- **`s`** approves everything for the rest of the session, writes included.
+  Cleared only by restarting.
+
+Both are recorded in the audit trail as standing approvals
+(`by: "human:standing-turn"`), so the record never implies you saw each call.
+
 Unrecognised input re-asks rather than counting as "no". Typed-ahead lines are
 held aside and replayed, so a message you typed before the prompt appeared does
 not silently decide it.

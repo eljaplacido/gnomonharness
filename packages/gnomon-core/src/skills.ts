@@ -149,6 +149,25 @@ export function selectSkills(skills: Skill[], role: string, input: string): Skil
  * something this repository observed, and it should not be able to quietly
  * outrank system.md.
  */
+/**
+ * State the working invariant the model otherwise has to guess.
+ *
+ * Without it a session watched a model invent `/repo`, run `find /repo`, get
+ * exit 2, and spend three tool calls rediscovering where it was. The wording
+ * is deliberately path-free: an absolute path would make the prompt differ
+ * between machines, which is the thing this harness exists to avoid.
+ */
+export const WORKING_CONTEXT =
+  "## Working context\n\n" +
+  "You are operating inside a single repository. Every tool path is resolved " +
+  "relative to its root, and paths outside it are refused — so use relative " +
+  "paths like `src/main.rs` or `.` and never guess an absolute one. `read` on " +
+  "a directory lists it; start there rather than shelling out to find.";
+
+export function withWorkingContext(systemPrompt: string): string {
+  return `${systemPrompt}\n\n${WORKING_CONTEXT}`;
+}
+
 export function applySkills(systemPrompt: string, skills: Skill[]): string {
   if (skills.length === 0) return systemPrompt;
   const blocks = skills.map(

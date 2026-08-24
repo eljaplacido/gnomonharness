@@ -181,3 +181,19 @@ describe("authorship", () => {
     expect(skillId("!!!")).toBe("skill");
   });
 });
+
+describe("working context", () => {
+  it("states the path invariant without naming a machine path", async () => {
+    const { WORKING_CONTEXT, withWorkingContext } = await import("./skills.js");
+    // A session watched a model invent `/repo` and spend three tool calls
+    // rediscovering where it was. Telling it the invariant fixes that — but an
+    // absolute path would make the prompt differ between machines, which is
+    // the thing this harness exists to avoid.
+    expect(WORKING_CONTEXT).toMatch(/relative/i);
+    expect(WORKING_CONTEXT).not.toMatch(/\/home\/|\/Users\/|C:\\\\/);
+    expect(withWorkingContext("SYS")).toContain("SYS");
+    expect(withWorkingContext("SYS").indexOf("SYS")).toBeLessThan(
+      withWorkingContext("SYS").indexOf("Working context")
+    );
+  });
+});
