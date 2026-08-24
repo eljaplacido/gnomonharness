@@ -4,6 +4,12 @@
 
 ### Added
 
+- **`gnomon init`** — scaffolds a documented starter `.gnomon/` surface into
+  any project. `--from <path>` copies an existing surface instead, `--force`
+  replaces one, and it refuses to clobber a surface without it.
+- **`pnpm run link:global`** puts `gnomon` on PATH, so the harness can be used
+  from any project rather than only from its own checkout.
+
 - **Tool execution.** `gnomon prompt` now runs the tools declared in
   `tools.toml` — `read`, `bash`, `write`, `edit` — feeding results back until
   the model answers in prose, bounded by `max_steps` from `roles.toml`.
@@ -37,6 +43,12 @@
 
 ### Fixed
 
+- **The `bin` entry could never have run.** `packages/gnomon-cli/gnomon.js`
+  used `require` inside a `"type": "module"` package (an immediate
+  ReferenceError), resolved the harness root one directory too high, and
+  pinned `cwd` to the checkout — so even once loadable it would have operated
+  on the harness instead of the user's project. Rewritten as ESM that locates
+  the checkout relative to itself and inherits the caller's directory.
 - **`parseToml` did not support `[[array-of-tables]]`.** The `[table]` pattern
   also matches `[[tools]]`, so all four `[[tools]]` entries in `tools.toml`
   collapsed into a single key named `"[tools]"` (last one wins) and

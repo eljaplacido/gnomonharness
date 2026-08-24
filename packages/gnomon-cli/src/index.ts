@@ -33,6 +33,7 @@ import {
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { runTui } from "gnomon-tui";
+import { initSurface } from "./init.js";
 
 // ---------------------------------------------------------------------------
 // Argument parsing (minimal, no deps)
@@ -43,6 +44,8 @@ interface CliArgs {
   subcommand?: string;
   dir?: string;
   printSession?: boolean;
+  force?: boolean;
+  from?: string;
   positional: string[];
 }
 
@@ -68,6 +71,11 @@ export function parseArgs(args: string[]): CliArgs {
     if (arg === "--dir" || arg === "-d") {
       i++;
       result.dir = args[i];
+    } else if (arg === "--from") {
+      i++;
+      result.from = args[i];
+    } else if (arg === "--force" || arg === "-f") {
+      result.force = true;
     } else if (arg === "-p") {
       // Already handled above
     } else if (arg.startsWith("-")) {
@@ -221,6 +229,28 @@ async function cmdSimulate(args: CliArgs): Promise<void> {
   console.log(JSON.stringify(result, null, 2));
 }
 
+async function cmdInit(args: CliArgs): Promise<void> {
+  let result;
+  try {
+    result = initSurface({ dir: args.dir, force: args.force, from: args.from });
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+
+  console.log(`Initialised ${result.gnomonDir}`);
+  for (const f of result.written) console.log(`  + .gnomon/${f}`);
+  for (const f of result.skipped) console.log(`  · .gnomon/${f} (kept existing)`);
+
+  console.log("");
+  console.log("Next:");
+  console.log("  1. Edit .gnomon/roles.toml — the model tags must be ones you");
+  console.log("     actually have. `ollama list` shows them.");
+  console.log("  2. Run `gnomon prompt` in this directory.");
+  console.log("");
+  console.log("Approval is on_write: reads are free, writes show a diff first.");
+}
+
 async function cmdPrompt(args: CliArgs): Promise<void> {
   const config = loadConfig(args.dir);
   await runPromptLoop(config, args.subcommand || "implement");
@@ -234,6 +264,10 @@ function showHelp(): void {
   console.log(`gnomon v0.1.0 — deterministic coding agent harness
 
 Commands:
+  init [--dir <path>] [--from <path>] [--force]
+    Write a .gnomon/ surface into a project. --from copies an existing
+    surface instead of the built-in starter templates.
+
   surface [manifest|hash|paths] [--dir <path>]
     Show surface hash, manifest, or paths for .gnomon/ tree
 
@@ -257,6 +291,11 @@ Commands:
 
 One-shot mode: gnomon <command>
 Interactive mode: gnomon prompt
+
+Getting started in a project:
+  cd /path/to/project
+  gnomon init
+  gnomon prompt
 
 Environment:
   GNOMON_BIN_OVERRIDE     Path to gnomon binary (for testing)
@@ -303,6 +342,9 @@ async function main(): Promise<void> {
       break;
     case "simulate":
       await cmdSimulate(args);
+      break;
+    case "init":
+      await cmdInit(args);
       break;
     case "prompt":
     case "run":

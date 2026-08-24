@@ -492,6 +492,49 @@ cargo build
 ./gnomon tui              # Session browser
 ```
 
+### Installing the Command
+
+The CLI is a `bin`, so it can live on your PATH and be run from any project:
+
+```bash
+# once, from the gnomon checkout
+pnpm install
+pnpm run link:global      # → `gnomon` on PATH
+
+# then, in any project
+cd ~/code/my-project
+gnomon init               # writes .gnomon/
+gnomon prompt             # start working
+```
+
+`gnomon` resolves `.gnomon/` from your **current directory**, so it operates on
+the project you are standing in, not on the harness checkout.
+
+`pnpm run unlink:global` removes it.
+
+> Not on npm yet. The workspace packages are `private` and depend on each other
+> via `workspace:*`, so `npm install gnomon` is not a thing today — publishing
+> would mean making them public and versioning the internal deps.
+
+### `gnomon init`
+
+| Flag | Effect |
+|---|---|
+| *(none)* | Write the built-in starter surface into `./.gnomon/` |
+| `--dir <path>` | Initialise a different directory |
+| `--from <path>` | Copy an existing `.gnomon/` instead of the starter templates |
+| `--force` | Replace an existing surface (refuses without it) |
+
+The starter surface is deliberately minimal and documented. **Edit
+`.gnomon/roles.toml` first** — the model tags are concrete backend tags, not
+aliases, so they must name models you actually have (`ollama list`).
+
+To inherit a configuration that already works:
+
+```bash
+gnomon init --from ~/Desktop/gnomon
+```
+
 ### In a New Project
 
 Drop a `.gnomon/` directory into your project:
