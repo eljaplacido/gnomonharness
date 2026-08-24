@@ -533,7 +533,8 @@ describe("max_steps", () => {
 
   it("reaching the budget still produces an answer", async () => {
     const config: any = loadConfig("../..");
-    config.roles = { tiny: { model: "M", max_steps: 1 } };
+    // max_steps is a checkpoint now, so give this one an actual ceiling.
+    config.roles = { tiny: { model: "M", max_steps: 1, max_steps_total: 1 } };
     const state: any = { config, exchanges: [], currentRole: "tiny" };
 
     let calls = 0;
@@ -581,12 +582,155 @@ describe("max_steps", () => {
         // The gathered work is not thrown away mid-sentence.
         expect(turn.content).toContain("Here is what I found so far.");
         // And the reader is told the answer is partial, and why.
-        expect(turn.content).toContain("max_steps");
+        expect(turn.content).toMatch(/max_steps_total|ceiling/);
         expect(mapBucket(turn.code)).toBe("refusal");
-        expect(said.join("\n")).toContain("Reached max_steps");
+        expect(said.join("\n")).toContain("Reached the ceiling");
         // A wrap-up call happened, and it carried no tools.
         expect(calls).toBeGreaterThan(1);
       }
     );
+  });
+});
+
+describe("long-horizon turns", () => {
+  const fakeProgress = { start() {}, update() {}, stop() {} } as any;
+  const fakeUi = {
+    meta: [], meta_style: "line", think: "hide", spinner: false, color: false,
+  } as any;
+  const route = {
+    model: "M", temperature: 0, top_p: 1,
+    target: { model: "M", temperature: 0, top_p: 1, url: "http://x" },
+  } as any;
+
+  const withFetch = async (impl: typeof fetch, run: () => Promise<void>) => {
+    const original = globalThis.fetch;
+    globalThis.fetch = impl;
+    try { await run(); } finally { globalThis.fetch = original; }
+  };
+
+  const cfgWithRole = (def: Record<string, unknown>) => {
+    const config: any = loadConfig("../..");
+    config.roles = { worker: { model: "M", ...def } };
+    return config;
+  };
+
+  it("passes a checkpoint and keeps going instead of stopping", async () => {
+    // max_steps used to end the turn. Unattended, nobody is there to re-prompt.
+    const config = cfgWithRole({ max_steps: 2, max_steps_total: 8 });
+    const state: any = { config, exchanges: [], currentRole: "worker" };
+    const said: string[] = [];
+    let toolRounds = 0;
+
+    await withFetch(
+      (async (_u: string, init: any) => {
+        const sentTools = JSON.parse(init.body).tools !== undefined;
+        if (!sentTools) {
+          return { ok: true, json: async () => ({ message: { content: "wrapped up" } }) } as any;
+        }
+        toolRounds++;
+        // Ask for distinct calls, so this is progress rather than a stall.
+        return {
+          ok: true,
+          json: async () => ({
+            message: {
+              content: "",
+              tool_calls: [
+                { function: { name: "read", arguments: { path: `f${toolRounds}a` } } },
+                { function: { name: "read", arguments: { path: `f${toolRounds}b` } } },
+              ],
+            },
+          }),
+        } as any;
+      }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state, "worker", route, [{ role: "user", content: "audit" }],
+          { approve: async () => true, progress: fakeProgress, ui: fakeUi, say: (l: string) => said.push(l) }
+        );
+        // It continued past 2, and only stopped at the ceiling.
+        expect(turn.toolSteps).toBeGreaterThan(2);
+        expect(said.join("\n")).toContain("continuing (leg 2)");
+        expect(turn.content).toContain("wrapped up");
+      }
+    );
+  });
+
+  it("stops when the same call repeats — a circle is not progress", async () => {
+    const config = cfgWithRole({ max_steps: 50, max_steps_total: 500 });
+    const state: any = { config, exchanges: [], currentRole: "worker" };
+    const said: string[] = [];
+
+    await withFetch(
+      (async (_u: string, init: any) => {
+        const sentTools = JSON.parse(init.body).tools !== undefined;
+        if (!sentTools) {
+          return { ok: true, json: async () => ({ message: { content: "done" } }) } as any;
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            message: {
+              content: "",
+              tool_calls: [{ function: { name: "read", arguments: { path: "same.txt" } } }],
+            },
+          }),
+        } as any;
+      }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state, "worker", route, [{ role: "user", content: "go" }],
+          { approve: async () => true, progress: fakeProgress, ui: fakeUi, say: (l: string) => said.push(l) }
+        );
+        // Nowhere near the 500 ceiling — it noticed the loop instead.
+        expect(turn.toolSteps).toBeLessThan(10);
+        expect(said.join("\n")).toContain("repeated");
+      }
+    );
+  });
+});
+
+describe("trimWorking", () => {
+  const msg = (role: any, content: string) => ({ role, content }) as any;
+
+  it("leaves a small turn alone", () => {
+    const w = [msg("system", "rules"), msg("user", "task"), msg("assistant", "ok")];
+    const r = promptLoop.trimWorking(w, 10_000);
+    expect(r.dropped).toBe(0);
+    expect(r.messages).toBe(w);
+  });
+
+  it("keeps the instructions and the task, whatever the budget", () => {
+    // Losing the task halfway through the task is the one unrecoverable
+    // outcome, so the head is never what gives way.
+    const w = [
+      msg("system", "RULES"),
+      msg("user", "THE TASK"),
+      ...Array.from({ length: 40 }, (_, i) => msg("assistant", `filler ${i} `.repeat(50))),
+    ];
+    const r = promptLoop.trimWorking(w, 400);
+    expect(r.dropped).toBeGreaterThan(0);
+    const body = r.messages.map((m) => m.content).join("\n");
+    expect(body).toContain("RULES");
+    expect(body).toContain("THE TASK");
+  });
+
+  it("says what it dropped rather than letting it vanish", () => {
+    const w = [
+      msg("user", "task"),
+      ...Array.from({ length: 30 }, (_, i) => msg("assistant", `x`.repeat(400))),
+    ];
+    const r = promptLoop.trimWorking(w, 300);
+    expect(r.messages.map((m) => m.content).join("\n")).toContain("were dropped");
+  });
+
+  it("never leaves a tool result answering a call the model cannot see", () => {
+    // Some backends reject a tool message with no visible tool_calls before it.
+    const w = [
+      msg("user", "task"),
+      ...Array.from({ length: 20 }, () => msg("tool", "y".repeat(400))),
+    ];
+    const r = promptLoop.trimWorking(w, 500);
+    const afterHead = r.messages.slice(2);
+    expect(afterHead[0]?.role).not.toBe("tool");
   });
 });

@@ -179,6 +179,17 @@ export interface RoleDef {
    */
   tools?: string[];
   /**
+   * Hard ceiling on tool calls for one turn.
+   *
+   * `max_steps` is a checkpoint, not a wall: on reaching it the harness
+   * compacts the turn's working context and continues. This is where it
+   * actually stops. Defaults to eight times `max_steps`.
+   *
+   * Set it to `max_steps` to get the old behaviour — stop at the first
+   * checkpoint — or to 0 to refuse to continue at all.
+   */
+  max_steps_total?: number;
+  /**
    * Shell commands this role may run, as regular expressions.
    *
    * Absent means any command. That matters more than it looks: `bash` can

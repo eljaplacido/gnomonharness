@@ -108,22 +108,31 @@ const TOPICS: Record<string, Builder> = {
         "the real boundary — a verifier has no write tool, so it cannot alter what",
         "it judges, however it is prompted.",
         "",
-        "max_steps caps tool calls per turn. A role that does not set one gets 12,",
-        "not unlimited. Reaching it does not discard the turn: the model is asked",
-        "to answer from what it gathered and say what it could not reach.",
+        "max_steps is a checkpoint, not a wall: on reaching it the harness",
+        "compacts the turn's working context and continues. max_steps_total is",
+        "where it actually stops — a session left running unattended cannot",
+        "depend on someone noticing a stall and re-prompting.",
+        "",
+        "A turn also stops early if the same tool call repeats: a circle is not",
+        "progress, and on autopilot it would burn the whole budget.",
       ],
       here: [
         `current        ${role}`,
+        "steps          per-leg / ceiling",
         `mode           ${routing.mode}`,
         ...listRoles(config).map((r) => {
           const def = config.roles[r];
           const tools = Array.isArray(def.tools) ? def.tools.join(", ") : "all declared";
           // An unset max_steps is not "unlimited" — it is a default of 12 that
           // used to be invisible. Show the effective number either way.
-          const steps =
-            typeof def.max_steps === "number" ? `${def.max_steps}` : "12 (default)";
+          const per = typeof def.max_steps === "number" ? def.max_steps : 12;
+          const total =
+            typeof def.max_steps_total === "number" ? def.max_steps_total : per * 8;
+          const steps = `${per}/${total}${
+            typeof def.max_steps === "number" ? "" : " (default)"
+          }`;
           return bullet(
-            `${r.padEnd(12)} ${(def.model ?? "?").padEnd(22)} ${steps.padEnd(12)} ${tools}${
+            `${r.padEnd(12)} ${(def.model ?? "?").padEnd(22)} ${steps.padEnd(14)} ${tools}${
               r === role ? "  ← current" : ""
             }`
           );

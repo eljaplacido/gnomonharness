@@ -379,7 +379,8 @@ endpoint = "zen"
 | `endpoint` | Named block from `[endpoints]`; defaults to `local`. |
 | `tools` | Tools this role may call. Absent = all declared; `[]` = none. |
 | `bash_allow` | Shell commands this role may run. See [Tools and Safety](#tools-and-safety). |
-| `max_steps` | Cap on tool calls per turn. **A role that omits it gets 12, not unlimited** — every scaffolded role states its own so nothing depends on that. Reaching it does not discard the turn: the model is asked to answer from what it gathered and say what it could not reach. |
+| `max_steps` | Tool calls per **leg**. Reaching it is a checkpoint, not a wall: the harness compacts the turn's working context and continues. A role that omits it gets 12. |
+| `max_steps_total` | Where a turn actually stops. Defaults to `max_steps × 8`. Set it equal to `max_steps` to stop at the first checkpoint. |
 | `fallback` | Second endpoint tried when the primary fails or times out. |
 
 ### `tools.toml`
@@ -620,6 +621,34 @@ failure is worth knowing: **decisions survive, specifics erode.**
 
 **Long-term** is [skills](#skills), which persist in the surface across
 sessions.
+
+### Long turns
+
+A turn is not capped at one leg. On reaching `max_steps` the harness compacts
+the turn's own working context and carries on:
+
+```
+[tools] 26/160 calls — continuing (leg 2)
+✓ turn 1 · plan · result · 1m49s · 32 tool call(s)
+```
+
+This matters for unattended runs. `max_steps` used to end the turn, which is
+survivable when someone is watching and can re-prompt, and not otherwise.
+
+Three things bound it:
+
+- **`max_steps_total`** — the actual ceiling.
+- **Working-context compaction.** A turn that reads forty files accumulates
+  forty tool results, and on a long run that is what overflows first.
+  Instructions and the original request are never what gives way; the oldest
+  tool traffic is, and what was dropped is stated rather than vanishing.
+- **Stall detection.** The same tool call repeating three times over is a
+  circle, not progress, and on autopilot it would burn the whole budget.
+  The turn stops and says so.
+
+Reaching any of them spends one final tool-free call asking the model to answer
+from what it gathered and state what it could not reach — the budget is on tool
+calls, and a wrap-up costs none.
 
 ---
 

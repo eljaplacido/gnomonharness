@@ -4,6 +4,17 @@
 
 ### Added
 
+- **Turns continue past `max_steps`.** It is a checkpoint now, not a wall: the
+  harness compacts the turn's working context and carries on to
+  `max_steps_total` (default `max_steps × 8`). A session left running
+  unattended cannot depend on someone noticing a stall and re-prompting.
+- **Working-context compaction inside a turn.** Between turns the history was
+  folded; nothing did that *within* one, and a turn that reads forty files
+  accumulates forty tool results — on a long run that is what overflows first.
+  Instructions and the original request are never what gives way.
+- **Stall detection.** The same tool call repeating three times ends the turn.
+  A circle is not progress, and on autopilot it would burn the whole budget.
+
 - **`gnomon key set|list|unset`** — store an API key for an endpoint that
   declares one. `gnomon key set zen` resolves the variable name from the
   surface; a bare `VARIABLE_NAME` works too. Input is hidden on a terminal and

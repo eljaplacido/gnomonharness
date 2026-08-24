@@ -177,6 +177,7 @@ endpoint = "local"
 temperature = 0.2
 top_p = 0.9
 max_steps = 20
+max_steps_total = 160
 # Reads the repo and writes specs/contracts only — never source. Keeping it
 # off \`edit\` is what stops a planning turn from quietly becoming a code change.
 tools = ["read", "write", "skill"]
@@ -188,6 +189,7 @@ endpoint = "local"
 temperature = 0.3
 top_p = 0.95
 max_steps = 32
+max_steps_total = 256
 tools = ["read", "write", "edit", "bash"]
 description = "Tests first, then the code that satisfies them"
 
@@ -197,6 +199,7 @@ endpoint = "local"
 temperature = 0.1
 top_p = 0.9
 max_steps = 20
+max_steps_total = 160
 # No write, no edit. A verifier that can edit can make a failing suite pass
 # by changing the suite, so the capability is simply absent.
 tools = ["read", "bash"]
@@ -217,6 +220,7 @@ endpoint = "local"
 temperature = 0.2
 top_p = 0.9
 max_steps = 20
+max_steps_total = 160
 tools = ["read", "bash"]
 description = "Hardest reasoning, lowest call volume"
 
@@ -226,6 +230,7 @@ endpoint = "local"
 temperature = 0.3
 top_p = 0.95
 max_steps = 28
+max_steps_total = 224
 description = "Highest token volume — where local hosting pays off"
 
 [roles.critique]
@@ -234,6 +239,7 @@ endpoint = "local"
 temperature = 0.1
 top_p = 0.9
 max_steps = 16
+max_steps_total = 128
 tools = ["read", "bash"]
 description = "Must not share context with the implementer"
 
@@ -243,6 +249,7 @@ endpoint = "local"
 temperature = 0.2
 top_p = 0.95
 max_steps = 6
+max_steps_total = 48
 description = "Summarisation, compaction, commit messages"
 
 # A second endpoint, tried when the primary fails or times out.

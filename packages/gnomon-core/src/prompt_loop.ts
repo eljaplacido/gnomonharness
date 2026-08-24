@@ -529,6 +529,84 @@ export interface TurnResult {
  */
 export const DEFAULT_MAX_STEPS = 12;
 
+/**
+ * How many checkpoints a turn may pass before the wall.
+ *
+ * `max_steps` was a wall, so a long task ended mid-sentence and the operator
+ * had to notice and re-prompt. In a session left running for hours nobody is
+ * watching to do that, so it is a checkpoint now: the harness compacts and
+ * continues, up to `max_steps * DEFAULT_LEGS` unless the role says otherwise.
+ */
+export const DEFAULT_LEGS = 8;
+
+/** Consecutive identical calls that mean the model is going in circles. */
+const STALL_REPEATS = 3;
+
+/** A comparable identity for a tool call, for stall detection. */
+function callSignature(call: ToolCall): string {
+  return `${call.name}:${JSON.stringify(call.args)}`;
+}
+
+/**
+ * Shrink a turn's working context so a long turn cannot outgrow the window.
+ *
+ * Between turns `compactSession` folds history; nothing did that *inside* a
+ * turn, and a turn that reads forty files accumulates forty tool results. On a
+ * long autopilot run that is what overflows first.
+ *
+ * The instructions and the original request are kept whole — losing the task
+ * halfway through a task is the one unrecoverable outcome. The oldest tool
+ * traffic gives way, and what was dropped is stated rather than vanishing.
+ */
+export function trimWorking(
+  working: ChatMessage[],
+  budgetTokens: number
+): { messages: ChatMessage[]; dropped: number } {
+  const cost = (m: ChatMessage) => estimateTokens(m.content);
+  const total = working.reduce((n, m) => n + cost(m), 0);
+  if (total <= budgetTokens) return { messages: working, dropped: 0 };
+
+  // Everything before the first user message is instruction, and the first
+  // user message is the task. Both are kept whatever the budget.
+  const firstUser = working.findIndex((m) => m.role === "user");
+  const head = firstUser === -1 ? working.slice() : working.slice(0, firstUser + 1);
+  const tail = firstUser === -1 ? [] : working.slice(firstUser + 1);
+
+  const headCost = head.reduce((n, m) => n + cost(m), 0);
+  const kept: ChatMessage[] = [];
+  let used = headCost;
+
+  // Newest first: recent tool results are what the next call reasons from.
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const c = cost(tail[i]);
+    if (used + c > budgetTokens) break;
+    used += c;
+    kept.unshift(tail[i]);
+  }
+
+  const dropped = tail.length - kept.length;
+  if (dropped === 0) return { messages: working, dropped: 0 };
+
+  // A tool result must not be the first thing after the head: some backends
+  // reject a tool message that answers no visible call.
+  while (kept.length > 0 && kept[0].role === "tool") kept.shift();
+
+  return {
+    messages: [
+      ...head,
+      {
+        role: "system",
+        content:
+          `[gnomon context] ${dropped} earlier step(s) in this turn were dropped ` +
+          `to stay inside the context window. Their findings are not available ` +
+          `to re-read — if you need one again, gather it again.`,
+      },
+      ...kept,
+    ],
+    dropped,
+  };
+}
+
 /** Severity order, so the worst outcome in a turn is the one reported. */
 function worse(a: number, b: number): number {
   const rank = (c: number) =>
@@ -581,11 +659,22 @@ export async function runAgenticTurn(
   const roleDef = config.roles[role] ?? {};
   const maxSteps =
     typeof roleDef.max_steps === "number" ? roleDef.max_steps : DEFAULT_MAX_STEPS;
+  // max_steps is a checkpoint; this is the wall. A session left running for
+  // hours cannot be asked to notice a stall and re-prompt by hand.
+  const maxTotal =
+    typeof roleDef.max_steps_total === "number"
+      ? roleDef.max_steps_total
+      : maxSteps * DEFAULT_LEGS;
 
+  const ctxLimits = resolveContext(config);
   const working: ChatMessage[] = [...messages];
   const toolLog: string[] = [];
   let code = 0;
   let steps = 0;
+  let stepsThisLeg = 0;
+  let leg = 1;
+  // Signatures of the last few calls, to notice a model going in circles.
+  const recentCalls: string[] = [];
   let usedModel = route.model;
 
   const cancelled = (): TurnResult => ({
@@ -658,24 +747,40 @@ export async function runAgenticTurn(
       return { content: result.content, code, model: usedModel, toolSteps: steps, toolLog };
     }
 
-    if (steps + result.toolCalls.length > maxSteps) {
-      const note =
-        `Reached max_steps (${maxSteps}) for role "${role}" after ${steps} ` +
-        `tool call(s). Raise it for "${role}" in .gnomon/roles.toml if this ` +
-        `role routinely needs more.`;
+    // Stalled? Repeating one call verbatim is not progress, and on autopilot
+    // it would burn the whole budget in a circle.
+    const stalled =
+      recentCalls.length >= STALL_REPEATS &&
+      recentCalls
+        .slice(-STALL_REPEATS)
+        .every((sig) => sig === callSignature(result.toolCalls[0]));
+
+    const wall = maxTotal <= 0 || steps >= maxTotal;
+    // Measured on what has already run, never on what is about to. Gating on
+    // the incoming batch meant a response asking for more calls than
+    // `max_steps` checkpointed forever without executing anything — a leg that
+    // makes no progress is a spin, not a checkpoint. A batch may overshoot the
+    // per-leg figure slightly; that is the price of guaranteeing progress.
+    const checkpoint = stepsThisLeg >= maxSteps;
+
+    if (stalled || (checkpoint && wall)) {
+      const note = stalled
+        ? `Stopped: the same tool call repeated ${STALL_REPEATS} times without ` +
+          `progress, after ${steps} call(s).`
+        : `Reached the ceiling for role "${role}" — ${steps} tool call(s), ` +
+          `max_steps_total ${maxTotal}. Raise it in .gnomon/roles.toml if this ` +
+          `role routinely needs more.`;
       deps.say(paint(deps.ui, "yellow", `  [tools] ${note}`));
 
-      // Spend one more call — without tools — asking it to conclude. A turn
-      // that gathered eight files and then stopped mid-sentence threw that
-      // work away; the budget is on tool calls, and a wrap-up costs none.
+      // The budget is on tool calls and a wrap-up costs none, so the work
+      // gathered so far is answered from rather than discarded.
       deps.progress.start(`${usedModel} — wrapping up`);
       working.push({
         role: "system",
         content:
-          `You have reached this turn's tool budget of ${maxSteps} calls and ` +
-          `cannot call any more. Answer now from what you already gathered. ` +
-          `State plainly what you were unable to examine, so the user knows ` +
-          `what is missing rather than assuming the answer is complete.`,
+          `You cannot call any more tools this turn. Answer now from what you ` +
+          `already gathered, and state plainly what you were unable to examine ` +
+          `so the user knows the answer is partial.`,
       });
       const closing = await callEndpoint(
         route.target,
@@ -698,6 +803,38 @@ export async function runAgenticTurn(
         toolSteps: steps,
         toolLog,
       };
+    }
+
+    if (checkpoint) {
+      // Not a wall: compact and carry on. A session running unattended for
+      // hours cannot depend on someone noticing and re-prompting.
+      leg++;
+      stepsThisLeg = 0;
+
+      const budget = Math.max(1024, Math.floor(ctxLimits.max_context_tokens * 0.6));
+      const before = working.length;
+      const trimmed = trimWorking(working, budget);
+      if (trimmed.dropped > 0) {
+        working.length = 0;
+        working.push(...trimmed.messages);
+        deps.say(
+          paint(
+            deps.ui,
+            "gray",
+            `  [context] turn grew past the window — dropped ${trimmed.dropped} ` +
+              `of ${before} steps of working context`
+          )
+        );
+      }
+
+      deps.say(
+        paint(
+          deps.ui,
+          "gray",
+          `  [tools] ${steps}/${maxTotal} calls — continuing (leg ${leg})`
+        )
+      );
+      deps.progress.start(`${usedModel} — leg ${leg}, ${steps} call(s) so far`);
     }
 
     // Echo the assistant turn back verbatim — some backends validate that a
@@ -726,6 +863,9 @@ export async function runAgenticTurn(
         return cancelled();
       }
       steps++;
+      stepsThisLeg++;
+      recentCalls.push(callSignature(call));
+      if (recentCalls.length > STALL_REPEATS * 2) recentCalls.shift();
       const gated = needsApproval(call.name, gate) && offered.has(call.name);
       deps.progress.stop();
       deps.say(
