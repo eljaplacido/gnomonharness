@@ -507,6 +507,13 @@ gnomon init               # writes .gnomon/
 gnomon prompt             # start working
 ```
 
+`pnpm run link:global` prints `WARN ... has no binaries`. That warning is
+wrong — pnpm emits it while reading the manifest, then creates the shim
+anyway. Confirm with `which gnomon`.
+
+If `gnomon` is not found afterwards, pnpm's global bin directory is not on
+your PATH; run `pnpm setup` once and reopen the shell.
+
 `gnomon` resolves `.gnomon/` from your **current directory**, so it operates on
 the project you are standing in, not on the harness checkout.
 
