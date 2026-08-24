@@ -8,9 +8,10 @@
  *   gnomon enumerations             — show contract
  *   gnomon session [--dir <path>]   — run a session
  *   gnomon prompt                   — interactive agent loop
+ *   gnomon -p "<task>"              — one-shot task, JSON record, contract exit code
  *
- * One-shot mode (no TUI): gnomon <command>
- * Interactive mode: gnomon prompt
+ * The one-shot form is the invocation a machine pins. Everything else here is for a
+ * person at a terminal.
  */
 
 import {
@@ -20,6 +21,7 @@ import {
   resolveGnomonDir,
   Manifest,
   runPromptLoop,
+  runTask,
 } from "gnomon-core";
 import {
   manifest as surfaceManifest,
@@ -30,67 +32,29 @@ import {
   simulatePatch,
   Enumerations,
 } from "gnomon-natives";
-import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { runTui } from "gnomon-tui";
-
-// ---------------------------------------------------------------------------
-// Argument parsing (minimal, no deps)
-// ---------------------------------------------------------------------------
-
-interface CliArgs {
-  command: string;
-  subcommand?: string;
-  dir?: string;
-  printSession?: boolean;
-  positional: string[];
-}
-
-export function parseArgs(args: string[]): CliArgs {
-  const result: CliArgs = { command: "", subcommand: "", positional: [] };
-  let i = 0;
-
-  // Check for -p flag early
-  if (args.includes("-p")) {
-    result.printSession = true;
-  }
-
-  // Skip program name
-  if (args[0]?.startsWith("-")) {
-    i = 1;
-  } else {
-    result.command = args[0];
-    i = 1;
-  }
-
-  while (i < args.length) {
-    const arg = args[i];
-    if (arg === "--dir" || arg === "-d") {
-      i++;
-      result.dir = args[i];
-    } else if (arg === "-p") {
-      // Already handled above
-    } else if (arg.startsWith("-")) {
-      // Flag (ignored for now)
-    } else {
-      if (!result.subcommand) {
-        result.subcommand = arg;
-      } else {
-        result.positional.push(arg);
-      }
-    }
-    i++;
-  }
-
-  return result;
-}
+import { CliArgs, oneShotTask, parseArgs } from "./args.js";
 
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
+/**
+ * `--dir` names the repository, everywhere, and `.gnomon/` is resolved beneath it.
+ *
+ * The native hasher takes the `.gnomon/` directory itself while `loadConfig` takes
+ * the repository root, so passing one `--dir` value straight to both hashed one tree
+ * and read another. Resolving here keeps the flag meaning one thing; a path that is
+ * not a repository now fails by name instead of silently hashing the wrong tree.
+ */
+function surfaceDirOf(args: CliArgs): string | undefined {
+  return args.dir ? resolveGnomonDir(args.dir) : undefined;
+}
+
 async function cmdSurface(args: CliArgs): Promise<void> {
-  const dir = args.dir;
+  const dir = surfaceDirOf(args);
   if (args.subcommand === "manifest") {
     const m = surfaceManifest(dir);
     console.log(JSON.stringify(m, null, 2));
@@ -156,7 +120,7 @@ async function cmdSession(args: CliArgs): Promise<void> {
   const gnomonDir = config.gnomonDir;
 
   // Build manifest from surface
-  const m = surfaceManifest(dir);
+  const m = surfaceManifest(surfaceDirOf(args));
   const session = new SessionManager(m as Manifest);
 
   for (const cmd of commands) {
@@ -177,10 +141,9 @@ async function cmdSession(args: CliArgs): Promise<void> {
     }
   }
 
-  // Save session
-  const outFile = args.positional.length > 0
-    ? `${args.positional[0].replace(/[/:]/g, "_")}.json`
-    : "session.json";
+  // Written where the readers look. The TUI and `gnomon -p` both read sessions/,
+  // and a record saved beside the working directory is a record they never see.
+  const outFile = sessionPath(dir, "session");
   session.save(outFile);
   console.log(`Session saved: ${outFile}`);
   console.log(`Total steps: ${session.stepCount}`);
@@ -221,6 +184,58 @@ async function cmdSimulate(args: CliArgs): Promise<void> {
   console.log(JSON.stringify(result, null, 2));
 }
 
+/** Where a session record is written: sessions/<name>-<n>.json under the repo. */
+function sessionPath(dir: string | undefined, name: string): string {
+  const sessionsDir = join(dir ? resolve(dir) : process.cwd(), "sessions");
+  mkdirSync(sessionsDir, { recursive: true });
+  const existing = existsSync(sessionsDir)
+    ? readdirSync(sessionsDir).filter((f) => f.endsWith(".json")).length
+    : 0;
+  return join(sessionsDir, `${name}-${String(existing + 1).padStart(4, "0")}.json`);
+}
+
+/**
+ * One task, one record, one exit code from the published table.
+ *
+ * This is the contract a machine consumer pins, so it holds three things even when
+ * the run goes badly: the record is written, the record names the surface it ran
+ * under, and the process exits with the native value of its last step rather than a
+ * generic 1. An unreachable provider exits 12 and is an apparatus failure — not a
+ * task the agent failed, and not a task it refused.
+ */
+async function cmdTask(args: CliArgs, task: string): Promise<void> {
+  const dir = args.dir;
+  const config = loadConfig(dir);
+  const manifest = surfaceManifest(surfaceDirOf(args)) as Manifest;
+
+  const { record, exitCode } = await runTask({
+    prompt: task,
+    role: args.role,
+    dir: dir ? resolve(dir) : process.cwd(),
+    manifest,
+    config,
+  });
+
+  const outFile = sessionPath(dir, "task");
+  writeFileSync(outFile, JSON.stringify(record, null, 2));
+
+  if (args.json) {
+    console.log(JSON.stringify(record, null, 2));
+  } else {
+    for (const step of record.session.steps) {
+      const label = step.attempt ? `attempt ${step.attempt}` : "step";
+      console.log(`[${label}: ${step.model ?? "-"}] ${step.bucket} (${step.native_code}) ${step.duration_ms}ms`);
+      const text = step.stdout || step.stderr;
+      if (text) console.log(text);
+    }
+    console.error(`session: ${outFile}`);
+  }
+
+  // Set rather than exit: `process.exit()` can truncate a record still being
+  // written to a pipe, and the record is the point of this mode.
+  process.exitCode = exitCode;
+}
+
 async function cmdPrompt(args: CliArgs): Promise<void> {
   const config = loadConfig(args.dir);
   await runPromptLoop(config, args.subcommand || "implement");
@@ -235,7 +250,8 @@ function showHelp(): void {
 
 Commands:
   surface [manifest|hash|paths] [--dir <path>]
-    Show surface hash, manifest, or paths for .gnomon/ tree
+    Show surface hash, manifest, or paths for .gnomon/ tree.
+    --dir names the repository; .gnomon/ is resolved beneath it.
 
   enumerations
     Show the enumerations contract (edit_format, sandbox, approval, role_profile)
@@ -255,11 +271,24 @@ Commands:
   run
     Alias for \`prompt\`
 
-One-shot mode: gnomon <command>
-Interactive mode: gnomon prompt
+  -p "<task>" [--role <role>] [--json] [--dir <path>]
+    One-shot: run one task, write a session record under sessions/, and exit with
+    the native value of the last step. This is the invocation a machine pins.
 
-Environment:
-  GNOMON_BIN_OVERRIDE     Path to gnomon binary (for testing)
+  -p
+    With no task: print the id of the most recent session.
+
+Exit codes (conformance/exit_codes.json):
+  0,1    result              completed / failed
+  2,3,4  refusal             refused by model / by gate / preconditions unmet
+  10-13  apparatus_failure   launch failed / timed out / provider unreachable /
+                             context exhausted
+
+Environment — machine scope, recorded on every session record because none of it
+is in the surface hash:
+  GNOMON_MODEL_URL        Primary endpoint, when roles.toml declares none
+  GNOMON_MODEL_TIMEOUT_MS Per-call bound; it decides what counts as a timeout
+  GNOMON_BIN_OVERRIDE     Path to the native binaries (for testing)
   GNOMON_DIR              Override .gnomon/ directory path
 `);
 }
@@ -271,13 +300,19 @@ Environment:
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
-  if (args.command === "--help" || args.command === "-h" || args.command === "help") {
+  if (args.command === "help") {
     showHelp();
     return;
   }
 
-  // -p flag: print latest session ID regardless of command
-  if (args.printSession) {
+  // `-p <task>` is the one-shot mode; bare `-p` keeps its older meaning, printing
+  // the id of the most recent session.
+  const task = oneShotTask(args);
+  if (task !== null) {
+    await cmdTask(args, task);
+    return;
+  }
+  if (args.print) {
     await cmdSessionId(args);
     return;
   }

@@ -8,7 +8,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  PNPM_HOME: /home/runner/.pnpm/bin
 
 jobs:
   rust-tests:
@@ -17,6 +16,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # dtolnay/rust-toolchain — the ref names the toolchain. `dtolnay/rust-action`
+      # does not exist, and every run of this workflow failed on it before the fix.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -58,7 +59,7 @@ jobs:
         run: pnpm run build
 
       - name: Run tests
-        run: pnpm test --filter gnomon-core --filter gnomon-natives --filter gnomon-cli
+        run: pnpm test --filter gnomon-core --filter gnomon-natives --filter gnomon-cli --filter gnomon-tui
 
   ci-script:
     name: Full CI pipeline (.gnomon/ci.sh)
@@ -99,9 +100,10 @@ jobs:
         run: cargo build --bin gnomon-surface
         working-directory: crates/gnomon-surface
 
+      # Built from the workspace root: a member crate still writes into the
+      # workspace target/, which is where the upload step reads from.
       - name: Build (release)
-        run: cargo build --release --bin gnomon-surface
-        working-directory: crates/gnomon-surface
+        run: cargo build --release -p gnomon-surface
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -124,14 +126,77 @@ jobs:
         working-directory: crates/gnomon-surface
 
       - name: Build (release)
-        run: cargo build --release --bin gnomon-surface
-        working-directory: crates/gnomon-surface
+        run: cargo build --release -p gnomon-surface
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: gnomon-surface-macos
           path: target/release/gnomon-surface
+
+  executor-contract:
+    name: Executor contract (one-shot, provider unreachable)
+    runs-on: ubuntu-latest
+    needs: [rust-tests, ts-tests]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build gnomon-surface
+        run: cargo build -p gnomon-surface
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      # The one-shot mode is the invocation a machine consumer pins, so CI asserts
+      # its contract rather than smoke-testing the interactive loop: with no model
+      # reachable it must exit 12 (provider_unreachable) and still write a session
+      # record whose only outcome is apparatus_failure. An agent that cannot reach a
+      # provider has not failed the task — that distinction is the whole exit table.
+      #
+      # `--role smol` deliberately: it is the one role declaring no fallback, so the
+      # probe stays inside the runner instead of calling a third-party endpoint.
+      - name: One-shot exits on the published table
+        env:
+          GNOMON_BIN_OVERRIDE: target/debug
+          GNOMON_MODEL_URL: http://127.0.0.1:1/v1/chat/completions
+        run: |
+          set +e
+          pnpm -w exec tsx packages/gnomon-cli/src/index.ts -p 'ci contract probe' \
+            --role smol --json > session.json
+          code=$?
+          set -e
+          echo "exit code: $code"
+          test "$code" -eq 12 || { echo "expected 12 (provider_unreachable), got $code"; exit 1; }
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync("session.json", "utf8"));
+            const buckets = [...new Set(r.session.steps.map(s => s.bucket))];
+            if (JSON.stringify(buckets) !== JSON.stringify(["apparatus_failure"]))
+              throw new Error("expected only apparatus_failure, got " + buckets);
+            if (!r.session.manifest.surface_hash) throw new Error("no surface hash on the record");
+            const ts = r.tool_surface;
+            // The invariant, not a fixed value: what was offered must be a subset of
+            // what the surface declares, and `enforced` must follow what was offered.
+            // Asserting `enforced === false` outlived the day the tool loop landed.
+            if (!ts.effective.every(t => ts.declared.includes(t)))
+              throw new Error("offered a tool the surface never declared: " + ts.effective);
+            if (ts.enforced !== (ts.effective.length > 0))
+              throw new Error("tool_surface.enforced does not follow what was offered");
+            if (!r.environment.some(e => e.name === "GNOMON_MODEL_URL" && e.set))
+              throw new Error("the environment override in force was not recorded");
+            console.log("session record conforms");
+          '
 
   test-interactive:
     name: Interactive prompt loop smoke test

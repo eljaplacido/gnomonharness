@@ -11,6 +11,7 @@
  * No TUI deps — pure logic layer.
  */
 
+import { dirname } from "node:path";
 import { GnomonConfig, loadConfig, recomputeManifest } from "./config.js";
 import {
   SessionManager,
@@ -20,6 +21,7 @@ import {
   validateSession,
   Manifest,
   defaultExitCodeMap,
+  SURFACE_DRIFT_CODE,
 } from "./session.js";
 
 // ---------------------------------------------------------------------------
@@ -225,22 +227,27 @@ export async function runAgentTurn(
 
     // 3.5. Re-assert manifest (drift detection)
     try {
+      // recomputeManifest takes the repository, not `.gnomon/` — it joins the
+      // directory name itself. Handed `.gnomon/` it looked for `.gnomon/.gnomon`,
+      // found nothing, and hashed an all-absent surface: a re-assertion that could
+      // only ever report drift, on every turn, whatever the files said.
       const { manifest: newSources, surface_hash: newHash } = recomputeManifest(
-        agent.gnomon.gnomonDir,
+        dirname(agent.gnomon.gnomonDir),
         "0.1.0"
       );
       const currentHash = agent.manifest.surface_hash;
       if (currentHash && newHash && currentHash !== newHash) {
-        // Drift detected — record apparatus_failure
+        // Drift: the surface moved under the session. A refusal, not an apparatus
+        // failure — see SURFACE_DRIFT_CODE.
         const driftStep: SessionStep = {
-          native_code: 10,
-          bucket: "apparatus_failure",
+          native_code: SURFACE_DRIFT_CODE,
+          bucket: "refusal",
           duration_ms: 0,
           stdout: `Manifest hash changed: ${currentHash.slice(0, 8)}... → ${newHash.slice(0, 8)}...`,
           stderr: "Surface drift detected — .gnomon/ files modified",
         };
         steps.push(driftStep);
-        agent.session.addStep(10, driftStep.stdout, driftStep.stderr, 0);
+        agent.session.addStep(SURFACE_DRIFT_CODE, driftStep.stdout, driftStep.stderr, 0);
       } else if (currentHash && !newHash) {
         // First run — seed the manifest
         agent.manifest.surface_hash = newHash;

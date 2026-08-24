@@ -116,22 +116,31 @@ role routing, `hashline` edit format. You stop reaching for other agents.
 - [x] `gnomon apply <patchset>` → apply patches
 - [x] `gnomon simulate <patchset>` → dry-run patches
 - [x] `gnomon prompt` → interactive mode (stub)
-- [x] Argument parsing with --dir flag
-- [ ] `gnomon -p session-id` → print current session ID
+- [x] Argument parsing with --dir flag; `--dir` names the repository everywhere
+- [x] `gnomon -p` → print current session ID
+- [x] `gnomon -p "<task>"` → one-shot task: session record out, contract exit code
+- [ ] Tool loop: a declared tool actually offered to a provider and executed
 
 ## P6 — CI/CD (week 6)
 
 **Goal:** `.gnomon/ci.sh` validates all contracts end-to-end.
 
-- [x] Run all tests across all crates (46 Rust + 63 TS = 109)
+- [x] Run all tests across all crates. **No count is asserted** — a number no
+      producer regenerates is stale the moment somebody adds a test
 - [x] Manifest golden fixture match
 - [x] Enumerations schema validation
 - [x] Session golden fixture validation
 - [x] Exit codes fixture validation
 - [x] Determinism check (same tree → same hash)
 - [x] GitHub Actions integration (push to trigger)
-  - [x] `ci.yml` — 7 jobs: Rust tests, TS tests, full CI script, Ubuntu build,
-        macOS build, interactive smoke test, clippy
+  - [x] `ci.yml` — 6 jobs: Rust tests + clippy, TS tests, full CI script,
+        Ubuntu build, macOS build, executor contract
+  - [x] **The pipeline actually runs.** Every run before 2026-08-24 failed at
+        setup: `dtolnay/rust-action` does not exist, and pnpm was told its
+        version twice. Nothing had executed a single test on a runner
+  - [x] The interactive smoke test is replaced by an executor-contract job:
+        with no provider reachable, one-shot must exit 12 and write a record
+        whose only bucket is `apparatus_failure`
   - [x] Push-triggered on master/develop, PR-triggered on master
   - [x] Build badges in README
 - [ ] aarch64 build step (Docker or cross-compile)

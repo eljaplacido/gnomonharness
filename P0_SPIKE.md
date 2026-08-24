@@ -1,5 +1,20 @@
 # P0 Spike — Findings Template
 
+> **Status: recorded, undated, and not realised in code.**
+>
+> Two things stop this from being a reading anybody can rely on:
+>
+> 1. The decision below is dated `2025-07-xx`. A placeholder is not a date, and a
+>    record without one cannot be placed against the commits it supposedly governs.
+> 2. It concludes *extend* — depend on published `pi` packages — and no source file
+>    in this repository imports one. `gnomon-core` did declare `pi-agent-core` and
+>    `pi-ai` at `latest`; both are **placeholder name reservations on npm at 0.0.1**
+>    containing no code, so the declaration bought nothing and left `latest` free to
+>    pull whatever appears there later. They have been removed.
+>
+> Re-run the spike and date it, or record that the posture is now *neither* extend
+> nor embed but a hand-rolled loop, which is what the code actually is.
+
 ## Purpose
 
 Determine **extend vs embed** by testing pi package hook surfaces, and choose

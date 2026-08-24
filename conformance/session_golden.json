@@ -1,5 +1,5 @@
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "session": {
     "manifest": {
       "build": "0.1.0+test",
@@ -12,21 +12,44 @@
     "steps": [
       {
         "seq": 1,
-        "native_code": 0,
-        "bucket": "result",
-        "duration_ms": 150,
-        "action": "read",
-        "tool": "read",
-        "result": "read file"
+        "native_code": 12,
+        "bucket": "apparatus_failure",
+        "duration_ms": 40,
+        "role": "implement",
+        "model": "local:large",
+        "attempt": 1,
+        "reason": "primary unreachable — recorded, not smoothed over"
       },
       {
         "seq": 2,
-        "native_code": 2,
-        "bucket": "refusal",
-        "duration_ms": 20,
-        "action": "reject",
-        "reason": "model declined"
+        "native_code": 0,
+        "bucket": "result",
+        "duration_ms": 1500,
+        "role": "implement",
+        "model": "frontier:remote",
+        "attempt": 2,
+        "action": "answered after two tool calls"
       }
     ]
+  },
+  "environment": [
+    { "name": "GNOMON_MODEL_URL", "set": true, "value": "http://127.0.0.1:11434" },
+    { "name": "GNOMON_MODEL_TIMEOUT_MS", "set": false, "value": null },
+    { "name": "GNOMON_BIN_OVERRIDE", "set": false, "value": null }
+  ],
+  "tool_surface": {
+    "declared": ["bash", "edit", "read", "write"],
+    "effective": ["bash", "edit", "read", "write"],
+    "enforced": true
+  },
+  "policy": {
+    "sandbox": "confined",
+    "approval": "on_write",
+    "edit_format": "hashline",
+    "enforced": true
+  },
+  "task": {
+    "prompt": "implement the thing",
+    "role": "implement"
   }
 }

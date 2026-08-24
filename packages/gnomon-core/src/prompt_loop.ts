@@ -330,9 +330,17 @@ async function callEndpoint(
     });
 
     if (!res.ok) {
+      // The published table separates these, and a consumer that only ever sees
+      // 10 cannot tell a box that is down from a window that is full.
+      const body = await res.text().catch(() => "");
+      const code = /context (length|window)|maximum context|too many tokens/i.test(body)
+        ? 13
+        : res.status === 408 || res.status === 504
+          ? 11
+          : 12;
       return {
         content: `Model API error: ${res.status} ${res.statusText}`,
-        code: 10,
+        code,
         toolCalls: [],
       };
     }
@@ -360,10 +368,16 @@ async function callEndpoint(
 
     return { content, code: 0, toolCalls, rawToolCalls: raw };
   } catch (err) {
+    const name = err instanceof Error ? err.name : "";
     const msg = err instanceof Error ? err.message : String(err);
+    // 11 timed_out, 12 provider_unreachable. `10 launch_failed` is for a process
+    // that never started, which is not what a fetch reports.
+    const timedOut = name === "TimeoutError" || name === "AbortError";
     return {
-      content: `Model unavailable at ${target.url}: ${msg}`,
-      code: 10,
+      content: timedOut
+        ? `Model timed out after ${timeoutMs}ms at ${target.url}`
+        : `Model unavailable at ${target.url}: ${msg}`,
+      code: timedOut ? 11 : 12,
       toolCalls: [],
     };
   }
@@ -411,6 +425,20 @@ export interface TurnDeps {
   ui: ResolvedUi;
   /** Emit a transcript line as work happens */
   say: (line: string) => void;
+  /**
+   * Called once per model attempt, primary and declared fallback alike.
+   *
+   * The turn reports one worst-outcome code, which is right for a person reading a
+   * transcript and wrong for a record: a primary that timed out and a fallback that
+   * answered are two attempts with two buckets, and a session that only worked on
+   * the second try is a finding only if the first try survives somewhere.
+   */
+  onAttempt?: (attempt: {
+    attempt: number;
+    model: string;
+    code: number;
+    duration_ms: number;
+  }) => void;
 }
 
 /** Result of one agentic turn, before it becomes a PromptExchange. */
@@ -474,9 +502,11 @@ export async function runAgenticTurn(
   const toolLog: string[] = [];
   let code = 0;
   let steps = 0;
+  let attempts = 0;
   let usedModel = route.model;
 
   for (;;) {
+    let attemptStart = Date.now();
     let result = await callEndpoint(
       route.target,
       working,
@@ -484,18 +514,33 @@ export async function runAgenticTurn(
       modelTimeoutMs()
     );
     usedModel = route.model;
+    attempts += 1;
+    deps.onAttempt?.({
+      attempt: attempts,
+      model: route.model,
+      code: result.code,
+      duration_ms: Date.now() - attemptStart,
+    });
 
     if (result.code !== 0 && route.fallback) {
       deps.progress.update(
         `${route.fallback.model} — primary unavailable, falling back`
       );
       usedModel = route.fallback.model;
+      attemptStart = Date.now();
       result = await callEndpoint(
         route.fallback,
         working,
         toolSet.schemas,
         modelTimeoutMs()
       );
+      attempts += 1;
+      deps.onAttempt?.({
+        attempt: attempts,
+        model: route.fallback.model,
+        code: result.code,
+        duration_ms: Date.now() - attemptStart,
+      });
     }
 
     code = worse(code, result.code);

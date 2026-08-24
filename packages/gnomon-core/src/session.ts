@@ -7,7 +7,7 @@
 
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
-import { GnomonConfig } from "./config.js";
+import { EnvironmentOverride } from "./config.js";
 
 // ---------------------------------------------------------------------------
 // Types — mirror gnomon-exec Rust structs
@@ -26,6 +26,17 @@ export interface SessionStep {
   duration_ms: number;
   stdout: string;
   stderr: string;
+  /** Which role this step ran under, when a model served it. */
+  role?: string;
+  /** The model that actually answered — not the one the role names, when a
+   * declared fallback took over. */
+  model?: string;
+  /** 1 for the primary target, 2 for the declared fallback, and so on.
+   *
+   * The harness may retry internally; it may not report three attempts as one
+   * clean step. A session that only worked on the second try is a finding, and it
+   * is only a finding if the first try is still in the record. */
+  attempt?: number;
 }
 
 /**
@@ -57,6 +68,20 @@ export interface SessionRecord {
     version: string;
     steps: SessionStep[];
   };
+  /** Machine-scoped variables in force at invocation. Not in the surface hash —
+   * which is exactly why they are on the record. */
+  environment?: EnvironmentOverride[];
+  /** What the surface declares against what the loop offered a model. */
+  tool_surface?: { declared: string[]; effective: string[]; enforced: boolean };
+  /** What policy.toml selects, and whether anything acted on it. */
+  policy?: {
+    sandbox: string | null;
+    approval: string | null;
+    edit_format: string | null;
+    enforced: boolean;
+  };
+  /** The task this session was asked to perform, when it was given one. */
+  task?: { prompt: string; role: string };
   metadata: {
     created: string;
     runtime_version: string;
@@ -98,6 +123,17 @@ export function defaultExitCodeMap(): ExitCodeMap {
     expected_count: 9,
   };
 }
+
+/**
+ * The surface moved during a session: native `4 preconditions_unmet`, a refusal.
+ *
+ * A refusal rather than an apparatus failure, and the difference is not pedantry.
+ * Nothing broke — the surface the session was asserted against simply stopped being
+ * the surface on disk, so the harness declines to continue instead of producing a
+ * result nobody can reproduce. Filing that under apparatus failure would hide a
+ * configuration change inside the bucket reserved for the machine being down.
+ */
+export const SURFACE_DRIFT_CODE = 4;
 
 /**
  * Map a native exit code to a bucket.
@@ -167,6 +203,56 @@ export class SessionManager {
     };
     this._record.session.steps.push(step);
     this._stepCounter++;
+  }
+
+  /**
+   * Record one model attempt as its own step.
+   *
+   * One call per attempt, never one call per turn: a primary that timed out and a
+   * fallback that answered are two steps with two buckets, and collapsing them
+   * would report an apparatus failure as a clean result.
+   */
+  addModelStep(step: {
+    nativeCode: number;
+    role: string;
+    model: string;
+    attempt: number;
+    stdout?: string;
+    stderr?: string;
+    durationMs?: number;
+  }): SessionStep {
+    const recorded: SessionStep = {
+      native_code: step.nativeCode,
+      bucket: mapBucket(step.nativeCode),
+      duration_ms: step.durationMs ?? 0,
+      stdout: step.stdout ?? "",
+      stderr: step.stderr ?? "",
+      role: step.role,
+      model: step.model,
+      attempt: step.attempt,
+    };
+    this._record.session.steps.push(recorded);
+    this._stepCounter++;
+    return recorded;
+  }
+
+  /** Attach the context a consumer needs to read the steps: what the environment
+   * carried, what the surface declared, and what the task was. */
+  describeContext(context: {
+    environment?: EnvironmentOverride[];
+    tool_surface?: { declared: string[]; effective: string[]; enforced: boolean };
+    policy?: {
+      sandbox: string | null;
+      approval: string | null;
+      edit_format: string | null;
+      enforced: boolean;
+    };
+    task?: { prompt: string; role: string };
+  }): void {
+    if (context.environment) this._record.environment = context.environment;
+    if (context.tool_surface) this._record.tool_surface = context.tool_surface;
+    if (context.policy) this._record.policy = context.policy;
+    if (context.task) this._record.task = context.task;
   }
 
   /**

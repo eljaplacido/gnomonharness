@@ -367,13 +367,26 @@ Every session is a structured JSON record:
       }
     ]
   },
+  "environment": [
+    { "name": "GNOMON_MODEL_URL", "set": true, "value": "http://127.0.0.1:11434" }
+  ],
+  "tool_surface": { "declared": ["bash", "edit", "read", "write"], "effective": [], "enforced": false },
+  "policy": { "sandbox": "confined", "approval": "on_write", "edit_format": "hashline", "enforced": false },
   "metadata": {
-    "created": "2025-01-xxT...",
-    "runtime_version": "v20.x.x",
+    "runtime_version": "v22.x.x",
     "driver_version": "gnomon-core"
   }
 }
 ```
+
+`tool_surface` is the line to read first. `declared` is what `.gnomon/tools.toml`
+states and the hash covers; `effective` is what the loop actually offered the model on
+this run. `enforced` is true only when something was offered — a surface hash over a
+tool list no model ever saw describes an agent that does not exist, and a consumer
+reading only the hash cannot tell the two apart.
+
+`policy` reports the same way: the selects `.gnomon/policy.toml` publishes, and whether
+this run acted on them.
 
 - Steps are **ordered** — reordering changes the session hash.
 - No composite verdict. The set of outcomes (`outcomes[]`) carries
@@ -386,7 +399,12 @@ Every turn, gnomon **re-asserts** the manifest:
 
 1. Walks `.gnomon/`, hashes every file (SHA256).
 2. Compares against the current manifest's `surface_hash`.
-3. If changed → records an `apparatus_failure` step and halts.
+3. If changed → records a step with native `4 preconditions_unmet` and halts.
+
+That is a **refusal**, not an apparatus failure, and the distinction is deliberate:
+nothing broke. The surface the session was asserted against stopped being the surface
+on disk, so the harness declines to continue rather than produce a result nobody can
+reproduce.
 
 **Absence is part of the hash.** A file removed from `.gnomon/` is a surface
 change — not a silent no-op.
@@ -438,14 +456,31 @@ binaries must be built first (`cargo build`) for native commands to work.
 | `simulate <file>` | Dry-run a patch set | `./gnomon simulate patches.json` |
 | `run` | Full agent loop | `./gnomon run` |
 | `hash` | Print surface hash | `./gnomon hash` |
+| `-p "<task>"` | **One-shot**: one task, one session record, one contract exit code | `./gnomon -p 'implement the parser' --json` |
+| `-p` | With no task: print the id of the most recent session | `./gnomon -p` |
+
+`-p "<task>"` is the invocation a machine pins — a CI job, a runbook line, another
+system naming this harness as its executor. It writes a session record under
+`sessions/` and exits with the native value of its last step, so an unreachable
+provider exits 12 and is an apparatus failure rather than a task the agent failed.
 
 **Flags:**
 
 | Flag | Description |
 |------|-------------|
-| `--dir`, `-d` | Override project root (default: cwd) |
+| `--dir`, `-d` | The **repository** root; `.gnomon/` is resolved beneath it |
+| `--role <name>` | Which role answers a one-shot task (default: `implement`) |
+| `--json` | Print the session record to stdout and nothing else |
 | `--help` | Show help |
-| `--version` | Show version |
+
+**Environment** — machine scope, and therefore *not* in the surface hash. Each is
+recorded on every session record rather than assumed away:
+
+| Variable | What it changes |
+|----------|-----------------|
+| `GNOMON_MODEL_URL` | The primary endpoint, when `roles.toml` declares none |
+| `GNOMON_MODEL_TIMEOUT_MS` | The per-call bound — it decides what counts as a timeout |
+| `GNOMON_BIN_OVERRIDE` | Which native binaries run, including the one that hashes the surface |
 
 ### Interactive Commands (`./gnomon prompt`)
 
@@ -549,12 +584,23 @@ gnomon (agent) → sessions → agentcenter (dashboard)
 
 ### With TriadSepta (Future)
 
-**TriadSepta** is a planned runtime integration — a multi-agent orchestrator
-that coordinates gnomon sessions across repositories. When ready:
+See **[TRIADSEPTA-INTEGRATION.md](TRIADSEPTA-INTEGRATION.md)** for the seam, the open
+items, and what each side may and may not own.
 
-- gnomon sessions will be addressable as TriadSepta worker nodes.
-- Cross-repo coordination via TriadSepta's session graph.
-- Shared model routing across all gnomon instances in a TriadSepta cluster.
+TriadSepta is **not** an orchestrator, a runtime, or a cluster, and gnomon is not a
+worker node in one. It is a declaration interpreter: it pins subsystems at immutable
+revisions, emits a runbook of their own commands, and records whether composing them
+added anything they did not already know. Its governing constraint is that deleting it
+must leave every subsystem able to do everything it could before — so the relationship
+is one-directional and thin:
+
+- TriadSepta would name gnomon in an `executor` port: a **pin** (git revision + tree
+  hash), a **ref** (`.gnomon/`, by content hash), and **selects** validated against
+  `gnomon enumerations`.
+- It invokes `gnomon -p "<task>"` — gnomon's own command, in the product repository.
+- gnomon **never imports, calls, or requires TriadSepta.** A harness that reaches back
+  is a second integration layer, and it breaks that constraint in the direction nobody
+  is watching.
 
 ---
 
@@ -604,7 +650,7 @@ agent.extensionHost.register(ext);
 | **Bucket** | One of three outcome categories: `result`, `refusal`, `apparatus_failure`. |
 | **Role** | A named agent personality with a model assignment (e.g., `plan`, `implement`). |
 | **Profile** | A named preset of role-to-model mappings (e.g., `local_first`). |
-| **Drift** | Any change to `.gnomon/` files between turns — triggers `apparatus_failure`. |
+| **Drift** | Any change to `.gnomon/` files during a session — halts with `4 preconditions_unmet`, a refusal. |
 | **Session** | Ordered list of steps, each with a bucket, duration, and stdout/stderr. |
 | **Hook** | Extension callback at a lifecycle phase (pre_turn, post_turn, etc.). |
 | **gnomon-natives** | TypeScript bindings to the Rust crates (surface, edit, exec). |
@@ -617,15 +663,18 @@ agent.extensionHost.register(ext);
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| **P0 — Spike** | 🟡 Partial | Hook surface validation, serving stack |
-| **P1 — Contracts** | ✅ Done | Versioned contracts, red fixtures |
-| **P2 — Daily driver** | ✅ Done | Prompt loop, role routing, TUI |
+| **P0 — Spike** | 🟡 Recorded, undated | `P0_SPIKE.md` reports hooks reaching tool definitions and concludes *extend*. It carries no date, and nothing here imports a `pi` package — so the posture is decided on paper and unrealised in code |
+| **P1 — Contracts** | ✅ Done | Versioned contracts, fixtures in `conformance/` |
+| **P2 — Daily driver** | ✅ Done | Prompt loop, role routing, TUI, conversation window, and a tool loop: declared tools are offered to the provider, executed under the sandbox, and gated by the approval policy |
 | **P3 — Surface** | ✅ Done | Manifest, hash, golden fixture |
 | **P4 — Outcomes** | ✅ Done | Buckets, exit codes, session validation |
-| **P5 — Edit + CLI** | ✅ Done | Patches, enums, CLI, agent loop |
-| **P6 — CI/CD** | ✅ Done | `.gnomon/ci.sh`, 109 tests, 7-stage pipeline |
+| **P5 — Edit + CLI** | ✅ Done | Patches, enums, CLI, one-shot mode |
+| **P6 — CI/CD** | ✅ Done | `.gnomon/ci.sh` and a six-job pipeline. No test count is quoted: a number no producer regenerates goes stale the moment somebody adds a test |
 
-**109 tests pass** — 46 Rust, 63 TypeScript. CI validates all contracts end-to-end.
+The badge at the top is the only claim this file makes about the pipeline, because it
+is the only one with a producer behind it. Runs before 2026-08-24 failed at setup — on
+an action name that does not exist, and a pnpm version declared twice — so for a while
+the suite had never once run on a runner while the phase table read *done*.
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for full phase details.
 

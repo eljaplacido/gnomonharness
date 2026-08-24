@@ -103,6 +103,22 @@ for step in s['session']['steps']:
     assert 'bucket' in step
     assert 'duration_ms' in step
     assert step['bucket'] in ('result', 'refusal', 'apparatus_failure')
+
+# Declared against effective, and the environment that is in no hash at all. A
+# record that omits these cannot tell a reader whether the surface it names was
+# actually in force.
+assert 'tool_surface' in s, 'a record must state its tool surface'
+ts = s['tool_surface']
+assert set(ts['effective']) <= set(ts['declared']), 'offered a tool the surface never declared'
+assert ts['enforced'] == (len(ts['effective']) > 0), 'enforced must follow what was offered'
+assert 'policy' in s and isinstance(s['policy']['enforced'], bool)
+names = {e['name'] for e in s['environment']}
+assert {'GNOMON_MODEL_URL', 'GNOMON_MODEL_TIMEOUT_MS', 'GNOMON_BIN_OVERRIDE'} <= names
+
+# One attempt is one step, in order. A fallback that answered after a primary that
+# did not is two steps, and a record that shows one has smoothed over the failure.
+attempts = [step['attempt'] for step in s['session']['steps'] if 'attempt' in step]
+assert attempts == sorted(attempts), 'attempts must be recorded in order'
 print('OK')
 " || fail "Session fixture is invalid"
 pass "Session fixture is valid"

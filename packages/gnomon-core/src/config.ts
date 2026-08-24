@@ -6,7 +6,7 @@
  */
 
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
-import { join, resolve, dirname, relative } from "node:path";
+import { join, resolve, dirname, relative, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { SourceEntry } from "./session.js";
 
@@ -113,6 +113,14 @@ export interface RoleDef {
   temperature?: number;
   top_p?: number;
   description?: string;
+  /** Full chat-completions URL for the primary target.
+   *
+   * Declared here so that the endpoint is part of the hashed surface. When it is
+   * absent the resolver falls back to GNOMON_MODEL_URL, which is machine scope by
+   * another door: two runs at the same surface hash can then reach different
+   * models. That override is recorded on every session record rather than assumed
+   * away — see `environmentOverrides`. */
+  url?: string;
   fallback?: FallbackDef;
   // Legacy field (kept for compat with older role files)
   profile?: string;
@@ -161,7 +169,12 @@ export interface SystemPrompt {
  * - Key-value pairs: key = "value"
  * - Tables: [table]
  * - Nested tables: [table.sub]
+ * - Arrays of tables: [[table]]
  * - Arrays: items = ["a", "b"]
+ *
+ * `[[table]]` is not a nicety. `.gnomon/tools.toml` is written entirely in it, and
+ * without it every `[[tools]]` block collapsed onto one stray key — so the declared
+ * tool surface, the thing rule 3 exists to make into data, did not parse at all.
  */
 export function parseToml(content: string): Record<string, unknown> {
   const result: Record<string, unknown> = {};
@@ -383,6 +396,102 @@ export function getProfile(config: GnomonConfig, name: string): ProfileDef {
 }
 
 /**
+ * Declared against effective.
+ *
+ * `declared` is what `.gnomon/tools.toml` states and the surface hash covers.
+ * `effective` is what a loop actually offered a provider — passed in, because the
+ * set is built where the tools live and this module must not depend on them.
+ *
+ * `enforced` is false when nothing was offered. That case is not hypothetical: a
+ * hash covering a tool list no model ever saw describes an agent that does not
+ * exist, and a consumer reading only the hash cannot tell the two apart.
+ */
+export function toolSurface(
+  config: GnomonConfig,
+  offered: string[] = []
+): { declared: string[]; effective: string[]; enforced: boolean } {
+  const declared = declaredTools(config)
+    .filter((t) => t.enabled !== false)
+    .map((t) => t.name)
+    .sort((a, b) => a.localeCompare(b));
+  const effective = [...offered].sort((a, b) => a.localeCompare(b));
+  return { declared, effective, enforced: effective.length > 0 };
+}
+
+/**
+ * What `.gnomon/policy.toml` selects, and whether this run acted on it.
+ *
+ * `enforced` is passed in rather than assumed: the selects are published and hashed
+ * either way, and a record that asserts enforcement the run did not perform is worse
+ * than one that admits the gap.
+ */
+export function policySummary(
+  config: GnomonConfig,
+  enforced = false
+): {
+  sandbox: string | null;
+  approval: string | null;
+  edit_format: string | null;
+  enforced: boolean;
+} {
+  const policy = config.policy as unknown as Record<string, Record<string, unknown>>;
+  const defaults = (config.config.defaults ?? {}) as Record<string, unknown>;
+  const read = (table: string, key: string, fallback: string): string | null => {
+    const value = policy?.[table]?.[key];
+    if (typeof value === "string") return value;
+    const declared = defaults[fallback];
+    return typeof declared === "string" ? declared : null;
+  };
+  return {
+    sandbox: read("sandbox", "level", "sandbox"),
+    approval: read("approval", "gate", "approval"),
+    edit_format: read("edit", "format", "edit_format"),
+    enforced,
+  };
+}
+
+/** Machine-scoped variables that change what the agent does. */
+export const ENVIRONMENT_VARIABLES: readonly string[] = [
+  "GNOMON_MODEL_URL",
+  "GNOMON_MODEL_TIMEOUT_MS",
+  "GNOMON_BIN_OVERRIDE",
+];
+
+export interface EnvironmentOverride {
+  name: string;
+  set: boolean;
+  /** A safe rendering: the origin of a URL, the raw value otherwise, null when unset.
+   * A model URL can carry a token in its userinfo, so only its origin is kept. */
+  value: string | null;
+}
+
+/**
+ * The environment this run actually read, recorded rather than assumed away.
+ *
+ * Rule 1 removes machine-scoped *files*; these variables are the same thing through
+ * another door — they select an endpoint, a timeout that decides whether an outcome
+ * is apparatus failure, and even which binary computes the surface hash. None of
+ * them is in the hash, so two runs at one hash can differ. Recording them is what
+ * makes that visible to a consumer; it does not make it go away.
+ */
+export function environmentOverrides(
+  env: NodeJS.ProcessEnv = process.env
+): EnvironmentOverride[] {
+  return ENVIRONMENT_VARIABLES.map((name) => {
+    const raw = env[name];
+    if (raw === undefined || raw === "") return { name, set: false, value: null };
+    if (name.endsWith("_URL")) {
+      try {
+        return { name, set: true, value: new URL(raw).origin };
+      } catch {
+        return { name, set: true, value: "unparseable" };
+      }
+    }
+    return { name, set: true, value: raw };
+  });
+}
+
+/**
  * Check if a tool is enabled.
  */
 export function isToolEnabled(config: GnomonConfig, toolName: string): boolean {
@@ -537,11 +646,17 @@ export function routeRole(
   const top_p = roleDef.top_p ?? 0.9;
   const description = roleDef.description ?? "";
 
+  // Surface first, environment second. A URL declared in roles.toml is hashed and
+  // reviewable; GNOMON_MODEL_URL is neither, so it may fill a gap the surface left
+  // and may never override what the surface states.
   const target: RouteTarget = {
     model,
     temperature,
     top_p,
-    url: process.env.GNOMON_MODEL_URL ?? "http://localhost:11434/api/chat",
+    url:
+      roleDef.url ??
+      process.env.GNOMON_MODEL_URL ??
+      "http://localhost:11434/api/chat",
   };
 
   let fallback: RouteTarget | undefined;
@@ -635,7 +750,10 @@ function collectSurface(baseDir: string): SourceEntry[] {
         walk(fullPath);
       } else {
         const hash = fileSha256(fullPath);
-        sources.push({ path: relPath, sha256: hash });
+        // Posix separators always. The surface hash has to be byte-identical for
+        // the same tree, and `relative()` yields backslashes on Windows — which
+        // would give one repository two hashes depending on who checked it out.
+        sources.push({ path: relPath.split(sep).join("/"), sha256: hash });
       }
     }
   }

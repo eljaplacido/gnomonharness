@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   buildToolSet,
   executeTool,
@@ -41,7 +41,16 @@ beforeEach(() => {
   writeFileSync(join(root, "hello.txt"), "alpha\nbeta\ngamma\n");
   mkdirSync(join(root, "sub"));
 });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
+afterEach(() => {
+  // maxRetries: a child killed on timeout can still hold the directory open for
+  // a moment, and on Windows that removal fails with EPERM — failing a test that
+  // has already passed. Cleanup is not the assertion, so it may also give up.
+  try {
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  } catch {
+    /* the temp directory outlives the run; the OS clears it */
+  }
+});
 
 describe("buildToolSet", () => {
   it("offers the tools the surface declares", () => {
@@ -69,7 +78,10 @@ describe("sandbox", () => {
   });
 
   it("allows anything when sandbox is off", () => {
-    expect(resolveInRoot(root, "/etc/passwd", "off")).toBe("/etc/passwd");
+    // Compared against resolve(), not a literal: an absolute POSIX path resolves
+    // to a drive-qualified path on Windows, and hardcoding one spelling made the
+    // suite pass only on one kind of machine.
+    expect(resolveInRoot(root, "/etc/passwd", "off")).toBe(resolve("/etc/passwd"));
   });
 
   it("read outside the sandbox is a refusal, not a crash", async () => {
