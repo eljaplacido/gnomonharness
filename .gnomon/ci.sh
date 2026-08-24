@@ -16,6 +16,15 @@ cd "$(dirname "$0")/.."
 # Counts are read back out of the runners. Asserting a hardcoded total would
 # report a number nothing checked — the exact failure this harness exists to
 # make impossible.
+# gnomon-natives shells out to the Rust binaries, and `cargo test` builds test
+# harnesses rather than the bin targets — so build them explicitly first. This
+# keeps ci.sh self-contained instead of depending on a prior local build.
+echo "═══ Building native binaries ═══"
+cargo build --bin gnomon-surface --bin gnomon-enums 2>&1 | tail -3 \
+    || fail "Native binary build failed"
+pass "Native binaries built"
+
+echo ""
 echo "═══ Running tests ═══"
 RUST_OUT=$(cargo test --all 2>&1) || { echo "$RUST_OUT"; fail "Rust tests failed"; }
 echo "$RUST_OUT" | grep -E "^test result:" || true
