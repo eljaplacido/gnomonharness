@@ -88,13 +88,31 @@ function findBinary(name: string): string {
   }
 
   throw new Error(
-    `gnomon binary not found: "${name}". ` +
-    "Set GNOMON_BIN_OVERRIDE to point to the binary."
+    `gnomon native binary not found: "${name}".\n` +
+    "It is built from the Rust crates in this checkout:\n" +
+    "  cargo build --bin gnomon-surface --bin gnomon-enums\n" +
+    "Or set GNOMON_BIN_OVERRIDE to a directory containing it."
   );
 }
 
-const SURFACE_BIN = findBinary("gnomon-surface");
-const ENUMS_BIN = findBinary("gnomon-enums");
+/**
+ * Resolve a native binary on first use, not at import.
+ *
+ * These used to be module-level constants, so importing this package threw
+ * when the Rust binaries had not been built — which killed `gnomon --help`,
+ * `gnomon init` and `gnomon launch`, none of which touch a native binary. On a
+ * fresh clone that made the whole CLI unusable until someone happened to run
+ * cargo. Resolving lazily means only the commands that genuinely need the
+ * binaries can fail for want of them.
+ */
+const binCache = new Map<string, string>();
+function nativeBin(name: string): string {
+  const cached = binCache.get(name);
+  if (cached) return cached;
+  const resolved = findBinary(name);
+  binCache.set(name, resolved);
+  return resolved;
+}
 
 // ---------------------------------------------------------------------------
 // Surface API
@@ -107,7 +125,7 @@ const ENUMS_BIN = findBinary("gnomon-enums");
  */
 export function manifest(dir?: string): Manifest {
   const target = dir ? resolve(dir) : join(process.cwd(), ".gnomon");
-  const result = spawnSync(SURFACE_BIN, ["manifest", "--dir", target], {
+  const result = spawnSync(nativeBin("gnomon-surface"), ["manifest", "--dir", target], {
     encoding: "utf-8",
     maxBuffer: 10 * 1024 * 1024, // 10MB
   });
@@ -128,7 +146,7 @@ export function manifest(dir?: string): Manifest {
  */
 export function surfaceHash(dir?: string): string {
   const target = dir ? resolve(dir) : join(process.cwd(), ".gnomon");
-  const result = spawnSync(SURFACE_BIN, ["hash", "--dir", target], {
+  const result = spawnSync(nativeBin("gnomon-surface"), ["hash", "--dir", target], {
     encoding: "utf-8",
     maxBuffer: 10 * 1024 * 1024,
   });
@@ -149,7 +167,7 @@ export function surfaceHash(dir?: string): string {
  */
 export function listPaths(dir?: string): string[] {
   const target = dir ? resolve(dir) : join(process.cwd(), ".gnomon");
-  const result = spawnSync(SURFACE_BIN, ["paths", "--dir", target], {
+  const result = spawnSync(nativeBin("gnomon-surface"), ["paths", "--dir", target], {
     encoding: "utf-8",
     maxBuffer: 10 * 1024 * 1024,
   });
@@ -174,7 +192,7 @@ export function listPaths(dir?: string): string[] {
  * Returns the 4 top-level keys: edit_format, sandbox, approval, role_profile.
  */
 export function enumerations(): Enumerations {
-  const result = spawnSync(ENUMS_BIN, [], {
+  const result = spawnSync(nativeBin("gnomon-enums"), [], {
     encoding: "utf-8",
     maxBuffer: 1024 * 1024,
   });

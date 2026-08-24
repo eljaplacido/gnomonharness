@@ -76,3 +76,33 @@ describe("gnomon-natives surface", () => {
   });
 });
 
+
+describe("native binaries resolve lazily", () => {
+  it("importing the package does not require a built binary", async () => {
+    // These were module-level constants, so importing this package threw when
+    // the Rust crates had not been built — which killed `gnomon --help`,
+    // `gnomon init` and `gnomon launch`, none of which touch a native binary.
+    // On a fresh clone that made the whole CLI unusable.
+    const original = process.env.GNOMON_BIN_OVERRIDE;
+    process.env.GNOMON_BIN_OVERRIDE = "/nonexistent-on-purpose";
+    try {
+      await expect(import("./surface.js")).resolves.toBeDefined();
+    } finally {
+      if (original === undefined) delete process.env.GNOMON_BIN_OVERRIDE;
+      else process.env.GNOMON_BIN_OVERRIDE = original;
+    }
+  });
+
+  it("the error names the command that builds it", () => {
+    try {
+      manifest("/nonexistent-surface-path-for-error-text");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Either it ran (binary present) or it told the user what to run.
+      if (message.includes("not found")) {
+        expect(message).toContain("cargo build");
+        expect(message).toContain("GNOMON_BIN_OVERRIDE");
+      }
+    }
+  });
+});

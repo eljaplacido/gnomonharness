@@ -71,12 +71,18 @@ works.
 
 ```bash
 git clone https://github.com/eljaplacido/gnomonharness.git ~/gnomon
-cd ~/gnomon && pnpm install && pnpm run link:global
+cd ~/gnomon && pnpm run setup
 ```
 
-That puts `gnomon` on your PATH. It prints `WARN ... has no binaries` — pnpm
-emits that while reading the manifest and creates the shim anyway. Confirm with
-`which gnomon`; if it is missing, run `pnpm setup` once and reopen the shell.
+`setup` installs dependencies, builds the Rust binaries, and puts `gnomon` on
+your PATH. The Rust build is not optional: `gnomon surface`, `enumerations`,
+`apply` and `simulate` shell out to it. (`launch`, `prompt` and `init` do not,
+and work without it.)
+
+It prints `WARN ... has no binaries` — pnpm emits that while reading the
+manifest and creates the shim anyway. Confirm with `which gnomon`; if it is
+missing, run `pnpm setup` once (pnpm's own command, which configures the global
+bin directory) and reopen the shell.
 
 `pnpm run unlink:global` removes it.
 
@@ -793,7 +799,7 @@ that has them.
 ## Development
 
 ```bash
-pnpm install
+pnpm run setup             # deps + native binaries + `gnomon` on PATH
 pnpm test                  # 245 TypeScript tests
 cargo test --all           # 46 Rust tests
 bash .gnomon/ci.sh         # the full pipeline, including fixtures
