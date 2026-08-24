@@ -8,7 +8,7 @@ same prompt, same outcome — on any machine, for anyone who clones it.
 cd my-project && gnomon launch
 ```
 
-> **Status: working, pre-1.0.** 291 tests (46 Rust, 245 TypeScript), CI green
+> **Status: working, pre-1.0.** 389 tests (46 Rust, 343 TypeScript), CI green
 > across Linux and macOS. Interfaces may still move. The [Known Limits](#known-limits)
 > section is deliberately specific — read it before relying on this.
 
@@ -940,10 +940,17 @@ that has them.
 
 ```bash
 pnpm run setup             # deps + native binaries + `gnomon` on PATH
-pnpm test                  # 245 TypeScript tests
+pnpm test                  # 343 TypeScript tests
 cargo test --all           # 46 Rust tests
 bash .gnomon/ci.sh         # the full pipeline, including fixtures
 ```
+
+`packages/gnomon-cli/src/docs.test.ts` checks this README against the code:
+every command it lists is dispatched, every slash command it names is in the
+registry and reachable by Tab, every default it quotes is the default a
+scaffolded surface actually has, and every file it points at exists. Much of
+this repository's history is documented behaviour that was not the behaviour,
+so the docs are tested like anything else.
 
 CI runs Rust tests + clippy (`-D warnings`), TypeScript tests, the full
 pipeline, cross-platform builds, and an interactive smoke test.

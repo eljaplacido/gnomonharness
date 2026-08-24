@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AuditTrail, resolveAudit, verifyTrail, redact, ResolvedAudit } from "./audit.js";
+import { AuditTrail, resolveAudit, verifyTrail, redact, recordHash, ResolvedAudit } from "./audit.js";
 
 let root: string;
 const settings = (over: Partial<ResolvedAudit> = {}): ResolvedAudit => ({
@@ -164,5 +164,25 @@ describe("what a trail records", () => {
     const t = new AuditTrail(settings(), "s");
     for (let i = 0; i < 5; i++) t.write("turn", { i });
     expect(readTrail(t).map((r) => r.seq)).toEqual([0, 1, 2, 3, 4]);
+  });
+});
+
+describe("recordHash", () => {
+  it("does not depend on key order", () => {
+    // Records are re-hashed on read, where JSON.parse may present keys in a
+    // different order than they were written.
+    const a = { seq: 0, ts: "t", kind: "turn" as const, prev: null, role: "x", bucket: "result" };
+    const b = { bucket: "result", role: "x", prev: null, kind: "turn" as const, ts: "t", seq: 0 };
+    expect(recordHash(a)).toBe(recordHash(b));
+  });
+
+  it("ignores the hash field itself", () => {
+    const base = { seq: 1, ts: "t", kind: "turn" as const, prev: null, role: "x" };
+    expect(recordHash({ ...base, hash: "anything" })).toBe(recordHash(base));
+  });
+
+  it("changes when any recorded value changes", () => {
+    const base = { seq: 1, ts: "t", kind: "turn" as const, prev: null, bucket: "result" };
+    expect(recordHash({ ...base, bucket: "refusal" })).not.toBe(recordHash(base));
   });
 });

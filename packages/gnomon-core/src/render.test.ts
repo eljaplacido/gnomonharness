@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { splitThinking, renderMeta, renderExchange, Progress } from "./render.js";
+import { splitThinking, renderMeta, renderExchange, Progress, paint } from "./render.js";
 import { ResolvedUi, parseMetaFields, META_FIELDS } from "./config.js";
 import { PromptExchange } from "./prompt_loop.js";
 
@@ -172,5 +172,23 @@ describe("Progress", () => {
     p.start("x");
     p.stop();
     expect(written.join("")).toBe("  x\n");
+  });
+});
+
+describe("paint", () => {
+  it("returns text untouched when colour is off", () => {
+    // Piped output and CI logs must stay greppable.
+    expect(paint(ui({ color: false }), "green", "hello")).toBe("hello");
+  });
+
+  it("wraps in escapes when colour is on, without altering the text", () => {
+    const out = paint(ui({ color: true }), "green", "hello");
+    expect(out).toContain("hello");
+    expect(out).toMatch(/\x1b\[32m/);
+    expect(out).toMatch(/\x1b\[0m$/);
+  });
+
+  it("an unknown colour still returns the text", () => {
+    expect(paint(ui({ color: true }), "chartreuse", "hello")).toContain("hello");
   });
 });

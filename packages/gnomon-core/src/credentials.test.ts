@@ -13,6 +13,9 @@ import {
   unsetCredential,
   listCredentials,
   applyCredentials,
+  saveCredentials,
+  suppliedByStore,
+  isShellExported,
 } from "./credentials.js";
 
 let dir: string;
@@ -131,5 +134,42 @@ describe("applyCredentials", () => {
       expect(supplied).toEqual(["GNOMON_A", "GNOMON_B"]);
       expect(supplied.join()).not.toContain("1");
     });
+  });
+});
+
+describe("precedence reporting", () => {
+  it("distinguishes what this process injected from what the shell exported", () => {
+    // key list claimed an exported variable took precedence over every stored
+    // key, because applyCredentials had loaded them moments earlier.
+    setCredential("GNOMON_PREC_A", "stored", store);
+    const original = process.env.GNOMON_PREC_A;
+    delete process.env.GNOMON_PREC_A;
+    try {
+      applyCredentials(store);
+      expect(suppliedByStore()).toContain("GNOMON_PREC_A");
+      expect(isShellExported("GNOMON_PREC_A")).toBe(false);
+    } finally {
+      if (original === undefined) delete process.env.GNOMON_PREC_A;
+      else process.env.GNOMON_PREC_A = original;
+    }
+  });
+
+  it("a genuine export is reported as taking precedence", () => {
+    setCredential("GNOMON_PREC_B", "stored", store);
+    const original = process.env.GNOMON_PREC_B;
+    process.env.GNOMON_PREC_B = "from-shell";
+    try {
+      applyCredentials(store);
+      expect(suppliedByStore()).not.toContain("GNOMON_PREC_B");
+      expect(isShellExported("GNOMON_PREC_B")).toBe(true);
+    } finally {
+      if (original === undefined) delete process.env.GNOMON_PREC_B;
+      else process.env.GNOMON_PREC_B = original;
+    }
+  });
+
+  it("saveCredentials writes what loadCredentials reads", () => {
+    saveCredentials({ A: "1", B: "2" }, store);
+    expect(loadCredentials(store)).toEqual({ A: "1", B: "2" });
   });
 });

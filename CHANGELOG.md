@@ -4,6 +4,17 @@
 
 ### Added
 
+- **Tests for the parts that shipped untested.** `session_store` (resume had
+  been verified only by hand), `agent.ts` including the surface-drift
+  detection that could not fire before the hash was fixed, `runTask` — the
+  documented non-interactive contract — `listModels`, and the credential
+  precedence reporting. 389 tests total, up from 322.
+- **Documentation coherence tests.** `docs.test.ts` checks the README against
+  the code: every CLI command it lists is dispatched, every slash command it
+  names is registered and Tab-reachable, every default it quotes is what a
+  scaffolded surface actually has, every file it points at exists, and the
+  Known Limits section still states the limits that are real.
+
 - **Turns continue past `max_steps`.** It is a checkpoint now, not a wall: the
   harness compacts the turn's working context and carries on to
   `max_steps_total` (default `max_steps × 8`). A session left running

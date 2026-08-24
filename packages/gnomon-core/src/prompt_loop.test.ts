@@ -734,3 +734,143 @@ describe("trimWorking", () => {
     expect(afterHead[0]?.role).not.toBe("tool");
   });
 });
+
+describe("runTask — the non-interactive contract", () => {
+  const withFetch = async (impl: typeof fetch, run: () => Promise<void>) => {
+    const original = globalThis.fetch;
+    globalThis.fetch = impl;
+    try { await run(); } finally { globalThis.fetch = original; }
+  };
+
+  const answers = (content: string) =>
+    (async () => ({ ok: true, json: async () => ({ message: { content } }) })) as unknown as typeof fetch;
+
+  it("returns a record carrying the surface hash", async () => {
+    // A composition layer gates on this: behaviour must be attributable to a
+    // configuration, not merely to a run.
+    await withFetch(answers("done"), async () => {
+      const record = await promptLoop.runTask(loadConfig("../.."), "say hi", { role: "smol" });
+      expect(record.surface_hash).toMatch(/^[0-9a-f]{64}$/);
+      expect(record.role).toBe("smol");
+      expect(record.bucket).toBe("result");
+      expect(record.output).toBe("done");
+    });
+  });
+
+  it("confines run-to-run variance to `volatile`", async () => {
+    // The gate compares two runs and ignores exactly what is allowed to
+    // differ. Anything outside `volatile` that moves would break that.
+    await withFetch(answers("stable"), async () => {
+      const config = loadConfig("../..");
+      const a = await promptLoop.runTask(config, "same input", { role: "smol" });
+      const b = await promptLoop.runTask(config, "same input", { role: "smol" });
+      const strip = (r: typeof a) => ({ ...r, volatile: undefined });
+      expect(strip(a)).toEqual(strip(b));
+      expect(Object.keys(a.volatile)).toEqual(["duration_ms"]);
+    });
+  });
+
+  it("refuses gated calls when nobody is there to ask", async () => {
+    // Granting writes because no operator is watching would invert the meaning
+    // of approval = "on_write".
+    let sawTools = false;
+    await withFetch(
+      (async (_u: string, init: any) => {
+        const body = JSON.parse(init.body);
+        if (body.tools && !sawTools) {
+          sawTools = true;
+          return {
+            ok: true,
+            json: async () => ({
+              message: {
+                content: "",
+                tool_calls: [{ function: { name: "write", arguments: { path: "x.txt", content: "y" } } }],
+              },
+            }),
+          } as any;
+        }
+        return { ok: true, json: async () => ({ message: { content: "refused then answered" } }) } as any;
+      }) as unknown as typeof fetch,
+      async () => {
+        const record = await promptLoop.runTask(loadConfig("../.."), "write a file", { role: "implement" });
+        expect(record.bucket).toBe("refusal");
+        expect(record.tool_log.join(" ")).toContain("denied");
+      }
+    );
+  });
+
+  it("--yes grants them, and the record says so happened", async () => {
+    await withFetch(answers("ok"), async () => {
+      const record = await promptLoop.runTask(loadConfig("../.."), "hello", { role: "smol", yes: true });
+      expect(record.bucket).toBe("result");
+    });
+  });
+
+  it("reports a transport failure as apparatus_failure, not a result", async () => {
+    await withFetch(
+      (async () => { throw new Error("connection refused"); }) as unknown as typeof fetch,
+      async () => {
+        const record = await promptLoop.runTask(loadConfig("../.."), "hi", { role: "smol" });
+        expect(record.bucket).toBe("apparatus_failure");
+        expect(record.output).toContain("connection refused");
+      }
+    );
+  });
+});
+
+describe("listModels", () => {
+  const withFetch = async (impl: typeof fetch, run: () => Promise<void>) => {
+    const original = globalThis.fetch;
+    globalThis.fetch = impl;
+    try { await run(); } finally { globalThis.fetch = original; }
+  };
+
+  it("reads ollama's shape and openai's shape", async () => {
+    await withFetch(
+      (async (url: any) =>
+        String(url).includes("/api/tags")
+          ? ({ ok: true, json: async () => ({ models: [{ name: "qwen3.6:35b" }] }) } as any)
+          : ({ ok: true, json: async () => ({ data: [{ id: "hosted-1" }] }) } as any)) as unknown as typeof fetch,
+      async () => {
+        const config: any = loadConfig("../..");
+        process.env.OPENCODE_API_KEY = "test";
+        try {
+          const found = await promptLoop.listModels(config);
+          const local = found.find((e) => e.endpoint === "local")!;
+          const zen = found.find((e) => e.endpoint === "zen")!;
+          expect(local.models).toContain("qwen3.6:35b");
+          expect(zen.models).toContain("hosted-1");
+        } finally {
+          delete process.env.OPENCODE_API_KEY;
+        }
+      }
+    );
+  });
+
+  it("says why an endpoint is unavailable rather than showing an empty list", async () => {
+    // "No models" and "could not ask" look identical otherwise.
+    await withFetch(
+      (async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch,
+      async () => {
+        const found = await promptLoop.listModels(loadConfig("../.."));
+        const local = found.find((e) => e.endpoint === "local")!;
+        expect(local.models).toEqual([]);
+        expect(local.problem).toContain("ECONNREFUSED");
+      }
+    );
+  });
+
+  it("does not call an endpoint whose key is missing", async () => {
+    let called = false;
+    await withFetch(
+      (async () => { called = true; return { ok: true, json: async () => ({}) } as any; }) as unknown as typeof fetch,
+      async () => {
+        delete process.env.OPENCODE_API_KEY;
+        const found = await promptLoop.listModels(loadConfig("../.."));
+        const zen = found.find((e) => e.endpoint === "zen")!;
+        expect(zen.problem).toContain("gnomon key set");
+      }
+    );
+    expect(called).toBe(true); // local was still queried
+  });
+});
