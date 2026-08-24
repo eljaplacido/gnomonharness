@@ -321,6 +321,29 @@ function readTool(args: Record<string, unknown>, ctx: ToolContext): ToolOutcome 
   }
 }
 
+/**
+ * Kill a spawned shell and everything it started.
+ *
+ * With shell:true the direct child is `sh -c`, which is not what does the
+ * work. Signalling the negated pid targets the whole process group, so a
+ * timed-out command cannot leave a live orphan behind.
+ */
+function killTree(proc: { pid?: number; kill: (sig: NodeJS.Signals) => boolean }): void {
+  if (typeof proc.pid === "number") {
+    try {
+      process.kill(-proc.pid, "SIGKILL");
+      return;
+    } catch {
+      // group already gone, or no permission — fall through
+    }
+  }
+  try {
+    proc.kill("SIGKILL");
+  } catch {
+    // already exited
+  }
+}
+
 async function bashTool(
   args: Record<string, unknown>,
   ctx: ToolContext
@@ -349,6 +372,10 @@ async function bashTool(
     const proc = spawn(command, {
       shell: true,
       cwd: ctx.root,
+      // detached puts the command in its own process group. shell:true means
+      // the direct child is `sh -c`, so signalling only that leaves the real
+      // work orphaned and still running; the group is what must be killed.
+      detached: true,
       // sandbox.network = false is declared in policy.toml but this build
       // cannot enforce it; the loop says so at startup rather than pretending.
     });
@@ -359,7 +386,7 @@ async function bashTool(
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      proc.kill("SIGKILL");
+      killTree(proc);
       done({
         code: TOOL_FAILED,
         content: `Command timed out after ${ctx.timeoutMs}ms.`,

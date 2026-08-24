@@ -3,7 +3,14 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  mkdirSync,
+  existsSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -241,6 +248,22 @@ describe("bash", () => {
     );
     expect(out.code).toBe(TOOL_FAILED);
     expect(out.content).toContain("timed out");
+  });
+
+  it("a timed-out command leaves no live orphan behind", async () => {
+    // shell:true means the direct child is `sh -c`; killing only that would
+    // leave the real work running. The marker file appears only if the
+    // grandchild survived the kill.
+    const marker = join(root, "orphan-marker");
+    const out = await executeTool(
+      "bash",
+      { command: `sleep 0.4 && touch "${marker}"` },
+      ctx({ timeoutMs: 120 }),
+      offered
+    );
+    expect(out.code).toBe(TOOL_FAILED);
+    await new Promise((r) => setTimeout(r, 900));
+    expect(existsSync(marker)).toBe(false);
   });
 });
 
