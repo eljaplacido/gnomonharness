@@ -34,6 +34,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # gnomon-natives shells out to the Rust binaries, so they must exist
+      # before its tests run. findBinary() looks in <repo>/target/debug.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build native binaries
+        run: cargo build --bin gnomon-surface --bin gnomon-enums
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 

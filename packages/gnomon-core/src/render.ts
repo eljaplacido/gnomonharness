@@ -125,6 +125,8 @@ function metaField(
       return `~${humanTokens(exchange.context_tokens)} tok`;
     case "think":
       return thinkTokens > 0 ? `think ~${humanTokens(thinkTokens)} tok` : null;
+    case "tools":
+      return exchange.tool_steps ? `${exchange.tool_steps} tool call(s)` : null;
     default:
       return null;
   }

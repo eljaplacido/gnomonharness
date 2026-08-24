@@ -9,6 +9,7 @@
  */
 
 import * as readline from "node:readline";
+import { resolve } from "node:path";
 import {
   GnomonConfig,
   RouteTarget,
@@ -23,6 +24,18 @@ import {
   META_FIELDS,
 } from "./config.js";
 import { Progress, renderExchange, splitThinking, paint } from "./render.js";
+import {
+  buildToolSet,
+  executeTool,
+  needsApproval,
+  ToolContext,
+  ToolOutcome,
+  ApprovalRequest,
+  Approver,
+  SandboxLevel,
+  ApprovalGate,
+} from "./tools.js";
+import { mapBucket } from "./session.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -44,6 +57,10 @@ export interface PromptExchange {
   context_dropped?: number;
   /** Estimated prompt tokens sent */
   context_tokens?: number;
+  /** Tool calls executed during this turn */
+  tool_steps?: number;
+  /** One line per tool call, for the transcript */
+  tool_log?: string[];
 }
 
 /** State for the interactive prompt loop */
@@ -67,8 +84,20 @@ function uiOf(state: PromptState): ResolvedUi {
 
 /** One message in a chat-completions payload */
 export interface ChatMessage {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
+  /** Echoed back verbatim on an assistant turn that called tools */
+  tool_calls?: unknown[];
+  /** Set on a tool result; both spellings, since backends differ */
+  tool_call_id?: string;
+  tool_name?: string;
+}
+
+/** One tool invocation requested by the model */
+export interface ToolCall {
+  id?: string;
+  name: string;
+  args: Record<string, unknown>;
 }
 
 /** The messages for one call, plus what the window had to leave out */
@@ -237,6 +266,24 @@ export function buildMessages(
 interface InferenceResult {
   content: string;
   code: number;
+  /** Normalised tool calls the model asked for */
+  toolCalls: ToolCall[];
+  /** The backend's own representation, echoed back unchanged */
+  rawToolCalls?: unknown[];
+}
+
+/** Tool arguments arrive as an object (Ollama) or a JSON string (OpenAI). */
+function parseToolArgs(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === "object") return raw as Record<string, unknown>;
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
 }
 
 /**
@@ -250,6 +297,7 @@ interface InferenceResult {
 async function callEndpoint(
   target: RouteTarget,
   messages: ChatMessage[],
+  tools: unknown[],
   timeoutMs: number
 ): Promise<InferenceResult> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -260,7 +308,7 @@ async function callEndpoint(
 
   // Sampling params go top-level (OpenAI shape); Ollama reads the
   // nested `options` object — send both so either backend is happy.
-  const payload = {
+  const payload: Record<string, unknown> = {
     model: target.model,
     messages,
     stream: false,
@@ -271,6 +319,7 @@ async function callEndpoint(
       top_p: target.top_p,
     },
   };
+  if (tools.length > 0) payload.tools = tools;
 
   try {
     const res = await fetch(target.url, {
@@ -284,21 +333,38 @@ async function callEndpoint(
       return {
         content: `Model API error: ${res.status} ${res.statusText}`,
         code: 10,
+        toolCalls: [],
       };
     }
 
     const json = await res.json();
-    const content =
-      json.choices?.[0]?.message?.content ??
-      json.message?.content ??
-      json.response ??
-      "";
-    return { content, code: 0 };
+    const message = json.choices?.[0]?.message ?? json.message ?? {};
+    const content = message.content ?? json.response ?? "";
+
+    const raw: unknown[] = Array.isArray(message.tool_calls)
+      ? message.tool_calls
+      : [];
+    const toolCalls: ToolCall[] = raw.map((c) => {
+      const call = c as {
+        id?: string;
+        name?: string;
+        arguments?: unknown;
+        function?: { name?: string; arguments?: unknown };
+      };
+      return {
+        id: call.id,
+        name: call.function?.name ?? call.name ?? "",
+        args: parseToolArgs(call.function?.arguments ?? call.arguments),
+      };
+    });
+
+    return { content, code: 0, toolCalls, rawToolCalls: raw };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
       content: `Model unavailable at ${target.url}: ${msg}`,
       code: 10,
+      toolCalls: [],
     };
   }
 }
@@ -332,6 +398,188 @@ function printExchange(exchange: PromptExchange, ui: ResolvedUi): void {
   for (const line of renderExchange(exchange, ui)) {
     console.log(line);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Agentic turn
+// ---------------------------------------------------------------------------
+
+/** Everything one turn needs that is not in PromptState. */
+export interface TurnDeps {
+  approve: Approver;
+  progress: Progress;
+  ui: ResolvedUi;
+  /** Emit a transcript line as work happens */
+  say: (line: string) => void;
+}
+
+/** Result of one agentic turn, before it becomes a PromptExchange. */
+export interface TurnResult {
+  content: string;
+  /** Worst outcome code seen — model transport or any tool */
+  code: number;
+  model: string;
+  toolSteps: number;
+  toolLog: string[];
+}
+
+/** Severity order, so the worst outcome in a turn is the one reported. */
+function worse(a: number, b: number): number {
+  const rank = (c: number) =>
+    mapBucket(c) === "apparatus_failure" ? 2 : mapBucket(c) === "refusal" ? 1 : 0;
+  return rank(b) > rank(a) ? b : a;
+}
+
+/**
+ * Run one turn to completion: call the model, execute any tools it asks for,
+ * feed the results back, repeat until it answers in prose.
+ *
+ * Stops at `max_steps` from roles.toml (default 12) and says so rather than
+ * looping. Every tool call records an outcome code, so a turn where the user
+ * declined a write reports `refusal` — the bucket that was unreachable while
+ * outcomes were derived from HTTP status alone.
+ */
+export async function runAgenticTurn(
+  state: PromptState,
+  route: ReturnType<typeof routeRole>,
+  messages: ChatMessage[],
+  deps: TurnDeps
+): Promise<TurnResult> {
+  const config = state.config;
+  const toolSet = buildToolSet(config);
+  const offered = new Set(toolSet.schemas.map((t) => t.function.name));
+
+  const defaults = config.config.defaults ?? {};
+  const policy = config.policy ?? {};
+  const gate = ((policy.approval as { gate?: string } | undefined)?.gate ??
+    defaults.approval ??
+    "on_write") as ApprovalGate;
+  const sandbox = ((policy.sandbox as { level?: string } | undefined)?.level ??
+    defaults.sandbox ??
+    "confined") as SandboxLevel;
+
+  const ctx: ToolContext = {
+    root: resolve(config.gnomonDir, ".."),
+    sandbox,
+    gate,
+    approve: deps.approve,
+    timeoutMs: toolTimeoutMs(config),
+    maxOutputBytes: 32_000,
+  };
+
+  const roleDef = config.roles[state.currentRole] ?? {};
+  const maxSteps = typeof roleDef.max_steps === "number" ? roleDef.max_steps : 12;
+
+  const working: ChatMessage[] = [...messages];
+  const toolLog: string[] = [];
+  let code = 0;
+  let steps = 0;
+  let usedModel = route.model;
+
+  for (;;) {
+    let result = await callEndpoint(
+      route.target,
+      working,
+      toolSet.schemas,
+      modelTimeoutMs()
+    );
+    usedModel = route.model;
+
+    if (result.code !== 0 && route.fallback) {
+      deps.progress.update(
+        `${route.fallback.model} — primary unavailable, falling back`
+      );
+      usedModel = route.fallback.model;
+      result = await callEndpoint(
+        route.fallback,
+        working,
+        toolSet.schemas,
+        modelTimeoutMs()
+      );
+    }
+
+    code = worse(code, result.code);
+
+    if (result.code !== 0 || result.toolCalls.length === 0) {
+      return { content: result.content, code, model: usedModel, toolSteps: steps, toolLog };
+    }
+
+    if (steps + result.toolCalls.length > maxSteps) {
+      const note =
+        `Stopped: this turn reached max_steps (${maxSteps}) for role ` +
+        `"${state.currentRole}". ${steps} tool call(s) ran.`;
+      deps.say(paint(deps.ui, "yellow", `  [tools] ${note}`));
+      return {
+        content: result.content || note,
+        code: worse(code, 4),
+        model: usedModel,
+        toolSteps: steps,
+        toolLog,
+      };
+    }
+
+    // Echo the assistant turn back verbatim — some backends validate that a
+    // tool result answers a tool call they can see.
+    working.push({
+      role: "assistant",
+      content: result.content ?? "",
+      tool_calls: result.rawToolCalls,
+    });
+
+    for (const call of result.toolCalls) {
+      steps++;
+      const gated = needsApproval(call.name, gate) && offered.has(call.name);
+      deps.progress.stop();
+      deps.say(
+        paint(deps.ui, "cyan", `  ⚙ ${call.name}`) +
+          paint(deps.ui, "gray", ` ${describeCall(call)}`)
+      );
+
+      const outcome: ToolOutcome = await executeTool(call.name, call.args, ctx, offered);
+      code = worse(code, outcome.code);
+      toolLog.push(outcome.summary);
+
+      const bucket = mapBucket(outcome.code);
+      deps.say(
+        paint(
+          deps.ui,
+          bucket === "result" ? "green" : bucket === "refusal" ? "yellow" : "red",
+          `    ${bucket === "result" ? "✓" : bucket === "refusal" ? "⚠" : "✗"} ${outcome.summary}`
+        )
+      );
+
+      working.push({
+        role: "tool",
+        content: outcome.content,
+        tool_call_id: call.id,
+        tool_name: call.name,
+      });
+      if (!gated) {
+        // keep the spinner honest about what is running next
+        deps.progress.start(`${usedModel} — ${steps} tool call(s) so far`);
+      } else {
+        deps.progress.start(`${usedModel} — ${steps} tool call(s) so far`);
+      }
+    }
+  }
+}
+
+/** A short, readable form of a tool call for the transcript. */
+function describeCall(call: ToolCall): string {
+  const a = call.args;
+  if (typeof a.path === "string") return String(a.path);
+  if (typeof a.command === "string") {
+    const c = String(a.command).replace(/\s+/g, " ");
+    return c.length > 70 ? `${c.slice(0, 70)}…` : c;
+  }
+  return "";
+}
+
+/** bash timeout, from tools.toml. */
+function toolTimeoutMs(config: GnomonConfig): number {
+  const declared = (config.tools.tools ?? []).find((t) => t.name === "bash");
+  const secs = declared?.timeout_seconds;
+  return typeof secs === "number" && secs > 0 ? secs * 1000 : 120_000;
 }
 
 // ---------------------------------------------------------------------------
@@ -550,6 +798,79 @@ export async function runPromptLoop(
       notify = resolve;
     });
 
+  // Approval gate. Reads from the same queue the loop uses, so a decision
+  // typed while a tool is pending is picked up in order.
+  const approve = async (req: ApprovalRequest): Promise<boolean> => {
+    const ui = uiOf(state);
+    console.log("");
+    console.log(paint(ui, "yellow", `  ┌ approve: ${req.summary}`));
+    for (const line of req.preview.slice(0, 60)) {
+      const colour = line.startsWith("+ ")
+        ? "green"
+        : line.startsWith("- ")
+          ? "red"
+          : "gray";
+      console.log(paint(ui, colour, `  │ ${line}`));
+    }
+    if (req.preview.length > 60) {
+      console.log(paint(ui, "gray", `  │ … ${req.preview.length - 60} more lines`));
+    }
+    console.log(paint(ui, "yellow", "  └ [y]es / [N]o"));
+    rl.setPrompt("approve> ");
+    rl.prompt();
+    const answer = (await readLine()) ?? "";
+    const yes = /^(y|yes)$/i.test(answer.trim());
+    console.log(
+      yes
+        ? paint(ui, "green", "  approved")
+        : paint(ui, "yellow", "  declined")
+    );
+    return yes;
+  };
+
+  // Name what the surface declares but cannot offer, rather than quietly
+  // shipping a shorter tool list.
+  {
+    const ui = uiOf(state);
+    const toolSet = buildToolSet(config);
+    const names = toolSet.schemas.map((t) => t.function.name);
+    console.log(
+      paint(ui, "gray", `Tools: ${names.join(", ") || "(none)"}`)
+    );
+    if (toolSet.disabled.length > 0) {
+      console.log(
+        paint(ui, "yellow", `  disabled in surface: ${toolSet.disabled.join(", ")}`)
+      );
+    }
+    if (toolSet.unimplemented.length > 0) {
+      console.log(
+        paint(
+          ui,
+          "yellow",
+          `  declared but not implemented by this build: ${toolSet.unimplemented.join(", ")}`
+        )
+      );
+    }
+    const policy = config.policy ?? {};
+    const sandboxLevel =
+      (policy.sandbox as { level?: string } | undefined)?.level ??
+      config.config.defaults?.sandbox ??
+      "confined";
+    const networkDeclared =
+      (policy.sandbox as { network?: boolean } | undefined)?.network;
+    if (sandboxLevel !== "off" && networkDeclared === false) {
+      console.log(
+        paint(
+          ui,
+          "yellow",
+          "  note: policy.toml declares network = false; this build confines " +
+            "filesystem paths but does not enforce network isolation."
+        )
+      );
+    }
+    console.log("");
+  }
+
   try {
     while (true) {
       // Show the prompt only when actually waiting on the user —
@@ -610,7 +931,7 @@ export async function runPromptLoop(
         );
       }
 
-      // Call model — primary first, declared fallback on failure
+      // Run the turn: model, tools, approvals, until it answers in prose.
       const progress = new Progress(ui);
       const carried =
         built.included > 0 ? ` · ${built.included} turn(s) of context` : "";
@@ -621,40 +942,29 @@ export async function runPromptLoop(
       );
 
       const start = Date.now();
-      let result = await callEndpoint(route.target, built.messages, modelTimeoutMs());
-      let usedModel = route.model;
-
-      if (result.code !== 0 && route.fallback) {
-        progress.update(`${route.fallback.model} — primary unavailable, falling back`);
-        usedModel = route.fallback.model;
-        result = await callEndpoint(
-          route.fallback,
-          built.messages,
-          modelTimeoutMs()
-        );
-      }
+      const turn = await runAgenticTurn(state, route, built.messages, {
+        approve,
+        progress,
+        ui,
+        say: (line) => console.log(line),
+      });
       progress.stop();
       const duration = Date.now() - start;
-
-      // Map outcome
-      const bucket = result.code === 0
-        ? "result"
-        : result.code === 1
-          ? "refusal"
-          : "apparatus_failure";
 
       const exchange: PromptExchange = {
         turn: state.exchanges.length + 1,
         role,
         input: cleanedInput,
-        output: result.content,
-        model: usedModel,
-        code: result.code,
-        bucket,
+        output: turn.content,
+        model: turn.model,
+        code: turn.code,
+        bucket: mapBucket(turn.code),
         duration_ms: duration,
         context_turns: built.included,
         context_dropped: built.dropped,
         context_tokens: built.tokens,
+        tool_steps: turn.toolSteps,
+        tool_log: turn.toolLog,
       };
 
       state.exchanges.push(exchange);

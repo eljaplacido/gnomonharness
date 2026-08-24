@@ -42,7 +42,8 @@ export type MetaField =
   | "duration"
   | "context"
   | "tokens"
-  | "think";
+  | "think"
+  | "tools";
 
 export type MetaStyle = "line" | "compact";
 export type ThinkMode = "hide" | "collapse" | "show";
@@ -132,15 +133,17 @@ export interface ProfileDef {
   tools?: string[];
 }
 
-/** Tools.toml: tool definitions */
+/** Tools.toml: declared tools and MCP servers */
 export interface ToolsDef {
-  [name: string]: ToolDef;
+  tools?: ToolDef[];
+  mcp_servers?: Record<string, unknown>;
 }
 
 export interface ToolDef {
-  description: string;
-  parameters?: Record<string, unknown>;
-  returns: string;
+  name: string;
+  description?: string;
+  enabled?: boolean;
+  timeout_seconds?: number;
 }
 
 /** System prompt template */
@@ -168,6 +171,26 @@ export function parseToml(content: string): Record<string, unknown> {
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
+
+    // Array-of-tables header: [[tools]]. Must be tested before [table],
+    // whose pattern also matches "[[tools]]" (capturing "[tools]") and would
+    // otherwise fold every entry into one key named "[tools]".
+    const arrayMatch = trimmed.match(/^\[\[(.+)\]\]$/);
+    if (arrayMatch) {
+      const parts = arrayMatch[1].split(".").map((x) => x.trim());
+      let parent: Record<string, unknown> = result;
+      for (let k = 0; k < parts.length - 1; k++) {
+        if (!(parts[k] in parent)) parent[parts[k]] = {};
+        parent = parent[parts[k]] as Record<string, unknown>;
+      }
+      const leaf = parts[parts.length - 1];
+      if (!Array.isArray(parent[leaf])) parent[leaf] = [];
+      const entry: Record<string, unknown> = {};
+      (parent[leaf] as unknown[]).push(entry);
+      currentTable = arrayMatch[1];
+      currentObj = entry;
+      continue;
+    }
 
     // Table header
     const tableMatch = trimmed.match(/^\[(.+)\]$/);
@@ -363,11 +386,18 @@ export function getProfile(config: GnomonConfig, name: string): ProfileDef {
  * Check if a tool is enabled.
  */
 export function isToolEnabled(config: GnomonConfig, toolName: string): boolean {
-  const tool = config.tools[toolName];
-  if (!tool) return false;
+  const declared = config.tools.tools?.find((t) => t.name === toolName);
+  if (!declared) return false;
+  if (declared.enabled === false) return false;
 
-  const configEntry = config.config.tools?.find((t) => t.name === toolName);
-  return configEntry?.enabled !== false;
+  // config.toml may disable a declared tool without removing the declaration.
+  const override = config.config.tools?.find((t) => t.name === toolName);
+  return override?.enabled !== false;
+}
+
+/** Every tool the surface declares, in declaration order. */
+export function declaredTools(config: GnomonConfig): ToolDef[] {
+  return config.tools.tools ?? [];
 }
 
 /** The context-window policy, fully resolved with declared defaults. */
@@ -429,6 +459,7 @@ export const META_FIELDS: MetaField[] = [
   "context",
   "tokens",
   "think",
+  "tools",
 ];
 
 const META_STYLES: MetaStyle[] = ["line", "compact"];
@@ -470,7 +501,8 @@ export function resolveUi(config: GnomonConfig): ResolvedUi {
   const ui = config.config.ui ?? {};
   const declared = Array.isArray(ui.meta) ? parseMetaFields(ui.meta).fields : null;
   return {
-    meta: declared ?? ["turn", "role", "model", "bucket", "duration", "context"],
+    meta:
+      declared ?? ["turn", "role", "model", "bucket", "duration", "context", "tools"],
     meta_style: pickEnum(ui.meta_style, META_STYLES, "line"),
     think: pickEnum(ui.think, THINK_MODES, "collapse"),
     spinner: typeof ui.spinner === "boolean" ? ui.spinner : true,

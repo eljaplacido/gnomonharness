@@ -15,3 +15,4 @@ export * from "./session.js";
 export * from "./agent.js";
 export * from "./prompt_loop.js";
 export * from "./render.js";
+export * from "./tools.js";

@@ -217,6 +217,54 @@ description = "Summarisation, compaction, commit messages"
 Each role maps to a `model` string and sampling parameters. The model string
 is a logical identifier — not a hard dependency on any specific provider.
 
+#### Tool Execution
+
+The interactive loop executes the tools declared in `tools.toml`. The model
+receives their schemas, calls them, and the results are fed back until it
+answers in prose (bounded by `max_steps` in `roles.toml`, default 12).
+
+| Tool | Effect | Gated by `approval = "on_write"` |
+|---|---|---|
+| `read` | File contents (numbered) or a directory listing | no |
+| `bash` | Shell command in the repo root; `timeout_seconds` from `tools.toml` | yes |
+| `write` | Create or overwrite a file | yes |
+| `edit` | Exact text replacement; must match **exactly once** | yes |
+
+`bash` is gated under `on_write` because a command can write anything.
+
+**Approval** shows a real diff before anything is applied:
+
+```
+  ┌ approve: edit src/auth.ts (+3 −1)
+  │   const token = req.headers.authorization
+  │ - if (!token) return null
+  │ + if (!token) throw new AuthError("missing token")
+  └ [y]es / [N]o
+```
+
+**Sandbox.** Under `sandbox = "confined"` (or `strict`) every path is resolved
+and must land inside the repository root — `../` and absolute paths are both
+caught. A path outside it is a *refusal*, and the model is told why.
+
+**Outcomes** follow `conformance/exit_codes.json`, so a tool result maps to a
+bucket exactly like a process exit code:
+
+| Code | Bucket | When |
+|---|---|---|
+| `0` | `result` | the tool ran (a non-zero shell exit is still a result — the tool worked) |
+| `2` | `refusal` | you declined the approval |
+| `3` | `refusal` | the path was outside the sandbox |
+| `4` | `refusal` | the tool is not declared, or the turn hit `max_steps` |
+| `11` | `apparatus_failure` | the tool broke: missing file, timeout, ambiguous edit |
+
+A tool the model invents is refused **by name**, with the real list — it is
+never silently ignored. Tools the surface declares but that are disabled or
+unimplemented are named at startup rather than dropped from the list.
+
+**Not enforced:** `policy.toml` declares `network = false`, but this build
+confines filesystem paths only. The loop says so at startup instead of
+implying isolation it does not provide.
+
 #### `tools.toml` — Declared Tools
 
 ```toml
