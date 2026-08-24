@@ -52,6 +52,7 @@ import {
   withWorkingContext,
 } from "./skills.js";
 import { AuditTrail, resolveAudit } from "./audit.js";
+import { explain, explainTopics, topicNames } from "./explain.js";
 import {
   resolveSessionStore,
   saveSession,
@@ -889,6 +890,85 @@ export async function compactSession(
 }
 
 // ---------------------------------------------------------------------------
+// Model discovery
+// ---------------------------------------------------------------------------
+
+export interface EndpointModels {
+  endpoint: string;
+  url: string;
+  models: string[];
+  /** Why the list is empty, when it is */
+  problem?: string;
+}
+
+/**
+ * Ask each declared endpoint what it offers.
+ *
+ * Choosing a model per role meant already knowing the exact tag a backend
+ * would accept — and a wrong tag surfaces as an opaque API error at the worst
+ * moment. Listing is a read-only query against the endpoints the surface
+ * already declares.
+ */
+export async function listModels(config: GnomonConfig): Promise<EndpointModels[]> {
+  const out: EndpointModels[] = [];
+
+  for (const name of listEndpoints(config)) {
+    const ep = resolveEndpoint(config, name);
+    const kind = ep.kind ?? "ollama";
+    // Ollama lists at /api/tags; OpenAI-shaped APIs at /v1/models.
+    const listUrl =
+      kind === "ollama"
+        ? ep.url.replace(/\/api\/chat\/?$/, "/api/tags")
+        : ep.url.replace(/\/chat\/completions\/?$/, "/models");
+
+    const key = ep.api_key_env ? process.env[ep.api_key_env] : undefined;
+    if (ep.api_key_env && !key) {
+      out.push({
+        endpoint: name,
+        url: listUrl,
+        models: [],
+        problem: `$${ep.api_key_env} is not set in this shell`,
+      });
+      continue;
+    }
+
+    try {
+      const res = await fetch(listUrl, {
+        headers: key ? { Authorization: `Bearer ${key}` } : {},
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) {
+        out.push({
+          endpoint: name,
+          url: listUrl,
+          models: [],
+          problem: `${res.status} ${res.statusText}`,
+        });
+        continue;
+      }
+      const json = (await res.json()) as {
+        models?: Array<{ name?: string; model?: string }>;
+        data?: Array<{ id?: string }>;
+      };
+      const models = (json.models ?? []).map((m) => m.name ?? m.model ?? "")
+        .concat((json.data ?? []).map((m) => m.id ?? ""))
+        .filter(Boolean)
+        .sort();
+      out.push({ endpoint: name, url: listUrl, models });
+    } catch (err) {
+      out.push({
+        endpoint: name,
+        url: listUrl,
+        models: [],
+        problem: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Non-interactive execution
 // ---------------------------------------------------------------------------
 
@@ -1063,7 +1143,9 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/reset", help: "Drop conversation history (keeps the session open)" },
   { name: "/meta", arg: "[fields]", help: "Show or set the meta line" },
   { name: "/think", arg: "[mode]", help: "Chain-of-thought: hide | collapse | show" },
-  { name: "/manifest", help: "Show manifest command" },
+  { name: "/explain", arg: "[topic]", help: "What a feature is, how this repo has it set, and what to do with it" },
+  { name: "/models", help: "Models each endpoint actually offers" },
+  { name: "/manifest", help: "The surface hash and what it covers" },
   { name: "/clear", help: "Clear screen (history is kept)" },
   { name: "/help", help: "This list" },
   { name: "/quit", help: "Exit the loop" },
@@ -1084,6 +1166,12 @@ export function completeInput(
   if (roleArg) {
     const partial = roleArg[1];
     return [roles.filter((r) => r.startsWith(partial)), partial];
+  }
+
+  const explainArg = line.match(/^\/(?:explain|reflect)\s+(\S*)$/);
+  if (explainArg) {
+    const partial = explainArg[1];
+    return [topicNames().filter((t) => t.startsWith(partial)), partial];
   }
 
   const modeArg = line.match(/^\/mode\s+(\S*)$/);
@@ -1431,9 +1519,52 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       return true;
     }
 
-    case "/manifest":
-      console.log("\nUse: gnomon surface manifest");
+    case "/explain":
+    case "/reflect": {
+      const topic = (parts[1] ?? "").trim().toLowerCase();
+      if (!topic) {
+        console.log("\nWhat would you like explained?\n");
+        for (const t of explainTopics()) {
+          console.log(`  /explain ${t.topic.padEnd(10)} ${t.summary}`);
+        }
+        console.log(
+          "\nEach one says what the feature is, how THIS repository has it set,\n" +
+            "and what to do with it."
+        );
+        return true;
+      }
+
+      const found = explain(state.config, state.currentRole, topic);
+      if (!found) {
+        console.log(
+          `\nNothing to explain for "${topic}". Try: ${topicNames().join(", ")}`
+        );
+        return true;
+      }
+
+      const ui = uiOf(state);
+      console.log(`\n${paint(ui, "bold", found.topic)} — ${found.summary}\n`);
+      for (const line of found.what) console.log(line ? `  ${line}` : "");
+      console.log(`\n${paint(ui, "cyan", "In this repository")}`);
+      for (const line of found.here) console.log(`  ${line}`);
+      console.log(`\n${paint(ui, "cyan", "What to do with it")}`);
+      for (const line of found.next) console.log(line ? `  ${line}` : "");
       return true;
+    }
+
+    case "/manifest": {
+      // This printed "Use: gnomon surface manifest" — a pointer to another
+      // command, with no hint what a manifest is or why anyone would want one.
+      const m = explain(state.config, state.currentRole, "manifest")!;
+      const ui = uiOf(state);
+      console.log(`\n${paint(ui, "bold", "manifest")} — ${m.summary}\n`);
+      for (const line of m.what) console.log(line ? `  ${line}` : "");
+      console.log(`\n${paint(ui, "cyan", "In this repository")}`);
+      for (const line of m.here) console.log(`  ${line}`);
+      console.log(`\n${paint(ui, "cyan", "What to do with it")}`);
+      for (const line of m.next) console.log(line ? `  ${line}` : "");
+      return true;
+    }
 
     case "/help": {
       console.log("\nCommands  (press Tab after \"/\" to complete)\n");
@@ -1953,6 +2084,34 @@ export async function runPromptLoop(
 
       // Handle slash commands
       if (input.startsWith("/")) {
+        // /models queries the network, and processCommand is synchronous.
+        if (/^\/models\b/.test(input.trim())) {
+          const ui0 = uiOf(state);
+          console.log(paint(ui0, "gray", "\n  querying endpoints…"));
+          const found = await listModels(config);
+          for (const e of found) {
+            console.log(`\n  ${paint(ui0, "bold", e.endpoint)}  ${e.url}`);
+            if (e.problem) {
+              console.log(paint(ui0, "yellow", `    unavailable: ${e.problem}`));
+              continue;
+            }
+            if (e.models.length === 0) {
+              console.log(paint(ui0, "gray", "    (reachable, but offered no models)"));
+              continue;
+            }
+            for (const m of e.models) console.log(`    ${m}`);
+          }
+          console.log(
+            paint(
+              ui0,
+              "gray",
+              `\n  Put one on a role in .gnomon/roles.toml:\n` +
+                `    [roles.plan]\n    model = "<tag from above>"\n    endpoint = "<endpoint name>"`
+            )
+          );
+          continue;
+        }
+
         if (processCommand(input, state)) {
           continue;
         }
@@ -1966,6 +2125,8 @@ export async function runPromptLoop(
           const known = [
             "help", "roles", "role", "profiles", "context", "reset",
             "meta", "think", "manifest", "clear", "quit",
+            "explain", "reflect", "models", "tools", "endpoints",
+            "skills", "session", "mode",
           ];
           const near = known.filter(
             (k) => k.startsWith(typed.slice(0, 3)) || typed.startsWith(k.slice(0, 3))

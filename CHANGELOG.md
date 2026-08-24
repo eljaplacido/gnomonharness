@@ -4,6 +4,18 @@
 
 ### Added
 
+- **`/explain <topic>`** (alias `/reflect`) — what a feature is, how *this*
+  repository currently has it configured, and what to do next. The middle
+  section is the point: documentation explains a feature in the abstract and
+  leaves the reader to work out whether any of it applies to the project in
+  front of them. Reads the live surface; no model call, because an explanation
+  of a deterministic harness that varied between runs would be a poor way to
+  learn it. Topics: approval, audit, context, endpoints, manifest, roles,
+  sessions, skills, tools.
+- **`/models`** — asks each declared endpoint what it actually offers, so
+  putting a hosted or local model on a role is discovery rather than guessing
+  a tag and finding out from an opaque API error.
+
 - **Standing approvals.** `[a]ll this turn` and `[s]ession` alongside yes/no.
   A repository survey costs a dozen read-only calls before any work starts,
   and approving each separately is a rhythm you stop reading rather than
@@ -138,6 +150,10 @@
 
 ### Fixed
 
+- **`/manifest` printed a pointer to another command.** "Use: gnomon surface
+  manifest" — no hint what a manifest is or why anyone would want one. It now
+  shows the surface hash, the files it covers, when it changes, and why that
+  matters.
 - **`/skills` explained nothing when there were none.** Two empty lists and the
   word "surface" told a first-time reader what the feature was not. It now
   says what a skill is and how to make one.

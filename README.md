@@ -254,6 +254,20 @@ model = "some-hosted-model"
 endpoint = "zen"                    # only when local fails or times out
 ```
 
+`/models` asks each endpoint what it actually offers, so choosing a model per
+role is discovery rather than guesswork:
+
+```
+/models
+
+  local  http://127.0.0.1:11434/api/tags
+    qwen3.6:35b
+    deepseek-r1:32b-qwen-distill-q4_K_M
+    …
+  zen  https://opencode.ai/zen/v1/models
+    unavailable: $OPENCODE_API_KEY is not set in this shell
+```
+
 `/endpoints` shows each one, which roles route to it, and whether its key
 variable is actually set in your shell:
 
@@ -676,6 +690,25 @@ walking up from the current directory, the way `git` finds `.git`.
 
 ## Interactive Commands
 
+**`/explain` is the one to reach for when something is unclear.** It answers
+three questions per topic — what the feature is, how this repository currently
+has it configured, and what to do next — by reading the live surface:
+
+```
+/explain endpoints
+
+  In this repository
+    local  http://127.0.0.1:11434/api/chat  [ollama]
+           used by coordinator, implementor, verifier, plan, implement, …
+    zen    https://opencode.ai/zen/v1/chat/completions  [openai]
+           key $OPENCODE_API_KEY (NOT SET)
+           nothing routes here
+```
+
+Topics: `approval`, `audit`, `context`, `endpoints`, `manifest`, `roles`,
+`sessions`, `skills`, `tools`. No model call — an explanation of a
+deterministic harness that varied between runs would be a poor way to learn it.
+
 Press **Tab** after `/` to list and complete everything — `/help` renders the
 same registry completion offers, so a command cannot be implemented but
 undiscoverable.
@@ -690,6 +723,9 @@ undiscoverable.
 | `/context` | Window, folded turns, summary size |
 | `/skills` | Active skills and pending proposals |
 | `/session` | This session's id and where it is saved |
+| `/explain [topic]` | What a feature is, how **this** repo has it set, and what to do with it |
+| `/models` | Models each endpoint actually offers |
+| `/manifest` | The surface hash and what it covers |
 | `/reset` | Drop history (and the summary) |
 | `/meta [fields]` | Set the meta line — `/meta all`, `/meta none`, `/meta style compact` |
 | `/think [mode]` | Chain-of-thought: `hide` \| `collapse` \| `show` |
