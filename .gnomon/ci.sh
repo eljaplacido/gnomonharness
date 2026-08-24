@@ -25,18 +25,27 @@ cargo build --bin gnomon-surface --bin gnomon-enums 2>&1 | tail -3 \
 pass "Native binaries built"
 
 echo ""
+# Output is tee'd, not captured into a variable: a captured failure prints
+# nothing until the handler runs, and if the runner kills the step first the
+# log shows an exit code with no cause. Streaming keeps the failure visible.
+RUST_LOG=$(mktemp)
+TS_LOG=$(mktemp)
+trap 'rm -f "$RUST_LOG" "$TS_LOG"' EXIT
+
 echo "═══ Running tests ═══"
-RUST_OUT=$(cargo test --all 2>&1) || { echo "$RUST_OUT"; fail "Rust tests failed"; }
-echo "$RUST_OUT" | grep -E "^test result:" || true
-RUST_N=$(echo "$RUST_OUT" | grep -oE 'test result: ok\. [0-9]+' \
+if ! cargo test --all 2>&1 | tee "$RUST_LOG"; then
+    fail "Rust tests failed"
+fi
+RUST_N=$(grep -oE 'test result: ok\. [0-9]+' "$RUST_LOG" \
     | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
 pass "Rust tests passed ($RUST_N)"
 
 echo ""
 echo "═══ Running TypeScript tests ═══"
-TS_OUT=$(pnpm test 2>&1) || { echo "$TS_OUT"; fail "TypeScript tests failed"; }
-echo "$TS_OUT" | grep -E "Tests +[0-9]+ passed" || true
-TS_N=$(echo "$TS_OUT" | grep -oE 'Tests +[0-9]+ passed' \
+if ! pnpm test 2>&1 | tee "$TS_LOG"; then
+    fail "TypeScript tests failed"
+fi
+TS_N=$(grep -oE 'Tests +[0-9]+ passed' "$TS_LOG" \
     | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
 pass "TypeScript tests passed ($TS_N)"
 
