@@ -53,6 +53,7 @@ import {
 } from "./skills.js";
 import { AuditTrail, resolveAudit } from "./audit.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
+import { applyCredentials } from "./credentials.js";
 import {
   resolveSessionStore,
   saveSession,
@@ -927,7 +928,7 @@ export async function listModels(config: GnomonConfig): Promise<EndpointModels[]
         endpoint: name,
         url: listUrl,
         models: [],
-        problem: `$${ep.api_key_env} is not set in this shell`,
+        problem: `$${ep.api_key_env} is not available — run: gnomon key set ${name}`,
       });
       continue;
     }
@@ -1017,6 +1018,8 @@ export async function runTask(
   input: string,
   options: RunTaskOptions = {}
 ): Promise<TaskRecord> {
+  applyCredentials();
+
   const routing = resolveRouting(config);
   // suggest needs someone to ask, and a task run has nobody. It falls back to
   // the declared default rather than silently promoting itself to auto.
@@ -1409,7 +1412,7 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         if (ep.api_key_env) {
           const present = Boolean(process.env[ep.api_key_env]);
           console.log(
-            `      key: $${ep.api_key_env} — ${present ? "set" : "NOT SET in this shell"}`
+            `      key: $${ep.api_key_env} — ${present ? "available" : `NOT SET — run: gnomon key set ${name}`}`
           );
         }
       }
@@ -1622,6 +1625,10 @@ export async function runPromptLoop(
     exchanges: [],
     currentRole: initialRole ?? "implement",
   };
+
+  // Stored keys fill in for variables the shell has not exported. Named, not
+  // shown: the loop reports which variables were supplied, never their values.
+  const suppliedKeys = applyCredentials();
 
   const store = resolveSessionStore(config);
   const startedAt = new Date().toISOString();
@@ -2023,6 +2030,11 @@ export async function runPromptLoop(
     });
   }
 
+  if (suppliedKeys.length > 0) {
+    console.log(
+      paint(uiOf(state), "gray", `Keys: ${suppliedKeys.join(", ")} supplied from the credential store`)
+    );
+  }
   if (audit.enabled) {
       console.log(
         paint(ui, "gray", `Audit: ${audit.path}  (${auditSettings.record}${auditSettings.chain ? ", hash-chained" : ""})`)

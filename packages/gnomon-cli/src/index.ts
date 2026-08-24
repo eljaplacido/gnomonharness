@@ -29,6 +29,14 @@ import {
   verifyTrail,
   resolveSessionStore,
   listSessions,
+  resolveEndpoint,
+  listEndpoints,
+  credentialsPath,
+  setCredential,
+  unsetCredential,
+  listCredentials,
+  applyCredentials,
+  isShellExported,
 } from "gnomon-core";
 import {
   manifest as surfaceManifest,
@@ -40,6 +48,7 @@ import {
   Enumerations,
 } from "gnomon-natives";
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { createInterface } from "node:readline";
 import { join, resolve } from "node:path";
 import { runTui } from "gnomon-tui";
 import { initSurface } from "./init.js";
@@ -262,6 +271,134 @@ async function cmdSimulate(args: CliArgs): Promise<void> {
 
   const result = simulatePatch(patchsetPath, args.dir);
   console.log(JSON.stringify(result, null, 2));
+}
+
+/**
+ * Read a secret without echoing it.
+ *
+ * readline draws every keystroke; overriding its output hook is the supported
+ * way to stop that. Falls back to plain stdin when there is no terminal, so
+ * `echo $KEY | gnomon key set zen --stdin` works in a script.
+ */
+function readSecret(prompt: string): Promise<string> {
+  if (!process.stdin.isTTY) {
+    return new Promise((resolvePromise) => {
+      let data = "";
+      process.stdin.setEncoding("utf-8");
+      process.stdin.on("data", (chunk) => (data += chunk));
+      process.stdin.on("end", () => resolvePromise(data.trim()));
+    });
+  }
+
+  return new Promise((resolvePromise) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+    let shown = false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (rl as any)._writeToOutput = (chunk: string) => {
+      if (!shown) {
+        // Draw the question once, then swallow every keystroke.
+        process.stdout.write(prompt);
+        shown = true;
+      }
+    };
+    rl.question(prompt, (answer) => {
+      rl.close();
+      process.stdout.write("\n");
+      resolvePromise(answer.trim());
+    });
+  });
+}
+
+/**
+ * Resolve what the user named to a variable.
+ *
+ * `gnomon key set zen` is the natural thing to type, so an endpoint name is
+ * accepted and its declared api_key_env looked up. A bare VARIABLE_NAME works
+ * too, for endpoints declared elsewhere.
+ */
+function resolveKeyVariable(args: CliArgs, named: string): string | null {
+  try {
+    const config = loadConfig(args.dir);
+    if (listEndpoints(config).includes(named)) {
+      const ep = resolveEndpoint(config, named);
+      if (!ep.api_key_env) {
+        console.error(
+          `Endpoint "${named}" declares no api_key_env — it needs no key.`
+        );
+        process.exit(1);
+      }
+      return ep.api_key_env;
+    }
+  } catch {
+    // No surface here; fall through and treat the argument as a variable name.
+  }
+  return /^[A-Z][A-Z0-9_]*$/.test(named) ? named : null;
+}
+
+async function cmdKey(args: CliArgs): Promise<void> {
+  const sub = args.subcommand ?? "list";
+  const named = args.positional[0];
+
+  if (sub === "list") {
+    const held = listCredentials();
+    console.log(`Credentials in ${credentialsPath()}`);
+    console.log("(names only — values are never printed)\n");
+    if (held.length === 0) {
+      console.log("  (none)");
+    } else {
+      for (const v of held) {
+        // A variable exported in the shell wins, so say which is in force.
+        const shadowed = isShellExported(v);
+        console.log(`  ${v}${shadowed ? "   (an exported variable takes precedence here)" : ""}`);
+      }
+    }
+    console.log("\n  gnomon key set <endpoint|VARIABLE>");
+    return;
+  }
+
+  if (!named) {
+    console.error(`Usage: gnomon key ${sub} <endpoint|VARIABLE>`);
+    process.exit(1);
+  }
+
+  const variable = resolveKeyVariable(args, named);
+  if (!variable) {
+    console.error(
+      `"${named}" is neither a declared endpoint nor a variable name.\n` +
+        "Try: gnomon key set zen   ·   gnomon key set OPENCODE_API_KEY"
+    );
+    process.exit(1);
+  }
+
+  if (sub === "unset") {
+    const removed = unsetCredential(variable);
+    console.log(removed ? `Removed ${variable}.` : `${variable} was not stored.`);
+    return;
+  }
+
+  if (sub === "set") {
+    const value = await readSecret(`Value for ${variable} (input hidden): `);
+    if (!value) {
+      console.error("Nothing entered — no change.");
+      process.exit(1);
+    }
+    setCredential(variable, value);
+    console.log(`Stored ${variable} in ${credentialsPath()} (mode 0600).`);
+    console.log(
+      "The surface still names the variable and never holds the value, so\n" +
+        ".gnomon/ stays safe to commit."
+    );
+    if (isShellExported(variable)) {
+      console.log(
+        `\nNote: ${variable} is also exported in this shell, and an exported\n` +
+          "variable takes precedence. Unset it to use the stored one."
+      );
+    }
+    return;
+  }
+
+  console.error(`Unknown key subcommand: ${sub}. Use: set | list | unset`);
+  process.exit(1);
 }
 
 async function cmdAudit(args: CliArgs): Promise<void> {
@@ -497,6 +634,12 @@ Commands:
   simulate <patchset.json> [--dir <path>]
     Dry-run preview of a patchset
 
+  key [set|list|unset] <endpoint|VARIABLE>
+    Store an API key for an endpoint that declares one. The value is kept in
+    a machine-local file (mode 0600), never in .gnomon/ — the surface names
+    the variable and must stay safe to commit. An exported variable always
+    takes precedence.
+
   audit [show|verify] [--dir <path>]
     Audit trails, when [audit] is enabled. 'verify' re-hashes each record
     and checks the chain, so a trail altered after the fact is detectable.
@@ -542,6 +685,10 @@ Environment:
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
+  // Stored keys stand in for variables the shell has not exported. Done once,
+  // here, so every command sees the same environment.
+  applyCredentials();
+
   if (args.command === "--help" || args.command === "-h" || args.command === "help") {
     showHelp();
     return;
@@ -577,6 +724,10 @@ async function main(): Promise<void> {
       break;
     case "init":
       await cmdInit(args);
+      break;
+    case "key":
+    case "keys":
+      await cmdKey(args);
       break;
     case "audit":
       await cmdAudit(args);

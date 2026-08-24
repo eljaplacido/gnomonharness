@@ -241,6 +241,32 @@ default, so a surface that never mentions endpoints still works. Only the
 credential is machine-scoped, and only **by name**. Naming an endpoint that is
 not declared is an error, not a silent default.
 
+#### Keys
+
+The surface names the variable and never holds the value — that is what makes
+`.gnomon/` safe to commit. To supply the value:
+
+```bash
+gnomon key set zen           # prompts, input hidden
+echo "$KEY" | gnomon key set zen   # or from a script
+gnomon key list              # names only; values are never printed
+gnomon key unset zen
+```
+
+It is stored in `$XDG_DATA_HOME/gnomon/credentials.json` (or
+`~/.local/share/…`), mode `0600`, outside every repository — a path relative to
+the project would eventually be committed by someone.
+
+**An exported variable always wins.** A CI secret or a deliberate `export` is
+an intentional act, and silently replacing it would be exactly the
+machine-scoped surprise this harness exists to prevent.
+
+> This is not a Rule 1 exception. Rule 1 forbids machine-scoped
+> *configuration* — anything that changes what the agent does. A credential
+> changes nothing about behaviour: two machines with the same surface behave
+> identically given access. The surface still decides which endpoint is used
+> and which variable supplies the key.
+
 **Declaring an endpoint does not use it.** `gnomon init` ships `local`, `zen`
 and `go`, all inert — nothing reaches an endpoint until a role names it:
 
@@ -676,6 +702,7 @@ regular expressions reject inline `(?i)`; matching is already case-insensitive.
 | `gnomon task "<what to do>" [--role <name>] [--yes] [--json]` | One task, no terminal. Exit code carries the bucket. |
 | `gnomon sessions` | Saved sessions. |
 | `gnomon skill [list\|accept <id>\|reject <id>]` | Learned skills and proposals. |
+| `gnomon key [set\|list\|unset] <endpoint\|VAR>` | Store an API key for an endpoint that declares one. |
 | `gnomon audit [show\|verify]` | Audit trails. |
 | `gnomon surface [hash\|manifest\|paths]` | Inspect the surface. |
 | `gnomon enumerations` | The enumerations contract. |

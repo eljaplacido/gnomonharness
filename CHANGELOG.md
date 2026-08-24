@@ -4,6 +4,13 @@
 
 ### Added
 
+- **`gnomon key set|list|unset`** — store an API key for an endpoint that
+  declares one. `gnomon key set zen` resolves the variable name from the
+  surface; a bare `VARIABLE_NAME` works too. Input is hidden on a terminal and
+  read from stdin when piped. Values are stored machine-locally at mode 0600,
+  outside every repository, and never printed: the surface names the variable
+  and must stay safe to commit. An exported variable always takes precedence.
+
 - **`/explain <topic>`** (alias `/reflect`) — what a feature is, how *this*
   repository currently has it configured, and what to do next. The middle
   section is the point: documentation explains a feature in the abstract and
