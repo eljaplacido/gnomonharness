@@ -236,26 +236,52 @@ export async function runPromptLoop(
   console.log(`Model: ${routeRole(config, state.currentRole).model}`);
   console.log("");
 
-  // Resolves to null on EOF (Ctrl+D, or a closed pipe) so the loop can exit
-  // cleanly instead of rl.question rejecting with "readline was closed".
+  // Line-driven input with a queue: anything typed while the model is
+  // thinking is buffered and processed in order instead of being dropped.
   let closed = false;
+  const lineQueue: string[] = [];
+  let notify: ((line: string | null) => void) | null = null;
+
+  rl.on("line", (line: string) => {
+    if (notify) {
+      const n = notify;
+      notify = null;
+      n(line);
+    } else {
+      lineQueue.push(line);
+    }
+  });
   rl.on("close", () => {
     closed = true;
+    if (notify) {
+      const n = notify;
+      notify = null;
+      n(null);
+    }
   });
 
-  const question = (prompt: string): Promise<string | null> =>
+  const readLine = (): Promise<string | null> =>
     new Promise((resolve) => {
+      if (lineQueue.length > 0) {
+        resolve(lineQueue.shift() ?? null);
+        return;
+      }
       if (closed) {
         resolve(null);
         return;
       }
-      rl.question(prompt, resolve);
-      rl.once("close", () => resolve(null));
+      notify = resolve;
     });
 
   try {
     while (true) {
-      const input = await question("gnomon> ");
+      // Show the prompt only when actually waiting on the user —
+      // buffered (typed-ahead) lines replay silently instead.
+      if (!closed && lineQueue.length === 0) {
+        rl.setPrompt("gnomon> ");
+        rl.prompt();
+      }
+      const input = await readLine();
       if (input === null) {
         console.log("\nSession complete. See you next turn.");
         break;
@@ -291,6 +317,7 @@ export async function runPromptLoop(
       const route = routeRole(config, role);
 
       console.log(`\n[role: ${role} | model: ${route.model}]`);
+      console.log("  … thinking  (first turn after idle loads the model, ~10–20s)");
 
       // Call model — primary first, declared fallback on failure
       const start = Date.now();
