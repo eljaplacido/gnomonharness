@@ -264,6 +264,38 @@ describe("gnomon-core prompt_loop", () => {
     });
   });
 
+  describe("role switching", () => {
+    const mk = (): any => ({
+      config: loadConfig(fixtureRoot),
+      exchanges: [],
+      currentRole: "implement",
+    });
+
+    it("/role <name> switches the session role", () => {
+      const state = mk();
+      expect(promptLoop.processCommand("/role smol", state)).toBe(true);
+      expect(state.currentRole).toBe("smol");
+    });
+
+    it("/roles <name> also switches — it is what people type", () => {
+      const state = mk();
+      expect(promptLoop.processCommand("/roles plan", state)).toBe(true);
+      expect(state.currentRole).toBe("plan");
+    });
+
+    it("/roles with no argument only lists", () => {
+      const state = mk();
+      expect(promptLoop.processCommand("/roles", state)).toBe(true);
+      expect(state.currentRole).toBe("implement");
+    });
+
+    it("an unknown role is reported and changes nothing", () => {
+      const state = mk();
+      expect(promptLoop.processCommand("/role nope", state)).toBe(true);
+      expect(state.currentRole).toBe("implement");
+    });
+  });
+
   describe("PromptExchange type", () => {
     it("creates valid exchange object", () => {
       const exchange: promptLoop.PromptExchange = {

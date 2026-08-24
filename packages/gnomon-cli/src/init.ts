@@ -224,7 +224,10 @@ export function initSurface(options: InitOptions = {}): InitResult {
   if (existsSync(gnomonDir) && !options.force) {
     throw new Error(
       `.gnomon/ already exists at ${gnomonDir}\n` +
-        "Refusing to overwrite an existing surface. Pass --force to replace it."
+        "Refusing to overwrite an existing surface.\n" +
+        "If you meant a different project, cd into it first — init always " +
+        "writes to the current directory.\n" +
+        "To replace this one, pass --force."
     );
   }
 

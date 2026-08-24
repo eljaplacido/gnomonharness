@@ -38,7 +38,6 @@ export type MetaField =
   | "role"
   | "model"
   | "bucket"
-  | "status"
   | "duration"
   | "context"
   | "tokens"
@@ -272,14 +271,32 @@ function parseValue(value: string): unknown {
  * @returns Resolved path to .gnomon/ directory
  */
 export function resolveGnomonDir(root?: string): string {
-  const target = root ? resolve(root) : process.cwd();
-  const gnomonDir = join(target, ".gnomon");
-
-  if (!existsSync(gnomonDir)) {
-    throw new Error(`.gnomon/ directory not found at: ${gnomonDir}`);
+  // An explicit --dir means exactly that directory: no searching.
+  if (root) {
+    const gnomonDir = join(resolve(root), ".gnomon");
+    if (!existsSync(gnomonDir)) {
+      throw new Error(`.gnomon/ not found at ${gnomonDir}`);
+    }
+    return gnomonDir;
   }
 
-  return gnomonDir;
+  // Otherwise walk up from the cwd, the way git finds .git. Working from a
+  // subdirectory of a project is normal, and requiring the exact project root
+  // made it easy to run in the wrong place and get a confusing miss.
+  const start = process.cwd();
+  let dir = start;
+  for (;;) {
+    const candidate = join(dir, ".gnomon");
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  throw new Error(
+    `No .gnomon/ surface found in ${start} or any parent directory.\n` +
+      `Run \`gnomon init\` in your project root to create one.`
+  );
 }
 
 /**
@@ -454,7 +471,6 @@ export const META_FIELDS: MetaField[] = [
   "role",
   "model",
   "bucket",
-  "status",
   "duration",
   "context",
   "tokens",

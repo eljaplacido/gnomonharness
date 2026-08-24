@@ -298,7 +298,8 @@ async function callEndpoint(
   target: RouteTarget,
   messages: ChatMessage[],
   tools: unknown[],
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): Promise<InferenceResult> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const apiKey = target.apiKeyEnv ? process.env[target.apiKeyEnv] : undefined;
@@ -326,7 +327,10 @@ async function callEndpoint(
       method: "POST",
       headers,
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(timeoutMs),
+      // Either the request deadline or the user pressing Esc ends the call.
+      signal: signal
+        ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal])
+        : AbortSignal.timeout(timeoutMs),
     });
 
     if (!res.ok) {
@@ -360,6 +364,9 @@ async function callEndpoint(
 
     return { content, code: 0, toolCalls, rawToolCalls: raw };
   } catch (err) {
+    if (signal?.aborted) {
+      return { content: CANCELLED, code: 2, toolCalls: [] };
+    }
     const msg = err instanceof Error ? err.message : String(err);
     return {
       content: `Model unavailable at ${target.url}: ${msg}`,
@@ -368,6 +375,9 @@ async function callEndpoint(
     };
   }
 }
+
+/** Marker text for a turn the user stopped. Code 2 → bucket `refusal`. */
+export const CANCELLED = "Cancelled.";
 
 /** Default per-request timeout. Cold-loading large local models needs headroom. */
 function modelTimeoutMs(): number {
@@ -388,7 +398,8 @@ function printBanner(): void {
   console.log(" ╚══════════════════════════════════════════╝");
   console.log("");
   console.log("/help for commands · /meta and /think to change what you see");
-  console.log("/context for the window · /reset to drop history");
+  console.log("/context for the window · /role <name> to switch role");
+  console.log("Esc cancels the turn in progress.");
   console.log("Type /quit or Ctrl+C to exit.");
   console.log("");
 }
@@ -411,6 +422,8 @@ export interface TurnDeps {
   ui: ResolvedUi;
   /** Emit a transcript line as work happens */
   say: (line: string) => void;
+  /** Aborted when the user presses Esc (or Ctrl+C) mid-turn */
+  signal?: AbortSignal;
 }
 
 /** Result of one agentic turn, before it becomes a PromptExchange. */
@@ -476,14 +489,27 @@ export async function runAgenticTurn(
   let steps = 0;
   let usedModel = route.model;
 
+  const cancelled = (): TurnResult => ({
+    content: CANCELLED,
+    code: worse(code, 2),
+    model: usedModel,
+    toolSteps: steps,
+    toolLog,
+  });
+
   for (;;) {
+    if (deps.signal?.aborted) return cancelled();
+
     let result = await callEndpoint(
       route.target,
       working,
       toolSet.schemas,
-      modelTimeoutMs()
+      modelTimeoutMs(),
+      deps.signal
     );
     usedModel = route.model;
+
+    if (deps.signal?.aborted) return cancelled();
 
     if (result.code !== 0 && route.fallback) {
       deps.progress.update(
@@ -494,8 +520,10 @@ export async function runAgenticTurn(
         route.fallback,
         working,
         toolSet.schemas,
-        modelTimeoutMs()
+        modelTimeoutMs(),
+        deps.signal
       );
+      if (deps.signal?.aborted) return cancelled();
     }
 
     code = worse(code, result.code);
@@ -527,6 +555,12 @@ export async function runAgenticTurn(
     });
 
     for (const call of result.toolCalls) {
+      // Stop between tools rather than mid-write: a cancelled turn should
+      // never leave a half-applied change.
+      if (deps.signal?.aborted) {
+        deps.progress.stop();
+        return cancelled();
+      }
       steps++;
       const gated = needsApproval(call.name, gate) && offered.has(call.name);
       deps.progress.stop();
@@ -599,16 +633,35 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       process.exit(0);
       return true;
 
-    case "/roles":
+    case "/role":
+    case "/roles": {
       const roles = listRoles(state.config);
+      const wanted = (parts[1] ?? "").trim();
+
+      // `/roles plan` reads as "switch to plan" to anyone typing it, so make
+      // it do that rather than silently re-listing and leaving the role alone.
+      if (wanted) {
+        if (!roles.includes(wanted)) {
+          console.log(`\nNo such role: "${wanted}". Available: ${roles.join(", ")}`);
+          return true;
+        }
+        state.currentRole = wanted;
+        const route = routeRole(state.config, wanted);
+        console.log(`\nRole: ${wanted} → ${route.model}`);
+        return true;
+      }
+
       console.log(`\nAvailable roles: ${roles.join(", ")}`);
       for (const r of roles) {
         const roleDef = state.config.roles[r];
         const model = roleDef.model ?? roleDef.profile ?? "local:default";
         const desc = roleDef.description ?? "";
-        console.log(`  ${r}: ${model}${desc ? ` — ${desc}` : ""}`);
+        const here = r === state.currentRole ? " ← current" : "";
+        console.log(`  ${r}: ${model}${desc ? ` — ${desc}` : ""}${here}`);
       }
+      console.log(`\nSwitch with: /role <name>`);
       return true;
+    }
 
     case "/profiles":
       const profiles = listProfiles(state.config);
@@ -702,7 +755,8 @@ export function processCommand(cmd: string, state: PromptState): boolean {
 
     case "/help":
       console.log(`\nCommands:
-  /roles           — Show available roles and models
+  /roles           — List roles and models (marks the current one)
+  /role <name>     — Switch role for the rest of the session
   /profiles        — Show available profiles
   /context         — Show context policy and the current window
   /reset           — Drop conversation history (keeps the session open)
@@ -720,6 +774,8 @@ Input is automatically routed to a role based on prefix:
   /critique "..."  → critique role
   /smol "..."      → smol role
   "..."            → current role (default: implement)
+
+A role prefix applies to that one turn only; /role switches for good.
 
 /meta and /think change this session only. Defaults live in
 [ui] in .gnomon/config.toml, so every checkout renders the same.
@@ -798,6 +854,25 @@ export async function runPromptLoop(
       notify = resolve;
     });
 
+  // Esc cancels the turn in flight. Only a turn — at the prompt it does
+  // nothing, so a stray Esc cannot end the session. Ctrl+C does the same
+  // mid-turn and only exits when nothing is running.
+  let cancelTurn: (() => void) | null = null;
+  if (process.stdin.isTTY) {
+    readline.emitKeypressEvents(process.stdin);
+    process.stdin.on("keypress", (_chunk, key) => {
+      if (key && key.name === "escape" && cancelTurn) cancelTurn();
+    });
+  }
+  rl.on("SIGINT", () => {
+    if (cancelTurn) {
+      cancelTurn();
+      return;
+    }
+    console.log("\nSession complete. See you next turn.");
+    process.exit(0);
+  });
+
   // Approval gate. Reads from the same queue the loop uses, so a decision
   // typed while a tool is pending is picked up in order.
   const approve = async (req: ApprovalRequest): Promise<boolean> => {
@@ -816,10 +891,42 @@ export async function runPromptLoop(
       console.log(paint(ui, "gray", `  │ … ${req.preview.length - 60} more lines`));
     }
     console.log(paint(ui, "yellow", "  └ [y]es / [N]o"));
-    rl.setPrompt("approve> ");
-    rl.prompt();
-    const answer = (await readLine()) ?? "";
-    const yes = /^(y|yes)$/i.test(answer.trim());
+
+    // Anything typed before this prompt appeared was meant as a message, not
+    // as an answer to a question the user had not yet seen. Hold it aside and
+    // replay it afterwards rather than letting it decide the approval.
+    const held = lineQueue.splice(0, lineQueue.length);
+    if (held.length > 0) {
+      console.log(
+        paint(ui, "gray", `  (holding ${held.length} typed-ahead line(s))`)
+      );
+    }
+
+    let yes = false;
+    for (let attempt = 0; ; attempt++) {
+      rl.setPrompt("approve> ");
+      rl.prompt();
+      const answer = ((await readLine()) ?? "").trim();
+
+      if (/^(y|yes)$/i.test(answer)) {
+        yes = true;
+        break;
+      }
+      if (/^(n|no)$/i.test(answer) || answer === "") {
+        yes = false;
+        break;
+      }
+      // Unrecognised input used to count as "no", so a stray keystroke
+      // silently refused the call. Ask again instead of guessing.
+      if (!process.stdin.isTTY || attempt >= 2) {
+        console.log(paint(ui, "yellow", "  unrecognised — treating as no"));
+        yes = false;
+        break;
+      }
+      console.log(paint(ui, "yellow", `  answer y or n (got "${answer}")`));
+    }
+
+    lineQueue.unshift(...held);
     console.log(
       yes
         ? paint(ui, "green", "  approved")
@@ -876,7 +983,7 @@ export async function runPromptLoop(
       // Show the prompt only when actually waiting on the user —
       // buffered (typed-ahead) lines replay silently instead.
       if (!closed && lineQueue.length === 0) {
-        rl.setPrompt("gnomon> ");
+        rl.setPrompt(`${state.currentRole} ▸ `);
         rl.prompt();
       }
       const input = await readLine();
@@ -890,28 +997,52 @@ export async function runPromptLoop(
         if (processCommand(input, state)) {
           continue;
         }
-        // Unknown slash command — fall through to inference
+        // A role prefix (`/plan do the thing`) is a real turn. Anything else
+        // starting with "/" is a mistyped command: sending it to the model
+        // burned a slow turn on a typo like "/helpo".
+        const roleNames = listRoles(config);
+        const isRoleTurn = roleNames.some((r) => input.startsWith(`/${r} `));
+        if (!isRoleTurn) {
+          const typed = input.slice(1).split(/\s+/)[0];
+          const known = [
+            "help", "roles", "role", "profiles", "context", "reset",
+            "meta", "think", "manifest", "clear", "quit",
+          ];
+          const near = known.filter(
+            (k) => k.startsWith(typed.slice(0, 3)) || typed.startsWith(k.slice(0, 3))
+          );
+          const ui0 = uiOf(state);
+          console.log(
+            paint(ui0, "yellow", `\nUnknown command: /${typed}`) +
+              (near.length ? paint(ui0, "gray", `  did you mean /${near.join(", /")} ?`) : "")
+          );
+          console.log(paint(ui0, "gray", "/help lists everything."));
+          console.log(
+            paint(
+              ui0,
+              "gray",
+              `To send this to the model, drop the leading slash.`
+            )
+          );
+          continue;
+        }
       }
 
-      // Infer role from input prefix
+      // A role prefix routes THIS turn only. It used to overwrite
+      // state.currentRole, so one `/smol ...` silently pinned every later
+      // turn to smol with no way back — use /role to switch for real.
       let role = state.currentRole;
       let cleanedInput = input;
 
-      if (input.startsWith("/plan ")) {
-        role = "plan";
-        cleanedInput = input.slice("/plan ".length);
-      } else if (input.startsWith("/implement ")) {
-        role = "implement";
-        cleanedInput = input.slice("/implement ".length);
-      } else if (input.startsWith("/critique ")) {
-        role = "critique";
-        cleanedInput = input.slice("/critique ".length);
-      } else if (input.startsWith("/smol ")) {
-        role = "smol";
-        cleanedInput = input.slice("/smol ".length);
+      for (const candidate of listRoles(config)) {
+        const prefix = `/${candidate} `;
+        if (input.startsWith(prefix)) {
+          role = candidate;
+          cleanedInput = input.slice(prefix.length);
+          break;
+        }
       }
 
-      state.currentRole = role;
       const route = routeRole(config, role);
 
       const ui = uiOf(state);
@@ -942,14 +1073,26 @@ export async function runPromptLoop(
       );
 
       const start = Date.now();
-      const turn = await runAgenticTurn(state, route, built.messages, {
-        approve,
-        progress,
-        ui,
-        say: (line) => console.log(line),
-      });
+      const controller = new AbortController();
+      cancelTurn = () => controller.abort();
+      let turn: TurnResult;
+      try {
+        turn = await runAgenticTurn(state, route, built.messages, {
+          approve,
+          progress,
+          ui,
+          say: (line) => console.log(line),
+          signal: controller.signal,
+        });
+      } finally {
+        cancelTurn = null;
+      }
       progress.stop();
       const duration = Date.now() - start;
+
+      if (turn.content === CANCELLED) {
+        console.log(paint(ui, "yellow", "  ⚠ cancelled"));
+      }
 
       const exchange: PromptExchange = {
         turn: state.exchanges.length + 1,

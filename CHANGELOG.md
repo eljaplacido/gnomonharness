@@ -4,6 +4,15 @@
 
 ### Added
 
+- **`/role <name>` switches role for the session.** `/roles <name>` does the
+  same, since that is what people type.
+- **Esc cancels the turn in progress** (Ctrl+C does too, mid-turn). The abort
+  reaches the model request and is checked between tool calls, so a cancelled
+  turn never leaves a half-applied edit. At the prompt, Esc does nothing.
+- `.gnomon/` now resolves by walking up from the cwd, the way git finds
+  `.git`, so gnomon works from any subdirectory of a project.
+- The prompt shows the current role (`implement ▸`).
+
 - **`gnomon init`** — scaffolds a documented starter `.gnomon/` surface into
   any project. `--from <path>` copies an existing surface instead, `--force`
   replaces one, and it refuses to clobber a surface without it.
@@ -43,6 +52,24 @@
 
 ### Fixed
 
+- **A role prefix no longer pins the session.** `/smol ...` overwrote
+  `currentRole`, so one smol turn silently routed every later turn to smol
+  with no command to undo it. A prefix now applies to that turn only.
+- **A tool can no longer crash the session.** `write` to a directory hit an
+  unguarded `readFileSync` and threw `EISDIR` out of the process, ending a
+  live run. Directory paths are rejected as tool failures, and every tool
+  dispatch is wrapped so a throw becomes an `apparatus_failure` the model is
+  told about.
+- **A missing file is a `result`, not an `apparatus_failure`.** The tool ran
+  and the answer was "absent"; marking normal exploration as broken apparatus
+  made the bucket meaningless.
+- **A mistyped slash command is no longer sent to the model.** `/helpo` spent
+  a full turn on a typo; unknown commands now report and suggest the nearest.
+- **Unrecognised approval input re-asks instead of counting as "no".** A stray
+  keystroke silently refused the tool call. Typed-ahead lines are held aside
+  and replayed rather than answering a prompt the user had not yet seen.
+- Removed the `status` meta field, which duplicated `bucket` beside the glyph
+  already printed on the same line.
 - **The `bin` entry could never have run.** `packages/gnomon-cli/gnomon.js`
   used `require` inside a `"type": "module"` package (an immediate
   ReferenceError), resolved the harness root one directory too high, and

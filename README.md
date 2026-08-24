@@ -514,8 +514,13 @@ anyway. Confirm with `which gnomon`.
 If `gnomon` is not found afterwards, pnpm's global bin directory is not on
 your PATH; run `pnpm setup` once and reopen the shell.
 
-`gnomon` resolves `.gnomon/` from your **current directory**, so it operates on
-the project you are standing in, not on the harness checkout.
+`gnomon` finds `.gnomon/` by walking up from your **current directory**, the
+way `git` finds `.git` — so it works from anywhere inside a project, and it
+operates on the project you are standing in, not on the harness checkout.
+
+`gnomon init`, by contrast, always writes to the current directory. If you run
+it from the harness checkout you will initialise the harness, not your project:
+`cd` into the project first.
 
 `pnpm run unlink:global` removes it.
 

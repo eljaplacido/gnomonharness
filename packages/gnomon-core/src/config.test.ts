@@ -16,6 +16,8 @@ import {
   inferRole,
 } from "./index.js";
 import { join, resolve } from "node:path";
+import { mkdirSync, rmSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 // ---------------------------------------------------------------------------
 // TOML parsing
@@ -103,10 +105,40 @@ temp = 0.3
       expect(gnomonDir).toContain(".gnomon");
     });
 
-    it("throws when .gnomon/ is absent", () => {
+    it("an explicit dir means exactly that dir — no searching upward", () => {
+      // fixtureRoot's PARENT has a .gnomon/. An explicit --dir must not
+      // silently fall back to it and load the wrong surface.
       expect(() => resolveGnomonDir("/tmp/nonexistent_dir_12345")).toThrow(
-        ".gnomon/ directory not found"
+        /\.gnomon\/ not found at/
       );
+    });
+
+    it("walks up from the cwd to find a surface, the way git does", () => {
+      // Resolve before chdir: fixtureRoot is relative, so resolving it after
+      // the chdir would measure it against the new cwd.
+      const fixtureAbs = resolve(fixtureRoot);
+      const nested = join(fixtureAbs, "deep", "nested");
+      mkdirSync(nested, { recursive: true });
+      const cwd = process.cwd();
+      try {
+        process.chdir(nested);
+        expect(resolveGnomonDir()).toBe(join(fixtureAbs, ".gnomon"));
+      } finally {
+        process.chdir(cwd);
+        rmSync(join(fixtureAbs, "deep"), { recursive: true, force: true });
+      }
+    });
+
+    it("names the directory it searched from when nothing is found", () => {
+      const empty = mkdtempSync(join(tmpdir(), "gnomon-none-"));
+      const cwd = process.cwd();
+      try {
+        process.chdir(empty);
+        expect(() => resolveGnomonDir()).toThrow(/gnomon init/);
+      } finally {
+        process.chdir(cwd);
+        rmSync(empty, { recursive: true, force: true });
+      }
     });
 
     it("resolves to absolute path", () => {

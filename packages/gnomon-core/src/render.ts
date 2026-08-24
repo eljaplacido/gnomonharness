@@ -109,10 +109,6 @@ function metaField(
       return exchange.model;
     case "bucket":
       return exchange.bucket;
-    case "status": {
-      const s = STATUS[exchange.bucket] ?? STATUS.result;
-      return `${s.glyph} ${exchange.bucket}`;
-    }
     case "duration":
       return humanDuration(exchange.duration_ms);
     case "context":

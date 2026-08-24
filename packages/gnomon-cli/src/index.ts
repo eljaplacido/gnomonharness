@@ -239,6 +239,7 @@ async function cmdInit(args: CliArgs): Promise<void> {
   }
 
   console.log(`Initialised ${result.gnomonDir}`);
+  console.log(`  (in ${resolve(args.dir ?? process.cwd())})`);
   for (const f of result.written) console.log(`  + .gnomon/${f}`);
   for (const f of result.skipped) console.log(`  · .gnomon/${f} (kept existing)`);
 

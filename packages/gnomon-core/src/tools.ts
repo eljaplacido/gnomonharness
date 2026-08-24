@@ -30,6 +30,8 @@ import { GnomonConfig, declaredTools, isToolEnabled } from "./config.js";
 // ---------------------------------------------------------------------------
 
 export const TOOL_OK = 0;
+/** The tool ran and the answer was negative (missing path). Still a result. */
+export const TOOL_OK_EMPTY = 1;
 export const TOOL_DENIED = 2;
 export const TOOL_OUT_OF_SANDBOX = 3;
 export const TOOL_NOT_DECLARED = 4;
@@ -284,8 +286,12 @@ function readTool(args: Record<string, unknown>, ctx: ToolContext): ToolOutcome 
     };
   }
   if (!existsSync(abs)) {
+    // The tool worked and the answer is "it isn't there". That is a result,
+    // not an apparatus failure — exploring a tree turns up missing paths
+    // constantly, and marking each one as broken apparatus makes the bucket
+    // meaningless.
     return {
-      code: TOOL_FAILED,
+      code: TOOL_OK_EMPTY,
       content: `No such file or directory: ${path}`,
       summary: `read ${path} — not found`,
     };
@@ -299,7 +305,7 @@ function readTool(args: Record<string, unknown>, ctx: ToolContext): ToolOutcome 
       return {
         code: TOOL_OK,
         content: entries.join("\n") || "(empty directory)",
-        summary: `read ${path}/ — ${entries.length} entries`,
+        summary: `read ${path.replace(/\/+$/, "")}/ — ${entries.length} entries`,
       };
     }
     const raw = readFileSync(abs, "utf-8");
@@ -441,6 +447,14 @@ async function writeTool(
     };
   }
 
+  if (existsSync(abs) && statSync(abs).isDirectory()) {
+    return {
+      code: TOOL_FAILED,
+      content: `${path} is a directory, not a file. Give a path to a file.`,
+      summary: `write ${path} — is a directory`,
+    };
+  }
+
   const before = existsSync(abs) ? readFileSync(abs, "utf-8") : "";
   const diff = diffLines(before, content);
   const { added, removed } = diffStat(diff);
@@ -497,6 +511,13 @@ async function editTool(
       code: TOOL_FAILED,
       content: `No such file: ${path}`,
       summary: `edit ${path} — not found`,
+    };
+  }
+  if (statSync(abs).isDirectory()) {
+    return {
+      code: TOOL_FAILED,
+      content: `${path} is a directory, not a file.`,
+      summary: `edit ${path} — is a directory`,
     };
   }
 
@@ -574,6 +595,26 @@ export async function executeTool(
     };
   }
 
+  // A throw here would take the whole session down: an unguarded
+  // readFileSync on a directory (EISDIR) once killed a live run outright.
+  // A broken tool is an apparatus_failure the model can be told about.
+  try {
+    return await dispatch(name, args, ctx);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      code: TOOL_FAILED,
+      content: `Tool "${name}" failed: ${msg}`,
+      summary: `${name} — ${msg}`,
+    };
+  }
+}
+
+async function dispatch(
+  name: string,
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolOutcome> {
   switch (name) {
     case "read":
       return readTool(args, ctx);

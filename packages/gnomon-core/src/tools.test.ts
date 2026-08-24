@@ -26,6 +26,7 @@ import {
   TOOL_OUT_OF_SANDBOX,
   TOOL_NOT_DECLARED,
   TOOL_FAILED,
+  TOOL_OK_EMPTY,
 } from "./tools.js";
 import { loadConfig } from "./config.js";
 import { mapBucket } from "./session.js";
@@ -176,10 +177,19 @@ describe("read", () => {
     expect(out.content).toContain("sub/");
   });
 
-  it("a missing file is an apparatus failure, not a refusal", async () => {
+  it("a missing file is a result — the tool ran, the answer is 'absent'", async () => {
+    // Exploring a tree turns up missing paths constantly. Reporting each as
+    // broken apparatus made the bucket meaningless in real sessions.
     const out = await executeTool("read", { path: "nope.txt" }, ctx(), offered);
-    expect(out.code).toBe(TOOL_FAILED);
-    expect(mapBucket(out.code)).toBe("apparatus_failure");
+    expect(out.code).toBe(TOOL_OK_EMPTY);
+    expect(mapBucket(out.code)).toBe("result");
+    expect(out.content).toContain("No such file");
+  });
+
+  it("reading a directory path with a trailing slash reads cleanly", async () => {
+    const out = await executeTool("read", { path: "sub/" }, ctx(), offered);
+    expect(out.code).toBe(TOOL_OK);
+    expect(out.summary).not.toContain("//");
   });
 });
 
@@ -264,6 +274,45 @@ describe("bash", () => {
     expect(out.code).toBe(TOOL_FAILED);
     await new Promise((r) => setTimeout(r, 900));
     expect(existsSync(marker)).toBe(false);
+  });
+});
+
+describe("directory paths never crash the session", () => {
+  it("write to a directory is a tool failure, not a throw", async () => {
+    // This exact case (write to `.gnomon/`) threw an uncaught EISDIR and
+    // killed a live session outright.
+    const out = await executeTool(
+      "write",
+      { path: "sub", content: "x" },
+      ctx(),
+      offered
+    );
+    expect(out.code).toBe(TOOL_FAILED);
+    expect(out.content).toContain("is a directory");
+  });
+
+  it("edit on a directory is a tool failure, not a throw", async () => {
+    const out = await executeTool(
+      "edit",
+      { path: "sub", old_text: "a", new_text: "b" },
+      ctx(),
+      offered
+    );
+    expect(out.code).toBe(TOOL_FAILED);
+    expect(out.content).toContain("is a directory");
+  });
+
+  it("a tool that throws becomes an apparatus_failure, not an exception", async () => {
+    // hello.txt is a file, so treating it as a parent directory makes the
+    // underlying mkdir throw ENOTDIR. It must surface as an outcome.
+    const out = await executeTool(
+      "write",
+      { path: join("hello.txt", "nested", "x.txt"), content: "y" },
+      ctx(),
+      offered
+    );
+    expect(out.code).toBe(TOOL_FAILED);
+    expect(mapBucket(out.code)).toBe("apparatus_failure");
   });
 });
 
