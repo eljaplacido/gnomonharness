@@ -10,6 +10,24 @@ NC='\033[0m'
 pass() { echo -e "${GREEN}✅ $1${NC}"; }
 fail() { echo -e "${RED}❌ $1${NC}"; exit 1; }
 
+ESC=$(printf '\033')
+strip_ansi() { sed -E "s/${ESC}\[[0-9;]*[A-Za-z]//g"; }
+
+# Sum the numbers an ERE matches in a log file.
+#
+# Two things this must survive. CI forces colour, so "Tests  121 passed"
+# arrives as "Tests <esc>[22m <esc>[1m<esc>[32m121 passed" and an un-stripped
+# pattern matches nothing. And a grep that matches nothing exits 1, which
+# under `set -e -o pipefail` kills the script mid-assignment with no message —
+# which is exactly how a fully passing test run reported a bare exit 1.
+# Counting is reporting, not a check: it can never fail the pipeline.
+count_from() {
+    local file="$1" pattern="$2" total=""
+    total=$(strip_ansi < "$file" | grep -oE "$pattern" | grep -oE '[0-9]+' \
+        | awk '{s+=$1} END {print s+0}') || total=0
+    echo "${total:-0}"
+}
+
 cd "$(dirname "$0")/.."
 
 # ── 1. Run all tests (Rust + TS) ──
@@ -36,8 +54,7 @@ echo "═══ Running tests ═══"
 if ! cargo test --all 2>&1 | tee "$RUST_LOG"; then
     fail "Rust tests failed"
 fi
-RUST_N=$(grep -oE 'test result: ok\. [0-9]+' "$RUST_LOG" \
-    | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+RUST_N=$(count_from "$RUST_LOG" 'test result: ok\. [0-9]+')
 pass "Rust tests passed ($RUST_N)"
 
 echo ""
@@ -45,8 +62,7 @@ echo "═══ Running TypeScript tests ═══"
 if ! pnpm test 2>&1 | tee "$TS_LOG"; then
     fail "TypeScript tests failed"
 fi
-TS_N=$(grep -oE 'Tests +[0-9]+ passed' "$TS_LOG" \
-    | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+TS_N=$(count_from "$TS_LOG" 'Tests +[0-9]+ passed')
 pass "TypeScript tests passed ($TS_N)"
 
 echo ""
