@@ -115,6 +115,15 @@ const IMPLEMENTED: Record<string, Record<string, unknown>> = {
 
 export interface ToolSet {
   schemas: ToolSchema[];
+  /**
+   * MCP servers the surface declares.
+   *
+   * tools.toml documents an [mcp_servers] block, and nothing reads it. A
+   * declared server that is silently ignored is the failure system.md forbids:
+   * the tool list would be shorter than the surface asked for, with no
+   * refusal naming what is missing.
+   */
+  mcp_declared: string[];
   /** Declared but switched off in the surface */
   disabled: string[];
   /** Declared and enabled, but not implemented by this build */
@@ -166,7 +175,14 @@ export function buildToolSet(config: GnomonConfig, role?: string): ToolSet {
     });
   }
 
-  return { schemas, disabled, unimplemented, withheld };
+  const mcp = (config.tools.mcp_servers ?? {}) as Record<string, unknown>;
+  return {
+    schemas,
+    disabled,
+    unimplemented,
+    withheld,
+    mcp_declared: Object.keys(mcp),
+  };
 }
 
 // ---------------------------------------------------------------------------

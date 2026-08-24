@@ -7,14 +7,23 @@
 import { describe, it, expect } from "vitest";
 import { computeSurfaceHash, SourceEntry } from "./session.js";
 import { recomputeManifest } from "./config.js";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
-/** Fixture tree root — relative to this file */
-const FIXTURE_DIR = join(__dirname, "../../conformance/fixture_tree");
+/**
+ * Fixture tree root — relative to this file.
+ *
+ * __dirname is packages/gnomon-core/src, so reaching the repository root takes
+ * three levels. It was two, which resolved to packages/conformance — a path
+ * that does not exist. Every assertion still passed, because a manifest of
+ * files that are all absent is still a manifest.
+ */
+const FIXTURE_DIR = join(__dirname, "../../../conformance/fixture_tree");
 
 // ---------------------------------------------------------------------------
 // computeSurfaceHash
@@ -78,14 +87,50 @@ describe("recomputeManifest", () => {
     expect(surface_hash.length).toBe(64); // SHA256 hex
   });
 
+  it("actually hashes the files — not every source is null", () => {
+    // The original assertions passed while collectSurface found nothing and
+    // the hash was a constant meaning "every file absent". A hash of the
+    // right shape is not a hash of the right thing.
+    const { manifest } = recomputeManifest(FIXTURE_DIR);
+    const hashed = manifest.filter((s) => s.sha256 !== null);
+    expect(hashed.length).toBeGreaterThan(0);
+    for (const s of hashed) expect(s.sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("accepts the .gnomon dir itself, which is how the runtime calls it", () => {
+    const viaRoot = recomputeManifest(FIXTURE_DIR);
+    const viaSurface = recomputeManifest(join(FIXTURE_DIR, ".gnomon"));
+    expect(viaSurface.surface_hash).toBe(viaRoot.surface_hash);
+    expect(viaSurface.manifest.some((s) => s.sha256 !== null)).toBe(true);
+  });
+
+  it("the hash tracks a change to the surface", () => {
+    // Drift detection, the audit trail's attribution, and resume all depend
+    // on this being true. It was not.
+    const tmp = mkdtempSync(join(tmpdir(), "gnomon-manifest-"));
+    try {
+      mkdirSync(join(tmp, ".gnomon"), { recursive: true });
+      writeFileSync(join(tmp, ".gnomon", "system.md"), "original", "utf-8");
+      const before = recomputeManifest(tmp).surface_hash;
+
+      writeFileSync(join(tmp, ".gnomon", "system.md"), "changed", "utf-8");
+      const after = recomputeManifest(tmp).surface_hash;
+
+      expect(after).not.toBe(before);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("includes all canonical surface paths", () => {
     const { manifest } = recomputeManifest(FIXTURE_DIR);
     const paths = manifest.map((s) => s.path);
-    expect(paths).toContain("config.toml");
-    expect(paths).toContain("system.md");
-    expect(paths).toContain("roles.toml");
-    expect(paths).toContain("policy.toml");
-    expect(paths).toContain("tools.toml");
+    // .gnomon/-prefixed, matching gnomon-surface and the golden fixture.
+    expect(paths).toContain(".gnomon/config.toml");
+    expect(paths).toContain(".gnomon/system.md");
+    expect(paths).toContain(".gnomon/roles.toml");
+    expect(paths).toContain(".gnomon/policy.toml");
+    expect(paths).toContain(".gnomon/tools.toml");
   });
 
   it("returns null sha256 for absent paths", () => {

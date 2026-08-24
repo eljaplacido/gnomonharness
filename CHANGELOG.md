@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Session resume.** Conversations are saved after every turn to
+  `.gnomon-sessions/`. `gnomon prompt --continue` resumes the most recent,
+  `--resume <id>` a specific one, `gnomon sessions` lists them, `/session`
+  shows the current id. A snapshot records the surface hash it ran under, and
+  resuming across a changed surface says so — behaviour comes from the
+  surface, never from the snapshot.
+
 - **`gnomon launch`** — creates `.gnomon/` if missing, then opens the loop.
   One command to start in a project.
 - **Auto-compression.** `compaction = "summary"` now works: turns evicted from
@@ -105,6 +112,35 @@
 
 ### Fixed
 
+- **The TypeScript surface hash was a constant.** `collectSurface` expected a
+  project root and appended `.gnomon`, while every runtime caller passed the
+  already-resolved `.gnomon` directory — so it looked for `.gnomon/.gnomon`,
+  found nothing, and hashed "every file absent". That value was identical in
+  every repository and never changed when the surface did, which made the
+  audit trail's attribution meaningless, `gnomon task`'s record meaningless,
+  and drift detection — in `agent.ts` since the beginning — incapable of
+  firing.
+- **The two surface-hash implementations disagreed.** gnomon-surface prefixes
+  canonical paths with `.gnomon/` and the golden fixture pins that; the
+  TypeScript one did not, so the same directory produced two different hashes
+  under the same name. Aligned, with a test in gnomon-cli comparing them.
+- **The manifest sort was locale-sensitive.** `localeCompare` orders
+  punctuation differently under different collations, so the same surface
+  could hash differently on two machines — machine-scoped behaviour inside the
+  hash meant to prove behaviour is not machine-scoped. Now byte-wise, matching
+  the Rust implementation.
+- **The manifest test fixture path was wrong** (`../../` from `src/` reaches
+  `packages/`, not the repository root). Every assertion still passed, because
+  a manifest of files that are all absent is still a manifest. The tests now
+  assert that sources are actually hashed and that the hash tracks a change.
+- **Compaction compounded loss.** Each fold re-summarised the existing record
+  along with the new turns, so early facts were compressed repeatedly. Folds
+  now append, and the record is re-folded whole only when it outgrows
+  `retain_after`.
+- **Declared MCP servers were silently ignored.** `tools.toml` documents an
+  `[mcp_servers]` block that nothing reads. Declaring one is now reported at
+  startup as not connected, rather than leaving the tool list quietly shorter
+  than the surface asked for.
 - **A role with `bash` was never read-only.** An end-to-end audit found the
   `verifier` — `tools = ["read", "bash"]`, no write tool — creating a file
   through `bash` on its first attempt. Restricting `write`/`edit` is

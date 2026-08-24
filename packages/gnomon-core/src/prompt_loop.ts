@@ -46,6 +46,13 @@ import {
 import { mapBucket } from "./session.js";
 import { loadSkills, loadProposedSkills, selectSkills, applySkills } from "./skills.js";
 import { AuditTrail, resolveAudit } from "./audit.js";
+import {
+  resolveSessionStore,
+  saveSession,
+  loadSession,
+  SESSION_FORMAT,
+  SessionSnapshot,
+} from "./session_store.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -89,6 +96,13 @@ export interface PromptState {
    * `compaction = "summary"`. Replaces them in the prompt.
    */
   summary?: string;
+  /** Identifier this conversation is saved under */
+  sessionId?: string;
+}
+
+/** The id this session saves under, or a placeholder before one is assigned. */
+function sessionIdOf(state: PromptState): string {
+  return state.sessionId ?? "(not started)";
 }
 
 /** The session's UI settings, resolving from the surface on first use. */
@@ -739,12 +753,29 @@ export async function compactSession(
     })
     .join("\n\n");
 
-  const priorSummary = state.summary
-    ? `Existing record so far:\n${state.summary}\n\nFold the following into it, ` +
-      `keeping it a single coherent record.\n\n`
-    : "";
+  // Summarise only the NEW turns and append, rather than re-summarising the
+  // existing record every time.
+  //
+  // Re-folding the whole record on every eviction compounds loss: each pass
+  // compresses what the last pass already compressed, so early facts decay
+  // across generations the way a repeatedly re-encoded image does. In a stress
+  // test that behaviour kept "avoid async-std, use tokio" and lost the
+  // project's name. Appending keeps early sections at their first-generation
+  // fidelity; the whole record is re-folded only when it grows past
+  // retain_after, which is rare.
+  const summaryTokens = estimateTokens(state.summary ?? "");
+  const refold = summaryTokens > ctx.retain_after;
+  const priorSummary =
+    state.summary && refold
+      ? `Existing record, which has grown too long — fold it together with the ` +
+        `new material into one shorter record:\n${state.summary}\n\n`
+      : "";
 
-  onNote?.(`compacting ${pending.length} turn(s) via ${role}…`);
+  onNote?.(
+    refold
+      ? `re-folding the record (${summaryTokens} tok) plus ${pending.length} turn(s) via ${role}…`
+      : `compacting ${pending.length} turn(s) via ${role}…`
+  );
 
   const route = routeRole(state.config, role);
   const result = await callEndpoint(
@@ -767,10 +798,13 @@ export async function compactSession(
     };
   }
 
-  const summary = splitThinking(result.content).answer.trim();
-  if (!summary) {
+  const folded_text = splitThinking(result.content).answer.trim();
+  if (!folded_text) {
     return { folded: 0, reclaimed: 0, problem: "compaction produced nothing" };
   }
+  // Append unless this pass re-folded everything.
+  const summary =
+    state.summary && !refold ? `${state.summary}\n\n${folded_text}` : folded_text;
 
   const before = pending.reduce(
     (n, e) => n + estimateTokens(e.input) + estimateTokens(e.output),
@@ -945,6 +979,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/role", arg: "<name>", help: "Switch role for the rest of the session" },
   { name: "/mode", arg: "[manual|auto]", help: "Who picks the role: you, or the surface's routing rules" },
   { name: "/skills", help: "Active skills and pending proposals" },
+  { name: "/session", help: "This session's id and where it is saved" },
   { name: "/endpoints", help: "List declared inference endpoints" },
   { name: "/profiles", help: "Show available profiles" },
   { name: "/tools", help: "Show the tools this role may call" },
@@ -1051,6 +1086,19 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         console.log(`  ${r}: ${model}${ep}${desc ? ` — ${desc}` : ""}${scope}${here}`);
       }
       console.log(`\nSwitch with: /role <name>`);
+      return true;
+    }
+
+    case "/session": {
+      const st = resolveSessionStore(state.config);
+      console.log(`\nSession: ${sessionIdOf(state)}`);
+      console.log(`  turns recorded   ${state.exchanges.length}`);
+      console.log(`  persistence      ${st.persist ? st.dir : "off"}`);
+      if (st.persist) {
+        console.log(`  resume later     gnomon prompt --resume ${sessionIdOf(state)}`);
+      } else {
+        console.log(`  set [session].persist = true in .gnomon/config.toml to keep it`);
+      }
       return true;
     }
 
@@ -1284,15 +1332,42 @@ A role prefix applies to that one turn only; /role switches for good.
  * Reads user input from stdin, infers role, calls model API,
  * displays results.
  */
+export interface PromptLoopOptions {
+  /** Resume a saved session: an id, or true for the most recent */
+  resume?: string | true;
+}
+
 export async function runPromptLoop(
   config: GnomonConfig,
-  initialRole?: string
+  initialRole?: string,
+  options: PromptLoopOptions = {}
 ): Promise<void> {
   const state: PromptState = {
     config,
     exchanges: [],
     currentRole: initialRole ?? "implement",
   };
+
+  const store = resolveSessionStore(config);
+  const startedAt = new Date().toISOString();
+  let sessionId = `${startedAt.replace(/[:.]/g, "-")}-${process.pid}`;
+  let resumedFrom: SessionSnapshot | null = null;
+  state.sessionId = sessionId;
+
+  if (options.resume) {
+    try {
+      const snap = loadSession(store, options.resume === true ? undefined : options.resume);
+      state.exchanges = snap.exchanges ?? [];
+      state.summary = snap.summary;
+      state.currentRole = initialRole ?? snap.currentRole ?? state.currentRole;
+      sessionId = snap.id;
+      state.sessionId = sessionId;
+      resumedFrom = snap;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  }
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -1305,7 +1380,7 @@ export async function runPromptLoop(
 
   // Off unless the surface asks for it.
   const auditSettings = resolveAudit(config);
-  const sessionId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
+  // One id for the session, so a trail and its snapshot name the same run.
   const audit = new AuditTrail(auditSettings, sessionId);
   const surfaceHash = (() => {
     try {
@@ -1320,6 +1395,30 @@ export async function runPromptLoop(
     roles: listRoles(config),
     record: auditSettings.record,
   });
+
+  const persist = (): void => {
+    if (!store.persist) return;
+    try {
+      saveSession(store, {
+        format: SESSION_FORMAT,
+        id: sessionId,
+        started: resumedFrom?.started ?? startedAt,
+        updated: new Date().toISOString(),
+        surface_hash: surfaceHash,
+        cwd: process.cwd(),
+        currentRole: state.currentRole,
+        summary: state.summary,
+        exchanges: state.exchanges,
+      });
+    } catch (err) {
+      // Losing a snapshot must not lose the turn that produced it.
+      console.log(
+        paint(uiOf(state), "yellow", `  [session] could not save: ${
+          err instanceof Error ? err.message : String(err)
+        }`)
+      );
+    }
+  };
 
   printBanner();
   console.log(`Role: ${state.currentRole}`);
@@ -1486,6 +1585,18 @@ export async function runPromptLoop(
         )
       );
     }
+    if (toolSet.mcp_declared.length > 0) {
+      console.log(
+        paint(
+          ui,
+          "yellow",
+          `  MCP servers declared but NOT connected by this build: ${toolSet.mcp_declared.join(", ")}`
+        )
+      );
+      console.log(
+        paint(ui, "yellow", `  their tools are unavailable — nothing reads [mcp_servers] yet.`)
+      );
+    }
   };
 
   {
@@ -1502,7 +1613,42 @@ export async function runPromptLoop(
         )
       );
     }
-    if (audit.enabled) {
+    if (resumedFrom) {
+    const ui0 = uiOf(state);
+    console.log(
+      paint(
+        ui0,
+        "cyan",
+        `Resumed ${sessionId} — ${state.exchanges.length} turn(s)` +
+          (state.summary ? " and a summary" : "")
+      )
+    );
+    // Behaviour comes from the surface, not the snapshot. If the surface moved,
+    // the replayed history was produced under different rules; say so rather
+    // than carrying it forward silently.
+    if (resumedFrom.surface_hash && surfaceHash && resumedFrom.surface_hash !== surfaceHash) {
+      console.log(
+        paint(
+          ui0,
+          "yellow",
+          `  the surface changed since this session ran: ` +
+            `${resumedFrom.surface_hash.slice(0, 12)} → ${surfaceHash.slice(0, 12)}`
+        )
+      );
+      console.log(
+        paint(ui0, "yellow", `  the replayed history was produced under the older one.`)
+      );
+    }
+    audit.write("session_resume", {
+      resumed: sessionId,
+      turns: state.exchanges.length,
+      surface_hash: surfaceHash,
+      surface_hash_at_save: resumedFrom.surface_hash,
+      surface_changed: resumedFrom.surface_hash !== surfaceHash,
+    });
+  }
+
+  if (audit.enabled) {
       console.log(
         paint(ui, "gray", `Audit: ${audit.path}  (${auditSettings.record}${auditSettings.chain ? ", hash-chained" : ""})`)
       );
@@ -1726,6 +1872,7 @@ export async function runPromptLoop(
       };
 
       state.exchanges.push(exchange);
+      persist();
       audit.write("turn", {
         turn: exchange.turn,
         role,
@@ -1761,6 +1908,8 @@ export async function runPromptLoop(
             `  [context] folded ${compacted.folded} turn(s), reclaimed ~${compacted.reclaimed} tok`
           )
         );
+        // The summary and the folded flags are part of the conversation now.
+        persist();
       }
     }
   } finally {

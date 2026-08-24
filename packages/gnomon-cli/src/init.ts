@@ -259,6 +259,15 @@ enabled = true
 name = "skill"
 description = "Propose a skill: a durable note about how to work in this repository"
 enabled = true
+
+# MCP servers are NOT connected by this build. Declaring one is reported at
+# startup, but its tools will not be available. Capability comes from what
+# gnomon implements, not from what a model can do.
+# [mcp_servers.example]
+# name = "example-server"
+# transport = "stdio"
+# command = "npx"
+# args = ["-y", "@example/mcp-server"]
 `;
 
 const POLICY_TOML = `# Policy: approval gates, sandbox level, edit format.

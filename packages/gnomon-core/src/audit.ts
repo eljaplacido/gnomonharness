@@ -100,6 +100,7 @@ export function resolveAudit(config: GnomonConfig): ResolvedAudit {
 
 export type AuditKind =
   | "session_start"
+  | "session_resume"
   | "turn"
   | "tool_call"
   | "approval"

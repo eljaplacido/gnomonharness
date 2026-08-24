@@ -6,7 +6,7 @@
  */
 
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
-import { join, resolve, dirname, relative } from "node:path";
+import { join, resolve, dirname, relative, basename } from "node:path";
 import { createHash } from "node:crypto";
 import { SourceEntry } from "./session.js";
 
@@ -24,6 +24,7 @@ export interface Config {
   endpoints?: Record<string, EndpointConfig>;
   routing?: RoutingConfig;
   audit?: import("./audit.js").AuditConfig;
+  session?: import("./session_store.js").SessionConfig;
 }
 
 /**
@@ -859,12 +860,20 @@ export function inferRole(input: string): string {
  * Canonical .gnomon/ surface paths — the minimum set every manifest lists.
  * Mirrors gnomon-surface's SURFACE_PATHS.
  */
+/**
+ * Canonical surface paths, `.gnomon/`-prefixed to match gnomon-surface and
+ * conformance/manifest_golden.json.
+ *
+ * These strings go into the hash, so a different prefix is a different hash.
+ * Unprefixed, this implementation and the Rust one returned different values
+ * for the same directory — two things both called "the surface hash".
+ */
 const SURFACE_PATHS = [
-  "config.toml",
-  "system.md",
-  "roles.toml",
-  "policy.toml",
-  "tools.toml",
+  ".gnomon/config.toml",
+  ".gnomon/system.md",
+  ".gnomon/roles.toml",
+  ".gnomon/tools.toml",
+  ".gnomon/policy.toml",
 ] as const;
 
 /**
@@ -883,9 +892,22 @@ function fileSha256(filePath: string): string | null {
  * Walk .gnomon/ directory, collect files with their hashes.
  * Only hashes — never contents.
  */
+/**
+ * Resolve either a project root or a `.gnomon/` directory to the surface dir.
+ *
+ * Both call styles exist in this codebase — the tests pass a project root, and
+ * every runtime caller passes `config.gnomonDir`. Accepting only the former
+ * meant the runtime looked for `.gnomon/.gnomon`, found nothing, and hashed
+ * "every file absent": a constant that was identical in every repository and
+ * never changed when the surface did.
+ */
+function surfaceDirOf(dir: string): string {
+  return basename(resolve(dir)) === ".gnomon" ? resolve(dir) : join(dir, ".gnomon");
+}
+
 function collectSurface(baseDir: string): SourceEntry[] {
   const sources: SourceEntry[] = [];
-  const gnomonDir = join(baseDir, ".gnomon");
+  const gnomonDir = surfaceDirOf(baseDir);
 
   if (!existsSync(gnomonDir)) return sources;
 
@@ -894,7 +916,8 @@ function collectSurface(baseDir: string): SourceEntry[] {
     const entries = readdirSync(dir);
     for (const entry of entries) {
       const fullPath = join(dir, entry);
-      const relPath = relative(join(baseDir, ".gnomon"), fullPath);
+      // Prefixed to match the Rust implementation and the golden fixture.
+      const relPath = join(".gnomon", relative(gnomonDir, fullPath));
       const st = statSync(fullPath);
       if (st.isDirectory()) {
         walk(fullPath);
@@ -942,8 +965,15 @@ export function recomputeManifest(baseDir: string, build: string = "0.1.0"): {
     }
   }
 
-  // Sort by path for determinism
-  sources.sort((a, b) => a.path.localeCompare(b.path));
+  // Sort by path, byte-wise — NOT localeCompare.
+  //
+  // localeCompare is locale-sensitive: it orders punctuation differently under
+  // different collations, so the same surface could hash differently on two
+  // machines. That is the machine-scoped behaviour Rule 1 forbids, inside the
+  // hash meant to prove behaviour is not machine-scoped. It also disagreed
+  // with gnomon-surface's byte-wise sort, so the two implementations of the
+  // same hash returned different values for the same directory.
+  sources.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
   // Compute surface hash
   const hash = createHash("sha256");

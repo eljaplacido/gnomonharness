@@ -167,6 +167,11 @@ surface still determines *that* summarisation happens and *which role* does it,
 but two runs can summarise differently. That is why `discard` remains the
 default.
 
+Each fold summarises only the **new** turns and appends. Re-folding the whole
+record every time would compound loss — each pass compressing what the last
+pass already compressed, the way a repeatedly re-encoded image degrades. The
+record is re-folded as a whole only when it outgrows `retain_after`.
+
 It is also lossy in proportion to how hard you squeeze. Folding a session into
 a 340-token window with a 7B summariser preserved the decisions ("avoid
 async-std, use tokio") and lost a detail (the project's name). At a realistic
@@ -319,6 +324,39 @@ gnomon skill reject cargo-suite
 Accepting changes the surface hash on purpose and applies from the next
 session. Learning stays reviewable, and the hash stays honest. `/skills` shows
 both lists.
+
+#### Sessions — Resume Where You Left Off
+
+Conversations are saved after every turn, so closing the terminal or losing
+the process does not lose the work.
+
+```bash
+gnomon sessions                    # newest last
+gnomon prompt --continue           # resume the most recent
+gnomon prompt --resume <id>        # resume a specific one
+```
+
+```toml
+[session]
+persist = true              # on by default
+dir = ".gnomon-sessions"    # outside .gnomon/, same reason as the audit trail
+keep = 20                   # older snapshots are pruned; 0 keeps everything
+```
+
+`/session` shows the current id from inside the loop.
+
+**What resuming restores, and what it does not.** It replays the conversation.
+It does **not** replay the rules that produced it — behaviour always comes from
+the current surface. A snapshot records the hash it ran under, so if the
+surface moved in between, gnomon says so:
+
+```
+Resumed 2026-08-24T19-39-48-151Z — 1 turn(s)
+  the surface changed since this session ran: bbe6ff24ee76 → cbf81db14bd9
+  the replayed history was produced under the older one.
+```
+
+Add `.gnomon-sessions/` and `.gnomon-audit/` to your `.gitignore`.
 
 #### `[audit]` — Traceability and Governance
 
@@ -678,6 +716,7 @@ binaries must be built first (`cargo build`) for native commands to work.
 | `/think [mode]` | Chain-of-thought: `hide` \| `collapse` \| `show` |
 | `/mode [manual\|auto]` | Who picks the role: you, or the surface's routing rules |
 | `/skills` | Active skills and pending proposals |
+| `/session` | This session's id and where it is saved |
 | `/tools` | Tools the current role may call, and what is withheld |
 | `/context` | Window, folded turns, summary size |
 | `/endpoints` | Declared inference endpoints |
@@ -830,6 +869,24 @@ gnomon (agent) → sessions → agentcenter (dashboard)
 - KPIs, ELO scores, and benchmark results flow into agentcenter's scorecards.
 - The `infquant_sync` skill in agentcenter ingests gnomon benchmark results.
 - Cross-project analysis: gnomon sessions + OpenCode logs → unified feed.
+
+### Acquiring New Capabilities
+
+**Capability comes from what gnomon implements, not from what a model can do.**
+A model that "knows about PDFs" cannot read one unless a tool hands it the
+bytes.
+
+| Route | Works today | Notes |
+|---|---|---|
+| `bash` | **Yes** | The general escape hatch. `pdftotext`, `curl`, `rg`, anything installed. Constrain it per role with `bash_allow`. |
+| Skills | **Yes** | Teach *how* to use what exists — "PDFs here are read with `pdftotext -layout`". A skill adds knowledge, never capability. |
+| New built-in tool | No | Requires implementing it in `gnomon-core`. |
+| MCP servers | **No** | `tools.toml` documents an `[mcp_servers]` block and nothing reads it. Declaring one is reported at startup and its tools are unavailable. |
+
+So a skill plus `bash` covers a great deal — PDF extraction and web fetching
+are both `bash` away, and the coordinator can propose a skill recording how.
+What it cannot do is grow a *new kind* of tool by itself. MCP is the missing
+piece, and until it exists gnomon says so rather than implying otherwise.
 
 ### With TriadSepta
 

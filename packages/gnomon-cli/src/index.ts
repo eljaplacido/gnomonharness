@@ -27,6 +27,8 @@ import {
   runTask,
   resolveAudit,
   verifyTrail,
+  resolveSessionStore,
+  listSessions,
 } from "gnomon-core";
 import {
   manifest as surfaceManifest,
@@ -56,6 +58,7 @@ interface CliArgs {
   role?: string;
   yes?: boolean;
   json?: boolean;
+  resume?: string | true;
   positional: string[];
 }
 
@@ -89,6 +92,17 @@ export function parseArgs(args: string[]): CliArgs {
       result.role = args[i];
     } else if (arg === "--force" || arg === "-f") {
       result.force = true;
+    } else if (arg === "--resume" || arg === "-r") {
+      // `--resume` alone means the most recent; `--resume <id>` names one.
+      const next = args[i + 1];
+      if (next && !next.startsWith("-")) {
+        i++;
+        result.resume = next;
+      } else {
+        result.resume = true;
+      }
+    } else if (arg === "--continue" || arg === "-c") {
+      result.resume = true;
     } else if (arg === "--yes" || arg === "-y") {
       result.yes = true;
     } else if (arg === "--json") {
@@ -115,11 +129,11 @@ export function parseArgs(args: string[]): CliArgs {
 // ---------------------------------------------------------------------------
 
 async function cmdSurface(args: CliArgs): Promise<void> {
-  // The native binary takes a project directory and does not search upward.
-  // Passing undefined made it read whatever .gnomon/ sat beside the cwd — from
-  // a subdirectory that is nothing, and it reported a hash of absent files
-  // rather than saying so.
-  const dir = args.dir ?? resolve(resolveGnomonDir(), "..");
+  // gnomon-surface takes the .gnomon DIRECTORY itself (see .gnomon/ci.sh),
+  // not the project root, and does not search upward. Passing a root made it
+  // hash `.gnomon/.gnomon/...` and sweep in files that sit beside the surface;
+  // passing nothing made it hash whatever happened to be next to the cwd.
+  const dir = args.dir ? join(resolve(args.dir), ".gnomon") : resolveGnomonDir();
   if (args.subcommand === "manifest") {
     const m = surfaceManifest(dir);
     console.log(JSON.stringify(m, null, 2));
@@ -420,7 +434,36 @@ async function cmdLaunch(args: CliArgs): Promise<void> {
 
 async function cmdPrompt(args: CliArgs): Promise<void> {
   const config = loadConfig(args.dir);
-  await runPromptLoop(config, args.subcommand || "implement");
+  // A resumed session keeps its own role unless one is named here.
+  const role = args.resume ? args.subcommand || undefined : args.subcommand || "implement";
+  await runPromptLoop(config, role, { resume: args.resume });
+}
+
+async function cmdSessions(args: CliArgs): Promise<void> {
+  const config = loadConfig(args.dir);
+  const store = resolveSessionStore(config);
+
+  if (!store.persist) {
+    console.log("Session persistence is off ([session].persist = false).");
+    return;
+  }
+
+  const sessions = listSessions(store);
+  if (sessions.length === 0) {
+    console.log(`No sessions in ${store.dir}`);
+    return;
+  }
+
+  console.log(`Sessions in ${store.dir} (newest last):\n`);
+  for (const s of sessions) {
+    console.log(`  ${s.id}`);
+    console.log(
+      `    ${s.turns} turn(s) · ${s.currentRole} · ${s.updated} · surface ${s.surface_hash.slice(0, 12)}`
+    );
+    if (s.opening) console.log(`    "${s.opening}"`);
+  }
+  console.log(`\nResume the newest:  gnomon prompt --continue`);
+  console.log(`Resume a specific:  gnomon prompt --resume <id>`);
 }
 
 // ---------------------------------------------------------------------------
@@ -469,8 +512,12 @@ Commands:
     Gated tool calls are REFUSED unless --yes: a non-interactive run has
     nobody to ask. Exit code: 0 result, 2 refusal, 10 apparatus_failure.
 
-  prompt
-    Interactive agent loop — reads stdin, infers role, calls model
+  sessions [--dir <path>]
+    Saved sessions, newest last.
+
+  prompt [--continue | --resume <id>]
+    Interactive agent loop. --continue resumes the most recent session,
+    --resume <id> a specific one. Conversations are saved after every turn.
 
   run
     Alias for \`prompt\`
@@ -533,6 +580,9 @@ async function main(): Promise<void> {
       break;
     case "audit":
       await cmdAudit(args);
+      break;
+    case "sessions":
+      await cmdSessions(args);
       break;
     case "task":
       await cmdTask(args);
