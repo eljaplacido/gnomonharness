@@ -28,7 +28,7 @@ import {
   TOOL_FAILED,
   TOOL_OK_EMPTY,
 } from "./tools.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, declaredTools, isToolEnabled } from "./config.js";
 import { mapBucket } from "./session.js";
 
 let root: string;
@@ -52,10 +52,16 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe("buildToolSet", () => {
-  it("offers the tools the surface declares", () => {
-    const set = buildToolSet(loadConfig("../.."));
-    const names = set.schemas.map((s) => s.function.name).sort();
-    expect(names).toEqual(["bash", "edit", "read", "write"]);
+  it("offers exactly the tools the surface declares and enables", () => {
+    // Derived from the surface, not hardcoded: adding a tool to tools.toml
+    // should not break this test, only a mismatch should.
+    const config = loadConfig("../..");
+    const expected = declaredTools(config)
+      .filter((t) => isToolEnabled(config, t.name))
+      .map((t) => t.name)
+      .sort();
+    const names = buildToolSet(config).schemas.map((s) => s.function.name).sort();
+    expect(names).toEqual(expected);
   });
 
   it("gives every tool a parameter schema", () => {
@@ -356,8 +362,12 @@ describe("per-role tool scope", () => {
 
   it("a role with no tool list gets everything declared", () => {
     const c = cfgWithRoles({ implement: { model: "m" } });
+    const expected = declaredTools(c)
+      .filter((t) => isToolEnabled(c, t.name))
+      .map((t) => t.name)
+      .sort();
     const names = buildToolSet(c, "implement").schemas.map((s) => s.function.name);
-    expect(names.sort()).toEqual(["bash", "edit", "read", "write"]);
+    expect(names.sort()).toEqual(expected);
   });
 
   it("a verifier cannot write or edit — the capability is absent", () => {
@@ -365,7 +375,10 @@ describe("per-role tool scope", () => {
     const set = buildToolSet(c, "verifier");
     const names = set.schemas.map((s) => s.function.name).sort();
     expect(names).toEqual(["bash", "read"]);
-    expect(set.withheld.sort()).toEqual(["edit", "write"]);
+    // Everything else the surface declares is withheld, whatever that is.
+    expect(set.withheld).toContain("write");
+    expect(set.withheld).toContain("edit");
+    expect(set.withheld).not.toContain("read");
   });
 
   it("a withheld tool is refused by name, naming what IS available", async () => {

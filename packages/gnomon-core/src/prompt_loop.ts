@@ -19,6 +19,11 @@ import {
   resolveContext,
   resolveUi,
   resolveEndpoint,
+  resolveRouting,
+  recomputeManifest,
+  routeInput,
+  ResolvedRouting,
+  RoutingMode,
   listEndpoints,
   parseMetaFields,
   ResolvedUi,
@@ -38,6 +43,7 @@ import {
   ApprovalGate,
 } from "./tools.js";
 import { mapBucket } from "./session.js";
+import { loadSkills, loadProposedSkills, selectSkills, applySkills } from "./skills.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -72,12 +78,20 @@ export interface PromptState {
   currentRole: string;
   /** Resolved `[ui]`; /meta and /think edit this copy for the session only */
   ui?: ResolvedUi;
+  /** Resolved `[routing]`; /mode edits this copy for the session only */
+  routing?: ResolvedRouting;
 }
 
 /** The session's UI settings, resolving from the surface on first use. */
 function uiOf(state: PromptState): ResolvedUi {
   if (!state.ui) state.ui = resolveUi(state.config);
   return state.ui;
+}
+
+/** The session's routing policy, resolving from the surface on first use. */
+function routingOf(state: PromptState): ResolvedRouting {
+  if (!state.routing) state.routing = resolveRouting(state.config);
+  return state.routing;
 }
 
 // ---------------------------------------------------------------------------
@@ -401,7 +415,7 @@ function printBanner(): void {
   console.log("");
   console.log("/help for commands · /meta and /think to change what you see");
   console.log("/context for the window · /role <name> to switch role");
-  console.log("Esc cancels the turn in progress.");
+  console.log("Esc cancels the turn in progress.  /mode auto lets the harness route.");
   console.log("Type /quit or Ctrl+C to exit.");
   console.log("");
 }
@@ -477,6 +491,7 @@ export async function runAgenticTurn(
     "confined") as SandboxLevel;
 
   const ctx: ToolContext = {
+    config,
     root: resolve(config.gnomonDir, ".."),
     sandbox,
     gate,
@@ -622,6 +637,100 @@ function toolTimeoutMs(config: GnomonConfig): number {
 }
 
 // ---------------------------------------------------------------------------
+// Non-interactive execution
+// ---------------------------------------------------------------------------
+
+/** One task run, as data. Separated so a caller can compare runs. */
+export interface TaskRecord {
+  /** Content hash of .gnomon/ — what determined this behaviour */
+  surface_hash: string;
+  role: string;
+  model: string;
+  endpoint?: string;
+  input: string;
+  output: string;
+  code: number;
+  bucket: string;
+  tool_steps: number;
+  tool_log: string[];
+  skills: string[];
+  /**
+   * Fields that legitimately differ between two runs of the same task.
+   * Kept apart so a comparison can ignore exactly these and nothing else.
+   */
+  volatile: { duration_ms: number };
+}
+
+export interface RunTaskOptions {
+  role?: string;
+  /** Approve gated tool calls. Without it every gated call is refused. */
+  yes?: boolean;
+  /** Emit progress lines to stderr */
+  verbose?: boolean;
+}
+
+/**
+ * Run one task without a terminal.
+ *
+ * This is the invocation a composition layer can put in a runbook: it takes a
+ * task, uses only `.gnomon/` for configuration, references nothing outside
+ * this repository, and returns a record.
+ *
+ * Approval is refused by default. A non-interactive run has nobody to ask, and
+ * silently granting writes because no one is watching would invert the meaning
+ * of `approval = "on_write"`.
+ */
+export async function runTask(
+  config: GnomonConfig,
+  input: string,
+  options: RunTaskOptions = {}
+): Promise<TaskRecord> {
+  const routing = resolveRouting(config);
+  const role =
+    options.role ??
+    (routing.mode === "auto" ? routeInput(config, input, routing).role : routing.default);
+
+  const state: PromptState = { config, exchanges: [], currentRole: role };
+  const ui: ResolvedUi = { ...resolveUi(config), spinner: false, color: false };
+  const route = routeRole(config, role);
+
+  const active = selectSkills(loadSkills(config), role, input);
+  const systemPrompt = applySkills(config.system.content ?? "", active);
+  const built = buildMessages(state, systemPrompt, input);
+
+  const note = (line: string) => {
+    if (options.verbose) process.stderr.write(`${line}\n`);
+  };
+
+  const start = Date.now();
+  const turn = await runAgenticTurn(state, role, route, built.messages, {
+    approve: async (req) => {
+      note(`[approval] ${req.summary} — ${options.yes ? "granted" : "refused"}`);
+      return Boolean(options.yes);
+    },
+    progress: new Progress(ui, process.stderr as NodeJS.WriteStream),
+    ui,
+    say: note,
+  });
+  const duration = Date.now() - start;
+
+  return {
+    surface_hash: recomputeManifest(config.gnomonDir, "0.1.0").surface_hash,
+    role,
+    model: turn.model,
+    endpoint: route.target.endpoint,
+    input,
+    output: turn.content,
+    code: turn.code,
+    bucket: mapBucket(turn.code),
+    tool_steps: turn.toolSteps,
+    tool_log: turn.toolLog,
+    skills: active.map((sk) => sk.id),
+    volatile: { duration_ms: duration },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
@@ -642,6 +751,8 @@ export interface CommandSpec {
 export const COMMANDS: CommandSpec[] = [
   { name: "/roles", help: "List roles and models (marks the current one)" },
   { name: "/role", arg: "<name>", help: "Switch role for the rest of the session" },
+  { name: "/mode", arg: "[manual|auto]", help: "Who picks the role: you, or the surface's routing rules" },
+  { name: "/skills", help: "Active skills and pending proposals" },
   { name: "/endpoints", help: "List declared inference endpoints" },
   { name: "/profiles", help: "Show available profiles" },
   { name: "/tools", help: "Show the tools this role may call" },
@@ -670,6 +781,12 @@ export function completeInput(
   if (roleArg) {
     const partial = roleArg[1];
     return [roles.filter((r) => r.startsWith(partial)), partial];
+  }
+
+  const modeArg = line.match(/^\/mode\s+(\S*)$/);
+  if (modeArg) {
+    const partial = modeArg[1];
+    return [["manual", "auto"].filter((m) => m.startsWith(partial)), partial];
   }
 
   const thinkArg = line.match(/^\/think\s+(\S*)$/);
@@ -742,6 +859,60 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         console.log(`  ${r}: ${model}${ep}${desc ? ` — ${desc}` : ""}${scope}${here}`);
       }
       console.log(`\nSwitch with: /role <name>`);
+      return true;
+    }
+
+    case "/skills": {
+      const active = loadSkills(state.config);
+      const pending = loadProposedSkills(state.config);
+      console.log(`\nActive skills (.gnomon/skills/) — loaded into the prompt:`);
+      if (active.length === 0) console.log("  (none)");
+      for (const sk of active) {
+        const scope = sk.roles ? ` [${sk.roles.join(", ")}]` : "";
+        const when = sk.match ? `  when: ${sk.match}` : "  always";
+        console.log(`  ${sk.id}${scope} — ${sk.description ?? sk.name}`);
+        console.log(`    ${when.trim()}`);
+      }
+      console.log(`\nProposed (.gnomon/skills/proposed/) — NOT loaded:`);
+      if (pending.length === 0) console.log("  (none)");
+      for (const sk of pending) {
+        console.log(`  ${sk.id} — ${sk.description ?? sk.name}`);
+      }
+      if (pending.length > 0) {
+        console.log(
+          `\nAccept with \`gnomon skill accept <id>\`. Accepting changes the ` +
+            `surface hash and takes effect next session.`
+        );
+      }
+      return true;
+    }
+
+    case "/mode": {
+      const routing = routingOf(state);
+      const wanted = (parts[1] ?? "").trim();
+      if (!wanted) {
+        console.log(`\nMode: ${routing.mode}`);
+        console.log("  manual — the current role answers; a prefix routes one turn");
+        console.log("  auto   — [routing] rules in config.toml pick the role per turn");
+        if (routing.rules.length > 0) {
+          console.log("\nRules, in priority order:");
+          for (const rule of routing.rules) {
+            console.log(`  ${rule.role.padEnd(12)} ${rule.match}`);
+          }
+          console.log(`  ${routing.default.padEnd(12)} (default, when nothing matches)`);
+        } else {
+          console.log("\nNo [[routing.rules]] declared — auto would always use " +
+            `"${routing.default}".`);
+        }
+        return true;
+      }
+      if (wanted !== "manual" && wanted !== "auto") {
+        console.log(`\nUnknown mode: "${wanted}". Use: manual | auto`);
+        return true;
+      }
+      routing.mode = wanted as RoutingMode;
+      console.log(`\nMode: ${routing.mode}`);
+      console.log("Session only — edit [routing].mode in .gnomon/config.toml to make it stick.");
       return true;
     }
 
@@ -1007,10 +1178,13 @@ export async function runPromptLoop(
     }
     console.log(paint(ui, "yellow", "  └ [y]es / [N]o"));
 
-    // Anything typed before this prompt appeared was meant as a message, not
-    // as an answer to a question the user had not yet seen. Hold it aside and
-    // replay it afterwards rather than letting it decide the approval.
-    const held = lineQueue.splice(0, lineQueue.length);
+    // On a TTY, anything already typed was meant as a message, not as an
+    // answer to a prompt the user had not yet seen — hold it and replay it.
+    // On a pipe the opposite is true: the script's next line IS the answer,
+    // and holding it would silently decline every gated call.
+    const held = process.stdin.isTTY
+      ? lineQueue.splice(0, lineQueue.length)
+      : [];
     if (held.length > 0) {
       console.log(
         paint(ui, "gray", `  (holding ${held.length} typed-ahead line(s))`)
@@ -1173,22 +1347,67 @@ export async function runPromptLoop(
       // turn to smol with no way back — use /role to switch for real.
       let role = state.currentRole;
       let cleanedInput = input;
+      let prefixed = false;
 
       for (const candidate of listRoles(config)) {
         const prefix = `/${candidate} `;
         if (input.startsWith(prefix)) {
           role = candidate;
           cleanedInput = input.slice(prefix.length);
+          prefixed = true;
           break;
         }
+      }
+
+      const uiEarly = uiOf(state);
+      const routing = routingOf(state);
+
+      // In auto mode the surface's rules choose. An explicit prefix always
+      // wins: asking for a role and being overruled would be worse than not
+      // having auto at all.
+      if (routing.mode === "auto" && !prefixed) {
+        const decision = routeInput(config, cleanedInput, routing);
+        if (decision.problem) {
+          console.log(
+            paint(uiEarly, "yellow", `  [routing] ${decision.problem}`)
+          );
+        }
+        if (decision.role !== role) {
+          console.log(
+            paint(uiEarly, "cyan", `  ⇢ auto: ${role} → ${decision.role}`) +
+              paint(
+                uiEarly,
+                "gray",
+                decision.rule
+                  ? `  (${decision.rule.why ?? decision.rule.match})`
+                  : "  (default)"
+              )
+          );
+        }
+        role = decision.role;
       }
 
       const route = routeRole(config, role);
 
       const ui = uiOf(state);
 
+      // Skills that apply to this role and input join the system prompt.
+      // Selection is by declared pattern, not model judgement, so the same
+      // input loads the same skills on every machine.
+      const active = selectSkills(loadSkills(config), role, cleanedInput);
+      if (active.length > 0) {
+        console.log(
+          paint(
+            uiEarly,
+            "gray",
+            `  [skills] ${active.map((sk) => sk.name).join(", ")}`
+          )
+        );
+      }
+      const systemPrompt = applySkills(config.system.content ?? "", active);
+
       // Build the window from prior turns before calling.
-      const built = buildMessages(state, config.system.content ?? "", cleanedInput);
+      const built = buildMessages(state, systemPrompt, cleanedInput);
       if (built.notice) {
         console.log(paint(ui, "yellow", `  [context] ${built.notice}`));
       }

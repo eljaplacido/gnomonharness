@@ -16,6 +16,8 @@ import {
   inferRole,
   resolveEndpoint,
   listEndpoints,
+  resolveRouting,
+  routeInput,
 } from "./index.js";
 import { join, resolve } from "node:path";
 import { mkdirSync, rmSync, mkdtempSync } from "node:fs";
@@ -310,5 +312,96 @@ describe("endpoints", () => {
     const serialised = JSON.stringify(routeRole(c, "r"));
     expect(serialised).toContain("ZEN_KEY");
     expect(serialised).not.toMatch(/Bearer|sk-/);
+  });
+});
+
+describe("routing", () => {
+  const fixtureRoot = "../../conformance/fixture_tree";
+  const withRouting = (routing: Record<string, unknown>, roles: string[]): any => {
+    const c: any = loadConfig(fixtureRoot);
+    c.config = { ...c.config, routing };
+    c.roles = Object.fromEntries(roles.map((r) => [r, { model: "m" }]));
+    return c;
+  };
+
+  it("defaults to manual", () => {
+    expect(resolveRouting(withRouting({}, ["implement"])).mode).toBe("manual");
+  });
+
+  it("first matching rule wins, so order is priority", () => {
+    const c = withRouting(
+      {
+        default: "implement",
+        rules: [
+          { role: "coordinator", match: "^spec\\b" },
+          { role: "smol", match: "spec" },
+        ],
+      },
+      ["implement", "coordinator", "smol"]
+    );
+    expect(routeInput(c, "spec the cache").role).toBe("coordinator");
+  });
+
+  it("falls back to the default when nothing matches", () => {
+    const c = withRouting(
+      { default: "implement", rules: [{ role: "smol", match: "^summarise\\b" }] },
+      ["implement", "smol"]
+    );
+    const d = routeInput(c, "do something else");
+    expect(d.role).toBe("implement");
+    expect(d.rule).toBeNull();
+  });
+
+  it("matches case-insensitively", () => {
+    const c = withRouting(
+      { default: "implement", rules: [{ role: "smol", match: "^summarise\\b" }] },
+      ["implement", "smol"]
+    );
+    expect(routeInput(c, "SUMMARISE this").role).toBe("smol");
+  });
+
+  it("a rule naming an undefined role is reported, not silently skipped", () => {
+    const c = withRouting(
+      { default: "implement", rules: [{ role: "ghost", match: "^x" }] },
+      ["implement"]
+    );
+    const d = routeInput(c, "x marks it");
+    expect(d.role).toBe("implement");
+    expect(d.problem).toMatch(/not defined in roles.toml/);
+  });
+
+  it("an invalid pattern is reported rather than throwing", () => {
+    const c = withRouting(
+      { default: "implement", rules: [{ role: "smol", match: "([" }] },
+      ["implement", "smol"]
+    );
+    expect(() => routeInput(c, "anything")).not.toThrow();
+    expect(routeInput(c, "anything").problem).toMatch(/invalid pattern/);
+  });
+
+  it("routing is a pure function of surface plus input", () => {
+    const c = withRouting(
+      { default: "implement", rules: [{ role: "smol", match: "^sum" }] },
+      ["implement", "smol"]
+    );
+    expect(routeInput(c, "sum it").role).toBe(routeInput(c, "sum it").role);
+  });
+});
+
+describe("literal TOML strings", () => {
+  it("a single-quoted value keeps backslashes, so regexes survive", () => {
+    const r = parseToml("match = '^\\s*(spec|plan)\\b'");
+    expect(r.match).toBe("^\\s*(spec|plan)\\b");
+    expect(new RegExp(r.match as string, "i").test("  spec the thing")).toBe(true);
+  });
+
+  it("a # inside a literal string is not a comment", () => {
+    const r = parseToml("match = 'a#b'");
+    expect(r.match).toBe("a#b");
+  });
+
+  it("a comment after a literal string is still stripped", () => {
+    const r = parseToml("match = 'abc'   # trailing note");
+    expect(r.match).toBe("abc");
   });
 });

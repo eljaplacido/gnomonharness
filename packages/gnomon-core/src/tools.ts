@@ -24,6 +24,7 @@ import {
 } from "node:fs";
 import { resolve, relative, isAbsolute, dirname, join } from "node:path";
 import { GnomonConfig, declaredTools, isToolEnabled } from "./config.js";
+import { proposeSkill, renderSkill, SkillProposal } from "./skills.js";
 
 // ---------------------------------------------------------------------------
 // Outcome codes
@@ -89,6 +90,26 @@ const IMPLEMENTED: Record<string, Record<string, unknown>> = {
       new_text: str("Replacement text"),
     },
     ["path", "old_text", "new_text"]
+  ),
+  skill: obj(
+    {
+      name: str("Short name for the skill, e.g. 'rust test layout'"),
+      body: str(
+        "The instruction itself: what someone working in this repository " +
+          "should know or do. Concrete and specific to this repository."
+      ),
+      description: str("One line summarising when this applies"),
+      match: str(
+        "Optional case-insensitive regular expression. The skill is loaded " +
+          "only for turns whose input matches. Omit to always apply."
+      ),
+      roles: {
+        type: "array",
+        items: { type: "string" },
+        description: "Roles this applies to. Omit for all roles.",
+      },
+    },
+    ["name", "body"]
   ),
 };
 
@@ -190,7 +211,7 @@ export interface ApprovalRequest {
 export type Approver = (req: ApprovalRequest) => Promise<boolean>;
 
 /** Tools that can change something outside the model's own context. */
-const MUTATING = new Set(["bash", "write", "edit"]);
+const MUTATING = new Set(["bash", "write", "edit", "skill"]);
 
 /** Whether a call needs sign-off under the configured gate. */
 export function needsApproval(tool: string, gate: ApprovalGate): boolean {
@@ -273,6 +294,8 @@ export function diffStat(lines: string[]): { added: number; removed: number } {
 // ---------------------------------------------------------------------------
 
 export interface ToolContext {
+  /** Needed by `skill`, which writes inside .gnomon/ */
+  config?: GnomonConfig;
   root: string;
   sandbox: SandboxLevel;
   gate: ApprovalGate;
@@ -587,6 +610,86 @@ async function editTool(
 }
 
 /**
+ * Propose a skill.
+ *
+ * Writes to `.gnomon/skills/proposed/` only, at a path derived from the name,
+ * so a proposal can never target an existing skill or escape into the rest of
+ * the surface. It does not take effect in this session: skills are loaded from
+ * `.gnomon/skills/`, and moving it there is a human action. That is what keeps
+ * "same surface + same prompt → same outcome" true while still letting the
+ * harness learn.
+ */
+async function skillTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolOutcome> {
+  if (!ctx.config) {
+    return {
+      code: TOOL_FAILED,
+      content: "Skill authorship is unavailable: no surface is loaded.",
+      summary: "skill — no surface",
+    };
+  }
+
+  const name = String(args.name ?? "").trim();
+  const body = String(args.body ?? "").trim();
+  if (!name || !body) {
+    return {
+      code: TOOL_FAILED,
+      content: "A skill needs both a name and a body.",
+      summary: "skill — incomplete",
+    };
+  }
+
+  const proposal: SkillProposal = {
+    name,
+    body,
+    description:
+      typeof args.description === "string" ? args.description.trim() : undefined,
+    match: typeof args.match === "string" ? args.match.trim() || undefined : undefined,
+    roles: Array.isArray(args.roles) ? args.roles.map(String) : undefined,
+  };
+
+  if (proposal.match) {
+    try {
+      new RegExp(proposal.match, "i");
+    } catch {
+      return {
+        code: TOOL_FAILED,
+        content: `"${proposal.match}" is not a valid regular expression.`,
+        summary: "skill — bad pattern",
+      };
+    }
+  }
+
+  if (needsApproval("skill", ctx.gate)) {
+    const ok = await ctx.approve({
+      tool: "skill",
+      summary: `propose skill "${name}"`,
+      preview: renderSkill(proposal).split("\n").map((l) => `+ ${l}`),
+    });
+    if (!ok) {
+      return {
+        code: TOOL_DENIED,
+        content: `Refused: the user declined the skill proposal "${name}".`,
+        summary: `skill "${name}" — denied`,
+      };
+    }
+  }
+
+  const { id, existed } = proposeSkill(ctx.config, proposal);
+  return {
+    code: TOOL_OK,
+    content:
+      `Proposed skill "${name}" as ${id}.md. It is NOT active: proposals live ` +
+      `in .gnomon/skills/proposed/ and take effect only once accepted with ` +
+      `\`gnomon skill accept ${id}\`, which changes the surface hash ` +
+      `deliberately.${existed ? " (replaced an earlier proposal of the same name)" : ""}`,
+    summary: `skill ${id} proposed${existed ? " (replaced)" : ""}`,
+  };
+}
+
+/**
  * Run one tool call.
  *
  * A tool the surface does not offer returns a refusal naming it, rather than
@@ -637,6 +740,8 @@ async function dispatch(
       return writeTool(args, ctx);
     case "edit":
       return editTool(args, ctx);
+    case "skill":
+      return skillTool(args, ctx);
     default:
       return {
         code: TOOL_NOT_DECLARED,

@@ -20,6 +20,11 @@ import {
   resolveGnomonDir,
   Manifest,
   runPromptLoop,
+  loadSkills,
+  loadProposedSkills,
+  acceptSkill,
+  rejectSkill,
+  runTask,
 } from "gnomon-core";
 import {
   manifest as surfaceManifest,
@@ -46,6 +51,9 @@ interface CliArgs {
   printSession?: boolean;
   force?: boolean;
   from?: string;
+  role?: string;
+  yes?: boolean;
+  json?: boolean;
   positional: string[];
 }
 
@@ -74,8 +82,15 @@ export function parseArgs(args: string[]): CliArgs {
     } else if (arg === "--from") {
       i++;
       result.from = args[i];
+    } else if (arg === "--role") {
+      i++;
+      result.role = args[i];
     } else if (arg === "--force" || arg === "-f") {
       result.force = true;
+    } else if (arg === "--yes" || arg === "-y") {
+      result.yes = true;
+    } else if (arg === "--json") {
+      result.json = true;
     } else if (arg === "-p") {
       // Already handled above
     } else if (arg.startsWith("-")) {
@@ -229,6 +244,78 @@ async function cmdSimulate(args: CliArgs): Promise<void> {
   console.log(JSON.stringify(result, null, 2));
 }
 
+async function cmdTask(args: CliArgs): Promise<void> {
+  const text = [args.subcommand, ...args.positional].filter(Boolean).join(" ").trim();
+  if (!text) {
+    console.error('Usage: gnomon task "<what to do>" [--role <name>] [--yes] [--json]');
+    process.exit(1);
+  }
+
+  const config = loadConfig(args.dir);
+  const record = await runTask(config, text, {
+    role: args.role,
+    yes: args.yes,
+    verbose: !args.json,
+  });
+
+  if (args.json) {
+    console.log(JSON.stringify(record, null, 2));
+  } else {
+    console.log(record.output);
+    console.error(
+      `\n[${record.bucket}] role=${record.role} model=${record.model} ` +
+        `tools=${record.tool_steps} surface=${record.surface_hash.slice(0, 12)}`
+    );
+  }
+
+  // Exit code carries the bucket, so a caller can gate on it without parsing.
+  process.exit(record.bucket === "result" ? 0 : record.bucket === "refusal" ? 2 : 10);
+}
+
+async function cmdSkill(args: CliArgs): Promise<void> {
+  const config = loadConfig(args.dir);
+  const sub = args.subcommand ?? "list";
+  const id = args.positional[0];
+
+  if (sub === "list") {
+    const active = loadSkills(config);
+    const pending = loadProposedSkills(config);
+    console.log("Active (.gnomon/skills/):");
+    if (active.length === 0) console.log("  (none)");
+    for (const s of active) console.log(`  ${s.id} — ${s.description ?? s.name}`);
+    console.log("\nProposed (.gnomon/skills/proposed/) — not loaded:");
+    if (pending.length === 0) console.log("  (none)");
+    for (const s of pending) console.log(`  ${s.id} — ${s.description ?? s.name}`);
+    return;
+  }
+
+  if (sub === "accept" || sub === "reject") {
+    if (!id) {
+      console.error(`Usage: gnomon skill ${sub} <id>`);
+      process.exit(1);
+    }
+    try {
+      if (sub === "accept") {
+        const to = acceptSkill(config, id);
+        console.log(`Accepted ${id} → ${to}`);
+        console.log(
+          "The surface hash has changed. The skill loads from the next session."
+        );
+      } else {
+        rejectSkill(config, id);
+        console.log(`Rejected ${id}`);
+      }
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+    return;
+  }
+
+  console.error(`Unknown skill subcommand: ${sub}. Use: list | accept | reject`);
+  process.exit(1);
+}
+
 async function cmdInit(args: CliArgs): Promise<void> {
   let result;
   try {
@@ -283,6 +370,17 @@ Commands:
 
   simulate <patchset.json> [--dir <path>]
     Dry-run preview of a patchset
+
+  skill [list|accept <id>|reject <id>] [--dir <path>]
+    Skills the harness has learned. An agent proposes into
+    .gnomon/skills/proposed/; accepting moves it into .gnomon/skills/,
+    which changes the surface hash and applies from the next session.
+
+  task "<what to do>" [--role <name>] [--yes] [--json] [--dir <path>]
+    Run one task without a terminal and print the result. --json emits a
+    record whose only run-to-run differences are under "volatile".
+    Gated tool calls are REFUSED unless --yes: a non-interactive run has
+    nobody to ask. Exit code: 0 result, 2 refusal, 10 apparatus_failure.
 
   prompt
     Interactive agent loop — reads stdin, infers role, calls model
@@ -346,6 +444,13 @@ async function main(): Promise<void> {
       break;
     case "init":
       await cmdInit(args);
+      break;
+    case "task":
+      await cmdTask(args);
+      break;
+    case "skill":
+    case "skills":
+      await cmdSkill(args);
       break;
     case "prompt":
     case "run":

@@ -59,6 +59,43 @@ kind = "ollama"
 # url = "http://127.0.0.1:4200/v1/chat/completions"
 # kind = "openai"
 
+[routing]
+# manual: your current role answers, and a /role-prefix routes one turn.
+# auto:   the rules below pick the role per turn. An explicit prefix always
+#         wins — being overruled after asking for a role would be worse than
+#         having no auto mode at all.
+#
+# Rules live here, not in the model's judgement: the same input must pick the
+# same role on every machine, which a model choosing its own role would not.
+# First match wins, so order is priority.
+mode = "manual"
+default = "implement"
+
+[[routing.rules]]
+role = "coordinator"
+match = '^\s*(spec|specify|design|plan|contract|scope|propose)\b'
+why = "intent and contracts"
+
+[[routing.rules]]
+role = "verifier"
+match = '^\s*(verify|check|validate|run the tests?|run tests?|does it pass)\b'
+why = "runs the suite, cannot write"
+
+[[routing.rules]]
+role = "implementor"
+match = '^\s*(implement|build|fix|add|refactor|rename|migrate|write the)\b'
+why = "tests first, then code"
+
+[[routing.rules]]
+role = "critique"
+match = '^\s*(review|critique|audit|what.s wrong)\b'
+why = "separate context from the implementer"
+
+[[routing.rules]]
+role = "smol"
+match = '^\s*(summari[sz]e|commit message|tl;?dr)\b'
+why = "cheap, high volume"
+
 [ui]
 # What the terminal shows. Declared here so every checkout renders the same.
 # Runtime /meta and /think override these for the session only.
@@ -91,7 +128,7 @@ top_p = 0.9
 max_steps = 12
 # Reads the repo and writes specs/contracts only — never source. Keeping it
 # off \`edit\` is what stops a planning turn from quietly becoming a code change.
-tools = ["read", "write"]
+tools = ["read", "write", "skill"]
 description = "Intent and contracts: turns a request into a spec"
 
 [roles.implementor]
@@ -179,6 +216,11 @@ enabled = true
 [[tools]]
 name = "write"
 description = "Create or overwrite a file"
+enabled = true
+
+[[tools]]
+name = "skill"
+description = "Propose a skill: a durable note about how to work in this repository"
 enabled = true
 `;
 

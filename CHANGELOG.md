@@ -4,6 +4,25 @@
 
 ### Added
 
+- **`[routing]` — auto mode.** The harness can pick the role per turn from
+  rules declared in the surface, announcing the switch and its reason. An
+  explicit `/role` prefix always wins. `/mode` switches for the session.
+  Rules live in the surface rather than the model's judgement so routing stays
+  reproducible.
+- **Skills.** `.gnomon/skills/*.md` with TOML front matter, selected by
+  declared pattern and role and appended below `system.md`. The `skill` tool
+  (coordinator only) *proposes* into `.gnomon/skills/proposed/`, which is not
+  loaded; `gnomon skill accept <id>` moves it into the surface, changing the
+  hash deliberately and applying next session. An agent that rewrote its own
+  skills mid-session would break the harness's central claim, so it cannot.
+- **`gnomon task "<what to do>" [--role] [--yes] [--json]`** — a documented
+  non-interactive invocation emitting a record with `surface_hash` and
+  run-to-run differences confined to `volatile`. Exit code carries the bucket.
+  Gated tool calls are refused unless `--yes`: a non-interactive run has nobody
+  to ask.
+- Single-quoted TOML literal strings, so a regex needs no escaping.
+- `/mode`, `/skills`; `gnomon skill list|accept|reject`.
+
 - **`[endpoints]` in config.toml.** Named inference endpoints (`local`,
   and whatever else you declare — OpenCode Zen, OpenFang, any OpenAI-shaped
   API), selected per role and per fallback with `endpoint = "<name>"`.

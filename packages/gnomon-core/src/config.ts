@@ -22,7 +22,33 @@ export interface Config {
   context?: ContextConfig;
   ui?: UiConfig;
   endpoints?: Record<string, EndpointConfig>;
+  routing?: RoutingConfig;
 }
+
+/**
+ * config.toml [routing] — who answers, and whether the harness decides.
+ *
+ * The rules live in the surface and are hashed with it, so "auto" stays
+ * deterministic: the same input picks the same role on every machine. A model
+ * asked to choose its own role would not be.
+ */
+export interface RoutingConfig {
+  /** manual: the current role answers. auto: rules pick per turn. */
+  mode?: RoutingMode;
+  /** Role used when no rule matches */
+  default?: string;
+  rules?: RoutingRule[];
+}
+
+export interface RoutingRule {
+  role: string;
+  /** Case-insensitive regular expression matched against the input */
+  match: string;
+  /** Shown when this rule fires, so a switch is never unexplained */
+  why?: string;
+}
+
+export type RoutingMode = "manual" | "auto";
 
 /**
  * config.toml [endpoints.<name>] — where inference goes.
@@ -256,12 +282,15 @@ export function parseToml(content: string): Record<string, unknown> {
  * parses to the whole line, so no enum value ever matches.
  */
 function stripComment(value: string): string {
-  let inString = false;
+  let quote: '"' | "'" | null = null;
   for (let i = 0; i < value.length; i++) {
     const ch = value[i];
-    if (ch === '"' && value[i - 1] !== "\\") {
-      inString = !inString;
-    } else if (ch === "#" && !inString) {
+    if (quote) {
+      // Literal strings have no escapes, so only a basic string honours \".
+      if (ch === quote && !(quote === '"' && value[i - 1] === "\\")) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === "#") {
       return value.slice(0, i).trim();
     }
   }
@@ -269,8 +298,15 @@ function stripComment(value: string): string {
 }
 
 function parseValue(value: string): unknown {
-  // String
-  if (value.startsWith('"') && value.endsWith('"')) {
+  // Literal string: 'no escapes here'. This is the TOML idiom for regular
+  // expressions — in a basic string a pattern would have to double every
+  // backslash, and this parser does not process escapes, so "\\s" would
+  // reach RegExp as a literal backslash followed by s and match nothing.
+  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1);
+  }
+  // Basic string
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
     return value.slice(1, -1);
   }
   // Array
@@ -565,6 +601,72 @@ export interface RouteTarget {
   /** Which named endpoint this came from, for display */
   endpoint?: string;
   kind?: EndpointKind;
+}
+
+/** The routing policy, resolved with defaults. */
+export interface ResolvedRouting {
+  mode: RoutingMode;
+  default: string;
+  rules: RoutingRule[];
+}
+
+export function resolveRouting(config: GnomonConfig): ResolvedRouting {
+  const r = config.config.routing ?? {};
+  return {
+    mode: r.mode === "auto" ? "auto" : "manual",
+    default: typeof r.default === "string" ? r.default : "implement",
+    rules: Array.isArray(r.rules) ? r.rules : [],
+  };
+}
+
+/** What auto-routing decided, and on what grounds. */
+export interface RoutingDecision {
+  role: string;
+  /** The rule that fired, or null when the default was used */
+  rule: RoutingRule | null;
+  /** Set when a rule names a role the surface does not define */
+  problem?: string;
+}
+
+/**
+ * Pick the role for one input.
+ *
+ * First matching rule wins, so order in the surface is the priority order.
+ * A rule naming an undefined role is reported rather than silently skipped —
+ * a routing table with a typo would otherwise fail open onto the default and
+ * look like the rule simply did not match.
+ */
+export function routeInput(
+  config: GnomonConfig,
+  input: string,
+  routing?: ResolvedRouting
+): RoutingDecision {
+  const r = routing ?? resolveRouting(config);
+  const known = listRoles(config);
+
+  for (const rule of r.rules) {
+    let re: RegExp;
+    try {
+      re = new RegExp(rule.match, "i");
+    } catch {
+      return {
+        role: r.default,
+        rule: null,
+        problem: `rule for "${rule.role}" has an invalid pattern: ${rule.match}`,
+      };
+    }
+    if (!re.test(input)) continue;
+    if (!known.includes(rule.role)) {
+      return {
+        role: r.default,
+        rule: null,
+        problem: `rule matched but role "${rule.role}" is not defined in roles.toml`,
+      };
+    }
+    return { role: rule.role, rule };
+  }
+
+  return { role: r.default, rule: null };
 }
 
 /** The endpoint every role falls back to when none is named. */

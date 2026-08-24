@@ -222,6 +222,82 @@ rather than advisory:
 | `implementor` | `read`, `write`, `edit`, `bash` | Tests first, then the code that satisfies them. |
 | `verifier` | `read`, `bash` | Runs the suite and reports. Cannot alter what it judges. |
 
+#### `[routing]` — Manual and Auto Modes
+
+```toml
+[routing]
+mode = "manual"                # manual | auto
+default = "implement"
+
+[[routing.rules]]
+role = "coordinator"
+match = '^\s*(spec|specify|design|plan|contract)\b'
+why = "intent and contracts"
+```
+
+In **manual** mode your current role answers, and a `/plan …` prefix routes one
+turn. In **auto** mode these rules pick the role per turn, and the switch is
+announced with the reason:
+
+```
+  ⇢ auto: implement → coordinator  (intent and contracts)
+```
+
+An explicit prefix always wins over auto — asking for a role and being
+overruled would be worse than having no auto mode at all.
+
+The rules live in the surface, not in the model's judgement. A model choosing
+its own role would make routing unreproducible; a declared table means the same
+input picks the same role on every machine. First match wins, so order is
+priority. A rule naming an undefined role is reported rather than failing open
+onto the default, where a typo would look like a pattern that simply did not
+match. `/mode` shows and switches for the session.
+
+Patterns use **single-quoted** TOML literal strings so a regex needs no
+escaping.
+
+#### `skills/` — What the Harness Has Learned
+
+A skill is a durable note about this repository, kept in `.gnomon/skills/*.md`
+with TOML front matter:
+
+```markdown
++++
+name = "cargo suite"
+description = "How the full test suite runs here"
+match = '\bcargo\s+test\b'
+roles = ["implementor", "verifier"]
++++
+
+Run the full suite with `cargo test --all`.
+```
+
+Skills whose pattern matches the turn are appended to the system prompt, below
+`system.md` and explicitly marked as notes that do not override it. Selection is
+by declared pattern, not model judgement, so the same input loads the same
+skills everywhere.
+
+**Authorship is a proposal, never a self-application.** This matters more here
+than in most harnesses: `.gnomon/` is content-hashed, and the claim is that the
+same surface plus the same prompt yields the same outcome. An agent rewriting
+its own skills mid-session would break that — the hash would change underneath
+the run that changed it.
+
+So the `skill` tool (granted to `coordinator` alone) writes to
+`.gnomon/skills/proposed/`, which is **not loaded**. The filename is derived
+from the name, so a proposal cannot target an existing skill or escape into the
+rest of the surface. You accept it deliberately:
+
+```bash
+gnomon skill list
+gnomon skill accept cargo-suite     # moves it into .gnomon/skills/
+gnomon skill reject cargo-suite
+```
+
+Accepting changes the surface hash on purpose and applies from the next
+session. Learning stays reviewable, and the hash stays honest. `/skills` shows
+both lists.
+
 #### `policy.toml` — Security & Approval Gates
 
 ```toml
@@ -512,6 +588,8 @@ binaries must be built first (`cargo build`) for native commands to work.
 | `/reset` | Drop conversation history without leaving the session |
 | `/meta [fields]` | Show or set the meta line — `/meta all`, `/meta none`, `/meta turn,model,duration`, `/meta style compact` |
 | `/think [mode]` | Chain-of-thought: `hide` \| `collapse` \| `show` |
+| `/mode [manual\|auto]` | Who picks the role: you, or the surface's routing rules |
+| `/skills` | Active skills and pending proposals |
 | `/tools` | Tools the current role may call, and what is withheld |
 | `/endpoints` | Declared inference endpoints |
 | `/manifest` | Manifest command |
@@ -664,14 +742,63 @@ gnomon (agent) → sessions → agentcenter (dashboard)
 - The `infquant_sync` skill in agentcenter ingests gnomon benchmark results.
 - Cross-project analysis: gnomon sessions + OpenCode logs → unified feed.
 
-### With TriadSepta (Future)
+### With TriadSepta
 
-**TriadSepta** is a planned runtime integration — a multi-agent orchestrator
-that coordinates gnomon sessions across repositories. When ready:
+[TriadSepta](https://github.com/eljaplacido/TriadSepta) composes subsystems and
+publishes evidence about whether composing them was worth it. Its governing
+constraint is:
 
-- gnomon sessions will be addressable as TriadSepta worker nodes.
-- Cross-repo coordination via TriadSepta's session graph.
-- Shared model routing across all gnomon instances in a TriadSepta cluster.
+> Removing this repository must leave every subsystem able to do everything it
+> could do before.
+
+It enforces that by emitting a **runbook** — the literal ordered subsystem
+commands, with their own configuration paths, containing no reference to
+TriadSepta — and re-running it from a checkout where TriadSepta is absent.
+Anything the runbook cannot reproduce is a *leak*.
+
+gnomon is built to satisfy that constraint rather than to depend on it:
+
+| Requirement | How gnomon meets it |
+|---|---|
+| Works with the integration layer absent | Standalone CLI. Nothing in this repository references TriadSepta. |
+| Configuration by its own paths | Everything is `.gnomon/`, resolved from the working directory. |
+| A documented, non-interactive invocation | `gnomon task "<what to do>" --json` |
+| Reproducible evidence | The record carries `surface_hash`; run-to-run differences are confined to `volatile`. |
+| A resolvable immutable revision | Public remote, published commits, clean tree. |
+
+**Declared invocation** for `declarations/subsystems.json`:
+
+```json
+{
+  "name": "gnomon",
+  "role": "harness",
+  "remote": "https://github.com/eljaplacido/gnomonharness.git",
+  "invocation": "gnomon task \"<what to do>\" --dir <repository> --json"
+}
+```
+
+The record `--json` prints is the evidence:
+
+```json
+{
+  "surface_hash": "08184fa4...",
+  "role": "smol",
+  "model": "qwen2.5:7b-instruct",
+  "endpoint": "local",
+  "bucket": "result",
+  "tool_steps": 1,
+  "skills": [],
+  "volatile": { "duration_ms": 4358 }
+}
+```
+
+`volatile` exists so a gate comparing two runs can ignore exactly what is
+allowed to differ, and nothing else. Exit codes carry the bucket (`0` result,
+`2` refusal, `10` apparatus_failure) so a runbook can gate without parsing.
+
+**One deliberate asymmetry.** A non-interactive run refuses every gated tool
+call unless `--yes` is passed. There is nobody to ask, and granting writes
+because no one is watching would invert the meaning of `approval = "on_write"`.
 
 ---
 
