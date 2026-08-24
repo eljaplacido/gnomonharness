@@ -102,6 +102,168 @@ describe("gnomon-core prompt_loop", () => {
     });
   });
 
+  describe("context window", () => {
+    const mkState = (
+      exchanges: Partial<promptLoop.PromptExchange>[],
+      context?: Record<string, unknown>,
+      defaults?: Record<string, unknown>
+    ): any => {
+      const config: any = loadConfig(fixtureRoot);
+      config.config = { ...config.config, context, defaults };
+      return {
+        config,
+        currentRole: "implement",
+        exchanges: exchanges.map((e, i) => ({
+          turn: i + 1,
+          role: "implement",
+          input: "",
+          output: "",
+          model: "m",
+          code: 0,
+          bucket: "result",
+          duration_ms: 1,
+          ...e,
+        })),
+      };
+    };
+
+    it("estimateTokens is deterministic and length-proportional", () => {
+      expect(promptLoop.estimateTokens("abcd")).toBe(1);
+      expect(promptLoop.estimateTokens("abcd")).toBe(
+        promptLoop.estimateTokens("abcd")
+      );
+      expect(promptLoop.estimateTokens("")).toBe(0);
+    });
+
+    it("first turn sends only system + user", () => {
+      const built = promptLoop.buildMessages(mkState([]), "SYS", "hello");
+      expect(built.messages).toEqual([
+        { role: "system", content: "SYS" },
+        { role: "user", content: "hello" },
+      ]);
+      expect(built.included).toBe(0);
+      expect(built.dropped).toBe(0);
+    });
+
+    it("replays prior turns so follow-ups resolve", () => {
+      const state = mkState([{ input: "what is X?", output: "X is a thing" }]);
+      const built = promptLoop.buildMessages(state, "SYS", "that wasn't an answer");
+      expect(built.messages.map((m) => m.role)).toEqual([
+        "system",
+        "user",
+        "assistant",
+        "user",
+      ]);
+      expect(built.messages[1].content).toBe("what is X?");
+      expect(built.messages[2].content).toBe("X is a thing");
+      expect(built.included).toBe(1);
+    });
+
+    it("never replays a failed turn as an assistant message", () => {
+      const state = mkState([
+        { input: "a", output: "Model unavailable at http://…", code: 10 },
+        { input: "b", output: "real answer", code: 0 },
+      ]);
+      const built = promptLoop.buildMessages(state, "SYS", "next");
+      const contents = built.messages.map((m) => m.content);
+      expect(contents).not.toContain("Model unavailable at http://…");
+      expect(contents).toContain("real answer");
+      expect(built.included).toBe(1);
+    });
+
+    it("policy=full replays everything", () => {
+      const state = mkState(
+        Array.from({ length: 5 }, (_, i) => ({
+          input: "x".repeat(400),
+          output: "y".repeat(400),
+        })),
+        { policy: "full" },
+        { max_context_tokens: 64 }
+      );
+      const built = promptLoop.buildMessages(state, "SYS", "next");
+      expect(built.included).toBe(5);
+      expect(built.dropped).toBe(0);
+    });
+
+    it("sliding_window keeps the oldest and newest, drops the middle", () => {
+      // Each exchange costs 50 tok (100 chars in + 100 chars out).
+      const state = mkState(
+        Array.from({ length: 6 }, (_, i) => ({
+          input: `IN${i}`.padEnd(100, "."),
+          output: `OUT${i}`.padEnd(100, "."),
+        })),
+        { policy: "sliding_window", retain_after: 50 },
+        { max_context_tokens: 160, compaction: "discard" }
+      );
+      const built = promptLoop.buildMessages(state, "", "next");
+      expect(built.dropped).toBeGreaterThan(0);
+      expect(built.included).toBeGreaterThan(0);
+
+      const joined = built.messages.map((m) => m.content).join("\n");
+      // oldest anchor survives
+      expect(joined).toContain("IN0");
+      // newest survives
+      expect(joined).toContain("IN5");
+      // the drop is named, not silent
+      expect(joined).toContain("[gnomon context]");
+      expect(joined).toContain("dropped to fit");
+    });
+
+    it("compaction=truncate names the dropped turns by prompt", () => {
+      const state = mkState(
+        Array.from({ length: 6 }, (_, i) => ({
+          input: `PROMPT${i}`.padEnd(100, "."),
+          output: `OUT${i}`.padEnd(100, "."),
+        })),
+        { policy: "sliding_window", retain_after: 50 },
+        { max_context_tokens: 160, compaction: "truncate" }
+      );
+      const built = promptLoop.buildMessages(state, "", "next");
+      const marker = built.messages.find((m) =>
+        m.content.startsWith("[gnomon context]")
+      );
+      expect(marker).toBeDefined();
+      expect(marker!.content).toContain("compacted to");
+      expect(marker!.content).toContain("PROMPT");
+    });
+
+    it("unimplemented policy=summary is named, never silently substituted", () => {
+      const state = mkState([{ input: "a", output: "b" }], { policy: "summary" });
+      const built = promptLoop.buildMessages(state, "SYS", "next");
+      expect(built.notice).toMatch(/summary/);
+      expect(built.notice).toMatch(/not implemented/);
+    });
+
+    it("same surface + same history produces the same messages", () => {
+      const mk = () => mkState([{ input: "a", output: "b" }]);
+      expect(promptLoop.buildMessages(mk(), "SYS", "x").messages).toEqual(
+        promptLoop.buildMessages(mk(), "SYS", "x").messages
+      );
+    });
+  });
+
+  describe("history commands", () => {
+    it("/reset drops history", () => {
+      const state: any = {
+        config: loadConfig(fixtureRoot),
+        exchanges: [{ turn: 1, input: "a", output: "b", code: 0 }],
+        currentRole: "implement",
+      };
+      expect(promptLoop.processCommand("/reset", state)).toBe(true);
+      expect(state.exchanges).toHaveLength(0);
+    });
+
+    it("/context reports the window without mutating it", () => {
+      const state: any = {
+        config: loadConfig(fixtureRoot),
+        exchanges: [{ turn: 1, input: "a", output: "b", code: 0 }],
+        currentRole: "implement",
+      };
+      expect(promptLoop.processCommand("/context", state)).toBe(true);
+      expect(state.exchanges).toHaveLength(1);
+    });
+  });
+
   describe("PromptExchange type", () => {
     it("creates valid exchange object", () => {
       const exchange: promptLoop.PromptExchange = {

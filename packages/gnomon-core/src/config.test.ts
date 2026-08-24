@@ -25,6 +25,23 @@ describe("gnomon-core config", () => {
   // Fixture tree lives at repo root — go up 2 levels from packages/gnomon-core
   const fixtureRoot = "../../conformance/fixture_tree";
 
+  describe("inline comments", () => {
+    it("strips a trailing # comment from a value", () => {
+      const r = parseToml('approval = "on_write"   # never | on_write | always');
+      expect(r.approval).toBe("on_write");
+    });
+
+    it("strips comments from numbers", () => {
+      const r = parseToml("retain_after = 2048   # tokens to keep at edges");
+      expect(r.retain_after).toBe(2048);
+    });
+
+    it("keeps a # that is inside a quoted string", () => {
+      const r = parseToml('label = "a # b"');
+      expect(r.label).toBe("a # b");
+    });
+  });
+
   describe("parseToml", () => {
     it("parses key-value pairs", () => {
       const result = parseToml(`

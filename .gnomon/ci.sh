@@ -13,17 +13,26 @@ fail() { echo -e "${RED}❌ $1${NC}"; exit 1; }
 cd "$(dirname "$0")/.."
 
 # ── 1. Run all tests (Rust + TS) ──
+# Counts are read back out of the runners. Asserting a hardcoded total would
+# report a number nothing checked — the exact failure this harness exists to
+# make impossible.
 echo "═══ Running tests ═══"
-cargo test 2>&1 || fail "Rust tests failed"
-pass "All 46 Rust tests passed"
+RUST_OUT=$(cargo test --all 2>&1) || { echo "$RUST_OUT"; fail "Rust tests failed"; }
+echo "$RUST_OUT" | grep -E "^test result:" || true
+RUST_N=$(echo "$RUST_OUT" | grep -oE 'test result: ok\. [0-9]+' \
+    | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+pass "Rust tests passed ($RUST_N)"
 
 echo ""
 echo "═══ Running TypeScript tests ═══"
-pnpm test 2>&1 || fail "TypeScript tests failed"
-pass "All 63 TypeScript tests passed"
+TS_OUT=$(pnpm test 2>&1) || { echo "$TS_OUT"; fail "TypeScript tests failed"; }
+echo "$TS_OUT" | grep -E "Tests +[0-9]+ passed" || true
+TS_N=$(echo "$TS_OUT" | grep -oE 'Tests +[0-9]+ passed' \
+    | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+pass "TypeScript tests passed ($TS_N)"
 
 echo ""
-pass "All 109 tests passed (46 Rust + 63 TypeScript)"
+pass "All $((RUST_N + TS_N)) tests passed ($RUST_N Rust + $TS_N TypeScript)"
 
 # ── 2. Validate manifest against golden ──
 echo ""

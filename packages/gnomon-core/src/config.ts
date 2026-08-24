@@ -18,7 +18,53 @@ import { SourceEntry } from "./session.js";
 export interface Config {
   process?: Record<string, ProcessConfig>;
   tools?: ToolConfig[];
+  defaults?: Defaults;
+  context?: ContextConfig;
+  ui?: UiConfig;
 }
+
+/** config.toml [ui] — what the terminal shows, declared in the surface */
+export interface UiConfig {
+  meta?: string[];
+  meta_style?: MetaStyle;
+  think?: ThinkMode;
+  spinner?: boolean;
+  color?: boolean;
+}
+
+/** Meta fields available for the line printed with each answer */
+export type MetaField =
+  | "turn"
+  | "role"
+  | "model"
+  | "bucket"
+  | "status"
+  | "duration"
+  | "context"
+  | "tokens"
+  | "think";
+
+export type MetaStyle = "line" | "compact";
+export type ThinkMode = "hide" | "collapse" | "show";
+
+/** config.toml [defaults] */
+export interface Defaults {
+  edit_format?: string;
+  sandbox?: string;
+  approval?: string;
+  role_profile?: string;
+  max_context_tokens?: number;
+  compaction?: Compaction;
+}
+
+/** config.toml [context] */
+export interface ContextConfig {
+  policy?: ContextPolicy;
+  retain_after?: number;
+}
+
+export type ContextPolicy = "full" | "sliding_window" | "summary";
+export type Compaction = "discard" | "summary" | "truncate";
 
 export interface ProcessConfig {
   timeout_ms?: number;
@@ -143,13 +189,33 @@ export function parseToml(content: string): Record<string, unknown> {
     const kvMatch = trimmed.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.+)$/);
     if (kvMatch) {
       const key = kvMatch[1];
-      const value = kvMatch[2].trim();
+      const value = stripComment(kvMatch[2]);
       currentObj[key] = parseValue(value);
       continue;
     }
   }
 
   return result;
+}
+
+/**
+ * Strip a trailing `# ...` comment from a value, honouring quoted strings.
+ *
+ * Every documented value in config.toml carries an inline comment listing its
+ * legal values. Without this, `approval = "on_write"  # never | on_write | ...`
+ * parses to the whole line, so no enum value ever matches.
+ */
+function stripComment(value: string): string {
+  let inString = false;
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (ch === '"' && value[i - 1] !== "\\") {
+      inString = !inString;
+    } else if (ch === "#" && !inString) {
+      return value.slice(0, i).trim();
+    }
+  }
+  return value.trim();
 }
 
 function parseValue(value: string): unknown {
@@ -302,6 +368,114 @@ export function isToolEnabled(config: GnomonConfig, toolName: string): boolean {
 
   const configEntry = config.config.tools?.find((t) => t.name === toolName);
   return configEntry?.enabled !== false;
+}
+
+/** The context-window policy, fully resolved with declared defaults. */
+export interface ResolvedContext {
+  policy: ContextPolicy;
+  retain_after: number;
+  max_context_tokens: number;
+  compaction: Compaction;
+}
+
+const CONTEXT_POLICIES: ContextPolicy[] = ["full", "sliding_window", "summary"];
+const COMPACTIONS: Compaction[] = ["discard", "summary", "truncate"];
+
+function pickEnum<T extends string>(value: unknown, legal: T[], fallback: T): T {
+  return typeof value === "string" && (legal as string[]).includes(value)
+    ? (value as T)
+    : fallback;
+}
+
+function pickInt(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  return fallback;
+}
+
+/**
+ * Resolve the context-window policy from config.toml.
+ *
+ * `[context]` and `[defaults].max_context_tokens` / `.compaction` are already
+ * declared in the surface and already part of the surface hash — this reads
+ * what is there rather than introducing new configuration.
+ */
+export function resolveContext(config: GnomonConfig): ResolvedContext {
+  const ctx = config.config.context ?? {};
+  const defaults = config.config.defaults ?? {};
+  return {
+    policy: pickEnum(ctx.policy, CONTEXT_POLICIES, "sliding_window"),
+    retain_after: pickInt(ctx.retain_after, 2048),
+    max_context_tokens: pickInt(defaults.max_context_tokens, 65536),
+    compaction: pickEnum(defaults.compaction, COMPACTIONS, "discard"),
+  };
+}
+
+/** The `[ui]` block, fully resolved with defaults. */
+export interface ResolvedUi {
+  meta: MetaField[];
+  meta_style: MetaStyle;
+  think: ThinkMode;
+  spinner: boolean;
+  color: boolean;
+}
+
+export const META_FIELDS: MetaField[] = [
+  "turn",
+  "role",
+  "model",
+  "bucket",
+  "status",
+  "duration",
+  "context",
+  "tokens",
+  "think",
+];
+
+const META_STYLES: MetaStyle[] = ["line", "compact"];
+const THINK_MODES: ThinkMode[] = ["hide", "collapse", "show"];
+
+/**
+ * Parse a meta field list, dropping names that are not fields.
+ *
+ * Unknown names are returned so the caller can name them rather than silently
+ * showing a shorter line than the surface asked for.
+ */
+export function parseMetaFields(names: string[]): {
+  fields: MetaField[];
+  unknown: string[];
+} {
+  const fields: MetaField[] = [];
+  const unknown: string[] = [];
+  for (const raw of names) {
+    const name = String(raw).trim();
+    if (!name) continue;
+    if ((META_FIELDS as string[]).includes(name)) {
+      if (!fields.includes(name as MetaField)) fields.push(name as MetaField);
+    } else {
+      unknown.push(name);
+    }
+  }
+  return { fields, unknown };
+}
+
+/**
+ * Resolve the `[ui]` block from config.toml.
+ *
+ * Presentation is declared in the surface like everything else, so two
+ * checkouts of a repo show the same thing. Runtime `/meta` and `/think` edit
+ * only the in-memory copy — persisting them would be machine-scoped state,
+ * which Rule 1 forbids.
+ */
+export function resolveUi(config: GnomonConfig): ResolvedUi {
+  const ui = config.config.ui ?? {};
+  const declared = Array.isArray(ui.meta) ? parseMetaFields(ui.meta).fields : null;
+  return {
+    meta: declared ?? ["turn", "role", "model", "bucket", "duration", "context"],
+    meta_style: pickEnum(ui.meta_style, META_STYLES, "line"),
+    think: pickEnum(ui.think, THINK_MODES, "collapse"),
+    spinner: typeof ui.spinner === "boolean" ? ui.spinner : true,
+    color: typeof ui.color === "boolean" ? ui.color : true,
+  };
 }
 
 /** A resolved inference target: where and how to call a model */

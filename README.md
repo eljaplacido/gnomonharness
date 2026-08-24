@@ -130,7 +130,42 @@ compaction = "discard"             # discard | summary | truncate
 [context]
 policy = "sliding_window"          # full | sliding_window | summary
 retain_after = 2048                # tokens to keep at edges
+
+[ui]
+meta = ["turn", "role", "model", "bucket", "duration", "context"]
+meta_style = "line"                # line | compact
+think = "collapse"                 # hide | collapse | show
+spinner = true
+color = true
 ```
+
+**`[context]` — conversation history.** The interactive loop replays prior
+turns so follow-ups (“that wasn't what I asked”, “now do the same for Y”)
+resolve against what came before.
+
+| Value | Meaning |
+|---|---|
+| `policy = "full"` | Replay every prior turn. |
+| `policy = "sliding_window"` | Keep `retain_after` tokens of the *oldest* turns — the original ask, which later turns refer back to — and fill the rest of `max_context_tokens` from the newest turns backwards. The middle gives way, because neither end depends on it. |
+| `policy = "summary"` | Not implemented in this build. Named at runtime, never silently substituted. |
+| `compaction = "discard"` | Turns that don't fit are dropped, and the drop is stated in-band. |
+| `compaction = "truncate"` | Turns that don't fit are replaced by a list of their prompts. |
+
+History is in-memory for the session only — nothing is written to disk, so the
+surface stays the single source of behaviour. Two rules it keeps:
+
+- **Failed turns are never replayed.** Their `output` is a transport error
+  string, not something the model said.
+- **Reasoning is never replayed.** A `<think>` block is the model's working;
+  feeding it back costs tokens and re-opens a settled question.
+
+**`[ui]` — what the terminal shows.** Declared in the surface so every checkout
+renders identically. `meta` is an ordered list drawn from `turn`, `role`,
+`model`, `bucket`, `status`, `duration`, `context`, `tokens`, `think`; an empty
+list shows no meta line at all. `think` controls how much chain-of-thought
+survives into the transcript — reasoning models (`qwen3.6`, `deepseek-r1`) wrap
+their scratchpad in `<think>…</think>`, and `collapse` shows one line of it so
+you can see it happened without reading it.
 
 #### `policy.toml` — Security & Approval Gates
 
@@ -363,6 +398,28 @@ binaries must be built first (`cargo build`) for native commands to work.
 | `--dir`, `-d` | Override project root (default: cwd) |
 | `--help` | Show help |
 | `--version` | Show version |
+
+### Interactive Commands (`./gnomon prompt`)
+
+| Command | Description |
+|---|---|
+| `/roles` | Available roles and the model behind each |
+| `/profiles` | Available profiles |
+| `/context` | Context policy and the current window (turns carried, dropped, tokens) |
+| `/reset` | Drop conversation history without leaving the session |
+| `/meta [fields]` | Show or set the meta line — `/meta all`, `/meta none`, `/meta turn,model,duration`, `/meta style compact` |
+| `/think [mode]` | Chain-of-thought: `hide` \| `collapse` \| `show` |
+| `/manifest` | Manifest command |
+| `/clear` | Clear the screen (history is kept) |
+| `/help` | Command list |
+| `/quit` | Exit |
+
+Prefix a prompt with a role to route one turn: `/plan …`, `/implement …`,
+`/critique …`, `/smol …`.
+
+`/meta` and `/think` change the running session only. Defaults live in `[ui]`
+in `.gnomon/config.toml` — persisting a runtime toggle would be machine-scoped
+state, which Rule 1 forbids.
 
 ---
 
