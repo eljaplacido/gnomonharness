@@ -1,26 +1,41 @@
 # Role routing — model + sampling params per role.
 # Changing which model implements a role is a surface change (hashes).
+#
+# Model names are concrete backend tags, not symbolic aliases. Rule 1 says no
+# machine-scoped configuration: an alias like "local:large" would have to be
+# resolved per-machine, which is exactly the thing this harness forbids. The
+# tag that reaches the backend lives here, in the surface, and is hashed.
 
 [roles.plan]
-model = "frontier:remote"
+model = "qwen3.6:35b"
 temperature = 0.2
 top_p = 0.9
 description = "Hardest reasoning, lowest call volume"
 
+[roles.plan.fallback]
+model = "nemotron-3-ultra-free"
+url = "https://opencode.ai/zen/v1/chat/completions"
+api_key_env = "OPENCODE_API_KEY"
+
 [roles.implement]
-model = "local:large"
+model = "qwen3.6:35b"
 temperature = 0.3
 top_p = 0.95
 description = "Highest token volume — this is where local hosting saves money"
 
+[roles.implement.fallback]
+model = "nemotron-3-ultra-free"
+url = "https://opencode.ai/zen/v1/chat/completions"
+api_key_env = "OPENCODE_API_KEY"
+
 [roles.critique]
-model = "local:large:separate"
+model = "deepseek-r1:32b-qwen-distill-q4_K_M"
 temperature = 0.1
 top_p = 0.9
-description = "Must not share context with the implementer"
+description = "Must not share context with the implementer — distinct model"
 
 [roles.smol]
-model = "local:small"
+model = "qwen2.5:7b-instruct"
 temperature = 0.2
 top_p = 0.95
 description = "Summarisation, compaction, commit messages"

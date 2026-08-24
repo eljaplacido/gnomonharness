@@ -52,11 +52,21 @@ export interface Roles {
   [role: string]: RoleDef;
 }
 
+/** Secondary endpoint tried when the primary model fails or times out */
+export interface FallbackDef {
+  model: string;
+  /** Full chat-completions URL (defaults to OpenCode Zen) */
+  url?: string;
+  /** Env var holding the bearer token */
+  api_key_env?: string;
+}
+
 export interface RoleDef {
   model?: string;
   temperature?: number;
   top_p?: number;
   description?: string;
+  fallback?: FallbackDef;
   // Legacy field (kept for compat with older role files)
   profile?: string;
   allowed_edit_formats?: string[];
@@ -294,6 +304,16 @@ export function isToolEnabled(config: GnomonConfig, toolName: string): boolean {
   return configEntry?.enabled !== false;
 }
 
+/** A resolved inference target: where and how to call a model */
+export interface RouteTarget {
+  model: string;
+  temperature: number;
+  top_p: number;
+  /** Full chat-completions endpoint URL */
+  url: string;
+  apiKeyEnv?: string;
+}
+
 /**
  * Route a role to its model config.
  * Returns the model string and sampling params from roles.toml,
@@ -302,7 +322,7 @@ export function isToolEnabled(config: GnomonConfig, toolName: string): boolean {
 export function routeRole(
   config: GnomonConfig,
   role: string
-): { model: string; temperature: number; top_p: number; description?: string } {
+): { model: string; temperature: number; top_p: number; description?: string; target: RouteTarget; fallback?: RouteTarget } {
   const roleDef = getRole(config, role);
 
   // Role-level overrides take precedence
@@ -311,7 +331,25 @@ export function routeRole(
   const top_p = roleDef.top_p ?? 0.9;
   const description = roleDef.description ?? "";
 
-  return { model, temperature, top_p, description };
+  const target: RouteTarget = {
+    model,
+    temperature,
+    top_p,
+    url: process.env.GNOMON_MODEL_URL ?? "http://localhost:11434/api/chat",
+  };
+
+  let fallback: RouteTarget | undefined;
+  if (roleDef.fallback?.model) {
+    fallback = {
+      model: roleDef.fallback.model,
+      temperature,
+      top_p,
+      url: roleDef.fallback.url ?? "https://opencode.ai/zen/v1/chat/completions",
+      apiKeyEnv: roleDef.fallback.api_key_env,
+    };
+  }
+
+  return { model, temperature, top_p, description, target, fallback };
 }
 
 /**

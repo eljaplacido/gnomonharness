@@ -9,7 +9,7 @@
  */
 
 import * as readline from "node:readline";
-import { GnomonConfig, routeRole, listRoles, listProfiles } from "./config.js";
+import { GnomonConfig, RouteTarget, routeRole, listRoles, listProfiles } from "./config.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,42 +45,48 @@ interface InferenceResult {
 }
 
 /**
- * Call a local model API (Ollama-compatible OpenAI endpoint).
+ * Call one inference endpoint (Ollama /api/chat or any OpenAI-compatible
+ * /chat/completions) with a hard timeout.
  *
- * Supports:
- * - Ollama: localhost:11434/api/chat
- * - Custom: GNOMON_MODEL_URL env var (e.g. http://localhost:8080/v1/chat/completions)
+ * Response parsing supports both shapes:
+ * - Ollama:  { message: { content } } or { response }
+ * - OpenAI:  { choices: [ { message: { content } } ] }
  */
-async function callModel(
+async function callEndpoint(
+  target: RouteTarget,
   prompt: string,
   systemPrompt: string,
-  model: string,
-  temperature: number,
-  top_p: number
+  timeoutMs: number
 ): Promise<InferenceResult> {
-  const baseUrl = process.env.GNOMON_MODEL_URL ?? "http://localhost:11434";
-  const endpoint = baseUrl.endsWith("/api/chat")
-    ? baseUrl
-    : `${baseUrl}/api/chat`;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const apiKey = target.apiKeyEnv ? process.env[target.apiKeyEnv] : undefined;
+  if (apiKey) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  }
 
+  // Sampling params go top-level (OpenAI shape); Ollama reads the
+  // nested `options` object — send both so either backend is happy.
   const payload = {
-    model,
+    model: target.model,
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: prompt },
     ],
     stream: false,
+    temperature: target.temperature,
+    top_p: target.top_p,
     options: {
-      temperature,
-      top_p,
+      temperature: target.temperature,
+      top_p: target.top_p,
     },
   };
 
   try {
-    const res = await fetch(endpoint, {
+    const res = await fetch(target.url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (!res.ok) {
@@ -91,17 +97,25 @@ async function callModel(
     }
 
     const json = await res.json();
-
-    // Ollama response format
-    const content = json.message?.content ?? json.response ?? json.content ?? "";
+    const content =
+      json.choices?.[0]?.message?.content ??
+      json.message?.content ??
+      json.response ??
+      "";
     return { content, code: 0 };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
-      content: `Model unavailable: ${msg}\n\nTip: start ollama, then set GNOMON_MODEL_URL if needed.`,
+      content: `Model unavailable at ${target.url}: ${msg}`,
       code: 10,
     };
   }
+}
+
+/** Default per-request timeout. Cold-loading large local models needs headroom. */
+function modelTimeoutMs(): number {
+  const raw = parseInt(process.env.GNOMON_MODEL_TIMEOUT_MS ?? "", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 120_000;
 }
 
 // ---------------------------------------------------------------------------
@@ -222,14 +236,30 @@ export async function runPromptLoop(
   console.log(`Model: ${routeRole(config, state.currentRole).model}`);
   console.log("");
 
-  const question = (prompt: string): Promise<string> =>
+  // Resolves to null on EOF (Ctrl+D, or a closed pipe) so the loop can exit
+  // cleanly instead of rl.question rejecting with "readline was closed".
+  let closed = false;
+  rl.on("close", () => {
+    closed = true;
+  });
+
+  const question = (prompt: string): Promise<string | null> =>
     new Promise((resolve) => {
+      if (closed) {
+        resolve(null);
+        return;
+      }
       rl.question(prompt, resolve);
+      rl.once("close", () => resolve(null));
     });
 
   try {
     while (true) {
       const input = await question("gnomon> ");
+      if (input === null) {
+        console.log("\nSession complete. See you next turn.");
+        break;
+      }
 
       // Handle slash commands
       if (input.startsWith("/")) {
@@ -245,16 +275,16 @@ export async function runPromptLoop(
 
       if (input.startsWith("/plan ")) {
         role = "plan";
-        cleanedInput = input.slice(6);
+        cleanedInput = input.slice("/plan ".length);
       } else if (input.startsWith("/implement ")) {
         role = "implement";
-        cleanedInput = input.slice(13);
+        cleanedInput = input.slice("/implement ".length);
       } else if (input.startsWith("/critique ")) {
         role = "critique";
-        cleanedInput = input.slice(12);
+        cleanedInput = input.slice("/critique ".length);
       } else if (input.startsWith("/smol ")) {
         role = "smol";
-        cleanedInput = input.slice(6);
+        cleanedInput = input.slice("/smol ".length);
       }
 
       state.currentRole = role;
@@ -262,15 +292,28 @@ export async function runPromptLoop(
 
       console.log(`\n[role: ${role} | model: ${route.model}]`);
 
-      // Call model
+      // Call model — primary first, declared fallback on failure
       const start = Date.now();
-      const result = await callModel(
+      let result = await callEndpoint(
+        route.target,
         cleanedInput,
         config.system.content ?? "",
-        route.model,
-        route.temperature,
-        route.top_p
+        modelTimeoutMs()
       );
+      let usedModel = route.model;
+
+      if (result.code !== 0 && route.fallback) {
+        console.log(
+          `  [primary unavailable — falling back to ${route.fallback.model}]`
+        );
+        usedModel = route.fallback.model;
+        result = await callEndpoint(
+          route.fallback,
+          cleanedInput,
+          config.system.content ?? "",
+          modelTimeoutMs()
+        );
+      }
       const duration = Date.now() - start;
 
       // Map outcome
@@ -285,7 +328,7 @@ export async function runPromptLoop(
         role,
         input: cleanedInput,
         output: result.content,
-        model: route.model,
+        model: usedModel,
         code: result.code,
         bucket,
         duration_ms: duration,
