@@ -14,6 +14,8 @@ import {
   listProfiles,
   isToolEnabled,
   inferRole,
+  resolveEndpoint,
+  listEndpoints,
 } from "./index.js";
 import { join, resolve } from "node:path";
 import { mkdirSync, rmSync, mkdtempSync } from "node:fs";
@@ -237,5 +239,76 @@ temp = 0.3
       const config = loadConfig(fixtureRoot);
       expect(isToolEnabled(config, "nonexistent_tool")).toBe(false);
     });
+  });
+});
+
+describe("endpoints", () => {
+  // Declared at file scope here: the outer suite's fixtureRoot is not visible
+  // from this block.
+  const fixtureRoot = "../../conformance/fixture_tree";
+
+  const withEndpoints = (
+    endpoints: Record<string, unknown>,
+    roles: Record<string, unknown>
+  ): any => {
+    const c: any = loadConfig(fixtureRoot);
+    c.config = { ...c.config, endpoints };
+    c.roles = roles;
+    return c;
+  };
+
+  it("local is built in, so a surface need not declare it", () => {
+    const c = withEndpoints({}, { r: { model: "m" } });
+    expect(resolveEndpoint(c, "local").url).toContain("11434");
+  });
+
+  it("a declared endpoint overrides the built-in", () => {
+    const c = withEndpoints(
+      { local: { url: "http://elsewhere:1234/api/chat", kind: "ollama" } },
+      { r: { model: "m" } }
+    );
+    expect(resolveEndpoint(c, "local").url).toBe("http://elsewhere:1234/api/chat");
+  });
+
+  it("a role routes to the endpoint it names", () => {
+    const c = withEndpoints(
+      { zen: { url: "https://zen.example/v1/chat/completions", kind: "openai", api_key_env: "ZEN_KEY" } },
+      { r: { model: "m", endpoint: "zen" } }
+    );
+    const route = routeRole(c, "r");
+    expect(route.target.url).toBe("https://zen.example/v1/chat/completions");
+    expect(route.target.apiKeyEnv).toBe("ZEN_KEY");
+    expect(route.target.endpoint).toBe("zen");
+  });
+
+  it("an undeclared endpoint is named, not silently defaulted", () => {
+    const c = withEndpoints({}, { r: { model: "m", endpoint: "nope" } });
+    expect(() => routeRole(c, "r")).toThrow(/Unknown endpoint "nope"/);
+  });
+
+  it("a fallback can name an endpoint too", () => {
+    const c = withEndpoints(
+      { zen: { url: "https://zen.example/v1", kind: "openai" } },
+      { r: { model: "m", fallback: { model: "f", endpoint: "zen" } } }
+    );
+    expect(routeRole(c, "r").fallback?.url).toBe("https://zen.example/v1");
+  });
+
+  it("an explicit fallback url still wins, so old surfaces keep working", () => {
+    const c = withEndpoints(
+      {},
+      { r: { model: "m", fallback: { model: "f", url: "https://spelled.out/v1" } } }
+    );
+    expect(routeRole(c, "r").fallback?.url).toBe("https://spelled.out/v1");
+  });
+
+  it("credentials are referenced by name, never by value", () => {
+    const c = withEndpoints(
+      { zen: { url: "https://zen.example/v1", api_key_env: "ZEN_KEY" } },
+      { r: { model: "m", endpoint: "zen" } }
+    );
+    const serialised = JSON.stringify(routeRole(c, "r"));
+    expect(serialised).toContain("ZEN_KEY");
+    expect(serialised).not.toMatch(/Bearer|sk-/);
   });
 });

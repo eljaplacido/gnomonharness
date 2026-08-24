@@ -167,6 +167,61 @@ survives into the transcript — reasoning models (`qwen3.6`, `deepseek-r1`) wra
 their scratchpad in `<think>…</think>`, and `collapse` shows one line of it so
 you can see it happened without reading it.
 
+#### `[endpoints]` — Where Inference Goes
+
+```toml
+[endpoints.local]
+url = "http://127.0.0.1:11434/api/chat"
+kind = "ollama"
+
+[endpoints.zen]
+url = "https://opencode.ai/zen/v1/chat/completions"
+kind = "openai"
+api_key_env = "OPENCODE_API_KEY"   # the NAME of the variable, never the key
+
+[endpoints.go]
+url = "http://127.0.0.1:4200/v1/chat/completions"
+kind = "openai"
+```
+
+Routing lives in the surface and is hashed with it, so a checkout declares
+where its inference goes rather than the machine deciding. `local` has a
+built-in default, so a surface that never mentions endpoints still works.
+Only the credential is machine-scoped, and only **by name**.
+
+A role selects one with `endpoint = "<name>"`; a fallback can name a different
+one. Naming an endpoint that isn't declared is an error, not a silent default.
+`/endpoints` lists them.
+
+> `GNOMON_MODEL_URL` still overrides the resolved URL, but the prompt loop
+> announces it at startup — a machine-scoped route that changed behaviour
+> silently is exactly what Rule 1 exists to prevent.
+
+#### Role Tool Scope
+
+`tools` narrows what a role may call. Omit it for every declared tool; an
+empty list means none.
+
+```toml
+[roles.verifier]
+tools = ["read", "bash"]     # no write, no edit
+```
+
+The separation is **enforced by capability, not by instruction**. A verifier
+that can edit could make a failing suite pass by changing the suite, so the
+tool is simply absent from what it is offered — asking the model not to do it
+is not the same thing. A withheld tool is refused by name, and `/tools` shows
+what the current role can reach.
+
+This is what makes the spec → contract → test → implement → verify roles real
+rather than advisory:
+
+| Role | Tools | Why |
+|---|---|---|
+| `coordinator` | `read`, `write` | Writes specs and contracts. No `edit`, so a planning turn cannot quietly become a code change. |
+| `implementor` | `read`, `write`, `edit`, `bash` | Tests first, then the code that satisfies them. |
+| `verifier` | `read`, `bash` | Runs the suite and reports. Cannot alter what it judges. |
+
 #### `policy.toml` — Security & Approval Gates
 
 ```toml
@@ -457,13 +512,20 @@ binaries must be built first (`cargo build`) for native commands to work.
 | `/reset` | Drop conversation history without leaving the session |
 | `/meta [fields]` | Show or set the meta line — `/meta all`, `/meta none`, `/meta turn,model,duration`, `/meta style compact` |
 | `/think [mode]` | Chain-of-thought: `hide` \| `collapse` \| `show` |
+| `/tools` | Tools the current role may call, and what is withheld |
+| `/endpoints` | Declared inference endpoints |
 | `/manifest` | Manifest command |
 | `/clear` | Clear the screen (history is kept) |
 | `/help` | Command list |
 | `/quit` | Exit |
 
+Press **Tab** after `/` to list and complete every command — the registry
+that `/help` prints is the same one completion offers, so a command cannot be
+implemented but undiscoverable.
+
 Prefix a prompt with a role to route one turn: `/plan …`, `/implement …`,
-`/critique …`, `/smol …`.
+`/critique …`, `/smol …`. A prefix applies to that turn only; `/role <name>`
+switches for the session.
 
 `/meta` and `/think` change the running session only. Defaults live in `[ui]`
 in `.gnomon/config.toml` — persisting a runtime toggle would be machine-scoped

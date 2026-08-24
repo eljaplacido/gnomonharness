@@ -21,7 +21,25 @@ export interface Config {
   defaults?: Defaults;
   context?: ContextConfig;
   ui?: UiConfig;
+  endpoints?: Record<string, EndpointConfig>;
 }
+
+/**
+ * config.toml [endpoints.<name>] — where inference goes.
+ *
+ * The URL lives in the surface and is hashed, so routing is part of what a
+ * checkout declares rather than something the machine decides. Only the
+ * credential is machine-scoped, and only by NAME: api_key_env names an
+ * environment variable, never the secret itself.
+ */
+export interface EndpointConfig {
+  url: string;
+  /** ollama | openai — selects the request/response shape */
+  kind?: EndpointKind;
+  api_key_env?: string;
+}
+
+export type EndpointKind = "ollama" | "openai";
 
 /** config.toml [ui] — what the terminal shows, declared in the surface */
 export interface UiConfig {
@@ -101,7 +119,9 @@ export interface Roles {
 /** Secondary endpoint tried when the primary model fails or times out */
 export interface FallbackDef {
   model: string;
-  /** Full chat-completions URL (defaults to OpenCode Zen) */
+  /** Named endpoint from config.toml [endpoints] */
+  endpoint?: string;
+  /** Full chat-completions URL. Overrides `endpoint` when both are given. */
   url?: string;
   /** Env var holding the bearer token */
   api_key_env?: string;
@@ -112,6 +132,14 @@ export interface RoleDef {
   temperature?: number;
   top_p?: number;
   description?: string;
+  /** Named endpoint from config.toml [endpoints]; defaults to "local" */
+  endpoint?: string;
+  /**
+   * Tools this role may call. Absent means every declared tool.
+   * An empty list means none — which is how a read-only verifier is
+   * expressed: it can run the suite but cannot write.
+   */
+  tools?: string[];
   fallback?: FallbackDef;
   // Legacy field (kept for compat with older role files)
   profile?: string;
@@ -534,6 +562,53 @@ export interface RouteTarget {
   /** Full chat-completions endpoint URL */
   url: string;
   apiKeyEnv?: string;
+  /** Which named endpoint this came from, for display */
+  endpoint?: string;
+  kind?: EndpointKind;
+}
+
+/** The endpoint every role falls back to when none is named. */
+export const DEFAULT_ENDPOINT = "local";
+
+const BUILTIN_ENDPOINTS: Record<string, EndpointConfig> = {
+  local: { url: "http://127.0.0.1:11434/api/chat", kind: "ollama" },
+};
+
+/**
+ * Resolve a named endpoint from the surface.
+ *
+ * `local` has a built-in default so a surface that never mentions endpoints
+ * still works. Anything else must be declared: a role pointing at an endpoint
+ * that does not exist is a configuration error worth naming, not something to
+ * silently paper over with a guessed URL.
+ */
+export function resolveEndpoint(
+  config: GnomonConfig,
+  name: string = DEFAULT_ENDPOINT
+): EndpointConfig {
+  const declared = config.config.endpoints?.[name];
+  if (declared?.url) return declared;
+  const builtin = BUILTIN_ENDPOINTS[name];
+  if (builtin) return builtin;
+
+  const known = [
+    ...Object.keys(config.config.endpoints ?? {}),
+    ...Object.keys(BUILTIN_ENDPOINTS),
+  ];
+  throw new Error(
+    `Unknown endpoint "${name}". Declared: ${known.join(", ") || "(none)"}.\n` +
+      "Add it under [endpoints." + name + "] in .gnomon/config.toml."
+  );
+}
+
+/** Every endpoint the surface offers, built-ins included. */
+export function listEndpoints(config: GnomonConfig): string[] {
+  return [
+    ...new Set([
+      ...Object.keys(BUILTIN_ENDPOINTS),
+      ...Object.keys(config.config.endpoints ?? {}),
+    ]),
+  ].sort();
 }
 
 /**
@@ -553,21 +628,39 @@ export function routeRole(
   const top_p = roleDef.top_p ?? 0.9;
   const description = roleDef.description ?? "";
 
+  // Where inference goes is declared in the surface and hashed with it.
+  // GNOMON_MODEL_URL remains only as an explicit override, and the prompt
+  // loop announces it when set — a machine-scoped route that changed
+  // behaviour silently is exactly what Rule 1 exists to prevent.
+  const endpointName = roleDef.endpoint ?? DEFAULT_ENDPOINT;
+  const endpoint = resolveEndpoint(config, endpointName);
   const target: RouteTarget = {
     model,
     temperature,
     top_p,
-    url: process.env.GNOMON_MODEL_URL ?? "http://localhost:11434/api/chat",
+    url: process.env.GNOMON_MODEL_URL ?? endpoint.url,
+    apiKeyEnv: endpoint.api_key_env,
+    endpoint: endpointName,
+    kind: endpoint.kind ?? "ollama",
   };
 
   let fallback: RouteTarget | undefined;
   if (roleDef.fallback?.model) {
+    const fb = roleDef.fallback;
+    // An explicit url wins over a named endpoint, so existing surfaces that
+    // spelled the URL out keep working unchanged.
+    const fbEndpointName = fb.endpoint ?? (fb.url ? undefined : DEFAULT_ENDPOINT);
+    const fbEndpoint = fbEndpointName
+      ? resolveEndpoint(config, fbEndpointName)
+      : undefined;
     fallback = {
-      model: roleDef.fallback.model,
+      model: fb.model,
       temperature,
       top_p,
-      url: roleDef.fallback.url ?? "https://opencode.ai/zen/v1/chat/completions",
-      apiKeyEnv: roleDef.fallback.api_key_env,
+      url: fb.url ?? fbEndpoint?.url ?? "",
+      apiKeyEnv: fb.api_key_env ?? fbEndpoint?.api_key_env,
+      endpoint: fbEndpointName,
+      kind: fbEndpoint?.kind ?? "openai",
     };
   }
 

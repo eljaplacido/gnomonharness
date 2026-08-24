@@ -98,6 +98,8 @@ export interface ToolSet {
   disabled: string[];
   /** Declared and enabled, but not implemented by this build */
   unimplemented: string[];
+  /** Enabled, but not in this role's allow-list */
+  withheld: string[];
 }
 
 /**
@@ -107,12 +109,23 @@ export interface ToolSet {
  * `unimplemented` rather than quietly left out: system.md forbids silently
  * shortening the tool list.
  */
-export function buildToolSet(config: GnomonConfig): ToolSet {
+export function buildToolSet(config: GnomonConfig, role?: string): ToolSet {
   const schemas: ToolSchema[] = [];
   const disabled: string[] = [];
   const unimplemented: string[] = [];
+  const withheld: string[] = [];
+
+  // A role may narrow the tool list. Absent means "everything declared";
+  // an empty list means none, which is how a verifier that runs the suite
+  // but must not write is expressed.
+  const allowed = role ? config.roles[role]?.tools : undefined;
+  const roleLimited = Array.isArray(allowed);
 
   for (const tool of declaredTools(config)) {
+    if (roleLimited && !allowed!.includes(tool.name)) {
+      withheld.push(tool.name);
+      continue;
+    }
     if (!isToolEnabled(config, tool.name)) {
       disabled.push(tool.name);
       continue;
@@ -132,7 +145,7 @@ export function buildToolSet(config: GnomonConfig): ToolSet {
     });
   }
 
-  return { schemas, disabled, unimplemented };
+  return { schemas, disabled, unimplemented, withheld };
 }
 
 // ---------------------------------------------------------------------------
@@ -589,9 +602,9 @@ export async function executeTool(
     return {
       code: TOOL_NOT_DECLARED,
       content:
-        `Refused: "${name}" is not a tool this surface offers. ` +
+        `Refused: "${name}" is not available to this role. ` +
         `Available: ${[...offered].join(", ") || "(none)"}.`,
-      summary: `${name} — not declared`,
+      summary: `${name} — not available to this role`,
     };
   }
 

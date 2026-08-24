@@ -314,3 +314,41 @@ describe("gnomon-core prompt_loop", () => {
     });
   });
 });
+
+describe("tab completion", () => {
+  const roles = ["plan", "implement", "critique", "smol"];
+
+  it("bare / offers every command", () => {
+    const [hits] = promptLoop.completeInput("/", roles);
+    expect(hits).toContain("/help");
+    expect(hits).toContain("/role");
+    expect(hits.length).toBe(promptLoop.COMMANDS.length);
+  });
+
+  it("narrows as you type", () => {
+    const [hits] = promptLoop.completeInput("/co", roles);
+    expect(hits).toEqual(["/context"]);
+  });
+
+  it("completes role names after /role", () => {
+    const [hits, partial] = promptLoop.completeInput("/role im", roles);
+    expect(hits).toEqual(["implement"]);
+    expect(partial).toBe("im");
+  });
+
+  it("completes /think modes", () => {
+    const [hits] = promptLoop.completeInput("/think s", roles);
+    expect(hits).toEqual(["show"]);
+  });
+
+  it("offers nothing for ordinary prose", () => {
+    const [hits] = promptLoop.completeInput("fix the parser", roles);
+    expect(hits).toEqual([]);
+  });
+
+  it("every command in the registry is unique and starts with /", () => {
+    const names = promptLoop.COMMANDS.map((c) => c.name);
+    expect(new Set(names).size).toBe(names.length);
+    expect(names.every((n) => n.startsWith("/"))).toBe(true);
+  });
+});

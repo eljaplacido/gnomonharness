@@ -18,6 +18,8 @@ import {
   listProfiles,
   resolveContext,
   resolveUi,
+  resolveEndpoint,
+  listEndpoints,
   parseMetaFields,
   ResolvedUi,
   MetaField,
@@ -454,12 +456,15 @@ function worse(a: number, b: number): number {
  */
 export async function runAgenticTurn(
   state: PromptState,
+  /** The role THIS turn runs as — a `/plan …` prefix differs from the
+   *  session role, and it selects both the tool list and max_steps. */
+  role: string,
   route: ReturnType<typeof routeRole>,
   messages: ChatMessage[],
   deps: TurnDeps
 ): Promise<TurnResult> {
   const config = state.config;
-  const toolSet = buildToolSet(config);
+  const toolSet = buildToolSet(config, role);
   const offered = new Set(toolSet.schemas.map((t) => t.function.name));
 
   const defaults = config.config.defaults ?? {};
@@ -480,7 +485,7 @@ export async function runAgenticTurn(
     maxOutputBytes: 32_000,
   };
 
-  const roleDef = config.roles[state.currentRole] ?? {};
+  const roleDef = config.roles[role] ?? {};
   const maxSteps = typeof roleDef.max_steps === "number" ? roleDef.max_steps : 12;
 
   const working: ChatMessage[] = [...messages];
@@ -535,7 +540,7 @@ export async function runAgenticTurn(
     if (steps + result.toolCalls.length > maxSteps) {
       const note =
         `Stopped: this turn reached max_steps (${maxSteps}) for role ` +
-        `"${state.currentRole}". ${steps} tool call(s) ran.`;
+        `"${role}". ${steps} tool call(s) ran.`;
       deps.say(paint(deps.ui, "yellow", `  [tools] ${note}`));
       return {
         content: result.content || note,
@@ -617,6 +622,74 @@ function toolTimeoutMs(config: GnomonConfig): number {
 }
 
 // ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+/** One slash command, as shown by /help and offered by Tab completion. */
+export interface CommandSpec {
+  name: string;
+  arg?: string;
+  help: string;
+}
+
+/**
+ * Every command, in one place.
+ *
+ * /help renders this and Tab completion offers it, so a command can never be
+ * implemented but undiscoverable — typing "/" and Tab is how you find out
+ * what exists.
+ */
+export const COMMANDS: CommandSpec[] = [
+  { name: "/roles", help: "List roles and models (marks the current one)" },
+  { name: "/role", arg: "<name>", help: "Switch role for the rest of the session" },
+  { name: "/endpoints", help: "List declared inference endpoints" },
+  { name: "/profiles", help: "Show available profiles" },
+  { name: "/tools", help: "Show the tools this role may call" },
+  { name: "/context", help: "Show context policy and the current window" },
+  { name: "/reset", help: "Drop conversation history (keeps the session open)" },
+  { name: "/meta", arg: "[fields]", help: "Show or set the meta line" },
+  { name: "/think", arg: "[mode]", help: "Chain-of-thought: hide | collapse | show" },
+  { name: "/manifest", help: "Show manifest command" },
+  { name: "/clear", help: "Clear screen (history is kept)" },
+  { name: "/help", help: "This list" },
+  { name: "/quit", help: "Exit the loop" },
+];
+
+/**
+ * Tab completion for the prompt.
+ *
+ * Completes slash commands, and role names after /role. Returns the readline
+ * completer shape: [matches, the substring they complete].
+ */
+export function completeInput(
+  line: string,
+  roles: string[],
+  endpoints: string[] = []
+): [string[], string] {
+  const roleArg = line.match(/^\/roles?\s+(\S*)$/);
+  if (roleArg) {
+    const partial = roleArg[1];
+    return [roles.filter((r) => r.startsWith(partial)), partial];
+  }
+
+  const thinkArg = line.match(/^\/think\s+(\S*)$/);
+  if (thinkArg) {
+    const partial = thinkArg[1];
+    return [
+      ["hide", "collapse", "show"].filter((m) => m.startsWith(partial)),
+      partial,
+    ];
+  }
+
+  if (!line.startsWith("/")) return [[], line];
+
+  const names = COMMANDS.map((c) => c.name);
+  const hits = names.filter((n) => n.startsWith(line));
+  // With nothing after "/", offer everything rather than nothing.
+  return [hits.length > 0 ? hits : names, line];
+}
+
+// ---------------------------------------------------------------------------
 // Command loop
 // ---------------------------------------------------------------------------
 
@@ -647,7 +720,12 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         }
         state.currentRole = wanted;
         const route = routeRole(state.config, wanted);
-        console.log(`\nRole: ${wanted} → ${route.model}`);
+        const where = route.target.endpoint ? ` @ ${route.target.endpoint}` : "";
+        console.log(`\nRole: ${wanted} → ${route.model}${where}`);
+        const set = buildToolSet(state.config, wanted);
+        console.log(
+          `  tools: ${set.schemas.map((t) => t.function.name).join(", ") || "(none — read-only role)"}`
+        );
         return true;
       }
 
@@ -657,9 +735,45 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         const model = roleDef.model ?? roleDef.profile ?? "local:default";
         const desc = roleDef.description ?? "";
         const here = r === state.currentRole ? " ← current" : "";
-        console.log(`  ${r}: ${model}${desc ? ` — ${desc}` : ""}${here}`);
+        const ep = roleDef.endpoint ? ` @${roleDef.endpoint}` : "";
+        const scope = Array.isArray(roleDef.tools)
+          ? `  [tools: ${roleDef.tools.join(", ") || "none"}]`
+          : "";
+        console.log(`  ${r}: ${model}${ep}${desc ? ` — ${desc}` : ""}${scope}${here}`);
       }
       console.log(`\nSwitch with: /role <name>`);
+      return true;
+    }
+
+    case "/tools": {
+      const set = buildToolSet(state.config, state.currentRole);
+      console.log(`\nTools available to "${state.currentRole}":`);
+      for (const t of set.schemas) {
+        console.log(`  ${t.function.name} — ${t.function.description}`);
+      }
+      if (set.schemas.length === 0) {
+        console.log("  (none — this role cannot call tools)");
+      }
+      if (set.withheld.length > 0) {
+        console.log(`\n  Withheld from this role: ${set.withheld.join(", ")}`);
+      }
+      if (set.disabled.length > 0) {
+        console.log(`  Disabled in the surface: ${set.disabled.join(", ")}`);
+      }
+      if (set.unimplemented.length > 0) {
+        console.log(`  Declared but unimplemented: ${set.unimplemented.join(", ")}`);
+      }
+      return true;
+    }
+
+    case "/endpoints": {
+      console.log("\nDeclared endpoints (.gnomon/config.toml [endpoints]):");
+      for (const name of listEndpoints(state.config)) {
+        const ep = resolveEndpoint(state.config, name);
+        const key = ep.api_key_env ? `  key: $${ep.api_key_env}` : "";
+        console.log(`  ${name}: ${ep.url}  [${ep.kind ?? "ollama"}]${key}`);
+      }
+      console.log("\nRoles select one with `endpoint = \"<name>\"` in roles.toml.");
       return true;
     }
 
@@ -753,20 +867,16 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       console.log("\nUse: gnomon surface manifest");
       return true;
 
-    case "/help":
-      console.log(`\nCommands:
-  /roles           — List roles and models (marks the current one)
-  /role <name>     — Switch role for the rest of the session
-  /profiles        — Show available profiles
-  /context         — Show context policy and the current window
-  /reset           — Drop conversation history (keeps the session open)
-  /meta [fields]   — Show or set the meta line (/meta all, /meta none,
-                     /meta turn,model,duration, /meta style compact)
-  /think [mode]    — Chain-of-thought: hide | collapse | show
-  /manifest        — Show manifest command
-  /clear           — Clear screen (history is kept)
-  /help            — This list
-  /quit            — Exit the loop
+    case "/help": {
+      console.log("\nCommands  (press Tab after \"/\" to complete)\n");
+      const width = Math.max(
+        ...COMMANDS.map((c) => `${c.name} ${c.arg ?? ""}`.trimEnd().length)
+      );
+      for (const c of COMMANDS) {
+        const label = `${c.name}${c.arg ? ` ${c.arg}` : ""}`;
+        console.log(`  ${label.padEnd(width)}  — ${c.help}`);
+      }
+      console.log(`
 
 Input is automatically routed to a role based on prefix:
   /plan "..."      → plan role
@@ -781,6 +891,7 @@ A role prefix applies to that one turn only; /role switches for good.
 [ui] in .gnomon/config.toml, so every checkout renders the same.
 `);
       return true;
+    }
 
     case "/clear":
       process.stdout.write("\x1Bc");
@@ -801,16 +912,20 @@ export async function runPromptLoop(
   config: GnomonConfig,
   initialRole?: string
 ): Promise<void> {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
   const state: PromptState = {
     config,
     exchanges: [],
     currentRole: initialRole ?? "implement",
   };
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    // Tab after "/" lists every command, so they are discoverable from the
+    // prompt rather than only from the docs.
+    completer: (line: string) =>
+      completeInput(line, listRoles(config), listEndpoints(config)),
+  });
 
   printBanner();
   console.log(`Role: ${state.currentRole}`);
@@ -937,13 +1052,22 @@ export async function runPromptLoop(
 
   // Name what the surface declares but cannot offer, rather than quietly
   // shipping a shorter tool list.
-  {
+  const reportTools = (): void => {
     const ui = uiOf(state);
-    const toolSet = buildToolSet(config);
+    const toolSet = buildToolSet(config, state.currentRole);
     const names = toolSet.schemas.map((t) => t.function.name);
     console.log(
-      paint(ui, "gray", `Tools: ${names.join(", ") || "(none)"}`)
+      paint(ui, "gray", `Tools (${state.currentRole}): ${names.join(", ") || "(none)"}`)
     );
+    if (toolSet.withheld.length > 0) {
+      console.log(
+        paint(
+          ui,
+          "gray",
+          `  not for this role: ${toolSet.withheld.join(", ")}`
+        )
+      );
+    }
     if (toolSet.disabled.length > 0) {
       console.log(
         paint(ui, "yellow", `  disabled in surface: ${toolSet.disabled.join(", ")}`)
@@ -955,6 +1079,22 @@ export async function runPromptLoop(
           ui,
           "yellow",
           `  declared but not implemented by this build: ${toolSet.unimplemented.join(", ")}`
+        )
+      );
+    }
+  };
+
+  {
+    const ui = uiOf(state);
+    reportTools();
+
+    // A machine-scoped route must never take effect silently.
+    if (process.env.GNOMON_MODEL_URL) {
+      console.log(
+        paint(
+          ui,
+          "yellow",
+          `  note: GNOMON_MODEL_URL overrides the surface's endpoint → ${process.env.GNOMON_MODEL_URL}`
         )
       );
     }
@@ -1077,7 +1217,7 @@ export async function runPromptLoop(
       cancelTurn = () => controller.abort();
       let turn: TurnResult;
       try {
-        turn = await runAgenticTurn(state, route, built.messages, {
+        turn = await runAgenticTurn(state, role, route, built.messages, {
           approve,
           progress,
           ui,

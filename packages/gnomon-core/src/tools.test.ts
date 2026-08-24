@@ -346,3 +346,52 @@ describe("diffLines", () => {
     expect(d.length).toBeLessThan(20);
   });
 });
+
+describe("per-role tool scope", () => {
+  const cfgWithRoles = (roles: Record<string, unknown>): any => {
+    const c: any = loadConfig("../..");
+    c.roles = roles;
+    return c;
+  };
+
+  it("a role with no tool list gets everything declared", () => {
+    const c = cfgWithRoles({ implement: { model: "m" } });
+    const names = buildToolSet(c, "implement").schemas.map((s) => s.function.name);
+    expect(names.sort()).toEqual(["bash", "edit", "read", "write"]);
+  });
+
+  it("a verifier cannot write or edit — the capability is absent", () => {
+    const c = cfgWithRoles({ verifier: { model: "m", tools: ["read", "bash"] } });
+    const set = buildToolSet(c, "verifier");
+    const names = set.schemas.map((s) => s.function.name).sort();
+    expect(names).toEqual(["bash", "read"]);
+    expect(set.withheld.sort()).toEqual(["edit", "write"]);
+  });
+
+  it("a withheld tool is refused by name, naming what IS available", async () => {
+    const c = cfgWithRoles({ verifier: { model: "m", tools: ["read", "bash"] } });
+    const offeredForRole = new Set(
+      buildToolSet(c, "verifier").schemas.map((s) => s.function.name)
+    );
+    const out = await executeTool(
+      "write",
+      { path: "x.txt", content: "y" },
+      ctx(),
+      offeredForRole
+    );
+    expect(out.code).toBe(TOOL_NOT_DECLARED);
+    expect(mapBucket(out.code)).toBe("refusal");
+    expect(out.content).toContain("read");
+  });
+
+  it("an empty tool list means no tools at all", () => {
+    const c = cfgWithRoles({ talker: { model: "m", tools: [] } });
+    expect(buildToolSet(c, "talker").schemas).toHaveLength(0);
+  });
+
+  it("a role's scope cannot widen past what the surface declares", () => {
+    const c = cfgWithRoles({ greedy: { model: "m", tools: ["read", "teleport"] } });
+    const names = buildToolSet(c, "greedy").schemas.map((s) => s.function.name);
+    expect(names).toEqual(["read"]);
+  });
+});

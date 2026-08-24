@@ -14,8 +14,7 @@ description = "Hardest reasoning, lowest call volume"
 
 [roles.plan.fallback]
 model = "nemotron-3-ultra-free"
-url = "https://opencode.ai/zen/v1/chat/completions"
-api_key_env = "OPENCODE_API_KEY"
+endpoint = "zen"
 
 [roles.implement]
 model = "qwen3.6:35b"
@@ -25,8 +24,7 @@ description = "Highest token volume — this is where local hosting saves money"
 
 [roles.implement.fallback]
 model = "nemotron-3-ultra-free"
-url = "https://opencode.ai/zen/v1/chat/completions"
-api_key_env = "OPENCODE_API_KEY"
+endpoint = "zen"
 
 [roles.critique]
 model = "deepseek-r1:32b-qwen-distill-q4_K_M"
@@ -39,3 +37,33 @@ model = "qwen2.5:7b-instruct"
 temperature = 0.2
 top_p = 0.95
 description = "Summarisation, compaction, commit messages"
+
+# ── specify → contract → test → implement → verify ─────────────────────────
+# Separated by capability, not by instruction: the tool list is the boundary.
+
+[roles.coordinator]
+model = "qwen3.6:35b"
+endpoint = "local"
+temperature = 0.2
+top_p = 0.9
+max_steps = 12
+tools = ["read", "write"]
+description = "Intent and contracts — writes specs, never source"
+
+[roles.implementor]
+model = "qwen3.6:35b"
+endpoint = "local"
+temperature = 0.3
+top_p = 0.95
+max_steps = 24
+tools = ["read", "write", "edit", "bash"]
+description = "Tests first, then the code that satisfies them"
+
+[roles.verifier]
+model = "deepseek-r1:32b-qwen-distill-q4_K_M"
+endpoint = "local"
+temperature = 0.1
+top_p = 0.9
+max_steps = 12
+tools = ["read", "bash"]
+description = "Runs the suite and reports. Cannot write."

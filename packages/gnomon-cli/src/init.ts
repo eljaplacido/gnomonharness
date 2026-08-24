@@ -44,6 +44,21 @@ compaction = "discard"            # discard | summary | truncate
 policy = "sliding_window"         # full | sliding_window | summary
 retain_after = 2048               # tokens of the oldest turns to keep
 
+[endpoints.local]
+# Where inference goes lives in the surface, not in an env var: routing is
+# part of what a checkout declares, and it is hashed with everything else.
+url = "http://127.0.0.1:11434/api/chat"
+kind = "ollama"
+
+# [endpoints.zen]
+# url = "https://opencode.ai/zen/v1/chat/completions"
+# kind = "openai"
+# api_key_env = "OPENCODE_API_KEY"   # the NAME of the variable, never the key
+
+# [endpoints.go]
+# url = "http://127.0.0.1:4200/v1/chat/completions"
+# kind = "openai"
+
 [ui]
 # What the terminal shows. Declared here so every checkout renders the same.
 # Runtime /meta and /think override these for the session only.
@@ -54,23 +69,65 @@ spinner = true
 color = true
 `;
 
-const ROLES_TOML = `# Role routing — model + sampling params per role.
+const ROLES_TOML = `# Role routing — model, endpoint, and tool scope per role.
 #
 # EDIT THESE MODEL TAGS. They are concrete backend tags, not aliases: an alias
 # would have to be resolved per machine, which is the machine-scoped config
 # this harness forbids. Run \`ollama list\` to see what you have.
 #
-# Changing which model implements a role is a surface change, and re-hashes.
+# \`endpoint\` names a block from [endpoints] in config.toml (default "local").
+# \`tools\` narrows what the role may call. Omit it for every declared tool;
+# an empty list means none.
 
-[roles.plan]
+# ── The specify → contract → test → implement → verify loop ────────────────
+# Three roles, separated by what they are allowed to touch. The separation is
+# enforced by the tool list, not by asking the model nicely.
+
+[roles.coordinator]
 model = "qwen2.5:14b-instruct"
+endpoint = "local"
 temperature = 0.2
 top_p = 0.9
 max_steps = 12
+# Reads the repo and writes specs/contracts only — never source. Keeping it
+# off \`edit\` is what stops a planning turn from quietly becoming a code change.
+tools = ["read", "write"]
+description = "Intent and contracts: turns a request into a spec"
+
+[roles.implementor]
+model = "qwen2.5:14b-instruct"
+endpoint = "local"
+temperature = 0.3
+top_p = 0.95
+max_steps = 24
+tools = ["read", "write", "edit", "bash"]
+description = "Tests first, then the code that satisfies them"
+
+[roles.verifier]
+model = "qwen2.5:14b-instruct"
+endpoint = "local"
+temperature = 0.1
+top_p = 0.9
+max_steps = 12
+# No write, no edit. A verifier that can edit can make a failing suite pass
+# by changing the suite, so the capability is simply absent.
+tools = ["read", "bash"]
+description = "Runs the suite and reports. Cannot write."
+
+# ── General-purpose roles ──────────────────────────────────────────────────
+
+[roles.plan]
+model = "qwen2.5:14b-instruct"
+endpoint = "local"
+temperature = 0.2
+top_p = 0.9
+max_steps = 12
+tools = ["read", "bash"]
 description = "Hardest reasoning, lowest call volume"
 
 [roles.implement]
 model = "qwen2.5:14b-instruct"
+endpoint = "local"
 temperature = 0.3
 top_p = 0.95
 max_steps = 16
@@ -78,23 +135,25 @@ description = "Highest token volume — where local hosting pays off"
 
 [roles.critique]
 model = "qwen2.5:14b-instruct"
+endpoint = "local"
 temperature = 0.1
 top_p = 0.9
 max_steps = 8
+tools = ["read", "bash"]
 description = "Must not share context with the implementer"
 
 [roles.smol]
 model = "qwen2.5:7b-instruct"
+endpoint = "local"
 temperature = 0.2
 top_p = 0.95
 max_steps = 6
 description = "Summarisation, compaction, commit messages"
 
-# Optional: a second endpoint tried when the primary fails or times out.
+# A second endpoint, tried when the primary fails or times out.
 # [roles.implement.fallback]
-# model = "some-hosted-model"
-# url = "https://example.invalid/v1/chat/completions"
-# api_key_env = "SOME_API_KEY"
+# model = "qwen3-coder"
+# endpoint = "zen"
 `;
 
 const TOOLS_TOML = `# Declared tools. Each one the model may call must appear here.

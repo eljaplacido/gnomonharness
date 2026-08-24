@@ -4,6 +4,23 @@
 
 ### Added
 
+- **`[endpoints]` in config.toml.** Named inference endpoints (`local`,
+  and whatever else you declare — OpenCode Zen, OpenFang, any OpenAI-shaped
+  API), selected per role and per fallback with `endpoint = "<name>"`.
+  Routing now lives in the surface and is hashed with it; previously the
+  primary URL came from `GNOMON_MODEL_URL` or a hardcoded localhost default,
+  so where inference went was machine-scoped — the one thing Rule 1 forbids.
+  Credentials are still referenced by name only.
+- **Per-role tool scope.** `tools = [...]` in `roles.toml` narrows what a role
+  may call, enforced by omitting the tool from what the model is offered
+  rather than by asking it to abstain.
+- **`coordinator` / `implementor` / `verifier` roles** in the starter surface,
+  separated by capability: the coordinator has no `edit`, the verifier has
+  neither `write` nor `edit`.
+- **Tab completion** for slash commands, role names, and `/think` modes,
+  driven by the same registry `/help` prints.
+- **`/tools`** and **`/endpoints`**.
+
 - **`/role <name>` switches role for the session.** `/roles <name>` does the
   same, since that is what people type.
 - **Esc cancels the turn in progress** (Ctrl+C does too, mid-turn). The abort
