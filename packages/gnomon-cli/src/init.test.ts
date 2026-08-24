@@ -84,6 +84,31 @@ describe("template hygiene", () => {
     }
   });
 
+  it("declares the remote endpoints, inert until a role names one", () => {
+    // They shipped commented out, so a scaffolded project's /endpoints showed
+    // only `local` and there was no sign the others were even possible.
+    // Declaring costs nothing: nothing reaches an endpoint no role points at.
+    const root = mkdtempSync(join(tmpdir(), "gnomon-ep-"));
+    try {
+      initSurface({ dir: root });
+      const config = loadConfig(root);
+      const declared = config.config.endpoints ?? {};
+
+      expect(Object.keys(declared).sort()).toEqual(["go", "local", "zen"]);
+      expect(declared.zen?.api_key_env).toBe("OPENCODE_API_KEY");
+      expect(declared.zen?.kind).toBe("openai");
+      // A NAME, never a secret.
+      expect(JSON.stringify(declared)).not.toMatch(/sk-|Bearer/);
+
+      // Inert: every scaffolded role still runs locally.
+      for (const role of Object.keys(config.roles)) {
+        expect(config.roles[role].endpoint ?? "local").toBe("local");
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("every template parses as the TOML the surface expects", () => {
     const root = mkdtempSync(join(tmpdir(), "gnomon-tpl-"));
     try {

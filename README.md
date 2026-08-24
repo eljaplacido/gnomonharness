@@ -241,6 +241,33 @@ default, so a surface that never mentions endpoints still works. Only the
 credential is machine-scoped, and only **by name**. Naming an endpoint that is
 not declared is an error, not a silent default.
 
+**Declaring an endpoint does not use it.** `gnomon init` ships `local`, `zen`
+and `go`, all inert — nothing reaches an endpoint until a role names it:
+
+```toml
+[roles.plan]
+model = "some-hosted-model"
+endpoint = "zen"                    # primary
+
+[roles.implement.fallback]
+model = "some-hosted-model"
+endpoint = "zen"                    # only when local fails or times out
+```
+
+`/endpoints` shows each one, which roles route to it, and whether its key
+variable is actually set in your shell:
+
+```
+  zen: https://opencode.ai/zen/v1/chat/completions  [openai]
+      fallback for: plan, implement
+      key: $OPENCODE_API_KEY — NOT SET in this shell
+  go: http://127.0.0.1:4200/v1/chat/completions  [openai]
+      used by: (no role — declared but nothing routes here)
+```
+
+"Not configured" and "configured but nothing routes to it" look identical in a
+plain listing, so the listing says which.
+
 #### `[context]` — conversation history
 
 ```toml
@@ -784,6 +811,11 @@ that has them.
   decisions.
 - **Small models narrate unreliably.** Tool calls are correct far more often
   than the prose describing them.
+- **Not every model accepts tools.** Reasoning distills in particular make the
+  backend reject any request carrying a tools array. gnomon detects this,
+  retries once without them, and says so — but that role runs with fewer tools
+  than the surface declared until you set `tools = []` for it or give it a
+  tool-capable model.
 
 ### How to acquire new capabilities today
 

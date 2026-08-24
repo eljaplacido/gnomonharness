@@ -50,14 +50,30 @@ retain_after = 2048               # tokens of the oldest turns to keep
 url = "http://127.0.0.1:11434/api/chat"
 kind = "ollama"
 
-# [endpoints.zen]
-# url = "https://opencode.ai/zen/v1/chat/completions"
-# kind = "openai"
-# api_key_env = "OPENCODE_API_KEY"   # the NAME of the variable, never the key
+# Declared, but inert until a role names one. An endpoint costs nothing to
+# declare: nothing reaches it unless roles.toml says endpoint = "zen".
+# /endpoints lists these and reports whether the key variable is set.
 
-# [endpoints.go]
-# url = "http://127.0.0.1:4200/v1/chat/completions"
-# kind = "openai"
+[endpoints.zen]
+url = "https://opencode.ai/zen/v1/chat/completions"
+kind = "openai"
+api_key_env = "OPENCODE_API_KEY"   # the NAME of the variable, never the key
+
+[endpoints.go]
+url = "http://127.0.0.1:4200/v1/chat/completions"
+kind = "openai"
+
+# To actually use one, point a role at it in roles.toml:
+#
+#   [roles.plan]
+#   model = "some-hosted-model"
+#   endpoint = "zen"
+#
+# or keep local as primary and reach for it only on failure:
+#
+#   [roles.implement.fallback]
+#   model = "some-hosted-model"
+#   endpoint = "zen"
 
 [routing]
 # A trust dial:

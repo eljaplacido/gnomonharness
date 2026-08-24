@@ -411,3 +411,99 @@ describe("tab completion", () => {
     expect(names.every((n) => n.startsWith("/"))).toBe(true);
   });
 });
+
+describe("model API errors", () => {
+  const okJson = (body: unknown) =>
+    ({ ok: true, json: async () => body }) as unknown as Response;
+
+  const errJson = (status: number, body: string) =>
+    ({
+      ok: false,
+      status,
+      statusText: status === 400 ? "Bad Request" : "Error",
+      text: async () => body,
+    }) as unknown as Response;
+
+  const withFetch = async (impl: typeof fetch, run: () => Promise<void>) => {
+    const original = globalThis.fetch;
+    globalThis.fetch = impl;
+    try {
+      await run();
+    } finally {
+      globalThis.fetch = original;
+    }
+  };
+
+  it("reports the body, not just the status", async () => {
+    // "400 Bad Request" alone sent a real session hunting for a missing model
+    // that was installed and working — it just could not accept tools.
+    const state: any = {
+      config: loadConfig(fixtureRoot),
+      exchanges: [],
+      currentRole: "implement",
+    };
+    await withFetch(
+      (async () =>
+        errJson(400, '{"error":"model X does not support tools"}')) as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "X", temperature: 0, top_p: 1, target: { model: "X", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "hi" }],
+          {
+            approve: async () => false,
+            progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+            say: () => {},
+          }
+        );
+        expect(turn.content).toContain("does not support tools");
+      }
+    );
+  });
+
+  it("a model that rejects tools is retried without them, and it is announced", async () => {
+    // This repo's surface, not the fixture: the fixture declares no tools, so
+    // none would be sent and the rejection path could never run.
+    const state: any = {
+      config: loadConfig("../.."),
+      exchanges: [],
+      currentRole: "implement",
+    };
+    const said: string[] = [];
+    let calls = 0;
+
+    await withFetch(
+      (async (_url: string, init: any) => {
+        calls++;
+        const sentTools = JSON.parse(init.body).tools !== undefined;
+        if (sentTools) {
+          return errJson(400, '{"error":"model X does not support tools"}');
+        }
+        return okJson({ message: { content: "answered without tools" } });
+      }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "X", temperature: 0, top_p: 1, target: { model: "X", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "hi" }],
+          {
+            approve: async () => false,
+            progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+            say: (l: string) => said.push(l),
+          }
+        );
+        expect(turn.content).toBe("answered without tools");
+        expect(calls).toBe(2);
+        // Never silently: the surface declared tools that this turn ran without.
+        expect(said.join("\n")).toContain("cannot accept tools");
+        expect(said.join("\n")).toContain("tools = []");
+        // Remembered, so the rejection is paid once.
+        expect(state.noToolModels.has("X")).toBe(true);
+      }
+    );
+  });
+});

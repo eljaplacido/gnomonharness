@@ -98,6 +98,11 @@ export interface PromptState {
   summary?: string;
   /** Identifier this conversation is saved under */
   sessionId?: string;
+  /**
+   * Models the backend has refused a tools array for. Remembered so the
+   * rejection is paid once per session rather than on every turn.
+   */
+  noToolModels?: Set<string>;
 }
 
 /** The id this session saves under, or a placeholder before one is assigned. */
@@ -318,6 +323,8 @@ interface InferenceResult {
   toolCalls: ToolCall[];
   /** The backend's own representation, echoed back unchanged */
   rawToolCalls?: unknown[];
+  /** The backend refused the request because this model cannot use tools */
+  toolsUnsupported?: boolean;
 }
 
 /** Tool arguments arrive as an object (Ollama) or a JSON string (OpenAI). */
@@ -382,10 +389,28 @@ async function callEndpoint(
     });
 
     if (!res.ok) {
+      // The body carries the reason; the status alone does not. Reporting
+      // "400 Bad Request" and discarding the explanation sent a real session
+      // hunting for a missing model that was in fact installed and working —
+      // it simply could not accept a tools array.
+      const body = await res.text().catch(() => "");
+      const detail = (() => {
+        try {
+          const parsed = JSON.parse(body);
+          return typeof parsed?.error === "string" ? parsed.error : body;
+        } catch {
+          return body;
+        }
+      })().trim();
+
       return {
-        content: `Model API error: ${res.status} ${res.statusText}`,
+        content:
+          `Model API error: ${res.status} ${res.statusText}` +
+          (detail ? `\n${detail.slice(0, 500)}` : ""),
         code: 10,
         toolCalls: [],
+        toolsUnsupported:
+          res.status === 400 && /does not support tools/i.test(detail),
       };
     }
 
@@ -552,16 +577,49 @@ export async function runAgenticTurn(
     toolLog,
   });
 
+  const noTools = (state.noToolModels ??= new Set<string>());
+
+  /**
+   * Call a target, coping with a model that cannot accept tools.
+   *
+   * Some models — reasoning distills especially — make the backend reject any
+   * request carrying a tools array. Retrying without them is announced, not
+   * silent: a turn that ran with fewer tools than the surface declared is
+   * exactly what system.md says must never pass unremarked.
+   */
+  const call = async (target: typeof route.target) => {
+    const offer = noTools.has(target.model) ? [] : toolSet.schemas;
+    let r = await callEndpoint(target, working, offer, modelTimeoutMs(), deps.signal);
+
+    if (r.toolsUnsupported && offer.length > 0) {
+      noTools.add(target.model);
+      deps.progress.stop();
+      deps.say(
+        paint(
+          deps.ui,
+          "yellow",
+          `  [tools] ${target.model} cannot accept tools — retrying without them.`
+        )
+      );
+      deps.say(
+        paint(
+          deps.ui,
+          "gray",
+          `  this role's tools are unavailable for this model. To make that ` +
+            `explicit, set tools = [] for "${role}" in roles.toml, or give the ` +
+            `role a tool-capable model.`
+        )
+      );
+      deps.progress.start(`${target.model} — without tools`);
+      r = await callEndpoint(target, working, [], modelTimeoutMs(), deps.signal);
+    }
+    return r;
+  };
+
   for (;;) {
     if (deps.signal?.aborted) return cancelled();
 
-    let result = await callEndpoint(
-      route.target,
-      working,
-      toolSet.schemas,
-      modelTimeoutMs(),
-      deps.signal
-    );
+    let result = await call(route.target);
     usedModel = route.model;
 
     if (deps.signal?.aborted) return cancelled();
@@ -571,13 +629,7 @@ export async function runAgenticTurn(
         `${route.fallback.model} — primary unavailable, falling back`
       );
       usedModel = route.fallback.model;
-      result = await callEndpoint(
-        route.fallback,
-        working,
-        toolSet.schemas,
-        modelTimeoutMs(),
-        deps.signal
-      );
+      result = await call(route.fallback);
       if (deps.signal?.aborted) return cancelled();
     }
 
@@ -1077,6 +1129,19 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         console.log(
           `  tools: ${set.schemas.map((t) => t.function.name).join(", ") || "(none — read-only role)"}`
         );
+        // Switching role and then being routed elsewhere on the next turn
+        // looks like /role did not work. Say which one is in charge.
+        const mode = routingOf(state).mode;
+        if (mode === "auto") {
+          console.log(
+            `  note: mode is auto, so the routing rules may still send a turn ` +
+              `elsewhere.\n        /mode manual pins this role.`
+          );
+        } else if (mode === "suggest") {
+          console.log(
+            `  note: mode is suggest, so you may still be asked to switch per turn.`
+          );
+        }
         return true;
       }
 
@@ -1187,13 +1252,41 @@ export function processCommand(cmd: string, state: PromptState): boolean {
     }
 
     case "/endpoints": {
-      console.log("\nDeclared endpoints (.gnomon/config.toml [endpoints]):");
+      console.log("\nDeclared endpoints (.gnomon/config.toml [endpoints]):\n");
+      const roles = listRoles(state.config);
       for (const name of listEndpoints(state.config)) {
         const ep = resolveEndpoint(state.config, name);
-        const key = ep.api_key_env ? `  key: $${ep.api_key_env}` : "";
-        console.log(`  ${name}: ${ep.url}  [${ep.kind ?? "ollama"}]${key}`);
+        console.log(`  ${name}: ${ep.url}  [${ep.kind ?? "ollama"}]`);
+
+        // An endpoint nothing points at is declared, not used. Saying so is
+        // the difference between "it is not configured" and "it is configured
+        // and nothing routes to it" — which look identical from a listing.
+        const primary = roles.filter(
+          (r) => (state.config.roles[r]?.endpoint ?? "local") === name
+        );
+        const viaFallback = roles.filter(
+          (r) => state.config.roles[r]?.fallback?.endpoint === name
+        );
+        if (primary.length === 0 && viaFallback.length === 0) {
+          console.log(`      used by: (no role — declared but nothing routes here)`);
+        } else {
+          if (primary.length > 0) console.log(`      used by: ${primary.join(", ")}`);
+          if (viaFallback.length > 0) {
+            console.log(`      fallback for: ${viaFallback.join(", ")}`);
+          }
+        }
+
+        if (ep.api_key_env) {
+          const present = Boolean(process.env[ep.api_key_env]);
+          console.log(
+            `      key: $${ep.api_key_env} — ${present ? "set" : "NOT SET in this shell"}`
+          );
+        }
       }
-      console.log("\nRoles select one with `endpoint = \"<name>\"` in roles.toml.");
+      console.log(
+        `\nPoint a role at one with endpoint = "<name>" in roles.toml, or give\n` +
+          `it a [roles.<name>.fallback] with its own model and endpoint.`
+      );
       return true;
     }
 

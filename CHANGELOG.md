@@ -4,6 +4,14 @@
 
 ### Added
 
+- **`zen` and `go` endpoints are declared by default**, inert until a role
+  names one. They shipped commented out, so a scaffolded project's
+  `/endpoints` listed only `local` with no sign the others were possible.
+- **`/endpoints` reports usage and key presence** — which roles route to each
+  endpoint (primary or fallback) and whether its `api_key_env` variable is set
+  in the current shell. "Not configured" and "configured but nothing routes to
+  it" look identical in a plain listing.
+
 - **`mode = "suggest"`** — a middle setting between `manual` and `auto`. The
   routing rules propose a role and you confirm per turn ([y]es once, [a]lways,
   [N]o), with the role's tool list shown so the consequence of accepting is
@@ -119,6 +127,19 @@
 
 ### Fixed
 
+- **A model API error reported only its status.** `Model API error: 400 Bad
+  Request` discarded the body, which said
+  `deepseek-r1:… does not support tools`. A real session spent three turns
+  hunting for a missing model that was installed and answering fine — it
+  simply could not accept a tools array. The body is now included.
+- **A model that cannot accept tools now works.** The request is retried once
+  without them, announced (never silently — a turn running with fewer tools
+  than the surface declared is exactly what system.md forbids passing
+  unremarked), and remembered so the rejection is paid once per session. The
+  notice names the durable fix.
+- **`/role` in auto mode looked broken.** Switching role and then being routed
+  elsewhere on the next turn gave no hint the two features were interacting;
+  `/role` now says when the mode may still override it.
 - **The scaffolded routing rules and `bash_allow` matched nothing.** In a JS
   template literal `\s` is an invalid escape that collapses to `s` and `\b`
   becomes a backspace, so every regex in the `gnomon init` templates shipped
