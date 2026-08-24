@@ -429,3 +429,39 @@ describe("multi-line arrays", () => {
     expect(r.p).toEqual(["a", "b"]);
   });
 });
+
+describe("routing modes", () => {
+  const fixtureRoot = "../../conformance/fixture_tree";
+  const withMode = (mode: unknown): any => {
+    const c: any = loadConfig(fixtureRoot);
+    c.config = { ...c.config, routing: { mode, default: "implement" } };
+    c.roles = { implement: { model: "m" }, coordinator: { model: "m" } };
+    return c;
+  };
+
+  it("accepts all three modes", () => {
+    expect(resolveRouting(withMode("manual")).mode).toBe("manual");
+    expect(resolveRouting(withMode("suggest")).mode).toBe("suggest");
+    expect(resolveRouting(withMode("auto")).mode).toBe("auto");
+  });
+
+  it("an unknown mode falls back to manual, the least surprising one", () => {
+    expect(resolveRouting(withMode("chaos")).mode).toBe("manual");
+    expect(resolveRouting(withMode(undefined)).mode).toBe("manual");
+  });
+
+  it("routeInput is mode-independent — modes decide what to DO with it", () => {
+    // The rules produce the same answer regardless of mode; only the loop's
+    // response differs (act, ask, or ignore).
+    const rules = [{ role: "coordinator", match: "^spec\\b" }];
+    const mk = (mode: string) => {
+      const c: any = loadConfig(fixtureRoot);
+      c.config = { ...c.config, routing: { mode, default: "implement", rules } };
+      c.roles = { implement: { model: "m" }, coordinator: { model: "m" } };
+      return c;
+    };
+    for (const mode of ["manual", "suggest", "auto"]) {
+      expect(routeInput(mk(mode), "spec the cache").role).toBe("coordinator");
+    }
+  });
+});

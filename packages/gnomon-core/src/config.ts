@@ -35,7 +35,15 @@ export interface Config {
  * asked to choose its own role would not be.
  */
 export interface RoutingConfig {
-  /** manual: the current role answers. auto: rules pick per turn. */
+  /**
+   * manual  — the current role answers; you switch.
+   * suggest — rules propose a role and you confirm, per turn.
+   * auto    — rules pick, and the switch is announced after the fact.
+   *
+   * A trust dial: run `suggest` until the rules stop surprising you, then
+   * `auto`. `suggest` needs someone to ask, so a non-interactive run treats
+   * it as `manual` rather than deciding on your behalf.
+   */
   mode?: RoutingMode;
   /** Role used when no rule matches */
   default?: string;
@@ -50,7 +58,7 @@ export interface RoutingRule {
   why?: string;
 }
 
-export type RoutingMode = "manual" | "auto";
+export type RoutingMode = "manual" | "suggest" | "auto";
 
 /**
  * config.toml [endpoints.<name>] — where inference goes.
@@ -665,10 +673,12 @@ export interface ResolvedRouting {
   rules: RoutingRule[];
 }
 
+const ROUTING_MODES: RoutingMode[] = ["manual", "suggest", "auto"];
+
 export function resolveRouting(config: GnomonConfig): ResolvedRouting {
   const r = config.config.routing ?? {};
   return {
-    mode: r.mode === "auto" ? "auto" : "manual",
+    mode: pickEnum(r.mode, ROUTING_MODES, "manual"),
     default: typeof r.default === "string" ? r.default : "implement",
     rules: Array.isArray(r.rules) ? r.rules : [],
   };

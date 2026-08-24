@@ -4,6 +4,13 @@
 
 ### Added
 
+- **`mode = "suggest"`** — a middle setting between `manual` and `auto`. The
+  routing rules propose a role and you confirm per turn ([y]es once, [a]lways,
+  [N]o), with the role's tool list shown so the consequence of accepting is
+  visible. `a` switches the session role. A non-interactive run treats
+  `suggest` as `manual` and names what it would have proposed, rather than
+  deciding unattended.
+
 - **Session resume.** Conversations are saved after every turn to
   `.gnomon-sessions/`. `gnomon prompt --continue` resumes the most recent,
   `--resume <id>` a specific one, `gnomon sessions` lists them, `/session`
@@ -112,6 +119,16 @@
 
 ### Fixed
 
+- **The scaffolded routing rules and `bash_allow` matched nothing.** In a JS
+  template literal `\s` is an invalid escape that collapses to `s` and `\b`
+  becomes a backspace, so every regex in the `gnomon init` templates shipped
+  with its backslashes stripped. `spec out a caching layer` did not route to
+  the coordinator, and the verifier's command allow-list — the control that
+  makes that role read-only — permitted nothing and would have refused the
+  test commands it exists to allow. Structural tests passed throughout,
+  because a broken pattern is still a string in an array. The tests now assert
+  that the rules route the inputs they claim to and that the allow-list
+  permits `cargo test` while refusing `echo pwned > hack.txt`.
 - **The TypeScript surface hash was a constant.** `collectSurface` expected a
   project root and appended `.gnomon`, while every runtime caller passed the
   already-resolved `.gnomon` directory — so it looked for `.gnomon/.gnomon`,

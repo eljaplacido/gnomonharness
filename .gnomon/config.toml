@@ -27,15 +27,20 @@ url = "http://127.0.0.1:4200/v1/chat/completions"
 kind = "openai"
 
 [routing]
-# manual: your current role answers, and a /role-prefix routes one turn.
-# auto:   the rules below pick the role per turn. An explicit prefix always
-#         wins — being overruled after asking for a role would be worse than
-#         having no auto mode at all.
+# A trust dial:
+#   manual  — your current role answers; a /role-prefix routes one turn.
+#   suggest — the rules propose a role and you confirm ([y]es once, [a]lways,
+#             [N]o). Run this until the rules stop surprising you.
+#   auto    — the rules pick, and say which rule fired.
+#
+# An explicit prefix always wins in every mode — being overruled after asking
+# for a role would be worse than having no routing at all. `suggest` needs
+# someone to ask, so a non-interactive run treats it as manual.
 #
 # Rules live here, not in the model's judgement: the same input must pick the
 # same role on every machine, which a model choosing its own role would not.
 # First match wins, so order is priority.
-mode = "manual"
+mode = "manual"                   # manual | suggest | auto
 default = "implement"
 
 [[routing.rules]]

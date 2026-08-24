@@ -60,40 +60,45 @@ kind = "ollama"
 # kind = "openai"
 
 [routing]
-# manual: your current role answers, and a /role-prefix routes one turn.
-# auto:   the rules below pick the role per turn. An explicit prefix always
-#         wins — being overruled after asking for a role would be worse than
-#         having no auto mode at all.
+# A trust dial:
+#   manual  — your current role answers; a /role-prefix routes one turn.
+#   suggest — the rules propose a role and you confirm ([y]es once, [a]lways,
+#             [N]o). Run this until the rules stop surprising you.
+#   auto    — the rules pick, and say which rule fired.
+#
+# An explicit prefix always wins in every mode — being overruled after asking
+# for a role would be worse than having no routing at all. 'suggest' needs
+# someone to ask, so a non-interactive run treats it as manual.
 #
 # Rules live here, not in the model's judgement: the same input must pick the
 # same role on every machine, which a model choosing its own role would not.
 # First match wins, so order is priority.
-mode = "manual"
+mode = "manual"                   # manual | suggest | auto
 default = "implement"
 
 [[routing.rules]]
 role = "coordinator"
-match = '^\s*(spec|specify|design|plan|contract|scope|propose)\b'
+match = '^\\s*(spec|specify|design|plan|contract|scope|propose)\\b'
 why = "intent and contracts"
 
 [[routing.rules]]
 role = "verifier"
-match = '^\s*(verify|check|validate|run the tests?|run tests?|does it pass)\b'
+match = '^\\s*(verify|check|validate|run the tests?|run tests?|does it pass)\\b'
 why = "runs the suite, cannot write"
 
 [[routing.rules]]
 role = "implementor"
-match = '^\s*(implement|build|fix|add|refactor|rename|migrate|write the)\b'
+match = '^\\s*(implement|build|fix|add|refactor|rename|migrate|write the)\\b'
 why = "tests first, then code"
 
 [[routing.rules]]
 role = "critique"
-match = '^\s*(review|critique|audit|what.s wrong)\b'
+match = '^\\s*(review|critique|audit|what.s wrong)\\b'
 why = "separate context from the implementer"
 
 [[routing.rules]]
 role = "smol"
-match = '^\s*(summari[sz]e|commit message|tl;?dr)\b'
+match = '^\\s*(summari[sz]e|commit message|tl;?dr)\\b'
 why = "cheap, high volume"
 
 [audit]
@@ -183,8 +188,8 @@ tools = ["read", "bash"]
 # read-only. This list is what actually constrains it: the suite can be run,
 # nothing else. Remove it and the verifier can alter what it judges.
 bash_allow = [
-  '^(cargo|pnpm|npm|yarn|pytest|python -m pytest|go|make)\s',
-  '^(ls|cat|head|tail|grep|rg|find|git (status|diff|log|show))\s',
+  '^(cargo|pnpm|npm|yarn|pytest|python -m pytest|go|make)\\s',
+  '^(ls|cat|head|tail|grep|rg|find|git (status|diff|log|show))\\s',
 ]
 description = "Runs the suite and reports. Cannot write."
 

@@ -447,7 +447,7 @@ function printBanner(): void {
   console.log("");
   console.log("/help for commands · /meta and /think to change what you see");
   console.log("/context for the window · /role <name> to switch role");
-  console.log("Esc cancels the turn in progress.  /mode auto lets the harness route.");
+  console.log("Esc cancels the turn.  /mode suggest|auto lets the harness route.");
   console.log("Type /quit or Ctrl+C to exit.");
   console.log("");
 }
@@ -868,9 +868,13 @@ export async function runTask(
   options: RunTaskOptions = {}
 ): Promise<TaskRecord> {
   const routing = resolveRouting(config);
+  // suggest needs someone to ask, and a task run has nobody. It falls back to
+  // the declared default rather than silently promoting itself to auto.
   const role =
     options.role ??
-    (routing.mode === "auto" ? routeInput(config, input, routing).role : routing.default);
+    (routing.mode === "auto"
+      ? routeInput(config, input, routing).role
+      : routing.default);
 
   const state: PromptState = { config, exchanges: [], currentRole: role };
   const ui: ResolvedUi = { ...resolveUi(config), spinner: false, color: false };
@@ -977,7 +981,7 @@ export interface CommandSpec {
 export const COMMANDS: CommandSpec[] = [
   { name: "/roles", help: "List roles and models (marks the current one)" },
   { name: "/role", arg: "<name>", help: "Switch role for the rest of the session" },
-  { name: "/mode", arg: "[manual|auto]", help: "Who picks the role: you, or the surface's routing rules" },
+  { name: "/mode", arg: "[manual|suggest|auto]", help: "Who picks the role: you, the rules with your confirmation, or the rules" },
   { name: "/skills", help: "Active skills and pending proposals" },
   { name: "/session", help: "This session's id and where it is saved" },
   { name: "/endpoints", help: "List declared inference endpoints" },
@@ -1013,7 +1017,10 @@ export function completeInput(
   const modeArg = line.match(/^\/mode\s+(\S*)$/);
   if (modeArg) {
     const partial = modeArg[1];
-    return [["manual", "auto"].filter((m) => m.startsWith(partial)), partial];
+    return [
+      ["manual", "suggest", "auto"].filter((m) => m.startsWith(partial)),
+      partial,
+    ];
   }
 
   const thinkArg = line.match(/^\/think\s+(\S*)$/);
@@ -1132,8 +1139,10 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       const wanted = (parts[1] ?? "").trim();
       if (!wanted) {
         console.log(`\nMode: ${routing.mode}`);
-        console.log("  manual — the current role answers; a prefix routes one turn");
-        console.log("  auto   — [routing] rules in config.toml pick the role per turn");
+        console.log("  manual  — the current role answers; a prefix routes one turn");
+        console.log("  suggest — the rules propose a role and you confirm, per turn");
+        console.log("  auto    — the rules pick, and say what they picked");
+        console.log("\n  A trust dial: run suggest until the rules stop surprising you.");
         if (routing.rules.length > 0) {
           console.log("\nRules, in priority order:");
           for (const rule of routing.rules) {
@@ -1146,8 +1155,8 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         }
         return true;
       }
-      if (wanted !== "manual" && wanted !== "auto") {
-        console.log(`\nUnknown mode: "${wanted}". Use: manual | auto`);
+      if (wanted !== "manual" && wanted !== "suggest" && wanted !== "auto") {
+        console.log(`\nUnknown mode: "${wanted}". Use: manual | suggest | auto`);
         return true;
       }
       routing.mode = wanted as RoutingMode;
@@ -1481,6 +1490,52 @@ export async function runPromptLoop(
     process.exit(0);
   });
 
+  /**
+   * Ask whether to take a suggested role.
+   *
+   * Declining is the cheap answer, so `n` is the default: a nudge you ignore
+   * should cost one keystroke. "always" switches the session role, which is
+   * how `suggest` becomes `auto` for the rules you have come to trust.
+   */
+  const suggestRole = async (
+    from: string,
+    to: string,
+    why: string
+  ): Promise<"once" | "always" | "no"> => {
+    const ui = uiOf(state);
+    console.log("");
+    console.log(
+      paint(ui, "cyan", `  ⇢ suggest: ${from} → ${to}`) +
+        paint(ui, "gray", `  (${why})`)
+    );
+    const toolNames = buildToolSet(config, to)
+      .schemas.map((t) => t.function.name)
+      .join(", ");
+    console.log(paint(ui, "gray", `    ${to} can use: ${toolNames || "(no tools)"}`));
+    console.log(
+      paint(ui, "yellow", `  └ [y]es once · [a]lways · [N]o  (Enter keeps ${from})`)
+    );
+
+    // Typed-ahead lines were meant as messages, not as an answer to a
+    // question that had not appeared yet.
+    const held = lineQueue.splice(0, lineQueue.length);
+    rl.setPrompt("role> ");
+    rl.prompt();
+    const answer = ((await readLine()) ?? "").trim().toLowerCase();
+    lineQueue.unshift(...held);
+
+    if (/^(a|always)$/.test(answer)) {
+      console.log(paint(ui, "green", `  switched to ${to} for the session`));
+      return "always";
+    }
+    if (/^(y|yes)$/.test(answer)) {
+      console.log(paint(ui, "green", `  ${to} for this turn`));
+      return "once";
+    }
+    console.log(paint(ui, "gray", `  staying on ${from}`));
+    return "no";
+  };
+
   // Approval gate. Reads from the same queue the loop uses, so a decision
   // typed while a tool is pending is picked up in order.
   const approve = async (req: ApprovalRequest): Promise<boolean> => {
@@ -1763,29 +1818,54 @@ export async function runPromptLoop(
       const uiEarly = uiOf(state);
       const routing = routingOf(state);
 
-      // In auto mode the surface's rules choose. An explicit prefix always
-      // wins: asking for a role and being overruled would be worse than not
-      // having auto at all.
-      if (routing.mode === "auto" && !prefixed) {
+      // The surface's rules choose in auto, propose in suggest. An explicit
+      // prefix always wins in either: asking for a role and being overruled
+      // would be worse than not having the mode at all.
+      if (routing.mode !== "manual" && !prefixed) {
         const decision = routeInput(config, cleanedInput, routing);
         if (decision.problem) {
           console.log(
             paint(uiEarly, "yellow", `  [routing] ${decision.problem}`)
           );
         }
+
+        const why = decision.rule
+          ? decision.rule.why ?? decision.rule.match
+          : "no rule matched — the default";
+
         if (decision.role !== role) {
-          console.log(
-            paint(uiEarly, "cyan", `  ⇢ auto: ${role} → ${decision.role}`) +
-              paint(
-                uiEarly,
-                "gray",
-                decision.rule
-                  ? `  (${decision.rule.why ?? decision.rule.match})`
-                  : "  (default)"
-              )
-          );
+          if (routing.mode === "auto") {
+            console.log(
+              paint(uiEarly, "cyan", `  ⇢ auto: ${role} → ${decision.role}`) +
+                paint(uiEarly, "gray", `  (${why})`)
+            );
+            role = decision.role;
+          } else {
+            // suggest: ask. A non-TTY has nobody to ask, so it keeps the
+            // current role and says what it would have proposed — a scripted
+            // run must not depend on an answer nobody can give.
+            if (!process.stdin.isTTY) {
+              console.log(
+                paint(
+                  uiEarly,
+                  "gray",
+                  `  ⇢ would suggest ${decision.role} (${why}) — not interactive, staying on ${role}`
+                )
+              );
+            } else {
+              const accepted = await suggestRole(role, decision.role, why);
+              if (accepted === "once") {
+                role = decision.role;
+              } else if (accepted === "always") {
+                role = decision.role;
+                state.currentRole = decision.role;
+                console.log(
+                  paint(uiEarly, "gray", `  session role is now ${decision.role}`)
+                );
+              }
+            }
+          }
         }
-        role = decision.role;
       }
 
       const route = routeRole(config, role);

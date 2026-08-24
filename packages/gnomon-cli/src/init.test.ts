@@ -5,6 +5,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { loadConfig, routeInput } from "gnomon-core";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initSurface } from "./init.js";
 
@@ -14,6 +18,89 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "gnomon-init-"));
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+describe("template hygiene", () => {
+  it("the embedded templates contain no unescaped backticks", () => {
+    // The templates live in JS template literals, so a markdown-style
+    // `word` closes the literal and breaks the build. This has happened
+    // three times; a test is cheaper than noticing it again.
+    const src = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "init.ts"),
+      "utf-8"
+    );
+    // Strip escaped backticks, then look inside each template literal.
+    const literals = src.replace(/\\`/g, "").match(/= `[\s\S]*?\n`;/g) ?? [];
+    expect(literals.length).toBeGreaterThan(0);
+    for (const literal of literals) {
+      const body = literal.slice(3, -2);
+      expect(body).not.toContain("`");
+    }
+  });
+
+  it("the scaffolded routing rules match the inputs they claim to", () => {
+    // Not "is it an array" — does it actually route. In a JS template literal
+    // `\s` is an invalid escape that collapses to `s` and `\b` becomes a
+    // backspace, so these patterns shipped broken and matched nothing while
+    // every structural assertion passed.
+    const root = mkdtempSync(join(tmpdir(), "gnomon-rules-"));
+    try {
+      initSurface({ dir: root });
+      const config = loadConfig(root);
+
+      const cases: Array<[string, string]> = [
+        ["spec out a caching layer", "coordinator"],
+        ["verify the build", "verifier"],
+        ["implement the parser", "implementor"],
+        ["review this module", "critique"],
+        ["summarise the changes", "smol"],
+        ["what colour is the bikeshed", "implement"], // no rule → default
+      ];
+      for (const [input, expected] of cases) {
+        expect(routeInput(config, input).role).toBe(expected);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the scaffolded verifier's bash_allow permits tests and refuses writes", () => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-allow-"));
+    try {
+      initSurface({ dir: root });
+      const allow = loadConfig(root).roles.verifier?.bash_allow ?? [];
+      expect(allow.length).toBeGreaterThan(0);
+
+      const permits = (cmd: string) =>
+        allow.some((p) => new RegExp(p).test(cmd));
+
+      expect(permits("cargo test --all")).toBe(true);
+      expect(permits("pnpm test")).toBe(true);
+      expect(permits("git status --short")).toBe(true);
+      // The whole point of the list.
+      expect(permits("echo pwned > hack.txt")).toBe(false);
+      expect(permits("rm -rf /")).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("every template parses as the TOML the surface expects", () => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-tpl-"));
+    try {
+      initSurface({ dir: root });
+      const cfg = loadConfig(root);
+      // Values that must survive parsing, not just files that must exist.
+      expect(cfg.config.defaults?.approval).toBe("on_write");
+      expect(cfg.config.routing?.mode).toBe("manual");
+      expect(Array.isArray(cfg.config.ui?.meta)).toBe(true);
+      expect(cfg.roles.verifier?.tools).toEqual(["read", "bash"]);
+      expect(Array.isArray(cfg.roles.verifier?.bash_allow)).toBe(true);
+      expect(cfg.tools.tools?.map((t) => t.name)).toContain("skill");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("initSurface", () => {
   it("writes a complete surface", () => {

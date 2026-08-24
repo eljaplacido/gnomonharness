@@ -262,13 +262,36 @@ match = '^\s*(spec|specify|design|plan|contract)\b'
 why = "intent and contracts"
 ```
 
-In **manual** mode your current role answers, and a `/plan …` prefix routes one
-turn. In **auto** mode these rules pick the role per turn, and the switch is
-announced with the reason:
+`mode` is a trust dial:
+
+| Mode | Who decides |
+|---|---|
+| `manual` | You. Your current role answers; a `/plan …` prefix routes one turn. |
+| `suggest` | The rules propose, you confirm — per turn. |
+| `auto` | The rules pick, and say which rule fired. |
+
+**`suggest`** is the one to start on. It shows what it would do, what that role
+could reach, and waits:
+
+```
+  ⇢ suggest: implement → coordinator  (intent and contracts)
+    coordinator can use: read, write, skill
+  └ [y]es once · [a]lways · [N]o  (Enter keeps implement)
+```
+
+`a` switches the session role — which is how `suggest` becomes `auto` for the
+rules you have come to trust. Declining is one keystroke, because a nudge you
+ignore should be cheap.
+
+**`auto`** acts and reports:
 
 ```
   ⇢ auto: implement → coordinator  (intent and contracts)
 ```
+
+`suggest` needs someone to ask, so a non-interactive run (a pipe, `gnomon
+task`) treats it as `manual` and names what it would have proposed rather than
+deciding unattended.
 
 An explicit prefix always wins over auto — asking for a role and being
 overruled would be worse than having no auto mode at all.
