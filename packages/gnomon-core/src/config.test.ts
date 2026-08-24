@@ -405,3 +405,27 @@ describe("literal TOML strings", () => {
     expect(r.match).toBe("abc");
   });
 });
+
+describe("multi-line arrays", () => {
+  it("an array spanning lines parses as a list, not the string '['", () => {
+    // Unjoined, `key = [` parsed as "[" and silently emptied every
+    // multi-line list in the surface — including a bash allow-list.
+    const r = parseToml(`bash_allow = [\n  '^cargo\\\\s',\n  '^pnpm\\\\s',\n]`);
+    expect(r.bash_allow).toEqual(["^cargo\\\\s", "^pnpm\\\\s"]);
+  });
+
+  it("a comma inside a quoted pattern does not split the item", () => {
+    const r = parseToml(`p = ['^(a|b),\\\\s', '^c']`);
+    expect(r.p).toEqual(["^(a|b),\\\\s", "^c"]);
+  });
+
+  it("a trailing comma does not produce an empty item", () => {
+    const r = parseToml(`p = ["a", "b",]`);
+    expect(r.p).toEqual(["a", "b"]);
+  });
+
+  it("comments inside a multi-line array are stripped", () => {
+    const r = parseToml(`p = [\n  "a",   # first\n  "b",\n]`);
+    expect(r.p).toEqual(["a", "b"]);
+  });
+});

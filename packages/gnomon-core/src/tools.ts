@@ -296,6 +296,11 @@ export function diffStat(lines: string[]): { added: number; removed: number } {
 export interface ToolContext {
   /** Needed by `skill`, which writes inside .gnomon/ */
   config?: GnomonConfig;
+  /**
+   * Shell commands the current role may run. Empty/undefined means any.
+   * See RoleDef.bash_allow: without this, granting `bash` grants writing.
+   */
+  bashAllow?: string[];
   root: string;
   sandbox: SandboxLevel;
   gate: ApprovalGate;
@@ -393,6 +398,29 @@ async function bashTool(
   const command = String(args.command ?? "");
   if (!command.trim()) {
     return { code: TOOL_FAILED, content: "Empty command.", summary: "bash — empty" };
+  }
+
+  // A role may narrow bash to specific commands. Without this, `tools` alone
+  // cannot make a role read-only: bash writes.
+  if (ctx.bashAllow && ctx.bashAllow.length > 0) {
+    const permitted = ctx.bashAllow.some((pattern) => {
+      try {
+        return new RegExp(pattern).test(command.trim());
+      } catch {
+        // A pattern that will not compile must not widen the allow-list.
+        return false;
+      }
+    });
+    if (!permitted) {
+      return {
+        code: TOOL_DENIED,
+        content:
+          `Refused: this role may only run commands matching ` +
+          `${ctx.bashAllow.map((p) => `/${p}/`).join(", ")}. ` +
+          `"${command.trim().slice(0, 80)}" does not.`,
+        summary: `bash — not permitted for this role`,
+      };
+    }
   }
 
   if (needsApproval("bash", ctx.gate)) {

@@ -17,3 +17,4 @@ export * from "./prompt_loop.js";
 export * from "./render.js";
 export * from "./tools.js";
 export * from "./skills.js";
+export * from "./audit.js";

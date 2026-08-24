@@ -150,6 +150,28 @@ resolve against what came before.
 | `policy = "summary"` | Not implemented in this build. Named at runtime, never silently substituted. |
 | `compaction = "discard"` | Turns that don't fit are dropped, and the drop is stated in-band. |
 | `compaction = "truncate"` | Turns that don't fit are replaced by a list of their prompts. |
+| `compaction = "summary"` | Turns that don't fit are folded into a running summary by the `summary_role` (default `smol`), which replaces them in the prompt. |
+
+**Auto-compression.** Under `compaction = "summary"`, compaction runs *after* a
+turn completes — so the cost lands between turns, not inside one — and reports
+what it reclaimed:
+
+```
+[context] compacting 2 turn(s) via smol…
+[context] folded 2 turn(s), reclaimed ~425 tok
+```
+
+A deliberate trade-off: `discard` and `truncate` are bit-reproducible, because
+they only ever drop text. `summary` is not — it asks a model what mattered. The
+surface still determines *that* summarisation happens and *which role* does it,
+but two runs can summarise differently. That is why `discard` remains the
+default.
+
+It is also lossy in proportion to how hard you squeeze. Folding a session into
+a 340-token window with a 7B summariser preserved the decisions ("avoid
+async-std, use tokio") and lost a detail (the project's name). At a realistic
+`max_context_tokens` this is not the regime you are in, but the direction of
+the failure is worth knowing: **decisions survive, specifics erode.**
 
 History is in-memory for the session only — nothing is written to disk, so the
 surface stays the single source of behaviour. Two rules it keeps:
@@ -297,6 +319,72 @@ gnomon skill reject cargo-suite
 Accepting changes the surface hash on purpose and applies from the next
 session. Learning stays reviewable, and the hash stays honest. `/skills` shows
 both lists.
+
+#### `[audit]` — Traceability and Governance
+
+Off by default. When a surface asks for it, every turn, tool call and approval
+decision is appended to a hash-chained JSONL trail.
+
+```toml
+[audit]
+enabled = false
+dir = ".gnomon-audit"      # outside .gnomon/ — see below
+record = "metadata"        # metadata | full
+redact = ['(api[_-]?key|token|secret|password)\s*[:=]\s*\S+']
+chain = true
+```
+
+What it provides — primitives, not a compliance claim:
+
+| Need | How |
+|---|---|
+| Append-only record | JSONL, one record per turn / tool call / approval |
+| Tamper evidence | Each record carries `sha256` of itself and the previous; `gnomon audit verify` re-hashes and reports the first broken sequence |
+| Attribution to a configuration | Every record carries the `surface_hash` that determined the behaviour |
+| Human-oversight evidence | Approval decisions are recorded with who decided. A non-interactive run records `by: "flag:--yes"` or `"default:no-operator"` — never implying oversight that did not happen |
+| Data minimisation | `record = "metadata"` writes decisions and outcomes but **no prompt or response text** |
+| Redaction | Patterns scrubbed from any recorded text |
+
+**Whether a deployment satisfies any particular regulation depends on the
+deployment.** This is the evidence layer such regimes need, not a certificate.
+
+Two things that are load-bearing:
+
+- **The trail lives outside `.gnomon/`.** The surface is content-hashed; a log
+  written inside it would change the surface hash on every turn and make drift
+  detection meaningless.
+- **A redaction pattern that will not compile fails *open*** — the text it was
+  meant to scrub gets written instead. gnomon validates patterns at startup and
+  warns loudly, and warns harder when `record = "full"`. Note that JavaScript
+  regular expressions reject inline `(?i)`; matching is already
+  case-insensitive.
+
+```bash
+gnomon audit show      # trails
+gnomon audit verify    # exit 1 if any chain is broken
+```
+
+#### `bash_allow` — Why `tools` Alone Is Not Enough
+
+**`bash` can write anything.** A role holding it is not read-only however its
+`tools` list reads — an end-to-end audit of this harness found a `verifier`
+with `tools = ["read", "bash"]` creating a file through `bash` on its first
+attempt.
+
+`bash_allow` is what actually constrains it:
+
+```toml
+[roles.verifier]
+tools = ["read", "bash"]
+bash_allow = [
+  '^(cargo|pnpm|npm|yarn|pytest|go|make)\s',
+  '^(ls|cat|head|tail|grep|rg|find|git (status|diff|log|show))\s',
+]
+```
+
+A command matching none of these is refused by name. Absent the list, any
+command runs — which is the honest default, and the reason the starter
+`verifier` ships with one.
 
 #### `policy.toml` — Security & Approval Gates
 
@@ -591,6 +679,7 @@ binaries must be built first (`cargo build`) for native commands to work.
 | `/mode [manual\|auto]` | Who picks the role: you, or the surface's routing rules |
 | `/skills` | Active skills and pending proposals |
 | `/tools` | Tools the current role may call, and what is withheld |
+| `/context` | Window, folded turns, summary size |
 | `/endpoints` | Declared inference endpoints |
 | `/manifest` | Manifest command |
 | `/clear` | Clear the screen (history is kept) |

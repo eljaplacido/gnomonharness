@@ -227,11 +227,70 @@ describe("gnomon-core prompt_loop", () => {
       expect(marker!.content).toContain("PROMPT");
     });
 
-    it("unimplemented policy=summary is named, never silently substituted", () => {
-      const state = mkState([{ input: "a", output: "b" }], { policy: "summary" });
+    it("a running summary is replayed in place of folded turns", () => {
+      const state = mkState([
+        { input: "old ask", output: "old answer", folded: true },
+        { input: "recent", output: "recent answer" },
+      ]);
+      state.summary = "Earlier: the user asked about X; we chose Y.";
+
       const built = promptLoop.buildMessages(state, "SYS", "next");
-      expect(built.notice).toMatch(/summary/);
-      expect(built.notice).toMatch(/not implemented/);
+      const body = built.messages.map((m) => m.content).join("\n");
+
+      expect(body).toContain("we chose Y");
+      expect(body).not.toContain("old answer");
+      expect(body).toContain("recent answer");
+      expect(built.included).toBe(1);
+    });
+
+    it("the summary counts against the budget", () => {
+      const withSummary = mkState([], {}, { max_context_tokens: 1000 });
+      withSummary.summary = "x".repeat(400);
+      const without = mkState([], {}, { max_context_tokens: 1000 });
+
+      expect(promptLoop.buildMessages(withSummary, "", "next").budget).toBeLessThan(
+        promptLoop.buildMessages(without, "", "next").budget
+      );
+    });
+
+    it("evicted turns are handed back so a compactor can fold them", () => {
+      const state = mkState(
+        Array.from({ length: 6 }, (_, i) => ({
+          input: `IN${i}`.padEnd(100, "."),
+          output: `OUT${i}`.padEnd(100, "."),
+        })),
+        { policy: "sliding_window", retain_after: 50 },
+        { max_context_tokens: 160, compaction: "summary" }
+      );
+      const built = promptLoop.buildMessages(state, "", "next");
+      expect(built.evicted.length).toBe(built.dropped);
+      expect(built.dropped).toBeGreaterThan(0);
+      expect(built.messages.map((m) => m.content).join("\n")).toContain(
+        "folded into the summary"
+      );
+    });
+
+    it("compaction does nothing when the surface does not ask for it", async () => {
+      const state = mkState([{ input: "a", output: "b" }], {}, { compaction: "discard" });
+      const r = await promptLoop.compactSession(state, "SYS");
+      expect(r.folded).toBe(0);
+      expect(state.summary).toBeUndefined();
+    });
+
+    it("a missing summary_role is reported rather than losing turns silently", async () => {
+      const state = mkState(
+        Array.from({ length: 6 }, (_, i) => ({
+          input: `IN${i}`.padEnd(100, "."),
+          output: `OUT${i}`.padEnd(100, "."),
+        })),
+        { policy: "sliding_window", retain_after: 50, summary_role: "nonexistent" },
+        { max_context_tokens: 160, compaction: "summary" }
+      );
+      const r = await promptLoop.compactSession(state, "");
+      expect(r.folded).toBe(0);
+      expect(r.problem).toMatch(/not defined in roles.toml/);
+      // Nothing was marked folded, so the turns are retried, not lost.
+      expect(state.exchanges.every((e) => !e.folded)).toBe(true);
     });
 
     it("same surface + same history produces the same messages", () => {

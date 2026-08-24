@@ -96,6 +96,36 @@ role = "smol"
 match = '^\s*(summari[sz]e|commit message|tl;?dr)\b'
 why = "cheap, high volume"
 
+[audit]
+# Off by default: nothing is recorded unless a surface asks for it.
+#
+# When enabled, every turn, tool call and approval decision is appended to a
+# hash-chained JSONL trail. That gives the primitives a traceability regime
+# needs — an append-only record, tamper-evidence, the surface hash that
+# determined the behaviour, and recorded human oversight decisions.
+#
+# It is not a compliance claim. Whether a deployment satisfies any particular
+# regulation depends on the deployment.
+enabled = false
+
+# Outside .gnomon/ on purpose: the surface is content-hashed, so a log written
+# inside it would change the surface hash on every turn.
+dir = ".gnomon-audit"
+
+# metadata: decisions, outcomes and identifiers only — no prompt or response
+#           text is written, so a trail can be kept where the content cannot.
+# full:     text as well, after 'redact' is applied.
+record = "metadata"
+
+# Patterns scrubbed from any recorded text. Matching is always
+# case-insensitive, so do not write an inline (?i) — JavaScript regular
+# expressions reject it, and a pattern that will not compile fails OPEN.
+# gnomon warns at startup about any that do not compile.
+redact = ['(api[_-]?key|token|secret|password)\s*[:=]\s*\S+']
+
+# Chain each record to the previous by hash, so alteration is detectable.
+chain = true
+
 [ui]
 # What the terminal shows. Declared here so every checkout renders the same.
 # Runtime /meta and /think override these for the session only.
@@ -149,6 +179,13 @@ max_steps = 12
 # No write, no edit. A verifier that can edit can make a failing suite pass
 # by changing the suite, so the capability is simply absent.
 tools = ["read", "bash"]
+# 'bash' can write anything, so 'tools' alone cannot make this role
+# read-only. This list is what actually constrains it: the suite can be run,
+# nothing else. Remove it and the verifier can alter what it judges.
+bash_allow = [
+  '^(cargo|pnpm|npm|yarn|pytest|python -m pytest|go|make)\s',
+  '^(ls|cat|head|tail|grep|rg|find|git (status|diff|log|show))\s',
+]
 description = "Runs the suite and reports. Cannot write."
 
 # ── General-purpose roles ──────────────────────────────────────────────────

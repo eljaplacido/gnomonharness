@@ -17,6 +17,7 @@ import {
   listRoles,
   listProfiles,
   resolveContext,
+  Compaction,
   resolveUi,
   resolveEndpoint,
   resolveRouting,
@@ -44,6 +45,7 @@ import {
 } from "./tools.js";
 import { mapBucket } from "./session.js";
 import { loadSkills, loadProposedSkills, selectSkills, applySkills } from "./skills.js";
+import { AuditTrail, resolveAudit } from "./audit.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -69,6 +71,8 @@ export interface PromptExchange {
   tool_steps?: number;
   /** One line per tool call, for the transcript */
   tool_log?: string[];
+  /** Folded into the running summary; no longer replayed verbatim */
+  folded?: boolean;
 }
 
 /** State for the interactive prompt loop */
@@ -80,6 +84,11 @@ export interface PromptState {
   ui?: ResolvedUi;
   /** Resolved `[routing]`; /mode edits this copy for the session only */
   routing?: ResolvedRouting;
+  /**
+   * Running summary of turns evicted from the window under
+   * `compaction = "summary"`. Replaces them in the prompt.
+   */
+  summary?: string;
 }
 
 /** The session's UI settings, resolving from the surface on first use. */
@@ -123,6 +132,8 @@ export interface BuiltContext {
   included: number;
   /** Prior turns the window could not fit */
   dropped: number;
+  /** Those turns themselves, so a compactor can fold them */
+  evicted: PromptExchange[];
   /** Estimated prompt tokens */
   tokens: number;
   /** Tokens available for history after system prompt + current input */
@@ -181,21 +192,31 @@ export function buildMessages(
     messages.push({ role: "system", content: systemPrompt });
   }
 
-  const usable = state.exchanges.filter((e) => e.code === 0);
+  // Folded turns live in the summary now; replaying them too would pay for
+  // the same content twice.
+  const usable = state.exchanges.filter((e) => e.code === 0 && !e.folded);
+
+  if (state.summary) {
+    messages.push({
+      role: "system",
+      content:
+        `[gnomon context] Summary of earlier turns in this session, folded ` +
+        `because they no longer fit the window:\n\n${state.summary}`,
+    });
+  }
   const budget = Math.max(
     0,
     ctx.max_context_tokens -
       estimateTokens(systemPrompt) -
-      estimateTokens(input)
+      estimateTokens(input) -
+      estimateTokens(state.summary ?? "")
   );
 
-  // "summary" would need a second inference per turn through the smol role.
-  // Not built. Name it rather than quietly substituting something else.
-  if (ctx.policy === "summary") {
-    notice =
-      'context.policy = "summary" is not implemented in this build — ' +
-      "using sliding_window.";
-  }
+  // policy = "summary" windows exactly like sliding_window; what differs is
+  // what happens to the evicted turns, which is compaction's job. Setting
+  // policy = "summary" implies compaction = "summary".
+  const compaction: Compaction =
+    ctx.policy === "summary" ? "summary" : ctx.compaction;
 
   let head: PromptExchange[] = [];
   let tail: PromptExchange[] = [];
@@ -236,29 +257,25 @@ export function buildMessages(
   head.forEach(replay);
 
   if (dropped.length > 0) {
-    const compaction =
-      ctx.compaction === "summary" ? "discard" : ctx.compaction;
-    if (ctx.compaction === "summary" && !notice) {
-      notice =
-        'defaults.compaction = "summary" is not implemented in this build — ' +
-        "using discard.";
-    }
-    messages.push({
-      role: "system",
-      content:
-        compaction === "truncate"
-          ? `[gnomon context] ${dropped.length} earlier turn(s) compacted to ` +
-            `their prompts (compaction=truncate):\n` +
-            dropped
-              .map(
-                (e) =>
-                  `- turn ${e.turn} (${e.role}): ` +
-                  `${e.input.slice(0, 120).replace(/\s+/g, " ")}`
-              )
-              .join("\n")
+    // Under compaction = "summary" these are about to be folded by
+    // compactSession(); say they are pending rather than lost.
+    const explain =
+      compaction === "truncate"
+        ? `[gnomon context] ${dropped.length} earlier turn(s) compacted to ` +
+          `their prompts (compaction=truncate):\n` +
+          dropped
+            .map(
+              (e) =>
+                `- turn ${e.turn} (${e.role}): ` +
+                `${e.input.slice(0, 120).replace(/\s+/g, " ")}`
+            )
+            .join("\n")
+        : compaction === "summary"
+          ? `[gnomon context] ${dropped.length} earlier turn(s) are being ` +
+            `folded into the summary above.`
           : `[gnomon context] ${dropped.length} earlier turn(s) dropped to fit ` +
-            `the window (policy=${ctx.policy}, compaction=discard).`,
-    });
+            `the window (policy=${ctx.policy}, compaction=discard).`;
+    messages.push({ role: "system", content: explain });
   }
 
   tail.forEach(replay);
@@ -266,6 +283,7 @@ export function buildMessages(
 
   return {
     messages,
+    evicted: dropped,
     included: head.length + tail.length,
     dropped: dropped.length,
     tokens: messages.reduce((n, m) => n + estimateTokens(m.content), 0),
@@ -440,6 +458,8 @@ export interface TurnDeps {
   say: (line: string) => void;
   /** Aborted when the user presses Esc (or Ctrl+C) mid-turn */
   signal?: AbortSignal;
+  /** Append-only trail; a disabled one is a no-op */
+  audit?: AuditTrail;
 }
 
 /** Result of one agentic turn, before it becomes a PromptExchange. */
@@ -492,6 +512,7 @@ export async function runAgenticTurn(
 
   const ctx: ToolContext = {
     config,
+    bashAllow: config.roles[role]?.bash_allow,
     root: resolve(config.gnomonDir, ".."),
     sandbox,
     gate,
@@ -593,6 +614,19 @@ export async function runAgenticTurn(
       code = worse(code, outcome.code);
       toolLog.push(outcome.summary);
 
+      deps.audit?.write("tool_call", {
+        role,
+        tool: call.name,
+        // The target is metadata; the content it carries is not.
+        target: describeCall(call),
+        gated,
+        code: outcome.code,
+        bucket: mapBucket(outcome.code),
+        summary: outcome.summary,
+        args: deps.audit.text(JSON.stringify(call.args)),
+        result: deps.audit.text(outcome.content),
+      });
+
       const bucket = mapBucket(outcome.code);
       deps.say(
         paint(
@@ -634,6 +668,120 @@ function toolTimeoutMs(config: GnomonConfig): number {
   const declared = (config.tools.tools ?? []).find((t) => t.name === "bash");
   const secs = declared?.timeout_seconds;
   return typeof secs === "number" && secs > 0 ? secs * 1000 : 120_000;
+}
+
+// ---------------------------------------------------------------------------
+// Compaction
+// ---------------------------------------------------------------------------
+
+/** What one compaction pass did. */
+export interface CompactionResult {
+  /** Turns folded into the summary by this pass */
+  folded: number;
+  /** Estimated tokens the fold reclaimed */
+  reclaimed: number;
+  /** Set when compaction was needed but could not run */
+  problem?: string;
+}
+
+const SUMMARY_INSTRUCTION =
+  "You are compacting a coding session's history. Rewrite the material below " +
+  "as a compact factual record for an agent that will continue this work.\n\n" +
+  "Keep: decisions made, files touched, commands run and their outcomes, " +
+  "constraints the user stated, and anything still unresolved.\n" +
+  "Drop: pleasantries, restated questions, and reasoning that led nowhere.\n\n" +
+  "Write plain prose or terse bullets. Do not address the user. Do not offer " +
+  "to help. Output only the record.";
+
+/**
+ * Fold turns that no longer fit the window into a running summary.
+ *
+ * Called after a turn completes, not while building a prompt: summarising
+ * needs an inference call, and keeping buildMessages synchronous and pure
+ * keeps the windowing logic testable without a model.
+ *
+ * A deliberate trade-off: `discard` and `truncate` are bit-reproducible,
+ * because they only ever drop text. `summary` is not — it asks a model what
+ * mattered. The surface still determines that summarisation happens and which
+ * role does it, but two runs can summarise differently. That is the price of
+ * keeping long sessions coherent, and it is why `discard` remains the default.
+ */
+export async function compactSession(
+  state: PromptState,
+  systemPrompt: string,
+  onNote?: (line: string) => void
+): Promise<CompactionResult> {
+  const ctx = resolveContext(state.config);
+  const wants = ctx.compaction === "summary" || ctx.policy === "summary";
+  if (!wants) return { folded: 0, reclaimed: 0 };
+
+  // Build against an empty next input to see what the window sheds.
+  const probe = buildMessages(state, systemPrompt, "");
+  const pending = probe.evicted.filter((e) => !e.folded);
+  if (pending.length === 0) return { folded: 0, reclaimed: 0 };
+
+  const role = ctx.summary_role;
+  if (!state.config.roles[role]) {
+    return {
+      folded: 0,
+      reclaimed: 0,
+      problem:
+        `context.summary_role = "${role}" is not defined in roles.toml, so ` +
+        `${pending.length} turn(s) were dropped instead of summarised.`,
+    };
+  }
+
+  const transcript = pending
+    .map((e) => {
+      const answer = splitThinking(e.output).answer || e.output;
+      const tools = e.tool_log?.length ? `\n  tools: ${e.tool_log.join("; ")}` : "";
+      return `--- turn ${e.turn} (${e.role})\nuser: ${e.input}\nassistant: ${answer}${tools}`;
+    })
+    .join("\n\n");
+
+  const priorSummary = state.summary
+    ? `Existing record so far:\n${state.summary}\n\nFold the following into it, ` +
+      `keeping it a single coherent record.\n\n`
+    : "";
+
+  onNote?.(`compacting ${pending.length} turn(s) via ${role}…`);
+
+  const route = routeRole(state.config, role);
+  const result = await callEndpoint(
+    route.target,
+    [
+      { role: "system", content: SUMMARY_INSTRUCTION },
+      { role: "user", content: `${priorSummary}${transcript}` },
+    ],
+    [],
+    modelTimeoutMs()
+  );
+
+  if (result.code !== 0) {
+    // Leaving them unfolded means they are simply dropped this turn and
+    // retried next — losing them silently would be worse than a slow retry.
+    return {
+      folded: 0,
+      reclaimed: 0,
+      problem: `compaction failed (${result.content.slice(0, 80)}); turns left unfolded`,
+    };
+  }
+
+  const summary = splitThinking(result.content).answer.trim();
+  if (!summary) {
+    return { folded: 0, reclaimed: 0, problem: "compaction produced nothing" };
+  }
+
+  const before = pending.reduce(
+    (n, e) => n + estimateTokens(e.input) + estimateTokens(e.output),
+    0
+  );
+  const after = estimateTokens(summary) - estimateTokens(state.summary ?? "");
+
+  state.summary = summary;
+  for (const e of pending) e.folded = true;
+
+  return { folded: pending.length, reclaimed: Math.max(0, before - after) };
 }
 
 // ---------------------------------------------------------------------------
@@ -702,20 +850,64 @@ export async function runTask(
     if (options.verbose) process.stderr.write(`${line}\n`);
   };
 
+  // A non-interactive run is the one most likely to need a trail: nobody
+  // watched it happen.
+  const auditSettings = resolveAudit(config);
+  const sessionId = `task-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
+  const audit = new AuditTrail(auditSettings, sessionId);
+  const surface_hash = recomputeManifest(config.gnomonDir, "0.1.0").surface_hash;
+
+  audit.write("session_start", {
+    surface_hash,
+    cwd: process.cwd(),
+    mode: "task",
+    role,
+    record: auditSettings.record,
+    approvals: options.yes ? "granted" : "refused",
+  });
+
   const start = Date.now();
   const turn = await runAgenticTurn(state, role, route, built.messages, {
     approve: async (req) => {
-      note(`[approval] ${req.summary} — ${options.yes ? "granted" : "refused"}`);
+      const decision = options.yes ? "approved" : "declined";
+      note(`[approval] ${req.summary} — ${decision}`);
+      audit.write("approval", {
+        tool: req.tool,
+        summary: req.summary,
+        decision,
+        // Recorded honestly: no human saw this. A trail that implied
+        // oversight where there was none would be worse than no trail.
+        by: options.yes ? "flag:--yes" : "default:no-operator",
+        interactive: false,
+      });
       return Boolean(options.yes);
     },
     progress: new Progress(ui, process.stderr as NodeJS.WriteStream),
     ui,
     say: note,
+    audit,
   });
   const duration = Date.now() - start;
 
+  audit.write("turn", {
+    turn: 1,
+    role,
+    model: turn.model,
+    endpoint: route.target.endpoint,
+    bucket: mapBucket(turn.code),
+    code: turn.code,
+    duration_ms: duration,
+    tool_steps: turn.toolSteps,
+    tool_log: turn.toolLog,
+    skills: active.map((sk) => sk.id),
+    surface_hash,
+    input: audit.text(input),
+    output: audit.text(turn.content),
+  });
+  audit.write("session_end", { turns: 1, surface_hash });
+
   return {
-    surface_hash: recomputeManifest(config.gnomonDir, "0.1.0").surface_hash,
+    surface_hash,
     role,
     model: turn.model,
     endpoint: route.target.endpoint,
@@ -1023,14 +1215,27 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       console.log(`  turns carried      ${built.included}`);
       console.log(`  turns dropped      ${built.dropped}`);
       console.log(`  estimated tokens   ~${built.tokens} / ${ctx.max_context_tokens}`);
+      const folded = state.exchanges.filter((e) => e.folded).length;
+      if (folded > 0 || state.summary) {
+        console.log(`  turns folded       ${folded} (in the summary)`);
+        console.log(`  summary size       ~${estimateTokens(state.summary ?? "")} tok`);
+      }
+      if (ctx.compaction === "summary" || ctx.policy === "summary") {
+        console.log(`  summary_role       ${ctx.summary_role}`);
+      }
       if (built.notice) console.log(`  notice             ${built.notice}`);
       return true;
     }
 
     case "/reset": {
       const n = state.exchanges.length;
+      const hadSummary = Boolean(state.summary);
       state.exchanges.length = 0;
-      console.log(`\nHistory cleared (${n} turn(s) dropped). Surface unchanged.`);
+      state.summary = undefined;
+      console.log(
+        `\nHistory cleared (${n} turn(s)${hadSummary ? " and the summary" : ""} dropped). ` +
+          `Surface unchanged.`
+      );
       return true;
     }
 
@@ -1096,6 +1301,24 @@ export async function runPromptLoop(
     // prompt rather than only from the docs.
     completer: (line: string) =>
       completeInput(line, listRoles(config), listEndpoints(config)),
+  });
+
+  // Off unless the surface asks for it.
+  const auditSettings = resolveAudit(config);
+  const sessionId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
+  const audit = new AuditTrail(auditSettings, sessionId);
+  const surfaceHash = (() => {
+    try {
+      return recomputeManifest(config.gnomonDir, "0.1.0").surface_hash;
+    } catch {
+      return "";
+    }
+  })();
+  audit.write("session_start", {
+    surface_hash: surfaceHash,
+    cwd: process.cwd(),
+    roles: listRoles(config),
+    record: auditSettings.record,
   });
 
   printBanner();
@@ -1216,6 +1439,13 @@ export async function runPromptLoop(
     }
 
     lineQueue.unshift(...held);
+    audit.write("approval", {
+      tool: req.tool,
+      summary: req.summary,
+      decision: yes ? "approved" : "declined",
+      by: "human",
+      interactive: Boolean(process.stdin.isTTY),
+    });
     console.log(
       yes
         ? paint(ui, "green", "  approved")
@@ -1272,6 +1502,27 @@ export async function runPromptLoop(
         )
       );
     }
+    if (audit.enabled) {
+      console.log(
+        paint(ui, "gray", `Audit: ${audit.path}  (${auditSettings.record}${auditSettings.chain ? ", hash-chained" : ""})`)
+      );
+      if (auditSettings.invalid_redact.length > 0) {
+        // Fails open: whatever these were meant to scrub would be written.
+        console.log(
+          paint(
+            ui,
+            "red",
+            `  WARNING: ${auditSettings.invalid_redact.length} redaction pattern(s) do not compile ` +
+              `and are NOT being applied: ${auditSettings.invalid_redact.join(", ")}`
+          )
+        );
+        if (auditSettings.record === "full") {
+          console.log(
+            paint(ui, "red", "  Recording is set to \"full\", so unredacted text is being written.")
+          );
+        }
+      }
+    }
     const policy = config.policy ?? {};
     const sandboxLevel =
       (policy.sandbox as { level?: string } | undefined)?.level ??
@@ -1302,6 +1553,10 @@ export async function runPromptLoop(
       }
       const input = await readLine();
       if (input === null) {
+        audit.write("session_end", {
+          turns: state.exchanges.length,
+          surface_hash: surfaceHash,
+        });
         console.log("\nSession complete. See you next turn.");
         break;
       }
@@ -1442,6 +1697,7 @@ export async function runPromptLoop(
           ui,
           say: (line) => console.log(line),
           signal: controller.signal,
+          audit,
         });
       } finally {
         cancelTurn = null;
@@ -1470,7 +1726,42 @@ export async function runPromptLoop(
       };
 
       state.exchanges.push(exchange);
+      audit.write("turn", {
+        turn: exchange.turn,
+        role,
+        model: exchange.model,
+        endpoint: route.target.endpoint,
+        bucket: exchange.bucket,
+        code: exchange.code,
+        duration_ms: duration,
+        tool_steps: exchange.tool_steps,
+        tool_log: exchange.tool_log,
+        skills: active.map((sk) => sk.id),
+        context_turns: built.included,
+        context_dropped: built.dropped,
+        context_tokens: built.tokens,
+        surface_hash: surfaceHash,
+        input: audit.text(cleanedInput),
+        output: audit.text(turn.content),
+      });
       printExchange(exchange, ui);
+
+      // Fold anything the window has shed. After the turn, not during it, so
+      // the cost lands between turns rather than inside one.
+      const compacted = await compactSession(state, systemPrompt, (line) =>
+        console.log(paint(ui, "gray", `  [context] ${line}`))
+      );
+      if (compacted.problem) {
+        console.log(paint(ui, "yellow", `  [context] ${compacted.problem}`));
+      } else if (compacted.folded > 0) {
+        console.log(
+          paint(
+            ui,
+            "gray",
+            `  [context] folded ${compacted.folded} turn(s), reclaimed ~${compacted.reclaimed} tok`
+          )
+        );
+      }
     }
   } finally {
     rl.close();

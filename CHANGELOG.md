@@ -4,6 +4,23 @@
 
 ### Added
 
+- **`gnomon launch`** — creates `.gnomon/` if missing, then opens the loop.
+  One command to start in a project.
+- **Auto-compression.** `compaction = "summary"` now works: turns evicted from
+  the window are folded into a running summary by `context.summary_role`
+  (default `smol`), which replaces them in the prompt. It was declared but
+  unimplemented since the beginning. `discard` and `truncate` stay
+  bit-reproducible; `summary` trades that for retention, which is why it is not
+  the default.
+- **`[audit]` — traceability, off by default.** Hash-chained JSONL of every
+  turn, tool call and approval decision, carrying the surface hash that
+  determined the behaviour. `record = "metadata"` keeps prompt and response
+  text out of the log entirely; `redact` scrubs patterns from any text that is
+  recorded. `gnomon audit verify` re-hashes the chain and names the first
+  broken record. The trail lives outside `.gnomon/` because writing inside a
+  content-hashed surface would change its hash every turn.
+- **`bash_allow`** — per-role shell command allow-list.
+
 - **`[routing]` — auto mode.** The harness can pick the role per turn from
   rules declared in the surface, announcing the switch and its reason. An
   explicit `/role` prefix always wins. `/mode` switches for the session.
@@ -88,6 +105,31 @@
 
 ### Fixed
 
+- **A role with `bash` was never read-only.** An end-to-end audit found the
+  `verifier` — `tools = ["read", "bash"]`, no write tool — creating a file
+  through `bash` on its first attempt. Restricting `write`/`edit` is
+  meaningless while `bash` is available. `bash_allow` now constrains it, and
+  the starter `verifier` ships with a list that permits running the suite and
+  nothing else.
+- **`parseToml` did not support multi-line arrays.** `key = [` parsed as the
+  string `"["`, which would have silently emptied every multi-line list in a
+  surface — including a `bash_allow` that was supposed to be containing a
+  role. Array items are now split on top-level commas only, so a comma inside
+  a quoted pattern no longer tears it in half.
+- **The audit chain never verified.** `JSON.stringify` drops undefined-valued
+  keys, so records were hashed with fields that were absent on read and every
+  chained trail reported as broken. Caught by testing tamper detection rather
+  than assuming it.
+- **A redaction pattern that would not compile failed silently, and open** —
+  the text it was meant to scrub got written. Patterns are validated at
+  startup and reported. The shipped default itself used an inline `(?i)`,
+  which JavaScript rejects.
+- **`gnomon task` recorded nothing.** Auditing was wired only into the
+  interactive loop, leaving the non-interactive path — the one most likely to
+  need a trail, since nobody watched it — unrecorded.
+- **`gnomon surface` ignored the upward search.** From a subdirectory it
+  passed no directory to the native binary, which then hashed a `.gnomon/`
+  that was not there and reported a hash of absent files instead of saying so.
 - **A role prefix no longer pins the session.** `/smol ...` overwrote
   `currentRole`, so one smol turn silently routed every later turn to smol
   with no command to undo it. A prefix now applies to that turn only.

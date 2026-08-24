@@ -25,6 +25,8 @@ import {
   acceptSkill,
   rejectSkill,
   runTask,
+  resolveAudit,
+  verifyTrail,
 } from "gnomon-core";
 import {
   manifest as surfaceManifest,
@@ -113,7 +115,11 @@ export function parseArgs(args: string[]): CliArgs {
 // ---------------------------------------------------------------------------
 
 async function cmdSurface(args: CliArgs): Promise<void> {
-  const dir = args.dir;
+  // The native binary takes a project directory and does not search upward.
+  // Passing undefined made it read whatever .gnomon/ sat beside the cwd — from
+  // a subdirectory that is nothing, and it reported a hash of absent files
+  // rather than saying so.
+  const dir = args.dir ?? resolve(resolveGnomonDir(), "..");
   if (args.subcommand === "manifest") {
     const m = surfaceManifest(dir);
     console.log(JSON.stringify(m, null, 2));
@@ -244,6 +250,55 @@ async function cmdSimulate(args: CliArgs): Promise<void> {
   console.log(JSON.stringify(result, null, 2));
 }
 
+async function cmdAudit(args: CliArgs): Promise<void> {
+  const config = loadConfig(args.dir);
+  const settings = resolveAudit(config);
+  const sub = args.subcommand ?? "show";
+
+  if (!existsSync(settings.dir)) {
+    console.log(`No audit trail at ${settings.dir}`);
+    console.log(
+      settings.enabled
+        ? "Auditing is enabled but nothing has been recorded yet."
+        : "Auditing is off. Set [audit].enabled = true in .gnomon/config.toml."
+    );
+    return;
+  }
+
+  const trails = readdirSync(settings.dir)
+    .filter((f: string) => f.endsWith(".jsonl"))
+    .sort();
+
+  if (sub === "show" || sub === "list") {
+    console.log(`Trails in ${settings.dir}:`);
+    for (const t of trails) console.log(`  ${t}`);
+    if (trails.length === 0) console.log("  (none)");
+    return;
+  }
+
+  if (sub === "verify") {
+    const targets = args.positional.length > 0 ? args.positional : trails;
+    let allOk = true;
+    for (const name of targets) {
+      const path = join(settings.dir, name);
+      const r = verifyTrail(path);
+      if (r.problem) {
+        console.error(`${name}: ${r.problem}`);
+        allOk = false;
+        continue;
+      }
+      const status = r.ok ? "intact" : `BROKEN at seq ${r.broken.join(", ")}`;
+      console.log(`${name}: ${r.records} records — ${status}`);
+      if (!r.ok) allOk = false;
+    }
+    if (!allOk) process.exit(1);
+    return;
+  }
+
+  console.error(`Unknown audit subcommand: ${sub}. Use: show | verify`);
+  process.exit(1);
+}
+
 async function cmdTask(args: CliArgs): Promise<void> {
   const text = [args.subcommand, ...args.positional].filter(Boolean).join(" ").trim();
   if (!text) {
@@ -339,6 +394,30 @@ async function cmdInit(args: CliArgs): Promise<void> {
   console.log("Approval is on_write: reads are free, writes show a diff first.");
 }
 
+/**
+ * One command to start working in a project.
+ *
+ * Creates the surface if it is missing, then opens the loop. `gnomon init`
+ * followed by `gnomon prompt` was two steps that were easy to get wrong —
+ * running init from the wrong directory initialised the harness instead of
+ * the project.
+ */
+async function cmdLaunch(args: CliArgs): Promise<void> {
+  const target = resolve(args.dir ?? process.cwd());
+  const surface = join(target, ".gnomon");
+
+  if (!existsSync(surface)) {
+    console.log(`No .gnomon/ in ${target} — creating one.`);
+    await cmdInit(args);
+    console.log("");
+    console.log("Edit .gnomon/roles.toml if the model tags are not ones you have,");
+    console.log("then re-run `gnomon launch`. Starting anyway:");
+    console.log("");
+  }
+
+  await cmdPrompt(args);
+}
+
 async function cmdPrompt(args: CliArgs): Promise<void> {
   const config = loadConfig(args.dir);
   await runPromptLoop(config, args.subcommand || "implement");
@@ -352,6 +431,10 @@ function showHelp(): void {
   console.log(`gnomon v0.1.0 — deterministic coding agent harness
 
 Commands:
+  launch [--dir <path>] [--from <path>]
+    Start working here. Creates .gnomon/ if it is missing, then opens the
+    interactive loop. This is the one command to remember.
+
   init [--dir <path>] [--from <path>] [--force]
     Write a .gnomon/ surface into a project. --from copies an existing
     surface instead of the built-in starter templates.
@@ -370,6 +453,10 @@ Commands:
 
   simulate <patchset.json> [--dir <path>]
     Dry-run preview of a patchset
+
+  audit [show|verify] [--dir <path>]
+    Audit trails, when [audit] is enabled. 'verify' re-hashes each record
+    and checks the chain, so a trail altered after the fact is detectable.
 
   skill [list|accept <id>|reject <id>] [--dir <path>]
     Skills the harness has learned. An agent proposes into
@@ -393,8 +480,7 @@ Interactive mode: gnomon prompt
 
 Getting started in a project:
   cd /path/to/project
-  gnomon init
-  gnomon prompt
+  gnomon launch
 
 Environment:
   GNOMON_BIN_OVERRIDE     Path to gnomon binary (for testing)
@@ -445,12 +531,18 @@ async function main(): Promise<void> {
     case "init":
       await cmdInit(args);
       break;
+    case "audit":
+      await cmdAudit(args);
+      break;
     case "task":
       await cmdTask(args);
       break;
     case "skill":
     case "skills":
       await cmdSkill(args);
+      break;
+    case "launch":
+      await cmdLaunch(args);
       break;
     case "prompt":
     case "run":

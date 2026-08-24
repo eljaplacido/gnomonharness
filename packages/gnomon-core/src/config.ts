@@ -23,6 +23,7 @@ export interface Config {
   ui?: UiConfig;
   endpoints?: Record<string, EndpointConfig>;
   routing?: RoutingConfig;
+  audit?: import("./audit.js").AuditConfig;
 }
 
 /**
@@ -105,6 +106,8 @@ export interface Defaults {
 export interface ContextConfig {
   policy?: ContextPolicy;
   retain_after?: number;
+  /** Role used to fold evicted turns into a summary. Default "smol". */
+  summary_role?: string;
 }
 
 export type ContextPolicy = "full" | "sliding_window" | "summary";
@@ -166,6 +169,15 @@ export interface RoleDef {
    * expressed: it can run the suite but cannot write.
    */
   tools?: string[];
+  /**
+   * Shell commands this role may run, as regular expressions.
+   *
+   * Absent means any command. That matters more than it looks: `bash` can
+   * write anything, so a role holding it is NOT read-only however its `tools`
+   * list reads. A verifier that must run the suite without being able to
+   * alter it needs this list, not just the absence of `write`.
+   */
+  bash_allow?: string[];
   fallback?: FallbackDef;
   // Legacy field (kept for compat with older role files)
   profile?: string;
@@ -221,9 +233,28 @@ export function parseToml(content: string): Record<string, unknown> {
   let currentTable: string | null = null;
   let currentObj: Record<string, unknown> = result;
 
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
+  const lines = content.split("\n");
+  for (let lineNo = 0; lineNo < lines.length; lineNo++) {
+    let trimmed = lines[lineNo].trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
+
+    // An array may span lines. Joining them here rather than parsing line by
+    // line matters: an unjoined `key = [` parsed as the string "[", which
+    // silently emptied every multi-line list in the surface.
+    if (/=\s*\[[^\]]*$/.test(stripComment(trimmed))) {
+      const parts: string[] = [stripComment(trimmed)];
+      let depth =
+        (parts[0].match(/\[/g) ?? []).length - (parts[0].match(/\]/g) ?? []).length;
+      while (depth > 0 && lineNo + 1 < lines.length) {
+        lineNo++;
+        const next = stripComment(lines[lineNo].trim());
+        if (!next) continue;
+        parts.push(next);
+        depth +=
+          (next.match(/\[/g) ?? []).length - (next.match(/\]/g) ?? []).length;
+      }
+      trimmed = parts.join(" ");
+    }
 
     // Array-of-tables header: [[tools]]. Must be tested before [table],
     // whose pattern also matches "[[tools]]" (capturing "[tools]") and would
@@ -309,11 +340,31 @@ function parseValue(value: string): unknown {
   if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
     return value.slice(1, -1);
   }
-  // Array
+  // Array. Split on top-level commas only: a pattern like '^(a|b),\\s' would
+  // otherwise be torn in half, and a trailing comma would yield an empty item.
   if (value.startsWith("[") && value.endsWith("]")) {
     const inner = value.slice(1, -1).trim();
     if (!inner) return [];
-    return inner.split(",").map((v) => parseValue(v.trim()));
+    const items: string[] = [];
+    let buf = "";
+    let quote: '"' | "'" | null = null;
+    for (let i = 0; i < inner.length; i++) {
+      const ch = inner[i];
+      if (quote) {
+        if (ch === quote && !(quote === '"' && inner[i - 1] === "\\")) quote = null;
+        buf += ch;
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+        buf += ch;
+      } else if (ch === ",") {
+        items.push(buf);
+        buf = "";
+      } else {
+        buf += ch;
+      }
+    }
+    items.push(buf);
+    return items.map((v) => v.trim()).filter(Boolean).map(parseValue);
   }
   // Boolean
   if (value === "true") return true;
@@ -487,6 +538,7 @@ export interface ResolvedContext {
   retain_after: number;
   max_context_tokens: number;
   compaction: Compaction;
+  summary_role: string;
 }
 
 const CONTEXT_POLICIES: ContextPolicy[] = ["full", "sliding_window", "summary"];
@@ -518,6 +570,8 @@ export function resolveContext(config: GnomonConfig): ResolvedContext {
     retain_after: pickInt(ctx.retain_after, 2048),
     max_context_tokens: pickInt(defaults.max_context_tokens, 65536),
     compaction: pickEnum(defaults.compaction, COMPACTIONS, "discard"),
+    summary_role:
+      typeof ctx.summary_role === "string" ? ctx.summary_role : "smol",
   };
 }
 

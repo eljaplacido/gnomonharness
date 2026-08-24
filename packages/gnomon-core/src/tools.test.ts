@@ -408,3 +408,62 @@ describe("per-role tool scope", () => {
     expect(names).toEqual(["read"]);
   });
 });
+
+describe("bash_allow — the constraint that actually makes a role read-only", () => {
+  it("an unlisted command is refused", async () => {
+    const out = await executeTool(
+      "bash",
+      { command: "echo pwned > hack.txt" },
+      ctx({ bashAllow: ["^cargo\\s", "^pnpm\\s"] }),
+      offered
+    );
+    expect(out.code).toBe(TOOL_DENIED);
+    expect(mapBucket(out.code)).toBe("refusal");
+    expect(existsSync(join(root, "hack.txt"))).toBe(false);
+  });
+
+  it("a listed command runs", async () => {
+    const out = await executeTool(
+      "bash",
+      { command: "echo ok" },
+      ctx({ bashAllow: ["^echo\\s"] }),
+      offered
+    );
+    expect(out.code).toBe(TOOL_OK);
+    expect(out.content).toContain("ok");
+  });
+
+  it("no allow-list means any command — granting bash grants writing", async () => {
+    // The point of the test is that this is TRUE, and therefore that a role
+    // holding bash without an allow-list is not read-only however its `tools`
+    // list reads.
+    const out = await executeTool(
+      "bash",
+      { command: `touch ${join(root, "written.txt")}` },
+      ctx(),
+      offered
+    );
+    expect(out.code).toBe(TOOL_OK);
+    expect(existsSync(join(root, "written.txt"))).toBe(true);
+  });
+
+  it("a pattern that will not compile does not widen the allow-list", async () => {
+    const out = await executeTool(
+      "bash",
+      { command: "echo hi" },
+      ctx({ bashAllow: ["(["] }),
+      offered
+    );
+    expect(out.code).toBe(TOOL_DENIED);
+  });
+
+  it("the refusal names what the role may run", async () => {
+    const out = await executeTool(
+      "bash",
+      { command: "rm -rf /" },
+      ctx({ bashAllow: ["^cargo\\s"] }),
+      offered
+    );
+    expect(out.content).toContain("cargo");
+  });
+});
