@@ -1,29 +1,23 @@
 #!/usr/bin/env node
-// gnomon CLI launcher — single command: ./gnomon <args>
-// Usage:
-//   cd /path/to/gnomon && ./gnomon <cmd>
-//   ./gnomon tui
-//   ./gnomon prompt
-//   ./gnomon session "echo hello"
-const { spawnSync } = require("child_process");
-const { join, resolve } = require("path");
-const { existsSync } = require("fs");
+// gnomon repo-root convenience shim.
+//
+// Deliberately thin: it re-executes the real launcher at
+// packages/gnomon-cli/gnomon.js rather than re-implementing it. There used to
+// be two launchers with two policies, and the one the README told people to
+// use was the one that still pinned cwd to the checkout and passed argv
+// through a shell — so `./gnomon task "fix the bug & ship it"` arrived as
+// five arguments and ran against the wrong repository.
+//
+// CommonJS: the root package.json declares no "type", unlike gnomon-cli's.
+const { spawnSync } = require("node:child_process");
+const { join } = require("node:path");
 
-// __dirname resolves to where this script lives (the repo root)
-const projectRoot = resolve(__dirname);
-
-// Find tsx — it's a shell script, not a JS file
-const tsxBin = join(projectRoot, "node_modules", ".bin", "tsx");
-const tsxBinWin = join(projectRoot, "node_modules", ".bin", "tsx.cmd");
-const entry = join(projectRoot, "packages", "gnomon-cli", "src", "index.ts");
-
-// Prefer tsx.cmd on Windows, tsx on Unix
-const bin = existsSync(tsxBinWin) ? tsxBinWin : tsxBin;
-
-const result = spawnSync(bin, [entry, ...process.argv.slice(2)], {
+const launcher = join(__dirname, "packages", "gnomon-cli", "gnomon.js");
+const r = spawnSync(process.execPath, [launcher, ...process.argv.slice(2)], {
   stdio: "inherit",
-  shell: true,
-  cwd: projectRoot,
 });
-
-process.exit(result.status ?? 1);
+if (r.error) {
+  console.error("gnomon: " + r.error.message);
+  process.exit(1);
+}
+process.exit(r.status ?? 1);

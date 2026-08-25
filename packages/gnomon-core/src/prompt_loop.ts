@@ -36,6 +36,7 @@ import {
 } from "./config.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES } from "./render.js";
 import {
+  Todo,
   buildToolSet,
   executeTool,
   needsApproval,
@@ -87,6 +88,12 @@ export interface PromptExchange {
   context_dropped?: number;
   /** Estimated prompt tokens sent */
   context_tokens?: number;
+  /**
+   * Backend-reported tokens for the whole turn, summed over every model call
+   * it took (a turn with six tool calls made seven). Absent when the backend
+   * reports none.
+   */
+  usage?: TokenUsage;
   /** Tool calls executed during this turn */
   tool_steps?: number;
   /** One line per tool call, for the transcript */
@@ -96,6 +103,8 @@ export interface PromptExchange {
 }
 
 /** State for the interactive prompt loop */
+export type { Todo };
+
 export interface PromptState {
   config: GnomonConfig;
   exchanges: PromptExchange[];
@@ -125,6 +134,14 @@ export interface PromptState {
    * rejection is paid once per session rather than on every turn.
    */
   noToolModels?: Set<string>;
+  /**
+   * The session checklist, as the `todo` tool last left it.
+   *
+   * Session state, not surface state: it lives in the saved conversation and
+   * never in `.gnomon/`, because a list that changed on every turn would move
+   * the surface hash on every turn and make it useless as an identifier.
+   */
+  todos?: Todo[];
 }
 
 /** The id this session saves under, or a placeholder before one is assigned. */
@@ -196,6 +213,18 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+/**
+ * Whether a turn with this exit code is replayed into the next context.
+ *
+ * Buckets come from the published exit contract (docs/CONTRACTS.md): 0-1
+ * result, 2-4 refusal, 10-13 apparatus_failure. Result and refusal are both
+ * things the model said and both replay; apparatus_failure is the harness
+ * reporting its own breakage and does not.
+ */
+export function isReplayable(code: number): boolean {
+  return mapBucket(code) !== "apparatus_failure";
+}
+
 /** Token cost of replaying one exchange (its user turn + its reply). */
 function exchangeCost(e: PromptExchange): number {
   return (
@@ -213,9 +242,18 @@ function exchangeCost(e: PromptExchange): number {
  *   the remaining budget from the newest turns backwards. The middle is what
  *   gives way, because that is the part neither end depends on.
  *
- * Turns that failed are never replayed: their `output` is a transport error
- * string, not something the model said. Feeding it back as an assistant
- * message would teach the model that it emits connection errors.
+ * Which turns replay is decided by bucket, not by "was the exit code zero".
+ *
+ *   result (0-1)             — replayed.
+ *   refusal (2-4)            — replayed. A refusal is something the *model*
+ *     said: the write you declined, the command `bash_allow` turned down. Drop
+ *     it and the next turn cannot refer back to it — you deny a write, say
+ *     "put it in src/ instead", and the model has no idea what "it" was. That
+ *     round trip is the most common thing a person does after a gate fires,
+ *     so it is the last thing that should lose its history.
+ *   apparatus_failure (10-13) — never replayed. Here the `output` really is a
+ *     transport error string rather than something the model said, and feeding
+ *     it back would teach the model that it emits connection errors.
  *
  * Whatever does not fit is named in-band rather than silently vanishing —
  * the same rule system.md applies to unreachable tools.
@@ -235,7 +273,7 @@ export function buildMessages(
 
   // Folded turns live in the summary now; replaying them too would pay for
   // the same content twice.
-  const usable = state.exchanges.filter((e) => e.code === 0 && !e.folded);
+  const usable = state.exchanges.filter((e) => isReplayable(e.code) && !e.folded);
 
   if (state.summary) {
     messages.push({
@@ -347,15 +385,77 @@ export function buildMessages(
 // ---------------------------------------------------------------------------
 
 /** Model inference result from API call */
+/**
+ * What a backend reported it actually spent on one call.
+ *
+ * Counted by the model server, not estimated here. `estimateTokens` exists to
+ * slide the context window deterministically on every machine and is wrong by
+ * design on code; it must never be quoted back as a cost. Absent when the
+ * backend did not say — reported as unknown rather than as zero, because a
+ * confident 0 is worse than a blank.
+ */
+export interface TokenUsage {
+  input?: number;
+  output?: number;
+  /** Model server's own wall-clock for the call, when it reports one. */
+  ms?: number;
+}
+
 interface InferenceResult {
   content: string;
   code: number;
+  /** Backend-reported token spend for this call, when it reports any */
+  usage?: TokenUsage;
   /** Normalised tool calls the model asked for */
   toolCalls: ToolCall[];
   /** The backend's own representation, echoed back unchanged */
   rawToolCalls?: unknown[];
   /** The backend refused the request because this model cannot use tools */
   toolsUnsupported?: boolean;
+}
+
+/**
+ * Pull the backend's own token counts out of a response.
+ *
+ * Two shapes, because two backends:
+ *   Ollama  — `prompt_eval_count` / `eval_count`, durations in nanoseconds.
+ *   OpenAI  — `usage.prompt_tokens` / `usage.completion_tokens`.
+ *
+ * A field the backend omitted stays undefined and is rendered as "?" rather
+ * than 0: a cost line that silently reads zero when the number is missing is
+ * the kind of thing you trust for a week and then find out was never true.
+ */
+export function readUsage(json: unknown): TokenUsage | undefined {
+  const j = json as Record<string, any>;
+  if (!j || typeof j !== "object") return undefined;
+  const num = (v: unknown) => (typeof v === "number" && isFinite(v) ? v : undefined);
+
+  const input = num(j.usage?.prompt_tokens) ?? num(j.prompt_eval_count);
+  const output = num(j.usage?.completion_tokens) ?? num(j.eval_count);
+  // Ollama reports nanoseconds; OpenAI reports no duration at all.
+  const ns = num(j.total_duration);
+  const ms = ns === undefined ? undefined : Math.round(ns / 1e6);
+
+  if (input === undefined && output === undefined && ms === undefined) {
+    return undefined;
+  }
+  return { input, output, ms };
+}
+
+/** Add one call's usage into a running total for the turn. */
+export function addUsage(
+  total: TokenUsage | undefined,
+  next: TokenUsage | undefined
+): TokenUsage | undefined {
+  if (!next) return total;
+  if (!total) return { ...next };
+  const add = (a?: number, b?: number) =>
+    a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0);
+  return {
+    input: add(total.input, next.input),
+    output: add(total.output, next.output),
+    ms: add(total.ms, next.ms),
+  };
 }
 
 /** Tool arguments arrive as an object (Ollama) or a JSON string (OpenAI). */
@@ -466,7 +566,7 @@ async function callEndpoint(
       };
     });
 
-    return { content, code: 0, toolCalls, rawToolCalls: raw };
+    return { content, code: 0, toolCalls, rawToolCalls: raw, usage: readUsage(json) };
   } catch (err) {
     if (signal?.aborted) {
       return { content: CANCELLED, code: 2, toolCalls: [] };
@@ -497,8 +597,8 @@ function modelTimeoutMs(): number {
 function printBanner(): void {
   console.log("\n");
   console.log(" ╔══════════════════════════════════════════╗");
-  console.log(" ║          gnomon — interactive mode        ║");
-  console.log(" ║   Deterministic coding agent harness      ║");
+  console.log(" ║          gnomon — interactive mode       ║");
+  console.log(" ║   Deterministic coding agent harness     ║");
   console.log(" ╚══════════════════════════════════════════╝");
   console.log("");
   console.log("/help for commands · /meta and /think to change what you see");
@@ -540,6 +640,12 @@ export interface TurnResult {
   model: string;
   toolSteps: number;
   toolLog: string[];
+  /**
+   * Backend-reported tokens for every model call this turn made. A turn with
+   * six tool calls costs seven calls, and the whole point of reporting spend
+   * is that the tool loop — not the visible prompt — is where it goes.
+   */
+  usage?: TokenUsage;
 }
 
 /**
@@ -646,6 +752,26 @@ function worse(a: number, b: number): number {
  * declined a write reports `refusal` — the bucket that was unreachable while
  * outcomes were derived from HTTP status alone.
  */
+/**
+ * Assemble the system prompt for one turn: system.md, plus the skills whose
+ * pattern matches, plus the working-context note.
+ *
+ * One function because a sub-turn started by `task` must be assembled exactly
+ * as a top-level turn is — a delegated verifier that silently lost the
+ * repository's skills would be judging by different rules than the same role
+ * reached by hand, and the difference would be invisible.
+ */
+export function buildSystemPrompt(
+  state: PromptState,
+  role: string,
+  input: string
+): string {
+  const active = selectSkills(loadSkills(state.config), role, input);
+  return withWorkingContext(
+    applySkills(state.config.system.content ?? "", active)
+  );
+}
+
 export async function runAgenticTurn(
   state: PromptState,
   /** The role THIS turn runs as — a `/plan …` prefix differs from the
@@ -653,10 +779,18 @@ export async function runAgenticTurn(
   role: string,
   route: ReturnType<typeof routeRole>,
   messages: ChatMessage[],
-  deps: TurnDeps
+  deps: TurnDeps,
+  /** 0 for a turn a person asked for; 1 for one the `task` tool delegated. */
+  depth: number = 0
 ): Promise<TurnResult> {
   const config = state.config;
   const toolSet = buildToolSet(config, role);
+  // A sub-turn is offered no `task`, so delegation cannot nest. Enforced here
+  // rather than only in the tool, so the schema the model sees is the truth
+  // about what it can call.
+  if (depth > 0) {
+    toolSet.schemas = toolSet.schemas.filter((t) => t.function.name !== "task");
+  }
   const offered = new Set(toolSet.schemas.map((t) => t.function.name));
 
   const defaults = config.config.defaults ?? {};
@@ -668,9 +802,12 @@ export async function runAgenticTurn(
     defaults.sandbox ??
     "confined") as SandboxLevel;
 
+  const network = (policy.sandbox as { network?: boolean } | undefined)?.network;
+
   const ctx: ToolContext = {
     config,
     bashAllow: config.roles[role]?.bash_allow,
+    bashDeny: config.roles[role]?.bash_deny,
     writeAllow: config.roles[role]?.write_allow,
     root: resolve(config.gnomonDir, ".."),
     sandbox,
@@ -678,6 +815,41 @@ export async function runAgenticTurn(
     approve: deps.approve,
     timeoutMs: toolTimeoutMs(config),
     maxOutputBytes: 32_000,
+    network,
+    todos: {
+      list: () => state.todos ?? [],
+      replace: (t) => {
+        state.todos = t;
+      },
+    },
+    delegate: {
+      depth,
+      roles: () => listRoles(config),
+      run: async (subRole, instruction) => {
+        // A fresh message list: the sub-turn sees its instruction and the
+        // system prompt for its own role, and nothing of this conversation.
+        // That isolation is the reason to delegate at all.
+        const subRoute = routeRole(config, subRole);
+        const system = buildSystemPrompt(state, subRole, instruction);
+        const sub = await runAgenticTurn(
+          state,
+          subRole,
+          subRoute,
+          [
+            ...(system ? [{ role: "system" as const, content: system }] : []),
+            { role: "user" as const, content: instruction },
+          ],
+          deps,
+          depth + 1
+        );
+        return {
+          content: sub.content,
+          code: sub.code,
+          toolSteps: sub.toolSteps,
+          model: sub.model,
+        };
+      },
+    },
   };
 
   const roleDef = config.roles[role] ?? {};
@@ -693,6 +865,7 @@ export async function runAgenticTurn(
   const ctxLimits = resolveContext(config);
   const working: ChatMessage[] = [...messages];
   const toolLog: string[] = [];
+  let turnUsage: TokenUsage | undefined;
   let code = 0;
   let steps = 0;
   let stepsThisLeg = 0;
@@ -707,6 +880,7 @@ export async function runAgenticTurn(
     model: usedModel,
     toolSteps: steps,
     toolLog,
+    usage: turnUsage,
   });
 
   const noTools = (state.noToolModels ??= new Set<string>());
@@ -722,6 +896,7 @@ export async function runAgenticTurn(
   const call = async (target: typeof route.target) => {
     const offer = noTools.has(target.model) ? [] : toolSet.schemas;
     let r = await callEndpoint(target, working, offer, modelTimeoutMs(), deps.signal);
+    turnUsage = addUsage(turnUsage, r.usage);
 
     if (r.toolsUnsupported && offer.length > 0) {
       noTools.add(target.model);
@@ -744,6 +919,7 @@ export async function runAgenticTurn(
       );
       deps.progress.start(`${target.model} — without tools`);
       r = await callEndpoint(target, working, [], modelTimeoutMs(), deps.signal);
+      turnUsage = addUsage(turnUsage, r.usage);
     }
     return r;
   };
@@ -768,7 +944,14 @@ export async function runAgenticTurn(
     code = worse(code, result.code);
 
     if (result.code !== 0 || result.toolCalls.length === 0) {
-      return { content: result.content, code, model: usedModel, toolSteps: steps, toolLog };
+      return {
+        content: result.content,
+        code,
+        model: usedModel,
+        toolSteps: steps,
+        toolLog,
+        usage: turnUsage,
+      };
     }
 
     // Stalled? Repeating one call verbatim is not progress, and on autopilot
@@ -813,6 +996,7 @@ export async function runAgenticTurn(
         modelTimeoutMs(),
         deps.signal
       );
+      turnUsage = addUsage(turnUsage, closing.usage);
       deps.progress.stop();
 
       const content =
@@ -826,6 +1010,7 @@ export async function runAgenticTurn(
         model: usedModel,
         toolSteps: steps,
         toolLog,
+        usage: turnUsage,
       };
     }
 
@@ -1189,7 +1374,20 @@ export interface TaskRecord {
    * Fields that legitimately differ between two runs of the same task.
    * Kept apart so a comparison can ignore exactly these and nothing else.
    */
-  volatile: { duration_ms: number };
+  /**
+   * Everything that may differ between two runs of the same input. The
+   * contract for `--json` is that anything *outside* this object is
+   * reproducible, so the conformance gate diffs two runs and ignores this.
+   *
+   * Token counts are optional and appear only when the backend reported
+   * them — an absent count is left out rather than written as 0.
+   */
+  volatile: {
+    duration_ms: number;
+    tokens_in?: number;
+    tokens_out?: number;
+    model_ms?: number;
+  };
 }
 
 export interface RunTaskOptions {
@@ -1232,9 +1430,7 @@ export async function runTask(
   const route = routeRole(config, role);
 
   const active = selectSkills(loadSkills(config), role, input);
-  const systemPrompt = withWorkingContext(
-        applySkills(config.system.content ?? "", active)
-      );
+  const systemPrompt = buildSystemPrompt(state, role, input);
   const built = buildMessages(state, systemPrompt, input);
 
   const note = (line: string) => {
@@ -1290,6 +1486,8 @@ export async function runTask(
     duration_ms: duration,
     tool_steps: turn.toolSteps,
     tool_log: turn.toolLog,
+    tokens_in: turn.usage?.input,
+    tokens_out: turn.usage?.output,
     skills: active.map((sk) => sk.id),
     surface_hash,
     input: audit.text(input),
@@ -1309,7 +1507,19 @@ export async function runTask(
     tool_steps: turn.toolSteps,
     tool_log: turn.toolLog,
     skills: active.map((sk) => sk.id),
-    volatile: { duration_ms: duration },
+    // Token counts sit beside duration under `volatile`: they are the
+    // backend's measurement of one run, so two runs of the same task differ
+    // in them without anything about the surface having changed. The contract
+    // for --json is that everything outside `volatile` is reproducible.
+    volatile: {
+      duration_ms: duration,
+      // Spread-if-present, not `key: undefined`: a backend that reports no
+      // usage must leave the key off entirely, so `volatile` stays exactly
+      // "the things that varied" rather than gaining three permanent blanks.
+      ...(turn.usage?.input !== undefined ? { tokens_in: turn.usage.input } : {}),
+      ...(turn.usage?.output !== undefined ? { tokens_out: turn.usage.output } : {}),
+      ...(turn.usage?.ms !== undefined ? { model_ms: turn.usage.ms } : {}),
+    },
   };
 }
 
@@ -1342,7 +1552,9 @@ export interface CommandSpec {
 export const LIVE_SAFE_COMMANDS = new Set([
   "/help", "/roles", "/profiles", "/tools", "/endpoints", "/context",
   "/skills", "/manifest", "/explain", "/reflect", "/meta", "/think", "/mode",
-  "/theme",
+  // Reading the checklist mid-turn is the point of having one: it answers
+  // "how far through is it" without stopping the work to find out.
+  "/theme", "/todo",
 ]);
 
 export const COMMANDS: CommandSpec[] = [
@@ -1363,6 +1575,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/explain", arg: "[topic]", help: "What a feature is, how this repo has it set, and what to do with it" },
   { name: "/reflect", arg: "[topic]", help: "Alias for /explain" },
   { name: "/models", help: "Pick a model for a role (arrows, type to filter)" },
+  { name: "/todo", help: "The checklist, as the agent last left it" },
   { name: "/manifest", help: "The surface hash and what it covers" },
   { name: "/clear", help: "Clear screen (history is kept)" },
   { name: "/help", help: "This list" },
@@ -2191,6 +2404,34 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       return true;
     }
 
+    case "/todo": {
+      const todos = state.todos ?? [];
+      if (todos.length === 0) {
+        console.log(
+          "\nNo checklist. The agent writes one with the `todo` tool when a " +
+            "task has enough steps to be worth tracking."
+        );
+        return true;
+      }
+      const done = todos.filter((t) => t.status === "completed").length;
+      console.log(`\nChecklist — ${done}/${todos.length} done`);
+      for (const t of todos) {
+        const mark =
+          t.status === "completed" ? "[x]" : t.status === "in_progress" ? "[>]" : "[ ]";
+        const colour =
+          t.status === "completed" ? "gray" : t.status === "in_progress" ? "cyan" : "white";
+        console.log(paint(uiOf(state), colour as never, `  ${mark} ${t.content}`));
+      }
+      console.log(
+        paint(
+          uiOf(state),
+          "gray",
+          "\n  It is saved with the session, so --continue picks it back up."
+        )
+      );
+      return true;
+    }
+
     case "/context": {
       const ctx = resolveContext(state.config);
       const built = buildMessages(state, state.config.system.content ?? "", "");
@@ -2363,6 +2604,9 @@ export async function runPromptLoop(
       const snap = loadSession(store, options.resume === true ? undefined : options.resume);
       state.exchanges = snap.exchanges ?? [];
       state.summary = snap.summary;
+      // A resumed session picks the checklist back up: the most common reason
+      // to resume is that the work is not finished.
+      state.todos = snap.todos;
       state.currentRole = initialRole ?? snap.currentRole ?? state.currentRole;
       sessionId = snap.id;
       state.sessionId = sessionId;
@@ -2432,6 +2676,7 @@ export async function runPromptLoop(
         cwd: process.cwd(),
         currentRole: state.currentRole,
         summary: state.summary,
+        todos: state.todos,
         exchanges: state.exchanges,
       });
     } catch (err) {
@@ -2904,8 +3149,11 @@ export async function runPromptLoop(
         paint(
           ui,
           "yellow",
-          "  note: policy.toml declares network = false; this build confines " +
-            "filesystem paths but does not enforce network isolation."
+          "  note: policy.toml declares network = false. It is enforced for " +
+            "the `webfetch` tool, which refuses outright. It is NOT process " +
+            "isolation: `bash` can still reach the network through curl, a " +
+            "package manager, or anything else installed. Constrain that with " +
+            "bash_allow if it matters."
         )
       );
     }
@@ -3228,9 +3476,7 @@ export async function runPromptLoop(
           )
         );
       }
-      const systemPrompt = withWorkingContext(
-        applySkills(config.system.content ?? "", active)
-      );
+      const systemPrompt = buildSystemPrompt(state, role, cleanedInput);
 
       // Build the window from prior turns before calling.
       const built = buildMessages(state, systemPrompt, cleanedInput);
@@ -3303,6 +3549,7 @@ export async function runPromptLoop(
         context_tokens: built.tokens,
         tool_steps: turn.toolSteps,
         tool_log: turn.toolLog,
+        usage: turn.usage,
       };
 
       state.exchanges.push(exchange);

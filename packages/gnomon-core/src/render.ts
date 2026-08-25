@@ -200,9 +200,23 @@ function metaField(
       return exchange.context_dropped
         ? `ctx ${exchange.context_turns} turns (−${exchange.context_dropped})`
         : `ctx ${exchange.context_turns} turns`;
-    case "tokens":
+    case "tokens": {
+      // Two different numbers, and the difference matters enough to mark it.
+      // `usage` is what the model server counted; the estimate is gnomon's own
+      // ~4-chars-per-token approximation, which exists to slide the context
+      // window identically on every machine and is wrong on code. A measured
+      // count prints bare, an estimate keeps its tilde, so a cost read off
+      // this line is never silently a guess.
+      const u = exchange.usage;
+      if (u && (u.input !== undefined || u.output !== undefined)) {
+        const parts: string[] = [];
+        if (u.input !== undefined) parts.push(`${humanTokens(u.input)} in`);
+        if (u.output !== undefined) parts.push(`${humanTokens(u.output)} out`);
+        return parts.join(" ");
+      }
       if (exchange.context_tokens === undefined) return null;
       return `~${humanTokens(exchange.context_tokens)} tok`;
+    }
     case "think":
       return thinkTokens > 0 ? `think ~${humanTokens(thinkTokens)} tok` : null;
     case "tools":

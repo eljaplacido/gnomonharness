@@ -4,6 +4,186 @@
 
 ### Added
 
+- **`todo` — the checklist a long run is steered by.** A turn spanning thirty
+  tool calls loses the shape of what it set out to do, and the model re-derives
+  the plan from the transcript every few steps. The whole list is replaced on
+  each call rather than patched: a patch protocol needs identifiers, and
+  identifiers a model invents mismatch a list it has since reordered. At most
+  one item may be `in_progress`, enforced. Saved with the session, so
+  `--continue` picks it back up; `/todo` reads it, including mid-turn.
+
+- **`task` — a sub-turn under another role, with that role's tools.** The
+  separation this harness is built around, reachable from inside a turn. Three
+  properties, each with a test: the sub-turn gets the *target* role's tools, so
+  delegation cannot acquire capability; it cannot nest, because a sub-turn is
+  offered no `task`; and only the answer returns, not the transcript. A role
+  that may not write may not delegate — a generated template briefly gave the
+  `verifier` this tool, which would have made "cannot alter what it judges"
+  untrue by one indirection, and `docs.test.ts` now asserts it cannot.
+
+- **`webfetch`, shipped disabled — and it makes `[sandbox] network` real.**
+  That key was declared and unenforced; the startup banner said so, which is
+  the same shape as `approval = "always"` being a dial that turned nothing. It
+  now refuses the fetch and names the file. Requests are checked before they
+  leave: `http`/`https` only, and the hostname must not resolve to a loopback,
+  private or link-local address — checked on the *resolved address*, because
+  any domain can publish an A record pointing at `127.0.0.1`, and the metadata
+  endpoint at `169.254.169.254` holds cloud credentials. Redirects are not
+  followed automatically; each hop is re-checked in its own right.
+
+- **`bash_deny` — a guardrail on what cannot be undone.** `bash_allow` is an
+  allow-list, and an allow-list cannot express *everything except three
+  catastrophes* — which is what the implementing role needs: unrestricted bash
+  for builds and suites nobody can enumerate, and no ability to force-push over
+  a release branch. Deny wins over allow. Shipped with the starter surface
+  covering force-push, pushing straight onto `main`/`master`/`release`, remote
+  branch deletion, and `git branch -D`. It binds this agent; branch protection
+  on the remote is the control that binds everyone, and this does not replace
+  it.
+
+  Case-sensitive, deliberately: `git branch -D` discards an unmerged branch and
+  `-d` refuses to, differing only by case. The first version folded case and so
+  blocked the safe form — caught by its own test.
+
+- **Four skills ship with the repository** — `git-branching`,
+  `authenticated-tools`, `verifying-changes`, `changing-the-surface`. Branching
+  and PR discipline, the rule that `gh` and `az` are authenticated outside
+  gnomon and a credential is never printed, the one command that decides
+  whether a change is good, and what to do when the right answer is a surface
+  change.
+
+- **[docs/POSITIONING.md](docs/POSITIONING.md)** — where this sits against
+  other harnesses, what it does differently as mechanism rather than intention,
+  and where it is behind. It states plainly that no public benchmark has been
+  run and that the numbers in it are local measurements.
+
+### Changed
+
+- **`[sandbox] network = false` is enforced for `webfetch`** and the startup
+  note no longer says it is unenforced. It says what is true instead: enforced
+  for the tool gnomon controls, and *not* process isolation, because `bash` can
+  still reach the network through `curl` or a package manager and no
+  allow-list over shell text can honestly claim otherwise.
+
+- **A malformed tool argument is `11`, not a refusal.** `compute` returned a
+  refusal for an expression that would not parse, which put it on the wrong
+  side of a line the published contract already draws: refusal (2-4) is
+  something saying no — a declined approval, an allow-list, a tool the role was
+  not given — and `11` is a tool that understood the request and could not
+  carry it out, the bucket "ambiguous edit" already lived in.
+
+### Security
+
+- **The `.gnomon/` surface is no longer writable by a tool call.** `write` and
+  `edit` refuse any path inside it, whatever the role and whatever the approval
+  gate. The surface decides the tool list, the approval gate and every
+  allow-list, so an agent that could write there could rewrite the rules it was
+  being judged by — `gate = "never"`, a wider `bash_allow`, an `edit` tool it
+  was not given — and the next turn would run under the surface it authored. It
+  also moved the surface hash silently, which is the one identifier a session
+  is traced by. Verified: an agent asked to set `gate = "never"` is refused, and
+  the hash is unchanged afterwards. The `skill` tool remains the sanctioned way
+  in, and its proposals are inert until a person accepts them.
+
+- **`bash` cannot be prevented from moving the surface, so it is detected.**
+  The command is arbitrary shell and an allow-list that tried to spot every way
+  a process can touch a file would be a guess dressed up as a guarantee. The
+  hash is re-read after every `bash` call instead; if it moved, the tool result
+  says so to the model and the transcript line reads `bash — exit 0 · surface
+  changed`. Detection rather than prevention is the honest primitive, and it
+  catches every mechanism rather than the ones someone thought of.
+
+- **The sandbox follows symlinks.** `resolveInRoot` compared paths with
+  `resolve()`, which is string algebra: it collapses `..` and nothing else, so
+  a symlink inside the repository reached anywhere on the filesystem while
+  `sandbox = "confined"` was set. This was a full escape in both directions —
+  reading a file the repository does not contain, and creating one outside the
+  root. Real paths are compared now, on both sides, so a checkout reached
+  through a symlinked parent still resolves to itself.
+
+### Added
+
+- **`grep` and `glob`.** Finding a symbol was previously either a guess at a
+  filename or a `bash` call, and under `approval = "on_write"` every `bash`
+  call costs an approval — so a role without `bash` could not find a file it
+  had not been told the name of. Both are read-only and therefore never gated.
+  Measured on the same task, same model: **11 tool calls and 25.1s with a wrong
+  answer, against 1 call and 4.5s with the right one.**
+
+- **`compute` — arithmetic the model is not asked to do in its head.** A model
+  asked for a number produces one whether or not it computed it, and the wrong
+  answer arrives with the same confidence as the right one. Exact decimal
+  arithmetic over scaled BigInts, so `0.1 + 0.2` is `0.3` and `19.99 * 3` is
+  `59.97`. It is a recursive-descent parser, never `eval`: the expression is
+  model-authored text from an inference endpoint, and handing that to a
+  JavaScript evaluator would make every arithmetic question a code-execution
+  primitive. It is also self-contained rather than shelling out to `python3` or
+  `bc`, because "whichever interpreter this machine has" is precisely the
+  machine-scoped dependency Rule 1 forbids.
+
+- **Token accounting from the backend.** `prompt_eval_count`/`eval_count`
+  (Ollama) and `usage.prompt_tokens`/`completion_tokens` (OpenAI) are read,
+  summed across every model call a turn makes — a turn with six tool calls made
+  seven — and reported on the meta line (`2.3s · 1.7k in 93 out`), in `--json`
+  under `volatile`, and in the audit trail. A measured count prints bare and an
+  estimate keeps its `~`, because the existing `estimateTokens` is a
+  ~4-characters-per-token approximation that exists to slide the context window
+  identically on every machine and is wrong on code. A backend that reports
+  nothing leaves the key off rather than writing `0`.
+
+### Fixed
+
+- **`approval = "always"` now means something.** It was consulted only by
+  `bash`, `write`, `edit` and `skill` — which are exactly the `on_write` stops —
+  so the two settings behaved identically and `always` was a documented dial
+  that turned nothing. Every tool consults the gate now, so the three values
+  are three ways to work: `always` asks about every call including reads and
+  searches, `on_write` asks only about calls that can change something, `never`
+  asks about nothing. A test asserts the first two are distinguishable.
+
+- **The TUI banner was thirteen columns narrower than its border.** Both boxes
+  in this repository had shipped misaligned; the padding is computed from the
+  border width now, and measured on the bare string so ANSI escapes — which
+  occupy characters and no columns — cannot shift it again.
+
+- **Refused turns are no longer erased from the conversation.** Context was
+  filtered to `code === 0`, so every refusal and every apparatus failure
+  vanished from history. Denying a write and then saying "put it in `src/`
+  instead" left the model with no referent for "it" — the most common thing a
+  person does after a gate fires was the one the harness forgot. Replay is now
+  decided by bucket: result and refusal both replay, because both are things
+  the model said; apparatus_failure does not, because there the output really
+  is a transport error string.
+
+- **`./gnomon` ran in the wrong directory and mangled its arguments.** The
+  repo-root shim still had the two bugs the real launcher documents having
+  fixed: `cwd` pinned to the checkout, so running it inside another project
+  operated on gnomon's own surface, and `shell: true`, which re-split the argv
+  array through `sh` — `./gnomon task "fix the login bug & ship it"` arrived as
+  five arguments with the remainder backgrounded at the `&`. It is now a thin
+  re-exec of `packages/gnomon-cli/gnomon.js`, so there is one launcher policy
+  rather than two.
+
+- **The interactive banner was a column wider than its own border.** Both
+  content lines measured 46 against the border's 45.
+
+### Known
+
+- **~200ms of the per-invocation overhead is `tsx` transpiling the sources.**
+  Measured against a raw Ollama call on the same prompt: 126ms raw, 356ms
+  through `gnomon task`, with a 197ms boot floor — so gnomon's own logic is
+  ~33ms and the rest is startup. An interactive session pays it once; a script
+  calling `gnomon task` in a loop pays it every time. Removing it means running
+  compiled output, which means giving every workspace package conditional
+  `exports` (they all currently point at `./src/index.ts`) and changing what
+  vitest resolves. That is a deliberate change to how the workspace builds, not
+  something to slip into a hardening pass.
+
+- **Enabling `[audit]` costs nothing measurable.** 338ms with the trail on
+  against 354ms with it off, over the same task — within run-to-run noise.
+
+### Added
+
 - **`/session` opens an arrow-key picker.** Sessions are listed by when they
   were and what they were about — the identifier is how the file is named, not
   how anyone recognises a conversation. Continuing one previously meant reading

@@ -22,6 +22,34 @@ cd ../gnomon-natives && pnpm build
 cd ../gnomon-cli && pnpm build
 ```
 
+## The gate
+
+One command decides:
+
+```bash
+.gnomon/ci.sh
+```
+
+It builds the native binaries, runs both suites, checks every conformance
+fixture and computes the manifest twice to prove it is deterministic. A change
+is not ready until it passes, whatever else looks right.
+
+**Documentation is tested like code.** `packages/gnomon-cli/src/docs.test.ts`
+checks the README against the implementation — every CLI command it lists is
+dispatched, every slash command it names is reachable by Tab, every default it
+quotes is what a scaffolded surface has. Changing a default, a role's tool list
+or a command name *will* fail those tests until the README moves too. That is
+the test working: much of this repository's history is documented behaviour
+that was not the behaviour.
+
+## Branches
+
+Nothing lands on `master` directly — releases are cut from it. Branch as
+`feat/<area>-<what>`, `fix/<area>-<what>`, `docs/<what>`, `chore/<what>`, one
+reviewable idea per branch. The starter surface's `bash_deny` refuses
+force-pushes and pushes straight onto `main`/`master`/`release`; that guardrail
+binds the agent, and branch protection on the remote is what binds everyone.
+
 ## Running conformance tests
 
 ```bash

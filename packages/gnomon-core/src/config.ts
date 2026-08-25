@@ -210,6 +210,20 @@ export interface RoleDef {
    */
   bash_allow?: string[];
   /**
+   * Commands this role may never run, whatever `bash_allow` permits.
+   *
+   * An allow-list cannot express "everything except three catastrophes", and
+   * that is the shape the implementing role needs: unrestricted bash for
+   * builds and test suites it cannot enumerate in advance, minus the handful
+   * of operations whose damage is neither local nor undoable — force-pushing
+   * a release branch, deleting it on the remote.
+   *
+   * Case-insensitive regular expressions, matched against the whole command
+   * and each top-level segment. Deny wins over allow, and a pattern that will
+   * not compile refuses rather than permits.
+   */
+  bash_deny?: string[];
+  /**
    * Paths this role may create or modify, as globs — `docs/**`, `**\/*.md`.
    *
    * Absent means anywhere inside the sandbox. Withholding `edit` stops a role

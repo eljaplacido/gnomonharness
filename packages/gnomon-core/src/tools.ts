@@ -20,11 +20,21 @@ import {
   existsSync,
   statSync,
   readdirSync,
+  realpathSync,
+  Dirent,
   mkdirSync,
 } from "node:fs";
 import { resolve, relative, isAbsolute, dirname, join, sep } from "node:path";
-import { GnomonConfig, declaredTools, isToolEnabled } from "./config.js";
+import { lookup as dnsLookupCb } from "node:dns";
+import { promisify } from "node:util";
+import {
+  GnomonConfig,
+  declaredTools,
+  isToolEnabled,
+  recomputeManifest,
+} from "./config.js";
 import { proposeSkill, renderSkill, SkillProposal } from "./skills.js";
+import { compute, ComputeError } from "./compute.js";
 
 // ---------------------------------------------------------------------------
 // Outcome codes
@@ -45,6 +55,12 @@ export interface ToolOutcome {
   content: string;
   /** One line for the transcript */
   summary: string;
+  /**
+   * Set when `.gnomon/` moved while this call ran. Only `bash` can do this —
+   * `write` and `edit` refuse the surface outright — and it is reported rather
+   * than prevented because the command is arbitrary shell.
+   */
+  surface_drift?: SurfaceDrift;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,6 +92,81 @@ const IMPLEMENTED: Record<string, Record<string, unknown>> = {
     ["path"]
   ),
   bash: obj({ command: str("Shell command to run") }, ["command"]),
+  task: obj(
+    {
+      role: str(
+        "Role the sub-turn runs as. It gets that role's tools, not yours."
+      ),
+      instruction: str(
+        "Everything the sub-turn needs. It starts with no history and cannot " +
+          "see this conversation."
+      ),
+    },
+    ["role", "instruction"]
+  ),
+  webfetch: obj(
+    {
+      url: str("Absolute http or https URL to retrieve as text"),
+    },
+    ["url"]
+  ),
+  todo: {
+    type: "object",
+    properties: {
+      todos: {
+        type: "array",
+        description:
+          "The complete checklist, replacing the previous one. Send every " +
+          "item each time, not just the changed ones.",
+        items: {
+          type: "object",
+          properties: {
+            content: str("What the step is, in a few words"),
+            status: {
+              type: "string",
+              enum: ["pending", "in_progress", "completed"],
+              description: "At most one item may be in_progress.",
+            },
+          },
+          required: ["content", "status"],
+        },
+      },
+    },
+    required: ["todos"],
+    additionalProperties: false,
+  },
+  compute: obj(
+    {
+      expression: str(
+        "Arithmetic to evaluate exactly, e.g. `19.99 * 3` or " +
+          "`round(1234 / 7, 2)`. Operators + - * / % ^ and the functions " +
+          "sqrt, abs, round, floor, ceil, min, max."
+      ),
+    },
+    ["expression"]
+  ),
+  glob: obj(
+    {
+      pattern: str(
+        "Glob over the path, e.g. `**/*.ts`, `src/**/test_*.py`. `*` stops " +
+          "at a separator, `**` crosses them."
+      ),
+      path: str("Directory to search under, relative to the root. Default: the root."),
+    },
+    ["pattern"]
+  ),
+  grep: obj(
+    {
+      pattern: str("Regular expression to match against each line"),
+      path: str("Directory to search under, relative to the root. Default: the root."),
+      include: str("Only search files whose path matches this glob, e.g. `**/*.rs`"),
+      ignore_case: {
+        type: "boolean",
+        description: "Match case-insensitively. Default: false.",
+      },
+    },
+    ["pattern"]
+  ),
   write: obj(
     {
       path: str("File path, relative to the repository root"),
@@ -204,8 +295,56 @@ export function resolveInRoot(
 ): string | null {
   const abs = isAbsolute(path) ? resolve(path) : resolve(root, path);
   if (sandbox === "off") return abs;
-  const rel = relative(resolve(root), abs);
+
+  // Compare real paths, not written ones. `resolve()` is pure string algebra:
+  // it collapses `..` and nothing else, so a symlink inside the repository
+  // pointing anywhere on the filesystem passed this check untouched. That was
+  // a full escape in both directions — `read link-to-outside.txt` returned a
+  // file the repository does not contain, and `write linked-dir/f` created one
+  // outside the root while sandbox was set to "confined".
+  //
+  // The root is realpath'd too, so a checkout reached through a symlinked
+  // parent (a home directory on another volume, a /tmp that is really
+  // /private/tmp) still resolves to itself rather than looking like an escape.
+  const realRoot = realpathOrSelf(resolve(root));
+  const realAbs = realpathOfNearest(abs);
+  const rel = relative(realRoot, realAbs);
   if (rel.startsWith("..") || isAbsolute(rel)) return null;
+  return abs;
+}
+
+/** realpath, falling back to the path itself when it does not exist yet. */
+function realpathOrSelf(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+/**
+ * Real path of `abs`, resolving whatever part of it already exists.
+ *
+ * A write names a file that is usually absent, so `realpathSync` on it throws
+ * and would leave the check with nothing to compare. Walking up to the
+ * nearest existing ancestor and re-attaching the remainder resolves every
+ * symlink on the path that could redirect the write, which is the part that
+ * matters — the final component cannot itself be a symlink if it does not
+ * exist.
+ */
+function realpathOfNearest(abs: string): string {
+  const parts: string[] = [];
+  let cur = abs;
+  for (let i = 0; i < 64; i++) {
+    try {
+      return parts.length > 0 ? join(realpathSync(cur), ...parts) : realpathSync(cur);
+    } catch {
+      const parent = dirname(cur);
+      if (parent === cur) return abs; // reached the filesystem root
+      parts.unshift(cur.slice(parent.length + 1));
+      cur = parent;
+    }
+  }
   return abs;
 }
 
@@ -227,14 +366,55 @@ export interface ApprovalRequest {
 export type Approver = (req: ApprovalRequest) => Promise<boolean>;
 
 /** Tools that can change something outside the model's own context. */
-const MUTATING = new Set(["bash", "write", "edit", "skill"]);
+const MUTATING = new Set(["bash", "write", "edit", "skill", "webfetch", "task"]);
 
 /** Whether a call needs sign-off under the configured gate. */
+/**
+ * Whether a call needs sign-off under the configured gate.
+ *
+ * The three gates are the three ways to run the loop:
+ *
+ *   always   — every tool call asks, reads and searches included. Consent
+ *              after every action.
+ *   on_write — only calls that can change something ask. Consent per change.
+ *   never    — nothing asks. Unattended.
+ *
+ * Every tool must consult this, not only the mutating ones. `always` used to
+ * be reached exclusively from `bash`, `write`, `edit` and `skill`, which are
+ * the same four `on_write` stops — so the two settings behaved identically and
+ * `always` was a documented dial that turned nothing. policy.toml already says
+ * what that is worth: a surface documenting a setting no code reads is worse
+ * than one that omits it, because it invites you to tune something that
+ * cannot move.
+ */
 export function needsApproval(tool: string, gate: ApprovalGate): boolean {
   if (gate === "always") return true;
   if (gate === "never") return false;
   // on_write: bash is included because a command can write anything.
   return MUTATING.has(tool);
+}
+
+/**
+ * Ask for a read-only call, when the gate is strict enough to want one.
+ *
+ * Returns null when the call may proceed, or the refusal to hand back. Reads
+ * and searches share this because under `always` the reason to stop is the
+ * same for all of them, and it is not that they might change something.
+ */
+async function gateReadOnly(
+  tool: string,
+  summary: string,
+  ctx: ToolContext,
+  preview: string[] = []
+): Promise<ToolOutcome | null> {
+  if (!needsApproval(tool, ctx.gate)) return null;
+  const ok = await ctx.approve({ tool, summary, preview });
+  if (ok) return null;
+  return {
+    code: TOOL_DENIED,
+    content: `Refused: the user declined the ${tool} call.`,
+    summary: `${summary} — denied`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +593,16 @@ export interface ToolContext {
    */
   bashAllow?: string[];
   /**
+   * Shell commands the current role may never run, whatever else allows them.
+   *
+   * See RoleDef.bash_deny. This is the list for the handful of operations
+   * whose damage is not local and not undoable by re-running something —
+   * force-pushing a release branch, deleting it on the remote. The role doing
+   * the work has unrestricted bash by necessity; this is how it still cannot
+   * do those.
+   */
+  bashDeny?: string[];
+  /**
    * Paths this role may create or modify, as globs. Empty/undefined means any
    * path inside the sandbox.
    *
@@ -430,6 +620,52 @@ export interface ToolContext {
   timeoutMs: number;
   /** Cap on bytes returned to the model from read/bash */
   maxOutputBytes: number;
+  /**
+   * The session checklist `todo` reads and replaces.
+   *
+   * Supplied by the loop, which owns session state. Absent means the tool is
+   * unavailable rather than silently forgetful — a checklist that accepted
+   * writes and dropped them would be worse than no checklist.
+   */
+  todos?: TodoStore;
+  /**
+   * Runs a sub-turn under another role, for the `task` tool. Supplied by the
+   * loop, because a tool cannot call the model by itself.
+   */
+  delegate?: Delegate;
+  /** Whether tools may reach the network. From `[sandbox] network`. */
+  network?: boolean;
+}
+
+/** One item on the session checklist. */
+export interface Todo {
+  content: string;
+  status: TodoStatus;
+}
+
+export type TodoStatus = "pending" | "in_progress" | "completed";
+
+/** Where the checklist lives. The loop owns it; the tool only edits it. */
+export interface TodoStore {
+  list(): Todo[];
+  replace(todos: Todo[]): void;
+}
+
+/** What `task` needs from the loop to run a sub-turn. */
+export interface Delegate {
+  /** Roles a sub-turn may be given. */
+  roles(): string[];
+  /** Run `instruction` as `role`, with no history, and return its answer. */
+  run(role: string, instruction: string): Promise<DelegateResult>;
+  /** How deep the current turn already is. 0 is the top-level turn. */
+  depth: number;
+}
+
+export interface DelegateResult {
+  content: string;
+  code: number;
+  toolSteps: number;
+  model: string;
 }
 
 function clamp(text: string, limit: number): string {
@@ -437,7 +673,10 @@ function clamp(text: string, limit: number): string {
   return `${text.slice(0, limit)}\n… [truncated at ${limit} bytes]`;
 }
 
-function readTool(args: Record<string, unknown>, ctx: ToolContext): ToolOutcome {
+async function readTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolOutcome> {
   const path = String(args.path ?? "");
   const abs = resolveInRoot(ctx.root, path, ctx.sandbox);
   if (!abs) {
@@ -458,6 +697,9 @@ function readTool(args: Record<string, unknown>, ctx: ToolContext): ToolOutcome 
       summary: `read ${path} — not found`,
     };
   }
+  const denied = await gateReadOnly("read", `read ${path}`, ctx);
+  if (denied) return denied;
+
   try {
     if (statSync(abs).isDirectory()) {
       const entries = readdirSync(abs, { withFileTypes: true })
@@ -519,6 +761,58 @@ async function bashTool(
   const command = String(args.command ?? "");
   if (!command.trim()) {
     return { code: TOOL_FAILED, content: "Empty command.", summary: "bash — empty" };
+  }
+
+  // Deny first, and independently of the allow-list.
+  //
+  // An allow-list cannot say "everything except three catastrophes". The role
+  // that does the work needs unrestricted bash — it runs builds, installers
+  // and test suites nobody can enumerate in advance — and that is exactly the
+  // role you want stopped from force-pushing over a release branch. Those are
+  // different questions, so they are different lists, and deny wins: a pattern
+  // on both is denied.
+  if (ctx.bashDeny && ctx.bashDeny.length > 0) {
+    const scan = scanShellCommand(command);
+    // The whole string as well as each segment. A segment split cannot see
+    // `git push --force` written across a substitution, and denial is the one
+    // place where matching too much is the safer error.
+    const subjects = [command, ...scan.segments];
+    for (const pattern of ctx.bashDeny) {
+      let re: RegExp;
+      try {
+        // Case-sensitive, like bash_allow. Shell commands and flags are, and
+        // folding case here does real damage: `git branch -D` discards an
+        // unmerged branch while `-d` refuses to, and the two differ only by
+        // case. An "i" flag turned the guardrail on the destructive form into
+        // a block on the safe one.
+        re = new RegExp(pattern);
+      } catch {
+        // A deny pattern that will not compile must fail closed, unlike an
+        // allow pattern: the cost of refusing a safe command is an error
+        // message, and the cost of running an unsafe one is a lost branch.
+        return {
+          code: TOOL_DENIED,
+          content:
+            `Refused: this role has a bash_deny pattern that is not a valid ` +
+            `regular expression (${pattern}). Fix it in roles.toml — while it ` +
+            `cannot be evaluated, bash is refused rather than allowed.`,
+          summary: "bash — deny pattern will not compile",
+        };
+      }
+      const hit = subjects.find((sub) => re.test(sub));
+      if (hit !== undefined) {
+        return {
+          code: TOOL_DENIED,
+          content:
+            `Refused: "${hit.trim().slice(0, 80)}" matches a bash_deny pattern ` +
+            `for this role (/${pattern}/).\n\n` +
+            `This is a guardrail in .gnomon/roles.toml, not a judgement about ` +
+            `the command. If it should be allowed, the list is the thing to ` +
+            `change — and changing it moves the surface hash.`,
+          summary: `bash — denied by bash_deny (/${pattern}/)`,
+        };
+      }
+    }
   }
 
   // A role may narrow bash to specific commands. Without this, `tools` alone
@@ -583,6 +877,11 @@ async function bashTool(
     }
   }
 
+  // Pinned before the command runs so drift can be attributed to it. See
+  // surfaceHashOf: bash is arbitrary shell, so the surface is detected moving
+  // rather than prevented from moving.
+  const surfaceBefore = surfaceHashOf(ctx);
+
   return new Promise<ToolOutcome>((done) => {
     const proc = spawn(command, {
       shell: true,
@@ -632,10 +931,12 @@ async function bashTool(
       ]
         .filter(Boolean)
         .join("\n");
+      const drift = surfaceDrift(ctx, surfaceBefore);
       done({
         code: TOOL_OK,
-        content: clamp(body, ctx.maxOutputBytes),
-        summary: `bash — exit ${exit}`,
+        content: clamp(body, ctx.maxOutputBytes) + (drift ? `\n\n${drift.notice}` : ""),
+        summary: `bash — exit ${exit}${drift ? " · surface changed" : ""}`,
+        surface_drift: drift ?? undefined,
       });
     });
   });
@@ -688,6 +989,86 @@ export function globToRegExp(glob: string): RegExp {
  * the argument as written would make the scope bypassable by anyone who typed
  * two dots.
  */
+/**
+ * Whether `abs` lands inside the `.gnomon/` surface.
+ *
+ * The surface is the thing every behaviour is a function of: the tool list,
+ * the approval gate, the per-role `bash_allow` and `write_allow`. An agent
+ * that can write there can rewrite the rules it is being judged by — set
+ * `approval = "never"`, widen `bash_allow`, hand itself the `edit` tool — and
+ * the next turn runs under the surface it authored. It also silently moves
+ * the surface hash, which is the one identifier a session is traced by.
+ *
+ * So `write` and `edit` stop at the boundary regardless of role. Changing the
+ * surface stays a human act, done in an editor. The `skill` tool is the sole
+ * sanctioned way in, and it does not come through here: it writes proposals
+ * to `.gnomon/skills/proposed/`, which are inert until `gnomon skill accept`
+ * moves them — deliberately changing the hash, with a person doing it.
+ */
+/**
+ * The current surface hash, or null if it cannot be computed.
+ *
+ * `write` and `edit` stop at the `.gnomon/` boundary, but `bash` cannot be
+ * held to that: the command is arbitrary shell, and an allow-list that tried
+ * to spot every way a process can touch a file would be a guess dressed up as
+ * a guarantee. So the surface is not *prevented* from moving under bash — it
+ * is *detected*, by re-reading the hash on the far side of the command.
+ *
+ * Detection rather than prevention is the honest primitive here, and it is
+ * the one the harness already relies on: the hash is what makes a session
+ * reproducible, so a hash that moved mid-session is exactly the fact a reader
+ * needs, whatever mechanism moved it.
+ */
+/** A surface hash that moved while a command ran. */
+export interface SurfaceDrift {
+  before: string;
+  after: string;
+  notice: string;
+}
+
+/**
+ * Compare the surface hash against the one pinned before a command ran.
+ *
+ * Returns null when nothing moved, which is the overwhelmingly common case
+ * and costs one walk of `.gnomon/`.
+ */
+export function surfaceDrift(
+  ctx: ToolContext,
+  before: string | null
+): SurfaceDrift | null {
+  if (!before) return null;
+  const after = surfaceHashOf(ctx);
+  if (!after || after === before) return null;
+  return {
+    before,
+    after,
+    notice:
+      `[gnomon] WARNING: that command changed .gnomon/ — the surface hash ` +
+      `moved from ${before.slice(0, 12)} to ${after.slice(0, 12)}. The rules ` +
+      `this session is running under are no longer the ones it started with, ` +
+      `and the earlier turns were recorded against a surface that no longer ` +
+      `exists. Restore .gnomon/ (git checkout) before continuing, or start a ` +
+      `new session so the record matches the surface.`,
+  };
+}
+
+export function surfaceHashOf(ctx: ToolContext): string | null {
+  const dir = ctx.config?.gnomonDir ?? join(ctx.root, ".gnomon");
+  try {
+    return recomputeManifest(dir).surface_hash;
+  } catch {
+    return null;
+  }
+}
+
+export function inSurface(ctx: ToolContext, abs: string): boolean {
+  const surface = ctx.config?.gnomonDir
+    ? resolve(ctx.config.gnomonDir)
+    : resolve(ctx.root, ".gnomon");
+  const rel = relative(surface, resolve(abs));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
 export function writeAllowed(
   ctx: ToolContext,
   abs: string
@@ -707,6 +1088,721 @@ export function writeAllowed(
     : { ok: false, rel, listed: allowed.map((p) => `"${p}"`).join(", ") };
 }
 
+/**
+ * `todo` — the checklist a long run is steered by.
+ *
+ * A turn that spans thirty tool calls loses the shape of what it set out to
+ * do. The model re-derives the plan from the transcript every few steps, which
+ * costs tokens and drifts; and whoever is watching cannot tell how far through
+ * it is. An explicit list fixes both, and it is the model's own list rather
+ * than the harness's guess at one.
+ *
+ * The whole list is replaced on every call rather than patched item by item.
+ * A patch protocol needs stable identifiers, and identifiers a model invents
+ * are a source of silent mismatches — "update item 3" against a list it has
+ * since reordered. Replacing is idempotent and has no such failure.
+ *
+ * It touches no file and reaches nothing outside the session, so it is not in
+ * MUTATING and costs no approval under `on_write`.
+ */
+async function todoTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolOutcome> {
+  if (!ctx.todos) {
+    return {
+      code: TOOL_FAILED,
+      content: "The checklist is unavailable in this run.",
+      summary: "todo — unavailable",
+    };
+  }
+
+  const raw = args.todos;
+  if (!Array.isArray(raw)) {
+    return {
+      code: TOOL_FAILED,
+      content:
+        "todo takes `todos`: the complete list, e.g. " +
+        '[{"content":"read the config","status":"completed"}]. ' +
+        "Send the whole list every time — it replaces the previous one.",
+      summary: "todo — no list",
+    };
+  }
+  if (raw.length > 100) {
+    return {
+      code: TOOL_FAILED,
+      content: "A checklist of more than 100 items is a plan that needs splitting.",
+      summary: "todo — too many items",
+    };
+  }
+
+  const todos: Todo[] = [];
+  for (const item of raw) {
+    const o = (item ?? {}) as Record<string, unknown>;
+    const content = String(o.content ?? "").trim();
+    if (!content) {
+      return {
+        code: TOOL_FAILED,
+        content: "Every checklist item needs a non-empty `content`.",
+        summary: "todo — empty item",
+      };
+    }
+    const status = String(o.status ?? "pending");
+    if (status !== "pending" && status !== "in_progress" && status !== "completed") {
+      return {
+        code: TOOL_FAILED,
+        content:
+          `"${status}" is not a status. Use pending, in_progress or completed.`,
+        summary: "todo — bad status",
+      };
+    }
+    todos.push({ content: content.slice(0, 200), status });
+  }
+
+  // One thing at a time, enforced rather than suggested. A list with four
+  // items in progress is a list nobody is steering by, and it is the shape a
+  // model drifts into when nothing stops it.
+  const running = todos.filter((t) => t.status === "in_progress");
+  if (running.length > 1) {
+    return {
+      code: TOOL_FAILED,
+      content:
+        `${running.length} items are in_progress. Exactly one thing is worked ` +
+        `on at a time — mark the others pending.`,
+      summary: `todo — ${running.length} in progress`,
+    };
+  }
+
+  const denied = await gateReadOnly("todo", `todo — ${todos.length} item(s)`, ctx);
+  if (denied) return denied;
+
+  ctx.todos.replace(todos);
+
+  const done = todos.filter((t) => t.status === "completed").length;
+  const mark = (t: Todo) =>
+    t.status === "completed" ? "[x]" : t.status === "in_progress" ? "[>]" : "[ ]";
+  const body = todos.map((t) => `${mark(t)} ${t.content}`).join("\n");
+  const now = running[0]?.content;
+  return {
+    code: TOOL_OK,
+    content:
+      `Checklist (${done}/${todos.length} done):\n${body || "(empty)"}` +
+      (now ? `\n\nWorking on: ${now}` : ""),
+    summary: `todo — ${done}/${todos.length} done${now ? ` · ${now.slice(0, 40)}` : ""}`,
+  };
+}
+
+/**
+ * `compute` — arithmetic the model is not asked to do in its head.
+ *
+ * A language model asked for a number produces one whether or not it computed
+ * it, and the wrong answer arrives with exactly the same confidence as the
+ * right one. Giving it somewhere deterministic to send the question is worth
+ * more than any instruction not to guess — so system.md points here, and this
+ * evaluates the expression exactly rather than in floating point.
+ *
+ * Pure: no filesystem, no network, no state. That makes it read-only in the
+ * sense the approval gate cares about, so it is not in MUTATING and never
+ * interrupts anyone for sign-off.
+ */
+async function computeTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolOutcome> {
+  const expression = String(args.expression ?? "").trim();
+  const denied = await gateReadOnly("compute", `compute ${expression}`, ctx);
+  if (denied) return denied;
+
+  try {
+    const value = compute(expression);
+    return {
+      code: TOOL_OK,
+      content: `${expression} = ${value}`,
+      summary: `compute ${expression} = ${value}`,
+    };
+  } catch (err) {
+    if (err instanceof ComputeError) {
+      // 11, not a refusal. The published contract puts "ambiguous edit" here —
+      // a tool that understood the request and could not carry it out — and an
+      // expression that will not parse is the same shape. Refusal (2-4) is
+      // reserved for something saying no: a declined approval, an allow-list,
+      // a tool this role was not given. Keeping that line in one place is what
+      // lets a reader treat the buckets as meaning anything.
+      return {
+        code: TOOL_FAILED,
+        content: `Cannot evaluate "${expression}": ${err.message}`,
+        summary: `compute — ${err.message}`,
+      };
+    }
+    throw err;
+  }
+}
+
+/**
+ * `task` — run a sub-turn under another role, with its own context.
+ *
+ * The separation this makes possible is the one the harness is built around:
+ * a critique that never saw the implementer's reasoning, a verifier that
+ * cannot have edited what it judges. Until now that separation existed only
+ * across turns a person drove by hand — you switched role and re-explained.
+ * This lets one turn reach for it.
+ *
+ * Three things it deliberately does:
+ *
+ *   * The sub-turn gets the *target role's* tools, not the caller's. That is
+ *     the whole point — delegating to `verifier` must not hand it `write`
+ *     because the implementor had it. Capability comes from the surface.
+ *   * It cannot nest. A sub-turn is offered no `task` tool, so a run cannot
+ *     fan out into a tree nobody bounded. One level is enough for the
+ *     separation and is a depth a reader can hold.
+ *   * Only the answer comes back, not the transcript. Replaying a sub-turn's
+ *     tool calls into the parent would defeat the isolation that made it worth
+ *     running — and cost the context twice.
+ *
+ * Gated like a write. Its own tool calls are gated individually too, so the
+ * extra prompt is not redundant: it is the moment capability changes hands,
+ * and it names which role is about to get what.
+ */
+async function taskTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolOutcome> {
+  if (!ctx.delegate) {
+    return {
+      code: TOOL_FAILED,
+      content: "Sub-turns are unavailable in this run.",
+      summary: "task — unavailable",
+    };
+  }
+  if (ctx.delegate.depth > 0) {
+    // Reached only if a surface offers `task` to a role a sub-turn runs as;
+    // the sub-turn's tool list already withholds it.
+    return {
+      code: TOOL_DENIED,
+      content:
+        "Refused: a sub-turn cannot start another one. Do this work here, or " +
+        "report back so the turn that called you can delegate again.",
+      summary: "task — refused (already a sub-turn)",
+    };
+  }
+
+  const role = String(args.role ?? "").trim();
+  const instruction = String(args.instruction ?? "").trim();
+  const known = ctx.delegate.roles();
+
+  if (!role || !known.includes(role)) {
+    return {
+      code: TOOL_FAILED,
+      content:
+        `"${role || "(none)"}" is not a role in this repository. ` +
+        `Available: ${known.join(", ")}.`,
+      summary: `task — unknown role "${role}"`,
+    };
+  }
+  if (!instruction) {
+    return {
+      code: TOOL_FAILED,
+      content:
+        "task needs an `instruction`. The sub-turn starts with no history, so " +
+        "say everything it needs — it cannot see this conversation.",
+      summary: "task — no instruction",
+    };
+  }
+
+  const subTools = ctx.config ? buildToolSet(ctx.config, role) : null;
+  const offers = subTools
+    ? subTools.schemas.map((t) => t.function.name).filter((n) => n !== "task")
+    : [];
+
+  if (needsApproval("task", ctx.gate)) {
+    const ok = await ctx.approve({
+      tool: "task",
+      summary: `delegate to "${role}"`,
+      preview: [
+        `  role:  ${role}`,
+        `  tools: ${offers.join(", ") || "(none)"}`,
+        ...instruction.split("\n").slice(0, 12).map((l) => `  │ ${l}`),
+      ],
+    });
+    if (!ok) {
+      return {
+        code: TOOL_DENIED,
+        content: `Refused: the user declined to delegate to "${role}".`,
+        summary: `task ${role} — denied`,
+      };
+    }
+  }
+
+  const r = await ctx.delegate.run(role, instruction);
+  return {
+    // The sub-turn's worst outcome is this call's outcome: a delegated
+    // refusal is a refusal, not a successful delegation of one.
+    code: r.code,
+    content:
+      `Sub-turn as "${role}" (${r.model}, ${r.toolSteps} tool call(s)) reported:\n\n` +
+      r.content,
+    summary: `task ${role} — ${r.toolSteps} tool call(s)`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Network
+// ---------------------------------------------------------------------------
+
+/**
+ * Address ranges a fetched URL may never resolve to.
+ *
+ * A URL supplied by a model is attacker-influenced input in every deployment
+ * where the model reads anything it did not write — a fetched page, a file, an
+ * issue comment. Left unchecked, `webfetch` is a server-side request forgery
+ * primitive pointed at whatever the machine can reach but the network cannot:
+ * a metadata endpoint holding cloud credentials, an unauthenticated admin port
+ * on localhost, a service on the LAN.
+ *
+ * The check is on the *resolved address*, not the hostname, because a name is
+ * not a destination: `localtest.me` and any attacker-controlled domain can
+ * publish an A record pointing at 127.0.0.1.
+ */
+function isBlockedAddress(ip: string): boolean {
+  const v4 = ip.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    if (a === 0) return true; // "this network"
+    if (a === 10) return true; // private
+    if (a === 127) return true; // loopback
+    if (a === 169 && b === 254) return true; // link-local, incl. cloud metadata
+    if (a === 172 && b >= 16 && b <= 31) return true; // private
+    if (a === 192 && b === 168) return true; // private
+    if (a === 100 && b >= 64 && b <= 127) return true; // carrier-grade NAT
+    if (a >= 224) return true; // multicast and reserved
+    return false;
+  }
+  const v6 = ip.toLowerCase().replace(/^\[|\]$/g, "");
+  if (v6 === "::1" || v6 === "::") return true; // loopback, unspecified
+  if (v6.startsWith("fe80")) return true; // link-local
+  if (/^f[cd]/.test(v6)) return true; // unique local
+  // IPv4-mapped (::ffff:127.0.0.1) is the same destination by another spelling.
+  const mapped = v6.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return isBlockedAddress(mapped[1]);
+  return false;
+}
+
+/** Every address a host resolves to must be allowed, not merely the first. */
+async function resolvesToBlocked(hostname: string): Promise<string | null> {
+  const bare = hostname.replace(/^\[|\]$/g, "");
+  if (isBlockedAddress(bare)) return bare; // a literal IP needs no lookup
+  let addrs: { address: string }[];
+  try {
+    addrs = await dnsLookup(bare, { all: true, verbatim: true });
+  } catch {
+    return null; // a name that will not resolve fails at fetch, with its own error
+  }
+  // Any address being blocked blocks the fetch: a host that answers with one
+  // public and one loopback address is the classic rebinding shape.
+  for (const a of addrs) {
+    if (isBlockedAddress(a.address)) return a.address;
+  }
+  return null;
+}
+
+/** Strip tags and collapse whitespace — the text, not the markup. */
+function htmlToText(html: string): string {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s*\n\s*\n+/g, "\n\n")
+    .trim();
+}
+
+/**
+ * `webfetch` — retrieve a URL as text.
+ *
+ * Outward-facing, so it is gated like a write: the request leaves the machine,
+ * and what leaves it is a URL a model chose. It is also the one tool that
+ * makes `[sandbox] network` real. That key was declared and unenforced — the
+ * startup banner said so — which is the same shape as `approval = "always"`
+ * being a dial that turned nothing. `network = false` now refuses the fetch
+ * and names the file, so the default surface has no network reach and gaining
+ * it is a visible edit that moves the surface hash.
+ */
+async function webfetchTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolOutcome> {
+  const raw = String(args.url ?? "").trim();
+  if (!raw) {
+    return {
+      code: TOOL_FAILED,
+      content: "webfetch needs a `url`.",
+      summary: "webfetch — no url",
+    };
+  }
+
+  if (ctx.network === false) {
+    return {
+      code: TOOL_DENIED,
+      content:
+        `Refused: .gnomon/policy.toml sets [sandbox] network = false, so tools ` +
+        `may not reach the network. Set it to true to allow webfetch — that is ` +
+        `an edit to the surface, and it changes the surface hash.`,
+      summary: `webfetch ${raw} — refused (network disabled)`,
+    };
+  }
+
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return {
+      code: TOOL_FAILED,
+      content: `"${raw}" is not a valid URL.`,
+      summary: "webfetch — bad url",
+    };
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    // file: would read the filesystem with none of the sandbox checks that
+    // `read` applies; the rest are not fetchable in any useful sense.
+    return {
+      code: TOOL_DENIED,
+      content: `Refused: only http and https are fetchable, not "${url.protocol}".`,
+      summary: `webfetch — ${url.protocol} refused`,
+    };
+  }
+
+  const blocked = await resolvesToBlocked(url.hostname);
+  if (blocked) {
+    return {
+      code: TOOL_DENIED,
+      content:
+        `Refused: ${url.hostname} resolves to ${blocked}, a private, loopback ` +
+        `or link-local address. Fetching those would let a URL reach services ` +
+        `this machine can see and the network cannot — including cloud ` +
+        `metadata endpoints.`,
+      summary: `webfetch ${url.hostname} — refused (private address)`,
+    };
+  }
+
+  const denied = await gateReadOnly("webfetch", `webfetch ${url.href}`, ctx, [
+    `  GET ${url.href}`,
+  ]);
+  if (denied) return denied;
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      // Redirects are followed by hand so each hop is re-checked; `follow`
+      // would let a public URL bounce to 169.254.169.254 unexamined.
+      redirect: "manual",
+      headers: { "User-Agent": "gnomon", Accept: "text/*, application/json;q=0.9, */*;q=0.1" },
+      signal: AbortSignal.timeout(ctx.timeoutMs),
+    });
+  } catch (err) {
+    return {
+      code: TOOL_FAILED,
+      content: `Could not fetch ${url.href}: ${err instanceof Error ? err.message : String(err)}`,
+      summary: `webfetch ${url.hostname} — failed`,
+    };
+  }
+
+  if (res.status >= 300 && res.status < 400) {
+    const to = res.headers.get("location");
+    return {
+      code: TOOL_OK_EMPTY,
+      content:
+        `${url.href} redirects (${res.status}) to ${to ?? "an unnamed location"}. ` +
+        `Redirects are not followed automatically — call webfetch again with ` +
+        `that URL if it is the one you want, and it will be checked in its own right.`,
+      summary: `webfetch ${url.hostname} — ${res.status} redirect`,
+    };
+  }
+
+  const body = await res.text().catch(() => "");
+  const type = res.headers.get("content-type") ?? "";
+  const text = /html/i.test(type) ? htmlToText(body) : body;
+
+  return {
+    code: res.ok ? TOOL_OK : TOOL_OK_EMPTY,
+    content: clamp(
+      `${res.status} ${res.statusText} · ${type || "unknown type"}\n\n${text}`,
+      ctx.maxOutputBytes
+    ),
+    summary: `webfetch ${url.hostname} — ${res.status}, ${text.length} chars`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Search: glob and grep
+// ---------------------------------------------------------------------------
+
+/**
+ * Directories never walked by `glob` or `grep`.
+ *
+ * Fixed, not configurable, and deliberately so: a search that returned a
+ * different set of files depending on a machine's ignore rules would make the
+ * same question answerable differently on two checkouts. These are the trees
+ * that are build output or dependency caches in every ecosystem this harness
+ * targets, and none of them is source anyone is asking about.
+ */
+const dnsLookup = promisify(dnsLookupCb) as (
+  host: string,
+  opts: { all: true; verbatim: boolean }
+) => Promise<{ address: string }[]>;
+
+const NEVER_WALKED = new Set([
+  ".git",
+  "node_modules",
+  "target",
+  "dist",
+  "build",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".next",
+  ".turbo",
+  "vendor",
+  ".gnomon-audit",
+  ".gnomon-sessions",
+]);
+
+/** Hard ceilings, so a search on a large tree cannot hang or flood the window. */
+const WALK_MAX_FILES = 20_000;
+const SEARCH_MAX_HITS = 200;
+
+/**
+ * Walk the tree under `dir`, returning repo-relative POSIX paths, sorted.
+ *
+ * Sorted because the model's next move is decided by what comes back: an
+ * order that depended on the filesystem would make an identical repository
+ * answer the same question differently on two machines.
+ */
+function walkFiles(root: string, dir: string): string[] {
+  const out: string[] = [];
+  const stack: string[] = [dir];
+  while (stack.length > 0 && out.length < WALK_MAX_FILES) {
+    const cur = stack.pop()!;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(cur, { withFileTypes: true });
+    } catch {
+      continue; // unreadable directory is not a reason to fail the search
+    }
+    for (const e of entries) {
+      if (e.isSymbolicLink()) continue; // a link out of the tree escapes the sandbox
+      const abs = join(cur, e.name);
+      if (e.isDirectory()) {
+        if (NEVER_WALKED.has(e.name)) continue;
+        stack.push(abs);
+      } else if (e.isFile()) {
+        out.push(relative(root, abs).split(sep).join("/"));
+        if (out.length >= WALK_MAX_FILES) break;
+      }
+    }
+  }
+  return out.sort();
+}
+
+/** Resolve the optional `path` argument to a directory inside the sandbox. */
+function searchScope(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): { abs: string; rel: string } | ToolOutcome {
+  const rel = String(args.path ?? "").trim() || ".";
+  const abs = resolveInRoot(ctx.root, rel, ctx.sandbox);
+  if (!abs) {
+    return {
+      code: TOOL_OUT_OF_SANDBOX,
+      content: `Refused: "${rel}" is outside the repository root and sandbox=${ctx.sandbox}.`,
+      summary: `search ${rel} — refused (outside sandbox)`,
+    };
+  }
+  if (!existsSync(abs)) {
+    return {
+      code: TOOL_OK_EMPTY,
+      content: `No such directory: ${rel}`,
+      summary: `search ${rel} — not found`,
+    };
+  }
+  return { abs, rel };
+}
+
+/**
+ * `glob` — list files whose path matches a glob.
+ *
+ * Read-only, so it is not in MUTATING and never asks for approval. That is
+ * the point of having it: before this existed, a role with no `bash` (the
+ * verifier, the coordinator) could not find a file it had not been told the
+ * name of, and a role with `bash` had to spend an approval on `find` to do
+ * what is plainly a read.
+ */
+async function globTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolOutcome> {
+  const pattern = String(args.pattern ?? "").trim();
+  if (!pattern) {
+    return {
+      code: TOOL_FAILED,
+      content: "glob needs a `pattern`, e.g. `**/*.ts` or `src/**/test_*.py`.",
+      summary: "glob — no pattern",
+    };
+  }
+  const scope = searchScope(args, ctx);
+  if ("code" in scope) return scope;
+
+  let re: RegExp;
+  try {
+    re = globToRegExp(pattern);
+  } catch {
+    return {
+      code: TOOL_FAILED,
+      content: `"${pattern}" is not a valid glob.`,
+      summary: "glob — bad pattern",
+    };
+  }
+
+  const gd = await gateReadOnly("glob", `glob ${pattern} in ${scope.rel}`, ctx);
+  if (gd) return gd;
+
+  const base = scope.rel === "." ? "" : scope.rel.replace(/\/+$/, "") + "/";
+  const hits = walkFiles(ctx.root, scope.abs).filter((f) =>
+    re.test(base ? f.slice(base.length) : f)
+  );
+
+  if (hits.length === 0) {
+    return {
+      code: TOOL_OK_EMPTY,
+      content: `No files match ${pattern} under ${scope.rel}.`,
+      summary: `glob ${pattern} — 0 files`,
+    };
+  }
+  const shown = hits.slice(0, SEARCH_MAX_HITS);
+  const truncated =
+    hits.length > shown.length
+      ? `\n\n(${hits.length - shown.length} more not shown — narrow the pattern)`
+      : "";
+  return {
+    code: TOOL_OK,
+    content: clamp(shown.join("\n") + truncated, ctx.maxOutputBytes),
+    summary: `glob ${pattern} — ${hits.length} file(s)`,
+  };
+}
+
+/**
+ * `grep` — find lines matching a regular expression.
+ *
+ * Returns `path:line:text`, which is what makes the follow-up `read` cheap:
+ * without it a model looking for a symbol guesses filenames, and every guess
+ * is a round trip. Read-only, so no approval.
+ */
+async function grepTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolOutcome> {
+  const pattern = String(args.pattern ?? "").trim();
+  if (!pattern) {
+    return {
+      code: TOOL_FAILED,
+      content: "grep needs a `pattern` — a regular expression.",
+      summary: "grep — no pattern",
+    };
+  }
+  const scope = searchScope(args, ctx);
+  if ("code" in scope) return scope;
+
+  let re: RegExp;
+  try {
+    re = new RegExp(pattern, args.ignore_case === true ? "i" : "");
+  } catch (err) {
+    return {
+      code: TOOL_FAILED,
+      content:
+        `"${pattern}" is not a valid regular expression: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      summary: "grep — bad pattern",
+    };
+  }
+
+  const includeRaw = String(args.include ?? "").trim();
+  let include: RegExp | null = null;
+  if (includeRaw) {
+    try {
+      include = globToRegExp(includeRaw);
+    } catch {
+      return {
+        code: TOOL_FAILED,
+        content: `"${includeRaw}" is not a valid glob for \`include\`.`,
+        summary: "grep — bad include",
+      };
+    }
+  }
+
+  const gd = await gateReadOnly("grep", `grep /${pattern}/ in ${scope.rel}`, ctx);
+  if (gd) return gd;
+
+  const base = scope.rel === "." ? "" : scope.rel.replace(/\/+$/, "") + "/";
+  const files = walkFiles(ctx.root, scope.abs).filter(
+    (f) => !include || include.test(base ? f.slice(base.length) : f)
+  );
+
+  const lines: string[] = [];
+  let matched = 0;
+  let filesWithHits = 0;
+  for (const f of files) {
+    let text: string;
+    try {
+      const buf = readFileSync(join(ctx.root, f));
+      // A NUL in the first 8k is the standard binary heuristic. Without it a
+      // grep over a repo with fixtures returns pages of mojibake.
+      if (buf.subarray(0, 8192).includes(0)) continue;
+      text = buf.toString("utf-8");
+    } catch {
+      continue;
+    }
+    let hitHere = false;
+    const split = text.split("\n");
+    for (let i = 0; i < split.length; i++) {
+      if (!re.test(split[i])) continue;
+      re.lastIndex = 0;
+      matched++;
+      hitHere = true;
+      if (lines.length < SEARCH_MAX_HITS) {
+        lines.push(`${f}:${i + 1}:${split[i].trim().slice(0, 300)}`);
+      }
+    }
+    if (hitHere) filesWithHits++;
+  }
+
+  if (matched === 0) {
+    return {
+      code: TOOL_OK_EMPTY,
+      content: `No match for /${pattern}/ under ${scope.rel}${
+        includeRaw ? ` (include ${includeRaw})` : ""
+      }.`,
+      summary: `grep ${pattern} — 0 matches`,
+    };
+  }
+  const truncated =
+    matched > lines.length
+      ? `\n\n(${matched - lines.length} more match(es) not shown — narrow the pattern or set \`include\`)`
+      : "";
+  return {
+    code: TOOL_OK,
+    content: clamp(lines.join("\n") + truncated, ctx.maxOutputBytes),
+    summary: `grep ${pattern} — ${matched} match(es) in ${filesWithHits} file(s)`,
+  };
+}
+
 async function writeTool(
   args: Record<string, unknown>,
   ctx: ToolContext
@@ -719,6 +1815,19 @@ async function writeTool(
       code: TOOL_OUT_OF_SANDBOX,
       content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
       summary: `write ${path} — refused (outside sandbox)`,
+    };
+  }
+
+  if (inSurface(ctx, abs)) {
+    return {
+      code: TOOL_DENIED,
+      content:
+        `Refused: "${path}" is inside .gnomon/, the surface that decides how ` +
+        `this agent behaves. It is not writable by a tool call — editing it ` +
+        `is a human act, because it changes the surface hash and the rules ` +
+        `the next turn runs under. To propose durable guidance instead, use ` +
+        `the skill tool.`,
+      summary: `write ${path} — refused (surface is read-only)`,
     };
   }
 
@@ -790,6 +1899,18 @@ async function editTool(
       code: TOOL_OUT_OF_SANDBOX,
       content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
       summary: `edit ${path} — refused (outside sandbox)`,
+    };
+  }
+
+  if (inSurface(ctx, abs)) {
+    return {
+      code: TOOL_DENIED,
+      content:
+        `Refused: "${path}" is inside .gnomon/, the surface that decides how ` +
+        `this agent behaves. It is not editable by a tool call — changing it ` +
+        `is a human act, because it changes the surface hash and the rules ` +
+        `the next turn runs under.`,
+      summary: `edit ${path} — refused (surface is read-only)`,
     };
   }
   const scope = writeAllowed(ctx, abs);
@@ -996,6 +2117,18 @@ async function dispatch(
       return readTool(args, ctx);
     case "bash":
       return bashTool(args, ctx);
+    case "task":
+      return taskTool(args, ctx);
+    case "webfetch":
+      return webfetchTool(args, ctx);
+    case "todo":
+      return todoTool(args, ctx);
+    case "compute":
+      return computeTool(args, ctx);
+    case "glob":
+      return globTool(args, ctx);
+    case "grep":
+      return grepTool(args, ctx);
     case "write":
       return writeTool(args, ctx);
     case "edit":
