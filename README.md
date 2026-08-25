@@ -12,6 +12,22 @@ repo on another machine and you get the same agent.
 cd my-project && gnomon launch
 ```
 
+<p align="center">
+  <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="620">
+</p>
+
+### Why "gnomon"
+
+The **gnomon** is the blade on a sundial — the part that casts the shadow.
+
+It is also the only part that does not move. The sun travels, the shadow
+sweeps the hours, but the blade is fixed, and that is precisely why the dial
+can be read at all. Take the gnomon away and you have a decorated stone.
+
+That is the whole design in one object. The model varies, the conversation
+wanders, the tools do different things each run — and the `.gnomon/` directory
+does not. Behaviour is readable because something is holding still.
+
 > **Status: working, pre-1.0.** 404 tests (46 Rust, 358 TypeScript), CI green on
 > Linux and macOS. Interfaces may still move. [Known Limits](#known-limits) is
 > deliberately specific — read it before depending on this.
@@ -20,6 +36,7 @@ cd my-project && gnomon launch
 
 ## Contents
 
+- [Why "gnomon"](#why-gnomon)
 - [Why this exists](#why-this-exists)
 - [What actually happens when you type](#what-actually-happens-when-you-type)
 - [Architecture](#architecture)
@@ -522,8 +539,18 @@ summary_role = "smol"             # who folds evicted turns
 | `compaction = "discard"` | Evicted turns are dropped, and the drop is stated in-band. |
 | `compaction = "truncate"` | Evicted turns are replaced by a list of their prompts. |
 | `compaction = "summary"` | Evicted turns are folded into a running summary by `summary_role`. |
+| `reserve_output` | Tokens held back for the model's *reply*. Defaults to 15% of the budget — at least 1024, never more than 40%. |
 
-Two rules the window keeps:
+Four rules the window keeps:
+
+- **The reply gets room.** The window used to fill `max_context_tokens`
+  completely, leaving nothing to answer with — and the ~4-characters-per-token
+  estimate under-counts code, so both errors pointed the same way.
+  `reserve_output` covers both. At 200 turns the window settles at ~85% of the
+  budget rather than 100%.
+- **The newest turn survives.** When the budget is tight the opening anchor
+  gives way before the turn just taken, because that is what the next turn
+  continues from.
 
 - **Failed turns are never replayed.** Their output is a transport error
   string, not something the model said.

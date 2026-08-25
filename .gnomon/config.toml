@@ -12,6 +12,10 @@ compaction = "discard"            # discard | summary | truncate
 [context]
 policy = "sliding_window"         # full | sliding_window | summary
 retain_after = 2048               # tokens to keep at edges in sliding_window
+# Held back for the model's reply. The window would otherwise fill the whole
+# budget and leave nothing to answer with, and the ~4-chars-per-token estimate
+# under-counts code — one reserve covers both. Default: 15%, at least 1024.
+reserve_output = 8192
 
 [endpoints.local]
 url = "http://127.0.0.1:11434/api/chat"

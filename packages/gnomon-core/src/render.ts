@@ -17,22 +17,101 @@ import type { ResolvedUi, MetaField } from "./config.js";
 // ---------------------------------------------------------------------------
 
 const ESC = "\x1b[";
-const CODES: Record<string, string> = {
-  reset: `${ESC}0m`,
-  dim: `${ESC}2m`,
-  bold: `${ESC}1m`,
-  gray: `${ESC}90m`,
-  green: `${ESC}32m`,
-  yellow: `${ESC}33m`,
-  red: `${ESC}31m`,
-  cyan: `${ESC}36m`,
-  magenta: `${ESC}35m`,
+
+/**
+ * A named palette.
+ *
+ * Call sites ask for a role — `gray` for secondary text, `yellow` for
+ * attention — and the theme decides what that becomes. Nothing needs to know
+ * which escape it got.
+ */
+export interface Theme {
+  name: string;
+  description: string;
+  codes: Record<string, string>;
+}
+
+const RESET = `${ESC}0m`;
+
+export const THEMES: Record<string, Theme> = {
+  dark: {
+    name: "dark",
+    description: "Default. Secondary text stays legible on a dark background.",
+    codes: {
+      // NOT 90m. "Bright black" on a black terminal is charcoal on charcoal,
+      // and this palette uses the muted role nineteen times — most of the
+      // meta lines, every context note, every tool argument.
+      gray: `${ESC}37m`,
+      bold: `${ESC}1m`,
+      dim: `${ESC}2m`,
+      green: `${ESC}32m`,
+      yellow: `${ESC}33m`,
+      red: `${ESC}31m`,
+      cyan: `${ESC}36m`,
+      magenta: `${ESC}35m`,
+    },
+  },
+  dim: {
+    name: "dim",
+    description: "Quieter. Secondary text recedes — good on a bright terminal.",
+    codes: {
+      gray: `${ESC}90m`,
+      bold: `${ESC}1m`,
+      dim: `${ESC}2m`,
+      green: `${ESC}32m`,
+      yellow: `${ESC}33m`,
+      red: `${ESC}31m`,
+      cyan: `${ESC}36m`,
+      magenta: `${ESC}35m`,
+    },
+  },
+  light: {
+    name: "light",
+    description: "For a light background: darker foregrounds, blue for accent.",
+    codes: {
+      gray: `${ESC}90m`,
+      bold: `${ESC}1m`,
+      dim: `${ESC}2m`,
+      green: `${ESC}32m`,
+      yellow: `${ESC}33m`,
+      red: `${ESC}31m`,
+      cyan: `${ESC}34m`,
+      magenta: `${ESC}35m`,
+    },
+  },
+  "high-contrast": {
+    name: "high-contrast",
+    description: "Bright and bold throughout. For small text or poor displays.",
+    codes: {
+      gray: `${ESC}97m`,
+      bold: `${ESC}1m`,
+      dim: `${ESC}97m`,
+      green: `${ESC}1;92m`,
+      yellow: `${ESC}1;93m`,
+      red: `${ESC}1;91m`,
+      cyan: `${ESC}1;96m`,
+      magenta: `${ESC}1;95m`,
+    },
+  },
+  mono: {
+    name: "mono",
+    description: "No colour, but keeps the layout. For logs and screenshots.",
+    codes: {},
+  },
 };
+
+export const DEFAULT_THEME = "dark";
+
+/** The palette in force, falling back rather than throwing on a bad name. */
+export function themeOf(ui: ResolvedUi): Theme {
+  return THEMES[ui.theme] ?? THEMES[DEFAULT_THEME];
+}
 
 /** Wrap text in a colour, or return it untouched when colour is off. */
 export function paint(ui: ResolvedUi, color: string, text: string): string {
   if (!ui.color) return text;
-  return `${CODES[color] ?? ""}${text}${CODES.reset}`;
+  const code = themeOf(ui).codes[color];
+  return code ? `${code}${text}${RESET}` : text;
 }
 
 // ---------------------------------------------------------------------------

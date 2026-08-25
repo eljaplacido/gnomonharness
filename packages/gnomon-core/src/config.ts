@@ -79,6 +79,7 @@ export type EndpointKind = "ollama" | "openai";
 
 /** config.toml [ui] — what the terminal shows, declared in the surface */
 export interface UiConfig {
+  theme?: string;
   meta?: string[];
   meta_style?: MetaStyle;
   think?: ThinkMode;
@@ -117,6 +118,15 @@ export interface ContextConfig {
   retain_after?: number;
   /** Role used to fold evicted turns into a summary. Default "smol". */
   summary_role?: string;
+  /**
+   * Tokens held back from the window for the model's reply.
+   *
+   * The window used to fill `max_context_tokens` completely, leaving nothing
+   * for the answer — and the estimate is ~4 characters per token, which
+   * under-counts code. Both errors point the same way, so the reserve covers
+   * both. Defaults to 15% of the budget, at least 1024.
+   */
+  reserve_output?: number;
 }
 
 export type ContextPolicy = "full" | "sliding_window" | "summary";
@@ -559,6 +569,7 @@ export interface ResolvedContext {
   max_context_tokens: number;
   compaction: Compaction;
   summary_role: string;
+  reserve_output: number;
 }
 
 const CONTEXT_POLICIES: ContextPolicy[] = ["full", "sliding_window", "summary"];
@@ -592,11 +603,20 @@ export function resolveContext(config: GnomonConfig): ResolvedContext {
     compaction: pickEnum(defaults.compaction, COMPACTIONS, "discard"),
     summary_role:
       typeof ctx.summary_role === "string" ? ctx.summary_role : "smol",
+    reserve_output: (() => {
+      const budget = pickInt(defaults.max_context_tokens, 65536);
+      // 15% of the window, at least 1024 — but never more than 40% of it.
+      // Without the cap a small max_context_tokens was consumed entirely by
+      // the floor, leaving no room for history at all.
+      const wanted = Math.max(1024, Math.floor(budget * 0.15));
+      return pickInt(ctx.reserve_output, Math.min(wanted, Math.floor(budget * 0.4)));
+    })(),
   };
 }
 
 /** The `[ui]` block, fully resolved with defaults. */
 export interface ResolvedUi {
+  theme: string;
   meta: MetaField[];
   meta_style: MetaStyle;
   think: ThinkMode;
@@ -655,6 +675,7 @@ export function resolveUi(config: GnomonConfig): ResolvedUi {
   const ui = config.config.ui ?? {};
   const declared = Array.isArray(ui.meta) ? parseMetaFields(ui.meta).fields : null;
   return {
+    theme: typeof ui.theme === "string" && ui.theme ? ui.theme : "dark",
     meta:
       declared ?? ["turn", "role", "model", "bucket", "duration", "context", "tools"],
     meta_style: pickEnum(ui.meta_style, META_STYLES, "line"),

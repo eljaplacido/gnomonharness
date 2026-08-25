@@ -193,7 +193,9 @@ describe("gnomon-core prompt_loop", () => {
           input: `IN${i}`.padEnd(100, "."),
           output: `OUT${i}`.padEnd(100, "."),
         })),
-        { policy: "sliding_window", retain_after: 50 },
+        // reserve_output: 0 — this exercises the window itself, not the
+        // reply reserve, and 160 tokens minus a reserve holds only one turn.
+        { policy: "sliding_window", retain_after: 50, reserve_output: 0 },
         { max_context_tokens: 160, compaction: "discard" }
       );
       const built = promptLoop.buildMessages(state, "", "next");
@@ -896,5 +898,126 @@ describe("typing while a turn runs", () => {
     for (const cmd of promptLoop.LIVE_SAFE_COMMANDS) {
       expect(registered.has(cmd), cmd).toBe(true);
     }
+  });
+});
+
+describe("the live command menu", () => {
+  const M = promptLoop.CommandMenu;
+
+  it("offers everything on a bare slash", () => {
+    // Tab completion only helps someone who knows a command exists. Typing `/`
+    // and being shown what there is turns the prompt into the index.
+    expect(M.matches("/")!.length).toBe(promptLoop.COMMANDS.length);
+  });
+
+  it("narrows as the line grows", () => {
+    expect(M.matches("/co")!.map((c) => c.name)).toEqual(["/context"]);
+    expect(M.matches("/the")!.map((c) => c.name)).toEqual(["/theme"]);
+  });
+
+  it("returns an empty list — not null — for a slash that matches nothing", () => {
+    // null means "no menu here"; empty means "a menu that says nothing fits".
+    expect(M.matches("/zzz")).toEqual([]);
+  });
+
+  it("stands down once an argument is being typed", () => {
+    // The command is chosen by then; the menu would only be in the way.
+    expect(M.matches("/theme ")).toBeNull();
+    expect(M.matches("/role plan")).toBeNull();
+  });
+
+  it("never appears for ordinary prose", () => {
+    expect(M.matches("fix the parser")).toBeNull();
+    expect(M.matches("")).toBeNull();
+  });
+
+  it("draws nothing on a non-TTY, so piped output stays clean", () => {
+    const written: string[] = [];
+    const out: any = { isTTY: false, write: (s: string) => written.push(s) };
+    const menu = new M(out, () => ({ theme: "dark", color: false }) as any);
+    menu.render("/");
+    menu.clear();
+    expect(written).toEqual([]);
+  });
+
+  it("restores the cursor after drawing, so the input line survives", () => {
+    const written: string[] = [];
+    const out: any = { isTTY: true, write: (s: string) => written.push(s) };
+    const menu = new M(out, () => ({ theme: "mono", color: true }) as any);
+    menu.render("/co");
+    const body = written.join("");
+    expect(body).toContain("\x1b[s"); // save
+    expect(body).toContain("\x1b[J"); // clear below
+    expect(body.endsWith("\x1b[u")).toBe(true); // restore, last
+    expect(body).toContain("/context");
+  });
+
+  it("clear is a no-op when nothing was drawn", () => {
+    const written: string[] = [];
+    const out: any = { isTTY: true, write: (s: string) => written.push(s) };
+    new M(out, () => ({ theme: "mono", color: true }) as any).clear();
+    expect(written).toEqual([]);
+  });
+});
+
+describe("the window leaves room to answer", () => {
+  const mk = (over: Record<string, unknown>): any => {
+    const config: any = loadConfig("../..");
+    config.config = { ...config.config, defaults: { max_context_tokens: 10_000 }, context: over };
+    return { config, exchanges: [], currentRole: "implement" };
+  };
+
+  it("reserves output tokens out of the budget", () => {
+    // The window used to fill max_context_tokens completely, leaving the model
+    // nothing to reply with — and chars/4 under-counts code, so both errors
+    // point the same way.
+    const withReserve = promptLoop.buildMessages(mk({ reserve_output: 3000 }), "", "hi");
+    const without = promptLoop.buildMessages(mk({ reserve_output: 0 }), "", "hi");
+    expect(without.budget - withReserve.budget).toBe(3000);
+  });
+
+  it("a long history is capped below the full budget", () => {
+    const state = mk({ reserve_output: 2000 });
+    state.exchanges = Array.from({ length: 200 }, (_, i) => ({
+      turn: i + 1, role: "implement", input: "x".repeat(400), output: "y".repeat(1200),
+      model: "m", code: 0, bucket: "result", duration_ms: 1,
+    }));
+    const built = promptLoop.buildMessages(state, "", "next");
+    expect(built.dropped).toBeGreaterThan(0);
+    expect(built.tokens).toBeLessThan(10_000 - 1000);
+  });
+
+  it("the reserve cannot drive the budget negative", () => {
+    const built = promptLoop.buildMessages(mk({ reserve_output: 99_999 }), "", "hi");
+    expect(built.budget).toBe(0);
+    expect(built.included).toBe(0);
+  });
+});
+
+describe("a tight window keeps the most recent turn", () => {
+  it("drops the anchor before the newest exchange", () => {
+    // When only one turn fits, it must be the one the next turn continues
+    // from. Losing that breaks the conversation in a way losing the opening
+    // does not.
+    const config: any = loadConfig("../..");
+    config.config = {
+      ...config.config,
+      defaults: { max_context_tokens: 200 },
+      context: { policy: "sliding_window", retain_after: 100, reserve_output: 0 },
+    };
+    const state: any = {
+      config,
+      currentRole: "implement",
+      exchanges: Array.from({ length: 5 }, (_, i) => ({
+        turn: i + 1, role: "implement",
+        input: `IN${i}`.padEnd(200, "."), output: `OUT${i}`.padEnd(200, "."),
+        model: "m", code: 0, bucket: "result", duration_ms: 1,
+      })),
+    };
+
+    const built = promptLoop.buildMessages(state, "", "next");
+    const body = built.messages.map((m) => m.content).join("\n");
+    expect(built.included).toBeGreaterThan(0);
+    expect(body, "the newest turn must survive").toContain("IN4");
   });
 });

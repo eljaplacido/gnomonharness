@@ -18,6 +18,7 @@ import {
   listEndpoints,
   resolveRouting,
   routeInput,
+  resolveContext,
 } from "./index.js";
 import { join, resolve } from "node:path";
 import { mkdirSync, rmSync, mkdtempSync } from "node:fs";
@@ -463,5 +464,30 @@ describe("routing modes", () => {
     for (const mode of ["manual", "suggest", "auto"]) {
       expect(routeInput(mk(mode), "spec the cache").role).toBe("coordinator");
     }
+  });
+});
+
+describe("output reserve", () => {
+  const fixtureRoot = "../../conformance/fixture_tree";
+  const withBudget = (max: number, over: Record<string, unknown> = {}): any => {
+    const c: any = loadConfig(fixtureRoot);
+    c.config = { ...c.config, defaults: { max_context_tokens: max }, context: over };
+    return c;
+  };
+
+  it("reserves 15% of a normal window", () => {
+    expect(resolveContext(withBudget(65536)).reserve_output).toBe(9830);
+  });
+
+  it("never takes more than 40% of a small one", () => {
+    // A flat 1024 floor consumed a small window entirely, leaving no room for
+    // any history at all.
+    expect(resolveContext(withBudget(160)).reserve_output).toBe(64);
+    expect(resolveContext(withBudget(1000)).reserve_output).toBe(400);
+  });
+
+  it("an explicit value is taken as given", () => {
+    expect(resolveContext(withBudget(65536, { reserve_output: 0 })).reserve_output).toBe(0);
+    expect(resolveContext(withBudget(65536, { reserve_output: 20000 })).reserve_output).toBe(20000);
   });
 });

@@ -3,11 +3,12 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { splitThinking, renderMeta, renderExchange, Progress, paint } from "./render.js";
+import { splitThinking, renderMeta, renderExchange, Progress, paint, THEMES } from "./render.js";
 import { ResolvedUi, parseMetaFields, META_FIELDS } from "./config.js";
 import { PromptExchange } from "./prompt_loop.js";
 
 const ui = (over: Partial<ResolvedUi> = {}): ResolvedUi => ({
+  theme: "dark",
   meta: ["turn", "role", "model", "bucket", "duration", "context"],
   meta_style: "line",
   think: "collapse",
@@ -250,5 +251,41 @@ describe("Progress suspend/resume", () => {
     p.resume();
     p.stop();
     expect(written.join("")).not.toContain("\x1b");
+  });
+});
+
+describe("themes", () => {
+  it("the default does not use bright-black for secondary text", () => {
+    // 90m on a black terminal is charcoal on charcoal, and the muted role
+    // carries most of the meta lines and every context note.
+    const painted = paint(ui({ color: true, theme: "dark" }), "gray", "x");
+    expect(painted).not.toContain("[90m");
+    expect(painted).toContain("[37m");
+  });
+
+  it("every theme defines the roles the code actually asks for", () => {
+    // A theme missing a role would silently render that text unstyled.
+    const used = ["gray", "cyan", "yellow", "green", "red", "bold"];
+    for (const [name, theme] of Object.entries(THEMES)) {
+      if (name === "mono") continue; // deliberately empty
+      for (const role of used) {
+        expect(theme.codes[role], `${name}.${role}`).toBeTruthy();
+      }
+    }
+  });
+
+  it("mono emits no escapes but keeps the text", () => {
+    const out = paint(ui({ color: true, theme: "mono" }), "gray", "hello");
+    expect(out).toBe("hello");
+  });
+
+  it("an unknown theme falls back rather than rendering unstyled", () => {
+    const out = paint(ui({ color: true, theme: "chartreuse" }), "gray", "hello");
+    expect(out).toContain("hello");
+    expect(out).toContain("\x1b[");
+  });
+
+  it("colour = false wins over any theme", () => {
+    expect(paint(ui({ color: false, theme: "high-contrast" }), "red", "x")).toBe("x");
   });
 });

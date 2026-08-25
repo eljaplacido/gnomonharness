@@ -4,6 +4,20 @@
 
 ### Added
 
+- **Colour themes.** `[ui] theme` and `/theme` — `dark` (default), `dim`,
+  `light`, `high-contrast`, `mono`. The default no longer uses ANSI "bright
+  black" for secondary text, which on a dark terminal is charcoal on charcoal
+  and carries most of the meta lines, context notes and tool arguments.
+- **A live command menu.** Matching commands appear under the prompt as `/` is
+  typed. Tab completion only helps someone who already knows a command exists.
+- **`reserve_output`** — tokens held back for the model's reply. The window
+  used to fill `max_context_tokens` completely, leaving nothing to answer with,
+  and the ~4-characters-per-token estimate under-counts code; both errors
+  pointed the same way. Defaults to 15% of the budget, at least 1024 and never
+  more than 40%. Measured: 200 turns now settle at ~85% of budget, not 100%.
+- **`docs/DESIGN.md`** is a real document — the constraint, what it forced,
+  what is deliberately not deterministic, and what this repository does not own.
+
 - **`/new`** — start a fresh session, leaving the current one on disk and
   resumable. **`/session <id>`** switches to an earlier one in place, and
   `/session` with no argument lists them with their opening lines.
@@ -198,6 +212,18 @@
 
 ### Fixed
 
+- **A conversation transcript was committed to the repository.** A session
+  snapshot under `.gnomon-sessions/` was tracked and the directory was absent
+  from `.gitignore`. Untracked, and both `.gnomon-sessions/` and
+  `.gnomon-audit/` are now ignored — they hold conversation text and must never
+  be published.
+- **A tight window dropped the newest turn.** The oldest anchor was filled
+  first, so when little fitted, the turn just taken — the one the next turn
+  continues from — was what gave way. The anchor now yields first.
+- **Three stray per-crate `Cargo.lock` files** were tracked. In a workspace
+  only the root has one; the others were ignored by cargo and pure noise.
+- The `P0_*` spike files sat in the repository root and referred to a
+  dependency that no longer exists. Moved to `docs/spikes/`.
 - **You could not see what you were typing during a turn.** The progress
   spinner writes a carriage return and an erase-line every 80ms, wiping each
   keystroke as fast as the terminal echoed it. Typed-ahead input was being

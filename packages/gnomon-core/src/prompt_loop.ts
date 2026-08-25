@@ -31,7 +31,7 @@ import {
   MetaField,
   META_FIELDS,
 } from "./config.js";
-import { Progress, renderExchange, splitThinking, paint } from "./render.js";
+import { Progress, renderExchange, splitThinking, paint, THEMES } from "./render.js";
 import {
   buildToolSet,
   executeTool,
@@ -241,9 +241,12 @@ export function buildMessages(
         `because they no longer fit the window:\n\n${state.summary}`,
     });
   }
+  // The reply needs room too, and estimateTokens under-counts code. Both
+  // point the same way, so one reserve covers both.
   const budget = Math.max(
     0,
     ctx.max_context_tokens -
+      ctx.reserve_output -
       estimateTokens(systemPrompt) -
       estimateTokens(input) -
       estimateTokens(state.summary ?? "")
@@ -263,7 +266,13 @@ export function buildMessages(
     head = usable;
     cursor = usable.length;
   } else {
-    const headLimit = Math.min(ctx.retain_after, budget);
+    // Never spend the anchor's budget so freely that the most recent turn
+    // cannot fit. The opening ask is valuable; the turn just taken is what the
+    // next one continues from, and losing that breaks the conversation in a
+    // way losing the opening does not.
+    const newest = usable[usable.length - 1];
+    const newestCost = newest ? exchangeCost(newest) : 0;
+    const headLimit = Math.min(ctx.retain_after, Math.max(0, budget - newestCost));
     let used = 0;
     for (; cursor < usable.length; cursor++) {
       const cost = exchangeCost(usable[cursor]);
@@ -1331,6 +1340,7 @@ export interface CommandSpec {
 export const LIVE_SAFE_COMMANDS = new Set([
   "/help", "/roles", "/profiles", "/tools", "/endpoints", "/context",
   "/skills", "/manifest", "/explain", "/reflect", "/meta", "/think", "/mode",
+  "/theme",
 ]);
 
 export const COMMANDS: CommandSpec[] = [
@@ -1347,6 +1357,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/reset", help: "Drop conversation history (keeps the session open)" },
   { name: "/meta", arg: "[fields]", help: "Show or set the meta line" },
   { name: "/think", arg: "[mode]", help: "Chain-of-thought: hide | collapse | show" },
+  { name: "/theme", arg: "[name]", help: "Colour theme: dark | dim | light | high-contrast | mono" },
   { name: "/explain", arg: "[topic]", help: "What a feature is, how this repo has it set, and what to do with it" },
   { name: "/reflect", arg: "[topic]", help: "Alias for /explain" },
   { name: "/models", help: "Models each endpoint actually offers" },
@@ -1379,6 +1390,12 @@ export function completeInput(
     return [topicNames().filter((t) => t.startsWith(partial)), partial];
   }
 
+  const themeArg = line.match(/^\/theme\s+(\S*)$/);
+  if (themeArg) {
+    const partial = themeArg[1];
+    return [Object.keys(THEMES).filter((t) => t.startsWith(partial)), partial];
+  }
+
   const modeArg = line.match(/^\/mode\s+(\S*)$/);
   if (modeArg) {
     const partial = modeArg[1];
@@ -1403,6 +1420,87 @@ export function completeInput(
   const hits = names.filter((n) => n.startsWith(line));
   // With nothing after "/", offer everything rather than nothing.
   return [hits.length > 0 ? hits : names, line];
+}
+
+// ---------------------------------------------------------------------------
+// Live command menu
+// ---------------------------------------------------------------------------
+
+/** How many matches to show below the prompt at once. */
+const MENU_ROWS = 6;
+
+/**
+ * Draw the matching commands under the prompt as the line is typed.
+ *
+ * Tab completion only helps someone who already knows a command exists.
+ * Typing `/` and being shown what there is turns the prompt into the index,
+ * so `/help` stops being the only way in.
+ *
+ * The menu is drawn below the cursor and erased before every redraw, using
+ * save/restore rather than counting lines — the input line can wrap, and a
+ * fixed offset would tear the display when it does.
+ */
+export class CommandMenu {
+  private shown = false;
+
+  constructor(
+    private readonly out: NodeJS.WriteStream,
+    private readonly ui: () => ResolvedUi
+  ) {}
+
+  private get live(): boolean {
+    return Boolean(this.out.isTTY);
+  }
+
+  /** Matching commands for a partial line, or null when no menu applies. */
+  static matches(line: string): CommandSpec[] | null {
+    if (!line.startsWith("/")) return null;
+    // Once a space is typed the command is chosen and an argument is being
+    // entered. Checking the trimmed line missed the trailing space, which is
+    // exactly the keystroke that ends the menu's usefulness.
+    if (/\s/.test(line)) return null;
+    return COMMANDS.filter((c) => c.name.startsWith(line));
+  }
+
+  render(line: string): void {
+    if (!this.live) return;
+    const found = CommandMenu.matches(line);
+    if (!found) {
+      this.clear();
+      return;
+    }
+
+    const ui = this.ui();
+    const rows = found.slice(0, MENU_ROWS);
+    const width = Math.max(...COMMANDS.map((c) => c.name.length));
+
+    const body = rows.map(
+      (c) =>
+        `  ${paint(ui, "cyan", c.name.padEnd(width))}  ${paint(ui, "gray", c.help)}`
+    );
+    if (found.length > rows.length) {
+      body.push(paint(ui, "gray", `  … ${found.length - rows.length} more`));
+    }
+    if (found.length === 0) {
+      body.push(paint(ui, "gray", `  no command starts with ${line}`));
+    }
+
+    // Save cursor, clear everything below, draw, come back.
+    this.out.write("\x1b[s");
+    this.out.write("\n\x1b[J");
+    this.out.write(body.join("\n"));
+    this.out.write("\x1b[u");
+    this.shown = true;
+  }
+
+  /** Erase the menu. Safe to call when nothing is drawn. */
+  clear(): void {
+    if (!this.live || !this.shown) return;
+    this.out.write("\x1b[s");
+    this.out.write("\n\x1b[J");
+    this.out.write("\x1b[u");
+    this.shown = false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1705,6 +1803,41 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       return true;
     }
 
+    case "/theme": {
+      const ui = uiOf(state);
+      const wanted = (parts[1] ?? "").trim();
+
+      if (!wanted) {
+        console.log(`\nTheme: ${ui.theme}\n`);
+        for (const t of Object.values(THEMES)) {
+          const mark = t.name === ui.theme ? "←" : " ";
+          // Render each name in its own palette, so the list is the preview.
+          const sample = paint({ ...ui, theme: t.name }, "gray", "secondary text");
+          const accent = paint({ ...ui, theme: t.name }, "cyan", "accent");
+          const warn = paint({ ...ui, theme: t.name }, "yellow", "attention");
+          console.log(`  ${t.name.padEnd(14)} ${sample}  ${accent}  ${warn}  ${mark}`);
+          console.log(`  ${" ".repeat(14)} ${t.description}`);
+        }
+        console.log(`\nSet with: /theme <name>`);
+        return true;
+      }
+
+      if (!THEMES[wanted]) {
+        console.log(
+          `\nUnknown theme: "${wanted}". Available: ${Object.keys(THEMES).join(", ")}`
+        );
+        return true;
+      }
+
+      ui.theme = wanted;
+      console.log(`\nTheme: ${wanted} — ${THEMES[wanted].description}`);
+      console.log(paint(ui, "gray", "  secondary text looks like this"));
+      console.log(
+        "Session only — edit [ui].theme in .gnomon/config.toml to make it stick."
+      );
+      return true;
+    }
+
     case "/think": {
       const ui = uiOf(state);
       const mode = (parts[1] ?? "").trim();
@@ -1737,7 +1870,10 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       console.log(`  turns recorded     ${state.exchanges.length}`);
       console.log(`  turns carried      ${built.included}`);
       console.log(`  turns dropped      ${built.dropped}`);
-      console.log(`  estimated tokens   ~${built.tokens} / ${ctx.max_context_tokens}`);
+      console.log(
+        `  estimated tokens   ~${built.tokens} / ${ctx.max_context_tokens}` +
+          `  (${ctx.reserve_output} reserved for the reply)`
+      );
       const folded = state.exchanges.filter((e) => e.folded).length;
       if (folded > 0 || state.summary) {
         console.log(`  turns folded       ${folded} (in the summary)`);
@@ -1881,6 +2017,8 @@ export async function runPromptLoop(
   // shown: the loop reports which variables were supplied, never their values.
   const suppliedKeys = applyCredentials();
 
+  const menu = new CommandMenu(process.stdout, () => uiOf(state));
+
   const store = resolveSessionStore(config);
   const startedAt = new Date().toISOString();
   let sessionId = `${startedAt.replace(/[:.]/g, "-")}-${process.pid}`;
@@ -2000,6 +2138,7 @@ export async function runPromptLoop(
   let notify: ((line: string | null) => void) | null = null;
 
   rl.on("line", (line: string) => {
+    menu.clear();
     if (notify) {
       const n = notify;
       notify = null;
@@ -2074,6 +2213,14 @@ export async function runPromptLoop(
       // this nothing typed during a turn was ever visible — the queue worked,
       // but blind.
       if (cancelTurn && activeProgress) activeProgress.suspend();
+
+      // Show what `/` can start. Deferred a tick because readline updates its
+      // buffer after the keypress handler runs, so reading rl.line here would
+      // always be one character behind.
+      setImmediate(() => {
+        if (cancelTurn) return;
+        menu.render(rl.line ?? "");
+      });
     });
   }
   rl.on("SIGINT", () => {
@@ -2601,6 +2748,7 @@ export async function runPromptLoop(
 
       // Scope check: a standing approval given for one turn ends with it.
       approveRestOfTurn = false;
+      menu.clear();
 
       const start = Date.now();
       const controller = new AbortController();

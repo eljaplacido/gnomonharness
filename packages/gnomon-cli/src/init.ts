@@ -44,6 +44,10 @@ compaction = "discard"            # discard | summary | truncate
 # the oldest turns (the original ask) and fills the rest from the newest.
 policy = "sliding_window"         # full | sliding_window | summary
 retain_after = 2048               # tokens of the oldest turns to keep
+# Held back for the model's reply. The window would otherwise fill the whole
+# budget and leave nothing to answer with, and the ~4-chars-per-token estimate
+# under-counts code — one reserve covers both. Default: 15%, at least 1024.
+reserve_output = 8192
 
 [endpoints.local]
 # Where inference goes lives in the surface, not in an env var: routing is
