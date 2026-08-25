@@ -299,19 +299,49 @@ export class Progress {
     private out: NodeJS.WriteStream = process.stdout
   ) {}
 
+  /** Would a spinner be drawn here at all? */
   private get live(): boolean {
     return this.ui.spinner && Boolean(this.out.isTTY);
+  }
+
+  /** Is a frame timer actually running right now? */
+  private get drawing(): boolean {
+    return this.timer !== null;
   }
 
   start(label: string): void {
     this.label = label;
     this.started = Date.now();
-    this.suspended = false;
+    // Suspension is sticky: it survives start() and stop(). A turn stops and
+    // restarts the spinner at every tool boundary, and clearing the flag there
+    // handed the line back to the spinner a few times a second while someone
+    // was still typing into it. The typist keeps the line until they submit.
+    // Nothing leaks between turns because the loop builds a fresh Progress per
+    // turn.
+    this.clearTimer();
+    if (this.suspended) return;
     if (!this.live) {
       this.out.write(`  ${label}\n`);
       return;
     }
+    // start() used to abandon a running interval without clearing it — see
+    // clearTimer above. The orphans never stopped: they kept writing
+    // "\r\x1b[2K" over the line, and they survived stop(), which sets
+    // started = 0, so they rendered (Date.now() - 0) / 1000 and printed a Unix
+    // epoch as the elapsed time.
     this.draw();
+    this.arm();
+  }
+
+  private clearTimer(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+
+  private arm(): void {
+    this.clearTimer();
     this.timer = setInterval(() => this.draw(), 80);
     if (typeof this.timer.unref === "function") this.timer.unref();
   }
@@ -323,6 +353,9 @@ export class Progress {
   }
 
   private draw(): void {
+    // Drawing without a start is a bug in the caller, but it must never render
+    // the epoch as an elapsed time. Treat it as starting now.
+    if (this.started === 0) this.started = Date.now();
     const secs = ((Date.now() - this.started) / 1000).toFixed(1);
     const f = FRAMES[this.frame++ % FRAMES.length];
     this.out.write(
@@ -343,14 +376,17 @@ export class Progress {
    * nothing typed was ever visible. While someone is typing, the line is
    * theirs.
    */
-  suspend(): void {
-    if (this.suspended) return;
+  suspend(): boolean {
+    if (this.suspended) return false;
+    const wasDrawing = this.drawing;
     this.suspended = true;
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
-    if (this.live) this.out.write("\r\x1b[2K");
+    this.clearTimer();
+    // Only erase a line this spinner was actually drawing on. When a tool is
+    // waiting at an approval prompt no frame is running, and erasing then wiped
+    // the `approve>` prompt and the keystroke that had just been echoed onto
+    // it — typing `yes` showed `es`.
+    if (wasDrawing && this.live) this.out.write("\r\x1b[2K");
+    return wasDrawing;
   }
 
   /** Resume drawing after a suspend. No-op if it was never started. */
@@ -359,18 +395,37 @@ export class Progress {
     this.suspended = false;
     if (!this.live || this.started === 0) return;
     this.draw();
-    this.timer = setInterval(() => this.draw(), 80);
-    if (typeof this.timer.unref === "function") this.timer.unref();
+    this.arm();
   }
 
   /** Stop and clear the line. Safe to call when never started. */
   stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
-    this.suspended = false;
+    const wasDrawing = this.drawing;
+    this.clearTimer();
     this.started = 0;
-    if (this.live) this.out.write("\r\x1b[2K");
+    // Leave `suspended` alone, and do not erase a line this spinner does not
+    // own. stop() runs at every tool boundary, so erasing unconditionally wiped
+    // whatever the typist had entered since the last one.
+    if (wasDrawing && !this.suspended && this.live) this.out.write("\r\x1b[2K");
+  }
+
+  /**
+   * Print a transcript line without fighting the spinner for the row.
+   *
+   * The model's reasoning was written straight onto the live frame, so a turn
+   * that explained itself opened with the spinner spliced into it:
+   * `⠸ qwen3.6:35b 6.4s  │ Let me read the config first`.
+   */
+  print(text: string): void {
+    const wasDrawing = this.drawing;
+    if (wasDrawing) {
+      this.clearTimer();
+      if (this.live) this.out.write("\r\x1b[2K");
+    }
+    this.out.write(`${text}\n`);
+    if (wasDrawing && !this.suspended) {
+      this.draw();
+      this.arm();
+    }
   }
 }

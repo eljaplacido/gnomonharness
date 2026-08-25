@@ -1291,3 +1291,92 @@ describe("pickFromList is drivable with the keyboard", () => {
     expect(s.written.join("")).toContain("1–3 of 3");
   });
 });
+
+describe("a picker owns the keyboard while it is open", () => {
+  const ui = { color: false } as never;
+  const sink = () => {
+    const written: string[] = [];
+    return {
+      written,
+      stream: { write: (t: string) => written.push(t), columns: 80 } as unknown as NodeJS.WriteStream,
+    };
+  };
+  const rl = { pause: () => {}, resume: () => {} } as never;
+  const items = [
+    { key: "a", label: "qwen3.6:35b", hint: "@local" },
+    { key: "b", label: "gpt-5.5", hint: "@zen" },
+  ];
+  const press = (name: string, chunk = "") =>
+    process.stdin.emit("keypress", chunk, { name, ctrl: false, meta: false });
+
+  // rl.pause() does not unsubscribe readline. It stayed on the same keypress
+  // events, so Enter both chose a row AND emitted a `line` — which queued the
+  // filter text as a model turn. Choosing a model made gnomon prompt itself
+  // with the word the user had typed to search.
+  it("detaches every other keypress listener while open", async () => {
+    const seen: string[] = [];
+    const bystander = (_c: unknown, k: { name?: string }) => seen.push(k?.name ?? "");
+    process.stdin.on("keypress", bystander);
+    try {
+      const p = promptLoop.pickFromList(items, { title: "Choose" }, ui, rl, sink().stream);
+      for (const ch of "gpt") press(ch, ch);
+      press("return");
+      expect(await p).toBe("b");
+      // The bystander stands in for readline: it must not have seen a thing.
+      expect(seen).toEqual([]);
+    } finally {
+      process.stdin.off("keypress", bystander);
+    }
+  });
+
+  it("gives them back afterwards", async () => {
+    const seen: string[] = [];
+    const bystander = (_c: unknown, k: { name?: string }) => seen.push(k?.name ?? "");
+    process.stdin.on("keypress", bystander);
+    try {
+      const p = promptLoop.pickFromList(items, { title: "Choose" }, ui, rl, sink().stream);
+      press("return");
+      await p;
+      press("x", "x");
+      expect(seen).toEqual(["x"]);
+    } finally {
+      process.stdin.off("keypress", bystander);
+    }
+  });
+
+  it("gives them back on Esc too, not only on Enter", async () => {
+    const seen: string[] = [];
+    const bystander = (_c: unknown, k: { name?: string }) => seen.push(k?.name ?? "");
+    process.stdin.on("keypress", bystander);
+    try {
+      const p = promptLoop.pickFromList(items, { title: "Choose" }, ui, rl, sink().stream);
+      press("escape");
+      expect(await p).toBeNull();
+      press("y", "y");
+      expect(seen).toEqual(["y"]);
+    } finally {
+      process.stdin.off("keypress", bystander);
+    }
+  });
+
+  // The redraw moves the cursor up by a constant. A row that wrapped made that
+  // constant wrong and smeared the list up the screen, one copy per keystroke.
+  it("never writes a row wider than the terminal", async () => {
+    const f = sink();
+    (f.stream as unknown as { columns: number }).columns = 40;
+    const long = [
+      {
+        key: "x",
+        label: "hf.co/unsloth/Qwen3-235B-A22B-Instruct-GGUF:Q4_K_XL",
+        hint: "@local · implement",
+      },
+    ];
+    const p = promptLoop.pickFromList(long, { title: "Choose a model", rows: 3 }, ui, rl, f.stream);
+    press("escape");
+    await p;
+    for (const line of f.written.join("").split("\n")) {
+      // eslint-disable-next-line no-control-regex
+      expect(line.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").length).toBeLessThanOrEqual(40);
+    }
+  });
+});

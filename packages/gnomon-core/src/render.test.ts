@@ -289,3 +289,103 @@ describe("themes", () => {
     expect(paint(ui({ color: false, theme: "high-contrast" }), "red", "x")).toBe("x");
   });
 });
+
+describe("Progress does not leave timers running", () => {
+  const fake = () => {
+    const writes: string[] = [];
+    return {
+      writes,
+      stream: {
+        write: (t: string) => { writes.push(t); return true; },
+        isTTY: true,
+      } as unknown as NodeJS.WriteStream,
+    };
+  };
+  const ui = { spinner: true, color: false } as never;
+  const tick = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  // A turn calls start() again on every leg and after every tool. Each call
+  // used to abandon the running interval without clearing it, and the orphans
+  // never stopped.
+  it("start() twice leaves exactly one interval", async () => {
+    const f = fake();
+    const p = new Progress(ui, f.stream);
+    p.start("one");
+    p.start("two");
+    f.writes.length = 0;
+    await tick(300);
+    p.stop();
+    const frames = f.writes.length;
+    const f2 = fake();
+    const q = new Progress(ui, f2.stream);
+    q.start("only");
+    f2.writes.length = 0;
+    await tick(300);
+    q.stop();
+    // Within one frame of each other, not double.
+    expect(Math.abs(frames - f2.writes.length)).toBeLessThanOrEqual(1);
+  });
+
+  it("stop() ends all drawing, however many times start() was called", async () => {
+    const f = fake();
+    const p = new Progress(ui, f.stream);
+    p.start("a");
+    p.start("b");
+    p.start("c");
+    p.stop();
+    f.writes.length = 0;
+    await tick(300);
+    expect(f.writes).toEqual([]);
+  });
+
+  // The reported symptom: "1787650983.7s". stop() sets started = 0, so an
+  // orphaned frame rendered (Date.now() - 0) / 1000 — a Unix epoch.
+  it("never renders a Unix epoch as an elapsed time", async () => {
+    const f = fake();
+    const p = new Progress(ui, f.stream);
+    p.start("x");
+    p.start("y");
+    p.stop();
+    await tick(300);
+    expect(f.writes.join("")).not.toMatch(/\b1[0-9]{9}\.[0-9]s/);
+  });
+
+  // Typing during a turn calls suspend(). It could only ever clear the one
+  // handle the field pointed at, so orphans kept erasing the line and nothing
+  // typed was visible.
+  it("suspend() stops every writer, so a typed line survives", async () => {
+    const f = fake();
+    const p = new Progress(ui, f.stream);
+    p.start("leg 1");
+    p.start("leg 2");
+    p.start("leg 3");
+    p.suspend();
+    f.writes.length = 0;
+    await tick(300);
+    expect(f.writes).toEqual([]);
+  });
+
+  it("resume() after suspend() draws again, and only once per frame", async () => {
+    const f = fake();
+    const p = new Progress(ui, f.stream);
+    p.start("a");
+    p.suspend();
+    p.resume();
+    f.writes.length = 0;
+    await tick(250);
+    p.stop();
+    expect(f.writes.length).toBeGreaterThan(0);
+    expect(f.writes.length).toBeLessThanOrEqual(4);
+  });
+
+  it("elapsed time counts from the last start, in seconds", async () => {
+    const f = fake();
+    const p = new Progress(ui, f.stream);
+    p.start("a");
+    await tick(150);
+    const shown = f.writes.join("").match(/([0-9]+\.[0-9])s/g) ?? [];
+    p.stop();
+    expect(shown.length).toBeGreaterThan(0);
+    for (const v of shown) expect(parseFloat(v)).toBeLessThan(5);
+  });
+});

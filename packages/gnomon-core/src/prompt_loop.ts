@@ -929,12 +929,9 @@ export async function runAgenticTurn(
         tool_call_id: call.id,
         tool_name: call.name,
       });
-      if (!gated) {
-        // keep the spinner honest about what is running next
-        deps.progress.start(`${usedModel} — ${steps} tool call(s) so far`);
-      } else {
-        deps.progress.start(`${usedModel} — ${steps} tool call(s) so far`);
-      }
+      // Both branches did the same thing. The spinner was stopped before the
+      // tool ran, so this restarts it either way.
+      deps.progress.start(`${usedModel} — ${steps} tool call(s) so far`);
     }
   }
 }
@@ -1605,6 +1602,15 @@ export async function pickFromList(
     );
   };
 
+  // Cursor arithmetic moves up by a fixed count, so a row that wraps would
+  // make every subsequent redraw land a line too low and smear the list up the
+  // screen. Truncating is what keeps the height a constant.
+  const width = () => Math.max(20, (out.columns ?? 80) - 1);
+  const fit = (text: string, used: number) => {
+    const room = width() - used;
+    return text.length <= room ? text : `${text.slice(0, Math.max(1, room - 1))}…`;
+  };
+
   const draw = (first: boolean) => {
     const list = visible();
     if (index >= list.length) index = Math.max(0, list.length - 1);
@@ -1615,8 +1621,8 @@ export async function pickFromList(
     if (!first) out.write(`\x1b[${height}A`);
     out.write("\x1b[J");
     out.write(
-      `  ${paint(ui, "cyan", opts.title)}` +
-        `${paint(ui, "gray", "   ↑↓ move · Enter choose · Esc cancel · type to filter")}\n`
+      `  ${paint(ui, "cyan", fit(opts.title, 2))}` +
+        `${paint(ui, "gray", fit("   ↑↓ move · Enter choose · Esc cancel · type to filter", opts.title.length + 2))}\n`
     );
     out.write(
       `  ${paint(ui, "gray", "filter:")} ` +
@@ -1629,11 +1635,16 @@ export async function pickFromList(
         continue;
       }
       const mark = item.current ? paint(ui, "green", "✓") : " ";
-      const hint = item.hint ? `  ${paint(ui, "gray", item.hint)}` : "";
+      // Measured on the plain text; the escape codes occupy no columns.
+      const plain = `${item.label}${item.hint ? `  ${item.hint}` : ""}`;
+      const shown = fit(plain, 6);
+      const label = shown.slice(0, item.label.length);
+      const rest = shown.slice(item.label.length);
+      const hint = rest ? paint(ui, "gray", rest) : "";
       out.write(
         top + r === index
-          ? `${paint(ui, "cyan", "  ›")} ${mark} ${paint(ui, "bold", item.label)}${hint}\n`
-          : `    ${mark} ${paint(ui, "gray", item.label)}${hint}\n`
+          ? `${paint(ui, "cyan", "  ›")} ${mark} ${paint(ui, "bold", label)}${hint}\n`
+          : `    ${mark} ${paint(ui, "gray", label)}${hint}\n`
       );
     }
     const shown = Math.min(rows, list.length);
@@ -1687,14 +1698,31 @@ export async function pickFromList(
 
     const finish = (chosen: string | null) => {
       process.stdin.off("keypress", onKey);
+      // Hand the keyboard back exactly as it was found.
+      for (const l of borrowed) process.stdin.on("keypress", l);
       out.write(`\x1b[${height}A\x1b[J`);
       rl.resume();
       resolvePick(chosen);
     };
 
-    // rl.pause() pauses process.stdin itself, and a paused stream emits no
-    // data — so keypress never fires. Pause the interface so it neither echoes
-    // nor builds a line, then resume the stream so the keys still arrive here.
+    // Take readline's keypress listeners away for the duration.
+    //
+    // rl.pause() is not enough, and believing it was cost four separate
+    // defects. Readline stays subscribed to the same keypress events, so every
+    // key was handled twice: it echoed the filter onto the prompt line
+    // underneath the picker, it emitted a `line` event when Enter chose a row
+    // — which queued the filter text as a real model turn, so choosing a model
+    // made gnomon prompt itself with the word "qwen" — it left the filter in
+    // its buffer after Esc so the next message went out with it prepended, and
+    // its own SIGINT handler killed the whole session on Ctrl-C while this
+    // picker's ctrl-c branch sat unreachable.
+    //
+    // With the listeners detached, readline sees nothing, echoes nothing, and
+    // emits nothing until they are put back.
+    const borrowed = process.stdin.listeners("keypress") as Array<
+      (...args: unknown[]) => void
+    >;
+    for (const l of borrowed) process.stdin.off("keypress", l);
     rl.pause();
     process.stdin.resume();
     process.stdin.on("keypress", onKey);
@@ -2478,13 +2506,17 @@ export async function runPromptLoop(
     }
 
     lineQueue.push(line);
-    if (cancelTurn && trimmed) {
+    // Reaching here at all means nothing was waiting on the line — the harness
+    // is busy. Acknowledging only when a *cancellable turn* was running left
+    // input typed during compaction with no echo, no prompt and no receipt,
+    // which is the very symptom the queue was added to remove.
+    if (trimmed) {
       const ui0 = uiOf(state);
       console.log(
         paint(
           ui0,
           "gray",
-          `  ⏎ queued (${lineQueue.length}) — runs when this turn finishes`
+          `  ⏎ queued (${lineQueue.length}) — runs when the harness is free`
         )
       );
       activeProgress?.resume();
@@ -2533,7 +2565,17 @@ export async function runPromptLoop(
       // The spinner erases the whole line twelve times a second, so without
       // this nothing typed during a turn was ever visible — the queue worked,
       // but blind.
-      if (cancelTurn && activeProgress) activeProgress.suspend();
+      //
+      // suspend() erases the frame it was drawing, and readline has already
+      // echoed the keystroke onto that same row — so the character that
+      // silenced the spinner went with it and the line read `ix the bug`.
+      // Repainting on the next tick puts the prompt and the whole buffer back;
+      // a tick later because readline updates rl.line after this handler runs.
+      if (cancelTurn && activeProgress?.suspend()) {
+        setImmediate(() => {
+          if (cancelTurn) rl.prompt(true);
+        });
+      }
 
       // Show what `/` can start. Deferred a tick because readline updates its
       // buffer after the keypress handler runs, so reading rl.line here would
@@ -2545,6 +2587,10 @@ export async function runPromptLoop(
     });
   }
   rl.on("SIGINT", () => {
+    // A picker owns the keyboard and cancels itself on Ctrl-C. Without this
+    // guard readline's handler ran first and ended the session on top of a
+    // half-drawn list.
+    if (picking) return;
     if (cancelTurn) {
       cancelTurn();
       return;
@@ -2991,18 +3037,21 @@ export async function runPromptLoop(
             }
           }
 
+          picking = true;
           const pickedModel = await pickFromList(
             items,
             { title: "Choose a model", rows: 12 },
             ui0,
             rl
           );
+          picking = false;
           if (!pickedModel) {
             console.log(paint(ui0, "gray", "  (no change)"));
             continue;
           }
           const [pickedEndpoint, modelTag] = pickedModel.split("\u0000");
 
+          picking = true;
           const pickedRole = await pickFromList(
             rolesNow.map((r) => ({
               key: r,
@@ -3015,6 +3064,7 @@ export async function runPromptLoop(
             ui0,
             rl
           );
+          picking = false;
           if (!pickedRole) {
             console.log(paint(ui0, "gray", "  (no change)"));
             continue;
@@ -3221,7 +3271,10 @@ export async function runPromptLoop(
           approve,
           progress,
           ui,
-          say: (line) => console.log(line),
+          // Through the spinner, which clears its frame first and redraws
+          // after. console.log wrote straight onto the live row, so a turn that
+          // explained itself opened with the spinner spliced into the text.
+          say: (line) => progress.print(line),
           signal: controller.signal,
           audit,
         });
