@@ -1,51 +1,35 @@
 # gnomon
 
-**A deterministic coding-agent harness.** Everything that decides how the agent
-behaves lives in one content-hashed directory in your repository. Same surface,
-same prompt, same outcome — on any machine, for anyone who clones it.
+**A coding agent whose behaviour is fixed by files in your repository, not by
+your machine.**
+
+Point it at a project, and everything that decides how it acts — which models,
+which roles, which tools each role may touch, when it must ask permission —
+lives in one directory called `.gnomon/`. That directory is hashed. Clone the
+repo on another machine and you get the same agent.
 
 ```bash
 cd my-project && gnomon launch
 ```
 
-> **Status: working, pre-1.0.** 389 tests (46 Rust, 343 TypeScript), CI green
-> across Linux and macOS. Interfaces may still move. The [Known Limits](#known-limits)
-> section is deliberately specific — read it before relying on this.
+> **Status: working, pre-1.0.** 404 tests (46 Rust, 358 TypeScript), CI green on
+> Linux and macOS. Interfaces may still move. [Known Limits](#known-limits) is
+> deliberately specific — read it before depending on this.
 
 ---
 
-## Why
+## Contents
 
-Most agent harnesses answer "why did it do that?" with a shrug. Configuration
-is scattered across global dotfiles, environment variables, and per-machine
-state, so the same repository behaves differently for two people and nobody can
-say why.
-
-gnomon takes the opposite position: **behaviour is a property of the
-repository, not the machine.** One directory — `.gnomon/` — declares the
-models, the roles, the tools, the approval policy, the context strategy. It is
-hashed, and the hash goes into every record the harness emits. If behaviour
-changed, the hash changed, and you can see exactly which file moved.
-
-That constraint is load-bearing. It is why skills are proposed rather than
-self-applied, why the audit trail lives *outside* the surface, and why routing
-rules are declared regular expressions instead of a model's judgement.
-
----
-
-## Table of Contents
-
+- [Why this exists](#why-this-exists)
+- [What actually happens when you type](#what-actually-happens-when-you-type)
+- [Architecture](#architecture)
+- [The specify → contract → test → implement → verify loop](#the-specify--contract--test--implement--verify-loop)
+- [Specs, contracts and tests — how the harness holds itself to this](#specs-contracts-and-tests--how-the-harness-holds-itself-to-this)
+- [The Six Rules](#the-six-rules)
 - [Install](#install)
 - [Quick Start](#quick-start)
-- [The Six Rules](#the-six-rules)
-- [Architecture](#architecture)
+- [Architecture Layout](#architecture-layout)
 - [The Surface — `.gnomon/`](#the-surface--gnomon)
-  - [`config.toml`](#configtoml)
-  - [`roles.toml`](#rolestoml)
-  - [`tools.toml`](#toolstoml)
-  - [`policy.toml`](#policytoml)
-  - [`system.md`](#systemmd)
-  - [`skills/`](#skills)
 - [Roles and the Trust Dial](#roles-and-the-trust-dial)
 - [Tools and Safety](#tools-and-safety)
 - [Context and Memory](#context-and-memory)
@@ -60,6 +44,240 @@ rules are declared regular expressions instead of a model's judgement.
 - [Development](#development)
 - [Contributing](#contributing)
 - [License](#license)
+
+---
+
+## Why this exists
+
+Ask most coding agents *why did you do that* and there is no answer to give.
+Configuration is scattered across global dotfiles, environment variables and
+per-machine state, so the same repository behaves differently for two people
+and nobody can say which difference mattered.
+
+gnomon takes the opposite position: **behaviour is a property of the
+repository.** One directory declares the models, the roles, the tools, the
+approval policy, the context strategy. It is content-hashed, and that hash is
+stamped on every record the harness emits. If behaviour changed, the hash
+changed, and you can see exactly which file moved.
+
+That single constraint decides most of the design. It is why skills are
+proposed rather than self-applied, why the audit trail lives *outside* the
+hashed directory, and why routing rules are declared regular expressions
+instead of a model's judgement.
+
+---
+
+## What actually happens when you type
+
+No hand-waving — this is the real path, in order.
+
+```mermaid
+flowchart TD
+    A["you type a line"] --> B{"slash command?"}
+    B -- yes --> B1["handled locally, no model call"]
+    B -- no --> C["pick the role<br/>manual · suggest · auto"]
+    C --> D["load skills whose pattern<br/>matches this input"]
+    D --> E["build the context window<br/>recent turns + summary"]
+    E --> F["send: system + skills + history<br/>+ tool schemas for THIS role"]
+    F --> G{"model asks for<br/>a tool?"}
+    G -- "no, prose" --> M["answer"]
+    G -- yes --> H{"gated by<br/>approval policy?"}
+    H -- yes --> I["show diff or command<br/>y · all-turn · session · no"]
+    H -- no --> J
+    I -- declined --> R["refusal recorded"]
+    I -- approved --> J["execute under sandbox<br/>+ bash_allow"]
+    J --> K["feed result back"]
+    K --> L{"hit max_steps?"}
+    L -- no --> F
+    L -- yes --> N["compact working context,<br/>continue next leg"]
+    N --> F
+    M --> O["record outcome bucket<br/>save session · append audit"]
+    R --> O
+```
+
+Three things in that path are worth pulling out, because they are where the
+guarantees live.
+
+**The model is only offered the tools its role may use.** Not asked to avoid
+others — they are absent from the schema list it receives. A `verifier` has no
+`write` tool to call.
+
+**Nothing that changes your repository runs before you see it.** Writes and
+edits show a real diff; commands show the command. `bash` is gated too, because
+a command can write anything.
+
+**Every step lands in one of three buckets** — `result`, `refusal`,
+`apparatus_failure` — with no composite verdict. A declined approval is a
+refusal. A timeout is an apparatus failure. A tool that ran and returned a
+non-zero exit is a *result*: the tool worked.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph SURFACE[".gnomon/ — the surface, content-hashed"]
+        S1["config.toml<br/>defaults · context · ui<br/>routing · endpoints · audit"]
+        S2["roles.toml<br/>model · endpoint<br/>tools · budgets"]
+        S3["tools.toml<br/>policy.toml<br/>system.md"]
+        S4["skills/<br/>learned notes"]
+    end
+
+    subgraph TS["TypeScript — the loop"]
+        T1["gnomon-core<br/>turns · tools · context<br/>skills · audit · sessions"]
+        T2["gnomon-cli"]
+    end
+
+    subgraph RS["Rust — the verifiable parts"]
+        R1["gnomon-surface<br/>hash + manifest"]
+        R2["gnomon-edit<br/>structural edits"]
+        R3["gnomon-exec<br/>spawn · timeout · buckets"]
+    end
+
+    SURFACE --> T1
+    T2 --> T1
+    T1 --> RS
+    T1 --> OUT["outside the surface:<br/>.gnomon-sessions/<br/>.gnomon-audit/"]
+```
+
+**Rust owns what must be checkable without trusting a JavaScript runtime** —
+the surface hash, structural editing, process execution with timeouts.
+`gnomon-surface` is the authority on what a surface hashes to, and
+`conformance/manifest_golden.json` pins it. The TypeScript side computes the
+same hash independently, and a test holds the two together; they disagreed
+once, and that test is why they no longer can.
+
+**TypeScript owns the loop** — turns, tool execution, context, skills, audit,
+sessions.
+
+**Sessions and audit trails live outside `.gnomon/` on purpose.** Writing a log
+inside a content-hashed directory would change the surface hash on every turn
+and make drift detection meaningless.
+
+---
+
+## The specify → contract → test → implement → verify loop
+
+This is where I should be careful, because the honest answer is more useful
+than the marketing one.
+
+**What gnomon enforces: capability boundaries.** Three roles ship with
+deliberately different reach.
+
+| Role | Tools | Cannot |
+|---|---|---|
+| `coordinator` | `read`, `write`, `skill` | **edit** — so a planning turn cannot quietly become a code change |
+| `implementor` | `read`, `write`, `edit`, `bash` | — |
+| `verifier` | `read`, `bash` (allow-listed) | **write, edit** — cannot alter what it judges |
+
+That separation is real and testable. Ask the verifier to create a file and it
+cannot: there is no `write` tool in what it was offered. Ask it to do the same
+through `bash` and the command is refused, because `bash_allow` narrows it to
+test commands.
+
+```toml
+[roles.verifier]
+tools = ["read", "bash"]
+bash_allow = ['^septacore check\b', '^(cargo|pnpm|pytest|go|make)\s']
+```
+
+That second line matters more than it looks. **`bash` can write anything**, so
+`tools = ["read", "bash"]` is *not* read-only on its own. An audit of this
+harness caught exactly that: a verifier with no write tool created a file
+through `bash` on its first attempt.
+
+**What gnomon does not enforce: the sequence.** There is no orchestrator that
+runs coordinator → implementor → verifier and gates on the verifier's exit
+code. The order is yours. What the harness gives you is the assurance that when
+you are in the verifier, it *cannot* have edited the thing it is judging — and
+that the transition was recorded.
+
+Routing can help you follow the loop without thinking about it:
+
+```toml
+[[routing.rules]]
+role = "coordinator"
+match = '^\s*(spec|specify|design|plan|contract)\b'
+why = "intent and contracts"
+```
+
+With `mode = "suggest"` the harness proposes the role and shows what it could
+reach, and you confirm:
+
+```
+  ⇢ suggest: implement → coordinator  (intent and contracts)
+    coordinator can use: read, write, skill
+  └ [y]es once · [a]lways · [N]o
+```
+
+With `mode = "auto"` it routes and tells you which rule fired. Either way the
+rules are declared data, not a model's opinion — the same input picks the same
+role on every machine.
+
+**Where done-or-not is decided.** gnomon deliberately has no gate of its own.
+[SeptaCore](https://github.com/eljaplacido/SeptaCore) is a repository-native
+verification plane driven by any shell, and the `verifier` role's `bash_allow`
+permits `septacore check`. One gate decides; gnomon is one of the shells that
+drives it. Adding a second gate here would be duplicated mechanism, which is
+the thing that composition layer exists to prevent.
+
+---
+
+## Specs, contracts and tests — how the harness holds itself to this
+
+The same paradigm applies to gnomon's own development, and it is checkable
+rather than asserted.
+
+**Contracts are published data, not prose.** `conformance/` holds golden
+fixtures that pin the observable behaviour:
+
+| Fixture | Pins |
+|---|---|
+| `manifest_golden.json` | The surface manifest and its hash |
+| `exit_codes.json` | Exit code → bucket, all nine values |
+| `enumerations_golden.json` | Legal values for `edit_format`, `sandbox`, `approval`, `role_profile` |
+| `session_golden.json` | The session record shape |
+
+`gnomon enumerations` prints the contract; `.gnomon/ci.sh` checks the code
+against every fixture and computes the manifest twice to prove it is
+deterministic.
+
+**Documentation is tested like code.** `packages/gnomon-cli/src/docs.test.ts`
+checks this README against the implementation: every CLI command it lists is
+dispatched, every slash command it names is registered *and* reachable by Tab,
+every default it quotes is what a scaffolded surface actually has, every file
+it points at exists. Much of this repository's history is documented behaviour
+that was not the behaviour, so the docs carry tests.
+
+**Claims are pinned by the test that would fail without them.** A hash of the
+right shape is not a hash of the right thing: the surface hash was a constant
+for months while every structural assertion passed. The tests now assert that
+sources are actually hashed, that the hash tracks a change, and that both
+implementations agree.
+
+---
+
+## The Six Rules
+
+1. **No machine-scoped configuration.** Everything lives in `.gnomon/`.
+   No `~/.gnomon/`, no `$XDG_CONFIG_HOME`, no global defaults.
+
+2. **Every session emits a manifest**, content-addressed over the surface — a
+   list of every file in `.gnomon/` with its SHA256. Absence is part of the
+   hash: a missing file ≠ an empty file.
+
+3. **Tool schemas are declared data**, resolved from `.gnomon/tools.toml`,
+   sorted, hashed. Unreachable tools produce a refusal, never a shorter list.
+
+4. **Three outcome buckets:** `result` / `refusal` / `apparatus_failure`.
+   No composite verdict. Every step carries its bucket; the reader decides.
+
+5. **Published, versioned exit contract.** See [docs/CONTRACTS.md](docs/CONTRACTS.md).
+   Exit codes 0–1 → `result`, 2–4 → `refusal`, 10–13 → `apparatus_failure`.
+
+6. **Published enumerations.** `gnomon enumerations` prints the allowed values
+   for `edit_format`, `sandbox`, `approval`, `role_profile`.
 
 ---
 
@@ -100,23 +318,30 @@ bin directory) and reopen the shell.
 cd my-project && gnomon launch
 ```
 
-`launch` creates `.gnomon/` if it is missing and opens the loop. Two things to
-do straight after:
+`launch` creates `.gnomon/` if it is missing and opens the loop. It tells you
+which project it resolved, because `.gnomon/` is found by walking up and
+running from the wrong directory otherwise looks identical to running from the
+right one:
+
+```
+No .gnomon/ in /home/you/my-project — creating one.
+Project: /home/you/my-project
+Role: implement
+Model: qwen2.5:14b-instruct
+Tools (implement): read, bash, edit, write, skill
+```
+
+Two things to do straight after:
 
 1. **Edit `.gnomon/roles.toml`.** Model tags are concrete backend tags, not
-   aliases — they must name models you actually have (`ollama list`).
+   aliases — they must name models you actually have. `/models` lists what each
+   endpoint offers.
 2. **Add `.gnomon-sessions/` and `.gnomon-audit/` to `.gitignore`.**
 
-To inherit a configuration that already works:
-
-```bash
-gnomon init --from /path/to/another/project
-```
-
-A first session looks like this:
+A first exchange:
 
 ```
-gnomon> read src/lib.ts and tell me what add() does
+implement ▸ read src/lib.ts and tell me what add() does
   ⚙ read src/lib.ts
     ✓ read src/lib.ts — 4 lines
 
@@ -129,40 +354,22 @@ add() takes two numbers and returns a - b, which looks like a bug.
 Ask it to fix that, and nothing is written until you say so:
 
 ```
+  │ The subtraction is the defect; I will change it to addition.
   ⚙ edit src/lib.ts
 
   ┌ approve: edit src/lib.ts (+1 −1)
   │ - return a - b;
   │ + return a + b;
-  └ [y]es / [N]o
+  └ [y]es · [a]ll this turn · [s]ession · [N]o
 ```
 
----
-
-## The Six Rules
-
-1. **No machine-scoped configuration.** Everything lives in `.gnomon/`.
-   No `~/.gnomon/`, no `$XDG_CONFIG_HOME`, no global defaults.
-
-2. **Every session emits a manifest**, content-addressed over the surface — a
-   list of every file in `.gnomon/` with its SHA256. Absence is part of the
-   hash: a missing file ≠ an empty file.
-
-3. **Tool schemas are declared data**, resolved from `.gnomon/tools.toml`,
-   sorted, hashed. Unreachable tools produce a refusal, never a shorter list.
-
-4. **Three outcome buckets:** `result` / `refusal` / `apparatus_failure`.
-   No composite verdict. Every step carries its bucket; the reader decides.
-
-5. **Published, versioned exit contract.** See [docs/CONTRACTS.md](docs/CONTRACTS.md).
-   Exit codes 0–1 → `result`, 2–4 → `refusal`, 10–13 → `apparatus_failure`.
-
-6. **Published enumerations.** `gnomon enumerations` prints the allowed values
-   for `edit_format`, `sandbox`, `approval`, `role_profile`.
+**Lost? `/explain <topic>`** answers three questions about any feature — what
+it is, how *this* repository currently has it set, and what to do next — by
+reading your live surface.
 
 ---
 
-## Architecture
+## Architecture Layout
 
 ```
 gnomon/
@@ -171,7 +378,7 @@ gnomon/
 │   ├── gnomon-edit/            # Structural edits
 │   └── gnomon-exec/            # Spawn, timeout, sandbox, outcome capture
 ├── packages/                   # TypeScript — the parts that must be flexible
-│   ├── gnomon-core/            # Agent loop, tools, skills, context, audit
+│   ├── gnomon-core/            # Turns, tools, skills, context, audit, sessions
 │   ├── gnomon-cli/             # Thin shell over core
 │   ├── gnomon-natives/         # Bindings to the crates
 │   └── gnomon-tui/             # Saved-session viewer
@@ -179,17 +386,6 @@ gnomon/
 ├── conformance/                # Golden fixtures — the contract
 └── docs/                       # DESIGN, CONTRACTS, ROADMAP
 ```
-
-**Rust** owns the surface hash, structural editing, and process execution:
-the things whose correctness must be checkable without trusting a JavaScript
-runtime. `gnomon-surface` is the authority on what a surface hashes to, and
-`conformance/manifest_golden.json` pins it.
-
-**TypeScript** owns the agent loop, tool execution, context management, skills,
-and the audit trail.
-
-Both implementations of the surface hash are compared in CI. They disagreed
-once — different canonical path prefixes — and a test now holds them together.
 
 ---
 
