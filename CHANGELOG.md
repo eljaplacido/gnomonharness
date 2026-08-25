@@ -4,6 +4,15 @@
 
 ### Added
 
+- **`/session` opens an arrow-key picker.** Sessions are listed by when they
+  were and what they were about — the identifier is how the file is named, not
+  how anyone recognises a conversation. Continuing one previously meant reading
+  a list, copying a timestamp-and-pid string, and typing it back. `/session
+  <id>` still works for scripts, and a non-TTY still gets the printed list.
+- **A guard for working on gnomon itself.** Running from the harness checkout
+  is how gnomon is developed and almost never what a user of gnomon intends;
+  the banner now says which of those is happening.
+
 - **Colour themes.** `[ui] theme` and `/theme` — `dark` (default), `dim`,
   `light`, `high-contrast`, `mono`. The default no longer uses ANSI "bright
   black" for secondary text, which on a dark terminal is charcoal on charcoal

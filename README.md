@@ -893,10 +893,24 @@ gnomon prompt --resume <id>        # a specific one
 From inside the loop:
 
 ```
-/session          this session, and earlier ones with their opening lines
-/session <id>     continue an earlier one here
+/session          pick one with the arrow keys
+/session <id>     name one directly, for scripts
 /new              start a fresh one — the current stays on disk, resumable
 ```
+
+`/session` opens a picker. Sessions are shown the way you remember them — when
+they were and what they were about — not by the identifier the file happens to
+carry:
+
+```
+  Choose a session   ↑↓ move · Enter open · Esc cancel
+
+  › 25 Aug 10:57    7 turns  implement  Audit this project and its structure
+    24 Aug 20:16    5 turns  implement  Investigate the flaky test
+    24 Aug 20:10    4 turns  plan       Draft the release notes
+```
+
+On a non-TTY it prints the list instead, so scripts keep working.
 
 `/new` rotates rather than erases, so the conversation you just left is still
 there. (`/reset` is the same thing: clearing history while keeping the session

@@ -63,6 +63,7 @@ import {
   listSessions,
   SESSION_FORMAT,
   SessionSnapshot,
+  SessionListEntry,
 } from "./session_store.js";
 
 // ---------------------------------------------------------------------------
@@ -1460,6 +1461,122 @@ export function isSelfTargeting(projectRoot: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Session picker
+// ---------------------------------------------------------------------------
+
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+/**
+ * "25 Aug 10:41" — short, sortable by eye, and not locale-dependent.
+ *
+ * toLocaleString would render differently per machine, which is the kind of
+ * per-machine variation this harness avoids even in output nobody hashes.
+ */
+export function formatWhen(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "unknown";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getDate())} ${MONTHS[d.getMonth()]} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** One row of the picker: when it was, how big, and what it was about. */
+export function sessionRow(
+  entry: SessionListEntry,
+  widths: { role: number },
+  current: boolean
+): string {
+  const when = formatWhen(entry.updated);
+  const turns = `${entry.turns} turn${entry.turns === 1 ? "" : "s"}`;
+  const topic = entry.opening
+    ? entry.opening.length > 52
+      ? `${entry.opening.slice(0, 52)}…`
+      : entry.opening
+    : "(no opening line)";
+  return (
+    `${when}  ${turns.padStart(8)}  ` +
+    `${entry.currentRole.padEnd(widths.role)}  ${topic}${current ? "   ← current" : ""}`
+  );
+}
+
+/**
+ * Choose a session with the arrow keys.
+ *
+ * Sessions were addressed by identifier — a timestamp with a process id — so
+ * continuing one meant reading a list, copying a string, and typing it back.
+ * The identifier is how the file is named, not how anyone recognises a
+ * conversation; the date and the opening line are.
+ *
+ * Returns the chosen id, or null when cancelled.
+ */
+export async function pickSession(
+  entries: SessionListEntry[],
+  currentId: string,
+  ui: ResolvedUi,
+  rl: readline.Interface,
+  out: NodeJS.WriteStream = process.stdout
+): Promise<string | null> {
+  if (entries.length === 0) return null;
+
+  // Newest first: the one most likely wanted is the one under the cursor.
+  const rows = [...entries].reverse();
+  const roleWidth = Math.max(...rows.map((e) => e.currentRole.length));
+  let index = 0;
+
+  const header =
+    paint(ui, "cyan", "  Choose a session") +
+    paint(ui, "gray", "   ↑↓ move · Enter open · Esc cancel");
+
+  const draw = (first: boolean) => {
+    if (!first) out.write(`\x1b[${rows.length + 2}A`);
+    out.write("\x1b[J");
+    out.write(`${header}\n\n`);
+    rows.forEach((e, i) => {
+      const line = sessionRow(e, { role: roleWidth }, e.id === currentId);
+      out.write(
+        i === index
+          ? `${paint(ui, "cyan", "  ›")} ${paint(ui, "bold", line)}\n`
+          : `    ${paint(ui, "gray", line)}\n`
+      );
+    });
+  };
+
+  draw(true);
+
+  return new Promise<string | null>((resolvePick) => {
+    const onKey = (_chunk: string, key: readline.Key | undefined) => {
+      if (!key) return;
+      if (key.name === "up" || (key.name === "p" && key.ctrl)) {
+        index = (index - 1 + rows.length) % rows.length;
+        draw(false);
+      } else if (key.name === "down" || (key.name === "n" && key.ctrl)) {
+        index = (index + 1) % rows.length;
+        draw(false);
+      } else if (key.name === "return" || key.name === "enter") {
+        finish(rows[index].id);
+      } else if (key.name === "escape" || (key.name === "c" && key.ctrl) || key.name === "q") {
+        finish(null);
+      }
+    };
+
+    const finish = (chosen: string | null) => {
+      process.stdin.off("keypress", onKey);
+      // Erase the picker so the transcript keeps only the outcome.
+      out.write(`\x1b[${rows.length + 2}A\x1b[J`);
+      rl.resume();
+      resolvePick(chosen);
+    };
+
+    // rl.pause() pauses process.stdin itself, and a paused stream emits no
+    // data — so keypress never fired and the picker could not be driven at
+    // all. Pause the interface so it neither echoes nor builds a line, then
+    // resume the stream so the keys still arrive here.
+    rl.pause();
+    process.stdin.resume();
+    process.stdin.on("keypress", onKey);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Live command menu
 // ---------------------------------------------------------------------------
 
@@ -2250,10 +2367,13 @@ export async function runPromptLoop(
   let cancelTurn: (() => void) | null = null;
   // The progress line of the turn in flight, so typing can silence it.
   let activeProgress: InstanceType<typeof Progress> | null = null;
+  // True while the session picker owns the keyboard.
+  let picking = false;
 
   if (process.stdin.isTTY) {
     readline.emitKeypressEvents(process.stdin);
     process.stdin.on("keypress", (_chunk, key) => {
+      if (picking) return; // the picker has its own key handling
       if (key && key.name === "escape" && cancelTurn) {
         cancelTurn();
         return;
@@ -2268,7 +2388,7 @@ export async function runPromptLoop(
       // buffer after the keypress handler runs, so reading rl.line here would
       // always be one character behind.
       setImmediate(() => {
-        if (cancelTurn) return;
+        if (cancelTurn || picking) return;
         menu.render(rl.line ?? "");
       });
     });
@@ -2615,6 +2735,52 @@ export async function runPromptLoop(
 
       // Handle slash commands
       if (input.startsWith("/")) {
+        // The session picker waits on keypresses; processCommand is sync.
+        if (/^\/sessions?\s*$/.test(input.trim()) && process.stdin.isTTY) {
+          const st = resolveSessionStore(config);
+          const ui0 = uiOf(state);
+          if (!st.persist) {
+            console.log(
+              "\nSession persistence is off. Set [session].persist = true in " +
+                ".gnomon/config.toml to keep conversations."
+            );
+            continue;
+          }
+          const entries = listSessions(st);
+          if (entries.length <= 1) {
+            console.log(
+              `\nThis session: ${sessionIdOf(state)} — ${state.exchanges.length} turn(s).`
+            );
+            console.log(`  /new  starts a fresh one; this is the only session so far.`);
+            continue;
+          }
+
+          picking = true;
+          const chosen = await pickSession(entries, sessionIdOf(state), ui0, rl);
+          picking = false;
+
+          if (!chosen) {
+            console.log(paint(ui0, "gray", "  (kept this session)"));
+            continue;
+          }
+          if (chosen === sessionIdOf(state)) {
+            console.log(paint(ui0, "gray", "  (already here)"));
+            continue;
+          }
+          try {
+            state.switchSession?.(chosen);
+            const opened = entries.find((e) => e.id === chosen);
+            console.log(
+              `\nOpened ${formatWhen(opened?.updated ?? "")} — ` +
+                `${state.exchanges.length} turn(s) restored` +
+                (opened?.opening ? `: "${opened.opening}"` : "")
+            );
+          } catch (err) {
+            console.log(`\n${err instanceof Error ? err.message : String(err)}`);
+          }
+          continue;
+        }
+
         // /models queries the network, and processCommand is synchronous.
         if (/^\/models\b/.test(input.trim())) {
           const ui0 = uiOf(state);

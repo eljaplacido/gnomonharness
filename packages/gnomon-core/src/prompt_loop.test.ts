@@ -1041,3 +1041,65 @@ describe("working on gnomon itself is flagged", () => {
     expect(promptLoop.isSelfTargeting(`${checkout}/packages`)).toBe(false);
   });
 });
+
+describe("session rows read like conversations, not filenames", () => {
+  const entry = (over: Record<string, unknown> = {}): any => ({
+    id: "2026-08-25T07-40-52-153Z-1806636",
+    path: "/x", updated: "2026-08-25T10:41:00.000Z",
+    turns: 7, currentRole: "implement",
+    surface_hash: "abc", opening: "Audit this project and its structure",
+    ...over,
+  });
+
+  it("formats a date a person can scan", () => {
+    // The identifier is how the file is named, not how anyone recognises a
+    // conversation.
+    expect(promptLoop.formatWhen("2026-08-25T10:41:00.000Z")).toMatch(
+      /^\d{2} [A-Z][a-z]{2} \d{2}:\d{2}$/
+    );
+  });
+
+  it("survives a corrupt timestamp", () => {
+    expect(promptLoop.formatWhen("not a date")).toBe("unknown");
+  });
+
+  it("shows when, how big, which role, and what it was about", () => {
+    const row = promptLoop.sessionRow(entry(), { role: 11 }, false);
+    expect(row).toContain("Aug");
+    expect(row).toContain("7 turns");
+    expect(row).toContain("implement");
+    expect(row).toContain("Audit this project");
+    // Never the identifier.
+    expect(row).not.toContain("1806636");
+  });
+
+  it("says which one you are in", () => {
+    expect(promptLoop.sessionRow(entry(), { role: 11 }, true)).toContain("← current");
+    expect(promptLoop.sessionRow(entry(), { role: 11 }, false)).not.toContain("← current");
+  });
+
+  it("singularises one turn", () => {
+    expect(promptLoop.sessionRow(entry({ turns: 1 }), { role: 11 }, false)).toContain("1 turn ");
+  });
+
+  it("truncates a long opening rather than wrapping the row", () => {
+    const row = promptLoop.sessionRow(
+      entry({ opening: "x".repeat(200) }), { role: 11 }, false
+    );
+    expect(row).toContain("…");
+    expect(row.length).toBeLessThan(120);
+  });
+
+  it("says so when there is no opening line", () => {
+    expect(promptLoop.sessionRow(entry({ opening: "" }), { role: 11 }, false))
+      .toContain("no opening line");
+  });
+});
+
+describe("pickSession", () => {
+  it("returns null for an empty list rather than drawing an empty picker", async () => {
+    const rl: any = { pause() {}, resume() {} };
+    const out: any = { isTTY: true, write() {} };
+    expect(await promptLoop.pickSession([], "x", {} as any, rl, out)).toBeNull();
+  });
+});
