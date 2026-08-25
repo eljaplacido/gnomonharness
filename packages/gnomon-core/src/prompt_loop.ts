@@ -58,6 +58,7 @@ import {
   resolveSessionStore,
   saveSession,
   loadSession,
+  listSessions,
   SESSION_FORMAT,
   SessionSnapshot,
 } from "./session_store.js";
@@ -106,6 +107,15 @@ export interface PromptState {
   summary?: string;
   /** Identifier this conversation is saved under */
   sessionId?: string;
+  /**
+   * Rotate to a fresh session, leaving the current snapshot on disk.
+   *
+   * Supplied by the loop, which owns the id and the persistence. A command
+   * cannot rotate a session by itself without reaching into both.
+   */
+  newSession?: () => void;
+  /** Load an earlier session into this one. Throws when the id is unknown. */
+  switchSession?: (id: string) => void;
   /**
    * Models the backend has refused a tools array for. Remembered so the
    * rejection is paid once per session rather than on every turn.
@@ -1310,12 +1320,26 @@ export interface CommandSpec {
  * implemented but undiscoverable — typing "/" and Tab is how you find out
  * what exists.
  */
+/**
+ * Commands that may run while a turn is still going.
+ *
+ * All of them only read state or change how output is rendered, so running one
+ * mid-turn cannot alter what that turn does. Everything else — anything that
+ * changes the role, the history or the session — waits, because a turn already
+ * bound to a role and a context should not have either moved under it.
+ */
+export const LIVE_SAFE_COMMANDS = new Set([
+  "/help", "/roles", "/profiles", "/tools", "/endpoints", "/context",
+  "/skills", "/manifest", "/explain", "/reflect", "/meta", "/think", "/mode",
+]);
+
 export const COMMANDS: CommandSpec[] = [
   { name: "/roles", help: "List roles and models (marks the current one)" },
   { name: "/role", arg: "<name>", help: "Switch role for the rest of the session" },
   { name: "/mode", arg: "[manual|suggest|auto]", help: "Who picks the role: you, the rules with your confirmation, or the rules" },
   { name: "/skills", help: "Active skills and pending proposals" },
-  { name: "/session", help: "This session's id and where it is saved" },
+  { name: "/session", arg: "[id]", help: "This session, earlier ones, and switching between them" },
+  { name: "/new", help: "Start a fresh session; the current one stays resumable" },
   { name: "/endpoints", help: "List declared inference endpoints" },
   { name: "/profiles", help: "Show available profiles" },
   { name: "/tools", help: "Show the tools this role may call" },
@@ -1324,6 +1348,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/meta", arg: "[fields]", help: "Show or set the meta line" },
   { name: "/think", arg: "[mode]", help: "Chain-of-thought: hide | collapse | show" },
   { name: "/explain", arg: "[topic]", help: "What a feature is, how this repo has it set, and what to do with it" },
+  { name: "/reflect", arg: "[topic]", help: "Alias for /explain" },
   { name: "/models", help: "Models each endpoint actually offers" },
   { name: "/manifest", help: "The surface hash and what it covers" },
   { name: "/clear", help: "Clear screen (history is kept)" },
@@ -1453,15 +1478,49 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       return true;
     }
 
+    case "/sessions":
     case "/session": {
       const st = resolveSessionStore(state.config);
-      console.log(`\nSession: ${sessionIdOf(state)}`);
-      console.log(`  turns recorded   ${state.exchanges.length}`);
-      console.log(`  persistence      ${st.persist ? st.dir : "off"}`);
-      if (st.persist) {
-        console.log(`  resume later     gnomon prompt --resume ${sessionIdOf(state)}`);
+      const wanted = (parts[1] ?? "").trim();
+
+      if (!st.persist) {
+        console.log(
+          "\nSession persistence is off. Set [session].persist = true in " +
+            ".gnomon/config.toml to keep conversations."
+        );
+        return true;
+      }
+
+      if (wanted) {
+        try {
+          state.switchSession?.(wanted);
+          console.log(
+            `\nSwitched to ${wanted} — ${state.exchanges.length} turn(s) restored.`
+          );
+        } catch (err) {
+          console.log(`\n${err instanceof Error ? err.message : String(err)}`);
+        }
+        return true;
+      }
+
+      console.log(`\nThis session: ${sessionIdOf(state)}`);
+      console.log(
+        `  ${state.exchanges.length} turn(s) · saved after every turn to ${st.dir}`
+      );
+
+      const others = listSessions(st).filter((e) => e.id !== sessionIdOf(state));
+      if (others.length > 0) {
+        console.log(`\nEarlier sessions (newest last):`);
+        for (const e of others.slice(-8)) {
+          console.log(`  ${e.id}`);
+          console.log(
+            `    ${e.turns} turn(s) · ${e.currentRole}${e.opening ? ` · "${e.opening}"` : ""}`
+          );
+        }
+        console.log(`\n  /session <id>   continue one here`);
+        console.log(`  /new            start a fresh one`);
       } else {
-        console.log(`  set [session].persist = true in .gnomon/config.toml to keep it`);
+        console.log(`\n  /new  starts a fresh one; this is the only session so far.`);
       }
       return true;
     }
@@ -1691,15 +1750,26 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       return true;
     }
 
+    case "/new":
     case "/reset": {
+      // Clearing history but keeping the session id meant the next turn's
+      // snapshot overwrote the record of everything before it. Starting a new
+      // session leaves the old one on disk, resumable.
       const n = state.exchanges.length;
-      const hadSummary = Boolean(state.summary);
+      const previous = state.sessionId;
+      // Rotate before clearing. newSession() persists the current state first,
+      // so clearing beforehand wrote an empty snapshot over the very session
+      // this is meant to leave intact.
+      state.newSession?.();
       state.exchanges.length = 0;
       state.summary = undefined;
       console.log(
-        `\nHistory cleared (${n} turn(s)${hadSummary ? " and the summary" : ""} dropped). ` +
-          `Surface unchanged.`
+        `\nNew session${previous && n > 0 ? `; the previous one keeps its ${n} turn(s)` : ""}.`
       );
+      if (previous && n > 0) {
+        console.log(`  resume it later:  gnomon prompt --resume ${previous}`);
+      }
+      console.log(`  now:              ${sessionIdOf(state)}`);
       return true;
     }
 
@@ -1859,6 +1929,26 @@ export async function runPromptLoop(
     record: auditSettings.record,
   });
 
+  // Rotating and switching need the loop's id and its persist(), so they are
+  // supplied here rather than reached for from a command.
+  state.newSession = (): void => {
+    persist();
+    sessionId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
+    state.sessionId = sessionId;
+    resumedFrom = null;
+  };
+
+  state.switchSession = (id: string): void => {
+    persist();
+    const snap = loadSession(store, id);
+    state.exchanges = snap.exchanges ?? [];
+    state.summary = snap.summary;
+    state.currentRole = snap.currentRole ?? state.currentRole;
+    sessionId = snap.id;
+    state.sessionId = sessionId;
+    resumedFrom = snap;
+  };
+
   const persist = (): void => {
     if (!store.persist) return;
     try {
@@ -1914,8 +2004,33 @@ export async function runPromptLoop(
       const n = notify;
       notify = null;
       n(line);
-    } else {
-      lineQueue.push(line);
+      return;
+    }
+
+    // Nothing is waiting on this line, which means a turn is running.
+    const trimmed = line.trim();
+    const verb = trimmed.split(/\s+/)[0];
+
+    if (cancelTurn && trimmed && LIVE_SAFE_COMMANDS.has(verb)) {
+      // Run it now. These only read state or change rendering, so the turn in
+      // flight is unaffected — and waiting until it finished to be told what
+      // /think does would defeat the point of asking mid-turn.
+      processCommand(trimmed, state);
+      activeProgress?.resume();
+      return;
+    }
+
+    lineQueue.push(line);
+    if (cancelTurn && trimmed) {
+      const ui0 = uiOf(state);
+      console.log(
+        paint(
+          ui0,
+          "gray",
+          `  ⏎ queued (${lineQueue.length}) — runs when this turn finishes`
+        )
+      );
+      activeProgress?.resume();
     }
   });
   rl.on("close", () => {
@@ -1944,10 +2059,21 @@ export async function runPromptLoop(
   // nothing, so a stray Esc cannot end the session. Ctrl+C does the same
   // mid-turn and only exits when nothing is running.
   let cancelTurn: (() => void) | null = null;
+  // The progress line of the turn in flight, so typing can silence it.
+  let activeProgress: InstanceType<typeof Progress> | null = null;
+
   if (process.stdin.isTTY) {
     readline.emitKeypressEvents(process.stdin);
     process.stdin.on("keypress", (_chunk, key) => {
-      if (key && key.name === "escape" && cancelTurn) cancelTurn();
+      if (key && key.name === "escape" && cancelTurn) {
+        cancelTurn();
+        return;
+      }
+      // Any other key while a turn runs: the line belongs to the typist now.
+      // The spinner erases the whole line twelve times a second, so without
+      // this nothing typed during a turn was ever visible — the queue worked,
+      // but blind.
+      if (cancelTurn && activeProgress) activeProgress.suspend();
     });
   }
   rl.on("SIGINT", () => {
@@ -2464,6 +2590,7 @@ export async function runPromptLoop(
 
       // Run the turn: model, tools, approvals, until it answers in prose.
       const progress = new Progress(ui);
+      activeProgress = progress;
       const carried =
         built.included > 0 ? ` · ${built.included} turn(s) of context` : "";
       progress.start(
@@ -2492,6 +2619,7 @@ export async function runPromptLoop(
         cancelTurn = null;
       }
       progress.stop();
+      activeProgress = null;
       const duration = Date.now() - start;
 
       if (turn.content === CANCELLED) {

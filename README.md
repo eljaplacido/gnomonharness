@@ -855,11 +855,25 @@ calls, and a wrap-up costs none.
 Conversations are saved after every turn, so closing the terminal does not lose
 the work.
 
+Nothing to ask for — every turn is written as it happens.
+
 ```bash
 gnomon sessions                    # newest last
 gnomon prompt --continue           # resume the most recent
 gnomon prompt --resume <id>        # a specific one
 ```
+
+From inside the loop:
+
+```
+/session          this session, and earlier ones with their opening lines
+/session <id>     continue an earlier one here
+/new              start a fresh one — the current stays on disk, resumable
+```
+
+`/new` rotates rather than erases, so the conversation you just left is still
+there. (`/reset` is the same thing: clearing history while keeping the session
+id used to overwrite the record of everything before it.)
 
 ```toml
 [session]
@@ -976,7 +990,8 @@ undiscoverable.
 | `/endpoints` | Declared inference endpoints |
 | `/context` | Window, folded turns, summary size |
 | `/skills` | Active skills and pending proposals |
-| `/session` | This session's id and where it is saved |
+| `/session [id]` | This session, earlier ones, and switching between them |
+| `/new` | Start a fresh session; the current one stays resumable |
 | `/explain [topic]` | What a feature is, how **this** repo has it set, and what to do with it |
 | `/models` | Models each endpoint actually offers |
 | `/manifest` | The surface hash and what it covers |
@@ -984,6 +999,21 @@ undiscoverable.
 | `/meta [fields]` | Set the meta line — `/meta all`, `/meta none`, `/meta style compact` |
 | `/think [mode]` | Chain-of-thought: `hide` \| `collapse` \| `show` |
 | `/clear` `/help` `/quit` | |
+
+**You can type while a turn is running.** Anything you enter is queued and runs
+when the turn finishes, and the progress line gets out of the way as soon as
+you start typing:
+
+```
+  ⠋ qwen3.6:35b — 4 tool call(s) so far 12.3s
+  ⏎ queued (1) — runs when this turn finishes
+```
+
+Commands that only read state or change rendering — `/think`, `/meta`,
+`/context`, `/tools`, `/help`, `/explain` — **run immediately**, without
+waiting for the turn. Anything that would move the role, the history or the
+session waits, because a turn already bound to those should not have them
+change underneath it.
 
 **Esc** cancels the turn in progress — the abort reaches the model request and
 is checked between tool calls, so a cancelled turn never leaves a half-applied

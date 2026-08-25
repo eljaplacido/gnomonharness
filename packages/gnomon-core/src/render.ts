@@ -213,6 +213,7 @@ export class Progress {
   private frame = 0;
   private started = 0;
   private label = "";
+  private suspended = false;
 
   constructor(
     private ui: ResolvedUi,
@@ -226,6 +227,7 @@ export class Progress {
   start(label: string): void {
     this.label = label;
     this.started = Date.now();
+    this.suspended = false;
     if (!this.live) {
       this.out.write(`  ${label}\n`);
       return;
@@ -253,12 +255,43 @@ export class Progress {
     );
   }
 
+  /**
+   * Stop redrawing and leave the line alone.
+   *
+   * Each frame writes a carriage return and an erase-line, twelve times a
+   * second. That erases whatever the user is typing as fast as the terminal
+   * echoes it — the queue was accepting typed-ahead input the whole time, but
+   * nothing typed was ever visible. While someone is typing, the line is
+   * theirs.
+   */
+  suspend(): void {
+    if (this.suspended) return;
+    this.suspended = true;
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    if (this.live) this.out.write("\r\x1b[2K");
+  }
+
+  /** Resume drawing after a suspend. No-op if it was never started. */
+  resume(): void {
+    if (!this.suspended) return;
+    this.suspended = false;
+    if (!this.live || this.started === 0) return;
+    this.draw();
+    this.timer = setInterval(() => this.draw(), 80);
+    if (typeof this.timer.unref === "function") this.timer.unref();
+  }
+
   /** Stop and clear the line. Safe to call when never started. */
   stop(): void {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.suspended = false;
+    this.started = 0;
     if (this.live) this.out.write("\r\x1b[2K");
   }
 }

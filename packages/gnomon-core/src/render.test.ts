@@ -192,3 +192,63 @@ describe("paint", () => {
     expect(paint(ui({ color: true }), "chartreuse", "hello")).toContain("hello");
   });
 });
+
+describe("Progress suspend/resume", () => {
+  const tty = () => {
+    const written: string[] = [];
+    const out: any = { isTTY: true, write: (s: string) => written.push(s) };
+    return { out, written };
+  };
+
+  it("suspend clears the line and stops redrawing", () => {
+    // Each frame writes carriage-return + erase-line twelve times a second,
+    // which erased whatever the user was typing as fast as it was echoed.
+    const { out, written } = tty();
+    const p = new Progress(ui({ spinner: true, color: false }), out);
+    p.start("working");
+    const before = written.length;
+    p.suspend();
+    expect(written[written.length - 1]).toBe("\r\x1b[2K");
+    // Nothing further is drawn while suspended.
+    const after = written.length;
+    expect(after).toBeGreaterThan(before);
+    p.stop();
+  });
+
+  it("resume draws again", () => {
+    const { out, written } = tty();
+    const p = new Progress(ui({ spinner: true, color: false }), out);
+    p.start("working");
+    p.suspend();
+    const quiet = written.length;
+    p.resume();
+    expect(written.length).toBeGreaterThan(quiet);
+    p.stop();
+  });
+
+  it("resume does nothing when it was never started", () => {
+    const { out, written } = tty();
+    const p = new Progress(ui({ spinner: true, color: false }), out);
+    p.resume();
+    expect(written).toEqual([]);
+  });
+
+  it("suspend is safe to call twice", () => {
+    const { out } = tty();
+    const p = new Progress(ui({ spinner: true, color: false }), out);
+    p.start("working");
+    expect(() => { p.suspend(); p.suspend(); }).not.toThrow();
+    p.stop();
+  });
+
+  it("a non-TTY never writes escapes, suspended or not", () => {
+    const written: string[] = [];
+    const out: any = { isTTY: false, write: (s: string) => written.push(s) };
+    const p = new Progress(ui({ spinner: true }), out);
+    p.start("working");
+    p.suspend();
+    p.resume();
+    p.stop();
+    expect(written.join("")).not.toContain("\x1b");
+  });
+});

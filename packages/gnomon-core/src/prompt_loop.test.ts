@@ -874,3 +874,27 @@ describe("listModels", () => {
     expect(called).toBe(true); // local was still queried
   });
 });
+
+describe("typing while a turn runs", () => {
+  it("the live-safe set only holds commands that cannot affect the turn", () => {
+    // Anything that moves the role, the history or the session would change
+    // the ground under a turn already bound to them.
+    const unsafe = ["/role", "/reset", "/new", "/session", "/clear", "/quit", "/models"];
+    for (const cmd of unsafe) {
+      expect(promptLoop.LIVE_SAFE_COMMANDS.has(cmd), cmd).toBe(false);
+    }
+  });
+
+  it("includes the ones worth reaching for mid-turn", () => {
+    for (const cmd of ["/think", "/meta", "/help", "/context", "/tools"]) {
+      expect(promptLoop.LIVE_SAFE_COMMANDS.has(cmd), cmd).toBe(true);
+    }
+  });
+
+  it("every live-safe command is a real command", () => {
+    const registered = new Set(promptLoop.COMMANDS.map((c) => c.name));
+    for (const cmd of promptLoop.LIVE_SAFE_COMMANDS) {
+      expect(registered.has(cmd), cmd).toBe(true);
+    }
+  });
+});
