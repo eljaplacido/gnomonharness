@@ -28,6 +28,21 @@ change travel together — that part is a convention.
 Three natives collapse onto `refusal`. Four onto `apparatus_failure`.
 Declared explicitly so a consumer reading only the bucket knows.
 
+**Where the line between 2-4 and 11 falls**, since tools use both and the
+native names read narrower than the use:
+
+- **Refusal (2-4) is something saying no.** A declined approval, `bash_allow`
+  or `bash_deny`, `write_allow`, a path outside the sandbox, a tool the role
+  was not given, a surface path that is not writable.
+- **11 is a tool that understood the request and could not carry it out.** An
+  edit whose anchor matches twice, an unreadable file, an expression that will
+  not parse, a checklist with two items in progress — as well as the timeout
+  the native name describes.
+
+The distinction is what makes the bucket answer anything: `apparatus_failure`
+is the signal to look at the harness, and a model's malformed argument
+arriving there would make it meaningless.
+
 This table is the vocabulary, not an inventory of what the current build
 emits. `gnomon task` exits `0`, `2` or `10` — the bucket, not the native code —
 and every other command exits `0` or `1`. The finer codes are reserved for
