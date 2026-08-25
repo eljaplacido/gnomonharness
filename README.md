@@ -600,6 +600,7 @@ meta_style = "line"               # line | compact
 think = "collapse"                # hide | collapse | show
 spinner = true
 color = true
+markdown = true
 ```
 
 `meta` is an ordered list drawn from `turn`, `role`, `model`, `bucket`,
@@ -607,6 +608,46 @@ color = true
 line. `think` controls how much chain-of-thought survives — reasoning models
 wrap their scratchpad in `<think>…</think>`, and `collapse` shows one line of
 it so you can see it happened without reading it.
+
+`markdown` renders the answer instead of printing its source. A model replies in
+markdown whether or not anything reads it, so a comparison table used to arrive
+as a wall of pipes and `**bold**` kept its asterisks:
+
+```
+  ┌────────────────┬────────────────────────────────────┬──────────────────────┐
+  │ Feature        │ Gnomon                             │ Others               │
+  ├────────────────┼────────────────────────────────────┼──────────────────────┤
+  │ Configuration  │ Repository-local (.gnomon/)        │ Machine-local        │
+  └────────────────┴────────────────────────────────────┴──────────────────────┘
+```
+
+Headings, emphasis, code spans, lists, quotes, rules and links are rendered;
+tables are drawn to the terminal width, with columns shrunk to fit rather than
+allowed to wrap at the edge. Anything unrecognised is left exactly as it was
+found — text passing through untouched is the intended failure mode, because
+mangled text is worse than unformatted text. Set it to `false` to get the raw
+markdown back, which is what you want when the answer *is* a document you are
+about to paste somewhere else.
+
+A ` ```mermaid ` fence is drawn:
+
+```
+  ┌─────────────┐
+  │ User prompt │
+  └─────────────┘
+    │
+    │ Route by role → Coordinator: plan
+    ▼
+  ┌─────────────┐   ┌─────────────┐
+  │ Coordinator │   │ Implementor │
+  └─────────────┘   └─────────────┘
+```
+
+`graph` and `flowchart` in `TD`, `TB`, `LR`, `RL` or `BT`, including chained
+statements (`A --> B --> C`) and edge labels. Sequence diagrams, class diagrams
+and subgraphs are **not** laid out: those print as their own source with the
+reason given, because inventing a picture for a diagram this cannot place would
+be worse than showing what the model wrote.
 
 #### `[audit]` and `[session]`
 

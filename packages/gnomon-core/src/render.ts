@@ -11,6 +11,7 @@
 
 import type { PromptExchange } from "./prompt_loop.js";
 import type { ResolvedUi, MetaField } from "./config.js";
+import { renderMarkdown, DEFAULT_WIDTH } from "./markdown.js";
 
 // ---------------------------------------------------------------------------
 // Colour
@@ -43,6 +44,7 @@ export const THEMES: Record<string, Theme> = {
       // meta lines, every context note, every tool argument.
       gray: `${ESC}37m`,
       bold: `${ESC}1m`,
+      italic: `${ESC}3m`,
       dim: `${ESC}2m`,
       green: `${ESC}32m`,
       yellow: `${ESC}33m`,
@@ -57,6 +59,7 @@ export const THEMES: Record<string, Theme> = {
     codes: {
       gray: `${ESC}90m`,
       bold: `${ESC}1m`,
+      italic: `${ESC}3m`,
       dim: `${ESC}2m`,
       green: `${ESC}32m`,
       yellow: `${ESC}33m`,
@@ -71,6 +74,7 @@ export const THEMES: Record<string, Theme> = {
     codes: {
       gray: `${ESC}90m`,
       bold: `${ESC}1m`,
+      italic: `${ESC}3m`,
       dim: `${ESC}2m`,
       green: `${ESC}32m`,
       yellow: `${ESC}33m`,
@@ -85,6 +89,7 @@ export const THEMES: Record<string, Theme> = {
     codes: {
       gray: `${ESC}97m`,
       bold: `${ESC}1m`,
+      italic: `${ESC}3m`,
       dim: `${ESC}97m`,
       green: `${ESC}1;92m`,
       yellow: `${ESC}1;93m`,
@@ -243,6 +248,16 @@ export function renderMeta(
  * Pure — returns lines rather than printing, so the layout is testable and so
  * a different front-end can reuse it.
  */
+/**
+ * Columns available for an answer.
+ *
+ * `columns` is absent when output is piped, and a fixed width there keeps a
+ * redirected transcript stable instead of varying with whoever ran it.
+ */
+export function terminalWidth(out: NodeJS.WriteStream = process.stdout): number {
+  return out.isTTY && out.columns ? Math.max(40, out.columns) : DEFAULT_WIDTH;
+}
+
 export function renderExchange(
   exchange: PromptExchange,
   ui: ResolvedUi
@@ -268,7 +283,13 @@ export function renderExchange(
     }
   }
 
-  lines.push(answer || paint(ui, "yellow", "(no answer — reply was reasoning only)"));
+  if (!answer) {
+    lines.push(paint(ui, "yellow", "(no answer — reply was reasoning only)"));
+  } else if (ui.markdown) {
+    lines.push(...renderMarkdown(answer, ui, terminalWidth()));
+  } else {
+    lines.push(answer);
+  }
   lines.push("");
   lines.push(...renderMeta(exchange, ui, thinkTokens));
   lines.push("");

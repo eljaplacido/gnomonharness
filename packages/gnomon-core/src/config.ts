@@ -85,6 +85,7 @@ export interface UiConfig {
   think?: ThinkMode;
   spinner?: boolean;
   color?: boolean;
+  markdown?: boolean;
 }
 
 /** Meta fields available for the line printed with each answer */
@@ -638,6 +639,15 @@ export interface ResolvedUi {
   think: ThinkMode;
   spinner: boolean;
   color: boolean;
+  /**
+   * Render the answer's markdown, rather than printing the source.
+   *
+   * A model answers in markdown whether or not anything reads it, so a
+   * comparison table arrived as a wall of pipes and `**bold**` kept its
+   * asterisks. Off prints exactly what the model returned, which is what you
+   * want when the answer *is* the markdown you are about to paste elsewhere.
+   */
+  markdown: boolean;
 }
 
 export const META_FIELDS: MetaField[] = [
@@ -698,6 +708,7 @@ export function resolveUi(config: GnomonConfig): ResolvedUi {
     think: pickEnum(ui.think, THINK_MODES, "collapse"),
     spinner: typeof ui.spinner === "boolean" ? ui.spinner : true,
     color: typeof ui.color === "boolean" ? ui.color : true,
+    markdown: typeof ui.markdown === "boolean" ? ui.markdown : true,
   };
 }
 

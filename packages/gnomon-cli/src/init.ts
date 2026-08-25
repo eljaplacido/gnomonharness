@@ -165,6 +165,11 @@ meta_style = "line"               # line | compact
 think = "collapse"                # hide | collapse | show
 spinner = true
 color = true
+# Render the answer's markdown — tables as tables, **bold** as bold, and
+# a mermaid fence as boxes and arrows. Set false to print exactly
+# what the model returned, which is what you want when the answer *is* markdown
+# you are about to paste somewhere else.
+markdown = true
 `;
 
 const rolesToml = (large: string, small: string, note: string) => `# Role routing — model, endpoint, and tool scope per role.
