@@ -45,6 +45,29 @@ export interface SessionMeta {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Inner width of the banner box, excluding its two border columns. */
+export const BANNER_WIDTH = 46;
+
+/**
+ * Centre `text` in `width` columns, colouring only the text itself.
+ *
+ * The padding is measured on the bare string and the escape codes are added
+ * afterwards, because an ANSI sequence occupies characters in a JavaScript
+ * string and zero columns in a terminal — padding a pre-coloured string is how
+ * a box ends up looking right in the source and wrong on screen.
+ */
+export function centre(
+  text: string,
+  width: number,
+  paint: (t: string) => string = (t) => t
+): string {
+  const visible = [...text].length;
+  if (visible >= width) return paint(text);
+  const left = Math.floor((width - visible) / 2);
+  return " ".repeat(left) + paint(text) + " ".repeat(width - visible - left);
+}
+
+
 const ESC = "\x1b[";
 const COLORS = {
   reset: `${ESC}0m`,
@@ -122,15 +145,17 @@ function latestSession(dir?: string): SessionMeta | null {
 /** Render the TUI header */
 function renderHeader(): void {
   console.clear();
+  // Centred against the border rather than padded by hand. Hand-counted
+  // padding drifts the moment the title changes — and it had: the right edge
+  // sat 13 columns inside the corner. Colour is applied after centring
+  // because ANSI escapes have width in a string and none on screen.
+  console.log(`${c("cyan", "╔" + "═".repeat(BANNER_WIDTH) + "╗")}`);
   console.log(
-    `${c("cyan", "╔══════════════════════════════════════════════╗")}`
+    `${c("cyan", "║")}${centre("gnomon — TUI", BANNER_WIDTH, (t) =>
+      c("bold", c("white", t))
+    )}${c("cyan", "║")}`
   );
-  console.log(
-    `${c("cyan", "║")}       ${c("bold", c("white", "gnomon — TUI"))}              ${c("cyan", "║")}`
-  );
-  console.log(
-    `${c("cyan", "╚══════════════════════════════════════════════╝")}`
-  );
+  console.log(`${c("cyan", "╚" + "═".repeat(BANNER_WIDTH) + "╝")}`);
   console.log();
 }
 

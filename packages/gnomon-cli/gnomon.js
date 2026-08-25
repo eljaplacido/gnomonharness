@@ -4,13 +4,24 @@
  *
  * This is the `bin` entry, so it must work from anywhere — a globally linked
  * install invoked inside someone else's project, not just from a checkout.
- * Two rules follow from that:
+ * Three rules follow from that:
  *
  *   1. The harness is located relative to THIS file, by walking up to the
  *      checkout that contains it.
  *   2. The child inherits the caller's working directory. gnomon resolves
  *      `.gnomon/` from the cwd, so pinning cwd to the checkout — as this
  *      launcher used to — made it impossible to use on any other project.
+ *   3. No `shell` on unix. `shell: true` re-splits the argv array through sh,
+ *      which turned `task "fix the login bug & ship it"` into five arguments
+ *      and backgrounded the remainder at the `&`.
+ *
+ * It runs the TypeScript sources through `tsx`, which costs ~200ms of
+ * transpilation per invocation. That is the single largest piece of gnomon's
+ * own overhead and it is worth removing, but not from here: every workspace
+ * package sets `exports` to `./src/index.ts`, so running compiled output
+ * means giving all of them conditional exports — which also changes what
+ * vitest resolves. That is a deliberate change to how the workspace is built,
+ * not something a launcher should decide. Interactive sessions pay it once.
  *
  * ESM: the package declares "type": "module", so `require` is not available.
  */
@@ -44,8 +55,8 @@ if (!root) {
   process.exit(1);
 }
 
-const entry = join(root, "packages", "gnomon-cli", "src", "index.ts");
 const isWindows = process.platform === "win32";
+const entry = join(root, "packages", "gnomon-cli", "src", "index.ts");
 const tsx = join(root, "node_modules", ".bin", isWindows ? "tsx.cmd" : "tsx");
 
 if (!existsSync(tsx)) {
@@ -56,9 +67,6 @@ if (!existsSync(tsx)) {
   process.exit(1);
 }
 
-// No `shell` on unix: the .bin/tsx shebang makes it directly executable, and
-// avoiding the shell keeps arguments containing spaces or quotes intact.
-// No `cwd`: the child inherits the caller's directory on purpose.
 const result = spawnSync(tsx, [entry, ...process.argv.slice(2)], {
   stdio: "inherit",
   shell: isWindows,

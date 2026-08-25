@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
 import { existsSync, mkdirSync, writeFileSync, rmSync, readdirSync } from "node:fs";
+import { centre, BANNER_WIDTH } from "./tui.js";
 
 const FIXTURE_DIR = join(__dirname, "../../../conformance/fixture_tree");
 
@@ -115,5 +116,30 @@ describe("TuiState", () => {
     };
     expect(state.mode).toBe("menu");
     expect(state.sessions).toEqual([]);
+  });
+});
+
+describe("banner geometry", () => {
+  // Both boxes in this repository have shipped misaligned — the interactive
+  // banner by one column, this one by thirteen. Hand-counted padding is the
+  // cause, so the padding is computed and this pins it.
+  it("centre() fills exactly the width it is given", () => {
+    for (const text of ["gnomon — TUI", "x", "", "a — b — c"]) {
+      expect([...centre(text, BANNER_WIDTH)].length).toBe(BANNER_WIDTH);
+    }
+  });
+
+  it("counts columns, not escape sequences", () => {
+    // ANSI codes occupy characters in a string and no columns on screen. A
+    // pre-coloured string padded by length looks right in source, wrong on
+    // screen.
+    const painted = centre("hi", 10, (t) => `\x1b[1m${t}\x1b[0m`);
+    const bare = painted.replace(/\x1b\[[0-9;]*m/g, "");
+    expect([...bare].length).toBe(10);
+  });
+
+  it("does not truncate text wider than the box", () => {
+    const long = "x".repeat(BANNER_WIDTH + 6);
+    expect(centre(long, BANNER_WIDTH)).toBe(long);
   });
 });
