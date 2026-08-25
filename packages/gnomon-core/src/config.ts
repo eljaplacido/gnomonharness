@@ -208,6 +208,22 @@ export interface RoleDef {
    * alter it needs this list, not just the absence of `write`.
    */
   bash_allow?: string[];
+  /**
+   * Paths this role may create or modify, as globs — `docs/**`, `**\/*.md`.
+   *
+   * Absent means anywhere inside the sandbox. Withholding `edit` stops a role
+   * from revising an existing file; it does not stop `write` from creating
+   * one. A coordinator described as writing specs and never source is only
+   * described that way until this list exists.
+   *
+   * Globs rather than the regexes `bash_allow` takes: an unanchored `docs/`
+   * as a regex also permits `src/docs/anything`, and a scope that quietly
+   * grants more than it reads is the failure worth designing out.
+   *
+   * Applies to both `write` and `edit`. Matched against the resolved path
+   * relative to the root, so `docs/../src/main.rs` is judged as `src/main.rs`.
+   */
+  write_allow?: string[];
   fallback?: FallbackDef;
   // Legacy field (kept for compat with older role files)
   profile?: string;

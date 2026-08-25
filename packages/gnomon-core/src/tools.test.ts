@@ -16,6 +16,7 @@ import { join } from "node:path";
 import {
   buildToolSet,
   executeTool,
+  globToRegExp,
   resolveInRoot,
   needsApproval,
   diffLines,
@@ -550,5 +551,101 @@ describe("bash_allow cannot be escaped by chaining", () => {
       "bash", { command: "ls . ; rm -rf /" }, readOnly(), offered
     );
     expect(out.content).toContain("rm -rf /");
+  });
+});
+
+describe("write_allow confines where a role may write", () => {
+  const offered = new Set(["read", "write", "edit"]);
+  const planner = () => ctx({ writeAllow: ["docs/**", "specs/**", "*.md"] });
+
+  it("permits a path the scope names", async () => {
+    const out = await executeTool(
+      "write",
+      { path: "docs/spec.md", content: "# spec\n" },
+      planner(),
+      offered
+    );
+    expect(out.code).toBe(TOOL_OK);
+    expect(readFileSync(join(root, "docs/spec.md"), "utf-8")).toBe("# spec\n");
+  });
+
+  // The gap this closes: a coordinator holds `write` and not `edit`, and was
+  // described as writing specs and never source. Withholding `edit` only stops
+  // it revising a file that exists — creating one was never in question.
+  it("refuses source, and does not create it", async () => {
+    const out = await executeTool(
+      "write",
+      { path: "src/main.rs", content: "fn main() {}\n" },
+      planner(),
+      offered
+    );
+    expect(out.code).toBe(TOOL_DENIED);
+    expect(existsSync(join(root, "src/main.rs"))).toBe(false);
+  });
+
+  it("names what the role may write, so the refusal is actionable", async () => {
+    const out = await executeTool(
+      "write",
+      { path: "src/main.rs", content: "x" },
+      planner(),
+      offered
+    );
+    expect(out.content).toContain("docs/**");
+    expect(out.content).toContain("src/main.rs");
+  });
+
+  it("judges the resolved path, so .. cannot walk out of the scope", async () => {
+    const out = await executeTool(
+      "write",
+      { path: "docs/../src/main.rs", content: "fn main() {}\n" },
+      planner(),
+      offered
+    );
+    expect(out.code).toBe(TOOL_DENIED);
+    expect(existsSync(join(root, "src/main.rs"))).toBe(false);
+  });
+
+  it("gates edit as well as write", async () => {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src/main.rs"), "fn main() {}\n");
+    const out = await executeTool(
+      "edit",
+      { path: "src/main.rs", old_text: "fn main() {}", new_text: "fn main() { panic!() }" },
+      planner(),
+      offered
+    );
+    expect(out.code).toBe(TOOL_DENIED);
+    expect(readFileSync(join(root, "src/main.rs"), "utf-8")).toBe("fn main() {}\n");
+  });
+
+  it("an absent scope still means anywhere in the sandbox", async () => {
+    const out = await executeTool(
+      "write",
+      { path: "src/main.rs", content: "fn main() {}\n" },
+      ctx(),
+      offered
+    );
+    expect(out.code).toBe(TOOL_OK);
+  });
+
+  it("* stops at a separator", async () => {
+    const out = await executeTool(
+      "write",
+      { path: "docs/deep/notes.md", content: "x" },
+      ctx({ writeAllow: ["*.md"] }),
+      offered
+    );
+    expect(out.code).toBe(TOOL_DENIED);
+  });
+
+  it("**/ matches at depth zero as well as deeper", () => {
+    expect(globToRegExp("**/*.md").test("NOTES.md")).toBe(true);
+    expect(globToRegExp("**/*.md").test("docs/a/NOTES.md")).toBe(true);
+  });
+
+  // A regex `docs/` would match this. That is why these are globs.
+  it("a scope for docs/ does not also permit src/docs/", () => {
+    expect(globToRegExp("docs/**").test("src/docs/evil.rs")).toBe(false);
+    expect(globToRegExp("docs/**").test("docs/ok.md")).toBe(true);
   });
 });

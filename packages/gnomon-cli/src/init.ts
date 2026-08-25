@@ -190,11 +190,21 @@ temperature = 0.2
 top_p = 0.9
 max_steps = 20
 max_steps_total = 160
-# Reads the repo and writes specs/contracts. It holds write but not edit, so it
-# cannot revise existing code in place; write itself is not path-scoped, so
-# "never source" is the role's job, not a guarantee the surface makes. Keeping it
-# off \`edit\` is what stops a planning turn from quietly becoming a code change.
+# Reads the repo and writes specs/contracts. Two things hold that to be true:
+# no edit, so it cannot revise existing code in place, and write_allow, so the
+# files it may create are the ones a planning turn produces. Without the second
+# it could still write src/main.rs — withholding edit narrows how a role can
+# change code, not whether it can.
+#
+# Widen this the moment it is wrong for your repo. A scope that refuses work
+# you actually wanted is a scope you will delete in frustration; a scope that
+# matches your layout is one you keep.
 tools = ["read", "write", "skill"]
+# Not .gnomon/**. The skill tool writes proposals to .gnomon/skills/proposed/
+# through its own path, and accepting one is a human act that changes the
+# surface hash. Letting a role reach .gnomon/skills/ with plain write would
+# let it grant itself a standing instruction and skip that entirely.
+write_allow = ["docs/**", "specs/**", "*.md"]
 description = "Intent and contracts: turns a request into a spec"
 
 [roles.implementor]

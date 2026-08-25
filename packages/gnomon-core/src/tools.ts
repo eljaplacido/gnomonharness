@@ -22,7 +22,7 @@ import {
   readdirSync,
   mkdirSync,
 } from "node:fs";
-import { resolve, relative, isAbsolute, dirname, join } from "node:path";
+import { resolve, relative, isAbsolute, dirname, join, sep } from "node:path";
 import { GnomonConfig, declaredTools, isToolEnabled } from "./config.js";
 import { proposeSkill, renderSkill, SkillProposal } from "./skills.js";
 
@@ -412,6 +412,16 @@ export interface ToolContext {
    * See RoleDef.bash_allow: without this, granting `bash` grants writing.
    */
   bashAllow?: string[];
+  /**
+   * Paths this role may create or modify, as globs. Empty/undefined means any
+   * path inside the sandbox.
+   *
+   * See RoleDef.write_allow. The `tools` list decides *whether* a role can
+   * write; this decides *where*. A coordinator described as writing specs and
+   * never source needs this, because withholding `edit` only stops it from
+   * revising a file in place — `write` will happily create src/main.rs.
+   */
+  writeAllow?: string[];
   root: string;
   sandbox: SandboxLevel;
   gate: ApprovalGate;
@@ -631,6 +641,72 @@ async function bashTool(
   });
 }
 
+/**
+ * Compile one glob to an anchored RegExp.
+ *
+ * Globs, not regexes, unlike bash_allow. A path pattern written as a regex is
+ * over-permissive by default in a way that is easy to miss: `docs/` matches
+ * `src/docs/anything`, because an unanchored regex matches a substring and `.`
+ * is any character. A scope that silently permits more than it reads is worse
+ * than no scope, so paths take the notation where the obvious spelling is also
+ * the safe one.
+ *
+ * `*` stops at a separator, `**` crosses them, and `**` followed by a
+ * separator also matches nothing at all — so `**\/*.md` covers both `NOTES.md`
+ * and `docs/NOTES.md`.
+ */
+export function globToRegExp(glob: string): RegExp {
+  let out = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        if (glob[i + 2] === "/") {
+          out += "(?:.*/)?";
+          i += 2;
+        } else {
+          out += ".*";
+          i += 1;
+        }
+      } else {
+        out += "[^/]*";
+      }
+    } else if (c === "?") {
+      out += "[^/]";
+    } else {
+      out += c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  return new RegExp(`^${out}$`);
+}
+
+/**
+ * Is this role allowed to modify this path?
+ *
+ * Matches the path *after* resolution, relative to the root, so `docs/../src`
+ * is judged as `src` rather than as something starting with `docs/`. Checking
+ * the argument as written would make the scope bypassable by anyone who typed
+ * two dots.
+ */
+export function writeAllowed(
+  ctx: ToolContext,
+  abs: string
+): { ok: true } | { ok: false; rel: string; listed: string } {
+  const allowed = ctx.writeAllow?.filter((p) => p.trim().length > 0) ?? [];
+  if (allowed.length === 0) return { ok: true };
+  const rel = relative(ctx.root, abs).split(sep).join("/");
+  const ok = allowed.some((pattern) => {
+    try {
+      return globToRegExp(pattern).test(rel);
+    } catch {
+      return false;
+    }
+  });
+  return ok
+    ? { ok: true }
+    : { ok: false, rel, listed: allowed.map((p) => `"${p}"`).join(", ") };
+}
+
 async function writeTool(
   args: Record<string, unknown>,
   ctx: ToolContext
@@ -643,6 +719,17 @@ async function writeTool(
       code: TOOL_OUT_OF_SANDBOX,
       content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
       summary: `write ${path} — refused (outside sandbox)`,
+    };
+  }
+
+  const scope = writeAllowed(ctx, abs);
+  if (!scope.ok) {
+    return {
+      code: TOOL_DENIED,
+      content:
+        `Refused: "${scope.rel}" is not a path this role may write.\n` +
+        `This role may write ${scope.listed}.`,
+      summary: `write ${path} — not permitted for this role`,
     };
   }
 
@@ -703,6 +790,16 @@ async function editTool(
       code: TOOL_OUT_OF_SANDBOX,
       content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
       summary: `edit ${path} — refused (outside sandbox)`,
+    };
+  }
+  const scope = writeAllowed(ctx, abs);
+  if (!scope.ok) {
+    return {
+      code: TOOL_DENIED,
+      content:
+        `Refused: "${scope.rel}" is not a path this role may modify.\n` +
+        `This role may write ${scope.listed}.`,
+      summary: `edit ${path} — not permitted for this role`,
     };
   }
   if (!existsSync(abs)) {

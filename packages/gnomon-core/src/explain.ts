@@ -308,6 +308,7 @@ const TOPICS: Record<string, Builder> = {
   tools: (config, role) => {
     const set = buildToolSet(config, role);
     const allow = config.roles[role]?.bash_allow;
+    const paths = config.roles[role]?.write_allow;
     return {
       topic: "tools",
       summary: "What the agent can actually do, and what it cannot",
@@ -317,7 +318,9 @@ const TOPICS: Record<string, Builder> = {
         "is asked to avoid, it is absent.",
         "",
         "bash can write anything, so a role holding it is not read-only unless",
-        "bash_allow narrows which commands it may run.",
+        "bash_allow narrows which commands it may run. Withholding edit stops a",
+        "role revising a file, not creating one, so write_allow is what confines",
+        "it to a part of the tree.",
       ],
       here: [
         `role           ${role}`,
@@ -325,12 +328,14 @@ const TOPICS: Record<string, Builder> = {
         ...(set.withheld.length ? [`withheld       ${set.withheld.join(", ")}`] : []),
         ...(set.disabled.length ? [`disabled       ${set.disabled.join(", ")}`] : []),
         `bash_allow     ${allow?.length ? allow.join("  ") : "(any command)"}`,
+        `write_allow    ${paths?.length ? paths.join("  ") : "(anywhere in the sandbox)"}`,
       ],
       next: [
         "/tools             this list, any time",
         "",
         'Narrow a role in .gnomon/roles.toml: tools = ["read", "bash"], and',
         "bash_allow = ['^cargo\\\\s'] to make read-only mean it.",
+        'write_allow = ["docs/**"] confines what a writing role may touch.',
       ],
     };
   },

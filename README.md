@@ -188,7 +188,7 @@ deliberately different reach.
 
 | Role | Tools | Cannot |
 |---|---|---|
-| `coordinator` | `read`, `write`, `skill` | **edit** — it cannot alter existing code in place. `write` is still repo-wide, so this narrows the blast radius rather than sealing it |
+| `coordinator` | `read`, `write`, `skill` | **edit**, and every path outside `write_allow` — so a planning turn can neither revise code nor create it |
 | `implementor` | `read`, `write`, `edit`, `bash` | — |
 | `verifier` | `read`, `bash` (allow-listed) | **write, edit** — cannot alter what it judges |
 
@@ -609,6 +609,7 @@ endpoint = "zen"
 | `endpoint` | Named block from `[endpoints]`; defaults to `local`. |
 | `tools` | Tools this role may call. Absent = all declared; `[]` = none. |
 | `bash_allow` | Shell commands this role may run. See [Tools and Safety](#tools-and-safety). |
+| `write_allow` | Paths this role may create or modify, as globs. Absent = anywhere in the sandbox. |
 | `max_steps` | Tool calls per **leg**. Reaching it is a checkpoint, not a wall: the harness compacts the turn's working context and continues. A role that omits it gets 12. |
 | `max_steps_total` | Where a turn actually stops. Defaults to `max_steps × 8`. Set it equal to `max_steps` to stop at the first checkpoint. |
 | `fallback` | Second endpoint tried when the primary fails or times out. |
@@ -807,6 +808,38 @@ A command matching none of these is refused by name. Absent the list, any
 command runs — which is the honest default, and the reason the shipped
 `verifier` has one.
 
+### `write_allow` — because withholding `edit` only stops half of it
+
+`coordinator` holds `write` and not `edit`, and is described as writing specs
+and never source. Withholding `edit` stops it revising a file that exists. It
+never stopped it from creating one, so nothing prevented a planning turn from
+writing `src/main.rs` outright.
+
+```toml
+[roles.coordinator]
+tools = ["read", "write", "skill"]
+write_allow = ["docs/**", "specs/**", "*.md"]
+```
+
+A path matching none of these is refused, and the refusal names both the path
+and the scope. It gates `edit` as well as `write` — a path scope covering only
+one of the two would be decoration.
+
+**Globs, not regexes**, unlike `bash_allow`. A regex is unanchored and `.`
+matches anything, so `docs/` as a regex also permits `src/docs/evil.rs`. On
+paths that failure is silent and grants more than it reads, so the notation
+here is the one whose obvious spelling is also the safe one. `*` stops at a
+separator, `**` crosses them.
+
+Matching happens on the **resolved** path, so `docs/../src/main.rs` is judged
+as `src/main.rs`.
+
+Not `.gnomon/**`, in the shipped coordinator. The `skill` tool writes
+proposals to `.gnomon/skills/proposed/` through its own path and accepting one
+is a human act that changes the surface hash; a role that could reach
+`.gnomon/skills/` with plain `write` would grant itself a standing instruction
+and skip that entirely.
+
 ### Outcomes
 
 Tool results map to buckets exactly like process exit codes
@@ -815,7 +848,7 @@ Tool results map to buckets exactly like process exit codes
 | Code | Bucket | When |
 |---|---|---|
 | `0`, `1` | `result` | The tool ran. A non-zero shell exit is still a result — the tool worked. |
-| `2` | `refusal` | You declined the approval. |
+| `2` | `refusal` | You declined the approval, or `bash_allow` / `write_allow` refused it. |
 | `3` | `refusal` | The path was outside the sandbox. |
 | `4` | `refusal` | Tool not available to this role, or `max_steps` reached. |
 | `11` | `apparatus_failure` | The tool broke: timeout, ambiguous edit, unreadable file. |

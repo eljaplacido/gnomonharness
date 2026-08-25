@@ -170,3 +170,52 @@ describe("a session states which project it is operating on", () => {
     expect(cli).toContain("Using the existing .gnomon/ in");
   });
 });
+
+describe("the README outcome table matches the tool result codes", () => {
+  // The row for write_allow was written against the wrong code minutes after
+  // the feature landed. A table of numbers copied by hand is exactly the kind
+  // of claim this file exists to hold down.
+  const tools = readFileSync(
+    join(repoRoot, "packages/gnomon-core/src/tools.ts"),
+    "utf-8"
+  );
+  const constants = new Map(
+    [...tools.matchAll(/export const (TOOL_[A-Z_]+) = (\d+);/g)].map(
+      (m) => [m[1], Number(m[2])]
+    )
+  );
+
+  it("documents every code the tools can return, and no invented ones", () => {
+    const table = readme.slice(readme.indexOf("| Code | Bucket | When |"));
+    const documented = new Set(
+      [...table.slice(0, table.indexOf("\n\n")).matchAll(/`(\d+)`/g)].map((m) =>
+        Number(m[1])
+      )
+    );
+    const real = new Set(constants.values());
+    for (const code of real) {
+      expect(documented, `code ${code} is returned but undocumented`).toContain(code);
+    }
+    for (const code of documented) {
+      expect(real, `code ${code} is documented but never returned`).toContain(code);
+    }
+  });
+
+  it("puts the allow-list refusals on the code the guards actually return", () => {
+    const denied = constants.get("TOOL_DENIED");
+    // Scoped to the outcome table: the role reference also has a write_allow
+    // row, and matching that one made this assert against the wrong table.
+    const table = readme.slice(readme.indexOf("| Code | Bucket | When |"));
+    const row = table
+      .slice(0, table.indexOf("\n\n"))
+      .split("\n")
+      .find((l) => l.includes("write_allow"));
+    expect(row, "no outcome row mentions write_allow").toBeTruthy();
+    expect(row).toContain(`\`${denied}\``);
+  });
+
+  it("the guards do return it", () => {
+    expect(tools).toContain("summary: `write ${path} — not permitted for this role`");
+    expect(tools).toContain("summary: `edit ${path} — not permitted for this role`");
+  });
+});

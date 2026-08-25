@@ -670,6 +670,7 @@ export async function runAgenticTurn(
   const ctx: ToolContext = {
     config,
     bashAllow: config.roles[role]?.bash_allow,
+    writeAllow: config.roles[role]?.write_allow,
     root: resolve(config.gnomonDir, ".."),
     sandbox,
     gate,
