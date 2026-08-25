@@ -32,7 +32,10 @@ const CONFIG_TOML = `# gnomon configuration — the active surface.
 # No machine-scoped config: if it changes what the agent does, it belongs here.
 
 [defaults]
-edit_format = "hashline"          # ast | hashline | str_replace
+edit_format = "str_replace"       # ast | hashline | str_replace
+                                  # Only str_replace is implemented: the edit tool
+                                  # matches an exact string. The other two are in the
+                                  # enumerations contract, not in this build.
 sandbox = "confined"              # off | confined | strict
 approval = "on_write"             # never | on_write | always
 role_profile = "local_first"      # local_first | frontier_plan | all_remote
@@ -50,8 +53,10 @@ retain_after = 2048               # tokens of the oldest turns to keep
 reserve_output = 8192
 
 [endpoints.local]
-# Where inference goes lives in the surface, not in an env var: routing is
-# part of what a checkout declares, and it is hashed with everything else.
+# Where inference goes lives in the surface: routing is part of what a checkout
+# declares, and it is hashed with everything else. One escape hatch exists —
+# GNOMON_MODEL_URL overrides this url — and the prompt loop prints a note at
+# startup when it is set, so an override cannot be mistaken for the surface.
 url = "http://127.0.0.1:11434/api/chat"
 kind = "ollama"
 
@@ -147,7 +152,7 @@ record = "metadata"
 # case-insensitive, so do not write an inline (?i) — JavaScript regular
 # expressions reject it, and a pattern that will not compile fails OPEN.
 # gnomon warns at startup about any that do not compile.
-redact = ['(api[_-]?key|token|secret|password)\s*[:=]\s*\S+']
+redact = ['(api[_-]?key|token|secret|password)\\s*[:=]\\s*\\S+']
 
 # Chain each record to the previous by hash, so alteration is detectable.
 chain = true
@@ -185,7 +190,9 @@ temperature = 0.2
 top_p = 0.9
 max_steps = 20
 max_steps_total = 160
-# Reads the repo and writes specs/contracts only — never source. Keeping it
+# Reads the repo and writes specs/contracts. It holds write but not edit, so it
+# cannot revise existing code in place; write itself is not path-scoped, so
+# "never source" is the role's job, not a guarantee the surface makes. Keeping it
 # off \`edit\` is what stops a planning turn from quietly becoming a code change.
 tools = ["read", "write", "skill"]
 description = "Intent and contracts: turns a request into a spec"
@@ -237,6 +244,9 @@ endpoint = "local"
 temperature = 0.3
 top_p = 0.95
 max_steps = 28
+# Stated explicitly. An omitted list means every declared tool, which handed
+# this role \`skill\` as well and made "the coordinator authors skills" untrue.
+tools = ["read", "write", "edit", "bash"]
 max_steps_total = 224
 description = "Highest token volume — where local hosting pays off"
 
@@ -256,6 +266,7 @@ endpoint = "local"
 temperature = 0.2
 top_p = 0.95
 max_steps = 6
+tools = ["read"]
 max_steps_total = 48
 description = "Summarisation, compaction, commit messages"
 
@@ -309,20 +320,17 @@ const POLICY_TOML = `# Policy: approval gates, sandbox level, edit format.
 
 [approval]
 gate = "on_write"                  # never | on_write | always
-auto_merge = false
-reject_on_disagreement = false
 
 [sandbox]
 level = "confined"                 # off | confined | strict
 # NOTE: network isolation is declared but NOT enforced by this build. The
 # prompt loop says so at startup rather than implying protection it lacks.
 network = false
-env_isolation = true
 
-[edit]
-format = "hashline"                # ast | hashline | str_replace
-min_line_context = 3
-preserve_formatting = true
+# Keys that changed nothing used to sit here — auto_merge,
+# reject_on_disagreement, env_isolation, min_line_context, preserve_formatting.
+# A surface that documents a setting no code reads is worse than one that omits
+# it, because it invites you to tune something that cannot move.
 `;
 
 const SYSTEM_MD = `You are a deterministic coding agent working in this repository.

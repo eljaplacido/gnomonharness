@@ -377,7 +377,7 @@ fn print_usage() {
     println!("gnomon-edit: Content-unsafe patch engine");
     println!();
     println!("Usage:");
-    println!("  gnomon-edit simulate <patch.json>          — Simulate a patch and print result");
+    println!("  gnomon-edit simulate <patches.json>        — Dry-run a patch set, print JSON");
     println!("  gnomon-edit apply <patches.json>           — Apply a batch of patches");
     println!("  gnomon-edit diff <patch.json>              — Show diff of a single patch");
     println!("  gnomon-edit validate <patches.json>        — Validate patches without applying");
@@ -394,55 +394,84 @@ fn main() {
         std::process::exit(1);
     }
 
-    let mut repo_root = Path::new(".");
-    let mut i = 2;
+    // The command is argv[1], as the usage text says. Flag parsing used to
+    // start at index 2 and then read the command from that same index, so
+    // `gnomon-edit simulate patch.json` took "patch.json" as the command and
+    // reported `Unknown command: simulate` — naming argv[1] while having
+    // dispatched on argv[2]. Nothing could ever invoke this binary.
+    let command = args[1].as_str();
 
-    // Parse flags first (before command dispatch)
+    let mut repo_root = Path::new(".");
+    let mut positional: Vec<&str> = Vec::new();
+    let mut i = 2;
     while i < args.len() {
-        match args[i].as_str() {
-            "--dir" => {
-                i += 1;
-                if i < args.len() {
-                    repo_root = Path::new(&args[i]);
-                }
+        if args[i] == "--dir" {
+            i += 1;
+            if i < args.len() {
+                repo_root = Path::new(&args[i]);
             }
-            _ => break,
+        } else {
+            positional.push(args[i].as_str());
         }
         i += 1;
     }
 
-    let command = if i < args.len() { &args[i] } else { "" };
-    let args_start = i.saturating_add(1); // first arg after command
-
     match command {
         "simulate" => {
-            if args_start >= args.len() {
-                eprintln!("Usage: gnomon-edit simulate <patch.json> [--dir <path>]");
+            if positional.is_empty() {
+                eprintln!("Usage: gnomon-edit simulate <patches.json> [--dir <path>]");
                 std::process::exit(1);
             }
-            let patch: Patch = serde_json::from_str(
-                &fs::read_to_string(&args[args_start]).unwrap(),
-            ).unwrap();
-            let result = simulate_patch(&patch, repo_root);
-            match result {
-                Ok(new_contents) => {
-                    println!("✅ Patch would apply successfully");
-                    println!("New content length: {} bytes", new_contents.len());
-                    println!("---");
-                    println!("{}", new_contents);
+            // A patch SET, and machine-readable, matching `apply`. This read a
+            // single Patch and printed prose, while every caller sent a
+            // patchset and parsed JSON — so nothing could consume it.
+            let content = fs::read_to_string(positional[0]).unwrap();
+            let patchset: PatchSet = serde_json::from_str(&content).unwrap();
+
+            let mut results: Vec<PatchResult> = Vec::new();
+            for patch in &patchset.patches {
+                match simulate_patch(patch, repo_root) {
+                    Ok(new_contents) => {
+                        let old_hash = fs::read_to_string(repo_root.join(&patch.path))
+                            .ok()
+                            .map(|c| sha256_str(&c));
+                        results.push(PatchResult {
+                            path: patch.path.clone(),
+                            applied: true,
+                            old_content_sha256: old_hash,
+                            new_content_sha256: Some(sha256_str(&new_contents)),
+                            error: None,
+                        });
+                    }
+                    Err(e) => results.push(PatchResult {
+                        path: patch.path.clone(),
+                        applied: false,
+                        old_content_sha256: None,
+                        new_content_sha256: None,
+                        error: Some(e.to_string()),
+                    }),
                 }
-                Err(e) => {
-                    eprintln!("❌ Patch would fail: {}", e);
-                    std::process::exit(1);
-                }
+            }
+
+            let applied = results.iter().filter(|r| r.applied).count();
+            let result = PatchSetResult {
+                total: results.len(),
+                applied,
+                failed: results.len() - applied,
+                all_applied: applied == results.len(),
+                results,
+            };
+            println!("{}", serde_json::to_string_pretty(&result).unwrap());
+            if !result.all_applied {
+                std::process::exit(2);
             }
         }
         "apply" => {
-            if args_start >= args.len() {
+            if positional.is_empty() {
                 eprintln!("Usage: gnomon-edit apply <patches.json> [--dir <path>]");
                 std::process::exit(1);
             }
-            let content = fs::read_to_string(&args[args_start]).unwrap();
+            let content = fs::read_to_string(positional[0]).unwrap();
             let patchset: PatchSet = serde_json::from_str(&content).unwrap();
             let result = apply_patches(&patchset, repo_root);
             let json = serde_json::to_string_pretty(&result).unwrap();
@@ -452,12 +481,12 @@ fn main() {
             }
         }
         "diff" => {
-            if args_start >= args.len() {
+            if positional.is_empty() {
                 eprintln!("Usage: gnomon-edit diff <patch.json> [--dir <path>]");
                 std::process::exit(1);
             }
             let patch: Patch = serde_json::from_str(
-                &fs::read_to_string(&args[args_start]).unwrap(),
+                &fs::read_to_string(positional[0]).unwrap(),
             ).unwrap();
             let result = simulate_patch(&patch, repo_root);
             match result {
@@ -480,11 +509,11 @@ fn main() {
             }
         }
         "validate" => {
-            if args_start >= args.len() {
+            if positional.is_empty() {
                 eprintln!("Usage: gnomon-edit validate <patches.json> [--dir <path>]");
                 std::process::exit(1);
             }
-            let content = fs::read_to_string(&args[args_start]).unwrap();
+            let content = fs::read_to_string(positional[0]).unwrap();
             let patchset: PatchSet = serde_json::from_str(&content).unwrap();
             let mut valid = true;
             for patch in &patchset.patches {
@@ -504,7 +533,7 @@ fn main() {
             print_usage();
         }
         _ => {
-            eprintln!("Unknown command: {}", args[1]);
+            eprintln!("Unknown command: {}", command);
             print_usage();
             std::process::exit(1);
         }

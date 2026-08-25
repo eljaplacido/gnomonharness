@@ -52,12 +52,18 @@ stated wherever it appears.
 
 ## The split between Rust and TypeScript
 
-Rust owns what must be checkable without trusting a JavaScript runtime: the
-surface hash, structural editing, process execution with timeouts.
-`gnomon-surface` is the authority, `conformance/manifest_golden.json` pins it,
-and the TypeScript side computes the same hash independently with a test
-holding the two together. They disagreed once; that test is why they no longer
-can.
+Rust owns the surface hash, because it must be checkable without trusting a
+JavaScript runtime. `gnomon-surface` is the authority,
+`conformance/manifest_golden.json` pins it, and the TypeScript side computes
+the same hash independently with a test holding the two together. They
+disagreed once; that test is why they no longer can.
+
+`gnomon-edit`, `gnomon-exec` and `gnomon-enums` back CLI commands — `apply`,
+`simulate`, `session`, `enumerations`. They are deliberately outside the agent
+loop, which reaches files through a TypeScript exact-string `edit` tool and
+processes through `spawn`. Moving those two into the crates would put a
+checkable boundary around the loop's most dangerous operations; it is a design
+worth having and is not what this build does.
 
 TypeScript owns the loop — turns, tools, context, skills, audit, sessions —
 where the cost of change is low and the shape is still moving.

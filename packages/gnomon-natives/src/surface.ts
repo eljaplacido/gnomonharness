@@ -255,7 +255,11 @@ export function applyPatchset(
     }
   );
 
-  if (result.status !== 0) {
+  // Exit 2 means the run completed and some patches did not apply — a result,
+  // not a failure of the apparatus, and the caller inspects `all_applied` for
+  // exactly that. Throwing on it turned an ordinary finding into an exception
+  // with an empty message.
+  if (result.status !== 0 && result.status !== 2) {
     const stderr = result.stderr?.toString() ?? "unknown error";
     throw new Error(`gnomon-edit failed: ${stderr}`);
   }
@@ -285,7 +289,11 @@ export function simulatePatch(
     }
   );
 
-  if (result.status !== 0) {
+  // Exit 2 means the run completed and some patches did not apply — a result,
+  // not a failure of the apparatus, and the caller inspects `all_applied` for
+  // exactly that. Throwing on it turned an ordinary finding into an exception
+  // with an empty message.
+  if (result.status !== 0 && result.status !== 2) {
     const stderr = result.stderr?.toString() ?? "unknown error";
     throw new Error(`gnomon-edit simulate failed: ${stderr}`);
   }

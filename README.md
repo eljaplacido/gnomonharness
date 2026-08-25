@@ -154,16 +154,20 @@ flowchart LR
 
     SURFACE --> T1
     T2 --> T1
-    T1 --> RS
+    T2 --> RS
     T1 --> OUT["outside the surface:<br/>.gnomon-sessions/<br/>.gnomon-audit/"]
 ```
 
-**Rust owns what must be checkable without trusting a JavaScript runtime** —
-the surface hash, structural editing, process execution with timeouts.
-`gnomon-surface` is the authority on what a surface hashes to, and
-`conformance/manifest_golden.json` pins it. The TypeScript side computes the
-same hash independently, and a test holds the two together; they disagreed
-once, and that test is why they no longer can.
+**Rust owns the surface hash.** `gnomon-surface` is the authority on what a
+surface hashes to, and `conformance/manifest_golden.json` pins it. The
+TypeScript side computes the same hash independently, and a test holds the two
+together; they disagreed once, and that test is why they no longer can.
+
+`gnomon-edit` and `gnomon-exec` back the `apply`, `simulate` and `session`
+commands. **They are not in the agent loop:** the `edit` tool is a TypeScript
+exact-string replace and `bash` is `child_process.spawn` with a timeout. Saying
+Rust owns structural editing and process execution would describe a design
+rather than this build.
 
 **TypeScript owns the loop** — turns, tool execution, context, skills, audit,
 sessions.
@@ -184,7 +188,7 @@ deliberately different reach.
 
 | Role | Tools | Cannot |
 |---|---|---|
-| `coordinator` | `read`, `write`, `skill` | **edit** — so a planning turn cannot quietly become a code change |
+| `coordinator` | `read`, `write`, `skill` | **edit** — it cannot alter existing code in place. `write` is still repo-wide, so this narrows the blast radius rather than sealing it |
 | `implementor` | `read`, `write`, `edit`, `bash` | — |
 | `verifier` | `read`, `bash` (allow-listed) | **write, edit** — cannot alter what it judges |
 
@@ -309,10 +313,11 @@ git clone https://github.com/eljaplacido/gnomonharness.git ~/gnomon
 cd ~/gnomon && pnpm run setup
 ```
 
-`setup` installs dependencies, builds the Rust binaries, and puts `gnomon` on
-your PATH. The Rust build is not optional: `gnomon surface`, `enumerations`,
-`apply` and `simulate` shell out to it. (`launch`, `prompt` and `init` do not,
-and work without it.)
+`setup` installs dependencies, builds all four Rust binaries, and puts `gnomon`
+on your PATH. They are not optional for every command: `surface` and
+`enumerations` use `gnomon-surface`/`gnomon-enums`, `apply` and `simulate` use
+`gnomon-edit`, and `session` uses `gnomon-exec`. (`launch`, `prompt`, `task`
+and `init` use none of them and work without a Rust toolchain.)
 
 It prints `WARN ... has no binaries` — pnpm emits that while reading the
 manifest and creates the shim anyway. Confirm with `which gnomon`; if it is
@@ -430,7 +435,7 @@ the point.
 
 ```toml
 [defaults]
-edit_format = "hashline"          # ast | hashline | str_replace
+edit_format = "str_replace"       # ast | hashline | str_replace
 sandbox = "confined"              # off | confined | strict
 approval = "on_write"             # never | on_write | always
 role_profile = "local_first"
@@ -662,7 +667,8 @@ content-hashed, and the claim is that the same surface plus the same prompt
 yields the same outcome. An agent rewriting its own skills mid-session would
 change the hash underneath the run that changed it.
 
-So the `skill` tool — granted to `coordinator` alone in the default surface —
+So the `skill` tool — which only `coordinator` is offered, because every
+scaffolded role states its tool list explicitly —
 writes to `.gnomon/skills/proposed/`, which is **not loaded**. The filename is
 derived from the name, so a proposal cannot target an existing skill or escape
 the directory. You accept it deliberately:
@@ -1209,20 +1215,28 @@ that has them.
 
 ```bash
 pnpm run setup             # deps + native binaries + `gnomon` on PATH
-pnpm test                  # 343 TypeScript tests
-cargo test --all           # 46 Rust tests
+pnpm test                  # the TypeScript suites
+cargo test --all           # the Rust suites
+pnpm typecheck             # tsc across the workspace
+pnpm lint                  # cargo clippy -D warnings
 bash .gnomon/ci.sh         # the full pipeline, including fixtures
 ```
 
-`packages/gnomon-cli/src/docs.test.ts` checks this README against the code:
-every command it lists is dispatched, every slash command it names is in the
-registry and reachable by Tab, every default it quotes is the default a
-scaffolded surface actually has, and every file it points at exists. Much of
-this repository's history is documented behaviour that was not the behaviour,
-so the docs are tested like anything else.
+Run the typecheck. `vitest` transpiles with esbuild, which strips types without
+checking them — a file with a hard type error will pass its own test suite.
+`.gnomon/ci.sh` runs `tsc` for that reason.
 
-CI runs Rust tests + clippy (`-D warnings`), TypeScript tests, the full
-pipeline, cross-platform builds, and an interactive smoke test.
+`packages/gnomon-cli/src/docs.test.ts` checks this README against the code: the
+CLI commands it names are dispatched, every slash command it lists is in the
+registry and reachable by Tab, the defaults it quotes are what a scaffolded
+surface actually has, and the files it points at exist. The CLI-command check
+walks a named list rather than every row, so a newly documented command needs
+adding there too. Much of this repository's history is documented behaviour
+that was not the behaviour, so the docs are tested like anything else.
+
+CI runs Rust tests + clippy (`-D warnings`), the TypeScript typecheck and
+tests, the full pipeline, cross-platform builds, and an interactive smoke
+test.
 
 A note for contributors: the `gnomon init` templates live inside JavaScript
 template literals. A markdown-style backtick closes the literal, and `\s` is an

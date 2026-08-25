@@ -238,6 +238,101 @@ export function needsApproval(tool: string, gate: ApprovalGate): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Shell command inspection
+// ---------------------------------------------------------------------------
+
+/** What a shell command is made of, as far as an allow-list must care. */
+export interface ShellScan {
+  /** Top-level commands, split on unquoted `;` `&&` `||` `|` `&` and newline */
+  segments: string[];
+  /** `$(...)`, backticks, or process substitution appears outside quotes */
+  substitution: boolean;
+  /** Output redirection appears outside quotes */
+  redirection: boolean;
+}
+
+/**
+ * Take a shell command apart, honouring quotes.
+ *
+ * An allow-list that tests the whole string is not an allow-list. Matching
+ * `^ls\s` against `ls /tmp; echo pwned > f` succeeds, and the shell then runs
+ * both halves — which is exactly how a role with no write tool wrote a file.
+ * Every top-level segment has to clear the list on its own, and a `;` inside
+ * `grep "a;b"` must not be mistaken for one.
+ */
+export function scanShellCommand(command: string): ShellScan {
+  const segments: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  let substitution = false;
+  let redirection = false;
+
+  const push = () => {
+    const t = current.trim();
+    if (t) segments.push(t);
+    current = "";
+  };
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    const next = command[i + 1];
+
+    if (quote) {
+      // Single quotes take everything literally; double quotes still expand,
+      // so a substitution inside them is real.
+      if (quote === '"' && ((ch === "$" && next === "(") || ch === "`")) {
+        substitution = true;
+      }
+      if (ch === quote && command[i - 1] !== "\\") quote = null;
+      current += ch;
+      continue;
+    }
+
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+
+    if (ch === "`" || (ch === "$" && next === "(")) {
+      substitution = true;
+      current += ch;
+      continue;
+    }
+    // Process substitution: <(cmd) and >(cmd) both run a command.
+    if ((ch === "<" || ch === ">") && next === "(") {
+      substitution = true;
+      current += ch;
+      continue;
+    }
+    if (ch === ">") {
+      redirection = true;
+      current += ch;
+      continue;
+    }
+
+    if (ch === ";" || ch === "\n") {
+      push();
+      continue;
+    }
+    if ((ch === "&" || ch === "|") && next === ch) {
+      push();
+      i++;
+      continue;
+    }
+    if (ch === "|" || ch === "&") {
+      push();
+      continue;
+    }
+
+    current += ch;
+  }
+  push();
+
+  return { segments, substitution, redirection };
+}
+
+// ---------------------------------------------------------------------------
 // Diff preview
 // ---------------------------------------------------------------------------
 
@@ -419,23 +514,47 @@ async function bashTool(
   // A role may narrow bash to specific commands. Without this, `tools` alone
   // cannot make a role read-only: bash writes.
   if (ctx.bashAllow && ctx.bashAllow.length > 0) {
-    const permitted = ctx.bashAllow.some((pattern) => {
-      try {
-        return new RegExp(pattern).test(command.trim());
-      } catch {
-        // A pattern that will not compile must not widen the allow-list.
-        return false;
-      }
+    const allowed = ctx.bashAllow;
+    const listed = allowed.map((p) => `/${p}/`).join(", ");
+    const refuse = (why: string) => ({
+      code: TOOL_DENIED,
+      content: `Refused: ${why}\nThis role may only run commands matching ${listed}.`,
+      summary: `bash — not permitted for this role`,
     });
-    if (!permitted) {
-      return {
-        code: TOOL_DENIED,
-        content:
-          `Refused: this role may only run commands matching ` +
-          `${ctx.bashAllow.map((p) => `/${p}/`).join(", ")}. ` +
-          `"${command.trim().slice(0, 80)}" does not.`,
-        summary: `bash — not permitted for this role`,
-      };
+
+    const scan = scanShellCommand(command);
+
+    // Command substitution runs a command the allow-list never sees.
+    if (scan.substitution) {
+      return refuse(
+        "the command uses substitution ($(…), backticks, or <(…)), which runs " +
+          "something this list cannot inspect."
+      );
+    }
+    // A permitted command that redirects is still a write.
+    if (scan.redirection) {
+      return refuse(
+        "the command redirects output (>), which writes regardless of what it runs."
+      );
+    }
+
+    // Every segment on its own merits. Testing the whole string let
+    // `ls /tmp; echo pwned > f` through on the strength of its first two words.
+    const matches = (segment: string) =>
+      allowed.some((pattern) => {
+        try {
+          return new RegExp(pattern).test(segment);
+        } catch {
+          // A pattern that will not compile must not widen the allow-list.
+          return false;
+        }
+      });
+
+    const offending = scan.segments.find((seg) => !matches(seg));
+    if (offending !== undefined || scan.segments.length === 0) {
+      return refuse(
+        `"${(offending ?? command).trim().slice(0, 80)}" is not on it.`
+      );
     }
   }
 

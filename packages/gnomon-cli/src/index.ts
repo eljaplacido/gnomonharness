@@ -195,9 +195,24 @@ async function cmdTui(args: CliArgs): Promise<void> {
   await runTui(args.dir);
 }
 
+/**
+ * The bare arguments to a command, in order.
+ *
+ * parseArgs files the first non-flag word under `subcommand`, which is right
+ * for `skill accept <id>` and wrong for `apply <file>`. Commands taking a
+ * value first read through this instead; reading `positional` alone meant
+ * apply, simulate and session printed usage and exited 1 for every invocation
+ * they have ever had.
+ */
+function bareArgs(args: CliArgs): string[] {
+  return [args.subcommand, ...args.positional].filter(
+    (v): v is string => typeof v === "string" && v.length > 0
+  );
+}
+
 async function cmdSession(args: CliArgs): Promise<void> {
   const dir = args.dir;
-  const commands = args.positional;
+  const commands = bareArgs(args);
 
   if (commands.length === 0) {
     console.error("Usage: gnomon session [--dir <path>] <command> [command ...]");
@@ -230,8 +245,8 @@ async function cmdSession(args: CliArgs): Promise<void> {
   }
 
   // Save session
-  const outFile = args.positional.length > 0
-    ? `${args.positional[0].replace(/[/:]/g, "_")}.json`
+  const outFile = commands.length > 0
+    ? `${commands[0].replace(/[/:]/g, "_")}.json`
     : "session.json";
   session.save(outFile);
   console.log(`Session saved: ${outFile}`);
@@ -240,7 +255,7 @@ async function cmdSession(args: CliArgs): Promise<void> {
 }
 
 async function cmdApply(args: CliArgs): Promise<void> {
-  const patchsetPath = args.positional[0];
+  const patchsetPath = bareArgs(args)[0];
   if (!patchsetPath) {
     console.error("Usage: gnomon apply <patchset.json> [--dir <path>]");
     process.exit(1);
@@ -263,7 +278,7 @@ async function cmdApply(args: CliArgs): Promise<void> {
 }
 
 async function cmdSimulate(args: CliArgs): Promise<void> {
-  const patchsetPath = args.positional[0];
+  const patchsetPath = bareArgs(args)[0];
   if (!patchsetPath) {
     console.error("Usage: gnomon simulate <patchset.json> [--dir <path>]");
     process.exit(1);

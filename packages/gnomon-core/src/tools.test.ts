@@ -27,6 +27,7 @@ import {
   TOOL_NOT_DECLARED,
   TOOL_FAILED,
   TOOL_OK_EMPTY,
+  scanShellCommand,
 } from "./tools.js";
 import { loadConfig, declaredTools, isToolEnabled } from "./config.js";
 import { mapBucket } from "./session.js";
@@ -465,5 +466,89 @@ describe("bash_allow — the constraint that actually makes a role read-only", (
       offered
     );
     expect(out.content).toContain("cargo");
+  });
+});
+
+describe("scanShellCommand", () => {
+  it("splits on every top-level separator", () => {
+    expect(scanShellCommand("a; b").segments).toEqual(["a", "b"]);
+    expect(scanShellCommand("a && b").segments).toEqual(["a", "b"]);
+    expect(scanShellCommand("a || b").segments).toEqual(["a", "b"]);
+    expect(scanShellCommand("a | b").segments).toEqual(["a", "b"]);
+    expect(scanShellCommand("a & b").segments).toEqual(["a", "b"]);
+    expect(scanShellCommand("a\nb").segments).toEqual(["a", "b"]);
+  });
+
+  it("does not split inside quotes", () => {
+    // grep "a;b" file is one command, not two.
+    expect(scanShellCommand('grep "a;b" f').segments).toEqual(['grep "a;b" f']);
+    expect(scanShellCommand("grep 'a && b' f").segments).toEqual(["grep 'a && b' f"]);
+  });
+
+  it("sees substitution in every form it can take", () => {
+    expect(scanShellCommand("ls $(whoami)").substitution).toBe(true);
+    expect(scanShellCommand("ls `whoami`").substitution).toBe(true);
+    expect(scanShellCommand("diff <(a) <(b)").substitution).toBe(true);
+    // Double quotes still expand; single quotes do not.
+    expect(scanShellCommand('echo "$(whoami)"').substitution).toBe(true);
+    expect(scanShellCommand("echo '$(whoami)'").substitution).toBe(false);
+  });
+
+  it("sees output redirection", () => {
+    expect(scanShellCommand("cargo test > out.txt").redirection).toBe(true);
+    expect(scanShellCommand("cargo test >> out.txt").redirection).toBe(true);
+    expect(scanShellCommand('grep ">" file').redirection).toBe(false);
+  });
+
+  it("leaves an ordinary command alone", () => {
+    const scan = scanShellCommand("cargo test --all");
+    expect(scan.segments).toEqual(["cargo test --all"]);
+    expect(scan.substitution).toBe(false);
+    expect(scan.redirection).toBe(false);
+  });
+});
+
+describe("bash_allow cannot be escaped by chaining", () => {
+  // Every one of these was PERMITTED, and the file was created. The control
+  // existed specifically to make a verifier read-only.
+  const readOnly = () => ctx({ bashAllow: ["^(cargo|pnpm|pytest)\\s", "^(ls|cat|grep)\\s"] });
+
+  const bypasses: Array<[string, string]> = [
+    ["semicolon", "ls . ; echo pwned > hack.txt"],
+    ["and-and", "ls . && echo pwned > hack.txt"],
+    ["or-or", "ls . || echo pwned > hack.txt"],
+    ["pipe", "ls . | tee hack.txt"],
+    ["background", "ls . & echo pwned > hack.txt"],
+    ["newline", "ls .\necho pwned > hack.txt"],
+    ["substitution", "ls $(echo pwned > hack.txt)"],
+    ["backticks", "ls `echo pwned > hack.txt`"],
+    ["redirect", "cargo test > hack.txt"],
+    ["process-substitution", "cat <(echo pwned > hack.txt)"],
+  ];
+
+  for (const [name, cmd] of bypasses) {
+    it(`refuses ${name}`, async () => {
+      const out = await executeTool("bash", { command: cmd }, readOnly(), offered);
+      expect(out.code, cmd).toBe(TOOL_DENIED);
+      expect(existsSync(join(root, "hack.txt")), `${cmd} wrote a file`).toBe(false);
+    });
+  }
+
+  it("still permits a plain allowed command", async () => {
+    const out = await executeTool("bash", { command: "ls ." }, readOnly(), offered);
+    expect(out.code).toBe(TOOL_OK);
+  });
+
+  it("permits chaining when every segment is allowed", async () => {
+    // The point is not to forbid chaining, only unreviewed commands.
+    const out = await executeTool("bash", { command: "ls . && cat hello.txt" }, readOnly(), offered);
+    expect(out.code).toBe(TOOL_OK);
+  });
+
+  it("names what it objected to", async () => {
+    const out = await executeTool(
+      "bash", { command: "ls . ; rm -rf /" }, readOnly(), offered
+    );
+    expect(out.content).toContain("rm -rf /");
   });
 });

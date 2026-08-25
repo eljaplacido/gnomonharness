@@ -111,6 +111,49 @@ describe("template hygiene", () => {
     }
   });
 
+  it("the scaffolded redaction pattern actually redacts", async () => {
+    // It shipped as `...s*[:=]s*S+` — backslashes eaten by the template
+    // literal. It COMPILED, so the invalid-pattern warning never fired, and a
+    // live key would have gone into a `full` audit trail unscrubbed.
+    const { resolveAudit, redact } = await import("gnomon-core");
+    {
+      await initSurface({ dir: root });
+      const audit = resolveAudit(loadConfig(root));
+      expect(audit.invalid_redact).toEqual([]);
+      expect(audit.redact.length).toBeGreaterThan(0);
+      for (const secret of [
+        "api_key = sk-LIVE-abc123",
+        "TOKEN: ghp_realtokenvalue",
+        'password="hunter2"',
+      ]) {
+        expect(redact(secret, audit.redact), secret).toContain("[redacted]");
+        expect(redact(secret, audit.redact)).not.toContain("sk-LIVE-abc123");
+      }
+    }
+  });
+
+  it("only the coordinator is offered the skill tool", async () => {
+    // implement and smol declared no `tools`, and an omitted list means every
+    // declared tool — so three roles could author skills while the docs said
+    // one could.
+    const { buildToolSet, listRoles } = await import("gnomon-core");
+    await initSurface({ dir: root });
+    const config = loadConfig(root);
+    const withSkill = listRoles(config).filter((r) =>
+      buildToolSet(config, r).schemas.some((t) => t.function.name === "skill")
+    );
+    expect(withSkill).toEqual(["coordinator"]);
+  });
+
+  it("every scaffolded role states its tools rather than inheriting all", async () => {
+    const { listRoles } = await import("gnomon-core");
+    await initSurface({ dir: root });
+    const config = loadConfig(root);
+    for (const role of listRoles(config)) {
+      expect(Array.isArray(config.roles[role].tools), role).toBe(true);
+    }
+  });
+
   it("every template parses as the TOML the surface expects", async () => {
     const root = mkdtempSync(join(tmpdir(), "gnomon-tpl-"));
     try {

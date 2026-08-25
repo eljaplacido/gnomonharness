@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import {
+  applyPatchset,
+  simulatePatch,
   manifest,
   surfaceHash,
   listPaths,
@@ -9,6 +11,8 @@ import {
 } from "./surface.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -103,6 +107,66 @@ describe("native binaries resolve lazily", () => {
         expect(message).toContain("cargo build");
         expect(message).toContain("GNOMON_BIN_OVERRIDE");
       }
+    }
+  });
+});
+
+describe("the patch engine is reachable", () => {
+  // gnomon-edit dispatched on argv[2] while the usage text documented argv[1],
+  // so `gnomon-edit simulate f.json` read "f.json" as the command and reported
+  // `Unknown command: simulate`. Nothing could invoke it.
+  const tmp = () => mkdtempSync(join(tmpdir(), "gnomon-patch-"));
+
+  it("simulate reports results and writes nothing", () => {
+    const dir = tmp();
+    try {
+      writeFileSync(join(dir, "f.txt"), "hello world\n");
+      const patchFile = join(dir, "p.json");
+      writeFileSync(patchFile, JSON.stringify({
+        patches: [{ path: "f.txt", pattern: "hello", replacement: "goodbye", mode: "exact" }],
+      }));
+
+      const result = simulatePatch(patchFile, dir) as any;
+      expect(result.total).toBe(1);
+      expect(result.applied).toBe(1);
+      expect(result.all_applied).toBe(true);
+      // Dry run: the file is untouched.
+      expect(readFileSync(join(dir, "f.txt"), "utf-8")).toBe("hello world\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("apply actually applies", () => {
+    const dir = tmp();
+    try {
+      writeFileSync(join(dir, "f.txt"), "hello world\n");
+      const patchFile = join(dir, "p.json");
+      writeFileSync(patchFile, JSON.stringify({
+        patches: [{ path: "f.txt", pattern: "hello", replacement: "goodbye", mode: "exact" }],
+      }));
+
+      const result = applyPatchset(patchFile, dir) as any;
+      expect(result.all_applied).toBe(true);
+      expect(readFileSync(join(dir, "f.txt"), "utf-8")).toBe("goodbye world\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a patch that cannot apply is reported, not thrown", () => {
+    const dir = tmp();
+    try {
+      writeFileSync(join(dir, "f.txt"), "hello world\n");
+      const patchFile = join(dir, "p.json");
+      writeFileSync(patchFile, JSON.stringify({
+        patches: [{ path: "f.txt", pattern: "NOT PRESENT", replacement: "x", mode: "exact" }],
+      }));
+      const result = simulatePatch(patchFile, dir) as any;
+      expect(result.all_applied).toBe(false);
+      expect(result.results[0].error).toBeTruthy();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

@@ -58,6 +58,17 @@ RUST_N=$(count_from "$RUST_LOG" 'test result: ok\. [0-9]+')
 pass "Rust tests passed ($RUST_N)"
 
 echo ""
+# vitest transpiles with esbuild, which strips types without checking them, so
+# the test run alone will not catch a type error. tsc is the check; running it
+# here is what keeps "all CI checks passed" from meaning less than it says.
+echo "═══ Typechecking TypeScript ═══"
+if ! pnpm -r run build > "$TS_LOG" 2>&1; then
+    cat "$TS_LOG"
+    fail "TypeScript typecheck failed"
+fi
+pass "TypeScript typechecks"
+
+echo ""
 echo "═══ Running TypeScript tests ═══"
 if ! pnpm test 2>&1 | tee "$TS_LOG"; then
     fail "TypeScript tests failed"

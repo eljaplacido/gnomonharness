@@ -1,7 +1,11 @@
 # Contracts — versioned, with fixtures in `conformance/`
 
-A change to any contract requires a fixture change in the same commit —
-as a CI check, not a convention.
+Each contract below names the fixture that pins it and says what CI actually
+checks against that fixture. The checks are not uniform, and the difference
+matters: the manifest is diffed byte-for-byte against real output, while the
+exit-code and session fixtures are only validated for internal consistency.
+Nothing inspects a commit to require that a contract change and a fixture
+change travel together — that part is a convention.
 
 **Version: 0.1.0** (2025-01-xx)
 
@@ -24,32 +28,48 @@ as a CI check, not a convention.
 Three natives collapse onto `refusal`. Four onto `apparatus_failure`.
 Declared explicitly so a consumer reading only the bucket knows.
 
+This table is the vocabulary, not an inventory of what the current build
+emits. `gnomon task` exits `0`, `2` or `10` — the bucket, not the native code —
+and every other command exits `0` or `1`. The finer codes are reserved for
+callers that need them; a consumer should switch on the bucket, which is the
+part that is stable.
+
 **Fixture**: `conformance/exit_codes.json` — every code maps to its bucket.
-CI asserts no code is missing and every code maps to exactly one bucket.
+CI asserts the fixture holds nine codes and that each maps to one of the three
+declared buckets. It does not compare the fixture against the codes the
+binaries emit, because no enum in the source is the authority yet — this
+document is.
 
 ## 2. Manifest — `gnomon-surface manifest`
 
 ```json
 {
-  "build": "<version>+<git revision>",
+  "build": "<version>+local",
   "surface_hash": "<sha256>",
   "sources": [
     { "path": ".gnomon/system.md", "sha256": "<...>" },
     { "path": ".gnomon/roles.toml", "sha256": "<...>" },
-    { "path": ".gnomon/extensions/foo.ts", "sha256": null }
+    { "path": ".gnomon/tools.toml", "sha256": null }
   ]
 }
 ```
 
-- Every searched path present or absent — `sha256: null` = absent.
-- Absence is part of the hash. A missing extension ≠ empty extension.
+- `build` is the crate version plus `local`. It is not a git revision, and a
+  consumer must not read provenance from it.
+- Five paths are declared and always listed, present or absent — `config.toml`,
+  `system.md`, `roles.toml`, `tools.toml`, `policy.toml`. For these,
+  `sha256: null` means absent.
+- Every other file under `.gnomon/` is listed only when it exists; it is found
+  by walking the directory, so deleting one removes its row rather than
+  nulling it. Either way the hash changes: a missing extension ≠ an empty one.
 - Hashes only, never file contents (credentials by name, never by value).
 - Sort `sources` by path; do not iterate a hash map.
 - Byte-identical for the same tree.
 
-**Fixture**: `conformance/manifest_golden.json` — expected output for a
-known `.gnomon/` tree. CI runs manifest on a temp tree and diff against
-this fixture byte-for-byte.
+**Fixture**: `conformance/manifest_golden.json` — expected output for the tree
+in `conformance/fixture_tree/`. CI runs the manifest against that tree and
+compares byte-for-byte, then runs it a second time and compares the two hashes,
+so both format drift and non-determinism fail the build.
 
 ## 3. Enumerations — `gnomon enumerations --json`
 
