@@ -4,6 +4,14 @@
 
 ### Added
 
+- **`/new`** — start a fresh session, leaving the current one on disk and
+  resumable. **`/session <id>`** switches to an earlier one in place, and
+  `/session` with no argument lists them with their opening lines.
+- **Commands that only read state or change rendering now run mid-turn** —
+  `/think`, `/meta`, `/context`, `/tools`, `/help`, `/explain`. Anything that
+  would move the role, the history or the session still waits, because a turn
+  bound to those should not have them change underneath it.
+
 - **`gnomon init` detects models instead of guessing.** The templates named
   fixed tags, so a machine with a 35B model was scaffolded onto a 14B one — the
   template could not know, guessed low, and was wrong on the very machine it
@@ -190,6 +198,17 @@
 
 ### Fixed
 
+- **You could not see what you were typing during a turn.** The progress
+  spinner writes a carriage return and an erase-line every 80ms, wiping each
+  keystroke as fast as the terminal echoed it. Typed-ahead input was being
+  queued correctly the whole time — it was simply invisible, which made the
+  feature unusable. The spinner now yields the line on the first keypress,
+  resumes when the line is submitted, and a queued line is acknowledged.
+- **`/reset` destroyed the session it cleared.** Clearing history while keeping
+  the session id meant the next turn's snapshot overwrote the record of
+  everything before it. It rotates to a new session now, like `/new`.
+- **`/reflect` was unreachable.** It worked as an alias for `/explain` but was
+  never registered, so it appeared in neither `/help` nor Tab completion.
 - **An unset `max_steps` looked unlimited.** It silently fell back to a default
   of 12 that lived in TypeScript and appeared nowhere in the surface. A session
   read `roles.toml`, correctly observed that `plan` had no `max_steps` key,
