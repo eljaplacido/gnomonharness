@@ -10,7 +10,7 @@
 
 import * as readline from "node:readline";
 import { resolve, dirname, join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   GnomonConfig,
@@ -32,6 +32,7 @@ import {
   ResolvedUi,
   MetaField,
   META_FIELDS,
+  loadConfig,
 } from "./config.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES } from "./render.js";
 import {
@@ -1364,7 +1365,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/theme", arg: "[name]", help: "Colour theme: dark | dim | light | high-contrast | mono" },
   { name: "/explain", arg: "[topic]", help: "What a feature is, how this repo has it set, and what to do with it" },
   { name: "/reflect", arg: "[topic]", help: "Alias for /explain" },
-  { name: "/models", help: "Models each endpoint actually offers" },
+  { name: "/models", help: "Pick a model for a role (arrows, type to filter)" },
   { name: "/manifest", help: "The surface hash and what it covers" },
   { name: "/clear", help: "Clear screen (history is kept)" },
   { name: "/help", help: "This list" },
@@ -1509,6 +1510,197 @@ export function sessionRow(
  *
  * Returns the chosen id, or null when cancelled.
  */
+/**
+ * Point a role at a model, in place.
+ *
+ * A surgical line edit rather than a re-serialise. roles.toml is written by
+ * hand and carries the comments explaining why each role is scoped the way it
+ * is; round-tripping it through a parser would discard exactly the part a
+ * reader needs. Only the `model` (and optionally `endpoint`) line inside
+ * `[roles.<name>]` is touched.
+ *
+ * A `[roles.<name>.fallback]` block starts with `[`, so it ends the section
+ * and is left alone — changing a role's model must not silently change what
+ * it falls back to.
+ */
+export function setRoleModel(
+  text: string,
+  role: string,
+  model: string,
+  endpoint?: string
+): string {
+  const lines = text.split("\n");
+  const header = new RegExp(`^\\s*\\[roles\\.${role.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]\\s*$`);
+  const start = lines.findIndex((l) => header.test(l));
+  if (start === -1) {
+    throw new Error(`roles.toml has no [roles.${role}] section to edit.`);
+  }
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^\s*\[/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+
+  const put = (key: string, value: string) => {
+    const at = lines.findIndex(
+      (l, i) => i > start && i < end && new RegExp(`^\\s*${key}\\s*=`).test(l)
+    );
+    const line = `${key} = "${value}"`;
+    if (at === -1) lines.splice(start + 1, 0, line);
+    else lines[at] = line;
+  };
+
+  put("model", model);
+  if (endpoint) put("endpoint", endpoint);
+  return lines.join("\n");
+}
+
+/** One row in a picker. */
+export interface PickItem {
+  /** Returned when this row is chosen */
+  key: string;
+  label: string;
+  /** Dimmed, after the label */
+  hint?: string;
+  /** Marked as the one currently in force */
+  current?: boolean;
+}
+
+/** Rows visible at once. Longer lists scroll inside this window. */
+const PICK_ROWS = 10;
+
+/**
+ * Choose one row from a list, with the arrows and a filter.
+ *
+ * One keyboard implementation, shared. A second copy is how the argument
+ * parser came to be tested while the shipped one stayed broken, and picker
+ * key handling has its own history here: rl.pause() also pauses the stream
+ * the keys arrive on, which made an early version impossible to drive at all.
+ *
+ * The window is a fixed height whatever the list length — always `rows` lines,
+ * padded — so the redraw can move the cursor by a constant and never tears.
+ * Sixty models will not scroll a terminal away; they scroll inside the window.
+ */
+export async function pickFromList(
+  items: PickItem[],
+  opts: { title: string; rows?: number; start?: number },
+  ui: ResolvedUi,
+  rl: readline.Interface,
+  out: NodeJS.WriteStream = process.stdout
+): Promise<string | null> {
+  if (items.length === 0) return null;
+  const rows = Math.max(3, Math.min(opts.rows ?? PICK_ROWS, items.length));
+  const height = rows + 4;
+  let filter = "";
+  let index = Math.max(0, Math.min(opts.start ?? 0, items.length - 1));
+  let top = 0;
+
+  const visible = (): PickItem[] => {
+    const f = filter.toLowerCase();
+    if (!f) return items;
+    return items.filter((i) =>
+      `${i.label} ${i.hint ?? ""}`.toLowerCase().includes(f)
+    );
+  };
+
+  const draw = (first: boolean) => {
+    const list = visible();
+    if (index >= list.length) index = Math.max(0, list.length - 1);
+    if (index < top) top = index;
+    if (index >= top + rows) top = index - rows + 1;
+    top = Math.max(0, Math.min(top, Math.max(0, list.length - rows)));
+
+    if (!first) out.write(`\x1b[${height}A`);
+    out.write("\x1b[J");
+    out.write(
+      `  ${paint(ui, "cyan", opts.title)}` +
+        `${paint(ui, "gray", "   ↑↓ move · Enter choose · Esc cancel · type to filter")}\n`
+    );
+    out.write(
+      `  ${paint(ui, "gray", "filter:")} ` +
+        `${filter ? paint(ui, "bold", filter) : paint(ui, "gray", "(none)")}\n\n`
+    );
+    for (let r = 0; r < rows; r++) {
+      const item = list[top + r];
+      if (!item) {
+        out.write("\n");
+        continue;
+      }
+      const mark = item.current ? paint(ui, "green", "✓") : " ";
+      const hint = item.hint ? `  ${paint(ui, "gray", item.hint)}` : "";
+      out.write(
+        top + r === index
+          ? `${paint(ui, "cyan", "  ›")} ${mark} ${paint(ui, "bold", item.label)}${hint}\n`
+          : `    ${mark} ${paint(ui, "gray", item.label)}${hint}\n`
+      );
+    }
+    const shown = Math.min(rows, list.length);
+    out.write(
+      paint(
+        ui,
+        "gray",
+        `  ${list.length ? top + 1 : 0}–${top + shown} of ${list.length}` +
+          `${filter ? ` matching "${filter}"` : ""}\n`
+      )
+    );
+  };
+
+  draw(true);
+
+  return new Promise<string | null>((resolvePick) => {
+    const onKey = (chunk: string, key: readline.Key | undefined) => {
+      if (!key) return;
+      const list = visible();
+      if (key.name === "up" || (key.ctrl && key.name === "p")) {
+        index = list.length ? (index - 1 + list.length) % list.length : 0;
+      } else if (key.name === "down" || (key.ctrl && key.name === "n")) {
+        index = list.length ? (index + 1) % list.length : 0;
+      } else if (key.name === "pageup") {
+        index = Math.max(0, index - rows);
+      } else if (key.name === "pagedown") {
+        index = Math.min(Math.max(0, list.length - 1), index + rows);
+      } else if (key.name === "return" || key.name === "enter") {
+        return finish(list[index]?.key ?? null);
+      } else if (key.name === "escape" || (key.ctrl && key.name === "c")) {
+        return finish(null);
+      } else if (key.name === "backspace") {
+        filter = filter.slice(0, -1);
+        index = 0;
+      } else if (
+        !key.ctrl &&
+        !key.meta &&
+        typeof chunk === "string" &&
+        chunk.length === 1 &&
+        chunk >= " "
+      ) {
+        // Typing filters. That is also why `q` no longer cancels: in a list
+        // you can type into, a letter that quits is a trap.
+        filter += chunk;
+        index = 0;
+      } else {
+        return;
+      }
+      draw(false);
+    };
+
+    const finish = (chosen: string | null) => {
+      process.stdin.off("keypress", onKey);
+      out.write(`\x1b[${height}A\x1b[J`);
+      rl.resume();
+      resolvePick(chosen);
+    };
+
+    // rl.pause() pauses process.stdin itself, and a paused stream emits no
+    // data — so keypress never fires. Pause the interface so it neither echoes
+    // nor builds a line, then resume the stream so the keys still arrive here.
+    rl.pause();
+    process.stdin.resume();
+    process.stdin.on("keypress", onKey);
+  });
+}
+
 export async function pickSession(
   entries: SessionListEntry[],
   currentId: string,
@@ -1521,60 +1713,18 @@ export async function pickSession(
   // Newest first: the one most likely wanted is the one under the cursor.
   const rows = [...entries].reverse();
   const roleWidth = Math.max(...rows.map((e) => e.currentRole.length));
-  let index = 0;
 
-  const header =
-    paint(ui, "cyan", "  Choose a session") +
-    paint(ui, "gray", "   ↑↓ move · Enter open · Esc cancel");
-
-  const draw = (first: boolean) => {
-    if (!first) out.write(`\x1b[${rows.length + 2}A`);
-    out.write("\x1b[J");
-    out.write(`${header}\n\n`);
-    rows.forEach((e, i) => {
-      const line = sessionRow(e, { role: roleWidth }, e.id === currentId);
-      out.write(
-        i === index
-          ? `${paint(ui, "cyan", "  ›")} ${paint(ui, "bold", line)}\n`
-          : `    ${paint(ui, "gray", line)}\n`
-      );
-    });
-  };
-
-  draw(true);
-
-  return new Promise<string | null>((resolvePick) => {
-    const onKey = (_chunk: string, key: readline.Key | undefined) => {
-      if (!key) return;
-      if (key.name === "up" || (key.name === "p" && key.ctrl)) {
-        index = (index - 1 + rows.length) % rows.length;
-        draw(false);
-      } else if (key.name === "down" || (key.name === "n" && key.ctrl)) {
-        index = (index + 1) % rows.length;
-        draw(false);
-      } else if (key.name === "return" || key.name === "enter") {
-        finish(rows[index].id);
-      } else if (key.name === "escape" || (key.name === "c" && key.ctrl) || key.name === "q") {
-        finish(null);
-      }
-    };
-
-    const finish = (chosen: string | null) => {
-      process.stdin.off("keypress", onKey);
-      // Erase the picker so the transcript keeps only the outcome.
-      out.write(`\x1b[${rows.length + 2}A\x1b[J`);
-      rl.resume();
-      resolvePick(chosen);
-    };
-
-    // rl.pause() pauses process.stdin itself, and a paused stream emits no
-    // data — so keypress never fired and the picker could not be driven at
-    // all. Pause the interface so it neither echoes nor builds a line, then
-    // resume the stream so the keys still arrive here.
-    rl.pause();
-    process.stdin.resume();
-    process.stdin.on("keypress", onKey);
-  });
+  return pickFromList(
+    rows.map((e) => ({
+      key: e.id,
+      label: sessionRow(e, { role: roleWidth }, e.id === currentId),
+      current: e.id === currentId,
+    })),
+    { title: "Choose a session" },
+    ui,
+    rl,
+    out
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -2785,27 +2935,122 @@ export async function runPromptLoop(
         // /models queries the network, and processCommand is synchronous.
         if (/^\/models\b/.test(input.trim())) {
           const ui0 = uiOf(state);
+          const listOnly = /\s--list\b/.test(input);
           console.log(paint(ui0, "gray", "\n  querying endpoints…"));
           const found = await listModels(config);
+
+          // Unreachable endpoints are reported, never silently dropped. A
+          // shorter list that does not say what is missing is how a wrong
+          // model tag turns into an opaque API error later.
           for (const e of found) {
-            console.log(`\n  ${paint(ui0, "bold", e.endpoint)}  ${e.url}`);
             if (e.problem) {
-              console.log(paint(ui0, "yellow", `    unavailable: ${e.problem}`));
-              continue;
+              console.log(
+                `  ${paint(ui0, "bold", e.endpoint)}  ` +
+                  paint(ui0, "yellow", `unavailable: ${e.problem}`)
+              );
+            } else if (e.models.length === 0) {
+              console.log(
+                `  ${paint(ui0, "bold", e.endpoint)}  ` +
+                  paint(ui0, "gray", "(reachable, but offered no models)")
+              );
             }
-            if (e.models.length === 0) {
-              console.log(paint(ui0, "gray", "    (reachable, but offered no models)"));
-              continue;
-            }
-            for (const m of e.models) console.log(`    ${m}`);
           }
+
+          const offered = found.filter((e) => !e.problem && e.models.length > 0);
+          if (offered.length === 0) {
+            console.log(paint(ui0, "yellow", "\n  No endpoint offered a model."));
+            continue;
+          }
+
+          if (listOnly || !process.stdin.isTTY) {
+            for (const e of offered) {
+              console.log(`\n  ${paint(ui0, "bold", e.endpoint)}  ${e.url}`);
+              for (const m of e.models) console.log(`    ${m}`);
+            }
+            continue;
+          }
+
+          const rolesNow = listRoles(config);
+          const inUse = new Map<string, string>();
+          for (const r of rolesNow) {
+            const def = config.roles[r];
+            if (def?.model) inUse.set(`${def.endpoint ?? "local"}\u0000${def.model}`, r);
+          }
+
+          const items: PickItem[] = [];
+          for (const e of offered) {
+            for (const m of e.models) {
+              const key = `${e.endpoint}\u0000${m}`;
+              const held = inUse.get(key);
+              items.push({
+                key,
+                label: m,
+                hint: held ? `@${e.endpoint} · ${held}` : `@${e.endpoint}`,
+                current: Boolean(held),
+              });
+            }
+          }
+
+          const pickedModel = await pickFromList(
+            items,
+            { title: "Choose a model", rows: 12 },
+            ui0,
+            rl
+          );
+          if (!pickedModel) {
+            console.log(paint(ui0, "gray", "  (no change)"));
+            continue;
+          }
+          const [pickedEndpoint, modelTag] = pickedModel.split("\u0000");
+
+          const pickedRole = await pickFromList(
+            rolesNow.map((r) => ({
+              key: r,
+              label: r,
+              hint: `${config.roles[r]?.model ?? "(unset)"} @${config.roles[r]?.endpoint ?? "local"}`,
+              current: r === state.currentRole,
+            })),
+            { title: `Give ${modelTag} to which role?`, rows: 8,
+              start: Math.max(0, rolesNow.indexOf(state.currentRole)) },
+            ui0,
+            rl
+          );
+          if (!pickedRole) {
+            console.log(paint(ui0, "gray", "  (no change)"));
+            continue;
+          }
+
+          const rolesPath = join(config.gnomonDir, "roles.toml");
+          try {
+            const before = readFileSync(rolesPath, "utf-8");
+            writeFileSync(
+              rolesPath,
+              setRoleModel(before, pickedRole, modelTag, pickedEndpoint),
+              "utf-8"
+            );
+          } catch (err) {
+            console.log(
+              paint(ui0, "yellow",
+                `  Could not write roles.toml: ${err instanceof Error ? err.message : String(err)}`)
+            );
+            continue;
+          }
+
+          // roles.toml is part of the surface, so this changed the hash on
+          // purpose. Reload rather than asking for a restart — but say what
+          // moved, because a surface that changes without saying so is the
+          // thing this harness exists to prevent.
+          const projectRoot = resolve(config.gnomonDir, "..");
+          const fresh = loadConfig(projectRoot);
+          state.config = fresh;
           console.log(
-            paint(
-              ui0,
-              "gray",
-              `\n  Put one on a role in .gnomon/roles.toml:\n` +
-                `    [roles.plan]\n    model = "<tag from above>"\n    endpoint = "<endpoint name>"`
-            )
+            `\n  ${paint(ui0, "green", "✓")} ${paint(ui0, "bold", pickedRole)} → ` +
+              `${modelTag} @${pickedEndpoint}`
+          );
+          console.log(
+            paint(ui0, "gray",
+              `  .gnomon/roles.toml written · surface now ` +
+                `${recomputeManifest(fresh.gnomonDir, "0.1.0").surface_hash.slice(0, 16)}…`)
           );
           continue;
         }

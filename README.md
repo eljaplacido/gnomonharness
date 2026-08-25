@@ -500,19 +500,45 @@ model = "some-hosted-model"
 endpoint = "zen"                    # only when local fails or times out
 ```
 
-`/models` asks each endpoint what it actually offers, so choosing a model per
-role is discovery rather than guesswork:
+`/models` asks each endpoint what it offers and lets you **assign** one, so
+choosing a model per role is neither guesswork nor hand-editing TOML:
 
 ```
 /models
 
-  local  http://127.0.0.1:11434/api/tags
-    qwen3.6:35b
-    deepseek-r1:32b-qwen-distill-q4_K_M
-    …
-  zen  https://opencode.ai/zen/v1/models
-    unavailable: $OPENCODE_API_KEY is not set in this shell
+  zen  unavailable: $OPENCODE_API_KEY is not set in this shell
+
+  Choose a model   ↑↓ move · Enter choose · Esc cancel · type to filter
+  filter: qwen3
+
+  ›   qwen3.6:35b            @local · implement
+      qwen3.5:122b-a10b      @local
+      qwen3.6-plus           @zen
+  1–3 of 3 matching "qwen3"
 ```
+
+Arrows move, Enter chooses, and **typing filters** — sixty models from a
+hosted endpoint narrow to the one you meant instead of scrolling past. Pick a
+model, then pick the role to give it to, and `.gnomon/roles.toml` is rewritten
+in place: only that role's `model` and `endpoint` lines change, comments and
+every other role untouched, and the role's `fallback` block is deliberately
+left alone.
+
+That edits the surface, so the hash changes and the new value is reported:
+
+```
+  ✓ plan → qwen3.6:35b @local
+  .gnomon/roles.toml written · surface now 3f9c1a04b71e2d55…
+```
+
+`/models --list` prints the plain list instead, which is also what you get when
+output is not a terminal.
+
+**A project's `.gnomon/` is never rewritten by updating gnomon.** The surface
+belongs to the checkout it sits in — that is the whole point of hashing it — so
+a `git pull` in the harness leaves the models a project was scaffolded with
+exactly as they were. If a project has been sitting on the tags detection chose
+months ago, `/models` is how you move it.
 
 `/endpoints` shows each one, which roles route to it, and whether its key
 variable is actually set in your shell:
@@ -1073,7 +1099,7 @@ undiscoverable.
 | `/session [id]` | This session, earlier ones, and switching between them |
 | `/new` | Start a fresh session; the current one stays resumable |
 | `/explain [topic]` | What a feature is, how **this** repo has it set, and what to do with it |
-| `/models` | Models each endpoint actually offers |
+| `/models` | Models each endpoint offers; arrows + filter to assign one to a role. `--list` to only print |
 | `/manifest` | The surface hash and what it covers |
 | `/reset` | Drop history (and the summary) |
 | `/meta [fields]` | Set the meta line — `/meta all`, `/meta none`, `/meta style compact` |

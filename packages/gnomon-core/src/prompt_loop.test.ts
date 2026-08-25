@@ -6,6 +6,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { loadConfig } from "./config.js";
 import { mapBucket } from "./session.js";
 import * as promptLoop from "./prompt_loop.js";
+import { setRoleModel } from "./prompt_loop.js";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Fixture tree lives at repo root — go up 2 levels from packages/gnomon-core
 const fixtureRoot = "../../conformance/fixture_tree";
@@ -1101,5 +1105,189 @@ describe("pickSession", () => {
     const rl: any = { pause() {}, resume() {} };
     const out: any = { isTTY: true, write() {} };
     expect(await promptLoop.pickSession([], "x", {} as any, rl, out)).toBeNull();
+  });
+});
+
+describe("setRoleModel edits roles.toml in place", () => {
+  const sample = [
+    "# Role routing",
+    "",
+    "[roles.plan]",
+    "model = \"qwen2.5:14b-instruct\"   # picked at init",
+    "endpoint = \"local\"",
+    "temperature = 0.2",
+    "tools = [\"read\", \"bash\"]",
+    "",
+    "[roles.plan.fallback]",
+    "model = \"nemotron-3-ultra-free\"",
+    "endpoint = \"zen\"",
+    "",
+    "[roles.smol]",
+    "model = \"qwen2.5:7b-instruct\"",
+  ].join("\n");
+
+  it("changes the model of the named role", () => {
+    const out = setRoleModel(sample, "plan", "qwen3.6:35b", "local");
+    expect(out).toContain('model = "qwen3.6:35b"');
+    expect(out).not.toContain('model = "qwen2.5:14b-instruct"');
+  });
+
+  // A fallback block opens with `[`, so it ends the section. Changing which
+  // model a role uses must not silently change what it falls back to.
+  it("leaves the role's fallback alone", () => {
+    const out = setRoleModel(sample, "plan", "qwen3.6:35b", "local");
+    expect(out).toContain('model = "nemotron-3-ultra-free"');
+    expect(out.split("\n")[9]).toBe('model = "nemotron-3-ultra-free"');
+  });
+
+  it("leaves every other role alone", () => {
+    const out = setRoleModel(sample, "plan", "qwen3.6:35b", "local");
+    expect(out).toContain('model = "qwen2.5:7b-instruct"');
+  });
+
+  // The comments are the reason a reader can tell why a role is scoped as it
+  // is. Round-tripping through a parser would drop them.
+  it("keeps the comments and the rest of the section", () => {
+    const out = setRoleModel(sample, "plan", "qwen3.6:35b", "local");
+    expect(out).toContain("# Role routing");
+    expect(out).toContain("temperature = 0.2");
+    expect(out).toContain('tools = ["read", "bash"]');
+  });
+
+  it("sets the endpoint when one is given", () => {
+    const out = setRoleModel(sample, "plan", "gpt-5.5", "zen");
+    const section = out.slice(out.indexOf("[roles.plan]"), out.indexOf("[roles.plan.fallback]"));
+    expect(section).toContain('endpoint = "zen"');
+  });
+
+  it("adds a model line to a role that has none", () => {
+    const out = setRoleModel("[roles.bare]\ntools = []\n", "bare", "qwen3.6:35b");
+    expect(out).toContain('model = "qwen3.6:35b"');
+    expect(out).toContain("tools = []");
+  });
+
+  it("refuses a role the file does not define, rather than appending one", () => {
+    expect(() => setRoleModel(sample, "nope", "x")).toThrow(/no \[roles\.nope\]/);
+  });
+
+  it("round-trips through the parser to the value it wrote", () => {
+    const out = setRoleModel(sample, "plan", "qwen3.6:35b", "zen");
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-roles-"));
+    try {
+      mkdirSync(join(dir, ".gnomon"), { recursive: true });
+      writeFileSync(join(dir, ".gnomon", "roles.toml"), out);
+      const parsed = loadConfig(dir);
+      expect(parsed.roles.plan.model).toBe("qwen3.6:35b");
+      expect(parsed.roles.plan.endpoint).toBe("zen");
+      expect(parsed.roles.plan.temperature).toBe(0.2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("pickFromList is drivable with the keyboard", () => {
+  // The picker is exercised by emitting the same keypress events readline
+  // would. `/session` shipped a picker that could not be driven at all —
+  // rl.pause() pauses the stream the keys arrive on — and nothing caught it
+  // because nothing pressed a key.
+  const ui = { color: false } as never;
+  const sink = () => {
+    const written: string[] = [];
+    return {
+      stream: { write: (s: string) => written.push(s) } as unknown as NodeJS.WriteStream,
+      written,
+    };
+  };
+  const rl = { pause: () => {}, resume: () => {} } as never;
+  const press = (name: string, chunk = "") =>
+    process.stdin.emit("keypress", chunk, { name, ctrl: false, meta: false });
+
+  const items = [
+    { key: "a", label: "qwen3.6:35b", hint: "@local" },
+    { key: "b", label: "qwen2.5:7b-instruct", hint: "@local" },
+    { key: "c", label: "gpt-5.5", hint: "@zen" },
+  ];
+
+  it("returns null for an empty list rather than drawing nothing", async () => {
+    expect(await promptLoop.pickFromList([], { title: "x" }, ui, rl, sink().stream)).toBeNull();
+  });
+
+  it("Enter chooses the row under the cursor", async () => {
+    const p = promptLoop.pickFromList(items, { title: "Choose" }, ui, rl, sink().stream);
+    press("return");
+    expect(await p).toBe("a");
+  });
+
+  it("down moves the cursor", async () => {
+    const p = promptLoop.pickFromList(items, { title: "Choose" }, ui, rl, sink().stream);
+    press("down");
+    press("return");
+    expect(await p).toBe("b");
+  });
+
+  it("up from the top wraps to the bottom", async () => {
+    const p = promptLoop.pickFromList(items, { title: "Choose" }, ui, rl, sink().stream);
+    press("up");
+    press("return");
+    expect(await p).toBe("c");
+  });
+
+  it("starts where the caller asks", async () => {
+    const p = promptLoop.pickFromList(items, { title: "Choose", start: 2 }, ui, rl, sink().stream);
+    press("return");
+    expect(await p).toBe("c");
+  });
+
+  it("Esc cancels and chooses nothing", async () => {
+    const p = promptLoop.pickFromList(items, { title: "Choose" }, ui, rl, sink().stream);
+    press("escape");
+    expect(await p).toBeNull();
+  });
+
+  // Sixty models is the real case, and arrowing through sixty rows is not
+  // "intuitive" however well the arrows work.
+  it("typing filters, so a long list can be narrowed instead of scrolled", async () => {
+    const p = promptLoop.pickFromList(items, { title: "Choose" }, ui, rl, sink().stream);
+    for (const ch of "gpt") press(ch, ch);
+    press("return");
+    expect(await p).toBe("c");
+  });
+
+  it("backspace widens the filter again", async () => {
+    const p = promptLoop.pickFromList(items, { title: "Choose" }, ui, rl, sink().stream);
+    for (const ch of "gpt") press(ch, ch);
+    for (let i = 0; i < 3; i++) press("backspace");
+    press("return");
+    expect(await p).toBe("a");
+  });
+
+  it("the filter matches the hint too, so an endpoint name narrows it", async () => {
+    const p = promptLoop.pickFromList(items, { title: "Choose" }, ui, rl, sink().stream);
+    for (const ch of "zen") press(ch, ch);
+    press("return");
+    expect(await p).toBe("c");
+  });
+
+  // Sixty models must not scroll the terminal away: past the window size the
+  // drawing is a fixed height and the list scrolls inside it.
+  it("draws a fixed height for any list longer than the window", () => {
+    const make = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ key: `k${i}`, label: `model-${i}` }));
+    const heightFor = (n: number) => {
+      const s = sink();
+      void promptLoop.pickFromList(make(n), { title: "t", rows: 5 }, ui, rl, s.stream);
+      press("escape");
+      return s.written.join("").split("\n").length;
+    };
+    expect(heightFor(60)).toBe(heightFor(6));
+  });
+
+  it("shrinks the window to the list when the list is shorter", () => {
+    const s = sink();
+    void promptLoop.pickFromList(items, { title: "t", rows: 12 }, ui, rl, s.stream);
+    press("escape");
+    // Three items, not twelve rows of mostly blank.
+    expect(s.written.join("")).toContain("1–3 of 3");
   });
 });
