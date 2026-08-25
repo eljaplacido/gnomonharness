@@ -1,4 +1,4 @@
-# gnomon
+# Gnomon Harness 
 
 **A coding agent whose behaviour is fixed by files in your repository, not by
 your machine.**
