@@ -37,14 +37,14 @@ describe("template hygiene", () => {
     }
   });
 
-  it("the scaffolded routing rules match the inputs they claim to", () => {
+  it("the scaffolded routing rules match the inputs they claim to", async () => {
     // Not "is it an array" — does it actually route. In a JS template literal
     // `\s` is an invalid escape that collapses to `s` and `\b` becomes a
     // backspace, so these patterns shipped broken and matched nothing while
     // every structural assertion passed.
     const root = mkdtempSync(join(tmpdir(), "gnomon-rules-"));
     try {
-      initSurface({ dir: root });
+      await initSurface({ dir: root });
       const config = loadConfig(root);
 
       const cases: Array<[string, string]> = [
@@ -63,10 +63,10 @@ describe("template hygiene", () => {
     }
   });
 
-  it("the scaffolded verifier's bash_allow permits tests and refuses writes", () => {
+  it("the scaffolded verifier's bash_allow permits tests and refuses writes", async () => {
     const root = mkdtempSync(join(tmpdir(), "gnomon-allow-"));
     try {
-      initSurface({ dir: root });
+      await initSurface({ dir: root });
       const allow = loadConfig(root).roles.verifier?.bash_allow ?? [];
       expect(allow.length).toBeGreaterThan(0);
 
@@ -86,13 +86,13 @@ describe("template hygiene", () => {
     }
   });
 
-  it("declares the remote endpoints, inert until a role names one", () => {
+  it("declares the remote endpoints, inert until a role names one", async () => {
     // They shipped commented out, so a scaffolded project's /endpoints showed
     // only `local` and there was no sign the others were even possible.
     // Declaring costs nothing: nothing reaches an endpoint no role points at.
     const root = mkdtempSync(join(tmpdir(), "gnomon-ep-"));
     try {
-      initSurface({ dir: root });
+      await initSurface({ dir: root });
       const config = loadConfig(root);
       const declared = config.config.endpoints ?? {};
 
@@ -111,10 +111,10 @@ describe("template hygiene", () => {
     }
   });
 
-  it("every template parses as the TOML the surface expects", () => {
+  it("every template parses as the TOML the surface expects", async () => {
     const root = mkdtempSync(join(tmpdir(), "gnomon-tpl-"));
     try {
-      initSurface({ dir: root });
+      await initSurface({ dir: root });
       const cfg = loadConfig(root);
       // Values that must survive parsing, not just files that must exist.
       expect(cfg.config.defaults?.approval).toBe("on_write");
@@ -130,8 +130,8 @@ describe("template hygiene", () => {
 });
 
 describe("initSurface", () => {
-  it("writes a complete surface", () => {
-    const r = initSurface({ dir: root });
+  it("writes a complete surface", async () => {
+    const r = await initSurface({ dir: root });
     expect(r.written).toEqual([
       "config.toml",
       "roles.toml",
@@ -145,43 +145,43 @@ describe("initSurface", () => {
     }
   });
 
-  it("refuses to clobber an existing surface", () => {
-    initSurface({ dir: root });
-    expect(() => initSurface({ dir: root })).toThrow(/already exists/);
+  it("refuses to clobber an existing surface", async () => {
+    await initSurface({ dir: root });
+    await expect(initSurface({ dir: root })).rejects.toThrow(/already exists/);
   });
 
-  it("--force replaces an existing surface", () => {
-    initSurface({ dir: root });
+  it("--force replaces an existing surface", async () => {
+    await initSurface({ dir: root });
     writeFileSync(join(root, ".gnomon", "config.toml"), "# edited\n");
-    initSurface({ dir: root, force: true });
+    await initSurface({ dir: root, force: true });
     expect(readFileSync(join(root, ".gnomon", "config.toml"), "utf-8")).toContain(
       "[defaults]"
     );
   });
 
-  it("the scaffolded surface declares all four tools", () => {
-    initSurface({ dir: root });
+  it("the scaffolded surface declares all four tools", async () => {
+    await initSurface({ dir: root });
     const tools = readFileSync(join(root, ".gnomon", "tools.toml"), "utf-8");
     for (const name of ["read", "bash", "edit", "write"]) {
       expect(tools).toContain(`name = "${name}"`);
     }
   });
 
-  it("the scaffolded surface declares context and ui policy", () => {
-    initSurface({ dir: root });
+  it("the scaffolded surface declares context and ui policy", async () => {
+    await initSurface({ dir: root });
     const config = readFileSync(join(root, ".gnomon", "config.toml"), "utf-8");
     expect(config).toContain("[context]");
     expect(config).toContain("[ui]");
     expect(config).toContain("policy = \"sliding_window\"");
   });
 
-  it("--from copies an existing surface", () => {
+  it("--from copies an existing surface", async () => {
     const src = mkdtempSync(join(tmpdir(), "gnomon-src-"));
     mkdirSync(join(src, ".gnomon", "profiles"), { recursive: true });
     writeFileSync(join(src, ".gnomon", "config.toml"), "# borrowed\n");
     writeFileSync(join(src, ".gnomon", "profiles", "x.toml"), "# nested\n");
 
-    const r = initSurface({ dir: root, from: src });
+    const r = await initSurface({ dir: root, from: src });
     expect(readFileSync(join(root, ".gnomon", "config.toml"), "utf-8")).toBe(
       "# borrowed\n"
     );
@@ -189,22 +189,22 @@ describe("initSurface", () => {
     rmSync(src, { recursive: true, force: true });
   });
 
-  it("--from accepts a path to the .gnomon dir itself", () => {
+  it("--from accepts a path to the .gnomon dir itself", async () => {
     const src = mkdtempSync(join(tmpdir(), "gnomon-src-"));
     mkdirSync(join(src, ".gnomon"), { recursive: true });
     writeFileSync(join(src, ".gnomon", "config.toml"), "# direct\n");
 
-    initSurface({ dir: root, from: join(src, ".gnomon") });
+    await initSurface({ dir: root, from: join(src, ".gnomon") });
     expect(readFileSync(join(root, ".gnomon", "config.toml"), "utf-8")).toBe(
       "# direct\n"
     );
     rmSync(src, { recursive: true, force: true });
   });
 
-  it("--from reports a missing source instead of writing a partial surface", () => {
-    expect(() => initSurface({ dir: root, from: join(root, "nope") })).toThrow(
-      /No .gnomon\/ surface found/
-    );
+  it("--from reports a missing source instead of writing a partial surface", async () => {
+    await expect(
+      initSurface({ dir: root, from: join(root, "nope") })
+    ).rejects.toThrow(/No .gnomon\/ surface found/);
     expect(existsSync(join(root, ".gnomon"))).toBe(false);
   });
 });

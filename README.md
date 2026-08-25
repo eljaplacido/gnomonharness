@@ -333,9 +333,11 @@ Tools (implement): read, bash, edit, write, skill
 
 Two things to do straight after:
 
-1. **Edit `.gnomon/roles.toml`.** Model tags are concrete backend tags, not
-   aliases — they must name models you actually have. `/models` lists what each
-   endpoint offers.
+1. **Check `.gnomon/roles.toml`.** `init` asks your model host what it has and
+   writes real tags — the largest model under ~70B for the reasoning roles, and
+   the smallest one still big enough to summarise for `smol`. It records what
+   it found and why, in the file. If nothing was reachable it falls back to
+   generic tags and says so, and those will very likely be wrong.
 2. **Add `.gnomon-sessions/` and `.gnomon-audit/` to `.gitignore`.**
 
 A first exchange:

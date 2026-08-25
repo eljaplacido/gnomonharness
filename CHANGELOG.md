@@ -4,6 +4,17 @@
 
 ### Added
 
+- **`gnomon init` detects models instead of guessing.** The templates named
+  fixed tags, so a machine with a 35B model was scaffolded onto a 14B one — the
+  template could not know, guessed low, and was wrong on the very machine it
+  was guessing for. It now asks the model host, picks the largest under ~70B
+  for the reasoning roles (a 120B default is minutes per turn) and the smallest
+  above ~6B for `smol` (which folds evicted turns into the running summary, so
+  a 4B summariser is a false economy), excludes embedding models, and writes
+  what it found into `roles.toml` as a comment. Detection runs once, at
+  scaffold time; the result is concrete hashed data like the rest of the
+  surface. With no host reachable it falls back to generic tags and says so.
+
 - **Tests for the parts that shipped untested.** `session_store` (resume had
   been verified only by hand), `agent.ts` including the surface-drift
   detection that could not fire before the hash was fixed, `runTask` — the

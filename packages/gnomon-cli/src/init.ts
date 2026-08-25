@@ -21,6 +21,7 @@ import {
   statSync,
 } from "node:fs";
 import { join, resolve, relative } from "node:path";
+import { detectModels, ModelChoice, FALLBACK_LARGE, FALLBACK_SMALL } from "./detect.js";
 
 // ---------------------------------------------------------------------------
 // Templates
@@ -157,11 +158,13 @@ spinner = true
 color = true
 `;
 
-const ROLES_TOML = `# Role routing — model, endpoint, and tool scope per role.
+const rolesToml = (large: string, small: string, note: string) => `# Role routing — model, endpoint, and tool scope per role.
 #
-# EDIT THESE MODEL TAGS. They are concrete backend tags, not aliases: an alias
-# would have to be resolved per machine, which is the machine-scoped config
-# this harness forbids. Run \`ollama list\` to see what you have.
+${note}
+#
+# These are concrete backend tags, not aliases: an alias would have to be
+# resolved per machine, which is the machine-scoped config this harness
+# forbids. Change any of them freely — \`/models\` lists what is available.
 #
 # \`endpoint\` names a block from [endpoints] in config.toml (default "local").
 # \`tools\` narrows what the role may call. Omit it for every declared tool;
@@ -172,7 +175,7 @@ const ROLES_TOML = `# Role routing — model, endpoint, and tool scope per role.
 # enforced by the tool list, not by asking the model nicely.
 
 [roles.coordinator]
-model = "qwen2.5:14b-instruct"
+model = "${large}"
 endpoint = "local"
 temperature = 0.2
 top_p = 0.9
@@ -184,7 +187,7 @@ tools = ["read", "write", "skill"]
 description = "Intent and contracts: turns a request into a spec"
 
 [roles.implementor]
-model = "qwen2.5:14b-instruct"
+model = "${large}"
 endpoint = "local"
 temperature = 0.3
 top_p = 0.95
@@ -194,7 +197,7 @@ tools = ["read", "write", "edit", "bash"]
 description = "Tests first, then the code that satisfies them"
 
 [roles.verifier]
-model = "qwen2.5:14b-instruct"
+model = "${large}"
 endpoint = "local"
 temperature = 0.1
 top_p = 0.9
@@ -215,7 +218,7 @@ description = "Runs the suite and reports. Cannot write."
 # ── General-purpose roles ──────────────────────────────────────────────────
 
 [roles.plan]
-model = "qwen2.5:14b-instruct"
+model = "${large}"
 endpoint = "local"
 temperature = 0.2
 top_p = 0.9
@@ -225,7 +228,7 @@ tools = ["read", "bash"]
 description = "Hardest reasoning, lowest call volume"
 
 [roles.implement]
-model = "qwen2.5:14b-instruct"
+model = "${large}"
 endpoint = "local"
 temperature = 0.3
 top_p = 0.95
@@ -234,7 +237,7 @@ max_steps_total = 224
 description = "Highest token volume — where local hosting pays off"
 
 [roles.critique]
-model = "qwen2.5:14b-instruct"
+model = "${large}"
 endpoint = "local"
 temperature = 0.1
 top_p = 0.9
@@ -244,7 +247,7 @@ tools = ["read", "bash"]
 description = "Must not share context with the implementer"
 
 [roles.smol]
-model = "qwen2.5:7b-instruct"
+model = "${small}"
 endpoint = "local"
 temperature = 0.2
 top_p = 0.95
@@ -342,9 +345,34 @@ interface Template {
   content: string;
 }
 
-const TEMPLATES: Template[] = [
+/**
+ * A line in roles.toml saying where its model tags came from.
+ *
+ * Written into the surface rather than only printed, because whoever reads
+ * this file next will not have seen the init output — and a concrete tag with
+ * no provenance looks like a decision someone made deliberately.
+ */
+function modelNote(choice: ModelChoice): string {
+  if (choice.fallback) {
+    return (
+      `# These are generic starter tags: ${choice.fallback}, so nothing could be\n` +
+      `# detected. They are very likely wrong for this machine.`
+    );
+  }
+  const found = choice.detected
+    .map((m) => `${m.name} (${m.billions}B)`)
+    .join(", ");
+  return (
+    `# These tags were detected at 'gnomon init' time on this machine.\n` +
+    `# Found: ${found}.\n` +
+    `# Detection ran once, here; the tags below are now fixed data like any\n` +
+    `# other part of the surface.`
+  );
+}
+
+const templatesFor = (choice: ModelChoice): Template[] => [
   { path: "config.toml", content: CONFIG_TOML },
-  { path: "roles.toml", content: ROLES_TOML },
+  { path: "roles.toml", content: rolesToml(choice.large, choice.small, modelNote(choice)) },
   { path: "tools.toml", content: TOOLS_TOML },
   { path: "policy.toml", content: POLICY_TOML },
   { path: "system.md", content: SYSTEM_MD },
@@ -368,6 +396,8 @@ export interface InitResult {
   gnomonDir: string;
   written: string[];
   skipped: string[];
+  /** What detection chose, when it ran */
+  models?: ModelChoice;
 }
 
 /** Recursively collect the files of an existing surface. */
@@ -392,7 +422,7 @@ function collectSurface(dir: string, base = dir): Template[] {
  * Refuses to clobber an existing surface unless `force` is set: overwriting it
  * would silently change how an already-configured project behaves.
  */
-export function initSurface(options: InitOptions = {}): InitResult {
+export async function initSurface(options: InitOptions = {}): Promise<InitResult> {
   const root = resolve(options.dir ?? process.cwd());
   const gnomonDir = join(root, ".gnomon");
 
@@ -406,7 +436,13 @@ export function initSurface(options: InitOptions = {}): InitResult {
     );
   }
 
-  let templates = TEMPLATES;
+  // Detection is skipped entirely when copying an existing surface — that
+  // surface already made these choices.
+  let choice: ModelChoice = options.from
+    ? { large: FALLBACK_LARGE, small: FALLBACK_SMALL, detected: [] }
+    : await detectModels();
+
+  let templates = templatesFor(choice);
   if (options.from) {
     const src = resolve(options.from);
     const srcSurface = src.endsWith(".gnomon") ? src : join(src, ".gnomon");
@@ -433,5 +469,5 @@ export function initSurface(options: InitOptions = {}): InitResult {
     written.push(t.path);
   }
 
-  return { gnomonDir, written, skipped };
+  return { gnomonDir, written, skipped, models: options.from ? undefined : choice };
 }

@@ -19,11 +19,11 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
 const help = readFileSync(join(repoRoot, "packages/gnomon-cli/src/index.ts"), "utf-8");
 
-const scaffold = <T>(run: (root: string) => T): T => {
+const scaffold = async <T>(run: (root: string) => T | Promise<T>): Promise<T> => {
   const root = mkdtempSync(join(tmpdir(), "gnomon-docs-"));
   try {
-    initSurface({ dir: root });
-    return run(root);
+    await initSurface({ dir: root });
+    return await run(root);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -73,8 +73,8 @@ describe("every interactive command the README lists is implemented", () => {
 });
 
 describe("documented defaults are the actual defaults", () => {
-  it("a scaffolded surface matches what the README says it ships", () => {
-    scaffold((root) => {
+  it("a scaffolded surface matches what the README says it ships", async () => {
+    await scaffold((root) => {
       const config = loadConfig(root);
 
       // "Approval is on_write: reads are free, writes show a diff first."
@@ -94,8 +94,8 @@ describe("documented defaults are the actual defaults", () => {
     });
   });
 
-  it("the role table in the README matches the scaffolded roles", () => {
-    scaffold((root) => {
+  it("the role table in the README matches the scaffolded roles", async () => {
+    await scaffold((root) => {
       const config = loadConfig(root);
       // | `coordinator` | `read`, `write`, `skill` |
       expect(config.roles.coordinator?.tools).toEqual(["read", "write", "skill"]);
@@ -107,10 +107,10 @@ describe("documented defaults are the actual defaults", () => {
     });
   });
 
-  it("no scaffolded role relies on the invisible max_steps default", () => {
+  it("no scaffolded role relies on the invisible max_steps default", async () => {
     // The README says a role that omits max_steps gets 12. Every shipped role
     // states its own so a reader never has to know that.
-    scaffold((root) => {
+    await scaffold((root) => {
       const config = loadConfig(root);
       for (const role of listRoles(config)) {
         expect(typeof config.roles[role].max_steps, role).toBe("number");
@@ -119,8 +119,8 @@ describe("documented defaults are the actual defaults", () => {
     });
   });
 
-  it("implemented tools are exactly what tools.toml declares", () => {
-    scaffold((root) => {
+  it("implemented tools are exactly what tools.toml declares", async () => {
+    await scaffold((root) => {
       const config = loadConfig(root);
       const set = buildToolSet(config);
       // "Implemented tools: read, bash, write, edit, skill."

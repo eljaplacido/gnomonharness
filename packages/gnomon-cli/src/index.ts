@@ -525,7 +525,7 @@ async function cmdSkill(args: CliArgs): Promise<void> {
 async function cmdInit(args: CliArgs): Promise<void> {
   let result;
   try {
-    result = initSurface({ dir: args.dir, force: args.force, from: args.from });
+    result = await initSurface({ dir: args.dir, force: args.force, from: args.from });
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
@@ -536,10 +536,26 @@ async function cmdInit(args: CliArgs): Promise<void> {
   for (const f of result.written) console.log(`  + .gnomon/${f}`);
   for (const f of result.skipped) console.log(`  · .gnomon/${f} (kept existing)`);
 
+  // Say which models were chosen and why. A tag appearing in roles.toml with
+  // no explanation looks like a decision someone made on your behalf.
+  const models = result.models;
+  if (models) {
+    console.log("");
+    if (models.fallback) {
+      console.log(`Models: ${models.fallback}, so generic starter tags were used:`);
+      console.log(`  ${models.large} for the reasoning roles, ${models.small} for smol`);
+      console.log("  These are very likely wrong for this machine — edit them.");
+    } else {
+      console.log(`Models: detected ${models.detected.length} on this machine.`);
+      console.log(`  ${models.large} for the reasoning roles`);
+      console.log(`  ${models.small} for smol`);
+    }
+  }
+
   console.log("");
   console.log("Next:");
-  console.log("  1. Edit .gnomon/roles.toml — the model tags must be ones you");
-  console.log("     actually have. `ollama list` shows them.");
+  console.log("  1. Check .gnomon/roles.toml — the model tags must be ones you");
+  console.log("     actually have. `/models` lists them.");
   console.log("  2. Run `gnomon prompt` in this directory.");
   console.log("");
   console.log("Approval is on_write: reads are free, writes show a diff first.");
