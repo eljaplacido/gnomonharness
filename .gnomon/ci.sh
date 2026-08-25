@@ -37,8 +37,15 @@ cd "$(dirname "$0")/.."
 # gnomon-natives shells out to the Rust binaries, and `cargo test` builds test
 # harnesses rather than the bin targets — so build them explicitly first. This
 # keeps ci.sh self-contained instead of depending on a prior local build.
+#
+# --bins, not a list of names. The list was written out here and in the
+# workflow, both of them naming two of the four while their comments said "the
+# binaries"; the patch-engine tests then spawned a gnomon-edit nobody had
+# built. A set that cannot be enumerated wrongly is better than one kept in
+# step by hand. Debug, not release: vitest.setup.ts points
+# GNOMON_BIN_OVERRIDE at target/debug.
 echo "═══ Building native binaries ═══"
-cargo build --bin gnomon-surface --bin gnomon-enums 2>&1 | tail -3 \
+cargo build --workspace --bins 2>&1 | tail -3 \
     || fail "Native binary build failed"
 pass "Native binaries built"
 

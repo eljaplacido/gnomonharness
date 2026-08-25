@@ -36,14 +36,14 @@ jobs:
 
       # gnomon-natives shells out to the Rust binaries, so they must exist
       # before its tests run. findBinary() looks in <repo>/target/debug.
-      # All four, not a subset: this step built only surface and enums, so the
-      # patch-engine tests spawned a gnomon-edit that was not there and failed
-      # with an empty stderr. A binary the tests reach for belongs here.
+      # --bins, not a list: this step named two of the four while the comment
+      # said "the Rust binaries", so the patch-engine tests spawned a
+      # gnomon-edit that was not there.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build native binaries
-        run: cargo build --bin gnomon-surface --bin gnomon-enums --bin gnomon-edit --bin gnomon-exec
+        run: cargo build --workspace --bins
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
