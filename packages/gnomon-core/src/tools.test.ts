@@ -10,6 +10,7 @@ import {
   readFileSync,
   mkdirSync,
   existsSync,
+  symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +30,9 @@ import {
   TOOL_FAILED,
   TOOL_OK_EMPTY,
   scanShellCommand,
+  ApprovalGate,
+  ApprovalRequest,
+  Todo,
 } from "./tools.js";
 import { loadConfig, declaredTools, isToolEnabled } from "./config.js";
 import { mapBucket } from "./session.js";
@@ -647,5 +651,652 @@ describe("write_allow confines where a role may write", () => {
   it("a scope for docs/ does not also permit src/docs/", () => {
     expect(globToRegExp("docs/**").test("src/docs/evil.rs")).toBe(false);
     expect(globToRegExp("docs/**").test("docs/ok.md")).toBe(true);
+  });
+});
+
+describe("the surface is not writable by a tool call", () => {
+  // .gnomon/ decides the tool list, the approval gate and every allow-list.
+  // An agent that can write there rewrites the rules it is judged by, and
+  // moves the one hash a session is traced by.
+  beforeEach(() => {
+    mkdirSync(join(root, ".gnomon"), { recursive: true });
+    writeFileSync(join(root, ".gnomon", "policy.toml"), 'gate = "on_write"\n');
+  });
+
+  it("refuses write into .gnomon/, even with the gate open", async () => {
+    const r = await executeTool(
+      "write",
+      { path: ".gnomon/pwned.txt", content: "OWNED" },
+      ctx({ gate: "never" }),
+      offered
+    );
+    expect(r.code).toBe(TOOL_DENIED);
+    expect(existsSync(join(root, ".gnomon", "pwned.txt"))).toBe(false);
+  });
+
+  it("refuses the privilege escalation: editing the approval gate away", async () => {
+    const r = await executeTool(
+      "edit",
+      {
+        path: ".gnomon/policy.toml",
+        old_text: 'gate = "on_write"',
+        new_text: 'gate = "never"',
+      },
+      ctx({ gate: "never" }),
+      offered
+    );
+    expect(r.code).toBe(TOOL_DENIED);
+    expect(readFileSync(join(root, ".gnomon", "policy.toml"), "utf-8")).toContain(
+      'gate = "on_write"'
+    );
+  });
+
+  it("is not bypassable by walking out and back in", async () => {
+    const r = await executeTool(
+      "write",
+      { path: "src/../.gnomon/roles.toml", content: "x" },
+      ctx({ gate: "never" }),
+      offered
+    );
+    expect(r.code).toBe(TOOL_DENIED);
+  });
+
+  it("still allows writes everywhere else", async () => {
+    const r = await executeTool(
+      "write",
+      { path: "src/main.ts", content: "ok" },
+      ctx({ gate: "never" }),
+      offered
+    );
+    expect(r.code).toBe(TOOL_OK);
+  });
+
+  it("detects — does not prevent — a surface moved by bash", async () => {
+    // bash is arbitrary shell, so it is reported rather than blocked.
+    const r = await executeTool(
+      "bash",
+      { command: "printf x >> .gnomon/policy.toml" },
+      ctx({ gate: "never" }),
+      new Set(["bash"])
+    );
+    expect(r.summary).toContain("surface changed");
+    expect(r.surface_drift).toBeDefined();
+    expect(r.surface_drift!.before).not.toBe(r.surface_drift!.after);
+    expect(r.content).toContain("surface hash");
+  });
+
+  it("says nothing when bash leaves the surface alone", async () => {
+    const r = await executeTool(
+      "bash",
+      { command: "echo hello" },
+      ctx({ gate: "never" }),
+      new Set(["bash"])
+    );
+    expect(r.summary).not.toContain("surface changed");
+    expect(r.surface_drift).toBeUndefined();
+  });
+});
+
+describe("glob and grep — search without spending an approval", () => {
+  const search = new Set(["read", "glob", "grep", "bash"]);
+
+  beforeEach(() => {
+    mkdirSync(join(root, "src", "db"), { recursive: true });
+    mkdirSync(join(root, "src", "util"), { recursive: true });
+    mkdirSync(join(root, "node_modules", "junk"), { recursive: true });
+    writeFileSync(join(root, "src", "db", "conn.py"), "TIMEOUT_SECONDS = 30\ndef f(): pass\n");
+    writeFileSync(join(root, "src", "util", "retry.py"), "TIMEOUT_SECONDS = 5\n");
+    writeFileSync(join(root, "README.md"), "no symbols here\n");
+    writeFileSync(join(root, "node_modules", "junk", "x.py"), "TIMEOUT_SECONDS = 999\n");
+  });
+
+  it("grep finds a symbol across the tree as path:line:text", async () => {
+    const r = await executeTool("grep", { pattern: "TIMEOUT_SECONDS" }, ctx(), search);
+    expect(r.code).toBe(TOOL_OK);
+    expect(r.content).toContain("src/db/conn.py:1:TIMEOUT_SECONDS = 30");
+    expect(r.content).toContain("src/util/retry.py:1:TIMEOUT_SECONDS = 5");
+  });
+
+  it("never walks node_modules, so a dependency cannot answer for the repo", async () => {
+    const r = await executeTool("grep", { pattern: "TIMEOUT_SECONDS" }, ctx(), search);
+    expect(r.content).not.toContain("node_modules");
+  });
+
+  it("search costs no approval under on_write — that is the point of it", async () => {
+    // A role with no bash could not previously find a file it had not been
+    // told the name of, and a role with bash spent an approval on `find` to
+    // do what is plainly a read. Under `always` search does ask, because
+    // `always` means consent for every action; that is covered separately.
+    let asked = false;
+    const c = ctx({
+      gate: "on_write",
+      approve: async () => { asked = true; return true; },
+    });
+    await executeTool("grep", { pattern: "TIMEOUT" }, c, search);
+    await executeTool("glob", { pattern: "**/*.py" }, c, search);
+    expect(asked).toBe(false);
+  });
+
+  it("glob matches by path pattern and sorts deterministically", async () => {
+    const r = await executeTool("glob", { pattern: "**/*.py" }, ctx(), search);
+    expect(r.code).toBe(TOOL_OK);
+    const files = r.content.split("\n").filter(Boolean);
+    expect(files).toEqual(["src/db/conn.py", "src/util/retry.py"]);
+    expect([...files].sort()).toEqual(files);
+  });
+
+  it("grep can be narrowed by include", async () => {
+    const r = await executeTool(
+      "grep",
+      { pattern: "TIMEOUT_SECONDS", include: "**/retry.py" },
+      ctx(),
+      search
+    );
+    expect(r.content).toContain("src/util/retry.py");
+    expect(r.content).not.toContain("conn.py");
+  });
+
+  it("a miss is an empty result, not a broken tool", async () => {
+    const r = await executeTool("grep", { pattern: "NOTHING_HERE" }, ctx(), search);
+    expect(mapBucket(r.code)).toBe("result");
+    expect(r.summary).toContain("0 matches");
+  });
+
+  it("an invalid regex is refused with the reason, not thrown", async () => {
+    const r = await executeTool("grep", { pattern: "([" }, ctx(), search);
+    expect(r.code).toBe(TOOL_FAILED);
+    expect(r.content).toContain("not a valid regular expression");
+  });
+
+  it("cannot search outside the sandbox", async () => {
+    const r = await executeTool("grep", { pattern: "x", path: "../.." }, ctx(), search);
+    expect(r.code).toBe(TOOL_OUT_OF_SANDBOX);
+  });
+
+  it("is withheld from a role that does not declare it", async () => {
+    const r = await executeTool("grep", { pattern: "x" }, ctx(), new Set(["read"]));
+    expect(r.code).toBe(TOOL_NOT_DECLARED);
+    expect(r.content).toContain("not available to this role");
+  });
+});
+
+describe("the sandbox follows symlinks, not just `..`", () => {
+  // resolve() is string algebra: it collapses `..` and nothing else, so a
+  // symlink inside the repository used to reach anywhere on the filesystem
+  // while sandbox was set to "confined".
+  let outside: string;
+
+  beforeEach(() => {
+    outside = mkdtempSync(join(tmpdir(), "gnomon-outside-"));
+    writeFileSync(join(outside, "secret.txt"), "SECRET_TOKEN=abc123\n");
+  });
+
+  afterEach(() => {
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  it("refuses a read through a symlink pointing out of the repo", async () => {
+    symlinkSync(join(outside, "secret.txt"), join(root, "link.txt"));
+    const r = await executeTool("read", { path: "link.txt" }, ctx(), offered);
+    expect(r.code).toBe(TOOL_OUT_OF_SANDBOX);
+    expect(r.content).not.toContain("SECRET_TOKEN");
+  });
+
+  it("refuses a write through a symlinked directory", async () => {
+    symlinkSync(outside, join(root, "escape"), "dir");
+    const r = await executeTool(
+      "write",
+      { path: "escape/pwned.txt", content: "OWNED" },
+      ctx({ gate: "never" }),
+      offered
+    );
+    expect(r.code).toBe(TOOL_OUT_OF_SANDBOX);
+    expect(existsSync(join(outside, "pwned.txt"))).toBe(false);
+  });
+
+  it("a symlink that stays inside the repo is still allowed", async () => {
+    mkdirSync(join(root, "real"), { recursive: true });
+    writeFileSync(join(root, "real", "f.txt"), "inside\n");
+    symlinkSync(join(root, "real"), join(root, "alias"), "dir");
+    const r = await executeTool("read", { path: "alias/f.txt" }, ctx(), offered);
+    expect(r.code).toBe(TOOL_OK);
+    expect(r.content).toContain("inside");
+  });
+
+  it("a checkout reached through a symlinked parent is not an escape", async () => {
+    // A home directory on another volume, or a macOS /tmp that is really
+    // /private/tmp. Realpathing the target but not the root would make every
+    // path in such a checkout look like it pointed outside.
+    const alias = join(outside, "repo-alias");
+    symlinkSync(root, alias, "dir");
+    writeFileSync(join(root, "inside.txt"), "ok\n");
+    expect(resolveInRoot(alias, "inside.txt", "confined")).not.toBeNull();
+  });
+
+  it("sandbox=off still opts out entirely", () => {
+    symlinkSync(join(outside, "secret.txt"), join(root, "link2.txt"));
+    expect(resolveInRoot(root, "link2.txt", "off")).not.toBeNull();
+  });
+
+  it("search does not walk out through a symlink either", async () => {
+    symlinkSync(outside, join(root, "escape2"), "dir");
+    const r = await executeTool(
+      "grep",
+      { pattern: "SECRET_TOKEN" },
+      ctx(),
+      new Set(["grep"])
+    );
+    expect(r.content).not.toContain("SECRET_TOKEN=abc123");
+  });
+});
+
+describe("the approval gate is three distinct modes", () => {
+  // always → consent for every action. on_write → consent per change.
+  // never → unattended. `always` used to be reached only from the four
+  // mutating tools, which are the same four `on_write` stops, so the two
+  // settings behaved identically and one of them was a dial that turned
+  // nothing.
+  const all = new Set(["read", "glob", "grep", "compute", "bash", "write", "edit"]);
+
+  beforeEach(() => {
+    writeFileSync(join(root, "f.txt"), "one\ntwo\n");
+  });
+
+  /** Run one call under `gate`, recording whether sign-off was requested. */
+  async function under(gate: ApprovalGate, tool: string, args: Record<string, unknown>) {
+    let asked = false;
+    const r = await executeTool(
+      tool,
+      args,
+      ctx({ gate, approve: async () => { asked = true; return true; } }),
+      all
+    );
+    return { asked, r };
+  }
+
+  const READS: Array<[string, Record<string, unknown>]> = [
+    ["read", { path: "f.txt" }],
+    ["glob", { pattern: "**/*.txt" }],
+    ["grep", { pattern: "one" }],
+    ["compute", { expression: "2+2" }],
+  ];
+  const WRITES: Array<[string, Record<string, unknown>]> = [
+    ["write", { path: "w.txt", content: "x" }],
+    ["edit", { path: "f.txt", old_text: "one", new_text: "1" }],
+    ["bash", { command: "echo hi" }],
+  ];
+
+  it("always: every call asks, reads and searches included", async () => {
+    for (const [tool, args] of [...READS, ...WRITES]) {
+      const { asked } = await under("always", tool, args);
+      expect(asked, `${tool} should ask under always`).toBe(true);
+    }
+  });
+
+  it("on_write: only calls that can change something ask", async () => {
+    for (const [tool, args] of READS) {
+      const { asked } = await under("on_write", tool, args);
+      expect(asked, `${tool} should not ask under on_write`).toBe(false);
+    }
+    for (const [tool, args] of WRITES) {
+      const { asked } = await under("on_write", tool, args);
+      expect(asked, `${tool} should ask under on_write`).toBe(true);
+    }
+  });
+
+  it("never: nothing asks", async () => {
+    for (const [tool, args] of [...READS, ...WRITES]) {
+      const { asked } = await under("never", tool, args);
+      expect(asked, `${tool} should not ask under never`).toBe(false);
+    }
+  });
+
+  it("a declined read under always is a refusal that returns no content", async () => {
+    const r = await executeTool(
+      "read",
+      { path: "f.txt" },
+      ctx({ gate: "always", approve: async () => false }),
+      all
+    );
+    expect(r.code).toBe(TOOL_DENIED);
+    expect(r.content).not.toContain("two");
+  });
+
+  it("always and on_write are not the same setting", async () => {
+    // The regression this exists to catch.
+    const strict = await under("always", "read", { path: "f.txt" });
+    const loose = await under("on_write", "read", { path: "f.txt" });
+    expect(strict.asked).not.toBe(loose.asked);
+  });
+});
+
+describe("todo — the checklist a long run is steered by", () => {
+  const offer = new Set(["todo"]);
+
+  /** A context with a real store, so a write can be read back. */
+  function withStore(over: Partial<ToolContext> = {}) {
+    let items: Todo[] = [];
+    const c = ctx({
+      todos: { list: () => items, replace: (t) => { items = t; } },
+      ...over,
+    });
+    return { c, read: () => items };
+  }
+
+  it("replaces the whole list and reports progress", async () => {
+    const { c, read } = withStore();
+    const r = await executeTool(
+      "todo",
+      { todos: [
+        { content: "read the config", status: "completed" },
+        { content: "write the test", status: "in_progress" },
+        { content: "implement", status: "pending" },
+      ] },
+      c,
+      offer
+    );
+    expect(r.code).toBe(TOOL_OK);
+    expect(r.summary).toContain("1/3 done");
+    expect(r.content).toContain("[x] read the config");
+    expect(r.content).toContain("[>] write the test");
+    expect(r.content).toContain("[ ] implement");
+    expect(read()).toHaveLength(3);
+  });
+
+  it("replacing is idempotent — the same list twice is the same state", async () => {
+    // Replace rather than patch: a patch protocol needs identifiers, and
+    // identifiers a model invents mismatch a list it has since reordered.
+    const { c, read } = withStore();
+    const todos = [{ content: "one", status: "pending" }];
+    await executeTool("todo", { todos }, c, offer);
+    await executeTool("todo", { todos }, c, offer);
+    expect(read()).toEqual([{ content: "one", status: "pending" }]);
+  });
+
+  it("allows at most one item in progress", async () => {
+    // A list with four things in progress is a list nobody is steering by.
+    const { c, read } = withStore();
+    const r = await executeTool(
+      "todo",
+      { todos: [
+        { content: "a", status: "in_progress" },
+        { content: "b", status: "in_progress" },
+      ] },
+      c,
+      offer
+    );
+    expect(r.code).toBe(TOOL_FAILED);
+    expect(r.content).toContain("one thing is worked");
+    expect(read()).toEqual([]); // rejected, not half-applied
+  });
+
+  it("rejects a bad status rather than coercing it", async () => {
+    const { c } = withStore();
+    const r = await executeTool(
+      "todo",
+      { todos: [{ content: "a", status: "nearly" }] },
+      c,
+      offer
+    );
+    expect(r.code).toBe(TOOL_FAILED);
+    expect(r.content).toContain("not a status");
+  });
+
+  it("costs no approval under on_write — it changes no file", async () => {
+    let asked = false;
+    const { c } = withStore({
+      gate: "on_write",
+      approve: async () => { asked = true; return true; },
+    });
+    await executeTool("todo", { todos: [{ content: "a", status: "pending" }] }, c, offer);
+    expect(asked).toBe(false);
+  });
+});
+
+describe("webfetch — the tool that makes [sandbox] network real", () => {
+  const offer = new Set(["webfetch"]);
+
+  it("refuses everything when the surface disables the network", async () => {
+    // The key was declared and unenforced; the startup banner said so. Now it
+    // decides, and gaining network reach is a visible edit to the surface.
+    const r = await executeTool(
+      "webfetch",
+      { url: "https://example.com" },
+      ctx({ network: false, gate: "never" }),
+      offer
+    );
+    expect(r.code).toBe(TOOL_DENIED);
+    expect(r.content).toContain("network = false");
+  });
+
+  it("refuses loopback and private addresses — SSRF", async () => {
+    // A URL a model chose is attacker-influenced wherever the model reads
+    // anything it did not write. Unchecked, this reaches services the machine
+    // can see and the network cannot.
+    for (const url of [
+      "http://127.0.0.1:11434/api/tags",
+      "http://localhost:8080/",
+      "http://169.254.169.254/latest/meta-data/",
+      "http://10.0.0.5/",
+      "http://192.168.1.1/",
+      "http://172.16.0.1/",
+      "http://[::1]/",
+    ]) {
+      const r = await executeTool(
+        "webfetch",
+        { url },
+        ctx({ network: true, gate: "never" }),
+        offer
+      );
+      expect(r.code, url).toBe(TOOL_DENIED);
+      expect(r.summary, url).toContain("private address");
+    }
+  });
+
+  it("refuses schemes that are not http(s)", async () => {
+    // file: would read the filesystem with none of the checks `read` applies.
+    for (const url of ["file:///etc/passwd", "ftp://example.com/x", "data:text/html,x"]) {
+      const r = await executeTool(
+        "webfetch",
+        { url },
+        ctx({ network: true, gate: "never" }),
+        offer
+      );
+      expect(r.code, url).toBe(TOOL_DENIED);
+    }
+  });
+
+  it("is gated like a write — the request leaves the machine", async () => {
+    let asked = false;
+    await executeTool(
+      "webfetch",
+      { url: "http://127.0.0.1/" },
+      ctx({
+        network: true,
+        gate: "on_write",
+        approve: async () => { asked = true; return false; },
+      }),
+      offer
+    );
+    // Blocked before the prompt here (private address), which is the stronger
+    // guarantee: the address check runs before anyone is asked.
+    expect(asked).toBe(false);
+    expect(needsApproval("webfetch", "on_write")).toBe(true);
+  });
+});
+
+describe("task — delegation crosses a capability boundary", () => {
+  const offer = new Set(["task"]);
+
+  function delegating(over: Partial<ToolContext> = {}) {
+    const calls: Array<{ role: string; instruction: string }> = [];
+    const c = ctx({
+      delegate: {
+        depth: 0,
+        roles: () => ["implementor", "verifier"],
+        run: async (role, instruction) => {
+          calls.push({ role, instruction });
+          return { content: "done", code: 0, toolSteps: 2, model: "m" };
+        },
+      },
+      ...over,
+    });
+    return { c, calls };
+  }
+
+  it("runs the sub-turn and returns only its answer", async () => {
+    const { c, calls } = delegating({ gate: "never" });
+    const r = await executeTool(
+      "task",
+      { role: "verifier", instruction: "run the suite" },
+      c,
+      offer
+    );
+    expect(r.code).toBe(TOOL_OK);
+    expect(calls).toEqual([{ role: "verifier", instruction: "run the suite" }]);
+    expect(r.content).toContain("done");
+  });
+
+  it("cannot nest — a sub-turn may not start another", async () => {
+    const { c } = delegating({ gate: "never" });
+    (c.delegate as any).depth = 1;
+    const r = await executeTool(
+      "task",
+      { role: "verifier", instruction: "again" },
+      c,
+      offer
+    );
+    expect(r.code).toBe(TOOL_DENIED);
+    expect(r.content).toContain("cannot start another");
+  });
+
+  it("refuses a role the surface does not define", async () => {
+    const { c, calls } = delegating({ gate: "never" });
+    const r = await executeTool(
+      "task",
+      { role: "root", instruction: "x" },
+      c,
+      offer
+    );
+    expect(r.code).toBe(TOOL_FAILED);
+    expect(calls).toEqual([]);
+  });
+
+  it("carries the sub-turn's outcome rather than reporting success", async () => {
+    // A delegated refusal is a refusal, not a successful delegation of one.
+    const c = ctx({
+      gate: "never",
+      delegate: {
+        depth: 0,
+        roles: () => ["verifier"],
+        run: async () => ({ content: "declined", code: 2, toolSteps: 1, model: "m" }),
+      },
+    });
+    const r = await executeTool("task", { role: "verifier", instruction: "x" }, c, offer);
+    expect(mapBucket(r.code)).toBe("refusal");
+  });
+
+  it("is gated: delegation is the moment capability changes hands", async () => {
+    let seen: ApprovalRequest | null = null;
+    const { c, calls } = delegating({
+      gate: "on_write",
+      approve: async (req) => { seen = req; return false; },
+    });
+    const r = await executeTool(
+      "task",
+      { role: "implementor", instruction: "write it" },
+      c,
+      offer
+    );
+    expect(r.code).toBe(TOOL_DENIED);
+    expect(calls).toEqual([]);
+    expect(seen!.summary).toContain("implementor");
+  });
+});
+
+describe("bash_deny — the guardrail on operations that are not undoable", () => {
+  // An allow-list cannot say "everything except three catastrophes", and that
+  // is the shape the implementing role needs: unrestricted bash for builds and
+  // suites nobody can enumerate, minus force-pushing over a release branch.
+  const DENY = [
+    String.raw`\bgit\s+push\b[^|;&]*\s(--force|-f)\b`,
+    String.raw`\bgit\s+push\b[^|;&]*\s(main|master|release)\b`,
+    String.raw`\bgit\s+push\b[^|;&]*--delete\b`,
+    String.raw`\bgit\s+branch\b[^|;&]*\s-D\b`,
+  ];
+  const c = () => ctx({ gate: "never", bashDeny: DENY });
+  const offer = new Set(["bash"]);
+
+  const run = (command: string) => executeTool("bash", { command }, c(), offer);
+
+  it("refuses the operations that lose someone else's work", async () => {
+    for (const cmd of [
+      "git push --force origin feature",
+      "git push -f",
+      "git push origin main",
+      "git push origin master",
+      "git push origin --delete feature",
+      "git branch -D feature",
+    ]) {
+      const r = await run(cmd);
+      expect(r.code, cmd).toBe(TOOL_DENIED);
+      expect(r.summary, cmd).toContain("bash_deny");
+    }
+  });
+
+  it("leaves ordinary work alone", async () => {
+    // Over-blocking is its own failure: a guardrail people route around is
+    // worse than none, because it teaches them the harness is in the way.
+    for (const cmd of [
+      "git status",
+      "git push origin feature/thing",
+      "git push -u origin my-branch",
+      "git branch -d merged-branch",
+      "git commit -m 'main point of the change'",
+      "cargo test --all",
+      "echo pushing to main later",
+    ]) {
+      const r = await run(cmd);
+      expect(r.code, cmd).not.toBe(TOOL_DENIED);
+    }
+  });
+
+  it("catches a denied command hidden behind a permitted one", async () => {
+    const r = await run("git status && git push --force origin main");
+    expect(r.code).toBe(TOOL_DENIED);
+  });
+
+  it("deny wins over allow", async () => {
+    const r = await executeTool(
+      "bash",
+      { command: "git push --force origin main" },
+      ctx({ gate: "never", bashAllow: ["^git\\s"], bashDeny: DENY }),
+      offer
+    );
+    expect(r.code).toBe(TOOL_DENIED);
+    expect(r.summary).toContain("bash_deny");
+  });
+
+  it("a deny pattern that will not compile refuses rather than permits", async () => {
+    // The opposite of bash_allow, deliberately: refusing a safe command costs
+    // an error message, running an unsafe one costs a branch.
+    const r = await executeTool(
+      "bash",
+      { command: "echo hi" },
+      ctx({ gate: "never", bashDeny: ["(["] }),
+      offer
+    );
+    expect(r.code).toBe(TOOL_DENIED);
+    expect(r.content).toContain("not a valid regular expression");
+  });
+
+  it("does nothing when the role declares no deny list", async () => {
+    const r = await executeTool(
+      "bash",
+      { command: "git push --force origin main" },
+      ctx({ gate: "never" }),
+      offer
+    );
+    expect(r.code).not.toBe(TOOL_DENIED);
   });
 });

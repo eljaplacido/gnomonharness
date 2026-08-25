@@ -12,7 +12,7 @@ temperature = 0.2
 top_p = 0.9
 max_steps = 20
 max_steps_total = 160
-tools = ["read", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "task", "bash"]
 description = "Hardest reasoning, lowest call volume"
 
 [roles.plan.fallback]
@@ -26,7 +26,21 @@ top_p = 0.95
 # Surveying a repository costs a dozen calls before any work starts.
 max_steps = 28
 max_steps_total = 224
-tools = ["read", "write", "edit", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "write", "edit", "bash"]
+# Operations whose damage is neither local nor undoable by re-running
+# something. This role has unrestricted bash by necessity — it runs builds,
+# installers and suites nobody can enumerate ahead of time — so the guardrail
+# is a deny-list rather than an allow-list. Deny wins over allow.
+#
+# Not a substitute for branch protection on the remote: that is the control
+# that binds everyone, and this one only binds the agent. It is the local half.
+bash_deny = [
+  '\bgit\s+push\b[^|;&]*\s(--force|-f)\b',            # force-push, any branch
+  '\bgit\s+push\b[^|;&]*\s(main|master|release)\b',   # straight onto a release branch
+  '\bgit\s+push\b[^|;&]*--delete\b',                   # deleting a branch on the remote
+  '\bgit\s+branch\b[^|;&]*\s-D\b',                    # discarding an unmerged branch
+]
+
 description = "Highest token volume — this is where local hosting saves money"
 
 [roles.implement.fallback]
@@ -39,7 +53,7 @@ temperature = 0.1
 top_p = 0.9
 max_steps = 16
 max_steps_total = 128
-tools = ["read", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "bash"]
 description = "Must not share context with the implementer — distinct model"
 
 [roles.smol]
@@ -48,7 +62,7 @@ temperature = 0.2
 top_p = 0.95
 max_steps = 8
 max_steps_total = 64
-tools = ["read"]
+tools = ["read", "glob", "grep", "compute", "todo"]
 description = "Summarisation, compaction, commit messages"
 
 # ── specify → contract → test → implement → verify ─────────────────────────
@@ -61,7 +75,7 @@ temperature = 0.2
 top_p = 0.9
 max_steps = 20
 max_steps_total = 160
-tools = ["read", "write", "skill"]
+tools = ["read", "glob", "grep", "compute", "todo", "task", "write", "skill"]
 # No edit, so it cannot revise code in place, and write_allow so it cannot
 # create it either. Not .gnomon/**: skill proposals go to
 # .gnomon/skills/proposed/ through the skill tool, and accepting one is a
@@ -76,7 +90,21 @@ temperature = 0.3
 top_p = 0.95
 max_steps = 24
 max_steps_total = 192
-tools = ["read", "write", "edit", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "write", "edit", "bash"]
+# Operations whose damage is neither local nor undoable by re-running
+# something. This role has unrestricted bash by necessity — it runs builds,
+# installers and suites nobody can enumerate ahead of time — so the guardrail
+# is a deny-list rather than an allow-list. Deny wins over allow.
+#
+# Not a substitute for branch protection on the remote: that is the control
+# that binds everyone, and this one only binds the agent. It is the local half.
+bash_deny = [
+  '\bgit\s+push\b[^|;&]*\s(--force|-f)\b',            # force-push, any branch
+  '\bgit\s+push\b[^|;&]*\s(main|master|release)\b',   # straight onto a release branch
+  '\bgit\s+push\b[^|;&]*--delete\b',                   # deleting a branch on the remote
+  '\bgit\s+branch\b[^|;&]*\s-D\b',                    # discarding an unmerged branch
+]
+
 description = "Tests first, then the code that satisfies them"
 
 [roles.verifier]
@@ -86,7 +114,7 @@ temperature = 0.1
 top_p = 0.9
 max_steps = 20
 max_steps_total = 160
-tools = ["read", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "bash"]
 # `bash` can write anything, so `tools` alone cannot make this role
 # read-only. This list is what actually constrains it: the suite can be run,
 # nothing else. Remove it and the verifier can alter what it judges.

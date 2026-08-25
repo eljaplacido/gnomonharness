@@ -160,7 +160,7 @@ chain = true
 [ui]
 # What the terminal shows. Declared here so every checkout renders the same.
 # Runtime /meta and /think override these for the session only.
-meta = ["turn", "role", "model", "bucket", "duration", "context", "tools"]
+meta = ["turn", "role", "model", "bucket", "duration", "tokens", "context", "tools"]
 meta_style = "line"               # line | compact
 think = "collapse"                # hide | collapse | show
 spinner = true
@@ -204,7 +204,7 @@ max_steps_total = 160
 # Widen this the moment it is wrong for your repo. A scope that refuses work
 # you actually wanted is a scope you will delete in frustration; a scope that
 # matches your layout is one you keep.
-tools = ["read", "write", "skill"]
+tools = ["read", "glob", "grep", "compute", "todo", "task", "write", "skill"]
 # Not .gnomon/**. The skill tool writes proposals to .gnomon/skills/proposed/
 # through its own path, and accepting one is a human act that changes the
 # surface hash. Letting a role reach .gnomon/skills/ with plain write would
@@ -219,7 +219,21 @@ temperature = 0.3
 top_p = 0.95
 max_steps = 32
 max_steps_total = 256
-tools = ["read", "write", "edit", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "write", "edit", "bash"]
+# Operations whose damage is neither local nor undoable by re-running
+# something. This role has unrestricted bash by necessity — it runs builds,
+# installers and suites nobody can enumerate ahead of time — so the guardrail
+# is a deny-list rather than an allow-list. Deny wins over allow.
+#
+# Not a substitute for branch protection on the remote: that is the control
+# that binds everyone, and this one only binds the agent. It is the local half.
+bash_deny = [
+  '\\bgit\\s+push\\b[^|;&]*\\s(--force|-f)\\b',            # force-push, any branch
+  '\\bgit\\s+push\\b[^|;&]*\\s(main|master|release)\\b',   # straight onto a release branch
+  '\\bgit\\s+push\\b[^|;&]*--delete\\b',                   # deleting a branch on the remote
+  '\\bgit\\s+branch\\b[^|;&]*\\s-D\\b',                    # discarding an unmerged branch
+]
+
 description = "Tests first, then the code that satisfies them"
 
 [roles.verifier]
@@ -231,7 +245,7 @@ max_steps = 20
 max_steps_total = 160
 # No write, no edit. A verifier that can edit can make a failing suite pass
 # by changing the suite, so the capability is simply absent.
-tools = ["read", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "bash"]
 # 'bash' can write anything, so 'tools' alone cannot make this role
 # read-only. This list is what actually constrains it: the suite can be run,
 # nothing else. Remove it and the verifier can alter what it judges.
@@ -250,7 +264,7 @@ temperature = 0.2
 top_p = 0.9
 max_steps = 20
 max_steps_total = 160
-tools = ["read", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "task", "bash"]
 description = "Hardest reasoning, lowest call volume"
 
 [roles.implement]
@@ -261,8 +275,22 @@ top_p = 0.95
 max_steps = 28
 # Stated explicitly. An omitted list means every declared tool, which handed
 # this role \`skill\` as well and made "the coordinator authors skills" untrue.
-tools = ["read", "write", "edit", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "write", "edit", "bash"]
 max_steps_total = 224
+# Operations whose damage is neither local nor undoable by re-running
+# something. This role has unrestricted bash by necessity — it runs builds,
+# installers and suites nobody can enumerate ahead of time — so the guardrail
+# is a deny-list rather than an allow-list. Deny wins over allow.
+#
+# Not a substitute for branch protection on the remote: that is the control
+# that binds everyone, and this one only binds the agent. It is the local half.
+bash_deny = [
+  '\\bgit\\s+push\\b[^|;&]*\\s(--force|-f)\\b',            # force-push, any branch
+  '\\bgit\\s+push\\b[^|;&]*\\s(main|master|release)\\b',   # straight onto a release branch
+  '\\bgit\\s+push\\b[^|;&]*--delete\\b',                   # deleting a branch on the remote
+  '\\bgit\\s+branch\\b[^|;&]*\\s-D\\b',                    # discarding an unmerged branch
+]
+
 description = "Highest token volume — where local hosting pays off"
 
 [roles.critique]
@@ -272,7 +300,7 @@ temperature = 0.1
 top_p = 0.9
 max_steps = 16
 max_steps_total = 128
-tools = ["read", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "bash"]
 description = "Must not share context with the implementer"
 
 [roles.smol]
@@ -281,7 +309,7 @@ endpoint = "local"
 temperature = 0.2
 top_p = 0.95
 max_steps = 6
-tools = ["read"]
+tools = ["read", "glob", "grep", "compute", "todo"]
 max_steps_total = 48
 description = "Summarisation, compaction, commit messages"
 
@@ -305,6 +333,38 @@ name = "bash"
 description = "Execute a shell command in the project root"
 enabled = true
 timeout_seconds = 120
+
+[[tools]]
+name = "todo"
+description = "Keep a checklist for this session. Replace the whole list each time."
+enabled = true
+
+[[tools]]
+name = "task"
+description = "Run a sub-turn under another role, with its own context. It gets that role's tools."
+enabled = true
+
+# Reaches the network, so it is gated like a write and refused outright when
+# [sandbox] network = false in policy.toml. Off by default for that reason.
+[[tools]]
+name = "webfetch"
+description = "Retrieve an http(s) URL as text"
+enabled = false
+
+[[tools]]
+name = "compute"
+description = "Evaluate arithmetic exactly. Use this instead of calculating in your head."
+enabled = true
+
+[[tools]]
+name = "glob"
+description = "Find files by path pattern, e.g. **/*.ts"
+enabled = true
+
+[[tools]]
+name = "grep"
+description = "Find lines matching a regular expression. Returns path:line:text."
+enabled = true
 
 [[tools]]
 name = "edit"
@@ -334,6 +394,14 @@ enabled = true
 const POLICY_TOML = `# Policy: approval gates, sandbox level, edit format.
 
 [approval]
+# The autonomy dial:
+#   always   — every tool call asks, reads and searches included.
+#              Consent after every action.
+#   on_write — only calls that can change something ask. Consent per change.
+#   never    — nothing asks. Unattended.
+#
+# Non-interactive runs have nobody to ask, so a gated call is refused rather
+# than assumed; \`gnomon task --yes\` is what stands in for a person.
 gate = "on_write"                  # never | on_write | always
 
 [sandbox]
@@ -355,7 +423,12 @@ Rules:
 - No machine-scoped config. Everything lives in .gnomon/.
 - Every step records its outcome: result, refusal, or apparatus_failure.
 - Use the declared tools to inspect the repository. Do not guess at file
-  contents, paths, or command output — read them.
+  contents, paths, or command output — read them. Use \`grep\` and \`glob\` to
+  find things; guessing a filename costs a round trip and usually misses.
+- Do not calculate in your head. Any arithmetic that decides an answer —
+  totals, percentages, differences, unit conversions — goes through the
+  \`compute\` tool. A number you produced without computing it is a guess that
+  reads exactly like a fact.
 - If a tool is unreachable, record a refusal naming the tool. Do not
   silently shorten the tool list.
 - State your plan, execute it, report what happened.

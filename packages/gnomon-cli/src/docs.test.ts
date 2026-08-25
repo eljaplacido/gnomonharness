@@ -97,13 +97,42 @@ describe("documented defaults are the actual defaults", () => {
   it("the role table in the README matches the scaffolded roles", async () => {
     await scaffold((root) => {
       const config = loadConfig(root);
-      // | `coordinator` | `read`, `write`, `skill` |
-      expect(config.roles.coordinator?.tools).toEqual(["read", "write", "skill"]);
-      // | `implementor` | read, write, edit, bash |
-      expect(config.roles.implementor?.tools).toEqual(["read", "write", "edit", "bash"]);
-      // | `verifier` | read, bash (allow-listed) |
-      expect(config.roles.verifier?.tools).toEqual(["read", "bash"]);
+      // | `coordinator` | `read`, `glob`, `grep`, `write`, `skill` |
+      expect(config.roles.coordinator?.tools).toEqual([
+        "read", "glob", "grep", "compute", "todo", "task", "write", "skill",
+      ]);
+      // | `implementor` | read, glob, grep, write, edit, bash |
+      expect(config.roles.implementor?.tools).toEqual([
+        "read", "glob", "grep", "compute", "todo", "write", "edit", "bash",
+      ]);
+      // | `verifier` | read, glob, grep, bash (allow-listed) |
+      expect(config.roles.verifier?.tools).toEqual([
+        "read", "glob", "grep", "compute", "todo", "bash",
+      ]);
+      // Search is read-only, so giving it to the verifier widens nothing: it
+      // still cannot write, and it no longer needs bash to find a file.
+      expect(config.roles.verifier?.tools).not.toContain("write");
+      expect(config.roles.verifier?.tools).not.toContain("edit");
       expect(config.roles.verifier?.bash_allow?.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("a read-only role cannot delegate its way to a write", async () => {
+    // `task` runs a sub-turn under another role, with that role's tools. Give
+    // it to the verifier and "cannot alter what it judges" stops being true by
+    // one indirection: it delegates to the implementor and the code changes.
+    // A generated template did exactly that. The separation is the product, so
+    // it is asserted rather than assumed.
+    await scaffold((root) => {
+      const config = loadConfig(root);
+      for (const role of ["verifier", "critique", "smol"]) {
+        expect(config.roles[role]?.tools, role).not.toContain("task");
+        expect(config.roles[role]?.tools, role).not.toContain("write");
+        expect(config.roles[role]?.tools, role).not.toContain("edit");
+      }
+      // The roles that coordinate are the ones that may delegate.
+      expect(config.roles.coordinator?.tools).toContain("task");
+      expect(config.roles.plan?.tools).toContain("task");
     });
   });
 
@@ -123,10 +152,13 @@ describe("documented defaults are the actual defaults", () => {
     await scaffold((root) => {
       const config = loadConfig(root);
       const set = buildToolSet(config);
-      // "Implemented tools: read, bash, write, edit, skill."
+      // The README's tool table, minus `webfetch`: it is declared with
+      // enabled = false, because reaching the network is opt-in.
       expect(set.schemas.map((t) => t.function.name).sort()).toEqual(
-        ["bash", "edit", "read", "skill", "write"]
+        ["bash", "compute", "edit", "glob", "grep", "read", "skill", "task", "todo", "write"]
       );
+      // Declared-but-disabled is reported, never silently dropped.
+      expect(set.disabled).toContain("webfetch");
       expect(set.unimplemented).toEqual([]);
     });
   });
@@ -146,7 +178,14 @@ describe("the README does not promise what is not built", () => {
     // than the gaps themselves.
     expect(readme).toContain("No MCP");
     expect(readme).toContain("No role chain");
-    expect(readme).toMatch(/network = false.*not enforced|not enforced.*network/s);
+    expect(readme).toContain("No cloud or background execution");
+    // `network = false` is enforced for `webfetch` and is not process
+    // isolation. Both halves have to be stated: claiming enforcement without
+    // the bash caveat would promise isolation that no allow-list over shell
+    // text can deliver.
+    expect(readme).toMatch(/network = false.*webfetch/s);
+    expect(readme).toMatch(/not process\s+isolation/s);
+    expect(readme).toMatch(/`bash`[^.]*reaches the network|curl/s);
   });
 });
 

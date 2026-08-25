@@ -28,7 +28,7 @@ import {
 } from "node:fs";
 import { join, isAbsolute, resolve } from "node:path";
 import { GnomonConfig } from "./config.js";
-import type { PromptExchange } from "./prompt_loop.js";
+import type { Todo, PromptExchange } from "./prompt_loop.js";
 
 export const SESSION_FORMAT = 1;
 
@@ -70,6 +70,14 @@ export interface SessionSnapshot {
   currentRole: string;
   /** Running compaction summary, if any */
   summary?: string;
+  /**
+   * The checklist as the `todo` tool last left it.
+   *
+   * Saved with the conversation rather than in `.gnomon/`: it changes on most
+   * turns, and anything that changes on most turns cannot live in a surface
+   * whose hash is meant to identify a configuration.
+   */
+  todos?: Todo[];
   exchanges: PromptExchange[];
 }
 

@@ -176,6 +176,49 @@ describe("gnomon-core prompt_loop", () => {
       expect(built.included).toBe(1);
     });
 
+    it("replays a refused turn — the model said it, and the retry refers to it", () => {
+      // Denying a write and then saying "put it in src/ instead" is the most
+      // common thing a person does after a gate fires. If the refused turn is
+      // dropped, "it" has no referent and the model starts over.
+      const state = mkState([
+        {
+          input: "create notes.txt",
+          output: "I tried to write notes.txt and the write was declined.",
+          code: 2,
+        },
+      ]);
+      const built = promptLoop.buildMessages(state, "SYS", "put it in src/ instead");
+      const contents = built.messages.map((m) => m.content);
+      expect(contents).toContain("create notes.txt");
+      expect(contents).toContain(
+        "I tried to write notes.txt and the write was declined."
+      );
+      expect(built.included).toBe(1);
+    });
+
+    it("separates the buckets: refusal replays, apparatus_failure does not", () => {
+      const state = mkState([
+        { input: "a", output: "declined by the gate", code: 2 },
+        { input: "b", output: "Model API error: 404", code: 10 },
+        { input: "c", output: "fine", code: 0 },
+      ]);
+      const built = promptLoop.buildMessages(state, "SYS", "next");
+      const contents = built.messages.map((m) => m.content);
+      expect(contents).toContain("declined by the gate");
+      expect(contents).toContain("fine");
+      expect(contents).not.toContain("Model API error: 404");
+      expect(built.included).toBe(2);
+    });
+
+    it("isReplayable follows the published exit contract", () => {
+      expect([0, 1, 2, 3, 4].map(promptLoop.isReplayable)).toEqual([
+        true, true, true, true, true,
+      ]);
+      expect([10, 11, 12, 13].map(promptLoop.isReplayable)).toEqual([
+        false, false, false, false,
+      ]);
+    });
+
     it("policy=full replays everything", () => {
       const state = mkState(
         Array.from({ length: 5 }, (_, i) => ({
@@ -440,6 +483,106 @@ describe("model API errors", () => {
       globalThis.fetch = original;
     }
   };
+
+  it("a delegated sub-turn starts with none of the parent conversation", async () => {
+    // The isolation is the reason to delegate at all: a critique that never
+    // saw the implementer's reasoning, a verifier that cannot have edited what
+    // it judges. If the parent history leaked in, `task` would be an
+    // expensive way to ask the same context twice.
+    const state: any = {
+      config: loadConfig("../.."),
+      exchanges: [
+        { turn: 1, role: "implement", input: "the codeword is BANANA", output: "noted", model: "m", code: 0, bucket: "result", duration_ms: 1 },
+      ],
+      currentRole: "plan",
+    };
+    const bodies: any[] = [];
+    let call = 0;
+
+    await withFetch(
+      (async (_url: string, init: any) => {
+        bodies.push(JSON.parse(init.body));
+        call++;
+        // First call: the parent delegates. Later calls answer in prose.
+        const tool_calls =
+          call === 1
+            ? [{ function: { name: "task", arguments: { role: "verifier", instruction: "list the files" } } }]
+            : undefined;
+        return {
+          ok: true,
+          json: async () => ({ message: { content: tool_calls ? "" : "done", tool_calls } }),
+        };
+      }) as unknown as typeof fetch,
+      async () => {
+        await promptLoop.runAgenticTurn(
+          state,
+          "plan",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [
+            { role: "system", content: "SYS" },
+            { role: "user", content: "the codeword is BANANA" },
+            { role: "assistant", content: "noted" },
+            { role: "user", content: "delegate a file listing" },
+          ],
+          {
+            approve: async () => true,
+            progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+            say: () => {},
+          }
+        );
+      }
+    );
+
+    // The parent's first request carries the history; the sub-turn's does not.
+    expect(JSON.stringify(bodies[0].messages)).toContain("BANANA");
+    const sub = bodies[1];
+    expect(sub, "the sub-turn should have made a request").toBeDefined();
+    expect(JSON.stringify(sub.messages)).not.toContain("BANANA");
+    expect(sub.messages.at(-1).content).toBe("list the files");
+  });
+
+  it("a sub-turn is offered no `task`, so delegation cannot nest", async () => {
+    const state: any = {
+      config: loadConfig("../.."),
+      exchanges: [],
+      currentRole: "plan",
+    };
+    const bodies: any[] = [];
+    let call = 0;
+    await withFetch(
+      (async (_url: string, init: any) => {
+        bodies.push(JSON.parse(init.body));
+        call++;
+        const tool_calls =
+          call === 1
+            ? [{ function: { name: "task", arguments: { role: "implementor", instruction: "go" } } }]
+            : undefined;
+        return {
+          ok: true,
+          json: async () => ({ message: { content: tool_calls ? "" : "done", tool_calls } }),
+        };
+      }) as unknown as typeof fetch,
+      async () => {
+        await promptLoop.runAgenticTurn(
+          state,
+          "plan",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "delegate" }],
+          {
+            approve: async () => true,
+            progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+            say: () => {},
+          }
+        );
+      }
+    );
+    const parentTools = (bodies[0].tools ?? []).map((t: any) => t.function.name);
+    const subTools = (bodies[1]?.tools ?? []).map((t: any) => t.function.name);
+    expect(parentTools).toContain("task");
+    expect(subTools).not.toContain("task");
+  });
 
   it("reports the body, not just the status", async () => {
     // "400 Bad Request" alone sent a real session hunting for a missing model

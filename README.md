@@ -58,6 +58,7 @@ does not. Behaviour is readable because something is holding still.
 - [Determinism and Contracts](#determinism-and-contracts)
 - [Composing with TriadSepta](#composing-with-triadsepta)
 - [Known Limits](#known-limits)
+- [Where gnomon sits](docs/POSITIONING.md)
 - [Development](#development)
 - [Contributing](#contributing)
 - [License](#license)
@@ -188,9 +189,9 @@ deliberately different reach.
 
 | Role | Tools | Cannot |
 |---|---|---|
-| `coordinator` | `read`, `write`, `skill` | **edit**, and every path outside `write_allow` — so a planning turn can neither revise code nor create it |
-| `implementor` | `read`, `write`, `edit`, `bash` | — |
-| `verifier` | `read`, `bash` (allow-listed) | **write, edit** — cannot alter what it judges |
+| `coordinator` | `read`, `glob`, `grep`, `compute`, `todo`, `task`, `write`, `skill` | **edit**, and every path outside `write_allow` — so a planning turn can neither revise code nor create it |
+| `implementor` | `read`, `glob`, `grep`, `compute`, `todo`, `write`, `edit`, `bash` | — |
+| `verifier` | `read`, `glob`, `grep`, `compute`, `todo`, `bash` (allow-listed) | **write, edit** — cannot alter what it judges |
 
 That separation is real and testable. Ask the verifier to create a file and it
 cannot: there is no `write` tool in what it was offered. Ask it to do the same
@@ -199,12 +200,12 @@ test commands.
 
 ```toml
 [roles.verifier]
-tools = ["read", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "bash"]
 bash_allow = ['^septacore check\b', '^(cargo|pnpm|pytest|go|make)\s']
 ```
 
 That second line matters more than it looks. **`bash` can write anything**, so
-`tools = ["read", "bash"]` is *not* read-only on its own. An audit of this
+`tools = ["read", "glob", "grep", "compute", "todo", "bash"]` is *not* read-only on its own. An audit of this
 harness caught exactly that: a verifier with no write tool created a file
 through `bash` on its first attempt.
 
@@ -228,7 +229,7 @@ reach, and you confirm:
 
 ```
   ⇢ suggest: implement → coordinator  (intent and contracts)
-    coordinator can use: read, write, skill
+    coordinator can use: read, glob, grep, compute, todo, task, write, skill
   └ [y]es once · [a]lways · [N]o
 ```
 
@@ -350,7 +351,7 @@ No .gnomon/ in /home/you/my-project — creating one.
 Project: /home/you/my-project
 Role: implement
 Model: qwen2.5:14b-instruct
-Tools (implement): read, bash, edit, write, skill
+Tools (implement): read, bash, todo, compute, glob, grep, edit, write
 ```
 
 Two things to do straight after:
@@ -661,7 +662,7 @@ model = "qwen3.6:35b"
 endpoint = "local"
 temperature = 0.1
 max_steps = 12
-tools = ["read", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "bash"]
 bash_allow = ['^(cargo|pnpm|pytest|go|make)\s', '^(ls|cat|grep|git (status|diff|log))\s']
 description = "Runs the suite and reports. Cannot write."
 
@@ -691,9 +692,49 @@ enabled = true
 timeout_seconds = 120
 ```
 
-Implemented tools: `read`, `bash`, `write`, `edit`, `skill`. A tool that is
+Implemented tools: `read`, `glob`, `grep`, `compute`, `todo`, `task`,
+`webfetch`, `bash`, `write`, `edit`, `skill`. A tool that is
 declared but disabled, unimplemented, or withheld from the current role is
 **named at startup** — never quietly dropped.
+
+**`glob` and `grep` are read-only, so they are never gated.** That is the point
+of having them. `bash` counts as mutating under `approval = "on_write"` — a
+command can write anything — so before these existed, finding a symbol was
+either a guess at a filename or an approval prompt, and a role without `bash`
+(the verifier, the coordinator) could not find a file it had not been told the
+name of. On the same task and model, searching by `grep` rather than guessing
+took **1 tool call and 4.5s instead of 11 calls and 25.1s**, and got the right
+answer instead of the wrong one.
+
+**`compute` exists because a model asked for a number produces one whether or
+not it computed it**, and the wrong answer arrives with exactly the same
+confidence as the right one. `system.md` tells the model to send any arithmetic
+that decides an answer here. It evaluates exactly, over scaled integers rather
+than floating point, so `0.1 + 0.2` is `0.3` and `19.99 * 3` is `59.97`. Two
+things it deliberately is not: it is a parser, never `eval` — the expression is
+model-authored text arriving from an inference endpoint, and handing that to a
+JavaScript evaluator would make every arithmetic question a code-execution
+primitive; and it is self-contained rather than a shell-out to `python3` or
+`bc`, because "whichever interpreter this machine happens to have" is exactly
+the machine-scoped dependency Rule 1 forbids.
+
+### The surface is not writable by a tool call
+
+`write` and `edit` refuse any path inside `.gnomon/`, whatever the role and
+whatever the gate. The surface decides the tool list, the approval gate and
+every allow-list, so an agent that can write there rewrites the rules it is
+judged by — and moves the surface hash, which is the one identifier a session
+is traced by. Changing it stays a human act. `skill` is the sanctioned way in,
+and its proposals are inert until `gnomon skill accept` moves them.
+
+`bash` is the exception, and it is handled honestly rather than pretended away:
+the command is arbitrary shell, so instead of an allow-list guessing at every
+way a process can touch a file, the hash is re-read after the command. If it
+moved, the model is told and the transcript says so:
+
+```
+  bash — exit 0 · surface changed
+```
 
 ### `policy.toml`
 
@@ -724,6 +765,15 @@ roles = ["implementor", "verifier"]
 
 Run the full suite with `cargo test --all`. Clippy is `-D warnings` in CI.
 ```
+
+Four ship with this repository, and they are the working examples of the form:
+
+| Skill | Covers |
+|---|---|
+| `git-branching` | Branch names, commits, what `bash_deny` refuses, opening a PR |
+| `authenticated-tools` | `gh` / `az` are authenticated outside gnomon; never print a credential |
+| `verifying-changes` | `.gnomon/ci.sh` is the one command that decides; docs are tested like code |
+| `changing-the-surface` | Why `.gnomon/` is not writable, and what to do instead |
 
 Skills whose pattern matches the turn are appended to the system prompt, below
 `system.md` and explicitly marked as notes that do not override it. Selection
@@ -757,9 +807,9 @@ rather than by instruction**:
 
 | Role | Tools | Why |
 |---|---|---|
-| `coordinator` | `read`, `write`, `skill` | Specs and contracts. No `edit`, so planning cannot quietly become a code change. |
-| `implementor` | `read`, `write`, `edit`, `bash` | Tests first, then the code that satisfies them. |
-| `verifier` | `read`, `bash` (allow-listed) | Runs the suite. Cannot alter what it judges. |
+| `coordinator` | `read`, `glob`, `grep`, `compute`, `todo`, `task`, `write`, `skill` | Specs and contracts. No `edit`, so planning cannot quietly become a code change. |
+| `implementor` | `read`, `glob`, `grep`, `compute`, `todo`, `write`, `edit`, `bash` | Tests first, then the code that satisfies them. |
+| `verifier` | `read`, `glob`, `grep`, `compute`, `todo`, `bash` (allow-listed) | Runs the suite. Cannot alter what it judges. |
 
 Plus `plan`, `implement`, `critique`, `smol` for general use.
 
@@ -787,7 +837,7 @@ reach, and waits:
 
 ```
   ⇢ suggest: implement → coordinator  (intent and contracts)
-    coordinator can use: read, write, skill
+    coordinator can use: read, glob, grep, compute, todo, task, write, skill
   └ [y]es once · [a]lways · [N]o  (Enter keeps implement)
 ```
 
@@ -816,10 +866,104 @@ and repeats until it answers in prose — bounded by `max_steps`.
 | Tool | Effect | Gated by `approval = "on_write"` |
 |---|---|---|
 | `read` | File contents (numbered) or a directory listing | no |
+| `glob` | Files matching a path pattern | no |
+| `grep` | Lines matching a regex, as `path:line:text` | no |
+| `compute` | Exact arithmetic | no |
+| `todo` | The session checklist | no |
 | `bash` | Shell command in the repo root | **yes** |
 | `write` | Create or overwrite a file | yes |
 | `edit` | Exact text replacement; must match **exactly once** | yes |
+| `task` | Run a sub-turn under another role | yes |
+| `webfetch` | Retrieve an http(s) URL as text | yes |
 | `skill` | Propose a skill | yes |
+
+**`todo` is how a long run stays steerable.** A turn spanning thirty tool calls
+loses the shape of what it set out to do; the model re-derives the plan from
+the transcript every few steps, which costs tokens and drifts. The whole list
+is replaced on every call rather than patched — a patch protocol needs
+identifiers, and identifiers a model invents mismatch a list it has since
+reordered. At most one item may be `in_progress`, enforced rather than
+suggested. It is saved with the session, so `--continue` picks it back up, and
+`/todo` shows it at any time, including mid-turn.
+
+**`task` runs a sub-turn under another role, with that role's tools.** This is
+the separation the harness is built around, made reachable from inside a turn:
+a critique that never saw the implementer's reasoning, a verifier that cannot
+have edited what it judges. Three properties hold, and each has a test:
+
+- The sub-turn gets the **target role's** tools, not the caller's — so
+  delegation cannot be used to acquire capability.
+- It **cannot nest**. A sub-turn is offered no `task` tool.
+- Only the answer returns, not the transcript. Replaying the sub-turn's tool
+  calls into the parent would defeat the isolation that made it worth running.
+
+A role that may not write also may not delegate — `verifier`, `critique` and
+`smol` have no `task`, and `docs.test.ts` asserts it.
+
+**`webfetch` ships disabled**, and needs `[sandbox] network = true` as well.
+It is the tool that makes that key real. Requests are checked before they
+leave: only `http`/`https`, and the hostname must not resolve to a loopback,
+private or link-local address — the check is on the resolved address, not the
+name, because any domain can publish an A record pointing at `127.0.0.1`.
+Redirects are not followed automatically; each hop is re-checked in its own
+right.
+
+### How much it asks
+
+`approval.gate` is the autonomy dial, and the three values are three ways to
+work:
+
+| Gate | Asks about | In other words |
+|---|---|---|
+| `always` | **every** tool call — reads and searches included | consent after every action |
+| `on_write` | only calls that can change something | consent per change |
+| `never` | nothing | unattended |
+
+The middle column is the whole difference, and it is worth stating plainly
+because it was not always true: `always` used to be consulted only by `bash`,
+`write`, `edit` and `skill` — which are exactly the `on_write` stops — so the
+two settings behaved identically and `always` was a dial that turned nothing.
+Every tool consults the gate now, and a test asserts the two are distinguishable.
+
+In a non-interactive run (`gnomon task`) there is nobody to ask, so a gated
+call is **refused** rather than assumed. `--yes` is what stands in for a
+person, which is why `gate = "never"` and `task --yes` are the two ways to run
+unattended, and why neither is the default.
+
+### Guardrails on what cannot be undone — `bash_deny`
+
+`bash_allow` is an allow-list, and an allow-list cannot express *everything
+except three catastrophes*. That is exactly the shape the implementing role
+needs: unrestricted `bash`, because it runs builds, installers and suites
+nobody can enumerate in advance — and no ability to force-push over a release
+branch.
+
+So there is a second list, and **deny wins over allow**:
+
+```toml
+[roles.implement]
+bash_deny = [
+  '\bgit\s+push\b[^|;&]*\s(--force|-f)\b',            # force-push, any branch
+  '\bgit\s+push\b[^|;&]*\s(main|master|release)\b',   # straight onto a release branch
+  '\bgit\s+push\b[^|;&]*--delete\b',                   # deleting a branch on the remote
+  '\bgit\s+branch\b[^|;&]*\s-D\b',                    # discarding an unmerged branch
+]
+```
+
+Shipped with the starter surface, because losing someone else's commits is not
+a mistake worth making once. Three details that are decisions, not accidents:
+
+- **Case-sensitive**, unlike much pattern matching. `git branch -D` discards an
+  unmerged branch and `-d` refuses to; they differ only by case, and folding it
+  turned a guardrail on the destructive form into a block on the safe one.
+- **Matched against the whole command and each top-level segment**, so
+  `git status && git push --force` is caught.
+- **A pattern that will not compile refuses** rather than permits — the
+  opposite of `bash_allow`. Refusing a safe command costs an error message;
+  running an unsafe one costs a branch.
+
+It binds this agent and nothing else. **Branch protection on the remote is the
+control that binds everyone**, and this does not replace it.
 
 ### Approval
 
@@ -863,11 +1007,11 @@ repository root — `../` and absolute paths are both caught. A path outside is 
 
 **`bash` can write anything.** A role holding it is not read-only however its
 `tools` list reads. An end-to-end audit of this harness found a `verifier` with
-`tools = ["read", "bash"]` creating a file through `bash` on its first attempt.
+`tools = ["read", "glob", "grep", "compute", "todo", "bash"]` creating a file through `bash` on its first attempt.
 
 ```toml
 [roles.verifier]
-tools = ["read", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "bash"]
 bash_allow = ['^(cargo|pnpm|npm|pytest|go|make)\s', '^(ls|cat|grep|git (status|diff|log))\s']
 ```
 
@@ -884,7 +1028,7 @@ writing `src/main.rs` outright.
 
 ```toml
 [roles.coordinator]
-tools = ["read", "write", "skill"]
+tools = ["read", "glob", "grep", "compute", "todo", "task", "write", "skill"]
 write_allow = ["docs/**", "specs/**", "*.md"]
 ```
 
@@ -1141,6 +1285,7 @@ undiscoverable.
 | `/new` | Start a fresh session; the current one stays resumable |
 | `/explain [topic]` | What a feature is, how **this** repo has it set, and what to do with it |
 | `/models` | Models each endpoint offers; arrows + filter to assign one to a role. `--list` to only print |
+| `/todo` | The checklist, as the agent last left it |
 | `/manifest` | The surface hash and what it covers |
 | `/reset` | Drop history (and the summary) |
 | `/meta [fields]` | Set the meta line — `/meta all`, `/meta none`, `/meta style compact` |
@@ -1280,16 +1425,24 @@ meaning of `approval = "on_write"`.
 ## Known Limits
 
 Stated specifically, because a harness that hides its gaps is worse than one
-that has them.
+that has them. [docs/POSITIONING.md](docs/POSITIONING.md) sets these against
+what other harnesses do, and says what has and has not been measured.
 
 - **No MCP.** `tools.toml` documents an `[mcp_servers]` block and nothing
   connects it. Declaring a server is reported at startup as unavailable.
-  New *kinds* of tools require implementing them in `gnomon-core`.
+  New *kinds* of tools require implementing them in `gnomon-core`. This is the
+  largest single gap against every other harness in its class.
+- **No cloud or background execution.** A turn runs in your terminal, in your
+  repository, now. There is no queue, no worktree pool, no "open a PR while I
+  do something else".
 - **No role chain.** Routing picks which role answers a turn. Nothing runs
   `coordinator → implementor → verifier` in sequence, gating on the verifier.
-- **`network = false` is declared but not enforced.** The sandbox confines
-  filesystem paths only. The loop says so at startup rather than implying
-  isolation it does not provide.
+- **`network = false` is enforced for `webfetch`, and is not process
+  isolation.** The one tool gnomon controls the network reach of refuses
+  outright when the surface sets it. `bash` is a different matter: `curl`, a
+  package manager or anything else installed still reaches the network, and no
+  allow-list over shell text can honestly claim otherwise. Constrain that with
+  `bash_allow` where it matters. The loop says exactly this at startup.
 - **Summary compaction is not reproducible**, and erodes specifics before
   decisions.
 - **Small models narrate unreliably.** Tool calls are correct far more often
@@ -1308,6 +1461,7 @@ that has them.
 | Skills | **Yes** | Teach *how* to use what exists. Adds knowledge, never capability. |
 | New built-in tool | No | Requires implementing it. |
 | MCP servers | No | See above. |
+| `webfetch` | **Yes**, opt-in | Declared `enabled = false`; needs `[sandbox] network = true` as well. |
 
 ---
 
