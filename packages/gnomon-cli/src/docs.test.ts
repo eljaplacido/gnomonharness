@@ -149,3 +149,24 @@ describe("the README does not promise what is not built", () => {
     expect(readme).toMatch(/network = false.*not enforced|not enforced.*network/s);
   });
 });
+
+describe("a session states which project it is operating on", () => {
+  const src = readFileSync(join(repoRoot, "packages/gnomon-core/src/prompt_loop.ts"), "utf-8");
+  const cli = readFileSync(join(repoRoot, "packages/gnomon-cli/src/index.ts"), "utf-8");
+
+  it("the banner names the project root", () => {
+    // `.gnomon/` resolves by walking up, so running from the wrong directory
+    // looked identical to running from the right one. A session was spent
+    // working on the harness while its operator believed it was working on
+    // their project.
+    expect(src).toContain("Project: ${projectRoot}");
+  });
+
+  it("and says so when the root came from walking up", () => {
+    expect(src).toContain("found by walking up from");
+  });
+
+  it("launch reports reusing a surface, not only creating one", () => {
+    expect(cli).toContain("Using the existing .gnomon/ in");
+  });
+});

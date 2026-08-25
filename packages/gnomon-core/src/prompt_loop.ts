@@ -1884,6 +1884,21 @@ export async function runPromptLoop(
   };
 
   printBanner();
+
+  // Which project this session is operating on.
+  //
+  // Nothing said. `.gnomon/` resolves by walking up, and `launch` is silent
+  // when a surface already exists, so running either from the wrong directory
+  // looked identical to running it from the right one — a session spent
+  // working on the harness while its operator believed it was working on their
+  // project. The root is the first thing on screen now.
+  const projectRoot = resolve(config.gnomonDir, "..");
+  console.log(`Project: ${projectRoot}`);
+  if (projectRoot !== resolve(process.cwd())) {
+    console.log(
+      `  (found by walking up from ${resolve(process.cwd())})`
+    );
+  }
   console.log(`Role: ${state.currentRole}`);
   console.log(`Model: ${routeRole(config, state.currentRole).model}`);
   console.log("");

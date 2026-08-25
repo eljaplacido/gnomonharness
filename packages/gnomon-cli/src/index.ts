@@ -557,7 +557,11 @@ async function cmdLaunch(args: CliArgs): Promise<void> {
   const target = resolve(args.dir ?? process.cwd());
   const surface = join(target, ".gnomon");
 
-  if (!existsSync(surface)) {
+  if (existsSync(surface)) {
+    // Silence here meant a launch in the wrong directory looked exactly like
+    // a launch in the right one.
+    console.log(`Using the existing .gnomon/ in ${target}`);
+  } else {
     console.log(`No .gnomon/ in ${target} — creating one.`);
     await cmdInit(args);
     console.log("");
@@ -565,6 +569,7 @@ async function cmdLaunch(args: CliArgs): Promise<void> {
     console.log("then re-run `gnomon launch`. Starting anyway:");
     console.log("");
   }
+
 
   await cmdPrompt(args);
 }
