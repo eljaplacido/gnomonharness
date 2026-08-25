@@ -45,7 +45,7 @@ export interface Enumerations {
 // Binary path resolution
 // ---------------------------------------------------------------------------
 
-function findBinary(name: string): string {
+export function findBinary(name: string): string {
   // 1. Check GNOMON_BIN_OVERRIDE env var (for testing)
   //    Can be a full path to the binary OR a directory containing it
   const override = process.env.GNOMON_BIN_OVERRIDE;
@@ -54,8 +54,17 @@ function findBinary(name: string): string {
     // If it looks like a directory (ends without .exe or known extension), append name
     const candidate = join(resolved, name);
     if (existsSync(candidate)) return candidate;
-    // Otherwise use override as-is
-    if (existsSync(resolved)) return resolved;
+    // Otherwise use the override as-is — but only if it is a file. It used to
+    // be returned whenever it existed, so an override pointing at a directory
+    // that lacked this particular binary returned the directory, and spawning
+    // it failed with EACCES. The diagnosis then blamed permissions instead of
+    // the missing build, which is exactly what happened in CI when the
+    // workflow built two of the four binaries.
+    try {
+      if (statSync(resolved).isFile()) return resolved;
+    } catch {
+      // fall through to the search below
+    }
   }
 
   // 2. Check target/debug for dev builds
@@ -90,7 +99,8 @@ function findBinary(name: string): string {
   throw new Error(
     `gnomon native binary not found: "${name}".\n` +
     "It is built from the Rust crates in this checkout:\n" +
-    "  cargo build --bin gnomon-surface --bin gnomon-enums\n" +
+    `  cargo build --bin ${name}\n` +
+    "  (or `pnpm run build:native` for all four)\n" +
     "Or set GNOMON_BIN_OVERRIDE to a directory containing it."
   );
 }
@@ -106,6 +116,31 @@ function findBinary(name: string): string {
  * binaries can fail for want of them.
  */
 const binCache = new Map<string, string>();
+
+/**
+ * Explain a failed spawn.
+ *
+ * When the binary is missing, spawnSync leaves `status` null and puts the
+ * reason in `error` — `stderr` is empty. Reporting "unknown error" for that
+ * case sent a CI failure back saying nothing about the actual cause, which was
+ * a workflow step that built two of the four binaries.
+ */
+function spawnDetail(result: {
+  error?: Error;
+  status: number | null;
+  stderr?: string | Buffer | null;
+}): string {
+  const stderr = result.stderr?.toString().trim();
+  if (stderr) return stderr;
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return `${result.error.message} — the binary is not built. Run \`pnpm run build:native\` or \`cargo build --bin gnomon-edit\`.`;
+    }
+    return result.error.message;
+  }
+  return `exit ${result.status ?? "null"} with no output`;
+}
 function nativeBin(name: string): string {
   const cached = binCache.get(name);
   if (cached) return cached;
@@ -260,8 +295,7 @@ export function applyPatchset(
   // exactly that. Throwing on it turned an ordinary finding into an exception
   // with an empty message.
   if (result.status !== 0 && result.status !== 2) {
-    const stderr = result.stderr?.toString() ?? "unknown error";
-    throw new Error(`gnomon-edit failed: ${stderr}`);
+    throw new Error(`gnomon-edit failed: ${spawnDetail(result)}`);
   }
 
   const output = result.stdout?.toString().trim() ?? "{}";
@@ -294,8 +328,7 @@ export function simulatePatch(
   // exactly that. Throwing on it turned an ordinary finding into an exception
   // with an empty message.
   if (result.status !== 0 && result.status !== 2) {
-    const stderr = result.stderr?.toString() ?? "unknown error";
-    throw new Error(`gnomon-edit simulate failed: ${stderr}`);
+    throw new Error(`gnomon-edit simulate failed: ${spawnDetail(result)}`);
   }
 
   const output = result.stdout?.toString().trim() ?? "{}";

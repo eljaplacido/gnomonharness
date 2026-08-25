@@ -7,6 +7,7 @@ import {
   listPaths,
   enumerations,
   version,
+  findBinary,
   GNONOM_VERSION,
 } from "./surface.js";
 import { fileURLToPath } from "node:url";
@@ -107,6 +108,48 @@ describe("native binaries resolve lazily", () => {
         expect(message).toContain("cargo build");
         expect(message).toContain("GNOMON_BIN_OVERRIDE");
       }
+    }
+  });
+});
+
+describe("finding the native binaries", () => {
+  // The override used to be returned whenever the path existed, so pointing it
+  // at a directory without this binary handed spawnSync a directory. The error
+  // was EACCES, which reads as a permissions problem and is not one.
+  it("a directory override missing the binary reports the binary, not the directory", () => {
+    const original = process.env.GNOMON_BIN_OVERRIDE;
+    const empty = mkdtempSync(join(tmpdir(), "gnomon-nobin-"));
+    process.env.GNOMON_BIN_OVERRIDE = empty;
+    try {
+      // A name no build produces, so the target/debug and PATH fallbacks
+      // cannot mask what the override branch does.
+      let message = "";
+      try {
+        findBinary("gnomon-not-a-real-binary");
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      expect(message).toContain("gnomon-not-a-real-binary");
+      expect(message).toContain("cargo build --bin gnomon-not-a-real-binary");
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+      if (original === undefined) delete process.env.GNOMON_BIN_OVERRIDE;
+      else process.env.GNOMON_BIN_OVERRIDE = original;
+    }
+  });
+
+  it("a file override is used as given", () => {
+    const original = process.env.GNOMON_BIN_OVERRIDE;
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-binfile-"));
+    const fake = join(dir, "stand-in");
+    writeFileSync(fake, "#!/bin/sh\nexit 0\n");
+    process.env.GNOMON_BIN_OVERRIDE = fake;
+    try {
+      expect(findBinary("gnomon-not-a-real-binary")).toBe(fake);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      if (original === undefined) delete process.env.GNOMON_BIN_OVERRIDE;
+      else process.env.GNOMON_BIN_OVERRIDE = original;
     }
   });
 });
