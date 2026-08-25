@@ -1021,3 +1021,23 @@ describe("a tight window keeps the most recent turn", () => {
     expect(body, "the newest turn must survive").toContain("IN4");
   });
 });
+
+describe("working on gnomon itself is flagged", () => {
+  it("recognises this checkout", async () => {
+    // An entire session was spent auditing the harness while its operator
+    // believed they were auditing their project. The root was printed; what
+    // that root *is* was not.
+    const checkout = promptLoop.harnessCheckout();
+    expect(checkout).not.toBeNull();
+    expect(promptLoop.isSelfTargeting(checkout!)).toBe(true);
+  });
+
+  it("stays quiet for any other project", () => {
+    expect(promptLoop.isSelfTargeting("/tmp/some-other-project")).toBe(false);
+  });
+
+  it("does not confuse a subdirectory of the checkout with the checkout", () => {
+    const checkout = promptLoop.harnessCheckout()!;
+    expect(promptLoop.isSelfTargeting(`${checkout}/packages`)).toBe(false);
+  });
+});

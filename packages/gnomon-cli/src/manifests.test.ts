@@ -84,6 +84,52 @@ describe("imported workspace packages are declared", () => {
   }
 });
 
+describe("development dependencies are used too", () => {
+  // Tools are invoked by name from scripts or by the runner, not imported, so
+  // they cannot be checked the same way. Everything else must be reachable.
+  const TOOLING = new Set(["typescript", "vitest", "tsx", "eslint", "prettier"]);
+
+  for (const pkg of workspacePackages) {
+    it(pkg, () => {
+      const manifest = JSON.parse(
+        readFileSync(join(packagesDir, pkg, "package.json"), "utf-8")
+      );
+      const scripts = Object.values(manifest.scripts ?? {}).join(" ");
+      const imported = importedBy(pkg);
+
+      const phantom = Object.keys(manifest.devDependencies ?? {}).filter(
+        (d) =>
+          !TOOLING.has(d) &&
+          !d.startsWith("@types/") &&
+          !imported.has(d) &&
+          !scripts.includes(d)
+      );
+      // node-gyp and node-addon-api sat here unused, and the package
+      // described itself as N-API bindings while shelling out to binaries —
+      // which found its way into an audit as a build-complexity risk.
+      expect(phantom, `${pkg} declares dev dependencies nothing uses`).toEqual([]);
+    });
+  }
+});
+
+describe("package descriptions match what the package does", () => {
+  it("gnomon-natives does not claim to be a native addon", () => {
+    const manifest = JSON.parse(
+      readFileSync(join(packagesDir, "gnomon-natives", "package.json"), "utf-8")
+    );
+    const src = readFileSync(
+      join(packagesDir, "gnomon-natives", "src", "surface.ts"),
+      "utf-8"
+    );
+    // It spawns the Rust binaries. Saying otherwise misleads anyone sizing up
+    // the build, and it did.
+    expect(src).toContain("spawnSync");
+    expect(src).not.toMatch(/require\(.*\.node|napi/i);
+    expect(manifest.description.toLowerCase()).not.toContain("n-api");
+    expect(manifest.description.toLowerCase()).not.toContain("napi");
+  });
+});
+
 describe("types-only packages are development dependencies", () => {
   for (const pkg of workspacePackages) {
     it(pkg, () => {

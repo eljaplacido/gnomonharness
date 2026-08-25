@@ -9,7 +9,9 @@
  */
 
 import * as readline from "node:readline";
-import { resolve } from "node:path";
+import { resolve, dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   GnomonConfig,
   RouteTarget,
@@ -1423,6 +1425,41 @@ export function completeInput(
 }
 
 // ---------------------------------------------------------------------------
+// Self-targeting guard
+// ---------------------------------------------------------------------------
+
+/**
+ * The checkout this build is running from, or null when it cannot be found.
+ *
+ * Located the same way the launcher does: walk up from this module until the
+ * CLI source appears.
+ */
+export function harnessCheckout(from = fileURLToPath(import.meta.url)): string | null {
+  let dir = dirname(resolve(from));
+  for (let i = 0; i < 8; i++) {
+    if (existsSync(join(dir, "packages", "gnomon-cli", "src", "index.ts"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+/**
+ * Whether the project about to be worked on is gnomon's own checkout.
+ *
+ * Running `gnomon` from the harness directory is legitimate — that is how
+ * gnomon is developed — but for anyone using gnomon on their own project it
+ * is a mistake, and a quiet one: an entire session was spent auditing the
+ * harness while its operator believed they were auditing their project. The
+ * project root is already printed; this says what that root *is*.
+ */
+export function isSelfTargeting(projectRoot: string): boolean {
+  const checkout = harnessCheckout();
+  return checkout !== null && resolve(projectRoot) === resolve(checkout);
+}
+
+// ---------------------------------------------------------------------------
 // Live command menu
 // ---------------------------------------------------------------------------
 
@@ -2122,6 +2159,19 @@ export async function runPromptLoop(
   // project. The root is the first thing on screen now.
   const projectRoot = resolve(config.gnomonDir, "..");
   console.log(`Project: ${projectRoot}`);
+  if (isSelfTargeting(projectRoot)) {
+    const ui0 = uiOf(state);
+    console.log(
+      paint(
+        ui0,
+        "yellow",
+        "  ⚠ this is gnomon's own checkout — you are working on the harness,"
+      )
+    );
+    console.log(
+      paint(ui0, "yellow", "    not on another project. cd to your project first if that was not intended.")
+    );
+  }
   if (projectRoot !== resolve(process.cwd())) {
     console.log(
       `  (found by walking up from ${resolve(process.cwd())})`

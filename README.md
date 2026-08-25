@@ -28,7 +28,7 @@ That is the whole design in one object. The model varies, the conversation
 wanders, the tools do different things each run — and the `.gnomon/` directory
 does not. Behaviour is readable because something is holding still.
 
-> **Status: working, pre-1.0.** 404 tests (46 Rust, 358 TypeScript), CI green on
+> **Status: working, pre-1.0.** Over 400 tests across Rust and TypeScript, CI green on
 > Linux and macOS. Interfaces may still move. [Known Limits](#known-limits) is
 > deliberately specific — read it before depending on this.
 
@@ -399,7 +399,7 @@ gnomon/
 ├── packages/                   # TypeScript — the parts that must be flexible
 │   ├── gnomon-core/            # Turns, tools, skills, context, audit, sessions
 │   ├── gnomon-cli/             # Thin shell over core
-│   ├── gnomon-natives/         # Bindings to the crates
+│   ├── gnomon-natives/         # Typed access to the Rust binaries
 │   └── gnomon-tui/             # Saved-session viewer
 ├── .gnomon/                    # This repository's own surface
 ├── conformance/                # Golden fixtures — the contract
