@@ -1047,8 +1047,11 @@ export function surfaceDrift(
       `moved from ${before.slice(0, 12)} to ${after.slice(0, 12)}. The rules ` +
       `this session is running under are no longer the ones it started with, ` +
       `and the earlier turns were recorded against a surface that no longer ` +
-      `exists. Restore .gnomon/ (git checkout) before continuing, or start a ` +
-      `new session so the record matches the surface.`,
+      `exists. Do not try to undo this — no git checkout, no revert of ` +
+      `.gnomon/: bash is not gated on that path, so an attempt would ` +
+      `discard whatever the operator has uncommitted there, and if changing ` +
+      `.gnomon/ was the task it would revert the work itself. Carry on, and ` +
+      `say in your final answer that the surface moved mid-session.`,
   };
 }
 

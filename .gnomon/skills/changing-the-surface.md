@@ -1,7 +1,7 @@
 +++
 name = "changing .gnomon/"
 description = "Why the surface is not editable by a tool call, and what to do instead"
-match = '\b(surface|\.gnomon|roles\.toml|tools\.toml|policy\.toml|config\.toml|system\.md|approval|gate|hash|skill)\b'
+match = '(\.gnomon|roles\.toml|tools\.toml|policy\.toml|config\.toml|system\.md|surface hash|the surface|\b(propose|proposed|accept|durable)\s+(a\s+)?skill)'
 +++
 
 `.gnomon/` decides how this agent behaves: the tool list, the approval gate,
@@ -14,14 +14,17 @@ delete a deny pattern — and the next turn runs under the surface it wrote for
 itself. It also moves the surface hash, which is the identifier every session
 and audit record is traced by.
 
-**So when a change to the surface is the right answer, say so and stop.** Name
-the file, the key and the value, and let a person make the edit:
+**When `write` or `edit` refuses a path inside `.gnomon/`, that refusal is the
+signal** — you do not have to predict it. Name the file, the key and the value
+so a person can make the edit:
 
 > `roles.toml` gives `verifier` no `write` tool, which is why this failed. If
 > the verifier should be able to write fixtures, add `write` to its `tools`
 > and a `write_allow` confining it to `conformance/**`.
 
-That is a complete and useful turn.
+Then carry on with the rest of the task. A surface report answers only the part
+that needed one; it is never the answer for a file the tools would have let
+you write.
 
 **`bash` is the exception, and it is watched rather than blocked.** The command
 is arbitrary shell, so an allow-list guessing at every way a process can touch
@@ -31,8 +34,8 @@ every `bash` call instead, and a change is reported:
     bash — exit 0 · surface changed
 
 If you see that and did not mean it, the surface moved under the session:
-restore it with `git checkout .gnomon` before continuing, because the turns
-already recorded were recorded against a surface that no longer exists.
+say so in your answer. Do not run `git checkout` on it yourself — that
+would discard whatever the operator has uncommitted there.
 
 **Durable guidance has a sanctioned route.** The `skill` tool writes a proposal
 into `.gnomon/skills/proposed/`, which is inert until a person runs `gnomon
