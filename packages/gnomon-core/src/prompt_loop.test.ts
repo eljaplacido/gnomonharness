@@ -668,6 +668,88 @@ describe("model API errors", () => {
     );
   });
 
+  it("classifies apparatus failures instead of calling everything 10", async () => {
+    // Both sites used to hardcode 10, so "no such model" and "endpoint
+    // overloaded" were indistinguishable — and conformance/exit_codes.json has
+    // shipped 11/12/13 since the first release with nothing emitting them.
+    const c = promptLoop.classifyFailure;
+    expect(c({ status: 400, message: "no such model" })).toBe(10);
+    expect(c({ status: 401, message: "bad key" })).toBe(10);
+    expect(c({ status: 503, message: "overloaded" })).toBe(12);
+    expect(c({ status: 429, message: "rate limited" })).toBe(12);
+    expect(c({ status: 408, message: "request timeout" })).toBe(11);
+    expect(c({ errName: "TimeoutError", message: "The operation timed out" })).toBe(11);
+    expect(c({ message: "fetch failed: ECONNREFUSED" })).toBe(12);
+    expect(c({ status: 400, message: "maximum context length exceeded" })).toBe(13);
+  });
+
+  it("retries a transient failure and reports each attempt", async () => {
+    // The operator's stated fear is a long run dying on a blip. Two failures
+    // then a success must come back as a success, and the retries must be
+    // visible -- a silent retry would make three tries read as one.
+    const config: any = loadConfig("../..");
+    config.config = { ...config.config, resilience: { attempts: 3, backoff_ms: 1 } };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const said: string[] = [];
+    let calls = 0;
+
+    await withFetch(
+      (async () => {
+        calls++;
+        if (calls < 3) throw Object.assign(new Error("fetch failed: ECONNREFUSED"), {});
+        return { ok: true, json: async () => ({ message: { content: "recovered" } }) };
+      }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "hi" }],
+          {
+            approve: async () => true,
+            progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+            say: (l: string) => said.push(l),
+          }
+        );
+        expect(turn.content).toBe("recovered");
+        expect(turn.code).toBe(0);
+      }
+    );
+    expect(calls).toBe(3);
+    expect(said.filter((l) => l.includes("[retry]")).length).toBe(2);
+  });
+
+  it("does not retry a request that will fail identically", async () => {
+    // A 400 with a bad model tag is not a blip. Retrying it burns the deadline
+    // for nothing.
+    const config: any = loadConfig("../..");
+    config.config = { ...config.config, resilience: { attempts: 3, backoff_ms: 1 } };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    let calls = 0;
+    await withFetch(
+      (async () => {
+        calls++;
+        return errJson(400, '{"error":"model nope not found"}');
+      }) as unknown as typeof fetch,
+      async () => {
+        await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "nope", temperature: 0, top_p: 1, target: { model: "nope", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "hi" }],
+          {
+            approve: async () => true,
+            progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+            say: () => {},
+          }
+        );
+      }
+    );
+    expect(calls).toBe(1);
+  });
+
   it("reports the body, not just the status", async () => {
     // "400 Bad Request" alone sent a real session hunting for a missing model
     // that was installed and working — it just could not accept tools.

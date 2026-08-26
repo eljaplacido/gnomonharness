@@ -1054,6 +1054,41 @@ function collectSurface(baseDir: string): SourceEntry[] {
   return sources;
 }
 
+/** Resolved [resilience]: what the harness does when the endpoint misbehaves. */
+export interface ResolvedResilience {
+  attempts: number;
+  backoff_ms: number;
+  request_timeout_ms: number;
+}
+
+/**
+ * Read [resilience] from config.toml.
+ *
+ * In the surface, not the environment, because a harness that retried three
+ * times here and once there would not be the same harness — and the timeout in
+ * particular decides what counts as apparatus failure, which is a behaviour.
+ * GNOMON_MODEL_TIMEOUT_MS used to set it from the shell, which is exactly the
+ * machine-scoped configuration Rule 1 forbids.
+ *
+ * Retrying is not a behaviour in the sense determinism cares about: it does not
+ * change what the harness decides, only how many times it asks before giving
+ * up on a socket. What would break determinism is retrying a *different* number
+ * of times per machine, which is why the count is hashed with everything else.
+ */
+export function resolveResilience(config: GnomonConfig): ResolvedResilience {
+  const r = (config.config as { resilience?: Record<string, unknown> } | undefined)
+    ?.resilience;
+  const num = (v: unknown, d: number) =>
+    typeof v === "number" && isFinite(v) && v >= 0 ? v : d;
+  return {
+    // 1 attempt means "try once, do not retry" — the behaviour before this
+    // existed, and still the value a surface can choose.
+    attempts: Math.max(1, Math.floor(num(r?.attempts, 3))),
+    backoff_ms: Math.floor(num(r?.backoff_ms, 500)),
+    request_timeout_ms: Math.max(1000, Math.floor(num(r?.request_timeout_ms, 120_000))),
+  };
+}
+
 /** A resolved [verify] block, or null when the surface declares none. */
 export interface ResolvedVerify {
   command: string;

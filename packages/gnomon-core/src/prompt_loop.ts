@@ -20,6 +20,7 @@ import {
   listProfiles,
   resolveContext,
   resolveVerify,
+  resolveResilience,
   Compaction,
   resolveUi,
   resolveEndpoint,
@@ -459,6 +460,45 @@ export function addUsage(
   };
 }
 
+/**
+ * Which apparatus failure this is.
+ *
+ * Both failure sites used to return 10 for everything, so a 400 "no such
+ * model" and a 503 "overloaded" were the same value — and nothing downstream
+ * could tell a fault worth retrying from one that will fail identically next
+ * time. The receiving machinery already existed: conformance/exit_codes.json
+ * has shipped 11, 12 and 13 since the first release with nothing ever emitting
+ * them.
+ *
+ *   10 launch_failed        — the request was wrong. 400, 401, a bad model tag.
+ *   11 timed_out            — the deadline passed.
+ *   12 provider_unreachable — the endpoint is down, refused, or overloaded.
+ *   13 context_exhausted    — the prompt did not fit.
+ *
+ * Only 11 and 12 are worth trying again; 10 and 13 fail the same way twice.
+ */
+export function classifyFailure(opts: {
+  status?: number;
+  errName?: string;
+  message?: string;
+}): number {
+  const { status, errName, message = "" } = opts;
+  if (errName === "TimeoutError" || /timed? ?out/i.test(message)) return 11;
+  if (/context length|maximum context|too many tokens|context_length/i.test(message)) {
+    return 13;
+  }
+  if (status === undefined) {
+    // A transport error with no HTTP status: refused, DNS, socket hangup.
+    return /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|EPIPE|fetch failed|socket hang up|network/i
+      .test(message)
+      ? 12
+      : 10;
+  }
+  if (status === 429 || status >= 500) return 12;
+  if (status === 408) return 11;
+  return 10;
+}
+
 /** Tool arguments arrive as an object (Ollama) or a JSON string (OpenAI). */
 function parseToolArgs(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === "object") return raw as Record<string, unknown>;
@@ -481,6 +521,52 @@ function parseToolArgs(raw: unknown): Record<string, unknown> {
  * - Ollama:  { message: { content } } or { response }
  * - OpenAI:  { choices: [ { message: { content } } ] }
  */
+/**
+ * Call an endpoint, retrying only the failures that a second attempt can fix.
+ *
+ * 12 (unreachable, overloaded) and 11 (timed out) are worth trying again; 10
+ * (a malformed request, a bad model tag) and 13 (the prompt did not fit) fail
+ * the same way twice, and retrying them wastes the deadline.
+ *
+ * Every attempt is announced. A silent retry would make a session that took
+ * three tries read as one, which is the part of this that would actually
+ * violate the harness's own claims — not the retry itself.
+ */
+async function callEndpointWithRetry(
+  target: RouteTarget,
+  messages: ChatMessage[],
+  tools: unknown[],
+  timeoutMs: number,
+  resilience: { attempts: number; backoff_ms: number },
+  say: ((line: string) => void) | undefined,
+  ui: ResolvedUi | undefined,
+  signal?: AbortSignal
+): Promise<InferenceResult> {
+  const RETRYABLE = new Set([11, 12]);
+  let last: InferenceResult | null = null;
+  for (let attempt = 1; attempt <= resilience.attempts; attempt++) {
+    const r = await callEndpoint(target, messages, tools, timeoutMs, signal);
+    if (r.code === 0 || !RETRYABLE.has(r.code)) return r;
+    last = r;
+    if (signal?.aborted) return r;
+    if (attempt < resilience.attempts) {
+      const wait = resilience.backoff_ms * Math.pow(2, attempt - 1);
+      if (say && ui) {
+        say(
+          paint(
+            ui,
+            "yellow",
+            `  [retry] ${r.code === 11 ? "timed out" : "endpoint unreachable"} ` +
+              `— attempt ${attempt} of ${resilience.attempts}, waiting ${wait}ms`
+          )
+        );
+      }
+      await new Promise((res) => setTimeout(res, wait));
+    }
+  }
+  return last!;
+}
+
 async function callEndpoint(
   target: RouteTarget,
   messages: ChatMessage[],
@@ -539,7 +625,7 @@ async function callEndpoint(
         content:
           `Model API error: ${res.status} ${res.statusText}` +
           (detail ? `\n${detail.slice(0, 500)}` : ""),
-        code: 10,
+        code: classifyFailure({ status: res.status, message: detail }),
         toolCalls: [],
         toolsUnsupported:
           res.status === 400 && /does not support tools/i.test(detail),
@@ -575,7 +661,10 @@ async function callEndpoint(
     const msg = err instanceof Error ? err.message : String(err);
     return {
       content: `Model unavailable at ${target.url}: ${msg}`,
-      code: 10,
+      code: classifyFailure({
+        errName: err instanceof Error ? err.name : undefined,
+        message: msg,
+      }),
       toolCalls: [],
     };
   }
@@ -585,7 +674,26 @@ async function callEndpoint(
 export const CANCELLED = "Cancelled.";
 
 /** Default per-request timeout. Cold-loading large local models needs headroom. */
-function modelTimeoutMs(): number {
+/**
+ * How long to wait on one model call.
+ *
+ * This came from GNOMON_MODEL_TIMEOUT_MS, which is a machine-scoped setting for
+ * something that is not machine-scoped: the deadline decides what counts as
+ * apparatus failure, and a harness that gives up after ten seconds here and two
+ * minutes there is not the same harness. It lives in `[resilience]` in
+ * config.toml now, hashed with everything else.
+ *
+ * The environment variable is still read when the surface says nothing, so an
+ * existing shell alias keeps working — but the surface wins where it speaks,
+ * and the startup banner names the override, as it already does for
+ * GNOMON_MODEL_URL.
+ */
+function modelTimeoutMs(config?: GnomonConfig): number {
+  if (config) {
+    const declared = (config.config as { resilience?: { request_timeout_ms?: unknown } })
+      ?.resilience?.request_timeout_ms;
+    if (typeof declared === "number" && declared > 0) return Math.floor(declared);
+  }
   const raw = parseInt(process.env.GNOMON_MODEL_TIMEOUT_MS ?? "", 10);
   return Number.isFinite(raw) && raw > 0 ? raw : 120_000;
 }
@@ -871,6 +979,7 @@ export async function runAgenticTurn(
   // after a write or an edit.
   let touchedFiles = false;
   const verify = resolveVerify(config);
+  const resilience = resolveResilience(config);
   let verifyRounds = 0;
   let turnUsage: TokenUsage | undefined;
   let code = 0;
@@ -902,7 +1011,16 @@ export async function runAgenticTurn(
    */
   const call = async (target: typeof route.target) => {
     const offer = noTools.has(target.model) ? [] : toolSet.schemas;
-    let r = await callEndpoint(target, working, offer, modelTimeoutMs(), deps.signal);
+    let r = await callEndpointWithRetry(
+      target,
+      working,
+      offer,
+      resilience.request_timeout_ms,
+      resilience,
+      deps.say,
+      deps.ui,
+      deps.signal
+    );
     turnUsage = addUsage(turnUsage, r.usage);
 
     if (r.toolsUnsupported && offer.length > 0) {
@@ -925,7 +1043,7 @@ export async function runAgenticTurn(
         )
       );
       deps.progress.start(`${target.model} — without tools`);
-      r = await callEndpoint(target, working, [], modelTimeoutMs(), deps.signal);
+      r = await callEndpoint(target, working, [], modelTimeoutMs(config), deps.signal);
       turnUsage = addUsage(turnUsage, r.usage);
     }
     return r;
@@ -1063,7 +1181,7 @@ export async function runAgenticTurn(
         route.target,
         working,
         [],
-        modelTimeoutMs(),
+        modelTimeoutMs(config),
         deps.signal
       );
       turnUsage = addUsage(turnUsage, closing.usage);

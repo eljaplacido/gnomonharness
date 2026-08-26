@@ -20,6 +20,24 @@ retain_after = 2048               # tokens to keep at edges in sliding_window
 # under-counts code — one reserve covers both. Default: 15%, at least 1024.
 reserve_output = 8192
 
+# What the harness does when the endpoint misbehaves.
+#
+# In the surface rather than the environment, because a harness that retries
+# three times here and once there is not the same harness — and the timeout
+# decides what counts as apparatus failure, which is a behaviour, not a
+# preference. GNOMON_MODEL_TIMEOUT_MS still works when this says nothing, and
+# the startup banner names it when it is set.
+#
+# Only 11 (timed out) and 12 (unreachable, overloaded, rate-limited) are
+# retried. A 400 with a bad model tag and a prompt that did not fit will fail
+# the same way twice, so retrying them only burns the deadline. Every attempt
+# is announced: a silent retry would make a session that took three tries read
+# as one.
+[resilience]
+attempts = 3              # 1 disables retry
+backoff_ms = 500          # doubled each attempt
+request_timeout_ms = 120000
+
 [endpoints.local]
 url = "http://127.0.0.1:11434/api/chat"
 kind = "ollama"
