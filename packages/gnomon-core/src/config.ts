@@ -6,7 +6,7 @@
  */
 
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
-import { join, resolve, dirname, relative, basename } from "node:path";
+import { join, resolve, dirname, relative, basename, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { SourceEntry } from "./session.js";
 
@@ -1000,7 +1000,14 @@ function collectSurface(baseDir: string): SourceEntry[] {
     for (const entry of entries) {
       const fullPath = join(dir, entry);
       // Prefixed to match the Rust implementation and the golden fixture.
-      const relPath = join(".gnomon", relative(gnomonDir, fullPath));
+      // POSIX separators always. The path string is hashed, so `join()` on
+      // Windows puts backslashes into the manifest and the same tree gets two
+      // hashes. Worse: recomputeManifest looks the canonical SURFACE_PATHS up by
+      // exact string, so every one of them misses and is recorded absent while
+      // the real files are listed again as extras. No-op where sep is "/".
+      const relPath = join(".gnomon", relative(gnomonDir, fullPath))
+        .split(sep)
+        .join("/");
       const st = statSync(fullPath);
       if (st.isDirectory()) {
         walk(fullPath);

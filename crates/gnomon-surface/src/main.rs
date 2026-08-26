@@ -70,7 +70,13 @@ fn collect_surface(dir: &Path) -> Vec<Source> {
                 // Strip the .gnomon/ prefix to get relative paths like
                 // "config.toml", "profiles/local_first.toml", etc.
                 let relative = path.strip_prefix(dir).unwrap_or(path);
-                let rel_str = format!(".gnomon/{}", relative.to_string_lossy());
+                // POSIX separators always: the path is hashed, and WalkDir yields the
+    // platform separator. MAIN_SEPARATOR is '/' on unix so this is a no-op
+    // there, and a filename cannot contain the separator on either platform.
+    let rel_str = format!(
+        ".gnomon/{}",
+        relative.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/")
+    );
 
                 let hash = file_sha256(path);
                 sources.push(Source {
