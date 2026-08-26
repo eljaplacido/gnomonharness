@@ -985,9 +985,11 @@ export async function runAgenticTurn(
       working.push({
         role: "system",
         content:
-          `You cannot call any more tools this turn. Answer now from what you ` +
-          `already gathered, and state plainly what you were unable to examine ` +
-          `so the user knows the answer is partial.`,
+          `No tools are attached to this final call, so answer now from what ` +
+          `you already have. If a change you were asked to make was never ` +
+          `applied by a tool call, say so in your first line — never describe ` +
+          `an edit you did not make as though you made it. Then say what you ` +
+          `were unable to examine, so the answer is legibly partial.`,
       });
       const closing = await callEndpoint(
         route.target,

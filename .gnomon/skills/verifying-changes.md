@@ -5,7 +5,9 @@ match = '\b(test|tests|suite|verify|check|ci|clippy|lint|conformance|green|passi
 roles = ["verifier", "critique", "implementor", "implement", "plan"]
 +++
 
-One command decides:
+One command decides, where the role can run it — `verifier` has a `bash_allow`
+that permits the suite but not this script, so from there run the suite
+directly and report:
 
     .gnomon/ci.sh
 

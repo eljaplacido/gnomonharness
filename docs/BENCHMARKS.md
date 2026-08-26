@@ -30,8 +30,14 @@ Claude Code (`claude -p --output-format json`) was run as a **separate arm**,
 not a peer: it cannot be pointed at the same model, so its result answers "what
 does the ceiling look like", not "which harness is better".
 
-Model tiers: `qwen2.5:7b-instruct` and `qwen3.6:35b` locally, `openai/gpt-5.3-codex`
-and `anthropic/claude-sonnet-5` via OpenRouter.
+Model tiers: `qwen2.5:7b-instruct` and `qwen3.6:35b` locally,
+`openai/gpt-5.3-codex` and `anthropic/claude-sonnet-5` via OpenRouter.
+
+**These are model names, not harness names.** `gpt-5.3-codex` is a model; the
+Codex *CLI harness* is a different thing and is not measured in this study at
+all. Every row of every table below varies the harness and holds the model
+fixed. A column headed "codex" would read as the Codex harness scoring, which
+is not what happened — so the model tiers are written out in full.
 
 Five tasks — search, read, arithmetic, edit, multi-step — each scored on three
 deterministic criteria. The `edit` task is scored by importing the result and
@@ -49,8 +55,8 @@ Harness and raw results: [`benchmarks/`](../benchmarks).
 |---|---|---|---|---|---|
 | qwen2.5-7b | 89% | 31% | 62% | 76% | – |
 | qwen3.6-35b | **100%** | 71% | 89% | 96% | – |
-| gpt-5.3-codex | **100%** | 57% | **100%** | **100%** | 93% |
-| claude-sonnet-5 | **100%** | 64% | **100%** | **100%** | 93% |
+| `openai/gpt-5.3-codex` (model) | **100%** | 57% | **100%** | **100%** | 93% |
+| `anthropic/claude-sonnet-5` (model) | **100%** | 64% | **100%** | **100%** | 93% |
 
 ### Tokens per completed task
 
@@ -58,8 +64,8 @@ Harness and raw results: [`benchmarks/`](../benchmarks).
 |---|---|---|---|---|---|
 | qwen2.5-7b | **5,796** | 251,576 | 11,814 | 122,546 | – |
 | qwen3.6-35b | **4,277** | 55,477 | 7,209 | 73,655 | – |
-| gpt-5.3-codex | 4,560 | 75,944 | **2,312** | 30,291 | 22,184 |
-| claude-sonnet-5 | **5,839** | 175,885 | 5,287 | 56,983 | 44,631 |
+| `openai/gpt-5.3-codex` (model) | 4,560 | 75,944 | **2,312** | 30,291 | 22,184 |
+| `anthropic/claude-sonnet-5` (model) | **5,839** | 175,885 | 5,287 | 56,983 | 44,631 |
 
 ### Aggregate rank — 4 tiers × 4 axes (quality, pass rate, latency, tokens)
 
@@ -165,6 +171,93 @@ else identical: no edit, then edit applied.
 After the fix, gnomon moved 86% → 100% on codex while **every other harness
 scored identically across both sweeps**, which is what makes the attribution
 sound rather than a story about variance.
+
+---
+
+## Terminal-Bench — the external result
+
+Everything above is a suite this repository wrote and scored. This section is
+not: the tasks, the environment and the verifiers all come from
+[Terminal-Bench](https://github.com/laude-institute/terminal-bench), and gnomon
+enters through the same adapter base class as its built-in `codex`,
+`claude-code` and `opencode` adapters.
+
+**Dataset:** `terminal-bench-core==0.1.1`, pinned. The registry offers `0.1.0`,
+`0.1.1` and `head`; `head` is an explicitly moving pre-release, so a number
+measured against it would not be reproducible. There is no 2.x or 3.x task set
+available through this channel, so this is **not** "Terminal-Bench 3.0" and is
+not labelled as such anywhere.
+
+**Subset:** 30 of 80 tasks, spanning git/vcs, sysadmin, security, data,
+algorithmic and SWE work. Deliberately excluded: `build-linux-kernel-qemu`,
+`train-fasttext`, `eval-mteb`, `pytorch-*`, `reshard-c4-data` — their image
+pulls dominate the clock without adding discriminating power. This is a subset
+result and is not a full-suite score.
+
+**Model:** `openai/gpt-5.3-codex` via OpenRouter, identical for every arm.
+
+### Results
+
+| arm | score | what it establishes |
+|---|---|---|
+| **gnomon** | **15/30 (50%)** | the harness result |
+| `naive` (floor) | **0/30 (0%)** | the tasks are not passable without a harness |
+| `oracle` (reference) | 11/12 on the smaller set | the environment itself works |
+
+The floor is the load-bearing number. `naive` runs the same model with minimal
+scaffolding and solved **none** of the thirty. Whatever else is true, the
+harness is doing the work rather than the model doing it unaided.
+
+The rate is also stable: an earlier 12-task run of the same configuration
+scored 6/12, and the 30-task run — which adds 18 tasks the first never saw —
+scored 15/30. Both exactly 50%.
+
+### gnomon's outcome breakdown, 30 tasks
+
+| outcome | count |
+|---|---|
+| pass | 15 |
+| genuine task failure | 10 |
+| agent timeout | 2 |
+| test timeout | 1 |
+| parse error | 1 |
+| unknown agent error | 1 |
+
+Twenty-eight of thirty attempts produced a real outcome; two crashed.
+
+### What this does to the internal study above
+
+The internal suite scored gnomon at **100%** on this same model. The external
+suite scores it at **50%**. That is the clearest possible demonstration of the
+saturation warning already recorded above: five tasks written here, scored by
+criteria written here, measured task design more than harness quality.
+
+The external number is the more honest one, and it says half these tasks are
+still failing.
+
+### What is still open
+
+No comparator. Two attempts at running opencode through Terminal-Bench were
+discarded rather than reported, both because the failure modes said *crash*
+rather than *failed the task*:
+
+1. The stock adapter enumerates providers and rejects `openrouter`, and parses
+   the model id as exactly `provider/model`, which a three-part OpenRouter id
+   breaks.
+2. Forwarding `OPENROUTER_API_KEY` is not sufficient — opencode needs a config
+   declaring the provider before it can resolve one. Without it the agent
+   crashes: 9 of 12, then 30 of 30.
+
+A fixed adapter writes that config into the container before invoking opencode,
+inheriting the installer and result parsing untouched. Until it has run, the
+honest statement is that **gnomon works and adds real value on external tasks,
+and it is not yet known whether it does so better than the alternatives.**
+
+### Confidence
+
+Thirty tasks, one trial each. The 95% interval on 50% is roughly ±18 points, so
+a harness scoring 44% or 56% would be indistinguishable from this result. It is
+a smoke test with an external oracle, not a leaderboard entry.
 
 ---
 

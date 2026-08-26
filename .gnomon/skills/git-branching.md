@@ -1,7 +1,7 @@
 +++
 name = "branching and pull requests"
 description = "How work reaches the default branch here, and what never touches it directly"
-match = '\b(branch|commit|push|pull request|pr|merge|rebase|release|tag|git)\b'
+match = '\b(git|commit|commits|committing|push|pushing|pull request|PRs?|rebase|force-push|gh pr|branch off|feature branch|new branch|the default branch)\b'
 +++
 
 Releases are cut from the default branch, so nothing lands on it by accident.
@@ -16,7 +16,7 @@ One branch is one reviewable idea. If a change grows a second idea, that is a
 second branch — a pull request nobody can hold in their head is one nobody
 reviews.
 
-**Before starting**, confirm which branch you are on and that it is current:
+**Before you commit**, check where you are:
 
     git status --short --branch
     git fetch origin && git log --oneline -3 origin/HEAD
