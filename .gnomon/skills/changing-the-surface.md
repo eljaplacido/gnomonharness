@@ -33,7 +33,10 @@ every `bash` call instead, and a change is reported:
 
     bash — exit 0 · surface changed
 
-If you see that and did not mean it, the surface moved under the session:
+If you see that, work out whether it was you. A command you ran on purpose —
+`gnomon skill accept`, a scaffold that was asked for — is the surface moving
+as intended: say so and carry on. If nothing you ran should have touched
+`.gnomon/`, the surface moved under the session:
 say so in your answer. Do not run `git checkout` on it yourself — that
 would discard whatever the operator has uncommitted there.
 

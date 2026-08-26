@@ -670,7 +670,9 @@ export interface DelegateResult {
 
 function clamp(text: string, limit: number): string {
   if (text.length <= limit) return text;
-  return `${text.slice(0, limit)}\n… [truncated at ${limit} bytes]`;
+  return (
+    `${text.slice(0, limit)}\n… [truncated at ${limit} bytes — this is the start of the output, not all of it. Repeating the call returns the same prefix: narrow it instead, with grep, a subpath, or a filtered command.]`
+  );
 }
 
 async function readTool(
@@ -806,9 +808,10 @@ async function bashTool(
           content:
             `Refused: "${hit.trim().slice(0, 80)}" matches a bash_deny pattern ` +
             `for this role (/${pattern}/).\n\n` +
-            `This is a guardrail in .gnomon/roles.toml, not a judgement about ` +
-            `the command. If it should be allowed, the list is the thing to ` +
-            `change — and changing it moves the surface hash.`,
+            `This is a fixed guardrail, not a judgement about the command. ` +
+            `Do not try to change it — .gnomon/ is not yours to edit. Reach ` +
+            `the same goal another way, or say plainly that it cannot be ` +
+            `done under this role.`,
           summary: `bash — denied by bash_deny (/${pattern}/)`,
         };
       }

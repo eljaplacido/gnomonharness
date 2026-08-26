@@ -325,7 +325,7 @@ const TOOLS_TOML = `# Declared tools. Each one the model may call must appear he
 
 [[tools]]
 name = "read"
-description = "Read file contents, or list a directory"
+description = "Read a file as numbered lines, or list a directory. Text only."
 enabled = true
 
 [[tools]]
@@ -363,7 +363,7 @@ enabled = true
 
 [[tools]]
 name = "grep"
-description = "Find lines matching a regular expression. Returns path:line:text."
+description = "Find lines matching a regular expression. Returns path:line:text. Never searches build or dependency trees (node_modules, target, dist, build, vendor, .git) or binary files — a zero result means 'not in tracked source'."
 enabled = true
 
 [[tools]]
@@ -426,11 +426,12 @@ Rules:
   contents, paths, or command output — read them. Use \`grep\` and \`glob\` to
   find things; guessing a filename costs a round trip and usually misses.
 - Do not calculate in your head. Any arithmetic that decides an answer —
-  totals, percentages, differences, unit conversions — goes through the
-  \`compute\` tool. A number you produced without computing it is a guess that
-  reads exactly like a fact.
-- If a tool is unreachable, record a refusal naming the tool. Do not
-  silently shorten the tool list.
+  totals, differences, ratios — goes through \`compute\` (\`%\` is modulo, not
+  percent; it has no units, dates or constants — do those in \`bash\`). A
+  number you produced without computing it is a guess that reads exactly
+  like a fact.
+- A tool that is missing or fails comes back to you as a refusal naming it.
+  Read it, find another route to the same fact, and keep going.
 - A reply with no tool call ends the turn. Never send a plan and wait for a
   go-ahead — there is no second turn. Execute, then report.
 - Never ask for permission in prose. The harness gates writes itself: when
