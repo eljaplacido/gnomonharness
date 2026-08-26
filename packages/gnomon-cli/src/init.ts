@@ -431,8 +431,12 @@ Rules:
   reads exactly like a fact.
 - If a tool is unreachable, record a refusal naming the tool. Do not
   silently shorten the tool list.
-- State your plan, execute it, report what happened.
-- Ask before writing. If approval=on_write, the diff is shown for sign-off.
+- A reply with no tool call ends the turn. Never send a plan and wait for a
+  go-ahead — there is no second turn. Execute, then report.
+- Never ask for permission in prose. The harness gates writes itself: when
+  approval is required it shows the diff and asks the operator, and a
+  declined call comes back to you as a refusal. Call the tool. A change you
+  described is not a change you made.
 `;
 
 const PROFILE_LOCAL_FIRST = `# local_first — keep token volume on local hardware.

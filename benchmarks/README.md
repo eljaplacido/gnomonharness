@@ -1,0 +1,53 @@
+# benchmarks/
+
+The harness behind [docs/BENCHMARKS.md](../docs/BENCHMARKS.md). Published so the
+numbers can be checked and re-derived rather than taken on trust.
+
+**These are preliminary results.** Read the trust assessment in
+[docs/BENCHMARKS.md](../docs/BENCHMARKS.md#how-much-to-trust-this) first — the
+task set saturates, the sample sizes are small, and the benchmark's author also
+wrote one of the harnesses under test.
+
+| File | What it is |
+|---|---|
+| `harness.py` | The runner: fixtures, tasks, scorers, per-harness invocation |
+| `analyse.py` | Turns a results file into the tables |
+| `claude_code_arm.py` | Claude Code, run separately with a spend cap |
+| `reap.sh` | Kills leftover harness processes between runs — see below |
+| `results/*.json` | Raw per-run records, one file per model tier |
+
+## Running it
+
+Configuration is deliberately absent. Each harness needs its own provider
+config, and the ones used here held a live API key, so they are not committed.
+Supply your own:
+
+```bash
+BENCH_PROVIDER=ollama BENCH_MODEL=qwen2.5:7b-instruct TRIALS=3 python3 harness.py
+```
+
+For OpenRouter, set `BENCH_PROVIDER=openrouter` and provide provider configs at
+the paths named at the top of `harness.py`, plus `OPENROUTER_API_KEY`.
+
+## Two things that will bite you
+
+**Only ever run one instance.** Two concurrent runs reap each other's live
+harness children and each records the other's kills as timeouts. `runfrontier`
+took an exclusive `flock` for this reason; two passes were invalidated before
+the cause was found.
+
+**Keep fixtures outside this directory.** `harness.py` contains the fixture
+files as string literals, so a harness that searches upward will find them and
+answer from the benchmark's own source. `WORK` points outside the tree on
+purpose.
+
+## Fairness notes
+
+Every harness runs unattended, which means each needs its own auto-approve flag
+— `--yes` for gnomon, `--auto` for opencode, `--approval-mode yolo` for omp.
+Omitting one of these does not produce a slow harness; it produces a harness
+that scores zero because it is waiting for a human who is not there.
+
+Token counts sum `input + cacheRead + cacheWrite`. Counting only `input` is
+correct on a local endpoint with no caching and badly wrong on a cached one,
+where it collapses to the uncached delta and ranks harnesses by cache hit-rate.
