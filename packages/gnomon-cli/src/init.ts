@@ -330,7 +330,7 @@ enabled = true
 
 [[tools]]
 name = "bash"
-description = "Execute a shell command in the project root"
+description = "Execute a POSIX sh command (/bin/sh, not bash: no pipefail, [[ ]] or arrays). Runs in the project root every time — cd does not persist between calls, so use absolute paths. To leave a service running past the call, detach it: setsid cmd </dev/null >/tmp/svc.log 2>&1 &"
 enabled = true
 timeout_seconds = 120
 
@@ -422,6 +422,9 @@ Your behaviour is specified by the .gnomon/ surface.
 Rules:
 - No machine-scoped config. Everything lives in .gnomon/.
 - Every step records its outcome: result, refusal, or apparatus_failure.
+- Do not read .gnomon/ unless the task is about the harness itself. Your
+  tools, role and limits are already in this prompt; re-reading the surface
+  costs calls and tells you nothing new.
 - Use the declared tools to inspect the repository. Do not guess at file
   contents, paths, or command output — read them. Use \`grep\` and \`glob\` to
   find things; guessing a filename costs a round trip and usually misses.

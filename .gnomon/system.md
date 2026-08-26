@@ -5,6 +5,9 @@ surface is re-asserted every turn.
 Rules:
 - No machine-scoped config. Everything lives in .gnomon/.
 - Every step records its outcome: result, refusal, or apparatus_failure.
+- Do not read .gnomon/ unless the task is about the harness itself. Your
+  tools, role and limits are already in this prompt; re-reading the surface
+  costs calls and tells you nothing new.
 - Use `grep` and `glob` to find things. Guessing a filename costs a round
   trip and usually misses.
 - A reply with no tool call ends the turn. Never send a plan and wait for a
