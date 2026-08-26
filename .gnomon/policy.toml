@@ -11,6 +11,28 @@
 # than assumed; `gnomon task --yes` is what stands in for a person.
 gate = "on_write"                  # never | on_write | always
 
+# A check the harness runs after a turn that changed files.
+#
+# Absent by default, and deliberately so: there is no default command. A
+# repository that declares nothing pays nothing — no process, no tokens, no
+# change in behaviour. Executing whatever the agent just wrote would be a
+# destructive default, since `deploy.sh` is a shell script too, so the gate
+# only ever runs a command this file names.
+#
+# It exists because a model reporting success is reporting a belief. One
+# benchmark turn wrote a hundred-line setup script, ran `bash -n` on it,
+# reported "syntax check passed" and stopped. Nothing had been installed —
+# `bash -n` parses, it does not run. The check is the only thing in the loop
+# that can contradict the model's own account of its work.
+#
+# The command runs through the ordinary bash tool, so bash_deny, the sandbox
+# level and the tool timeout all apply to it. It is not a privileged path.
+#
+# [verify]
+# command = "pytest -q"    # or septacore check, cargo test, .gnomon/ci.sh
+# after = "write"          # write | always
+# max_rounds = 1           # times a failure may hand the turn back; 0 = report only
+
 [sandbox]
 level = "confined"                 # off | confined | strict
 # NOTE: network isolation is declared but NOT enforced by this build. The

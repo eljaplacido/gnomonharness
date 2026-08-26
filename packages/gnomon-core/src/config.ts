@@ -157,6 +157,38 @@ export interface Policy {
     modes: string[];
     default: string;
   };
+  /**
+   * A check the harness runs after a turn that changed files.
+   *
+   * Declared data, hashed with the rest of the surface, and absent by default:
+   * a repository that declares nothing pays nothing, not a token and not a
+   * process. There is deliberately no default command. Executing whatever the
+   * agent just wrote would be a destructive default in a real repository --
+   * `deploy.sh` is a shell script too -- so the gate only ever runs a command
+   * the repository named itself.
+   *
+   * It exists because a benchmark run showed the gap concretely: a turn wrote a
+   * hundred-line setup script, ran `bash -n` on it, reported "syntax check
+   * passed" and stopped. Nothing had been installed. `bash -n` parses; it does
+   * not run. The harness had no way to know the difference, and neither did the
+   * transcript.
+   */
+  verify?: {
+    /** Shell command to run. Absent means no gate. */
+    command?: string;
+    /**
+     * When to run it. "write" runs it only when the turn used write or edit,
+     * which is the case the evidence supports; "always" runs it on every turn
+     * that made any tool call.
+     */
+    after?: string;
+    /**
+     * How many times a failed check may hand the turn back to the model.
+     * Bounded, and every re-entry still counts against max_steps_total, so a
+     * check that can never pass cannot spend the budget in a circle.
+     */
+    max_rounds?: number;
+  };
   exit_codes?: Record<string, string>;
 }
 
@@ -1020,6 +1052,34 @@ function collectSurface(baseDir: string): SourceEntry[] {
 
   walk(gnomonDir);
   return sources;
+}
+
+/** A resolved [verify] block, or null when the surface declares none. */
+export interface ResolvedVerify {
+  command: string;
+  after: "write" | "always";
+  max_rounds: number;
+}
+
+/**
+ * Read [verify] from policy.toml.
+ *
+ * Returns null unless a command is declared, so every call site can treat "no
+ * gate" as the ordinary case rather than a special one.
+ */
+export function resolveVerify(config: GnomonConfig): ResolvedVerify | null {
+  const v = (config.policy as { verify?: Record<string, unknown> } | undefined)?.verify;
+  const command = typeof v?.command === "string" ? v.command.trim() : "";
+  if (!command) return null;
+  const after = v?.after === "always" ? "always" : "write";
+  const rounds = typeof v?.max_rounds === "number" ? v.max_rounds : 1;
+  return {
+    command,
+    after,
+    // Zero is a legitimate setting: run the check, report it, never hand the
+    // turn back. Negative is not.
+    max_rounds: Math.max(0, Math.floor(rounds)),
+  };
 }
 
 /**

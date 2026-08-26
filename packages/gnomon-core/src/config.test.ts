@@ -3,7 +3,10 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
+  resolveVerify,
   parseToml,
   loadConfig,
   resolveGnomonDir,
@@ -489,5 +492,58 @@ describe("output reserve", () => {
   it("an explicit value is taken as given", () => {
     expect(resolveContext(withBudget(65536, { reserve_output: 0 })).reserve_output).toBe(0);
     expect(resolveContext(withBudget(65536, { reserve_output: 20000 })).reserve_output).toBe(20000);
+  });
+});
+
+describe("[verify] — the gate is absent unless a repository asks for one", () => {
+  // The whole design rests on costing nothing when undeclared: no tokens, no
+  // process, no behaviour change. A repository that says nothing gets the
+  // harness it had before the gate existed.
+  const cfg = (policy: Record<string, unknown>) =>
+    ({ policy } as unknown as Parameters<typeof resolveVerify>[0]);
+
+  it("returns null when policy.toml declares nothing", () => {
+    expect(resolveVerify(cfg({}))).toBeNull();
+  });
+
+  it("returns null for a [verify] block with no command", () => {
+    // Half-declared is not declared. An empty command would otherwise run the
+    // shell with nothing and pass, which reads as verification and is not.
+    expect(resolveVerify(cfg({ verify: {} }))).toBeNull();
+    expect(resolveVerify(cfg({ verify: { command: "   " } }))).toBeNull();
+    expect(resolveVerify(cfg({ verify: { after: "always" } }))).toBeNull();
+  });
+
+  it("resolves a declared command with its defaults", () => {
+    const v = resolveVerify(cfg({ verify: { command: "pytest -q" } }));
+    expect(v).toEqual({ command: "pytest -q", after: "write", max_rounds: 1 });
+  });
+
+  it("defaults `after` to write, because that is the case the evidence covers", () => {
+    // The gap it was built for is a turn that changed files and reported
+    // success. A turn that only read something has nothing to verify.
+    expect(resolveVerify(cfg({ verify: { command: "x" } }))!.after).toBe("write");
+    expect(resolveVerify(cfg({ verify: { command: "x", after: "always" } }))!.after).toBe("always");
+    expect(resolveVerify(cfg({ verify: { command: "x", after: "nonsense" } }))!.after).toBe("write");
+  });
+
+  it("bounds max_rounds, and allows zero", () => {
+    // Zero means: run the check and record it, never hand the turn back. That
+    // is a legitimate posture — report, do not retry.
+    expect(resolveVerify(cfg({ verify: { command: "x", max_rounds: 0 } }))!.max_rounds).toBe(0);
+    expect(resolveVerify(cfg({ verify: { command: "x", max_rounds: 3 } }))!.max_rounds).toBe(3);
+    expect(resolveVerify(cfg({ verify: { command: "x", max_rounds: -5 } }))!.max_rounds).toBe(0);
+    expect(resolveVerify(cfg({ verify: { command: "x", max_rounds: 2.7 } }))!.max_rounds).toBe(2);
+  });
+
+  it("ships no default command anywhere in the scaffolded surface", () => {
+    // Executing whatever the agent just wrote would be a destructive default:
+    // `deploy.sh` is a shell script too. The gate only ever runs a command the
+    // repository named itself.
+    const init = readFileSync(
+      join(__dirname, "../../gnomon-cli/src/init.ts"), "utf-8"
+    );
+    const policyBlock = init.slice(init.indexOf("const POLICY_TOML"));
+    expect(policyBlock).not.toMatch(/^\s*command\s*=/m);
   });
 });

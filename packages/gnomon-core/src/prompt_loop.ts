@@ -19,6 +19,7 @@ import {
   listRoles,
   listProfiles,
   resolveContext,
+  resolveVerify,
   Compaction,
   resolveUi,
   resolveEndpoint,
@@ -865,6 +866,12 @@ export async function runAgenticTurn(
   const ctxLimits = resolveContext(config);
   const working: ChatMessage[] = [...messages];
   const toolLog: string[] = [];
+  // Whether this turn changed anything on disk. The verify gate is about the
+  // difference between "said it did" and "did it", so it only has meaning
+  // after a write or an edit.
+  let touchedFiles = false;
+  const verify = resolveVerify(config);
+  let verifyRounds = 0;
   let turnUsage: TokenUsage | undefined;
   let code = 0;
   let steps = 0;
@@ -944,6 +951,67 @@ export async function runAgenticTurn(
     code = worse(code, result.code);
 
     if (result.code !== 0 || result.toolCalls.length === 0) {
+      // The turn is about to end. If the surface declared a check and this
+      // turn changed files, run it before letting the answer stand — a model
+      // that reports success is reporting a belief, and the check is the only
+      // thing in the loop that can contradict it.
+      //
+      // The check runs through the ordinary bash tool, so bash_deny, the
+      // sandbox level and the tool timeout all apply to it unchanged. It is
+      // not a privileged escape hatch.
+      const gateApplies =
+        verify !== null &&
+        result.code === 0 &&
+        steps > 0 &&
+        verifyRounds < verify.max_rounds &&
+        (verify.after === "always" || touchedFiles);
+
+      if (gateApplies && verify) {
+        verifyRounds++;
+        deps.progress.stop();
+        deps.say(paint(deps.ui, "cyan", `  ⚙ verify`) +
+          paint(deps.ui, "gray", ` ${verify.command}`));
+        const check = await executeTool(
+          "bash",
+          { command: verify.command },
+          { ...ctx, gate: "never" as ApprovalGate },
+          new Set(["bash"])
+        );
+        // bashTool reports TOOL_OK for any command that *ran*; the shell's own
+        // exit status is in the summary, not the tool code. Reading the tool
+        // code here would make every check pass, including the failing ones —
+        // which is precisely the class of silent-success bug this gate exists
+        // to catch.
+        const exitMatch = /exit (-?\d+)/.exec(check.summary);
+        const shellExit = exitMatch ? Number(exitMatch[1]) : (check.code === 0 ? 0 : 1);
+        const passed = check.code === 0 && shellExit === 0;
+
+        toolLog.push(`verify — ${check.summary}`);
+        deps.audit?.write("verify", {
+          role,
+          command: verify.command,
+          exit: shellExit,
+          passed,
+        });
+
+        if (!passed) {
+          deps.say(paint(deps.ui, "yellow",
+            `    ⚠ verify failed — handing the turn back`));
+          working.push({ role: "assistant", content: result.content });
+          working.push({
+            role: "system",
+            content:
+              `The declared verification for this repository failed after your ` +
+              `changes. This is the repository's own check, not an opinion:\n\n` +
+              `$ ${verify.command}\n${check.content}\n\n` +
+              `Your answer is not accepted while this fails. Fix what it shows, ` +
+              `or say plainly that you cannot and why.`,
+          });
+          continue;
+        }
+        deps.say(paint(deps.ui, "gray", `    ✓ verify passed`));
+      }
+
       return {
         content: result.content,
         code,
@@ -1087,6 +1155,9 @@ export async function runAgenticTurn(
       const outcome: ToolOutcome = await executeTool(call.name, call.args, ctx, offered);
       code = worse(code, outcome.code);
       toolLog.push(outcome.summary);
+      if ((call.name === "write" || call.name === "edit") && outcome.code === 0) {
+        touchedFiles = true;
+      }
 
       deps.audit?.write("tool_call", {
         role,

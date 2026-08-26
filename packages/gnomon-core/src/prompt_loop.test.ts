@@ -584,6 +584,90 @@ describe("model API errors", () => {
     expect(subTools).not.toContain("task");
   });
 
+  it("the verify gate hands a turn back when the declared check fails", async () => {
+    // The gap this was built for: a turn writes a script, runs `bash -n` on
+    // it, reports "syntax check passed" and stops. Nothing ran. The check is
+    // the only thing in the loop that can contradict a model's own account of
+    // its work.
+    const config: any = loadConfig("../..");
+    config.policy = { ...config.policy, verify: { command: "exit 1", max_rounds: 1 } };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+
+    let call = 0;
+    const bodies: any[] = [];
+    await withFetch(
+      (async (_u: string, init: any) => {
+        bodies.push(JSON.parse(init.body));
+        call++;
+        // 1st: write a file. 2nd: declare done. 3rd: after the failed check.
+        const tool_calls =
+          call === 1
+            ? [{ function: { name: "write", arguments: { path: "x.txt", content: "hi" } } }]
+            : undefined;
+        return {
+          ok: true,
+          json: async () => ({
+            message: { content: tool_calls ? "" : `answer ${call}`, tool_calls },
+          }),
+        };
+      }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "write a file" }],
+          {
+            approve: async () => true,
+            progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+            say: () => {},
+          }
+        );
+        expect(turn.toolLog.some((l) => l.startsWith("verify —"))).toBe(true);
+      }
+    );
+
+    // The failed check must reach the model as a system message, and the turn
+    // must continue rather than end on the unverified answer.
+    const seen = JSON.stringify(bodies);
+    expect(seen).toContain("declared verification for this repository failed");
+    expect(bodies.length).toBeGreaterThan(2);
+  });
+
+  it("does not run a check the surface never declared", async () => {
+    // Zero cost when absent is the whole bargain: no process, no tokens, no
+    // behaviour change for a repository that asked for nothing.
+    const config: any = loadConfig("../..");
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    let call = 0;
+    await withFetch(
+      (async () => {
+        call++;
+        const tool_calls =
+          call === 1
+            ? [{ function: { name: "write", arguments: { path: "y.txt", content: "hi" } } }]
+            : undefined;
+        return { ok: true, json: async () => ({ message: { content: tool_calls ? "" : "done", tool_calls } }) };
+      }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "write a file" }],
+          {
+            approve: async () => true,
+            progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+            say: () => {},
+          }
+        );
+        expect(turn.toolLog.some((l) => l.startsWith("verify —"))).toBe(false);
+      }
+    );
+  });
+
   it("reports the body, not just the status", async () => {
     // "400 Bad Request" alone sent a real session hunting for a missing model
     // that was installed and working — it just could not accept tools.

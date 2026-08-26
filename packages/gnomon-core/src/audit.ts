@@ -104,6 +104,10 @@ export type AuditKind =
   | "turn"
   | "tool_call"
   | "approval"
+  // The declared verification for a turn that changed files: what ran, and
+  // whether it passed. A trail that records the change but not the check
+  // cannot answer whether the change was ever known to be good.
+  | "verify"
   | "session_end";
 
 export interface AuditRecord {
