@@ -21,3 +21,4 @@ export * from "./audit.js";
 export * from "./session_store.js";
 export * from "./explain.js";
 export * from "./credentials.js";
+export * from "./loops.js";

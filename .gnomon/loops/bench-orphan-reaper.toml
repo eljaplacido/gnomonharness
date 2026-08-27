@@ -1,0 +1,38 @@
+# Reap terminal-bench containers that outlived the process that started them.
+#
+# This is a real incident, not a hypothetical. On 2026-08-27 two benchmark runs
+# were killed at 08:32 and 10:06; ten of their containers survived the parent
+# and were still consuming CPU at 13:40. They exhausted Docker's address pool,
+# starved the live sweep, and made the host unqueryable -- which in turn made
+# the surviving containers invisible, so the condition hid its own cause.
+#
+# The host address is supplied by the environment, never written here. A
+# hostname is machine-scoped config, and this file is content-hashed and
+# committed: baking it in would make the surface hash differ per machine.
+
+[loop]
+name        = "bench-orphan-reaper"
+every       = "5m"
+description = "Kill tb containers that outlived their runner"
+
+[guard]
+# Prints a count. Zero on a healthy box, so the common tick costs one ssh and
+# no model call at all.
+# TOML LITERAL string (single-quoted). A basic "..." string would need
+# backslash escapes for the inner quotes, and gnomon's parseToml does not
+# process them -- it passed the backslashes through, ssh received a hostname
+# wrapped in \" and answered "hostname contains invalid characters". Shell
+# commands belong in literal strings regardless.
+run         = 'ssh -o BatchMode=yes -o ConnectTimeout=30 "${BENCH_HOST:?BENCH_HOST unset}" "wsl -d Ubuntu bash -lc ~/gnomon-bench/orphan_scan.sh"'
+act_when    = "gt 0"
+timeout_sec = 120
+
+[act]
+run         = 'ssh -o BatchMode=yes -o ConnectTimeout=30 "${BENCH_HOST:?BENCH_HOST unset}" "wsl -d Ubuntu bash -lc ~/gnomon-bench/orphan_reap.sh"'
+timeout_sec = 300
+
+[limits]
+# Three failed reaps means the remediation itself is broken. Retrying forever
+# is how a cleanup automation becomes the runaway process it was built to stop.
+max_consecutive_failures = 3
+max_runs_per_hour        = 6

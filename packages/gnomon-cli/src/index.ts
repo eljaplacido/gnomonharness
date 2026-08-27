@@ -26,6 +26,15 @@ import {
   rejectSkill,
   runTask,
   resolveAudit,
+  loadLoops,
+  runTick,
+  readState,
+  installLoop,
+  uninstallLoop,
+  installedLoops,
+  cronExpr,
+  writeState,
+  LOOP_STATE_DIR,
   verifyTrail,
   resolveSessionStore,
   listSessions,
@@ -50,6 +59,7 @@ import {
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { runTui } from "gnomon-tui";
 import { initSurface } from "./init.js";
 
@@ -189,6 +199,124 @@ async function cmdSessionId(args: CliArgs): Promise<void> {
   } else {
     console.log("no-session");
   }
+}
+
+/**
+ * `gnomon loop` — declare supervision in the surface, materialize it on this
+ * machine.
+ *
+ * The split is the point. `list` and `run` read `.gnomon/loops/*.toml`, which
+ * is hashed and portable. `install`/`uninstall` touch this machine's crontab,
+ * which is not in the surface and must never be: a crontab path is exactly the
+ * machine-scoped config Rule 1 keeps out. `status` reconciles the two.
+ */
+async function cmdLoop(args: CliArgs): Promise<void> {
+  const root = args.dir ? resolve(args.dir) : process.cwd();
+  const gnomonDir = resolveGnomonDir(args.dir);
+  const loops = loadLoops(gnomonDir);
+  const sub = args.subcommand ?? "list";
+  const named = (n?: string) => {
+    const l = loops.find((x) => x.name === n);
+    if (!l) {
+      console.error(`Unknown loop: ${n ?? "(none given)"}. Declared: ${loops.map((x) => x.name).join(", ") || "none"}`);
+      process.exit(1);
+    }
+    return l!;
+  };
+
+  if (sub === "list") {
+    if (!loops.length) {
+      console.log("No loops declared. Add .gnomon/loops/<name>.toml");
+      return;
+    }
+    const inst = new Set(installedLoops());
+    for (const l of loops) {
+      const st = readState(root, l.name);
+      const flag = st.tripped ? "BREAKER OPEN" : inst.has(l.name) ? "installed" : "declared";
+      console.log(`${l.name}  every=${l.every}  [${flag}]  ${l.description ?? ""}`);
+    }
+    return;
+  }
+
+  if (sub === "run") {
+    // Exit codes follow gnomon's buckets so cron and callers can branch without
+    // parsing text: 0 the loop is fine, 2 it acted-and-failed (a real signal),
+    // 10 the apparatus could not look at all.
+    const l = named(args.positional[0]);
+    const r = runTick(root, l);
+    const stamp = new Date().toISOString();
+    console.log(`${stamp} ${r.loop} ${r.outcome}${r.guardValue !== undefined ? ` guard=${r.guardValue}` : ""}${r.detail ? ` — ${r.detail}` : ""}`);
+    if (r.outcome === "guard_failed") process.exit(10);
+    if (r.outcome === "act_failed" || r.outcome === "breaker_open") process.exit(2);
+    return;
+  }
+
+  if (sub === "dry-run") {
+    const l = named(args.positional[0]);
+    const r = runTick(root, l, { dryRun: true });
+    console.log(`${r.loop} ${r.outcome}${r.guardValue !== undefined ? ` guard=${r.guardValue}` : ""}${r.detail ? ` — ${r.detail}` : ""}`);
+    return;
+  }
+
+  if (sub === "install") {
+    const l = named(args.positional[0]);
+    // NOT process.argv[1]: under the tsx launcher that is src/index.ts, and
+    // cron handed it to a bare `node`, which cannot load TypeScript. Resolve
+    // the launcher relative to this module and pin the interpreter to the one
+    // running now, since cron's PATH has neither nvm nor tsx.
+    const launcher = fileURLToPath(new URL("../gnomon.js", import.meta.url));
+    const bin = `${JSON.stringify(process.execPath)} ${JSON.stringify(launcher)}`;
+    const line = installLoop(root, l, bin);
+    console.log(`installed ${l.name}\n  ${line}`);
+    return;
+  }
+
+  if (sub === "uninstall") {
+    const name = args.positional[0];
+    console.log(uninstallLoop(name!) ? `uninstalled ${name}` : `not installed: ${name}`);
+    return;
+  }
+
+  if (sub === "status") {
+    const inst = new Set(installedLoops());
+    const declared = new Set(loops.map((l) => l.name));
+    let drift = false;
+    for (const l of loops) {
+      const st = readState(root, l.name);
+      const where = inst.has(l.name) ? "installed" : "NOT INSTALLED";
+      if (!inst.has(l.name)) drift = true;
+      console.log(
+        `${l.name}\n  schedule   ${l.every} (${cronExpr(l.every)})\n  machine    ${where}\n  breaker    ${st.tripped ? "OPEN" : "closed"} (${st.consecutive_failures} consecutive failures)\n  last tick  ${st.last_tick ?? "never"} ${st.last_outcome ?? ""}`
+      );
+    }
+    for (const n of inst) {
+      if (!declared.has(n)) {
+        drift = true;
+        console.log(`${n}\n  DRIFT: in crontab but not declared in .gnomon/loops/`);
+      }
+    }
+    if (drift) process.exitCode = 1;
+    return;
+  }
+
+  if (sub === "reset") {
+    const l = named(args.positional[0]);
+    writeState(root, l.name, { consecutive_failures: 0, action_times: [], tripped: false });
+    console.log(`reset ${l.name} (breaker closed)`);
+    return;
+  }
+
+  if (sub === "kill") {
+    // The global stop. A supervisor you cannot switch off is a liability.
+    let n = 0;
+    for (const name of installedLoops()) if (uninstallLoop(name)) n++;
+    console.log(`uninstalled ${n} loop(s) from crontab`);
+    return;
+  }
+
+  console.error(`Unknown loop subcommand: ${sub}`);
+  console.error("Use: list | status | dry-run <name> | run <name> | install <name> | uninstall <name> | reset <name> | kill");
+  process.exit(1);
 }
 
 async function cmdTui(args: CliArgs): Promise<void> {
@@ -784,6 +912,10 @@ async function main(): Promise<void> {
     case "prompt":
     case "run":
       await cmdPrompt(args);
+      break;
+    case "loop":
+    case "loops":
+      await cmdLoop(args);
       break;
     case "tui":
       await cmdTui(args);
