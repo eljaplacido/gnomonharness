@@ -1,0 +1,35 @@
+# Keep the benchmark host's Docker able to build. Docker Desktop rewrites
+# ~/.docker/config.json with credsStore="desktop.exe" on session changes, and
+# that credential helper then fails with "logon session does not exist" -- every
+# `docker compose build` exits 1, and a whole tier crashes 30/30 as
+# unknown_agent_error with no model call. This happened tonight after a WSL
+# restart and killed a full sweep before the cause was found.
+#
+# The sweep's own preflight strips it once per tier; this loop strips it
+# continuously, so a mid-tier rewrite cannot fail the builds. It cannot restart
+# a dead docker DAEMON (needs sudo) -- that it can only surface.
+#
+# Host is supplied by the environment (BENCH_HOST in .gnomon-loops/env), never
+# written here: a hostname is machine-scoped config and this file is hashed.
+
+[loop]
+name        = "bench-creds-guard"
+every       = "3m"
+description = "Strip Docker Desktop credsStore that breaks tb builds"
+
+[guard]
+# Counts config problems (credsStore/credHelpers present, or daemon down).
+# Zero on a healthy box, so the common tick is one ssh and no remediation.
+run         = 'ssh -o BatchMode=yes -o ConnectTimeout=30 "${BENCH_HOST:?BENCH_HOST unset}" "wsl -d Ubuntu bash -lc ~/gnomon-bench/creds_scan.sh"'
+act_when    = "gt 0"
+timeout_sec = 90
+
+[act]
+run         = 'ssh -o BatchMode=yes -o ConnectTimeout=30 "${BENCH_HOST:?BENCH_HOST unset}" "wsl -d Ubuntu bash -lc ~/gnomon-bench/creds_fix.sh"'
+timeout_sec = 90
+
+[limits]
+# credsStore can reappear often, so allow more acts than the reaper. Five
+# failed strips in a row means the fix itself is broken -- stop and surface it.
+max_consecutive_failures = 5
+max_runs_per_hour        = 20

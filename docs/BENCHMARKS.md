@@ -1,7 +1,17 @@
 # Preliminary benchmarks
 
-**Status: preliminary. Not an official result. Do not cite these numbers as a
-harness ranking.**
+**Status: preliminary, and partly retracted. Not an official result. Do not
+cite these numbers as a harness ranking.**
+
+> **Retraction notice, 27 August 2026.** A post-mortem of the benchmark
+> apparatus found three defects that each penalised the *slower* arm, so they
+> biased the ranking rather than merely widening its error bars. The
+> comparative tables below are not reliable. The `naive` floor claim in the
+> Terminal-Bench section has been withdrawn outright. gnomon's 15/30 survives;
+> the harness comparisons do not.
+>
+> Read [BENCHMARK-POSTMORTEM.md](BENCHMARK-POSTMORTEM.md) before citing
+> anything here.
 
 This document records a first pass at measuring gnomon against comparable
 open-source coding harnesses, run on one machine over one day. It is published
@@ -201,12 +211,30 @@ result and is not a full-suite score.
 | arm | score | what it establishes |
 |---|---|---|
 | **gnomon** | **15/30 (50%)** | the harness result |
-| `naive` (floor) | **0/30 (0%)** | the tasks are not passable without a harness |
+| `naive` (floor) | **no result** | nothing — see below |
 | `oracle` (reference) | 11/12 on the smaller set | the environment itself works |
 
-The floor is the load-bearing number. `naive` runs the same model with minimal
-scaffolding and solved **none** of the thirty. Whatever else is true, the
-harness is doing the work rather than the model doing it unaided.
+**Correction, 27 August 2026.** This section previously read "`naive` (floor)
+**0/30 (0%)** — the tasks are not passable without a harness", and called that
+the load-bearing number on the grounds that the harness, not the model, was
+doing the work.
+
+The raw record for that run is `{'unknown_agent_error': 30}`. All thirty trials
+**crashed**. Not one of them ran the model and failed a task. A crash floor and
+a capability floor are different claims, and only the second supports "the
+harness is doing the work rather than the model doing it unaided" — so that
+sentence was not evidenced by its own data and has been withdrawn.
+
+**The external result therefore has no floor at present.** gnomon's 15/30
+stands on its own (that arm was a solo run and lost only 2 of 30 trials to
+apparatus, making it the cleanest measurement in the corpus), but the claim
+that the tasks are unreachable without a harness is unsupported until the
+`naive` arm is re-run and produces real task verdicts rather than crashes.
+
+How this was missed, and the rule that now prevents it, are in
+[BENCHMARK-POSTMORTEM.md](BENCHMARK-POSTMORTEM.md) — finding F4. The short
+version: a trial that crashed never produced a verdict, so it cannot be scored
+as a zero.
 
 The rate is also stable: an earlier 12-task run of the same configuration
 scored 6/12, and the 30-task run — which adds 18 tasks the first never saw —

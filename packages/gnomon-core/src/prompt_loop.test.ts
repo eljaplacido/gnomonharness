@@ -635,10 +635,64 @@ describe("model API errors", () => {
     expect(bodies.length).toBeGreaterThan(2);
   });
 
+  it("nudges a model that makes many calls without changing a file", async () => {
+    // The measured failure: on a weak model gnomon ran ~100 distinct read-only
+    // commands and changed nothing, where fast harnesses gave up in a handful.
+    // The stall check misses it because the calls are all different. After the
+    // idle threshold a nudge must reach the model telling it to act or conclude.
+    const state: any = { config: loadConfig("../.."), exchanges: [], currentRole: "implement" };
+    const bodies: any[] = [];
+    let call = 0;
+    await withFetch(
+      (async (_url: string, init: any) => {
+        bodies.push(JSON.parse(init.body));
+        call++;
+        // A *different* read-only command every turn — never a write — past the
+        // threshold, then stop. Distinct calls on purpose: identical ones would
+        // trip the stall check first, and the failure this guards against is
+        // diverse flailing, not repetition.
+        const tool_calls =
+          call <= 14
+            ? [{ function: { name: "bash", arguments: { command: `echo probe ${call}` } } }]
+            : undefined;
+        return {
+          ok: true,
+          json: async () => ({ message: { content: tool_calls ? "" : "gave up", tool_calls } }),
+        };
+      }) as unknown as typeof fetch,
+      async () => {
+        await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "find the bug" }],
+          {
+            approve: async () => true,
+            progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+            say: () => {},
+          }
+        );
+      }
+    );
+    // The idle nudge must have reached the model.
+    const seen = JSON.stringify(bodies);
+    expect(seen).toContain("without changing a file");
+    // Once per streak, not on every subsequent call.
+    const nudged = bodies.filter((b) =>
+      JSON.stringify(b.messages).includes("without changing a file")
+    );
+    expect(nudged.length).toBeGreaterThanOrEqual(1);
+    expect(nudged.length).toBeLessThan(bodies.length);
+  });
+
   it("does not run a check the surface never declared", async () => {
     // Zero cost when absent is the whole bargain: no process, no tokens, no
-    // behaviour change for a repository that asked for nothing.
+    // behaviour change for a repository that asked for nothing. Tested against
+    // a surface with no check declared — set explicitly so the assertion holds
+    // whatever this repository's own policy.toml happens to declare.
     const config: any = loadConfig("../..");
+    config.policy = { ...config.policy, verify: undefined };
     const state: any = { config, exchanges: [], currentRole: "implement" };
     let call = 0;
     await withFetch(

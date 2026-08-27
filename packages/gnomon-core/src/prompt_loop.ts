@@ -780,6 +780,21 @@ export const DEFAULT_LEGS = 8;
 /** Consecutive identical calls that mean the model is going in circles. */
 const STALL_REPEATS = 3;
 
+/**
+ * Calls a role may make without changing a file before it is nudged to decide.
+ *
+ * `STALL_REPEATS` catches a model repeating one call verbatim. It does not
+ * catch the other failure mode measured on weak models: a model that flails —
+ * many *different* diagnostic calls, none of them a write, converging on
+ * nothing. On `git-multibranch` gnomon ran a hundred distinct read-only
+ * commands over twenty minutes and still failed; the fast harnesses gave up in
+ * four. Persistence wins hard-but-solvable tasks (it is why gnomon solves mazes
+ * others abandon), so this is a nudge, not a wall: after this many calls with
+ * no write it prompts the model to act or conclude, and lets it continue. The
+ * genuine long solve keeps its budget; the flailer gets a reason to stop.
+ */
+const NUDGE_AFTER_IDLE = 12;
+
 /** A comparable identity for a tool call, for stall detection. */
 function callSignature(call: ToolCall): string {
   return `${call.name}:${JSON.stringify(call.args)}`;
@@ -986,6 +1001,10 @@ export async function runAgenticTurn(
   let steps = 0;
   let stepsThisLeg = 0;
   let leg = 1;
+  // Calls since the last write/edit, and whether this idle streak was already
+  // nudged. Reset together on a successful write so each streak is nudged once.
+  let callsSinceWrite = 0;
+  let nudgedThisStreak = false;
   // Signatures of the last few calls, to notice a model going in circles.
   const recentCalls: string[] = [];
   let usedModel = route.model;
@@ -1261,6 +1280,7 @@ export async function runAgenticTurn(
       }
       steps++;
       stepsThisLeg++;
+      callsSinceWrite++;
       recentCalls.push(callSignature(call));
       if (recentCalls.length > STALL_REPEATS * 2) recentCalls.shift();
       const gated = needsApproval(call.name, gate) && offered.has(call.name);
@@ -1275,6 +1295,9 @@ export async function runAgenticTurn(
       toolLog.push(outcome.summary);
       if ((call.name === "write" || call.name === "edit") && outcome.code === 0) {
         touchedFiles = true;
+        // A write is progress: the idle streak, and its nudge, start over.
+        callsSinceWrite = 0;
+        nudgedThisStreak = false;
       }
 
       deps.audit?.write("tool_call", {
@@ -1307,6 +1330,32 @@ export async function runAgenticTurn(
       });
       // Both branches did the same thing. The spinner was stopped before the
       // tool ran, so this restarts it either way.
+      deps.progress.start(`${usedModel} — ${steps} tool call(s) so far`);
+    }
+
+    // Flailing? Many calls, none of them a write. Unlike the stall check this
+    // does not require the calls to be identical — the measured failure mode is
+    // a model trying many *different* things and changing nothing. Nudge once
+    // per idle streak (it resets on the next write) and let the turn continue:
+    // a genuine long solve keeps working, a flailer gets a reason to conclude.
+    if (callsSinceWrite >= NUDGE_AFTER_IDLE && !nudgedThisStreak) {
+      nudgedThisStreak = true;
+      deps.progress.stop();
+      deps.say(
+        paint(
+          deps.ui,
+          "gray",
+          `  [tools] ${callsSinceWrite} call(s) without changing a file — nudging to decide`
+        )
+      );
+      working.push({
+        role: "system",
+        content:
+          `You have run ${callsSinceWrite} tool calls without changing a file. ` +
+          `If you have found what you need, make the change now. If the task ` +
+          `cannot be completed, say so plainly and stop — state what you were ` +
+          `unable to do and why. Do not keep investigating without acting.`,
+      });
       deps.progress.start(`${usedModel} — ${steps} tool call(s) so far`);
     }
   }
