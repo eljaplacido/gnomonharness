@@ -635,6 +635,90 @@ describe("model API errors", () => {
     expect(bodies.length).toBeGreaterThan(2);
   });
 
+  it("urges convergence past converge_after, re-firing as the budget shrinks", async () => {
+    // The measured failure: on weak models gnomon spends its whole step budget
+    // exploring and the external clock kills it with nothing submitted. Past the
+    // role's converge_after fraction the harness must push submit-or-conclude,
+    // and keep pushing as the remaining budget shrinks.
+    const config: any = loadConfig("../..");
+    // Small, reachable budget: converge at step 4, re-fire every 2, wall at 8.
+    config.roles = {
+      ...config.roles,
+      implement: { ...config.roles.implement, max_steps: 2, max_steps_total: 8, converge_after: 0.5 },
+    };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const bodies: any[] = [];
+    let call = 0;
+    await withFetch(
+      (async (_url: string, init: any) => {
+        bodies.push(JSON.parse(init.body));
+        call++;
+        // Read-only calls, never a write, past the wall; then stop.
+        const tool_calls =
+          call <= 10
+            ? [{ function: { name: "bash", arguments: { command: `echo probe ${call}` } } }]
+            : undefined;
+        return {
+          ok: true,
+          json: async () => ({ message: { content: tool_calls ? "" : "done", tool_calls } }),
+        };
+      }) as unknown as typeof fetch,
+      async () => {
+        await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "fix it" }],
+          {
+            approve: async () => true,
+            progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+            say: () => {},
+          }
+        );
+      }
+    );
+    // The convergence push must have reached the model, more than once.
+    const converged = bodies.filter((b) =>
+      JSON.stringify(b.messages).includes("when they run out any work you have not applied is lost")
+    );
+    expect(converged.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not urge convergence when converge_after is absent", async () => {
+    // Opt-in: a role that declares no converge_after runs full exploration to
+    // the wall, which is what wins on capable models. Absence must be silent.
+    const config: any = loadConfig("../..");
+    config.roles = {
+      ...config.roles,
+      implement: { ...config.roles.implement, max_steps: 2, max_steps_total: 8, converge_after: undefined },
+    };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const bodies: any[] = [];
+    let call = 0;
+    await withFetch(
+      (async (_url: string, init: any) => {
+        bodies.push(JSON.parse(init.body));
+        call++;
+        const tool_calls =
+          call <= 10
+            ? [{ function: { name: "bash", arguments: { command: `echo probe ${call}` } } }]
+            : undefined;
+        return { ok: true, json: async () => ({ message: { content: tool_calls ? "" : "done", tool_calls } }) };
+      }) as unknown as typeof fetch,
+      async () => {
+        await promptLoop.runAgenticTurn(
+          state, "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "fix it" }],
+          { approve: async () => true, progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false }, say: () => {} }
+        );
+      }
+    );
+    expect(JSON.stringify(bodies)).not.toContain("work you have not applied is lost");
+  });
+
   it("nudges a model that makes many calls without changing a file", async () => {
     // The measured failure: on a weak model gnomon ran ~100 distinct read-only
     // commands and changed nothing, where fast harnesses gave up in a handful.

@@ -985,6 +985,14 @@ export async function runAgenticTurn(
     typeof roleDef.max_steps_total === "number"
       ? roleDef.max_steps_total
       : maxSteps * DEFAULT_LEGS;
+  // Step at which the role starts being pushed to converge (submit-or-conclude).
+  // Absent / non-positive converge_after means never — full exploration to the
+  // wall, which is what wins on capable models. A step count, never wall-clock,
+  // so the same surface behaves the same on a fast and a slow box.
+  const convergeAt =
+    typeof roleDef.converge_after === "number" && roleDef.converge_after > 0
+      ? Math.floor(maxTotal * Math.min(1, roleDef.converge_after))
+      : Infinity;
 
   const ctxLimits = resolveContext(config);
   const working: ChatMessage[] = [...messages];
@@ -1007,6 +1015,9 @@ export async function runAgenticTurn(
   // rather than reminded once and then left alone.
   let callsSinceWrite = 0;
   let callsAtLastNudge = 0;
+  // Step at which convergence was last urged, so the push re-fires as the
+  // remaining budget shrinks rather than being said once and forgotten.
+  let stepsAtLastConverge = 0;
   // Signatures of the last few calls, to notice a model going in circles.
   const recentCalls: string[] = [];
   let usedModel = route.model;
@@ -1361,6 +1372,36 @@ export async function runAgenticTurn(
           `unable to do and why. Do not keep investigating without acting.`,
       });
       deps.progress.start(`${usedModel} — ${steps} tool call(s) so far`);
+    }
+
+    // Converging? Past the role's converge_after fraction, push the model to
+    // stop exploring and submit what already works, or conclude it cannot. This
+    // fires on budget consumed regardless of whether the model is writing, and
+    // re-fires every checkpoint's worth of calls as the remaining budget
+    // shrinks — the pressure rises toward the wall. It targets the measured
+    // timeout gap: converge before the external clock kills the process with
+    // nothing submitted. Only active where the surface opts in.
+    if (steps >= convergeAt && steps - stepsAtLastConverge >= maxSteps) {
+      stepsAtLastConverge = steps;
+      const left = Math.max(0, maxTotal - steps);
+      deps.progress.stop();
+      deps.say(
+        paint(
+          deps.ui,
+          "yellow",
+          `  [tools] budget ${steps}/${maxTotal} — urging convergence (${left} call(s) left)`
+        )
+      );
+      working.push({
+        role: "system",
+        content:
+          `You have used ${steps} of ${maxTotal} tool calls — about ${left} ` +
+          `remain, and when they run out any work you have not applied is lost. ` +
+          `Stop exploring now. Apply and submit what already works. If the task ` +
+          `cannot be completed with what you have, say so plainly in your first ` +
+          `line, state what blocked it, and stop — do not start new investigation.`,
+      });
+      deps.progress.start(`${usedModel} — ${steps} tool call(s), converging`);
     }
   }
 }

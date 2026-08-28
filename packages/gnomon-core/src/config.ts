@@ -233,6 +233,27 @@ export interface RoleDef {
    */
   max_steps_total?: number;
   /**
+   * Fraction of `max_steps_total` (0–1) after which the harness pushes the
+   * model to converge — stop exploring, apply and submit what already works,
+   * or say plainly it cannot. Escalates as the remaining budget shrinks.
+   *
+   * The benchmark data behind this: gnomon's answers match the field's leaders
+   * (identical wrong-answer counts) but on weak models it spends its whole
+   * step budget exploring and the *external* clock kills the process with
+   * nothing submitted — recorded as apparatus_failure. Converging before the
+   * wall turns "grind until killed" into "submit a partial or conclude", which
+   * is how lean harnesses beat it on weak models.
+   *
+   * Deliberately a STEP fraction, never a wall-clock deadline: a fast box and a
+   * slow box must behave identically on the same surface, and steps are in the
+   * hashed surface. Absent means off — exploration runs to `max_steps_total`,
+   * which is what wins on capable models, so capable-model role profiles omit
+   * it or set it high. This is opt-in on purpose: it is a measured behaviour,
+   * not a default, per the harness-research finding that added structure can
+   * hurt as well as help.
+   */
+  converge_after?: number;
+  /**
    * Shell commands this role may run, as regular expressions.
    *
    * Absent means any command. That matters more than it looks: `bash` can
