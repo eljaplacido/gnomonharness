@@ -91,7 +91,7 @@ provider-specific features.
 | Gap | Who has it | Why it matters |
 |---|---|---|
 | **MCP** | Cline, Goose, Continue, Claude Code | The single largest gap. New *kinds* of tools require implementing them in `gnomon-core`. |
-| **Cloud / async execution** | Codex, Cursor, OpenHands | No queue, no worktree pool, no issue-to-PR while you do something else. |
+| **Cloud / async execution** | Codex, Cursor, OpenHands | No queue, no worktree pool, no issue-to-PR while you do something else. Cron-scheduled `loops` are the one unattended path — single guard/act ticks, not a queue. |
 | **IDE surface** | Cursor, Cline, Continue, Windsurf, Roo | Terminal only. |
 | **Sandboxed isolation** | OpenHands | `confined` is filesystem path containment, not a container. `bash` reaches the network. |
 | **Ecosystem** | all of them | This is one repository. |

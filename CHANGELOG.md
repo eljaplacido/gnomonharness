@@ -4,6 +4,21 @@
 
 ### Added
 
+- **`loops` — unattended supervision without a daemon.** `gnomon loop|loops`
+  runs guard/act ticks off the OS scheduler (cron): a guard command decides
+  whether to act, and only then does it escalate to a `gnomon task`. A circuit
+  breaker halts a loop that keeps failing rather than hammering. Subcommands:
+  `list`, `status`, `dry-run`, `run`, `install`, `uninstall`, `reset`, `kill`.
+  Loops live in `.gnomon/loops/*.toml`. This is the one unattended path — a
+  single guard/act tick each fire, never a queue, worktree pool, or daemon.
+
+- **`[resilience]` — survive a blip, and say which failure it was.** A long run
+  should not die on a transient hiccup. `[resilience]` (`attempts`, `backoff_ms`,
+  `request_timeout_ms`) retries only the transient transport codes (11 timeout,
+  12 unreachable/5xx/429) — never a deterministic 400 that will fail identically
+  — and announces each attempt, so three tries never read as one. Scaffolded
+  into every surface; enabled by default (`attempts = 3`).
+
 - **`todo` — the checklist a long run is steered by.** A turn spanning thirty
   tool calls loses the shape of what it set out to do, and the model re-derives
   the plan from the transcript every few steps. The whole list is replaced on

@@ -126,7 +126,9 @@ a command can write anything.
 
 **Every step lands in one of three buckets** — `result`, `refusal`,
 `apparatus_failure` — with no composite verdict. A declined approval is a
-refusal. A timeout is an apparatus failure. A tool that ran and returned a
+refusal. A timeout that ends the turn unrecovered is an apparatus failure; one
+the model recovers from is recorded on that step but does not stamp the turn. A
+tool that ran and returned a
 non-zero exit is a *result*: the tool worked.
 
 ---
@@ -136,7 +138,7 @@ non-zero exit is a *result*: the tool worked.
 ```mermaid
 flowchart LR
     subgraph SURFACE[".gnomon/ — the surface, content-hashed"]
-        S1["config.toml<br/>defaults · context · ui<br/>routing · endpoints · audit"]
+        S1["config.toml<br/>defaults · context · ui<br/>routing · endpoints · audit · resilience"]
         S2["roles.toml<br/>model · endpoint<br/>tools · budgets"]
         S3["tools.toml<br/>policy.toml<br/>system.md"]
         S4["skills/<br/>learned notes"]
@@ -418,7 +420,7 @@ gnomon/
 
 ```
 .gnomon/
-├── config.toml      # defaults, context, ui, routing, endpoints, audit, session
+├── config.toml      # defaults, context, ui, routing, endpoints, audit, session, resilience
 ├── roles.toml       # model + endpoint + tool scope per role
 ├── tools.toml       # declared tools
 ├── policy.toml      # approval gate, sandbox level, edit format
@@ -680,6 +682,7 @@ endpoint = "zen"
 | `write_allow` | Paths this role may create or modify, as globs. Absent = anywhere in the sandbox. |
 | `max_steps` | Tool calls per **leg**. Reaching it is a checkpoint, not a wall: the harness compacts the turn's working context and continues. A role that omits it gets 12. |
 | `max_steps_total` | Where a turn actually stops. Defaults to `max_steps × 8`. Set it equal to `max_steps` to stop at the first checkpoint. |
+| `converge_after` | Opt-in. A step-budget fraction past which the harness urges *submit or conclude* as the budget depletes. Absent = full exploration. |
 | `fallback` | Second endpoint tried when the primary fails or times out. |
 
 ### `tools.toml`
@@ -745,6 +748,11 @@ gate = "on_write"                  # never | on_write | always
 [sandbox]
 level = "confined"                 # off | confined | strict
 network = false                    # DECLARED BUT NOT ENFORCED — see Known Limits
+
+[verify]                           # a declared check run after a turn changes files
+command = ".gnomon/verify.sh"      # non-recursive; empty/absent = off
+after = "write"                    # run when the turn touched a file
+max_rounds = 1                     # let the model react to a failure, once
 ```
 
 ### `system.md`
@@ -1241,6 +1249,7 @@ regular expressions reject inline `(?i)`; matching is already case-insensitive.
 | `gnomon session <cmd>` | Run shell commands as recorded session steps. |
 | `gnomon apply\|simulate <patchset.json>` | Apply or dry-run a patch set. |
 | `gnomon tui` | Saved-session viewer. |
+| `gnomon loop\|loops [list\|status\|dry-run\|run\|install\|uninstall\|reset\|kill]` | Cron-scheduled guard/act supervision with a circuit breaker. No daemon. |
 
 `--dir <path>` targets a different project. `gnomon` finds `.gnomon/` by
 walking up from the current directory, the way `git` finds `.git`.
@@ -1432,9 +1441,11 @@ what other harnesses do, and says what has and has not been measured.
   connects it. Declaring a server is reported at startup as unavailable.
   New *kinds* of tools require implementing them in `gnomon-core`. This is the
   largest single gap against every other harness in its class.
-- **No cloud or background execution.** A turn runs in your terminal, in your
-  repository, now. There is no queue, no worktree pool, no "open a PR while I
-  do something else".
+- **No cloud execution, and no long-running daemon.** A turn runs in your
+  terminal, in your repository, now. There is no queue, no worktree pool, no
+  "open a PR while I do something else". The one unattended path is
+  cron-scheduled loops (`gnomon loops`) — single guard/act ticks on the OS
+  scheduler, not a queue or a worktree pool.
 - **No role chain.** Routing picks which role answers a turn. Nothing runs
   `coordinator → implementor → verifier` in sequence, gating on the verifier.
 - **`network = false` is enforced for `webfetch`, and is not process

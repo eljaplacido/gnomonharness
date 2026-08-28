@@ -49,6 +49,15 @@ and every other command exits `0` or `1`. The finer codes are reserved for
 callers that need them; a consumer should switch on the bucket, which is the
 part that is stable.
 
+Which of those a turn exits with is settled from its *terminal* step, not the
+worst step in it. `apparatus_failure` (`10`) is reserved for a turn that *ends*
+unrecovered on the apparatus tier — the final model call failed. A mid-turn
+transient the turn recovered from — a bash step that hit its own deadline, a
+retried 5xx or timeout — is recorded as an apparatus_failure *step* but is
+dropped from the turn's exit once the turn reaches a `result` or `refusal`
+terminal, so a turn that goes on to conclude cleanly exits `0`. Non-apparatus
+codes still take the worse of the two, so a refusal floor is never demoted.
+
 **Fixture**: `conformance/exit_codes.json` — every code maps to its bucket.
 CI asserts the fixture holds nine codes and that each maps to one of the three
 declared buckets. It does not compare the fixture against the codes the
@@ -104,7 +113,9 @@ enumerations output. CI asserts the output conforms.
 
 One JSON object per session: manifest + ordered list of steps. Each step
 carries: native value, bucket, duration. No composite verdict — carry the
-set of outcomes and let the reader decide.
+set of outcomes and let the reader decide. A step's bucket is its own raw code;
+the session's single reported (exit) code is the *settled* code above, so a turn
+can hold an `apparatus_failure` step and still exit `result`.
 
 **Fixture**: `conformance/session_golden.json` — a minimal valid session.
 CI asserts every session has: manifest, steps array, each step has
