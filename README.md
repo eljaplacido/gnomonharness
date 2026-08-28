@@ -352,7 +352,7 @@ right one:
 No .gnomon/ in /home/you/my-project — creating one.
 Project: /home/you/my-project
 Role: implement
-Model: qwen2.5:14b-instruct
+Model: qwen3.6:35b
 Tools (implement): read, bash, todo, compute, glob, grep, edit, write
 ```
 
