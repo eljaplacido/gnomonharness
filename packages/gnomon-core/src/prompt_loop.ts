@@ -795,6 +795,18 @@ const STALL_REPEATS = 3;
  */
 const NUDGE_AFTER_IDLE = 12;
 
+/**
+ * How many calls between convergence re-pushes once `converge_after` is reached.
+ *
+ * The first version re-fired every `max_steps` (a checkpoint, ~28), which in a
+ * short run — a weak model under an external clock reaches only ~45 calls before
+ * being killed — fired the convergence push once and then never again. A single
+ * "submit what you have" is easy to ignore. A finer, fixed cadence keeps the
+ * pressure up through the tail of the budget without being tied to the
+ * checkpoint interval.
+ */
+const CONVERGE_REFIRE = 6;
+
 /** A comparable identity for a tool call, for stall detection. */
 function callSignature(call: ToolCall): string {
   return `${call.name}:${JSON.stringify(call.args)}`;
@@ -1016,8 +1028,9 @@ export async function runAgenticTurn(
   let callsSinceWrite = 0;
   let callsAtLastNudge = 0;
   // Step at which convergence was last urged, so the push re-fires as the
-  // remaining budget shrinks rather than being said once and forgotten.
-  let stepsAtLastConverge = 0;
+  // remaining budget shrinks rather than being said once and forgotten. Seeded
+  // so the first push lands exactly at convergeAt, then every CONVERGE_REFIRE.
+  let stepsAtLastConverge = convergeAt - CONVERGE_REFIRE;
   // Signatures of the last few calls, to notice a model going in circles.
   const recentCalls: string[] = [];
   let usedModel = route.model;
@@ -1381,7 +1394,7 @@ export async function runAgenticTurn(
     // shrinks — the pressure rises toward the wall. It targets the measured
     // timeout gap: converge before the external clock kills the process with
     // nothing submitted. Only active where the surface opts in.
-    if (steps >= convergeAt && steps - stepsAtLastConverge >= maxSteps) {
+    if (steps >= convergeAt && steps - stepsAtLastConverge >= CONVERGE_REFIRE) {
       stepsAtLastConverge = steps;
       const left = Math.max(0, maxTotal - steps);
       deps.progress.stop();
