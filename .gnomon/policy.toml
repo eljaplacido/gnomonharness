@@ -28,23 +28,21 @@ gate = "on_write"                  # never | on_write | always
 # The command runs through the ordinary bash tool, so bash_deny, the sandbox
 # level and the tool timeout all apply to it. It is not a privileged path.
 #
-# A check the harness runs after a turn that changed files. Absent by default,
-# deliberately: a repository that declares nothing pays nothing.
+# A check the harness runs after a turn that changed files. Declared on this
+# repository after the failure it prevents happened in the benchmark's own
+# tooling (2026-08-27): a script passed `bash -n`, was reported validated, and
+# broke because parsing is not running.
 #
-# Not enabled on this repository, and the reason is instructive. The obvious
-# command is `.gnomon/ci.sh` — but that script runs gnomon's own vitest suite,
-# and the unit tests exercise `runAgenticTurn` against the live surface. A test
-# whose turn writes a file would trip this gate, run ci.sh, and recurse into the
-# very suite that is running it. The verify command for a repository must be a
-# check that does not re-enter the agent's own test path; ci.sh is not that for
-# gnomon itself. A lighter, non-recursive check (typecheck + contract validation
-# without the vitest run) is the right thing to declare here, and is left as a
-# deliberate follow-up rather than shipped half-done.
-#
-# [verify]
-# command = ".gnomon/verify.sh"   # NOT ci.sh — must not run the vitest suite
-# after = "write"          # write | always
-# max_rounds = 1           # times a failure may hand the turn back; 0 = report only
+# The command is verify.sh, NOT ci.sh — deliberately. ci.sh runs gnomon's own
+# vitest suite, which exercises runAgenticTurn; a turn that writes a file would
+# trip this gate, run ci.sh, and recurse into the suite running it. verify.sh
+# typechecks the TypeScript workspace only (~3s, no vitest, no cargo test), so
+# it catches the most common said-it-did-vs-did-it gap — an edit that does not
+# compile — without re-entering the agent's own test path.
+[verify]
+command = ".gnomon/verify.sh"
+after = "write"          # write | always
+max_rounds = 1           # times a failure may hand the turn back; 0 = report only
 
 [sandbox]
 level = "confined"                 # off | confined | strict

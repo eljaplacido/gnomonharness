@@ -1001,10 +1001,12 @@ export async function runAgenticTurn(
   let steps = 0;
   let stepsThisLeg = 0;
   let leg = 1;
-  // Calls since the last write/edit, and whether this idle streak was already
-  // nudged. Reset together on a successful write so each streak is nudged once.
+  // Calls since the last write/edit, and the count at which the model was last
+  // nudged. Both reset on a successful write, so a fresh idle streak is nudged
+  // from zero again and a long flail is re-nudged every NUDGE_AFTER_IDLE calls
+  // rather than reminded once and then left alone.
   let callsSinceWrite = 0;
-  let nudgedThisStreak = false;
+  let callsAtLastNudge = 0;
   // Signatures of the last few calls, to notice a model going in circles.
   const recentCalls: string[] = [];
   let usedModel = route.model;
@@ -1295,9 +1297,9 @@ export async function runAgenticTurn(
       toolLog.push(outcome.summary);
       if ((call.name === "write" || call.name === "edit") && outcome.code === 0) {
         touchedFiles = true;
-        // A write is progress: the idle streak, and its nudge, start over.
+        // A write is progress: the idle streak, and its nudge cadence, restart.
         callsSinceWrite = 0;
-        nudgedThisStreak = false;
+        callsAtLastNudge = 0;
       }
 
       deps.audit?.write("tool_call", {
@@ -1335,11 +1337,13 @@ export async function runAgenticTurn(
 
     // Flailing? Many calls, none of them a write. Unlike the stall check this
     // does not require the calls to be identical — the measured failure mode is
-    // a model trying many *different* things and changing nothing. Nudge once
-    // per idle streak (it resets on the next write) and let the turn continue:
-    // a genuine long solve keeps working, a flailer gets a reason to conclude.
-    if (callsSinceWrite >= NUDGE_AFTER_IDLE && !nudgedThisStreak) {
-      nudgedThisStreak = true;
+    // a model trying many *different* things and changing nothing. Re-nudge
+    // every NUDGE_AFTER_IDLE calls without a write (a single reminder is easy to
+    // ignore, and the overnight sweep showed weak models grinding 7–9 tasks to
+    // the timeout wall), and let the turn continue: a genuine long solve keeps
+    // working, a flailer gets repeated reason to conclude.
+    if (callsSinceWrite - callsAtLastNudge >= NUDGE_AFTER_IDLE) {
+      callsAtLastNudge = callsSinceWrite;
       deps.progress.stop();
       deps.say(
         paint(

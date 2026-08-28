@@ -647,12 +647,12 @@ describe("model API errors", () => {
       (async (_url: string, init: any) => {
         bodies.push(JSON.parse(init.body));
         call++;
-        // A *different* read-only command every turn — never a write — past the
-        // threshold, then stop. Distinct calls on purpose: identical ones would
-        // trip the stall check first, and the failure this guards against is
-        // diverse flailing, not repetition.
+        // A *different* read-only command every turn — never a write — well past
+        // two idle intervals, then stop. Distinct calls on purpose: identical
+        // ones would trip the stall check first, and the failure this guards
+        // against is diverse flailing, not repetition.
         const tool_calls =
-          call <= 14
+          call <= 26
             ? [{ function: { name: "bash", arguments: { command: `echo probe ${call}` } } }]
             : undefined;
         return {
@@ -678,11 +678,12 @@ describe("model API errors", () => {
     // The idle nudge must have reached the model.
     const seen = JSON.stringify(bodies);
     expect(seen).toContain("without changing a file");
-    // Once per streak, not on every subsequent call.
+    // Re-nudged across a long flail (every NUDGE_AFTER_IDLE calls), not once
+    // and forgotten — but not on every single call either.
     const nudged = bodies.filter((b) =>
       JSON.stringify(b.messages).includes("without changing a file")
     );
-    expect(nudged.length).toBeGreaterThanOrEqual(1);
+    expect(nudged.length).toBeGreaterThanOrEqual(2);
     expect(nudged.length).toBeLessThan(bodies.length);
   });
 
