@@ -57,6 +57,32 @@
   and where it is behind. It states plainly that no public benchmark has been
   run and that the numbers in it are local measurements.
 
+- **`converge_after` — a step-budget convergence phase (`roles.toml`).** A
+  Terminal-Bench sweep showed gnomon's answers match the field's leaders —
+  identical wrong-answer counts to goose and forge — but on weak models it
+  spends its whole step budget exploring and the *external* clock kills the
+  process with nothing submitted, scored as apparatus failure. Past this
+  fraction of `max_steps_total` the harness urges the model to stop exploring
+  and submit what works or conclude it cannot, re-firing as the remaining budget
+  shrinks. Deliberately a step fraction, never a wall-clock deadline: a fast box
+  and a slow box must behave identically on the same hashed surface. Opt-in —
+  absent means full exploration, which is what wins on capable models.
+
+- **The idle nudge — a model that changes nothing gets told to decide.** The
+  stall check catches a call repeated verbatim; it misses the other measured
+  failure, a model running many *different* read-only commands and converging on
+  nothing (one weak-model run made ~100 distinct probes over twenty minutes).
+  After `NUDGE_AFTER_IDLE` calls with no write the harness nudges it to act or
+  conclude, re-firing every interval so a single reminder is not simply ignored.
+
+- **`[verify]` shipped enabled, via a non-recursive `verify.sh`.** The gate that
+  runs a declared check after a turn changes files, turned on for this
+  repository. The command is `verify.sh` — a TypeScript typecheck of the
+  workspace (~3s) — deliberately *not* `ci.sh`: ci.sh runs the vitest suite that
+  exercises `runAgenticTurn`, so a write-turn would recurse into the gate. A
+  typecheck catches the most common said-it-did-vs-did-it gap, an edit that does
+  not compile, without re-entering the agent's own test path.
+
 ### Changed
 
 - **`[sandbox] network = false` is enforced for `webfetch`** and the startup
