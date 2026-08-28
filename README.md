@@ -307,6 +307,10 @@ implementations agree.
 
 ## Install
 
+> New here? **[GETTING_STARTED.md](GETTING_STARTED.md)** is the shortest path —
+> install, launch, first task. This section and the next cover the same ground
+> in more detail.
+
 Requires **Node ≥ 20**, **pnpm 9**, and a **Rust toolchain**. For local
 inference, [Ollama](https://ollama.com) — though any OpenAI-shaped endpoint
 works.
