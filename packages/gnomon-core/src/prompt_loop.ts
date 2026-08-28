@@ -880,6 +880,31 @@ function worse(a: number, b: number): number {
 }
 
 /**
+ * Settle a turn's reported code from its accumulated code and the code of the
+ * step that actually ended it.
+ *
+ * apparatus_failure means the apparatus — model transport, container, the
+ * harness itself — failed the turn, not that the agent did badly. worse() is
+ * monotonic across a turn, so a single mid-turn transient the model recovered
+ * from — a bash command that hit its own deadline (TOOL_FAILED), a retried 5xx
+ * or timeout — would otherwise stamp the whole turn apparatus_failure even
+ * though it went on to write an answer and conclude cleanly. That is a lie about
+ * where the failure was: the harness worked fine.
+ *
+ * So apparatus_failure is reserved for a turn that *ends* on an apparatus-tier
+ * code (the final model call failed unrecovered). When the turn instead reaches
+ * a result or a refusal terminal — a clean prose conclusion (terminal 0), a
+ * stall/wall floor (4), a cancel (2) — a superseded apparatus-tier code is
+ * dropped and the terminal governs. Non-apparatus codes still take the worse of
+ * the two, so a refusal floor is never demoted to a result.
+ */
+function settle(accumulated: number, terminal: number): number {
+  if (mapBucket(terminal) === "apparatus_failure") return terminal;
+  if (mapBucket(accumulated) === "apparatus_failure") return terminal;
+  return worse(accumulated, terminal);
+}
+
+/**
  * Run one turn to completion: call the model, execute any tools it asks for,
  * feed the results back, repeat until it answers in prose.
  *
@@ -1037,7 +1062,7 @@ export async function runAgenticTurn(
 
   const cancelled = (): TurnResult => ({
     content: CANCELLED,
-    code: worse(code, 2),
+    code: settle(code, 2),
     model: usedModel,
     toolSteps: steps,
     toolLog,
@@ -1177,7 +1202,7 @@ export async function runAgenticTurn(
 
       return {
         content: result.content,
-        code,
+        code: settle(code, result.code),
         model: usedModel,
         toolSteps: steps,
         toolLog,
@@ -1239,7 +1264,7 @@ export async function runAgenticTurn(
 
       return {
         content,
-        code: worse(code, 4),
+        code: settle(code, 4),
         model: usedModel,
         toolSteps: steps,
         toolLog,

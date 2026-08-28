@@ -1270,6 +1270,49 @@ describe("runTask — the non-interactive contract", () => {
       }
     );
   });
+
+  it("does not stamp a whole turn apparatus_failure for a mid-turn blip the model recovered from", async () => {
+    // A tool that hits TOOL_FAILED mid-turn (here an empty bash command) used to
+    // lock the turn's code to apparatus_failure through worse()'s monotonicity,
+    // even after the model went on to answer and conclude cleanly. That is a lie
+    // about where the failure was — the harness worked. The turn is a result.
+    const config: any = loadConfig("../..");
+    config.policy = { ...config.policy, verify: undefined };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    let call = 0;
+    await withFetch(
+      (async () => {
+        call++;
+        const tool_calls =
+          call === 1
+            ? [{ function: { name: "bash", arguments: { command: "" } } }]
+            : undefined;
+        return {
+          ok: true,
+          json: async () => ({
+            message: { content: tool_calls ? "" : "the answer is 42", tool_calls },
+          }),
+        };
+      }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "answer the question" }],
+          {
+            approve: async () => true,
+            progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+            say: () => {},
+          }
+        );
+        expect(turn.content).toBe("the answer is 42");
+        // 0 = result; the pre-fix value was TOOL_FAILED (11) = apparatus_failure.
+        expect(turn.code).toBe(0);
+      }
+    );
+  });
 });
 
 describe("listModels", () => {

@@ -83,6 +83,23 @@
   typecheck catches the most common said-it-did-vs-did-it gap, an edit that does
   not compile, without re-entering the agent's own test path.
 
+### Fixed
+
+- **`apparatus_failure` is reserved for a turn that *ends* unrecovered.** The
+  turn's code was accumulated with a monotonic `worse()`, so a single mid-turn
+  transient the model recovered from — a bash command that hit its own deadline
+  (`TOOL_FAILED`), a retried 5xx or timeout — stamped the whole turn
+  `apparatus_failure` even after it wrote an answer and concluded cleanly. That
+  mislabels the agent's result as a harness failure, and under valid-trial
+  scoring silently drops completed work from the denominator. A new `settle()`
+  keeps `apparatus_failure` only when the *terminal* step is apparatus-tier (the
+  final model call failed); a result or refusal terminal — a clean conclusion, a
+  stall/wall floor, a cancel — drops a superseded apparatus code, while
+  non-apparatus codes still take the worse of the two so a refusal floor is never
+  demoted to a result. Surfaced by the P0 benchmark, where converge-on arms
+  showed 12.5%→38.5% `apparatus_failure` on hard tasks whose transcripts had
+  written valid answers; `converge_after` itself is a bystander.
+
 ### Changed
 
 - **`[sandbox] network = false` is enforced for `webfetch`** and the startup
