@@ -178,7 +178,10 @@ describe("the README does not promise what is not built", () => {
     // than the gaps themselves.
     expect(readme).toContain("No MCP");
     expect(readme).toContain("No role chain");
-    expect(readme).toContain("No cloud or background execution");
+    // Qualified from "No cloud or background execution" once `loops` shipped:
+    // cron-scheduled loops ARE an unattended path, so the blanket claim was
+    // false. The limits that remain true are stated exactly.
+    expect(readme).toContain("No cloud execution, and no long-running daemon");
     // `network = false` is enforced for `webfetch` and is not process
     // isolation. Both halves have to be stated: claiming enforcement without
     // the bash caveat would promise isolation that no allow-list over shell

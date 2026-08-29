@@ -1315,6 +1315,29 @@ describe("runTask — the non-interactive contract", () => {
   });
 });
 
+describe("isLocalEndpoint", () => {
+  it("marks localhost, the LAN, and Tailscale as local hardware; cloud hosts as not", () => {
+    const local = [
+      "http://127.0.0.1:11434/api/chat",
+      "http://localhost:4200/v1/chat/completions",
+      "http://192.168.1.5:8080",
+      "http://10.0.0.2:11434",
+      "http://172.16.5.5:8080",
+      "http://100.86.231.23:18080/v1", // Tailscale CGNAT (100.64.0.0/10)
+      "http://gx10.local:11434",
+    ];
+    const cloud = [
+      "https://openrouter.ai/api/v1/chat/completions",
+      "https://opencode.ai/zen/v1/chat/completions",
+      "https://api.githubcopilot.com/chat/completions",
+      "http://100.200.1.1:80", // 100.200 is outside the CGNAT range
+      "not a url",
+    ];
+    for (const u of local) expect(promptLoop.isLocalEndpoint(u), u).toBe(true);
+    for (const u of cloud) expect(promptLoop.isLocalEndpoint(u), u).toBe(false);
+  });
+});
+
 describe("listModels", () => {
   const withFetch = async (impl: typeof fetch, run: () => Promise<void>) => {
     const original = globalThis.fetch;

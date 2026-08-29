@@ -91,6 +91,20 @@ api_key_env = "OPENCODE_API_KEY"   # the NAME of the variable, never the key
 url = "http://127.0.0.1:4200/v1/chat/completions"
 kind = "openai"
 
+# Cloud endpoints — templates, commented so they do not show as unavailable
+# until you want one. Uncomment a block and set the named env var (the key
+# itself never lives in the surface), then point a role at it in roles.toml:
+# endpoint = "openrouter". Local and cloud live side by side, one role each.
+# [endpoints.openrouter]
+# url = "https://openrouter.ai/api/v1/chat/completions"
+# kind = "openai"
+# api_key_env = "OPENROUTER_API_KEY"
+#
+# [endpoints.copilot]
+# url = "https://api.githubcopilot.com/chat/completions"
+# kind = "openai"
+# api_key_env = "GITHUB_COPILOT_TOKEN"
+
 # To actually use one, point a role at it in roles.toml:
 #
 #   [roles.plan]

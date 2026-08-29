@@ -1616,6 +1616,30 @@ export interface EndpointModels {
  * moment. Listing is a read-only query against the endpoints the surface
  * already declares.
  */
+/**
+ * Does an endpoint URL point at local hardware — this box or the LAN — or a
+ * remote cloud? The model list marks each so "which run on my machine" is not
+ * left as a guess from the endpoint name (`go` at :4200 is local; `zen` is not).
+ */
+export function isLocalEndpoint(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(host)) return true;
+  if (host.endsWith(".local")) return true;
+  // RFC1918 private ranges are the LAN, and 100.64.0.0/10 (CGNAT) is what
+  // Tailscale hands out — both are the operator's own hardware, not a cloud.
+  return (
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)
+  );
+}
+
 export async function listModels(config: GnomonConfig): Promise<EndpointModels[]> {
   const out: EndpointModels[] = [];
 
@@ -2343,10 +2367,18 @@ export class CommandMenu {
     const rows = found.slice(0, MENU_ROWS);
     const width = Math.max(...COMMANDS.map((c) => c.name.length));
 
-    const body = rows.map(
-      (c) =>
-        `  ${paint(ui, "cyan", c.name.padEnd(width))}  ${paint(ui, "gray", c.help)}`
-    );
+    // Truncate each row to the terminal width so a long help string never
+    // wraps. A wrapped row makes the body taller than the save/restore redraw
+    // assumes — the actual cause of the menu tearing into duplicated, smeared
+    // copies on a narrow terminal. `2 + width + 2` is the plain prefix width
+    // (indent, padded name, gap); the escape codes paint adds occupy no columns.
+    const cols = Math.max(20, (this.out.columns ?? 80) - 1);
+    const clip = (s: string, room: number): string =>
+      s.length <= room ? s : `${s.slice(0, Math.max(1, room - 1))}…`;
+    const body = rows.map((c) => {
+      const help = clip(c.help, Math.max(0, cols - (width + 4)));
+      return `  ${paint(ui, "cyan", c.name.padEnd(width))}  ${paint(ui, "gray", help)}`;
+    });
     if (found.length > rows.length) {
       body.push(paint(ui, "gray", `  … ${found.length - rows.length} more`));
     }
@@ -3596,13 +3628,14 @@ export async function runPromptLoop(
 
           const items: PickItem[] = [];
           for (const e of offered) {
+            const where = isLocalEndpoint(e.url) ? "local" : "cloud";
             for (const m of e.models) {
               const key = `${e.endpoint}\u0000${m}`;
               const held = inUse.get(key);
               items.push({
                 key,
                 label: m,
-                hint: held ? `@${e.endpoint} · ${held}` : `@${e.endpoint}`,
+                hint: held ? `${where} @${e.endpoint} · ${held}` : `${where} @${e.endpoint}`,
                 current: Boolean(held),
               });
             }
