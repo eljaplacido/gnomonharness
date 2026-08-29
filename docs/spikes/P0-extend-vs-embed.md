@@ -1,5 +1,8 @@
 # P0 Spike — Findings Template
 
+> **Historical.** An early design spike kept for the record. It references the
+> author's `pi` tool and scratch files that are not part of this repository.
+
 ## Purpose
 
 Determine **extend vs embed** by testing pi package hook surfaces, and choose

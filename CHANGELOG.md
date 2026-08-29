@@ -427,7 +427,7 @@
 - `/mode`, `/skills`; `gnomon skill list|accept|reject`.
 
 - **`[endpoints]` in config.toml.** Named inference endpoints (`local`,
-  and whatever else you declare — OpenCode Zen, OpenFang, any OpenAI-shaped
+  and whatever else you declare — OpenCode Zen, OpenRouter, any OpenAI-shaped
   API), selected per role and per fallback with `endpoint = "<name>"`.
   Routing now lives in the surface and is hashed with it; previously the
   primary URL came from `GNOMON_MODEL_URL` or a hardcoded localhost default,

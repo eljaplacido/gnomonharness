@@ -1,7 +1,8 @@
 /**
  * P0 Spike Test — Tool Definition Interception
  *
- * Run with: pi -e /home/eljaplacido/Desktop/gnomon/P0_test_extension.ts
+ * Historical design spike (kept for the record). Was originally run with
+ * `pi -e` against a scratch file that is not part of this repository.
  *
  * Tests:
  * 1. Can we read tool definitions via before_agent_start?

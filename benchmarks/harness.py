@@ -17,22 +17,26 @@ binary check hides that.
 import json, os, re, shutil, sqlite3, statistics as st, subprocess, sys, time
 from pathlib import Path
 
-ROOT = Path("/tmp/claude-1000/-home-eljaplacido-Desktop-gnomon/ac2c4057-bbed-4190-9a9f-b089f8918684/scratchpad/bench")
+# Paths are configurable so this runs on any machine: set the BENCH_* env vars,
+# or let the comparator binaries resolve on PATH. The defaults below are only a
+# convenience for the author layout — nothing here is required to exist.
+REPO = Path(__file__).resolve().parent.parent
+ROOT = Path(os.environ.get("BENCH_ROOT", os.path.expanduser("~/.cache/gnomon-bench")))
 # Fixtures live OUTSIDE the benchmark directory on purpose. With work/ nested
 # under bench/, a harness that searches upward finds bench.py — which contains
 # the fixture files as string literals — and answers from the benchmark's own
 # source. opencode did exactly that: it reported TIMEOUT_SECONDS "in
 # bench/bench.py", which is neither the fixture nor an answer.
-WORK = Path("/tmp/claude-1000/-home-eljaplacido-Desktop-gnomon/ac2c4057-bbed-4190-9a9f-b089f8918684/fixtures")
+WORK = Path(os.environ.get("BENCH_WORK", str(ROOT.parent / "fixtures")))
 PROVIDER = os.environ.get("BENCH_PROVIDER", "ollama")   # ollama | openrouter
 IS_OR = PROVIDER == "openrouter"
 PICONF = (ROOT/"or"/"piconf") if IS_OR else (ROOT/"piconf")
 OMP_OVERLAY = (ROOT/"or"/"omp-openrouter.yml") if IS_OR else (ROOT/"omp-ollama.yml")
-GNOMON = "/home/eljaplacido/Desktop/gnomon/packages/gnomon-cli/gnomon.js"
-OPENCODE = "/home/eljaplacido/.opencode/bin/opencode"
-PI = "/home/eljaplacido/.local/bin/pi"
-OMP = "/home/eljaplacido/.local/bin/omp"
-PIRS = os.path.expanduser("~/pi-builds/pi_agent_rust/target/release/pi")
+GNOMON = os.environ.get("BENCH_GNOMON", str(REPO / "packages" / "gnomon-cli" / "gnomon.js"))
+OPENCODE = os.environ.get("BENCH_OPENCODE") or shutil.which("opencode") or "opencode"
+PI = os.environ.get("BENCH_PI") or shutil.which("pi") or "pi"
+OMP = os.environ.get("BENCH_OMP") or shutil.which("omp") or "omp"
+PIRS = os.environ.get("BENCH_PIRS", os.path.expanduser("~/pi-builds/pi_agent_rust/target/release/pi"))
 OC_DB = (ROOT/"or"/"occonf"/"bench.db") if IS_OR else (ROOT/"occonf"/"bench.db")
 OC_CONF = (ROOT/"or"/"occonf"/"opencode.json") if IS_OR else (ROOT/"occonf"/"opencode.json")
 MODEL = os.environ.get("BENCH_MODEL", "qwen2.5:7b-instruct")

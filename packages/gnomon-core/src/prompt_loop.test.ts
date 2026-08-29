@@ -1372,7 +1372,7 @@ describe("isLocalEndpoint", () => {
       "http://192.168.1.5:8080",
       "http://10.0.0.2:11434",
       "http://172.16.5.5:8080",
-      "http://100.86.231.23:18080/v1", // Tailscale CGNAT (100.64.0.0/10)
+      "http://100.100.0.42:18080/v1", // Tailscale CGNAT (100.64.0.0/10)
       "http://gx10.local:11434",
     ];
     const cloud = [
