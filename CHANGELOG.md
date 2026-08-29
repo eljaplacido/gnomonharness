@@ -149,6 +149,17 @@
 
 ### Changed
 
+- **Open-source release hardening.** The default `gnomon init` scaffold no
+  longer seeds the author-private `septacore check` as the verifier's first
+  `bash_allow` entry — any shell command satisfies the gate, and the built-in
+  `[verify]` block works with nothing external installed. A `.gitattributes`
+  forces LF so the content-hashed surface hashes identically on a Windows
+  checkout. Docs now match what shipped (MCP stdio, themes, `/allow`), state the
+  Linux/macOS-only support stance, and carry the maintainer contact; the
+  Terminal-Bench campaign ships a `summarize.py` that regenerates its buckets
+  from raw data and a reviewer section (tasks, arms legend, scoring rule,
+  caveats). Machine-specific paths were removed from the tracked repro scripts.
+
 - **`[sandbox] network = false` is enforced for `webfetch`** and the startup
   note no longer says it is unenforced. It says what is true instead: enforced
   for the tool gnomon controls, and *not* process isolation, because `bash` can
@@ -164,9 +175,35 @@
 
 ### Security
 
-- **The `.gnomon/` surface is no longer writable by a tool call.** `write` and
-  `edit` refuse any path inside it, whatever the role and whatever the approval
-  gate. The surface decides the tool list, the approval gate and every
+- **Pre-release security audit — five confinement bypasses closed** (each with a
+  regression test):
+  - *bash allow-list bypass.* A single-quoted argument ending in a backslash
+    kept `scanShellCommand`'s quote open (it applied the double-quote escape
+    rule to single quotes, which bash treats literally), so
+    `cargo test --features 'x\'; curl … | sh` scanned as one allow-listed
+    segment and ran as two commands. Single quotes now close on the first quote.
+  - *strict surface guard vs. a symlink.* `inSurface` compared a lexical path
+    while the write followed the link, so `write glink/roles.toml`
+    (`glink -> .gnomon`) skipped the strict/consent gate and landed in the
+    surface. It now realpaths both sides, matching the sandbox check.
+  - *delegated consent.* A `task` sub-turn inherited the human's `/allow`, so
+    under `custom|all` a model-chosen sub-turn could write the surface. Forced
+    to `strict` at any delegation depth.
+  - *MCP calls ran ungated.* `mcp__…` dispatch called the server directly with
+    no approval, even under `gate = "always"`. Now gated like a mutating tool.
+  - *MCP environment leak.* A spawned server inherited the full process
+    environment — every provider key and stored credential. The child env is now
+    a minimal base plus only the names the surface declared.
+- **webfetch SSRF: IPv4-mapped IPv6 blocked.** `http://[::ffff:a9fe:a9fe]/`
+  (169.254.169.254) and `::ffff:7f00:1` (127.0.0.1) reached the guard in hex
+  form — which Node's URL parser keeps, and normalizes the dotted form down to —
+  and the dotted-only check missed them. The hex tail is decoded and re-checked.
+  The residual single-resolution DNS-rebinding window is documented at the guard.
+- **The `.gnomon/` surface is not writable by a tool call in the default
+  `strict` mode.** `write` and `edit` refuse any path inside it, whatever the
+  role and whatever the approval gate; `/allow custom|all` is the human-consented
+  path that lifts it (see Added), and even then `edit` always refuses and a
+  delegated sub-turn is forced back to `strict`. The surface decides the tool list, the approval gate and every
   allow-list, so an agent that could write there could rewrite the rules it was
   being judged by — `gate = "never"`, a wider `bash_allow`, an `edit` tool it
   was not given — and the next turn would run under the surface it authored. It
