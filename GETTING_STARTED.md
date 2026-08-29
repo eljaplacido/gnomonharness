@@ -115,6 +115,47 @@ Prefer one shot, no terminal? The exit code carries the outcome:
 gnomon task "fix the bug in add()" --yes
 ```
 
+## Using a cloud model (e.g. OpenCode) with an API key
+
+gnomon keeps the **endpoint** (safe to commit) separate from the **key** (never
+committed). Setup is two steps, and the second is one command.
+
+1. Declare the endpoint once in `.gnomon/config.toml` — the `api_key_env` line is
+   what makes it a keyed endpoint:
+
+   ```toml
+   [endpoints.go]
+   url = "https://opencode.ai/zen/v1/chat/completions"
+   kind = "openai"
+   api_key_env = "OPENCODE_API_KEY"
+   ```
+
+2. Store the key — one command, input hidden:
+
+   ```bash
+   gnomon key set go
+   ```
+
+   It writes the key to a machine-local file (mode 0600). Your `.gnomon/` only
+   ever holds the variable *name* (`OPENCODE_API_KEY`), never the value, so it
+   stays safe to commit. (`gnomon key list` shows what is stored, names only;
+   `gnomon key unset go` removes it.)
+
+Now point a role at it. In the loop, **`/models`** lists what each endpoint
+serves — pick a `go` model and it writes both `model` and `endpoint = "go"` into
+that role. Or edit `.gnomon/roles.toml` directly:
+
+```toml
+[roles.implement]
+model   = "<a model the go endpoint serves>"
+endpoint = "go"
+```
+
+Check it worked with **`/explain endpoints`** (shows the URL, whether the key is
+set, and who routes there) and **`/models`** (an endpoint that is down shows the
+error instead of a model list). A **local** endpoint like Ollama or a server on
+`127.0.0.1` needs no key — skip step 2 for those.
+
 ## Stuck?
 
 Inside the loop, **`/explain <topic>`** tells you what a feature is, how *your*
