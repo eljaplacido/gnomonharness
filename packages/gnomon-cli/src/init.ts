@@ -95,12 +95,14 @@ kind = "openai"
 api_key_env = "OPENCODE_API_KEY"   # the NAME of the variable, never the key
 provider = "opencode"
 
-# A LOCAL OpenAI-shaped server (OpenCode/LM Studio/vLLM/llama.cpp in server
-# mode). Point the url at yours; local servers need no key. Shows as  · local.
+# OpenCode Go — the $10/mo subscription tier (opencode.ai/go). Cloud, keyed.
+# Models are prefixed opencode-go/ (e.g. opencode-go/deepseek-v4-flash); run
+# /models to list them. Store the key with:  gnomon key set go
 [endpoints.go]
-url = "http://127.0.0.1:4200/v1/chat/completions"
+url = "https://opencode.ai/zen/go/v1/chat/completions"
 kind = "openai"
-provider = "self-hosted"
+api_key_env = "OPENCODE_API_KEY"
+provider = "opencode"
 
 # Cloud templates — commented so they do not show as unavailable until you want
 # one. Uncomment a block, then store its key with:  gnomon key set <name>
