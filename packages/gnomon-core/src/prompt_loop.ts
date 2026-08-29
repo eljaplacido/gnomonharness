@@ -30,6 +30,8 @@ import {
   ResolvedRouting,
   RoutingMode,
   listEndpoints,
+  isLocalEndpoint,
+  endpointClass,
   parseMetaFields,
   ResolvedUi,
   MetaField,
@@ -37,6 +39,7 @@ import {
   loadConfig,
 } from "./config.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence } from "./render.js";
+export { isLocalEndpoint } from "./config.js";
 import {
   Todo,
   buildToolSet,
@@ -1663,25 +1666,6 @@ export interface EndpointModels {
  * remote cloud? The model list marks each so "which run on my machine" is not
  * left as a guess from the endpoint name (`go` at :4200 is local; `zen` is not).
  */
-export function isLocalEndpoint(url: string): boolean {
-  let host: string;
-  try {
-    host = new URL(url).hostname.toLowerCase();
-  } catch {
-    return false;
-  }
-  if (["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(host)) return true;
-  if (host.endsWith(".local")) return true;
-  // RFC1918 private ranges are the LAN, and 100.64.0.0/10 (CGNAT) is what
-  // Tailscale hands out — both are the operator's own hardware, not a cloud.
-  return (
-    /^10\./.test(host) ||
-    /^192\.168\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)
-  );
-}
-
 export async function listModels(config: GnomonConfig): Promise<EndpointModels[]> {
   const out: EndpointModels[] = [];
 
@@ -2697,7 +2681,10 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       const roles = listRoles(state.config);
       for (const name of listEndpoints(state.config)) {
         const ep = resolveEndpoint(state.config, name);
-        console.log(`  ${name}: ${ep.url}  [${ep.kind ?? "ollama"}]`);
+        const cls = endpointClass(ep.url, ep.kind, ep.provider);
+        console.log(
+          `  ${name}: ${ep.url}  [${ep.kind ?? "ollama"}] · ${cls.where} · ${cls.provider}`
+        );
 
         // An endpoint nothing points at is declared, not used. Saying so is
         // the difference between "it is not configured" and "it is configured

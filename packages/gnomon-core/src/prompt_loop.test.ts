@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { loadConfig } from "./config.js";
+import { loadConfig, endpointClass } from "./config.js";
 import { mapBucket } from "./session.js";
 import * as promptLoop from "./prompt_loop.js";
 import { setRoleModel } from "./prompt_loop.js";
@@ -1384,6 +1384,35 @@ describe("isLocalEndpoint", () => {
     ];
     for (const u of local) expect(promptLoop.isLocalEndpoint(u), u).toBe(true);
     for (const u of cloud) expect(promptLoop.isLocalEndpoint(u), u).toBe(false);
+  });
+});
+
+describe("endpointClass — the local/cloud + provider tag on a listing", () => {
+  it("names the provider from the URL, and local vs cloud", () => {
+    const cases: Array<[string, "local" | "cloud", string]> = [
+      ["https://openrouter.ai/api/v1/chat/completions", "cloud", "openrouter"],
+      ["https://opencode.ai/zen/v1/chat/completions", "cloud", "opencode"],
+      ["https://api.githubcopilot.com/chat/completions", "cloud", "copilot"],
+      ["https://my-resource.openai.azure.com/...", "cloud", "azure"],
+      ["https://bedrock-runtime.us-east-1.amazonaws.com/...", "cloud", "aws"],
+      ["https://generativelanguage.googleapis.com/...", "cloud", "google"],
+      ["http://127.0.0.1:11434/api/chat", "local", "ollama"],
+    ];
+    for (const [url, where, provider] of cases) {
+      const c = endpointClass(url, url.includes("11434") ? "ollama" : "openai");
+      expect(c.where, url).toBe(where);
+      expect(c.provider, url).toBe(provider);
+    }
+  });
+
+  it("a local non-Ollama server reads as self-hosted; an explicit provider wins", () => {
+    expect(endpointClass("http://127.0.0.1:4200/v1/chat/completions", "openai")).toEqual({
+      where: "local",
+      provider: "self-hosted",
+    });
+    expect(
+      endpointClass("https://gateway.example.com/v1", "openai", "opencode")
+    ).toEqual({ where: "cloud", provider: "opencode" });
   });
 });
 

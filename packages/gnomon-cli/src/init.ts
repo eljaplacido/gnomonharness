@@ -79,31 +79,60 @@ url = "http://127.0.0.1:11434/api/chat"
 kind = "ollama"
 
 # Declared, but inert until a role names one. An endpoint costs nothing to
-# declare: nothing reaches it unless roles.toml says endpoint = "zen".
-# /endpoints lists these and reports whether the key variable is set.
+# declare: nothing reaches it unless roles.toml says endpoint = "<name>".
+# /endpoints lists these, tags each  · local  or  · cloud · <provider>, and
+# reports whether the key variable is set.
+#
+# Every endpoint is the same shape: a URL, a request kind (openai | ollama),
+# and — for cloud ones — a key VARIABLE NAME (never the key itself; store it
+# with "gnomon key set <name>"). provider is a display label only, inferred
+# from the URL when omitted, and never affects routing. This one shape covers
+# any OpenAI-compatible provider; azure/aws/google notes are below.
 
 [endpoints.zen]
 url = "https://opencode.ai/zen/v1/chat/completions"
 kind = "openai"
 api_key_env = "OPENCODE_API_KEY"   # the NAME of the variable, never the key
+provider = "opencode"
 
+# A LOCAL OpenAI-shaped server (OpenCode/LM Studio/vLLM/llama.cpp in server
+# mode). Point the url at yours; local servers need no key. Shows as  · local.
 [endpoints.go]
 url = "http://127.0.0.1:4200/v1/chat/completions"
 kind = "openai"
+provider = "self-hosted"
 
-# Cloud endpoints — templates, commented so they do not show as unavailable
-# until you want one. Uncomment a block and set the named env var (the key
-# itself never lives in the surface), then point a role at it in roles.toml:
-# endpoint = "openrouter". Local and cloud live side by side, one role each.
+# Cloud templates — commented so they do not show as unavailable until you want
+# one. Uncomment a block, then store its key with:  gnomon key set <name>
+# Local and cloud live side by side; assign one per role in roles.toml.
+#
 # [endpoints.openrouter]
 # url = "https://openrouter.ai/api/v1/chat/completions"
 # kind = "openai"
 # api_key_env = "OPENROUTER_API_KEY"
+# provider = "openrouter"
 #
-# [endpoints.copilot]
-# url = "https://api.githubcopilot.com/chat/completions"
-# kind = "openai"
+# [endpoints.copilot]              # needs a GitHub Copilot TOKEN, not a plain
+# url = "https://api.githubcopilot.com/chat/completions"   # API key — obtain it
+# kind = "openai"                  # via GitHub's Copilot auth flow, then store it
 # api_key_env = "GITHUB_COPILOT_TOKEN"
+# provider = "copilot"
+#
+# [endpoints.google]               # Gemini exposes an OpenAI-compatible route
+# url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+# kind = "openai"
+# api_key_env = "GEMINI_API_KEY"
+# provider = "google"
+#
+# [endpoints.azure]                # URL carries resource + deployment + api-version
+# url = "https://<resource>.openai.azure.com/openai/deployments/<deployment>/chat/completions?api-version=2024-10-21"
+# kind = "openai"
+# api_key_env = "AZURE_OPENAI_API_KEY"
+# provider = "azure"
+#
+# AWS Bedrock signs requests with SigV4, not a bearer key, so it needs an
+# OpenAI-compatible gateway (LiteLLM, Bedrock Access Gateway) in front: point
+# the url at the gateway and set its key. Native SigV4 is a future addition.
 
 # To actually use one, point a role at it in roles.toml:
 #

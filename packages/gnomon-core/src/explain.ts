@@ -14,7 +14,7 @@
  * learn what a deterministic harness does.
  */
 
-import { GnomonConfig, resolveContext, resolveRouting, resolveEndpoint, listEndpoints, listRoles, recomputeManifest } from "./config.js";
+import { GnomonConfig, resolveContext, resolveRouting, resolveEndpoint, listEndpoints, endpointClass, listRoles, recomputeManifest } from "./config.js";
 import { resolveAudit } from "./audit.js";
 import { resolveSessionStore } from "./session_store.js";
 import { loadSkills, loadProposedSkills } from "./skills.js";
@@ -168,8 +168,9 @@ const TOPICS: Record<string, Builder> = {
         const key = ep.api_key_env
           ? `  key $${ep.api_key_env} ${process.env[ep.api_key_env] ? "(set)" : "(NOT SET)"}`
           : "";
+        const cls = endpointClass(ep.url, ep.kind, ep.provider);
         return [
-          bullet(`${name.padEnd(8)} ${ep.url}  [${ep.kind ?? "ollama"}]${key}`),
+          bullet(`${name.padEnd(8)} ${ep.url}  [${ep.kind ?? "ollama"}] · ${cls.where} · ${cls.provider}${key}`),
           bullet(
             `         ${
               primary.length || fb.length
@@ -184,14 +185,18 @@ const TOPICS: Record<string, Builder> = {
       next: [
         "/models            what each endpoint actually offers",
         "",
-        "To put a role on a hosted model:",
+        "The model tag must be one the endpoint hosts: a cloud endpoint (zen,",
+        "openrouter) serves its own tags; a local one (Ollama) serves your local",
+        "models. Do not put a local tag on a cloud endpoint, or the reverse.",
+        "",
+        "To put a role on a hosted (cloud) model:",
         '  [roles.plan]',
-        '  model = "the-model-tag"',
+        '  model = "a-tag-that-endpoint-hosts"',
         '  endpoint = "zen"',
         "",
-        "Or keep local primary and reach out only on failure:",
+        "Or keep a local model primary and reach the cloud only on failure:",
         '  [roles.implement.fallback]',
-        '  model = "the-model-tag"',
+        '  model = "a-tag-that-endpoint-hosts"',
         '  endpoint = "zen"',
       ],
     };
