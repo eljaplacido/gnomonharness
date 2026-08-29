@@ -28,7 +28,7 @@ That is the whole design in one object. The model varies, the conversation
 wanders, the tools do different things each run — and the `.gnomon/` directory
 does not. Behaviour is readable because something is holding still.
 
-> **Status: working, pre-1.0.** Over 400 tests across Rust and TypeScript, CI green on
+> **Status: working, pre-1.0.** Over 600 tests across Rust and TypeScript, CI green on
 > Linux and macOS. Interfaces may still move. [Known Limits](#known-limits) is
 > deliberately specific — read it before depending on this.
 
@@ -1459,7 +1459,9 @@ meaning of `approval = "on_write"`.
 
 Stated specifically, because a harness that hides its gaps is worse than one
 that has them. [docs/POSITIONING.md](docs/POSITIONING.md) sets these against
-what other harnesses do, and says what has and has not been measured.
+what other harnesses do, and says what has and has not been measured. Measured
+results and their caveats are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the
+[August 2026 Terminal-Bench campaign](benchmarks/results/terminal-bench-2026-08/README.md).
 
 - **MCP is stdio-only.** `tools.toml`'s `[mcp_servers]` block is wired for the
   **stdio** transport: a pinned server is spawned at startup, its tools are

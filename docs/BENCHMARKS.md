@@ -10,6 +10,13 @@ cite these numbers as a harness ranking.**
 > Terminal-Bench section has been withdrawn outright. gnomon's 15/30 survives;
 > the harness comparisons do not.
 >
+> **Superseded in part, 28 August 2026.** The clean-clock re-run promised by the
+> post-mortem was carried out on a disciplined apparatus; its scored data and
+> analysis live in
+> [`benchmarks/results/terminal-bench-2026-08/`](../benchmarks/results/terminal-bench-2026-08/README.md).
+> It finds gnomon ≈ goose (parity) > opencode on the tested cell. Prefer it over
+> the harness-comparison tables below.
+>
 > Read [BENCHMARK-POSTMORTEM.md](BENCHMARK-POSTMORTEM.md) before citing
 > anything here.
 

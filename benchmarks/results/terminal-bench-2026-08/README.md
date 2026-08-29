@@ -22,6 +22,59 @@ gnomon against two real competitors on identical tasks.
 - This establishes **non-inferiority + an efficiency/integrity edge in the tested
   cell**, NOT a frontier-model, full-task-set leaderboard rank.
 
+## For a reviewer: how to read and reproduce this
+
+**Conflict of interest, stated up front.** gnomon's author wrote this benchmark
+apparatus and chose the task set. Read every number with that in mind; the
+per-task matrix below is deliberately included so you can adjudicate the
+load-bearing claims yourself rather than trust the aggregates. See also
+`docs/BENCHMARKS.md` ("how much to trust this") and the `docs/BENCHMARK-POSTMORTEM.md`.
+
+**What was under test.** gnomon here is its **default surface** — the adapter
+runs `gnomon init` and then rewrites `roles.toml` by regex to point at the
+benchmark model. It is *not* this repository's tuned `.gnomon/`. So this measures
+the out-of-the-box harness, and does not generalize to a hand-tuned surface.
+
+**The 8 `TASKS_P0` tasks** (deliberately hard, timeout-prone; a reviewer can
+verify each `task_id` in the per-arm `results.json`):
+`conda-env-conflict-resolution`, `configure-git-webserver`, `count-dataset-tokens`,
+`git-multibranch`, `hello-world`, `intrusion-detection`, `new-encrypt-command`,
+`processing-pipeline`. The `guard` arms additionally run four more
+(`blind-maze-explorer-5x5`, `crack-7z-hash`, `csv-to-parquet`, plus `hello-world`)
+as a capable-model sanity set.
+
+**Arm names.** `<campaign>-<model>-<variant>`:
+- `p0c` = this P0 campaign; `oc` = opencode.
+- model: `ds` = deepseek-v4-flash, `glm` = glm-5.3-flash, `guard` = claude-sonnet-5.
+- variant: `base` = gnomon with `converge_after` **off**; `conv` = `converge_after`
+  **on**; `goose` = the goose harness; (no variant on `oc-*`) = opencode.
+- In the ladder table below, the **"gnomon +P0"** column means the `conv`
+  (convergence-on) arm — *not* the TASKS_P0 task set. The `p0c` prefix is the
+  campaign; the convergence feature is the variable.
+
+**Scoring rule (`results.json` → bucket), exact and reproducible.** For each
+trial: `pass` if `is_resolved == True` (this counts even when `failure_mode ==
+"agent_timeout"` — a turn that hit a mid-run deadline but still produced a
+verified solution is a result, the settle() principle); `crash` if `is_resolved
+is None`; `timeout` if `is_resolved == False` and `failure_mode ==
+"agent_timeout"`; `wrong` otherwise. `valid = trials − crash`; `valid_pass_pct =
+100·pass/valid`. **`summarize.py` in this directory is that rule in code** —
+`python3 summarize.py --check` verifies `SUMMARY.json` against the raw results and
+prints the per-task pass matrix.
+
+**Versions.** terminal-bench `terminal-bench-core==0.1.1`; models via OpenRouter
+(`deepseek/deepseek-v4-flash`, `z-ai/glm-5.3-flash`, `anthropic/claude-sonnet-5`);
+goose and opencode at the versions installed on the run host (the comparator
+binaries the adapter invoked — pin these when re-running for a citable number).
+
+**Reproduce.** The full runner/adapter/`TASKS_P0` apparatus is **not** shipped in
+this repository — only the scored `results.json`, `SUMMARY.json`, and `summarize.py`.
+To re-run from scratch, follow the "Spec for the next run" in
+`docs/BENCHMARK-POSTMORTEM.md` (lowercase per-arm `--run-id`, pre-built images,
+adapter timeout diffed against stock, score over valid trials, compare only on
+shared-completed tasks). To re-derive the buckets and per-task matrix from the
+committed raw data, run `summarize.py`.
+
 ## Capability ladder (valid-pass %, same tasks)
 
 | tier | gnomon base | gnomon +P0 | goose | opencode |
@@ -30,6 +83,26 @@ gnomon against two real competitors on identical tasks.
 | GLM | 37.5% | 54.5% | 57.1% | 26.7% |
 
 **Verdict: goose ≈ gnomon > opencode.**
+
+### Per-task pass matrix (resolved / attempted)
+
+| task | gn-ds-base | gn-ds-conv | goose-ds | gn-glm-base | gn-glm-conv | goose-glm | oc-ds | oc-glm |
+|---|---|---|---|---|---|---|---|---|
+| `conda-env-conflict-resolution` | 1/3 | 1/3 | 1/1 | 0/3 | 0/3 | 0/1 | 2/2 | 0/2 |
+| `configure-git-webserver` | 3/3 | 3/3 | 0/1 | 0/3 | 0/3 | 0/1 | 0/2 | 0/2 |
+| `count-dataset-tokens` | 0/3 | 0/3 | 0/1 | 2/3 | 3/3 | 1/1 | 0/2 | 2/2 |
+| `git-multibranch` | 0/3 | 0/3 | 0/1 | 0/3 | 0/3 | 0/1 | 0/2 | 0/2 |
+| `hello-world` | 2/3 | 1/3 | 1/1 | 3/3 | 3/3 | 1/1 | 0/2 | 2/2 |
+| `intrusion-detection` | 0/3 | 0/3 | 0/1 | 0/3 | 0/3 | 0/1 | 0/2 | 0/2 |
+| `new-encrypt-command` | 3/3 | 3/3 | 1/1 | 2/3 | 3/3 | 1/1 | 1/2 | 0/2 |
+| `processing-pipeline` | 0/3 | 0/3 | 0/1 | 2/3 | 3/3 | 1/1 | 0/2 | 0/2 |
+
+Regenerate with `python3 summarize.py` (the same rule that produces `SUMMARY.json`).
+This table is what adjudicates the goose comparison: `configure-git-webserver`
+(gnomon **6/6** on DS vs goose **0/1**) is the one discordant task and gnomon
+wins it; there is **no** task goose solves that gnomon does not. `hello-world` on
+DS shows gnomon's 3 attempts landing the model's true ~50% rate (3/6) while
+goose's single attempt drew a pass — single-attempt luck, not a capability gap.
 
 - **gnomon vs goose — parity.** Aggregate looks like a goose edge, but it is not
   significant (DS p≈0.80, GLM p≈0.31) and dissolves per-task: **zero tasks goose

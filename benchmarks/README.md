@@ -8,6 +8,14 @@ numbers can be checked and re-derived rather than taken on trust.
 task set saturates, the sample sizes are small, and the benchmark's author also
 wrote one of the harnesses under test.
 
+**Two different benchmarks live under `benchmarks/`.** `harness.py` here is the
+*internal* 5-task efficiency/quality suite behind `docs/BENCHMARKS.md`. The
+*external* Terminal-Bench harness-vs-harness campaign (gnomon vs goose vs
+opencode, August 2026) is a separate thing with its own scored data and writeup
+under [`results/terminal-bench-2026-08/`](results/terminal-bench-2026-08/README.md)
+— `harness.py` did **not** produce it; its buckets regenerate from raw data via
+`results/terminal-bench-2026-08/summarize.py`.
+
 | File | What it is |
 |---|---|
 | `harness.py` | The runner: fixtures, tasks, scorers, per-harness invocation |
