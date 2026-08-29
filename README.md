@@ -1467,7 +1467,8 @@ Stated specifically, because a harness that hides its gaps is worse than one
 that has them. [docs/POSITIONING.md](docs/POSITIONING.md) sets these against
 what other harnesses do, and says what has and has not been measured. Measured
 results and their caveats are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the
-[August 2026 Terminal-Bench campaign](benchmarks/results/terminal-bench-2026-08/README.md).
+[August 2026 Terminal-Bench campaign](benchmarks/results/terminal-bench-2026-08/README.md). The
+[benchmark roadmap](docs/BENCHMARK-ROADMAP.md) says what is and is not yet claimable.
 
 - **MCP is stdio-only.** `tools.toml`'s `[mcp_servers]` block is wired for the
   **stdio** transport: a pinned server is spawned at startup, its tools are
