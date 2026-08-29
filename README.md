@@ -1442,10 +1442,12 @@ Stated specifically, because a harness that hides its gaps is worse than one
 that has them. [docs/POSITIONING.md](docs/POSITIONING.md) sets these against
 what other harnesses do, and says what has and has not been measured.
 
-- **No MCP.** `tools.toml` documents an `[mcp_servers]` block and nothing
-  connects it. Declaring a server is reported at startup as unavailable.
-  New *kinds* of tools require implementing them in `gnomon-core`. This is the
-  largest single gap against every other harness in its class.
+- **MCP is stdio-only.** `tools.toml`'s `[mcp_servers]` block is wired for the
+  **stdio** transport: a pinned server is spawned at startup, its tools are
+  discovered and offered as `mcp__<server>__<tool>`, gated per role. HTTP/SSE
+  transports are not wired yet. And the reproducibility guarantee is *bounded*
+  here — gnomon pins the server's *invocation*, not its behaviour — so pin the
+  version and treat an MCP server as an external, non-deterministic dependency.
 - **No cloud execution, and no long-running daemon.** A turn runs in your
   terminal, in your repository, now. There is no queue, no worktree pool, no
   "open a PR while I do something else". The one unattended path is

@@ -176,7 +176,7 @@ describe("the README does not promise what is not built", () => {
   it("states the known limits it must state", () => {
     // These gaps are real; a reader finding them undocumented would be worse
     // than the gaps themselves.
-    expect(readme).toContain("No MCP");
+    expect(readme).toContain("MCP is stdio-only");
     expect(readme).toContain("No role chain");
     // Qualified from "No cloud or background execution" once `loops` shipped:
     // cron-scheduled loops ARE an unattended path, so the blanket claim was

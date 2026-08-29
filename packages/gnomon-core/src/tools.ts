@@ -35,6 +35,7 @@ import {
 } from "./config.js";
 import { proposeSkill, renderSkill, SkillProposal } from "./skills.js";
 import { compute, ComputeError } from "./compute.js";
+import type { McpRegistry, McpToolInfo } from "./mcp.js";
 
 // ---------------------------------------------------------------------------
 // Outcome codes
@@ -209,10 +210,10 @@ export interface ToolSet {
   /**
    * MCP servers the surface declares.
    *
-   * tools.toml documents an [mcp_servers] block, and nothing reads it. A
-   * declared server that is silently ignored is the failure system.md forbids:
-   * the tool list would be shorter than the surface asked for, with no
-   * refusal naming what is missing.
+   * The names of MCP servers the surface declares (wired by connectMcp /
+   * ctx.mcp). Their discovered tools are merged into `schemas` when connected;
+   * this list is what the startup summary counts, and what names a server whose
+   * tools are absent because it did not connect — never silently dropped.
    */
   mcp_declared: string[];
   /** Declared but switched off in the surface */
@@ -230,7 +231,11 @@ export interface ToolSet {
  * `unimplemented` rather than quietly left out: system.md forbids silently
  * shortening the tool list.
  */
-export function buildToolSet(config: GnomonConfig, role?: string): ToolSet {
+export function buildToolSet(
+  config: GnomonConfig,
+  role?: string,
+  mcpTools: McpToolInfo[] = []
+): ToolSet {
   const schemas: ToolSchema[] = [];
   const disabled: string[] = [];
   const unimplemented: string[] = [];
@@ -262,6 +267,25 @@ export function buildToolSet(config: GnomonConfig, role?: string): ToolSet {
         name: tool.name,
         description: tool.description ?? tool.name,
         parameters,
+      },
+    });
+  }
+
+  // MCP tools discovered from connected servers. Gated like any other tool: a
+  // role with a `tools` list must name the tool, or its server (`mcp__<server>`)
+  // to take all of that server's tools.
+  for (const mt of mcpTools) {
+    const serverKey = `mcp__${mt.server}`;
+    if (roleLimited && !allowed!.includes(mt.name) && !allowed!.includes(serverKey)) {
+      withheld.push(mt.name);
+      continue;
+    }
+    schemas.push({
+      type: "function",
+      function: {
+        name: mt.name,
+        description: mt.description ?? mt.name,
+        parameters: mt.inputSchema as Record<string, unknown>,
       },
     });
   }
@@ -651,6 +675,11 @@ export interface ToolContext {
    * consent. Set by the human with `/allow`, never by the agent.
    */
   allow?: SurfaceConsent;
+  /**
+   * Connected MCP servers, if any. `mcp__…` tool calls route here. Supplied by
+   * the loop, which owns the server processes' lifetime.
+   */
+  mcp?: McpRegistry;
 }
 
 /** One item on the session checklist. */
@@ -2184,6 +2213,22 @@ async function dispatch(
   args: Record<string, unknown>,
   ctx: ToolContext
 ): Promise<ToolOutcome> {
+  // MCP tools are named `mcp__<server>__<tool>` and routed to their server.
+  if (name.startsWith("mcp__")) {
+    if (!ctx.mcp) {
+      return {
+        code: TOOL_NOT_DECLARED,
+        content: `Refused: "${name}" is an MCP tool, but no MCP server is connected.`,
+        summary: `${name} — no mcp`,
+      };
+    }
+    const r = await ctx.mcp.call(name, args);
+    return {
+      code: r.isError ? TOOL_FAILED : TOOL_OK,
+      content: r.content,
+      summary: `${name} — ${r.isError ? "error" : "ok"}`,
+    };
+  }
   switch (name) {
     case "read":
       return readTool(args, ctx);

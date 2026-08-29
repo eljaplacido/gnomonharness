@@ -50,6 +50,7 @@ import {
   ApprovalGate,
   SurfaceConsent,
 } from "./tools.js";
+import { connectMcp, type McpRegistry } from "./mcp.js";
 import { mapBucket } from "./session.js";
 import {
   loadSkills,
@@ -118,6 +119,8 @@ export interface PromptState {
   routing?: ResolvedRouting;
   /** Surface-edit consent for this session, set by `/allow`. Default `strict`. */
   allow?: SurfaceConsent;
+  /** Connected MCP servers, if the surface declares any. Set once at startup. */
+  mcp?: McpRegistry;
   /**
    * Running summary of turns evicted from the window under
    * `compaction = "summary"`. Replaces them in the prompt.
@@ -978,7 +981,7 @@ export async function runAgenticTurn(
   depth: number = 0
 ): Promise<TurnResult> {
   const config = state.config;
-  const toolSet = buildToolSet(config, role);
+  const toolSet = buildToolSet(config, role, state.mcp?.tools() ?? []);
   // A sub-turn is offered no `task`, so delegation cannot nest. Enforced here
   // rather than only in the tool, so the schema the model sees is the truth
   // about what it can call.
@@ -1010,6 +1013,8 @@ export async function runAgenticTurn(
     timeoutMs: toolTimeoutMs(config),
     maxOutputBytes: 32_000,
     network,
+    // Connected MCP servers (mcp__… calls route here); undefined if none.
+    mcp: state.mcp,
     // Surface-edit consent, human-set via /allow. A delegated sub-turn is
     // forced back to strict below, so delegation can never acquire it.
     allow: state.allow,
@@ -2483,7 +2488,7 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         const route = routeRole(state.config, wanted);
         const where = route.target.endpoint ? ` @ ${route.target.endpoint}` : "";
         console.log(`\nRole: ${wanted} → ${route.model}${where}`);
-        const set = buildToolSet(state.config, wanted);
+        const set = buildToolSet(state.config, wanted, state.mcp?.tools() ?? []);
         console.log(
           `  tools: ${set.schemas.map((t) => t.function.name).join(", ") || "(none — read-only role)"}`
         );
@@ -2649,7 +2654,7 @@ export function processCommand(cmd: string, state: PromptState): boolean {
     }
 
     case "/tools": {
-      const set = buildToolSet(state.config, state.currentRole);
+      const set = buildToolSet(state.config, state.currentRole, state.mcp?.tools() ?? []);
       console.log(`\nTools available to "${state.currentRole}":`);
       for (const t of set.schemas) {
         console.log(`  ${t.function.name} — ${t.function.description}`);
@@ -3059,6 +3064,15 @@ export async function runPromptLoop(
   // first apply, so the terminal is restored when the loop ends.
   applyTerminalTheme(uiOf(state));
 
+  // Connect any declared MCP servers before the first turn, so their tools are
+  // in the set the model sees. A server that will not connect is reported and
+  // skipped — never fatal.
+  if (config.tools.mcp_servers && Object.keys(config.tools.mcp_servers).length > 0) {
+    state.mcp = await connectMcp(config.tools.mcp_servers, (l) =>
+      console.log(paint(uiOf(state), "gray", l))
+    );
+  }
+
   // Off unless the surface asks for it.
   const auditSettings = resolveAudit(config);
   // One id for the session, so a trail and its snapshot name the same run.
@@ -3202,6 +3216,7 @@ export async function runPromptLoop(
   });
   rl.on("close", () => {
     closed = true;
+    state.mcp?.close();
     if (notify) {
       const n = notify;
       notify = null;
@@ -3453,7 +3468,7 @@ export async function runPromptLoop(
   // shipping a shorter tool list.
   const reportTools = (): void => {
     const ui = uiOf(state);
-    const toolSet = buildToolSet(config, state.currentRole);
+    const toolSet = buildToolSet(config, state.currentRole, state.mcp?.tools() ?? []);
     const names = toolSet.schemas.map((t) => t.function.name);
     console.log(
       paint(ui, "gray", `Tools (${state.currentRole}): ${names.join(", ") || "(none)"}`)
@@ -3482,15 +3497,14 @@ export async function runPromptLoop(
       );
     }
     if (toolSet.mcp_declared.length > 0) {
+      const connected = state.mcp?.tools().length ?? 0;
       console.log(
         paint(
           ui,
-          "yellow",
-          `  MCP servers declared but NOT connected by this build: ${toolSet.mcp_declared.join(", ")}`
+          "gray",
+          `  MCP: ${toolSet.mcp_declared.length} server(s) declared, ${connected} tool(s) connected — ` +
+            `a role must list a tool, or its server as mcp__<name>, to use them.`
         )
-      );
-      console.log(
-        paint(ui, "yellow", `  their tools are unavailable — nothing reads [mcp_servers] yet.`)
       );
     }
   };

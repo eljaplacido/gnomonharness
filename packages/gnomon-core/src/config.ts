@@ -312,10 +312,29 @@ export interface ProfileDef {
   tools?: string[];
 }
 
+/**
+ * A pinned MCP server, referenced by name in tools.toml. Its tools are
+ * discovered at startup and offered as `mcp__<server>__<tool>`, gated per role
+ * like any other tool. Pin the version in `args` for reproducibility — an
+ * unpinned server can change its tool set with no surface-hash move.
+ */
+export interface McpServerDef {
+  /** Only "stdio" is wired by this build; others are declared-not-connected. */
+  transport?: string;
+  /** The executable to spawn, e.g. "npx". */
+  command?: string;
+  args?: string[];
+  /**
+   * Env var NAMES to forward from the process to the server (for API keys and
+   * the like). Values are never written in the surface, only the names.
+   */
+  env?: string[];
+}
+
 /** Tools.toml: declared tools and MCP servers */
 export interface ToolsDef {
   tools?: ToolDef[];
-  mcp_servers?: Record<string, unknown>;
+  mcp_servers?: Record<string, McpServerDef>;
 }
 
 export interface ToolDef {

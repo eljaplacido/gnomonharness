@@ -4,6 +4,17 @@
 
 ### Added
 
+- **MCP — stdio transport, pinned, gated, reported.** `[mcp_servers]` is no
+  longer inert: a declared **stdio** server is spawned at startup, its tools
+  discovered (`tools/list`) and offered to the model as `mcp__<server>__<tool>`,
+  each gated per role (a role must list the tool, or its server as
+  `mcp__<name>`). Calls route back over `tools/call`. Hand-rolled and zero-dep —
+  a few JSON-RPC messages over a pipe. A server that will not connect is
+  reported and skipped, never fatal. The reproducibility caveat is stated
+  loudly: gnomon pins the server's *invocation*, not its behaviour, so pin the
+  version — an MCP server is an external, non-deterministic dependency. HTTP/SSE
+  transports are a follow-up.
+
 - **Whole-terminal colour themes.** Two 24-bit palettes — `tokyonight` and
   `catppuccin` — recolour the *entire* terminal, not just printed text, via
   OSC 11/10 (the effect a full-screen TUI gets from an alternate buffer, done
