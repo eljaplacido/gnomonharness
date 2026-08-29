@@ -21,6 +21,11 @@ A third, narrower experiment lives under
 DFlash speculative-decoding **on vs off** measurement (output-exact, greedy) of
 the local-inference wall-clock win — a self-contained runner, not the campaign.
 
+B3 (**cost of running the suite, per harness**) turns the measured token
+counts into dollars: [`results/cost-2026-08/`](results/cost-2026-08/README.md) —
+regenerate with `python3 cost_report.py`.
+
+
 | File | What it is |
 |---|---|
 | `harness.py` | The runner: fixtures, tasks, scorers, per-harness invocation |
