@@ -25,6 +25,10 @@ B3 (**cost of running the suite, per harness**) turns the measured token
 counts into dollars: [`results/cost-2026-08/`](results/cost-2026-08/README.md) —
 regenerate with `python3 cost_report.py`.
 
+B4 (**containment**) drives a real model to breach each role boundary and
+measures whether the guards hold: [`results/containment-2026-08/`](results/containment-2026-08/README.md)
+— 15/15 contained.
+
 
 | File | What it is |
 |---|---|
