@@ -55,3 +55,21 @@ any large-repo, multi-language, or frontier-model-at-scale result.
 1. **B3** (cost comparison) — local models, no cloud spend, directly answers the token/$ point.
 2. **B1** (re-run on current Terminal-Bench) — needs the framework install + Docker + a model budget; schedule deliberately, not unattended.
 3. **B4** (containment) — turns the differentiator into a number.
+
+
+## Attempted and learned (Aug 2026)
+
+**Model-scaling ladder + hybrid — attempted, inconclusive (~$2.5 spent, stopped).**
+On the *current* Terminal-Bench's hard tasks (the cheap model's failures), the
+affordable tiers all cluster: deepseek-v4-flash 2/10, deepseek-v4-pro 1/10,
+claude-sonnet-5 timed out ($1.87/task). No clean "cheap fails / strong passes"
+band, so **scaling did not show** — it needs frontier-of-frontier models AND a
+curated *medium*-difficulty task set (hard-for-cheap but solvable-by-strong),
+which the hard-task selection here was not. The **local+cloud hybrid** (frontier
+coordinator plans + delegates, local implementor executes) — the network is
+fine (a tb container reaches the host :18080), but the coordinator↔implementor
+delegation **flailed** (9 min on hello-world, unresolved). That is a gnomon-side
+fix (delegation with a weak local implementor), not a benchmark. **Not
+committed** as a result — a negative/broken run proves nothing and would mislead.
+Redo when: (a) a small frontier budget for a curated medium-task band, and (b)
+the hybrid delegation is debugged with a stronger local model.
