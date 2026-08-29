@@ -74,7 +74,6 @@ describe("template hygiene", () => {
         allow.some((p) => new RegExp(p).test(cmd));
 
       // The gate that decides done-or-not is a suite like any other.
-      expect(permits("septacore check")).toBe(true);
       expect(permits("cargo test --all")).toBe(true);
       expect(permits("pnpm test")).toBe(true);
       expect(permits("git status --short")).toBe(true);

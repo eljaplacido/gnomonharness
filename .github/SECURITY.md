@@ -3,13 +3,17 @@
 ## Reporting
 
 Security issues may be reported as **private GitHub Security Advisories**
-through the "Security" tab of this repository.
+through the "Security" tab of this repository, or by email to
+<digicisu@gmail.com> for reporters who prefer not to use the Security tab.
 
 ## Scope
 
-gnomon is a **local coding agent harness** — it runs entirely on the
-developer's machine and never sends data to external services (unless
-explicitly configured via `GNOMON_MODEL_URL` pointing to a remote API).
+gnomon is a **local coding-agent harness** — it runs in the developer's
+terminal. It reaches the network only where the surface says so: a role's
+model endpoint (which may be a cloud API), the opt-in `webfetch` tool (gated by
+`[sandbox] network`), a configured stdio MCP server, and whatever `bash`
+commands the role's `bash_allow` permits. There is no telemetry and no
+background service.
 
 Key security boundaries:
 

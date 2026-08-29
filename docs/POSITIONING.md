@@ -90,7 +90,7 @@ provider-specific features.
 
 | Gap | Who has it | Why it matters |
 |---|---|---|
-| **MCP** | Cline, Goose, Continue, Claude Code | The single largest gap. New *kinds* of tools require implementing them in `gnomon-core`. |
+| **MCP (HTTP/SSE)** | Cline, Goose, Continue, Claude Code | stdio MCP is wired — a pinned server's tools are discovered and offered per role, no `gnomon-core` change needed. The remaining gap is the HTTP/SSE transports and the breadth of the server ecosystem. |
 | **Cloud / async execution** | Codex, Cursor, OpenHands | No queue, no worktree pool, no issue-to-PR while you do something else. Cron-scheduled `loops` are the one unattended path — single guard/act ticks, not a queue. |
 | **IDE surface** | Cursor, Cline, Continue, Windsurf, Roo | Terminal only. |
 | **Sandboxed isolation** | OpenHands | `confined` is filesystem path containment, not a container. `bash` reaches the network. |
@@ -103,8 +103,9 @@ provider-specific features.
 Stated as narrowly as the evidence supports.
 
 - **Reproducible configuration identity.** Content-hashed surface, stamped on
-  every record, with the agent structurally unable to edit it. No harness in
-  the comparable set treats configuration as an identified artefact this way.
+  every record; the agent cannot edit it without an explicit human `/allow` for
+  the session (and a delegated sub-turn never can). No harness in the
+  comparable set treats configuration as an identified artefact this way.
 - **Capability separation that is asserted rather than described.** Role tool
   lists, `write_allow`, `bash_allow`, `bash_deny`, and non-nesting delegation —
   each with a test that fails if the boundary moves.
@@ -121,9 +122,9 @@ commit and review like code; you work with local or self-hosted models; you
 need to answer afterwards what an agent was permitted to do; or you want a
 small harness you can read end to end and extend.
 
-**A poor fit if** you want IDE integration, MCP tools today, cloud execution,
-or the broadest model support. Those are real requirements and other harnesses
-serve them better.
+**A poor fit if** you want IDE integration, HTTP/SSE MCP transports, cloud
+execution, or the broadest model support. Those are real requirements and other
+harnesses serve them better.
 
 **Closest neighbours.** OpenCode for terminal-native provider-agnostic work
 with a far larger ecosystem; Aider for Git-centric diff discipline; Pi for

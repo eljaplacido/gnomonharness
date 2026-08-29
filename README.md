@@ -203,7 +203,7 @@ test commands.
 ```toml
 [roles.verifier]
 tools = ["read", "glob", "grep", "compute", "todo", "bash"]
-bash_allow = ['^septacore check\b', '^(cargo|pnpm|pytest|go|make)\s']
+bash_allow = ['^(cargo|pnpm|pytest|go|make)\s', '^septacore check\b']  # septacore optional/external
 ```
 
 That second line matters more than it looks. **`bash` can write anything**, so
@@ -239,12 +239,16 @@ With `mode = "auto"` it routes and tells you which rule fired. Either way the
 rules are declared data, not a model's opinion — the same input picks the same
 role on every machine.
 
-**Where done-or-not is decided.** gnomon deliberately has no gate of its own.
-[SeptaCore](https://github.com/eljaplacido/SeptaCore) is a repository-native
-verification plane driven by any shell, and the `verifier` role's `bash_allow`
-permits `septacore check`. One gate decides; gnomon is one of the shells that
-drives it. Adding a second gate here would be duplicated mechanism, which is
-the thing that composition layer exists to prevent.
+**Where done-or-not is decided.** The gate is a command the surface names, not
+a model's opinion — any shell command satisfies the `verifier` role's
+`bash_allow`, and the optional `[verify]` block runs one (`pytest`, `cargo
+test`, `make`, `.gnomon/ci.sh`) after a turn and hands it back on failure. That
+works with nothing external installed.
+[SeptaCore](https://github.com/eljaplacido/SeptaCore) (external, optional) is
+*one* such gate — a repository-native verification plane any shell can drive,
+which this repository's own surface happens to use; gnomon does not require it.
+gnomon deliberately does not build a *second* gate of its own, because that
+would be duplicated mechanism.
 
 ---
 
@@ -602,12 +606,13 @@ See [Roles and the Trust Dial](#roles-and-the-trust-dial).
 
 ```toml
 [ui]
-meta = ["turn", "role", "model", "bucket", "duration", "context", "tools"]
+meta = ["turn", "role", "model", "bucket", "duration", "context", "tokens", "tools"]
 meta_style = "line"               # line | compact
 think = "collapse"                # hide | collapse | show
 spinner = true
 color = true
 markdown = true
+theme = "dark"                    # dark | dim | light | high-contrast | mono | tokyonight | catppuccin
 ```
 
 `meta` is an ordered list drawn from `turn`, `role`, `model`, `bucket`,
@@ -615,6 +620,13 @@ markdown = true
 line. `think` controls how much chain-of-thought survives — reasoning models
 wrap their scratchpad in `<think>…</think>`, and `collapse` shows one line of
 it so you can see it happened without reading it.
+
+`theme` sets the palette the loop draws in — `dark` (default), `dim`, `light`,
+`high-contrast`, and `mono` recolour gnomon's own output only. `tokyonight` and
+`catppuccin` additionally recolour the **whole terminal** background and
+foreground via OSC escapes, and reset it on a clean exit (see the caveat in
+[Known Limits](#known-limits)). Switch live with `/theme <name>`; `/theme` with
+no argument lists them.
 
 `markdown` renders the answer instead of printing its source. A model replies in
 markdown whether or not anything reads it, so a comparison table used to arrive
@@ -727,12 +739,18 @@ the machine-scoped dependency Rule 1 forbids.
 
 ### The surface is not writable by a tool call
 
-`write` and `edit` refuse any path inside `.gnomon/`, whatever the role and
-whatever the gate. The surface decides the tool list, the approval gate and
-every allow-list, so an agent that can write there rewrites the rules it is
-judged by — and moves the surface hash, which is the one identifier a session
-is traced by. Changing it stays a human act. `skill` is the sanctioned way in,
-and its proposals are inert until `gnomon skill accept` moves them.
+By default (`/allow strict`), `write` and `edit` refuse any path inside
+`.gnomon/`, whatever the role and whatever the gate. The surface decides the
+tool list, the approval gate and every allow-list, so an agent that could
+freely write there would rewrite the rules it is judged by — and move the
+surface hash, which is the one identifier a session is traced by. So changing
+it stays a human act: the operator can lift the block for a session with
+`/allow custom` (each surface write is shown as a diff and approved) or `/allow
+all` (standing consent, still announced). Even then `edit` always refuses — a
+surface change is a full-file `write` that loudly reports the hash moved, never
+an in-place edit — and a delegated `task` sub-turn is always forced back to
+`strict`, so delegation can never acquire the consent. `skill` is the durable
+way in, and its proposals are inert until `gnomon skill accept` moves them.
 
 `bash` is the exception, and it is handled honestly rather than pretended away:
 the command is arbitrary shell, so instead of an allow-list guessing at every
@@ -1304,6 +1322,7 @@ undiscoverable.
 | `/reset` | Drop history (and the summary) |
 | `/meta [fields]` | Set the meta line — `/meta all`, `/meta none`, `/meta style compact` |
 | `/think [mode]` | Chain-of-thought: `hide` \| `collapse` \| `show` |
+| `/theme [name]` | Colour theme; `tokyonight`/`catppuccin` recolour the whole terminal |
 | `/clear` `/help` `/quit` | |
 
 **You can type while a turn is running.** Anything you enter is queued and runs
@@ -1461,6 +1480,18 @@ what other harnesses do, and says what has and has not been measured.
   package manager or anything else installed still reaches the network, and no
   allow-list over shell text can honestly claim otherwise. Constrain that with
   `bash_allow` where it matters. The loop says exactly this at startup.
+- **Linux and macOS only; Windows is untested and unsupported — use WSL2.**
+  The deterministic core (surface hashing, config, edit tools, MCP discovery,
+  launch) is written to be portable, and a committed `.gitattributes` forces LF
+  so a Windows checkout hashes identically. But the `bash` tool, the verify
+  gate, `gnomon loops` (cron), and the CI scripts assume a POSIX shell, and
+  native-binary discovery and MCP spawning are not yet Windows-hardened. CI
+  runs on Linux and macOS.
+- **Whole-terminal themes need an OSC-honouring terminal.** `tokyonight` and
+  `catppuccin` recolour the terminal background and foreground with OSC 10/11,
+  honoured by most modern terminals (legacy Windows conhost ignores them). The
+  colour is reset on a clean exit; if the process is killed without its exit
+  handler running, the terminal keeps the colour until you reset it.
 - **Summary compaction is not reproducible**, and erodes specifics before
   decisions.
 - **Small models narrate unreliably.** Tool calls are correct far more often
@@ -1478,7 +1509,7 @@ what other harnesses do, and says what has and has not been measured.
 | `bash` | **Yes** | The escape hatch. `pdftotext`, `curl`, `rg` — anything installed. Constrain per role with `bash_allow`. |
 | Skills | **Yes** | Teach *how* to use what exists. Adds knowledge, never capability. |
 | New built-in tool | No | Requires implementing it. |
-| MCP servers | No | See above. |
+| MCP servers | **Yes**, stdio | A pinned stdio server's tools are discovered at startup and offered as `mcp__<server>__<tool>`, gated per role. HTTP/SSE transports are not wired; pin the version — see [Known Limits](#known-limits). |
 | `webfetch` | **Yes**, opt-in | Declared `enabled = false`; needs `[sandbox] network = true` as well. |
 
 ---
@@ -1533,3 +1564,8 @@ shape is not a hash of the right thing.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Maintainer
+
+Elja Placido — <digicisu@gmail.com>. Security reports: see
+[SECURITY.md](.github/SECURITY.md).

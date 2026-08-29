@@ -79,10 +79,14 @@ which is how that control came to exist.
 
 ## What this repository does not own
 
-**A gate.** Whether work is done is decided by
-[SeptaCore](https://github.com/eljaplacido/SeptaCore), a verification plane any
-shell can drive. gnomon's `verifier` role may run `septacore check` and report
-the verdict. A second gate here would be duplicated mechanism.
+**A gate of its own.** Whether work is done is decided by a command the surface
+names — any shell command satisfies the `verifier` role's `bash_allow`, and the
+optional `[verify]` block runs one (`pytest`, `cargo test`, `make`,
+`.gnomon/ci.sh`) after a turn and hands it back on failure. That works with
+nothing external installed. [SeptaCore](https://github.com/eljaplacido/SeptaCore)
+(external, optional) is *one* such gate — a verification plane any shell can
+drive — which the author's own surface uses; gnomon does not require it. A
+second gate built into gnomon would be duplicated mechanism.
 
 **An orchestrator.** Routing picks which role answers a turn. Nothing runs
 coordinator → implementor → verifier in sequence and gates on the result. The

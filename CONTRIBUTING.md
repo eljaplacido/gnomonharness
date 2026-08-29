@@ -10,17 +10,20 @@
 ## Building
 
 ```bash
-# Install dependencies
-pnpm install
+# One-liner: builds the Rust binaries and every TS package
+pnpm run setup
+```
 
-# Build all Rust crates
-cargo build --release
+<details><summary>The granular steps <code>setup</code> runs, if you need them</summary>
 
-# Build TS packages
+```bash
+pnpm install                 # dependencies
+cargo build --release        # Rust crates
 cd packages/gnomon-core && pnpm build
 cd ../gnomon-natives && pnpm build
 cd ../gnomon-cli && pnpm build
 ```
+</details>
 
 ## The gate
 
@@ -68,8 +71,7 @@ cd packages/gnomon-cli && pnpm test -- exit_codes
 4. Verify the fixture is green
 5. Document in `CHANGELOG.md`
 
-## Syncing with agentcenter
+## Questions / contact
 
-gnomon sessions can be exported to the agentcenter outbox format for
-cross-project analysis. See the `agentcenter` outbox schema for the
-expected JSONL format.
+Maintainer: Elja Placido — <digicisu@gmail.com>. For anything security-related,
+follow [.github/SECURITY.md](.github/SECURITY.md) instead of a public issue.

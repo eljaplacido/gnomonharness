@@ -173,8 +173,11 @@ Ordered by what a day of real use runs into first.
       tokens, wall-clock, tool calls and pass rate, with the same tasks run on
       OpenCode and Aider for a baseline. Until this exists, no claim about task
       success rates is honest — see [POSITIONING.md](POSITIONING.md).
-- [ ] **MCP.** The largest single gap against every harness in this class.
-      `tools.toml` documents the block and nothing connects it.
+- [x] **MCP (stdio).** `tools.toml`'s `[mcp_servers]` block spawns a pinned
+      stdio server at startup, discovers its tools and offers them per role as
+      `mcp__<server>__<tool>`. HTTP/SSE transports remain to be wired, and the
+      reproducibility guarantee is bounded — gnomon pins the invocation, not the
+      server's behaviour.
 - [ ] **Compiled entry point.** ~197ms of every invocation is `tsx`
       transpiling the sources; gnomon's own logic is ~33ms. Needs conditional
       `exports` across every workspace package, which also changes what vitest

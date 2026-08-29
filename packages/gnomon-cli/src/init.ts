@@ -282,7 +282,7 @@ tools = ["read", "glob", "grep", "compute", "todo", "bash"]
 # read-only. This list is what actually constrains it: the suite can be run,
 # nothing else. Remove it and the verifier can alter what it judges.
 bash_allow = [
-  '^septacore check\\b',\n  '^(cargo|pnpm|npm|yarn|pytest|python -m pytest|go|make)\\s',
+  '^(cargo|pnpm|npm|yarn|pytest|python -m pytest|go|make)\\s',
   '^(ls|cat|head|tail|grep|rg|find|git (status|diff|log|show))\\s',
 ]
 description = "Runs the suite and reports. Cannot write."
@@ -395,7 +395,7 @@ enabled = true
 # level and the tool timeout all apply to it. It is not a privileged path.
 #
 # [verify]
-# command = "pytest -q"    # or septacore check, cargo test, .gnomon/ci.sh
+# command = "pytest -q"    # or cargo test, make, .gnomon/ci.sh
 # after = "write"          # write | always
 # max_rounds = 1           # times a failure may hand the turn back; 0 = report only
 

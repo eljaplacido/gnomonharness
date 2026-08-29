@@ -7,7 +7,7 @@ exit-code and session fixtures are only validated for internal consistency.
 Nothing inspects a commit to require that a contract change and a fixture
 change travel together — that part is a convention.
 
-**Version: 0.1.0** (2025-01-xx)
+**Version: 0.1.0** (2026-08)
 
 ---
 
