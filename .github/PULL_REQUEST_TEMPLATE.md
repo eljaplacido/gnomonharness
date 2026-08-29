@@ -12,8 +12,9 @@
 
 ## Tests
 
-<!-- Confirm test count before/after. Every new metric lands with
-  (a) migration, (b) collector, (c) UI surface, (d) test. -->
+<!-- Confirm test count before/after. A documented claim lands with a test
+  that fails when the claim stops being true; a surface-contract change lands
+  with a conformance/ fixture. -->
 
 - [ ] `cargo test` — Rust tests pass
 - [ ] `pnpm test` — TypeScript tests pass

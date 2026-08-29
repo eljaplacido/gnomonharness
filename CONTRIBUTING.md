@@ -1,5 +1,29 @@
 # CONTRIBUTING — gnomon
 
+Contributions are welcome, and the project is **maintainer-gated for now**: every
+change lands through a pull request that the maintainer reviews and merges.
+`master` is branch-protected — no direct pushes, no force-pushes — so the way in
+is always a PR.
+
+## How to propose a change
+
+1. **Open an issue first for anything non-trivial.** A new tool, a surface
+   contract, a behaviour change, a dependency — agree the direction before you
+   build it. Bug fixes and docs can go straight to a PR. (The harness has strong
+   opinions; a five-minute issue saves a rewritten PR.)
+2. **Fork, branch, and keep it one slice.** Branch off `master`; one PR is one
+   reviewable change, not a grab-bag. Match the surrounding style.
+3. **The gate must be green.** `.gnomon/ci.sh` runs the whole suite (Rust +
+   TypeScript + the docs-are-tested checks). CI runs it on every PR; run it
+   locally first. A documented claim that isn't backed by a test that fails when
+   the claim stops being true will not pass review — see the note below.
+4. **Open the PR against `master`.** The maintainer (Elja Placido —
+   <digicisu@gmail.com>) reviews and merges. Expect review before merge; that is
+   the gate, and it is deliberate while the interfaces are still moving.
+
+Security issues do **not** go through public PRs or issues — see
+[.github/SECURITY.md](.github/SECURITY.md).
+
 ## Dev workflow
 
 - Rust 1.82+, `cargo fmt` + `cargo clippy` + `cargo test`.

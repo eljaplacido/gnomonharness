@@ -62,9 +62,6 @@ hashes.
 your PATH. Confirm with `which gnomon`. (pnpm may print `WARN … has no
 binaries` — harmless; it creates the shim anyway.)
 
-> **Pre-release note:** while the repository is private, an anonymous `git clone`
-> will fail — authenticate first (`gh auth login`, or clone over SSH). Once it is
-> public this is not needed.
 
 ## 3. Launch it in a project
 
