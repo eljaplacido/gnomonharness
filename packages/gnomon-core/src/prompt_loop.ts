@@ -2387,6 +2387,7 @@ const MENU_ROWS = 6;
  */
 export class CommandMenu {
   private shown = false;
+  private rows = 0;
 
   constructor(
     private readonly out: NodeJS.WriteStream,
@@ -2438,20 +2439,36 @@ export class CommandMenu {
       body.push(paint(ui, "gray", `  no command starts with ${line}`));
     }
 
-    // Save cursor, clear everything below, draw, come back.
-    this.out.write("\x1b[s");
-    this.out.write("\n\x1b[J");
-    this.out.write(body.join("\n"));
-    this.out.write("\x1b[u");
+    // Draw the menu on the rows below the prompt without disturbing it. The
+    // cursor is on the prompt line (readline has already redrawn it). The trap
+    // is the bottom of the screen: saving the cursor, drawing N lines, and
+    // having that draw SCROLL the screen leaves the saved position stale, so
+    // the restore lands N rows too low — every keystroke then redraws slightly
+    // offset, smearing the menu into the duplicated, corrupted copies the bug
+    // report showed. So reserve the N rows first (the scroll, if any, happens
+    // now and carries the cursor with it), come back up to the prompt, and only
+    // then save → draw → restore. Nothing scrolls in that window, so the
+    // restore is exact. IND (ESC D) reserves a row and preserves the column
+    // regardless of the terminal's newline mode; each drawn row is forced to
+    // column 0 with CR so nothing depends on it either.
+    const n = body.length;
+    this.out.write("\x1bD".repeat(n)); // reserve N rows below (scroll now if at bottom)
+    this.out.write(`\x1b[${n}A`);      // back up to the prompt line, column intact
+    this.out.write("\x1b7");           // save cursor (DECSC) — stable, no more scroll
+    this.out.write("\n\r\x1b[J");      // down one, column 0, clear the whole region
+    this.out.write(body.join("\n\r"));  // draw, each row starting at column 0
+    this.out.write("\x1b8");           // restore to the prompt
+    this.rows = n;
     this.shown = true;
   }
 
   /** Erase the menu. Safe to call when nothing is drawn. */
   clear(): void {
     if (!this.live || !this.shown) return;
-    this.out.write("\x1b[s");
-    this.out.write("\n\x1b[J");
-    this.out.write("\x1b[u");
+    this.out.write("\x1b7");        // save at the prompt
+    this.out.write("\n\r\x1b[J");   // wipe everything below it
+    this.out.write("\x1b8");        // restore
+    this.rows = 0;
     this.shown = false;
   }
 }

@@ -1513,10 +1513,31 @@ describe("the live command menu", () => {
     const menu = new M(out, () => ({ theme: "mono", color: true }) as any);
     menu.render("/co");
     const body = written.join("");
-    expect(body).toContain("\x1b[s"); // save
-    expect(body).toContain("\x1b[J"); // clear below
-    expect(body.endsWith("\x1b[u")).toBe(true); // restore, last
+    expect(body).toContain("\x1b7"); // save (DECSC)
+    expect(body).toContain("\x1b[J"); // clear the region below
+    expect(body.endsWith("\x1b8")).toBe(true); // restore (DECRC), last
     expect(body).toContain("/context");
+  });
+
+  it("reserves the rows BEFORE saving the cursor, so a scroll cannot smear it", () => {
+    // The bug: near the bottom of the screen, drawing the menu scrolled the
+    // terminal *after* the cursor was saved, so the restore landed rows too low
+    // and every keystroke redrew offset — duplicated, corrupted copies. The fix
+    // reserves the rows first (the scroll, if any, happens then), comes back up,
+    // and only then saves. Order is the whole fix, so order is what is asserted.
+    const written: string[] = [];
+    const out: any = { isTTY: true, columns: 80, write: (s: string) => written.push(s) };
+    new M(out, () => ({ theme: "mono", color: false }) as any).render("/");
+    const body = written.join("");
+    const rows = Math.min(promptLoop.COMMANDS.length, 6) + 1; // MENU_ROWS + the "N more" line
+    expect(body).toContain("\x1bD".repeat(rows));   // reserved with IND, one per row
+    expect(body).toContain(`\x1b[${rows}A`);        // then back up to the prompt
+    const reserve = body.indexOf("\x1bD");
+    const up = body.indexOf(`\x1b[${rows}A`);
+    const save = body.indexOf("\x1b7");
+    expect(reserve).toBeGreaterThanOrEqual(0);
+    expect(up).toBeGreaterThan(reserve); // up-move after the reservation
+    expect(save).toBeGreaterThan(up);    // save after we are back on the prompt
   });
 
   it("clear is a no-op when nothing was drawn", () => {
