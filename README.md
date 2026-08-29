@@ -317,7 +317,9 @@ implementations agree.
 
 Requires **Node ≥ 20**, **pnpm 9**, and a **Rust toolchain**. For local
 inference, [Ollama](https://ollama.com) — though any OpenAI-shaped endpoint
-works.
+works. **Linux and macOS**; on **Windows use WSL2** (native PowerShell/cmd is
+unsupported — the `bash` tool is POSIX). See
+[GETTING_STARTED.md](GETTING_STARTED.md) for the per-platform steps.
 
 ```bash
 git clone https://github.com/eljaplacido/gnomonharness.git ~/gnomon
