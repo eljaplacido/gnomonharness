@@ -1222,6 +1222,12 @@ describe("webfetch — the tool that makes [sandbox] network real", () => {
       "http://192.168.1.1/",
       "http://172.16.0.1/",
       "http://[::1]/",
+      // IPv4-mapped/compatible IPv6 — Node keeps (and even normalizes down to)
+      // the hex form, which the dotted-only guard used to wave through.
+      "http://[::ffff:7f00:1]/",           // 127.0.0.1
+      "http://[::ffff:a9fe:a9fe]/",        // 169.254.169.254 (metadata)
+      "http://[::ffff:169.254.169.254]/",  // normalizes to the hex form above
+      "http://[::a9fe:a9fe]/",             // IPv4-compatible, same destination
     ]) {
       const r = await executeTool(
         "webfetch",

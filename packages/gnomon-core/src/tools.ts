@@ -1444,9 +1444,20 @@ function isBlockedAddress(ip: string): boolean {
   if (v6 === "::1" || v6 === "::") return true; // loopback, unspecified
   if (v6.startsWith("fe80")) return true; // link-local
   if (/^f[cd]/.test(v6)) return true; // unique local
-  // IPv4-mapped (::ffff:127.0.0.1) is the same destination by another spelling.
-  const mapped = v6.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return isBlockedAddress(mapped[1]);
+  // IPv4-mapped and IPv4-compatible addresses are the same destination by
+  // another spelling, and both the dotted tail (::ffff:127.0.0.1) and the hex
+  // tail have to be decoded — `::ffff:7f00:1` is 127.0.0.1 and
+  // `::ffff:a9fe:a9fe` is 169.254.169.254 (the metadata endpoint). Checking
+  // only the dotted form blocked one spelling and waved the other through.
+  const mappedDotted = v6.match(/^::(?:ffff:)?(\d+\.\d+\.\d+\.\d+)$/);
+  if (mappedDotted) return isBlockedAddress(mappedDotted[1]);
+  const mappedHex = v6.match(/^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mappedHex) {
+    const hi = parseInt(mappedHex[1], 16);
+    const lo = parseInt(mappedHex[2], 16);
+    const v4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+    return isBlockedAddress(v4);
+  }
   return false;
 }
 
@@ -1465,6 +1476,13 @@ async function resolvesToBlocked(hostname: string): Promise<string | null> {
   for (const a of addrs) {
     if (isBlockedAddress(a.address)) return a.address;
   }
+  // Residual, documented rather than pretended away: this resolves the name and
+  // then fetch() resolves it again independently, so a name with a TTL-0 record
+  // that alternates public/loopback answers (DNS rebinding) can pass here and
+  // connect to a blocked address. Fully closing it needs pinning the vetted IP
+  // through a custom dispatcher, which this zero-dependency build cannot import
+  // without breaking HTTPS certificate validation. webfetch is opt-in per role
+  // and gated behind [sandbox] network, which bounds the exposure.
   return null;
 }
 
