@@ -46,6 +46,21 @@ describe("gnomon-core prompt_loop", () => {
       }
     });
 
+    it("/cot sets the live-trace mode for the session, and rejects a bad one", () => {
+      const state: any = { config: loadConfig(fixtureRoot), exchanges: [], currentRole: "implement" };
+      // Default is full (set by resolveUi); switching sticks on the session ui.
+      expect(promptLoop.processCommand("/cot brief", state)).toBe(true);
+      expect(state.ui.cot).toBe("brief");
+      expect(promptLoop.processCommand("/cot tools", state)).toBe(true);
+      expect(state.ui.cot).toBe("tools");
+      // An unknown mode is reported and changes nothing.
+      promptLoop.processCommand("/cot nonsense", state);
+      expect(state.ui.cot).toBe("tools");
+      // Tab-completes the modes.
+      const [offered] = promptLoop.completeInput("/cot t", []);
+      expect(offered.sort()).toEqual(["think", "tools"]);
+    });
+
     it("/roles returns role list", async () => {
       const config = loadConfig(fixtureRoot);
       const state: any = {
@@ -436,7 +451,9 @@ describe("tab completion", () => {
 
   it("narrows as you type", () => {
     const [hits] = promptLoop.completeInput("/co", roles);
-    expect(hits).toEqual(["/context"]);
+    expect(hits).toEqual(["/context", "/cot"]);
+    // A longer prefix still narrows to one.
+    expect(promptLoop.completeInput("/con", roles)[0]).toEqual(["/context"]);
   });
 
   it("completes role names after /role", () => {
@@ -1484,7 +1501,7 @@ describe("typing while a turn runs", () => {
   });
 
   it("includes the ones worth reaching for mid-turn", () => {
-    for (const cmd of ["/think", "/meta", "/help", "/context", "/tools"]) {
+    for (const cmd of ["/think", "/cot", "/meta", "/help", "/context", "/tools"]) {
       expect(promptLoop.LIVE_SAFE_COMMANDS.has(cmd), cmd).toBe(true);
     }
   });
@@ -1507,7 +1524,8 @@ describe("the live command menu", () => {
   });
 
   it("narrows as the line grows", () => {
-    expect(M.matches("/co")!.map((c) => c.name)).toEqual(["/context"]);
+    expect(M.matches("/co")!.map((c) => c.name)).toEqual(["/context", "/cot"]);
+    expect(M.matches("/con")!.map((c) => c.name)).toEqual(["/context"]);
     expect(M.matches("/the")!.map((c) => c.name)).toEqual(["/theme"]);
   });
 

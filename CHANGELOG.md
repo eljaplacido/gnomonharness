@@ -4,6 +4,15 @@
 
 ### Added
 
+- **`/cot` — control how much of the live trace shows while it works.** Modes:
+  `full` (default — reasoning + prose + every tool call/result), `think`
+  (reasoning and prose only), `tools` (tool calls and results only), `brief`
+  (one line per step: the call and its result), `off` (nothing until the final
+  answer). The reasoning shown live respects `/think` (collapse = one line,
+  show = all, hide = none); models that emit no `<think>` show nothing extra.
+  Live-safe (settable mid-turn) and Tab-completes its modes. Persist with
+  `[ui].cot` in config.toml.
+
 - **MCP — stdio transport, pinned, gated, reported.** `[mcp_servers]` is no
   longer inert: a declared **stdio** server is spawned at startup, its tools
   discovered (`tools/list`) and offered to the model as `mcp__<server>__<tool>`,
