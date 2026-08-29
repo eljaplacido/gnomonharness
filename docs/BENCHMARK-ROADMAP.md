@@ -38,10 +38,10 @@ any large-repo, multi-language, or frontier-model-at-scale result.
 **Tier 1 — make existing claims valid**
 - **B1 · Independence + currency:** run the full, unmodified current Terminal-Bench (3.0/4.0), plus SWE-bench-lite, gnomon vs goose vs opencode. Removes objections 2 + 3.
 - **B2 · Power:** pre-register arms; trial counts fixed to a target CI (±10pt @95%); always ship the per-task matrix.
-- **B3 · Cost/efficiency incl. goose:** route every harness through one usage-logging endpoint → **$-per-run and $-per-solved-task** across harnesses. Makes "leaner" concrete and finally captures goose. *(Top priority — reviewer-requested.)*
+- **B3 · Cost/efficiency** ✅ *(done, [cost-2026-08](../benchmarks/results/cost-2026-08/))* — from measured tokens: opencode costs 3.6×–10.7× more than gnomon to run the suite. Still open: a shared usage-logging endpoint to include **goose**.
 
 **Tier 2 — differentiator + weak axis**
-- **B4 · Safety/containment:** adversarial suite (model steered to escape its role) → containment rate vs peers.
+- **B4 · Safety/containment** ✅ *(first pass, [containment-2026-08](../benchmarks/results/containment-2026-08/))* — gnomon contains **15/15** model-driven boundary attacks. Still open: the **vs-peers** comparison (do opencode/pi contain the same attacks?).
 - **B5 · Large-repo / long-horizon:** stress the sliding-window gap honestly.
 - **B6 · Multi-language:** JS/Rust/Go/shell, not just Python.
 
