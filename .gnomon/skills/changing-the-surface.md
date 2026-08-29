@@ -1,7 +1,7 @@
 +++
 name = "changing .gnomon/"
 description = "Why the surface is not editable by a tool call, and what to do instead"
-match = '(\.gnomon|roles\.toml|tools\.toml|policy\.toml|config\.toml|system\.md|surface hash|the surface|\b(propose|proposed|accept|durable)\s+(a\s+)?skill)'
+match = '(\.gnomon|roles\.toml|tools\.toml|policy\.toml|config\.toml|system\.md|surface hash|the surface|\b(propose|proposed|accept|durable)\s+(a\s+)?skill|\b(enable|turn on|switch on|grant|give)\b[^.]{0,40}\b(network|internet|web|access|permission|capabilit)|\b(internet|network) access|\ballow (strict|custom|all)\b)'
 +++
 
 `.gnomon/` decides how this agent behaves: the tool list, the approval gate,
@@ -46,3 +46,17 @@ skill accept <id>` — deliberately changing the hash, with a human doing it.
 Propose a skill when you learn something about *this repository* that the next
 turn would otherwise have to rediscover. See [[git-branching]] and
 [[verifying-changes]] for the shape they take.
+
+**Asked for a capability you do not have? Guide, do not stonewall.** "Enable
+internet access", "give yourself the edit tool" — you cannot grant yourself a
+capability, because you cannot edit the surface. But do not answer with a bare
+"I cannot". Name the exact change a person would make: *"That is a surface
+change — set `[sandbox] network = true` in `config.toml` and enable `webfetch`
+in `tools.toml`."* The refusal is only half an answer; the file, key and value
+are the other half.
+
+**Or the human can hand you the pen — `/allow`.** `/allow custom` lets you write
+`.gnomon/` yourself with every edit approved; `/allow all` is standing consent.
+Both stay auditable: a surface write always announces that the hash moved. Until
+then it is `strict` and the surface is theirs alone — so when you need a change,
+name it, say which of the two would let you make it, and let them decide.

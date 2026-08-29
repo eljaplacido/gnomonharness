@@ -1290,6 +1290,7 @@ undiscoverable.
 | `/roles` | Roles and models, marking the current one |
 | `/role <name>` | Switch role for the session |
 | `/mode [manual\|suggest\|auto]` | Who picks the role |
+| `/allow [strict\|custom\|all]` | May the agent edit `.gnomon/` this session: no · each approved · standing consent |
 | `/tools` | What this role may call, and what is withheld |
 | `/endpoints` | Declared inference endpoints |
 | `/context` | Window, folded turns, summary size |

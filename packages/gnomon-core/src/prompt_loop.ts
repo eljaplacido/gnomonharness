@@ -48,6 +48,7 @@ import {
   Approver,
   SandboxLevel,
   ApprovalGate,
+  SurfaceConsent,
 } from "./tools.js";
 import { mapBucket } from "./session.js";
 import {
@@ -115,6 +116,8 @@ export interface PromptState {
   ui?: ResolvedUi;
   /** Resolved `[routing]`; /mode edits this copy for the session only */
   routing?: ResolvedRouting;
+  /** Surface-edit consent for this session, set by `/allow`. Default `strict`. */
+  allow?: SurfaceConsent;
   /**
    * Running summary of turns evicted from the window under
    * `compaction = "summary"`. Replaces them in the prompt.
@@ -977,6 +980,9 @@ export async function runAgenticTurn(
     timeoutMs: toolTimeoutMs(config),
     maxOutputBytes: 32_000,
     network,
+    // Surface-edit consent, human-set via /allow. A delegated sub-turn is
+    // forced back to strict below, so delegation can never acquire it.
+    allow: state.allow,
     todos: {
       list: () => state.todos ?? [],
       replace: (t) => {
@@ -1162,7 +1168,7 @@ export async function runAgenticTurn(
         const check = await executeTool(
           "bash",
           { command: verify.command },
-          { ...ctx, gate: "never" as ApprovalGate },
+          { ...ctx, gate: "never" as ApprovalGate, allow: "strict" as SurfaceConsent },
           new Set(["bash"])
         );
         // bashTool reports TOOL_OK for any command that *ran*; the shell's own
@@ -1908,6 +1914,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/roles", help: "List roles and models (marks the current one)" },
   { name: "/role", arg: "<name>", help: "Switch role for the rest of the session" },
   { name: "/mode", arg: "[manual|suggest|auto]", help: "Who picks the role: you, the rules with your confirmation, or the rules" },
+  { name: "/allow", arg: "[strict|custom|all]", help: "May the agent edit .gnomon/ this session: strict (no) | custom (each approved) | all (standing consent)" },
   { name: "/skills", help: "Active skills and pending proposals" },
   { name: "/session", arg: "[id]", help: "This session, earlier ones, and switching between them" },
   { name: "/new", help: "Start a fresh session; the current one stays resumable" },
@@ -1963,6 +1970,15 @@ export function completeInput(
     const partial = modeArg[1];
     return [
       ["manual", "suggest", "auto"].filter((m) => m.startsWith(partial)),
+      partial,
+    ];
+  }
+
+  const allowArg = line.match(/^\/allow\s+(\S*)$/);
+  if (allowArg) {
+    const partial = allowArg[1];
+    return [
+      ["strict", "custom", "all"].filter((m) => m.startsWith(partial)),
       partial,
     ];
   }
@@ -2701,6 +2717,32 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       }
       console.log(`\nMeta: ${ui.meta.join(", ") || "(none)"} (${ui.meta_style})`);
       console.log(`Session only — edit [ui] in .gnomon/config.toml to make it stick.`);
+      return true;
+    }
+
+    case "/allow": {
+      const wanted = (parts[1] ?? "").trim();
+      const current = state.allow ?? "strict";
+      if (!wanted) {
+        console.log(`\nAllow: ${current} — may the agent edit its own .gnomon/ surface this session?`);
+        console.log("  strict — no. The surface stays a human act; the agent names the edit for you. (default)");
+        console.log("  custom — yes, but every surface write is approved, one at a time.");
+        console.log("  all    — yes, standing consent. Each write still announces the hash move.");
+        console.log("\n  A consent dial. Surface edits stay auditable — the hash moves loudly whatever the setting.");
+        return true;
+      }
+      if (wanted !== "strict" && wanted !== "custom" && wanted !== "all") {
+        console.log(`\nUnknown level: "${wanted}". Use: strict | custom | all`);
+        return true;
+      }
+      state.allow = wanted as SurfaceConsent;
+      const note =
+        state.allow === "all"
+          ? " — the agent may now write .gnomon/ itself; every write announces the hash move."
+          : state.allow === "custom"
+            ? " — the agent may write .gnomon/, and you approve each surface edit."
+            : " — the surface is human-only again.";
+      console.log(`\nAllow: ${state.allow}${note}`);
       return true;
     }
 

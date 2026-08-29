@@ -365,6 +365,15 @@ export interface ApprovalRequest {
 
 export type Approver = (req: ApprovalRequest) => Promise<boolean>;
 
+/**
+ * Whether the agent may edit its own `.gnomon/` surface this session, set by
+ * the human via `/allow`. `strict` (default) keeps the surface a human-only
+ * act — the pillar. `custom` lets the agent write it but each edit is approved;
+ * `all` is standing consent. A consented surface write still moves the hash
+ * loudly, so the change stays auditable. Never set by the agent itself.
+ */
+export type SurfaceConsent = "strict" | "custom" | "all";
+
 /** Tools that can change something outside the model's own context. */
 const MUTATING = new Set(["bash", "write", "edit", "skill", "webfetch", "task"]);
 
@@ -635,6 +644,13 @@ export interface ToolContext {
   delegate?: Delegate;
   /** Whether tools may reach the network. From `[sandbox] network`. */
   network?: boolean;
+  /**
+   * Whether the agent may write inside `.gnomon/` this session. Absent =
+   * `strict` = the surface is human-only (the default, and the pillar).
+   * `custom` permits a surface write with per-edit approval; `all` is standing
+   * consent. Set by the human with `/allow`, never by the agent.
+   */
+  allow?: SurfaceConsent;
 }
 
 /** One item on the session checklist. */
@@ -1825,16 +1841,65 @@ async function writeTool(
   }
 
   if (inSurface(ctx, abs)) {
-    return {
-      code: TOOL_DENIED,
-      content:
-        `Refused: "${path}" is inside .gnomon/, the surface that decides how ` +
-        `this agent behaves. It is not writable by a tool call — editing it ` +
-        `is a human act, because it changes the surface hash and the rules ` +
-        `the next turn runs under. To propose durable guidance instead, use ` +
-        `the skill tool.`,
-      summary: `write ${path} — refused (surface is read-only)`,
-    };
+    const consent = ctx.allow ?? "strict";
+    if (consent === "strict") {
+      return {
+        code: TOOL_DENIED,
+        content:
+          `Refused: "${path}" is inside .gnomon/, the surface that decides how ` +
+          `this agent behaves. It is not writable by a tool call — editing it ` +
+          `is a human act, because it changes the surface hash and the rules ` +
+          `the next turn runs under. The human can allow it for this session ` +
+          `with /allow custom (each edit approved) or /allow all; to propose ` +
+          `durable guidance instead, use the skill tool.`,
+        summary: `write ${path} — refused (surface is read-only)`,
+      };
+    }
+    // The human consented to surface edits this session (/allow custom|all).
+    // This is the one path that writes inside .gnomon/, so it is deliberate and
+    // loud: it always announces that the hash moved.
+    if (existsSync(abs) && statSync(abs).isDirectory()) {
+      return {
+        code: TOOL_FAILED,
+        content: `${path} is a directory, not a file. Give a path to a file.`,
+        summary: `write ${path} — is a directory`,
+      };
+    }
+    const surfaceBefore = existsSync(abs) ? readFileSync(abs, "utf-8") : "";
+    const surfaceDiff = diffLines(surfaceBefore, content);
+    const { added: sa, removed: sr } = diffStat(surfaceDiff);
+    // custom always asks; all defers to the configured gate.
+    if (consent === "custom" || needsApproval("write", ctx.gate)) {
+      const ok = await ctx.approve({
+        tool: "write",
+        summary: `write ${path} — SURFACE EDIT, moves the hash (+${sa} −${sr})`,
+        preview: surfaceDiff,
+      });
+      if (!ok) {
+        return {
+          code: TOOL_DENIED,
+          content: `Refused: the user declined the surface write to ${path}.`,
+          summary: `write ${path} — surface edit denied`,
+        };
+      }
+    }
+    try {
+      mkdirSync(dirname(abs), { recursive: true });
+      writeFileSync(abs, content, "utf-8");
+      return {
+        code: TOOL_OK,
+        content:
+          `Wrote ${path} (+${sa} −${sr}). This changed the surface — the hash ` +
+          `moved, and the next turn runs under the new rules.`,
+        summary: `write ${path} — SURFACE CHANGED (+${sa} −${sr})`,
+      };
+    } catch (err) {
+      return {
+        code: TOOL_FAILED,
+        content: `Could not write ${path}: ${err instanceof Error ? err.message : String(err)}`,
+        summary: `write ${path} — failed`,
+      };
+    }
   }
 
   const scope = writeAllowed(ctx, abs);
@@ -1915,7 +1980,8 @@ async function editTool(
         `Refused: "${path}" is inside .gnomon/, the surface that decides how ` +
         `this agent behaves. It is not editable by a tool call — changing it ` +
         `is a human act, because it changes the surface hash and the rules ` +
-        `the next turn runs under.`,
+        `the next turn runs under. Once the human allows it (/allow custom|all) ` +
+        `a surface file is changed by a full-file write, not an in-place edit.`,
       summary: `edit ${path} — refused (surface is read-only)`,
     };
   }

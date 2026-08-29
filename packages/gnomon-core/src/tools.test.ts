@@ -711,6 +711,58 @@ describe("the surface is not writable by a tool call", () => {
     expect(r.code).toBe(TOOL_OK);
   });
 
+  it("/allow all lets the agent write the surface — and says the hash moved", async () => {
+    const r = await executeTool(
+      "write",
+      { path: ".gnomon/roles.toml", content: 'model = "x"\n' },
+      ctx({ gate: "never", allow: "all" }),
+      offered
+    );
+    expect(r.code).toBe(TOOL_OK);
+    expect(readFileSync(join(root, ".gnomon", "roles.toml"), "utf-8")).toContain(
+      'model = "x"'
+    );
+    expect(r.content).toMatch(/surface|hash moved/i);
+  });
+
+  it("/allow custom requires approval for each surface write", async () => {
+    const denied = await executeTool(
+      "write",
+      { path: ".gnomon/roles.toml", content: "nope" },
+      ctx({ gate: "never", allow: "custom", approve: async () => false }),
+      offered
+    );
+    expect(denied.code).toBe(TOOL_DENIED);
+    expect(existsSync(join(root, ".gnomon", "roles.toml"))).toBe(false);
+
+    const okd = await executeTool(
+      "write",
+      { path: ".gnomon/roles.toml", content: "yes" },
+      ctx({ gate: "never", allow: "custom", approve: async () => true }),
+      offered
+    );
+    expect(okd.code).toBe(TOOL_OK);
+    expect(readFileSync(join(root, ".gnomon", "roles.toml"), "utf-8")).toBe("yes");
+  });
+
+  it("/allow strict (the default) refuses, and edit refuses the surface at every level", async () => {
+    const w = await executeTool(
+      "write",
+      { path: ".gnomon/roles.toml", content: "x" },
+      ctx({ gate: "never", allow: "strict" }),
+      offered
+    );
+    expect(w.code).toBe(TOOL_DENIED);
+    // Surface files are changed by a full-file write under /allow, never edit.
+    const e = await executeTool(
+      "edit",
+      { path: ".gnomon/policy.toml", old_text: 'gate = "on_write"', new_text: 'gate = "never"' },
+      ctx({ gate: "never", allow: "all" }),
+      offered
+    );
+    expect(e.code).toBe(TOOL_DENIED);
+  });
+
   it("detects — does not prevent — a surface moved by bash", async () => {
     // bash is arbitrary shell, so it is reported rather than blocked.
     const r = await executeTool(

@@ -4,6 +4,17 @@
 
 ### Added
 
+- **`/allow` — hand the agent the pen for `.gnomon/`, by consent.** The surface
+  is human-only by default (the pillar): `write`/`edit` refuse every path inside
+  `.gnomon/`. `/allow` is a per-session consent dial the human sets — `strict`
+  (default, unchanged), `custom` (the agent may write the surface, every edit
+  approved), `all` (standing consent). A consented surface write is always loud:
+  it announces the hash moved, so the change stays auditable; and a delegated
+  sub-turn is forced back to `strict`, so delegation can never acquire it. Paired
+  with "guide, don't stonewall": asked to enable a capability it lacks (network,
+  a tool), the agent now names the exact surface change and offers `/allow`,
+  instead of a bare "I cannot".
+
 - **`loops` — unattended supervision without a daemon.** `gnomon loop|loops`
   runs guard/act ticks off the OS scheduler (cron): a guard command decides
   whether to act, and only then does it escalate to a `gnomon task`. A circuit
