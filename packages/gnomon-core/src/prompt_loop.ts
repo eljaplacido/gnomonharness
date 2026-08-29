@@ -36,6 +36,7 @@ import {
   ResolvedUi,
   MetaField,
   META_FIELDS,
+  COT_MODES,
   loadConfig,
 } from "./config.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence } from "./render.js";
@@ -1360,8 +1361,24 @@ export async function runAgenticTurn(
     // Models usually say why before they call something, and that text was
     // being discarded — leaving an approval prompt that showed a command and
     // no reason for it. Approving a row of symbols is not oversight.
-    const rationale = splitThinking(result.content ?? "").answer.trim();
-    if (rationale) {
+    // /cot decides how much of the live "while it works" trace to show.
+    const split = splitThinking(result.content ?? "");
+    const showTrace = deps.ui.cot === "full" || deps.ui.cot === "think";
+    // Chain-of-thought as it happens — the model's <think> reasoning, at the
+    // verbosity /think sets (collapse = one line, show = all, hide = none). This
+    // is what "see it chewing" means; models that emit no <think> show nothing.
+    if (showTrace && deps.ui.think !== "hide") {
+      const think = split.think.trim();
+      if (think) {
+        const all = think.split("\n");
+        const lines = deps.ui.think === "collapse"
+          ? [all[0] + (all.length > 1 ? " …" : "")]
+          : all;
+        for (const line of lines) deps.say(paint(deps.ui, "gray", `  · ${line}`));
+      }
+    }
+    const rationale = split.answer.trim();
+    if (rationale && showTrace) {
       for (const line of rationale.split("\n")) {
         deps.say(paint(deps.ui, "gray", `  │ ${line}`));
       }
@@ -1381,10 +1398,12 @@ export async function runAgenticTurn(
       if (recentCalls.length > STALL_REPEATS * 2) recentCalls.shift();
       const gated = needsApproval(call.name, gate) && offered.has(call.name);
       deps.progress.stop();
-      deps.say(
-        paint(deps.ui, "cyan", `  ⚙ ${call.name}`) +
-          paint(deps.ui, "gray", ` ${describeCall(call)}`)
-      );
+      if (deps.ui.cot === "full" || deps.ui.cot === "tools") {
+        deps.say(
+          paint(deps.ui, "cyan", `  ⚙ ${call.name}`) +
+            paint(deps.ui, "gray", ` ${describeCall(call)}`)
+        );
+      }
 
       const outcome: ToolOutcome = await executeTool(call.name, call.args, ctx, offered);
       code = worse(code, outcome.code);
@@ -1410,13 +1429,19 @@ export async function runAgenticTurn(
       });
 
       const bucket = mapBucket(outcome.code);
-      deps.say(
-        paint(
-          deps.ui,
-          bucket === "result" ? "green" : bucket === "refusal" ? "yellow" : "red",
-          `    ${bucket === "result" ? "✓" : bucket === "refusal" ? "⚠" : "✗"} ${outcome.summary}`
-        )
-      );
+      const glyph = bucket === "result" ? "✓" : bucket === "refusal" ? "⚠" : "✗";
+      const bcolor = bucket === "result" ? "green" : bucket === "refusal" ? "yellow" : "red";
+      if (deps.ui.cot === "full" || deps.ui.cot === "tools") {
+        deps.say(paint(deps.ui, bcolor, `    ${glyph} ${outcome.summary}`));
+      } else if (deps.ui.cot === "brief") {
+        // One line per step: the call and what it returned.
+        deps.say(
+          paint(deps.ui, "cyan", `  • ${call.name}`) +
+            paint(deps.ui, "gray", ` ${describeCall(call)} `) +
+            paint(deps.ui, bcolor, `${glyph} ${outcome.summary}`)
+        );
+      }
+      // think / off: no per-tool line — the spinner still shows activity.
 
       working.push({
         role: "tool",
@@ -1924,7 +1949,7 @@ export interface CommandSpec {
  */
 export const LIVE_SAFE_COMMANDS = new Set([
   "/help", "/roles", "/profiles", "/tools", "/endpoints", "/context",
-  "/skills", "/manifest", "/explain", "/reflect", "/meta", "/think", "/mode",
+  "/skills", "/manifest", "/explain", "/reflect", "/meta", "/think", "/cot", "/mode",
   // Reading the checklist mid-turn is the point of having one: it answers
   // "how far through is it" without stopping the work to find out.
   "/theme", "/todo",
@@ -1945,6 +1970,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/reset", help: "Drop conversation history (keeps the session open)" },
   { name: "/meta", arg: "[fields]", help: "Show or set the meta line" },
   { name: "/think", arg: "[mode]", help: "Chain-of-thought: hide | collapse | show" },
+  { name: "/cot", arg: "[mode]", help: "Live trace while it works: off | brief | tools | think | full" },
   { name: "/theme", arg: "[name]", help: "Colour theme — dark, dim, light, high-contrast, mono, tokyonight, catppuccin (the last two recolour the whole terminal)" },
   { name: "/explain", arg: "[topic]", help: "What a feature is, how this repo has it set, and what to do with it" },
   { name: "/reflect", arg: "[topic]", help: "Alias for /explain" },
@@ -1983,6 +2009,12 @@ export function completeInput(
   if (themeArg) {
     const partial = themeArg[1];
     return [Object.keys(THEMES).filter((t) => t.startsWith(partial)), partial];
+  }
+
+  const cotArg = line.match(/^\/cot\s+(\S*)$/);
+  if (cotArg) {
+    const partial = cotArg[1];
+    return [COT_MODES.filter((m) => m.startsWith(partial)), partial];
   }
 
   const modeArg = line.match(/^\/mode\s+(\S*)$/);
@@ -2839,6 +2871,29 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       ui.think = mode;
       console.log(`\nChain-of-thought: ${ui.think}`);
       console.log(`Session only — edit [ui].think in .gnomon/config.toml to make it stick.`);
+      return true;
+    }
+
+    case "/cot": {
+      const ui = uiOf(state);
+      const mode = (parts[1] ?? "").trim();
+      if (!mode) {
+        console.log(`\nLive trace: ${ui.cot}`);
+        console.log(`  off    — nothing until the final answer`);
+        console.log(`  brief  — one line per step: the call and its result`);
+        console.log(`  tools  — tool calls and results, no reasoning`);
+        console.log(`  think  — reasoning and prose only, no tool lines`);
+        console.log(`  full   — reasoning + prose + every tool call/result`);
+        console.log(`(reasoning is shown at /think's level: collapse = one line, show = all, hide = none)`);
+        return true;
+      }
+      if (!COT_MODES.includes(mode as (typeof COT_MODES)[number])) {
+        console.log(`\nUnknown mode: "${mode}". Use: ${COT_MODES.join(" | ")}`);
+        return true;
+      }
+      ui.cot = mode as (typeof COT_MODES)[number];
+      console.log(`\nLive trace: ${ui.cot}`);
+      console.log(`Session only — edit [ui].cot in .gnomon/config.toml to make it stick.`);
       return true;
     }
 

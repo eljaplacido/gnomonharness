@@ -89,6 +89,7 @@ export interface UiConfig {
   meta?: string[];
   meta_style?: MetaStyle;
   think?: ThinkMode;
+  cot?: CotMode;
   spinner?: boolean;
   color?: boolean;
   markdown?: boolean;
@@ -108,6 +109,16 @@ export type MetaField =
 
 export type MetaStyle = "line" | "compact";
 export type ThinkMode = "hide" | "collapse" | "show";
+
+/**
+ * How much of the live "while it works" trace to show, set by /cot:
+ *   full  — reasoning (at /think's verbosity) + prose + each tool call/result
+ *   think — reasoning + prose only, no tool lines
+ *   tools — tool calls and results only, no reasoning
+ *   brief — one line per step: the call and its result summary
+ *   off   — nothing until the final answer
+ */
+export type CotMode = "off" | "brief" | "tools" | "think" | "full";
 
 /** config.toml [defaults] */
 export interface Defaults {
@@ -729,6 +740,7 @@ export interface ResolvedUi {
   meta: MetaField[];
   meta_style: MetaStyle;
   think: ThinkMode;
+  cot: CotMode;
   spinner: boolean;
   color: boolean;
   /**
@@ -756,6 +768,7 @@ export const META_FIELDS: MetaField[] = [
 
 const META_STYLES: MetaStyle[] = ["line", "compact"];
 const THINK_MODES: ThinkMode[] = ["hide", "collapse", "show"];
+export const COT_MODES: CotMode[] = ["off", "brief", "tools", "think", "full"];
 
 /**
  * Parse a meta field list, dropping names that are not fields.
@@ -798,6 +811,7 @@ export function resolveUi(config: GnomonConfig): ResolvedUi {
       declared ?? ["turn", "role", "model", "bucket", "duration", "context", "tools"],
     meta_style: pickEnum(ui.meta_style, META_STYLES, "line"),
     think: pickEnum(ui.think, THINK_MODES, "collapse"),
+    cot: pickEnum(ui.cot, COT_MODES, "full"),
     spinner: typeof ui.spinner === "boolean" ? ui.spinner : true,
     color: typeof ui.color === "boolean" ? ui.color : true,
     markdown: typeof ui.markdown === "boolean" ? ui.markdown : true,
