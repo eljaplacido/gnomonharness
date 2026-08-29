@@ -22,6 +22,24 @@ rl.on('line', (line) => {
 });
 `;
 
+// Reports whether two env vars reached the child, so the test can prove the
+// declared-only forwarding contract instead of trusting it.
+const ENV_SERVER = `
+const rl = require('readline').createInterface({ input: process.stdin });
+const send = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+const has = (k) => process.env[k] === undefined ? 'ABSENT' : 'PRESENT';
+rl.on('line', (line) => {
+  let m; try { m = JSON.parse(line); } catch { return; }
+  if (m.method === 'initialize') {
+    send({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2024-11-05', capabilities: {}, serverInfo: { name: 'env', version: '1' } } });
+  } else if (m.method === 'tools/list') {
+    send({ jsonrpc: '2.0', id: m.id, result: { tools: [ { name: 'report', description: 'report env', inputSchema: { type: 'object' } } ] } });
+  } else if (m.method === 'tools/call') {
+    send({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: 'DECLARED=' + has('GNOMON_MCP_DECLARED') + ' SECRET=' + has('GNOMON_MCP_SECRET') }], isError: false } });
+  }
+});
+`;
+
 describe("mcp", () => {
   it("connects a stdio server, discovers its tools, and routes a call", async () => {
     const reg = await connectMcp({
@@ -65,5 +83,34 @@ describe("mcp", () => {
     expect(r.isError).toBe(true);
     expect(r.content).toMatch(/not connected/i);
     reg.close();
+  });
+
+  it("forwards only the declared env vars, not the whole environment", async () => {
+    // A stored provider key would sit in process.env; the surface declares
+    // which names a server may see. The child must get the declared name and
+    // NOT the undeclared secret — the `env` list is a filter, not an add-on.
+    process.env.GNOMON_MCP_DECLARED = "yes";
+    process.env.GNOMON_MCP_SECRET = "do-not-leak";
+    try {
+      const reg = await connectMcp({
+        env: {
+          transport: "stdio",
+          command: "node",
+          args: ["-e", ENV_SERVER],
+          env: ["GNOMON_MCP_DECLARED"],
+        },
+      });
+      try {
+        const r = await reg.call(mcpToolName("env", "report"), {});
+        expect(r.isError).toBe(false);
+        expect(r.content).toContain("DECLARED=PRESENT");
+        expect(r.content).toContain("SECRET=ABSENT");
+      } finally {
+        reg.close();
+      }
+    } finally {
+      delete process.env.GNOMON_MCP_DECLARED;
+      delete process.env.GNOMON_MCP_SECRET;
+    }
   });
 });

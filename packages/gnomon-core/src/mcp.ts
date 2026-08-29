@@ -78,7 +78,18 @@ class McpConnection {
     }
     if (!this.def.command) throw new Error("no command to spawn");
 
-    const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+    // Do NOT hand a third-party server the full process environment: it would
+    // inherit every provider key and every secret applyCredentials() loaded
+    // into process.env. The `env` list is a filter, not an add-on — forward
+    // only the names the surface declared, over a minimal base the child needs
+    // to find its own runtime (spawn defaults to the full env when unset, so
+    // this object must be passed explicitly below to take effect).
+    const env: Record<string, string> = {};
+    for (const k of ["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL",
+                     "SystemRoot", "PATHEXT", "APPDATA", "LOCALAPPDATA"]) {
+      const v = process.env[k];
+      if (v !== undefined) env[k] = v;
+    }
     for (const varName of this.def.env ?? []) {
       const v = process.env[varName];
       if (v !== undefined) env[varName] = v;
@@ -86,6 +97,7 @@ class McpConnection {
 
     const proc = spawn(this.def.command, this.def.args ?? [], {
       stdio: ["pipe", "pipe", "pipe"],
+      env,
     }) as ChildProcessWithoutNullStreams;
     this.proc = proc;
     proc.on("error", (err) => this.failAll(err));

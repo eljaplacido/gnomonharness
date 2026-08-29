@@ -1,0 +1,20 @@
+# The surface hash is SHA-256 over raw file bytes (crates/gnomon-surface reads
+# them verbatim; no EOL normalization at hash time). If a Windows checkout with
+# core.autocrlf=true rewrote the hashed surface files to CRLF, every file hash —
+# and the surface hash, and the conformance golden — would diverge from a Unix
+# checkout. Forcing LF on text keeps "same surface, same hash on every machine"
+# true, and keeps a Windows contributor from poisoning the hash for everyone.
+* text=auto eol=lf
+
+# Shell scripts must stay LF or they will not run under bash.
+*.sh text eol=lf
+
+# Never touch binaries.
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.gif -text
+*.ico -text
+*.pdf -text
+*.woff -text
+*.woff2 -text

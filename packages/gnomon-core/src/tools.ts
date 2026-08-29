@@ -496,7 +496,12 @@ export function scanShellCommand(command: string): ShellScan {
       if (quote === '"' && ((ch === "$" && next === "(") || ch === "`")) {
         substitution = true;
       }
-      if (ch === quote && command[i - 1] !== "\\") quote = null;
+      // A single-quoted string ends at the very next quote — bash never lets
+      // a backslash escape it; only inside double quotes does `\"` stay
+      // literal. Applying the backslash test to single quotes let `'x\'` read
+      // as an open quote, swallowing the `; curl … | sh` tail into one segment
+      // that an allow-listed prefix then waved through.
+      if (ch === quote && (quote === "'" || command[i - 1] !== "\\")) quote = null;
       current += ch;
       continue;
     }
@@ -1113,10 +1118,17 @@ export function surfaceHashOf(ctx: ToolContext): string | null {
 }
 
 export function inSurface(ctx: ToolContext, abs: string): boolean {
-  const surface = ctx.config?.gnomonDir
-    ? resolve(ctx.config.gnomonDir)
-    : resolve(ctx.root, ".gnomon");
-  const rel = relative(surface, resolve(abs));
+  // Realpath both sides. Comparing lexical paths let a symlink inside the repo
+  // (`glink -> .gnomon`) read as an ordinary file, so `write glink/roles.toml`
+  // skipped the strict/consent gate while the write still landed in .gnomon/.
+  // resolveInRoot already realpaths for the sandbox check; this guard must
+  // match it, or the surface pillar is bypassable by a single symlink.
+  const surface = realpathOrSelf(
+    ctx.config?.gnomonDir
+      ? resolve(ctx.config.gnomonDir)
+      : resolve(ctx.root, ".gnomon")
+  );
+  const rel = relative(surface, realpathOfNearest(abs));
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
@@ -2221,6 +2233,24 @@ async function dispatch(
         content: `Refused: "${name}" is an MCP tool, but no MCP server is connected.`,
         summary: `${name} — no mcp`,
       };
+    }
+    // An MCP call reaches an arbitrary third-party server with model-chosen
+    // args — the tool class most likely to have external side effects, and the
+    // only one that used to run ungated. Gate it like a mutating built-in:
+    // prompt under on_write and always, proceed silently only under `never`.
+    if (ctx.gate !== "never") {
+      const ok = await ctx.approve({
+        tool: name,
+        summary: `${name} — MCP call`,
+        preview: [JSON.stringify(args).slice(0, 2000)],
+      });
+      if (!ok) {
+        return {
+          code: TOOL_DENIED,
+          content: `Refused: the user declined the ${name} call.`,
+          summary: `${name} — denied`,
+        };
+      }
     }
     const r = await ctx.mcp.call(name, args);
     return {

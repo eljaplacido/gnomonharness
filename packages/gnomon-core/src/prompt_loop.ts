@@ -1016,8 +1016,9 @@ export async function runAgenticTurn(
     // Connected MCP servers (mcp__… calls route here); undefined if none.
     mcp: state.mcp,
     // Surface-edit consent, human-set via /allow. A delegated sub-turn is
-    // forced back to strict below, so delegation can never acquire it.
-    allow: state.allow,
+    // forced to strict here — its instruction was chosen by the parent model,
+    // not the human, so it must never inherit the human's surface consent.
+    allow: depth > 0 ? ("strict" as SurfaceConsent) : state.allow,
     todos: {
       list: () => state.todos ?? [],
       replace: (t) => {

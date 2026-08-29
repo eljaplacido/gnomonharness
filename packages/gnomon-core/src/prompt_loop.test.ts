@@ -7,7 +7,7 @@ import { loadConfig } from "./config.js";
 import { mapBucket } from "./session.js";
 import * as promptLoop from "./prompt_loop.js";
 import { setRoleModel } from "./prompt_loop.js";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -582,6 +582,55 @@ describe("model API errors", () => {
     const subTools = (bodies[1]?.tools ?? []).map((t: any) => t.function.name);
     expect(parentTools).toContain("task");
     expect(subTools).not.toContain("task");
+  });
+
+  it("a delegated sub-turn cannot inherit /allow — it is forced to strict", async () => {
+    // Surface consent is a human act. A `task` sub-turn's instruction is chosen
+    // by the parent MODEL, not the human, so even under /allow all it must run
+    // strict — otherwise delegation launders a surface write nobody consented
+    // to. A temp copy of the surface stands in so the real repo is never hit.
+    const tmp = mkdtempSync(join(tmpdir(), "gnomon-m6-"));
+    cpSync(join(process.cwd(), "..", "..", ".gnomon"), join(tmp, ".gnomon"), { recursive: true });
+    try {
+      const config: any = loadConfig(tmp);
+      const state: any = { config, exchanges: [], currentRole: "plan", allow: "all" };
+      let call = 0;
+      const bodies: any[] = [];
+      await withFetch(
+        (async (_u: string, init: any) => {
+          bodies.push(JSON.parse(init.body));
+          call++;
+          let tool_calls: any;
+          if (call === 1)
+            tool_calls = [{ function: { name: "task", arguments: { role: "implement", instruction: "rewrite the surface" } } }];
+          else if (call === 2)
+            tool_calls = [{ function: { name: "write", arguments: { path: ".gnomon/m6probe.toml", content: 'model = "x"\n' } } }];
+          else tool_calls = undefined;
+          return { ok: true, json: async () => ({ message: { content: tool_calls ? "" : "done", tool_calls } }) };
+        }) as unknown as typeof fetch,
+        async () => {
+          await promptLoop.runAgenticTurn(
+            state,
+            "plan",
+            { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+            [{ role: "user", content: "delegate a surface edit" }],
+            {
+              approve: async () => true,
+              progress: { start() {}, update() {}, stop() {} } as any,
+              ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+              say: () => {},
+            }
+          );
+        }
+      );
+      // The sub-turn's write result is fed back to the model on the next call.
+      // Under the fix it is the strict refusal, and the probe file never lands.
+      const seen = JSON.stringify(bodies.map((b: any) => b.messages));
+      expect(seen).toMatch(/human act|\/allow|read-only/i);
+      expect(existsSync(join(tmp, ".gnomon", "m6probe.toml"))).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("the verify gate hands a turn back when the declared check fails", async () => {

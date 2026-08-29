@@ -505,6 +505,16 @@ describe("scanShellCommand", () => {
     expect(scanShellCommand('grep ">" file').redirection).toBe(false);
   });
 
+  it("closes a single quote on the first quote, backslash or not", () => {
+    // Single quotes are literal in bash: `'x\'` is the string `x\` and the
+    // quote is then closed. Treating the backslash as an escape kept the quote
+    // open and hid a `;`-chained command inside one allow-listed segment.
+    expect(scanShellCommand("a --f 'x\\'; b").segments).toEqual(["a --f 'x\\'", "b"]);
+    // Double quotes are unaffected: a `;` inside them still does not split, and
+    // an unquoted one after the closing quote still does.
+    expect(scanShellCommand('echo "a;b" ; c').segments).toEqual(['echo "a;b"', "c"]);
+  });
+
   it("leaves an ordinary command alone", () => {
     const scan = scanShellCommand("cargo test --all");
     expect(scan.segments).toEqual(["cargo test --all"]);
@@ -529,6 +539,10 @@ describe("bash_allow cannot be escaped by chaining", () => {
     ["backticks", "ls `echo pwned > hack.txt`"],
     ["redirect", "cargo test > hack.txt"],
     ["process-substitution", "cat <(echo pwned > hack.txt)"],
+    // A single-quoted arg ending in a backslash used to keep the scanner's
+    // quote open — bash closes it (single quotes are literal), and the `;`
+    // tail became a second, unreviewed command. The whole line was permitted.
+    ["single-quote-escape", "cargo test --features 'x\\'; echo pwned > hack.txt"],
   ];
 
   for (const [name, cmd] of bypasses) {
@@ -701,6 +715,21 @@ describe("the surface is not writable by a tool call", () => {
     expect(r.code).toBe(TOOL_DENIED);
   });
 
+  it("is not bypassable by a symlink that aliases the surface", async () => {
+    // A lexical inSurface judged `glink/roles.toml` an ordinary file while the
+    // write followed the link into .gnomon/. The guard has to realpath, the
+    // way the sandbox check already does, or one symlink defeats the pillar.
+    symlinkSync(join(root, ".gnomon"), join(root, "glink"), "dir");
+    const r = await executeTool(
+      "write",
+      { path: "glink/roles.toml", content: "pwned" },
+      ctx({ gate: "never", allow: "strict" }),
+      offered
+    );
+    expect(r.code).toBe(TOOL_DENIED);
+    expect(existsSync(join(root, ".gnomon", "roles.toml"))).toBe(false);
+  });
+
   it("still allows writes everywhere else", async () => {
     const r = await executeTool(
       "write",
@@ -786,6 +815,66 @@ describe("the surface is not writable by a tool call", () => {
     );
     expect(r.summary).not.toContain("surface changed");
     expect(r.surface_drift).toBeUndefined();
+  });
+});
+
+describe("an MCP call is gated, not waved through", () => {
+  // MCP reaches an arbitrary third-party server with model-chosen args — the
+  // tool class most likely to have external side effects. It used to run with
+  // no approval even under the strictest gate; every other tool self-gates.
+  const stubMcp = (calls: string[]) => ({
+    tools: () => [],
+    call: async (name: string) => {
+      calls.push(name);
+      return { isError: false, content: "ok" };
+    },
+    close: () => {},
+  });
+  const mcpOffered = new Set(["mcp__srv__do"]);
+
+  it("prompts under on_write and a decline never reaches the server", async () => {
+    const calls: string[] = [];
+    const r = await executeTool(
+      "mcp__srv__do",
+      { x: 1 },
+      ctx({ gate: "on_write", approve: async () => false, mcp: stubMcp(calls) as never }),
+      mcpOffered
+    );
+    expect(r.code).toBe(TOOL_DENIED);
+    expect(calls).toEqual([]);
+  });
+
+  it("runs when the human approves", async () => {
+    const calls: string[] = [];
+    const r = await executeTool(
+      "mcp__srv__do",
+      { x: 1 },
+      ctx({ gate: "on_write", approve: async () => true, mcp: stubMcp(calls) as never }),
+      mcpOffered
+    );
+    expect(r.code).toBe(TOOL_OK);
+    expect(calls).toEqual(["mcp__srv__do"]);
+  });
+
+  it("does not prompt under the never gate", async () => {
+    const calls: string[] = [];
+    let asked = false;
+    const r = await executeTool(
+      "mcp__srv__do",
+      { x: 1 },
+      ctx({
+        gate: "never",
+        approve: async () => {
+          asked = true;
+          return false;
+        },
+        mcp: stubMcp(calls) as never,
+      }),
+      mcpOffered
+    );
+    expect(asked).toBe(false);
+    expect(r.code).toBe(TOOL_OK);
+    expect(calls).toEqual(["mcp__srv__do"]);
   });
 });
 
