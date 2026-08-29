@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { splitThinking, renderMeta, renderExchange, Progress, paint, THEMES } from "./render.js";
+import { splitThinking, renderMeta, renderExchange, Progress, paint, THEMES, terminalThemeSequence } from "./render.js";
 import { ResolvedUi, parseMetaFields, META_FIELDS } from "./config.js";
 import { PromptExchange } from "./prompt_loop.js";
 
@@ -272,6 +272,16 @@ describe("themes", () => {
         expect(theme.codes[role], `${name}.${role}`).toBeTruthy();
       }
     }
+  });
+
+  it("terminalThemeSequence sets OSC bg/fg for a whole-terminal theme, resets otherwise", () => {
+    const seq = terminalThemeSequence(THEMES["tokyonight"]);
+    expect(seq).toContain("\x1b]11;#1a1b26"); // OSC 11 — background
+    expect(seq).toContain("\x1b]10;#c0caf5"); // OSC 10 — foreground
+    // a theme with no terminal block, and null, both reset to the defaults
+    const reset = "\x1b]111\x07\x1b]110\x07";
+    expect(terminalThemeSequence(THEMES["dark"])).toBe(reset);
+    expect(terminalThemeSequence(null)).toBe(reset);
   });
 
   it("mono emits no escapes but keeps the text", () => {

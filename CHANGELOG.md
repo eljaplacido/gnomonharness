@@ -4,6 +4,16 @@
 
 ### Added
 
+- **Whole-terminal colour themes.** Two 24-bit palettes — `tokyonight` and
+  `catppuccin` — recolour the *entire* terminal, not just printed text, via
+  OSC 11/10 (the effect a full-screen TUI gets from an alternate buffer, done
+  from the scrolling loop). `/theme <name>` applies one live and lists all with
+  previews; the terminal's own colours are restored on exit. The 16-colour
+  themes (dark/dim/light/high-contrast/mono) are unchanged and leave the
+  terminal background alone. Themes now carry an optional `terminal` block, and
+  `terminalThemeSequence()` builds the OSC. Needs a terminal that honours OSC
+  (most do).
+
 - **`/allow` — hand the agent the pen for `.gnomon/`, by consent.** The surface
   is human-only by default (the pillar): `write`/`edit` refuse every path inside
   `.gnomon/`. `/allow` is a per-session consent dial the human sets — `strict`

@@ -36,7 +36,7 @@ import {
   META_FIELDS,
   loadConfig,
 } from "./config.js";
-import { Progress, renderExchange, splitThinking, paint, THEMES } from "./render.js";
+import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence } from "./render.js";
 import {
   Todo,
   buildToolSet,
@@ -158,6 +158,36 @@ function sessionIdOf(state: PromptState): string {
 function uiOf(state: PromptState): ResolvedUi {
   if (!state.ui) state.ui = resolveUi(state.config);
   return state.ui;
+}
+
+// A theme with a `terminal` block recolours the whole terminal via OSC, which
+// outlives the process — so once applied, the reset must fire on exit.
+let bgThemeApplied = false;
+let exitResetRegistered = false;
+
+/** Apply (or reset) the terminal-wide colours of the current theme. TTY only. */
+function applyTerminalTheme(ui: ResolvedUi, out: NodeJS.WriteStream = process.stdout): void {
+  if (!out.isTTY || !ui.color) return;
+  const theme = THEMES[ui.theme];
+  out.write(terminalThemeSequence(theme ?? null));
+  if (theme?.terminal) {
+    bgThemeApplied = true;
+    if (!exitResetRegistered) {
+      exitResetRegistered = true;
+      // Restore the terminal's own colours on a normal exit. Deliberately not a
+      // SIGINT/SIGTERM handler: the loop owns those, and clean exits flow
+      // through readline's close into "exit" anyway.
+      process.on("exit", () => {
+        if (bgThemeApplied && process.stdout.isTTY) {
+          process.stdout.write(terminalThemeSequence(null));
+        }
+      });
+    }
+  } else {
+    // Switched to a theme that leaves the terminal alone; the reset above
+    // already went out, so nothing more is owed on exit.
+    bgThemeApplied = false;
+  }
 }
 
 /** The session's routing policy, resolving from the surface on first use. */
@@ -1925,7 +1955,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/reset", help: "Drop conversation history (keeps the session open)" },
   { name: "/meta", arg: "[fields]", help: "Show or set the meta line" },
   { name: "/think", arg: "[mode]", help: "Chain-of-thought: hide | collapse | show" },
-  { name: "/theme", arg: "[name]", help: "Colour theme: dark | dim | light | high-contrast | mono" },
+  { name: "/theme", arg: "[name]", help: "Colour theme — dark, dim, light, high-contrast, mono, tokyonight, catppuccin (the last two recolour the whole terminal)" },
   { name: "/explain", arg: "[topic]", help: "What a feature is, how this repo has it set, and what to do with it" },
   { name: "/reflect", arg: "[topic]", help: "Alias for /explain" },
   { name: "/models", help: "Pick a model for a role (arrows, type to filter)" },
@@ -2773,6 +2803,7 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       }
 
       ui.theme = wanted;
+      applyTerminalTheme(ui);
       console.log(`\nTheme: ${wanted} — ${THEMES[wanted].description}`);
       console.log(paint(ui, "gray", "  secondary text looks like this"));
       console.log(
@@ -3022,6 +3053,11 @@ export async function runPromptLoop(
     completer: (line: string) =>
       completeInput(line, listRoles(config), listEndpoints(config)),
   });
+
+  // Paint the terminal for the theme in force — only if the theme declares a
+  // full-terminal colour, and only on a TTY. The exit-reset is registered on
+  // first apply, so the terminal is restored when the loop ends.
+  applyTerminalTheme(uiOf(state));
 
   // Off unless the surface asks for it.
   const auditSettings = resolveAudit(config);

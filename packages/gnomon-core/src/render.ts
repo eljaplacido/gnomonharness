@@ -30,6 +30,14 @@ export interface Theme {
   name: string;
   description: string;
   codes: Record<string, string>;
+  /**
+   * Recolour the whole terminal, not just printed text, via OSC 11/10 (hex).
+   * This is how a scrolling loop gets an edge-to-edge background without a
+   * full-screen alternate buffer — but the change outlives the process, so
+   * whenever a theme with this is applied the reset (`terminalThemeSequence(null)`)
+   * MUST run on exit. Omit it and the theme leaves the terminal's own colours be.
+   */
+  terminal?: { bg: string; fg?: string };
 }
 
 const RESET = `${ESC}0m`;
@@ -103,6 +111,41 @@ export const THEMES: Record<string, Theme> = {
     description: "No colour, but keeps the layout. For logs and screenshots.",
     codes: {},
   },
+  // 24-bit palettes that also recolour the whole terminal (OSC 11/10). They
+  // need a terminal that honours OSC — most do — and the background is reset on
+  // exit. Foreground roles are RGB; bold/italic/dim stay attribute-only.
+  tokyonight: {
+    name: "tokyonight",
+    description: "Deep indigo with soft neon. Recolours the whole terminal.",
+    codes: {
+      gray: `${ESC}38;2;86;95;137m`,
+      bold: `${ESC}1m`,
+      italic: `${ESC}3m`,
+      dim: `${ESC}38;2;68;71;90m`,
+      green: `${ESC}38;2;158;206;106m`,
+      yellow: `${ESC}38;2;224;175;104m`,
+      red: `${ESC}38;2;247;118;142m`,
+      cyan: `${ESC}38;2;125;207;255m`,
+      magenta: `${ESC}38;2;187;154;247m`,
+    },
+    terminal: { bg: "#1a1b26", fg: "#c0caf5" },
+  },
+  catppuccin: {
+    name: "catppuccin",
+    description: "Mocha — warm pastels on a plum background. Whole terminal.",
+    codes: {
+      gray: `${ESC}38;2;108;112;134m`,
+      bold: `${ESC}1m`,
+      italic: `${ESC}3m`,
+      dim: `${ESC}38;2;88;91;112m`,
+      green: `${ESC}38;2;166;227;161m`,
+      yellow: `${ESC}38;2;249;226;175m`,
+      red: `${ESC}38;2;243;139;168m`,
+      cyan: `${ESC}38;2;137;220;235m`,
+      magenta: `${ESC}38;2;203;166;247m`,
+    },
+    terminal: { bg: "#1e1e2e", fg: "#cdd6f4" },
+  },
 };
 
 export const DEFAULT_THEME = "dark";
@@ -110,6 +153,21 @@ export const DEFAULT_THEME = "dark";
 /** The palette in force, falling back rather than throwing on a bad name. */
 export function themeOf(ui: ResolvedUi): Theme {
   return THEMES[ui.theme] ?? THEMES[DEFAULT_THEME];
+}
+
+/**
+ * The OSC sequence that paints — or resets — the whole terminal for a theme.
+ *
+ * OSC 11 sets the background and OSC 10 the foreground; 111/110 reset them to
+ * the terminal's own defaults. Pass a theme with a `terminal` block to apply it,
+ * or `null` to reset — which MUST run on exit, because unlike a full-screen
+ * TUI's alternate buffer, this change persists in the terminal after gnomon is
+ * gone. Callers emit this only to a TTY with colour on.
+ */
+export function terminalThemeSequence(theme: Theme | null): string {
+  const t = theme?.terminal;
+  if (!t) return "\x1b]111\x07\x1b]110\x07";
+  return `\x1b]11;${t.bg}\x07` + (t.fg ? `\x1b]10;${t.fg}\x07` : "");
 }
 
 /** Wrap text in a colour, or return it untouched when colour is off. */
