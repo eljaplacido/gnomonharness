@@ -13,8 +13,9 @@ is printed as it goes.
 import json, os, re, shutil, subprocess, sys, time
 from pathlib import Path
 
-ROOT = Path("/tmp/claude-1000/-home-eljaplacido-Desktop-gnomon/ac2c4057-bbed-4190-9a9f-b089f8918684/scratchpad/bench")
-WORK = Path("/tmp/claude-1000/-home-eljaplacido-Desktop-gnomon/ac2c4057-bbed-4190-9a9f-b089f8918684/fixtures_cc")
+# Configurable so this runs on any machine (matches benchmarks/harness.py).
+ROOT = Path(os.environ.get("BENCH_ROOT", os.path.expanduser("~/.cache/gnomon-bench")))
+WORK = Path(os.environ.get("BENCH_WORK_CC", str(ROOT.parent / "fixtures_cc")))
 TIMEOUT = 300
 TRIALS = int(os.environ.get("TRIALS", "2"))
 DET_REPEATS = int(os.environ.get("DET_REPEATS", "3"))
