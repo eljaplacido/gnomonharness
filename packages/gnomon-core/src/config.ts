@@ -73,6 +73,12 @@ export interface EndpointConfig {
   /** ollama | openai — selects the request/response shape */
   kind?: EndpointKind;
   api_key_env?: string;
+  /**
+   * Display label for listings — `openrouter`, `copilot`, `azure`, … Inferred
+   * from the URL when omitted, and never affects routing (the URL and key do
+   * that). Set it to name a custom or gateway endpoint the host can't guess.
+   */
+  provider?: string;
 }
 
 export type EndpointKind = "ollama" | "openai";
@@ -921,6 +927,73 @@ export function listEndpoints(config: GnomonConfig): string[] {
       ...Object.keys(config.config.endpoints ?? {}),
     ]),
   ].sort();
+}
+
+/**
+ * Whether an endpoint URL is the operator's own hardware rather than a cloud.
+ *
+ * The distinction is the one a reader keeps confusing — a role on a cloud
+ * endpoint must name a model that endpoint hosts, never a local Ollama tag —
+ * so the listings mark each endpoint local or cloud from this. localhost, the
+ * LAN (RFC1918), and Tailscale's CGNAT range (100.64.0.0/10) are all local.
+ */
+export function isLocalEndpoint(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(host)) return true;
+  if (host.endsWith(".local")) return true;
+  return (
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)
+  );
+}
+
+const KNOWN_PROVIDERS: Array<[RegExp, string]> = [
+  [/(^|\.)openrouter\.ai$/, "openrouter"],
+  [/(^|\.)opencode\.ai$/, "opencode"],
+  [/(^|\.)githubcopilot\.com$/, "copilot"],
+  [/\.openai\.azure\.com$/, "azure"],
+  [/(^|\.)azure\.com$/, "azure"],
+  [/(^|\.)amazonaws\.com$/, "aws"],
+  [/(^|\.)googleapis\.com$/, "google"],
+  [/(^|\.)anthropic\.com$/, "anthropic"],
+  [/(^|\.)openai\.com$/, "openai"],
+  [/(^|\.)mistral\.ai$/, "mistral"],
+  [/(^|\.)together\.(ai|xyz)$/, "together"],
+  [/(^|\.)groq\.com$/, "groq"],
+];
+
+/**
+ * Classify an endpoint for a listing: is it the operator's own hardware or a
+ * cloud, and which provider. `provider` (if the surface set it) wins; otherwise
+ * it is inferred from the host. Display only — routing never consults this.
+ */
+export function endpointClass(
+  url: string,
+  kind?: EndpointKind,
+  provider?: string
+): { where: "local" | "cloud"; provider: string } {
+  const where = isLocalEndpoint(url) ? "local" : "cloud";
+  if (provider) return { where, provider };
+  if (where === "local") {
+    return { where, provider: kind === "ollama" ? "ollama" : "self-hosted" };
+  }
+  let host = "";
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    host = "";
+  }
+  for (const [re, name] of KNOWN_PROVIDERS) {
+    if (re.test(host)) return { where, provider: name };
+  }
+  return { where, provider: host || "custom" };
 }
 
 /**
