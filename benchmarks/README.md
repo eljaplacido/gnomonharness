@@ -29,6 +29,9 @@ B4 (**containment**) drives a real model to breach each role boundary and
 measures whether the guards hold: [`results/containment-2026-08/`](results/containment-2026-08/README.md)
 — 15/15 contained.
 
+B1 (**current Terminal-Bench**, independence + currency) runs gnomon on the
+live task set via tb 0.2.18: [`results/terminal-bench-current-2026-08/`](results/terminal-bench-current-2026-08/README.md) — 10/16 (62.5%) on a stratified sample.
+
 
 | File | What it is |
 |---|---|

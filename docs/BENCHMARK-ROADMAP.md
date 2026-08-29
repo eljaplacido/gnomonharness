@@ -36,7 +36,7 @@ any large-repo, multi-language, or frontier-model-at-scale result.
 ## Program (priority-ordered)
 
 **Tier 1 — make existing claims valid**
-- **B1 · Independence + currency:** run the full, unmodified current Terminal-Bench (3.0/4.0), plus SWE-bench-lite, gnomon vs goose vs opencode. Removes objections 2 + 3.
+- **B1 · Independence + currency** ✅ *(first pass, [terminal-bench-current-2026-08](../benchmarks/results/terminal-bench-current-2026-08/))* — gnomon on the CURRENT tb (0.2.18, live task set): 10/16 = 62.5% on a stratified sample, cheapest model, $0.06. Still open: full-set run, goose/opencode arms, more attempts.
 - **B2 · Power:** pre-register arms; trial counts fixed to a target CI (±10pt @95%); always ship the per-task matrix.
 - **B3 · Cost/efficiency** ✅ *(done, [cost-2026-08](../benchmarks/results/cost-2026-08/))* — from measured tokens: opencode costs 3.6×–10.7× more than gnomon to run the suite. Still open: a shared usage-logging endpoint to include **goose**.
 
