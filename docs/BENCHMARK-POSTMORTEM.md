@@ -297,17 +297,17 @@ converted into a fake zero.
 Two hardware facts bound everything, and both were discovered by measurement
 after being assumed.
 
-**The GB10 does not parallelise.** gx10 serves `qwen3.6:35b` at ~58 tok/s *in
+**The GB10 does not parallelise.** the GB10 node serves `qwen3.6:35b` at ~58 tok/s *in
 aggregate* — four concurrent streams take 4× the wall time of one, per-stream
 throughput unchanged. Raising `OLLAMA_NUM_PARALLEL` to 4 changed nothing;
 capping context from 262k to 32k freed 6 GB and changed nothing. It is
 memory-bandwidth-bound. Local-tier duration is therefore *total output tokens ÷
 58*, and no `--n-concurrent` setting moves it.
 
-**The benchmarks do not run on gx10.** They run detached inside WSL on the
-Windows box. When gx10 was shut down at 15:59 on the 27th, the sweep never
+**The benchmarks do not run on the GB10 node.** They run detached inside WSL on the
+Windows box. When the GB10 node was shut down at 15:59 on the 27th, the sweep never
 noticed — it had been running two hours and continued for two more. The only
-gx10-side component is the orphan-reaper cron, which resumed by itself.
+node-side component is the orphan-reaper cron, which resumed by itself.
 
 ### Spec for the next run
 

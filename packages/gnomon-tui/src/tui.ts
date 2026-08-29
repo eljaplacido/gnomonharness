@@ -189,7 +189,7 @@ function renderMenu(state: TuiState): void {
   });
 
   console.log();
-  console.log(c("dim", "  ↑/↓ navigate  Enter view  d delete  q quit"));
+  console.log(c("dim", "  ↑/↓ navigate  Enter view  q quit"));
 }
 
 /** Render a session view */

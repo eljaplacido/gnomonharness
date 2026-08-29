@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { loadConfig, endpointClass } from "./config.js";
+import { loadConfig, endpointClass, resolveUi } from "./config.js";
 import { mapBucket } from "./session.js";
 import * as promptLoop from "./prompt_loop.js";
 import { setRoleModel } from "./prompt_loop.js";
@@ -647,6 +647,72 @@ describe("model API errors", () => {
       expect(existsSync(join(tmp, ".gnomon", "m6probe.toml"))).toBe(false);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("/cot gates the live trace — reasoning, prose, and tool lines, per mode", async () => {
+    // A gate inversion (tool lines under cot=think, say) passes the whole rest
+    // of the suite, so the emitted lines are asserted directly. One turn: the
+    // model reasons in <think>, writes prose, calls bash once, then concludes.
+    const config: any = loadConfig("../..");
+    const runWith = async (cot: string): Promise<string> => {
+      const state: any = {
+        config,
+        exchanges: [],
+        currentRole: "implement",
+        ui: { ...resolveUi(config), cot, think: "show", color: false },
+      };
+      const lines: string[] = [];
+      let call = 0;
+      await withFetch(
+        (async (_u: string, _init: any) => {
+          call++;
+          const tool_calls =
+            call === 1
+              ? [{ function: { name: "bash", arguments: { command: "echo hi" } } }]
+              : undefined;
+          const content = call === 1 ? "<think>weighing options</think>let me check" : "done";
+          return { ok: true, json: async () => ({ message: { content, tool_calls } }) };
+        }) as unknown as typeof fetch,
+        async () => {
+          await promptLoop.runAgenticTurn(
+            state,
+            "implement",
+            { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+            [{ role: "user", content: "go" }],
+            {
+              approve: async () => true,
+              progress: { start() {}, update() {}, stop() {} } as any,
+              ui: state.ui,
+              say: (s: string) => lines.push(s),
+            }
+          );
+        }
+      );
+      return lines.join("\n");
+    };
+
+    const has = (s: string, m: string) => s.includes(m);
+    const full = await runWith("full");
+    expect(has(full, "·"), "full shows reasoning").toBe(true);
+    expect(has(full, "│"), "full shows prose").toBe(true);
+    expect(has(full, "⚙"), "full shows the call line").toBe(true);
+
+    const tools = await runWith("tools");
+    expect(has(tools, "⚙"), "tools shows the call line").toBe(true);
+    expect(has(tools, "·") || has(tools, "│"), "tools hides reasoning/prose").toBe(false);
+
+    const think = await runWith("think");
+    expect(has(think, "·"), "think shows reasoning").toBe(true);
+    expect(has(think, "⚙") || has(think, "✓"), "think hides tool lines").toBe(false);
+
+    const brief = await runWith("brief");
+    expect(has(brief, "•"), "brief shows a bullet per step").toBe(true);
+    expect(has(brief, "⚙") || has(brief, "·"), "brief has no call line or reasoning").toBe(false);
+
+    const off = await runWith("off");
+    for (const m of ["·", "│", "⚙", "✓", "•"]) {
+      expect(has(off, m), `off suppresses ${m}`).toBe(false);
     }
   });
 
@@ -1389,8 +1455,8 @@ describe("isLocalEndpoint", () => {
       "http://192.168.1.5:8080",
       "http://10.0.0.2:11434",
       "http://172.16.5.5:8080",
-      "http://100.100.0.42:18080/v1", // Tailscale CGNAT (100.64.0.0/10)
-      "http://gx10.local:11434",
+      "http://100.64.0.1:18080/v1", // Tailscale CGNAT (100.64.0.0/10)
+      "http://host.local:11434",
     ];
     const cloud = [
       "https://openrouter.ai/api/v1/chat/completions",

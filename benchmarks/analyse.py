@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-import json, re, statistics as st
+import json, os, re, statistics as st
 from collections import Counter
 from pathlib import Path
 
-ROOT = Path("/tmp/claude-1000/-home-eljaplacido-Desktop-gnomon/ac2c4057-bbed-4190-9a9f-b089f8918684/scratchpad/bench")
+# Configurable so this runs on any machine (matches benchmarks/harness.py).
+ROOT = Path(os.environ.get("BENCH_ROOT", os.path.expanduser("~/.cache/gnomon-bench")))
 d = json.loads((ROOT/"results_qwen36_35b.json").read_text())
 runs, base, det, setup = d["runs"], d["baseline"], d["determinism"], d.get("setup_ms", {})
 H = ["gnomon", "opencode", "pi", "omp"]

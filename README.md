@@ -557,11 +557,14 @@ months ago, `/models` is how you move it.
 variable is actually set in your shell:
 
 ```
-  zen: https://opencode.ai/zen/v1/chat/completions  [openai]
+  go: https://opencode.ai/zen/go/v1/chat/completions  [openai] · cloud · opencode
+      used by: (no role — declared but nothing routes here)
+      key: $OPENCODE_API_KEY — NOT SET in this shell
+  local: http://127.0.0.1:11434/api/chat  [ollama] · local · ollama
+      used by: plan, implement, critique, smol
+  zen: https://opencode.ai/zen/v1/chat/completions  [openai] · cloud · opencode
       fallback for: plan, implement
       key: $OPENCODE_API_KEY — NOT SET in this shell
-  go: http://127.0.0.1:4200/v1/chat/completions  [openai]
-      used by: (no role — declared but nothing routes here)
 ```
 
 "Not configured" and "configured but nothing routes to it" look identical in a
@@ -1290,9 +1293,9 @@ has it configured, and what to do next — by reading the live surface:
 /explain endpoints
 
   In this repository
-    local  http://127.0.0.1:11434/api/chat  [ollama]
+    local  http://127.0.0.1:11434/api/chat  [ollama]  · local · ollama
            used by coordinator, implementor, verifier, plan, implement, …
-    zen    https://opencode.ai/zen/v1/chat/completions  [openai]
+    zen    https://opencode.ai/zen/v1/chat/completions  [openai]  · cloud · opencode
            key $OPENCODE_API_KEY (NOT SET)
            nothing routes here
 ```

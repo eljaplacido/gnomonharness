@@ -505,6 +505,17 @@ describe("scanShellCommand", () => {
     expect(scanShellCommand('grep ">" file').redirection).toBe(false);
   });
 
+  it("a backslash-escaped quote outside a quote is literal, not a quote-open", () => {
+    // `\'` and `\"` are literal characters to bash; they must not open a quote
+    // that hides the `;`-chained tail from the segment split.
+    expect(scanShellCommand("cat x \\'; b").segments).toEqual(["cat x \\'", "b"]);
+    expect(scanShellCommand('cat x \\" ; b').segments.length).toBe(2);
+    // An escaped separator stays inside its own segment.
+    expect(scanShellCommand("echo a\\; b").segments).toEqual(["echo a\\; b"]);
+    // Substitution hidden behind an escaped quote is still seen.
+    expect(scanShellCommand("ls \\'; echo $(x)").substitution).toBe(true);
+  });
+
   it("closes a single quote on the first quote, backslash or not", () => {
     // Single quotes are literal in bash: `'x\'` is the string `x\` and the
     // quote is then closed. Treating the backslash as an escape kept the quote
@@ -543,6 +554,13 @@ describe("bash_allow cannot be escaped by chaining", () => {
     // quote open — bash closes it (single quotes are literal), and the `;`
     // tail became a second, unreviewed command. The whole line was permitted.
     ["single-quote-escape", "cargo test --features 'x\\'; echo pwned > hack.txt"],
+    // A backslash-escaped quote OUTSIDE any quote is a literal to bash, but the
+    // scanner used to let it OPEN a quote, swallowing the `;`-chained tail into
+    // one allow-listed segment — arbitrary write/exec from a read-only role.
+    ["bs-escaped-squote-write", "cat hello.txt \\'; echo pwned > hack.txt"],
+    ["bs-escaped-dquote-pipe", "cat hello.txt \\\"; tee hack.txt"],
+    ["bs-escaped-squote-subst", "ls . \\'; echo $(echo pwned > hack.txt)"],
+    ["bs-escaped-squote-rm", "cat hello.txt \\'; rm -rf hack.txt"],
   ];
 
   for (const [name, cmd] of bypasses) {
@@ -1228,6 +1246,8 @@ describe("webfetch — the tool that makes [sandbox] network real", () => {
       "http://[::ffff:a9fe:a9fe]/",        // 169.254.169.254 (metadata)
       "http://[::ffff:169.254.169.254]/",  // normalizes to the hex form above
       "http://[::a9fe:a9fe]/",             // IPv4-compatible, same destination
+      "http://[fe90::1]/",                  // link-local: fe80::/10 spans past fe80
+      "http://[64:ff9b::7f00:1]/",          // NAT64 well-known prefix wrapping 127.0.0.1
     ]) {
       const r = await executeTool(
         "webfetch",
