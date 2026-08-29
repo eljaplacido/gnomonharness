@@ -16,6 +16,11 @@ under [`results/terminal-bench-2026-08/`](results/terminal-bench-2026-08/README.
 — `harness.py` did **not** produce it; its buckets regenerate from raw data via
 `results/terminal-bench-2026-08/summarize.py`.
 
+A third, narrower experiment lives under
+[`results/dflash-2026-08/`](results/dflash-2026-08/README.md): a controlled
+DFlash speculative-decoding **on vs off** measurement (output-exact, greedy) of
+the local-inference wall-clock win — a self-contained runner, not the campaign.
+
 | File | What it is |
 |---|---|
 | `harness.py` | The runner: fixtures, tasks, scorers, per-harness invocation |
