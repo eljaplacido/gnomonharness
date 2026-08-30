@@ -1021,6 +1021,57 @@ export interface TurnResult {
    * is that the tool loop — not the visible prompt — is where it goes.
    */
   usage?: TokenUsage;
+  /**
+   * Why the tool loop ended. The distinction existed only as prose in the
+   * wrap-up note, was interpolated into the answer text, and was then
+   * discarded — so "stopped voluntarily with budget left" and "hit the wall"
+   * were indistinguishable afterwards. Four separate investigations of one
+   * benchmark campaign each blamed a different cause and every one was
+   * refuted, because this field was not written down.
+   *
+   * A separate axis from the outcome bucket, not a composite verdict: the
+   * bucket says WHAT happened, this says why the loop stopped.
+   */
+  stop_reason: StopReason;
+  /** The numbers behind the label — "hit the wall" and "hit the wall at 12
+   * when the role declares 40" are different findings. */
+  stop_detail?: { steps?: number; max_steps_total?: number; repeats?: number };
+  /** Counters already computed by the loop and previously thrown away. */
+  counters: TurnCounters;
+}
+
+/**
+ * Why the tool loop stopped.
+ *
+ * Deliberately only the values a return site can actually produce. A verify
+ * handback and the anti-flailing nudge are NOT turn ends — the first
+ * `continue`s the loop and the second only pushes a system message — so
+ * publishing them here would put values in a Rule 6 enumeration that nothing
+ * can emit.
+ */
+export type StopReason = "answered" | "stall" | "step_wall" | "cancelled";
+
+/**
+ * Per-turn tallies. Every field is a count of something the loop already
+ * tracked; none of them is read back to decide anything, which is what keeps
+ * this observation rather than control.
+ */
+export interface TurnCounters {
+  /** Successful write/edit tool calls. */
+  writes: number;
+  /** Bash calls observed to change the worktree — shell-mediated work that
+   * `writes` cannot see. The pair separates "never wrote a file" from "wrote
+   * through the shell", which are opposite diagnoses. */
+  worktree_moves: number;
+  /** Anti-flailing nudges fired, and where the first one landed. */
+  nudges: number;
+  first_nudge_step?: number;
+  /** Whether the final tool call of the turn changed anything. */
+  final_step_was_write: boolean;
+  /** Per tool: calls made, refusals, apparatus failures. Separates "bash
+   * failed 9 of 31 calls" from "bash succeeded 31/31 and the answer was still
+   * wrong". */
+  per_tool: Record<string, { calls: number; refusals: number; apparatus: number }>;
 }
 
 /**
@@ -1332,6 +1383,21 @@ export async function runAgenticTurn(
   const recentCalls: string[] = [];
   let usedModel = route.model;
 
+  // Observation only. Nothing below reads these back to decide anything — the
+  // moment one of them gates a call, this stops being a record and becomes
+  // control, and the nudge regression is the reminder of what that costs.
+  const counters: TurnCounters = {
+    writes: 0,
+    worktree_moves: 0,
+    nudges: 0,
+    final_step_was_write: false,
+    per_tool: {},
+  };
+  const tally = (name: string, field: "calls" | "refusals" | "apparatus") => {
+    const t = (counters.per_tool[name] ??= { calls: 0, refusals: 0, apparatus: 0 });
+    t[field]++;
+  };
+
   const cancelled = (): TurnResult => ({
     content: CANCELLED,
     code: settle(code, 2),
@@ -1339,6 +1405,8 @@ export async function runAgenticTurn(
     toolSteps: steps,
     toolLog,
     usage: turnUsage,
+    stop_reason: "cancelled",
+    counters,
   });
 
   const noTools = (state.noToolModels ??= new Set<string>());
@@ -1479,6 +1547,10 @@ export async function runAgenticTurn(
         toolSteps: steps,
         toolLog,
         usage: turnUsage,
+        // The model stopped calling tools of its own accord. Whether it was
+        // RIGHT to stop is the bucket's business, not this field's.
+        stop_reason: "answered",
+        counters,
       };
     }
 
@@ -1541,6 +1613,11 @@ export async function runAgenticTurn(
         toolSteps: steps,
         toolLog,
         usage: turnUsage,
+        stop_reason: stalled ? "stall" : "step_wall",
+        stop_detail: stalled
+          ? { steps, repeats: STALL_REPEATS }
+          : { steps, max_steps_total: maxTotal },
+        counters,
       };
     }
 
@@ -1634,12 +1711,24 @@ export async function runAgenticTurn(
       const outcome: ToolOutcome = await executeTool(call.name, call.args, ctx, offered);
       code = worse(code, outcome.code);
       toolLog.push(outcome.summary);
+      tally(call.name, "calls");
+      const outcomeBucket = mapBucket(outcome.code);
+      if (outcomeBucket === "refusal") tally(call.name, "refusals");
+      else if (outcomeBucket === "apparatus_failure") tally(call.name, "apparatus");
+      // "the last thing it did changed something" separates a turn that
+      // finished its work from one that stopped after looking around.
+      counters.final_step_was_write =
+        ((call.name === "write" || call.name === "edit") && outcome.code === 0) ||
+        outcome.worktree_changed === true;
+
       if ((call.name === "write" || call.name === "edit") && outcome.code === 0) {
+        counters.writes++;
         touchedFiles = true;
         // A write is progress: the idle streak, and its nudge cadence, restart.
         callsSinceWrite = 0;
         callsAtLastNudge = 0;
       } else if (outcome.worktree_changed) {
+        counters.worktree_moves++;
         // Shell-mediated progress. In the 48-task benchmark arm, 49 of the 50
         // nudged trials had made no write/edit call at all — the model was
         // editing through heredocs and `sed -i`, so the counter read a working
@@ -1701,6 +1790,8 @@ export async function runAgenticTurn(
     // the timeout wall), and let the turn continue: a genuine long solve keeps
     // working, a flailer gets repeated reason to conclude.
     if (callsSinceWrite - callsAtLastNudge >= NUDGE_AFTER_IDLE) {
+      counters.nudges++;
+      counters.first_nudge_step ??= steps;
       callsAtLastNudge = callsSinceWrite;
       deps.progress.stop();
       deps.say(
@@ -2007,6 +2098,13 @@ export interface TaskRecord {
   tool_steps: number;
   tool_log: string[];
   skills: string[];
+  /** Why the tool loop ended — a separate axis from `bucket`, never a
+   * composite verdict with it. */
+  stop_reason: StopReason;
+  /** The numbers behind `stop_reason`, when it has any. */
+  stop_detail?: { steps?: number; max_steps_total?: number; repeats?: number };
+  /** Counts the loop already kept and used to discard. */
+  counters: TurnCounters;
   /**
    * Fields that legitimately differ between two runs of the same task.
    * Kept apart so a comparison can ignore exactly these and nothing else.
@@ -2123,6 +2221,9 @@ export async function runTask(
     duration_ms: duration,
     tool_steps: turn.toolSteps,
     tool_log: turn.toolLog,
+    stop_reason: turn.stop_reason,
+    stop_detail: turn.stop_detail,
+    counters: turn.counters,
     tokens_in: turn.usage?.input,
     tokens_out: turn.usage?.output,
     skills: active.map((sk) => sk.id),
@@ -2144,6 +2245,9 @@ export async function runTask(
     tool_steps: turn.toolSteps,
     tool_log: turn.toolLog,
     skills: active.map((sk) => sk.id),
+    stop_reason: turn.stop_reason,
+    ...(turn.stop_detail ? { stop_detail: turn.stop_detail } : {}),
+    counters: turn.counters,
     // Token counts sit beside duration under `volatile`: they are the
     // backend's measurement of one run, so two runs of the same task differ
     // in them without anything about the surface having changed. The contract

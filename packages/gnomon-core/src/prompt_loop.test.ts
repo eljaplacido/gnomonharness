@@ -1331,6 +1331,43 @@ describe("runTask — the non-interactive contract", () => {
   const answers = (content: string) =>
     (async () => ({ ok: true, json: async () => ({ message: { content } }) })) as unknown as typeof fetch;
 
+  it("records WHY the loop stopped, on a separate axis from the bucket", async () => {
+    // The distinction existed only as prose in the wrap-up note and was
+    // discarded. Four investigations of one campaign each blamed a different
+    // cause and every one was refuted, because this was never written down.
+    await withFetch(answers("done"), async () => {
+      const record = await promptLoop.runTask(loadConfig("../.."), "say hi", { role: "smol" });
+      expect(record.stop_reason).toBe("answered");
+      // separate axis, not a composite verdict: the bucket says what happened
+      expect(record.bucket).toBe("result");
+    });
+  });
+
+  it("carries the counters the loop already computed", async () => {
+    // Every one of these was calculated and thrown away. Each maps to exactly
+    // one of the refuted campaign diagnoses.
+    await withFetch(answers("done"), async () => {
+      const record = await promptLoop.runTask(loadConfig("../.."), "say hi", { role: "smol" });
+      expect(record.counters).toBeDefined();
+      expect(record.counters.writes).toBe(0);
+      expect(record.counters.worktree_moves).toBe(0);
+      expect(record.counters.nudges).toBe(0);
+      expect(record.counters.final_step_was_write).toBe(false);
+      expect(record.counters.per_tool).toEqual({});
+    });
+  });
+
+  it("keeps stop_reason out of the reproducible/volatile split it does not belong in", async () => {
+    // stop_reason is a property of the trajectory, not of the wall clock, so
+    // it sits outside `volatile` beside tool_steps rather than next to
+    // duration_ms.
+    await withFetch(answers("done"), async () => {
+      const record = await promptLoop.runTask(loadConfig("../.."), "say hi", { role: "smol" });
+      expect(Object.keys(record.volatile)).not.toContain("stop_reason");
+      expect(Object.keys(record.volatile)).not.toContain("counters");
+    });
+  });
+
   it("returns a record carrying the surface hash", async () => {
     // A composition layer gates on this: behaviour must be attributable to a
     // configuration, not merely to a run.
