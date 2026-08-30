@@ -1,5 +1,19 @@
 # Terminal-Bench, current version — gnomon (independence + currency)
 
+> **CORRECTION (2026-08-30): every number in this document was measured with a
+> broken adapter.** The setup script leaves the shell in `/opt/gnomon`, where
+> gnomon is cloned and built, and that working directory persisted — so
+> `gnomon init` rooted the surface in the *cloned repo* rather than the task.
+> Every task deliverable under `/app` was therefore outside the sandbox root and
+> `write`/`edit` **refused it outright**: 21 of 42 trials hit
+> "refused (outside sandbox)" and only 11 of 42 used `write`/`edit` at all.
+> Models that noticed routed around it via `bash` and passed; models that did
+> not, failed. The peers were never affected, so **the peer comparisons in this
+> family of results are biased against gnomon by an unknown amount.**
+> `gnomon-setup.sh.j2` in this directory now carries the fix (`cd` to the task
+> dir); after it, refusals fell to ~5% and `write`/`edit` usage roughly doubled.
+> A re-run is required before any number here is cited.
+
 An **independent, current-version** run: gnomon against the live Terminal-Bench
 task set, on the current framework — closing the two objections the earlier
 [terminal-bench-2026-08](../terminal-bench-2026-08/) campaign carried (the
