@@ -679,7 +679,15 @@ export function isToolEnabled(config: GnomonConfig, toolName: string): boolean {
 
 /** Every tool the surface declares, in declaration order. */
 export function declaredTools(config: GnomonConfig): ToolDef[] {
-  return config.tools.tools ?? [];
+  // Sorted, because Rule 3 says "resolved from .gnomon/tools.toml, sorted,
+  // hashed" and this returned file order. Two surfaces with identical tools
+  // written in a different order presented the model a differently-ordered
+  // schema list, and MCP tools are appended in CONNECTION order on top of
+  // that — so the same surface could differ between runs whenever a server
+  // was slow. Consistent field order is also the cheapest of the three levers
+  // the current top-of-leaderboard harness attributes its tool-call
+  // reliability to, and a stable prefix is what makes prompt caching hit.
+  return [...(config.tools.tools ?? [])].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** The context-window policy, fully resolved with declared defaults. */

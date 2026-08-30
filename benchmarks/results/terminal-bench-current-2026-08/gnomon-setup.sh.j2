@@ -25,6 +25,21 @@ set -e
 export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
 GN=/opt/gnomon/packages/gnomon-cli/gnomon.js
 INSTR="$1"
+# Run from the TASK directory, explicitly.
+#
+# This script is sourced into a shell that the setup step left sitting in
+# /opt/gnomon (where gnomon was cloned and built), and that cwd persists. So
+# `gnomon init` rooted the surface in the CLONED REPO rather than the task, and
+# every task deliverable under /app was then OUTSIDE the sandbox root: write and
+# edit refused it outright.
+#
+# Measured in the 48-task arm before this fix: 21 of 42 trials hit
+# "refused (outside sandbox)" and only 11 of 42 used write/edit at all. Models
+# that noticed and routed around it through bash passed; models that did not,
+# failed. After the fix, refusals fell to ~5% and write/edit usage roughly
+# doubled. Every gnomon Terminal-Bench number produced before 2026-08-30 was
+# measured with the write tools structurally unable to touch the task.
+cd "${TB_TASK_DIR:-/app}" 2>/dev/null || cd /app 2>/dev/null || true
 node "$GN" init >/dev/null 2>&1 || true
 node -e '
 const fs=require("fs"), E=process.env;

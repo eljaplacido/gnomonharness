@@ -58,6 +58,17 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe("buildToolSet", () => {
+  it("offers schemas in a stable, sorted order — Rule 3 says sorted", () => {
+    // This returned file order. Two surfaces with identical tools written in a
+    // different order presented the model a differently-ordered schema list,
+    // and MCP tools are appended in CONNECTION order on top of that, so the
+    // same surface could differ between runs whenever a server was slow.
+    const config = loadConfig("../..");
+    const names = buildToolSet(config).schemas.map((s) => s.function.name);
+    expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
+  });
+
+
   it("offers exactly the tools the surface declares and enables", () => {
     // Derived from the surface, not hardcoded: adding a tool to tools.toml
     // should not break this test, only a mismatch should.
