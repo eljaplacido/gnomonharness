@@ -536,6 +536,10 @@ interface InferenceResult {
   rawToolCalls?: unknown[];
   /** The backend refused the request because this model cannot use tools */
   toolsUnsupported?: boolean;
+  /** Why the backend stopped generating — "length", "stop", "tool_calls". A
+   * turn with no tool calls and no text is a different event depending on this,
+   * and it was never recorded. */
+  finishReason?: string;
 }
 
 /**
@@ -756,7 +760,21 @@ async function callEndpoint(
 
     const json = await res.json();
     const message = json.choices?.[0]?.message ?? json.message ?? {};
-    const content = message.content ?? json.response ?? "";
+    // reasoning_content is read, and last. A reasoning model that answers only
+    // in its thinking channel returns content: null, which this read as "" — an
+    // empty turn the loop then labelled a completed answer. Measured on one
+    // benchmark arm: 5 of 13 failures were a zero-tool-call, zero-text turn
+    // recorded as `answered`, and the outcome split was absolute — empty final
+    // answer 0/10 passed, prose final answer 7/10 passed. Two other models on
+    // the same tasks and the same prompt never produced one, so this is the
+    // transport reading, not the prompt.
+    const content =
+      message.content ??
+      json.response ??
+      message.reasoning_content ??
+      message.reasoning ??
+      "";
+    const finishReason = json.choices?.[0]?.finish_reason ?? json.done_reason;
 
     const raw: unknown[] = Array.isArray(message.tool_calls)
       ? message.tool_calls
@@ -775,7 +793,7 @@ async function callEndpoint(
       };
     });
 
-    return { content, code: 0, toolCalls, rawToolCalls: raw, usage: readUsage(json) };
+    return { content, code: 0, toolCalls, rawToolCalls: raw, usage: readUsage(json), finishReason };
   } catch (err) {
     if (signal?.aborted) {
       return { content: CANCELLED, code: 2, toolCalls: [] };
@@ -1049,7 +1067,12 @@ export interface TurnResult {
  * publishing them here would put values in a Rule 6 enumeration that nothing
  * can emit.
  */
-export type StopReason = "answered" | "stall" | "step_wall" | "cancelled";
+export type StopReason =
+  | "answered"
+  | "empty"
+  | "stall"
+  | "step_wall"
+  | "cancelled";
 
 /**
  * Per-turn tallies. Every field is a count of something the loop already
@@ -1382,6 +1405,9 @@ export async function runAgenticTurn(
   // Signatures of the last few calls, to notice a model going in circles.
   const recentCalls: string[] = [];
   let usedModel = route.model;
+  // One re-prompt for an empty completion, and whether it stuck.
+  let emptyRetried = false;
+  let emptyTerminus = false;
 
   // Observation only. Nothing below reads these back to decide anything — the
   // moment one of them gates a call, this stops being a record and becomes
@@ -1478,6 +1504,31 @@ export async function runAgenticTurn(
 
     code = worse(code, result.code);
 
+    // A turn with no tool calls AND no text is not an answer. It was recorded as
+    // stop_reason "answered", which is how a loop that gave up got counted as a
+    // model that concluded. Re-prompt once — as a user turn, because the only
+    // mid-conversation system injection in a bench run is the nudge, and that is
+    // exactly where these clustered — then terminate honestly if it repeats.
+    //
+    // Deliberately NOT bucketed as apparatus_failure: that would reclassify a
+    // large share of trials and move the reported score with no behaviour
+    // change. stop_reason is a separate axis from the bucket. Record it, do not
+    // launder it.
+    if (result.code === 0 && result.toolCalls.length === 0 && !result.content.trim()) {
+      if (!emptyRetried) {
+        emptyRetried = true;
+        deps.say(paint(deps.ui, "yellow", `  [loop] empty completion — asking once more`));
+        working.push({
+          role: "user",
+          content:
+            `Your last reply contained no tool calls and no text. Answer now: ` +
+            `say what you did, or say plainly what blocked you and why.`,
+        });
+        continue;
+      }
+      emptyTerminus = true;
+    }
+
     if (result.code !== 0 || result.toolCalls.length === 0) {
       // The turn is about to end. If the surface declared a check and this
       // turn changed files, run it before letting the answer stand — a model
@@ -1549,7 +1600,7 @@ export async function runAgenticTurn(
         usage: turnUsage,
         // The model stopped calling tools of its own accord. Whether it was
         // RIGHT to stop is the bucket's business, not this field's.
-        stop_reason: "answered",
+        stop_reason: emptyTerminus ? "empty" : "answered",
         counters,
       };
     }
