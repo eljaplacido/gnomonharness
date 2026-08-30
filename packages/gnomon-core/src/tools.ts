@@ -738,6 +738,25 @@ function clamp(text: string, limit: number): string {
   );
 }
 
+/**
+ * Keep both ends of an output that is too long, and say how much went missing.
+ *
+ * `clamp` keeps the head, which is right when the model can narrow the call and
+ * try again. A killed command cannot be narrowed and re-run cheaply — and the
+ * part that says *why* it was still running is usually the last thing it
+ * printed. So a timeout keeps the tail as well, and names the dropped byte
+ * count rather than eliding silently.
+ */
+function clampEnds(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const head = Math.floor(limit * 0.6);
+  const tail = limit - head;
+  const dropped = text.length - limit;
+  return (
+    `${text.slice(0, head)}\n… [${dropped} bytes dropped from the middle — this is the start and the end of the output, not all of it.]\n${text.slice(-tail)}`
+  );
+}
+
 async function readTool(
   args: Record<string, unknown>,
   ctx: ToolContext
@@ -967,10 +986,28 @@ async function bashTool(
       if (settled) return;
       settled = true;
       killTree(proc);
+      // What the command printed before it was killed is evidence the harness
+      // already holds: the failing test, the last line of a build, the prompt it
+      // was blocked on. Discarding it left the model with nothing to act on but
+      // the fact of the timeout, and the only move that leaves is to run the
+      // same command again. Report the elapsed limit, then hand back both ends
+      // of what was captured.
+      const captured = [
+        stdout ? `stdout:\n${stdout}` : "stdout: (empty)",
+        stderr ? `stderr:\n${stderr}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const drift = surfaceDrift(ctx, surfaceBefore);
       done({
         code: TOOL_FAILED,
-        content: `Command timed out after ${ctx.timeoutMs}ms.`,
-        summary: `bash — timeout`,
+        content:
+          `Command timed out after ${ctx.timeoutMs}ms and was killed. Output captured before the kill:\n` +
+          clampEnds(captured, ctx.maxOutputBytes) +
+          `\n\nIt did not finish, so this output is partial. Re-running it unchanged will time out again: narrow it, or start it in the background and poll (\`cmd > /tmp/out.log 2>&1 & echo $!\`, then read the log).` +
+          (drift ? `\n\n${drift.notice}` : ""),
+        summary: `bash — timeout${drift ? " · surface changed" : ""}`,
+        surface_drift: drift ?? undefined,
       });
     }, ctx.timeoutMs);
 
