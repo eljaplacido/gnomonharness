@@ -2077,3 +2077,84 @@ describe("a picker owns the keyboard while it is open", () => {
     }
   });
 });
+
+/**
+ * Pasting.
+ *
+ * The loop opens one turn per "line" event, and readline emits one per
+ * newline — so before this, pasting a forty-line log opened forty turns, each
+ * answering a fragment, and the queue replayed the rest as refusals. These
+ * cover the counting that tells paste from typing.
+ */
+describe("bracketed paste", () => {
+  const { scanPasteMarkers, joinPastedBlock, PASTE_START, PASTE_END } = promptLoop;
+  const wrap = (body: string) => `${PASTE_START}${body}${PASTE_END}`;
+
+  it("counts the newlines inside a paste, not the ones outside it", () => {
+    const scan = scanPasteMarkers(`typed\r${wrap("a\rb\rc")}`, false);
+    // Three pasted lines, two newlines between them: the third is the fragment
+    // left on the prompt line, which has no "line" event until Enter.
+    expect(scan).toEqual({ lines: 2, inPaste: false, sawPaste: true });
+  });
+
+  it("ignores a chunk with no paste in it", () => {
+    expect(scanPasteMarkers("just typing\r", false)).toEqual({
+      lines: 0,
+      inPaste: false,
+      sawPaste: false,
+    });
+  });
+
+  it("carries an unterminated paste into the next chunk", () => {
+    // A paste larger than the pipe buffer arrives in pieces, and the markers
+    // land in different ones. Losing the open state here would read the tail
+    // as typing — which is the original bug, at scale.
+    const first = scanPasteMarkers(`${PASTE_START}line one\rline two\r`, false);
+    expect(first).toEqual({ lines: 2, inPaste: true, sawPaste: true });
+
+    const second = scanPasteMarkers(`line three\rtail${PASTE_END}`, first.inPaste);
+    expect(second).toEqual({ lines: 1, inPaste: false, sawPaste: true });
+  });
+
+  it("counts CRLF once", () => {
+    expect(scanPasteMarkers(wrap("a\r\nb\r\nc"), false).lines).toBe(2);
+  });
+
+  it("counts a paste with no newline as nothing to hold", () => {
+    // It goes into readline's buffer like typing, which is exactly right.
+    const scan = scanPasteMarkers(wrap("/models"), false);
+    expect(scan.lines).toBe(0);
+    expect(scan.sawPaste).toBe(true);
+  });
+
+  it("resumes counting after a paste closes mid-chunk", () => {
+    const scan = scanPasteMarkers(`${wrap("a\rb")}\r${wrap("c\rd")}`, false);
+    expect(scan).toEqual({ lines: 2, inPaste: false, sawPaste: true });
+  });
+
+  it("joins held lines with the fragment left on the prompt line", () => {
+    expect(joinPastedBlock(["alpha", "beta"], "gamma tail")).toBe(
+      "alpha\nbeta\ngamma tail"
+    );
+  });
+
+  it("drops the empty fragment a trailing newline leaves behind", () => {
+    expect(joinPastedBlock(["alpha", "beta"], "")).toBe("alpha\nbeta");
+  });
+
+  it("keeps blank lines inside the block", () => {
+    // Blank lines are content in a diff or a log; only the trailing one is
+    // punctuation.
+    expect(joinPastedBlock(["alpha", "", "beta"], "")).toBe("alpha\n\nbeta");
+  });
+
+  it("keeps a typed question appended after the paste", () => {
+    expect(joinPastedBlock(["stack", "trace"], "what causes this?")).toBe(
+      "stack\ntrace\nwhat causes this?"
+    );
+  });
+
+  it("survives a paste that is only a newline", () => {
+    expect(joinPastedBlock([""], "")).toBe("");
+  });
+});
