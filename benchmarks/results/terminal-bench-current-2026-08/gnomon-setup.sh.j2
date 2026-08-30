@@ -1,4 +1,12 @@
 #!/bin/bash
+# Capture the TASK directory before anything can change it. tb starts this
+# script in the task's WORKDIR, which is NOT always /app: fix-git lives in
+# /app/personal-site, swe-bench-astropy-2 in /app/astropy, prove-plus-comm in
+# /workspace (where /app does not exist at all). An earlier fix guessed
+# "${TB_TASK_DIR:-/app}" — that variable exists in 0 files of terminal-bench,
+# so it silently hardcoded /app and would have rooted the surface in an empty
+# directory for those tasks. Record the real one instead of guessing.
+printf '%s' "$PWD" > /opt/task-cwd 2>/dev/null || true
 # Install gnomon into a terminal-bench task container and write /opt/gnomon-run.sh.
 # `gnomon task` needs only node + pnpm deps (no Rust build), so this stays light.
 set -e
@@ -14,8 +22,7 @@ nvm install 22 >/dev/null 2>&1
 npm i -g pnpm >/dev/null 2>&1
 
 git clone --depth 1 https://github.com/eljaplacido/gnomonharness.git /opt/gnomon >/dev/null 2>&1
-cd /opt/gnomon
-pnpm install --silent >/dev/null 2>&1
+(cd /opt/gnomon && pnpm install --silent >/dev/null 2>&1)
 
 # Run helper: build a fresh surface in the task dir, point every role at the
 # bench endpoint/model (greedy, approval off for headless), then solve.
@@ -39,7 +46,7 @@ INSTR="$1"
 # failed. After the fix, refusals fell to ~5% and write/edit usage roughly
 # doubled. Every gnomon Terminal-Bench number produced before 2026-08-30 was
 # measured with the write tools structurally unable to touch the task.
-cd "${TB_TASK_DIR:-/app}" 2>/dev/null || cd /app 2>/dev/null || true
+cd "$(cat /opt/task-cwd 2>/dev/null || echo /app)" 2>/dev/null || true
 node "$GN" init >/dev/null 2>&1 || true
 node -e '
 const fs=require("fs"), E=process.env;
