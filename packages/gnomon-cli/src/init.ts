@@ -408,29 +408,7 @@ description = "Run a sub-turn under another role, with its own context. It gets 
 enabled = true
 
 # Reaches the network, so it is gated like a write and refused outright when
-# # A check the harness runs after a turn that changed files.
-#
-# Absent by default, and deliberately so: there is no default command. A
-# repository that declares nothing pays nothing — no process, no tokens, no
-# change in behaviour. Executing whatever the agent just wrote would be a
-# destructive default, since \`deploy.sh\` is a shell script too, so the gate
-# only ever runs a command this file names.
-#
-# It exists because a model reporting success is reporting a belief. One
-# benchmark turn wrote a hundred-line setup script, ran \`bash -n\` on it,
-# reported "syntax check passed" and stopped. Nothing had been installed —
-# \`bash -n\` parses, it does not run. The check is the only thing in the loop
-# that can contradict the model's own account of its work.
-#
-# The command runs through the ordinary bash tool, so bash_deny, the sandbox
-# level and the tool timeout all apply to it. It is not a privileged path.
-#
-# [verify]
-# command = "pytest -q"    # or cargo test, make, .gnomon/ci.sh
-# after = "write"          # write | always
-# max_rounds = 1           # times a failure may hand the turn back; 0 = report only
-
-[sandbox] network = false in policy.toml. Off by default for that reason.
+# [sandbox] network = false in policy.toml. Off by default for that reason.
 [[tools]]
 name = "webfetch"
 description = "Retrieve an http(s) URL as text"
@@ -501,6 +479,32 @@ network = false
 # reject_on_disagreement, env_isolation, min_line_context, preserve_formatting.
 # A surface that documents a setting no code reads is worse than one that omits
 # it, because it invites you to tune something that cannot move.
+
+# A check the harness runs after a turn that changed files.
+#
+# Absent by default, and deliberately so: there is no default command. A
+# repository that declares nothing pays nothing — no process, no tokens, no
+# change in behaviour. Executing whatever the agent just wrote would be a
+# destructive default, since \`deploy.sh\` is a shell script too, so the gate
+# only ever runs a command this file names.
+#
+# It exists because a model reporting success is reporting a belief. One
+# benchmark turn wrote a hundred-line setup script, ran \`bash -n\` on it,
+# reported "syntax check passed" and stopped. Nothing had been installed —
+# \`bash -n\` parses, it does not run. The check is the only thing in the loop
+# that can contradict the model's own account of its work.
+#
+# The command runs through the ordinary bash tool, so bash_deny, the sandbox
+# level and the tool timeout all apply to it. It is not a privileged path.
+#
+# It lives here, not in tools.toml: the loader maps each file to its own
+# namespace and they never merge, so a [verify] block written in tools.toml is
+# read by nothing and fails silently.
+#
+# [verify]
+# command = "pytest -q"    # or cargo test, make, .gnomon/ci.sh
+# after = "write"          # write | always
+# max_rounds = 1           # times a failure may hand the turn back; 0 = report only
 `;
 
 const SYSTEM_MD = `You are a deterministic coding agent working in this repository.
@@ -533,6 +537,14 @@ Rules:
   approval is required it shows the diff and asks the operator, and a
   declined call comes back to you as a refusal. Call the tool. A change you
   described is not a change you made.
+- Run what you produced before you end the turn. Turn each constraint the
+  task states into a command that fails if it is violated, run it, and paste
+  the output. Writing the file is not producing the artifact: a script that
+  has never been executed is a guess about what it does, and "it exists" is
+  not "it works".
+- Get to something that works end to end first, then improve it. If the
+  deliverable is not on disk yet, make it exist before refining anything —
+  a turn spent validating a thing that was never produced scores nothing.
 `;
 
 const PROFILE_LOCAL_FIRST = `# local_first — keep token volume on local hardware.

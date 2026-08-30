@@ -20,6 +20,41 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe("template hygiene", () => {
+  it("every scaffolded .toml is structurally valid — no table header with trailing prose", async () => {
+    // A commented documentation block was spliced into the middle of another
+    // comment, which stripped the "# " from its closing line and left
+    //   [sandbox] network = false in policy.toml. Off by default for that reason.
+    // live in every generated tools.toml. gnomon's own parser is lenient enough
+    // to accept it, so nothing failed — but a strict TOML reader rejects the
+    // file, which makes the surface non-portable. Encode the shape of that bug
+    // rather than the one line, so the next splice is caught at init time.
+    await initSurface({ dir: root });
+    for (const f of ["config.toml", "policy.toml", "roles.toml", "tools.toml"]) {
+      const text = readFileSync(join(root, ".gnomon", f), "utf-8");
+      text.split("\n").forEach((line, i) => {
+        if (line.trimStart().startsWith("#") || line.trim() === "") return;
+        // A line that opens with a bracket must BE a table header and nothing
+        // else — no prose trailing off the end of it.
+        if (!line.trimStart().startsWith("[")) return;
+        expect(
+          /^\s*\[\[?[^\[\]]+\]\]?\s*(#.*)?$/.test(line),
+          `${f}:${i + 1} is not a clean table header: ${line}`
+        ).toBe(true);
+      });
+    }
+  });
+
+  it("the verify block is scaffolded where the loader reads it", async () => {
+    // resolveVerify reads config.policy.verify. The loader maps each surface
+    // file to its own namespace and they never merge, so a [verify] block
+    // written into tools.toml is read by nothing and fails silently.
+    await initSurface({ dir: root });
+    const policy = readFileSync(join(root, ".gnomon", "policy.toml"), "utf-8");
+    const tools = readFileSync(join(root, ".gnomon", "tools.toml"), "utf-8");
+    expect(policy).toContain("[verify]");
+    expect(tools).not.toContain("[verify]");
+  });
+
   it("the embedded templates contain no unescaped backticks", () => {
     // The templates live in JS template literals, so a markdown-style
     // `word` closes the literal and breaks the build. This has happened
