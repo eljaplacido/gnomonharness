@@ -272,6 +272,41 @@ describe("bash", () => {
     expect(out.content).toContain("timed out");
   });
 
+  it("a timed-out command hands back what it printed before the kill", async () => {
+    // The benchmark's long tail was the model re-running a command that had
+    // already timed out, because the timeout discarded everything the command
+    // had said. The output is evidence the harness is holding; killing the
+    // process is not a reason to drop it.
+    const out = await executeTool(
+      "bash",
+      { command: `echo "made it to step 3"; sleep 5` },
+      ctx({ timeoutMs: 250 }),
+      offered
+    );
+    expect(out.code).toBe(TOOL_FAILED);
+    expect(out.content).toContain("timed out");
+    expect(out.content).toContain("made it to step 3");
+    // and it must say the output is partial, so the model does not read a
+    // truncated log as the whole story
+    expect(out.content).toContain("partial");
+  });
+
+  it("a timed-out command keeps both ends of an oversized output", async () => {
+    // A killed command cannot be cheaply narrowed and re-run, and the reason it
+    // was still running is usually the last thing it printed — so the tail is
+    // kept too, unlike the head-only clamp used on a command that completed.
+    const out = await executeTool(
+      "bash",
+      { command: `printf 'HEAD'; for i in $(seq 1 400); do printf 'xxxxxxxxxx'; done; printf 'TAIL'; sleep 5` },
+      ctx({ timeoutMs: 400, maxOutputBytes: 200 }),
+      offered
+    );
+    expect(out.code).toBe(TOOL_FAILED);
+    expect(out.content).toContain("HEAD");
+    expect(out.content).toContain("TAIL");
+    expect(out.content).toContain("bytes dropped from the middle");
+  });
+
   it("a timed-out command leaves no live orphan behind", async () => {
     // shell:true means the direct child is `sh -c`; killing only that would
     // leave the real work running. The marker file appears only if the
