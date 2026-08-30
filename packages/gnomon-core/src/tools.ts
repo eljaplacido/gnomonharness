@@ -22,9 +22,11 @@ import {
   readdirSync,
   realpathSync,
   Dirent,
+  Stats,
   mkdirSync,
 } from "node:fs";
 import { resolve, relative, isAbsolute, dirname, join, sep } from "node:path";
+import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
 import { promisify } from "node:util";
 import {
@@ -62,6 +64,19 @@ export interface ToolOutcome {
    * than prevented because the command is arbitrary shell.
    */
   surface_drift?: SurfaceDrift;
+  /**
+   * Set when the worktree moved while this call ran. Only `bash` reports it,
+   * and only observationally — the tree is stamped before and after, never
+   * inferred from the command text.
+   *
+   * Deliberately NOT folded into `touchedFiles`/`verify.after`. Those are a
+   * published enumeration (`"write" | "always"`), and since bash is enabled by
+   * default, treating shell mutation as a write would collapse `"write"` into
+   * `"always"` for any turn that ever shelled out — widening a declared value
+   * without declaring it. This exists so the anti-flailing nudge can tell work
+   * from idling; the verify gate keeps its own, narrower meaning.
+   */
+  worktree_changed?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -966,6 +981,9 @@ async function bashTool(
   // surfaceHashOf: bash is arbitrary shell, so the surface is detected moving
   // rather than prevented from moving.
   const surfaceBefore = surfaceHashOf(ctx);
+  // Same reasoning one level out: whether the command changed the worktree is
+  // observed, not guessed from its text. Feeds the nudge, not the verify gate.
+  const worktreeBefore = worktreeStampOf(ctx);
 
   return new Promise<ToolOutcome>((done) => {
     const proc = spawn(command, {
@@ -999,8 +1017,10 @@ async function bashTool(
         .filter(Boolean)
         .join("\n");
       const drift = surfaceDrift(ctx, surfaceBefore);
+      const movedTree = worktreeMoved(ctx, worktreeBefore);
       done({
         code: TOOL_FAILED,
+        worktree_changed: movedTree,
         content:
           `Command timed out after ${ctx.timeoutMs}ms and was killed. Output captured before the kill:\n` +
           clampEnds(captured, ctx.maxOutputBytes) +
@@ -1035,8 +1055,10 @@ async function bashTool(
         .filter(Boolean)
         .join("\n");
       const drift = surfaceDrift(ctx, surfaceBefore);
+      const movedTree = worktreeMoved(ctx, worktreeBefore);
       done({
         code: TOOL_OK,
+        worktree_changed: movedTree,
         content: clamp(body, ctx.maxOutputBytes) + (drift ? `\n\n${drift.notice}` : ""),
         summary: `bash — exit ${exit}${drift ? " · surface changed" : ""}`,
         surface_drift: drift ?? undefined,
@@ -1165,6 +1187,61 @@ export function surfaceHashOf(ctx: ToolContext): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * A cheap, deterministic stamp of the worktree: which files exist, and their
+ * size and mtime.
+ *
+ * Used only to answer "did this shell command change anything?" — the question
+ * the anti-flailing nudge was getting wrong. In the 48-task benchmark arm, 49
+ * of the 50 nudged trials had made no `write`/`edit` call at all, because the
+ * model was editing through heredocs and `sed -i`; the counter saw an idle
+ * agent and told a working one to stop.
+ *
+ * Observation, not inference: a pattern list over `sed|tee|make` would be a
+ * behaviour-deciding rule living outside the content-hashed surface, and it
+ * would be wrong on the first command it had not been taught. This reuses the
+ * same walk `glob`/`grep` use, so it inherits their fixed ignore set and their
+ * file cap, and it never reads file contents.
+ *
+ * Returns null when the tree cannot be stamped, which callers must read as
+ * "unknown", never as "unchanged".
+ *
+ * Cost, measured: 1.4ms on this repo (273 walked files) and 79.6ms on a
+ * synthetic tree at the WALK_MAX_FILES cap — so at most ~160ms per bash call,
+ * against a measured model round-trip of 7.4s median. It stats, never reads.
+ */
+export function worktreeStampOf(ctx: ToolContext): string | null {
+  try {
+    const h = createHash("sha256");
+    for (const rel of walkFiles(ctx.root, ctx.root)) {
+      // .gnomon/ has its own stamp (surfaceHashOf) and its own meaning; a
+      // surface edit is drift, not progress.
+      if (rel === ".gnomon" || rel.startsWith(".gnomon/")) continue;
+      let st: Stats;
+      try {
+        st = statSync(join(ctx.root, rel));
+      } catch {
+        continue; // vanished mid-walk: the next stamp will differ anyway
+      }
+      h.update(`${rel}:${st.size}:${st.mtimeMs}\n`);
+    }
+    return h.digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Did the worktree move? Only a stamp taken on both sides can say so; an
+ * unstampable tree is unknown, and unknown must not read as changed (that
+ * would disarm the nudge) nor as unchanged in a way anyone relies on.
+ */
+export function worktreeMoved(ctx: ToolContext, before: string | null): boolean {
+  if (before === null) return false;
+  const after = worktreeStampOf(ctx);
+  return after !== null && after !== before;
 }
 
 export function inSurface(ctx: ToolContext, abs: string): boolean {

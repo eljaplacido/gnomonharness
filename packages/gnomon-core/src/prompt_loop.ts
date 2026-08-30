@@ -1639,6 +1639,19 @@ export async function runAgenticTurn(
         // A write is progress: the idle streak, and its nudge cadence, restart.
         callsSinceWrite = 0;
         callsAtLastNudge = 0;
+      } else if (outcome.worktree_changed) {
+        // Shell-mediated progress. In the 48-task benchmark arm, 49 of the 50
+        // nudged trials had made no write/edit call at all — the model was
+        // editing through heredocs and `sed -i`, so the counter read a working
+        // agent as an idle one and told it to stop. Nudged trials passed 8/50
+        // against 34/69 for un-nudged ones.
+        //
+        // The streak restarts; `touchedFiles` deliberately does not. That flag
+        // means `verify.after = "write"`, a published enumeration, and bash is
+        // enabled by default — so counting shell work as a write would silently
+        // turn "write" into "always" for any turn that shelled out.
+        callsSinceWrite = 0;
+        callsAtLastNudge = 0;
       }
 
       deps.audit?.write("tool_call", {

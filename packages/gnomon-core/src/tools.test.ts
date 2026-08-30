@@ -1502,3 +1502,39 @@ describe("bash_deny — the guardrail on operations that are not undoable", () =
     expect(r.code).not.toBe(TOOL_DENIED);
   });
 });
+
+describe("shell-mediated work is observed, not inferred", () => {
+  it("a bash command that writes a file reports the worktree moved", async () => {
+    // The nudge counted only write/edit, so a model editing through heredocs or
+    // sed -i looked idle. 49 of the 50 nudged trials in the 48-task arm had made
+    // no write/edit call at all.
+    const out = await executeTool(
+      "bash",
+      { command: `echo hello > made-by-shell.txt` },
+      ctx(),
+      offered
+    );
+    expect(out.code).toBe(TOOL_OK);
+    expect(out.worktree_changed).toBe(true);
+  });
+
+  it("a read-only bash command does not", async () => {
+    // The guard must stay armed against real flailing: ls/cat/grep in a loop is
+    // exactly the failure the nudge exists to catch.
+    const out = await executeTool("bash", { command: `ls -la` }, ctx(), offered);
+    expect(out.code).toBe(TOOL_OK);
+    expect(out.worktree_changed).toBe(false);
+  });
+
+  it("does not report a surface edit as worktree progress", async () => {
+    // .gnomon/ moving is drift, reported by surface_drift; it is not the model
+    // making progress on the task.
+    const out = await executeTool(
+      "bash",
+      { command: `mkdir -p .gnomon && echo x >> .gnomon/scratch.txt` },
+      ctx(),
+      offered
+    );
+    expect(out.worktree_changed).toBe(false);
+  });
+});
