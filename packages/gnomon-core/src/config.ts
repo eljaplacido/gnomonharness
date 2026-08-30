@@ -933,6 +933,193 @@ export function resolveEndpoint(
   );
 }
 
+/** The only keys an [endpoints.<name>] block may carry. */
+const ENDPOINT_KEYS = new Set(["url", "kind", "api_key_env", "provider"]);
+
+/**
+ * Spellings people reach for when they mean to supply a secret directly.
+ *
+ * Every one of them is silently ignored today: the block is read into
+ * EndpointConfig, which has no field for them, so no Authorization header is
+ * ever built. The endpoint then fails with the provider's own 401 and nothing
+ * points at the cause — while the secret sits in a content-hashed directory
+ * that is meant to be committable. Two failures wearing one typo.
+ */
+const SECRET_KEYS = new Set([
+  "api_key",
+  "apikey",
+  "apiKey",
+  "key",
+  "token",
+  "secret",
+  "password",
+  "authorization",
+  "bearer",
+]);
+
+export interface SurfaceProblem {
+  /** File and block, as a reader would look for it */
+  where: string;
+  problem: string;
+  fix: string;
+  /**
+   * Fatal problems stop the session. Reserved for a surface that cannot do
+   * what it says: a secret that is both exposed and inert, an endpoint with
+   * no URL, a role pointing at an endpoint nobody declared.
+   */
+  fatal: boolean;
+}
+
+/**
+ * Read the surface for things that are wrong but silent.
+ *
+ * Every check here exists because the failure it catches surfaced somewhere
+ * far away from its cause — a 401 in the middle of a task, an endpoint that
+ * was never reachable, a model tag no backend has. Offline and cheap on
+ * purpose: it runs before the first turn, so it may not make a network call.
+ * Whether a *key* works is a different question, and only the endpoint can
+ * answer it — see probeEndpointAuth.
+ */
+export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
+  const problems: SurfaceProblem[] = [];
+  const declared = config.config.endpoints ?? {};
+
+  for (const [name, raw] of Object.entries(declared)) {
+    const where = `.gnomon/config.toml [endpoints.${name}]`;
+    // Read as raw TOML: the point is to see the fields EndpointConfig has no
+    // home for, which is exactly what the typed view hides.
+    const block = (raw ?? {}) as unknown as Record<string, unknown>;
+
+    for (const field of Object.keys(block)) {
+      if (SECRET_KEYS.has(field)) {
+        problems.push({
+          where,
+          problem:
+            `${field} holds a secret in the surface — and the harness never reads it, ` +
+            `so this endpoint sends no Authorization header at all.`,
+          fix:
+            `Delete the ${field} line, then:  gnomon key set ${name}\n` +
+            `      and declare  api_key_env = "<VARIABLE_NAME>"  in its place. ` +
+            `Rotate the exposed key: .gnomon/ is hashed and meant to be committed.`,
+          fatal: true,
+        });
+        continue;
+      }
+      if (!ENDPOINT_KEYS.has(field)) {
+        problems.push({
+          where,
+          problem: `unknown field "${field}" — it is read by nothing.`,
+          fix: `Endpoints take: ${[...ENDPOINT_KEYS].join(", ")}. Check the spelling.`,
+          fatal: false,
+        });
+      }
+    }
+
+    if (!block.url) {
+      problems.push({
+        where,
+        problem: "no url — nothing can be sent here.",
+        fix: `Add url = "https://…/chat/completions" (or an Ollama /api/chat).`,
+        fatal: true,
+      });
+    }
+
+    const kind = block.kind;
+    if (kind !== undefined && kind !== "openai" && kind !== "ollama") {
+      problems.push({
+        where,
+        problem: `kind = "${String(kind)}" is not a request shape the harness knows.`,
+        fix: 'kind is "openai" or "ollama".',
+        fatal: true,
+      });
+    }
+  }
+
+  const known = new Set(listEndpoints(config));
+  for (const [role, def] of Object.entries(config.roles ?? {})) {
+    const targets: Array<[string, string | undefined, string | undefined]> = [
+      [`[roles.${role}]`, def?.endpoint, def?.model],
+      [`[roles.${role}.fallback]`, def?.fallback?.endpoint, def?.fallback?.model],
+    ];
+
+    for (const [block, endpoint, model] of targets) {
+      if (endpoint === undefined && model === undefined) continue;
+      const where = `.gnomon/roles.toml ${block}`;
+
+      if (endpoint !== undefined && !known.has(endpoint)) {
+        problems.push({
+          where,
+          problem: `endpoint = "${endpoint}" is not declared.`,
+          fix: `Declared: ${[...known].sort().join(", ")}. Add [endpoints.${endpoint}] or point this at one of those.`,
+          fatal: true,
+        });
+        continue;
+      }
+
+      // An Ollama tag on a cloud endpoint, or the reverse. Not conclusive —
+      // only the endpoint's own model list is — but it is the mistake that
+      // gets made, and it costs nothing to say so before the turn that fails.
+      if (!model || endpoint === undefined) continue;
+      const url = declared[endpoint]?.url ?? BUILTIN_ENDPOINTS[endpoint]?.url;
+      if (!url) continue;
+      const local = isLocalEndpoint(url);
+      const looksLocal = /:\d|:[a-z0-9._-]*(b|q\d)/i.test(model) && model.includes(":");
+      if (!local && looksLocal) {
+        problems.push({
+          where,
+          problem: `model = "${model}" is an Ollama-style tag, but "${endpoint}" is a cloud endpoint.`,
+          fix: `Run /models to see what "${endpoint}" actually serves.`,
+          fatal: false,
+        });
+      }
+    }
+  }
+
+  return problems;
+}
+
+/**
+ * Ask an endpoint whether a key is accepted for *inference*.
+ *
+ * A model list is not the test. opencode.ai serves /v1/models to an unset
+ * key, a wrong key and no key at all — 200 every time — so a listing that
+ * worked was read as a key that worked, and the first honest signal was a 401
+ * several turns into a session. The smallest possible completion is the only
+ * thing that answers the question actually being asked.
+ */
+export async function probeEndpointAuth(
+  endpoint: EndpointConfig,
+  model: string,
+  timeoutMs = 20000
+): Promise<{ ok: boolean; status?: number; detail?: string }> {
+  const key = endpoint.api_key_env ? process.env[endpoint.api_key_env] : undefined;
+  if (endpoint.api_key_env && !key) {
+    return { ok: false, detail: `$${endpoint.api_key_env} is not set` };
+  }
+
+  const ollama = (endpoint.kind ?? "ollama") === "ollama";
+  const body = ollama
+    ? { model, messages: [{ role: "user", content: "hi" }], stream: false }
+    : { model, messages: [{ role: "user", content: "hi" }], max_tokens: 1 };
+
+  try {
+    const res = await fetch(endpoint.url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(key ? { Authorization: `Bearer ${key}` } : {}),
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (res.ok) return { ok: true, status: res.status };
+    const text = (await res.text().catch(() => "")).slice(0, 300);
+    return { ok: false, status: res.status, detail: text || res.statusText };
+  } catch (err) {
+    return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /** Every endpoint the surface offers, built-ins included. */
 export function listEndpoints(config: GnomonConfig): string[] {
   return [

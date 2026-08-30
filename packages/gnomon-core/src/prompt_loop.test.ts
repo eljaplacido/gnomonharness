@@ -2158,3 +2158,91 @@ describe("bracketed paste", () => {
     expect(joinPastedBlock([""], "")).toBe("");
   });
 });
+
+/**
+ * Writing an endpoint into config.toml.
+ *
+ * The block that caused the trouble was hand-written, pointed at the wrong
+ * host, and carried a plaintext api_key the harness never reads. A writer
+ * that only patched keys would have left that line sitting beside the
+ * api_key_env replacing it.
+ */
+describe("setEndpointBlock", () => {
+  const { setEndpointBlock } = promptLoop;
+
+  it("appends a block when the endpoint is new, leaving the file alone", () => {
+    const before = `[endpoints.local]\nurl = "http://127.0.0.1:11434/api/chat"\nkind = "ollama"\n`;
+    const after = setEndpointBlock(before, "go", {
+      url: "https://opencode.ai/zen/go/v1/chat/completions",
+      kind: "openai",
+      api_key_env: "OPENCODE_API_KEY",
+      provider: "opencode",
+    });
+    expect(after).toContain(before.trimEnd());
+    expect(after).toContain("[endpoints.go]");
+    expect(after).toContain('api_key_env = "OPENCODE_API_KEY"');
+  });
+
+  it("removes a plaintext api_key when rewriting a block", () => {
+    const before = [
+      "[endpoints.go]",
+      '# OpenFang, locally',
+      'url = "http://127.0.0.1:4200/v1/chat/completions"',
+      'api_key = "sk-secret-value"',
+      "",
+      "[routing]",
+      'mode = "manual"',
+    ].join("\n");
+
+    const after = setEndpointBlock(before, "go", {
+      url: "https://opencode.ai/zen/go/v1/chat/completions",
+      kind: "openai",
+      api_key_env: "OPENCODE_API_KEY",
+    });
+
+    expect(after).not.toContain("sk-secret-value");
+    expect(after).not.toMatch(/^api_key\s*=/m);
+    expect(after).toContain('url = "https://opencode.ai/zen/go/v1/chat/completions"');
+    // The block's own note survives; so does everything after it.
+    expect(after).toContain("# OpenFang, locally");
+    expect(after).toContain("[routing]");
+    expect(after).toContain('mode = "manual"');
+  });
+
+  it("keeps a comment that trails the settings, below them", () => {
+    // The first repair with this writer ate a block of guidance that sat
+    // under the keys. Prose in a surface file is how the next reader learns
+    // what a block is for; a writer that eats it teaches people not to write
+    // any.
+    const before = [
+      "[endpoints.go]",
+      'url = "http://old"',
+      "",
+      "# point a role at it in roles.toml:",
+      "#   endpoint = \"go\"",
+      "",
+      "[routing]",
+    ].join("\n");
+    const after = setEndpointBlock(before, "go", { url: "https://new", kind: "openai" });
+    expect(after).toContain("# point a role at it in roles.toml:");
+    expect(after.indexOf('url = "https://new"')).toBeLessThan(
+      after.indexOf("# point a role at it")
+    );
+    expect(after.indexOf("# point a role at it")).toBeLessThan(after.indexOf("[routing]"));
+  });
+
+  it("does not disturb a neighbouring endpoint", () => {
+    const before = [
+      "[endpoints.go]",
+      'url = "http://old"',
+      "",
+      "[endpoints.zen]",
+      'url = "https://zen"',
+      'api_key_env = "OPENCODE_API_KEY"',
+    ].join("\n");
+    const after = setEndpointBlock(before, "go", { url: "https://new", kind: "openai" });
+    expect(after).toContain("[endpoints.zen]");
+    expect(after).toContain('url = "https://zen"');
+    expect(after).not.toContain('url = "http://old"');
+  });
+});

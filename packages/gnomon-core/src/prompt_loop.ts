@@ -38,6 +38,10 @@ import {
   META_FIELDS,
   COT_MODES,
   loadConfig,
+  auditSurface,
+  probeEndpointAuth,
+  SurfaceProblem,
+  EndpointConfig,
 } from "./config.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence } from "./render.js";
 export { isLocalEndpoint } from "./config.js";
@@ -833,6 +837,150 @@ function printBanner(): void {
   console.log("Esc cancels the turn.  /mode suggest|auto lets the harness route.");
   console.log("Type /quit or Ctrl+C to exit.");
   console.log("");
+}
+
+/**
+ * Print what the surface gets wrong, and say whether the session may start.
+ *
+ * Returns false when something fatal was found. Fatal is narrow on purpose —
+ * a surface that cannot do what it claims, not one that is merely unusual —
+ * because a harness that refuses to start over a warning is a harness people
+ * route around.
+ */
+export function reportSurfaceProblems(
+  problems: SurfaceProblem[],
+  ui: ResolvedUi
+): boolean {
+  if (problems.length === 0) return true;
+
+  const fatal = problems.filter((p) => p.fatal);
+  console.log("");
+  for (const p of problems) {
+    const mark = p.fatal ? "✗" : "⚠";
+    const colour = p.fatal ? "red" : "yellow";
+    console.log(paint(ui, colour, `  ${mark} ${p.where}`));
+    console.log(paint(ui, colour, `    ${p.problem}`));
+    for (const line of p.fix.split("\n")) {
+      console.log(paint(ui, "gray", `    → ${line}`));
+    }
+  }
+
+  if (fatal.length > 0) {
+    console.log("");
+    console.log(
+      paint(
+        ui,
+        "red",
+        `  ${fatal.length} problem${fatal.length === 1 ? "" : "s"} above must be fixed before a session can start.`
+      )
+    );
+    return false;
+  }
+  console.log("");
+  return true;
+}
+
+/** One endpoint as a listing needs it: what it is, who uses it, what to test with. */
+export interface EndpointRow {
+  name: string;
+  endpoint: EndpointConfig;
+  where: string;
+  provider: string;
+  /** Roles routing here as their primary */
+  primary: string[];
+  /** Roles naming it only as a fallback */
+  fallback: string[];
+  /**
+   * A model to test with — the first role that routes here. Without one there
+   * is nothing to probe: an endpoint has no opinion about auth until it is
+   * asked to run a specific model.
+   */
+  probeModel?: string;
+}
+
+/** Result of asking each endpoint whether it will actually answer. */
+export type EndpointProbes = Map<string, { ok: boolean; status?: number; detail?: string }>;
+
+export function describeEndpoints(config: GnomonConfig): EndpointRow[] {
+  const roles = listRoles(config);
+  return listEndpoints(config).map((name) => {
+    const endpoint = resolveEndpoint(config, name);
+    const cls = endpointClass(endpoint.url, endpoint.kind, endpoint.provider);
+    const primary = roles.filter((r) => (config.roles[r]?.endpoint ?? "local") === name);
+    const fallback = roles.filter((r) => config.roles[r]?.fallback?.endpoint === name);
+    const probeModel =
+      (primary[0] ? config.roles[primary[0]]?.model : undefined) ??
+      (fallback[0] ? config.roles[fallback[0]]?.fallback?.model : undefined);
+    return { name, endpoint, where: cls.where, provider: cls.provider, primary, fallback, probeModel };
+  });
+}
+
+/**
+ * Render the endpoint listing.
+ *
+ * `probes` is null when nothing was tested, and the key line says exactly
+ * that. It used to read "available" whenever the variable was non-empty,
+ * which is how a revoked key looked healthy right up until a 401 landed in
+ * the middle of a task — the listing was answering "is the variable set",
+ * while every reader took it for "will this work".
+ */
+export function printEndpoints(
+  rows: EndpointRow[],
+  ui: ResolvedUi,
+  probes: EndpointProbes | null
+): void {
+  console.log("\nDeclared endpoints (.gnomon/config.toml [endpoints]):\n");
+  for (const row of rows) {
+    const { name, endpoint: ep } = row;
+    console.log(
+      `  ${paint(ui, "bold", name)}: ${ep.url}  [${ep.kind ?? "ollama"}] · ${row.where} · ${row.provider}`
+    );
+
+    // An endpoint nothing points at is declared, not used. Saying so is the
+    // difference between "it is not configured" and "it is configured and
+    // nothing routes to it" — which look identical from a listing.
+    if (row.primary.length === 0 && row.fallback.length === 0) {
+      console.log(`      used by: (no role — declared but nothing routes here)`);
+    } else {
+      if (row.primary.length > 0) console.log(`      used by: ${row.primary.join(", ")}`);
+      if (row.fallback.length > 0) console.log(`      fallback for: ${row.fallback.join(", ")}`);
+    }
+
+    if (ep.api_key_env) {
+      const set = Boolean(process.env[ep.api_key_env]);
+      if (!set) {
+        console.log(
+          paint(ui, "yellow", `      key: $${ep.api_key_env} — NOT SET — run: gnomon key set ${name}`)
+        );
+      } else {
+        console.log(`      key: $${ep.api_key_env} — set${probes ? "" : " (untested)"}`);
+      }
+    }
+
+    const probe = probes?.get(name);
+    if (!probe) continue;
+    if (probe.ok) {
+      console.log(paint(ui, "green", `      ✓ answered a real completion as ${row.probeModel}`));
+    } else {
+      const status = probe.status ? `${probe.status} ` : "";
+      console.log(
+        paint(ui, "red", `      ✗ ${status}${(probe.detail ?? "no response").replace(/\s+/g, " ").slice(0, 160)}`)
+      );
+      if (probe.status === 401 || probe.status === 403) {
+        console.log(
+          paint(ui, "gray", `      → the key is rejected for inference. Replace it: gnomon key set ${name}`)
+        );
+      } else if (probe.status === 404 || probe.status === 400) {
+        console.log(
+          paint(ui, "gray", `      → "${row.probeModel}" may not be a tag this endpoint serves. /models lists them.`)
+        );
+      }
+    }
+  }
+  console.log(
+    `\nPoint a role at one with endpoint = "<name>" in roles.toml, or give\n` +
+      `it a [roles.<name>.fallback] with its own model and endpoint.`
+  );
 }
 
 /** Print a styled exchange through the configurable renderer */
@@ -2260,6 +2408,71 @@ export function setRoleModel(
   return lines.join("\n");
 }
 
+/**
+ * Write an [endpoints.<name>] block into config.toml, in place.
+ *
+ * Rewrites the whole body rather than patching key by key, which is what
+ * removes a plaintext `api_key` line rather than leaving it beside the
+ * `api_key_env` that replaces it. Every comment in the block survives — those
+ * before the first setting stay above it, those after stay below — because
+ * the prose in a surface file is how the next reader learns what the block is
+ * for, and a writer that eats it teaches people not to write any.
+ *
+ * TOML tables are order-independent, so a new block is appended at the end of
+ * the file: no guessing where the endpoints section stops, and no comment
+ * displaced.
+ */
+export function setEndpointBlock(
+  text: string,
+  name: string,
+  fields: { url: string; kind: string; api_key_env?: string; provider?: string }
+): string {
+  const lines = text.split("\n");
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const start = lines.findIndex((l) => new RegExp(`^\\s*\\[endpoints\\.${escaped}\\]\\s*$`).test(l));
+
+  const body = [`url = "${fields.url}"`, `kind = "${fields.kind}"`];
+  if (fields.api_key_env) body.push(`api_key_env = "${fields.api_key_env}"`);
+  if (fields.provider) body.push(`provider = "${fields.provider}"`);
+
+  if (start === -1) {
+    const out = [...lines];
+    while (out.length > 0 && (out[out.length - 1] ?? "").trim() === "") out.pop();
+    return [...out, "", `[endpoints.${name}]`, ...body, ""].join("\n");
+  }
+
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^\s*\[/.test(lines[i] ?? "")) {
+      end = i;
+      break;
+    }
+  }
+
+  const inner = lines.slice(start + 1, end);
+  const isProse = (l: string) => l.trim() === "" || l.trim().startsWith("#");
+  const firstSetting = inner.findIndex((l) => !isProse(l));
+
+  // Prose above the first setting introduces the block; prose below it is a
+  // note that follows. Keep both where their author put them, and drop only
+  // the settings — which is the whole job.
+  const lead = firstSetting === -1 ? inner : inner.slice(0, firstSetting);
+  const trail = firstSetting === -1 ? [] : inner.slice(firstSetting).filter(isProse);
+
+  while (lead.length > 0 && (lead[lead.length - 1] ?? "").trim() === "") lead.pop();
+  while (trail.length > 0 && (trail[0] ?? "").trim() === "") trail.shift();
+  while (trail.length > 0 && (trail[trail.length - 1] ?? "").trim() === "") trail.pop();
+
+  return [
+    ...lines.slice(0, start + 1),
+    ...lead,
+    ...body,
+    "",
+    ...(trail.length > 0 ? [...trail, ""] : []),
+    ...lines.slice(end),
+  ].join("\n");
+}
+
 /** One row in a picker. */
 export interface PickItem {
   /** Returned when this row is chosen */
@@ -2787,44 +3000,10 @@ export function processCommand(cmd: string, state: PromptState): boolean {
     }
 
     case "/endpoints": {
-      console.log("\nDeclared endpoints (.gnomon/config.toml [endpoints]):\n");
-      const roles = listRoles(state.config);
-      for (const name of listEndpoints(state.config)) {
-        const ep = resolveEndpoint(state.config, name);
-        const cls = endpointClass(ep.url, ep.kind, ep.provider);
-        console.log(
-          `  ${name}: ${ep.url}  [${ep.kind ?? "ollama"}] · ${cls.where} · ${cls.provider}`
-        );
-
-        // An endpoint nothing points at is declared, not used. Saying so is
-        // the difference between "it is not configured" and "it is configured
-        // and nothing routes to it" — which look identical from a listing.
-        const primary = roles.filter(
-          (r) => (state.config.roles[r]?.endpoint ?? "local") === name
-        );
-        const viaFallback = roles.filter(
-          (r) => state.config.roles[r]?.fallback?.endpoint === name
-        );
-        if (primary.length === 0 && viaFallback.length === 0) {
-          console.log(`      used by: (no role — declared but nothing routes here)`);
-        } else {
-          if (primary.length > 0) console.log(`      used by: ${primary.join(", ")}`);
-          if (viaFallback.length > 0) {
-            console.log(`      fallback for: ${viaFallback.join(", ")}`);
-          }
-        }
-
-        if (ep.api_key_env) {
-          const present = Boolean(process.env[ep.api_key_env]);
-          console.log(
-            `      key: $${ep.api_key_env} — ${present ? "available" : `NOT SET — run: gnomon key set ${name}`}`
-          );
-        }
-      }
-      console.log(
-        `\nPoint a role at one with endpoint = "<name>" in roles.toml, or give\n` +
-          `it a [roles.<name>.fallback] with its own model and endpoint.`
-      );
+      // The probing form runs on the async path at the prompt; this one is
+      // what a mid-turn /endpoints gets, and it is careful to claim only what
+      // it actually checked.
+      printEndpoints(describeEndpoints(state.config), uiOf(state), null);
       return true;
     }
 
@@ -3303,6 +3482,14 @@ export async function runPromptLoop(
       `  (found by walking up from ${resolve(process.cwd())})`
     );
   }
+  // What the surface says that cannot be true. Before the first turn, because
+  // every one of these used to surface as a 401 or a model error somewhere in
+  // the middle of a task, with nothing on screen connecting it to the line
+  // that caused it.
+  if (!reportSurfaceProblems(auditSurface(config), uiOf(state))) {
+    process.exit(1);
+  }
+
   console.log(`Role: ${state.currentRole}`);
   console.log(`Model: ${routeRole(config, state.currentRole).model}`);
   console.log("");
@@ -3898,6 +4085,35 @@ export async function runPromptLoop(
           } catch (err) {
             console.log(`\n${err instanceof Error ? err.message : String(err)}`);
           }
+          continue;
+        }
+
+        // /endpoints asks each endpoint to run one token, which is the only
+        // question worth asking: a set variable and a reachable URL both
+        // reported healthy for a key that inference rejected.
+        if (/^\/endpoints\b/.test(input.trim())) {
+          const ui0 = uiOf(state);
+          const rows = describeEndpoints(config);
+          if (/\s--no-probe\b/.test(input)) {
+            printEndpoints(rows, ui0, null);
+            continue;
+          }
+
+          const testable = rows.filter((r) => r.probeModel);
+          console.log(
+            paint(
+              ui0,
+              "gray",
+              `\n  testing ${testable.length} endpoint${testable.length === 1 ? "" : "s"} with one token each… (--no-probe to skip)`
+            )
+          );
+          const probes: EndpointProbes = new Map();
+          await Promise.all(
+            testable.map(async (r) => {
+              probes.set(r.name, await probeEndpointAuth(r.endpoint, r.probeModel ?? "", 15000));
+            })
+          );
+          printEndpoints(rows, ui0, probes);
           continue;
         }
 
