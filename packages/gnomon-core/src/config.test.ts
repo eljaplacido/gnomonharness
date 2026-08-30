@@ -22,6 +22,7 @@ import {
   resolveRouting,
   routeInput,
   resolveContext,
+  auditSurface,
 } from "./index.js";
 import { join, resolve } from "node:path";
 import { mkdirSync, rmSync, mkdtempSync } from "node:fs";
@@ -545,5 +546,101 @@ describe("[verify] — the gate is absent unless a repository asks for one", () 
     );
     const policyBlock = init.slice(init.indexOf("const POLICY_TOML"));
     expect(policyBlock).not.toMatch(/^\s*command\s*=/m);
+  });
+});
+
+/**
+ * auditSurface — the things that are wrong but silent.
+ *
+ * Each of these produced a failure a long way from its cause: a plaintext key
+ * that no code path reads, a role pointing at an endpoint nobody declared, an
+ * Ollama tag sent to a cloud provider. All of them were only visible as a 401
+ * or a model error somewhere in the middle of a session.
+ */
+describe("auditSurface", () => {
+  const surface = (config: unknown, roles: unknown = {}) =>
+    ({ gnomonDir: "/nowhere", config, roles, policy: {}, profiles: {}, tools: {}, system: { content: "", version: "0.1" } }) as never;
+
+  it("is quiet about a surface that is right", () => {
+    const problems = auditSurface(
+      surface(
+        { endpoints: { zen: { url: "https://zen/v1/chat/completions", kind: "openai", api_key_env: "K", provider: "opencode" } } },
+        { plan: { model: "deepseek-v4-pro", endpoint: "zen" } }
+      )
+    );
+    expect(problems).toEqual([]);
+  });
+
+  it("refuses a plaintext key in the surface, and says it is also inert", () => {
+    const problems = auditSurface(
+      surface({ endpoints: { go: { url: "https://x/v1/chat/completions", api_key: "sk-secret" } } })
+    );
+    const p = problems.find((x) => x.problem.includes("api_key"));
+    expect(p?.fatal).toBe(true);
+    // Both halves matter: it is exposed, AND it does nothing.
+    expect(p?.problem).toMatch(/no Authorization header/);
+    expect(p?.fix).toMatch(/gnomon key set go/);
+    expect(p?.fix).toMatch(/Rotate/);
+  });
+
+  it("catches every spelling of a secret, not just api_key", () => {
+    for (const field of ["token", "secret", "apiKey", "password", "authorization"]) {
+      const problems = auditSurface(
+        surface({ endpoints: { x: { url: "https://x/v1/chat/completions", [field]: "v" } } })
+      );
+      expect(problems.some((p) => p.fatal && p.problem.includes(field))).toBe(true);
+    }
+  });
+
+  it("warns about a misspelled field rather than ignoring it", () => {
+    // api_key_evn silently disabled auth on an endpoint that looked configured.
+    const problems = auditSurface(
+      surface({ endpoints: { x: { url: "https://x/v1/chat/completions", api_key_evn: "K" } } })
+    );
+    const p = problems.find((x) => x.problem.includes("api_key_evn"));
+    expect(p?.fatal).toBe(false);
+    expect(p?.problem).toMatch(/read by nothing/);
+  });
+
+  it("is fatal about an endpoint with no url", () => {
+    const problems = auditSurface(surface({ endpoints: { x: { kind: "openai" } } }));
+    expect(problems.some((p) => p.fatal && p.problem.includes("no url"))).toBe(true);
+  });
+
+  it("is fatal about a role pointing at an endpoint nobody declared", () => {
+    const problems = auditSurface(
+      surface({ endpoints: {} }, { plan: { model: "m", endpoint: "typo" } })
+    );
+    const p = problems.find((x) => x.problem.includes('"typo"'));
+    expect(p?.fatal).toBe(true);
+    expect(p?.where).toContain("[roles.plan]");
+  });
+
+  it("checks a fallback block too", () => {
+    const problems = auditSurface(
+      surface({ endpoints: {} }, { plan: { model: "m", fallback: { model: "m2", endpoint: "nope" } } })
+    );
+    expect(problems.some((p) => p.where.includes("[roles.plan.fallback]"))).toBe(true);
+  });
+
+  it("notices an Ollama tag aimed at a cloud endpoint", () => {
+    const problems = auditSurface(
+      surface(
+        { endpoints: { zen: { url: "https://opencode.ai/zen/v1/chat/completions", kind: "openai" } } },
+        { plan: { model: "qwen3.6:35b", endpoint: "zen" } }
+      )
+    );
+    const p = problems.find((x) => x.problem.includes("Ollama-style"));
+    expect(p?.fatal).toBe(false);
+  });
+
+  it("leaves a local Ollama tag on a local endpoint alone", () => {
+    const problems = auditSurface(
+      surface(
+        { endpoints: { local: { url: "http://127.0.0.1:11434/api/chat", kind: "ollama" } } },
+        { plan: { model: "qwen3.6:35b", endpoint: "local" } }
+      )
+    );
+    expect(problems).toEqual([]);
   });
 });

@@ -46,6 +46,14 @@ import {
   listCredentials,
   applyCredentials,
   isShellExported,
+  probeEndpointAuth,
+  describeEndpoints,
+  printEndpoints,
+  setEndpointBlock,
+  setRoleModel,
+  listRoles,
+  resolveUi,
+  isLocalEndpoint,
 } from "gnomon-core";
 import {
   manifest as surfaceManifest,
@@ -79,10 +87,18 @@ interface CliArgs {
   json?: boolean;
   resume?: string | true;
   positional: string[];
+  /**
+   * Any other `--name value` pair, kept verbatim.
+   *
+   * Options a single command needs — `endpoint add --url …` — do not each
+   * deserve a field here, and before this they were dropped while their value
+   * silently became a positional argument.
+   */
+  flags: Record<string, string>;
 }
 
 export function parseArgs(args: string[]): CliArgs {
-  const result: CliArgs = { command: "", subcommand: "", positional: [] };
+  const result: CliArgs = { command: "", subcommand: "", positional: [], flags: {} };
   let i = 0;
 
   // Check for -p flag early
@@ -129,7 +145,16 @@ export function parseArgs(args: string[]): CliArgs {
     } else if (arg === "-p") {
       // Already handled above
     } else if (arg.startsWith("-")) {
-      // Flag (ignored for now)
+      // Any other option. A value is taken only when the next argument is not
+      // itself an option, so a bare `--verbose` stays a bare flag.
+      const key = arg.replace(/^--?/, "");
+      const next = args[i + 1];
+      if (next !== undefined && !next.startsWith("-")) {
+        i++;
+        result.flags[key] = next;
+      } else {
+        result.flags[key] = "true";
+      }
     } else {
       if (!result.subcommand) {
         result.subcommand = arg;
@@ -544,6 +569,337 @@ async function cmdKey(args: CliArgs): Promise<void> {
   process.exit(1);
 }
 
+// ---------------------------------------------------------------------------
+// Endpoints
+// ---------------------------------------------------------------------------
+
+/**
+ * Providers worth not making someone look up.
+ *
+ * A URL, a request shape and a key variable is the whole of an endpoint, and
+ * all three are things you can get subtly wrong in ways that surface much
+ * later as a 401 or an empty model list. Presets are not a feature; they are
+ * the three fields, already correct.
+ */
+const ENDPOINT_PRESETS: Record<
+  string,
+  { name: string; url: string; kind: string; api_key_env?: string; provider?: string; note: string }
+> = {
+  "opencode-go": {
+    name: "go",
+    url: "https://opencode.ai/zen/go/v1/chat/completions",
+    kind: "openai",
+    api_key_env: "OPENCODE_API_KEY",
+    provider: "opencode",
+    note: "OpenCode Go — the subscription tier at opencode.ai/go",
+  },
+  "opencode-zen": {
+    name: "zen",
+    url: "https://opencode.ai/zen/v1/chat/completions",
+    kind: "openai",
+    api_key_env: "OPENCODE_API_KEY",
+    provider: "opencode",
+    note: "OpenCode Zen — pay-as-you-go",
+  },
+  openrouter: {
+    name: "openrouter",
+    url: "https://openrouter.ai/api/v1/chat/completions",
+    kind: "openai",
+    api_key_env: "OPENROUTER_API_KEY",
+    provider: "openrouter",
+    note: "OpenRouter — many providers behind one key",
+  },
+  ollama: {
+    name: "local",
+    url: "http://127.0.0.1:11434/api/chat",
+    kind: "ollama",
+    provider: "ollama",
+    note: "Ollama on this machine — no key",
+  },
+};
+
+/** Ask a question with a default, on a terminal. */
+function ask(prompt: string, fallback = ""): Promise<string> {
+  return new Promise((resolvePromise) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(prompt, (answer) => {
+      rl.close();
+      resolvePromise(answer.trim() || fallback);
+    });
+  });
+}
+
+/**
+ * `gnomon endpoint add` — declare an endpoint, hold its key, and prove it works.
+ *
+ * Written because the pieces existed and the path between them did not. An
+ * endpoint took a hand-edited TOML block, a separate `key set`, a role edit in
+ * a second file, and a model tag you had to already know — four steps across
+ * three files, with no check at the end. What that produced in practice was an
+ * endpoint pointing somewhere unintended, a key in the wrong shape, and a 401
+ * several turns into a session with nothing on screen naming the cause.
+ *
+ * So the verification is the point, not the prompts: nothing is written to the
+ * surface until this endpoint has answered a real completion. A model listing
+ * is not evidence — opencode.ai serves one to no key at all.
+ */
+async function cmdEndpoint(args: CliArgs): Promise<void> {
+  const sub = args.subcommand ?? "list";
+  const config = loadConfig(args.dir);
+
+  if (sub === "list") {
+    printEndpoints(describeEndpoints(config), resolveUi(config), null);
+    console.log("\n  gnomon endpoint add [--preset opencode-go|opencode-zen|openrouter|ollama]");
+    console.log("  gnomon endpoint test <name>   — run one token through it");
+    return;
+  }
+
+  if (sub === "test") {
+    const name = args.positional[0] ?? args.flags.name;
+    const rows = describeEndpoints(config).filter((r) => !name || r.name === name);
+    if (rows.length === 0) {
+      console.error(`Unknown endpoint "${name}". Declared: ${listEndpoints(config).join(", ")}`);
+      process.exit(1);
+    }
+    applyCredentials();
+    const probes = new Map<string, { ok: boolean; status?: number; detail?: string }>();
+    for (const row of rows) {
+      const model = args.flags.model ?? row.probeModel;
+      if (!model) continue;
+      probes.set(row.name, await probeEndpointAuth(row.endpoint, model, 20000));
+    }
+    printEndpoints(rows, resolveUi(config), probes);
+    const bad = [...probes.values()].filter((p) => !p.ok);
+    if (bad.length > 0) process.exit(1);
+    return;
+  }
+
+  if (sub !== "add") {
+    console.error(`Unknown endpoint subcommand: ${sub}. Use: add | test | list`);
+    process.exit(1);
+  }
+
+  const interactive = process.stdin.isTTY;
+  applyCredentials();
+
+  // ── 1. Which provider ────────────────────────────────────────────────────
+  let presetKey = args.flags.preset;
+  if (!presetKey && interactive) {
+    console.log("\nWhich endpoint?\n");
+    const keys = Object.keys(ENDPOINT_PRESETS);
+    keys.forEach((k, i) => {
+      const p = ENDPOINT_PRESETS[k]!;
+      console.log(`  ${i + 1}. ${k.padEnd(14)} ${p.note}`);
+    });
+    console.log(`  ${keys.length + 1}. custom         anything OpenAI- or Ollama-shaped`);
+    const pick = await ask(`\nChoose [1-${keys.length + 1}]: `, "1");
+    const idx = Number.parseInt(pick, 10) - 1;
+    presetKey = keys[idx] ?? "custom";
+  }
+  const preset = presetKey ? ENDPOINT_PRESETS[presetKey] : undefined;
+  if (presetKey && presetKey !== "custom" && !preset) {
+    console.error(
+      `Unknown preset "${presetKey}". Known: ${Object.keys(ENDPOINT_PRESETS).join(", ")}, custom`
+    );
+    process.exit(1);
+  }
+
+  // ── 2. Name, URL, shape ──────────────────────────────────────────────────
+  const defaultName = preset?.name ?? "custom";
+  const name =
+    args.flags.name ?? (interactive ? await ask(`Endpoint name [${defaultName}]: `, defaultName) : defaultName);
+
+  const existing = config.config.endpoints?.[name];
+  if (existing && existing.url !== (args.flags.url ?? preset?.url)) {
+    // The failure this catches: a local daemon already declared as "go", and
+    // every attempt to add OpenCode Go quietly re-pointed roles at it instead.
+    console.log(`\n  "${name}" is already declared, and points somewhere else:`);
+    console.log(`    ${existing.url}`);
+    const roles = describeEndpoints(config).find((r) => r.name === name);
+    if (roles && (roles.primary.length > 0 || roles.fallback.length > 0)) {
+      console.log(`    used by: ${[...roles.primary, ...roles.fallback].join(", ")}`);
+    }
+    const go = interactive
+      ? await ask(`  Overwrite it? [y/N] `, "n")
+      : args.force
+        ? "y"
+        : "n";
+    if (!/^y/i.test(go)) {
+      console.log("  Left alone. Choose another name with --name <name>.");
+      return;
+    }
+  }
+
+  const url =
+    args.flags.url ??
+    preset?.url ??
+    (interactive ? await ask("URL (…/chat/completions or …/api/chat): ") : "");
+  if (!url) {
+    console.error("An endpoint needs a url. Pass --url.");
+    process.exit(1);
+  }
+  const kind =
+    args.flags.kind ?? preset?.kind ?? (url.includes("/api/chat") ? "ollama" : "openai");
+  const provider = args.flags.provider ?? preset?.provider;
+
+  // ── 3. The key, by name, with the value held outside the surface ─────────
+  const local = isLocalEndpoint(url);
+  let keyEnv = args.flags["key-env"] ?? preset?.api_key_env;
+  if (!keyEnv && !local && interactive) {
+    const suggested = `${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;
+    keyEnv = await ask(`Key variable name [${suggested}]: `, suggested);
+  }
+
+  if (keyEnv) {
+    const held = Boolean(process.env[keyEnv]);
+    let store = true;
+    if (held && interactive) {
+      const keep = await ask(`  $${keyEnv} already has a value. Keep it? [Y/n] `, "y");
+      store = !/^y/i.test(keep);
+    }
+    if (store) {
+      if (!interactive) {
+        console.error(`$${keyEnv} is not set. Run: gnomon key set ${name}`);
+        process.exit(1);
+      }
+      const value = await readSecret(`  Paste the key for $${keyEnv} (hidden): `);
+      if (!value) {
+        console.error("  Nothing entered — no change.");
+        process.exit(1);
+      }
+      setCredential(keyEnv, value);
+      process.env[keyEnv] = value;
+      console.log(`  Stored in ${credentialsPath()} (mode 0600). The surface holds only the name.`);
+    }
+  }
+
+  const endpoint = { url, kind: kind as "openai" | "ollama", api_key_env: keyEnv, provider };
+
+  // ── 4. Which model, from what the endpoint actually offers ───────────────
+  let model = args.flags.model;
+  if (!model) {
+    process.stdout.write("  Asking the endpoint what it serves… ");
+    const offered = await listModelsAt(endpoint);
+    if (offered.length === 0) {
+      console.log("no list available.");
+      model = interactive ? await ask("  Model tag: ") : "";
+    } else {
+      console.log(`${offered.length} models.`);
+      if (interactive) {
+        const preview = offered.slice(0, 40);
+        for (let i = 0; i < preview.length; i += 3) {
+          console.log("    " + preview.slice(i, i + 3).map((m) => m.padEnd(26)).join(""));
+        }
+        if (offered.length > preview.length) {
+          console.log(`    …and ${offered.length - preview.length} more`);
+        }
+        model = await ask(`  Model [${offered[0]}]: `, offered[0]!);
+      } else {
+        model = offered[0]!;
+      }
+    }
+    // A tag that is not on the list is the mistake that produces an opaque
+    // error three turns later — say so now, while it is still one keystroke.
+    if (model && offered.length > 0 && !offered.includes(model)) {
+      const near = offered.filter((m) => m.replace(/[^a-z0-9]/gi, "").includes(model!.replace(/[^a-z0-9]/gi, "")));
+      console.log(`  ⚠ "${model}" is not in that list.`);
+      if (near.length > 0) console.log(`    Did you mean: ${near.slice(0, 4).join(", ")}?`);
+    }
+  }
+  if (!model) {
+    console.error("A model tag is needed to test the endpoint. Pass --model.");
+    process.exit(1);
+  }
+
+  // ── 5. Prove it, before writing anything ─────────────────────────────────
+  process.stdout.write(`  Running one token through ${name} as ${model}… `);
+  const probe = await probeEndpointAuth(endpoint, model, 30000);
+  if (!probe.ok) {
+    console.log("failed.");
+    console.error(`\n  ✗ ${probe.status ?? ""} ${(probe.detail ?? "no response").slice(0, 300)}`);
+    if (probe.status === 401 || probe.status === 403) {
+      console.error(
+        `\n  The key is rejected for inference. Note that a model listing is not a\n` +
+          `  test of a key — opencode.ai serves one to no key at all — so a working\n` +
+          `  /models is not evidence here.\n` +
+          `  Get a fresh key and run: gnomon key set ${keyEnv ?? name}`
+      );
+    } else if (probe.status === 404 || probe.status === 400) {
+      console.error(`\n  Either the URL or the model tag is wrong for this provider.`);
+    }
+    console.error(`\n  Nothing was written to .gnomon/. Fix the above and run this again.`);
+    process.exit(1);
+  }
+  console.log("ok.");
+
+  // ── 6. Write the surface ─────────────────────────────────────────────────
+  const configPath = join(config.gnomonDir, "config.toml");
+  const before = readFileSync(configPath, "utf-8");
+  writeFileSync(configPath, setEndpointBlock(before, name, { url, kind, api_key_env: keyEnv, provider }));
+  console.log(`\n  ✓ .gnomon/config.toml — [endpoints.${name}]`);
+
+  // ── 7. Point roles at it ─────────────────────────────────────────────────
+  const roleNames = listRoles(config);
+  let wanted = args.flags.role ?? args.role ?? "";
+  if (!wanted && interactive) {
+    console.log(`\n  Roles: ${roleNames.join(", ")}`);
+    wanted = await ask("  Point which at it? (comma-separated, blank for none): ", "");
+  }
+  const chosen = wanted
+    .split(",")
+    .map((r) => r.trim())
+    .filter(Boolean);
+
+  if (chosen.length > 0) {
+    const rolesPath = join(config.gnomonDir, "roles.toml");
+    let text = readFileSync(rolesPath, "utf-8");
+    for (const role of chosen) {
+      if (!roleNames.includes(role)) {
+        console.error(`  ⚠ no [roles.${role}] — skipped.`);
+        continue;
+      }
+      text = setRoleModel(text, role, model, name);
+      console.log(`  ✓ ${role} → ${model} @${name}`);
+    }
+    writeFileSync(rolesPath, text);
+    console.log(`  ✓ .gnomon/roles.toml`);
+  }
+
+  const hash = surfaceHash(config.gnomonDir);
+  console.log(`\n  Surface now ${hash.slice(0, 16)}… — commit .gnomon/ to carry this to another machine.`);
+}
+
+/** Ask an endpoint for its model list. Empty when it will not say. */
+async function listModelsAt(endpoint: {
+  url: string;
+  kind: string;
+  api_key_env?: string;
+}): Promise<string[]> {
+  const listUrl =
+    endpoint.kind === "ollama"
+      ? endpoint.url.replace(/\/api\/chat\/?$/, "/api/tags")
+      : endpoint.url.replace(/\/chat\/completions\/?$/, "/models");
+  const key = endpoint.api_key_env ? process.env[endpoint.api_key_env] : undefined;
+  try {
+    const res = await fetch(listUrl, {
+      headers: key ? { Authorization: `Bearer ${key}` } : {},
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return [];
+    const json = (await res.json()) as {
+      models?: Array<{ name?: string; model?: string }>;
+      data?: Array<{ id?: string }>;
+    };
+    return (json.models ?? [])
+      .map((m) => m.name ?? m.model ?? "")
+      .concat((json.data ?? []).map((m) => m.id ?? ""))
+      .filter(Boolean)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 async function cmdAudit(args: CliArgs): Promise<void> {
   const config = loadConfig(args.dir);
   const settings = resolveAudit(config);
@@ -804,6 +1160,16 @@ Commands:
     the variable and must stay safe to commit. An exported variable always
     takes precedence.
 
+  endpoint [add|test|list]
+    add   Declare an endpoint end to end: provider, key, model, roles. It
+          asks the endpoint to run one token before writing anything, so a
+          rejected key is caught here rather than mid-task. Presets:
+          --preset opencode-go | opencode-zen | openrouter | ollama
+          Scriptable: --name --url --kind --key-env --model --role
+    test  Run one token through a declared endpoint (or all of them) and
+          report what came back. A model listing is not a test of a key —
+          some providers serve one to no key at all.
+
   audit [show|verify] [--dir <path>]
     Audit trails, when [audit] is enabled. 'verify' re-hashes each record
     and checks the chain, so a trail altered after the fact is detectable.
@@ -892,6 +1258,10 @@ async function main(): Promise<void> {
     case "key":
     case "keys":
       await cmdKey(args);
+      break;
+    case "endpoint":
+    case "endpoints":
+      await cmdEndpoint(args);
       break;
     case "audit":
       await cmdAudit(args);
