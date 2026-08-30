@@ -1331,6 +1331,39 @@ describe("runTask — the non-interactive contract", () => {
   const answers = (content: string) =>
     (async () => ({ ok: true, json: async () => ({ message: { content } }) })) as unknown as typeof fetch;
 
+  it("does not call an empty completion an answer", async () => {
+    // A zero-tool-call, zero-text turn was recorded as stop_reason "answered" —
+    // a loop that gave up counted as a model that concluded. On one benchmark
+    // arm this was 5 of 13 failures, and the split was absolute: empty final
+    // answer 0/10 passed, prose final answer 7/10 passed.
+    let calls = 0;
+    const empties = (async () => {
+      calls++;
+      return { ok: true, json: async () => ({ message: { content: "" } }) };
+    }) as unknown as typeof fetch;
+    await withFetch(empties, async () => {
+      const record = await promptLoop.runTask(loadConfig("../.."), "do a thing", { role: "smol" });
+      expect(record.stop_reason).toBe("empty");
+      // and it asked once more before giving up, rather than accepting silence
+      expect(calls).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it("reads an answer that arrives only in reasoning_content", async () => {
+    // A reasoning model returning content: null read as "" and produced exactly
+    // the empty turn above. Two other models on the same tasks never did, so it
+    // is the transport reading, not the prompt.
+    const reasoning = (async () => ({
+      ok: true,
+      json: async () => ({ message: { content: null, reasoning_content: "the answer" } }),
+    })) as unknown as typeof fetch;
+    await withFetch(reasoning, async () => {
+      const record = await promptLoop.runTask(loadConfig("../.."), "x", { role: "smol" });
+      expect(record.output).toBe("the answer");
+      expect(record.stop_reason).toBe("answered");
+    });
+  });
+
   it("records WHY the loop stopped, on a separate axis from the bucket", async () => {
     // The distinction existed only as prose in the wrap-up note and was
     // discarded. Four investigations of one campaign each blamed a different
