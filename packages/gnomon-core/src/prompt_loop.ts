@@ -204,6 +204,84 @@ function routingOf(state: PromptState): ResolvedRouting {
 }
 
 // ---------------------------------------------------------------------------
+// Pasting
+// ---------------------------------------------------------------------------
+
+/**
+ * Bracketed paste. \x1b[?2004h asks the terminal to wrap pasted text in these.
+ *
+ * readline's key parser swallows the markers — they never reach the line
+ * buffer — but it still splits the content on newlines and emits one "line"
+ * event per newline. The prompt loop turns each of those into a turn, so a
+ * pasted stack trace became forty turns answering forty fragments. Counting
+ * the newlines *inside* the markers is what lets the loop tell paste from
+ * typing before readline has split it.
+ */
+export const PASTE_START = "\x1b[200~";
+export const PASTE_END = "\x1b[201~";
+
+export interface PasteScan {
+  /** Newlines that fell inside a paste in this chunk — the "line" events to hold. */
+  lines: number;
+  /** Whether the chunk ended mid-paste, so the next one continues it. */
+  inPaste: boolean;
+  /** Whether any paste content passed through at all. */
+  sawPaste: boolean;
+}
+
+/**
+ * Count the newlines a chunk carries inside paste markers.
+ *
+ * Pure, and stateful only through `inPaste`, because a paste larger than the
+ * pipe buffer arrives in several chunks and the markers can land in different
+ * ones — an 8KB paste that lost its opening marker would be read as 200 turns.
+ */
+export function scanPasteMarkers(chunk: string, inPaste: boolean): PasteScan {
+  let rest = chunk;
+  let lines = 0;
+  let open = inPaste;
+  let sawPaste = false;
+
+  while (rest.length > 0) {
+    if (open) {
+      const end = rest.indexOf(PASTE_END);
+      const body = end === -1 ? rest : rest.slice(0, end);
+      // A terminal sends CR for a newline inside a paste; count either, and
+      // count CRLF once.
+      lines += (body.match(/\r\n|\r|\n/g) ?? []).length;
+      sawPaste = true;
+      if (end === -1) break;
+      open = false;
+      rest = rest.slice(end + PASTE_END.length);
+    } else {
+      const start = rest.indexOf(PASTE_START);
+      if (start === -1) break;
+      open = true;
+      rest = rest.slice(start + PASTE_START.length);
+    }
+  }
+
+  return { lines, inPaste: open, sawPaste };
+}
+
+/**
+ * Assemble held paste lines and the fragment left on the prompt line.
+ *
+ * The text after a paste's last newline is deliberately left in readline's
+ * buffer rather than held: it stays editable, and it is where a typed question
+ * about the pasted material naturally goes. Enter sends both as one input.
+ */
+export function joinPastedBlock(held: string[], tail: string): string {
+  const block = [...held, tail];
+  // A paste ending in a newline leaves an empty fragment behind. It is
+  // punctuation, not content.
+  while (block.length > 1 && (block[block.length - 1] ?? "").trim() === "") {
+    block.pop();
+  }
+  return block.join("\n");
+}
+
+// ---------------------------------------------------------------------------
 // Context window
 // ---------------------------------------------------------------------------
 
@@ -3235,8 +3313,94 @@ export async function runPromptLoop(
   const lineQueue: string[] = [];
   let notify: ((line: string | null) => void) | null = null;
 
-  rl.on("line", (line: string) => {
+  // ── Pasting ───────────────────────────────────────────────────────────────
+  //
+  // readline emits one "line" event per newline, and the queue above turned
+  // every one of them into a turn: pasting a forty-line stack trace opened
+  // forty turns, each answering a fragment of it. Pasting context is not an
+  // exotic use — paths, logs, diffs and specs get into a session no other way.
+  //
+  // A terminal will mark a paste if asked: \x1b[?2004h makes it wrap pasted
+  // text in \x1b[200~ … \x1b[201~. scanPasteMarkers counts the newlines inside
+  // those markers, from a listener PREPENDED to stdin. Prepending is the whole
+  // trick: it runs before readline's own data handler, so it can say in
+  // advance how many of the coming "line" events are paste rather than input.
+  //
+  // The fragment after a paste's last newline is deliberately left in
+  // readline's buffer: it stays editable, and Enter sends the held lines and
+  // that fragment together as ONE turn. Pasting alone submits nothing.
+  /** Complete lines taken from a paste, waiting for the Enter that sends them. */
+  let pasteBuffer: string[] = [];
+  /** How many upcoming "line" events are paste content, not typed input. */
+  let pastedLines = 0;
+  /** True across chunk boundaries while the terminal is inside a paste. */
+  let inPaste = false;
+  /** Set while a chunk carrying paste is being delivered; cleared next tick. */
+  let pasteKeysInFlight = false;
+
+  if (process.stdin.isTTY) {
+    process.stdout.write("\x1b[?2004h");
+    // Leaving it on would make the next program to own this terminal receive
+    // markers it never asked for.
+    process.on("exit", () => {
+      if (process.stdout.isTTY) process.stdout.write("\x1b[?2004l");
+    });
+
+    process.stdin.prependListener("data", (chunk: Buffer | string) => {
+      const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      if (!inPaste && !s.includes(PASTE_START)) return;
+
+      const scan = scanPasteMarkers(s, inPaste);
+      pastedLines += scan.lines;
+      inPaste = scan.inPaste;
+
+      if (scan.sawPaste) {
+        // Skip the per-keystroke work for every pasted character: the spinner
+        // repaint and the "/" menu are paid per key, and an ESC inside pasted
+        // text would otherwise cancel the turn in flight.
+        pasteKeysInFlight = true;
+        setImmediate(() => {
+          pasteKeysInFlight = false;
+        });
+      }
+    });
+  }
+
+  rl.on("line", (raw: string) => {
+    // Paste content. Hold it; do not open a turn for it.
+    if (pastedLines > 0) {
+      pastedLines -= 1;
+      pasteBuffer.push(raw);
+      if (pastedLines === 0) {
+        // Deferred a tick so the receipt lands after readline has finished
+        // echoing, rather than in the middle of it.
+        setImmediate(() => {
+          if (pasteBuffer.length === 0) return;
+          const held = pasteBuffer.length;
+          const chars = pasteBuffer.reduce((n, l) => n + l.length + 1, 0);
+          console.log(
+            paint(
+              uiOf(state),
+              "gray",
+              `  ⎘ pasted ${held} line${held === 1 ? "" : "s"}, ${chars} chars — held; Enter sends it as one turn`
+            )
+          );
+          rl.prompt(true);
+        });
+      }
+      return;
+    }
+
     menu.clear();
+
+    // Enter after a paste: the held lines and whatever is on the prompt line
+    // go out together, as a single input.
+    let line = raw;
+    if (pasteBuffer.length > 0) {
+      line = joinPastedBlock(pasteBuffer, raw);
+      pasteBuffer = [];
+    }
+
     if (notify) {
       const n = notify;
       notify = null;
@@ -3310,6 +3474,10 @@ export async function runPromptLoop(
     readline.emitKeypressEvents(process.stdin);
     process.stdin.on("keypress", (_chunk, key) => {
       if (picking) return; // the picker has its own key handling
+      // Pasted characters are not keystrokes. Without this a paste repainted
+      // the spinner once per character, and an ESC inside pasted text read as
+      // a request to cancel the turn.
+      if (pasteKeysInFlight) return;
       if (key && key.name === "escape" && cancelTurn) {
         cancelTurn();
         return;
