@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuditTrail, resolveAudit, verifyTrail, redact, recordHash, ResolvedAudit } from "./audit.js";
@@ -184,5 +184,38 @@ describe("recordHash", () => {
   it("changes when any recorded value changes", () => {
     const base = { seq: 1, ts: "t", kind: "turn" as const, prev: null, bucket: "result" };
     expect(recordHash({ ...base, bucket: "refusal" })).not.toBe(recordHash(base));
+  });
+});
+
+describe("a chained trail detects insertion", () => {
+  it("refuses a hash-less record appended to a chained trail", () => {
+    // verifyTrail skipped records with no hash, treating them as "chaining was
+    // off", and left `prev` untouched — so a fabricated record could be spliced
+    // into a genuine trail and the surrounding chain still validated. A trail
+    // that cannot detect an insertion is not tamper-evident, which is the one
+    // property this function exists to provide.
+    const t = new AuditTrail(settings(), "insert-test");
+    t.write("session_start", { surface_hash: "abc" });
+    t.write("turn", { role: "implementor" });
+    const p = join(settings().dir, "insert-test.jsonl");
+    expect(verifyTrail(p).ok).toBe(true);
+
+    const lines = readFileSync(p, "utf-8").split("\n").filter(Boolean);
+    lines.splice(1, 0, JSON.stringify({ kind: "turn", role: "forged" }));
+    writeFileSync(p, lines.join("\n") + "\n");
+
+    expect(verifyTrail(p).ok).toBe(false);
+  });
+
+  it("still accepts a trail written with chaining off", () => {
+    // The skip existed for a reason: an unchained trail has no hashes at all and
+    // must stay valid. Only a hash-less record inside a CHAINED trail is a break.
+    const p = join(settings().dir, "unchained.jsonl");
+    mkdirSync(settings().dir, { recursive: true });
+    writeFileSync(p, [
+      JSON.stringify({ kind: "session_start", surface_hash: "abc" }),
+      JSON.stringify({ kind: "turn", role: "implementor" }),
+    ].join("\n") + "\n");
+    expect(verifyTrail(p).ok).toBe(true);
   });
 });

@@ -242,6 +242,9 @@ export function verifyTrail(path: string): VerifyResult {
   const lines = readFileSync(path, "utf-8").split("\n").filter(Boolean);
   const broken: number[] = [];
   let prev: string | null = null;
+  // Whether this trail chains at all. Set by the first hashed record, so an
+  // unchained trail stays valid and a chained one cannot be diluted.
+  let chained = false;
 
   for (const [i, line] of lines.entries()) {
     let record: AuditRecord;
@@ -251,7 +254,18 @@ export function verifyTrail(path: string): VerifyResult {
       broken.push(i);
       continue;
     }
-    if (record.hash === undefined) continue; // chaining was off
+    if (record.hash === undefined) {
+      // A trail written with chaining off legitimately has no hashes — but a
+      // hash-less record inside a CHAINED trail is not "chaining was off", it is
+      // a record that verification cannot check. Skipping it silently meant
+      // fabricated records appended cleanly to a genuine tail: they were passed
+      // over, `prev` was left untouched, and the surrounding chain still
+      // validated. A trail that cannot detect an insertion is not tamper-evident,
+      // which is the one property this function exists to provide.
+      if (chained) broken.push(record.seq ?? i);
+      continue;
+    }
+    chained = true;
     if (record.hash !== recordHash(record) || record.prev !== prev) {
       broken.push(record.seq ?? i);
     }
