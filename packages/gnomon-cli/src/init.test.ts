@@ -197,7 +197,7 @@ describe("template hygiene", () => {
       expect(cfg.config.defaults?.approval).toBe("on_write");
       expect(cfg.config.routing?.mode).toBe("manual");
       expect(Array.isArray(cfg.config.ui?.meta)).toBe(true);
-      expect(cfg.roles.verifier?.tools).toEqual(["read", "glob", "grep", "compute", "todo", "bash"]);
+      expect(cfg.roles.verifier?.tools).toEqual(["read", "glob", "grep", "compute", "todo", "note", "bash"]);
       expect(Array.isArray(cfg.roles.verifier?.bash_allow)).toBe(true);
       expect(cfg.tools.tools?.map((t) => t.name)).toContain("skill");
     } finally {

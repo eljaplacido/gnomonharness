@@ -267,7 +267,7 @@ max_steps_total = 160
 # Widen this the moment it is wrong for your repo. A scope that refuses work
 # you actually wanted is a scope you will delete in frustration; a scope that
 # matches your layout is one you keep.
-tools = ["read", "glob", "grep", "compute", "todo", "task", "write", "skill"]
+tools = ["read", "glob", "grep", "compute", "todo", "note", "task", "write", "skill"]
 # Not .gnomon/**. The skill tool writes proposals to .gnomon/skills/proposed/
 # through its own path, and accepting one is a human act that changes the
 # surface hash. Letting a role reach .gnomon/skills/ with plain write would
@@ -282,7 +282,7 @@ temperature = 0.3
 top_p = 0.95
 max_steps = 32
 max_steps_total = 256
-tools = ["read", "glob", "grep", "compute", "todo", "write", "edit", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "note", "write", "edit", "bash"]
 # Operations whose damage is neither local nor undoable by re-running
 # something. This role has unrestricted bash by necessity — it runs builds,
 # installers and suites nobody can enumerate ahead of time — so the guardrail
@@ -308,7 +308,7 @@ max_steps = 20
 max_steps_total = 160
 # No write, no edit. A verifier that can edit can make a failing suite pass
 # by changing the suite, so the capability is simply absent.
-tools = ["read", "glob", "grep", "compute", "todo", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "note", "bash"]
 # 'bash' can write anything, so 'tools' alone cannot make this role
 # read-only. This list is what actually constrains it: the suite can be run,
 # nothing else. Remove it and the verifier can alter what it judges.
@@ -327,7 +327,7 @@ temperature = 0.2
 top_p = 0.9
 max_steps = 20
 max_steps_total = 160
-tools = ["read", "glob", "grep", "compute", "todo", "task", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "note", "task", "bash"]
 description = "Hardest reasoning, lowest call volume"
 
 [roles.implement]
@@ -338,7 +338,7 @@ top_p = 0.95
 max_steps = 28
 # Stated explicitly. An omitted list means every declared tool, which handed
 # this role \`skill\` as well and made "the coordinator authors skills" untrue.
-tools = ["read", "glob", "grep", "compute", "todo", "write", "edit", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "note", "write", "edit", "bash"]
 max_steps_total = 224
 # Operations whose damage is neither local nor undoable by re-running
 # something. This role has unrestricted bash by necessity — it runs builds,
@@ -363,7 +363,7 @@ temperature = 0.1
 top_p = 0.9
 max_steps = 16
 max_steps_total = 128
-tools = ["read", "glob", "grep", "compute", "todo", "bash"]
+tools = ["read", "glob", "grep", "compute", "todo", "note", "bash"]
 description = "Must not share context with the implementer"
 
 [roles.smol]
@@ -396,6 +396,14 @@ name = "bash"
 description = "Execute a POSIX sh command (/bin/sh, not bash: no pipefail, [[ ]] or arrays). Runs in the project root every time — cd does not persist between calls, so use absolute paths. To leave a service running past the call, detach it: setsid cmd </dev/null >/tmp/svc.log 2>&1 &"
 enabled = true
 timeout_seconds = 120
+
+# Outside the surface, like sessions and audit: a note changes no behaviour and
+# no hash, it only lets a long run remember what it already tried. Read back as
+# observation, never as instruction.
+[[tools]]
+name = "note"
+description = "Record a short fact this run learned — what you tried, what failed, what to avoid repeating. Later steps in this run will see it, including after context is compacted."
+enabled = true
 
 [[tools]]
 name = "todo"

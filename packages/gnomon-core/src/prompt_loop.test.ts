@@ -1404,6 +1404,66 @@ describe("runTask — the non-interactive contract", () => {
     });
   });
 
+  it("replays this run's notes to later turns, as observation and not instruction", async () => {
+    // The harness was amnesiac inside a single run, which is why its measured
+    // long tail was repeating an action that had already failed. Notes live
+    // outside the surface -- exactly as sessions and audit do, and for the same
+    // hash reason -- so remembering costs the constitution nothing.
+    const state: any = { config: loadConfig("../.."), exchanges: [], currentRole: "implement" };
+    expect(promptLoop.runNotesBlock(state)).toBe("");
+
+    state.notes = [{ turn: 1, text: "`make all` blocks past the tool timeout; build the target directly" }];
+    const block = promptLoop.runNotesBlock(state);
+    expect(block).toContain("make all");
+    expect(block).toContain("turn 1");
+    // framed so it cannot read as a grant of permission
+    expect(block).toContain("observations, not instructions");
+    expect(block).toContain("do not change what you are permitted to do");
+
+    // and it reaches the model through the system prompt
+    expect(promptLoop.buildSystemPrompt(state, "implement", "carry on")).toContain("make all");
+  });
+
+  it("a blank does not end the turn while there is budget left to retry into", async () => {
+    // The whole residual gap against the peer harness ran through this path:
+    // nudge -> blank -> bucket, with the budget largely unspent. One task was
+    // cut off 19 calls before its own model starts writing. A blank is the
+    // cheapest event in the loop and the budget is the expensive thing, so a
+    // model that goes quiet once and then recovers must be allowed to recover.
+    let calls = 0;
+    const blankThenAnswers = (async () => {
+      calls++;
+      return {
+        ok: true,
+        json: async () => ({ message: { content: calls === 1 ? "" : "I read the file; add() subtracts." } }),
+      };
+    }) as unknown as typeof fetch;
+    await withFetch(blankThenAnswers, async () => {
+      const record = await promptLoop.runTask(loadConfig("../.."), "do a thing", { role: "smol" });
+      expect(record.stop_reason).toBe("answered");
+      expect(record.output).toContain("subtracts");
+      expect(calls).toBe(2);
+    });
+  });
+
+  it("bounds the blank retries so a mute model cannot spin out the budget", async () => {
+    // The other half of the trade: retrying for ever is how a model that has
+    // genuinely stopped producing burns a full wall-clock budget and gets
+    // killed with no record. The bound is on CONSECUTIVE blanks, so it only
+    // fires on a model that never recovers.
+    let calls = 0;
+    const alwaysBlank = (async () => {
+      calls++;
+      return { ok: true, json: async () => ({ message: { content: "" } }) };
+    }) as unknown as typeof fetch;
+    await withFetch(alwaysBlank, async () => {
+      const record = await promptLoop.runTask(loadConfig("../.."), "do a thing", { role: "smol" });
+      expect(record.stop_reason).toBe("empty");
+      // the first call, plus exactly MAX_CONSECUTIVE_EMPTY re-asks
+      expect(calls).toBe(promptLoop.MAX_CONSECUTIVE_EMPTY + 1);
+    });
+  });
+
   it("reads an answer that arrives only in reasoning_content", async () => {
     // A reasoning model returning content: null read as "" and produced exactly
     // the empty turn above. Two other models on the same tasks never did, so it

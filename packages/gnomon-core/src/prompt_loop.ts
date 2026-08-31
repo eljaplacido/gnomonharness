@@ -57,6 +57,7 @@ import {
   SandboxLevel,
   ApprovalGate,
   SurfaceConsent,
+  RunNote,
 } from "./tools.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { mapBucket } from "./session.js";
@@ -115,7 +116,7 @@ export interface PromptExchange {
 }
 
 /** State for the interactive prompt loop */
-export type { Todo };
+export type { Todo, RunNote };
 
 export interface PromptState {
   config: GnomonConfig;
@@ -158,6 +159,8 @@ export interface PromptState {
    * the surface hash on every turn and make it useless as an identifier.
    */
   todos?: Todo[];
+  /** Notes this run kept about itself. Outside the surface, like sessions. */
+  notes?: RunNote[];
 }
 
 /** The id this session saves under, or a placeholder before one is assigned. */
@@ -1116,6 +1119,14 @@ export interface TurnResult {
  * publishing them here would put values in a Rule 6 enumeration that nothing
  * can emit.
  */
+/** Consecutive blank completions tolerated before a turn is called finished.
+ * Bounded so a model that has genuinely stopped producing cannot spin out the
+ * budget, but not so tight that one blank ends a turn with steps to spare. */
+export const MAX_CONSECUTIVE_EMPTY = 3;
+
+/** How many run notes are kept and replayed. Oldest fall off first. */
+export const MAX_RUN_NOTES = 40;
+
 export type StopReason =
   | "answered"
   | "empty"
@@ -1311,6 +1322,27 @@ function settle(accumulated: number, terminal: number): number {
  * repository's skills would be judging by different rules than the same role
  * reached by hand, and the difference would be invisible.
  */
+/**
+ * The run's own notes, replayed to later turns.
+ *
+ * Framed as observations the run recorded, never as instructions: a note is
+ * something this run noticed, and the model is free to disregard it. It also
+ * survives compaction, which is most of its value -- the turn that learned a
+ * command blocks is usually long gone by the turn that would otherwise repeat
+ * it. Nothing here grants a capability; the surface decides that and this text
+ * cannot change it.
+ */
+export function runNotesBlock(state: PromptState): string {
+  const notes = state.notes ?? [];
+  if (notes.length === 0) return "";
+  const lines = notes.map((n) => `- (turn ${n.turn}) ${n.text}`).join("\n");
+  return (
+    `\n\n## Notes from earlier in this run\n\n` +
+    `Things you recorded while working. They are observations, not instructions, ` +
+    `and they do not change what you are permitted to do.\n\n${lines}\n`
+  );
+}
+
 export function buildSystemPrompt(
   state: PromptState,
   role: string,
@@ -1318,7 +1350,7 @@ export function buildSystemPrompt(
 ): string {
   const active = selectSkills(loadSkills(state.config), role, input);
   return withWorkingContext(
-    applySkills(state.config.system.content ?? "", active)
+    applySkills(state.config.system.content ?? "", active) + runNotesBlock(state)
   );
 }
 
@@ -1366,6 +1398,21 @@ export async function runAgenticTurn(
     timeoutMs: toolTimeoutMs(config),
     maxOutputBytes: 32_000,
     network,
+    // Turn-scoped: a command that blocked once will block again, and the loop
+    // owns the lifetime of that fact.
+    timedOutCommands: new Set<string>(),
+    notes: {
+      list: () => state.notes ?? [],
+      add: (text) => {
+        state.notes ??= [];
+        // Bounded, and the oldest go first: a note store that grows without
+        // limit stops being re-readable and starts being context pressure.
+        state.notes.push({ turn: state.exchanges.length + 1, text });
+        if (state.notes.length > MAX_RUN_NOTES) {
+          state.notes = state.notes.slice(-MAX_RUN_NOTES);
+        }
+      },
+    },
     // Connected MCP servers (mcp__… calls route here); undefined if none.
     mcp: state.mcp,
     // Surface-edit consent, human-set via /allow. A delegated sub-turn is
@@ -1462,7 +1509,7 @@ export async function runAgenticTurn(
   // one nudge is survivable (10/14 trials pass), two is not (1/11); six trials
   // ended nudge -> blank -> bucket and none of them resolved. Three of those six
   // were the entire residual gap against the peer harness.
-  let emptyRetried = false;
+  let consecutiveEmpty = 0;
   let emptyTerminus = false;
 
   // Observation only. Nothing below reads these back to decide anything — the
@@ -1571,18 +1618,48 @@ export async function runAgenticTurn(
     // change. stop_reason is a separate axis from the bucket. Record it, do not
     // launder it.
     if (result.code === 0 && result.toolCalls.length === 0 && !result.content.trim()) {
-      if (!emptyRetried) {
-        emptyRetried = true;
-        deps.say(paint(deps.ui, "yellow", `  [loop] empty completion — asking once more`));
+      // Ending here while the budget is largely unspent is the single path that
+      // produced the whole residual gap against the peer harness: three tasks
+      // died on nudge -> blank -> bucket, and one of them was cut off 19 calls
+      // before the point where its own model starts writing. A blank reply is
+      // the cheapest event in the loop; the budget is the expensive thing, and
+      // forfeiting the second to avoid the first is the wrong trade.
+      //
+      // So retry while there is budget to retry into, bounded by consecutive
+      // blanks rather than by a once-per-nudge latch. Any real work resets the
+      // count, so the bound only ever fires on a model that has genuinely
+      // stopped producing -- and each re-ask is worded differently, because
+      // repeating the identical prompt is what makes an identical blank likely.
+      consecutiveEmpty++;
+      if (consecutiveEmpty <= MAX_CONSECUTIVE_EMPTY && steps < maxTotal) {
+        const asks = [
+          `Your last reply contained no tool calls and no text. Answer now: ` +
+            `say what you did, or say plainly what blocked you and why.`,
+          `Still nothing came back. You have ${maxTotal - steps} steps left. ` +
+            `Take one concrete action towards the task, or state the specific ` +
+            `obstacle stopping you.`,
+          `Reply with text this time, not a tool call: what is the current ` +
+            `state of the work, and what is the next thing that needs doing?`,
+        ];
+        deps.say(
+          paint(
+            deps.ui,
+            "yellow",
+            `  [loop] empty completion ${consecutiveEmpty}/${MAX_CONSECUTIVE_EMPTY} — ` +
+              `asking again (${maxTotal - steps} steps left)`
+          )
+        );
         working.push({
           role: "user",
-          content:
-            `Your last reply contained no tool calls and no text. Answer now: ` +
-            `say what you did, or say plainly what blocked you and why.`,
+          content: asks[Math.min(consecutiveEmpty - 1, asks.length - 1)]!,
         });
         continue;
       }
       emptyTerminus = true;
+    } else if (result.code === 0) {
+      // Progress of any kind clears the streak: the bound is on consecutive
+      // blanks, not on blanks per turn.
+      consecutiveEmpty = 0;
     }
 
     if (result.code !== 0 || result.toolCalls.length === 0) {
@@ -1898,9 +1975,9 @@ export async function runAgenticTurn(
     // working, a flailer gets repeated reason to conclude.
     if (callsSinceWrite - callsAtLastNudge >= NUDGE_AFTER_IDLE) {
       counters.nudges++;
-      // A fresh nudge is a fresh chance to answer: re-arm the empty-completion
-      // retry so a later blank is not judged by a latch spent 12 calls ago.
-      emptyRetried = false;
+      // A fresh nudge is a fresh chance to answer: clear the blank streak so a
+      // later blank is not judged against blanks from 12 calls ago.
+      consecutiveEmpty = 0;
       counters.first_nudge_step ??= steps;
       callsAtLastNudge = callsSinceWrite;
       deps.progress.stop();

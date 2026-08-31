@@ -126,6 +126,15 @@ const IMPLEMENTED: Record<string, Record<string, unknown>> = {
     },
     ["url"]
   ),
+  note: obj(
+    {
+      text: str(
+        "One short fact this run learned — what you tried, what failed, what " +
+          "not to repeat. Later steps see it, including after compaction."
+      ),
+    },
+    ["text"]
+  ),
   todo: {
     type: "object",
     properties: {
@@ -713,6 +722,48 @@ export interface ToolContext {
    * the loop, which owns the server processes' lifetime.
    */
   mcp?: McpRegistry;
+  /**
+   * Commands that already hit the bash timeout this turn.
+   *
+   * Both the tool description and the timeout message tell the model to detach
+   * a long command and poll it. It does not: the measured long tail is a model
+   * re-running the same blocking command until the wall, at full timeout cost
+   * each time. This harness's own pillar is capability over instruction, and
+   * two rounds of instruction is the evidence that prose was the wrong lever.
+   *
+   * Supplied by the loop, which owns turn-scoped state.
+   */
+  timedOutCommands?: Set<string>;
+  /**
+   * The run's scratch notes. Supplied by the loop, which owns session state.
+   * Absent means the tool is unavailable rather than silently forgetful.
+   */
+  notes?: NoteStore;
+}
+
+/** One thing the run learned about itself, written by the model as it worked. */
+export interface RunNote {
+  /** Turn the note was written on, for ordering and for the audit record. */
+  turn: number;
+  text: string;
+}
+
+/**
+ * The run's own notes: what has been tried, what did not work, what to avoid.
+ *
+ * DESIGN.md forbids an agent rewriting its own SKILLS mid-session, because that
+ * would change the surface hash underneath the run that changed it. That
+ * argument is correct and this does not violate it: notes live outside the
+ * surface, exactly as `.gnomon-sessions/` and `.gnomon-audit/` already do, for
+ * exactly the same reason. They are read back as observation, never as
+ * instruction, and they cannot grant a capability the surface withheld.
+ *
+ * Without this the harness is amnesiac inside a single run -- which is why its
+ * measured long tail was repeating an action that had already failed.
+ */
+export interface NoteStore {
+  list(): RunNote[];
+  add(text: string): void;
 }
 
 /** One item on the session checklist. */
@@ -977,6 +1028,27 @@ async function bashTool(
     }
   }
 
+  // A command that already timed out this turn will time out again, and the
+  // second 120s buys exactly the information the first one did. Refuse it
+  // instead, and say what would work -- a declared refusal, at no wall cost,
+  // rather than a fourth identical stall.
+  const commandKey = command.trim().replace(/\s+/g, " ");
+  if (ctx.timedOutCommands?.has(commandKey)) {
+    return {
+      code: TOOL_FAILED,
+      content:
+        `Refused: this exact command already timed out after ${ctx.timeoutMs}ms in this turn, ` +
+        `so running it unchanged will time out again and spend the same budget for the same result.\n\n` +
+        `Do one of these instead:\n` +
+        `  - start it in the background and poll the log:\n` +
+        `      setsid ${command.trim().split("\n")[0]} </dev/null >/tmp/gnomon-job.log 2>&1 & echo $!\n` +
+        `    then read /tmp/gnomon-job.log on a later step\n` +
+        `  - narrow it so it finishes inside the limit (a single test, a smaller range)\n` +
+        `  - or say plainly that this step cannot be completed within the tool timeout.`,
+      summary: `bash — refused (already timed out this turn)`,
+    };
+  }
+
   // Pinned before the command runs so drift can be attributed to it. See
   // surfaceHashOf: bash is arbitrary shell, so the surface is detected moving
   // rather than prevented from moving.
@@ -1026,6 +1098,8 @@ async function bashTool(
         .join("\n");
       const drift = surfaceDrift(ctx, surfaceBefore);
       const movedTree = worktreeMoved(ctx, worktreeBefore, shellCwd);
+      // So the next identical call is refused for free rather than stalling.
+      ctx.timedOutCommands?.add(commandKey);
       done({
         code: TOOL_FAILED,
         worktree_changed: movedTree,
@@ -2364,6 +2438,38 @@ async function skillTool(
  * A tool the surface does not offer returns a refusal naming it, rather than
  * being ignored — the model is told why nothing happened.
  */
+/**
+ * Record something this run learned, for later steps in the same run to read.
+ *
+ * Deliberately not a memory of everything: a note is a short, deliberate line
+ * the model chose to keep, which is what makes the block worth re-reading. The
+ * cap is on the store, not on the model's enthusiasm.
+ */
+export function noteTool(args: Record<string, unknown>, ctx: ToolContext): ToolOutcome {
+  const text = typeof args.text === "string" ? args.text.trim() : "";
+  if (!text) {
+    return {
+      code: TOOL_FAILED,
+      content: "Refused: `note` needs a non-empty `text`.",
+      summary: "note — empty",
+    };
+  }
+  if (!ctx.notes) {
+    return {
+      code: TOOL_FAILED,
+      content: "Refused: this build supplied no note store, so a note would be silently dropped.",
+      summary: "note — unavailable",
+    };
+  }
+  ctx.notes.add(text);
+  const n = ctx.notes.list().length;
+  return {
+    code: 0,
+    content: `Noted (${n} note${n === 1 ? "" : "s"} this run).`,
+    summary: `note — ${text.slice(0, 60)}`,
+  };
+}
+
 export async function executeTool(
   name: string,
   args: Record<string, unknown>,
@@ -2445,6 +2551,8 @@ async function dispatch(
       return webfetchTool(args, ctx);
     case "todo":
       return todoTool(args, ctx);
+    case "note":
+      return noteTool(args, ctx);
     case "compute":
       return computeTool(args, ctx);
     case "glob":

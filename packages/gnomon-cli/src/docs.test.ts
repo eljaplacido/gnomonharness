@@ -99,15 +99,15 @@ describe("documented defaults are the actual defaults", () => {
       const config = loadConfig(root);
       // | `coordinator` | `read`, `glob`, `grep`, `write`, `skill` |
       expect(config.roles.coordinator?.tools).toEqual([
-        "read", "glob", "grep", "compute", "todo", "task", "write", "skill",
+        "read", "glob", "grep", "compute", "todo", "note", "task", "write", "skill",
       ]);
       // | `implementor` | read, glob, grep, write, edit, bash |
       expect(config.roles.implementor?.tools).toEqual([
-        "read", "glob", "grep", "compute", "todo", "write", "edit", "bash",
+        "read", "glob", "grep", "compute", "todo", "note", "write", "edit", "bash",
       ]);
       // | `verifier` | read, glob, grep, bash (allow-listed) |
       expect(config.roles.verifier?.tools).toEqual([
-        "read", "glob", "grep", "compute", "todo", "bash",
+        "read", "glob", "grep", "compute", "todo", "note", "bash",
       ]);
       // Search is read-only, so giving it to the verifier widens nothing: it
       // still cannot write, and it no longer needs bash to find a file.
@@ -155,7 +155,7 @@ describe("documented defaults are the actual defaults", () => {
       // The README's tool table, minus `webfetch`: it is declared with
       // enabled = false, because reaching the network is opt-in.
       expect(set.schemas.map((t) => t.function.name).sort()).toEqual(
-        ["bash", "compute", "edit", "glob", "grep", "read", "skill", "task", "todo", "write"]
+        ["bash", "compute", "edit", "glob", "grep", "note", "read", "skill", "task", "todo", "write"]
       );
       // Declared-but-disabled is reported, never silently dropped.
       expect(set.disabled).toContain("webfetch");

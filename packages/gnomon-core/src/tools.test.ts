@@ -318,6 +318,50 @@ describe("bash", () => {
     expect(out.content).toContain("bytes dropped from the middle");
   });
 
+  it("note records what the run learned, and refuses to drop it silently", async () => {
+    const kept: any[] = [];
+    const withNotes = ctx({
+      notes: { list: () => kept, add: (t: string) => { kept.push({ turn: 1, text: t }); } },
+    });
+    const offeredWithNote = new Set([...offered, "note"]);
+    const ok = await executeTool("note", { text: "pytest -k slow exceeds the tool timeout" }, withNotes, offeredWithNote);
+    expect(ok.code).toBe(0);
+    expect(kept).toHaveLength(1);
+
+    const empty = await executeTool("note", { text: "   " }, withNotes, offeredWithNote);
+    expect(empty.code).toBe(TOOL_FAILED);
+
+    // A build with no store must say so rather than accept and discard.
+    const noStore = await executeTool("note", { text: "something" }, ctx({}), offeredWithNote);
+    expect(noStore.code).toBe(TOOL_FAILED);
+    expect(noStore.content).toContain("silently dropped");
+  });
+
+  it("refuses a command that already timed out, instead of stalling on it again", async () => {
+    // The measured long tail is a model re-running the same blocking command
+    // until the wall, paying the full timeout every time. Both the tool
+    // description and the timeout message already tell it to detach and poll,
+    // which is the evidence that prose was the wrong lever. The second attempt
+    // now costs nothing and comes back with the recipe.
+    const timedOutCommands = new Set<string>();
+    const c = ctx({ timeoutMs: 150, timedOutCommands });
+
+    const first = await executeTool("bash", { command: "sleep 5" }, c, offered);
+    expect(first.code).toBe(TOOL_FAILED);
+    expect(timedOutCommands.size).toBe(1);
+
+    const began = Date.now();
+    const second = await executeTool("bash", { command: "  sleep   5  " }, c, offered);
+    const elapsed = Date.now() - began;
+
+    expect(second.code).toBe(TOOL_FAILED);
+    expect(second.summary).toContain("already timed out");
+    // whitespace-normalised, so a cosmetically different retry is still caught
+    expect(second.content).toContain("setsid");
+    // and it refused immediately rather than spending the timeout a second time
+    expect(elapsed).toBeLessThan(100);
+  });
+
   it("a timed-out command leaves no live orphan behind", async () => {
     // shell:true means the direct child is `sh -c`; killing only that would
     // leave the real work running. The marker file appears only if the

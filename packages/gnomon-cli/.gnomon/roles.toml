@@ -1,0 +1,148 @@
+# Role routing — model, endpoint, and tool scope per role.
+#
+# These tags were detected at 'gnomon init' time on this machine.
+# Found: gemma3-4b:latest (3.9B), nemotron-3-nano:4b (4B), qwen2.5:7b-instruct (7.6B), qwen2.5:14b-instruct (14.8B), nemotron-3-nano:30b-a3b-q4_K_M (31.6B), deepseek-r1:32b-qwen-distill-q4_K_M (32.8B), qwen3.6:35b (36B), nemotron-3-super:120b-a12b-q4_K_M (123.6B), qwen3.5:122b-a10b-q4_K_M (125.1B).
+# Detection ran once, here; the tags below are now fixed data like any
+# other part of the surface.
+#
+# These are concrete backend tags, not aliases: an alias would have to be
+# resolved per machine, which is the machine-scoped config this harness
+# forbids. Change any of them freely — `/models` lists what is available.
+#
+# `endpoint` names a block from [endpoints] in config.toml (default "local").
+# `tools` narrows what the role may call. Omit it for every declared tool;
+# an empty list means none.
+
+# ── The specify → contract → test → implement → verify loop ────────────────
+# Three roles, separated by what they are allowed to touch. The separation is
+# enforced by the tool list, not by asking the model nicely.
+
+[roles.coordinator]
+model = "qwen3.6:35b"
+endpoint = "local"
+temperature = 0.2
+top_p = 0.9
+max_steps = 20
+max_steps_total = 160
+# Reads the repo and writes specs/contracts. Two things hold that to be true:
+# no edit, so it cannot revise existing code in place, and write_allow, so the
+# files it may create are the ones a planning turn produces. Without the second
+# it could still write src/main.rs — withholding edit narrows how a role can
+# change code, not whether it can.
+#
+# Widen this the moment it is wrong for your repo. A scope that refuses work
+# you actually wanted is a scope you will delete in frustration; a scope that
+# matches your layout is one you keep.
+tools = ["read", "glob", "grep", "compute", "todo", "task", "write", "skill"]
+# Not .gnomon/**. The skill tool writes proposals to .gnomon/skills/proposed/
+# through its own path, and accepting one is a human act that changes the
+# surface hash. Letting a role reach .gnomon/skills/ with plain write would
+# let it grant itself a standing instruction and skip that entirely.
+write_allow = ["docs/**", "specs/**", "*.md"]
+description = "Intent and contracts: turns a request into a spec"
+
+[roles.implementor]
+model = "qwen3.6:35b"
+endpoint = "local"
+temperature = 0.3
+top_p = 0.95
+max_steps = 32
+max_steps_total = 256
+tools = ["read", "glob", "grep", "compute", "todo", "write", "edit", "bash"]
+# Operations whose damage is neither local nor undoable by re-running
+# something. This role has unrestricted bash by necessity — it runs builds,
+# installers and suites nobody can enumerate ahead of time — so the guardrail
+# is a deny-list rather than an allow-list. Deny wins over allow.
+#
+# Not a substitute for branch protection on the remote: that is the control
+# that binds everyone, and this one only binds the agent. It is the local half.
+bash_deny = [
+  '\bgit\s+push\b[^|;&]*\s(--force|-f)\b',            # force-push, any branch
+  '\bgit\s+push\b[^|;&]*\s(main|master|release)\b',   # straight onto a release branch
+  '\bgit\s+push\b[^|;&]*--delete\b',                   # deleting a branch on the remote
+  '\bgit\s+branch\b[^|;&]*\s-D\b',                    # discarding an unmerged branch
+]
+
+description = "Tests first, then the code that satisfies them"
+
+[roles.verifier]
+model = "qwen3.6:35b"
+endpoint = "local"
+temperature = 0.1
+top_p = 0.9
+max_steps = 20
+max_steps_total = 160
+# No write, no edit. A verifier that can edit can make a failing suite pass
+# by changing the suite, so the capability is simply absent.
+tools = ["read", "glob", "grep", "compute", "todo", "bash"]
+# 'bash' can write anything, so 'tools' alone cannot make this role
+# read-only. This list is what actually constrains it: the suite can be run,
+# nothing else. Remove it and the verifier can alter what it judges.
+bash_allow = [
+  '^(cargo|pnpm|npm|yarn|pytest|python -m pytest|go|make)\s',
+  '^(ls|cat|head|tail|grep|rg|find|git (status|diff|log|show))\s',
+]
+description = "Runs the suite and reports. Cannot write."
+
+# ── General-purpose roles ──────────────────────────────────────────────────
+
+[roles.plan]
+model = "qwen3.6:35b"
+endpoint = "local"
+temperature = 0.2
+top_p = 0.9
+max_steps = 20
+max_steps_total = 160
+tools = ["read", "glob", "grep", "compute", "todo", "task", "bash"]
+description = "Hardest reasoning, lowest call volume"
+
+[roles.implement]
+model = "qwen3.6:35b"
+endpoint = "local"
+temperature = 0.3
+top_p = 0.95
+max_steps = 28
+# Stated explicitly. An omitted list means every declared tool, which handed
+# this role `skill` as well and made "the coordinator authors skills" untrue.
+tools = ["read", "glob", "grep", "compute", "todo", "write", "edit", "bash"]
+max_steps_total = 224
+# Operations whose damage is neither local nor undoable by re-running
+# something. This role has unrestricted bash by necessity — it runs builds,
+# installers and suites nobody can enumerate ahead of time — so the guardrail
+# is a deny-list rather than an allow-list. Deny wins over allow.
+#
+# Not a substitute for branch protection on the remote: that is the control
+# that binds everyone, and this one only binds the agent. It is the local half.
+bash_deny = [
+  '\bgit\s+push\b[^|;&]*\s(--force|-f)\b',            # force-push, any branch
+  '\bgit\s+push\b[^|;&]*\s(main|master|release)\b',   # straight onto a release branch
+  '\bgit\s+push\b[^|;&]*--delete\b',                   # deleting a branch on the remote
+  '\bgit\s+branch\b[^|;&]*\s-D\b',                    # discarding an unmerged branch
+]
+
+description = "Highest token volume — where local hosting pays off"
+
+[roles.critique]
+model = "qwen3.6:35b"
+endpoint = "local"
+temperature = 0.1
+top_p = 0.9
+max_steps = 16
+max_steps_total = 128
+tools = ["read", "glob", "grep", "compute", "todo", "bash"]
+description = "Must not share context with the implementer"
+
+[roles.smol]
+model = "qwen2.5:7b-instruct"
+endpoint = "local"
+temperature = 0.2
+top_p = 0.95
+max_steps = 6
+tools = ["read", "glob", "grep", "compute", "todo"]
+max_steps_total = 48
+description = "Summarisation, compaction, commit messages"
+
+# A second endpoint, tried when the primary fails or times out.
+# [roles.implement.fallback]
+# model = "qwen3-coder"
+# endpoint = "zen"

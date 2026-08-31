@@ -191,9 +191,9 @@ deliberately different reach.
 
 | Role | Tools | Cannot |
 |---|---|---|
-| `coordinator` | `read`, `glob`, `grep`, `compute`, `todo`, `task`, `write`, `skill` | **edit**, and every path outside `write_allow` — so a planning turn can neither revise code nor create it |
-| `implementor` | `read`, `glob`, `grep`, `compute`, `todo`, `write`, `edit`, `bash` | — |
-| `verifier` | `read`, `glob`, `grep`, `compute`, `todo`, `bash` (allow-listed) | **write, edit** — cannot alter what it judges |
+| `coordinator` | `read`, `glob`, `grep`, `compute`, `todo`, `note`, `task`, `write`, `skill` | **edit**, and every path outside `write_allow` — so a planning turn can neither revise code nor create it |
+| `implementor` | `read`, `glob`, `grep`, `compute`, `todo`, `note`, `write`, `edit`, `bash` | — |
+| `verifier` | `read`, `glob`, `grep`, `compute`, `todo`, `note`, `bash` (allow-listed) | **write, edit** — cannot alter what it judges |
 
 That separation is real and testable. Ask the verifier to create a file and it
 cannot: there is no `write` tool in what it was offered. Ask it to do the same
@@ -231,7 +231,7 @@ reach, and you confirm:
 
 ```
   ⇢ suggest: implement → coordinator  (intent and contracts)
-    coordinator can use: read, glob, grep, compute, todo, task, write, skill
+    coordinator can use: read, glob, grep, compute, todo, note, task, write, skill
   └ [y]es once · [a]lways · [N]o
 ```
 
@@ -716,7 +716,7 @@ enabled = true
 timeout_seconds = 120
 ```
 
-Implemented tools: `read`, `glob`, `grep`, `compute`, `todo`, `task`,
+Implemented tools: `read`, `glob`, `grep`, `compute`, `todo`, `note`, `task`,
 `webfetch`, `bash`, `write`, `edit`, `skill`. A tool that is
 declared but disabled, unimplemented, or withheld from the current role is
 **named at startup** — never quietly dropped.
@@ -842,9 +842,9 @@ rather than by instruction**:
 
 | Role | Tools | Why |
 |---|---|---|
-| `coordinator` | `read`, `glob`, `grep`, `compute`, `todo`, `task`, `write`, `skill` | Specs and contracts. No `edit`, so planning cannot quietly become a code change. |
-| `implementor` | `read`, `glob`, `grep`, `compute`, `todo`, `write`, `edit`, `bash` | Tests first, then the code that satisfies them. |
-| `verifier` | `read`, `glob`, `grep`, `compute`, `todo`, `bash` (allow-listed) | Runs the suite. Cannot alter what it judges. |
+| `coordinator` | `read`, `glob`, `grep`, `compute`, `todo`, `note`, `task`, `write`, `skill` | Specs and contracts. No `edit`, so planning cannot quietly become a code change. |
+| `implementor` | `read`, `glob`, `grep`, `compute`, `todo`, `note`, `write`, `edit`, `bash` | Tests first, then the code that satisfies them. |
+| `verifier` | `read`, `glob`, `grep`, `compute`, `todo`, `note`, `bash` (allow-listed) | Runs the suite. Cannot alter what it judges. |
 
 Plus `plan`, `implement`, `critique`, `smol` for general use.
 
@@ -872,7 +872,7 @@ reach, and waits:
 
 ```
   ⇢ suggest: implement → coordinator  (intent and contracts)
-    coordinator can use: read, glob, grep, compute, todo, task, write, skill
+    coordinator can use: read, glob, grep, compute, todo, note, task, write, skill
   └ [y]es once · [a]lways · [N]o  (Enter keeps implement)
 ```
 
@@ -905,6 +905,7 @@ and repeats until it answers in prose — bounded by `max_steps`.
 | `grep` | Lines matching a regex, as `path:line:text` | no |
 | `compute` | Exact arithmetic | no |
 | `todo` | The session checklist | no |
+| `note` | Record a fact this run learned, for later steps to read | no |
 | `bash` | Shell command in the repo root | **yes** |
 | `write` | Create or overwrite a file | yes |
 | `edit` | Exact text replacement; must match **exactly once** | yes |
