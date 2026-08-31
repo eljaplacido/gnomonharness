@@ -138,7 +138,13 @@ role routing, `hashline` edit format. You stop reaching for other agents.
   - [x] Push-triggered on master/develop, PR-triggered on master
   - [x] Build badges in README
 - [ ] aarch64 build step (Docker or cross-compile)
-- [ ] Code coverage threshold (80%+)
+- [~] Code coverage — **measured 2026-08-31**, not yet enforced. `pnpm run coverage`.
+      gnomon-core: 75.4% statements, 80.8% branches, 92.7% functions. The gap is
+      concentrated in one place: `prompt_loop.ts` at **50.1%**, almost entirely
+      the interactive loop (lines 3914-5121). Everything else is healthy —
+      audit.ts 94%, config.ts 92.6%, render.ts 93.3%, tools.ts 82%. That the
+      least-tested file is the control loop is worth stating plainly: it is
+      where most of the 2026-08-31 audit's defects were found.
 
 ---
 
@@ -195,4 +201,10 @@ Ordered by what a day of real use runs into first.
 - [ ] **Repo map.** Context is a sliding window over turns, not a ranked view
       of the repository.
 - [ ] aarch64 static binary (`musl` or Docker cross-compile)
-- [ ] Code coverage threshold (80%+)
+- [~] Code coverage — **measured 2026-08-31**, not yet enforced. `pnpm run coverage`.
+      gnomon-core: 75.4% statements, 80.8% branches, 92.7% functions. The gap is
+      concentrated in one place: `prompt_loop.ts` at **50.1%**, almost entirely
+      the interactive loop (lines 3914-5121). Everything else is healthy —
+      audit.ts 94%, config.ts 92.6%, render.ts 93.3%, tools.ts 82%. That the
+      least-tested file is the control loop is worth stating plainly: it is
+      where most of the 2026-08-31 audit's defects were found.
