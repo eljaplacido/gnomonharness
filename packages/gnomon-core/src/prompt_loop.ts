@@ -60,6 +60,7 @@ import {
   ApprovalGate,
   SurfaceConsent,
   RunNote,
+  concurrentSafe,
 } from "./tools.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { mapBucket } from "./session.js";
@@ -2019,7 +2020,31 @@ export async function runAgenticTurn(
       }
     }
 
-    for (const call of result.toolCalls) {
+    // Launch consecutive read-only calls together.
+    //
+    // The loop executed strictly one call at a time, and a turn's calls bunch
+    // during recon -- read five files, then decide. Overlapping those is one of
+    // the three levers ForgeCode reports for the same model, and it is the only
+    // one that costs nothing in behaviour: the tools in CONCURRENT_SAFE cannot
+    // write, spawn, reach the network, or touch session state, so running two
+    // at once cannot change the result of either.
+    //
+    // Results are consumed in DECLARED order below, whatever order they finish
+    // in, so every counter, the tool log and the transcript are byte-identical
+    // to the sequential path. That is what keeps the determinism result honest:
+    // this is a wall-clock change, not a behaviour change.
+    const prefetched = new Map<number, Promise<ToolOutcome>>();
+    if (!deps.signal?.aborted) {
+      for (let i = 0; i < result.toolCalls.length; i++) {
+        const call = result.toolCalls[i]!;
+        if (!concurrentSafe(call.name) || !offered.has(call.name)) break;
+        prefetched.set(i, executeTool(call.name, call.args, ctx, offered));
+      }
+      // One safe call on its own gains nothing and only adds a code path.
+      if (prefetched.size < 2) prefetched.clear();
+    }
+
+    for (const [callIndex, call] of result.toolCalls.entries()) {
       // Stop between tools rather than mid-write: a cancelled turn should
       // never leave a half-applied change.
       if (deps.signal?.aborted) {
@@ -2045,7 +2070,9 @@ export async function runAgenticTurn(
         );
       }
 
-      const outcome: ToolOutcome = await executeTool(call.name, call.args, ctx, offered);
+      const outcome: ToolOutcome =
+        (await prefetched.get(callIndex)) ??
+        (await executeTool(call.name, call.args, ctx, offered));
       code = worse(code, outcome.code);
       toolLog.push(outcome.summary);
       tally(call.name, "calls");

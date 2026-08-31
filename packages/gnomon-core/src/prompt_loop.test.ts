@@ -1550,6 +1550,50 @@ describe("runTask — the non-interactive contract", () => {
     });
   }, 20000);
 
+  it("overlaps consecutive read-only calls without changing the transcript", async () => {
+    // Recon is where a turn's calls bunch -- read several files, then decide --
+    // and the loop ran them strictly one at a time. Overlapping only the tools
+    // that cannot write, spawn, reach the network or touch session state is the
+    // one ForgeCode lever that costs nothing in behaviour.
+    //
+    // The property that matters is not speed, it is that the ORDER of results
+    // is the declared order whatever order they finish in. Otherwise this would
+    // buy wall-clock at the cost of the determinism result.
+    const dir = mkdtempSync(join(tmpdir(), "par-"));
+    for (const n of ["a", "b", "c"]) writeFileSync(join(dir, `${n}.txt`), `content-${n}\n`);
+    const config: any = loadConfig("../..");
+    let call = 0;
+    const readsThenAnswer = (async () => {
+      call++;
+      if (call === 1) {
+        return {
+          ok: true,
+          json: async () => ({
+            message: {
+              content: "",
+              tool_calls: ["a", "b", "c"].map((n) => ({
+                function: { name: "read", arguments: { path: join(dir, `${n}.txt`) } },
+              })),
+            },
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ message: { content: "read them all" } }) };
+    }) as unknown as typeof fetch;
+
+    await withFetch(readsThenAnswer, async () => {
+      const record = await promptLoop.runTask(config, "read the files", { role: "implement", yes: true });
+      expect(record.output).toContain("read them all");
+      // declared order, regardless of which read resolved first
+      const reads = record.tool_log.filter((l: string) => l.startsWith("read "));
+      expect(reads).toHaveLength(3);
+      expect(reads[0]).toContain("a.txt");
+      expect(reads[1]).toContain("b.txt");
+      expect(reads[2]).toContain("c.txt");
+    });
+    rmSync(dir, { recursive: true, force: true });
+  }, 20000);
+
   it("catches a two-call poll loop, not just verbatim repetition", async () => {
     // (the real loop alternated `sleep 5` and `ps aux | grep make`; these are
     // instant stand-ins with the same signature pattern)

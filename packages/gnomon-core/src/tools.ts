@@ -442,6 +442,31 @@ export type SurfaceConsent = "strict" | "custom" | "all";
 /** Tools that can change something outside the model's own context. */
 const MUTATING = new Set(["bash", "write", "edit", "skill", "webfetch", "task"]);
 
+/**
+ * Tools that may run CONCURRENTLY with each other.
+ *
+ * Deliberately narrower than "not MUTATING". A tool qualifies only if running
+ * two of them at once cannot change the result of either: no filesystem writes,
+ * no process spawning, no network, no shared harness state. `todo` and `note`
+ * are excluded despite being harmless to the repository, because they mutate
+ * session state and two concurrent writers would race for last-write-wins.
+ * `mcp__*` is excluded because this harness cannot know what a foreign server
+ * does.
+ *
+ * Recon is where a turn's calls actually bunch -- reading five files to decide
+ * what to change -- so this is where the wall-clock is, and it is exactly the
+ * set that is safe.
+ *
+ * Determinism is preserved by assembling results in DECLARED order regardless
+ * of completion order, so a surface still produces the same transcript.
+ */
+export const CONCURRENT_SAFE = new Set(["read", "glob", "grep", "compute"]);
+
+/** Whether a batch of calls may be executed together. */
+export function concurrentSafe(name: string): boolean {
+  return CONCURRENT_SAFE.has(name);
+}
+
 /** Whether a call needs sign-off under the configured gate. */
 /**
  * Whether a call needs sign-off under the configured gate.
