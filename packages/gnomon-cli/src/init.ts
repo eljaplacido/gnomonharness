@@ -400,7 +400,7 @@ enabled = true
 
 [[tools]]
 name = "bash"
-description = "Execute a POSIX sh command (/bin/sh, not bash: no pipefail, [[ ]] or arrays). Runs in the project root every time — cd does not persist between calls, so use absolute paths. To leave a service running past the call, detach it: setsid cmd </dev/null >/tmp/svc.log 2>&1 &"
+description = "Execute a POSIX sh command (/bin/sh, not bash: no pipefail, [[ ]] or arrays). Runs in the project root every time — cd does not persist between calls, so use absolute paths. To leave a service running past the call, detach it into a log this harness can read: mkdir -p .gnomon-jobs && setsid sh -c 'cmd' </dev/null >.gnomon-jobs/svc.log 2>&1 &"
 enabled = true
 timeout_seconds = 120
 

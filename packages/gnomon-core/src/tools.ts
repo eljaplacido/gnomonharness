@@ -1224,7 +1224,9 @@ async function bashTool(
         content:
           `Command timed out after ${ctx.timeoutMs}ms and was killed. Output captured before the kill:\n` +
           clampEnds(captured, ctx.maxOutputBytes) +
-          `\n\nIt did not finish, so this output is partial. Re-running it unchanged will time out again: narrow it, or start it in the background and poll (\`cmd > /tmp/out.log 2>&1 & echo $!\`, then read the log).` +
+          `\n\nIt did not finish, so this output is partial. Re-running it unchanged will time out again: ` +
+          `narrow it, or start it in the background and poll:\n      ${backgroundRecipe(command)}\n` +
+          `    then read ${JOB_LOG_DIR}/job.log on a later step.` +
           (drift ? `\n\n${drift.notice}` : ""),
         summary: `bash — timeout${drift ? " · surface changed" : ""}`,
         surface_drift: drift ?? undefined,
@@ -2691,9 +2693,15 @@ function releasePipes(proc: { stdout?: unknown; stderr?: unknown; unref?: () => 
   proc.unref?.();
 }
 
-export function backgroundRecipe(command: string, log = "/tmp/gnomon-job.log"): string {
+export const JOB_LOG_DIR = ".gnomon-jobs";
+
+export function backgroundRecipe(command: string, log = `${JOB_LOG_DIR}/job.log`): string {
   const quoted = `'${command.trim().replace(/'/g, `'\\''`)}'`;
-  return `setsid sh -c ${quoted} </dev/null >${log} 2>&1 & echo $!`;
+  // Project-relative, NOT /tmp. The advice used to name /tmp, and `read` refuses
+  // /tmp under the default confined sandbox -- so following the harness's own
+  // instructions produced a log the harness could not then read. Beside the
+  // surface, like .gnomon-sessions/ and .gnomon-audit/.
+  return `mkdir -p ${JOB_LOG_DIR} && setsid sh -c ${quoted} </dev/null >${log} 2>&1 & echo $!`;
 }
 
 /**

@@ -158,7 +158,7 @@ flowchart LR
     SURFACE --> T1
     T2 --> T1
     T2 --> RS
-    T1 --> OUT["outside the surface:<br/>.gnomon-sessions/<br/>.gnomon-audit/"]
+    T1 --> OUT["outside the surface:<br/>.gnomon-sessions/<br/>.gnomon-audit/<br/>.gnomon-jobs/"]
 ```
 
 **Rust owns the surface hash.** `gnomon-surface` is the authority on what a
@@ -373,7 +373,7 @@ Two things to do straight after:
    the smallest one still big enough to summarise for `smol`. It records what
    it found and why, in the file. If nothing was reachable it falls back to
    generic tags and says so, and those will very likely be wrong.
-2. **Add `.gnomon-sessions/` and `.gnomon-audit/` to `.gitignore`.**
+2. **Add `.gnomon-sessions/`, `.gnomon-audit/` and `.gnomon-jobs/` to `.gitignore`.**
 
 A first exchange:
 
