@@ -227,6 +227,21 @@ export interface VerifyResult {
   /** Sequence numbers where the chain does not hold */
   broken: number[];
   problem?: string;
+  /**
+   * Whether the trail ends where it says it ends.
+   *
+   * Chain integrity cannot see a truncation: lop the last records off and every
+   * remaining hash still matches its neighbour, so `ok` stays true while the
+   * most interesting part of the record -- what happened last -- is gone. A
+   * sealed trail closes with `session_end`.
+   *
+   * Reported SEPARATELY from `ok` rather than folded into it, because an
+   * unsealed trail has two very different causes: someone removed the tail, or
+   * the process was killed before it could write one. This harness kills runs
+   * that way itself. Rule 4 applies to its own diagnostics -- the reader
+   * decides, and a composite verdict would hide which of the two happened.
+   */
+  sealed: boolean;
 }
 
 /**
@@ -237,7 +252,7 @@ export interface VerifyResult {
  */
 export function verifyTrail(path: string): VerifyResult {
   if (!existsSync(path)) {
-    return { ok: false, records: 0, broken: [], problem: `No such trail: ${path}` };
+    return { ok: false, records: 0, broken: [], sealed: false, problem: `No such trail: ${path}` };
   }
   const lines = readFileSync(path, "utf-8").split("\n").filter(Boolean);
   const broken: number[] = [];
@@ -272,5 +287,25 @@ export function verifyTrail(path: string): VerifyResult {
     prev = record.hash;
   }
 
-  return { ok: broken.length === 0, records: lines.length, broken };
+  // A chained trail that does not close with session_end is either truncated or
+  // was killed mid-run. Either way the tail cannot be trusted to be complete,
+  // and chain integrity alone will never say so.
+  const last = lines.length
+    ? (() => {
+        try {
+          return JSON.parse(lines[lines.length - 1]!) as AuditRecord;
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+  const sealed = chained ? last?.kind === "session_end" : true;
+
+  return {
+    ok: broken.length === 0,
+    records: lines.length,
+    broken,
+    sealed,
+    ...(sealed ? {} : { problem: "trail does not end with session_end — truncated, or the run was killed" }),
+  };
 }

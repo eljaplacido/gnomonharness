@@ -218,4 +218,32 @@ describe("a chained trail detects insertion", () => {
     ].join("\n") + "\n");
     expect(verifyTrail(p).ok).toBe(true);
   });
+
+  it("reports a truncated trail as unsealed, separately from chain integrity", () => {
+    // Chain integrity cannot see a truncation: lop the last records off and every
+    // remaining hash still matches its neighbour. An adversarial sweep of nine
+    // tampering strategies caught eight and missed exactly this one -- the one
+    // that removes what happened LAST, the most interesting part of any trail.
+    // Reported apart from `ok` because an unsealed trail is either a truncation
+    // or a killed run, and this harness kills runs itself.
+    const t = new AuditTrail(settings(), "s");
+    t.write("session_start", { surface_hash: "abc" });
+    t.write("tool_call", { tool: "read", bucket: "result" });
+    t.write("turn", { role: "implement", bucket: "result" });
+    t.write("session_end", {});
+
+    const whole = verifyTrail(t.path!);
+    expect(whole.ok).toBe(true);
+    expect(whole.sealed).toBe(true);
+
+    // drop the tail: the surviving chain still validates, which is the point
+    const kept = readFileSync(t.path!, "utf-8").split("\n").filter(Boolean).slice(0, 2);
+    const cut = t.path!.replace(/\.jsonl$/, "-cut.jsonl");
+    writeFileSync(cut, kept.join("\n") + "\n");
+
+    const truncated = verifyTrail(cut);
+    expect(truncated.ok).toBe(true);          // chain integrity is genuinely intact
+    expect(truncated.sealed).toBe(false);     // and this is what catches it
+    expect(truncated.problem).toContain("session_end");
+  });
 });
