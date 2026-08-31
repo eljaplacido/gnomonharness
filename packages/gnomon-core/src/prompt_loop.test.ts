@@ -1439,6 +1439,35 @@ describe("runTask — the non-interactive contract", () => {
     expect(promptLoop.buildSystemPrompt(state, "implement", "carry on")).toContain("make all");
   });
 
+  it("recovers once from a context overflow instead of throwing the turn away", async () => {
+    // 13 means the prompt did not fit, and it is deliberately not retried --
+    // resending the same oversized prompt fails identically. But the loop then
+    // fell straight into the terminal branch and discarded the turn's entire
+    // accumulated work, while holding trimWorking, which exists to make the
+    // prompt smaller. The trim otherwise runs only at a leg checkpoint, so a
+    // long first leg can overflow before it is ever consulted.
+    const config: any = loadConfig("../..");
+    let call = 0;
+    const overflowThenFine = (async () => {
+      call++;
+      if (call === 1) {
+        return {
+          ok: false,
+          status: 400,
+          statusText: "Bad Request",
+          text: async () => JSON.stringify({ error: "maximum context length exceeded" }),
+        };
+      }
+      return { ok: true, json: async () => ({ message: { content: "recovered and answered" } }) };
+    }) as unknown as typeof fetch;
+
+    await withFetch(overflowThenFine, async () => {
+      const record = await promptLoop.runTask(config, "do the thing", { role: "implement", yes: true });
+      expect(record.output).toContain("recovered");
+      expect(call).toBeGreaterThanOrEqual(2);
+    });
+  }, 20000);
+
   it("catches a two-call poll loop, not just verbatim repetition", async () => {
     // (the real loop alternated `sleep 5` and `ps aux | grep make`; these are
     // instant stand-ins with the same signature pattern)

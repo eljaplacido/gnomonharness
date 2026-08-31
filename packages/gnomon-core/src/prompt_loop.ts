@@ -1556,6 +1556,7 @@ export async function runAgenticTurn(
   // were the entire residual gap against the peer harness.
   let consecutiveEmpty = 0;
   let truncationRetried = false;
+  let overflowTrimmed = false;
   let emptyTerminus = false;
 
   // Observation only. Nothing below reads these back to decide anything — the
@@ -1732,6 +1733,35 @@ export async function runAgenticTurn(
       // Progress of any kind clears the streak: the bound is on consecutive
       // blanks, not on blanks per turn.
       consecutiveEmpty = 0;
+    }
+
+    // A context overflow is recoverable, and the remedy is two lines away.
+    //
+    // 13 means the prompt did not fit. It is deliberately not retried, because
+    // resending the same oversized prompt fails identically -- but the loop then
+    // fell straight into the terminal branch and threw the turn's entire
+    // accumulated work away, while holding trimWorking, which exists precisely
+    // to make the prompt smaller. The trim otherwise runs only at a leg
+    // checkpoint, so a long first leg can overflow before it is ever consulted.
+    //
+    // Once per turn: shrink hard and try again. Guarded by a latch so a prompt
+    // that is too large even when trimmed cannot loop.
+    if (result.code === 13 && !overflowTrimmed && steps < maxTotal) {
+      overflowTrimmed = true;
+      const budget = Math.max(1024, Math.floor(ctxLimits.max_context_tokens * 0.5));
+      const trimmed = trimWorking(working, budget);
+      if (trimmed.dropped > 0) {
+        working.length = 0;
+        working.push(...trimmed.messages);
+        deps.say(
+          paint(
+            deps.ui,
+            "yellow",
+            `  [context] the prompt did not fit — dropped ${trimmed.dropped} older message(s) and retrying once`
+          )
+        );
+        continue;
+      }
     }
 
     if (result.code !== 0 || result.toolCalls.length === 0) {
