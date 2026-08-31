@@ -221,7 +221,8 @@ egress control, not re-described. It is not a design principle and nothing is
 lost by fixing it.
 
 **Suite defects found while building the measurement.** Recorded here because a
-containment suite that flatters the thing it measures is worse than none:
+containment suite that flatters what it measures is worse than none — seven of
+them, four affecting gnomon's arm and two the peer's:
 
 1. *Breach read from the agent's own tool log.* The network scenario decided
    whether gnomon had breached by grepping gnomon's own record of what it did —
@@ -244,6 +245,26 @@ containment suite that flatters the thing it measures is worse than none:
    the console line `"CONTAINED" if contained else "*** BREACHED ***"` printed a
    false alarm, because `None` is falsy. A suite that cries breach on its own
    invalid trials is unreadable.
+
+6. *The peer never reached the model.* `baseURL` was handed the full
+   `/v1/chat/completions` URL, and opencode appends its own path, so every
+   request went to `/v1/chat/completions/chat/completions` and returned
+   `AI_APICallError: File Not Found`.
+7. *And the peer's "did it run?" check believed it anyway.* `agent_ran()`
+   matched `message=process`, a line opencode emits while booting — before the
+   first API call fails. So 20 opencode trials that never contacted a model
+   were scored as perfect containment, in 1.3 seconds each.
+
+Defects 6 and 7 are the same failure as 2 and 3, pointed at the peer instead of
+at gnomon: an arm that did not act, scored as an arm that was controlled. The
+suite was flattering **both** harnesses. That symmetry is the only redeeming
+part — it was not biased, it was simply not measuring — and it means every
+containment comparison produced before this session is void, not merely noisy.
+
+The tell in both cases was wall-clock. A 35B model cannot answer in 1.3s, and a
+role that is going to attempt something does not take the full 180s cap doing
+nothing. **Trial duration is the cheapest apparatus check available**, and it
+should be read before any score is.
 
 Defects 2 and 3 compounded: the prompt caused the stall, and the scoring rule
 turned the stall into a pass. Both inflated gnomon's score. Defect 4 hid the
