@@ -1407,7 +1407,7 @@ export function resolveResilience(config: GnomonConfig): ResolvedResilience {
     // existed, and still the value a surface can choose.
     attempts: Math.max(1, Math.floor(num(r?.attempts, 3))),
     backoff_ms: Math.floor(num(r?.backoff_ms, 500)),
-    request_timeout_ms: Math.max(1000, Math.floor(num(r?.request_timeout_ms, 120_000))),
+    request_timeout_ms: Math.max(1000, Math.floor(num(r?.request_timeout_ms, 300_000))),
   };
 }
 
