@@ -957,6 +957,15 @@ async function readTool(
       summary: `read ${path} — refused (outside sandbox)`,
     };
   }
+  // Ask BEFORE touching the filesystem.
+  //
+  // The existence probe used to run first, so under approval = "always" a
+  // DECLINED read still answered "does this path exist?" -- the operator said
+  // no and the model learned something anyway. Small, but it is the whole point
+  // of the gate: a refusal that leaks the answer is not a refusal.
+  const denied = await gateReadOnly("read", `read ${path}`, ctx);
+  if (denied) return denied;
+
   if (!existsSync(abs)) {
     // The tool worked and the answer is "it isn't there". That is a result,
     // not an apparatus failure — exploring a tree turns up missing paths
@@ -968,8 +977,6 @@ async function readTool(
       summary: `read ${path} — not found`,
     };
   }
-  const denied = await gateReadOnly("read", `read ${path}`, ctx);
-  if (denied) return denied;
 
   try {
     if (statSync(abs).isDirectory()) {
@@ -2151,10 +2158,10 @@ function walkFiles(root: string, dir: string): string[] {
 }
 
 /** Resolve the optional `path` argument to a directory inside the sandbox. */
-function searchScope(
+async function searchScope(
   args: Record<string, unknown>,
   ctx: ToolContext
-): { abs: string; rel: string } | ToolOutcome {
+): Promise<{ abs: string; rel: string } | ToolOutcome> {
   const raw = String(args.path ?? "").trim() || ".";
   const abs = resolveInRoot(ctx.root, raw, ctx.sandbox);
   if (!abs) {
@@ -2164,6 +2171,10 @@ function searchScope(
       summary: `search ${raw} — refused (outside sandbox)`,
     };
   }
+  // Same ordering rule as read: the gate decides before the filesystem is
+  // consulted, so a declined search cannot confirm a directory exists.
+  const denied = await gateReadOnly("glob", `search ${raw}`, ctx);
+  if (denied) return denied;
   if (!existsSync(abs)) {
     return {
       code: TOOL_OK_EMPTY,
@@ -2204,7 +2215,7 @@ async function globTool(
       summary: "glob — no pattern",
     };
   }
-  const scope = searchScope(args, ctx);
+  const scope = await searchScope(args, ctx);
   if ("code" in scope) return scope;
 
   let re: RegExp;
@@ -2264,7 +2275,7 @@ async function grepTool(
       summary: "grep — no pattern",
     };
   }
-  const scope = searchScope(args, ctx);
+  const scope = await searchScope(args, ctx);
   if ("code" in scope) return scope;
 
   let re: RegExp;

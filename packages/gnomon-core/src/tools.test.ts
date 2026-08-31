@@ -338,6 +338,27 @@ describe("bash", () => {
     expect(noStore.content).toContain("silently dropped");
   });
 
+  it("a declined read does not reveal whether the path exists", async () => {
+    // The existence probe ran BEFORE the gate, so under approval = "always" a
+    // declined read still answered "does this path exist?" -- the operator said
+    // no and the model learned something anyway. A refusal that leaks the
+    // answer is not a refusal.
+    let asked = 0;
+    const declining = ctx({
+      gate: "always" as ApprovalGate,
+      approve: async () => { asked++; return false; },
+    });
+
+    const missing = await executeTool("read", { path: "definitely-not-here.txt" }, declining, offered);
+    const present = await executeTool("read", { path: "keepme.txt" }, declining, offered);
+
+    // both were gated...
+    expect(asked).toBe(2);
+    // ...and both refusals look identical: nothing distinguishes them
+    expect(missing.code).toBe(present.code);
+    expect(missing.content).not.toMatch(/No such file/);
+  });
+
   it("glob finds the same files however the path is spelled", async () => {
     // `rel` was the raw argument, while the file list it is sliced against comes
     // back normalised relative to the root. So the slice length was wrong for
