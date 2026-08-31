@@ -378,6 +378,20 @@ export interface SystemPrompt {
  * - Nested tables: [table.sub]
  * - Arrays: items = ["a", "b"]
  */
+/**
+ * parseToml, with the filename in the message.
+ *
+ * "line 12: cannot parse ..." is only actionable if the reader knows which of
+ * the four surface files it came from.
+ */
+function parseTomlNamed(content: string, filename: string): Record<string, unknown> {
+  try {
+    return parseToml(content);
+  } catch (e) {
+    throw new Error(`.gnomon/${filename} ${(e as Error).message}`);
+  }
+}
+
 export function parseToml(content: string): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   let currentTable: string | null = null;
@@ -450,6 +464,25 @@ export function parseToml(content: string): Record<string, unknown> {
       currentObj[key] = parseValue(value);
       continue;
     }
+
+    // Anything reaching here matched none of the three shapes this parser
+    // understands, and used to fall silently off the bottom of the loop.
+    //
+    // That silence is the dangerous part. `[roles.verifier` with the closing
+    // bracket missing dropped the header and HOISTED its keys to the top level,
+    // so the role vanished and its bash_allow became a root key read by nothing
+    // — a role that appears to exist and is not there. `this is not toml`
+    // vanished too. For a harness whose entire proposition is explicit
+    // configuration, a line the parser cannot read must not be a line it
+    // pretends it read.
+    //
+    // Thrown with the line number, because "somewhere in roles.toml" is not
+    // materially better than silence.
+    throw new Error(
+      `line ${lineNo + 1}: cannot parse ${JSON.stringify(
+        trimmed.length > 80 ? trimmed.slice(0, 80) + "…" : trimmed
+      )}. Expected a [table] header, a [[array]] header, or key = value.`
+    );
   }
 
   return result;
@@ -591,7 +624,7 @@ function loadToml<T = Record<string, unknown>>(
     for (const file of files) {
       const name = file.replace(/\.toml$/, "");
       const content = readFileSync(join(profilesDir, file), "utf-8");
-      result[name] = parseToml(content);
+      result[name] = parseTomlNamed(content, `profiles/${file}`);
     }
     return result as T;
   }
@@ -601,7 +634,7 @@ function loadToml<T = Record<string, unknown>>(
   }
 
   const content = readFileSync(filePath, "utf-8");
-  return parseToml(content) as T;
+  return parseTomlNamed(content, filename) as T;
 }
 
 /**
@@ -993,6 +1026,34 @@ const EXECUTING_ARGS: Array<[RegExp, string]> = [
   [/\bgit\b(?!\s*\()/, "git (-c core.pager / alias.* run commands)"],
 ];
 
+/**
+ * Which file each top-level block is READ from.
+ *
+ * A block in the wrong file is legal TOML, hashes into the surface, and is read
+ * by nothing. That is not hypothetical: a [verify] block sat in config.toml
+ * instead of policy.toml for days, silently disabling the declared check, and
+ * the campaign that missed it is the reason this audit exists. The two files sit
+ * side by side, both are TOML, both are hashed, and the block is valid in both —
+ * there is no way for an operator to see the difference unaided.
+ *
+ * Fatal, because a control that is declared and not read is worse than one that
+ * was never declared: the surface says the check runs.
+ */
+const BLOCK_OWNER: Record<string, string> = {
+  verify: "policy.toml",
+  approval: "policy.toml",
+  sandbox: "policy.toml",
+  endpoints: "config.toml",
+  defaults: "config.toml",
+  context: "config.toml",
+  ui: "config.toml",
+  routing: "config.toml",
+  resilience: "config.toml",
+  audit: "config.toml",
+  roles: "roles.toml",
+  tools: "tools.toml",
+};
+
 const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "model", "profile", "temperature", "tools", "top_p", "write_allow"]);
 
 /**
@@ -1057,6 +1118,25 @@ function editDistance(a: string, b: string): number {
 export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
   const problems: SurfaceProblem[] = [];
   const declared = config.config.endpoints ?? {};
+
+  // A declared block that lives in the wrong file is read by nothing.
+  for (const [file, parsed] of [
+    ["config.toml", config.config],
+    ["policy.toml", config.policy],
+  ] as const) {
+    for (const block of Object.keys((parsed ?? {}) as Record<string, unknown>)) {
+      const owner = BLOCK_OWNER[block];
+      if (!owner || owner === file) continue;
+      problems.push({
+        where: `.gnomon/${file} [${block}]`,
+        problem:
+          `[${block}] is declared here but read from ${owner} — so this block ` +
+          `does nothing, while the surface reads as though it does.`,
+        fix: `Move the [${block}] block to .gnomon/${owner}.`,
+        fatal: true,
+      });
+    }
+  }
 
   for (const [role, rawRole] of Object.entries(config.roles ?? {})) {
     const where = `.gnomon/roles.toml [roles.${role}]`;

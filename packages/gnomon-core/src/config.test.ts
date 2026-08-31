@@ -687,4 +687,45 @@ describe("auditSurface", () => {
         .filter((p: any) => p.fatal).length
     ).toBe(0);
   });
+
+  it("refuses a [verify] block that sits in the wrong file — the bug that started this", () => {
+    // A [verify] block lived in config.toml instead of policy.toml for days,
+    // silently disabling the declared check while the surface read as though it
+    // ran. resolveVerify only ever looks at policy.toml, the two files sit side
+    // by side, both are TOML, both are hashed, and the block is valid in both,
+    // so nothing an operator can see distinguishes them. Fatal, because a
+    // control that is declared and not read is worse than one never declared.
+    const misplaced: any = {
+      config: { verify: { command: "pnpm typecheck", after: "always" } },
+      policy: {},
+      roles: {},
+    };
+    const fatal = auditSurface(misplaced).filter((p: any) => p.fatal);
+    expect(fatal).toHaveLength(1);
+    expect(fatal[0].problem).toContain("read from policy.toml");
+    expect(fatal[0].fix).toContain("Move the [verify] block");
+
+    // and the same block in the right file is silent
+    expect(
+      auditSurface({ config: {}, policy: { verify: { command: "pnpm typecheck" } }, roles: {} } as any)
+        .filter((p: any) => p.fatal)
+    ).toHaveLength(0);
+  });
+
+  it("reports a line it cannot parse instead of silently dropping it", () => {
+    // A malformed table header used to fall off the bottom of the loop with no
+    // else branch: `[roles.verifier` (bracket missing) dropped the header and
+    // HOISTED its keys to the top level, so the role vanished while its
+    // bash_allow became a root key read by nothing -- a role that appears to
+    // exist in the file and is not there. For a harness whose whole proposition
+    // is explicit configuration, a line the parser cannot read must not be a
+    // line it pretends it read.
+    expect(() => parseToml("[roles.broken\nbash_allow = [\"ls\"]\n")).toThrow(/line 1: cannot parse/);
+    expect(() => parseToml("this is not toml\n")).toThrow(/cannot parse/);
+
+    // valid TOML is unaffected, comments and blanks included
+    const ok = parseToml('# a comment\n\n[table]\nkey = "value"\nlist = [\n  "a",\n  "b",\n]\n');
+    expect((ok.table as any).key).toBe("value");
+    expect((ok.table as any).list).toEqual(["a", "b"]);
+  });
 });
