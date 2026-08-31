@@ -1089,6 +1089,28 @@ const ENUM_KEYS: Record<string, { values: string[]; falls_back_to: string }> = {
   sandbox: { values: ["off", "confined", "strict"], falls_back_to: "confined" },
 };
 
+/**
+ * Keys that are read from a different block than the one an operator reaches
+ * for first.
+ *
+ * `compaction` and `max_context_tokens` are read from [defaults], while the
+ * block named [context] sits directly above them — so putting them under
+ * [context], which is what the names invite, silently does nothing and the
+ * window keeps its 65536-token default. Found the hard way: this exact mistake
+ * cost a benchmark run today, in a session whose whole subject was misplaced
+ * configuration.
+ */
+const KEY_OWNER: Record<string, string> = {
+  compaction: "defaults",
+  max_context_tokens: "defaults",
+  edit_format: "defaults",
+  role_profile: "defaults",
+  policy: "context",
+  retain_after: "context",
+  summary_role: "context",
+  reserve_output: "context",
+};
+
 const BLOCK_OWNER: Record<string, string> = {
   verify: "policy.toml",
   approval: "policy.toml",
@@ -1201,6 +1223,26 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
             `"${value}" is not one of ${spec.values.join(" | ")}, so this silently ` +
             `falls back to "${spec.falls_back_to}".`,
           fix: `Use one of: ${spec.values.join(", ")}. \`gnomon enumerations\` lists them.`,
+          fatal: false,
+        });
+      }
+    }
+  }
+
+  // A key in the neighbouring block is read by nothing either.
+  for (const [file, parsed] of [
+    ["config.toml", config.config],
+    ["policy.toml", config.policy],
+  ] as const) {
+    for (const [block, body] of Object.entries((parsed ?? {}) as Record<string, unknown>)) {
+      if (!body || typeof body !== "object") continue;
+      for (const key of Object.keys(body as Record<string, unknown>)) {
+        const owner = KEY_OWNER[key];
+        if (!owner || owner === block) continue;
+        problems.push({
+          where: `.gnomon/${file} [${block}]`,
+          problem: `"${key}" is read from [${owner}], not [${block}] — here it does nothing.`,
+          fix: `Move ${key} into the [${owner}] block.`,
           fatal: false,
         });
       }
