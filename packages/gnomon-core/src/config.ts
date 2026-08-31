@@ -511,17 +511,48 @@ function stripComment(value: string): string {
   return value.trim();
 }
 
+/** TOML basic-string escapes. Unknown escapes are left alone rather than
+ * throwing: this parser is lenient by design, and a surface that fails to load
+ * over an unrecognised escape helps nobody. */
+function unescapeBasic(raw: string): string {
+  return raw.replace(/\\(u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|.)/g, (whole, esc: string) => {
+    switch (esc) {
+      case "n": return "\n";
+      case "t": return "\t";
+      case "r": return "\r";
+      case "b": return "\b";
+      case "f": return "\f";
+      case '"': return '"';
+      case "\\": return "\\";
+      default:
+        if (esc[0] === "u" || esc[0] === "U") {
+          return String.fromCodePoint(parseInt(esc.slice(1), 16));
+        }
+        return whole;
+    }
+  });
+}
+
 function parseValue(value: string): unknown {
   // Literal string: 'no escapes here'. This is the TOML idiom for regular
-  // expressions — in a basic string a pattern would have to double every
-  // backslash, and this parser does not process escapes, so "\\s" would
-  // reach RegExp as a literal backslash followed by s and match nothing.
+  // expressions, and it needs no unescaping by definition.
   if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
     return value.slice(1, -1);
   }
-  // Basic string
+  // Basic string: escapes ARE processed, per the TOML spec.
+  //
+  // They were not, and the old comment here recorded that as a quirk without
+  // drawing the consequence. Writing a pattern the ordinary, spec-correct way —
+  // bash_deny = ["rm\\s+-rf"] — produced the string `rm\\s+-rf`, a regex
+  // containing a literal backslash, which matches nothing. So a deny written
+  // that way protected NOTHING while the surface read as though it did, and the
+  // failure was silent in the dangerous direction.
+  //
+  // gnomon's own surface never hit it only because it happens to use literal
+  // strings throughout. Measured: "rm\\s+-rf" failed to match `rm -rf x`;
+  // 'rm\\s+-rf' matched. Two spellings of the same intent, one of them inert.
   if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
-    return value.slice(1, -1);
+    return unescapeBasic(value.slice(1, -1));
   }
   // Array. Split on top-level commas only: a pattern like '^(a|b),\\s' would
   // otherwise be torn in half, and a trailing comma would yield an empty item.

@@ -728,4 +728,23 @@ describe("auditSurface", () => {
     expect((ok.table as any).key).toBe("value");
     expect((ok.table as any).list).toEqual(["a", "b"]);
   });
+
+  it("processes basic-string escapes, so a deny written the ordinary way actually denies", () => {
+    // The parser sliced the quotes off a basic string and stopped. Writing a
+    // pattern the spec-correct way -- bash_deny = ["rm\\\\s+-rf"] -- therefore
+    // produced a string containing a LITERAL backslash, a regex that matches
+    // nothing, so the deny protected nothing while the surface read as though
+    // it did. Silent, and in the dangerous direction. gnomon's own surface
+    // escaped it only by using literal strings throughout.
+    const t = parseToml('basic = "rm\\\\s+-rf"\nliteral = \'rm\\s+-rf\'\n');
+    expect(new RegExp(t.basic as string).test("rm -rf /")).toBe(true);
+    expect(new RegExp(t.literal as string).test("rm -rf /")).toBe(true);
+    // the two spellings of the same intent now agree
+    expect(t.basic).toEqual(t.literal);
+
+    // ordinary escapes still behave
+    expect(parseToml('s = "a\\nb"').s).toBe("a\nb");
+    expect(parseToml('s = "a\\tb"').s).toBe("a\tb");
+    expect(parseToml('s = "say \\"hi\\""').s).toBe('say "hi"');
+  });
 });
