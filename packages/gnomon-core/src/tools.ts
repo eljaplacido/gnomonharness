@@ -983,7 +983,15 @@ async function bashTool(
   const surfaceBefore = surfaceHashOf(ctx);
   // Same reasoning one level out: whether the command changed the worktree is
   // observed, not guessed from its text. Feeds the nudge, not the verify gate.
-  const worktreeBefore = worktreeStampOf(ctx);
+  // Where this command will actually operate. A command that cd's elsewhere, or
+  // installs into /usr/local, does work the ctx.root stamp cannot see.
+  const shellCwd = ((): string | undefined => {
+    const m = /(?:^|\s|&&|;)\s*cd\s+("[^"]+"|'[^']+'|[^\s;&|]+)/.exec(command);
+    if (!m) return undefined;
+    const raw = m[1].replace(/^["']|["']$/g, "");
+    return raw.startsWith("/") ? raw : undefined;   // only absolute; relative stays inside root
+  })();
+  const worktreeBefore = worktreeStampOf(ctx, shellCwd);
 
   return new Promise<ToolOutcome>((done) => {
     const proc = spawn(command, {
@@ -1017,7 +1025,7 @@ async function bashTool(
         .filter(Boolean)
         .join("\n");
       const drift = surfaceDrift(ctx, surfaceBefore);
-      const movedTree = worktreeMoved(ctx, worktreeBefore);
+      const movedTree = worktreeMoved(ctx, worktreeBefore, shellCwd);
       done({
         code: TOOL_FAILED,
         worktree_changed: movedTree,
@@ -1055,7 +1063,7 @@ async function bashTool(
         .filter(Boolean)
         .join("\n");
       const drift = surfaceDrift(ctx, surfaceBefore);
-      const movedTree = worktreeMoved(ctx, worktreeBefore);
+      const movedTree = worktreeMoved(ctx, worktreeBefore, shellCwd);
       done({
         code: TOOL_OK,
         worktree_changed: movedTree,
@@ -1212,20 +1220,29 @@ export function surfaceHashOf(ctx: ToolContext): string | null {
  * synthetic tree at the WALK_MAX_FILES cap — so at most ~160ms per bash call,
  * against a measured model round-trip of 7.4s median. It stats, never reads.
  */
-export function worktreeStampOf(ctx: ToolContext): string | null {
+export function worktreeStampOf(ctx: ToolContext, alsoRoot?: string): string | null {
   try {
     const h = createHash("sha256");
-    for (const rel of walkFiles(ctx.root, ctx.root)) {
+    // A second root, when the shell is working somewhere else. This walked only
+    // ctx.root, so a task whose work is an apt install, an /etc config or a
+    // system service could never move the stamp — and the anti-flailing nudge
+    // fired on an agent that was working correctly. One trial printed
+    // "98 call(s) without changing a file" immediately after postconf -e,
+    // service start and chown, with two of its tests already passing. The
+    // nudge was not wrong to fire on its premise; the premise was false.
+    const roots = alsoRoot && alsoRoot !== ctx.root ? [ctx.root, alsoRoot] : [ctx.root];
+    for (const base of roots)
+    for (const rel of walkFiles(base, base)) {
       // .gnomon/ has its own stamp (surfaceHashOf) and its own meaning; a
       // surface edit is drift, not progress.
       if (rel === ".gnomon" || rel.startsWith(".gnomon/")) continue;
       let st: Stats;
       try {
-        st = statSync(join(ctx.root, rel));
+        st = statSync(join(base, rel));
       } catch {
         continue; // vanished mid-walk: the next stamp will differ anyway
       }
-      h.update(`${rel}:${st.size}:${st.mtimeMs}\n`);
+      h.update(`${base}/${rel}:${st.size}:${st.mtimeMs}\n`);
     }
     return h.digest("hex");
   } catch {
@@ -1238,9 +1255,9 @@ export function worktreeStampOf(ctx: ToolContext): string | null {
  * unstampable tree is unknown, and unknown must not read as changed (that
  * would disarm the nudge) nor as unchanged in a way anyone relies on.
  */
-export function worktreeMoved(ctx: ToolContext, before: string | null): boolean {
+export function worktreeMoved(ctx: ToolContext, before: string | null, alsoRoot?: string): boolean {
   if (before === null) return false;
-  const after = worktreeStampOf(ctx);
+  const after = worktreeStampOf(ctx, alsoRoot);
   return after !== null && after !== before;
 }
 
