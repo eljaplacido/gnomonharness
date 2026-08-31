@@ -67,23 +67,29 @@ export function findBinary(name: string): string {
     }
   }
 
-  // 2. Check target/debug for dev builds
-  const debugPath = join(__dirname, "..", "..", "..", "target", "debug", name);
-  try {
-    const stat = statSync(debugPath);
-    if (stat.isFile()) return debugPath;
-  } catch {
-    // not found — try next
-  }
-
-  // 3. Check target/release for release builds
-  const releasePath = join(__dirname, "..", "..", "..", "target", "release", name);
-  try {
-    const stat = statSync(releasePath);
-    if (stat.isFile()) return releasePath;
-  } catch {
-    // not found — try next
-  }
+  // 2/3. target/debug and target/release — whichever is NEWER.
+  //
+  // debug used to be checked first and returned unconditionally, so a stale
+  // debug build silently shadowed a fresh release one. `pnpm run build:native`
+  // builds RELEASE, so the documented way to rebuild a native could be a no-op
+  // on any machine that had ever run `cargo build` without --release: the fix
+  // compiles, the binary on disk changes, and the harness keeps running the old
+  // one. Cost an hour today, twice, on a panic that had already been fixed.
+  //
+  // Newest wins, which is what a person means by "I just rebuilt it".
+  const candidates = (["debug", "release"] as const)
+    .map((profile) => join(__dirname, "..", "..", "..", "target", profile, name))
+    .map((path) => {
+      try {
+        const st = statSync(path);
+        return st.isFile() ? { path, mtime: st.mtimeMs } : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter((c): c is { path: string; mtime: number } => c !== null)
+    .sort((a, b) => b.mtime - a.mtime);
+  if (candidates.length > 0) return candidates[0]!.path;
 
   // 4. Check PATH (system install)
   try {

@@ -386,6 +386,33 @@ fn print_usage() {
     println!("  GNOMON_EDIT_MODE=dry   — Always dry-run (don't write to disk)");
 }
 
+
+/// Read and parse a patchset, or exit with a message a person can act on.
+///
+/// These were seven `unwrap()`s on user-supplied input, so the two most likely
+/// first mistakes with `apply` and `simulate` -- a wrong filename, a
+/// hand-edited JSON file -- surfaced as an internal panic with a backtrace
+/// invitation. It read as "this tool crashed", not "you gave me a bad path",
+/// and it was out of keeping with the rest of gnomon's errors, which name the
+/// problem and the fix.
+fn read_patchset(cmd: &str, path: &str) -> PatchSet {
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("gnomon-edit {cmd}: cannot read {path}: {e}");
+            std::process::exit(1);
+        }
+    };
+    match serde_json::from_str(&content) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("gnomon-edit {cmd}: {path} is not a valid patchset: {e}");
+            eprintln!("  expected JSON of the form {{\"patches\": [ ... ]}}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -425,8 +452,7 @@ fn main() {
             // A patch SET, and machine-readable, matching `apply`. This read a
             // single Patch and printed prose, while every caller sent a
             // patchset and parsed JSON — so nothing could consume it.
-            let content = fs::read_to_string(positional[0]).unwrap();
-            let patchset: PatchSet = serde_json::from_str(&content).unwrap();
+            let patchset: PatchSet = read_patchset("simulate", &positional[0]);
 
             let mut results: Vec<PatchResult> = Vec::new();
             for patch in &patchset.patches {
@@ -471,8 +497,7 @@ fn main() {
                 eprintln!("Usage: gnomon-edit apply <patches.json> [--dir <path>]");
                 std::process::exit(1);
             }
-            let content = fs::read_to_string(positional[0]).unwrap();
-            let patchset: PatchSet = serde_json::from_str(&content).unwrap();
+            let patchset: PatchSet = read_patchset("apply", &positional[0]);
             let result = apply_patches(&patchset, repo_root);
             let json = serde_json::to_string_pretty(&result).unwrap();
             println!("{}", json);
@@ -485,14 +510,34 @@ fn main() {
                 eprintln!("Usage: gnomon-edit diff <patch.json> [--dir <path>]");
                 std::process::exit(1);
             }
-            let patch: Patch = serde_json::from_str(
-                &fs::read_to_string(positional[0]).unwrap(),
-            ).unwrap();
+            // `diff` takes a single Patch, not a PatchSet, so it gets its own
+            // read rather than sharing read_patchset -- but the same rule: a
+            // bad path or bad JSON is the user's mistake to be told about, not
+            // a panic to be shown a backtrace for.
+            let patch: Patch = match fs::read_to_string(&positional[0]) {
+                Err(e) => {
+                    eprintln!("gnomon-edit diff: cannot read {}: {e}", positional[0]);
+                    std::process::exit(1);
+                }
+                Ok(c) => match serde_json::from_str(&c) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("gnomon-edit diff: {} is not a valid patch: {e}", positional[0]);
+                        std::process::exit(1);
+                    }
+                },
+            };
             let result = simulate_patch(&patch, repo_root);
             match result {
                 Ok(new_contents) => {
                     println!("=== DIFF ===");
-                    let old = fs::read_to_string(repo_root.join(&patch.path)).unwrap();
+                    let old = match fs::read_to_string(repo_root.join(&patch.path)) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("gnomon-edit diff: cannot read {}: {e}", patch.path);
+                            std::process::exit(1);
+                        }
+                    };
                     let old_lines: Vec<&str> = old.lines().collect();
                     let new_lines: Vec<&str> = new_contents.lines().collect();
                     for (i, (o, n)) in old_lines.iter().zip(new_lines.iter()).enumerate() {
@@ -513,8 +558,7 @@ fn main() {
                 eprintln!("Usage: gnomon-edit validate <patches.json> [--dir <path>]");
                 std::process::exit(1);
             }
-            let content = fs::read_to_string(positional[0]).unwrap();
-            let patchset: PatchSet = serde_json::from_str(&content).unwrap();
+            let patchset: PatchSet = read_patchset("validate", &positional[0]);
             let mut valid = true;
             for patch in &patchset.patches {
                 let result = apply_patch(patch, repo_root);
