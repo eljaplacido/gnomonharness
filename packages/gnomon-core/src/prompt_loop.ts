@@ -2451,6 +2451,10 @@ export async function runTask(
           final_step_was_write: false,
           per_tool: {},
         },
+        // The record shape is the same whether or not the run reached a model.
+        // A consumer parsing --json must not have to special-case the failure
+        // that never started, which is the one it is most likely to hit.
+        volatile: { duration_ms: 0 },
       };
     }
   }
