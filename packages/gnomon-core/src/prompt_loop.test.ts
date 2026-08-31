@@ -1439,6 +1439,31 @@ describe("runTask — the non-interactive contract", () => {
     expect(promptLoop.buildSystemPrompt(state, "implement", "carry on")).toContain("make all");
   });
 
+  it("an interactive exchange records why the turn ended, not only a task record", () => {
+    // stop_reason, stop_detail and counters were computed on every turn and then
+    // dropped on the interactive path -- they reached `gnomon task --json` and
+    // nothing else. So a person working in a session could not see that a turn
+    // had stalled, hit the step wall, or been cut off blank, which are the three
+    // things they would most want to know. The record shape should not depend on
+    // which entry point produced it.
+    const exchange: promptLoop.PromptExchange = {
+      turn: 1,
+      role: "implement",
+      input: "do it",
+      output: "done",
+      model: "m",
+      code: 0,
+      bucket: "result",
+      duration_ms: 1,
+      stop_reason: "stall",
+      stop_detail: { steps: 9, repeats: 3 },
+      counters: { writes: 0, worktree_moves: 0, nudges: 1, final_step_was_write: false, per_tool: {} },
+    };
+    expect(exchange.stop_reason).toBe("stall");
+    expect(exchange.stop_detail?.repeats).toBe(3);
+    expect(exchange.counters?.nudges).toBe(1);
+  });
+
   it("recovers once from a context overflow instead of throwing the turn away", async () => {
     // 13 means the prompt did not fit, and it is deliberately not retried --
     // resending the same oversized prompt fails identically. But the loop then

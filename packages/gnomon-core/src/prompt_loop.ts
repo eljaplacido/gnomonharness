@@ -114,7 +114,19 @@ export interface PromptExchange {
   /** One line per tool call, for the transcript */
   tool_log?: string[];
   /** Folded into the running summary; no longer replayed verbatim */
-  folded?: boolean;
+  folded?: boolean;  /**
+   * Why the turn ended, and the counters behind it.
+   *
+   * These were computed on every turn and then dropped on the interactive path:
+   * they reached `gnomon task --json` and nothing else, so a person working in a
+   * session could not see that a turn had stalled, hit the step wall, or been
+   * cut off blank -- the three things they would most want to know. The record
+   * shape should not depend on which entry point produced it.
+   */
+  stop_reason?: StopReason;
+  stop_detail?: { steps?: number; max_steps_total?: number; repeats?: number };
+  counters?: TurnCounters;
+
 }
 
 /** State for the interactive prompt loop */
@@ -889,7 +901,12 @@ function modelTimeoutMs(config?: GnomonConfig): number {
     if (typeof declared === "number" && declared > 0) return Math.floor(declared);
   }
   const raw = parseInt(process.env.GNOMON_MODEL_TIMEOUT_MS ?? "", 10);
-  return Number.isFinite(raw) && raw > 0 ? raw : 120_000;
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  // One default, not two. This hardcoded 120_000 while resolveResilience
+  // defaulted request_timeout_ms to 300_000, so the same setting had two
+  // different values depending on which path asked -- and a surface that
+  // declared nothing got whichever the caller happened to use.
+  return config ? resolveResilience(config).request_timeout_ms : 300_000;
 }
 
 // ---------------------------------------------------------------------------
@@ -2286,7 +2303,11 @@ export async function compactSession(
       { role: "user", content: `${priorSummary}${transcript}` },
     ],
     [],
-    modelTimeoutMs()
+    // Compaction is a model call like any other and must honour the surface's
+    // request_timeout_ms. Called with no config it fell through to the env var
+    // and a different default, so the one turn most likely to be large was the
+    // one given the shortest deadline.
+    modelTimeoutMs(state.config)
   );
 
   if (result.code !== 0) {
@@ -4928,6 +4949,9 @@ export async function runPromptLoop(
         tool_steps: turn.toolSteps,
         tool_log: turn.toolLog,
         usage: turn.usage,
+        stop_reason: turn.stop_reason,
+        stop_detail: turn.stop_detail,
+        counters: turn.counters,
       };
 
       state.exchanges.push(exchange);
@@ -4963,6 +4987,9 @@ export async function runPromptLoop(
         // trust. Undefined when the backend reports no usage, because a
         // confident 0 is worse than a blank.
         usage: exchange.usage,
+        stop_reason: exchange.stop_reason,
+        stop_detail: exchange.stop_detail,
+        counters: exchange.counters,
         surface_hash: surfaceHash,
         input: audit.text(cleanedInput),
         output: audit.text(turn.content),
