@@ -8,69 +8,198 @@ Companion to [BENCHMARKS.md](BENCHMARKS.md), [BENCHMARK-ROADMAP.md](BENCHMARK-RO
 [BENCHMARK-POSTMORTEM.md](BENCHMARK-POSTMORTEM.md). Where this report contradicts a claim in
 those documents, **this report is the later evidence** and the older claim is flagged below.
 
-> ## ⚠️ CORRECTION — 2026-08-31: the campaign measured a crippled gnomon
->
-> The benchmark adapter left the container's working directory in `/opt/gnomon`
-> (where gnomon is cloned and built), so `gnomon init` rooted the surface in the
-> **cloned repo** rather than the task. Every deliverable under `/app` was outside
-> the sandbox root and **`write`/`edit` refused it outright**.
->
-> Measured: **21 of 42 trials** hit `refused (outside sandbox)`, and only **11 of 42**
-> used `write`/`edit` at all. Models that noticed routed around it through `bash`
-> and passed; models that did not, failed — one model failed `hello-world` this way
-> and resolved it on the first attempt once the cwd was fixed. After the fix,
-> refusals fell to ~5% and `write`/`edit` usage roughly doubled.
->
-> **The peers were never affected.** So every gnomon-vs-peer number in this report —
-> including the headline 31.0% vs goose's 54.5% — is biased against gnomon by an
-> unknown amount, and the "gnomon works through the shell" pattern this report
-> repeatedly interprets as behaviour was **an artifact of the write tools being
-> unable to touch the task**.
->
-> Fixed in `2625678`. A re-run with the corrected adapter is in progress; nothing in
-> §3 or §5 should be cited until it lands.
->
-> One finding survives unchanged and is strengthened: **the record was never
-> produced**, which is why four independent investigations each blamed a different
-> cause and every one was refuted. This defect sat in the traces all day and was
-> found only when a second model failed differently on the same task.
+> **Superseded and corrected, 31 August 2026.** The figures first published here
+> were measured through a benchmark apparatus carrying six defects, every one of
+> which penalised gnomon and left the peers untouched. The corrected numbers are
+> below; the defects are catalogued as F7–F13 in
+> [BENCHMARK-POSTMORTEM.md](BENCHMARK-POSTMORTEM.md). Sections 2–9 are retained
+> as the record of what was originally run and concluded.
 
-> **Status: partial.** The gnomon 241-task arm, the frontier arm, the peer-containment arm and
-> a diagnostic re-run were still executing when this was written. Sections marked *(in flight)*
-> will change. Nothing here has been used to amend a committed result.
+## 1. Executive summary — corrected 31 August
+
+**Original headline: gnomon 31.0% against goose 54.5%, a 23.5-point deficit.**
+That number was wrong by roughly 26 points, in gnomon's disfavour.
+
+Corrected, on the same 48 tasks, the same model (`deepseek-v4-flash-0731`) and
+the same machine:
+
+| arm | valid-trial | 95% CI | honouring gnomon's `apparatus_failure` bucket |
+|---|---|---|---|
+| gnomon, capped clock, pass 1 | 18/43 = 41.9% | [28.4, 56.7] | 47.4% |
+| gnomon, capped clock, pass 2 | 20/45 = 44.4% | [30.9, 58.8] | 48.8% |
+| **gnomon, equal clock, pass 1** | **21/44 = 47.7%** | [33.8, 62.1] | **56.8%** |
+| **gnomon, equal clock, pass 2** | **20/44 = 45.5%** | [31.7, 59.9] | **57.1%** |
+| gnomon, `gpt-5.6-luna` | 22/44 = 50.0% | [35.8, 64.2] | 50.0% |
+| **goose** | **28/44 = 63.6%** | [48.9, 76.2] | 63.6% |
+
+**Paired against goose**, as the apparatus was progressively repaired:
+
+| comparison | paired | discordant | McNemar |
+|---|---|---|---|
+| capped clock | 42 | 1:9 | p = 0.021 |
+| equal clock, pass 1 | 43 | 0:8 | p = 0.008 |
+| equal clock, pass 2 | 44 | 1:9 | p = 0.021 |
+| gnomon on a stronger model | 43 | 1:7 | p = 0.070 |
+| **equal clock, apparatus + contamination excluded** | **35** | **0:3** | **p = 0.250** |
+
+The residual is three tasks: `install-klee-minimal`, `mailman`,
+`video-processing`.
+
+### The five findings that matter
+
+**1 · gnomon scores ~46–57%, not 31%.** The published figure measured a harness
+whose `write`/`edit` tools were refused by its own sandbox on half of all
+trials, whose clock was cut short against uncapped peers, and whose own
+`apparatus_failure` bucket the benchmark discarded — on an unlucky draw.
+
+**2 · The remaining gap is ~6 points and not significant.** goose leads
+63.6% to 47.7/45.5%. Excluding apparatus failures and two contaminated tasks,
+discordant 0:3, p = 0.250. Narrowed from 23.5 points, not closed.
+
+**3 · A stronger model buys nothing.** `gpt-5.6-luna` against
+`deepseek-v4-flash` on a fixed harness: discordant 4:2, p = 0.688. An earlier
+ceiling run had shown the hard tier tripling with a stronger model; it did not
+reproduce. The constraint was the harness, not the model.
+
+**4 · gnomon is 4.17× cheaper per trial than goose.** Like-for-like 48-task
+arms: gnomon $0.3293/48 = **$0.00686**, goose $1.3738/48 = **$0.02862**. Per
+solved task, **$0.0165 against $0.0491 — 2.98×**.
+
+> **Correction.** This report previously published 3.2× per trial and 2.1× per
+> solve. That derived gnomon's cost as `$1.7801 ÷ 200`, but that spend was the
+> **241-task** arm and 200 matches none of its counts (241 trials, 219 valid, 95
+> solved). The divisor was invented. The same credits-delta method recorded
+> `spent = $-9.2626` for the opencode arm — a negative spend, because a credit
+> top-up landed mid-arm — while this report published $0.74 for it. The method is
+> broken, not merely coarse; the ledger should be re-derived from
+> `GET /api/v1/generation?id=` per call.
+
+**5 · The deficit was never reasoning — it was stopping early.** On all three
+residual losses gnomon ended with budget in hand: `install-klee-minimal` one
+command short of `make` at 36 calls against a 52-call solution;
+`mailman` after 37 read-only calls, cut off 19 calls before its own model
+begins writing, with 616s and 219 of 256 steps unused.
+
+### Noise floor
+
+Two runs of identical code, identical model, identical flags:
+
+- **16.3%** of tasks flip (7 of 43) on the pre-fix build
+- **4.7%** (2 of 43) on the fixed build
+
+Any effect smaller than that is unmeasurable at n=1. The fixes appear to have
+made gnomon markedly more *stable*, which is the more interesting of the two
+results and the one most worth confirming.
 
 ---
 
-## 1. Executive summary
+## 1b. What was changed, and why — commit by commit
 
-**On raw capability in the tested cell, gnomon is behind goose by ~19.5pp and level with opencode
-— the goose gap misses the pre-registered significance bar (p = 0.077) but its direction is stable
-under every correction that could be defended, and it does not close under generous assumptions.**
+Seventeen commits, 30–31 August. Each states what was done, what it was worth,
+and the judgement behind it.
 
-The honest one-line answer to "is gnomon keeping up or falling behind?" is: **behind on the axis
-it does not claim, ahead on the axis it does.** gnomon is ~19.5pp behind goose on capability
-(direction stable under every correction, never once reversed, but short of the significance bar),
-at measured parity with opencode only because opencode ran handicapped, ~3.2× cheaper per trial on
-neutral apparatus, and effectively unmeasured against peers on containment and determinism.
+**`06f2f9d` · bash timeout returns its captured output.** The timeout killed the
+process and returned only `Command timed out`, discarding `stdout`/`stderr`
+already held in scope — so the model's only move was to re-run the same command.
+*Impact:* fires on 4 of 108 tasks; ceiling ~0–1 tasks. *Decision:* ship anyway —
+a harness selling the record must not destroy evidence it already holds.
 
-Three things should be read together:
+**`66ac876` · the idle counter sees shell work.** The anti-flailing nudge counted
+only `write`/`edit`, so models editing via heredocs and `sed -i` looked idle.
+50 of 118 trials nudged, 49 with no write/edit at all; nudged pass 16.0% vs
+49.3%. *Decision:* detect worktree movement observationally rather than
+pattern-matching command text, and deliberately do **not** widen `touchedFiles`,
+which would silently turn the published `verify.after = "write"` into `"always"`.
 
-1. **There is no regression to explain — the earlier result was never real.** Peer improvement is
-   ruled out (both peers resolved to the *same builds* in both campaigns, ~44 hours apart) and
-   gnomon regression is unsupported (its rate is flat at **29.6–35.4% across five independently
-   composed slices**). The old "parity with goose" rested on ~7 goose trials on 8 self-selected
-   tasks with gnomon holding a **3:1 attempt-budget advantage**.
-2. **The measured cause is not weak reasoning — it is self-inflicted early termination.**
-   31 of 59 unresolved trials stopped themselves, most within one tool call of an anti-flailing
-   nudge that fires because the idle counter counts only `write`/`edit` while the agent is
-   working through `bash`. When gnomon finishes normally with a summary it is right ~75% of the
-   time. That is an engineering defect, not a capability ceiling.
-3. **gnomon's own axes are where it still wins** — and cost now has neutral-apparatus evidence
-   for the first time: **$0.0089/trial vs goose's $0.0286** (3.2× cheaper per trial, 2.1× per
-   solved task) on the same box, same model, same benchmark.
+**`2625678` · benchmark surface rooted in the task dir; tool schemas sorted.**
+Two things. The adapter left the shell in `/opt/gnomon`, so `gnomon init` rooted
+the surface in the cloned repo and `write`/`edit` refused every deliverable —
+**21 of 42 trials**, only 11 of 42 using write/edit at all. And Rule 3 has always
+said schemas are "sorted"; `declaredTools` returned file order. *Impact:* the
+first is the campaign's largest single distortion. *Decision:* fix both; the sort
+also stabilises the prompt prefix for caching.
 
-The most consequential retraction: **capability non-inferiority vs goose** is withdrawn, not
-merely unsupported.
+**`12a8d5a`, `a1029f8` · documentation corrections.** The first flags the whole
+campaign as measured on a broken adapter. The second corrects an overstatement I
+had made in `4df5134`: I claimed gnomon ran with "a quarter of the time the task
+grants," but both arms shared `--global-agent-timeout-sec 900`, so the real bias
+is ~300s of thread-join lingering — roughly a third of what was claimed.
+
+**`d4b2df3` · capture the real task directory.** The first cwd fix guessed
+`${TB_TASK_DIR:-/app}`; that variable exists in **zero files** of terminal-bench,
+so it silently hardcoded `/app` — wrong for `fix-git` (`/app/personal-site`),
+`swe-bench-astropy-2` (`/app/astropy`) and `prove-plus-comm` (`/workspace`, where
+`/app` does not exist). *Decision:* record `$PWD` before anything can change it.
+A fix that fails silently on the tasks it was written for is worse than the bug.
+
+**`93efe00` · repair the init scaffold; require the model to prove its work.**
+Commit `ae0a0365` had spliced the `[verify]` docs into webfetch's comment,
+leaving a live uncommented line in every generated `tools.toml` since
+2026-08-26 — **invalid TOML** that gnomon's lenient parser accepted and strict
+readers reject. `[verify]` also sat in `TOOLS_TOML` while `resolveVerify` reads
+`policy.verify`, so it was unreachable. And `system.md` had no verification
+clause at all. *Decision:* fix the scaffold, move `[verify]` to where the loader
+reads it, add two clauses and no rule set — a rules-heavy prompt regressed in the
+cited ablation.
+
+**`650b6f9` · record why the turn stopped.** The loop knew whether it stalled or
+hit the ceiling, turned it into prose, and discarded the structure. *Impact:* no
+score movement by construction. *Decision:* `stop_reason` is a separate axis from
+the outcome bucket, never a composite verdict with it — four investigations of
+this campaign each blamed a different defect and every one was refuted, because
+the numbers that would have settled it were computed and thrown away.
+
+**`26f036b` · an empty completion is not an answer.** `message.content ??
+json.response` never read `reasoning_content`, so a reasoning model answering in
+its thinking channel returned `content: null` and read as empty — recorded as
+`stop_reason: "answered"`. Empty final answer: 0/10 passed. Prose: 7/10.
+*Decision:* the model control identifies it — `glm-5.2` took 18 nudges and
+`gpt-5.6-luna` 14 with **zero** empty turns; only `deepseek` produced them. So
+this is the transport reading, not the prompt wording, and the nudge prose was
+deliberately left alone.
+
+**`4df5134` · stop capping gnomon's clock.** `max_timeout_sec = 900.0` against
+every stock adapter's `float("inf")`. **Third recurrence** of this bug class; the
+two earlier fixes raised the number rather than removing the cap. *Impact:* goose
+reached 1200.2s on 13 of 45 trials, gnomon 968.2s on 7 of 45.
+
+**`77f7b0e` · a timeout is not a flake.** Codes 11 (timed out) and 12
+(unreachable) were retried identically. **7 of 41 trials (17%)** died from three
+attempts at the same deadline against a peer with no request deadline.
+*Decision:* a timed-out attempt now doubles the deadline; unreachable keeps the
+plain retry. Default raised 120s → 300s.
+
+**`cc86c8d` · stop ending runs the model had not finished.** The
+empty-completion retry was one boolean for the whole turn while the nudge
+re-fires every 12 calls, so the second empty always hit a spent latch. And
+`worktreeStampOf` walked only `ctx.root`, so `apt`, `/etc` and `/usr/local` work
+could never reset the counter — one trial printed *"98 call(s) without changing
+a file"* immediately after `postconf -e`, `service mailman3 start` and
+`chown -R list:list`, with two tests already passing.
+
+**`743f44c` · a hash-less record in a chained trail is a break.** `verifyTrail`
+skipped records with no hash and left `prev` untouched, so **fabricated records
+appended cleanly to a genuine trail**. *Decision:* the first hashed record marks
+the trail chained; after that a hash-less record is a break. Unchained trails are
+unaffected.
+
+**`e2c1b05`, plus the docs commits** · the second post-mortem (F7–F13), this
+report, the harness-research reconciliation, and a benchmark-discipline skill.
+
+### Known defects not fixed, and why
+
+- **Surface hashing follows symlinks** (`crates/gnomon-surface/src/main.rs:69`
+  uses `path.is_file()`). Behaviour-deciding content can therefore live outside
+  `.gnomon/`, which is Rule 1's whole point. Not fixed unsupervised: it changes
+  the hashing path every conformance golden depends on.
+- **The README contradicts Rule 3 with itself** — "unreachable tools produce a
+  refusal, never a shorter list" (:299) against "that role runs with fewer
+  tools" (:1510).
+- **A routed-around refusal still dominates the turn's bucket.** Two sandbox
+  denials at calls 5–6 made `mailman` publish `[refusal]` after 31 clean calls.
+  `worse()` is monotonic by design; changing it is a contract question.
+- **The credits-delta cost method** should be replaced by per-generation ledger
+  queries (see finding 4).
 
 ---
 
@@ -106,6 +235,14 @@ unchanged, so each peer arm remains upstream's agent rather than ours.
 ---
 
 ## 3. Results
+
+> **Historical.** Everything from here to §9 is the report as originally
+> written, retained as the record of what was run and concluded on 30 August.
+> **Its numbers are superseded by §1.** They were produced through an apparatus
+> carrying six defects (F7–F13), and the conclusions drawn from them — including
+> the claim that gnomon's failures were dominated by hard tasks, and that its
+> preference for the shell was behavioural — did not survive.
+
 
 ### 3.1 Headline
 
@@ -197,6 +334,14 @@ runs the queue hard-first, so composition shifts as it drains.
 ---
 
 ## 4. Strengths identified
+
+> **Historical.** Everything from here to §9 is the report as originally
+> written, retained as the record of what was run and concluded on 30 August.
+> **Its numbers are superseded by §1.** They were produced through an apparatus
+> carrying six defects (F7–F13), and the conclusions drawn from them — including
+> the claim that gnomon's failures were dominated by hard tasks, and that its
+> preference for the shell was behavioural — did not survive.
+
 
 These held up under adversarial verification.
 
