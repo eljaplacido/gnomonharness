@@ -4755,6 +4755,16 @@ export async function runPromptLoop(
         role,
         model: exchange.model,
         endpoint: route.target.endpoint,
+        // The NAME alone cannot answer "where did this actually go?".
+        // GNOMON_MODEL_URL replaces the declared url at resolve time, so two
+        // runs with the same surface hash and the same endpoint name can reach
+        // different servers, and nothing in the trail distinguishes them. The
+        // loop announces the override on the console; a console line is not a
+        // record. DESIGN.md's claim is "if behaviour changed, the hash changed"
+        // -- this is the one path where behaviour changes and it does not, so
+        // the resolved destination has to be written down instead.
+        endpoint_url: route.target.url,
+        endpoint_overridden: process.env.GNOMON_MODEL_URL ? true : undefined,
         bucket: exchange.bucket,
         code: exchange.code,
         duration_ms: duration,

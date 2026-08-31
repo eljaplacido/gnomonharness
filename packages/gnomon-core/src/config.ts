@@ -687,7 +687,18 @@ export function declaredTools(config: GnomonConfig): ToolDef[] {
   // was slow. Consistent field order is also the cheapest of the three levers
   // the current top-of-leaderboard harness attributes its tool-call
   // reliability to, and a stable prefix is what makes prompt caching hit.
-  return [...(config.tools.tools ?? [])].sort((a, b) => a.name.localeCompare(b.name));
+  // Byte-wise, NOT localeCompare — the same rule this file already applies to
+  // manifest paths, and for the same reason. localeCompare goes through ICU,
+  // whose collation tables differ between Node builds (a small-icu binary
+  // collates differently from a full-icu one) and between ICU versions. Rule 3
+  // says tool schemas are "sorted, hashed"; a sort whose result depends on which
+  // Node compiled the harness is not a sort that can be hashed and compared
+  // across machines. Demonstrated divergence on realistic names: localeCompare
+  // orders ["Read", "mcp__fs__read", "read"] differently from byte order, and
+  // MCP tools carry exactly that shape of name.
+  return [...(config.tools.tools ?? [])].sort((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+  );
 }
 
 /** The context-window policy, fully resolved with declared defaults. */

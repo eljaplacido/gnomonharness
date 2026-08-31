@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  declaredTools,
   resolveVerify,
   parseToml,
   loadConfig,
@@ -642,5 +643,21 @@ describe("auditSurface", () => {
       )
     );
     expect(problems).toEqual([]);
+  });
+
+  it("sorts declared tools byte-wise, not by locale", () => {
+    // Rule 3 says tool schemas are declared, sorted and hashed. localeCompare
+    // routes that sort through ICU, whose collation tables differ between Node
+    // builds (small-icu vs full-icu) and ICU versions, so the hash could depend
+    // on which Node compiled the harness. This file already sorts manifest paths
+    // byte-wise for exactly that reason -- and records that the two
+    // implementations of the surface hash once disagreed because of it.
+    // Uppercase and MCP-shaped names are where the two orders part company.
+    const names = ["read", "Read", "mcp__fs__read", "write", "todo"];
+    const cfg: any = { tools: { tools: names.map((name) => ({ name, enabled: true })) }, roles: {} };
+    const sorted = declaredTools(cfg).map((t: any) => t.name);
+    expect(sorted).toEqual([...names].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
+    // and that is genuinely a different order from the locale one
+    expect(sorted).not.toEqual([...names].sort((a, b) => a.localeCompare(b)));
   });
 });
