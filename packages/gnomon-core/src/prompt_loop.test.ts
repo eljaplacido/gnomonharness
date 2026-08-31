@@ -1439,6 +1439,38 @@ describe("runTask — the non-interactive contract", () => {
     expect(promptLoop.buildSystemPrompt(state, "implement", "carry on")).toContain("make all");
   });
 
+  it("catches a two-call poll loop, not just verbatim repetition", async () => {
+    // (the real loop alternated `sleep 5` and `ps aux | grep make`; these are
+    // instant stand-ins with the same signature pattern)
+    // Stall detection compared only against toolCalls[0] and demanded every
+    // recent signature equal it, so `sleep 5` / `ps aux | grep make` alternating
+    // was never all-equal and never a stall. Measured before the fix: an
+    // identical-call loop stalled at step 3, a two-call alternation ran to the
+    // step wall at 64. A real session spent 11 of its 13 calls polling a
+    // background job in exactly that shape.
+    const config: any = loadConfig("../..");
+    let call = 0;
+    const alternating = (async () => {
+      call++;
+      // never writes anything: A, B, A, B, ...
+      // instant commands: the point is the SHAPE of the loop, not its cost
+      const command = call % 2 === 0 ? "true" : "pwd";
+      return {
+        ok: true,
+        json: async () => ({
+          message: { content: "", tool_calls: [{ function: { name: "bash", arguments: { command } } }] },
+        }),
+      };
+    }) as unknown as typeof fetch;
+
+    await withFetch(alternating, async () => {
+      const record = await promptLoop.runTask(config, "watch the build", { role: "implement", yes: true });
+      expect(record.stop_reason).toBe("stall");
+      // and it noticed well before the step wall rather than at it
+      expect(record.tool_steps).toBeLessThan(20);
+    });
+  }, 30000);
+
   it("keeps the CURRENT request when trimming, not just the first one in the session", () => {
     // "The first user message is the task" holds only on turn one. From turn two
     // buildMessages replays earlier turns as user/assistant pairs, so the first

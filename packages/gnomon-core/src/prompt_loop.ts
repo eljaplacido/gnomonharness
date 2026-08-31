@@ -1201,6 +1201,10 @@ export const DEFAULT_LEGS = 8;
 /** Consecutive identical calls that mean the model is going in circles. */
 const STALL_REPEATS = 3;
 
+/** Window and distinct-signature bound for detecting an A-B-A-B poll loop. */
+const STALL_WINDOW = 8;
+const STALL_DISTINCT = 2;
+
 /**
  * Calls a role may make without changing a file before it is nudged to decide.
  *
@@ -1818,11 +1822,30 @@ export async function runAgenticTurn(
 
     // Stalled? Repeating one call verbatim is not progress, and on autopilot
     // it would burn the whole budget in a circle.
-    const stalled =
+    const repeatingVerbatim =
       recentCalls.length >= STALL_REPEATS &&
       recentCalls
         .slice(-STALL_REPEATS)
         .every((sig) => sig === callSignature(result.toolCalls[0]));
+
+    // Verbatim repetition is the easy case and the rarer one. The shape a real
+    // run produces is an ALTERNATION: `sleep 5` then `ps aux | grep make` then
+    // `sleep 5`, forever. Comparing only against toolCalls[0] and demanding
+    // every recent signature match it never sees that — measured, an
+    // identical-call loop stalled at step 3 while a two-call alternation ran to
+    // the step wall at 64. A real session spent 11 of its 13 calls polling a
+    // background job exactly this way.
+    //
+    // So: few distinct signatures across a wider window, and nothing written in
+    // it. The write condition is what keeps genuine multi-tool work out of this
+    // — a read/edit rhythm that is changing files is progress, however
+    // repetitive it looks.
+    const cycling =
+      recentCalls.length >= STALL_WINDOW &&
+      new Set(recentCalls.slice(-STALL_WINDOW)).size <= STALL_DISTINCT &&
+      callsSinceWrite >= STALL_WINDOW;
+
+    const stalled = repeatingVerbatim || cycling;
 
     const wall = maxTotal <= 0 || steps >= maxTotal;
     // Measured on what has already run, never on what is about to. Gating on
@@ -1960,7 +1983,12 @@ export async function runAgenticTurn(
       stepsThisLeg++;
       callsSinceWrite++;
       recentCalls.push(callSignature(call));
-      if (recentCalls.length > STALL_REPEATS * 2) recentCalls.shift();
+      // Keep enough history for the WIDER of the two stall tests. This was
+      // STALL_REPEATS * 2 = 6, so an 8-call alternation window could never be
+      // filled and the check it guards never fired once.
+      if (recentCalls.length > Math.max(STALL_REPEATS * 2, STALL_WINDOW)) {
+        recentCalls.shift();
+      }
       const gated = needsApproval(call.name, gate) && offered.has(call.name);
       deps.progress.stop();
       if (deps.ui.cot === "full" || deps.ui.cot === "tools") {
