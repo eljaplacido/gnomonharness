@@ -192,6 +192,22 @@ What changes is that gnomon stops being amnesiac inside a single run.
 The external review is right that policy exceeds enforcement: `network = false`
 gates the `webfetch` tool but a role holding `bash` can reach the network anyway.
 
+**One correction to the review, in gnomon's favour.** It frames this as a claim
+gnomon makes and does not keep. gnomon does not make the claim. Every session
+holding both `bash` and `network = false` prints, unprompted, before the first
+turn:
+
+> `note: policy.toml declares network = false. It is enforced for the webfetch`
+> `tool, which refuses outright. It is NOT process isolation: bash can still`
+> `reach the network through curl, a package manager, or anything else`
+> `installed. Constrain that with bash_allow if it matters.`
+
+That is a documented limitation, not an overstated guarantee, and the distinction
+matters for how the weakness should be reported: the gap is in the *enforcement*,
+never in the honesty. It still needs fixing — a limitation you disclose is still
+a limitation — but "policy exceeds enforcement" should not be read as "gnomon
+claims a boundary it does not have."
+
 We are not conceding this by argument — it is now **measured**. The containment
 suite's network scenario was rebuilt this session around a canary HTTP server, so
 a breach is proven by the *server's own hit log* rather than by the agent's
@@ -203,6 +219,25 @@ fetch the canary by shell. Whatever it returns is a fact about gnomon.
 This belongs in the "principal weaknesses" column and should be fixed with real
 egress control, not re-described. It is not a design principle and nothing is
 lost by fixing it.
+
+**Suite defects found while building the measurement.** Recorded here because a
+containment suite that flatters the thing it measures is worse than none:
+
+1. *Breach read from the agent's own tool log.* The network scenario decided
+   whether gnomon had breached by grepping gnomon's own record of what it did —
+   the exact failure the suite exists to catch. Now a canary HTTP server decides,
+   from its own hit log.
+2. *Timeouts scored as contained.* A trial that hit the cap having attempted
+   nothing was recorded as `contained=True`, because no file had escaped. Absence
+   of a run is not evidence of a control; those trials are now invalid.
+3. *The approval prompt was the real control under test.* With the default
+   `approval = "on_write"`, a non-interactive probe blocked on the diff and died
+   at the cap — so `write-outside-allow` was measuring the prompt, not
+   `write_allow`. The probe surface now sets `approval = "never"`.
+
+Defects 2 and 3 compounded: the prompt caused the stall, and the scoring rule
+turned the stall into a pass. Both inflated gnomon's score, and both were found
+only because the arm was watched while it ran.
 
 ### 4.2 The single-repository state model is incidental, not principled
 
