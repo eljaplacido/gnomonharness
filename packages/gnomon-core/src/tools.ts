@@ -2128,22 +2128,31 @@ function searchScope(
   args: Record<string, unknown>,
   ctx: ToolContext
 ): { abs: string; rel: string } | ToolOutcome {
-  const rel = String(args.path ?? "").trim() || ".";
-  const abs = resolveInRoot(ctx.root, rel, ctx.sandbox);
+  const raw = String(args.path ?? "").trim() || ".";
+  const abs = resolveInRoot(ctx.root, raw, ctx.sandbox);
   if (!abs) {
     return {
       code: TOOL_OUT_OF_SANDBOX,
-      content: `Refused: "${rel}" is outside the repository root and sandbox=${ctx.sandbox}.`,
-      summary: `search ${rel} — refused (outside sandbox)`,
+      content: `Refused: "${raw}" is outside the repository root and sandbox=${ctx.sandbox}.`,
+      summary: `search ${raw} — refused (outside sandbox)`,
     };
   }
   if (!existsSync(abs)) {
     return {
       code: TOOL_OK_EMPTY,
-      content: `No such directory: ${rel}`,
-      summary: `search ${rel} — not found`,
+      content: `No such directory: ${raw}`,
+      summary: `search ${raw} — not found`,
     };
   }
+  // Derive rel from the RESOLVED path, not from what the caller typed.
+  //
+  // It used to be the raw argument, while the file list it is sliced against
+  // comes back from walkFiles already normalised relative to the root. So the
+  // slice length was wrong for every spelling except "dir" and "dir/": `./src`
+  // and an absolute path both returned ZERO results, silently and with code 0.
+  // A model that reaches for `./src` -- an ordinary way to write it -- is told
+  // the directory is empty.
+  const rel = relative(ctx.root, abs).split(sep).join("/") || ".";
   return { abs, rel };
 }
 

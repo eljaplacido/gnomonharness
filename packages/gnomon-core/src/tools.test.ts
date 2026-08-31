@@ -338,6 +338,23 @@ describe("bash", () => {
     expect(noStore.content).toContain("silently dropped");
   });
 
+  it("glob finds the same files however the path is spelled", async () => {
+    // `rel` was the raw argument, while the file list it is sliced against comes
+    // back normalised relative to the root. So the slice length was wrong for
+    // every spelling except "dir" and "dir/": `./src` and an absolute path both
+    // returned ZERO results, silently, with code 0 -- a model reaching for the
+    // ordinary `./src` was told the directory was empty.
+    mkdirSync(join(root, "globsrc"), { recursive: true });
+    writeFileSync(join(root, "globsrc", "a.ts"), "a\n");
+    writeFileSync(join(root, "globsrc", "b.ts"), "b\n");
+    const spellings = ["globsrc", "globsrc/", "./globsrc", "./globsrc/", join(root, "globsrc")];
+    for (const path of spellings) {
+      const out = await executeTool("glob", { pattern: "*.ts", path }, ctx(), new Set(["glob"]));
+      const hits = (out.content ?? "").split("\n").filter((l) => l.endsWith(".ts")).length;
+      expect(hits, `path spelled ${JSON.stringify(path)}`).toBe(2);
+    }
+  });
+
   it("a malformed tool call is refused, and never silently does something else", async () => {
     // Small models omit arguments routinely. Every one of these used to return
     // code 0 -- a plain RESULT -- having done something the call never asked for.
