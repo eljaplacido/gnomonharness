@@ -1240,11 +1240,32 @@ export function trimWorking(
   // user message is the task. Both are kept whatever the budget.
   const firstUser = working.findIndex((m) => m.role === "user");
   const head = firstUser === -1 ? working.slice() : working.slice(0, firstUser + 1);
-  const tail = firstUser === -1 ? [] : working.slice(firstUser + 1);
+
+  // ...but "the first user message is the task" only holds on turn ONE.
+  // buildMessages replays earlier turns as user/assistant pairs, so from turn 2
+  // the first user message is a REQUEST FROM EARLIER IN THE CONVERSATION, and
+  // the current one sits further down. Tool traffic then accumulates after it,
+  // and newest-first eviction reaches the current request before it reaches
+  // that traffic. Measured on a second-turn conversation with 40 tool results:
+  // the trim kept "rename the widget" from turn one and dropped "delete the
+  // obsolete migration" that the turn was actually running -- so the model
+  // carried on against a stale request, which is exactly the "losing the task
+  // halfway through" outcome this function's own comment calls unrecoverable.
+  //
+  // Pin the LAST user message too. It is the only message whose loss cannot be
+  // compensated by anything else in the window.
+  const lastUser = working.map((m) => m.role).lastIndexOf("user");
+  const pinnedIdx = lastUser > firstUser ? lastUser : -1;
+  const pinned = pinnedIdx === -1 ? null : working[pinnedIdx]!;
+
+  const tail =
+    firstUser === -1
+      ? []
+      : working.slice(firstUser + 1).filter((_, k) => firstUser + 1 + k !== pinnedIdx);
 
   const headCost = head.reduce((n, m) => n + cost(m), 0);
   const kept: ChatMessage[] = [];
-  let used = headCost;
+  let used = headCost + (pinned ? cost(pinned) : 0);
 
   // Newest first: recent tool results are what the next call reasons from.
   for (let i = tail.length - 1; i >= 0; i--) {
@@ -1253,8 +1274,10 @@ export function trimWorking(
     used += c;
     kept.unshift(tail[i]);
   }
+  // Back in front of the traffic it produced, where it reads as the request.
+  if (pinned) kept.unshift(pinned);
 
-  const dropped = tail.length - kept.length;
+  const dropped = tail.length - (kept.length - (pinned ? 1 : 0));
   if (dropped === 0) return { messages: working, dropped: 0 };
 
   // A tool result must not be the first thing after the head: some backends

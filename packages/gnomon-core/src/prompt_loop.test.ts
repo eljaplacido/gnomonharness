@@ -1424,6 +1424,35 @@ describe("runTask — the non-interactive contract", () => {
     expect(promptLoop.buildSystemPrompt(state, "implement", "carry on")).toContain("make all");
   });
 
+  it("keeps the CURRENT request when trimming, not just the first one in the session", () => {
+    // "The first user message is the task" holds only on turn one. From turn two
+    // buildMessages replays earlier turns as user/assistant pairs, so the first
+    // user message is a request from earlier in the conversation and the current
+    // one sits further down, with this turn's tool traffic piling up after it.
+    // Newest-first eviction then reached the current request before it reached
+    // that traffic. Measured: the trim kept "rename the widget" from turn one
+    // and dropped "delete the obsolete migration" that the turn was running, so
+    // the model carried on against a stale request -- the "losing the task
+    // halfway through" outcome the function's own comment calls unrecoverable.
+    const working: any[] = [
+      { role: "system", content: "instructions" },
+      { role: "user", content: "TURN-ONE: rename the widget" },
+      { role: "assistant", content: "done" },
+      { role: "user", content: "CURRENT: delete the obsolete migration" },
+    ];
+    for (let i = 0; i < 40; i++) {
+      working.push({ role: "assistant", content: `step ${i}` });
+      working.push({ role: "tool", content: "x".repeat(3000) });
+    }
+    const { messages, dropped } = promptLoop.trimWorking(working, 4000);
+    const kept = messages.map((m: any) => m.content).join("\n");
+    expect(dropped).toBeGreaterThan(0);
+    expect(kept).toContain("CURRENT: delete the obsolete migration");
+    expect(kept).toContain("TURN-ONE: rename the widget");
+    // and it sits ahead of the traffic it produced, so it still reads as the request
+    expect(kept.indexOf("CURRENT:")).toBeLessThan(kept.indexOf("step 39"));
+  });
+
   it("a blank does not end the turn while there is budget left to retry into", async () => {
     // The whole residual gap against the peer harness ran through this path:
     // nudge -> blank -> bucket, with the budget largely unspent. One task was

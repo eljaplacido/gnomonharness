@@ -591,12 +591,62 @@ export function scanShellCommand(command: string): ShellScan {
 // Diff preview
 // ---------------------------------------------------------------------------
 
+/**
+ * Largest LCS table this will allocate: ~2M cells, about 16MB as a dense
+ * number[][], which is a size a long-running session can absorb repeatedly.
+ * Roughly 1400x1400 lines.
+ */
+export const LCS_CELL_CAP = 2_000_000;
+
+/** Marks a diff whose preview was skipped; carries the real counts for diffStat. */
+export const DIFF_ELIDED = "  … diff preview elided:";
+
+/**
+ * What changed, for a pair too large to diff cell-by-cell.
+ *
+ * Deliberately honest about being a summary: a reviewer who is shown "+3 −1"
+ * for a 40 000-line rewrite has been misled, so this says outright that the
+ * preview was elided and how big the two sides are.
+ */
+function summariseDiff(a: string[], b: string[]): string[] {
+  const sample = 12;
+  // The counts ride in the marker so diffStat stays truthful. Without this the
+  // sampled lines are all it can see, and a 40 000-line rewrite reports "+12
+  // −12" — a reviewer shown that has been actively misled, which is worse than
+  // being told the preview was skipped.
+  const out: string[] = [
+    `${DIFF_ELIDED} ${a.length} lines → ${b.length} lines is too large to diff ` +
+      `line-by-line; showing the first ${sample} of each side. removed=${a.length} added=${b.length}`,
+  ];
+  for (const line of a.slice(0, sample)) out.push(`- ${line}`);
+  if (a.length > sample) out.push(`  … ${a.length - sample} more removed`);
+  for (const line of b.slice(0, sample)) out.push(`+ ${line}`);
+  if (b.length > sample) out.push(`  … ${b.length - sample} more added`);
+  return out;
+}
+
 /** Longest-common-subsequence line diff, rendered as +/- lines. */
 export function diffLines(before: string, after: string, context = 3): string[] {
   const a = before.length ? before.split("\n") : [];
   const b = after.length ? after.split("\n") : [];
 
-  // LCS table. Files here are small enough that O(n·m) is fine.
+  // "Files here are small enough that O(n·m) is fine" was the standing comment,
+  // and it is true right up until a model overwrites a lockfile, a generated
+  // file or a dataset. Measured: 6 000 lines cost 371MB, 12 000 cost 866MB, and
+  // 40 000 killed the process outright with a V8 heap OOM -- exit 134, SIGABRT.
+  //
+  // That is the worst failure this harness can have. The try/catch in
+  // executeTool cannot catch a V8 OOM, so nothing is emitted: no exit-contract
+  // code, no session snapshot, no session_end record. Rule 5 promises a
+  // published exit contract and an ordinary `write` walked straight past it,
+  // taking the audit trail's seal with it.
+  //
+  // Above the cap, say what changed instead of computing where. The approval
+  // preview truncates at 60 lines regardless, so no caller loses anything it
+  // was actually going to show.
+  if ((a.length + 1) * (b.length + 1) > LCS_CELL_CAP) {
+    return summariseDiff(a, b);
+  }
   const lcs: number[][] = Array.from({ length: a.length + 1 }, () =>
     new Array(b.length + 1).fill(0)
   );
@@ -649,6 +699,14 @@ export function diffLines(before: string, after: string, context = 3): string[] 
 
 /** `+n −m` counts for a diff. */
 export function diffStat(lines: string[]): { added: number; removed: number } {
+  // An elided preview carries the true totals, because the handful of sampled
+  // lines it shows are not what changed.
+  const elided = lines[0]?.startsWith(DIFF_ELIDED)
+    ? /removed=(\d+) added=(\d+)/.exec(lines[0])
+    : null;
+  if (elided) {
+    return { added: Number(elided[2]), removed: Number(elided[1]) };
+  }
   return {
     added: lines.filter((l) => l.startsWith("+ ")).length,
     removed: lines.filter((l) => l.startsWith("- ")).length,

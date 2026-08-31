@@ -337,6 +337,30 @@ describe("bash", () => {
     expect(noStore.content).toContain("silently dropped");
   });
 
+  it("a huge write does not take the whole process down with it", async () => {
+    // diffLines allocated an (n+1)x(m+1) LCS table with the standing comment
+    // "files here are small enough that O(n·m) is fine". Measured before the
+    // guard: 6 000 lines cost 371MB, 12 000 cost 866MB, 40 000 aborted the
+    // process with a V8 heap OOM -- exit 134. executeTool's try/catch cannot
+    // catch that, so nothing was emitted: no exit-contract code, no session
+    // snapshot, no session_end record. Rule 5 promises a published exit
+    // contract and an ordinary `write` walked past it.
+    const big = Array.from({ length: 40_000 }, (_, i) => `line ${i}`).join("\n");
+    const other = Array.from({ length: 40_000 }, (_, i) => `changed ${i}`).join("\n");
+    writeFileSync(join(root, "huge.txt"), big);
+
+    const began = Date.now();
+    const out = await executeTool("write", { path: "huge.txt", content: other }, ctx(), offered);
+    expect(out.code).toBe(0);
+    expect(Date.now() - began).toBeLessThan(4000);
+
+    // and the counts stay truthful rather than reporting the sample size
+    const stat = diffStat(diffLines(big, other));
+    expect(stat.removed).toBe(40_000);
+    expect(stat.added).toBe(40_000);
+    expect(diffLines(big, other)[0]).toContain("too large to diff");
+  });
+
   it("a backgrounded job returns at once, however its streams are redirected", async () => {
     // The promise used to settle on `close`, which waits for the child's stdio
     // to close as well as the child to end. A backgrounded job inherits sh's
