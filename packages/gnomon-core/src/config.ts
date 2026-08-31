@@ -1229,6 +1229,55 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
     }
   }
 
+  // Every pattern the surface declares must actually compile.
+  //
+  // bash_allow / bash_deny / write_allow are compiled inside the tool at CALL
+  // time, so an uncompilable pattern is discovered mid-run or not at all. The
+  // two failure directions are opposite and both bad: a broken DENY makes every
+  // command refused (the role is dead), while a broken ALLOW silently
+  // contributes nothing (the role is wider than it reads). audit.redact is
+  // already validated at startup and warned about loudly; these were not.
+  for (const [role, rawRole] of Object.entries(config.roles ?? {})) {
+    const where = `.gnomon/roles.toml [roles.${role}]`;
+    for (const key of ["bash_allow", "bash_deny"] as const) {
+      const list = (rawRole as RoleDef)?.[key];
+      if (!Array.isArray(list)) continue;
+      for (const pattern of list) {
+        if (typeof pattern !== "string") continue;
+        try {
+          new RegExp(pattern);
+        } catch (e) {
+          problems.push({
+            where,
+            problem: `${key} pattern ${JSON.stringify(pattern)} is not a valid regular expression: ${(e as Error).message}`,
+            fix:
+              key === "bash_deny"
+                ? `While it cannot be compiled, bash is refused outright — this role can run nothing. Fix or remove the pattern.`
+                : `An allow-list entry that cannot compile contributes nothing, so this role is wider than it reads. Fix or remove it.`,
+            // A dead deny is a dead role; a dead allow is a quiet widening.
+            fatal: key === "bash_deny",
+          });
+        }
+      }
+    }
+  }
+
+  // routing.rules written with single brackets is a table, not an array of
+  // tables — legal TOML, silently yielding zero rules while mode = "auto".
+  {
+    const routing = (config.config as { routing?: { rules?: unknown; mode?: unknown } } | undefined)?.routing;
+    if (routing && "rules" in routing && routing.rules !== undefined && !Array.isArray(routing.rules)) {
+      problems.push({
+        where: `.gnomon/config.toml [routing]`,
+        problem:
+          `routing.rules is a ${typeof routing.rules === "object" ? "table" : typeof routing.rules}, not an array of tables — ` +
+          `so no routing rules are loaded at all.`,
+        fix: `Write each rule as [[routing.rules]] with double brackets.`,
+        fatal: false,
+      });
+    }
+  }
+
   // A key in the neighbouring block is read by nothing either.
   for (const [file, parsed] of [
     ["config.toml", config.config],

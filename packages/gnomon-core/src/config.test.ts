@@ -776,4 +776,42 @@ describe("auditSurface", () => {
       } as any)
     ).toHaveLength(0);
   });
+
+  it("catches a pattern that cannot compile, and a routing block written as a table", () => {
+    // bash_allow/bash_deny compile inside the tool at CALL time, so a broken
+    // pattern is found mid-run or never. The two failure directions are
+    // opposite and both bad: a dead DENY refuses every command (the role cannot
+    // work), a dead ALLOW contributes nothing (the role is wider than it
+    // reads). audit.redact was already validated at startup; these were not.
+    const broken: any = {
+      config: {},
+      policy: {},
+      roles: { verifier: { bash_deny: ["rm\\s+-rf", "([unclosed"], bash_allow: ["*bad"] } },
+    };
+    const problems = auditSurface(broken);
+    const deny = problems.find((p: any) => p.problem.includes("bash_deny"));
+    const allow = problems.find((p: any) => p.problem.includes("bash_allow"));
+    expect(deny?.fatal).toBe(true);       // a dead deny is a dead role
+    expect(allow?.fatal).toBe(false);     // a dead allow is a quiet widening
+    expect(allow?.fix).toContain("wider than it reads");
+
+    // [routing.rules] with single brackets is a table: legal TOML, zero rules
+    const single: any = {
+      config: { routing: { mode: "auto", rules: { role: "plan", match: "^x" } } },
+      policy: {},
+      roles: {},
+    };
+    const r = auditSurface(single).find((p: any) => p.problem.includes("routing.rules"));
+    expect(r?.problem).toContain("not an array of tables");
+    expect(r?.fix).toContain("[[routing.rules]]");
+
+    // and correctly-written surfaces stay silent
+    expect(
+      auditSurface({
+        config: { routing: { mode: "auto", rules: [{ role: "plan", match: "^x" }] } },
+        policy: {},
+        roles: { verifier: { bash_deny: ["rm\\s+-rf"], bash_allow: ["^ls\\s"] } },
+      } as any)
+    ).toHaveLength(0);
+  });
 });
