@@ -36,10 +36,16 @@ tools = ["read", "glob", "grep", "compute", "todo", "write", "edit", "bash"]
 # Not a substitute for branch protection on the remote: that is the control
 # that binds everyone, and this one only binds the agent. It is the local half.
 bash_deny = [
-  '\bgit\s+push\b[^|;&]*\s(--force|-f)\b',            # force-push, any branch
-  '\bgit\s+push\b[^|;&]*\s(main|master|release)\b',   # straight onto a release branch
-  '\bgit\s+push\b[^|;&]*--delete\b',                   # deleting a branch on the remote
-  '\bgit\s+branch\b[^|;&]*\s-D\b',                    # discarding an unmerged branch
+  # Measured against the real syntax: the previous list denied `--force` and
+  # `-D` and let through `git push origin +master` (force-push by refspec),
+  # `git push origin :master` (delete the remote branch), and
+  # `git branch --delete --force`. Four operations named, all four reachable by
+  # their ordinary spellings.
+  '\bgit\s+push\b[^|;&]*\s(--force|--force-with-lease|-f)\b',   # force-push, any branch
+  '\bgit\s+push\b[^|;&]*\s[+:]',                               # +refspec forces, :refspec deletes
+  '\bgit\s+push\b[^|;&]*[\s:+/](main|master|release)\b',        # straight onto a release branch
+  '\bgit\s+push\b[^|;&]*--delete\b',                            # deleting a branch on the remote
+  '\bgit\s+branch\b[^|;&]*\s(-D\b|--delete\b|-d\b[^|;&]*--force\b)',  # discarding an unmerged branch
 ]
 
 description = "Highest token volume — this is where local hosting saves money"
@@ -100,10 +106,16 @@ tools = ["read", "glob", "grep", "compute", "todo", "write", "edit", "bash"]
 # Not a substitute for branch protection on the remote: that is the control
 # that binds everyone, and this one only binds the agent. It is the local half.
 bash_deny = [
-  '\bgit\s+push\b[^|;&]*\s(--force|-f)\b',            # force-push, any branch
-  '\bgit\s+push\b[^|;&]*\s(main|master|release)\b',   # straight onto a release branch
-  '\bgit\s+push\b[^|;&]*--delete\b',                   # deleting a branch on the remote
-  '\bgit\s+branch\b[^|;&]*\s-D\b',                    # discarding an unmerged branch
+  # Measured against the real syntax: the previous list denied `--force` and
+  # `-D` and let through `git push origin +master` (force-push by refspec),
+  # `git push origin :master` (delete the remote branch), and
+  # `git branch --delete --force`. Four operations named, all four reachable by
+  # their ordinary spellings.
+  '\bgit\s+push\b[^|;&]*\s(--force|--force-with-lease|-f)\b',   # force-push, any branch
+  '\bgit\s+push\b[^|;&]*\s[+:]',                               # +refspec forces, :refspec deletes
+  '\bgit\s+push\b[^|;&]*[\s:+/](main|master|release)\b',        # straight onto a release branch
+  '\bgit\s+push\b[^|;&]*--delete\b',                            # deleting a branch on the remote
+  '\bgit\s+branch\b[^|;&]*\s(-D\b|--delete\b|-d\b[^|;&]*--force\b)',  # discarding an unmerged branch
 ]
 
 description = "Tests first, then the code that satisfies them"

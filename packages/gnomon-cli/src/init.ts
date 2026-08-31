@@ -291,10 +291,16 @@ tools = ["read", "glob", "grep", "compute", "todo", "note", "write", "edit", "ba
 # Not a substitute for branch protection on the remote: that is the control
 # that binds everyone, and this one only binds the agent. It is the local half.
 bash_deny = [
-  '\\bgit\\s+push\\b[^|;&]*\\s(--force|-f)\\b',            # force-push, any branch
-  '\\bgit\\s+push\\b[^|;&]*\\s(main|master|release)\\b',   # straight onto a release branch
-  '\\bgit\\s+push\\b[^|;&]*--delete\\b',                   # deleting a branch on the remote
-  '\\bgit\\s+branch\\b[^|;&]*\\s-D\\b',                    # discarding an unmerged branch
+  # Measured against the real syntax: the previous list denied --force and -D
+  # and let through 'git push origin +master' (force-push by refspec),
+  # 'git push origin :master' (delete the remote branch), and
+  # 'git branch --delete --force'. Four operations named, all four reachable
+  # by their ordinary spellings.
+  '\\bgit\\s+push\\b[^|;&]*\\s(--force|--force-with-lease|-f)\\b',
+  '\\bgit\\s+push\\b[^|;&]*\\s[+:]',
+  '\\bgit\\s+push\\b[^|;&]*[\\s:+/](main|master|release)\\b',
+  '\\bgit\\s+push\\b[^|;&]*--delete\\b',
+  '\\bgit\\s+branch\\b[^|;&]*\\s(-D\\b|--delete\\b|-d\\b[^|;&]*--force\\b)',
 ]
 
 description = "Tests first, then the code that satisfies them"
@@ -355,10 +361,16 @@ max_steps_total = 224
 # Not a substitute for branch protection on the remote: that is the control
 # that binds everyone, and this one only binds the agent. It is the local half.
 bash_deny = [
-  '\\bgit\\s+push\\b[^|;&]*\\s(--force|-f)\\b',            # force-push, any branch
-  '\\bgit\\s+push\\b[^|;&]*\\s(main|master|release)\\b',   # straight onto a release branch
-  '\\bgit\\s+push\\b[^|;&]*--delete\\b',                   # deleting a branch on the remote
-  '\\bgit\\s+branch\\b[^|;&]*\\s-D\\b',                    # discarding an unmerged branch
+  # Measured against the real syntax: the previous list denied --force and -D
+  # and let through 'git push origin +master' (force-push by refspec),
+  # 'git push origin :master' (delete the remote branch), and
+  # 'git branch --delete --force'. Four operations named, all four reachable
+  # by their ordinary spellings.
+  '\\bgit\\s+push\\b[^|;&]*\\s(--force|--force-with-lease|-f)\\b',
+  '\\bgit\\s+push\\b[^|;&]*\\s[+:]',
+  '\\bgit\\s+push\\b[^|;&]*[\\s:+/](main|master|release)\\b',
+  '\\bgit\\s+push\\b[^|;&]*--delete\\b',
+  '\\bgit\\s+branch\\b[^|;&]*\\s(-D\\b|--delete\\b|-d\\b[^|;&]*--force\\b)',
 ]
 
 description = "Highest token volume — where local hosting pays off"
