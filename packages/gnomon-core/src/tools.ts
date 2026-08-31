@@ -1069,6 +1069,11 @@ async function bashTool(
     const proc = spawn(command, {
       shell: true,
       cwd: ctx.root,
+      // stdin closed, stdout/stderr piped. An inherited stdin pipe that nobody
+      // ever writes to makes any command that reads stdin block until the tool
+      // timeout kills it -- `cat` with no argument, an npm prompt, a git
+      // credential ask. Nothing here can answer them, so they get EOF instead.
+      stdio: ["ignore", "pipe", "pipe"],
       // detached puts the command in its own process group. shell:true means
       // the direct child is `sh -c`, so signalling only that leaves the real
       // work orphaned and still running; the group is what must be killed.
@@ -1125,27 +1130,69 @@ async function bashTool(
         summary: `bash — failed to spawn`,
       });
     });
-    proc.on("close", (exit) => {
+    // `exit`, NOT `close`.
+    //
+    // close waits for the child's stdio streams to close as well as the child
+    // to end. A backgrounded job inherits sh's pipe write-ends, so the pipes
+    // stay open for as long as the JOB runs, and close never fires though sh
+    // exited in milliseconds. Measured: `sleep 30 & echo started` blocked the
+    // full timeout and was then SIGKILLed by killTree, so the model was handed
+    // proof the job had started AND a timeout, while the job itself was dead.
+    // `sleep 30 >log 2>&1 &` returned in 2ms -- the difference was only whether
+    // BOTH streams were redirected, which is not a distinction any model can be
+    // expected to get right every time. It is also the harness's own advice for
+    // long commands, so the recommended path was the broken one.
+    //
+    // A short drain after exit collects output still in flight; the process is
+    // already gone, so this waits on bytes, not on the job.
+    proc.on("exit", (exit) => {
+      if (settled) return;
+      setTimeout(() => finish(exit), 40);
+    });
+    const finish = (exit: number | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      const body = [
-        `exit: ${exit}`,
-        stdout ? `stdout:\n${stdout}` : "stdout: (empty)",
-        stderr ? `stderr:\n${stderr}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n");
+      // stderr BEFORE stdout when the command failed, and both ends kept.
+      //
+      // The old order put stderr last and clamped head-only, so a chatty build
+      // that failed returned 32KB of "Compiling crate-1..3999" and dropped the
+      // compiler error entirely -- the model was told the build failed and shown
+      // nothing about why, with a footer advising it to "narrow it with grep",
+      // which cannot be done for a build. Measured: 4000 progress lines plus one
+      // E0308 on stderr came back with the error absent.
+      //
+      // The timeout path already reasons this way ("the reason it was still
+      // running is usually the last thing it printed"); a non-zero exit deserves
+      // the same treatment, and its diagnostics are the point of the call.
+      const failed = exit !== 0;
+      const body = failed
+        ? [
+            `exit: ${exit}`,
+            stderr ? `stderr:\n${stderr}` : "stderr: (empty)",
+            stdout ? `stdout:\n${stdout}` : "stdout: (empty)",
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : [
+            `exit: ${exit}`,
+            stdout ? `stdout:\n${stdout}` : "stdout: (empty)",
+            stderr ? `stderr:\n${stderr}` : "",
+          ]
+            .filter(Boolean)
+            .join("\n");
       const drift = surfaceDrift(ctx, surfaceBefore);
       const movedTree = worktreeMoved(ctx, worktreeBefore, shellCwd);
       done({
         code: TOOL_OK,
         worktree_changed: movedTree,
-        content: clamp(body, ctx.maxOutputBytes) + (drift ? `\n\n${drift.notice}` : ""),
+        content:
+          (failed ? clampEnds(body, ctx.maxOutputBytes) : clamp(body, ctx.maxOutputBytes)) +
+          (drift ? `\n\n${drift.notice}` : ""),
         summary: `bash — exit ${exit}${drift ? " · surface changed" : ""}`,
         surface_drift: drift ?? undefined,
       });
-    });
+    };
   });
 }
 

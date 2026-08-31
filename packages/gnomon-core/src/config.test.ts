@@ -660,4 +660,31 @@ describe("auditSurface", () => {
     // and that is genuinely a different order from the locale one
     expect(sorted).not.toEqual([...names].sort((a, b) => a.localeCompare(b)));
   });
+
+  it("refuses to start on an unknown role key, because the typo WIDENS capability", () => {
+    // buildToolSet reads config.roles[role]?.tools and treats undefined as
+    // "every declared tool", and bash_allow is enforced only `if (list &&
+    // list.length > 0)`. So `tool =` instead of `tools =`, or `bash_alow`
+    // instead of `bash_allow`, does not narrow the role slightly -- it removes
+    // the restriction entirely, while the role goes on printing its own
+    // description ("Cannot alter what it judges"). The failure direction is
+    // toward more capability, which is why this is fatal and an unknown
+    // endpoint field is only a warning.
+    const cfg: any = {
+      config: {},
+      roles: { verifier: { model: "m", tool: ["read"], bash_alow: ["^ls"] } },
+    };
+    const problems = auditSurface(cfg);
+    const fatal = problems.filter((p: any) => p.fatal);
+    expect(fatal.length).toBe(2);
+    expect(fatal.map((p: any) => p.problem).join(" ")).toContain('Did you mean "tools"');
+    expect(fatal.map((p: any) => p.problem).join(" ")).toContain('Did you mean "bash_allow"');
+    expect(fatal.map((p: any) => p.fix).join(" ")).toContain("widens the role");
+
+    // a correctly spelled role is silent
+    expect(
+      auditSurface({ config: {}, roles: { verifier: { model: "m", tools: ["read"], bash_allow: ["^ls"] } } } as any)
+        .filter((p: any) => p.fatal).length
+    ).toBe(0);
+  });
 });

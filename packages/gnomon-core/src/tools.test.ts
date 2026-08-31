@@ -337,6 +337,52 @@ describe("bash", () => {
     expect(noStore.content).toContain("silently dropped");
   });
 
+  it("a backgrounded job returns at once, however its streams are redirected", async () => {
+    // The promise used to settle on `close`, which waits for the child's stdio
+    // to close as well as the child to end. A backgrounded job inherits sh's
+    // pipe write-ends, so the pipes stayed open for as long as the JOB ran and
+    // `close` never fired though sh had exited in milliseconds. Measured:
+    // `sleep 30 & echo started` blocked the full timeout and was then SIGKILLed,
+    // so the model got proof the job started AND a timeout, with the job dead.
+    // Only `>log 2>&1 &` escaped -- and that is the harness's own advice for
+    // long commands, so the recommended path was the broken one.
+    for (const command of [
+      "sleep 20 >/tmp/gn-bg-a.log 2>&1 & echo started",
+      "sleep 20 & echo started",
+      "sh -c 'echo boot; sleep 20' >/tmp/gn-bg-b.log & echo started",
+    ]) {
+      const began = Date.now();
+      const out = await executeTool("bash", { command }, ctx({ timeoutMs: 3000 }), offered);
+      expect(out.code, command).toBe(0);
+      expect(Date.now() - began, command).toBeLessThan(1500);
+    }
+  });
+
+  it("keeps the diagnostics when a chatty command fails", async () => {
+    // stderr was last in the body and the clamp was head-only, so a build that
+    // printed thousands of progress lines and then failed returned its preamble
+    // and dropped the compiler error entirely. The model was told the build
+    // failed and shown nothing about why. The timeout path already keeps both
+    // ends for exactly this reason; a non-zero exit now does too.
+    const noisy =
+      'for i in $(seq 1 3000); do echo "   Compiling crate-$i"; done; ' +
+      'echo "error[E0308]: mismatched types" >&2; exit 101';
+    const out = await executeTool("bash", { command: noisy }, ctx({ maxOutputBytes: 4000 }), offered);
+    expect(out.summary).toContain("exit 101");
+    expect(out.content).toContain("E0308");
+    expect(out.content).toContain("stderr:");
+  });
+
+  it("does not hand a command an stdin nobody will ever write to", async () => {
+    // An inherited stdin pipe makes anything that reads stdin block until the
+    // tool timeout kills it. Nothing in the loop can answer a prompt, so the
+    // honest thing is EOF.
+    const began = Date.now();
+    const out = await executeTool("bash", { command: "cat" }, ctx({ timeoutMs: 3000 }), offered);
+    expect(out.code).toBe(0);
+    expect(Date.now() - began).toBeLessThan(1500);
+  });
+
   it("refuses a command that already timed out, instead of stalling on it again", async () => {
     // The measured long tail is a model re-running the same blocking command
     // until the wall, paying the full timeout every time. Both the tool

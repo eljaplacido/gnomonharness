@@ -1132,7 +1132,12 @@ export type StopReason =
   | "empty"
   | "stall"
   | "step_wall"
-  | "cancelled";
+  | "cancelled"
+  // The run never reached the model: the surface itself could not be used.
+  // Without this, a refusal to start had to borrow "answered", which is how an
+  // apparatus failure came to be recorded as a turn that concluded. It IS a
+  // value a return site produces, so Rule 6 is satisfied.
+  | "apparatus";
 
 /**
  * Per-turn tallies. Every field is a count of something the loop already
@@ -2337,6 +2342,45 @@ export async function runTask(
   options: RunTaskOptions = {}
 ): Promise<TaskRecord> {
   applyCredentials();
+
+  // The surface audit ran only on the interactive path, so `gnomon task` -- the
+  // non-interactive entry point, and the one every benchmark adapter uses --
+  // started against surfaces nothing had checked. A fatal problem there is
+  // worse than in a session, not better: there is nobody watching the console,
+  // and a role silently widened by a typo'd key would simply run.
+  //
+  // Reported as an apparatus failure rather than a thrown error, because that
+  // is what it is: the harness could not be configured, so no result of any
+  // kind is available. Bucketing it as a refusal would let a misconfigured
+  // surface look like a model declining the work.
+  {
+    const fatal = auditSurface(config).filter((p) => p.fatal);
+    if (fatal.length > 0) {
+      const detail = fatal
+        .map((p) => `${p.where}: ${p.problem}\n    ${p.fix}`)
+        .join("\n  ");
+      return {
+        input,
+        output: `Surface cannot be used:\n  ${detail}`,
+        role: options.role ?? "unknown",
+        model: "",
+        code: 10,
+        bucket: "apparatus_failure",
+        stop_reason: "apparatus",
+        tool_steps: 0,
+        tool_log: [],
+        skills: [],
+        surface_hash: "",
+        counters: {
+          writes: 0,
+          worktree_moves: 0,
+          nudges: 0,
+          final_step_was_write: false,
+          per_tool: {},
+        },
+      };
+    }
+  }
 
   const routing = resolveRouting(config);
   // suggest needs someone to ask, and a task run has nobody. It falls back to

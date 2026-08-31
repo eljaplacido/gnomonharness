@@ -956,6 +956,23 @@ export function resolveEndpoint(
 const ENDPOINT_KEYS = new Set(["url", "kind", "api_key_env", "provider"]);
 
 /**
+ * Every key a [roles.*] block may carry.
+ *
+ * Unknown keys here are FATAL, unlike an unknown endpoint field, because the
+ * failure direction is toward MORE capability. `buildToolSet` reads
+ * `config.roles[role]?.tools` and treats undefined as "everything declared", so
+ * writing `tool = [...]` instead of `tools = [...]` hands the role every tool in
+ * the surface. `bash_alow` deletes an allow-list the same way -- the enforcement
+ * is `if (ctx.bashAllow && ctx.bashAllow.length > 0)`. A verifier that a dropped
+ * character has silently converted into unrestricted bash still prints its own
+ * description, "Runs the suite. Cannot alter what it judges."
+ *
+ * A role block has a small closed key set and no legitimate reason to carry an
+ * unread key, so this refuses to start rather than warn.
+ */
+const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "model", "profile", "temperature", "tools", "top_p", "write_allow"]);
+
+/**
  * Spellings people reach for when they mean to supply a secret directly.
  *
  * Every one of them is silently ignored today: the block is read into
@@ -999,9 +1016,50 @@ export interface SurfaceProblem {
  * Whether a *key* works is a different question, and only the endpoint can
  * answer it — see probeEndpointAuth.
  */
+/** Levenshtein, for "did you mean" on a misspelled surface key. */
+function editDistance(a: string, b: string): number {
+  const d: number[][] = Array.from({ length: a.length + 1 }, (_, i) =>
+    Array.from({ length: b.length + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
+  );
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      d[i]![j] = Math.min(
+        d[i - 1]![j]! + 1,
+        d[i]![j - 1]! + 1,
+        d[i - 1]![j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+  return d[a.length]![b.length]!;
+}
+
 export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
   const problems: SurfaceProblem[] = [];
   const declared = config.config.endpoints ?? {};
+
+  for (const [role, rawRole] of Object.entries(config.roles ?? {})) {
+    const where = `.gnomon/roles.toml [roles.${role}]`;
+    for (const field of Object.keys((rawRole ?? {}) as Record<string, unknown>)) {
+      if (ROLE_KEYS.has(field)) continue;
+      const near = [...ROLE_KEYS]
+        .map((k) => [k, editDistance(field, k)] as const)
+        .filter(([, d]) => d <= 2)
+        .sort((a, b) => a[1] - b[1])[0]?.[0];
+      problems.push({
+        where,
+        problem:
+          `unknown field "${field}" — it is read by nothing` +
+          (near ? `. Did you mean "${near}"?` : "."),
+        fix:
+          (near === "tools"
+            ? `A role with no readable \`tools\` list gets EVERY declared tool, so this ` +
+              `typo widens the role instead of narrowing it. `
+            : near && near.endsWith("_allow")
+              ? `An unreadable allow-list is not an empty one — it removes the restriction ` +
+                `entirely. `
+              : "") + `Roles take: ${[...ROLE_KEYS].join(", ")}.`,
+        fatal: true,
+      });
+    }
+  }
 
   for (const [name, raw] of Object.entries(declared)) {
     const where = `.gnomon/config.toml [endpoints.${name}]`;
