@@ -52,7 +52,7 @@ class GnomonAgent(AbstractInstalledAgent):
         return [
             TerminalCommand(
                 command=f"bash /opt/gnomon-run.sh {shlex.quote(instruction)}",
-                max_timeout_sec=900.0,
+                max_timeout_sec=float("inf"),  # match the stock adapters; --global-agent-timeout-sec governs
                 block=True,
             )
         ]
