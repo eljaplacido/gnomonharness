@@ -1070,6 +1070,25 @@ const EXECUTING_ARGS: Array<[RegExp, string]> = [
  * Fatal, because a control that is declared and not read is worse than one that
  * was never declared: the surface says the check runs.
  */
+/**
+ * Every top-level block either surface file may declare.
+ *
+ * A misspelled block name — [resilence], [aproval], [sandobx] — is legal TOML,
+ * hashes into the surface, and is read by nothing, so the setting it contains
+ * silently reverts to the default. That is the same failure as the misplaced
+ * [verify] block, one letter earlier.
+ */
+const KNOWN_BLOCKS = new Set([
+  "endpoints", "defaults", "context", "ui", "routing", "resilience", "audit",
+  "session", "process", "tools", "verify", "approval", "sandbox", "exit_codes",
+]);
+
+/** Keys whose VALUE is a closed set, and what silently happens to a typo. */
+const ENUM_KEYS: Record<string, { values: string[]; falls_back_to: string }> = {
+  approval: { values: ["never", "on_write", "always"], falls_back_to: "on_write" },
+  sandbox: { values: ["off", "confined", "strict"], falls_back_to: "confined" },
+};
+
 const BLOCK_OWNER: Record<string, string> = {
   verify: "policy.toml",
   approval: "policy.toml",
@@ -1149,6 +1168,44 @@ function editDistance(a: string, b: string): number {
 export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
   const problems: SurfaceProblem[] = [];
   const declared = config.config.endpoints ?? {};
+
+  // A block name nothing recognises, and an enum value nothing accepts. Both
+  // revert to a default without saying so, and both are one keystroke away from
+  // a control the operator believes is in force.
+  for (const [file, parsed] of [
+    ["config.toml", config.config],
+    ["policy.toml", config.policy],
+  ] as const) {
+    for (const [block, body] of Object.entries((parsed ?? {}) as Record<string, unknown>)) {
+      if (!KNOWN_BLOCKS.has(block)) {
+        const near = [...KNOWN_BLOCKS]
+          .map((k) => [k, editDistance(block, k)] as const)
+          .filter(([, d]) => d <= 2)
+          .sort((a, b) => a[1] - b[1])[0]?.[0];
+        problems.push({
+          where: `.gnomon/${file} [${block}]`,
+          problem:
+            `[${block}] is not a block this harness reads` +
+            (near ? `. Did you mean "${near}"?` : "; it does nothing."),
+          fix: `Known blocks: ${[...KNOWN_BLOCKS].sort().join(", ")}.`,
+          fatal: false,
+        });
+        continue;
+      }
+      const spec = ENUM_KEYS[block];
+      const value = (body as Record<string, unknown> | undefined)?.[block === "approval" ? "gate" : "level"];
+      if (spec && typeof value === "string" && !spec.values.includes(value)) {
+        problems.push({
+          where: `.gnomon/${file} [${block}]`,
+          problem:
+            `"${value}" is not one of ${spec.values.join(" | ")}, so this silently ` +
+            `falls back to "${spec.falls_back_to}".`,
+          fix: `Use one of: ${spec.values.join(", ")}. \`gnomon enumerations\` lists them.`,
+          fatal: false,
+        });
+      }
+    }
+  }
 
   // A declared block that lives in the wrong file is read by nothing.
   for (const [file, parsed] of [

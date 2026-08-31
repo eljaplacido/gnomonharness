@@ -747,4 +747,33 @@ describe("auditSurface", () => {
     expect(parseToml('s = "a\\tb"').s).toBe("a\tb");
     expect(parseToml('s = "say \\"hi\\""').s).toBe('say "hi"');
   });
+
+  it("names a block or an enum value nothing reads, instead of silently defaulting", () => {
+    // A misspelled block name is legal TOML, hashes into the surface, and is
+    // read by nothing -- so the setting inside it reverts to the default with no
+    // sign. Same for a misspelled enum value: "on_wrote" silently becomes
+    // on_write, which is the LOOSER of the two an operator might have meant.
+    const cfg: any = {
+      config: { resilence: { attempts: 5 } },
+      policy: { approval: { gate: "on_wrote" }, sandbox: { level: "confned" } },
+      roles: {},
+    };
+    const problems = auditSurface(cfg);
+    const text = problems.map((p: any) => p.problem).join(" | ");
+    expect(text).toContain('Did you mean "resilience"');
+    expect(text).toContain("never | on_write | always");
+    expect(text).toContain("off | confined | strict");
+    // warnings, not refusals: the surface still works, it just does not do what
+    // it appears to
+    expect(problems.every((p: any) => !p.fatal)).toBe(true);
+
+    // a correct surface stays silent
+    expect(
+      auditSurface({
+        config: { resilience: { attempts: 5 } },
+        policy: { approval: { gate: "on_write" }, sandbox: { level: "confined" } },
+        roles: {},
+      } as any)
+    ).toHaveLength(0);
+  });
 });
