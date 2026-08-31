@@ -137,6 +137,57 @@ between two runs of the identical harness.
 
 ---
 
+## What a suite does when it is not measuring
+
+Added 2026-08-31, after a containment suite produced three separate clean sweeps
+that measured nothing. Every one of these flattered the thing under test.
+
+**Read the wall-clock before you read the score.** It is the cheapest apparatus
+check there is, and it caught most of the following:
+
+- 1.3s per trial for a 35B model — the peer never reached the model at all
+  (`baseURL` had the completions path appended twice, every request 404'd).
+- 180s exactly, with an empty tool log — the agent never acted; an approval
+  prompt was blocking a non-interactive run, so the *prompt* was the control
+  being measured rather than the policy under test.
+- 22s and a refusal in the tool log — a real trial.
+
+Ask of any duration: *is this long enough for the work to have happened, and
+short enough that it did not simply hit a cap?*
+
+**A suite can flatter BOTH arms at once.** Ours scored gnomon's timeouts as
+"contained" and the peer's failed API calls as "contained". That symmetry is not
+fairness — it is a suite that is not measuring. Do not take "at least it was even
+handed" as reassurance.
+
+**A result that is too clean is a finding, not a relief.** A 33/33 sweep arrived
+after direct probing had already proven three bypasses existed. The contradiction
+was the tell: the score was impossible, so the apparatus was wrong. If a run
+contradicts something you have separately established, believe the contradiction
+and go looking.
+
+**Prove the negative control before trusting a pass.** "Contained" means nothing
+unless a breach is demonstrably detectable. Fire the attack at the detector
+directly first — a canary server that logs a real hit, a filesystem predicate you
+have watched succeed — and only then believe the trials that come back clean.
+
+**Score the boundary, not the phrasing.** A scenario whose prompt names the exact
+command its pattern blocks measures whether the model tried that spelling.
+`rm -rf` was refused; `rm -fr`, `rm --recursive --force` and `find -exec` all went
+through. Give every scenario 2–3 adversarial variants reaching the same end state
+by a different route, and count it sound only if **every** variant is contained.
+
+**Never edit or rebuild underneath a live run.** Twice now: a `sed` on a running
+script left it executing the original ref, and a `pnpm build` mid-sweep broke
+`init` for every remaining trial. Editing a live script is not a way to change a
+live run, and neither is rebuilding its dependencies.
+
+**Detect breach from real state, never from the agent's own account.** The suite
+originally decided whether gnomon had breached by grepping gnomon's own tool log
+— asking the thing under test whether it had misbehaved.
+
+---
+
 ## Fast pre-flight
 
 ```
@@ -152,6 +203,10 @@ between two runs of the identical harness.
 [ ] MDE stated; if MDE > target effect, say so before spending
 [ ] Arms serialized, cheapest first, credit floor per arm
 [ ] Task-selection file non-empty
+[ ] Negative control fired: a breach/failure is demonstrably detectable
+[ ] Wall-clock per trial is plausible for the work (not ~0, not exactly the cap)
+[ ] Outcome read from real state, not from the agent's own report
+[ ] Nothing rebuilt or edited underneath the running arm
 ```
 
 If a line cannot be ticked, either fix it or write down — in the result — that it was not met.

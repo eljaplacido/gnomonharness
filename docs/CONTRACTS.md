@@ -33,7 +33,10 @@ native names read narrower than the use:
 
 - **Refusal (2-4) is something saying no.** A declined approval, `bash_allow`
   or `bash_deny`, `write_allow`, a path outside the sandbox, a tool the role
-  was not given, a surface path that is not writable.
+  was not given, a surface path that is not writable, **or a malformed call —
+  `write` with no `content`, `read` with no `path`, `bash` with a non-string
+  `command`.** The last of those belongs here rather than at 11 for the reason
+  stated below: the model got it wrong, so the harness says no.
 - **11 is a tool that understood the request and could not carry it out.** An
   edit whose anchor matches twice, an unreadable file, an expression that will
   not parse, a checklist with two items in progress — as well as the timeout
@@ -42,6 +45,26 @@ native names read narrower than the use:
 The distinction is what makes the bucket answer anything: `apparatus_failure`
 is the signal to look at the harness, and a model's malformed argument
 arriving there would make it meaningless.
+
+## `stop_reason` — why the tool loop ended
+
+A separate axis from the bucket, never a composite verdict with it. A turn can
+be a `result` that hit the step wall, or a `refusal` that answered. Emitted on
+every `TaskRecord`.
+
+| value | meaning |
+|---|---|
+| `answered` | the model produced a final answer |
+| `empty` | it returned no text and no tool call, and did not recover after re-asking |
+| `stall` | the same call repeated without changing anything |
+| `step_wall` | `max_steps_total` was reached |
+| `cancelled` | the operator stopped it |
+| `apparatus` | the run never reached the model — the surface itself could not be used |
+
+`apparatus` exists because every failure of that kind previously borrowed
+`answered`, which recorded a run that never started as a turn that concluded.
+
+---
 
 This table is the vocabulary, not an inventory of what the current build
 emits. `gnomon task` exits `0`, `2` or `10` — the bucket, not the native code —

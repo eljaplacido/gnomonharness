@@ -1129,6 +1129,20 @@ export const MAX_CONSECUTIVE_EMPTY = 3;
 /** How many run notes are kept and replayed. Oldest fall off first. */
 export const MAX_RUN_NOTES = 40;
 
+/**
+ * Append a note, bounded, oldest first.
+ *
+ * Exported so the bound is testable: it lived in a closure inside the turn, and
+ * a test written against the closure could only ever assert that rendering
+ * works, not that the cap holds. A note store that grows without limit stops
+ * being something the model can re-read and becomes context pressure — the very
+ * problem compaction exists to relieve.
+ */
+export function pushNote(notes: RunNote[], turn: number, text: string): RunNote[] {
+  notes.push({ turn, text });
+  return notes.length > MAX_RUN_NOTES ? notes.slice(-MAX_RUN_NOTES) : notes;
+}
+
 export type StopReason =
   | "answered"
   | "empty"
@@ -1437,13 +1451,7 @@ export async function runAgenticTurn(
     notes: {
       list: () => state.notes ?? [],
       add: (text) => {
-        state.notes ??= [];
-        // Bounded, and the oldest go first: a note store that grows without
-        // limit stops being re-readable and starts being context pressure.
-        state.notes.push({ turn: state.exchanges.length + 1, text });
-        if (state.notes.length > MAX_RUN_NOTES) {
-          state.notes = state.notes.slice(-MAX_RUN_NOTES);
-        }
+        state.notes = pushNote(state.notes ?? [], state.exchanges.length + 1, text);
       },
     },
     // Connected MCP servers (mcp__… calls route here); undefined if none.

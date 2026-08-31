@@ -25,7 +25,14 @@ exists to earn, and today `12` can become `40` without moving a byte of the mani
 **(b) The record that Rules 2 and 4 exist to produce was never produced.** `[audit] enabled = false`
 ships in `init.ts:193` **and in gnomon's own `.gnomon/config.toml:100`** — off even in the dogfood
 surface. `TaskRecord` carries no `stop_reason`; the reason exists internally as a note string
-(`prompt_loop.ts:1276-1281`) and is only interpolated into prose. The benchmark adapter ignores
+(`prompt_loop.ts:1276-1281`) and is only interpolated into prose.
+
+> **Fixed 2026-08-31.** `TaskRecord` now carries `stop_reason`, `stop_detail` and
+> `counters` (`08bdd4d`), and the enumeration is published in
+> [CONTRACTS.md](CONTRACTS.md). Audit still ships off by default, which is a
+> deliberate choice rather than an oversight — but it means every benchmark run
+> to date was made with tracing disabled, and that is recorded in
+> [BENCHMARK-REPORT-2026-08-30.md](BENCHMARK-REPORT-2026-08-30.md). The benchmark adapter ignores
 `CONTAINER_AGENT_LOGS_PATH`, which terminal-bench already mounts.
 
 **The consequence is the whole argument.** Four independent adversarial analyses of the same

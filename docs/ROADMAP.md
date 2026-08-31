@@ -169,10 +169,20 @@ was green throughout; none of it lived on a path the tests exercised.
 
 Ordered by what a day of real use runs into first.
 
-- [ ] **Evaluation suite.** A fixed task set across several models recording
-      tokens, wall-clock, tool calls and pass rate, with the same tasks run on
-      OpenCode and Aider for a baseline. Until this exists, no claim about task
-      success rates is honest — see [POSITIONING.md](POSITIONING.md).
+- [~] **Evaluation suite.** *Partly built, 2026-08-31.* Terminal-Bench runs with
+      goose and opencode as peer arms (`benchmarks/results/terminal-bench-*`), and
+      four dimension suites now exist that no public benchmark covers:
+      auditability (`auditability-2026-08-31`, adversarial tamper-evidence),
+      surface-replay determinism (`determinism-2026-08-31`), context retention
+      (`context-2026-08-31`), and the tool-calling contract under malformed model
+      output (`tool-contract-2026-08-31`). Containment is peer-compared
+      (`containment-2026-08-31`) with its own correction attached.
+      **Still missing:** code quality (nothing measures the diff, only whether a
+      hidden test passed), prompt-injection resistance, per-turn latency against
+      peers, and a token-efficiency comparison — backend `usage` is captured on
+      the audit record now, but no comparative run has used it. Until those
+      exist, claims on those axes are not honest — see
+      [POSITIONING.md](POSITIONING.md).
 - [x] **MCP (stdio).** `tools.toml`'s `[mcp_servers]` block spawns a pinned
       stdio server at startup, discovers its tools and offers them per role as
       `mcp__<server>__<tool>`. HTTP/SSE transports remain to be wired, and the

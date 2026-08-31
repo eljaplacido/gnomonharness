@@ -260,4 +260,19 @@ describe("the README outcome table matches the tool result codes", () => {
     expect(tools).toContain("summary: `write ${path} — not permitted for this role`");
     expect(tools).toContain("summary: `edit ${path} — not permitted for this role`");
   });
+
+  it("CONTRACTS.md's stop_reason table matches the enumeration the code emits", () => {
+    // Rule 6 is about published enumerations, and stop_reason is one: it appears
+    // on every TaskRecord. It was not published anywhere until the values had
+    // already drifted once -- `apparatus` had to be added because every failure
+    // of that kind was borrowing `answered`, recording a run that never started
+    // as a turn that concluded. Pinning the table stops the next drift being
+    // silent.
+    const contracts = readFileSync(join(__dirname, "../../../docs/CONTRACTS.md"), "utf-8");
+    const documented = [...contracts.matchAll(/^\| `([a-z_]+)` \| /gm)].map((m) => m[1]);
+    const expected = ["answered", "empty", "stall", "step_wall", "cancelled", "apparatus"];
+    for (const value of expected) {
+      expect(documented, `stop_reason "${value}" is not in CONTRACTS.md`).toContain(value);
+    }
+  });
 });

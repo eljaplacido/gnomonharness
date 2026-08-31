@@ -1404,6 +1404,21 @@ describe("runTask — the non-interactive contract", () => {
     });
   });
 
+  it("bounds the note store, oldest first, so it stays re-readable", () => {
+    // A note store that grows without limit stops being something the model can
+    // re-read and becomes context pressure -- the problem compaction exists to
+    // relieve. The bound lived in a closure, where a test could only assert that
+    // rendering worked; it is a function now so the cap itself is checkable.
+    let notes: any[] = [];
+    for (let i = 0; i < promptLoop.MAX_RUN_NOTES + 15; i++) {
+      notes = promptLoop.pushNote(notes, i + 1, `note ${i}`);
+    }
+    expect(notes).toHaveLength(promptLoop.MAX_RUN_NOTES);
+    // the OLDEST fell off, the newest survived
+    expect(notes[0].text).toBe("note 15");
+    expect(notes[notes.length - 1].text).toBe(`note ${promptLoop.MAX_RUN_NOTES + 14}`);
+  });
+
   it("replays this run's notes to later turns, as observation and not instruction", async () => {
     // The harness was amnesiac inside a single run, which is why its measured
     // long tail was repeating an action that had already failed. Notes live
