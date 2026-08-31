@@ -991,6 +991,61 @@ describe("model API errors", () => {
     expect(said.filter((l) => l.includes("[retry]")).length).toBe(2);
   });
 
+  it("escalates a timeout deadline, but never past the budget flat retrying would have used", async () => {
+    // The escalation shipped unbounded and made things strictly worse: 300 +
+    // 600 + 1200 = 2100s against a harness wall of 900, so 5 of 5 benchmark
+    // trials stopped recording an apparatus_failure inside budget and started
+    // being SIGKILLed with no record at all. Bounding it is what makes the idea
+    // safe -- the sequence may redistribute timeoutMs x attempts, never exceed
+    // it. Here that is 1000 x 3 = 3000ms, so the attempts are 1000 then 2000
+    // and there is no third: a third could not finish inside the budget, and
+    // starting it would forfeit the exit contract for nothing.
+    const config: any = loadConfig("../..");
+    config.config = {
+      ...config.config,
+      resilience: { attempts: 3, backoff_ms: 1, request_timeout_ms: 1000 },
+    };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const said: string[] = [];
+    const spans: number[] = [];
+
+    await withFetch(
+      ((_url: string, init: any) => {
+        // Honour the deadline the loop actually chose, so elapsed time is real
+        // and the budget is genuinely consumed rather than notionally.
+        const began = Date.now();
+        return new Promise((_resolve, reject) => {
+          init.signal.addEventListener("abort", () => {
+            spans.push(Date.now() - began);
+            reject(Object.assign(new Error("The operation timed out"), { name: "TimeoutError" }));
+          });
+        });
+      }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "hi" }],
+          {
+            approve: async () => true,
+            progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+            say: (l: string) => said.push(l),
+          }
+        );
+        expect(turn.code).toBe(11);
+      }
+    );
+
+    expect(spans.length).toBe(2);
+    // It really did escalate -- the second attempt got roughly twice the first.
+    expect(spans[1]).toBeGreaterThan(spans[0] * 1.5);
+    // And the whole sequence stayed inside what flat retrying would have spent.
+    expect(spans.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(3000 + 400);
+    expect(said.some((l) => l.includes("retry budget spent"))).toBe(true);
+  }, 15000);
+
   it("does not retry a request that will fail identically", async () => {
     // A 400 with a bad model tag is not a blip. Retrying it burns the deadline
     // for nothing.

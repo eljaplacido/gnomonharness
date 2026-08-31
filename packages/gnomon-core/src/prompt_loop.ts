@@ -681,15 +681,51 @@ async function callEndpointWithRetry(
   // peer with no request deadline that completed the same calls. So a timed-out
   // attempt DOUBLES the deadline rather than repeating it. Unreachable (12) is a
   // real flake and keeps the plain retry.
+  //
+  // The escalation is bounded, and the bound is the point. Doubling without one
+  // spends 300 + 600 + 1200 = 2100s where flat retrying spent 900 — so a run
+  // that used to fail fast, inside its budget, with a recorded bucket, instead
+  // got SIGKILLed by the harness wall and recorded NOTHING. Measured: 5 of 5
+  // trials converted apparatus_failure -> agent_timeout. A harness that must
+  // publish an exit contract cannot afford to be killed mid-call.
+  //
+  // So the whole retry sequence gets the budget flat retrying would have used —
+  // timeoutMs x attempts — and escalation only redistributes it into fewer,
+  // longer attempts. Worst-case wall is therefore unchanged from the flat
+  // behaviour this replaced, which is what makes the escalation safe to ship:
+  // it cannot push any caller past a deadline it was already surviving.
+  const budgetMs = timeoutMs * resilience.attempts;
+  let spentMs = 0;
   let deadline = timeoutMs;
   for (let attempt = 1; attempt <= resilience.attempts; attempt++) {
+    const startedAt = Date.now();
     const r = await callEndpoint(target, messages, tools, deadline, signal);
+    spentMs += Date.now() - startedAt;
     if (r.code === 0 || !RETRYABLE.has(r.code)) return r;
     last = r;
     if (signal?.aborted) return r;
-    if (r.code === 11) deadline *= 2;
+    if (r.code === 11) {
+      // Stop while the answer still fits in the budget. Starting an attempt
+      // that cannot finish inside it buys nothing and forfeits the record.
+      const remainingMs = budgetMs - spentMs;
+      if (remainingMs < timeoutMs) {
+        if (say && ui) {
+          say(
+            paint(
+              ui,
+              "yellow",
+              `  [retry] timed out — retry budget spent (${spentMs}ms of ${budgetMs}ms), giving up after ` +
+                `attempt ${attempt} of ${resilience.attempts}`
+            )
+          );
+        }
+        return r;
+      }
+      deadline = Math.min(deadline * 2, remainingMs);
+    }
     if (attempt < resilience.attempts) {
       const wait = resilience.backoff_ms * Math.pow(2, attempt - 1);
+      spentMs += wait;
       if (say && ui) {
         say(
           paint(
