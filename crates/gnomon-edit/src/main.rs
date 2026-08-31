@@ -452,7 +452,7 @@ fn main() {
             // A patch SET, and machine-readable, matching `apply`. This read a
             // single Patch and printed prose, while every caller sent a
             // patchset and parsed JSON — so nothing could consume it.
-            let patchset: PatchSet = read_patchset("simulate", &positional[0]);
+            let patchset: PatchSet = read_patchset("simulate", positional[0]);
 
             let mut results: Vec<PatchResult> = Vec::new();
             for patch in &patchset.patches {
@@ -497,7 +497,7 @@ fn main() {
                 eprintln!("Usage: gnomon-edit apply <patches.json> [--dir <path>]");
                 std::process::exit(1);
             }
-            let patchset: PatchSet = read_patchset("apply", &positional[0]);
+            let patchset: PatchSet = read_patchset("apply", positional[0]);
             let result = apply_patches(&patchset, repo_root);
             let json = serde_json::to_string_pretty(&result).unwrap();
             println!("{}", json);
@@ -514,7 +514,7 @@ fn main() {
             // read rather than sharing read_patchset -- but the same rule: a
             // bad path or bad JSON is the user's mistake to be told about, not
             // a panic to be shown a backtrace for.
-            let patch: Patch = match fs::read_to_string(&positional[0]) {
+            let patch: Patch = match fs::read_to_string(positional[0]) {
                 Err(e) => {
                     eprintln!("gnomon-edit diff: cannot read {}: {e}", positional[0]);
                     std::process::exit(1);
@@ -558,7 +558,7 @@ fn main() {
                 eprintln!("Usage: gnomon-edit validate <patches.json> [--dir <path>]");
                 std::process::exit(1);
             }
-            let patchset: PatchSet = read_patchset("validate", &positional[0]);
+            let patchset: PatchSet = read_patchset("validate", positional[0]);
             let mut valid = true;
             for patch in &patchset.patches {
                 let result = apply_patch(patch, repo_root);
