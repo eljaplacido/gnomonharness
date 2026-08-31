@@ -970,6 +970,29 @@ const ENDPOINT_KEYS = new Set(["url", "kind", "api_key_env", "provider"]);
  * A role block has a small closed key set and no legitimate reason to carry an
  * unread key, so this refuses to start rather than warn.
  */
+/**
+ * Argument forms that turn a read-only-looking program into an arbitrary write.
+ *
+ * An allow-list of PROGRAM NAMES cannot confine a program that takes a command
+ * as an argument. The shipped verifier allowed `find`, described itself as
+ * "Runs the suite and reports. Cannot write.", and was measured executing
+ * `find . -exec sh -c 'echo PWNED > /tmp/x' \;` and `find target.txt -delete`
+ * successfully -- the redirection lives inside a quoted argument, so the
+ * command scanner correctly sees no redirection at all.
+ *
+ * gnomon does not silently override the operator's declaration here; that would
+ * be the harness deciding policy. It says the declaration is weaker than it
+ * looks, which is the thing the operator cannot see for themselves.
+ */
+const EXECUTING_ARGS: Array<[RegExp, string]> = [
+  [/\bfind\b/, "find (-exec, -execdir, -delete, -fprintf all write or run)"],
+  [/\bxargs\b/, "xargs (runs whatever it is piped)"],
+  [/\benv\b/, "env (runs its argument)"],
+  [/\b(sh|bash|zsh|ksh|dash)\b/, "a shell (runs anything)"],
+  [/\b(awk|gawk|perl|python3?|ruby|node)\b/, "an interpreter (runs anything)"],
+  [/\bgit\b(?!\s*\()/, "git (-c core.pager / alias.* run commands)"],
+];
+
 const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "model", "profile", "temperature", "tools", "top_p", "write_allow"]);
 
 /**
@@ -1037,6 +1060,31 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
 
   for (const [role, rawRole] of Object.entries(config.roles ?? {})) {
     const where = `.gnomon/roles.toml [roles.${role}]`;
+    // An allow-list that admits a program which takes a command as an argument
+    // does not constrain that role, however read-only its description claims to
+    // be. Warn rather than refuse: the operator may want exactly this, and it is
+    // their surface. What they cannot do is notice it unaided.
+    const allow = (rawRole as RoleDef)?.bash_allow;
+    if (Array.isArray(allow) && allow.length > 0) {
+      const admits = EXECUTING_ARGS.filter(([re]) => allow.some((pat) => re.test(pat)))
+        .map(([, why]) => why);
+      const deny = (rawRole as RoleDef)?.bash_deny ?? [];
+      const guarded = deny.some((d) => /exec|delete|fprint|-c\b/.test(d));
+      if (admits.length > 0 && !guarded) {
+        problems.push({
+          where,
+          problem:
+            `bash_allow admits ${admits.join("; ")} — so this role can run and write ` +
+            `arbitrarily, whatever its tools list or description says.`,
+          fix:
+            `Either drop those from bash_allow (\`glob\`/\`grep\` are gated read-only tools ` +
+            `that already exist), or add a bash_deny for the executing forms, e.g. ` +
+            `bash_deny = ['-exec', '-execdir', '-delete', '-fprint', '\\bxargs\\b'].`,
+          fatal: false,
+        });
+      }
+    }
+
     for (const field of Object.keys((rawRole ?? {}) as Record<string, unknown>)) {
       if (ROLE_KEYS.has(field)) continue;
       const near = [...ROLE_KEYS]

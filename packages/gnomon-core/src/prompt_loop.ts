@@ -43,7 +43,9 @@ import {
   SurfaceProblem,
   EndpointConfig,
 } from "./config.js";
-import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence } from "./render.js";
+import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence,
+  safeForPrompt,
+} from "./render.js";
 export { isLocalEndpoint } from "./config.js";
 import {
   Todo,
@@ -4156,8 +4158,11 @@ export async function runPromptLoop(
       return true;
     }
     console.log("");
-    console.log(paint(ui, "yellow", `  ┌ approve: ${req.summary}`));
-    for (const line of req.preview.slice(0, 60)) {
+    // Both of these are model-chosen strings. Printed raw, a command carrying
+    // ESC[2K and a CR could erase and rewrite the very line being approved.
+    console.log(paint(ui, "yellow", `  ┌ approve: ${safeForPrompt(req.summary)}`));
+    for (const raw of req.preview.slice(0, 60)) {
+      const line = safeForPrompt(raw);
       const colour = line.startsWith("+ ")
         ? "green"
         : line.startsWith("- ")

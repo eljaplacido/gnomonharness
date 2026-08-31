@@ -316,6 +316,13 @@ bash_allow = [
   '^(cargo|pnpm|npm|yarn|pytest|python -m pytest|go|make)\\s',
   '^(ls|cat|head|tail|grep|rg|find|git (status|diff|log|show))\\s',
 ]
+bash_deny = [
+  # find is on the allow-list for reading the tree, but -exec/-delete/-fprintf
+  # turn it into an arbitrary write. Measured: a verifier described as "Cannot
+  # write" created and deleted files through all three.
+  '-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint',
+  '\\bxargs\\b',
+]
 description = "Runs the suite and reports. Cannot write."
 
 # ── General-purpose roles ──────────────────────────────────────────────────

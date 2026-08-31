@@ -522,3 +522,31 @@ export class Progress {
     }
   }
 }
+
+
+/**
+ * Make model-chosen text safe to print next to a question the operator answers.
+ *
+ * The approval prompt renders a tool's summary and preview verbatim, and both
+ * are built from strings the MODEL chose -- `bash: ${command}`, and the diff
+ * body. Nothing filtered control characters, so a command could carry ESC[2K
+ * and a carriage return, erase the line the operator was about to read, and
+ * redraw a different, innocuous one in its place. Reproduced: a curl-pipe-sh
+ * command rendered on screen as two lines of `git status --short`, with the
+ * real command invisible, above a prompt asking to approve it.
+ *
+ * An approval gate the thing being approved can rewrite is not a gate. Escaping
+ * costs nothing and makes a crafted command conspicuous instead of invisible:
+ * the operator sees the literal \x1b, which no ordinary command contains.
+ *
+ * Tab survives because it is legitimate layout in a diff. Everything else in
+ * C0/C1, including ESC, CR and the backspace that could achieve the same trick,
+ * becomes a visible escape.
+ */
+export function safeForPrompt(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u0008\u000A-\u001F\u007F-\u009F]/g, (c) => {
+    const code = c.charCodeAt(0);
+    return `\\x${code.toString(16).padStart(2, "0")}`;
+  });
+}
