@@ -1529,6 +1529,27 @@ describe("shell-mediated work is observed, not inferred", () => {
     expect(out.worktree_changed).toBe(true);
   });
 
+  it("sees work done outside the root when the shell cd's there", async () => {
+    // worktreeStampOf walked only ctx.root, so an apt install, an /etc config
+    // or a system service could never move the stamp — and the anti-flailing
+    // nudge fired on an agent that was working correctly. One benchmark trial
+    // printed "98 call(s) without changing a file" straight after postconf -e,
+    // service start and chown, with two of its tests already passing.
+    const outside = mkdtempSync(join(tmpdir(), "gnomon-outside-"));
+    try {
+      const out = await executeTool(
+        "bash",
+        { command: `cd ${outside} && echo hi > made-outside.txt` },
+        ctx(),
+        offered
+      );
+      expect(out.code).toBe(TOOL_OK);
+      expect(out.worktree_changed).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("a read-only bash command does not", async () => {
     // The guard must stay armed against real flailing: ls/cat/grep in a loop is
     // exactly the failure the nudge exists to catch.

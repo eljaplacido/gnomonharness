@@ -1418,7 +1418,14 @@ export async function runAgenticTurn(
   // Signatures of the last few calls, to notice a model going in circles.
   const recentCalls: string[] = [];
   let usedModel = route.model;
-  // One re-prompt for an empty completion, and whether it stuck.
+  // One re-prompt for an empty completion, per nudge cycle — not one per turn.
+  //
+  // The nudge re-fires every NUDGE_AFTER_IDLE calls for as long as the turn
+  // runs, but this latch was a single boolean for the whole turn, so the SECOND
+  // empty completion always landed on a spent latch and ended the run. Measured:
+  // one nudge is survivable (10/14 trials pass), two is not (1/11); six trials
+  // ended nudge -> blank -> bucket and none of them resolved. Three of those six
+  // were the entire residual gap against the peer harness.
   let emptyRetried = false;
   let emptyTerminus = false;
 
@@ -1855,6 +1862,9 @@ export async function runAgenticTurn(
     // working, a flailer gets repeated reason to conclude.
     if (callsSinceWrite - callsAtLastNudge >= NUDGE_AFTER_IDLE) {
       counters.nudges++;
+      // A fresh nudge is a fresh chance to answer: re-arm the empty-completion
+      // retry so a later blank is not judged by a latch spent 12 calls ago.
+      emptyRetried = false;
       counters.first_nudge_step ??= steps;
       callsAtLastNudge = callsSinceWrite;
       deps.progress.stop();
