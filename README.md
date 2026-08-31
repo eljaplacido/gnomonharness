@@ -375,6 +375,11 @@ Two things to do straight after:
    generic tags and says so, and those will very likely be wrong.
 2. **Add `.gnomon-sessions/`, `.gnomon-audit/` and `.gnomon-jobs/` to `.gitignore`.**
 
+> **At the prompt:** Tab completes file paths, and `@src/lib.ts` is a
+> conventional way to name one. Up-arrow history survives a restart — it is kept
+> in `.gnomon-sessions/history`, outside the surface, because it is per-machine
+> state like a session log rather than configuration.
+
 A first exchange:
 
 ```

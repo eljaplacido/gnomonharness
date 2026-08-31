@@ -1439,6 +1439,63 @@ describe("runTask — the non-interactive contract", () => {
     expect(promptLoop.buildSystemPrompt(state, "implement", "carry on")).toContain("make all");
   });
 
+  it("completes ordinary input as a path, with or without @", () => {
+    // Tab did nothing for anything not starting with "/", so the only way to put
+    // a file in front of the model was to type its path from memory and hope the
+    // agent read the right one -- against `@src/lib.ts` + Tab in every
+    // comparable tool.
+    const dir = mkdtempSync(join(tmpdir(), "complete-"));
+    mkdirSync(join(dir, "src"));
+    writeFileSync(join(dir, "src", "lib.ts"), "x");
+    writeFileSync(join(dir, "src", "libx.ts"), "x");
+    mkdirSync(join(dir, "node_modules"));
+
+    const [plain] = promptLoop.completePath("read src/li", dir);
+    expect(plain).toEqual(["src/lib.ts", "src/libx.ts"]);
+
+    // the @ form is honoured and preserved in the completion
+    const [at, token] = promptLoop.completePath("summarise @src/li", dir);
+    expect(at).toEqual(["@src/lib.ts", "@src/libx.ts"]);
+    expect(token).toBe("@src/li");
+
+    // directories get a trailing slash so the next Tab descends
+    const [top] = promptLoop.completePath("", dir);
+    expect(top).toContain("src/");
+    // and the noise a listing would otherwise lead with is skipped
+    expect(top).not.toContain("node_modules/");
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("keeps prompt history across restarts, outside the surface", () => {
+    // readline had no history file, so up-arrow worked within one run and
+    // nothing survived a restart. Stored beside .gnomon-sessions/ because it is
+    // per-machine state like a session log, not configuration -- it must never
+    // reach the surface hash.
+    const dir = mkdtempSync(join(tmpdir(), "hist-"));
+    mkdirSync(join(dir, ".gnomon"));
+    const cfg: any = { gnomonDir: join(dir, ".gnomon") };
+
+    expect(promptLoop.loadHistory(cfg)).toEqual([]);
+    promptLoop.appendHistory(cfg, "fix the parser");
+    promptLoop.appendHistory(cfg, "run the tests");
+    expect(promptLoop.loadHistory(cfg)).toEqual(["fix the parser", "run the tests"]);
+
+    // a repeat moves to the end rather than duplicating
+    promptLoop.appendHistory(cfg, "fix the parser");
+    expect(promptLoop.loadHistory(cfg)).toEqual(["run the tests", "fix the parser"]);
+
+    // blank lines are not history
+    promptLoop.appendHistory(cfg, "   ");
+    expect(promptLoop.loadHistory(cfg)).toHaveLength(2);
+
+    // and it lives OUTSIDE .gnomon/, so the surface hash cannot see it
+    expect(promptLoop.historyPath(cfg)).toContain(".gnomon-sessions");
+    expect(promptLoop.historyPath(cfg)).not.toMatch(/\.gnomon[/\\]history/);
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("an interactive exchange records why the turn ended, not only a task record", () => {
     // stop_reason, stop_detail and counters were computed on every turn and then
     // dropped on the interactive path -- they reached `gnomon task --json` and

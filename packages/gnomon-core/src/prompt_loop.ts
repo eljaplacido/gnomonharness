@@ -10,7 +10,7 @@
 
 import * as readline from "node:readline";
 import { resolve, dirname, join } from "node:path";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync} from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   GnomonConfig,
@@ -2655,6 +2655,93 @@ export async function runTask(
 // Commands
 // ---------------------------------------------------------------------------
 
+/**
+ * Complete the trailing token of a line as a filesystem path.
+ *
+ * Deliberately narrow: it completes what is being typed, it does not read the
+ * file or change the turn. Anything that alters what the model SEES belongs in
+ * the surface, not in a keystroke.
+ *
+ * Hidden entries and the harness's own directories are skipped unless the token
+ * already names one -- a listing whose first twenty entries are .git internals
+ * is not completion, it is noise.
+ */
+export function completePath(line: string, root: string): [string[], string] {
+  const m = /(^|\s)@?([^\s]*)$/.exec(line);
+  const token = m?.[2] ?? "";
+  const at = token !== "" && /(^|\s)@[^\s]*$/.test(line);
+  const slash = token.lastIndexOf("/");
+  const dir = slash >= 0 ? token.slice(0, slash + 1) : "";
+  const stem = slash >= 0 ? token.slice(slash + 1) : token;
+  const base = resolve(root, dir || ".");
+  // Never complete outside the project: the same boundary the read tool keeps.
+  if (!base.startsWith(resolve(root))) return [[], token];
+  let entries: string[];
+  try {
+    entries = readdirSync(base, { withFileTypes: true })
+      .filter((e) => stem.startsWith(".") || !e.name.startsWith("."))
+      .filter((e) => !HIDDEN_FROM_COMPLETION.has(e.name))
+      .map((e) => dir + e.name + (e.isDirectory() ? "/" : ""));
+  } catch {
+    return [[], token];
+  }
+  const hits = entries.filter((e) => e.startsWith(dir + stem)).sort();
+  return [hits.map((h) => (at ? "@" + h : h)), at ? "@" + token : token];
+}
+
+/**
+ * Prompt history that survives a restart.
+ *
+ * readline was constructed with no `history` option and no file, so Node's
+ * in-memory default gave up-arrow within one run and nothing across runs --
+ * re-running yesterday's prompt meant retyping it. Stored beside
+ * `.gnomon-sessions/`, not inside `.gnomon/`: it is per-machine state like a
+ * session log, not configuration, so it must not touch the surface hash.
+ *
+ * Bounded, newest last on disk. Failures are silent by design -- a read-only
+ * checkout should still get a prompt, just without history.
+ */
+export const HISTORY_LIMIT = 500;
+
+export function historyPath(config: GnomonConfig): string {
+  return join(resolve(config.gnomonDir, ".."), ".gnomon-sessions", "history");
+}
+
+export function loadHistory(config: GnomonConfig): string[] {
+  try {
+    return readFileSync(historyPath(config), "utf-8")
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .slice(-HISTORY_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+export function appendHistory(config: GnomonConfig, line: string): void {
+  const text = line.trim();
+  if (!text) return;
+  try {
+    const kept = [...loadHistory(config).filter((l) => l !== text), text].slice(-HISTORY_LIMIT);
+    const p = historyPath(config);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, kept.join("\n") + "\n");
+  } catch {
+    /* history is a convenience; never let it break the prompt */
+  }
+}
+
+/** Directories a path completion should not lead with. */
+const HIDDEN_FROM_COMPLETION = new Set([
+  "node_modules",
+  ".git",
+  ".gnomon-sessions",
+  ".gnomon-audit",
+  ".gnomon-jobs",
+  "target",
+  "dist",
+]);
+
 /** One slash command, as shown by /help and offered by Tab completion. */
 export interface CommandSpec {
   name: string;
@@ -2721,7 +2808,9 @@ export const COMMANDS: CommandSpec[] = [
 export function completeInput(
   line: string,
   roles: string[],
-  endpoints: string[] = []
+  endpoints: string[] = [],
+  /** Project root, for completing ordinary input as a path. */
+  root: string = process.cwd()
 ): [string[], string] {
   const roleArg = line.match(/^\/roles?\s+(\S*)$/);
   if (roleArg) {
@@ -2774,7 +2863,12 @@ export function completeInput(
     ];
   }
 
-  if (!line.startsWith("/")) return [[], line];
+  // Ordinary input completes PATHS. Tab used to do nothing at all here, so the
+  // only way to put a file in front of the model was to type its path from
+  // memory and hope the agent read the right one -- against `@src/lib.ts` plus
+  // Tab in every comparable tool. An `@` prefix is honoured but optional: the
+  // completion is on the trailing token either way.
+  if (!line.startsWith("/")) return completePath(line, root);
 
   const names = COMMANDS.map((c) => c.name);
   const hits = names.filter((n) => n.startsWith(line));
@@ -3877,7 +3971,10 @@ export async function runPromptLoop(
     // Tab after "/" lists every command, so they are discoverable from the
     // prompt rather than only from the docs.
     completer: (line: string) =>
-      completeInput(line, listRoles(config), listEndpoints(config)),
+      completeInput(line, listRoles(config), listEndpoints(config), resolve(config.gnomonDir, "..")),
+    // Node wants newest FIRST; the file keeps newest last so it reads like a log.
+    history: loadHistory(config).slice().reverse(),
+    historySize: HISTORY_LIMIT,
   });
 
   // Paint the terminal for the theme in force — only if the theme declares a
@@ -4058,6 +4155,9 @@ export async function runPromptLoop(
   }
 
   rl.on("line", (raw: string) => {
+    // Persist before anything can consume or reroute the line, so a prompt is
+    // recallable next session even if this turn goes wrong.
+    appendHistory(config, raw);
     // Paste content. Hold it; do not open a turn for it.
     if (pastedLines > 0) {
       pastedLines -= 1;
