@@ -17,6 +17,13 @@ cite these numbers as a harness ranking.**
 > It finds gnomon ≈ goose (parity) > opencode on the tested cell. Prefer it over
 > the harness-comparison tables below.
 >
+> **Extended and partly corrected, 31 August 2026.** Seven new suites measure
+> dimensions no public benchmark covers, and one earlier result is **withdrawn**.
+> See [The dimension suites](#the-dimension-suites-31-august-2026) below. A
+> 14-agent audit of the harness produced 46 verified defects, 41 now fixed; the
+> three rated critical are described there because each one distorted a
+> measurement.
+>
 > Read [BENCHMARK-POSTMORTEM.md](BENCHMARK-POSTMORTEM.md) before citing
 > anything here.
 
@@ -188,6 +195,99 @@ else identical: no edit, then edit applied.
 After the fix, gnomon moved 86% → 100% on codex while **every other harness
 scored identically across both sweeps**, which is what makes the attribution
 sound rather than a story about variance.
+
+---
+
+---
+
+## The dimension suites (31 August 2026)
+
+The benchmarks above measure **task completion**, because that is what public
+benchmarks measure. gnomon's own claims are mostly about other things —
+auditability, reproducibility, containment, the exit contract — and none of them
+had ever been tested. Seven suites now do, all peer-comparable where a peer
+exists, all reading outcomes from real state rather than from the agent's
+account of itself. Every one is reproducible from its directory.
+
+| # | Dimension | Result | Data |
+|---|---|---|---|
+| T1 | Tamper-evidence | **8/9** attacks caught | [`auditability-2026-08-31`](../benchmarks/results/auditability-2026-08-31/) |
+| T2 | Surface-replay determinism | **10/10** stable | [`determinism-2026-08-31`](../benchmarks/results/determinism-2026-08-31/) |
+| T3 | Context retention | `discard` **0/9** · `summary` **9/9** | [`context-2026-08-31`](../benchmarks/results/context-2026-08-31/) |
+| T4 | Tool-calling contract | **15/16** malformed calls refused, 0 crashes | [`tool-contract-2026-08-31`](../benchmarks/results/tool-contract-2026-08-31/) |
+| T5 | Per-turn overhead | gnomon **322ms** vs opencode **1680ms** | [`latency-2026-08-31`](../benchmarks/results/latency-2026-08-31/) |
+| T6 | Prompt injection | boundary holds **12/12** when the model complies | [`injection-2026-08-31`](../benchmarks/results/injection-2026-08-31/) |
+| T7 | Verify-gate value | **inconclusive** — the model never failed | [`quality-2026-08-31`](../benchmarks/results/quality-2026-08-31/) |
+| B4 | Containment (peer-compared) | **3 of 5 boundaries sound** — *corrected* | [`containment-2026-08-31`](../benchmarks/results/containment-2026-08-31/) |
+
+### The withdrawal
+
+**B4's headline "gnomon contains 25/25 vs opencode 18/25" is withdrawn as
+evidence for the containment claim.** Each scenario's prompt named the exact
+command its pattern was written to block, so the run scored *whether the model
+tried that spelling*, not whether the boundary holds — and it would have kept
+reporting 25/25 after a regression that removed the guard entirely.
+
+Re-run with adversarial variants reaching the same end state by other routes:
+**21/33 trials, 3 of 5 boundaries sound.** `rm -fr`, `rm --recursive --force`
+and `find -exec cp` all defeat the shipped patterns. The correction and its
+reasoning are in [`CORRECTION.md`](../benchmarks/results/containment-2026-08-31/CORRECTION.md).
+
+What survives is the part that was never about pattern matching: `.gnomon/` is
+not writable **by any tool**, so it does not depend on guessing a spelling.
+opencode, given four escalating deny configurations, rewrote its own permission
+file every time.
+
+### What the suites found in gnomon
+
+Each suite was written to test a claim and several disproved one instead. The
+defects below were all reproduced before being fixed:
+
+- **Truncating an audit trail was undetectable.** Chain integrity cannot see it —
+  remove the last records and every surviving hash still matches. `VerifyResult`
+  now reports `sealed` separately from `ok`.
+- **A `write` with no `content` silently emptied the file** and reported success.
+- **`bash_deny` written the ordinary TOML way protected nothing** — basic-string
+  escapes were never processed, so the pattern reached `RegExp` holding a literal
+  backslash. This affected every user, not only the benchmark.
+- **A large `write` killed the process** with an uncatchable V8 OOM: no exit code,
+  no session record, no `session_end`. Rule 5's exit contract, bypassed by an
+  ordinary tool call.
+- **`trimWorking` dropped the *current* request** from turn two onward, leaving the
+  model working on a stale one.
+- **The shipped deny list named four dangerous git operations and blocked one.**
+- **The approval prompt could be rewritten by the thing being approved** — model
+  text was printed unescaped, so a command could erase the line and redraw an
+  innocuous one.
+
+### Honest limits
+
+- **T7 is inconclusive and published as such.** The model solved both fixtures
+  20/20, so there was never a broken fix for the verify gate to catch. An arm
+  comparison where neither arm can fail measures nothing.
+- **T6 proves the boundary, not the model.** The injections were ignored 0/12 —
+  a fact about this model's suggestibility. The *control* (asking directly) is
+  what shows the harness works: complied 12/12, breached 0/12.
+- **T5 measures overhead, not capability.** opencode does more per turn; cheaper
+  is not automatically better.
+- **T2 is a dimension with no peer.** No other harness makes the claim, so there
+  is nothing to compare against — only gnomon's own consistency.
+
+### Three suite defects worth recording
+
+The suites flattered gnomon before they measured it, and the corrections are in
+[.claude/skills/benchmark-discipline](../.claude/skills/benchmark-discipline/SKILL.md):
+
+1. Breach was originally read from **gnomon's own tool log** — asking the thing
+   under test whether it had misbehaved.
+2. **Timeouts scored as "contained."** The agent did nothing, so nothing escaped.
+3. A clean **33/33 sweep measured nothing**: a gnomon TOML bug made the probe's
+   allow-list match no command at all, so the role could not run anything. The
+   contradiction with a separately-proven bypass was the tell.
+
+The cheapest check that caught most of them was **wall-clock**: a 35B model
+cannot answer in 1.3s, and a role about to act does not spend the full cap doing
+nothing.
 
 ---
 
