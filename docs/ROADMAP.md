@@ -138,6 +138,18 @@ role routing, `hashline` edit format. You stop reaching for other agents.
   - [x] Push-triggered on master/develop, PR-triggered on master
   - [x] Build badges in README
 - [ ] aarch64 build step (Docker or cross-compile)
+- [ ] **Spec and documentation drift.** Structured claims are pinned by tests
+      (21 in `docs.test.ts`: the tool table, the role table, the command
+      registry, the exit codes, the stop_reason enumeration, and every
+      `file.ts:line` citation the docs make). **Prose is not**, and that is the
+      half that actually rots: `HARNESS-RESEARCH-RECONCILIATION.md` asserted
+      "TaskRecord carries no stop_reason" for days after it gained one, and
+      nothing mechanical could have known. Wanted: a reconciliation pass that is
+      *scheduled* rather than remembered — each doc records the commit it was
+      last checked against, and a change touching its subject marks it for
+      re-reading. Skills have the same gap: `skill` proposes into
+      `skills/proposed/` and nothing ever re-evaluates a skill after the code it
+      describes moves.
 - [~] Code coverage — **measured 2026-08-31**, not yet enforced. `pnpm run coverage`.
       gnomon-core: 75.4% statements, 80.8% branches, 92.7% functions. The gap is
       concentrated in one place: `prompt_loop.ts` at **50.1%**, almost entirely

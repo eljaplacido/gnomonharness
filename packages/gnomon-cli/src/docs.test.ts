@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { readFileSync, mkdtempSync, rmSync, existsSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync, existsSync, readdirSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,6 +71,27 @@ describe("every interactive command the README lists is implemented", () => {
     expect(offered.sort()).toEqual(COMMANDS.map((c) => c.name).sort());
   });
 });
+
+/** First match for a bare filename under a tree, ignoring build output. */
+function findFile(dir: string, name: string): string | null {
+  let found: string | null = null;
+  const walk = (d: string) => {
+    if (found) return;
+    let entries;
+    try { entries = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (found) return;
+      if (e.isDirectory()) {
+        if (["node_modules", "dist", "target", ".git"].includes(e.name)) continue;
+        walk(join(d, e.name));
+      } else if (e.name === name) {
+        found = join(d, e.name);
+      }
+    }
+  };
+  walk(dir);
+  return found;
+}
 
 describe("documented defaults are the actual defaults", () => {
   it("a scaffolded surface matches what the README says it ships", async () => {
@@ -274,5 +295,40 @@ describe("the README outcome table matches the tool result codes", () => {
     for (const value of expected) {
       expect(documented, `stop_reason "${value}" is not in CONTRACTS.md`).toContain(value);
     }
+  });
+
+  it("every file:line the docs cite still resolves", () => {
+    // Documentation rots by pointing at code that moved. This is the cheap,
+    // checkable half of that problem: a citation naming a file that no longer
+    // exists, or a line past the end of it, is definitely stale.
+    //
+    // It does NOT catch the expensive half -- prose that is simply no longer
+    // true. HARNESS-RESEARCH-RECONCILIATION.md asserted "TaskRecord carries no
+    // stop_reason" for days after it gained one, and nothing mechanical could
+    // have known. That kind of drift is found by reading, which is why the
+    // reconciliation pass is a task and not a test.
+    const root = join(__dirname, "../../..");
+    const docs = [
+      ...readdirSync(join(root, "docs")).filter((f) => f.endsWith(".md")).map((f) => join(root, "docs", f)),
+      join(root, "README.md"),
+    ];
+    const cite = /\b([a-z_]+\.(?:ts|rs)):(\d+)/g;
+    const stale: string[] = [];
+    for (const doc of docs) {
+      const text = readFileSync(doc, "utf-8");
+      for (const m of text.matchAll(cite)) {
+        const [, file, lineNo] = m;
+        const found = findFile(join(root, "packages"), file!) ?? findFile(join(root, "crates"), file!);
+        if (!found) {
+          stale.push(`${doc.split("/").pop()}: ${m[0]} — no such file`);
+          continue;
+        }
+        const lines = readFileSync(found, "utf-8").split("\n").length;
+        if (Number(lineNo) > lines) {
+          stale.push(`${doc.split("/").pop()}: ${m[0]} — file has ${lines} lines`);
+        }
+      }
+    }
+    expect(stale, `stale citations:\n${stale.join("\n")}`).toEqual([]);
   });
 });
