@@ -338,6 +338,39 @@ describe("bash", () => {
     expect(noStore.content).toContain("silently dropped");
   });
 
+  it("a malformed tool call is refused, and never silently does something else", async () => {
+    // Small models omit arguments routinely. Every one of these used to return
+    // code 0 -- a plain RESULT -- having done something the call never asked for.
+    // The worst by far: `write` with no `content` truncated an existing file to
+    // zero bytes and reported success, one malformed call away from silent data
+    // loss.
+    writeFileSync(join(root, "keepme.txt"), "IMPORTANT CONTENT\n");
+
+    const noContent = await executeTool("write", { path: "keepme.txt" }, ctx(), offered);
+    expect(noContent.code).toBe(TOOL_DENIED);
+    expect(readFileSync(join(root, "keepme.txt"), "utf-8")).toBe("IMPORTANT CONTENT\n");
+    // an EMPTY string is still a legitimate write; an ABSENT one is not
+    const emptyOnPurpose = await executeTool("write", { path: "keepme.txt", content: "" }, ctx(), offered);
+    expect(emptyOnPurpose.code).toBe(0);
+
+    // a missing path resolved to "" and then to the FILESYSTEM ROOT
+    for (const args of [{}, { path: "" }, ["keepme.txt"] as unknown]) {
+      const out = await executeTool("read", args as Record<string, unknown>, ctx(), offered);
+      expect(out.code).toBe(TOOL_DENIED);
+      expect(out.summary).toContain("no path");
+    }
+
+    // String({}) is "[object Object]", which the shell tried to run
+    const badCmd = await executeTool("bash", { command: { evil: true } as unknown as string }, ctx(), offered);
+    expect(badCmd.code).toBe(TOOL_DENIED);
+
+    // and all of these are REFUSALS (2-4), never apparatus_failure (11):
+    // CONTRACTS.md says a model's malformed argument landing in 11 would make
+    // apparatus_failure meaningless, since that bucket means "look at the harness".
+    expect(noContent.code).toBeGreaterThanOrEqual(2);
+    expect(noContent.code).toBeLessThanOrEqual(4);
+  });
+
   it("names the signal instead of reporting a killed command as exit null", async () => {
     // Node passes exit === null when the child dies on a signal, and the old
     // summary said "bash — exit null". The verify gate's /exit (-?\d+)/ then

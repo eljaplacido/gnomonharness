@@ -913,7 +913,17 @@ async function readTool(
   args: Record<string, unknown>,
   ctx: ToolContext
 ): Promise<ToolOutcome> {
-  const path = String(args.path ?? "");
+  // A missing, empty or non-string path resolved to "" and then to the
+  // FILESYSTEM ROOT — `read / — 1 entries` — rather than being refused. The
+  // model asked for nothing and got a listing of somewhere it never named.
+  if (typeof args.path !== "string" || args.path.trim() === "") {
+    return {
+      code: TOOL_DENIED,
+      content: `Refused: read needs a \`path\`. Nothing was given, and an absent path is not a path.`,
+      summary: `read — no path given`,
+    };
+  }
+  const path = args.path;
   const abs = resolveInRoot(ctx.root, path, ctx.sandbox);
   if (!abs) {
     return {
@@ -994,7 +1004,22 @@ async function bashTool(
   args: Record<string, unknown>,
   ctx: ToolContext
 ): Promise<ToolOutcome> {
-  const command = String(args.command ?? "");
+  // String({}) is "[object Object]", which the shell dutifully tried to run
+  // and reported as exit 127. A malformed call should be refused, not executed.
+  // Only a NON-STRING is refused. An empty string is harmless -- the shell runs
+  // nothing and exits 0 -- and a turn that recovers from one must not be stamped
+  // a refusal, which is a contract this suite already pins.
+  if (typeof args.command !== "string") {
+    return {
+      code: TOOL_DENIED,
+      content:
+        `Refused: bash needs a \`command\` string, and got ${
+          Array.isArray(args.command) ? "an array" : typeof args.command
+        }. String({}) is "[object Object]", which the shell would try to run.`,
+      summary: `bash — command is not a string`,
+    };
+  }
+  const command = args.command;
   if (!command.trim()) {
     return { code: TOOL_FAILED, content: "Empty command.", summary: "bash — empty" };
   }
@@ -2294,7 +2319,30 @@ async function writeTool(
   ctx: ToolContext
 ): Promise<ToolOutcome> {
   const path = String(args.path ?? "");
-  const content = String(args.content ?? "");
+  // `String(undefined ?? "")` is "", so a call that simply omitted `content`
+  // TRUNCATED the file and reported success: an existing file went to zero
+  // bytes with summary "write src/a.txt (+0 −2)" and code 0. Small models omit
+  // arguments routinely, so this was one malformed tool call away from silent
+  // data loss, reported as a result rather than a refusal.
+  //
+  // An empty string is still a legitimate write; an ABSENT one is not.
+  if (typeof args.content !== "string") {
+    return {
+      // TOOL_DENIED (a refusal), not TOOL_FAILED (11, apparatus_failure).
+      // CONTRACTS.md draws that line explicitly: 11 means "understood the
+      // request and could not carry it out", and "a model's malformed argument
+      // arriving there would make it meaningless" — apparatus_failure is the
+      // signal to go and look at the harness. A missing argument is the model
+      // getting it wrong, so the harness says no.
+      code: TOOL_DENIED,
+      content:
+        `Refused: write needs a \`content\` string. Omitting it would empty ` +
+        `${path || "the file"}, which is not what a missing argument should mean. ` +
+        `Send content: "" if you meant to empty it.`,
+      summary: `write — no content given`,
+    };
+  }
+  const content = args.content;
   const abs = resolveInRoot(ctx.root, path, ctx.sandbox);
   if (!abs) {
     return {
