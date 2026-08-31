@@ -1431,6 +1431,9 @@ export async function runAgenticTurn(
     // Turn-scoped: a command that blocked once will block again, and the loop
     // owns the lifetime of that fact.
     timedOutCommands: new Set<string>(),
+    // So Esc reaches a command that has already started, not just the gap
+    // between two of them.
+    signal: deps.signal,
     notes: {
       list: () => state.notes ?? [],
       add: (text) => {

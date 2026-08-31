@@ -793,6 +793,17 @@ export interface ToolContext {
    */
   timedOutCommands?: Set<string>;
   /**
+   * Cancellation for the running turn.
+   *
+   * Esc and Ctrl-C were only ever checked BETWEEN tool calls, so a command that
+   * had already started could not be interrupted at all: the operator's only
+   * exits were the tool timeout or killing the terminal. On a 120s default that
+   * is two minutes of an unstoppable command they have already asked to stop --
+   * and `detached: true` puts it in its own process group, so the terminal's
+   * own Ctrl-C does not reach it either.
+   */
+  signal?: AbortSignal;
+  /**
    * The run's scratch notes. Supplied by the loop, which owns session state.
    * Absent means the tool is unavailable rather than silently forgetful.
    */
@@ -1099,8 +1110,8 @@ async function bashTool(
         `so running it unchanged will time out again and spend the same budget for the same result.\n\n` +
         `Do one of these instead:\n` +
         `  - start it in the background and poll the log:\n` +
-        `      setsid ${command.trim().split("\n")[0]} </dev/null >/tmp/gnomon-job.log 2>&1 & echo $!\n` +
-        `    then read /tmp/gnomon-job.log on a later step\n` +
+        `      ${backgroundRecipe(command)}\n` +
+        `    then read that log on a later step\n` +
         `  - narrow it so it finishes inside the limit (a single test, a smaller range)\n` +
         `  - or say plainly that this step cannot be completed within the tool timeout.`,
       summary: `bash — refused (already timed out this turn)`,
@@ -1123,6 +1134,7 @@ async function bashTool(
   })();
   const worktreeBefore = worktreeStampOf(ctx, shellCwd);
 
+  const startedAt = Date.now();
   return new Promise<ToolOutcome>((done) => {
     const proc = spawn(command, {
       shell: true,
@@ -1159,6 +1171,7 @@ async function bashTool(
       ]
         .filter(Boolean)
         .join("\n");
+      releasePipes(proc);
       const drift = surfaceDrift(ctx, surfaceBefore);
       const movedTree = worktreeMoved(ctx, worktreeBefore, shellCwd);
       // So the next identical call is refused for free rather than stalling.
@@ -1175,6 +1188,29 @@ async function bashTool(
         surface_drift: drift ?? undefined,
       });
     }, ctx.timeoutMs);
+
+    // The operator pressing Esc must reach the process, not merely be noticed
+    // once it has finished.
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      killTree(proc);
+      releasePipes(proc);
+      done({
+        code: TOOL_FAILED,
+        content:
+          `Cancelled by the operator after ${Date.now() - startedAt}ms. Output captured before the stop:\n` +
+          clampEnds(
+            [stdout ? `stdout:\n${stdout}` : "stdout: (empty)", stderr ? `stderr:\n${stderr}` : ""]
+              .filter(Boolean)
+              .join("\n"),
+            ctx.maxOutputBytes
+          ),
+        summary: `bash — cancelled`,
+      });
+    };
+    ctx.signal?.addEventListener("abort", onAbort, { once: true });
 
     proc.stdout?.on("data", (d: Buffer) => (stdout += d.toString()));
     proc.stderr?.on("data", (d: Buffer) => (stderr += d.toString()));
@@ -2543,6 +2579,33 @@ async function skillTool(
  * A tool the surface does not offer returns a refusal naming it, rather than
  * being ignored — the model is told why nothing happened.
  */
+/**
+ * A correct backgrounding form for an arbitrary command.
+ *
+ * The first version of this prefixed `setsid ` onto the command text, which is
+ * only valid when the command happens to be a single program invocation. For
+ * `cd /home && sleep 5 && echo done` it emitted
+ *   setsid cd /home && sleep 5 && echo done </dev/null >LOG 2>&1 & echo $!
+ * which setsid rejects ("failed to execute cd") while the shell cheerfully runs
+ * the remaining && branches in the foreground. Advice that does not work is
+ * worse than no advice: the model follows it, gets exit 0 and a confusing
+ * stderr, and concludes the job is running.
+ *
+ * Wrapping in `sh -c` with the command single-quoted makes any command legal,
+ * pipelines and && chains included.
+ */
+/** Let go of a finished child's pipes so an orphan cannot hold the loop open. */
+function releasePipes(proc: { stdout?: unknown; stderr?: unknown; unref?: () => void }): void {
+  (proc.stdout as { destroy?: () => void } | undefined)?.destroy?.();
+  (proc.stderr as { destroy?: () => void } | undefined)?.destroy?.();
+  proc.unref?.();
+}
+
+export function backgroundRecipe(command: string, log = "/tmp/gnomon-job.log"): string {
+  const quoted = `'${command.trim().replace(/'/g, `'\\''`)}'`;
+  return `setsid sh -c ${quoted} </dev/null >${log} 2>&1 & echo $!`;
+}
+
 /**
  * Record something this run learned, for later steps in the same run to read.
  *

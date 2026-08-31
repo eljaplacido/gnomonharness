@@ -33,6 +33,7 @@ import {
   ApprovalGate,
   ApprovalRequest,
   Todo,
+  backgroundRecipe,
 } from "./tools.js";
 import { loadConfig, declaredTools, isToolEnabled } from "./config.js";
 import { mapBucket } from "./session.js";
@@ -335,6 +336,41 @@ describe("bash", () => {
     const noStore = await executeTool("note", { text: "something" }, ctx({}), offeredWithNote);
     expect(noStore.code).toBe(TOOL_FAILED);
     expect(noStore.content).toContain("silently dropped");
+  });
+
+  it("Esc reaches a command that has already started", async () => {
+    // Cancellation was only checked BETWEEN tool calls, so a running command
+    // could not be interrupted at all -- the operator's only exits were the tool
+    // timeout or killing the terminal, and detached:true means the terminal's
+    // own Ctrl-C does not reach the process group either. On the 120s default
+    // that is two minutes of a command they have already asked to stop.
+    const ac = new AbortController();
+    const began = Date.now();
+    setTimeout(() => ac.abort(), 200);
+    const out = await executeTool(
+      "bash",
+      { command: "sleep 20" },
+      ctx({ timeoutMs: 15000, signal: ac.signal }),
+      offered
+    );
+    expect(out.summary).toContain("cancelled");
+    expect(Date.now() - began).toBeLessThan(3000);
+  });
+
+  it("the backgrounding recipe it hands back is a command that actually runs", async () => {
+    // The first version prefixed "setsid " onto the command text, which is only
+    // valid for a bare program invocation. For `cd /home && sleep 5 && echo done`
+    // it emitted a string setsid rejects ("failed to execute cd") while the shell
+    // ran the remaining && branches in the FOREGROUND. Advice that does not work
+    // is worse than none: the model follows it, sees exit 0, and concludes the
+    // job is running.
+    const recipe = backgroundRecipe("cd /tmp && sleep 5 && echo done", "/tmp/gn-recipe.log");
+    expect(recipe).toContain("sh -c");
+    const began = Date.now();
+    const out = await executeTool("bash", { command: recipe }, ctx({ timeoutMs: 5000 }), offered);
+    expect(out.code).toBe(0);
+    expect(out.content).not.toContain("failed to execute");
+    expect(Date.now() - began).toBeLessThan(2000);
   });
 
   it("a huge write does not take the whole process down with it", async () => {
