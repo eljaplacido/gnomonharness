@@ -670,11 +670,24 @@ async function callEndpointWithRetry(
 ): Promise<InferenceResult> {
   const RETRYABLE = new Set([11, 12]);
   let last: InferenceResult | null = null;
+  // A timeout is not a flake. If a generation legitimately needs longer than the
+  // deadline, repeating the call with the SAME deadline fails identically —
+  // three guaranteed failures and the backoff on top. The config already makes
+  // this argument about HTTP 400s ("will fail the same way twice, so retrying
+  // them only burns the deadline"); it is just as true of code 11.
+  //
+  // Measured: 7 of 41 trials in one benchmark arm died on exactly this, all with
+  // the same signature — two retries, then "aborted due to timeout" — against a
+  // peer with no request deadline that completed the same calls. So a timed-out
+  // attempt DOUBLES the deadline rather than repeating it. Unreachable (12) is a
+  // real flake and keeps the plain retry.
+  let deadline = timeoutMs;
   for (let attempt = 1; attempt <= resilience.attempts; attempt++) {
-    const r = await callEndpoint(target, messages, tools, timeoutMs, signal);
+    const r = await callEndpoint(target, messages, tools, deadline, signal);
     if (r.code === 0 || !RETRYABLE.has(r.code)) return r;
     last = r;
     if (signal?.aborted) return r;
+    if (r.code === 11) deadline *= 2;
     if (attempt < resilience.attempts) {
       const wait = resilience.backoff_ms * Math.pow(2, attempt - 1);
       if (say && ui) {
@@ -682,7 +695,7 @@ async function callEndpointWithRetry(
           paint(
             ui,
             "yellow",
-            `  [retry] ${r.code === 11 ? "timed out" : "endpoint unreachable"} ` +
+            `  [retry] ${r.code === 11 ? `timed out (deadline now ${deadline}ms)` : "endpoint unreachable"} ` +
               `— attempt ${attempt} of ${resilience.attempts}, waiting ${wait}ms`
           )
         );
