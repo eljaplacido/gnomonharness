@@ -1543,6 +1543,7 @@ export async function runAgenticTurn(
   // ended nudge -> blank -> bucket and none of them resolved. Three of those six
   // were the entire residual gap against the peer harness.
   let consecutiveEmpty = 0;
+  let truncationRetried = false;
   let emptyTerminus = false;
 
   // Observation only. Nothing below reads these back to decide anything — the
@@ -1650,6 +1651,32 @@ export async function runAgenticTurn(
     // large share of trials and move the reported score with no behaviour
     // change. stop_reason is a separate axis from the bucket. Record it, do not
     // launder it.
+    // A completion the backend cut off at the token limit is not a finished
+    // answer, and finish_reason was parsed, returned, and then read by nothing:
+    // "length" took the ordinary terminal branch and was recorded as
+    // stop_reason "answered". Ask once for the rest, bounded like the blank
+    // retry, then let it stand rather than looping.
+    if (
+      result.code === 0 &&
+      result.toolCalls.length === 0 &&
+      result.finishReason === "length" &&
+      !truncationRetried &&
+      steps < maxTotal
+    ) {
+      truncationRetried = true;
+      deps.say(
+        paint(deps.ui, "yellow", `  [loop] the reply was cut off at the token limit — asking for the rest`)
+      );
+      working.push({ role: "assistant", content: result.content });
+      working.push({
+        role: "user",
+        content:
+          `That reply was cut off at the token limit. Continue from exactly where ` +
+          `it stopped, or if the work is done, say so briefly.`,
+      });
+      continue;
+    }
+
     if (result.code === 0 && result.toolCalls.length === 0 && !result.content.trim()) {
       // Ending here while the budget is largely unspent is the single path that
       // produced the whole residual gap against the peer harness: three tasks
@@ -1727,9 +1754,19 @@ export async function runAgenticTurn(
         // code here would make every check pass, including the failing ones —
         // which is precisely the class of silent-success bug this gate exists
         // to catch.
+        // Fail CLOSED when the exit status cannot be read.
+        //
+        // The old default was `check.code === 0 ? 0 : 1`, and bashTool reports
+        // TOOL_OK for anything that ran -- so a check killed by a signal came
+        // back as "bash — exit null", failed this regex, defaulted to 0, and the
+        // gate reported PASSED. A segfaulted or OOM-killed test suite was
+        // indistinguishable from a green one, in the one mechanism whose whole
+        // job is to contradict a model that claims success. bashTool now names
+        // the signal, and an unreadable status is treated as failure.
         const exitMatch = /exit (-?\d+)/.exec(check.summary);
-        const shellExit = exitMatch ? Number(exitMatch[1]) : (check.code === 0 ? 0 : 1);
-        const passed = check.code === 0 && shellExit === 0;
+        const killed = /killed by /.test(check.summary);
+        const shellExit = exitMatch ? Number(exitMatch[1]) : killed ? 1 : check.code === 0 ? 1 : 1;
+        const passed = check.code === 0 && exitMatch !== null && shellExit === 0;
 
         toolLog.push(`verify — ${check.summary}`);
         deps.audit?.write("verify", {

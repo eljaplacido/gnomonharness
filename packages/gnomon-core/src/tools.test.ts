@@ -338,6 +338,39 @@ describe("bash", () => {
     expect(noStore.content).toContain("silently dropped");
   });
 
+  it("names the signal instead of reporting a killed command as exit null", async () => {
+    // Node passes exit === null when the child dies on a signal, and the old
+    // summary said "bash — exit null". The verify gate's /exit (-?\d+)/ then
+    // failed to match and fell through to a default of 0, so a segfaulted or
+    // OOM-killed test suite reported PASSED -- in the one mechanism whose whole
+    // job is to contradict a model that claims success.
+    const out = await executeTool("bash", { command: "kill -9 $$" }, ctx({ timeoutMs: 5000 }), offered);
+    expect(out.summary).toMatch(/killed by SIG/);
+    expect(out.summary).not.toContain("exit null");
+  });
+
+  it("write_allow resolves symlinks, like the two guards beside it", async () => {
+    // resolveInRoot and inSurface both realpath, each with a comment about a
+    // symlink defeating them. writeAllowed computed its relative path
+    // lexically, so a symlink inside an allowed directory pointed anywhere on
+    // the filesystem and still counted as allowed.
+    mkdirSync(join(root, "src"), { recursive: true });
+    const outside = join(root, "..", `escape-${process.pid}.txt`);
+    try {
+      symlinkSync(outside, join(root, "src", "link.txt"));
+    } catch {
+      return; // no symlink support here; nothing to assert
+    }
+    const out = await executeTool(
+      "write",
+      { path: "src/link.txt", content: "escaped" },
+      ctx({ writeAllow: ["src/**"] }),
+      offered
+    );
+    expect(out.code).not.toBe(0);
+    expect(existsSync(outside)).toBe(false);
+  });
+
   it("Esc reaches a command that has already started", async () => {
     // Cancellation was only checked BETWEEN tool calls, so a running command
     // could not be interrupted at all -- the operator's only exits were the tool

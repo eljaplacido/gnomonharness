@@ -24,6 +24,8 @@ import {
   Dirent,
   Stats,
   mkdirSync,
+  lstatSync,
+  readlinkSync
 } from "node:fs";
 import { resolve, relative, isAbsolute, dirname, join, sep } from "node:path";
 import { createHash } from "node:crypto";
@@ -384,6 +386,21 @@ function realpathOfNearest(abs: string): string {
   const parts: string[] = [];
   let cur = abs;
   for (let i = 0; i < 64; i++) {
+    // A DANGLING symlink makes realpathSync throw, and the fallback below then
+    // returns the lexical path — so `src/link.txt -> ../../escaped.txt` looked
+    // like it lived in src/ to every guard built on this, write_allow included.
+    // Resolve the link by hand before giving up on it: a link that does not
+    // point anywhere yet still decides where the write lands.
+    try {
+      if (lstatSync(cur).isSymbolicLink()) {
+        const target = resolve(dirname(cur), readlinkSync(cur));
+        // Guard the recursion the same way the loop is guarded.
+        const resolved = i < 32 ? realpathOfNearest(target) : target;
+        return parts.length > 0 ? join(resolved, ...parts) : resolved;
+      }
+    } catch {
+      /* not a link, or unreadable — fall through to the ordinary path */
+    }
     try {
       return parts.length > 0 ? join(realpathSync(cur), ...parts) : realpathSync(cur);
     } catch {
@@ -1239,11 +1256,11 @@ async function bashTool(
     //
     // A short drain after exit collects output still in flight; the process is
     // already gone, so this waits on bytes, not on the job.
-    proc.on("exit", (exit) => {
+    proc.on("exit", (exit, signal) => {
       if (settled) return;
-      setTimeout(() => finish(exit), 40);
+      setTimeout(() => finish(exit, signal), 40);
     });
-    const finish = (exit: number | null) => {
+    const finish = (exit: number | null, signal?: NodeJS.Signals | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -1283,7 +1300,15 @@ async function bashTool(
         content:
           (failed ? clampEnds(body, ctx.maxOutputBytes) : clamp(body, ctx.maxOutputBytes)) +
           (drift ? `\n\n${drift.notice}` : ""),
-        summary: `bash — exit ${exit}${drift ? " · surface changed" : ""}`,
+        // `exit` is null when the child died on a signal, and "exit null" then
+        // failed the verify gate's /exit (-?\d+)/ and fell through to its
+        // `code === 0 ? 0 : 1` default -- reporting a segfaulted or OOM-killed
+        // check as PASSED. Name the signal instead, so nothing can read it as a
+        // clean zero.
+        summary:
+          (exit === null && signal
+            ? `bash — killed by ${signal}`
+            : `bash — exit ${exit}`) + (drift ? " · surface changed" : ""),
         surface_drift: drift ?? undefined,
       });
     };
@@ -1497,7 +1522,15 @@ export function writeAllowed(
 ): { ok: true } | { ok: false; rel: string; listed: string } {
   const allowed = ctx.writeAllow?.filter((p) => p.trim().length > 0) ?? [];
   if (allowed.length === 0) return { ok: true };
-  const rel = relative(ctx.root, abs).split(sep).join("/");
+  // Resolved, not lexical. resolveInRoot and inSurface both realpath here --
+  // the first because "a symlink inside the repository pointing anywhere on the
+  // filesystem passed this check untouched", the second because otherwise "the
+  // surface pillar is bypassable by a single symlink". write_allow was the one
+  // guard left out, so a symlink inside an allowed directory could point
+  // anywhere and still count as allowed.
+  const rel = relative(realpathOrSelf(resolve(ctx.root)), realpathOfNearest(abs))
+    .split(sep)
+    .join("/");
   const ok = allowed.some((pattern) => {
     try {
       return globToRegExp(pattern).test(rel);
