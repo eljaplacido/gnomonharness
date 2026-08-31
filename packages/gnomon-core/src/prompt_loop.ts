@@ -4687,6 +4687,13 @@ export async function runPromptLoop(
         context_turns: built.included,
         context_dropped: built.dropped,
         context_tokens: built.tokens,
+        // What the turn actually SPENT, as the backend reported it — distinct
+        // from context_tokens, which is this harness's own estimate of the
+        // window it sent. Without it the audit trail can say what a run did but
+        // not what it cost, and a token-efficiency claim has to be taken on
+        // trust. Undefined when the backend reports no usage, because a
+        // confident 0 is worse than a blank.
+        usage: exchange.usage,
         surface_hash: surfaceHash,
         input: audit.text(cleanedInput),
         output: audit.text(turn.content),
