@@ -131,3 +131,26 @@ describe("gate: the repository's own CI gates can fail", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("gate: the auditor reports each problem once", () => {
+  it("does not multiply surface-level findings by the number of roles", () => {
+    // Three checks -- [chain] stages, task_allow, extra_roots -- are about the
+    // SURFACE, not one role, and sat inside the per-role loop. Each ran once
+    // per role: two genuine warnings appeared seven times each on this
+    // repository's own seven-role surface. Fifteen lines for three problems,
+    // and a fatal chain stage would have printed seven fatal errors.
+    const dir = surface({
+      "config.toml": '[chain]\nstages = ["a", "nosuch"]\n',
+      "roles.toml": ["a", "b", "c", "d", "e"]
+        .map((r) => `[roles.${r}]\ntools = ["read"]\n`)
+        .join(""),
+    });
+    const problems = auditSurface(loadConfig(dir));
+    const chainProblems = problems.filter((p) => /\[chain\]/.test(p.where));
+    expect(chainProblems.length, "one bad stage, one report").toBe(1);
+    expect(chainProblems[0].problem).toContain("nosuch");
+    const keyed = problems.map((p) => `${p.where}|${p.problem}`);
+    expect(new Set(keyed).size, "no problem reported twice").toBe(keyed.length);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

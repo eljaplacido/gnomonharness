@@ -1115,6 +1115,12 @@ const EXECUTING_ARGS: Array<[RegExp, string, RegExp]> = [
 const KNOWN_BLOCKS = new Set([
   "endpoints", "defaults", "context", "ui", "routing", "resilience", "audit",
   "session", "process", "tools", "verify", "approval", "sandbox", "exit_codes",
+  // Added with the feature, which is the point: [chain] shipped and this list
+  // did not move, so every surface declaring one was told "[chain] is not a
+  // block this harness reads; it does nothing" -- by the harness that had just
+  // read it. A block the code honours and the auditor disowns is the same
+  // silent mismatch in the other direction.
+  "chain",
 ]);
 
 /** Keys whose VALUE is a closed set, and what silently happens to a typo. */
@@ -1381,99 +1387,6 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
       }
     }
 
-  // A chain stage naming a role that does not exist fails partway through a
-  // turn, after the earlier stages have already spent their budget and their
-  // tokens. Fatal, because the surface cannot do what it says it does.
-  {
-    const stages = resolveChain(config);
-    for (const st of stages) {
-      if (!config.roles?.[st]) {
-        problems.push({
-          where: ".gnomon/config.toml [chain]",
-          problem: `stage "${st}" is not a role in this surface.`,
-          fix: `Declared roles: ${Object.keys(config.roles ?? {}).sort().join(", ")}.`,
-          fatal: true,
-        });
-      }
-    }
-    if (stages.length === 1) {
-      problems.push({
-        where: ".gnomon/config.toml [chain]",
-        problem: `a chain of one stage ("${stages[0]}") is the same as no chain.`,
-        fix: "Remove [chain], or add the stages that make it a chain.",
-        fatal: false,
-      });
-    }
-  }
-
-  // A role holding `task` with no task_allow can delegate to any role, and a
-  // sub-turn runs with the TARGET role's tools -- so its own `tools` line is
-  // not the answer to what it can cause. Worth saying out loud, in the same
-  // spirit as the bash_allow warning: the operator can decide this is fine,
-  // what they cannot do is notice it unaided.
-  for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
-    const def = rawRole as RoleDef;
-    const holdsTask = !def?.tools || def.tools.includes("task");
-    if (!holdsTask || def?.task_allow !== undefined) continue;
-    const reachable = Object.keys(config.roles ?? {}).filter((r) => r !== roleName);
-    const writers = reachable.filter((r) => {
-      const t = (config.roles[r] as RoleDef)?.tools;
-      return !t || t.includes("write") || t.includes("edit") || t.includes("bash");
-    });
-    if (writers.length === 0) continue;
-    problems.push({
-      where: `.gnomon/roles.toml [roles.${roleName}]`,
-      problem:
-        `holds \`task\` with no task_allow, so it may delegate to any role — ` +
-        `including ${writers.slice(0, 3).join(", ")}${writers.length > 3 ? ", …" : ""}, ` +
-        `which can write. A sub-turn runs with the TARGET role's tools, so this ` +
-        `role's own tools list is not the limit of what it can cause.`,
-      fix:
-        `Name the roles it may delegate to, e.g. task_allow = ["${writers[0]}"]. ` +
-        `An empty list forbids delegation entirely.`,
-      fatal: false,
-    });
-  }
-
-  // A granted extra root that is absolute, or that is not there, is worth
-  // saying out loud. Neither is fatal -- a grant that resolves nowhere simply
-  // grants nothing, which is the safe direction -- but both mean the surface
-  // does not say what its author thought it said.
-  {
-    const raw = (config.policy?.sandbox as { extra_roots?: unknown } | undefined)?.extra_roots;
-    if (raw !== undefined && !Array.isArray(raw)) {
-      problems.push({
-        where: ".gnomon/policy.toml [sandbox]",
-        problem: "extra_roots is not an array.",
-        fix: 'Write it as a list, e.g. extra_roots = ["../sibling-checkout"].',
-        fatal: true,
-      });
-    } else if (Array.isArray(raw)) {
-      const root = resolve(config.gnomonDir, "..");
-      for (const entry of raw) {
-        if (typeof entry !== "string") continue;
-        if (isAbsolute(entry)) {
-          problems.push({
-            where: ".gnomon/policy.toml [sandbox]",
-            problem:
-              `extra_roots contains an absolute path (${entry}) — that is ` +
-              `machine-scoped configuration, and it grants nothing on any other clone.`,
-            fix: "Name it relative to the repository root instead, e.g. \"../sibling-checkout\".",
-            fatal: false,
-          });
-        }
-        const abs = isAbsolute(entry) ? resolve(entry) : resolve(root, entry);
-        if (!existsSync(abs)) {
-          problems.push({
-            where: ".gnomon/policy.toml [sandbox]",
-            problem: `extra_roots names ${entry}, which does not exist here — it grants nothing.`,
-            fix: "Remove it, or check the path relative to the repository root.",
-            fatal: false,
-          });
-        }
-      }
-    }
-  }
 
     for (const field of Object.keys((rawRole ?? {}) as Record<string, unknown>)) {
       if (ROLE_KEYS.has(field)) continue;
@@ -1498,6 +1411,107 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
       });
     }
   }
+
+  // The three checks below are about the SURFACE, not about one role, and
+  // they used to sit inside the per-role loop above. Each therefore ran once
+  // per role: two genuine task_allow warnings were reported seven times each
+  // on this repository's own surface, fifteen lines for three problems. A
+  // fatal [chain] stage would have printed seven times and inflated the fatal
+  // count sevenfold, which is worse -- warning fatigue is how a real finding
+  // gets skipped, and an overstated count erodes trust in the diagnostic.
+// A chain stage naming a role that does not exist fails partway through a
+// turn, after the earlier stages have already spent their budget and their
+// tokens. Fatal, because the surface cannot do what it says it does.
+{
+  const stages = resolveChain(config);
+  for (const st of stages) {
+    if (!config.roles?.[st]) {
+      problems.push({
+        where: ".gnomon/config.toml [chain]",
+        problem: `stage "${st}" is not a role in this surface.`,
+        fix: `Declared roles: ${Object.keys(config.roles ?? {}).sort().join(", ")}.`,
+        fatal: true,
+      });
+    }
+  }
+  if (stages.length === 1) {
+    problems.push({
+      where: ".gnomon/config.toml [chain]",
+      problem: `a chain of one stage ("${stages[0]}") is the same as no chain.`,
+      fix: "Remove [chain], or add the stages that make it a chain.",
+      fatal: false,
+    });
+  }
+}
+
+// A role holding `task` with no task_allow can delegate to any role, and a
+// sub-turn runs with the TARGET role's tools -- so its own `tools` line is
+// not the answer to what it can cause. Worth saying out loud, in the same
+// spirit as the bash_allow warning: the operator can decide this is fine,
+// what they cannot do is notice it unaided.
+for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
+  const def = rawRole as RoleDef;
+  const holdsTask = !def?.tools || def.tools.includes("task");
+  if (!holdsTask || def?.task_allow !== undefined) continue;
+  const reachable = Object.keys(config.roles ?? {}).filter((r) => r !== roleName);
+  const writers = reachable.filter((r) => {
+    const t = (config.roles[r] as RoleDef)?.tools;
+    return !t || t.includes("write") || t.includes("edit") || t.includes("bash");
+  });
+  if (writers.length === 0) continue;
+  problems.push({
+    where: `.gnomon/roles.toml [roles.${roleName}]`,
+    problem:
+      `holds \`task\` with no task_allow, so it may delegate to any role — ` +
+      `including ${writers.slice(0, 3).join(", ")}${writers.length > 3 ? ", …" : ""}, ` +
+      `which can write. A sub-turn runs with the TARGET role's tools, so this ` +
+      `role's own tools list is not the limit of what it can cause.`,
+    fix:
+      `Name the roles it may delegate to, e.g. task_allow = ["${writers[0]}"]. ` +
+      `An empty list forbids delegation entirely.`,
+    fatal: false,
+  });
+}
+
+// A granted extra root that is absolute, or that is not there, is worth
+// saying out loud. Neither is fatal -- a grant that resolves nowhere simply
+// grants nothing, which is the safe direction -- but both mean the surface
+// does not say what its author thought it said.
+{
+  const raw = (config.policy?.sandbox as { extra_roots?: unknown } | undefined)?.extra_roots;
+  if (raw !== undefined && !Array.isArray(raw)) {
+    problems.push({
+      where: ".gnomon/policy.toml [sandbox]",
+      problem: "extra_roots is not an array.",
+      fix: 'Write it as a list, e.g. extra_roots = ["../sibling-checkout"].',
+      fatal: true,
+    });
+  } else if (Array.isArray(raw)) {
+    const root = resolve(config.gnomonDir, "..");
+    for (const entry of raw) {
+      if (typeof entry !== "string") continue;
+      if (isAbsolute(entry)) {
+        problems.push({
+          where: ".gnomon/policy.toml [sandbox]",
+          problem:
+            `extra_roots contains an absolute path (${entry}) — that is ` +
+            `machine-scoped configuration, and it grants nothing on any other clone.`,
+          fix: "Name it relative to the repository root instead, e.g. \"../sibling-checkout\".",
+          fatal: false,
+        });
+      }
+      const abs = isAbsolute(entry) ? resolve(entry) : resolve(root, entry);
+      if (!existsSync(abs)) {
+        problems.push({
+          where: ".gnomon/policy.toml [sandbox]",
+          problem: `extra_roots names ${entry}, which does not exist here — it grants nothing.`,
+          fix: "Remove it, or check the path relative to the repository root.",
+          fatal: false,
+        });
+      }
+    }
+  }
+}
 
   for (const [name, raw] of Object.entries(declared)) {
     const where = `.gnomon/config.toml [endpoints.${name}]`;
