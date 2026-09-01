@@ -48,6 +48,8 @@ different servers.
 | Task completion | [Terminal-Bench](../benchmarks/results/terminal-bench-postfix-2026-08-31/) | 43.5% → **52.2%**, McNemar **p = 0.109** — *direction only*, n=3 running |
 | Context retention | [context](../benchmarks/results/context-2026-08-31/) | `summary` **9/9**, `discard` **0/9**. The shipped default is `discard` |
 | Per-turn overhead | [latency](../benchmarks/results/latency-2026-08-31/) | **223 ms** vs opencode **1581 ms** |
+| Token efficiency | [tokens](../benchmarks/results/token-efficiency-2026-09-01/) | **604k in / 15k out per trial — 41:1**. Cost is context re-sending, not generation. Billed $0.0153/trial; naive token arithmetic overstates it **3.3×** because caching fits this shape |
+| Verify gate — misconfigured | `902a93f` | a check that cannot run made the model rewrite correct code; one task went from passing without the gate to failing with it. Now reported as unrunnable, not handed back, and not called a pass |
 | Test authoring | [test authoring](../benchmarks/results/test-authoring-2026-08-31/) | **1/9** — and 3/9 asserted the *bug* as the contract |
 | Verify-gate value | [verify gate](../benchmarks/results/verify-gate-2026-09-01/) | **inconclusive after 38 trials** — the model fixes 18/18, so the gate has nothing to catch |
 | The three real workflows | [workflows](../benchmarks/results/workflows-2026-09-01/) | audit / refactor / greenfield all **complete**; four defects found doing it |
