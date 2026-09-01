@@ -233,6 +233,21 @@ export interface RoleDef {
   /** Named endpoint from config.toml [endpoints]; defaults to "local" */
   endpoint?: string;
   /**
+   * Roles this role may delegate to with the `task` tool.
+   *
+   * Without it, `task` is an unconditional capability upgrade: a sub-turn gets
+   * the TARGET role's tools, so any role holding `task` can borrow any other
+   * role's list, and its own `tools` line stops being the answer to what it can
+   * do. `plan` declares no `write` and no `edit`, and could delegate to
+   * `implement` and have files written anyway.
+   *
+   * Omitted means every role, which is the behaviour that shipped — but the
+   * surface audit says so, and the starter surface states it explicitly. That
+   * is the same course the `tools` list took after an omitted list quietly
+   * handed the coordinator `skill`.
+   */
+  task_allow?: string[];
+  /**
    * Tools this role may call. Absent means every declared tool.
    * An empty list means none — which is how a read-only verifier is
    * expressed: it can run the suite but cannot write.
@@ -1141,7 +1156,7 @@ const BLOCK_OWNER: Record<string, string> = {
   tools: "tools.toml",
 };
 
-const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "model", "profile", "temperature", "tools", "top_p", "write_allow"]);
+const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "model", "profile", "task_allow", "temperature", "tools", "top_p", "write_allow"]);
 
 /**
  * Spellings people reach for when they mean to supply a secret directly.
@@ -1361,6 +1376,35 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
         });
       }
     }
+
+  // A role holding `task` with no task_allow can delegate to any role, and a
+  // sub-turn runs with the TARGET role's tools -- so its own `tools` line is
+  // not the answer to what it can cause. Worth saying out loud, in the same
+  // spirit as the bash_allow warning: the operator can decide this is fine,
+  // what they cannot do is notice it unaided.
+  for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
+    const def = rawRole as RoleDef;
+    const holdsTask = !def?.tools || def.tools.includes("task");
+    if (!holdsTask || def?.task_allow !== undefined) continue;
+    const reachable = Object.keys(config.roles ?? {}).filter((r) => r !== roleName);
+    const writers = reachable.filter((r) => {
+      const t = (config.roles[r] as RoleDef)?.tools;
+      return !t || t.includes("write") || t.includes("edit") || t.includes("bash");
+    });
+    if (writers.length === 0) continue;
+    problems.push({
+      where: `.gnomon/roles.toml [roles.${roleName}]`,
+      problem:
+        `holds \`task\` with no task_allow, so it may delegate to any role — ` +
+        `including ${writers.slice(0, 3).join(", ")}${writers.length > 3 ? ", …" : ""}, ` +
+        `which can write. A sub-turn runs with the TARGET role's tools, so this ` +
+        `role's own tools list is not the limit of what it can cause.`,
+      fix:
+        `Name the roles it may delegate to, e.g. task_allow = ["${writers[0]}"]. ` +
+        `An empty list forbids delegation entirely.`,
+      fatal: false,
+    });
+  }
 
   // A granted extra root that is absolute, or that is not there, is worth
   // saying out loud. Neither is fatal -- a grant that resolves nowhere simply

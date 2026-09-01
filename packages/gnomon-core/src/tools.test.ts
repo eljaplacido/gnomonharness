@@ -1868,3 +1868,66 @@ describe("shell-mediated work is observed, not inferred", () => {
     expect(out.worktree_changed).toBe(false);
   });
 });
+
+describe("task_allow bounds what delegation can reach", () => {
+  const ctxFor = (taskAllow?: string[]) =>
+    ({
+      root: "/tmp",
+      sandbox: "confined" as const,
+      gate: "never" as const,
+      approve: async () => true,
+      taskAllow,
+      delegate: {
+        depth: 0,
+        roles: () => ["implement", "verifier", "critique"],
+        run: async () => ({ answer: "done", code: 0 }),
+      },
+    }) as unknown as Parameters<typeof executeTool>[2];
+
+  it("refuses a target the role may not delegate to", async () => {
+    // Without this, `task` is an unconditional capability upgrade: a sub-turn
+    // runs with the TARGET role's tools, so a role declaring no `write` could
+    // reach one that has it and have files written on its behalf. Its own
+    // tools list stopped being the answer to what it could cause.
+    const r = await executeTool(
+      "task",
+      { role: "implement", instruction: "write a file" },
+      ctxFor(["verifier"]),
+      new Set(["task"])
+    );
+    expect(r.code).toBe(2); // TOOL_DENIED — a refusal, not a failure
+    expect(r.content).toContain("may not delegate");
+    expect(r.content).toContain("verifier");
+  });
+
+  it("allows a declared target", async () => {
+    const r = await executeTool(
+      "task",
+      { role: "verifier", instruction: "check it" },
+      ctxFor(["verifier"]),
+      new Set(["task"])
+    );
+    expect(r.code).not.toBe(2);
+  });
+
+  it("an empty list forbids delegation entirely", async () => {
+    const r = await executeTool(
+      "task",
+      { role: "verifier", instruction: "check it" },
+      ctxFor([]),
+      new Set(["task"])
+    );
+    expect(r.code).toBe(2);
+    expect(r.content).toContain("may not delegate at all");
+  });
+
+  it("an omitted list keeps the shipped behaviour", async () => {
+    const r = await executeTool(
+      "task",
+      { role: "implement", instruction: "do it" },
+      ctxFor(undefined),
+      new Set(["task"])
+    );
+    expect(r.code).not.toBe(2);
+  });
+});

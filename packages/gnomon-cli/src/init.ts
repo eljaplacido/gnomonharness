@@ -269,6 +269,10 @@ max_steps_total = 160
 # you actually wanted is a scope you will delete in frustration; a scope that
 # matches your layout is one you keep.
 tools = ["read", "glob", "grep", "compute", "todo", "note", "task", "write", "skill"]
+# Which roles this one may hand work to. A sub-turn runs with the TARGET
+# role's tools, so this line -- not the one above -- bounds what delegation
+# can cause. Omit it and any role is reachable. An empty list forbids it.
+task_allow = ["implementor", "verifier"]
 # Not .gnomon/**. The skill tool writes proposals to .gnomon/skills/proposed/
 # through its own path, and accepting one is a human act that changes the
 # surface hash. Letting a role reach .gnomon/skills/ with plain write would
@@ -342,6 +346,7 @@ top_p = 0.9
 max_steps = 20
 max_steps_total = 160
 tools = ["read", "glob", "grep", "compute", "todo", "note", "task", "bash"]
+task_allow = ["implement", "critique"]
 description = "Hardest reasoning, lowest call volume"
 
 [roles.implement]

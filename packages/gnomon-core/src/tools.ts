@@ -810,6 +810,11 @@ export interface ToolContext {
    * that leaves a trace, rather than a flag that does not.
    */
   extraRoots?: string[];
+  /**
+   * Roles the current role may delegate to. Undefined means every role, which
+   * is what shipped; see RoleDef.task_allow for why that is worth declaring.
+   */
+  taskAllow?: string[];
   gate: ApprovalGate;
   approve: Approver;
   /** bash timeout, ms */
@@ -1841,6 +1846,25 @@ async function taskTool(
   const role = String(args.role ?? "").trim();
   const instruction = String(args.instruction ?? "").trim();
   const known = ctx.delegate.roles();
+
+  // Declared delegation. A sub-turn runs with the TARGET role's tools, so this
+  // is the moment capability changes hands -- and without a list, a role that
+  // declares no `write` could reach one that does and have files written on
+  // its behalf. Checked before "is it a real role" is answered, so an
+  // un-permitted target reads the same whether or not it exists: the caller
+  // learns what it may reach, not what the surface happens to contain.
+  if (ctx.taskAllow !== undefined && !ctx.taskAllow.includes(role)) {
+    return {
+      code: TOOL_DENIED,
+      content:
+        `Refused: this role may not delegate to "${role || "(none)"}". ` +
+        (ctx.taskAllow.length > 0
+          ? `It may delegate to: ${ctx.taskAllow.join(", ")}.`
+          : "It may not delegate at all.") +
+        " Delegation is declared in roles.toml as task_allow.",
+      summary: `task — refused (${role || "no role"} not in task_allow)`,
+    };
+  }
 
   if (!role || !known.includes(role)) {
     return {

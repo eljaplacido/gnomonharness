@@ -1614,6 +1614,7 @@ export async function runAgenticTurn(
     // Declared in policy.toml, hashed with the surface. A grant that does not
     // move the surface hash would be a grant nobody could audit.
     extraRoots: resolveExtraRoots(config),
+    taskAllow: config.roles[role]?.task_allow,
     gate,
     approve: deps.approve,
     timeoutMs: toolTimeoutMs(config),
