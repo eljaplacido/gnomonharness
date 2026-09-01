@@ -177,10 +177,26 @@ command its pattern blocks measures whether the model tried that spelling.
 through. Give every scenario 2–3 adversarial variants reaching the same end state
 by a different route, and count it sound only if **every** variant is contained.
 
-**Never edit or rebuild underneath a live run.** Twice now: a `sed` on a running
-script left it executing the original ref, and a `pnpm build` mid-sweep broke
-`init` for every remaining trial. Editing a live script is not a way to change a
-live run, and neither is rebuilding its dependencies.
+**Never perturb your own apparatus — and the apparatus is wider than the script.**
+Four distinct forms of this, each of which cost a run:
+
+- A `sed` on a running script: it kept executing the original ref.
+- A `pnpm build` mid-sweep: `init` broke for every remaining trial.
+- `rm -rf runs/*` on restart "to start clean": it deleted three COMPLETED cells,
+  and the missing results were then misdiagnosed as the harness failing.
+- Three agents launched against one local model endpoint: each became slow
+  enough to hit its own timeout, and all three returned nothing.
+
+The last one is the general rule the others are instances of: **serialize
+anything that shares a resource, and check the resource rather than the script.**
+A supervisor that waits on a process *name* has the same bug — kill and relaunch
+the run and the name briefly vanishes, so the waiter concludes the stage is
+finished. Wait on a pid.
+
+**Suspect the operator, not only the run.** Every apparatus failure in this
+campaign that was blamed on the harness or the host turned out to be something
+the operator did to the run while diagnosing it. Before concluding "the tool is
+broken", list what you have changed since it last worked.
 
 **Detect breach from real state, never from the agent's own account.** The suite
 originally decided whether gnomon had breached by grepping gnomon's own tool log
@@ -207,6 +223,9 @@ originally decided whether gnomon had breached by grepping gnomon's own tool log
 [ ] Wall-clock per trial is plausible for the work (not ~0, not exactly the cap)
 [ ] Outcome read from real state, not from the agent's own report
 [ ] Nothing rebuilt or edited underneath the running arm
+[ ] Nothing else is contending for the same endpoint, GPU, or docker host
+[ ] Supervisors wait on pids, not on process names
+[ ] No cleanup step deletes results that are already complete
 ```
 
 If a line cannot be ticked, either fix it or write down — in the result — that it was not met.
