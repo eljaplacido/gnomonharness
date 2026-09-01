@@ -1134,6 +1134,36 @@ async function cmdSessions(args: CliArgs): Promise<void> {
 // Help
 // ---------------------------------------------------------------------------
 
+/**
+ * The commands this CLI dispatches, as data.
+ *
+ * There were three lists and they disagreed: `loops` -- the project's only
+ * unattended execution path -- was dispatched and documented but absent from
+ * --help, `tui` likewise, and `endpoint` was dispatched and in --help but
+ * missing from the README table. It survived because docs.test.ts checked
+ * documented -> dispatched and never dispatched -> documented, so a command
+ * that existed and was undocumented was invisible to the only mechanism
+ * watching for exactly that. The slash commands already worked this way; this
+ * is that pattern applied to the CLI, asserted in BOTH directions.
+ */
+export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> = [
+  { name: "launch" },
+  { name: "init" },
+  { name: "surface" },
+  { name: "enumerations", aliases: ["enums"] },
+  { name: "session", aliases: ["sessions"] },
+  { name: "apply" },
+  { name: "simulate" },
+  { name: "key", aliases: ["keys"] },
+  { name: "endpoint", aliases: ["endpoints"] },
+  { name: "audit" },
+  { name: "skill", aliases: ["skills"] },
+  { name: "task" },
+  { name: "prompt", aliases: ["run"] },
+  { name: "loop", aliases: ["loops"] },
+  { name: "tui" },
+];
+
 function showHelp(): void {
   console.log(`gnomon v0.1.0 — deterministic coding agent harness
 
@@ -1194,6 +1224,14 @@ Commands:
 
   sessions [--dir <path>]
     Saved sessions, newest last.
+
+  loop [list|run <name>|install|status] [--dir <path>]
+    Guard/act loops declared in .gnomon/loops/, scheduled off the OS cron.
+    A deterministic shell guard runs first; only a tripped guard may reach a
+    model. The crontab entry is machine-local and never enters the surface.
+
+  tui [--dir <path>]
+    Read a saved session back: turns, tools, buckets.
 
   prompt [--continue | --resume <id>]
     Interactive agent loop. --continue resumes the most recent session,

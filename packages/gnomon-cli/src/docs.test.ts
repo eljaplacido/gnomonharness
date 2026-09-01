@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { CLI_COMMANDS } from "./index.js";
 import { readFileSync, mkdtempSync, rmSync, existsSync, readdirSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -330,5 +331,34 @@ describe("the README outcome table matches the tool result codes", () => {
       }
     }
     expect(stale, `stale citations:\n${stale.join("\n")}`).toEqual([]);
+  });
+});
+
+describe("the CLI command surface agrees with itself, both directions", () => {
+  // The asymmetry that let three commands diverge: this file checked
+  // documented -> dispatched and never dispatched -> documented, so a command
+  // that existed and was undocumented was invisible to the only mechanism
+  // watching for exactly that.
+  const src = readFileSync(join(__dirname, "index.ts"), "utf8");
+  const dispatched = new Set([...src.matchAll(/case "([a-z-]+)":/g)].map((m) => m[1]));
+  const registry = CLI_COMMANDS.flatMap((c) => [c.name, ...(c.aliases ?? [])]);
+
+  it("every dispatched command is in the registry", () => {
+    const missing = [...dispatched].filter((c) => !registry.includes(c));
+    expect(missing, `dispatched but not registered: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("every registered command is actually dispatched", () => {
+    const dead = registry.filter((c) => !dispatched.has(c));
+    expect(dead, `registered but not dispatched: ${dead.join(", ")}`).toEqual([]);
+  });
+
+  it("every primary command appears in --help", () => {
+    const help = readFileSync(join(__dirname, "index.ts"), "utf8");
+    const body = help.slice(help.indexOf("Commands:"));
+    const absent = CLI_COMMANDS.map((c) => c.name).filter(
+      (n) => !new RegExp(`\\n  ${n}[ \\[\\n]`).test(body)
+    );
+    expect(absent, `dispatched but absent from --help: ${absent.join(", ")}`).toEqual([]);
   });
 });
