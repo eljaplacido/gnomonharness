@@ -418,4 +418,29 @@ describe("Progress does not leave timers running", () => {
     // tabs are legitimate diff layout and survive
     expect(safeForPrompt("a\tb")).toBe("a\tb");
   });
+
+  it("says when a refusal was routed around rather than fatal", () => {
+    // Measured across three real workflows -- a repo audit, a refactor and a
+    // greenfield build. All three produced correct work: the audit found a real
+    // type divergence, the refactor consolidated three duplicate functions and
+    // left the code running, the build shipped a package with 10 passing tests.
+    // All three were bucketed `refusal`, because the model tried something its
+    // role forbade, was told no, and did it another way -- which is the policy
+    // WORKING. A reader seeing only the bucket concludes all three failed.
+    //
+    // settle() deliberately never demotes a refusal to a result and this does
+    // not change that. The bucket is unchanged; the line just stops reading as
+    // "the turn failed".
+    const base: any = {
+      turn: 1, role: "implement", input: "x", output: "y", model: "m",
+      code: 2, duration_ms: 10,
+    };
+    const ui: any = { meta: ["bucket"], meta_style: "line", think: "hide", spinner: false, color: false };
+    const line = (e: any) => renderMeta(e, ui).join(" ");
+
+    expect(line({ ...base, bucket: "refusal", stop_reason: "answered" })).toContain("answered anyway");
+    // a refusal that actually ended the turn still reads plainly
+    expect(line({ ...base, bucket: "refusal", stop_reason: "step_wall" })).not.toContain("anyway");
+    expect(line({ ...base, bucket: "result", stop_reason: "answered" })).toContain("result");
+  });
 });

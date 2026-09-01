@@ -250,7 +250,19 @@ function metaField(
     case "model":
       return exchange.model;
     case "bucket":
-      return exchange.bucket;
+      // A turn that hit a boundary and then finished anyway reads as a failure
+      // if the bucket is all you show. Measured across three real workflows --
+      // a repo audit, a refactor, and a greenfield build: every one produced
+      // correct work, and every one was bucketed `refusal` because the model
+      // tried something its role forbade, was told no, and did it another way.
+      //
+      // That IS the policy working. settle() deliberately never demotes a
+      // refusal to a result (CONTRACTS.md), and this does not change it -- the
+      // bucket is the bucket. It adds the one word that stops it being read as
+      // "the turn failed", which the record already knows from stop_reason.
+      return exchange.bucket === "refusal" && exchange.stop_reason === "answered"
+        ? "refusal (answered anyway)"
+        : exchange.bucket;
     case "duration":
       return humanDuration(exchange.duration_ms);
     case "context":
