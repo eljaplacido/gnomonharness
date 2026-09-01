@@ -991,6 +991,88 @@ describe("model API errors", () => {
     expect(said.filter((l) => l.includes("[retry]")).length).toBe(2);
   });
 
+  it("rides out an endpoint outage far longer than `attempts` alone would allow", async () => {
+    // The shipped behaviour tolerated ~1.5s of unreachable endpoint: three
+    // attempts, 500ms and 1000ms of backoff, all of which return in about a
+    // millisecond because a refused socket is fast. A measured 54-second
+    // OpenRouter blip therefore killed 4 concurrent benchmark trials at once --
+    // one of them 92 tool calls deep -- while the retry budget sat unspent.
+    // An unreachable endpoint must not burn a generation attempt.
+    const config: any = loadConfig("../..");
+    config.config = {
+      ...config.config,
+      resilience: { attempts: 3, backoff_ms: 1, transport_grace_ms: 60_000 },
+    };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const said: string[] = [];
+    let calls = 0;
+
+    await withFetch(
+      (async () => {
+        calls++;
+        // Ten straight refusals -- more than `attempts` -- then recovery.
+        if (calls <= 10) throw Object.assign(new Error("fetch failed: ECONNREFUSED"), {});
+        return { ok: true, json: async () => ({ message: { content: "rode it out" } }) };
+      }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "hi" }],
+          {
+            approve: async () => true,
+            progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+            say: (l: string) => said.push(l),
+          }
+        );
+        expect(turn.content).toBe("rode it out");
+        expect(turn.code).toBe(0);
+      }
+    );
+    // Eleven calls: it kept knocking past the three-attempt bound.
+    expect(calls).toBe(11);
+    expect(said.filter((l) => l.includes("grace")).length).toBeGreaterThan(0);
+  });
+
+  it("stops knocking when the transport grace is spent, and records the failure", async () => {
+    const config: any = loadConfig("../..");
+    config.config = {
+      ...config.config,
+      resilience: { attempts: 3, backoff_ms: 1, transport_grace_ms: 8 },
+    };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const said: string[] = [];
+    let calls = 0;
+
+    await withFetch(
+      (async () => {
+        calls++;
+        throw Object.assign(new Error("fetch failed: ECONNREFUSED"), {});
+      }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "hi" }],
+          {
+            approve: async () => true,
+            progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+            say: (l: string) => said.push(l),
+          }
+        );
+        // A spent grace is still an apparatus failure, not a silent success.
+        expect(turn.code).toBe(12);
+      }
+    );
+    // Bounded: it gave up rather than knocking forever.
+    expect(calls).toBeLessThan(10);
+    expect(said.filter((l) => l.includes("grace spent")).length).toBe(1);
+  });
+
   it("escalates a timeout deadline, but never past the budget flat retrying would have used", async () => {
     // The escalation shipped unbounded and made things strictly worse: 300 +
     // 600 + 1200 = 2100s against a harness wall of 900, so 5 of 5 benchmark

@@ -69,6 +69,7 @@ reserve_output = 8192
 attempts = 3              # 1 disables retry
 backoff_ms = 500          # doubled each attempt
 request_timeout_ms = 300000   # a reasoning model on a hard task exceeds 120s; a timed-out attempt doubles this
+transport_grace_ms = 60000    # an endpoint refusing the socket is not an attempt; keep knocking this long (0 disables)
 
 [endpoints.local]
 # Where inference goes lives in the surface: routing is part of what a checkout

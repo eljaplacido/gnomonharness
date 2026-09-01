@@ -698,7 +698,7 @@ async function callEndpointWithRetry(
   messages: ChatMessage[],
   tools: unknown[],
   timeoutMs: number,
-  resilience: { attempts: number; backoff_ms: number },
+  resilience: { attempts: number; backoff_ms: number; transport_grace_ms?: number },
   say: ((line: string) => void) | undefined,
   ui: ResolvedUi | undefined,
   signal?: AbortSignal
@@ -729,9 +729,32 @@ async function callEndpointWithRetry(
   // longer attempts. Worst-case wall is therefore unchanged from the flat
   // behaviour this replaced, which is what makes the escalation safe to ship:
   // it cannot push any caller past a deadline it was already surviving.
+  //
+  // Code 12 -- the endpoint refusing the socket -- is a different animal again,
+  // and shipped with a hole in it. A refused fetch returns in about a
+  // millisecond, so three attempts at 500ms and 1000ms of backoff tolerated a
+  // grand total of ~1.5 SECONDS of provider outage, and then gave up having
+  // spent essentially none of the budget it was holding. Measured: a 54-second
+  // OpenRouter blip destroyed 4 concurrent trials at once, one of them 92 tool
+  // calls deep, while the retry budget sat 99.9% unspent.
+  //
+  // So an unreachable endpoint no longer consumes a generation attempt. It gets
+  // its own wall -- transport_grace_ms -- and keeps knocking, backing off
+  // exponentially, until either the socket opens or the grace runs out. The
+  // grace is additionally clamped by the same budget code 11 respects, so the
+  // worst-case wall of this function is UNCHANGED. That is the property that
+  // makes it safe to ship, exactly as it was for the timeout escalation above.
+  //
+  // It costs at most one grace period per turn, not per call: an endpoint still
+  // unreachable when the grace expires returns apparatus_failure, which ends
+  // the turn.
   const budgetMs = timeoutMs * resilience.attempts;
+  const graceMs = Math.max(0, resilience.transport_grace_ms ?? 0);
+  const MAX_TRANSPORT_WAIT_MS = 8_000;
   let spentMs = 0;
   let deadline = timeoutMs;
+  let transportWaitedMs = 0;
+  let transportTries = 0;
   for (let attempt = 1; attempt <= resilience.attempts; attempt++) {
     const startedAt = Date.now();
     const r = await callEndpoint(target, messages, tools, deadline, signal);
@@ -739,6 +762,43 @@ async function callEndpointWithRetry(
     if (r.code === 0 || !RETRYABLE.has(r.code)) return r;
     last = r;
     if (signal?.aborted) return r;
+    if (r.code === 12 && graceMs > 0) {
+      transportTries++;
+      const wait = Math.min(
+        resilience.backoff_ms * Math.pow(2, transportTries - 1),
+        MAX_TRANSPORT_WAIT_MS
+      );
+      const roomLeft = Math.min(graceMs - transportWaitedMs, budgetMs - spentMs);
+      if (wait > roomLeft) {
+        if (say && ui) {
+          say(
+            paint(
+              ui,
+              "yellow",
+              `  [retry] endpoint unreachable — grace spent (${transportWaitedMs}ms of ` +
+                `${graceMs}ms) after ${transportTries} attempt(s), giving up`
+            )
+          );
+        }
+        return r;
+      }
+      transportWaitedMs += wait;
+      spentMs += wait;
+      if (say && ui) {
+        say(
+          paint(
+            ui,
+            "yellow",
+            `  [retry] endpoint unreachable — attempt ${transportTries}, waiting ${wait}ms ` +
+              `(${transportWaitedMs}ms of ${graceMs}ms grace)`
+          )
+        );
+      }
+      await new Promise((res) => setTimeout(res, wait));
+      // An endpoint that never answered did not spend a generation attempt.
+      attempt--;
+      continue;
+    }
     if (r.code === 11) {
       // Stop while the answer still fits in the budget. Starting an attempt
       // that cannot finish inside it buys nothing and forfeits the record.

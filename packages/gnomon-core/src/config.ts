@@ -1757,6 +1757,13 @@ export interface ResolvedResilience {
   attempts: number;
   backoff_ms: number;
   request_timeout_ms: number;
+  /**
+   * How long to keep waiting out an endpoint that will not answer the socket
+   * at all, in milliseconds. 0 restores the old behaviour (give up after
+   * `attempts`). See callEndpointWithRetry for why this is separate from
+   * `attempts`.
+   */
+  transport_grace_ms: number;
 }
 
 /**
@@ -1784,6 +1791,11 @@ export function resolveResilience(config: GnomonConfig): ResolvedResilience {
     attempts: Math.max(1, Math.floor(num(r?.attempts, 3))),
     backoff_ms: Math.floor(num(r?.backoff_ms, 500)),
     request_timeout_ms: Math.max(1000, Math.floor(num(r?.request_timeout_ms, 300_000))),
+    // 60s rides out the transient provider blips that are actually observed —
+    // the one that prompted this lasted 54 — while staying far inside a
+    // 900s harness wall. It is spent at most once per turn, because an
+    // endpoint that is still unreachable afterwards ends the turn.
+    transport_grace_ms: Math.floor(num(r?.transport_grace_ms, 60_000)),
   };
 }
 
