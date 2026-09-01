@@ -67,6 +67,7 @@ import {
   globToRegExp,
 } from "./tools.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
+import { harnessBuild } from "./build.js";
 import { mapBucket } from "./session.js";
 import {
   loadSkills,
@@ -2817,6 +2818,16 @@ export async function listModels(config: GnomonConfig): Promise<EndpointModels[]
 export interface TaskRecord {
   /** Content hash of .gnomon/ — what determined this behaviour */
   surface_hash: string;
+  /**
+   * Which harness build produced this record, e.g. `gnomon/0.1.0+abf40c0`.
+   *
+   * The surface hash says what rules the run was under; this says what code
+   * read them. Without it the sentence the whole design exists to earn --
+   * "if behaviour changed, the hash changed" -- is only half true, because
+   * loop constants and the loop itself live outside the surface. Every
+   * benchmark record written before this field was under-identified.
+   */
+  harness: string;
   role: string;
   model: string;
   endpoint?: string;
@@ -2918,6 +2929,7 @@ export async function runTask(
         .join("\n  ");
       return {
         input,
+        harness: harnessBuild(),
         output: `Surface cannot be used:\n  ${detail}`,
         role: options.role ?? "unknown",
         model: "",
@@ -2980,6 +2992,8 @@ export async function runTask(
 
   audit.write("session_start", {
     surface_hash,
+    // The trail names its harness for the same reason the record does.
+    harness: harnessBuild(),
     cwd: process.cwd(),
     mode: "task",
     role,
@@ -3120,6 +3134,7 @@ export async function runTask(
 
   return {
     surface_hash,
+    harness: harnessBuild(),
     // With a chain, the top-level fields describe the stage whose answer the
     // operator actually receives -- the last one that ran. Reporting the entry
     // role beside the final stage's bucket and output would make the record
@@ -4584,6 +4599,8 @@ export async function runPromptLoop(
     }
   })();
   audit.write("session_start", {
+    // The trail names its harness for the same reason the record does.
+    harness: harnessBuild(),
     surface_hash: surfaceHash,
     cwd: process.cwd(),
     roles: listRoles(config),

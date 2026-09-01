@@ -134,6 +134,31 @@ so both format drift and non-determinism fail the build.
 **Fixture**: `conformance/enumerations_schema.json` — JSON Schema for the
 enumerations output. CI asserts the output conforms.
 
+## 3b. Provenance — which harness produced a record
+
+Every `TaskRecord` and every audit trail carries **`harness`**, a build
+identifier such as `gnomon/0.1.0+abf40c0` or `gnomon/0.1.0+abf40c0-dirty`.
+
+It exists because `surface_hash` answers only half the question. The hash says
+what **rules** a run was under. It does not say what **code** read them — and
+several constants that decide loop behaviour still live in TypeScript rather
+than in the surface, so two people with identical surface hashes on different
+builds can get different behaviour. Until this field existed, no record said so,
+and every benchmark record written before it is under-identified.
+
+Resolution order: `GNOMON_BUILD` if a release or CI stamped one — the only form
+that survives `npm install`, where there is no repository to ask; otherwise
+`git rev-parse --short HEAD` in the harness's own tree, suffixed `-dirty` when
+that tree has uncommitted changes; otherwise the literal `unknown`.
+
+A build made from an edited tree must not claim to be the commit it sits on, and
+a missing provenance string is said plainly rather than guessed — a wrong one is
+worse than none, because it is the kind of thing a reader believes.
+
+Note this is a different thing from the manifest's `build` field, which is a
+format version and about which this document already says a consumer must not
+read provenance from it.
+
 ## 4. Session record
 
 One JSON object per session: manifest + ordered list of steps. Each step

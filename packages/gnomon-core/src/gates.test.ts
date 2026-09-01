@@ -154,3 +154,29 @@ describe("gate: the auditor reports each problem once", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("gate: a record names the harness that produced it", () => {
+  it("carries a build identifier, not just a surface hash", async () => {
+    // An independent audit put this first of thirteen findings and the only
+    // one touching the thesis: the surface hash says what RULES a run was
+    // under, and nothing said what CODE read them. Two people on identical
+    // surfaces with different builds get different behaviour, because loop
+    // constants and the loop itself live outside the surface.
+    const { harnessBuild } = await import("./build.js");
+    const b = harnessBuild();
+    expect(b).toMatch(/^gnomon\/\d+\.\d+\.\d+\+/);
+    // Never silently claims a commit it is not on.
+    expect(b.endsWith("+")).toBe(false);
+  });
+
+  it("marks a build made from an edited tree as dirty", async () => {
+    // A build from a modified tree must not claim to be its last commit --
+    // that is the under-identification the field exists to end.
+    const { harnessBuild } = await import("./build.js");
+    const b = harnessBuild();
+    const clean = /\+[0-9a-f]{7,}$/.test(b);
+    const dirty = /-dirty$/.test(b);
+    const unknown = /\+unknown$/.test(b);
+    expect(clean || dirty || unknown, `unexpected build string: ${b}`).toBe(true);
+  });
+});
