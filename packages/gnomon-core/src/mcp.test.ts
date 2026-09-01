@@ -114,3 +114,18 @@ describe("mcp", () => {
     }
   });
 });
+
+describe("MCP reaches the non-interactive entry point too", () => {
+  it("connects declared servers in `gnomon task`, not only in `gnomon prompt`", async () => {
+    // connectMcp was called only from runPromptLoop, so a surface declaring
+    // [mcp_servers] gave its tools to the interactive loop and NOT to
+    // `gnomon task` -- same surface, same hash, two tool sets depending on the
+    // entry point. Measured against a real server: the model answered "no tool
+    // named mcp__canary__stamp available" on a surface that declared it.
+    const { runTask } = await import("./prompt_loop.js");
+    const src = String(runTask);
+    expect(src).toContain("connectMcp");
+    // ...and lets it go again: `gnomon task` is run in loops by scripts.
+    expect(src).toContain("state.mcp?.close()");
+  });
+});

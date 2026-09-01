@@ -2899,9 +2899,26 @@ export async function runTask(
     approvals: options.yes ? "granted" : "refused",
   });
 
+  // Connect declared MCP servers here too. They were wired only in
+  // runPromptLoop, so a surface declaring [mcp_servers] handed its tools to
+  // `gnomon prompt` and NOT to `gnomon task` -- the same surface, the same
+  // hash, two different tool sets depending on which entry point you used.
+  // That is the exact shape of the bug fixed above for the surface audit, and
+  // it breaks Rule 3 harder: the declared data stopped deciding what the model
+  // can reach. Measured: a surface declaring one MCP server ran a task in
+  // which the model reported "no tool named mcp__canary__stamp available".
+  //
+  // Failure to connect is reported and skipped, never fatal -- an unreachable
+  // MCP server should cost its own tools, not the whole run.
+  if (config.tools.mcp_servers && Object.keys(config.tools.mcp_servers).length > 0) {
+      state.mcp = await connectMcp(config.tools.mcp_servers, note);
+  }
+
   const start = Date.now();
-  const turn = await runAgenticTurn(state, role, route, built.messages, {
-    approve: async (req) => {
+  let turn: TurnResult;
+  try {
+      turn = await runAgenticTurn(state, role, route, built.messages, {
+      approve: async (req) => {
       const decision = options.yes ? "approved" : "declined";
       note(`[approval] ${req.summary} — ${decision}`);
       audit.write("approval", {
@@ -2914,12 +2931,17 @@ export async function runTask(
         interactive: false,
       });
       return Boolean(options.yes);
-    },
-    progress: new Progress(ui, process.stderr as NodeJS.WriteStream),
-    ui,
-    say: note,
-    audit,
-  });
+      },
+      progress: new Progress(ui, process.stderr as NodeJS.WriteStream),
+      ui,
+      say: note,
+      audit,
+    });
+  } finally {
+    // Subprocesses outlive the turn otherwise, and `gnomon task` is the entry
+    // point scripts run in a loop.
+    state.mcp?.close();
+  }
   const duration = Date.now() - start;
 
   audit.write("turn", {
