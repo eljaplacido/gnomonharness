@@ -26,7 +26,7 @@ import {
   auditSurface,
 } from "./index.js";
 import { join, resolve } from "node:path";
-import { mkdirSync, rmSync, mkdtempSync } from "node:fs";
+import { mkdirSync, rmSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 // ---------------------------------------------------------------------------
@@ -821,5 +821,45 @@ describe("auditSurface", () => {
         roles: { verifier: { bash_deny: ["rm\\s+-rf"], bash_allow: ["^ls\\s"] } },
       } as any)
     ).toHaveLength(0);
+  });
+});
+
+describe("bash_allow executor warning guards each admission on its own terms", () => {
+  const write = (dir: string, file: string, body: string) => {
+    mkdirSync(join(dir, ".gnomon"), { recursive: true });
+    writeFileSync(join(dir, ".gnomon", file), body);
+  };
+
+  it("still warns about an interpreter when the deny-list only covers git", () => {
+    // The guard was one loose test -- /exec|delete|fprint|-c\b/ over the whole
+    // deny-list -- and the starter surface's own rule for `git push --delete`
+    // contains "delete". So every scaffolded surface satisfied it and this
+    // warning never fired again, whatever bash_allow admitted. Measured on a
+    // surface whose allow-list admitted python, go, make and find.
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-guard-"));
+    write(dir, "roles.toml", `
+[roles.tight]
+tools = ["bash"]
+bash_allow = ['^(python|make)\\s']
+bash_deny = ['\\bgit\\s+push\\b[^|;&]*--delete\\b']
+`);
+    const problems = auditSurface(loadConfig(dir));
+    const hit = problems.filter((p) => /bash_allow admits/.test(p.problem));
+    expect(hit.length).toBe(1);
+    expect(hit[0].problem).toContain("an interpreter");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("stays quiet when the deny-list actually guards what was admitted", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-guard-ok-"));
+    write(dir, "roles.toml", `
+[roles.tight]
+tools = ["bash"]
+bash_allow = ['^find\\s']
+bash_deny = ['-exec', '-delete', '-fprint']
+`);
+    const problems = auditSurface(loadConfig(dir));
+    expect(problems.filter((p) => /bash_allow admits/.test(p.problem)).length).toBe(0);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

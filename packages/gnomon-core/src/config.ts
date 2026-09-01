@@ -1048,13 +1048,28 @@ const ENDPOINT_KEYS = new Set(["url", "kind", "api_key_env", "provider"]);
  * be the harness deciding policy. It says the declaration is weaker than it
  * looks, which is the thing the operator cannot see for themselves.
  */
-const EXECUTING_ARGS: Array<[RegExp, string]> = [
-  [/\bfind\b/, "find (-exec, -execdir, -delete, -fprintf all write or run)"],
-  [/\bxargs\b/, "xargs (runs whatever it is piped)"],
-  [/\benv\b/, "env (runs its argument)"],
-  [/\b(sh|bash|zsh|ksh|dash)\b/, "a shell (runs anything)"],
-  [/\b(awk|gawk|perl|python3?|ruby|node)\b/, "an interpreter (runs anything)"],
-  [/\bgit\b(?!\s*\()/, "git (-c core.pager / alias.* run commands)"],
+const EXECUTING_ARGS: Array<[RegExp, string, RegExp]> = [
+  // [what the allow-list admits, why it executes, what a deny must mention to
+  //  actually neutralise THAT admission]
+  //
+  // The third column exists because the guard used to be one loose test
+  // applied to the whole deny-list -- /exec|delete|fprint|-c\b/ against any
+  // entry -- and the starter surface's own rule for `git push --delete`
+  // contains the substring "delete". So every surface scaffolded by
+  // `gnomon init` silently satisfied the guard and this warning never fired
+  // again, on any role, however its bash_allow read. A check that the shipped
+  // default disables is worse than no check: it reports safety it never
+  // verified. Each admission is now guarded on its own terms.
+  [/\bfind\b/, "find (-exec, -execdir, -delete, -fprintf all write or run)",
+   /-exec|-execdir|-ok\b|-okdir|-delete|-fprint/],
+  [/\bxargs\b/, "xargs (runs whatever it is piped)", /\bxargs\b/],
+  [/\benv\b/, "env (runs its argument)", /\benv\b/],
+  [/\b(sh|bash|zsh|ksh|dash)\b/, "a shell (runs anything)",
+   /\b(sh|bash|zsh|ksh|dash)\b|-c\b/],
+  [/\b(awk|gawk|perl|python3?|ruby|node)\b/, "an interpreter (runs anything)",
+   /\b(awk|gawk|perl|python3?|ruby|node)\b/],
+  [/\bgit\b(?!\s*\()/, "git (-c core.pager / alias.* run commands)",
+   /core\.pager|alias\.|-c\b/],
 ];
 
 /**
@@ -1325,11 +1340,14 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
     // their surface. What they cannot do is notice it unaided.
     const allow = (rawRole as RoleDef)?.bash_allow;
     if (Array.isArray(allow) && allow.length > 0) {
-      const admits = EXECUTING_ARGS.filter(([re]) => allow.some((pat) => re.test(pat)))
-        .map(([, why]) => why);
       const deny = (rawRole as RoleDef)?.bash_deny ?? [];
-      const guarded = deny.some((d) => /exec|delete|fprint|-c\b/.test(d));
-      if (admits.length > 0 && !guarded) {
+      // Guarded per admission: a deny for `git push --delete` says nothing
+      // about whether `python` can still run arbitrary code.
+      const admits = EXECUTING_ARGS.filter(
+        ([re, , guard]) =>
+          allow.some((pat) => re.test(pat)) && !deny.some((d) => guard.test(d))
+      ).map(([, why]) => why);
+      if (admits.length > 0) {
         problems.push({
           where,
           problem:
