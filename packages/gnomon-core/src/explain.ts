@@ -14,7 +14,7 @@
  * learn what a deterministic harness does.
  */
 
-import { GnomonConfig, resolveContext, resolveRouting, resolveEndpoint, listEndpoints, endpointClass, listRoles, recomputeManifest } from "./config.js";
+import { GnomonConfig, resolveContext, resolveRouting, resolveEndpoint, listEndpoints, endpointClass, listRoles, recomputeManifest, resolveVerify, resolveExtraRoots } from "./config.js";
 import { resolveAudit } from "./audit.js";
 import { resolveSessionStore } from "./session_store.js";
 import { loadSkills, loadProposedSkills } from "./skills.js";
@@ -37,6 +37,126 @@ const bullet = (s: string) => `  ${s}`;
 type Builder = (config: GnomonConfig, role: string) => Explanation;
 
 const TOPICS: Record<string, Builder> = {
+  routing: (config, role) => {
+    const r = resolveRouting(config);
+    const rules = r.rules ?? [];
+    return {
+      topic: "routing",
+      summary: "Which role answers a turn, and why that is a declared rule rather than a judgement",
+      what: [
+        "Three modes. 'manual' — your current role answers, and a /role prefix",
+        "routes one turn. 'suggest' — a rule proposes and you confirm. 'auto' —",
+        "the rule picks and the harness says which one fired.",
+        "",
+        "The rules are regexes in config.toml, not the model's opinion. The same",
+        "input picks the same role on every machine, which is what makes a routed",
+        "run reproducible. An explicit prefix always wins, in every mode.",
+      ],
+      here: [
+        `mode            ${r.mode}`,
+        `default role    ${r.default}`,
+        `current role    ${role}`,
+        `rules declared  ${rules.length}`,
+        ...rules.slice(0, 8).map((x) => bullet(`${x.role.padEnd(12)} ${x.pattern}`)),
+        ...(rules.length > 8 ? [bullet(`… and ${rules.length - 8} more`)] : []),
+      ],
+      next: [
+        "/mode manual|suggest|auto changes it for this session; config.toml changes",
+        "it for the repository — and moves the surface hash, so the change is",
+        "visible in the trail.",
+        "",
+        "Run 'suggest' until the rules stop surprising you, then promote to 'auto'.",
+        "A non-interactive run has nobody to ask, so it treats 'suggest' as manual",
+        "rather than promoting itself.",
+      ],
+    };
+  },
+
+  verify: (config) => {
+    const v = resolveVerify(config);
+    return {
+      topic: "verify",
+      summary: "The one check that can contradict the model's account of its own work",
+      what: [
+        "A command the surface names, run by the harness after a turn that changed",
+        "files. Not the agent's own test call — the agent reports a belief, and",
+        "this is the only thing in the loop that can disagree with it.",
+        "",
+        "It exists because a benchmark turn once wrote a hundred-line setup script,",
+        "ran 'bash -n' on it, reported 'syntax check passed' and stopped. Nothing",
+        "had been installed: bash -n parses, it does not run.",
+        "",
+        "There is no default command. A repository that declares nothing pays",
+        "nothing — running whatever the agent just wrote would be a destructive",
+        "default, since deploy.sh is a shell script too.",
+      ],
+      here: v
+        ? [
+            `command         ${v.command}`,
+            `runs            ${v.after === "write" ? "after a turn that changed files" : "after every turn"}`,
+            `max rounds      ${v.max_rounds}`,
+            ...(v.test_must_fail_first ? [bullet("new tests must fail before they pass")] : []),
+          ]
+        : [
+            "No [verify] block — nothing is run, and nothing can contradict the",
+            "model here. That is the default, and it is a deliberate one.",
+          ],
+      next: [
+        "Declare it in policy.toml, e.g. command = \"pnpm -r test\". It runs through",
+        "the ordinary bash tool, so bash_deny, the sandbox level and the tool",
+        "timeout all apply — it is not a privileged path.",
+        "",
+        "Under approval = \"always\" it asks before running, like everything else.",
+        "A declined check is recorded as declined rather than passed.",
+      ],
+    };
+  },
+
+  sandbox: (config, role) => {
+    const policy = (config.policy ?? {}) as { sandbox?: { level?: string; network?: boolean } };
+    const level = policy.sandbox?.level ?? "confined";
+    const extra = resolveExtraRoots(config);
+    const allow = config.roles[role]?.bash_allow ?? [];
+    const deny = config.roles[role]?.bash_deny ?? [];
+    return {
+      topic: "sandbox",
+      summary: "What the level actually confines — and what it does not",
+      what: [
+        "Under 'confined' and 'strict', every TOOL PATH is resolved and must land",
+        "inside the repository root, or inside a root the surface has granted.",
+        "'../' and absolute paths are both caught, and symlinks are resolved",
+        "first, so a link inside the repository cannot redirect a write out of it.",
+        "",
+        "It does NOT govern bash. 'strict' will still run 'cat /etc/passwd'. A role",
+        "that runs builds and installers cannot have its shell enumerated in",
+        "advance, so bash is bounded by bash_allow and bash_deny instead — and an",
+        "allow-list is only as tight as its least-constrained entry. One that",
+        "admits an interpreter or a compiler admits everything they can run.",
+        "",
+        "Network isolation is declared but not enforced: it stops the webfetch",
+        "tool, not curl.",
+      ],
+      here: [
+        `level           ${level}`,
+        `network         ${policy.sandbox?.network === false ? "declared off (webfetch refuses; bash is not isolated)" : "not declared off"}`,
+        `granted roots   ${extra.length === 0 ? "none — the repository root only" : `${extra.length} declared`}`,
+        ...extra.map((r) => bullet(r)),
+        `bash_allow      ${allow.length === 0 ? `none declared — role "${role}" may run anything not denied` : `${allow.length} pattern(s)`}`,
+        ...allow.slice(0, 6).map((x) => bullet(x)),
+        `bash_deny       ${deny.length} pattern(s)`,
+      ],
+      next: [
+        "To let the agent reach one other checkout, name it rather than turning",
+        "the sandbox off:  extra_roots = [\"../sibling-checkout\"]  in policy.toml.",
+        "Relative, so it means the same thing on every clone, and hashed with the",
+        "rest of the surface so the grant is visible in the trail.",
+        "",
+        "gnomon warns at startup when a role's bash_allow admits something that",
+        "runs arbitrary code. That warning is worth reading rather than silencing.",
+      ],
+    };
+  },
+
   manifest: (config) => {
     const { manifest, surface_hash } = recomputeManifest(config.gnomonDir, "0.1.0");
     const present = manifest.filter((s) => s.sha256);
