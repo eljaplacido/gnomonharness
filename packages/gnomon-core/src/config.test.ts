@@ -24,9 +24,10 @@ import {
   routeInput,
   resolveContext,
   auditSurface,
+  recomputeManifest,
 } from "./index.js";
 import { join, resolve } from "node:path";
-import { mkdirSync, rmSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, mkdtempSync, writeFileSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 // ---------------------------------------------------------------------------
@@ -860,6 +861,43 @@ bash_deny = ['-exec', '-delete', '-fprint']
 `);
     const problems = auditSurface(loadConfig(dir));
     expect(problems.filter((p) => /bash_allow admits/.test(p.problem)).length).toBe(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("a proposal is staging, an acceptance is a surface change", () => {
+  it("leaves the surface hash alone while proposed, and moves it on accept", () => {
+    // DESIGN.md gives this as the reason the skill tool writes to
+    // skills/proposed/ at all: "An agent rewriting its own skills mid-session
+    // would change the hash underneath the run that changed it". Only half of
+    // that held. The proposal was genuinely inert, but it lived inside
+    // .gnomon/ and was hashed, so the hash moved anyway -- measured, a
+    // coordinator turn proposing one skill ended with the surface hash at
+    // aa71d075c48e while its own audit record said d715443b4af3. README names
+    // that precise harm as the thing the surface block exists to prevent: an
+    // agent must not "move the surface hash, which is the one identifier a
+    // session is traced by".
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-propose-"));
+    mkdirSync(join(dir, ".gnomon", "skills", "proposed"), { recursive: true });
+    writeFileSync(join(dir, ".gnomon", "config.toml"), "[defaults]\n");
+    const before = recomputeManifest(join(dir, ".gnomon"), "0.1.0").surface_hash;
+
+    writeFileSync(
+      join(dir, ".gnomon", "skills", "proposed", "s.md"),
+      "---\nid: s\n---\nbody\n"
+    );
+    const proposed = recomputeManifest(join(dir, ".gnomon"), "0.1.0").surface_hash;
+    expect(proposed).toBe(before);
+
+    // Accepting moves the file into skills/, which IS hashed: the moment it
+    // can affect behaviour is the moment it starts counting.
+    renameSync(
+      join(dir, ".gnomon", "skills", "proposed", "s.md"),
+      join(dir, ".gnomon", "skills", "s.md")
+    );
+    const accepted = recomputeManifest(join(dir, ".gnomon"), "0.1.0").surface_hash;
+    expect(accepted).not.toBe(before);
+
     rmSync(dir, { recursive: true, force: true });
   });
 });

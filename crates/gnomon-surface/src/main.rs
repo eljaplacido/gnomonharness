@@ -78,6 +78,19 @@ fn collect_surface(dir: &Path) -> Vec<Source> {
         relative.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/")
     );
 
+                // skills/proposed/ is staging, not surface, and must be
+                // excluded here exactly as it is in the TypeScript walk --
+                // two implementations of one hash that disagree would be
+                // worse than either being wrong. A proposal is not loaded
+                // and cannot change behaviour, so hashing it let an agent
+                // move the surface hash its own audit record is stamped
+                // with. Accepting a proposal moves the file into skills/,
+                // which IS hashed: the moment it can affect behaviour is
+                // the moment it starts counting.
+                if rel_str.starts_with(".gnomon/skills/proposed/") {
+                    continue;
+                }
+
                 let hash = file_sha256(path);
                 sources.push(Source {
                     path: rel_str,

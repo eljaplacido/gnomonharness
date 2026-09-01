@@ -1798,7 +1798,28 @@ function collectSurface(baseDir: string): SourceEntry[] {
         .join("/");
       const st = statSync(fullPath);
       if (st.isDirectory()) {
-        walk(fullPath);
+        // skills/proposed/ is staging, not surface. DESIGN.md gives the reason
+        // the `skill` tool writes there at all: "An agent rewriting its own
+        // skills mid-session would change the hash underneath the run that
+        // changed it -- so the skill tool writes to skills/proposed/, which is
+        // not loaded". Half of that was true. The proposal is genuinely not
+        // loaded and cannot change behaviour -- but it sits inside .gnomon/,
+        // so it was hashed, and the hash moved anyway. Measured: a coordinator
+        // turn that proposed one skill left the surface hash at aa71d075c48e
+        // where its own audit record had stamped d715443b4af3.
+        //
+        // README names that exact harm as the thing the surface block prevents:
+        // an agent must not "move the surface hash, which is the one identifier
+        // a session is traced by". So excluding staging is not a narrowing of
+        // what the hash covers, it is the hash finally meaning what it is
+        // documented to mean -- everything that decides how the agent behaves,
+        // and identical hashes for identical rules in BOTH directions.
+        //
+        // Nothing becomes invisible. `gnomon skill list` shows proposals, and
+        // accepting one moves the file into skills/, which is hashed -- so the
+        // moment a proposal can affect behaviour is exactly the moment it
+        // starts counting.
+        if (relPath !== ".gnomon/skills/proposed") walk(fullPath);
       } else {
         const hash = fileSha256(fullPath);
         sources.push({ path: relPath, sha256: hash });
