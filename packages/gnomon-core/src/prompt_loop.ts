@@ -5591,19 +5591,86 @@ export async function runPromptLoop(
       const start = Date.now();
       const controller = new AbortController();
       cancelTurn = () => controller.abort();
+      // A declared chain shapes the turn here exactly as it does in
+      // `gnomon task`. It was wired into runTask only, so a surface declaring
+      // [chain] got three stages from `gnomon task` and one role from
+      // `gnomon prompt` -- the same surface, the same hash, different behaviour
+      // depending on the entry point. That is precisely the bug fixed for MCP
+      // one release earlier, and it belongs to the entry point that an operator
+      // actually spends their day in.
+      //
+      // An explicit /role prefix has already set `state.currentRole` for this
+      // turn, and it wins here too: asking for one role and silently getting
+      // three would be worse than having no chain.
+      const turnChain = prefixed ? [] : resolveChain(config);
       let turn: TurnResult;
       try {
-        turn = await runAgenticTurn(state, role, route, built.messages, {
-          approve,
-          progress,
-          ui,
-          // Through the spinner, which clears its frame first and redraws
-          // after. console.log wrote straight onto the live row, so a turn that
-          // explained itself opened with the spinner spliced into the text.
-          say: (line) => progress.print(line),
-          signal: controller.signal,
-          audit,
-        });
+        if (turnChain.length >= 2) {
+          let carriedAnswer = "";
+          let last: TurnResult | null = null;
+          for (let i = 0; i < turnChain.length; i++) {
+            const stageRole = turnChain[i];
+            const stageRoute = routeRole(config, stageRole);
+            const stageInput = carriedAnswer
+              ? `${cleanedInput}\n\n---\nThe previous stage (${turnChain[i - 1]}) reported:\n${carriedAnswer}`
+              : cleanedInput;
+            // The stage sees the conversation so far plus its own instruction;
+            // it does NOT see the previous stage's tool calls, only what that
+            // stage reported. Same contract as runTask and the `task` tool.
+            const stageState: PromptState = { ...state, currentRole: stageRole };
+            const stageBuilt = buildMessages(
+              stageState,
+              buildSystemPrompt(stageState, stageRole, stageInput),
+              stageInput
+            );
+            progress.print(
+              paint(ui, "gray", `  [chain] stage ${i + 1}/${turnChain.length} — ${stageRole}`)
+            );
+            const r = await runAgenticTurn(
+              stageState,
+              stageRole,
+              stageRoute,
+              stageBuilt.messages,
+              {
+                approve,
+                progress,
+                ui,
+                say: (l) => progress.print(l),
+                signal: controller.signal,
+                audit,
+              }
+            );
+            audit?.write("chain_stage", {
+              stage: i + 1,
+              of: turnChain.length,
+              role: stageRole,
+              bucket: mapBucket(r.code),
+              code: r.code,
+              stop_reason: r.stop_reason,
+              tool_steps: r.toolSteps,
+            });
+            last = r;
+            carriedAnswer = r.content;
+            // A dead endpoint is not an answer to hand onward, and Esc must
+            // stop the whole chain rather than only the stage in flight.
+            if (r.code === 10 || r.code === 12 || r.code === 13) break;
+            if (controller.signal.aborted) break;
+          }
+          turn = last!;
+        } else {
+          turn = await runAgenticTurn(state, role, route, built.messages, {
+            approve,
+            progress,
+            ui,
+            // Through the spinner, which clears its frame first and redraws
+            // after. console.log wrote straight onto the live row, so a turn
+            // that explained itself opened with the spinner spliced into the
+            // text.
+            say: (line) => progress.print(line),
+            signal: controller.signal,
+            audit,
+          });
+        }
       } finally {
         cancelTurn = null;
       }
