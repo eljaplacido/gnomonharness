@@ -4534,6 +4534,22 @@ A role prefix applies to that one turn only; /role switches for good.
 export interface PromptLoopOptions {
   /** Resume a saved session: an id, or true for the most recent */
   resume?: string | true;
+  /**
+   * Where the loop reads and writes. Defaults to the real stdio, which is the
+   * only thing it ever used.
+   *
+   * A seam, not a feature. This function is 1,286 lines and was measured at 0%
+   * coverage -- the least-tested code in the project and, by the project's own
+   * post-mortems, where most defects have been found. It had no way in: it read
+   * `process.stdin` directly, so nothing could drive it without a terminal. The
+   * interactive [chain] wiring landed inside this untested range, which is
+   * exactly the combination that produces a defect nobody sees.
+   *
+   * TTY-only behaviour stays guarded by `isTTY` and simply does not run when a
+   * plain stream is supplied, so a test exercises the loop's decisions rather
+   * than its terminal handling.
+   */
+  io?: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream };
 }
 
 export async function runPromptLoop(
@@ -4551,7 +4567,9 @@ export async function runPromptLoop(
   // shown: the loop reports which variables were supplied, never their values.
   const suppliedKeys = applyCredentials();
 
-  const menu = new CommandMenu(process.stdout, () => uiOf(state));
+  const stdin = options.io?.input ?? process.stdin;
+  const stdout = options.io?.output ?? process.stdout;
+  const menu = new CommandMenu(stdout as NodeJS.WriteStream, () => uiOf(state));
 
   const store = resolveSessionStore(config);
   const startedAt = new Date().toISOString();
@@ -4578,8 +4596,8 @@ export async function runPromptLoop(
   }
 
   const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
+    input: stdin,
+    output: stdout,
     // Tab after "/" lists every command, so they are discoverable from the
     // prompt rather than only from the docs.
     completer: (line: string) =>
@@ -4740,7 +4758,7 @@ export async function runPromptLoop(
   /** Set while a chunk carrying paste is being delivered; cleared next tick. */
   let pasteKeysInFlight = false;
 
-  if (process.stdin.isTTY) {
+  if ((stdin as NodeJS.ReadStream).isTTY) {
     process.stdout.write("\x1b[?2004h");
     // Leaving it on would make the next program to own this terminal receive
     // markers it never asked for.
@@ -4748,7 +4766,7 @@ export async function runPromptLoop(
       if (process.stdout.isTTY) process.stdout.write("\x1b[?2004l");
     });
 
-    process.stdin.prependListener("data", (chunk: Buffer | string) => {
+    (stdin as NodeJS.ReadStream).prependListener("data", (chunk: Buffer | string) => {
       const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
       if (!inPaste && !s.includes(PASTE_START)) return;
 
@@ -4875,9 +4893,9 @@ export async function runPromptLoop(
   // True while the session picker owns the keyboard.
   let picking = false;
 
-  if (process.stdin.isTTY) {
-    readline.emitKeypressEvents(process.stdin);
-    process.stdin.on("keypress", (_chunk, key) => {
+  if ((stdin as NodeJS.ReadStream).isTTY) {
+    readline.emitKeypressEvents(stdin as NodeJS.ReadStream);
+    (stdin as NodeJS.ReadStream).on("keypress", (_chunk, key) => {
       if (picking) return; // the picker has its own key handling
       // Pasted characters are not keystrokes. Without this a paste repainted
       // the spinner once per character, and an ESC inside pasted text read as
