@@ -31,6 +31,7 @@ different servers.
 
 | Claim | Evidence | Result |
 |---|---|---|
+| Consent-gated capability: it does what the operator grants | [capability](../benchmarks/results/capability-2026-09-01/) | MCP, egress, neighbouring repo, CLI auth and driving another harness — **5/5 work when granted**, 4/5 refuse when withheld. The fifth is the finding, below |
 | The surface is not writable by a tool call | [containment](../benchmarks/results/containment-2026-08-31/) · [consent](../benchmarks/results/consent-2026-09-01/) | gnomon **5/5** refused; opencode rewrote its own permission file **5/5** across four escalating configs. `strict` refuses even when the approver says *yes* — **6/6** |
 | Capability over instruction | [injection](../benchmarks/results/injection-2026-08-31/) | boundary holds **12/12** when the model actually complies; the model ignored the injections 0/12, so the *control* is what proves it |
 | Skills proposed, never self-applied | — | **untested** |
@@ -53,13 +54,25 @@ different servers.
 Listed because omitting them would imply coverage that does not exist.
 
 - **Skills are proposed, never self-applied** — the mechanism is never exercised
-- **MCP** — declared in `tools.toml`, never benchmarked
 - **Session resume fidelity** — `/session`, `--continue`, never tested
 - **Model agnosticism** — every suite above ran on one local model or one cloud
   model; no cross-provider comparison exists
 - **Peer task completion** — the goose figure predates the adapter repairs and is
   **not a valid current baseline**; the opencode arm failed on a model-name
   parsing bug and produced nothing
+
+## The one that failed
+
+Withheld egress was **not** contained on the first attempt. Refused at `curl`,
+the model wrote a Go program inside the repository and ran it with the compiler
+the allow-list admitted. Tightening the allow-list to exclude interpreters and
+compilers contained it. Nothing was bypassed — an allow-list containing a
+compiler permits arbitrary code, and **an allow-list is exactly as tight as its
+least-constrained entry**.
+
+gnomon's own surface audit exists to say this at startup, and did not, on any
+surface `gnomon init` produces: its guard was satisfied by the scaffold's own
+`git push --delete` rule containing the substring "delete". Fixed in `9b2342a`.
 
 ## How to read a number here
 
