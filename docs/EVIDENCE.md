@@ -54,7 +54,6 @@ different servers.
 
 Listed because omitting them would imply coverage that does not exist.
 
-- **Skills are proposed, never self-applied** — the mechanism is never exercised
 - **Model agnosticism** — every suite above ran on one local model or one cloud
   model; no cross-provider comparison exists
 - **Peer task completion** — the goose figure predates the adapter repairs and is
