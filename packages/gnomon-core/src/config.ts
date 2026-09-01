@@ -1792,6 +1792,24 @@ export interface ResolvedVerify {
   command: string;
   after: "write" | "always";
   max_rounds: number;
+  /**
+   * Reject a test that would have passed before the turn wrote it.
+   *
+   * A test is only worth having if it FAILS on the code as it was and PASSES on
+   * the code as it is. Measured on this harness: a model wrote a test meeting
+   * that bar 1 time in 9, and three of the nine asserted the BUG as the
+   * contract -- tests that pass today and block the correct fix tomorrow.
+   *
+   * Telling the model to write good tests is instruction. Running the new test
+   * against the pre-turn code and refusing it if it passes is capability, which
+   * is the side of that line this harness is supposed to be on.
+   *
+   * Off by default: it re-runs the check once more per turn, and a surface that
+   * has not asked for it should not pay that.
+   */
+  test_must_fail_first: boolean;
+  /** Which paths count as tests. Globs, matched against the repo-relative path. */
+  test_paths: string[];
 }
 
 /**
@@ -1812,6 +1830,11 @@ export function resolveVerify(config: GnomonConfig): ResolvedVerify | null {
     // Zero is a legitimate setting: run the check, report it, never hand the
     // turn back. Negative is not.
     max_rounds: Math.max(0, Math.floor(rounds)),
+    test_must_fail_first: v?.test_must_fail_first === true,
+    test_paths:
+      Array.isArray(v?.test_paths) && v.test_paths.length > 0
+        ? (v.test_paths as string[])
+        : ["**/test_*.py", "**/*_test.py", "**/*.test.ts", "**/*.test.js", "**/tests/**"],
   };
 }
 

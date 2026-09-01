@@ -518,7 +518,15 @@ describe("[verify] — the gate is absent unless a repository asks for one", () 
 
   it("resolves a declared command with its defaults", () => {
     const v = resolveVerify(cfg({ verify: { command: "pytest -q" } }));
-    expect(v).toEqual({ command: "pytest -q", after: "write", max_rounds: 1 });
+    expect(v).toEqual({
+      command: "pytest -q",
+      after: "write",
+      max_rounds: 1,
+      // Off unless asked for: it re-runs the check once more per turn, and a
+      // surface that has not requested that should not pay for it.
+      test_must_fail_first: false,
+      test_paths: ["**/test_*.py", "**/*_test.py", "**/*.test.ts", "**/*.test.js", "**/tests/**"],
+    });
   });
 
   it("defaults `after` to write, because that is the case the evidence covers", () => {

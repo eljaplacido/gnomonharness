@@ -338,6 +338,28 @@ describe("bash", () => {
     expect(noStore.content).toContain("silently dropped");
   });
 
+  it("remembers what a file looked like before the turn touched it", async () => {
+    // This is what makes a test checkable. T8 measured this model writing a
+    // test that actually pins behaviour 1 time in 9, with three of the nine
+    // asserting the BUG as the contract -- tests that pass today and block the
+    // correct fix tomorrow. The mechanical check for all of those is to run the
+    // new test against the code as it was, and that needs the pre-image.
+    const preImages = new Map<string, string>();
+    const c = ctx({ preImages });
+    writeFileSync(join(root, "src.txt"), "ORIGINAL\n");
+
+    await executeTool("write", { path: "src.txt", content: "FIRST\n" }, c, offered);
+    await executeTool("edit", { path: "src.txt", old_text: "FIRST", new_text: "SECOND" }, c, offered);
+
+    // FIRST WRITE WINS: the entry is the state at the start of the TURN, so a
+    // file edited three times still compares against what the turn inherited.
+    expect([...preImages.values()]).toEqual(["ORIGINAL\n"]);
+
+    // and a brand-new file records an empty pre-image, not a missing entry
+    await executeTool("write", { path: "fresh.txt", content: "new\n" }, c, offered);
+    expect(preImages.get(join(root, "fresh.txt"))).toBe("");
+  });
+
   it("a declined read does not reveal whether the path exists", async () => {
     // The existence probe ran BEFORE the gate, so under approval = "always" a
     // declined read still answered "does this path exist?" -- the operator said

@@ -532,6 +532,15 @@ network = false
 # command = "pytest -q"    # or cargo test, make, .gnomon/ci.sh
 # after = "write"          # write | always
 # max_rounds = 1           # times a failure may hand the turn back; 0 = report only
+#
+# test_must_fail_first = true
+#   Reject a test that would have passed BEFORE the turn wrote it. A test is
+#   only worth having if it fails on the code as it was and passes on the code
+#   as it is; one that passes on both pins nothing, and one that asserts the bug
+#   passes today and blocks the correct fix tomorrow. Measured on this harness:
+#   a model cleared that bar 1 time in 9. Off by default -- it re-runs the check
+#   once more per turn, and a surface that has not asked should not pay for it.
+# test_paths = ["**/test_*.py", "**/tests/**"]   # what counts as a test
 `;
 
 const SYSTEM_MD = `You are a deterministic coding agent working in this repository.

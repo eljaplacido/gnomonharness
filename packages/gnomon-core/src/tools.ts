@@ -850,6 +850,23 @@ export interface ToolContext {
    * Absent means the tool is unavailable rather than silently forgetful.
    */
   notes?: NoteStore;
+  /**
+   * What the files this turn modified looked like BEFORE it touched them.
+   *
+   * Both `write` and `edit` already read the old content to build their diff,
+   * so keeping it costs nothing — and it is what makes a test verifiable. T8
+   * measured this model writing a test that actually pins behaviour 1 time in
+   * 9, and three of the nine asserted the BUG as if it were the contract: tests
+   * that pass today and would block the correct fix tomorrow.
+   *
+   * The check that catches all of those is mechanical -- run the new test
+   * against the code as it was before the turn, and if it passes it pins
+   * nothing -- and it needs exactly this.
+   *
+   * Supplied by the loop, which owns turn scope. First write wins, so the entry
+   * is the state at the START of the turn rather than the previous step.
+   */
+  preImages?: Map<string, string>;
 }
 
 /** One thing the run learned about itself, written by the model as it worked. */
@@ -2481,6 +2498,10 @@ async function writeTool(
   }
 
   const before = existsSync(abs) ? readFileSync(abs, "utf-8") : "";
+  // First write wins: the pre-image is the state at the start of the TURN, not
+  // the previous step, so a file edited three times still compares against what
+  // the turn inherited.
+  if (ctx.preImages && !ctx.preImages.has(abs)) ctx.preImages.set(abs, before);
   const diff = diffLines(before, content);
   const { added, removed } = diffStat(diff);
 
@@ -2570,6 +2591,7 @@ async function editTool(
   }
 
   const before = readFileSync(abs, "utf-8");
+  if (ctx.preImages && !ctx.preImages.has(abs)) ctx.preImages.set(abs, before);
   const hits = before.split(oldText).length - 1;
   if (hits === 0) {
     return {

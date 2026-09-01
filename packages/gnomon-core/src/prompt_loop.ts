@@ -9,7 +9,7 @@
  */
 
 import * as readline from "node:readline";
-import { resolve, dirname, join } from "node:path";
+import { resolve, dirname, join, relative, sep} from "node:path";
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync} from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
@@ -61,6 +61,7 @@ import {
   SurfaceConsent,
   RunNote,
   concurrentSafe,
+  globToRegExp,
 } from "./tools.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { mapBucket } from "./session.js";
@@ -1470,6 +1471,9 @@ export async function runAgenticTurn(
     // So Esc reaches a command that has already started, not just the gap
     // between two of them.
     signal: deps.signal,
+    // What each file looked like before this turn touched it. Enables the
+    // test-must-fail-first check below; costs one string per modified file.
+    preImages: new Map<string, string>(),
     notes: {
       list: () => state.notes ?? [],
       add: (text) => {
@@ -1828,7 +1832,56 @@ export async function runAgenticTurn(
         const shellExit = exitMatch ? Number(exitMatch[1]) : killed ? 1 : check.code === 0 ? 1 : 1;
         const passed = check.code === 0 && exitMatch !== null && shellExit === 0;
 
-        toolLog.push(`verify — ${check.summary}`);
+        // A test that would have passed BEFORE this turn pins nothing.
+        //
+        // Only meaningful when the check passed and the turn actually wrote a
+        // test: restore the non-test files to their pre-images, run the same
+        // command again, and if it still passes then the new test does not
+        // depend on the change it claims to cover. T8 measured this model
+        // clearing that bar 1 time in 9, with three tests asserting the bug
+        // itself, so the cheapest honest guard is to re-run rather than to ask.
+        let pinsNothing = false;
+        if (passed && verify.test_must_fail_first && ctx.preImages && ctx.preImages.size > 0) {
+          const isTest = (abs: string) => {
+            const rel = relative(ctx.root, abs).split(sep).join("/");
+            return verify.test_paths.some((g) => {
+              try {
+                return globToRegExp(g).test(rel);
+              } catch {
+                return false;
+              }
+            });
+          };
+          const wroteATest = [...ctx.preImages.keys()].some(isTest);
+          const sources = [...ctx.preImages.entries()].filter(([abs]) => !isTest(abs));
+          if (wroteATest && sources.length > 0) {
+            const current = new Map(sources.map(([abs]) => [abs, readFileSync(abs, "utf-8")]));
+            try {
+              for (const [abs, pre] of sources) writeFileSync(abs, pre);
+              const again = await executeTool(
+                "bash",
+                { command: verify.command },
+                { ...ctx, gate: "never" as ApprovalGate, allow: "strict" as SurfaceConsent },
+                new Set(["bash"])
+              );
+              const stillPasses = again.code === 0 && /exit 0\b/.test(again.summary);
+              if (stillPasses) {
+                pinsNothing = true;
+                deps.say(
+                  paint(
+                    deps.ui,
+                    "yellow",
+                    `  ⚠ the new test passes against the code as it was — it pins nothing`
+                  )
+                );
+              }
+            } finally {
+              for (const [abs, now] of current) writeFileSync(abs, now);
+            }
+          }
+        }
+
+        toolLog.push(`verify — ${check.summary}${pinsNothing ? " · test pins nothing" : ""}`);
         deps.audit?.write("verify", {
           role,
           command: verify.command,
@@ -1836,7 +1889,7 @@ export async function runAgenticTurn(
           passed,
         });
 
-        if (!passed) {
+        if (!passed || pinsNothing) {
           deps.say(paint(deps.ui, "yellow",
             `    ⚠ verify failed — handing the turn back`));
           working.push({ role: "assistant", content: result.content });
