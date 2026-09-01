@@ -144,6 +144,22 @@ export interface PromptState {
   routing?: ResolvedRouting;
   /** Surface-edit consent for this session, set by `/allow`. Default `strict`. */
   allow?: SurfaceConsent;
+  /**
+   * Session-scoped grants for the other two dials, set by `/network` and
+   * `/sandbox`.
+   *
+   * The surface keeps its declared default; these lift it for THIS session
+   * only, exactly as `/allow` and `/mode` already do. That is the difference
+   * between a consent dial and a weaker policy: the committed default does not
+   * move, the grant does not persist, and the operator granting it is a person
+   * at a prompt rather than the model asking itself.
+   *
+   * Without them the only way to let an agent reach the network or another
+   * repository was to quit, edit policy.toml, and start again -- which is not
+   * governance, it is friction that gets worked around.
+   */
+  network?: boolean;
+  sandbox?: SandboxLevel;
   /** Connected MCP servers, if the surface declares any. Set once at startup. */
   mcp?: McpRegistry;
   /**
@@ -1483,11 +1499,15 @@ export async function runAgenticTurn(
   const gate = ((policy.approval as { gate?: string } | undefined)?.gate ??
     defaults.approval ??
     "on_write") as ApprovalGate;
-  const sandbox = ((policy.sandbox as { level?: string } | undefined)?.level ??
-    defaults.sandbox ??
-    "confined") as SandboxLevel;
+  const sandbox =
+    state.sandbox ??
+    (((policy.sandbox as { level?: string } | undefined)?.level ??
+      defaults.sandbox ??
+      "confined") as SandboxLevel);
 
-  const network = (policy.sandbox as { network?: boolean } | undefined)?.network;
+  // Session grant wins over the declared default; the surface is unchanged.
+  const declaredNetwork = (policy.sandbox as { network?: boolean } | undefined)?.network;
+  const network = state.network ?? declaredNetwork;
 
   const ctx: ToolContext = {
     config,
@@ -2944,6 +2964,8 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/role", arg: "<name>", help: "Switch role for the rest of the session" },
   { name: "/mode", arg: "[manual|suggest|auto]", help: "Who picks the role: you, the rules with your confirmation, or the rules" },
   { name: "/allow", arg: "[strict|custom|all]", help: "May the agent edit .gnomon/ this session: strict (no) | custom (each approved) | all (standing consent)" },
+  { name: "/network", arg: "[on|off]", help: "May tools reach the network this session (webfetch, and what bash can dial)" },
+  { name: "/sandbox", arg: "[off|confined|strict]", help: "How far outside this project tools may reach this session" },
   { name: "/skills", help: "Active skills and pending proposals" },
   { name: "/session", arg: "[id]", help: "This session, earlier ones, and switching between them" },
   { name: "/new", help: "Start a fresh session; the current one stays resumable" },
@@ -3811,6 +3833,80 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       }
       console.log(`\nMeta: ${ui.meta.join(", ") || "(none)"} (${ui.meta_style})`);
       console.log(`Session only — edit [ui] in .gnomon/config.toml to make it stick.`);
+      return true;
+    }
+
+    case "/network": {
+      const wanted = (parts[1] ?? "").trim().toLowerCase();
+      const declared = (state.config.policy as { sandbox?: { network?: boolean } } | undefined)
+        ?.sandbox?.network;
+      const current = state.network ?? declared ?? false;
+      if (!wanted) {
+        console.log(`\nNetwork: ${current ? "on" : "off"}${state.network !== undefined ? " (this session)" : " (from policy.toml)"}`);
+        console.log("  on  — webfetch may retrieve URLs.");
+        console.log("  off — webfetch refuses outright. (default)");
+        console.log(
+          "\n  A session grant: policy.toml is unchanged and the next session starts from it again."
+        );
+        console.log(
+          "  Not process isolation — a role holding `bash` can reach the network either way;"
+        );
+        console.log("  constrain that with bash_allow if it matters.");
+        return true;
+      }
+      if (wanted !== "on" && wanted !== "off") {
+        console.log(`\nUnknown setting: "${wanted}". Use: on | off`);
+        return true;
+      }
+      state.network = wanted === "on";
+      console.log(
+        `\nNetwork: ${wanted} — this session only; policy.toml still says ${declared ? "on" : "off"}.`
+      );
+      if (state.network) {
+        // The caveat belongs where the grant is made, not only in the help
+        // text: this is the moment the operator forms a belief about what they
+        // just permitted.
+        console.log(
+          "  Note: this governs the `webfetch` tool. It is NOT process isolation —"
+        );
+        console.log(
+          "  a role holding `bash` could already reach the network via curl or a"
+        );
+        console.log("  package manager. Constrain that with bash_allow if it matters.");
+      }
+      return true;
+    }
+
+    case "/sandbox": {
+      const wanted = (parts[1] ?? "").trim().toLowerCase();
+      const declared = ((state.config.policy as { sandbox?: { level?: string } } | undefined)
+        ?.sandbox?.level ?? "confined") as SandboxLevel;
+      const current = state.sandbox ?? declared;
+      if (!wanted) {
+        console.log(`\nSandbox: ${current}${state.sandbox ? " (this session)" : " (from policy.toml)"}`);
+        console.log("  strict   — the project root only, symlinks resolved.");
+        console.log("  confined — the project root. (default)");
+        console.log("  off      — anywhere the process can reach, including other repositories.");
+        console.log(
+          "\n  A session grant: policy.toml is unchanged and the next session starts from it again."
+        );
+        console.log("  `off` is what you want to audit or borrow from a repo outside this one.");
+        return true;
+      }
+      if (!["off", "confined", "strict"].includes(wanted)) {
+        console.log(`\nUnknown level: "${wanted}". Use: off | confined | strict`);
+        return true;
+      }
+      state.sandbox = wanted as SandboxLevel;
+      console.log(
+        `\nSandbox: ${wanted} — this session only; policy.toml still says ${declared}.`
+      );
+      if (state.sandbox === "off") {
+        console.log(
+          "  Tools may now read and write anywhere this process can reach, including"
+        );
+        console.log("  other repositories. Every path still lands in the audit trail.");
+      }
       return true;
     }
 

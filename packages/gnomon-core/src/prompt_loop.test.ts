@@ -1521,6 +1521,38 @@ describe("runTask — the non-interactive contract", () => {
     expect(exchange.counters?.nudges).toBe(1);
   });
 
+  it("grants network and sandbox for the session without touching the surface", async () => {
+    // The only way to let an agent reach the network or another repository was
+    // to quit, edit policy.toml and start again. That is not governance, it is
+    // friction that gets worked around. These are consent DIALS in the /allow
+    // mould: the committed default does not move, the grant does not persist,
+    // and the thing granting it is a person at a prompt rather than the model
+    // asking itself.
+    const cfg = loadConfig("../..");
+    const state: any = { config: cfg, exchanges: [], currentRole: "implement", ui: resolveUi(cfg) };
+    const say: string[] = [];
+    const log = console.log;
+    console.log = (...a: unknown[]) => void say.push(a.join(" "));
+    try {
+      await promptLoop.processCommand("/network on", state, {} as any);
+      expect(state.network).toBe(true);
+      await promptLoop.processCommand("/network off", state, {} as any);
+      expect(state.network).toBe(false);
+      await promptLoop.processCommand("/sandbox off", state, {} as any);
+      expect(state.sandbox).toBe("off");
+      // a bad value changes nothing rather than guessing
+      await promptLoop.processCommand("/sandbox nonsense", state, {} as any);
+      expect(state.sandbox).toBe("off");
+    } finally {
+      console.log = log;
+    }
+    const said = say.join(" ");
+    // it says plainly that the surface is unchanged
+    expect(said).toMatch(/this session only|policy\.toml still says/);
+    // and the honest caveat travels with the grant
+    expect(said).toMatch(/not process isolation/i);
+  });
+
   it("pushes a read-only role to conclude, since exploring cannot become work", async () => {
     // converge_after ships unset everywhere and unset means "never converge",
     // defended as what wins on capable models. For a role holding no write,

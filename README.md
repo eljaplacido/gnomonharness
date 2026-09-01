@@ -375,6 +375,14 @@ Two things to do straight after:
    generic tags and says so, and those will very likely be wrong.
 2. **Add `.gnomon-sessions/`, `.gnomon-audit/` and `.gnomon-jobs/` to `.gitignore`.**
 
+> **Consent dials, at the prompt:** `/allow` (may the agent edit `.gnomon/`),
+> `/network` (may `webfetch` reach the network), `/sandbox` (how far outside the
+> project tools may reach). Each is **session-scoped** — the declared default in
+> `policy.toml` is untouched, the next session starts from it again, and the
+> grant announces what it does and does not cover. They exist so that consenting
+> to a piece of work is something you do at the prompt rather than by quitting,
+> editing a file and starting over.
+>
 > **At the prompt:** Tab completes file paths, and `@src/lib.ts` is a
 > conventional way to name one. Up-arrow history survives a restart — it is kept
 > in `.gnomon-sessions/history`, outside the surface, because it is per-machine
