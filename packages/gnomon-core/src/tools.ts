@@ -815,6 +815,11 @@ export interface ToolContext {
    * is what shipped; see RoleDef.task_allow for why that is worth declaring.
    */
   taskAllow?: string[];
+  /**
+   * Where `bash` runs. Undefined or mode "off" means the host, which is the
+   * default and the behaviour that shipped. See resolveExec.
+   */
+  exec?: { mode: "off" | "docker"; image: string; network: boolean };
   gate: ApprovalGate;
   approve: Approver;
   /** bash timeout, ms */
@@ -1059,7 +1064,24 @@ async function readTool(
  * work. Signalling the negated pid targets the whole process group, so a
  * timed-out command cannot leave a live orphan behind.
  */
-function killTree(proc: { pid?: number; kill: (sig: NodeJS.Signals) => boolean }): void {
+function killTree(
+  proc: { pid?: number; kill: (sig: NodeJS.Signals) => boolean },
+  containerName?: string
+): void {
+  // A container is not in the process group. Killing `docker run` returns the
+  // shell to us and leaves the container running, so a timed-out command would
+  // keep working -- writing into the repository -- after the turn had given up
+  // on it. Remove it explicitly, best-effort and without waiting.
+  if (containerName) {
+    try {
+      spawn("docker", ["rm", "-f", containerName], {
+        stdio: "ignore",
+        detached: true,
+      }).unref();
+    } catch {
+      // docker gone, or never started one
+    }
+  }
   if (typeof proc.pid === "number") {
     try {
       process.kill(-proc.pid, "SIGKILL");
@@ -1073,6 +1095,50 @@ function killTree(proc: { pid?: number; kill: (sig: NodeJS.Signals) => boolean }
   } catch {
     // already exited
   }
+}
+
+/**
+ * Rewrite a shell command so it runs inside a container instead of on the host.
+ *
+ * The repository is bind-mounted at the same absolute path it has outside, so
+ * absolute paths the model has already seen keep working and the cwd is
+ * unchanged from its point of view. Everything else on the host is simply not
+ * there.
+ *
+ * --user maps the caller. Without it every file the agent creates comes back
+ * owned by root and the operator cannot edit their own repository without
+ * sudo; that was the first thing testing this found.
+ *
+ * --network none unless the surface declares network = true, which finally
+ * makes that declaration mean something for `bash`. Until now it governed only
+ * the webfetch tool, and the startup note says so.
+ *
+ * The container is named after the run so a cancelled turn can remove it: the
+ * process group kill that stops a host command does not stop a container.
+ */
+export function sandboxCommand(
+  command: string,
+  ctx: { root: string; exec?: { mode: "off" | "docker"; image: string; network: boolean } },
+  name: string
+): string {
+  const ex = ctx.exec;
+  if (!ex || ex.mode === "off") return command;
+  // Single-quoted for `sh -c`, so only the quote character needs escaping.
+  const inner = `'${command.replace(/'/g, `'\''`)}'`;
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  const gid = typeof process.getgid === "function" ? process.getgid() : 0;
+  return [
+    "docker run --rm",
+    `--name ${name}`,
+    ex.network ? "" : "--network none",
+    `--user ${uid}:${gid}`,
+    `-v ${JSON.stringify(ctx.root)}:${JSON.stringify(ctx.root)}`,
+    `-w ${JSON.stringify(ctx.root)}`,
+    ex.image,
+    `sh -c ${inner}`,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 async function bashTool(
@@ -1252,8 +1318,14 @@ async function bashTool(
   const worktreeBefore = worktreeStampOf(ctx, shellCwd);
 
   const startedAt = Date.now();
+  // A stable, unique name so a cancelled or timed-out turn can remove the
+  // container. Killing the process group stops `docker run`, not the container
+  // it started -- the work would keep going with nobody watching it.
+  const sandboxName = `gnomon-${process.pid}-${startedAt.toString(36)}`;
+  const spawned = sandboxCommand(command, ctx, sandboxName);
+  const sandboxed = spawned !== command;
   return new Promise<ToolOutcome>((done) => {
-    const proc = spawn(command, {
+    const proc = spawn(spawned, {
       shell: true,
       cwd: ctx.root,
       // stdin closed, stdout/stderr piped. An inherited stdin pipe that nobody
@@ -1275,7 +1347,7 @@ async function bashTool(
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      killTree(proc);
+      killTree(proc, sandboxed ? sandboxName : undefined);
       // What the command printed before it was killed is evidence the harness
       // already holds: the failing test, the last line of a build, the prompt it
       // was blocked on. Discarding it left the model with nothing to act on but
@@ -1314,7 +1386,7 @@ async function bashTool(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      killTree(proc);
+      killTree(proc, sandboxed ? sandboxName : undefined);
       releasePipes(proc);
       done({
         code: TOOL_FAILED,

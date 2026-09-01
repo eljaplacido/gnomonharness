@@ -22,6 +22,7 @@ import {
   resolveVerify,
   resolveResilience,
   resolveExtraRoots,
+  resolveExec,
   Compaction,
   resolveUi,
   resolveEndpoint,
@@ -1615,6 +1616,9 @@ export async function runAgenticTurn(
     // move the surface hash would be a grant nobody could audit.
     extraRoots: resolveExtraRoots(config),
     taskAllow: config.roles[role]?.task_allow,
+    // Where bash runs. "off" by default, so nothing moves unless a surface
+    // asks for it.
+    exec: resolveExec(config, role),
     gate,
     approve: deps.approve,
     timeoutMs: toolTimeoutMs(config),

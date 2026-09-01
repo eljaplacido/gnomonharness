@@ -57,7 +57,7 @@ const TOPICS: Record<string, Builder> = {
         `default role    ${r.default}`,
         `current role    ${role}`,
         `rules declared  ${rules.length}`,
-        ...rules.slice(0, 8).map((x) => bullet(`${x.role.padEnd(12)} ${x.pattern}`)),
+        ...rules.slice(0, 8).map((x) => bullet(`${x.role.padEnd(12)} ${x.match}${x.why ? `   — ${x.why}` : ""}`)),
         ...(rules.length > 8 ? [bullet(`… and ${rules.length - 8} more`)] : []),
       ],
       next: [

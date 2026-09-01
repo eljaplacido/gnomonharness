@@ -247,6 +247,10 @@ export interface RoleDef {
    * handed the coordinator `skill`.
    */
   task_allow?: string[];
+  /** Per-role override of [sandbox] exec. See resolveExec. */
+  exec?: string;
+  /** Per-role override of [sandbox] image. */
+  image?: string;
   /**
    * Tools this role may call. Absent means every declared tool.
    * An empty list means none — which is how a read-only verifier is
@@ -1156,7 +1160,7 @@ const BLOCK_OWNER: Record<string, string> = {
   tools: "tools.toml",
 };
 
-const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "model", "profile", "task_allow", "temperature", "tools", "top_p", "write_allow"]);
+const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "model", "exec", "image", "profile", "task_allow", "temperature", "tools", "top_p", "write_allow"]);
 
 /**
  * Spellings people reach for when they mean to supply a secret directly.
@@ -1893,6 +1897,49 @@ export function resolveExtraRoots(config: GnomonConfig): string[] {
   return raw
     .filter((r): r is string => typeof r === "string" && r.trim().length > 0)
     .map((r) => (isAbsolute(r) ? resolve(r) : resolve(root, r)));
+}
+
+/** Where `bash` actually runs. See resolveExec. */
+export interface ResolvedExec {
+  mode: "off" | "docker";
+  image: string;
+  /** Whether the sandbox gets a network. Follows [sandbox] network. */
+  network: boolean;
+}
+
+/**
+ * Resolve `[sandbox] exec`, with a per-role override in roles.toml.
+ *
+ * The sandbox LEVEL governs tool paths and has never governed `bash` -- a role
+ * that runs builds and installers cannot have its shell enumerated in advance,
+ * so `strict` still runs `cat /etc/passwd`. This is the other half: not what
+ * paths a tool may name, but where the shell itself executes.
+ *
+ * "off" is the default and changes nothing, so no existing surface moves. It is
+ * opt-in per surface and per role, which is the point -- one role can run its
+ * calculations in a container while the rest of the harness runs on the host.
+ *
+ * Only "docker" is wired. bwrap was tested first and cannot work on stock
+ * Ubuntu without relaxing the AppArmor restriction on unprivileged user
+ * namespaces: `bwrap: setting up uid map: Permission denied`, with
+ * /proc/sys/kernel/unprivileged_userns_clone already 1. A backend that cannot
+ * start must refuse rather than silently run unsandboxed, so it is not offered
+ * rather than offered-and-broken.
+ */
+export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
+  const sandbox = (config.policy?.sandbox ?? {}) as {
+    exec?: unknown;
+    image?: unknown;
+    network?: unknown;
+  };
+  const roleDef = role ? (config.roles?.[role] as RoleDef | undefined) : undefined;
+  const raw = (roleDef?.exec ?? sandbox.exec) as unknown;
+  const mode = raw === "docker" ? "docker" : "off";
+  const image =
+    (typeof roleDef?.image === "string" && roleDef.image) ||
+    (typeof sandbox.image === "string" && sandbox.image) ||
+    "debian:stable-slim";
+  return { mode, image, network: sandbox.network === true };
 }
 
 /** Resolved [resilience]: what the harness does when the endpoint misbehaves. */
