@@ -68,7 +68,11 @@ is why step 1 asks for an issue first.
 
 ## Dev workflow
 
-- Rust 1.82+, `cargo fmt` + `cargo clippy` + `cargo test`.
+- Rust **1.85+** (`rust-toolchain.toml` pins 1.94, the version this workspace is
+  verified on), `cargo fmt` + `cargo clippy` + `cargo test`. The floor is not
+  1.82 as this file said for a long time: a transitive dependency needs the
+  `edition2024` Cargo feature, stabilised in 1.85, so 1.82 fails to resolve
+  before it compiles anything. Nobody had exercised the documented floor.
 - TS 5.x, pnpm, `vitest` for tests.
 - One PR = one slice of the roadmap. Keep diffs reviewable.
 - Every new contract change lands with (a) a fixture, (b) a test. No orphan contracts.

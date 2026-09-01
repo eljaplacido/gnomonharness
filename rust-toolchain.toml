@@ -1,6 +1,13 @@
 # Pinned because CONTRIBUTING said "Rust 1.82+" while CI installed unpinned
-# `stable`, so neither a contributor nor CI was reading a version anyone had
-# chosen. "Works on my machine" is unfalsifiable until both read the same file.
+# `stable`, so neither a contributor nor CI read a version anyone had chosen.
+#
+# 1.82 is also simply WRONG, and pinning it is how that was discovered: a
+# transitive dependency requires the `edition2024` Cargo feature, which is not
+# stabilised before 1.85, so `cargo test` on 1.82 fails to resolve at all.
+# The documented floor had never been exercised.
+#
+# 1.94 is the version this workspace is verified to build and test on. Raising
+# the pin is cheap; discovering the floor by breaking someone's build is not.
 [toolchain]
-channel = "1.82"
+channel = "1.94"
 components = ["clippy", "rustfmt"]
