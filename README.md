@@ -1062,6 +1062,61 @@ succeeded in the same turn. That is deliberate — `implement` must run builds a
 installers nobody can enumerate ahead of time — but it means a role holding
 `bash` is confined by its deny-list, not by this setting. See the next section.
 
+### `task_allow` — why `tools` alone is not enough either
+
+A sub-turn started by `task` runs with the **target** role's tools, not the
+caller's. That is deliberate: delegating to `verifier` must not hand it `write`
+because the implementor had it. But it means a role holding `task` can borrow
+any other role's list, so its own `tools` line is not the limit of what it can
+cause — `plan` declares no `write` and could delegate to `implement`.
+
+`task_allow` names the roles a role may delegate to. A target outside the list
+is a **refusal**, and the message says what the role may reach. An empty list
+forbids delegation entirely; omitting it means any role, and the surface audit
+says so at startup, naming the writable roles the caller can reach.
+
+```toml
+[roles.plan]
+tools      = ["read", "glob", "grep", "todo", "note", "task", "bash"]
+task_allow = ["implement", "critique"]
+```
+
+### `extra_roots` — reaching one other checkout without turning the sandbox off
+
+Before this, "let the agent read my other repository" had two spellings and both
+were worse than the thing being asked for: `sandbox = "off"`, which drops
+confinement everywhere at once, or `bash cat`, which the sandbox level does not
+govern at all.
+
+```toml
+[sandbox]
+extra_roots = ["../sibling-checkout"]
+```
+
+Paths resolve against the repository root, so the grant means the same thing on
+every clone — an absolute path there is machine-scoped configuration, which Rule
+1 forbids, and the audit says so. Granted roots are matched on real paths, so a
+symlink cannot smuggle one in. It is declared data: it lives in `policy.toml`,
+it is hashed with the rest of the surface, and the surface hash moves when it
+changes.
+
+### `exec` — where `bash` actually runs
+
+`sandbox.level` governs tool paths and has never governed the shell. `exec` is
+the other half:
+
+```toml
+[sandbox]
+exec  = "docker"              # off (default) | docker
+image = "debian:stable-slim"
+```
+
+The repository is bind-mounted at the same absolute path it has outside, the
+caller is mapped with `--user` so files come back owned by you rather than
+root, and the container gets no network unless `[sandbox] network` is true.
+Settable per role, so one role can run its calculations isolated while the rest
+of the harness runs on the host. `off` is the default and changes nothing.
+
 ### `bash_allow` — why `tools` alone is not enough
 
 **`bash` can write anything.** A role holding it is not read-only however its

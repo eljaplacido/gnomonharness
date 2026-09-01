@@ -32,7 +32,9 @@ Declared explicitly so a consumer reading only the bucket knows.
 native names read narrower than the use:
 
 - **Refusal (2-4) is something saying no.** A declined approval, `bash_allow`
-  or `bash_deny`, `write_allow`, a path outside the sandbox, a tool the role
+  or `bash_deny`, `write_allow`, `task_allow` (a role delegating to a role it
+  may not), a path outside the sandbox and outside every granted
+  `extra_roots`, a tool the role
   was not given, a surface path that is not writable, **or a malformed call —
   `write` with no `content`, `read` with no `path`, `bash` with a non-string
   `command`.** The last of those belongs here rather than at 11 for the reason

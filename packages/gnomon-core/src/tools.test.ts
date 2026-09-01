@@ -19,6 +19,7 @@ import {
   executeTool,
   globToRegExp,
   resolveInRoot,
+  sandboxCommand,
   needsApproval,
   diffLines,
   diffStat,
@@ -1929,5 +1930,48 @@ describe("task_allow bounds what delegation can reach", () => {
       new Set(["task"])
     );
     expect(r.code).not.toBe(2);
+  });
+});
+
+describe("sandboxCommand — where bash actually runs", () => {
+  const off = { root: "/repo", exec: { mode: "off" as const, image: "x", network: false } };
+  const on = { root: "/repo", exec: { mode: "docker" as const, image: "img:1", network: false } };
+
+  it("leaves the command alone when exec is off, which is the default", () => {
+    expect(sandboxCommand("echo hi", off, "n")).toBe("echo hi");
+    expect(sandboxCommand("echo hi", { root: "/repo" }, "n")).toBe("echo hi");
+  });
+
+  it("mounts the repository at the same absolute path it has outside", () => {
+    // So absolute paths the model has already seen keep working, and its cwd
+    // is unchanged from its point of view.
+    const c = sandboxCommand("ls", on, "n");
+    expect(c).toContain('-v "/repo":"/repo"');
+    expect(c).toContain('-w "/repo"');
+  });
+
+  it("maps the caller, or every file comes back owned by root", () => {
+    // The first thing testing this found: without --user the operator cannot
+    // edit their own repository after the agent writes in it.
+    expect(sandboxCommand("ls", on, "n")).toMatch(/--user \d+:\d+/);
+  });
+
+  it("gives the sandbox no network unless the surface declares one", () => {
+    expect(sandboxCommand("ls", on, "n")).toContain("--network none");
+    const net = { ...on, exec: { ...on.exec, network: true } };
+    expect(sandboxCommand("ls", net, "n")).not.toContain("--network none");
+  });
+
+  it("names the container so a cancelled turn can remove it", () => {
+    // Killing the process group stops `docker run`, not the container it
+    // started, so the work would continue after the turn gave up on it.
+    expect(sandboxCommand("ls", on, "run-7")).toContain("--name run-7");
+  });
+
+  it("survives quotes in the command", () => {
+    const c = sandboxCommand(`echo 'it'\''s fine'`, on, "n");
+    expect(c).toContain("sh -c");
+    // the single quote is escaped rather than ending the wrapper's own quoting
+    expect(c.endsWith("'")).toBe(true);
   });
 });

@@ -22,6 +22,14 @@ skills mid-session would change the hash underneath the run that changed it —
 so the `skill` tool writes to `skills/proposed/`, which is not loaded, and a
 human moves it. Learning stays deliberate and reviewable.
 
+For a while only half of that was true. A proposal was correctly inert, but it
+sat inside `.gnomon/` and both surface walks hashed it, so proposing *did* move
+the hash underneath the run — measured, a turn ended at `aa71d075c48e` with its
+own audit record stamped `d715443b4af3`. Staging is now excluded from the hash
+in both the TypeScript and Rust walks; accepting a proposal moves the file into
+`skills/`, which is hashed, so the moment it can affect behaviour is the moment
+it starts counting.
+
 **Sessions and audit trails live outside the surface.** A log written inside a
 content-hashed directory would change the hash on every turn and make drift
 detection meaningless. They sit beside it, in `.gnomon-sessions/` and
