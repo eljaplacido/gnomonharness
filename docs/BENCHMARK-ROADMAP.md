@@ -26,7 +26,20 @@ any large-repo, multi-language, or frontier-model-at-scale result.
 
 1. **Statistical power** — 7–24 valid trials/arm; differences are noise. Ranking claims unsupported.
 2. **Independence** — gnomon authored the benchmark and chose the task subset. Biggest reviewer objection.
-3. **Version currency** — ran on `terminal-bench-core==0.1.1`; the current family is Terminal-Bench 3.0/4.0. Not comparable to the live leaderboard.
+3. **Version currency** — ~~the current family is Terminal-Bench 3.0/4.0~~ **Corrected
+   2026-09-01: that was unsupported.** `terminal-bench` **0.2.18 is the latest release
+   on PyPI** (0.2.13–0.2.18 available, nothing higher), and BENCHMARKS.md already said
+   so — "there is no 2.x or 3.x task set available through this channel". Two committed
+   documents contradicted each other and the wrong one got repeated.
+
+   What is actually true: the framework is current; the *dataset* is the variable. Early
+   runs used `terminal-bench-core==0.1.1` via the registry, which **no longer resolves**
+   (`registry.tbench.ai` has no DNS). The 2026-09-01 runs use the GitHub repo's
+   `original-tasks` at HEAD `d28711d` (2026-07-10) — **241 tasks**, the current set.
+
+   The live remaining gap is **coverage, not currency**: our arms score a 46-task
+   pre-registered subset, not the full 241. That is a sample of the benchmark and must
+   be labelled as one.
 4. **Task breadth** — 8 self-selected, timeout-prone, Python-only; 2 non-discriminating. No large-repo / long-horizon (gnomon's weak axis).
 5. **Efficiency vs goose unmeasured** — the headline claim has a hole against the strongest peer.
 6. **Model coverage** — cheap cloud + one guardrail; claims are cell-specific.

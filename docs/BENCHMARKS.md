@@ -200,6 +200,17 @@ sound rather than a story about variance.
 
 ---
 
+> **Version note, corrected 1 September 2026.** `terminal-bench` **0.2.18 is the
+> latest release** — PyPI carries 0.2.13 through 0.2.18 and nothing above. Any
+> claim in this repository that "the current family is Terminal-Bench 3.0/4.0"
+> was unsupported and is withdrawn; BENCHMARK-ROADMAP.md carried it and has been
+> corrected. The framework these numbers ran on is current.
+>
+> The dataset is the part that moved: `registry.tbench.ai` no longer resolves, so
+> the 1 September runs take tasks from the GitHub repo's `original-tasks` at HEAD
+> `d28711d` (2026-07-10) — 241 tasks. **The real limitation is coverage: our arms
+> score a 46-task pre-registered subset, not the full 241.**
+
 ## The dimension suites (31 August 2026)
 
 The benchmarks above measure **task completion**, because that is what public
