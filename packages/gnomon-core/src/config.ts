@@ -6,7 +6,7 @@
  */
 
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
-import { join, resolve, dirname, relative, basename, sep } from "node:path";
+import { join, resolve, dirname, relative, basename, sep, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
 import { SourceEntry } from "./session.js";
 
@@ -1344,6 +1344,46 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
       }
     }
 
+  // A granted extra root that is absolute, or that is not there, is worth
+  // saying out loud. Neither is fatal -- a grant that resolves nowhere simply
+  // grants nothing, which is the safe direction -- but both mean the surface
+  // does not say what its author thought it said.
+  {
+    const raw = (config.policy?.sandbox as { extra_roots?: unknown } | undefined)?.extra_roots;
+    if (raw !== undefined && !Array.isArray(raw)) {
+      problems.push({
+        where: ".gnomon/policy.toml [sandbox]",
+        problem: "extra_roots is not an array.",
+        fix: 'Write it as a list, e.g. extra_roots = ["../sibling-checkout"].',
+        fatal: true,
+      });
+    } else if (Array.isArray(raw)) {
+      const root = resolve(config.gnomonDir, "..");
+      for (const entry of raw) {
+        if (typeof entry !== "string") continue;
+        if (isAbsolute(entry)) {
+          problems.push({
+            where: ".gnomon/policy.toml [sandbox]",
+            problem:
+              `extra_roots contains an absolute path (${entry}) — that is ` +
+              `machine-scoped configuration, and it grants nothing on any other clone.`,
+            fix: "Name it relative to the repository root instead, e.g. \"../sibling-checkout\".",
+            fatal: false,
+          });
+        }
+        const abs = isAbsolute(entry) ? resolve(entry) : resolve(root, entry);
+        if (!existsSync(abs)) {
+          problems.push({
+            where: ".gnomon/policy.toml [sandbox]",
+            problem: `extra_roots names ${entry}, which does not exist here — it grants nothing.`,
+            fix: "Remove it, or check the path relative to the repository root.",
+            fatal: false,
+          });
+        }
+      }
+    }
+  }
+
     for (const field of Object.keys((rawRole ?? {}) as Record<string, unknown>)) {
       if (ROLE_KEYS.has(field)) continue;
       const near = [...ROLE_KEYS]
@@ -1750,6 +1790,26 @@ function collectSurface(baseDir: string): SourceEntry[] {
 
   walk(gnomonDir);
   return sources;
+}
+
+/**
+ * Absolute extra roots granted by `[sandbox] extra_roots`, resolved against the
+ * repository root so a surface can name a sibling checkout as `"../other"` and
+ * stay portable.
+ *
+ * Relative entries are the point: an absolute path in the surface would be
+ * machine-scoped configuration, which Rule 1 forbids. `../other` means the same
+ * thing on every clone that has the same two repositories side by side, and
+ * means nothing -- resolving to a path that simply does not exist, and so
+ * granting nothing -- on one that does not.
+ */
+export function resolveExtraRoots(config: GnomonConfig): string[] {
+  const raw = (config.policy?.sandbox as { extra_roots?: unknown } | undefined)?.extra_roots;
+  if (!Array.isArray(raw)) return [];
+  const root = resolve(config.gnomonDir, "..");
+  return raw
+    .filter((r): r is string => typeof r === "string" && r.trim().length > 0)
+    .map((r) => (isAbsolute(r) ? resolve(r) : resolve(root, r)));
 }
 
 /** Resolved [resilience]: what the harness does when the endpoint misbehaves. */

@@ -21,6 +21,7 @@ import {
   resolveContext,
   resolveVerify,
   resolveResilience,
+  resolveExtraRoots,
   Compaction,
   resolveUi,
   resolveEndpoint,
@@ -1610,6 +1611,9 @@ export async function runAgenticTurn(
     writeAllow: config.roles[role]?.write_allow,
     root: resolve(config.gnomonDir, ".."),
     sandbox,
+    // Declared in policy.toml, hashed with the surface. A grant that does not
+    // move the surface hash would be a grant nobody could audit.
+    extraRoots: resolveExtraRoots(config),
     gate,
     approve: deps.approve,
     timeoutMs: toolTimeoutMs(config),

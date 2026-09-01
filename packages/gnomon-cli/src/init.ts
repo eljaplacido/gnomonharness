@@ -505,6 +505,14 @@ level = "confined"                 # off | confined | strict
 # that runs builds and installers cannot have its shell enumerated in advance.
 # A role holding bash is bounded by bash_deny/bash_allow, not by this line.
 #
+# To let the agent reach ONE other checkout, name it here rather than turning
+# the sandbox off. Paths are relative to this repository root, so the grant
+# means the same thing on every clone -- an absolute path would be
+# machine-scoped configuration, and Rule 1 forbids that. Granting is declared
+# data: it lives in this file, it is hashed with the rest of the surface, and
+# 'gnomon surface hash' moves when it changes.
+#   extra_roots = ["../sibling-checkout"]
+#
 # NOTE: network isolation is declared but NOT enforced by this build. The
 # prompt loop says so at startup rather than implying protection it lacks.
 network = false

@@ -104,6 +104,28 @@ describe("sandbox", () => {
     expect(resolveInRoot(root, "/etc/passwd", "off")).toBe("/etc/passwd");
   });
 
+  it("admits a path inside a granted extra root, and nothing else", () => {
+    // "Let the agent read my other checkout" had two spellings before this,
+    // and both were worse than a named root: sandbox = "off", which drops
+    // confinement everywhere at once, or `bash cat`, which the sandbox level
+    // does not govern at all. Measured on a strict surface: `read` of a
+    // neighbouring repository was refused while `cat` of the same file
+    // succeeded in the same turn.
+    const other = mkdtempSync(join(tmpdir(), "gnomon-other-"));
+    writeFileSync(join(other, "NOTES.md"), "neighbour");
+    const grant = [other];
+
+    // Granted: inside the named root.
+    expect(resolveInRoot(root, join(other, "NOTES.md"), "confined", grant)).not.toBeNull();
+    // Still confined: a sibling of the granted root is NOT granted.
+    expect(resolveInRoot(root, join(other, "..", "elsewhere.txt"), "confined", grant)).toBeNull();
+    // Still confined: everything else is unchanged by the grant.
+    expect(resolveInRoot(root, "/etc/passwd", "confined", grant)).toBeNull();
+    // And the repository root itself still works.
+    expect(resolveInRoot(root, "hello.txt", "confined", grant)).toContain("hello.txt");
+    rmSync(other, { recursive: true, force: true });
+  });
+
   it("read outside the sandbox is a refusal, not a crash", async () => {
     const out = await executeTool("read", { path: "/etc/passwd" }, ctx(), offered);
     expect(out.code).toBe(TOOL_OUT_OF_SANDBOX);

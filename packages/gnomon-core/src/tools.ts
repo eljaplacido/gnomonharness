@@ -341,7 +341,8 @@ export type SandboxLevel = "off" | "confined" | "strict";
 export function resolveInRoot(
   root: string,
   path: string,
-  sandbox: SandboxLevel
+  sandbox: SandboxLevel,
+  extraRoots: string[] = []
 ): string | null {
   const abs = isAbsolute(path) ? resolve(path) : resolve(root, path);
   if (sandbox === "off") return abs;
@@ -356,11 +357,16 @@ export function resolveInRoot(
   // The root is realpath'd too, so a checkout reached through a symlinked
   // parent (a home directory on another volume, a /tmp that is really
   // /private/tmp) still resolves to itself rather than looking like an escape.
-  const realRoot = realpathOrSelf(resolve(root));
   const realAbs = realpathOfNearest(abs);
-  const rel = relative(realRoot, realAbs);
-  if (rel.startsWith("..") || isAbsolute(rel)) return null;
-  return abs;
+  // Every granted root is checked the same way the repository root is: real
+  // paths, so a symlink cannot smuggle a path into a granted root any more
+  // than it can into this one.
+  for (const candidate of [root, ...extraRoots]) {
+    const realRoot = realpathOrSelf(resolve(candidate));
+    const rel = relative(realRoot, realAbs);
+    if (!rel.startsWith("..") && !isAbsolute(rel)) return abs;
+  }
+  return null;
 }
 
 /** realpath, falling back to the path itself when it does not exist yet. */
@@ -789,6 +795,21 @@ export interface ToolContext {
   writeAllow?: string[];
   root: string;
   sandbox: SandboxLevel;
+  /**
+   * Additional absolute roots the SURFACE has granted, from
+   * `[sandbox] extra_roots`. A path landing inside one of these is treated
+   * exactly as if it were inside the repository root.
+   *
+   * This exists so that "let the agent read my other repository" does not have
+   * to be spelled `sandbox = "off"`. Before it, an operator with a neighbouring
+   * checkout to consult had two options, and both were worse: turn the sandbox
+   * off, losing confinement everywhere at once, or lean on `bash cat`, which
+   * the level does not govern at all. A named root is narrower than either, and
+   * it is declared data -- it lives in policy.toml, it is hashed with the rest
+   * of the surface, and `gnomon surface hash` moves when it changes. Consent
+   * that leaves a trace, rather than a flag that does not.
+   */
+  extraRoots?: string[];
   gate: ApprovalGate;
   approve: Approver;
   /** bash timeout, ms */
@@ -966,7 +987,7 @@ async function readTool(
     };
   }
   const path = args.path;
-  const abs = resolveInRoot(ctx.root, path, ctx.sandbox);
+  const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
   if (!abs) {
     return {
       code: TOOL_OUT_OF_SANDBOX,
@@ -2180,7 +2201,7 @@ async function searchScope(
   ctx: ToolContext
 ): Promise<{ abs: string; rel: string } | ToolOutcome> {
   const raw = String(args.path ?? "").trim() || ".";
-  const abs = resolveInRoot(ctx.root, raw, ctx.sandbox);
+  const abs = resolveInRoot(ctx.root, raw, ctx.sandbox, ctx.extraRoots);
   if (!abs) {
     return {
       code: TOOL_OUT_OF_SANDBOX,
@@ -2407,7 +2428,7 @@ async function writeTool(
     };
   }
   const content = args.content;
-  const abs = resolveInRoot(ctx.root, path, ctx.sandbox);
+  const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
   if (!abs) {
     return {
       code: TOOL_OUT_OF_SANDBOX,
@@ -2544,7 +2565,7 @@ async function editTool(
   const path = String(args.path ?? "");
   const oldText = String(args.old_text ?? "");
   const newText = String(args.new_text ?? "");
-  const abs = resolveInRoot(ctx.root, path, ctx.sandbox);
+  const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
   if (!abs) {
     return {
       code: TOOL_OUT_OF_SANDBOX,
