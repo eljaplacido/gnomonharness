@@ -1222,6 +1222,9 @@ export const READ_ONLY_CONVERGE_AFTER = 0.6;
 /** Refusals of one tool, all of its calls, before the loop says the policy may be wrong. */
 export const ALL_REFUSED_NOTICE = 3;
 
+/** TOOL_DENIED, named here so the verify gate can recognise a declined check. */
+const TOOL_DENIED_CODE = 2;
+
 /**
  * Append a note, bounded, oldest first.
  *
@@ -1945,12 +1948,28 @@ export async function runAgenticTurn(
         deps.progress.stop();
         deps.say(paint(deps.ui, "cyan", `  ⚙ verify`) +
           paint(deps.ui, "gray", ` ${verify.command}`));
+        // The check is the SURFACE's declaration, not a tool the model chose,
+        // so it runs for any role and is not gated like a model action -- a
+        // coordinator that changed files still gets its declared check.
+        //
+        // But `never` was hardcoded, so an operator running approval = "always"
+        // -- who has asked to see every command before it runs -- silently did
+        // not see this one. Under `always` it asks, once; under the other gates
+        // it stays ungated, because a declared check is not the model reaching
+        // for the shell.
+        const verifyGate: ApprovalGate = gate === "always" ? "always" : "never";
         const check = await executeTool(
           "bash",
           { command: verify.command },
-          { ...ctx, gate: "never" as ApprovalGate, allow: "strict" as SurfaceConsent },
+          { ...ctx, gate: verifyGate, allow: "strict" as SurfaceConsent },
           new Set(["bash"])
         );
+        if (check.code === TOOL_DENIED_CODE) {
+          // Declined by the operator. Not a failure of the check, and not a
+          // reason to hand the turn back -- they saw it and said no.
+          deps.say(paint(deps.ui, "gray", `  ⚙ verify — declined; not run`));
+          toolLog.push("verify — declined by the operator");
+        }
         // bashTool reports TOOL_OK for any command that *ran*; the shell's own
         // exit status is in the summary, not the tool code. Reading the tool
         // code here would make every check pass, including the failing ones —

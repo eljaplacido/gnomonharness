@@ -64,7 +64,7 @@ import {
   simulatePatch,
   Enumerations,
 } from "gnomon-natives";
-import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync} from "node:fs";
 import { createInterface } from "node:readline";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -397,10 +397,17 @@ async function cmdSession(args: CliArgs): Promise<void> {
     }
   }
 
-  // Save session
-  const outFile = commands.length > 0
-    ? `${commands[0].replace(/[/:]/g, "_")}.json`
-    : "session.json";
+  // Save into the surface's own session directory, not the working directory.
+  //
+  // This used to name the file after the first COMMAND and drop it wherever the
+  // shell happened to be: `gnomon session "pytest -q"` wrote `pytest -q.json`
+  // into the current directory, --dir was loaded and then ignored, and
+  // `gnomon session <id>` looked for records somewhere else entirely — so a
+  // saved session could not be found by the command meant to read it.
+  const store = resolveSessionStore(config);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const outFile = join(store.dir, `session-${stamp}.json`);
+  mkdirSync(store.dir, { recursive: true });
   session.save(outFile);
   console.log(`Session saved: ${outFile}`);
   console.log(`Total steps: ${session.stepCount}`);
