@@ -2059,6 +2059,44 @@ export async function runAgenticTurn(
         const shellExit = exitMatch ? Number(exitMatch[1]) : killed ? 1 : check.code === 0 ? 1 : 1;
         const passed = check.code === 0 && exitMatch !== null && shellExit === 0;
 
+        // "The check could not run" is not "your work is wrong", and telling
+        // the model the second when the first is true is a category error with
+        // teeth. Measured: a [verify] command of `pytest -q hidden_test.py`
+        // against plain assert scripts errored during COLLECTION every round,
+        // so the gate reported failure unconditionally -- and the model
+        // rewrote already-correct code trying to satisfy a check that could
+        // never pass. One task went from correct without the gate to broken
+        // with it. A misconfigured check is worse than no check.
+        //
+        // 126 and 127 are POSIX and tool-independent: not executable, and not
+        // found. Anything more specific would need per-tool knowledge the
+        // harness does not have and should not guess at.
+        // 126 and 127 are POSIX and tool-independent: not executable, and not
+        // found. Anything more specific would need per-tool knowledge the
+        // harness does not have and should not guess at -- a pytest collection
+        // error still reads as an ordinary failure, which is an honest limit.
+        const unrunnable = shellExit === 126 || shellExit === 127;
+        if (!passed && unrunnable) {
+          deps.say(
+            paint(
+              deps.ui,
+              "yellow",
+              `  ⚙ verify — the check could not run (exit ${shellExit}). ` +
+                `Not counted against the work; fix [verify] command.`
+            )
+          );
+          toolLog.push(`verify — could not run (exit ${shellExit})`);
+          deps.audit?.write("verify", {
+            command: verify.command,
+            ok: false,
+            unrunnable: true,
+            exit: shellExit,
+            round: verifyRounds,
+          });
+          // Handing this back would spend the remaining rounds on a defect in
+          // the surface rather than in the work, so stop checking.
+          verifyRounds = verify.max_rounds;
+        }
         // A test that would have passed BEFORE this turn pins nothing.
         //
         // Only meaningful when the check passed and the turn actually wrote a
@@ -2116,7 +2154,14 @@ export async function runAgenticTurn(
           passed,
         });
 
-        if (!passed || pinsNothing) {
+        // An unrunnable check is a defect in the surface, not in the work, and
+        // handing it back tells the model its correct code is wrong. Measured:
+        // against an uncollectable check the model rewrote working code every
+        // round, and one task went from passing without the gate to failing
+        // with it.
+        if (unrunnable && !pinsNothing) {
+          // Already reported above, with the audit record saying why.
+        } else if (!passed || pinsNothing) {
           deps.say(paint(deps.ui, "yellow",
             `    ⚠ verify failed — handing the turn back`));
           working.push({ role: "assistant", content: result.content });
@@ -2131,7 +2176,13 @@ export async function runAgenticTurn(
           });
           continue;
         }
-        deps.say(paint(deps.ui, "gray", `    ✓ verify passed`));
+        // Only say it passed when it actually ran and passed. A check that
+        // could not run has already reported itself, and calling that "passed"
+        // would be the same silent success this gate exists to contradict --
+        // just from the other side.
+        if (!unrunnable) {
+          deps.say(paint(deps.ui, "gray", `    ✓ verify passed`));
+        }
       }
 
       return {
