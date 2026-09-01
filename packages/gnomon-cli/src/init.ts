@@ -499,6 +499,12 @@ gate = "on_write"                  # never | on_write | always
 
 [sandbox]
 level = "confined"                 # off | confined | strict
+# What the level actually governs: TOOL PATHS. read/write/edit/glob/grep must
+# resolve inside the repository root, symlinks included. It does NOT govern
+# bash -- even at 'strict' it will still run 'cat /etc/passwd', because a role
+# that runs builds and installers cannot have its shell enumerated in advance.
+# A role holding bash is bounded by bash_deny/bash_allow, not by this line.
+#
 # NOTE: network isolation is declared but NOT enforced by this build. The
 # prompt loop says so at startup rather than implying protection it lacks.
 network = false

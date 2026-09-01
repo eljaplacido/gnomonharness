@@ -1050,7 +1050,17 @@ not silently decide it.
 
 Under `confined`/`strict`, every tool path is resolved and must land inside the
 repository root — `../` and absolute paths are both caught. A path outside is a
-**refusal**, and the model is told why.
+**refusal**, and the model is told why. Symlinks are resolved before the check,
+including dangling ones, so a link inside the repository cannot redirect a read
+or a write past the boundary.
+
+**The level governs tool paths, not `bash`.** `sandbox = "strict"` does not stop
+`bash cat /etc/passwd`; a shell command is constrained by `bash_deny` /
+`bash_allow` and by nothing else. Measured: on a `strict` surface, `read` of a
+neighbouring repository was refused and `cat` of the same file through `bash`
+succeeded in the same turn. That is deliberate — `implement` must run builds and
+installers nobody can enumerate ahead of time — but it means a role holding
+`bash` is confined by its deny-list, not by this setting. See the next section.
 
 ### `bash_allow` — why `tools` alone is not enough
 
