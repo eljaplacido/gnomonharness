@@ -138,12 +138,31 @@ class McpConnection {
 
   close(): void {
     this.failAll(new Error("closed"));
+    const proc = this.proc;
+    this.proc = null;
+    if (!proc) return;
     try {
-      this.proc?.kill();
+      // Killing the child is not enough to let node exit. Its three pipes are
+      // live libuv handles and the stdout listener holds a reference, so the
+      // event loop stays alive with nothing to run. Measured: `gnomon prompt`
+      // on a surface declaring one MCP server never returned from /quit -- the
+      // loop had exited, the terminal was simply hung -- while the same
+      // surface without the server exited immediately.
+      //
+      // This is the same shape as the bash tool's releasePipes(): end stdin so
+      // a well-behaved server can leave on EOF, drop the listeners, destroy
+      // the streams, then signal and unref whatever is left.
+      proc.stdout?.removeAllListeners();
+      proc.stderr?.removeAllListeners();
+      proc.stdin?.end();
+      proc.stdout?.destroy();
+      proc.stderr?.destroy();
+      proc.stdin?.destroy();
+      proc.kill();
+      proc.unref();
     } catch {
       /* already gone */
     }
-    this.proc = null;
   }
 
   private request(method: string, params: unknown, timeoutMs = CONNECT_TIMEOUT_MS): Promise<RpcMessage> {

@@ -5542,6 +5542,16 @@ export async function runPromptLoop(
       }
     }
   } finally {
+    // Both of these, on every exit path. MCP servers are child processes, and
+    // an un-killed child keeps node's event loop alive with nothing left to
+    // run -- so `gnomon prompt` on a surface declaring one never came back
+    // from /quit. The loop had exited; the terminal was simply hung, with no
+    // output to say why, and each hung session left another orphaned server
+    // behind. Closing on readline's "close" event was not enough: that event
+    // does not fire on this path, and cleanup that depends on which way the
+    // user left is cleanup that will be missed.
+    state.mcp?.close();
+    state.mcp = undefined;
     rl.close();
   }
 }
