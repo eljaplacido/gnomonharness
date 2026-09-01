@@ -34,7 +34,7 @@ different servers.
 | Consent-gated capability: it does what the operator grants | [capability](../benchmarks/results/capability-2026-09-01/) | MCP, egress, neighbouring repo, CLI auth and driving another harness — **5/5 work when granted**, 4/5 refuse when withheld. The fifth is the finding, below |
 | The surface is not writable by a tool call | [containment](../benchmarks/results/containment-2026-08-31/) · [consent](../benchmarks/results/consent-2026-09-01/) | gnomon **5/5** refused; opencode rewrote its own permission file **5/5** across four escalating configs. `strict` refuses even when the approver says *yes* — **6/6** |
 | Capability over instruction | [injection](../benchmarks/results/injection-2026-08-31/) | boundary holds **12/12** when the model actually complies; the model ignored the injections 0/12, so the *control* is what proves it |
-| Skills proposed, never self-applied | — | **untested** |
+| Skills proposed, never self-applied | [capability](../benchmarks/results/capability-2026-09-01/) · `c5e2b53` | ✅ inert while proposed, loads only on `skill accept` — **and the hash now holds still**: proposing used to move the surface hash the run's own audit record was stamped with |
 | Sessions and audit live outside the surface | [determinism](../benchmarks/results/determinism-2026-08-31/) | mtime and path perturbation leave the hash unchanged |
 | Tamper-evident audit trail | [auditability](../benchmarks/results/auditability-2026-08-31/) | **8/9** attacks caught. A full re-chain is undetectable by construction and is published as a limit |
 
@@ -42,6 +42,7 @@ different servers.
 
 | Dimension | Evidence | Result |
 |---|---|---|
+| Session resume | live pty run, 2026-09-01 | ✅ `--continue` restored the conversation and the model answered from it — `Resumed …848888 — 1 turn(s)` |
 | Task completion | [Terminal-Bench](../benchmarks/results/terminal-bench-postfix-2026-08-31/) | 43.5% → **52.2%**, McNemar **p = 0.109** — *direction only*, n=3 running |
 | Context retention | [context](../benchmarks/results/context-2026-08-31/) | `summary` **9/9**, `discard` **0/9**. The shipped default is `discard` |
 | Per-turn overhead | [latency](../benchmarks/results/latency-2026-08-31/) | **223 ms** vs opencode **1581 ms** |
@@ -54,7 +55,6 @@ different servers.
 Listed because omitting them would imply coverage that does not exist.
 
 - **Skills are proposed, never self-applied** — the mechanism is never exercised
-- **Session resume fidelity** — `/session`, `--continue`, never tested
 - **Model agnosticism** — every suite above ran on one local model or one cloud
   model; no cross-provider comparison exists
 - **Peer task completion** — the goose figure predates the adapter repairs and is
