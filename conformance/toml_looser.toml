@@ -1,0 +1,60 @@
+# conformance/toml_looser.toml — text gnomon accepts that TOML 1.0 rejects.
+#
+# The other direction of divergence from toml_misread.toml: here a spec parser
+# refuses the file outright and gnomon loads it. That is not harmless. It means
+# a .gnomon/ surface can be written that gnomon reads happily and no other TOML
+# tool — an editor, a linter, a script, a future gnomon that grows a real
+# parser — will open at all. Measured: Python 3.12 tomllib refuses this file at
+# the first case below.
+#
+# Two of these are silent typo-swallowers rather than conveniences:
+# `capital_bool` and `junk_after_string` are how a wrong value becomes a string
+# nobody notices. Pinned so the hole is documented, not so it is blessed.
+#
+# gnomon's own reading is pinned in toml_looser_golden.json and asserted by
+# config.test.ts. Do not use these constructs in a surface.
+# See docs/CONTRACTS.md §5.
+
+[looser]
+
+# TOML: an unknown escape is an error. gnomon: left verbatim, deliberately —
+# a surface that refuses to load over one unrecognised escape helps nobody.
+# This is the only case in this file that is a considered choice.
+unknown_escape = "a\qb"
+
+# TOML: booleans are lower-case only, so this is an error. gnomon: the string
+# "True", which is truthy in JS. A boolean setting written this way is ON and
+# reads as though it were checked.
+capital_bool = True
+
+# TOML: leading zeros are an error. gnomon: the integer 7.
+leading_zeros = 007
+
+# TOML: an unquoted value is an error. gnomon: the raw text as a string. This
+# fallback is what makes every case in toml_misread.toml silent.
+bare_word = unquoted words become a string
+
+# TOML: an unterminated string is an error. gnomon: the rest of the line
+# including the opening quote.
+unclosed_quote = "abc
+
+# TOML: trailing content after a value is an error. gnomon: the whole thing as
+# one string, quotes included.
+junk_after_string = "value" extra
+
+# TOML: a value is required. gnomon: the comment is stripped first, leaving
+# nothing, and nothing parses as the empty string.
+comment_only_value = #
+
+# TOML: a duplicate key is an error. gnomon: last one wins, silently.
+duplicate_key = 1
+duplicate_key = 2
+
+# TOML: redefining a table is an error. gnomon: merges into it, silently. This
+# one is benign in practice and is how a surface split across sections still
+# works, but it is not TOML.
+[reopened]
+first = 1
+
+[reopened]
+second = 2

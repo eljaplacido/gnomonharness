@@ -43,7 +43,13 @@ All four are checked by `.gnomon/ci.sh` on every run.
 **Goal:** TUI, sessions, `.gnomon/` resolution with **no** home-directory path,
 role routing, `hashline` edit format. You stop reaching for other agents.
 
-- [x] TS core: agent loop, extension host, session model
+- [x] TS core: agent loop, session model. The "extension host" this line also
+      claimed is real code that nothing calls: `ExtensionHost` in
+      `packages/gnomon-core/src/agent.ts`, registered by no caller, and
+      `.gnomon/extensions/` is content-hashed into the surface but read by no
+      code path. Kept on purpose; wiring it is scheduled separately. The loop
+      that actually runs is `prompt_loop.ts:runAgenticTurn`, which shares no
+      code with `agent.ts`.
 - [x] CLI: `gnomon run`, `gnomon session`, `gnomon enumerations`
 - [x] `.gnomon/` resolver: reads from working repo, no `~/.gnomon/` path.
       The one machine-local file is the credential store, which holds values
@@ -54,7 +60,15 @@ role routing, `hashline` edit format. You stop reaching for other agents.
 - [ ] Edit format: `hashline` — **not implemented.** `str_replace` is the only
       format this build has; the other two are in the enumerations contract
       and nothing reads them. `config.toml` says so where it is configured.
-- [x] Manifest emitted every turn, re-asserted on changes
+- [x] Manifest emitted every turn — every turn record and audit event carries a
+      `surface_hash`. The "re-asserted on changes" half of what this line used
+      to claim is not what the code does, checked 2026-09-01 by reading both
+      live entry points: `runTask` (`prompt_loop.ts:2991`) and the interactive
+      loop (`prompt_loop.ts:4596`) each call `recomputeManifest` exactly once,
+      at session start, and every later turn stamps that captured value. So a
+      per-turn record cannot notice drift — it reprints the hash the session
+      opened with. What does re-read the surface is `tools.ts:surfaceDrift`,
+      per bash call, and the resume-time comparison at `prompt_loop.ts:5159`.
 
 **Done when:** A machine-scoped path survives nowhere in resolution.
 
@@ -72,7 +86,20 @@ role routing, `hashline` edit format. You stop reaching for other agents.
 - [x] `conformance/fixture_tree/` — reproducible test tree
 - [ ] Build static aarch64 binary with `musl` target or aarch64 Docker
 - [x] CI: `gnomon-enums` prints enumerations contract
-- [x] Assert manifest every turn in the agent loop — `reassertManifest()` in agent.ts records apparatus_failure on drift
+- [x] Detect surface drift during a run — `surfaceHashOf()` and `surfaceDrift()`
+      in `tools.ts` pin the `.gnomon/` hash before every bash call and compare
+      after, appending a WARNING to the tool output when it moved.
+      What this line said until 2026-09-01, and why it was wrong: it credited
+      `reassertManifest()` in `agent.ts` with recording `apparatus_failure` on
+      drift. Grep across the whole repo: no function named `reassertManifest`
+      exists, and the only hit was this line describing it. The behaviour it
+      described half-exists — an inline block at `agent.ts:226` does push an
+      `apparatus_failure` step that `runSession` halts on — but `agent.ts` is
+      the unwired loop, so that code runs in no real session.
+      Known limits of what does ship, published rather than implied away: the
+      live check is per-bash-call, not per-turn; it warns rather than recording
+      `apparatus_failure` or stopping; and drift arriving by any route other
+      than a bash call is noticed only if some later bash call straddles it.
 
 **Done when:** Two runs over the same tree produce identical manifests.
 

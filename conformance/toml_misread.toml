@@ -1,0 +1,59 @@
+# conformance/toml_misread.toml — valid TOML that gnomon reads as something else.
+#
+# This is the dangerous class, and the reason this fixture exists at all. The
+# constructs below are legal TOML 1.0. gnomon's parser does not reject them —
+# it returns a DIFFERENT value, silently, with no startup failure and no
+# warning. A surface using any of them loads and then behaves in a way its
+# author cannot read off the file.
+#
+# The mechanism is one line of parseValue: anything that is not a quoted
+# string, an array, `true`/`false`, or a decimal int/float falls through to
+# "return the raw text as a string". Every case here is that fallback firing.
+#
+# toml_misread_golden.json pins BOTH readings side by side: `gnomon` is what
+# parseToml actually returns (asserted by config.test.ts), `toml` is what a
+# spec parser returns (Python 3.12 tomllib, recorded offline on 2026-09-01 —
+# nothing in CI re-runs it, so a future edit to this file must be re-checked
+# by hand).
+#
+# Recording gnomon's output here is NOT an endorsement of it. Do not use these
+# constructs in a .gnomon/ surface. See docs/CONTRACTS.md §5.
+
+[misread]
+
+# TOML: an inline table. gnomon: the literal text, as a string. Anything
+# reading `endpoints.local.url` off this gets undefined.
+inline_table = { a = 1, b = 2 }
+
+# TOML: a local date / an offset date-time. gnomon: strings.
+date = 2026-08-30
+datetime = 2026-08-30T12:00:00Z
+
+# TOML: the integer 1000. gnomon: the string "1_000". A numeric comparison
+# against it — a timeout, a token budget — is then comparing against text.
+underscored = 1_000
+
+# TOML: the integer 31. gnomon: the string "0x1f".
+hexadecimal = 0x1f
+
+# TOML: the floats 1000000.0 and 1500.0. gnomon: strings.
+exponent = 1e6
+float_exponent = 1.5e3
+
+# TOML: the integer 5. gnomon: the string "+5". Only a leading MINUS is
+# recognised: the number regexes are /^-?\d+$/ and /^-?\d+\.\d+$/.
+positive = +5
+
+# TOML: an array of two arrays. gnomon: the array splitter tracks quotes but
+# not brackets, so it cuts at the comma inside the first inner array and
+# produces three mangled items. The multi-line spelling of the same value
+# happens to survive, because each inner array then sits between top-level
+# commas — do not rely on either.
+nested_array = [["a", "b"], ["c"]]
+
+# TOML: one table whose name is the single string "quoted.header".
+# gnomon: the header regex captures the quotes and then splits on the dot, so
+# this becomes two nested tables named `"quoted` and `header"`.
+# Kept last: it changes where every following key lands.
+["quoted.header"]
+k = 1

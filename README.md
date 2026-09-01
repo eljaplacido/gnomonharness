@@ -616,6 +616,67 @@ Four rules the window keeps:
   string, not something the model said.
 - **Reasoning is never replayed.** A `<think>` block is working, not speech.
 
+#### `[turn]` — when a turn stops, is nudged, or converges
+
+```toml
+[turn]
+max_consecutive_empty = 3         # blank replies in a row before the turn is done
+max_run_notes = 40                # run notes kept and replayed; oldest fall off first
+read_only_converge_after = 0.6    # a role with no write/edit/bash is pushed to conclude here
+all_refused_notice = 3            # every call to one tool refused this often → say so out loud
+max_steps = 12                    # tool calls per leg when a role declares no max_steps
+legs = 8                          # max_steps_total defaults to max_steps × legs
+stall_repeats = 3                 # identical calls in a row that count as going in circles
+nudge_after_idle = 12             # calls without changing a file before the model is nudged
+converge_refire = 6               # calls between convergence re-pushes past converge_after
+```
+
+Every value shown is the default, so a surface that omits the block — or writes
+it out exactly as above — behaves as it always did. What changes is that the
+numbers are now *declarable*, and therefore hashed.
+
+**Why this block exists.** `.gnomon/` is supposed to declare everything that
+decides how the agent acts, content-hashed, with that hash stamped on every
+record. These nine were TypeScript constants instead. From
+[`docs/HARNESS-RESEARCH-RECONCILIATION.md`](docs/HARNESS-RESEARCH-RECONCILIATION.md):
+all 114 session records in one benchmark arm carry `surface=be52a8a14db8`, while
+the mechanism that ended a large share of those runs — `nudge_after_idle` — was
+invisible to that hash. *"If behaviour changed, the hash changed"* is the
+sentence the whole design exists to earn, and until this block existed, `12`
+could become `40` without moving a byte of the manifest. Two people with
+identical surface hashes on two gnomon builds got different behaviour and
+nothing in the record could say so.
+
+| Key | What it decides |
+|---|---|
+| `max_consecutive_empty` | Blank completions in a row tolerated before the turn is recorded with `stop_reason: empty`. Each re-ask is worded differently. `0` means one blank ends the turn. |
+| `max_run_notes` | The bound on the run's own notes, replayed to later turns and surviving compaction. Oldest fall off first. |
+| `read_only_converge_after` | Fills in `converge_after` for a role holding no `write`, `edit`, `bash`, `task` or `skill` — whatever it finds, the only possible output is a report. An explicit `converge_after` in `roles.toml` always wins. `0` disables it. |
+| `all_refused_notice` | After this many calls to one tool, all of them refused, the loop says the policy may be wrong. A `bash_allow` pattern can compile and still match nothing; `gnomon audit` cannot catch that. |
+| `max_steps` | The default for a role that declares no `max_steps`. The role's own value wins where it has one. `/roles` prints which of the two you are getting. |
+| `legs` | `max_steps_total` defaults to `max_steps × legs`. `max_steps` is a checkpoint — the harness compacts and continues — and this is how many checkpoints there are before the wall. `1` restores stop-at-the-first-checkpoint. |
+| `stall_repeats` | Identical consecutive tool calls that mean the model is going in circles. Ends the turn with `stop_reason: stall`. |
+| `nudge_after_idle` | Calls without changing a file before the model is nudged to act or conclude — and re-nudged every this-many after that. A nudge, not a wall: persistence is what wins hard-but-solvable tasks. |
+| `converge_refire` | Calls between convergence re-pushes once `converge_after` is reached. A single "submit what you have" is easy to ignore. |
+
+Values are floored where a zero would mean the opposite of what it reads:
+`max_run_notes = 0` would keep *every* note (`slice(-0)` returns the whole
+array) and `stall_repeats = 0` would declare a stall on the first tool call of
+every turn, so both floor at 1. `max_consecutive_empty` and
+`all_refused_notice` accept `0`, where it honestly means "never".
+
+**Known limit.** `[turn]` declares nine of the loop's numbers, not all of them.
+The A-B-A-B alternation test (8-call window, 2 distinct signatures) and the
+*wording* of the nudge and convergence messages are still compiled into the
+harness and still outside the surface hash. The reconciliation document names
+that text alongside the numbers; it has not moved yet. So a surface that pins
+every key in this block still does not pin the whole loop, and this section says
+so rather than implying otherwise.
+
+**Not a tuning claim.** No run has been measured before and after this block
+existed. It is a correctness change to what the surface hash covers, and it is
+not evidence that any of these nine numbers is the right one.
+
 #### `[routing]` — the trust dial
 
 See [Roles and the Trust Dial](#roles-and-the-trust-dial).

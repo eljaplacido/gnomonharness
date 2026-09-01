@@ -71,6 +71,37 @@ backoff_ms = 500          # doubled each attempt
 request_timeout_ms = 300000   # a reasoning model on a hard task exceeds 120s; a timed-out attempt doubles this
 transport_grace_ms = 60000    # an endpoint refusing the socket is not an attempt; keep knocking this long (0 disables)
 
+[turn]
+# The numbers that decide when a turn stops, is nudged, or is pushed to
+# converge. Every value below is the harness default, so writing the block out
+# in full changes nothing -- but from here on, changing one of them moves the
+# surface hash, which is the whole point.
+#
+# They were TypeScript constants until now, and that broke the sentence this
+# design exists to earn: "if behaviour changed, the hash changed". From
+# docs/HARNESS-RESEARCH-RECONCILIATION.md: 114 session records in one benchmark
+# arm all carried the same surface hash while the mechanism that ended a large
+# share of those runs -- nudge_after_idle -- was invisible to it. Two checkouts
+# with identical hashes on two builds behaved differently and nothing in the
+# record could say so.
+#
+# NOT a tuning recommendation. No run has been measured before and after this
+# block existed; these are the values that already shipped, written down.
+max_consecutive_empty = 3    # blank replies in a row before the turn is done (0 = one blank ends it)
+max_run_notes = 40           # run notes kept and replayed; oldest fall off first
+read_only_converge_after = 0.6  # a role with no write/edit/bash is pushed to conclude here (0 = never)
+all_refused_notice = 3       # every call to one tool refused this many times -> say the policy may be wrong
+max_steps = 12               # tool calls per leg when a role declares no max_steps of its own
+legs = 8                     # max_steps_total defaults to max_steps * legs (1 = stop at the first checkpoint)
+stall_repeats = 3            # identical calls in a row that count as going in circles
+nudge_after_idle = 12        # calls without changing a file before the model is nudged to decide
+converge_refire = 6          # calls between convergence re-pushes once converge_after is reached
+
+# Known limit, stated rather than implied: this block declares NINE of the
+# loop's numbers. The A-B-A-B alternation window (8 calls, 2 distinct
+# signatures) and the wording of the nudge and convergence messages are still
+# compiled into the harness and still outside the surface hash.
+
 [chain]
 # The stages one turn passes through, in order. Absent means one role answers,
 # which is the behaviour without this block -- nothing changes until you ask.

@@ -24,6 +24,8 @@ import {
   resolveExtraRoots,
   resolveExec,
   resolveChain,
+  resolveLoop,
+  LOOP_DEFAULTS,
   Compaction,
   resolveUi,
   resolveEndpoint,
@@ -1220,10 +1222,15 @@ export interface TurnResult {
  * publishing them here would put values in a Rule 6 enumeration that nothing
  * can emit.
  */
-/** Consecutive blank completions tolerated before a turn is called finished.
- * Bounded so a model that has genuinely stopped producing cannot spin out the
- * budget, but not so tight that one blank ends a turn with steps to spare. */
-export const MAX_CONSECUTIVE_EMPTY = 3;
+/**
+ * Consecutive blank completions tolerated before a turn is called finished.
+ *
+ * Now `[loop] max_consecutive_empty` in config.toml; this is only its default,
+ * re-exported so existing importers keep working. The number itself lives in
+ * LOOP_DEFAULTS, because a default written in two files is a setting with two
+ * values -- see the "One default, not two" note on modelTimeoutMs above.
+ */
+export const MAX_CONSECUTIVE_EMPTY = LOOP_DEFAULTS.max_consecutive_empty;
 
 /**
  * Tool-call syntax a model emitted as PROSE instead of as a tool call.
@@ -1273,18 +1280,23 @@ export function noteMarkupInAnswer(
   );
 }
 
-/** How many run notes are kept and replayed. Oldest fall off first. */
-export const MAX_RUN_NOTES = 40;
+/** How many run notes are kept and replayed. Oldest fall off first.
+ *  Default for `[loop] max_run_notes`; the live value comes from resolveLoop. */
+export const MAX_RUN_NOTES = LOOP_DEFAULTS.max_run_notes;
 
 /**
  * Where a read-only role starts being pushed to conclude, as a fraction of its
  * step budget. Only applies when the surface declared no converge_after of its
  * own, and only to a role that holds no tool which can change anything.
+ *
+ * Default for `[loop] read_only_converge_after`; the live value comes from
+ * resolveLoop.
  */
-export const READ_ONLY_CONVERGE_AFTER = 0.6;
+export const READ_ONLY_CONVERGE_AFTER = LOOP_DEFAULTS.read_only_converge_after;
 
-/** Refusals of one tool, all of its calls, before the loop says the policy may be wrong. */
-export const ALL_REFUSED_NOTICE = 3;
+/** Refusals of one tool, all of its calls, before the loop says the policy may
+ *  be wrong. Default for `[loop] all_refused_notice`. */
+export const ALL_REFUSED_NOTICE = LOOP_DEFAULTS.all_refused_notice;
 
 /** TOOL_DENIED, named here so the verify gate can recognise a declined check. */
 const TOOL_DENIED_CODE = 2;
@@ -1298,9 +1310,19 @@ const TOOL_DENIED_CODE = 2;
  * being something the model can re-read and becomes context pressure — the very
  * problem compaction exists to relieve.
  */
-export function pushNote(notes: RunNote[], turn: number, text: string): RunNote[] {
+export function pushNote(
+  notes: RunNote[],
+  turn: number,
+  text: string,
+  /**
+   * The bound, from `[loop] max_run_notes`. Defaulted rather than required so
+   * the existing three-argument callers -- including the tests that assert the
+   * cap -- keep compiling and keep meaning what they meant.
+   */
+  limit: number = MAX_RUN_NOTES
+): RunNote[] {
   notes.push({ turn, text });
-  return notes.length > MAX_RUN_NOTES ? notes.slice(-MAX_RUN_NOTES) : notes;
+  return notes.length > limit ? notes.slice(-limit) : notes;
 }
 
 export type StopReason =
@@ -1355,7 +1377,7 @@ export interface TurnCounters {
  * and then hit this number. A default nobody can see is a default nobody can
  * plan around, so /roles and /explain now show the effective value.
  */
-export const DEFAULT_MAX_STEPS = 12;
+export const DEFAULT_MAX_STEPS = LOOP_DEFAULTS.max_steps;
 
 /**
  * How many checkpoints a turn may pass before the wall.
@@ -1363,43 +1385,26 @@ export const DEFAULT_MAX_STEPS = 12;
  * `max_steps` was a wall, so a long task ended mid-sentence and the operator
  * had to notice and re-prompt. In a session left running for hours nobody is
  * watching to do that, so it is a checkpoint now: the harness compacts and
- * continues, up to `max_steps * DEFAULT_LEGS` unless the role says otherwise.
+ * continues, up to `max_steps * [loop] legs` unless the role says otherwise.
  */
-export const DEFAULT_LEGS = 8;
+export const DEFAULT_LEGS = LOOP_DEFAULTS.legs;
 
-/** Consecutive identical calls that mean the model is going in circles. */
-const STALL_REPEATS = 3;
-
+// STALL_REPEATS, NUDGE_AFTER_IDLE and CONVERGE_REFIRE used to live here as
+// module constants. They are `[loop] stall_repeats`, `nudge_after_idle` and
+// `converge_refire` now, read per turn through resolveLoop, and the measurements
+// that produced each number moved with them onto the ResolvedLoop fields in
+// config.ts — which is where a reader deciding what to write in config.toml
+// looks. They were the three the harness-research reconciliation named by name:
+// "today 12 can become 40 without moving a byte of the manifest".
+//
+// These two did NOT move, and saying so is the point of this comment. They
+// govern the A-B-A-B alternation test below and are still compiled in, still
+// outside the surface hash. So `[loop]` declares nine of the loop's numbers, not
+// all of them, and a surface that pins every key in it is still not pinning
+// this pair.
 /** Window and distinct-signature bound for detecting an A-B-A-B poll loop. */
 const STALL_WINDOW = 8;
 const STALL_DISTINCT = 2;
-
-/**
- * Calls a role may make without changing a file before it is nudged to decide.
- *
- * `STALL_REPEATS` catches a model repeating one call verbatim. It does not
- * catch the other failure mode measured on weak models: a model that flails —
- * many *different* diagnostic calls, none of them a write, converging on
- * nothing. On `git-multibranch` gnomon ran a hundred distinct read-only
- * commands over twenty minutes and still failed; the fast harnesses gave up in
- * four. Persistence wins hard-but-solvable tasks (it is why gnomon solves mazes
- * others abandon), so this is a nudge, not a wall: after this many calls with
- * no write it prompts the model to act or conclude, and lets it continue. The
- * genuine long solve keeps its budget; the flailer gets a reason to stop.
- */
-const NUDGE_AFTER_IDLE = 12;
-
-/**
- * How many calls between convergence re-pushes once `converge_after` is reached.
- *
- * The first version re-fired every `max_steps` (a checkpoint, ~28), which in a
- * short run — a weak model under an external clock reaches only ~45 calls before
- * being killed — fired the convergence push once and then never again. A single
- * "submit what you have" is easy to ignore. A finer, fixed cadence keeps the
- * pressure up through the tail of the budget without being tied to the
- * checkpoint interval.
- */
-const CONVERGE_REFIRE = 6;
 
 /** A comparable identity for a tool call, for stall detection. */
 function callSignature(call: ToolCall): string {
@@ -1583,6 +1588,10 @@ export async function runAgenticTurn(
   depth: number = 0
 ): Promise<TurnResult> {
   const config = state.config;
+  // The loop's own numbers, from the surface rather than from this file. Read
+  // once per turn so a `[loop]` block is hashed into the record that describes
+  // the turn it governed, exactly as [resilience] and [context] already are.
+  const loop = resolveLoop(config);
   const toolSet = buildToolSet(config, role, state.mcp?.tools() ?? []);
   // A sub-turn is offered no `task`, so delegation cannot nest. Enforced here
   // rather than only in the tool, so the schema the model sees is the truth
@@ -1638,7 +1647,12 @@ export async function runAgenticTurn(
     notes: {
       list: () => state.notes ?? [],
       add: (text) => {
-        state.notes = pushNote(state.notes ?? [], state.exchanges.length + 1, text);
+        state.notes = pushNote(
+          state.notes ?? [],
+          state.exchanges.length + 1,
+          text,
+          loop.max_run_notes
+        );
       },
     },
     // Connected MCP servers (mcp__… calls route here); undefined if none.
@@ -1685,13 +1699,13 @@ export async function runAgenticTurn(
 
   const roleDef = config.roles[role] ?? {};
   const maxSteps =
-    typeof roleDef.max_steps === "number" ? roleDef.max_steps : DEFAULT_MAX_STEPS;
+    typeof roleDef.max_steps === "number" ? roleDef.max_steps : loop.max_steps;
   // max_steps is a checkpoint; this is the wall. A session left running for
   // hours cannot be asked to notice a stall and re-prompt by hand.
   const maxTotal =
     typeof roleDef.max_steps_total === "number"
       ? roleDef.max_steps_total
-      : maxSteps * DEFAULT_LEGS;
+      : maxSteps * loop.legs;
   // Step at which the role starts being pushed to converge (submit-or-conclude).
   // Absent / non-positive converge_after means never — full exploration to the
   // wall, which is what wins on capable models. A step count, never wall-clock,
@@ -1715,7 +1729,7 @@ export async function runAgenticTurn(
     typeof roleDef.converge_after === "number" && roleDef.converge_after > 0
       ? roleDef.converge_after
       : readOnlyRole && Array.isArray(roleDef.tools)
-        ? READ_ONLY_CONVERGE_AFTER
+        ? loop.read_only_converge_after
         : 0;
   const convergeAt =
     declaredConverge > 0
@@ -1739,20 +1753,20 @@ export async function runAgenticTurn(
   let leg = 1;
   // Calls since the last write/edit, and the count at which the model was last
   // nudged. Both reset on a successful write, so a fresh idle streak is nudged
-  // from zero again and a long flail is re-nudged every NUDGE_AFTER_IDLE calls
+  // from zero again and a long flail is re-nudged every nudge_after_idle calls
   // rather than reminded once and then left alone.
   let callsSinceWrite = 0;
   let callsAtLastNudge = 0;
   // Step at which convergence was last urged, so the push re-fires as the
   // remaining budget shrinks rather than being said once and forgotten. Seeded
-  // so the first push lands exactly at convergeAt, then every CONVERGE_REFIRE.
-  let stepsAtLastConverge = convergeAt - CONVERGE_REFIRE;
+  // so the first push lands exactly at convergeAt, then every converge_refire.
+  let stepsAtLastConverge = convergeAt - loop.converge_refire;
   // Signatures of the last few calls, to notice a model going in circles.
   const recentCalls: string[] = [];
   let usedModel = route.model;
   // One re-prompt for an empty completion, per nudge cycle — not one per turn.
   //
-  // The nudge re-fires every NUDGE_AFTER_IDLE calls for as long as the turn
+  // The nudge re-fires every nudge_after_idle calls for as long as the turn
   // runs, but this latch was a single boolean for the whole turn, so the SECOND
   // empty completion always landed on a spent latch and ended the run. Measured:
   // one nudge is survivable (10/14 trials pass), two is not (1/11); six trials
@@ -1938,7 +1952,7 @@ export async function runAgenticTurn(
       // stopped producing -- and each re-ask is worded differently, because
       // repeating the identical prompt is what makes an identical blank likely.
       consecutiveEmpty++;
-      if (consecutiveEmpty <= MAX_CONSECUTIVE_EMPTY && steps < maxTotal) {
+      if (consecutiveEmpty <= loop.max_consecutive_empty && steps < maxTotal) {
         const asks = [
           `Your last reply contained no tool calls and no text. Answer now: ` +
             `say what you did, or say plainly what blocked you and why.`,
@@ -1952,7 +1966,7 @@ export async function runAgenticTurn(
           paint(
             deps.ui,
             "yellow",
-            `  [loop] empty completion ${consecutiveEmpty}/${MAX_CONSECUTIVE_EMPTY} — ` +
+            `  [loop] empty completion ${consecutiveEmpty}/${loop.max_consecutive_empty} — ` +
               `asking again (${maxTotal - steps} steps left)`
           )
         );
@@ -2203,9 +2217,9 @@ export async function runAgenticTurn(
     // Stalled? Repeating one call verbatim is not progress, and on autopilot
     // it would burn the whole budget in a circle.
     const repeatingVerbatim =
-      recentCalls.length >= STALL_REPEATS &&
+      recentCalls.length >= loop.stall_repeats &&
       recentCalls
-        .slice(-STALL_REPEATS)
+        .slice(-loop.stall_repeats)
         .every((sig) => sig === callSignature(result.toolCalls[0]));
 
     // Verbatim repetition is the easy case and the rarer one. The shape a real
@@ -2237,7 +2251,7 @@ export async function runAgenticTurn(
 
     if (stalled || (checkpoint && wall)) {
       const note = stalled
-        ? `Stopped: the same tool call repeated ${STALL_REPEATS} times without ` +
+        ? `Stopped: the same tool call repeated ${loop.stall_repeats} times without ` +
           `progress, after ${steps} call(s).`
         : `Reached the ceiling for role "${role}" — ${steps} tool call(s), ` +
           `max_steps_total ${maxTotal}. Raise it in .gnomon/roles.toml if this ` +
@@ -2282,7 +2296,7 @@ export async function runAgenticTurn(
         usage: turnUsage,
         stop_reason: stalled ? "stall" : "step_wall",
         stop_detail: stalled
-          ? { steps, repeats: STALL_REPEATS }
+          ? { steps, repeats: loop.stall_repeats }
           : { steps, max_steps_total: maxTotal },
         counters,
       };
@@ -2390,9 +2404,11 @@ export async function runAgenticTurn(
       callsSinceWrite++;
       recentCalls.push(callSignature(call));
       // Keep enough history for the WIDER of the two stall tests. This was
-      // STALL_REPEATS * 2 = 6, so an 8-call alternation window could never be
-      // filled and the check it guards never fired once.
-      if (recentCalls.length > Math.max(STALL_REPEATS * 2, STALL_WINDOW)) {
+      // stall_repeats * 2 = 6, so an 8-call alternation window could never be
+      // filled and the check it guards never fired once. Still computed from the
+      // wider of the two now that stall_repeats is declarable: a surface setting
+      // it to 20 must not silently disable the alternation test instead.
+      if (recentCalls.length > Math.max(loop.stall_repeats * 2, STALL_WINDOW)) {
         recentCalls.shift();
       }
       const gated = needsApproval(call.name, gate) && offered.has(call.name);
@@ -2425,7 +2441,7 @@ export async function runAgenticTurn(
         //
         // So say it where it is unmissable, once, while the run is happening.
         const t = counters.per_tool?.[call.name];
-        if (t && t.calls === t.refusals && t.refusals === ALL_REFUSED_NOTICE) {
+        if (t && t.calls === t.refusals && t.refusals === loop.all_refused_notice) {
           deps.say(
             paint(
               deps.ui,
@@ -2508,11 +2524,11 @@ export async function runAgenticTurn(
     // Flailing? Many calls, none of them a write. Unlike the stall check this
     // does not require the calls to be identical — the measured failure mode is
     // a model trying many *different* things and changing nothing. Re-nudge
-    // every NUDGE_AFTER_IDLE calls without a write (a single reminder is easy to
+    // every nudge_after_idle calls without a write (a single reminder is easy to
     // ignore, and the overnight sweep showed weak models grinding 7–9 tasks to
     // the timeout wall), and let the turn continue: a genuine long solve keeps
     // working, a flailer gets repeated reason to conclude.
-    if (callsSinceWrite - callsAtLastNudge >= NUDGE_AFTER_IDLE) {
+    if (callsSinceWrite - callsAtLastNudge >= loop.nudge_after_idle) {
       counters.nudges++;
       // A fresh nudge is a fresh chance to answer: clear the blank streak so a
       // later blank is not judged against blanks from 12 calls ago.
@@ -2545,7 +2561,7 @@ export async function runAgenticTurn(
     // shrinks — the pressure rises toward the wall. It targets the measured
     // timeout gap: converge before the external clock kills the process with
     // nothing submitted. Only active where the surface opts in.
-    if (steps >= convergeAt && steps - stepsAtLastConverge >= CONVERGE_REFIRE) {
+    if (steps >= convergeAt && steps - stepsAtLastConverge >= loop.converge_refire) {
       stepsAtLastConverge = steps;
       const left = Math.max(0, maxTotal - steps);
       deps.progress.stop();
@@ -3966,7 +3982,7 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         const budget =
           typeof roleDef.max_steps === "number"
             ? `  [max_steps ${roleDef.max_steps}]`
-            : `  [max_steps ${DEFAULT_MAX_STEPS} — default, not set]`;
+            : `  [max_steps ${resolveLoop(state.config).max_steps} — default, not set]`;
         console.log(`  ${r}: ${model}${ep}${desc ? ` — ${desc}` : ""}${scope}${budget}${here}`);
       }
       console.log(`\nSwitch with: /role <name>`);

@@ -1,0 +1,288 @@
+# Release — build the native binaries for a tag and attach them to a GitHub
+# release.
+#
+# READ THIS BEFORE TRUSTING IT: this workflow has never run on GitHub Actions.
+# It was written as release *preparation*; no tag has been pushed. Being exact
+# about which parts are measured and which are argued, because the difference is
+# the whole point of the provenance field this workflow exists to feed:
+#
+#   VERIFIED, by running the step's own script locally with the `${{ }}`
+#   expressions substituted by hand:
+#     - The package step produces the archive it claims: an 8-entry tarball
+#       holding gnomon-surface, gnomon-enums, gnomon-edit, gnomon-exec, LICENSE,
+#       GNOMON_BUILD and README-BINARIES.txt, plus a .sha256 beside it. The
+#       nested heredoc survives YAML block-scalar dedent (the `EOF` lands in
+#       column 0) and `\$PWD` reaches the file unexpanded.
+#     - The version check passes for a tag matching the manifests and fails with
+#       the intended ::error:: for one that does not (tested v0.1.0 and v0.2.0
+#       against Cargo.toml 0.1.0 / package.json 0.1.0).
+#     - The stamp is the shape gnomon-core reads. Run for real:
+#       `GNOMON_BUILD=v0.1.0-abc1234` makes `harnessBuild()` return
+#       `gnomon/0.1.0+v0.1.0-abc1234`, instead of the git-derived fallback.
+#
+#   ARGUED FROM THE REPOSITORY, not executed: the four binaries above are the
+#   four `[[bin]]`/`main.rs` targets under `crates/`; the toolchain step accounts
+#   for the 1.82 pin in `rust-toolchain.toml`.
+#
+#   NOT VERIFIED AT ALL: that any of the three targets compiles, that the
+#   aarch64 cross-linker package is enough for this dependency set, that the
+#   runner images have every tool used here, and that the release job's token
+#   and `gh` invocation work. Treat the first tag as the test, and expect to fix
+#   something.
+#
+# Two deliberate safety properties, because an accidental release is not
+# undoable in the way an accidental commit is:
+#
+#   1. `on: push: tags:` and nothing else. No `workflow_dispatch`, no branch
+#      push, no `pull_request`. This file cannot fire except by someone pushing
+#      a tag on purpose. CI (ci.yml) is what runs on branches and PRs.
+#   2. The release is created as a **draft**. A tag push builds and uploads;
+#      a human presses Publish. Remove `--draft` from the `gh release create`
+#      call below to change that, and understand that you are removing the last
+#      step where a mistaken tag can still be caught.
+
+name: Release
+
+on:
+  push:
+    tags:
+      # Tags only. Matching `v*` and not `*` so that a non-release tag
+      # (`baseline-2026-08-30`, a benchmark marker) does not build a release.
+      - "v*"
+
+# Read-only by default; only the job that creates the release is given write,
+# and it is the only job that ever holds a token that can publish anything.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  verify:
+    name: Verify the tag matches the declared version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      stamp: ${{ steps.v.outputs.stamp }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The failure this job prevents: a tag whose number disagrees with the
+      # version in the tree. `harnessBuild()` in gnomon-core composes its string
+      # from package.json's version, NOT from the tag — so tagging v0.2.0 with
+      # 0.1.0 still in the manifests produces records that say
+      # `gnomon/0.1.0+v0.2.0-<sha>`, and provenance that contradicts itself is
+      # worse than provenance that is missing. Fail here, before anything is
+      # built or uploaded.
+      - name: Check versions agree
+        id: v
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          cargo_version=$(python3 -c "import tomllib;print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")
+          npm_version=$(node -p "require('./package.json').version")
+
+          echo "tag=$tag  cargo=$cargo_version  npm=$npm_version"
+          if [ "$version" != "$cargo_version" ] || [ "$version" != "$npm_version" ]; then
+            echo "::error::tag $tag implies version $version, but Cargo.toml says $cargo_version and package.json says $npm_version. Bump the manifests and re-tag."
+            exit 1
+          fi
+
+          # The provenance identifier. gnomon-core reads GNOMON_BUILD from the
+          # environment and renders `gnomon/<package version>+<this value>`, so
+          # this becomes e.g. `gnomon/0.1.0+v0.1.0-abf40c0`: the release a user
+          # installed AND the commit it was cut from, which the git fallback
+          # cannot give you once the repository is gone.
+          echo "version=$version"                          >> "$GITHUB_OUTPUT"
+          echo "stamp=${tag}-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build ${{ matrix.name }}
+    needs: [verify]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide whether the others build.
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: linux-arm64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            # Cross-compiled from an x64 runner rather than built on an ARM
+            # runner: `ubuntu-*-arm` labels exist, but their availability
+            # depends on the repository's plan and runner settings, and a
+            # release that only builds where a label happens to be enabled is a
+            # release that breaks silently later. A cross linker is a package.
+            apt: gcc-aarch64-linux-gnu
+            linker: aarch64-linux-gnu-gcc
+          - name: darwin-arm64
+            # macos-latest is Apple Silicon, so this is a native build, not a
+            # cross one. If GitHub ever repoints that label at an x64 image
+            # this still builds correctly — the target is named explicitly
+            # rather than inherited from the host.
+            os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Not the action's `targets:` input, deliberately. `rust-toolchain.toml`
+      # pins this repository to 1.82, and it exists because CONTRIBUTING said
+      # "Rust 1.82+" while CI installed unpinned `stable` — so cargo run inside
+      # the checkout uses 1.82 no matter what the action installed. Adding the
+      # target through the action would install it for `stable`, a toolchain
+      # this build never invokes, and cargo would stop with "the target may not
+      # be installed" while the log above it showed the target being added.
+      # Run inside the checkout, `rustup target add` resolves the same toolchain
+      # cargo will.
+      - name: Add ${{ matrix.target }} to the pinned toolchain
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install cross linker
+        if: matrix.apt != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.apt }}
+
+      # --workspace --bins, not a hand-written list. ci.yml carries the same
+      # comment for the same reason: a step that named two of the four binaries
+      # while claiming to build "the Rust binaries" left gnomon-natives
+      # spawning a gnomon-edit that was not there. The four are gnomon-surface,
+      # gnomon-enums (both from crates/gnomon-surface), gnomon-edit and
+      # gnomon-exec.
+      - name: Build release binaries
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
+          # Stamped here as well as written into the archive: any harness record
+          # this job produces is then identified by the release rather than
+          # falling back to a bare commit sha.
+          GNOMON_BUILD: ${{ needs.verify.outputs.stamp }}
+        run: cargo build --release --workspace --bins --target ${{ matrix.target }}
+
+      # A flat directory of binaries is the layout gnomon-natives'
+      # findBinary() already understands: it searches target/debug and
+      # target/release, or any directory given as GNOMON_BIN_OVERRIDE. So an
+      # unpacked archive is usable by exporting one variable, with no install
+      # step to get wrong.
+      - name: Package
+        id: pkg
+        env:
+          GNOMON_BUILD: ${{ needs.verify.outputs.stamp }}
+        run: |
+          set -euo pipefail
+          dir="gnomon-${{ needs.verify.outputs.version }}-${{ matrix.name }}"
+          mkdir -p "dist/$dir"
+          for bin in gnomon-surface gnomon-enums gnomon-edit gnomon-exec; do
+            cp "target/${{ matrix.target }}/release/$bin" "dist/$dir/$bin"
+          done
+          cp LICENSE "dist/$dir/LICENSE"
+
+          # The provenance value, shipped as a file because it cannot be
+          # compiled in. `harnessBuild()` resolves GNOMON_BUILD from the
+          # *environment at runtime*; these are Rust binaries and the field is
+          # read by TypeScript, so nothing in this archive can set it by being
+          # present. Writing it here at least means the identifier travels with
+          # the artifact instead of living only in a release page.
+          printf '%s\n' "$GNOMON_BUILD" > "dist/$dir/GNOMON_BUILD"
+          cat > "dist/$dir/README-BINARIES.txt" <<EOF
+          gnomon native binaries — $GNOMON_BUILD (${{ matrix.name }})
+
+          Point the harness at this directory:
+
+              export GNOMON_BIN_OVERRIDE="\$PWD/$dir"
+
+          And stamp provenance, so records name this release instead of falling
+          back to the git commit of whatever tree they run in:
+
+              export GNOMON_BUILD="\$(cat "\$PWD/$dir/GNOMON_BUILD")"
+
+          Without that second export the harness reports gnomon/<version>+<sha>
+          from its own checkout, or gnomon/<version>+unknown where there is no
+          repository to ask.
+          EOF
+
+          tar -czf "dist/$dir.tar.gz" -C dist "$dir"
+          # Checksums beside the archive: shasum is present on both runner
+          # images, sha256sum is not present on macOS.
+          ( cd dist && shasum -a 256 "$dir.tar.gz" > "$dir.tar.gz.sha256" )
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.dir }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  release:
+    name: Draft the GitHub release
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    # The only job with a token that can write anything, and it holds it for
+    # exactly one step.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download every platform's archive
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # No third-party release action. The token that can publish a release is
+      # the most privileged thing in this repository's CI, and `gh` is already
+      # on the runner — handing that token to an action outside this workspace
+      # would sit badly in a project whose security policy advertises zero
+      # third-party runtime dependencies.
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          STAMP: ${{ needs.verify.outputs.stamp }}
+        run: |
+          set -euo pipefail
+          ls -l dist
+          cat dist/*.sha256 > dist/SHA256SUMS
+
+          notes=$(cat <<EOF
+          Native binaries for gnomon $VERSION.
+
+          **Build identifier:** \`$STAMP\` — records produced with
+          \`GNOMON_BUILD=$STAMP\` exported resolve their provenance field to
+          \`gnomon/$VERSION+$STAMP\`. See \`README-BINARIES.txt\` in each
+          archive, and \`docs/CONTRACTS.md\` §3b for what that field is for.
+
+          Each archive contains gnomon-surface, gnomon-enums, gnomon-edit and
+          gnomon-exec. Verify with \`SHA256SUMS\`.
+
+          Changes: see [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md).
+          EOF
+          )
+
+          # --draft: the tag builds and uploads, a human publishes. --verify-tag
+          # refuses to create a release for a tag that is not on the remote.
+          gh release create "${{ github.ref_name }}" \
+            --draft \
+            --verify-tag \
+            --title "gnomon ${{ github.ref_name }}" \
+            --notes "$notes" \
+            dist/*.tar.gz dist/*.sha256 dist/SHA256SUMS

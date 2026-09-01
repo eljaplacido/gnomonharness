@@ -1,0 +1,43 @@
+# Why this file exists, and what it is defending.
+#
+# .gitattributes already forces `* text=auto eol=lf`, and the comment there says
+# why: the surface hash is SHA-256 over raw file bytes, so a CRLF working tree
+# changes every file hash, the surface hash, and the conformance golden with it.
+# But .gitattributes normalizes on the way into git. It does not stop an editor
+# writing CRLF into the working tree, and a locally-computed surface hash reads
+# the working tree. The failure that produces is a conformance mismatch that
+# looks like "the golden is wrong" rather than "my editor uses CRLF".
+# This file makes the editor agree with .gitattributes before git is involved.
+#
+# Verified: `grep -rlP '^\t'` across *.ts, *.rs, *.toml and *.yml (excluding
+# node_modules/ and target/) matches nothing, and the widths below are the
+# widths already in the tree — TypeScript 2, Rust 4. This file describes the
+# repository; it does not reformat it.
+#
+# NOT verified: nothing enforces these settings. `cargo fmt` covers Rust;
+# `.gnomon/ci.sh` does not check TypeScript formatting or line endings, so a
+# contributor whose editor ignores .editorconfig is caught by git's
+# normalization, not by the gate.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.rs]
+indent_size = 4
+
+[*.md]
+# Two trailing spaces are a hard line break in Markdown. Trimming them silently
+# reflows a paragraph, so this is the one place trailing whitespace is content.
+trim_trailing_whitespace = false
+
+[*.{png,jpg,jpeg,gif,ico,pdf,woff,woff2}]
+# Mirrors the `-text` entries in .gitattributes: never touch binaries.
+insert_final_newline = false
+trim_trailing_whitespace = false

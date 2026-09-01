@@ -170,3 +170,163 @@ can hold an `apparatus_failure` step and still exit `result`.
 **Fixture**: `conformance/session_golden.json` — a minimal valid session.
 CI asserts every session has: manifest, steps array, each step has
 `native_code`, `bucket`, `duration_ms`.
+
+## 5. TOML — the subset `.gnomon/*.toml` may use
+
+gnomon parses its surface with a hand-rolled parser in
+`packages/gnomon-core/src/config.ts` (`parseToml`, ~200 lines) rather than a
+library, because the harness ships with **zero runtime dependencies**. That is
+deliberate and it is kept. The consequence is that gnomon reads a *subset* of
+TOML, and this section is that subset — written down because until it was, a
+surface written in valid TOML the parser did not know was a hard startup
+failure with nothing to check against first.
+
+**Two things this contract is not.** It does not describe TOML; it describes
+what gnomon accepts. And unlike the manifest, it is **guaranteed by one
+implementation only**: `gnomon-surface` hashes the surface bytes and never
+parses them, so the two-implementation check that protects `surface_hash` does
+not extend to what the file *means*. One parser decides that. These fixtures
+are the only thing standing behind it.
+
+### 5.1 Accepted
+
+| Construct | Example |
+|---|---|
+| Top-level key/value | `schema_version = 1` |
+| Table | `[defaults]` |
+| Nested table | `[tables.nested.deep]` |
+| Whitespace in a header | `[ spaced_header ]` |
+| Dash in a table **name** | `[roles.my-role]` |
+| Array of tables | `[[tools]]`, `[[chain.steps]]` |
+| Bare key | `[a-zA-Z_][a-zA-Z0-9_]*` — letters, digits, `_` |
+| Basic string, with escapes | `"a\tb"`, `"say \"hi\""`, `"é"`, `"\U0001F600"` |
+| Literal string | `'^(a\|b),\s'` |
+| Boolean | `true`, `false` — lower case only |
+| Integer, decimal | `42`, `-7` |
+| Float, decimal | `0.125`, `-2.5` |
+| Array | `["a", "b"]`, `[1, 2, 3]`, `[true, false]`, `[]` |
+| Mixed array | `[1, "a", true]` |
+| Trailing comma | `["a", "b",]` |
+| Multi-line array | `[` … `]`, with comments and blank lines inside |
+| Trailing `#` comment on a **value** | `approval = "on_write"  # never \| on_write` |
+| `#` inside either kind of string | `"a # b"`, `'a#b'` |
+| CRLF line endings | parses to the same tree as LF |
+
+### 5.2 Unsupported — refused, with a file and a line
+
+These raise `.gnomon/<file> line <n>: cannot parse "<text>". Expected a
+[table] header, a [[array]] header, or key = value.` and gnomon does not start.
+
+| Construct | Example | Valid TOML? |
+|---|---|---|
+| Inline comment on a **header** | `[tools] # note` | **yes** |
+| Dotted key in key position | `local.url = "..."` | **yes** |
+| Dash in a **key** | `max-steps = 4` | **yes** |
+| Quoted key | `"max steps" = 4` | **yes** |
+| Multi-line basic string | `"""` … `"""` | **yes** |
+| Multi-line literal string | `'''` … `'''` | **yes** |
+| `]` inside a string in a **multi-line** array | `[`⏎`"a]b",`⏎`]` | **yes** |
+| Unclosed header | `[roles.verifier` | no |
+| Key with no value | `model =` | no |
+| Empty header | `[]` | no |
+| A line that is neither | `this is not toml` | no |
+
+**Seven of those eleven are valid TOML 1.0** — verified against Python 3.12
+`tomllib`, offline, 2026-09-01. That is the price of the zero-dependency
+parser, and it is published rather than left to be discovered at startup. Note
+also the inconsistency in rows 1 and 3: a dash is fine in a table *name* and
+fatal in a *key*, because the header pattern does not validate the name at all.
+
+Three of these — the two multi-line strings and the bracketed array — name a
+line **past** the construct that caused the failure, because the parser is
+line-based and reports where it stopped rather than where the mistake is. Each
+is one line past the offending character, which for the array is two lines past
+the `bash_deny = [` a reader would go looking at.
+
+### 5.3 Unsupported — accepted and read as something else. **Silent.**
+
+The dangerous class. Every row below is valid TOML 1.0 that gnomon accepts
+without error and reads as a **different value**. There is no warning. A
+surface using any of them starts, and then does not do what its author reads
+off the file.
+
+| Written | TOML means | gnomon reads |
+|---|---|---|
+| `t = { a = 1 }` | a table | the string `"{ a = 1 }"` |
+| `d = 2026-08-30` | a date | the string `"2026-08-30"` |
+| `d = 2026-08-30T12:00:00Z` | a date-time | a string |
+| `n = 1_000` | the integer `1000` | the string `"1_000"` |
+| `n = 0x1f` | the integer `31` | the string `"0x1f"` |
+| `n = 1e6` | the float `1000000.0` | the string `"1e6"` |
+| `n = +5` | the integer `5` | the string `"+5"` |
+| `n = [["a", "b"], ["c"]]` | two nested arrays | three mangled items |
+| `["quoted.header"]` | one table named `quoted.header` | two tables, `"quoted` → `header"` |
+
+One branch causes almost all of it: `parseValue` returns the raw text as a
+**string** for anything that is not a quoted string, an array, `true`/`false`,
+or a plain decimal int/float. So a token budget written `1_000` is text, and
+every numeric comparison against it is comparing against text.
+
+Two more that no fixture file can hold, for the reason given:
+
+- **An unterminated array becomes a string.** `bash_deny = [` with no closing
+  bracket parses as the string `[ "rm -rf",` — a deny list that reads as
+  populated and matches nothing. The line-joiner consumes to end of file, so
+  this can only be the last line of a file.
+- **A table and an array-of-tables sharing a name lose keys.** `[a]` then
+  `[[a]]` discards the first outright; `[[a]]` then `[a]` writes the second's
+  keys onto the *array object* as non-index properties, where JSON, `for..of`
+  and `.map` all drop them. Neither ordering errors. TOML calls both a
+  duplicate-key error.
+
+### 5.4 Accepted although TOML rejects it
+
+gnomon is also *looser* than the spec in places. This matters because a surface
+can then be written that gnomon loads and **no other TOML tool will open** — no
+editor, no linter, no later gnomon that grows a real parser.
+
+| Written | gnomon reads | TOML |
+|---|---|---|
+| `s = "a\qb"` (unknown escape) | `a\qb`, verbatim | error |
+| `b = True` | the string `"True"` | error |
+| `n = 007` | the integer `7` | error |
+| `k = bare words` | the string `"bare words"` | error |
+| `k = "abc` (unterminated) | the string `"abc` | error |
+| `k = "value" extra` | the string `"value" extra` | error |
+| `k = #` | the empty string | error |
+| a duplicate key | last one wins | error |
+| a reopened `[table]` | merges | error |
+
+Only the first is a considered choice — a surface that refuses to load over one
+unrecognised escape helps nobody. `True` and `"value" extra` are the two that
+bite: `True` is a **string**, which is truthy in JavaScript, so a boolean
+setting written that way is **on** and reads as though someone had checked it.
+
+### 5.5 Fixtures
+
+| Fixture | Pins |
+|---|---|
+| `conformance/toml_accepted.toml` + `toml_accepted_golden.json` | §5.1 — the golden is the full parse tree |
+| `conformance/toml_rejected/` (11 files) + `toml_rejected.json` | §5.2 — the index pins the exact line each case reports |
+| `conformance/toml_misread.toml` + `toml_misread_golden.json` | §5.3 — golden holds **both** readings, `gnomon` and `toml`, side by side |
+| `conformance/toml_looser.toml` + `toml_looser_golden.json` | §5.4 — golden holds gnomon's reading and tomllib's refusal message |
+
+**What CI checks.** `packages/gnomon-core/src/config.test.ts` runs in the
+`ts-tests` job and in `.gnomon/ci.sh`. It parses the accepted fixture and
+compares it to the golden; re-parses it with CRLF line endings and requires the
+same tree; asserts every rejected fixture throws naming the exact line from the
+index, and — through `loadConfig`, since the naming wrapper is module-private —
+that the message is prefixed with `.gnomon/roles.toml` and
+`.gnomon/profiles/local.toml`; and compares the misread and looser fixtures to
+their goldens. It also fails if a file exists in `toml_rejected/` with no case
+in the index, so a fixture cannot be added that asserts nothing.
+
+**What CI does not check.** The cross-check against a real TOML parser. The
+claim that `toml_accepted.toml` is valid TOML 1.0 and parses to the same tree,
+that seven rejected cases are valid TOML, and the `toml` halves of the two
+divergence goldens were all produced by Python 3.12 `tomllib`, once, offline,
+on 2026-09-01. CI has no Python and the harness has no TOML library, both on
+purpose, so **nothing re-runs it**: an edit to any of these fixtures has to be
+re-checked by hand. Said plainly rather than left as an implication, because a
+golden that only pins the parser against itself would prove nothing about the
+subset being TOML.

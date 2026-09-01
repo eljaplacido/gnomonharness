@@ -1,0 +1,85 @@
+{
+  "note": "Every file in conformance/toml_rejected/ makes gnomon's TOML parser throw, and this index pins WHERE. 'line' is the 1-based line the error names and 'offending' is the text it quotes; the full message is `line <line>: cannot parse <JSON-quoted offending>. Expected a [table] header, a [[array]] header, or key = value.`, and loadConfig prefixes it with `.gnomon/<filename> `. Asserted by packages/gnomon-core/src/config.test.ts, which also fails if a fixture exists with no case here.",
+  "why_the_line_number_matters": "The throw exists because these lines used to be silently skipped: `[roles.verifier` with the bracket missing dropped the header and hoisted its keys to the top level, so the role vanished while its bash_allow became a root key read by nothing. Naming the file and line is the whole remedy, so a wrong line number is a real regression -- hence pinning it. Note cases 04, 05 and 11, where the named line is one or two PAST the construct that caused the failure, because the parser is line-based and reports where it stopped.",
+  "valid_toml_count": 7,
+  "case_count": 11,
+  "cases": [
+    {
+      "file": "01_unclosed_table_header.toml",
+      "construct": "a [table] header missing its closing bracket",
+      "valid_toml": false,
+      "line": 11,
+      "offending": "[roles.verifier"
+    },
+    {
+      "file": "02_dotted_key.toml",
+      "construct": "a dotted key in key position (a.b = ...)",
+      "valid_toml": true,
+      "line": 7,
+      "offending": "local.url = \"http://127.0.0.1:11434\""
+    },
+    {
+      "file": "03_comment_on_table_header.toml",
+      "construct": "an inline # comment on a [table] or [[array]] header",
+      "valid_toml": true,
+      "line": 10,
+      "offending": "[tools] # the tools this role may call"
+    },
+    {
+      "file": "04_multiline_basic_string.toml",
+      "construct": "a multi-line basic string (\"\"\")",
+      "valid_toml": true,
+      "line": 9,
+      "offending": "a long system prompt"
+    },
+    {
+      "file": "05_multiline_literal_string.toml",
+      "construct": "a multi-line literal string (''')",
+      "valid_toml": true,
+      "line": 5,
+      "offending": "a long system prompt"
+    },
+    {
+      "file": "06_dashed_key.toml",
+      "construct": "a dash in a key (accepted in a table NAME, rejected in a key)",
+      "valid_toml": true,
+      "line": 8,
+      "offending": "max-steps = 4"
+    },
+    {
+      "file": "07_quoted_key.toml",
+      "construct": "a quoted key (\"a b\" = ...)",
+      "valid_toml": true,
+      "line": 5,
+      "offending": "\"max steps\" = 4"
+    },
+    {
+      "file": "08_empty_value.toml",
+      "construct": "a key with no value",
+      "valid_toml": false,
+      "line": 7,
+      "offending": "model ="
+    },
+    {
+      "file": "09_prose.toml",
+      "construct": "a line that is neither a header nor key = value",
+      "valid_toml": false,
+      "line": 6,
+      "offending": "the verifier should be strict about tests"
+    },
+    {
+      "file": "10_empty_table_header.toml",
+      "construct": "an empty table header ([])",
+      "valid_toml": false,
+      "line": 3,
+      "offending": "[]"
+    },
+    {
+      "file": "11_bracket_in_multiline_array.toml",
+      "construct": "a ] inside a string inside a MULTI-LINE array (fine on one line)",
+      "valid_toml": true,
+      "line": 18,
+      "offending": "\"c\","
+    }
+  ]
+}

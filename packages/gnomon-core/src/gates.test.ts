@@ -180,3 +180,52 @@ describe("gate: a record names the harness that produced it", () => {
     expect(clean || dirty || unknown, `unexpected build string: ${b}`).toBe(true);
   });
 });
+
+describe("gate: the turn limits are surface-declared and stay in one place", () => {
+  it("defaults resolve to LOOP_DEFAULTS when no [turn] block is declared", async () => {
+    const { resolveLoop, LOOP_DEFAULTS, loadConfig } = await import("./config.js");
+    const dir = surface({ "config.toml": "[defaults]\n" });
+    expect(resolveLoop(loadConfig(dir))).toEqual(LOOP_DEFAULTS);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a declared [turn] block actually changes the resolved value", async () => {
+    // Without this the block could be inert and nothing would notice, which is
+    // the failure mode the whole finding is about.
+    const { resolveLoop, loadConfig } = await import("./config.js");
+    const dir = surface({ "config.toml": "[turn]\nmax_steps = 40\nstall_repeats = 9\n" });
+    const r = resolveLoop(loadConfig(dir));
+    expect(r.max_steps).toBe(40);
+    expect(r.stall_repeats).toBe(9);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('"turn" is a known block, so the auditor does not disown what the code reads', async () => {
+    // Deleting this entry passed all 718 tests when the block was added --
+    // exactly the [chain] regression the KNOWN_BLOCKS comment cites as the
+    // reason the line exists. It can silently revert; now it cannot.
+    const { auditSurface, loadConfig } = await import("./config.js");
+    const dir = surface({ "config.toml": "[turn]\nmax_steps = 12\n" });
+    const disowned = auditSurface(loadConfig(dir)).filter((p) =>
+      /\[turn\] is not a block|not a block this harness reads/.test(p.problem)
+    );
+    expect(disowned, "the auditor disowns a block the code reads").toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("[turn] does not collide with the [loop] header used by .gnomon/loops/", async () => {
+    // Two schemas behind one name in two files is how an operator writes
+    // [loop] name = "nightly" into config.toml and gets silence.
+    const src = readFileSync(join(__dirname, "config.ts"), "utf8");
+    const start = src.indexOf("const KNOWN_BLOCKS");
+    const region = src.slice(start, src.indexOf("];", start));
+    // Entries only. The comment above them names [loop] on purpose, to say why
+    // this block is NOT called that, so matching the raw text would match prose.
+    const entries = region
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("//"))
+      .flatMap((l) => [...l.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]));
+    expect(entries).toContain("turn");
+    expect(entries, "[loop] is the loops/ declaration header, not this").not.toContain("loop");
+  });
+});

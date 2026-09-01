@@ -1,0 +1,89 @@
+# Measured: nothing watched any of this repository's three dependency
+# ecosystems. The pinned GitHub Actions in .github/workflows/ci.yml, the crates
+# in Cargo.lock, and the dev toolchain in pnpm-lock.yaml were all updated only
+# when someone happened to notice — and the changelog records that CI itself sat
+# broken for a stretch because nothing was checking the workflow either.
+#
+# Weekly, not daily: one maintainer reviews these. A daily cadence on three
+# ecosystems produces more PRs than the review contract in CONTRIBUTING.md
+# promises to answer, and a queue nobody drains is worse than no queue.
+
+version: 2
+updates:
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      # One PR per week for all action bumps. These are almost always
+      # `actions/checkout@v4 -> v5`-shaped and reviewing them one at a time
+      # spends the review budget on the least interesting updates in the repo.
+      github-actions:
+        patterns: ["*"]
+
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      # Patch and minor together; a major lands on its own because a major on
+      # `sha2` or `serde` can change what `gnomon-surface` hashes or how a
+      # manifest serializes, and that is a conformance-fixture question, not a
+      # dependency bump.
+      cargo-minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      dev-dependencies:
+        patterns: ["*"]
+    # Why npm is here at all, given the runtime dependency set is empty.
+    #
+    # Verified by reading every package.json in the workspace: gnomon has ZERO
+    # third-party runtime dependencies. The only entries under `dependencies`
+    # anywhere are workspace links between gnomon's own packages —
+    # gnomon-cli -> {core, natives, tui}, gnomon-tui -> core. Every third-party
+    # package in the tree (tsx, typescript, vitest, @types/node,
+    # @vitest/coverage-v8) is a devDependency.
+    #
+    # That emptiness is deliberate and worth defending. A harness whose job is
+    # to decide what an agent may run should not itself pull a transitive tree
+    # into the process doing the running: every runtime dependency is code with
+    # the harness's own privileges, inside the boundary it is supposed to
+    # enforce, and it is one more supply-chain surface on a tool people point at
+    # their source repositories. It is also what makes `npm install gnomon`
+    # a small, auditable thing.
+    #
+    # So: Dependabot is enabled here to keep the DEV toolchain current, and for
+    # nothing else. If it ever opens a PR that adds or bumps something under
+    # `dependencies`, that is not a routine update — it is this property
+    # breaking, and the PR should be closed rather than merged.
+    #
+    # NOT verified: Dependabot's pnpm support is sensitive to the lockfile
+    # version. This workspace is pnpm@9 (`packageManager` in package.json) with
+    # a v9 `pnpm-lock.yaml`, which is supported at time of writing, but nothing
+    # here proves it parses. If it cannot, Dependabot reports the failure on the
+    # repository's Insights -> Dependency graph -> Dependabot tab and opens no
+    # PRs at all — check that tab after the first Monday rather than reading
+    # silence as health.

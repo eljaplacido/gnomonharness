@@ -1121,6 +1121,17 @@ const KNOWN_BLOCKS = new Set([
   // read it. A block the code honours and the auditor disowns is the same
   // silent mismatch in the other direction.
   "chain",
+  // Same lesson, applied on the way in this time: resolveLoop reads [loop], so
+  // this list moves in the same commit. Without it the auditor would print
+  // "[loop] is not a block this harness reads" over a block the harness had
+  // just read -- and the operator's most likely response is to delete the
+  // block, which is how a declared loop setting silently reverts to a default.
+  // NOT "loop": .gnomon/loops/*.toml already uses a [loop] header for a loop
+  // DECLARATION (name/every/guard/act). Two schemas behind one name in two
+  // files is how an operator writes [loop] name = "nightly" into config.toml
+  // and gets silence -- the inert-setting failure this project exists to make
+  // impossible. These numbers decide when a TURN stops.
+  "turn",
 ]);
 
 /** Keys whose VALUE is a closed set, and what silently happens to a typo. */
@@ -1161,6 +1172,7 @@ const BLOCK_OWNER: Record<string, string> = {
   ui: "config.toml",
   routing: "config.toml",
   resilience: "config.toml",
+  loop: "config.toml",
   audit: "config.toml",
   roles: "roles.toml",
   tools: "tools.toml",
@@ -2054,6 +2066,167 @@ export function resolveResilience(config: GnomonConfig): ResolvedResilience {
     // 900s harness wall. It is spent at most once per turn, because an
     // endpoint that is still unreachable afterwards ends the turn.
     transport_grace_ms: Math.floor(num(r?.transport_grace_ms, 60_000)),
+  };
+}
+
+/**
+ * Resolved [loop]: the numbers that decide when a turn stops, is nudged, or is
+ * pushed to converge.
+ *
+ * Every one of these was a TypeScript constant until now, which broke the one
+ * sentence the whole design exists to earn. From this repo's own
+ * docs/HARNESS-RESEARCH-RECONCILIATION.md: all 114 session records in the
+ * surviving benchmark arm carry `surface=be52a8a14db8` while the mechanism that
+ * ended a large share of those runs -- `NUDGE_AFTER_IDLE = 12` -- was invisible
+ * to that hash. "Today 12 can become 40 without moving a byte of the manifest."
+ * Two checkouts with identical surface hashes on two gnomon builds behaved
+ * differently and nothing in the record could say so.
+ */
+export interface ResolvedLoop {
+  /**
+   * Consecutive blank completions tolerated before the turn is called finished.
+   *
+   * Bounded so a model that has genuinely stopped producing cannot spin out the
+   * budget, but not so tight that one blank ends a turn with steps to spare.
+   * Measured: one nudge is survivable (10/14 trials pass), two is not (1/11).
+   */
+  max_consecutive_empty: number;
+  /** How many run notes are kept and replayed. Oldest fall off first. */
+  max_run_notes: number;
+  /**
+   * `converge_after` applied to a role that holds no tool which can change
+   * anything, when the surface declared none of its own.
+   *
+   * Measured on a real read-only audit of a 229-file repository: 65 tool calls,
+   * 54 of them reads, stop_reason step_wall, and no answer at all. A role whose
+   * only possible output is a report has no reason to explore to the wall.
+   * 0 disables it, which is the behaviour before the default existed.
+   */
+  read_only_converge_after: number;
+  /**
+   * Refusals of one tool, across all of its calls, before the loop says out
+   * loud that the policy may be wrong.
+   *
+   * Measured on a greenfield run: 8 bash calls, 8 refusals, a stall, nothing
+   * built -- an allow-list written `'...\\s'` in a TOML literal string compiles
+   * and matches no command, so auditSurface cannot catch it.
+   */
+  all_refused_notice: number;
+  /**
+   * Tool calls one leg may make when a role declares no `max_steps`.
+   *
+   * A role's own `max_steps` in roles.toml still wins; this is only the value
+   * used when it is silent. It was invisible before it was declarable: a
+   * session read roles.toml, concluded "plan has no step limit", and then hit
+   * this number.
+   */
+  max_steps: number;
+  /**
+   * Legs before the wall: `max_steps_total` defaults to `max_steps * legs`.
+   *
+   * `max_steps` was a wall, so a long task ended mid-sentence and an operator
+   * had to notice and re-prompt. In a session left running for hours nobody is
+   * watching to do that, so it is a checkpoint: the harness compacts and
+   * continues. 1 restores the old stop-at-the-first-checkpoint behaviour.
+   */
+  legs: number;
+  /** Consecutive identical tool calls that mean the model is going in circles. */
+  stall_repeats: number;
+  /**
+   * Calls without a write before the anti-flailing nudge fires, and re-fires.
+   *
+   * `stall_repeats` catches a model repeating one call verbatim; it does not
+   * catch the other measured failure -- many *different* diagnostic calls, none
+   * of them a write. On `git-multibranch` gnomon ran a hundred distinct
+   * read-only commands over twenty minutes and still failed; the fast harnesses
+   * gave up in four. Persistence wins hard-but-solvable tasks, so this is a
+   * nudge and not a wall.
+   */
+  nudge_after_idle: number;
+  /**
+   * Calls between convergence re-pushes once `converge_after` is reached.
+   *
+   * The first version re-fired every `max_steps` (~28), which in a short run --
+   * a weak model under an external clock reaches only ~45 calls before being
+   * killed -- fired once and then never again. A single "submit what you have"
+   * is easy to ignore.
+   */
+  converge_refire: number;
+}
+
+/**
+ * The compiled-in values, kept in ONE place.
+ *
+ * prompt_loop.ts re-exports these under their old constant names rather than
+ * repeating the numbers, because a default written twice is a setting with two
+ * values: `modelTimeoutMs` hardcoded 120_000 while resolveResilience defaulted
+ * to 300_000, and the same surface got whichever path happened to ask.
+ */
+export const LOOP_DEFAULTS: ResolvedLoop = {
+  max_consecutive_empty: 3,
+  max_run_notes: 40,
+  read_only_converge_after: 0.6,
+  all_refused_notice: 3,
+  max_steps: 12,
+  legs: 8,
+  stall_repeats: 3,
+  nudge_after_idle: 12,
+  converge_refire: 6,
+};
+
+/**
+ * Read [loop] from config.toml.
+ *
+ * Defaults are exactly the constants this replaces, so no existing surface
+ * changes behaviour and no existing hash starts meaning something new. What
+ * changes is that a surface CAN now say -- and when it says, the hash moves.
+ *
+ * NOT VERIFIED: no run has been measured before and after this. It is a
+ * correctness change to what the surface hash covers, not a tuning change, and
+ * it is not evidence that any of these numbers is the right one.
+ *
+ * Known limit, published rather than papered over: three loop behaviours are
+ * still compiled in and still outside the hash -- `STALL_WINDOW` (8) and
+ * `STALL_DISTINCT` (2), which govern the A-B-A-B alternation test, and the TEXT
+ * of the nudge and convergence messages, which the reconciliation doc names
+ * alongside the numbers. So "[loop] declares the loop" is true of these nine and
+ * of nothing else yet.
+ */
+export function resolveLoop(config: GnomonConfig): ResolvedLoop {
+  const l = (config.config as { turn?: Record<string, unknown> } | undefined)?.turn;
+  const num = (v: unknown, d: number) =>
+    typeof v === "number" && isFinite(v) && v >= 0 ? v : d;
+  const d = LOOP_DEFAULTS;
+  return {
+    // 0 is legal and means "one blank ends the turn": never re-ask.
+    max_consecutive_empty: Math.floor(num(l?.max_consecutive_empty, d.max_consecutive_empty)),
+    // Floored at 1, not 0. `pushNote` keeps the tail with `slice(-limit)`, and
+    // `[1,2,3].slice(-0)` returns the WHOLE array -- checked in node, not in a
+    // test -- so a bound of zero would silently mean no bound at all. A setting
+    // that reads as "keep none" and does the opposite is the failure this file
+    // exists to prevent.
+    max_run_notes: Math.max(1, Math.floor(num(l?.max_run_notes, d.max_run_notes))),
+    // A fraction of the step budget, so clamped to it. 0 means never.
+    read_only_converge_after: Math.min(
+      1,
+      num(l?.read_only_converge_after, d.read_only_converge_after)
+    ),
+    all_refused_notice: Math.floor(num(l?.all_refused_notice, d.all_refused_notice)),
+    // Floored at 1 because 0 makes max_steps_total 0, which is the wall on the
+    // first call: the turn ends before any tool runs. A role that really wants
+    // that already has max_steps_total = 0 in roles.toml, where it is one role's
+    // decision rather than every role's.
+    max_steps: Math.max(1, Math.floor(num(l?.max_steps, d.max_steps))),
+    legs: Math.max(1, Math.floor(num(l?.legs, d.legs))),
+    // Floored at 1 for the same class of reason as max_run_notes: the stall test
+    // is `recentCalls.slice(-stall_repeats).every(...)`, and at 0 that is
+    // `[].every(...)`, which is `true`. Zero would declare a stall on the first
+    // tool call of every turn.
+    stall_repeats: Math.max(1, Math.floor(num(l?.stall_repeats, d.stall_repeats))),
+    // Both are "calls since the last one", so 0 would fire on every single call
+    // and turn a nudge into a wall of system messages.
+    nudge_after_idle: Math.max(1, Math.floor(num(l?.nudge_after_idle, d.nudge_after_idle))),
+    converge_refire: Math.max(1, Math.floor(num(l?.converge_refire, d.converge_refire))),
   };
 }
 

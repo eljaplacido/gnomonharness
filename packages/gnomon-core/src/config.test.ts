@@ -27,7 +27,7 @@ import {
   recomputeManifest,
 } from "./index.js";
 import { join, resolve } from "node:path";
-import { mkdirSync, rmSync, mkdtempSync, writeFileSync, renameSync } from "node:fs";
+import { mkdirSync, rmSync, mkdtempSync, writeFileSync, renameSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 // ---------------------------------------------------------------------------
@@ -899,5 +899,276 @@ describe("a proposal is staging, an acceptance is a surface change", () => {
     expect(accepted).not.toBe(before);
 
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// TOML conformance — conformance/toml_accepted.toml and its three companions
+// ---------------------------------------------------------------------------
+
+/**
+ * The parser is hand-rolled and dependency-free on purpose, so it reads a
+ * SUBSET of TOML. Nothing said which subset. That gap had two halves and both
+ * are covered here:
+ *
+ *  (a) a surface written in valid TOML the parser does not know is a hard
+ *      startup failure, and there was no document to check against first;
+ *  (b) the Rust side hashes the surface bytes and never parses them, so the
+ *      two-implementation guarantee that protects the hash does NOT extend to
+ *      what the file MEANS. One parser decides that, unchecked.
+ *
+ * These fixtures are the check. They do not make the subset larger; they make
+ * it knowable, and they fail if it moves.
+ */
+describe("TOML conformance — the accepted subset is pinned, not implied", () => {
+  const conformanceDir = join(__dirname, "../../../conformance");
+  const read = (p: string) => readFileSync(join(conformanceDir, p), "utf-8");
+  const readJson = (p: string) => JSON.parse(read(p));
+
+  describe("accepted — conformance/toml_accepted.toml", () => {
+    it("parses to the golden tree", () => {
+      expect(parseToml(read("toml_accepted.toml"))).toEqual(
+        readJson("toml_accepted_golden.json")
+      );
+    });
+
+    it("agrees with a real TOML parser, which is the point of the golden", () => {
+      // The golden is not just "whatever parseToml did". It was checked once,
+      // offline, against Python 3.12 tomllib on 2026-09-01: that parser
+      // produced a tree deep-equal to this file, so the golden pins agreement
+      // with TOML 1.0 rather than agreement with ourselves.
+      //
+      // NOT re-run here. CI has no Python and the harness has no TOML library
+      // by design, so this assertion only guards the shape a spec parser
+      // fixed: an edit to the fixture must be re-checked by hand. Stated
+      // rather than implied, because a golden that only pins the parser
+      // against itself would prove nothing about the subset being TOML.
+      const t: any = readJson("toml_accepted_golden.json");
+      expect(t.strings.escapes).toBe("tab:\there\nnewline");
+      expect(t.strings.literal).toBe("no \\s escapes here");
+      expect(t.strings.unicode_long).toBe("\u{1F600}");
+      expect(t.arrays.regex_with_comma).toEqual(["^(a|b),\\s", "^c"]);
+      expect(t.arrays.bracket_in_string).toEqual(["a]b", "c"]);
+      expect(t.tools).toEqual([
+        { name: "read", enabled: true },
+        { name: "write", enabled: false },
+      ]);
+      expect(t.chain.steps).toEqual([{ role: "planner" }, { role: "builder" }]);
+      // A dash is legal in a table NAME and illegal in a key. Measured, not
+      // designed: the header regex does not validate the name, the key regex
+      // is [a-zA-Z_][a-zA-Z0-9_]*. The rejected case for the other half is
+      // toml_rejected/06_dashed_key.toml.
+      expect(t.dashed["table-name"].ok).toBe(true);
+    });
+
+    it("is deterministic and CRLF-insensitive", () => {
+      // The surface hash is computed over bytes by Rust while meaning is
+      // computed here, so a parse that varied by line ending would put a
+      // checked-out-on-Windows surface a different shape from its own hash.
+      const src = read("toml_accepted.toml");
+      expect(parseToml(src)).toEqual(parseToml(src));
+      expect(parseToml(src.replace(/\n/g, "\r\n"))).toEqual(parseToml(src));
+    });
+  });
+
+  describe("rejected — conformance/toml_rejected/", () => {
+    const index = readJson("toml_rejected.json");
+
+    it("has a pinned case for every fixture and a fixture for every case", () => {
+      // Without this, adding a fixture with no expectation would look like
+      // coverage and assert nothing.
+      const onDisk = readdirSync(join(conformanceDir, "toml_rejected"))
+        .filter((f: string) => f.endsWith(".toml"))
+        .sort();
+      expect(index.cases.map((c: any) => c.file).sort()).toEqual(onDisk);
+      expect(index.case_count).toBe(index.cases.length);
+      expect(index.valid_toml_count).toBe(
+        index.cases.filter((c: any) => c.valid_toml).length
+      );
+    });
+
+    it("seven of the eleven refused constructs are valid TOML 1.0", () => {
+      // The headline number for anyone writing a surface: most of what gnomon
+      // refuses is a file every other TOML tool reads without complaint. That
+      // is the cost of the zero-dependency parser, and publishing it is worth
+      // more than implying the parser covers TOML.
+      //
+      // Checked against Python 3.12 tomllib offline on 2026-09-01, recorded in
+      // toml_rejected.json; not re-run here, for the same reason as above.
+      expect(index.valid_toml_count).toBe(7);
+      expect(index.cases).toHaveLength(11);
+    });
+
+    for (const c of index.cases as any[]) {
+      it(`refuses ${c.construct} at the named line (${c.file})`, () => {
+        let message = "";
+        try {
+          parseToml(read(join("toml_rejected", c.file)));
+          throw new Error(`${c.file} parsed without throwing`);
+        } catch (e) {
+          message = (e as Error).message;
+        }
+        // The line number is the whole remedy, so it is asserted exactly. A
+        // header that used to be skipped silently HOISTED its keys to the top
+        // level -- the role vanished while its bash_allow became a root key
+        // read by nothing -- and "somewhere in roles.toml" would not have been
+        // materially better than that silence.
+        expect(message).toContain(
+          `line ${c.line}: cannot parse ${JSON.stringify(c.offending)}`
+        );
+        expect(message).toContain("Expected a [table] header");
+      });
+    }
+
+    it("names the surface file, not only the line", () => {
+      // A bare "line 12: cannot parse ..." is not actionable: five files are
+      // loaded and the reader cannot tell which one it came from. parseTomlNamed
+      // is module-private, so this goes through loadConfig, the path an
+      // operator actually hits.
+      const dir = mkdtempSync(join(tmpdir(), "gnomon-toml-conformance-"));
+      mkdirSync(join(dir, ".gnomon", "profiles"), { recursive: true });
+      writeFileSync(join(dir, ".gnomon", "config.toml"), "[defaults]\n");
+
+      for (const c of index.cases as any[]) {
+        const src = read(join("toml_rejected", c.file));
+
+        writeFileSync(join(dir, ".gnomon", "roles.toml"), src);
+        expect(() => loadConfig(dir)).toThrow(
+          new RegExp(`^\\.gnomon/roles\\.toml line ${c.line}: cannot parse`)
+        );
+        writeFileSync(join(dir, ".gnomon", "roles.toml"), "[roles.x]\n");
+
+        // profiles/ is loaded per-file and carries the subdirectory in the
+        // name, so it is checked separately rather than assumed.
+        writeFileSync(join(dir, ".gnomon", "profiles", "local.toml"), src);
+        expect(() => loadConfig(dir)).toThrow(
+          new RegExp(`^\\.gnomon/profiles/local\\.toml line ${c.line}: cannot parse`)
+        );
+        rmSync(join(dir, ".gnomon", "profiles", "local.toml"));
+      }
+
+      rmSync(dir, { recursive: true, force: true });
+    });
+  });
+
+  describe("misread — conformance/toml_misread.toml", () => {
+    // The dangerous class, and the reason a fixture beats a summary. These are
+    // valid TOML 1.0 that the parser ACCEPTS and reads as a different value:
+    // no throw, no warning, no startup failure. The mechanism is one branch --
+    // parseValue returns the raw text as a string for anything that is not a
+    // quoted string, an array, true/false, or a decimal int/float.
+    const golden = readJson("toml_misread_golden.json");
+
+    it("reads them exactly as recorded — a limit published, not fixed", () => {
+      expect(parseToml(read("toml_misread.toml"))).toEqual(golden.gnomon);
+    });
+
+    it("differs from TOML in TYPE, which is what makes it silent", () => {
+      const g = golden.gnomon.misread;
+      // An inline table is a table to every other reader and a string here, so
+      // anything reaching into it gets undefined rather than an error.
+      expect(g.inline_table).toBe("{ a = 1, b = 2 }");
+      expect(golden.toml.misread.inline_table).toEqual({ a: 1, b: 2 });
+
+      // Numbers that are not plain decimal fall through to string. A budget or
+      // timeout written as 1_000 is then text, and any numeric comparison
+      // against it is comparing against text.
+      expect(g.underscored).toBe("1_000");
+      expect(g.hexadecimal).toBe("0x1f");
+      expect(g.exponent).toBe("1e6");
+      expect(g.float_exponent).toBe("1.5e3");
+      // Only a leading MINUS is recognised: /^-?\d+$/ and /^-?\d+\.\d+$/.
+      expect(g.positive).toBe("+5");
+      for (const v of [g.underscored, g.hexadecimal, g.exponent, g.float_exponent, g.positive]) {
+        expect(typeof v).toBe("string");
+      }
+
+      // Dates are the case a text diff of the two goldens will NOT show: the
+      // tomllib half was JSON-serialised, so a date renders as the same
+      // characters gnomon produces. The divergence is the type -- a date
+      // object there, a string here -- so it is asserted rather than eyeballed.
+      expect(g.date).toBe("2026-08-30");
+      expect(golden.toml.misread.date).toBe("2026-08-30");
+      expect(typeof g.date).toBe("string");
+
+      // The array splitter tracks quotes but not brackets, so a nested array
+      // is cut at the comma INSIDE the first inner array.
+      expect(g.nested_array).toEqual(['["a"', '"b"]', ["c"]]);
+      expect(golden.toml.misread.nested_array).toEqual([["a", "b"], ["c"]]);
+
+      // A quoted table name keeps its quotes and is then split on the dot, so
+      // one table named "quoted.header" becomes two nested tables.
+      expect(Object.keys(golden.gnomon)).toContain('"quoted');
+      expect(golden.gnomon['"quoted']['header"']).toEqual({ k: 1 });
+    });
+  });
+
+  describe("looser — conformance/toml_looser.toml", () => {
+    // The other direction: gnomon accepts text a spec parser refuses outright.
+    // Measured -- Python 3.12 tomllib refuses this file at its first case
+    // (recorded in the golden, offline, 2026-09-01). The consequence is that a
+    // .gnomon/ surface can be written that gnomon loads and no editor, linter
+    // or later gnomon with a real parser will open.
+    const golden = readJson("toml_looser_golden.json");
+
+    it("accepts text no TOML parser will read", () => {
+      expect(parseToml(read("toml_looser.toml"))).toEqual(golden.gnomon);
+      expect(golden.toml_refusal).toBeTruthy();
+    });
+
+    it("swallows two typos in the direction that stays quiet", () => {
+      // Not conveniences. `True` is not a TOML boolean, so it becomes the
+      // STRING "True" -- which is truthy in JS, so a setting written that way
+      // is ON and reads as though someone had checked it.
+      expect(golden.gnomon.looser.capital_bool).toBe("True");
+      expect(Boolean(golden.gnomon.looser.capital_bool)).toBe(true);
+      // Trailing content after a value is an error in TOML and one long string
+      // here, quotes included.
+      expect(golden.gnomon.looser.junk_after_string).toBe('"value" extra');
+    });
+  });
+
+  describe("limits that cannot share a fixture file", () => {
+    it("silently turns an unterminated array into a string", () => {
+      // The multi-line joiner consumes to end of file looking for the closing
+      // bracket, so this case has to be the LAST line of any file it lives in
+      // -- which is why it is inline rather than in toml_looser.toml.
+      //
+      // Measured: no throw. `bash_deny` becomes the string `[ "rm -rf",` and a
+      // deny list that reads as populated matches nothing.
+      expect(parseToml('bash_deny = [\n  "rm -rf",\n')).toEqual({
+        bash_deny: '[ "rm -rf",',
+      });
+      expect(parseToml("n = [\n")).toEqual({ n: "[" });
+    });
+
+    it("loses keys when a table and an array-of-tables share a name", () => {
+      // Neither ordering errors. TOML calls both a duplicate-key error; here
+      // the loser's keys just go somewhere nothing reads.
+
+      // [table] first: the [[array]] header overwrites it outright, because it
+      // replaces any value that is not already an array. k = 1 is gone.
+      expect(parseToml("[a]\nk = 1\n[[a]]\nj = 2\n")).toEqual({ a: [{ j: 2 }] });
+
+      // [[array]] first: the [table] header walks INTO the array and writes
+      // k = 2 as a non-index property of it. Not dropped -- worse, kept
+      // somewhere nothing looks. Measured: it survives a deep-equal, and it
+      // does not survive JSON, a for..of, .map, or anything else that treats
+      // config.tools as the list it is declared to be.
+      const reversed = parseToml("[[a]]\nj = 1\n[a]\nk = 2\n");
+      expect((reversed.a as any[]).length).toBe(1);
+      expect((reversed.a as any[])[0]).toEqual({ j: 1 });
+      expect((reversed.a as any).k).toBe(2);
+      expect(JSON.parse(JSON.stringify(reversed))).toEqual({ a: [{ j: 1 }] });
+
+      // Same shape for a sub-table of an array-of-tables: [tools.opts] after
+      // [[tools]] hangs opts off the array, not off the last entry, so a role
+      // reading tools[0].opts gets undefined.
+      const sub = parseToml('[[tools]]\nname = "a"\n[tools.opts]\nx = 1\n');
+      expect((sub.tools as any[])[0]).toEqual({ name: "a" });
+      expect((sub.tools as any).opts).toEqual({ x: 1 });
+      expect(JSON.parse(JSON.stringify(sub))).toEqual({ tools: [{ name: "a" }] });
+    });
   });
 });

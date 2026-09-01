@@ -1,6 +1,33 @@
 # CHANGELOG — gnomon
 
+<!--
+  The 0.1.0 heading below read `## [0.1.0] — 2025-01-xx` until this commit: a
+  placeholder day, in a year the project did not exist. Measured against the
+  repository itself — `git log --reverse --date=short` puts the first commit at
+  2026-08-23 and the newest at 2026-09-01, and `git tag` lists nothing at all.
+
+  So 0.1.0 had never been cut. The section carrying that number described
+  scaffold day, while ~700 lines of the work that 0.1.0 actually consists of
+  sat above it under `[Unreleased]`. Those are one release, and they are one
+  section now; scaffold day is kept as a dated subsection at the end of it
+  rather than deleted, because it is still what happened on 2026-08-23.
+
+  NOT VERIFIED, and the reason this file cannot claim otherwise: the date on the
+  0.1.0 heading is the date the section was PREPARED, not the date a tag was
+  pushed — nothing has been published, and `git tag` is still empty. If v0.1.0
+  is tagged on a different day, change the heading to that day. The link
+  definitions at the foot of this file resolve only once the tag exists.
+-->
+
 ## [Unreleased]
+
+Nothing yet — 0.1.0 below has not been tagged. Entries written after the tag is
+pushed belong here.
+
+## [0.1.0] — 2026-09-01
+
+The first release. Everything below is 0.1.0: the project has no earlier tag, so
+there is no "since" to measure from and the whole history is the release note.
 
 ### Added
 
@@ -701,9 +728,14 @@
   `clippy` is now requested explicitly as a toolchain component.
 - The "first turn after idle loads the model" hint printed on every turn.
 
-## [0.1.0] — 2025-01-xx
+### Scaffold — 2026-08-23
 
-### Added
+The repository's first day, kept as its own subsection because it is the one
+part of 0.1.0 with a date anybody can check (`git log --reverse`). It carried
+the `[0.1.0]` heading and the placeholder date until the release section above
+was written.
+
+#### Added
 
 - Repository scaffold with full layout
 - `.gnomon/` config: `config.toml`, `system.md`, `roles.toml`, `tools.toml`, `policy.toml`
@@ -716,7 +748,7 @@
 - CONTRIBUTING.md, CHANGELOG.md
 - Agentcenter outbox sync reference
 
-### Phases
+#### Phases
 
 - P0: 🟡 Partial (hook surface not yet validated)
 - P1: ✅ Done (fixtures written, red on arrival)
@@ -725,3 +757,12 @@
 - P4: ✅ Done (buckets, exit codes, session validation)
 - P5: ✅ Done (patches, enums, CLI, agent loop)
 - P6: ✅ Done (`.gnomon/ci.sh`, 109 tests, 7-stage pipeline)
+
+<!--
+  Release links. Both 404 until `v0.1.0` is tagged and pushed — see the note at
+  the top of this file. They are written now so that cutting the release is one
+  `git tag`, not a documentation edit as well.
+-->
+
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.1.0

@@ -1,0 +1,154 @@
+# conformance/toml_accepted.toml — the whole of gnomon's TOML subset.
+#
+# gnomon parses .gnomon/*.toml with a hand-rolled ~200-line parser
+# (packages/gnomon-core/src/config.ts:parseToml) rather than a library,
+# because the harness ships with zero runtime dependencies. The subset is
+# therefore smaller than TOML, and until this file existed nothing said how
+# much smaller: a surface written in valid TOML the parser did not know was a
+# hard startup failure with no document to check against first.
+#
+# Every construct below is parsed. The expected tree is pinned byte-for-byte in
+# toml_accepted_golden.json, and docs/CONTRACTS.md §5 publishes the same subset
+# in prose along with what is NOT here.
+#
+# This file is valid TOML by the 1.0 spec, deliberately: it was checked once,
+# offline, against Python 3.12 tomllib on 2026-09-01, and that parser produced
+# a tree equal to the golden. So the golden pins agreement with TOML, not just
+# agreement with gnomon's parser. Nothing in CI re-runs that check — CI has no
+# Python and the harness has no TOML library — so a future edit to this file
+# must be re-checked by hand.
+#
+# What is NOT here, because the parser cannot express it, lives in the three
+# companion fixtures — the split is by how it fails, which is the part an
+# author needs:
+#   toml_rejected/     — refused with a file and line. 7 of the 11 are valid
+#                        TOML 1.0, so this is a hard startup failure on a file
+#                        every other tool reads.
+#   toml_misread.toml  — valid TOML, accepted, read as a DIFFERENT value.
+#                        Silent. Inline tables, dates, 1_000, 0x1f, 1e6, +5.
+#   toml_looser.toml   — not valid TOML, accepted anyway. The surface then
+#                        loads in gnomon and in nothing else.
+
+# Top-level keys, before any table header, land at the root.
+schema_version = 1
+
+# ---------------------------------------------------------------------------
+# Strings
+# ---------------------------------------------------------------------------
+
+[strings]
+# Basic strings process escapes, per the spec. They did not until 2026-08:
+# bash_deny = ["rm\\s+-rf"] produced a regex containing a literal backslash,
+# which matches nothing, so a deny written the ordinary way protected nothing.
+basic = "plain"
+escapes = "tab:\there\nnewline"
+quoted = "say \"hi\""
+backslash = "a\\b"
+unicode_short = "é"
+unicode_long = "\U0001F600"
+carriage = "a\rb"
+# Literal strings process nothing. This is the idiom for regular expressions,
+# and the surface uses it throughout.
+literal = 'no \s escapes here'
+literal_empty = ''
+basic_empty = ""
+
+# A trailing comment is stripped from a value, and a # inside either kind of
+# string is not a comment. Without this, every documented enum in config.toml
+# parsed as the whole line, so no value ever matched.
+commented = "kept"          # never | on_write | always
+hash_in_basic = "a # b"
+hash_in_literal = 'a#b'
+
+# ---------------------------------------------------------------------------
+# Scalars
+# ---------------------------------------------------------------------------
+
+[scalars]
+yes = true
+no = false
+count = 42
+negative = -7
+zero = 0
+ratio = 0.125
+negative_ratio = -2.5
+
+# ---------------------------------------------------------------------------
+# Arrays
+# ---------------------------------------------------------------------------
+
+[arrays]
+empty = []
+strings = ["a", "b"]
+numbers = [1, 2, 3]
+bools = [true, false]
+mixed = [1, "a", true]
+trailing_comma = ["a", "b",]
+spaced = [ "a" , "b" ]
+
+# Split on top-level commas only. A pattern holding a comma used to be torn in
+# half, which silently rewrote the rule.
+regex_with_comma = ['^(a|b),\s', '^c']
+
+# A ] inside a string is safe on ONE line. It is NOT safe across lines — the
+# line-joiner counts brackets without knowing about strings — so the
+# multi-line spelling of this same array is a rejected case
+# (toml_rejected/11_bracket_in_multiline_array.toml).
+bracket_in_string = ["a]b", "c"]
+
+# Arrays may span lines. Joining them before parsing matters: an unjoined
+# `key = [` parsed as the string "[", which silently emptied every multi-line
+# list in the surface. Comments and blank lines inside the array are fine.
+multiline = [
+  "a",          # per-item note
+
+  # whole-line note
+  "b",
+]
+
+# ---------------------------------------------------------------------------
+# Tables
+# ---------------------------------------------------------------------------
+
+[tables]
+flat = "one level"
+
+[tables.nested]
+mid = "two levels"
+
+[tables.nested.deep]
+value = "three levels"
+
+# Whitespace inside a header is trimmed.
+[ spaced_header ]
+key = "trimmed"
+
+# A dash is legal in a table name and NOT legal in a key. The header regex does
+# not validate the name at all, while the key regex is [a-zA-Z_][a-zA-Z0-9_]*,
+# so `[roles.my-role]` loads and `max-steps = 4` inside it is a startup failure
+# (toml_rejected/06_dashed_key.toml). Measured, not intended — pinned so the
+# inconsistency is known.
+[dashed.table-name]
+ok = true
+
+# ---------------------------------------------------------------------------
+# Arrays of tables
+# ---------------------------------------------------------------------------
+
+# Tested before [table]: the [table] pattern also matches "[[tools]]",
+# capturing "[tools]", and folded every entry into one key of that name.
+[[tools]]
+name = "read"
+enabled = true
+
+[[tools]]
+name = "write"
+enabled = false
+
+# Dotted names work in an array-of-tables header, where they do not work in
+# key position.
+[[chain.steps]]
+role = "planner"
+
+[[chain.steps]]
+role = "builder"

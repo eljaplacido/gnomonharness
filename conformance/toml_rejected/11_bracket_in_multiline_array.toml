@@ -1,0 +1,19 @@
+# A ] inside a string, inside a MULTI-LINE array. VALID TOML 1.0 — gnomon
+# refuses to start.
+#
+# The line-joiner counts [ and ] characters without knowing about strings, so
+# the ] inside "a]b" closes the array early: joining stops at that element.
+# The joined text then ends in a comma rather than a bracket, so it is not an
+# array — bash_deny silently becomes the string `[ "a]b",` — and the failure
+# is reported on the NEXT element, which now looks like a stray line —
+# one line past the ] that actually caused it, two past the `bash_deny = [`
+# that a reader would go looking at. The exact number is pinned in
+# toml_rejected.json.
+#
+# The identical value on ONE line is fine and is in toml_accepted.toml. That
+# is the whole hazard: the same array, reformatted, stops loading.
+
+bash_deny = [
+  "a]b",
+  "c",
+]

@@ -8,9 +8,10 @@
  *
  * The tension with gnomon's determinism is deliberate and bounded: the surface
  * pins the server's *invocation* (command/args), not its behaviour. So the
- * client's job is to be loud — report which servers connected and what tools
- * they offered — and never to crash the loop when a server is missing or slow.
- * A server that will not connect is skipped and named, not fatal.
+ * client's job is to be loud — report which servers connected, which protocol
+ * revision each one answered with, and what tools they offered — and never to
+ * crash the loop when a server is missing or slow. A server that will not
+ * connect is skipped and named, not fatal.
  *
  * No dependencies: the protocol is a few JSON-RPC messages over a pipe.
  */
@@ -18,7 +19,35 @@
 import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
 import type { McpServerDef } from "./config.js";
 
+/**
+ * The revision this client ASKS for. Left pinned at the one these message
+ * shapes were written against: every later revision only adds things this
+ * client does not use over stdio (batching removal, elicitation, an HTTP
+ * header), so asking for a newer one would be a wire change with nothing here
+ * able to test it. Not verified against any real server -- the only servers
+ * exercised for this change are the mocks in mcp.test.ts.
+ *
+ * What changed is the other half of the handshake: the server's answer is now
+ * read instead of discarded.
+ */
 const PROTOCOL_VERSION = "2024-11-05";
+
+/**
+ * The revisions this build recognises in an `initialize` result.
+ *
+ * The failure that produced this list: the client sent `protocolVersion` and
+ * never looked at what came back, so a server answering a revision we had never
+ * heard of produced a connection line identical to one answering ours. Measured
+ * against the mock servers in mcp.test.ts: before this change, servers replying
+ * 2024-11-05, 2099-01-01, and no version at all were indistinguishable in the
+ * report -- a mismatch could only surface later, as some other call failing.
+ *
+ * This list is what the build knew when it shipped and WILL go stale. That is
+ * exactly why an unrecognised version is printed rather than treated as fatal;
+ * see the decision recorded in connect() below.
+ */
+const KNOWN_PROTOCOL_VERSIONS = new Set(["2024-11-05", "2025-03-26", "2025-06-18"]);
+
 const CONNECT_TIMEOUT_MS = 8000;
 const CALL_TIMEOUT_MS = 60_000;
 
@@ -40,6 +69,12 @@ export interface McpRegistry {
   tools(): McpToolInfo[];
   /** Route an `mcp__…` call to its server. */
   call(name: string, args: Record<string, unknown>): Promise<{ content: string; isError: boolean }>;
+  /**
+   * What each connected server answered with in `initialize`. Recorded on the
+   * registry so the negotiated revision can be reported after connect time too
+   * -- the connection line scrolls away, a stale session does not.
+   */
+  protocols(): Array<{ server: string; version: string | null; known: boolean }>;
   close(): void;
 }
 
@@ -65,6 +100,14 @@ class McpConnection {
   private pending = new Map<number, { resolve: (m: RpcMessage) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
   private buf = "";
   tools: McpToolInfo[] = [];
+  /**
+   * What the server answered with in `initialize`, or null when it omitted the
+   * field. The spec requires the field, so null is itself worth printing rather
+   * than smoothing over.
+   */
+  protocolVersion: string | null = null;
+  /** Whether that answer is one of KNOWN_PROTOCOL_VERSIONS. */
+  protocolKnown = false;
 
   constructor(
     public readonly name: string,
@@ -107,11 +150,39 @@ class McpConnection {
     // The server's own logging goes to stderr; keep it out of the protocol.
     proc.stderr.resume();
 
-    await this.request("initialize", {
+    const init = await this.request("initialize", {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: {},
       clientInfo: { name: "gnomon", version: "0.1.0" },
     });
+    // A JSON-RPC error on initialize was not checked at all. Measured against a
+    // mock that refuses initialize and then goes quiet: the client went on to
+    // send tools/list and hung there past the test's 5s cap, on its way to the
+    // 8s CONNECT_TIMEOUT_MS -- so the operator waited 8s to be told the wrong
+    // call had timed out, with the refused handshake never mentioned. Name the
+    // refusal and the version we asked for; a rejected version is the likeliest
+    // cause, though the server's message is the only evidence of which it was.
+    if (init.error) {
+      throw new Error(
+        `initialize refused (asked for protocol ${PROTOCOL_VERSION}): ${init.error.message}`
+      );
+    }
+    const initResult = init.result as { protocolVersion?: unknown } | undefined;
+    this.protocolVersion =
+      typeof initResult?.protocolVersion === "string" ? initResult.protocolVersion : null;
+    this.protocolKnown =
+      this.protocolVersion !== null && KNOWN_PROTOCOL_VERSIONS.has(this.protocolVersion);
+
+    // DECISION: an unrecognised (or missing) version is reported, not skipped.
+    // Reasoning, not measurement -- no server answering an unknown version was
+    // available to test against. Skipping would cost the whole server on a
+    // string comparison against a list that goes stale by design, and the three
+    // messages this client actually sends (initialize, tools/list, tools/call)
+    // have kept their shapes across every published revision. Proceeding fails
+    // visibly if the guess is wrong -- tools/list returns nothing, or a call
+    // comes back isError -- whereas skipping fails silently and permanently.
+    // The report line below is what makes the guess auditable; without it this
+    // would be exactly the silent degradation the pinned version already was.
     this.notify("notifications/initialized", {});
 
     const listed = (await this.request("tools/list", {})).result as
@@ -124,6 +195,24 @@ class McpConnection {
       description: t.description,
       inputSchema: t.inputSchema ?? { type: "object", properties: {} },
     }));
+  }
+
+  /**
+   * The protocol phrase for the connection line. Loud in exactly the two cases
+   * an operator needs to see -- an answer this build does not know, and no
+   * answer at all -- and quiet when the server agreed with what we asked for.
+   */
+  protocolNote(): string {
+    if (this.protocolVersion === null) {
+      return `protocol UNREPORTED by the server (asked ${PROTOCOL_VERSION}), proceeding`;
+    }
+    if (!this.protocolKnown) {
+      return `protocol ${this.protocolVersion} UNKNOWN to this build (asked ${PROTOCOL_VERSION}), proceeding`;
+    }
+    if (this.protocolVersion !== PROTOCOL_VERSION) {
+      return `protocol ${this.protocolVersion} (asked ${PROTOCOL_VERSION})`;
+    }
+    return `protocol ${this.protocolVersion}`;
   }
 
   async callTool(tool: string, args: Record<string, unknown>): Promise<{ content: string; isError: boolean }> {
@@ -243,7 +332,10 @@ export async function connectMcp(
       await conn.connect();
       conns.push(conn);
       for (const t of conn.tools) byTool.set(t.name, conn);
-      report(`  mcp: ${name} connected — ${conn.tools.length} tool(s): ${conn.tools.map((t) => t.tool).join(", ") || "(none)"}`);
+      report(
+        `  mcp: ${name} connected — ${conn.protocolNote()} — ${conn.tools.length} tool(s): ` +
+          `${conn.tools.map((t) => t.tool).join(", ") || "(none)"}`
+      );
     } catch (err) {
       conn.close();
       report(`  mcp: ${name} unavailable — ${err instanceof Error ? err.message : String(err)}`);
@@ -252,6 +344,8 @@ export async function connectMcp(
 
   return {
     tools: () => conns.flatMap((c) => c.tools),
+    protocols: () =>
+      conns.map((c) => ({ server: c.name, version: c.protocolVersion, known: c.protocolKnown })),
     async call(name, args) {
       const conn = byTool.get(name);
       if (!conn) return { content: `MCP tool "${name}" is not connected.`, isError: true };

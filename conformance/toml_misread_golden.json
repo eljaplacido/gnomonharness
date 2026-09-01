@@ -1,0 +1,54 @@
+{
+  "note": "Two readings of conformance/toml_misread.toml. Every construct in that file is valid TOML 1.0 that gnomon's parser accepts and reads as a DIFFERENT value -- no error, no warning, no startup failure. 'gnomon' is what parseToml returns and is asserted by packages/gnomon-core/src/config.test.ts. 'toml' is what a spec parser returns: Python 3.12 tomllib, recorded offline on 2026-09-01. Nothing in CI re-runs the tomllib half -- CI has no Python and the harness has no TOML library -- so an edit to the fixture must be re-checked by hand. Recording gnomon's reading here is documentation of a limit, not endorsement of it. One caveat about reading the two halves side by side: the 'toml' half is JSON-serialised, so a TOML date renders as the same characters gnomon produces and a text diff shows no difference for `date` and `datetime`. The divergence there is the TYPE -- a date object under a spec parser, a string here -- which is why config.test.ts asserts the type rather than eyeballing the diff.",
+  "gnomon": {
+    "misread": {
+      "inline_table": "{ a = 1, b = 2 }",
+      "date": "2026-08-30",
+      "datetime": "2026-08-30T12:00:00Z",
+      "underscored": "1_000",
+      "hexadecimal": "0x1f",
+      "exponent": "1e6",
+      "float_exponent": "1.5e3",
+      "positive": "+5",
+      "nested_array": [
+        "[\"a\"",
+        "\"b\"]",
+        [
+          "c"
+        ]
+      ]
+    },
+    "\"quoted": {
+      "header\"": {
+        "k": 1
+      }
+    }
+  },
+  "toml": {
+    "misread": {
+      "inline_table": {
+        "a": 1,
+        "b": 2
+      },
+      "date": "2026-08-30",
+      "datetime": "2026-08-30T12:00:00+00:00",
+      "underscored": 1000,
+      "hexadecimal": 31,
+      "exponent": 1000000.0,
+      "float_exponent": 1500.0,
+      "positive": 5,
+      "nested_array": [
+        [
+          "a",
+          "b"
+        ],
+        [
+          "c"
+        ]
+      ]
+    },
+    "quoted.header": {
+      "k": 1
+    }
+  }
+}

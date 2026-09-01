@@ -24,6 +24,48 @@ is always a PR.
 Security issues do **not** go through public PRs or issues — see
 [.github/SECURITY.md](.github/SECURITY.md).
 
+## The review contract
+
+The failure this section exists to fix: everything above told you how to make a
+good PR and nothing told you what happens to it afterwards. A contributor could
+not tell whether a PR would be looked at in a day or never, and the honest
+answer — one person, no rota — was inferable only from the fact that the same
+name appears everywhere. Silence on this reads as abandonment even when it is
+just a slow week, so here is the shape of it, including the parts that are not
+reassuring.
+
+- **One maintainer, and that is the whole review bench.** `.github/CODEOWNERS`
+  names one person for every path because there is one person. No PR gets a
+  second reviewer, because there is no second reviewer.
+- **Merges are maintainer-gated.** `master` is branch-protected; every change
+  lands through a PR the maintainer approves and merges. Nobody self-merges,
+  including the maintainer — the same PR flow applies to their own work.
+- **The gate is not the review.** Green CI is necessary and not sufficient:
+  `.gnomon/ci.sh` proves the suite passes, and review is where the design
+  argument happens. Red CI, though, is not reviewed at all — fix it first, or
+  say in the PR why it is red on purpose.
+
+**Response targets.** These are targets, published so you can tell "slow" from
+"abandoned". They are not an SLA and nobody is paid to meet them:
+
+| | Target |
+|---|---|
+| First response to a new issue or PR | within **7 days** |
+| Follow-up once a review thread is live | within **7 days** per round |
+| Security report (see [SECURITY.md](.github/SECURITY.md)) | ahead of everything else in this table. Checked: SECURITY.md states a reporting *route* and no timeline, so these targets are the only published ones — assume the same 7 days, and treat a private advisory as the way to escalate faster |
+
+If a PR has been quiet for longer than the target, the right move is to comment
+on it and say so. That is not nagging; it is the only escalation path there is,
+and it works — a dropped thread here is far more likely to be an oversight than
+a decision.
+
+**Where a PR most often stalls**, so you can pre-empt it: a change that alters
+documented behaviour without moving the README (`docs.test.ts` will fail it), a
+contract change that arrives without a `conformance/` fixture, or a
+non-trivial feature that never had a proposal issue and turns out to point away
+from where the project is going. The first two are caught by the gate. The third
+is why step 1 asks for an issue first.
+
 ## Dev workflow
 
 - Rust 1.82+, `cargo fmt` + `cargo clippy` + `cargo test`.
