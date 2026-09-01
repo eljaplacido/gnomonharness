@@ -2865,3 +2865,26 @@ describe("setEndpointBlock", () => {
     expect(after).not.toContain('url = "http://old"');
   });
 });
+
+describe("a declared chain is the shape of the turn", () => {
+  it("keeps one bucket per stage rather than folding them into a verdict", async () => {
+    // Rule 4 is the whole constraint here: three stages produce three
+    // outcomes, and a harness that publishes three buckets must not invent a
+    // fourth that summarises them. The record carries the list; the top-level
+    // fields describe the stage whose answer the operator receives.
+    const src = String(promptLoop.runTask);
+    expect(src).toContain("resolveChain");
+    expect(src).toContain("chain_stage");
+    // an apparatus failure stops the chain instead of feeding a dead endpoint
+    // forward to stages that would answer a question nobody asked
+    expect(src).toContain("r.code === 10");
+  });
+
+  it("an explicit --role beats the declared chain", () => {
+    // Asking for one role and silently getting three would be worse than
+    // having no chain -- the same reason an explicit /role prefix beats the
+    // routing rules.
+    const src = String(promptLoop.runTask);
+    expect(src).toContain("options.role || declaredChain.length < 2");
+  });
+});

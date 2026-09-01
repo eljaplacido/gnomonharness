@@ -1381,6 +1381,31 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
       }
     }
 
+  // A chain stage naming a role that does not exist fails partway through a
+  // turn, after the earlier stages have already spent their budget and their
+  // tokens. Fatal, because the surface cannot do what it says it does.
+  {
+    const stages = resolveChain(config);
+    for (const st of stages) {
+      if (!config.roles?.[st]) {
+        problems.push({
+          where: ".gnomon/config.toml [chain]",
+          problem: `stage "${st}" is not a role in this surface.`,
+          fix: `Declared roles: ${Object.keys(config.roles ?? {}).sort().join(", ")}.`,
+          fatal: true,
+        });
+      }
+    }
+    if (stages.length === 1) {
+      problems.push({
+        where: ".gnomon/config.toml [chain]",
+        problem: `a chain of one stage ("${stages[0]}") is the same as no chain.`,
+        fix: "Remove [chain], or add the stages that make it a chain.",
+        fatal: false,
+      });
+    }
+  }
+
   // A role holding `task` with no task_allow can delegate to any role, and a
   // sub-turn runs with the TARGET role's tools -- so its own `tools` line is
   // not the answer to what it can cause. Worth saying out loud, in the same
@@ -1940,6 +1965,35 @@ export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
     (typeof sandbox.image === "string" && sandbox.image) ||
     "debian:stable-slim";
   return { mode, image, network: sandbox.network === true };
+}
+
+/**
+ * A declared role chain: the stages one turn passes through, in order.
+ *
+ * The separation this buys is the one the harness was built around, and until
+ * now it existed only across turns a person drove by hand. `task` lets a model
+ * reach for it mid-turn; this makes it the shape of the turn itself.
+ *
+ * Declared in the surface rather than typed at a keyboard, because a chain a
+ * human types is machine-scoped behaviour of the worst kind: it lives in their
+ * habits, it is not hashed, it is not in the manifest, and it does not
+ * reproduce on another machine. Declared, it is data — hashed, diffable, and
+ * identical everywhere.
+ *
+ * Absent means the current behaviour: one role answers. Nothing existing moves.
+ *
+ * Rule 4 is the constraint that shapes the rest: every stage keeps its OWN
+ * bucket and its own record. The chain never collapses three outcomes into a
+ * composite verdict, because that is precisely the thing this harness refuses
+ * to do.
+ */
+export function resolveChain(config: GnomonConfig): string[] {
+  const raw = (config.config as { chain?: { stages?: unknown } } | undefined)?.chain?.stages;
+  if (!Array.isArray(raw)) return [];
+  const stages = raw.filter((r): r is string => typeof r === "string" && r.trim().length > 0);
+  // A stage naming a role that does not exist would fail mid-turn, after the
+  // earlier stages had already spent their budget. auditSurface reports it.
+  return stages;
 }
 
 /** Resolved [resilience]: what the harness does when the endpoint misbehaves. */

@@ -71,6 +71,22 @@ backoff_ms = 500          # doubled each attempt
 request_timeout_ms = 300000   # a reasoning model on a hard task exceeds 120s; a timed-out attempt doubles this
 transport_grace_ms = 60000    # an endpoint refusing the socket is not an attempt; keep knocking this long (0 disables)
 
+[chain]
+# The stages one turn passes through, in order. Absent means one role answers,
+# which is the behaviour without this block -- nothing changes until you ask.
+#
+# Declared here rather than typed at a keyboard on purpose: a chain a person
+# types lives in their habits, is not hashed, is not in the manifest, and does
+# not reproduce on another machine. Declared, it is data.
+#
+# Every stage keeps its OWN bucket and its own audit record. The chain never
+# folds three outcomes into a fourth -- that is the composite verdict Rule 4
+# exists to forbid. A stage receives the original request plus what the stage
+# before it REPORTED, never its transcript.
+#
+# An explicit --role or /role prefix overrides the chain entirely.
+# stages = ["plan", "implement", "critique"]
+
 [endpoints.local]
 # Where inference goes lives in the surface: routing is part of what a checkout
 # declares, and it is hashed with everything else. One escape hatch exists —

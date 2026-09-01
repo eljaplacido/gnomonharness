@@ -23,6 +23,7 @@ import {
   resolveResilience,
   resolveExtraRoots,
   resolveExec,
+  resolveChain,
   Compaction,
   resolveUi,
   resolveEndpoint,
@@ -2783,6 +2784,26 @@ export interface TaskRecord {
   /** Counts the loop already kept and used to discard. */
   counters: TurnCounters;
   /**
+   * When [chain] is declared, one entry per stage that ran, in order — each
+   * with its OWN bucket, code and stop_reason.
+   *
+   * Rule 4 is why this is a list rather than a summary. Three stages produce
+   * three outcomes, and a harness that publishes three buckets must not fold
+   * them into a fourth. The top-level bucket on this record is the LAST stage
+   * that ran, because that is the answer the operator receives — not a verdict
+   * over the chain.
+   */
+  stages?: Array<{
+    stage: number;
+    role: string;
+    model: string;
+    code: number;
+    bucket: string;
+    stop_reason: StopReason;
+    tool_steps: number;
+    output: string;
+  }>;
+  /**
    * Fields that legitimately differ between two runs of the same task.
    * Kept apart so a comparison can ignore exactly these and nothing else.
    */
@@ -2880,6 +2901,13 @@ export async function runTask(
       ? routeInput(config, input, routing).role
       : routing.default);
 
+  // A declared chain shapes the whole turn. An explicit --role overrides it:
+  // asking for one role and silently getting three would be worse than having
+  // no chain at all, and it is the same reasoning that lets an explicit /role
+  // prefix beat the routing rules.
+  const declaredChain = resolveChain(config);
+  const chain = options.role || declaredChain.length < 2 ? [] : declaredChain;
+
   const state: PromptState = { config, exchanges: [], currentRole: role };
   const ui: ResolvedUi = { ...resolveUi(config), spinner: false, color: false };
   const route = routeRole(config, role);
@@ -2923,11 +2951,9 @@ export async function runTask(
       state.mcp = await connectMcp(config.tools.mcp_servers, note);
   }
 
-  const start = Date.now();
-  let turn: TurnResult;
-  try {
-      turn = await runAgenticTurn(state, role, route, built.messages, {
-      approve: async (req) => {
+  // One approval callback for every stage: a chain must not become a way to
+  // get a second, laxer gate.
+  const approveHere = async (req: ApprovalRequest) => {
       const decision = options.yes ? "approved" : "declined";
       note(`[approval] ${req.summary} — ${decision}`);
       audit.write("approval", {
@@ -2940,12 +2966,78 @@ export async function runTask(
         interactive: false,
       });
       return Boolean(options.yes);
-      },
-      progress: new Progress(ui, process.stderr as NodeJS.WriteStream),
-      ui,
-      say: note,
-      audit,
-    });
+      };
+
+  const start = Date.now();
+  const stageRecords: NonNullable<TaskRecord["stages"]> = [];
+  let turn: TurnResult;
+  try {
+    if (chain.length >= 2) {
+      // Each stage starts from the ORIGINAL request plus what the stage before
+      // it reported -- its answer, not its transcript. Replaying one stage's
+      // tool calls into the next would defeat the isolation that made the
+      // split worth having, and pay for the context twice. Same contract the
+      // `task` tool already keeps for sub-turns.
+      let carried = "";
+      let last: TurnResult | null = null;
+      for (let i = 0; i < chain.length; i++) {
+        const stageRole = chain[i];
+        const stageRoute = routeRole(config, stageRole);
+        const stageInput = carried
+          ? `${input}\n\n---\nThe previous stage (${chain[i - 1]}) reported:\n${carried}`
+          : input;
+        const stageState: PromptState = { config, exchanges: [], currentRole: stageRole };
+        stageState.mcp = state.mcp;
+        const stageMsgs = buildMessages(
+          stageState,
+          buildSystemPrompt(stageState, stageRole, stageInput),
+          stageInput
+        );
+        note(`[chain] stage ${i + 1}/${chain.length} — ${stageRole}`);
+        const r = await runAgenticTurn(stageState, stageRole, stageRoute, stageMsgs.messages, {
+          approve: approveHere,
+          progress: new Progress(ui, process.stderr as NodeJS.WriteStream),
+          ui,
+          say: note,
+          audit,
+        });
+        stageRecords.push({
+          stage: i + 1,
+          role: stageRole,
+          model: r.model,
+          code: r.code,
+          bucket: mapBucket(r.code),
+          stop_reason: r.stop_reason,
+          tool_steps: r.toolSteps,
+          output: r.content,
+        });
+        audit.write("chain_stage", {
+          stage: i + 1,
+          of: chain.length,
+          role: stageRole,
+          bucket: mapBucket(r.code),
+          code: r.code,
+          stop_reason: r.stop_reason,
+          tool_steps: r.toolSteps,
+          surface_hash,
+        });
+        last = r;
+        carried = r.content;
+        // An apparatus failure is not a result to hand onward: the endpoint
+        // died or the surface could not be used, and the stages after it would
+        // be answering a question nobody asked.
+        if (r.code === 10 || r.code === 12 || r.code === 13) break;
+      }
+      turn = last!;
+    } else {
+      turn = await runAgenticTurn(state, role, route, built.messages, {
+        approve: approveHere,
+        progress: new Progress(ui, process.stderr as NodeJS.WriteStream),
+        ui,
+        say: note,
+        audit,
+      });
+    }
   } finally {
     // Subprocesses outlive the turn otherwise, and `gnomon task` is the entry
     // point scripts run in a loop.
@@ -2977,7 +3069,11 @@ export async function runTask(
 
   return {
     surface_hash,
-    role,
+    // With a chain, the top-level fields describe the stage whose answer the
+    // operator actually receives -- the last one that ran. Reporting the entry
+    // role beside the final stage's bucket and output would make the record
+    // internally inconsistent, which is worse than either choice alone.
+    role: stageRecords.length > 0 ? stageRecords[stageRecords.length - 1].role : role,
     model: turn.model,
     endpoint: route.target.endpoint,
     input,
@@ -2990,6 +3086,9 @@ export async function runTask(
     stop_reason: turn.stop_reason,
     ...(turn.stop_detail ? { stop_detail: turn.stop_detail } : {}),
     counters: turn.counters,
+    // Present only when a chain ran, so a record from a single-role turn is
+    // byte-identical to what it was before this existed.
+    ...(stageRecords.length > 0 ? { stages: stageRecords } : {}),
     // Token counts sit beside duration under `volatile`: they are the
     // backend's measurement of one run, so two runs of the same task differ
     // in them without anything about the surface having changed. The contract

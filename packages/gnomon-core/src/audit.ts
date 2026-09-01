@@ -102,6 +102,10 @@ export type AuditKind =
   | "session_start"
   | "session_resume"
   | "turn"
+  // One per stage of a declared [chain]. Separate from "turn" on purpose:
+  // Rule 4 says three stages produce three outcomes, and a trail that folded
+  // them into one record would be publishing a composite verdict.
+  | "chain_stage"
   | "tool_call"
   | "approval"
   // The declared verification for a turn that changed files: what ran, and
