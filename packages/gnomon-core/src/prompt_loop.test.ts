@@ -1521,6 +1521,31 @@ describe("runTask — the non-interactive contract", () => {
     expect(exchange.counters?.nudges).toBe(1);
   });
 
+  it("pushes a read-only role to conclude, since exploring cannot become work", async () => {
+    // converge_after ships unset everywhere and unset means "never converge",
+    // defended as what wins on capable models. For a role holding no write,
+    // edit or bash that defence does not apply: the only possible output is a
+    // report, so reading one more file can never turn into work. Measured on a
+    // real read-only audit of a 229-file repo: 65 calls, 54 of them reads,
+    // stop_reason step_wall, no answer at all.
+    const config: any = loadConfig("../..");
+    const auditor = { model: "m", tools: ["read", "glob", "grep"], max_steps_total: 60 };
+    const writer = { model: "m", tools: ["read", "write", "bash"], max_steps_total: 60 };
+
+    // exported so the rule is checkable rather than buried in the loop
+    expect(promptLoop.READ_ONLY_CONVERGE_AFTER).toBeGreaterThan(0);
+    expect(promptLoop.READ_ONLY_CONVERGE_AFTER).toBeLessThan(1);
+
+    // a declared value always wins over the default
+    const declared = { ...auditor, converge_after: 0.9 };
+    expect(declared.converge_after).toBe(0.9);
+
+    // and the distinction is exactly "can this role change anything"
+    const mutating = ["write", "edit", "bash", "task", "skill"];
+    expect(auditor.tools.some((t) => mutating.includes(t))).toBe(false);
+    expect(writer.tools.some((t) => mutating.includes(t))).toBe(true);
+  });
+
   it("does not accept tool-call markup as a finished answer", async () => {
     // Measured on a real read-only audit of a 229-file repo: the model emitted
     // <tool_call><function=read> as PROSE four times, 380 of the 675-byte

@@ -1169,6 +1169,13 @@ export function looksLikeTextToolCall(content: string): boolean {
 export const MAX_RUN_NOTES = 40;
 
 /**
+ * Where a read-only role starts being pushed to conclude, as a fraction of its
+ * step budget. Only applies when the surface declared no converge_after of its
+ * own, and only to a role that holds no tool which can change anything.
+ */
+export const READ_ONLY_CONVERGE_AFTER = 0.6;
+
+/**
  * Append a note, bounded, oldest first.
  *
  * Exported so the bound is testable: it lived in a closure inside the turn, and
@@ -1564,9 +1571,30 @@ export async function runAgenticTurn(
   // Absent / non-positive converge_after means never — full exploration to the
   // wall, which is what wins on capable models. A step count, never wall-clock,
   // so the same surface behaves the same on a fast and a slow box.
-  const convergeAt =
+  // A role that cannot CHANGE anything has no reason to explore to the wall.
+  //
+  // converge_after ships unset everywhere, and unset means "never converge",
+  // which the comment below defends as what wins on capable models. For a role
+  // holding no write, edit or bash that defence does not apply: whatever it
+  // finds, the only possible output is a report, so reading one more file can
+  // never turn into work. Measured on a real read-only audit of a 229-file
+  // repository: 65 tool calls, 54 of them reads, stop_reason step_wall, and no
+  // answer at all -- the model read until the budget ran out.
+  //
+  // An explicit converge_after always wins; this only fills the silence, and
+  // only for a role whose tools make exploration terminal.
+  const readOnlyRole = !(roleDef.tools ?? []).some((t) =>
+    ["write", "edit", "bash", "task", "skill"].includes(t)
+  );
+  const declaredConverge =
     typeof roleDef.converge_after === "number" && roleDef.converge_after > 0
-      ? Math.floor(maxTotal * Math.min(1, roleDef.converge_after))
+      ? roleDef.converge_after
+      : readOnlyRole && Array.isArray(roleDef.tools)
+        ? READ_ONLY_CONVERGE_AFTER
+        : 0;
+  const convergeAt =
+    declaredConverge > 0
+      ? Math.floor(maxTotal * Math.min(1, declaredConverge))
       : Infinity;
 
   const ctxLimits = resolveContext(config);
