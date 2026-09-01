@@ -1521,6 +1521,44 @@ describe("runTask — the non-interactive contract", () => {
     expect(exchange.counters?.nudges).toBe(1);
   });
 
+  it("does not accept tool-call markup as a finished answer", async () => {
+    // Measured on a real read-only audit of a 229-file repo: the model emitted
+    // <tool_call><function=read> as PROSE four times, 380 of the 675-byte
+    // "answer" was markup, and the loop recorded it as a result. The model had
+    // not answered -- its chat template did not match the endpoint's tool
+    // protocol -- and nothing in the harness noticed.
+    expect(promptLoop.looksLikeTextToolCall("<tool_call>\n<function=read>")).toBe(true);
+    expect(promptLoop.looksLikeTextToolCall("<|tool_call|> read")).toBe(true);
+    expect(promptLoop.looksLikeTextToolCall("[TOOL_CALL] read")).toBe(true);
+    // ordinary prose that merely mentions tools is not markup
+    expect(promptLoop.looksLikeTextToolCall("I called the read tool on src/lib.ts")).toBe(false);
+    expect(promptLoop.looksLikeTextToolCall("use <b>bold</b> and function names")).toBe(false);
+
+    const config: any = loadConfig("../..");
+    let call = 0;
+    const markupThenAnswer = (async () => {
+      call++;
+      return {
+        ok: true,
+        json: async () => ({
+          message: {
+            content:
+              call === 1
+                ? "<tool_call>\n<function=read>\n<parameter=path>x.txt</parameter>\n</function>"
+                : "add() subtracts; that is the bug.",
+          },
+        }),
+      };
+    }) as unknown as typeof fetch;
+
+    await withFetch(markupThenAnswer, async () => {
+      const record = await promptLoop.runTask(config, "review it", { role: "smol", yes: true });
+      expect(record.output).toContain("subtracts");
+      expect(record.output).not.toContain("<tool_call>");
+      expect(call).toBe(2);
+    });
+  }, 20000);
+
   it("recovers once from a context overflow instead of throwing the turn away", async () => {
     // 13 means the prompt did not fit, and it is deliberately not retried --
     // resending the same oversized prompt fails identically. But the loop then

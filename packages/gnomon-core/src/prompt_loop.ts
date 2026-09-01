@@ -1145,6 +1145,26 @@ export interface TurnResult {
  * budget, but not so tight that one blank ends a turn with steps to spare. */
 export const MAX_CONSECUTIVE_EMPTY = 3;
 
+/**
+ * Tool-call syntax a model emitted as PROSE instead of as a tool call.
+ *
+ * When a model's chat template does not match the transport's tool protocol it
+ * writes the call out as text, and the loop then treats it as a finished answer.
+ * Measured on a real audit run: 4 such blocks in a 675-byte "answer", 380 bytes
+ * of it markup, recorded as a result. Nothing in the harness noticed.
+ *
+ * That is the same class as an empty completion -- the model did not answer, it
+ * failed to call -- and it gets the same treatment: re-ask once, then record it
+ * honestly rather than passing markup off as prose.
+ */
+const TEXT_TOOL_CALL =
+  /<tool_call>|<\/?function\s*=|<\|tool.?call\|>|<function_calls>|\[TOOL_CALL\]/i;
+
+/** Whether a completion is tool-call markup rather than an answer. */
+export function looksLikeTextToolCall(content: string): boolean {
+  return TEXT_TOOL_CALL.test(content);
+}
+
 /** How many run notes are kept and replayed. Oldest fall off first. */
 export const MAX_RUN_NOTES = 40;
 
@@ -1191,6 +1211,15 @@ export interface TurnCounters {
   first_nudge_step?: number;
   /** Whether the final tool call of the turn changed anything. */
   final_step_was_write: boolean;
+  /**
+   * Replies that contained tool-call markup as prose rather than a tool call.
+   *
+   * A protocol mismatch between the model's chat template and the endpoint's
+   * tool format, not a model failure — worth counting separately because the
+   * fix is configuration (a different template or endpoint kind), not a better
+   * prompt.
+   */
+  text_tool_calls?: number;
   /** Per tool: calls made, refusals, apparatus failures. Separates "bash
    * failed 9 of 31 calls" from "bash succeeded 31/31 and the answer was still
    * wrong". */
@@ -1579,6 +1608,7 @@ export async function runAgenticTurn(
   let consecutiveEmpty = 0;
   let truncationRetried = false;
   let overflowTrimmed = false;
+  let textToolCallRetried = false;
   let emptyTerminus = false;
 
   // Observation only. Nothing below reads these back to decide anything — the
@@ -1708,6 +1738,35 @@ export async function runAgenticTurn(
         content:
           `That reply was cut off at the token limit. Continue from exactly where ` +
           `it stopped, or if the work is done, say so briefly.`,
+      });
+      continue;
+    }
+
+    // A model writing its tool call out as text has not answered either.
+    if (
+      result.code === 0 &&
+      result.toolCalls.length === 0 &&
+      looksLikeTextToolCall(result.content) &&
+      !textToolCallRetried &&
+      steps < maxTotal
+    ) {
+      textToolCallRetried = true;
+      counters.text_tool_calls = (counters.text_tool_calls ?? 0) + 1;
+      deps.say(
+        paint(
+          deps.ui,
+          "yellow",
+          `  [loop] the reply contained tool-call markup, not an answer — the model's ` +
+            `template may not match this endpoint's tool protocol; asking once in plain text`
+        )
+      );
+      working.push({ role: "assistant", content: result.content });
+      working.push({
+        role: "user",
+        content:
+          `That reply contained tool-call markup as text rather than an actual tool call. ` +
+          `If you need a tool, call it properly. If you are finished, answer in plain prose ` +
+          `with no markup.`,
       });
       continue;
     }
