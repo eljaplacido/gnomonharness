@@ -1521,6 +1521,32 @@ describe("runTask — the non-interactive contract", () => {
     expect(exchange.counters?.nudges).toBe(1);
   });
 
+  it("annotates tool-call markup that survives into a final answer", () => {
+    // The first guard only caught markup arriving INSTEAD of an answer, so it
+    // missed the two paths that actually produced it: a turn that made real
+    // tool calls and then signed off with markup, and a turn cut off at the
+    // step wall mid-emission. Measured on a real refactor run -- the work was
+    // correct, the report was markup, and the counter still read zero.
+    const counters: any = { writes: 0, worktree_moves: 0, nudges: 0, final_step_was_write: false, per_tool: {} };
+    const out = promptLoop.noteMarkupInAnswer(
+      "Consolidated parse().\n<tool_call>\n<function=write>",
+      counters
+    );
+    expect(counters.text_tool_calls).toBe(1);
+    // the model's own text is NOT rewritten -- editing an answer to look better
+    // is the opposite of a faithful record
+    expect(out).toContain("Consolidated parse().");
+    expect(out).toContain("<tool_call>");
+    // but a reader who sees markup also sees why
+    expect(out).toMatch(/chat\s+template may not match/);
+
+    // clean prose is returned untouched, and does not tick the counter
+    const clean: any = { ...counters, text_tool_calls: undefined };
+    expect(promptLoop.noteMarkupInAnswer("All three copies are now one.", clean))
+      .toBe("All three copies are now one.");
+    expect(clean.text_tool_calls).toBeUndefined();
+  });
+
   it("grants network and sandbox for the session without touching the surface", async () => {
     // The only way to let an agent reach the network or another repository was
     // to quit, edit policy.toml and start again. That is not governance, it is

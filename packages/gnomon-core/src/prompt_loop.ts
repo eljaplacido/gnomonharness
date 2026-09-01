@@ -1181,6 +1181,34 @@ export function looksLikeTextToolCall(content: string): boolean {
   return TEXT_TOOL_CALL.test(content);
 }
 
+/**
+ * Flag tool-call markup that survived into a FINAL answer.
+ *
+ * The first version of this guard only caught markup arriving INSTEAD of an
+ * answer -- a turn with no tool calls at all. It therefore missed the two paths
+ * that actually produced it in practice: a turn that made real tool calls and
+ * then signed off with markup, and a turn cut off at the step wall mid-markup.
+ * Measured on a real refactor run: the work was correct, and the report was
+ * markup, with the counter still reading zero.
+ *
+ * The text is not rewritten -- editing a model's answer to look better is the
+ * opposite of a faithful record. It is annotated, so a reader who sees markup
+ * also sees why, and the counter makes it greppable across a benchmark arm.
+ */
+export function noteMarkupInAnswer(
+  content: string,
+  counters: TurnCounters
+): string {
+  if (!looksLikeTextToolCall(content)) return content;
+  counters.text_tool_calls = (counters.text_tool_calls ?? 0) + 1;
+  return (
+    content +
+    `\n\n_[gnomon: this reply contains tool-call markup as text. The model's chat ` +
+    `template may not match this endpoint's tool protocol — check the endpoint \`kind\` ` +
+    `and the model tag. The work above may still be sound; the REPORT is not reliable.]_`
+  );
+}
+
 /** How many run notes are kept and replayed. Oldest fall off first. */
 export const MAX_RUN_NOTES = 40;
 
@@ -1190,6 +1218,9 @@ export const MAX_RUN_NOTES = 40;
  * own, and only to a role that holds no tool which can change anything.
  */
 export const READ_ONLY_CONVERGE_AFTER = 0.6;
+
+/** Refusals of one tool, all of its calls, before the loop says the policy may be wrong. */
+export const ALL_REFUSED_NOTICE = 3;
 
 /**
  * Append a note, bounded, oldest first.
@@ -2015,7 +2046,7 @@ export async function runAgenticTurn(
       }
 
       return {
-        content: result.content,
+        content: noteMarkupInAnswer(result.content, counters),
         code: settle(code, result.code),
         model: usedModel,
         toolSteps: steps,
@@ -2100,7 +2131,9 @@ export async function runAgenticTurn(
           : result.content || note;
 
       return {
-        content,
+        // The wall and stall paths are where markup actually survived: a turn
+        // cut off mid-emission still returns whatever it had.
+        content: noteMarkupInAnswer(content, counters),
         code: settle(code, 4),
         model: usedModel,
         toolSteps: steps,
@@ -2237,7 +2270,32 @@ export async function runAgenticTurn(
       toolLog.push(outcome.summary);
       tally(call.name, "calls");
       const outcomeBucket = mapBucket(outcome.code);
-      if (outcomeBucket === "refusal") tally(call.name, "refusals");
+      if (outcomeBucket === "refusal") {
+        tally(call.name, "refusals");
+        // Every call to this tool refused, and enough of them to mean it.
+        //
+        // A pattern list that compiles but matches nothing is invisible: the
+        // surface looks configured, the role looks equipped, and every call
+        // comes back refused. Measured on a greenfield run: 8 bash calls, 8
+        // refusals, a stall, and nothing built -- because an allow-list written
+        // `'...\\s'` in a TOML literal string is a valid regex that matches no
+        // command. auditSurface cannot catch that; it only compiles patterns,
+        // and this one compiles.
+        //
+        // So say it where it is unmissable, once, while the run is happening.
+        const t = counters.per_tool?.[call.name];
+        if (t && t.calls === t.refusals && t.refusals === ALL_REFUSED_NOTICE) {
+          deps.say(
+            paint(
+              deps.ui,
+              "yellow",
+              `  [tools] every ${call.name} call so far has been refused (${t.refusals}/${t.refusals}). ` +
+                `If that is not what you intended, check this role's ${call.name === "bash" ? "bash_allow/bash_deny" : "tool list and write_allow"} ` +
+                `— a pattern can compile and still match nothing.`
+            )
+          );
+        }
+      }
       else if (outcomeBucket === "apparatus_failure") tally(call.name, "apparatus");
       // "the last thing it did changed something" separates a turn that
       // finished its work from one that stopped after looking around.
