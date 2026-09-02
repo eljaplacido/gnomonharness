@@ -17,7 +17,7 @@ git push origin master v0.2.0
 ```
 
 The tag push triggers `.github/workflows/release.yml`, which re-checks the
-version, builds binaries for four targets, and opens a **draft** release. A
+version, builds binaries for three targets (linux-x64, linux-arm64, darwin-arm64), and opens a **draft** release. A
 human presses Publish. That is deliberate: the workflow decides nothing about
 whether a build is fit to install.
 
@@ -58,7 +58,7 @@ It fails fast and early by design. Read the failing step first:
 
 - **"Check versions agree"** — a manifest was missed. Run
   `scripts/check-versions.sh <version>`, fix, amend, and re-tag with `-f`.
-- A build-matrix target only — the other three still built (`fail-fast: false`),
+- A build-matrix target only — the others still built (`fail-fast: false`),
   so the failure is that toolchain, not the release.
 
 Re-tagging an already-pushed tag requires `git push -f origin <tag>`, and any

@@ -1,34 +1,41 @@
 # Release — build the native binaries for a tag and attach them to a GitHub
 # release.
 #
-# READ THIS BEFORE TRUSTING IT: this workflow has never run on GitHub Actions.
-# It was written as release *preparation*; no tag has been pushed. Being exact
-# about which parts are measured and which are argued, because the difference is
-# the whole point of the provenance field this workflow exists to feed:
+# STATUS, measured 2026-09-02: this workflow has now run on GitHub Actions and
+# produced a release. Run 33650778599 (tag v0.1.1) built all three targets and
+# drafted the release with its archives attached. The header below used to say
+# "never run" and list what was unverified; that list is settled, and what
+# settled it is recorded here rather than deleted, because the difference
+# between measured and argued is the whole point of the provenance field this
+# workflow exists to feed.
 #
-#   VERIFIED, by running the step's own script locally with the `${{ }}`
+#   MEASURED, by the run above:
+#     - All three targets compile: linux-x64, linux-arm64 (cross-linked from an
+#       x64 runner), darwin-arm64.
+#     - The runner images have every tool used here.
+#     - The release job's token and `gh release create --draft --verify-tag`
+#       invocation work; the draft carried 3 archives, 3 .sha256 files and
+#       SHA256SUMS.
+#     - The version check fails a tag whose number disagrees with the manifests.
+#       Not a thought experiment: v0.1.1 was pushed twice against 0.1.0
+#       manifests and this step stopped it twice, in under 15 seconds, before
+#       anything was built. It is the reason scripts/check-versions.sh exists —
+#       see docs/RELEASING.md.
+#
+#   VERIFIED EARLIER, by running the step's own script locally with the `${{ }}`
 #   expressions substituted by hand:
 #     - The package step produces the archive it claims: an 8-entry tarball
 #       holding gnomon-surface, gnomon-enums, gnomon-edit, gnomon-exec, LICENSE,
 #       GNOMON_BUILD and README-BINARIES.txt, plus a .sha256 beside it. The
 #       nested heredoc survives YAML block-scalar dedent (the `EOF` lands in
 #       column 0) and `\$PWD` reaches the file unexpanded.
-#     - The version check passes for a tag matching the manifests and fails with
-#       the intended ::error:: for one that does not (tested v0.1.0 and v0.2.0
-#       against Cargo.toml 0.1.0 / package.json 0.1.0).
 #     - The stamp is the shape gnomon-core reads. Run for real:
 #       `GNOMON_BUILD=v0.1.0-abc1234` makes `harnessBuild()` return
 #       `gnomon/0.1.0+v0.1.0-abc1234`, instead of the git-derived fallback.
 #
-#   ARGUED FROM THE REPOSITORY, not executed: the four binaries above are the
-#   four `[[bin]]`/`main.rs` targets under `crates/`; the toolchain step accounts
-#   for the 1.82 pin in `rust-toolchain.toml`.
-#
-#   NOT VERIFIED AT ALL: that any of the three targets compiles, that the
-#   aarch64 cross-linker package is enough for this dependency set, that the
-#   runner images have every tool used here, and that the release job's token
-#   and `gh` invocation work. Treat the first tag as the test, and expect to fix
-#   something.
+#   STILL NOT MEASURED: that the published archives run on a machine that is not
+#   the runner that built them. Nobody has downloaded one and executed it on a
+#   clean host. Until someone does, "it builds" is the claim, not "it works".
 #
 # Two deliberate safety properties, because an accidental release is not
 # undoable in the way an accidental commit is:
@@ -144,9 +151,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       # Not the action's `targets:` input, deliberately. `rust-toolchain.toml`
-      # pins this repository to 1.82, and it exists because CONTRIBUTING said
-      # "Rust 1.82+" while CI installed unpinned `stable` — so cargo run inside
-      # the checkout uses 1.82 no matter what the action installed. Adding the
+      # pins this repository to an exact toolchain (1.94 as of this writing),
+      # and it exists because CONTRIBUTING said "Rust 1.82+" while CI installed
+      # unpinned `stable` — a floor nobody checked, and 1.82 could not in fact
+      # build a transitive dependency that requires edition 2024. Cargo run
+      # inside the checkout uses the pinned version no matter what the action
+      # installed, so the pin is the toolchain that matters here. Adding the
       # target through the action would install it for `stable`, a toolchain
       # this build never invokes, and cargo would stop with "the target may not
       # be installed" while the log above it showed the target being added.
