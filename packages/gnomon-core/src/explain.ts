@@ -158,7 +158,7 @@ const TOPICS: Record<string, Builder> = {
   },
 
   manifest: (config) => {
-    const { manifest, surface_hash } = recomputeManifest(config.gnomonDir, "0.1.0");
+    const { manifest, surface_hash } = recomputeManifest(config.gnomonDir);
     const present = manifest.filter((s) => s.sha256);
     return {
       topic: "manifest",

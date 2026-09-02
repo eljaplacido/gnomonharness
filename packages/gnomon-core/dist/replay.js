@@ -250,7 +250,7 @@ export function replay(trailPath, config, options = {}) {
     };
     const currentHash = (() => {
         try {
-            return recomputeManifest(config.gnomonDir, "0.1.0").surface_hash;
+            return recomputeManifest(config.gnomonDir).surface_hash;
         }
         catch {
             return null;

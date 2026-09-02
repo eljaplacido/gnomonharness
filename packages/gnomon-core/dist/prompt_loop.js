@@ -2369,7 +2369,7 @@ export async function runTask(config, input, options = {}) {
     const auditSettings = resolveAudit(config);
     const sessionId = `task-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
     const audit = new AuditTrail(auditSettings, sessionId);
-    const surface_hash = recomputeManifest(config.gnomonDir, "0.1.0").surface_hash;
+    const surface_hash = recomputeManifest(config.gnomonDir).surface_hash;
     audit.write("session_start", {
         surface_hash,
         // The trail names its harness for the same reason the record does.
@@ -3765,7 +3765,7 @@ export async function runPromptLoop(config, initialRole, options = {}) {
     const audit = new AuditTrail(auditSettings, sessionId);
     const surfaceHash = (() => {
         try {
-            return recomputeManifest(config.gnomonDir, "0.1.0").surface_hash;
+            return recomputeManifest(config.gnomonDir).surface_hash;
         }
         catch {
             return "";
@@ -4418,7 +4418,7 @@ export async function runPromptLoop(config, initialRole, options = {}) {
                     console.log(`\n  ${paint(ui0, "green", "✓")} ${paint(ui0, "bold", pickedRole)} → ` +
                         `${modelTag} @${pickedEndpoint}`);
                     console.log(paint(ui0, "gray", `  .gnomon/roles.toml written · surface now ` +
-                        `${recomputeManifest(fresh.gnomonDir, "0.1.0").surface_hash.slice(0, 16)}…`));
+                        `${recomputeManifest(fresh.gnomonDir).surface_hash.slice(0, 16)}…`));
                     continue;
                 }
                 if (processCommand(input, state)) {

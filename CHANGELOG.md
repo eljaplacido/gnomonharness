@@ -26,7 +26,14 @@
 
 ## [Unreleased]
 
-Nothing yet. Entries written after v0.1.1 is pushed belong here.
+### Changed
+
+- `recomputeManifest()` no longer takes a `build` argument. It never read one:
+  six call sites passed the literal `"0.1.0"`, which read as if the returned
+  manifest were stamped with a version. It is not, and the return type never
+  carried one. A dead argument that looks like provenance is a bad thing to have
+  in a codebase whose subject is provenance. The build string a record carries
+  comes from `harnessBuild()`, and always did.
 
 ## [0.1.1] — 2026-09-02
 

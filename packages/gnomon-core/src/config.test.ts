@@ -880,13 +880,13 @@ describe("a proposal is staging, an acceptance is a surface change", () => {
     const dir = mkdtempSync(join(tmpdir(), "gnomon-propose-"));
     mkdirSync(join(dir, ".gnomon", "skills", "proposed"), { recursive: true });
     writeFileSync(join(dir, ".gnomon", "config.toml"), "[defaults]\n");
-    const before = recomputeManifest(join(dir, ".gnomon"), "0.1.0").surface_hash;
+    const before = recomputeManifest(join(dir, ".gnomon")).surface_hash;
 
     writeFileSync(
       join(dir, ".gnomon", "skills", "proposed", "s.md"),
       "---\nid: s\n---\nbody\n"
     );
-    const proposed = recomputeManifest(join(dir, ".gnomon"), "0.1.0").surface_hash;
+    const proposed = recomputeManifest(join(dir, ".gnomon")).surface_hash;
     expect(proposed).toBe(before);
 
     // Accepting moves the file into skills/, which IS hashed: the moment it
@@ -895,7 +895,7 @@ describe("a proposal is staging, an acceptance is a surface change", () => {
       join(dir, ".gnomon", "skills", "proposed", "s.md"),
       join(dir, ".gnomon", "skills", "s.md")
     );
-    const accepted = recomputeManifest(join(dir, ".gnomon"), "0.1.0").surface_hash;
+    const accepted = recomputeManifest(join(dir, ".gnomon")).surface_hash;
     expect(accepted).not.toBe(before);
 
     rmSync(dir, { recursive: true, force: true });

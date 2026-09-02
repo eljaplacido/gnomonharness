@@ -28,7 +28,7 @@ const surface = (): string => {
 };
 
 const agentFor = (gnomonDir: string) => {
-  const manifest = recomputeManifest(gnomonDir, "0.1.0");
+  const manifest = recomputeManifest(gnomonDir);
   return {
     gnomon: { gnomonDir } as any,
     manifest: { build: "0.1.0", surface_hash: manifest.surface_hash, sources: manifest.manifest },

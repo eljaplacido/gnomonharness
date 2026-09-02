@@ -799,8 +799,15 @@ export declare function resolveVerify(config: GnomonConfig): ResolvedVerify | nu
  * Recompute the manifest from the .gnomon/ tree on disk.
  * Used for drift detection: compare against the cached manifest.
  * Returns a fresh Manifest suitable for comparison.
+ *
+ * It took a `build` parameter until this commit and never read it. Six call
+ * sites passed the literal "0.1.0", which read as if the returned manifest were
+ * stamped with a version — it is not, and the return type never carried one.
+ * A dead argument that looks like provenance is worse than no argument in a
+ * codebase whose subject is provenance, so it is gone rather than defaulted.
+ * The build string a record actually carries comes from harnessBuild().
  */
-export declare function recomputeManifest(baseDir: string, build?: string): {
+export declare function recomputeManifest(baseDir: string): {
     manifest: SourceEntry[];
     surface_hash: string;
 };

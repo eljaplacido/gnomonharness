@@ -99,7 +99,7 @@ function surface(over: Partial<Record<string, string>> = {}): GnomonConfig {
 }
 
 function surfaceHash(config: GnomonConfig): string {
-  return recomputeManifest(config.gnomonDir, "0.1.0").surface_hash;
+  return recomputeManifest(config.gnomonDir).surface_hash;
 }
 
 const auditSettings = (over: Partial<ResolvedAudit> = {}): ResolvedAudit => ({

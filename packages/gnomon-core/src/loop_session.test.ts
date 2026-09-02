@@ -218,12 +218,12 @@ describe("session persistence through the interactive loop", () => {
       // tested; the consequence — a real turn writing a real snapshot and the
       // hash holding still — is only observable by running one.
       const root = makeSurface();
-      const before = recomputeManifest(join(root, ".gnomon"), "0.1.0").surface_hash;
+      const before = recomputeManifest(join(root, ".gnomon")).surface_hash;
 
       await drive(root, ["do a thing", "/quit"]);
 
       expect(snapshots(root)).toHaveLength(1);
-      const after = recomputeManifest(join(root, ".gnomon"), "0.1.0").surface_hash;
+      const after = recomputeManifest(join(root, ".gnomon")).surface_hash;
       expect(after).toBe(before);
     },
     20000
@@ -351,7 +351,7 @@ describe("resuming a session through the interactive loop", () => {
       // region. A resumed session whose rules quietly changed underneath it is
       // exactly the failure this harness exists to prevent.
       const root = makeSurface({ marker: " rev-one" });
-      const hashAtSave = recomputeManifest(join(root, ".gnomon"), "0.1.0").surface_hash;
+      const hashAtSave = recomputeManifest(join(root, ".gnomon")).surface_hash;
 
       await drive(root, ["begin under the old rules", "/quit"]);
       const saved = loadSession(storeOf(root));
@@ -363,7 +363,7 @@ describe("resuming a session through the interactive loop", () => {
         join(root, ".gnomon", "system.md"),
         "You are a stub under test. rev-two, materially different.\n"
       );
-      const hashNow = recomputeManifest(join(root, ".gnomon"), "0.1.0").surface_hash;
+      const hashNow = recomputeManifest(join(root, ".gnomon")).surface_hash;
       expect(hashNow, "editing system.md must move the surface hash").not.toBe(
         hashAtSave
       );

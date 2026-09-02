@@ -1844,8 +1844,15 @@ export function resolveVerify(config) {
  * Recompute the manifest from the .gnomon/ tree on disk.
  * Used for drift detection: compare against the cached manifest.
  * Returns a fresh Manifest suitable for comparison.
+ *
+ * It took a `build` parameter until this commit and never read it. Six call
+ * sites passed the literal "0.1.0", which read as if the returned manifest were
+ * stamped with a version — it is not, and the return type never carried one.
+ * A dead argument that looks like provenance is worse than no argument in a
+ * codebase whose subject is provenance, so it is gone rather than defaulted.
+ * The build string a record actually carries comes from harnessBuild().
  */
-export function recomputeManifest(baseDir, build = "0.1.0") {
+export function recomputeManifest(baseDir) {
     const existing = collectSurface(baseDir);
     const existingMap = new Map();
     for (const s of existing) {

@@ -3247,7 +3247,7 @@ export async function runTask(
   const auditSettings = resolveAudit(config);
   const sessionId = `task-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
   const audit = new AuditTrail(auditSettings, sessionId);
-  const surface_hash = recomputeManifest(config.gnomonDir, "0.1.0").surface_hash;
+  const surface_hash = recomputeManifest(config.gnomonDir).surface_hash;
 
   audit.write("session_start", {
     surface_hash,
@@ -4870,7 +4870,7 @@ export async function runPromptLoop(
   const audit = new AuditTrail(auditSettings, sessionId);
   const surfaceHash = (() => {
     try {
-      return recomputeManifest(config.gnomonDir, "0.1.0").surface_hash;
+      return recomputeManifest(config.gnomonDir).surface_hash;
     } catch {
       return "";
     }
@@ -5722,7 +5722,7 @@ export async function runPromptLoop(
           console.log(
             paint(ui0, "gray",
               `  .gnomon/roles.toml written · surface now ` +
-                `${recomputeManifest(fresh.gnomonDir, "0.1.0").surface_hash.slice(0, 16)}…`)
+                `${recomputeManifest(fresh.gnomonDir).surface_hash.slice(0, 16)}…`)
           );
           continue;
         }

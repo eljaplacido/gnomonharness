@@ -225,10 +225,7 @@ export async function runAgentTurn(
 
     // 3.5. Re-assert manifest (drift detection)
     try {
-      const { manifest: newSources, surface_hash: newHash } = recomputeManifest(
-        agent.gnomon.gnomonDir,
-        "0.1.0"
-      );
+      const { manifest: newSources, surface_hash: newHash } = recomputeManifest(agent.gnomon.gnomonDir);
       const currentHash = agent.manifest.surface_hash;
       if (currentHash && newHash && currentHash !== newHash) {
         // Drift detected — record apparatus_failure
