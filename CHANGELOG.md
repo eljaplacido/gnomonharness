@@ -12,17 +12,110 @@
   section now; scaffold day is kept as a dated subsection at the end of it
   rather than deleted, because it is still what happened on 2026-08-23.
 
-  NOT VERIFIED, and the reason this file cannot claim otherwise: the date on the
-  0.1.0 heading is the date the section was PREPARED, not the date a tag was
-  pushed — nothing has been published, and `git tag` is still empty. If v0.1.0
-  is tagged on a different day, change the heading to that day. The link
-  definitions at the foot of this file resolve only once the tag exists.
+  Updated 2026-09-02: v0.1.0 was tagged (a651b51) and a draft release was cut,
+  but it was never published — an audit of that tag found the defects listed
+  under 0.1.1, including two mechanisms that reported success while doing
+  nothing. v0.1.1 is the first release intended for anyone else to install, and
+  v0.1.0 is kept in this file because it is what happened, not because anything
+  should install it.
+
+  The dates on release headings are the dates those sections were prepared. If
+  a tag is pushed on a different day, change the heading to that day. The link
+  definitions at the foot of this file resolve only once the tags exist.
 -->
 
 ## [Unreleased]
 
-Nothing yet — 0.1.0 below has not been tagged. Entries written after the tag is
-pushed belong here.
+Nothing yet. Entries written after v0.1.1 is pushed belong here.
+
+## [0.1.1] — 2026-09-02
+
+A correctness release. 0.1.0 was tagged and drafted but never published; every
+entry here is a defect found by auditing that tag, and two of them are defects
+in mechanisms that reported success while doing nothing.
+
+### Fixed
+
+- **A stored credential could reroute the model.** `gnomon key set` accepted any
+  variable name, including `GNOMON_MODEL_URL` — so a value outside the repository
+  changed which endpoint answered, with the surface hash unmoved. That is rule 1
+  inverted: the manifest said the run was reproducible and it was not.
+  `applyCredentials` now admits only names a surface file declares, and refuses
+  the rest by name.
+- **`--continue` resumed nothing.** Session listing output was being written into
+  the session store, where `session-*.json` sorted last and carried neither `id`
+  nor `exchanges`; the resume path silently selected it and started fresh. Both
+  the write and the tolerant read are fixed.
+- **`approval = "always"` deadlocked.** Tool prefetch fired concurrent approval
+  requests into a single-slot resolver, so the second one was never answered.
+  Prefetch is now skipped when every call must be approved.
+- **The verify gate called an unrunnable check "passed".** Exit 126/127 — script
+  not executable, interpreter missing — was indistinguishable from a clean run.
+  It is now reported as unrunnable: not a pass, and not handed back to the model
+  as a failure it could "fix".
+- **A key error opened a socket first.** Missing credentials surfaced as
+  `provider_unreachable` (12, apparatus) rather than `launch_failed` (10). A
+  pre-flight check runs before the connection, so a misconfigured key is no
+  longer counted as the provider's fault.
+- **MCP servers were absent from `gnomon task`.** `connectMcp` ran only in the
+  interactive loop, so the one-shot path silently had a shorter tool list —
+  precisely the failure rule 3 exists to prevent.
+- **`gnomon-surface` hardcoded its revision to `local`.** It now resolves the
+  revision the same way the TypeScript side does, and the two agree.
+- **`pnpm -r typecheck` checked nothing.** No package defined the script, so it
+  exited 0 and a real type error shipped past it. All four packages now run
+  `tsc --noEmit`.
+- **The release gate read the wrong manifest.** It compared the tag against
+  Cargo.toml and the root `package.json`, but `harnessBuild()` stamps records
+  with *gnomon-core's* version — the one file it never read. `scripts/check-versions.sh`
+  now checks all six carriers, runs in local CI as well as on tag push, and
+  `scripts/bump-version.sh` updates them together.
+
+### Added
+
+- **`gnomon attest`** — sign a session's audit chain with an external signer
+  command, and verify it. Three states are reported distinctly: signed-valid,
+  signed-broken, and NOT-SIGNED. An unsigned trail is never shown as passing.
+- **`gnomon replay`** — re-derive the harness's decisions from a recorded trail
+  without calling a model, so a record can be checked against the code that
+  claims to have produced it.
+- **`[chain]`** — a declared role sequence, one outcome bucket per stage, with
+  `chain_stage` audit records. It gates nothing; it is a record of which role
+  ran when. Measured against no-chain on Terminal-Bench: no significant
+  difference (p = 0.375, n = 2 paired) — published in
+  `benchmarks/results/role-chain-2026-09-02/`.
+- **`[turn]`** — nine loop constants that were compiled-in are now surface
+  fields, so changing them is a hash change. Named `[turn]` rather than `[loop]`
+  to avoid colliding with `.gnomon/loops/*.toml`.
+- **`extra_roots`, `task_allow`, `transport_grace_ms`, and `[sandbox] exec = "docker"`** —
+  declared, hashed, and documented.
+- **`docs/EVIDENCE.md`** — a claim-to-measurement map, including an explicit
+  "claims with no evidence" section.
+- **Negative-control tests** (`gates.test.ts`) asserting each gate *can* fail.
+  Written after discovering a typecheck control that could not: it ran from a
+  directory with no `node_modules` and resolved an unrelated binary that exits 1
+  unconditionally, so good and bad code both "failed" it.
+
+### Changed
+
+- Transport failures no longer consume a generation attempt (`transport_grace_ms`).
+- Three surface-level checks that ran once per role now run once, cutting a
+  15-report startup to 3.
+- `rust-toolchain.toml` pins 1.94; 1.82 could not build a transitive dependency
+  requiring edition 2024.
+- Test coverage: `prompt_loop.ts` 50.3% → 72.6%, gnomon-core 74.9% → 83.9%.
+  1018 tests (57 Rust, 961 TypeScript).
+
+### Known limits, stated rather than fixed
+
+- `role_profile` is a published enumeration that nothing reads. It is disclosed
+  as declared-not-implemented rather than quietly removed.
+- `gnomon-exec` cannot deserialize a `gnomon session` record (missing `seq`).
+  Published as a limit in `.gnomon/ci.sh`; the two record readers are not yet
+  one reader.
+- The three headline comparisons run for this release — role chain, peer
+  harness, and model ceiling — all returned null results at the sample sizes
+  affordable. They are published as nulls, not withheld.
 
 ## [0.1.0] — 2026-09-01
 
@@ -764,5 +857,6 @@ was written.
   `git tag`, not a documentation edit as well.
 -->
 
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.1.1
 [0.1.0]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.1.0

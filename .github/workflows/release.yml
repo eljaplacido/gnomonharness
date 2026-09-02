@@ -86,14 +86,18 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           version="${tag#v}"
-          cargo_version=$(python3 -c "import tomllib;print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")
-          npm_version=$(node -p "require('./package.json').version")
-
-          echo "tag=$tag  cargo=$cargo_version  npm=$npm_version"
-          if [ "$version" != "$cargo_version" ] || [ "$version" != "$npm_version" ]; then
-            echo "::error::tag $tag implies version $version, but Cargo.toml says $cargo_version and package.json says $npm_version. Bump the manifests and re-tag."
-            exit 1
-          fi
+          # Every manifest, not just the root. This step used to read Cargo.toml
+          # and ./package.json only — but harnessBuild() stamps records with
+          # *gnomon-core's* package.json version, so the one file whose version
+          # actually reaches a published record was the one the release gate
+          # never read. The golden fixtures embed it too, and a stale golden
+          # fails conformance only after the binaries are built.
+          #
+          # The check lives in a script so it can be run locally and from
+          # .gnomon/ci.sh, rather than existing only inside a workflow nobody
+          # can execute before pushing a tag. `scripts/bump-version.sh` is the
+          # other half: it updates all of them at once.
+          scripts/check-versions.sh "$version"
 
           # The provenance identifier. gnomon-core reads GNOMON_BUILD from the
           # environment and renders `gnomon/<package version>+<this value>`, so

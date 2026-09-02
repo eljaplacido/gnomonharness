@@ -21,12 +21,26 @@ const __dirname = dirname(__filename);
 // Resolve fixture relative to test file location
 const fixtureDir = join(__dirname, "..", "..", "..", "conformance", "fixture_tree", ".gnomon");
 
+// The version the native binary will report, read from the workspace manifest
+// rather than written down twice.
+const CRATE_VERSION = (() => {
+  const toml = readFileSync(join(__dirname, "..", "..", "..", "Cargo.toml"), "utf8");
+  const m = /^\s*version\s*=\s*"([^"]+)"/m.exec(toml);
+  if (!m) throw new Error("no version in workspace Cargo.toml");
+  return m[1];
+})();
+
 describe("gnomon-natives surface", () => {
 
   describe("manifest", () => {
     it("returns a valid manifest structure", () => {
       const m = manifest(fixtureDir);
-      expect(m.build).toMatch(/^0\.1\.0\+/);
+      // Derived, never hardcoded. A literal here (it was /^0\.1\.0\+/) turns
+      // every version bump into a mystery test failure in an unrelated
+      // package — which is exactly what it did on the 0.1.0 -> 0.1.1 bump.
+      // The workspace Cargo.toml is the source of truth for the binary's
+      // version; the release workflow separately asserts package.json agrees.
+      expect(m.build).toMatch(new RegExp(`^${CRATE_VERSION.replace(/\./g, "\\.")}\\+`));
       expect(m.surface_hash).toMatch(/^[a-f0-9]{64}$/);
       expect(Array.isArray(m.sources)).toBe(true);
       expect(m.sources.length).toBeGreaterThan(0);

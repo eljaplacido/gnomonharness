@@ -450,7 +450,8 @@ gnomon/
 │   └── gnomon-tui/             # Saved-session viewer
 ├── .gnomon/                    # This repository's own surface
 ├── conformance/                # Golden fixtures — the contract
-└── docs/                       # DESIGN, CONTRACTS, ROADMAP
+├── scripts/                    # Release plumbing — bump and check versions
+└── docs/                       # DESIGN, CONTRACTS, RELEASING, ROADMAP
 ```
 
 ---

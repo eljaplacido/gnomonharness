@@ -142,6 +142,14 @@ pnpm test
 cd packages/gnomon-cli && pnpm test -- exit_codes
 ```
 
+## Cutting a release
+
+`scripts/bump-version.sh <version>`, then follow
+[docs/RELEASING.md](docs/RELEASING.md). Do not hand-edit the version: it is
+written down in six files and the one that reaches published records is not the
+one you would think to edit first. `scripts/check-versions.sh` asserts they
+agree, and runs in `.gnomon/ci.sh` before you ever push a tag.
+
 ## Adding a new contract
 
 1. Update `docs/CONTRACTS.md` with the new contract definition

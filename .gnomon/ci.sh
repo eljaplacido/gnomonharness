@@ -420,6 +420,20 @@ else
     fail "Manifest is non-deterministic: $H1 != $H2"
 fi
 
+# ── 6b. Version carriers agree ──
+#
+# Six files write the release version down, and only a tag push used to check
+# them — after the v0.1.1 tag had already been cut, twice, and failed twice.
+# Running it here means the mismatch is caught by the CI you run before
+# tagging, not by the release job you cannot run until after.
+echo ""
+echo "═══ Version consistency check ═══"
+if scripts/check-versions.sh; then
+    pass "All version carriers agree"
+else
+    fail "Version carriers disagree (see above); run scripts/bump-version.sh"
+fi
+
 # ── 7. Contract change ⇒ fixture change, in the same change ──
 #
 # CONTRIBUTING.md told contributors this was caught; CONTRACTS.md said in the
