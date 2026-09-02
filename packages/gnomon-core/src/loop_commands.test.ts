@@ -23,13 +23,14 @@
  * how many HTTP requests left the process. Nothing here greps the source.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { PassThrough, Writable } from "node:stream";
 import { mkdtempSync, cpSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadConfig, routeRole } from "./config.js";
 import { runPromptLoop, COMMANDS } from "./prompt_loop.js";
+import { stubDeclaredKeys } from "./test_support.js";
 
 // The real surface, copied per test. loadConfig is fine on the repo itself, but
 // the loop APPENDS to `<root>/.gnomon-sessions/history` and saves a session
@@ -208,6 +209,20 @@ const sentPrompt = (call: ModelCall): string =>
   call.body.messages?.filter((m) => m.role === "user").at(-1)?.content ?? "";
 
 describe("slash commands inside the running loop", () => {
+  // This surface routes a role at an endpoint declaring api_key_env, and the
+  // loop pre-flights that before opening a socket. Without a value the turn is
+  // refused and every assertion below fails on a missing model call.
+  //
+  // It used to work anyway, because the author's machine had a credential
+  // store with that variable in it. That made these tests pass locally and
+  // fail in CI, which is the exact machine-scoped dependence this project
+  // exists to remove. The stub is declared here so the requirement is visible.
+  let restoreKeys: () => void;
+  beforeAll(() => {
+    restoreKeys = stubDeclaredKeys(loadConfig(resolve(process.cwd(), "..", "..")));
+  });
+  afterAll(() => restoreKeys());
+
   // ─────────────────────────────────────────────────────────────────────────
   // The claim nothing proved.
   // ─────────────────────────────────────────────────────────────────────────

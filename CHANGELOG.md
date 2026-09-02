@@ -65,6 +65,18 @@ in mechanisms that reported success while doing nothing.
 - **`pnpm -r typecheck` checked nothing.** No package defined the script, so it
   exited 0 and a real type error shipped past it. All four packages now run
   `tsc --noEmit`.
+- **The test suite read the developer's credential store.** Thirteen gnomon-core
+  tests copy this repository's own surface, which routes a role at an endpoint
+  declaring `api_key_env`. On a machine where `gnomon key set` had ever been
+  run, `~/.local/share/gnomon/credentials.json` supplied that key and the tests
+  took the model path; on a fresh checkout they took the refusal path and
+  failed. They were green locally and red in CI, and "passes for me" was true
+  and useless — a machine-scoped dependency in the test suite of a harness whose
+  first rule forbids machine-scoped configuration. A shared `vitest.setup.ts`
+  now points `XDG_DATA_HOME` at an empty directory and sweeps credential-shaped
+  variables out of the environment, so every run starts in the state a
+  stranger's checkout is in; tests that need a key call `stubDeclaredKeys()`,
+  which reads the names from the surface rather than hardcoding them.
 - **The release gate read the wrong manifest.** It compared the tag against
   Cargo.toml and the root `package.json`, but `harnessBuild()` stamps records
   with *gnomon-core's* version — the one file it never read. `scripts/check-versions.sh`

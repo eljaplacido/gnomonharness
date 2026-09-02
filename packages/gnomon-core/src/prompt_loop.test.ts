@@ -2,8 +2,9 @@
  * gnomon-core: Prompt loop tests
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
 import { loadConfig, endpointClass, resolveUi } from "./config.js";
+import { stubDeclaredKeys } from "./test_support.js";
 import { mapBucket } from "./session.js";
 import * as promptLoop from "./prompt_loop.js";
 import { setRoleModel } from "./prompt_loop.js";
@@ -1472,6 +1473,15 @@ describe("trimWorking", () => {
 });
 
 describe("runTask — the non-interactive contract", () => {
+  // Some of these route at an endpoint that declares api_key_env, which the
+  // loop pre-flights before opening a socket. `fetch` is stubbed throughout, so
+  // the VALUE is irrelevant — but its PRESENCE decides whether a turn happens
+  // at all. It used to come from the author's credential store, which is why
+  // these passed locally and failed in CI. See test_support.ts.
+  let restoreKeys: () => void;
+  beforeAll(() => { restoreKeys = stubDeclaredKeys(loadConfig("../..")); });
+  afterAll(() => restoreKeys());
+
   const withFetch = async (impl: typeof fetch, run: () => Promise<void>) => {
     const original = globalThis.fetch;
     globalThis.fetch = impl;
