@@ -133,6 +133,19 @@ export function listSessions(store: ResolvedSessionStore): SessionListEntry[] {
     const path = join(store.dir, file);
     try {
       const snap = JSON.parse(readFileSync(path, "utf-8")) as SessionSnapshot;
+      // A parseable JSON file is not a conversation snapshot.
+      //
+      // `gnomon session <cmd>` writes its own record into this same directory,
+      // and it has neither an `id` nor `exchanges`. Sorted by filename,
+      // `session-<stamp>.json` lands AFTER `<stamp>.json`, so it became the
+      // "most recent session" -- and `--continue`, the flag a daily user reaches
+      // for most, silently resumed it: `Resumed undefined — 0 turn(s)`, with the
+      // real conversation unreachable. prune() sorts the same way, so the real
+      // ones were also the first deleted.
+      //
+      // A reader that trusts the shape of what it parsed is how a directory
+      // becomes a contract nobody wrote down. Validate it here.
+      if (typeof snap.id !== "string" || !Array.isArray(snap.exchanges)) continue;
       out.push({
         id: snap.id,
         path,

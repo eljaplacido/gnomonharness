@@ -2383,7 +2383,21 @@ export async function runAgenticTurn(
     // to the sequential path. That is what keeps the determinism result honest:
     // this is a wall-clock change, not a behaviour change.
     const prefetched = new Map<number, Promise<ToolOutcome>>();
-    if (!deps.signal?.aborted) {
+    // Never prefetch when every call has to ask.
+    //
+    // Under approval = "always" each prefetched call awaits ctx.approve, which
+    // awaits readLine() -- and readLine holds ONE resolver. The second
+    // concurrent prompt overwrote the first, which was then never called, so
+    // the turn never settled and neither Esc nor Ctrl+C recovered it.
+    // Reproduced with two leading `read` calls, which is ordinary model
+    // behaviour: two approve> prompts appear, one is answerable, the session is
+    // gone. `on_write` is unaffected -- read/glob/grep/compute are not writes
+    // and ask nothing there -- which is why the default never showed this.
+    //
+    // Overlapping reads is a wall-clock optimisation. An operator who asked to
+    // see every call before it runs has already said the wall clock is not what
+    // they are optimising.
+    if (!deps.signal?.aborted && gate !== "always") {
       for (let i = 0; i < result.toolCalls.length; i++) {
         const call = result.toolCalls[i]!;
         if (!concurrentSafe(call.name) || !offered.has(call.name)) break;

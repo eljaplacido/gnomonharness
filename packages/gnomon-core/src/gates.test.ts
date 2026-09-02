@@ -114,21 +114,38 @@ describe("gate: the repository's own CI gates can fail", () => {
     }
   });
 
-  it("tsc actually rejects a type error", () => {
-    // Proves the checker is wired, not merely named. A gate that cannot fail
-    // is not a gate, and this is the cheapest possible proof that it can.
-    const dir = mkdtempSync(join(tmpdir(), "gnomon-tsc-"));
-    writeFileSync(join(dir, "bad.ts"), "const n: number = 'not a number';\n");
-    let failed = false;
-    try {
-      execFileSync("npx", ["tsc", "--noEmit", "--strict", join(dir, "bad.ts")], {
-        stdio: "pipe", cwd: join(__dirname, "..", ".."),
-      });
-    } catch {
-      failed = true;
-    }
-    expect(failed, "tsc accepted a string assigned to a number").toBe(true);
-    rmSync(dir, { recursive: true, force: true });
+  it("tsc actually rejects a type error, and accepts a correct one", () => {
+    // This test is the reason the file exists, and until now it could not fail.
+    //
+    // It ran `npx tsc` with cwd = packages/, which has no node_modules. npx then
+    // resolved the npm DECOY package named `tsc` ("This is not the tsc command
+    // you are looking for"), which exits 1 unconditionally. Measured from that
+    // directory: a string assigned to a number -> exit 1, and `const n: number =
+    // 42` -> exit 1 as well. The assertion held for both, so a green result said
+    // nothing about TypeScript at all.
+    //
+    // Two changes make it a control. It runs from a package that HAS the real
+    // compiler, and it asserts BOTH directions -- a checker that rejects
+    // everything is exactly as useless as one that accepts everything, and only
+    // the second assertion can tell them apart.
+    const cwd = join(__dirname, "..");
+    const check = (src: string): boolean => {
+      const dir = mkdtempSync(join(tmpdir(), "gnomon-tsc-"));
+      writeFileSync(join(dir, "x.ts"), src);
+      try {
+        execFileSync("npx", ["tsc", "--noEmit", "--strict", join(dir, "x.ts")], {
+          stdio: "pipe",
+          cwd,
+        });
+        return true;
+      } catch {
+        return false;
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+    expect(check("const n: number = 'not a number';\n"), "tsc accepted a type error").toBe(false);
+    expect(check("const n: number = 42;\n"), "tsc rejected correct code — it is not really running").toBe(true);
   });
 });
 
@@ -314,5 +331,32 @@ describe("gate: attestation reports what it cannot do", () => {
     const none = resolveAttest(cfg({}), "/tmp/gate/.gnomon-audit");
     expect(none.enabled).toBe(false);
     expect(none.problems).toEqual([]);
+  });
+});
+
+describe("gate: session resume cannot be hijacked by a non-conversation file", () => {
+  it("skips a parseable .json in the store that is not a snapshot", async () => {
+    // `gnomon session <cmd>` writes its record into the SAME directory as
+    // conversation snapshots, with neither an `id` nor `exchanges`. Sorted by
+    // filename, `session-<stamp>.json` lands after `<stamp>.json`, so it became
+    // the most recent "session" and --continue silently resumed it:
+    // "Resumed undefined — 0 turn(s)", the real conversation unreachable, and
+    // prune() deleting the real ones first because it sorts the same way.
+    const { listSessions } = await import("./session_store.js");
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-sess-"));
+    writeFileSync(
+      join(dir, "2026-09-02T10-00-00-000Z-1.json"),
+      JSON.stringify({ id: "2026-09-02T10-00-00-000Z-1", exchanges: [{ input: "real work" }], updated: "x" })
+    );
+    // what `gnomon session` writes — parseable, and not a conversation
+    writeFileSync(
+      join(dir, "session-2026-09-02T11-00-00-000Z.json"),
+      JSON.stringify({ command: "pytest -q", steps: [], started: "x" })
+    );
+    const found = listSessions({ dir, persist: true, keep: 10 } as never);
+    expect(found.length, "the command record must not be listed as a session").toBe(1);
+    expect(found[0].id).toBe("2026-09-02T10-00-00-000Z-1");
+    expect(found[0].turns).toBe(1);
+    rmSync(dir, { recursive: true, force: true });
   });
 });
