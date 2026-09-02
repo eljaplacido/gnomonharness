@@ -144,6 +144,18 @@ so both format drift and non-determinism fail the build.
   "sandbox": ["off", "confined", "strict"],
   "approval": ["never", "on_write", "always"],
   "role_profile": ["local_first", "frontier_plan", "all_remote"]
+```
+
+**`role_profile` is declared and not implemented.** The three values are
+published and `.gnomon/profiles/*.toml` exists, but nothing reads either: no code
+path selects a profile, and `roleDef.profile` is consumed as a model tag rather
+than as a profile name. It is listed here because removing a published
+enumeration value is a contract change, and because a reader who finds
+`profiles/` in a scaffolded surface will otherwise assume it does something.
+The same disclosure applies to `edit_format`: of `ast`, `hashline` and
+`str_replace`, only `str_replace` is implemented.
+
+```json
 }
 ```
 

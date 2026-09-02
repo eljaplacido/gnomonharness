@@ -7,7 +7,7 @@ import { loadConfig, endpointClass, resolveUi } from "./config.js";
 import { mapBucket } from "./session.js";
 import * as promptLoop from "./prompt_loop.js";
 import { setRoleModel } from "./prompt_loop.js";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -2900,4 +2900,111 @@ describe("a declared chain is the shape of the turn", () => {
     const src = String(promptLoop.runTask);
     expect(src).toContain("options.role || declaredChain.length < 2");
   });
+});
+
+describe("the verify gate — the one thing that can contradict the model", () => {
+  // Local, as every other describe in this file keeps its own: the global is
+  // swapped and restored in a finally so two suites cannot fight over it.
+  const withFetch = async (impl: typeof fetch, run: () => Promise<void>) => {
+    const original = globalThis.fetch;
+    globalThis.fetch = impl;
+    try {
+      await run();
+    } finally {
+      globalThis.fetch = original;
+    }
+  };
+
+  // It was one test deep. These cover the three outcomes a declared check can
+  // actually have, because the gate's whole job is to be believed about which
+  // one happened: it passed, it failed, or it never ran. Conflating the third
+  // with the second made the model rewrite correct code (commit 902a93f).
+  // A copy of the real surface, as the delegation test does: a hand-rolled
+  // minimal one produced no turn at all, because routing and the role's tool
+  // list come from files this loop genuinely reads.
+  const surfaceWith = (verify: string) => {
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-vg-"));
+    cpSync(join(process.cwd(), "..", "..", ".gnomon"), join(dir, ".gnomon"), { recursive: true });
+    const policy = join(dir, ".gnomon", "policy.toml");
+    writeFileSync(
+      policy,
+      readFileSync(policy, "utf8").replace(/\n\[verify\][\s\S]*$/, "\n") +
+        `\n[verify]\ncommand = ${JSON.stringify(verify)}\nafter = "write"\nmax_rounds = 1\n`
+    );
+    return dir;
+  };
+
+  const runWrite = async (dir: string) => {
+    // Stubbed fetch, so the value is irrelevant — but the loop pre-flights the
+    // declared api_key_env before opening a socket, and without it the turn is
+    // refused before the write and the gate never runs.
+    process.env.OPENCODE_API_KEY ??= "stub-key-for-this-test";
+    const config: any = loadConfig(dir);
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const said: string[] = [];
+    let call = 0;
+    await withFetch(
+      (async () => {
+        call++;
+        const tool_calls =
+          call === 1
+            ? [{ function: { name: "write", arguments: { path: "f.txt", content: "x\n" } } }]
+            : undefined;
+        return { ok: true, json: async () => ({ message: { content: tool_calls ? "" : "done", tool_calls } }) };
+      }) as unknown as typeof fetch,
+      async () => {
+        await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "write a file" }],
+          {
+            approve: async () => true,
+            progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+            say: (l: string) => said.push(l),
+          }
+        );
+      }
+    );
+    return said.join("\n");
+  };
+
+  it("says PASSED only when the check ran and exited 0", async () => {
+    const dir = surfaceWith("true");
+    const out = await runWrite(dir);
+    expect(out).toMatch(/verify passed/i);
+    expect(out).not.toMatch(/could not run|handing the turn back/i);
+    rmSync(dir, { recursive: true, force: true });
+  }, 20000);
+
+  it("hands the turn back when the check RAN and failed", async () => {
+    const dir = surfaceWith("false");
+    const out = await runWrite(dir);
+    expect(out).toMatch(/verify failed|handing the turn back/i);
+    expect(out).not.toMatch(/verify passed/i);
+    rmSync(dir, { recursive: true, force: true });
+  }, 20000);
+
+  it("reports a check that COULD NOT RUN, and neither fails nor passes it", async () => {
+    // 127 is not-found. Reporting it as failure told the model its correct work
+    // was wrong; reporting it as a pass would be the silent success this gate
+    // exists to contradict. It must be neither.
+    const dir = surfaceWith("definitely-not-a-real-command-xyz");
+    const out = await runWrite(dir);
+    expect(out).toMatch(/could not run/i);
+    expect(out).not.toMatch(/verify passed/i);
+    expect(out).not.toMatch(/handing the turn back/i);
+    rmSync(dir, { recursive: true, force: true });
+  }, 20000);
+
+  it("treats a check killed by a signal as a failure, not a pass", async () => {
+    // bashTool reports TOOL_OK for anything that RAN, so a signal-killed suite
+    // came back with an unreadable exit status. Failing closed is the only safe
+    // reading: a segfaulted test suite must not be indistinguishable from green.
+    const dir = surfaceWith("kill -9 $$");
+    const out = await runWrite(dir);
+    expect(out).not.toMatch(/verify passed/i);
+    rmSync(dir, { recursive: true, force: true });
+  }, 20000);
 });
