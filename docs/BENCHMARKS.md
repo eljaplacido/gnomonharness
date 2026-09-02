@@ -24,6 +24,16 @@ cite these numbers as a harness ranking.**
 > three rated critical are described there because each one distorted a
 > measurement.
 >
+> **Build attribution, added 2026-09-02.** This document names no commit for any
+> number in it, which means a reader arriving from the v0.1.1 release will
+> reasonably assume these describe the build they downloaded. They do not.
+> Nothing here — and nothing in `benchmarks/results/` — was run against
+> `v0.1.1` (`f317b97`). Each result directory's own README names the build it
+> measured, where that was recorded; several older ones do not record it at all,
+> and those cannot support a claim about any particular commit.
+> [EVIDENCE.md](EVIDENCE.md) carries the current claim-to-measurement map and is
+> the better entry point.
+>
 > Read [BENCHMARK-POSTMORTEM.md](BENCHMARK-POSTMORTEM.md) before citing
 > anything here.
 
