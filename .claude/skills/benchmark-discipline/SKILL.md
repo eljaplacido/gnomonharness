@@ -198,6 +198,20 @@ campaign that was blamed on the harness or the host turned out to be something
 the operator did to the run while diagnosing it. Before concluding "the tool is
 broken", list what you have changed since it last worked.
 
+**A green run that depends on your machine measures your machine.** Added
+2026-09-02. Thirteen tests passed locally and failed in CI, and the difference
+was `~/.local/share/gnomon/credentials.json`: the tests copied a surface whose
+endpoint declares `api_key_env`, and on a machine where `gnomon key set` had
+ever been run, the key was simply there. They exercised the model path here and
+the refusal path everywhere else. "Passes for me" was true, reproducible, and
+worthless.
+
+The general form: **before believing a suite, run it in the state a stranger is
+in.** An empty `XDG_DATA_HOME`, no exported keys, a fresh clone. Anything that
+changes between those two runs is apparatus, not result — and the direction of
+the error is always flattering, because your machine is the one with the
+credentials, the caches and the built binaries.
+
 **Detect breach from real state, never from the agent's own account.** The suite
 originally decided whether gnomon had breached by grepping gnomon's own tool log
 — asking the thing under test whether it had misbehaved.
@@ -222,6 +236,7 @@ originally decided whether gnomon had breached by grepping gnomon's own tool log
 [ ] Negative control fired: a breach/failure is demonstrably detectable
 [ ] Wall-clock per trial is plausible for the work (not ~0, not exactly the cap)
 [ ] Outcome read from real state, not from the agent's own report
+[ ] Suite re-run in a stranger's state (no keys, empty XDG_DATA_HOME, fresh clone)
 [ ] Nothing rebuilt or edited underneath the running arm
 [ ] Nothing else is contending for the same endpoint, GPU, or docker host
 [ ] Supervisors wait on pids, not on process names
