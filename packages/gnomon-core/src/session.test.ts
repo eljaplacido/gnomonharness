@@ -41,9 +41,17 @@ describe("gnomon-core session", () => {
       expect(mapBucket(10)).toBe("apparatus_failure");
     });
 
-    it("defaults unknown codes to result", () => {
-      expect(mapBucket(99)).toBe("result");
-      expect(mapBucket(-1)).toBe("result");
+    it("defaults unknown codes to apparatus_failure, not result", () => {
+      // This test previously asserted "result" and so pinned the defect: a code
+      // the contract does not name -- a wrapper's own error, a shell's 126/127,
+      // a process killed by a signal -- was counted as completed work and would
+      // enter a denominator as a success. That is the conflation Rule 4 exists
+      // to prevent, quietly undone by the catch-all.
+      //
+      // Failing closed costs nothing while the contract is complete and is the
+      // only safe direction when it is not.
+      expect(mapBucket(99)).toBe("apparatus_failure");
+      expect(mapBucket(-1)).toBe("apparatus_failure");
     });
 
     it("uses custom map when provided", () => {

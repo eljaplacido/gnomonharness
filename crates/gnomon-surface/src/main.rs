@@ -164,10 +164,63 @@ fn build_sources(dir: &Path) -> Vec<Source> {
     sources
 }
 
+/// The revision this manifest was produced at. See cmd_manifest for why.
+fn resolve_revision(dir: &Path) -> String {
+    if let Ok(stamped) = std::env::var("GNOMON_BUILD") {
+        let stamped = stamped.trim().to_string();
+        if !stamped.is_empty() {
+            return stamped;
+        }
+    }
+    let git = |args: &[&str]| -> Option<String> {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+    match git(&["rev-parse", "--short", "HEAD"]) {
+        Some(sha) if !sha.is_empty() => {
+            let dirty = git(&["status", "--porcelain"])
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+            if dirty {
+                format!("{sha}-dirty")
+            } else {
+                sha
+            }
+        }
+        // No repository to ask, or git absent. Said plainly rather than guessed.
+        _ => "local".to_string(),
+    }
+}
+
 fn cmd_manifest(dir: &Path) {
     let sources = build_sources(dir);
     let surface_hash = compute_surface_hash(&sources);
-    let build = format!("{}+{}", VERSION, "local"); // no git revision in non-repo context
+    // Which BUILD produced this manifest, not just which version.
+    //
+    // This was `format!("{}+{}", VERSION, "local")` -- a hardcoded literal with
+    // no code path by which a revision could ever reach it -- and CONTRACTS.md
+    // then wrote the drift up as the design: "it is not a git revision, and a
+    // consumer must not read provenance from it." So the one field named
+    // `build` in the one artifact meant to identify a run identified nothing,
+    // and the document told readers not to look.
+    //
+    // Resolution order, most trustworthy first, matching the harness field on
+    // the TypeScript side so the two agree:
+    //   1. GNOMON_BUILD, stamped by a release. The only form that survives a
+    //      binary shipped without its repository.
+    //   2. `git rev-parse --short HEAD` in the directory being hashed, with a
+    //      `-dirty` suffix when that tree has uncommitted changes -- a build
+    //      from an edited tree must not claim to be the commit it sits on.
+    //   3. `local`, said plainly. A wrong provenance string is worse than an
+    //      absent one, because it is the kind of thing a reader believes.
+    let build = format!("{}+{}", VERSION, resolve_revision(dir));
 
     let manifest = Manifest {
         build,

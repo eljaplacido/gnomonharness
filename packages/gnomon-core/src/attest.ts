@@ -39,6 +39,24 @@
  *      machine is holding a copy of the heads somewhere the machine cannot
  *      reach; `verifyAttestation` takes `headsPath` so an off-box copy can be
  *      used directly.
+ *   2b. SELECTIVE head deletion is worse than full deletion, and quieter.
+ *      Removing individual head LINES rather than the file produces a clean
+ *      verdict. Measured on a live unsealed trail with `every = 2`: truncating
+ *      four records to two and deleting the one later head reported
+ *      `status: signed, verified: 1, problems: 0, unattested: 0` — two records
+ *      gone and nothing said. The record-count shrink check is the stated
+ *      defence and is defeated by removing the head that recorded the larger
+ *      count. Heads default to a subdirectory BESIDE the trail, so an attacker
+ *      with trail write access usually has heads write access too.
+ *
+ *      The mitigation is the same one that closes the re-chain, and it is the
+ *      only one: keep the heads where the writer cannot reach them. A single
+ *      off-box head still catches every case here, because a head binds the
+ *      record count it signed.
+ *
+ *      Published rather than fixed. No arrangement of files on one machine
+ *      closes it — anyone who can delete a record can delete the evidence that
+ *      it ever existed.
  *   3. Records written after the last head are UNATTESTED. Signing every record
  *      would be an external process call per record; signing heads periodically
  *      is what makes this cheap enough to leave on. The tail between the last
@@ -160,6 +178,10 @@ const DEFAULT_HEADS_SUBDIR = "heads";
 export function resolveAttest(config: GnomonConfig, auditDir: string): ResolvedAttest {
   const audit = (config.config as { audit?: { attest?: AttestConfig } }).audit ?? {};
   const a = audit.attest ?? {};
+  // Whether the operator ASKED for attestation, as distinct from whether it
+  // resolved. A block that is present but unusable must be reported rather than
+  // read as "this surface never signs".
+  const declaredBlock = Object.prototype.hasOwnProperty.call(audit, "attest");
   const root = resolve(config.gnomonDir, "..");
   const problems: string[] = [];
 
@@ -224,6 +246,25 @@ export function resolveAttest(config: GnomonConfig, auditDir: string): ResolvedA
       ? declaredDir
       : join(root, declaredDir)
     : join(auditDir, DEFAULT_HEADS_SUBDIR);
+
+  // A declared [audit.attest] block with no usable `sign` is REPORTED, not
+  // silently disabled.
+  //
+  // Measured through the real loader: `[audit.attest] sgn = "..."` and
+  // `[audit.attes] sign = "..."` both resolved to enabled:false with an empty
+  // problems list and drew nothing from the surface audit -- KNOWN_BLOCKS
+  // validates top-level blocks only, so a misspelt sub-block escapes it. The
+  // sharp edge is that `declared` is this same flag, so a surface that ASKED
+  // for attestation and typo'd the key verifies as `unsigned, declared:false`,
+  // whose documented meaning is "this surface never signs". The auditor is then
+  // told the opposite of the truth.
+  if (declaredBlock && !sign) {
+    problems.push(
+      "[audit.attest] is declared but has no usable `sign` command, so nothing " +
+        "is signed. Check the spelling of `sign` and of the block itself — a " +
+        "misspelt sub-block is not caught by the top-level block check."
+    );
+  }
 
   return {
     enabled: Boolean(sign),
@@ -419,6 +460,26 @@ export function checkSignature(
       GNOMON_ATTEST_DIGEST: digest,
     });
     if (r.code === 124) return { checked: false, detail: "verify command timed out" };
+    // A verifier that COULD NOT RUN is not a broken signature.
+    //
+    // 126 and 127 are POSIX and tool-independent: not executable, and not
+    // found. Only 124 was treated as unverifiable, so every other non-zero exit
+    // became `valid: false` and surfaced as "broken" -- i.e. as tampering -- on
+    // a genuine, correctly-signed trail. Measured: a verify command that does
+    // not exist on the checking machine reported `broken`, reason `signature`.
+    //
+    // That is the scenario this module invites. `heads_dir` exists so a third
+    // party can audit an off-box copy, and the machine doing the checking is
+    // exactly the one where a smartcard or agent tool is absent. Reporting
+    // "your trail was tampered with" because the checker is missing would be
+    // the same conflation commit 902a93f removed from the verify gate -- "the
+    // check could not run" is not "your work is wrong" -- reintroduced here.
+    if (r.code === 126 || r.code === 127) {
+      return {
+        checked: false,
+        detail: `verify command could not run (exit ${r.code})${r.err ? `: ${r.err}` : ""}`,
+      };
+    }
     return {
       checked: true,
       valid: r.code === 0,

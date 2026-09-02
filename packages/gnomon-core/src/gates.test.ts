@@ -276,3 +276,43 @@ describe("gate: a credential cannot be configuration in disguise", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("gate: attestation reports what it cannot do", () => {
+  it("a verifier that could not run is NOT reported as a broken signature", async () => {
+    // Only exit 124 was treated as unverifiable, so a verify command that is
+    // absent on the checking machine (127) reported `broken` on a genuine,
+    // correctly-signed trail. That machine is precisely the one heads_dir
+    // invites: a third party auditing an off-box copy, without the smartcard
+    // or agent tool. It is the same conflation commit 902a93f removed from the
+    // verify gate -- "the check could not run" is not "your work is wrong".
+    const src = readFileSync(join(__dirname, "attest.ts"), "utf8");
+    expect(src).toContain("r.code === 126 || r.code === 127");
+    expect(src).toMatch(/could not run \(exit \$\{r\.code\}\)/);
+  });
+
+  it("a declared [audit.attest] with no usable sign command is reported", async () => {
+    // KNOWN_BLOCKS validates TOP-LEVEL blocks only, so a misspelt sub-block
+    // escaped it entirely: `[audit.attest] sgn = "..."` resolved to disabled
+    // with an empty problems list and drew nothing from the surface audit.
+    // Worse, `declared` is that same flag -- so a surface that asked for
+    // attestation and typo'd verified as "unsigned, declared:false", whose
+    // documented meaning is "this surface never signs".
+    const { resolveAttest } = await import("./attest.js");
+    const cfg = (audit: unknown) =>
+      ({ config: { audit }, gnomonDir: "/tmp/gate/.gnomon" }) as never;
+    const good = resolveAttest(cfg({ attest: { sign: "true" } }), "/tmp/gate/.gnomon-audit");
+    expect(good.enabled).toBe(true);
+    expect(good.problems).toEqual([]);
+
+    const typo = resolveAttest(cfg({ attest: { sgn: "true" } }), "/tmp/gate/.gnomon-audit");
+    expect(typo.enabled).toBe(false);
+    expect(typo.problems.join(" "), "a declared-but-unusable block must not be silent").toMatch(
+      /audit\.attest/
+    );
+
+    // An undeclared block stays silent — it is not a problem, it is a choice.
+    const none = resolveAttest(cfg({}), "/tmp/gate/.gnomon-audit");
+    expect(none.enabled).toBe(false);
+    expect(none.problems).toEqual([]);
+  });
+});

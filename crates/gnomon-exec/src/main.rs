@@ -405,7 +405,17 @@ fn main() {
                 1 => "result",
                 2..=4 => "refusal",
                 10..=13 => "apparatus_failure",
-                _ => "result",
+                // An integer nobody declared is an APPARATUS failure, not a
+                // result. The catch-all used to be "result", so a code this
+                // harness has never heard of -- a wrapper's own error, a shell
+                // returning 126/127, a process killed by a signal -- was
+                // counted as work completed, and would have entered a
+                // denominator as a success. Rule 4 exists to stop exactly that
+                // conflation, and the catch-all was quietly undoing it.
+                //
+                // Failing closed here costs nothing when the contract is
+                // complete and is the only safe direction when it is not.
+                _ => "apparatus_failure",
             };
 
             let output = serde_json::json!({

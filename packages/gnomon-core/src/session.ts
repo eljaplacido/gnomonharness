@@ -106,7 +106,11 @@ export function defaultExitCodeMap(): ExitCodeMap {
 export function mapBucket(nativeCode: number, map?: ExitCodeMap): Bucket {
   const m = map ?? defaultExitCodeMap();
   const key = String(nativeCode);
-  return m.exit_codes[key] ?? "result";
+  // Same reasoning as the Rust mapper: an undeclared integer is apparatus, not
+  // a result. Defaulting to "result" meant a code the contract does not name
+  // was counted as completed work and would enter a denominator as a success --
+  // the precise conflation Rule 4 exists to prevent.
+  return m.exit_codes[key] ?? "apparatus_failure";
 }
 
 /**

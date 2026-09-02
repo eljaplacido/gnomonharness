@@ -103,8 +103,24 @@ document is.
 }
 ```
 
-- `build` is the crate version plus `local`. It is not a git revision, and a
-  consumer must not read provenance from it.
+- `build` is `<version>+<revision>` — the crate version, then `GNOMON_BUILD` if a
+  release stamped one, else `git rev-parse --short HEAD` of the tree being
+  hashed with a `-dirty` suffix when that tree has uncommitted changes, else the
+  literal `local` when there is no repository to ask.
+
+  It was a hardcoded `local` with no code path by which a revision could reach
+  it, and this document previously wrote that drift up as the design: *"it is
+  not a git revision, and a consumer must not read provenance from it."* So the
+  one field named `build`, in the one artifact meant to identify a run,
+  identified nothing — and this contract told readers not to look. A consumer
+  MAY now read provenance from it, with one caveat stated plainly: `local` means
+  the producer could not determine a revision, and `-dirty` means the tree was
+  edited and is not the commit it names.
+
+  `build` is **not** part of `surface_hash`. The hash covers the surface; the
+  build says which code read it. Two manifests differing only in `build` describe
+  the same rules read by different harnesses, which is exactly the distinction
+  the pair exists to draw.
 - Five paths are declared and always listed, present or absent — `config.toml`,
   `system.md`, `roles.toml`, `tools.toml`, `policy.toml`. For these,
   `sha256: null` means absent.
