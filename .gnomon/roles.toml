@@ -13,6 +13,28 @@ top_p = 0.9
 max_steps = 20
 max_steps_total = 160
 tools = ["read", "glob", "grep", "compute", "todo", "task", "bash"]
+# Measured, 2026-09-02: this role holds `bash` and carried no bash_deny at
+# all, so the guard in tools.ts is skipped outright --
+# `if (ctx.bashDeny && ctx.bashDeny.length > 0)`. Every spelling `implement`
+# refuses reached the shell from here unrefused: `git push --force`,
+# `git push origin +master`, `git push origin :master`,
+# `git push --delete origin master`, `git branch -D`.
+#
+# The only thing standing between this role and a rewritten release branch was
+# .gnomon/skills/git-branching.md, which is loaded into this role's prompt and
+# says "Never commit straight to the default branch" / never force-push. A
+# skill is advice to a model. It is not a control, and a surface must not read
+# as though it is one.
+#
+# These are the five patterns `implement` already carried, copied verbatim so
+# all the bash-holding roles refuse the same set.
+bash_deny = [
+  '\bgit\s+push\b[^|;&]*\s(--force|--force-with-lease|-f)\b',   # force-push, any branch
+  '\bgit\s+push\b[^|;&]*\s[+:]',                               # +refspec forces, :refspec deletes
+  '\bgit\s+push\b[^|;&]*[\s:+/](main|master|release)\b',        # straight onto a release branch
+  '\bgit\s+push\b[^|;&]*--delete\b',                            # deleting a branch on the remote
+  '\bgit\s+branch\b[^|;&]*\s(-D\b|--delete\b|-d\b[^|;&]*--force\b)',  # discarding an unmerged branch
+]
 description = "Hardest reasoning, lowest call volume"
 
 [roles.plan.fallback]
@@ -61,6 +83,28 @@ top_p = 0.9
 max_steps = 16
 max_steps_total = 128
 tools = ["read", "glob", "grep", "compute", "todo", "bash"]
+# Measured, 2026-09-02: this role holds `bash` and carried no bash_deny at
+# all, so the guard in tools.ts is skipped outright --
+# `if (ctx.bashDeny && ctx.bashDeny.length > 0)`. Every spelling `implement`
+# refuses reached the shell from here unrefused: `git push --force`,
+# `git push origin +master`, `git push origin :master`,
+# `git push --delete origin master`, `git branch -D`.
+#
+# The only thing standing between this role and a rewritten release branch was
+# .gnomon/skills/git-branching.md, which is loaded into this role's prompt and
+# says "Never commit straight to the default branch" / never force-push. A
+# skill is advice to a model. It is not a control, and a surface must not read
+# as though it is one.
+#
+# These are the five patterns `implement` already carried, copied verbatim so
+# all the bash-holding roles refuse the same set.
+bash_deny = [
+  '\bgit\s+push\b[^|;&]*\s(--force|--force-with-lease|-f)\b',   # force-push, any branch
+  '\bgit\s+push\b[^|;&]*\s[+:]',                               # +refspec forces, :refspec deletes
+  '\bgit\s+push\b[^|;&]*[\s:+/](main|master|release)\b',        # straight onto a release branch
+  '\bgit\s+push\b[^|;&]*--delete\b',                            # deleting a branch on the remote
+  '\bgit\s+branch\b[^|;&]*\s(-D\b|--delete\b|-d\b[^|;&]*--force\b)',  # discarding an unmerged branch
+]
 description = "Must not share context with the implementer — distinct model"
 
 [roles.smol]

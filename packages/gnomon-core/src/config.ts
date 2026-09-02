@@ -9,6 +9,14 @@ import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, dirname, relative, basename, sep, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
 import { SourceEntry } from "./session.js";
+// Deliberate cycle: skills.ts imports parseToml from here. Both directions are
+// used only inside function bodies, never at module scope, so the partially
+// initialised namespace an ESM cycle hands the second module to load is never
+// touched. The alternative -- a second directory reader inside auditSurface --
+// is worse: the audit would then be checking files the runtime does not
+// necessarily load. loadSkills is the reader the turn uses, so the audit sees
+// exactly what the turn will see.
+import { loadSkills } from "./skills.js";
 
 // ---------------------------------------------------------------------------
 // Types — mirror Rust structs from gnomon-surface
@@ -1067,43 +1075,108 @@ const ENDPOINT_KEYS = new Set(["url", "kind", "api_key_env", "provider"]);
  * be the harness deciding policy. It says the declaration is weaker than it
  * looks, which is the thing the operator cannot see for themselves.
  */
-const EXECUTING_ARGS: Array<[RegExp, string, RegExp]> = [
-  // [what the allow-list admits, why it executes, what a deny must mention to
-  //  actually neutralise THAT admission]
-  //
-  // The third column exists because the guard used to be one loose test
-  // applied to the whole deny-list -- /exec|delete|fprint|-c\b/ against any
-  // entry -- and the starter surface's own rule for `git push --delete`
-  // contains the substring "delete". So every surface scaffolded by
-  // `gnomon init` silently satisfied the guard and this warning never fired
-  // again, on any role, however its bash_allow read. A check that the shipped
-  // default disables is worse than no check: it reports safety it never
-  // verified. Each admission is now guarded on its own terms.
-  [/\bfind\b/, "find (-exec, -execdir, -delete, -fprintf all write or run)",
-   /-exec|-execdir|-ok\b|-okdir|-delete|-fprint/],
-  [/\bxargs\b/, "xargs (runs whatever it is piped)", /\bxargs\b/],
-  [/\benv\b/, "env (runs its argument)", /\benv\b/],
-  [/\b(sh|bash|zsh|ksh|dash)\b/, "a shell (runs anything)",
-   /\b(sh|bash|zsh|ksh|dash)\b|-c\b/],
-  [/\b(awk|gawk|perl|python3?|ruby|node)\b/, "an interpreter (runs anything)",
-   /\b(awk|gawk|perl|python3?|ruby|node)\b/],
-  [/\bgit\b(?!\s*\()/, "git (-c core.pager / alias.* run commands)",
-   /core\.pager|alias\.|-c\b/],
-];
+interface ExecutingArg {
+  /** What the allow-list ENTRY's TEXT must contain for this admission to fire. */
+  admits: RegExp;
+  /** How the warning names it. */
+  why: string;
+  /**
+   * What a bash_deny entry must mention to actually neutralise THIS admission.
+   *
+   * This column exists because the guard used to be one loose test applied to
+   * the whole deny-list -- /exec|delete|fprint|-c\b/ against any entry -- and
+   * the starter surface's own rule for `git push --delete` contains the
+   * substring "delete". So every surface scaffolded by `gnomon init` silently
+   * satisfied the guard and this warning never fired again, on any role,
+   * however its bash_allow read. A check that the shipped default disables is
+   * worse than no check: it reports safety it never verified.
+   */
+  guard: RegExp;
+  /**
+   * The deny entries that close THIS admission, exactly as they go in the file.
+   *
+   * The whole point of holding them as data: `fix` is built from them, so the
+   * remedy the operator is handed is BY CONSTRUCTION the thing whose absence
+   * made this fire. `guard.test(denyText(d))` is true for at least one `d`
+   * here, which is the invariant that makes following the fix clear the
+   * warning. Nothing enforced that before and the shipped text did not satisfy
+   * it -- see the note on the scaffolded verifier below.
+   */
+  deny: string[];
+  /** What else applying `deny` does, said before the operator finds out. */
+  note: string;
+}
 
 /**
- * Which file each top-level block is READ from.
+ * A deny pattern reduced to the text a guard should be read against.
  *
- * A block in the wrong file is legal TOML, hashes into the surface, and is read
- * by nothing. That is not hypothetical: a [verify] block sat in config.toml
- * instead of policy.toml for days, silently disabling the declared check, and
- * the campaign that missed it is the reason this audit exists. The two files sit
- * side by side, both are TOML, both are hashed, and the block is valid in both —
- * there is no way for an operator to see the difference unaided.
+ * Measured, 2026-09-02: the xargs admission's guard was /\bxargs\b/ and the
+ * deny spelling this file itself recommended -- and that the scaffolded
+ * verifier actually carries -- is '\bxargs\b'. As a SUBJECT string that is
+ * the nine characters `\bxargs\b`, in which "xargs" is preceded by the word
+ * character 'b', so \b does not hold and the guard returned false. Same for
+ * env: /\benv\b/ against '\benv\b' is false. Two of the six admissions
+ * could never be marked guarded by their own recommended remedy, so an
+ * operator who applied it exactly would have kept the warning forever.
+ * Verified with node: guard.test('\\bxargs\\b') === false,
+ * guard.test('xargs') === true.
  *
- * Fatal, because a control that is declared and not read is worse than one that
- * was never declared: the surface says the check runs.
+ * Only \b is removed. Removing more would widen the guard, and a guard that
+ * matches too much SUPPRESSES a real warning -- the failure direction this
+ * whole table was rebuilt to close.
  */
+const denyText = (pattern: string): string => pattern.replace(/\\b/g, "");
+
+const EXECUTING_ARGS: ExecutingArg[] = [
+  {
+    admits: /\bfind\b/,
+    why: "find (-exec, -execdir, -delete, -fprintf all write or run)",
+    guard: /-exec|-execdir|-ok\b|-okdir|-delete|-fprint/,
+    deny: ["-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint"],
+    note: "find still reads the tree; only its executing arguments are refused.",
+  },
+  {
+    admits: /\bxargs\b/,
+    why: "xargs (runs whatever it is piped)",
+    guard: /\bxargs\b/,
+    deny: ["\\bxargs\\b"],
+    note: "Nothing else in bash_allow is affected.",
+  },
+  {
+    admits: /\benv\b/,
+    why: "env (runs its argument)",
+    guard: /\benv\b/,
+    deny: ["\\benv\\b"],
+    note: "Nothing else in bash_allow is affected.",
+  },
+  {
+    admits: /\b(sh|bash|zsh|ksh|dash)\b/,
+    why: "a shell (runs anything)",
+    guard: /\b(sh|bash|zsh|ksh|dash)\b|-c\b/,
+    deny: ["\\b(sh|bash|zsh|ksh|dash)\\b"],
+    note:
+      "Deny wins over allow, so this also stops any bash_allow entry that spells " +
+      "a shell. If you need one, narrow bash_allow instead.",
+  },
+  {
+    admits: /\b(awk|gawk|perl|python3?|ruby|node)\b/,
+    why: "an interpreter (runs anything)",
+    guard: /\b(awk|gawk|perl|python3?|ruby|node)\b/,
+    deny: ["\\b(awk|gawk|perl|python3?|ruby|node)\\b"],
+    note:
+      "Deny wins over allow, so this also stops bash_allow entries that spell an " +
+      "interpreter -- 'python -m pytest' among them. If you need that one, narrow " +
+      "bash_allow instead: 'pytest' on its own names no interpreter.",
+  },
+  {
+    admits: /\bgit\b(?!\s*\()/,
+    why: "git (-c core.pager / alias.* run commands)",
+    guard: /core\.pager|alias\.|-c\b/,
+    deny: ["\\bgit\\b[^|;&]*\\s-c\\s"],
+    note: "Ordinary git subcommands are untouched; only `git -c \u2026` is refused.",
+  },
+];
+
 /**
  * Every top-level block either surface file may declare.
  *
@@ -1134,11 +1207,38 @@ const KNOWN_BLOCKS = new Set([
   "turn",
 ]);
 
-/** Keys whose VALUE is a closed set, and what silently happens to a typo. */
-const ENUM_KEYS: Record<string, { values: string[]; falls_back_to: string }> = {
-  approval: { values: ["never", "on_write", "always"], falls_back_to: "on_write" },
-  sandbox: { values: ["off", "confined", "strict"], falls_back_to: "confined" },
-};
+/**
+ * Keys whose VALUE is a closed set, and what silently happens to a typo.
+ *
+ * Keyed by (block, key), not by block alone. It used to be a Record keyed on
+ * the block, with the key derived at the call site as
+ * `block === "approval" ? "gate" : "level"` -- a shape that can hold exactly
+ * ONE enumeration per block. [sandbox] has two. So `exec` was unreachable by
+ * this check, and resolveExec resolves it as
+ * `raw === "docker" ? "docker" : "off"`: every misspelling becomes "off".
+ * A surface that asked for container isolation ran on the host and said
+ * nothing -- and `exec` was already in ROLE_KEYS and KNOWN_BLOCKS, so no other
+ * check saw it either.
+ *
+ * Measured, 2026-09-02, on a scratch surface carrying
+ * `[sandbox] level = "confined"` and `exec = "dokcer"`: auditSurface returned
+ * 0 problems before this change and 1 after.
+ */
+const EXEC_VALUES = ["off", "docker"] as const;
+
+interface EnumSpec {
+  block: string;
+  key: string;
+  values: readonly string[];
+  falls_back_to: string;
+}
+
+const ENUM_KEYS: EnumSpec[] = [
+  { block: "approval", key: "gate", values: ["never", "on_write", "always"], falls_back_to: "on_write" },
+  { block: "sandbox", key: "level", values: ["off", "confined", "strict"], falls_back_to: "confined" },
+  // resolveExec: anything that is not exactly "docker" resolves to "off".
+  { block: "sandbox", key: "exec", values: EXEC_VALUES, falls_back_to: "off" },
+];
 
 /**
  * Keys that are read from a different block than the one an operator reaches
@@ -1162,20 +1262,74 @@ const KEY_OWNER: Record<string, string> = {
   reserve_output: "context",
 };
 
-const BLOCK_OWNER: Record<string, string> = {
-  verify: "policy.toml",
-  approval: "policy.toml",
-  sandbox: "policy.toml",
-  endpoints: "config.toml",
-  defaults: "config.toml",
-  context: "config.toml",
-  ui: "config.toml",
-  routing: "config.toml",
-  resilience: "config.toml",
-  loop: "config.toml",
-  audit: "config.toml",
-  roles: "roles.toml",
-  tools: "tools.toml",
+interface BlockOwner {
+  /** The surface file this block is read from. */
+  file: string;
+  /**
+   * Whether ANY code in this build reads it.
+   *
+   * False is not a hypothetical. `read: false` entries are blocks that are
+   * typed on the config interfaces, listed in KNOWN_BLOCKS (so every other
+   * check waves them through), hashed into the surface -- and read by nothing.
+   * A setting that does nothing is worse than no setting, so they are reported
+   * where they sit rather than left to look load-bearing.
+   */
+  read: boolean;
+}
+
+/**
+ * Which file each top-level block is read from, and whether it is read at all.
+ *
+ * A block in the wrong file is legal TOML, hashes into the surface, and is read
+ * by nothing. That is not hypothetical: a [verify] block sat in config.toml
+ * instead of policy.toml for days, silently disabling the declared check, and
+ * the campaign that missed it is the reason this audit exists. The two files sit
+ * side by side, both are TOML, both are hashed, and the block is valid in both —
+ * there is no way for an operator to see the difference unaided. That case is
+ * fatal, because a control that is declared and not read is worse than one that
+ * was never declared: the surface says the check runs.
+ *
+ * This table drifted away from KNOWN_BLOCKS. KNOWN_BLOCKS gained `chain` and
+ * `turn` and deliberately dropped `loop` (two schemas behind one name --
+ * .gnomon/loops/*.toml uses a [loop] header for a loop DECLARATION); this one
+ * still named `loop` and had never carried `turn`, `chain`, `session`,
+ * `process` or `exit_codes`. The consequence, measured on a scratch surface:
+ * `[turn]` written into policy.toml -- exactly the [verify]-in-the-wrong-file
+ * mistake this check exists for -- produced no problem at all, because a block
+ * missing from this table is skipped by the loop that reads it.
+ *
+ * `process` and `exit_codes` are here with read: false. Verified 2026-09-02 by
+ * grep over packages/*​/src and crates/*​/src: nothing reads
+ * `config.config.process` and nothing reads `config.policy.exit_codes`. The
+ * `exit_codes` that IS read is conformance/exit_codes.json, a different file
+ * and a different shape (session.ts ExitCodeMap) -- the name collision is
+ * precisely why an operator would write the block and expect it to matter.
+ */
+const BLOCK_OWNER: Record<string, BlockOwner> = {
+  verify: { file: "policy.toml", read: true },
+  approval: { file: "policy.toml", read: true },
+  sandbox: { file: "policy.toml", read: true },
+  // NOT read: no consumer of config.policy.exit_codes anywhere in this build.
+  exit_codes: { file: "policy.toml", read: false },
+  endpoints: { file: "config.toml", read: true },
+  defaults: { file: "config.toml", read: true },
+  context: { file: "config.toml", read: true },
+  ui: { file: "config.toml", read: true },
+  routing: { file: "config.toml", read: true },
+  resilience: { file: "config.toml", read: true },
+  audit: { file: "config.toml", read: true },
+  // resolveSessionStore reads config.config.session.
+  session: { file: "config.toml", read: true },
+  // resolveChain reads config.config.chain.
+  chain: { file: "config.toml", read: true },
+  // resolveLoop reads config.config.turn. NOT "loop": that header means
+  // a loop DECLARATION in .gnomon/loops/*.toml, and two schemas behind one
+  // name is how a declared setting silently reverts to a default.
+  turn: { file: "config.toml", read: true },
+  // NOT read: ProcessConfig is typed on Config and no consumer exists.
+  process: { file: "config.toml", read: false },
+  roles: { file: "roles.toml", read: true },
+  tools: { file: "tools.toml", read: true },
 };
 
 const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "model", "exec", "image", "profile", "task_allow", "temperature", "tools", "top_p", "write_allow"]);
@@ -1266,14 +1420,18 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
         });
         continue;
       }
-      const spec = ENUM_KEYS[block];
-      const value = (body as Record<string, unknown> | undefined)?.[block === "approval" ? "gate" : "level"];
-      if (spec && typeof value === "string" && !spec.values.includes(value)) {
+      // Every enumeration this block owns, not just the first one. See
+      // ENUM_KEYS: the old shape could only express one per block, which is
+      // how [sandbox] exec went unchecked.
+      for (const spec of ENUM_KEYS) {
+        if (spec.block !== block) continue;
+        const value = (body as Record<string, unknown> | undefined)?.[spec.key];
+        if (typeof value !== "string" || spec.values.includes(value)) continue;
         problems.push({
           where: `.gnomon/${file} [${block}]`,
           problem:
-            `"${value}" is not one of ${spec.values.join(" | ")}, so this silently ` +
-            `falls back to "${spec.falls_back_to}".`,
+            `${spec.key} = "${value}" is not one of ${spec.values.join(" | ")}, so this ` +
+            `silently falls back to "${spec.falls_back_to}".`,
           fix: `Use one of: ${spec.values.join(", ")}. \`gnomon enumerations\` lists them.`,
           fatal: false,
         });
@@ -1357,15 +1515,39 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
   ] as const) {
     for (const block of Object.keys((parsed ?? {}) as Record<string, unknown>)) {
       const owner = BLOCK_OWNER[block];
-      if (!owner || owner === file) continue;
-      problems.push({
-        where: `.gnomon/${file} [${block}]`,
-        problem:
-          `[${block}] is declared here but read from ${owner} — so this block ` +
-          `does nothing, while the surface reads as though it does.`,
-        fix: `Move the [${block}] block to .gnomon/${owner}.`,
-        fatal: true,
-      });
+      if (!owner) continue;
+      if (owner.file !== file) {
+        problems.push({
+          where: `.gnomon/${file} [${block}]`,
+          problem: owner.read
+            ? `[${block}] is declared here but read from ${owner.file} — so this block ` +
+              `does nothing, while the surface reads as though it does.`
+            : `[${block}] belongs in ${owner.file}, not here — so nothing reads it here. ` +
+              `And nothing reads it there either: no consumer of [${block}] exists in ` +
+              `this build.`,
+          fix: `Move the [${block}] block to .gnomon/${owner.file}.`,
+          // Fatal only when the block is a control that would otherwise be in
+          // force. A block nothing reads is inert wherever it sits; refusing to
+          // start over it would be a claim larger than the evidence.
+          fatal: owner.read,
+        });
+        continue;
+      }
+      if (!owner.read) {
+        problems.push({
+          where: `.gnomon/${file} [${block}]`,
+          problem:
+            `[${block}] is in the right file and is read by nothing. Verified ` +
+            `2026-09-02 by grep over packages/*/src and crates/*/src: no consumer. ` +
+            `It is typed on the config interface and hashed into the surface, and it ` +
+            `changes no behaviour.`,
+          fix:
+            `Delete the block. A setting that does nothing is worse than no setting: ` +
+            `it invites tuning that cannot move, and it moves the surface hash while ` +
+            `changing nothing about what the harness does.`,
+          fatal: false,
+        });
+      }
     }
   }
 
@@ -1378,22 +1560,65 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
     const allow = (rawRole as RoleDef)?.bash_allow;
     if (Array.isArray(allow) && allow.length > 0) {
       const deny = (rawRole as RoleDef)?.bash_deny ?? [];
-      // Guarded per admission: a deny for `git push --delete` says nothing
-      // about whether `python` can still run arbitrary code.
-      const admits = EXECUTING_ARGS.filter(
-        ([re, , guard]) =>
-          allow.some((pat) => re.test(pat)) && !deny.some((d) => guard.test(d))
-      ).map(([, why]) => why);
-      if (admits.length > 0) {
+      // One problem PER admission, each carrying the remedy for that admission
+      // alone.
+      //
+      // The shipped version emitted a single problem whose `fix` was a fixed
+      // string: "add a bash_deny for the executing forms, e.g. bash_deny =
+      // ['-exec', '-execdir', '-delete', '-fprint', '\bxargs\b']". Measured
+      // 2026-09-02 on a surface written by `gnomon init` itself: the fresh
+      // surface warns on first launch, the admission is `an interpreter`
+      // (bash_allow names `python -m pytest`), and all five patterns in that
+      // remedy were ALREADY in the file init had just written. Following the
+      // printed instruction to the letter could not clear the warning, because
+      // none of those five patterns guards the interpreter admission. A remedy
+      // that cannot clear the thing it is offered for teaches an operator to
+      // ignore the auditor.
+      //
+      // `fix` is now built from the same `deny` data the guard is tested
+      // against, so the remedy is by construction the thing whose absence made
+      // this fire.
+      for (const e of EXECUTING_ARGS) {
+        const hits = allow.filter((pat) => typeof pat === "string" && e.admits.test(pat));
+        if (hits.length === 0) continue;
+        // Guarded per admission: a deny for `git push --delete` says nothing
+        // about whether `python` can still run arbitrary code.
+        if (deny.some((d) => typeof d === "string" && e.guard.test(denyText(d)))) continue;
         problems.push({
           where,
           problem:
-            `bash_allow admits ${admits.join("; ")} — so this role can run and write ` +
-            `arbitrarily, whatever its tools list or description says.`,
+            `bash_allow admits ${e.why} — a program that takes a command as an ` +
+            `argument, so an allow-list of program NAMES does not bound this role by ` +
+            `the names it appears to. Named by: ${hits.map((h) => JSON.stringify(h)).join(", ")}. ` +
+            `NOT VERIFIED: this reads the allow-list pattern TEXT and does not evaluate ` +
+            `which commands that pattern actually matches, so it does not show that any ` +
+            `particular command reaches this role.`,
           fix:
-            `Either drop those from bash_allow (\`glob\`/\`grep\` are gated read-only tools ` +
-            `that already exist), or add a bash_deny for the executing forms, e.g. ` +
-            `bash_deny = ['-exec', '-execdir', '-delete', '-fprint', '\\bxargs\\b'].`,
+            `Add to this role's bash_deny — deny wins over allow, so the rest of ` +
+            `bash_allow is untouched:\n` +
+            `        bash_deny = [${e.deny.map((d) => `'${d}'`).join(", ")}]\n` +
+            `      ${e.note}\n` +
+            `      Or drop the entr${hits.length > 1 ? "ies" : "y"} above from bash_allow ` +
+            `(\`glob\`/\`grep\` are gated read-only tools that already exist).`,
+          fatal: false,
+        });
+      }
+    }
+
+    // A per-role `exec` override falls back exactly like the [sandbox] one:
+    // resolveExec reads `roleDef?.exec ?? sandbox.exec` and resolves anything
+    // that is not the string "docker" to "off". ROLE_KEYS catches a misspelled
+    // KEY; nothing caught a misspelled VALUE, so `exec = "dokcer"` on a role
+    // read as an isolation request and ran on the host.
+    {
+      const value = (rawRole as RoleDef)?.exec;
+      if (typeof value === "string" && !EXEC_VALUES.includes(value as typeof EXEC_VALUES[number])) {
+        problems.push({
+          where,
+          problem:
+            `exec = "${value}" is not one of ${EXEC_VALUES.join(" | ")}, so this role ` +
+            `silently falls back to "off" — no sandbox, and no warning.`,
+          fix: `Use one of: ${EXEC_VALUES.join(", ")}. Only "docker" is wired in this build.`,
           fatal: false,
         });
       }
@@ -1610,6 +1835,118 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
           where,
           problem: `model = "${model}" is an Ollama-style tag, but "${endpoint}" is a cloud endpoint.`,
           fix: `Run /models to see what "${endpoint}" actually serves.`,
+          fatal: false,
+        });
+      }
+    }
+  }
+
+  // ── Skills ───────────────────────────────────────────────────────────────
+  //
+  // A skill file is surface: it is hashed, and its body goes into the system
+  // prompt. Three ways it can be inert or hostile, none of which said anything
+  // before this:
+  //
+  //   1. `match` will not compile. selectSkills does
+  //      `try { new RegExp(s.match, "i") } catch { return false }` -- so the
+  //      skill silently applies to NOTHING, forever, and the surface reads as
+  //      though the note is in force. The catch is right (one bad note must not
+  //      break every turn) and silent is wrong.
+  //   2. A control character. It renders as nothing in a terminal, so
+  //      `gnomon skill list` and a diff both show a file that looks correct,
+  //      while an ESC sequence in the body can repaint the operator's screen
+  //      and any C0 byte reaches the model as prompt text. It hashes like any
+  //      other byte, so the surface hash moves and the visible file does not.
+  //   3. `roles` naming a role this surface does not declare. selectSkills
+  //      filters on `s.roles.includes(role)`, so one typo -- "implementer" for
+  //      "implementor" -- makes the note apply to nothing. Same silence as (1),
+  //      one letter earlier.
+  //
+  // Warnings, not refusals: a dead skill costs knowledge, not safety.
+  //
+  // Guarded on gnomonDir because auditSurface is also called on hand-built
+  // config objects that never loaded a directory (config.test.ts does this
+  // throughout), and join(undefined, "skills") throws.
+  if (typeof config.gnomonDir === "string" && config.gnomonDir) {
+    const roleNames = new Set(Object.keys(config.roles ?? {}));
+    let skills: ReturnType<typeof loadSkills> = [];
+    try {
+      skills = loadSkills(config);
+    } catch (e) {
+      problems.push({
+        where: ".gnomon/skills/",
+        problem: `the skills directory could not be read: ${(e as Error).message}`,
+        fix: "Fix or remove the unreadable file. Until then no skill loads at all.",
+        fatal: false,
+      });
+    }
+    for (const skill of skills) {
+      const where = `.gnomon/skills/${skill.id}.md`;
+
+      if (skill.match !== undefined) {
+        try {
+          new RegExp(skill.match, "i");
+        } catch (e) {
+          problems.push({
+            where,
+            problem:
+              `match = ${JSON.stringify(skill.match)} is not a valid regular expression: ` +
+              `${(e as Error).message}. selectSkills catches this and returns false, so ` +
+              `the skill applies to nothing — on every turn, silently.`,
+            fix:
+              `Fix the pattern, or delete the \`match\` line entirely: a skill with no ` +
+              `match always applies, which is what a broken one was probably meant to do.`,
+            fatal: false,
+          });
+        }
+      }
+
+      // C0 and C1 controls, minus the three that are legitimate text.
+      // eslint-disable-next-line no-control-regex
+      const CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/;
+      for (const [field, text] of [
+        ["name", skill.name],
+        ["description", skill.description],
+        ["match", skill.match],
+        ["body", skill.body],
+      ] as const) {
+        if (typeof text !== "string") continue;
+        const at = text.search(CONTROL);
+        if (at < 0) continue;
+        const code = text.charCodeAt(at);
+        problems.push({
+          where,
+          problem:
+            `${field} holds a control character (U+${code.toString(16).toUpperCase().padStart(4, "0")}` +
+            `${code === 0x1b ? ", ESC" : ""}) at offset ${at}. It renders as nothing, so the ` +
+            `file looks correct in a terminal and in a diff while the surface hash has ` +
+            `moved` +
+            (field === "body"
+              ? ` — and the body goes into the system prompt verbatim.`
+              : `.`),
+          fix:
+            `Remove the byte. To find it:  grep -nP '[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]' ` +
+            `.gnomon/skills/${skill.id}.md`,
+          fatal: false,
+        });
+        break; // one report per skill is enough to send someone to the file
+      }
+
+      for (const role of skill.roles ?? []) {
+        if (roleNames.has(role)) continue;
+        const near = [...roleNames]
+          .map((r) => [r, editDistance(role, r)] as const)
+          .filter(([, d]) => d <= 3)
+          .sort((a, b) => a[1] - b[1])[0]?.[0];
+        problems.push({
+          where,
+          problem:
+            `roles names "${role}", which is not a role in this surface — selectSkills ` +
+            `filters on that list, so this skill reaches nothing under that name` +
+            (near ? `. Did you mean "${near}"?` : "."),
+          fix:
+            `Declared roles: ${[...roleNames].sort().join(", ") || "(none)"}. ` +
+            `Remove \`roles\` entirely to apply the skill to every role.`,
           fatal: false,
         });
       }

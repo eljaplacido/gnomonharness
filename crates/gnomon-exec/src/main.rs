@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::Instant;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 // ─────────────────────────────────────────────
@@ -99,9 +99,25 @@ pub struct Session {
 #[derive(Debug)]
 pub struct StepResult {
     pub native_code: i32,
+    /// Wall time from spawn to the child's exit. See spawn_step for what this
+    /// used to measure instead.
     pub duration_ms: u64,
+    /// The timeout expired and the child was killed. `native_code` is -1 in
+    /// that case (killed by a signal, so there is no exit code), which the
+    /// bucket map already reads as apparatus_failure -- but a caller cannot
+    /// tell a timeout from any other undeclared code without being told.
+    pub timed_out: bool,
     pub stdout: String,
     pub stderr: String,
+    /// Bytes the child actually wrote to the stream. May exceed
+    /// `stdout.len()`: see OUTPUT_CAP_BYTES.
+    pub stdout_bytes: u64,
+    pub stderr_bytes: u64,
+    /// The captured text is not all of it -- the cap was hit, or the drain was
+    /// abandoned after DRAIN_GRACE. Published rather than implied, because a
+    /// silently short capture reads exactly like a short command.
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
 }
 
 // ─────────────────────────────────────────────
@@ -172,13 +188,145 @@ pub enum ExecError {
 // Step execution
 // ─────────────────────────────────────────────
 
-pub fn spawn_step(cmd: &str, timeout_ms: u64, _exit_map: &ExitCodeMap) -> Result<StepResult, ExecError> {
-    let start = Instant::now();
+/// Bytes retained per stream.
+///
+/// The drain threads keep READING past this and throw the excess away. They
+/// never stop reading: a reader that stops is precisely what fills the pipe.
+/// `stdout_bytes`/`stderr_bytes` report what the child actually wrote, so a
+/// capped capture says so instead of looking like a short one.
+const OUTPUT_CAP_BYTES: usize = 1024 * 1024;
 
+/// How long to wait, after the child has exited or been killed, for the drain
+/// threads to reach EOF.
+///
+/// Bounded, and the bound is a limit worth publishing: `Child::kill` signals
+/// the child, not its descendants. A grandchild that inherited the pipe holds
+/// the write end open, so EOF may never arrive. After this grace the capture
+/// is reported with `*_truncated: true` and the run continues, rather than
+/// trading one hang for another.
+///
+/// NOT VERIFIED: no test here spawns a grandchild that outlives its parent;
+/// the grace is reasoning about how pipes and process groups work, not a
+/// measurement.
+const DRAIN_GRACE: Duration = Duration::from_millis(2_000);
+
+/// Longest gap between `try_wait` polls. The first polls are 1ms apart so a
+/// fast command's `duration_ms` is its own duration and not the sampling
+/// interval; the backoff keeps a 900s timeout from burning a core.
+const MAX_POLL: Duration = Duration::from_millis(20);
+
+/// What one drain thread has read so far.
+struct Capture {
+    /// The first OUTPUT_CAP_BYTES bytes.
+    kept: Vec<u8>,
+    /// Every byte seen, capped or not.
+    total: u64,
+}
+
+/// A drain thread and the buffer it is filling.
+struct Drain {
+    handle: std::thread::JoinHandle<()>,
+    capture: Arc<Mutex<Capture>>,
+}
+
+/// Read a child pipe to EOF on its own thread, keeping the first
+/// OUTPUT_CAP_BYTES and counting the rest.
+fn drain_stream<R: std::io::Read + Send + 'static>(mut src: R) -> Drain {
+    let capture = Arc::new(Mutex::new(Capture { kept: Vec::new(), total: 0 }));
+    let sink = Arc::clone(&capture);
+    let handle = std::thread::spawn(move || {
+        let mut chunk = [0u8; 8192];
+        loop {
+            match src.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    // Poisoning would mean the collector panicked; nothing is
+                    // listening any more, so stop reading.
+                    let Ok(mut cap) = sink.lock() else { break };
+                    cap.total += n as u64;
+                    if cap.kept.len() < OUTPUT_CAP_BYTES {
+                        let room = OUTPUT_CAP_BYTES - cap.kept.len();
+                        cap.kept.extend_from_slice(&chunk[..room.min(n)]);
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+    });
+    Drain { handle, capture }
+}
+
+/// Wait up to `deadline` for a drain thread, then take whatever it has.
+/// Returns (text, bytes_seen, truncated).
+fn collect_drain(drain: Option<Drain>, deadline: Instant) -> (String, u64, bool) {
+    let Some(drain) = drain else {
+        return (String::new(), 0, false);
+    };
+    while !drain.handle.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // Deliberately not `join()`: an abandoned thread is left detached rather
+    // than blocking this one forever. See DRAIN_GRACE.
+    let abandoned = !drain.handle.is_finished();
+    let cap = drain.capture.lock().unwrap_or_else(|e| e.into_inner());
+    // from_utf8_lossy, not from_utf8: the cap can land mid-codepoint, and a
+    // replacement character is a better answer than an error about encoding
+    // for output that was truncated on purpose.
+    let text = String::from_utf8_lossy(&cap.kept).to_string();
+    let truncated = abandoned || cap.total > cap.kept.len() as u64;
+    (text, cap.total, truncated)
+}
+
+/// Run `cmd`, bound it by `timeout_ms`, and report what happened.
+///
+/// `cmd` is split on whitespace and executed directly -- there is no shell, so
+/// no pipes, redirections, globs or quoting.
+///
+/// TWO MEASURED FAILURES produced the shape of this function.
+///
+/// 1. Deadlock above one pipe buffer. stdout and stderr were piped but only
+///    read AFTER `child.wait()` returned. A child that writes more than the
+///    kernel's pipe buffer (64 KiB on Linux) blocks in write() until someone
+///    drains it, while the parent blocks in wait() until the child exits.
+///    Neither ever moves. Measured:
+///    $ gnomon-exec step --cmd "head -c 61440 /dev/zero" --timeout-ms 3000
+///    wall=3.01s   exit=0                       (60 KiB: under the buffer)
+///    $ gnomon-exec step --cmd "head -c 102400 /dev/zero" --timeout-ms 3000
+///    wall=25.00s  exit=124                     (100 KiB: hung until an
+///    outer `timeout 25` killed it)
+///    Both pipes are now drained on their own threads from the moment the
+///    child exists, so nothing waits on anything that is waiting on it.
+///
+/// 2. `duration_ms` was the timeout, not the command. The timeout was a thread
+///    that slept for the whole `timeout_ms` and then fired, and the parent
+///    `join()`ed it before stopping the clock -- so every step took the full
+///    timeout in wall-clock and reported that as the command's duration.
+///    Measured:
+///    $ gnomon-exec step --cmd "echo hi" --timeout-ms 8000
+///    "duration_ms": 8001    wall=8.00s
+///    $ gnomon-exec step --cmd "echo hi" --timeout-ms 2000
+///    "duration_ms": 2000    wall=2.00s
+///    The number moved with the timeout and never with the command. It is
+///    hashed into `session_steps_hash` and serialised into every session
+///    record, so every recorded duration in this crate's history is the
+///    timeout it was run under.
+///
+/// The old timeout also did not work. It ran `pkill -P <child>`, which kills
+/// the child's CHILDREN and not the child, so a timed-out `head`, `sleep` or
+/// `cat` was never signalled -- the wait simply blocked until the command
+/// finished on its own. `try_wait` + `Child::kill` replaces it.
+///
+/// LIMIT, published rather than implied: `Child::kill` signals the direct
+/// child only. A process group or a daemonised grandchild survives it. This
+/// is a timeout, not a sandbox.
+pub fn spawn_step(cmd: &str, timeout_ms: u64, _exit_map: &ExitCodeMap) -> Result<StepResult, ExecError> {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     if parts.is_empty() {
         return Err(ExecError::StepFailure("empty command".into()));
     }
+
+    let start = Instant::now();
 
     let mut child = Command::new(parts[0])
         .args(&parts[1..])
@@ -191,43 +339,56 @@ pub fn spawn_step(cmd: &str, timeout_ms: u64, _exit_map: &ExitCodeMap) -> Result
             source: e,
         })?;
 
-    // Enforce timeout: wait in a separate thread, kill if exceeded
-    let child_handle = child.id();
-    let timeout_thread = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(timeout_ms));
-        // Try to kill the process tree
-        let _ = Command::new("pkill")
-            .args(["-P", &child_handle.to_string()])
-            .spawn();
-    });
+    // Before the wait, never after it. This is fix (1).
+    let out_drain = child.stdout.take().map(drain_stream);
+    let err_drain = child.stderr.take().map(drain_stream);
 
-    let status = match child.wait() {
-        Ok(s) => s,
-        Err(_) => return Err(ExecError::StepFailure("child wait failed".into())),
+    // timeout_ms == 0 means no time at all: the child is killed on the first
+    // poll. Said plainly here because "0 disables the timeout" is the other
+    // plausible reading and it is not what this does.
+    let deadline = start + Duration::from_millis(timeout_ms);
+    let mut poll = Duration::from_millis(1);
+
+    let (status, timed_out) = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break (Some(status), false),
+            Ok(None) => {}
+            Err(_) => return Err(ExecError::StepFailure("child wait failed".into())),
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            let _ = child.kill();
+            // Reap it, so the exit status is real and no zombie is left. kill()
+            // has already been sent, so this returns promptly.
+            break (child.wait().ok(), true);
+        }
+
+        std::thread::sleep(poll.min(deadline.saturating_duration_since(now)));
+        poll = (poll * 2).min(MAX_POLL);
     };
 
-    // Join the timeout thread (it may or may not have fired)
-    let _ = timeout_thread.join();
-
+    // Stopped here, at the child's exit -- not after draining, and not after
+    // joining a thread that slept for the timeout. This is fix (2).
     let duration_ms = start.elapsed().as_millis() as u64;
 
-    let stdout = child.stdout.take().map(|handle| {
-        let mut buf = Vec::new();
-        let _ = handle.take(1024 * 1024).read_to_end(&mut buf);
-        String::from_utf8_lossy(&buf).to_string()
-    }).unwrap_or_default();
-
-    let stderr = child.stderr.take().map(|handle| {
-        let mut buf = Vec::new();
-        let _ = handle.take(1024 * 1024).read_to_end(&mut buf);
-        String::from_utf8_lossy(&buf).to_string()
-    }).unwrap_or_default();
+    let drain_deadline = Instant::now() + DRAIN_GRACE;
+    let (stdout, stdout_bytes, stdout_truncated) = collect_drain(out_drain, drain_deadline);
+    let (stderr, stderr_bytes, stderr_truncated) = collect_drain(err_drain, drain_deadline);
 
     Ok(StepResult {
-        native_code: status.code().unwrap_or(-1),
+        // No exit code means killed by a signal, including by the timeout
+        // above. -1 is undeclared, and the bucket map reads undeclared as
+        // apparatus_failure -- which is what a killed step is.
+        native_code: status.and_then(|s| s.code()).unwrap_or(-1),
         duration_ms,
+        timed_out,
         stdout,
         stderr,
+        stdout_bytes,
+        stderr_bytes,
+        stdout_truncated,
+        stderr_truncated,
     })
 }
 
@@ -422,8 +583,18 @@ fn main() {
                 "native_code": result.native_code,
                 "bucket": bucket,
                 "duration_ms": result.duration_ms,
+                // Reported, not inferred. A caller that sees native_code -1
+                // cannot otherwise tell "the timeout killed it" from "it died
+                // of something else", and those are different problems.
+                "timed_out": result.timed_out,
                 "stdout": result.stdout.trim(),
                 "stderr": result.stderr.trim(),
+                // The capture is capped at 1 MiB per stream. Saying so beats
+                // handing back a short string that looks complete.
+                "stdout_bytes": result.stdout_bytes,
+                "stderr_bytes": result.stderr_bytes,
+                "stdout_truncated": result.stdout_truncated,
+                "stderr_truncated": result.stderr_truncated,
             });
 
             println!("{}", serde_json::to_string_pretty(&output).unwrap());
@@ -585,6 +756,132 @@ mod tests {
     fn test_spawn_step_empty_command() {
         let map = default_exit_code_map();
         assert!(spawn_step("", 5000, &map).is_err());
+    }
+
+    /// Run `spawn_step` on its own thread and give up after `budget`.
+    ///
+    /// Every test below covers a defect whose symptom was a HANG. A hanging
+    /// test reports nothing -- it is the same "reports success while doing
+    /// nothing" shape one level up, since a suite that never finishes never
+    /// says it failed either. This turns each hang into a named failure.
+    fn spawn_step_bounded(cmd: &'static str, timeout_ms: u64, budget: Duration) -> StepResult {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let map = default_exit_code_map();
+            let _ = tx.send(spawn_step(cmd, timeout_ms, &map));
+        });
+        match rx.recv_timeout(budget) {
+            Ok(result) => result.unwrap_or_else(|e| panic!("spawn_step('{cmd}') errored: {e}")),
+            Err(_) => panic!(
+                "spawn_step('{cmd}') did not return within {budget:?} -- it is deadlocked"
+            ),
+        }
+    }
+
+    #[test]
+    fn test_spawn_step_survives_more_than_one_pipe_buffer() {
+        // 256 KiB, four times the 64 KiB Linux pipe buffer. Before the drain
+        // threads existed this blocked forever: the child in write(), the
+        // parent in wait(). Measured at 100 KiB: wall=25.00s, killed by an
+        // outer `timeout 25`, against --timeout-ms 3000.
+        let result = spawn_step_bounded(
+            "head -c 262144 /dev/zero",
+            10_000,
+            Duration::from_secs(20),
+        );
+        assert_eq!(result.native_code, 0, "the child exits 0; it is not killed");
+        assert!(!result.timed_out, "256 KiB in under 10s is not a timeout");
+        assert_eq!(
+            result.stdout_bytes, 262_144,
+            "every byte the child wrote must be accounted for"
+        );
+        assert!(!result.stdout_truncated, "256 KiB is well under the 1 MiB cap");
+    }
+
+    #[test]
+    fn test_spawn_step_duration_is_the_command_not_the_timeout() {
+        // Measured before the fix: `echo hi --timeout-ms 8000` reported
+        // duration_ms 8001, and `--timeout-ms 2000` reported 2000. The number
+        // tracked the timeout and never the command.
+        let slept = spawn_step_bounded("sleep 0.4", 9_000, Duration::from_secs(20));
+        assert_eq!(slept.native_code, 0);
+        assert!(!slept.timed_out);
+        assert!(
+            slept.duration_ms >= 350,
+            "a 0.4s command cannot take {}ms -- the clock is not running",
+            slept.duration_ms
+        );
+        assert!(
+            slept.duration_ms < 4_000,
+            "a 0.4s command under a 9s timeout reported {}ms; that is the timeout, not the command",
+            slept.duration_ms
+        );
+
+        // Same command, a different timeout. The old code returned ~the
+        // timeout for both, so these two numbers moved together; they must not.
+        let a = spawn_step_bounded("sleep 0.4", 3_000, Duration::from_secs(20));
+        let b = spawn_step_bounded("sleep 0.4", 9_000, Duration::from_secs(20));
+        let spread = a.duration_ms.abs_diff(b.duration_ms);
+        assert!(
+            spread < 1_000,
+            "the same command under a 3s and a 9s timeout reported {}ms and {}ms; \
+             duration_ms is still following the timeout",
+            a.duration_ms,
+            b.duration_ms
+        );
+    }
+
+    #[test]
+    fn test_spawn_step_timeout_kills_the_child() {
+        // The old timeout ran `pkill -P <child>`, which kills the child's
+        // CHILDREN. `sleep` has none, so it was never signalled and the wait
+        // blocked for the full 30s. The budget here is 8s, so that failure
+        // now reports as a failure.
+        let start = Instant::now();
+        let result = spawn_step_bounded("sleep 30", 400, Duration::from_secs(8));
+        let observed = start.elapsed();
+
+        assert!(result.timed_out, "a 30s command under a 400ms timeout must time out");
+        assert_eq!(
+            result.native_code, -1,
+            "killed by a signal, so there is no exit code"
+        );
+        assert!(
+            observed < Duration::from_secs(6),
+            "the timeout returned after {observed:?}; it did not kill the child"
+        );
+
+        // And the bucket the CLI would assign: -1 is undeclared, and
+        // undeclared is apparatus_failure, never a result.
+        assert_eq!(default_exit_code_map().bucket(0), Some(&Bucket::Result));
+        assert!(
+            !matches!(result.native_code, 0 | 1),
+            "a killed step must not land in the result bucket"
+        );
+    }
+
+    #[test]
+    fn test_spawn_step_publishes_its_output_cap() {
+        // 1.2 MB, over the 1 MiB cap. The cap is not the bug -- silence about
+        // it would be: a capped capture reads exactly like a short command.
+        let over = OUTPUT_CAP_BYTES as u64 + 200_000;
+        let result = spawn_step_bounded(
+            "head -c 1248576 /dev/zero",
+            15_000,
+            Duration::from_secs(25),
+        );
+        assert_eq!(over, 1_248_576, "the command above must write over the cap");
+        assert_eq!(result.native_code, 0, "capping must not kill the child");
+        assert_eq!(
+            result.stdout_bytes, 1_248_576,
+            "the byte count reports what was written, not what was kept"
+        );
+        assert!(result.stdout_truncated, "over the cap must be reported as truncated");
+        assert_eq!(
+            result.stdout.len(),
+            OUTPUT_CAP_BYTES,
+            "exactly the cap is kept"
+        );
     }
 
     #[test]

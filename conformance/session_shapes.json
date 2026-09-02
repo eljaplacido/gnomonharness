@@ -1,0 +1,51 @@
+{
+  "_why": [
+    "session_golden.json pins the SessionRecord struct in crates/gnomon-exec/src/main.rs.",
+    "Measured 2026-09-02: nothing in the shipped harness writes that struct.",
+    "`gnomon-exec` has no subcommand that emits a SessionRecord — `step` prints one",
+    "bare step object and `validate` only reads. The one command that writes a session",
+    "record to disk is `gnomon session` (packages/gnomon-cli/src/index.ts ->",
+    "SessionManager in packages/gnomon-core/src/session.ts), and it writes a different",
+    "shape. Feeding a real `gnomon session` record to the only validator in the tree:",
+    "  $ gnomon-exec validate --session .gnomon-sessions/session-...json",
+    "  Error loading session: Deserialization error: missing field `seq` at line 65 column 7",
+    "  exit 1",
+    "So this file declares BOTH shapes and the subset that is actually contracted.",
+    ".gnomon/ci.sh checks a LIVE `gnomon session` record and session_golden.json against",
+    "it, so neither producer can drift without CI saying which key moved."
+  ],
+
+  "contract": {
+    "_why": "docs/CONTRACTS.md section 4. Both producers must satisfy this.",
+    "record_required": ["session"],
+    "session_required": ["manifest", "steps"],
+    "step_required": ["native_code", "bucket", "duration_ms"],
+    "buckets": ["result", "refusal", "apparatus_failure"]
+  },
+
+  "producers": {
+    "gnomon session": {
+      "_what": "packages/gnomon-cli/src/index.ts cmdSession -> SessionManager.save()",
+      "_verified": "2026-09-02, `gnomon session --dir <tree> 'echo hello' 'exit 3' 'exit 42'`",
+      "record_keys": ["session", "metadata"],
+      "session_keys": ["manifest", "version", "steps"],
+      "step_keys": ["native_code", "bucket", "duration_ms", "stdout", "stderr"],
+      "metadata_keys": ["created", "runtime_version", "driver_version"]
+    },
+    "gnomon-exec SessionRecord": {
+      "_what": "crates/gnomon-exec/src/main.rs — the struct session_golden.json pins",
+      "_written_by": "nothing shipped; build_session() is reachable only from tests",
+      "record_keys": ["version", "session"],
+      "session_keys": ["manifest", "steps"],
+      "step_keys_required": ["seq", "native_code", "bucket", "duration_ms"],
+      "step_keys_optional": ["action", "tool", "result", "reason"]
+    }
+  },
+
+  "divergence": {
+    "_why": "Published rather than left to be discovered. Each entry is a real gap.",
+    "gnomon_session_lacks": ["version (top level)", "seq (per step)"],
+    "gnomon_exec_lacks": ["metadata", "stdout", "stderr"],
+    "consequence": "gnomon-exec validate --session cannot read a gnomon session record."
+  }
+}

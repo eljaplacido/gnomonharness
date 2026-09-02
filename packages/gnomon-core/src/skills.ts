@@ -129,6 +129,20 @@ export function loadProposedSkills(config: GnomonConfig): Skill[] {
  *
  * A skill with no `match` always applies; one with an unparseable pattern is
  * skipped rather than throwing, so a malformed note cannot break every turn.
+ *
+ * That catch stays — one bad note must not break every turn — but it was the
+ * ONLY thing that ever happened to a broken pattern. `return false` on every
+ * turn is indistinguishable from a pattern that simply never matches, so a
+ * skill accepted into the surface, hashed, and listed by `gnomon skill list`
+ * could be inert for its whole life with nothing anywhere saying so. The same
+ * silence covers `roles = ["implementer"]` when the role is spelled
+ * "implementor": the filter on the line above drops it and says nothing.
+ *
+ * auditSurface (config.ts) now iterates loadSkills and reports both, plus a
+ * control character anywhere in the file — it runs before the first turn, which
+ * is the only moment an operator is in a position to fix the file. Refusing
+ * here instead would trade a lost note for a dead session; that is the wrong
+ * trade, so the catch below is unchanged on purpose.
  */
 export function selectSkills(skills: Skill[], role: string, input: string): Skill[] {
   return skills.filter((s) => {
@@ -137,6 +151,7 @@ export function selectSkills(skills: Skill[], role: string, input: string): Skil
     try {
       return new RegExp(s.match, "i").test(input);
     } catch {
+      // Reported by auditSurface at startup, not swallowed silently.
       return false;
     }
   });

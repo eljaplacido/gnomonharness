@@ -199,7 +199,15 @@ describe("the README does not promise what is not built", () => {
     // These gaps are real; a reader finding them undocumented would be worse
     // than the gaps themselves.
     expect(readme).toContain("MCP is stdio-only");
-    expect(readme).toContain("No role chain");
+    // Was `expect(readme).toContain("No role chain")` — and [chain] SHIPPED:
+    // init scaffolds it, the auditor validates it, the loop runs the stages,
+    // and the trail writes one chain_stage record per stage. So this assertion
+    // made correcting the README a CI failure: a test pinning a false claim,
+    // which is the same shape as the six defects this project spent a week
+    // removing. The limit that IS true is that the chain gates on nothing —
+    // no stage's outcome stops the next — and that is what must be stated.
+    expect(readme).toMatch(/role chain runs in order and gates on nothing/i);
+    expect(readme, "the false limit must not come back").not.toContain("No role chain.");
     // Qualified from "No cloud or background execution" once `loops` shipped:
     // cron-scheduled loops ARE an unattended path, so the blanket claim was
     // false. The limits that remain true are stated exactly.

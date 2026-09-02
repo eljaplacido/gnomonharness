@@ -1676,18 +1676,51 @@ export function worktreeMoved(ctx: ToolContext, before: string | null, alsoRoot?
 }
 
 export function inSurface(ctx: ToolContext, abs: string): boolean {
-  // Realpath both sides. Comparing lexical paths let a symlink inside the repo
-  // (`glink -> .gnomon`) read as an ordinary file, so `write glink/roles.toml`
-  // skipped the strict/consent gate while the write still landed in .gnomon/.
-  // resolveInRoot already realpaths for the sandbox check; this guard must
-  // match it, or the surface pillar is bypassable by a single symlink.
-  const surface = realpathOrSelf(
-    ctx.config?.gnomonDir
-      ? resolve(ctx.config.gnomonDir)
-      : resolve(ctx.root, ".gnomon")
-  );
-  const rel = relative(surface, realpathOfNearest(abs));
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  // Lexical OR realpath. Either one landing inside `.gnomon/` makes it a
+  // surface write, because a symlink can move the surface hash from BOTH
+  // sides and neither check alone sees both.
+  //
+  // Realpath alone was the first fix, for the outside-in direction: comparing
+  // lexical paths let a symlink inside the repo (`glink -> .gnomon`) read as
+  // an ordinary file, so `write glink/roles.toml` skipped the strict/consent
+  // gate while the write still landed in .gnomon/.
+  //
+  // But realpath ALONE reopened the same hole inside-out, and that half was
+  // strictly worse because it needs no aliasing directory — just one symlink
+  // inside the surface. Measured, on a fresh root with allow="strict" (the
+  // default, under which the agent may not touch its surface at all):
+  // with `.gnomon/roles.toml -> ../build/roles.toml`, `write .gnomon/roles.toml`
+  // returned TOOL_OK "(+1 −1)", rewrote roles.toml from model = "trusted" to
+  // model = "attacker", and moved the surface hash 85d60b5e66cd -> 41e464031142.
+  // The realpath arm judged it outside (its real path is build/), so no gate
+  // ran; collectSurface hashes with statSync, which FOLLOWS the link, so the
+  // surface it is judged by moved anyway. Same result one directory up:
+  // `.gnomon/vendor -> ../build` made `write .gnomon/vendor/x.toml` a TOOL_OK
+  // surface write, hash 5959ca6d666d -> bf7f28ce7360.
+  //
+  // The sandbox catches only the subset whose link leaves the root entirely
+  // (that one returns TOOL_OUT_OF_SANDBOX), so it is not a second line of
+  // defence for the in-root case above — the common one, since `.gnomon/` sits
+  // in the repository the agent is editing.
+  //
+  // This is the rule the whole design rests on: the agent must not be able to
+  // rewrite the rules it is judged by. So the guard is deliberately
+  // over-inclusive. A false positive costs one consent prompt on a path that
+  // merely looks like the surface; a false negative costs the pillar.
+  const surfaceLexical = ctx.config?.gnomonDir
+    ? resolve(ctx.config.gnomonDir)
+    : resolve(ctx.root, ".gnomon");
+  // The surface may itself be reached through a symlinked parent (a checkout
+  // on another volume, a /tmp that is really /private/tmp); realpath that side
+  // so an ordinary layout does not read as an escape.
+  const surfaceReal = realpathOrSelf(surfaceLexical);
+  const under = (base: string, p: string): boolean => {
+    const rel = relative(base, p);
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  };
+  // `abs` arrives already `resolve()`d by resolveInRoot, so `..` is collapsed
+  // and the lexical arm cannot be walked out of and back in.
+  return under(surfaceReal, realpathOfNearest(abs)) || under(surfaceLexical, resolve(abs));
 }
 
 export function writeAllowed(

@@ -7,6 +7,11 @@
 //!   gnomon-surface manifest [--dir <path>]
 //!   gnomon-surface hash [--dir <path>]
 //!   gnomon-surface paths [--dir <path>]
+//!   gnomon-surface --help
+//!
+//! `--dir` accepts either a project root (a directory that contains .gnomon/)
+//! or the .gnomon/ directory itself; both name the same surface and produce
+//! the same hash. See surface_dir_of for the measurement that forced that.
 //!
 //! The manifest subcommand outputs JSON with: build, surface_hash, sources.
 //! Sources are sorted by path. Absent paths get sha256: null.
@@ -260,37 +265,197 @@ fn cmd_paths(dir: &Path) {
     }
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
+// ─────────────────────────────────────────────
+// Argument parsing
+// ─────────────────────────────────────────────
 
-    let mut dir = PathBuf::from(".");
-    let mut subcommand = "manifest";
+const USAGE: &str = "\
+gnomon-surface — resolve the .gnomon/ surface, hash it, emit a manifest
 
-    let mut i = 1;
+Usage:
+  gnomon-surface [manifest|hash|paths] [--dir <path>]
+  gnomon-surface --help
+
+Subcommands:
+  manifest   JSON: build, surface_hash, and every source with its sha256 (default)
+  hash       the surface hash alone, on one line
+  paths      one line per source: ✓ present, ✗ declared but absent
+
+Options:
+  --dir <path>   Either a project root (a directory containing .gnomon/) or the
+                 .gnomon/ directory itself. Both name the same surface and hash
+                 identically. Default: the current directory.
+  -h, --help     Print this message.
+
+Exit codes:
+  0   the subcommand ran
+  2   usage error, or no .gnomon/ directory under --dir
+";
+
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+enum Subcommand {
+    Manifest,
+    Hash,
+    Paths,
+}
+
+/// What `main` got out of argv, or the reason it could not.
+#[derive(PartialEq, Eq, Debug)]
+enum Parsed {
+    Help,
+    Run {
+        subcommand: Subcommand,
+        dir: PathBuf,
+    },
+}
+
+/// Resolve what `--dir` named into the .gnomon/ directory to hash.
+///
+/// Measured, before this function existed: `--dir` was used verbatim and
+/// defaulted to `.`, so pointing the binary at a project root walked the whole
+/// repository and prefixed every path a second time.
+///
+///   $ gnomon-surface paths --dir conformance/fixture_tree
+///   ✓ .gnomon/.gnomon/config.toml     <- the real file, doubled prefix
+///   ✗ .gnomon/config.toml             <- all five declared paths, sha256: null
+///   $ gnomon-surface hash --dir conformance/fixture_tree
+///   7877192efe5453fe61d1e0793e797c7e1cd6a10eb262a1de465f564dfb078e35
+///   $ gnomon-surface hash --dir conformance/fixture_tree/.gnomon
+///   84d764b6ff94d6952b1f2d7c27e45c41cd303b8a80e3a130bbd195a3c043476a
+///
+/// and the TypeScript implementation (`recomputeManifest`, which normalises
+/// with `surfaceDirOf`) returned 84d764b6ff94… for that same project root.
+/// Exit code 0 every time. This binary exists so a third party can check a
+/// surface hash without a JS runtime; a confident wrong answer defeats its
+/// only purpose, and pointing at a project root is the obvious thing to try.
+///
+/// Mirrors config.ts `surfaceDirOf` exactly, so the two implementations agree
+/// on what a directory argument means: basename `.gnomon` = the caller already
+/// pointed at the surface, anything else = a project root.
+fn surface_dir_of(dir: &Path) -> PathBuf {
+    // Lexical, not canonicalize(): a path that does not exist must still
+    // resolve, so the caller can report it by name rather than fail here.
+    let abs = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+    if abs.file_name() == Some(std::ffi::OsStr::new(".gnomon")) {
+        abs
+    } else {
+        abs.join(".gnomon")
+    }
+}
+
+/// Parse argv[1..].
+///
+/// Measured, before this returned a Result: the loop’s catch-all was
+/// `_ => {}`, so every token it did not recognise was dropped in silence.
+///
+///   $ gnomon-surface hsah --dir conformance/fixture_tree/.gnomon
+///   {  "build": ..., "surface_hash": ... }      exit 0
+///   $ gnomon-surface hash --dir <d> --exclude nope
+///   84d764b6ff94…                             exit 0
+///   $ gnomon-surface --help
+///   {  "build": ..., "surface_hash": ... }      exit 0
+///
+/// A typo’d subcommand answered a question nobody asked; `--exclude` looked
+/// honoured and was not; `--help` was not a flag, it was noise. An
+/// unrecognised token now stops the run. This binary is trusted about exactly
+/// one 64-character string, and it cannot be trusted while it answers requests
+/// it did not understand.
+fn parse_args(args: &[String]) -> Result<Parsed, String> {
+    let mut dir: Option<PathBuf> = None;
+    let mut subcommand: Option<Subcommand> = None;
+
+    let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
+        let arg = args[i].as_str();
+        match arg {
+            "-h" | "--help" => return Ok(Parsed::Help),
             "--dir" => {
                 i += 1;
-                if i < args.len() {
-                    dir = PathBuf::from(&args[i]);
+                // A flag whose value fell off the end used to leave `dir` at
+                // its default, so `--dir` with nothing after it hashed the
+                // current directory and said nothing: the wrong surface,
+                // reported with exactly the same confidence as the right one.
+                let Some(value) = args.get(i) else {
+                    return Err("--dir requires a path".to_string());
+                };
+                if dir.is_some() {
+                    return Err("--dir given more than once".to_string());
                 }
+                dir = Some(PathBuf::from(value));
             }
             "manifest" | "hash" | "paths" => {
-                subcommand = args[i].as_str();
+                let next = match arg {
+                    "manifest" => Subcommand::Manifest,
+                    "hash" => Subcommand::Hash,
+                    _ => Subcommand::Paths,
+                };
+                // Two subcommands used to mean "the last one wins", silently.
+                if let Some(first) = subcommand {
+                    return Err(format!(
+                        "two subcommands given: {} and {}",
+                        subcommand_name(first),
+                        arg
+                    ));
+                }
+                subcommand = Some(next);
             }
-            _ => {}
+            other => return Err(format!("unrecognised argument: {other}")),
         }
         i += 1;
     }
 
-    match subcommand {
-        "manifest" => cmd_manifest(&dir),
-        "hash" => cmd_hash(&dir),
-        "paths" => cmd_paths(&dir),
-        _ => {
-            eprintln!("Usage: gnomon-surface [manifest|hash|paths] [--dir <path>]");
-            std::process::exit(1);
+    Ok(Parsed::Run {
+        subcommand: subcommand.unwrap_or(Subcommand::Manifest),
+        dir: dir.unwrap_or_else(|| PathBuf::from(".")),
+    })
+}
+
+fn subcommand_name(s: Subcommand) -> &'static str {
+    match s {
+        Subcommand::Manifest => "manifest",
+        Subcommand::Hash => "hash",
+        Subcommand::Paths => "paths",
+    }
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    let parsed = match parse_args(&args) {
+        Ok(parsed) => parsed,
+        Err(reason) => {
+            eprintln!("gnomon-surface: {reason}");
+            eprint!("{USAGE}");
+            std::process::exit(2);
         }
+    };
+
+    let (subcommand, dir) = match parsed {
+        Parsed::Help => {
+            print!("{USAGE}");
+            return;
+        }
+        Parsed::Run { subcommand, dir } => (subcommand, dir),
+    };
+
+    let surface = surface_dir_of(&dir);
+    if !surface.is_dir() {
+        // Not a warning. collect_surface over an absent directory returns
+        // nothing, so the run would print a well-formed 64-hex hash of five
+        // nulls and exit 0 -- a hash of a surface that is not there, which
+        // reads exactly like a hash of a surface that is.
+        eprintln!(
+            "gnomon-surface: no .gnomon/ directory at {} (resolved from --dir {})",
+            surface.display(),
+            dir.display()
+        );
+        std::process::exit(2);
+    }
+
+    match subcommand {
+        Subcommand::Manifest => cmd_manifest(&surface),
+        Subcommand::Hash => cmd_hash(&surface),
+        Subcommand::Paths => cmd_paths(&surface),
     }
 }
 
@@ -466,6 +631,142 @@ mod tests {
             hash_empty_dir, hash_with_empty,
             "A missing extension and an empty one are NOT the same surface"
         );
+    }
+
+    // ── Directory normalisation (finding 13) ──
+    //
+    // These tests exist because the bug they pin was invisible: every symptom
+    // of it came back on exit 0 with a well-formed 64-hex hash.
+
+    #[test]
+    fn test_surface_dir_of_accepts_a_project_root_or_the_surface_itself() {
+        let tmp = setup_test_dir();
+        let root = tmp.path();
+        let surface = root.join(".gnomon");
+
+        assert_eq!(
+            surface_dir_of(root),
+            std::path::absolute(&surface).unwrap(),
+            "a project root must resolve to the .gnomon/ inside it"
+        );
+        assert_eq!(
+            surface_dir_of(&surface),
+            std::path::absolute(&surface).unwrap(),
+            "the .gnomon/ directory itself must resolve to itself, not to .gnomon/.gnomon"
+        );
+        // A trailing separator is the same directory.
+        let with_slash = PathBuf::from(format!("{}/", surface.display()));
+        assert_eq!(surface_dir_of(&with_slash), std::path::absolute(&surface).unwrap());
+    }
+
+    #[test]
+    fn test_project_root_and_surface_dir_hash_identically() {
+        let tmp = setup_test_dir();
+        let root = tmp.path();
+        let surface = root.join(".gnomon");
+
+        let from_root = compute_surface_hash(&build_sources(&surface_dir_of(root)));
+        let from_surface = compute_surface_hash(&build_sources(&surface_dir_of(&surface)));
+
+        assert_eq!(
+            from_root, from_surface,
+            "a project root and its .gnomon/ name the same surface, so they must hash the same"
+        );
+
+        // Negative control: the pre-fix code path, spelled out. If
+        // surface_dir_of were ever reduced to the identity function, the
+        // assertion above would still pass and this one would fail -- so a
+        // regression cannot hide behind two agreeing wrong answers.
+        let unnormalised = compute_surface_hash(&build_sources(root));
+        assert_ne!(
+            unnormalised, from_surface,
+            "control: hashing the project root WITHOUT normalising must differ -- \
+             if it does not, this test is not measuring the normalisation"
+        );
+    }
+
+    #[test]
+    fn test_project_root_does_not_produce_a_doubled_prefix() {
+        let tmp = setup_test_dir();
+        let root = tmp.path();
+
+        let sources = build_sources(&surface_dir_of(root));
+        assert!(
+            !sources.iter().any(|s| s.path.starts_with(".gnomon/.gnomon/")),
+            "no source may be recorded under a doubled .gnomon/ prefix: {:?}",
+            sources.iter().map(|s| s.path.as_str()).collect::<Vec<_>>()
+        );
+        for path in SURFACE_PATHS {
+            let source = sources.iter().find(|s| s.path == *path).unwrap();
+            assert!(
+                source.sha256.is_some(),
+                "'{path}' is present on disk and must not be reported absent from a project root"
+            );
+        }
+
+        // Control: without normalisation, every declared path IS reported
+        // absent while the real files appear doubled. This is the measured
+        // failure, kept executable so the fix cannot silently come undone.
+        let unnormalised = build_sources(root);
+        assert!(
+            unnormalised.iter().any(|s| s.path.starts_with(".gnomon/.gnomon/")),
+            "control: the un-normalised walk is what produced the doubled prefix"
+        );
+        for path in SURFACE_PATHS {
+            let source = unnormalised.iter().find(|s| s.path == *path).unwrap();
+            assert!(source.sha256.is_none(), "control: '{path}' was reported absent");
+        }
+    }
+
+    // ── Argument parsing (finding 13) ──
+
+    #[test]
+    fn test_parse_args_defaults() {
+        let parsed = parse_args(&[]).unwrap();
+        assert_eq!(
+            parsed,
+            Parsed::Run { subcommand: Subcommand::Manifest, dir: PathBuf::from(".") }
+        );
+    }
+
+    #[test]
+    fn test_parse_args_subcommand_and_dir() {
+        let args: Vec<String> = ["hash", "--dir", "/x/.gnomon"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            parse_args(&args).unwrap(),
+            Parsed::Run { subcommand: Subcommand::Hash, dir: PathBuf::from("/x/.gnomon") }
+        );
+    }
+
+    #[test]
+    fn test_parse_args_help_is_recognised() {
+        for flag in ["--help", "-h"] {
+            assert_eq!(
+                parse_args(&[flag.to_string()]).unwrap(),
+                Parsed::Help,
+                "{flag} must be help, not a token to ignore"
+            );
+        }
+        // Help wins even when it trails a subcommand, so `hash --help` cannot
+        // print a hash and call it documentation.
+        let args: Vec<String> = ["hash", "--help"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(parse_args(&args).unwrap(), Parsed::Help);
+    }
+
+    #[test]
+    fn test_parse_args_rejects_what_it_does_not_understand() {
+        // Each of these exited 0 with a manifest or a hash before the fix.
+        let cases: [&[&str]; 4] = [
+            &["hsah"],                          // typo'd subcommand
+            &["hash", "--exclude", "nope"],     // flag that does not exist
+            &["--dir"],                         // value fell off the end
+            &["hash", "manifest"],              // two subcommands
+        ];
+        for case in cases {
+            let args: Vec<String> = case.iter().map(|s| s.to_string()).collect();
+            let err = parse_args(&args).unwrap_err();
+            assert!(!err.is_empty(), "{case:?} must be rejected with a reason");
+        }
     }
 
     #[test]

@@ -60,3 +60,40 @@ __pycache__/
 # these on every run. Sixteen of them were tracked, so following the
 # documented workflow left every contributor with a dirty tree.
 coverage/
+
+# Nothing inside a .gnomon/ surface is ever ignored.
+#
+# The surface is content-hashed, and `gnomon surface hash` walks every file
+# under .gnomon/ -- so a stray file there changes the identity every session
+# record and audit record is traced by. The rules above hid ten kinds of stray
+# file from `git status` while the hash moved underneath them. Measured
+# 2026-09-02 with `git check-ignore -v`, all ten IGNORED before this stanza:
+#
+#   .gnomon/scratch.log            <- *.log
+#   .gnomon/run.jsonl              <- *.jsonl
+#   .gnomon/sessions/x.toml        <- sessions/
+#   .gnomon/dist/a.txt             <- dist/
+#   .gnomon/coverage/x             <- coverage/
+#   .gnomon/.env                   <- .env
+#   .gnomon/a.key                  <- *.key
+#   .gnomon/__pycache__/x.pyc      <- __pycache__/
+#   .gnomon/target/x               <- target/
+#   packages/gnomon-cli/.gnomon/x.log  <- *.log
+#
+# A clean `git status` over a moved hash is the worst available combination:
+# the operator's one signal that the surface changed says nothing.
+#
+# The directory form is needed as well as the file form. Git will not descend
+# into an excluded directory, so re-including `.gnomon/sessions/x.toml` alone
+# cannot work -- `.gnomon/sessions` itself has to be un-excluded first, and
+# `**/.gnomon/**` matches the directory too. The leading `**/` covers nested
+# surfaces (packages/gnomon-cli/.gnomon/), not only the one at the root.
+#
+# This deliberately un-ignores .gnomon/.env and .gnomon/*.key. That is the
+# intended direction: a key inside a hashed, committable directory is a finding
+# the auditor already calls fatal, and it must be VISIBLE so someone deletes and
+# rotates it -- not quietly hidden from `git status` while it sits in the tree.
+#
+# .gnomon-sessions/, .gnomon-audit/ and .gnomon-loops/ are unaffected: they are
+# different path components, not children of .gnomon/, and they stay ignored.
+!**/.gnomon/**

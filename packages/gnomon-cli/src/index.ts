@@ -240,7 +240,7 @@ async function cmdLoop(args: CliArgs): Promise<void> {
   const root = args.dir ? resolve(args.dir) : process.cwd();
   const gnomonDir = resolveGnomonDir(args.dir);
   const loops = loadLoops(gnomonDir);
-  const sub = args.subcommand ?? "list";
+  const sub = subcommandOr(args, "list");
   const named = (n?: string) => {
     const l = loops.find((x) => x.name === n);
     if (!l) {
@@ -362,6 +362,34 @@ function bareArgs(args: CliArgs): string[] {
   return [args.subcommand, ...args.positional].filter(
     (v): v is string => typeof v === "string" && v.length > 0
   );
+}
+
+/**
+ * The subcommand, or `fallback` when none was given.
+ *
+ * parseArgs initialises `subcommand` to the EMPTY STRING (see `parseArgs`
+ * above; cli.test.ts pins it: `parseArgs(["surface"]).subcommand === ""`).
+ * An empty string is not nullish, so every nullish-coalescing fallback on that
+ * field evaluated to `""` and fell straight through to the command's
+ * "Unknown subcommand" branch. The fallbacks were there, and did nothing.
+ *
+ * Measured 2026-09-02, before this existed — all five in the bare form
+ * `--help` documents as optional, the brackets in `endpoint [add|test|list]`
+ * being the promise that the subcommand may be omitted:
+ *
+ *   gnomon endpoint  ->  Unknown endpoint subcommand: . Use: add | test | list   [1]
+ *   gnomon skill     ->  Unknown skill subcommand: . Use: list | accept | reject [1]
+ *   gnomon loop      ->  Unknown loop subcommand:                                [1]
+ *   gnomon key       ->  Usage: gnomon key  <endpoint|VARIABLE>                  [1]
+ *   gnomon audit     ->  reached the same branch whenever an audit dir existed
+ *
+ * Empty and undefined both mean "not given", so both map to the fallback. That
+ * also means this keeps working if `parseArgs` is ever changed to leave the
+ * field undefined — the fix does not depend on which sentinel is in use.
+ */
+function subcommandOr(args: CliArgs, fallback: string): string {
+  const sub = args.subcommand;
+  return sub === undefined || sub === "" ? fallback : sub;
 }
 
 async function cmdSession(args: CliArgs): Promise<void> {
@@ -512,7 +540,7 @@ function resolveKeyVariable(args: CliArgs, named: string): string | null {
 }
 
 async function cmdKey(args: CliArgs): Promise<void> {
-  const sub = args.subcommand ?? "list";
+  const sub = subcommandOr(args, "list");
   const named = args.positional[0];
 
   if (sub === "list") {
@@ -652,11 +680,36 @@ function ask(prompt: string, fallback = ""): Promise<string> {
  * is not evidence — opencode.ai serves one to no key at all.
  */
 async function cmdEndpoint(args: CliArgs): Promise<void> {
-  const sub = args.subcommand ?? "list";
+  const sub = subcommandOr(args, "list");
   const config = loadConfig(args.dir);
+
+  // Load the machine-local key store BEFORE anything reads the environment.
+  //
+  // `printEndpoints` decides SET vs NOT SET by reading `process.env[api_key_env]`
+  // (prompt_loop.ts). The `list` branch used to return above this call, so a key
+  // that `gnomon key set` had stored — and that every other command applies and
+  // uses successfully — was reported as missing, with the advice to run the very
+  // command that had already stored it.
+  //
+  // Measured 2026-09-02 with the key present in the store and unexported:
+  //     $ gnomon endpoint list
+  //       key: $OPENCODE_API_KEY — NOT SET — run: gnomon key set zen
+  // Both cloud endpoints, on a surface where `gnomon endpoint test zen` then
+  // authenticated fine.
+  //
+  // `declaredKeyVars(config)` is the allow-list: only names the SURFACE declares
+  // as key variables are injected, so the store cannot smuggle in
+  // GNOMON_MODEL_URL and friends. See the note in main().
+  const supplied = applyCredentials(undefined, declaredKeyVars(config));
 
   if (sub === "list") {
     printEndpoints(describeEndpoints(config), resolveUi(config), null);
+    if (supplied.length > 0) {
+      // Say where a key came from. "set" alone cannot distinguish a stored key
+      // from an exported one, and only one of those follows you to another
+      // shell.
+      console.log(`\n  Supplied from ${credentialsPath()}: ${supplied.join(", ")}`);
+    }
     console.log("\n  gnomon endpoint add [--preset opencode-go|opencode-zen|openrouter|ollama]");
     console.log("  gnomon endpoint test <name>   — run one token through it");
     return;
@@ -669,7 +722,6 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
       console.error(`Unknown endpoint "${name}". Declared: ${listEndpoints(config).join(", ")}`);
       process.exit(1);
     }
-    applyCredentials(undefined, declaredKeyVars(config));
     const probes = new Map<string, { ok: boolean; status?: number; detail?: string }>();
     for (const row of rows) {
       const model = args.flags.model ?? row.probeModel;
@@ -688,7 +740,6 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
   }
 
   const interactive = process.stdin.isTTY;
-  applyCredentials(undefined, declaredKeyVars(config));
 
   // ── 1. Which provider ────────────────────────────────────────────────────
   let presetKey = args.flags.preset;
@@ -908,53 +959,164 @@ async function listModelsAt(endpoint: {
   }
 }
 
+/**
+ * `gnomon audit` — list trails, and check one against everything that can
+ * catch a change to it.
+ *
+ * WHAT `verify` USED TO DO, MEASURED 2026-09-02.
+ *
+ * A surface with `[audit.attest]` declaring an Ed25519 signer and a public key
+ * wrote a three-record trail with a signed head over every record. The trail
+ * was then fully re-chained — one field edited, every hash recomputed, file
+ * written back — the exact attack `attest.ts` exists to catch and the one
+ * documented as UNDETECTABLE by hash chaining alone:
+ *
+ *     $ gnomon audit verify        (before)
+ *     sess-1.jsonl: 3 records — intact          [exit 0]
+ *
+ * Identical output before and after the tampering, and exit 0 both times. The
+ * command called `verifyTrail(path)` with no options, and `opts.attest` is what
+ * makes it look at the signatures at all — so the signer, the heads and every
+ * test behind them were wired to nothing. And with no trails at all it looped
+ * over an empty list and still exited 0: "verified" and "there was nothing to
+ * verify" were the same answer.
+ *
+ * So: the resolved `[audit.attest]` is passed in, the three states are printed
+ * as three different things, and an empty target list is an error.
+ *
+ * WHAT EACH LINE MEANS, and the limit on each:
+ *   chain   — records hash to their own content and to their neighbour. Cannot
+ *             see a full re-chain; that is what the attestation line is for.
+ *   seal    — the trail ends with session_end. Reported apart from the chain
+ *             because a killed run and a truncated file both land here.
+ *   anchor  — SIGNED / BROKEN / NOT SIGNED / UNVERIFIABLE, against heads signed
+ *             by a key this harness never holds.
+ *
+ * NOT SIGNED is not an error when the surface declares no signer: that is a
+ * legitimate configuration, and failing it would make `verify` useless on the
+ * default surface. It IS an error when a signer is declared and the heads are
+ * missing — that is an anchor that was removed.
+ */
 async function cmdAudit(args: CliArgs): Promise<void> {
   const config = loadConfig(args.dir);
   const settings = resolveAudit(config);
-  const sub = args.subcommand ?? "show";
+  const sub = subcommandOr(args, "show");
 
-  if (!existsSync(settings.dir)) {
-    console.log(`No audit trail at ${settings.dir}`);
-    console.log(
-      settings.enabled
-        ? "Auditing is enabled but nothing has been recorded yet."
-        : "Auditing is off. Set [audit].enabled = true in .gnomon/config.toml."
-    );
-    return;
+  if (sub !== "show" && sub !== "list" && sub !== "verify") {
+    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify`);
+    process.exit(1);
   }
 
-  const trails = readdirSync(settings.dir)
-    .filter((f: string) => f.endsWith(".jsonl"))
-    .sort();
+  const trails = existsSync(settings.dir)
+    ? readdirSync(settings.dir)
+        .filter((f: string) => f.endsWith(".jsonl"))
+        .sort()
+    : [];
 
   if (sub === "show" || sub === "list") {
+    if (!existsSync(settings.dir)) {
+      console.log(`No audit trail at ${settings.dir}`);
+      console.log(
+        settings.enabled
+          ? "Auditing is enabled but nothing has been recorded yet."
+          : "Auditing is off. Set [audit].enabled = true in .gnomon/config.toml."
+      );
+      return;
+    }
     console.log(`Trails in ${settings.dir}:`);
     for (const t of trails) console.log(`  ${t}`);
     if (trails.length === 0) console.log("  (none)");
     return;
   }
 
-  if (sub === "verify") {
-    const targets = args.positional.length > 0 ? args.positional : trails;
-    let allOk = true;
-    for (const name of targets) {
-      const path = join(settings.dir, name);
-      const r = verifyTrail(path);
-      if (r.problem) {
-        console.error(`${name}: ${r.problem}`);
-        allOk = false;
-        continue;
-      }
-      const status = r.ok ? "intact" : `BROKEN at seq ${r.broken.join(", ")}`;
-      console.log(`${name}: ${r.records} records — ${status}`);
-      if (!r.ok) allOk = false;
-    }
-    if (!allOk) process.exit(1);
-    return;
+  // ── verify ────────────────────────────────────────────────────────────────
+  const targets = args.positional.length > 0 ? args.positional : trails;
+  if (targets.length === 0) {
+    // Exit 1, not 0. A gate that answers "verified" when it verified nothing is
+    // the failure this repository keeps hitting; `audit verify` is the last
+    // thing that should have it. A caller gating a release on this exit code
+    // gets "no evidence", which is not "no problem".
+    console.error(`gnomon audit verify: nothing to verify.`);
+    console.error(`  Looked in ${settings.dir} for *.jsonl and found none.`);
+    console.error(
+      settings.enabled
+        ? `  [audit].enabled is true, so a trail appears once a session runs.`
+        : `  [audit].enabled is false in .gnomon/config.toml — nothing is being recorded.`
+    );
+    process.exit(1);
   }
 
-  console.error(`Unknown audit subcommand: ${sub}. Use: show | verify`);
-  process.exit(1);
+  const attest = settings.attest;
+  // Reported once, above the trails: a public key that would not load makes
+  // every line below say "unverifiable" for a reason nobody would otherwise be
+  // told, which reads exactly like "nothing was ever signed".
+  for (const problem of attest?.problems ?? []) {
+    console.error(`[audit.attest] ${problem}`);
+  }
+
+  let allOk = true;
+  for (const name of targets) {
+    const path = join(settings.dir, name);
+    // `attest` is passed unconditionally. When no signer is declared it is
+    // resolved-but-disabled and costs one existsSync, and it is what lets the
+    // NOT SIGNED line below be printed at all.
+    const r = verifyTrail(path, attest ? { attest } : {});
+
+    if (!existsSync(path)) {
+      console.error(`${name}: no such trail in ${settings.dir}`);
+      allOk = false;
+      continue;
+    }
+
+    const chain = r.ok ? "chain intact" : `chain BROKEN at seq ${r.broken.join(", ")}`;
+    const seal = r.sealed ? "sealed" : "NOT SEALED (truncated, or the run was killed)";
+    console.log(`${name}: ${r.records} records — ${chain}, ${seal}`);
+    if (!r.ok) allOk = false;
+
+    const a = r.attestation;
+    if (!a) {
+      // Only reachable if resolveAudit ever stops resolving [audit.attest].
+      console.log(`  anchor: NOT CHECKED — no attestation settings were resolved`);
+      allOk = false;
+      continue;
+    }
+
+    if (a.status === "signed") {
+      console.log(
+        `  anchor: SIGNED — ${a.verified}/${a.heads} head(s) verified, covered through seq ${a.covered_through}`
+      );
+      if (a.unattested > 0) {
+        console.log(`          ${a.unattested} later record(s) are chained but not yet anchored`);
+      }
+    } else if (a.status === "broken") {
+      console.error(`  anchor: BROKEN — ${a.problem}`);
+      allOk = false;
+    } else if (a.status === "unverifiable") {
+      console.error(`  anchor: UNVERIFIABLE — ${a.problem}`);
+      console.error(`          heads: ${a.heads_path}`);
+      allOk = false;
+    } else if (a.declared) {
+      // A signer IS declared and there are no usable heads. The anchor was
+      // removed, or signing failed at write time; either way this trail is not
+      // protected against the re-chain and must not read as if it were.
+      console.error(`  anchor: NOT SIGNED — ${a.problem}`);
+      console.error(`          [audit.attest] declares a signer, so heads were expected here.`);
+      allOk = false;
+    } else {
+      console.log(`  anchor: NOT SIGNED — this surface declares no [audit.attest] signer.`);
+      console.log(
+        `          The chain above proves the file is internally consistent, not that it`
+      );
+      console.log(
+        `          is the file that was written: rewriting a record and recomputing every`
+      );
+      console.log(
+        `          hash passes it. Declare a signer to close that.`
+      );
+    }
+  }
+
+  if (!allOk) process.exit(1);
 }
 
 async function cmdTask(args: CliArgs): Promise<void> {
@@ -987,7 +1149,7 @@ async function cmdTask(args: CliArgs): Promise<void> {
 
 async function cmdSkill(args: CliArgs): Promise<void> {
   const config = loadConfig(args.dir);
-  const sub = args.subcommand ?? "list";
+  const sub = subcommandOr(args, "list");
   const id = args.positional[0];
 
   if (sub === "list") {

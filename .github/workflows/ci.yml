@@ -162,9 +162,96 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
+      # MEASURED, 2026-09-02. This step used to be:
+      #
+      #     … run 2>&1 | grep -E "(Commands|Available roles|exit)" && echo "PASS"
+      #
+      # `exit` matches "Type /quit or Ctrl+C to exit." — line 11 of the startup
+      # banner, printed 27 lines before the first slash command is read. The
+      # alternation was therefore satisfied by a process that had done nothing
+      # but print its banner. Verified by running the loop with EMPTY stdin: no
+      # command was issued, and the old pattern still matched and printed PASS.
+      # `grep` being last in the pipeline threw away the CLI's exit status on
+      # top of that, so a loop that crashed after the banner also passed.
+      #
+      # So: tee to a log, check the loop's own status, and require evidence
+      # that each command actually ran. `^Commands` is the /help table and
+      # `^Available roles` is the /roles table — both anchored, both printed
+      # only after input is read. `^Session complete` is weaker on purpose and
+      # is here for what it does prove: the loop reached its normal end instead
+      # of being killed. It is present on EOF too, so it is never the only
+      # evidence.
       - name: Smoke test prompt loop
         run: |
-          echo -e "/help\n/roles\n/quit" | \
-          GNOMON_BIN_OVERRIDE=target/debug \
-          pnpm -w exec tsx packages/gnomon-cli/src/index.ts run 2>&1 | \
-          grep -E "(Commands|Available roles|exit)" && echo "PASS"
+          set -uo pipefail
+          set +e
+          printf '/help\n/roles\n/quit\n' \
+            | GNOMON_BIN_OVERRIDE=target/debug \
+              pnpm -w exec tsx packages/gnomon-cli/src/index.ts run > loop.log 2>&1
+          status=${PIPESTATUS[1]}
+          set -e
+
+          # CI forces colour. An un-stripped line can start with an escape
+          # sequence, which would defeat every anchored pattern below and turn
+          # this back into a check that cannot fail.
+          sed -E $'s/\x1b\\[[0-9;]*[A-Za-z]//g' loop.log > loop.txt
+          echo "----- prompt loop output -----"
+          cat loop.txt
+          echo "------------------------------"
+
+          rc=0
+          if [ "$status" -ne 0 ]; then
+            echo "FAIL: the prompt loop exited $status"
+            rc=1
+          fi
+          for evidence in '^Commands' '^Available roles' '^Session complete'; do
+            if grep -qE "$evidence" loop.txt; then
+              echo "ok: found /$evidence/"
+            else
+              echo "FAIL: nothing matched /$evidence/ — the loop did not get as far"
+              echo "      as running the command that prints it."
+              rc=1
+            fi
+          done
+          exit $rc
+
+  contract-fixtures:
+    # THE META-CHECK. docs/CONTRACTS.md and CONTRIBUTING.md both told readers a
+    # contract change arriving without a conformance/ fixture was caught.
+    # Measured 2026-09-02: no job in this file looked at a diff at all, so
+    # nothing was caught — CONTRACTS.md line 8 admitted as much in its own words
+    # while CONTRIBUTING.md line 65 claimed the opposite. This job is what makes
+    # the claim true, for the file set named in the script and no wider.
+    #
+    # pull_request only: the gate needs two refs to diff and a push build has no
+    # dependable base (a force-push or a first commit has none at all). Stated
+    # rather than papered over — a `push` build is NOT covered by this.
+    name: Contract change ⇒ fixture change
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      # fetch-depth: 0 — the gate needs a merge base, and the default shallow
+      # clone has none. With depth 1 the gate exits 2 (cannot determine a base)
+      # and the step below fails it, which is the intended behaviour: no base
+      # means no answer, and no answer must not read as a pass.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Contract/fixture gate
+        run: |
+          set -uo pipefail
+          BASE="origin/${{ github.base_ref }}"
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          set +e
+          bash conformance/contract_fixture_gate.sh "$BASE"
+          rc=$?
+          set -e
+          if [ "$rc" -eq 2 ]; then
+            echo ""
+            echo "FAIL: the gate could not determine a base to diff against, in CI,"
+            echo "      where there is always one. That is a broken check, and a"
+            echo "      broken check must not report success."
+            exit 1
+          fi
+          exit $rc

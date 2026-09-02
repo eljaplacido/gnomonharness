@@ -1,5 +1,34 @@
 # Declared tools and MCP servers. Each pinned.
-# Unreachable servers produce a refusal — never a shorter tool list.
+#
+# This file used to say, on this line: "Unreachable servers produce a refusal —
+# never a shorter tool list." That sentence was false, and the code cannot be
+# changed from here, so it is replaced with what connectMcp actually does
+# (packages/gnomon-core/src/mcp.ts, read 2026-09-02):
+#
+#   A server that fails to spawn or fails the handshake is CAUGHT. One line is
+#   printed at startup — `mcp: <name> unavailable — <reason>` — the connection
+#   is closed, and the loop continues. That server's tools are simply absent
+#   from the tool list handed to the model. The model is never told, and no
+#   refusal naming the server is ever produced: it sees a shorter list and has
+#   no way to know one existed.
+#
+# The claim was worth deleting rather than softening. It described the single
+# behaviour that would have made a missing server visible to the model, and the
+# code does the opposite — so a reader who trusted it would conclude a server
+# had connected because nothing refused. A surface sentence describing a control
+# that does not exist is the same failure as a setting nothing reads.
+#
+# The only refusal on that path fires when a model names an unconnected tool
+# (`MCP tool "x" is not connected.`), which will not happen, because the tool
+# was never offered to it.
+#
+# What to do instead: read the startup lines. A declared server that does not
+# appear there did not connect, and the session is running with fewer tools than
+# this file declares.
+#
+# gnomon's own tools — the [[tools]] blocks below — are different, and do refuse
+# by name: a tool a role may not call comes back as
+# `Refused: "<name>" is not available to this role.` (tools.ts).
 
 [[tools]]
 name = "read"

@@ -66,12 +66,23 @@ JavaScript runtime. `gnomon-surface` is the authority,
 the same hash independently with a test holding the two together. They
 disagreed once; that test is why they no longer can.
 
-`gnomon-edit`, `gnomon-exec` and `gnomon-enums` back CLI commands — `apply`,
-`simulate`, `session`, `enumerations`. They are deliberately outside the agent
-loop, which reaches files through a TypeScript exact-string `edit` tool and
-processes through `spawn`. Moving those two into the crates would put a
-checkable boundary around the loop's most dangerous operations; it is a design
-worth having and is not what this build does.
+`gnomon-edit` and `gnomon-enums` back CLI commands — `apply`, `simulate`,
+`enumerations`. `gnomon-exec` backs **none**: this line named it behind
+`session` for months, and `gnomon session` does not call it. `session` uses
+`gnomon-surface` for its manifest and then runs each command through
+`SessionManager.run` in `session.ts`, which is `node:child_process.spawn` with
+`shell: true`; `runSessionStep`, the only function that would spawn
+`gnomon-exec`, has zero call sites in this repository. Verified by stubbing:
+with a `gnomon-exec` on the binary path that exits 42 and announces itself,
+`gnomon session "echo …"` still succeeded — and the same trick on
+`gnomon-surface` failed the command at once, so the probe could have seen a
+call had there been one.
+
+Those crates are deliberately outside the agent loop, which reaches files
+through a TypeScript exact-string `edit` tool and processes through `spawn`.
+Moving editing and execution into the crates would put a checkable boundary
+around the loop's most dangerous operations; it is a design worth having, it is
+what `gnomon-exec` was built for, and it is not what this build does.
 
 TypeScript owns the loop — turns, tools, context, skills, audit, sessions —
 where the cost of change is low and the shape is still moving.
@@ -96,9 +107,25 @@ nothing external installed. [SeptaCore](https://github.com/eljaplacido/SeptaCore
 drive — which the author's own surface uses; gnomon does not require it. A
 second gate built into gnomon would be duplicated mechanism.
 
-**An orchestrator.** Routing picks which role answers a turn. Nothing runs
-coordinator → implementor → verifier in sequence and gates on the result. The
-order is the operator's.
+**An orchestrator that gates.** This section claimed "nothing runs coordinator →
+implementor → verifier in sequence" for six commits after `[chain]` shipped.
+Something does. `[chain] stages = ["plan", "implement", "critique"]` is
+scaffolded by `gnomon init`, validated by `auditSurface` (a stage naming a
+role that does not exist is fatal), and run by both `gnomon task` and the
+interactive loop; each stage receives the original request plus what the
+previous stage *reported*, never its transcript, and each writes its own
+`chain_stage` audit record.
+
+What is genuinely absent is the **gate**. In both chain loops in
+`prompt_loop.ts` the only early exit is on codes 10, 12 and 13 — apparatus
+failure, dead endpoint, unusable surface. A stage's own outcome does not stop
+the stage after it. That follows from the rule above rather than contradicting
+it: folding three outcomes into one pass/fail verdict is the composite verdict
+Rule 4 forbids, so the chain sequences and records, and the decision about what
+a bad stage means stays with the operator reading the trail. The cost of that
+choice is stated where it can be checked: a declared chain did not improve task
+completion in [role-chain-2026-09-02](../benchmarks/results/role-chain-2026-09-02/README.md)
+(48.7% vs 56.6%, a difference equal to the within-arm spread).
 
 See [CONTRACTS.md](CONTRACTS.md) for the versioned interfaces and
 [ROADMAP.md](ROADMAP.md) for what is built and what is not.

@@ -60,10 +60,19 @@ and it works — a dropped thread here is far more likely to be an oversight tha
 a decision.
 
 **Where a PR most often stalls**, so you can pre-empt it: a change that alters
-documented behaviour without moving the README (`docs.test.ts` will fail it), a
-contract change that arrives without a `conformance/` fixture, or a
-non-trivial feature that never had a proposal issue and turns out to point away
-from where the project is going. The first two are caught by the gate. The third
+documented behaviour without moving the README, a contract change that arrives
+without a `conformance/` fixture, or a non-trivial feature that never had a
+proposal issue and turns out to point away from where the project is going.
+
+Only the first is mechanically gated. `docs.test.ts` runs in CI and fails a PR
+that moves the tool table, the role table, the command registry, the exit
+codes, the `stop_reason` enumeration, a scaffolded default, or a `file.ts:line`
+citation out of step with the README. The second is **reviewer-enforced**:
+`.gnomon/ci.sh` re-validates the four fixtures that already exist
+(`manifest_golden.json`, `enumerations`, `session_golden.json`,
+`exit_codes.json`), so *changing* one of those contracts without updating its
+fixture does fail — but nothing anywhere checks that a **new** contract arrives
+with a fixture at all. A reviewer asks for it, or it does not happen. The third
 is why step 1 asks for an issue first.
 
 ## Dev workflow

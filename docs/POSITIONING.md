@@ -96,7 +96,7 @@ provider-specific features.
 | **Sandboxed isolation** | OpenHands | `confined` is filesystem path containment, not a container. `bash` reaches the network. |
 | **Ecosystem** | all of them | This is one repository. |
 | **Repo map / semantic context** | Aider, Cursor | Context is a sliding window over turns, not a ranked map of the repository. |
-| **Enforced role chain** | — | Routing picks *which* role answers. Nothing runs coordinator → implementor → verifier and gates on the result. The order is yours. |
+| **A role chain that *gates*** | Devin, ForgeCode-style pipelines | The chain itself ships: `[chain] stages = [...]` runs the stages in declared order from both `gnomon task` and the interactive loop, each stage seeing the original request plus what the previous stage *reported*, one `chain_stage` audit record each. What is missing is the gate — a stage's exit code never stops the next one; only an apparatus failure (codes 10/12/13) aborts the remainder. So a `verifier` stage records a verdict and nothing acts on it. Measured, declaring a chain did not improve task completion here: [role-chain-2026-09-02](../benchmarks/results/role-chain-2026-09-02/README.md), 48.7% vs 56.6%, within the noise. |
 
 ## Where it is genuinely ahead
 

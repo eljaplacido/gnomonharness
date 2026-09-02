@@ -844,6 +844,58 @@ async function callEndpointWithRetry(
   return last!;
 }
 
+/**
+ * Is this URL pointing at this machine?
+ *
+ * Used only to tell the two `ECONNREFUSED`s apart. A refused socket at
+ * api.openai.com means the internet is having a bad day and retrying is
+ * sensible; a refused socket at 127.0.0.1:11434 means the user has not started
+ * the server, and no amount of retrying will start it. The remedy is different,
+ * so the message has to be.
+ *
+ * Parse failures return false: an unparseable URL is not evidence of loopback,
+ * and the generic message is still correct.
+ */
+export function isLoopbackUrl(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  // Node's URL keeps the BRACKETS on an IPv6 hostname -- `http://[::1]:1234`
+  // gives hostname "[::1]", not "::1". Written the other way round first, and
+  // the unit check caught it: every IPv6 loopback URL was classified remote and
+  // got the generic message this exists to replace. It also normalises the long
+  // form, so `[0:0:0:0:0:0:0:1]` arrives as `[::1]` and only `::1` need match.
+  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
+  // 0.0.0.0 is not routable as a destination; connecting to it hits this host.
+  if (host === "0.0.0.0" || host === "::") return true;
+  // The whole 127.0.0.0/8 block, not just 127.0.0.1 -- llama.cpp and friends
+  // are routinely bound to 127.0.0.2 and up on a busy box.
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
+/**
+ * The real errno behind a fetch failure.
+ *
+ * Node's fetch throws `TypeError: fetch failed` and hangs the actual cause off
+ * `.cause` -- so matching ECONNREFUSED against `err.message` never matches, and
+ * every transport failure looked identical. Walk the chain (bounded; causes can
+ * be self-referential) and return the first `code` found.
+ */
+export function causeCode(err: unknown): string | undefined {
+  let cur: unknown = err;
+  for (let i = 0; i < 8 && cur; i++) {
+    const c = (cur as { code?: unknown }).code;
+    if (typeof c === "string") return c;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
 async function callEndpoint(
   target: RouteTarget,
   messages: ChatMessage[],
@@ -853,6 +905,50 @@ async function callEndpoint(
 ): Promise<InferenceResult> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const apiKey = target.apiKeyEnv ? process.env[target.apiKeyEnv] : undefined;
+
+  // Pre-flight the declared key, before the socket is opened.
+  //
+  // The surface declaring `api_key_env = "X"` is the surface stating that this
+  // endpoint does not work without $X. When $X was unset we sent the request
+  // anyway, with no Authorization header, and handed the user back whatever the
+  // provider said -- for the two defaults that is `Model API error: 401
+  // Unauthorized` plus a provider JSON blob. That names neither the variable
+  // the surface declared, nor the command that sets it, and it is the single
+  // most likely thing to go wrong on a first run.
+  //
+  // Measured, driving a turn at an endpoint declaring api_key_env with that
+  // variable unset: before, 1 request went out and the turn returned
+  // `Model API error: 401 Unauthorized` + `invalid x-api-key`; after, 0
+  // requests go out and the turn returns the variable name and the command.
+  //
+  // Costs one boolean on a value the line above already computed, so the happy
+  // path is unchanged -- verified by a control that sets the key and asserts
+  // the request still goes out carrying `Bearer <key>`.
+  //
+  // Code 10 (`launch_failed`), not 12: 12 is in RETRYABLE, so it would knock on
+  // the endpoint for the whole transport grace first. There is no attempt count
+  // at which an unset variable becomes set.
+  //
+  // Empty counts as missing. `export X=` yields "", which sends `Bearer ` and
+  // 401s exactly like no header at all, so treating it as present would put the
+  // user back in front of the raw provider error this exists to replace.
+  if (target.apiKeyEnv && !apiKey) {
+    const where = target.endpoint ? `endpoint "${target.endpoint}"` : `endpoint ${target.url}`;
+    return {
+      content:
+        `No API key: ${where} declares api_key_env = "${target.apiKeyEnv}", ` +
+        `and $${target.apiKeyEnv} is not set in this environment.\n\n` +
+        `Set it with:\n` +
+        (target.endpoint
+          ? `  gnomon key set ${target.endpoint}\n`
+          : `  export ${target.apiKeyEnv}=<your key>\n`) +
+        `\nNo request was sent, so nothing was billed. ` +
+        `Run \`gnomon models\` to see which endpoints have a key.`,
+      code: 10,
+      toolCalls: [],
+    };
+  }
+
   if (apiKey) {
     headers["Authorization"] = `Bearer ${apiKey}`;
   }
@@ -898,10 +994,36 @@ async function callEndpoint(
         }
       })().trim();
 
+      // A rejected credential, told as a credential problem.
+      //
+      // The pre-flight above catches an UNSET declared variable. This is the
+      // other half: a variable that is set but wrong or expired, or an endpoint
+      // whose surface declares no api_key_env at all against a provider that
+      // demands one. Both arrived as a bare `Model API error: 401 Unauthorized`
+      // and a provider blob, which does not say which of the declared endpoints
+      // rejected it or which variable supplied the key that was rejected.
+      const authHint =
+        res.status === 401 || res.status === 403
+          ? `\n\n` +
+            (target.apiKeyEnv
+              ? `The key came from $${target.apiKeyEnv}` +
+                (target.endpoint ? ` (endpoint "${target.endpoint}")` : "") +
+                `, so it is set but the provider rejected it — wrong key, wrong ` +
+                `account, or expired. Replace it with: gnomon key set ` +
+                `${target.endpoint ?? "<endpoint>"}`
+              : (target.endpoint
+                  ? `Endpoint "${target.endpoint}" declares no api_key_env`
+                  : `This endpoint declares no api_key_env`) +
+                `, so no Authorization header was sent. If this provider needs ` +
+                `a key, add api_key_env = "<VARIABLE>" to its [endpoints] block ` +
+                `in .gnomon/config.toml, then: gnomon key set ` +
+                `${target.endpoint ?? "<endpoint>"}`)
+          : "";
       return {
         content:
           `Model API error: ${res.status} ${res.statusText}` +
-          (detail ? `\n${detail.slice(0, 500)}` : ""),
+          (detail ? `\n${detail.slice(0, 500)}` : "") +
+          authHint,
         code: classifyFailure({ status: res.status, message: detail }),
         toolCalls: [],
         toolsUnsupported:
@@ -950,8 +1072,62 @@ async function callEndpoint(
       return { content: CANCELLED, code: 2, toolCalls: [] };
     }
     const msg = err instanceof Error ? err.message : String(err);
+    const errno = causeCode(err);
+
+    // Nothing is listening on this box.
+    //
+    // The generic line was `Model unavailable at http://127.0.0.1:11434/api/chat:
+    // fetch failed`, which is true and useless: "fetch failed" is what Node's
+    // fetch says for a DNS failure, a TLS failure, a reset and a refusal alike,
+    // and the user cannot tell from it whether the address is wrong, the network
+    // is down, or they simply never started the server. On a first run it is
+    // almost always the last one.
+    //
+    // ECONNREFUSED to a loopback address is the one case that admits a single
+    // definite reading: the kernel answered, and no process holds that port.
+    // That is worth saying plainly, with the port in it.
+    //
+    // LIMIT, published rather than implied: this changes the MESSAGE, not the
+    // retry policy. `transport_grace_ms` still applies, so an unreachable
+    // endpoint is still knocked on for the configured grace before the turn
+    // ends -- the [retry] lines above say so as it happens. Shortening that for
+    // loopback would silently redefine a declared resilience setting, and a
+    // user starting the server in another terminal is exactly who the grace
+    // helps. NOT VERIFIED: no measurement of how often that second case occurs.
+    if (errno === "ECONNREFUSED" && isLoopbackUrl(target.url)) {
+      let where = target.url;
+      try {
+        const u = new URL(target.url);
+        where = `${u.hostname}:${u.port || (u.protocol === "https:" ? "443" : "80")}`;
+      } catch {
+        /* keep the raw URL */
+      }
+      return {
+        content:
+          `Nothing is listening on ${where} — the connection was refused, ` +
+          `so no server is running there.\n\n` +
+          `This is a local endpoint` +
+          (target.endpoint ? ` ("${target.endpoint}", ${target.url})` : ` (${target.url})`) +
+          `, so gnomon cannot start it for you. Start the model server, then ` +
+          `retry:\n` +
+          `  ollama serve            # if this endpoint is Ollama\n` +
+          `  gnomon models           # lists every endpoint and what answers\n\n` +
+          `If the server IS running, it is on a different port than the surface ` +
+          `declares — check [endpoints] in .gnomon/config.toml.`,
+        code: classifyFailure({
+          errName: err instanceof Error ? err.name : undefined,
+          message: msg,
+        }),
+        toolCalls: [],
+      };
+    }
+
     return {
-      content: `Model unavailable at ${target.url}: ${msg}`,
+      content:
+        `Model unavailable at ${target.url}: ${msg}` +
+        // The errno is the whole diagnosis and Node buries it on `.cause`, so
+        // surface it. Without this every transport failure read "fetch failed".
+        (errno && !msg.includes(errno) ? ` (${errno})` : ""),
       code: classifyFailure({
         errName: err instanceof Error ? err.name : undefined,
         message: msg,
@@ -2250,7 +2426,31 @@ export async function runAgenticTurn(
     // per-leg figure slightly; that is the price of guaranteeing progress.
     const checkpoint = stepsThisLeg >= maxSteps;
 
-    if (stalled || (checkpoint && wall)) {
+    // The wall stops the turn ON ITS OWN. This was `stalled || (checkpoint &&
+    // wall)`, which made max_steps_total not a wall but a number consulted only
+    // where a leg happened to end: once past it, the turn kept running until
+    // the CURRENT leg also reached its per-leg max_steps. So the overshoot was
+    // not a rounding error, it was up to a whole leg — and worst exactly where
+    // an operator is most deliberate, setting a total TIGHTER than one leg.
+    //
+    // Measured (fake endpoint, one tool call per response, distinct paths so
+    // neither stall test fires; steps = turn.toolSteps), before -> after:
+    //
+    //   max_steps  max_steps_total   ran before   ran after
+    //       4             6              8            6
+    //       5             7             10            7
+    //       4             9             12            9
+    //      10             3             10            3     <- 3.3x the wall
+    //       4             0              4            0
+    //
+    // The last row is a documented contract, not an inference. config.ts says
+    // of flooring max_steps at 1: "0 makes max_steps_total 0, which is the wall
+    // on the first call: the turn ends before any tool runs." It ran a whole
+    // leg of 4 first.
+    //
+    // A ceiling a turn can walk through is worse than no ceiling: it is the one
+    // bound an unattended session has, and the number in roles.toml was not it.
+    if (stalled || wall) {
       const note = stalled
         ? `Stopped: the same tool call repeated ${loop.stall_repeats} times without ` +
           `progress, after ${steps} call(s).`
@@ -2397,8 +2597,12 @@ export async function runAgenticTurn(
     // Overlapping reads is a wall-clock optimisation. An operator who asked to
     // see every call before it runs has already said the wall clock is not what
     // they are optimising.
+    // Room left under the wall. Checked here as well as in the execution loop
+    // so the prefetch cannot do work the budget has no room to count.
+    const roomUnderWall = maxTotal > 0 ? Math.max(0, maxTotal - steps) : 0;
     if (!deps.signal?.aborted && gate !== "always") {
       for (let i = 0; i < result.toolCalls.length; i++) {
+        if (i >= roomUnderWall) break;
         const call = result.toolCalls[i]!;
         if (!concurrentSafe(call.name) || !offered.has(call.name)) break;
         prefetched.set(i, executeTool(call.name, call.args, ctx, offered));
@@ -2413,6 +2617,30 @@ export async function runAgenticTurn(
       if (deps.signal?.aborted) {
         deps.progress.stop();
         return cancelled();
+      }
+      // The wall holds INSIDE a batch too. The check above runs once per model
+      // response, so on its own it can only notice the wall AFTER a batch has
+      // already carried the turn past it. Measured, same harness as above, with
+      // a model asking for 6 tool calls in every response and max_steps_total 8:
+      // 12 calls ran before, 8 after. The bigger the batch a model likes to
+      // emit, the further past its own ceiling the turn went.
+      //
+      // Skipped calls still get a tool result. Returning nothing for a call the
+      // model can see in its own message leaves an unanswered tool_call_id, and
+      // backends that validate that pairing reject the wrap-up request that
+      // follows — the turn would end in an apparatus error instead of at its
+      // ceiling. It is also the honest answer: the tool did not run.
+      if (maxTotal <= 0 || steps >= maxTotal) {
+        working.push({
+          role: "tool",
+          content:
+            `Not run: this turn reached max_steps_total (${maxTotal}) before ` +
+            `this call. No tool ran for it and nothing changed. Answer from ` +
+            `what you already have.`,
+          tool_call_id: call.id,
+          tool_name: call.name,
+        });
+        continue;
       }
       steps++;
       stepsThisLeg++;

@@ -14,8 +14,16 @@
  * deliberately about the FAILING direction only; the passing direction is
  * covered by the suites beside this one.
  */
-import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, appendFileSync, readFileSync } from "node:fs";
+import { describe, it, expect, vi } from "vitest";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  appendFileSync,
+  readFileSync,
+  chmodSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -186,15 +194,104 @@ describe("gate: a record names the harness that produced it", () => {
     expect(b.endsWith("+")).toBe(false);
   });
 
-  it("marks a build made from an edited tree as dirty", async () => {
-    // A build from a modified tree must not claim to be its last commit --
-    // that is the under-identification the field exists to end.
-    const { harnessBuild } = await import("./build.js");
-    const b = harnessBuild();
-    const clean = /\+[0-9a-f]{7,}$/.test(b);
-    const dirty = /-dirty$/.test(b);
-    const unknown = /\+unknown$/.test(b);
-    expect(clean || dirty || unknown, `unexpected build string: ${b}`).toBe(true);
+  it("says -dirty for an edited tree, and does not for a committed one", async () => {
+    // What this replaced, and why: the old assertion was
+    // `expect(clean || dirty || unknown).toBe(true)` -- a disjunction over
+    // EVERY string harnessBuild() can return. Measured against the real
+    // build.ts: hardcoding `const dirty = ""` (deleting the suffix outright)
+    // and inverting the porcelain test to `.length === 0` BOTH left it green.
+    // It could not fail, so it was not evidence that a build from an edited
+    // tree stops claiming to be its last commit.
+    //
+    // harnessBuild() runs git with cwd = its own source directory, so the tree
+    // under test is selected the way git itself selects one: GIT_DIR and
+    // GIT_WORK_TREE. That drives the real execFileSync calls against a
+    // throwaway repository whose clean/dirty state this test owns, instead of
+    // asserting against whatever the checkout happens to look like -- which is
+    // the other reason the old test had to be a disjunction.
+    //
+    // vi.resetModules() is required, not decorative: harnessBuild() caches its
+    // answer in a module-level `cached`, so without a fresh module instance the
+    // second call would return the first call's string and the two halves would
+    // agree for the wrong reason.
+    const repo = mkdtempSync(join(tmpdir(), "gnomon-build-"));
+    const git = (...args: string[]) =>
+      execFileSync("git", args, {
+        cwd: repo,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    const saved = {
+      dir: process.env.GIT_DIR,
+      work: process.env.GIT_WORK_TREE,
+      build: process.env.GNOMON_BUILD,
+    };
+    try {
+      git("init", "-q", "-b", "main");
+      writeFileSync(join(repo, "a.txt"), "committed\n");
+      git("add", "a.txt");
+      git("-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q", "-m", "one");
+
+      process.env.GIT_DIR = join(repo, ".git");
+      process.env.GIT_WORK_TREE = repo;
+      // GNOMON_BUILD short-circuits git entirely; a stamped environment would
+      // make every assertion below pass without git being consulted at all.
+      delete process.env.GNOMON_BUILD;
+
+      vi.resetModules();
+      const clean = (await import("./build.js")).harnessBuild();
+      expect(clean, `expected a committed sha, got: ${clean}`).toMatch(/\+[0-9a-f]{7,}$/);
+      expect(clean.endsWith("-dirty"), `a committed tree must not say dirty: ${clean}`).toBe(false);
+
+      appendFileSync(join(repo, "a.txt"), "an uncommitted edit\n");
+
+      vi.resetModules();
+      const dirty = (await import("./build.js")).harnessBuild();
+      expect(dirty, `an edited tree must say dirty, got: ${dirty}`).toMatch(/\+[0-9a-f]{7,}-dirty$/);
+      // The commit did not move; only the tree did. Asserting the exact pair
+      // rules out a build string that changed for some other reason.
+      expect(dirty).toBe(`${clean}-dirty`);
+    } finally {
+      if (saved.dir === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = saved.dir;
+      if (saved.work === undefined) delete process.env.GIT_WORK_TREE;
+      else process.env.GIT_WORK_TREE = saved.work;
+      if (saved.build !== undefined) process.env.GNOMON_BUILD = saved.build;
+      vi.resetModules();
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("says +unknown, never a guess, when there is no repository to ask", async () => {
+    // The third branch of the resolution order, and the one a stranger who
+    // installed from a tarball actually gets. "unknown" is the honest answer;
+    // a build string that silently reported the last commit of some UNRELATED
+    // repository -- whichever one git found by walking up from the install
+    // directory -- would be a wrong provenance string, which build.ts's own
+    // header calls worse than an absent one.
+    const empty = mkdtempSync(join(tmpdir(), "gnomon-norepo-"));
+    const saved = {
+      dir: process.env.GIT_DIR,
+      work: process.env.GIT_WORK_TREE,
+      build: process.env.GNOMON_BUILD,
+    };
+    try {
+      // A GIT_DIR that is not a repository: git fails, and the catch runs.
+      process.env.GIT_DIR = join(empty, "not-a-repo");
+      process.env.GIT_WORK_TREE = empty;
+      delete process.env.GNOMON_BUILD;
+      vi.resetModules();
+      const b = (await import("./build.js")).harnessBuild();
+      expect(b).toMatch(/\+unknown$/);
+    } finally {
+      if (saved.dir === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = saved.dir;
+      if (saved.work === undefined) delete process.env.GIT_WORK_TREE;
+      else process.env.GIT_WORK_TREE = saved.work;
+      if (saved.build !== undefined) process.env.GNOMON_BUILD = saved.build;
+      vi.resetModules();
+      rmSync(empty, { recursive: true, force: true });
+    }
   });
 });
 
@@ -295,16 +392,87 @@ describe("gate: a credential cannot be configuration in disguise", () => {
 });
 
 describe("gate: attestation reports what it cannot do", () => {
-  it("a verifier that could not run is NOT reported as a broken signature", async () => {
-    // Only exit 124 was treated as unverifiable, so a verify command that is
-    // absent on the checking machine (127) reported `broken` on a genuine,
-    // correctly-signed trail. That machine is precisely the one heads_dir
-    // invites: a third party auditing an off-box copy, without the smartcard
-    // or agent tool. It is the same conflation commit 902a93f removed from the
-    // verify gate -- "the check could not run" is not "your work is wrong".
-    const src = readFileSync(join(__dirname, "attest.ts"), "utf8");
-    expect(src).toContain("r.code === 126 || r.code === 127");
-    expect(src).toMatch(/could not run \(exit \$\{r\.code\}\)/);
+  // What this replaced, and why: the four assertions below used to be two
+  // greps over attest.ts for the strings "r.code === 126 || r.code === 127"
+  // and "could not run (exit ${r.code})". A grep for a branch cannot see
+  // whether the branch is REACHED or whether it sets `checked` the right way
+  // round. Measured against the real attest.ts: moving the 126/127 block below
+  // the `return { checked: true, ... }` that follows it -- which makes it dead
+  // code and restores the exact defect the block was written to fix -- left
+  // both greps green. These run a real verifier per case instead.
+  //
+  // `checkSignature` runs the declared command through `bash -lc`, so each of
+  // these four statuses is one an operator can actually produce on the machine
+  // doing the checking.
+  const checkWith = async (verify: string) => {
+    const { resolveAttest, checkSignature } = await import("./attest.js");
+    const settings = resolveAttest(
+      {
+        config: { audit: { attest: { sign: "true", verify } } },
+        gnomonDir: "/tmp/gate/.gnomon",
+      } as never,
+      "/tmp/gate/.gnomon-audit"
+    );
+    expect(settings.verify, "the surface's verify command must have resolved").toBe(verify);
+    return checkSignature(
+      {
+        seq: 1,
+        hash: "a".repeat(64),
+        ts: "2026-09-02T00:00:00.000Z",
+        records: 1,
+        trail: "trail.jsonl",
+        algorithm: "ed25519",
+        signature_encoding: "base64",
+        key_id: null,
+        signature: "AAAA",
+      },
+      settings
+    );
+  };
+
+  it("a verifier that is not installed is 'could not run', NOT a broken signature", async () => {
+    // The machine heads_dir invites -- a third party auditing an off-box copy,
+    // without the smartcard or the agent tool. Reporting "your trail was
+    // tampered with" because the checker is absent is the conflation commit
+    // 902a93f removed from the verify gate, reintroduced here.
+    const r = await checkWith("gnomon-no-such-verifier-xyz");
+    expect(r.checked, "an absent verifier must not read as tampering").toBe(false);
+    expect((r as { detail: string }).detail).toContain("could not run (exit 127)");
+  });
+
+  it("...and neither is one that is present but not executable", async () => {
+    // 126 is the other half of the POSIX pair, and the likelier one after a
+    // checkout: the verify script is right there, its mode bit is not.
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-verifier-"));
+    const script = join(dir, "verify.sh");
+    writeFileSync(script, "#!/bin/sh\nexit 0\n");
+    chmodSync(script, 0o644);
+    try {
+      const r = await checkWith(script);
+      expect(r.checked).toBe(false);
+      expect((r as { detail: string }).detail).toContain("could not run (exit 126)");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("but a verifier that RAN and said no IS a broken signature", async () => {
+    // The negative control for the two above. A build that answered
+    // `checked: false` on every non-zero exit would pass both of them and
+    // would never be able to report a forged head -- which is the entire point
+    // of checking a signature. Only this assertion tells the two apart.
+    const r = await checkWith("exit 1");
+    expect(r.checked, "a verifier that ran must be reported as having run").toBe(true);
+    expect((r as { valid: boolean }).valid).toBe(false);
+    expect((r as { detail?: string }).detail).toContain("exit 1");
+  });
+
+  it("and one that RAN and said yes is a good signature", async () => {
+    // The passing direction: a verifier that rejects everything is exactly as
+    // useless as one that accepts everything.
+    const r = await checkWith("exit 0");
+    expect(r.checked).toBe(true);
+    expect((r as { valid: boolean }).valid).toBe(true);
   });
 
   it("a declared [audit.attest] with no usable sign command is reported", async () => {

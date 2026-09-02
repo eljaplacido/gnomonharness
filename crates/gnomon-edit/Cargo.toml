@@ -11,7 +11,15 @@ sha2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-regex = "1"
+# Was `regex = "1"` -- its own pin, the one dependency in this crate not
+# inherited, beside five siblings that are. The workspace table already
+# declared `regex = "1"`, so the two happened to agree and nothing would have
+# reported the day they stopped: editing the workspace pin is the documented
+# way to move a version here, and it would have moved every crate except this
+# one, in silence. gnomon-edit is the only member that uses regex today, so
+# NOT VERIFIED as having caused a real skew -- the defect is that the single
+# place versions are managed did not actually manage this one.
+regex = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

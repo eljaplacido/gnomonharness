@@ -2,7 +2,7 @@
   "name": "gnomon",
   "version": "0.1.0",
   "private": true,
-  "description": "Deterministic coding agent harness \u2014 repo-scoped config, content-hashed surface",
+  "description": "Deterministic coding agent harness — repo-scoped config, content-hashed surface",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -25,7 +25,7 @@
   "scripts": {
     "build": "pnpm -r run build",
     "setup": "pnpm install && pnpm run build:native && pnpm run link:global",
-    "build:native": "cargo build --release --workspace --bins",
+    "build:native": "if command -v cargo >/dev/null 2>&1; then cargo build --release --workspace --bins; else printf '\\n  cargo not found - SKIPPING the native build (this is not an error).\\n  Works without it:  gnomon launch | prompt | task | init\\n  Needs it:          gnomon surface | apply | session, and the Rust tests\\n  To get it:         curl https://sh.rustup.rs -sSf | sh   (https://rustup.rs)\\n                     then re-run: pnpm run build:native\\n  Or unpack a release archive and export GNOMON_BIN_OVERRIDE at it -\\n  see GETTING_STARTED.md, \"Prebuilt binaries\".\\n\\n'; fi",
     "test": "pnpm -r run test",
     "gnomon": "tsx packages/gnomon-cli/src/index.ts",
     "gnomon:tui": "tsx packages/gnomon-cli/src/index.ts tui",
@@ -35,7 +35,7 @@
     "test:tui": "pnpm --filter gnomon-tui test",
     "typecheck": "pnpm -r run build",
     "lint": "cargo clippy --all -- -D warnings",
-    "link:global": "cd packages/gnomon-cli && pnpm link --global",
+    "link:global": "cd packages/gnomon-cli && { pnpm link --global || true; }; if command -v gnomon >/dev/null 2>&1; then printf '\\n  gnomon is on PATH: %s\\n\\n' \"$(command -v gnomon)\"; else printf '\\n  FAILED: gnomon is NOT on PATH after `pnpm link --global`.\\n\\n  pnpm writes the shim into its global bin directory, which is $PNPM_HOME.\\n  With PNPM_HOME unset - the default state after `corepack enable pnpm` -\\n  pnpm links the package, writes no shim on PATH, prints only\\n  \"WARN ... has no binaries\", and exits 0. Measured with pnpm 9.0.0 on\\n  2026-09-02. That warning is the failure, not a note.\\n\\n  Fix it once:\\n      pnpm setup             # sets PNPM_HOME and puts it on PATH in your shell rc\\n      exec $SHELL            # or just open a new terminal\\n      pnpm run link:global   # re-run this step\\n\\n  Or skip the global link and use the launcher in this checkout - same\\n  program, no PATH change:\\n      ./gnomon launch\\n\\n' >&2; exit 1; fi",
     "unlink:global": "cd packages/gnomon-cli && pnpm unlink --global",
     "coverage": "pnpm --filter gnomon-core exec vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=text-summary"
   },

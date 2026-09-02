@@ -19,6 +19,7 @@ import {
   readdirSync,
   readFileSync,
   statSync,
+  chmodSync,
 } from "node:fs";
 import { join, resolve, relative } from "node:path";
 import { detectModels, ModelChoice, FALLBACK_LARGE, FALLBACK_SMALL } from "./detect.js";
@@ -394,6 +395,25 @@ max_steps = 20
 max_steps_total = 160
 tools = ["read", "glob", "grep", "compute", "todo", "note", "task", "bash"]
 task_allow = ["implement", "critique"]
+# Measured, 2026-09-02: this role holds \`bash\` and the scaffold gave it no
+# bash_deny, so the guard in tools.ts is skipped outright --
+# \`if (ctx.bashDeny && ctx.bashDeny.length > 0)\`. Every spelling the
+# implement role refuses reached the shell from here unrefused:
+# 'git push --force', 'git push origin +master', 'git push origin :master',
+# 'git push --delete origin master', 'git branch -D'. The starter skills tell
+# the model not to do those; a skill is advice to a model, not a control, and a
+# scaffolded surface must not read as though it is one.
+#
+# The same five patterns the implement role carries, copied verbatim so every
+# bash-holding role refuses the same set.
+bash_deny = [
+  '\\bgit\\s+push\\b[^|;&]*\\s(--force|--force-with-lease|-f)\\b',
+  '\\bgit\\s+push\\b[^|;&]*\\s[+:]',
+  '\\bgit\\s+push\\b[^|;&]*[\\s:+/](main|master|release)\\b',
+  '\\bgit\\s+push\\b[^|;&]*--delete\\b',
+  '\\bgit\\s+branch\\b[^|;&]*\\s(-D\\b|--delete\\b|-d\\b[^|;&]*--force\\b)',
+]
+
 description = "Hardest reasoning, lowest call volume"
 
 [roles.implement]
@@ -436,6 +456,25 @@ top_p = 0.9
 max_steps = 16
 max_steps_total = 128
 tools = ["read", "glob", "grep", "compute", "todo", "note", "bash"]
+# Measured, 2026-09-02: this role holds \`bash\` and the scaffold gave it no
+# bash_deny, so the guard in tools.ts is skipped outright --
+# \`if (ctx.bashDeny && ctx.bashDeny.length > 0)\`. Every spelling the
+# implement role refuses reached the shell from here unrefused:
+# 'git push --force', 'git push origin +master', 'git push origin :master',
+# 'git push --delete origin master', 'git branch -D'. The starter skills tell
+# the model not to do those; a skill is advice to a model, not a control, and a
+# scaffolded surface must not read as though it is one.
+#
+# The same five patterns the implement role carries, copied verbatim so every
+# bash-holding role refuses the same set.
+bash_deny = [
+  '\\bgit\\s+push\\b[^|;&]*\\s(--force|--force-with-lease|-f)\\b',
+  '\\bgit\\s+push\\b[^|;&]*\\s[+:]',
+  '\\bgit\\s+push\\b[^|;&]*[\\s:+/](main|master|release)\\b',
+  '\\bgit\\s+push\\b[^|;&]*--delete\\b',
+  '\\bgit\\s+branch\\b[^|;&]*\\s(-D\\b|--delete\\b|-d\\b[^|;&]*--force\\b)',
+]
+
 description = "Must not share context with the implementer"
 
 [roles.smol]
@@ -455,8 +494,17 @@ description = "Summarisation, compaction, commit messages"
 `;
 
 const TOOLS_TOML = `# Declared tools. Each one the model may call must appear here.
-# A tool that is declared but unreachable produces a refusal naming it —
-# never a silently shorter tool list.
+#
+# A gnomon tool the current role may not call comes back to the model as a
+# refusal naming it: \`Refused: "<name>" is not available to this role.\`
+#
+# An MCP server does NOT behave that way, and this header used to claim it did.
+# Measured against connectMcp (packages/gnomon-core/src/mcp.ts, 2026-09-02): a
+# server that fails to spawn or fails the handshake is caught, one startup line
+# is printed -- \`mcp: <name> unavailable — <reason>\` -- and its tools are
+# simply absent from the list the model is given. The model is never told. Read
+# the startup lines: a declared server missing from them did not connect, and
+# the session is running with fewer tools than this file declares.
 
 [[tools]]
 name = "read"
@@ -658,6 +706,14 @@ description = "Local models for implement/critique/smol; escalate only for plan.
 interface Template {
   path: string;
   content: string;
+  /**
+   * Permission bits to restore after writing, or undefined to take the
+   * default.
+   *
+   * Only `--from` sets this. The built-in templates are all data files and
+   * take whatever the umask gives them, which is what they had before.
+   */
+  mode?: number;
 }
 
 /**
@@ -715,7 +771,30 @@ export interface InitResult {
   models?: ModelChoice;
 }
 
-/** Recursively collect the files of an existing surface. */
+/**
+ * Recursively collect the files of an existing surface, permission bits and all.
+ *
+ * Measured, 2026-09-02: this read content and nothing else, and the write loop
+ * below used writeFileSync, which creates a file at 0o666 & ~umask -- 0o644 on
+ * a default umask. So a surface whose .gnomon/verify.sh was 0o755 arrived at
+ * 0o644 in the new project, and the first turn that changed a file ran the
+ * verify gate through the bash tool and got exit 126, "Permission denied".
+ * Reproduced by round-trip in this session: source mode 100755, destination
+ * 100644 before the fix, 100755 after.
+ *
+ * Two limits, published rather than implied:
+ *
+ *  - Content is read as utf-8. A binary file in a surface (an image, a
+ *    compiled helper) is corrupted by the round trip; it was before this change
+ *    too, and carrying the exec bit does not fix it. NOT VERIFIED with a real
+ *    binary -- no surface in this repository contains one.
+ *  - DIRECTORY modes are not carried. mkdirSync below takes the umask default.
+ *    Nothing in a surface has been observed to depend on one.
+ *
+ * setuid/setgid/sticky are masked off deliberately: `init --from` copies a
+ * configuration directory, and there is no configuration reason to propagate
+ * them. Carrying them silently is the kind of thing a copy should not do.
+ */
 function collectSurface(dir: string, base = dir): Template[] {
   const out: Template[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
@@ -725,7 +804,11 @@ function collectSurface(dir: string, base = dir): Template[] {
     if (entry.isDirectory()) {
       out.push(...collectSurface(abs, base));
     } else if (entry.isFile()) {
-      out.push({ path: relative(base, abs), content: readFileSync(abs, "utf-8") });
+      out.push({
+        path: relative(base, abs),
+        content: readFileSync(abs, "utf-8"),
+        mode: statSync(abs).mode & 0o777,
+      });
     }
   }
   return out;
@@ -781,6 +864,10 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
     }
     mkdirSync(join(dest, ".."), { recursive: true });
     writeFileSync(dest, t.content, "utf-8");
+    // After the write, not as writeFileSync's `mode` option: that option only
+    // applies when the file is CREATED, so with --force over an existing file
+    // it does nothing and the stale mode survives. chmod applies either way.
+    if (t.mode !== undefined) chmodSync(dest, t.mode);
     written.push(t.path);
   }
 

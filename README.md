@@ -28,8 +28,12 @@ That is the whole design in one object. The model varies, the conversation
 wanders, the tools do different things each run — and the `.gnomon/` directory
 does not. Behaviour is readable because something is holding still.
 
-> **Status: working, pre-1.0.** Over 600 tests across Rust and TypeScript, CI green on
-> Linux and macOS. Interfaces may still move. [Known Limits](#known-limits) is
+> **Status: working, pre-1.0.** 954 TypeScript tests (837 core, 96 cli, 14
+> natives, 7 tui — counted 2026-09-02 by collecting each package with
+> `vitest list`, so parameterised blocks are counted as they expand) and 46
+> Rust tests. CI runs the whole suite on **Linux only**; the macOS job builds
+> `gnomon-surface` and runs no tests, so "green on macOS" means *it compiles
+> there*. Interfaces may still move. [Known Limits](#known-limits) is
 > deliberately specific — read it before depending on this.
 
 ---
@@ -152,7 +156,7 @@ flowchart LR
     subgraph RS["Rust — the verifiable parts"]
         R1["gnomon-surface<br/>hash + manifest"]
         R2["gnomon-edit<br/>structural edits"]
-        R3["gnomon-exec<br/>spawn · timeout · buckets"]
+        R3["gnomon-exec<br/>built, called by nothing"]
     end
 
     SURFACE --> T1
@@ -166,8 +170,13 @@ surface hashes to, and `conformance/manifest_golden.json` pins it. The
 TypeScript side computes the same hash independently, and a test holds the two
 together; they disagreed once, and that test is why they no longer can.
 
-`gnomon-edit` and `gnomon-exec` back the `apply`, `simulate` and `session`
-commands. **They are not in the agent loop:** the `edit` tool is a TypeScript
+`gnomon-edit` backs the `apply` and `simulate` commands. **`gnomon-exec` backs
+nothing.** The crate is built and tested (23 Rust tests), and
+`gnomon-natives`'s `runSessionStep` would call it — but that function has zero
+call sites: `gnomon session` runs each command through `SessionManager.run` in
+`session.ts`, which is `node:child_process.spawn` with `shell: true`. So the
+one command this README used to attribute to `gnomon-exec` never invokes it.
+**Nothing Rust is in the agent loop either:** the `edit` tool is a TypeScript
 exact-string replace and `bash` is `child_process.spawn` with a timeout. Saying
 Rust owns structural editing and process execution would describe a design
 rather than this build.
@@ -327,10 +336,16 @@ cd ~/gnomon && pnpm run setup
 ```
 
 `setup` installs dependencies, builds all four Rust binaries, and puts `gnomon`
-on your PATH. They are not optional for every command: `surface` and
-`enumerations` use `gnomon-surface`/`gnomon-enums`, `apply` and `simulate` use
-`gnomon-edit`, and `session` uses `gnomon-exec`. (`launch`, `prompt`, `task`
-and `init` use none of them and work without a Rust toolchain.)
+on your PATH. Three of the four are load-bearing: `surface`, `enumerations` and
+`session` use `gnomon-surface`/`gnomon-enums`, and `apply` and `simulate` use
+`gnomon-edit`. **`gnomon-exec` is built and no command calls it** — `gnomon
+session` uses `gnomon-surface` for its manifest and then spawns each command
+through Node (see [Architecture](#architecture)). Measured, with a stub binary
+in `GNOMON_BIN_OVERRIDE` that exits 42 and prints to stderr: a poisoned
+`gnomon-exec` left `gnomon session "echo …"` succeeding untouched, and a
+poisoned `gnomon-surface` failed it immediately — so the probe could detect a
+call, and there was none. (`launch`, `prompt`, `task` and `init` use no native
+binary and work without a Rust toolchain.)
 
 It prints `WARN ... has no binaries` — pnpm emits that while reading the
 manifest and creates the shim anyway. Confirm with `which gnomon`; if it is
@@ -426,7 +441,8 @@ gnomon/
 ├── crates/                     # Rust — the parts that must be verifiable
 │   ├── gnomon-surface/         # Resolve + hash the surface, emit manifests
 │   ├── gnomon-edit/            # Structural edits
-│   └── gnomon-exec/            # Spawn, timeout, sandbox, outcome capture
+│   └── gnomon-exec/            # Spawn, timeout, sandbox, outcome capture —
+│                               #   built and tested; no TS caller reaches it
 ├── packages/                   # TypeScript — the parts that must be flexible
 │   ├── gnomon-core/            # Turns, tools, skills, context, audit, sessions
 │   ├── gnomon-cli/             # Thin shell over core
@@ -1178,6 +1194,18 @@ root, and the container gets no network unless `[sandbox] network` is true.
 Settable per role, so one role can run its calculations isolated while the rest
 of the harness runs on the host. `off` is the default and changes nothing.
 
+**Two limits, published because both fail open.** `docker` is the only value
+that does anything: the resolver is `raw === "docker" ? "docker" : "off"`, so
+`bwrap`, `podman` or a typo runs **on the host**. Measured 2026-09-02 on a
+scaffolded surface with `exec = "bwrap"`: `resolveExec` returned `mode: "off"`,
+and the surface audit reported `exec = "bwrap" is not one of off | docker, so
+this silently falls back to "off"` — as a **warning, not a refusal**, and
+`gnomon task` prints only fatal problems, so on that path the warning is not
+shown at all. Second: nothing checks for a docker daemon before a turn starts; a
+missing one surfaces as a failing command mid-turn. The reasoning, and what it
+would take to make a rejected backend refuse, is in
+[docs/SANDBOX-DESIGN.md](docs/SANDBOX-DESIGN.md).
+
 ### `bash_allow` — why `tools` alone is not enough
 
 **`bash` can write anything.** A role holding it is not read-only however its
@@ -1396,6 +1424,85 @@ One thing that is load-bearing: **a redaction pattern that will not compile
 fails *open*** — the text it was meant to scrub gets written. gnomon validates
 patterns at startup and warns loudly, harder when `record = "full"`. JavaScript
 regular expressions reject inline `(?i)`; matching is already case-insensitive.
+
+### `[audit.attest]` — an anchor outside the file
+
+Hash chaining proves a trail is *internally consistent*. It cannot prove it is
+the trail that was written, because everything needed to rebuild it is inside
+the file: edit a record, recompute every hash after it, and `gnomon audit
+verify` says `intact`. That was attack 9 of 9 in
+[auditability-2026-08-31](benchmarks/results/auditability-2026-08-31/) — the one
+that was not caught, and could not be.
+
+`[audit.attest]` puts the anchor outside. It signs the chain head periodically —
+and **gnomon never holds the key**. The surface declares a *command*: gnomon
+writes a digest to its stdin and reads a signature from its stdout, so the
+private key lives wherever the operator put it (an agent, a smartcard, another
+machine). If gnomon held a key, the re-chain attack would gain exactly one step
+— rewrite, then re-sign — and nothing would improve.
+
+```toml
+[audit]
+enabled = true
+chain = true                       # required; attest with chain off is refused and reported
+
+[audit.attest]
+sign = "./sign-head.sh"            # digest on stdin → signature on stdout. Declaring it is what turns signing on.
+verify = "./verify-head.sh"        # optional external checker; exit 0 = valid. For keys node:crypto cannot check.
+public_key = "keys/audit.pub"      # PEM inline or a path, for in-process verification
+key_id = "ops-2026"                # opaque label, recorded in each head and passed to the signer
+algorithm = "ed25519"              # default
+signature_encoding = "base64"      # base64 (default) | hex
+every = 0                          # sign a head every N records; 0 = only when the trail is sealed
+timeout_sec = 10                   # default; the signer is killed after this
+dir = ".gnomon-audit/heads"        # default: a heads/ subdirectory beside the trail
+```
+
+Signer output over **8 KiB** is refused — enough for an Ed25519 signature (88
+base64 chars), an RSA-4096 one (684) or an armoured PGP block, and bounded so a
+misbehaving signer cannot write its stdout into the heads file forever.
+
+**Four limits it publishes about itself.** They are in the module header of
+`attest.ts` and repeated here because a reader of this file should not have to
+find them in the source:
+
+1. **An attacker who also controls the signer still wins.** They re-chain the
+   trail and ask the signer for a fresh head over the rewrite. This does not
+   make forgery impossible; it moves the boundary from *write access to a
+   directory* to *possession of a key the harness never holds*. That is the
+   whole claim, and it is not more than that.
+2. **Deleting the heads is a downgrade, not a break** — and *selective* deletion
+   is worse than deleting the file. Remove the file and verification reports
+   `unsigned` plus `declared`, so a reader sees the surface says this trail
+   should have been signed. Remove individual head *lines* and the verdict comes
+   back clean: measured on a live unsealed trail with `every = 2`, truncating
+   four records to two and deleting the one later head reported `status: signed,
+   verified: 1, problems: 0, unattested: 0` — two records gone and nothing said.
+   Heads default to a subdirectory *beside* the trail, so whoever can write the
+   trail can usually write the heads. **This is published rather than fixed: no
+   arrangement of files on one machine closes it.** The one mitigation is to
+   keep a head copy where the writer cannot reach it; `verifyAttestation` takes
+   a `headsPath` so an off-box copy can be checked directly, and a single
+   off-box head catches every case here because a head binds the record count it
+   signed.
+3. **Records written after the last head are `unattested`**, and reported as a
+   count rather than folded into a pass. Signing every record would be an
+   external process call per record; signing heads periodically is what makes
+   this cheap enough to leave on.
+4. **NOT VERIFIED: no hardware token, KMS, remote signing service or
+   timestamping authority has been exercised.** What was tested is a local
+   Ed25519 key held by a script gnomon invokes, plus an external verify command.
+   Whether a particular smartcard agent works through this interface is
+   unmeasured.
+
+**And a fifth limit, about the CLI rather than the mechanism: `gnomon audit
+verify` does not check signatures.** It calls `verifyTrail(path)` with no
+attestation settings, so it reports chain integrity only — a trail whose heads
+were deleted still prints `intact`. Attestation verification is library-only
+today (`verifyTrail(path, { attest })`, or `verifyAttestation` directly), and
+`replay` has no command either. Both are exercised by the suite — 31 tests for
+`attest.ts`, 42 for `replay.ts` — but neither is reachable from a terminal.
+Wiring them to subcommands is not done.
 
 ---
 
@@ -1621,8 +1728,28 @@ results and their caveats are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and th
   "open a PR while I do something else". The one unattended path is
   cron-scheduled loops (`gnomon loops`) — single guard/act ticks on the OS
   scheduler, not a queue or a worktree pool.
-- **No role chain.** Routing picks which role answers a turn. Nothing runs
-  `coordinator → implementor → verifier` in sequence, gating on the verifier.
+- **A role chain runs in order and gates on nothing.** This bullet said "No role
+  chain" for six commits after `[chain]` shipped, which is the worst kind of
+  wrong: a published limit that understated the harness and hid the real one.
+  The chain is real — `gnomon init` scaffolds the `[chain]` block, `auditSurface`
+  fails a surface whose stage names a role that does not exist, both
+  `gnomon task` and the interactive loop run the stages, each stage gets the
+  original request plus **what the stage before it reported** (never its
+  transcript), and the audit trail carries one `chain_stage` record per stage.
+  The true limit is **gating**. Read from `prompt_loop.ts`, both chain loops:
+  the only early exit is `if (r.code === 10 || r.code === 12 || r.code === 13)
+  break` — apparatus failure, a dead endpoint, an unusable surface. A stage's
+  own outcome never stops the next one, so a `critique` stage that reports the
+  work is wrong is followed by nothing, and a `verifier` at the end of a chain
+  appends an opinion to the record rather than gating on it. That is deliberate
+  (Rule 4: every stage keeps its own bucket, and the chain never folds them into
+  a composite verdict) but it means **"chain" here is sequencing, not
+  enforcement**. And it is not free: measured in
+  [role-chain-2026-09-02](benchmarks/results/role-chain-2026-09-02/README.md) —
+  47 tasks, two passes per arm, one variable — the chain scored **48.7%** against
+  **56.6%** without it, a −7.9pp difference exactly equal to the within-arm
+  spread (McNemar exact p = 0.375). No effect is demonstrated in either
+  direction; what is demonstrated is that declaring one did not help.
 - **`network = false` is enforced for `webfetch`, and is not process
   isolation.** The one tool gnomon controls the network reach of refuses
   outright when the surface sets it. `bash` is a different matter: `curl`, a
@@ -1634,8 +1761,14 @@ results and their caveats are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and th
   launch) is written to be portable, and a committed `.gitattributes` forces LF
   so a Windows checkout hashes identically. But the `bash` tool, the verify
   gate, `gnomon loops` (cron), and the CI scripts assume a POSIX shell, and
-  native-binary discovery and MCP spawning are not yet Windows-hardened. CI
-  runs on Linux and macOS.
+  native-binary discovery and MCP spawning are not yet Windows-hardened.
+  **CI tests Linux only.** Read from `.github/workflows/ci.yml`: the
+  `rust-tests`, `ts-tests`, `ci-script` and `test-interactive` jobs all run on
+  `ubuntu-latest`; the `build-macos` job runs `cargo build --bin gnomon-surface`
+  (debug and release) and nothing else — no `cargo test`, no `pnpm test`. So
+  macOS is verified to *compile one Rust binary*, and the TypeScript loop, the
+  `bash` tool and the verify gate have never been exercised there by CI. Treat
+  macOS as supported-by-intent and unverified-by-CI.
 - **Whole-terminal themes need an OSC-honouring terminal.** `tokyonight` and
   `catppuccin` recolour the terminal background and foreground with OSC 10/11,
   honoured by most modern terminals (legacy Windows conhost ignores them). The

@@ -608,6 +608,17 @@ describe("model API errors", () => {
     // to. A temp copy of the surface stands in so the real repo is never hit.
     const tmp = mkdtempSync(join(tmpdir(), "gnomon-m6-"));
     cpSync(join(process.cwd(), "..", "..", ".gnomon"), join(tmp, ".gnomon"), { recursive: true });
+    // This surface routes `implement` at an endpoint that declares
+    // api_key_env, and the loop now pre-flights that before opening a socket --
+    // correctly, since sending an unauthenticated request and handing back the
+    // provider's 401 names neither the variable nor the command that sets it.
+    // The fetch here is stubbed, so the VALUE is irrelevant; what matters is
+    // that the sub-turn reaches the write, which is what this test is about.
+    // Without it the sub-turn is refused before the tool ever runs, and the
+    // test would pass for the wrong reason -- no probe file, because no turn.
+    const keyVar = "OPENCODE_API_KEY";
+    const hadKey = process.env[keyVar];
+    process.env[keyVar] = "stub-key-for-this-test";
     try {
       const config: any = loadConfig(tmp);
       const state: any = { config, exchanges: [], currentRole: "plan", allow: "all" };
@@ -646,6 +657,8 @@ describe("model API errors", () => {
       expect(seen).toMatch(/human act|\/allow|read-only/i);
       expect(existsSync(join(tmp, ".gnomon", "m6probe.toml"))).toBe(false);
     } finally {
+      if (hadKey === undefined) delete process.env[keyVar];
+      else process.env[keyVar] = hadKey;
       rmSync(tmp, { recursive: true, force: true });
     }
   });
