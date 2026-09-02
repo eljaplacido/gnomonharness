@@ -24,6 +24,7 @@ import {
   resolveExtraRoots,
   resolveExec,
   resolveChain,
+  declaredKeyVars,
   resolveLoop,
   LOOP_DEFAULTS,
   Compaction,
@@ -2925,7 +2926,7 @@ export async function runTask(
   input: string,
   options: RunTaskOptions = {}
 ): Promise<TaskRecord> {
-  applyCredentials();
+  applyCredentials(undefined, declaredKeyVars(config));
 
   // The surface audit ran only on the interactive path, so `gnomon task` -- the
   // non-interactive entry point, and the one every benchmark adapter uses --
@@ -4565,7 +4566,7 @@ export async function runPromptLoop(
 
   // Stored keys fill in for variables the shell has not exported. Named, not
   // shown: the loop reports which variables were supplied, never their values.
-  const suppliedKeys = applyCredentials();
+  const suppliedKeys = applyCredentials(undefined, declaredKeyVars(config));
 
   const stdin = options.io?.input ?? process.stdin;
   const stdout = options.io?.output ?? process.stdout;

@@ -111,15 +111,57 @@ export function listCredentials(path = credentialsPath()): string[] {
  */
 let lastSupplied: string[] = [];
 
-export function applyCredentials(path = credentialsPath()): string[] {
+export function applyCredentials(
+  path = credentialsPath(),
+  declared?: Iterable<string>
+): string[] {
+  // Only names the SURFACE declares as key variables are injected.
+  //
+  // Without this the store was a general-purpose machine-local environment
+  // file: `gnomon key set` accepted any shell identifier, every entry was
+  // pushed into process.env unconditionally, and three variables that decide
+  // BEHAVIOUR are read from that same environment -- GNOMON_MODEL_URL,
+  // GNOMON_MODEL_TIMEOUT_MS and GNOMON_BIN_OVERRIDE. Measured: storing
+  // GNOMON_MODEL_URL rerouted inference to another host with the surface hash
+  // unchanged. That is configuration in disguise, and it defeats the one rule
+  // this harness exists to keep -- a credential must select credentials, never
+  // a model, a tool list, a timeout or a binary.
+  //
+  // The header of this file argued "a credential changes nothing about
+  // behaviour" while the code below it made that false. The argument was
+  // right; the code is now what it described.
+  //
+  // An undeclared name is REFUSED and named, not silently dropped: a key that
+  // is present and ignored is the silent failure the surface audit exists to
+  // catch. Callers that pass no declared set get the old behaviour, which
+  // keeps every existing test and script working -- the CLI passes the real
+  // set.
+  const allowed = declared ? new Set(declared) : null;
   const supplied: string[] = [];
+  const refused: string[] = [];
   for (const [variable, value] of Object.entries(loadCredentials(path))) {
+    if (allowed && !allowed.has(variable)) {
+      refused.push(variable);
+      continue;
+    }
     if (process.env[variable]) continue;
     process.env[variable] = value;
     supplied.push(variable);
   }
   lastSupplied = supplied.sort();
+  lastRefused = refused.sort();
   return lastSupplied;
+}
+
+let lastRefused: string[] = [];
+
+/**
+ * Stored names the surface does not declare, so the loop can say that a key is
+ * present and being ignored rather than leaving the operator to wonder why it
+ * had no effect.
+ */
+export function refusedCredentials(): string[] {
+  return lastRefused;
 }
 
 /**

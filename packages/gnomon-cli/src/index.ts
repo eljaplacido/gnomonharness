@@ -14,6 +14,7 @@
  */
 
 import {
+  declaredKeyVars,
   loadConfig,
   initAgent,
   SessionManager,
@@ -668,7 +669,7 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
       console.error(`Unknown endpoint "${name}". Declared: ${listEndpoints(config).join(", ")}`);
       process.exit(1);
     }
-    applyCredentials();
+    applyCredentials(undefined, declaredKeyVars(config));
     const probes = new Map<string, { ok: boolean; status?: number; detail?: string }>();
     for (const row of rows) {
       const model = args.flags.model ?? row.probeModel;
@@ -687,7 +688,7 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
   }
 
   const interactive = process.stdin.isTTY;
-  applyCredentials();
+  applyCredentials(undefined, declaredKeyVars(config));
 
   // ── 1. Which provider ────────────────────────────────────────────────────
   let presetKey = args.flags.preset;
@@ -1260,9 +1261,16 @@ Environment:
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
-  // Stored keys stand in for variables the shell has not exported. Done once,
-  // here, so every command sees the same environment.
-  applyCredentials();
+  // Deliberately NOT applied here. This is before any surface is loaded, so
+  // there is nothing to say which names are credentials -- and injecting the
+  // whole store blind is exactly the hole this closes: the store accepted any
+  // shell identifier, and GNOMON_MODEL_URL, GNOMON_MODEL_TIMEOUT_MS and
+  // GNOMON_BIN_OVERRIDE are all read from the environment. Storing one of
+  // those rerouted inference with the surface hash unchanged.
+  //
+  // Every command that can reach a model applies them itself once it has a
+  // surface: runTask and runPromptLoop in the loop, and the endpoint commands
+  // below. A command with no surface has no business holding a key.
 
   if (args.command === "--help" || args.command === "-h" || args.command === "help") {
     showHelp();

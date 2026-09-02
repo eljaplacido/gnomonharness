@@ -22,12 +22,45 @@
  *   2. Recording text is opt-in. `record = "metadata"` keeps prompts and
  *      responses out of the log entirely, so a trace can be kept where the
  *      content itself may not be retained.
+ *
+ * And one limit, published rather than implied. Hash chaining proves a trail is
+ * internally consistent. It does NOT prove it is the trail that was written:
+ * anyone who can write the file can edit a record, recompute every hash after
+ * it, and produce something this module verifies as intact. That was measured —
+ * eight of nine tampering strategies were caught, and that one was not
+ * (benchmarks/results/auditability-2026-08-31). Closing it needs an anchor
+ * outside the file, which is what attest.ts adds when a surface declares a
+ * signer. Without that declaration the limit above is exactly the guarantee.
  */
 
 import { appendFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { join, resolve, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
 import { GnomonConfig } from "./config.js";
+import { Attestor, resolveAttest, verifyAttestation, type AttestVerifyResult, type ResolvedAttest } from "./attest.js";
+
+// The attestation surface is re-exported here so that a consumer holding a
+// ResolvedAudit can name the type of its `attest` field.
+export type {
+  AttestConfig,
+  AttestHead,
+  AttestProblem,
+  AttestFailure,
+  AttestStatus,
+  AttestVerifyResult,
+  ResolvedAttest,
+  SignatureCheck,
+  SignatureEncoding,
+} from "./attest.js";
+export {
+  Attestor,
+  checkSignature,
+  headBytes,
+  headDigest,
+  headsPathFor,
+  resolveAttest,
+  verifyAttestation,
+} from "./attest.js";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -63,6 +96,14 @@ export interface ResolvedAudit {
    * is told and can refuse to proceed.
    */
   invalid_redact: string[];
+  /**
+   * External attestation, from [audit.attest].
+   *
+   * Optional so that a ResolvedAudit built by hand — as tests and callers
+   * already do — stays valid, and so that everything below can be read as
+   * "unless the surface asked for a signer, nothing here runs".
+   */
+  attest?: ResolvedAttest;
 }
 
 const DEFAULT_DIR = ".gnomon-audit";
@@ -84,13 +125,19 @@ export function resolveAudit(config: GnomonConfig): ResolvedAudit {
     }
   }
 
+  const resolvedDir = isAbsolute(dir) ? dir : join(root, dir);
+
   return {
     enabled: a.enabled === true,
-    dir: isAbsolute(dir) ? dir : join(root, dir),
+    dir: resolvedDir,
     record: a.record === "full" ? "full" : "metadata",
     redact: valid,
     chain: a.chain !== false,
     invalid_redact: invalid,
+    // Resolved unconditionally because an undeclared [audit.attest] is pure
+    // string work: no process is spawned and no file is touched. A declared
+    // public_key path is the one read, and only when it was declared.
+    attest: resolveAttest(config, resolvedDir),
   };
 }
 
@@ -144,7 +191,16 @@ export function redact(text: string, patterns: string[]): string {
  * Undefined-valued keys are skipped, because JSON.stringify drops them when
  * the record is written. Hashing them at write time and not finding them on
  * read made every chained record verify as broken.
+ *
+ * Exported as `canonicalJson` because attestation has to sign THESE bytes. A
+ * signature over a second, private serialisation would attest something no
+ * verifier can reconstruct, so there is exactly one canonicaliser and both the
+ * chain and the anchor use it.
  */
+export function canonicalJson(value: unknown): string {
+  return canonical(value);
+}
+
 function canonical(value: unknown): string {
   if (value === undefined) return "null";
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -175,6 +231,9 @@ export class AuditTrail {
   private seq = 0;
   private prev: string | null = null;
   private file: string | null = null;
+  /** Null unless the surface declared a signer. */
+  private attestor: Attestor | null = null;
+  private readonly setupProblems: string[] = [];
 
   constructor(
     private readonly settings: ResolvedAudit,
@@ -183,6 +242,21 @@ export class AuditTrail {
     if (!settings.enabled) return;
     mkdirSync(settings.dir, { recursive: true });
     this.file = join(settings.dir, `${sessionId}.jsonl`);
+
+    const attest = settings.attest;
+    if (attest?.enabled) {
+      if (!settings.chain) {
+        // An anchor needs something to anchor. With chaining off there are no
+        // record hashes, so a head would name a hash that does not exist and
+        // sign a claim about nothing. Refuse loudly instead of writing heads
+        // that look like protection.
+        this.setupProblems.push(
+          "[audit.attest] declares a signer but [audit].chain is off — there are no chain heads to sign"
+        );
+      } else {
+        this.attestor = new Attestor(attest, `${sessionId}.jsonl`);
+      }
+    }
   }
 
   get enabled(): boolean {
@@ -191,6 +265,22 @@ export class AuditTrail {
 
   get path(): string | null {
     return this.file;
+  }
+
+  /** Where signed heads are written, or null when nothing is being signed. */
+  get attestPath(): string | null {
+    return this.attestor?.path ?? null;
+  }
+
+  /**
+   * Anything that went wrong with attestation, for the caller to show.
+   *
+   * Read this rather than assuming heads exist. A signer that is unreachable
+   * degrades the trail to unattested silently otherwise, and an unattested
+   * trail looks exactly like one whose anchor was deleted.
+   */
+  get attestProblems(): string[] {
+    return [...this.setupProblems, ...(this.attestor?.problems ?? [])];
   }
 
   /** Text is recorded only when the surface asks for `full`. */
@@ -218,6 +308,13 @@ export class AuditTrail {
       this.prev = record.hash;
     }
     appendFileSync(this.file, `${JSON.stringify(record)}\n`, "utf-8");
+
+    // Signing happens AFTER the record is on disk, and its failure is recorded
+    // rather than thrown. A trail that stopped recording because a smartcard
+    // was unplugged would lose exactly the records worth having.
+    if (this.attestor && record.hash && this.attestor.due(kind, this.seq)) {
+      this.attestor.sign(record.seq, record.hash, this.seq);
+    }
   }
 }
 
@@ -246,6 +343,25 @@ export interface VerifyResult {
    * decides, and a composite verdict would hide which of the two happened.
    */
   sealed: boolean;
+  /**
+   * External attestation, present only when the caller passed an [audit.attest]
+   * to check against.
+   *
+   * A THIRD fact, kept out of `ok` for the same reason `sealed` is. `ok` is a
+   * statement about internal consistency and nothing else; a full re-chain
+   * leaves `ok` true and lands here as `status: "broken"`. Folding the two
+   * would produce a single verdict that cannot distinguish "someone edited one
+   * byte" from "someone rewrote the file and the anchor caught it" — or, worse,
+   * would mark every unsigned trail as broken.
+   */
+  attestation?: AttestVerifyResult;
+}
+
+export interface VerifyOptions {
+  /** Check signed heads too. Omitted, no attestation work happens at all. */
+  attest?: ResolvedAttest;
+  /** Heads held somewhere the writer of the trail cannot reach. */
+  headsPath?: string;
 }
 
 /**
@@ -253,10 +369,20 @@ export interface VerifyResult {
  *
  * Each record's hash must match its content, and must match the `prev` of the
  * record after it. A trail that fails this was edited after the fact.
+ *
+ * This check alone cannot see a full re-chain: rewriting every record and
+ * recomputing every hash produces a trail that passes here. Pass `opts.attest`
+ * to also check the trail against signed heads, which is what catches it.
  */
-export function verifyTrail(path: string): VerifyResult {
+export function verifyTrail(path: string, opts: VerifyOptions = {}): VerifyResult {
+  const attestation = opts.attest
+    ? verifyAttestation(path, opts.attest, opts.headsPath ? { headsPath: opts.headsPath } : {})
+    : undefined;
+  const withAttestation = <T extends VerifyResult>(r: T): T =>
+    attestation ? { ...r, attestation } : r;
+
   if (!existsSync(path)) {
-    return { ok: false, records: 0, broken: [], sealed: false, problem: `No such trail: ${path}` };
+    return withAttestation({ ok: false, records: 0, broken: [], sealed: false, problem: `No such trail: ${path}` });
   }
   const lines = readFileSync(path, "utf-8").split("\n").filter(Boolean);
   const broken: number[] = [];
@@ -305,11 +431,11 @@ export function verifyTrail(path: string): VerifyResult {
     : null;
   const sealed = chained ? last?.kind === "session_end" : true;
 
-  return {
+  return withAttestation({
     ok: broken.length === 0,
     records: lines.length,
     broken,
     sealed,
     ...(sealed ? {} : { problem: "trail does not end with session_end — truncated, or the run was killed" }),
-  };
+  });
 }

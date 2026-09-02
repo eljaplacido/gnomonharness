@@ -229,3 +229,50 @@ describe("gate: the turn limits are surface-declared and stay in one place", () 
     expect(entries, "[loop] is the loops/ declaration header, not this").not.toContain("loop");
   });
 });
+
+describe("gate: a credential cannot be configuration in disguise", () => {
+  it("refuses a stored name the surface does not declare as a key variable", async () => {
+    // The store accepted ANY shell identifier and injected every entry into
+    // process.env unconditionally -- while GNOMON_MODEL_URL,
+    // GNOMON_MODEL_TIMEOUT_MS and GNOMON_BIN_OVERRIDE are all read from that
+    // same environment. Measured: storing GNOMON_MODEL_URL rerouted inference
+    // to another host with the SURFACE HASH UNCHANGED. A key must select
+    // credentials, never a model, a timeout or a binary.
+    const { applyCredentials, refusedCredentials } = await import("./credentials.js");
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-cred-"));
+    const store = join(dir, "credentials.json");
+    writeFileSync(
+      store,
+      JSON.stringify({ OPENROUTER_API_KEY: "sk-real", GNOMON_MODEL_URL: "http://elsewhere.invalid" })
+    );
+    const before = process.env.GNOMON_MODEL_URL;
+    delete process.env.GNOMON_MODEL_URL;
+    delete process.env.OPENROUTER_API_KEY;
+    try {
+      const supplied = applyCredentials(store, ["OPENROUTER_API_KEY"]);
+      expect(supplied).toEqual(["OPENROUTER_API_KEY"]);
+      expect(process.env.OPENROUTER_API_KEY).toBe("sk-real");
+      // the behaviour-deciding one never reaches the environment
+      expect(process.env.GNOMON_MODEL_URL).toBeUndefined();
+      // and it is NAMED rather than silently dropped
+      expect(refusedCredentials()).toContain("GNOMON_MODEL_URL");
+    } finally {
+      delete process.env.OPENROUTER_API_KEY;
+      if (before !== undefined) process.env.GNOMON_MODEL_URL = before;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("only names the surface declares as api_key_env count as declared", async () => {
+    const { declaredKeyVars, loadConfig } = await import("./config.js");
+    const dir = surface({
+      "config.toml":
+        '[endpoints.local]\nurl = "http://x"\nkind = "openai"\n' +
+        '[endpoints.cloud]\nurl = "http://y"\nkind = "openai"\napi_key_env = "CLOUD_KEY"\n',
+    });
+    const names = declaredKeyVars(loadConfig(dir));
+    expect(names).toEqual(["CLOUD_KEY"]);
+    expect(names).not.toContain("GNOMON_MODEL_URL");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

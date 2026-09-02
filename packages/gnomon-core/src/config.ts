@@ -1662,6 +1662,29 @@ export async function probeEndpointAuth(
 }
 
 /** Every endpoint the surface offers, built-ins included. */
+/**
+ * The environment-variable NAMES this surface declares as credential holders.
+ *
+ * The one legitimate reason for the machine-local store to touch process.env.
+ * Anything not in this set is configuration, not a credential, and the store
+ * refuses it -- see applyCredentials.
+ */
+export function declaredKeyVars(config: GnomonConfig): string[] {
+  const out = new Set<string>();
+  for (const ep of Object.values(config.config.endpoints ?? {})) {
+    const name = (ep as { api_key_env?: unknown } | undefined)?.api_key_env;
+    if (typeof name === "string" && name.trim()) out.add(name.trim());
+  }
+  // MCP servers forward named variables to their child process, and those are
+  // credentials by the same definition.
+  for (const def of Object.values(config.tools?.mcp_servers ?? {})) {
+    for (const name of (def as { env?: unknown }).env as string[] | undefined ?? []) {
+      if (typeof name === "string" && name.trim()) out.add(name.trim());
+    }
+  }
+  return [...out].sort();
+}
+
 export function listEndpoints(config: GnomonConfig): string[] {
   return [
     ...new Set([
