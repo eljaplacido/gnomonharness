@@ -953,19 +953,33 @@ async function callEndpoint(
     headers["Authorization"] = `Bearer ${apiKey}`;
   }
 
-  // Sampling params go top-level (OpenAI shape); Ollama reads the
-  // nested `options` object — send both so either backend is happy.
+  // Sampling params in the shape THIS endpoint accepts, and only that shape.
+  //
+  // This used to send both — top-level for OpenAI and a nested `options` object
+  // for Ollama — with the comment "send both so either backend is happy". Ollama
+  // is happy to ignore unknown fields. Strict OpenAI-compatible providers are
+  // not: opencode's Console Go rejects the whole request with
+  //
+  //   400 invalid_request_error: Extra inputs are not permitted, field: 'options'
+  //
+  // So "send both" did not widen compatibility, it broke every strict provider —
+  // and only for roles that declare `temperature`/`top_p`, which the scaffold
+  // writes for every role. The failure names a field the user never wrote, in a
+  // request they cannot see, so there is nothing in the surface to go and fix.
+  //
+  // `kind` is already resolved on the target and defaults to ollama, matching
+  // how /endpoints renders it.
   const payload: Record<string, unknown> = {
     model: target.model,
     messages,
     stream: false,
-    temperature: target.temperature,
-    top_p: target.top_p,
-    options: {
-      temperature: target.temperature,
-      top_p: target.top_p,
-    },
   };
+  if ((target.kind ?? "ollama") === "ollama") {
+    payload.options = { temperature: target.temperature, top_p: target.top_p };
+  } else {
+    payload.temperature = target.temperature;
+    payload.top_p = target.top_p;
+  }
   if (tools.length > 0) payload.tools = tools;
 
   try {
@@ -1266,6 +1280,113 @@ export function describeEndpoints(config: GnomonConfig): EndpointRow[] {
 }
 
 /**
+ * Is the model a role names actually one this endpoint serves?
+ *
+ * Nothing asked this until 2026-09-03, and the cost was a whole session. A role
+ * routed at OpenCode Go with `model = "glm-5-3"` (the id is `glm-5.3`) produced
+ * a 400 from the provider naming the MODEL, which reads as "that model is not
+ * available" rather than "you typed the id wrong" — so the next guess was a
+ * prefix the scaffold had invented, `opencode-go/glm-5-3`, which 400s the same
+ * way. Two wrong answers that both look like confirmation.
+ *
+ * The endpoint has always been able to answer this: /v1/models for OpenAI-shaped
+ * providers, /api/tags for Ollama. It was simply never consulted.
+ */
+export interface ModelCheck {
+  role: string;
+  model: string;
+  ok: boolean;
+  /** The closest id this endpoint actually serves, when the model is unknown. */
+  suggestion?: string;
+  /** How many ids the endpoint offers, for "N available". */
+  available: number;
+}
+
+/** Edit distance, bounded — only used to say "did you mean". */
+function editDistance(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(
+        prev[j]! + 1,
+        cur[j - 1]! + 1,
+        prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    prev = cur;
+  }
+  return prev[n]!;
+}
+
+/**
+ * Cross-check every role's model against the ids its endpoint advertises.
+ *
+ * Endpoints that cannot be listed (no key, unreachable, a provider that serves
+ * no listing) yield NO entries rather than false ones: "we could not check" and
+ * "we checked and it is wrong" must not look the same.
+ */
+export async function checkRoleModels(
+  config: GnomonConfig
+): Promise<Map<string, ModelCheck[]>> {
+  const out = new Map<string, ModelCheck[]>();
+  const listings = await listModels(config);
+  const byEndpoint = new Map(listings.map((l) => [l.endpoint, l]));
+  const roles = listRoles(config);
+
+  for (const row of describeEndpoints(config)) {
+    const listing = byEndpoint.get(row.name);
+    if (!listing || listing.problem || listing.models.length === 0) continue;
+    const have = listing.models;
+    const checks: ModelCheck[] = [];
+
+    const consider = (role: string, model: string | undefined) => {
+      if (!model) return;
+      if (have.includes(model)) {
+        checks.push({ role, model, ok: true, available: have.length });
+        return;
+      }
+      // Ollama tags carry a `:tag` suffix the listing may spell differently;
+      // an exact-prefix match on the bare name is still a real match.
+      const bare = model.split(":")[0]!;
+      if (have.some((h) => h === bare || h.startsWith(bare + ":"))) {
+        checks.push({ role, model, ok: true, available: have.length });
+        return;
+      }
+      // Compare against the bare id too. The commonest wrong form is a
+      // provider prefix — `opencode-go/glm-5-3` — which is far enough from
+      // `glm-5.3` in edit distance to suppress the suggestion at exactly the
+      // moment it is most needed. Strip a leading `<something>/` and try again,
+      // keeping whichever comparison is closer.
+      const stripped = model.includes("/") ? model.slice(model.lastIndexOf("/") + 1) : model;
+      let best: string | undefined;
+      let bestD = Infinity;
+      for (const h of have) {
+        const d = Math.min(
+          editDistance(model.toLowerCase(), h.toLowerCase()),
+          editDistance(stripped.toLowerCase(), h.toLowerCase())
+        );
+        if (d < bestD) { bestD = d; best = h; }
+      }
+      // Only offer a suggestion when it is close enough to be a typo rather
+      // than a different model entirely.
+      const near = best !== undefined && bestD <= Math.max(3, Math.ceil(stripped.length * 0.34));
+      checks.push({ role, model, ok: false, suggestion: near ? best : undefined, available: have.length });
+    };
+
+    for (const r of roles) {
+      if ((config.roles[r]?.endpoint ?? "local") === row.name) consider(r, config.roles[r]?.model);
+      if (config.roles[r]?.fallback?.endpoint === row.name) {
+        consider(r + " (fallback)", config.roles[r]?.fallback?.model);
+      }
+    }
+    if (checks.length > 0) out.set(row.name, checks);
+  }
+  return out;
+}
+
+/**
  * Render the endpoint listing.
  *
  * `probes` is null when nothing was tested, and the key line says exactly
@@ -1277,13 +1398,28 @@ export function describeEndpoints(config: GnomonConfig): EndpointRow[] {
 export function printEndpoints(
   rows: EndpointRow[],
   ui: ResolvedUi,
-  probes: EndpointProbes | null
+  probes: EndpointProbes | null,
+  checks?: Map<string, ModelCheck[]> | null
 ): void {
   console.log("\nDeclared endpoints (.gnomon/config.toml [endpoints]):\n");
-  for (const row of rows) {
+
+  // Grouped, with the group stated as a heading rather than as a word buried
+  // mid-line. A surface routinely mixes the two — local for volume, cloud for
+  // the hard roles — and "which of these costs money and needs a key" is the
+  // first question anyone asks of this list. It used to be answerable only by
+  // reading a ` · cloud · ` fragment between two other fields.
+  const groups: Array<[string, EndpointRow[]]> = [
+    ["LOCAL — on this machine, no key, no bill", rows.filter((r) => r.where === "local")],
+    ["CLOUD — remote, keyed, billed", rows.filter((r) => r.where !== "local")],
+  ];
+
+  for (const [heading, group] of groups) {
+    if (group.length === 0) continue;
+    console.log(paint(ui, "bold", `  ── ${heading} ${"─".repeat(Math.max(0, 46 - heading.length))}`));
+  for (const row of group) {
     const { name, endpoint: ep } = row;
     console.log(
-      `  ${paint(ui, "bold", name)}: ${ep.url}  [${ep.kind ?? "ollama"}] · ${row.where} · ${row.provider}`
+      `  ${paint(ui, "bold", name)}: ${ep.url}  [${ep.kind ?? "ollama"}] · ${row.provider}`
     );
 
     // An endpoint nothing points at is declared, not used. Saying so is the
@@ -1307,6 +1443,30 @@ export function printEndpoints(
       }
     }
 
+    // Does every role pointed here name a model this endpoint actually serves?
+    // Absent when the endpoint could not be listed — silence means unchecked,
+    // never checked-and-fine.
+    const rowChecks = checks?.get(name);
+    if (rowChecks && rowChecks.length > 0) {
+      const bad = rowChecks.filter((c) => !c.ok);
+      if (bad.length === 0) {
+        const shown = [...new Set(rowChecks.map((c) => c.model))].join(", ");
+        console.log(paint(ui, "green", `      ✓ model ids check out against this endpoint: ${shown}`));
+      } else {
+        for (const c of bad) {
+          console.log(
+            paint(ui, "red", `      ✗ role ${c.role} names model "${c.model}" — this endpoint does not serve it`)
+          );
+          if (c.suggestion) {
+            console.log(paint(ui, "yellow", `        did you mean:  ${c.suggestion}`));
+          }
+          console.log(
+            paint(ui, "gray", `        ${c.available} model ids available here — /models lists them, and picks one for a role`)
+          );
+        }
+      }
+    }
+
     const probe = probes?.get(name);
     if (!probe) continue;
     if (probe.ok) {
@@ -1326,10 +1486,15 @@ export function printEndpoints(
         );
       }
     }
+
+  }
+  console.log("");
   }
   console.log(
-    `\nPoint a role at one with endpoint = "<name>" in roles.toml, or give\n` +
-      `it a [roles.<name>.fallback] with its own model and endpoint.`
+    `Point a role at one with endpoint = "<name>" in roles.toml, or give\n` +
+      `it a [roles.<name>.fallback] with its own model and endpoint.\n` +
+      `/models picks a model for a role from what the endpoint actually serves,\n` +
+      `which is the only way to be sure the id is one it will accept.`
   );
 }
 
@@ -5590,12 +5755,20 @@ export async function runPromptLoop(
             )
           );
           const probes: EndpointProbes = new Map();
-          await Promise.all(
-            testable.map(async (r) => {
-              probes.set(r.name, await probeEndpointAuth(r.endpoint, r.probeModel ?? "", 15000));
-            })
-          );
-          printEndpoints(rows, ui0, probes);
+          // Ask each endpoint for its model list at the same time as the auth
+          // probe. Both are network calls that answer the two questions a
+          // broken endpoint actually raises -- "will it take my key" and "does
+          // it know the model I named" -- and running them together costs one
+          // round trip rather than two.
+          const [, checks] = await Promise.all([
+            Promise.all(
+              testable.map(async (r) => {
+                probes.set(r.name, await probeEndpointAuth(r.endpoint, r.probeModel ?? "", 15000));
+              })
+            ),
+            checkRoleModels(config).catch(() => null),
+          ]);
+          printEndpoints(rows, ui0, probes, checks);
           continue;
         }
 

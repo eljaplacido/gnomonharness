@@ -3018,3 +3018,58 @@ describe("the verify gate — the one thing that can contradict the model", () =
     rmSync(dir, { recursive: true, force: true });
   }, 20000);
 });
+
+// The payload used to carry BOTH shapes — top-level temperature/top_p for
+// OpenAI and a nested `options` object for Ollama — with the comment "send both
+// so either backend is happy". Ollama ignores unknown fields. Strict
+// OpenAI-compatible providers do not: opencode's Console Go rejects the request
+// with `400 Extra inputs are not permitted, field: 'options'`, naming a field
+// the user never wrote, in a request they cannot see.
+//
+// It fired for any role declaring temperature/top_p — which the scaffold writes
+// for every role — so no strict OpenAI cloud endpoint worked at all.
+describe("request shape follows the endpoint kind", () => {
+  const surfaceWith = (kind: string, url: string): string => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-kind-"));
+    mkdirSync(join(root, ".gnomon"), { recursive: true });
+    writeFileSync(join(root, ".gnomon", "config.toml"),
+      `[endpoints.target]\nurl = "${url}"\nkind = "${kind}"\n`);
+    writeFileSync(join(root, ".gnomon", "roles.toml"),
+      `[roles.smol]\nmodel = "m1"\nendpoint = "target"\ntemperature = 0.2\ntop_p = 0.9\n` +
+      `tools = ["read"]\nmax_steps = 1\n`);
+    writeFileSync(join(root, ".gnomon", "system.md"), "be brief\n");
+    return root;
+  };
+
+  const bodyFor = async (kind: string, url: string): Promise<Record<string, unknown>> => {
+    const root = surfaceWith(kind, url);
+    let seen: Record<string, unknown> = {};
+    const real = globalThis.fetch;
+    globalThis.fetch = (async (_u: string, init: { body: string }) => {
+      seen = JSON.parse(init.body);
+      return { ok: true, json: async () => ({ message: { content: "ok" } }) };
+    }) as unknown as typeof fetch;
+    try {
+      await promptLoop.runTask(loadConfig(root), "hi", { role: "smol" });
+    } finally {
+      globalThis.fetch = real;
+      rmSync(root, { recursive: true, force: true });
+    }
+    return seen;
+  };
+
+  it("sends Ollama its nested options and no top-level sampling params", async () => {
+    const body = await bodyFor("ollama", "http://127.0.0.1:11434/api/chat");
+    expect(body.options).toEqual({ temperature: 0.2, top_p: 0.9 });
+    expect(body).not.toHaveProperty("temperature");
+    expect(body).not.toHaveProperty("top_p");
+  });
+
+  it("sends OpenAI top-level sampling params and NO options field", async () => {
+    const body = await bodyFor("openai", "https://example.invalid/v1/chat/completions");
+    expect(body.temperature).toBe(0.2);
+    expect(body.top_p).toBe(0.9);
+    // The whole bug: an `options` key here is a 400 from any strict provider.
+    expect(body).not.toHaveProperty("options");
+  });
+});

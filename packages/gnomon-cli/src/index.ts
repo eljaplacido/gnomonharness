@@ -16,6 +16,7 @@
 import {
   harnessBuild,
   declaredKeyVars,
+  checkRoleModels,
   loadConfig,
   initAgent,
   SessionManager,
@@ -704,7 +705,14 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
   const supplied = applyCredentials(undefined, declaredKeyVars(config));
 
   if (sub === "list") {
-    printEndpoints(describeEndpoints(config), resolveUi(config), null);
+    // Cross-check every role's model id against what its endpoint advertises.
+    // This is the diagnostic command, and the failure it exists to catch is
+    // exactly a model id the endpoint will not accept -- which is otherwise
+    // invisible here and shows up later as a provider 400 naming the model,
+    // which reads as "unavailable" rather than "misspelled". `.catch(null)` so
+    // an offline box still gets the listing, unchecked rather than wrong.
+    const modelChecks = await checkRoleModels(config).catch(() => null);
+    printEndpoints(describeEndpoints(config), resolveUi(config), null, modelChecks);
     if (supplied.length > 0) {
       // Say where a key came from. "set" alone cannot distinguish a stored key
       // from an exported one, and only one of those follows you to another
@@ -729,7 +737,8 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
       if (!model) continue;
       probes.set(row.name, await probeEndpointAuth(row.endpoint, model, 20000));
     }
-    printEndpoints(rows, resolveUi(config), probes);
+    const modelChecks = await checkRoleModels(config).catch(() => null);
+    printEndpoints(rows, resolveUi(config), probes, modelChecks);
     const bad = [...probes.values()].filter((p) => !p.ok);
     if (bad.length > 0) process.exit(1);
     return;

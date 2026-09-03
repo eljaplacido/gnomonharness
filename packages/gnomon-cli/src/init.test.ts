@@ -216,6 +216,13 @@ describe("initSurface", () => {
       "policy.toml",
       "system.md",
       join("profiles", "local_first.toml"),
+      // Scaffolded from 2026-09-03. `init` shipped no skills at all until then,
+      // so every new project started with none of the rules this repository had
+      // already written down for itself — and a local model asked to configure
+      // an endpoint duly wrote a user's API key into a .env in plaintext and
+      // guessed two model ids that do not exist.
+      join("skills", "endpoints-and-models.md"),
+      join("skills", "secrets.md"),
     ]);
     for (const f of r.written) {
       expect(existsSync(join(root, ".gnomon", f))).toBe(true);

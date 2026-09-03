@@ -145,8 +145,13 @@ api_key_env = "OPENCODE_API_KEY"   # the NAME of the variable, never the key
 provider = "opencode"
 
 # OpenCode Go — the $10/mo subscription tier (opencode.ai/go). Cloud, keyed.
-# Models are prefixed opencode-go/ (e.g. opencode-go/deepseek-v4-flash); run
-# /models to list them. Store the key with:  gnomon key set go
+# Model ids are BARE — glm-5.3, deepseek-v4-flash, kimi-k3 — with no provider
+# prefix. This comment claimed they were "prefixed opencode-go/" until
+# 2026-09-03; they never were, and the wrong id comes back as a 400 that names
+# a model rather than the prefix, so the guess looks confirmed. Verified
+# against the endpoint: GET https://opencode.ai/zen/go/v1/models lists 34, all
+# unprefixed.
+# Run /models to list them. Store the key with:  gnomon key set go
 [endpoints.go]
 url = "https://opencode.ai/zen/go/v1/chat/completions"
 kind = "openai"
@@ -741,6 +746,95 @@ function modelNote(choice: ModelChoice): string {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Skills scaffolded into every new surface
+//
+// `gnomon init` shipped NO skills until 2026-09-03, and the cost was watchable:
+// a local model asked to "set up the opencode go endpoint" invented a `.env`
+// file, wrote the user's API key into it in plaintext, guessed two model ids
+// that do not exist, and told the user four times to set a key that was already
+// in the credential store. Every one of those is a rule this repository already
+// had written down — in ITS OWN .gnomon/skills/, which a fresh project never
+// receives.
+// ---------------------------------------------------------------------------
+
+const SKILL_ENDPOINTS = `+++
+name = "endpoints and model ids"
+description = "How to point a role at a local or cloud endpoint, and how to get the model id right instead of guessing it"
+match = '\\b(endpoint|endpoints|model|models|opencode|openrouter|ollama|cloud|local|api[_-]?key|glm|gpt|claude|kimi|qwen|deepseek|route|routing)\\b'
++++
+
+**Never guess a model id, and never hand-edit one into roles.toml first.**
+
+An endpoint publishes the ids it serves. Ask it:
+
+    gnomon endpoint list     # every endpoint, grouped LOCAL vs CLOUD, and it
+                             # cross-checks each role's model id against what
+                             # that endpoint actually serves
+    /models                  # inside the loop: lists them, and picks one for a role
+
+\`gnomon endpoint list\` will say \`✗ role plan names model "x" — this endpoint
+does not serve it\` and offer the nearest real id. That output is the answer.
+Read it before changing anything.
+
+**Model ids are bare.** \`glm-5.3\`, \`deepseek-v4-flash\`, \`kimi-k3\`. There is no
+\`opencode-go/\` or other provider prefix, whatever a comment may say. A wrong id
+comes back as a provider 400 that names the MODEL, which reads as "unavailable"
+rather than "misspelled" — so a guess looks confirmed when it is not.
+
+**Adding an endpoint is one command, not four file edits.**
+
+    gnomon endpoint add --preset opencode-go | opencode-zen | openrouter | ollama
+
+It asks the endpoint to run one token before writing anything, so a rejected key
+or a bad model fails there rather than several turns into a task.
+
+**Check whether the key is already there before asking for one.** \`gnomon
+endpoint list\` prints \`key: $VAR — set\` when it is. A key can come from the
+credential store and already be present; telling the user to run
+\`gnomon key set\` when the listing says \`set\` is noise that hides the real fault.
+
+**Local and cloud coexist.** A surface routinely runs volume roles on a local
+endpoint and the hard ones on a cloud endpoint. Changing one role's endpoint
+does not disturb the others. Set it per role:
+
+    [roles.plan]
+    model = "glm-5.3"      # an id the endpoint listed
+    endpoint = "go"
+
+**A surface change needs a restart.** \`.gnomon/\` is read when the process starts
+and its hash is asserted every turn. Editing roles.toml mid-session does not
+re-route the running session — say so, rather than reporting the change as live.
+`;
+
+const SKILL_SECRETS = `+++
+name = "secrets"
+description = "Where API keys go, and what must never be written into the repository"
+match = '\\b(api[_-]?key|token|secret|credential|password|\\.env|auth|login)\\b'
++++
+
+**Never write a secret into a file in the repository.** Not \`.env\`, not a config
+file, not a comment, not a test fixture — regardless of \`.gitignore\`. A key in
+the working tree is a key in backups, in editor state, in the next \`tar\`, and in
+any transcript that pastes the file back.
+
+Keys belong in the credential store, entered by the person who owns them:
+
+    gnomon key set <endpoint>
+
+That prompts, stores outside the surface, and never puts the value in the
+surface hash. The surface names the VARIABLE (\`api_key_env = "OPENCODE_API_KEY"\`),
+never the value.
+
+**If a user pastes a key into the conversation**, do not write it anywhere. Say
+plainly that it is now exposed and should be revoked and reissued, then tell them
+the one command to store the replacement themselves.
+
+**Authentication that needs a browser is not yours to do.** \`gh auth login\`,
+\`az login\` and their equivalents are interactive. Report which command the user
+should run and stop; that is a finished turn.
+`;
+
 const templatesFor = (choice: ModelChoice): Template[] => [
   { path: "config.toml", content: CONFIG_TOML },
   { path: "roles.toml", content: rolesToml(choice.large, choice.small, modelNote(choice)) },
@@ -748,6 +842,8 @@ const templatesFor = (choice: ModelChoice): Template[] => [
   { path: "policy.toml", content: POLICY_TOML },
   { path: "system.md", content: SYSTEM_MD },
   { path: join("profiles", "local_first.toml"), content: PROFILE_LOCAL_FIRST },
+  { path: join("skills", "endpoints-and-models.md"), content: SKILL_ENDPOINTS },
+  { path: join("skills", "secrets.md"), content: SKILL_SECRETS },
 ];
 
 // ---------------------------------------------------------------------------

@@ -344,6 +344,36 @@ export type EndpointProbes = Map<string, {
 }>;
 export declare function describeEndpoints(config: GnomonConfig): EndpointRow[];
 /**
+ * Is the model a role names actually one this endpoint serves?
+ *
+ * Nothing asked this until 2026-09-03, and the cost was a whole session. A role
+ * routed at OpenCode Go with `model = "glm-5-3"` (the id is `glm-5.3`) produced
+ * a 400 from the provider naming the MODEL, which reads as "that model is not
+ * available" rather than "you typed the id wrong" — so the next guess was a
+ * prefix the scaffold had invented, `opencode-go/glm-5-3`, which 400s the same
+ * way. Two wrong answers that both look like confirmation.
+ *
+ * The endpoint has always been able to answer this: /v1/models for OpenAI-shaped
+ * providers, /api/tags for Ollama. It was simply never consulted.
+ */
+export interface ModelCheck {
+    role: string;
+    model: string;
+    ok: boolean;
+    /** The closest id this endpoint actually serves, when the model is unknown. */
+    suggestion?: string;
+    /** How many ids the endpoint offers, for "N available". */
+    available: number;
+}
+/**
+ * Cross-check every role's model against the ids its endpoint advertises.
+ *
+ * Endpoints that cannot be listed (no key, unreachable, a provider that serves
+ * no listing) yield NO entries rather than false ones: "we could not check" and
+ * "we checked and it is wrong" must not look the same.
+ */
+export declare function checkRoleModels(config: GnomonConfig): Promise<Map<string, ModelCheck[]>>;
+/**
  * Render the endpoint listing.
  *
  * `probes` is null when nothing was tested, and the key line says exactly
@@ -352,7 +382,7 @@ export declare function describeEndpoints(config: GnomonConfig): EndpointRow[];
  * the middle of a task — the listing was answering "is the variable set",
  * while every reader took it for "will this work".
  */
-export declare function printEndpoints(rows: EndpointRow[], ui: ResolvedUi, probes: EndpointProbes | null): void;
+export declare function printEndpoints(rows: EndpointRow[], ui: ResolvedUi, probes: EndpointProbes | null, checks?: Map<string, ModelCheck[]> | null): void;
 /** Everything one turn needs that is not in PromptState. */
 export interface TurnDeps {
     approve: Approver;
