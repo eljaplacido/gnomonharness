@@ -14,6 +14,7 @@
  */
 
 import {
+  harnessBuild,
   declaredKeyVars,
   loadConfig,
   initAgent,
@@ -1328,7 +1329,13 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
 ];
 
 function showHelp(): void {
-  console.log(`gnomon v0.1.0 — deterministic coding agent harness
+  // Derived, never a literal. This line read `gnomon v0.1.0` while every
+  // package.json, Cargo.toml and the tag said 0.1.1 — so the one version string
+  // a human actually reads was the one that could not be trusted, and
+  // `gnomon --help` could not distinguish a 133-commit-old checkout from HEAD.
+  // harnessBuild() carries the version AND the commit, which is the question
+  // being asked when someone types --version.
+  console.log(`${harnessBuild()} — deterministic coding agent harness
 
 Commands:
   launch [--dir <path>] [--from <path>]

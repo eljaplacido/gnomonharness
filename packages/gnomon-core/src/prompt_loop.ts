@@ -943,7 +943,7 @@ async function callEndpoint(
           ? `  gnomon key set ${target.endpoint}\n`
           : `  export ${target.apiKeyEnv}=<your key>\n`) +
         `\nNo request was sent, so nothing was billed. ` +
-        `Run \`gnomon models\` to see which endpoints have a key.`,
+        `Run \`gnomon endpoint list\` to see which endpoints have a key.`,
       code: 10,
       toolCalls: [],
     };
@@ -1111,7 +1111,7 @@ async function callEndpoint(
           `, so gnomon cannot start it for you. Start the model server, then ` +
           `retry:\n` +
           `  ollama serve            # if this endpoint is Ollama\n` +
-          `  gnomon models           # lists every endpoint and what answers\n\n` +
+          `  gnomon endpoint list    # lists every endpoint and what answers\n\n` +
           `If the server IS running, it is on a different port than the surface ` +
           `declares — check [endpoints] in .gnomon/config.toml.`,
         code: classifyFailure({

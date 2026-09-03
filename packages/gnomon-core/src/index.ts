@@ -62,6 +62,10 @@ export * from "./render.js";
 export * from "./tools.js";
 export * from "./skills.js";
 export * from "./audit.js";
+// Provenance. Not exported until 2026-09-03, which is why the CLI's own help
+// banner carried a hardcoded version literal instead: the function that knows
+// which build is running was not reachable from the package that prints it.
+export * from "./build.js";
 export * from "./session_store.js";
 export * from "./explain.js";
 export * from "./credentials.js";

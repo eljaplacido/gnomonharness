@@ -18,6 +18,7 @@ export * from "./render.js";
 export * from "./tools.js";
 export * from "./skills.js";
 export * from "./audit.js";
+export * from "./build.js";
 export * from "./session_store.js";
 export * from "./explain.js";
 export * from "./credentials.js";

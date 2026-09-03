@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { parseArgs } from "./index.js";
 import { recomputeManifest } from "gnomon-core";
 import { surfaceHash, manifest } from "gnomon-natives";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,5 +112,46 @@ describe("the two surface-hash implementations agree", () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+// The help banner used to be a hardcoded `gnomon v0.1.0` literal. It stayed
+// 0.1.0 through the whole of v0.1.1 — so the single version string a human ever
+// reads was the one string that could not be trusted, and `gnomon --help` could
+// not distinguish a 133-commit-old checkout from HEAD. Nothing asserted it,
+// which is exactly why it drifted; `scripts/check-versions.sh` audits eight
+// carriers and never covered this one.
+//
+// The banner is derived from harnessBuild() now, so this test is about keeping
+// it derived: it fails if anyone reintroduces a literal.
+describe("the version a user actually sees", () => {
+  it("is derived from the build, not written down", async () => {
+    const { harnessBuild } = await import("gnomon-core");
+    const src = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "index.ts"), "utf8");
+
+    const banner = /console\.log\(`([^\n]*)— deterministic coding agent harness/.exec(src);
+    expect(banner, "help banner not found — did the wording change?").toBeTruthy();
+
+    // It must interpolate, and must not carry a literal version.
+    expect(banner![1]).toContain("${harnessBuild()}");
+    expect(banner![1]).not.toMatch(/v?\d+\.\d+\.\d+/);
+
+    // And the value it interpolates must name this package's real version, so
+    // a bump that misses the CLI cannot pass.
+    const pkg = JSON.parse(readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8"));
+    expect(harnessBuild()).toContain(`gnomon/${pkg.version}+`);
+  });
+
+  it("points at commands that exist when it refuses for a missing key", () => {
+    // The refusal named `gnomon models`, which exits 1 with "Unknown command".
+    // It is handed to a user who is already blocked, so it sent them into a
+    // second failure. Every command the harness recommends must be real.
+    const core = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "..", "..",
+           "gnomon-core", "src", "prompt_loop.ts"), "utf8");
+    expect(core).not.toContain("gnomon models");
+    expect(core).toContain("gnomon endpoint list");
   });
 });
