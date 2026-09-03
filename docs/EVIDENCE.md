@@ -6,7 +6,9 @@ with no row is a claim with no evidence, and is listed as such at the bottom
 rather than omitted.
 
 **Which build these numbers describe — read this before citing any of them.**
-No suite here was run against `v0.1.1` (`f317b97`), the released build. The most
+One suite now has: `v011-timeout-2026-09-03` ran against `v0.1.1` (`f317b97`),
+with the SHA recorded per trial from inside the container. Every OTHER rate
+below predates the tag. The most
 recent arms ran at `bb71829`, which *is* an ancestor of the release, so they
 measure an earlier state of the same line rather than the artifact you can
 download. Five commits landed between them and the tag, and two of those change
@@ -66,6 +68,8 @@ different servers.
 | Verify gate — misconfigured | `902a93f` | a check that cannot run made the model rewrite correct code; one task went from passing without the gate to failing with it. Now reported as unrunnable, not handed back, and not called a pass |
 | Test authoring | [2026-08-31](../benchmarks/results/test-authoring-2026-08-31/) · [2026-09-01](../benchmarks/results/test-authoring-2026-09-01/) | **1/9** left to itself, and tests for existing code pin its bugs. Fixed by the **instruction**, not by any mechanism: asking for the docstring's intent with `xfail` on contradictions gives 0 failures after a bugfix. The role chain does **not** fix it |
 | Verify-gate value | [verify gate 2026-09-01b](../benchmarks/results/verify-gate-2026-09-01b/) | **5/10 → 8/10** once a catchable population exists — three conversions, zero regressions. p = 0.25, so direction not significance. The earlier run was inconclusive because the model fixed 18/18 unaided |
+| **v0.1.1 task completion** | [v011-timeout](../benchmarks/results/v011-timeout-2026-09-03/) | **44.7%** on 47 Terminal-Bench tasks (`deepseek-v4-flash`, 900s, mean of 2 passes). The **first number attributable to a released build** — every other rate in this document predates the tag. Roughly **41% of trials end at the timeout cap**, the largest single bucket |
+| **Timeout-retry teaching** | [v011-timeout](../benchmarks/results/v011-timeout-2026-09-03/) | **null on both endpoints.** Score 44.7% → 45.7% (+1.1pp, against an 8.5pp within-arm spread). Mechanism — the endpoint the design *can* resolve — did not move either: timeouts 40.4% → 42.6%, `setsid` adoption unchanged. Delivery verified, so this is a real negative, not an underpowered one |
 | **Peer harness** | [peer opencode](../benchmarks/results/peer-opencode-2026-09-02/) | **null.** On equal terms, 34 paired tasks: gnomon 50.0%, opencode 47.1%, discordant 3 to 2, **McNemar p = 1.0000**. The unequal-terms reading — an 18-point win at p = 0.039 — is an artifact of opencode auto-rejecting its own permission prompts, and the arm's own README says not to quote it |
 | **Role chain** | [role chain](../benchmarks/results/role-chain-2026-09-02/) | **null, on the feature this project argued hardest for.** 38 tasks paired across four cells: control 56.6%, chain 48.7%. The −7.9pp difference exactly equals the within-arm spread; **McNemar p = 0.375** |
 | **Model ceiling** | [model ceiling](../benchmarks/results/model-ceiling-2026-09-02/) | **null.** 12 valid tasks, build fixed: `deepseek-v4-flash` 41.7%, `gpt-5.6-luna` 50.0% at 2.5×/7.5× the price, **McNemar p = 1.0000**. Three nulls the same night — chain, peer, ceiling |
