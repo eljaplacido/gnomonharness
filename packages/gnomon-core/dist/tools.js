@@ -2057,13 +2057,28 @@ async function writeTool(args, ctx) {
             }
         }
         try {
+            // Pinned before the write so the drift report carries both ends.
+            const beforeHash = surfaceHashOf(ctx);
             mkdirSync(dirname(abs), { recursive: true });
             writeFileSync(abs, content, "utf-8");
+            // Signal it. The claim "the next turn runs under the new rules" was made
+            // here and was FALSE: the running session holds the config it loaded at
+            // startup, and nothing reloaded it. A user who changed a role's model,
+            // watched this line print, and then saw /role report the old model had
+            // been told the opposite of what happened.
+            //
+            // The reload belongs to the loop, not to a tool, so this reports the
+            // change and the loop acts on it. `surface_drift` already existed for
+            // exactly this and was set by bash and read by nobody.
+            const afterHash = surfaceHashOf(ctx);
             return {
                 code: TOOL_OK,
-                content: `Wrote ${path} (+${sa} −${sr}). This changed the surface — the hash ` +
-                    `moved, and the next turn runs under the new rules.`,
+                content: `Wrote ${path} (+${sa} −${sr}). This changed the surface, so the hash ` +
+                    `moved. The harness reloads it before the next turn and will say so.`,
                 summary: `write ${path} — SURFACE CHANGED (+${sa} −${sr})`,
+                surface_drift: beforeHash && afterHash && beforeHash !== afterHash
+                    ? { before: beforeHash, after: afterHash, notice: `${path} was rewritten by a tool call` }
+                    : undefined,
             };
         }
         catch (err) {

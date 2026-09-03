@@ -11,7 +11,7 @@ import * as readline from "node:readline";
 import { GnomonConfig, routeRole, ResolvedRouting, ResolvedUi, SurfaceProblem, EndpointConfig } from "./config.js";
 import { Progress } from "./render.js";
 export { isLocalEndpoint } from "./config.js";
-import { Todo, Approver, SandboxLevel, SurfaceConsent, RunNote } from "./tools.js";
+import { Todo, type SurfaceDrift, Approver, SandboxLevel, SurfaceConsent, RunNote } from "./tools.js";
 import { type McpRegistry } from "./mcp.js";
 import { AuditTrail } from "./audit.js";
 import { SessionListEntry } from "./session_store.js";
@@ -430,6 +430,17 @@ export interface TurnResult {
     };
     /** Counters already computed by the loop and previously thrown away. */
     counters: TurnCounters;
+    /**
+     * Set when `.gnomon/` moved while this turn ran — an approved surface write,
+     * or a bash command that touched it. The interactive loop reloads on this.
+     *
+     * It exists because the surface write tool printed "the next turn runs under
+     * the new rules" and that was false: the session holds the config it loaded
+     * at startup. A user changed a role's model, saw that line, and then watched
+     * /role report the old model. `surface_drift` was already being produced by
+     * bash and read by nothing at all.
+     */
+    surface_changed?: SurfaceDrift[];
 }
 /**
  * Why the tool loop stopped.

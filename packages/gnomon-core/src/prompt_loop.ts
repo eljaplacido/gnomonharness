@@ -57,6 +57,7 @@ import {
   Todo,
   buildToolSet,
   executeTool,
+  type SurfaceDrift,
   needsApproval,
   ToolContext,
   ToolOutcome,
@@ -1576,6 +1577,17 @@ export interface TurnResult {
   stop_detail?: { steps?: number; max_steps_total?: number; repeats?: number };
   /** Counters already computed by the loop and previously thrown away. */
   counters: TurnCounters;
+  /**
+   * Set when `.gnomon/` moved while this turn ran — an approved surface write,
+   * or a bash command that touched it. The interactive loop reloads on this.
+   *
+   * It exists because the surface write tool printed "the next turn runs under
+   * the new rules" and that was false: the session holds the config it loaded
+   * at startup. A user changed a role's model, saw that line, and then watched
+   * /role report the old model. `surface_drift` was already being produced by
+   * bash and read by nothing at all.
+   */
+  surface_changed?: SurfaceDrift[];
 }
 
 /**
@@ -2104,6 +2116,7 @@ export async function runAgenticTurn(
   const ctxLimits = resolveContext(config);
   const working: ChatMessage[] = [...messages];
   const toolLog: string[] = [];
+  const surfaceChanges: SurfaceDrift[] = [];
   // Whether this turn changed anything on disk. The verify gate is about the
   // difference between "said it did" and "did it", so it only has meaning
   // after a write or an edit.
@@ -2167,6 +2180,7 @@ export async function runAgenticTurn(
     usage: turnUsage,
     stop_reason: "cancelled",
     counters,
+    surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
   });
 
   const noTools = (state.noToolModels ??= new Set<string>());
@@ -2576,6 +2590,7 @@ export async function runAgenticTurn(
         // RIGHT to stop is the bucket's business, not this field's.
         stop_reason: emptyTerminus ? "empty" : "answered",
         counters,
+        surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
       };
     }
 
@@ -2688,6 +2703,7 @@ export async function runAgenticTurn(
           ? { steps, repeats: loop.stall_repeats }
           : { steps, max_steps_total: maxTotal },
         counters,
+        surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
       };
     }
 
@@ -2855,6 +2871,7 @@ export async function runAgenticTurn(
         (await prefetched.get(callIndex)) ??
         (await executeTool(call.name, call.args, ctx, offered));
       code = worse(code, outcome.code);
+      if (outcome.surface_drift) surfaceChanges.push(outcome.surface_drift);
       toolLog.push(outcome.summary);
       tally(call.name, "calls");
       const outcomeBucket = mapBucket(outcome.code);
@@ -6166,6 +6183,49 @@ export async function runPromptLoop(
       }
       progress.stop();
       activeProgress = null;
+
+      // The surface moved during that turn — reload, so the session actually
+      // runs under the rules it just wrote.
+      //
+      // Until now nothing did. The write tool printed "the next turn runs under
+      // the new rules" and the session went on using the config it loaded at
+      // startup: a user changed the plan role's model, watched that line, then
+      // saw /role report the old model, three times, across two sessions.
+      // `/models` already reloads after writing roles.toml, so the capability
+      // existed and only this path did not use it.
+      //
+      // Said out loud, with both hashes. A surface that changes silently is the
+      // thing this harness exists to prevent, and that applies to a change the
+      // harness itself made.
+      if (turn.surface_changed && turn.surface_changed.length > 0) {
+        for (const d of turn.surface_changed) {
+          progress.print(
+            paint(ui, "yellow", `  surface moved: ${d.notice}`)
+          );
+        }
+        try {
+          const reloaded = loadConfig(resolve(state.config.gnomonDir, ".."));
+          state.config = reloaded;
+          const short = recomputeManifest(reloaded.gnomonDir).surface_hash.slice(0, 16);
+          progress.print(
+            paint(ui, "green", `  ✓ surface reloaded — now ${short}… · this session runs under it from the next turn`)
+          );
+          // Roles, models and endpoints all come from the surface, so say what
+          // the current role resolves to NOW. That is the line the user was
+          // looking for and did not get.
+          const rt = routeRole(reloaded, state.currentRole);
+          progress.print(
+            paint(ui, "gray", `    ${state.currentRole} → ${rt.target.model} @${rt.target.endpoint ?? "local"}`)
+          );
+        } catch (err) {
+          progress.print(
+            paint(ui, "red",
+              `  ✗ the surface moved but could not be reloaded: ` +
+              `${err instanceof Error ? err.message : String(err)}\n` +
+              `    This session is still running the previous surface. Restart to pick it up.`)
+          );
+        }
+      }
       const duration = Date.now() - start;
 
       if (turn.content === CANCELLED) {

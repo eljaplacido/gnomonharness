@@ -1495,6 +1495,7 @@ depth = 0) {
     const ctxLimits = resolveContext(config);
     const working = [...messages];
     const toolLog = [];
+    const surfaceChanges = [];
     // Whether this turn changed anything on disk. The verify gate is about the
     // difference between "said it did" and "did it", so it only has meaning
     // after a write or an edit.
@@ -1556,6 +1557,7 @@ depth = 0) {
         usage: turnUsage,
         stop_reason: "cancelled",
         counters,
+        surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
     });
     const noTools = (state.noToolModels ??= new Set());
     /**
@@ -1882,6 +1884,7 @@ depth = 0) {
                 // RIGHT to stop is the bucket's business, not this field's.
                 stop_reason: emptyTerminus ? "empty" : "answered",
                 counters,
+                surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
             };
         }
         // Stalled? Repeating one call verbatim is not progress, and on autopilot
@@ -1976,6 +1979,7 @@ depth = 0) {
                     ? { steps, repeats: loop.stall_repeats }
                     : { steps, max_steps_total: maxTotal },
                 counters,
+                surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
             };
         }
         if (checkpoint) {
@@ -2123,6 +2127,8 @@ depth = 0) {
             const outcome = (await prefetched.get(callIndex)) ??
                 (await executeTool(call.name, call.args, ctx, offered));
             code = worse(code, outcome.code);
+            if (outcome.surface_drift)
+                surfaceChanges.push(outcome.surface_drift);
             toolLog.push(outcome.summary);
             tally(call.name, "calls");
             const outcomeBucket = mapBucket(outcome.code);
@@ -4769,6 +4775,40 @@ export async function runPromptLoop(config, initialRole, options = {}) {
             }
             progress.stop();
             activeProgress = null;
+            // The surface moved during that turn — reload, so the session actually
+            // runs under the rules it just wrote.
+            //
+            // Until now nothing did. The write tool printed "the next turn runs under
+            // the new rules" and the session went on using the config it loaded at
+            // startup: a user changed the plan role's model, watched that line, then
+            // saw /role report the old model, three times, across two sessions.
+            // `/models` already reloads after writing roles.toml, so the capability
+            // existed and only this path did not use it.
+            //
+            // Said out loud, with both hashes. A surface that changes silently is the
+            // thing this harness exists to prevent, and that applies to a change the
+            // harness itself made.
+            if (turn.surface_changed && turn.surface_changed.length > 0) {
+                for (const d of turn.surface_changed) {
+                    progress.print(paint(ui, "yellow", `  surface moved: ${d.notice}`));
+                }
+                try {
+                    const reloaded = loadConfig(resolve(state.config.gnomonDir, ".."));
+                    state.config = reloaded;
+                    const short = recomputeManifest(reloaded.gnomonDir).surface_hash.slice(0, 16);
+                    progress.print(paint(ui, "green", `  ✓ surface reloaded — now ${short}… · this session runs under it from the next turn`));
+                    // Roles, models and endpoints all come from the surface, so say what
+                    // the current role resolves to NOW. That is the line the user was
+                    // looking for and did not get.
+                    const rt = routeRole(reloaded, state.currentRole);
+                    progress.print(paint(ui, "gray", `    ${state.currentRole} → ${rt.target.model} @${rt.target.endpoint ?? "local"}`));
+                }
+                catch (err) {
+                    progress.print(paint(ui, "red", `  ✗ the surface moved but could not be reloaded: ` +
+                        `${err instanceof Error ? err.message : String(err)}\n` +
+                        `    This session is still running the previous surface. Restart to pick it up.`));
+                }
+            }
             const duration = Date.now() - start;
             if (turn.content === CANCELLED) {
                 console.log(paint(ui, "yellow", "  ⚠ cancelled"));

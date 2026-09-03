@@ -25,7 +25,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { PassThrough, Writable } from "node:stream";
-import { mkdtempSync, cpSync, rmSync } from "node:fs";
+import { mkdtempSync, cpSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadConfig, routeRole } from "./config.js";
@@ -557,4 +557,56 @@ describe("slash commands inside the running loop", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 180000);
+});
+
+// A surface write used to print "the next turn runs under the new rules" and
+// then not do it: the session kept the config it loaded at startup. A user
+// changed the plan role's model, saw that line, and watched /role report the
+// old model — three times, across two sessions, before it was diagnosed.
+//
+// `/models` already reloaded after writing roles.toml, so the capability
+// existed and only the agent-write path did not use it.
+describe("a surface written mid-session takes effect", () => {
+  let restoreKeys: () => void;
+  beforeAll(() => {
+    restoreKeys = stubDeclaredKeys(loadConfig(resolve(process.cwd(), "..", "..")));
+  });
+  afterAll(() => restoreKeys());
+
+  it("reloads, says so, and reports the role's NEW model", async () => {
+    const root = makeProject();
+    const rolesPath = join(root, ".gnomon", "roles.toml");
+    const before = readFileSync(rolesPath, "utf8");
+    // Rewrite the current role's model to something unmistakable.
+    const after = before.replace(/^model = ".*"$/m, 'model = "changed-by-the-turn"');
+    expect(after).not.toEqual(before);
+
+    let call = 0;
+    // /allow all first: a surface write is refused without it, by design.
+    const seen = await drive(root, ["/allow all", "rewrite the surface", "y", "/quit"], {
+      // `implement` is the role that holds `write`; the fixture's default is
+      // `plan`, which does not, so the call would be refused as undeclared.
+      initialRole: "implement",
+      reply: () => {
+        call++;
+        return call === 1
+          ? { message: { content: "", tool_calls: [{ function: {
+              name: "write",
+              arguments: { path: ".gnomon/roles.toml", content: after },
+            } }] } }
+          : { message: { content: "rewritten" } };
+      },
+    });
+
+    // The file really moved...
+    expect(readFileSync(rolesPath, "utf8")).toContain("changed-by-the-turn");
+    // ...the loop noticed and said so...
+    expect(seen.seen).toContain("surface moved:");
+    expect(seen.seen).toContain("surface reloaded");
+    // ...and it names the role's model as it resolves NOW — the line the user
+    // was looking for and did not get. (The rewrite lands on the first role in
+    // the file, so this asserts the reload happened, not which role moved.)
+    expect(seen.seen).toMatch(/surface reloaded — now [0-9a-f]{16}/);
+    rmSync(root, { recursive: true, force: true });
+  });
 });

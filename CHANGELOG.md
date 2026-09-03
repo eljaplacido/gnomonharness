@@ -37,6 +37,16 @@
   for any role declaring `temperature`/`top_p`, which the scaffold writes for
   **every** role. The payload now follows the endpoint's `kind`, which was
   already resolved and unused.
+- **A surface written mid-session did not take effect, and said it had.** The
+  `write` tool printed *"the hash moved, and the next turn runs under the new
+  rules"*. The session kept the config it loaded at startup, so a user who
+  changed a role's model saw that line and then watched `/role` report the old
+  model — three times, across two sessions. `surface_drift` already existed for
+  exactly this, was produced by `bash`, and was **read by nothing**. The loop
+  now reloads the surface after a turn that moved it, names what moved, prints
+  the new hash, and reports what the current role resolves to *now*. If the
+  reload fails it says the session is still on the previous surface rather than
+  claiming otherwise.
 - **Tool-result messages leaked Ollama's field spelling to OpenAI endpoints.**
   `ChatMessage` carried both `tool_call_id` and `tool_name` — "both spellings,
   since backends differ" — so the second tool call of any cloud turn died with
