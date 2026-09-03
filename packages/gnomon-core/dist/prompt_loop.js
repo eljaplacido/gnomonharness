@@ -8,6 +8,7 @@
  * GNOMON_MODEL_URL env var.
  */
 import * as readline from "node:readline";
+import { execFileSync } from "node:child_process";
 import { resolve, dirname, join, relative, sep } from "node:path";
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -1178,6 +1179,49 @@ limit = MAX_RUN_NOTES) {
     return notes.length > limit ? notes.slice(-limit) : notes;
 }
 /**
+ * Ask git what changed. Best-effort and bounded: a turn must not fail because
+ * the project is not a repository, or because git is slow.
+ */
+export function measureTreeDelta(root) {
+    const run = (args) => {
+        try {
+            return execFileSync("git", args, {
+                cwd: root, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"],
+            });
+        }
+        catch {
+            return null;
+        }
+    };
+    const parse = (out) => {
+        const m = new Map();
+        for (const line of out.split("\n")) {
+            const parts = line.split("\t");
+            if (parts.length < 3)
+                continue;
+            const ins = Number(parts[0]);
+            const del = Number(parts[1]);
+            // "-" for binary files; count the file, not the lines.
+            m.set(parts[2], [Number.isFinite(ins) ? ins : 0, Number.isFinite(del) ? del : 0]);
+        }
+        return m;
+    };
+    const plain = run(["diff", "--numstat", "HEAD"]) ?? run(["diff", "--numstat"]);
+    if (plain === null)
+        return { files: 0, insertions: 0, deletions: 0, crlf_only: 0, unavailable: "not a git worktree" };
+    const a = parse(plain);
+    const b = parse(run(["diff", "--numstat", "--ignore-cr-at-eol", "HEAD"]) ?? run(["diff", "--numstat", "--ignore-cr-at-eol"]) ?? "");
+    let insertions = 0, deletions = 0, crlfOnly = 0;
+    for (const [file, [i, d]] of a) {
+        insertions += i;
+        deletions += d;
+        // Changed in the plain diff, unchanged once line endings are ignored.
+        if (!b.has(file))
+            crlfOnly++;
+    }
+    return { files: a.size, insertions, deletions, crlf_only: crlfOnly };
+}
+/**
  * Tool calls a role may make in one turn when its surface does not say.
  *
  * Exported because it was invisible: a role with no `max_steps` key looked
@@ -1548,17 +1592,22 @@ depth = 0) {
         const t = (counters.per_tool[name] ??= { calls: 0, refusals: 0, apparatus: 0 });
         t[field]++;
     };
-    const cancelled = () => ({
-        content: CANCELLED,
-        code: settle(code, 2),
-        model: usedModel,
-        toolSteps: steps,
-        toolLog,
-        usage: turnUsage,
-        stop_reason: "cancelled",
-        counters,
-        surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
-    });
+    // A cancelled turn still changed the tree if it got that far, and that is
+    // exactly when someone wants to know what it left behind.
+    const cancelled = () => {
+        counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."));
+        return {
+            content: CANCELLED,
+            code: settle(code, 2),
+            model: usedModel,
+            toolSteps: steps,
+            toolLog,
+            usage: turnUsage,
+            stop_reason: "cancelled",
+            counters,
+            surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
+        };
+    };
     const noTools = (state.noToolModels ??= new Set());
     /**
      * Call a target, coping with a model that cannot accept tools.
@@ -1873,6 +1922,8 @@ depth = 0) {
                     deps.say(paint(deps.ui, "gray", `    ✓ verify passed`));
                 }
             }
+            // Measured at the end of the turn, from git — never the model's account.
+            counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."));
             return {
                 content: noteMarkupInAnswer(result.content, counters),
                 code: settle(code, result.code),
@@ -1965,6 +2016,8 @@ depth = 0) {
             const content = closing.code === 0 && closing.content.trim()
                 ? `${closing.content.trim()}\n\n_[${note}]_`
                 : result.content || note;
+            // Measured at the end of the turn, from git — never the model's account.
+            counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."));
             return {
                 // The wall and stall paths are where markup actually survived: a turn
                 // cut off mid-emission still returns whatever it had.
@@ -4775,6 +4828,19 @@ export async function runPromptLoop(config, initialRole, options = {}) {
             }
             progress.stop();
             activeProgress = null;
+            // What the turn actually did to the tree, measured. Printed rather than
+            // left in the record, because the failure this catches is a turn that
+            // SAYS "31 insertions" over a 2,492-line diff and is believed — an
+            // external review of a real audit run found three errors of exactly that
+            // shape and none in the code analysis itself.
+            const td = turn.counters.tree_delta;
+            if (td && !td.unavailable && td.files > 0) {
+                progress.print(paint(ui, "gray", `  [tree] ${td.files} file(s), +${td.insertions} −${td.deletions} (measured, git)`));
+                if (td.crlf_only > 0) {
+                    progress.print(paint(ui, "yellow", `  [tree] ${td.crlf_only} of those changed ONLY line endings — that is churn, not work. ` +
+                        `A .gitattributes with * text=auto is the one-file fix.`));
+                }
+            }
             // The surface moved during that turn — reload, so the session actually
             // runs under the rules it just wrote.
             //

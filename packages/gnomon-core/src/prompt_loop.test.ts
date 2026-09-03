@@ -10,6 +10,7 @@ import * as promptLoop from "./prompt_loop.js";
 import { setRoleModel } from "./prompt_loop.js";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 
 // Fixture tree lives at repo root — go up 2 levels from packages/gnomon-core
@@ -3115,5 +3116,59 @@ describe("request shape follows the endpoint kind", () => {
     expect(body.top_p).toBe(0.9);
     // The whole bug: an `options` key here is a 400 from any strict provider.
     expect(body).not.toHaveProperty("options");
+  });
+});
+
+// An external review of a real gnomon audit run found three errors, all the
+// same shape: "claims about the code are accurate and well-cited; claims about
+// its own tree state are asserted, not measured." It reported 31 insertions
+// over a 2,492-line diff, quoted a tsc count it had not taken, and declared a
+// CRLF hazard handled while the lockfile sat rewritten in the tree.
+//
+// Every one is one git call away, so the turn takes it.
+describe("measureTreeDelta — measured, not asserted", () => {
+  const repo = (): string => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-td-"));
+    const git = (...a: string[]) =>
+      execFileSync("git", a, { cwd: root, stdio: "ignore" });
+    git("init", "-q");
+    git("config", "user.email", "t@t");
+    git("config", "user.name", "t");
+    writeFileSync(join(root, "a.txt"), "alpha\nbeta\ngamma\n");
+    writeFileSync(join(root, "b.txt"), "one\ntwo\n");
+    git("add", "-A");
+    git("commit", "-qm", "init");
+    return root;
+  };
+
+  it("separates line-ending churn from real work", () => {
+    const root = repo();
+    // a.txt: CRLF only. b.txt: one genuinely added line.
+    writeFileSync(join(root, "a.txt"), "alpha\r\nbeta\r\ngamma\r\n");
+    writeFileSync(join(root, "b.txt"), "one\ntwo\nthree\n");
+    const d = promptLoop.measureTreeDelta(root);
+    expect(d.files).toBe(2);
+    // git counts the CRLF rewrite as 3 changed lines; the point is that the
+    // total is NOT the amount of work done, and crlf_only says how much of it
+    // is noise.
+    expect(d.insertions).toBe(4);
+    expect(d.crlf_only).toBe(1);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("reports nothing rather than zero outside a git worktree", () => {
+    const bare = mkdtempSync(join(tmpdir(), "gnomon-nogit-"));
+    const d = promptLoop.measureTreeDelta(bare);
+    // "we could not measure" must not read as "nothing changed".
+    expect(d.unavailable).toBeTruthy();
+    rmSync(bare, { recursive: true, force: true });
+  });
+
+  it("counts a clean tree as clean", () => {
+    const root = repo();
+    const d = promptLoop.measureTreeDelta(root);
+    expect(d).toMatchObject({ files: 0, insertions: 0, deletions: 0, crlf_only: 0 });
+    expect(d.unavailable).toBeUndefined();
+    rmSync(root, { recursive: true, force: true });
   });
 });

@@ -37,6 +37,17 @@
   for any role declaring `temperature`/`top_p`, which the scaffold writes for
   **every** role. The payload now follows the endpoint's `kind`, which was
   already resolved and unused.
+- **A turn now measures what it did to the worktree instead of asserting it.**
+  `counters.tree_delta` carries files / insertions / deletions from `git diff
+  --numstat`, plus `crlf_only` — files whose entire change vanishes under
+  `--ignore-cr-at-eol`, i.e. pure line-ending churn. An external review of a
+  real gnomon audit run put this first: *"claims about the code are accurate and
+  well-cited; claims about its own tree state are asserted, not measured."*
+  Three of its four findings were that shape — a reported "31 insertions" over a
+  2,492-line diff, a tsc count quoted but never taken, and a CRLF hazard
+  declared handled while the lockfile sat rewritten. Each is one git call away.
+  A tree that cannot be measured reports `unavailable` rather than zero, because
+  "not measured" and "nothing changed" must not look alike.
 - **A surface written mid-session did not take effect, and said it had.** The
   `write` tool printed *"the hash moved, and the next turn runs under the new
   rules"*. The session kept the config it loaded at startup, so a user who

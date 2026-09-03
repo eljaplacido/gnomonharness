@@ -514,7 +514,43 @@ export type StopReason = "answered" | "empty" | "stall" | "step_wall" | "cancell
  * tracked; none of them is read back to decide anything, which is what keeps
  * this observation rather than control.
  */
+/** Measured worktree change for one turn. Absent outside a git worktree. */
+export interface TreeDelta {
+    files: number;
+    insertions: number;
+    deletions: number;
+    /**
+     * Files whose entire change vanishes under `--ignore-cr-at-eol` — i.e. pure
+     * line-ending churn. Counted separately because it is invisible in a plain
+     * numstat and drowns the real change: one reviewed run showed 3,862 lines of
+     * CRLF noise around 464 lines of actual dependency resolution.
+     */
+    crlf_only: number;
+    /** Why there is no measurement, when there is none. */
+    unavailable?: string;
+}
+/**
+ * Ask git what changed. Best-effort and bounded: a turn must not fail because
+ * the project is not a repository, or because git is slow.
+ */
+export declare function measureTreeDelta(root: string): TreeDelta;
 export interface TurnCounters {
+    /**
+     * What actually changed in the worktree this turn — MEASURED, at the end,
+     * from git. Never the model's account of it.
+     *
+     * An external review of a real gnomon audit run put this first: "claims about
+     * the code are accurate and well-cited; claims about its own tree state are
+     * asserted, not measured." Three of its four findings were that shape — the
+     * harness reported "31 insertions / 4 deletions" for a diff that was 2,492
+     * lines, reported a tsc error count it had not taken, and declared a CRLF
+     * hazard handled while the whole lockfile sat rewritten in the tree.
+     *
+     * Every one of those is checkable in one git call, and the project's own
+     * thesis is that a record should carry measurements rather than assertions.
+     * It was not applying that to itself.
+     */
+    tree_delta?: TreeDelta;
     /** Successful write/edit tool calls. */
     writes: number;
     /** Bash calls observed to change the worktree — shell-mediated work that

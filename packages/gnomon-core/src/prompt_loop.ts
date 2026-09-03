@@ -9,6 +9,7 @@
  */
 
 import * as readline from "node:readline";
+import { execFileSync } from "node:child_process";
 import { resolve, dirname, join, relative, sep} from "node:path";
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync} from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -1719,7 +1720,77 @@ export type StopReason =
  * tracked; none of them is read back to decide anything, which is what keeps
  * this observation rather than control.
  */
+/** Measured worktree change for one turn. Absent outside a git worktree. */
+export interface TreeDelta {
+  files: number;
+  insertions: number;
+  deletions: number;
+  /**
+   * Files whose entire change vanishes under `--ignore-cr-at-eol` — i.e. pure
+   * line-ending churn. Counted separately because it is invisible in a plain
+   * numstat and drowns the real change: one reviewed run showed 3,862 lines of
+   * CRLF noise around 464 lines of actual dependency resolution.
+   */
+  crlf_only: number;
+  /** Why there is no measurement, when there is none. */
+  unavailable?: string;
+}
+
+/**
+ * Ask git what changed. Best-effort and bounded: a turn must not fail because
+ * the project is not a repository, or because git is slow.
+ */
+export function measureTreeDelta(root: string): TreeDelta {
+  const run = (args: string[]): string | null => {
+    try {
+      return execFileSync("git", args, {
+        cwd: root, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      return null;
+    }
+  };
+  const parse = (out: string): Map<string, [number, number]> => {
+    const m = new Map<string, [number, number]>();
+    for (const line of out.split("\n")) {
+      const parts = line.split("\t");
+      if (parts.length < 3) continue;
+      const ins = Number(parts[0]); const del = Number(parts[1]);
+      // "-" for binary files; count the file, not the lines.
+      m.set(parts[2]!, [Number.isFinite(ins) ? ins : 0, Number.isFinite(del) ? del : 0]);
+    }
+    return m;
+  };
+  const plain = run(["diff", "--numstat", "HEAD"]) ?? run(["diff", "--numstat"]);
+  if (plain === null) return { files: 0, insertions: 0, deletions: 0, crlf_only: 0, unavailable: "not a git worktree" };
+  const a = parse(plain);
+  const b = parse(run(["diff", "--numstat", "--ignore-cr-at-eol", "HEAD"]) ?? run(["diff", "--numstat", "--ignore-cr-at-eol"]) ?? "");
+  let insertions = 0, deletions = 0, crlfOnly = 0;
+  for (const [file, [i, d]] of a) {
+    insertions += i; deletions += d;
+    // Changed in the plain diff, unchanged once line endings are ignored.
+    if (!b.has(file)) crlfOnly++;
+  }
+  return { files: a.size, insertions, deletions, crlf_only: crlfOnly };
+}
+
 export interface TurnCounters {
+  /**
+   * What actually changed in the worktree this turn — MEASURED, at the end,
+   * from git. Never the model's account of it.
+   *
+   * An external review of a real gnomon audit run put this first: "claims about
+   * the code are accurate and well-cited; claims about its own tree state are
+   * asserted, not measured." Three of its four findings were that shape — the
+   * harness reported "31 insertions / 4 deletions" for a diff that was 2,492
+   * lines, reported a tsc error count it had not taken, and declared a CRLF
+   * hazard handled while the whole lockfile sat rewritten in the tree.
+   *
+   * Every one of those is checkable in one git call, and the project's own
+   * thesis is that a record should carry measurements rather than assertions.
+   * It was not applying that to itself.
+   */
+  tree_delta?: TreeDelta;
   /** Successful write/edit tool calls. */
   writes: number;
   /** Bash calls observed to change the worktree — shell-mediated work that
@@ -2171,7 +2242,11 @@ export async function runAgenticTurn(
     t[field]++;
   };
 
-  const cancelled = (): TurnResult => ({
+  // A cancelled turn still changed the tree if it got that far, and that is
+  // exactly when someone wants to know what it left behind.
+  const cancelled = (): TurnResult => {
+    counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."));
+    return {
     content: CANCELLED,
     code: settle(code, 2),
     model: usedModel,
@@ -2181,7 +2256,8 @@ export async function runAgenticTurn(
     stop_reason: "cancelled",
     counters,
     surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
-  });
+    };
+  };
 
   const noTools = (state.noToolModels ??= new Set<string>());
 
@@ -2579,6 +2655,8 @@ export async function runAgenticTurn(
         }
       }
 
+      // Measured at the end of the turn, from git — never the model's account.
+      counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."));
       return {
         content: noteMarkupInAnswer(result.content, counters),
         code: settle(code, result.code),
@@ -2689,6 +2767,8 @@ export async function runAgenticTurn(
           ? `${closing.content.trim()}\n\n_[${note}]_`
           : result.content || note;
 
+      // Measured at the end of the turn, from git — never the model's account.
+      counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."));
       return {
         // The wall and stall paths are where markup actually survived: a turn
         // cut off mid-emission still returns whatever it had.
@@ -6183,6 +6263,26 @@ export async function runPromptLoop(
       }
       progress.stop();
       activeProgress = null;
+
+      // What the turn actually did to the tree, measured. Printed rather than
+      // left in the record, because the failure this catches is a turn that
+      // SAYS "31 insertions" over a 2,492-line diff and is believed — an
+      // external review of a real audit run found three errors of exactly that
+      // shape and none in the code analysis itself.
+      const td = turn.counters.tree_delta;
+      if (td && !td.unavailable && td.files > 0) {
+        progress.print(
+          paint(ui, "gray",
+            `  [tree] ${td.files} file(s), +${td.insertions} −${td.deletions} (measured, git)`)
+        );
+        if (td.crlf_only > 0) {
+          progress.print(
+            paint(ui, "yellow",
+              `  [tree] ${td.crlf_only} of those changed ONLY line endings — that is churn, not work. ` +
+              `A .gitattributes with * text=auto is the one-file fix.`)
+          );
+        }
+      }
 
       // The surface moved during that turn — reload, so the session actually
       // runs under the rules it just wrote.
