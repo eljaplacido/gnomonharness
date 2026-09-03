@@ -533,6 +533,25 @@ export function buildMessages(
           : `[gnomon context] ${dropped.length} earlier turn(s) dropped to fit ` +
             `the window (policy=${ctx.policy}, compaction=discard).`;
     messages.push({ role: "system", content: explain });
+
+    // ...and tell the OPERATOR, not only the model.
+    //
+    // `notice` was declared here and never assigned, so both of its display
+    // sites were unreachable and the human watching the session saw nothing at
+    // all. The model was told in-band that turns had been dropped; the person
+    // responsible for the session was not.
+    //
+    // That matters more than it looks: the shipped default is
+    // `compaction = "discard"`, which measured 0/9 on context retention against
+    // 9/9 for "summary". So the common case is a session that silently forgets
+    // and then answers as though it never knew — with the one mechanism built
+    // to warn about it sitting inert.
+    notice =
+      compaction === "summary"
+        ? `${dropped.length} earlier turn(s) folded into the summary to fit the window.`
+        : `${dropped.length} earlier turn(s) DROPPED to fit the window ` +
+          `(compaction=discard — they are gone, not summarised). ` +
+          `Set compaction = "summary" in .gnomon/config.toml to fold them instead.`;
   }
 
   tail.forEach(replay);

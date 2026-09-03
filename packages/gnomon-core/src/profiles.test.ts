@@ -122,3 +122,49 @@ describe("a published option this build does not implement", () => {
     rmSync(root, { recursive: true, force: true });
   });
 });
+
+// `notice` was declared in buildMessages and never assigned, so both of its
+// display sites were unreachable: the MODEL was told in-band that turns had
+// been dropped, and the operator watching the session was told nothing.
+//
+// The shipped default is compaction = "discard", measured 0/9 on context
+// retention against 9/9 for "summary" — so the common case is a session that
+// silently forgets and then answers as though it never knew, with the one
+// mechanism built to warn about it inert.
+describe("dropping context tells the operator, not only the model", () => {
+  const stateWith = (turns: number, compaction: string) => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-ctx-"));
+    mkdirSync(join(root, ".gnomon"), { recursive: true });
+    writeFileSync(join(root, ".gnomon", "config.toml"),
+      `[defaults]\nmax_context_tokens = 900\ncompaction = "${compaction}"\n\n` +
+      `[endpoints.local]\nurl = "http://127.0.0.1:11434/api/chat"\nkind = "ollama"\n`);
+    writeFileSync(join(root, ".gnomon", "roles.toml"),
+      `[roles.smol]\nmodel = "m"\nendpoint = "local"\ntools = ["read"]\n`);
+    writeFileSync(join(root, ".gnomon", "system.md"), "x\n");
+    const config = loadConfig(root);
+    const exchanges = Array.from({ length: turns }, (_, i) => ({
+      turn: i + 1, role: "smol", input: "q".repeat(400), output: "a".repeat(400), code: 0,
+    }));
+    return { root, state: { config, exchanges, currentRole: "smol" } as never };
+  };
+
+  it("sets a notice naming how many turns went, and how to keep them", async () => {
+    const promptLoop = await import("./prompt_loop.js");
+    const { root, state } = stateWith(24, "discard");
+    const built = promptLoop.buildMessages(state, "sys", "next question");
+    expect(built.dropped, "the fixture must actually overflow the window").toBeGreaterThan(0);
+    expect(built.notice, "notice was declared and never assigned").toBeTruthy();
+    expect(built.notice).toContain("DROPPED");
+    expect(built.notice).toContain('compaction = "summary"');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("says nothing when nothing was dropped", async () => {
+    const promptLoop = await import("./prompt_loop.js");
+    const { root, state } = stateWith(1, "discard");
+    const built = promptLoop.buildMessages(state, "sys", "hi");
+    expect(built.dropped).toBe(0);
+    expect(built.notice).toBeUndefined();
+    rmSync(root, { recursive: true, force: true });
+  });
+});

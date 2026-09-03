@@ -37,6 +37,15 @@
   for any role declaring `temperature`/`top_p`, which the scaffold writes for
   **every** role. The payload now follows the endpoint's `kind`, which was
   already resolved and unused.
+- **A session that drops context now says so to the operator.** `buildMessages`
+  declared a `notice` and never assigned it, so both of its display sites were
+  unreachable: the **model** was told in-band that earlier turns had been
+  dropped, and the person watching the session was told nothing. That matters
+  more than it looks — the shipped default is `compaction = "discard"`, measured
+  **0/9** on context retention against 9/9 for `"summary"`, so the common case
+  is a session that silently forgets and then answers as though it never knew,
+  with the one mechanism built to warn about it inert. The notice names how many
+  turns went and how to keep them instead.
 - **A published option this build does not implement is now disclosed.** The
   enumerations offer `edit_format = ast | hashline | str_replace`; only the last
   is built. A surface asking for `ast` ran on `str_replace` **in silence** — the
