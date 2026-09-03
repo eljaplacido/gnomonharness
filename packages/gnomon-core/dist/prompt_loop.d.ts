@@ -705,6 +705,19 @@ export interface TaskRecord {
     /** Content hash of .gnomon/ — what determined this behaviour */
     surface_hash: string;
     /**
+     * Non-fatal findings from the surface audit, absent when there are none.
+     *
+     * The interactive path prints these; the scripted path discarded them, so a
+     * CI run against a surface asking for an unimplemented edit format, or a role
+     * whose allow-list admits an interpreter, saw nothing at all. Fatal findings
+     * never reach here — they end the run with code 10 before a turn happens.
+     */
+    surface_problems?: Array<{
+        where: string;
+        problem: string;
+        fatal: boolean;
+    }>;
+    /**
      * Which harness build produced this record, e.g. `gnomon/0.1.0+abf40c0`.
      *
      * The surface hash says what rules the run was under; this says what code

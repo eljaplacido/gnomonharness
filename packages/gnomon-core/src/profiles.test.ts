@@ -84,3 +84,41 @@ describe("role_profile actually routes", () => {
     expect(out.roles.plan).toMatchObject({ model: "m2", endpoint: "local", temperature: 0.1 });
   });
 });
+
+// Publishing an option that does nothing is the same defect as any other
+// mechanism reporting success while doing nothing — it is just spelled in the
+// contract instead of the code. `edit_format` publishes ast | hashline |
+// str_replace, only the last is built, and a surface asking for `ast` ran on
+// `str_replace` in silence: the surface saying one thing and the harness doing
+// another, which is the sentence this project exists to prevent.
+describe("a published option this build does not implement", () => {
+  const withFormat = (fmt: string): string => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-ef-"));
+    mkdirSync(join(root, ".gnomon"), { recursive: true });
+    writeFileSync(join(root, ".gnomon", "config.toml"),
+      `[defaults]\nedit_format = "${fmt}"\n\n[endpoints.local]\nurl = "http://127.0.0.1:11434/api/chat"\nkind = "ollama"\n`);
+    writeFileSync(join(root, ".gnomon", "roles.toml"),
+      `[roles.smol]\nmodel = "m"\nendpoint = "local"\ntools = ["read"]\n`);
+    writeFileSync(join(root, ".gnomon", "system.md"), "x\n");
+    return root;
+  };
+
+  it("is reported, naming what the run will actually use", async () => {
+    const { auditSurface } = await import("./config.js");
+    const root = withFormat("ast");
+    const hit = auditSurface(loadConfig(root)).find((p) => p.where.includes("edit_format"));
+    expect(hit, "an unimplemented edit_format must be reported").toBeTruthy();
+    expect(hit!.problem).toContain("NOT implemented");
+    expect(hit!.problem).toContain("str_replace");
+    // Not fatal: it is a disclosure, not a reason to refuse to run.
+    expect(hit!.fatal).toBe(false);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("says nothing when the surface names the format that IS built", async () => {
+    const { auditSurface } = await import("./config.js");
+    const root = withFormat("str_replace");
+    expect(auditSurface(loadConfig(root)).find((p) => p.where.includes("edit_format"))).toBeUndefined();
+    rmSync(root, { recursive: true, force: true });
+  });
+});

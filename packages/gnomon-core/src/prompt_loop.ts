@@ -3393,6 +3393,15 @@ export interface TaskRecord {
   /** Content hash of .gnomon/ — what determined this behaviour */
   surface_hash: string;
   /**
+   * Non-fatal findings from the surface audit, absent when there are none.
+   *
+   * The interactive path prints these; the scripted path discarded them, so a
+   * CI run against a surface asking for an unimplemented edit format, or a role
+   * whose allow-list admits an interpreter, saw nothing at all. Fatal findings
+   * never reach here — they end the run with code 10 before a turn happens.
+   */
+  surface_problems?: Array<{ where: string; problem: string; fatal: boolean }>;
+  /**
    * Which harness build produced this record, e.g. `gnomon/0.1.0+abf40c0`.
    *
    * The surface hash says what rules the run was under; this says what code
@@ -3495,8 +3504,15 @@ export async function runTask(
   // is what it is: the harness could not be configured, so no result of any
   // kind is available. Bucketing it as a refusal would let a misconfigured
   // surface look like a model declining the work.
+  // Non-fatal findings are recorded too. The interactive path prints them; the
+  // scripted path used to DISCARD them entirely, so a CI run against a surface
+  // asking for an unimplemented edit format, or a role whose allow-list admits
+  // an interpreter, saw nothing at all. A record is where a measured fact
+  // belongs, and these are measured facts about the surface that produced the
+  // record.
+  const surfaceFindings = auditSurface(config);
   {
-    const fatal = auditSurface(config).filter((p) => p.fatal);
+    const fatal = surfaceFindings.filter((p) => p.fatal);
     if (fatal.length > 0) {
       const detail = fatal
         .map((p) => `${p.where}: ${p.problem}\n    ${p.fix}`)
@@ -3709,6 +3725,13 @@ export async function runTask(
   return {
     surface_hash,
     harness: harnessBuild(),
+    // Non-fatal surface findings, so a scripted consumer can see what the
+    // interactive operator would have been shown. Omitted when clean rather
+    // than emitted as an empty array: a field that is always present teaches a
+    // reader to skip it.
+    surface_problems: surfaceFindings.length > 0
+      ? surfaceFindings.map((p) => ({ where: p.where, problem: p.problem, fatal: p.fatal }))
+      : undefined,
     // With a chain, the top-level fields describe the stage whose answer the
     // operator actually receives -- the last one that ran. Reporting the entry
     // role beside the final stage's bucket and output would make the record

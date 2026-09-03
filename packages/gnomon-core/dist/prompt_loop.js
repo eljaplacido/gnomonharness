@@ -2547,8 +2547,15 @@ export async function runTask(config, input, options = {}) {
     // is what it is: the harness could not be configured, so no result of any
     // kind is available. Bucketing it as a refusal would let a misconfigured
     // surface look like a model declining the work.
+    // Non-fatal findings are recorded too. The interactive path prints them; the
+    // scripted path used to DISCARD them entirely, so a CI run against a surface
+    // asking for an unimplemented edit format, or a role whose allow-list admits
+    // an interpreter, saw nothing at all. A record is where a measured fact
+    // belongs, and these are measured facts about the surface that produced the
+    // record.
+    const surfaceFindings = auditSurface(config);
     {
-        const fatal = auditSurface(config).filter((p) => p.fatal);
+        const fatal = surfaceFindings.filter((p) => p.fatal);
         if (fatal.length > 0) {
             const detail = fatal
                 .map((p) => `${p.where}: ${p.problem}\n    ${p.fix}`)
@@ -2748,6 +2755,13 @@ export async function runTask(config, input, options = {}) {
     return {
         surface_hash,
         harness: harnessBuild(),
+        // Non-fatal surface findings, so a scripted consumer can see what the
+        // interactive operator would have been shown. Omitted when clean rather
+        // than emitted as an empty array: a field that is always present teaches a
+        // reader to skip it.
+        surface_problems: surfaceFindings.length > 0
+            ? surfaceFindings.map((p) => ({ where: p.where, problem: p.problem, fatal: p.fatal }))
+            : undefined,
         // With a chain, the top-level fields describe the stage whose answer the
         // operator actually receives -- the last one that ran. Reporting the entry
         // role beside the final stage's bucket and output would make the record

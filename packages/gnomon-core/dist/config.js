@@ -832,9 +832,48 @@ function editDistance(a, b) {
             d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
     return d[a.length][b.length];
 }
+/**
+ * Enumeration values this build publishes but does not implement.
+ *
+ * Publishing an option that does nothing is the same defect as any other
+ * mechanism that reports success while doing nothing — it is simply spelled in
+ * the contract instead of in the code. Rule 6 says the enumerations are
+ * published; it does not say a reader has to guess which of them work.
+ *
+ * `edit_format` is the live case: the enumeration offers ast | hashline |
+ * str_replace, only the last is built, and a surface asking for `ast` used to
+ * run on `str_replace` in silence — the surface saying one thing and the
+ * harness doing another, which is the sentence this project exists to prevent.
+ *
+ * Entries leave this table by being implemented, never by being quietly
+ * dropped from the contract.
+ */
+const DECLARED_NOT_IMPLEMENTED = {
+    edit_format: {
+        values: ["ast", "hashline"],
+        inUse: "str_replace",
+        why: "the edit tool matches an exact string; the structural and hash-line formats are in the enumerations contract, not in this build",
+    },
+};
 export function auditSurface(config) {
     const problems = [];
     const declared = config.config.endpoints ?? {};
+    // A published option that this build does not implement, named in the
+    // surface. Reported rather than silently downgraded.
+    for (const [key, spec] of Object.entries(DECLARED_NOT_IMPLEMENTED)) {
+        const chosen = config.config.defaults?.[key];
+        if (typeof chosen === "string" && spec.values.includes(chosen)) {
+            problems.push({
+                where: `.gnomon/config.toml [defaults] ${key}`,
+                problem: `${key} = "${chosen}" is published in the enumerations contract but NOT implemented in this ` +
+                    `build. The run uses "${spec.inUse}" — ${spec.why}. Nothing said so until now, so a surface ` +
+                    `could ask for one edit format and get another in silence.`,
+                fix: `Set ${key} = "${spec.inUse}", or keep "${chosen}" knowing it does not take effect. ` +
+                    `\`gnomon enumerations --json\` lists every published value; this is the subset that is inert.`,
+                fatal: false,
+            });
+        }
+    }
     // A block name nothing recognises, and an enum value nothing accepts. Both
     // revert to a default without saying so, and both are one keystroke away from
     // a control the operator believes is in force.

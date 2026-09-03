@@ -37,6 +37,19 @@
   for any role declaring `temperature`/`top_p`, which the scaffold writes for
   **every** role. The payload now follows the endpoint's `kind`, which was
   already resolved and unused.
+- **A published option this build does not implement is now disclosed.** The
+  enumerations offer `edit_format = ast | hashline | str_replace`; only the last
+  is built. A surface asking for `ast` ran on `str_replace` **in silence** — the
+  surface saying one thing and the harness doing another, which is the sentence
+  this project exists to prevent. The surface audit now names it, and says which
+  format the run will actually use. Entries leave that table by being
+  implemented, never by being quietly dropped from the contract.
+- **`gnomon task --json` records non-fatal surface findings.** It reported only
+  *fatal* ones, so a scripted or CI run against a surface with an unimplemented
+  edit format, or a role whose allow-list admits an interpreter, saw nothing at
+  all — while the interactive operator was shown every one. `surface_problems`
+  is absent when clean rather than an empty array, because a field that is
+  always present teaches a reader to skip it.
 - **`role_profile` now does something.** It was a published enumeration that
   nothing read: `gnomon init` scaffolded `role_profile = "local_first"`, two
   profile files shipped, `loadConfig` parsed them — and no line of the harness
