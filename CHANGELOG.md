@@ -26,6 +26,58 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **No strict OpenAI-compatible provider worked at all.** The request carried
+  sampling params in *both* shapes — top-level for OpenAI and a nested `options`
+  object for Ollama — under the comment *"send both so either backend is
+  happy"*. Ollama ignores unknown fields; strict providers reject them, and
+  OpenCode answers `400 Extra inputs are not permitted, field: 'options'` —
+  naming a field the user never wrote, in a request they cannot see. It fired
+  for any role declaring `temperature`/`top_p`, which the scaffold writes for
+  **every** role. The payload now follows the endpoint's `kind`, which was
+  already resolved and unused.
+- **The scaffold invented a model-id prefix that does not exist.** Its comment
+  claimed OpenCode Go ids are "prefixed `opencode-go/`". They are bare —
+  `glm-5.3`, `deepseek-v4-flash`. A wrong id returns a 400 naming the *model*,
+  which reads as "unavailable" rather than "misspelled", so the wrong guess
+  looks confirmed.
+- **The missing-key refusal named a command that does not exist** (`gnomon
+  models`, which exits 1). It is handed to somebody already blocked, so it sent
+  them into a second failure. Both sites now say `gnomon endpoint list`.
+- **`gnomon --help` printed a hardcoded `v0.1.0`** through the whole of v0.1.1,
+  so the one version string a human reads could not distinguish a
+  133-commit-old checkout from HEAD. It renders `harnessBuild()` now — version
+  *and* commit. `harnessBuild()` had to be exported from gnomon-core to do it,
+  which is why a literal was there in the first place.
+- **A stray `.gnomon/` was committed inside `packages/gnomon-cli`.** Referenced
+  by nothing, it silently captured any session started from that directory.
+
+### Added
+
+- **`gnomon endpoint list` / `/endpoints` cross-check every role's model id**
+  against the ids its endpoint actually advertises, and name the nearest real
+  one:
+
+      ✗ role plan names model "opencode-go/glm-5-3" — this endpoint does not serve it
+        did you mean:  glm-5.3
+
+  The suggestion strips a provider prefix before measuring distance, because
+  that is the commonest wrong form and raw edit distance suppresses the hint
+  exactly when it is most needed. An endpoint that cannot be listed produces
+  **no** entry: "unchecked" and "checked and fine" must not look alike.
+- **LOCAL and CLOUD are headed groups** in the endpoint listing, rather than a
+  `· cloud ·` fragment between two other fields. Surfaces routinely mix the two,
+  and "which of these costs money and needs a key" is the first question anyone
+  asks of that list.
+- **`gnomon init` now scaffolds two skills.** It scaffolded none, so every new
+  project began without the rules this repository had written down for itself.
+  `endpoints-and-models` (list the ids, never guess one; the key may already be
+  set) and `secrets` (never write a key into a file in the repository). Both
+  were added after a local model configuring an endpoint wrote a user's API key
+  into a plaintext `.env`, guessed two ids that do not exist, and four times
+  recommended setting a key the listing already reported as set.
+
 ### Changed
 
 - `recomputeManifest()` no longer takes a `build` argument. It never read one:
