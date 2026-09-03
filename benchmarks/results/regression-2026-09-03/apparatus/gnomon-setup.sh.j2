@@ -1,0 +1,177 @@
+#!/bin/bash
+# Install gnomon inside the task container.
+#
+# It is built from source rather than a published package: the workspace
+# packages are private and depend on each other by `workspace:*`, so there is
+# nothing on npm to install. node_modules cannot be baked in from the host
+# either — the host is aarch64 and these containers are amd64.
+set -e
+
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v node >/dev/null 2>&1 || [ "$(node -v | cut -c2- | cut -d. -f1)" -lt 20 ]; then
+  (apt-get update -qq && apt-get install -y -qq curl ca-certificates git >/dev/null 2>&1) || true
+  curl -fsSL https://deb.nodesource.com/setup_22.x 2>/dev/null | bash - >/dev/null 2>&1 || true
+  apt-get install -y -qq nodejs >/dev/null 2>&1 || true
+fi
+command -v git >/dev/null 2>&1 || apt-get install -y -qq git >/dev/null 2>&1 || true
+
+npm install -g pnpm@9 >/dev/null 2>&1 || true
+
+rm -rf /opt/gnomon
+# The ref under test is a TEMPLATE VARIABLE with no default, and this script
+# aborts if it is empty.
+#
+# It used to be the hardcoded branch `feat/benchmark-findings`. By 2026-09-02
+# that branch was 131 commits behind the released v0.1.1, so every trial
+# measured a build nobody ships while the results were filed under whatever the
+# run was called. This is the failure `.claude/skills/benchmark-discipline`
+# opens with -- containers cloning a ref that is not the one under test -- and
+# it was live in this adapter the whole time.
+export GIT_TERMINAL_PROMPT=0    # never hang on an auth prompt; fail fast so we can retry
+
+# Force HTTP/1.1. Measured 2026-09-03 inside the task image: over HTTP/2 the
+# clone dies with
+#   fatal: could not read Username for 'https://github.com': terminal prompts disabled
+#   fatal: expected flush after ref listing
+# on a PUBLIC repository, for every ref, while curl to the same
+# .git/info/refs?service=git-upload-pack returns 200 and api.github.com returns
+# 200. The auth message is a red herring -- nothing is private; git's protocol
+# negotiation is being mangled. Setting http.version=HTTP/1.1 clones every ref
+# first try.
+#
+# This is why the smoke test exists. Without it, all 188 trials of this campaign
+# would have run with no gnomon installed and scored 0 while the log said only
+# `gnomon: command not found`.
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=http.version
+export GIT_CONFIG_VALUE_0=HTTP/1.1
+GNOMON_REF="{{ gnomon_ref }}"
+if [ -z "$GNOMON_REF" ]; then
+  echo "FATAL: gnomon_ref is empty. Refusing to guess a ref." >&2
+  exit 90
+fi
+
+# Accept a tag, a branch, OR a bare commit SHA. The error message below has
+# always said "a tag, branch or SHA" and only the first two worked:
+# `git clone --branch <sha>` fails with "Remote branch <sha> not found", because
+# --branch takes a ref name and a SHA is not one. Measured 2026-09-03, after a
+# regression arm pinned at a commit failed all 47 trials -- loudly, because of
+# the FATAL below, which is the only reason it cost minutes instead of a night.
+#
+# Shallow-by-ref first (fast, the common case); on failure fall back to a full
+# clone and check the commit out.
+_cloned=0
+for _i in 1 2 3 4 5 6; do
+  rm -rf /opt/gnomon
+  if git clone --depth 1 --branch "$GNOMON_REF" https://github.com/eljaplacido/gnomonharness.git /opt/gnomon >/dev/null 2>&1; then
+    _cloned=1
+    break
+  fi
+  rm -rf /opt/gnomon
+  if git clone https://github.com/eljaplacido/gnomonharness.git /opt/gnomon >/dev/null 2>&1 \
+     && git -C /opt/gnomon checkout --detach "$GNOMON_REF" >/dev/null 2>&1; then
+    _cloned=1
+    break
+  fi
+  sleep $((_i*4))
+done
+
+# Refuse to start rather than silently fall back. A run that quietly measured
+# the default branch because a tag was mistyped is worse than no run: it
+# produces a number that looks attributable and is not.
+if [ "$_cloned" != 1 ]; then
+  # Say WHY. Six silent failures and a bare "could not clone" sends the reader
+  # to the ref when the cause is usually the container: no git, no CA bundle,
+  # no DNS. One unsuppressed attempt costs a second and turns a guess into a
+  # diagnosis.
+  echo "FATAL: could not clone ref '$GNOMON_REF' after 6 attempts." >&2
+  echo "--- environment ---" >&2
+  echo "git: $(command -v git || echo MISSING)  $(git --version 2>&1 | head -1)" >&2
+  echo "ca-certificates: $([ -e /etc/ssl/certs/ca-certificates.crt ] && echo present || echo MISSING)" >&2
+  echo "dns: $(getent hosts github.com 2>&1 | head -1 || echo UNRESOLVED)" >&2
+  echo "--- one unsuppressed attempt ---" >&2
+  rm -rf /opt/gnomon
+  git clone --depth 1 --branch "$GNOMON_REF" https://github.com/eljaplacido/gnomonharness.git /opt/gnomon >&2 2>&1 || true
+  exit 91
+fi
+
+cd /opt/gnomon
+# Record what was ACTUALLY checked out, per trial, where the artifacts collect
+# it. The ref asked for and the commit received are two different facts, and
+# only the second one can support a claim.
+_sha="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+mkdir -p /var/log/gnomon-bench
+printf 'ref=%s\nsha=%s\n' "$GNOMON_REF" "$_sha" > /var/log/gnomon-bench/REF.txt
+echo "gnomon ref=$GNOMON_REF sha=$_sha" >&2
+pnpm install --silent >/dev/null 2>&1
+
+cat > /usr/local/bin/gnomon <<'WRAP'
+#!/usr/bin/env bash
+exec node /opt/gnomon/packages/gnomon-cli/gnomon.js "$@"
+WRAP
+chmod +x /usr/local/bin/gnomon
+
+# Scaffold the surface in the task directory and point it at the benchmark
+# endpoint. gnomon refuses to run without a .gnomon/, by design.
+cd /app 2>/dev/null || cd "${T_BENCH_TEST_DIR:-/app}" 2>/dev/null || cd /
+gnomon init >/dev/null 2>&1 || true
+# `|| true` is kept because init warns on an existing surface, but the RESULT is
+# asserted: no .gnomon/ means every trial in this container runs against no
+# surface and scores as a capability failure. That is apparatus, and must look
+# like apparatus.
+if [ ! -d .gnomon ]; then
+  echo "FATAL: gnomon init produced no .gnomon/ in $(pwd)" >&2
+  exit 92
+fi
+
+python3 - <<'PY' 2>/dev/null || true
+import os, re, pathlib
+d = pathlib.Path(".gnomon")
+if d.exists():
+    c = d / "config.toml"
+    s = c.read_text()
+    if "[endpoints.bench]" not in s:
+        s = s.replace("[endpoints.local]",
+            '[endpoints.bench]\n'
+            'url = "{{ base_url }}"\n'
+            'kind = "openai"\n'
+            'api_key_env = "{{ api_key_env }}"\n\n'
+            "[endpoints.local]", 1)
+        c.write_text(s)
+    r = d / "roles.toml"
+    t = r.read_text()
+    t = re.sub(r'^model = ".*"$', 'model = "{{ model_id }}"', t, flags=re.M)
+    t = re.sub(r'^endpoint = ".*"$', 'endpoint = "bench"', t, flags=re.M)
+    # +P0 arm only: declare converge_after on the implement role (gnomon's
+    # default task role). Empty string => baseline arm, nothing added, full
+    # exploration. Inserted right after the [roles.implement] header.
+    ca = "{{ converge_after }}".strip()
+    if ca:
+        t = re.sub(r'(^\[roles\.implement\]\s*$)',
+                   r'\1\nconverge_after = ' + ca, t, count=1, flags=re.M)
+    r.write_text(t)
+PY
+
+# Assert the surface rewrite actually took. The python block above runs under
+# `|| true` with stderr discarded, so a failure inside it used to leave the
+# container pointed at the DEFAULT endpoint -- every trial then failing for a
+# reason with nothing to do with the build under test.
+if ! grep -q 'endpoint = "bench"' .gnomon/roles.toml 2>/dev/null; then
+  echo "FATAL: surface rewrite did not take" >&2
+  exit 93
+fi
+
+# The timeout-retry teaching: the ONLY difference between the two arms. Empty
+# means the as-released arm and system.md is untouched. system.md is in the
+# surface hash, so the arms are distinguishable by manifest, not just by what
+# we remember configuring.
+cat > /tmp/teach.md <<'TEACHEOF'
+{{ timeout_teaching }}
+TEACHEOF
+if [ -s /tmp/teach.md ] && grep -q '[^[:space:]]' /tmp/teach.md; then
+  printf '\n\n' >> .gnomon/system.md
+  cat /tmp/teach.md >> .gnomon/system.md
+  echo "teaching applied: $(wc -l < /tmp/teach.md) lines" >&2
+else
+  echo "teaching: none (as-released arm)" >&2
+fi

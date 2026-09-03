@@ -81,3 +81,22 @@ by a WSL teardown.
 
 Budget: ~$4.60 expected at $1.10–1.25 per cell, against $12.71 remaining, with a
 $3.00 floor checked before each cell.
+
+## Apparatus fault found after pre-registration, before any scored trial
+
+The first launch failed **all 47 trials of the old arm** in minutes: the adapter
+clones with `git clone --depth 1 --branch "$GNOMON_REF"`, and `--branch` takes a
+ref NAME — `140bd83` is a commit, so git answered `Remote branch 140bd83 not
+found`. The adapter's own error text had always claimed it accepted "a tag,
+branch or SHA"; only the first two worked.
+
+It cost minutes rather than a night **because the ref check added earlier that
+day fails loudly**: eight `FATAL: could not clone ref '140bd83'` lines in the
+trial logs. Under the previous adapter the same fault produced
+`gnomon: command not found` and a silent 0/47.
+
+Fixed by falling back to a full clone plus `git checkout --detach <ref>` when
+the shallow-by-name clone fails. Verified inside the task image before
+relaunching: `140bd83 -> FALLBACK OK 140bd83`, `v0.1.1 -> shallow OK f317b97`.
+
+The apparatus as run is archived in `apparatus/`.
