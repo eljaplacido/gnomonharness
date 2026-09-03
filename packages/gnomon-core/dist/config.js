@@ -858,6 +858,36 @@ const DECLARED_NOT_IMPLEMENTED = {
 export function auditSurface(config) {
     const problems = [];
     const declared = config.config.endpoints ?? {};
+    // Files under .gnomon/extensions/ are hashed — the surface walker includes
+    // every file under .gnomon/ — and nothing in this build loads them. So
+    // dropping an extension in changes the surface hash, which is the harness
+    // announcing that behaviour changed, while behaviour did not change at all.
+    //
+    // That is the inverse of the usual defect and just as bad: the hash is the
+    // one thing this project asks people to trust, and here it moves for nothing.
+    // The extension host exists in agent.ts (registerExtension) and has no caller
+    // that reads the directory.
+    try {
+        const extDir = join(config.gnomonDir, "extensions");
+        const files = existsSync(extDir)
+            ? readdirSync(extDir).filter((f) => /\.(ts|js|mjs)$/.test(f))
+            : [];
+        if (files.length > 0) {
+            problems.push({
+                where: `.gnomon/extensions/`,
+                problem: `${files.length} extension file(s) here (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}) ` +
+                    `are INSIDE the surface hash and are NOT loaded by this build. Adding or editing one moves the ` +
+                    `hash — which says behaviour changed — while nothing about the run changes.`,
+                fix: `Remove them, or keep them knowing they are inert. The extension host exists (agent.ts ` +
+                    `registerExtension) but nothing reads this directory yet; when it does, these files will start ` +
+                    `taking effect without the hash moving again.`,
+                fatal: false,
+            });
+        }
+    }
+    catch {
+        // Never fail an audit over the audit.
+    }
     // A published option that this build does not implement, named in the
     // surface. Reported rather than silently downgraded.
     for (const [key, spec] of Object.entries(DECLARED_NOT_IMPLEMENTED)) {

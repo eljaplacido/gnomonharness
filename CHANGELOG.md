@@ -37,6 +37,13 @@
   for any role declaring `temperature`/`top_p`, which the scaffold writes for
   **every** role. The payload now follows the endpoint's `kind`, which was
   already resolved and unused.
+- **`.gnomon/extensions/` is disclosed as hashed-but-inert.** Every file under
+  `.gnomon/` is in the surface hash, extensions included — and nothing in this
+  build loads them. So dropping an extension in moves the hash, which is the
+  harness announcing that behaviour changed, while behaviour does not change at
+  all. That is the inverse of the usual defect and just as bad, because the hash
+  is the one thing this project asks people to trust. The extension host exists
+  (`agent.ts` `registerExtension`); nothing reads the directory yet.
 - **A session that drops context now says so to the operator.** `buildMessages`
   declared a `notice` and never assigned it, so both of its display sites were
   unreachable: the **model** was told in-band that earlier turns had been

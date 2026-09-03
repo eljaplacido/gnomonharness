@@ -168,3 +168,41 @@ describe("dropping context tells the operator, not only the model", () => {
     rmSync(root, { recursive: true, force: true });
   });
 });
+
+// Files under .gnomon/extensions/ are inside the surface hash — the walker
+// includes every file under .gnomon/ — and nothing in this build loads them.
+// So dropping an extension in moves the hash, which is the harness announcing
+// that behaviour changed, while behaviour does not change at all.
+//
+// That is the inverse of the usual defect and just as bad: the hash is the one
+// thing this project asks people to trust.
+describe("extensions are hashed but inert, and say so", () => {
+  const withExt = (files: string[]): string => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-ext-"));
+    mkdirSync(join(root, ".gnomon", "extensions"), { recursive: true });
+    writeFileSync(join(root, ".gnomon", "config.toml"),
+      `[endpoints.local]\nurl = "http://127.0.0.1:11434/api/chat"\nkind = "ollama"\n`);
+    writeFileSync(join(root, ".gnomon", "roles.toml"),
+      `[roles.smol]\nmodel = "m"\nendpoint = "local"\ntools = ["read"]\n`);
+    writeFileSync(join(root, ".gnomon", "system.md"), "x\n");
+    for (const f of files) writeFileSync(join(root, ".gnomon", "extensions", f), "export default {};\n");
+    return root;
+  };
+
+  it("reports extension files as inert", async () => {
+    const { auditSurface } = await import("./config.js");
+    const root = withExt(["hook.ts"]);
+    const hit = auditSurface(loadConfig(root)).find((p) => p.where.includes("extensions"));
+    expect(hit).toBeTruthy();
+    expect(hit!.problem).toContain("NOT loaded");
+    expect(hit!.problem).toContain("hash");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("says nothing when the directory is empty or absent", async () => {
+    const { auditSurface } = await import("./config.js");
+    const root = withExt([]);
+    expect(auditSurface(loadConfig(root)).find((p) => p.where.includes("extensions"))).toBeUndefined();
+    rmSync(root, { recursive: true, force: true });
+  });
+});
