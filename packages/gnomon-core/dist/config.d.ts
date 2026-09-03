@@ -354,10 +354,42 @@ export declare function resolveGnomonDir(root?: string): string;
  * @param root Project root path
  * @returns Typed configuration object
  */
-export declare function loadConfig(root?: string): GnomonConfig;
+/**
+ * Which profile applies, and what it does.
+ *
+ * `role_profile` was a PUBLISHED ENUMERATION that nothing read. `gnomon init`
+ * scaffolded `role_profile = "local_first"` and shipped two profile files;
+ * `loadConfig` parsed them into `config.profiles`; and not one line of the
+ * harness ever applied them. Rule 6 was satisfied in the letter — the options
+ * were published — while `enumerations --json` advertised
+ * `["local_first","frontier_plan","all_remote"]` to a reader who would
+ * reasonably conclude that choosing one changed where inference goes. It did
+ * not, and there is no worse thing for a config key to do.
+ *
+ * It also happens to be the feature that would have saved the most pain: a user
+ * spent an evening hand-editing roles.toml to point `plan` at a cloud endpoint,
+ * which is exactly what `role_profile = "frontier_plan"` says.
+ *
+ * A profile may set any per-role field — model, endpoint, temperature, tools.
+ * It is merged OVER the base role, per field, so a profile that names only a
+ * model leaves the endpoint alone.
+ */
+export declare function applyProfile(roles: Roles, profiles: Profiles, name: string | undefined): {
+    roles: Roles;
+    applied?: string;
+    problem?: string;
+};
+export declare function loadConfig(root?: string, profileOverride?: string): GnomonConfig;
 /** Complete gnomon configuration */
 export interface GnomonConfig {
     gnomonDir: string;
+    /** Which profile was applied to `roles`, and whether a flag chose it. */
+    profile?: {
+        name?: string;
+        requested?: string;
+        overridden: boolean;
+        problem?: string;
+    };
     config: Config;
     policy: Policy;
     roles: Roles;

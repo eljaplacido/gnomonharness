@@ -307,15 +307,62 @@ function loadToml(gnomonDir, filename) {
  * @param root Project root path
  * @returns Typed configuration object
  */
-export function loadConfig(root) {
+/**
+ * Which profile applies, and what it does.
+ *
+ * `role_profile` was a PUBLISHED ENUMERATION that nothing read. `gnomon init`
+ * scaffolded `role_profile = "local_first"` and shipped two profile files;
+ * `loadConfig` parsed them into `config.profiles`; and not one line of the
+ * harness ever applied them. Rule 6 was satisfied in the letter — the options
+ * were published — while `enumerations --json` advertised
+ * `["local_first","frontier_plan","all_remote"]` to a reader who would
+ * reasonably conclude that choosing one changed where inference goes. It did
+ * not, and there is no worse thing for a config key to do.
+ *
+ * It also happens to be the feature that would have saved the most pain: a user
+ * spent an evening hand-editing roles.toml to point `plan` at a cloud endpoint,
+ * which is exactly what `role_profile = "frontier_plan"` says.
+ *
+ * A profile may set any per-role field — model, endpoint, temperature, tools.
+ * It is merged OVER the base role, per field, so a profile that names only a
+ * model leaves the endpoint alone.
+ */
+export function applyProfile(roles, profiles, name) {
+    if (!name)
+        return { roles };
+    const def = profiles[name];
+    if (!def) {
+        // Named and missing is a surface error, and it is reported rather than
+        // ignored: silently running the base roles is how a profile becomes
+        // decorative in the first place.
+        const known = Object.keys(profiles).sort().join(", ") || "none";
+        return { roles, problem: `profile "${name}" is not in .gnomon/profiles/ (have: ${known})` };
+    }
+    const overrides = def.roles ?? {};
+    const merged = { ...roles };
+    for (const [role, fields] of Object.entries(overrides)) {
+        merged[role] = { ...(merged[role] ?? {}), ...fields };
+    }
+    return { roles: merged, applied: name };
+}
+export function loadConfig(root, profileOverride) {
     const gnomonDir = resolveGnomonDir(root);
+    const baseRoles = (loadToml(gnomonDir, "roles.toml").roles ?? {});
+    const cfg = loadToml(gnomonDir, "config.toml");
+    const profiles = loadToml(gnomonDir, "profiles");
+    // The surface names the default; --profile overrides it and is DISCLOSED at
+    // startup, the same way GNOMON_MODEL_URL is, because it changes behaviour
+    // without moving the hash.
+    const wanted = profileOverride ?? cfg.defaults?.role_profile;
+    const applied = applyProfile(baseRoles, profiles, wanted);
     return {
         gnomonDir,
-        config: loadToml(gnomonDir, "config.toml"),
+        profile: { name: applied.applied, requested: wanted, overridden: Boolean(profileOverride), problem: applied.problem },
+        config: cfg,
         policy: loadToml(gnomonDir, "policy.toml"),
         // roles.toml has [roles.X] headers → parseToml wraps in {roles: {...}}
-        roles: (loadToml(gnomonDir, "roles.toml").roles ?? {}),
-        profiles: loadToml(gnomonDir, "profiles"),
+        roles: applied.roles,
+        profiles,
         tools: loadToml(gnomonDir, "tools.toml"),
         // system.md is plain text, not TOML — read directly
         system: (() => {

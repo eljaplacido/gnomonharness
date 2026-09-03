@@ -37,6 +37,30 @@
   for any role declaring `temperature`/`top_p`, which the scaffold writes for
   **every** role. The payload now follows the endpoint's `kind`, which was
   already resolved and unused.
+- **`role_profile` now does something.** It was a published enumeration that
+  nothing read: `gnomon init` scaffolded `role_profile = "local_first"`, two
+  profile files shipped, `loadConfig` parsed them — and no line of the harness
+  ever applied one, while `enumerations --json` advertised
+  `["local_first","frontier_plan","all_remote"]` to a reader who would
+  reasonably conclude that picking one changed where inference goes. That is
+  this project's own dominant defect class sitting inside its own contract.
+
+  A profile merges **per field** over the base roles, so one that names a model
+  leaves the endpoint alone. `--profile <name>` overrides the surface and is
+  **disclosed at startup** the way `GNOMON_MODEL_URL` is, because it changes
+  behaviour without moving the hash. A named profile that does not exist is
+  **reported**, not ignored — silently running the base roles is how a profile
+  becomes decorative in the first place.
+
+  This is also the shortest path to what people build by hand:
+  `role_profile = "frontier_plan"` points `plan` at a cloud endpoint and leaves
+  the volume roles local, in one line instead of per-role edits across two files.
+
+  The repository's own profile files carried placeholder model tags
+  (`frontier:remote`, `local:large`) under a header reading *"NOT READ BY ANY
+  CODE PATH"* — true when written, and the reason the tags were never real. They
+  are real now. Scaffolded profiles declare no role overrides, so no existing
+  surface changes behaviour on upgrade.
 - **A turn now checks the `file:line` citations in its own answer.**
   `counters.citations` records checked / ok / broken / ambiguous, and the
   transcript names any that do not land. A citation is what lets a reader follow

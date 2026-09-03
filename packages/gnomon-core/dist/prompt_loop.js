@@ -4436,6 +4436,26 @@ export async function runPromptLoop(config, initialRole, options = {}) {
     {
         const ui = uiOf(state);
         reportTools();
+        // Which profile is in force, and whether a flag chose it.
+        //
+        // `role_profile` was published in the enumerations and read by nothing for
+        // the whole life of the project — the surface advertised that choosing
+        // local_first or frontier_plan changed where inference goes, and it did
+        // not. Now that it does, it says so: an applied profile rewrites role
+        // routing, and routing is the single largest source of run-to-run variance.
+        const prof = config.profile;
+        if (prof?.problem) {
+            console.log(paint(ui, "red", `  ✗ ${prof.problem} — running the base roles unchanged`));
+        }
+        else if (prof?.name && prof.overridden) {
+            // --profile is machine-scoped: it changes behaviour without moving the
+            // hash, exactly like GNOMON_MODEL_URL, so it gets the same treatment.
+            console.log(paint(ui, "yellow", `  note: --profile ${prof.name} overrides the surface's role_profile — ` +
+                `behaviour changed, surface hash did NOT`));
+        }
+        else if (prof?.name) {
+            console.log(paint(ui, "gray", `  profile: ${prof.name} (from the surface)`));
+        }
         // A machine-scoped route must never take effect silently.
         if (process.env.GNOMON_MODEL_URL) {
             console.log(paint(ui, "yellow", `  note: GNOMON_MODEL_URL overrides the surface's endpoint → ${process.env.GNOMON_MODEL_URL}`));

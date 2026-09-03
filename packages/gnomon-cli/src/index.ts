@@ -524,7 +524,7 @@ function readSecret(prompt: string): Promise<string> {
  */
 function resolveKeyVariable(args: CliArgs, named: string): string | null {
   try {
-    const config = loadConfig(args.dir);
+    const config = loadConfig(args.dir, args.flags['profile']);
     if (listEndpoints(config).includes(named)) {
       const ep = resolveEndpoint(config, named);
       if (!ep.api_key_env) {
@@ -683,7 +683,7 @@ function ask(prompt: string, fallback = ""): Promise<string> {
  */
 async function cmdEndpoint(args: CliArgs): Promise<void> {
   const sub = subcommandOr(args, "list");
-  const config = loadConfig(args.dir);
+  const config = loadConfig(args.dir, args.flags['profile']);
 
   // Load the machine-local key store BEFORE anything reads the environment.
   //
@@ -1008,7 +1008,7 @@ async function listModelsAt(endpoint: {
  * missing — that is an anchor that was removed.
  */
 async function cmdAudit(args: CliArgs): Promise<void> {
-  const config = loadConfig(args.dir);
+  const config = loadConfig(args.dir, args.flags['profile']);
   const settings = resolveAudit(config);
   const sub = subcommandOr(args, "show");
 
@@ -1136,7 +1136,7 @@ async function cmdTask(args: CliArgs): Promise<void> {
     process.exit(1);
   }
 
-  const config = loadConfig(args.dir);
+  const config = loadConfig(args.dir, args.flags['profile']);
   const record = await runTask(config, text, {
     role: args.role,
     yes: args.yes,
@@ -1158,7 +1158,7 @@ async function cmdTask(args: CliArgs): Promise<void> {
 }
 
 async function cmdSkill(args: CliArgs): Promise<void> {
-  const config = loadConfig(args.dir);
+  const config = loadConfig(args.dir, args.flags['profile']);
   const sub = subcommandOr(args, "list");
   const id = args.positional[0];
 
@@ -1270,14 +1270,14 @@ async function cmdLaunch(args: CliArgs): Promise<void> {
 }
 
 async function cmdPrompt(args: CliArgs): Promise<void> {
-  const config = loadConfig(args.dir);
+  const config = loadConfig(args.dir, args.flags['profile']);
   // A resumed session keeps its own role unless one is named here.
   const role = args.resume ? args.subcommand || undefined : args.subcommand || "implement";
   await runPromptLoop(config, role, { resume: args.resume });
 }
 
 async function cmdSessions(args: CliArgs): Promise<void> {
-  const config = loadConfig(args.dir);
+  const config = loadConfig(args.dir, args.flags['profile']);
   const store = resolveSessionStore(config);
 
   if (!store.persist) {

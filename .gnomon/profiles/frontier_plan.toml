@@ -1,22 +1,21 @@
-# Profile: frontier_plan
-# Use frontier for plan + implement. Critique stays local separate context.
+# frontier_plan — the hard reasoning goes to a cloud model, volume stays local.
+#
+# This is the shape people reach for and then build by hand: point `plan` at a
+# cloud endpoint and leave everything else alone. Doing it here means one line
+# in config.toml (`role_profile = "frontier_plan"`) instead of editing roles.toml
+# per role, and it is in the surface, so it is hashed and reviewable.
+#
+# `critique` deliberately stays local AND separate: it must not share context
+# with the implementer, and that is cheaper to guarantee on a local endpoint.
 
 [profile]
 name = "frontier_plan"
-role_profile = "frontier_plan"
+description = "plan on the cloud endpoint; implement, critique and smol stay local."
 
 [roles.plan]
-model = "frontier:remote"
-temperature = 0.1
+model = "glm-5.3"
+endpoint = "go"
 
 [roles.implement]
-model = "frontier:remote"
-temperature = 0.3
-
-[roles.critique]
-model = "local:large:separate"
-temperature = 0.1
-
-[roles.smol]
-model = "local:small"
-temperature = 0.2
+model = "qwen3.6:35b"
+endpoint = "local"

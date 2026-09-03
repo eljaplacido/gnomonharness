@@ -700,16 +700,69 @@ function loadToml<T = Record<string, unknown>>(
  * @param root Project root path
  * @returns Typed configuration object
  */
-export function loadConfig(root?: string): GnomonConfig {
+/**
+ * Which profile applies, and what it does.
+ *
+ * `role_profile` was a PUBLISHED ENUMERATION that nothing read. `gnomon init`
+ * scaffolded `role_profile = "local_first"` and shipped two profile files;
+ * `loadConfig` parsed them into `config.profiles`; and not one line of the
+ * harness ever applied them. Rule 6 was satisfied in the letter — the options
+ * were published — while `enumerations --json` advertised
+ * `["local_first","frontier_plan","all_remote"]` to a reader who would
+ * reasonably conclude that choosing one changed where inference goes. It did
+ * not, and there is no worse thing for a config key to do.
+ *
+ * It also happens to be the feature that would have saved the most pain: a user
+ * spent an evening hand-editing roles.toml to point `plan` at a cloud endpoint,
+ * which is exactly what `role_profile = "frontier_plan"` says.
+ *
+ * A profile may set any per-role field — model, endpoint, temperature, tools.
+ * It is merged OVER the base role, per field, so a profile that names only a
+ * model leaves the endpoint alone.
+ */
+export function applyProfile(
+  roles: Roles,
+  profiles: Profiles,
+  name: string | undefined
+): { roles: Roles; applied?: string; problem?: string } {
+  if (!name) return { roles };
+  const def = (profiles as Record<string, unknown>)[name] as
+    | { roles?: Record<string, Record<string, unknown>> }
+    | undefined;
+  if (!def) {
+    // Named and missing is a surface error, and it is reported rather than
+    // ignored: silently running the base roles is how a profile becomes
+    // decorative in the first place.
+    const known = Object.keys(profiles).sort().join(", ") || "none";
+    return { roles, problem: `profile "${name}" is not in .gnomon/profiles/ (have: ${known})` };
+  }
+  const overrides = def.roles ?? {};
+  const merged: Roles = { ...roles };
+  for (const [role, fields] of Object.entries(overrides)) {
+    merged[role] = { ...(merged[role] ?? {}), ...(fields as object) } as Roles[string];
+  }
+  return { roles: merged, applied: name };
+}
+
+export function loadConfig(root?: string, profileOverride?: string): GnomonConfig {
   const gnomonDir = resolveGnomonDir(root);
+  const baseRoles = ((loadToml<Record<string, unknown>>(gnomonDir, "roles.toml") as Record<string, unknown>).roles ?? {}) as Roles;
+  const cfg = loadToml<Config>(gnomonDir, "config.toml");
+  const profiles = loadToml<Profiles>(gnomonDir, "profiles") as unknown as Profiles;
+  // The surface names the default; --profile overrides it and is DISCLOSED at
+  // startup, the same way GNOMON_MODEL_URL is, because it changes behaviour
+  // without moving the hash.
+  const wanted = profileOverride ?? (cfg.defaults as { role_profile?: string } | undefined)?.role_profile;
+  const applied = applyProfile(baseRoles, profiles, wanted);
 
   return {
     gnomonDir,
-    config: loadToml<Config>(gnomonDir, "config.toml"),
+    profile: { name: applied.applied, requested: wanted, overridden: Boolean(profileOverride), problem: applied.problem },
+    config: cfg,
     policy: loadToml<Policy>(gnomonDir, "policy.toml"),
     // roles.toml has [roles.X] headers → parseToml wraps in {roles: {...}}
-    roles: ((loadToml<Record<string, unknown>>(gnomonDir, "roles.toml") as Record<string, unknown>).roles ?? {}) as Roles,
-    profiles: loadToml<Profiles>(gnomonDir, "profiles") as unknown as Profiles,
+    roles: applied.roles,
+    profiles,
     tools: loadToml<ToolsDef>(gnomonDir, "tools.toml"),
     // system.md is plain text, not TOML — read directly
     system: (() => {
@@ -725,6 +778,8 @@ export function loadConfig(root?: string): GnomonConfig {
 /** Complete gnomon configuration */
 export interface GnomonConfig {
   gnomonDir: string;
+  /** Which profile was applied to `roles`, and whether a flag chose it. */
+  profile?: { name?: string; requested?: string; overridden: boolean; problem?: string };
   config: Config;
   policy: Policy;
   roles: Roles;
