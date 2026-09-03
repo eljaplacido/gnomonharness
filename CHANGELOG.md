@@ -37,6 +37,15 @@
   for any role declaring `temperature`/`top_p`, which the scaffold writes for
   **every** role. The payload now follows the endpoint's `kind`, which was
   already resolved and unused.
+- **A turn now checks the `file:line` citations in its own answer.**
+  `counters.citations` records checked / ok / broken / ambiguous, and the
+  transcript names any that do not land. A citation is what lets a reader follow
+  an argument to the code, so one that lands nowhere is a false statement in the
+  most confidence-inspiring format an answer has — and nothing was checking
+  them. Deliberately conservative: it reports rather than editing the answer,
+  and a duplicated filename is **ambiguous, never broken**, because a checker
+  that manufactures false accusations trains its reader to ignore it. (An early
+  version of the standalone tool did exactly that to two correct citations.)
 - **A turn now measures what it did to the worktree instead of asserting it.**
   `counters.tree_delta` carries files / insertions / deletions from `git diff
   --numstat`, plus `crlf_only` — files whose entire change vanishes under

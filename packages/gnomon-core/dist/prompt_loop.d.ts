@@ -551,6 +551,18 @@ export interface TurnCounters {
      * It was not applying that to itself.
      */
     tree_delta?: TreeDelta;
+    /**
+     * file:line citations in the answer, checked against the tree. The other half
+     * of the same review finding: a citation is what lets a reader follow the
+     * argument to the code, so one that lands nowhere is a false statement in the
+     * most confidence-inspiring format an answer has.
+     */
+    citations?: {
+        checked: number;
+        ok: number;
+        broken: number;
+        ambiguous: number;
+    };
     /** Successful write/edit tool calls. */
     writes: number;
     /** Bash calls observed to change the worktree — shell-mediated work that

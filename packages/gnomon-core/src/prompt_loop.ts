@@ -10,6 +10,7 @@
 
 import * as readline from "node:readline";
 import { execFileSync } from "node:child_process";
+import { checkCitations } from "./citations.js";
 import { resolve, dirname, join, relative, sep} from "node:path";
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync} from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -1791,6 +1792,13 @@ export interface TurnCounters {
    * It was not applying that to itself.
    */
   tree_delta?: TreeDelta;
+  /**
+   * file:line citations in the answer, checked against the tree. The other half
+   * of the same review finding: a citation is what lets a reader follow the
+   * argument to the code, so one that lands nowhere is a false statement in the
+   * most confidence-inspiring format an answer has.
+   */
+  citations?: { checked: number; ok: number; broken: number; ambiguous: number };
   /** Successful write/edit tool calls. */
   writes: number;
   /** Bash calls observed to change the worktree — shell-mediated work that
@@ -6269,6 +6277,26 @@ export async function runPromptLoop(
       // SAYS "31 insertions" over a 2,492-line diff and is believed — an
       // external review of a real audit run found three errors of exactly that
       // shape and none in the code analysis itself.
+      // Citations in the answer, checked against the tree. Reported, never
+      // rewritten: the answer is the model's, and a harness that silently
+      // edited it would be doing the thing this exists to catch.
+      const cites = checkCitations(turn.content, resolve(state.config.gnomonDir, ".."));
+      turn.counters.citations = {
+        checked: cites.checked, ok: cites.ok,
+        broken: cites.broken.length, ambiguous: cites.ambiguous,
+      };
+      if (cites.broken.length > 0) {
+        progress.print(
+          paint(ui, "yellow",
+            `  [cites] ${cites.broken.length} of ${cites.checked} citation(s) in that answer do not land:`)
+        );
+        for (const b of cites.broken.slice(0, 5)) {
+          progress.print(paint(ui, "yellow", `          ${b.raw} — ${b.detail}`));
+        }
+      } else if (cites.checked > 0) {
+        progress.print(paint(ui, "gray", `  [cites] ${cites.ok}/${cites.checked} citation(s) check out`));
+      }
+
       const td = turn.counters.tree_delta;
       if (td && !td.unavailable && td.files > 0) {
         progress.print(
