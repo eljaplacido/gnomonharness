@@ -3065,6 +3065,50 @@ describe("request shape follows the endpoint kind", () => {
     expect(body).not.toHaveProperty("top_p");
   });
 
+  // The `options` leak was fixed by name, and the very next request failed on
+  // `tool_name` — same defect, one field along. So this asserts the WHOLE
+  // message shape against an allow-list rather than chasing fields.
+  it("never lets an Ollama-only message field reach an OpenAI endpoint", async () => {
+    const root = surfaceWith("openai", "https://example.invalid/v1/chat/completions");
+    const bodies: Array<Record<string, unknown>> = [];
+    let turn = 0;
+    const real = globalThis.fetch;
+    globalThis.fetch = (async (_u: string, init: { body: string }) => {
+      bodies.push(JSON.parse(init.body));
+      turn++;
+      // First response asks for a tool; the second answers. The tool RESULT
+      // message is what carried `tool_name`, so a single-turn probe misses it.
+      return turn === 1
+        ? { ok: true, json: async () => ({
+            message: { content: "", tool_calls: [{ id: "c1", function: { name: "read", arguments: "{\"path\":\".\"}" } }] },
+          }) }
+        : { ok: true, json: async () => ({ message: { content: "done" } }) };
+    }) as unknown as typeof fetch;
+    try {
+      await promptLoop.runTask(loadConfig(root), "look", { role: "smol", yes: true });
+    } finally {
+      globalThis.fetch = real;
+      rmSync(root, { recursive: true, force: true });
+    }
+
+    const allowed = new Set(["role", "content", "tool_calls", "tool_call_id", "name"]);
+    const offenders: string[] = [];
+    for (const body of bodies) {
+      for (const m of (body.messages as Array<Record<string, unknown>>) ?? []) {
+        for (const k of Object.keys(m)) if (!allowed.has(k)) offenders.push(k);
+      }
+      for (const k of Object.keys(body)) {
+        if (!["model", "messages", "stream", "temperature", "top_p", "tools"].includes(k)) {
+          offenders.push(`payload.${k}`);
+        }
+      }
+    }
+    expect(offenders, `OpenAI payload carried non-OpenAI fields: ${offenders.join(", ")}`).toEqual([]);
+    // and the turn actually reached the tool-result message this guards
+    expect(bodies.length).toBeGreaterThan(1);
+    expect(JSON.stringify(bodies)).toContain("tool_call_id");
+  });
+
   it("sends OpenAI top-level sampling params and NO options field", async () => {
     const body = await bodyFor("openai", "https://example.invalid/v1/chat/completions");
     expect(body.temperature).toBe(0.2);

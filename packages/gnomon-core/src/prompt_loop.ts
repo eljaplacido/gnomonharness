@@ -969,9 +969,32 @@ async function callEndpoint(
   //
   // `kind` is already resolved on the target and defaults to ollama, matching
   // how /endpoints renders it.
+  // Messages carry BOTH spellings of a tool result — `tool_call_id` (OpenAI)
+  // and `tool_name` (Ollama) — for the same "send both and hope" reason the
+  // sampling params did. Strict providers reject the surplus one:
+  //
+  //   400 Extra inputs are not permitted, field: 'messages[3].tool_name'
+  //
+  // Filtering by an ALLOW-LIST per kind, not by deleting the field this week's
+  // error happened to name. The `options` leak was fixed by name first, and the
+  // next request straight after failed on `tool_name` — same defect, one field
+  // along. A whitelist cannot drift that way: a field added to ChatMessage
+  // later is dropped for the backend that did not ask for it.
+  const OPENAI_MESSAGE_KEYS = new Set(["role", "content", "tool_calls", "tool_call_id", "name"]);
+  const OLLAMA_MESSAGE_KEYS = new Set(["role", "content", "tool_calls", "tool_name"]);
+  const isOllama = (target.kind ?? "ollama") === "ollama";
+  const allowedKeys = isOllama ? OLLAMA_MESSAGE_KEYS : OPENAI_MESSAGE_KEYS;
+  const wireMessages = messages.map((m) => {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(m as unknown as Record<string, unknown>)) {
+      if (v !== undefined && allowedKeys.has(k)) out[k] = v;
+    }
+    return out;
+  });
+
   const payload: Record<string, unknown> = {
     model: target.model,
-    messages,
+    messages: wireMessages,
     stream: false,
   };
   if ((target.kind ?? "ollama") === "ollama") {

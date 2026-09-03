@@ -37,6 +37,14 @@
   for any role declaring `temperature`/`top_p`, which the scaffold writes for
   **every** role. The payload now follows the endpoint's `kind`, which was
   already resolved and unused.
+- **Tool-result messages leaked Ollama's field spelling to OpenAI endpoints.**
+  `ChatMessage` carried both `tool_call_id` and `tool_name` — "both spellings,
+  since backends differ" — so the second tool call of any cloud turn died with
+  `400 Extra inputs are not permitted, field: 'messages[3].tool_name'`. Fixed by
+  filtering the payload through a **per-kind allow-list** rather than deleting
+  the field the error named: the `options` leak above was fixed by name, and the
+  very next request failed on `tool_name`, one field along. A whitelist cannot
+  drift that way.
 - **The scaffold invented a model-id prefix that does not exist.** Its comment
   claimed OpenCode Go ids are "prefixed `opencode-go/`". They are bare —
   `glm-5.3`, `deepseek-v4-flash`. A wrong id returns a 400 naming the *model*,
