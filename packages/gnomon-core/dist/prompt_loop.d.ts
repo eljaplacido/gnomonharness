@@ -509,11 +509,6 @@ export declare function pushNote(notes: RunNote[], turn: number, text: string,
  */
 limit?: number): RunNote[];
 export type StopReason = "answered" | "empty" | "stall" | "step_wall" | "cancelled" | "apparatus";
-/**
- * Per-turn tallies. Every field is a count of something the loop already
- * tracked; none of them is read back to decide anything, which is what keeps
- * this observation rather than control.
- */
 /** Measured worktree change for one turn. Absent outside a git worktree. */
 export interface TreeDelta {
     files: number;

@@ -1180,6 +1180,28 @@ limit = MAX_RUN_NOTES) {
     return notes.length > limit ? notes.slice(-limit) : notes;
 }
 /**
+ * Per-turn tallies. Every field is a count of something the loop already
+ * tracked; none of them is read back to decide anything, which is what keeps
+ * this observation rather than control.
+ */
+/**
+ * Stamp the answer's citation check onto the turn's counters.
+ *
+ * Inside the turn rather than in the interactive loop, so `gnomon task --json`
+ * carries it too — that is the scripted path, and a record is exactly where a
+ * measured fact belongs. It was in the loop only, and the one-shot record came
+ * back with `citations: null`.
+ */
+function stampCitations(counters, answer, root) {
+    try {
+        const c = checkCitations(answer, root);
+        counters.citations = { checked: c.checked, ok: c.ok, broken: c.broken.length, ambiguous: c.ambiguous };
+    }
+    catch {
+        // Bookkeeping must never fail a turn.
+    }
+}
+/**
  * Ask git what changed. Best-effort and bounded: a turn must not fail because
  * the project is not a repository, or because git is slow.
  */
@@ -1597,6 +1619,9 @@ depth = 0) {
     // exactly when someone wants to know what it left behind.
     const cancelled = () => {
         counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."));
+        // No answer was produced, so there is nothing to cite-check. Left unset
+        // rather than zeroed: "no citations checked" and "checked, none found"
+        // are different facts.
         return {
             content: CANCELLED,
             code: settle(code, 2),
@@ -1925,6 +1950,7 @@ depth = 0) {
             }
             // Measured at the end of the turn, from git — never the model's account.
             counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."));
+            stampCitations(counters, result.content, resolve(state.config.gnomonDir, ".."));
             return {
                 content: noteMarkupInAnswer(result.content, counters),
                 code: settle(code, result.code),
@@ -2019,6 +2045,7 @@ depth = 0) {
                 : result.content || note;
             // Measured at the end of the turn, from git — never the model's account.
             counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."));
+            stampCitations(counters, content, resolve(state.config.gnomonDir, ".."));
             return {
                 // The wall and stall paths are where markup actually survived: a turn
                 // cut off mid-emission still returns whatever it had.
@@ -4834,21 +4861,16 @@ export async function runPromptLoop(config, initialRole, options = {}) {
             // SAYS "31 insertions" over a 2,492-line diff and is believed — an
             // external review of a real audit run found three errors of exactly that
             // shape and none in the code analysis itself.
-            // Citations in the answer, checked against the tree. Reported, never
-            // rewritten: the answer is the model's, and a harness that silently
-            // edited it would be doing the thing this exists to catch.
-            const cites = checkCitations(turn.content, resolve(state.config.gnomonDir, ".."));
-            turn.counters.citations = {
-                checked: cites.checked, ok: cites.ok,
-                broken: cites.broken.length, ambiguous: cites.ambiguous,
-            };
-            if (cites.broken.length > 0) {
-                progress.print(paint(ui, "yellow", `  [cites] ${cites.broken.length} of ${cites.checked} citation(s) in that answer do not land:`));
-                for (const b of cites.broken.slice(0, 5)) {
-                    progress.print(paint(ui, "yellow", `          ${b.raw} — ${b.detail}`));
-                }
+            // Citations are checked inside the turn (see runAgenticTurn), so the
+            // one-shot `gnomon task --json` record carries them too -- that is the
+            // scripted path, and a record is exactly where a measured fact belongs.
+            // This only renders them.
+            const cites = turn.counters.citations;
+            if (cites && cites.broken > 0) {
+                progress.print(paint(ui, "yellow", `  [cites] ${cites.broken} of ${cites.checked} citation(s) in that answer do not land — ` +
+                    `re-read before trusting them`));
             }
-            else if (cites.checked > 0) {
+            else if (cites && cites.checked > 0) {
                 progress.print(paint(ui, "gray", `  [cites] ${cites.ok}/${cites.checked} citation(s) check out`));
             }
             const td = turn.counters.tree_delta;
