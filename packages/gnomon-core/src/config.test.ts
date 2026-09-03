@@ -988,7 +988,7 @@ describe("TOML conformance — the accepted subset is pinned, not implied", () =
       );
     });
 
-    it("seven of the eleven refused constructs are valid TOML 1.0", () => {
+    it("five of the nine refused constructs are valid TOML 1.0", () => {
       // The headline number for anyone writing a surface: most of what gnomon
       // refuses is a file every other TOML tool reads without complaint. That
       // is the cost of the zero-dependency parser, and publishing it is worth
@@ -996,8 +996,13 @@ describe("TOML conformance — the accepted subset is pinned, not implied", () =
       //
       // Checked against Python 3.12 tomllib offline on 2026-09-01, recorded in
       // toml_rejected.json; not re-run here, for the same reason as above.
-      expect(index.valid_toml_count).toBe(7);
-      expect(index.cases).toHaveLength(11);
+      // Was "seven of eleven" until 2026-09-03, when the dashed-key and
+      // quoted-key deviations were FIXED rather than re-pinned: both are valid
+      // TOML 1.0, both are now accepted, and their fixtures moved into
+      // toml_accepted.toml. The count drops by exactly the two that were fixed,
+      // which is the only honest way for this number to fall.
+      expect(index.valid_toml_count).toBe(5);
+      expect(index.cases).toHaveLength(9);
     });
 
     for (const c of index.cases as any[]) {

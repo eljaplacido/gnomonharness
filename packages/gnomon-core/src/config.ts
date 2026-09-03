@@ -483,11 +483,31 @@ export function parseToml(content: string): Record<string, unknown> {
       continue;
     }
 
-    // Key = value
-    const kvMatch = trimmed.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.+)$/);
+    // Key = value.
+    //
+    // Three key forms, all of them valid TOML and all three REJECTED here until
+    // 2026-09-03 with a hard "cannot parse" that killed the whole surface load:
+    //
+    //   max-steps = 4      bare keys may contain '-'; the old pattern was
+    //                      [a-zA-Z_][a-zA-Z0-9_]* and allowed no dash at all
+    //   "0" = "result"     a quoted (basic-string) key — the natural spelling
+    //                      for the numeric keys an [exit_codes] block wants
+    //   'lit' = 1          a literal-string key
+    //
+    // The error said `cannot parse "max-steps = 4"`, which reads as "you wrote
+    // invalid TOML" to someone who did not. For a harness whose proposition is
+    // explicit configuration, refusing correct configuration is worse than most
+    // of the things it refuses on purpose.
+    //
+    // Dotted keys (`a.b = 1`) are still not supported, and still throw — which
+    // is the honest outcome, because pretending to read one would put the value
+    // somewhere the writer did not ask for.
+    const kvMatch = trimmed.match(
+      /^(?:([A-Za-z0-9_-]+)|"([^"]*)"|'([^']*)')\s*=\s*(.+)$/
+    );
     if (kvMatch) {
-      const key = kvMatch[1];
-      const value = stripComment(kvMatch[2]);
+      const key = kvMatch[1] ?? kvMatch[2] ?? kvMatch[3]!;
+      const value = stripComment(kvMatch[4]!);
       currentObj[key] = parseValue(value);
       continue;
     }

@@ -249,8 +249,6 @@ These raise `.gnomon/<file> line <n>: cannot parse "<text>". Expected a
 |---|---|---|
 | Inline comment on a **header** | `[tools] # note` | **yes** |
 | Dotted key in key position | `local.url = "..."` | **yes** |
-| Dash in a **key** | `max-steps = 4` | **yes** |
-| Quoted key | `"max steps" = 4` | **yes** |
 | Multi-line basic string | `"""` … `"""` | **yes** |
 | Multi-line literal string | `'''` … `'''` | **yes** |
 | `]` inside a string in a **multi-line** array | `[`⏎`"a]b",`⏎`]` | **yes** |
@@ -259,11 +257,21 @@ These raise `.gnomon/<file> line <n>: cannot parse "<text>". Expected a
 | Empty header | `[]` | no |
 | A line that is neither | `this is not toml` | no |
 
-**Seven of those eleven are valid TOML 1.0** — verified against Python 3.12
-`tomllib`, offline, 2026-09-01. That is the price of the zero-dependency
-parser, and it is published rather than left to be discovered at startup. Note
-also the inconsistency in rows 1 and 3: a dash is fine in a table *name* and
-fatal in a *key*, because the header pattern does not validate the name at all.
+**Five of those nine are valid TOML 1.0** — verified against Python 3.12
+`tomllib`, offline; the accepted golden was regenerated from `tomllib` again on
+2026-09-03. That is the price of the zero-dependency parser, and it is published
+rather than left to be discovered at startup.
+
+It was *seven of eleven* until 2026-09-03. A **dash in a key** (`max-steps = 4`)
+and a **quoted key** (`"max steps" = 4`) are both valid TOML 1.0 and are now
+**accepted**; their fixtures moved from `conformance/toml_rejected/` into
+`toml_accepted.toml`. The count fell by exactly the two that were fixed, which
+is the only honest way for this number to fall — publishing a smaller number by
+deleting a fixture would be the same dishonesty one level up.
+
+The dashed case also closed an inconsistency this table used to record: a dash
+was accepted in a table *name* and fatal in a *key*, because the header pattern
+never validated the name at all.
 
 Three of these — the two multi-line strings and the bracketed array — name a
 line **past** the construct that caused the failure, because the parser is
@@ -351,7 +359,7 @@ in the index, so a fixture cannot be added that asserts nothing.
 
 **What CI does not check.** The cross-check against a real TOML parser. The
 claim that `toml_accepted.toml` is valid TOML 1.0 and parses to the same tree,
-that seven rejected cases are valid TOML, and the `toml` halves of the two
+that five rejected cases are valid TOML, and the `toml` halves of the two
 divergence goldens were all produced by Python 3.12 `tomllib`, once, offline,
 on 2026-09-01. CI has no Python and the harness has no TOML library, both on
 purpose, so **nothing re-runs it**: an edit to any of these fixtures has to be

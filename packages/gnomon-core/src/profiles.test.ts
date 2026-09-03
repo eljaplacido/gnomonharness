@@ -206,3 +206,45 @@ describe("extensions are hashed but inert, and say so", () => {
     rmSync(root, { recursive: true, force: true });
   });
 });
+
+// Three valid TOML key forms were rejected with a hard "cannot parse" that
+// killed the whole surface load. The message read as "you wrote invalid TOML"
+// to someone who had not — and for a harness whose proposition is explicit
+// configuration, refusing correct configuration is worse than most of what it
+// refuses on purpose.
+describe("the TOML parser accepts valid keys", () => {
+  const parse = (body: string): Record<string, unknown> => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-toml-"));
+    mkdirSync(join(root, ".gnomon"), { recursive: true });
+    writeFileSync(join(root, ".gnomon", "config.toml"), body);
+    writeFileSync(join(root, ".gnomon", "roles.toml"), `[roles.smol]\nmodel = "m"\n`);
+    writeFileSync(join(root, ".gnomon", "system.md"), "x\n");
+    try {
+      return loadConfig(root).config as unknown as Record<string, unknown>;
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+
+  it("accepts a dash in a bare key", () => {
+    const d = parse(`[defaults]\nmax-steps = 4\n`).defaults as Record<string, unknown>;
+    expect(d["max-steps"]).toBe(4);
+  });
+
+  it("accepts a quoted key — the natural spelling for numeric [exit_codes] keys", () => {
+    const d = parse(`[exit_codes]\n"0" = "result"\n`).exit_codes as Record<string, unknown>;
+    expect(d["0"]).toBe("result");
+  });
+
+  it("accepts a literal-string key", () => {
+    const d = parse(`[defaults]\n'lit' = 1\n`).defaults as Record<string, unknown>;
+    expect(d["lit"]).toBe(1);
+  });
+
+  it("still THROWS on a line it genuinely cannot read", () => {
+    // The silence this replaced was the dangerous part: `[roles.verifier` with
+    // the bracket missing used to hoist its keys to the top level, so a role
+    // appeared to exist and did not. That must keep throwing.
+    expect(() => parse(`[defaults]\nthis is not toml\n`)).toThrow(/cannot parse/);
+  });
+});

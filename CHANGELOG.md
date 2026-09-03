@@ -37,6 +37,21 @@
   for any role declaring `temperature`/`top_p`, which the scaffold writes for
   **every** role. The payload now follows the endpoint's `kind`, which was
   already resolved and unused.
+- **The TOML parser accepts two valid key forms it used to refuse.** A dash in a
+  key (`max-steps = 4`) and a quoted key (`"max steps" = 4`) are both valid
+  TOML 1.0, and both produced a hard `cannot parse` that stopped gnomon
+  starting — a message reading "you wrote invalid TOML" to someone who had not.
+  A literal-string key (`'lit' = 1`) is accepted too. Dotted keys in key
+  position still throw, which stays correct: pretending to read one would put
+  the value somewhere the writer did not ask for.
+
+  The fixtures moved rather than being deleted: `conformance/toml_rejected/`
+  drops from eleven cases to nine and its valid-TOML count from **seven to
+  five**, because exactly two were fixed. `docs/CONTRACTS.md` §5.2 says so.
+  Publishing a smaller number by deleting a fixture would be the same
+  dishonesty one level up. The accepted golden was regenerated from Python
+  `tomllib`, the same independent parser the suite was originally checked
+  against — not from gnomon's own output.
 - **`.gnomon/extensions/` is disclosed as hashed-but-inert.** Every file under
   `.gnomon/` is in the surface hash, extensions included — and nothing in this
   build loads them. So dropping an extension in moves the hash, which is the
