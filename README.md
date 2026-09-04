@@ -1514,6 +1514,7 @@ Wiring them to subcommands is not done.
 |---|---|
 | `gnomon launch` | Create `.gnomon/` if missing, then open the loop. **The one to remember.** |
 | `gnomon init [--from <path>] [--force]` | Write a surface. `--from` copies an existing one. |
+| `gnomon migrate [--check]` | Bring an existing `.gnomon/` up to the current shipped defaults. `--check` reports without writing and exits 1 if anything is pending. |
 | `gnomon prompt [--continue \| --resume <id>]` | Interactive loop. |
 | `gnomon task "<what to do>" [--role <name>] [--yes] [--json]` | One task, no terminal. Exit code carries the bucket. |
 | `gnomon sessions` | Saved sessions. |

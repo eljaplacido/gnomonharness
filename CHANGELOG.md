@@ -62,10 +62,28 @@
 
   Migrating it automatically was considered and rejected: `.gnomon/` is
   content-hashed and human-owned, and a release that edits a committed surface
-  moves the hash under a user who did not ask for it. Announcing it is the
-  honest option even though it is the one more people will miss.
+  moves the hash under a user who did not ask for it. **`gnomon migrate` is the
+  middle**, added below: never automatic, one command, and it says what it
+  changed and why.
 
 ### Added
+
+- **`gnomon migrate` — one command to bring an existing surface up to the
+  current defaults.** `gnomon init` writes every default explicitly and the code
+  default applies only when a key is absent, so changing a default in the source
+  changes it for new projects and for nobody else. This is the command that
+  closes that gap without a release ever editing a surface on its own.
+
+  It rewrites one line at a time with a targeted match, never by parsing the
+  TOML and re-serialising it: a round trip through a parser drops every comment
+  in the file, and the scaffold's comments are most of what makes the surface
+  readable. It only rewrites a value that **was the old default** — a value that
+  is neither the old nor the new one was chosen by somebody, and the command has
+  no way to tell a deliberate choice from an inherited one, so it does not try.
+  It prints the surface hash before and after, because the hash moving is the
+  point: behaviour changed and the record should say so.
+
+  `--check` reports without writing and exits 1, so CI can gate on it.
 
 - **Tool output too large for the window is written to `.gnomon-out/` instead
   of being discarded.** The truncation notice used to end *"narrow it instead"*.

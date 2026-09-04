@@ -15,6 +15,7 @@
 
 import {
   harnessBuild,
+  recomputeManifest,
   declaredKeyVars,
   checkRoleModels,
   loadConfig,
@@ -73,6 +74,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runTui } from "gnomon-tui";
 import { initSurface } from "./init.js";
+import { pendingMigrations, applyMigrations, MIGRATIONS } from "./migrate.js";
 
 // ---------------------------------------------------------------------------
 // Argument parsing (minimal, no deps)
@@ -1201,6 +1203,64 @@ async function cmdSkill(args: CliArgs): Promise<void> {
   process.exit(1);
 }
 
+async function cmdMigrate(args: CliArgs): Promise<void> {
+  const check = args.flags.check === "true";
+  let gnomonDir: string;
+  try {
+    gnomonDir = args.dir ? join(resolve(args.dir), ".gnomon") : resolveGnomonDir();
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+  if (!existsSync(gnomonDir)) {
+    console.error(
+      `No .gnomon/ at ${gnomonDir} — nothing to migrate. ` +
+        `\`gnomon init\` writes a new surface at the current defaults.`
+    );
+    process.exit(1);
+  }
+
+  const before = recomputeManifest(gnomonDir).surface_hash;
+  const pending = pendingMigrations(gnomonDir);
+
+  console.log(`${gnomonDir}`);
+  console.log(`  surface ${before.slice(0, 16)}…\n`);
+
+  if (pending.length === 0) {
+    console.log(
+      `Already current — nothing to change (${MIGRATIONS.length} migration(s) known).`
+    );
+    return;
+  }
+
+  for (const p of pending) {
+    console.log(`  [${p.id}]  .gnomon/${p.file}`);
+    console.log(`    ${p.what}`);
+    for (const line of p.why) console.log(`      ${line}`);
+    console.log();
+  }
+
+  if (check) {
+    console.log(
+      `${pending.length} change(s) pending. Nothing was written (--check).\n` +
+        `Run \`gnomon migrate\` to apply them.`
+    );
+    // Non-zero so CI can gate on it.
+    process.exit(1);
+  }
+
+  applyMigrations(pending);
+  const after = recomputeManifest(gnomonDir).surface_hash;
+  console.log(`${pending.length} change(s) applied.`);
+  console.log(`  surface ${before.slice(0, 16)}… → ${after.slice(0, 16)}…`);
+  console.log(
+    `\nThe surface hash moved, which is the point: behaviour changed and the\n` +
+      `record now says so. Review with \`git diff .gnomon/\` and commit it.\n` +
+      `If you had chosen one of these values deliberately, revert that line —\n` +
+      `this command cannot tell a chosen value from an inherited one.`
+  );
+}
+
 async function cmdInit(args: CliArgs): Promise<void> {
   let result;
   try {
@@ -1335,6 +1395,7 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "prompt", aliases: ["run"] },
   { name: "loop", aliases: ["loops"] },
   { name: "tui" },
+  { name: "migrate" },
 ];
 
 function showHelp(): void {
@@ -1354,6 +1415,11 @@ Commands:
   init [--dir <path>] [--from <path>] [--force]
     Write a .gnomon/ surface into a project. --from copies an existing
     surface instead of the built-in starter templates.
+
+  migrate [--dir <path>] [--check]
+    Bring an existing .gnomon/ up to the current shipped defaults. Prints
+    what it changes and why; --check reports without writing. Never runs
+    on its own — a release does not edit a surface you committed.
 
   surface [manifest|hash|paths] [--dir <path>]
     Show surface hash, manifest, or paths for .gnomon/ tree
@@ -1485,6 +1551,9 @@ async function main(): Promise<void> {
       break;
     case "init":
       await cmdInit(args);
+      break;
+    case "migrate":
+      await cmdMigrate(args);
       break;
     case "key":
     case "keys":
