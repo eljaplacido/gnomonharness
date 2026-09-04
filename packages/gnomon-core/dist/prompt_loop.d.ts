@@ -11,7 +11,7 @@ import * as readline from "node:readline";
 import { GnomonConfig, routeRole, ResolvedRouting, ResolvedUi, SurfaceProblem, EndpointConfig } from "./config.js";
 import { Progress } from "./render.js";
 export { isLocalEndpoint } from "./config.js";
-import { Todo, type SurfaceDrift, Approver, SandboxLevel, SurfaceConsent, RunNote } from "./tools.js";
+import { Todo, type SurfaceDrift, Approver, SandboxLevel, SurfaceConsent, RunNote, type SpillSink } from "./tools.js";
 import { type McpRegistry } from "./mcp.js";
 import { AuditTrail } from "./audit.js";
 import { SessionListEntry } from "./session_store.js";
@@ -120,6 +120,14 @@ export interface PromptState {
     todos?: Todo[];
     /** Notes this run kept about itself. Outside the surface, like sessions. */
     notes?: RunNote[];
+    /**
+     * Where over-long tool output is written instead of being discarded.
+     *
+     * Session-scoped rather than turn-scoped on purpose: the sink numbers the
+     * files it writes, and a fresh one per turn would renumber from 001 and
+     * overwrite a file an earlier turn told the model to read.
+     */
+    spill?: SpillSink;
 }
 /**
  * Bracketed paste. \x1b[?2004h asks the terminal to wrap pasted text in these.

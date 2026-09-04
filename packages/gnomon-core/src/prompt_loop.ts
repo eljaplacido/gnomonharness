@@ -11,7 +11,7 @@
 import * as readline from "node:readline";
 import { execFileSync } from "node:child_process";
 import { checkCitations } from "./citations.js";
-import { resolve, dirname, join, relative, sep} from "node:path";
+import { resolve, dirname, join, relative, sep, basename } from "node:path";
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync} from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
@@ -71,6 +71,8 @@ import {
   RunNote,
   concurrentSafe,
   globToRegExp,
+  createSpillSink,
+  type SpillSink,
 } from "./tools.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { harnessBuild } from "./build.js";
@@ -79,7 +81,9 @@ import {
   loadSkills,
   loadProposedSkills,
   selectSkills,
+  roleSkills,
   applySkills,
+  SKILLS_DIR,
   withWorkingContext,
 } from "./skills.js";
 import { AuditTrail, resolveAudit } from "./audit.js";
@@ -203,6 +207,14 @@ export interface PromptState {
   todos?: Todo[];
   /** Notes this run kept about itself. Outside the surface, like sessions. */
   notes?: RunNote[];
+  /**
+   * Where over-long tool output is written instead of being discarded.
+   *
+   * Session-scoped rather than turn-scoped on purpose: the sink numbers the
+   * files it writes, and a fresh one per turn would renumber from 001 and
+   * overwrite a file an earlier turn told the model to read.
+   */
+  spill?: SpillSink;
 }
 
 /** The id this session saves under, or a placeholder before one is assigned. */
@@ -2062,9 +2074,20 @@ export function buildSystemPrompt(
   role: string,
   input: string
 ): string {
-  const active = selectSkills(loadSkills(state.config), role, input);
+  const all = loadSkills(state.config);
+  const active = selectSkills(all, role, input);
+  // Everything this role may use that did not fire this turn, listed by name
+  // and path only. Derived from the surface and the role, so it is the same on
+  // every machine with the same checkout.
+  const chosen = new Set(active.map((s) => s.id));
+  const dormant = roleSkills(all, role).filter((s) => !chosen.has(s.id));
   return withWorkingContext(
-    applySkills(state.config.system.content ?? "", active) + runNotesBlock(state)
+    applySkills(
+      state.config.system.content ?? "",
+      active,
+      dormant,
+      `${basename(state.config.gnomonDir)}/${SKILLS_DIR}`
+    ) + runNotesBlock(state)
   );
 }
 
@@ -2126,6 +2149,14 @@ export async function runAgenticTurn(
     approve: deps.approve,
     timeoutMs: toolTimeoutMs(config),
     maxOutputBytes: 32_000,
+    // Created once per session and memoised, so file numbering is continuous
+    // across turns. Before a session id is assigned there is still a process
+    // to name, and scratch from an unnamed run is still better than bytes
+    // thrown away.
+    spill: (state.spill ??= createSpillSink(
+      resolve(config.gnomonDir, ".."),
+      state.sessionId ?? `pid-${process.pid}`
+    )),
     network,
     // Turn-scoped: a command that blocked once will block again, and the loop
     // owns the lifetime of that fact.

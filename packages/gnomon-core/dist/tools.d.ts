@@ -249,6 +249,24 @@ export interface ToolContext {
     /** Cap on bytes returned to the model from read/bash */
     maxOutputBytes: number;
     /**
+     * Where output too large for the window is kept instead of being thrown away.
+     *
+     * Truncation used to be the whole answer: the model got the first 32k and a
+     * note saying "narrow it instead". That note is honest and it is also the
+     * wrong advice for the measured failure -- roughly 41% of benchmark trials
+     * end at the timeout cap, and the long tail is a model re-running a long
+     * command. Telling it to run a *different* long command does not help; the
+     * bytes it needed already existed and were discarded.
+     *
+     * So the full text is written beside the surface and the note names the
+     * path, which `read` and `grep` can reach at every sandbox level because it
+     * is inside the root. Absent, or returning null, means today's behaviour
+     * exactly: truncate and say so. A path is never named unless the write
+     * succeeded, because a citation to a file that is not there is worse than
+     * the truncation it replaced.
+     */
+    spill?: SpillSink;
+    /**
      * The session checklist `todo` reads and replaces.
      *
      * Supplied by the loop, which owns session state. Absent means the tool is
@@ -503,6 +521,33 @@ export declare function writeAllowed(ctx: ToolContext, abs: string): {
     listed: string;
 };
 export declare const JOB_LOG_DIR = ".gnomon-jobs";
+/**
+ * Where output too large for the context window is kept.
+ *
+ * Beside the surface, like `.gnomon-jobs/`, `.gnomon-sessions/` and
+ * `.gnomon-audit/` — deliberately NOT inside `.gnomon/`, because every file
+ * under there is content-hashed and a tool writing one would move the surface
+ * hash mid-session. That is the hash announcing a behaviour change that did
+ * not happen, which is the one thing it must never do.
+ */
+export declare const OVERFLOW_DIR = ".gnomon-out";
+/**
+ * Save one over-long tool output, returning a root-relative path or null.
+ *
+ * Null on any failure, and every caller treats null as "no file exists" — a
+ * harness that names a path it did not manage to write has told the model to
+ * read something that is not there.
+ */
+export type SpillSink = (text: string, label: string) => string | null;
+/**
+ * A sink that writes under `<root>/.gnomon-out/<session>/`.
+ *
+ * Per session, not per process, so `--continue` can still reach a file an
+ * earlier turn cited. Older session directories are pruned to `keep` on the
+ * first write of a new one: this is scratch, it holds conversation-derived
+ * text, and it must not grow without bound in someone's repository.
+ */
+export declare function createSpillSink(root: string, session: string, keep?: number): SpillSink;
 export declare function backgroundRecipe(command: string, log?: string): string;
 /**
  * Record something this run learned, for later steps in the same run to read.

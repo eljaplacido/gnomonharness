@@ -12,6 +12,7 @@ import {
   loadSkills,
   loadProposedSkills,
   selectSkills,
+  roleSkills,
   applySkills,
   proposeSkill,
   acceptSkill,
@@ -195,5 +196,68 @@ describe("working context", () => {
     expect(withWorkingContext("SYS").indexOf("SYS")).toBeLessThan(
       withWorkingContext("SYS").indexOf("Working context")
     );
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Progressive disclosure.
+//
+// A skill whose `match` is slightly wrong used to be indistinguishable from a
+// skill nobody wrote: hashed into the surface, listed by `gnomon skill list`,
+// and never once mentioned to the model. Naming the dormant ones costs a line
+// each, and it is the only way the mistake ever gets noticed.
+
+describe("skills the model is told about but not given", () => {
+  const mk = (over: Partial<Skill>): Skill => ({
+    id: "x", name: "x", body: "BODY_TEXT", proposed: false, ...over,
+  });
+
+  it("roleSkills keeps what the role may use, whatever the input was", () => {
+    const all = [
+      mk({ id: "a", roles: ["implement"] }),
+      mk({ id: "b", roles: ["verifier"] }),
+      mk({ id: "c" }),
+    ];
+    expect(roleSkills(all, "implement").map((s) => s.id)).toEqual(["a", "c"]);
+  });
+
+  it("lists a non-matching skill by path, and withholds its body", () => {
+    const dormant = mk({
+      id: "cargo-layout",
+      name: "Cargo layout",
+      description: "where tests live",
+      body: "BODY_TEXT",
+    });
+    const out = applySkills("SYS", [], [dormant], ".gnomon/skills");
+    expect(out).toContain(".gnomon/skills/cargo-layout.md");
+    expect(out).toContain("Cargo layout");
+    expect(out).toContain("where tests live");
+    // The point of progressive disclosure: the body costs nothing until asked.
+    expect(out).not.toContain("BODY_TEXT");
+  });
+
+  it("tells the model the description is a label, not the note", () => {
+    const out = applySkills("SYS", [], [mk({ id: "a", description: "d" })]);
+    // A model that acts on a one-line description instead of reading the file
+    // has been given a worse version of the skill, not a cheaper one.
+    expect(out).toMatch(/read/i);
+    expect(out).toMatch(/not act on the description alone/i);
+  });
+
+  it("still inlines the body of a skill that DID match", () => {
+    const out = applySkills("SYS", [mk({ id: "hit", body: "BODY_TEXT" })], []);
+    expect(out).toContain("BODY_TEXT");
+  });
+
+  it("says nothing at all when there is nothing to say", () => {
+    expect(applySkills("SYS", [], [])).toBe("SYS");
+  });
+
+  it("the dormant list is derived from the surface, so it is machine-stable", () => {
+    const all = [mk({ id: "b" }), mk({ id: "a" })];
+    const once = applySkills("SYS", [], roleSkills(all, "implement"));
+    const twice = applySkills("SYS", [], roleSkills(all, "implement"));
+    expect(once).toBe(twice);
   });
 });

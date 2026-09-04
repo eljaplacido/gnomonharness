@@ -26,7 +26,79 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`compaction` now defaults to `summary`, not `discard`.** This project
+  measured its own default at **0/9** on context retention against **9/9** for
+  `summary` ([context-2026-08-31](benchmarks/results/context-2026-08-31/)), and
+  then shipped the losing one for another four days. The measurement was
+  already in `docs/EVIDENCE.md`; nothing acted on it. Reading LangChain's
+  `deepagents` — which summarises at a token threshold by default — is what
+  made the omission visible, which is worth recording as the actual cause.
+
+  A surface whose `context.summary_role` is missing still degrades to
+  discarding, with a message naming how many turns went; that path is
+  unchanged and is why the new default is safe. The scaffold's `smol` role
+  runs on the `local` endpoint, so the default costs a local call and no money,
+  and `docs.test.ts` now asserts both — that a scaffolded surface declares the
+  role the default needs, and that it is reachable without a key.
+
+  **This will not move any Terminal-Bench number.** The same result recorded
+  **zero compaction events across 224 trials**, because those tasks never reach
+  the window. It changes long interactive sessions, which is where the 0/9 was
+  measured.
+
+### Added
+
+- **Tool output too large for the window is written to `.gnomon-out/` instead
+  of being discarded.** The truncation notice used to end *"narrow it instead"*.
+  That is honest advice and it is the wrong advice for the measured failure:
+  ~41% of benchmark trials end at the timeout cap and the long tail is a model
+  re-running a long command, so telling it to run a *different* long command
+  does not help — the bytes it needed already existed and were thrown away.
+  The notice now names a path and tells the model to `grep` it.
+
+  It says `grep` and not `read` because the first version said "read or grep"
+  and **both halves were wrong when measured end to end**: a file that
+  overflowed the window overflows it again on the way back, so `read` returned
+  another truncated prefix and wrote a second, larger copy — and `grep` on a
+  file path silently found nothing (see below). Reading an offloaded file no
+  longer offloads it again, and the two defects have tests.
+
+  Deliberately beside the surface, never inside `.gnomon/`: a tool writing into
+  a content-hashed directory would move the surface hash mid-session, which is
+  the hash announcing a behaviour change that did not happen. Asserted, not
+  described — a test fails if the path ever starts with `.gnomon/`.
+
+  No path is named unless the write succeeded. A read-only checkout, a full
+  disk or a refused directory all fall back to exactly the previous message,
+  because a citation to a file that is not there is worse than the truncation
+  it replaced. Scratch is per session so `--continue` can still reach a file an
+  earlier turn cited, and older session directories are pruned to the last five.
+
+- **Skills that did not match are listed by name and path.** A skill whose
+  `match` pattern is slightly wrong was indistinguishable from a skill nobody
+  wrote: hashed into the surface, listed by `gnomon skill list`, and never once
+  mentioned to the model. Its body still costs nothing until asked for — the
+  prompt carries one line per dormant skill and the file path to `read`. The
+  list is derived from the surface and the role, not from model judgement, so
+  the same checkout produces the same list on every machine. Skills excluded by
+  `roles` are not listed, because they are not for this role at all.
+
 ### Fixed
+
+- **`grep` answered "no match" for a file that contained the pattern.** Its
+  `path` argument was documented as "Directory to search under" and the walker
+  called `readdirSync` on it; given a file that throws `ENOTDIR`, the catch
+  meant for an unreadable directory swallowed it, and the search reported
+  `No match for /x/ under path/to/file`. **A wrong answer shaped like a valid
+  negative**, which is the worst kind this harness can give: a model that greps
+  one file and is told there is nothing there stops looking. A file is now a
+  scope of exactly one file, `include` is tested against the path itself rather
+  than an empty string, and the schema says "File or directory".
+
+  Found by following this project's own new advice — the overflow notice tells
+  the model to grep the offloaded file, and it did not work.
 
 - **No strict OpenAI-compatible provider worked at all.** The request carried
   sampling params in *both* shapes — top-level for OpenAI and a nested `options`

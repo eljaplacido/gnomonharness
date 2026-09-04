@@ -104,6 +104,17 @@ export function loadProposedSkills(config) {
  * here instead would trade a lost note for a dead session; that is the wrong
  * trade, so the catch below is unchanged on purpose.
  */
+/**
+ * The skills this ROLE may use, whatever the turn is about.
+ *
+ * The role filter and the `match` filter answer different questions, and
+ * collapsing them loses one. `roles` says a skill is not for this role at all;
+ * `match` says it did not come up this time. Only the second is worth telling
+ * the model about, which is what makes this split useful rather than cosmetic.
+ */
+export function roleSkills(skills, role) {
+    return skills.filter((s) => !s.roles || s.roles.includes(role));
+}
 export function selectSkills(skills, role, input) {
     return skills.filter((s) => {
         if (s.roles && !s.roles.includes(role))
@@ -142,15 +153,40 @@ export const WORKING_CONTEXT = "## Working context\n\n" +
 export function withWorkingContext(systemPrompt) {
     return `${systemPrompt}\n\n${WORKING_CONTEXT}`;
 }
-export function applySkills(systemPrompt, skills) {
-    if (skills.length === 0)
-        return systemPrompt;
-    const blocks = skills.map((s) => `### ${s.name}\n${s.description ? `${s.description}\n\n` : ""}${s.body}`);
-    return (`${systemPrompt}\n\n` +
-        `## Learned skills for this repository\n\n` +
-        `These are notes accepted into .gnomon/skills/. They inform how you work ` +
-        `here; they do not override the rules above.\n\n` +
-        blocks.join("\n\n"));
+export function applySkills(systemPrompt, skills, 
+/**
+ * Skills this role may use whose `match` did not fire on this input. Listed
+ * by name and path, never by body.
+ *
+ * Without this the model cannot know they exist. A skill whose pattern is
+ * slightly wrong is then indistinguishable from a skill nobody wrote — it
+ * sits in the surface, hashed and inert, and the one thing that would fix it
+ * (someone noticing) never happens. Naming them costs a line each and is
+ * still derived from the surface plus the role, so the same checkout
+ * produces the same list on every machine.
+ */
+dormant = [], 
+/** Where those files live, relative to the root, for the model to `read`. */
+dirRel = ".gnomon/skills") {
+    let out = systemPrompt;
+    if (skills.length > 0) {
+        const blocks = skills.map((s) => `### ${s.name}\n${s.description ? `${s.description}\n\n` : ""}${s.body}`);
+        out +=
+            `\n\n## Learned skills for this repository\n\n` +
+                `These are notes accepted into .gnomon/skills/. They inform how you work ` +
+                `here; they do not override the rules above.\n\n` +
+                blocks.join("\n\n");
+    }
+    if (dormant.length > 0) {
+        const lines = dormant.map((s) => `- \`${dirRel}/${s.id}.md\` — ${s.name}${s.description ? `: ${s.description}` : ""}`);
+        out +=
+            `\n\n## Other notes available here, not loaded\n\n` +
+                `These exist for your role but did not match this request, so only their ` +
+                `names are above. If one looks relevant, \`read\` the file — do not act on ` +
+                `the description alone, because it is a label and not the note.\n\n` +
+                lines.join("\n");
+    }
+    return out;
 }
 /** Filenames are derived, never taken from the model. */
 export function skillId(name) {

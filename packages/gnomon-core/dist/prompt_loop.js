@@ -10,17 +10,17 @@
 import * as readline from "node:readline";
 import { execFileSync } from "node:child_process";
 import { checkCitations } from "./citations.js";
-import { resolve, dirname, join, relative, sep } from "node:path";
+import { resolve, dirname, join, relative, sep, basename } from "node:path";
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { routeRole, listRoles, listProfiles, resolveContext, resolveVerify, resolveResilience, resolveExtraRoots, resolveExec, resolveChain, declaredKeyVars, resolveLoop, LOOP_DEFAULTS, resolveUi, resolveEndpoint, resolveRouting, recomputeManifest, routeInput, listEndpoints, isLocalEndpoint, endpointClass, parseMetaFields, META_FIELDS, COT_MODES, loadConfig, auditSurface, probeEndpointAuth, } from "./config.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence, safeForPrompt, } from "./render.js";
 export { isLocalEndpoint } from "./config.js";
-import { buildToolSet, executeTool, needsApproval, concurrentSafe, globToRegExp, } from "./tools.js";
+import { buildToolSet, executeTool, needsApproval, concurrentSafe, globToRegExp, createSpillSink, } from "./tools.js";
 import { connectMcp } from "./mcp.js";
 import { harnessBuild } from "./build.js";
 import { mapBucket } from "./session.js";
-import { loadSkills, loadProposedSkills, selectSkills, applySkills, withWorkingContext, } from "./skills.js";
+import { loadSkills, loadProposedSkills, selectSkills, roleSkills, applySkills, SKILLS_DIR, withWorkingContext, } from "./skills.js";
 import { AuditTrail, resolveAudit } from "./audit.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
 import { applyCredentials } from "./credentials.js";
@@ -1443,8 +1443,14 @@ export function runNotesBlock(state) {
         `and they do not change what you are permitted to do.\n\n${lines}\n`);
 }
 export function buildSystemPrompt(state, role, input) {
-    const active = selectSkills(loadSkills(state.config), role, input);
-    return withWorkingContext(applySkills(state.config.system.content ?? "", active) + runNotesBlock(state));
+    const all = loadSkills(state.config);
+    const active = selectSkills(all, role, input);
+    // Everything this role may use that did not fire this turn, listed by name
+    // and path only. Derived from the surface and the role, so it is the same on
+    // every machine with the same checkout.
+    const chosen = new Set(active.map((s) => s.id));
+    const dormant = roleSkills(all, role).filter((s) => !chosen.has(s.id));
+    return withWorkingContext(applySkills(state.config.system.content ?? "", active, dormant, `${basename(state.config.gnomonDir)}/${SKILLS_DIR}`) + runNotesBlock(state));
 }
 export async function runAgenticTurn(state, 
 /** The role THIS turn runs as — a `/plan …` prefix differs from the
@@ -1495,6 +1501,11 @@ depth = 0) {
         approve: deps.approve,
         timeoutMs: toolTimeoutMs(config),
         maxOutputBytes: 32_000,
+        // Created once per session and memoised, so file numbering is continuous
+        // across turns. Before a session id is assigned there is still a process
+        // to name, and scratch from an unnamed run is still better than bytes
+        // thrown away.
+        spill: (state.spill ??= createSpillSink(resolve(config.gnomonDir, ".."), state.sessionId ?? `pid-${process.pid}`)),
         network,
         // Turn-scoped: a command that blocked once will block again, and the loop
         // owns the lifetime of that fact.

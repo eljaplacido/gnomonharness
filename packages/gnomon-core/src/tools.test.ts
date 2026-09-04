@@ -9,6 +9,7 @@ import {
   writeFileSync,
   readFileSync,
   mkdirSync,
+  readdirSync,
   existsSync,
   symlinkSync,
 } from "node:fs";
@@ -35,6 +36,8 @@ import {
   ApprovalRequest,
   Todo,
   backgroundRecipe,
+  createSpillSink,
+  OVERFLOW_DIR,
 } from "./tools.js";
 import { loadConfig, declaredTools, isToolEnabled } from "./config.js";
 import { mapBucket } from "./session.js";
@@ -1973,5 +1976,138 @@ describe("sandboxCommand — where bash actually runs", () => {
     expect(c).toContain("sh -c");
     // the single quote is escaped rather than ending the wrapper's own quoting
     expect(c.endsWith("'")).toBe(true);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Overflow: output too large for the window is kept, not thrown away.
+//
+// The truncation message used to end "narrow it instead". That is honest and
+// it is the wrong advice for the measured failure: roughly 41% of benchmark
+// trials end at the timeout cap, and the long tail is a model re-running a
+// long command. The bytes it needed already existed and were discarded.
+
+describe("oversized tool output is offloaded, not just truncated", () => {
+  const big = () => "x".repeat(5000) + "NEEDLE_AT_THE_END\n";
+
+  it("writes the FULL output and names a path the model can read", async () => {
+    writeFileSync(join(root, "big.txt"), big());
+    const spill = createSpillSink(root, "sess-1");
+    const out = await executeTool(
+      "read",
+      { path: "big.txt" },
+      ctx({ maxOutputBytes: 200, spill }),
+      offered
+    );
+    const m = out.content.match(/saved at (\S+)/);
+    expect(m, "the notice must name the file it wrote").toBeTruthy();
+    const rel = m![1];
+    expect(rel.startsWith(`${OVERFLOW_DIR}/`)).toBe(true);
+    // The whole point: the tail the model was truncated away from is on disk.
+    const saved = readFileSync(join(root, rel), "utf-8");
+    expect(saved).toContain("NEEDLE_AT_THE_END");
+    expect(saved.length).toBeGreaterThan(5000);
+    // And the model was still told what it got is partial.
+    expect(out.content).toContain("not all of it");
+  });
+
+  it("the path it names resolves under the sandbox, so `read` can reach it", async () => {
+    writeFileSync(join(root, "big.txt"), big());
+    const spill = createSpillSink(root, "sess-1");
+    const first = await executeTool(
+      "read", { path: "big.txt" }, ctx({ maxOutputBytes: 200, spill }), offered
+    );
+    const rel = first.content.match(/saved at (\S+)/)![1];
+    // Confined is the shipped default; a path the harness names and the
+    // sandbox then refuses would be worse than saying nothing.
+    const back = await executeTool(
+      "read", { path: rel }, ctx({ sandbox: "confined" }), offered
+    );
+    expect(back.code).toBe(0);
+    expect(back.content).toContain("NEEDLE_AT_THE_END");
+  });
+
+  it("keeps the old message, and names no path, when there is no sink", async () => {
+    writeFileSync(join(root, "big.txt"), big());
+    const out = await executeTool(
+      "read", { path: "big.txt" }, ctx({ maxOutputBytes: 200 }), offered
+    );
+    expect(out.content).toContain("narrow it instead");
+    expect(out.content).not.toContain("saved at");
+  });
+
+  it("names no path when the write fails — a citation to nothing is worse", async () => {
+    writeFileSync(join(root, "big.txt"), big());
+    const out = await executeTool(
+      "read",
+      { path: "big.txt" },
+      ctx({ maxOutputBytes: 200, spill: () => null }),
+      offered
+    );
+    expect(out.content).not.toContain("saved at");
+    expect(out.content).toContain("narrow it instead");
+  });
+
+  it("numbers files across calls instead of overwriting the last one", () => {
+    const spill = createSpillSink(root, "sess-1");
+    const a = spill("first", "bash-exit");
+    const b = spill("second", "bash-exit");
+    expect(a).not.toBe(b);
+    expect(readFileSync(join(root, a!), "utf-8")).toBe("first");
+    expect(readFileSync(join(root, b!), "utf-8")).toBe("second");
+  });
+
+  it("prunes old session directories so scratch cannot grow without bound", () => {
+    // Four older sessions already on disk, then a fifth writes with keep=2.
+    for (const old of ["s1", "s2", "s3", "s4"]) {
+      mkdirSync(join(root, OVERFLOW_DIR, old), { recursive: true });
+      writeFileSync(join(root, OVERFLOW_DIR, old, "001-x.txt"), "old");
+    }
+    createSpillSink(root, "s5", 2)("new", "x");
+    const left = readdirSync(join(root, OVERFLOW_DIR)).sort();
+    expect(left).toContain("s5");
+    expect(left.length).toBeLessThanOrEqual(3);
+  });
+
+  it("grep reaches the file it names — the advice has to actually work", async () => {
+    // The first version of the notice said "read or grep that file". Measured
+    // end to end, BOTH halves were wrong: `read` truncated at the same limit
+    // and offloaded a second, larger copy, and `grep` on a file path walked it
+    // as a directory, found nothing, and answered "No match" for a file that
+    // contained the pattern.
+    writeFileSync(join(root, "big.txt"), "x".repeat(5000) + "\nFINAL_ERROR: linker failed\n");
+    const spill = createSpillSink(root, "sess-1");
+    const first = await executeTool(
+      "read", { path: "big.txt" }, ctx({ maxOutputBytes: 200, spill }), offered
+    );
+    const rel = first.content.match(/saved at (\S+)/)![1];
+    const hit = await executeTool(
+      "grep", { pattern: "FINAL_ERROR", path: rel },
+      ctx({ maxOutputBytes: 4000 }), new Set(["grep"])
+    );
+    expect(hit.code).toBe(0);
+    expect(hit.content).toContain("FINAL_ERROR: linker failed");
+  });
+
+  it("reading an offloaded file does not offload it again", async () => {
+    writeFileSync(join(root, "big.txt"), big());
+    const spill = createSpillSink(root, "sess-1");
+    const c = ctx({ maxOutputBytes: 200, spill });
+    const first = await executeTool("read", { path: "big.txt" }, c, offered);
+    const rel = first.content.match(/saved at (\S+)/)![1];
+    await executeTool("read", { path: rel }, c, offered);
+    await executeTool("read", { path: rel }, c, offered);
+    // Two further reads of the same file wrote nothing: the bytes are already
+    // on disk, and a second copy is a bigger file and another truncated prefix.
+    const files = readdirSync(join(root, OVERFLOW_DIR, "sess-1"));
+    expect(files).toHaveLength(1);
+  });
+
+  it("never writes inside .gnomon/, which would move the surface hash", () => {
+    const rel = createSpillSink(root, "sess-1")("payload", "bash-exit");
+    expect(rel).toBeTruthy();
+    expect(rel!.startsWith(".gnomon/")).toBe(false);
+    expect(rel!.startsWith(`${OVERFLOW_DIR}/`)).toBe(true);
   });
 });

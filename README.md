@@ -162,7 +162,7 @@ flowchart LR
     SURFACE --> T1
     T2 --> T1
     T2 --> RS
-    T1 --> OUT["outside the surface:<br/>.gnomon-sessions/<br/>.gnomon-audit/<br/>.gnomon-jobs/"]
+    T1 --> OUT["outside the surface:<br/>.gnomon-sessions/<br/>.gnomon-audit/<br/>.gnomon-jobs/<br/>.gnomon-out/"]
 ```
 
 **Rust owns the surface hash.** `gnomon-surface` is the authority on what a
@@ -388,7 +388,8 @@ Two things to do straight after:
    the smallest one still big enough to summarise for `smol`. It records what
    it found and why, in the file. If nothing was reachable it falls back to
    generic tags and says so, and those will very likely be wrong.
-2. **Add `.gnomon-sessions/`, `.gnomon-audit/` and `.gnomon-jobs/` to `.gitignore`.**
+2. **Add `.gnomon-sessions/`, `.gnomon-audit/`, `.gnomon-jobs/` and
+   `.gnomon-out/` to `.gitignore`.**
 
 > **Consent dials, at the prompt:** `/allow` (may the agent edit `.gnomon/`),
 > `/network` (may `webfetch` reach the network), `/sandbox` (how far outside the
@@ -483,7 +484,7 @@ sandbox = "confined"              # off | confined | strict
 approval = "on_write"             # never | on_write | always
 role_profile = "local_first"
 max_context_tokens = 65536
-compaction = "discard"            # discard | summary | truncate
+compaction = "summary"            # discard | summary | truncate
 ```
 
 #### `[endpoints]` — where inference goes

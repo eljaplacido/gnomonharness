@@ -13,7 +13,7 @@
  * No dependencies.
  */
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, realpathSync, mkdirSync, lstatSync, readlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, realpathSync, mkdirSync, rmSync, lstatSync, readlinkSync } from "node:fs";
 import { resolve, relative, isAbsolute, dirname, join, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
@@ -83,7 +83,7 @@ const IMPLEMENTED = {
     glob: obj({
         pattern: str("Glob over the path, e.g. `**/*.ts`, `src/**/test_*.py`. `*` stops " +
             "at a separator, `**` crosses them."),
-        path: str("Directory to search under, relative to the root. Default: the root."),
+        path: str("File or directory to search, relative to the root. Default: the root."),
     }, ["pattern"]),
     grep: obj({
         pattern: str("Regular expression to match against each line"),
@@ -554,10 +554,31 @@ export function diffStat(lines) {
         removed: lines.filter((l) => l.startsWith("- ")).length,
     };
 }
-function clamp(text, limit) {
+/**
+ * Offload the full text and describe where it went, or say nothing.
+ *
+ * Returns "" when there is no sink or the write failed, so every caller below
+ * degrades to the truncation message it had before.
+ */
+function spilled(text, ctx, label) {
+    const rel = ctx.spill?.(text, label);
+    if (!rel)
+        return "";
+    // `grep`, not `read`. A file this size does not fit the window either, so
+    // "read that file" is advice that cannot work: reading it truncates at the
+    // same limit and offloads it a second time. Measured end to end before this
+    // wording was written -- the first version said "read or grep", and the read
+    // it recommended returned another truncated prefix.
+    return (` The full ${text.length} bytes are saved at ${rel} — \`grep\` that path for ` +
+        `what you need rather than running the command again.`);
+}
+function clamp(text, ctx, label) {
+    const limit = ctx.maxOutputBytes;
     if (text.length <= limit)
         return text;
-    return (`${text.slice(0, limit)}\n… [truncated at ${limit} bytes — this is the start of the output, not all of it. Repeating the call returns the same prefix: narrow it instead, with grep, a subpath, or a filtered command.]`);
+    const kept = spilled(text, ctx, label);
+    return (`${text.slice(0, limit)}\n… [truncated at ${limit} bytes — this is the start of the output, not all of it.${kept}` +
+        `${kept ? "" : " Repeating the call returns the same prefix: narrow it instead, with grep, a subpath, or a filtered command."}]`);
 }
 /**
  * Keep both ends of an output that is too long, and say how much went missing.
@@ -568,13 +589,15 @@ function clamp(text, limit) {
  * printed. So a timeout keeps the tail as well, and names the dropped byte
  * count rather than eliding silently.
  */
-function clampEnds(text, limit) {
+function clampEnds(text, ctx, label) {
+    const limit = ctx.maxOutputBytes;
     if (text.length <= limit)
         return text;
     const head = Math.floor(limit * 0.6);
     const tail = limit - head;
     const dropped = text.length - limit;
-    return (`${text.slice(0, head)}\n… [${dropped} bytes dropped from the middle — this is the start and the end of the output, not all of it.]\n${text.slice(-tail)}`);
+    const kept = spilled(text, ctx, label);
+    return (`${text.slice(0, head)}\n… [${dropped} bytes dropped from the middle — this is the start and the end of the output, not all of it.${kept}]\n${text.slice(-tail)}`);
 }
 async function readTool(args, ctx) {
     // A missing, empty or non-string path resolved to "" and then to the
@@ -635,7 +658,13 @@ async function readTool(args, ctx) {
             .join("\n");
         return {
             code: TOOL_OK,
-            content: clamp(numbered, ctx.maxOutputBytes),
+            content: clamp(numbered, 
+            // Re-offloading an offloaded file writes a second, larger copy of
+            // bytes already on disk and hands back another prefix. Nothing is
+            // gained and the directory grows on every attempt.
+            path.split(sep).join("/").startsWith(`${OVERFLOW_DIR}/`)
+                ? { ...ctx, spill: undefined }
+                : ctx, `read-${path}`),
             summary: `read ${path} — ${raw.split("\n").length} lines`,
         };
     }
@@ -931,7 +960,7 @@ async function bashTool(args, ctx) {
                 code: TOOL_FAILED,
                 worktree_changed: movedTree,
                 content: `Command timed out after ${ctx.timeoutMs}ms and was killed. Output captured before the kill:\n` +
-                    clampEnds(captured, ctx.maxOutputBytes) +
+                    clampEnds(captured, ctx, `bash-timeout`) +
                     `\n\nIt did not finish, so this output is partial. Re-running it unchanged will time out again: ` +
                     `narrow it, or start it in the background and poll:\n      ${backgroundRecipe(command)}\n` +
                     `    then read ${JOB_LOG_DIR}/job.log on a later step.` +
@@ -954,7 +983,7 @@ async function bashTool(args, ctx) {
                 content: `Cancelled by the operator after ${Date.now() - startedAt}ms. Output captured before the stop:\n` +
                     clampEnds([stdout ? `stdout:\n${stdout}` : "stdout: (empty)", stderr ? `stderr:\n${stderr}` : ""]
                         .filter(Boolean)
-                        .join("\n"), ctx.maxOutputBytes),
+                        .join("\n"), ctx, `bash-cancelled`),
                 summary: `bash — cancelled`,
             });
         };
@@ -1030,7 +1059,7 @@ async function bashTool(args, ctx) {
             done({
                 code: TOOL_OK,
                 worktree_changed: movedTree,
-                content: (failed ? clampEnds(body, ctx.maxOutputBytes) : clamp(body, ctx.maxOutputBytes)) +
+                content: (failed ? clampEnds(body, ctx, `bash-exit`) : clamp(body, ctx, `bash-exit`)) +
                     (drift ? `\n\n${drift.notice}` : ""),
                 // `exit` is null when the child died on a signal, and "exit null" then
                 // failed the verify gate's /exit (-?\d+)/ and fell through to its
@@ -1722,7 +1751,7 @@ async function webfetchTool(args, ctx) {
     const text = /html/i.test(type) ? htmlToText(body) : body;
     return {
         code: res.ok ? TOOL_OK : TOOL_OK_EMPTY,
-        content: clamp(`${res.status} ${res.statusText} · ${type || "unknown type"}\n\n${text}`, ctx.maxOutputBytes),
+        content: clamp(`${res.status} ${res.statusText} · ${type || "unknown type"}\n\n${text}`, ctx, `webfetch-${url.hostname}`),
         summary: `webfetch ${url.hostname} — ${res.status}, ${text.length} chars`,
     };
 }
@@ -1767,6 +1796,20 @@ const SEARCH_MAX_HITS = 200;
  * answer the same question differently on two machines.
  */
 function walkFiles(root, dir) {
+    // A file is a valid scope of exactly one file. Without this, readdirSync
+    // throws ENOTDIR, the catch below swallows it, and `grep` answers
+    // "No match for /x/ under path/to/file" for a file that contains x — a wrong
+    // answer shaped like a valid negative, which is the worst kind this harness
+    // can give. Found by grepping an offloaded output file, which is the exact
+    // thing the overflow notice tells the model to do.
+    try {
+        if (statSync(dir).isFile()) {
+            return [relative(root, dir).split(sep).join("/")];
+        }
+    }
+    catch {
+        // Missing or unreadable: fall through, and the walk yields nothing.
+    }
     const out = [];
     const stack = [dir];
     while (stack.length > 0 && out.length < WALK_MAX_FILES) {
@@ -1880,7 +1923,7 @@ async function globTool(args, ctx) {
         : "";
     return {
         code: TOOL_OK,
-        content: clamp(shown.join("\n") + truncated, ctx.maxOutputBytes),
+        content: clamp(shown.join("\n") + truncated, ctx, `glob`),
         summary: `glob ${pattern} — ${hits.length} file(s)`,
     };
 }
@@ -1932,7 +1975,17 @@ async function grepTool(args, ctx) {
     const gd = await gateReadOnly("grep", `grep /${pattern}/ in ${scope.rel}`, ctx);
     if (gd)
         return gd;
-    const base = scope.rel === "." ? "" : scope.rel.replace(/\/+$/, "") + "/";
+    // With a file scope there is no prefix to strip: `include` is tested against
+    // the path itself, or it would be tested against the empty string and match
+    // nothing.
+    let scopeIsFile = false;
+    try {
+        scopeIsFile = statSync(scope.abs).isFile();
+    }
+    catch {
+        /* absent path: the walk returns nothing and the 0-match branch reports it */
+    }
+    const base = scopeIsFile || scope.rel === "." ? "" : scope.rel.replace(/\/+$/, "") + "/";
     const files = walkFiles(ctx.root, scope.abs).filter((f) => !include || include.test(base ? f.slice(base.length) : f));
     const lines = [];
     let matched = 0;
@@ -1977,7 +2030,7 @@ async function grepTool(args, ctx) {
         : "";
     return {
         code: TOOL_OK,
-        content: clamp(lines.join("\n") + truncated, ctx.maxOutputBytes),
+        content: clamp(lines.join("\n") + truncated, ctx, `grep`),
         summary: `grep ${pattern} — ${matched} match(es) in ${filesWithHits} file(s)`,
     };
 }
@@ -2339,6 +2392,93 @@ function releasePipes(proc) {
     proc.unref?.();
 }
 export const JOB_LOG_DIR = ".gnomon-jobs";
+/**
+ * Where output too large for the context window is kept.
+ *
+ * Beside the surface, like `.gnomon-jobs/`, `.gnomon-sessions/` and
+ * `.gnomon-audit/` — deliberately NOT inside `.gnomon/`, because every file
+ * under there is content-hashed and a tool writing one would move the surface
+ * hash mid-session. That is the hash announcing a behaviour change that did
+ * not happen, which is the one thing it must never do.
+ */
+export const OVERFLOW_DIR = ".gnomon-out";
+/**
+ * A sink that writes under `<root>/.gnomon-out/<session>/`.
+ *
+ * Per session, not per process, so `--continue` can still reach a file an
+ * earlier turn cited. Older session directories are pruned to `keep` on the
+ * first write of a new one: this is scratch, it holds conversation-derived
+ * text, and it must not grow without bound in someone's repository.
+ */
+export function createSpillSink(root, session, keep = 5) {
+    const safeSession = session.replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 60) || "session";
+    let dir = null;
+    let unusable = false;
+    let n = 0;
+    return (text, label) => {
+        if (unusable)
+            return null;
+        if (!dir) {
+            try {
+                const base = join(root, OVERFLOW_DIR);
+                mkdirSync(base, { recursive: true });
+                pruneSpillDirs(base, keep);
+                dir = join(base, safeSession);
+                mkdirSync(dir, { recursive: true });
+            }
+            catch {
+                // Read-only checkout, no permission, full disk. Truncation still works.
+                unusable = true;
+                return null;
+            }
+        }
+        const safe = label.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+        const name = `${String(++n).padStart(3, "0")}-${safe || "output"}.txt`;
+        try {
+            writeFileSync(join(dir, name), text, "utf-8");
+        }
+        catch {
+            return null;
+        }
+        // Forward slashes: this string is handed to the model to pass back to
+        // `read`, and a Windows separator would come back as an escape.
+        return `${OVERFLOW_DIR}/${safeSession}/${name}`;
+    };
+}
+/** Keep the `keep` most recently modified session directories, drop the rest. */
+function pruneSpillDirs(base, keep) {
+    let entries;
+    try {
+        entries = readdirSync(base, { withFileTypes: true })
+            .filter((e) => e.isDirectory())
+            .map((e) => e.name);
+    }
+    catch {
+        return;
+    }
+    if (entries.length <= keep)
+        return;
+    const byAge = entries
+        .map((name) => {
+        let mtime = 0;
+        try {
+            mtime = statSync(join(base, name)).mtimeMs;
+        }
+        catch {
+            /* unreadable: treat as oldest, so it is the first to go */
+        }
+        return { name, mtime };
+    })
+        .sort((a, b) => a.mtime - b.mtime);
+    for (const { name } of byAge.slice(0, byAge.length - keep)) {
+        try {
+            rmSync(join(base, name), { recursive: true, force: true });
+        }
+        catch {
+            /* leaving scratch behind is not worth failing a turn over */
+        }
+    }
+}
 export function backgroundRecipe(command, log = `${JOB_LOG_DIR}/job.log`) {
     const quoted = `'${command.trim().replace(/'/g, `'\\''`)}'`;
     // Project-relative, NOT /tmp. The advice used to name /tmp, and `read` refuses

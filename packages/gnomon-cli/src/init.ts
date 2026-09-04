@@ -41,7 +41,7 @@ sandbox = "confined"              # off | confined | strict
 approval = "on_write"             # never | on_write | always
 role_profile = "local_first"      # local_first | frontier_plan | all_remote
 max_context_tokens = 65536
-compaction = "discard"            # discard | summary | truncate
+compaction = "summary"            # discard | summary | truncate
 
 [context]
 # How prior turns are replayed. sliding_window keeps retain_after tokens of

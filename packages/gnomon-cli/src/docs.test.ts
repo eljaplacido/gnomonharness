@@ -103,8 +103,19 @@ describe("documented defaults are the actual defaults", () => {
       expect(config.config.defaults?.approval).toBe("on_write");
       // "sandbox = confined"
       expect(config.config.defaults?.sandbox).toBe("confined");
-      // "compaction = discard … is the default"
-      expect(resolveContext(config).compaction).toBe("discard");
+      // "compaction = summary … is the default" — changed 2026-09-04; `discard`
+      // measured 0/9 on context retention against 9/9 for `summary`.
+      expect(resolveContext(config).compaction).toBe("summary");
+      // And the role that default needs must exist in the surface that ships
+      // it. `summary` without its summary_role degrades to `discard` with a
+      // warning -- honest, but it would mean the documented default silently
+      // does nothing on a freshly scaffolded project, which is worse than
+      // having left `discard` in place.
+      const ctx = resolveContext(config);
+      expect(config.roles[ctx.summary_role]).toBeTruthy();
+      // It must also be reachable without a key, because the shipped profile
+      // is local_first: "No key, no bill, no network."
+      expect(config.roles[ctx.summary_role]?.endpoint).toBe("local");
       // "mode = manual … suggest is where to start" — shipped manual
       expect(resolveRouting(config).mode).toBe("manual");
       // "Off by default" — audit

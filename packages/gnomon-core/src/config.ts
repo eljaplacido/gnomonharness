@@ -905,7 +905,7 @@ export function resolveContext(config: GnomonConfig): ResolvedContext {
     policy: pickEnum(ctx.policy, CONTEXT_POLICIES, "sliding_window"),
     retain_after: pickInt(ctx.retain_after, 2048),
     max_context_tokens: pickInt(defaults.max_context_tokens, 65536),
-    compaction: pickEnum(defaults.compaction, COMPACTIONS, "discard"),
+    compaction: pickEnum(defaults.compaction, COMPACTIONS, "summary"),
     summary_role:
       typeof ctx.summary_role === "string" ? ctx.summary_role : "smol",
     reserve_output: (() => {

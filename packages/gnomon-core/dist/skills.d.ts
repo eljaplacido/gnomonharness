@@ -68,6 +68,15 @@ export declare function loadProposedSkills(config: GnomonConfig): Skill[];
  * here instead would trade a lost note for a dead session; that is the wrong
  * trade, so the catch below is unchanged on purpose.
  */
+/**
+ * The skills this ROLE may use, whatever the turn is about.
+ *
+ * The role filter and the `match` filter answer different questions, and
+ * collapsing them loses one. `roles` says a skill is not for this role at all;
+ * `match` says it did not come up this time. Only the second is worth telling
+ * the model about, which is what makes this split useful rather than cosmetic.
+ */
+export declare function roleSkills(skills: Skill[], role: string): Skill[];
 export declare function selectSkills(skills: Skill[], role: string, input: string): Skill[];
 /**
  * Append the applicable skills to the system prompt.
@@ -86,7 +95,21 @@ export declare function selectSkills(skills: Skill[], role: string, input: strin
  */
 export declare const WORKING_CONTEXT: string;
 export declare function withWorkingContext(systemPrompt: string): string;
-export declare function applySkills(systemPrompt: string, skills: Skill[]): string;
+export declare function applySkills(systemPrompt: string, skills: Skill[], 
+/**
+ * Skills this role may use whose `match` did not fire on this input. Listed
+ * by name and path, never by body.
+ *
+ * Without this the model cannot know they exist. A skill whose pattern is
+ * slightly wrong is then indistinguishable from a skill nobody wrote — it
+ * sits in the surface, hashed and inert, and the one thing that would fix it
+ * (someone noticing) never happens. Naming them costs a line each and is
+ * still derived from the surface plus the role, so the same checkout
+ * produces the same list on every machine.
+ */
+dormant?: Skill[], 
+/** Where those files live, relative to the root, for the model to `read`. */
+dirRel?: string): string;
 export interface SkillProposal {
     name: string;
     description?: string;
