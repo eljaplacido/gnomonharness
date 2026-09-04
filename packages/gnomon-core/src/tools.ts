@@ -80,6 +80,20 @@ export interface ToolOutcome {
    * from idling; the verify gate keeps its own, narrower meaning.
    */
   worktree_changed?: boolean;
+  /**
+   * The COMMAND's exit status, when the tool ran one.
+   *
+   * `code` answers "did the tool work" and is `TOOL_OK` for a command that ran
+   * and exited 1 — which is correct, and is why a caller that wants to know
+   * whether the WORK succeeded cannot read `code` alone. Undefined for every
+   * tool that runs no command, and for a kill by signal, where there is no
+   * status to report and guessing one would be worse than saying nothing.
+   *
+   * Structured rather than scraped from `summary`: the verify gate already
+   * learned what a regex over that string costs when `exit null` parsed as a
+   * clean zero.
+   */
+  shell_exit?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1527,6 +1541,9 @@ async function bashTool(
       done({
         code: TOOL_OK,
         worktree_changed: movedTree,
+        // null when the child died on a signal: left undefined rather than
+        // coerced, because "killed" is not an exit status.
+        shell_exit: typeof exit === "number" ? exit : undefined,
         content:
           (failed ? clampEnds(body, ctx, `bash-exit`) : clamp(body, ctx, `bash-exit`)) +
           (drift ? `\n\n${drift.notice}` : ""),

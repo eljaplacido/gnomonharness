@@ -47,6 +47,20 @@ export interface ToolOutcome {
      * from idling; the verify gate keeps its own, narrower meaning.
      */
     worktree_changed?: boolean;
+    /**
+     * The COMMAND's exit status, when the tool ran one.
+     *
+     * `code` answers "did the tool work" and is `TOOL_OK` for a command that ran
+     * and exited 1 — which is correct, and is why a caller that wants to know
+     * whether the WORK succeeded cannot read `code` alone. Undefined for every
+     * tool that runs no command, and for a kill by signal, where there is no
+     * status to report and guessing one would be worse than saying nothing.
+     *
+     * Structured rather than scraped from `summary`: the verify gate already
+     * learned what a regex over that string costs when `exit null` parsed as a
+     * clean zero.
+     */
+    shell_exit?: number;
 }
 export interface ToolSchema {
     type: "function";

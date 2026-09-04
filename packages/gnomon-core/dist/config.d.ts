@@ -91,7 +91,7 @@ export type ThinkMode = "hide" | "collapse" | "show";
  *   brief — one line per step: the call and its result summary
  *   off   — nothing until the final answer
  */
-export type CotMode = "off" | "brief" | "tools" | "think" | "full";
+export type CotMode = "off" | "brief" | "tools" | "think" | "work" | "full";
 /** config.toml [defaults] */
 export interface Defaults {
     edit_format?: string;

@@ -1059,6 +1059,9 @@ async function bashTool(args, ctx) {
             done({
                 code: TOOL_OK,
                 worktree_changed: movedTree,
+                // null when the child died on a signal: left undefined rather than
+                // coerced, because "killed" is not an exit status.
+                shell_exit: typeof exit === "number" ? exit : undefined,
                 content: (failed ? clampEnds(body, ctx, `bash-exit`) : clamp(body, ctx, `bash-exit`)) +
                     (drift ? `\n\n${drift.notice}` : ""),
                 // `exit` is null when the child died on a signal, and "exit null" then

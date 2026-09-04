@@ -121,6 +121,14 @@ export interface PromptState {
     /** Notes this run kept about itself. Outside the surface, like sessions. */
     notes?: RunNote[];
     /**
+     * The steps inside the most recently folded chunk, for `/expand`.
+     *
+     * Display state, not conversation state: it is never sent to the model and
+     * never saved with the session. The audit trail is the durable record of
+     * what ran — this only spares the operator a re-read of it.
+     */
+    lastFold?: FoldStep[];
+    /**
      * Where over-long tool output is written instead of being discarded.
      *
      * Session-scoped rather than turn-scoped on purpose: the sink numbers the
@@ -402,6 +410,26 @@ export interface TurnDeps {
     signal?: AbortSignal;
     /** Append-only trail; a disabled one is a no-op */
     audit?: AuditTrail;
+    /**
+     * Whether a standing approval covers gated calls right now.
+     *
+     * The turn needs this to decide what may be folded. A call the human is
+     * being asked about one at a time is a call they are watching, and folding
+     * it away would hide the thing they are looking at — and the prompt itself
+     * prints outside `say`, so a pending chunk has to be flushed before it.
+     */
+    standingApproval?: () => boolean;
+}
+/** One step held back by the fold, kept so `/expand` can print it. */
+export interface FoldStep {
+    tool: string;
+    /** What `describeCall` said: a declared path, or the command text */
+    describe: string;
+    /** A path the ARGS declared. Never parsed out of a command. */
+    path?: string;
+    glyph: string;
+    colour: string;
+    summary: string;
 }
 /** Result of one agentic turn, before it becomes a PromptExchange. */
 export interface TurnResult {

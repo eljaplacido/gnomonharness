@@ -68,6 +68,51 @@
 
 ### Added
 
+- **The live trace folds a run of quiet steps into one line, and stops printing
+  each call three times.** A recon run — read, grep, read, grep, forty times —
+  is a rhythm you stop reading, and once you stop reading it you also stop
+  seeing the one line that mattered. Measured on a real trace: **23 lines
+  became 7**, with the single failing command standing alone between two folded
+  runs instead of buried among forty identical ones.
+
+  **Three lines per call became two, then one.** Every call was announced by
+  `⚙ <command truncated at 70 chars>` from the turn loop and again by
+  `⤷ <full command>  (standing approval: session)` from the approval callback,
+  which no verbosity setting gated — so the *truncated* copy printed first, the
+  useful one second, and a session-scope fact was restated 40+ times in a single
+  turn. The second line is gone. The decision is still recorded where it
+  belongs: `gnomon audit show` answers what was approved and by whom, and the
+  scrollback was only ever a worse copy of it that made the calls nobody
+  approved harder to spot. Granting a standing approval still announces itself
+  once, in full, at the moment it is granted.
+
+  **What is never folded**, because a fold that hid any of these would be worse
+  than the noise it replaced: a failed tool call, a refusal, a step that changed
+  the worktree, a step that moved the surface hash, and any step the operator is
+  being asked to approve one at a time. "Changed nothing" is read off
+  `worktree_changed`, which `bash` stamps by hashing the tree before and after —
+  never inferred from the command text, an approach this repository rejected
+  explicitly.
+
+  This turned up a defect in the first version of the rule. `bash` returns
+  `TOOL_OK` for a command that ran and exited 1, so a failing test run folded
+  away as one more quiet step. `ToolOutcome` now carries a structured
+  `shell_exit`, and a non-zero one breaks the fold. Structured rather than
+  scraped from the summary string, because the verify gate already learned what
+  a regex over that text costs when `exit null` parsed as a clean zero.
+
+  Three ways to get the detail back, all of them present:
+  - **`/cot full`** prints every step and never folds. Unchanged from today.
+  - **`/expand`** lists the steps inside the most recent folded run, and can be
+    typed while the turn is still running.
+  - **The audit trail is untouched.** Folding is display-only: every call, its
+    arguments and its result are still written, folded or not.
+
+  The default `[ui].cot` moves from `full` to the new `work`. Safe without a
+  migration, unlike the compaction change below: `cot` is not in the published
+  enumerations and `gnomon init` has never written it, so the code default is
+  what every existing surface already uses.
+
 - **`gnomon migrate` — one command to bring an existing surface up to the
   current defaults.** `gnomon init` writes every default explicitly and the code
   default applies only when a key is absent, so changing a default in the source

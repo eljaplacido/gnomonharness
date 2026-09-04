@@ -126,7 +126,7 @@ export type ThinkMode = "hide" | "collapse" | "show";
  *   brief — one line per step: the call and its result summary
  *   off   — nothing until the final answer
  */
-export type CotMode = "off" | "brief" | "tools" | "think" | "full";
+export type CotMode = "off" | "brief" | "tools" | "think" | "work" | "full";
 
 /** config.toml [defaults] */
 export interface Defaults {
@@ -953,7 +953,7 @@ export const META_FIELDS: MetaField[] = [
 
 const META_STYLES: MetaStyle[] = ["line", "compact"];
 const THINK_MODES: ThinkMode[] = ["hide", "collapse", "show"];
-export const COT_MODES: CotMode[] = ["off", "brief", "tools", "think", "full"];
+export const COT_MODES: CotMode[] = ["off", "brief", "tools", "think", "work", "full"];
 
 /**
  * Parse a meta field list, dropping names that are not fields.
@@ -996,7 +996,12 @@ export function resolveUi(config: GnomonConfig): ResolvedUi {
       declared ?? ["turn", "role", "model", "bucket", "duration", "context", "tools"],
     meta_style: pickEnum(ui.meta_style, META_STYLES, "line"),
     think: pickEnum(ui.think, THINK_MODES, "collapse"),
-    cot: pickEnum(ui.cot, COT_MODES, "full"),
+    // `work` folds a run of steps that succeeded and changed nothing into one
+    // line, because a wall of them is a rhythm you stop reading. `full` is the
+    // escape and still prints every call. Safe to change without a migration:
+    // `cot` is not in the published enumerations and `gnomon init` does not
+    // write it, so this default reaches an existing surface too.
+    cot: pickEnum(ui.cot, COT_MODES, "work"),
     spinner: typeof ui.spinner === "boolean" ? ui.spinner : true,
     color: typeof ui.color === "boolean" ? ui.color : true,
     markdown: typeof ui.markdown === "boolean" ? ui.markdown : true,

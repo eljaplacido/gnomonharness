@@ -665,6 +665,202 @@ describe("model API errors", () => {
     }
   });
 
+  // ---------------------------------------------------------------------
+  // The fold. A recon run is a rhythm you stop reading, and once you stop
+  // reading it you stop seeing the one line that mattered. These assert both
+  // halves: that a clean run collapses, and that nothing worth seeing does.
+
+  const runFold = async (
+    cot: string,
+    calls: Array<{ command?: string; path?: string }>,
+    outcome: (i: number) => { code?: number; worktree_changed?: boolean } = () => ({})
+  ): Promise<string> => {
+    const config: any = loadConfig("../..");
+    const state: any = {
+      config,
+      exchanges: [],
+      currentRole: "implement",
+      ui: { ...resolveUi(config), cot, think: "hide", color: false },
+    };
+    const lines: string[] = [];
+    let call = 0;
+    await withFetch(
+      (async () => {
+        call++;
+        const tool_calls =
+          call === 1
+            ? calls.map((c) => ({
+                function: {
+                  name: c.path !== undefined ? "read" : "bash",
+                  arguments: c.path !== undefined ? { path: c.path } : { command: c.command },
+                },
+              }))
+            : undefined;
+        return { ok: true, json: async () => ({ message: { content: call === 1 ? "" : "done", tool_calls } }) };
+      }) as unknown as typeof fetch,
+      async () => {
+        await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "go" }],
+          {
+            approve: async () => true,
+            progress: { start() {}, update() {}, stop() {} } as any,
+            ui: state.ui,
+            say: (s: string) => lines.push(s),
+            // The case in the report: `bash` is gated under the shipped
+            // `on_write`, and the operator granted a standing approval once.
+            // Without one every call prompts, and folding correctly refuses to
+            // hide a call the human is being asked about — asserted below.
+            standingApproval: () => true,
+          }
+        );
+      }
+    );
+    void outcome;
+    return lines.join("\n");
+  };
+
+  it("folds a clean run of steps into one line, and says how many", async () => {
+    const out = await runFold("work", [
+      { command: "echo a" }, { command: "echo b" }, { command: "echo c" }, { command: "echo d" },
+    ]);
+    expect(out).toContain("4 steps folded");
+    expect(out).toContain("bash ×4");
+    expect(out).toContain("nothing changed");
+    // Each command is no longer on its own line — that is the whole point.
+    expect(out).not.toContain("echo b");
+  });
+
+  it("names where a folded run started when no path was declared", async () => {
+    // An all-bash run declares no paths, so the summary would otherwise say
+    // nothing at all about what the run was doing.
+    // Exits 0: a command that fails is never folded, which the test below
+    // asserts, so the fixture here has to be one that actually succeeds.
+    const out = await runFold("work", [
+      { command: "pwd" }, { command: "echo b" }, { command: "echo c" },
+    ]);
+    expect(out).toContain("from  pwd");
+  });
+
+  it("names the paths a folded run declared, and never mines a command for one", async () => {
+    const out = await runFold("work", [
+      { path: "a.txt" }, { path: "b.txt" }, { path: "a.txt" },
+    ]);
+    expect(out).toContain("a.txt");
+    expect(out).toContain("b.txt");
+    // read declares a path; bash does not, and its command text is not parsed
+    // for something that looks like one.
+    const bash = await runFold("work", [
+      { command: "cat /etc/hostname" }, { command: "echo b" }, { command: "echo c" },
+    ]);
+    expect(bash).not.toContain("/etc/hostname ·");
+  });
+
+  it("does not fold fewer than three steps — it would save one line", async () => {
+    const out = await runFold("work", [{ command: "echo a" }, { command: "echo b" }]);
+    expect(out).not.toContain("steps folded");
+    expect(out).toContain("echo a");
+    expect(out).toContain("echo b");
+  });
+
+  it("a failure breaks the run and prints in full", async () => {
+    // `false` exits non-zero, so this step is not a clean one.
+    const out = await runFold("work", [
+      { command: "echo a" }, { command: "echo b" }, { command: "false" }, { command: "echo d" },
+    ]);
+    // The failing step is on its own line, whatever happened around it.
+    expect(out).toMatch(/bash — exit 1/);
+  });
+
+  it("`work` still shows reasoning and prose — it folds steps, not thinking", async () => {
+    // The first version of this gated the trace to full/think only, so the new
+    // default hid the chain of thought. That is the opposite of the point.
+    const config: any = loadConfig("../..");
+    const state: any = {
+      config, exchanges: [], currentRole: "implement",
+      ui: { ...resolveUi(config), cot: "work", think: "show", color: false },
+    };
+    const lines: string[] = [];
+    let call = 0;
+    await withFetch(
+      (async () => {
+        call++;
+        return {
+          ok: true,
+          json: async () => ({
+            message: {
+              content: call === 1 ? "<think>weighing options</think>let me check" : "done",
+              tool_calls: call === 1
+                ? [{ function: { name: "bash", arguments: { command: "echo hi" } } }]
+                : undefined,
+            },
+          }),
+        };
+      }) as unknown as typeof fetch,
+      async () => {
+        await promptLoop.runAgenticTurn(
+          state, "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "go" }],
+          { approve: async () => true, progress: { start() {}, update() {}, stop() {} } as any,
+            ui: state.ui, say: (s: string) => lines.push(s) }
+        );
+      }
+    );
+    const out = lines.join("\n");
+    expect(out, "work shows reasoning").toContain("·");
+    expect(out, "work shows prose").toContain("│");
+  });
+
+  it("never folds a call the operator is being asked about one at a time", async () => {
+    // No standing approval: `bash` is gated under the shipped `on_write`, so
+    // each call puts a prompt in front of a human. Folding those away would
+    // hide the thing they are looking at -- and the prompt is written straight
+    // to the console rather than through `say`, so a chunk held back would
+    // also print in the wrong order.
+    const config: any = loadConfig("../..");
+    const state: any = {
+      config, exchanges: [], currentRole: "implement",
+      ui: { ...resolveUi(config), cot: "work", think: "hide", color: false },
+    };
+    const lines: string[] = [];
+    let call = 0;
+    await withFetch(
+      (async () => {
+        call++;
+        return { ok: true, json: async () => ({ message: {
+          content: call === 1 ? "" : "done",
+          tool_calls: call === 1
+            ? ["a", "b", "c", "d"].map((c) => ({ function: { name: "bash", arguments: { command: `echo ${c}` } } }))
+            : undefined,
+        } }) };
+      }) as unknown as typeof fetch,
+      async () => {
+        await promptLoop.runAgenticTurn(
+          state, "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "go" }],
+          { approve: async () => true, progress: { start() {}, update() {}, stop() {} } as any,
+            ui: state.ui, say: (s: string) => lines.push(s) }
+          // no standingApproval
+        );
+      }
+    );
+    const out = lines.join("\n");
+    expect(out).not.toContain("steps folded");
+    expect(out).toContain("echo b");
+  });
+
+  it("`full` never folds, so there is always a way to see every step", async () => {
+    const out = await runFold("full", [
+      { command: "echo a" }, { command: "echo b" }, { command: "echo c" }, { command: "echo d" },
+    ]);
+    expect(out).not.toContain("steps folded");
+    expect(out).toContain("echo b");
+  });
+
   it("/cot gates the live trace — reasoning, prose, and tool lines, per mode", async () => {
     // A gate inversion (tool lines under cot=think, say) passes the whole rest
     // of the suite, so the emitted lines are asserted directly. One turn: the

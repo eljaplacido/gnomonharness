@@ -1459,6 +1459,67 @@ role, route, messages, deps,
 /** 0 for a turn a person asked for; 1 for one the `task` tool delegated. */
 depth = 0) {
     const config = state.config;
+    // ---------------------------------------------------------------------
+    // The fold.
+    //
+    // A recon run — read, grep, read, grep, forty times — is a rhythm you stop
+    // reading, and once you stop reading it you also stop seeing the one line
+    // that mattered. So a run of steps that SUCCEEDED and CHANGED NOTHING
+    // collapses into a single line, and anything else breaks the run and prints
+    // in full: a failure, a refusal, a write, surface drift, or a call the human
+    // is being asked about one at a time.
+    //
+    // "Changed nothing" is read off `worktree_changed`, which the bash tool
+    // stamps by hashing the tree before and after. It is NOT inferred from the
+    // command text — this repository rejected that approach explicitly, and a
+    // fold that guessed wrong would hide the one step that edited a file.
+    //
+    // Every line the turn prints goes through `say` below, which flushes first.
+    // That makes ordering a property of the code rather than of remembering to
+    // flush at each of two dozen call sites.
+    const pendingFold = [];
+    // Two folded steps save one line and cost the detail of both.
+    const FOLD_MIN = 3;
+    const emitStep = (st) => {
+        deps.say(paint(deps.ui, "cyan", `  ⚙ ${st.tool}`) + paint(deps.ui, "gray", ` ${st.describe}`));
+        deps.say(paint(deps.ui, st.colour, `    ${st.glyph} ${st.summary}`));
+    };
+    const flushFold = () => {
+        if (pendingFold.length === 0)
+            return;
+        const steps_ = pendingFold.splice(0, pendingFold.length);
+        if (steps_.length < FOLD_MIN) {
+            for (const st of steps_)
+                emitStep(st);
+            return;
+        }
+        state.lastFold = steps_;
+        const counts = new Map();
+        for (const st of steps_)
+            counts.set(st.tool, (counts.get(st.tool) ?? 0) + 1);
+        const byTool = [...counts.entries()]
+            .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+            .map(([t, n]) => (n > 1 ? `${t} ×${n}` : t))
+            .join(", ");
+        // Only paths the ARGS declared. `bash` declares none, so an all-bash run
+        // names none rather than having its command text mined for something that
+        // looks like one.
+        const paths = [...new Set(steps_.map((st) => st.path).filter(Boolean))];
+        const shown = paths.slice(0, 3).join(", ") + (paths.length > 3 ? `, +${paths.length - 3}` : "");
+        deps.say(paint(deps.ui, "cyan", `  ⚙ ${steps_.length} steps folded`) +
+            paint(deps.ui, "gray", ` · ${byTool}${paths.length ? ` · ${shown}` : ""} · nothing changed`) +
+            paint(deps.ui, "gray", `  /expand`));
+        // With no declared path there is nothing above saying what the run was
+        // about, so name where it started. Verbatim and truncated, never summarised.
+        if (paths.length === 0) {
+            deps.say(paint(deps.ui, "gray", `      from  ${steps_[0].describe}`));
+        }
+    };
+    /** Every transcript line in this turn. Flushes the fold so order holds. */
+    const say = (line) => {
+        flushFold();
+        deps.say(line);
+    };
     // The loop's own numbers, from the surface rather than from this file. Read
     // once per turn so a `[loop]` block is hashed into the record that describes
     // the turn it governed, exactly as [resilience] and [context] already are.
@@ -1647,6 +1708,7 @@ depth = 0) {
     // A cancelled turn still changed the tree if it got that far, and that is
     // exactly when someone wants to know what it left behind.
     const cancelled = () => {
+        flushFold();
         counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."));
         // No answer was produced, so there is nothing to cite-check. Left unset
         // rather than zeroed: "no citations checked" and "checked, none found"
@@ -1679,8 +1741,8 @@ depth = 0) {
         if (r.toolsUnsupported && offer.length > 0) {
             noTools.add(target.model);
             deps.progress.stop();
-            deps.say(paint(deps.ui, "yellow", `  [tools] ${target.model} cannot accept tools — retrying without them.`));
-            deps.say(paint(deps.ui, "gray", `  this role's tools are unavailable for this model. To make that ` +
+            say(paint(deps.ui, "yellow", `  [tools] ${target.model} cannot accept tools — retrying without them.`));
+            say(paint(deps.ui, "gray", `  this role's tools are unavailable for this model. To make that ` +
                 `explicit, set tools = [] for "${role}" in roles.toml, or give the ` +
                 `role a tool-capable model.`));
             deps.progress.start(`${target.model} — without tools`);
@@ -1725,7 +1787,7 @@ depth = 0) {
             !truncationRetried &&
             steps < maxTotal) {
             truncationRetried = true;
-            deps.say(paint(deps.ui, "yellow", `  [loop] the reply was cut off at the token limit — asking for the rest`));
+            say(paint(deps.ui, "yellow", `  [loop] the reply was cut off at the token limit — asking for the rest`));
             working.push({ role: "assistant", content: result.content });
             working.push({
                 role: "user",
@@ -1742,7 +1804,7 @@ depth = 0) {
             steps < maxTotal) {
             textToolCallRetried = true;
             counters.text_tool_calls = (counters.text_tool_calls ?? 0) + 1;
-            deps.say(paint(deps.ui, "yellow", `  [loop] the reply contained tool-call markup, not an answer — the model's ` +
+            say(paint(deps.ui, "yellow", `  [loop] the reply contained tool-call markup, not an answer — the model's ` +
                 `template may not match this endpoint's tool protocol; asking once in plain text`));
             working.push({ role: "assistant", content: result.content });
             working.push({
@@ -1777,7 +1839,7 @@ depth = 0) {
                     `Reply with text this time, not a tool call: what is the current ` +
                         `state of the work, and what is the next thing that needs doing?`,
                 ];
-                deps.say(paint(deps.ui, "yellow", `  [loop] empty completion ${consecutiveEmpty}/${loop.max_consecutive_empty} — ` +
+                say(paint(deps.ui, "yellow", `  [loop] empty completion ${consecutiveEmpty}/${loop.max_consecutive_empty} — ` +
                     `asking again (${maxTotal - steps} steps left)`));
                 working.push({
                     role: "user",
@@ -1810,7 +1872,7 @@ depth = 0) {
             if (trimmed.dropped > 0) {
                 working.length = 0;
                 working.push(...trimmed.messages);
-                deps.say(paint(deps.ui, "yellow", `  [context] the prompt did not fit — dropped ${trimmed.dropped} older message(s) and retrying once`));
+                say(paint(deps.ui, "yellow", `  [context] the prompt did not fit — dropped ${trimmed.dropped} older message(s) and retrying once`));
                 continue;
             }
         }
@@ -1831,7 +1893,7 @@ depth = 0) {
             if (gateApplies && verify) {
                 verifyRounds++;
                 deps.progress.stop();
-                deps.say(paint(deps.ui, "cyan", `  ⚙ verify`) +
+                say(paint(deps.ui, "cyan", `  ⚙ verify`) +
                     paint(deps.ui, "gray", ` ${verify.command}`));
                 // The check is the SURFACE's declaration, not a tool the model chose,
                 // so it runs for any role and is not gated like a model action -- a
@@ -1847,7 +1909,7 @@ depth = 0) {
                 if (check.code === TOOL_DENIED_CODE) {
                     // Declined by the operator. Not a failure of the check, and not a
                     // reason to hand the turn back -- they saw it and said no.
-                    deps.say(paint(deps.ui, "gray", `  ⚙ verify — declined; not run`));
+                    say(paint(deps.ui, "gray", `  ⚙ verify — declined; not run`));
                     toolLog.push("verify — declined by the operator");
                 }
                 // bashTool reports TOOL_OK for any command that *ran*; the shell's own
@@ -1886,7 +1948,7 @@ depth = 0) {
                 // error still reads as an ordinary failure, which is an honest limit.
                 const unrunnable = shellExit === 126 || shellExit === 127;
                 if (!passed && unrunnable) {
-                    deps.say(paint(deps.ui, "yellow", `  ⚙ verify — the check could not run (exit ${shellExit}). ` +
+                    say(paint(deps.ui, "yellow", `  ⚙ verify — the check could not run (exit ${shellExit}). ` +
                         `Not counted against the work; fix [verify] command.`));
                     toolLog.push(`verify — could not run (exit ${shellExit})`);
                     deps.audit?.write("verify", {
@@ -1932,7 +1994,7 @@ depth = 0) {
                             const stillPasses = again.code === 0 && /exit 0\b/.test(again.summary);
                             if (stillPasses) {
                                 pinsNothing = true;
-                                deps.say(paint(deps.ui, "yellow", `  ⚠ the new test passes against the code as it was — it pins nothing`));
+                                say(paint(deps.ui, "yellow", `  ⚠ the new test passes against the code as it was — it pins nothing`));
                             }
                         }
                         finally {
@@ -1957,7 +2019,7 @@ depth = 0) {
                     // Already reported above, with the audit record saying why.
                 }
                 else if (!passed || pinsNothing) {
-                    deps.say(paint(deps.ui, "yellow", `    ⚠ verify failed — handing the turn back`));
+                    say(paint(deps.ui, "yellow", `    ⚠ verify failed — handing the turn back`));
                     working.push({ role: "assistant", content: result.content });
                     working.push({
                         role: "system",
@@ -1974,10 +2036,14 @@ depth = 0) {
                 // would be the same silent success this gate exists to contradict --
                 // just from the other side.
                 if (!unrunnable) {
-                    deps.say(paint(deps.ui, "gray", `    ✓ verify passed`));
+                    say(paint(deps.ui, "gray", `    ✓ verify passed`));
                 }
             }
             // Measured at the end of the turn, from git — never the model's account.
+            // Nothing may be still held back when the turn ends: a folded chunk
+            // printed after the answer would describe work the reader has already
+            // been given conclusions about.
+            flushFold();
             counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."));
             stampCitations(counters, result.content, resolve(state.config.gnomonDir, ".."));
             return {
@@ -2054,7 +2120,7 @@ depth = 0) {
                 : `Reached the ceiling for role "${role}" — ${steps} tool call(s), ` +
                     `max_steps_total ${maxTotal}. Raise it in .gnomon/roles.toml if this ` +
                     `role routinely needs more.`;
-            deps.say(paint(deps.ui, "yellow", `  [tools] ${note}`));
+            say(paint(deps.ui, "yellow", `  [tools] ${note}`));
             // The budget is on tool calls and a wrap-up costs none, so the work
             // gathered so far is answered from rather than discarded.
             deps.progress.start(`${usedModel} — wrapping up`);
@@ -2073,6 +2139,10 @@ depth = 0) {
                 ? `${closing.content.trim()}\n\n_[${note}]_`
                 : result.content || note;
             // Measured at the end of the turn, from git — never the model's account.
+            // Nothing may be still held back when the turn ends: a folded chunk
+            // printed after the answer would describe work the reader has already
+            // been given conclusions about.
+            flushFold();
             counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."));
             stampCitations(counters, content, resolve(state.config.gnomonDir, ".."));
             return {
@@ -2103,10 +2173,10 @@ depth = 0) {
             if (trimmed.dropped > 0) {
                 working.length = 0;
                 working.push(...trimmed.messages);
-                deps.say(paint(deps.ui, "gray", `  [context] turn grew past the window — dropped ${trimmed.dropped} ` +
+                say(paint(deps.ui, "gray", `  [context] turn grew past the window — dropped ${trimmed.dropped} ` +
                     `of ${before} steps of working context`));
             }
-            deps.say(paint(deps.ui, "gray", `  [tools] ${steps}/${maxTotal} calls — continuing (leg ${leg})`));
+            say(paint(deps.ui, "gray", `  [tools] ${steps}/${maxTotal} calls — continuing (leg ${leg})`));
             deps.progress.start(`${usedModel} — leg ${leg}, ${steps} call(s) so far`);
         }
         // Echo the assistant turn back verbatim — some backends validate that a
@@ -2121,7 +2191,10 @@ depth = 0) {
         // no reason for it. Approving a row of symbols is not oversight.
         // /cot decides how much of the live "while it works" trace to show.
         const split = splitThinking(result.content ?? "");
-        const showTrace = deps.ui.cot === "full" || deps.ui.cot === "think";
+        // `work` shows the reasoning and the prose in full — it folds STEPS, not
+        // thinking. Leaving it out here made the new default hide the chain of
+        // thought, which is the opposite of what folding is for.
+        const showTrace = deps.ui.cot === "full" || deps.ui.cot === "think" || deps.ui.cot === "work";
         // Chain-of-thought as it happens — the model's <think> reasoning, at the
         // verbosity /think sets (collapse = one line, show = all, hide = none). This
         // is what "see it chewing" means; models that emit no <think> show nothing.
@@ -2133,13 +2206,13 @@ depth = 0) {
                     ? [all[0] + (all.length > 1 ? " …" : "")]
                     : all;
                 for (const line of lines)
-                    deps.say(paint(deps.ui, "gray", `  · ${line}`));
+                    say(paint(deps.ui, "gray", `  · ${line}`));
             }
         }
         const rationale = split.answer.trim();
         if (rationale && showTrace) {
             for (const line of rationale.split("\n")) {
-                deps.say(paint(deps.ui, "gray", `  │ ${line}`));
+                say(paint(deps.ui, "gray", `  │ ${line}`));
             }
         }
         // Launch consecutive read-only calls together.
@@ -2229,9 +2302,16 @@ depth = 0) {
                 recentCalls.shift();
             }
             const gated = needsApproval(call.name, gate) && offered.has(call.name);
+            // A call the operator has to answer for is one they are watching, and
+            // its prompt is written straight to the console rather than through
+            // `say` — so anything held back has to land before it.
+            const standing = deps.standingApproval?.() ?? false;
+            const askedIndividually = gated && !standing;
+            if (askedIndividually)
+                flushFold();
             deps.progress.stop();
             if (deps.ui.cot === "full" || deps.ui.cot === "tools") {
-                deps.say(paint(deps.ui, "cyan", `  ⚙ ${call.name}`) +
+                say(paint(deps.ui, "cyan", `  ⚙ ${call.name}`) +
                     paint(deps.ui, "gray", ` ${describeCall(call)}`));
             }
             const outcome = (await prefetched.get(callIndex)) ??
@@ -2257,7 +2337,7 @@ depth = 0) {
                 // So say it where it is unmissable, once, while the run is happening.
                 const t = counters.per_tool?.[call.name];
                 if (t && t.calls === t.refusals && t.refusals === loop.all_refused_notice) {
-                    deps.say(paint(deps.ui, "yellow", `  [tools] every ${call.name} call so far has been refused (${t.refusals}/${t.refusals}). ` +
+                    say(paint(deps.ui, "yellow", `  [tools] every ${call.name} call so far has been refused (${t.refusals}/${t.refusals}). ` +
                         `If that is not what you intended, check this role's ${call.name === "bash" ? "bash_allow/bash_deny" : "tool list and write_allow"} ` +
                         `— a pattern can compile and still match nothing.`));
                 }
@@ -2307,11 +2387,41 @@ depth = 0) {
             const glyph = bucket === "result" ? "✓" : bucket === "refusal" ? "⚠" : "✗";
             const bcolor = bucket === "result" ? "green" : bucket === "refusal" ? "yellow" : "red";
             if (deps.ui.cot === "full" || deps.ui.cot === "tools") {
-                deps.say(paint(deps.ui, bcolor, `    ${glyph} ${outcome.summary}`));
+                say(paint(deps.ui, bcolor, `    ${glyph} ${outcome.summary}`));
+            }
+            else if (deps.ui.cot === "work") {
+                const step = {
+                    tool: call.name,
+                    describe: describeCall(call),
+                    path: typeof call.args.path === "string" ? call.args.path : undefined,
+                    glyph,
+                    colour: bcolor,
+                    summary: outcome.summary,
+                };
+                // Everything that must stay visible: it failed, it was refused, it
+                // moved the tree, it moved the surface, or the operator was asked
+                // about it. Anything else is recon and can be counted rather than
+                // listed.
+                const foldable = bucket === "result" &&
+                    // The tool succeeding is not the work succeeding. `bash` returns
+                    // TOOL_OK for a command that ran and exited 1, so this check is what
+                    // stops a failing test run or a broken script being counted as one
+                    // more quiet step. Undefined means the tool ran no command.
+                    (outcome.shell_exit === undefined || outcome.shell_exit === 0) &&
+                    !outcome.worktree_changed &&
+                    !outcome.surface_drift &&
+                    !askedIndividually;
+                if (foldable) {
+                    pendingFold.push(step);
+                }
+                else {
+                    flushFold();
+                    emitStep(step);
+                }
             }
             else if (deps.ui.cot === "brief") {
                 // One line per step: the call and what it returned.
-                deps.say(paint(deps.ui, "cyan", `  • ${call.name}`) +
+                say(paint(deps.ui, "cyan", `  • ${call.name}`) +
                     paint(deps.ui, "gray", ` ${describeCall(call)} `) +
                     paint(deps.ui, bcolor, `${glyph} ${outcome.summary}`));
             }
@@ -2341,7 +2451,7 @@ depth = 0) {
             counters.first_nudge_step ??= steps;
             callsAtLastNudge = callsSinceWrite;
             deps.progress.stop();
-            deps.say(paint(deps.ui, "gray", `  [tools] ${callsSinceWrite} call(s) without changing a file — nudging to decide`));
+            say(paint(deps.ui, "gray", `  [tools] ${callsSinceWrite} call(s) without changing a file — nudging to decide`));
             working.push({
                 role: "system",
                 content: `You have run ${callsSinceWrite} tool calls without changing a file. ` +
@@ -2362,7 +2472,7 @@ depth = 0) {
             stepsAtLastConverge = steps;
             const left = Math.max(0, maxTotal - steps);
             deps.progress.stop();
-            deps.say(paint(deps.ui, "yellow", `  [tools] budget ${steps}/${maxTotal} — urging convergence (${left} call(s) left)`));
+            say(paint(deps.ui, "yellow", `  [tools] budget ${steps}/${maxTotal} — urging convergence (${left} call(s) left)`));
             working.push({
                 role: "system",
                 content: `You have used ${steps} of ${maxTotal} tool calls — about ${left} ` +
@@ -2936,6 +3046,9 @@ export const LIVE_SAFE_COMMANDS = new Set([
     // Reading the checklist mid-turn is the point of having one: it answers
     // "how far through is it" without stopping the work to find out.
     "/theme", "/todo",
+    // Reading back a folded run is the same question as reading the checklist:
+    // "what has it actually done". It touches display state only.
+    "/expand",
 ]);
 export const COMMANDS = [
     { name: "/roles", help: "List roles and models (marks the current one)" },
@@ -2954,7 +3067,8 @@ export const COMMANDS = [
     { name: "/reset", help: "Drop conversation history (keeps the session open)" },
     { name: "/meta", arg: "[fields]", help: "Show or set the meta line" },
     { name: "/think", arg: "[mode]", help: "Chain-of-thought: hide | collapse | show" },
-    { name: "/cot", arg: "[mode]", help: "Live trace while it works: off | brief | tools | think | full" },
+    { name: "/cot", arg: "[mode]", help: "Live trace while it works: off | brief | tools | think | work | full" },
+    { name: "/expand", help: "List the steps inside the last folded run" },
     { name: "/theme", arg: "[name]", help: "Colour theme — dark, dim, light, high-contrast, mono, tokyonight, catppuccin (the last two recolour the whole terminal)" },
     { name: "/explain", arg: "[topic]", help: "What a feature is, how this repo has it set, and what to do with it" },
     { name: "/reflect", arg: "[topic]", help: "Alias for /explain" },
@@ -3835,7 +3949,9 @@ export function processCommand(cmd, state) {
                 console.log(`  brief  — one line per step: the call and its result`);
                 console.log(`  tools  — tool calls and results, no reasoning`);
                 console.log(`  think  — reasoning and prose only, no tool lines`);
-                console.log(`  full   — reasoning + prose + every tool call/result`);
+                console.log(`  work   — as full, but a run of steps that succeeded and changed`);
+                console.log(`           nothing folds into one line. /expand lists the last one.`);
+                console.log(`  full   — reasoning + prose + every tool call/result, never folded`);
                 console.log(`(reasoning is shown at /think's level: collapse = one line, show = all, hide = none)`);
                 return true;
             }
@@ -3846,6 +3962,26 @@ export function processCommand(cmd, state) {
             ui.cot = mode;
             console.log(`\nLive trace: ${ui.cot}`);
             console.log(`Session only — edit [ui].cot in .gnomon/config.toml to make it stick.`);
+            return true;
+        }
+        case "/expand": {
+            const ui = uiOf(state);
+            const steps = state.lastFold ?? [];
+            if (steps.length === 0) {
+                console.log(`\nNothing folded yet this session.`);
+                console.log(`A run of steps folds only when every one of them succeeded and ` +
+                    `changed nothing.`);
+                return true;
+            }
+            console.log(`\n${steps.length} step(s) in the last folded run:`);
+            for (const st of steps) {
+                console.log(paint(ui, "cyan", `  ⚙ ${st.tool}`) + paint(ui, "gray", ` ${st.describe}`));
+                console.log(paint(ui, st.colour, `    ${st.glyph} ${st.summary}`));
+            }
+            // The scrollback is a convenience; the trail is the record. Said here
+            // because this is the moment someone is looking for what happened.
+            console.log(paint(ui, "gray", `\nThis is display only — every call, its arguments and its result are ` +
+                `in the audit trail (\`gnomon audit show\`), folded or not.`));
             return true;
         }
         case "/todo": {
@@ -4369,7 +4505,18 @@ export async function runPromptLoop(config, initialRole, options = {}) {
     const approve = async (req) => {
         const ui = uiOf(state);
         if (approveRestOfSession || approveRestOfTurn) {
-            console.log(paint(ui, "gray", `  ⤷ ${req.summary}  (standing approval: ${approveRestOfSession ? "session" : "this turn"})`));
+            // No line here. This used to print `⤷ <summary> (standing approval: …)`
+            // for EVERY call, which restated a scope the operator had already been
+            // told about once, in full, at the moment they granted it — and did it
+            // beside the `⚙` line that names the same call, so each step cost three
+            // lines and two of them said the same thing. Measured on a real recon
+            // run: 40+ identical suffixes in one turn, with the truncated copy
+            // printed FIRST and the useful one second.
+            //
+            // The decision is still recorded. The audit trail is what answers "what
+            // was approved and by whom"; the scrollback was only ever a worse copy
+            // of it, and a worse copy that made the calls nobody approved harder to
+            // spot.
             audit.write("approval", {
                 tool: req.tool,
                 summary: req.summary,
@@ -4878,6 +5025,7 @@ export async function runPromptLoop(config, initialRole, options = {}) {
                             say: (l) => progress.print(l),
                             signal: controller.signal,
                             audit,
+                            standingApproval: () => approveRestOfSession || approveRestOfTurn,
                         });
                         audit?.write("chain_stage", {
                             stage: i + 1,
@@ -4911,6 +5059,7 @@ export async function runPromptLoop(config, initialRole, options = {}) {
                         say: (line) => progress.print(line),
                         signal: controller.signal,
                         audit,
+                        standingApproval: () => approveRestOfSession || approveRestOfTurn,
                     });
                 }
             }

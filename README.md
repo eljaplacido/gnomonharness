@@ -1577,7 +1577,8 @@ undiscoverable.
 | `/reset` | Drop history (and the summary) |
 | `/meta [fields]` | Set the meta line — `/meta all`, `/meta none`, `/meta style compact` |
 | `/think [mode]` | Chain-of-thought: `hide` \| `collapse` \| `show` |
-| `/cot [mode]` | Live trace while it works: `off` \| `brief` \| `tools` \| `think` \| `full` |
+| `/cot [mode]` | Live trace while it works: `off` \| `brief` \| `tools` \| `think` \| `work` \| `full`. `work` is the default: it shows reasoning and prose in full, and folds a run of steps that succeeded and changed nothing into one line. `full` never folds. |
+| `/expand` | List the steps inside the last folded run. |
 | `/theme [name]` | Colour theme; `tokyonight`/`catppuccin` recolour the whole terminal |
 | `/clear` `/help` `/quit` | |
 
