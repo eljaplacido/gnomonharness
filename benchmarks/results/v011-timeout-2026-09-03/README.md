@@ -23,6 +23,16 @@ and both appear in the archived trial logs.
 `count-call-stack`), `deepseek-v4-flash`, 900 s cap, concurrency 8, serialized,
 n=2 per arm. All 47 tasks were valid in all four cells.
 
+> **Correction, 2026-09-04 — the cap was not 900 s.** Re-measured from this
+> run's own archived `data/`: every trial marked `agent_timeout` ran
+> **1200–1202 s** of agent wall-clock, in all four cells. The 900 s figure is
+> what was configured, not what bound the trials, and it was published here
+> without being checked against the timestamps that were already in the file.
+> The same ceiling appears in `regression-2026-09-03`, where it was found. It
+> applied equally to both arms, so **nothing below changes** except the number:
+> read "900 s" as "a ~1200 s effective clock" throughout. Mechanism not
+> established — see that run's README.
+
 ## Result — the score
 
 | arm | pass 1 | pass 2 | **mean** | within-arm spread |
@@ -68,8 +78,9 @@ it under pressure — which a longer instruction does not fix.
 ## What this run does establish
 
 **A Terminal-Bench number for a released build.** `v0.1.1` scores **44.7%**
-(mean of two passes, 47 tasks, `deepseek-v4-flash`, 900 s). Every previously
-published number in this repository predates the tag.
+(mean of two passes, 47 tasks, `deepseek-v4-flash`, ~1200 s effective clock —
+see the correction above). Every previously published number in this repository
+predates the tag.
 
 **A replicated noise floor.** An earlier pair of identical runs on this build
 flipped 7/47 = **14.9%** of tasks, against **14.7%** measured previously on a
@@ -78,7 +89,8 @@ measurements landing that close is worth more than either alone, and it means
 **any single change worth less than ~10 points is invisible to this design.**
 
 **Timeouts are the dominant failure mode and remain unexplained.** Roughly
-**41%** of all trials end at the 900 s cap, in both arms. That is the largest
+**41%** of all trials end at the cap, in both arms (the cap being ~1200 s, not
+the 900 s stated above — see the correction). That is the largest
 single bucket in the data and the obvious place for the next piece of work — but
 the first attempt at it, this one, did nothing.
 
