@@ -48,6 +48,23 @@
   the window. It changes long interactive sessions, which is where the 0/9 was
   measured.
 
+  **An existing project does not get this by upgrading, and should be told so
+  rather than left to find out.** The code default applies only when the key is
+  absent, and `gnomon init` writes `compaction` explicitly — so every surface
+  scaffolded before today still says `discard`, still scores 0/9, and keeps
+  doing it until someone edits the line. The fix is one line in
+  `.gnomon/config.toml`:
+
+  ```toml
+  [defaults]
+  compaction = "summary"
+  ```
+
+  Migrating it automatically was considered and rejected: `.gnomon/` is
+  content-hashed and human-owned, and a release that edits a committed surface
+  moves the hash under a user who did not ask for it. Announcing it is the
+  honest option even though it is the one more people will miss.
+
 ### Added
 
 - **Tool output too large for the window is written to `.gnomon-out/` instead
