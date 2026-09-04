@@ -96,6 +96,19 @@ fn collect_surface(dir: &Path) -> Vec<Source> {
                     continue;
                 }
 
+                // `extensions/` for the same reason, and it must match the
+                // TypeScript walk exactly -- two implementations of one hash
+                // that disagree would be worse than either being wrong.
+                // Every file here is hashed by both implementations and
+                // loaded by neither, so an extension dropped in moves the
+                // hash while changing no behaviour. Removed rather than
+                // disclosed (see the TS walk for the full reasoning, and for
+                // why the remaining false-negative risk is measured rather
+                // than assumed).
+                if rel_str.starts_with(".gnomon/extensions/") {
+                    continue;
+                }
+
                 let hash = file_sha256(path);
                 sources.push(Source {
                     path: rel_str,
@@ -603,33 +616,51 @@ mod tests {
     }
 
     #[test]
-    fn test_missing_extension_vs_empty_extension() {
+    fn test_an_extension_does_not_move_the_hash_because_nothing_loads_it() {
+        // This test asserted the OPPOSITE until 2026-09-04: that adding a file
+        // under `extensions/` changes the surface hash. It did, and that was
+        // the defect. Nothing in either implementation loads an extension, so
+        // the hash was announcing a behaviour change that never happened --
+        // the one thing this project asks people to trust, lying in the
+        // harmless direction. Commit 9f38bfd disclosed it; this removes it.
+        //
+        // TRIPWIRE: if an extension host is ever built, this test is the thing
+        // that must change back, together with the `.gnomon/extensions/` skip
+        // in `collect_surface` and its twin in the TypeScript walk. Leaving it
+        // excluded once extensions LOAD would turn today's harmless false
+        // positive into a false negative -- behaviour changing while the hash
+        // holds still -- which is the failure this whole design exists to make
+        // impossible. `benchmarks/surface-fidelity/` measures that direction
+        // on every run and will catch it.
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path().join(".gnomon");
         let ext_dir = dir.join("extensions");
 
         fs::create_dir(&dir).unwrap();
         fs::create_dir(&ext_dir).unwrap();
-        // Don't create any .ts files
 
         let sources = build_sources(&dir);
-        // Check that extensions dir appears in walk but no .ts files
         let ext_sources: Vec<_> = sources
             .iter()
-            .filter(|s| s.path.starts_with("extensions/"))
+            .filter(|s| s.path.contains("extensions/"))
             .collect();
-        assert_eq!(ext_sources.len(), 0, "No .ts files means no extension sources");
+        assert_eq!(ext_sources.len(), 0, "an empty extensions dir contributes nothing");
 
         let hash_empty_dir = compute_surface_hash(&sources);
 
-        // Now create an empty file
-        fs::write(ext_dir.join("empty.ts"), "").unwrap();
+        // A real extension file, not an empty one: if anything were going to
+        // move the hash it would be this.
+        fs::write(ext_dir.join("hook.ts"), "export const hook = () => {};\n").unwrap();
         let sources2 = build_sources(&dir);
-        let hash_with_empty = compute_surface_hash(&sources2);
+        let hash_with_extension = compute_surface_hash(&sources2);
 
-        assert_ne!(
-            hash_empty_dir, hash_with_empty,
-            "A missing extension and an empty one are NOT the same surface"
+        assert!(
+            sources2.iter().all(|s| !s.path.contains("extensions/")),
+            "an extension file must not appear in the manifest while nothing loads it"
+        );
+        assert_eq!(
+            hash_empty_dir, hash_with_extension,
+            "an extension changes no behaviour, so it must not change the surface hash"
         );
     }
 

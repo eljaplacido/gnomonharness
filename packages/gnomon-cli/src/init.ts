@@ -703,9 +703,46 @@ Rules:
   a turn spent validating a thing that was never produced scores nothing.
 `;
 
-const PROFILE_LOCAL_FIRST = `# local_first — keep token volume on local hardware.
+/**
+ * The `local_first` profile a scaffold ships.
+ *
+ * It used to declare `name` and `description` and nothing else, which made
+ * `role_profile = "local_first"` — written into every scaffolded config.toml —
+ * a published option that changed nothing on a fresh install. Found 2026-09-04
+ * by `benchmarks/surface-fidelity/`, which classifies a hashed path that cannot
+ * move behaviour as a false positive; this file was one.
+ *
+ * This repository's OWN profile was rewritten on 2026-09-03 with real role
+ * blocks, for exactly this reason, and the scaffold template was not updated
+ * with it. The comment left in that file says what the fix has to be: "a
+ * profile that names a model nothing can run is worse than no profile" — so
+ * the models here are the ones `init` detected on this machine, the same
+ * values it writes into roles.toml, rather than placeholder tags.
+ */
+const profileLocalFirst = (large: string, small: string) => `# local_first — keep token volume on local hardware.
+#
+# A profile is merged OVER the base role, per field. These are the same models
+# roles.toml already names, so selecting this profile is a no-op until you
+# point one of the roles somewhere else — which is the point: change a model
+# here and the surface hash moves with it.
 name = "local_first"
 description = "Local models for implement/critique/smol; escalate only for plan."
+
+[roles.plan]
+model = "${large}"
+endpoint = "local"
+
+[roles.implement]
+model = "${large}"
+endpoint = "local"
+
+[roles.critique]
+model = "${large}"
+endpoint = "local"
+
+[roles.smol]
+model = "${small}"
+endpoint = "local"
 `;
 
 interface Template {
@@ -841,7 +878,7 @@ const templatesFor = (choice: ModelChoice): Template[] => [
   { path: "tools.toml", content: TOOLS_TOML },
   { path: "policy.toml", content: POLICY_TOML },
   { path: "system.md", content: SYSTEM_MD },
-  { path: join("profiles", "local_first.toml"), content: PROFILE_LOCAL_FIRST },
+  { path: join("profiles", "local_first.toml"), content: profileLocalFirst(choice.large, choice.small) },
   { path: join("skills", "endpoints-and-models.md"), content: SKILL_ENDPOINTS },
   { path: join("skills", "secrets.md"), content: SKILL_SECRETS },
 ];

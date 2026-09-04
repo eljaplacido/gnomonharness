@@ -72,6 +72,7 @@ import {
   concurrentSafe,
   globToRegExp,
   createSpillSink,
+  ARGS_TRUNCATED,
   type SpillSink,
 } from "./tools.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
@@ -566,11 +567,29 @@ export function buildMessages(
     // 9/9 for "summary". So the common case is a session that silently forgets
     // and then answers as though it never knew — with the one mechanism built
     // to warn about it sitting inert.
-    notice =
-      compaction === "summary"
-        ? `${dropped.length} earlier turn(s) folded into the summary to fit the window.`
+    // Reports what HAPPENED, not what the surface asked for.
+    //
+    // This chose its wording from `compaction` alone, so a surface declaring
+    // `summary` was told "folded into the summary" whether or not anything had
+    // been folded. With no reachable `context.summary_role` nothing can be:
+    // compactIfNeeded refuses and the turns are dropped, and the operator was
+    // told the opposite of that in the one message written to warn them.
+    //
+    // Found 2026-09-04 by `benchmarks/fault-disclosure/`, and reachable by
+    // DEFAULT since `compaction` became `summary` earlier the same day — which
+    // is what made an already-wrong message start mattering. The tell that it
+    // was folded is a summary existing; `state.summary` is where compaction
+    // puts one.
+    const foldedForReal = compaction === "summary" && Boolean(state.summary);
+    notice = foldedForReal
+      ? `${dropped.length} earlier turn(s) folded into the summary to fit the window.`
+      : compaction === "summary"
+        ? `${dropped.length} earlier turn(s) DROPPED to fit the window — ` +
+          `compaction = "summary" is set but nothing has been folded, so they ` +
+          `are gone. Check that context.summary_role names a role this surface ` +
+          `defines and that its endpoint is reachable.`
         : `${dropped.length} earlier turn(s) DROPPED to fit the window ` +
-          `(compaction=discard — they are gone, not summarised). ` +
+          `(compaction=${compaction} — they are gone, not summarised). ` +
           `Set compaction = "summary" in .gnomon/config.toml to fold them instead.`;
   }
 
@@ -709,15 +728,30 @@ export function classifyFailure(opts: {
   return 10;
 }
 
+/**
+ * Marks arguments that arrived as a string the endpoint never finished.
+ *
+ * A partial response is one of the four canonical agent faults, and it used to
+ * be indistinguishable here from a call with no arguments: `JSON.parse` threw,
+ * the catch returned `{}`, and `read {"path": "src/ma` -- a call truncated by a
+ * token limit -- reached the tool as `read {}`. The tool then answered
+ * "read needs a `path`. Nothing was given", which is FALSE and points the model
+ * at the wrong repair: told an argument is missing it invents one, told its
+ * call was truncated it re-emits it. Nothing crashed and nothing said so.
+ */
 /** Tool arguments arrive as an object (Ollama) or a JSON string (OpenAI). */
 function parseToolArgs(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === "object") return raw as Record<string, unknown>;
   if (typeof raw === "string") {
+    // An empty string is a call with no arguments, which is legitimate for a
+    // tool that takes none. Only a non-empty string that will not parse is a
+    // truncation.
+    if (raw.trim() === "") return {};
     try {
       const parsed = JSON.parse(raw);
       return parsed && typeof parsed === "object" ? parsed : {};
     } catch {
-      return {};
+      return { [ARGS_TRUNCATED]: raw };
     }
   }
   return {};
@@ -804,6 +838,24 @@ async function callEndpointWithRetry(
   let deadline = timeoutMs;
   let transportWaitedMs = 0;
   let transportTries = 0;
+  /**
+   * What the operator is told a code-12 retry was.
+   *
+   * `classifyFailure` folds 429 and 5xx and a refused socket all into 12,
+   * which is right for RETRY POLICY -- another attempt can fix any of them --
+   * and wrong for the notice, which used to call every one of them "endpoint
+   * unreachable". A rate-limited endpoint is perfectly reachable and is
+   * REJECTING you, and the remedies do not overlap: an unreachable endpoint
+   * sends you to your network or your URL, a 429 sends you to your quota or a
+   * different endpoint. Found 2026-09-04 by injecting a 429 storm and reading
+   * what the operator was actually shown.
+   */
+  const transportKind = (r: { content?: string }): string => {
+    const text = r.content ?? "";
+    if (/\b429\b|rate.?limit/i.test(text)) return "endpoint rate limiting (429)";
+    if (/\b5\d\d\b|overloaded|unavailable/i.test(text)) return "endpoint erroring (5xx)";
+    return "endpoint unreachable";
+  };
   for (let attempt = 1; attempt <= resilience.attempts; attempt++) {
     const startedAt = Date.now();
     const r = await callEndpoint(target, messages, tools, deadline, signal);
@@ -824,7 +876,7 @@ async function callEndpointWithRetry(
             paint(
               ui,
               "yellow",
-              `  [retry] endpoint unreachable — grace spent (${transportWaitedMs}ms of ` +
+              `  [retry] ${transportKind(r)} — grace spent (${transportWaitedMs}ms of ` +
                 `${graceMs}ms) after ${transportTries} attempt(s), giving up`
             )
           );
@@ -838,7 +890,7 @@ async function callEndpointWithRetry(
           paint(
             ui,
             "yellow",
-            `  [retry] endpoint unreachable — attempt ${transportTries}, waiting ${wait}ms ` +
+            `  [retry] ${transportKind(r)} — attempt ${transportTries}, waiting ${wait}ms ` +
               `(${transportWaitedMs}ms of ${graceMs}ms grace)`
           )
         );
@@ -875,7 +927,7 @@ async function callEndpointWithRetry(
           paint(
             ui,
             "yellow",
-            `  [retry] ${r.code === 11 ? `timed out (deadline now ${deadline}ms)` : "endpoint unreachable"} ` +
+            `  [retry] ${r.code === 11 ? `timed out (deadline now ${deadline}ms)` : transportKind(r)} ` +
               `— attempt ${attempt} of ${resilience.attempts}, waiting ${wait}ms`
           )
         );

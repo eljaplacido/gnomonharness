@@ -534,6 +534,12 @@ export declare function writeAllowed(ctx: ToolContext, abs: string): {
     rel: string;
     listed: string;
 };
+/**
+ * Set by the response parser when a tool call's arguments arrived as a string
+ * the endpoint never finished. Declared here so `executeTool` can recognise it
+ * without importing from the loop.
+ */
+export declare const ARGS_TRUNCATED = "__gnomon_args_truncated__";
 export declare const JOB_LOG_DIR = ".gnomon-jobs";
 /**
  * Where output too large for the context window is kept.

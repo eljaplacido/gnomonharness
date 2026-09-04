@@ -28,6 +28,22 @@
 
 ### Changed
 
+- **`.gnomon/extensions/` is no longer hashed.** Commit `9f38bfd` *disclosed*
+  that every file under it is content-hashed by both implementations and loaded
+  by neither, so dropping an extension in moved the surface hash while changing
+  no behaviour. Disclosure is the protective layer bolted on top; this is the
+  removal — the same treatment `skills/proposed/` already had, for the same
+  reason, applied to the case that was missed.
+
+  The direction of the remaining error is stated on purpose. Excluding a path
+  trades a **false positive** (hash moves, behaviour does not) for the risk of a
+  **false negative** (behaviour changes, hash does not) if an extension host is
+  ever built and nobody re-includes the directory — and a false negative is far
+  worse for a project whose whole claim rests on this hash. That risk is not
+  accepted on trust: `benchmarks/surface-fidelity/` measures both directions on
+  every run, its negative control models this exact trap, and the Rust test that
+  used to pin the old behaviour is now a named tripwire.
+
 - **`compaction` now defaults to `summary`, not `discard`.** This project
   measured its own default at **0/9** on context retention against **9/9** for
   `summary` ([context-2026-08-31](benchmarks/results/context-2026-08-31/)), and
@@ -67,6 +83,25 @@
   changed and why.
 
 ### Added
+
+- **Two benchmarks that measure properties, not task scores.** Both are
+  exhaustive, deterministic and **$0** — no model, no sampling, no noise floor,
+  and no MDE, because a discrepancy is a counterexample rather than an estimate.
+  Both pre-register their scoring rule and both refuse to publish a number until
+  a negative control has fired, on the principle that a detector which has never
+  detected anything is not evidence.
+
+  - **`benchmarks/surface-fidelity/`** mutates every path under a scaffolded
+    `.gnomon/` and asks whether the hash moves exactly when behaviour moves.
+    **12/12 faithful, 0 false negatives.** This is the first measurement of the
+    claim everything else rests on — `conformance/manifest_golden.json` only
+    ever checked that the hash is *deterministic*, which a constant function
+    also satisfies.
+  - **`benchmarks/fault-disclosure/`** injects the four canonical agent faults
+    plus four of this harness's own degradation paths, and scores whether the
+    operator is told **what actually went wrong**. **8/8 disclosed.** Survival
+    is reported but is explicitly not the headline: it was 8/8 before any of the
+    fixes below, so every defect was invisible to a survival-only measure.
 
 - **The live trace folds a run of quiet steps into one line, and stops printing
   each call three times.** A recon run — read, grep, read, grep, forty times —
@@ -166,6 +201,40 @@
   `roles` are not listed, because they are not for this role at all.
 
 ### Fixed
+
+- **A rate limit was reported to the operator as "endpoint unreachable".**
+  `classifyFailure` folds 429, 5xx and a refused socket into code 12, which is
+  right for retry policy and wrong for the notice: the endpoint was reachable
+  and *rejecting*, and the remedies do not overlap — unreachable sends you to
+  your network, a 429 sends you to your quota. Found by injecting a 429 storm
+  and reading what the operator was actually shown.
+
+- **A truncated tool call was reported as a missing argument.** Arguments arrive
+  from OpenAI-shaped endpoints as a JSON *string*; a response cut off by a token
+  limit yields `{"path": "src/ma`. `JSON.parse` threw, the catch returned `{}`,
+  and the call reached the tool as `read {}`, which answered *"read needs a
+  `path`. Nothing was given"* — a true sentence about a false premise. Told an
+  argument is missing a model invents one; told the call was truncated it
+  re-emits it. Now named as a transit truncation, with the bytes that did
+  arrive, and with a negative-control test so an empty argument string is still
+  read as a call with no arguments rather than a manufactured fault.
+
+- **Dropped turns were reported as folded.** The context notice chose its
+  wording from the *declared* `compaction` rather than from what happened, so a
+  surface whose `context.summary_role` names no reachable role was told "N
+  earlier turn(s) folded into the summary" while those turns were dropped
+  outright. Reachable **by default** since `compaction` became `summary` in this
+  same release — a pre-existing wrong message that only started mattering once
+  the default changed.
+
+- **The scaffolded `local_first` profile declared nothing.** `gnomon init` wrote
+  a `profiles/local_first.toml` carrying only `name` and `description`, while
+  `config.toml` wrote `role_profile = "local_first"` — so the shipped default
+  profile was applied on every fresh install and changed nothing. This
+  repository rewrote its *own* profile with real role blocks on 2026-09-03 for
+  exactly this reason and left the scaffold behind. Found by
+  `benchmarks/surface-fidelity/` on its first honest run, which is the class of
+  defect it exists to catch.
 
 - **`grep` answered "no match" for a file that contained the pattern.** Its
   `path` argument was documented as "Directory to search under" and the walker

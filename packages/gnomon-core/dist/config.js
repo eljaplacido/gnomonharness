@@ -1763,8 +1763,30 @@ function collectSurface(baseDir) {
                 // accepting one moves the file into skills/, which is hashed -- so the
                 // moment a proposal can affect behaviour is exactly the moment it
                 // starts counting.
-                if (relPath !== ".gnomon/skills/proposed")
+                //
+                // `extensions/` is the same case, found 2026-09-04 by applying the
+                // via-negativa principle to the surface: remove a source of fragility
+                // rather than disclose it. Commit 9f38bfd DISCLOSED that every file
+                // under `.gnomon/extensions/` is hashed by both implementations and
+                // loaded by neither -- so dropping an extension in moves the hash,
+                // which is the harness announcing that behaviour changed, while
+                // behaviour does not change at all. Disclosure is the protective layer
+                // bolted on top; this is the removal.
+                //
+                // The direction of the remaining error matters and is stated on
+                // purpose. Excluding a path trades a FALSE POSITIVE (hash moves,
+                // behaviour does not) for the risk of a FALSE NEGATIVE (behaviour
+                // changes, hash does not) if an extension host is ever built and
+                // nobody re-includes the directory. A false negative is far worse for
+                // a project whose whole claim rests on this hash. That risk is not
+                // accepted on trust: `benchmarks/surface-fidelity/` measures BOTH
+                // directions over every surface path on every run, and a host that
+                // starts loading extensions while they are excluded here shows up
+                // there as a false negative.
+                if (relPath !== ".gnomon/skills/proposed" &&
+                    relPath !== ".gnomon/extensions") {
                     walk(fullPath);
+                }
             }
             else {
                 const hash = fileSha256(fullPath);

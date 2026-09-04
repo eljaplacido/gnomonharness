@@ -1202,6 +1202,138 @@ describe("model API errors", () => {
     expect(said.filter((l) => l.includes("[retry]")).length).toBe(2);
   });
 
+  // ---------------------------------------------------------------------
+  // Injected faults.
+  //
+  // ReliabilityBench names four canonical faults for LLM agents: timeouts,
+  // rate limits, partial responses, and schema drift. Timeouts and outages had
+  // end-to-end tests; the other two did not -- 429 was classified in a unit
+  // test and never driven through a turn, and a partial response was never
+  // injected at all. These are the least-exercised and most load-bearing paths
+  // in the harness, because they only run when something is already wrong.
+  //
+  // Each asserts BOTH halves: the turn survived, AND it said so. A harness that
+  // rides out a fault silently has returned a plausible answer the operator has
+  // no reason to distrust, which is worse than failing.
+
+  it("rides out a rate-limit storm, and says it happened", async () => {
+    const config: any = loadConfig("../..");
+    config.config = {
+      ...config.config,
+      resilience: { attempts: 3, backoff_ms: 1, transport_grace_ms: 60_000 },
+    };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const said: string[] = [];
+    let calls = 0;
+    await withFetch(
+      (async () => {
+        calls++;
+        // Six 429s -- more than `attempts` -- then the provider recovers.
+        if (calls <= 6) {
+          return {
+            ok: false,
+            status: 429,
+            statusText: "Too Many Requests",
+            text: async () => "rate limit exceeded, retry in 1s",
+            json: async () => ({}),
+          };
+        }
+        return { ok: true, json: async () => ({ message: { content: "through the storm" } }) };
+      }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state, "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "hi" }],
+          { approve: async () => true, progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false } as any,
+            say: (l: string) => said.push(l) }
+        );
+        // Survived.
+        expect(turn.code, "a rate limit is transient — it must not end the turn").toBe(0);
+        expect(turn.content).toContain("through the storm");
+        expect(calls, "the retry budget must outlast `attempts` for a 429").toBeGreaterThan(3);
+      }
+    );
+    // And disclosed. A silent recovery is a turn the operator cannot tell from
+    // a clean one, on an endpoint that is actively rejecting them.
+    const trace = said.join("\n");
+    expect(trace, "the operator must be told the endpoint was rate limiting").toMatch(/429|rate limit/i);
+  });
+
+  it("a truncated tool call is reported as truncated, not as a missing argument", async () => {
+    // The fourth canonical fault, and it was silently mis-reported. Arguments
+    // arrive from OpenAI-shaped endpoints as a JSON *string*; a response cut
+    // off by a token limit yields `{"path": "src/ma`. JSON.parse threw, the
+    // catch returned {}, and the call reached the tool as `read {}` -- which
+    // answered "read needs a `path`. Nothing was given". True sentence, false
+    // premise: the model DID give one and the wire cut it off. Told an argument
+    // is missing a model invents one; told the call was truncated it re-emits.
+    const config: any = loadConfig("../..");
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    let calls = 0;
+    await withFetch(
+      (async () => {
+        calls++;
+        if (calls === 1) {
+          return { ok: true, json: async () => ({ choices: [{ message: {
+            content: "",
+            tool_calls: [{ id: "c1", function: { name: "read", arguments: '{"path": "src/ma' } }],
+          } }] }) };
+        }
+        return { ok: true, json: async () => ({ message: { content: "done" } }) };
+      }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state, "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "read something" }],
+          { approve: async () => true, progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false } as any,
+            say: () => {} }
+        );
+        const log = turn.toolLog.join("\n");
+        expect(log, "the fault must be named as a truncation").toMatch(/truncat/i);
+        // The old, misleading diagnosis must not be what the model is told.
+        expect(log).not.toMatch(/needs a .path.*Nothing was given/i);
+      }
+    );
+  });
+
+  it("an empty argument string is still a call with no arguments, not a truncation", async () => {
+    // The negative control for the test above. A tool that takes no arguments
+    // legitimately arrives with "" — reading that as a truncation would
+    // manufacture a fault on every such call, which is the failure mode that
+    // makes a detector worth ignoring.
+    const config: any = loadConfig("../..");
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    let calls = 0;
+    await withFetch(
+      (async () => {
+        calls++;
+        if (calls === 1) {
+          return { ok: true, json: async () => ({ choices: [{ message: {
+            content: "",
+            tool_calls: [{ id: "c1", function: { name: "read", arguments: "" } }],
+          } }] }) };
+        }
+        return { ok: true, json: async () => ({ message: { content: "done" } }) };
+      }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state, "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "read something" }],
+          { approve: async () => true, progress: { start() {}, update() {}, stop() {} } as any,
+            ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false } as any,
+            say: () => {} }
+        );
+        expect(turn.toolLog.join("\n"), "an absent argument is not a truncated one")
+          .not.toMatch(/truncat/i);
+      }
+    );
+  });
+
   it("rides out an endpoint outage far longer than `attempts` alone would allow", async () => {
     // The shipped behaviour tolerated ~1.5s of unreachable endpoint: three
     // attempts, 500ms and 1000ms of backoff, all of which return in about a

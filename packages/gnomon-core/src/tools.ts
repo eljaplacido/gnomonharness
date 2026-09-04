@@ -3014,6 +3014,13 @@ function releasePipes(proc: { stdout?: unknown; stderr?: unknown; unref?: () => 
   proc.unref?.();
 }
 
+/**
+ * Set by the response parser when a tool call's arguments arrived as a string
+ * the endpoint never finished. Declared here so `executeTool` can recognise it
+ * without importing from the loop.
+ */
+export const ARGS_TRUNCATED = "__gnomon_args_truncated__";
+
 export const JOB_LOG_DIR = ".gnomon-jobs";
 
 /**
@@ -3166,6 +3173,27 @@ export async function executeTool(
         `Refused: "${name}" is not available to this role. ` +
         `Available: ${[...offered].join(", ") || "(none)"}.`,
       summary: `${name} — not available to this role`,
+    };
+  }
+
+  // A call the endpoint never finished emitting. Named as such rather than
+  // dispatched with the arguments stripped: a truncated `read {"path": "src/ma`
+  // used to arrive as `read {}` and come back "read needs a `path`. Nothing was
+  // given", which is a true sentence about a false premise -- the model DID
+  // give one, and the wire cut it off. Told an argument is missing it invents
+  // one; told the call was truncated it re-emits it.
+  const truncated = args[ARGS_TRUNCATED];
+  if (typeof truncated === "string") {
+    const shown = truncated.length > 200 ? `${truncated.slice(0, 200)}…` : truncated;
+    return {
+      code: TOOL_FAILED,
+      content:
+        `Your ${name} call did not arrive complete: its arguments were cut off ` +
+        `mid-JSON after ${truncated.length} characters, so no argument could be ` +
+        `read and NOTHING RAN. This is a transport truncation, not a mistake in ` +
+        `what you asked for. Send the same call again, shorter if it was long.\n` +
+        `Received: ${shown}`,
+      summary: `${name} — arguments truncated in transit (${truncated.length} chars)`,
     };
   }
 
