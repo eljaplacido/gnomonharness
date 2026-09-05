@@ -135,6 +135,26 @@
   weakest** — the edit engine refuses a drifted patch but there is no undo,
   snapshot or rollback, and git is the de facto one.
 
+- **`test_must_fail_first` measured properly, and it is nearly idle.** Re-run
+  with an authoring role holding no `bash` — the only configuration in which the
+  mechanism can act, since it needs `preImages` and only `write`/`edit` populate
+  those. Of 39 valid runs: 20 wrote a test that already pinned the change
+  (nothing to flag), 18 wrote a test that fails on their own fix (so the check
+  did not pass and the gate skips the mechanism by design), and **1** hit the
+  case it exists to catch.
+
+  The mechanism is correct. Its **applicable population on this corpus is 1 run
+  in 39**, and the task shape that generates bug-pinning tests in quantity —
+  writing tests *for existing code*, `daily-chain`'s 4-in-25 — cannot fire it at
+  all, because a turn that writes only tests has no non-test sources. The gap
+  between where it fires and where bug-pinning happens is the thing worth fixing.
+
+- **Measured on the way: withholding the shell halves the rate at which the
+  agent's own tests pass on its own fix** — 18 of 39 runs, against near-zero when
+  `bash` is available. Without a shell the model cannot run the suite itself, so
+  it ships tests it never executed and gets one hand-back from the declared
+  check. A real operator trade that now has a number on it.
+
 - **The `writing-tests` skill was shipped and measured on the same day, and the
   measurement is null.** 10 greenfield specifications, two passes, one variable,
   $0 on a local model: mean mutation score 0.891 → 0.896, **delta +0.005**,

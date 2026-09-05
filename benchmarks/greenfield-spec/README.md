@@ -164,6 +164,71 @@ quality of the tests the agent writes.** The project shipped it on someone else'
 evidence and measured it the same day; the measurement came back null and is
 reported here rather than left unrun.
 
+---
+
+# Arm 1a″ — the same question, in the configuration where the mechanism can act
+
+Arm 1a′ could not measure `test_must_fail_first` because the agent had a shell,
+wrote through heredocs, and `preImages` — which only `write`/`edit` populate —
+stayed empty. This arm withholds `bash` from the authoring role, which is the
+only configuration in which the capability can act at all. Results in
+`runs-1a2/`.
+
+| | off | on |
+|---|--:|--:|
+| **fails-before-and-passes-after** (primary) | 9/19 = 47.4% | 11/20 = 55.0% |
+| fix satisfies the hidden reference suite | 12/19 = 63.2% | 10/20 = 50.0% |
+| mean mutation score delta (on − off) | — | −0.039 |
+
+Paired: 15 concordant, off-only 1, on-only 3. **McNemar exact p = 0.6250.**
+Direction favours `on`; the arm cannot separate it from three tasks flipping.
+One run excluded as an apparatus timeout, published rather than dropped.
+
+## Finding 1 — the mechanism works, and has almost nothing to act on
+
+`pins nothing` fired **0 times in 40 runs**, with `write`/`edit` used in 39 of
+40 and `bash` in none. That is not the earlier bug. Decomposing the primary
+explains it exactly:
+
+| | runs |
+|---|--:|
+| test fails before **and** passes after — nothing to flag | 20 |
+| test fails before, **fails after too** — the check did not pass, so the gate handed the turn back and `test_must_fail_first` is skipped by design | 18 |
+| **test passes before and after — the case the mechanism exists to catch** | **1** |
+
+So the applicable population on this corpus is **1 run in 39**. The mechanism is
+correct; it is nearly idle.
+
+That sharpens what the capability is for. It fires only when all three hold: the
+turn writes an implementation *and* a test through `write`/`edit`, the declared
+check **passes**, and the test does not pin the change. And the task shape that
+generates bug-pinning tests in quantity — `daily-chain`'s 4-in-25, writing tests
+*for existing code* — fails the first condition, because a turn that writes only
+tests has no non-test sources and the mechanism cannot fire.
+
+**`test_must_fail_first` is narrower than it looks, and the gap between where it
+fires and where bug-pinning actually happens is the thing to fix.**
+
+## Finding 2 — withholding the shell halves the rate at which the agent's own tests pass
+
+Same corpus, same model, same planted defects. The only change from arm 1a′ is
+that the authoring role has no `bash`:
+
+| | with `bash` (1a′) | without (1a″) |
+|---|--:|--:|
+| fails-before-and-passes-after | 8–9 / 10 | 9–11 / 20 |
+| the agent's tests fail on its **own** fix | rare | **18 of 39 runs** |
+
+Without a shell the model cannot run `pytest` itself, so it ships tests it has
+never executed, and its only feedback is one hand-back from the declared check
+(`max_rounds = 1` here). With a shell it iterates until green — and, because of
+the defect this benchmark found, the declared check never runs at all.
+
+That is a real operator trade and it now has a number on it: **a read-only-ish
+authoring role costs roughly half your working-test rate unless you raise
+`[verify] max_rounds` to compensate.** Neither arm is "the right setting"; the
+point is that the cost was invisible before.
+
 ## Apparatus defects found before the result, all recorded
 
 Four, in [PRE-REGISTRATION.md](PRE-REGISTRATION.md): a 60s pytest timeout that
