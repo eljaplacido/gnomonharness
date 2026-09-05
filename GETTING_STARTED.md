@@ -12,12 +12,11 @@ shortest path from nothing to a first task. For the full reference, see
   `apply`, and `session`; `launch`, `task`, and `init` work without it
 - A model endpoint — local [Ollama](https://ollama.com), or any OpenAI-shaped API
 
-**Platform:** Linux and macOS are supported. **On Windows, use WSL2** — see the
-Windows block below. gnomon does *not* run under native PowerShell or cmd.exe:
-its `bash` tool and build scripts assume a POSIX shell, so the agent's shell
-commands would not run there. (A Windows checkout still hashes the surface
-identically, thanks to the committed `.gitattributes` — so contributing from
-Windows is fine; it is *running the agent* that wants WSL2.)
+**Platform:** Linux, macOS and Windows are all supported and all tested — CI runs
+the full suite on each. Windows needs **Git for Windows**, which provides the
+POSIX shell gnomon runs commands through on every platform; see the Windows
+block below for why, and for the two things that behave differently there. WSL2
+still works if you prefer it.
 
 ## 2. Install
 
@@ -35,7 +34,44 @@ cd ~/gnomon
 pnpm run setup
 ```
 
-### Windows — via WSL2 (do this once, from PowerShell)
+### Windows — natively (from PowerShell)
+
+Supported and tested since 2026-09-05: CI runs the full suite on
+`windows-latest`. You do not need WSL2.
+
+```powershell
+winget install --id Git.Git          # also provides the POSIX shell gnomon uses
+winget install --id OpenJS.NodeJS    # Node >= 20
+winget install --id Rustlang.Rustup  # Rust, for the native binaries
+corepack enable pnpm
+
+git clone https://github.com/eljaplacido/gnomonharness.git $HOME\gnomon
+cd $HOME\gnomon
+pnpm run setup
+```
+
+**Git for Windows is not optional.** gnomon runs shell commands through a POSIX
+shell on every platform, so that the same surface behaves the same way on every
+machine — `cmd.exe` would make the same hash mean two different languages. Git
+ships that shell. If gnomon cannot find one, `bash` refuses and tells you how to
+get it rather than running your commands under something else. Already have a
+shell you prefer? `set GNOMON_SHELL=C:\path\to\bash.exe`.
+
+Two things differ on Windows and say so when they happen:
+
+- `gnomon loops` **runs** fine, but cannot **install** on a schedule — that is
+  cron, and Windows has Task Scheduler. Schedule `gnomon loops run <name>`
+  yourself.
+- The credential store is restricted with an ACL rather than a `0600` file mode,
+  and reports it if that fails.
+
+Writing a Windows path into `.gnomon/*.toml`? Use a literal string —
+`command = 'C:\Users\me\server.exe'` — or double the backslashes. A basic
+(double-quoted) TOML string treats `\U` as an escape.
+
+### Windows — via WSL2, if you would rather
+
+Still works, and is the right choice if your toolchain already lives there.
 
 ```powershell
 wsl --install -d Ubuntu

@@ -673,8 +673,23 @@ network = false
 #
 # [verify]
 # command = "pytest -q"    # or cargo test, make, .gnomon/ci.sh
-# after = "write"          # write | always
+# after = "always"         # write | always
 # max_rounds = 1           # times a failure may hand the turn back; 0 = report only
+#
+#   "always" is the example on purpose, and it is not the code default.
+#
+#   "write" means a write or edit TOOL CALL, and only that. A turn that changes
+#   files through the shell -- a heredoc, sed -i, a build script -- does not
+#   count, so the declared check DOES NOT RUN for it. That is deliberate:
+#   counting shell work as a write would turn "write" into "always" for any turn
+#   that shells out, silently, for every surface that already exists.
+#
+#   The cost of it is what measurement showed. In a 48-task benchmark arm, 49 of
+#   50 trials made no write/edit call at all -- the model was editing through
+#   heredocs and sed -i. Under "write" none of those turns would have been
+#   checked. gnomon now SAYS so when it happens (a verify_skipped_shell_only
+#   degradation, on the terminal and in the trail), but the setting that just
+#   checks every turn is "always", and for most projects that is what you want.
 #
 # test_must_fail_first = true
 #   Reject a test that would have passed BEFORE the turn wrote it. A test is

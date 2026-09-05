@@ -24,10 +24,18 @@ export interface CredentialStore {
     [variable: string]: string;
 }
 /**
- * Where the store lives. XDG when set, otherwise ~/.local/share/gnomon.
+ * Where the store lives. XDG when set, otherwise the platform's own data
+ * directory: `%APPDATA%` on Windows, `~/.local/share` elsewhere.
  *
  * Deliberately not inside any repository: a path relative to the project would
  * eventually be committed by someone.
+ *
+ * `XDG_DATA_HOME` is honoured on every platform, not just POSIX ones. It is the
+ * variable this project's own tests and benchmarks set to run "in a stranger's
+ * state", and a Windows branch that ignored it would make those runs measure
+ * the developer's real credential store -- the exact failure
+ * `.claude/skills/benchmark-discipline` records under "a green run that depends
+ * on your machine measures your machine".
  */
 export declare function credentialsPath(): string;
 export declare function loadCredentials(path?: string): CredentialStore;

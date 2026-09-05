@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { auditSurface, loadConfig, recomputeManifest, resolveChain } from "./config.js";
 import { resolveInRoot, executeTool } from "./tools.js";
+import { createRequire } from "node:module";
 
 const surface = (files: Record<string, string>) => {
   const dir = mkdtempSync(join(tmpdir(), "gnomon-gate-"));
@@ -137,11 +138,22 @@ describe("gate: the repository's own CI gates can fail", () => {
     // everything is exactly as useless as one that accepts everything, and only
     // the second assertion can tell them apart.
     const cwd = join(__dirname, "..");
+    const tscBin = createRequire(import.meta.url).resolve("typescript/bin/tsc");
     const check = (src: string): boolean => {
       const dir = mkdtempSync(join(tmpdir(), "gnomon-tsc-"));
       writeFileSync(join(dir, "x.ts"), src);
       try {
-        execFileSync("npx", ["tsc", "--noEmit", "--strict", join(dir, "x.ts")], {
+        // The compiler's own entry point, run by this node -- not `npx`.
+        //
+        // npx is a shell shim (npx.cmd on Windows), and execFileSync resolves
+        // .exe from PATH but not .cmd, so plain "npx" throws ENOENT there and
+        // this check returned false for BOTH inputs -- reading as "tsc rejected
+        // correct code" when tsc had never run. That is the same shape as the
+        // npm decoy package described above: a checker that fails everything is
+        // indistinguishable from one that works, unless both directions are
+        // asserted. Resolving the module removes the shim entirely.
+        execFileSync(process.execPath,
+          [tscBin, "--noEmit", "--strict", join(dir, "x.ts")], {
           stdio: "pipe",
           cwd,
         });
@@ -440,7 +452,13 @@ describe("gate: attestation reports what it cannot do", () => {
     expect((r as { detail: string }).detail).toContain("could not run (exit 127)");
   });
 
-  it("...and neither is one that is present but not executable", async () => {
+  // POSIX-only by nature. Windows has no executable bit -- chmod 0644 leaves
+  // the script perfectly runnable -- so the state this test constructs cannot
+  // exist there. Skipped rather than weakened: 126 is a real POSIX code and
+  // this is a real POSIX behaviour.
+  const posixOnly = process.platform === "win32" ? it.skip : it;
+
+  posixOnly("...and neither is one that is present but not executable", async () => {
     // 126 is the other half of the POSIX pair, and the likelier one after a
     // checkout: the verify script is right there, its mode bit is not.
     const dir = mkdtempSync(join(tmpdir(), "gnomon-verifier-"));

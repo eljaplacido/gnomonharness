@@ -14,7 +14,9 @@ import {
   symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import * as tools from "./tools.js";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 import {
   buildToolSet,
   executeTool,
@@ -60,7 +62,24 @@ beforeEach(() => {
   writeFileSync(join(root, "hello.txt"), "alpha\nbeta\ngamma\n");
   mkdirSync(join(root, "sub"));
 });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
+// maxRetries, because Windows holds a handle on the directory a just-exited
+// child was running in and rmdir returns EBUSY for a few milliseconds after
+// the process is gone. Five tools.test.ts cases failed on that alone, in
+// cleanup, with nothing wrong in what they were testing.
+afterEach(() => {
+  // Windows holds a handle on the directory a just-killed child was running in,
+  // and rmdir returns EBUSY until the OS lets go -- which for a SIGKILLed
+  // process is longer than a few milliseconds. Retry generously, and then
+  // TOLERATE failure: the assertions have already run, and a temp directory the
+  // operating system will reap anyway must not be reported as the test failing.
+  // Five bash cases were failing in cleanup while the behaviour they test was
+  // correct.
+  try {
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
+  } catch {
+    // leaked into the OS temp dir; not this test's subject
+  }
+});
 
 describe("buildToolSet", () => {
   it("offers schemas in a stable, sorted order — Rule 3 says sorted", () => {
@@ -105,7 +124,12 @@ describe("sandbox", () => {
   });
 
   it("allows anything when sandbox is off", () => {
-    expect(resolveInRoot(root, "/etc/passwd", "off")).toBe("/etc/passwd");
+    // A path that is absolute on THIS platform. "/etc/passwd" is not absolute
+    // on Windows the way this test means -- it resolves against the current
+    // drive to D:\etc\passwd -- so the assertion failed while the behaviour
+    // was right.
+    const outside = process.platform === "win32" ? "C:\\Windows\\win.ini" : "/etc/passwd";
+    expect(resolveInRoot(root, outside, "off")).toBe(outside);
   });
 
   it("admits a path inside a granted extra root, and nothing else", () => {
@@ -127,7 +151,7 @@ describe("sandbox", () => {
     expect(resolveInRoot(root, "/etc/passwd", "confined", grant)).toBeNull();
     // And the repository root itself still works.
     expect(resolveInRoot(root, "hello.txt", "confined", grant)).toContain("hello.txt");
-    rmSync(other, { recursive: true, force: true });
+    rmSync(other, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
   it("read outside the sandbox is a refusal, not a crash", async () => {
@@ -464,7 +488,17 @@ describe("bash", () => {
     // OOM-killed test suite reported PASSED -- in the one mechanism whose whole
     // job is to contradict a model that claims success.
     const out = await executeTool("bash", { command: "kill -9 $$" }, ctx({ timeoutMs: 5000 }), offered);
-    expect(out.summary).toMatch(/killed by SIG/);
+    // The PROPERTY is that a killed command never reads as a clean zero. On
+    // POSIX that is spelled "killed by SIGKILL"; Windows has no signals and
+    // reports a large non-zero exit instead. Asserting the POSIX spelling on
+    // Windows would fail while the property held, which is the wrong direction
+    // for a test whose subject is a summary being misread.
+    expect(out.summary).not.toMatch(/exit (0|null)\b/);
+    if (process.platform !== "win32") {
+      expect(out.summary).toMatch(/killed by SIG/);
+    } else {
+      expect(out.summary).toMatch(/exit \d+/);
+    }
     expect(out.summary).not.toContain("exit null");
   });
 
@@ -791,9 +825,14 @@ describe("bash_allow — the constraint that actually makes a role read-only", (
     // The point of the test is that this is TRUE, and therefore that a role
     // holding bash without an allow-list is not read-only however its `tools`
     // list reads.
+    // Relative, because bash runs with cwd = root. An absolute path
+    // interpolated here would be a Windows path on Windows, and a backslash is
+    // an ESCAPE character to the POSIX shell -- so `touch C:\Users\...` writes
+    // somewhere else or nothing at all, and the test fails for a reason that
+    // has nothing to do with allow-lists.
     const out = await executeTool(
       "bash",
-      { command: `touch ${join(root, "written.txt")}` },
+      { command: "touch written.txt" },
       ctx(),
       offered
     );
@@ -1339,7 +1378,7 @@ describe("the sandbox follows symlinks, not just `..`", () => {
   });
 
   afterEach(() => {
-    rmSync(outside, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
   it("refuses a read through a symlink pointing out of the repo", async () => {
@@ -1841,14 +1880,16 @@ describe("shell-mediated work is observed, not inferred", () => {
     try {
       const out = await executeTool(
         "bash",
-        { command: `cd ${outside} && echo hi > made-outside.txt` },
+        // Forward slashes: the shell is POSIX on every platform, and a
+        // backslash is an escape character to it. Git Bash accepts `C:/...`.
+        { command: `cd ${outside.replace(/\\/g, "/")} && echo hi > made-outside.txt` },
         ctx(),
         offered
       );
       expect(out.code).toBe(TOOL_OK);
       expect(out.worktree_changed).toBe(true);
     } finally {
-      rmSync(outside, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   });
 
@@ -2109,5 +2150,32 @@ describe("oversized tool output is offloaded, not just truncated", () => {
     expect(rel).toBeTruthy();
     expect(rel!.startsWith(".gnomon/")).toBe(false);
     expect(rel!.startsWith(`${OVERFLOW_DIR}/`)).toBe(true);
+  });
+});
+
+describe("portability: the shell is POSIX on every platform", () => {
+  // The design claim this pins: a surface at a given hash means the same
+  // commands everywhere. `shell: true` would have run /bin/sh here and
+  // cmd.exe on Windows -- two languages behind one hash.
+  it("resolves to a shell that exists on this machine", () => {
+    const sh = tools.posixShell();
+    expect(sh, "no POSIX shell resolved on this platform").not.toBeNull();
+    expect(existsSync(sh!)).toBe(true);
+  });
+
+  it("is /bin/sh off Windows", () => {
+    if (process.platform === "win32") return;
+    expect(tools.posixShell()).toBe("/bin/sh");
+  });
+
+  it("the refusal names how to get a shell, rather than only that one is missing", () => {
+    // A refusal an operator cannot act on is a worse failure than the one it
+    // reports. This is the message a Windows box with no Git for Windows sees.
+    expect(tools.NO_POSIX_SHELL).toMatch(/GNOMON_SHELL/);
+    expect(tools.NO_POSIX_SHELL).toMatch(/Git/i);
+    // It names cmd.exe on purpose -- saying why the obvious fallback is NOT
+    // taken is the part an operator needs, not a detail to hide.
+    expect(tools.NO_POSIX_SHELL).toMatch(/cmd\.exe/);
+    expect(tools.NO_POSIX_SHELL).toMatch(/winget|install/i);
   });
 });

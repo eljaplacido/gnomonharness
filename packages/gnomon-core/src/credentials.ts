@@ -29,6 +29,7 @@ import {
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
+import { execFileSync } from "node:child_process";
 
 export interface CredentialStore {
   /** Variable name → value */
@@ -36,15 +37,28 @@ export interface CredentialStore {
 }
 
 /**
- * Where the store lives. XDG when set, otherwise ~/.local/share/gnomon.
+ * Where the store lives. XDG when set, otherwise the platform's own data
+ * directory: `%APPDATA%` on Windows, `~/.local/share` elsewhere.
  *
  * Deliberately not inside any repository: a path relative to the project would
  * eventually be committed by someone.
+ *
+ * `XDG_DATA_HOME` is honoured on every platform, not just POSIX ones. It is the
+ * variable this project's own tests and benchmarks set to run "in a stranger's
+ * state", and a Windows branch that ignored it would make those runs measure
+ * the developer's real credential store -- the exact failure
+ * `.claude/skills/benchmark-discipline` records under "a green run that depends
+ * on your machine measures your machine".
  */
 export function credentialsPath(): string {
   const xdg = process.env.XDG_DATA_HOME;
-  const base = xdg && xdg.trim() ? xdg : join(homedir(), ".local", "share");
-  return join(base, "gnomon", "credentials.json");
+  if (xdg && xdg.trim()) return join(xdg, "gnomon", "credentials.json");
+  if (process.platform === "win32") {
+    const appdata = process.env.APPDATA;
+    const base = appdata && appdata.trim() ? appdata : join(homedir(), "AppData", "Roaming");
+    return join(base, "gnomon", "credentials.json");
+  }
+  return join(homedir(), ".local", "share", "gnomon", "credentials.json");
 }
 
 export function loadCredentials(path = credentialsPath()): CredentialStore {
@@ -75,6 +89,47 @@ export function saveCredentials(
   });
   // writeFileSync's mode only applies on create; enforce it on every write.
   chmodSync(path, 0o600);
+  restrictToOwner(path);
+}
+
+/**
+ * Make the store owner-only on Windows, where `chmod` is a no-op.
+ *
+ * Found 2026-09-05 by the windows-latest job: the mode came back 0o666. On
+ * POSIX this file is 0600 and the comment above says why -- "a secret readable
+ * by other users on the machine is not stored". On Windows it inherited the
+ * directory's ACL and was readable by every local user, with nothing saying so.
+ * A credential store that is owner-only on one platform and world-readable on
+ * another, with the same code and the same reassuring comment, is exactly the
+ * silent-degradation class this repository hunts.
+ *
+ * `icacls /inheritance:r /grant:r <user>:F` drops inherited entries and leaves
+ * one: the owner. Best-effort, and it REPORTS when it cannot -- a security
+ * control that fails silently is worse than one that is absent, because the
+ * comment above keeps promising it.
+ */
+function restrictToOwner(path: string): void {
+  if (process.platform !== "win32") return;
+  const user = process.env.USERNAME;
+  if (!user) {
+    process.stderr.write(
+      `gnomon: could not restrict ${path} to your account (USERNAME is unset).\n` +
+        `  The credential store may be readable by other users on this machine.\n`
+    );
+    return;
+  }
+  try {
+    execFileSync("icacls", [path, "/inheritance:r", "/grant:r", `${user}:F`], {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+  } catch (e) {
+    process.stderr.write(
+      `gnomon: could not restrict ${path} to your account: ` +
+        `${e instanceof Error ? e.message.split("\n")[0] : String(e)}\n` +
+        `  The credential store may be readable by other users on this machine.\n` +
+        `  Restrict it yourself:  icacls "${path}" /inheritance:r /grant:r "%USERNAME%:F"\n`
+    );
+  }
 }
 
 export function setCredential(

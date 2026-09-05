@@ -3464,6 +3464,12 @@ describe("measureTreeDelta — measured, not asserted", () => {
     git("init", "-q");
     git("config", "user.email", "t@t");
     git("config", "user.name", "t");
+    // Pinned, not inherited. Git for Windows installs with core.autocrlf=true,
+    // which normalises the CRLF file this fixture writes on purpose -- so git
+    // reported one changed file instead of two and the test failed while
+    // measureTreeDelta was doing exactly its job. The subject here is the
+    // tool's crlf_only accounting; the runner's git config is apparatus.
+    git("config", "core.autocrlf", "false");
     writeFileSync(join(root, "a.txt"), "alpha\nbeta\ngamma\n");
     writeFileSync(join(root, "b.txt"), "one\ntwo\n");
     git("add", "-A");

@@ -34,6 +34,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, } from "node:fs";
 import { join } from "node:path";
 import { parseToml } from "./config.js";
+import { tmpdir } from "node:os";
+import { posixShell, NO_POSIX_SHELL } from "./tools.js";
 /** Where a loop's runtime state lives. Sibling of `.gnomon/`, never inside. */
 export const LOOP_STATE_DIR = ".gnomon-loops";
 /** Marker appended to crontab lines so we can find and remove only our own. */
@@ -109,8 +111,17 @@ export function writeState(root, name, s) {
  * throwing: a guard that exits non-zero is a legitimate signal, not a crash.
  */
 function sh(cmd, timeoutSec) {
+    // The same POSIX shell the `bash` tool uses, for the same reason: a loop's
+    // guard and act commands are declared in the surface, and a surface that
+    // means one language here and another there is machine-scoped behaviour the
+    // hash cannot see. On a Windows box with no POSIX shell this reports a
+    // failure rather than running the command under cmd.exe.
+    const shell = posixShell();
+    if (shell === null) {
+        return { code: 127, out: "", err: NO_POSIX_SHELL };
+    }
     try {
-        const out = execFileSync("bash", ["-lc", cmd], {
+        const out = execFileSync(shell, ["-lc", cmd], {
             encoding: "utf-8",
             timeout: timeoutSec * 1000,
             stdio: ["ignore", "pipe", "pipe"],
@@ -270,9 +281,19 @@ function crontabRead() {
     return r.out;
 }
 function crontabWrite(text) {
-    const tmp = join(process.env.TMPDIR ?? "/tmp", `gnomon-cron-${process.pid}`);
+    if (process.platform === "win32") {
+        // Refused rather than half-done. Windows schedules with Task Scheduler, not
+        // crontab, and pretending otherwise would leave an operator believing a
+        // loop was installed when nothing was.
+        throw new Error("gnomon loops are scheduled with cron, which Windows does not have.\n" +
+            "The loop itself runs fine here -- `gnomon loops run <name>` works -- but " +
+            "installing it on a schedule does not.\n" +
+            "Schedule it yourself with Task Scheduler, invoking:\n" +
+            "    gnomon loops run <name>");
+    }
+    const tmp = join(process.env.TMPDIR ?? tmpdir(), `gnomon-cron-${process.pid}`);
     writeFileSync(tmp, text.endsWith("\n") ? text : text + "\n");
-    execFileSync("bash", ["-lc", `crontab ${JSON.stringify(tmp)} && rm -f ${JSON.stringify(tmp)}`], {
+    execFileSync(posixShell() ?? "/bin/sh", ["-lc", `crontab ${JSON.stringify(tmp)} && rm -f ${JSON.stringify(tmp)}`], {
         stdio: ["ignore", "pipe", "pipe"],
     });
 }

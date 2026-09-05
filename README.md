@@ -1785,19 +1785,23 @@ results and their caveats are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and th
   package manager or anything else installed still reaches the network, and no
   allow-list over shell text can honestly claim otherwise. Constrain that with
   `bash_allow` where it matters. The loop says exactly this at startup.
-- **Linux and macOS only; Windows is untested and unsupported — use WSL2.**
-  The deterministic core (surface hashing, config, edit tools, MCP discovery,
-  launch) is written to be portable, and a committed `.gitattributes` forces LF
-  so a Windows checkout hashes identically. But the `bash` tool, the verify
-  gate, `gnomon loops` (cron), and the CI scripts assume a POSIX shell, and
-  native-binary discovery and MCP spawning are not yet Windows-hardened.
-  **CI tests Linux only.** Read from `.github/workflows/ci.yml`: the
-  `rust-tests`, `ts-tests`, `ci-script` and `test-interactive` jobs all run on
-  `ubuntu-latest`; the `build-macos` job runs `cargo build --bin gnomon-surface`
-  (debug and release) and nothing else — no `cargo test`, no `pnpm test`. So
-  macOS is verified to *compile one Rust binary*, and the TypeScript loop, the
-  `bash` tool and the verify gate have never been exercised there by CI. Treat
-  macOS as supported-by-intent and unverified-by-CI.
+- **Windows needs a POSIX shell, and gnomon will tell you if it cannot find one.**
+  Supported and tested as of 2026-09-05: `windows-latest` runs the full
+  TypeScript suite in CI, 899 passing with 3 skips that are POSIX behaviours
+  Windows does not have (the executable bit, and two `0600` file modes).
+
+  What it needs is **Git for Windows** — `winget install --id Git.Git` — because
+  the `bash` tool runs commands through a POSIX shell on every platform. That is
+  deliberate: `cmd.exe` would make the same surface, at the same hash, mean two
+  different languages, and a shell that changes with the operating system is
+  machine-scoped behaviour the hash cannot see. With no POSIX shell, `bash`
+  refuses and says how to get one rather than running your commands under
+  something else. `GNOMON_SHELL` points at one you already have.
+
+  Two things behave differently and say so: `gnomon loops` can *run* but cannot
+  *install* on a schedule, because that is cron and Windows has Task Scheduler
+  instead; and the credential store is restricted with an ACL (`icacls`) rather
+  than a `0600` mode, which is reported if it fails.
 - **Whole-terminal themes need an OSC-honouring terminal.** `tokyonight` and
   `catppuccin` recolour the terminal background and foreground with OSC 10/11,
   honoured by most modern terminals (legacy Windows conhost ignores them). The

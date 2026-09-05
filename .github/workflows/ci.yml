@@ -8,7 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  PNPM_HOME: /home/runner/.pnpm/bin
+
 
 jobs:
   rust-tests:
@@ -27,6 +27,78 @@ jobs:
 
       - name: Cargo clippy
         run: cargo clippy --all -- -D warnings
+
+  # WINDOWS. Required, as of the commit that made it pass.
+  #
+  # It arrived `continue-on-error: true` on 2026-09-05 with 17 failures, because
+  # a job that fails on arrival teaches people to ignore the red tick. It came
+  # off in the change that made it green, which is the only honest moment for
+  # it: 899 passed and 3 skipped, and the three skips are POSIX behaviours that
+  # cannot exist on Windows (the executable bit, and two 0600 file modes) rather
+  # than things that do not work.
+  windows-tests:
+    name: TypeScript tests (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build native binaries
+        run: cargo build --workspace --bins
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (type-check)
+        run: pnpm run build
+
+      - name: Run tests
+        run: pnpm test --filter gnomon-core --filter gnomon-natives --filter gnomon-cli --filter gnomon-tui
+
+  # macOS ran no tests at all until 2026-09-05 -- the only macOS job built
+  # gnomon-surface, so README's "green on macOS" honestly meant "it compiles
+  # there". A platform the project claims to support and does not test is a
+  # platform it supports in the README only.
+  macos-tests:
+    name: TypeScript tests (macos-latest)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build native binaries
+        run: cargo build --workspace --bins
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (type-check)
+        run: pnpm run build
+
+      - name: Run tests
+        run: pnpm test --filter gnomon-core --filter gnomon-natives --filter gnomon-cli --filter gnomon-tui
 
   ts-tests:
     name: TypeScript tests (core / natives / cli / tui)
