@@ -36,6 +36,13 @@
  * reading anything. The point is that the claim "this was checked at <sha>"
  * ends up in a file a reviewer can see, the same way the contract gate's
  * exemption trailer works.
+ *
+ * Bless in its OWN commit, after the work, and never inside one you go on to
+ * amend or rebase: the marker names a commit, and amending orphans it. Done
+ * once on 2026-09-05 -- the manifest pointed at a SHA that existed only in the
+ * local reflog, so the script resolved it here and would have exited 2 on a
+ * fresh clone. It fails loudly rather than skipping the document, which is the
+ * right direction, but the cheaper fix is not to do it.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
