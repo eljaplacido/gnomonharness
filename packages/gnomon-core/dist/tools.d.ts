@@ -402,6 +402,11 @@ export interface DelegateResult {
     toolSteps: number;
     model: string;
 }
+export declare function posixShell(): string | null;
+/** Reset the memoised shell. Tests only. */
+export declare function _resetShellCache(): void;
+/** What to tell an operator on a Windows box with no POSIX shell. */
+export declare const NO_POSIX_SHELL: string;
 /**
  * Rewrite a shell command so it runs inside a container instead of on the host.
  *

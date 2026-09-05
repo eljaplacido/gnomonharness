@@ -1133,6 +1133,73 @@ async function readTool(
  * work. Signalling the negated pid targets the whole process group, so a
  * timed-out command cannot leave a live orphan behind.
  */
+/**
+ * The POSIX shell every `bash` tool call runs under, on every platform.
+ *
+ * WHY NOT cmd.exe. `spawn(cmd, { shell: true })` runs `/bin/sh -c` on Unix and
+ * `cmd.exe /d /s /c` on Windows. That would make the same surface, at the same
+ * hash, mean two different languages -- `ls`, `grep`, heredocs, `&&` chains and
+ * every `bash_allow` pattern behave differently or not at all. gnomon's whole
+ * claim is that a checkout with a given hash behaves the same way on another
+ * machine, and a shell that changes with the operating system is machine-scoped
+ * behaviour of the worst kind: invisible in the hash.
+ *
+ * So Windows uses a POSIX shell too. Git for Windows ships one (`bash.exe`,
+ * MSYS2-based, works in the Windows filesystem), and it is already installed
+ * anywhere `git` is.
+ *
+ * NOT WSL, deliberately. `bash.exe` on PATH is often WSL's launcher, which runs
+ * in a different filesystem with a different root -- so `ctx.root` would not
+ * mean the same path to the shell as it does to the sandbox check, and the
+ * containment guarantees would be reasoning about the wrong tree. Git Bash is
+ * searched by absolute path for that reason, and PATH is consulted last.
+ *
+ * Returns null when no POSIX shell exists. The caller REFUSES on null rather
+ * than falling back to cmd.exe: a harness that silently changes language is the
+ * silent-degradation class this repository has spent a week hunting.
+ */
+let cachedShell: string | null | undefined;
+
+export function posixShell(): string | null {
+  if (cachedShell !== undefined) return cachedShell;
+  if (process.platform !== "win32") return (cachedShell = "/bin/sh");
+
+  // A machine fact, like the path to a native binary -- not behaviour, and so
+  // not surface. Same reasoning as GNOMON_BIN_OVERRIDE and the credential
+  // store, both of which live outside the hash on purpose.
+  const override = process.env.GNOMON_SHELL;
+  if (override && existsSync(override)) return (cachedShell = override);
+
+  const pf = process.env["ProgramFiles"] || "C:\\Program Files";
+  const pf86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+  const local = process.env.LOCALAPPDATA || "";
+  for (const c of [
+    join(pf, "Git", "bin", "bash.exe"),
+    join(pf86, "Git", "bin", "bash.exe"),
+    local ? join(local, "Programs", "Git", "bin", "bash.exe") : "",
+  ]) {
+    if (c && existsSync(c)) return (cachedShell = c);
+  }
+  return (cachedShell = null);
+}
+
+/** Reset the memoised shell. Tests only. */
+export function _resetShellCache(): void {
+  cachedShell = undefined;
+}
+
+/** What to tell an operator on a Windows box with no POSIX shell. */
+export const NO_POSIX_SHELL =
+  "Refused: no POSIX shell found, so `bash` cannot run.\n\n" +
+  "gnomon runs shell commands through a POSIX shell on every platform, so that " +
+  "the same surface behaves the same way on every machine. Falling back to " +
+  "cmd.exe would change what your commands mean without changing the surface " +
+  "hash.\n\n" +
+  "Install Git for Windows (it ships the shell gnomon uses):\n" +
+  "    winget install --id Git.Git\n\n" +
+  "Or point gnomon at one you already have:\n" +
+  "    set GNOMON_SHELL=C:\\path\\to\\bash.exe";
+
 function killTree(
   proc: { pid?: number; kill: (sig: NodeJS.Signals) => boolean },
   containerName?: string
@@ -1149,6 +1216,17 @@ function killTree(
       }).unref();
     } catch {
       // docker gone, or never started one
+    }
+  }
+  if (typeof proc.pid === "number" && process.platform === "win32") {
+    // No process groups to signal. /T walks the tree, /F is SIGKILL's analogue.
+    try {
+      spawn("taskkill", ["/pid", String(proc.pid), "/T", "/F"], {
+        stdio: "ignore",
+      }).unref();
+      return;
+    } catch {
+      // fall through to the direct kill below
     }
   }
   if (typeof proc.pid === "number") {
@@ -1393,19 +1471,30 @@ async function bashTool(
   const sandboxName = `gnomon-${process.pid}-${startedAt.toString(36)}`;
   const spawned = sandboxCommand(command, ctx, sandboxName);
   const sandboxed = spawned !== command;
+
+  // Refused, not silently run under a different language. See posixShell().
+  const shellBin = posixShell();
+  if (shellBin === null) {
+    return {
+      code: TOOL_FAILED,
+      content: NO_POSIX_SHELL,
+      summary: "bash — refused (no POSIX shell on this machine)",
+    };
+  }
+
   return new Promise<ToolOutcome>((done) => {
-    const proc = spawn(spawned, {
-      shell: true,
+    const proc = spawn(shellBin, ["-c", spawned], {
       cwd: ctx.root,
       // stdin closed, stdout/stderr piped. An inherited stdin pipe that nobody
       // ever writes to makes any command that reads stdin block until the tool
       // timeout kills it -- `cat` with no argument, an npm prompt, a git
       // credential ask. Nothing here can answer them, so they get EOF instead.
       stdio: ["ignore", "pipe", "pipe"],
-      // detached puts the command in its own process group. shell:true means
-      // the direct child is `sh -c`, so signalling only that leaves the real
-      // work orphaned and still running; the group is what must be killed.
-      detached: true,
+      // detached puts the command in its own process group, so killTree can
+      // signal the group rather than only the `sh -c` in front of the real
+      // work. Windows has no process groups to signal and `detached` there
+      // means something else entirely -- killTree uses taskkill /T instead.
+      detached: process.platform !== "win32",
       // sandbox.network = false is declared in policy.toml but this build
       // cannot enforce it; the loop says so at startup rather than pretending.
     });

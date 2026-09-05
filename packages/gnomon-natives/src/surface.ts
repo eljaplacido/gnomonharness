@@ -45,6 +45,18 @@ export interface Enumerations {
 // Binary path resolution
 // ---------------------------------------------------------------------------
 
+/**
+ * The file name a built binary actually has on this platform.
+ *
+ * Cargo writes `gnomon-edit` on Unix and `gnomon-edit.exe` on Windows. Every
+ * lookup below searched for the bare name, so on Windows nothing was ever
+ * found and every native call failed at the point of spawn -- a whole-platform
+ * outage from one missing suffix.
+ */
+function exeName(name: string): string {
+  return process.platform === "win32" && !name.endsWith(".exe") ? name + ".exe" : name;
+}
+
 export function findBinary(name: string): string {
   // 1. Check GNOMON_BIN_OVERRIDE env var (for testing)
   //    Can be a full path to the binary OR a directory containing it
@@ -52,8 +64,12 @@ export function findBinary(name: string): string {
   if (override) {
     const resolved = resolve(override);
     // If it looks like a directory (ends without .exe or known extension), append name
-    const candidate = join(resolved, name);
+    const candidate = join(resolved, exeName(name));
     if (existsSync(candidate)) return candidate;
+    // The bare name too: an override directory populated by hand, or a
+    // cross-built artefact, may not carry the platform suffix.
+    const bare = join(resolved, name);
+    if (existsSync(bare)) return bare;
     // Otherwise use the override as-is — but only if it is a file. It used to
     // be returned whenever it existed, so an override pointing at a directory
     // that lacked this particular binary returned the directory, and spawning
@@ -78,7 +94,7 @@ export function findBinary(name: string): string {
   //
   // Newest wins, which is what a person means by "I just rebuilt it".
   const candidates = (["debug", "release"] as const)
-    .map((profile) => join(__dirname, "..", "..", "..", "target", profile, name))
+    .map((profile) => join(__dirname, "..", "..", "..", "target", profile, exeName(name)))
     .map((path) => {
       try {
         const st = statSync(path);
@@ -93,11 +109,14 @@ export function findBinary(name: string): string {
 
   // 4. Check PATH (system install)
   try {
-    const which = execSync(
-      `which ${name}`,
+    // `where` on Windows, `which` everywhere else -- and `where` prints one
+    // line per hit, so take the first.
+    const lookup = process.platform === "win32" ? "where" : "which";
+    const found = execSync(
+      `${lookup} ${exeName(name)}`,
       { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] }
-    ).trim();
-    if (which) return which;
+    ).trim().split(/\r?\n/)[0]?.trim();
+    if (found) return found;
   } catch {
     // not in PATH
   }

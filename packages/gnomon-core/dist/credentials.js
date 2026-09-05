@@ -23,15 +23,29 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, } from "
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 /**
- * Where the store lives. XDG when set, otherwise ~/.local/share/gnomon.
+ * Where the store lives. XDG when set, otherwise the platform's own data
+ * directory: `%APPDATA%` on Windows, `~/.local/share` elsewhere.
  *
  * Deliberately not inside any repository: a path relative to the project would
  * eventually be committed by someone.
+ *
+ * `XDG_DATA_HOME` is honoured on every platform, not just POSIX ones. It is the
+ * variable this project's own tests and benchmarks set to run "in a stranger's
+ * state", and a Windows branch that ignored it would make those runs measure
+ * the developer's real credential store -- the exact failure
+ * `.claude/skills/benchmark-discipline` records under "a green run that depends
+ * on your machine measures your machine".
  */
 export function credentialsPath() {
     const xdg = process.env.XDG_DATA_HOME;
-    const base = xdg && xdg.trim() ? xdg : join(homedir(), ".local", "share");
-    return join(base, "gnomon", "credentials.json");
+    if (xdg && xdg.trim())
+        return join(xdg, "gnomon", "credentials.json");
+    if (process.platform === "win32") {
+        const appdata = process.env.APPDATA;
+        const base = appdata && appdata.trim() ? appdata : join(homedir(), "AppData", "Roaming");
+        return join(base, "gnomon", "credentials.json");
+    }
+    return join(homedir(), ".local", "share", "gnomon", "credentials.json");
 }
 export function loadCredentials(path = credentialsPath()) {
     if (!existsSync(path))
