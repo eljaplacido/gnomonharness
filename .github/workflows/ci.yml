@@ -2,13 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, windows-support]
   pull_request:
     branches: [master]
 
 env:
   CARGO_TERM_COLOR: always
-  PNPM_HOME: /home/runner/.pnpm/bin
+
 
 jobs:
   rust-tests:
@@ -27,6 +27,42 @@ jobs:
 
       - name: Cargo clippy
         run: cargo clippy --all -- -D warnings
+
+  # WINDOWS. Reported, not required, until it is green -- a job that fails on
+  # arrival teaches people to ignore the red tick, and README has published
+  # "Windows is untested and unsupported" honestly rather than pretending
+  # otherwise. `continue-on-error` comes off in the same change that makes it
+  # pass, and not before.
+  windows-tests:
+    name: TypeScript tests (windows-latest) — provisional
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build native binaries
+        run: cargo build --workspace --bins
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (type-check)
+        run: pnpm run build
+
+      - name: Run tests
+        run: pnpm test --filter gnomon-core --filter gnomon-natives --filter gnomon-cli --filter gnomon-tui
 
   ts-tests:
     name: TypeScript tests (core / natives / cli / tui)
