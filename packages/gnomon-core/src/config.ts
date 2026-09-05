@@ -572,7 +572,24 @@ function unescapeBasic(raw: string): string {
       case '"': return '"';
       case "\\": return "\\";
       default:
-        if (esc[0] === "u" || esc[0] === "U") {
+        // Only a COMPLETE \uXXXX / \UXXXXXXXX is decoded. The guard used to be
+        // `esc[0] === "u" || esc[0] === "U"`, which is also true for the `.`
+        // branch of the alternation above -- so `\U` followed by anything that
+        // is not eight hex digits reached parseInt("", 16) = NaN and
+        // String.fromCodePoint(NaN) threw "Invalid code point NaN", failing the
+        // whole surface load.
+        //
+        // The string that does this in practice is a Windows path:
+        // `command = "C:\Users\me\server.exe"`. `\Users` is not a valid
+        // escape, so on Windows the most ordinary thing a person can write in
+        // tools.toml took the entire surface down with an error naming neither
+        // the file's line nor the word "escape". Found 2026-09-05 by the new
+        // windows-latest job, in mcp.test.ts.
+        //
+        // Left alone rather than thrown on, which is what the comment above has
+        // always promised: this parser is lenient, and a surface that fails to
+        // load over an unrecognised escape helps nobody.
+        if ((esc[0] === "u" && esc.length === 5) || (esc[0] === "U" && esc.length === 9)) {
           return String.fromCodePoint(parseInt(esc.slice(1), 16));
         }
         return whole;

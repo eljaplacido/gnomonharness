@@ -36,11 +36,21 @@ describe("credentialsPath", () => {
     expect(p.endsWith("credentials.json")).toBe(true);
   });
 
-  it("honours XDG_DATA_HOME", () => {
+  it("honours XDG_DATA_HOME, on every platform", () => {
+    // Compared with join(), not against a hardcoded POSIX string: the separator
+    // is "\\" on Windows and this assertion would fail there for a reason that
+    // has nothing to do with what it is testing.
+    //
+    // XDG on Windows is deliberate. It is the variable the benchmarks set to
+    // run "in a stranger's state", and a Windows branch that ignored it would
+    // point those runs at the developer's real credential store -- which is the
+    // failure `.claude/skills/benchmark-discipline` records as "a green run
+    // that depends on your machine measures your machine".
     const original = process.env.XDG_DATA_HOME;
-    process.env.XDG_DATA_HOME = "/tmp/xdg-example";
+    const base = process.platform === "win32" ? "C:\\xdg-example" : "/tmp/xdg-example";
+    process.env.XDG_DATA_HOME = base;
     try {
-      expect(credentialsPath()).toBe("/tmp/xdg-example/gnomon/credentials.json");
+      expect(credentialsPath()).toBe(join(base, "gnomon", "credentials.json"));
     } finally {
       if (original === undefined) delete process.env.XDG_DATA_HOME;
       else process.env.XDG_DATA_HOME = original;
@@ -54,17 +64,31 @@ describe("storage", () => {
     expect(loadCredentials(store).SOME_KEY).toBe("s3cret");
   });
 
-  it("is written owner-only", () => {
+  // POSIX modes only. Windows has no 0600 -- the equivalent is an ACL, applied
+  // by restrictToOwner() and not observable through statSync().mode, which
+  // reports 0o666 there no matter what the ACL says. Asserting the POSIX bits
+  // on Windows would fail for a reason that has nothing to do with whether the
+  // secret is protected.
+  const posixOnly = process.platform === "win32" ? it.skip : it;
+
+  posixOnly("is written owner-only", () => {
     setCredential("SOME_KEY", "s3cret", store);
     // 0600: a secret readable by other users on the machine is not stored.
     expect(statSync(store).mode & 0o777).toBe(0o600);
   });
 
-  it("stays owner-only when rewritten", () => {
+  posixOnly("stays owner-only when rewritten", () => {
     setCredential("A", "1", store);
     writeFileSync(store, "{}", { mode: 0o644 });
     setCredential("B", "2", store);
     expect(statSync(store).mode & 0o777).toBe(0o600);
+  });
+
+  it("writes the store without throwing on this platform", () => {
+    // The cross-platform half: on Windows this exercises restrictToOwner(),
+    // which shells out to icacls. It must not fail the write.
+    setCredential("PORTABLE", "v", store);
+    expect(loadCredentials(store).PORTABLE).toBe("v");
   });
 
   it("lists names, never values", () => {

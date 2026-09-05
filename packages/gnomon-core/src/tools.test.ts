@@ -14,7 +14,9 @@ import {
   symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import * as tools from "./tools.js";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 import {
   buildToolSet,
   executeTool,
@@ -2109,5 +2111,32 @@ describe("oversized tool output is offloaded, not just truncated", () => {
     expect(rel).toBeTruthy();
     expect(rel!.startsWith(".gnomon/")).toBe(false);
     expect(rel!.startsWith(`${OVERFLOW_DIR}/`)).toBe(true);
+  });
+});
+
+describe("portability: the shell is POSIX on every platform", () => {
+  // The design claim this pins: a surface at a given hash means the same
+  // commands everywhere. `shell: true` would have run /bin/sh here and
+  // cmd.exe on Windows -- two languages behind one hash.
+  it("resolves to a shell that exists on this machine", () => {
+    const sh = tools.posixShell();
+    expect(sh, "no POSIX shell resolved on this platform").not.toBeNull();
+    expect(existsSync(sh!)).toBe(true);
+  });
+
+  it("is /bin/sh off Windows", () => {
+    if (process.platform === "win32") return;
+    expect(tools.posixShell()).toBe("/bin/sh");
+  });
+
+  it("the refusal names how to get a shell, rather than only that one is missing", () => {
+    // A refusal an operator cannot act on is a worse failure than the one it
+    // reports. This is the message a Windows box with no Git for Windows sees.
+    expect(tools.NO_POSIX_SHELL).toMatch(/GNOMON_SHELL/);
+    expect(tools.NO_POSIX_SHELL).toMatch(/Git/i);
+    // It names cmd.exe on purpose -- saying why the obvious fallback is NOT
+    // taken is the part an operator needs, not a detail to hide.
+    expect(tools.NO_POSIX_SHELL).toMatch(/cmd\.exe/);
+    expect(tools.NO_POSIX_SHELL).toMatch(/winget|install/i);
   });
 });

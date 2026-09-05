@@ -22,6 +22,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
+import { execFileSync } from "node:child_process";
 /**
  * Where the store lives. XDG when set, otherwise the platform's own data
  * directory: `%APPDATA%` on Windows, `~/.local/share` elsewhere.
@@ -75,6 +76,44 @@ export function saveCredentials(store, path = credentialsPath()) {
     });
     // writeFileSync's mode only applies on create; enforce it on every write.
     chmodSync(path, 0o600);
+    restrictToOwner(path);
+}
+/**
+ * Make the store owner-only on Windows, where `chmod` is a no-op.
+ *
+ * Found 2026-09-05 by the windows-latest job: the mode came back 0o666. On
+ * POSIX this file is 0600 and the comment above says why -- "a secret readable
+ * by other users on the machine is not stored". On Windows it inherited the
+ * directory's ACL and was readable by every local user, with nothing saying so.
+ * A credential store that is owner-only on one platform and world-readable on
+ * another, with the same code and the same reassuring comment, is exactly the
+ * silent-degradation class this repository hunts.
+ *
+ * `icacls /inheritance:r /grant:r <user>:F` drops inherited entries and leaves
+ * one: the owner. Best-effort, and it REPORTS when it cannot -- a security
+ * control that fails silently is worse than one that is absent, because the
+ * comment above keeps promising it.
+ */
+function restrictToOwner(path) {
+    if (process.platform !== "win32")
+        return;
+    const user = process.env.USERNAME;
+    if (!user) {
+        process.stderr.write(`gnomon: could not restrict ${path} to your account (USERNAME is unset).\n` +
+            `  The credential store may be readable by other users on this machine.\n`);
+        return;
+    }
+    try {
+        execFileSync("icacls", [path, "/inheritance:r", "/grant:r", `${user}:F`], {
+            stdio: ["ignore", "ignore", "pipe"],
+        });
+    }
+    catch (e) {
+        process.stderr.write(`gnomon: could not restrict ${path} to your account: ` +
+            `${e instanceof Error ? e.message.split("\n")[0] : String(e)}\n` +
+            `  The credential store may be readable by other users on this machine.\n` +
+            `  Restrict it yourself:  icacls "${path}" /inheritance:r /grant:r "%USERNAME%:F"\n`);
+    }
 }
 export function setCredential(variable, value, path = credentialsPath()) {
     const store = loadCredentials(path);

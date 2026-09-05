@@ -1177,3 +1177,28 @@ describe("TOML conformance — the accepted subset is pinned, not implied", () =
     });
   });
 });
+
+describe("TOML: a Windows path does not take the surface down", () => {
+  // `\U` in C:\Users is not a valid TOML escape. The parser is documented as
+  // lenient -- unknown escapes are left alone -- but the unicode branch was
+  // entered on the first character alone, so `\U` reached
+  // String.fromCodePoint(NaN) and threw. On Windows that is the most ordinary
+  // line a person can write, and it failed the whole surface load with an error
+  // naming neither the line nor the word "escape".
+  it("leaves an incomplete \\u or \\U escape alone instead of throwing", () => {
+    const out = parseToml('command = "C:\\Users\\me\\server.exe"\n');
+    expect(out.command).toBe("C:\\Users\\me\\server.exe");
+  });
+
+  it("still decodes a complete escape, per the spec", () => {
+    expect(parseToml('a = "\\u0041"\n').a).toBe("A");
+    expect(parseToml('a = "\\U0001F600"\n').a).toBe("\u{1F600}");
+  });
+
+  it("a literal string is still the right way to write a path", () => {
+    // The idiom that needs no escaping at all, and what the scaffold should
+    // teach a Windows user.
+    expect(parseToml("command = 'C:\\Users\\me\\server.exe'\n").command)
+      .toBe("C:\\Users\\me\\server.exe");
+  });
+});
