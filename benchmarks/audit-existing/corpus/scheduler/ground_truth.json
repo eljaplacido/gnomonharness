@@ -1,0 +1,70 @@
+{
+  "project": "scheduler",
+  "note": "Line numbers resolved from `locator` at load time.",
+  "defects": [
+    {
+      "id": "window-inclusive-end",
+      "file": "scheduler/window.py",
+      "locator": "        return self.start_hour <= hour <= self.end_hour",
+      "class": "off-by-one bound",
+      "note": "SPEC.md and the docstring say the window is half-open [start, end); this includes end_hour",
+      "line": 19
+    },
+    {
+      "id": "window-end-unchecked",
+      "file": "scheduler/window.py",
+      "locator": "        self.end_hour = end_hour",
+      "class": "missing precondition",
+      "note": "a window whose end is not after its start must raise ValueError at construction; end_hour is never validated",
+      "line": 15
+    },
+    {
+      "id": "consume-raises",
+      "file": "scheduler/budget.py",
+      "locator": "            raise RuntimeError(\"retry budget exhausted\")",
+      "class": "contract violation",
+      "note": "SPEC.md and the docstring say consume returns False when exhausted and never raises",
+      "line": 17
+    },
+    {
+      "id": "priority-sorted-backwards",
+      "file": "scheduler/queue.py",
+      "locator": "        ready.sort(key=lambda j: j.priority)",
+      "class": "spec divergence",
+      "note": "higher priority must win; this sorts ascending and takes the lowest",
+      "line": 38
+    },
+    {
+      "id": "precondition-after-work",
+      "file": "scheduler/runner.py",
+      "locator": "    if now_hour < 0 or now_hour > 24:",
+      "class": "missing precondition",
+      "note": "documented as checked before any job is touched, but pop_ready has already run; and the bound is 24, not 23",
+      "line": 21
+    },
+    {
+      "id": "failure-not-contained",
+      "file": "scheduler/runner.py",
+      "locator": "        execute(job.name)",
+      "class": "swallowed exception",
+      "note": "a job that raises must be recorded as failed and must not stop the rest; this lets the exception escape and abandons the remaining jobs",
+      "line": 25
+    }
+  ],
+  "non_defects": [
+    {
+      "id": "reset-no-clamp",
+      "file": "scheduler/budget.py",
+      "locator": "        self.remaining = self.limit",
+      "note": "not clamping limit to a minimum of one is deliberate and the comment says why",
+      "line": 29
+    },
+    {
+      "id": "peek-copies",
+      "file": "scheduler/queue.py",
+      "locator": "        return [j.name for j in self._jobs]",
+      "note": "the extra allocation is deliberate and the comment says why",
+      "line": 50
+    }
+  ]
+}
