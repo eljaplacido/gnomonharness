@@ -116,7 +116,12 @@ def mutate(src, i):
         return None, None
 
 
-def run_pytest(workdir, testfile, timeout=60):
+# 8 seconds, not 60. These suites run in well under a second; a mutant that
+# takes longer is in an infinite loop, which IS a kill. The first version used
+# 60s and `csvfield` -- 37 mutation sites over a `while` loop -- spent minutes
+# per hanging mutant, at which point scoring one spec cost more than running the
+# agent on it. Measured: the first cell had produced one row in four minutes.
+def run_pytest(workdir, testfile, timeout=8):
     """True if the suite PASSES. Failure, error and timeout are all False."""
     try:
         r = subprocess.run(
@@ -130,7 +135,7 @@ def run_pytest(workdir, testfile, timeout=60):
         return False
 
 
-def score_module(module_src, module_name, agent_test_src, hidden_test_src, max_mutants=40):
+def score_module(module_src, module_name, agent_test_src, hidden_test_src, max_mutants=24):
     """The pre-registered pipeline. Every number is read from a pytest exit code."""
     work = tempfile.mkdtemp(prefix="mut-")
     try:
