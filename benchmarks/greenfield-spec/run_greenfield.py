@@ -54,7 +54,12 @@ def scaffold(root, skill_on):
 def score(spec_dir, root):
     mod = spec_dir.name
     impl_p = root / (mod + ".py")
-    tests = sorted(p for p in root.glob("test_*.py") if p.name != "test_hidden.py")
+    # rglob, not glob, and .gnomon/ excluded: an agent that writes
+    # tests/test_x.py rather than ./test_x.py has still written tests, and
+    # scoring it as "wrote none" would be the apparatus grading its own
+    # assumption about layout.
+    tests = sorted(p for p in root.rglob("test_*.py")
+                   if ".gnomon" not in p.parts and p.name != "test_hidden.py")
     out = {"spec": mod, "wrote_impl": impl_p.exists(), "wrote_tests": bool(tests),
            "test_files": [p.name for p in tests]}
     if not impl_p.exists() or not tests:

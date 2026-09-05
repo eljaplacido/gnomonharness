@@ -22,7 +22,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 def load(pattern):
     out = {}
-    for f in sorted(glob.glob(os.path.join(HERE, "runs", pattern))):
+    for f in sorted(glob.glob(os.path.join(HERE, os.environ.get("RUNS_DIR","runs"), pattern))):
         d = json.load(open(f))
         for r in d["rows"]:
             out[(r["spec"], d["config"], d["pass"])] = r
