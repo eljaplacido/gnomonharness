@@ -223,6 +223,12 @@ describe("initSurface", () => {
       // guessed two model ids that do not exist.
       join("skills", "endpoints-and-models.md"),
       join("skills", "secrets.md"),
+      // Added 2026-09-05. Test authoring is this harness's worst measured
+      // weakness -- 1 in 9 tests met the "fails before, passes after" bar
+      // unaided, and three of nine asserted the bug as the contract -- and it
+      // was fixed by an INSTRUCTION rather than a mechanism, which is unusual
+      // enough here to be worth shipping to every new project.
+      join("skills", "writing-tests.md"),
     ]);
     for (const f of r.written) {
       expect(existsSync(join(root, ".gnomon", f))).toBe(true);

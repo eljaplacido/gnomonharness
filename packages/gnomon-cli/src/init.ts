@@ -895,6 +895,67 @@ the one command to store the replacement themselves.
 should run and stop; that is a finished turn.
 `;
 
+/**
+ * The one instruction in this scaffold with an external replication behind it.
+ *
+ * Measured here twice: left to itself this harness wrote a test meeting the
+ * "fails before, passes after" bar 1 time in 9, and three of the nine asserted
+ * the BUG as the contract -- tests that pass today and block the correct fix
+ * tomorrow. What fixed it was not a mechanism but an instruction: ask for the
+ * docstring's INTENT, and mark a contradiction rather than encoding it.
+ *
+ * arXiv 2608.17177 measures the same shape independently -- specification-driven
+ * test generation, +9.8pp bug detection and +2.5pp branch coverage on production
+ * Google bugs. A modest effect against a named baseline on a real corpus, which
+ * is what a believable number looks like, and it is the one quantitative result
+ * this repository took from the "Antifragile Agentic Solution Factories" report
+ * whose other numbers did not survive its standard.
+ *
+ * [verify] test_must_fail_first is the CAPABILITY version of the same idea and
+ * is strictly better where it applies: it re-runs the new test against the
+ * pre-turn code and refuses it if it still passes. This skill fills the gap
+ * before there is a test to re-run.
+ */
+const SKILL_TESTS = `+++
+name = "writing a test that is worth having"
+description = "Specify the behaviour before generating the test, and never encode a bug as the contract"
+match = '\\b(test|tests|unit test|coverage|spec|assert|pytest|vitest|regression)\\b'
+roles = ["implement", "implementor", "verifier", "critique"]
++++
+
+A test is only worth having if it **fails on the code as it was and passes on
+the code as it is**. A test written by reading the implementation passes by
+construction and pins nothing -- and if the implementation is wrong, it pins the
+bug as the contract, so the correct fix now breaks the suite.
+
+Before writing the test, write down three things, in the test file:
+
+1. **Preconditions.** What must be true for this to be called at all.
+2. **Postconditions.** What the caller is entitled to afterwards. Take these
+   from the docstring, the type signature, the issue, or the caller -- never
+   from the body of the function under test.
+3. **Undefined behaviour.** What the specification does not say. Write no
+   assertions here; an assertion over undefined behaviour freezes an accident.
+
+Then generate the test from 1-3, not from the implementation.
+
+**When the implementation contradicts the specification, that is a finding, not
+a detail to work around.** Say so plainly, and mark the test expected-to-fail
+(xfail, test.fails, should_panic) rather than rewriting the expectation to match
+the code. A test changed to agree with a bug is worse than no test: it is a bug
+with a guard on it.
+
+**Check that it bites.** Break the code deliberately and confirm the test goes
+red. A test that passes against both the fixed and the broken version is
+measuring nothing, however good it looks.
+
+If this project declares test_must_fail_first under [verify], the harness
+enforces the first paragraph mechanically: it restores the non-test files,
+re-runs the check, and refuses a test that still passes. The instruction above
+is what to do before there is a test to re-run.
+`;
+
+
 const templatesFor = (choice: ModelChoice): Template[] => [
   { path: "config.toml", content: CONFIG_TOML },
   { path: "roles.toml", content: rolesToml(choice.large, choice.small, modelNote(choice)) },
@@ -904,6 +965,7 @@ const templatesFor = (choice: ModelChoice): Template[] => [
   { path: join("profiles", "local_first.toml"), content: profileLocalFirst(choice.large, choice.small) },
   { path: join("skills", "endpoints-and-models.md"), content: SKILL_ENDPOINTS },
   { path: join("skills", "secrets.md"), content: SKILL_SECRETS },
+  { path: join("skills", "writing-tests.md"), content: SKILL_TESTS },
 ];
 
 // ---------------------------------------------------------------------------

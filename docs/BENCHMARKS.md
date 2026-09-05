@@ -262,6 +262,14 @@ own 11.9–14.9% self-flip.
 | Silent success | **0/11 falsely successful**, 0 void | [`silent-success`](../benchmarks/silent-success/) |
 | Context on the wire | **4.66×** vs opencode, bytes counted at the endpoint | [`context-cost`](../benchmarks/context-cost/) |
 
+One arm is **designed and not run**, and is listed here because a design that
+exists only in somebody's head is indistinguishable from one that was quietly
+dropped: [`peer-parity`](../benchmarks/peer-parity/PRE-REGISTRATION.md) — a
+powered **non-inferiority** test against opencode. Five task-completion arms
+have come back null, so the answerable question is "does the governance cost
+task completion", not "does it win". It is gated on two unmet conditions, both
+written into its pre-registration.
+
 Two of them have a property worth stating plainly: they read their population
 from the **code**, not from a list kept in the benchmark.
 `degradation-contract` imports `DEGRADATION_IDS`, and `surface-fidelity` walks

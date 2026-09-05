@@ -1787,6 +1787,16 @@ const NEVER_WALKED = new Set([
     "vendor",
     ".gnomon-audit",
     ".gnomon-sessions",
+    // Build artefacts of the same family as dist/target/.next, and absent from
+    // this set until 2026-09-05. The cost was not hypothetical: `pnpm run
+    // coverage` writes into `coverage/` WHILE the suite runs, so the worktree
+    // stamp moved under every step, `worktree_changed` came back true for
+    // commands that changed nothing, and the step-folding test failed under
+    // coverage while passing without it. In a real session the same thing makes
+    // the anti-flailing nudge misfire on an agent that is working correctly --
+    // the premise "nothing changed" is read off this walk.
+    "coverage",
+    ".nyc_output",
 ]);
 /** Hard ceilings, so a search on a large tree cannot hang or flood the window. */
 const WALK_MAX_FILES = 20_000;

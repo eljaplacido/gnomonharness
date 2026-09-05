@@ -458,7 +458,57 @@ case "$GATE_RC" in
     *) fail "Contract/fixture gate" ;;
 esac
 
-# ── 8. Which prose documents are owed a reading ──
+# ── 8. Coverage may not fall ──
+#
+# A ratchet, not a target: the floor is committed in
+# scripts/coverage-floor.json and is raised deliberately, never by the last run.
+# Measured 2026-08-31 at 75.4% statements and left unenforced for five days;
+# enforcing it is what makes the number mean anything.
+#
+# It also earned its keep on arrival. Running under coverage made ONE test fail
+# that passes without it -- `coverage/` was missing from the tool walk's
+# skip-list, so vitest writing into it mid-run moved the worktree stamp and
+# `worktree_changed` came back true for commands that changed nothing. In a real
+# session that misfires the anti-flailing nudge on an agent that is working
+# correctly.
+echo ""
+echo "═══ Coverage floor ═══"
+if pnpm run coverage 2>&1 | node scripts/coverage_gate.mjs; then
+    pass "Coverage is at or above the committed floor"
+else
+    fail "Coverage fell below scripts/coverage-floor.json"
+fi
+
+# ── 9. Every benchmark adapter is as patient as the stock ones ──
+#
+# Asked for by docs/BENCHMARK-REPORT-2026-08-30.md 6.1.1 and never added:
+#
+#   "gnomon_agent.py:55: max_timeout_sec=900.0 -> float('inf'). One line;
+#    matches every stock adapter. Add a CI assertion that gnomon's adapter
+#    timeout equals the stock adapters' -- this bug class has now recurred
+#    twice."
+#
+# Twice, in two different forms: 600s once and 900s once, against peers running
+# uncapped. Every peer comparison measured while it held is biased against
+# gnomon by an unknown amount, and the bias is invisible in the score -- it
+# arrives as timeouts, which look like capability.
+echo ""
+echo "═══ Benchmark adapter clock parity ═══"
+ADAPTERS=$(git ls-files '*gnomon_agent.py' || true)
+if [ -z "$ADAPTERS" ]; then
+    echo "no committed adapters — nothing to check"
+else
+    BAD=""
+    for a in $ADAPTERS; do
+        if ! grep -q 'max_timeout_sec=float("inf")' "$a"; then BAD="$BAD $a"; fi
+    done
+    if [ -n "$BAD" ]; then
+        fail "adapter(s) self-cap their agent timeout:$BAD — stock adapters use float(\"inf\")"
+    fi
+    pass "All $(echo "$ADAPTERS" | wc -l) benchmark adapter(s) run uncapped, like the stock ones"
+fi
+
+# ── 10. Which prose documents are owed a reading ──
 #
 # A REPORT, never a failure, and the distinction is the whole design. Prose rot
 # is real here -- POSITIONING.md said no Terminal-Bench score was claimed while

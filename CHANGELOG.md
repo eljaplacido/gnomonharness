@@ -91,6 +91,39 @@
   `stop_reason: "answered"`. Same silent-success shape as `exit null` read as a
   clean zero, one level up.
 
+- **`benchmarks/peer-parity/PRE-REGISTRATION.md`** — the powered peer arm,
+  **designed and deliberately not launched.** The framing is the change: five
+  task-completion arms in a row have come back null, which is not five failures
+  to find an effect but a consistent finding that at this model tier the harness
+  is not the bottleneck. So the question is **non-inferiority** — "does the
+  governance cost task completion" — which is answerable at a price this project
+  can pay, where superiority is not. The arithmetic is written down: ~58 paired
+  tasks for a 10pp margin, ~230 for 5pp, ~640 for 3pp (out of reach).
+
+  Two conditions block it, both recorded there: the unexplained 900s-vs-1200s
+  clock, and verifying from the peer's own logs that it ran ungated.
+
+- **A `writing-tests.md` skill in the scaffold.** Specify preconditions,
+  postconditions and undefined behaviour *before* generating the test; mark a
+  spec/implementation contradiction `xfail` rather than encoding the bug as the
+  contract. Test authoring is this harness's worst measured weakness — 1 in 9
+  unaided, with three of nine asserting the bug — and it was fixed by an
+  instruction rather than a mechanism, which is unusual enough here to ship to
+  every new project. It is also the one quantitative result taken from the
+  "Antifragile" report (arXiv 2608.17177, +9.8pp bug detection).
+
+- **A coverage floor, enforced.** `scripts/coverage-floor.json` +
+  `scripts/coverage_gate.mjs`, wired into `.gnomon/ci.sh`. A ratchet, not a
+  target, and deliberately not self-raising. Coverage was measured on
+  2026-08-31 and left unenforced for five days; it is now **85.15%** statements
+  (from 75.4%, partly real tests and partly the removal of `agent.ts`).
+
+- **A CI assertion that benchmark adapters run uncapped**, asked for by
+  `BENCHMARK-REPORT-2026-08-30.md` 6.1.1 and never added. The bug class recurred
+  twice — 600s once, 900s once, against peers running `float("inf")` — and it is
+  invisible in the score, because it arrives as timeouts, which look like
+  capability.
+
 - **`benchmarks/context-cost`** — bytes off the wire, against a local recording
   endpoint, for both harnesses answering the same prompt in an identical repo.
   **4.66×** (opencode 36,490 bytes, gnomon 7,824). This **retires
@@ -131,6 +164,14 @@
   `docs/CONTRACTS.md` and the fixture must now be the same set.
 
 ### Fixed
+
+- **The tool walk did not skip `coverage/`.** Every other build-artefact
+  directory is skipped — `dist`, `target`, `.next`, `.turbo` — and this one was
+  not, so `pnpm run coverage` writing into it *while the suite ran* moved the
+  worktree stamp, `worktree_changed` came back true for commands that changed
+  nothing, and one step-folding test failed under coverage while passing without
+  it. In a real session the same thing misfires the anti-flailing nudge on an
+  agent that is working correctly. Found by turning the coverage gate on.
 
 - **The surface audit told operators the opposite of the truth about
   `.gnomon/extensions/`, for a day.** `35cc702` excluded the directory from the
