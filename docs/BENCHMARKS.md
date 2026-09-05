@@ -241,6 +241,33 @@ account of itself. Every one is reproducible from its directory.
 | T7 | Verify-gate value | **inconclusive** — the model never failed | [`quality-2026-08-31`](../benchmarks/results/quality-2026-08-31/) |
 | B4 | Containment (peer-compared) | **3 of 5 boundaries sound** — *corrected* | [`containment-2026-08-31`](../benchmarks/results/containment-2026-08-31/) |
 
+### The property suites (4–5 September 2026)
+
+A second family, and the difference from the table above is the point: these are
+**exhaustive and deterministic** rather than sampled. There is no noise floor,
+no MDE and no p-value in any of them, because a counterexample is not an
+estimate. All five cost **$0** — no model, no provider, no keys — and each one
+refuses to publish unless its negative control fires first.
+
+They exist because the sampled suites cannot answer the questions gnomon's
+claims actually rest on. A property like "the hash moves exactly when behaviour
+moves" is not a rate, and measuring it as one would bury it under this harness's
+own 11.9–14.9% self-flip.
+
+| Suite | Result | Data |
+|---|---|---|
+| Surface-hash fidelity | **12/12 paths faithful**, 0 false negatives | [`surface-fidelity`](../benchmarks/surface-fidelity/) |
+| Fault disclosure | **8/8 faults disclosed**, after 3 defects | [`fault-disclosure`](../benchmarks/fault-disclosure/) |
+| Degradation, recorded | **12/12 announced AND recorded**, after 3 more | [`degradation-contract`](../benchmarks/degradation-contract/) |
+| Silent success | **0/11 falsely successful**, 0 void | [`silent-success`](../benchmarks/silent-success/) |
+| Context on the wire | **4.66×** vs opencode, bytes counted at the endpoint | [`context-cost`](../benchmarks/context-cost/) |
+
+Two of them have a property worth stating plainly: they read their population
+from the **code**, not from a list kept in the benchmark.
+`degradation-contract` imports `DEGRADATION_IDS`, and `surface-fidelity` walks
+every path under a scaffolded surface. A benchmark holding its own copy of the
+population measures its copy, and drifts the moment somebody adds a case.
+
 ### The withdrawal
 
 **B4's headline "gnomon contains 25/25 vs opencode 18/25" is withdrawn as

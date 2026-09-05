@@ -8,7 +8,7 @@ program to close the gap. Companion to [BENCHMARKS.md](BENCHMARKS.md) and
 
 | Suite | Measures | Supports |
 |---|---|---|
-| Internal (`benchmarks/harness.py`) | Token-efficiency + quality vs opencode/pi/omp | **13–43× leaner than opencode** (Pareto win). Harness-comparison tables partly **retracted** by the post-mortem |
+| Internal (`benchmarks/harness.py`) | Token-efficiency + quality vs opencode/pi/omp | ~~13–43× leaner than opencode~~ — **RETRACTED**. That figure multiplied a token ratio by a *pass-rate* ratio from a suite whose comparative tables the post-mortem retracted. Superseded 2026-09-05 by [context-cost](../benchmarks/context-cost/), which counts bytes off the wire against a recording endpoint: **4.66×** total, 3.85× on messages |
 | [Terminal-Bench 2026-08](../benchmarks/results/terminal-bench-2026-08/) | Capability vs goose/opencode, cheap cloud models, 8 tasks | **gnomon ≈ goose (parity) > opencode**, tested cell, default surface |
 | [DFlash 2026-08](../benchmarks/results/dflash-2026-08/) | Local spec-decode speed, output-exact | **Free 1.3–1.5× wall-clock**, quality-neutral |
 

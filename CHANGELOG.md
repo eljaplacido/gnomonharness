@@ -91,6 +91,19 @@
   `stop_reason: "answered"`. Same silent-success shape as `exit null` read as a
   clean zero, one level up.
 
+- **`benchmarks/context-cost`** — bytes off the wire, against a local recording
+  endpoint, for both harnesses answering the same prompt in an identical repo.
+  **4.66×** (opencode 36,490 bytes, gnomon 7,824). This **retires
+  "13–43× leaner than opencode"**, a figure the 2026-08-30 post-mortem retracted
+  six days ago with the instruction to *"lead with the pure token ratio
+  (3.8–11.7×) instead"* — an instruction nothing had carried out while the
+  retracted number went on being quoted. The measured answer lands inside that
+  range.
+
+  Most of the gap is tool schemas: 20,812 bytes against 4,312, for 10 tools
+  against 9. Not more tools — each described about five times longer, re-sent
+  every turn.
+
 - **`benchmarks/silent-success`** — the first deliberate hunt for the bug class
   this repository has found four times by accident: a reported success while the
   thing underneath failed. Eleven decision points, each run clean and broken, so
