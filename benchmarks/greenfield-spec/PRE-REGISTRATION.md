@@ -135,6 +135,33 @@ pre-fix file, and it is the exact bar this harness measured a model clearing
 Arm 1b (the `writing-tests.md` skill, on → off) is unaffected and stays on the
 greenfield task, because an instruction applies where a capability does not.
 
+## Apparatus defects, recorded as they were found
+
+Kept here because each one looked like a result and was a fault in the probe,
+and because the pre-registered rule is what caught all of them.
+
+1. **A 60s pytest timeout in the mutation scorer.** These suites finish in well
+   under a second, so 60s only ever applied to a mutant in an infinite loop —
+   and `csvfield`, 37 mutation sites over a `while`, spent minutes per hanging
+   mutant. The first cell produced one row in four minutes. 8s now, and a hang
+   is correctly a **kill**. The run was stopped before the patch and restarted
+   from scratch rather than edited underneath.
+
+2. **The task prompt dictated the primary endpoint.** It said *"add a regression
+   test that fails on the defective version and passes on your fix"* — which is
+   the endpoint, given to both arms as an instruction. Both would have scored at
+   ceiling and the comparison would have been uninformative by construction; the
+   first three rows were already `bar_met=True`, mutation score 1.0, which is
+   what that looks like from outside. **You cannot instruct the thing you are
+   measuring.** The prompt now asks for what a person would actually ask for —
+   *"fix it so it matches SPEC.md, and add unit tests for it"* — and whether the
+   test catches the defect is a measurement again. Second restart.
+
+3. **Cosmetic planted defects.** The first scorable mutation for `semver` turned
+   `"."` into `".X"`, which breaks parsing outright and is visible from one line.
+   Planting now prefers semantic classes — boundary flips and dropped guards —
+   because a trivially easy task discriminates nothing between configurations.
+
 ## What must be true before it runs
 
 - The mutant set must be **validated against the reference suite first**: every

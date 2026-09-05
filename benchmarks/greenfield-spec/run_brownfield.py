@@ -111,11 +111,22 @@ test_must_fail_first = {"true" if tmff else "false"}
 ''')
 
 
+# APPARATUS DEFECT #2, found after two cells and before any result was read.
+#
+# The first version of this prompt said: "...add a regression test in
+# test_{mod}.py THAT FAILS ON THE DEFECTIVE VERSION AND PASSES ON YOUR FIX."
+# That is the primary endpoint, dictated to both arms in the task itself. Both
+# would have scored at ceiling and the comparison would have been uninformative
+# by construction -- and the first three rows were already bar_met=True,
+# mutation score 1.0, which is what that looks like from the outside.
+#
+# You cannot instruct the thing you are measuring. The prompt now asks for what
+# a person would actually ask for, and whether the test catches the defect is a
+# measurement again.
 TASK = (
     "SPEC.md states the intended behaviour of {mod}.py. The implementation in "
-    "{mod}.py does NOT match it -- there is exactly one defect. Fix {mod}.py so "
-    "it matches SPEC.md, and add a regression test in test_{mod}.py that fails "
-    "on the defective version and passes on your fix. Do not edit SPEC.md."
+    "{mod}.py does not match it. Fix {mod}.py so that it matches SPEC.md, and "
+    "add unit tests for it in test_{mod}.py. Do not edit SPEC.md."
 )
 
 
