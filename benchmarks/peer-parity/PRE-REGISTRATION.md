@@ -68,13 +68,23 @@ never chosen after seeing the interval.
 Both are the gate's rule 1 — *fix what you already know is broken first, or you
 are buying a characterisation of a bug you already have.*
 
-1. **The clock discrepancy must be explained.** `tb.lock` records
-   `global_agent_timeout_sec = 900.0` in every cell, and every trial marked
-   `agent_timeout` ran **1200–1202s** — in two independent runs, with setup time
-   separately accounted. It applies to every arm equally so it invalidates no
-   comparison, but ~41% of trials end at that cap, which makes the cap the
-   single largest determinant of the score. Running a powered arm against a cap
-   nobody can explain buys a precise measurement of an unknown.
+1. **The clock discrepancy — half-resolved 2026-09-05, and the remaining half
+   is now cheap.** [`clock.py`](../results/regression-2026-09-03/clock.py)
+   measured it from archived timestamps: **59 of 64 timeouts land in
+   1195–1210s across 23 different tasks**, so the cap in force is one global
+   1200s and not the 900s the launcher passed. A per-task cap would vary by
+   task; this does not.
+
+   What is left is *why the flag was inert*, which needs the terminal-bench
+   checkout on the sweep machine — a grep, not an experiment.
+
+   **The apparatus requirement that follows is not optional.** This arm must
+   assert, per cell, that `max(agent_ended_at − agent_started_at) ≤ declared_cap
+   × 1.02`, and abort if not. A cap that is not the declared one is invisible in
+   the score — it arrives as timeouts, which look like capability — and ~41% of
+   trials end there, which makes it the single largest determinant of the
+   number. Same bug class as the adapter self-cap, from the framework's side
+   instead of ours, and the same fix: assert the clock rather than trust it.
 
 2. **The peer must be ungated, and verified ungated from its own logs.**
    opencode auto-rejected its own permission prompts on 11 of 45 trials and

@@ -96,6 +96,45 @@ That is why this arm is worth running before the audit arm, and far before any
 Terminal-Bench comparison: it is the cheapest place in this whole programme where
 a real effect could actually clear the noise.
 
+## Amendment, 2026-09-05, before any run
+
+Two of the arms above were **null by construction**, found by reading
+`prompt_loop.ts` rather than by spending. Recorded here rather than silently
+restructured, because the pre-registration is only worth what its history shows.
+
+**Arm 1a as designed cannot fire on greenfield.** `test_must_fail_first`
+restores the turn's non-test files to their **pre-turn** state and re-runs the
+check. On greenfield the pre-turn state of `moneybox.py` is the empty string, so
+the restore breaks every test that imports the module, the check fails, and
+`pinsNothing` can never be true. The mechanism is a no-op on a project that did
+not exist before the turn — a real limit of the capability, and one worth
+publishing on its own.
+
+**And it does not fire on "write tests for this existing code" either.** The
+guard is `wroteATest && sources.length > 0`, where `sources` is the non-test
+files the turn wrote. A turn that writes only tests has no `sources`, so the
+mechanism never runs.
+
+So `test_must_fail_first` applies to exactly one shape: **a turn that changes an
+implementation and adds a test for the change.** That is the fix-plus-regression
+workflow, and it is the only place this arm can measure anything.
+
+Arm 1a is therefore replaced by:
+
+**Arm 1a′ (brownfield, fix-plus-test).** Each spec ships its reference
+implementation carrying one planted defect, plus `SPEC.md` stating the intended
+behaviour. The task is *fix the defect and add a regression test for it*. Single
+variable: `test_must_fail_first` off → on.
+
+**Primary endpoint for 1a′: does the resulting test FAIL against the original
+defective implementation?** That is the "fails before, passes after" bar stated
+directly, it is mechanically checkable by re-running the agent's test against the
+pre-fix file, and it is the exact bar this harness measured a model clearing
+**1 time in 9**.
+
+Arm 1b (the `writing-tests.md` skill, on → off) is unaffected and stays on the
+greenfield task, because an instruction applies where a capability does not.
+
 ## What must be true before it runs
 
 - The mutant set must be **validated against the reference suite first**: every
