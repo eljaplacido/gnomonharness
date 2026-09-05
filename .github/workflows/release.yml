@@ -144,6 +144,14 @@ jobs:
             # rather than inherited from the host.
             os: macos-latest
             target: aarch64-apple-darwin
+          - name: windows-x64
+            # Added 2026-09-05, with the platform. A release that supports
+            # Windows and ships no Windows binary supports it in the README
+            # only: `gnomon surface`, `apply` and `session` are the native
+            # crates, and without them a Windows user has the TypeScript half
+            # of the harness and none of the half that computes the hash.
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
 
@@ -193,14 +201,24 @@ jobs:
       # step to get wrong.
       - name: Package
         id: pkg
+        # bash on every runner, Windows included. The default shell there is
+        # PowerShell, which does not understand `set -euo pipefail` or any of
+        # the below; GitHub ships Git Bash on windows-latest for exactly this.
+        shell: bash
         env:
           GNOMON_BUILD: ${{ needs.verify.outputs.stamp }}
         run: |
           set -euo pipefail
           dir="gnomon-${{ needs.verify.outputs.version }}-${{ matrix.name }}"
           mkdir -p "dist/$dir"
+          # Cargo writes `gnomon-surface` on Unix and `gnomon-surface.exe` on
+          # Windows. Copying the bare name there produced an archive missing
+          # every binary it claimed to contain -- which the 8-entry assertion
+          # below would have caught, but only after a release had been drafted.
+          ext=""
+          case "${{ matrix.target }}" in *windows*) ext=".exe" ;; esac
           for bin in gnomon-surface gnomon-enums gnomon-edit gnomon-exec; do
-            cp "target/${{ matrix.target }}/release/$bin" "dist/$dir/$bin"
+            cp "target/${{ matrix.target }}/release/$bin$ext" "dist/$dir/$bin$ext"
           done
           cp LICENSE "dist/$dir/LICENSE"
 
