@@ -135,6 +135,22 @@
   weakest** — the edit engine refuses a drifted patch but there is no undo,
   snapshot or rollback, and git is the de facto one.
 
+- **`benchmarks/audit-existing` — pilot RUN, not just designed.** 14 planted
+  defects and 5 adversarial controls across two projects, two passes, $0 on a
+  local model: **10/14 found, 0/5 controls falsely flagged, 0 containment
+  violations**, and a flip rate of **1/14 = 7.1%** — half this harness's
+  Terminal-Bench flip rate, so reading code is a more repeatable act than making
+  a task pass.
+
+  Three of the four misses are defects of **absence** — a required check simply
+  not there — against a clean sweep of defects of presence. A hypothesis at n=4,
+  flagged as such rather than reported as a finding.
+
+  Claim accuracy came back 27/27 and is written up as a **positive control**
+  rather than a score: gnomon cite-checks its own `file:line` citations in-turn,
+  so `claim-check` largely re-verifies by the same rule. It becomes evidence only
+  against a harness with no such mechanism.
+
 - **`benchmarks/audit-existing/` and `benchmarks/greenfield-spec/`** —
   pre-registrations for the two workflows the operator asked about: auditing an
   existing project, and speccing a greenfield one, each against a peer. Both
