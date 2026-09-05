@@ -1200,6 +1200,20 @@ export function auditSurface(config) {
                 fatal: false,
             });
         }
+        // `gate = "on_check"` with nothing to check is an option that reads as a
+        // guarantee and behaves as `on_refusal`. Exactly the class 7ebd8fd disclosed
+        // for published options this build does not implement -- said here at
+        // startup rather than discovered when a chain runs to the end that the
+        // operator believed was gated.
+        if (stages.length >= 2 && resolveChainGate(config) === "on_check" && !resolveVerify(config)) {
+            problems.push({
+                where: ".gnomon/config.toml [chain]",
+                problem: `gate = "on_check" but no [verify] command is declared, so there is ` +
+                    `nothing to check and the gate can only ever act as "on_refusal".`,
+                fix: 'Declare [verify] command in policy.toml, or set gate = "on_refusal".',
+                fatal: false,
+            });
+        }
     }
     // A role holding `task` with no task_allow can delegate to any role, and a
     // sub-turn runs with the TARGET role's tools -- so its own `tools` line is
@@ -1847,25 +1861,18 @@ export function resolveExec(config, role) {
     return { mode, image, network: sandbox.network === true };
 }
 /**
- * A declared role chain: the stages one turn passes through, in order.
+ * Read `[chain] gate`.
  *
- * The separation this buys is the one the harness was built around, and until
- * now it existed only across turns a person drove by hand. `task` lets a model
- * reach for it mid-turn; this makes it the shape of the turn itself.
- *
- * Declared in the surface rather than typed at a keyboard, because a chain a
- * human types is machine-scoped behaviour of the worst kind: it lives in their
- * habits, it is not hashed, it is not in the manifest, and it does not
- * reproduce on another machine. Declared, it is data — hashed, diffable, and
- * identical everywhere.
- *
- * Absent means the current behaviour: one role answers. Nothing existing moves.
- *
- * Rule 4 is the constraint that shapes the rest: every stage keeps its OWN
- * bucket and its own record. The chain never collapses three outcomes into a
- * composite verdict, because that is precisely the thing this harness refuses
- * to do.
+ * Absent means `never`, which is what every surface written before this option
+ * existed already does. `gnomon init` writes it explicitly, so a scaffolded
+ * surface says what it chose; an existing one inherits the code default and
+ * nothing moves under anybody — the lesson `compaction` cost this project a
+ * release to learn.
  */
+export function resolveChainGate(config) {
+    const raw = config.config?.chain?.gate;
+    return raw === "on_refusal" || raw === "on_check" ? raw : "never";
+}
 export function resolveChain(config) {
     const raw = config.config?.chain?.stages;
     if (!Array.isArray(raw))

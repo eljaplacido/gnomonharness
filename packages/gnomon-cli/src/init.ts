@@ -119,6 +119,23 @@ converge_refire = 6          # calls between convergence re-pushes once converge
 # An explicit --role or /role prefix overrides the chain entirely.
 # stages = ["plan", "implement", "critique"]
 
+# What stops a chain early. One dial, three positions, each strictly stronger:
+#
+#   never       only an apparatus failure (10/12/13) stops it. A stage that
+#               refused, or whose declared check failed, still hands its answer
+#               to the next stage.
+#   on_refusal  a stage whose bucket is "refusal" also stops it -- it declined,
+#               so there is no answer for the next stage to build on.
+#   on_check    on_refusal, plus a stage whose declared [verify] check did not
+#               pass. This is the position that makes a chain a chain: the work
+#               is checked before the next stage is asked to look at it.
+#
+# What on_check does NOT do: gate on a stage's OPINION. A verifier reporting
+# "this is wrong" in prose still exits 0, and reading its sentence would be
+# instruction, not capability. What stops the chain is a check that RAN and
+# failed. Declare [verify] command in policy.toml to give it something to read.
+gate = "never"
+
 [endpoints.local]
 # Where inference goes lives in the surface: routing is part of what a checkout
 # declares, and it is hashed with everything else. One escape hatch exists —

@@ -1833,6 +1833,21 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
       fatal: false,
     });
   }
+  // `gate = "on_check"` with nothing to check is an option that reads as a
+  // guarantee and behaves as `on_refusal`. Exactly the class 7ebd8fd disclosed
+  // for published options this build does not implement -- said here at
+  // startup rather than discovered when a chain runs to the end that the
+  // operator believed was gated.
+  if (stages.length >= 2 && resolveChainGate(config) === "on_check" && !resolveVerify(config)) {
+    problems.push({
+      where: ".gnomon/config.toml [chain]",
+      problem:
+        `gate = "on_check" but no [verify] command is declared, so there is ` +
+        `nothing to check and the gate can only ever act as "on_refusal".`,
+      fix: 'Declare [verify] command in policy.toml, or set gate = "on_refusal".',
+      fatal: false,
+    });
+  }
 }
 
 // A role holding `task` with no task_allow can delegate to any role, and a
@@ -2552,6 +2567,49 @@ export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
  * composite verdict, because that is precisely the thing this harness refuses
  * to do.
  */
+/**
+ * What stops a declared chain early.
+ *
+ * One dial, three honest positions, in the same idiom as `approval.gate` —
+ * each strictly stronger than the one above it:
+ *
+ * - `never`   — only an apparatus failure (10/12/13) stops the chain. A stage
+ *               that refused, or whose declared check failed, still hands its
+ *               answer to the next stage. This is the behaviour every existing
+ *               surface has, and it stays the default for that reason.
+ * - `on_refusal` — a stage whose bucket is `refusal` also stops it. A stage
+ *               that declined to do the work has no answer to pass on, and the
+ *               stages after it would be building on a non-answer.
+ * - `on_check` — `on_refusal`, plus a stage whose declared `[verify]` check did
+ *               not pass. This is the position that makes a chain a chain: the
+ *               implementor's work is checked before the verifier is asked to
+ *               look at it, and a failing check stops the run rather than being
+ *               recorded and stepped over.
+ *
+ * What `on_check` deliberately does NOT do: gate on a stage's OPINION. A
+ * verifier that reads the code and reports "this is wrong" in prose still exits
+ * 0, and no amount of reading its sentence would be capability — it would be
+ * instruction, on the wrong side of the line this harness is built around. The
+ * thing that stops the chain is a check that ran and failed, which is real
+ * state. A surface wanting a verdict to gate declares a `[verify] command` that
+ * expresses it.
+ */
+export type ChainGate = "never" | "on_refusal" | "on_check";
+
+/**
+ * Read `[chain] gate`.
+ *
+ * Absent means `never`, which is what every surface written before this option
+ * existed already does. `gnomon init` writes it explicitly, so a scaffolded
+ * surface says what it chose; an existing one inherits the code default and
+ * nothing moves under anybody — the lesson `compaction` cost this project a
+ * release to learn.
+ */
+export function resolveChainGate(config: GnomonConfig): ChainGate {
+  const raw = (config.config as { chain?: { gate?: unknown } } | undefined)?.chain?.gate;
+  return raw === "on_refusal" || raw === "on_check" ? raw : "never";
+}
+
 export function resolveChain(config: GnomonConfig): string[] {
   const raw = (config.config as { chain?: { stages?: unknown } } | undefined)?.chain?.stages;
   if (!Array.isArray(raw)) return [];

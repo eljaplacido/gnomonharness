@@ -26,6 +26,8 @@ import {
   resolveExtraRoots,
   resolveExec,
   resolveChain,
+  resolveChainGate,
+  type ChainGate,
   declaredKeyVars,
   resolveLoop,
   LOOP_DEFAULTS,
@@ -1662,6 +1664,28 @@ export interface FoldStep {
 }
 
 /** Result of one agentic turn, before it becomes a PromptExchange. */
+/**
+ * Does the gate stop the chain after this stage? Returns the reason, or null.
+ *
+ * A reason rather than a boolean, because "the chain stopped" is not a useful
+ * thing to read in a trail three weeks later — `stopped_by` says which
+ * condition fired, and the two are not interchangeable when you are trying to
+ * work out why the verifier never ran.
+ *
+ * Apparatus failures are handled by the caller and are NOT this function's
+ * business: they stop the chain at every gate setting, including `never`, and
+ * folding them in here would make `never` look like it had a condition.
+ */
+export function chainStop(
+  gate: ChainGate,
+  r: Pick<TurnResult, "code" | "verify">
+): "refusal" | "verify" | null {
+  if (gate === "never") return null;
+  if (mapBucket(r.code) === "refusal") return "refusal";
+  if (gate === "on_check" && r.verify !== undefined && r.verify !== "passed") return "verify";
+  return null;
+}
+
 export interface TurnResult {
   content: string;
   /** Worst outcome code seen — model transport or any tool */
@@ -1679,6 +1703,18 @@ export interface TurnResult {
    */
   endpoint?: string;
   endpoint_url?: string;
+  /**
+   * The outcome of the surface's declared `[verify]` check for this turn, when
+   * one ran. Absent when no check is declared or none applied.
+   *
+   * It existed only as a separate `verify` audit record and as prose in the
+   * transcript, so the TURN said `code: 0` / `stop_reason: "answered"` for a
+   * turn whose declared check had failed every round it was given. A consumer
+   * reading the record -- `gnomon task --json`, or the chain gate below --
+   * could not tell that from a clean pass. Same silent-success shape as `exit
+   * null` read as a clean zero, one level up.
+   */
+  verify?: "passed" | "failed" | "unrunnable" | "declined";
   toolSteps: number;
   toolLog: string[];
   /**
@@ -2469,6 +2505,9 @@ export async function runAgenticTurn(
   // were the entire residual gap against the peer harness.
   let consecutiveEmpty = 0;
   let truncationRetried = false;
+  // The last outcome of the declared check. Last, not first: a failing check
+  // hands the turn back, and the round after it is the one that counts.
+  let verifyOutcome: TurnResult["verify"];
   // The finish_reason of the completion the turn ends on, so a reply the
   // backend cut off can be recorded as cut off rather than as an answer.
   let lastFinishReason: string | undefined;
@@ -2505,6 +2544,7 @@ export async function runAgenticTurn(
     model: usedModel,
     endpoint: usedTarget.endpoint,
     endpoint_url: usedTarget.url,
+    verify: verifyOutcome,
     toolSteps: steps,
     toolLog,
     usage: turnUsage,
@@ -2800,6 +2840,7 @@ export async function runAgenticTurn(
           // reason to hand the turn back -- they saw it and said no.
           say(paint(deps.ui, "gray", `  ⚙ verify — declined; not run`));
           toolLog.push("verify — declined by the operator");
+          verifyOutcome = "declined";
         }
         // bashTool reports TOOL_OK for any command that *ran*; the shell's own
         // exit status is in the summary, not the tool code. Reading the tool
@@ -2847,6 +2888,7 @@ export async function runAgenticTurn(
             )
           );
           toolLog.push(`verify — could not run (exit ${shellExit})`);
+          verifyOutcome = "unrunnable";
           deps.audit?.write("verify", {
             command: verify.command,
             ok: false,
@@ -2923,6 +2965,7 @@ export async function runAgenticTurn(
         if (unrunnable && !pinsNothing) {
           // Already reported above, with the audit record saying why.
         } else if (!passed || pinsNothing) {
+          verifyOutcome = "failed";
           say(paint(deps.ui, "yellow",
             `    ⚠ verify failed — handing the turn back`));
           working.push({ role: "assistant", content: result.content });
@@ -2942,6 +2985,7 @@ export async function runAgenticTurn(
         // would be the same silent success this gate exists to contradict --
         // just from the other side.
         if (!unrunnable) {
+          verifyOutcome = "passed";
           say(paint(deps.ui, "gray", `    ✓ verify passed`));
         }
       }
@@ -2959,6 +3003,7 @@ export async function runAgenticTurn(
         model: usedModel,
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
+        verify: verifyOutcome,
         toolSteps: steps,
         toolLog,
         usage: turnUsage,
@@ -3084,6 +3129,7 @@ export async function runAgenticTurn(
         model: usedModel,
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
+        verify: verifyOutcome,
         toolSteps: steps,
         toolLog,
         usage: turnUsage,
@@ -3878,6 +3924,7 @@ export async function runTask(
   // prefix beat the routing rules.
   const declaredChain = resolveChain(config);
   const chain = options.role || declaredChain.length < 2 ? [] : declaredChain;
+  const chainGate = resolveChainGate(config);
 
   const state: PromptState = { config, exchanges: [], currentRole: role };
   const ui: ResolvedUi = { ...resolveUi(config), spinner: false, color: false };
@@ -4006,6 +4053,21 @@ export async function runTask(
         // died or the surface could not be used, and the stages after it would
         // be answering a question nobody asked.
         if (r.code === 10 || r.code === 12 || r.code === 13) break;
+        const stop = chainStop(chainGate, r);
+        if (stop) {
+          note(
+            `[chain] stopped after stage ${i + 1}/${chain.length} (${stageRole}) — ${stop}`
+          );
+          audit.write("chain_stage", {
+            stage: i + 1,
+            of: chain.length,
+            role: stageRole,
+            stopped_by: stop,
+            gate: chainGate,
+            surface_hash,
+          });
+          break;
+        }
       }
       turn = last!;
     } else {
@@ -6706,6 +6768,21 @@ export async function runPromptLoop(
             // stop the whole chain rather than only the stage in flight.
             if (r.code === 10 || r.code === 12 || r.code === 13) break;
             if (controller.signal.aborted) break;
+            const stop = chainStop(resolveChainGate(config), r);
+            if (stop) {
+              progress.print(
+                paint(ui, "yellow",
+                  `  [chain] stopped after stage ${i + 1}/${turnChain.length} (${stageRole}) — ${stop}`)
+              );
+              audit?.write("chain_stage", {
+                stage: i + 1,
+                of: turnChain.length,
+                role: stageRole,
+                stopped_by: stop,
+                gate: resolveChainGate(config),
+              });
+              break;
+            }
           }
           turn = last!;
         } else {

@@ -1745,14 +1745,35 @@ results and their caveats are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and th
   original request plus **what the stage before it reported** (never its
   transcript), and the audit trail carries one `chain_stage` record per stage.
   The true limit is **gating**. Read from `prompt_loop.ts`, both chain loops:
-  the only early exit is `if (r.code === 10 || r.code === 12 || r.code === 13)
+  the only early exit was `if (r.code === 10 || r.code === 12 || r.code === 13)
   break` — apparatus failure, a dead endpoint, an unusable surface. A stage's
-  own outcome never stops the next one, so a `critique` stage that reports the
-  work is wrong is followed by nothing, and a `verifier` at the end of a chain
-  appends an opinion to the record rather than gating on it. That is deliberate
-  (Rule 4: every stage keeps its own bucket, and the chain never folds them into
-  a composite verdict) but it means **"chain" here is sequencing, not
-  enforcement**. And it is not free: measured in
+  own outcome never stopped the next one, so a `critique` stage that reported
+  the work was wrong was followed by nothing.
+
+  **Since 2026-09-05 the chain can gate**, through `[chain] gate` — one dial,
+  three positions, each strictly stronger. `never` is the behaviour above and
+  remains the default, so no existing surface moves. `on_refusal` also stops on
+  a stage whose bucket is `refusal` — it declined, so there is no answer for the
+  next stage to build on. `on_check` additionally stops on a stage whose
+  declared `[verify]` check did not pass, which is the position that makes the
+  chain enforcement rather than sequencing: the work is checked before the next
+  stage is asked to look at it.
+
+  The limit that remains, stated precisely: **`on_check` gates on a check, never
+  on an opinion.** A verifier that reads the code and reports "this is wrong" in
+  prose still exits 0, and reading its sentence would be instruction rather than
+  capability — the wrong side of the line this harness is built around. What
+  stops the chain is a command that ran and failed. A surface that wants a
+  verdict to gate expresses it as a `[verify] command`; `auditSurface` says so
+  at startup if `on_check` is declared with nothing to check.
+
+  Rule 4 is untouched: every stage still keeps its own bucket and its own
+  `chain_stage` record, and a stopped chain records `stopped_by` naming which
+  condition fired. The gate decides whether the NEXT stage runs; it never folds
+  the outcomes into a composite verdict.
+
+  And note what has not been re-measured: the −7.9pp below was measured with no
+  gate available, so it says nothing about a gated chain. Measured in
   [role-chain-2026-09-02](benchmarks/results/role-chain-2026-09-02/README.md) —
   47 tasks, two passes per arm, one variable — the chain scored **48.7%** against
   **56.6%** without it, a −7.9pp difference exactly equal to the within-arm

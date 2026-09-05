@@ -8,7 +8,7 @@
  * GNOMON_MODEL_URL env var.
  */
 import * as readline from "node:readline";
-import { GnomonConfig, routeRole, ResolvedRouting, ResolvedUi, SurfaceProblem, EndpointConfig } from "./config.js";
+import { GnomonConfig, routeRole, type ChainGate, ResolvedRouting, ResolvedUi, SurfaceProblem, EndpointConfig } from "./config.js";
 import { Progress } from "./render.js";
 export { isLocalEndpoint } from "./config.js";
 import { Todo, type SurfaceDrift, Approver, SandboxLevel, SurfaceConsent, RunNote, type SpillSink } from "./tools.js";
@@ -432,6 +432,19 @@ export interface FoldStep {
     summary: string;
 }
 /** Result of one agentic turn, before it becomes a PromptExchange. */
+/**
+ * Does the gate stop the chain after this stage? Returns the reason, or null.
+ *
+ * A reason rather than a boolean, because "the chain stopped" is not a useful
+ * thing to read in a trail three weeks later — `stopped_by` says which
+ * condition fired, and the two are not interchangeable when you are trying to
+ * work out why the verifier never ran.
+ *
+ * Apparatus failures are handled by the caller and are NOT this function's
+ * business: they stop the chain at every gate setting, including `never`, and
+ * folding them in here would make `never` look like it had a condition.
+ */
+export declare function chainStop(gate: ChainGate, r: Pick<TurnResult, "code" | "verify">): "refusal" | "verify" | null;
 export interface TurnResult {
     content: string;
     /** Worst outcome code seen — model transport or any tool */
@@ -449,6 +462,18 @@ export interface TurnResult {
      */
     endpoint?: string;
     endpoint_url?: string;
+    /**
+     * The outcome of the surface's declared `[verify]` check for this turn, when
+     * one ran. Absent when no check is declared or none applied.
+     *
+     * It existed only as a separate `verify` audit record and as prose in the
+     * transcript, so the TURN said `code: 0` / `stop_reason: "answered"` for a
+     * turn whose declared check had failed every round it was given. A consumer
+     * reading the record -- `gnomon task --json`, or the chain gate below --
+     * could not tell that from a clean pass. Same silent-success shape as `exit
+     * null` read as a clean zero, one level up.
+     */
+    verify?: "passed" | "failed" | "unrunnable" | "declined";
     toolSteps: number;
     toolLog: string[];
     /**

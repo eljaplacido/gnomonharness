@@ -13,7 +13,7 @@ import { checkCitations } from "./citations.js";
 import { resolve, dirname, join, relative, sep, basename } from "node:path";
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { routeRole, listRoles, listProfiles, resolveContext, resolveVerify, resolveResilience, resolveExtraRoots, resolveExec, resolveChain, declaredKeyVars, resolveLoop, LOOP_DEFAULTS, resolveUi, resolveEndpoint, resolveRouting, recomputeManifest, routeInput, listEndpoints, isLocalEndpoint, endpointClass, parseMetaFields, META_FIELDS, COT_MODES, loadConfig, auditSurface, probeEndpointAuth, } from "./config.js";
+import { routeRole, listRoles, listProfiles, resolveContext, resolveVerify, resolveResilience, resolveExtraRoots, resolveExec, resolveChain, resolveChainGate, declaredKeyVars, resolveLoop, LOOP_DEFAULTS, resolveUi, resolveEndpoint, resolveRouting, recomputeManifest, routeInput, listEndpoints, isLocalEndpoint, endpointClass, parseMetaFields, META_FIELDS, COT_MODES, loadConfig, auditSurface, probeEndpointAuth, } from "./config.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence, safeForPrompt, } from "./render.js";
 export { isLocalEndpoint } from "./config.js";
 import { buildToolSet, executeTool, needsApproval, concurrentSafe, globToRegExp, createSpillSink, ARGS_TRUNCATED, } from "./tools.js";
@@ -1158,6 +1158,28 @@ function printExchange(exchange, ui) {
         console.log(line);
     }
 }
+/** Result of one agentic turn, before it becomes a PromptExchange. */
+/**
+ * Does the gate stop the chain after this stage? Returns the reason, or null.
+ *
+ * A reason rather than a boolean, because "the chain stopped" is not a useful
+ * thing to read in a trail three weeks later — `stopped_by` says which
+ * condition fired, and the two are not interchangeable when you are trying to
+ * work out why the verifier never ran.
+ *
+ * Apparatus failures are handled by the caller and are NOT this function's
+ * business: they stop the chain at every gate setting, including `never`, and
+ * folding them in here would make `never` look like it had a condition.
+ */
+export function chainStop(gate, r) {
+    if (gate === "never")
+        return null;
+    if (mapBucket(r.code) === "refusal")
+        return "refusal";
+    if (gate === "on_check" && r.verify !== undefined && r.verify !== "passed")
+        return "verify";
+    return null;
+}
 /**
  * Why the tool loop stopped.
  *
@@ -1747,6 +1769,9 @@ depth = 0) {
     // were the entire residual gap against the peer harness.
     let consecutiveEmpty = 0;
     let truncationRetried = false;
+    // The last outcome of the declared check. Last, not first: a failing check
+    // hands the turn back, and the round after it is the one that counts.
+    let verifyOutcome;
     // The finish_reason of the completion the turn ends on, so a reply the
     // backend cut off can be recorded as cut off rather than as an answer.
     let lastFinishReason;
@@ -1781,6 +1806,7 @@ depth = 0) {
             model: usedModel,
             endpoint: usedTarget.endpoint,
             endpoint_url: usedTarget.url,
+            verify: verifyOutcome,
             toolSteps: steps,
             toolLog,
             usage: turnUsage,
@@ -2005,6 +2031,7 @@ depth = 0) {
                     // reason to hand the turn back -- they saw it and said no.
                     say(paint(deps.ui, "gray", `  ⚙ verify — declined; not run`));
                     toolLog.push("verify — declined by the operator");
+                    verifyOutcome = "declined";
                 }
                 // bashTool reports TOOL_OK for any command that *ran*; the shell's own
                 // exit status is in the summary, not the tool code. Reading the tool
@@ -2045,6 +2072,7 @@ depth = 0) {
                     say(paint(deps.ui, "yellow", `  ⚙ verify — the check could not run (exit ${shellExit}). ` +
                         `Not counted against the work; fix [verify] command.`));
                     toolLog.push(`verify — could not run (exit ${shellExit})`);
+                    verifyOutcome = "unrunnable";
                     deps.audit?.write("verify", {
                         command: verify.command,
                         ok: false,
@@ -2113,6 +2141,7 @@ depth = 0) {
                     // Already reported above, with the audit record saying why.
                 }
                 else if (!passed || pinsNothing) {
+                    verifyOutcome = "failed";
                     say(paint(deps.ui, "yellow", `    ⚠ verify failed — handing the turn back`));
                     working.push({ role: "assistant", content: result.content });
                     working.push({
@@ -2130,6 +2159,7 @@ depth = 0) {
                 // would be the same silent success this gate exists to contradict --
                 // just from the other side.
                 if (!unrunnable) {
+                    verifyOutcome = "passed";
                     say(paint(deps.ui, "gray", `    ✓ verify passed`));
                 }
             }
@@ -2146,6 +2176,7 @@ depth = 0) {
                 model: usedModel,
                 endpoint: usedTarget.endpoint,
                 endpoint_url: usedTarget.url,
+                verify: verifyOutcome,
                 toolSteps: steps,
                 toolLog,
                 usage: turnUsage,
@@ -2253,6 +2284,7 @@ depth = 0) {
                 model: usedModel,
                 endpoint: usedTarget.endpoint,
                 endpoint_url: usedTarget.url,
+                verify: verifyOutcome,
                 toolSteps: steps,
                 toolLog,
                 usage: turnUsage,
@@ -2841,6 +2873,7 @@ export async function runTask(config, input, options = {}) {
     // prefix beat the routing rules.
     const declaredChain = resolveChain(config);
     const chain = options.role || declaredChain.length < 2 ? [] : declaredChain;
+    const chainGate = resolveChainGate(config);
     const state = { config, exchanges: [], currentRole: role };
     const ui = { ...resolveUi(config), spinner: false, color: false };
     const route = routeRole(config, role);
@@ -2959,6 +2992,19 @@ export async function runTask(config, input, options = {}) {
                 // be answering a question nobody asked.
                 if (r.code === 10 || r.code === 12 || r.code === 13)
                     break;
+                const stop = chainStop(chainGate, r);
+                if (stop) {
+                    note(`[chain] stopped after stage ${i + 1}/${chain.length} (${stageRole}) — ${stop}`);
+                    audit.write("chain_stage", {
+                        stage: i + 1,
+                        of: chain.length,
+                        role: stageRole,
+                        stopped_by: stop,
+                        gate: chainGate,
+                        surface_hash,
+                    });
+                    break;
+                }
             }
             turn = last;
         }
@@ -5176,6 +5222,18 @@ export async function runPromptLoop(config, initialRole, options = {}) {
                             break;
                         if (controller.signal.aborted)
                             break;
+                        const stop = chainStop(resolveChainGate(config), r);
+                        if (stop) {
+                            progress.print(paint(ui, "yellow", `  [chain] stopped after stage ${i + 1}/${turnChain.length} (${stageRole}) — ${stop}`));
+                            audit?.write("chain_stage", {
+                                stage: i + 1,
+                                of: turnChain.length,
+                                role: stageRole,
+                                stopped_by: stop,
+                                gate: resolveChainGate(config),
+                            });
+                            break;
+                        }
                     }
                     turn = last;
                 }

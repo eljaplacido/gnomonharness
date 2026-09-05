@@ -28,6 +28,35 @@
 
 ### Added
 
+- **`[chain] gate` — the chain can now stop.** One dial, three positions, each
+  strictly stronger: `never` (the behaviour every existing surface has, and the
+  default, so nothing moves under anybody), `on_refusal` (a stage whose bucket
+  is `refusal` stops it), `on_check` (also a stage whose declared `[verify]`
+  check did not pass).
+
+  This closes the limit the README has published since the feature shipped: *"a
+  role chain runs in order and gates on nothing"*. A `critique` stage that
+  reported the work was wrong was followed by the next stage regardless.
+
+  What it deliberately does not do: gate on a stage's **opinion**. A verifier
+  reporting "this is wrong" in prose still exits 0, and reading its sentence
+  would be instruction rather than capability. What stops the chain is a check
+  that ran and failed. `auditSurface` reports a surface declaring `on_check`
+  with no `[verify] command`, because an option that reads as a guarantee and
+  behaves as `on_refusal` is the class `7ebd8fd` disclosed.
+
+  Rule 4 is untouched: every stage keeps its own bucket and its own
+  `chain_stage` record, and a stopped chain records `stopped_by` naming which
+  condition fired. **No migration needed** — unlike compaction, the code default
+  is what every existing surface already does.
+
+- **`verify` on the turn record** — `passed` / `failed` / `unrunnable` /
+  `declined`, so `gnomon task --json` says whether the declared check passed.
+  It existed only as a separate `verify` audit record, so a turn whose check
+  had failed every round it was given still reported `code: 0` and
+  `stop_reason: "answered"`. Same silent-success shape as `exit null` read as a
+  clean zero, one level up.
+
 - **A degradation contract, and a benchmark that measures it.**
   `packages/gnomon-core/src/degradation.ts` names every way this harness carries
   on with less than it declared — twelve paths — and

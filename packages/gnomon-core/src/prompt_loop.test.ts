@@ -3623,3 +3623,85 @@ describe("the degradation contract", () => {
     expect(recs.some((r) => r.kind === "degradation" && r.id === "endpoint_tools_rejected")).toBe(true);
   });
 });
+
+describe("the chain gate", () => {
+  // The pure decision, exhaustively. A chain that runs its verifier after the
+  // implementor's own check failed is the shape this whole option exists to
+  // stop, and it is cheap enough to enumerate rather than sample.
+  const R = (code: number, verify?: any) => ({ code, verify });
+
+  it("never lets anything through at gate=never", () => {
+    for (const r of [R(0), R(2, "failed"), R(4), R(0, "failed"), R(0, "unrunnable")]) {
+      expect(promptLoop.chainStop("never", r as any)).toBeNull();
+    }
+  });
+
+  it("stops on a refusal at on_refusal and above, and not on a passing check", () => {
+    expect(promptLoop.chainStop("on_refusal", R(2) as any)).toBe("refusal");
+    expect(promptLoop.chainStop("on_check", R(2) as any)).toBe("refusal");
+    expect(promptLoop.chainStop("on_refusal", R(0) as any)).toBeNull();
+    expect(promptLoop.chainStop("on_check", R(0, "passed") as any)).toBeNull();
+  });
+
+  it("stops on a check that did not pass, only at on_check", () => {
+    // A failing check does NOT stop on_refusal: the positions are ordered, and
+    // an operator who asked for the weaker one gets the weaker one.
+    expect(promptLoop.chainStop("on_refusal", R(0, "failed") as any)).toBeNull();
+    expect(promptLoop.chainStop("on_check", R(0, "failed") as any)).toBe("verify");
+    // Unrunnable and declined are not passes. A chain gated on a check that
+    // could not run has not been checked, and continuing would be the same
+    // silent success the verify gate itself refuses to publish.
+    expect(promptLoop.chainStop("on_check", R(0, "unrunnable") as any)).toBe("verify");
+    expect(promptLoop.chainStop("on_check", R(0, "declined") as any)).toBe("verify");
+    // No declared check at all is not a failed check.
+    expect(promptLoop.chainStop("on_check", R(0, undefined) as any)).toBeNull();
+  });
+
+  it("stops the chain in runTask, and the later stages never run", async () => {
+    // Driven end to end rather than by reading the source. The earlier chain
+    // tests in this file assert on `String(runTask)` containing substrings,
+    // which would pass unchanged with the wiring deleted -- the exact gap
+    // loop_chain.test.ts was written to close for the interactive path.
+    const withFetchLocal = async <T,>(impl: typeof fetch, run: () => Promise<T>): Promise<T> => {
+      const original = globalThis.fetch;
+      globalThis.fetch = impl;
+      try {
+        return await run();
+      } finally {
+        globalThis.fetch = original;
+      }
+    };
+    // Every stage reaches for the shell; runTask without --yes declines it, so
+    // each stage ends as a refusal. That is the condition on_refusal stops on.
+    const alwaysReachesForBash = (async () => ({
+      ok: true,
+      json: async () => ({
+        message: {
+          content: "",
+          tool_calls: [{ id: "c1", function: { name: "bash", arguments: '{"command": "echo hi"}' } }],
+        },
+      }),
+    })) as unknown as typeof fetch;
+
+    const run = async (gate: string) => {
+      const config: any = loadConfig("../..");
+      config.config = {
+        ...config.config,
+        chain: { stages: ["plan", "implement", "critique"], gate },
+      };
+      return await withFetchLocal(alwaysReachesForBash, () =>
+        promptLoop.runTask(config, "do a thing", {})
+      );
+    };
+
+    // The control. Without the gate every stage runs, which is what every
+    // surface written before this option got and still gets.
+    const ungated = await run("never");
+    expect(ungated.stages?.length, "gate=never must run all three stages").toBe(3);
+
+    // The gate. Stage 1 refuses, so stages 2 and 3 are never asked.
+    const gated = await run("on_refusal");
+    expect(gated.stages?.length, "gate=on_refusal must stop at the first refusal").toBe(1);
+    expect(gated.stages?.[0].bucket).toBe("refusal");
+  }, 60000);
+});
