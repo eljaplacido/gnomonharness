@@ -28,15 +28,17 @@ jobs:
       - name: Cargo clippy
         run: cargo clippy --all -- -D warnings
 
-  # WINDOWS. Reported, not required, until it is green -- a job that fails on
-  # arrival teaches people to ignore the red tick, and README has published
-  # "Windows is untested and unsupported" honestly rather than pretending
-  # otherwise. `continue-on-error` comes off in the same change that makes it
-  # pass, and not before.
+  # WINDOWS. Required, as of the commit that made it pass.
+  #
+  # It arrived `continue-on-error: true` on 2026-09-05 with 17 failures, because
+  # a job that fails on arrival teaches people to ignore the red tick. It came
+  # off in the change that made it green, which is the only honest moment for
+  # it: 899 passed and 3 skipped, and the three skips are POSIX behaviours that
+  # cannot exist on Windows (the executable bit, and two 0600 file modes) rather
+  # than things that do not work.
   windows-tests:
-    name: TypeScript tests (windows-latest) — provisional
+    name: TypeScript tests (windows-latest)
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
