@@ -141,7 +141,13 @@ describe("gate: the repository's own CI gates can fail", () => {
       const dir = mkdtempSync(join(tmpdir(), "gnomon-tsc-"));
       writeFileSync(join(dir, "x.ts"), src);
       try {
-        execFileSync("npx", ["tsc", "--noEmit", "--strict", join(dir, "x.ts")], {
+        // npx.cmd on Windows. execFileSync resolves .exe from PATH but not
+        // .cmd, so plain "npx" throws ENOENT there -- and this check returns
+        // false for BOTH inputs, which reads as "tsc rejected correct code"
+        // when tsc never ran at all. The same failure the comment above
+        // describes for the npm decoy package, from the other direction.
+        execFileSync(process.platform === "win32" ? "npx.cmd" : "npx",
+          ["tsc", "--noEmit", "--strict", join(dir, "x.ts")], {
           stdio: "pipe",
           cwd,
         });

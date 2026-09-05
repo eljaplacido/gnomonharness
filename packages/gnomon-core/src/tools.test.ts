@@ -814,9 +814,14 @@ describe("bash_allow — the constraint that actually makes a role read-only", (
     // The point of the test is that this is TRUE, and therefore that a role
     // holding bash without an allow-list is not read-only however its `tools`
     // list reads.
+    // Relative, because bash runs with cwd = root. An absolute path
+    // interpolated here would be a Windows path on Windows, and a backslash is
+    // an ESCAPE character to the POSIX shell -- so `touch C:\Users\...` writes
+    // somewhere else or nothing at all, and the test fails for a reason that
+    // has nothing to do with allow-lists.
     const out = await executeTool(
       "bash",
-      { command: `touch ${join(root, "written.txt")}` },
+      { command: "touch written.txt" },
       ctx(),
       offered
     );
@@ -1864,7 +1869,9 @@ describe("shell-mediated work is observed, not inferred", () => {
     try {
       const out = await executeTool(
         "bash",
-        { command: `cd ${outside} && echo hi > made-outside.txt` },
+        // Forward slashes: the shell is POSIX on every platform, and a
+        // backslash is an escape character to it. Git Bash accepts `C:/...`.
+        { command: `cd ${outside.replace(/\\/g, "/")} && echo hi > made-outside.txt` },
         ctx(),
         offered
       );

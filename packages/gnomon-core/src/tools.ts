@@ -1460,7 +1460,14 @@ async function bashTool(
     const m = /(?:^|\s|&&|;)\s*cd\s+("[^"]+"|'[^']+'|[^\s;&|]+)/.exec(command);
     if (!m) return undefined;
     const raw = m[1].replace(/^["']|["']$/g, "");
-    return raw.startsWith("/") ? raw : undefined;   // only absolute; relative stays inside root
+    // Absolute only; a relative cd stays inside the root and is already
+    // covered. "Absolute" includes a Windows drive path -- `C:\work` and
+    // `C:/work` -- which the POSIX-only test missed, so on Windows a turn that
+    // cd'd out of the root and did its work there moved nothing this could see.
+    // That is the premise the anti-flailing nudge reads, and it fired on agents
+    // that were working correctly for exactly this reason on Unix once already.
+    const absolute = raw.startsWith("/") || /^[A-Za-z]:[\\/]/.test(raw);
+    return absolute ? raw : undefined;
   })();
   const worktreeBefore = worktreeStampOf(ctx, shellCwd);
 
