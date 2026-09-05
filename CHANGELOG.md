@@ -26,6 +26,65 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Windows is supported and tested.** `windows-latest` runs the full TypeScript
+  suite in CI — 899 passing, 3 skipped — alongside a new **macOS test job**, so
+  every platform this project claims is now one it actually runs. macOS
+  previously only *compiled* `gnomon-surface`, meaning "green on macOS" said
+  nothing about whether it worked there.
+
+  The release matrix gains **windows-x64**: `surface`, `apply` and `session` are
+  the native crates, so a Windows user with no archive gets the TypeScript half
+  of the harness and none of the half that computes the hash.
+
+  **What it needs, and why.** Git for Windows, for its POSIX shell.
+  `spawn(cmd, { shell: true })` runs `/bin/sh -c` on Unix and `cmd.exe /d /s /c`
+  on Windows, which would make the same surface at the same hash mean two
+  different languages — a shell that changes with the operating system is
+  machine-scoped behaviour the hash cannot see. With none found, `bash` refuses
+  and says how to get one; it does not fall back. `GNOMON_SHELL` points at one
+  you already have. **Not WSL's `bash.exe`**, deliberately: it runs in a
+  different filesystem with a different root, so `ctx.root` would not mean the
+  same tree to the shell as it does to the sandbox check.
+
+  **What differs there, disclosed rather than silently degraded.** `gnomon loops`
+  runs but cannot install on a schedule (that is cron; Windows has Task
+  Scheduler), and the credential store is restricted with an ACL rather than a
+  `0600` mode.
+
+### Fixed
+
+- **A Windows path in TOML took the entire surface down.** `unescapeBasic`
+  entered its unicode branch on the *first character* of the escape, which is
+  also true for the `.` fallback of its own alternation — so `\U` followed by
+  anything that is not eight hex digits reached `parseInt("", 16) = NaN`,
+  `String.fromCodePoint(NaN)` threw, and the surface failed to load with
+  "Invalid code point NaN", naming neither the line nor the word "escape". The
+  string that does this is the most ordinary line a Windows user can write:
+  `command = "C:\Users\me\server.exe"`. Not a Windows bug — a parser bug that
+  Windows makes unavoidable.
+
+- **The credential store was world-readable on Windows.** Mode came back `0o666`
+  while the code set `0600` and the comment beside it said "a secret readable by
+  other users on the machine is not stored" — true on POSIX, false on Windows,
+  where `chmod` is a no-op. Now restricted with `icacls`, and it *reports* when
+  it cannot, because a security control that fails silently is worse than one
+  that is absent.
+
+- **Native binaries were never found on Windows.** Cargo writes
+  `gnomon-edit.exe`; every lookup asked for the bare name. A whole-platform
+  outage from one missing suffix. `which` → `where` too.
+
+- **The shell-`cd` detector was blind to drive paths.** `worktreeStampOf`'s
+  second root came from `raw.startsWith("/")`, which no Windows path satisfies —
+  so a turn that `cd`'d to `C:\work` and did everything there moved nothing the
+  stamp could see, and the anti-flailing nudge would have told a working agent to
+  stop. The same defect already fixed on the other platform, eight lines away.
+
+- **`killTree` signalled a process group**, which Windows does not have;
+  `taskkill /T` walks the tree instead.
+
 ### Removed
 
 - **`agent.ts` — the second, unwired agent loop.** 339 lines exporting an
