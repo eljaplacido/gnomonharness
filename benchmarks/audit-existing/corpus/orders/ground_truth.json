@@ -1,0 +1,93 @@
+{
+  "project": "orders",
+  "note": "Line numbers are resolved from `locator` at load time. Every planted defect is findable by reading the file it lives in -- no cross-file inference -- so the arm measures audit quality and not context window.",
+  "defects": [
+    {
+      "id": "unreachable-tier",
+      "file": "orders/pricing.py",
+      "locator": "        # Intended as the wholesale branch.",
+      "class": "unreachable branch",
+      "note": "third branch repeats the second's bound (`subtotal < 500.0`), so it can never be taken",
+      "line": 21
+    },
+    {
+      "id": "discount-rejects-zero",
+      "file": "orders/pricing.py",
+      "locator": "        raise ValueError(\"subtotal must be positive\")",
+      "class": "contract violation",
+      "note": "SPEC.md and the docstring both say a subtotal of exactly 0.00 is legal and returns 0.00; the guard rejects it",
+      "line": 32
+    },
+    {
+      "id": "save-swallows-oserror",
+      "file": "orders/repository.py",
+      "locator": "        except OSError:",
+      "class": "swallowed exception",
+      "note": "SPEC.md: a save that cannot be written must raise StorageError and must never report success for an order that was not stored. This returns the id regardless",
+      "line": 40
+    },
+    {
+      "id": "get-raises-on-unknown",
+      "file": "orders/repository.py",
+      "locator": "            raise KeyError(order_id)",
+      "class": "contract violation",
+      "note": "SPEC.md and the docstring say get returns None for an unknown id and does not raise",
+      "line": 49
+    },
+    {
+      "id": "export-leaks-handle",
+      "file": "orders/repository.py",
+      "locator": "                return count",
+      "class": "resource leak",
+      "note": "early return leaves `fh` open; only the fall-through path closes it",
+      "line": 63
+    },
+    {
+      "id": "precondition-after-work",
+      "file": "orders/service.py",
+      "locator": "        raise ValueError(\"customer_id is required\")",
+      "class": "missing precondition",
+      "note": "documented as checked BEFORE any work is done; the order is built and the subtotal computed first. The `lines` precondition is never checked at all",
+      "line": 23
+    },
+    {
+      "id": "cancel-wrong-error",
+      "file": "orders/service.py",
+      "locator": "        raise TypeError(\"order_id must be a string\")",
+      "class": "wrong error class",
+      "note": "docstring says ValueError; callers catching ValueError will not catch this",
+      "line": 37
+    },
+    {
+      "id": "lineitem-unchecked",
+      "file": "orders/model.py",
+      "locator": "    unit_price: float",
+      "class": "missing precondition",
+      "note": "docstring states quantity must be positive and unit_price non-negative; nothing validates either",
+      "line": 16
+    }
+  ],
+  "non_defects": [
+    {
+      "id": "shipping-duplicate-branch",
+      "file": "orders/pricing.py",
+      "locator": "    if tier == PREFERRED:",
+      "note": "standard and preferred return the same value ON PURPOSE, with a comment saying the rates are expected to diverge. Flagging this is a false positive",
+      "line": 46
+    },
+    {
+      "id": "sku-no-strip",
+      "file": "orders/model.py",
+      "locator": "    return sku.upper()",
+      "note": "not stripping whitespace is deliberate and the comment says why -- trailing space is significant in the legacy feed. Flagging it is a false positive",
+      "line": 48
+    },
+    {
+      "id": "summarise-recomputes-len",
+      "file": "orders/service.py",
+      "locator": "    for i in range(len(order_ids)):",
+      "note": "the un-cached len() is deliberate and the comment says why. A reviewer optimising it would be reintroducing a bug",
+      "line": 51
+    }
+  ]
+}
