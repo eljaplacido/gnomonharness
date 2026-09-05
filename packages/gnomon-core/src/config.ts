@@ -1501,15 +1501,28 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
   const problems: SurfaceProblem[] = [];
   const declared = config.config.endpoints ?? {};
 
-  // Files under .gnomon/extensions/ are hashed — the surface walker includes
-  // every file under .gnomon/ — and nothing in this build loads them. So
-  // dropping an extension in changes the surface hash, which is the harness
-  // announcing that behaviour changed, while behaviour did not change at all.
+  // Files under .gnomon/extensions/ are NOT hashed and NOT loaded. Inert in
+  // both directions, so this is a note about what the directory is, not a
+  // warning about a hash that moves for nothing.
   //
-  // That is the inverse of the usual defect and just as bad: the hash is the
-  // one thing this project asks people to trust, and here it moves for nothing.
-  // The extension host exists in agent.ts (registerExtension) and has no caller
-  // that reads the directory.
+  // This block said the opposite until 2026-09-05, and it was wrong for a day.
+  // 35cc702 excluded `extensions/` from the surface walk and left the
+  // disclosure that described the behaviour before it -- so an operator with
+  // extension files was told, specifically and falsely, that adding one moves
+  // their surface hash. A stale disclosure is worse than none: it is a
+  // confident sentence about the one thing this project asks people to trust.
+  //
+  // `benchmarks/surface-fidelity` did not catch it and could not: it measures
+  // hash against behaviour, not whether a sentence about them is true. Nothing
+  // mechanical can. What catches this class is reading, and the thing that
+  // schedules the reading is `scripts/doc_reconciliation.mjs` -- which covers
+  // the prose documents. This was a code comment, and it was found by reading
+  // the walk beside it.
+  //
+  // The direction of the remaining risk is the one 35cc702 accepted on purpose:
+  // if a host is ever built and nobody re-includes the directory, behaviour
+  // would change without the hash moving. surface-fidelity's negative control
+  // models exactly that trap and fires on it.
   try {
     const extDir = join(config.gnomonDir, "extensions");
     const files = existsSync(extDir)
@@ -1520,12 +1533,12 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
         where: `.gnomon/extensions/`,
         problem:
           `${files.length} extension file(s) here (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}) ` +
-          `are INSIDE the surface hash and are NOT loaded by this build. Adding or editing one moves the ` +
-          `hash — which says behaviour changed — while nothing about the run changes.`,
+          `are NOT loaded by this build and are NOT part of the surface hash. They are inert: adding, ` +
+          `editing or removing one changes nothing about a run and does not move the hash.`,
         fix:
-          `Remove them, or keep them knowing they are inert. The extension host exists (agent.ts ` +
-          `registerExtension) but nothing reads this directory yet; when it does, these files will start ` +
-          `taking effect without the hash moving again.`,
+          `Remove them, or keep them knowing they do nothing. No extension host reads this directory in ` +
+          `this build; if one is ever built, this directory has to be re-included in the surface walk in ` +
+          `the same change, or extensions would start taking effect without the hash moving.`,
         fatal: false,
       });
     }

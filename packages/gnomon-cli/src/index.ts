@@ -19,7 +19,6 @@ import {
   declaredKeyVars,
   checkRoleModels,
   loadConfig,
-  initAgent,
   SessionManager,
   resolveGnomonDir,
   Manifest,

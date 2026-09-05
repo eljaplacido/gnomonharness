@@ -26,7 +26,41 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **`agent.ts` — the second, unwired agent loop.** 339 lines exporting an
+  `ExtensionHost`, a `HookPhase` enum, `runAgentTurn` and `runSession`, called
+  by nothing on any turn in any session; `initAgent` had one importer that
+  imported the name and never called it. It was kept deliberately while the
+  extension-host design was wanted, and the reason it goes now is that
+  `.gnomon/extensions/` left the surface hash the day before — the directory the
+  host existed to read is inert in both directions, so the scaffolding has
+  nothing left to be scaffolding for.
+
+  **This is a breaking export change: the next release must be 0.2.0, not
+  0.1.2.** Anything importing `ExtensionHost`, `HookPhase`, `runAgentTurn`,
+  `runSession` or `initAgent` from `gnomon-core` will no longer resolve. Nothing
+  in this repository did.
+
+  Its removal broke two `file.ts:line` citations in `ROADMAP.md`, which
+  `docs.test.ts` caught immediately — the citation check doing exactly its job.
+
 ### Added
+
+- **`scripts/doc_reconciliation.mjs` and `docs/reconciliation.json`** — the
+  scheduled reconciliation pass the ROADMAP has asked for. Each prose document
+  records the commit it was last read against the code, plus the paths whose
+  movement should send somebody back to it; the script reports which documents
+  are **owed a reading**.
+
+  It cannot tell whether a document is true — nothing can — and it does not
+  pretend to. It answers the half that is mechanical. `.gnomon/ci.sh` prints the
+  report and never fails on it, because a gate firing on every commit that
+  touches `prompt_loop.ts` would be switched off within a month; `--check` exits
+  1 for anyone who wants it to gate.
+
+  Seeded with the three documents that have actually rotted here:
+  `POSITIONING.md`, `README.md` and `HARNESS-RESEARCH-RECONCILIATION.md`.
 
 - **`[chain] gate` — the chain can now stop.** One dial, three positions, each
   strictly stronger: `never` (the behaviour every existing surface has, and the
@@ -84,6 +118,23 @@
   `docs/CONTRACTS.md` and the fixture must now be the same set.
 
 ### Fixed
+
+- **The surface audit told operators the opposite of the truth about
+  `.gnomon/extensions/`, for a day.** `35cc702` excluded the directory from the
+  surface walk and left the disclosure describing the behaviour before it, so a
+  surface with extension files was told — specifically, and falsely — that those
+  files "are INSIDE the surface hash" and that adding one "moves the hash". They
+  are not, and it does not. A stale disclosure is worse than none: it is a
+  confident sentence about the one thing this project asks people to trust.
+
+  `benchmarks/surface-fidelity` did not catch it and could not — it measures
+  hash against behaviour, not whether a sentence about them is true.
+
+- **The scaffold advertised two inert edit formats as if they worked.**
+  `gnomon init` wrote `# ast | hashline | str_replace` beside `edit_format`,
+  with nothing marking which of the three this build implements. Now marked
+  INERT at the point of choice, rather than only in the surface audit that fires
+  after somebody has already chosen one.
 
 - **Endpoint fallback left no durable trace, and the record it did leave was
   wrong.** A role falling back to `[roles.<name>.fallback]` announced itself

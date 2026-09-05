@@ -458,5 +458,19 @@ case "$GATE_RC" in
     *) fail "Contract/fixture gate" ;;
 esac
 
+# ── 8. Which prose documents are owed a reading ──
+#
+# A REPORT, never a failure, and the distinction is the whole design. Prose rot
+# is real here -- POSITIONING.md said no Terminal-Bench score was claimed while
+# three campaigns sat committed beside it, and README understated its own test
+# count by 2.7x -- but a hard gate that fires on every commit touching
+# prompt_loop.ts would be switched off within a month, which is the reasoning
+# contract_fixture_gate.sh already wrote down for its own scope.
+#
+# `--check` exits 1 for anyone who wants it to gate. This does not use it.
+echo ""
+echo "═══ Documents owed a reading ═══"
+node scripts/doc_reconciliation.mjs || true
+
 echo ""
 echo "═══ All CI checks passed ═══"

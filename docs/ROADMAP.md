@@ -43,13 +43,13 @@ All four are checked by `.gnomon/ci.sh` on every run.
 **Goal:** TUI, sessions, `.gnomon/` resolution with **no** home-directory path,
 role routing, `hashline` edit format. You stop reaching for other agents.
 
-- [x] TS core: agent loop, session model. The "extension host" this line also
-      claimed is real code that nothing calls: `ExtensionHost` in
-      `packages/gnomon-core/src/agent.ts`, registered by no caller, and
-      `.gnomon/extensions/` is content-hashed into the surface but read by no
-      code path. Kept on purpose; wiring it is scheduled separately. The loop
-      that actually runs is `prompt_loop.ts:runAgenticTurn`, which shares no
-      code with `agent.ts`.
+- [x] TS core: agent loop, session model. This line once also claimed an
+      "extension host", which was real code that nothing called — an
+      `ExtensionHost` registered by no caller, beside a `.gnomon/extensions/`
+      directory read by no code path. Both are gone: the directory left the
+      surface hash on 2026-09-04 and the 339-line unwired loop was removed on
+      2026-09-05. The loop that runs, and always ran, is
+      `prompt_loop.ts:runAgenticTurn`.
 - [x] CLI: `gnomon run`, `gnomon session`, `gnomon enumerations`
 - [x] `.gnomon/` resolver: reads from working repo, no `~/.gnomon/` path.
       The one machine-local file is the credential store, which holds values
@@ -90,12 +90,11 @@ role routing, `hashline` edit format. You stop reaching for other agents.
       in `tools.ts` pin the `.gnomon/` hash before every bash call and compare
       after, appending a WARNING to the tool output when it moved.
       What this line said until 2026-09-01, and why it was wrong: it credited
-      `reassertManifest()` in `agent.ts` with recording `apparatus_failure` on
-      drift. Grep across the whole repo: no function named `reassertManifest`
-      exists, and the only hit was this line describing it. The behaviour it
-      described half-exists — an inline block at `agent.ts:226` does push an
-      `apparatus_failure` step that `runSession` halts on — but `agent.ts` is
-      the unwired loop, so that code runs in no real session.
+      a `reassertManifest()` in the unwired `agent.ts` loop with recording
+      `apparatus_failure` on drift. Grep across the whole repo: no function of
+      that name ever existed, and the only hit was this line describing it. The
+      nearest real thing was an inline block in that same unwired loop, which
+      ran in no real session — and the file itself was removed on 2026-09-05.
       Known limits of what does ship, published rather than implied away: the
       live check is per-bash-call, not per-turn; it warns rather than recording
       `apparatus_failure` or stopping; and drift arriving by any route other
