@@ -262,6 +262,24 @@ own 11.9–14.9% self-flip.
 | Silent success | **0/11 falsely successful**, 0 void | [`silent-success`](../benchmarks/silent-success/) |
 | Context on the wire | **4.66×** vs opencode, bytes counted at the endpoint | [`context-cost`](../benchmarks/context-cost/) |
 
+### The workflow arms (5 September 2026)
+
+Sampled rather than exhaustive, and cheap because they run against a local model:
+the two workflows gnomon is actually used for, measured against ground truth the
+apparatus controls rather than against a rubric.
+
+| arm | result | data |
+|---|---|---|
+| Auditing an existing project | **10/14 planted defects, 0/5 adversarial controls flagged, 0 containment violations**, flip rate 7.1% | [`audit-existing`](../benchmarks/audit-existing/) |
+| `test_must_fail_first`, off vs on | **null, and uninformative** — the arm found the mechanism does not run for shell-mediated turns | [`greenfield-spec`](../benchmarks/greenfield-spec/) |
+| `writing-tests` skill, off vs on | **null, and informative** — delta +0.005 against a measured within-arm spread of 0.146 | [`greenfield-spec`](../benchmarks/greenfield-spec/) |
+
+The audit arm's flip rate is the number worth carrying forward: **7.1%, against
+11.9–15.6% for task completion**. Reading code and reporting what is wrong is a
+more repeatable act than making a task pass, so a powered audit arm needs fewer
+paired items than a peer-parity arm — which changes what this project can afford
+to ask.
+
 One arm is **designed and not run**, and is listed here because a design that
 exists only in somebody's head is indistinguishable from one that was quietly
 dropped: [`peer-parity`](../benchmarks/peer-parity/PRE-REGISTRATION.md) — a

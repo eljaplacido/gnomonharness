@@ -90,6 +90,80 @@ makes a test written from the code pin the bug.
 - That this model, on this corpus, meets the fails-before bar 8–9 times in 10 and
   produces a spec-satisfying fix 7 times in 10, unaided.
 
+---
+
+# Arm 1b — the `writing-tests.md` skill, off against on — 2026-09-05
+
+**Null, and this one is informative: the effect is roughly 17× smaller than the
+noise it would have to clear.** Ten specifications, greenfield (write the
+implementation *and* the tests from a prompt), two passes, one variable. Score
+with `analyse_1b.py`.
+
+| | off | on |
+|---|--:|--:|
+| **mean mutation score** (primary) | 0.891 | 0.896 |
+| implementation satisfies the hidden suite | 9/20 = 45% | 9/20 = 45% |
+
+Paired per specification, mean of two passes:
+
+| | |
+|---|--:|
+| mean delta (on − off) | **+0.0051** |
+| sd of the deltas | 0.0847 |
+| improved / worsened / unchanged | 2 / 4 / 4 |
+| **Wilcoxon signed-rank, exact, two-sided** | **p = 1.0000** |
+
+## Why this null is worth more than arm 1a′'s
+
+Three things make it a real measurement rather than an absence of one:
+
+**The variable actually applied.** `skill_present` is `false` in all ten `off`
+rows and `true` in all ten `on` rows, and `selectSkills` returns
+`writing-tests` for every one of the ten prompts — checked by calling the loader
+directly, before spending anything.
+
+**The task is not at ceiling.** Unlike arm 1a′, where 8 of 10 specs scored
+mutation 1.0 in both arms, here the implementation satisfies the hidden reference
+suite only **45% of the time**, and mutation scores span 0.50 to 1.00. There was
+room to move.
+
+**The noise floor was measured inside the run.** Two passes per cell:
+
+| | mean per-spec &#124;pass1 − pass2&#124; | max |
+|---|--:|--:|
+| off | 0.0397 | 0.2308 |
+| on | **0.1461** | 0.5000 |
+
+The effect is **+0.005**. The `on` arm's own pass-to-pass spread is **0.146**.
+Nothing this small is detectable against that, and the honest statement is not
+"underpowered" but "the effect, if any, is far below the noise on this corpus".
+
+## The thing I did not expect
+
+**The instruction made the harness noisier.** The `on` arm's pass-to-pass spread
+is 3.7× the `off` arm's — 0.146 against 0.040 — while its mean is unchanged. An
+instruction that changes what the model writes without improving it, and widens
+the distribution doing so, is a worse trade than one that does nothing at all.
+
+At n=10 with two passes that is an observation, not a finding, and it is exactly
+the kind of subgroup claim this project's own notes warn against reading too
+hard. But it is the shape a larger run should look for.
+
+## What this does and does not say about the skill
+
+`skills/writing-tests.md` was scaffolded earlier the same day, on the strength of
+an external replication — arXiv 2608.17177, spec-driven test generation, +9.8pp
+bug detection against a named baseline on production Google bugs. **This
+measurement does not refute that paper and does not try to.** Different corpus,
+different model tier, different metric, and ten tiny specifications against a
+production bug set.
+
+What it says is narrower and still worth publishing: **on this corpus, with this
+model, the skill this project shipped today does nothing detectable to the
+quality of the tests the agent writes.** The project shipped it on someone else's
+evidence and measured it the same day; the measurement came back null and is
+reported here rather than left unrun.
+
 ## Apparatus defects found before the result, all recorded
 
 Four, in [PRE-REGISTRATION.md](PRE-REGISTRATION.md): a 60s pytest timeout that

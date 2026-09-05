@@ -135,6 +135,25 @@
   weakest** — the edit engine refuses a drifted patch but there is no undo,
   snapshot or rollback, and git is the de facto one.
 
+- **The `writing-tests` skill was shipped and measured on the same day, and the
+  measurement is null.** 10 greenfield specifications, two passes, one variable,
+  $0 on a local model: mean mutation score 0.891 → 0.896, **delta +0.005**,
+  Wilcoxon exact **p = 1.0000**.
+
+  This is a real null rather than an absent measurement: the task is not at
+  ceiling (the implementation satisfies the hidden suite only 45% of the time),
+  the variable demonstrably applied, and the noise floor was measured inside the
+  run — the `on` arm's own pass-to-pass spread is 0.146, roughly **30× the
+  effect**.
+
+  It does not refute arXiv 2608.17177, which measured a different corpus, model
+  tier and metric. It says the skill does nothing detectable *here*. Shipped on
+  someone else's evidence, measured against our own, and the result published
+  either way.
+
+  One observation flagged as an observation: the instruction made the harness
+  **3.7× noisier** pass-to-pass without moving the mean.
+
 - **`benchmarks/audit-existing` — pilot RUN, not just designed.** 14 planted
   defects and 5 adversarial controls across two projects, two passes, $0 on a
   local model: **10/14 found, 0/5 controls falsely flagged, 0 containment
