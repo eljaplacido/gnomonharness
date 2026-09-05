@@ -91,6 +91,42 @@
   `stop_reason: "answered"`. Same silent-success shape as `exit null` read as a
   clean zero, one level up.
 
+- **`pass^k`, computed from the archive for $0** —
+  [reliability-passk-2026-09-05](benchmarks/results/reliability-passk-2026-09-05/).
+  gnomon v0.1.1: **pass@1 51.2%, pass^2 45.2%**, retention 0.88 — about one
+  apparent success in eight does not reproduce. Both passes of both regression
+  arms have carried per-task outcomes since 2026-09-03; the metric was missing
+  because nobody asked the question, not because the data was. It restates this
+  project's 11.9–14.9% self-flip as a *measurement of the harness* rather than an
+  apology for the apparatus, in
+  [ReliabilityBench](https://arxiv.org/abs/2601.06112)'s vocabulary.
+
+- **`docs/EXTERNAL-BENCHMARKS.md`** — what exists outside this repository for
+  reliability and governance, and what running each against gnomon would take.
+  Three, all 2026, none yet run against a coding harness: **ReliabilityBench**
+  (consistency, ε-robustness, λ-fault tolerance — already the source of
+  `fault-disclosure`'s four fault classes), **DEMM-Bench** (governance-evidence
+  sufficiency across actor / authority / action / policy / decision basis /
+  resource touch / lifecycle / verification), and **ProcCtrlBench** (process
+  defects and control preservation, sampling TerminalBench).
+
+  Two self-assessments made before running anything, both naming a gap rather
+  than waiting for someone else to: gnomon answers roughly **6½ of DEMM-Bench's
+  8 evidence dimensions** out of the box, with `decision basis` the gap; and of
+  ProcCtrlBench's five control properties it holds four, with **`reversible` the
+  weakest** — the edit engine refuses a drifted patch but there is no undo,
+  snapshot or rollback, and git is the de facto one.
+
+- **`benchmarks/audit-existing/` and `benchmarks/greenfield-spec/`** —
+  pre-registrations for the two workflows the operator asked about: auditing an
+  existing project, and speccing a greenfield one, each against a peer. Both
+  replace *judging the output* with ground truth the apparatus controls —
+  planted defects with negative controls in the first, mutation scores against a
+  hidden reference suite in the second — because a rubric scored by the author of
+  the harness measures the author. Both sequence a **single-variable mechanism
+  arm first** (gnomon's own mechanism on/off) and gate the peer arms on it: if
+  the mechanism moves nothing, there is nothing for a peer comparison to show.
+
 - **`benchmarks/peer-parity/PRE-REGISTRATION.md`** — the powered peer arm,
   **designed and deliberately not launched.** The framing is the change: five
   task-completion arms in a row have come back null, which is not five failures
