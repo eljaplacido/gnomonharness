@@ -101,6 +101,31 @@ def scaffold(root, spec_dir, defective_src, tmff):
             import re
             p.write_text(re.sub(r'model = "[^"]*"', 'model = "%s"' % MODEL, p.read_text()))
 
+    # A role with NO SHELL, and that is the point of arm 1a''.
+    #
+    # `test_must_fail_first` needs `ctx.preImages`, which only `write` and
+    # `edit` populate. Arm 1a' gave the agent bash, it wrote through heredocs,
+    # preImages stayed empty and the mechanism never fired -- the arm measured
+    # nothing. Withholding bash is not a trick to make the number move: it is
+    # the only configuration in which this capability can act at all, and that
+    # is itself the finding 1a' produced.
+    #
+    # The declared [verify] check still runs: the gate invokes bash with an
+    # explicit offered-set of ["bash"], not the role's tool list, so a role
+    # that may not reach the shell is still checked by the surface's command.
+    roles = root / ".gnomon/roles.toml"
+    roles.write_text(roles.read_text() + f'''
+[roles.author]
+model = "{MODEL}"
+endpoint = "local"
+temperature = 0.1
+top_p = 0.9
+max_steps = 40
+max_steps_total = 200
+tools = ["read", "glob", "grep", "write", "edit", "todo", "note"]
+description = "Writes code and tests through write/edit. No shell."
+''')
+
     pol = root / ".gnomon/policy.toml"
     pol.write_text(pol.read_text() + f'''
 [verify]
@@ -184,6 +209,7 @@ def main():
     ap.add_argument("--pass", dest="passno", type=int, default=1)
     ap.add_argument("--out", default="runs")
     ap.add_argument("--specs", default="")
+    ap.add_argument("--role", default="author")
     ap.add_argument("--timeout", type=int, default=900)
     a = ap.parse_args()
 
@@ -204,7 +230,8 @@ def main():
         try:
             scaffold(root, sd, defective, a.config == "on")
             r = subprocess.run(
-                [str(TSX), str(CLI), "task", TASK.format(mod=sd.name), "--yes"],
+                [str(TSX), str(CLI), "task", TASK.format(mod=sd.name),
+                 "--role", a.role, "--yes"],
                 cwd=root, capture_output=True, timeout=a.timeout, text=True)
             elapsed = round(time.time() - t0, 1)
             row = score(sd, root, defective)
@@ -213,7 +240,7 @@ def main():
                 "planted": {"kind": kind, "site": site},
                 "seconds": elapsed,
                 "exit": r.returncode,
-                "stderr_tail": r.stderr[-400:] if r.stderr else "",
+                "stderr_tail": r.stderr[-4000:] if r.stderr else "",
             })
         except subprocess.TimeoutExpired:
             row = {"spec": sd.name, "config": a.config, "pass": a.passno,
