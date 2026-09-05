@@ -62,7 +62,13 @@ beforeEach(() => {
   writeFileSync(join(root, "hello.txt"), "alpha\nbeta\ngamma\n");
   mkdirSync(join(root, "sub"));
 });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
+// maxRetries, because Windows holds a handle on the directory a just-exited
+// child was running in and rmdir returns EBUSY for a few milliseconds after
+// the process is gone. Five tools.test.ts cases failed on that alone, in
+// cleanup, with nothing wrong in what they were testing.
+afterEach(() =>
+  rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+);
 
 describe("buildToolSet", () => {
   it("offers schemas in a stable, sorted order — Rule 3 says sorted", () => {
@@ -107,7 +113,12 @@ describe("sandbox", () => {
   });
 
   it("allows anything when sandbox is off", () => {
-    expect(resolveInRoot(root, "/etc/passwd", "off")).toBe("/etc/passwd");
+    // A path that is absolute on THIS platform. "/etc/passwd" is not absolute
+    // on Windows the way this test means -- it resolves against the current
+    // drive to D:\etc\passwd -- so the assertion failed while the behaviour
+    // was right.
+    const outside = process.platform === "win32" ? "C:\\Windows\\win.ini" : "/etc/passwd";
+    expect(resolveInRoot(root, outside, "off")).toBe(outside);
   });
 
   it("admits a path inside a granted extra root, and nothing else", () => {
@@ -129,7 +140,7 @@ describe("sandbox", () => {
     expect(resolveInRoot(root, "/etc/passwd", "confined", grant)).toBeNull();
     // And the repository root itself still works.
     expect(resolveInRoot(root, "hello.txt", "confined", grant)).toContain("hello.txt");
-    rmSync(other, { recursive: true, force: true });
+    rmSync(other, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
   it("read outside the sandbox is a refusal, not a crash", async () => {
@@ -466,7 +477,17 @@ describe("bash", () => {
     // OOM-killed test suite reported PASSED -- in the one mechanism whose whole
     // job is to contradict a model that claims success.
     const out = await executeTool("bash", { command: "kill -9 $$" }, ctx({ timeoutMs: 5000 }), offered);
-    expect(out.summary).toMatch(/killed by SIG/);
+    // The PROPERTY is that a killed command never reads as a clean zero. On
+    // POSIX that is spelled "killed by SIGKILL"; Windows has no signals and
+    // reports a large non-zero exit instead. Asserting the POSIX spelling on
+    // Windows would fail while the property held, which is the wrong direction
+    // for a test whose subject is a summary being misread.
+    expect(out.summary).not.toMatch(/exit (0|null)\b/);
+    if (process.platform !== "win32") {
+      expect(out.summary).toMatch(/killed by SIG/);
+    } else {
+      expect(out.summary).toMatch(/exit \d+/);
+    }
     expect(out.summary).not.toContain("exit null");
   });
 
@@ -1341,7 +1362,7 @@ describe("the sandbox follows symlinks, not just `..`", () => {
   });
 
   afterEach(() => {
-    rmSync(outside, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
   it("refuses a read through a symlink pointing out of the repo", async () => {
@@ -1850,7 +1871,7 @@ describe("shell-mediated work is observed, not inferred", () => {
       expect(out.code).toBe(TOOL_OK);
       expect(out.worktree_changed).toBe(true);
     } finally {
-      rmSync(outside, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   });
 

@@ -440,7 +440,13 @@ describe("gate: attestation reports what it cannot do", () => {
     expect((r as { detail: string }).detail).toContain("could not run (exit 127)");
   });
 
-  it("...and neither is one that is present but not executable", async () => {
+  // POSIX-only by nature. Windows has no executable bit -- chmod 0644 leaves
+  // the script perfectly runnable -- so the state this test constructs cannot
+  // exist there. Skipped rather than weakened: 126 is a real POSIX code and
+  // this is a real POSIX behaviour.
+  const posixOnly = process.platform === "win32" ? it.skip : it;
+
+  posixOnly("...and neither is one that is present but not executable", async () => {
     // 126 is the other half of the POSIX pair, and the likelier one after a
     // checkout: the verify script is right there, its mode bit is not.
     const dir = mkdtempSync(join(tmpdir(), "gnomon-verifier-"));
