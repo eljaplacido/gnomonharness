@@ -18,6 +18,7 @@
 
 import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
 import type { McpServerDef } from "./config.js";
+import { recordDegradation, type DegradationSink } from "./degradation.js";
 
 /**
  * The revision this client ASKS for. Left pinned at the one these message
@@ -321,7 +322,12 @@ class McpConnection {
  */
 export async function connectMcp(
   defs: Record<string, McpServerDef> | undefined,
-  report: (line: string) => void = () => {}
+  report: (line: string) => void = () => {},
+  // Recorded as well as reported. A server that fails to connect costs the
+  // session every tool it would have offered, and until 2026-09-05 that fact
+  // reached the terminal and nothing else -- so a scripted run came back with a
+  // smaller tool set than the surface declares and the trail said nothing.
+  audit?: DegradationSink
 ): Promise<McpRegistry> {
   const conns: McpConnection[] = [];
   const byTool = new Map<string, McpConnection>();
@@ -338,7 +344,14 @@ export async function connectMcp(
       );
     } catch (err) {
       conn.close();
-      report(`  mcp: ${name} unavailable — ${err instanceof Error ? err.message : String(err)}`);
+      const why = err instanceof Error ? err.message : String(err);
+      report(`  mcp: ${name} unavailable — ${why}`);
+      recordDegradation(audit, {
+        id: "mcp_server_unreachable",
+        declared: `[mcp_servers.${name}] ${def.command} ${(def.args ?? []).join(" ")}`.trim(),
+        actual: `did not connect (${why}); its tools are absent from this session`,
+        detail: { server: name },
+      });
     }
   }
 

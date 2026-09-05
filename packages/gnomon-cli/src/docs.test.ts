@@ -302,17 +302,55 @@ describe("the README outcome table matches the tool result codes", () => {
     expect(tools).toContain("summary: `edit ${path} — not permitted for this role`");
   });
 
-  it("CONTRACTS.md's stop_reason table matches the enumeration the code emits", () => {
+  it("the stop_reason enumeration, its fixture and its documentation are one set", () => {
     // Rule 6 is about published enumerations, and stop_reason is one: it appears
-    // on every TaskRecord. It was not published anywhere until the values had
-    // already drifted once -- `apparatus` had to be added because every failure
-    // of that kind was borrowing `answered`, recording a run that never started
-    // as a turn that concluded. Pinning the table stops the next drift being
-    // silent.
-    const contracts = readFileSync(join(__dirname, "../../../docs/CONTRACTS.md"), "utf-8");
+    // on every TaskRecord and every `turn` audit record, and a consumer switches
+    // on it. It was not published anywhere until the values had already drifted
+    // once -- `apparatus` had to be added because every failure of that kind was
+    // borrowing `answered`, recording a run that never started as a turn that
+    // concluded.
+    //
+    // This check used to hold its own hand-kept `expected` array and assert only
+    // that CONTRACTS.md contained each of them. That is one direction of three:
+    // a value the code emits and nobody documented passed, a value documented
+    // and never emitted passed, and the array itself was a fourth copy of the
+    // truth kept in step by hand. Now the union in the source, the table in
+    // CONTRACTS.md and conformance/stop_reason.json must be the SAME SET, so
+    // adding a value means touching all three deliberately -- the same shape as
+    // conformance/exit_codes.json.
+    const root = join(__dirname, "../../..");
+    const fixture = JSON.parse(
+      readFileSync(join(root, "conformance/stop_reason.json"), "utf-8")
+    ) as { stop_reason: Record<string, string>; expected_count: number };
+    const pinned = Object.keys(fixture.stop_reason).sort();
+
+    // The union as the code declares it, read out of the source rather than
+    // imported: importing the type gives nothing at runtime.
+    const src = readFileSync(
+      join(root, "packages/gnomon-core/src/prompt_loop.ts"),
+      "utf-8"
+    );
+    const union = src.slice(src.indexOf("export type StopReason ="));
+    // Only the union arms: `  | "value"` on a line of its own. A bare
+    // /"([a-z_]+)"/ over the block also matches the value names quoted inside
+    // the comments that explain them, which is how the first version of this
+    // read `answered` four times.
+    const emitted = [
+      ...union.slice(0, union.indexOf(";")).matchAll(/^\s*\|\s*"([a-z_]+)"\s*$/gm),
+    ]
+      .map((m) => m[1])
+      .sort();
+
+    const contracts = readFileSync(join(root, "docs/CONTRACTS.md"), "utf-8");
     const documented = [...contracts.matchAll(/^\| `([a-z_]+)` \| /gm)].map((m) => m[1]);
-    const expected = ["answered", "empty", "stall", "step_wall", "cancelled", "apparatus"];
-    for (const value of expected) {
+
+    expect(pinned.length, "expected_count must match the fixture's own keys").toBe(
+      fixture.expected_count
+    );
+    expect(emitted, "the code's StopReason union != conformance/stop_reason.json").toEqual(
+      pinned
+    );
+    for (const value of pinned) {
       expect(documented, `stop_reason "${value}" is not in CONTRACTS.md`).toContain(value);
     }
   });

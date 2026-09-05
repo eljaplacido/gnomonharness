@@ -16,6 +16,7 @@
  * No dependencies: the protocol is a few JSON-RPC messages over a pipe.
  */
 import { spawn } from "node:child_process";
+import { recordDegradation } from "./degradation.js";
 /**
  * The revision this client ASKS for. Left pinned at the one these message
  * shapes were written against: every later revision only adds things this
@@ -268,7 +269,12 @@ class McpConnection {
  * Returns a registry the loop routes calls through. `report` is called once per
  * server with the outcome, so a missing server is visible, never silent.
  */
-export async function connectMcp(defs, report = () => { }) {
+export async function connectMcp(defs, report = () => { }, 
+// Recorded as well as reported. A server that fails to connect costs the
+// session every tool it would have offered, and until 2026-09-05 that fact
+// reached the terminal and nothing else -- so a scripted run came back with a
+// smaller tool set than the surface declares and the trail said nothing.
+audit) {
     const conns = [];
     const byTool = new Map();
     for (const [name, def] of Object.entries(defs ?? {})) {
@@ -283,7 +289,14 @@ export async function connectMcp(defs, report = () => { }) {
         }
         catch (err) {
             conn.close();
-            report(`  mcp: ${name} unavailable — ${err instanceof Error ? err.message : String(err)}`);
+            const why = err instanceof Error ? err.message : String(err);
+            report(`  mcp: ${name} unavailable — ${why}`);
+            recordDegradation(audit, {
+                id: "mcp_server_unreachable",
+                declared: `[mcp_servers.${name}] ${def.command} ${(def.args ?? []).join(" ")}`.trim(),
+                actual: `did not connect (${why}); its tools are absent from this session`,
+                detail: { server: name },
+            });
         }
     }
     return {

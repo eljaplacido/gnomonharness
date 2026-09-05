@@ -74,7 +74,7 @@ export interface ResolvedAudit {
     attest?: ResolvedAttest;
 }
 export declare function resolveAudit(config: GnomonConfig): ResolvedAudit;
-export type AuditKind = "session_start" | "session_resume" | "turn" | "chain_stage" | "tool_call" | "approval" | "verify" | "session_end";
+export type AuditKind = "session_start" | "session_resume" | "turn" | "chain_stage" | "tool_call" | "approval" | "verify" | "degradation" | "session_end";
 export interface AuditRecord {
     seq: number;
     ts: string;

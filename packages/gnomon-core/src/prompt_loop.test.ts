@@ -3500,3 +3500,126 @@ describe("measureTreeDelta — measured, not asserted", () => {
     rmSync(root, { recursive: true, force: true });
   });
 });
+
+describe("the degradation contract", () => {
+  const UI = { meta: [], meta_style: "line", think: "hide", spinner: false, color: false, cot: "work" } as any;
+  // Local to this block, and returns what `run` returned -- the assertions here
+  // are about the TurnResult, not only about what was said.
+  const withFetch = async <T,>(impl: typeof fetch, run: () => Promise<T>): Promise<T> => {
+    const original = globalThis.fetch;
+    globalThis.fetch = impl;
+    try {
+      return await run();
+    } finally {
+      globalThis.fetch = original;
+    }
+  };
+  const deps = (said: string[], recs: any[]) => ({
+    approve: async () => true,
+    progress: { start() {}, update() {}, stop() {} } as any,
+    ui: UI,
+    say: (l: string) => said.push(l),
+    audit: { write: (kind: string, f: any) => recs.push({ kind, ...f }), text: (t: string) => t } as any,
+  });
+
+  // A fallback is the one degradation where the operator is not merely running
+  // slower -- they are talking to a different model than the surface declares.
+  // It was announced on the spinner alone, which the next frame overwrites, and
+  // `gnomon task` has no scrollback for it to be overwritten in.
+  it("records an endpoint fallback, and the record names the endpoint that answered", async () => {
+    const config: any = loadConfig("../..");
+    // One attempt, no transport grace: this test is about what happens AFTER
+    // the retries are spent, and this repo's own surface would otherwise spend
+    // 60s of grace re-asking the primary before the fallback is reached.
+    config.config = { ...config.config, resilience: { attempts: 1, backoff_ms: 1, transport_grace_ms: 0 } };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const said: string[] = [];
+    const recs: any[] = [];
+    let call = 0;
+    const turn = await withFetch(
+      (async () => {
+        if (++call === 1) throw Object.assign(new Error("fetch failed"), { name: "TypeError" });
+        return { ok: true, json: async () => ({ message: { content: "done" } }) };
+      }) as unknown as typeof fetch,
+      async () =>
+        await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          {
+            model: "primary-model", temperature: 0, top_p: 1,
+            target: { model: "primary-model", temperature: 0, top_p: 1, url: "http://primary.invalid", endpoint: "primary" },
+            fallback: { model: "fallback-model", temperature: 0, top_p: 1, url: "http://fallback.invalid", endpoint: "secondary" },
+          } as any,
+          [{ role: "user", content: "go" }],
+          deps(said, recs)
+        )
+    );
+
+    // Said, not only spun.
+    expect(said.join("\n")).toMatch(/falling back/i);
+    // Recorded, with a stable id a trail can be counted on.
+    const d = recs.find((r) => r.kind === "degradation");
+    expect(d, "a fallback must write a degradation record").toBeDefined();
+    expect(d.id).toBe("endpoint_fallback");
+    // And the record follows the request rather than the declaration. This is
+    // the half that was actively WRONG: the fallback's model was filed against
+    // the primary's endpoint and url.
+    expect(turn.model).toBe("fallback-model");
+    expect(turn.endpoint).toBe("secondary");
+    expect(turn.endpoint_url).toBe("http://fallback.invalid");
+  });
+
+  // A reply cut off twice was allowed to stand -- deliberate -- and recorded as
+  // `answered`, which is not. Same class as `exit null` read as a clean zero.
+  it("records a twice-truncated answer as truncated, not answered", async () => {
+    const state: any = { config: loadConfig("../.."), exchanges: [], currentRole: "implement" };
+    const said: string[] = [];
+    const recs: any[] = [];
+    const turn = await withFetch(
+      (async () => ({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: "half an ans" }, finish_reason: "length" }] }),
+      })) as unknown as typeof fetch,
+      async () =>
+        await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "go" }],
+          deps(said, recs)
+        )
+    );
+    expect(said.join("\n")).toMatch(/cut off/i);
+    expect(turn.stop_reason).toBe("truncated");
+  });
+
+  // An endpoint that refuses the tools array costs the role every tool it
+  // declares. Announced since it was written; recorded only since 2026-09-05.
+  it("records an endpoint refusing the tools array", async () => {
+    const state: any = { config: loadConfig("../.."), exchanges: [], currentRole: "implement" };
+    const said: string[] = [];
+    const recs: any[] = [];
+    let call = 0;
+    await withFetch(
+      (async () => {
+        if (++call === 1) {
+          return {
+            ok: false, status: 400, statusText: "Bad Request",
+            text: async () => "this model does not support tools",
+            json: async () => ({}),
+          };
+        }
+        return { ok: true, json: async () => ({ message: { content: "done" } }) };
+      }) as unknown as typeof fetch,
+      async () =>
+        await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "go" }],
+          deps(said, recs)
+        )
+    );
+    expect(recs.some((r) => r.kind === "degradation" && r.id === "endpoint_tools_rejected")).toBe(true);
+  });
+});

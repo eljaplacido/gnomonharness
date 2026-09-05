@@ -61,10 +61,19 @@ every `TaskRecord`.
 | `stall` | the same call repeated without changing anything |
 | `step_wall` | `max_steps_total` was reached |
 | `cancelled` | the operator stopped it |
+| `truncated` | the backend cut the reply off at its token limit, and the one bounded continuation request did not finish it either |
 | `apparatus` | the run never reached the model — the surface itself could not be used |
 
 `apparatus` exists because every failure of that kind previously borrowed
 `answered`, which recorded a run that never started as a turn that concluded.
+
+`truncated` exists for the same reason, one layer in. A reply cut off at the
+token limit already triggered one bounded request for the rest; if *that* came
+back cut off too, the partial answer was allowed to stand and was recorded as
+`answered`. The operator was told, twice, and the record said the turn
+concluded normally. Found 2026-09-05 by `benchmarks/degradation-contract`,
+which scores *announced* and *recorded* as separate endpoints precisely so a
+gap between them cannot pass.
 
 ---
 

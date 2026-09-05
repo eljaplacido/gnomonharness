@@ -28,10 +28,14 @@ That is the whole design in one object. The model varies, the conversation
 wanders, the tools do different things each run — and the `.gnomon/` directory
 does not. Behaviour is readable because something is holding still.
 
-> **Status: working, pre-1.0.** 954 TypeScript tests (837 core, 96 cli, 14
-> natives, 7 tui — counted 2026-09-02 by collecting each package with
-> `vitest list`, so parameterised blocks are counted as they expand) and 46
-> Rust tests. CI runs the whole suite on **Linux only**; the macOS job builds
+> **Status: working, pre-1.0.** 1023 TypeScript tests (897 core, 105 cli, 14
+> natives, 7 tui) and 57 Rust tests — **1080 total**, the number `.gnomon/ci.sh`
+> reads back out of the runners on every run rather than a total asserted here.
+> (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
+> silently stopped collecting two of the four packages, which is why the count
+> is now taken from the runners that actually executed them — a count nothing
+> checks is the failure mode this repository exists to make impossible.)
+> CI runs the whole suite on **Linux only**; the macOS job builds
 > `gnomon-surface` and runs no tests, so "green on macOS" means *it compiles
 > there*. Interfaces may still move. [Known Limits](#known-limits) is
 > deliberately specific — read it before depending on this.

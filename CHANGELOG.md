@@ -26,6 +26,59 @@
 
 ## [Unreleased]
 
+### Added
+
+- **A degradation contract, and a benchmark that measures it.**
+  `packages/gnomon-core/src/degradation.ts` names every way this harness carries
+  on with less than it declared — twelve paths — and
+  `benchmarks/degradation-contract` scores each on two endpoints:
+  **announced** (the operator was told) and **recorded** (the trail says so
+  afterwards). The population is read from the code's own `DEGRADATION_IDS`, so
+  declaring a path without wiring it fails the benchmark.
+
+  The two endpoints came apart, which is the finding. **12/12 announced, 8/12
+  recorded** before the fixes below.
+
+- **`degradation` audit record kind**, carrying a stable `id`, what the surface
+  declared, and what happened instead.
+
+- **`stop_reason: "truncated"`**, and `conformance/stop_reason.json` pinning the
+  enumeration. The previous pin was a hand-kept array inside `docs.test.ts` that
+  checked one direction of three; the union in the source, the table in
+  `docs/CONTRACTS.md` and the fixture must now be the same set.
+
+### Fixed
+
+- **Endpoint fallback left no durable trace, and the record it did leave was
+  wrong.** A role falling back to `[roles.<name>.fallback]` announced itself
+  only through `progress.update()` — a spinner frame the next frame overwrites,
+  and `gnomon task` in a script has no scrollback for it to be overwritten in.
+  So the most consequential thing that can happen to a turn, *you are not
+  talking to the model you declared*, was unanswerable afterwards.
+
+  Worse: the turn record stamped `endpoint` and `endpoint_url` from
+  `route.target` unconditionally, filing the fallback's model against the
+  primary's endpoint and URL. `endpoint_url` exists precisely so the trail can
+  tell two runs that reached different servers apart, and this path defeated it.
+  Now said, recorded, and the record follows the request.
+
+- **A twice-truncated answer was recorded as `answered`.** A reply cut off at
+  the token limit triggers one bounded request for the rest; if that reply was
+  also cut off, the partial answer stood — deliberate — with
+  `stop_reason: "answered"`. The operator was told twice and the record said the
+  turn concluded normally. Same class as `exit null` read as a clean zero.
+
+- **An endpoint refusing the tools array, and an MCP server failing to connect**,
+  were announced and not recorded. Both now write a `degradation` record.
+
+- **`gnomon task` recorded none of the context fields the interactive path
+  records.** `context_turns`, `context_dropped` and `context_tokens` were on the
+  interactive turn record and absent from the one-shot one, so the same surface
+  at the same hash recorded whether it had dropped context from `gnomon prompt`
+  and not from `gnomon task`. Third instance of one bug — MCP servers, the
+  surface audit, and now this. Recorded per stage for a declared chain, because
+  Rule 4 says three stages produce three records.
+
 ### Changed
 
 - **`.gnomon/extensions/` is no longer hashed.** Commit `9f38bfd` *disclosed*

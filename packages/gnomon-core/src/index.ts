@@ -58,6 +58,11 @@ export * from "./session.js";
 // thing that has ever exercised it.
 export * from "./agent.js";
 export * from "./prompt_loop.js";
+// The degradation contract: every way this harness carries on with less than
+// it declared, and the record each one writes. Read by
+// `benchmarks/degradation-contract`, which measures the declaration against
+// behaviour rather than keeping its own copy of the list.
+export * from "./degradation.js";
 export * from "./render.js";
 export * from "./tools.js";
 export * from "./skills.js";

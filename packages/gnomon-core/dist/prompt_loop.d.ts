@@ -437,6 +437,18 @@ export interface TurnResult {
     /** Worst outcome code seen — model transport or any tool */
     code: number;
     model: string;
+    /**
+     * The endpoint the model calls actually reached, and its URL.
+     *
+     * Both are the DECLARED route until a `[roles.<name>.fallback]` fires, at
+     * which point they follow the request. Callers stamped the audit record from
+     * `route.target` directly until 2026-09-05, so a fallback turn was recorded
+     * as the fallback's model against the primary's endpoint and URL — an
+     * internally inconsistent record of a run whose whole point was that it went
+     * somewhere else.
+     */
+    endpoint?: string;
+    endpoint_url?: string;
     toolSteps: number;
     toolLog: string[];
     /**
@@ -544,7 +556,7 @@ export declare function pushNote(notes: RunNote[], turn: number, text: string,
  * cap -- keep compiling and keep meaning what they meant.
  */
 limit?: number): RunNote[];
-export type StopReason = "answered" | "empty" | "stall" | "step_wall" | "cancelled" | "apparatus";
+export type StopReason = "answered" | "empty" | "stall" | "step_wall" | "cancelled" | "truncated" | "apparatus";
 /** Measured worktree change for one turn. Absent outside a git worktree. */
 export interface TreeDelta {
     files: number;

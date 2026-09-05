@@ -88,6 +88,7 @@ import {
   withWorkingContext,
 } from "./skills.js";
 import { AuditTrail, resolveAudit } from "./audit.js";
+import { recordDegradation } from "./degradation.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
 import { applyCredentials } from "./credentials.js";
 import {
@@ -1666,6 +1667,18 @@ export interface TurnResult {
   /** Worst outcome code seen — model transport or any tool */
   code: number;
   model: string;
+  /**
+   * The endpoint the model calls actually reached, and its URL.
+   *
+   * Both are the DECLARED route until a `[roles.<name>.fallback]` fires, at
+   * which point they follow the request. Callers stamped the audit record from
+   * `route.target` directly until 2026-09-05, so a fallback turn was recorded
+   * as the fallback's model against the primary's endpoint and URL — an
+   * internally inconsistent record of a run whose whole point was that it went
+   * somewhere else.
+   */
+  endpoint?: string;
+  endpoint_url?: string;
   toolSteps: number;
   toolLog: string[];
   /**
@@ -1822,6 +1835,17 @@ export type StopReason =
   | "stall"
   | "step_wall"
   | "cancelled"
+  // The backend cut the completion off at its token limit and the one bounded
+  // continuation request did not finish it either, so an answer known to be
+  // incomplete was allowed to stand.
+  //
+  // It used to stand as "answered". The continuation retry (added earlier) fixed
+  // the FIRST truncation and left the second recording a knowingly-partial reply
+  // as a turn that concluded normally -- the same silent-success shape as `exit
+  // null` read as a clean zero. Found 2026-09-05 by
+  // benchmarks/degradation-contract, which scores announced and recorded
+  // separately: the operator was told both times, the record said "answered".
+  | "truncated"
   // The run never reached the model: the surface itself could not be used.
   // Without this, a refusal to start had to borrow "answered", which is how an
   // apparatus failure came to be recorded as a turn that concluded. It IS a
@@ -2431,6 +2455,10 @@ export async function runAgenticTurn(
   // Signatures of the last few calls, to notice a model going in circles.
   const recentCalls: string[] = [];
   let usedModel = route.model;
+  // The target the model calls actually reached. Diverges from `route.target`
+  // the moment a fallback fires, and the record has to follow the request
+  // rather than the declaration.
+  let usedTarget = route.target;
   // One re-prompt for an empty completion, per nudge cycle — not one per turn.
   //
   // The nudge re-fires every nudge_after_idle calls for as long as the turn
@@ -2441,6 +2469,9 @@ export async function runAgenticTurn(
   // were the entire residual gap against the peer harness.
   let consecutiveEmpty = 0;
   let truncationRetried = false;
+  // The finish_reason of the completion the turn ends on, so a reply the
+  // backend cut off can be recorded as cut off rather than as an answer.
+  let lastFinishReason: string | undefined;
   let overflowTrimmed = false;
   let textToolCallRetried = false;
   let emptyTerminus = false;
@@ -2472,6 +2503,8 @@ export async function runAgenticTurn(
     content: CANCELLED,
     code: settle(code, 2),
     model: usedModel,
+    endpoint: usedTarget.endpoint,
+    endpoint_url: usedTarget.url,
     toolSteps: steps,
     toolLog,
     usage: turnUsage,
@@ -2524,6 +2557,12 @@ export async function runAgenticTurn(
             `role a tool-capable model.`
         )
       );
+      recordDegradation(deps.audit, {
+        id: "endpoint_tools_rejected",
+        declared: `${offer.length} tool(s) offered to ${target.model}`,
+        actual: "the endpoint refused the tools array; the turn ran without tools",
+        detail: { model: target.model, role },
+      });
       deps.progress.start(`${target.model} — without tools`);
       r = await callEndpoint(target, working, [], modelTimeoutMs(config), deps.signal);
       turnUsage = addUsage(turnUsage, r.usage);
@@ -2540,10 +2579,39 @@ export async function runAgenticTurn(
     if (deps.signal?.aborted) return cancelled();
 
     if (result.code !== 0 && route.fallback) {
+      // Announced on the spinner ONLY, until 2026-09-05. `progress.update` is
+      // overwritten by the very next frame, and `gnomon task` in a script has
+      // no scrollback to overwrite — so the single most consequential thing
+      // that can happen to a turn, "you are not talking to the model you
+      // declared", left no trace a person could find afterwards. Said, and
+      // recorded, and the spinner still updates because it is the fastest
+      // signal for someone watching.
+      deps.progress.stop();
+      say(
+        paint(
+          deps.ui,
+          "yellow",
+          `  [endpoint] ${route.target.endpoint || route.target.url} did not answer ` +
+            `— falling back to ${route.fallback.model} at ` +
+            `${route.fallback.endpoint || route.fallback.url}.`
+        )
+      );
+      recordDegradation(deps.audit, {
+        id: "endpoint_fallback",
+        declared: `${route.model} at ${route.target.endpoint || route.target.url}`,
+        actual: `${route.fallback.model} at ${route.fallback.endpoint || route.fallback.url}`,
+        detail: { primary_code: result.code },
+      });
       deps.progress.update(
         `${route.fallback.model} — primary unavailable, falling back`
       );
       usedModel = route.fallback.model;
+      // The turn record used to name `route.target` unconditionally, so a
+      // fallback turn was filed under the model that answered and the endpoint
+      // that did not. `endpoint_url` exists precisely so the trail can tell two
+      // runs that reached different servers apart (docs/EVIDENCE.md, Rule 1
+      // caveat), and this path defeated it.
+      usedTarget = route.fallback;
       result = await call(route.fallback);
       if (deps.signal?.aborted) return cancelled();
     }
@@ -2565,6 +2633,7 @@ export async function runAgenticTurn(
     // "length" took the ordinary terminal branch and was recorded as
     // stop_reason "answered". Ask once for the rest, bounded like the blank
     // retry, then let it stand rather than looping.
+    lastFinishReason = result.finishReason;
     if (
       result.code === 0 &&
       result.toolCalls.length === 0 &&
@@ -2888,12 +2957,18 @@ export async function runAgenticTurn(
         content: noteMarkupInAnswer(result.content, counters),
         code: settle(code, result.code),
         model: usedModel,
+        endpoint: usedTarget.endpoint,
+        endpoint_url: usedTarget.url,
         toolSteps: steps,
         toolLog,
         usage: turnUsage,
         // The model stopped calling tools of its own accord. Whether it was
         // RIGHT to stop is the bucket's business, not this field's.
-        stop_reason: emptyTerminus ? "empty" : "answered",
+        stop_reason: emptyTerminus
+          ? "empty"
+          : lastFinishReason === "length"
+            ? "truncated"
+            : "answered",
         counters,
         surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
       };
@@ -3007,6 +3082,8 @@ export async function runAgenticTurn(
         content: noteMarkupInAnswer(content, counters),
         code: settle(code, 4),
         model: usedModel,
+        endpoint: usedTarget.endpoint,
+        endpoint_url: usedTarget.url,
         toolSteps: steps,
         toolLog,
         usage: turnUsage,
@@ -3844,7 +3921,7 @@ export async function runTask(
   // Failure to connect is reported and skipped, never fatal -- an unreachable
   // MCP server should cost its own tools, not the whole run.
   if (config.tools.mcp_servers && Object.keys(config.tools.mcp_servers).length > 0) {
-      state.mcp = await connectMcp(config.tools.mcp_servers, note);
+      state.mcp = await connectMcp(config.tools.mcp_servers, note, audit);
   }
 
   // One approval callback for every stage: a chain must not become a way to
@@ -3915,6 +3992,12 @@ export async function runTask(
           code: r.code,
           stop_reason: r.stop_reason,
           tool_steps: r.toolSteps,
+          // Per stage, because each stage builds its own window and a chain
+          // that dropped context in stage 2 is not the same run as one that
+          // dropped it in stage 3.
+          context_turns: stageMsgs.included,
+          context_dropped: stageMsgs.dropped,
+          context_tokens: stageMsgs.tokens,
           surface_hash,
         });
         last = r;
@@ -3945,7 +4028,10 @@ export async function runTask(
     turn: 1,
     role,
     model: turn.model,
-    endpoint: route.target.endpoint,
+    // `turn.endpoint`, not `route.target.endpoint`: a fallback turn reached a
+    // different server and the record has to say which one.
+    endpoint: turn.endpoint ?? route.target.endpoint,
+    endpoint_url: turn.endpoint_url ?? route.target.url,
     bucket: mapBucket(turn.code),
     code: turn.code,
     duration_ms: duration,
@@ -3957,6 +4043,23 @@ export async function runTask(
     tokens_in: turn.usage?.input,
     tokens_out: turn.usage?.output,
     skills: active.map((sk) => sk.id),
+    // Present on the interactive turn record since it was written, and absent
+    // here until 2026-09-05 -- so the same surface, at the same hash, recorded
+    // whether it had dropped context from `gnomon prompt` and not from
+    // `gnomon task`. That is the third instance of one bug (MCP servers, the
+    // surface audit, and now this): a fact plumbed into one entry point and not
+    // the other, which makes the trail a function of how you invoked it.
+    //
+    // Only when no chain ran. With a chain, `built` describes a set of messages
+    // nothing sent -- each stage builds its own, and each stage records its own
+    // below, because Rule 4 says three stages produce three records.
+    ...(stageRecords.length === 0
+      ? {
+          context_turns: built.included,
+          context_dropped: built.dropped,
+          context_tokens: built.tokens,
+        }
+      : {}),
     surface_hash,
     input: audit.text(input),
     output: audit.text(turn.content),
@@ -3979,7 +4082,7 @@ export async function runTask(
     // internally inconsistent, which is worse than either choice alone.
     role: stageRecords.length > 0 ? stageRecords[stageRecords.length - 1].role : role,
     model: turn.model,
-    endpoint: route.target.endpoint,
+    endpoint: turn.endpoint ?? route.target.endpoint,
     input,
     output: turn.content,
     code: turn.code,
@@ -5471,15 +5574,6 @@ export async function runPromptLoop(
   // first apply, so the terminal is restored when the loop ends.
   applyTerminalTheme(uiOf(state));
 
-  // Connect any declared MCP servers before the first turn, so their tools are
-  // in the set the model sees. A server that will not connect is reported and
-  // skipped — never fatal.
-  if (config.tools.mcp_servers && Object.keys(config.tools.mcp_servers).length > 0) {
-    state.mcp = await connectMcp(config.tools.mcp_servers, (l) =>
-      console.log(paint(uiOf(state), "gray", l))
-    );
-  }
-
   // Off unless the surface asks for it.
   const auditSettings = resolveAudit(config);
   // One id for the session, so a trail and its snapshot name the same run.
@@ -5499,6 +5593,21 @@ export async function runPromptLoop(
     roles: listRoles(config),
     record: auditSettings.record,
   });
+
+  // Connect any declared MCP servers before the first turn, so their tools are
+  // in the set the model sees. A server that will not connect is reported and
+  // skipped — never fatal.
+  //
+  // Ordered AFTER session_start on purpose: a server that fails now writes a
+  // `degradation` record, and a trail whose first entry is a degradation has no
+  // session_start to attribute it to.
+  if (config.tools.mcp_servers && Object.keys(config.tools.mcp_servers).length > 0) {
+    state.mcp = await connectMcp(
+      config.tools.mcp_servers,
+      (l) => console.log(paint(uiOf(state), "gray", l)),
+      audit
+    );
+  }
 
   // Rotating and switching need the loop's id and its persist(), so they are
   // supplied here rather than reached for from a command.
@@ -6729,7 +6838,7 @@ export async function runPromptLoop(
         turn: exchange.turn,
         role,
         model: exchange.model,
-        endpoint: route.target.endpoint,
+        endpoint: turn.endpoint ?? route.target.endpoint,
         // The NAME alone cannot answer "where did this actually go?".
         // GNOMON_MODEL_URL replaces the declared url at resolve time, so two
         // runs with the same surface hash and the same endpoint name can reach
@@ -6738,7 +6847,7 @@ export async function runPromptLoop(
         // record. DESIGN.md's claim is "if behaviour changed, the hash changed"
         // -- this is the one path where behaviour changes and it does not, so
         // the resolved destination has to be written down instead.
-        endpoint_url: route.target.url,
+        endpoint_url: turn.endpoint_url ?? route.target.url,
         endpoint_overridden: process.env.GNOMON_MODEL_URL ? true : undefined,
         bucket: exchange.bucket,
         code: exchange.code,

@@ -159,6 +159,20 @@ export type AuditKind =
   // whether it passed. A trail that records the change but not the check
   // cannot answer whether the change was ever known to be good.
   | "verify"
+  // One per degradation: the harness kept working with less than it declared.
+  //
+  // Announcing a degradation on the terminal is not the same as recording it.
+  // A spinner frame is overwritten by the next one, and `gnomon task` in a
+  // script has no scrollback at all — so a degradation that only ever reached
+  // `progress.update()` is unanswerable afterwards, which is precisely the
+  // question this trail exists to answer. Measured 2026-09-05: endpoint
+  // fallback, an endpoint refusing the tools array, and an MCP server failing
+  // to connect were all announced and none of the three was recorded.
+  //
+  // Carries a stable `id` rather than only prose, so a trail can be counted
+  // and compared. The prose still ships beside it, because an id nobody can
+  // read is a different failure.
+  | "degradation"
   | "session_end";
 
 export interface AuditRecord {

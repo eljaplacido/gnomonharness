@@ -1,0 +1,31 @@
+{
+  "version": "0.1.0",
+  "_comment": [
+    "Why this file exists. stop_reason is a published enumeration under Rule 6 — it",
+    "appears on every TaskRecord and every `turn` audit record, and a consumer",
+    "switches on it. It was pinned only by a hand-kept list inside docs.test.ts,",
+    "which checked one direction: a value documented in CONTRACTS.md but never",
+    "emitted by the code would have passed, and so would a value the code emits",
+    "that nobody documented. Both are drift.",
+    "",
+    "This fixture is the third point that makes the check two-way. The test asserts",
+    "the union in prompt_loop.ts, the table in docs/CONTRACTS.md, and the keys here",
+    "are the SAME SET — so adding a value means touching all three deliberately,",
+    "the same shape as conformance/exit_codes.json.",
+    "",
+    "`truncated` was added 2026-09-05, found by benchmarks/degradation-contract: a",
+    "reply the backend cut off twice was allowed to stand and recorded as",
+    "`answered`."
+  ],
+  "stop_reason": {
+    "answered": "the model stopped calling tools of its own accord",
+    "empty": "the model returned neither text nor a tool call",
+    "stall": "the same call repeated until the stall limit",
+    "step_wall": "max_steps_total was reached",
+    "cancelled": "the operator stopped it",
+    "truncated": "the backend cut the reply off at its token limit, and the one bounded continuation request did not finish it either",
+    "apparatus": "the run never reached the model — the surface itself could not be used"
+  },
+  "expected_count": 7,
+  "not_a_bucket": "stop_reason is a separate axis from the outcome bucket. The bucket says WHAT happened; this says why the loop stopped. Nothing here maps to result/refusal/apparatus_failure, and a reader combining them is producing a composite verdict this project refuses to publish."
+}

@@ -7,12 +7,28 @@ to lose the people it attracts.
 
 ## What this is not
 
-**Not a benchmark.** gnomon has not been run against SWE-bench, SWE-Lancer,
-Terminal-Bench or any other public suite, and no score is claimed here. The
-numbers in this document are the ones measured on this machine, against local
-models, and they are labelled as such. A proper evaluation suite is separate
-work; until it exists, treat everything below as a design argument, not a
-result.
+**Not a leaderboard entry.** This line said "gnomon has not been run against
+SWE-bench, SWE-Lancer, Terminal-Bench or any other public suite, and no score is
+claimed here" from the day the file was written until 2026-09-05 — while three
+Terminal-Bench campaigns sat committed in the same repository. The project's own
+post-mortem called it the highest embarrassment-per-line in the corpus, because
+a reviewer who reads this page first discounts every number after it. It was
+still here for five days after that was written. This is the correction.
+
+What is actually true: gnomon **has** been run against Terminal-Bench, several
+times, and **the task-completion result is null**. On equal terms against
+opencode — same 44 tasks, same model, same clock, same night — 50.0% against
+47.1%, McNemar **p = 1.0000**
+([peer-opencode-2026-09-02](../benchmarks/results/peer-opencode-2026-09-02/README.md)).
+The role chain, the model tier and the timeout-retry instruction each measured
+null as well. No score on any public suite supports a claim that this harness
+completes more tasks than another one, and none is made here.
+
+That is the finding, not a disappointment: at this model tier the harness is not
+the bottleneck on task completion, so the properties below — determinism,
+capability separation, disclosure, auditability — are what this document is
+about. Those are measured exhaustively rather than sampled, and they are where
+the difference is. SWE-bench and SWE-Lancer remain unrun.
 
 **Not a competitor to the whole field.** Claude Code, Cursor, Codex and Copilot
 are products with teams, cloud execution, IDE surfaces and model access gnomon
@@ -135,9 +151,16 @@ record around it.
 
 ## What would change this document
 
-An evaluation suite. Specifically: a fixed task set, run across several models,
-recording tokens, wall-clock, tool-call counts and pass rate, with the same
-tasks run on at least OpenCode and Aider for a baseline. Until that exists, the
-honest claim is about *design properties that are testable* — determinism,
-capability boundaries, auditability — and not about task success rates, which
-nobody here has measured.
+That evaluation suite now exists, and it is the reason the top of this document
+changed. What would change *this* section is a **powered** peer comparison:
+every arm run to date is sized to detect roughly a 10pp difference, and every
+one has come back null, which rules out a large difference and says nothing
+about a small one. A run that could separate 50.0% from 47.1% needs several
+hundred paired tasks, not 34.
+
+So the honest claim remains about *design properties that are testable* —
+determinism, capability boundaries, disclosure, auditability — measured
+exhaustively rather than sampled. The difference from the earlier version of
+this paragraph is that task success rates have now been measured, repeatedly,
+and the answer was "no difference". That is a result, and it is why this
+document leads with the properties.

@@ -14,6 +14,7 @@ export * from "./config.js";
 export * from "./session.js";
 export * from "./agent.js";
 export * from "./prompt_loop.js";
+export * from "./degradation.js";
 export * from "./render.js";
 export * from "./tools.js";
 export * from "./skills.js";
