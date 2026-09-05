@@ -53,7 +53,15 @@ def scaffold(root, skill_on):
 
 def score(spec_dir, root):
     mod = spec_dir.name
+    # Same reason as the test glob below: an agent that writes src/moneybox.py
+    # has still written the module, and scoring it as "wrote none" would be the
+    # apparatus grading its own assumption about layout. Root first, so a
+    # correctly-placed file always wins.
     impl_p = root / (mod + ".py")
+    if not impl_p.exists():
+        found = [p for p in root.rglob(mod + ".py") if ".gnomon" not in p.parts]
+        if found:
+            impl_p = sorted(found, key=lambda q: len(q.parts))[0]
     # rglob, not glob, and .gnomon/ excluded: an agent that writes
     # tests/test_x.py rather than ./test_x.py has still written tests, and
     # scoring it as "wrote none" would be the apparatus grading its own
