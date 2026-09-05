@@ -66,9 +66,20 @@ beforeEach(() => {
 // child was running in and rmdir returns EBUSY for a few milliseconds after
 // the process is gone. Five tools.test.ts cases failed on that alone, in
 // cleanup, with nothing wrong in what they were testing.
-afterEach(() =>
-  rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
-);
+afterEach(() => {
+  // Windows holds a handle on the directory a just-killed child was running in,
+  // and rmdir returns EBUSY until the OS lets go -- which for a SIGKILLed
+  // process is longer than a few milliseconds. Retry generously, and then
+  // TOLERATE failure: the assertions have already run, and a temp directory the
+  // operating system will reap anyway must not be reported as the test failing.
+  // Five bash cases were failing in cleanup while the behaviour they test was
+  // correct.
+  try {
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
+  } catch {
+    // leaked into the OS temp dir; not this test's subject
+  }
+});
 
 describe("buildToolSet", () => {
   it("offers schemas in a stable, sorted order — Rule 3 says sorted", () => {
