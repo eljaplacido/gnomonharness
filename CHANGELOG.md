@@ -57,6 +57,13 @@
   `stop_reason: "answered"`. Same silent-success shape as `exit null` read as a
   clean zero, one level up.
 
+- **`benchmarks/silent-success`** — the first deliberate hunt for the bug class
+  this repository has found four times by accident: a reported success while the
+  thing underneath failed. Eleven decision points, each run clean and broken, so
+  a probe that always reports failure cannot score a perfect zero. The negative
+  control is the historic pre-`902a93f` verify rule reimplemented; it is caught.
+  **0/11 falsely successful** — it found nothing, which is the result.
+
 - **A degradation contract, and a benchmark that measures it.**
   `packages/gnomon-core/src/degradation.ts` names every way this harness carries
   on with less than it declared — twelve paths — and
