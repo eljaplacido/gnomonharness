@@ -1,5 +1,9 @@
 # The declared check does not run for a turn that works through the shell
 
+**Status: disclosed 2026-09-05** (`verify_skipped_shell_only`). The gate still
+skips — `after = "write"` still means write/edit — but it now says so, and the
+record says so. Row 13 in `benchmarks/degradation-contract/`.
+
 **Found 2026-09-05 by arm 1a′, and it is a finding about gnomon rather than a
 score.** Reproduced deterministically with no model:
 `benchmarks/greenfield-spec/probe_tmff.mjs`.

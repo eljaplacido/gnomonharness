@@ -178,6 +178,35 @@ const PROBES = {
     },
   },
 
+  verify_skipped_shell_only: {
+    must: /NOT RUN|only through the shell/i,
+    recordedBy: "a `degradation` record",
+    async run(root, audit) {
+      // The turn changes files through BASH, not write/edit. With
+      // `after = "write"` the gate does not apply -- correctly, per the
+      // published enumeration -- and until 2026-09-05 it said nothing at all.
+      let n = 0;
+      const { trace } = await turnWith(root, async () => {
+        if (++n === 1) {
+          return toolCall("bash", JSON.stringify({
+            command: "printf 'def f():\\n    return 1\\n' > m.py",
+          }));
+        }
+        return done();
+      }, {
+        audit,
+        config: (c) => {
+          c.policy = { ...(c.policy ?? {}),
+            verify: { command: "true", after: "write", max_rounds: 1 } };
+        },
+      });
+      return {
+        announcedIn: trace,
+        recorded: hasDegradation(audit, "verify_skipped_shell_only"),
+      };
+    },
+  },
+
   verify_unrunnable: {
     must: /could not run/i,
     mustNot: /passed/i,

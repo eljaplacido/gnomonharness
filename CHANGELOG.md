@@ -91,6 +91,24 @@
   `stop_reason: "answered"`. Same silent-success shape as `exit null` read as a
   clean zero, one level up.
 
+- **`verify_skipped_shell_only`** — a 13th declared degradation, and the one that
+  found itself. `touchedFiles` is set only by a `write`/`edit` returning 0, so
+  with the default `[verify] after = "write"` a turn that changes files **only
+  through the shell gets no check at all** — and the turn is reported exactly
+  like one that passed. The exclusion is deliberate and its reasoning is sound
+  (counting shell work as a write would silently turn `write` into `always`
+  underneath every existing surface); what was missing is that the cost was
+  written down nowhere, while this repository's own note eight lines away records
+  **49 of 50 nudged trials editing through heredocs and `sed -i`**.
+
+  The enumeration is unchanged. The skip is now announced and recorded, so an
+  operator can choose `after = "always"` rather than never learning the check did
+  not run. `TurnResult.verify` gains `"skipped"`, which the chain gate treats
+  like `unrunnable` — a check that never ran has not been passed.
+
+  Found by `benchmarks/greenfield-spec`, whose entire arm was measuring a
+  mechanism that was not running.
+
 - **`pass^k`, computed from the archive for $0** —
   [reliability-passk-2026-09-05](benchmarks/results/reliability-passk-2026-09-05/).
   gnomon v0.1.1: **pass@1 51.2%, pass^2 45.2%**, retention 0.88 — about one

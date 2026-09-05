@@ -473,7 +473,7 @@ export interface TurnResult {
      * could not tell that from a clean pass. Same silent-success shape as `exit
      * null` read as a clean zero, one level up.
      */
-    verify?: "passed" | "failed" | "unrunnable" | "declined";
+    verify?: "passed" | "failed" | "unrunnable" | "declined" | "skipped";
     toolSteps: number;
     toolLog: string[];
     /**

@@ -43,6 +43,8 @@ export const DEGRADATIONS = {
     "compaction is declared as `summary` but the summary role is unreachable, so turns were dropped rather than folded",
   tool_output_spilled:
     "a tool produced more output than the window allows, so it was written to a file and truncated in the transcript",
+  verify_skipped_shell_only:
+    "the surface declares `[verify] after = \"write\"` and this turn changed files only through the shell, so the declared check did not run",
   verify_unrunnable:
     "the declared verify command could not run, so the turn was neither passed nor handed back",
   verify_declined:

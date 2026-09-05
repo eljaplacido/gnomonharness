@@ -1714,7 +1714,7 @@ export interface TurnResult {
    * could not tell that from a clean pass. Same silent-success shape as `exit
    * null` read as a clean zero, one level up.
    */
-  verify?: "passed" | "failed" | "unrunnable" | "declined";
+  verify?: "passed" | "failed" | "unrunnable" | "declined" | "skipped";
   toolSteps: number;
   toolLog: string[];
   /**
@@ -2470,6 +2470,12 @@ export async function runAgenticTurn(
   // difference between "said it did" and "did it", so it only has meaning
   // after a write or an edit.
   let touchedFiles = false;
+  // Shell-mediated change, tracked SEPARATELY from touchedFiles rather than
+  // folded into it. Folding would silently turn `after = "write"` into
+  // `always` for any turn that shelled out, which is a published enumeration
+  // changing meaning underneath every existing surface. This exists so the gap
+  // can be DISCLOSED instead.
+  let shellTouchedWorktree = false;
   const verify = resolveVerify(config);
   const resilience = resolveResilience(config);
   let verifyRounds = 0;
@@ -2813,6 +2819,40 @@ export async function runAgenticTurn(
         steps > 0 &&
         verifyRounds < verify.max_rounds &&
         (verify.after === "always" || touchedFiles);
+
+      // The gate did not apply, and the reason is one the operator would want
+      // to know: the surface declared a check, the turn changed the worktree,
+      // and the check did not run because the change came through the shell.
+      // Found 2026-09-05 by benchmarks/greenfield-spec, whose whole arm was
+      // measuring a mechanism that was not running.
+      if (
+        verify !== null &&
+        !gateApplies &&
+        verify.after === "write" &&
+        !touchedFiles &&
+        shellTouchedWorktree &&
+        result.code === 0 &&
+        steps > 0 &&
+        verifyRounds < verify.max_rounds
+      ) {
+        deps.progress.stop();
+        say(
+          paint(
+            deps.ui,
+            "yellow",
+            `  ⚙ verify — NOT RUN. This turn changed files only through the shell, ` +
+              `and [verify] after = "write" counts write/edit. Set after = "always" ` +
+              `to check every turn.`
+          )
+        );
+        recordDegradation(deps.audit, {
+          id: "verify_skipped_shell_only",
+          declared: `[verify] ${verify.command} after = "write"`,
+          actual: "not run; the turn's changes came through the shell, not write/edit",
+          detail: { command: verify.command },
+        });
+        verifyOutcome = "skipped";
+      }
 
       if (gateApplies && verify) {
         verifyRounds++;
@@ -3371,6 +3411,13 @@ export async function runAgenticTurn(
         // means `verify.after = "write"`, a published enumeration, and bash is
         // enabled by default — so counting shell work as a write would silently
         // turn "write" into "always" for any turn that shelled out.
+        //
+        // What that reasoning left undocumented is the cost, and by this
+        // repository's own measurement eight lines above the cost is MOST
+        // turns: the declared check simply does not run for them, and the turn
+        // is reported exactly like one that passed it. Recorded here so the
+        // gate can say so rather than skip in silence.
+        shellTouchedWorktree = true;
         callsSinceWrite = 0;
         callsAtLastNudge = 0;
       }

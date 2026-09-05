@@ -36,6 +36,7 @@ export declare const DEGRADATIONS: {
     readonly context_turns_dropped: "the context window could not fit every prior turn, so the oldest were dropped outright";
     readonly context_summary_role_unreachable: "compaction is declared as `summary` but the summary role is unreachable, so turns were dropped rather than folded";
     readonly tool_output_spilled: "a tool produced more output than the window allows, so it was written to a file and truncated in the transcript";
+    readonly verify_skipped_shell_only: "the surface declares `[verify] after = \"write\"` and this turn changed files only through the shell, so the declared check did not run";
     readonly verify_unrunnable: "the declared verify command could not run, so the turn was neither passed nor handed back";
     readonly verify_declined: "the operator declined the verify command, so no check ran for this turn";
     readonly bash_timeout: "a command exceeded the tool timeout and was killed; the output captured before the kill is kept";

@@ -7,6 +7,8 @@ import { loadConfig, endpointClass, resolveUi } from "./config.js";
 import { stubDeclaredKeys } from "./test_support.js";
 import { mapBucket } from "./session.js";
 import * as promptLoop from "./prompt_loop.js";
+import { rmSync } from "node:fs";
+import { resolve as resolvePath, join as joinPath } from "node:path";
 import { setRoleModel } from "./prompt_loop.js";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -3593,6 +3595,55 @@ describe("the degradation contract", () => {
     expect(turn.stop_reason).toBe("truncated");
   });
 
+  // The one mechanism in the loop that can contradict a model claiming success
+  // did not run for a turn that worked through the shell, and said nothing. By
+  // this repository's own measurement -- 49 of 50 nudged trials made no
+  // write/edit call at all -- that is most turns.
+  it("says so when the declared check is skipped because the work went through the shell", async () => {
+    const config: any = loadConfig("../..");
+    config.policy = {
+      ...(config.policy ?? {}),
+      verify: { command: "true", after: "write", max_rounds: 1 },
+    };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const said: string[] = [];
+    const recs: any[] = [];
+    let call = 0;
+    const turn = await withFetch(
+      (async () => ({
+        ok: true,
+        json: async () => ({
+          message:
+            ++call === 1
+              ? {
+                  content: "",
+                  tool_calls: [
+                    { id: "c1", function: { name: "bash", arguments: '{"command": "printf x > shell_written.txt"}' } },
+                  ],
+                }
+              : { content: "done" },
+        }),
+      })) as unknown as typeof fetch,
+      async () =>
+        await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "go" }],
+          deps(said, recs)
+        )
+    );
+    try {
+      // `after = "write"` still means write/edit -- the enumeration does not
+      // change meaning. What changed is that the skip is now disclosed.
+      expect(turn.verify).toBe("skipped");
+      expect(said.join("\n")).toMatch(/NOT RUN/);
+      expect(recs.some((r) => r.kind === "degradation" && r.id === "verify_skipped_shell_only")).toBe(true);
+    } finally {
+      rmSync(joinPath(resolvePath(state.config.gnomonDir, ".."), "shell_written.txt"), { force: true });
+    }
+  }, 20000);
+
   // An endpoint that refuses the tools array costs the role every tool it
   // declares. Announced since it was written; recorded only since 2026-09-05.
   it("records an endpoint refusing the tools array", async () => {
@@ -3653,6 +3704,8 @@ describe("the chain gate", () => {
     // silent success the verify gate itself refuses to publish.
     expect(promptLoop.chainStop("on_check", R(0, "unrunnable") as any)).toBe("verify");
     expect(promptLoop.chainStop("on_check", R(0, "declined") as any)).toBe("verify");
+    // A check that never ran has not been passed either.
+    expect(promptLoop.chainStop("on_check", R(0, "skipped") as any)).toBe("verify");
     // No declared check at all is not a failed check.
     expect(promptLoop.chainStop("on_check", R(0, undefined) as any)).toBeNull();
   });
