@@ -2179,3 +2179,67 @@ describe("portability: the shell is POSIX on every platform", () => {
     expect(tools.NO_POSIX_SHELL).toMatch(/winget|install/i);
   });
 });
+
+describe("the approval window is a TOCTOU window, and is closed", () => {
+  // `before` is read, the operator is asked, and the content written is computed
+  // from `before`. Between the read and the write sits `await ctx.approve` --
+  // however long a human takes to answer, the longest window in the loop. A file
+  // that changed in it was about to be silently overwritten, and the operator had
+  // approved a diff against a version that no longer existed.
+  it("refuses a write when the file moved while the prompt was open", async () => {
+    const target = join(root, "raced.txt");
+    writeFileSync(target, "original\n");
+    const out = await executeTool(
+      "write",
+      { path: "raced.txt", content: "from the agent\n" },
+      ctx({
+        gate: "always",
+        // Someone else edits the file while the operator is deciding.
+        approve: async () => {
+          writeFileSync(target, "edited by a human mid-prompt\n");
+          return true;
+        },
+      }),
+      new Set(["write"])
+    );
+    expect(out.code).toBe(TOOL_DENIED);
+    expect(out.summary).toMatch(/changed under the prompt/);
+    // The other party's work survives.
+    expect(readFileSync(target, "utf-8")).toBe("edited by a human mid-prompt\n");
+  });
+
+  it("refuses an edit when the file moved while the prompt was open", async () => {
+    const target = join(root, "raced2.txt");
+    writeFileSync(target, "alpha\nbeta\n");
+    const out = await executeTool(
+      "edit",
+      { path: "raced2.txt", old_text: "alpha", new_text: "ALPHA" },
+      ctx({
+        gate: "always",
+        approve: async () => {
+          writeFileSync(target, "alpha\nbeta\ngamma\n");
+          return true;
+        },
+      }),
+      new Set(["edit"])
+    );
+    expect(out.code).toBe(TOOL_DENIED);
+    expect(out.summary).toMatch(/changed under the prompt/);
+    expect(readFileSync(target, "utf-8")).toBe("alpha\nbeta\ngamma\n");
+  });
+
+  it("still writes when nothing moved", async () => {
+    // The negative control: a guard that refuses everything would pass the two
+    // assertions above and be useless.
+    const target = join(root, "quiet.txt");
+    writeFileSync(target, "original\n");
+    const out = await executeTool(
+      "write",
+      { path: "quiet.txt", content: "from the agent\n" },
+      ctx({ gate: "always", approve: async () => true }),
+      new Set(["write"])
+    );
+    expect(out.code).toBe(TOOL_OK);
+    expect(readFileSync(target, "utf-8")).toBe("from the agent\n");
+  });
+});

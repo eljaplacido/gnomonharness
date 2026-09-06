@@ -178,6 +178,43 @@ const PROBES = {
     },
   },
 
+  diff_preview_elided: {
+    must: /diff preview elided/i,
+    recordedBy: "a `degradation` record",
+    async run(root, audit) {
+      // A change too large to diff, under a gate that asks. The operator sees a
+      // summary line and approves a diff that was never computed.
+      const { writeFileSync } = await import("node:fs");
+      const big = Array.from({ length: 6000 }, (_, i) => `line ${i}`).join("\n");
+      writeFileSync(join(root, "huge.txt"), big);
+      // The announcement is the approval PREVIEW -- it is what the operator is
+      // shown -- not the tool's return value. The first version of this probe
+      // read out.content and scored a working mechanism as undisclosed.
+      let preview = [];
+      await executeTool(
+        "write",
+        { path: "huge.txt", content: Array.from({ length: 6000 }, (_, i) => `changed ${i}`).join("\n") },
+        {
+          root,
+          sandbox: "confined",
+          timeoutMs: 15_000,
+          maxOutputBytes: 40_000,
+          gate: "always",
+          approve: async (req) => {
+            preview = req.preview ?? [];
+            return true;
+          },
+          audit,
+        },
+        new Set(["write"])
+      );
+      return {
+        announcedIn: preview.join("\n"),
+        recorded: hasDegradation(audit, "diff_preview_elided"),
+      };
+    },
+  },
+
   verify_skipped_shell_only: {
     must: /NOT RUN|only through the shell/i,
     recordedBy: "a `degradation` record",

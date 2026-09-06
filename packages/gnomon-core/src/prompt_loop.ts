@@ -76,6 +76,7 @@ import {
   createSpillSink,
   ARGS_TRUNCATED,
   type SpillSink,
+  DIFF_ELIDED,
 } from "./tools.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { harnessBuild } from "./build.js";
@@ -2374,6 +2375,7 @@ export async function runAgenticTurn(
   const network = state.network ?? declaredNetwork;
 
   const ctx: ToolContext = {
+    audit: deps.audit,
     config,
     bashAllow: config.roles[role]?.bash_allow,
     bashDeny: config.roles[role]?.bash_deny,
@@ -6200,7 +6202,7 @@ export async function runPromptLoop(
       paint(
         ui,
         "yellow",
-        "  └ [y]es · [a]ll this turn · [s]ession · [N]o"
+        "  └ [y]es · [a]ll this turn · [s]ession · [N]o · [v]iew full · [?] help"
       )
     );
 
@@ -6251,6 +6253,57 @@ export async function runPromptLoop(
       if (/^(n|no)$/i.test(answer) || answer === "") {
         yes = false;
         break;
+      }
+      // LINE answers, not keystrokes. Deliberately not raw mode: today every
+      // ambiguity in this ladder resolves to refusal, and single keys would make
+      // one unreviewed character grant a write with `s` -- session-wide standing
+      // consent -- sitting on the home row next to `a`.
+      //
+      // Neither consumes an `attempt`: asking to SEE the thing you are being
+      // asked to approve is not a failed answer, and counting it as one would
+      // push a careful operator into the "unrecognised — treating as no" branch
+      // for being careful.
+      if (/^(v|view)$/i.test(answer)) {
+        attempt--;
+        console.log(paint(ui, "gray", `  ┌ full preview (${req.preview.length} line(s))`));
+        for (const raw of req.preview) {
+          const line = safeForPrompt(raw);
+          const colour = line.startsWith("+ ")
+            ? "green"
+            : line.startsWith("- ")
+              ? "red"
+              : "gray";
+          console.log(paint(ui, colour, `  │ ${line}`));
+        }
+        // An elided preview has no full form to show: the diff was never
+        // computed, because the change was too large to diff. Say that, rather
+        // than reprinting the marker as though it were the content.
+        if (req.preview[0]?.startsWith(DIFF_ELIDED)) {
+          console.log(
+            paint(
+              ui,
+              "yellow",
+              "  └ this diff was never computed — the change was too large to " +
+                "diff, so there is no fuller preview than the line above."
+            )
+          );
+        } else {
+          console.log(paint(ui, "gray", "  └"));
+        }
+        continue;
+      }
+      if (answer === "?") {
+        attempt--;
+        console.log(
+          paint(
+            ui,
+            "gray",
+            "  y = run it once · a = every gated call for the rest of this TURN · " +
+              "s = the rest of the SESSION (writes included; restart to revoke) · " +
+              "n or Enter = refuse · v = print the full preview"
+          )
+        );
+        continue;
       }
       // Unrecognised input used to count as "no", so a stray keystroke
       // silently refused the call. Ask again instead of guessing.

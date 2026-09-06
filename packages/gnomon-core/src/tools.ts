@@ -14,6 +14,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { recordDegradation, type DegradationSink } from "./degradation.js";
 import {
   readFileSync,
   writeFileSync,
@@ -941,6 +942,11 @@ export interface ToolContext {
    * is the state at the START of the turn rather than the previous step.
    */
   preImages?: Map<string, string>;
+  /**
+   * Where a degradation inside a tool is recorded. Optional: a tool that runs
+   * without one still behaves identically, it just cannot write to the trail.
+   */
+  audit?: DegradationSink;
 }
 
 /** One thing the run learned about itself, written by the model as it worked. */
@@ -2883,6 +2889,19 @@ async function writeTool(
   const { added, removed } = diffStat(diff);
 
   if (needsApproval("write", ctx.gate)) {
+      if (diff[0]?.startsWith(DIFF_ELIDED)) {
+        // Announced in-band since the elision existed, and recorded nowhere:
+        // the operator approved a change whose diff was never computed, and the
+        // trail afterwards cannot tell that from a fully-reviewed approval.
+        // Fired only under approval -- an elided preview nobody was going to
+        // read is not a degradation, it is a large file.
+        recordDegradation(ctx.audit, {
+          id: "diff_preview_elided",
+          declared: "an approval shows the diff of the change it is approving",
+          actual: "the change was too large to diff; the approval was given against a summary line",
+          detail: { path, tool: "write" },
+        });
+      }
     const ok = await ctx.approve({
       tool: "write",
       summary: `write ${path} (+${added} −${removed})${before ? "" : " [new file]"}`,
@@ -2893,6 +2912,30 @@ async function writeTool(
         code: TOOL_DENIED,
         content: `Refused: the user declined the write to ${path}.`,
         summary: `write ${path} — denied`,
+      };
+    }
+
+    // The file is re-read AFTER approval, and the write refused if it moved.
+    //
+    // `before` was read before `await ctx.approve`, and the content written is
+    // computed from it — so anything that changed the file while the prompt was
+    // open was about to be silently discarded, and the operator approved a diff
+    // against a version that no longer existed. The window is however long a
+    // human takes to answer, which is the longest window in the whole loop.
+    //
+    // Checked only on the approval path, because that await is what opens it:
+    // ungated, the read-to-write gap is microseconds and a check there would be
+    // cost without a window to guard.
+    const nowOnDisk = existsSync(abs) ? readFileSync(abs, "utf-8") : "";
+    if (nowOnDisk !== before) {
+      return {
+        code: TOOL_DENIED,
+        content:
+          `Refused: ${path} changed on disk while the approval prompt was open, ` +
+          `so the approved change was computed from a version that no longer ` +
+          `exists and applying it would discard whatever changed.\n\n` +
+          `Re-read ${path} and decide again against what is there now.`,
+        summary: `write ${path} — refused (changed under the prompt)`,
       };
     }
   }
@@ -2990,6 +3033,19 @@ async function editTool(
   const { added, removed } = diffStat(diff);
 
   if (needsApproval("edit", ctx.gate)) {
+      if (diff[0]?.startsWith(DIFF_ELIDED)) {
+        // Announced in-band since the elision existed, and recorded nowhere:
+        // the operator approved a change whose diff was never computed, and the
+        // trail afterwards cannot tell that from a fully-reviewed approval.
+        // Fired only under approval -- an elided preview nobody was going to
+        // read is not a degradation, it is a large file.
+        recordDegradation(ctx.audit, {
+          id: "diff_preview_elided",
+          declared: "an approval shows the diff of the change it is approving",
+          actual: "the change was too large to diff; the approval was given against a summary line",
+          detail: { path, tool: "edit" },
+        });
+      }
     const ok = await ctx.approve({
       tool: "edit",
       summary: `edit ${path} (+${added} −${removed})`,
@@ -3000,6 +3056,23 @@ async function editTool(
         code: TOOL_DENIED,
         content: `Refused: the user declined the edit to ${path}.`,
         summary: `edit ${path} — denied`,
+      };
+    }
+  
+    // Re-read after approval; refuse if it moved. `after` was computed from the
+    // pre-approval `before`, so writing it would silently discard anything that
+    // changed while the prompt was open -- and the operator approved a diff
+    // against a version that no longer exists. The await IS the window.
+    const nowOnDisk = readFileSync(abs, "utf-8");
+    if (nowOnDisk !== before) {
+      return {
+        code: TOOL_DENIED,
+        content:
+          `Refused: ${path} changed on disk while the approval prompt was open. ` +
+          `The edit was computed against the earlier version, so applying it ` +
+          `would discard whatever changed.\n\n` +
+          `Re-read ${path} and edit again against what is there now.`,
+        summary: `edit ${path} — refused (changed under the prompt)`,
       };
     }
   }

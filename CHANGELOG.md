@@ -64,6 +64,32 @@
 
 ### Added
 
+- **The approval window was a TOCTOU window, and is now closed.** `write` and
+  `edit` read the file, `await ctx.approve`, then wrote content computed from
+  that earlier read — so anything that changed the file while the prompt was
+  open was silently discarded, and the operator had approved a diff against a
+  version that no longer existed. That await is the longest window in the loop:
+  as long as a human takes to answer.
+
+  Both tools now re-read after approval and **refuse** with `TOOL_DENIED` naming
+  the drift. Checked only on the approval path, because that await is what opens
+  the window. Pinned by three tests including a negative control — a guard that
+  refused everything would pass the other two.
+
+- **`v` and `?` at the approval prompt**, as *line* answers, and neither consumes
+  an attempt. `v` prints the full preview past the 60-line cap; where the diff
+  was never computed it says so rather than reprinting the marker as content.
+
+  Deliberately **not** single keystrokes, which the UX report asked for: every
+  ambiguity in that ladder resolves to refusal today, and raw keys would let one
+  unreviewed character grant a write — with `s`, session-wide standing consent,
+  on the home row beside `a`.
+
+- **`diff_preview_elided`** — the 14th declared degradation. A change too large
+  to diff is approved against a summary line, which was announced in-band since
+  the elision existed and **recorded nowhere**, so the trail could not tell that
+  from a fully-reviewed approval. `degradation-contract` is **14/14**.
+
 - **Degradations reach the scripted path.** They announce on **stderr regardless
   of `--json`** (stdout stays clean JSON for the consumer that asked for it),
   and the returned `TaskRecord` now carries **`degradations[]`** — grouped with

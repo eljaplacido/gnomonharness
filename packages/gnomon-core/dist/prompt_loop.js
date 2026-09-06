@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { routeRole, listRoles, listProfiles, resolveContext, resolveVerify, resolveResilience, resolveExtraRoots, resolveExec, resolveChain, resolveChainGate, declaredKeyVars, resolveLoop, LOOP_DEFAULTS, resolveUi, resolveEndpoint, resolveRouting, recomputeManifest, routeInput, listEndpoints, isLocalEndpoint, endpointClass, parseMetaFields, META_FIELDS, COT_MODES, loadConfig, auditSurface, probeEndpointAuth, } from "./config.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence, safeForPrompt, } from "./render.js";
 export { isLocalEndpoint } from "./config.js";
-import { buildToolSet, executeTool, needsApproval, concurrentSafe, globToRegExp, createSpillSink, ARGS_TRUNCATED, } from "./tools.js";
+import { buildToolSet, executeTool, needsApproval, concurrentSafe, globToRegExp, createSpillSink, ARGS_TRUNCATED, DIFF_ELIDED, } from "./tools.js";
 import { connectMcp } from "./mcp.js";
 import { harnessBuild } from "./build.js";
 import { mapBucket } from "./session.js";
@@ -1636,6 +1636,7 @@ depth = 0) {
     const declaredNetwork = policy.sandbox?.network;
     const network = state.network ?? declaredNetwork;
     const ctx = {
+        audit: deps.audit,
         config,
         bashAllow: config.roles[role]?.bash_allow,
         bashDeny: config.roles[role]?.bash_deny,
@@ -4797,7 +4798,7 @@ export async function runPromptLoop(config, initialRole, options = {}) {
         if (req.preview.length > 60) {
             console.log(paint(ui, "gray", `  │ … ${req.preview.length - 60} more lines`));
         }
-        console.log(paint(ui, "yellow", "  └ [y]es · [a]ll this turn · [s]ession · [N]o"));
+        console.log(paint(ui, "yellow", "  └ [y]es · [a]ll this turn · [s]ession · [N]o · [v]iew full · [?] help"));
         // On a TTY, anything already typed was meant as a message, not as an
         // answer to a prompt the user had not yet seen — hold it and replay it.
         // On a pipe the opposite is true: the script's next line IS the answer,
@@ -4833,6 +4834,46 @@ export async function runPromptLoop(config, initialRole, options = {}) {
             if (/^(n|no)$/i.test(answer) || answer === "") {
                 yes = false;
                 break;
+            }
+            // LINE answers, not keystrokes. Deliberately not raw mode: today every
+            // ambiguity in this ladder resolves to refusal, and single keys would make
+            // one unreviewed character grant a write with `s` -- session-wide standing
+            // consent -- sitting on the home row next to `a`.
+            //
+            // Neither consumes an `attempt`: asking to SEE the thing you are being
+            // asked to approve is not a failed answer, and counting it as one would
+            // push a careful operator into the "unrecognised — treating as no" branch
+            // for being careful.
+            if (/^(v|view)$/i.test(answer)) {
+                attempt--;
+                console.log(paint(ui, "gray", `  ┌ full preview (${req.preview.length} line(s))`));
+                for (const raw of req.preview) {
+                    const line = safeForPrompt(raw);
+                    const colour = line.startsWith("+ ")
+                        ? "green"
+                        : line.startsWith("- ")
+                            ? "red"
+                            : "gray";
+                    console.log(paint(ui, colour, `  │ ${line}`));
+                }
+                // An elided preview has no full form to show: the diff was never
+                // computed, because the change was too large to diff. Say that, rather
+                // than reprinting the marker as though it were the content.
+                if (req.preview[0]?.startsWith(DIFF_ELIDED)) {
+                    console.log(paint(ui, "yellow", "  └ this diff was never computed — the change was too large to " +
+                        "diff, so there is no fuller preview than the line above."));
+                }
+                else {
+                    console.log(paint(ui, "gray", "  └"));
+                }
+                continue;
+            }
+            if (answer === "?") {
+                attempt--;
+                console.log(paint(ui, "gray", "  y = run it once · a = every gated call for the rest of this TURN · " +
+                    "s = the rest of the SESSION (writes included; restart to revoke) · " +
+                    "n or Enter = refuse · v = print the full preview"));
+                continue;
             }
             // Unrecognised input used to count as "no", so a stray keystroke
             // silently refused the call. Ask again instead of guessing.

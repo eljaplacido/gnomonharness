@@ -12,6 +12,7 @@
  *
  * No dependencies.
  */
+import { type DegradationSink } from "./degradation.js";
 import { GnomonConfig } from "./config.js";
 import type { McpRegistry, McpToolInfo } from "./mcp.js";
 export declare const TOOL_OK = 0;
@@ -362,6 +363,11 @@ export interface ToolContext {
      * is the state at the START of the turn rather than the previous step.
      */
     preImages?: Map<string, string>;
+    /**
+     * Where a degradation inside a tool is recorded. Optional: a tool that runs
+     * without one still behaves identically, it just cannot write to the trail.
+     */
+    audit?: DegradationSink;
 }
 /** One thing the run learned about itself, written by the model as it worked. */
 export interface RunNote {
