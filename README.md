@@ -128,9 +128,15 @@ guarantees live.
 others — they are absent from the schema list it receives. A `verifier` has no
 `write` tool to call.
 
-**Nothing that changes your repository runs before you see it.** Writes and
-edits show a real diff; commands show the command. `bash` is gated too, because
-a command can write anything.
+**Under the default gate, nothing that changes your repository runs before you
+see it.** Writes and edits show a real diff; commands show the command. `bash` is
+gated too, because a command can write anything.
+
+The qualifier is load-bearing and was missing: `approval.gate = "never"`, a
+standing `[s]ession` consent, and `gnomon task --yes` each mean changes run
+without being shown. Those are choices a surface or an operator makes
+deliberately — but the sentence above claimed a guarantee the harness does not
+give in three of its own supported configurations.
 
 **Every step lands in one of three buckets** — `result`, `refusal`,
 `apparatus_failure` — with no composite verdict. A declined approval is a
@@ -870,7 +876,7 @@ gate = "on_write"                  # never | on_write | always
 
 [sandbox]
 level = "confined"                 # off | confined | strict
-network = false                    # DECLARED BUT NOT ENFORCED — see Known Limits
+network = false                    # enforced for `webfetch`; NOT process isolation — see Known Limits
 
 [verify]                           # a declared check run after a turn changes files
 command = ".gnomon/verify.sh"      # non-recursive; empty/absent = off
@@ -1295,7 +1301,17 @@ is re-folded whole only when it outgrows `retain_after`.
 A deliberate trade-off: `discard` and `truncate` are bit-reproducible because
 they only drop text. `summary` is not — it asks a model what mattered. The
 surface still determines *that* summarisation happens and *which role* does it,
-but two runs can summarise differently. That is why `discard` is the default.
+but two runs can summarise differently.
+
+`summary` is nonetheless the default, since 2026-09-04. This paragraph ended
+"that is why `discard` is the default" for two days after that stopped being
+true. The measurement is what changed it: `discard` scored **0/9** on context
+retention against `summary`'s **9/9**
+([context-2026-08-31](benchmarks/results/context-2026-08-31/)) — a session under
+`discard` forgets an evicted turn outright and then answers as though it never
+knew it. Bit-reproducibility is worth less than remembering. An existing surface
+keeps whatever it declares; `gnomon migrate` offers the change and names the
+evidence.
 
 It is lossy in proportion to how hard you squeeze. Folding a session into a
 340-token window with a 7B summariser preserved the decisions ("avoid

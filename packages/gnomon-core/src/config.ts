@@ -176,7 +176,11 @@ export interface Policy {
   sandbox?: {
     network?: boolean;
     filesystem?: string;
-    env_whitelist?: string[];
+    // `env_whitelist` was declared here and read by nothing -- no code path, no
+    // test, no doc. A surface author who wrote it got a key the harness ignores,
+    // which is the published-option-that-does-nothing defect this project
+    // removes rather than discloses. Deleted 2026-09-06; if environment scoping
+    // is wanted it comes back as a key something reads.
   };
   approval?: {
     modes: string[];

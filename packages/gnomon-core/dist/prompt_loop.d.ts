@@ -13,7 +13,7 @@ import { Progress } from "./render.js";
 export { isLocalEndpoint } from "./config.js";
 import { Todo, type SurfaceDrift, Approver, SandboxLevel, SurfaceConsent, RunNote, type SpillSink } from "./tools.js";
 import { type McpRegistry } from "./mcp.js";
-import { AuditTrail } from "./audit.js";
+import { type AuditKind } from "./audit.js";
 import { SessionListEntry } from "./session_store.js";
 /** A single exchange: user input → model response → outcome */
 export interface PromptExchange {
@@ -409,7 +409,23 @@ export interface TurnDeps {
     /** Aborted when the user presses Esc (or Ctrl+C) mid-turn */
     signal?: AbortSignal;
     /** Append-only trail; a disabled one is a no-op */
-    audit?: AuditTrail;
+    /**
+     * Structural, not `AuditTrail`, so a caller can pass a wrapper that both
+     * writes and collects. `runTask` does exactly that to put degradations on the
+     * record it returns; `benchmarks/degradation-contract` has always passed a
+     * plain collector here, so the runtime already accepted this — only the type
+     * was narrower than the truth.
+     */
+    audit?: TurnAudit;
+    /**
+     * Where a DEGRADATION is announced, when that must not be silenceable.
+     *
+     * `say` is the ordinary transcript channel, and in `runTask` it is gated on
+     * `options.verbose` — which `gnomon task --json` turns off. That silenced the
+     * announce half of the degradation contract on the one path where nobody is
+     * watching. Defaults to `say`, so the interactive loop is unchanged.
+     */
+    warn?: (line: string) => void;
     /**
      * Whether a standing approval covers gated calls right now.
      *
@@ -432,6 +448,14 @@ export interface FoldStep {
     summary: string;
 }
 /** Result of one agentic turn, before it becomes a PromptExchange. */
+/**
+ * The slice of the audit trail a turn uses. `AuditTrail` satisfies it.
+ */
+export interface TurnAudit {
+    write(kind: AuditKind, fields: Record<string, unknown>): void;
+    /** Undefined when the trail records metadata only — the redaction contract. */
+    text(value: string | undefined): string | undefined;
+}
 /**
  * Does the gate stop the chain after this stage? Returns the reason, or null.
  *
@@ -777,6 +801,22 @@ export declare function listModels(config: GnomonConfig): Promise<EndpointModels
 export interface TaskRecord {
     /** Content hash of .gnomon/ — what determined this behaviour */
     surface_hash: string;
+    /**
+     * Every degradation this run recorded — the harness carrying on with less
+     * than the surface declared. Absent when there were none.
+     *
+     * Here because `[audit]` is off on a scaffolded surface and `--json` silences
+     * the transcript, so a scripted run that fell back to another endpoint, lost
+     * an MCP server's tools, or skipped its declared check emitted clean JSON and
+     * exit 0 with nothing anywhere. `docs/EVIDENCE.md` published 13/13
+     * "announced AND recorded" measured by calling the loop directly — true of
+     * the library, and unmeasured for the entry point CI actually uses.
+     *
+     * NOT reproducible, and deliberately grouped with the volatile fields for
+     * that reason: `endpoint_fallback` and `mcp_server_unreachable` are the most
+     * environment-dependent facts a run can produce.
+     */
+    degradations?: Array<Record<string, unknown>>;
     /**
      * Non-fatal findings from the surface audit, absent when there are none.
      *

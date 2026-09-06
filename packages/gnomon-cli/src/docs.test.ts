@@ -355,6 +355,44 @@ describe("the README outcome table matches the tool result codes", () => {
     }
   });
 
+
+  it("the inert-enumeration set, its fixture and CONTRACTS.md are one set", () => {
+    // CONTRACTS.md said "`role_profile` is declared and not implemented" for
+    // weeks after 495fa40 made it route -- the contract document telling readers
+    // a working feature was inert. Nothing could catch it: the inert set lived
+    // in one prose paragraph and one TypeScript object, unlinked.
+    const root = join(__dirname, "../../..");
+    const fixture = JSON.parse(
+      readFileSync(join(root, "conformance/declared_not_implemented.json"), "utf-8")
+    ) as { declared_not_implemented: Record<string, string[]>; expected_keys: number };
+
+    const src = readFileSync(join(root, "packages/gnomon-core/src/config.ts"), "utf-8");
+    const block = src.slice(src.indexOf("const DECLARED_NOT_IMPLEMENTED"));
+    const body = block.slice(0, block.indexOf("\n};"));
+
+    const keys = [...body.matchAll(/^  ([a-z_]+): \{/gm)].map((m) => m[1]).sort();
+    expect(keys, "config.ts keys != the fixture").toEqual(
+      Object.keys(fixture.declared_not_implemented).sort()
+    );
+    expect(keys.length).toBe(fixture.expected_keys);
+
+    for (const [key, values] of Object.entries(fixture.declared_not_implemented)) {
+      const m = new RegExp(`${key}: \\{[^}]*values: \\[([^\\]]*)\\]`, "s").exec(body);
+      expect(m, `no values[] for "${key}" in DECLARED_NOT_IMPLEMENTED`).not.toBeNull();
+      const inCode = [...m![1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]).sort();
+      expect(inCode, `config.ts values for "${key}" != the fixture`).toEqual([...values].sort());
+    }
+
+    // And the document has to name each one, so the prose cannot drift from the
+    // code again in the direction that started this.
+    const contracts = readFileSync(join(root, "docs/CONTRACTS.md"), "utf-8");
+    for (const values of Object.values(fixture.declared_not_implemented)) {
+      for (const v of values) {
+        expect(contracts, `CONTRACTS.md does not mention inert value "${v}"`).toContain(v);
+      }
+    }
+  });
+
   it("every file:line the docs cite still resolves", () => {
     // Documentation rots by pointing at code that moved. This is the cheap,
     // checkable half of that problem: a citation naming a file that no longer

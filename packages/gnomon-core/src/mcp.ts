@@ -327,7 +327,13 @@ export async function connectMcp(
   // session every tool it would have offered, and until 2026-09-05 that fact
   // reached the terminal and nothing else -- so a scripted run came back with a
   // smaller tool set than the surface declares and the trail said nothing.
-  audit?: DegradationSink
+  audit?: DegradationSink,
+  /**
+   * Where the FAILURE is announced, when that must not be silenceable. A server
+   * that does not connect costs the session every tool it declares, and on the
+   * scripted path `report` is gated on --json. Defaults to `report`.
+   */
+  warn?: (line: string) => void
 ): Promise<McpRegistry> {
   const conns: McpConnection[] = [];
   const byTool = new Map<string, McpConnection>();
@@ -345,7 +351,7 @@ export async function connectMcp(
     } catch (err) {
       conn.close();
       const why = err instanceof Error ? err.message : String(err);
-      report(`  mcp: ${name} unavailable — ${why}`);
+      (warn ?? report)(`  mcp: ${name} unavailable — ${why}`);
       recordDegradation(audit, {
         id: "mcp_server_unreachable",
         declared: `[mcp_servers.${name}] ${def.command} ${(def.args ?? []).join(" ")}`.trim(),

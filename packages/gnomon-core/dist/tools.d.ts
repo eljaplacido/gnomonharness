@@ -122,6 +122,16 @@ export type Approver = (req: ApprovalRequest) => Promise<boolean>;
  * loudly, so the change stays auditable. Never set by the agent itself.
  */
 export type SurfaceConsent = "strict" | "custom" | "all";
+/** Tools that can change something outside the model's own context. */
+/**
+ * Tools whose call is gated under `approval.gate = "on_write"`.
+ *
+ * Exported because `/explain approval` used to carry its own literal copy —
+ * ["bash","write","edit","skill"] — which omitted `webfetch` and `task`, so the
+ * command that exists to tell an operator what is gated named two gated tools
+ * as ungated. One list, one truth.
+ */
+export declare const MUTATING: Set<string>;
 /**
  * Tools that may run CONCURRENTLY with each other.
  *

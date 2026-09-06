@@ -155,14 +155,19 @@ so both format drift and non-determinism fail the build.
   "role_profile": ["local_first", "frontier_plan", "all_remote"]
 ```
 
-**`role_profile` is declared and not implemented.** The three values are
-published and `.gnomon/profiles/*.toml` exists, but nothing reads either: no code
-path selects a profile, and `roleDef.profile` is consumed as a model tag rather
-than as a profile name. It is listed here because removing a published
-enumeration value is a contract change, and because a reader who finds
-`profiles/` in a scaffolded surface will otherwise assume it does something.
-The same disclosure applies to `edit_format`: of `ast`, `hashline` and
-`str_replace`, only `str_replace` is implemented.
+**`role_profile` is implemented.** This paragraph said it was "declared and not
+implemented" and stayed there after `495fa40` made it route: `applyProfile`
+(`config.ts:760`) merges the named profile over the base roles per field, called
+at `config.ts:793`. Corrected 2026-09-06 — a disclosure that outlives the defect
+it discloses is its own defect, and it was telling readers a working feature was
+inert.
+
+**`edit_format` is still the real case.** Of `ast`, `hashline` and
+`str_replace`, only `str_replace` is implemented; the other two are published in
+the enumerations contract and inert. They stay published because entries leave
+that list by being implemented, never by being dropped from what was already
+published — and `auditSurface` reports a surface that selects one, so nobody
+gets the inert behaviour in silence.
 
 ```json
 }

@@ -3764,3 +3764,81 @@ describe("the chain gate", () => {
     expect(gated.stages?.[0].bucket).toBe("refusal");
   }, 60000);
 });
+
+describe("the scripted path discloses degradations", () => {
+  // docs/EVIDENCE.md published "13/13 announced AND recorded". That was measured
+  // by calling runAgenticTurn directly with a collector -- true of the library,
+  // and never measured for `gnomon task`, which is the entry point CI uses.
+  //
+  // On that path `[audit]` is off by default and `note` is gated on
+  // `options.verbose`, which gnomon-cli sets to `!args.json`. So a run whose
+  // endpoint refused the tools array emitted clean JSON, exit 0, and nothing
+  // else. This is the fourth instance of the bug class this file names in its
+  // own comments: a fact plumbed into one entry point and not the other.
+  it("announces on stderr and puts it on the record, even under --json", async () => {
+    const config: any = loadConfig("../..");
+    config.config = {
+      ...config.config,
+      resilience: { attempts: 1, backoff_ms: 1, transport_grace_ms: 0 },
+    };
+
+    const stderr: string[] = [];
+    const realWrite = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (chunk: any) => {
+      stderr.push(String(chunk));
+      return true;
+    };
+
+    let call = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      if (++call === 1) {
+        return {
+          ok: false,
+          status: 400,
+          statusText: "Bad Request",
+          text: async () => "this model does not support tools",
+          json: async () => ({}),
+        };
+      }
+      return { ok: true, json: async () => ({ message: { content: "done" } }) };
+    }) as unknown as typeof fetch;
+
+    let record: any;
+    try {
+      // verbose:false is exactly what `--json` produces at gnomon-cli:1144.
+      record = await promptLoop.runTask(config, "go", { yes: true, verbose: false });
+    } finally {
+      globalThis.fetch = original;
+      (process.stderr as any).write = realWrite;
+    }
+
+    // RECORDED: on the returned record, not only in a trail that is off by
+    // default on a scaffolded surface.
+    expect(record.degradations, "the record must carry the degradation").toBeDefined();
+    expect(record.degradations.map((d: any) => d.id)).toContain("endpoint_tools_rejected");
+
+    // ANNOUNCED: reached stderr despite the transcript being silenced. stdout
+    // stays clean for the consumer that asked for JSON.
+    expect(stderr.join("")).toMatch(/cannot accept tools/);
+  }, 30000);
+
+  it("omits the field entirely when nothing degraded", async () => {
+    // A field that is always present teaches a reader to skip it -- the same
+    // rule surface_problems already follows.
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => ({
+      ok: true,
+      json: async () => ({ message: { content: "done" } }),
+    })) as unknown as typeof fetch;
+    try {
+      const record = await promptLoop.runTask(loadConfig("../.."), "go", {
+        yes: true,
+        verbose: false,
+      });
+      expect(record.degradations).toBeUndefined();
+    } finally {
+      globalThis.fetch = original;
+    }
+  }, 30000);
+});

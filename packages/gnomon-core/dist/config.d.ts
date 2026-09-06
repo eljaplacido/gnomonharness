@@ -135,7 +135,6 @@ export interface Policy {
     sandbox?: {
         network?: boolean;
         filesystem?: string;
-        env_whitelist?: string[];
     };
     approval?: {
         modes: string[];

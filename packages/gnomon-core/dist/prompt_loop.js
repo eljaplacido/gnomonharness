@@ -1158,7 +1158,6 @@ function printExchange(exchange, ui) {
         console.log(line);
     }
 }
-/** Result of one agentic turn, before it becomes a PromptExchange. */
 /**
  * Does the gate stop the chain after this stage? Returns the reason, or null.
  *
@@ -1597,6 +1596,21 @@ depth = 0) {
         flushFold();
         deps.say(line);
     };
+    /**
+     * Announce a degradation on a channel nobody can silence.
+     *
+     * `say` is the transcript, and in `runTask` it is `options.verbose`-gated --
+     * which `gnomon task --json` turns off. The degradation contract requires
+     * ANNOUNCED and RECORDED; on the scripted path the announce half was going to
+     * a channel the flag closed. Defaults to `say`, so the interactive loop is
+     * byte-identical.
+     */
+    const warn = (line) => {
+        if (deps.warn)
+            deps.warn(line);
+        else
+            say(line);
+    };
     // The loop's own numbers, from the surface rather than from this file. Read
     // once per turn so a `[loop]` block is hashed into the record that describes
     // the turn it governed, exactly as [resilience] and [context] already are.
@@ -1837,7 +1851,7 @@ depth = 0) {
         if (r.toolsUnsupported && offer.length > 0) {
             noTools.add(target.model);
             deps.progress.stop();
-            say(paint(deps.ui, "yellow", `  [tools] ${target.model} cannot accept tools — retrying without them.`));
+            warn(paint(deps.ui, "yellow", `  [tools] ${target.model} cannot accept tools — retrying without them.`));
             say(paint(deps.ui, "gray", `  this role's tools are unavailable for this model. To make that ` +
                 `explicit, set tools = [] for "${role}" in roles.toml, or give the ` +
                 `role a tool-capable model.`));
@@ -1869,7 +1883,7 @@ depth = 0) {
             // recorded, and the spinner still updates because it is the fastest
             // signal for someone watching.
             deps.progress.stop();
-            say(paint(deps.ui, "yellow", `  [endpoint] ${route.target.endpoint || route.target.url} did not answer ` +
+            warn(paint(deps.ui, "yellow", `  [endpoint] ${route.target.endpoint || route.target.url} did not answer ` +
                 `— falling back to ${route.fallback.model} at ` +
                 `${route.fallback.endpoint || route.fallback.url}.`));
             recordDegradation(deps.audit, {
@@ -2030,7 +2044,7 @@ depth = 0) {
                 steps > 0 &&
                 verifyRounds < verify.max_rounds) {
                 deps.progress.stop();
-                say(paint(deps.ui, "yellow", `  ⚙ verify — NOT RUN. This turn changed files only through the shell, ` +
+                warn(paint(deps.ui, "yellow", `  ⚙ verify — NOT RUN. This turn changed files only through the shell, ` +
                     `and [verify] after = "write" counts write/edit. Set after = "always" ` +
                     `to check every turn.`));
                 recordDegradation(deps.audit, {
@@ -2922,11 +2936,31 @@ export async function runTask(config, input, options = {}) {
         if (options.verbose)
             process.stderr.write(`${line}\n`);
     };
+    // Degradations are not chatter and `--json` must not silence them. `note` is
+    // gated on `options.verbose`, which `gnomon-cli` sets to `!args.json` -- so a
+    // scripted run whose endpoint fell back, whose MCP server never connected, or
+    // whose declared check was skipped printed nothing at all. stderr, always:
+    // stdout stays clean JSON for the consumer that asked for it.
+    const warn = (line) => process.stderr.write(`${line}\n`);
+    // Everything recorded as a degradation, collected on its way to the trail, so
+    // the RECORD carries it too. `[audit]` is off on a scaffolded surface, which
+    // means the trail is usually not there to read -- and the record always is.
+    const degradations = [];
     // A non-interactive run is the one most likely to need a trail: nobody
     // watched it happen.
     const auditSettings = resolveAudit(config);
     const sessionId = `task-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
     const audit = new AuditTrail(auditSettings, sessionId);
+    // Writes through, and keeps a copy of the degradations. Structural, which is
+    // why TurnDeps.audit is an interface rather than the class.
+    const auditForTurn = {
+        write: (kind, fields) => {
+            if (kind === "degradation")
+                degradations.push(fields);
+            audit.write(kind, fields);
+        },
+        text: (value) => audit.text(value),
+    };
     const surface_hash = recomputeManifest(config.gnomonDir).surface_hash;
     audit.write("session_start", {
         surface_hash,
@@ -2950,7 +2984,7 @@ export async function runTask(config, input, options = {}) {
     // Failure to connect is reported and skipped, never fatal -- an unreachable
     // MCP server should cost its own tools, not the whole run.
     if (config.tools.mcp_servers && Object.keys(config.tools.mcp_servers).length > 0) {
-        state.mcp = await connectMcp(config.tools.mcp_servers, note, audit);
+        state.mcp = await connectMcp(config.tools.mcp_servers, note, auditForTurn, warn);
     }
     // One approval callback for every stage: a chain must not become a way to
     // get a second, laxer gate.
@@ -2995,7 +3029,8 @@ export async function runTask(config, input, options = {}) {
                     progress: new Progress(ui, process.stderr),
                     ui,
                     say: note,
-                    audit,
+                    warn,
+                    audit: auditForTurn,
                 });
                 stageRecords.push({
                     stage: i + 1,
@@ -3052,7 +3087,8 @@ export async function runTask(config, input, options = {}) {
                 progress: new Progress(ui, process.stderr),
                 ui,
                 say: note,
-                audit,
+                warn,
+                audit: auditForTurn,
             });
         }
     }
@@ -3113,6 +3149,9 @@ export async function runTask(config, input, options = {}) {
         surface_problems: surfaceFindings.length > 0
             ? surfaceFindings.map((p) => ({ where: p.where, problem: p.problem, fatal: p.fatal }))
             : undefined,
+        // Same rule as surface_problems above: omitted when there were none, so a
+        // present field always means something happened.
+        degradations: degradations.length > 0 ? degradations : undefined,
         // With a chain, the top-level fields describe the stage whose answer the
         // operator actually receives -- the last one that ran. Reporting the entry
         // role beside the final stage's bucket and output would make the record
@@ -4865,6 +4904,19 @@ export async function runPromptLoop(config, initialRole, options = {}) {
         // A machine-scoped route must never take effect silently.
         if (process.env.GNOMON_MODEL_URL) {
             console.log(paint(ui, "yellow", `  note: GNOMON_MODEL_URL overrides the surface's endpoint → ${process.env.GNOMON_MODEL_URL}`));
+        }
+        // modelTimeoutMs()'s own comment has promised this line since the surface
+        // gained `[resilience] request_timeout_ms`: "the startup banner names the
+        // override, as it already does for GNOMON_MODEL_URL". It did not. An env
+        // var that changes when a turn is declared an apparatus failure, announced
+        // nowhere, is machine-scoped behaviour the surface hash cannot see -- so
+        // either it is said out loud or it should not be read at all.
+        if (process.env.GNOMON_MODEL_TIMEOUT_MS) {
+            console.log(paint(ui, "yellow", `  note: GNOMON_MODEL_TIMEOUT_MS overrides the request timeout → ` +
+                `${process.env.GNOMON_MODEL_TIMEOUT_MS}ms` +
+                (resolveResilience(config).request_timeout_ms
+                    ? ` (surface declares [resilience] request_timeout_ms, which wins)`
+                    : ``)));
         }
         if (resumedFrom) {
             const ui0 = uiOf(state);

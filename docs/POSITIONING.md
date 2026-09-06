@@ -49,8 +49,10 @@ Four things, and they are worth stating precisely because each is a mechanism
 rather than an intention.
 
 **1. Behaviour is content-addressed.** Every file in `.gnomon/` is hashed into
-one surface hash, stamped on every session and every audit record. Absence is
-part of the hash — a missing file is not an empty file. Two checkouts with the
+one surface hash, stamped on every session and every audit record — except
+`skills/proposed/` and `extensions/`, both excluded because nothing loads them,
+so neither can change behaviour without first being accepted or wired. Absence
+is part of the hash — a missing file is not an empty file. Two checkouts with the
 same hash behave the same way. Most harnesses have configuration; the
 distinction here is that the configuration is *identified*, so "why did it do
 that" resolves to a specific artefact rather than to a machine's state.
@@ -112,7 +114,7 @@ provider-specific features.
 | **Sandboxed isolation** | OpenHands | `confined` is filesystem path containment, not a container. `bash` reaches the network. |
 | **Ecosystem** | all of them | This is one repository. |
 | **Repo map / semantic context** | Aider, Cursor | Context is a sliding window over turns, not a ranked map of the repository. |
-| **A role chain that *gates*** | Devin, ForgeCode-style pipelines | The chain itself ships: `[chain] stages = [...]` runs the stages in declared order from both `gnomon task` and the interactive loop, each stage seeing the original request plus what the previous stage *reported*, one `chain_stage` audit record each. What is missing is the gate — a stage's exit code never stops the next one; only an apparatus failure (codes 10/12/13) aborts the remainder. So a `verifier` stage records a verdict and nothing acts on it. Measured, declaring a chain did not improve task completion here: [role-chain-2026-09-02](../benchmarks/results/role-chain-2026-09-02/README.md), 48.7% vs 56.6%, within the noise. |
+| **A role chain that *gates*** | Devin, ForgeCode-style pipelines | Closed 2026-09-05. `[chain] gate` has three positions: `never` (apparatus failure only — what every existing surface has, and the default), `on_refusal` (a stage whose bucket is `refusal` stops it), and `on_check` (also a stage whose declared `[verify]` check did not pass). What it deliberately does NOT do is gate on a stage's *opinion*: a verifier reporting "this is wrong" in prose still exits 0, and reading its sentence would be instruction rather than capability. What stops the chain is a check that ran and failed. Not re-measured: [role-chain-2026-09-02](../benchmarks/results/role-chain-2026-09-02/README.md) found 48.7% vs 56.6% (p = 0.375) for a chain that could not gate, and says nothing about one that can. |
 
 ## Where it is genuinely ahead
 

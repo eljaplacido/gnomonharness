@@ -269,7 +269,15 @@ function realpathOfNearest(abs) {
     return abs;
 }
 /** Tools that can change something outside the model's own context. */
-const MUTATING = new Set(["bash", "write", "edit", "skill", "webfetch", "task"]);
+/**
+ * Tools whose call is gated under `approval.gate = "on_write"`.
+ *
+ * Exported because `/explain approval` used to carry its own literal copy —
+ * ["bash","write","edit","skill"] — which omitted `webfetch` and `task`, so the
+ * command that exists to tell an operator what is gated named two gated tools
+ * as ungated. One list, one truth.
+ */
+export const MUTATING = new Set(["bash", "write", "edit", "skill", "webfetch", "task"]);
 /**
  * Tools that may run CONCURRENTLY with each other.
  *

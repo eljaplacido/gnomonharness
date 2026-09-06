@@ -56,5 +56,11 @@ export declare function mcpToolName(server: string, tool: string): string;
  * Returns a registry the loop routes calls through. `report` is called once per
  * server with the outcome, so a missing server is visible, never silent.
  */
-export declare function connectMcp(defs: Record<string, McpServerDef> | undefined, report?: (line: string) => void, audit?: DegradationSink): Promise<McpRegistry>;
+export declare function connectMcp(defs: Record<string, McpServerDef> | undefined, report?: (line: string) => void, audit?: DegradationSink, 
+/**
+ * Where the FAILURE is announced, when that must not be silenceable. A server
+ * that does not connect costs the session every tool it declares, and on the
+ * scripted path `report` is gated on --json. Defaults to `report`.
+ */
+warn?: (line: string) => void): Promise<McpRegistry>;
 //# sourceMappingURL=mcp.d.ts.map

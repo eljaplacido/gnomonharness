@@ -17,7 +17,7 @@ import { resolveContext, resolveRouting, resolveEndpoint, listEndpoints, endpoin
 import { resolveAudit } from "./audit.js";
 import { resolveSessionStore } from "./session_store.js";
 import { loadSkills, loadProposedSkills } from "./skills.js";
-import { buildToolSet } from "./tools.js";
+import { buildToolSet, MUTATING } from "./tools.js";
 const bullet = (s) => `  ${s}`;
 const TOPICS = {
     routing: (config, role) => {
@@ -144,8 +144,10 @@ const TOPICS = {
             topic: "manifest",
             summary: "The content hash of everything that decides how the agent behaves",
             what: [
-                "Every file in .gnomon/ is hashed, and those hashes are folded into one",
-                "surface hash. Absence counts: a missing file is not an empty file.",
+                "Every file in .gnomon/ is hashed -- except skills/proposed/ and",
+                "extensions/, which are excluded because nothing loads them -- and those",
+                "hashes are folded into one surface hash. Absence counts: a missing file",
+                "is not an empty file.",
                 "",
                 "It answers 'why did it behave that way' — behaviour is a function of the",
                 "surface, so identical hashes mean identical rules.",
@@ -173,7 +175,7 @@ const TOPICS = {
         const set = buildToolSet(config, role);
         const gated = set.schemas
             .map((t) => t.function.name)
-            .filter((n) => gate === "always" || ["bash", "write", "edit", "skill"].includes(n));
+            .filter((n) => gate === "always" || MUTATING.has(n));
         return {
             topic: "approval",
             summary: "Which tool calls need your sign-off before they run",

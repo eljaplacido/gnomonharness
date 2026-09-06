@@ -26,7 +26,60 @@
 
 ## [Unreleased]
 
+### Corrected
+
+- **`docs/EVIDENCE.md` published "13/13 degradations announced AND recorded" for
+  a path it had not measured.** The measurement calls `runAgenticTurn` directly
+  with a collector, which is the **library**. `gnomon task` — the entry point CI
+  runs — was never covered, and on it `[audit]` is off by default and `note` is
+  gated on `options.verbose`, which `gnomon-cli` sets to `!args.json`.
+
+  So a scripted run whose endpoint refused the tools array, whose MCP server
+  never connected, or whose declared check was skipped emitted **clean JSON,
+  exit 0, and nothing else** — the announce half of the contract closed by a
+  flag, on the one path where nobody is watching. `runTask`'s own comment says
+  it: *"A non-interactive run is the one most likely to need a trail: nobody
+  watched it happen."*
+
+  Fourth instance of the bug class this file names in its own comments — a fact
+  plumbed into one entry point and not the other.
+
+
+- **v0.1.1's release notes announced a command that does not exist.** Under
+  Added they list *"`gnomon replay` — re-derive the harness's decisions from a
+  recorded trail without calling a model"*. The library is real
+  (`packages/gnomon-core/src/replay.ts`, with `readTrail` and `replay`); the CLI
+  command was never wired, and `grep '"replay"' packages/gnomon-cli/src/index.ts`
+  returns nothing.
+
+  The published line is annotated in place rather than rewritten. Editing shipped
+  release notes so they match the code afterwards is exactly the failure this
+  project exists to prevent — the record says what was claimed, and the
+  correction says what was true.
+
+  **Not fixed by shipping the command.** That needs an exit-code decision for
+  `diverged` and `not_comparable` (Rule 5) and conformance fixtures (Rule 6);
+  making a false line true by building it in a hurry is how the enumeration
+  contract gets a value nobody pinned.
+
 ### Added
+
+- **Degradations reach the scripted path.** They announce on **stderr regardless
+  of `--json`** (stdout stays clean JSON for the consumer that asked for it),
+  and the returned `TaskRecord` now carries **`degradations[]`** — grouped with
+  the volatile fields on purpose, because `endpoint_fallback` and
+  `mcp_server_unreachable` are the most environment-dependent facts a run can
+  produce. Omitted entirely when nothing degraded, so a present field always
+  means something happened.
+
+  Measured end-to-end through `runTask` with `verbose: false` — the exact shape
+  `--json` produces — asserting the degradation reaches **both** channels. That
+  is the claim `EVIDENCE.md` was making without measuring.
+
+  `TurnDeps.audit` widens from the `AuditTrail` class to a structural
+  `TurnAudit`, so a caller can pass a wrapper that writes *and* collects.
+  `benchmarks/degradation-contract` has always passed a plain collector there —
+  the runtime already accepted this, only the type was narrower than the truth.
 
 - **Windows is supported and tested.** `windows-latest` runs the full TypeScript
   suite in CI — 899 passing, 3 skipped — alongside a new **macOS test job**, so
@@ -836,9 +889,13 @@ in mechanisms that reported success while doing nothing.
 - **`gnomon attest`** — sign a session's audit chain with an external signer
   command, and verify it. Three states are reported distinctly: signed-valid,
   signed-broken, and NOT-SIGNED. An unsigned trail is never shown as passing.
-- **`gnomon replay`** — re-derive the harness's decisions from a recorded trail
-  without calling a model, so a record can be checked against the code that
-  claims to have produced it.
+- **`gnomon replay`** — ⚠️ **THIS LINE IS FALSE AND WAS PUBLISHED.** See the
+  correction under [Unreleased]. The `replay` *library* exists
+  (`packages/gnomon-core/src/replay.ts`); the **command does not**, and never
+  did. `grep '"replay"' packages/gnomon-cli/src/index.ts` returns nothing.
+  Left in place rather than edited, because these are the notes that shipped
+  with v0.1.1 and rewriting released notes to match reality is the failure this
+  project exists to prevent.
 - **`[chain]`** — a declared role sequence, one outcome bucket per stage, with
   `chain_stage` audit records. It gates nothing; it is a record of which role
   ran when. Measured against no-chain on Terminal-Bench: no significant
