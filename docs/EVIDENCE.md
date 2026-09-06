@@ -1,14 +1,27 @@
 # Evidence — what is proven, what is not
 
-*Last reconciled 2026-09-04, against the v0.1.1 release.* One row per claim
+*Last reconciled 2026-09-06, against the v0.2.0 release.* One row per claim
 gnomon makes about itself, the measurement that tests it, and the result. A claim
 with no row is a claim with no evidence, and is listed as such at the bottom
 rather than omitted.
 
 **Which build these numbers describe — read this before citing any of them.**
-One suite now has: `v011-timeout-2026-09-03` ran against `v0.1.1` (`f317b97`),
-with the SHA recorded per trial from inside the container. Every OTHER rate
-below predates the tag. The most
+
+**No task-completion rate in this document was measured against v0.2.0.** Not
+one. Between v0.1.1 and this release the harness gained a chain gate, a
+degradation contract with 14 declared paths, Windows support, a POSIX shell on
+every platform, a closed TOCTOU in the approval path, and lost `agent.ts` — and
+none of that has been through a scored arm. Every rate below is attributable to
+the commit named in its own result README and to nothing else.
+
+The **property** suites are different, and that difference is the point: they
+are exhaustive, deterministic and $0, so they are re-run on every change and
+every number in them describes the current tree. The **rates** are sampled, cost
+money, and lag the code.
+
+One historical suite is attributable to a release: `v011-timeout-2026-09-03` ran
+against `v0.1.1` (`f317b97`), with the SHA recorded per trial from inside the
+container. Every other rate predates even that tag. The most
 recent arms ran at `bb71829`, which *is* an ancestor of the release, so they
 measure an earlier state of the same line rather than the artifact you can
 download. Five commits landed between them and the tag, and two of those change
@@ -101,8 +114,8 @@ Listed because omitting them would imply coverage that does not exist.
   row above. A null result going missing from the summary while the positives
   stay visible is the failure mode this document exists to prevent.)*
 
-- **Anything about `v0.1.1` specifically** — see the note at the top. Every arm
-  predates the release.
+- **Anything about `v0.2.0` specifically** — see the note at the top. No scored
+  arm has run against this release. The property suites have; the rates have not.
 
 ## The one that failed
 
