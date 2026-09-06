@@ -1,6 +1,6 @@
 # Does the surface hash mean what the project says it means? — 2026-09-04
 
-**12 of 12 paths faithful. Zero false negatives.** Pre-registered in
+**13 of 13 paths faithful. Zero false negatives, zero false positives.** Pre-registered in
 `PRE-REGISTRATION.md`; reproduce with `node fidelity.mjs`. Raw in `result.json`.
 
 ## What was measured
@@ -66,7 +66,14 @@ the probe, and because the pre-registered rule is what caught all three.
 2. **`skills/secrets.md` looked inert.** The "matching" probe input was
    `where does the api key go`, and the skill matches `api[_-]?key` — so the
    spaced form never matched and a body edit was invisible.
-3. **`profiles/probe.toml` looked inert**, because the fingerprint held
+3. **`skills/writing-tests.md` looked inert**, found 2026-09-06 when the skill
+   scaffolded the day before scored a FALSE POSITIVE. It matches
+   `\b(test|tests|…)\b` and neither probe input contained those words, so it was
+   dormant under every probe and editing it moved the hash while the fingerprint
+   stood still. A third input was added. The general rule, now stated in the
+   apparatus: **a scaffolded skill needs a probe input its `match` fires on, or
+   this benchmark measures the probe's vocabulary rather than the surface.**
+4. **`profiles/probe.toml` looked inert**, because the fingerprint held
    `role_profile` fixed. An unselected profile is not inert, it is
    *conditionally* live. The fingerprint now resolves every declared profile.
 

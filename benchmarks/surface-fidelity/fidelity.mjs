@@ -79,6 +79,17 @@ function fingerprint(root) {
       // so the spaced form is dormant and a body edit would be invisible —
       // an apparatus weakness that read as a false positive until it was fixed.
       buildSystemPrompt({ config: c, exchanges: [], currentRole: r }, r, "where does the api_key go"),
+      // A third input, for the same reason as the second. `writing-tests.md`
+      // was scaffolded on 2026-09-05 and matches \b(test|tests|...)\b, which
+      // neither input above contains -- so the skill was dormant under every
+      // probe and editing it moved the hash while the fingerprint stood still.
+      // It scored as a FALSE POSITIVE on 2026-09-06, and it was the apparatus
+      // again, exactly as the api_key case was.
+      //
+      // The general rule, now stated: a scaffolded skill needs a probe input
+      // its `match` fires on, or this benchmark measures the probe's vocabulary
+      // rather than the surface.
+      buildSystemPrompt({ config: c, exchanges: [], currentRole: r }, r, "write unit tests for this"),
     ]),
   });
 }
