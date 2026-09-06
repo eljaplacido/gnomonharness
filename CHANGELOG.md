@@ -24,7 +24,19 @@
   definitions at the foot of this file resolve only once the tags exist.
 -->
 
-## [Unreleased]
+## [0.2.0] — 2026-09-06
+
+**Breaking.** `agent.ts` and its exports (`ExtensionHost`, `HookPhase`,
+`runAgentTurn`, `runSession`, `initAgent`) are gone, which is why this is 0.2.0
+and not 0.1.2. Nothing in this repository imported them.
+
+**Platform.** Linux, macOS and Windows are all supported and all tested — CI runs
+the full suite on each. Windows needs Git for Windows, for its POSIX shell.
+
+**Migration.** `gnomon migrate` covers the one config change that needs it
+(`compaction`). `[chain] gate` defaults to `never`, which is what every existing
+surface already does, so nothing moves under anybody.
+
 
 ### Corrected
 
