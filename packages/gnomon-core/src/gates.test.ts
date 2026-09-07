@@ -25,7 +25,7 @@ import {
   chmodSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { auditSurface, loadConfig, recomputeManifest, resolveChain } from "./config.js";
 import { resolveInRoot, executeTool } from "./tools.js";
@@ -137,8 +137,23 @@ describe("gate: the repository's own CI gates can fail", () => {
     // compiler, and it asserts BOTH directions -- a checker that rejects
     // everything is exactly as useless as one that accepts everything, and only
     // the second assertion can tell them apart.
-    const cwd = join(__dirname, "..");
-    const tscBin = createRequire(import.meta.url).resolve("typescript/bin/tsc");
+    // Resolved through the package's OWN manifest, not by assuming a subpath.
+    //
+    // This was `resolve("typescript/bin/tsc")`, and TypeScript 7 dropped
+    // "./bin/tsc" from its `exports` map -- so the call throws
+    // ERR_PACKAGE_PATH_NOT_EXPORTED and this gate, whose whole job is to prove
+    // the type checker can fail, could not run at all. The `bin` field still
+    // says {"tsc": "./bin/tsc"} and the file is still there; only subpath
+    // EXPORTS changed. Reading the field is both version-proof and the thing
+    // that is actually authoritative about where a package's binary lives.
+    const req = createRequire(import.meta.url);
+    const tsPkgJson = req.resolve("typescript/package.json");
+    const tsPkg = JSON.parse(readFileSync(tsPkgJson, "utf-8")) as {
+      bin?: string | Record<string, string>;
+    };
+    const rel = typeof tsPkg.bin === "string" ? tsPkg.bin : tsPkg.bin?.tsc;
+    if (!rel) throw new Error("typescript's package.json declares no tsc bin");
+    const tscBin = join(dirname(tsPkgJson), rel);
     const check = (src: string): boolean => {
       const dir = mkdtempSync(join(tmpdir(), "gnomon-tsc-"));
       writeFileSync(join(dir, "x.ts"), src);
@@ -152,10 +167,24 @@ describe("gate: the repository's own CI gates can fail", () => {
         // npm decoy package described above: a checker that fails everything is
         // indistinguishable from one that works, unless both directions are
         // asserted. Resolving the module removes the shim entirely.
+        // cwd is the SCRATCH DIR, not a package.
+        //
+        // It was packages/gnomon-core, chosen so `npx tsc` would find the real
+        // compiler rather than the npm decoy -- a concern that disappeared when
+        // tscBin became an absolute path resolved from typescript's own
+        // manifest. Keeping it there then broke the gate under TypeScript 7,
+        // which added TS5112: "tsconfig.json is present but will not be loaded
+        // if files are specified on commandline". TS 5 ignored the config
+        // silently; 7 makes it an error, so BOTH samples failed and the gate
+        // reported that tsc rejects correct code.
+        //
+        // A hermetic cwd is the right answer regardless of version: what this
+        // asserts is that the compiler distinguishes good code from bad, and
+        // that must not depend on which directory the test happens to run in.
         execFileSync(process.execPath,
           [tscBin, "--noEmit", "--strict", join(dir, "x.ts")], {
           stdio: "pipe",
-          cwd,
+          cwd: dir,
         });
         return true;
       } catch {
