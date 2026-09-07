@@ -33,9 +33,29 @@
 #       `GNOMON_BUILD=v0.1.0-abc1234` makes `harnessBuild()` return
 #       `gnomon/0.1.0+v0.1.0-abc1234`, instead of the git-derived fallback.
 #
-#   STILL NOT MEASURED: that the published archives run on a machine that is not
-#   the runner that built them. Nobody has downloaded one and executed it on a
-#   clean host. Until someone does, "it builds" is the claim, not "it works".
+#   MEASURED 2026-09-07, and this is the line that said "STILL NOT MEASURED:
+#   that the published archives run on a machine that is not the runner that
+#   built them ... until someone does, 'it builds' is the claim, not 'it works'."
+#   Someone did. The v0.2.1 draft's linux-arm64 archive was downloaded onto an
+#   aarch64 Linux box that had never run a release build:
+#
+#     - `sha256sum -c` against the shipped .sha256 → OK.
+#     - All four binaries execute. `gnomon-enums` printed the enumerations
+#       contract; `gnomon-surface --dir .gnomon` printed a manifest.
+#     - It printed surface_hash 65f601c2…f65c4 for this repository's own
+#       `.gnomon/` — byte-identical to the locally compiled binary's answer.
+#       Cross-machine agreement on the hash is the harness's central claim, and
+#       until this it had never been checked across two differently built
+#       binaries.
+#     - The documented adoption path works verbatim: exporting
+#       GNOMON_BIN_OVERRIDE and GNOMON_BUILD from README-BINARIES.txt made
+#       `gnomon surface manifest` report build `0.2.1+v0.2.1-a9fec9b`, so the
+#       release identifier does travel with the artifact.
+#
+#   Still not measured: darwin-arm64 and windows-x64 on their own hardware.
+#   linux-x64 was downloaded on the same run and is NOT evidence either way —
+#   the host was aarch64, so it produced "Exec format error", which says only
+#   that a stranger downloading the wrong archive gets a clear failure.
 #
 # Two deliberate safety properties, because an accidental release is not
 # undoable in the way an accidental commit is:
