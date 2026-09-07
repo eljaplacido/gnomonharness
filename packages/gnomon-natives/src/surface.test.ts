@@ -144,7 +144,12 @@ describe("finding the native binaries", () => {
         message = (e as Error).message;
       }
       expect(message).toContain("gnomon-not-a-real-binary");
-      expect(message).toContain("cargo build --bin gnomon-not-a-real-binary");
+      expect(message).toContain("cargo build --release --bin gnomon-not-a-real-binary");
+      // And it must give the route that does NOT require a checkout: this
+      // message is now read most often by someone who ran `npm i -g
+      // gnomon-harness` and has no crates to build.
+      expect(message).toContain("releases/latest");
+      expect(message).toContain("GNOMON_BIN_OVERRIDE");
     } finally {
       rmSync(empty, { recursive: true, force: true });
       if (original === undefined) delete process.env.GNOMON_BIN_OVERRIDE;

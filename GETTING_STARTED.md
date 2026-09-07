@@ -20,6 +20,25 @@ still works if you prefer it.
 
 ## 2. Install
 
+### From npm — the short path
+
+```bash
+npm install -g gnomon-harness      # the package; the command is `gnomon`
+cd my-project && gnomon launch
+```
+
+That is everything `launch`, `prompt`, `task` and `init` need — no Rust, no
+clone, no pnpm. `surface`, `apply` and `session` additionally need the native
+binaries; add them from a release with the two exports under
+[Prebuilt binaries](#prebuilt-binaries--if-you-would-rather-not-install-rust),
+or build them from a clone.
+
+The package is `gnomon-harness` and the binary is `gnomon`: the name `gnomon`
+on npm belongs to an unrelated logging utility that has been there for years.
+
+Everything below is the from-source path — for working ON gnomon, or for
+running the version in your own checkout.
+
 ### Linux / macOS — from an empty terminal
 
 ```bash

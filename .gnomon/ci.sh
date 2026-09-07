@@ -609,6 +609,25 @@ if [ -n "$HOME_HITS" ]; then
 fi
 pass "No committed apparatus hardcodes a home directory"
 
+# ── 12. The published package installs and runs ──
+#
+# `pnpm -r build` passing says nothing about the tarball. The workspace resolves
+# gnomon-core to ./src/index.ts and runs everything through tsx; a published
+# package has neither. Two resolution worlds, and only one was ever checked --
+# gnomon-cli carried `noEmit: true` for its entire life, so the package that
+# would have been published contained no JavaScript at all.
+#
+# scripts/check-publishable.sh packs all four exactly as npm would, installs
+# them into an empty directory with no tsx and no checkout above it, and runs
+# the binary. It publishes nothing and needs no credentials.
+echo ""
+echo "═══ Published package installs and runs ═══"
+if bash scripts/check-publishable.sh; then
+    pass "npm-installed gnomon runs standalone"
+else
+    fail "The published package does not install-and-run — see above"
+fi
+
 # ── 10. Which prose documents are owed a reading ──
 #
 # A REPORT, never a failure, and the distinction is the whole design. Prose rot

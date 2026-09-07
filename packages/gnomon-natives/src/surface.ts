@@ -122,11 +122,19 @@ export function findBinary(name: string): string {
   }
 
   throw new Error(
-    `gnomon native binary not found: "${name}".\n` +
-    "It is built from the Rust crates in this checkout:\n" +
-    `  cargo build --bin ${name}\n` +
-    "  (or `pnpm run build:native` for all four)\n" +
-    "Or set GNOMON_BIN_OVERRIDE to a directory containing it."
+    `gnomon native binary not found: "${name}".\n\n` +
+    // Two audiences, and this message only ever addressed one of them. An npm
+    // install has no crates and no checkout to build them from, so "cargo build
+    // in this checkout" is advice it cannot follow. Both routes are named now,
+    // installed-first, because that is the reader more likely to be stuck.
+    "Download the binaries for your platform (no Rust toolchain needed):\n" +
+    "  https://github.com/eljaplacido/gnomonharness/releases/latest\n" +
+    "  then:  export GNOMON_BIN_OVERRIDE=/path/to/unpacked-dir\n\n" +
+    "Or, from a git checkout of gnomon, build them:\n" +
+    `  cargo build --release --bin ${name}\n` +
+    "  (or `pnpm run build:native` for all four)\n\n" +
+    "Only `surface`, `apply` and `session` need them. `launch`, `prompt`,\n" +
+    "`task` and `init` work without any of this."
   );
 }
 

@@ -235,6 +235,96 @@ describe("gate: a record names the harness that produced it", () => {
     expect(b.endsWith("+")).toBe(false);
   });
 
+
+  it("resolves the build field in the order conformance/build_field.json declares", async () => {
+    // The fixture is not decoration. conformance/enumerations_golden.json and
+    // enumerations_schema.json sat in this repository read by NOTHING until
+    // .gnomon/ci.sh was made to compare against them — two files shipped as
+    // evidence that were evidence of nothing. This test is what keeps
+    // build_field.json from becoming a third.
+    //
+    // Each rule is driven for real: the environment variable, then a git-less
+    // directory inside a node_modules tree, then a git-less directory outside
+    // one. The git rule has its own test above.
+    const spec = JSON.parse(
+      readFileSync(new URL("../../../conformance/build_field.json", import.meta.url), "utf-8")
+    ) as {
+      resolution_order: Array<{ rule: string; revision: string }>;
+      revision_pattern: string;
+    };
+    const revPattern = new RegExp(spec.revision_pattern);
+    const rules = spec.resolution_order.map((r) => r.rule);
+    expect(rules).toEqual(["GNOMON_BUILD", "git", "npm", "unknown"]);
+
+    const saved = process.env.GNOMON_BUILD;
+    try {
+      // 1. GNOMON_BUILD wins outright, verbatim.
+      vi.resetModules();
+      process.env.GNOMON_BUILD = "v9.9.9-abcdef0";
+      const stamped = (await import("./build.js")).harnessBuild();
+      expect(stamped).toMatch(/\+v9\.9\.9-abcdef0$/);
+
+      // 2 and 3 are about what happens with NO git and NO stamp. harnessBuild
+      // asks git with cwd = its own source directory, so pointing GIT_DIR at a
+      // path that is not a repository is what makes git decline.
+      delete process.env.GNOMON_BUILD;
+      const savedGitDir = process.env.GIT_DIR;
+      process.env.GIT_DIR = join(tmpdir(), "gnomon-definitely-not-a-repo");
+      try {
+        vi.resetModules();
+        const fallback = (await import("./build.js")).harnessBuild();
+        const revision = fallback.split("+")[1]!;
+
+        // In a checkout this reaches the `unknown` rule, and that is all this
+        // test can honestly claim.
+        //
+        // The `npm` rule branches on whether build.ts's own path contains
+        // node_modules, and build.ts is not under node_modules here — so an
+        // assertion written as `expect(revision).toBe(underNodeModules ? "npm"
+        // : "unknown")` passes whether or not the npm branch exists at all.
+        // Checked: deleting it outright (`? "npm" :` -> just `"unknown"`) left
+        // that version GREEN. It is the same shape as the disjunction the
+        // -dirty test above was rewritten to remove, and it is not repeated
+        // here.
+        //
+        // The npm rule is proven by scripts/check-publishable.sh, which packs
+        // the four packages, installs them into an empty directory and runs the
+        // binary — it reported `gnomon/0.2.2+npm` on 2026-09-07, from a real
+        // install, which is the only place that branch can be reached. That
+        // script is a required step of .gnomon/ci.sh.
+        expect(revision).toBe("unknown");
+        expect(revision).toMatch(revPattern);
+      } finally {
+        if (savedGitDir === undefined) delete process.env.GIT_DIR;
+        else process.env.GIT_DIR = savedGitDir;
+      }
+    } finally {
+      if (saved === undefined) delete process.env.GNOMON_BUILD;
+      else process.env.GNOMON_BUILD = saved;
+      vi.resetModules();
+    }
+  });
+
+  it("never ends with a bare '+', in any of the four rules", async () => {
+    // "A missing provenance string is said plainly rather than guessed" is the
+    // contract's own wording, and a trailing '+' is the shape of a guess that
+    // came back empty. Cheap to assert, and it covers every rule at once.
+    const saved = process.env.GNOMON_BUILD;
+    try {
+      for (const value of ["", "   ", "real-stamp"]) {
+        vi.resetModules();
+        process.env.GNOMON_BUILD = value;
+        const b = (await import("./build.js")).harnessBuild();
+        expect(b.endsWith("+"), `GNOMON_BUILD=${JSON.stringify(value)}`).toBe(false);
+        expect(b.split("+")[1]).toBeTruthy();
+      }
+    } finally {
+      if (saved === undefined) delete process.env.GNOMON_BUILD;
+      else process.env.GNOMON_BUILD = saved;
+      vi.resetModules();
+    }
+  });
+
   it("says -dirty for an edited tree, and does not for a committed one", async () => {
     // What this replaced, and why: the old assertion was
     // `expect(clean || dirty || unknown).toBe(true)` -- a disjunction over

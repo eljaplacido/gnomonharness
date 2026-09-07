@@ -9,6 +9,7 @@ lives in one directory called `.gnomon/`. That directory is hashed. Clone the
 repo on another machine and you get the same agent.
 
 ```bash
+npm install -g gnomon-harness      # the package; the command is `gnomon`
 cd my-project && gnomon launch
 ```
 
@@ -41,8 +42,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1050 TypeScript tests (923 core, 106 cli, 14
-> natives, 7 tui) and 60 Rust tests — **1110 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1052 TypeScript tests (925 core, 106 cli, 14
+> natives, 7 tui) and 60 Rust tests — **1112 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -350,9 +351,16 @@ implementations agree.
 > install, launch, first task. This section and the next cover the same ground
 > in more detail.
 
-Requires **Node ≥ 20**, **pnpm 9**, and a **Rust toolchain**. For local
-inference, [Ollama](https://ollama.com) — though any OpenAI-shaped endpoint
-works. **Linux, macOS and Windows** — all three run the full TypeScript suite
+```bash
+npm install -g gnomon-harness      # package name; the command is `gnomon`
+```
+
+Requires **Node ≥ 20** and a model endpoint — [Ollama](https://ollama.com) for
+local inference, or any OpenAI-shaped API. A **Rust toolchain** is needed only
+for `surface`, `apply` and `session`; take those from a
+[release](https://github.com/eljaplacido/gnomonharness/releases/latest) instead
+if you would rather not install one. Building from source additionally wants
+**pnpm 9**. **Linux, macOS and Windows** — all three run the full TypeScript suite
 in CI. Windows needs **Git for Windows** for the POSIX shell the `bash` tool
 uses on every platform (WSL2 also works, but is not required). See
 [GETTING_STARTED.md](GETTING_STARTED.md) for the per-platform steps.

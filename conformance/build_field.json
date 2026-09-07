@@ -1,0 +1,45 @@
+{
+  "_comment": [
+    "The `build` field's resolution order and its accepted revision vocabulary.",
+    "docs/CONTRACTS.md prose says the same thing; this is the machine-readable",
+    "half, so a change to the order or the vocabulary moves a fixture instead of",
+    "moving only a paragraph.",
+    "",
+    "Added 2026-09-07 with the npm package. `npm` is new: before it, an installed",
+    "copy fell through to `unknown`, because there is no repository to ask. That",
+    "made the field worthless in the one place provenance is hardest to",
+    "reconstruct afterwards -- an installed binary cannot know its commit, but",
+    "'this is a published build' is true, checkable, and more than nothing.",
+    "",
+    "Order is significant: the first rule that produces a value wins."
+  ],
+  "format": "gnomon/<semver>+<revision>",
+  "resolution_order": [
+    {
+      "rule": "GNOMON_BUILD",
+      "when": "the environment variable is set and non-blank",
+      "revision": "its verbatim value",
+      "note": "the only form that carries a real commit through npm install; release archives ship it in a GNOMON_BUILD file"
+    },
+    {
+      "rule": "git",
+      "when": "git answers rev-parse in the harness's own source directory",
+      "revision": "<short sha>, suffixed -dirty when the worktree has uncommitted changes"
+    },
+    {
+      "rule": "npm",
+      "when": "git does not answer and the harness is running from inside a node_modules tree",
+      "revision": "npm"
+    },
+    {
+      "rule": "unknown",
+      "when": "nothing above applies",
+      "revision": "unknown"
+    }
+  ],
+  "revision_pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+  "must_never": [
+    "end with a bare '+' — a missing revision is said, never implied",
+    "claim a commit for a tree with uncommitted changes"
+  ]
+}

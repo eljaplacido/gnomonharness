@@ -78,7 +78,15 @@ export function harnessBuild(): string {
     const dirty = git(["status", "--porcelain"]).length > 0 ? "-dirty" : "";
     cached = `gnomon/${version}+${sha}${dirty}`;
   } catch {
-    cached = `gnomon/${version}+unknown`;
+    // No git. That is the normal state of an `npm i -g gnomon-harness`, not an
+    // error -- and reporting `+unknown` for every installed copy makes the
+    // provenance field useless exactly where it is hardest to reconstruct
+    // later. A published package cannot know its commit, but it does know it is
+    // a published package, so say that instead of nothing.
+    //
+    // `npm` is distinguishable from `local` (a tarball or a checkout with no
+    // git) by whether this file sits under a node_modules tree.
+    cached = `gnomon/${version}+${here.includes("node_modules") ? "npm" : "unknown"}`;
   }
   return cached;
 }

@@ -65,7 +65,47 @@ Re-tagging an already-pushed tag requires `git push -f origin <tag>`, and any
 draft release from the previous attempt should be deleted first so there is
 exactly one draft per tag.
 
-## Not published to npm
+## Publishing to npm
+
+The four packages are publishable as of 2026-09-07. `.gnomon/ci.sh` proves the
+tarball installs and runs on every run, so the only thing left at release time
+is the credential.
+
+```bash
+npm login                      # once; the release does not store a token
+pnpm -r --filter './packages/*' publish --access public --no-git-checks
+```
+
+Order does not matter — npm resolves `gnomon-core@0.2.2` once it exists, and
+pnpm rewrites `workspace:*` to the real version as it publishes.
+
+| Published name | What it is |
+|---|---|
+| **`gnomon-harness`** | the CLI. `npm i -g gnomon-harness` gives you `gnomon` |
+| `gnomon-core` | agent loop, session model, tools |
+| `gnomon-natives` | typed access to the Rust binaries |
+| `gnomon-tui` | the session reader |
+
+**The package is `gnomon-harness`, the command is `gnomon`.** The bare name on
+npm belongs to an unrelated logging utility and has for years; `gnomon-harness`
+was free, matches the repository, and is the project's own word for itself.
+
+Two mechanisms make the published package different from the workspace, and
+both live in `publishConfig` so the workspace is untouched:
+
+- Each library package's `exports` points at `./dist/*.js` when published and
+  `./src/index.ts` in the workspace. Changing `exports` directly is what the
+  launcher comment warned would move what vitest resolves; `publishConfig`
+  avoids that entirely.
+- `gnomon-harness`'s `bin` is `bin/gnomon.mjs` when published — plain node on
+  compiled output — and `gnomon.js` in the workspace, which runs the TypeScript
+  through tsx. Shipping tsx would give gnomon its first third-party runtime
+  dependency, inside the process that decides what an agent may run.
+  `check-publishable.sh` fails if any appears.
+
+## Not published to npm — until 0.2.2
+
+*(kept for the record: this section described the state before the above.)*
 
 There is no `npm publish` step and no `NPM_TOKEN` anywhere in CI. The release is
 GitHub binaries and a git tag. Adding a registry publish is a decision about
