@@ -1,0 +1,62 @@
+{
+  "_comment": [
+    "SHA-256 vectors for the hex formatting every gnomon hash is printed through.",
+    "",
+    "Added when sha2 was taken from 0.10 to 0.11. That major swapped the digest",
+    "return type from generic_array::GenericArray to hybrid_array::Array, which",
+    "does NOT implement LowerHex -- so `format!(\"{:x}\", hasher.finalize())` stopped",
+    "compiling and had to be replaced by an explicit encoder in three crates.",
+    "",
+    "The DIGEST could not change (SHA-256 is SHA-256) but the ENCODING could, and",
+    "nothing pinned it: a hand-written encoder that drops a leading zero, or emits",
+    "uppercase, produces a wrong hash string from a correct digest. Every surface",
+    "hash, manifest sha256, audit chain link and patch pre/post image is that",
+    "string. `leading-zero-nibble` exists so the zero-padding is covered by data",
+    "rather than by intent.",
+    "",
+    "Vectors computed with Python's hashlib, i.e. not by the implementation they",
+    "pin. digests are lowercase, zero-padded, exactly 64 hex characters."
+  ],
+  "encoding": {
+    "case": "lower",
+    "width": 64,
+    "padding": "zero"
+  },
+  "vectors": [
+    {
+      "name": "empty",
+      "input": "",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "abc",
+      "input": "abc",
+      "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    },
+    {
+      "name": "hello world",
+      "input": "hello world",
+      "sha256": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+    },
+    {
+      "name": "pangram",
+      "input": "The quick brown fox jumps over the lazy dog",
+      "sha256": "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592"
+    },
+    {
+      "name": "utf8-multibyte",
+      "input": "gnomon — déjà vu ✓ 日本語",
+      "sha256": "cc69d518b26c674341be0cc46e5d60e6cae208048a33dbad4619608e22d1251a"
+    },
+    {
+      "name": "newline",
+      "input": "a\nb\n",
+      "sha256": "911169ddaaf146aff539f58c26c489af3b892dff0fe283c1c264c65ae5aa59a2"
+    },
+    {
+      "name": "leading-zero-nibble",
+      "input": "pad-13",
+      "sha256": "0b3d31efe2176808e570a6d353c176e69b4a88ee6033d7f499ed90cbfa3a6d82"
+    }
+  ]
+}

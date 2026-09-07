@@ -124,6 +124,23 @@ pub struct StepResult {
 // Exit code mapping
 // ─────────────────────────────────────────────
 
+/// Lowercase hex of a digest.
+///
+/// sha2 0.11 returns `hybrid_array::Array` where 0.10 returned
+/// `generic_array::GenericArray`, and the new type does not implement
+/// `LowerHex` -- so `format!("{:x}", hasher.finalize())` stopped compiling. The
+/// bytes are unchanged and so is this string: SHA-256 is SHA-256, and the
+/// conformance goldens are what prove it, not this comment.
+fn hex_digest(bytes: impl AsRef<[u8]>) -> String {
+    use std::fmt::Write as _;
+    let b = bytes.as_ref();
+    let mut s = String::with_capacity(b.len() * 2);
+    for byte in b {
+        let _ = write!(s, "{byte:02x}");
+    }
+    s
+}
+
 pub fn default_exit_code_map() -> ExitCodeMap {
     let mut codes = HashMap::new();
     codes.insert("0".to_string(), Bucket::Result);
@@ -493,7 +510,7 @@ pub fn validate_session(record: &SessionRecord, fixture_path: Option<&Path>) -> 
 pub fn sha256_str(s: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(s.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex_digest(hasher.finalize())
 }
 
 pub fn session_steps_hash(steps: &[SessionStep]) -> String {
@@ -501,7 +518,7 @@ pub fn session_steps_hash(steps: &[SessionStep]) -> String {
     for step in steps {
         hasher.update(format!("{}:{}:{}:{}", step.seq, step.native_code, step.bucket, step.duration_ms));
     }
-    format!("{:x}", hasher.finalize())
+    hex_digest(hasher.finalize())
 }
 
 // ─────────────────────────────────────────────
@@ -680,6 +697,39 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+
+    /// The hex encoding every gnomon hash is printed through, pinned by data.
+    ///
+    /// sha2 0.11 removed `LowerHex` from the digest type, so the `format!("{:x}",
+    /// ..)` that produced these strings had to be replaced by a hand-written
+    /// encoder -- in this crate and two others, three separate copies. The digest
+    /// cannot change; the ENCODING can, and an encoder that drops a leading zero
+    /// or emits uppercase turns a correct digest into a wrong hash string. Every
+    /// surface hash, manifest entry, audit chain link and patch image is that
+    /// string.
+    ///
+    /// Vectors come from conformance/digest_vectors.json, computed by Python's
+    /// hashlib rather than by the code they pin.
+    #[test]
+    fn hex_digest_matches_the_conformance_vectors() {
+        let raw = include_str!("../../../conformance/digest_vectors.json");
+        let doc: serde_json::Value = serde_json::from_str(raw).expect("digest_vectors.json parses");
+        let vectors = doc["vectors"].as_array().expect("vectors array");
+        assert!(!vectors.is_empty(), "fixture has no vectors");
+        for v in vectors {
+            let name = v["name"].as_str().unwrap();
+            let input = v["input"].as_str().unwrap();
+            let want = v["sha256"].as_str().unwrap();
+
+            let mut hasher = Sha256::new();
+            hasher.update(input.as_bytes());
+            let got = hex_digest(hasher.finalize());
+
+            assert_eq!(got, want, "vector {name}: input {input:?}");
+            assert_eq!(got.len(), 64, "vector {name}: not 64 chars");
+            assert_eq!(got, got.to_lowercase(), "vector {name}: not lowercase");
+        }
+    }
     use super::*;
     use tempfile::TempDir;
 
