@@ -143,7 +143,9 @@ the repository.
 # Pick the archive for your platform from
 #   https://github.com/eljaplacido/gnomonharness/releases
 #   linux-x64 · linux-arm64 · darwin-arm64 · windows-x64
-V=0.2.1; ARCH=linux-arm64
+# V is the release you want; the line below always reads the current one.
+V=$(curl -sL https://api.github.com/repos/eljaplacido/gnomonharness/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4 | tr -d v)
+ARCH=linux-arm64
 curl -LO https://github.com/eljaplacido/gnomonharness/releases/download/v$V/gnomon-$V-$ARCH.tar.gz
 curl -LO https://github.com/eljaplacido/gnomonharness/releases/download/v$V/gnomon-$V-$ARCH.tar.gz.sha256
 sha256sum -c gnomon-$V-$ARCH.tar.gz.sha256      # shasum -a 256 -c on macOS
@@ -160,11 +162,18 @@ and `$env:GNOMON_BUILD = (Get-Content "$PWD\gnomon-$V-$ARCH\GNOMON_BUILD")`.
 Without the second export the harness reports `gnomon/<version>+<sha>` from
 whatever checkout it runs in, instead of the release you actually installed.
 
-**Verified 2026-09-07**, on an arm64 Linux machine that had never run a release
-build: the checksum matched, all four binaries ran, and `gnomon surface`
-returned the *same* hash as a locally compiled binary — which is the property
-the whole project rests on, checked across two independently built binaries for
-the first time. Not yet verified on darwin-arm64 or windows-x64 hardware.
+**Verified 2026-09-07 against the published v0.2.2 archive**, on an arm64 Linux
+machine that had never run a release build: the checksum matched, all four
+binaries ran, and `gnomon-surface` returned `da69c3d9…52796` for this
+repository's own `.gnomon/` — byte-identical to the locally compiled binary,
+across a major version bump of the hashing crate. That agreement is the property
+the whole project rests on, and until this it had never been checked across two
+independently built binaries. Not yet verified on darwin-arm64 or windows-x64
+hardware.
+
+The `V=` line reads the current release rather than naming one, because the
+first draft of this section hardcoded a version whose release was later deleted
+— a download command that 404s is worse than no download command.
 
 ## 3. Launch it in a project
 
