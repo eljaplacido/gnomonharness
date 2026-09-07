@@ -909,6 +909,23 @@ async function callEndpointWithRetry(
       transportWaitedMs += wait;
       spentMs += wait;
       if (say && ui) {
+        // Say WHAT IS WRONG on the first failure, not after the grace runs out.
+        //
+        // The diagnosis is complete at attempt 1 -- callEndpoint builds it in
+        // its catch, errno in hand -- and the loop then discarded it ten more
+        // times, showing only "[retry] endpoint unreachable — attempt N". With
+        // the shipped defaults (backoff 500ms doubling to an 8s cap, 60s grace)
+        // that is 55.5 seconds and eleven yellow lines before a newcomer whose
+        // model server simply is not running is told so. Measured 2026-09-07.
+        //
+        // This does NOT touch retry policy -- the comment on the loopback
+        // branch is right that shortening the grace would silently redefine a
+        // declared setting, and someone starting the server in another terminal
+        // is exactly who it helps. It changes only WHEN they find out.
+        if (transportTries === 1 && r.content) {
+          say(paint(ui, "yellow", `  ${r.content.split("\n").join("\n  ")}`));
+          say(paint(ui, "gray", `  Retrying for up to ${Math.round(graceMs / 1000)}s in case it is starting up.`));
+        }
         say(
           paint(
             ui,

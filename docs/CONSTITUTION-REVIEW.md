@@ -1,7 +1,7 @@
 # Constitution review — what to keep, what to amend, what was never constitutional
 
 *2026-08-31. Written against [BENCHMARK-REPORT-2026-08-30.md](BENCHMARK-REPORT-2026-08-30.md),
-the external [Gnomon Harness Benchmark Review and Research Roadmap](../Gnomon%20Harness%20Benchmark%20Review%20and%20Research%20Roadmap.md),
+the external [Gnomon Harness Benchmark Review and Research Roadmap](research/gnomon-harness-benchmark-review-and-research-roadmap.md),
 and the measured failures in [BENCHMARK-POSTMORTEM.md](BENCHMARK-POSTMORTEM.md).*
 
 The question this answers: **are any of gnomon's principles costing it performance
