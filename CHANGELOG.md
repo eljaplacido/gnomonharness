@@ -24,7 +24,86 @@
   definitions at the foot of this file resolve only once the tags exist.
 -->
 
+## [0.2.2] — 2026-09-07
+
+**Security.** A single missing backslash let an approved command run outside the
+docker sandbox. If you run with `[exec] mode = "docker"`, upgrade.
+
+v0.2.1 was tagged and built but **never published**, and this is why: the escape
+was found after that tag was cut. Its draft is deleted rather than released —
+publishing a build with a known escape to close a loop would be the wrong kind
+of tidy. Everything v0.2.1 contained is here.
+
+### The escape
+
+`tools.ts` escaped single quotes for `sh -c` as ``command.replace(/'/g, `'\''`)``.
+The POSIX idiom is `'\''` — **four** characters. Written as a JS template
+literal it is **three**, because `\'` in a template literal is just `'`. Every
+quote became `'''` and the escaping did nothing.
+
+```
+grep 'a; touch /tmp/PWNED' f.txt
+  →  docker … sh -c 'grep '''a; touch /tmp/PWNED''' f.txt'
+  →  the host shell ends the docker command at the now-UNQUOTED `;`
+  →  touch runs ON THE HOST; the container gets only `grep a`
+```
+
+`bash_deny`, `bash_allow` and the approval prompt all read the **original**
+text, where `; touch …` sits harmlessly inside a grep pattern. So the command
+that was approved was not the command that ran, and the fragment that escaped
+was never checked against any allow-list. It bites only when the container is
+turned **on** — which is to say, only when someone was relying on it.
+
+Even without metacharacters it corrupted silently: `echo 'hello world'` became
+argv `["echo hello", "world"]`, so `world` vanished into `$0`.
+
+The test was the other half. It asserted `c.endsWith("'")` — which the broken
+output also satisfies — so it passed throughout. No assertion about the *shape*
+of the string can catch this; the replacement runs the line through a real
+`/bin/sh` and requires the command to arrive as one byte-identical argument.
+
+### Also fixed
+
+- **`tree_delta` reported the whole dirty worktree as the turn's work.** One
+  snapshot at turn end of `git diff HEAD`, under a field documented as "what
+  actually changed in the worktree **this turn** — MEASURED". A read-only
+  `verifier` handed your uncommitted edits back to you as the agent's. It takes
+  a baseline at turn start now.
+- **`pnpm run setup` could not run on Windows.** POSIX shell, and the only
+  install command given to native-Windows users; pnpm runs scripts through
+  cmd.exe there. Both scripts are Node now, and the Windows CI job runs them.
+- **Transport failures were reported as "5xx".** The classifier matched the word
+  "unavailable", and gnomon's own error reads `Model unavailable at <url>` — so
+  every refused socket sent the operator to a status page instead of to their
+  own URL. It classifies on the errno now.
+- **The diagnosis arrived 55 seconds late.** Complete at attempt 1 and discarded
+  ten times. Printed immediately; retry policy deliberately unchanged.
+- **`setsid`** is util-linux; Git for Windows ships none. The detach recipe is
+  guarded, and the hashed description stays platform-neutral so two clones
+  cannot get two hashes.
+- **sha2 0.10 → 0.11.** A major on the hashing crate. The surface hash is
+  byte-identical across it — checked, not assumed — and
+  `conformance/digest_vectors.json` now pins the hex encoding that three
+  hand-written encoders produce.
+- Fourteen benchmark scripts hardcoded one machine's home directory, so no
+  published result was reproducible. Fixed, with a CI gate.
+- README's Install section said Windows was unsupported; SECURITY.md called the
+  docker sandbox "non-root"; CONTRIBUTING documented a test command that exits
+  1 and a branch policy nobody followed; GETTING_STARTED called a failure
+  "harmless"; POSITIONING cited an n its own source contradicts. All corrected.
+- GitHub Discussions enabled — both documented support routes were 404.
+- The README has a screenshot of the terminal for the first time.
+
+**1110 tests** (60 Rust + 1050 TypeScript), and `.gnomon/ci.sh` now checks that
+number against this file.
+
 ## [0.2.1] — 2026-09-07
+
+> **Tagged and built, never published.** The sandbox escape described under
+> 0.2.2 was found after this tag was cut, so its draft was deleted rather than
+> released. Everything below is in 0.2.2. The tag stays because it is what
+> happened.
+
 
 An end-to-end audit of every command, every slash command, the TUI, the skills
 system and the docs, driving each against a live local endpoint rather than
@@ -1863,7 +1942,8 @@ was written.
   `git tag`, not a documentation edit as well.
 -->
 
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.2
 [0.2.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.1
 [0.2.0]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.0
 [0.1.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.1.1

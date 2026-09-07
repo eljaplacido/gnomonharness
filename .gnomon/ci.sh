@@ -523,9 +523,28 @@ esac
 # correctly.
 echo ""
 echo "═══ Coverage floor ═══"
-if pnpm run coverage 2>&1 | node scripts/coverage_gate.mjs; then
+# Two different failures, and they used to print the same sentence. The gate
+# fails closed when the coverage run produces NO summary on stdin -- correct,
+# but "Coverage fell below scripts/coverage-floor.json" then sends a maintainer
+# hunting for untested code that does not exist. Observed 2026-09-07: the gate
+# said "no coverage summary on stdin — refusing to pass" while the numbers were
+# 84.33/80.72/94.26/84.33, every one of them above the floor, and the very next
+# run was green. A gate that misreports why it failed is a gate people learn to
+# re-run rather than read.
+COV_OUT=$(mktemp)
+if pnpm run coverage 2>&1 | tee "$COV_OUT" | node scripts/coverage_gate.mjs; then
     pass "Coverage is at or above the committed floor"
+    rm -f "$COV_OUT"
 else
+    if grep -q "no coverage summary on stdin" "$COV_OUT" 2>/dev/null \
+       || ! grep -q "Coverage summary" "$COV_OUT"; then
+        echo "   The coverage RUN produced no summary — this is not a coverage"
+        echo "   regression. Last 20 lines of its output:"
+        tail -20 "$COV_OUT" | sed 's/^/   | /'
+        rm -f "$COV_OUT"
+        fail "The coverage run did not report — see above. Re-run; if it persists, the runner is broken, not the tests."
+    fi
+    rm -f "$COV_OUT"
     fail "Coverage fell below scripts/coverage-floor.json"
 fi
 
