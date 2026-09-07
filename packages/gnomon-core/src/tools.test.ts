@@ -649,8 +649,12 @@ describe("bash", () => {
 
     expect(second.code).toBe(TOOL_FAILED);
     expect(second.summary).toContain("already timed out");
-    // whitespace-normalised, so a cosmetically different retry is still caught
-    expect(second.content).toContain("setsid");
+    // whitespace-normalised, so a cosmetically different retry is still caught.
+    // The recipe is checked by its portable part: `setsid` is util-linux and
+    // Git for Windows does not ship it, so backgroundRecipe omits it there.
+    expect(second.content).toContain(".gnomon-jobs");
+    expect(second.content).toContain("</dev/null");
+    if (process.platform !== "win32") expect(second.content).toContain("setsid");
     // and it refused immediately rather than spending the timeout a second time
     expect(elapsed).toBeLessThan(100);
   });
@@ -2036,6 +2040,11 @@ describe("sandboxCommand — where bash actually runs", () => {
     //
     // No assertion about the SHAPE of the string can catch that. This one runs
     // a real shell and reads back the argv docker would have received.
+    // POSIX-only, and skipped rather than weakened: the subject IS how a POSIX
+    // shell tokenises the line, and windows-latest has no /bin/sh. The sandbox
+    // itself is docker, which runs the command under `sh -c` on every host.
+    if (process.platform === "win32") return;
+
     const command = `grep 'a; touch /tmp/gnomon-escape-probe' f.txt`;
     const line = sandboxCommand(command, on, "n");
 
