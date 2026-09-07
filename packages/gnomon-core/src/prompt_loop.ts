@@ -1975,7 +1975,39 @@ export interface TreeDelta {
  * Ask git what changed. Best-effort and bounded: a turn must not fail because
  * the project is not a repository, or because git is slow.
  */
-export function measureTreeDelta(root: string): TreeDelta {
+/**
+ * A numstat snapshot, for use as a turn-start baseline. Null when git cannot
+ * answer, which is not an error -- the project may not be a repository.
+ */
+export type TreeSnapshot = Map<string, [number, number]> | null;
+
+export function treeSnapshot(root: string): TreeSnapshot {
+  const d = measureTreeDelta(root, undefined, true);
+  return d.__snapshot ?? null;
+}
+
+export function measureTreeDelta(
+  root: string,
+  /**
+   * What the worktree looked like when the turn STARTED.
+   *
+   * Without it this function answers "worktree vs HEAD", which is not the
+   * question the field name asks. Measured 2026-09-07: a `verifier` turn whose
+   * only tool call was `read` still printed
+   * `[tree] 1 file(s), +2 -1 (measured, git)` for an edit that was already in
+   * the tree before the turn began -- under a field documented three lines
+   * below as "What actually changed in the worktree THIS TURN". Anyone running
+   * gnomon on a repository they were already working in got the whole dirty
+   * tree attributed to the agent.
+   *
+   * With a baseline, only files whose numstat actually moved are counted, and
+   * the line counts are differences. A turn that reverts something reports
+   * negative numbers, which is the honest answer and a rare one.
+   */
+  baseline?: TreeSnapshot,
+  /** Internal: return the raw snapshot instead of a delta. */
+  wantSnapshot = false
+): TreeDelta & { __snapshot?: Map<string, [number, number]> } {
   const run = (args: string[]): string | null => {
     try {
       return execFileSync("git", args, {
@@ -1999,14 +2031,32 @@ export function measureTreeDelta(root: string): TreeDelta {
   const plain = run(["diff", "--numstat", "HEAD"]) ?? run(["diff", "--numstat"]);
   if (plain === null) return { files: 0, insertions: 0, deletions: 0, crlf_only: 0, unavailable: "not a git worktree" };
   const a = parse(plain);
+  if (wantSnapshot) {
+    return { files: 0, insertions: 0, deletions: 0, crlf_only: 0, __snapshot: a };
+  }
   const b = parse(run(["diff", "--numstat", "--ignore-cr-at-eol", "HEAD"]) ?? run(["diff", "--numstat", "--ignore-cr-at-eol"]) ?? "");
-  let insertions = 0, deletions = 0, crlfOnly = 0;
+  let insertions = 0, deletions = 0, crlfOnly = 0, files = 0;
   for (const [file, [i, d]] of a) {
-    insertions += i; deletions += d;
+    const [bi, bd] = baseline?.get(file) ?? [0, 0];
+    const di = i - bi, dd = d - bd;
+    // A file already dirty at turn start, and untouched since, is not this
+    // turn's work and is not counted.
+    if (baseline && di === 0 && dd === 0) continue;
+    files++;
+    insertions += di; deletions += dd;
     // Changed in the plain diff, unchanged once line endings are ignored.
     if (!b.has(file)) crlfOnly++;
   }
-  return { files: a.size, insertions, deletions, crlf_only: crlfOnly };
+  // A file the turn REVERTED to its committed state leaves the numstat
+  // entirely, so walking `a` alone would miss it. It is this turn's work.
+  if (baseline) {
+    for (const [file, [bi, bd]] of baseline) {
+      if (a.has(file)) continue;
+      files++;
+      insertions -= bi; deletions -= bd;
+    }
+  }
+  return { files, insertions, deletions, crlf_only: crlfOnly };
 }
 
 export interface TurnCounters {
@@ -2591,6 +2641,11 @@ export async function runAgenticTurn(
     final_step_was_write: false,
     per_tool: {},
   };
+
+  // What the worktree looked like BEFORE this turn. Without it, `tree_delta`
+  // reports the whole dirty tree as the turn's doing -- including for a
+  // read-only role that only called `read`. One git call, taken once.
+  const treeBaseline = treeSnapshot(resolve(state.config.gnomonDir, ".."));
   const tally = (name: string, field: "calls" | "refusals" | "apparatus") => {
     const t = (counters.per_tool[name] ??= { calls: 0, refusals: 0, apparatus: 0 });
     t[field]++;
@@ -2600,7 +2655,7 @@ export async function runAgenticTurn(
   // exactly when someone wants to know what it left behind.
   const cancelled = (): TurnResult => {
     flushFold();
-    counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."));
+    counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."), treeBaseline);
     // No answer was produced, so there is nothing to cite-check. Left unset
     // rather than zeroed: "no citations checked" and "checked, none found"
     // are different facts.
@@ -3095,7 +3150,7 @@ export async function runAgenticTurn(
       // printed after the answer would describe work the reader has already
       // been given conclusions about.
       flushFold();
-      counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."));
+      counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."), treeBaseline);
       stampCitations(counters, result.content, resolve(state.config.gnomonDir, ".."));
       return {
         content: noteMarkupInAnswer(result.content, counters),
@@ -3219,7 +3274,7 @@ export async function runAgenticTurn(
       // printed after the answer would describe work the reader has already
       // been given conclusions about.
       flushFold();
-      counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."));
+      counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."), treeBaseline);
       stampCitations(counters, content, resolve(state.config.gnomonDir, ".."));
       return {
         // The wall and stall paths are where markup actually survived: a turn

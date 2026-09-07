@@ -3492,6 +3492,63 @@ describe("measureTreeDelta — measured, not asserted", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+
+  it("attributes only THIS turn's work, not the tree it started in", () => {
+    // The whole point of the field, and it did not hold. `tree_delta` took one
+    // snapshot at turn end and reported `git diff HEAD` -- i.e. the entire dirty
+    // worktree -- under a name and a doc comment that both say "this turn".
+    //
+    // Measured 2026-09-07 before the baseline existed: a `verifier` turn whose
+    // only tool call was `read`, run in a repository that already had an
+    // uncommitted edit, printed `[tree] 1 file(s), +2 -1 (measured, git)`. The
+    // agent had changed nothing. Anyone using gnomon on work in progress -- the
+    // normal case -- had their own edits reported back to them as the agent's.
+    const root = repo();
+
+    // Someone was already working here before the turn began.
+    writeFileSync(join(root, "a.txt"), "alpha\nbeta\ngamma\nPRE-EXISTING\n");
+    const before = promptLoop.treeSnapshot(root);
+    expect(before).not.toBeNull();
+
+    // A read-only turn: nothing happens to the tree.
+    const readOnly = promptLoop.measureTreeDelta(root, before);
+    expect(readOnly.files).toBe(0);
+    expect(readOnly.insertions).toBe(0);
+    expect(readOnly.deletions).toBe(0);
+
+    // Without the baseline, the same call still reports the pre-existing edit —
+    // which is what shipped, and why this test exists.
+    const unbaselined = promptLoop.measureTreeDelta(root);
+    expect(unbaselined.files).toBe(1);
+    expect(unbaselined.insertions).toBe(1);
+
+    // Now the turn actually does something.
+    writeFileSync(join(root, "b.txt"), "one\ntwo\nADDED BY THE TURN\n");
+    const wrote = promptLoop.measureTreeDelta(root, before);
+    expect(wrote.files).toBe(1);          // b.txt only — a.txt was already dirty
+    expect(wrote.insertions).toBe(1);     // the turn's line, not the tree's two
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("counts a file the turn reverted, which leaves the diff entirely", () => {
+    // A reverted file drops out of `git diff --numstat`, so walking the end
+    // state alone would score "restored a file to HEAD" as no work at all.
+    const root = repo();
+    writeFileSync(join(root, "a.txt"), "alpha\nbeta\ngamma\nWILL BE REVERTED\n");
+    const before = promptLoop.treeSnapshot(root);
+
+    // The turn puts it back the way it was committed.
+    writeFileSync(join(root, "a.txt"), "alpha\nbeta\ngamma\n");
+    const d = promptLoop.measureTreeDelta(root, before);
+    expect(d.files).toBe(1);
+    // Negative, and honestly so: the turn removed a line that was there when it
+    // started. A signed number is the only truthful answer here.
+    expect(d.insertions).toBe(-1);
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("reports nothing rather than zero outside a git worktree", () => {
     const bare = mkdtempSync(join(tmpdir(), "gnomon-nogit-"));
     const d = promptLoop.measureTreeDelta(bare);
