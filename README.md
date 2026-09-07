@@ -1597,7 +1597,7 @@ undiscoverable.
 | `/models` | Models each endpoint offers; arrows + filter to assign one to a role. `--list` to only print |
 | `/todo` | The checklist, as the agent last left it |
 | `/manifest` | The surface hash and what it covers |
-| `/reset` | Drop history (and the summary) |
+| `/reset` | Alias for `/new`. It does **not** clear history in place — that overwrote the record |
 | `/meta [fields]` | Set the meta line — `/meta all`, `/meta none`, `/meta style compact` |
 | `/think [mode]` | Chain-of-thought: `hide` \| `collapse` \| `show` |
 | `/cot [mode]` | Live trace while it works: `off` \| `brief` \| `tools` \| `think` \| `work` \| `full`. `work` is the default: it shows reasoning and prose in full, and folds a run of steps that succeeded and changed nothing into one line. `full` never folds. |

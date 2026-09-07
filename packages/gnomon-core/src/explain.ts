@@ -381,7 +381,7 @@ const TOPICS: Record<ExplainTopic, Builder> = {
       ],
       next: [
         "/context           what is in the window right now",
-        "/reset             drop the history and any summary",
+        "/reset             the same as /new; it does not clear in place",
         "",
         'compaction = "summary" keeps long sessions coherent, at the cost of exact',
         "reproducibility — it asks a model what mattered.",

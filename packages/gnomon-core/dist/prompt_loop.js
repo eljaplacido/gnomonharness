@@ -3316,7 +3316,7 @@ export const COMMANDS = [
     { name: "/profiles", help: "Show available profiles" },
     { name: "/tools", help: "Show the tools this role may call" },
     { name: "/context", help: "Show context policy and the current window" },
-    { name: "/reset", help: "Drop conversation history (keeps the session open)" },
+    { name: "/reset", help: "Alias for /new — the old 'clear history in place' lost the record" },
     { name: "/meta", arg: "[fields]", help: "Show or set the meta line" },
     { name: "/think", arg: "[mode]", help: "Chain-of-thought: hide | collapse | show" },
     { name: "/cot", arg: "[mode]", help: "Live trace while it works: off | brief | tools | think | work | full" },

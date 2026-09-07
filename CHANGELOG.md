@@ -146,6 +146,16 @@ holding `task` with no `task_allow` — meaning either could delegate to any rol
 in the file, and a sub-turn runs with the *target* role's tools. Both are named
 now. A fresh `gnomon init` and gnomon's own checkout both start clean.
 
+### Fixed — `/reset` was documented as doing what it deliberately stopped doing
+
+`/reset` is an alias for `/new`, and has been since the in-place version was
+removed: clearing history while keeping the session id meant the next turn's
+snapshot overwrote the record of everything before it. The behaviour change was
+right; nothing told the user. `/help` still read *"Drop conversation history
+(keeps the session open)"* — a promise of exactly the lost-record behaviour —
+and `/explain sessions` and README's command table said the same. All three now
+say it is an alias, and why.
+
 ### Fixed — README's test count, and its CI claim
 
 The status line said 1023 TypeScript / 1080 total while the runners produced
