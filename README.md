@@ -13,8 +13,17 @@ cd my-project && gnomon launch
 ```
 
 <p align="center">
-  <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="620">
+  <img src="docs/img/gnomon-session.png" alt="A gnomon session: the startup banner naming the role, model and the tools withheld from it; a glob and a read; an approval gate showing the exact diff before the edit is allowed; then the result and a meta line" width="820">
 </p>
+
+<p align="center"><sub>
+  One real turn against a local <code>qwen3.6:35b</code>. Note the third block:
+  <b>nothing is written until you have seen the diff.</b> The banner above it
+  lists the tools this role does <i>not</i> get — that list comes from
+  <code>.gnomon/</code>, not from a prompt.<br>
+  Regenerate with <code>scripts/render_terminal_png.py</code>; it renders a real
+  captured session, so this image cannot drift from what the harness prints.
+</sub></p>
 
 ### Why "gnomon"
 
@@ -27,6 +36,10 @@ can be read at all. Take the gnomon away and you have a decorated stone.
 That is the whole design in one object. The model varies, the conversation
 wanders, the tools do different things each run — and the `.gnomon/` directory
 does not. Behaviour is readable because something is holding still.
+
+<p align="center">
+  <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
+</p>
 
 > **Status: working, pre-1.0.** 1048 TypeScript tests (921 core, 106 cli, 14
 > natives, 7 tui) and 57 Rust tests — **1105 total**, the number `.gnomon/ci.sh`

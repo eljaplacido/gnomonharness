@@ -56,8 +56,16 @@ updates:
       prefix: "chore"
       include: "scope"
     groups:
+      # Minor and patch together; a MAJOR lands on its own, for the same reason
+      # the cargo group above gives. Measured 2026-09-07: without the
+      # update-types filter this group swept TypeScript 5.5 -> 7.0.2 and
+      # vitest 2 -> 5 into one "chore(deps-dev)" PR, whose CI failed on arrival
+      # with 16 TS2591 errors -- a major toolchain migration wearing the label
+      # of a routine dev bump, in a PR titled "Bump the dev-dependencies group".
+      # A grouped major is the one shape a weekly review is least able to judge.
       dev-dependencies:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
     # Why npm is here at all, given the runtime dependency set is empty.
     #
     # Verified by reading every package.json in the workspace: gnomon has ZERO
