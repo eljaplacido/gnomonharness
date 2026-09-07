@@ -63,12 +63,16 @@ role routing, `hashline` edit format. You stop reaching for other agents.
 - [x] Manifest emitted every turn — every turn record and audit event carries a
       `surface_hash`. The "re-asserted on changes" half of what this line used
       to claim is not what the code does, checked 2026-09-01 by reading both
-      live entry points: `runTask` (`prompt_loop.ts:2991`) and the interactive
-      loop (`prompt_loop.ts:4596`) each call `recomputeManifest` exactly once,
+      live entry points: `runTask` and the interactive loop `runPromptLoop`
+      (both in `prompt_loop.ts`) each call `recomputeManifest` exactly once,
       at session start, and every later turn stamps that captured value. So a
       per-turn record cannot notice drift — it reprints the hash the session
       opened with. What does re-read the surface is `tools.ts:surfaceDrift`,
-      per bash call, and the resume-time comparison at `prompt_loop.ts:5159`.
+      per bash call, and the resume-time `surface_hash` comparison in
+      `runPromptLoop`. (These were line numbers — 2991, 4596, 5159 — and all
+      three had drifted onto unrelated code by 2026-09-07. A line number into a
+      7,000-line file is a reference with a shelf life; a symbol name is one
+      `grep` and does not rot.)
 
 **Done when:** A machine-scoped path survives nowhere in resolution.
 

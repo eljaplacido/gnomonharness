@@ -14,18 +14,25 @@ must refuse to stay itself. Written against
 The comfortable version of this document would have said the constitution was ahead of the
 implementation. It isn't, and the true version is more useful.
 
-**(a) "The constraint" is false today.** `.gnomon/` is supposed to declare everything that decides
-how the agent acts, content-hashed, with that hash stamped on every record. But
-`NUDGE_AFTER_IDLE = 12`, `STALL_REPEATS = 3`, `CONVERGE_REFIRE = 6` and the nudge's injected text
-live in TypeScript (`prompt_loop.ts:899, 914, 926, 1555`). All 114 session records in the surviving
-arm carry `surface=be52a8a14db8` while the mechanism that ended a large share of those runs was
-invisible to that hash. *"If behaviour changed, the hash changed"* is the sentence the whole design
-exists to earn, and today `12` can become `40` without moving a byte of the manifest.
+**(a) "The constraint" was false when this was written.** `.gnomon/` is supposed to declare
+everything that decides how the agent acts, content-hashed, with that hash stamped on every record.
+But `NUDGE_AFTER_IDLE = 12`, `STALL_REPEATS = 3`, `CONVERGE_REFIRE = 6` and the nudge's injected
+text lived in TypeScript as module constants. All 114 session records in the surviving arm carry
+`surface=be52a8a14db8` while the mechanism that ended a large share of those runs was invisible to
+that hash. *"If behaviour changed, the hash changed"* is the sentence the whole design exists to
+earn, and `12` could become `40` without moving a byte of the manifest.
+
+> **Fixed.** The three are `[loop] stall_repeats`, `nudge_after_idle` and `converge_refire` now,
+> read per turn through `resolveLoop` and hashed with the rest of the surface; `gnomon init` writes
+> the block out with each default and the measurement behind it. `prompt_loop.ts` keeps a comment
+> where they used to sit, naming this document as the reason they moved. The finding stood in the
+> present tense here for some time after it stopped being true, with line numbers that had long
+> since pointed at unrelated code — which is the same failure this file was created to catch,
+> occurring in this file.
 
 **(b) The record that Rules 2 and 4 exist to produce was never produced.** `[audit] enabled = false`
 ships in `init.ts:193` **and in gnomon's own `.gnomon/config.toml:100`** — off even in the dogfood
-surface. `TaskRecord` carries no `stop_reason`; the reason exists internally as a note string
-(`prompt_loop.ts:1276-1281`) and is only interpolated into prose.
+surface. `TaskRecord` carries no `stop_reason`; the reason existed internally as a note string and was only interpolated into prose.
 
 > **Fixed 2026-08-31.** `TaskRecord` now carries `stop_reason`, `stop_detail` and
 > `counters` (`08bdd4d`), and the enumeration is published in
@@ -69,7 +76,7 @@ Do not rebuild any of these. Mapped by name.
 | Checkpoint/resume | session persistence, `--continue`/`--resume`, `todo`, hash-drift on resume | Resume *reports drift* instead of silently replaying under new rules |
 | Falsifiable change manifests | ROADMAP's per-phase `Wrong if:` clauses, conformance goldens | Independently invented; only the join is missing |
 | Ephemeral subagents | the `task` tool | Same idea, plus a containment property |
-| Publish-state guard | `[verify]` at `prompt_loop.ts:1194-1249` | Already correct, including parsing the *shell's* exit rather than the tool's |
+| Publish-state guard | `[verify]`, via `resolveVerify` (`config.ts`) and the post-turn check in `prompt_loop.ts` | Already correct, including parsing the *shell's* exit rather than the tool's |
 | Budget injection | `converge_after` | Implemented **and already A/B tested in-repo** |
 | Command batching | already at peer rate | 41.8% of 318 gnomon commands chain with `&&` vs the cited peer 42.7% |
 
