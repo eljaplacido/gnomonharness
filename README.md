@@ -28,16 +28,19 @@ That is the whole design in one object. The model varies, the conversation
 wanders, the tools do different things each run — and the `.gnomon/` directory
 does not. Behaviour is readable because something is holding still.
 
-> **Status: working, pre-1.0.** 1023 TypeScript tests (897 core, 105 cli, 14
-> natives, 7 tui) and 57 Rust tests — **1080 total**, the number `.gnomon/ci.sh`
-> reads back out of the runners on every run rather than a total asserted here.
+> **Status: working, pre-1.0.** 1048 TypeScript tests (921 core, 106 cli, 14
+> natives, 7 tui) and 57 Rust tests — **1105 total**, the number `.gnomon/ci.sh`
+> reads back out of the runners on every run rather than a total asserted here
+> — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
 > silently stopped collecting two of the four packages, which is why the count
 > is now taken from the runners that actually executed them — a count nothing
 > checks is the failure mode this repository exists to make impossible.)
-> CI runs the whole suite on **Linux only**; the macOS job builds
-> `gnomon-surface` and runs no tests, so "green on macOS" means *it compiles
-> there*. Interfaces may still move. [Known Limits](#known-limits) is
+> CI runs the TypeScript suite on **Linux, macOS and Windows**, and the Rust
+> tests plus clippy on Linux — see [.github/workflows/ci.yml](.github/workflows/ci.yml).
+> (This said "Linux only … green on macOS means it compiles there", which was
+> true until 2026-09-05 and was still here afterwards; the macOS and Windows
+> jobs run the same four packages the Linux one does.) Interfaces may still move. [Known Limits](#known-limits) is
 > deliberately specific — read it before depending on this.
 
 ---
@@ -181,7 +184,7 @@ TypeScript side computes the same hash independently, and a test holds the two
 together; they disagreed once, and that test is why they no longer can.
 
 `gnomon-edit` backs the `apply` and `simulate` commands. **`gnomon-exec` backs
-nothing.** The crate is built and tested (23 Rust tests), and
+nothing.** The crate is built and tested (27 Rust tests), and
 `gnomon-natives`'s `runSessionStep` would call it — but that function has zero
 call sites: `gnomon session` runs each command through `SessionManager.run` in
 `session.ts`, which is `node:child_process.spawn` with `shell: true`. So the

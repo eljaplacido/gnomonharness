@@ -17,6 +17,7 @@ import {
   readState,
   guardTrips,
   cronExpr,
+  parseCronLine,
   LoopDef,
   LOOP_STATE_DIR,
 } from "./loops.js";
@@ -186,5 +187,65 @@ describe("loadLoops", () => {
   it("is a no-op when nothing is declared", () => {
     rmSync(join(root, ".gnomon", "loops"), { recursive: true });
     expect(loadLoops(join(root, ".gnomon"))).toEqual([]);
+  });
+});
+
+/**
+ * The crontab layer had no tests at all, and carried two faults that only show
+ * up on a machine with more than one gnomon checkout — which is every machine
+ * that has ever had two. Both are properties of one line of text, so they are
+ * pinned here against the real format `installLoop` writes.
+ */
+describe("crontab line identity", () => {
+  // Verbatim shape of an installed line (installLoop, loops.ts).
+  const line = (name: string, root: string) =>
+    `*/5 * * * * cd ${JSON.stringify(root)} && [ -f ${JSON.stringify(root + "/.gnomon-loops/env")} ] ` +
+    `&& set -a && . ${JSON.stringify(root + "/.gnomon-loops/env")} && set +a; ` +
+    `"/usr/bin/node" "/h/gnomon/packages/gnomon-cli/gnomon.js" loop run ${name} ` +
+    `>> ${JSON.stringify(root + "/.gnomon-loops/cron.log")} 2>&1 # gnomon-loop:${name}`;
+
+  it("reads back the loop name and the project that installed it", () => {
+    expect(parseCronLine(line("tidy", "/home/a/proj"))).toEqual({
+      name: "tidy",
+      root: "/home/a/proj",
+    });
+  });
+
+  it("does not confuse a loop with one whose name it prefixes", () => {
+    // `l.includes("# gnomon-loop:" + "tidy")` matched the `tidy-up` line too,
+    // so `loop uninstall tidy` removed both.
+    const a = parseCronLine(line("tidy", "/p"))!;
+    const b = parseCronLine(line("tidy-up", "/p"))!;
+    expect(a.name).toBe("tidy");
+    expect(b.name).toBe("tidy-up");
+    expect(a.name).not.toBe(b.name);
+  });
+
+  it("separates same-named loops in different projects", () => {
+    // One namespace across a machine-wide crontab: `loop install tidy` in B
+    // deleted A's tidy line, and `loop status` in B called A's loops DRIFT.
+    const a = parseCronLine(line("tidy", "/home/a/proj"))!;
+    const b = parseCronLine(line("tidy", "/home/b/proj"))!;
+    expect(a.name).toBe(b.name);
+    expect(a.root).not.toBe(b.root);
+  });
+
+  it("survives a project path containing spaces and quotes", () => {
+    const root = '/home/a/my proj/"odd"';
+    expect(parseCronLine(line("tidy", root))!.root).toBe(root);
+  });
+
+  it("ignores a line that is not gnomon's", () => {
+    expect(parseCronLine("*/5 * * * * /usr/bin/backup.sh")).toBeNull();
+    expect(parseCronLine("")).toBeNull();
+  });
+
+  it("reports an unattributable marker rather than guessing a project", () => {
+    // A hand-edited crontab line. It must not be silently assigned to whichever
+    // project happens to be asking.
+    expect(parseCronLine("*/5 * * * * /bin/true # gnomon-loop:hand")).toEqual({
+      name: "hand",
+      root: null,
+    });
   });
 });

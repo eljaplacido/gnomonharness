@@ -86,8 +86,50 @@ export declare function runTick(root: string, loop: LoopDef, opts?: {
 }): TickResult;
 /** "5m" | "90m" | "2h" | "1d" → a crontab schedule. */
 export declare function cronExpr(every: string): string;
-/** Every loop name currently present in this machine's crontab. */
-export declare function installedLoops(): string[];
+/** One crontab line gnomon installed: which loop, and which project declared it. */
+export interface InstalledLoop {
+    name: string;
+    /**
+     * The project root the line runs in, read back from its own `cd "<root>"`.
+     * `null` only for a line carrying the marker without one — which gnomon
+     * never writes, so it means a human edited the crontab by hand.
+     */
+    root: string | null;
+}
+/**
+ * Read one crontab line back into the loop it schedules.
+ *
+ * The name is taken from the marker to the END OF LINE, not by substring
+ * search, and the root is recovered from the `cd` the line already carries.
+ * Both matter, and both were wrong:
+ *
+ *   - `l.includes(CRON_MARK + name)` is a prefix test. With `tidy` and
+ *     `tidy-up` both installed, `uninstallLoop("tidy")` matched the line for
+ *     `tidy-up` as well and removed both.
+ *   - The name alone is not an identity. crontab is machine-wide and the root
+ *     was discarded, so every loop in every project shared one namespace:
+ *     `loop status` in project B reported project A's loops as DRIFT and
+ *     exited 1, and `loop install tidy` in B silently deleted A's `tidy`
+ *     line — the filter that clears the old entry before writing the new one
+ *     matched across projects too.
+ *
+ * The line format is written by `installLoop` below and has always begun
+ * `<schedule> cd "<root>" && …`, so the root is recoverable from every line
+ * gnomon has ever installed. The quoting is `JSON.stringify`'s, so it is
+ * parsed back the same way rather than by unescaping it by hand.
+ */
+export declare function parseCronLine(line: string): InstalledLoop | null;
+/** Every gnomon loop line in this machine's crontab, with the project each belongs to. */
+export declare function installedLoopEntries(): InstalledLoop[];
+/**
+ * Loop names in this machine's crontab.
+ *
+ * With `root`, only the ones that project installed — plus any line carrying
+ * the marker with no recoverable root, which cannot be attributed to another
+ * project and so must not be hidden from this one. Without `root`, every one
+ * on the machine.
+ */
+export declare function installedLoops(root?: string): string[];
 /** Machine-local environment for loops. Gitignored, never in the surface. */
 export declare const LOOP_ENV_FILE = "env";
 /**
@@ -107,5 +149,12 @@ export declare const LOOP_ENV_FILE = "env";
  *     machine-scoped and gitignored precisely so it stays out of the surface.
  */
 export declare function installLoop(root: string, loop: LoopDef, gnomonBin: string): string;
-export declare function uninstallLoop(name: string): boolean;
+/**
+ * Remove a loop's crontab line.
+ *
+ * `root` scopes it to one project. Omitting it removes every line for that
+ * name on the machine, which is what the machine-wide stop wants and what
+ * every caller used to get whether it wanted it or not.
+ */
+export declare function uninstallLoop(name: string, root?: string): boolean;
 //# sourceMappingURL=loops.d.ts.map

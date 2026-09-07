@@ -2168,10 +2168,31 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
  * several turns into a session. The smallest possible completion is the only
  * thing that answers the question actually being asked.
  */
+/**
+ * How long one auth probe may take.
+ *
+ * ONE number, because the answer must not depend on which command asked. It
+ * was three — 15s in the loop's `/endpoints`, 20s in `gnomon endpoint list`,
+ * 30s in `gnomon endpoint test` — against a cold local model that takes longer
+ * than the smallest of them. Measured 2026-09-07 on this machine, first call
+ * after `keep_alive: 0`, ollama serving qwen3.6:35b (the model `gnomon init`
+ * itself selects here): 17.7s, 23.9s. So the same healthy endpoint reported
+ *
+ *     gnomon endpoint test local   ✓ answered a real completion
+ *     /endpoints                   ✗ The operation was aborted due to timeout
+ *
+ * in the same minute, and `/endpoints` was a coin-flip run to run.
+ *
+ * A cold model load is the slowest thing this probe legitimately waits on, so
+ * the budget is set above it rather than at it. An endpoint that is actually
+ * unreachable fails on connect, long before this.
+ */
+export const PROBE_TIMEOUT_MS = 45000;
+
 export async function probeEndpointAuth(
   endpoint: EndpointConfig,
   model: string,
-  timeoutMs = 20000
+  timeoutMs = PROBE_TIMEOUT_MS
 ): Promise<{ ok: boolean; status?: number; detail?: string }> {
   const key = endpoint.api_key_env ? process.env[endpoint.api_key_env] : undefined;
   if (endpoint.api_key_env && !key) {

@@ -57,3 +57,30 @@ describe("explain", () => {
     expect(a).toEqual(b);
   });
 });
+
+/**
+ * The index is what a reader sees first.
+ *
+ * `explainTopics()` fed the `/explain` list from a second, hand-kept map that
+ * had three topics missing, so routing, sandbox and verify printed their names
+ * with an empty line beside them — while `/explain routing` rendered its
+ * summary perfectly. The existing tests checked that every topic had a NAME and
+ * that the counts matched, which both remained true throughout.
+ */
+describe("the /explain index", () => {
+  it("gives every topic a non-empty summary", () => {
+    for (const { topic, summary } of explainTopics()) {
+      expect(summary, `/explain ${topic} has no summary`).toBeTruthy();
+      expect(summary.trim().length, `/explain ${topic} summary is blank`).toBeGreaterThan(10);
+    }
+  });
+
+  it("shows the same summary in the index as the topic itself renders", () => {
+    const cfg = config;
+    for (const { topic, summary } of explainTopics()) {
+      const built = explain(cfg, "implement", topic);
+      expect(built, `${topic} is listed but does not build`).not.toBeNull();
+      expect(built!.summary, `${topic}: index and page disagree`).toBe(summary);
+    }
+  });
+});

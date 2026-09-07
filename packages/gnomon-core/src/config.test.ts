@@ -25,6 +25,7 @@ import {
   resolveContext,
   auditSurface,
   recomputeManifest,
+  PROBE_TIMEOUT_MS,
 } from "./index.js";
 import { join, resolve } from "node:path";
 import { mkdirSync, rmSync, mkdtempSync, writeFileSync, renameSync, readdirSync } from "node:fs";
@@ -1200,5 +1201,39 @@ describe("TOML: a Windows path does not take the surface down", () => {
     // teach a Windows user.
     expect(parseToml("command = 'C:\\Users\\me\\server.exe'\n").command)
       .toBe("C:\\Users\\me\\server.exe");
+  });
+});
+
+/**
+ * One probe, one budget.
+ *
+ * Three call sites each passed their own timeout for the same operation, and
+ * the smallest was under the cold-start time of the local model `gnomon init`
+ * selects — so whether a healthy endpoint reported ✓ or ✗ depended on which
+ * command you typed. Nothing caught it because nothing compared them. This
+ * reads the call sites.
+ */
+describe("endpoint probe timeout", () => {
+  const CALLERS = [
+    "../../gnomon-cli/src/index.ts",
+    "./prompt_loop.ts",
+  ];
+
+  it("is long enough for a cold local model load", () => {
+    // Measured 2026-09-07, ollama qwen3.6:35b from cold: 17.7s and 23.9s.
+    expect(PROBE_TIMEOUT_MS).toBeGreaterThan(24000);
+  });
+
+  it("is not overridden at any call site", () => {
+    const offenders: string[] = [];
+    for (const rel of CALLERS) {
+      const src = readFileSync(new URL(rel, import.meta.url), "utf-8");
+      // probeEndpointAuth(endpoint, model)  — two arguments, never a third.
+      for (const m of src.matchAll(/probeEndpointAuth\(([^)]*)\)/g)) {
+        const args = m[1].split(",").length;
+        if (args > 2) offenders.push(`${rel}: probeEndpointAuth(${m[1].trim()})`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });

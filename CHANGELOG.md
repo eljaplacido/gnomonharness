@@ -24,6 +24,124 @@
   definitions at the foot of this file resolve only once the tags exist.
 -->
 
+## [0.2.1] — 2026-09-07
+
+An end-to-end audit of every command, every slash command, the TUI, the skills
+system and the docs, driving each against a live local endpoint rather than
+reading it. Seven defects, all of them found by running the thing. Two were
+silent, one destroyed work, and three were in the first minute of a new user's
+experience.
+
+`0.2.0` was prepared and committed but never tagged, so it shipped only as
+source on `master`; **0.2.1 is the first release carrying its contents.** The
+`[0.2.0]` link below now resolves because the tag was cut retroactively at
+`7f6b1f7`, the commit whose version carriers already said 0.2.0.
+
+### Fixed — `gnomon loop` could unschedule another project's supervision
+
+`installLoop` and `uninstallLoop` identified a crontab line by
+`line.includes("# gnomon-loop:" + name)`. That is a substring test on a name,
+with no notion of which project the line belongs to, and crontab is machine-wide.
+Two consequences, both reproduced:
+
+- **Prefix collision.** With `tidy` and `tidy-up` both installed,
+  `gnomon loop uninstall tidy` removed *both*.
+- **Cross-project clobbering.** `gnomon loop install tidy` in project B silently
+  deleted project A's `tidy` line — the filter that clears the stale entry before
+  writing the new one matched across projects too — while printing
+  `installed tidy`. A loop supervising production in A could be unscheduled by
+  an unrelated install in B, with nothing said.
+
+A crontab line has always carried `cd "<root>"`, so the project was recoverable
+from every line gnomon has ever written; it was simply discarded. `parseCronLine`
+now reads back both the name (to end-of-line, not by substring) and the root, and
+install/uninstall/status/list are scoped to the current project.
+
+`gnomon loop kill` was the machine-wide stop and stays available as
+`--all`; bare `kill` now stops this project and *reports* what it left running
+elsewhere, with the command to reach it. An escape hatch that silently reaches
+into unrelated repositories is not an escape hatch.
+
+The crontab layer had **no tests at all**, which is how both survived. It has six
+now, against the exact line format `installLoop` writes.
+
+### Fixed — a healthy local endpoint reported as failed, depending on which command asked
+
+`probeEndpointAuth` was called with three different timeouts for the same
+operation: 15s from `/endpoints` in the loop, 20s from `gnomon endpoint list`,
+30s from `gnomon endpoint test`. Measured on a cold ollama serving
+`qwen3.6:35b` — the model `gnomon init` selects on that machine — a first call
+takes 17.7s and 23.9s. So in the same minute:
+
+```
+gnomon endpoint test local    ✓ answered a real completion
+/endpoints                    ✗ The operation was aborted due to timeout
+```
+
+and `/endpoints` was a coin-flip run to run. There is now one
+`PROBE_TIMEOUT_MS`, set above a cold model load rather than at it, and a test
+that reads the call sites and fails if any passes its own.
+
+### Fixed — a skill written with YAML front matter was silently wrong
+
+`---` fences are the dominant convention, and **this repository ships both**:
+`.claude/skills/` is YAML, `.gnomon/skills/` is TOML. A skill written with the
+wrong fences parsed as "no front matter at all": no description, no `match` — so
+it applied to **every turn** — and its own `---\nname: …\n---` header went into
+the model's prompt as instruction text. It listed indistinguishably from a
+working skill, as `use-tabs — use-tabs`.
+
+The front matter is now stripped regardless (it is not instruction text under any
+reading), and both `gnomon skills list` and `/skills` say what is wrong and how
+to fix it. Loading is unchanged: a skill that vanishes is harder to debug than
+one that explains itself.
+
+### Fixed — three `/explain` topics printed a blank line
+
+`routing`, `sandbox` and `verify` appeared in the `/explain` index with no
+summary beside them, while `/explain routing` rendered its summary correctly.
+Each topic defined `summary` twice: once in its builder, once in a hand-kept
+`SUMMARIES` map that the index read and that the three had never been added to.
+The map is now the single source, the builders read from it, and `TOPICS` is
+keyed by it — so a topic without a summary does not compile. The existing tests
+checked that every topic had a *name* and that the counts matched, both of which
+stayed true throughout.
+
+### Fixed — the starter surface failed the auditor it ships with
+
+`gnomon init` wrote a `roles.toml` whose `verifier` named `python -m pytest` in
+`bash_allow`. gnomon's own startup audit flags that (an allow-list of program
+*names* does not bound a role that can reach an interpreter), so **every fresh
+project greeted its user with a six-line warning about config gnomon had just
+written**, on every launch. `pytest` alone runs the same suite and names no
+runtime; the interpreter deny is now in the template as well, so a later widening
+of `bash_allow` cannot reopen it.
+
+gnomon's own `.gnomon/roles.toml` had drifted behind the template it ships and
+warned three times over: the same `verifier` entry, plus `plan` and `coordinator`
+holding `task` with no `task_allow` — meaning either could delegate to any role
+in the file, and a sub-turn runs with the *target* role's tools. Both are named
+now. A fresh `gnomon init` and gnomon's own checkout both start clean.
+
+### Fixed — README's test count, and its CI claim
+
+The status line said 1023 TypeScript / 1080 total while the runners produced
+1034 / 1091, in the same paragraph that explains a *previous* miscount of that
+number — and claims the number is "what `.gnomon/ci.sh` reads back out of the
+runners". Nothing read it back. It does now: `.gnomon/ci.sh` compares the
+README's stated counts against the suite that just ran and fails with the line to
+paste. The same line still said CI ran "on Linux only" and that green on macOS
+meant "it compiles there", which stopped being true on 2026-09-05 when the macOS
+and Windows jobs began running the full suite.
+
+`gnomon-exec` was described as having 23 Rust tests; it has 27.
+
+### Tests
+
+1105, up from 1091 (57 Rust + 1048 TypeScript). The 14 added are the six
+crontab-identity tests, four skill front-matter tests, two `/explain` index
+tests, and two pinning the probe timeout.
+
 ## [0.2.0] — 2026-09-06
 
 **Breaking.** `agent.ts` and its exports (`ExtensionHost`, `HookPhase`,
@@ -1712,6 +1830,8 @@ was written.
   `git tag`, not a documentation edit as well.
 -->
 
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.1
+[0.2.0]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.0
 [0.1.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.1.1
 [0.1.0]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.1.0

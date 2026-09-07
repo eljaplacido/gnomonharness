@@ -19,13 +19,45 @@ import { resolveSessionStore } from "./session_store.js";
 import { loadSkills, loadProposedSkills } from "./skills.js";
 import { buildToolSet, MUTATING } from "./tools.js";
 const bullet = (s) => `  ${s}`;
+/**
+ * The one-line summary for every topic — the single source of truth.
+ *
+ * There were two. Each builder carried a `summary:` string literal, and this
+ * map restated them for the `/explain` index, which is the only place the
+ * one-liner is shown as a list. Three topics were never added to the map, so
+ * `/explain` printed:
+ *
+ *     /explain routing
+ *     /explain sandbox
+ *     /explain verify
+ *
+ * with nothing after the name, while `/explain routing` itself rendered its
+ * summary correctly. A duplicated string is a string that will disagree with
+ * itself; the builders now read from here, and `TOPICS` is keyed by this
+ * object, so a topic with no summary — or a summary with no topic — does not
+ * compile.
+ */
+const SUMMARIES = {
+    approval: "Which tool calls need your sign-off before they run",
+    audit: "A tamper-evident record of what happened and who approved it",
+    context: "How much of the conversation the model still sees",
+    endpoints: "Where inference goes — local, or any OpenAI-shaped API",
+    manifest: "The content hash of everything that decides how the agent behaves",
+    roles: "Who answers a turn, and what they are allowed to touch",
+    routing: "Which role answers a turn, and why that is a declared rule rather than a judgement",
+    sandbox: "What the level actually confines — and what it does not",
+    sessions: "Conversations survive closing the terminal",
+    skills: "Notes the repository keeps about itself, reused every session",
+    tools: "What the agent can actually do, and what it cannot",
+    verify: "The one check that can contradict the model's account of its own work",
+};
 const TOPICS = {
     routing: (config, role) => {
         const r = resolveRouting(config);
         const rules = r.rules ?? [];
         return {
             topic: "routing",
-            summary: "Which role answers a turn, and why that is a declared rule rather than a judgement",
+            summary: SUMMARIES.routing,
             what: [
                 "Three modes. 'manual' — your current role answers, and a /role prefix",
                 "routes one turn. 'suggest' — a rule proposes and you confirm. 'auto' —",
@@ -58,7 +90,7 @@ const TOPICS = {
         const v = resolveVerify(config);
         return {
             topic: "verify",
-            summary: "The one check that can contradict the model's account of its own work",
+            summary: SUMMARIES.verify,
             what: [
                 "A command the surface names, run by the harness after a turn that changed",
                 "files. Not the agent's own test call — the agent reports a belief, and",
@@ -101,7 +133,7 @@ const TOPICS = {
         const deny = config.roles[role]?.bash_deny ?? [];
         return {
             topic: "sandbox",
-            summary: "What the level actually confines — and what it does not",
+            summary: SUMMARIES.sandbox,
             what: [
                 "Under 'confined' and 'strict', every TOOL PATH is resolved and must land",
                 "inside the repository root, or inside a root the surface has granted.",
@@ -142,7 +174,7 @@ const TOPICS = {
         const present = manifest.filter((s) => s.sha256);
         return {
             topic: "manifest",
-            summary: "The content hash of everything that decides how the agent behaves",
+            summary: SUMMARIES.manifest,
             what: [
                 "Every file in .gnomon/ is hashed -- except skills/proposed/ and",
                 "extensions/, which are excluded because nothing loads them -- and those",
@@ -178,7 +210,7 @@ const TOPICS = {
             .filter((n) => gate === "always" || MUTATING.has(n));
         return {
             topic: "approval",
-            summary: "Which tool calls need your sign-off before they run",
+            summary: SUMMARIES.approval,
             what: [
                 "Nothing that changes your repository runs without you seeing it first.",
                 "Writes and edits show a real diff; commands show the command.",
@@ -201,7 +233,7 @@ const TOPICS = {
         const routing = resolveRouting(config);
         return {
             topic: "roles",
-            summary: "Who answers a turn, and what they are allowed to touch",
+            summary: SUMMARIES.roles,
             what: [
                 "A role bundles a model, an endpoint, and a tool list. The tool list is",
                 "the real boundary — a verifier has no write tool, so it cannot alter what",
@@ -243,7 +275,7 @@ const TOPICS = {
         const roles = listRoles(config);
         return {
             topic: "endpoints",
-            summary: "Where inference goes — local, or any OpenAI-shaped API",
+            summary: SUMMARIES.endpoints,
             what: [
                 "An endpoint is a URL and a request shape. Roles point at one by name.",
                 "Declaring an endpoint does nothing on its own; nothing reaches it until",
@@ -290,7 +322,7 @@ const TOPICS = {
         const ctx = resolveContext(config);
         return {
             topic: "context",
-            summary: "How much of the conversation the model still sees",
+            summary: SUMMARIES.context,
             what: [
                 "Older turns fall out of the window as it fills. What happens to them is",
                 "`compaction`: dropped, reduced to their prompts, or folded into a running",
@@ -318,7 +350,7 @@ const TOPICS = {
         const pending = loadProposedSkills(config);
         return {
             topic: "skills",
-            summary: "Notes the repository keeps about itself, reused every session",
+            summary: SUMMARIES.skills,
             what: [
                 "A skill is a durable fact about this project — how it builds, where things",
                 "live, a convention worth not rediscovering. Matching skills are added to",
@@ -345,7 +377,7 @@ const TOPICS = {
         const a = resolveAudit(config);
         return {
             topic: "audit",
-            summary: "A tamper-evident record of what happened and who approved it",
+            summary: SUMMARIES.audit,
             what: [
                 "Every turn, tool call and approval decision, appended to a hash-chained",
                 "JSONL trail carrying the surface hash that produced the behaviour.",
@@ -374,7 +406,7 @@ const TOPICS = {
         const st = resolveSessionStore(config);
         return {
             topic: "sessions",
-            summary: "Conversations survive closing the terminal",
+            summary: SUMMARIES.sessions,
             what: [
                 "The conversation is saved after every turn. Resuming replays it — but not",
                 "the rules that produced it, which always come from the current surface.",
@@ -394,7 +426,7 @@ const TOPICS = {
         const paths = config.roles[role]?.write_allow;
         return {
             topic: "tools",
-            summary: "What the agent can actually do, and what it cannot",
+            summary: SUMMARIES.tools,
             what: [
                 "read, bash, write, edit, skill. The model receives schemas for whatever",
                 "this role may call and nothing else — a withheld tool is not something it",
@@ -426,23 +458,16 @@ const TOPICS = {
 export function explainTopics() {
     return Object.keys(TOPICS)
         .sort()
-        .map((topic) => ({ topic, summary: SUMMARIES[topic] ?? "" }));
+        .map((topic) => ({ topic, summary: SUMMARIES[topic] }));
 }
-const SUMMARIES = {
-    manifest: "The content hash of everything that decides how the agent behaves",
-    approval: "Which tool calls need your sign-off before they run",
-    roles: "Who answers a turn, and what they are allowed to touch",
-    endpoints: "Where inference goes — local, or any OpenAI-shaped API",
-    context: "How much of the conversation the model still sees",
-    skills: "Notes the repository keeps about itself, reused every session",
-    audit: "A tamper-evident record of what happened and who approved it",
-    sessions: "Conversations survive closing the terminal",
-    tools: "What the agent can actually do, and what it cannot",
-};
 /** Build the explanation for a topic, or null when it is not one. */
 export function explain(config, role, topic) {
-    const build = TOPICS[topic.toLowerCase().trim()];
-    return build ? build(config, role) : null;
+    // `topic` is whatever the user typed, so it is narrowed here rather than
+    // asserted: an unknown name is a null return, not an index into the table.
+    const key = topic.toLowerCase().trim();
+    if (!Object.prototype.hasOwnProperty.call(TOPICS, key))
+        return null;
+    return TOPICS[key](config, role);
 }
 /** Topic names, for completion and the index. */
 export function topicNames() {

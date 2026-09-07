@@ -13,6 +13,13 @@ top_p = 0.9
 max_steps = 20
 max_steps_total = 160
 tools = ["read", "glob", "grep", "compute", "todo", "task", "bash"]
+# A sub-turn runs with the TARGET role's tools, so this list is not the limit
+# of what this role can cause: `task` with no task_allow could delegate to any
+# role in the file, `implement` included, and write through it. Named, so the
+# blast radius of a plan turn is the two roles it is actually meant to drive.
+# Every role that carries out work, and no route back up to `coordinator`:
+# delegation runs downward. `smol` is summarisation and is not delegated to.
+task_allow = ["implement", "implementor", "critique", "verifier"]
 # Measured, 2026-09-02: this role holds `bash` and carried no bash_deny at
 # all, so the guard in tools.ts is skipped outright --
 # `if (ctx.bashDeny && ctx.bashDeny.length > 0)`. Every spelling `implement`
@@ -127,6 +134,10 @@ top_p = 0.9
 max_steps = 20
 max_steps_total = 160
 tools = ["read", "glob", "grep", "compute", "todo", "task", "write", "skill"]
+# Same reasoning as [roles.plan]: `task` delegates, and a sub-turn carries the
+# target role's tools rather than this one's. The coordinator specifies work;
+# these are the roles that carry it out.
+task_allow = ["plan", "implement", "verifier"]
 # No edit, so it cannot revise code in place, and write_allow so it cannot
 # create it either. Not .gnomon/**: skill proposals go to
 # .gnomon/skills/proposed/ through the skill tool, and accepting one is a
@@ -177,7 +188,10 @@ tools = ["read", "glob", "grep", "compute", "todo", "bash"]
 # nothing else. Remove it and the verifier can alter what it judges.
 bash_allow = [
   '^septacore check\b',
-  '^(cargo|pnpm|npm|yarn|pytest|python -m pytest|go|make)\s',
+  # 'python -m pytest' was here and named an interpreter, which an allow-list of
+  # program NAMES cannot bound: the same entry admitted 'python -m anything'.
+  # 'pytest' runs the suite and names no runtime.
+  '^(cargo|pnpm|npm|yarn|pytest|go|make)\s',
   '^(ls|cat|head|tail|grep|rg|find|git (status|diff|log|show))\s',
 ]
 bash_deny = [
@@ -186,5 +200,8 @@ bash_deny = [
   # write" created and deleted files through all three.
   '-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint',
   '\bxargs\b',
+  # Deny wins over allow, so a widened bash_allow cannot reopen this. A role
+  # that "cannot write" must not reach a language runtime.
+  '\b(awk|gawk|perl|python3?|ruby|node)\b',
 ]
 description = "Runs the suite and reports. Cannot write."

@@ -261,3 +261,64 @@ describe("skills the model is told about but not given", () => {
     expect(once).toBe(twice);
   });
 });
+
+/**
+ * YAML front matter is the likely mistake, so it must not be the silent one.
+ *
+ * `---` is what almost every other tool uses for front matter, and this
+ * repository ships BOTH conventions — .claude/skills/ is YAML, .gnomon/skills/
+ * is TOML. A file written with the wrong fences used to parse as "no front
+ * matter at all": no description, no match (so it applied to every single
+ * turn), and its own `---\nname: …\n---` header handed to the model as
+ * instruction text.
+ */
+describe("a skill written with YAML front matter", () => {
+  const yaml = [
+    "---",
+    "name: use-tabs",
+    "description: This project indents with tabs, never spaces",
+    "match: \\b(indent|format)\\b",
+    "---",
+    "Indent with tabs. Never spaces.",
+  ].join("\n");
+
+  it("is reported rather than silently accepted", () => {
+    const s = parseSkill("use-tabs", yaml, false);
+    expect(s.problem).toBeTruthy();
+    expect(s.problem).toMatch(/YAML/);
+    expect(s.problem).toMatch(/\+\+\+/);
+  });
+
+  it("never puts the front matter into the prompt body", () => {
+    const s = parseSkill("use-tabs", yaml, false);
+    expect(s.body).toBe("Indent with tabs. Never spaces.");
+    expect(s.body).not.toMatch(/---/);
+    expect(s.body).not.toMatch(/description:/);
+  });
+
+  it("leaves a correct TOML skill untouched and problem-free", () => {
+    const toml = [
+      "+++",
+      'name = "use-tabs"',
+      'description = "This project indents with tabs, never spaces"',
+      "match = '\\b(indent|format)\\b'",
+      "+++",
+      "",
+      "Indent with tabs. Never spaces.",
+    ].join("\n");
+    const s = parseSkill("use-tabs", toml, false);
+    expect(s.problem).toBeUndefined();
+    expect(s.description).toBe("This project indents with tabs, never spaces");
+    expect(s.match).toBeTruthy();
+    expect(s.body).toBe("Indent with tabs. Never spaces.");
+  });
+
+  it("still treats a plain markdown note as a valid always-on skill", () => {
+    // The cheapest possible skill stays valid — this is not a new requirement
+    // that every file carry front matter.
+    const s = parseSkill("note", "Prefer small commits.", false);
+    expect(s.problem).toBeUndefined();
+    expect(s.match).toBeUndefined();
+    expect(s.body).toBe("Prefer small commits.");
+  });
+});

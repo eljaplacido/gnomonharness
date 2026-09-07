@@ -86,6 +86,56 @@ pass "TypeScript tests passed ($TS_N)"
 echo ""
 pass "All $((RUST_N + TS_N)) tests passed ($RUST_N Rust + $TS_N TypeScript)"
 
+# ── 1b. README's test count is the count that just ran ──
+#
+# README's status line states a precise total AND says the number is "what
+# .gnomon/ci.sh reads back out of the runners". Nothing read it back. Measured
+# 2026-09-07: README said 1023 TypeScript / 1080 total while the runners in the
+# lines above produced 1034 / 1091 — a claim about the runners that the runners
+# had never been asked about, sitting in the very paragraph that explains a
+# PREVIOUS miscount of the same number.
+#
+# A hard check, not a report, because it is exact and self-describing: it can
+# only fire when the README is actually wrong, and it prints the line to paste.
+# Stating a precise number in prose is a promise to maintain it; the alternative
+# is to not state one.
+echo ""
+echo "═══ README test count ═══"
+python3 - "$RUST_N" "$TS_N" <<'READMECHECK'
+import re, sys
+rust_n, ts_n = int(sys.argv[1]), int(sys.argv[2])
+readme = open("README.md", encoding="utf-8").read()
+m = re.search(
+    r"(?P<ts>[\d,]+) TypeScript tests .*?and (?P<rust>[\d,]+) Rust tests "
+    r"[^*]*\*\*(?P<total>[\d,]+) total\*\*",
+    readme, re.S)
+if not m:
+    sys.exit("FAIL: could not find the test-count claim in README.md's status line.\n"
+             "      If the wording changed, update this check along with it.")
+num = lambda k: int(m.group(k).replace(",", ""))
+claimed_ts, claimed_rust, claimed_total = num("ts"), num("rust"), num("total")
+total = rust_n + ts_n
+problems = []
+if claimed_ts != ts_n:
+    problems.append(f"TypeScript: README says {claimed_ts}, the runners produced {ts_n}")
+if claimed_rust != rust_n:
+    problems.append(f"Rust: README says {claimed_rust}, the runners produced {rust_n}")
+if claimed_total != total:
+    problems.append(f"total: README says {claimed_total}, the runners produced {total}")
+if claimed_ts + claimed_rust != claimed_total:
+    problems.append(f"README does not add up: {claimed_ts} + {claimed_rust} != {claimed_total}")
+if problems:
+    sys.exit("FAIL: README.md's status line disagrees with the tests that just ran:\n  "
+             + "\n  ".join(problems)
+             + f"\n\n  The line should read {ts_n} TypeScript tests and {rust_n} Rust "
+               f"tests — **{total} total**.\n"
+               "  The per-package counts in the same sentence are not checked here;\n"
+               "  run `pnpm test` and read them off the four summaries.")
+print(f"README states {claimed_ts} TypeScript + {claimed_rust} Rust = {claimed_total}; "
+      f"the runners agree")
+READMECHECK
+pass "README's test count matches the run"
+
 
 # Everything below is a contract check. One scratch dir for all of them, and
 # the trap is re-armed to include it — the earlier trap only knew about the two

@@ -400,7 +400,14 @@ tools = ["read", "glob", "grep", "compute", "todo", "note", "bash"]
 # read-only. This list is what actually constrains it: the suite can be run,
 # nothing else. Remove it and the verifier can alter what it judges.
 bash_allow = [
-  '^(cargo|pnpm|npm|yarn|pytest|python -m pytest|go|make)\\s',
+  # 'python -m pytest' used to be here. It named an interpreter, and an
+  # allow-list of program NAMES does not bound a role by the names it appears
+  # to: 'python -m anything' matched the same entry. gnomon's own startup audit
+  # said so on every launch of every project init had just created -- the
+  # shipped starter surface failed the auditor it ships with, which teaches a
+  # new user that the yellow text is noise. 'pytest' on its own runs the same
+  # suite and names no interpreter.
+  '^(cargo|pnpm|npm|yarn|pytest|go|make)\\s',
   '^(ls|cat|head|tail|grep|rg|find|git (status|diff|log|show))\\s',
 ]
 bash_deny = [
@@ -409,6 +416,9 @@ bash_deny = [
   # write" created and deleted files through all three.
   '-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint',
   '\\bxargs\\b',
+  # Deny wins over allow, so this holds even if someone widens bash_allow
+  # later. A role that "cannot write" must not reach a language runtime.
+  '\\b(awk|gawk|perl|python3?|ruby|node)\\b',
 ]
 description = "Runs the suite and reports. Cannot write."
 

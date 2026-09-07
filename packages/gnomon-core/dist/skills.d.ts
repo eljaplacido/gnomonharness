@@ -32,6 +32,15 @@ export interface Skill {
     body: string;
     /** Whether this came from skills/ (active) or skills/proposed/ */
     proposed: boolean;
+    /**
+     * Why this file is not the skill its author meant to write.
+     *
+     * Set only when the file parses but the result is not what the text says —
+     * today, YAML front matter. Never a reason to drop the skill: it is reported
+     * beside it, because a skill that vanishes is harder to debug than one that
+     * says what is wrong with it.
+     */
+    problem?: string;
 }
 export declare const SKILLS_DIR = "skills";
 export declare const PROPOSED_DIR: string;

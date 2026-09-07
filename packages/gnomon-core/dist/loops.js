@@ -32,7 +32,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parseToml } from "./config.js";
 import { tmpdir } from "node:os";
 import { posixShell, NO_POSIX_SHELL } from "./tools.js";
@@ -297,13 +297,81 @@ function crontabWrite(text) {
         stdio: ["ignore", "pipe", "pipe"],
     });
 }
-/** Every loop name currently present in this machine's crontab. */
-export function installedLoops() {
+/**
+ * Read one crontab line back into the loop it schedules.
+ *
+ * The name is taken from the marker to the END OF LINE, not by substring
+ * search, and the root is recovered from the `cd` the line already carries.
+ * Both matter, and both were wrong:
+ *
+ *   - `l.includes(CRON_MARK + name)` is a prefix test. With `tidy` and
+ *     `tidy-up` both installed, `uninstallLoop("tidy")` matched the line for
+ *     `tidy-up` as well and removed both.
+ *   - The name alone is not an identity. crontab is machine-wide and the root
+ *     was discarded, so every loop in every project shared one namespace:
+ *     `loop status` in project B reported project A's loops as DRIFT and
+ *     exited 1, and `loop install tidy` in B silently deleted A's `tidy`
+ *     line — the filter that clears the old entry before writing the new one
+ *     matched across projects too.
+ *
+ * The line format is written by `installLoop` below and has always begun
+ * `<schedule> cd "<root>" && …`, so the root is recoverable from every line
+ * gnomon has ever installed. The quoting is `JSON.stringify`'s, so it is
+ * parsed back the same way rather than by unescaping it by hand.
+ */
+export function parseCronLine(line) {
+    const i = line.indexOf(CRON_MARK);
+    if (i < 0)
+        return null;
+    const name = line.slice(i + CRON_MARK.length).trim();
+    if (!name)
+        return null;
+    const m = line.match(/\bcd\s+("(?:[^"\\]|\\.)*")/);
+    let root = null;
+    if (m) {
+        try {
+            const parsed = JSON.parse(m[1]);
+            if (typeof parsed === "string")
+                root = parsed;
+        }
+        catch {
+            // A line whose cd target will not parse is treated as unattributable
+            // rather than being attributed to the wrong project.
+        }
+    }
+    return { name, root };
+}
+/** Every gnomon loop line in this machine's crontab, with the project each belongs to. */
+export function installedLoopEntries() {
     return crontabRead()
         .split("\n")
-        .filter((l) => l.includes(CRON_MARK))
-        .map((l) => l.slice(l.indexOf(CRON_MARK) + CRON_MARK.length).trim())
-        .filter(Boolean);
+        .map(parseCronLine)
+        .filter((e) => e !== null);
+}
+/**
+ * Loop names in this machine's crontab.
+ *
+ * With `root`, only the ones that project installed — plus any line carrying
+ * the marker with no recoverable root, which cannot be attributed to another
+ * project and so must not be hidden from this one. Without `root`, every one
+ * on the machine.
+ */
+export function installedLoops(root) {
+    const entries = installedLoopEntries();
+    const scoped = root === undefined
+        ? entries
+        : entries.filter((e) => e.root === null || sameRoot(e.root, root));
+    return scoped.map((e) => e.name);
+}
+/** Two paths naming the same directory, compared as the crontab stores them. */
+function sameRoot(a, b) {
+    const norm = (p) => {
+        const r = resolve(p);
+        // Windows paths are case-insensitive; crontab is POSIX-only, but the
+        // comparison is cheap to get right and the tests run on all three.
+        return process.platform === "win32" ? r.toLowerCase() : r;
+    };
+    return norm(a) === norm(b);
 }
 /** Machine-local environment for loops. Gitignored, never in the surface. */
 export const LOOP_ENV_FILE = "env";
@@ -328,16 +396,35 @@ export function installLoop(root, loop, gnomonBin) {
     // `set -a` exports everything the file defines, so a plain KEY=value works.
     const srcEnv = `[ -f ${JSON.stringify(envFile)} ] && set -a && . ${JSON.stringify(envFile)} && set +a;`;
     const line = `${cronExpr(loop.every)} cd ${JSON.stringify(root)} && ${srcEnv} ${gnomonBin} loop run ${loop.name} >> ${JSON.stringify(join(root, LOOP_STATE_DIR, "cron.log"))} 2>&1 ${CRON_MARK}${loop.name}`;
+    // Clear only THIS project's line for THIS loop. The old filter was a
+    // substring test on the name with no notion of a project, so installing
+    // `tidy` here removed another checkout's `tidy` and this one's `tidy-up`.
     const kept = crontabRead()
         .split("\n")
-        .filter((l) => l.trim() && !l.includes(`${CRON_MARK}${loop.name}`));
+        .filter((l) => l.trim() && !matches(l, loop.name, root));
     crontabWrite([...kept, line].join("\n"));
     return line;
 }
-export function uninstallLoop(name) {
-    const lines = crontabRead().split("\n");
-    const kept = lines.filter((l) => l.trim() && !l.includes(`${CRON_MARK}${name}`));
-    if (kept.length === lines.filter((l) => l.trim()).length)
+/** Does this crontab line schedule `name` for `root`? Exact name, scoped project. */
+function matches(line, name, root) {
+    const e = parseCronLine(line);
+    if (!e || e.name !== name)
+        return false;
+    if (root === undefined)
+        return true;
+    return e.root === null || sameRoot(e.root, root);
+}
+/**
+ * Remove a loop's crontab line.
+ *
+ * `root` scopes it to one project. Omitting it removes every line for that
+ * name on the machine, which is what the machine-wide stop wants and what
+ * every caller used to get whether it wanted it or not.
+ */
+export function uninstallLoop(name, root) {
+    const lines = crontabRead().split("\n").filter((l) => l.trim());
+    const kept = lines.filter((l) => !matches(l, name, root));
+    if (kept.length === lines.length)
         return false;
     crontabWrite(kept.join("\n"));
     return true;

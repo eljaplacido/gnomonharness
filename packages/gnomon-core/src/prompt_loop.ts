@@ -5186,12 +5186,16 @@ export function processCommand(cmd: string, state: PromptState): boolean {
           `      applies: ${sk.match ? `when the turn matches /${sk.match}/` : "always"}` +
             `${sk.roles ? `, for ${sk.roles.join(", ")}` : ""}`
         );
+        // "always" is the correct reading of a skill whose match never parsed,
+        // and indistinguishable from one that meant it. Say which this is.
+        if (sk.problem) console.log(paint(uiOf(state), "yellow", `      ⚠ ${sk.problem}`));
       }
 
       console.log(`\nProposed by an agent — not in use until you accept:`);
       if (pending.length === 0) console.log("  (none)");
       for (const sk of pending) {
         console.log(`  ${sk.id} — ${sk.description ?? sk.name}`);
+        if (sk.problem) console.log(paint(uiOf(state), "yellow", `      ⚠ ${sk.problem}`));
         console.log(`      gnomon skill accept ${sk.id}   ·   gnomon skill reject ${sk.id}`);
       }
       if (pending.length > 0) {
@@ -6607,7 +6611,7 @@ export async function runPromptLoop(
           const [, checks] = await Promise.all([
             Promise.all(
               testable.map(async (r) => {
-                probes.set(r.name, await probeEndpointAuth(r.endpoint, r.probeModel ?? "", 15000));
+                probes.set(r.name, await probeEndpointAuth(r.endpoint, r.probeModel ?? ""));
               })
             ),
             checkRoleModels(config).catch(() => null),

@@ -48,6 +48,15 @@ export interface Skill {
   body: string;
   /** Whether this came from skills/ (active) or skills/proposed/ */
   proposed: boolean;
+  /**
+   * Why this file is not the skill its author meant to write.
+   *
+   * Set only when the file parses but the result is not what the text says —
+   * today, YAML front matter. Never a reason to drop the skill: it is reported
+   * beside it, because a skill that vanishes is harder to debug than one that
+   * says what is wrong with it.
+   */
+  problem?: string;
 }
 
 export const SKILLS_DIR = "skills";
@@ -67,6 +76,34 @@ export function parseSkill(id: string, raw: string, proposed: boolean): Skill {
   const fence = /^\+\+\+\s*\n([\s\S]*?)\n\+\+\+\s*\n?/;
   const m = raw.match(fence);
   if (!m) {
+    // YAML front matter, caught rather than swallowed.
+    //
+    // "No front matter" and "front matter this parser does not read" are not
+    // the same file, and treating them the same is silent. A `---` skill got
+    // name = the filename, NO description, NO match — so it applied to every
+    // turn — and its own front matter went into the model's prompt as
+    // instruction text, because the body was the whole file.
+    //
+    // The mistake is likely, not hypothetical: `---` is the dominant
+    // convention, and THIS repository ships both — .claude/skills/ uses YAML,
+    // .gnomon/skills/ uses TOML. Someone copying the shape they just read
+    // writes this file.
+    const yaml = /^---\s*\n([\s\S]*?)\n---\s*\n?/.exec(raw);
+    if (yaml) {
+      return {
+        id,
+        name: id,
+        // Strip it regardless: whatever else is true, `---\nname: …\n---` is
+        // not instruction text and must not reach the prompt.
+        body: raw.slice(yaml[0].length).trim(),
+        proposed,
+        problem:
+          "front matter is YAML (--- fences); gnomon skills use TOML (+++ fences). " +
+          "Its name, description and match were NOT read, so this skill applies to " +
+          "every turn. Change the fences to +++ and the `key: value` lines to " +
+          '`key = "value"`.',
+      };
+    }
     return { id, name: id, body: raw.trim(), proposed };
   }
   const meta = parseToml(m[1]) as Record<string, unknown>;

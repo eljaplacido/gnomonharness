@@ -35,6 +35,7 @@ import {
   installLoop,
   uninstallLoop,
   installedLoops,
+  installedLoopEntries,
   cronExpr,
   writeState,
   LOOP_STATE_DIR,
@@ -258,7 +259,7 @@ async function cmdLoop(args: CliArgs): Promise<void> {
       console.log("No loops declared. Add .gnomon/loops/<name>.toml");
       return;
     }
-    const inst = new Set(installedLoops());
+    const inst = new Set(installedLoops(root));
     for (const l of loops) {
       const st = readState(root, l.name);
       const flag = st.tripped ? "BREAKER OPEN" : inst.has(l.name) ? "installed" : "declared";
@@ -302,12 +303,14 @@ async function cmdLoop(args: CliArgs): Promise<void> {
 
   if (sub === "uninstall") {
     const name = args.positional[0];
-    console.log(uninstallLoop(name!) ? `uninstalled ${name}` : `not installed: ${name}`);
+    // Scoped to this project: crontab is machine-wide, and an unscoped remove
+    // took another checkout's loop of the same name with it.
+    console.log(uninstallLoop(name!, root) ? `uninstalled ${name}` : `not installed: ${name}`);
     return;
   }
 
   if (sub === "status") {
-    const inst = new Set(installedLoops());
+    const inst = new Set(installedLoops(root));
     const declared = new Set(loops.map((l) => l.name));
     let drift = false;
     for (const l of loops) {
@@ -321,7 +324,20 @@ async function cmdLoop(args: CliArgs): Promise<void> {
     for (const n of inst) {
       if (!declared.has(n)) {
         drift = true;
-        console.log(`${n}\n  DRIFT: in crontab but not declared in .gnomon/loops/`);
+        console.log(`${n}\n  DRIFT: in crontab for this project but not declared in .gnomon/loops/`);
+      }
+    }
+    // Loops other checkouts installed are NOT drift here — they are declared,
+    // in their own surface. Reported, because a crontab entry running gnomon
+    // on this machine is worth knowing about, but never counted as this
+    // project's problem and never a non-zero exit.
+    const elsewhere = installedLoopEntries().filter(
+      (e) => e.root !== null && resolve(e.root) !== resolve(root)
+    );
+    if (elsewhere.length) {
+      console.log(`\nOther projects on this machine (not this surface's concern):`);
+      for (const r of [...new Set(elsewhere.map((e) => e.root!))]) {
+        console.log(`  ${r}  (${elsewhere.filter((e) => e.root === r).map((e) => e.name).join(", ")})`);
       }
     }
     if (drift) process.exitCode = 1;
@@ -336,10 +352,36 @@ async function cmdLoop(args: CliArgs): Promise<void> {
   }
 
   if (sub === "kill") {
-    // The global stop. A supervisor you cannot switch off is a liability.
+    // The stop. A supervisor you cannot switch off is a liability — but crontab
+    // is machine-wide, and the unscoped version of this unscheduled every other
+    // checkout's loops too, from a project that had nothing to do with them.
+    // So: this project by default, `--all` for the machine, and either way it
+    // says what it did not touch and how to reach it.
+    const all = args.flags["all"] !== undefined || args.positional.includes("--all");
     let n = 0;
-    for (const name of installedLoops()) if (uninstallLoop(name)) n++;
-    console.log(`uninstalled ${n} loop(s) from crontab`);
+    for (const name of new Set(installedLoops(all ? undefined : root))) {
+      if (uninstallLoop(name, all ? undefined : root)) n++;
+    }
+    console.log(
+      all
+        ? `uninstalled ${n} loop(s) from crontab (every project on this machine)`
+        : `uninstalled ${n} loop(s) from crontab for ${root}`
+    );
+    if (!all) {
+      const elsewhere = installedLoopEntries().filter(
+        (e) => e.root !== null && resolve(e.root) !== resolve(root)
+      );
+      if (elsewhere.length) {
+        const roots = [...new Set(elsewhere.map((e) => e.root!))];
+        console.log(
+          `\n${elsewhere.length} loop(s) are still scheduled from ${roots.length} other project(s):`
+        );
+        for (const r of roots) {
+          console.log(`  ${r}  (${elsewhere.filter((e) => e.root === r).map((e) => e.name).join(", ")})`);
+        }
+        console.log(`\nStop those too:  gnomon loop kill --all`);
+      }
+    }
     return;
   }
 
@@ -736,7 +778,7 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     for (const row of rows) {
       const model = args.flags.model ?? row.probeModel;
       if (!model) continue;
-      probes.set(row.name, await probeEndpointAuth(row.endpoint, model, 20000));
+      probes.set(row.name, await probeEndpointAuth(row.endpoint, model));
     }
     const modelChecks = await checkRoleModels(config).catch(() => null);
     printEndpoints(rows, resolveUi(config), probes, modelChecks);
@@ -883,7 +925,7 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
 
   // ── 5. Prove it, before writing anything ─────────────────────────────────
   process.stdout.write(`  Running one token through ${name} as ${model}… `);
-  const probe = await probeEndpointAuth(endpoint, model, 30000);
+  const probe = await probeEndpointAuth(endpoint, model);
   if (!probe.ok) {
     console.log("failed.");
     console.error(`\n  ✗ ${probe.status ?? ""} ${(probe.detail ?? "no response").slice(0, 300)}`);
@@ -1166,12 +1208,19 @@ async function cmdSkill(args: CliArgs): Promise<void> {
   if (sub === "list") {
     const active = loadSkills(config);
     const pending = loadProposedSkills(config);
+    // A skill whose front matter did not parse still lists, and says so. It
+    // used to list looking exactly like a working one — `use-tabs — use-tabs`,
+    // the id standing in for the description it never read.
+    const show = (s: { id: string; name: string; description?: string; problem?: string }) => {
+      console.log(`  ${s.id} — ${s.description ?? s.name}`);
+      if (s.problem) console.log(`      ⚠ ${s.problem}`);
+    };
     console.log("Active (.gnomon/skills/):");
     if (active.length === 0) console.log("  (none)");
-    for (const s of active) console.log(`  ${s.id} — ${s.description ?? s.name}`);
+    for (const s of active) show(s);
     console.log("\nProposed (.gnomon/skills/proposed/) — not loaded:");
     if (pending.length === 0) console.log("  (none)");
-    for (const s of pending) console.log(`  ${s.id} — ${s.description ?? s.name}`);
+    for (const s of pending) show(s);
     return;
   }
 
