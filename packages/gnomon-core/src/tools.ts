@@ -1284,8 +1284,23 @@ export function sandboxCommand(
 ): string {
   const ex = ctx.exec;
   if (!ex || ex.mode === "off") return command;
-  // Single-quoted for `sh -c`, so only the quote character needs escaping.
-  const inner = `'${command.replace(/'/g, `'\''`)}'`;
+  // Single-quoted for `sh -c`, so only the quote character needs escaping --
+  // and it was escaped WRONG. The POSIX idiom is `'\''`: close the quote,
+  // emit a backslash-escaped quote, reopen. That is four characters. Written as
+  // a JS template literal, `` `'\''` `` is only THREE -- `\'` in a template
+  // literal is just `'` -- so every apostrophe became `'''` and the escaping
+  // silently did nothing.
+  //
+  // Measured 2026-09-07, with the docker sandbox on:
+  //   echo 'hello world'  ->  sh -c 'echo '''hello world''''
+  //                       ->  argv: ["echo hello", "world"]
+  // so the container ran `echo hello` and `world` became $0 and vanished. With
+  // an ODD number of quotes (`don't`) the whole command is a shell syntax
+  // error instead. NOT a container escape -- host execution could not be
+  // reproduced through quote, $(), backtick or && vectors -- but silent
+  // corruption of a command in the SANDBOXED path is its own kind of bad: the
+  // operator is told a command ran, and a different command ran.
+  const inner = `'${command.replace(/'/g, `'\\''`)}'`;
   const uid = typeof process.getuid === "function" ? process.getuid() : 0;
   const gid = typeof process.getgid === "function" ? process.getgid() : 0;
   return [

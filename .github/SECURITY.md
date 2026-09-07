@@ -42,7 +42,10 @@ defeated before it was added:**
   a symlink escaped it in both directions until realpath was applied, dangling
   links included. The level governs tool paths and **not** `bash`.
 - `exec = "docker"` — the only setting that actually contains the shell:
-  `--network none`, non-root, one bind mount, container reaped on cancel.
+  `--network none`, the caller's own uid/gid (`--user $(id -u):$(id -g)`, so the
+  operator can still edit their repository afterwards — NOT a guarantee of
+  non-root: gnomon running as root gives root in the container), one bind
+  mount, container reaped on cancel.
 - `approval` — every tool consults it. A non-interactive run refuses a gated
   call rather than assuming consent.
 - `/allow` — whether the agent may write `.gnomon/` at all. Session-scoped,

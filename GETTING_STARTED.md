@@ -120,7 +120,8 @@ Tools (implement): read, glob, grep, compute, todo, write, edit, bash
 1. **Check `.gnomon/roles.toml`.** `init` asks your model host what it has and
    writes real model tags. If nothing was reachable it falls back to generic
    tags — which will be wrong. Point them at models you actually have.
-2. **Ignore the run dirs.** Add `.gnomon-sessions/` and `.gnomon-audit/` to your
+2. **Ignore the run dirs.** Add `.gnomon-sessions/`, `.gnomon-audit/`,
+   `.gnomon-jobs/` and `.gnomon-out/` to your
    `.gitignore`.
 
 ## 5. Your first task

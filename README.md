@@ -352,8 +352,9 @@ implementations agree.
 
 Requires **Node ≥ 20**, **pnpm 9**, and a **Rust toolchain**. For local
 inference, [Ollama](https://ollama.com) — though any OpenAI-shaped endpoint
-works. **Linux and macOS**; on **Windows use WSL2** (native PowerShell/cmd is
-unsupported — the `bash` tool is POSIX). See
+works. **Linux, macOS and Windows** — all three run the full TypeScript suite
+in CI. Windows needs **Git for Windows** for the POSIX shell the `bash` tool
+uses on every platform (WSL2 also works, but is not required). See
 [GETTING_STARTED.md](GETTING_STARTED.md) for the per-platform steps.
 
 ```bash
@@ -1819,8 +1820,11 @@ results and their caveats are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and th
   `bash_allow` where it matters. The loop says exactly this at startup.
 - **Windows needs a POSIX shell, and gnomon will tell you if it cannot find one.**
   Supported and tested as of 2026-09-05: `windows-latest` runs the full
-  TypeScript suite in CI, 899 passing with 3 skips that are POSIX behaviours
-  Windows does not have (the executable bit, and two `0600` file modes).
+  TypeScript suite in CI — the same four packages Linux runs, minus 3 skips
+  that are POSIX behaviours Windows does not have (the executable bit, and two
+  `0600` file modes). (This said "899 passing", a figure from 2026-09-05 that
+  was 146 short of the same file's own total by 2026-09-07 and that nothing
+  checked. A count stated in two places rots in one of them.)
 
   What it needs is **Git for Windows** — `winget install --id Git.Git` — because
   the `bash` tool runs commands through a POSIX shell on every platform. That is

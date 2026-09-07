@@ -17,7 +17,7 @@ still here for five days after that was written. This is the correction.
 
 What is actually true: gnomon **has** been run against Terminal-Bench, several
 times, and **the task-completion result is null**. On equal terms against
-opencode — same 44 tasks, same model, same clock, same night — 50.0% against
+opencode — same 34 paired tasks, same model, same clock, same night — 50.0% against
 47.1%, McNemar **p = 1.0000**
 ([peer-opencode-2026-09-02](../benchmarks/results/peer-opencode-2026-09-02/README.md)).
 The role chain, the model tier and the timeout-retry instruction each measured

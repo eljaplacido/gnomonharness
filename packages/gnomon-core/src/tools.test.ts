@@ -2,6 +2,7 @@
  * gnomon-core: Tool execution tests
  */
 
+import { execFileSync } from "node:child_process";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   mkdtempSync,
@@ -2012,11 +2013,42 @@ describe("sandboxCommand — where bash actually runs", () => {
     expect(sandboxCommand("ls", on, "run-7")).toContain("--name run-7");
   });
 
-  it("survives quotes in the command", () => {
-    const c = sandboxCommand(`echo 'it'\''s fine'`, on, "n");
-    expect(c).toContain("sh -c");
-    // the single quote is escaped rather than ending the wrapper's own quoting
-    expect(c.endsWith("'")).toBe(true);
+  it("survives quotes in the command — checked by running a shell, not by eyeballing the string", () => {
+    // This test used to assert `c.endsWith("'")`. The BROKEN output satisfied
+    // that too, so it passed the whole time there was a sandbox escape behind it.
+    //
+    // The bug: the POSIX idiom for a quote inside single quotes is `'\''` —
+    // four characters. Written as a JS template literal it is only THREE,
+    // because `\'` in a template literal is just `'`. So every quote in the
+    // command became `'''` and the escaping did nothing at all. Measured
+    // 2026-09-07 with the broken form:
+    //
+    //   grep 'a; touch /tmp/PWNED' f.txt
+    //     ->  docker … sh -c 'grep '''a; touch /tmp/PWNED''' f.txt'
+    //     ->  the host shell ends the docker command at the now-UNQUOTED `;`
+    //         and runs `touch` ON THE HOST, outside the container.
+    //
+    // bash_deny, bash_allow and the approval prompt all read the ORIGINAL text,
+    // where `; touch …` sits harmlessly inside a grep pattern. So the command
+    // that was approved was not the command that ran, and the fragment that
+    // escaped the container was never checked against any allow-list. It only
+    // bites when an operator turns the container ON to contain an agent.
+    //
+    // No assertion about the SHAPE of the string can catch that. This one runs
+    // a real shell and reads back the argv docker would have received.
+    const command = `grep 'a; touch /tmp/gnomon-escape-probe' f.txt`;
+    const line = sandboxCommand(command, on, "n");
+
+    const script = `docker() { printf '%s\\n' "$@"; }\n${line}`;
+    const argv = execFileSync("/bin/sh", ["-c", script], { encoding: "utf-8" })
+      .split("\n")
+      .filter(Boolean);
+
+    // The command arrives as ONE argument, byte-identical to what was asked.
+    expect(argv[argv.length - 1]).toBe(command);
+    // And nothing survives past it: an escape shows up either as extra
+    // arguments or as a second command the host shell ran on its own.
+    expect(argv.filter((a) => a.includes("touch"))).toHaveLength(1);
   });
 });
 
