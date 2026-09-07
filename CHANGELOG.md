@@ -34,8 +34,31 @@ experience.
 
 `0.2.0` was prepared and committed but never tagged, so it shipped only as
 source on `master`; **0.2.1 is the first release carrying its contents.** The
-`[0.2.0]` link below now resolves because the tag was cut retroactively at
-`7f6b1f7`, the commit whose version carriers already said 0.2.0.
+`[0.2.0]` link below resolves to a tag cut retroactively at `7f6b1f7`, the commit
+whose version carriers already said 0.2.0 — a source marker with no binaries,
+because it predates the packaging fix below.
+
+### Fixed — the Windows binary could be built but never published
+
+The release job's packaging step wrote its checksum with `shasum -a 256`, under a
+comment reading *"shasum is present on both runner images"* — true, and written
+when there were two. `windows-x64` joined the matrix on 2026-09-05 and no tag was
+pushed until 2026-09-07, so the first tag after it was the first time the step
+ran there:
+
+```
+line 42: shasum: command not found        (exit 127)
+```
+
+Git Bash ships coreutils' `sha256sum`, not the Perl `shasum`; macOS is the exact
+opposite; Linux has both. So no single one of the two works everywhere, and the
+Windows archive — which had compiled cleanly — had no way to reach a release.
+The step now picks whichever is present. Both print `<hash>  <name>`, so
+`SHA256SUMS` is byte-identical either way.
+
+Worth stating plainly: **v0.2.1 is the first gnomon release to ship a Windows
+binary**, and the platform has been "supported and tested" in the README since
+0.2.0.
 
 ### Fixed — `gnomon loop` could unschedule another project's supervision
 
