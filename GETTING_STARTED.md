@@ -26,6 +26,8 @@ still works if you prefer it.
 # 1. tools (skip any you already have)
 #    Node ≥20:  https://nodejs.org  (or nvm);  then:
 corepack enable pnpm
+pnpm setup            # sets PNPM_HOME. Without it the last step below FAILS.
+exec $SHELL           # pick up PNPM_HOME (or open a new terminal)
 #    Rust:      curl https://sh.rustup.rs -sSf | sh   (or https://rustup.rs)
 
 # 2. clone and build
@@ -33,6 +35,12 @@ git clone https://github.com/eljaplacido/gnomonharness.git ~/gnomon
 cd ~/gnomon
 pnpm run setup
 ```
+
+`pnpm setup` and `pnpm run setup` are two different commands and you need both,
+in that order. The first is pnpm's own one-time step that creates a global bin
+directory and puts it on your PATH; the second is gnomon's. Skip the first and
+the last stage of the second exits 1, because `pnpm link --global` with
+`PNPM_HOME` unset links the package, writes no shim, warns, and exits 0.
 
 ### Windows — natively (from PowerShell)
 
@@ -43,8 +51,20 @@ Supported and tested since 2026-09-05: CI runs the full suite on
 winget install --id Git.Git          # also provides the POSIX shell gnomon uses
 winget install --id OpenJS.NodeJS    # Node >= 20
 winget install --id Rustlang.Rustup  # Rust, for the native binaries
-corepack enable pnpm
+```
 
+**Now close this window and open a new PowerShell.** winget edits the PATH of
+future processes, not of the one that ran it — continuing in the same window is
+the most common way this install fails, with `node` or `cargo` "not recognized".
+
+```powershell
+corepack enable pnpm
+pnpm setup            # sets PNPM_HOME; without it the last step below exits 1
+```
+
+**Close and reopen PowerShell once more**, so `PNPM_HOME` is in the environment.
+
+```powershell
 git clone https://github.com/eljaplacido/gnomonharness.git $HOME\gnomon
 cd $HOME\gnomon
 pnpm run setup
@@ -55,7 +75,11 @@ shell on every platform, so that the same surface behaves the same way on every
 machine — `cmd.exe` would make the same hash mean two different languages. Git
 ships that shell. If gnomon cannot find one, `bash` refuses and tells you how to
 get it rather than running your commands under something else. Already have a
-shell you prefer? `set GNOMON_SHELL=C:\path\to\bash.exe`.
+shell you prefer? In PowerShell that is
+`$env:GNOMON_SHELL = 'C:\path\to\bash.exe'`; in cmd.exe,
+`set GNOMON_SHELL=C:\path\to\bash.exe`. (`set` is cmd syntax and does
+nothing in PowerShell — it was the only form given here, in a PowerShell
+section.)
 
 Two things differ on Windows and say so when they happen:
 
@@ -94,10 +118,53 @@ hashes.
 
 ---
 
-`setup` installs dependencies, builds the native binaries, and puts `gnomon` on
-your PATH. Confirm with `which gnomon`. (pnpm may print `WARN … has no
-binaries` — harmless; it creates the shim anyway.)
+`setup` installs dependencies, builds the native binaries, type-checks every
+TypeScript package, and puts `gnomon` on your PATH. Confirm with `which gnomon`
+(`Get-Command gnomon` in PowerShell).
 
+If pnpm prints `WARN … has no binaries`, **that is the failure, not a note** —
+it means `PNPM_HOME` was unset, so no shim was written. `setup` now says so and
+exits 1 rather than reporting success. Run `pnpm setup`, open a new terminal,
+and re-run `pnpm run link:global`. (This paragraph used to call that warning
+harmless and claim the shim was created anyway. It is not, and it was not.)
+
+
+### Prebuilt binaries — if you would rather not install Rust
+
+`launch`, `prompt`, `task` and `init` need no Rust toolchain. `surface`,
+`apply` and `session` do, because they are the native crates. If you want those
+without installing rustup, take them from a release instead.
+
+This section is referenced from three places — `pnpm run setup`'s cargo-missing
+message, `build:native`, and README — and until now it did not exist anywhere in
+the repository.
+
+```bash
+# Pick the archive for your platform from
+#   https://github.com/eljaplacido/gnomonharness/releases
+#   linux-x64 · linux-arm64 · darwin-arm64 · windows-x64
+V=0.2.1; ARCH=linux-arm64
+curl -LO https://github.com/eljaplacido/gnomonharness/releases/download/v$V/gnomon-$V-$ARCH.tar.gz
+curl -LO https://github.com/eljaplacido/gnomonharness/releases/download/v$V/gnomon-$V-$ARCH.tar.gz.sha256
+sha256sum -c gnomon-$V-$ARCH.tar.gz.sha256      # shasum -a 256 -c on macOS
+tar -xzf gnomon-$V-$ARCH.tar.gz
+
+# Point the harness at them, and stamp provenance so records name the release
+export GNOMON_BIN_OVERRIDE="$PWD/gnomon-$V-$ARCH"
+export GNOMON_BUILD="$(cat "$PWD/gnomon-$V-$ARCH/GNOMON_BUILD")"
+```
+
+In PowerShell the last two are `$env:GNOMON_BIN_OVERRIDE = "$PWD\gnomon-$V-$ARCH"`
+and `$env:GNOMON_BUILD = (Get-Content "$PWD\gnomon-$V-$ARCH\GNOMON_BUILD")`.
+
+Without the second export the harness reports `gnomon/<version>+<sha>` from
+whatever checkout it runs in, instead of the release you actually installed.
+
+**Verified 2026-09-07**, on an arm64 Linux machine that had never run a release
+build: the checksum matched, all four binaries ran, and `gnomon surface`
+returned the *same* hash as a locally compiled binary — which is the property
+the whole project rests on, checked across two independently built binaries for
+the first time. Not yet verified on darwin-arm64 or windows-x64 hardware.
 
 ## 3. Launch it in a project
 

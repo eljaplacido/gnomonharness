@@ -8,10 +8,19 @@
  * no external anchor cannot detect a wholesale rewrite by someone holding the
  * file. Knowing exactly where the guarantee ends is the useful result.
  */
-import { verifyTrail, recordHash } from "/home/eljaplacido/Desktop/gnomon/packages/gnomon-core/dist/audit.js";
+const { verifyTrail, recordHash } = await import(`${REPO}/packages/gnomon-core/dist/audit.js`);
 import { writeFileSync, readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Repo root resolved from THIS file, not hardcoded. It was
+// "/home/eljaplacido/Desktop/gnomon", so the script ran only on the machine that wrote it --
+// while .gitignore un-ignores these traces on the stated grounds that
+// "a published result that cites a trace a clone does not have is not
+// evidence, it is an assertion". Same idiom as
+// benchmarks/surface-fidelity/fidelity.mjs.
+const REPO = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "");
+
 
 const load = (p) => readFileSync(p, "utf-8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 const save = (p, rs) => writeFileSync(p, rs.map((r) => JSON.stringify(r)).join("\n") + "\n");

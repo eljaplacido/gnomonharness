@@ -3,9 +3,13 @@
 # Underpowered for the score by construction; aimed at the MECHANISM counts,
 # which are the pre-registered strong endpoint and need far fewer trials to
 # show a direction.
+# Repo root resolved from THIS script, not hardcoded to the path of the
+# machine that wrote it, so a clone can re-run the published result.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")"/../../../.. && pwd)"
+
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; BENCH="$(cd "$HERE/.." && pwd)"
-REPO=/home/eljaplacido/Desktop/gnomon
+REPO=$REPO
 cd "$HERE"
 export OPENROUTER_API_KEY="$(tr -d '\r\n' < "$REPO/api.txt")"
 MODEL=openrouter/deepseek/deepseek-v4-flash

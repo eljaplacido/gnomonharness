@@ -12,12 +12,20 @@
  * session is flooded until the window evicts that turn, and we ask what
  * survives under each policy.
  */
-import { buildMessages, compactSession, loadConfig, buildSystemPrompt } from
-  "/home/eljaplacido/Desktop/gnomon/packages/gnomon-core/dist/index.js";
+const { buildMessages, compactSession, loadConfig, buildSystemPrompt } = await import(`${REPO}/packages/gnomon-core/dist/index.js`);
 import { writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
-const GN = "/home/eljaplacido/Desktop/gnomon/packages/gnomon-cli/gnomon.js";
+// Repo root resolved from THIS file, not hardcoded. It was
+// "/home/eljaplacido/Desktop/gnomon", so the script ran only on the machine that wrote it --
+// while .gitignore un-ignores these traces on the stated grounds that
+// "a published result that cites a trace a clone does not have is not
+// evidence, it is an assertion". Same idiom as
+// benchmarks/surface-fidelity/fidelity.mjs.
+const REPO = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "");
+
+
+const GN = `${REPO}/packages/gnomon-cli/gnomon.js";
 const CODEWORD = "MARMALADE-7731";
 
 function surface(dir, compaction, maxTokens) {

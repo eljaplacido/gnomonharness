@@ -374,10 +374,14 @@ poisoned `gnomon-surface` failed it immediately — so the probe could detect a
 call, and there was none. (`launch`, `prompt`, `task` and `init` use no native
 binary and work without a Rust toolchain.)
 
-It prints `WARN ... has no binaries` — pnpm emits that while reading the
-manifest and creates the shim anyway. Confirm with `which gnomon`; if it is
-missing, run `pnpm setup` once (pnpm's own command, which configures the global
-bin directory) and reopen the shell.
+If it prints `WARN ... has no binaries`, **that is the failure, not a note**:
+with `PNPM_HOME` unset — the default after `corepack enable pnpm` — pnpm links
+the package, writes no shim onto PATH, warns, and exits 0. `link:global` now
+detects that and exits 1 rather than reporting success. Run `pnpm setup` once
+(pnpm's own command, which configures the global bin directory), reopen the
+shell, and re-run `pnpm run link:global`. Confirm with `which gnomon`
+(`Get-Command gnomon` in PowerShell). This paragraph used to say pnpm "creates
+the shim anyway"; it does not.
 
 `pnpm run unlink:global` removes it.
 

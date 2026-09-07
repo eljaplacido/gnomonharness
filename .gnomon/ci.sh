@@ -558,6 +558,38 @@ else
     pass "All $(echo "$ADAPTERS" | wc -l) benchmark adapter(s) run uncapped, like the stock ones"
 fi
 
+# ── 11. Committed apparatus is runnable from a clone ──
+#
+# .gitignore un-ignores the benchmark traces on the stated grounds that "a
+# published result that cites a trace a clone does not have is not evidence, it
+# is an assertion". Measured 2026-09-07: 14 tracked scripts under benchmarks/
+# opened with `import … from "/home/<maintainer>/Desktop/gnomon/…"`, so not one
+# of the published results could be re-run by anybody else. The traces were
+# present and the apparatus was not portable, which lands in the same place.
+#
+# SCOPE, stated so nobody reads more into a green tick than is here:
+#   - EXECUTABLE apparatus under benchmarks/ and scripts/ only: .sh, .mjs,
+#     .js, .py. Not .json — benchmarks/results/**/data/*.json is recorded
+#     evidence, and several task instructions in it quote paths like
+#     /usr/local/server/home/user1/llvm-project. Rewriting captured evidence to
+#     satisfy a lint is the opposite of the point.
+#   - Not the TypeScript suite either: loops.test.ts pins crontab parsing with
+#     synthetic paths like /home/a/proj as DATA, and a gate that fired on those
+#     would be switched off within a week.
+#   - Comment lines are exempt: several of those files now record in a comment
+#     what the path used to be, which is worth keeping.
+echo ""
+echo "═══ Committed apparatus is runnable from a clone ═══"
+HOME_HITS=$(git grep -nI -E '/home/[a-z_][a-z0-9_-]*/' -- \
+    'benchmarks/**/*.sh' 'benchmarks/**/*.mjs' 'benchmarks/**/*.js' \
+    'benchmarks/**/*.py' 'scripts/*' 2>/dev/null \
+    | grep -vE ':[0-9]+:[[:space:]]*(#|//|\*)' || true)
+if [ -n "$HOME_HITS" ]; then
+    echo "$HOME_HITS"
+    fail "A committed script under benchmarks/ or scripts/ hardcodes someone's home directory (above). Resolve the repo root from the script's own location, or read the path from an environment variable with a \$HOME default."
+fi
+pass "No committed apparatus hardcodes a home directory"
+
 # ── 10. Which prose documents are owed a reading ──
 #
 # A REPORT, never a failure, and the distinction is the whole design. Prose rot

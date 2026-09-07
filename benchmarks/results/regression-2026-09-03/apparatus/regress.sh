@@ -28,7 +28,7 @@ run () {  # $1=label $2=ref
     --agent-import-path adapters.gnomon.gnomon_agent:GnomonAgent \
     --model openrouter/deepseek/deepseek-v4-flash \
     --agent-kwarg gnomon_ref=$2 \
-    --dataset-path /home/eljaplacido/gnomon-bench/terminal-bench/original-tasks \
+    --dataset-path "${TB_DATASET:-$HOME/gnomon-bench/terminal-bench/original-tasks}" \
     "${TASK_ARGS[@]}" \
     --n-attempts 1 --n-concurrent 8 --run-id "$ID" \
     --global-agent-timeout-sec 900 --output-path "runs/$ID" > "logs-$ID.txt" 2>&1

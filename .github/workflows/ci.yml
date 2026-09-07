@@ -66,6 +66,30 @@ jobs:
       - name: Run tests
         run: pnpm test --filter gnomon-core --filter gnomon-natives --filter gnomon-cli --filter gnomon-tui
 
+      # THE DOCUMENTED INSTALL PATH, which nothing here ran until now.
+      #
+      # `pnpm run setup` is the one install command GETTING_STARTED gives
+      # native-Windows users, and until 2026-09-07 it was POSIX shell:
+      # `command -v`, `>/dev/null 2>&1`, `{ …; }`, `printf`, `exec $SHELL`.
+      # pnpm runs scripts through cmd.exe on Windows unless `script-shell` is
+      # set, and no .npmrc here sets one -- so the documented command could not
+      # execute at all. Every step above passed while that was true, because
+      # every step above runs cargo/pnpm/vitest directly and never the script a
+      # newcomer is told to run.
+      #
+      # `build:native` and `link:global` are Node now. This runs them.
+      # link:global's exit code is NOT asserted: it exits 1 by design when
+      # PNPM_HOME is unset, which is a property of the runner's environment
+      # rather than of the script. What is asserted is that both EXECUTE -- the
+      # thing that was impossible before.
+      - name: The documented install scripts run on Windows
+        shell: pwsh
+        run: |
+          node scripts/build-native.mjs
+          if ($LASTEXITCODE -ne 0) { throw "build:native failed on Windows" }
+          node scripts/link-global.mjs
+          Write-Host "link:global exited $LASTEXITCODE (0 = on PATH, 1 = PNPM_HOME unset; both are real outcomes)"
+
   # macOS ran no tests at all until 2026-09-05 -- the only macOS job built
   # gnomon-surface, so README's "green on macOS" honestly meant "it compiles
   # there". A platform the project claims to support and does not test is a

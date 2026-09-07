@@ -856,8 +856,27 @@ async function callEndpointWithRetry(
    */
   const transportKind = (r: { content?: string }): string => {
     const text = r.content ?? "";
+    // Errno FIRST, and it decides on its own.
+    //
+    // The 5xx branch below matched the word "unavailable", and gnomon's own
+    // generic transport error reads `Model unavailable at <url>: <msg>` -- so
+    // EVERY connection refusal, DNS failure and timeout matched it and was
+    // reported as "endpoint erroring (5xx)". The `return "endpoint
+    // unreachable"` line was dead for the exact case it was written for.
+    // Measured 2026-09-07: a typo'd host is reported eleven times as the
+    // provider having a bad day, sending the operator to a status page instead
+    // of to their own URL.
+    //
+    // The errno is already in the message; it is not ambiguous, and it is not
+    // English.
+    if (/\b(ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT)\b/.test(text)) {
+      return "endpoint unreachable";
+    }
     if (/\b429\b|rate.?limit/i.test(text)) return "endpoint rate limiting (429)";
-    if (/\b5\d\d\b|overloaded|unavailable/i.test(text)) return "endpoint erroring (5xx)";
+    // Only a real status code now. "overloaded" is Anthropic's own wording for
+    // a 529 and stays; "unavailable" is gone, because it was gnomon's word for
+    // a failure it had already classified.
+    if (/\b5\d\d\b|overloaded/i.test(text)) return "endpoint erroring (5xx)";
     return "endpoint unreachable";
   };
   for (let attempt = 1; attempt <= resilience.attempts; attempt++) {

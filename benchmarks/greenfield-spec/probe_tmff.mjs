@@ -5,10 +5,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
-const REPO = "/home/eljaplacido/Desktop/gnomon";
+const REPO = `${REPO}";
 const core = (m) => import(`${REPO}/packages/gnomon-core/dist/${m}`);
 const { loadConfig } = await core("config.js");
 const { runAgenticTurn } = await core("prompt_loop.js");
+
+// Repo root resolved from THIS file, not hardcoded. It was
+// "/home/eljaplacido/Desktop/gnomon", so the script ran only on the machine that wrote it --
+// while .gitignore un-ignores these traces on the stated grounds that
+// "a published result that cites a trace a clone does not have is not
+// evidence, it is an assertion". Same idiom as
+// benchmarks/surface-fidelity/fidelity.mjs.
+const REPO = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
+
 
 const root = mkdtempSync(join(tmpdir(), "tmff-"));
 execFileSync(`${REPO}/node_modules/.bin/tsx`, [`${REPO}/packages/gnomon-cli/src/index.ts`, "init"],

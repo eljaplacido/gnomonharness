@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+import pathlib
+# Repo root resolved from THIS script, not hardcoded to the path of the
+# machine that wrote it, so a clone can re-run the published result.
+REPO = pathlib.Path(__file__).resolve().parents[2]
+
 """T7 — does the harness catch a fix that does not work?
 
 "Code quality" measured as model output would mostly measure the MODEL, and on a
@@ -17,7 +22,7 @@ person reading the transcript would have believed and been wrong about.
 import json, os, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
 
-GN = os.environ.get("GNOMON_JS", "/home/eljaplacido/Desktop/gnomon/packages/gnomon-cli/gnomon.js")
+GN = os.environ.get("GNOMON_JS", "" + str(REPO) + "/packages/gnomon-cli/gnomon.js")
 ENDPOINT = os.environ.get("BENCH_ENDPOINT_URL", "http://127.0.0.1:18080/v1/chat/completions")
 MODEL = os.environ.get("BENCH_MODEL", "bench-model")
 N = int(os.environ.get("TRIALS", "5"))

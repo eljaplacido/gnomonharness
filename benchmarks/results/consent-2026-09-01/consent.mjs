@@ -17,9 +17,18 @@
  * and a declining approver are used at every level: `strict` must refuse even
  * when the approver says yes, and `all` must not consult it at all.
  */
-import { executeTool } from "/home/eljaplacido/Desktop/gnomon/packages/gnomon-core/dist/tools.js";
+const { executeTool } = await import(`${REPO}/packages/gnomon-core/dist/tools.js`);
 import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+
+// Repo root resolved from THIS file, not hardcoded. It was
+// "/home/eljaplacido/Desktop/gnomon", so the script ran only on the machine that wrote it --
+// while .gitignore un-ignores these traces on the stated grounds that
+// "a published result that cites a trace a clone does not have is not
+// evidence, it is an assertion". Same idiom as
+// benchmarks/surface-fidelity/fidelity.mjs.
+const REPO = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "");
+
 
 const root = "/tmp/t9-consent";
 const surfaceFile = join(root, ".gnomon", "roles.toml");

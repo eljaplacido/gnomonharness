@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+import pathlib
+# Repo root resolved from THIS script, not hardcoded to the path of the
+# machine that wrote it, so a clone can re-run the published result.
+REPO = pathlib.Path(__file__).resolve().parents[2]
+
 """T8 — can the harness write a test that actually pins behaviour?
 
 The agent sees only the BROKEN module and is never told what the bug is. It is
@@ -18,7 +23,7 @@ import json, os, re, shutil, subprocess, tempfile
 from pathlib import Path
 from fixtures import FIXTURES
 
-GN = os.environ.get("GNOMON_JS", "/home/eljaplacido/Desktop/gnomon/packages/gnomon-cli/gnomon.js")
+GN = os.environ.get("GNOMON_JS", "" + str(REPO) + "/packages/gnomon-cli/gnomon.js")
 ENDPOINT = os.environ.get("BENCH_ENDPOINT_URL", "http://127.0.0.1:18080/v1/chat/completions")
 MODEL = os.environ.get("BENCH_MODEL", "bench-model")
 N = int(os.environ.get("TRIALS", "3"))

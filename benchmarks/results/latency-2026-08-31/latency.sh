@@ -8,11 +8,15 @@
 # The floor is the raw endpoint: whatever a bare HTTP call to the same model
 # costs is time NEITHER harness can avoid. Overhead is measured against it, and
 # a negative number would mean the apparatus is wrong.
+# Repo root resolved from THIS script, not hardcoded to the path of the
+# machine that wrote it, so a clone can re-run the published result.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")"/../../.. && pwd)"
+
 set -u
 cd "$(dirname "$0")"
 N="${1:-7}"
 EP=http://127.0.0.1:18080/v1/chat/completions
-GN=/home/eljaplacido/Desktop/gnomon/packages/gnomon-cli/gnomon.js
+GN=$REPO/packages/gnomon-cli/gnomon.js
 OCHOME=/tmp/claude-1000/-home-eljaplacido-Desktop-gnomon/3e2cdabf-9dae-4d33-ab10-ce4e461c33e7/scratchpad/bench/containment_peers/.ochome
 PROMPT="Reply with exactly the word READY and nothing else."
 
@@ -67,7 +71,7 @@ oc=()
 for i in $(seq 1 $N); do
   a=$(ms)
   timeout 120 env HOME=$OCHOME OPENCODE_CONFIG=/tmp/lat-oc/opencode.json OPENCODE_DISABLE_AUTOUPDATE=1 \
-    /home/eljaplacido/.opencode/bin/opencode run --dir /tmp/lat-oc "$PROMPT" >/dev/null 2>&1
+    "${OPENCODE_BIN:-$HOME/.opencode/bin/opencode}" run --dir /tmp/lat-oc "$PROMPT" >/dev/null 2>&1
   b=$(ms); oc+=($((b-a)))
 done
 cd "$(dirname "$0")"; echo -n "  opencode      "; stat "${oc[@]}"

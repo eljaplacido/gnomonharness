@@ -7,9 +7,13 @@
 # restart, docker networks are pruned between cells (leaked networks broke three
 # earlier arms at 38-44 trials), and STATUS is rewritten after every cell so the
 # operator can read one file on waking.
+# Repo root resolved from THIS script, not hardcoded to the path of the
+# machine that wrote it, so a clone can re-run the published result.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")"/../../../.. && pwd)"
+
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; BENCH="$(cd "$HERE/.." && pwd)"
-REPO=/home/eljaplacido/Desktop/gnomon
+REPO=$REPO
 cd "$HERE"
 STATUS="$HERE/OVERNIGHT_STATUS.txt"
 export OPENROUTER_API_KEY="$(tr -d '\r\n' < "$REPO/api.txt")"

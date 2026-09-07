@@ -12,9 +12,17 @@
  *   - a SILENT SUCCESS (code 0 for a call that did not do what it said)
  *   - a refusal reported as a result, or vice versa
  */
-import { executeTool, TOOL_OK, TOOL_DENIED, TOOL_FAILED, TOOL_NOT_DECLARED }
-  from "/home/eljaplacido/Desktop/gnomon/packages/gnomon-core/dist/tools.js";
+const { executeTool, TOOL_OK, TOOL_DENIED, TOOL_FAILED, TOOL_NOT_DECLARED } = await import(`${REPO}/packages/gnomon-core/dist/tools.js`);
 import { mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+
+// Repo root resolved from THIS file, not hardcoded. It was
+// "/home/eljaplacido/Desktop/gnomon", so the script ran only on the machine that wrote it --
+// while .gitignore un-ignores these traces on the stated grounds that
+// "a published result that cites a trace a clone does not have is not
+// evidence, it is an assertion". Same idiom as
+// benchmarks/surface-fidelity/fidelity.mjs.
+const REPO = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "");
+
 
 const root = "/tmp/tc-ws";
 const reset = () => { rmSync(root, { recursive: true, force: true }); mkdirSync(root + "/src", { recursive: true });

@@ -3327,7 +3327,19 @@ export function backgroundRecipe(command: string, log = `${JOB_LOG_DIR}/job.log`
   // /tmp under the default confined sandbox -- so following the harness's own
   // instructions produced a log the harness could not then read. Beside the
   // surface, like .gnomon-sessions/ and .gnomon-audit/.
-  return `mkdir -p ${JOB_LOG_DIR} && setsid sh -c ${quoted} </dev/null >${log} 2>&1 & echo $!`;
+  // `setsid` is util-linux and Git for Windows does not ship it, so on win32 the
+  // recipe the harness hands the model would fail with "setsid: command not
+  // found" -- on the one platform where a background job is hardest to debug.
+  // Nine `setsid` references existed across the source with no platform check
+  // near any of them.
+  //
+  // What it buys on POSIX is a new session, so a process-group kill aimed at
+  // the turn does not take the detached job with it. Without it the job is
+  // still backgrounded and still survives the tool call; it is simply in the
+  // same group. That is the right trade on a platform where the alternative is
+  // a command that does not run.
+  const detach = process.platform === "win32" ? "" : "setsid ";
+  return `mkdir -p ${JOB_LOG_DIR} && ${detach}sh -c ${quoted} </dev/null >${log} 2>&1 & echo $!`;
 }
 
 /**

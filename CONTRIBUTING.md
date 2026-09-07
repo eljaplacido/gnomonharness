@@ -1,9 +1,11 @@
 # CONTRIBUTING — gnomon
 
-Contributions are welcome, and the project is **maintainer-gated for now**: every
-change lands through a pull request that the maintainer reviews and merges.
-`master` is branch-protected — no direct pushes, no force-pushes — so the way in
-is always a PR.
+Contributions are welcome, and the project is **maintainer-gated for now**:
+every contributed change lands through a pull request that the maintainer
+reviews and merges. `master` is branch-protected — one approving review, three
+required checks, no force-pushes, no branch deletion — so for a contributor the
+way in is always a PR. The maintainer is exempt (`enforce_admins` is off) and
+does push directly; that is stated here rather than implied away.
 
 ## How to propose a change
 
@@ -37,9 +39,14 @@ reassuring.
 - **One maintainer, and that is the whole review bench.** `.github/CODEOWNERS`
   names one person for every path because there is one person. No PR gets a
   second reviewer, because there is no second reviewer.
-- **Merges are maintainer-gated.** `master` is branch-protected; every change
-  lands through a PR the maintainer approves and merges. Nobody self-merges,
-  including the maintainer — the same PR flow applies to their own work.
+- **Merges are maintainer-gated.** `master` is branch-protected; every
+  contributed change lands through a PR the maintainer approves and merges. A
+  contributor cannot self-merge: protection requires an approving review, and
+  it is not their own. The maintainer's own work goes direct — measured
+  2026-09-07, the previous twelve commits including two releases had no
+  associated PR. This bullet claimed the same flow applied to them; it does
+  not, and pretending otherwise is the kind of unchecked claim this repository
+  exists to catch.
 - **The gate is not the review.** Green CI is necessary and not sufficient:
   `.gnomon/ci.sh` proves the suite passes, and review is where the design
   argument happens. Red CI, though, is not reviewed at all — fix it first, or
@@ -89,19 +96,23 @@ is why step 1 asks for an issue first.
 ## Building
 
 ```bash
-# One-liner: builds the Rust binaries and every TS package
-pnpm run setup
+pnpm setup          # pnpm's own one-time step; sets PNPM_HOME. Needed once.
+pnpm run setup      # gnomon's
 ```
 
-<details><summary>The granular steps <code>setup</code> runs, if you need them</summary>
+<details><summary>The steps <code>pnpm run setup</code> actually runs</summary>
 
 ```bash
 pnpm install                 # dependencies
-cargo build --release        # Rust crates
-cd packages/gnomon-core && pnpm build
-cd ../gnomon-natives && pnpm build
-cd ../gnomon-cli && pnpm build
+pnpm run build:native        # cargo build --release, or a clear skip if no cargo
+pnpm run build               # tsc across all four TS packages
+pnpm run link:global         # puts `gnomon` on PATH, and EXITS 1 if it did not
 ```
+
+That list used to name five steps, three of which `setup` did not run — it
+chained `install`, `build:native` and `link:global` and never invoked `tsc` at
+all — while omitting the one step that can fail. Both are fixed: `build` is in
+the chain now, and this list is the chain.
 </details>
 
 ## The gate
@@ -126,7 +137,12 @@ that was not the behaviour.
 
 ## Branches
 
-Nothing lands on `master` directly — releases are cut from it. Branch as
+Contributor changes land on `master` only through a pull request: branch
+protection requires one approving review and three green checks. **The
+maintainer pushes directly**, and this said "nothing lands on `master`
+directly" while the last twelve commits — two of them releases — had no
+associated PR, because `enforce_admins` is off. Saying so is better than a rule
+only some people follow. Branch as
 `feat/<area>-<what>`, `fix/<area>-<what>`, `docs/<what>`, `chore/<what>`, one
 reviewable idea per branch. The starter surface's `bash_deny` refuses
 force-pushes and pushes straight onto `main`/`master`/`release`; that guardrail
@@ -134,12 +150,22 @@ binds the agent, and branch protection on the remote is what binds everyone.
 
 ## Running conformance tests
 
+The conformance fixtures under `conformance/` are checked by `.gnomon/ci.sh`,
+not by vitest — `pnpm test -- exit_codes` was documented here and exits 1 with
+"No test files found", because `exit_codes.json` is data read by that script.
+
 ```bash
-# Run all contract fixtures
+# Everything: both suites, every fixture, the coverage floor
+bash .gnomon/ci.sh
+
+# Just the test suites
 pnpm test
 
-# Run a specific fixture
-cd packages/gnomon-cli && pnpm test -- exit_codes
+# Run one package's suite
+pnpm --filter gnomon-cli test
+
+# Run one file
+cd packages/gnomon-core && pnpm exec vitest run src/skills.test.ts
 ```
 
 ## Cutting a release
