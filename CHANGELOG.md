@@ -24,6 +24,59 @@
   definitions at the foot of this file resolve only once the tags exist.
 -->
 
+## [0.2.3] — 2026-09-08
+
+**Installable without a clone, and without an npm account.** The release now
+carries the four npm tarballs alongside the platform binaries, so any machine
+with Node ≥ 20 can install gnomon in one command — no registry, no login, no
+pnpm, no Rust:
+
+```bash
+npm i -g https://github.com/eljaplacido/gnomonharness/releases/download/v0.2.3/gnomon-core-0.2.3.tgz \
+         https://github.com/eljaplacido/gnomonharness/releases/download/v0.2.3/gnomon-natives-0.2.3.tgz \
+         https://github.com/eljaplacido/gnomonharness/releases/download/v0.2.3/gnomon-tui-0.2.3.tgz \
+         https://github.com/eljaplacido/gnomonharness/releases/download/v0.2.3/gnomon-harness-0.2.3.tgz
+```
+
+Windows included — that command is identical in PowerShell. The registry publish
+(`npm i -g gnomon-harness`) is prepared and waiting only on credentials; nothing
+about the packages changes when it happens.
+
+### Added
+
+- **npm packaging.** Four publishable packages: `gnomon-harness` (the CLI —
+  the command is still `gnomon`), plus `gnomon-core`, `gnomon-natives` and
+  `gnomon-tui`. `publishConfig` points published consumers at compiled `dist/`
+  while the workspace keeps resolving `./src/*.ts`, so nothing about local
+  development or what vitest resolves moved.
+- **`scripts/check-publishable.sh`**, a required CI gate: packs all four exactly
+  as npm would, installs them into an empty directory with no tsx and no
+  checkout, and runs the binary. It fails if the tarball ships `src/` or
+  declares any third-party runtime dependency — the zero-runtime-dependency
+  property is now enforced on the *published* manifest rather than asserted
+  about the workspace one.
+- **`conformance/build_field.json`** pins the `build` field's four resolution
+  rules and its revision vocabulary.
+
+### Changed
+
+- **TypeScript 7 and vitest 5.** Three real breakages, none of them a version
+  bump: TS 7 stopped discovering `@types/node` implicitly under
+  `moduleResolution: "bundler"`; vitest 5 peers on `vite ≥ 6` and nothing
+  declared vite; and the tsc gate broke twice — `require.resolve
+  ("typescript/bin/tsc")` now throws, then TS5112 made a tsconfig in cwd an
+  error, so the gate reported that tsc rejects correct code.
+- **Coverage floor re-baselined** for the new provider, with both instruments'
+  numbers recorded. The covered counts went *up*; the denominators grew.
+- An installed copy reports provenance `+npm` rather than `+unknown`.
+- The "native binary not found" message now leads with the release download,
+  because its most likely reader has no checkout to build from.
+- **All three platforms are required checks** on `master`. Windows and macOS ran
+  on every PR and could not block one, so a Windows regression could merge —
+  and did, once, while this was being written.
+
+1112 tests (60 Rust + 1052 TypeScript), 19 gates.
+
 ## [0.2.2] — 2026-09-07
 
 **Security.** A single missing backslash let an approved command run outside the
@@ -1942,7 +1995,8 @@ was written.
   `git tag`, not a documentation edit as well.
 -->
 
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.3
 [0.2.2]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.2
 [0.2.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.1
 [0.2.0]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.0

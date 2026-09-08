@@ -319,6 +319,36 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # The npm tarballs ship WITH the release, so a machine with Node and
+      # nothing else can install gnomon from a URL. That is the whole install
+      # story for anyone who does not want a clone: `npm i -g <four URLs>` needs
+      # no registry account, no login, no pnpm and no Rust, and the command is
+      # identical in PowerShell.
+      #
+      # Built here rather than uploaded from the build matrix because they are
+      # platform-independent — one set covers Linux, macOS and Windows. The
+      # platform-specific half is the Rust archives above.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Pack the npm packages
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm -r run build
+          for p in gnomon-core gnomon-natives gnomon-tui gnomon-cli; do
+            ( cd "packages/$p" && pnpm pack --pack-destination "$GITHUB_WORKSPACE/dist" )
+          done
+          # The same gate .gnomon/ci.sh runs: if the tarball cannot install and
+          # run, it must not reach a release page where someone will try it.
+          bash scripts/check-publishable.sh
+
       # No third-party release action. The token that can publish a release is
       # the most privileged thing in this repository's CI, and `gh` is already
       # on the runner — handing that token to an action outside this workspace
@@ -345,6 +375,23 @@ jobs:
           Each archive contains gnomon-surface, gnomon-enums, gnomon-edit and
           gnomon-exec. Verify with \`SHA256SUMS\`.
 
+          ## Install without a clone
+
+          Node >= 20 and nothing else. Identical in bash and PowerShell:
+
+          \`\`\`
+          npm i -g \\
+            https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/gnomon-core-$VERSION.tgz \\
+            https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/gnomon-natives-$VERSION.tgz \\
+            https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/gnomon-tui-$VERSION.tgz \\
+            https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/gnomon-harness-$VERSION.tgz
+          \`\`\`
+
+          Then \`cd my-project && gnomon launch\`. That covers \`launch\`,
+          \`prompt\`, \`task\` and \`init\`; \`surface\`, \`apply\` and
+          \`session\` additionally want the native archive above, via
+          \`GNOMON_BIN_OVERRIDE\`.
+
           Changes: see [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md).
           EOF
           )
@@ -356,4 +403,4 @@ jobs:
             --verify-tag \
             --title "gnomon ${{ github.ref_name }}" \
             --notes "$notes" \
-            dist/*.tar.gz dist/*.sha256 dist/SHA256SUMS
+            dist/*.tar.gz dist/*.sha256 dist/SHA256SUMS dist/*.tgz

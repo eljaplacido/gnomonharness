@@ -20,15 +20,34 @@ still works if you prefer it.
 
 ## 2. Install
 
-### From npm — the short path
+### From a release — works today, on any machine with Node
+
+No registry account, no login, no clone, no pnpm, no Rust. **The command below
+is identical in bash and in PowerShell**, so it is also the Windows path:
+
+```bash
+V=0.2.3
+B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
+npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz \
+         $B/gnomon-tui-$V.tgz  $B/gnomon-harness-$V.tgz
+
+cd my-project && gnomon launch
+```
+
+The four are one package split up: `gnomon-harness` is the CLI and the other
+three are its libraries, so npm needs all four URLs — there is no registry entry
+to resolve them from yet.
+
+### From npm — once it is published
 
 ```bash
 npm install -g gnomon-harness      # the package; the command is `gnomon`
 cd my-project && gnomon launch
 ```
 
-That is everything `launch`, `prompt`, `task` and `init` need — no Rust, no
-clone, no pnpm. `surface`, `apply` and `session` additionally need the native
+The registry publish is prepared and waiting on credentials only; the packages
+are identical either way. Both paths cover everything `launch`, `prompt`, `task`
+and `init` need — no Rust, no clone, no pnpm. `surface`, `apply` and `session` additionally need the native
 binaries; add them from a release with the two exports under
 [Prebuilt binaries](#prebuilt-binaries--if-you-would-rather-not-install-rust),
 or build them from a clone.

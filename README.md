@@ -9,7 +9,11 @@ lives in one directory called `.gnomon/`. That directory is hashed. Clone the
 repo on another machine and you get the same agent.
 
 ```bash
-npm install -g gnomon-harness      # the package; the command is `gnomon`
+# Works today on Linux, macOS and Windows — Node >= 20, nothing else.
+# (Once published to the registry this is just: npm i -g gnomon-harness)
+V=0.2.3; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
+npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/gnomon-harness-$V.tgz
+
 cd my-project && gnomon launch
 ```
 
