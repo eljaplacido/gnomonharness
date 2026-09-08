@@ -1277,6 +1277,19 @@ function killTree(
  * The container is named after the run so a cancelled turn can remove it: the
  * process group kill that stops a host command does not stop a container.
  */
+/**
+ * One POSIX single-quoted shell word. The only correct way to put a value this
+ * process did not choose into a shell line.
+ *
+ * `'\''` -- four characters: close, escaped quote, reopen. Written as a JS
+ * template literal it is three, because `\'` in a template literal is just
+ * `'`; that is the bug this function exists to make unrepeatable, and it is
+ * why the replacement below uses a plain string rather than a template.
+ */
+export function shq(value: string): string {
+  return "'" + value.split("'").join("'\\''") + "'";
+}
+
 export function sandboxCommand(
   command: string,
   ctx: { root: string; exec?: { mode: "off" | "docker"; image: string; network: boolean } },
@@ -1296,11 +1309,12 @@ export function sandboxCommand(
   //                       ->  argv: ["echo hello", "world"]
   // so the container ran `echo hello` and `world` became $0 and vanished. With
   // an ODD number of quotes (`don't`) the whole command is a shell syntax
-  // error instead. NOT a container escape -- host execution could not be
-  // reproduced through quote, $(), backtick or && vectors -- but silent
-  // corruption of a command in the SANDBOXED path is its own kind of bad: the
-  // operator is told a command ran, and a different command ran.
-  const inner = `'${command.replace(/'/g, `'\\''`)}'`;
+  // error instead. It IS a container escape: `grep 'a; touch /tmp/X' f.txt`
+  // becomes `sh -c 'grep '''a; touch /tmp/X''' f.txt'`, whose `;` the host
+  // shell reads unquoted, and the tail runs outside the container -- after
+  // bash_deny, bash_allow and the approval prompt have all read the ORIGINAL
+  // text, where it was a harmless grep pattern.
+  const inner = shq(command);
   const uid = typeof process.getuid === "function" ? process.getuid() : 0;
   const gid = typeof process.getgid === "function" ? process.getgid() : 0;
   return [
@@ -1308,8 +1322,16 @@ export function sandboxCommand(
     `--name ${name}`,
     ex.network ? "" : "--network none",
     `--user ${uid}:${gid}`,
-    `-v ${JSON.stringify(ctx.root)}:${JSON.stringify(ctx.root)}`,
-    `-w ${JSON.stringify(ctx.root)}`,
+    // shq, NOT JSON.stringify. JSON.stringify produces a DOUBLE-quoted word,
+    // and `$( )` inside double quotes is still command substitution -- so a
+    // project directory named `/tmp/proj-$(cmd)` executed `cmd` on the host the
+    // moment the sandbox was switched on. Verified 2026-09-08 by running the
+    // constructed line through /bin/sh with docker stubbed: the marker file
+    // appeared. The command was fixed on 2026-09-07 and this half was left,
+    // which is the more common shape of a quoting bug -- one call site noticed,
+    // its neighbours not.
+    `-v ${shq(ctx.root)}:${shq(ctx.root)}`,
+    `-w ${shq(ctx.root)}`,
     ex.image,
     `sh -c ${inner}`,
   ]

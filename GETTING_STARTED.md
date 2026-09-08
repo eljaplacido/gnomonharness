@@ -40,6 +40,9 @@ to resolve them from yet.
 
 ### From npm — once it is published
 
+> This does **not** work yet — `gnomon-harness` is not on the registry and the
+> command below 404s today. Use the release path above until this note is gone.
+
 ```bash
 npm install -g gnomon-harness      # the package; the command is `gnomon`
 cd my-project && gnomon launch

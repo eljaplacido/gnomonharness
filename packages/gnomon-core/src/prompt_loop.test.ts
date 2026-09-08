@@ -3493,6 +3493,72 @@ describe("measureTreeDelta — measured, not asserted", () => {
   });
 
 
+
+  it("counts a file the turn CREATED — the most common thing an agent does", () => {
+    // `git diff --numstat HEAD` never lists an untracked file, so a turn whose
+    // whole work was writing new files recorded {files:0, insertions:0} — the
+    // same record as a turn that did nothing, in the field documented as
+    // "MEASURED, never the model's account of it".
+    //
+    // Both tests that arrived with the baseline used files the fixture had
+    // already committed, so neither could see this. Measured 2026-09-08:
+    // creating a 3-line file reported files:0.
+    const root = repo();
+    const before = promptLoop.treeSnapshot(root);
+    writeFileSync(join(root, "created.txt"), "a\nb\nc\n");
+    const d = promptLoop.measureTreeDelta(root, before);
+    expect(d.files).toBe(1);
+    expect(d.insertions).toBe(3);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("counts a binary file as changed, with no line counts to invent", () => {
+    // git prints `-` for both numstat columns of a binary file. Those were
+    // coerced to 0, which made `di === 0 && dd === 0` true for every binary
+    // change — so the baseline branch skipped them entirely. Nothing caught it
+    // because the suite had no binary fixture.
+    const root = repo();
+    writeFileSync(join(root, "img.bin"), Buffer.from([0, 1, 2, 3]));
+    execFileSync("git", ["add", "-A"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "bin"],
+      { cwd: root, stdio: "ignore" });
+
+    const before = promptLoop.treeSnapshot(root);
+    writeFileSync(join(root, "img.bin"), Buffer.from([0, 9, 9, 9, 9]));
+    const d = promptLoop.measureTreeDelta(root, before);
+    expect(d.files).toBe(1);
+    // Lines are the one thing that cannot be reported for a binary, and are not.
+    expect(d.insertions).toBe(0);
+    expect(d.deletions).toBe(0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("refuses to report a number when the turn committed, rather than inventing one", () => {
+    // Every count is relative to HEAD. `git commit` moves HEAD and empties the
+    // diff, so the baseline walk read every committed file as REVERTED and
+    // reported the turn as having REMOVED the lines it had just written — a
+    // regression introduced by the baseline itself.
+    //
+    // There is no honest number here, so none is given. `unavailable` already
+    // means "we could not measure", and the record must not read that as
+    // "nothing changed".
+    const root = repo();
+    const before = promptLoop.treeSnapshot(root);
+    writeFileSync(join(root, "work.txt"), "written by the turn\n");
+    const git = (...a: string[]) =>
+      execFileSync("git", a, { cwd: root, stdio: "ignore" });
+    git("add", "-A");
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "committed mid-turn");
+
+    const d = promptLoop.measureTreeDelta(root, before);
+    expect(d.unavailable).toBeTruthy();
+    expect(d.unavailable).toMatch(/HEAD moved/);
+    // And specifically NOT a negative count, which is what it used to report.
+    expect(d.insertions).toBe(0);
+    expect(d.deletions).toBe(0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("attributes only THIS turn's work, not the tree it started in", () => {
     // The whole point of the field, and it did not hold. `tree_delta` took one
     // snapshot at turn end and reported `git diff HEAD` -- i.e. the entire dirty

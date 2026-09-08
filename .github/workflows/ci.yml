@@ -64,7 +64,21 @@ jobs:
         run: pnpm run build
 
       - name: Run tests
-        run: pnpm test --filter gnomon-core --filter gnomon-natives --filter gnomon-cli --filter gnomon-tui
+        # `pnpm -r run test`, not an enumerated filter list.
+        #
+        # This was `--filter gnomon-core --filter gnomon-natives --filter
+        # gnomon-cli --filter gnomon-tui`. Renaming the CLI package to
+        # gnomon-harness for npm made `--filter gnomon-cli` match NOTHING, and
+        # pnpm does not fail when only some filters match — so this step kept
+        # exiting 0 while running three packages of four. On ubuntu the
+        # ci-script job still ran all of them, but on windows-latest and
+        # macos-latest nothing else did, so the 106 CLI tests silently stopped
+        # running on the two platforms whose path and shell handling those tests
+        # exist to cover.
+        #
+        # A list of names that must be kept in step with package.json is a list
+        # that will go stale. `-r` cannot.
+        run: pnpm -r run test
 
       # THE DOCUMENTED INSTALL PATH, which nothing here ran until now.
       #
@@ -122,7 +136,21 @@ jobs:
         run: pnpm run build
 
       - name: Run tests
-        run: pnpm test --filter gnomon-core --filter gnomon-natives --filter gnomon-cli --filter gnomon-tui
+        # `pnpm -r run test`, not an enumerated filter list.
+        #
+        # This was `--filter gnomon-core --filter gnomon-natives --filter
+        # gnomon-cli --filter gnomon-tui`. Renaming the CLI package to
+        # gnomon-harness for npm made `--filter gnomon-cli` match NOTHING, and
+        # pnpm does not fail when only some filters match — so this step kept
+        # exiting 0 while running three packages of four. On ubuntu the
+        # ci-script job still ran all of them, but on windows-latest and
+        # macos-latest nothing else did, so the 106 CLI tests silently stopped
+        # running on the two platforms whose path and shell handling those tests
+        # exist to cover.
+        #
+        # A list of names that must be kept in step with package.json is a list
+        # that will go stale. `-r` cannot.
+        run: pnpm -r run test
 
   ts-tests:
     name: TypeScript tests (core / natives / cli / tui)
@@ -157,7 +185,21 @@ jobs:
         run: pnpm run build
 
       - name: Run tests
-        run: pnpm test --filter gnomon-core --filter gnomon-natives --filter gnomon-cli --filter gnomon-tui
+        # `pnpm -r run test`, not an enumerated filter list.
+        #
+        # This was `--filter gnomon-core --filter gnomon-natives --filter
+        # gnomon-cli --filter gnomon-tui`. Renaming the CLI package to
+        # gnomon-harness for npm made `--filter gnomon-cli` match NOTHING, and
+        # pnpm does not fail when only some filters match — so this step kept
+        # exiting 0 while running three packages of four. On ubuntu the
+        # ci-script job still ran all of them, but on windows-latest and
+        # macos-latest nothing else did, so the 106 CLI tests silently stopped
+        # running on the two platforms whose path and shell handling those tests
+        # exist to cover.
+        #
+        # A list of names that must be kept in step with package.json is a list
+        # that will go stale. `-r` cannot.
+        run: pnpm -r run test
 
   ci-script:
     name: Full CI pipeline (.gnomon/ci.sh)

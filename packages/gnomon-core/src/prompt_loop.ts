@@ -1996,7 +1996,15 @@ export interface TreeDelta {
  * A numstat snapshot, for use as a turn-start baseline. Null when git cannot
  * answer, which is not an error -- the project may not be a repository.
  */
-export type TreeSnapshot = Map<string, [number, number]> | null;
+export interface TreeState {
+  /** Tracked files: path -> [insertions, deletions]. `null` counts mean binary. */
+  tracked: Map<string, [number | null, number | null]>;
+  /** Untracked, non-ignored files: path -> line count (null when binary). */
+  untracked: Map<string, number | null>;
+  /** The commit the diff is against. A turn that commits invalidates the rest. */
+  head: string | null;
+}
+export type TreeSnapshot = TreeState | null;
 
 export function treeSnapshot(root: string): TreeSnapshot {
   const d = measureTreeDelta(root, undefined, true);
@@ -2024,7 +2032,7 @@ export function measureTreeDelta(
   baseline?: TreeSnapshot,
   /** Internal: return the raw snapshot instead of a delta. */
   wantSnapshot = false
-): TreeDelta & { __snapshot?: Map<string, [number, number]> } {
+): TreeDelta & { __snapshot?: TreeState } {
   const run = (args: string[]): string | null => {
     try {
       return execFileSync("git", args, {
@@ -2034,46 +2042,130 @@ export function measureTreeDelta(
       return null;
     }
   };
-  const parse = (out: string): Map<string, [number, number]> => {
-    const m = new Map<string, [number, number]>();
+  const parse = (out: string): Map<string, [number | null, number | null]> => {
+    const m = new Map<string, [number | null, number | null]>();
     for (const line of out.split("\n")) {
       const parts = line.split("\t");
       if (parts.length < 3) continue;
       const ins = Number(parts[0]); const del = Number(parts[1]);
-      // "-" for binary files; count the file, not the lines.
-      m.set(parts[2]!, [Number.isFinite(ins) ? ins : 0, Number.isFinite(del) ? del : 0]);
+      // git prints "-" for both columns of a binary file. Kept as NULL rather
+      // than coerced to 0: with 0s, `di === 0 && dd === 0` is true for every
+      // binary change, and the baseline branch skipped them all. null says
+      // "changed, no line count" and the caller counts the file.
+      m.set(parts[2]!, [
+        Number.isFinite(ins) ? ins : null,
+        Number.isFinite(del) ? del : null,
+      ]);
     }
     return m;
   };
   const plain = run(["diff", "--numstat", "HEAD"]) ?? run(["diff", "--numstat"]);
   if (plain === null) return { files: 0, insertions: 0, deletions: 0, crlf_only: 0, unavailable: "not a git worktree" };
-  const a = parse(plain);
-  if (wantSnapshot) {
-    return { files: 0, insertions: 0, deletions: 0, crlf_only: 0, __snapshot: a };
+
+  // UNTRACKED FILES ARE THE POINT, and they were invisible.
+  //
+  // `git diff --numstat HEAD` never lists a file git has not been told about,
+  // so a turn whose work was CREATING files -- the single most common thing an
+  // agent does -- recorded `files:0, insertions:0`, which is exactly what doing
+  // nothing records. Measured 2026-09-08: writing a 3-line new file reported
+  // {"files":0,"insertions":0}. Both tests added with the baseline used files
+  // the fixture had committed, so neither could see it.
+  const untracked = new Map<string, number | null>();
+  for (const rel of (run(["ls-files", "--others", "--exclude-standard"]) ?? "")
+    .split("\n").map((l) => l.trim()).filter(Boolean)) {
+    untracked.set(rel, countLines(join(root, rel)));
   }
+  const head = (run(["rev-parse", "HEAD"]) ?? "").trim() || null;
+  const a = parse(plain);
+
+  if (wantSnapshot) {
+    return {
+      files: 0, insertions: 0, deletions: 0, crlf_only: 0,
+      __snapshot: { tracked: a, untracked, head },
+    };
+  }
+
+  // A COMMIT DURING THE TURN INVALIDATES THE BASELINE.
+  //
+  // Every count here is relative to HEAD. `git commit` moves HEAD and empties
+  // the diff, so the baseline walk below read every committed file as having
+  // been REVERTED and reported the turn as removing lines it had just written.
+  // Introduced by the baseline change itself; caught 2026-09-08. There is no
+  // honest number to give here, so none is given.
+  if (baseline && baseline.head && head && baseline.head !== head) {
+    return {
+      files: 0, insertions: 0, deletions: 0, crlf_only: 0,
+      unavailable: "HEAD moved during the turn (a commit); a diff against it cannot say what this turn did",
+    };
+  }
+
   const b = parse(run(["diff", "--numstat", "--ignore-cr-at-eol", "HEAD"]) ?? run(["diff", "--numstat", "--ignore-cr-at-eol"]) ?? "");
   let insertions = 0, deletions = 0, crlfOnly = 0, files = 0;
+
   for (const [file, [i, d]] of a) {
-    const [bi, bd] = baseline?.get(file) ?? [0, 0];
-    const di = i - bi, dd = d - bd;
-    // A file already dirty at turn start, and untouched since, is not this
-    // turn's work and is not counted.
+    const prev = baseline?.tracked.get(file);
+    // BINARY FILES ARE COUNTED, NOT SKIPPED. git prints `-` for both columns,
+    // which parse() keeps as null. Coercing that to 0 made `di === 0 && dd ===
+    // 0` true for every binary change, so the baseline branch skipped them
+    // entirely -- a regression from the same change, and invisible because the
+    // suite has no binary fixture.
+    const isBinary = i === null || d === null;
+    if (isBinary) {
+      const wasBinary = prev !== undefined;
+      if (baseline && wasBinary) continue;   // already changed at turn start
+      files++;
+      continue;                              // no line counts to add, by definition
+    }
+    const [bi, bd] = [prev?.[0] ?? 0, prev?.[1] ?? 0];
+    const di = i - (bi ?? 0), dd = d - (bd ?? 0);
     if (baseline && di === 0 && dd === 0) continue;
     files++;
     insertions += di; deletions += dd;
-    // Changed in the plain diff, unchanged once line endings are ignored.
     if (!b.has(file)) crlfOnly++;
   }
+
   // A file the turn REVERTED to its committed state leaves the numstat
   // entirely, so walking `a` alone would miss it. It is this turn's work.
   if (baseline) {
-    for (const [file, [bi, bd]] of baseline) {
+    for (const [file, [bi, bd]] of baseline.tracked) {
       if (a.has(file)) continue;
       files++;
-      insertions -= bi; deletions -= bd;
+      insertions -= bi ?? 0; deletions -= bd ?? 0;
     }
   }
+
+  // Untracked: created this turn, or grown/shrunk since it started.
+  for (const [file, lines] of untracked) {
+    const had = baseline?.untracked.has(file) ?? false;
+    const before = baseline?.untracked.get(file) ?? null;
+    if (baseline && had && before === lines) continue;   // untouched this turn
+    files++;
+    if (lines !== null) insertions += lines - (had && before !== null ? before : 0);
+  }
+  // An untracked file the turn DELETED.
+  if (baseline) {
+    for (const [file, lines] of baseline.untracked) {
+      if (untracked.has(file)) continue;
+      files++;
+      if (lines !== null) deletions += lines;
+    }
+  }
+
   return { files, insertions, deletions, crlf_only: crlfOnly };
+}
+
+/** Line count of a file, or null when it is binary or unreadable. */
+function countLines(path: string): number | null {
+  try {
+    const buf = readFileSync(path);
+    // Same heuristic git uses to call a file binary: a NUL in the first 8000 bytes.
+    if (buf.subarray(0, 8000).includes(0)) return null;
+    const text = buf.toString("utf-8");
+    if (text === "") return 0;
+    return text.endsWith("\n") ? text.split("\n").length - 1 : text.split("\n").length;
+  } catch {
+    return null;
+  }
 }
 
 export interface TurnCounters {

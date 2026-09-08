@@ -1994,9 +1994,12 @@ describe("sandboxCommand — where bash actually runs", () => {
   it("mounts the repository at the same absolute path it has outside", () => {
     // So absolute paths the model has already seen keep working, and its cwd
     // is unchanged from its point of view.
+    // Single-quoted now, not double: `$( )` inside a double-quoted word is
+    // still command substitution, so a project path could execute on the host.
+    // The property asserted here — same path inside and out — is unchanged.
     const c = sandboxCommand("ls", on, "n");
-    expect(c).toContain('-v "/repo":"/repo"');
-    expect(c).toContain('-w "/repo"');
+    expect(c).toContain("-v '/repo':'/repo'");
+    expect(c).toContain("-w '/repo'");
   });
 
   it("maps the caller, or every file comes back owned by root", () => {
@@ -2015,6 +2018,33 @@ describe("sandboxCommand — where bash actually runs", () => {
     // Killing the process group stops `docker run`, not the container it
     // started, so the work would continue after the turn gave up on it.
     expect(sandboxCommand("ls", on, "run-7")).toContain("--name run-7");
+  });
+
+  it("does not execute a project path that contains $( ), either", () => {
+    // The command was escaped on 2026-09-07 and its NEIGHBOURS were not. The
+    // same returned line interpolated ctx.root through JSON.stringify, which
+    // produces a DOUBLE-quoted word — and `$( )` inside double quotes is still
+    // command substitution. A project directory named `/tmp/proj-$(cmd)` ran
+    // `cmd` on the host the moment the sandbox was switched on. Verified by
+    // running the constructed line through /bin/sh with docker stubbed: the
+    // marker appeared.
+    //
+    // That is the more common shape of a quoting bug than the original: one
+    // call site noticed, its neighbours left. Everything goes through shq now.
+    if (process.platform === "win32") return;
+
+    const root = "/tmp/gnomon-probe-$(echo SUBSTITUTED)-x";
+    const line = sandboxCommand("ls", { ...on, root }, "n");
+    const script = `docker() { printf '%s\n' "$@"; }\n${line}`;
+    const argv = execFileSync("/bin/sh", ["-c", script], { encoding: "utf-8" })
+      .split("\n")
+      .filter(Boolean);
+
+    // The path must arrive verbatim, with the $( ) still literal text.
+    expect(argv).toContain(`${root}:${root}`);
+    expect(argv).toContain(root);
+    expect(argv.join(" ")).not.toContain("SUBSTITUTED\n");
+    expect(argv.some((a) => a.includes("$(echo SUBSTITUTED)"))).toBe(true);
   });
 
   it("survives quotes in the command — checked by running a shell, not by eyeballing the string", () => {

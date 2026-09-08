@@ -46,8 +46,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1052 TypeScript tests (925 core, 106 cli, 14
-> natives, 7 tui) and 60 Rust tests — **1112 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1056 TypeScript tests (929 core, 106 cli, 14
+> natives, 7 tui) and 60 Rust tests — **1116 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -356,8 +356,16 @@ implementations agree.
 > in more detail.
 
 ```bash
-npm install -g gnomon-harness      # package name; the command is `gnomon`
+# Node >= 20 and nothing else. Identical in bash and PowerShell.
+V=0.2.3; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
+npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/gnomon-harness-$V.tgz
 ```
+
+> **Not yet on the npm registry.** `npm i -g gnomon-harness` will be the command
+> once it is published; today it 404s, so the release tarballs above are the
+> install. They are the same four packages, byte for byte — the release job
+> builds them and refuses to publish a release whose tarballs do not install and
+> run. See [Prebuilt binaries](GETTING_STARTED.md) for the native half.
 
 Requires **Node ≥ 20** and a model endpoint — [Ollama](https://ollama.com) for
 local inference, or any OpenAI-shaped API. A **Rust toolchain** is needed only
