@@ -28,6 +28,18 @@ count_from() {
     echo "${total:-0}"
 }
 
+# A gate that inspected nothing may not report success.
+#
+# The most expensive bug shape this repo has produced, found twice by an outside
+# sweep and never by anything in here: A SELECTOR THAT MATCHES NOTHING RETURNS
+# SUCCESS. `--filter gnomon-cli` after the npm rename, and the `**/` git
+# pathspec below, both reported green having checked less than they claimed.
+# scripts/gate_scope.mjs carries the full account and the two modes; `identity`
+# is the real check and `scope` is the smoke alarm for sets with nothing to
+# derive from.
+scope() { node scripts/gate_scope.mjs floor "$1" "$2" || exit 1; }
+scope_identity() { node scripts/gate_scope.mjs identity "$1" --expected "$2" --actual "$3" || exit 1; }
+
 cd "$(dirname "$0")/.."
 
 # ── 1. Run all tests (Rust + TS) ──
@@ -62,6 +74,7 @@ if ! cargo test --all 2>&1 | tee "$RUST_LOG"; then
     fail "Rust tests failed"
 fi
 RUST_N=$(count_from "$RUST_LOG" 'test result: ok\. [0-9]+')
+scope "rust-tests" "$RUST_N"
 pass "Rust tests passed ($RUST_N)"
 
 echo ""
@@ -81,6 +94,30 @@ if ! pnpm test 2>&1 | tee "$TS_LOG"; then
     fail "TypeScript tests failed"
 fi
 TS_N=$(count_from "$TS_LOG" 'Tests +[0-9]+ passed')
+scope "ts-tests" "$TS_N"
+
+# EVERY workspace package that declares a `test` script must have REPORTED one.
+#
+# This is the check that would have caught the --filter bug on the day it
+# landed, and a floor would not have: three packages of four still ran, so the
+# total only dipped. Derived on both sides, so it cannot go stale -- adding a
+# package raises the requirement by itself, and no number is written down here
+# to drift.
+PKG_EXPECTED=$(mktemp); PKG_ACTUAL=$(mktemp)
+trap 'rm -f "$RUST_LOG" "$TS_LOG" "$PKG_EXPECTED" "$PKG_ACTUAL"' EXIT
+node -e '
+  const { readdirSync, readFileSync, existsSync } = require("node:fs");
+  for (const d of readdirSync("packages")) {
+    const m = `packages/${d}/package.json`;
+    if (!existsSync(m)) continue;
+    if (JSON.parse(readFileSync(m, "utf-8")).scripts?.test) console.log(d);
+  }
+' > "$PKG_EXPECTED"
+# pnpm prefixes every line of a recursive run with `packages/<dir> <script>:`.
+strip_ansi < "$TS_LOG" | grep -oE '^packages/[a-zA-Z0-9_-]+ test:[[:space:]]+Tests[[:space:]]+[0-9]+ passed' \
+    | sed -E 's#^packages/([a-zA-Z0-9_-]+) .*#\1#' | sort -u > "$PKG_ACTUAL" || true
+scope_identity "ts-packages" "$PKG_EXPECTED" "$PKG_ACTUAL"
+
 pass "TypeScript tests passed ($TS_N)"
 
 echo ""
@@ -564,18 +601,19 @@ fi
 echo ""
 echo "═══ Benchmark adapter clock parity ═══"
 ADAPTERS=$(git ls-files '*gnomon_agent.py' || true)
-if [ -z "$ADAPTERS" ]; then
-    echo "no committed adapters — nothing to check"
-else
-    BAD=""
-    for a in $ADAPTERS; do
-        if ! grep -q 'max_timeout_sec=float("inf")' "$a"; then BAD="$BAD $a"; fi
-    done
-    if [ -n "$BAD" ]; then
-        fail "adapter(s) self-cap their agent timeout:$BAD — stock adapters use float(\"inf\")"
-    fi
-    pass "All $(echo "$ADAPTERS" | wc -l) benchmark adapter(s) run uncapped, like the stock ones"
+# `if [ -z "$ADAPTERS" ]; then echo "nothing to check"` used to live here, and
+# passing. Renaming the adapter file would have retired -- silently, in a green
+# run -- the gate that exists because this exact bug class recurred twice. The
+# floor is 1: a gate with nothing to check is a gate that is gone.
+scope "benchmark-adapters" "$(printf '%s\n' "$ADAPTERS" | grep -c . || true)"
+BAD=""
+for a in $ADAPTERS; do
+    if ! grep -q 'max_timeout_sec=float("inf")' "$a"; then BAD="$BAD $a"; fi
+done
+if [ -n "$BAD" ]; then
+    fail "adapter(s) self-cap their agent timeout:$BAD — stock adapters use float(\"inf\")"
 fi
+pass "All $(printf '%s\n' "$ADAPTERS" | grep -c .) benchmark adapter(s) run uncapped, like the stock ones"
 
 # ── 11. Committed apparatus is runnable from a clone ──
 #
@@ -604,6 +642,22 @@ echo "═══ Committed apparatus is runnable from a clone ═══"
 # cost_report.py, claude_code_arm.py or reap.sh -- the five files that ARE the
 # apparatus. A single `*` crosses `/` in a pathspec and covers both levels.
 # The gate read as green over 98 files while 103 were in scope.
+# THE PATHSPEC MUST REACH EVERY FILE IT CLAIMS TO. This gate read green over
+# 98 files while 103 were in scope, because `benchmarks/**/*.py` cannot match a
+# file sitting directly in benchmarks/. Deriving the expected set a second way
+# -- filter the full tracked list by extension, no globbing involved -- is what
+# turns "the gate found nothing" into "the gate looked everywhere and found
+# nothing". A floor cannot do this: 98 of 103 clears any floor worth setting.
+APPARATUS_EXPECTED=$(mktemp); APPARATUS_ACTUAL=$(mktemp)
+git ls-files -- benchmarks scripts \
+    | grep -E '\.(sh|mjs|js|py)$' | sort -u > "$APPARATUS_EXPECTED" || true
+git ls-files -- 'benchmarks/*.sh' 'benchmarks/*.mjs' 'benchmarks/*.js' \
+    'benchmarks/*.py' 'scripts/*' \
+    | grep -E '\.(sh|mjs|js|py)$' | sort -u > "$APPARATUS_ACTUAL" || true
+scope "apparatus-files" "$(grep -c . < "$APPARATUS_ACTUAL" || true)"
+scope_identity "apparatus-pathspec" "$APPARATUS_EXPECTED" "$APPARATUS_ACTUAL"
+rm -f "$APPARATUS_EXPECTED" "$APPARATUS_ACTUAL"
+
 HOME_HITS=$(git grep -nI -E '/home/[a-z_][a-z0-9_-]*/' -- \
     'benchmarks/*.sh' 'benchmarks/*.mjs' 'benchmarks/*.js' \
     'benchmarks/*.py' 'scripts/*' 2>/dev/null \

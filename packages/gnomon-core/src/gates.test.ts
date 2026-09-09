@@ -196,6 +196,140 @@ describe("gate: the repository's own CI gates can fail", () => {
     expect(check("const n: number = 'not a number';\n"), "tsc accepted a type error").toBe(false);
     expect(check("const n: number = 42;\n"), "tsc rejected correct code — it is not really running").toBe(true);
   });
+
+  // ── The scope guard, against the two bugs it was built from ──
+  //
+  // A SELECTOR THAT MATCHES NOTHING RETURNS SUCCESS. The 2026-09-08 sweep found
+  // this twice, in unrelated gates, and neither was found by anything in this
+  // repository: `--filter gnomon-cli` after the npm rename (106 tests stopped
+  // running on macOS and Windows), and the git pathspec `benchmarks/**' + '/*.py`,
+  // which cannot match a file sitting directly in benchmarks/ (green over 98
+  // files while 103 were in scope).
+  //
+  // scripts/gate_scope.mjs is the answer, so it needs the treatment this whole
+  // file exists to apply: a gate nobody has watched fail is a gate that probably
+  // cannot. These replay both original bugs as inputs and require red.
+  describe("the scope guard catches a selector that stopped selecting", () => {
+    const REPO = join(__dirname, "..", "..", "..");
+    const SCRIPT = join(REPO, "scripts", "gate_scope.mjs");
+
+    /** Run gate_scope.mjs and report whether it PASSED. Never throws. */
+    const run = (args: string[]): { ok: boolean; out: string } => {
+      try {
+        const out = execFileSync(process.execPath, [SCRIPT, ...args], {
+          stdio: "pipe",
+          cwd: REPO,
+          encoding: "utf-8",
+        });
+        return { ok: true, out };
+      } catch (e) {
+        const err = e as { stdout?: string; stderr?: string };
+        return { ok: false, out: (err.stdout ?? "") + (err.stderr ?? "") };
+      }
+    };
+
+    /** A scratch pair of newline-delimited set files. */
+    const sets = (expected: string[], actual: string[]) => {
+      const dir = mkdtempSync(join(tmpdir(), "gnomon-scope-"));
+      const e = join(dir, "expected"), a = join(dir, "actual");
+      writeFileSync(e, expected.join("\n") + "\n");
+      writeFileSync(a, actual.join("\n") + "\n");
+      return { dir, e, a };
+    };
+
+    it("catches the --filter bug: a package that silently stopped reporting", () => {
+      const { dir, e, a } = sets(
+        ["gnomon-core", "gnomon-natives", "gnomon-cli", "gnomon-tui"],
+        ["gnomon-core", "gnomon-natives", "gnomon-tui"]
+      );
+      try {
+        const r = run(["identity", "ts-packages", "--expected", e, "--actual", a]);
+        expect(r.ok, "a missing package was reported as fine").toBe(false);
+        // Naming the item is the point: "1 of 4 missing" sends a maintainer
+        // looking, "gnomon-cli" tells them where.
+        expect(r.out).toContain("gnomon-cli");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("catches the `**/` pathspec bug: files the selector cannot reach", () => {
+      const { dir, e, a } = sets(
+        ["benchmarks/analyse.py", "benchmarks/results/x/run.py"],
+        ["benchmarks/results/x/run.py"]
+      );
+      try {
+        const r = run(["identity", "apparatus-pathspec", "--expected", e, "--actual", a]);
+        expect(r.ok, "a file outside the pathspec was reported as covered").toBe(false);
+        expect(r.out).toContain("benchmarks/analyse.py");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("passes when the selector reaches everything — it is not failing everything", () => {
+      // The direction that distinguishes a working check from one that is
+      // simply always red, which the tsc control above had to learn the hard way.
+      const { dir, e, a } = sets(["a", "b"], ["a", "b"]);
+      try {
+        expect(run(["identity", "x", "--expected", e, "--actual", a]).ok).toBe(true);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("refuses an empty expected set rather than calling it a match", () => {
+      // 0 of 0 items covered is the vacuous green in a new costume: it means
+      // the DERIVATION broke, and reporting success would hide that.
+      const { dir, e, a } = sets([], ["a"]);
+      try {
+        const r = run(["identity", "x", "--expected", e, "--actual", a]);
+        expect(r.ok).toBe(false);
+        expect(r.out).toContain("proves nothing");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("fails a floor breach, and passes above it", () => {
+      expect(run(["floor", "rust-tests", "1"]).ok, "a collapsed count passed").toBe(false);
+      expect(run(["floor", "rust-tests", "9999"]).ok, "a healthy count failed").toBe(true);
+    });
+
+    it("refuses a gate id with no declared floor instead of skipping it", () => {
+      // Skipping would reintroduce the bug: a gate calling scope() for an id
+      // nobody declared has no floor at all, and a silent skip reads as green.
+      const r = run(["floor", "no-such-gate-id", "5"]);
+      expect(r.ok).toBe(false);
+      expect(r.out).toContain("no floor declared");
+    });
+
+    it("treats an unparseable count as a broken gate, not as zero", () => {
+      // "" would compare as 0 and fail with 'inspected 0', sending a maintainer
+      // to hunt for deleted tests when the real fault is that the gate never
+      // reported. coverage_gate.mjs had to learn this same distinction.
+      const r = run(["floor", "rust-tests", "not-a-number"]);
+      expect(r.ok).toBe(false);
+      expect(r.out).toContain("not an integer");
+    });
+
+    it("every gate id ci.sh asks for is declared, with a reason", () => {
+      // The floors file is only load-bearing if ci.sh and it agree. A typo in
+      // either would otherwise surface as a CI failure nobody can place.
+      const ci = readFileSync(join(REPO, ".gnomon", "ci.sh"), "utf-8");
+      const floors = JSON.parse(
+        readFileSync(join(REPO, "scripts", "gate-scope-floors.json"), "utf-8")
+      ) as Record<string, { floor?: number; why?: string }>;
+      const asked = [...ci.matchAll(/^\s*scope "([a-z-]+)"/gm)].map((m) => m[1]);
+      expect(asked.length, "ci.sh calls scope() for nothing").toBeGreaterThan(0);
+      for (const id of asked) {
+        expect(floors[id], `ci.sh asks for "${id}", which has no floor`).toBeTruthy();
+        expect(typeof floors[id].floor, `${id}'s floor is not a number`).toBe("number");
+        // A floor with no reason is a number nobody can judge later.
+        expect(floors[id].why, `${id} has a floor but no why`).toBeTruthy();
+      }
+    });
+  });
 });
 
 describe("gate: the auditor reports each problem once", () => {

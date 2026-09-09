@@ -1,0 +1,63 @@
+{
+  "_comment": [
+    "HOW MANY THINGS EACH GATE MUST HAVE LOOKED AT BEFORE IT IS ALLOWED TO SAY",
+    "'pass'. A ratchet in the same sense as scripts/coverage-floor.json: the gate",
+    "fails when the number drops BELOW these, never for being above them, and it",
+    "does not raise itself.",
+    "",
+    "WHY THIS FILE EXISTS. The 2026-09-08 sweep of the released v0.2.3 found the",
+    "same bug twice, in two unrelated gates, and it is the most expensive bug",
+    "shape this repository has produced:",
+    "",
+    "  A SELECTOR THAT MATCHES NOTHING RETURNS SUCCESS.",
+    "",
+    "  - `pnpm --filter gnomon-cli` matched nothing once the package was renamed",
+    "    gnomon-harness for npm, and pnpm exits 0 when only SOME filters match.",
+    "    Three CI jobs kept exiting 0 while running three packages of four. The",
+    "    106 CLI tests stopped running on windows-latest and macos-latest — the",
+    "    exact two platforms whose path and shell handling those tests exist to",
+    "    cover — and nothing anywhere went red for two releases.",
+    "  - .gnomon/ci.sh's portability gate used the git pathspec",
+    "    `benchmarks/**/*.py`. A `**/` pathspec requires at least one",
+    "    intermediate directory, so the five files that ARE the apparatus, all",
+    "    sitting directly in benchmarks/, were never scanned. The gate read green",
+    "    over 98 files while 103 were in scope.",
+    "",
+    "Neither was a wrong answer. Both were a gate reporting success having",
+    "checked less than it claimed, which is worse than a failure: a red gate gets",
+    "fixed and a vacuous green one gets trusted.",
+    "",
+    "WHAT A FLOOR IS AND IS NOT. It is a smoke alarm for scope collapse, not an",
+    "assertion about the codebase. Set each one well below today's number, far",
+    "enough that ordinary work never trips it and a selector breaking always",
+    "does. A floor set AT the current count would fail on the first deleted test",
+    "and be switched off within a month — the same reasoning coverage-floor.json",
+    "already records.",
+    "",
+    "PREFER A DERIVED IDENTITY WHERE ONE EXISTS. ts-packages has no floor here",
+    "because it does not need one: the gate compares the packages that REPORTED",
+    "against the workspace packages that DECLARE a test script, so adding a",
+    "package raises the requirement automatically and no number here can go",
+    "stale. A floor is the fallback for sets with nothing to derive from.",
+    "",
+    "Measured 2026-09-09 at: rust-tests 60, ts-tests 1070, benchmark-adapters 3,",
+    "apparatus-files 102."
+  ],
+
+  "rust-tests": {
+    "floor": 40,
+    "why": "cargo test --all across four crates. Dropping under 40 means a crate stopped being compiled or `--all` stopped meaning all, not that tests were deleted."
+  },
+  "ts-tests": {
+    "floor": 800,
+    "why": "The whole TypeScript suite. gnomon-core alone is over 900; anything under 800 means a package did not run, which is the shape of the --filter bug rather than of deleted tests."
+  },
+  "benchmark-adapters": {
+    "floor": 1,
+    "why": "Committed *gnomon_agent.py adapters. At zero the clock-parity gate has nothing to check and used to say so and pass — a rename of the adapter file would have silently retired the gate that exists because this bug class recurred twice."
+  },
+  "apparatus-files": {
+    "floor": 90,
+    "why": "Tracked .sh/.mjs/.js/.py under benchmarks/ and scripts/ that the portability gate scans. The broken pathspec saw 98 of 103; a floor here would not have caught that five-file gap, but it does catch the pathspec breaking outright, which is the failure mode that retires the gate completely."
+  }
+}
