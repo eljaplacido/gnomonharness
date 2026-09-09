@@ -163,6 +163,35 @@ export function listSessions(store: ResolvedSessionStore): SessionListEntry[] {
 }
 
 /**
+ * How many .json files in the store are NOT conversations.
+ *
+ * `listSessions` is right to skip them -- `gnomon session <cmd>` writes command
+ * records into this same directory and they have no `id` and no `exchanges`.
+ * What was wrong was the sentence the CLI printed afterwards: "No sessions in
+ * <dir>" over a directory holding the file `gnomon session` had just named on
+ * stdout. A tool that denies the existence of the record it just wrote reads as
+ * data loss, and the user's next move is to go looking for a bug that is not
+ * there. Counting them lets the caller say what was skipped instead.
+ *
+ * Deliberately the same walk and the same shape test as `listSessions`, so the
+ * two cannot drift into disagreeing about what a conversation is.
+ */
+export function countNonConversations(store: ResolvedSessionStore): number {
+  if (!existsSync(store.dir)) return 0;
+  let n = 0;
+  for (const file of readdirSync(store.dir).filter((f) => f.endsWith(".json"))) {
+    try {
+      const snap = JSON.parse(readFileSync(join(store.dir, file), "utf-8")) as SessionSnapshot;
+      if (typeof snap.id !== "string" || !Array.isArray(snap.exchanges)) n += 1;
+    } catch {
+      // Unparseable is not a command record; it is a corrupt file, and saying
+      // "1 command record" about it would be a different false statement.
+    }
+  }
+  return n;
+}
+
+/**
  * Load a snapshot by id, or the most recent one.
  *
  * A snapshot from a future format is refused rather than half-read: replaying

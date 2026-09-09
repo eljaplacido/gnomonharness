@@ -150,6 +150,24 @@ describe("documented defaults are the actual defaults", () => {
     });
   });
 
+  // Both quick-start docs print a `gnomon launch` transcript, and both quoted
+  // eight tools for `implement` in an order the banner never uses -- the
+  // banner prints the list SORTED, and `note` was missing from both. A reader
+  // comparing their own first run against the doc finds a difference the doc
+  // does not explain. Found 2026-09-08.
+  it("the launch transcript in the docs quotes the tools the banner prints", async () => {
+    const getting = readFileSync(join(repoRoot, "GETTING_STARTED.md"), "utf-8");
+    await scaffold((root) => {
+      const config = loadConfig(root);
+      const banner = [...(config.roles.implement?.tools ?? [])].sort().join(", ");
+      for (const [name, doc] of [["README.md", readme], ["GETTING_STARTED.md", getting]] as const) {
+        const quoted = /Tools \(implement\): (.+)/.exec(doc)?.[1]?.trim();
+        expect(quoted, `${name} should show the banner`).toBeDefined();
+        expect(quoted, `${name} quotes a tool list the banner does not print`).toBe(banner);
+      }
+    });
+  });
+
   it("a read-only role cannot delegate its way to a write", async () => {
     // `task` runs a sub-turn under another role, with that role's tools. Give
     // it to the verifier and "cannot alter what it judges" stops being true by
@@ -446,6 +464,26 @@ describe("the CLI command surface agrees with itself, both directions", () => {
   it("every registered command is actually dispatched", () => {
     const dead = registry.filter((c) => !dispatched.has(c));
     expect(dead, `registered but not dispatched: ${dead.join(", ")}`).toEqual([]);
+  });
+
+  // `gnomon endpoint` shipped registered, dispatched, help-documented and
+  // absent from the README's CLI Reference for its whole life, because this
+  // block checked the registry against --help and never against the table a
+  // reader actually browses. Found 2026-09-08.
+  it("every primary command has a row in the README's CLI Reference", () => {
+    const table = readme.slice(readme.indexOf("## CLI Reference"));
+    const documented = new Set<string>();
+    for (const line of table.split("\n")) {
+      const m = /^\|\s*`gnomon ([^`]+)`/.exec(line);
+      if (!m) continue;
+      // The first token of the cell carries the names; `apply\|simulate` and
+      // `loop\|loops` share one row, so it may hold more than one.
+      for (const n of m[1]!.split(" ")[0]!.replace(/\\/g, "").split("|")) {
+        if (n) documented.add(n);
+      }
+    }
+    const absent = CLI_COMMANDS.map((c) => c.name).filter((n) => !documented.has(n));
+    expect(absent, `dispatched but absent from the README table: ${absent.join(", ")}`).toEqual([]);
   });
 
   it("every primary command appears in --help", () => {

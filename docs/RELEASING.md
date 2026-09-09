@@ -8,7 +8,7 @@ cannot be run until after the mistake has been pushed.
 ## The procedure
 
 ```bash
-scripts/bump-version.sh 0.2.0     # updates all six version carriers
+scripts/bump-version.sh 0.2.0     # updates all eight version carriers
 $EDITOR CHANGELOG.md              # add the section; move [Unreleased] links
 bash .gnomon/ci.sh                # includes the version-consistency gate
 git commit -am "release: v0.2.0"
@@ -17,13 +17,15 @@ git push origin master v0.2.0
 ```
 
 The tag push triggers `.github/workflows/release.yml`, which re-checks the
-version, builds binaries for three targets (linux-x64, linux-arm64, darwin-arm64), and opens a **draft** release. A
+version, builds binaries for four targets (linux-x64, linux-arm64, darwin-arm64,
+windows-x64) and the four npm tarballs the documented install uses, and opens a
+**draft** release. A
 human presses Publish. That is deliberate: the workflow decides nothing about
 whether a build is fit to install.
 
 ## Why a script rather than an instruction
 
-The version is written down in six places:
+The version is written down in eight places:
 
 | File | Why it matters |
 |---|---|
@@ -37,7 +39,7 @@ A half-bumped tree is not a cosmetic problem. It publishes records whose
 provenance names a version that was never released — which is the failure this
 harness exists to make impossible, occurring in the harness itself.
 
-`scripts/check-versions.sh` asserts all six agree. It runs in `.gnomon/ci.sh`
+`scripts/check-versions.sh` asserts all eight agree. It runs in `.gnomon/ci.sh`
 (so you catch it before tagging) and in the release workflow (so a tag cannot
 get past it).
 

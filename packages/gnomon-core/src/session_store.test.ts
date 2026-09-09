@@ -12,6 +12,7 @@ import {
   resolveSessionStore,
   saveSession,
   listSessions,
+  countNonConversations,
   loadSession,
   SESSION_FORMAT,
   SessionSnapshot,
@@ -112,6 +113,31 @@ describe("listing", () => {
     saveSession(store, snap({ id: "good" }));
     writeFileSync(join(store.dir, "broken.json"), "{ not json");
     expect(listSessions(store).map((e) => e.id)).toEqual(["good"]);
+  });
+
+  // `gnomon session <cmd>` prints the path it wrote and `gnomon sessions` then
+  // said "No sessions in <dir>" about the directory containing it. The filter
+  // is correct -- a command record is not a conversation -- but the sentence
+  // was not, and a tool that denies the record it just wrote reads as data
+  // loss. Reproduced end to end on 2026-09-09.
+  it("counts command records so the CLI can say what it skipped", () => {
+    mkdirSync(store.dir, { recursive: true });
+    // The shape `gnomon session` writes: no `id`, no `exchanges`.
+    writeFileSync(
+      join(store.dir, "session-2026-09-09T11-01-25-480Z.json"),
+      JSON.stringify({ steps: [{ command: "echo hi", bucket: "result" }] })
+    );
+    expect(listSessions(store)).toEqual([]);
+    expect(countNonConversations(store)).toBe(1);
+  });
+
+  it("does not count conversations, corrupt files or a missing directory", () => {
+    expect(countNonConversations(store)).toBe(0); // no directory at all
+    saveSession(store, snap({ id: "real" }));
+    writeFileSync(join(store.dir, "broken.json"), "{ not json");
+    // A conversation is not a command record, and neither is an unparseable
+    // file -- calling either one would put a different false number on screen.
+    expect(countNonConversations(store)).toBe(0);
   });
 });
 

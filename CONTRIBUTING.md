@@ -2,7 +2,7 @@
 
 Contributions are welcome, and the project is **maintainer-gated for now**:
 every contributed change lands through a pull request that the maintainer
-reviews and merges. `master` is branch-protected — one approving review, three
+reviews and merges. `master` is branch-protected — one approving review, seven
 required checks, no force-pushes, no branch deletion — so for a contributor the
 way in is always a PR. The maintainer is exempt (`enforce_admins` is off) and
 does push directly; that is stated here rather than implied away.
@@ -89,7 +89,7 @@ is why step 1 asks for an issue first.
   1.82 as this file said for a long time: a transitive dependency needs the
   `edition2024` Cargo feature, stabilised in 1.85, so 1.82 fails to resolve
   before it compiles anything. Nobody had exercised the documented floor.
-- TS 5.x, pnpm, `vitest` for tests.
+- TS 7.x, pnpm, `vitest` 5 for tests.
 - One PR = one slice of the roadmap. Keep diffs reviewable.
 - Every new contract change lands with (a) a fixture, (b) a test. No orphan contracts.
 
@@ -138,7 +138,9 @@ that was not the behaviour.
 ## Branches
 
 Contributor changes land on `master` only through a pull request: branch
-protection requires one approving review and three green checks. **The
+protection requires one approving review and seven green checks (the two
+test jobs, the full `.gnomon/ci.sh` pipeline, macOS, Windows, the prompt-loop
+smoke test, and the contract⇒fixture gate). **The
 maintainer pushes directly**, and this said "nothing lands on `master`
 directly" while the last twelve commits — two of them releases — had no
 associated PR, because `enforce_admins` is off. Saying so is better than a rule
@@ -162,7 +164,7 @@ bash .gnomon/ci.sh
 pnpm test
 
 # Run one package's suite
-pnpm --filter gnomon-cli test
+pnpm --filter ./packages/gnomon-cli test
 
 # Run one file
 cd packages/gnomon-core && pnpm exec vitest run src/skills.test.ts
@@ -172,7 +174,7 @@ cd packages/gnomon-core && pnpm exec vitest run src/skills.test.ts
 
 `scripts/bump-version.sh <version>`, then follow
 [docs/RELEASING.md](docs/RELEASING.md). Do not hand-edit the version: it is
-written down in six files and the one that reaches published records is not the
+written down in eight files and the one that reaches published records is not the
 one you would think to edit first. `scripts/check-versions.sh` asserts they
 agree, and runs in `.gnomon/ci.sh` before you ever push a tag.
 

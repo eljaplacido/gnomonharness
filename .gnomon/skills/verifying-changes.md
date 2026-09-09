@@ -21,7 +21,7 @@ The pieces, when you need one on its own:
     cargo test --workspace          # Rust
     cargo clippy --all -- -D warnings
     pnpm -r run test                # TypeScript, all packages
-    pnpm --filter gnomon-core test  # one package
+    pnpm --filter ./packages/gnomon-core test  # one package
 
 **Documentation is tested like code.** `packages/gnomon-cli/src/docs.test.ts`
 checks the README against the implementation: every CLI command it lists is

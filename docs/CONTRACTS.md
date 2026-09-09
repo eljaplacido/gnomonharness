@@ -2,10 +2,14 @@
 
 Each contract below names the fixture that pins it and says what CI actually
 checks against that fixture. The checks are not uniform, and the difference
-matters: the manifest is diffed byte-for-byte against real output, while the
-exit-code and session fixtures are only validated for internal consistency.
-Nothing inspects a commit to require that a contract change and a fixture
-change travel together — that part is a convention.
+matters: the manifest is diffed byte-for-byte against real output; the session
+fixture is loaded through `gnomon-exec`'s own validator and then cross-checked
+against a record the harness actually writes; the exit-code fixture is validated
+for internal consistency. And `conformance/contract_fixture_gate.sh` does
+inspect the diff — a contract-bearing file that changes without a `conformance/`
+change fails the gate. This paragraph said the opposite of both for as long as
+it took the gates to arrive; corrected 2026-09-09 against `.gnomon/ci.sh` §4
+and §7.
 
 **Version: 0.1.0** (2026-08)
 
@@ -79,7 +83,9 @@ gap between them cannot pass.
 
 This table is the vocabulary, not an inventory of what the current build
 emits. `gnomon task` exits `0`, `2` or `10` — the bucket, not the native code —
-and every other command exits `0` or `1`. The finer codes are reserved for
+and so does `gnomon loop run` (`2` on `act_failed`/`breaker_open`, `10` on
+`guard_failed`). `gnomon loop status` exits `1` on crontab drift. Every other
+command exits `0` or `1`. The finer codes are reserved for
 callers that need them; a consumer should switch on the bucket, which is the
 part that is stable.
 

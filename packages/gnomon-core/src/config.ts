@@ -785,6 +785,89 @@ export function applyProfile(
   return { roles: merged, applied: name };
 }
 
+/**
+ * Which file a role's `model`/`endpoint` is actually read from.
+ *
+ * A profile is merged OVER the base role, per field, so for a role the active
+ * profile declares, `.gnomon/roles.toml` is not what a run reads. Every writer
+ * and every instruction that named roles.toml unconditionally was therefore
+ * wrong for exactly the roles a scaffolded project ships: `gnomon init` writes
+ * `role_profile = "local_first"` and a `local_first.toml` that restates
+ * `model` and `endpoint` for plan, implement, critique and smol, so the edit
+ * that init and launch both tell you to make had no effect, and
+ * `gnomon endpoint add --role plan` printed a routing change that never
+ * happened. Found 2026-09-08 by an independent check of the v0.2.3 release.
+ *
+ * Only the routing fields count. A profile that sets `temperature` alone does
+ * not take the role's model away from roles.toml, and saying it did would send
+ * an editor to the wrong file just as surely.
+ */
+export interface RoleWriteTarget {
+  /** Absolute path of the file whose `[roles.<role>]` block a run reads. */
+  path: string;
+  /** The path as a reader knows it: `.gnomon/roles.toml`, or the profile. */
+  label: string;
+  /** The profile that governs this role, when one does. */
+  profile?: string;
+  /** The routing fields that profile takes over from the base role. */
+  shadowed?: string[];
+}
+
+const ROUTING_FIELDS = ["model", "endpoint"] as const;
+
+export function roleWriteTarget(config: GnomonConfig, role: string): RoleWriteTarget {
+  const base: RoleWriteTarget = {
+    path: join(config.gnomonDir, "roles.toml"),
+    label: ".gnomon/roles.toml",
+  };
+  const name = config.profile?.name;
+  if (!name) return base;
+  const def = (config.profiles as Record<string, unknown>)[name] as
+    | { roles?: Record<string, Record<string, unknown>> }
+    | undefined;
+  const block = def?.roles?.[role];
+  if (!block) return base;
+  const shadowed = ROUTING_FIELDS.filter((f) => f in block);
+  if (shadowed.length === 0) return base;
+  return {
+    path: join(config.gnomonDir, "profiles", `${name}.toml`),
+    label: `.gnomon/profiles/${name}.toml`,
+    profile: name,
+    shadowed: [...shadowed],
+  };
+}
+
+/**
+ * The file to send someone to when they want to change a model tag.
+ *
+ * `init` and `launch` say "check .gnomon/roles.toml"; when a profile governs
+ * every role that carries a model, that sentence names a file whose edits do
+ * nothing. Returns the target that covers the most roles, so the instruction
+ * points at the file the reader will actually be editing.
+ */
+export function modelEditTarget(config: GnomonConfig): RoleWriteTarget {
+  const base: RoleWriteTarget = {
+    path: join(config.gnomonDir, "roles.toml"),
+    label: ".gnomon/roles.toml",
+  };
+  const counts = new Map<string, { target: RoleWriteTarget; n: number }>();
+  for (const role of Object.keys(config.roles)) {
+    const t = roleWriteTarget(config, role);
+    const seen = counts.get(t.path);
+    if (seen) seen.n += 1;
+    else counts.set(t.path, { target: t, n: 1 });
+  }
+  // A tie goes to roles.toml: it is the file the reader already knows about,
+  // and it is where a role the profile does not name is still edited.
+  let best: { target: RoleWriteTarget; n: number } | undefined;
+  for (const entry of counts.values()) {
+    const better =
+      !best || entry.n > best.n || (entry.n === best.n && entry.target.path === base.path);
+    if (better) best = entry;
+  }
+  return best?.target ?? base;
+}
+
 export function loadConfig(root?: string, profileOverride?: string): GnomonConfig {
   const gnomonDir = resolveGnomonDir(root);
   const baseRoles = ((loadToml<Record<string, unknown>>(gnomonDir, "roles.toml") as Record<string, unknown>).roles ?? {}) as Roles;

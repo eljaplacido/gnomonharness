@@ -79,7 +79,30 @@ if (blessing.length > 0) {
   process.exit(0);
 }
 
+// A shallow clone has no history to resolve `last_checked` against, and
+// `actions/checkout` defaults to depth 1 -- as does the `git clone --depth 1`
+// a contributor reasonably reaches for. In that state every doc's lookup
+// raises, and this used to abort on the FIRST one with a raw git fatal printed
+// inside an otherwise green ci.sh run. Say what is wrong once, and say what
+// fixes it, rather than failing eight times in a language only git speaks.
+let shallow = false;
+try {
+  shallow = git(["rev-parse", "--is-shallow-repository"]).trim() === "true";
+} catch {
+  // Not a git repo, or a git too old for the flag. Fall through to the
+  // per-document handling below, which reports rather than assumes.
+}
+if (shallow) {
+  console.log(
+    "doc reconciliation: skipped — this is a shallow clone, so the recorded\n" +
+      "last_checked commits are not present. Run `git fetch --unshallow` (or\n" +
+      "check out with fetch-depth: 0) to get the report."
+  );
+  process.exit(0);
+}
+
 const owed = [];
+const unresolved = [];
 for (const [doc, spec] of Object.entries(manifest.docs)) {
   const since = spec.last_checked;
   let commits;
@@ -91,19 +114,29 @@ for (const [doc, spec] of Object.entries(manifest.docs)) {
       .split("\n")
       .filter(Boolean);
   } catch (e) {
-    console.error(
-      `${doc}: cannot resolve last_checked "${since}" — ${String(e).slice(0, 120)}`
-    );
-    process.exit(2);
+    // One unreadable ref is not a reason to stop reading the other documents.
+    // Collect it and carry on; the exit code below still reports the failure.
+    unresolved.push(`${doc}: cannot resolve last_checked "${since}" — ${String(e).slice(0, 120)}`);
+    continue;
   }
   if (commits.length > 0) owed.push({ doc, since, commits, why: spec.why });
 }
 
-if (owed.length === 0) {
-  console.log(
-    `doc reconciliation: all ${Object.keys(manifest.docs).length} documents current.`
+if (unresolved.length > 0) {
+  for (const u of unresolved) console.error(u);
+  console.error(
+    `\n${unresolved.length} document(s) could not be checked. If this is a shallow\n` +
+      "clone, `git fetch --unshallow` fixes it; otherwise the recorded commit is gone."
   );
-  process.exit(0);
+}
+
+if (owed.length === 0) {
+  const n = Object.keys(manifest.docs).length - unresolved.length;
+  console.log(`doc reconciliation: all ${n} readable document(s) current.`);
+  // An unreadable ref is a failure of the check, not a clean bill of health —
+  // reporting "all current" over documents nothing could read is exactly the
+  // false green this script exists to prevent.
+  process.exit(unresolved.length > 0 ? 2 : 0);
 }
 
 console.log(`doc reconciliation — ${owed.length} document(s) owed a reading\n`);
@@ -123,4 +156,4 @@ for (const o of owed) {
 // on every commit that touches prompt_loop.ts would fire on nearly every change
 // and be switched off within a month -- which is the reasoning
 // conformance/contract_fixture_gate.sh already wrote down for its own scope.
-process.exit(check ? 1 : 0);
+process.exit(unresolved.length > 0 ? 2 : check ? 1 : 0);

@@ -1917,6 +1917,21 @@ describe("shell-mediated work is observed, not inferred", () => {
     );
     expect(out.worktree_changed).toBe(false);
   });
+
+  it("does not report gnomon's own loop state as worktree progress", async () => {
+    // `gnomon loop install` puts cron on a schedule, and every tick appends to
+    // .gnomon-loops/cron.log and rewrites <loop>.json. The stamp walked it, so
+    // in any project with a loop installed the tree moved under steps that
+    // changed nothing and worktree_changed came back true for read-only work.
+    const out = await executeTool(
+      "bash",
+      { command: `mkdir -p .gnomon-loops && echo tick >> .gnomon-loops/cron.log` },
+      ctx(),
+      offered
+    );
+    expect(out.code).toBe(TOOL_OK);
+    expect(out.worktree_changed).toBe(false);
+  });
 });
 
 describe("task_allow bounds what delegation can reach", () => {

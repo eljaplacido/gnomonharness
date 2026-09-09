@@ -22,8 +22,7 @@ still works if you prefer it.
 
 ### From a release — works today, on any machine with Node
 
-No registry account, no login, no clone, no pnpm, no Rust. **The command below
-is identical in bash and in PowerShell**, so it is also the Windows path:
+No registry account, no login, no clone, no pnpm, no Rust.
 
 ```bash
 V=0.2.3
@@ -33,6 +32,24 @@ npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz \
 
 cd my-project && gnomon launch
 ```
+
+On Windows, in PowerShell:
+
+```powershell
+$V="0.2.3"
+$B="https://github.com/eljaplacido/gnomonharness/releases/download/v$V"
+npm i -g "$B/gnomon-core-$V.tgz" "$B/gnomon-natives-$V.tgz" "$B/gnomon-tui-$V.tgz" "$B/gnomon-harness-$V.tgz"
+
+cd my-project; gnomon launch
+```
+
+This said **"identical in bash and in PowerShell"** over the bash block alone.
+It is not: `V=0.2.3` is not an assignment in PowerShell, `$B/...` is not a path
+there, and `\` is not its line continuation (a backtick is) — so a Windows
+reader following the Windows path got a parse error and no install. Same
+mistake as the `set GNOMON_SHELL` line further down, in the same document.
+Both blocks above were run under PowerShell 7.6.5 and bash on 2026-09-08 with
+npm stubbed: each puts the same four URLs in front of npm.
 
 The four are one package split up: `gnomon-harness` is the CLI and the other
 three are its libraries, so npm needs all four URLs — there is no registry entry
@@ -50,8 +67,8 @@ cd my-project && gnomon launch
 
 The registry publish is prepared and waiting on credentials only; the packages
 are identical either way. Both paths cover everything `launch`, `prompt`, `task`
-and `init` need — no Rust, no clone, no pnpm. `surface`, `apply` and `session` additionally need the native
-binaries; add them from a release with the two exports under
+and `init` need — no Rust, no clone, no pnpm. `surface`, `enumerations`,
+`session`, `apply` and `simulate` additionally need the native binaries; add them from a release with the two exports under
 [Prebuilt binaries](#prebuilt-binaries--if-you-would-rather-not-install-rust),
 or build them from a clone.
 
@@ -173,7 +190,8 @@ harmless and claim the shim was created anyway. It is not, and it was not.)
 ### Prebuilt binaries — if you would rather not install Rust
 
 `launch`, `prompt`, `task` and `init` need no Rust toolchain. `surface`,
-`apply` and `session` do, because they are the native crates. If you want those
+`enumerations`, `session`, `apply` and `simulate` do, because they reach the
+native crates. If you want those
 without installing rustup, take them from a release instead.
 
 This section is referenced from three places — `pnpm run setup`'s cargo-missing
@@ -229,7 +247,7 @@ No .gnomon/ in /home/you/my-project — creating one.
 Project: /home/you/my-project
 Role: implement
 Model: qwen3.6:35b
-Tools (implement): read, glob, grep, compute, todo, write, edit, bash
+Tools (implement): bash, compute, edit, glob, grep, note, read, todo, write
 ```
 
 ## 4. Two things to do right after

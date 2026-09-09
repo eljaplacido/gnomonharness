@@ -101,7 +101,8 @@ export function defaultExitCodeMap(): ExitCodeMap {
 
 /**
  * Map a native exit code to a bucket.
- * Returns "result" as the default (catch-all for unknown codes).
+ * Returns "apparatus_failure" for any code the map does not declare — see the
+ * comment in the body for why that, and not "result", is the safe default.
  */
 export function mapBucket(nativeCode: number, map?: ExitCodeMap): Bucket {
   const m = map ?? defaultExitCodeMap();

@@ -46,8 +46,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1056 TypeScript tests (929 core, 106 cli, 14
-> natives, 7 tui) and 60 Rust tests — **1116 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1070 TypeScript tests (938 core, 111 cli, 14
+> natives, 7 tui) and 60 Rust tests — **1130 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -202,7 +202,7 @@ TypeScript side computes the same hash independently, and a test holds the two
 together; they disagreed once, and that test is why they no longer can.
 
 `gnomon-edit` backs the `apply` and `simulate` commands. **`gnomon-exec` backs
-nothing.** The crate is built and tested (27 Rust tests), and
+nothing.** The crate is built and tested (28 Rust tests), and
 `gnomon-natives`'s `runSessionStep` would call it — but that function has zero
 call sites: `gnomon session` runs each command through `SessionManager.run` in
 `session.ts`, which is `node:child_process.spawn` with `shell: true`. So the
@@ -355,11 +355,23 @@ implementations agree.
 > install, launch, first task. This section and the next cover the same ground
 > in more detail.
 
+Node >= 20 and nothing else.
+
 ```bash
-# Node >= 20 and nothing else. Identical in bash and PowerShell.
 V=0.2.3; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/gnomon-harness-$V.tgz
 ```
+
+```powershell
+$V="0.2.3"; $B="https://github.com/eljaplacido/gnomonharness/releases/download/v$V"
+npm i -g "$B/gnomon-core-$V.tgz" "$B/gnomon-natives-$V.tgz" "$B/gnomon-tui-$V.tgz" "$B/gnomon-harness-$V.tgz"
+```
+
+<!-- These are two blocks because they have to be. This said "Identical in bash
+and PowerShell" over the bash one: `V=0.2.3` is not an assignment in PowerShell
+and `$B/...` is not a path there, so a Windows reader who copied it installed
+nothing and got a parse error. Verified 2026-09-08 under PowerShell 7.6.5 --
+both blocks above put the same four URLs in front of npm. -->
 
 > **Not yet on the npm registry.** `npm i -g gnomon-harness` will be the command
 > once it is published; today it 404s, so the release tarballs above are the
@@ -369,7 +381,7 @@ npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/
 
 Requires **Node ≥ 20** and a model endpoint — [Ollama](https://ollama.com) for
 local inference, or any OpenAI-shaped API. A **Rust toolchain** is needed only
-for `surface`, `apply` and `session`; take those from a
+for `surface`, `enumerations`, `session`, `apply` and `simulate`; take those from a
 [release](https://github.com/eljaplacido/gnomonharness/releases/latest) instead
 if you would rather not install one. Building from source additionally wants
 **pnpm 9**. **Linux, macOS and Windows** — all three run the full TypeScript suite
@@ -429,7 +441,7 @@ No .gnomon/ in /home/you/my-project — creating one.
 Project: /home/you/my-project
 Role: implement
 Model: qwen3.6:35b
-Tools (implement): read, bash, todo, compute, glob, grep, edit, write
+Tools (implement): bash, compute, edit, glob, grep, note, read, todo, write
 ```
 
 Two things to do straight after:
@@ -1581,6 +1593,7 @@ Wiring them to subcommands is not done.
 | `gnomon sessions` | Saved sessions. |
 | `gnomon skill [list\|accept <id>\|reject <id>]` | Learned skills and proposals. |
 | `gnomon key [set\|list\|unset] <endpoint\|VAR>` | Store an API key for an endpoint that declares one. |
+| `gnomon endpoint [add\|test\|list]` | Declare an endpoint end to end — provider, key, model, roles — and prove it runs one token before writing anything. Presets: `opencode-go`, `opencode-zen`, `openrouter`, `ollama`. |
 | `gnomon audit [show\|verify]` | Audit trails. |
 | `gnomon surface [hash\|manifest\|paths]` | Inspect the surface. |
 | `gnomon enumerations` | The enumerations contract. |
@@ -1588,6 +1601,14 @@ Wiring them to subcommands is not done.
 | `gnomon apply\|simulate <patchset.json>` | Apply or dry-run a patch set. |
 | `gnomon tui` | Saved-session viewer. |
 | `gnomon loop\|loops [list\|status\|dry-run\|run\|install\|uninstall\|reset\|kill]` | Cron-scheduled guard/act supervision with a circuit breaker. No daemon. |
+
+**`--profile <name>`** is accepted by `simulate`, `endpoint`, `audit`, `task`,
+`skill`, `prompt` and `sessions`. It merges `.gnomon/profiles/<name>.toml` over
+the base roles for that run, which rewrites per-role `model` and `endpoint` —
+which machine runs inference, and who is billed. It is deliberately
+**machine-scoped and does not move the surface hash**: routing is where the
+project is allowed to differ per machine, behaviour is not. Naming a profile
+that ships no file is disclosed and ignored, never silently obeyed.
 
 `--dir <path>` targets a different project. `gnomon` finds `.gnomon/` by
 walking up from the current directory, the way `git` finds `.git`.

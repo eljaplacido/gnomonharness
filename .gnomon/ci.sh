@@ -599,9 +599,14 @@ fi
 #     what the path used to be, which is worth keeping.
 echo ""
 echo "═══ Committed apparatus is runnable from a clone ═══"
+# A git pathspec `**/` requires at least one intermediate directory, so
+# `benchmarks/**/*.py` never matched benchmarks/analyse.py, harness.py,
+# cost_report.py, claude_code_arm.py or reap.sh -- the five files that ARE the
+# apparatus. A single `*` crosses `/` in a pathspec and covers both levels.
+# The gate read as green over 98 files while 103 were in scope.
 HOME_HITS=$(git grep -nI -E '/home/[a-z_][a-z0-9_-]*/' -- \
-    'benchmarks/**/*.sh' 'benchmarks/**/*.mjs' 'benchmarks/**/*.js' \
-    'benchmarks/**/*.py' 'scripts/*' 2>/dev/null \
+    'benchmarks/*.sh' 'benchmarks/*.mjs' 'benchmarks/*.js' \
+    'benchmarks/*.py' 'scripts/*' 2>/dev/null \
     | grep -vE ':[0-9]+:[[:space:]]*(#|//|\*)' || true)
 if [ -n "$HOME_HITS" ]; then
     echo "$HOME_HITS"

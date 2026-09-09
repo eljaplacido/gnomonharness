@@ -55,7 +55,10 @@ import {
   printEndpoints,
   setEndpointBlock,
   setRoleModel,
+  roleWriteTarget,
+  modelEditTarget,
   listRoles,
+  countNonConversations,
   resolveUi,
   isLocalEndpoint,
 } from "gnomon-core";
@@ -963,22 +966,45 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     .filter(Boolean);
 
   if (chosen.length > 0) {
-    const rolesPath = join(config.gnomonDir, "roles.toml");
-    let text = readFileSync(rolesPath, "utf-8");
+    // Write where the role is actually resolved. A profile is merged OVER the
+    // base role, so for a role the active profile declares -- which, in a
+    // scaffolded project, is every role that has a model -- editing roles.toml
+    // changes nothing a run reads, and this command used to report a routing
+    // change that never happened.
+    const edits = new Map<string, { label: string; text: string }>();
     for (const role of chosen) {
       if (!roleNames.includes(role)) {
         console.error(`  ⚠ no [roles.${role}] — skipped.`);
         continue;
       }
-      text = setRoleModel(text, role, model, name);
-      console.log(`  ✓ ${role} → ${model} @${name}`);
+      const target = roleWriteTarget(config, role);
+      let file = edits.get(target.path);
+      if (!file) {
+        file = { label: target.label, text: readFileSync(target.path, "utf-8") };
+        edits.set(target.path, file);
+      }
+      file.text = setRoleModel(file.text, role, model, name);
+      console.log(
+        `  ✓ ${role} → ${model} @${name}` +
+          (target.profile ? ` (via profile "${target.profile}")` : "")
+      );
     }
-    writeFileSync(rolesPath, text);
-    console.log(`  ✓ .gnomon/roles.toml`);
+    for (const [path, file] of edits) {
+      writeFileSync(path, file.text);
+      console.log(`  ✓ ${file.label}`);
+    }
   }
 
-  const hash = surfaceHash(config.gnomonDir);
-  console.log(`\n  Surface now ${hash.slice(0, 16)}… — commit .gnomon/ to carry this to another machine.`);
+  // The hash is a closing courtesy, and it is the one line here that needs a
+  // native binary. Everything above it is already written, so on an install
+  // with no `gnomon-surface` this used to throw AFTER the writes -- reporting
+  // failure for a command that had succeeded.
+  try {
+    const hash = surfaceHash(config.gnomonDir);
+    console.log(`\n  Surface now ${hash.slice(0, 16)}… — commit .gnomon/ to carry this to another machine.`);
+  } catch {
+    console.log(`\n  Written. Commit .gnomon/ to carry this to another machine.`);
+  }
 }
 
 /** Ask an endpoint for its model list. Empty when it will not say. */
@@ -1186,6 +1212,15 @@ async function cmdTask(args: CliArgs): Promise<void> {
     verbose: !args.json,
   });
 
+  // Non-fatal surface problems go to stderr in BOTH modes. They are the ones
+  // that change what ran without stopping it -- a role_profile whose file is
+  // missing, an edit format nothing implements -- and --json used to be the
+  // mode where they were least visible and most consequential. stderr, so a
+  // caller piping stdout to a parser still gets clean JSON.
+  for (const p of record.surface_problems ?? []) {
+    if (!p.fatal) console.error(`  ⚠ ${p.where}: ${p.problem}`);
+  }
+
   if (args.json) {
     console.log(JSON.stringify(record, null, 2));
   } else {
@@ -1339,10 +1374,26 @@ async function cmdInit(args: CliArgs): Promise<void> {
     }
   }
 
+  // Name the file whose edits take effect. The scaffold ships
+  // `role_profile = "local_first"` and a profile that restates `model` and
+  // `endpoint` for every role that has one, and a profile is merged OVER the
+  // base role -- so "check .gnomon/roles.toml" sent every new user to a file
+  // their edits would be overridden in.
+  const where = (() => {
+    try {
+      return modelEditTarget(loadConfig(resolve(args.dir ?? process.cwd())));
+    } catch {
+      return { label: ".gnomon/roles.toml" } as { label: string; profile?: string };
+    }
+  })();
   console.log("");
   console.log("Next:");
-  console.log("  1. Check .gnomon/roles.toml — the model tags must be ones you");
+  console.log(`  1. Check ${where.label} — the model tags must be ones you`);
   console.log("     actually have. `/models` lists them.");
+  if (where.profile) {
+    console.log(`     (role_profile = "${where.profile}" is merged over roles.toml,`);
+    console.log("      so that file is what these roles are routed by.)");
+  }
   console.log("  2. Run `gnomon prompt` in this directory.");
   console.log("");
   console.log("Approval is on_write: reads are free, writes show a diff first.");
@@ -1368,7 +1419,14 @@ async function cmdLaunch(args: CliArgs): Promise<void> {
     console.log(`No .gnomon/ in ${target} — creating one.`);
     await cmdInit(args);
     console.log("");
-    console.log("Edit .gnomon/roles.toml if the model tags are not ones you have,");
+    const where = (() => {
+      try {
+        return modelEditTarget(loadConfig(target)).label;
+      } catch {
+        return ".gnomon/roles.toml";
+      }
+    })();
+    console.log(`Edit ${where} if the model tags are not ones you have,`);
     console.log("then re-run `gnomon launch`. Starting anyway:");
     console.log("");
   }
@@ -1395,6 +1453,17 @@ async function cmdSessions(args: CliArgs): Promise<void> {
 
   const sessions = listSessions(store);
   if (sessions.length === 0) {
+    // Say what was skipped. `gnomon session <cmd>` writes command records into
+    // this same directory and prints the path; claiming the directory is empty
+    // straight afterwards reads as data loss rather than as a filter.
+    const other = countNonConversations(store);
+    if (other > 0) {
+      console.log(
+        `No conversations in ${store.dir} — ${other} command-session record(s) ` +
+          `written by \`gnomon session\`. Read those with \`gnomon tui\`.`
+      );
+      return;
+    }
     console.log(`No sessions in ${store.dir}`);
     return;
   }
@@ -1518,7 +1587,7 @@ Commands:
   sessions [--dir <path>]
     Saved sessions, newest last.
 
-  loop [list|run <name>|install|status] [--dir <path>]
+  loop [list|status|dry-run <name>|run <name>|install <name>|uninstall <name>|reset <name>|kill] [--dir <path>]
     Guard/act loops declared in .gnomon/loops/, scheduled off the OS cron.
     A deterministic shell guard runs first; only a tripped guard may reach a
     model. The crontab entry is machine-local and never enters the surface.
@@ -1532,6 +1601,18 @@ Commands:
 
   run
     Alias for \`prompt\`
+
+Flags that apply across commands:
+  --profile <name>        Merge .gnomon/profiles/<name>.toml over the base
+                          roles for this run. It rewrites per-role model and
+                          endpoint — i.e. which machine runs inference and who
+                          is billed — and is accepted by simulate, endpoint,
+                          audit, task, skill, prompt and sessions. It is
+                          machine-scoped: it does NOT move the surface hash,
+                          so two machines can disagree about routing while
+                          agreeing about behaviour. A name with no file in
+                          .gnomon/profiles/ is reported, not obeyed.
+  --dir <path>            Act on that project instead of the cwd.
 
 One-shot mode: gnomon <command>
 Interactive mode: gnomon prompt

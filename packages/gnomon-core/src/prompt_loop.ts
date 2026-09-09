@@ -4162,6 +4162,23 @@ export async function runTask(
   // belongs, and these are measured facts about the surface that produced the
   // record.
   const surfaceFindings = auditSurface(config);
+  // A `role_profile` the surface names and does not ship is a routing change
+  // that did not happen. The interactive loop discloses it -- "✗ profile "x"
+  // is not in .gnomon/profiles/ ... running the base roles unchanged" -- and
+  // the scripted path dropped it entirely, so in CI, the one mode with nobody
+  // reading the terminal, the run silently used routing nobody asked for.
+  if (config.profile?.problem) {
+    surfaceFindings.push({
+      where: config.profile.overridden
+        ? "--profile"
+        : ".gnomon/config.toml [defaults] role_profile",
+      problem: `${config.profile.problem} — running the base roles unchanged`,
+      fix: config.profile.requested
+        ? `Add .gnomon/profiles/${config.profile.requested}.toml, or drop the name that asks for it.`
+        : "Name a profile that exists, or drop the name that asks for it.",
+      fatal: false,
+    });
+  }
   {
     const fatal = surfaceFindings.filter((p) => p.fatal);
     if (fatal.length > 0) {
@@ -4803,11 +4820,15 @@ export function sessionRow(
 /**
  * Point a role at a model, in place.
  *
- * A surgical line edit rather than a re-serialise. roles.toml is written by
- * hand and carries the comments explaining why each role is scoped the way it
- * is; round-tripping it through a parser would discard exactly the part a
- * reader needs. Only the `model` (and optionally `endpoint`) line inside
+ * A surgical line edit rather than a re-serialise. The file is written by hand
+ * and carries the comments explaining why each role is scoped the way it is;
+ * round-tripping it through a parser would discard exactly the part a reader
+ * needs. Only the `model` (and optionally `endpoint`) line inside
  * `[roles.<name>]` is touched.
+ *
+ * The text may be roles.toml or a profile under .gnomon/profiles/ -- both
+ * carry `[roles.<name>]` blocks, and which one a run reads depends on the
+ * active profile (see `roleWriteTarget`).
  *
  * A `[roles.<name>.fallback]` block starts with `[`, so it ends the section
  * and is left alone — changing a role's model must not silently change what
@@ -4823,7 +4844,7 @@ export function setRoleModel(
   const header = new RegExp(`^\\s*\\[roles\\.${role.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]\\s*$`);
   const start = lines.findIndex((l) => header.test(l));
   if (start === -1) {
-    throw new Error(`roles.toml has no [roles.${role}] section to edit.`);
+    throw new Error(`no [roles.${role}] section to edit in this file.`);
   }
   let end = lines.length;
   for (let i = start + 1; i < lines.length; i++) {

@@ -1869,7 +1869,20 @@ export function worktreeStampOf(ctx: ToolContext, alsoRoot?: string): string | n
     for (const rel of walkFiles(base, base)) {
       // .gnomon/ has its own stamp (surfaceHashOf) and its own meaning; a
       // surface edit is drift, not progress.
+      //
+      // .gnomon-loops/ is gnomon's OWN state, the same family as .gnomon-audit
+      // and .gnomon-sessions in NEVER_WALKED: `gnomon loop install` puts cron
+      // on a schedule and every tick appends to cron.log and rewrites
+      // <loop>.json. That made the tree move under a step that changed
+      // nothing, so `worktree_changed` came back true for read-only work and
+      // the anti-flailing nudge lost its premise -- exactly what adding
+      // coverage/ to NEVER_WALKED fixed on 2026-09-05, arriving instead
+      // through a directory the harness writes itself. It is excluded HERE
+      // rather than in NEVER_WALKED so glob and grep can still read it; only
+      // the "did the agent change anything" question ignores it.
+      // (String, not loops.ts's LOOP_STATE_DIR: loops.ts imports this module.)
       if (rel === ".gnomon" || rel.startsWith(".gnomon/")) continue;
+      if (rel === ".gnomon-loops" || rel.startsWith(".gnomon-loops/")) continue;
       let st: Stats;
       try {
         st = statSync(join(base, rel));

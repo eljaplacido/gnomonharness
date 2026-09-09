@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bump the release version everywhere it is written down.
 #
-# It is written down in six places, and a release that misses one is not a
+# It is written down in eight places, and a release that misses one is not a
 # cosmetic problem: `harnessBuild()` stamps records with gnomon-core's
 # package.json version, so a half-bumped tree emits provenance claiming a
 # version that was never released. The 0.1.1 tag failed CI twice for exactly

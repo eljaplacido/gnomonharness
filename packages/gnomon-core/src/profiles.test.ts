@@ -1,6 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { applyProfile, loadConfig, routeRole, type Roles, type Profiles } from "./config.js";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import {
+  applyProfile,
+  loadConfig,
+  modelEditTarget,
+  roleWriteTarget,
+  routeRole,
+  type Roles,
+  type Profiles,
+} from "./config.js";
+import { setRoleModel } from "./prompt_loop.js";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -246,5 +255,96 @@ describe("the TOML parser accepts valid keys", () => {
     // the bracket missing used to hoist its keys to the top level, so a role
     // appeared to exist and did not. That must keep throwing.
     expect(() => parse(`[defaults]\nthis is not toml\n`)).toThrow(/cannot parse/);
+  });
+});
+
+
+// A profile is merged OVER the base role, and every writer and every
+// instruction in the product named roles.toml unconditionally. For a
+// scaffolded project that is wrong for every role that has a model:
+// `gnomon init` writes `role_profile = "local_first"` and a profile restating
+// `model` and `endpoint` for plan, implement, critique and smol, so the edit
+// init and launch both told you to make had no effect, and
+// `gnomon endpoint add --role plan` printed a routing change that never
+// happened. Reported 2026-09-08 by an independent check of the v0.2.3 release.
+describe("the file a role is actually routed by", () => {
+  const surface = (defaults: string, profiles: Record<string, string>): string => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-target-"));
+    mkdirSync(join(root, ".gnomon", "profiles"), { recursive: true });
+    writeFileSync(join(root, ".gnomon", "config.toml"),
+      `[defaults]\n${defaults}\n\n[endpoints.local]\nurl = "http://127.0.0.1:11434/api/chat"\nkind = "ollama"\n\n` +
+      `[endpoints.cloud]\nurl = "https://example.invalid/v1/chat/completions"\nkind = "openai"\n`);
+    writeFileSync(join(root, ".gnomon", "roles.toml"),
+      `[roles.plan]\nmodel = "base-model"\nendpoint = "local"\ntools = ["read"]\n\n` +
+      `[roles.smol]\nmodel = "small"\nendpoint = "local"\ntools = ["read"]\n`);
+    writeFileSync(join(root, ".gnomon", "system.md"), "x\n");
+    for (const [name, body] of Object.entries(profiles)) {
+      writeFileSync(join(root, ".gnomon", "profiles", `${name}.toml`), body);
+    }
+    return root;
+  };
+
+  const SHADOWS_PLAN = `name = "p"\n\n[roles.plan]\nmodel = "profile-model"\nendpoint = "cloud"\n`;
+
+  it("is roles.toml when no profile is active", () => {
+    const root = surface("", { p: SHADOWS_PLAN });
+    const t = roleWriteTarget(loadConfig(root), "plan");
+    expect(t.label).toBe(".gnomon/roles.toml");
+    expect(t.profile).toBeUndefined();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("is the profile for a role the active profile routes", () => {
+    const root = surface('role_profile = "p"', { p: SHADOWS_PLAN });
+    const t = roleWriteTarget(loadConfig(root), "plan");
+    expect(t.label).toBe(".gnomon/profiles/p.toml");
+    expect(t.profile).toBe("p");
+    expect(t.shadowed).toEqual(["model", "endpoint"]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("is roles.toml for a role the active profile leaves alone", () => {
+    const root = surface('role_profile = "p"', { p: SHADOWS_PLAN });
+    expect(roleWriteTarget(loadConfig(root), "smol").label).toBe(".gnomon/roles.toml");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  // A profile that sets temperature does not take the model away from
+  // roles.toml, and saying it did would send an editor to the wrong file just
+  // as surely as the bug this fixes.
+  it("is roles.toml when the profile sets no routing field", () => {
+    const root = surface('role_profile = "p"', { p: `name = "p"\n\n[roles.plan]\ntemperature = 0.9\n` });
+    expect(roleWriteTarget(loadConfig(root), "plan").label).toBe(".gnomon/roles.toml");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  // The point of the whole thing: a write to the target changes what a run
+  // reads, and a write to roles.toml -- which is what the command used to do
+  // -- does not.
+  it("writing the target moves the route; writing roles.toml does not", () => {
+    const root = surface('role_profile = "p"', { p: SHADOWS_PLAN });
+    expect(routeRole(loadConfig(root), "plan").target.model).toBe("profile-model");
+
+    const rolesPath = join(root, ".gnomon", "roles.toml");
+    writeFileSync(rolesPath, setRoleModel(readFileSync(rolesPath, "utf-8"), "plan", "edited-in-roles", "local"));
+    expect(routeRole(loadConfig(root), "plan").target.model).toBe("profile-model");
+
+    const target = roleWriteTarget(loadConfig(root), "plan");
+    writeFileSync(target.path, setRoleModel(readFileSync(target.path, "utf-8"), "plan", "edited-in-profile", "cloud"));
+    expect(routeRole(loadConfig(root), "plan").target.model).toBe("edited-in-profile");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  // What `init` and `launch` print. The scaffold's profile covers every role
+  // that has a model, so the answer there is the profile.
+  it("modelEditTarget names the file that governs the most roles", () => {
+    const all = `name = "p"\n\n[roles.plan]\nmodel = "a"\n\n[roles.smol]\nmodel = "b"\n`;
+    const both = surface('role_profile = "p"', { p: all });
+    expect(modelEditTarget(loadConfig(both)).label).toBe(".gnomon/profiles/p.toml");
+    rmSync(both, { recursive: true, force: true });
+
+    const one = surface('role_profile = "p"', { p: SHADOWS_PLAN });
+    expect(modelEditTarget(loadConfig(one)).label).toBe(".gnomon/roles.toml");
+    rmSync(one, { recursive: true, force: true });
   });
 });

@@ -3,6 +3,7 @@ import { parseArgs } from "./index.js";
 import { recomputeManifest } from "gnomon-core";
 import { surfaceHash, manifest } from "gnomon-natives";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -153,5 +154,87 @@ describe("the version a user actually sees", () => {
            "gnomon-core", "src", "prompt_loop.ts"), "utf8");
     expect(core).not.toContain("gnomon models");
     expect(core).toContain("gnomon endpoint list");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `gnomon loop run` exit codes
+// ---------------------------------------------------------------------------
+//
+// docs/CONTRACTS.md §1 said "`gnomon task` exits 0, 2 or 10 ... and every other
+// command exits 0 or 1" from before loops existed. It was wrong: `loop run`
+// maps its outcome onto the same bucket codes, which is what a cron entry and
+// a CI step read. An independent sweep of the v0.2.3 release found the sentence
+// on 2026-09-08 and reproduced the codes; correcting the document without
+// pinning the behaviour would move the promise into prose again, so this spawns
+// the real CLI rather than asserting against the mapping in the abstract.
+//
+// packages/gnomon-core/src/loops.test.ts already covers the OUTCOMES
+// (guard_failed / act_failed / breaker_open). What was covered nowhere is the
+// outcome→process.exit step, which is the only part a caller can observe.
+describe("gnomon loop run — exit codes are the bucket, not 0/1", () => {
+  const CLI = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
+
+  /** A project with one declared loop, scaffolded by hand — no model needed. */
+  function projectWith(name: string, body: string): string {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-loopexit-"));
+    mkdirSync(join(root, ".gnomon", "loops"), { recursive: true });
+    // A surface minimal enough to load. The loop path never reaches a role.
+    writeFileSync(join(root, ".gnomon", "config.toml"), "[defaults]\n");
+    writeFileSync(join(root, ".gnomon", "roles.toml"), "[roles.implement]\nmodel = \"stub\"\n");
+    writeFileSync(join(root, ".gnomon", "loops", `${name}.toml`), body);
+    return root;
+  }
+
+  function runLoop(root: string, name: string): { code: number; out: string } {
+    const r = spawnSync(
+      process.execPath,
+      ["--import", "tsx", CLI, "loop", "run", name, "--dir", root],
+      { encoding: "utf-8", timeout: 60_000 }
+    );
+    return { code: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? "") };
+  }
+
+  it("exits 10 when the guard itself fails — apparatus, not 'nothing wrong'", () => {
+    const root = projectWith(
+      "badguard",
+      `[loop]\nname = "badguard"\nevery = "5m"\n\n[guard]\nrun = 'exit 9'\nact_when = "gt 0"\n\n[act]\nrun = 'true'\n`
+    );
+    try {
+      const { code, out } = runLoop(root, "badguard");
+      expect(out).toContain("guard_failed");
+      // 10 = apparatus_failure. A guard that could not run has NOT established
+      // that the condition is absent, so 0 would be a false all-clear.
+      expect(code).toBe(10);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("exits 2 when the action fails after a tripped guard", () => {
+    const root = projectWith(
+      "badact",
+      `[loop]\nname = "badact"\nevery = "5m"\n\n[guard]\nrun = 'echo 7'\nact_when = "gt 0"\n\n[act]\nrun = 'false'\n`
+    );
+    try {
+      const { code, out } = runLoop(root, "badact");
+      expect(out).toContain("act_failed");
+      expect(code).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("exits 0 on a clean tick, so cron only mails on a real failure", () => {
+    const root = projectWith(
+      "quiet",
+      `[loop]\nname = "quiet"\nevery = "5m"\n\n[guard]\nrun = 'echo 0'\nact_when = "gt 0"\n\n[act]\nrun = 'true'\n`
+    );
+    try {
+      const { code } = runLoop(root, "quiet");
+      expect(code).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

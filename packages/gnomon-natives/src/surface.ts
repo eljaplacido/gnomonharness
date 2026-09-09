@@ -133,8 +133,8 @@ export function findBinary(name: string): string {
     "Or, from a git checkout of gnomon, build them:\n" +
     `  cargo build --release --bin ${name}\n` +
     "  (or `pnpm run build:native` for all four)\n\n" +
-    "Only `surface`, `apply` and `session` need them. `launch`, `prompt`,\n" +
-    "`task` and `init` work without any of this."
+    "Only `surface`, `enumerations`, `session`, `apply` and `simulate` need\n" +
+    "them. `launch`, `prompt`, `task` and `init` work without any of this."
   );
 }
 
