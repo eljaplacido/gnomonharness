@@ -313,6 +313,44 @@ describe("gate: the repository's own CI gates can fail", () => {
       expect(r.out).toContain("not an integer");
     });
 
+    it("every CI job sets pnpm and node up the same way", () => {
+      // Added after the fresh-machine job failed on its FIRST run with
+      // "Multiple versions of pnpm specified": it used pnpm/action-setup@v4
+      // with `version: 9` while package.json declares
+      // `packageManager: pnpm@9.0.0`, and action-setup refuses both. Every
+      // other job in the file omits the version and uses @v6 -- the new job was
+      // written from an older pattern rather than from the file it was joining.
+      //
+      // Nothing checked that the jobs agreed, so the only way to find out was
+      // to push. That is a slow feedback loop for a class of mistake that costs
+      // a full CI round trip each time.
+      const yml = readFileSync(join(REPO, ".github", "workflows", "ci.yml"), "utf-8");
+
+      const setups = [...yml.matchAll(/uses:\s*pnpm\/action-setup@(\S+)/g)].map((m) => m[1]);
+      expect(setups.length, "no job sets pnpm up — this test is looking at the wrong file").toBeGreaterThan(1);
+      expect(new Set(setups).size, `jobs use different pnpm/action-setup versions: ${[...new Set(setups)].join(", ")}`).toBe(1);
+
+      const nodes = [...yml.matchAll(/uses:\s*actions\/setup-node@(\S+)/g)].map((m) => m[1]);
+      expect(new Set(nodes).size, `jobs use different actions/setup-node versions: ${[...new Set(nodes)].join(", ")}`).toBe(1);
+
+      const versions = [...yml.matchAll(/node-version:\s*(\S+)/g)].map((m) => m[1]);
+      expect(new Set(versions).size, `jobs pin different node versions: ${[...new Set(versions)].join(", ")}`).toBe(1);
+
+      // The specific refusal: package.json owns the pnpm version, so no job may
+      // also declare one.
+      const pkg = JSON.parse(readFileSync(join(REPO, "package.json"), "utf-8")) as {
+        packageManager?: string;
+      };
+      if (pkg.packageManager?.startsWith("pnpm@")) {
+        const withVersion = /pnpm\/action-setup@\S+\s*\n\s*with:\s*\n\s*version:/.test(yml);
+        expect(
+          withVersion,
+          "a job passes `version:` to pnpm/action-setup while package.json declares " +
+            `"packageManager": "${pkg.packageManager}". action-setup fails on both.`
+        ).toBe(false);
+      }
+    });
+
     it("every gate id ci.sh asks for is declared, with a reason", () => {
       // The floors file is only load-bearing if ci.sh and it agree. A typo in
       // either would otherwise surface as a CI failure nobody can place.

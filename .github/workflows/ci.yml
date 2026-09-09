@@ -421,15 +421,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # No `version:` here, and @v6 not @v4 -- matching every other job in this
+      # file. package.json declares `packageManager: pnpm@9.0.0`, and
+      # action-setup refuses when a version is given in both places:
+      # "Multiple versions of pnpm specified". Written from an older pattern
+      # rather than from the file it was being added to, and it failed on the
+      # first run.
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - name: Install deps
