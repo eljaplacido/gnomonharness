@@ -9,7 +9,8 @@ shortest path from nothing to a first task. For the full reference, see
 
 - **Node ≥ 20** and **pnpm 9** (get pnpm with `corepack enable pnpm`)
 - A **Rust toolchain** ([rustup](https://rustup.rs)) — needed for `surface`,
-  `apply`, and `session`; `launch`, `task`, and `init` work without it
+  `enumerations`, `session`, `apply` and `simulate`; `launch`, `prompt`, `task`
+  and `init` work without it
 - A model endpoint — local [Ollama](https://ollama.com), or any OpenAI-shaped API
 
 **Platform:** Linux, macOS and Windows are all supported and all tested — CI runs

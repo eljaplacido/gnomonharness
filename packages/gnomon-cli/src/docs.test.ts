@@ -495,3 +495,94 @@ describe("the CLI command surface agrees with itself, both directions", () => {
     expect(absent, `dispatched but absent from --help: ${absent.join(", ")}`).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The native-only command set, in prose
+// ---------------------------------------------------------------------------
+//
+// "Only `surface`, `apply` and `session` need the binaries" was written out in
+// five places — three documents, the runtime error, and the release notes — and
+// drifted on its first edit. For most of v0.2.x every copy was wrong:
+// `enumerations` and `simulate` reach the crates too, so a user who installed
+// from npm and ran `gnomon enumerations` was told, by the failure itself, that
+// `gnomon enumerations` did not need a binary.
+//
+// packages/gnomon-natives/src/surface.ts now holds ONE list. This binds the
+// prose to it. The measurement side — that the constant matches what actually
+// fails on a machine with no Rust — is scripts/fresh-machine.sh, which runs the
+// real commands in a container; the two together are what make the sentence
+// true rather than merely consistent.
+describe("the docs name the same native-only commands the code does", () => {
+  const NATIVE_ONLY = ["surface", "enumerations", "session", "apply", "simulate"];
+
+  it("the constant is the set this test was written against", () => {
+    // If someone adds a native-backed command, this fails first and points at
+    // the prose below rather than letting the docs quietly fall behind.
+    const src = readFileSync(
+      join(repoRoot, "packages/gnomon-natives/src/surface.ts"),
+      "utf-8"
+    );
+    const block = src.match(/NATIVE_ONLY_COMMANDS = \[([\s\S]*?)\] as const;/);
+    expect(block, "NATIVE_ONLY_COMMANDS is no longer a literal array").toBeTruthy();
+    const declared = [...block![1].matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
+    expect(declared).toEqual(NATIVE_ONLY);
+  });
+
+  it("the runtime error derives its list instead of spelling one out", () => {
+    // The message is the copy a stuck user actually reads, and it was the copy
+    // that stayed wrong longest.
+    const src = readFileSync(
+      join(repoRoot, "packages/gnomon-natives/src/surface.ts"),
+      "utf-8"
+    );
+    expect(src).toContain("nativeOnlySentence()");
+    expect(
+      src.includes("Only `surface`, `apply` and `session` need"),
+      "the old hand-written sentence is back in the error message"
+    ).toBe(false);
+  });
+
+  for (const [label, path] of [
+    ["README.md", "README.md"],
+    ["GETTING_STARTED.md", "GETTING_STARTED.md"],
+  ] as const) {
+    it(`${label} names all five wherever it explains the native requirement`, () => {
+      const text = readFileSync(join(repoRoot, path), "utf-8");
+      // Anchored on the COMMAND LIST, not on the prose around it. A first
+      // version matched phrasings ("need them", "a Rust toolchain is needed")
+      // and found nothing in README, which words it as "A **Rust toolchain** is
+      // needed only for ..." -- a test that silently matches no sentence is the
+      // vacuous green this whole session has been about, so it now finds the
+      // passages by the thing they are all guaranteed to contain.
+      const marker = "`surface`";
+      const windows: string[] = [];
+      for (let i = text.indexOf(marker); i !== -1; i = text.indexOf(marker, i + 1)) {
+        const w = text.slice(Math.max(0, i - 300), i + 400);
+        // Only passages that are ABOUT the native requirement. `surface` is
+        // also a noun in this project, and the surface hash is discussed
+        // everywhere.
+        if (/Rust toolchain|native binaries|native crates|need the binaries/i.test(w)) {
+          windows.push(w);
+        }
+      }
+      expect(
+        windows.length,
+        `${label} no longer explains the native requirement anywhere — either the ` +
+          `passage moved, or this test stopped finding it. Both need a human.`
+      ).toBeGreaterThan(0);
+
+      for (const w of windows) {
+        for (const cmd of NATIVE_ONLY) {
+          expect(
+            w.includes(`\`${cmd}\``),
+            `${label}: a passage about the native requirement omits \`${cmd}\`.\n` +
+              `    This is the drift that made every copy of this sentence wrong\n` +
+              `    for most of v0.2.x. The set is NATIVE_ONLY_COMMANDS in\n` +
+              `    packages/gnomon-natives/src/surface.ts.\n\n` +
+              `    Passage:\n${w.slice(250, 550).replace(/^/gm, "      ")}`
+          ).toBe(true);
+        }
+      }
+    });
+  }
+});

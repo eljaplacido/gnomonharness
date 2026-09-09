@@ -57,6 +57,35 @@ function exeName(name: string): string {
   return process.platform === "win32" && !name.endsWith(".exe") ? name + ".exe" : name;
 }
 
+/**
+ * The commands that cannot run without the Rust binaries.
+ *
+ * ONE list, because the sentence naming it was written out in five places and
+ * drifted on its first edit. For most of v0.2.x every one of them said "only
+ * `surface`, `apply` and `session`" while `enumerations` and `simulate` also
+ * reached the crates -- so a reader who installed from npm, ran
+ * `gnomon enumerations`, and got "native binary not found" was reading, in the
+ * same message, a sentence promising that command did not need one.
+ *
+ * scripts/fresh-machine.sh MEASURES the real set in a container with no Rust
+ * and compares it against this constant, and docs.test.ts holds the prose to
+ * it. A sentence that has to be maintained by hand in five files is a sentence
+ * that will be wrong in at least one of them.
+ */
+export const NATIVE_ONLY_COMMANDS = [
+  "surface",
+  "enumerations",
+  "session",
+  "apply",
+  "simulate",
+] as const;
+
+/** The same set as English, for the messages and the docs that quote it. */
+export function nativeOnlySentence(): string {
+  const q = NATIVE_ONLY_COMMANDS.map((c) => `\`${c}\``);
+  return `${q.slice(0, -1).join(", ")} and ${q[q.length - 1]}`;
+}
+
 export function findBinary(name: string): string {
   // 1. Check GNOMON_BIN_OVERRIDE env var (for testing)
   //    Can be a full path to the binary OR a directory containing it
@@ -133,8 +162,8 @@ export function findBinary(name: string): string {
     "Or, from a git checkout of gnomon, build them:\n" +
     `  cargo build --release --bin ${name}\n` +
     "  (or `pnpm run build:native` for all four)\n\n" +
-    "Only `surface`, `enumerations`, `session`, `apply` and `simulate` need\n" +
-    "them. `launch`, `prompt`, `task` and `init` work without any of this."
+    `Only ${nativeOnlySentence()} need them.\n` +
+    "`launch`, `prompt`, `task` and `init` work without any of this."
   );
 }
 

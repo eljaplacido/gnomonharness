@@ -11,10 +11,19 @@ cannot be run until after the mistake has been pushed.
 scripts/bump-version.sh 0.2.0     # updates all eight version carriers
 $EDITOR CHANGELOG.md              # add the section; move [Unreleased] links
 bash .gnomon/ci.sh                # includes the version-consistency gate
+bash scripts/fresh-machine.sh     # what a user with only Node actually gets
 git commit -am "release: v0.2.0"
 git tag -a v0.2.0 -m "gnomon v0.2.0"
 git push origin master v0.2.0
 ```
+
+`scripts/fresh-machine.sh` is the one check that runs OUTSIDE a checkout: it
+installs the four tarballs the documented way into a container with Node and
+nothing else, then runs every offline command. Five of the defects found in the
+released v0.2.3 were invisible to every other gate — a README install command
+that 404s, and a "native binary not found" message naming three commands when
+five needed one. It needs docker and exits 2 without it; CI runs it too, but run
+it here as well, because this is the last moment before the artefact is public.
 
 The tag push triggers `.github/workflows/release.yml`, which re-checks the
 version, builds binaries for four targets (linux-x64, linux-arm64, darwin-arm64,

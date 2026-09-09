@@ -393,3 +393,65 @@ jobs:
             exit 1
           fi
           exit $rc
+
+  fresh-machine:
+    # THE ONLY JOB THAT SEES WHAT A NEW USER SEES.
+    #
+    # Every other job runs inside a checkout, where the crates are built, the
+    # workspace resolves gnomon-core to ./src/index.ts, and a git history
+    # exists. An outside sweep of the released v0.2.3 on 2026-09-08 asked the
+    # other question — does this work for someone who has only Node? — and
+    # returned five confirmed defects, NOT ONE of which was findable from here:
+    # a README install command that 404s, and a "native binary not found"
+    # message that named three commands while five needed one, so
+    # `gnomon enumerations` printed a sentence promising `gnomon enumerations`
+    # did not need a binary.
+    #
+    # It installs the four tarballs the documented way into a container with
+    # Node and nothing else, runs every offline command, and requires the
+    # MEASURED set of commands needing a native binary to equal
+    # NATIVE_ONLY_COMMANDS exactly — not "at least", so a stale constant fails
+    # as loudly as a new dependency does.
+    #
+    # Not yet in branch protection's required set: it is new, and a check is
+    # promoted to required once it has been green long enough to be trusted,
+    # the same way windows-tests was.
+    name: Fresh machine (Node only, no Rust, no clone)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      # The tarballs must contain compiled JS, and the declared-set side of the
+      # comparison is read out of gnomon-natives' build.
+      - name: Build (compile to dist/)
+        run: pnpm -r run build
+
+      - name: Fresh-machine install and command sweep
+        run: |
+          set -uo pipefail
+          set +e
+          bash scripts/fresh-machine.sh
+          rc=$?
+          set -e
+          if [ "$rc" -eq 2 ]; then
+            echo ""
+            echo "FAIL: no docker on a runner that has docker. The one check that"
+            echo "      sees install-time defects skipped itself, and a skip must"
+            echo "      not read as a pass."
+            exit 1
+          fi
+          exit $rc
