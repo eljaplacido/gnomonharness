@@ -77,6 +77,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runTui } from "gnomon-tui";
 import { initSurface } from "./init.js";
+import { looksLikeChatModel, suggestChatModel } from "./detect.js";
 import { pendingMigrations, applyMigrations, MIGRATIONS } from "./migrate.js";
 
 // ---------------------------------------------------------------------------
@@ -892,6 +893,10 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
 
   // ── 4. Which model, from what the endpoint actually offers ───────────────
   let model = args.flags.model;
+  // Whether GNOMON picked the tag or a person did. It decides what the probe
+  // failure below is allowed to blame: a tag this command chose is this
+  // command's problem to explain, not the user's to be lectured about.
+  let modelWasChosenForYou = false;
   if (!model) {
     process.stdout.write("  Asking the endpoint what it serves… ");
     const offered = await listModelsAt(endpoint);
@@ -900,6 +905,19 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
       model = interactive ? await ask("  Model tag: ") : "";
     } else {
       console.log(`${offered.length} models.`);
+      // The list is sorted, so `offered[0]` is the ALPHABETICALLY first tag.
+      // On a stock Ollama that is bge-m3:latest -- an embedding model, which
+      // fails the probe with `"bge-m3:latest" does not support chat` while the
+      // command reported "Either the URL or the model tag is wrong for this
+      // provider" about a tag the user never chose. Found 2026-09-08 against a
+      // local Ollama serving ten models.
+      //
+      // Name-only filtering, shared with `gnomon init` via looksLikeChatModel
+      // so there is one list of what cannot chat. It is a filter and not a
+      // verdict: if nothing looks chat-capable the full list is used rather
+      // than refusing, because the names are all this endpoint reported.
+      const chatty = offered.filter(looksLikeChatModel);
+      const suggested = suggestChatModel(offered)!;
       if (interactive) {
         const preview = offered.slice(0, 40);
         for (let i = 0; i < preview.length; i += 3) {
@@ -908,9 +926,17 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
         if (offered.length > preview.length) {
           console.log(`    …and ${offered.length - preview.length} more`);
         }
-        model = await ask(`  Model [${offered[0]}]: `, offered[0]!);
+        if (chatty.length > 0 && chatty.length < offered.length) {
+          console.log(
+            `    (${offered.length - chatty.length} of these look like embedding ` +
+              `models and are not offered as the default.)`
+          );
+        }
+        model = await ask(`  Model [${suggested}]: `, suggested);
+        modelWasChosenForYou = model === suggested;
       } else {
-        model = offered[0]!;
+        model = suggested;
+        modelWasChosenForYou = true;
       }
     }
     // A tag that is not on the list is the mistake that produces an opaque
@@ -940,7 +966,18 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
           `  Get a fresh key and run: gnomon key set ${keyEnv ?? name}`
       );
     } else if (probe.status === 404 || probe.status === 400) {
-      console.error(`\n  Either the URL or the model tag is wrong for this provider.`);
+      if (modelWasChosenForYou) {
+        // Say who picked it. This branch used to read "Either the URL or the
+        // model tag is wrong for this provider" over a tag the user had never
+        // typed, which sends them to check a URL that is fine.
+        console.error(
+          `\n  Nothing is necessarily wrong with the URL: \`${model}\` is the tag\n` +
+            `  gnomon picked from what the endpoint listed, not one you gave.\n` +
+            `  Name one yourself with:  gnomon endpoint add --preset ${args.flags.preset ?? name} --model <tag>`
+        );
+      } else {
+        console.error(`\n  Either the URL or the model tag is wrong for this provider.`);
+      }
     }
     console.error(`\n  Nothing was written to .gnomon/. Fix the above and run this again.`);
     process.exit(1);

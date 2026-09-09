@@ -3,14 +3,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import {
-  parseParameterSize,
-  chooseModels,
-  detectModels,
-  DetectedModel,
-  FALLBACK_LARGE,
-  FALLBACK_SMALL,
-} from "./detect.js";
+import { parseParameterSize, chooseModels, detectModels, DetectedModel, FALLBACK_LARGE, FALLBACK_SMALL, looksLikeChatModel, suggestChatModel } from "./detect.js";
 
 const m = (name: string, billions: number, family = "qwen2"): DetectedModel => ({
   name, billions, family,
@@ -131,5 +124,58 @@ describe("detectModels", () => {
         expect((await detectModels()).fallback).toMatch(/500/);
       }
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Choosing a tag from names alone
+// ---------------------------------------------------------------------------
+//
+// `gnomon endpoint add --preset ollama` with no --model took `offered[0]`.
+// The list is sorted, so that is the ALPHABETICALLY first tag — on a stock
+// Ollama, `bge-m3:latest`. The probe then failed with `"bge-m3:latest" does not
+// support chat` and the command printed "Either the URL or the model tag is
+// wrong for this provider" about a tag the user had never typed. Found
+// 2026-09-08 against a local Ollama serving ten models; reproduced here as the
+// same ten, in the same sorted order.
+describe("suggesting a model from names alone", () => {
+  // The real /api/tags response from the machine the defect was found on.
+  const OLLAMA_TEN = [
+    "bge-m3:latest",
+    "deepseek-r1:32b-qwen-distill-q4_K_M",
+    "gemma3-4b:latest",
+    "nemotron-3-nano:30b-a3b-q4_K_M",
+    "nemotron-3-nano:4b",
+    "nemotron-3-super:120b-a12b-q4_K_M",
+    "qwen2.5:14b-instruct",
+    "qwen2.5:7b-instruct",
+    "qwen3.5:122b-a10b-q4_K_M",
+    "qwen3.6:35b",
+  ];
+
+  it("does not offer the embedding model that sorts first", () => {
+    expect(OLLAMA_TEN[0]).toBe("bge-m3:latest"); // the trap, still first
+    expect(suggestChatModel(OLLAMA_TEN)).toBe("deepseek-r1:32b-qwen-distill-q4_K_M");
+  });
+
+  it("recognises the embedding families by name", () => {
+    for (const n of ["bge-m3:latest", "nomic-embed-text:v1.5", "all-minilm:l6", "mxbai-embed-large"]) {
+      expect(looksLikeChatModel(n), `${n} was treated as a chat model`).toBe(false);
+    }
+    // The other direction matters as much: a filter that rejects everything
+    // would pass the test above and be useless.
+    for (const n of ["qwen3.6:35b", "deepseek-r1:32b", "gemma3-4b:latest", "llama3.3:70b"]) {
+      expect(looksLikeChatModel(n), `${n} was treated as an embedding model`).toBe(true);
+    }
+  });
+
+  it("suggests something rather than nothing when no name looks chat-capable", () => {
+    // A name filter cannot recognise every chat model. Refusing to suggest
+    // would be worse than suggesting what the old code did.
+    expect(suggestChatModel(["bge-m3:latest", "all-minilm:l6"])).toBe("bge-m3:latest");
+  });
+
+  it("has nothing to suggest for an empty list", () => {
+    expect(suggestChatModel([])).toBeUndefined();
   });
 });

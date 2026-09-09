@@ -46,6 +46,45 @@ const NOT_CHAT_FAMILIES = new Set(["bert", "nomic-bert"]);
 const NOT_CHAT_NAMES = /(^|\/)(bge|nomic-embed|all-minilm|mxbai-embed)/i;
 
 /**
+ * Could this tag hold a conversation, judged by name alone?
+ *
+ * The name is all some callers have. `/v1/models` and `/api/tags` return tags
+ * with no family and no parameter size, so `chooseModels` -- which needs both
+ * -- cannot be used there, and `gnomon endpoint add` was picking the
+ * alphabetically first tag instead. On a stock Ollama that is `bge-m3:latest`,
+ * an embedding model, which then failed the probe with
+ * `"bge-m3:latest" does not support chat` while the command blamed the URL.
+ *
+ * Exported so there is ONE list of what cannot chat. A second copy in the CLI
+ * would be a list to keep in step by hand, which is how the four-way "only
+ * surface, apply and session need the binaries" drift happened.
+ *
+ * Name-only, so it is a filter and not a verdict: it cannot see a chat model
+ * with an unusual name, which is why callers fall back to the full list rather
+ * than refusing when nothing matches.
+ */
+export function looksLikeChatModel(name: string): boolean {
+  return !NOT_CHAT_NAMES.test(name);
+}
+
+/**
+ * Which of these tags to offer as the default, given only their names.
+ *
+ * Callers have a sorted list from `/v1/models` or `/api/tags` and nothing else
+ * -- no family, no parameter size -- so this is deliberately the weakest
+ * possible choice: the first tag that does not look like an embedding model.
+ * `gnomon endpoint add` took `offered[0]` instead, which is the ALPHABETICALLY
+ * first tag, and on a stock Ollama that is `bge-m3:latest`.
+ *
+ * Falls back to the plain first tag when nothing looks chat-capable. A name
+ * filter cannot recognise every chat model, and refusing to suggest anything
+ * would be worse than suggesting the same tag as before.
+ */
+export function suggestChatModel(offered: readonly string[]): string | undefined {
+  return offered.find(looksLikeChatModel) ?? offered[0];
+}
+
+/**
  * Largest model to pick automatically.
  *
  * A 120B model is a poor first experience — minutes per turn on most
@@ -75,7 +114,7 @@ export function parseParameterSize(raw: string | undefined): number {
 /** Rank and filter what an endpoint reported. */
 export function chooseModels(models: DetectedModel[]): ModelChoice {
   const chat = models
-    .filter((m) => !NOT_CHAT_FAMILIES.has(m.family) && !NOT_CHAT_NAMES.test(m.name))
+    .filter((m) => !NOT_CHAT_FAMILIES.has(m.family) && looksLikeChatModel(m.name))
     .filter((m) => m.billions > 0)
     .sort((a, b) => a.billions - b.billions);
 
