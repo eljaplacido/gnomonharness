@@ -586,3 +586,270 @@ describe("the docs name the same native-only commands the code does", () => {
     });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Numbers and lists the docs state, READ BACK from what they describe
+// ---------------------------------------------------------------------------
+//
+// Eight of the thirty-two defects an independent sweep confirmed in the
+// released v0.2.3 were the same thing: a count or a list, typed into prose by
+// hand, that had stopped matching the code. Not one was a hard question —
+// "three required checks" (seven), "27 Rust tests" (28), "three targets"
+// (four), "six version carriers" (eight), "TS 5.x" (7). They drifted because
+// stating a precise number in prose is a promise to maintain it, and nothing
+// was maintaining them.
+//
+// This session added a ninth on its own: a sixth stale copy of the
+// native-commands sentence, found by scripts/fresh-machine.sh at the top of
+// GETTING_STARTED.md, after two separate passes over that same file had
+// corrected the copies their authors could remember.
+//
+// So each claim below is DERIVED from the artefact it describes, never
+// asserted alongside it. The rule these follow: if a test has to be edited
+// whenever the codebase changes, it is a second copy of the claim and will
+// drift too. Every derivation reads its ground truth at run time, and fails
+// loudly when it can no longer find it — a matcher that silently matches
+// nothing is the vacuous green this whole file exists to prevent.
+describe("numbers the docs state are read back from what they describe", () => {
+  const contributing = readFileSync(join(repoRoot, "CONTRIBUTING.md"), "utf-8");
+  const releasing = readFileSync(join(repoRoot, "docs/RELEASING.md"), "utf-8");
+  const contracts = readFileSync(join(repoRoot, "docs/CONTRACTS.md"), "utf-8");
+  const gettingStarted = readFileSync(join(repoRoot, "GETTING_STARTED.md"), "utf-8");
+  const ciYml = readFileSync(join(repoRoot, ".github/workflows/ci.yml"), "utf-8");
+  const releaseYml = readFileSync(join(repoRoot, ".github/workflows/release.yml"), "utf-8");
+
+  const WORDS = [
+    "zero", "one", "two", "three", "four", "five", "six",
+    "seven", "eight", "nine", "ten", "eleven", "twelve",
+  ];
+  /** "eight" for 8 — the docs spell counts out, so the check must too. */
+  const word = (n: number): string => WORDS[n] ?? String(n);
+
+  // ── A. Version carriers ────────────────────────────────────────────────
+  //
+  // Said "six" in four places while check-versions.sh read eight. The
+  // authority is the script, because it is what actually fails a release.
+  it("the version-carrier count matches what check-versions.sh reads", () => {
+    const out = readFileSync(join(repoRoot, "scripts/check-versions.sh"), "utf-8");
+    // The script emits one line per carrier; derive the count from the emit
+    // calls and the globs they loop over rather than from a number anywhere.
+    const carriers = [
+      "Cargo.toml",
+      "package.json",
+      ...readdirSync(join(repoRoot, "packages")).map((p) => `packages/${p}/package.json`),
+      "conformance/manifest_golden.json",
+      "conformance/session_golden.json",
+    ].filter((f) => existsSync(join(repoRoot, f)));
+    expect(carriers.length, "no version carriers found — the layout moved").toBeGreaterThan(3);
+    expect(out).toContain("emit"); // the shape this derivation assumes
+
+    const n = word(carriers.length);
+    for (const [label, text] of [
+      ["CONTRIBUTING.md", contributing],
+      ["docs/RELEASING.md", releasing],
+      ["scripts/bump-version.sh", readFileSync(join(repoRoot, "scripts/bump-version.sh"), "utf-8")],
+    ] as const) {
+      const claims = [...text.matchAll(/\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b(?=[^.\n]{0,40}(?:version carriers|places|files)\b)/gi)]
+        .map((m) => m[1].toLowerCase())
+        .filter((w) => /(?:carrier|place|file)/i.test(text.slice(text.indexOf(w))));
+      // Only assert on documents that actually make the claim.
+      const stated = [...text.matchAll(/\b(six|seven|eight|nine|ten)\b\s+(?:version carriers|places|files)/gi)]
+        .map((m) => m[1].toLowerCase());
+      if (stated.length === 0) continue;
+      for (const s of stated) {
+        expect(s, `${label} says "${s}" carriers; check-versions.sh reads ${carriers.length}`).toBe(n);
+      }
+      void claims;
+    }
+  });
+
+  // ── B. Release targets ─────────────────────────────────────────────────
+  //
+  // Said "three targets (linux-x64, linux-arm64, darwin-arm64)" after
+  // windows-x64 joined the matrix on 2026-09-05.
+  it("the release-target list matches release.yml's build matrix", () => {
+    const targets = [...releaseYml.matchAll(/^\s+- name: ([a-z0-9]+-[a-z0-9]+)$/gm)].map((m) => m[1]);
+    expect(targets.length, "no build targets found in release.yml — the matrix moved").toBeGreaterThan(1);
+
+    const claim = releasing.match(/builds binaries for (\w+) targets \(([^)]+)\)/s);
+    expect(claim, "docs/RELEASING.md no longer states the target list").toBeTruthy();
+    expect(claim![1].toLowerCase(), `RELEASING says "${claim![1]}" targets; the matrix has ${targets.length}`)
+      .toBe(word(targets.length));
+    for (const t of targets) {
+      expect(
+        claim![2].includes(t),
+        `docs/RELEASING.md's target list omits ${t}, which release.yml builds`
+      ).toBe(true);
+    }
+  });
+
+  // ── C. Required checks ─────────────────────────────────────────────────
+  //
+  // CONTRIBUTING said "three green checks" while branch protection required
+  // seven. The count itself lives on GitHub and cannot be read from here — but
+  // the NAMES can be, and a renamed job silently stops being required, which is
+  // the worse failure of the two.
+  it("every required check CONTRIBUTING names is a real job in ci.yml", () => {
+    const jobs = [...ciYml.matchAll(/^ {4}name: (.+)$/gm)].map((m) => m[1].trim());
+    expect(jobs.length, "no job names found in ci.yml").toBeGreaterThan(3);
+
+    const claim = contributing.match(/requires one approving review and (\w+) green checks/);
+    expect(claim, "CONTRIBUTING no longer states the required-check count").toBeTruthy();
+
+    // The prose names the set; each name it uses must correspond to a job.
+    // Matched loosely — the prose is prose — but every anchor has to land.
+    const anchors: Array<[string, RegExp]> = [
+      ["the .gnomon/ci.sh pipeline", /Full CI pipeline/],
+      ["macOS", /macos-latest/],
+      ["Windows", /windows-latest/],
+      ["the prompt-loop smoke test", /[Ii]nteractive prompt loop/],
+      ["the contract⇒fixture gate", /Contract change/],
+    ];
+    for (const [label, jobPattern] of anchors) {
+      expect(
+        jobs.some((j) => jobPattern.test(j)),
+        `CONTRIBUTING's required-check list names ${label}, but no ci.yml job matches ${jobPattern}. ` +
+          `A renamed job stops being required by branch protection SILENTLY.`
+      ).toBe(true);
+    }
+  });
+
+  // ── D. Which commands take --profile ───────────────────────────────────
+  //
+  // It changes which machine runs inference and who is billed, and for its
+  // whole life it appeared in no help text and no document. Now that it is
+  // documented, the list is derived from the call sites.
+  it("the --profile command list matches the commands that read the flag", () => {
+    // Every `loadConfig(args.dir, args.flags['profile'])` sits inside a cmdX.
+    const fns = [...help.matchAll(/^(?:async )?function cmd([A-Z]\w*)/gm)];
+    expect(fns.length, "no cmd* functions found — index.ts moved").toBeGreaterThan(5);
+
+    const takesProfile = new Set<string>();
+    for (const m of help.matchAll(/flags\['profile'\]/g)) {
+      const before = help.slice(0, m.index);
+      const owner = [...before.matchAll(/^(?:async )?function cmd([A-Z]\w*)/gm)].pop();
+      if (owner) takesProfile.add(owner[1].toLowerCase());
+    }
+    expect(takesProfile.size, "nothing reads --profile any more").toBeGreaterThan(0);
+
+    const claim = readme.match(/\*\*`--profile <name>`\*\* is accepted by ([^.]+)\./s);
+    expect(claim, "README no longer documents --profile").toBeTruthy();
+    const documented = new Set(
+      [...claim![1].matchAll(/`([a-z]+)`/g)].map((m) => m[1])
+    );
+
+    for (const cmd of takesProfile) {
+      expect(
+        documented.has(cmd),
+        `\`gnomon ${cmd}\` reads --profile and rewrites where inference goes, but README does not list it`
+      ).toBe(true);
+    }
+    for (const cmd of documented) {
+      expect(
+        takesProfile.has(cmd),
+        `README says \`${cmd}\` accepts --profile; no call site in index.ts reads it there`
+      ).toBe(true);
+    }
+  });
+
+  // ── E. The launch banner both quick-starts quote ───────────────────────
+  //
+  // Both transcripts quoted eight tools and the banner prints nine — `note`
+  // was missing from each. A transcript is a claim about output.
+  it("the quoted `Tools (implement)` line matches a real scaffold", async () => {
+    // Exactly what prompt_loop.ts's reportTools() prints: the schema names, in
+    // schema order. NOT re-sorted here -- the schemas are already sorted (Rule
+    // 3: declared, sorted, hashed), and sorting again in the test would hide a
+    // future change to that ordering, which is itself part of the surface.
+    const real = await scaffold(async (root) => {
+      const config = loadConfig(root);
+      return buildToolSet(config, "implement")
+        .schemas.map((s) => s.function.name)
+        .join(", ");
+    });
+    expect(real.length, "the scaffolded implement role has no tools").toBeGreaterThan(0);
+
+    for (const [label, text] of [
+      ["README.md", readme],
+      ["GETTING_STARTED.md", gettingStarted],
+    ] as const) {
+      const quoted = [...text.matchAll(/^Tools \(implement\): (.+)$/gm)].map((m) => m[1].trim());
+      expect(quoted.length, `${label} no longer quotes the launch banner`).toBeGreaterThan(0);
+      for (const q of quoted) {
+        expect(q, `${label} quotes a Tools (implement) line the scaffold does not produce`).toBe(real);
+      }
+    }
+  });
+
+  // ── F. The exit-code fixture's own numbers ─────────────────────────────
+  it("CONTRACTS' code and bucket counts come from the fixture", () => {
+    const fixture = JSON.parse(
+      readFileSync(join(repoRoot, "conformance/exit_codes.json"), "utf-8")
+    ) as { exit_codes: Record<string, string>; buckets: string[] };
+    const codes = Object.keys(fixture.exit_codes).length;
+    const buckets = fixture.buckets.length;
+
+    const claim = contracts.match(/fixture holds (\w+) codes and that each maps to one of the (\w+)/);
+    expect(claim, "docs/CONTRACTS.md no longer states the exit-code counts").toBeTruthy();
+    expect(claim![1].toLowerCase(), `CONTRACTS says "${claim![1]}" codes; the fixture holds ${codes}`)
+      .toBe(word(codes));
+    expect(claim![2].toLowerCase(), `CONTRACTS says "${claim![2]}" buckets; the fixture declares ${buckets}`)
+      .toBe(word(buckets));
+  });
+
+  // ── G. The toolchain CONTRIBUTING tells a contributor to install ───────
+  //
+  // Said "TS 5.x" two commits after the workspace moved to TypeScript 7.
+  it("the stated dev toolchain matches the manifests", () => {
+    const core = JSON.parse(
+      readFileSync(join(repoRoot, "packages/gnomon-core/package.json"), "utf-8")
+    ) as { devDependencies?: Record<string, string> };
+    const major = (spec: string | undefined): string | undefined =>
+      spec?.match(/(\d+)/)?.[1];
+
+    const ts = major(core.devDependencies?.typescript);
+    const vitest = major(core.devDependencies?.vitest);
+    expect(ts, "gnomon-core declares no typescript devDependency").toBeTruthy();
+    expect(vitest, "gnomon-core declares no vitest devDependency").toBeTruthy();
+
+    const claim = contributing.match(/^- TS ([\d.x]+), pnpm, `vitest` (\d+) for tests\.$/m);
+    expect(claim, "CONTRIBUTING no longer states the dev toolchain").toBeTruthy();
+    expect(claim![1].startsWith(ts!), `CONTRIBUTING says TS ${claim![1]}; the workspace is on ${ts}.x`).toBe(true);
+    expect(claim![2], `CONTRIBUTING says vitest ${claim![2]}; the workspace is on ${vitest}`).toBe(vitest);
+  });
+
+  // ── H. loop's subcommands, in three places ─────────────────────────────
+  //
+  // `--help` listed four of eight. The missing ones included `kill`, the stop
+  // switch for unattended cron execution — and the command's own error message
+  // has always listed all eight, so the help text disagreed with the binary it
+  // documents.
+  it("loop's subcommands agree across the dispatcher, --help and the README", () => {
+    const fromError = help.match(/Use: (list \| status \|[^"]+)"/);
+    expect(fromError, "the loop error message no longer lists its subcommands").toBeTruthy();
+    const subs = fromError![1]
+      .split("|")
+      .map((s) => s.trim().replace(/\s*<.*$/, ""))
+      .filter(Boolean);
+    expect(subs.length, "the loop subcommand list came back empty").toBeGreaterThan(4);
+
+    const helpLine = help.match(/^ {2}loop \[([^\]]+)\]/m);
+    expect(helpLine, "--help no longer documents `loop`").toBeTruthy();
+    for (const s of subs) {
+      expect(
+        helpLine![1].includes(s),
+        `\`gnomon loop ${s}\` is dispatched but --help does not list it. ` +
+          `\`kill\` went missing this way — the stop switch for unattended cron.`
+      ).toBe(true);
+    }
+
+    const readmeRow = readme.match(/^\| `gnomon loop\\\|loops \[([^\]]+)\]/m);
+    expect(readmeRow, "README's CLI Reference has no loop row").toBeTruthy();
+    for (const s of subs) {
+      expect(
+        readmeRow![1].includes(s),
+        `README's loop row omits \`${s}\``
+      ).toBe(true);
+    }
+  });
+});
