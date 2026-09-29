@@ -2537,6 +2537,28 @@ export function sessionModeBlock(interactive: boolean): string {
         "a question: carry the task out, check it, then report.";
 }
 
+/**
+ * A machine fact the model otherwise guesses wrong: which OS the shell is on.
+ *
+ * Deliberately outside the surface (like the credential store and the shell
+ * path): the same checkout on Windows and Linux has the same hash and the same
+ * behaviour rules, but `apt`, `/tmp` and `python3` are Linux-isms a model on a
+ * Git Bash host writes by default and then spends calls discovering. Empty on
+ * every other platform, so a Linux or macOS prompt is unchanged.
+ */
+export function platformBlock(platform: NodeJS.Platform = process.platform): string {
+  if (platform !== "win32") return "";
+  return (
+    "\n\n## This machine\n\n" +
+    "Windows. The `bash` tool runs Git Bash (MSYS2): POSIX commands, pipes and " +
+    "forward-slash paths work, and `/c/Users/x` is `C:\\Users\\x`. There is no " +
+    "apt, sudo or systemd. `python3` may be missing -- try `python` or `py`. Use " +
+    "`$TEMP`, not /tmp. Windows tools are callable from it (`powershell -NoProfile " +
+    "-Command ...`, `cmd //c ...`). Files may have CRLF line endings; `read` shows " +
+    "them without the \\r and `edit` matches either."
+  );
+}
+
 export function buildSystemPrompt(
   state: PromptState,
   role: string,
@@ -2558,7 +2580,7 @@ export function buildSystemPrompt(
       dormant,
       `${basename(state.config.gnomonDir)}/${SKILLS_DIR}`
     ) + runNotesBlock(state)
-  ) + `\n\n${sessionModeBlock(state.interactive === true && !opts.delegated)}`;
+  ) + platformBlock() + `\n\n${sessionModeBlock(state.interactive === true && !opts.delegated)}`;
 }
 
 export async function runAgenticTurn(

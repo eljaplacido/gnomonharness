@@ -64,7 +64,7 @@ def make_fixture(d, harness):
     subprocess.run(["git", "init", "-q"], cwd=d, capture_output=True)
     if harness == "gnomon":
         t0 = time.time()
-        subprocess.run(["node", GNOMON, "init"], cwd=d, capture_output=True, timeout=120)
+        subprocess.run(["node", GNOMON, "init", "--no-verify"], cwd=d, capture_output=True, timeout=120)
         SETUP_MS.setdefault("gnomon", []).append(int((time.time() - t0) * 1000))
         if IS_OR:
             c = d / ".gnomon/config.toml"

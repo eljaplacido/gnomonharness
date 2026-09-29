@@ -88,7 +88,7 @@ def scaffold(root, spec_dir, defective_src, tmff):
     subprocess.run(["git", "-c", "user.email=b@b", "-c", "user.name=b",
                     "commit", "-qm", "before"], cwd=root, check=True)
 
-    subprocess.run([str(TSX), str(CLI), "init"], cwd=root,
+    subprocess.run([str(TSX), str(CLI), "init", "--no-verify"], cwd=root,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
     cfg = root / ".gnomon/config.toml"

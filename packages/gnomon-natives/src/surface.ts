@@ -158,7 +158,10 @@ export function findBinary(name: string): string {
     // installed-first, because that is the reader more likely to be stuck.
     "Download the binaries for your platform (no Rust toolchain needed):\n" +
     "  https://github.com/eljaplacido/gnomonharness/releases/latest\n" +
-    "  then:  export GNOMON_BIN_OVERRIDE=/path/to/unpacked-dir\n\n" +
+    (process.platform === "win32"
+      ? "  then:  $env:GNOMON_BIN_OVERRIDE = \"C:\\path\\to\\unpacked-dir\"   (PowerShell)\n" +
+        "         set GNOMON_BIN_OVERRIDE=C:\\path\\to\\unpacked-dir        (cmd)\n\n"
+      : "  then:  export GNOMON_BIN_OVERRIDE=/path/to/unpacked-dir\n\n") +
     "Or, from a git checkout of gnomon, build them:\n" +
     `  cargo build --release --bin ${name}\n` +
     "  (or `pnpm run build:native` for all four)\n\n" +

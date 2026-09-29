@@ -508,3 +508,23 @@ describe("mcp protocol version", () => {
     }
   });
 });
+
+describe("MCP on Windows: .cmd shims", () => {
+  it("runs npx.cmd through cmd.exe with every argument quoted and escaped", async () => {
+    const { windowsSpawnPlan } = await import("./mcp.js");
+    const env = { PATH: "C:\\node;C:\\bin", PATHEXT: ".COM;.EXE;.BAT;.CMD", ComSpec: "C:\\Windows\\cmd.exe" };
+    const plan = windowsSpawnPlan("npx", ["-y", "@srv/pkg", "a&b"], env, (p) => p === "C:\\node\\npx.cmd");
+    expect(plan.file).toBe("C:\\Windows\\cmd.exe");
+    expect(plan.verbatim).toBe(true);
+    expect(plan.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+    // `&` stays inside one argument instead of starting a second command.
+    expect(plan.args[3]).toContain('^"a^&b^"');
+  });
+
+  it("runs a real .exe directly, and leaves an unresolvable command to fail as ENOENT", async () => {
+    const { windowsSpawnPlan } = await import("./mcp.js");
+    const env = { PATH: "C:\\py", PATHEXT: ".EXE;.CMD" };
+    expect(windowsSpawnPlan("uv", ["run"], env, (p) => p === "C:\\py\\uv.exe")).toEqual({ file: "C:\\py\\uv.exe", args: ["run"], verbatim: false });
+    expect(windowsSpawnPlan("nope", [], env, () => false)).toEqual({ file: "nope", args: [], verbatim: false });
+  });
+});

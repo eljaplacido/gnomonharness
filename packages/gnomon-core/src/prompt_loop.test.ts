@@ -1988,6 +1988,15 @@ describe("runTask — the non-interactive contract", () => {
     expect(sub).toMatch(/Nobody is at the terminal/);
   });
 
+  it("tells the model it is on Windows, and says nothing on other platforms", () => {
+    expect(promptLoop.platformBlock("linux")).toBe("");
+    expect(promptLoop.platformBlock("darwin")).toBe("");
+    const w = promptLoop.platformBlock("win32");
+    expect(w).toMatch(/Git Bash/);
+    expect(w).toMatch(/\$TEMP/);
+    expect(w).toMatch(/CRLF/);
+  });
+
   it("replaces dropped steps with a ledger of what ran and how it ended", () => {
     // "If you need one again, gather it again" -- and it did: `pnpm run verify`
     // twelve times in one turn, each run's exit status dropped with its output.
