@@ -2826,6 +2826,24 @@ export interface ResolvedLoop {
    * Measured: one nudge is survivable (10/14 trials pass), two is not (1/11).
    */
   max_consecutive_empty: number;
+  /**
+   * Consecutive replies whose tool calls could not be used, tolerated before
+   * the turn is ended with `stop_reason: "malformed"`.
+   *
+   * "Could not be used" means every call in the reply had arguments that were
+   * not a JSON object, or named a tool this role was not offered; or the reply
+   * wrote its call out as markup in the text; or the endpoint itself failed to
+   * parse the call the model emitted. Each such reply is answered with what was
+   * wrong and the model is asked to re-issue the call -- a repair turn. Any
+   * usable reply resets the count.
+   *
+   * Local Qwen-family models behind llama.cpp or Ollama produce all four shapes
+   * when the chat template and the endpoint's tool parser disagree. Without a
+   * bound the repair turns ran until the step wall. NOT VERIFIED: 2 is not a
+   * measured optimum; it is "re-ask twice", the same order as the other
+   * re-ask bounds in this block.
+   */
+  max_consecutive_malformed: number;
   /** How many run notes are kept and replayed. Oldest fall off first. */
   max_run_notes: number;
   /**
@@ -2899,6 +2917,7 @@ export interface ResolvedLoop {
  */
 export const LOOP_DEFAULTS: ResolvedLoop = {
   max_consecutive_empty: 3,
+  max_consecutive_malformed: 2,
   max_run_notes: 40,
   read_only_converge_after: 0.6,
   all_refused_notice: 3,
@@ -2924,7 +2943,7 @@ export const LOOP_DEFAULTS: ResolvedLoop = {
  * still compiled in and still outside the hash -- `STALL_WINDOW` (8) and
  * `STALL_DISTINCT` (2), which govern the A-B-A-B alternation test, and the TEXT
  * of the nudge and convergence messages, which the reconciliation doc names
- * alongside the numbers. So "[loop] declares the loop" is true of these nine and
+ * alongside the numbers. So "[loop] declares the loop" is true of these ten and
  * of nothing else yet.
  */
 export function resolveLoop(config: GnomonConfig): ResolvedLoop {
@@ -2935,6 +2954,10 @@ export function resolveLoop(config: GnomonConfig): ResolvedLoop {
   return {
     // 0 is legal and means "one blank ends the turn": never re-ask.
     max_consecutive_empty: Math.floor(num(l?.max_consecutive_empty, d.max_consecutive_empty)),
+    // 0 is legal too: the first unusable reply ends the turn, with no repair.
+    max_consecutive_malformed: Math.floor(
+      num(l?.max_consecutive_malformed, d.max_consecutive_malformed)
+    ),
     // Floored at 1, not 0. `pushNote` keeps the tail with `slice(-limit)`, and
     // `[1,2,3].slice(-0)` returns the WHOLE array -- checked in node, not in a
     // test -- so a bound of zero would silently mean no bound at all. A setting

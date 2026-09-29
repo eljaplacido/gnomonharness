@@ -702,6 +702,7 @@ Four rules the window keeps:
 ```toml
 [turn]
 max_consecutive_empty = 3         # blank replies in a row before the turn is done
+max_consecutive_malformed = 2     # replies with no usable tool call re-asked before the turn ends
 max_run_notes = 40                # run notes kept and replayed; oldest fall off first
 read_only_converge_after = 0.6    # a role with no write/edit/bash is pushed to conclude here
 all_refused_notice = 3            # every call to one tool refused this often → say so out loud
@@ -714,7 +715,10 @@ converge_refire = 6               # calls between convergence re-pushes past con
 
 Every value shown is the default, so a surface that omits the block — or writes
 it out exactly as above — behaves as it always did. What changes is that the
-numbers are now *declarable*, and therefore hashed.
+numbers are now *declarable*, and therefore hashed. The one exception is
+`max_consecutive_malformed`, which arrived with a behaviour change of its own:
+before it, unusable tool calls were re-asked with no bound but the step wall
+(markup once, then recorded as `answered`).
 
 **Why this block exists.** `.gnomon/` is supposed to declare everything that
 decides how the agent acts, content-hashed, with that hash stamped on every
@@ -731,6 +735,7 @@ nothing in the record could say so.
 | Key | What it decides |
 |---|---|
 | `max_consecutive_empty` | Blank completions in a row tolerated before the turn is recorded with `stop_reason: empty`. Each re-ask is worded differently. `0` means one blank ends the turn. |
+| `max_consecutive_malformed` | Replies in a row with no usable tool call — arguments that are not one JSON object, a tool the role was not given, a call written as `<tool_call>` markup in the text, or one the endpoint could not parse — each answered with what was wrong and a request to re-issue it. Past this many the turn wraps up with `stop_reason: malformed`. Any usable reply resets the count. `0` means the first one ends the turn. Markup is never parsed and run on the model's behalf: the fix for a template mismatch is the endpoint `kind` or the model's template. |
 | `max_run_notes` | The bound on the run's own notes, replayed to later turns and surviving compaction. Oldest fall off first. |
 | `read_only_converge_after` | Fills in `converge_after` for a role holding no `write`, `edit`, `bash`, `task` or `skill` — whatever it finds, the only possible output is a report. An explicit `converge_after` in `roles.toml` always wins. `0` disables it. |
 | `all_refused_notice` | After this many calls to one tool, all of them refused, the loop says the policy may be wrong. A `bash_allow` pattern can compile and still match nothing; `gnomon audit` cannot catch that. |
@@ -743,10 +748,11 @@ nothing in the record could say so.
 Values are floored where a zero would mean the opposite of what it reads:
 `max_run_notes = 0` would keep *every* note (`slice(-0)` returns the whole
 array) and `stall_repeats = 0` would declare a stall on the first tool call of
-every turn, so both floor at 1. `max_consecutive_empty` and
-`all_refused_notice` accept `0`, where it honestly means "never".
+every turn, so both floor at 1. `max_consecutive_empty`,
+`max_consecutive_malformed` and `all_refused_notice` accept `0`, where it
+honestly means "never".
 
-**Known limit.** `[turn]` declares nine of the loop's numbers, not all of them.
+**Known limit.** `[turn]` declares ten of the loop's numbers, not all of them.
 The A-B-A-B alternation test (8-call window, 2 distinct signatures) and the
 *wording* of the nudge and convergence messages are still compiled into the
 harness and still outside the surface hash. The reconciliation document names
@@ -756,7 +762,7 @@ so rather than implying otherwise.
 
 **Not a tuning claim.** No run has been measured before and after this block
 existed. It is a correctness change to what the surface hash covers, and it is
-not evidence that any of these nine numbers is the right one.
+not evidence that any of these ten numbers is the right one.
 
 #### `[routing]` — the trust dial
 
