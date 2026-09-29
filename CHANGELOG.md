@@ -24,6 +24,39 @@
   definitions at the foot of this file resolve only once the tags exist.
 -->
 
+## [Unreleased]
+
+**Daily interactive use, from one real session (2026-09-29).** An operator asked
+for a recap; the turn ran 112+ tool calls of implementation, re-ran
+`pnpm run verify` about twelve times, and printed "edit ×7 · nothing changed".
+Each line below is one cause.
+
+- **The prompt says whether anyone will answer.** The scaffolded system.md said
+  "there is no second turn", and the interactive loop sent it to a person who
+  was sitting there. A "This session" block now ends every system prompt: attended
+  sessions answer questions without changing files and ask the operator's
+  decisions; `gnomon task` and delegated sub-turns stay unattended.
+- **Verification is on by default where the project declares a check.** `init`
+  enables `[verify]` with the project's own `verify`/`check`/`test` script,
+  `cargo test`, `go test`, `pytest` or `make test`; nothing is invented. New
+  `after = "change"` runs it after any turn that changed a file, write/edit or
+  shell, and never after a read-only turn. `launch` says so when no check is
+  declared. `gnomon migrate` brings existing surfaces over.
+- **The context trim keeps a ledger.** Dropped steps are replaced by one line
+  each — what ran and how it ended — instead of "gather it again".
+- **Transcript honesty.** Successful edits are never folded under "nothing
+  changed"; a command that exits non-zero shows ✗, not ✓; `approve>` no longer
+  reappears after the prompt was answered; a `| tail` pipeline says its status
+  is tail's (this shell has no pipefail).
+- **`sudo` is refused outright,** before any approval prompt, including under
+  session-wide approval. The docker sandbox is exempt.
+- **`edit`** matches LF `old_text` in CRLF files and keeps them CRLF (Git for
+  Windows' default checkout), and writes `$$`, `$&`, `$'` in `new_text` literally.
+- **Windows launcher** no longer runs through cmd.exe: a checkout under a path
+  with a space starts, and `&`, `|`, `>` in a prompt stay text.
+- Model requests carry `x-opencode-session` and a `gnomon/<build>` User-Agent;
+  opencode Go answered 400 MissingSessionID without them.
+
 ## [0.2.3] — 2026-09-08
 
 **Installable without a clone, and without an npm account.** The release now

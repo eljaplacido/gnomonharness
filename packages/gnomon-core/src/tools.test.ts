@@ -2329,3 +2329,64 @@ describe("the approval window is a TOCTOU window, and is closed", () => {
     expect(readFileSync(target, "utf-8")).toBe("from the agent\n");
   });
 });
+
+describe("bash: host privilege and pipeline status", () => {
+  it("refuses sudo before any approval prompt, however approval is set", async () => {
+    // Session-wide approval covers every gated call; the only sudo that can
+    // succeed with stdin closed is a passwordless one, which nobody meant to grant.
+    let asked = 0;
+    for (const command of ["sudo true", "echo x | sudo tee /tmp/never", "ls && sudo -n true", "xargs -0 sudo rm"]) {
+      const out = await executeTool("bash", { command }, ctx({ approve: async () => (asked++, true) } as any), offered);
+      expect(out.summary).toBe("bash — refused (sudo)");
+      expect(mapBucket(out.code)).toBe("refusal");
+    }
+    expect(asked).toBe(0);
+    // Mentioning it is not running it.
+    const grep = await executeTool("bash", { command: 'echo "use sudo later"' }, ctx(), offered);
+    expect(grep.summary).toBe("bash — exit 0");
+  });
+
+  it("says when an exit status belongs to the last stage of a pipe", async () => {
+    // dash has no pipefail: `verify | tail` reported tail's 0 over a failed check.
+    const out = await executeTool("bash", { command: "false | tail -1" }, ctx(), offered);
+    expect(out.summary).toBe("bash — exit 0");
+    expect(out.content).toMatch(/this exit status is `tail`'s/);
+    const plain = await executeTool("bash", { command: "echo hi" }, ctx(), offered);
+    expect(plain.content).not.toMatch(/pipeline/);
+    const or = await executeTool("bash", { command: "false || echo recovered" }, ctx(), offered);
+    expect(or.content).not.toMatch(/pipeline/);
+  });
+});
+
+describe("edit: line endings and replacement text", () => {
+  it("matches an LF old_text in a CRLF file and keeps the file CRLF", async () => {
+    // Git for Windows checks out CRLF; `read` shows lines without \r and the
+    // model copies what it saw, so every multi-line edit came back not found.
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-crlf-"));
+    try {
+      writeFileSync(join(dir, "a.ts"), "one\r\ntwo\r\nthree\r\n");
+      const out = await executeTool(
+        "edit",
+        { path: "a.ts", old_text: "one\ntwo\n", new_text: "ONE\nTWO\nextra\n" },
+        ctx({ root: dir }),
+        offered
+      );
+      expect(out.code).toBe(0);
+      expect(readFileSync(join(dir, "a.ts"), "utf8")).toBe("ONE\r\nTWO\r\nextra\r\nthree\r\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes $$, $& and $' in new_text literally", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-dollar-"));
+    try {
+      writeFileSync(join(dir, "s.sh"), "echo PID\n");
+      const out = await executeTool("edit", { path: "s.sh", old_text: "PID", new_text: "$$ $& $'" }, ctx({ root: dir }), offered);
+      expect(out.code).toBe(0);
+      expect(readFileSync(join(dir, "s.sh"), "utf8")).toBe("echo $$ $& $'\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

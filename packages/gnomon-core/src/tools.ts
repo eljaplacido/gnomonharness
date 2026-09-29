@@ -1202,6 +1202,28 @@ export function _resetShellCache(): void {
   cachedShell = undefined;
 }
 
+/** `sudo` where the shell would run it: first word of a command, or after xargs/env. */
+export const SUDO_AT_COMMAND_POSITION = /(?:^|[;&|(`\n]|\$\()\s*(?:(?:xargs|env|command|exec|nohup)\s+(?:-\S+\s+)*)?sudo\b/;
+
+/**
+ * A note for a pipeline whose status is its last stage's.
+ *
+ * /bin/sh here is dash: no pipefail, no PIPESTATUS. `pnpm run verify 2>&1 |
+ * tail -40` reports tail's exit 0 whatever verify did, and the agent then
+ * re-ran the check again and again trying to learn its real status. The output
+ * is already clamped at both ends, so the tail bought nothing.
+ */
+export function pipelineStatusNote(command: string): string {
+  const m = /\|\s*(tail|head|grep|egrep|sort|uniq|wc|cut|awk|sed|cat|less|more)\b[^|]*$/.exec(command.trim());
+  if (!m || /\|\|[^|]*$/.test(command.trim())) return "";
+  return (
+    `\n\n(note: this exit status is \`${m[1]}\`'s, the last command in the pipeline -- ` +
+    `not the status of what fed it. This shell has no pipefail. For the real status, ` +
+    `drop the pipe: output is already clamped at both ends, so the error is kept. Or: ` +
+    `\`cmd >log 2>&1; echo "exit=$?"; tail -40 log\`.)`
+  );
+}
+
 /** What to tell an operator on a Windows box with no POSIX shell. */
 export const NO_POSIX_SHELL =
   "Refused: no POSIX shell found, so `bash` cannot run.\n\n" +
@@ -1463,6 +1485,23 @@ async function bashTool(
     }
   }
 
+  // Privilege escalation on the host is refused outright, before any approval
+  // prompt. Session-wide approval ("s") covers every gated call, and stdin is
+  // closed, so the only sudo that can succeed here is one that needs no
+  // password -- exactly the one nobody meant to grant. Observed 2026-09-29: a
+  // session-approved agent ran `echo ... | sudo tee -a /etc/sysctl.conf`.
+  // Inside the docker sandbox it is the container's root, not the host's.
+  if (ctx.exec?.mode !== "docker" && SUDO_AT_COMMAND_POSITION.test(command)) {
+    return {
+      code: TOOL_DENIED,
+      content:
+        "Refused: gnomon does not run sudo. Changing the machine outside this " +
+        "repository is the operator's call. Stop and give them the exact command " +
+        "to run themselves, and say why it is needed.",
+      summary: "bash — refused (sudo)",
+    };
+  }
+
   if (needsApproval("bash", ctx.gate)) {
     const ok = await ctx.approve({
       tool: "bash",
@@ -1693,6 +1732,7 @@ async function bashTool(
         shell_exit: typeof exit === "number" ? exit : undefined,
         content:
           (failed ? clampEnds(body, ctx, `bash-exit`) : clamp(body, ctx, `bash-exit`)) +
+          pipelineStatusNote(command) +
           (drift ? `\n\n${drift.notice}` : ""),
         // `exit` is null when the child died on a signal, and "exit null" then
         // failed the verify gate's /exit (-?\d+)/ and fell through to its
@@ -3012,8 +3052,8 @@ async function editTool(
   ctx: ToolContext
 ): Promise<ToolOutcome> {
   const path = String(args.path ?? "");
-  const oldText = String(args.old_text ?? "");
-  const newText = String(args.new_text ?? "");
+  const oldTextRaw = String(args.old_text ?? "");
+  const newTextRaw = String(args.new_text ?? "");
   const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
   if (!abs) {
     return {
@@ -3062,6 +3102,22 @@ async function editTool(
 
   const before = readFileSync(abs, "utf-8");
   if (ctx.preImages && !ctx.preImages.has(abs)) ctx.preImages.set(abs, before);
+  // A CRLF file and an LF old_text. Git for Windows checks out with
+  // core.autocrlf=true, `read` shows lines without their \r, and the model
+  // copies what it was shown -- so every multi-line edit on such a checkout
+  // came back "not found". Match in the file's own line ending, and write the
+  // replacement in it too, so the edit does not leave the file mixed.
+  let oldText = oldTextRaw;
+  let newText = newTextRaw;
+  if (
+    before.includes("\r\n") &&
+    !oldText.includes("\r") &&
+    oldText.includes("\n") &&
+    !before.includes(oldText)
+  ) {
+    oldText = oldText.replace(/\n/g, "\r\n");
+    newText = newText.replace(/\r?\n/g, "\r\n");
+  }
   const hits = before.split(oldText).length - 1;
   if (hits === 0) {
     return {
@@ -3078,7 +3134,9 @@ async function editTool(
     };
   }
 
-  const after = before.replace(oldText, newText);
+  // A function replacer: with a string, `$$`, `$&` and `$'` in new_text are
+  // replacement patterns, so `echo $$` was written as `echo $`.
+  const after = before.replace(oldText, () => newText);
   const diff = diffLines(before, after);
   const { added, removed } = diffStat(diff);
 

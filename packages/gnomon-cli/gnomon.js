@@ -67,10 +67,15 @@ if (!existsSync(tsx)) {
   process.exit(1);
 }
 
-const result = spawnSync(tsx, [entry, ...process.argv.slice(2)], {
-  stdio: "inherit",
-  shell: isWindows,
-});
+// tsx's own entry run by this node, with no shell in between. On Windows the
+// .cmd shim needs `shell: true`, which joins argv unquoted for cmd.exe: a
+// checkout under a path with a space did not start, and `&`, `|`, `>` or `%X%`
+// in a prompt were read by cmd. The shim stays the fallback for a layout
+// without the entry file.
+const tsxCli = join(root, "node_modules", "tsx", "dist", "cli.mjs");
+const result = existsSync(tsxCli)
+  ? spawnSync(process.execPath, [tsxCli, entry, ...process.argv.slice(2)], { stdio: "inherit" })
+  : spawnSync(tsx, [entry, ...process.argv.slice(2)], { stdio: "inherit", shell: isWindows });
 
 if (result.error) {
   console.error("gnomon: " + result.error.message);

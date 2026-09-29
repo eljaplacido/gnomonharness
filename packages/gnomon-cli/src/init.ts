@@ -23,6 +23,7 @@ import {
 } from "node:fs";
 import { join, resolve, relative } from "node:path";
 import { detectModels, ModelChoice, FALLBACK_LARGE, FALLBACK_SMALL } from "./detect.js";
+import { detectVerifyCommand } from "gnomon-core";
 
 // ---------------------------------------------------------------------------
 // Templates
@@ -734,8 +735,10 @@ Rules:
   like a fact.
 - A tool that is missing or fails comes back to you as a refusal naming it.
   Read it, find another route to the same fact, and keep going.
-- A reply with no tool call ends the turn. Never send a plan and wait for a
-  go-ahead — there is no second turn. Execute, then report.
+- A reply with no tool call ends the turn. When you were asked to do
+  something, do not send a plan and wait for a go-ahead — execute, then
+  report. Whether anyone can answer a question is stated under "This
+  session" at the end of this prompt.
 - Finish the work. Never end a turn by offering to do something you could
   have done: if it can be installed, read, run or written, do it instead of
   proposing it. "If you want, I can also…" means you stopped early. The
@@ -1016,6 +1019,8 @@ export interface InitResult {
   skipped: string[];
   /** What detection chose, when it ran */
   models?: ModelChoice;
+  /** The [verify] command switched on because the project declares it */
+  verify?: string;
 }
 
 /**
@@ -1100,6 +1105,26 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
     }
   }
 
+  // A project that already declares its check gets it switched on, not left
+  // as a comment nobody uncomments. Only a command the project itself declares
+  // (package.json script, Cargo.toml, ...); see detectVerifyCommand.
+  const verifyCommand = options.from ? null : detectVerifyCommand(root);
+  if (verifyCommand) {
+    templates = templates.map((t) =>
+      t.path === "policy.toml"
+        ? {
+            ...t,
+            content:
+              t.content +
+              `\n# Detected at 'gnomon init' from this project's own files.\n` +
+              `[verify]\ncommand = ${JSON.stringify(verifyCommand)}\n` +
+              `after = "change"         # any turn that changed a file, by write/edit or the shell\n` +
+              `max_rounds = 1\n`,
+          }
+        : t
+    );
+  }
+
   const written: string[] = [];
   const skipped: string[] = [];
 
@@ -1118,5 +1143,11 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
     written.push(t.path);
   }
 
-  return { gnomonDir, written, skipped, models: options.from ? undefined : choice };
+  return {
+    gnomonDir,
+    written,
+    skipped,
+    models: options.from ? undefined : choice,
+    verify: verifyCommand ?? undefined,
+  };
 }

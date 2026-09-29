@@ -8,6 +8,7 @@ import { join } from "node:path";
 import {
   declaredTools,
   resolveVerify,
+  detectVerifyCommand,
   parseToml,
   loadConfig,
   resolveGnomonDir,
@@ -537,6 +538,32 @@ describe("[verify] — the gate is absent unless a repository asks for one", () 
     expect(resolveVerify(cfg({ verify: { command: "x" } }))!.after).toBe("write");
     expect(resolveVerify(cfg({ verify: { command: "x", after: "always" } }))!.after).toBe("always");
     expect(resolveVerify(cfg({ verify: { command: "x", after: "nonsense" } }))!.after).toBe("write");
+    expect(resolveVerify(cfg({ verify: { command: "x", after: "change" } }))!.after).toBe("change");
+  });
+
+  it("detects only a check the project itself declares", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-vd-"));
+    try {
+      expect(detectVerifyCommand(dir)).toBeNull();
+      // npm's placeholder exits 1 on purpose; declaring it would fail every turn.
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { test: 'echo "Error: no test specified" && exit 1' } }));
+      expect(detectVerifyCommand(dir)).toBeNull();
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
+      expect(detectVerifyCommand(dir)).toBe("npm test");
+      // A script named verify is the project saying what "works" means.
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { test: "vitest", verify: "tsc && vitest run" } }));
+      writeFileSync(join(dir, "pnpm-lock.yaml"), "");
+      expect(detectVerifyCommand(dir)).toBe("pnpm run verify");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    const rust = mkdtempSync(join(tmpdir(), "gnomon-vd-"));
+    try {
+      writeFileSync(join(rust, "Cargo.toml"), "[package]\n");
+      expect(detectVerifyCommand(rust)).toBe("cargo test");
+    } finally {
+      rmSync(rust, { recursive: true, force: true });
+    }
   });
 
   it("bounds max_rounds, and allows zero", () => {
