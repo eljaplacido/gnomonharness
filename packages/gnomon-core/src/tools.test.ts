@@ -2035,7 +2035,7 @@ describe("sandboxCommand — where bash actually runs", () => {
     expect(sandboxCommand("ls", on, "run-7")).toContain("--name run-7");
   });
 
-  it("does not execute a project path that contains $( ), either", () => {
+  it.skipIf(process.platform === "win32")("does not execute a project path that contains $( ), either", () => {
     // The command was escaped on 2026-09-07 and its NEIGHBOURS were not. The
     // same returned line interpolated ctx.root through JSON.stringify, which
     // produces a DOUBLE-quoted word — and `$( )` inside double quotes is still
@@ -2046,7 +2046,6 @@ describe("sandboxCommand — where bash actually runs", () => {
     //
     // That is the more common shape of a quoting bug than the original: one
     // call site noticed, its neighbours left. Everything goes through shq now.
-    if (process.platform === "win32") return;
 
     const root = "/tmp/gnomon-probe-$(echo SUBSTITUTED)-x";
     const line = sandboxCommand("ls", { ...on, root }, "n");
@@ -2062,7 +2061,7 @@ describe("sandboxCommand — where bash actually runs", () => {
     expect(argv.some((a) => a.includes("$(echo SUBSTITUTED)"))).toBe(true);
   });
 
-  it("survives quotes in the command — checked by running a shell, not by eyeballing the string", () => {
+  it.skipIf(process.platform === "win32")("survives quotes in the command — checked by running a shell, not by eyeballing the string", () => {
     // This test used to assert `c.endsWith("'")`. The BROKEN output satisfied
     // that too, so it passed the whole time there was a sandbox escape behind it.
     //
@@ -2088,7 +2087,6 @@ describe("sandboxCommand — where bash actually runs", () => {
     // POSIX-only, and skipped rather than weakened: the subject IS how a POSIX
     // shell tokenises the line, and windows-latest has no /bin/sh. The sandbox
     // itself is docker, which runs the command under `sh -c` on every host.
-    if (process.platform === "win32") return;
 
     const command = `grep 'a; touch /tmp/gnomon-escape-probe' f.txt`;
     const line = sandboxCommand(command, on, "n");
@@ -2249,8 +2247,7 @@ describe("portability: the shell is POSIX on every platform", () => {
     expect(existsSync(sh!)).toBe(true);
   });
 
-  it("is /bin/sh off Windows", () => {
-    if (process.platform === "win32") return;
+  it.skipIf(process.platform === "win32")("is /bin/sh off Windows", () => {
     expect(tools.posixShell()).toBe("/bin/sh");
   });
 
@@ -2385,6 +2382,49 @@ describe("edit: line endings and replacement text", () => {
       const out = await executeTool("edit", { path: "s.sh", old_text: "PID", new_text: "$$ $& $'" }, ctx({ root: dir }), offered);
       expect(out.code).toBe(0);
       expect(readFileSync(join(dir, "s.sh"), "utf8")).toBe("echo $$ $& $'\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Windows: finding Git Bash, and CRLF in read/grep", () => {
+  const fs = (present: string[]) => (p: string) => present.map((x) => x.toLowerCase()).includes(p.toLowerCase());
+
+  it("derives Git's bash.exe from git.exe on PATH, for installs outside Program Files", () => {
+    const env = { ProgramFiles: "C:\\PF", PATH: "C:\\Windows\\system32;D:\\tools\\Git\\cmd" };
+    expect(tools.findGitBash(env, fs(["D:\\tools\\Git\\cmd\\git.exe", "D:\\tools\\Git\\bin\\bash.exe"]))).toBe("D:\\tools\\Git\\bin\\bash.exe");
+    // mingw64\bin layout
+    expect(
+      tools.findGitBash({ PATH: "E:\\pg\\mingw64\\bin" }, fs(["E:\\pg\\mingw64\\bin\\git.exe", "E:\\pg\\bin\\bash.exe"]))
+    ).toBe("E:\\pg\\bin\\bash.exe");
+    // The fixed location still wins.
+    expect(
+      tools.findGitBash(env, fs(["C:\\PF\\Git\\bin\\bash.exe", "D:\\tools\\Git\\cmd\\git.exe", "D:\\tools\\Git\\bin\\bash.exe"]))
+    ).toBe("C:\\PF\\Git\\bin\\bash.exe");
+  });
+
+  it("never takes WSL's launcher from System32 or WindowsApps", () => {
+    const env = { PATH: "C:\\Windows\\System32;C:\\Users\\u\\AppData\\Local\\Microsoft\\WindowsApps" };
+    expect(
+      tools.findGitBash(env, fs(["C:\\Windows\\System32\\bash.exe", "C:\\Users\\u\\AppData\\Local\\Microsoft\\WindowsApps\\bash.exe"]))
+    ).toBeNull();
+    expect(tools.findGitBash({ PATH: "C:\\msys64\\usr\\bin" }, fs(["C:\\msys64\\usr\\bin\\bash.exe"]))).toBe("C:\\msys64\\usr\\bin\\bash.exe");
+  });
+
+  it("gives the PowerShell form of the override, not only cmd's", () => {
+    expect(tools.NO_POSIX_SHELL).toMatch(/\$env:GNOMON_SHELL/);
+  });
+
+  it("read shows CRLF lines without \\r and says the file is CRLF; grep anchors match", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-crlf-read-"));
+    try {
+      writeFileSync(join(dir, "w.txt"), "alpha\r\nbeta\r\n");
+      const r = await executeTool("read", { path: "w.txt" }, ctx({ root: dir }), new Set(["read", "grep"]));
+      expect(r.content).not.toContain("\r");
+      expect(r.summary).toMatch(/CRLF/);
+      const g = await executeTool("grep", { pattern: "beta$" }, ctx({ root: dir }), new Set(["read", "grep"]));
+      expect(g.content).toMatch(/w\.txt:2:beta/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

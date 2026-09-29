@@ -172,7 +172,9 @@ export function terminalThemeSequence(theme: Theme | null): string {
 
 /** Wrap text in a colour, or return it untouched when colour is off. */
 export function paint(ui: ResolvedUi, color: string, text: string): string {
-  if (!ui.color) return text;
+  // NO_COLOR (no-color.org) is the operator's machine saying no, and it wins
+  // over the surface the same way an exported key wins over the store.
+  if (!ui.color || process.env.NO_COLOR) return text;
   const code = themeOf(ui).codes[color];
   return code ? `${code}${text}${RESET}` : text;
 }
@@ -384,7 +386,22 @@ export function renderExchange(
 // Progress
 // ---------------------------------------------------------------------------
 
-const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/**
+ * Braille frames, except in the legacy Windows console. conhost's default
+ * raster and Lucida fonts have no braille, so the spinner drew a row of boxes.
+ * Windows Terminal sets WT_SESSION and VS Code sets TERM_PROGRAM; both render
+ * braille and keep it.
+ */
+export function spinnerFrames(
+  platform: NodeJS.Platform = process.platform,
+  env: Record<string, string | undefined> = process.env
+): string[] {
+  const legacyConsole = platform === "win32" && !env.WT_SESSION && !env.TERM_PROGRAM;
+  return legacyConsole
+    ? ["|", "/", "-", "\\"]
+    : ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+}
+const FRAMES = spinnerFrames();
 
 /**
  * A live progress line: frame, label, elapsed seconds.

@@ -444,3 +444,25 @@ describe("Progress does not leave timers running", () => {
     expect(line({ ...base, bucket: "result", stop_reason: "answered" })).toContain("result");
   });
 });
+
+describe("terminal: NO_COLOR and the legacy Windows console", () => {
+  it("draws an ASCII spinner in conhost and braille everywhere else", async () => {
+    const { spinnerFrames } = await import("./render.js");
+    expect(spinnerFrames("win32", {})).toEqual(["|", "/", "-", "\\"]);
+    expect(spinnerFrames("win32", { WT_SESSION: "x" })[0]).toBe("⠋");
+    expect(spinnerFrames("linux", {})[0]).toBe("⠋");
+  });
+
+  it("honours NO_COLOR over the surface", async () => {
+    const { paint } = await import("./render.js");
+    const ui: any = { color: true, theme: "dark" };
+    const before = process.env.NO_COLOR;
+    process.env.NO_COLOR = "1";
+    try {
+      expect(paint(ui, "red", "x")).toBe("x");
+    } finally {
+      if (before === undefined) delete process.env.NO_COLOR;
+      else process.env.NO_COLOR = before;
+    }
+  });
+});

@@ -90,6 +90,8 @@ interface CliArgs {
   dir?: string;
   printSession?: boolean;
   force?: boolean;
+  /** init: do not switch on a detected [verify] (benchmark comparability) */
+  noVerify?: boolean;
   from?: string;
   role?: string;
   yes?: boolean;
@@ -136,6 +138,8 @@ export function parseArgs(args: string[]): CliArgs {
       result.role = args[i];
     } else if (arg === "--force" || arg === "-f") {
       result.force = true;
+    } else if (arg === "--no-verify") {
+      result.noVerify = true;
     } else if (arg === "--resume" || arg === "-r") {
       // `--resume` alone means the most recent; `--resume <id>` names one.
       const next = args[i + 1];
@@ -1384,7 +1388,7 @@ async function cmdMigrate(args: CliArgs): Promise<void> {
 async function cmdInit(args: CliArgs): Promise<void> {
   let result;
   try {
-    result = await initSurface({ dir: args.dir, force: args.force, from: args.from });
+    result = await initSurface({ dir: args.dir, force: args.force, from: args.from, noVerify: args.noVerify });
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
@@ -1394,6 +1398,7 @@ async function cmdInit(args: CliArgs): Promise<void> {
   console.log(`  (in ${resolve(args.dir ?? process.cwd())})`);
   for (const f of result.written) console.log(`  + .gnomon/${f}`);
   for (const f of result.skipped) console.log(`  · .gnomon/${f} (kept existing)`);
+  if (result.gitattributes) console.log("  + .gitattributes: .gnomon/** text eol=lf (same surface hash on Windows)");
 
   // Say which models were chosen and why. A tag appearing in roles.toml with
   // no explanation looks like a decision someone made on your behalf.
@@ -1573,9 +1578,11 @@ Commands:
     Start working here. Creates .gnomon/ if it is missing, then opens the
     interactive loop. This is the one command to remember.
 
-  init [--dir <path>] [--from <path>] [--force]
+  init [--dir <path>] [--from <path>] [--force] [--no-verify]
     Write a .gnomon/ surface into a project. --from copies an existing
-    surface instead of the built-in starter templates.
+    surface instead of the built-in starter templates. The project's own
+    check (package.json verify/check/test, cargo test, ...) is declared as
+    [verify]; --no-verify leaves it commented out, as before 2026-09-29.
 
   migrate [--dir <path>] [--check]
     Bring an existing .gnomon/ up to the current shipped defaults. Prints

@@ -80,6 +80,25 @@ jobs:
         # that will go stale. `-r` cannot.
         run: pnpm -r run test
 
+      # The Rust crates compute the surface hash the TS side must agree with,
+      # and they were tested on ubuntu only. Path and line-ending handling is
+      # exactly what differs here.
+      - name: Rust tests
+        run: cargo test --workspace
+
+      # A checkout under a path with a space, launched the way `gnomon` on PATH
+      # launches it. Until 2026-09-29 the launcher ran tsx.cmd with shell:true,
+      # cmd.exe split the path at the space, and gnomon did not start.
+      - name: The launcher starts from a path with a space
+        shell: pwsh
+        run: |
+          $j = Join-Path $env:RUNNER_TEMP "gnomon checkout"
+          New-Item -ItemType Junction -Path $j -Target $PWD | Out-Null
+          # --preserve-symlinks-main: otherwise node resolves the junction and
+          # the launcher sees the real, space-free path, proving nothing.
+          node --preserve-symlinks-main (Join-Path $j "packages\gnomon-cli\gnomon.js") --version
+          if ($LASTEXITCODE -ne 0) { throw "launcher failed from a spaced path" }
+
       # THE DOCUMENTED INSTALL PATH, which nothing here ran until now.
       #
       # `pnpm run setup` is the one install command GETTING_STARTED gives

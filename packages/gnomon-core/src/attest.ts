@@ -82,6 +82,7 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 import { createHash, createPublicKey, verify as verifyBytes, KeyObject } from "node:crypto";
 import { canonicalJson, recordHash, type AuditRecord } from "./audit.js";
 import type { GnomonConfig } from "./config.js";
+import { posixShell, NO_POSIX_SHELL } from "./tools.js";
 
 // ---------------------------------------------------------------------------
 // Limits, published rather than assumed
@@ -366,8 +367,13 @@ interface CommandResult {
  * file the verifier's shell. Env passing removes the question entirely.
  */
 function run(cmd: string, digest: string, timeoutSec: number, env: Record<string, string>): CommandResult {
+  // Bare `bash` on Windows resolves by PATH, and the first bash.exe there is
+  // usually System32's WSL launcher: the signer ran in another filesystem, or
+  // not at all. Use the shell the bash tool uses, and refuse without one.
+  const shell = process.platform === "win32" ? posixShell() : "bash";
+  if (shell === null) return { code: 127, out: "", err: NO_POSIX_SHELL };
   try {
-    const out = execFileSync("bash", ["-lc", cmd], {
+    const out = execFileSync(shell, ["-lc", cmd], {
       input: digest,
       encoding: "utf-8",
       timeout: timeoutSec * 1000,

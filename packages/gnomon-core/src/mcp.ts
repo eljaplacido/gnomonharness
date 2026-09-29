@@ -17,6 +17,8 @@
  */
 
 import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync } from "node:fs";
+import { win32 as win32Path } from "node:path";
 import type { McpServerDef } from "./config.js";
 import { recordDegradation, type DegradationSink } from "./degradation.js";
 
@@ -130,7 +132,12 @@ class McpConnection {
     // this object must be passed explicitly below to take effect).
     const env: Record<string, string> = {};
     for (const k of ["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL",
-                     "SystemRoot", "PATHEXT", "APPDATA", "LOCALAPPDATA"]) {
+                     "SystemRoot", "PATHEXT", "APPDATA", "LOCALAPPDATA",
+                     // Windows: npx and most Node CLIs resolve their cache and
+                     // config through these; without them `npx` fails before
+                     // the server starts.
+                     "USERPROFILE", "ComSpec", "SystemDrive", "ProgramData",
+                     "HOMEDRIVE", "HOMEPATH", "ProgramFiles", "ProgramFiles(x86)", "windir"]) {
       const v = process.env[k];
       if (v !== undefined) env[k] = v;
     }
@@ -139,9 +146,14 @@ class McpConnection {
       if (v !== undefined) env[varName] = v;
     }
 
-    const proc = spawn(this.def.command, this.def.args ?? [], {
+    const plan =
+      process.platform === "win32"
+        ? windowsSpawnPlan(this.def.command, this.def.args ?? [], env, existsSync)
+        : { file: this.def.command, args: this.def.args ?? [], verbatim: false };
+    const proc = spawn(plan.file, plan.args, {
       stdio: ["pipe", "pipe", "pipe"],
       env,
+      windowsVerbatimArguments: plan.verbatim,
     }) as ChildProcessWithoutNullStreams;
     this.proc = proc;
     proc.on("error", (err) => this.failAll(err));
@@ -379,4 +391,51 @@ export async function connectMcp(
       for (const c of conns) c.close();
     },
   };
+}
+
+// cmd.exe metacharacters, escaped with ^ (the cross-spawn rule set).
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+
+function cmdArg(arg: string, doubleEscape: boolean): string {
+  let a = arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1");
+  a = `"${a}"`.replace(CMD_META, "^$1");
+  return doubleEscape ? a.replace(CMD_META, "^$1") : a;
+}
+
+/**
+ * How to start an MCP server on Windows.
+ *
+ * `npx`, `pnpm`, `uvx` and every npm-installed CLI are `.cmd` shims there, and
+ * spawn without a shell cannot run a `.cmd` -- ENOENT, for the scaffold's own
+ * example (`command = "npx"`). Resolve the command through PATH and PATHEXT;
+ * a real .exe runs directly, and a .cmd/.bat runs under `cmd.exe /d /s /c`
+ * with every argument quoted and ^-escaped, so an argument containing `&` or
+ * `|` stays one argument instead of becoming a second command.
+ */
+export function windowsSpawnPlan(
+  command: string,
+  args: string[],
+  env: Record<string, string | undefined>,
+  exists: (p: string) => boolean
+): { file: string; args: string[]; verbatim: boolean } {
+  const w = win32Path;
+  const exts = (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  const hasExt = /\.[A-Za-z0-9]+$/.test(command);
+  const candidates = (dir: string) =>
+    hasExt ? [w.join(dir, command)] : exts.map((e) => w.join(dir, command + e.toLowerCase()));
+  let resolved: string | undefined;
+  if (/[\\/]/.test(command)) {
+    resolved = hasExt ? command : exts.map((e) => command + e.toLowerCase()).find(exists);
+  } else {
+    for (const dir of (env.PATH ?? env.Path ?? "").split(";").filter(Boolean)) {
+      resolved = candidates(dir).find(exists);
+      if (resolved) break;
+    }
+  }
+  if (!resolved || !/\.(cmd|bat)$/i.test(resolved)) {
+    return { file: resolved ?? command, args, verbatim: false };
+  }
+  const shim = /node_modules[\\/]\.bin[\\/]/i.test(resolved);
+  const line = [resolved.replace(CMD_META, "^$1"), ...args.map((a) => cmdArg(a, shim))].join(" ");
+  return { file: env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", `"${line}"`], verbatim: true };
 }

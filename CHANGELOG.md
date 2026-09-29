@@ -57,6 +57,30 @@ Each line below is one cause.
 - Model requests carry `x-opencode-session` and a `gnomon/<build>` User-Agent;
   opencode Go answered 400 MissingSessionID without them.
 
+**Native Windows, for daily use.**
+
+- Git Bash is found under Scoop and derived from `git.exe` on PATH, not only
+  in three fixed directories; System32/WindowsApps `bash.exe` (WSL) is never
+  taken. The refusal names the PowerShell `$env:` form.
+- `read` and `grep` split CRLF; `read` says a file is CRLF. `init` adds
+  `.gnomon/** text eol=lf` to `.gitattributes`, so autocrlf clones hash the
+  same surface.
+- The system prompt says the machine is Windows (outside the hash).
+- MCP servers named `npx`/`pnpm`/any `.cmd` shim start: resolved via
+  PATH/PATHEXT and run under `cmd.exe /d /s /c` with every argument escaped.
+  Windows' profile variables reach the server.
+- Surface/sandbox guards use the OS realpath (8.3 short names, case), and
+  `write_allow` matches case-insensitively on Windows.
+- `attest` and `gnomon session` use the bash tool's shell instead of PATH
+  `bash` / cmd.exe. `cd /c/x` is understood as `C:\x` for change detection.
+- The docker exec sandbox is refused on Windows instead of mounting a path
+  the container cannot see, as root.
+- `NO_COLOR` is honoured; the legacy console gets an ASCII spinner.
+- CI on windows-latest also runs `cargo test` and launches gnomon from a path
+  with a space; three win32 early-returns are now reported as skips.
+- `init --no-verify` keeps the pre-2026-09-29 ungated surface; the
+  benchmark runners pass it.
+
 ## [0.2.3] — 2026-09-08
 
 **Installable without a clone, and without an npm account.** The release now
