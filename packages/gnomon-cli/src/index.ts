@@ -1411,6 +1411,13 @@ async function cmdInit(args: CliArgs): Promise<void> {
     }
   }
 
+  console.log("");
+  console.log(
+    result.verify
+      ? `Verify: \`${result.verify}\` runs after every turn that changes a file ([verify] in policy.toml).`
+      : "Verify: none found — declare [verify] command in .gnomon/policy.toml, or no turn is ever checked."
+  );
+
   // Name the file whose edits take effect. The scaffold ships
   // `role_profile = "local_first"` and a profile that restates `model` and
   // `endpoint` for every role that has one, and a profile is merged OVER the

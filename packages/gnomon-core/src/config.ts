@@ -17,6 +17,7 @@ import { SourceEntry } from "./session.js";
 // necessarily load. loadSkills is the reader the turn uses, so the audit sees
 // exactly what the turn will see.
 import { loadSkills } from "./skills.js";
+import { harnessBuild } from "./build.js";
 
 // ---------------------------------------------------------------------------
 // Types — mirror Rust structs from gnomon-surface
@@ -207,8 +208,9 @@ export interface Policy {
     command?: string;
     /**
      * When to run it. "write" runs it only when the turn used write or edit,
-     * which is the case the evidence supports; "always" runs it on every turn
-     * that made any tool call.
+     * which is the case the evidence supports; "change" runs it when the turn
+     * changed the worktree by any route -- write/edit OR the shell -- and
+     * "always" runs it on every turn that made any tool call.
      */
     after?: string;
     /**
@@ -1422,6 +1424,7 @@ const ENUM_KEYS: EnumSpec[] = [
   { block: "sandbox", key: "level", values: ["off", "confined", "strict"], falls_back_to: "confined" },
   // resolveExec: anything that is not exactly "docker" resolves to "off".
   { block: "sandbox", key: "exec", values: EXEC_VALUES, falls_back_to: "off" },
+  { block: "verify", key: "after", values: ["write", "change", "always"], falls_back_to: "write" },
 ];
 
 /**
@@ -2290,8 +2293,13 @@ export async function probeEndpointAuth(
   try {
     const res = await fetch(endpoint.url, {
       method: "POST",
+      // The same client identity a real turn sends (callEndpoint in
+      // prompt_loop.ts). Without it opencode's Console Go answers 400
+      // MissingSessionID, and the probe reported a working key as a failure.
       headers: {
         "Content-Type": "application/json",
+        "User-Agent": harnessBuild(),
+        "x-opencode-session": `gnomon-probe-${process.pid}-${Date.now()}`,
         ...(key ? { Authorization: `Bearer ${key}` } : {}),
       },
       body: JSON.stringify(body),
@@ -2968,7 +2976,7 @@ export function resolveLoop(config: GnomonConfig): ResolvedLoop {
 /** A resolved [verify] block, or null when the surface declares none. */
 export interface ResolvedVerify {
   command: string;
-  after: "write" | "always";
+  after: "write" | "change" | "always";
   max_rounds: number;
   /**
    * Reject a test that would have passed before the turn wrote it.
@@ -3000,7 +3008,8 @@ export function resolveVerify(config: GnomonConfig): ResolvedVerify | null {
   const v = (config.policy as { verify?: Record<string, unknown> } | undefined)?.verify;
   const command = typeof v?.command === "string" ? v.command.trim() : "";
   if (!command) return null;
-  const after = v?.after === "always" ? "always" : "write";
+  const after =
+    v?.after === "always" ? "always" : v?.after === "change" ? "change" : "write";
   const rounds = typeof v?.max_rounds === "number" ? v.max_rounds : 1;
   return {
     command,
@@ -3014,6 +3023,61 @@ export function resolveVerify(config: GnomonConfig): ResolvedVerify | null {
         ? (v.test_paths as string[])
         : ["**/test_*.py", "**/*_test.py", "**/*.test.ts", "**/*.test.js", "**/tests/**"],
   };
+}
+
+/**
+ * The project's own check, read off the files that declare it.
+ *
+ * `init` shipped [verify] commented out, so a surface nobody edited had no
+ * gate at all: every turn that ended "done" was a belief nobody checked.
+ * Measured 2026-09-29 on a 112-call interactive turn in a medical-device
+ * repository -- the repo had `pnpm run verify`, the surface declared nothing,
+ * and the agent re-ran the check by hand a dozen times through `| tail`, which
+ * reports tail's exit status rather than the check's.
+ *
+ * Only a command the project already declares is returned; nothing is invented.
+ * Order is most-specific first: a script literally named `verify` or `check`
+ * is the project saying what "works" means, `test` is the fallback.
+ */
+export function detectVerifyCommand(root: string): string | null {
+  const has = (f: string) => existsSync(join(root, f));
+  const pkgPath = join(root, "package.json");
+  if (existsSync(pkgPath)) {
+    let scripts: Record<string, unknown> = {};
+    try {
+      scripts = (JSON.parse(readFileSync(pkgPath, "utf-8")).scripts ?? {}) as Record<string, unknown>;
+    } catch {
+      scripts = {};
+    }
+    const runner = has("pnpm-lock.yaml")
+      ? "pnpm"
+      : has("yarn.lock")
+        ? "yarn"
+        : has("bun.lockb") || has("bun.lock")
+          ? "bun"
+          : "npm";
+    for (const name of ["verify", "check", "test"]) {
+      const body = scripts[name];
+      if (typeof body !== "string" || !body.trim()) continue;
+      // npm's placeholder exits 1 by design; declaring it would fail every turn.
+      if (/no test specified/.test(body)) continue;
+      return runner === "npm" && name === "test" ? "npm test" : `${runner} run ${name}`;
+    }
+  }
+  if (has("Cargo.toml")) return "cargo test";
+  if (has("go.mod")) return "go test ./...";
+  if (has("pyproject.toml") || has("pytest.ini") || has("setup.cfg") || has("tox.ini")) {
+    return "pytest -q";
+  }
+  const makefile = join(root, "Makefile");
+  if (existsSync(makefile)) {
+    try {
+      if (/^test\s*:/m.test(readFileSync(makefile, "utf-8"))) return "make test";
+    } catch {
+      /* unreadable Makefile: declare nothing */
+    }
+  }
+  return null;
 }
 
 /**
