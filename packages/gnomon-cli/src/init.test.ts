@@ -120,6 +120,43 @@ describe("template hygiene", () => {
     }
   });
 
+  it("the scaffolded verifier runs the suite, not whatever code it picks", async () => {
+    // Every refused spelling below matched the old entry
+    // '^(cargo|pnpm|npm|yarn|pytest|go|make)\s', and each one runs code the
+    // verifier chose or writes to the tree.
+    const root = mkdtempSync(join(tmpdir(), "gnomon-allow-"));
+    try {
+      await initSurface({ dir: root });
+      const allow = loadConfig(root).roles.verifier?.bash_allow ?? [];
+      const permits = (cmd: string) =>
+        allow.some((p) => new RegExp(p).test(cmd));
+
+      for (const suite of [
+        "cargo test", "cargo test --all", "cargo nextest run -p core",
+        "cargo clippy --all -- -D warnings", "cargo check",
+        "go test ./...", "go vet ./...", "pytest", "pytest -q tests/unit",
+        "pnpm test", "pnpm run test", "pnpm run test:core",
+        "pnpm --filter ./packages/gnomon-core test", "npm test",
+        "npm run test -- --watch=false", "npm -w api test", "yarn test",
+        "make test", "make check",
+      ]) {
+        expect(permits(suite), suite).toBe(true);
+      }
+      for (const chosen of [
+        "npm exec cowsay", "npx cowsay", "pnpm dlx create-anything", "yarn dlx x",
+        "pnpm --filter x exec rm -rf .", "pnpm --filter x run build",
+        "npm install left-pad", "pnpm add x", "npm run build", "pnpm run deploy",
+        "npm testify", "make", "make clean", "make install",
+        "cargo run", "cargo build", "cargo install ripgrep",
+        "go run .", "go generate ./...", "go install x@latest",
+      ]) {
+        expect(permits(chosen), chosen).toBe(false);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("declares the remote endpoints, inert until a role names one", async () => {
     // They shipped commented out, so a scaffolded project's /endpoints showed
     // only `local` and there was no sign the others were even possible.

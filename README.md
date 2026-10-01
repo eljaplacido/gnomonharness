@@ -243,7 +243,7 @@ test commands.
 ```toml
 [roles.verifier]
 tools = ["read", "glob", "grep", "compute", "todo", "bash"]
-bash_allow = ['^(cargo|pnpm|pytest|go|make)\s', '^septacore check\b']  # septacore optional/external
+bash_allow = ['^(cargo (test|clippy)|pnpm (run )?test(:[\w-]+)?|pytest|go test|make (test|check))(\s|$)', '^septacore check\b']  # septacore optional/external
 ```
 
 That second line matters more than it looks. **`bash` can write anything**, so
@@ -841,7 +841,7 @@ endpoint = "local"
 temperature = 0.1
 max_steps = 12
 tools = ["read", "glob", "grep", "compute", "todo", "bash"]
-bash_allow = ['^(cargo|pnpm|pytest|go|make)\s', '^(ls|cat|grep|git (status|diff|log))\s']
+bash_allow = ['^(cargo (test|clippy)|pnpm (run )?test(:[\w-]+)?|pytest|go test|make (test|check))(\s|$)', '^(ls|cat|grep|git (status|diff|log))\s']
 description = "Runs the suite and reports. Cannot write."
 
 [roles.implement.fallback]
@@ -1280,7 +1280,7 @@ would take to make a rejected backend refuse, is in
 ```toml
 [roles.verifier]
 tools = ["read", "glob", "grep", "compute", "todo", "bash"]
-bash_allow = ['^(cargo|pnpm|npm|pytest|go|make)\s', '^(ls|cat|grep|git (status|diff|log))\s']
+bash_allow = ['^(cargo (test|clippy)|pnpm (run )?test(:[\w-]+)?|pytest|go test|make (test|check))(\s|$)', '^(ls|cat|grep|git (status|diff|log))\s']
 ```
 
 A command matching none of these is refused by name. Absent the list, any

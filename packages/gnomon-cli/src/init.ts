@@ -412,7 +412,19 @@ bash_allow = [
   # shipped starter surface failed the auditor it ships with, which teaches a
   # new user that the yellow text is noise. 'pytest' on its own runs the same
   # suite and names no interpreter.
-  '^(cargo|pnpm|npm|yarn|pytest|go|make)\\s',
+  #
+  # The same mistake survived one level up: '^(cargo|pnpm|npm|yarn|pytest|go|make)\\s'
+  # bounded the role by the tool's name, not by the suite. 'npm exec x',
+  # 'pnpm dlx x' and 'yarn dlx x' fetch and run any package; 'make clean' runs
+  # any target; 'cargo run' and 'go run' run any binary; 'go generate' runs
+  # whatever command a source comment names. A role that "cannot write" reached
+  # all of them. Running the suite still runs the project's own test code --
+  # that is what a verifier is for. Choosing other code to run is not.
+  # A named test script ('test:unit') or one workspace ('--filter x') is still
+  # the suite; 'run build' and 'exec' are not.
+  '^(cargo (test|nextest run|check|clippy)|go (test|vet)|pytest)(\\s|$)',
+  '^(pnpm|npm|yarn)( (--filter|-F|--workspace|-w) [^\\s;&|]+)? (run )?test(:[\\w-]+)?(\\s|$)',
+  '^make (test|check)(\\s|$)',
   '^(ls|cat|head|tail|grep|rg|find|git (status|diff|log|show))\\s',
 ]
 bash_deny = [
