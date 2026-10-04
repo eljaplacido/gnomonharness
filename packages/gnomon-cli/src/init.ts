@@ -423,7 +423,7 @@ bash_allow = [
   # A named test script ('test:unit') or one workspace ('--filter x') is still
   # the suite; 'run build' and 'exec' are not.
   '^(cargo (test|nextest run|check|clippy)|go (test|vet)|pytest)(\\s|$)',
-  '^(pnpm|npm|yarn)( (--filter|-F|--workspace|-w) [^\\s;&|]+)? (run )?test(:[\\w-]+)?(\\s|$)',
+  '^(pnpm|npm|yarn)( (--filter|-F|--workspace|-w) [^\\s;&|]+| -w)? (run )?test(:[\\w-]+)?(\\s|$)',
   '^make (test|check)(\\s|$)',
   '^(ls|cat|head|tail|grep|rg|find|git (status|diff|log|show))\\s',
 ]
@@ -436,6 +436,15 @@ bash_deny = [
   # Deny wins over allow, so this holds even if someone widens bash_allow
   # later. A role that "cannot write" must not reach a language runtime.
   '\\b(awk|gawk|perl|python3?|ruby|node)\\b',
+  # The suite runners take flags that name a program to run instead of, or
+  # around, the suite: 'go test -toolexec x', 'go vet -vettool=x',
+  # 'cargo test --config target.<triple>.runner=x', 'npm test --script-shell=x'
+  # (or a --userconfig that sets it), and make's '-f other.mk', '--eval' and
+  # 'VAR=x' overrides, any of which can replace what a recipe runs. Each one
+  # cleared the suite-only allow-list above.
+  '-vettool', '-toolexec',
+  '--(config|script-shell|userconfig|globalconfig)\\b',
+  '^make\\s[^|;&]*\\s(-[A-Za-z]*[fE]|--(file|makefile|eval)\\b|[^\\s=]+=)',
 ]
 description = "Runs the suite and reports. Cannot write."
 

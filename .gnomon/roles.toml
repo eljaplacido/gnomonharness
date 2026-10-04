@@ -197,7 +197,7 @@ bash_allow = [
   # this repository's own 'pnpm run test:core', 'pnpm --filter … test' and
   # 'cargo clippy'.
   '^(cargo (test|nextest run|check|clippy)|go (test|vet)|pytest)(\s|$)',
-  '^(pnpm|npm|yarn)( (--filter|-F|--workspace|-w) [^\s;&|]+)? (run )?test(:[\w-]+)?(\s|$)',
+  '^(pnpm|npm|yarn)( (--filter|-F|--workspace|-w) [^\s;&|]+| -w)? (run )?test(:[\w-]+)?(\s|$)',
   '^make (test|check)(\s|$)',
   '^(ls|cat|head|tail|grep|rg|find|git (status|diff|log|show))\s',
 ]
@@ -210,5 +210,10 @@ bash_deny = [
   # Deny wins over allow, so a widened bash_allow cannot reopen this. A role
   # that "cannot write" must not reach a language runtime.
   '\b(awk|gawk|perl|python3?|ruby|node)\b',
+  # Flags that name a program to run instead of, or around, the suite. Each
+  # cleared the suite-only bash_allow above; see the same list in init.ts.
+  '-vettool', '-toolexec',
+  '--(config|script-shell|userconfig|globalconfig)\b',
+  '^make\s[^|;&]*\s(-[A-Za-z]*[fE]|--(file|makefile|eval)\b|[^\s=]+=)',
 ]
 description = "Runs the suite and reports. Cannot write."
