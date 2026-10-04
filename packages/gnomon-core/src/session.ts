@@ -8,6 +8,7 @@
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { GnomonConfig } from "./config.js";
+import { posixShell, NO_POSIX_SHELL } from "./tools.js";
 
 // ---------------------------------------------------------------------------
 // Types — mirror gnomon-exec Rust structs
@@ -194,8 +195,14 @@ export class SessionManager {
       stdout: string;
       stderr: string;
     }>((resolve) => {
-      const proc = spawn(command, {
-        shell: true,
+      // The same shell the bash tool uses. `shell: true` meant cmd.exe on
+      // Windows, so a session's commands meant something else there.
+      const sh = posixShell();
+      if (sh === null) {
+        resolve({ code: 127, stdout: "", stderr: NO_POSIX_SHELL });
+        return;
+      }
+      const proc = spawn(sh, ["-c", command], {
         env: { ...process.env, ...env },
       });
 

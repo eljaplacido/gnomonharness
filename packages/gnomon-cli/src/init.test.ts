@@ -207,6 +207,20 @@ describe("template hygiene", () => {
 });
 
 describe("initSurface", () => {
+  it("keeps the surface LF on every OS via .gitattributes, once, without clobbering", async () => {
+    // The hash is over raw bytes; a Git for Windows CRLF checkout hashed the
+    // same commit differently.
+    writeFileSync(join(root, ".gitattributes"), "*.png binary");
+    const r = await initSurface({ dir: root });
+    expect(r.gitattributes).toBe(true);
+    const text = readFileSync(join(root, ".gitattributes"), "utf-8");
+    expect(text.startsWith("*.png binary\n")).toBe(true);
+    expect(text).toContain(".gnomon/** text eol=lf");
+    const again = await initSurface({ dir: root, force: true });
+    expect(again.gitattributes).toBe(false);
+    expect(readFileSync(join(root, ".gitattributes"), "utf-8")).toBe(text);
+  });
+
   it("writes a complete surface", async () => {
     const r = await initSurface({ dir: root });
     expect(r.written).toEqual([

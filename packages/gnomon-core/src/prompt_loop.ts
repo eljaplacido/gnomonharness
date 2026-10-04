@@ -22,6 +22,7 @@ import {
   listProfiles,
   resolveContext,
   resolveVerify,
+  detectVerifyCommand,
   resolveResilience,
   resolveExtraRoots,
   resolveExec,
@@ -158,6 +159,12 @@ export interface PromptState {
   config: GnomonConfig;
   exchanges: PromptExchange[];
   currentRole: string;
+  /**
+   * An operator is at the terminal and will answer. Set by the interactive
+   * loop only; `gnomon task` and chains leave it unset, which reads as
+   * unattended. Selects the "This session" block of the system prompt.
+   */
+  interactive?: boolean;
   /** Resolved `[ui]`; /meta and /think edit this copy for the session only */
   ui?: ResolvedUi;
   /** Resolved `[routing]`; /mode edits this copy for the session only */
@@ -865,7 +872,8 @@ async function callEndpointWithRetry(
   resilience: { attempts: number; backoff_ms: number; transport_grace_ms?: number },
   say: ((line: string) => void) | undefined,
   ui: ResolvedUi | undefined,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  session?: string
 ): Promise<InferenceResult> {
   const RETRYABLE = new Set([11, 12]);
   let last: InferenceResult | null = null;
@@ -958,7 +966,7 @@ async function callEndpointWithRetry(
   };
   for (let attempt = 1; attempt <= resilience.attempts; attempt++) {
     const startedAt = Date.now();
-    const r = await callEndpoint(target, messages, tools, deadline, signal);
+    const r = await callEndpoint(target, messages, tools, deadline, signal, session);
     spentMs += Date.now() - startedAt;
     if (r.code === 0 || !RETRYABLE.has(r.code)) return r;
     last = r;
@@ -1107,14 +1115,42 @@ export function causeCode(err: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * The conversation id a call carries when its caller has none -- `gnomon task`
+ * never assigns `state.sessionId`. One per process, so it is still stable for
+ * the whole run, which is the property the header below exists for.
+ */
+const PROCESS_SESSION = `gnomon-${process.pid}-${Date.now()}`;
+
 async function callEndpoint(
   target: RouteTarget,
   messages: ChatMessage[],
   tools: unknown[],
   timeoutMs: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /** The conversation this call belongs to -- `state.sessionId`. */
+  session?: string
 ): Promise<InferenceResult> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  // Identify the client, and the conversation, on every request.
+  //
+  // opencode's Console Go began refusing requests that carry neither, before
+  // generating anything:
+  //
+  //   400 MissingSessionID: Request is missing x-opencode-session and cannot
+  //   be routed efficiently.
+  //
+  // Its published client contract (opencode.ai/docs/go, "Where can I use it")
+  // is a stable `x-opencode-session` per conversation -- it routes and prompt-
+  // caches on it -- and a User-Agent naming the agent, not the HTTP library.
+  // Node's fetch sends `node`, which is exactly the generic name it asks
+  // clients not to send. Sent to every endpoint, not just opencode's: other
+  // providers ignore an unknown header, and gating on the hostname would break
+  // the first proxy put in front of it.
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "User-Agent": harnessBuild(),
+    "x-opencode-session": session ?? PROCESS_SESSION,
+  };
   const apiKey = target.apiKeyEnv ? process.env[target.apiKeyEnv] : undefined;
 
   // Pre-flight the declared key, before the socket is opened.
@@ -2439,6 +2475,9 @@ export function trimWorking(
   // reject a tool message that answers no visible call.
   while (kept.length > 0 && kept[0].role === "tool") kept.shift();
 
+  const keptSet = new Set(kept);
+  const ledger = droppedLedger(tail.filter((m) => !keptSet.has(m)));
+
   return {
     messages: [
       ...head,
@@ -2446,13 +2485,66 @@ export function trimWorking(
         role: "system",
         content:
           `[gnomon context] ${dropped} earlier step(s) in this turn were dropped ` +
-          `to stay inside the context window. Their findings are not available ` +
-          `to re-read — if you need one again, gather it again.`,
+          `to stay inside the context window. Their full output is gone, but ` +
+          `what they were and how they ended is not:\n${ledger}\n` +
+          `Do not repeat a step listed here to learn its outcome again — the ` +
+          `outcome is above. Re-run one only if something it depends on has ` +
+          `changed since.`,
       },
       ...kept,
     ],
     dropped,
   };
+}
+
+/**
+ * One line per dropped tool call: what ran and how it ended.
+ *
+ * The trim used to replace dropped steps with "if you need one again, gather it
+ * again", and the model did exactly that. Measured on a 2026-09-29 interactive
+ * session: after two trims it re-ran `pnpm run verify` twelve times, each time
+ * because the previous run's exit status had been dropped with its output. The
+ * outcome costs one line; the output is what the window cannot hold.
+ */
+export function droppedLedger(dropped: ChatMessage[], maxLines = 40): string {
+  const calls = new Map<string, { name: string; args: Record<string, unknown> }>();
+  for (const m of dropped) {
+    if (m.role !== "assistant" || !Array.isArray(m.tool_calls)) continue;
+    for (const c of m.tool_calls as {
+      id?: string;
+      name?: string;
+      arguments?: unknown;
+      function?: { name?: string; arguments?: unknown };
+    }[]) {
+      if (!c?.id) continue;
+      calls.set(c.id, {
+        name: c.function?.name ?? c.name ?? "",
+        args: parseToolArgs(c.function?.arguments ?? c.arguments),
+      });
+    }
+  }
+  const lines: string[] = [];
+  for (const m of dropped) {
+    if (m.role !== "tool") continue;
+    const call = m.tool_call_id ? calls.get(m.tool_call_id) : undefined;
+    const name = call?.name || m.tool_name || "tool";
+    const what = call ? describeCall({ name, args: call.args }) : "";
+    const first = (m.content.split("\n", 1)[0] ?? "").trim();
+    // bash leads with its exit status; every other tool leads with content,
+    // which is only worth a line when it is the reason the call failed.
+    const how =
+      name === "bash" || /^(Refused|Error|Could not|Cancelled|Command timed out)/.test(first)
+        ? first.slice(0, 100)
+        : "ok";
+    const line = `- ${name}${what ? ` ${what}` : ""} → ${how}`;
+    const prev = lines[lines.length - 1];
+    const rep = prev ? /^(.*?)(?: ×(\d+))?$/.exec(prev) : null;
+    if (rep && rep[1] === line) lines[lines.length - 1] = `${line} ×${Number(rep[2] ?? 1) + 1}`;
+    else lines.push(line);
+  }
+  if (lines.length === 0) return "- (no tool calls among them)";
+  const cut = lines.length - maxLines;
+  return (cut > 0 ? [`- … ${cut} older line(s) not shown`, ...lines.slice(cut)] : lines).join("\n");
 }
 
 /** Severity order, so the worst outcome in a turn is the one reported. */
@@ -2526,10 +2618,65 @@ export function runNotesBlock(state: PromptState): string {
   );
 }
 
+/**
+ * Who, if anyone, will read the reply -- appended after the surface's own text.
+ *
+ * The scaffolded system.md was written for unattended runs ("there is no
+ * second turn. Execute, then report."), and the interactive loop sent it
+ * unchanged. Measured 2026-09-29: an operator asked for a recap of where the
+ * work stood, and the turn ran 112+ tool calls implementing, re-verifying and
+ * editing STATUS.md -- the prompt had told it a question was a task with no
+ * chance to ask. Every surface already scaffolded carries that sentence, so
+ * this block has to override it explicitly rather than rely on a new scaffold.
+ */
+export function sessionModeBlock(interactive: boolean): string {
+  return interactive
+    ? "## This session\n\n" +
+        "An operator is at the terminal, reads your reply, and will answer it: " +
+        "there IS a next turn. Match what was asked.\n" +
+        "- A question -- a recap, an explanation, where things stand, an opinion, " +
+        "a review -- is answered. Read what you need, then answer in prose. Do not " +
+        "change files, run builds, or start the work the question is about.\n" +
+        "- A task is carried out in this turn and checked before you call it done.\n" +
+        "- A decision that is the operator's to make -- scope, a trade-off, " +
+        "anything irreversible or safety-relevant -- goes in one short question at " +
+        "the end of your reply, and then you stop.\n" +
+        "Where an instruction above says there is no second turn, or never to wait " +
+        "for a go-ahead, it describes unattended runs. In this session, this " +
+        "section wins."
+    : "## This session\n\n" +
+        "Nobody is at the terminal. There is no second turn and no one can answer " +
+        "a question: carry the task out, check it, then report.";
+}
+
+/**
+ * A machine fact the model otherwise guesses wrong: which OS the shell is on.
+ *
+ * Deliberately outside the surface (like the credential store and the shell
+ * path): the same checkout on Windows and Linux has the same hash and the same
+ * behaviour rules, but `apt`, `/tmp` and `python3` are Linux-isms a model on a
+ * Git Bash host writes by default and then spends calls discovering. Empty on
+ * every other platform, so a Linux or macOS prompt is unchanged.
+ */
+export function platformBlock(platform: NodeJS.Platform = process.platform): string {
+  if (platform !== "win32") return "";
+  return (
+    "\n\n## This machine\n\n" +
+    "Windows. The `bash` tool runs Git Bash (MSYS2): POSIX commands, pipes and " +
+    "forward-slash paths work, and `/c/Users/x` is `C:\\Users\\x`. There is no " +
+    "apt, sudo or systemd. `python3` may be missing -- try `python` or `py`. Use " +
+    "`$TEMP`, not /tmp. Windows tools are callable from it (`powershell -NoProfile " +
+    "-Command ...`, `cmd //c ...`). Files may have CRLF line endings; `read` shows " +
+    "them without the \\r and `edit` matches either."
+  );
+}
+
 export function buildSystemPrompt(
   state: PromptState,
   role: string,
-  input: string
+  input: string,
+  /** A sub-turn answers its parent, never a person. */
+  opts: { delegated?: boolean } = {}
 ): string {
   const all = loadSkills(state.config);
   const active = selectSkills(all, role, input);
@@ -2545,7 +2692,7 @@ export function buildSystemPrompt(
       dormant,
       `${basename(state.config.gnomonDir)}/${SKILLS_DIR}`
     ) + runNotesBlock(state)
-  );
+  ) + platformBlock() + `\n\n${sessionModeBlock(state.interactive === true && !opts.delegated)}`;
 }
 
 export async function runAgenticTurn(
@@ -2732,7 +2879,7 @@ export async function runAgenticTurn(
         // system prompt for its own role, and nothing of this conversation.
         // That isolation is the reason to delegate at all.
         const subRoute = routeRole(config, subRole);
-        const system = buildSystemPrompt(state, subRole, instruction);
+        const system = buildSystemPrompt(state, subRole, instruction, { delegated: true });
         const sub = await runAgenticTurn(
           state,
           subRole,
@@ -2920,7 +3067,8 @@ export async function runAgenticTurn(
       resilience,
       deps.say,
       deps.ui,
-      deps.signal
+      deps.signal,
+      state.sessionId
     );
     turnUsage = addUsage(turnUsage, r.usage);
 
@@ -2950,7 +3098,7 @@ export async function runAgenticTurn(
         detail: { model: target.model, role },
       });
       deps.progress.start(`${target.model} — without tools`);
-      r = await callEndpoint(target, working, [], modelTimeoutMs(config), deps.signal);
+      r = await callEndpoint(target, working, [], modelTimeoutMs(config), deps.signal, state.sessionId);
       turnUsage = addUsage(turnUsage, r.usage);
     }
     return r;
@@ -3214,7 +3362,12 @@ export async function runAgenticTurn(
         result.code === 0 &&
         steps > 0 &&
         verifyRounds < verify.max_rounds &&
-        (verify.after === "always" || touchedFiles);
+        (verify.after === "always" ||
+          touchedFiles ||
+          // "change": the same question asked of the tree rather than of the
+          // tool name, so heredoc and sed -i work is checked too, while a
+          // question-only turn that moved nothing is not charged a full suite.
+          (verify.after === "change" && shellTouchedWorktree));
 
       // The gate did not apply, and the reason is one the operator would want
       // to know: the surface declared a check, the turn changed the worktree,
@@ -3237,8 +3390,8 @@ export async function runAgenticTurn(
             deps.ui,
             "yellow",
             `  ⚙ verify — NOT RUN. This turn changed files only through the shell, ` +
-              `and [verify] after = "write" counts write/edit. Set after = "always" ` +
-              `to check every turn.`
+              `and [verify] after = "write" counts write/edit. Set after = "change" ` +
+              `to check every turn that changed a file by any route.`
           )
         );
         recordDegradation(deps.audit, {
@@ -3560,7 +3713,8 @@ export async function runAgenticTurn(
         working,
         [],
         modelTimeoutMs(config),
-        deps.signal
+        deps.signal,
+        state.sessionId
       );
       turnUsage = addUsage(turnUsage, closing.usage);
       deps.progress.stop();
@@ -3854,8 +4008,12 @@ export async function runAgenticTurn(
       });
 
       const bucket = mapBucket(outcome.code);
-      const glyph = bucket === "result" ? "✓" : bucket === "refusal" ? "⚠" : "✗";
-      const bcolor = bucket === "result" ? "green" : bucket === "refusal" ? "yellow" : "red";
+      // A command that ran and exited non-zero is a TOOL success and a WORK
+      // failure. It printed a green ✓ beside "exit 1", which read as passed.
+      const shellFailed =
+        bucket === "result" && outcome.shell_exit !== undefined && outcome.shell_exit !== 0;
+      const glyph = shellFailed ? "✗" : bucket === "result" ? "✓" : bucket === "refusal" ? "⚠" : "✗";
+      const bcolor = shellFailed ? "yellow" : bucket === "result" ? "green" : bucket === "refusal" ? "yellow" : "red";
       if (deps.ui.cot === "full" || deps.ui.cot === "tools") {
         say(paint(deps.ui, bcolor, `    ${glyph} ${outcome.summary}`));
       } else if (deps.ui.cot === "work") {
@@ -3873,6 +4031,12 @@ export async function runAgenticTurn(
         // listed.
         const foldable =
           bucket === "result" &&
+          // write/edit move the tree without bash's stamp, so worktree_changed
+          // is undefined for them. Folding them printed "edit ×7 · nothing
+          // changed" over seven successful edits -- the exact failure the
+          // comment at the top of the fold exists to rule out.
+          call.name !== "write" &&
+          call.name !== "edit" &&
           // The tool succeeding is not the work succeeding. `bash` returns
           // TOOL_OK for a command that ran and exited 1, so this check is what
           // stops a failing test run or a broken script being counted as one
@@ -3934,7 +4098,9 @@ export async function runAgenticTurn(
         role: "system",
         content:
           `You have run ${callsSinceWrite} tool calls without changing a file. ` +
-          `If you have found what you need, make the change now. If the task ` +
+          `If you have found what you need, act on it now: make the change the ` +
+          `request asked for, or -- if the request was a question, a recap or a ` +
+          `review -- stop calling tools and answer it. If the task ` +
           `cannot be completed, say so plainly and stop — state what you were ` +
           `unable to do and why. Do not keep investigating without acting.`,
       });
@@ -4096,7 +4262,9 @@ export async function compactSession(
     // request_timeout_ms. Called with no config it fell through to the env var
     // and a different default, so the one turn most likely to be large was the
     // one given the shortest deadline.
-    modelTimeoutMs(state.config)
+    modelTimeoutMs(state.config),
+    undefined,
+    state.sessionId
   );
 
   if (result.code !== 0) {
@@ -6116,6 +6284,7 @@ export async function runPromptLoop(
     config,
     exchanges: [],
     currentRole: initialRole ?? "implement",
+    interactive: true,
   };
 
   // Stored keys fill in for variables the shell has not exported. Named, not
@@ -6622,6 +6791,10 @@ export async function runPromptLoop(
     }
 
     let yes = false;
+    // Restored below. Left set, every keystroke typed during the rest of the
+    // turn repainted `approve> ` -- an answered, session-approved prompt that
+    // looked like the harness was waiting on a decision it already had.
+    const promptBefore = rl.getPrompt();
     for (let attempt = 0; ; attempt++) {
       rl.setPrompt("approve> ");
       rl.prompt();
@@ -6717,6 +6890,7 @@ export async function runPromptLoop(
       console.log(paint(ui, "yellow", `  answer y or n (got "${answer}")`));
     }
 
+    rl.setPrompt(promptBefore);
     lineQueue.unshift(...held);
     audit.write("approval", {
       tool: req.tool,
@@ -6909,6 +7083,24 @@ export async function runPromptLoop(
             "isolation: `bash` can still reach the network through curl, a " +
             "package manager, or anything else installed. Constrain that with " +
             "bash_allow if it matters."
+        )
+      );
+    }
+    // No declared check means no turn is ever checked: "done" is the model's
+    // belief and nothing in the loop can contradict it. Say so at the door,
+    // with the block to paste, rather than let it be discovered from a bug.
+    if (resolveVerify(config) === null) {
+      const found = detectVerifyCommand(resolve(config.gnomonDir, ".."));
+      console.log(
+        paint(
+          ui,
+          "yellow",
+          "  verify: none declared — nothing checks a turn's work before it reports done." +
+            (found
+              ? ` This project runs \`${found}\`; to have gnomon run it after every turn ` +
+                `that changes a file, add to .gnomon/policy.toml:\n` +
+                `      [verify]\n      command = ${JSON.stringify(found)}\n      after = "change"`
+              : " Declare [verify] command in .gnomon/policy.toml.")
         )
       );
     }

@@ -505,6 +505,46 @@ describe("model API errors", () => {
     }
   };
 
+  it("identifies the client and the conversation on every model request", async () => {
+    // opencode's Console Go refuses a request with neither -- 400
+    // MissingSessionID -- before generating anything. It routes and caches on
+    // the session, so the id must hold for the conversation, not per call.
+    const headers: Record<string, string>[] = [];
+    const turn = async (state: any) =>
+      withFetch(
+        (async (_url: string, init: any) => {
+          headers.push(init.headers);
+          return { ok: true, json: async () => ({ message: { content: "done" } }) };
+        }) as unknown as typeof fetch,
+        async () => {
+          await promptLoop.runAgenticTurn(
+            state,
+            "implement",
+            { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+            [{ role: "user", content: "hi" }],
+            {
+              approve: async () => true,
+              progress: { start() {}, update() {}, stop() {} } as any,
+              ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+              say: () => {},
+            }
+          );
+        }
+      );
+    const state: any = { config: loadConfig(fixtureRoot), exchanges: [], currentRole: "implement", sessionId: "S-1" };
+    await turn(state);
+    await turn(state);
+    expect(headers.map((h) => h["x-opencode-session"])).toEqual(["S-1", "S-1"]);
+    // Named as gnomon, not as Node's fetch -- Go asks for the agent's own name.
+    expect(headers[0]["User-Agent"]).toMatch(/^gnomon\//);
+
+    // No session id (a `gnomon task` run) still sends one, stable per process.
+    await turn({ config: loadConfig(fixtureRoot), exchanges: [], currentRole: "implement" });
+    await turn({ config: loadConfig(fixtureRoot), exchanges: [], currentRole: "implement" });
+    expect(headers[2]["x-opencode-session"]).toBeTruthy();
+    expect(headers[3]["x-opencode-session"]).toBe(headers[2]["x-opencode-session"]);
+  });
+
   it("a delegated sub-turn starts with none of the parent conversation", async () => {
     // The isolation is the reason to delegate at all: a critique that never
     // saw the implementer's reasoning, a verifier that cannot have edited what
@@ -733,6 +773,58 @@ describe("model API errors", () => {
     expect(out).toContain("nothing changed");
     // Each command is no longer on its own line — that is the whole point.
     expect(out).not.toContain("echo b");
+  });
+
+  it("never folds a successful edit into 'nothing changed'", async () => {
+    // write/edit carry no bash worktree stamp, so they were folded: a live
+    // session printed "edit ×7 · nothing changed" over seven applied edits.
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-fold-edit-"));
+    cpSync(join(process.cwd(), "..", "..", ".gnomon"), join(dir, ".gnomon"), { recursive: true });
+    writeFileSync(join(dir, "f.txt"), "a\nb\nc\n");
+    try {
+      const config: any = loadConfig(dir);
+      const state: any = {
+        config, exchanges: [], currentRole: "implement",
+        ui: { ...resolveUi(config), cot: "work", think: "hide", color: false },
+      };
+      const lines: string[] = [];
+      let call = 0;
+      process.env.OPENCODE_API_KEY ??= "stub-key-for-this-test";
+      await withFetch(
+        (async () => {
+          call++;
+          const tool_calls =
+            call === 1
+              ? ["a", "b", "c"].map((x, i) => ({
+                  id: `e${i}`,
+                  function: { name: "edit", arguments: { path: "f.txt", old_text: `${x}\n`, new_text: `${x}${x}\n` } },
+                }))
+              : undefined;
+          return { ok: true, json: async () => ({ message: { content: call === 1 ? "" : "done", tool_calls } }) };
+        }) as unknown as typeof fetch,
+        async () => {
+          await promptLoop.runAgenticTurn(
+            state,
+            "implement",
+            { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+            [{ role: "user", content: "go" }],
+            {
+              approve: async () => true,
+              progress: { start() {}, update() {}, stop() {} } as any,
+              ui: state.ui,
+              say: (s: string) => lines.push(s),
+              standingApproval: () => true,
+            }
+          );
+        }
+      );
+      const out = lines.join("\n");
+      expect(readFileSync(join(dir, "f.txt"), "utf8")).toBe("aa\nbb\ncc\n");
+      expect(out).not.toContain("steps folded");
+      expect(out.match(/⚙ edit f\.txt/g)?.length).toBe(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("names where a folded run started when no path was declared", async () => {
@@ -1873,6 +1965,59 @@ describe("runTask — the non-interactive contract", () => {
 
     // and it reaches the model through the system prompt
     expect(promptLoop.buildSystemPrompt(state, "implement", "carry on")).toContain("make all");
+  });
+
+  it("tells the model whether anyone will answer, and lets that override an unattended system.md", () => {
+    // An operator asked for a recap and got a 112-call implementation run: the
+    // scaffolded system.md said "there is no second turn", and the interactive
+    // loop sent it unchanged.
+    const base: any = { config: loadConfig("../.."), exchanges: [], currentRole: "implement" };
+    const attended = promptLoop.buildSystemPrompt({ ...base, interactive: true }, "implement", "recap where we are");
+    expect(attended).toMatch(/there IS a next turn/);
+    expect(attended).toMatch(/A question .* is answered/);
+    expect(attended).toMatch(/this section wins/);
+    // Last, so it is read after -- and explicitly over -- whatever system.md says.
+    expect(attended.trimEnd().endsWith("section wins.")).toBe(true);
+
+    const unattended = promptLoop.buildSystemPrompt(base, "implement", "fix it");
+    expect(unattended).toMatch(/Nobody is at the terminal/);
+    expect(unattended).not.toMatch(/there IS a next turn/);
+
+    // A delegated sub-turn answers its parent, never a person.
+    const sub = promptLoop.buildSystemPrompt({ ...base, interactive: true }, "implement", "x", { delegated: true });
+    expect(sub).toMatch(/Nobody is at the terminal/);
+  });
+
+  it("tells the model it is on Windows, and says nothing on other platforms", () => {
+    expect(promptLoop.platformBlock("linux")).toBe("");
+    expect(promptLoop.platformBlock("darwin")).toBe("");
+    const w = promptLoop.platformBlock("win32");
+    expect(w).toMatch(/Git Bash/);
+    expect(w).toMatch(/\$TEMP/);
+    expect(w).toMatch(/CRLF/);
+  });
+
+  it("replaces dropped steps with a ledger of what ran and how it ended", () => {
+    // "If you need one again, gather it again" -- and it did: `pnpm run verify`
+    // twelve times in one turn, each run's exit status dropped with its output.
+    const w: any[] = [
+      { role: "system", content: "sys" },
+      { role: "user", content: "task" },
+    ];
+    for (let i = 0; i < 6; i++) {
+      w.push({ role: "assistant", content: "", tool_calls: [{ id: `v${i}`, function: { name: "bash", arguments: '{"command":"pnpm run verify"}' } }] });
+      w.push({ role: "tool", tool_call_id: `v${i}`, tool_name: "bash", content: "exit: 0\n" + "x".repeat(4000) });
+    }
+    w.push({ role: "assistant", content: "", tool_calls: [{ id: "e1", function: { name: "edit", arguments: { path: "src/a.ts" } } }] });
+    w.push({ role: "tool", tool_call_id: "e1", tool_name: "edit", content: "Edited src/a.ts" });
+    const r = promptLoop.trimWorking(w, 1200);
+    expect(r.dropped).toBeGreaterThan(0);
+    const note = r.messages.find((m: any) => m.role === "system" && m.content.includes("[gnomon context]"))!.content;
+    expect(note).toMatch(/- bash pnpm run verify → exit: 0 ×\d/);
+    expect(note).toMatch(/Do not repeat a step listed here/);
+    expect(note).not.toMatch(/gather it again/);
+    // Only the outcome line, never the output it summarises.
+    expect(note).not.toContain("xxxx");
   });
 
   it("completes ordinary input as a path, with or without @", () => {
@@ -3771,6 +3916,49 @@ describe("the degradation contract", () => {
     } finally {
       rmSync(joinPath(resolvePath(state.config.gnomonDir, ".."), "shell_written.txt"), { force: true });
     }
+  }, 20000);
+
+  // `after = "change"` asks the tree, not the tool name: shell work is checked,
+  // and a turn that moved nothing -- a question -- is not charged a suite run.
+  it("runs the declared check after shell-only work when after = change, and not after a read-only turn", async () => {
+    const run = async (command: string) => {
+      const config: any = loadConfig("../..");
+      config.policy = { ...(config.policy ?? {}), verify: { command: "true", after: "change", max_rounds: 1 } };
+      const state: any = { config, exchanges: [], currentRole: "implement" };
+      const said: string[] = [];
+      const recs: any[] = [];
+      let call = 0;
+      const turn = await withFetch(
+        (async () => ({
+          ok: true,
+          json: async () => ({
+            message:
+              ++call === 1
+                ? { content: "", tool_calls: [{ id: "c1", function: { name: "bash", arguments: JSON.stringify({ command }) } }] }
+                : { content: "done" },
+          }),
+        })) as unknown as typeof fetch,
+        async () =>
+          await promptLoop.runAgenticTurn(
+            state,
+            "implement",
+            { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+            [{ role: "user", content: "go" }],
+            deps(said, recs)
+          )
+      );
+      return { turn, said: said.join("\n"), root: resolvePath(state.config.gnomonDir, "..") };
+    };
+    const wrote = await run("printf x > shell_written_change.txt");
+    try {
+      expect(wrote.turn.verify).toBe("passed");
+      expect(wrote.said).not.toMatch(/NOT RUN/);
+    } finally {
+      rmSync(joinPath(wrote.root, "shell_written_change.txt"), { force: true });
+    }
+    const looked = await run("ls");
+    expect(looked.said).not.toMatch(/⚙ verify/);
+    expect(looked.turn.verify).toBeUndefined();
   }, 20000);
 
   // An endpoint that refuses the tools array costs the role every tool it

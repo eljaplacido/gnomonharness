@@ -88,3 +88,33 @@ describe("gnomon migrate", () => {
     expect(readConfig()).toBe(before);
   });
 });
+
+describe("gnomon migrate — daily-use defaults (2026-09-29)", () => {
+  it("replaces only the exact scaffold 'no second turn' sentence", () => {
+    const old =
+      "Rules:\n- A reply with no tool call ends the turn. Never send a plan and wait for a\n" +
+      "  go-ahead — there is no second turn. Execute, then report.\n- next rule\n";
+    writeFileSync(join(gnomonDir, "system.md"), old, "utf-8");
+    applyMigrations(pendingMigrations(gnomonDir));
+    const out = readFileSync(join(gnomonDir, "system.md"), "utf-8");
+    expect(out).not.toContain("there is no second turn");
+    expect(out).toContain('"This\n  session"');
+    expect(out).toContain("- next rule");
+    // An edited sentence is somebody's choice, and is left alone.
+    writeFileSync(join(gnomonDir, "system.md"), "- there is no second turn, ever.\n", "utf-8");
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+  });
+
+  it("adds the project's own check when policy.toml declares none, and never invents one", () => {
+    writeFileSync(join(gnomonDir, "policy.toml"), "[approval]\ngate = \"on_write\"\n# [verify]\n# command = \"pytest -q\"\n", "utf-8");
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+    writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: { verify: "tsc && vitest run" } }));
+    writeFileSync(join(root, "pnpm-lock.yaml"), "");
+    applyMigrations(pendingMigrations(gnomonDir));
+    const out = readFileSync(join(gnomonDir, "policy.toml"), "utf-8");
+    expect(out).toMatch(/\n\[verify\]\ncommand = "pnpm run verify"\nafter = "change"/);
+    expect(out).toContain('gate = "on_write"');
+    // A declared block, whatever it says, is left alone.
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+  });
+});

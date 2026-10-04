@@ -397,7 +397,12 @@ pub fn spawn_step(cmd: &str, timeout_ms: u64, _exit_map: &ExitCodeMap) -> Result
         // No exit code means killed by a signal, including by the timeout
         // above. -1 is undeclared, and the bucket map reads undeclared as
         // apparatus_failure -- which is what a killed step is.
-        native_code: status.and_then(|s| s.code()).unwrap_or(-1),
+        //
+        // A timed-out step is -1 on every platform. On Windows kill() is
+        // TerminateProcess, which gives the child an ordinary exit code of 1,
+        // so a step killed by its timeout read as `exit 1` -- a code a surface
+        // may well declare as a result. First run on windows-latest found it.
+        native_code: if timed_out { -1 } else { status.and_then(|s| s.code()).unwrap_or(-1) },
         duration_ms,
         timed_out,
         stdout,

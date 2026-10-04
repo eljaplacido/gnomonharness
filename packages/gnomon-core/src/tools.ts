@@ -29,7 +29,7 @@ import {
   lstatSync,
   readlinkSync
 } from "node:fs";
-import { resolve, relative, isAbsolute, dirname, join, sep } from "node:path";
+import { resolve, relative, isAbsolute, dirname, join, sep, win32 as win32Path } from "node:path";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
 import { promisify } from "node:util";
@@ -387,10 +387,19 @@ export function resolveInRoot(
   return null;
 }
 
+/**
+ * The OS's own realpath on Windows. The JS implementation walks components
+ * lexically and neither expands 8.3 short names nor canonicalises case, so
+ * `GNOMON~1\roles.toml` and `.GNOMON\roles.toml` could both be judged
+ * outside the surface they are inside. POSIX keeps the JS one it always used.
+ */
+const realpath: (p: string) => string =
+  process.platform === "win32" ? (p) => realpathSync.native(p) : (p) => realpathSync(p);
+
 /** realpath, falling back to the path itself when it does not exist yet. */
 function realpathOrSelf(p: string): string {
   try {
-    return realpathSync(p);
+    return realpath(p);
   } catch {
     return p;
   }
@@ -426,7 +435,7 @@ function realpathOfNearest(abs: string): string {
       /* not a link, or unreadable — fall through to the ordinary path */
     }
     try {
-      return parts.length > 0 ? join(realpathSync(cur), ...parts) : realpathSync(cur);
+      return parts.length > 0 ? join(realpath(cur), ...parts) : realpath(cur);
     } catch {
       const parent = dirname(cur);
       if (parent === cur) return abs; // reached the filesystem root
@@ -1113,8 +1122,13 @@ async function readTool(
       };
     }
     const raw = readFileSync(abs, "utf-8");
+    // Split on CRLF too. A trailing \r on every line of a Windows checkout is
+    // invisible in the transcript and poison in anything copied from it.
+    // `edit` matches LF text against CRLF files, so what is shown here is what
+    // can be edited; the summary says which ending the file really has.
+    const crlf = raw.includes("\r\n");
     const numbered = raw
-      .split("\n")
+      .split(/\r?\n/)
       .map((l, n) => `${String(n + 1).padStart(5)}\t${l}`)
       .join("\n");
     return {
@@ -1129,7 +1143,7 @@ async function readTool(
           : ctx,
         `read-${path}`
       ),
-      summary: `read ${path} — ${raw.split("\n").length} lines`,
+      summary: `read ${path} — ${raw.split("\n").length} lines${crlf ? " · CRLF" : ""}`,
     };
   } catch (err) {
     return {
@@ -1184,22 +1198,89 @@ export function posixShell(): string | null {
   const override = process.env.GNOMON_SHELL;
   if (override && existsSync(override)) return (cachedShell = override);
 
-  const pf = process.env["ProgramFiles"] || "C:\\Program Files";
-  const pf86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
-  const local = process.env.LOCALAPPDATA || "";
-  for (const c of [
-    join(pf, "Git", "bin", "bash.exe"),
-    join(pf86, "Git", "bin", "bash.exe"),
-    local ? join(local, "Programs", "Git", "bin", "bash.exe") : "",
-  ]) {
-    if (c && existsSync(c)) return (cachedShell = c);
+  return (cachedShell = findGitBash(process.env, existsSync));
+}
+
+/**
+ * Git for Windows' bash.exe, without assuming where Git was installed.
+ *
+ * It looked in three fixed directories and nowhere else, although the comment
+ * above has always said "PATH is consulted last" -- so a Scoop install, a
+ * portable Git, or any custom install directory was refused with "no POSIX
+ * shell" on a machine where `git` worked. The fixed locations still come first.
+ * Then Git's own install root is derived from wherever `git.exe` sits on PATH
+ * (`<root>\cmd`, `<root>\bin`, `<root>\mingw64\bin`). A bare bash.exe on PATH
+ * is taken last, and never from System32 or WindowsApps: those are WSL's
+ * launchers, which run in another filesystem (see NOT WSL above).
+ *
+ * Win32 path arithmetic on purpose, so it is testable on any host.
+ */
+export function findGitBash(
+  env: Record<string, string | undefined>,
+  exists: (p: string) => boolean
+): string | null {
+  const w = win32Path;
+  const pf = env["ProgramFiles"] || "C:\\Program Files";
+  const pf86 = env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+  const local = env.LOCALAPPDATA || "";
+  const home = env.USERPROFILE || "";
+  const fixed = [
+    w.join(pf, "Git", "bin", "bash.exe"),
+    w.join(pf86, "Git", "bin", "bash.exe"),
+    local ? w.join(local, "Programs", "Git", "bin", "bash.exe") : "",
+    home ? w.join(home, "scoop", "apps", "git", "current", "bin", "bash.exe") : "",
+  ];
+  for (const c of fixed) if (c && exists(c)) return c;
+
+  const dirs = (env.PATH ?? env.Path ?? "").split(";").map((d) => d.trim().replace(/^"|"$/g, "")).filter(Boolean);
+  for (const d of dirs) {
+    if (!exists(w.join(d, "git.exe"))) continue;
+    const leaf = w.basename(d).toLowerCase();
+    const parent = w.dirname(d);
+    const roots =
+      leaf === "bin" && w.basename(parent).toLowerCase() === "mingw64"
+        ? [w.dirname(parent)]
+        : leaf === "cmd" || leaf === "bin"
+          ? [parent]
+          : [];
+    for (const r of roots) {
+      const c = w.join(r, "bin", "bash.exe");
+      if (exists(c)) return c;
+    }
   }
-  return (cachedShell = null);
+  for (const d of dirs) {
+    const c = w.join(d, "bash.exe");
+    if (/\\(system32|windowsapps)(\\|$)/i.test(d)) continue;
+    if (exists(c)) return c;
+  }
+  return null;
 }
 
 /** Reset the memoised shell. Tests only. */
 export function _resetShellCache(): void {
   cachedShell = undefined;
+}
+
+/** `sudo` where the shell would run it: first word of a command, or after xargs/env. */
+export const SUDO_AT_COMMAND_POSITION = /(?:^|[;&|(`\n]|\$\()\s*(?:(?:xargs|env|command|exec|nohup)\s+(?:-\S+\s+)*)?sudo\b/;
+
+/**
+ * A note for a pipeline whose status is its last stage's.
+ *
+ * /bin/sh here is dash: no pipefail, no PIPESTATUS. `pnpm run verify 2>&1 |
+ * tail -40` reports tail's exit 0 whatever verify did, and the agent then
+ * re-ran the check again and again trying to learn its real status. The output
+ * is already clamped at both ends, so the tail bought nothing.
+ */
+export function pipelineStatusNote(command: string): string {
+  const m = /\|\s*(tail|head|grep|egrep|sort|uniq|wc|cut|awk|sed|cat|less|more)\b[^|]*$/.exec(command.trim());
+  if (!m || /\|\|[^|]*$/.test(command.trim())) return "";
+  return (
+    `\n\n(note: this exit status is \`${m[1]}\`'s, the last command in the pipeline -- ` +
+    `not the status of what fed it. This shell has no pipefail. For the real status, ` +
+    `drop the pipe: output is already clamped at both ends, so the error is kept. Or: ` +
+    `\`cmd >log 2>&1; echo "exit=$?"; tail -40 log\`.)`
+  );
 }
 
 /** What to tell an operator on a Windows box with no POSIX shell. */
@@ -1212,7 +1293,8 @@ export const NO_POSIX_SHELL =
   "Install Git for Windows (it ships the shell gnomon uses):\n" +
   "    winget install --id Git.Git\n\n" +
   "Or point gnomon at one you already have:\n" +
-  "    set GNOMON_SHELL=C:\\path\\to\\bash.exe";
+  "    PowerShell:  $env:GNOMON_SHELL = \"C:\\path\\to\\bash.exe\"\n" +
+  "    cmd:         set GNOMON_SHELL=C:\\path\\to\\bash.exe";
 
 function killTree(
   proc: { pid?: number; kill: (sig: NodeJS.Signals) => boolean },
@@ -1463,6 +1545,23 @@ async function bashTool(
     }
   }
 
+  // Privilege escalation on the host is refused outright, before any approval
+  // prompt. Session-wide approval ("s") covers every gated call, and stdin is
+  // closed, so the only sudo that can succeed here is one that needs no
+  // password -- exactly the one nobody meant to grant. Observed 2026-09-29: a
+  // session-approved agent ran `echo ... | sudo tee -a /etc/sysctl.conf`.
+  // Inside the docker sandbox it is the container's root, not the host's.
+  if (ctx.exec?.mode !== "docker" && SUDO_AT_COMMAND_POSITION.test(command)) {
+    return {
+      code: TOOL_DENIED,
+      content:
+        "Refused: gnomon does not run sudo. Changing the machine outside this " +
+        "repository is the operator's call. Stop and give them the exact command " +
+        "to run themselves, and say why it is needed.",
+      summary: "bash — refused (sudo)",
+    };
+  }
+
   if (needsApproval("bash", ctx.gate)) {
     const ok = await ctx.approve({
       tool: "bash",
@@ -1518,9 +1617,30 @@ async function bashTool(
     // That is the premise the anti-flailing nudge reads, and it fired on agents
     // that were working correctly for exactly this reason on Unix once already.
     const absolute = raw.startsWith("/") || /^[A-Za-z]:[\\/]/.test(raw);
-    return absolute ? raw : undefined;
+    if (!absolute) return undefined;
+    // Git Bash spells C:\work as /c/work. Node resolves that to C:\c\work, so
+    // the stamp walked a directory that does not exist and saw no change.
+    const msys = /^\/([A-Za-z])(?:\/(.*))?$/.exec(raw);
+    if (process.platform === "win32" && msys) return `${msys[1].toUpperCase()}:\\${(msys[2] ?? "").replace(/\//g, "\\")}`;
+    return raw;
   })();
   const worktreeBefore = worktreeStampOf(ctx, shellCwd);
+
+  // The docker sandbox bind-mounts the root at the same absolute path inside a
+  // Linux container. `C:\work` is not a path there, and with no getuid the
+  // mapping fell back to --user 0:0 -- root. Refused, named, rather than run
+  // in a container that cannot see the repository.
+  if (ctx.exec?.mode === "docker" && process.platform === "win32") {
+    return {
+      code: TOOL_FAILED,
+      content:
+        "Refused: [sandbox] exec = \"docker\" is not supported on native Windows yet. " +
+        "It mounts the repository at its host path inside a Linux container, and a " +
+        "drive-letter path does not exist there. Set exec = \"off\" for this machine, " +
+        "or run gnomon inside WSL where the sandbox works.",
+      summary: "bash — refused (docker sandbox unsupported on Windows)",
+    };
+  }
 
   const startedAt = Date.now();
   // A stable, unique name so a cancelled or timed-out turn can remove the
@@ -1693,6 +1813,7 @@ async function bashTool(
         shell_exit: typeof exit === "number" ? exit : undefined,
         content:
           (failed ? clampEnds(body, ctx, `bash-exit`) : clamp(body, ctx, `bash-exit`)) +
+          pipelineStatusNote(command) +
           (drift ? `\n\n${drift.notice}` : ""),
         // `exit` is null when the child died on a signal, and "exit null" then
         // failed the verify gate's /exit (-?\d+)/ and fell through to its
@@ -1723,7 +1844,7 @@ async function bashTool(
  * separator also matches nothing at all — so `**\/*.md` covers both `NOTES.md`
  * and `docs/NOTES.md`.
  */
-export function globToRegExp(glob: string): RegExp {
+export function globToRegExp(glob: string, flags = ""): RegExp {
   let out = "";
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i];
@@ -1745,7 +1866,7 @@ export function globToRegExp(glob: string): RegExp {
       out += c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     }
   }
-  return new RegExp(`^${out}$`);
+  return new RegExp(`^${out}$`, flags);
 }
 
 /**
@@ -1973,7 +2094,9 @@ export function writeAllowed(
     .join("/");
   const ok = allowed.some((pattern) => {
     try {
-      return globToRegExp(pattern).test(rel);
+      // Case-insensitive where the filesystem is: `SRC/x.ts` IS `src/x.ts`
+      // on Windows, and refusing it was a false refusal with no workaround.
+      return globToRegExp(pattern, process.platform === "win32" ? "i" : "").test(rel);
     } catch {
       return false;
     }
@@ -2762,7 +2885,9 @@ async function grepTool(
       continue;
     }
     let hitHere = false;
-    const split = text.split("\n");
+    // CRLF-aware for the same reason as `read`: on a Windows checkout every
+    // line ends in \r, so an anchored pattern like `foo$` matched nothing.
+    const split = text.split(/\r?\n/);
     for (let i = 0; i < split.length; i++) {
       if (!re.test(split[i])) continue;
       re.lastIndex = 0;
@@ -3012,8 +3137,8 @@ async function editTool(
   ctx: ToolContext
 ): Promise<ToolOutcome> {
   const path = String(args.path ?? "");
-  const oldText = String(args.old_text ?? "");
-  const newText = String(args.new_text ?? "");
+  const oldTextRaw = String(args.old_text ?? "");
+  const newTextRaw = String(args.new_text ?? "");
   const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
   if (!abs) {
     return {
@@ -3062,6 +3187,22 @@ async function editTool(
 
   const before = readFileSync(abs, "utf-8");
   if (ctx.preImages && !ctx.preImages.has(abs)) ctx.preImages.set(abs, before);
+  // A CRLF file and an LF old_text. Git for Windows checks out with
+  // core.autocrlf=true, `read` shows lines without their \r, and the model
+  // copies what it was shown -- so every multi-line edit on such a checkout
+  // came back "not found". Match in the file's own line ending, and write the
+  // replacement in it too, so the edit does not leave the file mixed.
+  let oldText = oldTextRaw;
+  let newText = newTextRaw;
+  if (
+    before.includes("\r\n") &&
+    !oldText.includes("\r") &&
+    oldText.includes("\n") &&
+    !before.includes(oldText)
+  ) {
+    oldText = oldText.replace(/\n/g, "\r\n");
+    newText = newText.replace(/\r?\n/g, "\r\n");
+  }
   const hits = before.split(oldText).length - 1;
   if (hits === 0) {
     return {
@@ -3078,7 +3219,9 @@ async function editTool(
     };
   }
 
-  const after = before.replace(oldText, newText);
+  // A function replacer: with a string, `$$`, `$&` and `$'` in new_text are
+  // replacement patterns, so `echo $$` was written as `echo $`.
+  const after = before.replace(oldText, () => newText);
   const diff = diffLines(before, after);
   const { added, removed } = diffStat(diff);
 

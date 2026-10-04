@@ -23,6 +23,7 @@ import {
 } from "node:fs";
 import { join, resolve, relative } from "node:path";
 import { detectModels, ModelChoice, FALLBACK_LARGE, FALLBACK_SMALL } from "./detect.js";
+import { detectVerifyCommand } from "gnomon-core";
 
 // ---------------------------------------------------------------------------
 // Templates
@@ -735,8 +736,10 @@ Rules:
   like a fact.
 - A tool that is missing or fails comes back to you as a refusal naming it.
   Read it, find another route to the same fact, and keep going.
-- A reply with no tool call ends the turn. Never send a plan and wait for a
-  go-ahead — there is no second turn. Execute, then report.
+- A reply with no tool call ends the turn. When you were asked to do
+  something, do not send a plan and wait for a go-ahead — execute, then
+  report. Whether anyone can answer a question is stated under "This
+  session" at the end of this prompt.
 - Finish the work. Never end a turn by offering to do something you could
   have done: if it can be installed, read, run or written, do it instead of
   proposing it. "If you want, I can also…" means you stopped early. The
@@ -1009,6 +1012,12 @@ export interface InitOptions {
   force?: boolean;
   /** Copy an existing surface instead of using the built-in templates */
   from?: string;
+  /**
+   * Leave [verify] commented out even when the project declares a check.
+   * Benchmark harnesses pass it: a sweep before 2026-09-29 ran with no gate,
+   * and a gate switched on by the task's own files is a second variable.
+   */
+  noVerify?: boolean;
 }
 
 export interface InitResult {
@@ -1017,6 +1026,10 @@ export interface InitResult {
   skipped: string[];
   /** What detection chose, when it ran */
   models?: ModelChoice;
+  /** The [verify] command switched on because the project declares it */
+  verify?: string;
+  /** Whether `.gnomon/** text eol=lf` was added to the project's .gitattributes */
+  gitattributes?: boolean;
 }
 
 /**
@@ -1101,6 +1114,26 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
     }
   }
 
+  // A project that already declares its check gets it switched on, not left
+  // as a comment nobody uncomments. Only a command the project itself declares
+  // (package.json script, Cargo.toml, ...); see detectVerifyCommand.
+  const verifyCommand = options.from || options.noVerify ? null : detectVerifyCommand(root);
+  if (verifyCommand) {
+    templates = templates.map((t) =>
+      t.path === "policy.toml"
+        ? {
+            ...t,
+            content:
+              t.content +
+              `\n# Detected at 'gnomon init' from this project's own files.\n` +
+              `[verify]\ncommand = ${JSON.stringify(verifyCommand)}\n` +
+              `after = "change"         # any turn that changed a file, by write/edit or the shell\n` +
+              `max_rounds = 1\n`,
+          }
+        : t
+    );
+  }
+
   const written: string[] = [];
   const skipped: string[] = [];
 
@@ -1119,5 +1152,31 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
     written.push(t.path);
   }
 
-  return { gnomonDir, written, skipped, models: options.from ? undefined : choice };
+  // The surface hash is over raw bytes. A Windows clone with core.autocrlf
+  // (Git for Windows' default) checks .gnomon/ out as CRLF, so the same commit
+  // hashed differently on the two machines -- the one property the hash
+  // exists to guarantee. gnomon's own repository fixed this for itself with a
+  // .gitattributes line; a scaffolded project never got one.
+  const attrs = join(root, ".gitattributes");
+  const attrsText = existsSync(attrs) ? readFileSync(attrs, "utf-8") : "";
+  let gitattributes = false;
+  if (!/^\s*\.gnomon\/\S*\s+.*\beol=lf\b/m.test(attrsText)) {
+    writeFileSync(
+      attrs,
+      (attrsText && !attrsText.endsWith("\n") ? attrsText + "\n" : attrsText) +
+        "# gnomon: the surface is hashed byte-for-byte; keep it LF on every OS.\n" +
+        ".gnomon/** text eol=lf\n",
+      "utf-8"
+    );
+    gitattributes = true;
+  }
+
+  return {
+    gnomonDir,
+    written,
+    skipped,
+    gitattributes,
+    models: options.from ? undefined : choice,
+    verify: verifyCommand ?? undefined,
+  };
 }

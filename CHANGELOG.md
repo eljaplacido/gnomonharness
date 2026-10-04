@@ -26,6 +26,61 @@
 
 ## [Unreleased]
 
+**Daily interactive use, from one real session (2026-09-29).** An operator asked
+for a recap; the turn ran 112+ tool calls of implementation, re-ran
+`pnpm run verify` about twelve times, and printed "edit ×7 · nothing changed".
+Each line below is one cause.
+
+- **The prompt says whether anyone will answer.** The scaffolded system.md said
+  "there is no second turn", and the interactive loop sent it to a person who
+  was sitting there. A "This session" block now ends every system prompt: attended
+  sessions answer questions without changing files and ask the operator's
+  decisions; `gnomon task` and delegated sub-turns stay unattended.
+- **Verification is on by default where the project declares a check.** `init`
+  enables `[verify]` with the project's own `verify`/`check`/`test` script,
+  `cargo test`, `go test`, `pytest` or `make test`; nothing is invented. New
+  `after = "change"` runs it after any turn that changed a file, write/edit or
+  shell, and never after a read-only turn. `launch` says so when no check is
+  declared. `gnomon migrate` brings existing surfaces over.
+- **The context trim keeps a ledger.** Dropped steps are replaced by one line
+  each — what ran and how it ended — instead of "gather it again".
+- **Transcript honesty.** Successful edits are never folded under "nothing
+  changed"; a command that exits non-zero shows ✗, not ✓; `approve>` no longer
+  reappears after the prompt was answered; a `| tail` pipeline says its status
+  is tail's (this shell has no pipefail).
+- **`sudo` is refused outright,** before any approval prompt, including under
+  session-wide approval. The docker sandbox is exempt.
+- **`edit`** matches LF `old_text` in CRLF files and keeps them CRLF (Git for
+  Windows' default checkout), and writes `$$`, `$&`, `$'` in `new_text` literally.
+- **Windows launcher** no longer runs through cmd.exe: a checkout under a path
+  with a space starts, and `&`, `|`, `>` in a prompt stay text.
+- Model requests carry `x-opencode-session` and a `gnomon/<build>` User-Agent;
+  opencode Go answered 400 MissingSessionID without them.
+
+**Native Windows, for daily use.**
+
+- Git Bash is found under Scoop and derived from `git.exe` on PATH, not only
+  in three fixed directories; System32/WindowsApps `bash.exe` (WSL) is never
+  taken. The refusal names the PowerShell `$env:` form.
+- `read` and `grep` split CRLF; `read` says a file is CRLF. `init` adds
+  `.gnomon/** text eol=lf` to `.gitattributes`, so autocrlf clones hash the
+  same surface.
+- The system prompt says the machine is Windows (outside the hash).
+- MCP servers named `npx`/`pnpm`/any `.cmd` shim start: resolved via
+  PATH/PATHEXT and run under `cmd.exe /d /s /c` with every argument escaped.
+  Windows' profile variables reach the server.
+- Surface/sandbox guards use the OS realpath (8.3 short names, case), and
+  `write_allow` matches case-insensitively on Windows.
+- `attest` and `gnomon session` use the bash tool's shell instead of PATH
+  `bash` / cmd.exe. `cd /c/x` is understood as `C:\x` for change detection.
+- The docker exec sandbox is refused on Windows instead of mounting a path
+  the container cannot see, as root.
+- `NO_COLOR` is honoured; the legacy console gets an ASCII spinner.
+- CI on windows-latest also runs `cargo test` and launches gnomon from a path
+  with a space; three win32 early-returns are now reported as skips.
+- `init --no-verify` keeps the pre-2026-09-29 ungated surface; the
+  benchmark runners pass it.
+
 ### Fixed
 
 - **A reply with no usable tool call gets a bounded repair turn, then an honest

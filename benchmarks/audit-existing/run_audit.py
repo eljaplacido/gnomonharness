@@ -60,7 +60,7 @@ def scaffold(root, project_dir):
     subprocess.run(["git", "add", "-A"], cwd=root, check=True)
     subprocess.run(["git", "-c", "user.email=a@a", "-c", "user.name=a",
                     "commit", "-qm", "corpus"], cwd=root, check=True)
-    subprocess.run([str(TSX), str(CLI), "init"], cwd=root,
+    subprocess.run([str(TSX), str(CLI), "init", "--no-verify"], cwd=root,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
     cfg = root / ".gnomon/config.toml"
     cfg.write_text(cfg.read_text().replace(

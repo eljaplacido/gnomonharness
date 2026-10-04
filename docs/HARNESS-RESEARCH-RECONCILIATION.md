@@ -228,7 +228,10 @@ Recorded so it is not relitigated.
   `[result]` — declared done, graded wrong. Removing the stop sanction pushes trials into that worse
   bucket. The salvageable half is moving the text into the surface, not rewording it in place.
 - **A default `[verify]` command.** `init.ts` is right to refuse one, and Terminal-Bench hides its
-  tests, so injecting them is contamination.
+  tests, so injecting them is contamination. *Revisited 2026-09-29:* `init` now declares the check
+  the project **already** declares (its own `verify`/`test` script, `cargo test`, ...) — never an
+  invented or hidden one — because an interactive surface with no gate checked nothing. Benchmark
+  harnesses pass `init --no-verify`, so sweeps keep the ungated surface they were measured on.
 
 ---
 

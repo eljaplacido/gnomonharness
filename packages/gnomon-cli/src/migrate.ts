@@ -32,7 +32,8 @@
  */
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { detectVerifyCommand } from "gnomon-core";
 
 export interface Migration {
   id: string;
@@ -46,7 +47,7 @@ export interface Migration {
    * Rewrite the file text, or return null when there is nothing to do.
    * Must be a no-op for any value other than the old default.
    */
-  apply(text: string): string | null;
+  apply(text: string, ctx: { root: string }): string | null;
 }
 
 /**
@@ -94,6 +95,55 @@ export const MIGRATIONS: Migration[] = [
     ],
     apply: (text) => retypeKey(text, "defaults", "compaction", "discard", "summary"),
   },
+  {
+    id: "system-md-second-turn",
+    file: "system.md",
+    what: `system.md: "there is no second turn" → only for unattended runs`,
+    why: [
+      "The scaffold told every session there is no second turn, and the",
+      "interactive loop sent that to a person who was sitting right there.",
+      "Measured 2026-09-29: asked for a recap, a turn ran 112+ tool calls of",
+      "implementation. Only the exact scaffold sentence is replaced.",
+    ],
+    apply: (text) => {
+      const old =
+        "- A reply with no tool call ends the turn. Never send a plan and wait for a\n" +
+        "  go-ahead — there is no second turn. Execute, then report.";
+      if (!text.includes(old)) return null;
+      return text.replace(
+        old,
+        () =>
+          "- A reply with no tool call ends the turn. When you were asked to do\n" +
+          "  something, do not send a plan and wait for a go-ahead — execute, then\n" +
+          "  report. Whether anyone can answer a question is stated under \"This\n" +
+          "  session\" at the end of this prompt."
+      );
+    },
+  },
+  {
+    id: "verify-declared",
+    file: "policy.toml",
+    what: `policy.toml: no [verify]  →  the check this project already declares`,
+    why: [
+      "With no [verify], no turn is ever checked: \"done\" is the model's",
+      "belief. Until 2026-09-29 the scaffold shipped the block commented out.",
+      "Only a command the project itself declares is added (package.json",
+      "verify/check/test, Cargo.toml, go.mod, pytest, make test) — nothing",
+      "is invented, and a surface with any [verify] block is left alone.",
+    ],
+    apply: (text, ctx) => {
+      if (/^\s*\[verify\]\s*$/m.test(text)) return null;
+      const command = detectVerifyCommand(ctx.root);
+      if (!command) return null;
+      return (
+        text.replace(/\n*$/, "\n") +
+        `\n# Added by 'gnomon migrate' from this project's own files.\n` +
+        `[verify]\ncommand = ${JSON.stringify(command)}\n` +
+        `after = "change"         # any turn that changed a file, by write/edit or the shell\n` +
+        `max_rounds = 1\n`
+      );
+    },
+  },
 ];
 
 export interface MigrationResult {
@@ -113,7 +163,7 @@ export function pendingMigrations(gnomonDir: string): MigrationResult[] {
     const path = join(gnomonDir, m.file);
     if (!existsSync(path)) continue;
     const text = readFileSync(path, "utf-8");
-    const next = m.apply(text);
+    const next = m.apply(text, { root: dirname(gnomonDir) });
     if (next === null || next === text) continue;
     out.push({ id: m.id, file: m.file, what: m.what, why: m.why, next, path });
   }

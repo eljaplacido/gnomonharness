@@ -46,8 +46,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1095 TypeScript tests (947 core, 127 cli, 14
-> natives, 7 tui) and 60 Rust tests — **1155 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1127 TypeScript tests (976 core, 130 cli, 14
+> natives, 7 tui) and 60 Rust tests — **1187 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -939,7 +939,7 @@ network = false                    # enforced for `webfetch`; NOT process isolat
 
 [verify]                           # a declared check run after a turn changes files
 command = ".gnomon/verify.sh"      # non-recursive; empty/absent = off
-after = "write"                    # run when the turn touched a file
+after = "change"                   # write | change | always — "change" = any turn that moved the tree
 max_rounds = 1                     # let the model react to a failure, once
 ```
 
@@ -1883,7 +1883,16 @@ results and their caveats are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and th
   different languages, and a shell that changes with the operating system is
   machine-scoped behaviour the hash cannot see. With no POSIX shell, `bash`
   refuses and says how to get one rather than running your commands under
-  something else. `GNOMON_SHELL` points at one you already have.
+  something else. It is found in the usual install directories, under Scoop,
+  or derived from wherever `git.exe` sits on PATH (never System32's WSL
+  launcher); `GNOMON_SHELL` points at one you already have.
+
+  The model is told it is on Windows (Git Bash, `$TEMP`, no apt/sudo) outside
+  the hashed surface, the way the shell path is. `read`, `grep` and `edit`
+  handle CRLF files, and `init` adds `.gnomon/** text eol=lf` to
+  `.gitattributes` so a `core.autocrlf` clone hashes the same surface. The
+  docker exec sandbox is refused on native Windows rather than run with a
+  drive-letter mount that does not exist in the container.
 
   Two things behave differently and say so: `gnomon loops` can *run* but cannot
   *install* on a schedule, because that is cron and Windows has Task Scheduler
