@@ -120,6 +120,56 @@ describe("template hygiene", () => {
     }
   });
 
+  it("the scaffolded verifier runs the suite, not whatever code it picks", async () => {
+    // Every refused spelling below matched the old entry
+    // '^(cargo|pnpm|npm|yarn|pytest|go|make)\s', and each one runs code the
+    // verifier chose or writes to the tree. The flag spellings at the end also
+    // clear the suite-only allow-list; bash_deny is what refuses them.
+    const root = mkdtempSync(join(tmpdir(), "gnomon-allow-"));
+    try {
+      await initSurface({ dir: root });
+      const verifier = loadConfig(root).roles.verifier;
+      const allow = verifier?.bash_allow ?? [];
+      const deny = verifier?.bash_deny ?? [];
+      // Deny wins over allow, as in bashTool.
+      const permits = (cmd: string) =>
+        allow.some((p) => new RegExp(p).test(cmd)) &&
+        !deny.some((p) => new RegExp(p).test(cmd));
+
+      for (const suite of [
+        "cargo test", "cargo test --all", "cargo nextest run -p core",
+        "cargo clippy --all -- -D warnings", "cargo check",
+        "go test ./...", "go vet ./...", "pytest", "pytest -q tests/unit",
+        "pnpm test", "pnpm run test", "pnpm run test:core",
+        "pnpm --filter ./packages/gnomon-core test", "npm test",
+        "npm run test -- --watch=false", "npm -w api test", "pnpm -w test",
+        "yarn test", "make test", "make test -j4", "make check",
+      ]) {
+        expect(permits(suite), suite).toBe(true);
+      }
+      for (const chosen of [
+        "npm exec cowsay", "npx cowsay", "pnpm dlx create-anything", "yarn dlx x",
+        "pnpm --filter x exec rm -rf .", "pnpm --filter x run build",
+        "npm install left-pad", "pnpm add x", "npm run build", "pnpm run deploy",
+        "npm testify", "make", "make clean", "make install",
+        "cargo run", "cargo build", "cargo install ripgrep",
+        "go run .", "go generate ./...", "go install x@latest",
+        // The suite by name, with a flag that swaps in another program.
+        "go test -exec /bin/sh ./...", "go test -toolexec /bin/sh ./...",
+        "go vet -vettool=/bin/sh ./...",
+        'cargo test --config target.x86_64-unknown-linux-gnu.runner="sh -c id"',
+        "npm test --script-shell=/bin/sh", "npm test --userconfig=/tmp/npmrc",
+        "pnpm test --config.script-shell=/bin/sh",
+        "make test -f /tmp/other.mk", "make test --file=/tmp/other.mk",
+        "make check --eval=x", "make test SHELL=/bin/sh",
+      ]) {
+        expect(permits(chosen), chosen).toBe(false);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("declares the remote endpoints, inert until a role names one", async () => {
     // They shipped commented out, so a scaffolded project's /endpoints showed
     // only `local` and there was no sign the others were even possible.

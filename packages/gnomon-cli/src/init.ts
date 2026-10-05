@@ -413,7 +413,19 @@ bash_allow = [
   # shipped starter surface failed the auditor it ships with, which teaches a
   # new user that the yellow text is noise. 'pytest' on its own runs the same
   # suite and names no interpreter.
-  '^(cargo|pnpm|npm|yarn|pytest|go|make)\\s',
+  #
+  # The same mistake survived one level up: '^(cargo|pnpm|npm|yarn|pytest|go|make)\\s'
+  # bounded the role by the tool's name, not by the suite. 'npm exec x',
+  # 'pnpm dlx x' and 'yarn dlx x' fetch and run any package; 'make clean' runs
+  # any target; 'cargo run' and 'go run' run any binary; 'go generate' runs
+  # whatever command a source comment names. A role that "cannot write" reached
+  # all of them. Running the suite still runs the project's own test code --
+  # that is what a verifier is for. Choosing other code to run is not.
+  # A named test script ('test:unit') or one workspace ('--filter x') is still
+  # the suite; 'run build' and 'exec' are not.
+  '^(cargo (test|nextest run|check|clippy)|go (test|vet)|pytest)(\\s|$)',
+  '^(pnpm|npm|yarn)( (--filter|-F|--workspace|-w) [^\\s;&|]+| -w)? (run )?test(:[\\w-]+)?(\\s|$)',
+  '^make (test|check)(\\s|$)',
   '^(ls|cat|head|tail|grep|rg|find|git (status|diff|log|show))\\s',
 ]
 bash_deny = [
@@ -425,6 +437,15 @@ bash_deny = [
   # Deny wins over allow, so this holds even if someone widens bash_allow
   # later. A role that "cannot write" must not reach a language runtime.
   '\\b(awk|gawk|perl|python3?|ruby|node)\\b',
+  # The suite runners take flags that name a program to run instead of, or
+  # around, the suite: 'go test -toolexec x', 'go vet -vettool=x',
+  # 'cargo test --config target.<triple>.runner=x', 'npm test --script-shell=x'
+  # (or a --userconfig that sets it), and make's '-f other.mk', '--eval' and
+  # 'VAR=x' overrides, any of which can replace what a recipe runs. Each one
+  # cleared the suite-only allow-list above.
+  '-vettool', '-toolexec',
+  '--(config|script-shell|userconfig|globalconfig)\\b',
+  '^make\\s[^|;&]*\\s(-[A-Za-z]*[fE]|--(file|makefile|eval)\\b|[^\\s=]+=)',
 ]
 description = "Runs the suite and reports. Cannot write."
 

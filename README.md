@@ -46,8 +46,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1127 TypeScript tests (976 core, 130 cli, 14
-> natives, 7 tui) and 60 Rust tests — **1187 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1128 TypeScript tests (976 core, 131 cli, 14
+> natives, 7 tui) and 60 Rust tests — **1188 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -243,7 +243,7 @@ test commands.
 ```toml
 [roles.verifier]
 tools = ["read", "glob", "grep", "compute", "todo", "bash"]
-bash_allow = ['^(cargo|pnpm|pytest|go|make)\s', '^septacore check\b']  # septacore optional/external
+bash_allow = ['^(cargo (test|clippy)|pnpm (run )?test(:[\w-]+)?|pytest|go test|make (test|check))(\s|$)', '^septacore check\b']  # septacore optional/external
 ```
 
 That second line matters more than it looks. **`bash` can write anything**, so
@@ -847,7 +847,7 @@ endpoint = "local"
 temperature = 0.1
 max_steps = 12
 tools = ["read", "glob", "grep", "compute", "todo", "bash"]
-bash_allow = ['^(cargo|pnpm|pytest|go|make)\s', '^(ls|cat|grep|git (status|diff|log))\s']
+bash_allow = ['^(cargo (test|clippy)|pnpm (run )?test(:[\w-]+)?|pytest|go test|make (test|check))(\s|$)', '^(ls|cat|grep|git (status|diff|log))\s']
 description = "Runs the suite and reports. Cannot write."
 
 [roles.implement.fallback]
@@ -1286,7 +1286,7 @@ would take to make a rejected backend refuse, is in
 ```toml
 [roles.verifier]
 tools = ["read", "glob", "grep", "compute", "todo", "bash"]
-bash_allow = ['^(cargo|pnpm|npm|pytest|go|make)\s', '^(ls|cat|grep|git (status|diff|log))\s']
+bash_allow = ['^(cargo (test|clippy)|pnpm (run )?test(:[\w-]+)?|pytest|go test|make (test|check))(\s|$)', '^(ls|cat|grep|git (status|diff|log))\s']
 ```
 
 A command matching none of these is refused by name. Absent the list, any
