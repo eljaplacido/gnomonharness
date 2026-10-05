@@ -4153,3 +4153,246 @@ describe("the scripted path discloses degradations", () => {
     }
   }, 30000);
 });
+
+describe("a reply with no usable tool call gets a bounded repair turn", () => {
+  // Local Qwen-family models behind llama.cpp or Ollama produce every shape
+  // below when the chat template and the endpoint's tool parser disagree. Each
+  // reply is answered with what was wrong and the model is asked again; past
+  // `[turn] max_consecutive_malformed` the turn ends as "malformed" instead of
+  // spinning to the step wall or recording markup as an answer.
+  const UI = { meta: [], meta_style: "line", think: "hide", spinner: false, color: false, cot: "work" } as any;
+  const ROUTE = { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any;
+  const withFetch = async <T,>(impl: typeof fetch, run: () => Promise<T>): Promise<T> => {
+    const original = globalThis.fetch;
+    globalThis.fetch = impl;
+    try {
+      return await run();
+    } finally {
+      globalThis.fetch = original;
+    }
+  };
+  const deps = (said: string[], recs: any[] = []) => ({
+    approve: async () => true,
+    progress: { start() {}, update() {}, stop() {} } as any,
+    ui: UI,
+    say: (l: string) => said.push(l),
+    audit: { write: (kind: string, f: any) => recs.push({ kind, ...f }), text: (t: string) => t } as any,
+  });
+  const stateWith = (turn?: Record<string, unknown>): any => {
+    const config: any = loadConfig("../..");
+    if (turn) config.config = { ...config.config, turn: { ...(config.config?.turn ?? {}), ...turn } };
+    return { config, exchanges: [], currentRole: "implement" };
+  };
+  const toolReply = (name: string, args: string) => ({
+    ok: true,
+    json: async () => ({ choices: [{ message: {
+      content: "",
+      tool_calls: [{ id: "c1", type: "function", function: { name, arguments: args } }],
+    } }] }),
+  });
+  const textReply = (content: string) => ({
+    ok: true,
+    json: async () => ({ choices: [{ message: { content }, finish_reason: "stop" }] }),
+  });
+  const go = [{ role: "user" as const, content: "go" }];
+
+  it("parseToolArgs names each unusable shape instead of passing `{}`", () => {
+    const { parseToolArgs } = promptLoop;
+    const T = "__gnomon_args_truncated__";
+    const M = "__gnomon_args_malformed__";
+    expect(parseToolArgs({ path: "a" })).toEqual({ path: "a" });
+    expect(parseToolArgs('{"path": "a"}')).toEqual({ path: "a" });
+    // no arguments is legitimate, and so is `null`
+    expect(parseToolArgs("")).toEqual({});
+    expect(parseToolArgs("null")).toEqual({});
+    // ran out: a truncation, re-sent as it was
+    expect(parseToolArgs('{"path": "src/ma')).toHaveProperty(T);
+    expect(parseToolArgs('{"a":')).toHaveProperty(T);
+    // arrived whole and is not JSON: malformed, with the parser's reason
+    const single = parseToolArgs("{'path': 'a'}") as any;
+    expect(single).not.toHaveProperty(T);
+    expect(single[M].error).toMatch(/position 1/);
+    expect(parseToolArgs('{"content": "a\nb"}')).toHaveProperty(M);
+    expect(parseToolArgs('{"a":1}}')).toHaveProperty(M);
+    // parsed, but not an object -- these used to become `{}` silently
+    expect((parseToolArgs("[1,2]") as any)[M].error).toMatch(/array/);
+    expect((parseToolArgs("42") as any)[M].error).toMatch(/number/);
+    expect((parseToolArgs([1]) as any)[M].error).toMatch(/array/);
+    // encoded twice: the model's object is inside, read it once
+    expect(parseToolArgs(JSON.stringify('{"path": "a"}'))).toEqual({ path: "a" });
+    expect((parseToolArgs(JSON.stringify("just text")) as any)[M].error).toMatch(/string/);
+  });
+
+  it("isMalformedCall: bad arguments, or a tool the role was not given", () => {
+    const offered = new Set(["read"]);
+    expect(promptLoop.isMalformedCall({ name: "read", args: { path: "a" } }, offered)).toBe(false);
+    expect(promptLoop.isMalformedCall({ name: "", args: {} }, offered)).toBe(true);
+    expect(promptLoop.isMalformedCall({ name: "reed", args: { path: "a" } }, offered)).toBe(true);
+    expect(
+      promptLoop.isMalformedCall({ name: "read", args: promptLoop.parseToolArgs("{'p':1}") }, offered)
+    ).toBe(true);
+  });
+
+  it("tells the model the parse error, and nothing runs", async () => {
+    const said: string[] = [];
+    let calls = 0;
+    const bodies: any[] = [];
+    const turn = await withFetch(
+      (async (_url: string, init: any) => {
+        bodies.push(JSON.parse(init.body));
+        return ++calls === 1 ? toolReply("read", "{'path': 'README.md'}") : textReply("done");
+      }) as unknown as typeof fetch,
+      () => promptLoop.runAgenticTurn(stateWith(), "implement", ROUTE, go, deps(said))
+    );
+    expect(turn.stop_reason).toBe("answered");
+    expect(turn.toolLog.join("\n")).toMatch(/malformed arguments/);
+    // The repair turn carries the parser's own reason, and does not claim a
+    // transport truncation the call never suffered.
+    const toolMsg = bodies[1].messages.find((m: any) => m.role === "tool");
+    expect(toolMsg.content).toMatch(/could not be read \(.*position 1/);
+    expect(toolMsg.content).toMatch(/NOTHING RAN/);
+    expect(toolMsg.content).not.toMatch(/truncat|cut off/i);
+    expect(turn.counters.malformed_tool_calls).toBe(1);
+  });
+
+  it("ends as `malformed` once the repair budget is spent, with no tools on the wrap-up", async () => {
+    const said: string[] = [];
+    const recs: any[] = [];
+    let calls = 0;
+    const turn = await withFetch(
+      (async (_url: string, init: any) => {
+        const body = JSON.parse(init.body);
+        calls++;
+        // The wrap-up has no tools attached and is where the model answers.
+        if (!body.tools) return textReply("I could not issue a valid call.");
+        return toolReply("read", `{"path": "README.md",}`);
+      }) as unknown as typeof fetch,
+      () => promptLoop.runAgenticTurn(stateWith(), "implement", ROUTE, go, deps(said, recs))
+    );
+    // Default 2: one reply, two repairs, the third ends it -- then one wrap-up.
+    expect(calls).toBe(4);
+    expect(turn.stop_reason).toBe("malformed");
+    expect(turn.stop_detail).toMatchObject({ repeats: 3 });
+    expect(mapBucket(turn.code)).toBe("refusal");
+    expect(turn.content).toMatch(/could not issue a valid call/);
+    expect(turn.content).toMatch(/max_consecutive_malformed/);
+    // The two repaired replies are in the audit trail as ordinary tool_call
+    // records; the third, past the bound, ran nothing.
+    expect(recs.filter((r) => r.kind === "tool_call").length).toBe(2);
+    expect(said.join("\n")).toMatch(/re-issue it \(2\/2\)/);
+  });
+
+  it("a usable call clears the count", async () => {
+    const said: string[] = [];
+    let calls = 0;
+    const script = [
+      () => toolReply("read", "{'path': 'README.md'}"),
+      () => toolReply("read", "{'path': 'README.md'}"),
+      () => toolReply("read", '{"path": "README.md"}'),
+      () => toolReply("read", "{'path': 'README.md'}"),
+      () => toolReply("read", "{'path': 'README.md'}"),
+      () => textReply("done"),
+    ];
+    const turn = await withFetch(
+      (async () => script[Math.min(calls++, script.length - 1)]!()) as unknown as typeof fetch,
+      () => promptLoop.runAgenticTurn(stateWith(), "implement", ROUTE, go, deps(said))
+    );
+    // Four malformed replies in all, but never more than two in a row.
+    expect(turn.stop_reason).toBe("answered");
+    expect(turn.counters.malformed_tool_calls).toBe(4);
+  });
+
+  it("an unknown tool name counts, and the model is told what exists", async () => {
+    const said: string[] = [];
+    const turn = await withFetch(
+      (async (_u: string, init: any) =>
+        JSON.parse(init.body).tools
+          ? toolReply("read_file", '{"path": "README.md"}')
+          : textReply("stopped")) as unknown as typeof fetch,
+      () => promptLoop.runAgenticTurn(stateWith(), "implement", ROUTE, go, deps(said))
+    );
+    expect(turn.stop_reason).toBe("malformed");
+    expect(turn.toolLog.join("\n")).toMatch(/read_file — not available/);
+  });
+
+  it("markup in place of a call is re-asked within the bound, then recorded as malformed — not answered", async () => {
+    const markup =
+      "<tool_call>\n<function=read>\n<parameter=path>\nREADME.md\n</parameter>\n</function>\n</tool_call>";
+    const said: string[] = [];
+    let calls = 0;
+    const turn = await withFetch(
+      (async () => {
+        calls++;
+        return textReply(markup);
+      }) as unknown as typeof fetch,
+      () => promptLoop.runAgenticTurn(stateWith(), "implement", ROUTE, go, deps(said))
+    );
+    // Three markup replies (two re-asks), then the no-tools wrap-up.
+    expect(calls).toBe(4);
+    expect(turn.stop_reason).toBe("malformed");
+    // Still annotated -- never rewritten, never executed.
+    expect(turn.content).toMatch(/tool-call markup as text/);
+    expect(turn.toolSteps).toBe(0);
+  });
+
+  it("the bound is the surface's: max_consecutive_malformed = 0 re-asks nothing", async () => {
+    const said: string[] = [];
+    let calls = 0;
+    const turn = await withFetch(
+      (async (_u: string, init: any) => {
+        calls++;
+        return JSON.parse(init.body).tools ? toolReply("read", "{'path': 'x'}") : textReply("gave up");
+      }) as unknown as typeof fetch,
+      () =>
+        promptLoop.runAgenticTurn(
+          stateWith({ max_consecutive_malformed: 0 }),
+          "implement",
+          ROUTE,
+          go,
+          deps(said)
+        )
+    );
+    expect(calls).toBe(2);
+    expect(turn.stop_reason).toBe("malformed");
+  });
+
+  it("a tool call the endpoint could not parse is a repair turn, not an outage", async () => {
+    // Ollama and llama-server report their own tool-call parse failure as a
+    // 500, which classifyFailure files as 12: the identical request was re-sent
+    // as though the endpoint were down, and the turn ended as an apparatus
+    // failure. The endpoint is up; the model wrote something it cannot parse.
+    const said: string[] = [];
+    let calls = 0;
+    const bodies: any[] = [];
+    const turn = await withFetch(
+      (async (_u: string, init: any) => {
+        bodies.push(JSON.parse(init.body));
+        if (++calls === 1) {
+          return {
+            ok: false,
+            status: 500,
+            statusText: "Internal Server Error",
+            text: async () =>
+              JSON.stringify({
+                error: "error parsing tool call: raw='<function=read>', err=invalid character '<'",
+              }),
+            json: async () => ({}),
+          };
+        }
+        return textReply("answered after repair");
+      }) as unknown as typeof fetch,
+      () => promptLoop.runAgenticTurn(stateWith(), "implement", ROUTE, go, deps(said))
+    );
+    expect(calls).toBe(2);
+    expect(turn.code).toBe(0);
+    expect(turn.stop_reason).toBe("answered");
+    expect(said.join("\n")).not.toMatch(/\[retry\]/);
+    const repair = bodies[1].messages[bodies[1].messages.length - 1];
+    expect(repair.role).toBe("user");
+    expect(repair.content).toMatch(/error parsing tool call/);
+  });
+
+  it("an ordinary 500 is still an outage", () => {
+    expect(promptLoop.classifyFailure({ status: 500, message: "internal error" })).toBe(12);
+  });
+});

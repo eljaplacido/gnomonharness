@@ -76,6 +76,7 @@ import {
   globToRegExp,
   createSpillSink,
   ARGS_TRUNCATED,
+  ARGS_MALFORMED,
   type SpillSink,
   DIFF_ELIDED,
 } from "./tools.js";
@@ -650,6 +651,12 @@ interface InferenceResult {
   rawToolCalls?: unknown[];
   /** The backend refused the request because this model cannot use tools */
   toolsUnsupported?: boolean;
+  /**
+   * The endpoint rejected the model's OWN output: it generated a tool call the
+   * server's parser could not read. The server's message, verbatim. Returned
+   * with code 0, because the request was fine and the model answered -- badly.
+   */
+  toolCallUnparsed?: string;
   /** Why the backend stopped generating — "length", "stop", "tool_calls". A
    * turn with no tool calls and no text is a different event depending on this,
    * and it was never recorded. */
@@ -750,22 +757,92 @@ export function classifyFailure(opts: {
  * at the wrong repair: told an argument is missing it invents one, told its
  * call was truncated it re-emits it. Nothing crashed and nothing said so.
  */
-/** Tool arguments arrive as an object (Ollama) or a JSON string (OpenAI). */
-function parseToolArgs(raw: unknown): Record<string, unknown> {
+/**
+ * Whether a JSON parse failure is the input RUNNING OUT rather than going wrong.
+ *
+ * V8 reports a cut-off string as "Unterminated string" or "Unexpected end of
+ * JSON input", and otherwise names a position; a failure positioned at the end
+ * of the text is a truncation whatever the wording. Anything earlier -- single
+ * quotes, a raw newline in a string, a trailing brace -- arrived whole and is
+ * simply not JSON.
+ */
+function looksCutOff(raw: string, message: string): boolean {
+  if (/unexpected end|unterminated/i.test(message)) return true;
+  const at = /position (\d+)/.exec(message);
+  return at !== null && Number(at[1]) >= raw.trimEnd().length;
+}
+
+/**
+ * Tool arguments arrive as an object (Ollama) or a JSON string (OpenAI).
+ *
+ * Exported so each shape is testable without driving a turn. Three outcomes,
+ * never a silent fourth: the arguments, an ARGS_TRUNCATED marker, or an
+ * ARGS_MALFORMED marker carrying the parse error. What used to be the silent
+ * fourth: JSON that parsed to a non-object -- including arguments encoded
+ * twice, `"{\"path\": \"a\"}"` -- became `{}`, and the tool reported a
+ * missing argument the model had given. NOT VERIFIED against a live server
+ * that double-encodes; the shape is handled because the old path lost it.
+ */
+export function parseToolArgs(raw: unknown): Record<string, unknown> {
+  const notAnObject = (value: unknown, text: unknown) => ({
+    [ARGS_MALFORMED]: {
+      raw: text,
+      error: `arguments were a JSON ${Array.isArray(value) ? "array" : typeof value}, not an object`,
+    },
+  });
+  if (Array.isArray(raw)) return notAnObject(raw, raw);
   if (raw && typeof raw === "object") return raw as Record<string, unknown>;
   if (typeof raw === "string") {
     // An empty string is a call with no arguments, which is legitimate for a
     // tool that takes none. Only a non-empty string that will not parse is a
-    // truncation.
+    // fault.
     if (raw.trim() === "") return {};
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
-      return { [ARGS_TRUNCATED]: raw };
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return looksCutOff(raw, message)
+        ? { [ARGS_TRUNCATED]: raw }
+        : { [ARGS_MALFORMED]: { raw, error: message } };
     }
+    // Encoded twice: unwrap exactly once. The inner text is the model's own
+    // object, so this reads what it sent rather than repairing it.
+    if (typeof parsed === "string" && parsed.trim().startsWith("{")) {
+      try {
+        const inner: unknown = JSON.parse(parsed);
+        if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+          return inner as Record<string, unknown>;
+        }
+      } catch {
+        /* reported below as a string, which is what it is */
+      }
+    }
+    // `null` is how some servers spell "no arguments". Kept as before.
+    if (parsed === null) return {};
+    if (typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return notAnObject(parsed, raw);
   }
   return {};
+}
+
+/**
+ * Whether a normalised call is one no tool can act on: arguments that could not
+ * be read, or a name this role was not offered (including none at all).
+ *
+ * These still go through executeTool, which answers each with what was wrong
+ * -- that answer IS the repair turn. This only decides whether a whole reply
+ * of them counts towards `[turn] max_consecutive_malformed`.
+ */
+export function isMalformedCall(call: ToolCall, offered: Set<string>): boolean {
+  return (
+    !call.name ||
+    !offered.has(call.name) ||
+    ARGS_TRUNCATED in call.args ||
+    ARGS_MALFORMED in call.args
+  );
 }
 
 /**
@@ -1226,6 +1303,28 @@ async function callEndpoint(
                 `in .gnomon/config.toml, then: gnomon key set ` +
                 `${target.endpoint ?? "<endpoint>"}`)
           : "";
+
+      // The model answered and the SERVER could not parse its tool call.
+      //
+      // Ollama says "error parsing tool call: raw='…'" and llama-server says
+      // "Failed to parse input at pos N" (or "…tool call…"), both as a 500 --
+      // which classifyFailure files as 12, provider_unreachable, so the
+      // identical request was re-sent as though the endpoint were down and the
+      // turn ended as an apparatus failure once the budget ran out. The
+      // endpoint is up; the model wrote a call its template cannot express.
+      // That is a malformed call, and the loop gives it a repair turn.
+      //
+      // NOT VERIFIED against live servers: the phrasings are matched loosely
+      // and were not reproduced here. A wording that does not match falls back
+      // to the old path (12, retried), not to something worse.
+      if (/error parsing tool call|failed to parse (?:the )?(?:tool call|input at pos)/i.test(detail)) {
+        return {
+          content: "",
+          code: 0,
+          toolCalls: [],
+          toolCallUnparsed: detail.slice(0, 500),
+        };
+      }
       return {
         content:
           `Model API error: ${res.status} ${res.statusText}` +
@@ -1984,7 +2083,14 @@ export type StopReason =
   // Without this, a refusal to start had to borrow "answered", which is how an
   // apparatus failure came to be recorded as a turn that concluded. It IS a
   // value a return site produces, so Rule 6 is satisfied.
-  | "apparatus";
+  | "apparatus"
+  // Replies in a row that offered no usable tool call -- arguments that were
+  // not a JSON object, a tool the role was not given, a call written out as
+  // markup, or one the endpoint could not parse -- past `[turn]
+  // max_consecutive_malformed` repair turns. Before, markup was re-asked once
+  // and then recorded `answered`, and the other shapes were re-asked with no
+  // bound but the step wall, so a template mismatch read as a stall or a wall.
+  | "malformed";
 
 /**
  * Per-turn tallies. Every field is a count of something the loop already
@@ -2248,6 +2354,12 @@ export interface TurnCounters {
    * prompt.
    */
   text_tool_calls?: number;
+  /**
+   * Replies that offered no usable tool call: every call malformed, markup in
+   * place of a call, or a call the endpoint itself could not parse. Each one
+   * that fell inside `[turn] max_consecutive_malformed` got a repair turn.
+   */
+  malformed_tool_calls?: number;
   /** Per tool: calls made, refusals, apparatus failures. Separates "bash
    * failed 9 of 31 calls" from "bash succeeded 31/31 and the answer was still
    * wrong". */
@@ -2284,7 +2396,7 @@ export const DEFAULT_LEGS = LOOP_DEFAULTS.legs;
 //
 // These two did NOT move, and saying so is the point of this comment. They
 // govern the A-B-A-B alternation test below and are still compiled in, still
-// outside the surface hash. So `[loop]` declares nine of the loop's numbers, not
+// outside the surface hash. So `[loop]` declares ten of the loop's numbers, not
 // all of them, and a surface that pins every key in it is still not pinning
 // this pair.
 /** Window and distinct-signature bound for detecting an A-B-A-B poll loop. */
@@ -2884,7 +2996,11 @@ export async function runAgenticTurn(
   // backend cut off can be recorded as cut off rather than as an answer.
   let lastFinishReason: string | undefined;
   let overflowTrimmed = false;
-  let textToolCallRetried = false;
+  // Consecutive replies with no usable tool call -- see `[turn]
+  // max_consecutive_malformed`. Replaced a once-per-turn latch that covered
+  // only markup-as-text: a model that wrote invalid arguments or named a tool
+  // it was not given was answered and re-asked with no bound but the step wall.
+  let consecutiveMalformed = 0;
   let emptyTerminus = false;
 
   // Observation only. Nothing below reads these back to decide anything — the
@@ -3052,6 +3168,48 @@ export async function runAgenticTurn(
     // stop_reason "answered". Ask once for the rest, bounded like the blank
     // retry, then let it stand rather than looping.
     lastFinishReason = result.finishReason;
+
+    // Set when a reply with no usable tool call arrives and the repair budget
+    // is spent. The turn then ends through the same no-tools wrap-up as the
+    // stall and the wall, recorded as stop_reason "malformed".
+    let malformedOut = false;
+    // One repair turn for a reply that offered no usable tool call, while the
+    // count and the step budget allow. False means the budget is spent.
+    const repairMalformed = (what: string): boolean => {
+      consecutiveMalformed++;
+      counters.malformed_tool_calls = (counters.malformed_tool_calls ?? 0) + 1;
+      if (consecutiveMalformed > loop.max_consecutive_malformed || steps >= maxTotal) {
+        malformedOut = true;
+        return false;
+      }
+      say(
+        paint(
+          deps.ui,
+          "yellow",
+          `  [loop] ${what} — asking the model to re-issue it ` +
+            `(${consecutiveMalformed}/${loop.max_consecutive_malformed})`
+        )
+      );
+      return true;
+    };
+
+    // The endpoint could not parse the call the model wrote. Nothing reached a
+    // tool and there is no assistant message to echo, so the server's own
+    // reason is the whole of the repair prompt.
+    if (result.code === 0 && result.toolCallUnparsed !== undefined) {
+      if (repairMalformed("the endpoint could not parse the model's tool call")) {
+        working.push({
+          role: "user",
+          content:
+            `Your last reply contained a tool call the endpoint could not parse, so ` +
+            `nothing ran. The server said: ${result.toolCallUnparsed}\n\n` +
+            `Re-issue the call as a proper tool call whose arguments are one JSON ` +
+            `object, or if you are finished, answer in plain prose with no markup.`,
+        });
+        continue;
+      }
+    }
+
     if (
       result.code === 0 &&
       result.toolCalls.length === 0 &&
@@ -3074,35 +3232,47 @@ export async function runAgenticTurn(
     }
 
     // A model writing its tool call out as text has not answered either.
+    //
+    // Re-asked up to `[turn] max_consecutive_malformed` times, then ended as
+    // "malformed" through the no-tools wrap-up. It used to be re-asked once per
+    // turn and then allowed to stand as `answered`, markup and all -- annotated
+    // as unreliable in the text while the record said the turn concluded.
+    //
+    // The markup is NOT parsed into a call and run. That would be the harness
+    // deciding what a model meant from text it did not send as a call, then
+    // acting on it with write access; the fix for a template mismatch is the
+    // endpoint `kind` or the model's template, and the annotation says so.
     if (
+      !malformedOut &&
       result.code === 0 &&
       result.toolCalls.length === 0 &&
-      looksLikeTextToolCall(result.content) &&
-      !textToolCallRetried &&
-      steps < maxTotal
+      looksLikeTextToolCall(result.content)
     ) {
-      textToolCallRetried = true;
       counters.text_tool_calls = (counters.text_tool_calls ?? 0) + 1;
-      say(
-        paint(
-          deps.ui,
-          "yellow",
-          `  [loop] the reply contained tool-call markup, not an answer — the model's ` +
-            `template may not match this endpoint's tool protocol; asking once in plain text`
+      if (
+        repairMalformed(
+          "the reply contained tool-call markup, not a tool call — the model's " +
+            "template may not match this endpoint's tool protocol"
         )
-      );
-      working.push({ role: "assistant", content: result.content });
-      working.push({
-        role: "user",
-        content:
-          `That reply contained tool-call markup as text rather than an actual tool call. ` +
-          `If you need a tool, call it properly. If you are finished, answer in plain prose ` +
-          `with no markup.`,
-      });
-      continue;
+      ) {
+        working.push({ role: "assistant", content: result.content });
+        working.push({
+          role: "user",
+          content:
+            `That reply contained tool-call markup as text rather than an actual tool call. ` +
+            `If you need a tool, call it properly. If you are finished, answer in plain prose ` +
+            `with no markup.`,
+        });
+        continue;
+      }
     }
 
-    if (result.code === 0 && result.toolCalls.length === 0 && !result.content.trim()) {
+    if (
+      !malformedOut &&
+      result.code === 0 &&
+      result.toolCalls.length === 0 &&
+      !result.content.trim()
+    ) {
       // Ending here while the budget is largely unspent is the single path that
       // produced the whole residual gap against the peer harness: three tasks
       // died on nudge -> blank -> bucket, and one of them was cut off 19 calls
@@ -3176,7 +3346,9 @@ export async function runAgenticTurn(
       }
     }
 
-    if (result.code !== 0 || result.toolCalls.length === 0) {
+    if (!malformedOut && (result.code !== 0 || result.toolCalls.length === 0)) {
+      // A reply the model meant as an answer is a usable reply.
+      consecutiveMalformed = 0;
       // The turn is about to end. If the surface declared a check and this
       // turn changed files, run it before letting the answer stand — a model
       // that reports success is reporting a belief, and the check is the only
@@ -3439,6 +3611,7 @@ export async function runAgenticTurn(
     // Stalled? Repeating one call verbatim is not progress, and on autopilot
     // it would burn the whole budget in a circle.
     const repeatingVerbatim =
+      result.toolCalls.length > 0 &&
       recentCalls.length >= loop.stall_repeats &&
       recentCalls
         .slice(-loop.stall_repeats)
@@ -3462,6 +3635,19 @@ export async function runAgenticTurn(
       callsSinceWrite >= STALL_WINDOW;
 
     const stalled = repeatingVerbatim || cycling;
+
+    // A reply whose every call is unusable -- arguments that are not a JSON
+    // object, or a tool this role was not offered. Within the bound the batch
+    // runs as usual: executeTool answers each call with what was wrong, and
+    // those answers are the repair turn. Past it, nothing runs and the turn
+    // wraps up. One usable call in the reply is progress and clears the count.
+    if (!malformedOut && result.toolCalls.length > 0) {
+      if (result.toolCalls.every((c) => isMalformedCall(c, offered))) {
+        repairMalformed("no usable tool call in that reply (malformed arguments or unknown tool)");
+      } else {
+        consecutiveMalformed = 0;
+      }
+    }
 
     const wall = maxTotal <= 0 || steps >= maxTotal;
     // Measured on what has already run, never on what is about to. Gating on
@@ -3495,8 +3681,14 @@ export async function runAgenticTurn(
     //
     // A ceiling a turn can walk through is worse than no ceiling: it is the one
     // bound an unattended session has, and the number in roles.toml was not it.
-    if (stalled || wall) {
-      const note = stalled
+    if (malformedOut || stalled || wall) {
+      const note = malformedOut
+        ? `Stopped: ${consecutiveMalformed} repl${consecutiveMalformed === 1 ? "y" : "ies"} ` +
+          `in a row offered no usable tool call (malformed arguments, an unknown ` +
+          `tool, or a call written as text), after ${steps} call(s). Check the ` +
+          `endpoint \`kind\` and the model's chat template; [turn] ` +
+          `max_consecutive_malformed is ${loop.max_consecutive_malformed}.`
+        : stalled
         ? `Stopped: the same tool call repeated ${loop.stall_repeats} times without ` +
           `progress, after ${steps} call(s).`
         : `Reached the ceiling for role "${role}" — ${steps} tool call(s), ` +
@@ -3551,8 +3743,10 @@ export async function runAgenticTurn(
         toolSteps: steps,
         toolLog,
         usage: turnUsage,
-        stop_reason: stalled ? "stall" : "step_wall",
-        stop_detail: stalled
+        stop_reason: malformedOut ? "malformed" : stalled ? "stall" : "step_wall",
+        stop_detail: malformedOut
+          ? { steps, repeats: consecutiveMalformed }
+          : stalled
           ? { steps, repeats: loop.stall_repeats }
           : { steps, max_steps_total: maxTotal },
         counters,
