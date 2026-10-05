@@ -100,6 +100,7 @@ transport_grace_ms = 60000    # an endpoint refusing the socket is not an attemp
 # NOT a tuning recommendation. No run has been measured before and after this
 # block existed; these are the values that already shipped, written down.
 max_consecutive_empty = 3    # blank replies in a row before the turn is done (0 = one blank ends it)
+max_consecutive_malformed = 2  # replies with no usable tool call re-asked before stop_reason malformed (0 = never re-ask)
 max_run_notes = 40           # run notes kept and replayed; oldest fall off first
 read_only_converge_after = 0.6  # a role with no write/edit/bash is pushed to conclude here (0 = never)
 all_refused_notice = 3       # every call to one tool refused this many times -> say the policy may be wrong
@@ -109,7 +110,7 @@ stall_repeats = 3            # identical calls in a row that count as going in c
 nudge_after_idle = 12        # calls without changing a file before the model is nudged to decide
 converge_refire = 6          # calls between convergence re-pushes once converge_after is reached
 
-# Known limit, stated rather than implied: this block declares NINE of the
+# Known limit, stated rather than implied: this block declares TEN of the
 # loop's numbers. The A-B-A-B alternation window (8 calls, 2 distinct
 # signatures) and the wording of the nudge and convergence messages are still
 # compiled into the harness and still outside the surface hash.

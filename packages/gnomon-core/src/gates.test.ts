@@ -610,10 +610,12 @@ describe("gate: the turn limits are surface-declared and stay in one place", () 
     // Without this the block could be inert and nothing would notice, which is
     // the failure mode the whole finding is about.
     const { resolveLoop, loadConfig } = await import("./config.js");
-    const dir = surface({ "config.toml": "[turn]\nmax_steps = 40\nstall_repeats = 9\n" });
+    const dir = surface({ "config.toml": "[turn]\nmax_steps = 40\nstall_repeats = 9\nmax_consecutive_malformed = 0\n" });
     const r = resolveLoop(loadConfig(dir));
     expect(r.max_steps).toBe(40);
     expect(r.stall_repeats).toBe(9);
+    // 0 is honoured, not floored: the first unusable reply ends the turn.
+    expect(r.max_consecutive_malformed).toBe(0);
     rmSync(dir, { recursive: true, force: true });
   });
 

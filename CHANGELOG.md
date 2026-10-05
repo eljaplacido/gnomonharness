@@ -81,6 +81,43 @@ Each line below is one cause.
 - `init --no-verify` keeps the pre-2026-09-29 ungated surface; the
   benchmark runners pass it.
 
+### Fixed
+
+- **A reply with no usable tool call gets a bounded repair turn, then an honest
+  stop.** Local Qwen-family models behind llama.cpp (`--jinja`) or Ollama emit
+  four shapes when the chat template and the endpoint's tool parser disagree,
+  and each was handled differently or not at all:
+  - arguments that arrived whole but are not JSON (`{'path': 'a'}`, a raw
+    newline in a string) were reported to the model as a *transport
+    truncation* — "send the same call again" — which fails identically. They
+    now go back with the parser's own error and a request to fix the call.
+    Arguments that parse to a non-object (an array, a number, or a string —
+    including an object encoded twice, which is now unwrapped once) used to
+    become `{}` silently, and the tool reported a missing argument the model
+    had given.
+  - a tool the role was not given was answered and re-asked with no bound but
+    the step wall.
+  - tool-call markup written in the text (`<tool_call>`, `<function=…>`) was
+    re-asked once, then allowed to stand as the answer with
+    `stop_reason: answered`.
+  - a call the *endpoint* could not parse (Ollama's `error parsing tool call`,
+    llama-server's `Failed to parse input at pos N`, both HTTP 500) was
+    classified as `provider_unreachable`, re-sent unchanged under the transport
+    retry, and ended the turn as an apparatus failure.
+
+  All four now count towards one bound, `[turn] max_consecutive_malformed`
+  (default **2**, hashed like the rest of the block): each unusable reply is
+  answered with what was wrong and the model re-asked; a usable reply resets
+  the count; past the bound the turn wraps up with no tools attached and
+  records the new `stop_reason: malformed` (refusal floor, like `stall`). The
+  markup is still never parsed and executed on the model's behalf. The per-turn
+  counter `malformed_tool_calls` records how many replies needed a repair.
+  **Behaviour change:** unlike the other `[turn]` keys this default is not the
+  previous behaviour, which had no bound. NOT VERIFIED against a live
+  llama-server or Ollama: the server-side error phrasings are matched loosely
+  and were not reproduced against a running server; an unmatched wording falls
+  back to the old path.
+
 ## [0.2.3] — 2026-09-08
 
 **Installable without a clone, and without an npm account.** The release now

@@ -67,6 +67,7 @@ every `TaskRecord`.
 | `cancelled` | the operator stopped it |
 | `truncated` | the backend cut the reply off at its token limit, and the one bounded continuation request did not finish it either |
 | `apparatus` | the run never reached the model — the surface itself could not be used |
+| `malformed` | replies in a row offered no usable tool call, past `[turn] max_consecutive_malformed` repair turns |
 
 `apparatus` exists because every failure of that kind previously borrowed
 `answered`, which recorded a run that never started as a turn that concluded.
@@ -78,6 +79,18 @@ back cut off too, the partial answer was allowed to stand and was recorded as
 concluded normally. Found 2026-09-05 by `benchmarks/degradation-contract`,
 which scores *announced* and *recorded* as separate endpoints precisely so a
 gap between them cannot pass.
+
+`malformed` covers a reply whose tool calls no tool can act on: arguments that
+are not one JSON object (unparseable, or parsed to an array or scalar), a tool
+the role was not offered, a call written out as markup in the text
+(`<tool_call>`, `<function=…>`), or a call the endpoint's own parser rejected.
+Each such reply gets a repair turn — the model is told what was wrong and asked
+to re-issue the call — up to `[turn] max_consecutive_malformed` in a row
+(default 2); any usable reply resets the count. Past the bound the turn wraps
+up with no tools attached, exits on the `refusal` floor like `stall`, and
+records `stop_detail.repeats` as the number of unusable replies in a row.
+Before it existed, markup was re-asked once and then recorded as `answered`,
+and the other shapes were re-asked with no bound but the step wall.
 
 ---
 

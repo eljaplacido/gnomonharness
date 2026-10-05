@@ -3401,6 +3401,19 @@ function releasePipes(proc: { stdout?: unknown; stderr?: unknown; unref?: () => 
  */
 export const ARGS_TRUNCATED = "__gnomon_args_truncated__";
 
+/**
+ * Set by the response parser when a tool call's arguments arrived complete but
+ * unusable: JSON that will not parse for a reason other than running out, or
+ * JSON that parses to something other than an object. The value is
+ * `{ raw, error }`, so the model can be told WHAT was wrong.
+ *
+ * Kept apart from ARGS_TRUNCATED because the repair differs. A truncated call
+ * is re-sent as it was; `{'path': 'a'}` re-sent as it was fails identically,
+ * and telling the model its call was "cut off in transit" sends it after the
+ * wrong fault.
+ */
+export const ARGS_MALFORMED = "__gnomon_args_malformed__";
+
 export const JOB_LOG_DIR = ".gnomon-jobs";
 
 /**
@@ -3586,6 +3599,28 @@ export async function executeTool(
         `what you asked for. Send the same call again, shorter if it was long.\n` +
         `Received: ${shown}`,
       summary: `${name} — arguments truncated in transit (${truncated.length} chars)`,
+    };
+  }
+
+  // Arguments that arrived whole and could not be read. Refused rather than
+  // dispatched: stripped to `{}`, `read {'path': 'a'}` would come back
+  // "read needs a `path`", the same true-sentence-false-premise as above. The
+  // parse error goes back verbatim because it names the position and the
+  // fault, which is the one thing the model needs to write it correctly.
+  const malformed = args[ARGS_MALFORMED] as { raw?: unknown; error?: unknown } | undefined;
+  if (malformed && typeof malformed === "object") {
+    const raw = typeof malformed.raw === "string" ? malformed.raw : JSON.stringify(malformed.raw);
+    const shown = raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
+    const error = String(malformed.error ?? "not a JSON object");
+    return {
+      code: TOOL_DENIED,
+      content:
+        `Your ${name} call's arguments could not be read (${error}), so NOTHING ` +
+        `RAN. Arguments must be ONE JSON object whose keys are this tool's ` +
+        `parameters: double-quoted keys and strings, newlines inside strings ` +
+        `escaped as \\n. Re-issue the ${name} call with corrected arguments.\n` +
+        `Received: ${shown}`,
+      summary: `${name} — malformed arguments (${error.slice(0, 80)})`,
     };
   }
 
