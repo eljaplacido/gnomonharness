@@ -140,11 +140,88 @@ export const MIGRATIONS: Migration[] = [
         `\n# Added by 'gnomon migrate' from this project's own files.\n` +
         `[verify]\ncommand = ${JSON.stringify(command)}\n` +
         `after = "change"         # any turn that changed a file, by write/edit or the shell\n` +
-        `max_rounds = 1\n`
+        `max_rounds = 1\n` +
+        `test_must_fail_first = true  # a new test must fail on the code as it was\n`
       );
     },
   },
+  {
+    id: "verify-must-fail-first",
+    file: "policy.toml",
+    what: `policy.toml [verify]: test_must_fail_first absent  →  true`,
+    why: [
+      "A passing check is only evidence if the tests it runs pin something.",
+      "T8 measured a model writing a test that does 1 time in 9, three of the",
+      "nine asserting the bug. With this on, a new test that passes against the",
+      "code as it was is handed back; `gnomon check` applies the same rule to",
+      "other harnesses. Scaffolded on since 2026-10. Only a [verify] block with",
+      "no test_must_fail_first line at all is touched — `= false` is a choice.",
+    ],
+    apply: (text) => addKeyToSection(text, "verify", "test_must_fail_first", "true  # a new test must fail on the code as it was"),
+  },
+  {
+    id: "audit-enabled",
+    file: "config.toml",
+    what: `[audit] enabled = false  →  true`,
+    why: [
+      "A governance layer that keeps no record cannot show afterwards what it",
+      "governed: a 48-task campaign run with the trail off answered none of",
+      "its own questions (docs/BENCHMARK-POSTMORTEM.md). `record` is left as it",
+      "is — the scaffold's \"metadata\" writes no prompt or response text.",
+      "Scaffolded on since 2026-10. Trails land in [audit] dir, outside .gnomon/.",
+    ],
+    apply: (text) => retypeBool(text, "audit", "enabled", false, true),
+  },
 ];
+
+/** `key = <old bool>` → `key = <new bool>` inside one section, comment kept. */
+function retypeBool(text: string, section: string, key: string, oldValue: boolean, newValue: boolean): string | null {
+  const lines = text.split("\n");
+  let inSection = false;
+  let changed = false;
+  for (let i = 0; i < lines.length; i++) {
+    const header = lines[i].match(/^\s*\[([^\]]+)\]\s*$/);
+    if (header) {
+      inSection = header[1].trim() === section;
+      continue;
+    }
+    if (!inSection) continue;
+    const m = lines[i].match(new RegExp(`^(\\s*${key}\\s*=\\s*)${oldValue}(\\s*(?:#.*)?)$`));
+    if (!m) continue;
+    lines[i] = `${m[1]}${newValue}${m[2]}`;
+    changed = true;
+  }
+  return changed ? lines.join("\n") : null;
+}
+
+/**
+ * Add `key = value` to a section that does not mention the key at all, right
+ * after the section's last key line. A section that names it in any form —
+ * true, false, or a value this code does not recognise — was written by
+ * somebody and is left alone. A commented-out `# key = …` is not a mention.
+ */
+function addKeyToSection(text: string, section: string, key: string, value: string): string | null {
+  const lines = text.split("\n");
+  let start = -1;
+  let end = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    const header = lines[i].match(/^\s*\[([^\]]+)\]\s*$/);
+    if (!header) continue;
+    if (start >= 0) {
+      end = i;
+      break;
+    }
+    if (header[1].trim() === section) start = i;
+  }
+  if (start < 0) return null;
+  let last = start;
+  for (let i = start + 1; i < end; i++) {
+    if (new RegExp(`^\\s*${key}\\s*=`).test(lines[i])) return null;
+    if (/^\s*[A-Za-z0-9_"'-]+\s*=/.test(lines[i])) last = i;
+  }
+  lines.splice(last + 1, 0, `${key} = ${value}`);
+  return lines.join("\n");
+}
 
 export interface MigrationResult {
   id: string;
@@ -159,18 +236,27 @@ export interface MigrationResult {
 /** Everything this surface is behind on. Reads only. */
 export function pendingMigrations(gnomonDir: string): MigrationResult[] {
   const out: MigrationResult[] = [];
+  // Each migration reads the file as the ones before it left it. Two that
+  // edit the same file (verify-declared and verify-must-fail-first both edit
+  // policy.toml) used to each start from the original, and applying both
+  // wrote the second over the first.
+  const current = new Map<string, string>();
   for (const m of MIGRATIONS) {
     const path = join(gnomonDir, m.file);
     if (!existsSync(path)) continue;
-    const text = readFileSync(path, "utf-8");
+    const text = current.get(path) ?? readFileSync(path, "utf-8");
     const next = m.apply(text, { root: dirname(gnomonDir) });
     if (next === null || next === text) continue;
+    current.set(path, next);
     out.push({ id: m.id, file: m.file, what: m.what, why: m.why, next, path });
   }
   return out;
 }
 
-/** Write the pending migrations. Returns how many were applied. */
+/**
+ * Write the pending migrations. Returns how many were applied. In order: a
+ * later entry for the same file carries the earlier ones' changes.
+ */
 export function applyMigrations(pending: MigrationResult[]): number {
   for (const p of pending) writeFileSync(p.path, p.next, "utf-8");
   return pending.length;

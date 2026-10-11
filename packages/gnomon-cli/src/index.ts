@@ -1420,9 +1420,13 @@ async function cmdInit(args: CliArgs): Promise<void> {
   console.log("");
   console.log(
     result.verify
-      ? `Verify: \`${result.verify}\` runs after every turn that changes a file ([verify] in policy.toml).`
+      ? `Verify: \`${result.verify}\` runs after every turn that changes a file ([verify] in policy.toml);\n` +
+          `        a new test must fail on the code as it was (test_must_fail_first).`
       : "Verify: none found — declare [verify] command in .gnomon/policy.toml, or no turn is ever checked."
   );
+  if (result.audit) {
+    console.log("Audit: on — decisions and outcomes, no prompt text, in .gnomon-audit/ ([audit] in config.toml).");
+  }
 
   // Name the file whose edits take effect. The scaffold ships
   // `role_profile = "local_first"` and a profile that restates `model` and
@@ -1584,7 +1588,9 @@ Commands:
     Write a .gnomon/ surface into a project. --from copies an existing
     surface instead of the built-in starter templates. The project's own
     check (package.json verify/check/test, cargo test, ...) is declared as
-    [verify]; --no-verify leaves it commented out, as before 2026-09-29.
+    [verify] with test_must_fail_first, and the audit trail is on.
+    --no-verify writes the scaffold as before (no [verify], audit off),
+    byte for byte, for benchmark comparability.
 
   migrate [--dir <path>] [--check]
     Bring an existing .gnomon/ up to the current shipped defaults. Prints

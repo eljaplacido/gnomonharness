@@ -53,6 +53,14 @@ dispatches and 0 of them through gnomon, so none met a single rule
   SessionStart + Stop fragment (it edits no settings). SessionStart records the
   session's start (with a snapshot of a dirty tree); Stop judges everything
   since and blocks the stop once with the findings.
+- **A new surface governs something by default.** `gnomon init` now scaffolds
+  `test_must_fail_first = true` beside the detected `[verify]`, and
+  `[audit] enabled = true` (record stays `metadata`: no prompt text).
+  `gnomon migrate` offers both to existing surfaces (`verify-must-fail-first`,
+  `audit-enabled`), touching only an absent key / the old `false`. Migrations
+  editing the same file now chain instead of the later overwriting the
+  earlier. `init --no-verify` — what the benchmark runners use — still writes
+  the old scaffold byte for byte, so no sweep gains a second variable.
 - The must-fail-first re-run is one function now (`mustFailFirst`), shared by
   the turn loop and `check`; in the worktree its rewrites are journaled so a
   killed run cannot lose uncommitted work.
