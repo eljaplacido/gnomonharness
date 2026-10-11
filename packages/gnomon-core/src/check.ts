@@ -31,6 +31,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -333,8 +334,20 @@ async function judge(
   verdict: CheckVerdict,
   cleanups: Array<() => void>
 ): Promise<CheckVerdict> {
-  const start = resolve(opts.dir ?? process.cwd());
-  const toplevel = gitText(start, ["rev-parse", "--show-toplevel"]);
+  // Both sides canonical before any path is compared. git prints the
+  // toplevel's real, long path with forward slashes; the caller's directory
+  // may be a symlink (macOS /var → /private/var) or an 8.3 short name
+  // (Windows RUNNER~1). Measured on CI: every check refused with "the surface
+  // is outside the repository" on both, over a surface that was inside it.
+  const canonical = (p: string) => {
+    try {
+      return realpathSync.native(resolve(p));
+    } catch {
+      return resolve(p);
+    }
+  };
+  const start = canonical(opts.dir ?? process.cwd());
+  const toplevel = canonical(gitText(start, ["rev-parse", "--show-toplevel"]));
 
   // An interrupted earlier run left someone's work rewritten. Undo that before
   // reading anything, or this run would judge the half-restored tree.
@@ -413,7 +426,7 @@ async function judge(
     const current = gitText(toplevel, ["rev-parse", "HEAD"]);
     const dirty = gitText(toplevel, ["status", "--porcelain", "--untracked-files=no"]).length > 0;
     if (current !== headSha || dirty) {
-      treeRoot = mkdtempSync(join(tmpdir(), "gnomon-check-head-"));
+      treeRoot = canonical(mkdtempSync(join(tmpdir(), "gnomon-check-head-")));
       rmSync(treeRoot, { recursive: true, force: true });
       git(toplevel, ["worktree", "add", "--detach", "--quiet", treeRoot, headSha]);
       cleanups.push(() => {
