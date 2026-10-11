@@ -68,6 +68,9 @@ beforeEach(() => {
   sh(["config", "user.email", "t@example.invalid"]);
   sh(["config", "user.name", "t"]);
   sh(["config", "commit.gpgsign", "false"]);
+  // Git for Windows checks out CRLF by default, and a temporary worktree is a
+  // fresh checkout: the fixture bytes must be the bytes the test wrote.
+  sh(["config", "core.autocrlf", "false"]);
 });
 afterEach(() => {
   rmSync(repo, { recursive: true, force: true });
