@@ -32,7 +32,9 @@ const major = Number(process.versions.node.split(".")[0]);
 if (major < 20) {
   console.error(
     "gnomon needs Node.js 20 or newer; this is " + process.version + ".\n\n" +
-      "  Ubuntu/Debian:  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs\n" +
+      // The distro's npm and libnode-dev must go first: NodeSource's nodejs
+      // fails in dpkg on Ubuntu 22.04 while they are installed.
+      "  Ubuntu/Debian:  sudo apt remove -y nodejs npm libnode-dev; curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs\n" +
       "  any OS (nvm):   nvm install 22\n" +
       "  Windows:        winget install OpenJS.NodeJS.LTS"
   );
