@@ -1510,6 +1510,103 @@ describe("model API errors", () => {
     expect(said.filter((l) => l.includes("grace spent")).length).toBe(1);
   });
 
+  // A refused socket on THIS machine: nothing is running there. The 60s grace
+  // is for a provider blip; inherited by a first run with no server, it was a
+  // minute of [retry] lines before the user was told anything final.
+  const refusedLocally = () =>
+    Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:9"), { code: "ECONNREFUSED" }),
+    });
+  const loopbackRoute = {
+    model: "m", temperature: 0, top_p: 1,
+    target: { model: "m", temperature: 0, top_p: 1, url: "http://127.0.0.1:9/api/chat", kind: "ollama" },
+  } as any;
+  const quietDeps = (said: string[], signal?: AbortSignal) => ({
+    approve: async () => true,
+    progress: { start() {}, update() {}, stop() {} } as any,
+    ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false } as any,
+    say: (l: string) => said.push(l),
+    signal,
+  });
+
+  it("gives a refused LOCAL socket a short grace when the surface declares none", async () => {
+    const config: any = loadConfig("../..");
+    // No transport_grace_ms: the 60s default applies to remote endpoints only.
+    config.config = { ...config.config, resilience: { attempts: 3, backoff_ms: 1500 } };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const said: string[] = [];
+    const started = Date.now();
+    await withFetch(
+      (async () => { throw refusedLocally(); }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state, "implement", loopbackRoute, [{ role: "user", content: "hi" }], quietDeps(said)
+        );
+        expect(turn.code).toBe(12);
+      }
+    );
+    // Seconds, not a minute: one 1.5s wait, and the next would not fit.
+    expect(Date.now() - started).toBeLessThan(promptLoop.LOCAL_REFUSED_GRACE_MS + 1000);
+    expect(said.some((l) => l.includes(`of ${promptLoop.LOCAL_REFUSED_GRACE_MS}ms`))).toBe(true);
+    expect(said.some((l) => l.includes("Nothing is listening on 127.0.0.1:9"))).toBe(true);
+  }, 15_000);
+
+  it("honours a DECLARED transport_grace_ms for a refused local socket", async () => {
+    // Someone who wrote the grace down may be starting the server in another
+    // terminal. Ten refusals is ~1s of 1ms-doubling backoff -- past nothing
+    // but a declared 60s -- and then the server comes up.
+    const config: any = loadConfig("../..");
+    config.config = {
+      ...config.config,
+      resilience: { attempts: 3, backoff_ms: 1, transport_grace_ms: 60_000 },
+    };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const said: string[] = [];
+    let calls = 0;
+    await withFetch(
+      (async () => {
+        calls++;
+        if (calls <= 10) throw refusedLocally();
+        return { ok: true, json: async () => ({ message: { content: "up now" } }) };
+      }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state, "implement", loopbackRoute, [{ role: "user", content: "hi" }], quietDeps(said)
+        );
+        expect(turn.content).toBe("up now");
+      }
+    );
+    expect(calls).toBe(11);
+    expect(said.some((l) => l.includes("of 60000ms"))).toBe(true);
+  }, 15_000);
+
+  it("Esc during the retry wait ends it now, not when the backoff runs out", async () => {
+    // The wait was a bare setTimeout: the signal was aborted, and the turn sat
+    // out up to 8s a step anyway -- with `/quit` queued behind it.
+    const config: any = loadConfig("../..");
+    config.config = {
+      ...config.config,
+      resilience: { attempts: 3, backoff_ms: 8_000, transport_grace_ms: 60_000 },
+    };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const controller = new AbortController();
+    const started = Date.now();
+    await withFetch(
+      (async () => {
+        setTimeout(() => controller.abort(), 50);
+        throw refusedLocally();
+      }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state, "implement", loopbackRoute, [{ role: "user", content: "hi" }],
+          quietDeps([], controller.signal)
+        );
+        expect(turn.code).not.toBe(0);
+      }
+    );
+    expect(Date.now() - started).toBeLessThan(2_000);
+  }, 15_000);
+
   it("escalates a timeout deadline, but never past the budget flat retrying would have used", async () => {
     // The escalation shipped unbounded and made things strictly worse: 300 +
     // 600 + 1200 = 2100s against a harness wall of 900, so 5 of 5 benchmark
@@ -2675,6 +2772,20 @@ describe("listModels", () => {
 });
 
 describe("typing while a turn runs", () => {
+  it("a lone approval key is recognised as one, any case", () => {
+    for (const k of ["y", "n", "a", "s", "Y", "N", " y ", "S"]) {
+      expect(promptLoop.isStrayApprovalKey(k), k).toBe(true);
+    }
+  });
+
+  it("anything longer is a message, and still goes to the model", () => {
+    // "yes" on its own is rarer by accident and plausibly meant; the drop is
+    // for the keystroke aimed at a prompt that was not there.
+    for (const k of ["", "yes", "no", "y please", "ya", "x", "/y", "sure"]) {
+      expect(promptLoop.isStrayApprovalKey(k), k).toBe(false);
+    }
+  });
+
   it("the live-safe set only holds commands that cannot affect the turn", () => {
     // Anything that moves the role, the history or the session would change
     // the ground under a turn already bound to them.

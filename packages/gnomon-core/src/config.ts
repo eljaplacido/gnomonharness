@@ -2777,6 +2777,12 @@ export interface ResolvedResilience {
    * `attempts`.
    */
   transport_grace_ms: number;
+  /**
+   * Whether the surface wrote transport_grace_ms down. A refused socket on
+   * this machine gets a short grace unless it did -- a default is not a
+   * declaration. See the loopback branch in callEndpoint.
+   */
+  transport_grace_declared: boolean;
 }
 
 /**
@@ -2809,6 +2815,7 @@ export function resolveResilience(config: GnomonConfig): ResolvedResilience {
     // 900s harness wall. It is spent at most once per turn, because an
     // endpoint that is still unreachable afterwards ends the turn.
     transport_grace_ms: Math.floor(num(r?.transport_grace_ms, 60_000)),
+    transport_grace_declared: num(r?.transport_grace_ms, -1) >= 0,
   };
 }
 
