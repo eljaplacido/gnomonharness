@@ -24,6 +24,21 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+// Checked before anything else, and the import below is a promise rather than
+// a top-level await, so this file parses on the old Node an `apt install
+// nodejs` still hands out (12 on Ubuntu 22.04, 18 on 24.04). A top-level await
+// here was a SyntaxError on Node 12, which told the user nothing.
+const major = Number(process.versions.node.split(".")[0]);
+if (major < 20) {
+  console.error(
+    "gnomon needs Node.js 20 or newer; this is " + process.version + ".\n\n" +
+      "  Ubuntu/Debian:  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs\n" +
+      "  any OS (nvm):   nvm install 22\n" +
+      "  Windows:        winget install OpenJS.NodeJS.LTS"
+  );
+  process.exit(1);
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
 const entry = join(here, "..", "dist", "index.js");
 
@@ -39,4 +54,7 @@ if (!existsSync(entry)) {
 
 // Imported rather than spawned: one process, no shell, and the exit code and
 // signals belong to the program the user actually invoked.
-await import(pathToFileURL(entry).href);
+import(pathToFileURL(entry).href).catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
