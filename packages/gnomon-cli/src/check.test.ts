@@ -8,7 +8,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHECK_IDS, CHECK_STATUSES, CHECK_SCHEMA, type CheckVerdict, type ResolvedUi } from "gnomon-core";
 import { cmdCheck, renderVerdict } from "./check.js";
@@ -192,7 +192,7 @@ describe("gnomon check — the Claude Code hook", () => {
     expect(await hook("session-start", { session_id: "s-1", source: "resume" })).toBe(0);
     expect(readFileSync(state, "utf-8")).toBe(first);
 
-    const transcript = join(repo, "..", `${repo.split("/").pop()}-s-1.jsonl`);
+    const transcript = join(repo, "..", `${basename(repo)}-s-1.jsonl`);
     writeFileSync(
       transcript,
       JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "t", name: "Bash", input: { command: "ls" } }] } }) + "\n"
