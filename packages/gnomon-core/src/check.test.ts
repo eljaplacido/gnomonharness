@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { runCheck, checkExit, resolveCheckRole, type CheckVerdict } from "./check.js";
@@ -62,7 +62,9 @@ function surface(o: SurfaceOpts = {}): void {
 }
 
 beforeEach(() => {
-  repo = mkdtempSync(join(tmpdir(), "gnomon-check-"));
+  // Canonical, as runCheck makes it: macOS tmpdir is a symlink and Windows
+  // hands out 8.3 short names, and the verdict reports real paths.
+  repo = realpathSync.native(mkdtempSync(join(tmpdir(), "gnomon-check-")));
   sh(["init", "-q"]);
   sh(["config", "user.email", "t@example.invalid"]);
   sh(["config", "user.name", "t"]);
