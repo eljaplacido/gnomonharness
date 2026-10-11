@@ -1,0 +1,35 @@
+{
+  "version": "0.1.0",
+  "_comment": [
+    "The `gnomon check --json` document, schema gnomon.check/1 (docs/CONTRACTS.md §6).",
+    "",
+    "A caller gates on it without reading the code: factoryctl turns a 2 into a",
+    "send-back with `findings` as evidence and a 10 into a stopped phase, and",
+    "stores `audit.hash` in its own chain. A check id renamed, a status added, or",
+    "a key dropped is therefore a contract change, and this file is the third",
+    "point that makes it deliberate: packages/gnomon-cli/src/check.test.ts asserts",
+    "the code's CHECK_IDS / CHECK_STATUSES, the table in CONTRACTS.md §6 and the",
+    "lists here are the same sets, and validates a document the real binary",
+    "printed against `verdict_keys`, `entry_keys` and `audit_keys`."
+  ],
+  "schema": "gnomon.check/1",
+  "exit_codes": {
+    "0": "every check that applied held, and at least one check inspected something",
+    "2": "a check failed: the work is wrong (wins over 10 when both occur)",
+    "10": "no verdict: a check could not run, the run stopped early, or nothing was inspected"
+  },
+  "check_ids": ["write_allow", "surface", "verify", "must_fail_first", "bash_allow", "audit"],
+  "statuses": ["pass", "fail", "skipped", "error"],
+  "verdict_keys": {
+    "required": ["schema", "base", "head", "role", "surface_hash", "checks", "exit"],
+    "optional": ["audit", "error", "recovered"]
+  },
+  "entry_keys": {
+    "required": ["id", "status"],
+    "optional": ["findings", "reason", "inspected"]
+  },
+  "audit_keys": {
+    "required": ["trail", "seq", "hash", "surface_audit_enabled"],
+    "optional": []
+  }
+}

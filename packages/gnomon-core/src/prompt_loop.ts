@@ -4138,7 +4138,7 @@ function describeCall(call: ToolCall): string {
 }
 
 /** bash timeout, from tools.toml. */
-function toolTimeoutMs(config: GnomonConfig): number {
+export function toolTimeoutMs(config: GnomonConfig): number {
   const declared = (config.tools.tools ?? []).find((t) => t.name === "bash");
   const secs = declared?.timeout_seconds;
   return typeof secs === "number" && secs > 0 ? secs * 1000 : 120_000;

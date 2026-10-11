@@ -46,8 +46,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1140 TypeScript tests (988 core, 131 cli, 14
-> natives, 7 tui) and 60 Rust tests — **1200 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1168 TypeScript tests (1009 core, 138 cli, 14
+> natives, 7 tui) and 60 Rust tests — **1228 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -81,6 +81,7 @@ does not. Behaviour is readable because something is holding still.
 - [Context and Memory](#context-and-memory)
 - [Sessions](#sessions)
 - [Governance and Audit](#governance-and-audit)
+- [Governing other harnesses](#governing-other-harnesses)
 - [CLI Reference](#cli-reference)
 - [Interactive Commands](#interactive-commands)
 - [Adopting gnomon in an Existing Project](#adopting-gnomon-in-an-existing-project)
@@ -1585,6 +1586,62 @@ today (`verifyTrail(path, { attest })`, or `verifyAttestation` directly), and
 `attest.ts`, 42 for `replay.ts` — but neither is reachable from a terminal.
 Wiring them to subcommands is not done.
 
+## Governing other harnesses
+
+Every rule above is enforced inside gnomon's own tool loop, so work done by
+Claude Code, opencode or a factory's container never meets it. `gnomon check`
+asks the same rules after the fact, of a change any harness made, from the
+repository alone:
+
+```bash
+# CI: judge the branch against the rules as they stood on main
+gnomon check --base origin/main --head HEAD --role implement
+
+# after an agent finished, on its uncommitted work
+gnomon check --base "$SESSION_START_REV" --agent frontend-developer --json
+```
+
+| # | Check | Fails when |
+|---|---|---|
+| 1 | `write_allow` | a changed path is outside the role's `write_allow` |
+| 2 | `surface` | the change edits `.gnomon/` — an agent may not edit its own rules |
+| 3 | `verify` | the `[verify]` command fails on head |
+| 4 | `must_fail_first` | a new or changed test still passes with every other file put back to base — it pins nothing (only when `test_must_fail_first = true` and the change touched a test) |
+| 5 | `bash_allow` | always `skipped` in this build — transcript adapters (Claude Code, opencode) are the next step |
+| 6 | `audit` | the verdict could not be appended to the hash-chained trail |
+
+The rules come from **`--base`, never from head**: a change that widens its own
+`write_allow` is reported by check 2 and still judged by the old list. The diff
+is taken from `merge-base(base, head)`. Exit codes are the `task --json`
+contract — **0** every check held, **2** a check failed, **10** no verdict (git
+failed, no `[verify]`, no role, nothing changed). A check that does not apply
+says `skipped` with the reason, and is never counted as a pass.
+
+**Role.** `--role` wins. Otherwise `--agent <name>` (or the agent named in the
+transcript) is looked up in the base surface's `.gnomon/policy.toml`:
+
+```toml
+[check.roles]
+frontend-developer = "implement"
+```
+
+Neither gives a role → exit 10. A role is never guessed.
+
+**Where the verdict goes.** Into gnomon's own trail, `.gnomon-audit/check-*.jsonl`
+(or wherever `[audit] dir` points), as a sealed three-record chain that `gnomon
+audit verify` reads like any other — **even when `[audit] enabled = false`**.
+That flag decides what the loop records about sessions; a check verdict holds no
+model text and exists to be cited. `--json` carries the record's `hash`, so a
+caller with its own chain (factoryctl) stores it and gnomon's record names the
+caller's base, head and agent back.
+
+`--head` defaults to the working tree, and must-fail-first then rewrites source
+files in place for one re-run. Their bytes are journaled inside `.git/` first:
+a signal restores them, and the next `check` does if the process was killed
+outright. A named `--head` that is not what is checked out is judged in a
+temporary `git worktree`, which has no installed dependencies — a `[verify]`
+that needs them reports *could not run*, not a pass.
+
 ---
 
 ## CLI Reference
@@ -1601,6 +1658,7 @@ Wiring them to subcommands is not done.
 | `gnomon key [set\|list\|unset] <endpoint\|VAR>` | Store an API key for an endpoint that declares one. |
 | `gnomon endpoint [add\|test\|list]` | Declare an endpoint end to end — provider, key, model, roles — and prove it runs one token before writing anything. Presets: `opencode-go`, `opencode-zen`, `openrouter`, `ollama`. |
 | `gnomon audit [show\|verify]` | Audit trails. |
+| `gnomon check --base <rev> [--head <rev>] [--role <r> \| --agent <name>] [--json]` | Judge a change another harness made by this surface's rules as of `<rev>`. Exit 0 held, 2 failed, 10 no verdict. See [Governing other harnesses](#governing-other-harnesses). |
 | `gnomon surface [hash\|manifest\|paths]` | Inspect the surface. |
 | `gnomon enumerations` | The enumerations contract. |
 | `gnomon session <cmd>` | Run shell commands as recorded session steps. |
