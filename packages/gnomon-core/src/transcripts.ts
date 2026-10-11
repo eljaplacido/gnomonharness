@@ -32,7 +32,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import type { TranscriptCommand } from "./check.js";
 
 export const TRANSCRIPT_FORMATS = ["claude-code", "opencode"] as const;
@@ -93,7 +93,9 @@ function readClaudeCode(path: string, text: string): TranscriptRead {
   const subDir = join(dirname(path), basename(path, ".jsonl"), "subagents");
   if (existsSync(subDir)) {
     for (const f of walkJsonl(subDir)) {
-      files.push({ label: relative(dirname(path), f), text: readFileSync(f, "utf-8") });
+      // POSIX separators on every OS: a finding cites this, and Windows's
+      // backslashes made the same transcript cite differently there.
+      files.push({ label: relative(dirname(path), f).split(sep).join("/"), text: readFileSync(f, "utf-8") });
     }
   }
 
