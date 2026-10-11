@@ -26,6 +26,32 @@
 
 ## [Unreleased]
 
+**Install, update and uninstall are one command each (2026-10-11).**
+`scripts/install.sh` (Linux, macOS) and `scripts/install.ps1` (Windows) replace
+the four hand-edited tarball URLs: they check Node ≥ 20 and print the fix when
+it is missing, resolve the latest release, verify every download against
+`SHA256SUMS` (or GitHub's asset digest for files a release's SHA256SUMS
+predates), install from the npm registry once `gnomon-harness` is published
+there, and put the native binaries in `~/.local/share/gnomon/bin`
+(`%LOCALAPPDATA%\gnomon\bin`). gnomon-natives now searches that directory, so
+`gnomon surface` works after an install with no `GNOMON_BIN_OVERRIDE` — after
+v0.2.3's tarball install it failed with "native binary not found" until the
+user exported one by hand. New `gnomon update` (re-runs the installer for a
+global install, prints git commands for a checkout; `--check` only reports) and
+`gnomon uninstall` (prints the commands, naming all four packages, because a
+tarball install made each a separate global). An interactive `launch`/`prompt`
+may print one line, at most once a day, when a newer release exists — never
+under `task`, `--json`, CI or a pipe; `GNOMON_NO_UPDATE_CHECK=1` or `gnomon
+update --notice off` silences it, and its cache lives in the machine data dir,
+never in `.gnomon/`.
+
+Found while verifying the installer in clean `ubuntu:22.04` containers:
+v0.2.3's Linux binaries require glibc 2.39 (built on ubuntu-latest = 24.04), so
+on Ubuntu 22.04 `gnomon-surface` fails to load. The release workflow now builds
+Linux on ubuntu-22.04 (glibc 2.35), the installer runs each binary after placing
+it and warns when one does not load, and the release's `SHA256SUMS` now covers
+the npm tarballs too.
+
 **Daily interactive use, from one real session (2026-09-29).** An operator asked
 for a recap; the turn ran 112+ tool calls of implementation, re-ran
 `pnpm run verify` about twelve times, and printed "edit ×7 · nothing changed".

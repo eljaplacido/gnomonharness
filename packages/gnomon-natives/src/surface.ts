@@ -10,6 +10,7 @@ import { execSync } from "node:child_process";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -86,6 +87,44 @@ export function nativeOnlySentence(): string {
   return `${q.slice(0, -1).join(", ")} and ${q[q.length - 1]}`;
 }
 
+/**
+ * The per-user directory gnomon keeps machine-local state in.
+ *
+ * `XDG_DATA_HOME/gnomon` when that is set, on every platform (the tests and
+ * benchmarks set it to run in a stranger's state), otherwise
+ * `%LOCALAPPDATA%\gnomon` on Windows and `~/.local/share/gnomon` elsewhere.
+ *
+ * LOCAL, not roaming, on Windows: what lives here is binaries for this
+ * machine's architecture and a cache about this machine's install, and a
+ * roaming profile would carry both to machines they do not describe.
+ * Credentials keep their own path (gnomon-core's credentials.ts).
+ *
+ * Never inside a repository. Nothing in here may move the surface hash, and a
+ * path relative to the project would eventually be committed by someone.
+ */
+export function machineDataDir(): string {
+  const xdg = process.env.XDG_DATA_HOME;
+  if (xdg && xdg.trim()) return join(xdg, "gnomon");
+  if (process.platform === "win32") {
+    const local = process.env.LOCALAPPDATA;
+    const base = local && local.trim() ? local : join(homedir(), "AppData", "Local");
+    return join(base, "gnomon");
+  }
+  return join(homedir(), ".local", "share", "gnomon");
+}
+
+/**
+ * Where scripts/install.sh and scripts/install.ps1 put the native binaries.
+ *
+ * The installers and this function must agree on the path, and nothing else
+ * may be needed: an install that works only once the user exports
+ * GNOMON_BIN_OVERRIDE by hand is the install v0.2.3 shipped, and every
+ * `gnomon surface` after it failed with "native binary not found".
+ */
+export function installedBinDir(): string {
+  return join(machineDataDir(), "bin");
+}
+
 export function findBinary(name: string): string {
   // 1. Check GNOMON_BIN_OVERRIDE env var (for testing)
   //    Can be a full path to the binary OR a directory containing it
@@ -136,7 +175,20 @@ export function findBinary(name: string): string {
     .sort((a, b) => b.mtime - a.mtime);
   if (candidates.length > 0) return candidates[0]!.path;
 
-  // 4. Check PATH (system install)
+  // 4. The per-user directory the installers write to. After a checkout's own
+  //    build, because a developer's fresh `cargo build` must win; before PATH,
+  //    because the installer writes this copy in the same run that installs
+  //    the matching JS, while whatever is on PATH may be from any release.
+  for (const file of [exeName(name), name]) {
+    const candidate = join(installedBinDir(), file);
+    try {
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      // not installed here
+    }
+  }
+
+  // 5. Check PATH (system install)
   try {
     // `where` on Windows, `which` everywhere else -- and `where` prints one
     // line per hit, so take the first.
@@ -156,7 +208,14 @@ export function findBinary(name: string): string {
     // install has no crates and no checkout to build them from, so "cargo build
     // in this checkout" is advice it cannot follow. Both routes are named now,
     // installed-first, because that is the reader more likely to be stuck.
-    "Download the binaries for your platform (no Rust toolchain needed):\n" +
+    // The installer first, because it asks nothing of the reader: it fetches
+    // the archive for this platform, checks it against SHA256SUMS, and puts it
+    // where the lookup above already searches.
+    "Re-run the installer, which puts them in " + installedBinDir() + ":\n" +
+    (process.platform === "win32"
+      ? "  irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.ps1 | iex\n\n"
+      : "  curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.sh | sh\n\n") +
+    "Or download the binaries for your platform by hand (no Rust toolchain needed):\n" +
     "  https://github.com/eljaplacido/gnomonharness/releases/latest\n" +
     (process.platform === "win32"
       ? "  then:  $env:GNOMON_BIN_OVERRIDE = \"C:\\path\\to\\unpacked-dir\"   (PowerShell)\n" +

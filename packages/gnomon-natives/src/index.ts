@@ -7,8 +7,9 @@
  * - Session: deterministic step execution and outcome recording
  * - Enumerations: contract schema access
  *
- * All binaries are located via PATH, target/debug, target/release,
- * or the GNOMON_BIN_OVERRIDE environment variable.
+ * Binaries are located via GNOMON_BIN_OVERRIDE, target/debug or
+ * target/release, the installers' per-user directory (installedBinDir), or
+ * PATH, in that order.
  */
 
 export {
@@ -24,6 +25,9 @@ export {
   runSessionStep,
   // Version
   version,
+  // Where installed binaries and machine-local state live
+  machineDataDir,
+  installedBinDir,
   GNONOM_VERSION,
 } from "./surface.js";
 

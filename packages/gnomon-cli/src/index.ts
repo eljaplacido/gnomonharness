@@ -79,6 +79,7 @@ import { runTui } from "gnomon-tui";
 import { initSurface } from "./init.js";
 import { looksLikeChatModel, suggestChatModel } from "./detect.js";
 import { pendingMigrations, applyMigrations, MIGRATIONS } from "./migrate.js";
+import { cmdUpdate, cmdUninstall, maybeNotifyUpdate } from "./update.js";
 
 // ---------------------------------------------------------------------------
 // Argument parsing (minimal, no deps)
@@ -1562,6 +1563,8 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "loop", aliases: ["loops"] },
   { name: "tui" },
   { name: "migrate" },
+  { name: "update", aliases: ["upgrade"] },
+  { name: "uninstall" },
 ];
 
 function showHelp(): void {
@@ -1653,6 +1656,17 @@ Commands:
   run
     Alias for \`prompt\`
 
+  update [--check] [--force] [--notice on|off]
+    Show this version, the latest release and its changelog, then update
+    the way this copy was installed: a global install re-runs the installer
+    (npm package and native binaries together), a checkout is told the git
+    commands. --check only reports. --notice off silences the once-a-day
+    "newer version" line that interactive launch/prompt may print.
+
+  uninstall
+    Print the exact commands that remove this install and its native
+    binaries. Your stored keys and each project's .gnomon/ are left alone.
+
 Flags that apply across commands:
   --profile <name>        Merge .gnomon/profiles/<name>.toml over the base
                           roles for this run. It rewrites per-role model and
@@ -1675,6 +1689,7 @@ Getting started in a project:
 Environment:
   GNOMON_BIN_OVERRIDE     Path to gnomon binary (for testing)
   GNOMON_DIR              Override .gnomon/ directory path
+  GNOMON_NO_UPDATE_CHECK  Set to 1 to never look for a newer release
 `);
 }
 
@@ -1756,11 +1771,26 @@ async function main(): Promise<void> {
     case "skills":
       await cmdSkill(args);
       break;
+    case "update":
+    case "upgrade": {
+      const code = await cmdUpdate({
+        check: args.flags.check === "true",
+        force: !!args.force,
+        notice: args.flags.notice,
+      });
+      if (code !== 0) process.exit(code);
+      break;
+    }
+    case "uninstall":
+      cmdUninstall(credentialsPath(), installedLoopEntries());
+      break;
     case "launch":
+      maybeNotifyUpdate(args.command, !!args.json);
       await cmdLaunch(args);
       break;
     case "prompt":
     case "run":
+      maybeNotifyUpdate(args.command, !!args.json);
       await cmdPrompt(args);
       break;
     case "loop":
