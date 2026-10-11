@@ -9,6 +9,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -332,5 +333,89 @@ describe("gnomon check — an interrupted re-run", () => {
     expect(readFileSync(join(repo, "src/pay.txt"), "utf-8")).toBe("2\n");
     expect(existsSync(join(gitDir, "gnomon-check-restore.json"))).toBe(false);
     expect(byId(v, "write_allow")?.inspected).toBe(1);
+  });
+});
+
+describe("gnomon check — with a transcript (check 5)", () => {
+  const deny = `bash_deny = ['\\bgit\\s+push\\b[^|;&]*\\s(--force|-f)\\b']\n`;
+
+  it("a session that changed no file still has its commands judged", async () => {
+    surface();
+    put(".gnomon/roles.toml", `[roles.implement]\nmodel = "m"\nwrite_allow = ["src/**"]\n${deny}`);
+    const base = commit("base");
+    const v = await runCheck({
+      dir: repo,
+      base,
+      role: "implement",
+      transcript: { format: "claude-code", commands: [{ tool: "Bash", command: "git push --force origin main", at: "s.jsonl:3" }] },
+    });
+    expect(v.exit).toBe(2);
+    for (const id of ["write_allow", "surface", "verify", "must_fail_first"]) {
+      expect(byId(v, id)).toMatchObject({ status: "skipped", reason: expect.stringMatching(/no file changed/) });
+    }
+    expect(byId(v, "bash_allow")).toMatchObject({ status: "fail", findings: [{ rule: "bash_deny", at: "s.jsonl:3" }] });
+  });
+
+  it("an unreadable transcript is could-not-run", async () => {
+    surface();
+    const base = commit("base");
+    put("src/pay.txt", "2\n");
+    const v = await runCheck({ dir: repo, base, role: "implement", transcript: "the transcript could not be read: gone" });
+    expect(byId(v, "bash_allow")?.status).toBe("error");
+    expect(v.exit).toBe(10);
+  });
+
+  it("the transcript's agent picks the role through [check.roles]", async () => {
+    surface({ checkRoles: { build: "implement" } });
+    const base = commit("base");
+    put("src/pay.txt", "2\n");
+    const v = await runCheck({ dir: repo, base, transcript: { format: "opencode", agent: "build", commands: [] } });
+    expect(v.role).toBe("implement");
+  });
+
+  it("a redact pattern scrubs a command before it is chained", async () => {
+    surface();
+    put(".gnomon/roles.toml", `[roles.implement]\nmodel = "m"\nwrite_allow = ["src/**"]\n${deny}`);
+    put(".gnomon/config.toml", `[audit]\nredact = ['token=\\S+']\n`);
+    const base = commit("base");
+    const v = await runCheck({
+      dir: repo, base, role: "implement",
+      transcript: { format: "claude-code", commands: [{ tool: "Bash", command: "git push -f https://x token=SECRET1" }] },
+    });
+    const trail = readFileSync(v.audit!.trail, "utf-8");
+    expect(trail).not.toContain("SECRET1");
+    expect(trail).toContain("[redacted]");
+  });
+});
+
+describe("gnomon check — a session's starting point (the Claude Code hook)", () => {
+  it("diffs from the snapshot, so the operator's own uncommitted edits are not the agent's", async () => {
+    surface();
+    const base = commit("base");
+    // Before the session: the operator had run_tests.sh edited, uncommitted.
+    put("run_tests.sh", readFileSync(join(repo, "run_tests.sh"), "utf-8") + "# operator's edit\n");
+    const snapshot = sh(["stash", "create"]);
+    // The session then changes src/.
+    put("src/pay.txt", "2\n");
+    const v = await runCheck({ dir: repo, base, snapshot, role: "implement" });
+    expect(v.base).toBe(snapshot);
+    expect(byId(v, "write_allow")).toMatchObject({ status: "pass", inspected: 1 });
+    // Without it, the operator's edit is charged to the agent.
+    const naive = await runCheck({ dir: repo, base, role: "implement" });
+    expect(byId(naive, "write_allow")?.status).toBe("fail");
+  });
+
+  it("an untracked file already there, unchanged, is not charged; one that changed is", async () => {
+    surface();
+    const base = commit("base");
+    const h = (s: string) => createHash("sha256").update(s).digest("hex");
+    put("notes.txt", "mine\n");
+    put("scratch.txt", "the agent rewrote it\n");
+    put("src/pay.txt", "2\n");
+    const v = await runCheck({
+      dir: repo, base, role: "implement",
+      preexisting: { "notes.txt": h("mine\n"), "scratch.txt": h("mine too\n") },
+    });
+    expect(byId(v, "write_allow")?.findings?.map((f) => f.path)).toEqual(["scratch.txt"]);
   });
 });

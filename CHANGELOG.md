@@ -44,6 +44,15 @@ dispatches and 0 of them through gnomon, so none met a single rule
 - **Every verdict is appended to the hash-chained trail** — even with `[audit]`
   off, which governs session recording — and `--json` carries the record's hash
   for a caller's own chain. `replay` re-derives the recorded exit.
+- **Check 5: the agent's shell commands.** `--transcript <file> --format
+  claude-code|opencode` reads Claude Code session JSONL (and its subagents) or
+  an opencode export / `run --format json` log, and puts every command to
+  `bashPolicy` — the allow/deny decision `bashTool` makes, now one function. A
+  session that changed no file is still judged on what it ran.
+- **A Claude Code hook.** `gnomon check --install-hook claude-code` prints a
+  SessionStart + Stop fragment (it edits no settings). SessionStart records the
+  session's start (with a snapshot of a dirty tree); Stop judges everything
+  since and blocks the stop once with the findings.
 - The must-fail-first re-run is one function now (`mustFailFirst`), shared by
   the turn loop and `check`; in the worktree its rewrites are journaled so a
   killed run cannot lose uncommitted work.

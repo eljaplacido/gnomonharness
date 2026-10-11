@@ -36,6 +36,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   loadConfig,
@@ -45,10 +46,11 @@ import {
   resolveVerify,
   type GnomonConfig,
 } from "./config.js";
-import { AuditTrail, resolveAudit, verifyTrail } from "./audit.js";
+import { AuditTrail, redact, resolveAudit, verifyTrail } from "./audit.js";
 import { harnessBuild } from "./build.js";
 import { mustFailFirst, readVerifyExit, isTestPath, type PreImage } from "./must_fail_first.js";
 import {
+  bashPolicy,
   executeTool,
   inSurface,
   writeAllowed,
@@ -118,6 +120,11 @@ export interface TranscriptCommand {
   command: string;
   /** Where in the transcript, for a finding a human can go and look at. */
   at?: string;
+  /**
+   * false when the harness itself refused the call, so the command never ran.
+   * Reported, not failed: the rule held, just not by gnomon's hand.
+   */
+  ran?: false;
 }
 
 export interface CheckOptions {
@@ -136,6 +143,20 @@ export interface CheckOptions {
    * which is an error, not a skip — the caller asked for it.
    */
   transcript?: { format: string; commands: TranscriptCommand[]; agent?: string } | string;
+  /**
+   * A commit holding the tree as it stood when the agent started — `git stash
+   * create` at a Claude Code SessionStart — when that tree was dirty. The diff
+   * and the pre-images come from it, so the operator's own uncommitted edits
+   * are not charged to the agent; the RULES still come from `base`, because a
+   * snapshot of a dirty .gnomon/ is not a committed policy.
+   */
+  snapshot?: string;
+  /**
+   * Untracked files that already existed when the agent started, by sha256.
+   * One still holding the same bytes is not the agent's work and is left out;
+   * one that changed is judged like any other path.
+   */
+  preexisting?: Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +382,11 @@ async function judge(
     ? gitText(toplevel, ["rev-parse", "--verify", "--quiet", `${opts.head}^{commit}`])
     : null;
   const base = gitText(toplevel, ["merge-base", baseGiven, headSha ?? "HEAD"]);
-  verdict.base = base;
+  // The diff and the pre-images start here; the rules stay at `base`.
+  const from = opts.snapshot
+    ? gitText(toplevel, ["rev-parse", "--verify", "--quiet", `${opts.snapshot}^{commit}`])
+    : base;
+  verdict.base = from;
   if (headSha) verdict.head = headSha;
 
   // ── The rules, as of base ──────────────────────────────────────────────
@@ -437,11 +462,22 @@ async function judge(
       .split("\0")
       .filter(Boolean)
       .map((path) => ({ status: "A", path }));
+  const sha256 = (p: string) => createHash("sha256").update(readFileSync(p)).digest("hex");
+  const preexisting = opts.preexisting ?? {};
+  const unchangedSinceStart = (c: { status: string; path: string }) => {
+    const h = preexisting[c.path];
+    if (h === undefined || c.status !== "A") return false;
+    try {
+      return sha256(join(toplevel, c.path)) === h;
+    } catch {
+      return false;
+    }
+  };
   const paths = (
     headSha
-      ? parseNameStatus(git(toplevel, ["diff", "--name-status", "-z", "--no-renames", base, headSha]))
-      : [...parseNameStatus(git(toplevel, ["diff", "--name-status", "-z", "--no-renames", base])), ...untracked()]
-  ).filter((c) => !isOwn(c.path));
+      ? parseNameStatus(git(toplevel, ["diff", "--name-status", "-z", "--no-renames", from, headSha]))
+      : [...parseNameStatus(git(toplevel, ["diff", "--name-status", "-z", "--no-renames", from])), ...untracked()]
+  ).filter((c) => !isOwn(c.path) && !unchangedSinceStart(c));
 
   const ctx: ToolContext = {
     config: { ...config, gnomonDir: join(treeRoot, surfaceRel) },
@@ -464,69 +500,82 @@ async function judge(
   const abs = (p: string) => join(treeRoot, p);
 
   // A change with no paths gives every path-based check nothing to look at,
-  // and a pass over nothing is the failure this command exists to refuse.
+  // and a pass over nothing is the failure this command exists to refuse. A
+  // transcript still has something to say — a force-push leaves no diff — so
+  // with one the path checks are skipped and check 5 decides.
+  const transcript = typeof opts.transcript === "object" ? opts.transcript : null;
+  const between = `${from.slice(0, 12)} and ${verdict.head === "worktree" ? "the working tree" : verdict.head.slice(0, 12)}`;
+  if (paths.length === 0 && !transcript) {
+    throw new CheckCannotRun(`no changes between ${between} — nothing to judge`);
+  }
+
   if (paths.length === 0) {
-    throw new CheckCannotRun(
-      `no changes between ${base.slice(0, 12)} and ${verdict.head === "worktree" ? "the working tree" : verdict.head.slice(0, 12)} — nothing to judge`
-    );
-  }
-
-  // ── 1. write_allow ─────────────────────────────────────────────────────
-  const allow = (roleDef?.write_allow ?? []).filter((p) => p.trim().length > 0);
-  if (allow.length === 0) {
-    verdict.checks.push({
-      id: "write_allow",
-      status: "skipped",
-      reason: `role "${role}" declares no write_allow — every path is allowed, so there is nothing to check`,
-    });
+    const reason = `no file changed between ${between}`;
+    for (const id of ["write_allow", "surface", "verify", "must_fail_first"] as const) {
+      verdict.checks.push({ id, status: "skipped", reason });
+    }
   } else {
-    const findings: Array<Record<string, unknown>> = [];
-    for (const c of paths) {
-      const r = writeAllowed(ctx, abs(c.path));
-      if (!r.ok) findings.push({ path: c.path, change: c.status, rule: "write_allow", listed: allow.join(", ") });
-    }
-    verdict.checks.push({
-      id: "write_allow",
-      status: findings.length ? "fail" : "pass",
-      inspected: paths.length,
-      ...(findings.length ? { findings } : {}),
-    });
+    await judgePaths();
   }
 
-  // ── 2. the surface was not edited ──────────────────────────────────────
-  {
-    const findings: Array<Record<string, unknown>> = [];
-    for (const c of paths) {
-      if (inSurface(ctx, abs(c.path))) findings.push({ path: c.path, change: c.status, rule: "surface" });
-    }
-    if (findings.length) {
-      const headSurface = join(treeRoot, surfaceRel);
-      let headHash: string | null = null;
-      try {
-        headHash = existsSync(headSurface) ? recomputeManifest(headSurface).surface_hash : null;
-      } catch {
-        headHash = null;
+  async function judgePaths(): Promise<void> {
+    // ── 1. write_allow ───────────────────────────────────────────────────
+    const allow = (roleDef?.write_allow ?? []).filter((p) => p.trim().length > 0);
+    if (allow.length === 0) {
+      verdict.checks.push({
+        id: "write_allow",
+        status: "skipped",
+        reason: `role "${role}" declares no write_allow — every path is allowed, so there is nothing to check`,
+      });
+    } else {
+      const findings: Array<Record<string, unknown>> = [];
+      for (const c of paths) {
+        const r = writeAllowed(ctx, abs(c.path));
+        if (!r.ok) findings.push({ path: c.path, change: c.status, rule: "write_allow", listed: allow.join(", ") });
       }
-      findings.push({ detail: "an agent may not edit the rules it is judged by", surface_hash_head: headHash });
+      verdict.checks.push({
+        id: "write_allow",
+        status: findings.length ? "fail" : "pass",
+        inspected: paths.length,
+        ...(findings.length ? { findings } : {}),
+      });
     }
-    verdict.checks.push({
-      id: "surface",
-      status: findings.length ? "fail" : "pass",
-      inspected: paths.length,
-      ...(findings.length ? { findings } : {}),
-    });
-  }
 
-  // ── 3. [verify] on head ────────────────────────────────────────────────
-  const verify = resolveVerify(config);
-  let verifyPassed = false;
-  if (!verify) {
-    verdict.checks.push({
-      id: "verify",
-      status: "error",
-      reason: "the base surface declares no [verify] command — there is no check to run. Declare one in .gnomon/policy.toml.",
-    });
-  } else {
+    // ── 2. the surface was not edited ────────────────────────────────────
+    {
+      const findings: Array<Record<string, unknown>> = [];
+      for (const c of paths) {
+        if (inSurface(ctx, abs(c.path))) findings.push({ path: c.path, change: c.status, rule: "surface" });
+      }
+      if (findings.length) {
+        const headSurface = join(treeRoot, surfaceRel);
+        let headHash: string | null = null;
+        try {
+          headHash = existsSync(headSurface) ? recomputeManifest(headSurface).surface_hash : null;
+        } catch {
+          headHash = null;
+        }
+        findings.push({ detail: "an agent may not edit the rules it is judged by", surface_hash_head: headHash });
+      }
+      verdict.checks.push({
+        id: "surface",
+        status: findings.length ? "fail" : "pass",
+        inspected: paths.length,
+        ...(findings.length ? { findings } : {}),
+      });
+    }
+
+    // ── 3. [verify] on head ──────────────────────────────────────────────
+    const verify = resolveVerify(config);
+    let verifyPassed = false;
+    if (!verify) {
+      verdict.checks.push({
+        id: "verify",
+        status: "error",
+        reason: "the base surface declares no [verify] command — there is no check to run. Declare one in .gnomon/policy.toml.",
+      });
+      return;
+    }
     const run = (command: string) => executeTool("bash", { command }, ctx, new Set(["bash"]));
     const out = await run(verify.command);
     const v = readVerifyExit(out);
@@ -555,48 +604,95 @@ async function judge(
     // ── 4. must-fail-first ───────────────────────────────────────────────
     if (!verify.test_must_fail_first) {
       verdict.checks.push({ id: "must_fail_first", status: "skipped", reason: "test_must_fail_first is not declared in [verify]" });
-    } else if (!verifyPassed) {
+      return;
+    }
+    if (!verifyPassed) {
       verdict.checks.push({ id: "must_fail_first", status: "skipped", reason: "[verify] did not pass on head — nothing to re-run against" });
+      return;
+    }
+    // Same rule as the loop: only when the change added or edited a test. A
+    // deleted test is not a test written, so it is left out of the map.
+    const preImages = new Map<string, PreImage>();
+    for (const c of paths) {
+      const rel = posix(relative(projRoot, abs(c.path)));
+      if (c.status === "D" && isTestPath(verify.test_paths, rel)) continue;
+      preImages.set(abs(c.path), c.status === "A" ? null : git(toplevel, ["show", `${from}:${c.path}`]));
+    }
+    const sources = [...preImages.keys()].filter((p) => !isTestPath(verify.test_paths, posix(relative(projRoot, p))));
+    const reRun = () =>
+      mustFailFirst(projRoot, verify, preImages, (command) => executeTool("bash", { command }, ctx, new Set(["bash"])));
+    const mff = inPlace ? await withJournal(journal, sources, reRun) : await reRun();
+    if (!mff.ran) {
+      verdict.checks.push({ id: "must_fail_first", status: "skipped", reason: mff.reason ?? "did not run" });
+    } else if (mff.pinsNothing) {
+      verdict.checks.push({
+        id: "must_fail_first",
+        status: "fail",
+        inspected: mff.tests.length,
+        findings: mff.tests.map((t) => ({ test: t, detail: "passes against base sources — pins nothing" })),
+      });
     } else {
-      // Same rule as the loop: only when the change added or edited a test. A
-      // deleted test is not a test written, so it is left out of the map.
-      const preImages = new Map<string, PreImage>();
-      for (const c of paths) {
-        const rel = posix(relative(projRoot, abs(c.path)));
-        if (c.status === "D" && isTestPath(verify.test_paths, rel)) continue;
-        preImages.set(abs(c.path), c.status === "A" ? null : git(toplevel, ["show", `${base}:${c.path}`]));
-      }
-      const sources = [...preImages.keys()].filter((p) => !isTestPath(verify.test_paths, posix(relative(projRoot, p))));
-      const reRun = () =>
-        mustFailFirst(projRoot, verify, preImages, (command) => executeTool("bash", { command }, ctx, new Set(["bash"])));
-      const mff = inPlace ? await withJournal(journal, sources, reRun) : await reRun();
-      if (!mff.ran) {
-        verdict.checks.push({ id: "must_fail_first", status: "skipped", reason: mff.reason ?? "did not run" });
-      } else if (mff.pinsNothing) {
-        verdict.checks.push({
-          id: "must_fail_first",
-          status: "fail",
-          inspected: mff.tests.length,
-          findings: mff.tests.map((t) => ({ test: t, detail: "passes against base sources — pins nothing" })),
-        });
-      } else {
-        verdict.checks.push({ id: "must_fail_first", status: "pass", inspected: mff.tests.length });
-      }
+      verdict.checks.push({ id: "must_fail_first", status: "pass", inspected: mff.tests.length });
     }
   }
 
   // ── 5. the transcript's shell commands ─────────────────────────────────
-  verdict.checks.push(
-    opts.transcript === undefined
-      ? { id: "bash_allow", status: "skipped", reason: "no --transcript" }
-      : { id: "bash_allow", status: "error", reason: "transcript adapters are not in this build" }
-  );
+  verdict.checks.push(judgeTranscript(opts.transcript, roleDef?.bash_allow, roleDef?.bash_deny, role));
 
   // ── 6. the verdict goes on the trail ───────────────────────────────────
   appendVerdict(verdict, liveConfig, { agent, roleSource: resolved.source, given: { base: opts.base, head: opts.head } });
 
   verdict.exit = checkExit(verdict.checks);
   return verdict;
+}
+
+/**
+ * Check 5: every shell command the transcript holds, put to bashPolicy — the
+ * function bashTool itself calls before running anything. A command the
+ * harness refused (`ran: false`) is listed but does not fail the check: the
+ * rule held, by another hand.
+ */
+export function judgeTranscript(
+  transcript: CheckOptions["transcript"],
+  bashAllow: string[] | undefined,
+  bashDeny: string[] | undefined,
+  role: string
+): CheckEntry {
+  if (transcript === undefined) return { id: "bash_allow", status: "skipped", reason: "no --transcript" };
+  if (typeof transcript === "string") return { id: "bash_allow", status: "error", reason: transcript };
+  const allow = (bashAllow ?? []).filter((p) => p.trim());
+  const deny = (bashDeny ?? []).filter((p) => p.trim());
+  if (allow.length === 0 && deny.length === 0) {
+    return {
+      id: "bash_allow",
+      status: "skipped",
+      reason: `role "${role}" declares neither bash_allow nor bash_deny — every command is allowed, so there is nothing to check`,
+    };
+  }
+  if (transcript.commands.length === 0) {
+    return { id: "bash_allow", status: "skipped", reason: `the ${transcript.format} transcript holds no shell commands` };
+  }
+  const findings: Array<Record<string, unknown>> = [];
+  let failed = 0;
+  for (const c of transcript.commands) {
+    const refused = bashPolicy(c.command, allow, deny);
+    if (!refused) continue;
+    const finding: Record<string, unknown> = {
+      command: c.command.length > 200 ? `${c.command.slice(0, 200)}…` : c.command,
+      rule: refused.rule,
+      ...(refused.pattern ? { pattern: refused.pattern } : {}),
+      ...(c.at ? { at: c.at } : {}),
+    };
+    if (c.ran === false) finding.ran = false;
+    else failed++;
+    findings.push(finding);
+  }
+  return {
+    id: "bash_allow",
+    status: failed > 0 ? "fail" : "pass",
+    inspected: transcript.commands.length,
+    ...(findings.length ? { findings } : {}),
+  };
 }
 
 /**
@@ -655,7 +751,11 @@ function appendVerdict(
         inspected: c.inspected,
         // Paths, commands and exit codes only. Verify output is the project's
         // own test log and goes to the caller, not into the chain.
-        findings: c.findings?.map(({ output: _o, ...rest }) => rest),
+        // A transcript command goes through [audit] redact, as recorded text
+        // does everywhere else: a token pasted into a curl must not be chained.
+        findings: c.findings?.map(({ output: _o, ...rest }) =>
+          typeof rest.command === "string" ? { ...rest, command: redact(rest.command, settings.redact) } : rest
+        ),
       })),
       exit: checkExit(verdict.checks),
     });
