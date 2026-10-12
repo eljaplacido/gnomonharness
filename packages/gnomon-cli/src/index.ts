@@ -77,7 +77,22 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runTui } from "gnomon-tui";
 import { initSurface } from "./init.js";
-import { looksLikeChatModel, suggestChatModel } from "./detect.js";
+import {
+  looksLikeChatModel,
+  suggestChatModel,
+  listOllama,
+  ollamaTagsUrl,
+  orderForPicking,
+  DetectedModel,
+} from "./detect.js";
+import {
+  checkReadiness,
+  SETUP_CHOICES,
+  parseSetupPick,
+  parseModelPick,
+  ollamaNotRunning,
+  hostPort,
+} from "./setup.js";
 import { pendingMigrations, applyMigrations, MIGRATIONS } from "./migrate.js";
 import { cmdCheck } from "./check.js";
 
@@ -784,15 +799,29 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
       process.exit(1);
     }
     const probes = new Map<string, { ok: boolean; status?: number; detail?: string }>();
+    const untested: string[] = [];
     for (const row of rows) {
       const model = args.flags.model ?? row.probeModel;
-      if (!model) continue;
+      if (!model) {
+        untested.push(row.name);
+        continue;
+      }
+      row.probeModel = model;
       probes.set(row.name, await probeEndpointAuth(row.endpoint, model));
     }
     const modelChecks = await checkRoleModels(config).catch(() => null);
     printEndpoints(rows, resolveUi(config), probes, modelChecks);
+    // An endpoint with no role routed to it has no model to ask for, and was
+    // skipped without a word — `gnomon endpoint test go` printed the listing
+    // and exited 0, which reads as a pass. Say it, and do not exit 0 when the
+    // one endpoint asked about was never tested.
+    for (const n of untested) {
+      console.log(`  ${n}: NOT TESTED — no role routes here, so there is no model to ask for.`);
+      console.log(`    gnomon endpoint test ${n} --model <id>   (/models lists what it serves)`);
+    }
     const bad = [...probes.values()].filter((p) => !p.ok);
     if (bad.length > 0) process.exit(1);
+    if (name && untested.length > 0) process.exit(10);
     return;
   }
 
@@ -801,10 +830,36 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     process.exit(1);
   }
 
+  if ((await endpointAdd(args, config)) === "failed") process.exit(1);
+}
+
+/** How `endpointAdd` ended. Only "failed" is an error exit. */
+type AddOutcome = "written" | "declined" | "failed";
+
+interface AddOptions {
+  /** Preset chosen by the caller -- launch's picker -- rather than a flag. */
+  preset?: string;
+  /**
+   * First-run setup from `gnomon launch`: take the preset's endpoint name
+   * without asking, and point every role that names a model at the result.
+   * Someone who has just said "use Ollama" has answered both questions.
+   */
+  quick?: boolean;
+}
+
+/**
+ * The `endpoint add` flow, returning instead of exiting so `gnomon launch`
+ * can run it from its picker and offer the picker again when it fails.
+ */
+async function endpointAdd(
+  args: CliArgs,
+  config: ReturnType<typeof loadConfig>,
+  opts: AddOptions = {}
+): Promise<AddOutcome> {
   const interactive = process.stdin.isTTY;
 
   // ── 1. Which provider ────────────────────────────────────────────────────
-  let presetKey = args.flags.preset;
+  let presetKey = opts.preset ?? args.flags.preset;
   if (!presetKey && interactive) {
     console.log("\nWhich endpoint?\n");
     const keys = Object.keys(ENDPOINT_PRESETS);
@@ -822,13 +877,14 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     console.error(
       `Unknown preset "${presetKey}". Known: ${Object.keys(ENDPOINT_PRESETS).join(", ")}, custom`
     );
-    process.exit(1);
+    return "failed";
   }
 
   // ── 2. Name, URL, shape ──────────────────────────────────────────────────
   const defaultName = preset?.name ?? "custom";
   const name =
-    args.flags.name ?? (interactive ? await ask(`Endpoint name [${defaultName}]: `, defaultName) : defaultName);
+    args.flags.name ??
+    (interactive && !opts.quick ? await ask(`Endpoint name [${defaultName}]: `, defaultName) : defaultName);
 
   const existing = config.config.endpoints?.[name];
   if (existing && existing.url !== (args.flags.url ?? preset?.url)) {
@@ -847,7 +903,7 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
         : "n";
     if (!/^y/i.test(go)) {
       console.log("  Left alone. Choose another name with --name <name>.");
-      return;
+      return "declined";
     }
   }
 
@@ -857,7 +913,7 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     (interactive ? await ask("URL (…/chat/completions or …/api/chat): ") : "");
   if (!url) {
     console.error("An endpoint needs a url. Pass --url.");
-    process.exit(1);
+    return "failed";
   }
   const kind =
     args.flags.kind ?? preset?.kind ?? (url.includes("/api/chat") ? "ollama" : "openai");
@@ -872,6 +928,10 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
   }
 
   if (keyEnv) {
+    // A key `gnomon key set` stored earlier counts as held. The surface does
+    // not declare this variable yet -- that is what this command is about to
+    // do -- so nothing upstream of here has loaded it.
+    if (!process.env[keyEnv]) applyCredentials(undefined, [keyEnv]);
     const held = Boolean(process.env[keyEnv]);
     let store = true;
     if (held && interactive) {
@@ -881,12 +941,12 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     if (store) {
       if (!interactive) {
         console.error(`$${keyEnv} is not set. Run: gnomon key set ${name}`);
-        process.exit(1);
+        return "failed";
       }
       const value = await readSecret(`  Paste the key for $${keyEnv} (hidden): `);
       if (!value) {
         console.error("  Nothing entered — no change.");
-        process.exit(1);
+        return "failed";
       }
       setCredential(keyEnv, value);
       process.env[keyEnv] = value;
@@ -902,6 +962,13 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
   // failure below is allowed to blame: a tag this command chose is this
   // command's problem to explain, not the user's to be lectured about.
   let modelWasChosenForYou = false;
+  // What init would give `smol` on this Ollama, for quick setup.
+  let smallModel: string | undefined;
+  if (!model && kind === "ollama") {
+    const picked = await pickOllamaModel(url, interactive);
+    if (!picked) return "failed";
+    ({ model, chosenForYou: modelWasChosenForYou, small: smallModel } = picked);
+  }
   if (!model) {
     process.stdout.write("  Asking the endpoint what it serves… ");
     const offered = await listModelsAt(endpoint);
@@ -954,7 +1021,7 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
   }
   if (!model) {
     console.error("A model tag is needed to test the endpoint. Pass --model.");
-    process.exit(1);
+    return "failed";
   }
 
   // ── 5. Prove it, before writing anything ─────────────────────────────────
@@ -985,7 +1052,7 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
       }
     }
     console.error(`\n  Nothing was written to .gnomon/. Fix the above and run this again.`);
-    process.exit(1);
+    return "failed";
   }
   console.log("ok.");
 
@@ -998,6 +1065,11 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
   // ── 7. Point roles at it ─────────────────────────────────────────────────
   const roleNames = listRoles(config);
   let wanted = args.flags.role ?? args.role ?? "";
+  if (!wanted && opts.quick) {
+    // Every role that names a model. A role with no model inherits one and
+    // follows along; touching it would turn an inheritance into a copy.
+    wanted = roleNames.filter((r) => config.roles[r]?.model).join(",");
+  }
   if (!wanted && interactive) {
     console.log(`\n  Roles: ${roleNames.join(", ")}`);
     wanted = await ask("  Point which at it? (comma-separated, blank for none): ", "");
@@ -1025,9 +1097,13 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
         file = { label: target.label, text: readFileSync(target.path, "utf-8") };
         edits.set(target.path, file);
       }
-      file.text = setRoleModel(file.text, role, model, name);
+      // The cheap tier gets the cheap model init would have chosen, when
+      // there is one. Pointing `smol` at the same 35B as everything else
+      // works, and makes every summary cost a full reasoning turn.
+      const tag = opts.quick && role === "smol" && smallModel ? smallModel : model;
+      file.text = setRoleModel(file.text, role, tag, name);
       console.log(
-        `  ✓ ${role} → ${model} @${name}` +
+        `  ✓ ${role} → ${tag} @${name}` +
           (target.profile ? ` (via profile "${target.profile}")` : "")
       );
     }
@@ -1046,6 +1122,75 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     console.log(`\n  Surface now ${hash.slice(0, 16)}… — commit .gnomon/ to carry this to another machine.`);
   } catch {
     console.log(`\n  Written. Commit .gnomon/ to carry this to another machine.`);
+  }
+  return "written";
+}
+
+/**
+ * Pick a model from what a local Ollama serves.
+ *
+ * `endpoint add --preset ollama` used to fall through to the generic listing,
+ * which on a stopped Ollama printed `no list available` and asked for a tag
+ * -- the wrong question for someone whose only problem was that the server
+ * was not running. Now the two cases say different things: not running gets
+ * the command that starts it (and, on a terminal, a re-check), running gets
+ * a numbered list with init's own choice as the default.
+ *
+ * Undefined means the user gave up or there was nothing to pick.
+ */
+async function pickOllamaModel(
+  chatUrl: string,
+  interactive: boolean | undefined
+): Promise<{ model: string; chosenForYou: boolean; small?: string } | undefined> {
+  const tagsUrl = ollamaTagsUrl(chatUrl);
+  for (;;) {
+    process.stdout.write("  Asking Ollama what it serves… ");
+    const listing = await listOllama(tagsUrl, 3000);
+    let problem: string[] | null = null;
+    if (!listing.reachable) {
+      console.log(listing.refused ? "nothing there." : `no answer (${listing.why}).`);
+      problem = listing.refused
+        ? ollamaNotRunning(chatUrl)
+        : [`Ollama at ${hostPort(chatUrl)} did not answer: ${listing.why}.`];
+    } else if (listing.models.length === 0) {
+      console.log("no models.");
+      problem = [
+        "Ollama is running but serves no models. Pull one first, e.g.:",
+        "  ollama pull qwen3:8b",
+      ];
+    }
+    if (problem) {
+      for (const l of problem) console.log(`  ${l}`);
+      if (!interactive) {
+        console.error("\n  Nothing was written to .gnomon/. Run this again once it answers, or pass --model.");
+        return undefined;
+      }
+      const again = await ask("\n  Press Enter to check again, or q to go back: ", "");
+      if (/^q/i.test(again)) return undefined;
+      continue;
+    }
+
+    const models = (listing as { models: DetectedModel[] }).models;
+    const { ordered, suggested, small } = orderForPicking(models);
+    console.log(`${models.length} model${models.length === 1 ? "" : "s"}.`);
+    const names = ordered.map((m) => m.name);
+    if (!interactive) return { model: suggested!, chosenForYou: true, small };
+
+    const shown = ordered.slice(0, 30);
+    const width = Math.min(44, Math.max(...shown.map((m) => m.name.length)));
+    shown.forEach((m, i) => {
+      // 566.70M parses to 0.5667000000000001; nobody picks a model by the
+      // fourth decimal of its size.
+      const size =
+        m.billions <= 0 ? "" : m.billions >= 10 ? `${Math.round(m.billions)}B` : `${m.billions.toFixed(1)}B`;
+      const note =
+        m.name === suggested ? "← default" : looksLikeChatModel(m.name) ? "" : "(embedding — cannot chat)";
+      console.log(`    ${String(i + 1).padStart(2)}. ${m.name.padEnd(width)}  ${size.padStart(5)}  ${note}`.trimEnd());
+    });
+    if (ordered.length > shown.length) console.log(`        …and ${ordered.length - shown.length} more (type the tag)`);
+    const answer = await ask(`  Model [1 = ${suggested}]: `, "");
+    const model = parseModelPick(answer, names, suggested!);
+    return { model, chosenForYou: model === suggested, small };
   }
 }
 
@@ -1386,7 +1531,7 @@ async function cmdMigrate(args: CliArgs): Promise<void> {
   );
 }
 
-async function cmdInit(args: CliArgs): Promise<void> {
+async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promise<void> {
   let result;
   try {
     result = await initSurface({ dir: args.dir, force: args.force, from: args.from, noVerify: args.noVerify });
@@ -1407,9 +1552,15 @@ async function cmdInit(args: CliArgs): Promise<void> {
   if (models) {
     console.log("");
     if (models.fallback) {
-      console.log(`Models: ${models.fallback}, so generic starter tags were used:`);
-      console.log(`  ${models.large} for the reasoning roles, ${models.small} for smol`);
-      console.log("  These are very likely wrong for this machine — edit them.");
+      // Placeholders, and say what replaces them. "Very likely wrong -- edit
+      // them" named the problem and no way out of it; the way out is one
+      // command that lists what an endpoint serves and proves a tag works.
+      console.log(`Models: ${models.fallback}, so placeholder tags were written`);
+      console.log(`  (${models.large}, ${models.small}).`);
+      if (!opts.launching) {
+        console.log("  Replace them with a model you have:  gnomon endpoint add --preset ollama");
+        console.log("  (or --preset openrouter | opencode-go | opencode-zen, or no flag to choose)");
+      }
     } else {
       console.log(`Models: detected ${models.detected.length} on this machine.`);
       console.log(`  ${models.large} for the reasoning roles`);
@@ -1420,9 +1571,13 @@ async function cmdInit(args: CliArgs): Promise<void> {
   console.log("");
   console.log(
     result.verify
-      ? `Verify: \`${result.verify}\` runs after every turn that changes a file ([verify] in policy.toml).`
+      ? `Verify: \`${result.verify}\` runs after every turn that changes a file ([verify] in policy.toml);\n` +
+          `        a new test must fail on the code as it was (test_must_fail_first).`
       : "Verify: none found — declare [verify] command in .gnomon/policy.toml, or no turn is ever checked."
   );
+  if (result.audit) {
+    console.log("Audit: on — decisions and outcomes, no prompt text, in .gnomon-audit/ ([audit] in config.toml).");
+  }
 
   // Name the file whose edits take effect. The scaffold ships
   // `role_profile = "local_first"` and a profile that restates `model` and
@@ -1436,6 +1591,9 @@ async function cmdInit(args: CliArgs): Promise<void> {
       return { label: ".gnomon/roles.toml" } as { label: string; profile?: string };
     }
   })();
+  // Launch starts the session itself, so a "Next: run `gnomon prompt`" here
+  // told the user to do what was already happening on the next line.
+  if (opts.launching) return;
   console.log("");
   console.log("Next:");
   console.log(`  1. Check ${where.label} — the model tags must be ones you`);
@@ -1460,29 +1618,78 @@ async function cmdInit(args: CliArgs): Promise<void> {
 async function cmdLaunch(args: CliArgs): Promise<void> {
   const target = resolve(args.dir ?? process.cwd());
   const surface = join(target, ".gnomon");
+  const fresh = !existsSync(surface);
 
-  if (existsSync(surface)) {
+  if (!fresh) {
     // Silence here meant a launch in the wrong directory looked exactly like
     // a launch in the right one.
     console.log(`Using the existing .gnomon/ in ${target}`);
   } else {
     console.log(`No .gnomon/ in ${target} — creating one.`);
-    await cmdInit(args);
-    console.log("");
-    const where = (() => {
-      try {
-        return modelEditTarget(loadConfig(target)).label;
-      } catch {
-        return ".gnomon/roles.toml";
-      }
-    })();
-    console.log(`Edit ${where} if the model tags are not ones you have,`);
-    console.log("then re-run `gnomon launch`. Starting anyway:");
-    console.log("");
+    await cmdInit(args, { launching: true });
   }
 
+  // On a terminal, make sure a model answers BEFORE the session starts. A
+  // session that cannot reach one fails on its first message, and the way
+  // out (`gnomon endpoint add`) was nowhere on screen. Off a terminal there
+  // is nobody to ask, and a script gets exactly what it got before.
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    await offerModelSetup(args, target);
+  } else if (fresh) {
+    console.log("");
+    console.log("If those model tags are not ones you have, `gnomon endpoint add` sets one up.");
+  }
+  console.log("");
 
   await cmdPrompt(args);
+}
+
+/**
+ * Before a launch opens the session: does its role reach a model? If not,
+ * offer to set one up, through the same `endpoint add` flow -- presets, key
+ * held outside the surface, one token through it before anything is written.
+ *
+ * Loops until something answers or the user skips, so a failed setup (wrong
+ * key, Ollama still stopped) lands back on the choice rather than in a
+ * session that cannot work.
+ */
+async function offerModelSetup(args: CliArgs, target: string): Promise<void> {
+  const role = args.subcommand || "implement";
+  for (;;) {
+    let config;
+    try {
+      config = loadConfig(target, args.flags["profile"]);
+    } catch {
+      return; // cmdPrompt reports a surface that does not load, in full.
+    }
+    applyCredentials(undefined, declaredKeyVars(config));
+    const readiness = await checkReadiness(config, role);
+    if (readiness.ready) return;
+
+    console.log("");
+    console.log(`No model answers for this project yet: ${readiness.why}.`);
+    console.log("Set one up now?\n");
+    SETUP_CHOICES.forEach((c, i) => {
+      console.log(`  ${i + 1}. ${c.label.padEnd(13)} ${c.note}`);
+    });
+    const answer = await ask(`\nChoose [1-${SETUP_CHOICES.length}, Enter = 1]: `, "");
+    const pick = parseSetupPick(answer);
+    if (!pick) {
+      console.log(`  "${answer}" is not one of those.`);
+      continue;
+    }
+    if (pick === "skip") {
+      console.log(
+        "  Skipped. The session starts, but nothing will answer until a model does:\n" +
+          "    gnomon endpoint add --preset ollama | openrouter | opencode-go | opencode-zen"
+      );
+      return;
+    }
+    console.log("");
+    await endpointAdd(args, config, { preset: pick, quick: true });
+    // Written or not, look again: a write is proved by the next check, and a
+    // failure goes back to the choice instead of into a dead session.
+  }
 }
 
 async function cmdPrompt(args: CliArgs): Promise<void> {
@@ -1584,7 +1791,9 @@ Commands:
     Write a .gnomon/ surface into a project. --from copies an existing
     surface instead of the built-in starter templates. The project's own
     check (package.json verify/check/test, cargo test, ...) is declared as
-    [verify]; --no-verify leaves it commented out, as before 2026-09-29.
+    [verify] with test_must_fail_first, and the audit trail is on.
+    --no-verify writes the scaffold as before (no [verify], audit off),
+    byte for byte, for benchmark comparability.
 
   migrate [--dir <path>] [--check]
     Bring an existing .gnomon/ up to the current shipped defaults. Prints
@@ -1715,6 +1924,25 @@ async function main(): Promise<void> {
   if (args.command === "--help" || args.command === "-h" || args.command === "help") {
     showHelp();
     return;
+  }
+
+  // One line, the way every other CLI answers it. It used to fall through to
+  // showHelp(), so the version was the first of ~100 lines and `gnomon version`
+  // was an unknown command.
+  const first = process.argv[2];
+  if (first === "--version" || first === "-v" || first === "-V" || args.command === "version") {
+    console.log(harnessBuild());
+    return;
+  }
+
+  // Reporting commands piped into a file, grep or CI log printed raw escape
+  // codes (`[1mlocal[0m`). paint() already honours NO_COLOR, so set it for
+  // them when stdout is not a terminal. Not for commands that run tools: the
+  // variable would be inherited by the project's own commands and change what
+  // they print, which is not this flag's business. FORCE_COLOR opts back in.
+  const reporting = ["endpoint", "key", "audit", "sessions", "skill", "surface", "init", "migrate", "enumerations"];
+  if (reporting.includes(args.command) && !process.stdout.isTTY && !process.env.FORCE_COLOR) {
+    process.env.NO_COLOR = "1";
   }
 
   // -p flag: print latest session ID regardless of command

@@ -137,7 +137,9 @@ send-back with the findings acts on fact.
    at Stop.
 4. `gnomon init` scaffolds `[verify]` from `detectVerifyCommand` with
    `test_must_fail_first = true` and `[audit] enabled = true`, so a new surface
-   governs something by default.
+   governs something by default. *Built,* with `gnomon migrate` entries for
+   existing surfaces; `init --no-verify` (the benchmark runners' flag) keeps
+   the old scaffold byte for byte.
 
 ## Decisions
 

@@ -46,8 +46,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1192 TypeScript tests (1028 core, 143 cli, 14
-> natives, 7 tui) and 60 Rust tests — **1252 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1233 TypeScript tests (1037 core, 175 cli, 14
+> natives, 7 tui) and 60 Rust tests — **1293 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1473,12 +1473,16 @@ Resumed 2026-08-24T19-39-48-151Z — 1 turn(s)
 
 ## Governance and Audit
 
-Off by default. When a surface asks for it, every turn, tool call and approval
-decision is appended to a hash-chained JSONL trail.
+On in every surface `gnomon init` writes (since 2026-10; `init --no-verify`
+keeps the old scaffold for benchmark comparability, and the code default when
+the block is absent is still off). Every turn, tool call and approval
+decision is appended to a hash-chained JSONL trail — decisions and outcomes,
+not prompt text, under the scaffolded `record = "metadata"`. `gnomon migrate`
+switches it on for a surface scaffolded earlier.
 
 ```toml
 [audit]
-enabled = false
+enabled = true
 dir = ".gnomon-audit"      # outside .gnomon/, same reason as sessions
 record = "metadata"        # metadata | full
 redact = ['(api[_-]?key|token|secret|password)\s*[:=]\s*\S+']

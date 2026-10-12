@@ -118,8 +118,11 @@ describe("documented defaults are the actual defaults", () => {
       expect(config.roles[ctx.summary_role]?.endpoint).toBe("local");
       // "mode = manual … suggest is where to start" — shipped manual
       expect(resolveRouting(config).mode).toBe("manual");
-      // "Off by default" — audit
-      expect(resolveAudit(config).enabled).toBe(false);
+      // "On in every surface `gnomon init` writes" — audit, since 2026-10.
+      // Was off, which is how a 48-task campaign answered none of its own
+      // questions (docs/BENCHMARK-POSTMORTEM.md).
+      expect(resolveAudit(config).enabled).toBe(true);
+      expect(resolveAudit(config).record).toBe("metadata");
       // "persist = true  # on by default"
       expect(resolveSessionStore(config).persist).toBe(true);
       // "think = collapse"
