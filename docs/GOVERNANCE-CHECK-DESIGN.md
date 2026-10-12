@@ -13,8 +13,8 @@ Every check gnomon enforces runs inside gnomon's own tool loop: `bash_allow` /
 and `test_must_fail_first` after a turn (`prompt_loop.ts`, the re-run now in
 `must_fail_first.ts`). Work done by any other runtime never meets them.
 
-Measured on the first project that adopted gnomon as its governance layer
-(factoryctl, run `heko-run1`, audit 2026-10-01):
+Measured on the first project that adopted gnomon as its governance layer (a
+software factory dispatching agents from its own orchestrator; audit of one run):
 
 | | |
 |---|---|
@@ -100,9 +100,9 @@ send-back with the findings acts on fact.
 
 ## Where it would be wired
 
-- **factoryctl** — after `_dispatch_claude` / `_dispatch_container` returns,
-  run `gnomon check --base <pre-dispatch rev> --role <agent's role> --json` and
-  write the verdict into `audit.jsonl` as a `gate_exit` event. A 2 becomes a
+- **A calling orchestrator (a software factory)** — after an agent dispatch
+  returns, run `gnomon check --base <pre-dispatch rev> --role <agent's role> --json`
+  and record the verdict in the orchestrator's own audit log. A 2 becomes a
   send-back with the findings as its evidence; a 10 stops the phase.
 - **CI** — one job: `gnomon check --base origin/main --head HEAD --role implement`.
 - **Claude Code** — a `Stop` hook running the same command on the session's
@@ -115,8 +115,8 @@ send-back with the findings acts on fact.
   after the fact, before the work is accepted", which is the guarantee a
   factory or a merge needs.
 - It does not re-run or re-prompt a model.
-- It does not replace a project's own gates. factoryctl's attribution,
-  conservation and acceptance gates judge *what* was built against the spec;
+- It does not replace a project's own gates. An orchestrator's own acceptance
+  gates judge *what* was built against the spec;
   `check` judges *how* — the role's boundaries and whether the tests pin anything.
 
 ## Order of work (one PR each)
@@ -130,7 +130,6 @@ send-back with the findings acts on fact.
 4. `gnomon init` scaffolds `[verify]` from `detectVerifyCommand` with
    `test_must_fail_first = true` and `[audit] enabled = true`, so a new surface
    governs something by default.
-5. In factoryctl (separate repository): the post-dispatch hook and CI job.
 
 ## Decisions
 
@@ -151,7 +150,7 @@ The three questions this note left open, as answered on review (2026-10-11):
    trail, as its own sealed three-record trail (`session_start`, `check`,
    `session_end`) in the `[audit] dir`, read back with `verifyTrail` before the
    command reports it. `--json` carries the `check` record's `hash`, so a caller
-   with its own chain (factoryctl) stores it, and gnomon's record carries the
+   with its own audit chain stores it, and gnomon's record carries the
    base, head and agent the caller passed — a cross-reference both ways.
 
    With `[audit] enabled = false` the verdict is **still written**, to the same
@@ -171,7 +170,9 @@ Two choices the build made that the proposal did not spell out:
   the edit; checks 1, 3 and 4 still use the rules that predate it. A base with no
   surface is exit 10 — there is nothing to judge by.
 - **The diff is from `merge-base(base, head)`,** so `--base origin/main` in CI
-  judges what the branch did, not what main did since it branched.
+  judges what the branch did, not what main did since it branched. The rules
+  still come from the base as given: the merge-base is chosen by head's
+  history, and a head rebuilt on an older commit must not pick older rules.
 
 ## Open questions for review (answered above)
 
@@ -179,5 +180,5 @@ Two choices the build made that the proposal did not spell out:
   harness's agent name in the surface (`[check.roles] frontend-developer = "implement"`)?
 - Should check 4 run on every change, or only when the change touches
   `test_paths`? (The in-loop version only runs when a test was written.)
-- Where does the verdict live when the caller has its own hash chain
-  (factoryctl does): gnomon's trail, the caller's, or both with cross-reference?
+- Where does the verdict live when the caller has its own hash chain:
+  gnomon's trail, the caller's, or both with cross-reference?

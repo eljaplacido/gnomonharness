@@ -19,7 +19,8 @@
  *     graded by the policy it just wrote. Check 2 reports the edit; the rules
  *     it is judged by are the ones that predate it.
  *   - The diff is taken from merge-base(base, head), so `--base origin/main`
- *     in CI judges what the branch did, not what main did since.
+ *     in CI judges what the branch did, not what main did since. The rules
+ *     stay at the base as given: head's history picks the merge-base.
  *   - Exit is the `task --json` contract: 0 every check held, 2 a check failed,
  *     10 the check could not run. A run in which nothing was inspected is 10,
  *     never 0 — the rule .gnomon/ci.sh already set for its own gates.
@@ -103,7 +104,7 @@ export interface CheckVerdict {
   exit: 0 | 2 | 10;
   /**
    * The record this verdict was appended as, in gnomon's own hash chain. A
-   * caller with its own chain (factoryctl) stores `hash`; gnomon's record names
+   * caller with its own audit chain stores `hash`; gnomon's record names
    * the caller back through `--agent` and the base/head it was given.
    */
   audit?: { trail: string; seq: number; hash: string; surface_audit_enabled: boolean };
@@ -378,22 +379,29 @@ async function judge(
   if (headSha) verdict.head = headSha;
 
   // ── The rules, as of base ──────────────────────────────────────────────
+  // As of the base the CALLER named, not the merge-base. The merge-base is
+  // picked by head's history, and head is the work under judgement: a branch
+  // rebuilt on an old commit, or an agent that ran `git reset --hard` to one,
+  // would otherwise choose the policy that predates a tightening and be judged
+  // by that. Measured before this: a write outside a tightened write_allow,
+  // after a reset to the commit before the tightening, came back HELD (exit 0).
+  const rulesRev = baseGiven;
   const baseTree = mkdtempSync(join(tmpdir(), "gnomon-check-base-"));
   cleanups.push(() => rmSync(baseTree, { recursive: true, force: true }));
-  const surfaceFiles = git(toplevel, ["ls-tree", "-r", "-z", "--name-only", base, "--", surfaceRel])
+  const surfaceFiles = git(toplevel, ["ls-tree", "-r", "-z", "--name-only", rulesRev, "--", surfaceRel])
     .toString("utf-8")
     .split("\0")
     .filter(Boolean);
   if (surfaceFiles.length === 0) {
     throw new CheckCannotRun(
-      `the base revision ${base.slice(0, 12)} has no ${surfaceRel}/ — there are no rules to judge this change by. ` +
+      `the base revision ${rulesRev.slice(0, 12)} has no ${surfaceRel}/ — there are no rules to judge this change by. ` +
         `Commit the surface first: the rules a change is judged by must predate it.`
     );
   }
   for (const f of surfaceFiles) {
     const dest = join(baseTree, f);
     mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(dest, git(toplevel, ["show", `${base}:${f}`]));
+    writeFileSync(dest, git(toplevel, ["show", `${rulesRev}:${f}`]));
   }
   let config: GnomonConfig;
   try {
