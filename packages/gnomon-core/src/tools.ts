@@ -1421,30 +1421,24 @@ export function sandboxCommand(
     .join(" ");
 }
 
-async function bashTool(
-  args: Record<string, unknown>,
-  ctx: ToolContext
-): Promise<ToolOutcome> {
-  // String({}) is "[object Object]", which the shell dutifully tried to run
-  // and reported as exit 127. A malformed call should be refused, not executed.
-  // Only a NON-STRING is refused. An empty string is harmless -- the shell runs
-  // nothing and exits 0 -- and a turn that recovers from one must not be stamped
-  // a refusal, which is a contract this suite already pins.
-  if (typeof args.command !== "string") {
-    return {
-      code: TOOL_DENIED,
-      content:
-        `Refused: bash needs a \`command\` string, and got ${
-          Array.isArray(args.command) ? "an array" : typeof args.command
-        }. String({}) is "[object Object]", which the shell would try to run.`,
-      summary: `bash — command is not a string`,
-    };
-  }
-  const command = args.command;
-  if (!command.trim()) {
-    return { code: TOOL_FAILED, content: "Empty command.", summary: "bash — empty" };
-  }
-
+/**
+ * Does a role's bash_allow / bash_deny let this command through?
+ *
+ * The decision bashTool makes before it runs anything, as a function of the
+ * command and the two lists alone. Extracted so `gnomon check` can put a
+ * command another harness ran -- read out of its transcript -- to exactly the
+ * test this loop would have put it to. A second matcher would be a second
+ * policy, and the two would disagree on the first command nobody tried.
+ *
+ * Returns null when the command is allowed, or the refusal bashTool returns,
+ * plus which list refused it and the pattern, for a caller that reports rather
+ * than refuses.
+ */
+export function bashPolicy(
+  command: string,
+  allow: string[] | undefined,
+  deny: string[] | undefined
+): (ToolOutcome & { rule: "bash_deny" | "bash_allow"; pattern?: string }) | null {
   // Deny first, and independently of the allow-list.
   //
   // An allow-list cannot say "everything except three catastrophes". The role
@@ -1453,13 +1447,13 @@ async function bashTool(
   // role you want stopped from force-pushing over a release branch. Those are
   // different questions, so they are different lists, and deny wins: a pattern
   // on both is denied.
-  if (ctx.bashDeny && ctx.bashDeny.length > 0) {
+  if (deny && deny.length > 0) {
     const scan = scanShellCommand(command);
     // The whole string as well as each segment. A segment split cannot see
     // `git push --force` written across a substitution, and denial is the one
     // place where matching too much is the safer error.
     const subjects = [command, ...scan.segments];
-    for (const pattern of ctx.bashDeny) {
+    for (const pattern of deny) {
       let re: RegExp;
       try {
         // Case-sensitive, like bash_allow. Shell commands and flags are, and
@@ -1473,6 +1467,8 @@ async function bashTool(
         // allow pattern: the cost of refusing a safe command is an error
         // message, and the cost of running an unsafe one is a lost branch.
         return {
+          rule: "bash_deny",
+          pattern,
           code: TOOL_DENIED,
           content:
             `Refused: this role has a bash_deny pattern that is not a valid ` +
@@ -1484,6 +1480,8 @@ async function bashTool(
       const hit = subjects.find((sub) => re.test(sub));
       if (hit !== undefined) {
         return {
+          rule: "bash_deny",
+          pattern,
           code: TOOL_DENIED,
           content:
             `Refused: "${hit.trim().slice(0, 80)}" matches a bash_deny pattern ` +
@@ -1500,10 +1498,11 @@ async function bashTool(
 
   // A role may narrow bash to specific commands. Without this, `tools` alone
   // cannot make a role read-only: bash writes.
-  if (ctx.bashAllow && ctx.bashAllow.length > 0) {
-    const allowed = ctx.bashAllow;
+  if (allow && allow.length > 0) {
+    const allowed = allow;
     const listed = allowed.map((p) => `/${p}/`).join(", ");
     const refuse = (why: string) => ({
+      rule: "bash_allow" as const,
       code: TOOL_DENIED,
       content: `Refused: ${why}\nThis role may only run commands matching ${listed}.`,
       summary: `bash — not permitted for this role`,
@@ -1543,6 +1542,40 @@ async function bashTool(
         `"${(offending ?? command).trim().slice(0, 80)}" is not on it.`
       );
     }
+  }
+
+  return null;
+}
+
+async function bashTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolOutcome> {
+  // String({}) is "[object Object]", which the shell dutifully tried to run
+  // and reported as exit 127. A malformed call should be refused, not executed.
+  // Only a NON-STRING is refused. An empty string is harmless -- the shell runs
+  // nothing and exits 0 -- and a turn that recovers from one must not be stamped
+  // a refusal, which is a contract this suite already pins.
+  if (typeof args.command !== "string") {
+    return {
+      code: TOOL_DENIED,
+      content:
+        `Refused: bash needs a \`command\` string, and got ${
+          Array.isArray(args.command) ? "an array" : typeof args.command
+        }. String({}) is "[object Object]", which the shell would try to run.`,
+      summary: `bash — command is not a string`,
+    };
+  }
+  const command = args.command;
+  if (!command.trim()) {
+    return { code: TOOL_FAILED, content: "Empty command.", summary: "bash — empty" };
+  }
+
+  // Deny first, then the allow-list: see bashPolicy.
+  const refused = bashPolicy(command, ctx.bashAllow, ctx.bashDeny);
+  if (refused) {
+    const { rule: _rule, pattern: _pattern, ...outcome } = refused;
+    return outcome;
   }
 
   // Privilege escalation on the host is refused outright, before any approval

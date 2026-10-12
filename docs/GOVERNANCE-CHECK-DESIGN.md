@@ -126,7 +126,15 @@ send-back with the findings acts on fact.
    behaviour's tests moved onto it. No behaviour change.
 2. `gnomon check` with checks 1–4 and 6, diff-only. Tests: a fixture repo
    per failing check, plus "inspected nothing → 10".
-3. Transcript adapters (Claude Code JSONL, opencode) and check 5.
+3. Transcript adapters (Claude Code JSONL, opencode) and check 5. *Built:*
+   Claude Code session JSONL (subagent files included; a call Claude Code
+   refused is listed, not failed), `opencode export` JSON (verified on opencode
+   1.18.32) and the `opencode run --format json` event stream (envelope
+   verified live; a `tool_use` event was not, for want of a running model —
+   it reads the tool-part shape the export proves). Check 5 calls `bashPolicy`,
+   the decision `bashTool` itself makes. Plus `--install-hook claude-code` and
+   `--hook session-start|stop`, which record the session's start and judge it
+   at Stop.
 4. `gnomon init` scaffolds `[verify]` from `detectVerifyCommand` with
    `test_must_fail_first = true` and `[audit] enabled = true`, so a new surface
    governs something by default.

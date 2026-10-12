@@ -6,9 +6,9 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHECK_IDS, CHECK_STATUSES, CHECK_SCHEMA, type CheckVerdict, type ResolvedUi } from "gnomon-core";
 import { cmdCheck, renderVerdict } from "./check.js";
@@ -145,5 +145,113 @@ describe("gnomon check — through the real binary", () => {
     }
     fits(live!.audit!, fixture.audit_keys, "audit");
     expect(Object.keys(fixture.exit_codes)).toContain(String(live!.exit));
+  });
+});
+
+describe("gnomon check — the Claude Code hook", () => {
+  let repo: string;
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: repo, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  const errs: string[] = [];
+  const realError = console.error;
+
+  beforeAll(() => {
+    repo = mkdtempSync(join(tmpdir(), "gnomon-check-hook-"));
+    mkdirSync(join(repo, ".gnomon"));
+    writeFileSync(
+      join(repo, ".gnomon/roles.toml"),
+      `[roles.implement]\nmodel = "m"\nwrite_allow = ["src/**"]\nbash_deny = ['\\bgit\\s+push\\b[^|;&]*\\s--force\\b']\n`
+    );
+    writeFileSync(join(repo, ".gnomon/policy.toml"), `[verify]\ncommand = "true"\n\n[check.roles]\nclaude-code = "implement"\n`);
+    mkdirSync(join(repo, "src"));
+    writeFileSync(join(repo, "src/a.txt"), "1\n");
+    git("init", "-q");
+    git("config", "user.email", "t@example.invalid");
+    git("config", "user.name", "t");
+    git("add", "-A");
+    git("commit", "-q", "-m", "base");
+    console.error = (...a: unknown[]) => void errs.push(a.join(" "));
+  });
+  afterAll(() => {
+    console.error = realError;
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  const hook = (kind: string, input: Record<string, unknown>, flags: Record<string, string> = {}) =>
+    cmdCheck({ flags: { hook: kind, ...flags } }, () => {}, () => JSON.stringify({ cwd: repo, ...input }));
+
+  it("records the session's start once, and judges everything since at Stop", async () => {
+    // The operator's own uncommitted edit, before the session.
+    writeFileSync(join(repo, "notes.md"), "operator\n");
+    expect(await hook("session-start", { session_id: "s-1", source: "startup" })).toBe(0);
+    const state = join(git("rev-parse", "--absolute-git-dir"), "gnomon-check/sessions/s-1.json");
+    expect(existsSync(state)).toBe(true);
+    const first = readFileSync(state, "utf-8");
+    // A resume fires SessionStart again; the start it recorded stands.
+    writeFileSync(join(repo, "src/a.txt"), "2\n");
+    expect(await hook("session-start", { session_id: "s-1", source: "resume" })).toBe(0);
+    expect(readFileSync(state, "utf-8")).toBe(first);
+
+    const transcript = join(repo, "..", `${basename(repo)}-s-1.jsonl`);
+    writeFileSync(
+      transcript,
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "t", name: "Bash", input: { command: "ls" } }] } }) + "\n"
+    );
+    errs.length = 0;
+    // src/ changed, inside write_allow; notes.md predates the session; ls is allowed.
+    expect(await hook("stop", { session_id: "s-1", transcript_path: transcript }, { agent: "claude-code" })).toBe(0);
+    expect(errs).toEqual([]);
+    rmSync(transcript);
+  });
+
+  it("blocks the stop once with the findings, then lets go", async () => {
+    writeFileSync(join(repo, "outside.txt"), "x\n");
+    errs.length = 0;
+    expect(await hook("stop", { session_id: "s-1" }, { agent: "claude-code" })).toBe(2);
+    const said = errs.join("\n");
+    expect(said).toMatch(/✗ write_allow/);
+    expect(said).toMatch(/A outside\.txt/);
+    expect(said).toMatch(/governance check failed/);
+    // stop_hook_active: this is already the send-back. Report, do not block again.
+    expect(await hook("stop", { session_id: "s-1", stop_hook_active: true }, { agent: "claude-code" })).toBe(1);
+    rmSync(join(repo, "outside.txt"));
+  });
+
+  it("judges from the session's start even when the agent reset HEAD behind it", async () => {
+    // A clean tree at the start, so no snapshot is recorded: the diff must
+    // still start at the session's HEAD, not at a merge-base the reset chose.
+    git("checkout", "-q", "--", ".");
+    rmSync(join(repo, "notes.md"), { force: true });
+    const loose = git("rev-parse", "HEAD");
+    writeFileSync(
+      join(repo, ".gnomon/roles.toml"),
+      `[roles.implement]\nmodel = "m"\nwrite_allow = ["src/a.txt"]\n`
+    );
+    git("add", "-A");
+    git("commit", "-q", "-m", "tighten");
+    expect(await hook("session-start", { session_id: "s-reset", source: "startup" })).toBe(0);
+    git("reset", "-q", "--hard", loose);
+    errs.length = 0;
+    expect(await hook("stop", { session_id: "s-reset" }, { agent: "claude-code" })).toBe(2);
+    // Undoing the tightening is an edit to the surface, and it is seen.
+    expect(errs.join("\n")).toMatch(/✗ surface/);
+  });
+
+  it("stays silent where it has nothing to say: an ungoverned repo, an unsafe id", async () => {
+    const plainRepo = mkdtempSync(join(tmpdir(), "gnomon-ungoverned-"));
+    execFileSync("git", ["init", "-q"], { cwd: plainRepo });
+    expect(await cmdCheck({ flags: { hook: "stop" } }, () => {}, () => JSON.stringify({ cwd: plainRepo, session_id: "x" }))).toBe(0);
+    rmSync(plainRepo, { recursive: true, force: true });
+    expect(await hook("session-start", { session_id: "../../etc" })).toBe(0);
+    expect(existsSync(join(git("rev-parse", "--absolute-git-dir"), "gnomon-check/sessions/../../etc.json"))).toBe(false);
+  });
+
+  it("--install-hook prints a settings fragment and writes nothing", async () => {
+    const lines: string[] = [];
+    expect(await cmdCheck({ flags: { "install-hook": "claude-code" } }, (s) => lines.push(s))).toBe(0);
+    const fragment = JSON.parse(lines.join("\n")) as { hooks: Record<string, Array<{ hooks: Array<{ command: string; timeout?: number }> }>> };
+    expect(fragment.hooks.SessionStart![0]!.hooks[0]!.command).toBe("gnomon check --hook session-start");
+    expect(fragment.hooks.Stop![0]!.hooks[0]!.command).toBe("gnomon check --hook stop --agent claude-code");
+    expect(fragment.hooks.Stop![0]!.hooks[0]!.timeout).toBeGreaterThan(60);
   });
 });
