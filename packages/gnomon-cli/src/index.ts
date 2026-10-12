@@ -798,15 +798,29 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
       process.exit(1);
     }
     const probes = new Map<string, { ok: boolean; status?: number; detail?: string }>();
+    const untested: string[] = [];
     for (const row of rows) {
       const model = args.flags.model ?? row.probeModel;
-      if (!model) continue;
+      if (!model) {
+        untested.push(row.name);
+        continue;
+      }
+      row.probeModel = model;
       probes.set(row.name, await probeEndpointAuth(row.endpoint, model));
     }
     const modelChecks = await checkRoleModels(config).catch(() => null);
     printEndpoints(rows, resolveUi(config), probes, modelChecks);
+    // An endpoint with no role routed to it has no model to ask for, and was
+    // skipped without a word — `gnomon endpoint test go` printed the listing
+    // and exited 0, which reads as a pass. Say it, and do not exit 0 when the
+    // one endpoint asked about was never tested.
+    for (const n of untested) {
+      console.log(`  ${n}: NOT TESTED — no role routes here, so there is no model to ask for.`);
+      console.log(`    gnomon endpoint test ${n} --model <id>   (/models lists what it serves)`);
+    }
     const bad = [...probes.values()].filter((p) => !p.ok);
     if (bad.length > 0) process.exit(1);
+    if (name && untested.length > 0) process.exit(10);
     return;
   }
 
@@ -1888,6 +1902,25 @@ async function main(): Promise<void> {
   if (args.command === "--help" || args.command === "-h" || args.command === "help") {
     showHelp();
     return;
+  }
+
+  // One line, the way every other CLI answers it. It used to fall through to
+  // showHelp(), so the version was the first of ~100 lines and `gnomon version`
+  // was an unknown command.
+  const first = process.argv[2];
+  if (first === "--version" || first === "-v" || first === "-V" || args.command === "version") {
+    console.log(harnessBuild());
+    return;
+  }
+
+  // Reporting commands piped into a file, grep or CI log printed raw escape
+  // codes (`[1mlocal[0m`). paint() already honours NO_COLOR, so set it for
+  // them when stdout is not a terminal. Not for commands that run tools: the
+  // variable would be inherited by the project's own commands and change what
+  // they print, which is not this flag's business. FORCE_COLOR opts back in.
+  const reporting = ["endpoint", "key", "audit", "sessions", "skill", "surface", "init", "migrate", "enumerations"];
+  if (reporting.includes(args.command) && !process.stdout.isTTY && !process.env.FORCE_COLOR) {
+    process.env.NO_COLOR = "1";
   }
 
   // -p flag: print latest session ID regardless of command

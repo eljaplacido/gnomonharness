@@ -238,3 +238,40 @@ describe("gnomon loop run — exit codes are the bucket, not 0/1", () => {
     }
   });
 });
+
+describe("first-contact output", () => {
+  const CLI = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
+  const run = (args: string[], env: Record<string, string> = {}) => {
+    const r = spawnSync(process.execPath, ["--import", "tsx", CLI, ...args], {
+      encoding: "utf-8",
+      timeout: 60_000,
+      env: { ...process.env, ...env },
+    });
+    return { code: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? "") };
+  };
+
+  it.each([["--version"], ["-v"], ["version"]])("%s prints one line, not the help", (flag) => {
+    const { code, out } = run([flag]);
+    expect(code).toBe(0);
+    expect(out.trim().split("\n")).toHaveLength(1);
+    expect(out).toMatch(/^gnomon\/\d+\.\d+\.\d+/);
+  });
+
+  it("endpoint test on an endpoint nothing routes to says so and does not exit 0", () => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-eptest-"));
+    mkdirSync(join(root, ".gnomon"), { recursive: true });
+    writeFileSync(
+      join(root, ".gnomon", "config.toml"),
+      '[defaults]\n\n[endpoints.spare]\nurl = "http://127.0.0.1:9/api/chat"\nkind = "ollama"\n'
+    );
+    writeFileSync(join(root, ".gnomon", "roles.toml"), '[roles.implement]\nmodel = "stub"\n');
+    try {
+      const { code, out } = run(["endpoint", "test", "spare", "--dir", root]);
+      expect(out).toContain("spare: NOT TESTED");
+      expect(out).not.toContain("\x1b["); // piped: no raw escape codes
+      expect(code).toBe(10);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
