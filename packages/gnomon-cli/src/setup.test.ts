@@ -90,6 +90,16 @@ describe("checkReadiness — does launch's role have a model that answers?", () 
     expect(r.why).toBe(`nothing is listening on ${hostPort(url)}`);
   });
 
+  it("is not ready when only a different tag of the same model is served", async () => {
+    // init's placeholder `qwen2.5:14b-instruct` against an Ollama with
+    // `qwen2.5:7b` pulled is the same shape: a bare-prefix match would call
+    // it served and skip the picker.
+    const url = await fakeOllama();
+    const r = await checkReadiness(loadConfig(project(url, "qwen3:32b")), "implement");
+    expect(r.ready).toBe(false);
+    expect(r.why).toContain(`does not serve "qwen3:32b"`);
+  });
+
   it("is not ready when the endpoint answers but does not serve the role's model", async () => {
     // The fresh-repo case with a running Ollama that lacks the starter tag.
     const url = await fakeOllama();

@@ -107,10 +107,16 @@ export async function checkReadiness(
       ? { ready: false, why: `Ollama at ${hostPort(target.url)} is running but serves no models` }
       : { ready: true };
   }
-  // The same leniency checkRoleModels applies: `qwen3` is served as
-  // `qwen3:latest`, and calling that missing would be a false alarm.
-  const bare = target.model.split(":")[0]!;
-  const has = served.some((m) => m === target.model || m === bare || m.startsWith(bare + ":"));
+  // Lenient only for an UNTAGGED name (or `:latest`): `qwen3` is served as
+  // `qwen3:latest`, and calling that missing would be a false alarm. A tagged
+  // name must match exactly -- the bare-prefix match checkRoleModels uses
+  // would call init's placeholder `qwen2.5:14b-instruct` served whenever any
+  // `qwen2.5:*` is pulled, which is the fresh-repo case this check exists for.
+  const [bare, tag] = target.model.split(":") as [string, string | undefined];
+  const lenient = tag === undefined || tag === "latest";
+  const has = served.some(
+    (m) => m === target.model || (lenient && (m === bare || m.startsWith(bare + ":")))
+  );
   if (!has) {
     return { ready: false, why: `${where} does not serve "${target.model}"` };
   }
