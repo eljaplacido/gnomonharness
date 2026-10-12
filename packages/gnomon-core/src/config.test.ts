@@ -15,6 +15,7 @@ import {
   getRole,
   getProfile,
   routeRole,
+  resolveResilience,
   listRoles,
   listProfiles,
   isToolEnabled,
@@ -1262,5 +1263,32 @@ describe("endpoint probe timeout", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("resolveResilience: a default is not a declaration", () => {
+  // A refused local socket gets a short grace unless the surface wrote
+  // transport_grace_ms down, so the resolver has to keep the two apart -- the
+  // resolved number alone is 60000 either way.
+  const withResilience = (resilience: Record<string, unknown> | undefined) =>
+    ({ config: resilience ? { resilience } : {} }) as unknown as Parameters<typeof resolveResilience>[0];
+
+  it("marks an absent transport_grace_ms as undeclared, at the 60s default", () => {
+    const r = resolveResilience(withResilience({ attempts: 3 }));
+    expect(r.transport_grace_ms).toBe(60_000);
+    expect(r.transport_grace_declared).toBe(false);
+    expect(resolveResilience(withResilience(undefined)).transport_grace_declared).toBe(false);
+  });
+
+  it("marks a written one as declared, 0 included", () => {
+    expect(resolveResilience(withResilience({ transport_grace_ms: 60_000 })).transport_grace_declared).toBe(true);
+    const off = resolveResilience(withResilience({ transport_grace_ms: 0 }));
+    expect(off.transport_grace_declared).toBe(true);
+    expect(off.transport_grace_ms).toBe(0);
+  });
+
+  it("does not count a value it rejected as a declaration", () => {
+    expect(resolveResilience(withResilience({ transport_grace_ms: -5 })).transport_grace_declared).toBe(false);
+    expect(resolveResilience(withResilience({ transport_grace_ms: "60s" })).transport_grace_declared).toBe(false);
   });
 });

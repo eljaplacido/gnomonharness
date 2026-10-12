@@ -13,6 +13,8 @@
  * When nothing is reachable the generic defaults are used and init says so.
  */
 
+import { causeCode } from "gnomon-core";
+
 export interface DetectedModel {
   name: string;
   /** Parameters in billions, parsed from Ollama's metadata */
@@ -150,32 +152,106 @@ export async function detectModels(
   url = "http://127.0.0.1:11434/api/tags",
   timeoutMs = 3000
 ): Promise<ModelChoice> {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-    if (!res.ok) {
-      return {
-        large: FALLBACK_LARGE,
-        small: FALLBACK_SMALL,
-        detected: [],
-        fallback: `the model host answered ${res.status}`,
-      };
-    }
-    const json = (await res.json()) as {
-      models?: Array<{ name?: string; details?: { parameter_size?: string; family?: string } }>;
-    };
-    return chooseModels(
-      (json.models ?? []).map((m) => ({
-        name: m.name ?? "",
-        billions: parseParameterSize(m.details?.parameter_size),
-        family: m.details?.family ?? "",
-      })).filter((m) => m.name)
-    );
-  } catch {
+  const listing = await listOllama(url, timeoutMs);
+  if (!listing.reachable) {
     return {
       large: FALLBACK_LARGE,
       small: FALLBACK_SMALL,
       detected: [],
-      fallback: "no model host was reachable",
+      fallback:
+        listing.status !== undefined
+          ? `the model host answered ${listing.status}`
+          : "no model host was reachable",
     };
   }
+  return chooseModels(listing.models);
+}
+
+/** What an Ollama /api/tags request found, with the failure kept apart. */
+export type OllamaListing =
+  | { reachable: true; models: DetectedModel[] }
+  | {
+      reachable: false;
+      /** The socket was refused: no process holds that port. */
+      refused: boolean;
+      /** The HTTP status, when something answered but not with a listing. */
+      status?: number;
+      why: string;
+    };
+
+/** `…/api/chat` → `…/api/tags`, the listing beside it. */
+export function ollamaTagsUrl(chatUrl: string): string {
+  return chatUrl.replace(/\/api\/chat\/?$/, "/api/tags");
+}
+
+
+/**
+ * List what an Ollama-shaped endpoint serves, with sizes and families.
+ *
+ * Separate from detectModels because detection only needs a choice, and the
+ * callers that offer a pick need the list -- and need "nothing is listening"
+ * kept apart from "it answered with nothing". `gnomon endpoint add --preset
+ * ollama` used to say `no list available… Pass --model` for both, which sent
+ * someone who had simply not started Ollama off to find a tag.
+ */
+export async function listOllama(
+  url = "http://127.0.0.1:11434/api/tags",
+  timeoutMs = 3000
+): Promise<OllamaListing> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) {
+      return { reachable: false, refused: false, status: res.status, why: `answered ${res.status}` };
+    }
+    const json = (await res.json()) as {
+      models?: Array<{ name?: string; details?: { parameter_size?: string; family?: string } }>;
+    };
+    return {
+      reachable: true,
+      models: (json.models ?? [])
+        .map((m) => ({
+          name: m.name ?? "",
+          billions: parseParameterSize(m.details?.parameter_size),
+          family: m.details?.family ?? "",
+        }))
+        .filter((m) => m.name),
+    };
+  } catch (err) {
+    const errno = causeCode(err);
+    return {
+      reachable: false,
+      refused: errno === "ECONNREFUSED",
+      why: errno ?? (err instanceof Error ? err.message : String(err)),
+    };
+  }
+}
+
+/**
+ * The order to offer Ollama's models in, and which one is the default.
+ *
+ * The default is whatever `gnomon init` would have written -- chooseModels'
+ * `large` -- so a pick made at setup and a project scaffolded with Ollama
+ * running land on the same tag. After it: the other chat models, largest
+ * first (the big one is usually the one you pulled on purpose), then any
+ * whose size Ollama did not report, then the ones that cannot chat at all --
+ * last, so they are visible but never the easy choice.
+ */
+export function orderForPicking(models: readonly DetectedModel[]): {
+  ordered: DetectedModel[];
+  suggested?: string;
+  /** The `smol` tier init would choose, when there is one. */
+  small?: string;
+} {
+  if (models.length === 0) return { ordered: [] };
+  const choice = chooseModels([...models]);
+  const canChat = (m: DetectedModel) =>
+    !NOT_CHAT_FAMILIES.has(m.family) && looksLikeChatModel(m.name);
+  const rank = (m: DetectedModel) => (!canChat(m) ? 2 : m.billions > 0 ? 0 : 1);
+  const ordered = [...models].sort(
+    (a, b) => rank(a) - rank(b) || b.billions - a.billions || a.name.localeCompare(b.name)
+  );
+  const suggested = choice.fallback ? ordered[0]!.name : choice.large;
+  const at = ordered.findIndex((m) => m.name === suggested);
+  if (at > 0) ordered.unshift(...ordered.splice(at, 1));
+  return { ordered, suggested, small: choice.fallback ? undefined : choice.small };
 }

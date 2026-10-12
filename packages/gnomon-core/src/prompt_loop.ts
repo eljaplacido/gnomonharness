@@ -661,6 +661,12 @@ interface InferenceResult {
    * turn with no tool calls and no text is a different event depending on this,
    * and it was never recorded. */
   finishReason?: string;
+  /**
+   * The socket was refused by THIS machine: ECONNREFUSED to a loopback URL.
+   * Nothing is listening, and the retry policy treats that differently from a
+   * remote outage -- see callEndpointWithRetry.
+   */
+  refusedLocally?: boolean;
 }
 
 /**
@@ -869,7 +875,12 @@ async function callEndpointWithRetry(
   messages: ChatMessage[],
   tools: unknown[],
   timeoutMs: number,
-  resilience: { attempts: number; backoff_ms: number; transport_grace_ms?: number },
+  resilience: {
+    attempts: number;
+    backoff_ms: number;
+    transport_grace_ms?: number;
+    transport_grace_declared?: boolean;
+  },
   say: ((line: string) => void) | undefined,
   ui: ResolvedUi | undefined,
   signal?: AbortSignal,
@@ -920,8 +931,17 @@ async function callEndpointWithRetry(
   // It costs at most one grace period per turn, not per call: an endpoint still
   // unreachable when the grace expires returns apparatus_failure, which ends
   // the turn.
+  //
+  // One exception, and it is the first-run case. A refused socket on THIS
+  // machine (see the loopback branch in callEndpoint) gets a short grace
+  // unless the surface declares transport_grace_ms itself. The 60s default
+  // exists for a provider blip; a local server that is simply not running is
+  // not a blip, and knocking on it for a minute left a newcomer staring at
+  // eleven [retry] lines with `/quit` queued behind them. Declared, the value
+  // is honoured as written -- see the comment there for who that helps.
   const budgetMs = timeoutMs * resilience.attempts;
-  const graceMs = Math.max(0, resilience.transport_grace_ms ?? 0);
+  const declaredGraceMs = Math.max(0, resilience.transport_grace_ms ?? 0);
+  let graceMs = declaredGraceMs;
   const MAX_TRANSPORT_WAIT_MS = 8_000;
   let spentMs = 0;
   let deadline = timeoutMs;
@@ -971,6 +991,9 @@ async function callEndpointWithRetry(
     if (r.code === 0 || !RETRYABLE.has(r.code)) return r;
     last = r;
     if (signal?.aborted) return r;
+    if (r.refusedLocally && !resilience.transport_grace_declared) {
+      graceMs = Math.min(declaredGraceMs, LOCAL_REFUSED_GRACE_MS);
+    }
     if (r.code === 12 && graceMs > 0) {
       transportTries++;
       const wait = Math.min(
@@ -1003,10 +1026,9 @@ async function callEndpointWithRetry(
         // that is 55.5 seconds and eleven yellow lines before a newcomer whose
         // model server simply is not running is told so. Measured 2026-09-07.
         //
-        // This does NOT touch retry policy -- the comment on the loopback
-        // branch is right that shortening the grace would silently redefine a
-        // declared setting, and someone starting the server in another terminal
-        // is exactly who it helps. It changes only WHEN they find out.
+        // This changes only WHEN they find out. How LONG they wait is the
+        // grace above, which for a refused local socket is short unless the
+        // surface declared one -- see the comment on the loopback branch.
         if (transportTries === 1 && r.content) {
           say(paint(ui, "yellow", `  ${r.content.split("\n").join("\n  ")}`));
           say(paint(ui, "gray", `  Retrying for up to ${Math.round(graceMs / 1000)}s in case it is starting up.`));
@@ -1020,7 +1042,9 @@ async function callEndpointWithRetry(
           )
         );
       }
-      await new Promise((res) => setTimeout(res, wait));
+      if (!(await sleepUnlessAborted(wait, signal))) {
+        return { content: CANCELLED, code: 2, toolCalls: [] };
+      }
       // An endpoint that never answered did not spend a generation attempt.
       attempt--;
       continue;
@@ -1057,10 +1081,42 @@ async function callEndpointWithRetry(
           )
         );
       }
-      await new Promise((res) => setTimeout(res, wait));
+      if (!(await sleepUnlessAborted(wait, signal))) {
+        return { content: CANCELLED, code: 2, toolCalls: [] };
+      }
     }
   }
   return last!;
+}
+
+/**
+ * How long a refused LOCAL socket is knocked on when the surface does not
+ * declare transport_grace_ms. Long enough to catch a server that is in the
+ * middle of starting; short enough that "nothing is running" is the answer
+ * in seconds, not a minute.
+ */
+export const LOCAL_REFUSED_GRACE_MS = 4_000;
+
+/**
+ * Wait, unless the turn is cancelled first. False means it was.
+ *
+ * The backoff used to be a bare setTimeout, so Esc and Ctrl+C aborted the
+ * signal and then sat out the rest of the wait anyway -- up to 8s a step and
+ * a minute in all against a server that was not running.
+ */
+export function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /**
@@ -1393,13 +1449,21 @@ async function callEndpoint(
     // definite reading: the kernel answered, and no process holds that port.
     // That is worth saying plainly, with the port in it.
     //
-    // LIMIT, published rather than implied: this changes the MESSAGE, not the
-    // retry policy. `transport_grace_ms` still applies, so an unreachable
-    // endpoint is still knocked on for the configured grace before the turn
-    // ends -- the [retry] lines above say so as it happens. Shortening that for
-    // loopback would silently redefine a declared resilience setting, and a
-    // user starting the server in another terminal is exactly who the grace
-    // helps. NOT VERIFIED: no measurement of how often that second case occurs.
+    // THE RETRY RULE for this case, which changed. It used to change only the
+    // message: the inherited 60s `transport_grace_ms` default still applied,
+    // and the reason given was that shortening it would silently redefine a
+    // declared setting. But the default is not a declaration. On a first run
+    // with no server, the first message knocked for a minute, and `/quit`
+    // queued behind the retry -- so the newcomer this message is written for
+    // could not even leave.
+    //
+    // So now: when the surface DECLARES `transport_grace_ms`, it is honoured
+    // exactly, for loopback as for anything else -- someone who wrote it down
+    // may well be starting the server in another terminal. When it does not,
+    // a refused loopback socket gets LOCAL_REFUSED_GRACE_MS (a few seconds),
+    // enough for a server mid-start and no more. `refusedLocally` carries the
+    // distinction to callEndpointWithRetry; a refused REMOTE socket keeps the
+    // full grace either way, because that is the provider blip it exists for.
     if (errno === "ECONNREFUSED" && isLoopbackUrl(target.url)) {
       let where = target.url;
       try {
@@ -1420,6 +1484,7 @@ async function callEndpoint(
           `  gnomon endpoint list    # lists every endpoint and what answers\n\n` +
           `If the server IS running, it is on a different port than the surface ` +
           `declares — check [endpoints] in .gnomon/config.toml.`,
+        refusedLocally: true,
         code: classifyFailure({
           errName: err instanceof Error ? err.name : undefined,
           message: msg,
@@ -4989,6 +5054,27 @@ export const LIVE_SAFE_COMMANDS = new Set([
   "/expand",
 ]);
 
+/**
+ * The startup note for `network = false`: what it stops, and what it does not.
+ * Not process isolation -- bash is the hole, and bash_allow the remedy.
+ */
+export const NETWORK_OFF_NOTE =
+  "  note: network = false stops webfetch only — bash can still reach the network (see bash_allow)";
+
+/** The verbs that end the session. See processCommand. */
+const QUIT_COMMANDS = new Set(["/quit", "/exit", "/q"]);
+
+/**
+ * Is this line exactly one approval key -- y, n, a or s, any case?
+ *
+ * Only the single letters. "yes" or "no" typed on its own is rarer by
+ * accident and plausibly meant for the model; a lone `y` is a keystroke
+ * aimed at a prompt that was not there.
+ */
+export function isStrayApprovalKey(line: string): boolean {
+  return /^[ynas]$/i.test(line.trim());
+}
+
 export const COMMANDS: CommandSpec[] = [
   { name: "/roles", help: "List roles and models (marks the current one)" },
   { name: "/role", arg: "<name>", help: "Switch role for the rest of the session" },
@@ -6574,6 +6660,36 @@ export async function runPromptLoop(
       return;
     }
 
+    // Leaving is not something to queue. `/quit` typed during a turn waited
+    // behind it -- and behind a minute of retries when nothing was listening,
+    // which read as a harness that would not let you go. Cancel the turn and
+    // put the quit at the head of the queue, so it is the next thing the loop
+    // does once the turn unwinds and the session is saved on the way out. A
+    // second one means the first did not unwind fast enough: go now.
+    if (cancelTurn && QUIT_COMMANDS.has(verb.toLowerCase())) {
+      if (quitRequested) processCommand(trimmed, state);
+      quitRequested = true;
+      console.log(paint(uiOf(state), "gray", "  stopping the turn, then quitting"));
+      lineQueue.unshift(trimmed);
+      cancelTurn();
+      return;
+    }
+
+    // A bare approval key with no approval pending. Typed ahead, it would be
+    // sent to the model as a whole message -- measured: a `y` meant for a
+    // prompt that had already been answered spent a full turn on "The work
+    // is already done". An approval prompt reads its answer through `notify`
+    // above, never this queue, so a line reaching here was not answering one.
+    // TTY only: on a pipe the script's next line IS the answer to a prompt
+    // that has not been drawn yet, and dropping it would decline the call.
+    if (process.stdin.isTTY && isStrayApprovalKey(trimmed)) {
+      console.log(
+        paint(uiOf(state), "gray", `  ignored "${trimmed}" — no approval is pending`)
+      );
+      activeProgress?.resume();
+      return;
+    }
+
     lineQueue.push(line);
     // Reaching here at all means nothing was waiting on the line — the harness
     // is busy. Acknowledging only when a *cancellable turn* was running left
@@ -6618,6 +6734,8 @@ export async function runPromptLoop(
   // nothing, so a stray Esc cannot end the session. Ctrl+C does the same
   // mid-turn and only exits when nothing is running.
   let cancelTurn: (() => void) | null = null;
+  // Set by a `/quit` typed mid-turn; a second one exits without waiting.
+  let quitRequested = false;
   // The progress line of the turn in flight, so typing can silence it.
   let activeProgress: InstanceType<typeof Progress> | null = null;
   // True while the session picker owns the keyboard.
@@ -7074,17 +7192,10 @@ export async function runPromptLoop(
     const networkDeclared =
       (policy.sandbox as { network?: boolean } | undefined)?.network;
     if (sandboxLevel !== "off" && networkDeclared === false) {
-      console.log(
-        paint(
-          ui,
-          "yellow",
-          "  note: policy.toml declares network = false. It is enforced for " +
-            "the `webfetch` tool, which refuses outright. It is NOT process " +
-            "isolation: `bash` can still reach the network through curl, a " +
-            "package manager, or anything else installed. Constrain that with " +
-            "bash_allow if it matters."
-        )
-      );
+      // One line. It printed four on every launch, which is a wall nobody
+      // reads by the third session; the substance fits in one, and `/network`
+      // and `gnomon explain` carry the long form for whoever asks.
+      console.log(paint(ui, "yellow", NETWORK_OFF_NOTE));
     }
     // No declared check means no turn is ever checked: "done" is the model's
     // belief and nothing in the loop can contradict it. Say so at the door,
