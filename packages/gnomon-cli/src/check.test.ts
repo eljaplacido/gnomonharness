@@ -217,6 +217,26 @@ describe("gnomon check — the Claude Code hook", () => {
     rmSync(join(repo, "outside.txt"));
   });
 
+  it("judges from the session's start even when the agent reset HEAD behind it", async () => {
+    // A clean tree at the start, so no snapshot is recorded: the diff must
+    // still start at the session's HEAD, not at a merge-base the reset chose.
+    git("checkout", "-q", "--", ".");
+    rmSync(join(repo, "notes.md"), { force: true });
+    const loose = git("rev-parse", "HEAD");
+    writeFileSync(
+      join(repo, ".gnomon/roles.toml"),
+      `[roles.implement]\nmodel = "m"\nwrite_allow = ["src/a.txt"]\n`
+    );
+    git("add", "-A");
+    git("commit", "-q", "-m", "tighten");
+    expect(await hook("session-start", { session_id: "s-reset", source: "startup" })).toBe(0);
+    git("reset", "-q", "--hard", loose);
+    errs.length = 0;
+    expect(await hook("stop", { session_id: "s-reset" }, { agent: "claude-code" })).toBe(2);
+    // Undoing the tightening is an edit to the surface, and it is seen.
+    expect(errs.join("\n")).toMatch(/✗ surface/);
+  });
+
   it("stays silent where it has nothing to say: an ungoverned repo, an unsafe id", async () => {
     const plainRepo = mkdtempSync(join(tmpdir(), "gnomon-ungoverned-"));
     execFileSync("git", ["init", "-q"], { cwd: plainRepo });

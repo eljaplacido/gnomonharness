@@ -180,7 +180,11 @@ async function runHook(kind: string, args: CheckCliArgs, raw: string): Promise<n
   const verdict = await runCheck({
     dir: cwd,
     base: state.head,
-    snapshot: state.snapshot,
+    // The diff starts where the session started, never at a merge-base: the
+    // session's HEAD is exactly what the agent was handed, and one that ran
+    // `git reset --hard` to an older commit undid commits — a policy
+    // tightening among them — that a merge-base diff would not show.
+    snapshot: state.snapshot ?? state.head,
     preexisting: state.untracked,
     role: args.role,
     agent: flagOf(args, "agent"),
