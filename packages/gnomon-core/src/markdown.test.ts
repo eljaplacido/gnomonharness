@@ -235,6 +235,16 @@ describe("text is never lost", () => {
     expect(r).toContain("Final.");
   });
 
+  it("draws the fence language as the top of the code gutter, not a bare word", () => {
+    const lines = renderMarkdown(["```js", "const a = 1;", "```"].join("\n"), ui, 80);
+    const head = lines.findIndex((l) => l.includes("js"));
+    // Joined to the block below it, at the gutter's column...
+    expect(lines[head]).toBe("  ┌ js");
+    expect(lines[head + 1]).toMatch(/^  │ const a = 1;/);
+    // ...and never alone on a line, where it read as part of the answer.
+    expect(lines.some((l) => l.trim() === "js")).toBe(false);
+  });
+
   it("does not eat a shell glob", () => {
     expect(plain(renderInline("run `x` then rm *.log and *.tmp", ui))).toContain("*.log");
   });

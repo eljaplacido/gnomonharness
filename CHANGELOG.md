@@ -52,6 +52,34 @@ Linux on ubuntu-22.04 (glibc 2.35), the installer runs each binary after placing
 it and warns when one does not load, and the release's `SHA256SUMS` now covers
 the npm tarballs too.
 
+**First run, measured against a fresh repo with nothing listening (2026-10-11).**
+`gnomon launch` wrote placeholder tags, called them "very likely wrong — edit
+them", started a session that could not answer, and the first message then
+knocked on a dead port for a minute with `/quit` queued behind it.
+
+- **`launch` offers model setup before the session starts.** On a terminal,
+  when the role's endpoint does not answer or does not serve its model, a
+  picker offers Ollama, OpenRouter, OpenCode Go/Zen, a custom URL, or skip. It
+  is the `endpoint add` flow: key held outside the surface, one token through
+  the endpoint before anything is written. The "Next: run `gnomon prompt`" it
+  printed while starting the session itself is gone. Off a terminal, nothing
+  changes.
+- **`endpoint add --preset ollama` picks from what Ollama serves.** A numbered
+  list, defaulting to the model `init` would choose, embedding models last.
+  When Ollama is not running it says so and how to start it (`ollama serve`),
+  instead of `no list available… Pass --model`.
+- **A refused local socket fails in seconds, not a minute.** When
+  `transport_grace_ms` is not declared, ECONNREFUSED to a loopback URL gets a
+  4s grace; a declared value is honoured as written. New scaffolds leave it
+  undeclared. Esc, Ctrl+C and `/quit` now end the retry wait at once — the
+  backoff was a bare timer that ignored the cancelled turn.
+- **A stray approval key is not a message.** A lone `y`/`n`/`a`/`s` typed
+  while no approval is pending is dropped with a one-line note instead of
+  spending a model turn (on a terminal only — a piped script's next line is
+  still the answer to the next prompt).
+- The `network = false` startup note is one line, and a code fence's language
+  is drawn as the top of its gutter (`┌ js`) instead of a bare word.
+
 **Daily interactive use, from one real session (2026-09-29).** An operator asked
 for a recap; the turn ran 112+ tool calls of implementation, re-ran
 `pnpm run verify` about twelve times, and printed "edit ×7 · nothing changed".
