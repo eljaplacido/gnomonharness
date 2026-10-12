@@ -308,6 +308,15 @@ main() {
     # `--version` is one line on newer releases and the help text on older
     # ones, whose first line is the same build string.
     say "  $("$GNOMON" --version 2>&1 | head -n 1)"
+    # Ask the installed gnomon itself to find a native binary. Releases up to
+    # 0.2.3 do not search $BIN_DIR, so for them the binaries are placed,
+    # verified, run — and then "native binary not found" on first use.
+    if [ -z "$NATIVE_NOTE" ] && [ "${GNOMON_NO_NATIVE:-}" != "1" ]; then
+        if ! (cd "$WORK" && unset GNOMON_BIN_OVERRIDE && "$GNOMON" enumerations) >/dev/null 2>&1; then
+            NATIVE_NOTE="gnomon $VERSION does not look in $BIN_DIR by itself. Until a newer release, add this to your shell profile:
+    export GNOMON_BIN_OVERRIDE=\"$BIN_DIR\""
+        fi
+    fi
     [ -n "$NATIVE_NOTE" ] && say "  note: $NATIVE_NOTE"
 
     case ":$PATH:" in

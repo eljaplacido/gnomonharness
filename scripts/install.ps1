@@ -152,6 +152,24 @@ function Install-Gnomon {
         if (-not (Test-Path $gnomon)) { throw "npm reported success but $gnomon does not exist" }
         $first = First-Line (Invoke-Native $gnomon @('--version'))
         Write-Host "  $first"
+        # Ask the installed gnomon itself to find a native binary. Releases up
+        # to 0.2.3 do not search $binDir, so for them the binaries are placed,
+        # verified, run -- and then "native binary not found" on first use.
+        if (-not $note -and $env:GNOMON_NO_NATIVE -ne '1') {
+            $savedOverride = $env:GNOMON_BIN_OVERRIDE
+            Remove-Item Env:GNOMON_BIN_OVERRIDE -ErrorAction SilentlyContinue
+            Push-Location $work
+            try {
+                Invoke-Native $gnomon @('enumerations') | Out-Null
+                $found = ($LASTEXITCODE -eq 0)
+            } finally {
+                Pop-Location
+                if ($savedOverride) { $env:GNOMON_BIN_OVERRIDE = $savedOverride }
+            }
+            if (-not $found) {
+                $note = "gnomon $version does not look in $binDir by itself. Until a newer release, set this for your user:`n    [Environment]::SetEnvironmentVariable('GNOMON_BIN_OVERRIDE', '$binDir', 'User')"
+            }
+        }
         if ($note) { Write-Host "  note: $note" }
 
         $onPath = ($env:Path -split ';') | Where-Object { $_.TrimEnd('\') -ieq $prefix.TrimEnd('\') }
