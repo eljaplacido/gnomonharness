@@ -81,7 +81,12 @@ attempts = 3              # generation retries. 1 disables THESE; transport
                           # attempts = 1 still knocks for the full grace.
 backoff_ms = 500          # doubled each attempt
 request_timeout_ms = 300000   # a reasoning model on a hard task exceeds 120s; a timed-out attempt doubles this
-transport_grace_ms = 60000    # an endpoint refusing the socket is not an attempt; keep knocking this long (0 disables)
+# An endpoint refusing the socket is not an attempt; it is knocked on for a
+# grace instead (0 disables). Left undeclared on purpose: undeclared, a remote
+# endpoint gets 60s (a provider blip) but a server on THIS machine that refuses
+# outright gets a few seconds -- nothing is running there, and a first session
+# should say so, not retry for a minute. Declare it to knock that long on both.
+# transport_grace_ms = 60000
 
 [turn]
 # The numbers that decide when a turn stops, is nudged, or is pushed to
