@@ -214,10 +214,13 @@ function addKeyToSection(text: string, section: string, key: string, value: stri
     if (header[1].trim() === section) start = i;
   }
   if (start < 0) return null;
+  // After the section's last line of content — not its last `key =` line: a
+  // multi-line value (`test_paths = [` … `]`) ends below the line that opens
+  // it, and inserting after the opener wrote the new key inside the array.
   let last = start;
   for (let i = start + 1; i < end; i++) {
     if (new RegExp(`^\\s*${key}\\s*=`).test(lines[i])) return null;
-    if (/^\s*[A-Za-z0-9_"'-]+\s*=/.test(lines[i])) last = i;
+    if (lines[i].trim() && !lines[i].trim().startsWith("#")) last = i;
   }
   lines.splice(last + 1, 0, `${key} = ${value}`);
   return lines.join("\n");

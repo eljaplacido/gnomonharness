@@ -133,6 +133,15 @@ describe("gnomon migrate — governance defaults (2026-10)", () => {
     expect(pendingMigrations(gnomonDir)).toEqual([]);
   });
 
+  it("adds test_must_fail_first after a multi-line value, not inside it", () => {
+    policy(`[verify]\ncommand = "pytest -q"\ntest_paths = [\n  "tests/**",\n  "spec/**",\n]\n\n[approval]\ngate = "on_write"\n`);
+    applyMigrations(pendingMigrations(gnomonDir));
+    expect(readPolicy()).toBe(
+      `[verify]\ncommand = "pytest -q"\ntest_paths = [\n  "tests/**",\n  "spec/**",\n]\n` +
+        `test_must_fail_first = true  # a new test must fail on the code as it was\n\n[approval]\ngate = "on_write"\n`
+    );
+  });
+
   it("leaves a stated test_must_fail_first alone, even false; a comment is not a statement", () => {
     policy(`[verify]\ncommand = "pytest -q"\ntest_must_fail_first = false\n`);
     expect(pendingMigrations(gnomonDir)).toEqual([]);
