@@ -46,8 +46,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1198 TypeScript tests (1027 core, 150 cli, 14
-> natives, 7 tui) and 60 Rust tests — **1258 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1200 TypeScript tests (1028 core, 151 cli, 14
+> natives, 7 tui) and 60 Rust tests — **1260 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1637,7 +1637,7 @@ Neither gives a role → exit 10. A role is never guessed.
 audit verify` reads like any other — **even when `[audit] enabled = false`**.
 That flag decides what the loop records about sessions; a check verdict holds no
 model text and exists to be cited. `--json` carries the record's `hash`, so a
-caller with its own chain (factoryctl) stores it and gnomon's record names the
+caller with its own audit chain stores it and gnomon's record names the
 caller's base, head and agent back.
 
 **In every Claude Code session.** `gnomon check --install-hook claude-code`
