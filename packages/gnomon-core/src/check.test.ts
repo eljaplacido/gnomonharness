@@ -318,6 +318,24 @@ describe("gnomon check — head as a revision", () => {
     expect(v.base).toBe(base);
     expect(byId(v, "write_allow")).toMatchObject({ status: "pass", inspected: 1 });
   });
+
+  it("reads the rules from the base given, not from a merge-base head's history chose", async () => {
+    // Permissive policy first, then a tightening. Head is built on the commit
+    // BEFORE the tightening (a reset, or a branch rebased onto an old commit),
+    // so merge-base(base, head) is the permissive commit.
+    surface();
+    put(".gnomon/roles.toml", `[roles.implement]\nmodel = "m"\n`);
+    const loose = commit("loose");
+    surface();
+    const tight = commit("tight");
+    sh(["checkout", "-q", "-b", "work", loose]);
+    put("infra/env.txt", "SECRET=1\n");
+    const head = commit("work");
+    const v = await runCheck({ dir: repo, base: tight, head, role: "implement" });
+    expect(v.base).toBe(loose); // the diff still starts at the merge-base
+    expect(byId(v, "write_allow")).toMatchObject({ status: "fail", findings: [{ path: "infra/env.txt" }] });
+    expect(v.exit).toBe(2);
+  });
 });
 
 describe("gnomon check — an interrupted re-run", () => {
