@@ -433,7 +433,10 @@ function renderBlocks(src: string, ui: ResolvedUi, width: number): string[] {
       if (isDiagramLanguage(lang)) {
         out.push(...renderDiagram(block.join("\n"), ui, body));
       } else {
-        if (lang) out.push(paint(ui, "gray", `  ${lang}`));
+        // The language as the top of the gutter, not a line of its own. A
+        // bare `  js` above the block read as a stray word of the answer --
+        // with colour off, or in a scrollback copy, it was exactly that.
+        if (lang) out.push(paint(ui, "gray", `  ┌ ${lang}`));
         // Long code lines are cut, not reflowed: a wrapped line of code is a
         // different line of code.
         for (const l of block) {
