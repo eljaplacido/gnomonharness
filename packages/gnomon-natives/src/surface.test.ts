@@ -8,11 +8,13 @@ import {
   enumerations,
   version,
   findBinary,
+  machineDataDir,
+  installedBinDir,
   GNONOM_VERSION,
 } from "./surface.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -170,6 +172,71 @@ describe("finding the native binaries", () => {
       if (original === undefined) delete process.env.GNOMON_BIN_OVERRIDE;
       else process.env.GNOMON_BIN_OVERRIDE = original;
     }
+  });
+});
+
+describe("binaries the installer placed are found with no variable set", () => {
+  // v0.2.3's tarball install left every native-only command failing until the
+  // user exported GNOMON_BIN_OVERRIDE by hand. The installers now write the
+  // binaries to installedBinDir(); this pins that the lookup reads the same
+  // place, so the two cannot drift apart without a red test.
+  const withState = (fn: (data: string) => void) => {
+    const saved = { xdg: process.env.XDG_DATA_HOME, override: process.env.GNOMON_BIN_OVERRIDE };
+    const data = mkdtempSync(join(tmpdir(), "gnomon-xdg-"));
+    process.env.XDG_DATA_HOME = data;
+    delete process.env.GNOMON_BIN_OVERRIDE;
+    try {
+      fn(data);
+    } finally {
+      rmSync(data, { recursive: true, force: true });
+      if (saved.xdg === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = saved.xdg;
+      if (saved.override === undefined) delete process.env.GNOMON_BIN_OVERRIDE;
+      else process.env.GNOMON_BIN_OVERRIDE = saved.override;
+    }
+  };
+  const exe = (n: string) => (process.platform === "win32" ? n + ".exe" : n);
+
+  it("lives under the machine data dir, never under the project", () => {
+    withState((data) => {
+      expect(machineDataDir()).toBe(join(data, "gnomon"));
+      expect(installedBinDir()).toBe(join(data, "gnomon", "bin"));
+    });
+  });
+
+  it("finds a binary in installedBinDir()", () => {
+    withState(() => {
+      mkdirSync(installedBinDir(), { recursive: true });
+      const placed = join(installedBinDir(), exe("gnomon-installed-probe"));
+      writeFileSync(placed, "#!/bin/sh\nexit 0\n");
+      expect(findBinary("gnomon-installed-probe")).toBe(placed);
+    });
+  });
+
+  it("an explicit override still wins over the installed copy", () => {
+    withState((data) => {
+      mkdirSync(installedBinDir(), { recursive: true });
+      writeFileSync(join(installedBinDir(), exe("gnomon-installed-probe")), "");
+      const other = join(data, "elsewhere");
+      mkdirSync(other);
+      const chosen = join(other, exe("gnomon-installed-probe"));
+      writeFileSync(chosen, "");
+      process.env.GNOMON_BIN_OVERRIDE = other;
+      expect(findBinary("gnomon-installed-probe")).toBe(chosen);
+    });
+  });
+
+  it("the not-found message names the installer and where it installs", () => {
+    withState(() => {
+      let message = "";
+      try {
+        findBinary("gnomon-installed-probe");
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      expect(message).toContain(installedBinDir());
+      expect(message).toMatch(/scripts\/install\.(sh|ps1)/);
+    });
   });
 });
 
