@@ -26,6 +26,8 @@ export * from "./prompt_loop.js";
 export * from "./degradation.js";
 export * from "./render.js";
 export * from "./tools.js";
+// The test-must-fail-first re-run, shared by the turn loop and `gnomon check`.
+export * from "./must_fail_first.js";
 export * from "./skills.js";
 export * from "./audit.js";
 // Provenance. Not exported until 2026-09-03, which is why the CLI's own help
