@@ -1391,6 +1391,10 @@ const KNOWN_BLOCKS = new Set([
   // and gets silence -- the inert-setting failure this project exists to make
   // impossible. These numbers decide when a TURN stops.
   "turn",
+  // [check.roles] in policy.toml: which role `gnomon check` judges another
+  // harness's agent by. Listed with the feature, for the reason [chain] above
+  // gives.
+  "check",
 ]);
 
 /**
@@ -1496,6 +1500,8 @@ const BLOCK_OWNER: Record<string, BlockOwner> = {
   verify: { file: "policy.toml", read: true },
   approval: { file: "policy.toml", read: true },
   sandbox: { file: "policy.toml", read: true },
+  // resolveCheckRole (check.ts) reads config.policy.check.roles.
+  check: { file: "policy.toml", read: true },
   // NOT read: no consumer of config.policy.exit_codes anywhere in this build.
   exit_codes: { file: "policy.toml", read: false },
   endpoints: { file: "config.toml", read: true },

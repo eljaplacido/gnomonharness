@@ -133,6 +133,7 @@ import { buildToolSet, needsApproval, ApprovalGate } from "./tools.js";
 import { loadSkills, selectSkills } from "./skills.js";
 import { resolveAudit, verifyTrail, AuditRecord, AuditDetail } from "./audit.js";
 import { harnessBuild } from "./build.js";
+import { checkExit, type CheckId, type CheckStatus } from "./check.js";
 
 // ---------------------------------------------------------------------------
 // The partition this module is built on
@@ -962,6 +963,18 @@ export function replay(
             "trail",
             "the record carries a verdict but no exit status to derive it from"
           );
+        }
+        break;
+      }
+
+      case "check": {
+        // A `gnomon check` verdict. The checks themselves read a repository
+        // at two revisions this replay does not have, so the one thing it can
+        // re-derive is whether the exit follows from the statuses recorded.
+        if (Array.isArray(record.checks) && typeof record.exit === "number") {
+          tcmp(e, "check.exit", record.exit, checkExit(record.checks as Array<{ id: CheckId; status: CheckStatus }>));
+        } else {
+          uncheckable(e, "check.exit", "trail", "the record carries no checks or no exit to compare");
         }
         break;
       }

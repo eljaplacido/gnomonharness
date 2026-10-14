@@ -94,6 +94,7 @@ import {
   hostPort,
 } from "./setup.js";
 import { pendingMigrations, applyMigrations, MIGRATIONS } from "./migrate.js";
+import { cmdCheck } from "./check.js";
 
 // ---------------------------------------------------------------------------
 // Argument parsing (minimal, no deps)
@@ -1765,6 +1766,7 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "loop", aliases: ["loops"] },
   { name: "tui" },
   { name: "migrate" },
+  { name: "check" },
 ];
 
 function showHelp(): void {
@@ -1848,6 +1850,16 @@ Commands:
 
   tui [--dir <path>]
     Read a saved session back: turns, tools, buckets.
+
+  check --base <rev> [--head <rev>] [--role <role> | --agent <name>] [--json]
+    Judge a change another harness made (Claude Code, opencode, a CI
+    branch) by this surface's rules, as they stood at <rev>: every changed
+    path inside the role's write_allow, .gnomon/ not edited, [verify] passes
+    on head, a new test fails on the old sources (test_must_fail_first).
+    --head defaults to the working tree. The role is --role, else
+    [check.roles] in policy.toml maps --agent to one; never guessed. The
+    verdict is appended to the hash-chained audit trail; --json carries
+    the record's hash. Exit: 0 held, 2 a check failed, 10 no verdict.
 
   prompt [--continue | --resume <id>]
     Interactive agent loop. --continue resumes the most recent session,
@@ -1992,6 +2004,8 @@ async function main(): Promise<void> {
     case "tui":
       await cmdTui(args);
       break;
+    case "check":
+      process.exit(await cmdCheck(args));
     default:
       console.error(`Unknown command: ${args.command}`);
       showHelp();
