@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { parseParameterSize, chooseModels, detectModels, DetectedModel, FALLBACK_LARGE, FALLBACK_SMALL, looksLikeChatModel, suggestChatModel } from "./detect.js";
+import { parseParameterSize, chooseModels, detectModels, DetectedModel, FALLBACK_LARGE, FALLBACK_SMALL, looksLikeChatModel, suggestChatModel, listOllama, orderForPicking, ollamaTagsUrl } from "./detect.js";
 
 const m = (name: string, billions: number, family = "qwen2"): DetectedModel => ({
   name, billions, family,
@@ -177,5 +177,93 @@ describe("suggesting a model from names alone", () => {
 
   it("has nothing to suggest for an empty list", () => {
     expect(suggestChatModel([])).toBeUndefined();
+  });
+});
+
+describe("listOllama — not running and running-empty are different answers", () => {
+  const withFetch = async (impl: typeof fetch, run: () => Promise<void>) => {
+    const original = globalThis.fetch;
+    globalThis.fetch = impl;
+    try { await run(); } finally { globalThis.fetch = original; }
+  };
+
+  it("calls a refused socket refused, from the errno Node hides on .cause", async () => {
+    await withFetch(
+      (async () => {
+        throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+      }) as unknown as typeof fetch,
+      async () => {
+        const r = await listOllama();
+        expect(r.reachable).toBe(false);
+        expect(r.reachable === false && r.refused).toBe(true);
+      }
+    );
+  });
+
+  it("keeps a status apart from a refusal", async () => {
+    await withFetch(
+      (async () => ({ ok: false, status: 503 })) as unknown as typeof fetch,
+      async () => {
+        const r = await listOllama();
+        expect(r.reachable === false && !r.refused && r.status === 503).toBe(true);
+      }
+    );
+  });
+
+  it("reads sizes and families from a listing", async () => {
+    await withFetch(
+      (async () => ({
+        ok: true,
+        json: async () => ({ models: [{ name: "qwen3:8b", details: { parameter_size: "8.2B", family: "qwen3" } }] }),
+      })) as unknown as typeof fetch,
+      async () => {
+        const r = await listOllama();
+        expect(r).toEqual({ reachable: true, models: [{ name: "qwen3:8b", billions: 8.2, family: "qwen3" }] });
+      }
+    );
+  });
+
+  it("finds the listing beside the chat URL", () => {
+    expect(ollamaTagsUrl("http://127.0.0.1:11434/api/chat")).toBe("http://127.0.0.1:11434/api/tags");
+  });
+});
+
+describe("orderForPicking — what `endpoint add --preset ollama` offers first", () => {
+  const served = [
+    m("bge-m3:latest", 0.57, "bert"),
+    m("gemma3:4b", 4.3, "gemma3"),
+    m("nemotron-3-super:120b", 120, "nemotron"),
+    m("qwen3.6:35b", 36, "qwen3moe"),
+    m("mystery:latest", 0, "llama"),
+    m("qwen3:8b", 8.2, "qwen3"),
+  ];
+
+  it("defaults to the model init would choose, and lists it first", () => {
+    const { ordered, suggested, small } = orderForPicking(served);
+    expect(suggested).toBe(chooseModels([...served]).large);
+    expect(suggested).toBe("qwen3.6:35b");
+    expect(ordered[0]!.name).toBe("qwen3.6:35b");
+    expect(small).toBe("qwen3:8b");
+  });
+
+  it("then chat models largest first, unknown sizes after, embeddings last", () => {
+    const names = orderForPicking(served).ordered.map((x) => x.name);
+    expect(names).toEqual([
+      "qwen3.6:35b",
+      "nemotron-3-super:120b",
+      "qwen3:8b",
+      "gemma3:4b",
+      "mystery:latest",
+      "bge-m3:latest",
+    ]);
+  });
+
+  it("still suggests something when no size was reported", () => {
+    const { suggested } = orderForPicking([m("bge-m3:latest", 0, "bert"), m("custom:latest", 0, "llama")]);
+    expect(suggested).toBe("custom:latest");
+  });
+
+  it("has nothing to offer for an empty list", () => {
+    expect(orderForPicking([])).toEqual({ ordered: [] });
   });
 });

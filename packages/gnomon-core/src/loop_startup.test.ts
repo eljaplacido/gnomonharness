@@ -442,9 +442,12 @@ tools = ["read", "bash"]
     expect(note).toContain("webfetch");
     // what it does not,
     expect(note).toContain("bash");
-    expect(note).toMatch(/NOT process isolation/);
+    expect(note).toMatch(/webfetch only/);
     // and what to do instead -- a limit published without a remedy is a shrug.
     expect(note).toContain("bash_allow");
+    // On one line. It was a 4-line wall at 110 columns on every launch, and a
+    // note printed every time has to be short enough to keep being read.
+    expect(note!.replace(/\x1b\[[0-9;]*m/g, "").length).toBeLessThanOrEqual(100);
   }, 15000);
 
   it("says nothing when the surface never declared network = false", async () => {
@@ -470,7 +473,7 @@ tools = ["read", "bash"]
 
     const r = await run(dir, []);
     expect(r.lines.some((l) => l.includes("network = false"))).toBe(false);
-    expect(r.lines.some((l) => l.includes("NOT process isolation"))).toBe(false);
+    expect(r.lines.some((l) => l.includes("webfetch only"))).toBe(false);
   }, 15000);
 });
 

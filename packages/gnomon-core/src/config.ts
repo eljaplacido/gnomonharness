@@ -2315,7 +2315,36 @@ export async function probeEndpointAuth(
     const text = (await res.text().catch(() => "")).slice(0, 300);
     return { ok: false, status: res.status, detail: text || res.statusText };
   } catch (err) {
-    return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    // Node's fetch says "fetch failed" for a refusal, a DNS miss and a TLS
+    // error alike; the real errno hangs off `.cause`. `endpoint test` printed
+    // "✗ fetch failed" for an Ollama that simply was not started.
+    let code: string | undefined;
+    for (let cur: unknown = err, i = 0; i < 8 && cur && !code; i++) {
+      const c = (cur as { code?: unknown }).code;
+      if (typeof c === "string") code = c;
+      cur = (cur as { cause?: unknown }).cause;
+    }
+    let where = endpoint.url;
+    try {
+      const u = new URL(endpoint.url);
+      where = `${u.hostname}:${u.port || (u.protocol === "https:" ? "443" : "80")}`;
+    } catch {
+      /* keep the raw URL */
+    }
+    if (code === "ECONNREFUSED") {
+      const local = /^(localhost|127\.|\[?::1\]?$)/.test(where);
+      return {
+        ok: false,
+        detail: local
+          ? `nothing is listening on ${where} — start the model server (\`ollama serve\` for Ollama)`
+          : `connection refused by ${where}`,
+      };
+    }
+    if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
+      return { ok: false, detail: `cannot resolve ${where} (${code}) — check the URL and the network` };
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, detail: code ? `${msg} (${code})` : msg };
   }
 }
 
@@ -2783,6 +2812,12 @@ export interface ResolvedResilience {
    * `attempts`.
    */
   transport_grace_ms: number;
+  /**
+   * Whether the surface wrote transport_grace_ms down. A refused socket on
+   * this machine gets a short grace unless it did -- a default is not a
+   * declaration. See the loopback branch in callEndpoint.
+   */
+  transport_grace_declared: boolean;
 }
 
 /**
@@ -2815,6 +2850,7 @@ export function resolveResilience(config: GnomonConfig): ResolvedResilience {
     // 900s harness wall. It is spent at most once per turn, because an
     // endpoint that is still unreachable afterwards ends the turn.
     transport_grace_ms: Math.floor(num(r?.transport_grace_ms, 60_000)),
+    transport_grace_declared: num(r?.transport_grace_ms, -1) >= 0,
   };
 }
 

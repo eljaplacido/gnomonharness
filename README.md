@@ -46,8 +46,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1192 TypeScript tests (1028 core, 143 cli, 14
-> natives, 7 tui) and 60 Rust tests — **1252 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1224 TypeScript tests (1037 core, 166 cli, 14
+> natives, 7 tui) and 60 Rust tests — **1284 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1597,9 +1597,8 @@ repository alone:
 # CI: judge the branch against the rules as they stood on main
 gnomon check --base origin/main --head HEAD --role implement
 
-# after an agent finished, on its uncommitted work and its shell commands
-gnomon check --base "$SESSION_START_REV" --agent frontend-developer \
-  --transcript ~/.claude/projects/<project>/<session>.jsonl --format claude-code --json
+# after an agent finished, on its uncommitted work
+gnomon check --base "$SESSION_START_REV" --agent frontend-developer --json
 ```
 
 | # | Check | Fails when |
@@ -1608,7 +1607,7 @@ gnomon check --base "$SESSION_START_REV" --agent frontend-developer \
 | 2 | `surface` | the change edits `.gnomon/` — an agent may not edit its own rules |
 | 3 | `verify` | the `[verify]` command fails on head |
 | 4 | `must_fail_first` | a new or changed test still passes with every other file put back to base — it pins nothing (only when `test_must_fail_first = true` and the change touched a test) |
-| 5 | `bash_allow` | a shell command in the agent's transcript (`--transcript <file> --format claude-code\|opencode`) breaks the role's `bash_allow` / `bash_deny`. A command the harness itself refused is listed, not failed |
+| 5 | `bash_allow` | always `skipped` in this build — transcript adapters (Claude Code, opencode) are the next step |
 | 6 | `audit` | the verdict could not be appended to the hash-chained trail |
 
 The rules come from **`--base`, never from head**: a change that widens its own
@@ -1635,30 +1634,6 @@ That flag decides what the loop records about sessions; a check verdict holds no
 model text and exists to be cited. `--json` carries the record's `hash`, so a
 caller with its own audit chain stores it and gnomon's record names the
 caller's base, head and agent back.
-
-**In every Claude Code session.** `gnomon check --install-hook claude-code`
-prints this, for `.claude/settings.json` (or `~/.claude/settings.json`; a repo
-with no `.gnomon/` is skipped). It writes nothing itself:
-
-```json
-{
-  "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "gnomon check --hook session-start" }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "gnomon check --hook stop --agent claude-code", "timeout": 900 }] }]
-  }
-}
-```
-
-SessionStart reads the hook's JSON (`session_id`, `cwd`) and records `HEAD`
-— plus a `git stash create` snapshot when the tree is dirty, and the untracked
-files already there — under `.git/gnomon-check/`, so the operator's own
-uncommitted work is not charged to the agent. Stop runs the equivalent of
-`gnomon check --base <session-start rev> --transcript "$transcript_path"
---format claude-code` with the rest of the hook input. A failure exits 2, which
-blocks the stop and hands Claude the findings — once; on the second stop in a
-row (`stop_hook_active`) it reports and lets go. A turn that changed nothing is
-silent. Map the agent to a role with `claude-code = "implement"` under
-`[check.roles]`, or put `--role <role>` in the command.
 
 `--head` defaults to the working tree, and must-fail-first then rewrites source
 files in place for one re-run. Their bytes are journaled inside `.git/` first:
