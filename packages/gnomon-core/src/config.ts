@@ -1335,14 +1335,23 @@ const EXECUTING_ARGS: ExecutingArg[] = [
     deny: ["\\benv\\b"],
     note: "Nothing else in bash_allow is affected.",
   },
+  // A shell NAME, not a script path (#46). With a bare \b, the `sh` of
+  // `^\.gnomon/(ci|verify)\.sh$` counted -- \b holds after the '.' -- so a role
+  // allowed exactly two scripts was told it admits a shell. Worse, the remedy
+  // was the same unanchored pattern, which matches `.gnomon/ci.sh` itself; deny
+  // wins, so applying it locked the verifier out of the gate it exists to run.
+  // A name preceded by '.' is an extension and one followed by '/' is a
+  // directory; `/bin/sh` is still a shell. The deny is anchored to the command
+  // position, so it refuses `bash -c …`, `/bin/sh x` and `ls; sh x` but not a
+  // path that merely ends in .sh.
   {
-    admits: /\b(sh|bash|zsh|ksh|dash)\b/,
+    admits: /(?<![\w.])(sh|bash|zsh|ksh|dash)\b(?!\/)/,
     why: "a shell (runs anything)",
-    guard: /\b(sh|bash|zsh|ksh|dash)\b|-c\b/,
-    deny: ["\\b(sh|bash|zsh|ksh|dash)\\b"],
+    guard: /(?<![\w.])(sh|bash|zsh|ksh|dash)\b(?!\/)|-c\b/,
+    deny: ["(^|[;&|(]\\s*)(\\S*/)?(sh|bash|zsh|ksh|dash)(\\s|$)"],
     note:
-      "Deny wins over allow, so this also stops any bash_allow entry that spells " +
-      "a shell. If you need one, narrow bash_allow instead.",
+      "Deny wins over allow, so this also stops any bash_allow entry that runs " +
+      "a shell by name. Scripts run by path (.gnomon/ci.sh) are unaffected.",
   },
   {
     admits: /\b(awk|gawk|perl|python3?|ruby|node)\b/,
