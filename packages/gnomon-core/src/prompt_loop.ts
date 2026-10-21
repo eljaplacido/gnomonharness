@@ -54,9 +54,10 @@ import {
   probeEndpointAuth,
   SurfaceProblem,
   EndpointConfig,
+  roleWriteTarget,
 } from "./config.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence,
-  safeForPrompt,
+  safeForPrompt, traceLines, isEmptyReasoning, terminalWidth,
 } from "./render.js";
 export { isLocalEndpoint } from "./config.js";
 import {
@@ -1403,11 +1404,17 @@ async function callEndpoint(
     // answer 0/10 passed, prose final answer 7/10 passed. Two other models on
     // the same tasks and the same prompt never produced one, so this is the
     // transport reading, not the prompt.
+    //
+    // Except a placeholder. OpenCode Go's free tier sends content: null with
+    // reasoning "No reasoning available." -- read as content, that sentence
+    // became the rationale of every step and, on 2026-10-21, the whole final
+    // answer of a 75-call audit. It is an empty reply, and the loop's
+    // empty-reply handling is what should see it.
+    const reasoning = message.reasoning_content ?? message.reasoning;
     const content =
       message.content ??
       json.response ??
-      message.reasoning_content ??
-      message.reasoning ??
+      (typeof reasoning === "string" && isEmptyReasoning(reasoning) ? "" : reasoning) ??
       "";
     const finishReason = json.choices?.[0]?.finish_reason ?? json.done_reason;
 
@@ -3055,6 +3062,8 @@ export async function runAgenticTurn(
   let stepsAtLastConverge = convergeAt - loop.converge_refire;
   // Signatures of the last few calls, to notice a model going in circles.
   const recentCalls: string[] = [];
+  // The prose the last step showed, so an identical next one is not repeated.
+  let lastRationale = "";
   let usedModel = route.model;
   // The target the model calls actually reached. Diverges from `route.target`
   // the moment a fallback fires, and the record has to follow the request
@@ -3875,21 +3884,27 @@ export async function runAgenticTurn(
     // Chain-of-thought as it happens — the model's <think> reasoning, at the
     // verbosity /think sets (collapse = one line, show = all, hide = none). This
     // is what "see it chewing" means; models that emit no <think> show nothing.
-    if (showTrace && deps.ui.think !== "hide") {
+    //
+    // Both are clipped and escaped by traceLines: under `collapse` a step shows
+    // at most three rows of prose, and a step that repeats the last one's
+    // prose word for word shows none -- the operator already read it.
+    if (showTrace) {
+      const columns = terminalWidth();
       const think = split.think.trim();
       if (think) {
-        const all = think.split("\n");
-        const lines = deps.ui.think === "collapse"
-          ? [all[0] + (all.length > 1 ? " …" : "")]
+        const all = traceLines(think, deps.ui.think, columns);
+        const lines = deps.ui.think === "collapse" && all.length > 1
+          ? [`${all[0]} …`]
           : all;
         for (const line of lines) say(paint(deps.ui, "gray", `  · ${line}`));
       }
-    }
-    const rationale = split.answer.trim();
-    if (rationale && showTrace) {
-      for (const line of rationale.split("\n")) {
-        say(paint(deps.ui, "gray", `  │ ${line}`));
+      const rationale = split.answer.trim();
+      if (rationale && rationale !== lastRationale) {
+        for (const line of traceLines(rationale, deps.ui.think === "hide" ? "collapse" : deps.ui.think, columns)) {
+          say(paint(deps.ui, "gray", `  │ ${line}`));
+        }
       }
+      lastRationale = rationale;
     }
 
     // Launch consecutive read-only calls together.
@@ -5269,6 +5284,27 @@ export function sessionRow(
  * Returns the chosen id, or null when cancelled.
  */
 /**
+ * The stages this turn runs through: the declared chain, or none.
+ *
+ * The chain is what the DEFAULT role does. A turn answered by any other role
+ * -- a `/plan …` prefix, a `/role plan` switch, a routing rule that picked
+ * one -- is answered by that role alone. Before, only the prefix escaped: an
+ * operator who switched to plan was shown `plan ▸`, `Role: plan`, and a
+ * footer saying plan, while the coordinator, implementor and verifier did
+ * the work. Measured 2026-10-21 on a surface declaring a three-stage chain:
+ * a "plan" audit ran 75 calls as the coordinator.
+ */
+export function chainForTurn(
+  config: GnomonConfig,
+  role: string,
+  defaultRole: string,
+  prefixed: boolean
+): string[] {
+  if (prefixed || role !== defaultRole) return [];
+  return resolveChain(config);
+}
+
+/**
  * Point a role at a model, in place.
  *
  * A surgical line edit rather than a re-serialise. The file is written by hand
@@ -5728,6 +5764,17 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         console.log(
           `  tools: ${set.schemas.map((t) => t.function.name).join(", ") || "(none — read-only role)"}`
         );
+        // A declared chain belongs to the default role; say which applies,
+        // since the chain announces itself and its absence would not.
+        const chain = resolveChain(state.config);
+        const home = routingOf(state).default;
+        if (chain.length >= 2) {
+          console.log(
+            wanted === home
+              ? `  chain: ${chain.join(" → ")} runs each turn again`
+              : `  chain off while on ${wanted} — ${wanted} answers alone. /role ${home} turns it back on.`
+          );
+        }
         // Switching role and then being routed elsewhere on the next turn
         // looks like /role did not work. Say which one is in charge.
         const mode = routingOf(state).mode;
@@ -7223,6 +7270,11 @@ export async function runPromptLoop(
 
   try {
     while (true) {
+      // The surface as it stands NOW. /models and the surface-edit reload put
+      // a fresh config on `state`, but this loop kept reading the parameter it
+      // was started with -- so a model picked mid-session was written, hashed
+      // and announced, and the next turn still routed to the old one.
+      const config = state.config;
       // Show the prompt only when actually waiting on the user —
       // buffered (typed-ahead) lines replay silently instead.
       if (!closed && lineQueue.length === 0) {
@@ -7417,18 +7469,24 @@ export async function runPromptLoop(
             continue;
           }
 
-          const rolesPath = join(config.gnomonDir, "roles.toml");
+          // The file a run READS for this role, not always roles.toml. With a
+          // role_profile that names the role's model -- every scaffolded
+          // project -- a roles.toml write was reported as done, moved the
+          // hash, and changed nothing: the pick was overridden at the next
+          // load, and the startup audit then warned about the very line this
+          // command wrote. `gnomon endpoint add --role` already did this.
+          const target = roleWriteTarget(config, pickedRole);
           try {
-            const before = readFileSync(rolesPath, "utf-8");
+            const before = readFileSync(target.path, "utf-8");
             writeFileSync(
-              rolesPath,
+              target.path,
               setRoleModel(before, pickedRole, modelTag, pickedEndpoint),
               "utf-8"
             );
           } catch (err) {
             console.log(
               paint(ui0, "yellow",
-                `  Could not write roles.toml: ${err instanceof Error ? err.message : String(err)}`)
+                `  Could not write ${target.label}: ${err instanceof Error ? err.message : String(err)}`)
             );
             continue;
           }
@@ -7446,7 +7504,9 @@ export async function runPromptLoop(
           );
           console.log(
             paint(ui0, "gray",
-              `  .gnomon/roles.toml written · surface now ` +
+              `  ${target.label} written` +
+                (target.profile ? ` (profile "${target.profile}" governs ${pickedRole})` : "") +
+                ` · surface now ` +
                 `${recomputeManifest(fresh.gnomonDir).surface_hash.slice(0, 16)}…`)
           );
           continue;
@@ -7620,8 +7680,9 @@ export async function runPromptLoop(
       //
       // An explicit /role prefix has already set `state.currentRole` for this
       // turn, and it wins here too: asking for one role and silently getting
-      // three would be worse than having no chain.
-      const turnChain = prefixed ? [] : resolveChain(config);
+      // three would be worse than having no chain. So does a /role SWITCH --
+      // see chainForTurn.
+      const turnChain = chainForTurn(config, role, routingOf(state).default, prefixed);
       let turn: TurnResult;
       try {
         if (turnChain.length >= 2) {

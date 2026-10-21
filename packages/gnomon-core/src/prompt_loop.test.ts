@@ -2508,6 +2508,19 @@ describe("runTask — the non-interactive contract", () => {
     });
   });
 
+  it("reads a placeholder in the reasoning channel as an empty reply, not an answer", async () => {
+    // OpenCode Go's free tier: content null, reasoning "No reasoning
+    // available." Read as content, it ended a 75-call audit as the answer.
+    const placeholder = (async () => ({
+      ok: true,
+      json: async () => ({ message: { content: null, reasoning: "No reasoning available." } }),
+    })) as unknown as typeof fetch;
+    await withFetch(placeholder, async () => {
+      const record = await promptLoop.runTask(loadConfig("../.."), "x", { role: "smol" });
+      expect(record.stop_reason).toBe("empty");
+    });
+  });
+
   it("records WHY the loop stopped, on a separate axis from the bucket", async () => {
     // The distinction existed only as prose in the wrap-up note and was
     // discarded. Four investigations of one campaign each blamed a different
@@ -4504,5 +4517,24 @@ describe("a reply with no usable tool call gets a bounded repair turn", () => {
 
   it("an ordinary 500 is still an outage", () => {
     expect(promptLoop.classifyFailure({ status: 500, message: "internal error" })).toBe(12);
+  });
+});
+
+
+describe("chainForTurn", () => {
+  const withChain = (stages: string[]) =>
+    ({ config: { chain: { stages } } }) as unknown as Parameters<typeof promptLoop.chainForTurn>[0];
+
+  it("runs the declared chain for the default role", () => {
+    expect(promptLoop.chainForTurn(withChain(["a", "b"]), "implement", "implement", false)).toEqual(["a", "b"]);
+  });
+
+  it("is off for a role switched to with /role", () => {
+    // `/role plan` showed plan everywhere while the chain's stages did the work.
+    expect(promptLoop.chainForTurn(withChain(["a", "b"]), "plan", "implement", false)).toEqual([]);
+  });
+
+  it("is off for a one-turn prefix, as before", () => {
+    expect(promptLoop.chainForTurn(withChain(["a", "b"]), "implement", "implement", true)).toEqual([]);
   });
 });

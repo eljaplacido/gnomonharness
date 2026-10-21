@@ -80,6 +80,7 @@ import { initSurface } from "./init.js";
 import {
   looksLikeChatModel,
   suggestChatModel,
+  looksLikeTrialTier,
   listOllama,
   ollamaTagsUrl,
   orderForPicking,
@@ -992,20 +993,34 @@ async function endpointAdd(
       const chatty = offered.filter(looksLikeChatModel);
       const suggested = suggestChatModel(offered)!;
       if (interactive) {
-        const preview = offered.slice(0, 40);
-        for (let i = 0; i < preview.length; i += 3) {
-          console.log("    " + preview.slice(i, i + 3).map((m) => m.padEnd(26)).join(""));
+        // Numbered, like the Ollama picker. This printed a bare grid of tags
+        // and then "Model [beam-free]:" -- nothing said a number would do, or
+        // what to type at all, so the default was what most people got.
+        const preview = offered.slice(0, 60);
+        const width = Math.min(34, Math.max(...preview.map((m) => m.length)));
+        const cell = (m: string, i: number) => {
+          const note =
+            m === suggested ? "←" : !looksLikeChatModel(m) ? "(embed)" : looksLikeTrialTier(m) ? "(trial)" : "";
+          return `${String(i + 1).padStart(3)}. ${m.padEnd(width)} ${note.padEnd(7)}`;
+        };
+        const perRow = preview.length > 12 ? 2 : 1;
+        for (let i = 0; i < preview.length; i += perRow) {
+          console.log(" " + preview.slice(i, i + perRow).map((m, j) => cell(m, i + j)).join("  ").trimEnd());
         }
         if (offered.length > preview.length) {
-          console.log(`    …and ${offered.length - preview.length} more`);
+          console.log(`    …and ${offered.length - preview.length} more (type the tag)`);
         }
         if (chatty.length > 0 && chatty.length < offered.length) {
-          console.log(
-            `    (${offered.length - chatty.length} of these look like embedding ` +
-              `models and are not offered as the default.)`
-          );
+          console.log(`    (embed) cannot chat and is never the default.`);
         }
-        model = await ask(`  Model [${suggested}]: `, suggested);
+        if (offered.some(looksLikeTrialTier)) {
+          console.log(`    (trial) free/preview tiers — usable, but not chosen for you.`);
+        }
+        const answer = await ask(
+          `  Type a number or a tag (Enter = ${offered.indexOf(suggested) + 1}. ${suggested}): `,
+          ""
+        );
+        model = parseModelPick(answer, offered, suggested);
         modelWasChosenForYou = model === suggested;
       } else {
         model = suggested;
