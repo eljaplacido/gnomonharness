@@ -54,6 +54,7 @@ does not. Behaviour is readable because something is holding still.
 
 > **Status: working, pre-1.0.** 1199 TypeScript tests (985 core, 189 cli, 18
 > natives, 7 tui) and 60 Rust tests — **1259 total**, the number `.gnomon/ci.sh`
+> reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
 > silently stopped collecting two of the four packages, which is why the count
