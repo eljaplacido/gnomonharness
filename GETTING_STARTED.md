@@ -40,7 +40,7 @@ no Rust, no sudo.
 What it does: checks for Node ≥ 20 (if it is missing or old it prints the exact
 command for your OS — NodeSource, Homebrew, nvm, winget — and stops; it never
 installs Node as root on its own), resolves the latest release
-(`GNOMON_VERSION=0.2.3` pins one), installs the npm package, and puts the native
+(`GNOMON_VERSION=0.3.0` pins one), installs the npm package, and puts the native
 binaries in `~/.local/share/gnomon/bin` (`%LOCALAPPDATA%\gnomon\bin` on Windows),
 where `surface`, `enumerations`, `session`, `apply` and `simulate` find them
 with no environment variable. Every download is checked against the release's
@@ -57,19 +57,19 @@ package fails in dpkg while the distro's `npm` and `libnode-dev` are installed.
 ### By hand — the same packages, no script
 
 ```bash
-V=0.2.3
+V=0.3.0
 B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz \
          $B/gnomon-tui-$V.tgz  $B/gnomon-harness-$V.tgz
 ```
 
 ```powershell
-$V="0.2.3"
+$V="0.3.0"
 $B="https://github.com/eljaplacido/gnomonharness/releases/download/v$V"
 npm i -g "$B/gnomon-core-$V.tgz" "$B/gnomon-natives-$V.tgz" "$B/gnomon-tui-$V.tgz" "$B/gnomon-harness-$V.tgz"
 ```
 
-Two blocks because they have to be: `V=0.2.3` is not an assignment in
+Two blocks because they have to be: `V=0.3.0` is not an assignment in
 PowerShell and `\` is not its line continuation. The four are one package split
 up — `gnomon-harness` is the CLI and the other three its libraries — so npm
 needs all four URLs until there is a registry entry to resolve them from. This

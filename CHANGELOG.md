@@ -26,6 +26,33 @@
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-21
+
+Everything on master since v0.2.3, plus the nine pull requests that were open
+when gnomon was announced: one-line install and `gnomon update`/`uninstall`
+(#40), `gnomon check` (#41–#44), init gitignoring gnomon's machine-local dirs
+(#47), the `.sh` audit false positive (#48), and dependency bumps (#27, #29,
+#32, #49). v0.2.3's Linux binaries needed glibc 2.39 and did not load on
+Ubuntu 22.04; this release builds them on ubuntu-22.04 (see the install entry
+below).
+
+**A hand edit to roles.toml that the active profile overrides is reported
+(2026-10-21).** With `role_profile` set, a profile's `model`/`endpoint` replace
+the ones in roles.toml for that role, so changing them in roles.toml did nothing
+and nothing said so. The author's own `plan -> go` edit had never taken effect.
+`/models` and `endpoint add --role` already wrote to the profile; hand edits
+were the gap. Every routing field the profile overrides with a *different* value
+is now a non-fatal surface finding (interactive and `task` alike), and
+`endpoint list`/`test` and `/endpoints` print the ignored values and name the
+file a run actually reads, instead of always saying roles.toml. Equal values in
+both files (the scaffold's normal state) say nothing. gnomon's own surface had
+this exact defect: `implement` pointed at `go` in roles.toml and ran on
+`local`; roles.toml now states what runs. `init`'s closing hint says
+`gnomon launch`, the command `--help` leads with, not `gnomon prompt`.
+
+**Vite 8 refused four test files** that imported the same name twice, which
+Vite 7's parser let through. The duplicates are removed.
+
 **Install, update and uninstall are one command each (2026-10-11).**
 `scripts/install.sh` (Linux, macOS) and `scripts/install.ps1` (Windows) replace
 the four hand-edited tarball URLs: they check Node ≥ 20 and print the fix when
@@ -2199,7 +2226,8 @@ was written.
   `git tag`, not a documentation edit as well.
 -->
 
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.0
 [0.2.3]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.3
 [0.2.2]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.2
 [0.2.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.1
