@@ -780,7 +780,7 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     // which reads as "unavailable" rather than "misspelled". `.catch(null)` so
     // an offline box still gets the listing, unchecked rather than wrong.
     const modelChecks = await checkRoleModels(config).catch(() => null);
-    printEndpoints(describeEndpoints(config), resolveUi(config), null, modelChecks);
+    printEndpoints(describeEndpoints(config), resolveUi(config), null, modelChecks, config.profile);
     if (supplied.length > 0) {
       // Say where a key came from. "set" alone cannot distinguish a stored key
       // from an exported one, and only one of those follows you to another
@@ -811,7 +811,7 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
       probes.set(row.name, await probeEndpointAuth(row.endpoint, model));
     }
     const modelChecks = await checkRoleModels(config).catch(() => null);
-    printEndpoints(rows, resolveUi(config), probes, modelChecks);
+    printEndpoints(rows, resolveUi(config), probes, modelChecks, config.profile);
     // An endpoint with no role routed to it has no model to ask for, and was
     // skipped without a word — `gnomon endpoint test go` printed the listing
     // and exited 0, which reads as a pass. Say it, and do not exit 0 when the
@@ -1604,7 +1604,7 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
     console.log(`     (role_profile = "${where.profile}" is merged over roles.toml,`);
     console.log("      so that file is what these roles are routed by.)");
   }
-  console.log("  2. Run `gnomon prompt` in this directory.");
+  console.log("  2. Run `gnomon launch` in this directory.");
   console.log("");
   console.log("Approval is on_write: reads are free, writes show a diff first.");
 }

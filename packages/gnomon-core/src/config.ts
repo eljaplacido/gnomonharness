@@ -767,7 +767,7 @@ export function applyProfile(
   roles: Roles,
   profiles: Profiles,
   name: string | undefined
-): { roles: Roles; applied?: string; problem?: string } {
+): { roles: Roles; applied?: string; problem?: string; shadowed?: ShadowedRouting[] } {
   if (!name) return { roles };
   const def = (profiles as Record<string, unknown>)[name] as
     | { roles?: Record<string, Record<string, unknown>> }
@@ -781,10 +781,31 @@ export function applyProfile(
   }
   const overrides = def.roles ?? {};
   const merged: Roles = { ...roles };
+  const shadowed: ShadowedRouting[] = [];
   for (const [role, fields] of Object.entries(overrides)) {
+    // A roles.toml routing value the profile replaces with a DIFFERENT one is
+    // an edit that does nothing. Equal values are the scaffold's normal state
+    // and say nothing worth reporting.
+    const base = (roles[role] ?? {}) as Record<string, unknown>;
+    for (const field of ROUTING_FIELDS) {
+      const over = (fields as Record<string, unknown>)[field];
+      if (field in base && over !== undefined && base[field] !== over) {
+        shadowed.push({ role, field, base: String(base[field]), profile: String(over) });
+      }
+    }
     merged[role] = { ...(merged[role] ?? {}), ...(fields as object) } as Roles[string];
   }
-  return { roles: merged, applied: name };
+  return { roles: merged, applied: name, ...(shadowed.length > 0 ? { shadowed } : {}) };
+}
+
+/** A roles.toml `model`/`endpoint` the active profile overrides with another value. */
+export interface ShadowedRouting {
+  role: string;
+  field: (typeof ROUTING_FIELDS)[number];
+  /** The value roles.toml declares, which a run does not use. */
+  base: string;
+  /** The value the profile declares, which a run does use. */
+  profile: string;
 }
 
 /**
@@ -883,7 +904,13 @@ export function loadConfig(root?: string, profileOverride?: string): GnomonConfi
 
   return {
     gnomonDir,
-    profile: { name: applied.applied, requested: wanted, overridden: Boolean(profileOverride), problem: applied.problem },
+    profile: {
+      name: applied.applied,
+      requested: wanted,
+      overridden: Boolean(profileOverride),
+      problem: applied.problem,
+      ...(applied.shadowed ? { shadowed: applied.shadowed } : {}),
+    },
     config: cfg,
     policy: loadToml<Policy>(gnomonDir, "policy.toml"),
     // roles.toml has [roles.X] headers → parseToml wraps in {roles: {...}}
@@ -905,7 +932,14 @@ export function loadConfig(root?: string, profileOverride?: string): GnomonConfi
 export interface GnomonConfig {
   gnomonDir: string;
   /** Which profile was applied to `roles`, and whether a flag chose it. */
-  profile?: { name?: string; requested?: string; overridden: boolean; problem?: string };
+  profile?: {
+    name?: string;
+    requested?: string;
+    overridden: boolean;
+    problem?: string;
+    /** roles.toml routing values this profile replaces, so a run never reads them. */
+    shadowed?: ShadowedRouting[];
+  };
   config: Config;
   policy: Policy;
   roles: Roles;
@@ -1666,6 +1700,27 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
     }
   } catch {
     // Never fail an audit over the audit.
+  }
+
+  // A roles.toml model/endpoint the active profile overrides. Editing
+  // roles.toml is what the README and most users reach for first, and with a
+  // profile active that edit was silently ignored: no error, no notice, the run
+  // kept using the profile's value. Found 2026-10-21 by the author, whose own
+  // `plan -> go` edit had never taken effect.
+  if (config.profile?.name && config.profile.shadowed) {
+    const prof = `.gnomon/profiles/${config.profile.name}.toml`;
+    for (const s of config.profile.shadowed) {
+      problems.push({
+        where: `.gnomon/roles.toml [roles.${s.role}] ${s.field}`,
+        problem:
+          `${s.field} = "${s.base}" is ignored: role_profile "${config.profile.name}" sets ` +
+          `${s.field} = "${s.profile}" for this role, and the profile wins.`,
+        fix:
+          `Make the change in ${prof} instead, or use /models or \`gnomon endpoint add --role ${s.role}\` ` +
+          `(both write to the file a run reads), or change role_profile in .gnomon/config.toml.`,
+        fatal: false,
+      });
+    }
   }
 
   // A published option that this build does not implement, named in the

@@ -1756,7 +1756,8 @@ export function printEndpoints(
   rows: EndpointRow[],
   ui: ResolvedUi,
   probes: EndpointProbes | null,
-  checks?: Map<string, ModelCheck[]> | null
+  checks?: Map<string, ModelCheck[]> | null,
+  profile?: GnomonConfig["profile"]
 ): void {
   console.log("\nDeclared endpoints (.gnomon/config.toml [endpoints]):\n");
 
@@ -1847,8 +1848,23 @@ export function printEndpoints(
   }
   console.log("");
   }
+  // With a role_profile active, "in roles.toml" sent people to the file whose
+  // routing the profile overrides, so name the file a run actually reads, and
+  // list any roles.toml values that are being ignored right now.
+  const routingFile = profile?.name ? `.gnomon/profiles/${profile.name}.toml` : "roles.toml";
+  for (const s of profile?.shadowed ?? []) {
+    console.log(
+      paint(
+        ui,
+        "yellow",
+        `  ! roles.toml [roles.${s.role}] ${s.field} = "${s.base}" is ignored — ` +
+          `${routingFile} sets "${s.profile}", and the profile wins.`
+      )
+    );
+  }
+  if (profile?.shadowed?.length) console.log("");
   console.log(
-    `Point a role at one with endpoint = "<name>" in roles.toml, or give\n` +
+    `Point a role at one with endpoint = "<name>" in ${routingFile}, or give\n` +
       `it a [roles.<name>.fallback] with its own model and endpoint.\n` +
       `/models picks a model for a role from what the endpoint actually serves,\n` +
       `which is the only way to be sure the id is one it will accept.`
@@ -5902,7 +5918,7 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       // The probing form runs on the async path at the prompt; this one is
       // what a mid-turn /endpoints gets, and it is careful to claim only what
       // it actually checked.
-      printEndpoints(describeEndpoints(state.config), uiOf(state), null);
+      printEndpoints(describeEndpoints(state.config), uiOf(state), null, null, state.config.profile);
       return true;
     }
 
@@ -7278,7 +7294,7 @@ export async function runPromptLoop(
           const ui0 = uiOf(state);
           const rows = describeEndpoints(config);
           if (/\s--no-probe\b/.test(input)) {
-            printEndpoints(rows, ui0, null);
+            printEndpoints(rows, ui0, null, null, config.profile);
             continue;
           }
 
@@ -7304,7 +7320,7 @@ export async function runPromptLoop(
             ),
             checkRoleModels(config).catch(() => null),
           ]);
-          printEndpoints(rows, ui0, probes, checks);
+          printEndpoints(rows, ui0, probes, checks, config.profile);
           continue;
         }
 
