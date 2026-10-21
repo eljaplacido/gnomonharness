@@ -59,6 +59,16 @@ text. gnomon's own repository ignored all five, but a scaffolded project got no
 `.gitignore` entry, so the first `git add .` after a session committed them.
 `init` now appends only the missing entries, once, after any existing content.
 
+**The surface auditor no longer calls `ci.sh` a shell (#46, 2026-10-18).**
+The "bash_allow admits a shell" check matched `sh` after the `.` of a script
+path, so `bash_allow = ['^\.gnomon/(ci|verify)\.sh$']` warned on every
+startup. Its suggested `bash_deny` was the same unanchored pattern, which also
+matches `.gnomon/ci.sh`. Deny wins, so applying the fix locked the verifier out
+of its own gate. Shell names after `.`, or followed by `/`, no longer count. The
+suggested deny is anchored to the command position, so it refuses
+`bash -c …`, `/bin/sh x` and `ls; sh x`, but not `.gnomon/ci.sh`. A surface
+that already applied the old deny should replace it with the new one.
+
 **First run, measured against a fresh repo with nothing listening (2026-10-11).**
 `gnomon launch` wrote placeholder tags, called them "very likely wrong — edit
 them", started a session that could not answer, and the first message then

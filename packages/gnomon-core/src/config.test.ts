@@ -892,6 +892,34 @@ bash_deny = ['-exec', '-delete', '-fprint']
     expect(problems.filter((p) => /bash_allow admits/.test(p.problem)).length).toBe(0);
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it("does not call a script path ending in .sh a shell, and its shell deny spares that script (#46)", () => {
+    const shellHits = (allow: string, deny = "") => {
+      const dir = mkdtempSync(join(tmpdir(), "gnomon-guard-sh-"));
+      write(dir, "roles.toml", `
+[roles.verifier]
+tools = ["bash"]
+bash_allow = ['${allow}']
+${deny ? `bash_deny = ['${deny}']` : ""}
+`);
+      const hits = auditSurface(loadConfig(dir)).filter((p) => /a shell/.test(p.problem));
+      rmSync(dir, { recursive: true, force: true });
+      return hits;
+    };
+    expect(shellHits("^\\.gnomon/(ci|verify)\\.sh$")).toHaveLength(0);
+    expect(shellHits("^scripts/bash/run$")).toHaveLength(0);
+    expect(shellHits("^bash\\b")).toHaveLength(1);
+    expect(shellHits("^sh -c")).toHaveLength(1);
+    expect(shellHits("^/bin/sh\\s")).toHaveLength(1);
+
+    // The remedy it prints must clear the warning, and must not deny the gate.
+    const [hit] = shellHits("^(make|bash)\\s");
+    const deny = hit.fix.match(/bash_deny = \['(.+)'\]/)![1];
+    expect(shellHits("^(make|bash)\\s", deny)).toHaveLength(0);
+    const re = new RegExp(deny);
+    for (const cmd of [".gnomon/ci.sh", "./verify.sh --fast", "make test"]) expect(re.test(cmd)).toBe(false);
+    for (const cmd of ["bash -c 'rm -rf x'", "/bin/sh x", "ls; sh x", "make && zsh"]) expect(re.test(cmd)).toBe(true);
+  });
 });
 
 describe("a proposal is staging, an acceptance is a surface change", () => {
