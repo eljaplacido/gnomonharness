@@ -8,7 +8,6 @@ import { tmpdir } from "node:os";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, routeInput, resolveAudit, resolveVerify } from "gnomon-core";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initSurface, enableAuditBlock } from "./init.js";
 

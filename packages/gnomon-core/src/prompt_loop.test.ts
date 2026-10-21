@@ -7,7 +7,6 @@ import { loadConfig, endpointClass, resolveUi } from "./config.js";
 import { stubDeclaredKeys } from "./test_support.js";
 import { mapBucket } from "./session.js";
 import * as promptLoop from "./prompt_loop.js";
-import { rmSync } from "node:fs";
 import { resolve as resolvePath, join as joinPath } from "node:path";
 import { setRoleModel } from "./prompt_loop.js";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, existsSync } from "node:fs";
