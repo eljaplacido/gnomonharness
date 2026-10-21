@@ -7,10 +7,9 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync
 import { tmpdir } from "node:os";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig, routeInput } from "gnomon-core";
-import { tmpdir } from "node:os";
+import { loadConfig, routeInput, resolveAudit, resolveVerify } from "gnomon-core";
 import { join } from "node:path";
-import { initSurface } from "./init.js";
+import { initSurface, enableAuditBlock } from "./init.js";
 
 let root: string;
 
@@ -271,6 +270,21 @@ describe("initSurface", () => {
     expect(readFileSync(join(root, ".gitattributes"), "utf-8")).toBe(text);
   });
 
+  it("gitignores gnomon's machine-local dirs, only the missing ones, once", async () => {
+    // Sessions and audit trails hold conversation text; a scaffolded project
+    // committed them on the first `git add .`.
+    writeFileSync(join(root, ".gitignore"), "node_modules\n/.gnomon-sessions/");
+    const r = await initSurface({ dir: root });
+    expect(r.gitignore).toEqual([".gnomon-audit", ".gnomon-out", ".gnomon-jobs", ".gnomon-loops"]);
+    const text = readFileSync(join(root, ".gitignore"), "utf-8");
+    expect(text.startsWith("node_modules\n/.gnomon-sessions/\n")).toBe(true);
+    expect(text).toContain(".gnomon-audit/\n");
+    expect(text.match(/\.gnomon-sessions/g)).toHaveLength(1);
+    const again = await initSurface({ dir: root, force: true });
+    expect(again.gitignore).toEqual([]);
+    expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(text);
+  });
+
   it("writes a complete surface", async () => {
     const r = await initSurface({ dir: root });
     expect(r.written).toEqual([
@@ -360,5 +374,51 @@ describe("initSurface", () => {
       initSurface({ dir: root, from: join(root, "nope") })
     ).rejects.toThrow(/No .gnomon\/ surface found/);
     expect(existsSync(join(root, ".gnomon"))).toBe(false);
+  });
+});
+
+describe("initSurface — a new surface governs something by default (2026-10)", () => {
+  const scaffoldIn = async (dir: string, noVerify?: boolean) => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
+    await initSurface({ dir, noVerify });
+    const read = (f: string) => readFileSync(join(dir, ".gnomon", f), "utf-8");
+    return { config: read("config.toml"), policy: read("policy.toml"), loaded: loadConfig(dir) };
+  };
+
+  it("declares the project's check with test_must_fail_first, and turns the trail on", async () => {
+    const { policy, loaded } = await scaffoldIn(root);
+    expect(policy).toMatch(/\n\[verify\]\ncommand = "npm test"\n[\s\S]*\ntest_must_fail_first = true/);
+    expect(resolveVerify(loaded)).toMatchObject({ command: "npm test", test_must_fail_first: true });
+    expect(resolveAudit(loaded)).toMatchObject({ enabled: true, record: "metadata", chain: true });
+  });
+
+  it("--no-verify is the old scaffold byte for byte: the defaults are the only difference", async () => {
+    // Benchmark runners (benchmarks/harness.py, audit-existing, greenfield-spec)
+    // init with --no-verify. A scaffold change reaching them would be a second
+    // variable in every comparison against an earlier arm.
+    const old = await scaffoldIn(join(root, "old"), true);
+    const now = await scaffoldIn(join(root, "now"));
+    expect(old.config).toMatch(/\[audit\]\n# Off by default[\s\S]*?\nenabled = false\n/);
+    expect(resolveAudit(old.loaded).enabled).toBe(false);
+    expect(resolveVerify(old.loaded)).toBeNull();
+    expect(old.policy).not.toMatch(/^test_must_fail_first/m);
+    // Default = --no-verify + exactly the two additions, nothing else moved.
+    expect(enableAuditBlock(old.config)).toBe(now.config);
+    expect(now.policy.startsWith(old.policy)).toBe(true);
+    expect(now.policy.slice(old.policy.length)).toMatch(/^\n# Detected at 'gnomon init'[^\n]*\n\[verify\]\n/);
+  });
+
+  it("--from copies the source's choices and adds neither", async () => {
+    const src = join(root, "src");
+    await scaffoldIn(src, true);
+    const dest = join(root, "dest");
+    mkdirSync(dest);
+    await initSurface({ dir: dest, from: src });
+    expect(resolveAudit(loadConfig(dest)).enabled).toBe(false);
+  });
+
+  it("enableAuditBlock refuses a template whose block has moved", () => {
+    expect(() => enableAuditBlock("[audit]\nenabled = false\n")).toThrow(/changed shape/);
   });
 });

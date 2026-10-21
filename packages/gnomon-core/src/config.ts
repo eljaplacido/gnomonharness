@@ -767,7 +767,7 @@ export function applyProfile(
   roles: Roles,
   profiles: Profiles,
   name: string | undefined
-): { roles: Roles; applied?: string; problem?: string } {
+): { roles: Roles; applied?: string; problem?: string; shadowed?: ShadowedRouting[] } {
   if (!name) return { roles };
   const def = (profiles as Record<string, unknown>)[name] as
     | { roles?: Record<string, Record<string, unknown>> }
@@ -781,10 +781,31 @@ export function applyProfile(
   }
   const overrides = def.roles ?? {};
   const merged: Roles = { ...roles };
+  const shadowed: ShadowedRouting[] = [];
   for (const [role, fields] of Object.entries(overrides)) {
+    // A roles.toml routing value the profile replaces with a DIFFERENT one is
+    // an edit that does nothing. Equal values are the scaffold's normal state
+    // and say nothing worth reporting.
+    const base = (roles[role] ?? {}) as Record<string, unknown>;
+    for (const field of ROUTING_FIELDS) {
+      const over = (fields as Record<string, unknown>)[field];
+      if (field in base && over !== undefined && base[field] !== over) {
+        shadowed.push({ role, field, base: String(base[field]), profile: String(over) });
+      }
+    }
     merged[role] = { ...(merged[role] ?? {}), ...(fields as object) } as Roles[string];
   }
-  return { roles: merged, applied: name };
+  return { roles: merged, applied: name, ...(shadowed.length > 0 ? { shadowed } : {}) };
+}
+
+/** A roles.toml `model`/`endpoint` the active profile overrides with another value. */
+export interface ShadowedRouting {
+  role: string;
+  field: (typeof ROUTING_FIELDS)[number];
+  /** The value roles.toml declares, which a run does not use. */
+  base: string;
+  /** The value the profile declares, which a run does use. */
+  profile: string;
 }
 
 /**
@@ -883,7 +904,13 @@ export function loadConfig(root?: string, profileOverride?: string): GnomonConfi
 
   return {
     gnomonDir,
-    profile: { name: applied.applied, requested: wanted, overridden: Boolean(profileOverride), problem: applied.problem },
+    profile: {
+      name: applied.applied,
+      requested: wanted,
+      overridden: Boolean(profileOverride),
+      problem: applied.problem,
+      ...(applied.shadowed ? { shadowed: applied.shadowed } : {}),
+    },
     config: cfg,
     policy: loadToml<Policy>(gnomonDir, "policy.toml"),
     // roles.toml has [roles.X] headers → parseToml wraps in {roles: {...}}
@@ -905,7 +932,14 @@ export function loadConfig(root?: string, profileOverride?: string): GnomonConfi
 export interface GnomonConfig {
   gnomonDir: string;
   /** Which profile was applied to `roles`, and whether a flag chose it. */
-  profile?: { name?: string; requested?: string; overridden: boolean; problem?: string };
+  profile?: {
+    name?: string;
+    requested?: string;
+    overridden: boolean;
+    problem?: string;
+    /** roles.toml routing values this profile replaces, so a run never reads them. */
+    shadowed?: ShadowedRouting[];
+  };
   config: Config;
   policy: Policy;
   roles: Roles;
@@ -1335,14 +1369,23 @@ const EXECUTING_ARGS: ExecutingArg[] = [
     deny: ["\\benv\\b"],
     note: "Nothing else in bash_allow is affected.",
   },
+  // A shell NAME, not a script path (#46). With a bare \b, the `sh` of
+  // `^\.gnomon/(ci|verify)\.sh$` counted -- \b holds after the '.' -- so a role
+  // allowed exactly two scripts was told it admits a shell. Worse, the remedy
+  // was the same unanchored pattern, which matches `.gnomon/ci.sh` itself; deny
+  // wins, so applying it locked the verifier out of the gate it exists to run.
+  // A name preceded by '.' is an extension and one followed by '/' is a
+  // directory; `/bin/sh` is still a shell. The deny is anchored to the command
+  // position, so it refuses `bash -c …`, `/bin/sh x` and `ls; sh x` but not a
+  // path that merely ends in .sh.
   {
-    admits: /\b(sh|bash|zsh|ksh|dash)\b/,
+    admits: /(?<![\w.])(sh|bash|zsh|ksh|dash)\b(?!\/)/,
     why: "a shell (runs anything)",
-    guard: /\b(sh|bash|zsh|ksh|dash)\b|-c\b/,
-    deny: ["\\b(sh|bash|zsh|ksh|dash)\\b"],
+    guard: /(?<![\w.])(sh|bash|zsh|ksh|dash)\b(?!\/)|-c\b/,
+    deny: ["(^|[;&|(]\\s*)(\\S*/)?(sh|bash|zsh|ksh|dash)(\\s|$)"],
     note:
-      "Deny wins over allow, so this also stops any bash_allow entry that spells " +
-      "a shell. If you need one, narrow bash_allow instead.",
+      "Deny wins over allow, so this also stops any bash_allow entry that runs " +
+      "a shell by name. Scripts run by path (.gnomon/ci.sh) are unaffected.",
   },
   {
     admits: /\b(awk|gawk|perl|python3?|ruby|node)\b/,
@@ -1391,6 +1434,10 @@ const KNOWN_BLOCKS = new Set([
   // and gets silence -- the inert-setting failure this project exists to make
   // impossible. These numbers decide when a TURN stops.
   "turn",
+  // [check.roles] in policy.toml: which role `gnomon check` judges another
+  // harness's agent by. Listed with the feature, for the reason [chain] above
+  // gives.
+  "check",
 ]);
 
 /**
@@ -1496,6 +1543,8 @@ const BLOCK_OWNER: Record<string, BlockOwner> = {
   verify: { file: "policy.toml", read: true },
   approval: { file: "policy.toml", read: true },
   sandbox: { file: "policy.toml", read: true },
+  // resolveCheckRole (check.ts) reads config.policy.check.roles.
+  check: { file: "policy.toml", read: true },
   // NOT read: no consumer of config.policy.exit_codes anywhere in this build.
   exit_codes: { file: "policy.toml", read: false },
   endpoints: { file: "config.toml", read: true },
@@ -1651,6 +1700,27 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
     }
   } catch {
     // Never fail an audit over the audit.
+  }
+
+  // A roles.toml model/endpoint the active profile overrides. Editing
+  // roles.toml is what the README and most users reach for first, and with a
+  // profile active that edit was silently ignored: no error, no notice, the run
+  // kept using the profile's value. Found 2026-10-21 by the author, whose own
+  // `plan -> go` edit had never taken effect.
+  if (config.profile?.name && config.profile.shadowed) {
+    const prof = `.gnomon/profiles/${config.profile.name}.toml`;
+    for (const s of config.profile.shadowed) {
+      problems.push({
+        where: `.gnomon/roles.toml [roles.${s.role}] ${s.field}`,
+        problem:
+          `${s.field} = "${s.base}" is ignored: role_profile "${config.profile.name}" sets ` +
+          `${s.field} = "${s.profile}" for this role, and the profile wins.`,
+        fix:
+          `Make the change in ${prof} instead, or use /models or \`gnomon endpoint add --role ${s.role}\` ` +
+          `(both write to the file a run reads), or change role_profile in .gnomon/config.toml.`,
+        fatal: false,
+      });
+    }
   }
 
   // A published option that this build does not implement, named in the

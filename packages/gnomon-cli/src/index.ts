@@ -94,6 +94,8 @@ import {
   hostPort,
 } from "./setup.js";
 import { pendingMigrations, applyMigrations, MIGRATIONS } from "./migrate.js";
+import { cmdUpdate, cmdUninstall, maybeNotifyUpdate } from "./update.js";
+import { cmdCheck } from "./check.js";
 
 // ---------------------------------------------------------------------------
 // Argument parsing (minimal, no deps)
@@ -778,7 +780,7 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     // which reads as "unavailable" rather than "misspelled". `.catch(null)` so
     // an offline box still gets the listing, unchecked rather than wrong.
     const modelChecks = await checkRoleModels(config).catch(() => null);
-    printEndpoints(describeEndpoints(config), resolveUi(config), null, modelChecks);
+    printEndpoints(describeEndpoints(config), resolveUi(config), null, modelChecks, config.profile);
     if (supplied.length > 0) {
       // Say where a key came from. "set" alone cannot distinguish a stored key
       // from an exported one, and only one of those follows you to another
@@ -809,7 +811,7 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
       probes.set(row.name, await probeEndpointAuth(row.endpoint, model));
     }
     const modelChecks = await checkRoleModels(config).catch(() => null);
-    printEndpoints(rows, resolveUi(config), probes, modelChecks);
+    printEndpoints(rows, resolveUi(config), probes, modelChecks, config.profile);
     // An endpoint with no role routed to it has no model to ask for, and was
     // skipped without a word — `gnomon endpoint test go` printed the listing
     // and exited 0, which reads as a pass. Say it, and do not exit 0 when the
@@ -1544,6 +1546,7 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
   for (const f of result.written) console.log(`  + .gnomon/${f}`);
   for (const f of result.skipped) console.log(`  · .gnomon/${f} (kept existing)`);
   if (result.gitattributes) console.log("  + .gitattributes: .gnomon/** text eol=lf (same surface hash on Windows)");
+  if (result.gitignore?.length) console.log(`  + .gitignore: ${result.gitignore.map((d) => d + "/").join(" ")} (machine-local, never committed)`);
 
   // Say which models were chosen and why. A tag appearing in roles.toml with
   // no explanation looks like a decision someone made on your behalf.
@@ -1570,9 +1573,13 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
   console.log("");
   console.log(
     result.verify
-      ? `Verify: \`${result.verify}\` runs after every turn that changes a file ([verify] in policy.toml).`
+      ? `Verify: \`${result.verify}\` runs after every turn that changes a file ([verify] in policy.toml);\n` +
+          `        a new test must fail on the code as it was (test_must_fail_first).`
       : "Verify: none found — declare [verify] command in .gnomon/policy.toml, or no turn is ever checked."
   );
+  if (result.audit) {
+    console.log("Audit: on — decisions and outcomes, no prompt text, in .gnomon-audit/ ([audit] in config.toml).");
+  }
 
   // Name the file whose edits take effect. The scaffold ships
   // `role_profile = "local_first"` and a profile that restates `model` and
@@ -1597,7 +1604,7 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
     console.log(`     (role_profile = "${where.profile}" is merged over roles.toml,`);
     console.log("      so that file is what these roles are routed by.)");
   }
-  console.log("  2. Run `gnomon prompt` in this directory.");
+  console.log("  2. Run `gnomon launch` in this directory.");
   console.log("");
   console.log("Approval is on_write: reads are free, writes show a diff first.");
 }
@@ -1765,6 +1772,9 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "loop", aliases: ["loops"] },
   { name: "tui" },
   { name: "migrate" },
+  { name: "update", aliases: ["upgrade"] },
+  { name: "uninstall" },
+  { name: "check" },
 ];
 
 function showHelp(): void {
@@ -1785,7 +1795,9 @@ Commands:
     Write a .gnomon/ surface into a project. --from copies an existing
     surface instead of the built-in starter templates. The project's own
     check (package.json verify/check/test, cargo test, ...) is declared as
-    [verify]; --no-verify leaves it commented out, as before 2026-09-29.
+    [verify] with test_must_fail_first, and the audit trail is on.
+    --no-verify writes the scaffold as before (no [verify], audit off),
+    byte for byte, for benchmark comparability.
 
   migrate [--dir <path>] [--check]
     Bring an existing .gnomon/ up to the current shipped defaults. Prints
@@ -1849,12 +1861,37 @@ Commands:
   tui [--dir <path>]
     Read a saved session back: turns, tools, buckets.
 
+  check --base <rev> [--head <rev>] [--role <role> | --agent <name>] [--json]
+    Judge a change another harness made (Claude Code, opencode, a CI
+    branch) by this surface's rules, as they stood at <rev>: every changed
+    path inside the role's write_allow, .gnomon/ not edited, [verify] passes
+    on head, a new test fails on the old sources (test_must_fail_first).
+    --head defaults to the working tree. The role is --role, else
+    [check.roles] in policy.toml maps --agent to one; never guessed. The
+    verdict is appended to the hash-chained audit trail; --json carries
+    the record's hash. Exit: 0 held, 2 a check failed, 10 no verdict.
+    --transcript <file> --format claude-code|opencode also puts every
+    shell command the agent ran to the role's bash_allow / bash_deny.
+    --install-hook claude-code prints the SessionStart + Stop hooks that
+    run this on every Claude Code session (it edits nothing).
+
   prompt [--continue | --resume <id>]
     Interactive agent loop. --continue resumes the most recent session,
     --resume <id> a specific one. Conversations are saved after every turn.
 
   run
     Alias for \`prompt\`
+
+  update [--check] [--force] [--notice on|off]
+    Show this version, the latest release and its changelog, then update
+    the way this copy was installed: a global install re-runs the installer
+    (npm package and native binaries together), a checkout is told the git
+    commands. --check only reports. --notice off silences the once-a-day
+    "newer version" line that interactive launch/prompt may print.
+
+  uninstall
+    Print the exact commands that remove this install and its native
+    binaries. Your stored keys and each project's .gnomon/ are left alone.
 
 Flags that apply across commands:
   --profile <name>        Merge .gnomon/profiles/<name>.toml over the base
@@ -1878,6 +1915,7 @@ Getting started in a project:
 Environment:
   GNOMON_BIN_OVERRIDE     Path to gnomon binary (for testing)
   GNOMON_DIR              Override .gnomon/ directory path
+  GNOMON_NO_UPDATE_CHECK  Set to 1 to never look for a newer release
 `);
 }
 
@@ -1978,11 +2016,26 @@ async function main(): Promise<void> {
     case "skills":
       await cmdSkill(args);
       break;
+    case "update":
+    case "upgrade": {
+      const code = await cmdUpdate({
+        check: args.flags.check === "true",
+        force: !!args.force,
+        notice: args.flags.notice,
+      });
+      if (code !== 0) process.exit(code);
+      break;
+    }
+    case "uninstall":
+      cmdUninstall(credentialsPath(), installedLoopEntries());
+      break;
     case "launch":
+      maybeNotifyUpdate(args.command, !!args.json);
       await cmdLaunch(args);
       break;
     case "prompt":
     case "run":
+      maybeNotifyUpdate(args.command, !!args.json);
       await cmdPrompt(args);
       break;
     case "loop":
@@ -1992,6 +2045,8 @@ async function main(): Promise<void> {
     case "tui":
       await cmdTui(args);
       break;
+    case "check":
+      process.exit(await cmdCheck(args));
     default:
       console.error(`Unknown command: ${args.command}`);
       showHelp();

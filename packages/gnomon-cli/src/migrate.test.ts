@@ -118,3 +118,52 @@ describe("gnomon migrate — daily-use defaults (2026-09-29)", () => {
     expect(pendingMigrations(gnomonDir)).toEqual([]);
   });
 });
+
+describe("gnomon migrate — governance defaults (2026-10)", () => {
+  const policy = (t: string) => writeFileSync(join(gnomonDir, "policy.toml"), t, "utf-8");
+  const readPolicy = () => readFileSync(join(gnomonDir, "policy.toml"), "utf-8");
+
+  it("adds test_must_fail_first to a [verify] that does not mention it, inside the block", () => {
+    policy(`[verify]\ncommand = "pytest -q"\nmax_rounds = 1\n\n[approval]\ngate = "on_write"\n`);
+    expect(pendingMigrations(gnomonDir).map((p) => p.id)).toEqual(["verify-must-fail-first"]);
+    applyMigrations(pendingMigrations(gnomonDir));
+    expect(readPolicy()).toBe(
+      `[verify]\ncommand = "pytest -q"\nmax_rounds = 1\ntest_must_fail_first = true  # a new test must fail on the code as it was\n\n[approval]\ngate = "on_write"\n`
+    );
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+  });
+
+  it("adds test_must_fail_first after a multi-line value, not inside it", () => {
+    policy(`[verify]\ncommand = "pytest -q"\ntest_paths = [\n  "tests/**",\n  "spec/**",\n]\n\n[approval]\ngate = "on_write"\n`);
+    applyMigrations(pendingMigrations(gnomonDir));
+    expect(readPolicy()).toBe(
+      `[verify]\ncommand = "pytest -q"\ntest_paths = [\n  "tests/**",\n  "spec/**",\n]\n` +
+        `test_must_fail_first = true  # a new test must fail on the code as it was\n\n[approval]\ngate = "on_write"\n`
+    );
+  });
+
+  it("leaves a stated test_must_fail_first alone, even false; a comment is not a statement", () => {
+    policy(`[verify]\ncommand = "pytest -q"\ntest_must_fail_first = false\n`);
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+    policy(`[verify]\ncommand = "pytest -q"\n# test_must_fail_first = true\n`);
+    expect(pendingMigrations(gnomonDir).map((p) => p.id)).toEqual(["verify-must-fail-first"]);
+  });
+
+  it("a [verify] it adds carries test_must_fail_first, and two policy.toml migrations do not overwrite each other", () => {
+    policy(`[approval]\ngate = "on_write"\n`);
+    writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: { test: "jest" } }));
+    const pending = pendingMigrations(gnomonDir);
+    expect(pending.map((p) => p.id)).toEqual(["verify-declared"]);
+    applyMigrations(pending);
+    expect(readPolicy()).toMatch(/\[verify\]\ncommand = "npm test"\n[\s\S]*test_must_fail_first = true/);
+    expect(readPolicy()).toContain('gate = "on_write"');
+  });
+
+  it("switches [audit] on, keeping the comment, and only from false", () => {
+    writeFileSync(join(gnomonDir, "config.toml"), `[audit]\n# why\nenabled = false   # trail\nrecord = "metadata"\n`, "utf-8");
+    applyMigrations(pendingMigrations(gnomonDir));
+    expect(readConfig()).toBe(`[audit]\n# why\nenabled = true   # trail\nrecord = "metadata"\n`);
+    writeFileSync(join(gnomonDir, "config.toml"), `[other]\nenabled = false\n`, "utf-8");
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+  });
+});

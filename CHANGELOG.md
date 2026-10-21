@@ -26,6 +26,115 @@
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-21
+
+Everything on master since v0.2.3, plus the nine pull requests that were open
+when gnomon was announced: one-line install and `gnomon update`/`uninstall`
+(#40), `gnomon check` (#41–#44), init gitignoring gnomon's machine-local dirs
+(#47), the `.sh` audit false positive (#48), and dependency bumps (#27, #29,
+#32, #49). v0.2.3's Linux binaries needed glibc 2.39 and did not load on
+Ubuntu 22.04; this release builds them on ubuntu-22.04 (see the install entry
+below).
+
+**A hand edit to roles.toml that the active profile overrides is reported
+(2026-10-21).** With `role_profile` set, a profile's `model`/`endpoint` replace
+the ones in roles.toml for that role, so changing them in roles.toml did nothing
+and nothing said so. The author's own `plan -> go` edit had never taken effect.
+`/models` and `endpoint add --role` already wrote to the profile; hand edits
+were the gap. Every routing field the profile overrides with a *different* value
+is now a non-fatal surface finding (interactive and `task` alike), and
+`endpoint list`/`test` and `/endpoints` print the ignored values and name the
+file a run actually reads, instead of always saying roles.toml. Equal values in
+both files (the scaffold's normal state) say nothing. gnomon's own surface had
+this exact defect: `implement` pointed at `go` in roles.toml and ran on
+`local`; roles.toml now states what runs. `init`'s closing hint says
+`gnomon launch`, the command `--help` leads with, not `gnomon prompt`.
+
+**Vite 8 refused four test files** that imported the same name twice, which
+Vite 7's parser let through. The duplicates are removed.
+
+**Install, update and uninstall are one command each (2026-10-11).**
+`scripts/install.sh` (Linux, macOS) and `scripts/install.ps1` (Windows) replace
+the four hand-edited tarball URLs: they check Node ≥ 20 and print the fix when
+it is missing, resolve the latest release, verify every download against
+`SHA256SUMS` (or GitHub's asset digest for files a release's SHA256SUMS
+predates), install from the npm registry once `gnomon-harness` is published
+there, and put the native binaries in `~/.local/share/gnomon/bin`
+(`%LOCALAPPDATA%\gnomon\bin`). gnomon-natives now searches that directory, so
+`gnomon surface` works after an install with no `GNOMON_BIN_OVERRIDE` — after
+v0.2.3's tarball install it failed with "native binary not found" until the
+user exported one by hand. New `gnomon update` (re-runs the installer for a
+global install, prints git commands for a checkout; `--check` only reports) and
+`gnomon uninstall` (prints the commands, naming all four packages, because a
+tarball install made each a separate global). An interactive `launch`/`prompt`
+may print one line, at most once a day, when a newer release exists — never
+under `task`, `--json`, CI or a pipe; `GNOMON_NO_UPDATE_CHECK=1` or `gnomon
+update --notice off` silences it, and its cache lives in the machine data dir,
+never in `.gnomon/`.
+
+Found while verifying the installer in clean `ubuntu:22.04` containers:
+v0.2.3's Linux binaries require glibc 2.39 (built on ubuntu-latest = 24.04), so
+on Ubuntu 22.04 `gnomon-surface` fails to load. The release workflow now builds
+Linux on ubuntu-22.04 (glibc 2.35), the installer runs each binary after placing
+it and warns when one does not load, and the release's `SHA256SUMS` now covers
+the npm tarballs too.
+
+**`gnomon init` gitignores what gnomon writes beside `.gnomon/` (2026-10-18).**
+`.gnomon-sessions/`, `.gnomon-audit/`, `.gnomon-out/`, `.gnomon-jobs/` and
+`.gnomon-loops/` are machine-local, and the first two can hold conversation
+text. gnomon's own repository ignored all five, but a scaffolded project got no
+`.gitignore` entry, so the first `git add .` after a session committed them.
+`init` now appends only the missing entries, once, after any existing content.
+
+**The surface auditor no longer calls `ci.sh` a shell (#46, 2026-10-18).**
+The "bash_allow admits a shell" check matched `sh` after the `.` of a script
+path, so `bash_allow = ['^\.gnomon/(ci|verify)\.sh$']` warned on every
+startup. Its suggested `bash_deny` was the same unanchored pattern, which also
+matches `.gnomon/ci.sh`. Deny wins, so applying the fix locked the verifier out
+of its own gate. Shell names after `.`, or followed by `/`, no longer count. The
+suggested deny is anchored to the command position, so it refuses
+`bash -c …`, `/bin/sh x` and `ls; sh x`, but not `.gnomon/ci.sh`. A surface
+that already applied the old deny should replace it with the new one.
+
+**`gnomon check` — the same rules, asked of a change another harness made.**
+The first project to adopt gnomon as its governance layer ran 198 agent
+dispatches and 0 of them through gnomon, so none met a single rule
+(docs/GOVERNANCE-CHECK-DESIGN.md, now accepted).
+
+- **`gnomon check --base <rev> [--head <rev>] --role <r> | --agent <name> [--json]`**
+  judges a diff from git alone: every changed path inside the role's
+  `write_allow`, `.gnomon/` not edited, `[verify]` passes on head, and a new or
+  changed test fails against the base sources (`test_must_fail_first`). The
+  rules are read from **base**, so a change cannot widen the list it is judged
+  by. Exit 0 / 2 / 10, the `task --json` contract; nothing inspected is 10.
+  Schema `gnomon.check/1`, pinned in CONTRACTS.md §6 and
+  `conformance/check_verdict.json`.
+- **Role is never guessed:** `--role`, else `[check.roles]` in policy.toml maps
+  `--agent` to one, else exit 10.
+- **Every verdict is appended to the hash-chained trail** — even with `[audit]`
+  off, which governs session recording — and `--json` carries the record's hash
+  for a caller's own chain. `replay` re-derives the recorded exit.
+- **Check 5: the agent's shell commands.** `--transcript <file> --format
+  claude-code|opencode` reads Claude Code session JSONL (and its subagents) or
+  an opencode export / `run --format json` log, and puts every command to
+  `bashPolicy` — the allow/deny decision `bashTool` makes, now one function. A
+  session that changed no file is still judged on what it ran.
+- **A Claude Code hook.** `gnomon check --install-hook claude-code` prints a
+  SessionStart + Stop fragment (it edits no settings). SessionStart records the
+  session's start (with a snapshot of a dirty tree); Stop judges everything
+  since and blocks the stop once with the findings.
+- **A new surface governs something by default.** `gnomon init` now scaffolds
+  `test_must_fail_first = true` beside the detected `[verify]`, and
+  `[audit] enabled = true` (record stays `metadata`: no prompt text).
+  `gnomon migrate` offers both to existing surfaces (`verify-must-fail-first`,
+  `audit-enabled`), touching only an absent key / the old `false`. Migrations
+  editing the same file now chain instead of the later overwriting the
+  earlier. `init --no-verify` — what the benchmark runners use — still writes
+  the old scaffold byte for byte, so no sweep gains a second variable.
+- The must-fail-first re-run is one function now (`mustFailFirst`), shared by
+  the turn loop and `check`; in the worktree its rewrites are journaled so a
+  killed run cannot lose uncommitted work.
+
 **First run, measured against a fresh repo with nothing listening (2026-10-11).**
 `gnomon launch` wrote placeholder tags, called them "very likely wrong — edit
 them", started a session that could not answer, and the first message then
@@ -2117,7 +2226,8 @@ was written.
   `git tag`, not a documentation edit as well.
 -->
 
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.0
 [0.2.3]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.3
 [0.2.2]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.2
 [0.2.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.1

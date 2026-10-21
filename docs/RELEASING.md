@@ -97,6 +97,13 @@ pnpm rewrites `workspace:*` to the real version as it publishes.
 | `gnomon-natives` | typed access to the Rust binaries |
 | `gnomon-tui` | the session reader |
 
+The installers (`scripts/install.sh`, `scripts/install.ps1`, and `gnomon
+update`, which runs them) need no change for this: they ask
+`npm view gnomon-harness@<version>` and install from the registry once that
+version resolves, from the release tarballs until then. They always fetch the
+native archive from the GitHub release, and verify it against `SHA256SUMS`, so
+publish the npm packages with the same version as a release that exists.
+
 **The package is `gnomon-harness`, the command is `gnomon`.** The bare name on
 npm belongs to an unrelated logging utility and has for years; `gnomon-harness`
 was free, matches the repository, and is the project's own word for itself.

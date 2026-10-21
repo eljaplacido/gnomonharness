@@ -9,13 +9,19 @@ lives in one directory called `.gnomon/`. That directory is hashed. Clone the
 repo on another machine and you get the same agent.
 
 ```bash
-# Works today on Linux, macOS and Windows — Node >= 20, nothing else.
-# (Once published to the registry this is just: npm i -g gnomon-harness)
-V=0.2.3; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
-npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/gnomon-harness-$V.tgz
+# Linux / macOS — needs Node >= 20 (the installer tells you how if it is missing)
+curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.sh | sh
 
 cd my-project && gnomon launch
 ```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.ps1 | iex
+```
+
+Update with `gnomon update`; `gnomon uninstall` prints how to remove it.
+[Install](#install) has what the installer does and the manual route.
 
 <p align="center">
   <img src="docs/img/gnomon-session.png" alt="A gnomon session: the startup banner naming the role, model and the tools withheld from it; a glob and a read; an approval gate showing the exact diff before the edit is allowed; then the result and a meta line" width="820">
@@ -46,8 +52,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1160 TypeScript tests (985 core, 154 cli, 14
-> natives, 7 tui) and 60 Rust tests — **1220 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1277 TypeScript tests (1041 core, 211 cli, 18
+> natives, 7 tui) and 60 Rust tests — **1337 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -81,6 +87,7 @@ does not. Behaviour is readable because something is holding still.
 - [Context and Memory](#context-and-memory)
 - [Sessions](#sessions)
 - [Governance and Audit](#governance-and-audit)
+- [Governing other harnesses](#governing-other-harnesses)
 - [CLI Reference](#cli-reference)
 - [Interactive Commands](#interactive-commands)
 - [Adopting gnomon in an Existing Project](#adopting-gnomon-in-an-existing-project)
@@ -358,32 +365,63 @@ implementations agree.
 Node >= 20 and nothing else.
 
 ```bash
-V=0.2.3; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
-npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/gnomon-harness-$V.tgz
+curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.sh | sh
 ```
 
 ```powershell
-$V="0.2.3"; $B="https://github.com/eljaplacido/gnomonharness/releases/download/v$V"
-npm i -g "$B/gnomon-core-$V.tgz" "$B/gnomon-natives-$V.tgz" "$B/gnomon-tui-$V.tgz" "$B/gnomon-harness-$V.tgz"
+irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.ps1 | iex
 ```
 
-<!-- These are two blocks because they have to be. This said "Identical in bash
-and PowerShell" over the bash one: `V=0.2.3` is not an assignment in PowerShell
-and `$B/...` is not a path there, so a Windows reader who copied it installed
-nothing and got a parse error. Verified 2026-09-08 under PowerShell 7.6.5 --
-both blocks above put the same four URLs in front of npm. -->
+The installer ([`scripts/install.sh`](scripts/install.sh),
+[`scripts/install.ps1`](scripts/install.ps1)) checks Node and, if it is missing
+or older than 20, prints the command for your OS instead of running one as root.
+It resolves the latest release (`GNOMON_VERSION=0.3.0` pins one), installs the
+npm package — from the registry once `gnomon-harness` is published there, from
+the release's own tarballs until then — and puts the native binaries in
+`~/.local/share/gnomon/bin` (`%LOCALAPPDATA%\gnomon\bin`), where gnomon finds
+them with no environment variable. Every download is checked against the
+release's `SHA256SUMS`; a mismatch stops the install before anything is
+installed. No sudo: when npm's global prefix is not writable it installs under
+`~/.local` and tells you if that is not on your PATH.
 
-> **Not yet on the npm registry.** `npm i -g gnomon-harness` will be the command
-> once it is published; today it 404s, so the release tarballs above are the
-> install. They are the same four packages, byte for byte — the release job
-> builds them and refuses to publish a release whose tarballs do not install and
-> run. See [Prebuilt binaries](GETTING_STARTED.md) for the native half.
+**Updating.** `gnomon update` shows this version, the latest and its changelog,
+then re-runs the installer (`--check` only reports). An interactive `launch` or
+`prompt` may print one line, at most once a day, when a newer release exists;
+never under `task`, `--json`, CI or a pipe. `GNOMON_NO_UPDATE_CHECK=1` or
+`gnomon update --notice off` turns it off. The check's cache lives beside the
+binaries, never in `.gnomon/`.
+
+**Uninstalling.** `gnomon uninstall` prints the exact commands for how this
+copy was installed. For a default install that is:
+
+```bash
+npm rm -g gnomon-harness gnomon-core gnomon-natives gnomon-tui   # add --prefix ~/.local if it went there
+rm -rf ~/.local/share/gnomon/bin ~/.local/share/gnomon/update-check.json
+```
+
+All four names, because a release-tarball install makes each a separate global
+package, and `npm rm -g gnomon-harness` alone leaves three behind. Your stored
+keys (`~/.local/share/gnomon/credentials.json`) and each project's `.gnomon/`
+are left alone.
+
+**By hand**, without the installer — the same four packages the release job
+builds and refuses to publish unless they install and run:
+
+```bash
+V=0.3.0; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
+npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/gnomon-harness-$V.tgz
+```
+
+<!-- bash only: `V=0.3.0` is not an assignment in PowerShell, and `$B/...` is
+not a path there. The installer one-liners above are the cross-shell route. -->
+
+Once `gnomon-harness` is on the registry this is `npm i -g gnomon-harness`;
+today that 404s.
 
 Requires **Node ≥ 20** and a model endpoint — [Ollama](https://ollama.com) for
 local inference, or any OpenAI-shaped API. A **Rust toolchain** is needed only
-for `surface`, `enumerations`, `session`, `apply` and `simulate`; take those from a
-[release](https://github.com/eljaplacido/gnomonharness/releases/latest) instead
-if you would rather not install one. Building from source additionally wants
+for `surface`, `enumerations`, `session`, `apply` and `simulate`, and only when
+building from source — the installer fetches prebuilt ones. Building from source additionally wants
 **pnpm 9**. **Linux, macOS and Windows** — all three run the full TypeScript suite
 in CI. Windows needs **Git for Windows** for the POSIX shell the `bash` tool
 uses on every platform (WSL2 also works, but is not required). See
@@ -1472,12 +1510,16 @@ Resumed 2026-08-24T19-39-48-151Z — 1 turn(s)
 
 ## Governance and Audit
 
-Off by default. When a surface asks for it, every turn, tool call and approval
-decision is appended to a hash-chained JSONL trail.
+On in every surface `gnomon init` writes (since 2026-10; `init --no-verify`
+keeps the old scaffold for benchmark comparability, and the code default when
+the block is absent is still off). Every turn, tool call and approval
+decision is appended to a hash-chained JSONL trail — decisions and outcomes,
+not prompt text, under the scaffolded `record = "metadata"`. `gnomon migrate`
+switches it on for a surface scaffolded earlier.
 
 ```toml
 [audit]
-enabled = false
+enabled = true
 dir = ".gnomon-audit"      # outside .gnomon/, same reason as sessions
 record = "metadata"        # metadata | full
 redact = ['(api[_-]?key|token|secret|password)\s*[:=]\s*\S+']
@@ -1585,6 +1627,87 @@ today (`verifyTrail(path, { attest })`, or `verifyAttestation` directly), and
 `attest.ts`, 42 for `replay.ts` — but neither is reachable from a terminal.
 Wiring them to subcommands is not done.
 
+## Governing other harnesses
+
+Every rule above is enforced inside gnomon's own tool loop, so work done by
+Claude Code, opencode or a factory's container never meets it. `gnomon check`
+asks the same rules after the fact, of a change any harness made, from the
+repository alone:
+
+```bash
+# CI: judge the branch against the rules as they stood on main
+gnomon check --base origin/main --head HEAD --role implement
+
+# after an agent finished, on its uncommitted work and its shell commands
+gnomon check --base "$SESSION_START_REV" --agent frontend-developer \
+  --transcript ~/.claude/projects/<project>/<session>.jsonl --format claude-code --json
+```
+
+| # | Check | Fails when |
+|---|---|---|
+| 1 | `write_allow` | a changed path is outside the role's `write_allow` |
+| 2 | `surface` | the change edits `.gnomon/` — an agent may not edit its own rules |
+| 3 | `verify` | the `[verify]` command fails on head |
+| 4 | `must_fail_first` | a new or changed test still passes with every other file put back to base — it pins nothing (only when `test_must_fail_first = true` and the change touched a test) |
+| 5 | `bash_allow` | a shell command in the agent's transcript (`--transcript <file> --format claude-code\|opencode`) breaks the role's `bash_allow` / `bash_deny`. A command the harness itself refused is listed, not failed |
+| 6 | `audit` | the verdict could not be appended to the hash-chained trail |
+
+The rules come from **`--base`, never from head**: a change that widens its own
+`write_allow` is reported by check 2 and still judged by the old list. The diff
+is taken from `merge-base(base, head)`. Exit codes are the `task --json`
+contract — **0** every check held, **2** a check failed, **10** no verdict (git
+failed, no `[verify]`, no role, nothing changed). A check that does not apply
+says `skipped` with the reason, and is never counted as a pass.
+
+**Role.** `--role` wins. Otherwise `--agent <name>` (or the agent named in the
+transcript) is looked up in the base surface's `.gnomon/policy.toml`:
+
+```toml
+[check.roles]
+frontend-developer = "implement"
+```
+
+Neither gives a role → exit 10. A role is never guessed.
+
+**Where the verdict goes.** Into gnomon's own trail, `.gnomon-audit/check-*.jsonl`
+(or wherever `[audit] dir` points), as a sealed three-record chain that `gnomon
+audit verify` reads like any other — **even when `[audit] enabled = false`**.
+That flag decides what the loop records about sessions; a check verdict holds no
+model text and exists to be cited. `--json` carries the record's `hash`, so a
+caller with its own audit chain stores it and gnomon's record names the
+caller's base, head and agent back.
+
+**In every Claude Code session.** `gnomon check --install-hook claude-code`
+prints this, for `.claude/settings.json` (or `~/.claude/settings.json`; a repo
+with no `.gnomon/` is skipped). It writes nothing itself:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "gnomon check --hook session-start" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "gnomon check --hook stop --agent claude-code", "timeout": 900 }] }]
+  }
+}
+```
+
+SessionStart reads the hook's JSON (`session_id`, `cwd`) and records `HEAD`
+— plus a `git stash create` snapshot when the tree is dirty, and the untracked
+files already there — under `.git/gnomon-check/`, so the operator's own
+uncommitted work is not charged to the agent. Stop runs the equivalent of
+`gnomon check --base <session-start rev> --transcript "$transcript_path"
+--format claude-code` with the rest of the hook input. A failure exits 2, which
+blocks the stop and hands Claude the findings — once; on the second stop in a
+row (`stop_hook_active`) it reports and lets go. A turn that changed nothing is
+silent. Map the agent to a role with `claude-code = "implement"` under
+`[check.roles]`, or put `--role <role>` in the command.
+
+`--head` defaults to the working tree, and must-fail-first then rewrites source
+files in place for one re-run. Their bytes are journaled inside `.git/` first:
+a signal restores them, and the next `check` does if the process was killed
+outright. A named `--head` that is not what is checked out is judged in a
+temporary `git worktree`, which has no installed dependencies — a `[verify]`
+that needs them reports *could not run*, not a pass.
+
 ---
 
 ## CLI Reference
@@ -1601,11 +1724,14 @@ Wiring them to subcommands is not done.
 | `gnomon key [set\|list\|unset] <endpoint\|VAR>` | Store an API key for an endpoint that declares one. |
 | `gnomon endpoint [add\|test\|list]` | Declare an endpoint end to end — provider, key, model, roles — and prove it runs one token before writing anything. Presets: `opencode-go`, `opencode-zen`, `openrouter`, `ollama`. |
 | `gnomon audit [show\|verify]` | Audit trails. |
+| `gnomon check --base <rev> [--head <rev>] [--role <r> \| --agent <name>] [--json]` | Judge a change another harness made by this surface's rules as of `<rev>`. Exit 0 held, 2 failed, 10 no verdict. See [Governing other harnesses](#governing-other-harnesses). |
 | `gnomon surface [hash\|manifest\|paths]` | Inspect the surface. |
 | `gnomon enumerations` | The enumerations contract. |
 | `gnomon session <cmd>` | Run shell commands as recorded session steps. |
 | `gnomon apply\|simulate <patchset.json>` | Apply or dry-run a patch set. |
 | `gnomon tui` | Saved-session viewer. |
+| `gnomon update [--check] [--force] [--notice on\|off]` | Show this version, the latest release and its changelog, then update the way this copy was installed. `--check` only reports; `--notice off` silences the once-a-day notice. Alias: `upgrade`. |
+| `gnomon uninstall` | Print the exact commands that remove this install and its native binaries. |
 | `gnomon loop\|loops [list\|status\|dry-run\|run\|install\|uninstall\|reset\|kill]` | Cron-scheduled guard/act supervision with a circuit breaker. No daemon. |
 
 **`--profile <name>`** is accepted by `simulate`, `endpoint`, `audit`, `task`,

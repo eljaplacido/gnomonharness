@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   applyProfile,
+  auditSurface,
   loadConfig,
   modelEditTarget,
   roleWriteTarget,
@@ -346,5 +347,61 @@ describe("the file a role is actually routed by", () => {
     const one = surface('role_profile = "p"', { p: SHADOWS_PLAN });
     expect(modelEditTarget(loadConfig(one)).label).toBe(".gnomon/roles.toml");
     rmSync(one, { recursive: true, force: true });
+  });
+});
+
+// The writers above go to the right file; a HAND edit to roles.toml still did
+// nothing, silently. The author pointed plan at a cloud endpoint in roles.toml
+// on 2026-10-21 and `gnomon endpoint test` reported that no role routed there.
+// Nothing in the product said why.
+describe("a roles.toml edit the active profile overrides is reported", () => {
+  const surface = (rolesPlan: string, profilePlan: string): string => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-shadow-"));
+    mkdirSync(join(root, ".gnomon", "profiles"), { recursive: true });
+    writeFileSync(join(root, ".gnomon", "config.toml"),
+      `[defaults]\nrole_profile = "p"\n\n[endpoints.local]\nurl = "http://127.0.0.1:11434/api/chat"\nkind = "ollama"\n\n` +
+      `[endpoints.cloud]\nurl = "https://example.invalid/v1/chat/completions"\nkind = "openai"\n`);
+    writeFileSync(join(root, ".gnomon", "roles.toml"), `[roles.plan]\n${rolesPlan}tools = ["read"]\n`);
+    writeFileSync(join(root, ".gnomon", "system.md"), "x\n");
+    writeFileSync(join(root, ".gnomon", "profiles", "p.toml"), `name = "p"\n\n[roles.plan]\n${profilePlan}`);
+    return root;
+  };
+  const shadowFindings = (root: string) =>
+    auditSurface(loadConfig(root)).filter((f) => f.where.startsWith(".gnomon/roles.toml [roles."));
+
+  it("names each overridden field, and is not fatal", () => {
+    const root = surface(`model = "glm"\nendpoint = "cloud"\n`, `model = "qwen"\nendpoint = "local"\n`);
+    expect(loadConfig(root).profile?.shadowed).toEqual([
+      { role: "plan", field: "model", base: "glm", profile: "qwen" },
+      { role: "plan", field: "endpoint", base: "cloud", profile: "local" },
+    ]);
+    const found = shadowFindings(root);
+    expect(found.map((f) => f.where)).toEqual([
+      ".gnomon/roles.toml [roles.plan] model",
+      ".gnomon/roles.toml [roles.plan] endpoint",
+    ]);
+    expect(found.every((f) => !f.fatal)).toBe(true);
+    expect(found[1].problem).toContain('endpoint = "cloud" is ignored');
+    expect(found[1].fix).toContain(".gnomon/profiles/p.toml");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  // The scaffold restates the same values in both files. That is not an edit
+  // being ignored, and warning on every fresh project would teach people to
+  // skip the warning.
+  it("says nothing when both files agree", () => {
+    const root = surface(`model = "qwen"\nendpoint = "local"\n`, `model = "qwen"\nendpoint = "local"\n`);
+    expect(loadConfig(root).profile?.shadowed).toBeUndefined();
+    expect(shadowFindings(root)).toEqual([]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("says nothing for a field only one file sets", () => {
+    const out = applyProfile(
+      { plan: { model: "m", temperature: 0.1 } } as unknown as Roles,
+      { p: { roles: { plan: { endpoint: "cloud", temperature: 0.9 } } } } as unknown as Profiles,
+      "p"
+    );
+    expect(out.shadowed).toBeUndefined();
   });
 });

@@ -144,11 +144,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # ubuntu-22.04, not -latest, for both Linux builds: a binary needs
+          # at least the glibc it was linked against. v0.2.3 was built on
+          # 24.04 and required GLIBC_2.39, so on Ubuntu 22.04 (glibc 2.35) every
+          # native command failed at load — found by running scripts/install.sh
+          # in a clean ubuntu:22.04 container on 2026-10-11. The oldest
+          # supported runner is the floor this build should carry.
           - name: linux-x64
-            os: ubuntu-latest
+            os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
           - name: linux-arm64
-            os: ubuntu-latest
+            os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
             # Cross-compiled from an x64 runner rather than built on an ARM
             # runner: `ubuntu-*-arm` labels exist, but their availability
@@ -329,10 +335,10 @@ jobs:
       # platform-independent — one set covers Linux, macOS and Windows. The
       # platform-specific half is the Rust archives above.
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -362,7 +368,11 @@ jobs:
         run: |
           set -euo pipefail
           ls -l dist
-          cat dist/*.sha256 > dist/SHA256SUMS
+          # The npm tarballs too. v0.2.3's SHA256SUMS listed only the native
+          # archives, so the four packages scripts/install.sh feeds to
+          # `npm i -g` could be checked only against GitHub's own asset
+          # digests. Linux runner, so sha256sum is present.
+          { cat dist/*.sha256; ( cd dist && sha256sum ./*.tgz | sed 's|  \./|  |' ); } > dist/SHA256SUMS
 
           notes=$(cat <<EOF
           Native binaries for gnomon $VERSION.
@@ -375,12 +385,22 @@ jobs:
           Each archive contains gnomon-surface, gnomon-enums, gnomon-edit and
           gnomon-exec. Verify with \`SHA256SUMS\`.
 
-          ## Install without a clone
+          ## Install or update
 
-          Node >= 20 and nothing else. One line, so it is genuinely identical
-          in bash and PowerShell — the backslash-continued form this replaced
-          was bash-only, and PowerShell (whose continuation character is a
-          backtick) read it as five statements and installed nothing:
+          Node >= 20 and nothing else. The installer verifies every download
+          against \`SHA256SUMS\` and puts the native binaries where gnomon finds
+          them with no environment variable:
+
+          \`\`\`
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/master/scripts/install.sh | sh
+          \`\`\`
+          \`\`\`powershell
+          irm https://raw.githubusercontent.com/${{ github.repository }}/master/scripts/install.ps1 | iex
+          \`\`\`
+
+          Already installed: \`gnomon update\`.
+
+          By hand, npm only (one line, identical in bash and PowerShell):
 
           \`\`\`
           npm i -g https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/gnomon-core-$VERSION.tgz https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/gnomon-natives-$VERSION.tgz https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/gnomon-tui-$VERSION.tgz https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/gnomon-harness-$VERSION.tgz
@@ -389,7 +409,9 @@ jobs:
           Then \`cd my-project && gnomon launch\`. That covers \`launch\`,
           \`prompt\`, \`task\` and \`init\`; \`surface\`, \`enumerations\`,
           \`session\`, \`apply\` and \`simulate\` additionally want the native
-          archive above, via \`GNOMON_BIN_OVERRIDE\`.
+          archive above, unpacked into \`~/.local/share/gnomon/bin\`
+          (\`%LOCALAPPDATA%\\gnomon\\bin\` on Windows) — which the installer
+          does for you.
 
           Changes: see [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md).
           EOF

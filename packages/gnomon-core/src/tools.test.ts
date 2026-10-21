@@ -17,7 +17,6 @@ import {
 import { tmpdir } from "node:os";
 import * as tools from "./tools.js";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
 import {
   buildToolSet,
   executeTool,
