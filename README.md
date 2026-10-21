@@ -9,13 +9,19 @@ lives in one directory called `.gnomon/`. That directory is hashed. Clone the
 repo on another machine and you get the same agent.
 
 ```bash
-# Works today on Linux, macOS and Windows — Node >= 20, nothing else.
-# (Once published to the registry this is just: npm i -g gnomon-harness)
-V=0.2.3; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
-npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/gnomon-harness-$V.tgz
+# Linux / macOS — needs Node >= 20 (the installer tells you how if it is missing)
+curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.sh | sh
 
 cd my-project && gnomon launch
 ```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.ps1 | iex
+```
+
+Update with `gnomon update`; `gnomon uninstall` prints how to remove it.
+[Install](#install) has what the installer does and the manual route.
 
 <p align="center">
   <img src="docs/img/gnomon-session.png" alt="A gnomon session: the startup banner naming the role, model and the tools withheld from it; a glob and a read; an approval gate showing the exact diff before the edit is allowed; then the result and a meta line" width="820">
@@ -46,9 +52,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1160 TypeScript tests (985 core, 154 cli, 14
-> natives, 7 tui) and 60 Rust tests — **1220 total**, the number `.gnomon/ci.sh`
-> reads back out of the runners on every run rather than a total asserted here
+> **Status: working, pre-1.0.** 1199 TypeScript tests (985 core, 189 cli, 18
+> natives, 7 tui) and 60 Rust tests — **1259 total**, the number `.gnomon/ci.sh`
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
 > silently stopped collecting two of the four packages, which is why the count
@@ -358,32 +363,63 @@ implementations agree.
 Node >= 20 and nothing else.
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.sh | sh
+```
+
+```powershell
+irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.ps1 | iex
+```
+
+The installer ([`scripts/install.sh`](scripts/install.sh),
+[`scripts/install.ps1`](scripts/install.ps1)) checks Node and, if it is missing
+or older than 20, prints the command for your OS instead of running one as root.
+It resolves the latest release (`GNOMON_VERSION=0.2.3` pins one), installs the
+npm package — from the registry once `gnomon-harness` is published there, from
+the release's own tarballs until then — and puts the native binaries in
+`~/.local/share/gnomon/bin` (`%LOCALAPPDATA%\gnomon\bin`), where gnomon finds
+them with no environment variable. Every download is checked against the
+release's `SHA256SUMS`; a mismatch stops the install before anything is
+installed. No sudo: when npm's global prefix is not writable it installs under
+`~/.local` and tells you if that is not on your PATH.
+
+**Updating.** `gnomon update` shows this version, the latest and its changelog,
+then re-runs the installer (`--check` only reports). An interactive `launch` or
+`prompt` may print one line, at most once a day, when a newer release exists;
+never under `task`, `--json`, CI or a pipe. `GNOMON_NO_UPDATE_CHECK=1` or
+`gnomon update --notice off` turns it off. The check's cache lives beside the
+binaries, never in `.gnomon/`.
+
+**Uninstalling.** `gnomon uninstall` prints the exact commands for how this
+copy was installed. For a default install that is:
+
+```bash
+npm rm -g gnomon-harness gnomon-core gnomon-natives gnomon-tui   # add --prefix ~/.local if it went there
+rm -rf ~/.local/share/gnomon/bin ~/.local/share/gnomon/update-check.json
+```
+
+All four names, because a release-tarball install makes each a separate global
+package, and `npm rm -g gnomon-harness` alone leaves three behind. Your stored
+keys (`~/.local/share/gnomon/credentials.json`) and each project's `.gnomon/`
+are left alone.
+
+**By hand**, without the installer — the same four packages the release job
+builds and refuses to publish unless they install and run:
+
+```bash
 V=0.2.3; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/gnomon-harness-$V.tgz
 ```
 
-```powershell
-$V="0.2.3"; $B="https://github.com/eljaplacido/gnomonharness/releases/download/v$V"
-npm i -g "$B/gnomon-core-$V.tgz" "$B/gnomon-natives-$V.tgz" "$B/gnomon-tui-$V.tgz" "$B/gnomon-harness-$V.tgz"
-```
+<!-- bash only: `V=0.2.3` is not an assignment in PowerShell, and `$B/...` is
+not a path there. The installer one-liners above are the cross-shell route. -->
 
-<!-- These are two blocks because they have to be. This said "Identical in bash
-and PowerShell" over the bash one: `V=0.2.3` is not an assignment in PowerShell
-and `$B/...` is not a path there, so a Windows reader who copied it installed
-nothing and got a parse error. Verified 2026-09-08 under PowerShell 7.6.5 --
-both blocks above put the same four URLs in front of npm. -->
-
-> **Not yet on the npm registry.** `npm i -g gnomon-harness` will be the command
-> once it is published; today it 404s, so the release tarballs above are the
-> install. They are the same four packages, byte for byte — the release job
-> builds them and refuses to publish a release whose tarballs do not install and
-> run. See [Prebuilt binaries](GETTING_STARTED.md) for the native half.
+Once `gnomon-harness` is on the registry this is `npm i -g gnomon-harness`;
+today that 404s.
 
 Requires **Node ≥ 20** and a model endpoint — [Ollama](https://ollama.com) for
 local inference, or any OpenAI-shaped API. A **Rust toolchain** is needed only
-for `surface`, `enumerations`, `session`, `apply` and `simulate`; take those from a
-[release](https://github.com/eljaplacido/gnomonharness/releases/latest) instead
-if you would rather not install one. Building from source additionally wants
+for `surface`, `enumerations`, `session`, `apply` and `simulate`, and only when
+building from source — the installer fetches prebuilt ones. Building from source additionally wants
 **pnpm 9**. **Linux, macOS and Windows** — all three run the full TypeScript suite
 in CI. Windows needs **Git for Windows** for the POSIX shell the `bash` tool
 uses on every platform (WSL2 also works, but is not required). See
@@ -1606,6 +1642,8 @@ Wiring them to subcommands is not done.
 | `gnomon session <cmd>` | Run shell commands as recorded session steps. |
 | `gnomon apply\|simulate <patchset.json>` | Apply or dry-run a patch set. |
 | `gnomon tui` | Saved-session viewer. |
+| `gnomon update [--check] [--force] [--notice on\|off]` | Show this version, the latest release and its changelog, then update the way this copy was installed. `--check` only reports; `--notice off` silences the once-a-day notice. Alias: `upgrade`. |
+| `gnomon uninstall` | Print the exact commands that remove this install and its native binaries. |
 | `gnomon loop\|loops [list\|status\|dry-run\|run\|install\|uninstall\|reset\|kill]` | Cron-scheduled guard/act supervision with a circuit breaker. No daemon. |
 
 **`--profile <name>`** is accepted by `simulate`, `endpoint`, `audit`, `task`,

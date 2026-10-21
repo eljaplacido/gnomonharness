@@ -7,10 +7,11 @@ shortest path from nothing to a first task. For the full reference, see
 
 ## 1. Prerequisites
 
-- **Node ≥ 20** and **pnpm 9** (get pnpm with `corepack enable pnpm`)
-- A **Rust toolchain** ([rustup](https://rustup.rs)) — needed for `surface`,
-  `enumerations`, `session`, `apply` and `simulate`; `launch`, `prompt`, `task`
-  and `init` work without it
+- **Node ≥ 20** — all the installer below needs
+- From source only: **pnpm 9** (`corepack enable pnpm`) and a **Rust
+  toolchain** ([rustup](https://rustup.rs)) for `surface`, `enumerations`,
+  `session`, `apply` and `simulate`; `launch`, `prompt`, `task` and `init` work
+  without it
 - A model endpoint — local [Ollama](https://ollama.com), or any OpenAI-shaped API
 
 **Platform:** Linux, macOS and Windows are all supported and all tested — CI runs
@@ -21,60 +22,64 @@ still works if you prefer it.
 
 ## 2. Install
 
-### From a release — works today, on any machine with Node
+### The one-liner — any machine with Node
 
-No registry account, no login, no clone, no pnpm, no Rust.
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell 5.1 or 7)
+irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.ps1 | iex
+```
+
+Then `cd my-project && gnomon launch`. No registry account, no clone, no pnpm,
+no Rust, no sudo.
+
+What it does: checks for Node ≥ 20 (if it is missing or old it prints the exact
+command for your OS — NodeSource, Homebrew, nvm, winget — and stops; it never
+installs Node as root on its own), resolves the latest release
+(`GNOMON_VERSION=0.2.3` pins one), installs the npm package, and puts the native
+binaries in `~/.local/share/gnomon/bin` (`%LOCALAPPDATA%\gnomon\bin` on Windows),
+where `surface`, `enumerations`, `session`, `apply` and `simulate` find them
+with no environment variable. Every download is checked against the release's
+`SHA256SUMS` and a mismatch stops it before anything is installed. Re-running it
+upgrades in place.
+
+**Update:** `gnomon update` (`--check` only reports). **Remove:** `gnomon
+uninstall` prints the commands; see [README → Install](README.md#install).
+
+On Ubuntu 22.04 the distro's `nodejs` is 12 and on 24.04 it is 18 — both too
+old. The installer's printed advice removes them first, because NodeSource's
+package fails in dpkg while the distro's `npm` and `libnode-dev` are installed.
+
+### By hand — the same packages, no script
 
 ```bash
 V=0.2.3
 B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz \
          $B/gnomon-tui-$V.tgz  $B/gnomon-harness-$V.tgz
-
-cd my-project && gnomon launch
 ```
-
-On Windows, in PowerShell:
 
 ```powershell
 $V="0.2.3"
 $B="https://github.com/eljaplacido/gnomonharness/releases/download/v$V"
 npm i -g "$B/gnomon-core-$V.tgz" "$B/gnomon-natives-$V.tgz" "$B/gnomon-tui-$V.tgz" "$B/gnomon-harness-$V.tgz"
-
-cd my-project; gnomon launch
 ```
 
-This said **"identical in bash and in PowerShell"** over the bash block alone.
-It is not: `V=0.2.3` is not an assignment in PowerShell, `$B/...` is not a path
-there, and `\` is not its line continuation (a backtick is) — so a Windows
-reader following the Windows path got a parse error and no install. Same
-mistake as the `set GNOMON_SHELL` line further down, in the same document.
-Both blocks above were run under PowerShell 7.6.5 and bash on 2026-09-08 with
-npm stubbed: each puts the same four URLs in front of npm.
+Two blocks because they have to be: `V=0.2.3` is not an assignment in
+PowerShell and `\` is not its line continuation. The four are one package split
+up — `gnomon-harness` is the CLI and the other three its libraries — so npm
+needs all four URLs until there is a registry entry to resolve them from. This
+route does not fetch the native binaries; see
+[Prebuilt binaries](#prebuilt-binaries--if-you-would-rather-not-install-rust).
 
-The four are one package split up: `gnomon-harness` is the CLI and the other
-three are its libraries, so npm needs all four URLs — there is no registry entry
-to resolve them from yet.
-
-### From npm — once it is published
-
-> This does **not** work yet — `gnomon-harness` is not on the registry and the
-> command below 404s today. Use the release path above until this note is gone.
-
-```bash
-npm install -g gnomon-harness      # the package; the command is `gnomon`
-cd my-project && gnomon launch
-```
-
-The registry publish is prepared and waiting on credentials only; the packages
-are identical either way. Both paths cover everything `launch`, `prompt`, `task`
-and `init` need — no Rust, no clone, no pnpm. `surface`, `enumerations`,
-`session`, `apply` and `simulate` additionally need the native binaries; add them from a release with the two exports under
-[Prebuilt binaries](#prebuilt-binaries--if-you-would-rather-not-install-rust),
-or build them from a clone.
-
-The package is `gnomon-harness` and the binary is `gnomon`: the name `gnomon`
-on npm belongs to an unrelated logging utility that has been there for years.
+Once `gnomon-harness` is on the registry, `npm install -g gnomon-harness` will
+work too (today it 404s; the installer switches to the registry by itself the
+moment it does not). The package is `gnomon-harness` and the binary is
+`gnomon`: the name `gnomon` on npm belongs to an unrelated logging utility.
 
 Everything below is the from-source path — for working ON gnomon, or for
 running the version in your own checkout.
@@ -189,6 +194,11 @@ harmless and claim the shim was created anyway. It is not, and it was not.)
 
 
 ### Prebuilt binaries — if you would rather not install Rust
+
+**The installer above already does this** — it places them in
+`~/.local/share/gnomon/bin` (`%LOCALAPPDATA%\gnomon\bin`), which gnomon searches
+by itself. What follows is the manual route, for a checkout or for a machine
+where you would rather see every step.
 
 `launch`, `prompt`, `task` and `init` need no Rust toolchain. `surface`,
 `enumerations`, `session`, `apply` and `simulate` do, because they reach the
