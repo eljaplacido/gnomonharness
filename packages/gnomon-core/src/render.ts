@@ -10,8 +10,9 @@
  */
 
 import type { PromptExchange } from "./prompt_loop.js";
-import type { ResolvedUi, MetaField } from "./config.js";
+import type { ResolvedUi, MetaField, ThinkMode } from "./config.js";
 import { renderMarkdown, DEFAULT_WIDTH } from "./markdown.js";
+import { cut } from "./width.js";
 
 // ---------------------------------------------------------------------------
 // Colour
@@ -578,4 +579,51 @@ export function safeForPrompt(text: string): string {
     const code = c.charCodeAt(0);
     return `\\x${code.toString(16).padStart(2, "0")}`;
   });
+}
+
+
+/**
+ * What some providers put in the reasoning channel when there is no
+ * reasoning. OpenCode Go's free tier answers `content: null` with
+ * `reasoning: "No reasoning available."`, and the loop reads that channel
+ * when content is empty -- so the trace printed the same sentence under all
+ * sixty steps of a turn, measured 2026-10-21. It says nothing, so it is not
+ * shown. It is still what the model returned, and the transcript keeps it.
+ */
+const EMPTY_TRACE = /^(no reasoning( (is )?available)?|no thoughts?|reasoning (is )?not available|n\/a|none)[.!]?$/i;
+
+/** A provider's stand-in for "no reasoning", which is not text the model wrote. */
+export function isEmptyReasoning(text: string): boolean {
+  return EMPTY_TRACE.test(text.trim());
+}
+
+/**
+ * Model prose shown while a turn works, as lines ready for a `  │ ` prefix.
+ *
+ * `collapse` keeps the first three lines, each clipped to one row; `show`
+ * keeps everything. Clipping matters for more than tidiness: a line wider
+ * than the terminal wraps, and a wrapped row is one the spinner's
+ * erase-line cannot see, so long reasoning lines were left half-overwritten.
+ *
+ * Every line is model-chosen text, so control characters are escaped -- a
+ * carriage return in the reasoning rewrote the line before it.
+ */
+export function traceLines(
+  text: string,
+  mode: ThinkMode,
+  columns: number
+): string[] {
+  const body = text.trim();
+  if (!body || mode === "hide" || isEmptyReasoning(body)) return [];
+  const all = body.split("\n").map((l) => safeForPrompt(l.trimEnd()));
+  if (mode === "show") return all;
+  const kept = all.filter((l) => l.trim()).slice(0, 3);
+  const room = Math.max(20, columns - 6);
+  const lines = kept.map((l) => {
+    const { head, tail } = cut(l, room - 1);
+    return tail ? `${head}…` : head;
+  });
+  const hidden = all.filter((l) => l.trim()).length - kept.length;
+  if (hidden > 0) lines.push(`… ${hidden} more line(s) — /think show for all`);
+  return lines;
 }

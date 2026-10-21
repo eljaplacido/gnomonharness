@@ -83,7 +83,24 @@ export function looksLikeChatModel(name: string): boolean {
  * would be worse than suggesting the same tag as before.
  */
 export function suggestChatModel(offered: readonly string[]): string | undefined {
-  return offered.find(looksLikeChatModel) ?? offered[0];
+  const chatty = offered.filter(looksLikeChatModel);
+  return chatty.find((m) => !looksLikeTrialTier(m)) ?? chatty[0] ?? offered[0];
+}
+
+/**
+ * A tag naming a free, preview or trial tier of a model.
+ *
+ * Not offered as the default when anything else chats. OpenCode Go lists 37
+ * tags and the alphabetically first chat tag is `beam-free` -- a free tier
+ * that answered every step of a 75-call audit with `content: null` and the
+ * reasoning "No reasoning available.", then stopped with no answer. Setup
+ * pointed every role at it, measured 2026-10-21. Still listed, and still
+ * pickable; only the default moves.
+ */
+const TRIAL_TIER = /(^|[-_.:/])(free|preview|alpha|beta|exp|experimental|contributor)($|[-_.:/])/i;
+
+export function looksLikeTrialTier(name: string): boolean {
+  return TRIAL_TIER.test(name);
 }
 
 /**

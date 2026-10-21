@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { splitThinking, renderMeta, renderExchange, Progress, paint, THEMES, terminalThemeSequence, safeForPrompt } from "./render.js";
+import { splitThinking, renderMeta, renderExchange, Progress, paint, THEMES, terminalThemeSequence, safeForPrompt, traceLines } from "./render.js";
 import { ResolvedUi, parseMetaFields, META_FIELDS } from "./config.js";
 import { PromptExchange } from "./prompt_loop.js";
 
@@ -464,5 +464,32 @@ describe("terminal: NO_COLOR and the legacy Windows console", () => {
       if (before === undefined) delete process.env.NO_COLOR;
       else process.env.NO_COLOR = before;
     }
+  });
+});
+
+
+describe("traceLines", () => {
+  it("shows nothing for a provider's no-reasoning placeholder", () => {
+    expect(traceLines("No reasoning available.", "collapse", 80)).toEqual([]);
+    expect(traceLines("  no reasoning available  ", "show", 80)).toEqual([]);
+  });
+
+  it("keeps three rows under collapse, clipped to the terminal, and says what it left out", () => {
+    const text = ["one", "x".repeat(200), "three", "four", "five"].join("\n");
+    const lines = traceLines(text, "collapse", 60);
+    expect(lines).toHaveLength(4);
+    expect(lines[1].length).toBeLessThanOrEqual(54);
+    expect(lines[1].endsWith("…")).toBe(true);
+    expect(lines[3]).toMatch(/2 more line/);
+  });
+
+  it("keeps everything under show", () => {
+    expect(traceLines("a\nb\nc\nd", "show", 80)).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("escapes a carriage return the model wrote, so it cannot rewrite the row", () => {
+    const [line] = traceLines("cannot edit.\rI should", "collapse", 80);
+    expect(line).not.toContain("\r");
+    expect(line).toContain("\\x0d");
   });
 });

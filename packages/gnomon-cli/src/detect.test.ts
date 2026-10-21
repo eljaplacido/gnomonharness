@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { parseParameterSize, chooseModels, detectModels, DetectedModel, FALLBACK_LARGE, FALLBACK_SMALL, looksLikeChatModel, suggestChatModel, listOllama, orderForPicking, ollamaTagsUrl } from "./detect.js";
+import { parseParameterSize, chooseModels, detectModels, DetectedModel, FALLBACK_LARGE, FALLBACK_SMALL, looksLikeChatModel, looksLikeTrialTier, suggestChatModel, listOllama, orderForPicking, ollamaTagsUrl } from "./detect.js";
 
 const m = (name: string, billions: number, family = "qwen2"): DetectedModel => ({
   name, billions, family,
@@ -173,6 +173,16 @@ describe("suggesting a model from names alone", () => {
     // A name filter cannot recognise every chat model. Refusing to suggest
     // would be worse than suggesting what the old code did.
     expect(suggestChatModel(["bge-m3:latest", "all-minilm:l6"])).toBe("bge-m3:latest");
+  });
+
+  it("does not default to a free or preview tier when a full model is listed", () => {
+    // OpenCode Go's sorted list starts with beam-free; setup pointed every
+    // role at it.
+    const go = ["beam-free", "claude-haiku-5-5", "glm-5.3", "longcat-2.5-preview-free"];
+    expect(suggestChatModel(go)).toBe("claude-haiku-5-5");
+    expect(suggestChatModel(["beam-free", "x-preview"])).toBe("beam-free");
+    expect(looksLikeTrialTier("muse-spark-1.3-contributor")).toBe(true);
+    expect(looksLikeTrialTier("deepseek-v4.1-flash")).toBe(false);
   });
 
   it("has nothing to suggest for an empty list", () => {
