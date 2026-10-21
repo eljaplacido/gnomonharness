@@ -11,7 +11,8 @@
 import * as readline from "node:readline";
 import { execFileSync } from "node:child_process";
 import { checkCitations } from "./citations.js";
-import { resolve, dirname, join, relative, sep, basename } from "node:path";
+import { mustFailFirst, readVerifyExit } from "./must_fail_first.js";
+import { resolve, dirname, join, basename } from "node:path";
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync} from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
@@ -73,7 +74,6 @@ import {
   SurfaceConsent,
   RunNote,
   concurrentSafe,
-  globToRegExp,
   createSpillSink,
   ARGS_TRUNCATED,
   ARGS_MALFORMED,
@@ -3510,10 +3510,13 @@ export async function runAgenticTurn(
         // indistinguishable from a green one, in the one mechanism whose whole
         // job is to contradict a model that claims success. bashTool now names
         // the signal, and an unreadable status is treated as failure.
-        const exitMatch = /exit (-?\d+)/.exec(check.summary);
-        const killed = /killed by /.test(check.summary);
-        const shellExit = exitMatch ? Number(exitMatch[1]) : killed ? 1 : check.code === 0 ? 1 : 1;
-        const passed = check.code === 0 && exitMatch !== null && shellExit === 0;
+        //
+        // The reading lives in readVerifyExit (must_fail_first.ts) because
+        // `gnomon check` reads the same command's exit and must not read it
+        // differently. An unreadable status is null there; 1 here, as before.
+        const verifyExit = readVerifyExit(check);
+        const shellExit = verifyExit.exit ?? 1;
+        const passed = verifyExit.passed;
 
         // "The check could not run" is not "your work is wrong", and telling
         // the model the second when the first is true is a category error with
@@ -3564,42 +3567,26 @@ export async function runAgenticTurn(
         // itself, so the cheapest honest guard is to re-run rather than to ask.
         let pinsNothing = false;
         if (passed && verify.test_must_fail_first && ctx.preImages && ctx.preImages.size > 0) {
-          const isTest = (abs: string) => {
-            const rel = relative(ctx.root, abs).split(sep).join("/");
-            return verify.test_paths.some((g) => {
-              try {
-                return globToRegExp(g).test(rel);
-              } catch {
-                return false;
-              }
-            });
-          };
-          const wroteATest = [...ctx.preImages.keys()].some(isTest);
-          const sources = [...ctx.preImages.entries()].filter(([abs]) => !isTest(abs));
-          if (wroteATest && sources.length > 0) {
-            const current = new Map(sources.map(([abs]) => [abs, readFileSync(abs, "utf-8")]));
-            try {
-              for (const [abs, pre] of sources) writeFileSync(abs, pre);
-              const again = await executeTool(
-                "bash",
-                { command: verify.command },
-                { ...ctx, gate: "never" as ApprovalGate, allow: "strict" as SurfaceConsent },
-                new Set(["bash"])
-              );
-              const stillPasses = again.code === 0 && /exit 0\b/.test(again.summary);
-              if (stillPasses) {
-                pinsNothing = true;
-                say(
-                  paint(
-                    deps.ui,
-                    "yellow",
-                    `  ⚠ the new test passes against the code as it was — it pins nothing`
-                  )
-                );
-              }
-            } finally {
-              for (const [abs, now] of current) writeFileSync(abs, now);
-            }
+          // Extracted so `gnomon check` re-runs exactly this against a change
+          // another harness made; see must_fail_first.ts. The re-run goes
+          // through this turn's own ctx, as the first run did.
+          const mff = await mustFailFirst(ctx.root, verify, ctx.preImages, (command) =>
+            executeTool(
+              "bash",
+              { command },
+              { ...ctx, gate: "never" as ApprovalGate, allow: "strict" as SurfaceConsent },
+              new Set(["bash"])
+            )
+          );
+          if (mff.pinsNothing) {
+            pinsNothing = true;
+            say(
+              paint(
+                deps.ui,
+                "yellow",
+                `  ⚠ the new test passes against the code as it was — it pins nothing`
+              )
+            );
           }
         }
 
@@ -4216,7 +4203,7 @@ function describeCall(call: ToolCall): string {
 }
 
 /** bash timeout, from tools.toml. */
-function toolTimeoutMs(config: GnomonConfig): number {
+export function toolTimeoutMs(config: GnomonConfig): number {
   const declared = (config.tools.tools ?? []).find((t) => t.name === "bash");
   const secs = declared?.timeout_seconds;
   return typeof secs === "number" && secs > 0 ? secs * 1000 : 120_000;

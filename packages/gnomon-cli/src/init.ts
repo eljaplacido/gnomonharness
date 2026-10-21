@@ -1039,9 +1039,14 @@ export interface InitOptions {
   /** Copy an existing surface instead of using the built-in templates */
   from?: string;
   /**
-   * Leave [verify] commented out even when the project declares a check.
-   * Benchmark harnesses pass it: a sweep before 2026-09-29 ran with no gate,
-   * and a gate switched on by the task's own files is a second variable.
+   * Write the scaffold exactly as it was before the governance defaults: no
+   * [verify] even when the project declares a check, no test_must_fail_first,
+   * `[audit] enabled = false`. Benchmark harnesses pass it (benchmarks/
+   * harness.py, audit-existing, greenfield-spec): a sweep before 2026-09-29
+   * ran with no gate, and a gate — or an audit trail written into the task's
+   * workspace — switched on by a scaffold change is a second variable. The
+   * output under this flag is byte-identical to what it was, and init.test.ts
+   * pins that.
    */
   noVerify?: boolean;
 }
@@ -1058,6 +1063,8 @@ export interface InitResult {
   gitattributes?: boolean;
   /** The MACHINE_LOCAL_DIRS entries added to the project's .gitignore */
   gitignore?: string[];
+  /** Whether the scaffold switched the audit trail on */
+  audit?: boolean;
 }
 
 /** Directories gnomon creates next to .gnomon/ that must stay out of git. */
@@ -1110,6 +1117,35 @@ function collectSurface(dir: string, base = dir): Template[] {
     }
   }
   return out;
+}
+
+const AUDIT_OFF =
+  "[audit]\n# Off by default: nothing is recorded unless a surface asks for it.\n";
+const AUDIT_ON =
+  "[audit]\n# On, as scaffolded by `gnomon init` since 2026-10: a governance layer that\n" +
+  "# keeps no record cannot show afterwards what it governed. `record` below is\n" +
+  "# \"metadata\", so no prompt or response text is written. (The code default,\n" +
+  "# when this block is absent, is still off.)\n";
+
+/**
+ * The scaffold's [audit] block, switched on. A targeted rewrite of the
+ * template's own text, and it throws if that text has moved: a default that
+ * silently stopped being applied would be the inert-setting failure this
+ * project keeps measuring.
+ */
+export function enableAuditBlock(config: string): string {
+  const header = config.indexOf(AUDIT_OFF);
+  const flag = config.indexOf("\nenabled = false\n", header);
+  if (header < 0 || flag < 0) {
+    throw new Error("init: the config.toml template's [audit] block changed shape; update enableAuditBlock");
+  }
+  return (
+    config.slice(0, header) +
+    AUDIT_ON +
+    config.slice(header + AUDIT_OFF.length, flag) +
+    "\nenabled = true\n" +
+    config.slice(flag + "\nenabled = false\n".length)
+  );
 }
 
 /**
@@ -1165,9 +1201,27 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
               `\n# Detected at 'gnomon init' from this project's own files.\n` +
               `[verify]\ncommand = ${JSON.stringify(verifyCommand)}\n` +
               `after = "change"         # any turn that changed a file, by write/edit or the shell\n` +
-              `max_rounds = 1\n`,
+              `max_rounds = 1\n` +
+              // A check that passes is only evidence if the tests it runs pin
+              // something. On by default with the check it guards: a new test
+              // that passes against the code as it was is handed back. It
+              // costs one more run of the check, only on a turn that wrote a
+              // test; `gnomon check` applies the same rule to other harnesses.
+              `test_must_fail_first = true  # a new test must fail on the code as it was\n`,
           }
         : t
+    );
+  }
+
+  // The trail on by default, so a new surface can say afterwards what it
+  // governed. A harness whose pitch is "answerable afterwards from a record"
+  // shipped it off, and a 48-task campaign answered nothing
+  // (docs/BENCHMARK-POSTMORTEM.md). `record = "metadata"` stays: decisions
+  // and outcomes, no prompt or response text. Not for --from (that surface
+  // made its own choice) or --no-verify (see InitOptions).
+  if (!options.from && !options.noVerify) {
+    templates = templates.map((t) =>
+      t.path === "config.toml" ? { ...t, content: enableAuditBlock(t.content) } : t
     );
   }
 
@@ -1236,5 +1290,6 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
     gitignore,
     models: options.from ? undefined : choice,
     verify: verifyCommand ?? undefined,
+    audit: !options.from && !options.noVerify,
   };
 }

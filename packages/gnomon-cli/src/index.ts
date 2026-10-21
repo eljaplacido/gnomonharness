@@ -95,6 +95,7 @@ import {
 } from "./setup.js";
 import { pendingMigrations, applyMigrations, MIGRATIONS } from "./migrate.js";
 import { cmdUpdate, cmdUninstall, maybeNotifyUpdate } from "./update.js";
+import { cmdCheck } from "./check.js";
 
 // ---------------------------------------------------------------------------
 // Argument parsing (minimal, no deps)
@@ -1572,9 +1573,13 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
   console.log("");
   console.log(
     result.verify
-      ? `Verify: \`${result.verify}\` runs after every turn that changes a file ([verify] in policy.toml).`
+      ? `Verify: \`${result.verify}\` runs after every turn that changes a file ([verify] in policy.toml);\n` +
+          `        a new test must fail on the code as it was (test_must_fail_first).`
       : "Verify: none found — declare [verify] command in .gnomon/policy.toml, or no turn is ever checked."
   );
+  if (result.audit) {
+    console.log("Audit: on — decisions and outcomes, no prompt text, in .gnomon-audit/ ([audit] in config.toml).");
+  }
 
   // Name the file whose edits take effect. The scaffold ships
   // `role_profile = "local_first"` and a profile that restates `model` and
@@ -1769,6 +1774,7 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "migrate" },
   { name: "update", aliases: ["upgrade"] },
   { name: "uninstall" },
+  { name: "check" },
 ];
 
 function showHelp(): void {
@@ -1789,7 +1795,9 @@ Commands:
     Write a .gnomon/ surface into a project. --from copies an existing
     surface instead of the built-in starter templates. The project's own
     check (package.json verify/check/test, cargo test, ...) is declared as
-    [verify]; --no-verify leaves it commented out, as before 2026-09-29.
+    [verify] with test_must_fail_first, and the audit trail is on.
+    --no-verify writes the scaffold as before (no [verify], audit off),
+    byte for byte, for benchmark comparability.
 
   migrate [--dir <path>] [--check]
     Bring an existing .gnomon/ up to the current shipped defaults. Prints
@@ -1852,6 +1860,20 @@ Commands:
 
   tui [--dir <path>]
     Read a saved session back: turns, tools, buckets.
+
+  check --base <rev> [--head <rev>] [--role <role> | --agent <name>] [--json]
+    Judge a change another harness made (Claude Code, opencode, a CI
+    branch) by this surface's rules, as they stood at <rev>: every changed
+    path inside the role's write_allow, .gnomon/ not edited, [verify] passes
+    on head, a new test fails on the old sources (test_must_fail_first).
+    --head defaults to the working tree. The role is --role, else
+    [check.roles] in policy.toml maps --agent to one; never guessed. The
+    verdict is appended to the hash-chained audit trail; --json carries
+    the record's hash. Exit: 0 held, 2 a check failed, 10 no verdict.
+    --transcript <file> --format claude-code|opencode also puts every
+    shell command the agent ran to the role's bash_allow / bash_deny.
+    --install-hook claude-code prints the SessionStart + Stop hooks that
+    run this on every Claude Code session (it edits nothing).
 
   prompt [--continue | --resume <id>]
     Interactive agent loop. --continue resumes the most recent session,
@@ -2023,6 +2045,8 @@ async function main(): Promise<void> {
     case "tui":
       await cmdTui(args);
       break;
+    case "check":
+      process.exit(await cmdCheck(args));
     default:
       console.error(`Unknown command: ${args.command}`);
       showHelp();

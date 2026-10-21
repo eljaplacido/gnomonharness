@@ -173,6 +173,10 @@ export type AuditKind =
   // and compared. The prose still ships beside it, because an id nobody can
   // read is a different failure.
   | "degradation"
+  // The verdict of `gnomon check` on a change some other harness made: which
+  // base, head and role it judged, each check's status and findings, the exit.
+  // Its own kind because it is not a turn and nothing in it came from a model.
+  | "check"
   | "session_end";
 
 export interface AuditRecord {
@@ -303,8 +307,13 @@ export class AuditTrail {
     return redact(value ?? "", this.settings.redact);
   }
 
-  write(kind: AuditKind, fields: Record<string, unknown>): void {
-    if (!this.file) return;
+  /**
+   * Append one record. Returns it (with its hash, when chaining) so a caller
+   * that hands the verdict to someone else's chain -- `gnomon check --json` --
+   * can name exactly which record it was. Null when the trail is disabled.
+   */
+  write(kind: AuditKind, fields: Record<string, unknown>): AuditRecord | null {
+    if (!this.file) return null;
     // Written and hashed must be the same object: JSON.stringify silently
     // drops undefined keys, so remove them before either happens.
     const defined = Object.fromEntries(
@@ -329,6 +338,7 @@ export class AuditTrail {
     if (this.attestor && record.hash && this.attestor.due(kind, this.seq)) {
       this.attestor.sign(record.seq, record.hash, this.seq);
     }
+    return record;
   }
 }
 

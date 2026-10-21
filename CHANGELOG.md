@@ -69,6 +69,45 @@ suggested deny is anchored to the command position, so it refuses
 `bash -c …`, `/bin/sh x` and `ls; sh x`, but not `.gnomon/ci.sh`. A surface
 that already applied the old deny should replace it with the new one.
 
+**`gnomon check` — the same rules, asked of a change another harness made.**
+The first project to adopt gnomon as its governance layer ran 198 agent
+dispatches and 0 of them through gnomon, so none met a single rule
+(docs/GOVERNANCE-CHECK-DESIGN.md, now accepted).
+
+- **`gnomon check --base <rev> [--head <rev>] --role <r> | --agent <name> [--json]`**
+  judges a diff from git alone: every changed path inside the role's
+  `write_allow`, `.gnomon/` not edited, `[verify]` passes on head, and a new or
+  changed test fails against the base sources (`test_must_fail_first`). The
+  rules are read from **base**, so a change cannot widen the list it is judged
+  by. Exit 0 / 2 / 10, the `task --json` contract; nothing inspected is 10.
+  Schema `gnomon.check/1`, pinned in CONTRACTS.md §6 and
+  `conformance/check_verdict.json`.
+- **Role is never guessed:** `--role`, else `[check.roles]` in policy.toml maps
+  `--agent` to one, else exit 10.
+- **Every verdict is appended to the hash-chained trail** — even with `[audit]`
+  off, which governs session recording — and `--json` carries the record's hash
+  for a caller's own chain. `replay` re-derives the recorded exit.
+- **Check 5: the agent's shell commands.** `--transcript <file> --format
+  claude-code|opencode` reads Claude Code session JSONL (and its subagents) or
+  an opencode export / `run --format json` log, and puts every command to
+  `bashPolicy` — the allow/deny decision `bashTool` makes, now one function. A
+  session that changed no file is still judged on what it ran.
+- **A Claude Code hook.** `gnomon check --install-hook claude-code` prints a
+  SessionStart + Stop fragment (it edits no settings). SessionStart records the
+  session's start (with a snapshot of a dirty tree); Stop judges everything
+  since and blocks the stop once with the findings.
+- **A new surface governs something by default.** `gnomon init` now scaffolds
+  `test_must_fail_first = true` beside the detected `[verify]`, and
+  `[audit] enabled = true` (record stays `metadata`: no prompt text).
+  `gnomon migrate` offers both to existing surfaces (`verify-must-fail-first`,
+  `audit-enabled`), touching only an absent key / the old `false`. Migrations
+  editing the same file now chain instead of the later overwriting the
+  earlier. `init --no-verify` — what the benchmark runners use — still writes
+  the old scaffold byte for byte, so no sweep gains a second variable.
+- The must-fail-first re-run is one function now (`mustFailFirst`), shared by
+  the turn loop and `check`; in the worktree its rewrites are journaled so a
+  killed run cannot lose uncommitted work.
+
 **First run, measured against a fresh repo with nothing listening (2026-10-11).**
 `gnomon launch` wrote placeholder tags, called them "very likely wrong — edit
 them", started a session that could not answer, and the first message then

@@ -408,3 +408,36 @@ purpose, so **nothing re-runs it**: an edit to any of these fixtures has to be
 re-checked by hand. Said plainly rather than left as an implication, because a
 golden that only pins the parser against itself would prove nothing about the
 subset being TOML.
+
+## 6. `gnomon check --json` — schema `gnomon.check/1`
+
+The verdict on a change another harness made (design:
+`docs/GOVERNANCE-CHECK-DESIGN.md`).
+
+**Exit codes** are the `task --json` contract: **0** every check that applied
+held and at least one inspected something; **2** a check failed; **10** no
+verdict — a check could not run, the run stopped before judging, or nothing was
+inspected. A failure beats an error: when both occur the exit is 2.
+
+| Check id | Status values it can take |
+|---|---|
+| `write_allow` | pass, fail, skipped |
+| `surface` | pass, fail |
+| `verify` | pass, fail, error |
+| `must_fail_first` | pass, fail, skipped |
+| `bash_allow` | pass, fail, skipped, error |
+| `audit` | pass, error |
+
+`skipped` always carries a `reason` and is never counted as a pass. An `audit`
+pass alone is not a verdict: it records the work, it does not inspect it.
+
+Top-level keys: `schema`, `base` (merge-base, full sha), `head` (full sha or
+`"worktree"`), `role`, `surface_hash` (the **base** surface — the rules the
+change was judged by), `checks`, `exit`; optionally `audit` (`trail`, `seq`,
+`hash`, `surface_audit_enabled`), `error`, `recovered`. Each check: `id`,
+`status`; optionally `findings`, `reason`, `inspected`.
+
+**Fixture**: `conformance/check_verdict.json`. `packages/gnomon-cli/src/check.test.ts`
+asserts the code's check ids and statuses, this table, and the fixture are the
+same sets, and validates a document the real binary printed against the
+fixture's key lists.
