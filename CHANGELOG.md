@@ -52,6 +52,13 @@ Linux on ubuntu-22.04 (glibc 2.35), the installer runs each binary after placing
 it and warns when one does not load, and the release's `SHA256SUMS` now covers
 the npm tarballs too.
 
+**`gnomon init` gitignores what gnomon writes beside `.gnomon/` (2026-10-18).**
+`.gnomon-sessions/`, `.gnomon-audit/`, `.gnomon-out/`, `.gnomon-jobs/` and
+`.gnomon-loops/` are machine-local, and the first two can hold conversation
+text. gnomon's own repository ignored all five, but a scaffolded project got no
+`.gitignore` entry, so the first `git add .` after a session committed them.
+`init` now appends only the missing entries, once, after any existing content.
+
 **First run, measured against a fresh repo with nothing listening (2026-10-11).**
 `gnomon launch` wrote placeholder tags, called them "very likely wrong — edit
 them", started a session that could not answer, and the first message then

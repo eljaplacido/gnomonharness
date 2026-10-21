@@ -271,6 +271,21 @@ describe("initSurface", () => {
     expect(readFileSync(join(root, ".gitattributes"), "utf-8")).toBe(text);
   });
 
+  it("gitignores gnomon's machine-local dirs, only the missing ones, once", async () => {
+    // Sessions and audit trails hold conversation text; a scaffolded project
+    // committed them on the first `git add .`.
+    writeFileSync(join(root, ".gitignore"), "node_modules\n/.gnomon-sessions/");
+    const r = await initSurface({ dir: root });
+    expect(r.gitignore).toEqual([".gnomon-audit", ".gnomon-out", ".gnomon-jobs", ".gnomon-loops"]);
+    const text = readFileSync(join(root, ".gitignore"), "utf-8");
+    expect(text.startsWith("node_modules\n/.gnomon-sessions/\n")).toBe(true);
+    expect(text).toContain(".gnomon-audit/\n");
+    expect(text.match(/\.gnomon-sessions/g)).toHaveLength(1);
+    const again = await initSurface({ dir: root, force: true });
+    expect(again.gitignore).toEqual([]);
+    expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(text);
+  });
+
   it("writes a complete surface", async () => {
     const r = await initSurface({ dir: root });
     expect(r.written).toEqual([

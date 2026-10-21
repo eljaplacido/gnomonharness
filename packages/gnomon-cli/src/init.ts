@@ -1056,7 +1056,18 @@ export interface InitResult {
   verify?: string;
   /** Whether `.gnomon/** text eol=lf` was added to the project's .gitattributes */
   gitattributes?: boolean;
+  /** The MACHINE_LOCAL_DIRS entries added to the project's .gitignore */
+  gitignore?: string[];
 }
+
+/** Directories gnomon creates next to .gnomon/ that must stay out of git. */
+export const MACHINE_LOCAL_DIRS = [
+  ".gnomon-sessions",
+  ".gnomon-audit",
+  ".gnomon-out",
+  ".gnomon-jobs",
+  ".gnomon-loops",
+];
 
 /**
  * Recursively collect the files of an existing surface, permission bits and all.
@@ -1197,11 +1208,32 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
     gitattributes = true;
   }
 
+  // gnomon writes these beside .gnomon/ as it runs. Sessions and audit trails
+  // can hold conversation text, and the other three hold whatever the project
+  // printed. gnomon's own repository ignores all five; a scaffolded project
+  // did not, so the first `git add .` after a session committed them.
+  const ignore = join(root, ".gitignore");
+  const ignoreText = existsSync(ignore) ? readFileSync(ignore, "utf-8") : "";
+  const present = new Set(
+    ignoreText.split(/\r?\n/).map((l) => l.trim().replace(/^\//, "").replace(/\/$/, ""))
+  );
+  const gitignore = MACHINE_LOCAL_DIRS.filter((d) => !present.has(d));
+  if (gitignore.length > 0) {
+    writeFileSync(
+      ignore,
+      (ignoreText && !ignoreText.endsWith("\n") ? ignoreText + "\n" : ignoreText) +
+        "# gnomon: machine-local session, audit and tool-output state; never commit.\n" +
+        gitignore.map((d) => `${d}/\n`).join(""),
+      "utf-8"
+    );
+  }
+
   return {
     gnomonDir,
     written,
     skipped,
     gitattributes,
+    gitignore,
     models: options.from ? undefined : choice,
     verify: verifyCommand ?? undefined,
   };
