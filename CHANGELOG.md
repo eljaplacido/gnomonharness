@@ -26,6 +26,35 @@
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-10-21
+
+Fixes from the first day of real use after the announcement, on a project
+using OpenCode Go (#51, #52).
+
+- **Onboarding picks a usable model.** `gnomon launch` / `endpoint add` listed
+  a cloud provider's models as a bare grid and asked `Model [beam-free]:` —
+  nothing said what to type, and the default was the alphabetically first tag.
+  On OpenCode Go that is `beam-free`, a free tier, and quick setup pointed
+  every role at it. The list is now numbered and takes a number or a tag;
+  free/preview/trial tiers are marked `(trial)` and are never the default when
+  a full model is listed.
+- **`/models` changes the model that runs.** It wrote `roles.toml` even when
+  the active `role_profile` overrides that role, so the pick was announced,
+  moved the hash, and was ignored — and the startup audit then warned about
+  the line it had written. It now writes the file a run reads (the profile,
+  when it governs the role), and the loop reads the reloaded surface on the
+  next turn instead of the one it started with.
+- **`/role <name>` means that role answers.** A declared `[chain]` still ran
+  after switching role, so `/role plan` showed plan everywhere while the
+  chain's coordinator did the work. The chain now belongs to the default role;
+  any other role answers alone, and the switch message says which applies.
+- **The live trace is readable.** A provider's `"No reasoning available."`
+  placeholder is read as an empty reply — it had been printed under every step
+  and, once, returned as the final answer of a 75-call turn. Under
+  `think = collapse` a step shows at most three rows of prose, clipped to the
+  terminal; an unchanged rationale is not repeated; control characters in
+  model text are escaped.
+
 ## [0.3.0] — 2026-10-21
 
 Everything on master since v0.2.3, plus the nine pull requests that were open
@@ -2226,7 +2255,8 @@ was written.
   `git tag`, not a documentation edit as well.
 -->
 
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.1
 [0.3.0]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.0
 [0.2.3]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.3
 [0.2.2]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.2
