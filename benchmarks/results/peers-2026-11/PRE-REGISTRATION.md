@@ -265,3 +265,26 @@ per arm as apparatus and never scored.** A cell whose meter read failed is
 
 Both failed smoke cells move to `runs-smoke-failed/` and are re-run before
 launch.
+
+## Amendment before launch: mini's API key, and the smoke's own fixes
+
+From the smoke re-runs, 2026-10-31 16:20–16:35Z, before any full-run trial.
+- **mini's second failure.** With litellm pinned, mini got as far as the model
+  call, then died on `Missing credentials … OPENAI_API_KEY`. tb's adapter
+  forwards `MSWEA_API_KEY` alone whenever it is set. mini 2.4.6 does not hand
+  that to litellm. The arm's environment now also carries `OPENAI_API_KEY`
+  (a placeholder: the local model needs none), as every other arm's does.
+- **The runner.** `run_peers.sh` now:
+  - runs `preflight_setups.sh` before taking the lock;
+  - records `/proc/loadavg` per cell (`load.json`), because other sessions'
+    jobs share the host;
+  - writes `tokens.json`/`load.json` only into a directory tb created itself.
+    A first version created the directory before `tb run`, and tb refuses an
+    existing output directory without a lock. That cost two smoke cells,
+    which are kept in `runs-smoke-failed/`.
+
+**Smoke results, for the record (n = 1, not analysed):**
+- valid and resolved, with model calls: gnomon (3 requests, 7,199 prompt
+  tokens), goose (9,108), opencode (11,593), qwen (56,004);
+- opencode logged 0 auto-rejects;
+- setup seconds: gnomon 18, goose 27, opencode 10, qwen 9, mini 47–72.

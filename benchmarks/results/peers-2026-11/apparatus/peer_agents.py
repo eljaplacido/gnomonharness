@@ -59,6 +59,10 @@ class MiniSwePeer(MiniSweAgent):
             "OPENAI_API_BASE": _base(),
             "OPENAI_BASE_URL": _base(),
             "MSWEA_COST_TRACKING": "ignore_errors",
+            # tb's adapter forwards MSWEA_API_KEY alone when it is set, and mini 2.4.6
+            # no longer hands that to litellm: the smoke cell died on "Missing
+            # credentials". The local model needs no key, only a non-empty one.
+            "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", "not-needed"),
             "PEER_VERSION": self.VERSION,
             # The newest litellm without the 1.106.0 MCP-import crash (see the setup).
             "LITELLM_VERSION": "1.105.7",

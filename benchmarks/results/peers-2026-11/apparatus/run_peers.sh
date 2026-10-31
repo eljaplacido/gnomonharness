@@ -40,6 +40,9 @@ say() { echo "$(date -u +%FT%TZ) $*" | tee -a "$STATUS"; }
 tag=$(git ls-remote https://github.com/eljaplacido/gnomonharness.git refs/tags/v0.3.1 | cut -f1)
 [ "$tag" = "$GNOMON_SHA" ] || { say "FATAL: tag v0.3.1 is '$tag', this run pins $GNOMON_SHA"; exit 1; }
 
+# Every setup through bash itself, before anything is spent (see preflight_setups.sh).
+"$HERE/preflight_setups.sh" | tee -a "$STATUS" || { say "FATAL: preflight failed"; exit 1; }
+
 exec 9>"$LOCK"
 say "waiting for gpu.lock"
 flock -w 7200 9 || { say "FATAL: gpu.lock not free within 2 h"; exit 1; }
@@ -74,6 +77,9 @@ for k in $(seq 1 "$ATTEMPTS"); do
       id="p-k$k-$arm-$task"
       if compgen -G "$BENCH/runs/$id/*/*/results.json" >/dev/null; then say "SKIP $id (done)"; continue; fi
       say "START $id"
+      # Not mkdir'd before tb: tb refuses an existing output dir that has no lock.
+      # The host is shared (other sessions' jobs); the load is recorded per cell.
+      load_start=$(cut -d' ' -f1-3 /proc/loadavg)
       before=$(counters)
       "$BENCH/tbvenv/bin/tb" run \
         --agent-import-path "peer_agents:${CLS[$arm]}" --model "${MODEL[$arm]}" \
@@ -85,8 +91,12 @@ for k in $(seq 1 "$ATTEMPTS"); do
       # One trial at a time and only container traffic on the relay, so the
       # difference is this cell's model traffic, exactly.
       after=$(counters)
-      mkdir -p "$BENCH/runs/$id"
-      printf '{"before": %s, "after": %s}\n' "${before:-null}" "${after:-null}" > "$BENCH/runs/$id/tokens.json"
+      # Only into a dir tb made itself: a dir holding just these files makes tb refuse
+      # every later resume of the cell ("exists but no lock file").
+      if [ -d "$BENCH/runs/$id" ]; then
+        printf '{"before": %s, "after": %s}\n' "${before:-null}" "${after:-null}" > "$BENCH/runs/$id/tokens.json"
+        printf '{"start": "%s", "end": "%s"}\n' "$load_start" "$(cut -d' ' -f1-3 /proc/loadavg)" > "$BENCH/runs/$id/load.json"
+      fi
       say "END   $id (tb exit $rc)"
     done
   done

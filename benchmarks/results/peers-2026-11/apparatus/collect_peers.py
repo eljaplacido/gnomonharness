@@ -107,6 +107,7 @@ for d in sorted(runs.iterdir()):
         "agent_s": seconds(r.get("agent_started_at"), r.get("agent_ended_at")),
         "version": version,
         "setup_s": setup_s,
+        "load": json.loads((d / "load.json").read_text()) if (d / "load.json").exists() else None,
         "tokens": tokens,
         "auto_rejects": (logs / "opencode.log").read_text(errors="ignore").count("auto-reject")
                         if (logs / "opencode.log").exists() else None,
