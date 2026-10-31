@@ -38,7 +38,9 @@ ARMS = [
     # gone in openhands-ai 1.11.0); `openhands-sdk` is its adapter for the current one.
     ("openhands",   "openhands-sdk",         "openai",    "/openai/v1", "1.59.0",   ["LLM_API_KEY", "OPENAI_API_KEY"], "openhands-sdk/1.59.0"),
     ("aider",       "p2_agents:AiderPinned", "openai",    "/openai/v1", None,       ["OPENAI_API_KEY"], "aider/0.86.2"),
-    ("goose",       "goose",                 "openai",    "/openai/v1", "v1.57.0",  ["OPENAI_API_KEY"], "goose/1.57.0"),
+    # goose appends /v1/chat/completions to its host itself: /openai/v1 became
+    # /openai/v1/v1/... and 404'd in pass 2.
+    ("goose",       "goose",                 "openai",    "/openai",    "v1.57.0",  ["OPENAI_API_KEY"], "goose/1.57.0"),
     ("mini",        "p2_agents:MiniPinned",  "openai",    "/openai/v1", "2.4.6",    ["MSWEA_API_KEY", "OPENAI_API_KEY"], "mini-swe-agent/2.4.6"),
     # pi accepts a custom endpoint only with an API style and a key reference.
     ("pi",          "pi",                    "openai",    "/openai/v1", "0.85.1",   ["OPENAI_API_KEY"], "pi/0.85.1",

@@ -1,0 +1,246 @@
+Run-specific allowlist host(s) ['host.docker.internal'] are ignored because the effective network policy is public.
+Run-specific allowlist host(s) ['host.docker.internal'] are ignored because the effective network policy is public.
+Run-specific allowlist host(s) ['host.docker.internal'] are ignored because the effective network policy is public.
+  1/1 Mean: 0.000 ---------------------------------------- 0:27:36 0:00:00
+┌───────────────────── Traceback (most recent call last) ─────────────────────┐
+│ C:\dev\p2-harbor\.venv\Lib\site-packages\harbor\cli\jobs.py:2071 in start   │
+│                                                                             │
+│   2068 │   options.apply_defaults()                                         │
+│   2069 │   try:                                                             │
+│   2070 │   │   config = build_job_config(**options.arguments)               │
+│ > 2071 │   │   return _execute_job(                                         │
+│   2072 │   │   │   config,                                                  │
+│   2073 │   │   │   diff_sources=options.arguments["diff_sources"],          │
+│   2074 │   │   │   print_config=options.arguments["print_config"],          │
+│                                                                             │
+│ C:\dev\p2-harbor\.venv\Lib\site-packages\harbor\cli\jobs.py:2406 in         │
+│ _execute_job                                                                │
+│                                                                             │
+│   2403 │   # (when --upload is set) so everything stays on one event loop.  │
+│        See                                                                  │
+│   2404 │   # the long comment in `HarborHubUploadPlugin.on_job_end` for why │
+│        this matters.                                                        │
+│   2405 │   try:                                                             │
+│ > 2406 │   │   job, job_result = run_async(_run_job())                      │
+│   2407 │   except DATASET_RESOLUTION_ERRORS as exc:                         │
+│   2408 │   │   abort_dataset_resolution(console, exc, "No job was           │
+│        started.")                                                           │
+│   2409                                                                      │
+│                                                                             │
+│ C:\dev\p2-harbor\.venv\Lib\site-packages\harbor\cli\utils.py:108 in         │
+│ run_async                                                                   │
+│                                                                             │
+│   105 │   Requires Python 3.12+ (which is the minimum version for this      │
+│       project).                                                             │
+│   106 │   """                                                               │
+│   107 │   if sys.platform == "win32":                                       │
+│ > 108 │   │   return asyncio.run(                                           │
+│   109 │   │   │   with_async_cleanup(coro),                                 │
+│       loop_factory=asyncio.ProactorEventLoop                                │
+│   110 │   │   )                                                             │
+│   111 │   return asyncio.run(with_async_cleanup(coro))                      │
+│                                                                             │
+│ C:\Python314\Lib\asyncio\runners.py:205 in run                              │
+│                                                                             │
+│   202 │   │   │   "asyncio.run() cannot be called from a running event      │
+│       loop")                                                                │
+│   203 │                                                                     │
+│   204 │   with Runner(debug=debug, loop_factory=loop_factory) as runner:    │
+│ > 205 │   │   return runner.run(main)                                       │
+│   206                                                                       │
+│   207                                                                       │
+│   208 def _cancel_all_tasks(loop):                                          │
+│                                                                             │
+│ C:\Python314\Lib\asyncio\runners.py:128 in run                              │
+│                                                                             │
+│   125 │   │                                                                 │
+│   126 │   │   self._interrupt_count = 0                                     │
+│   127 │   │   try:                                                          │
+│ > 128 │   │   │   return self._loop.run_until_complete(task)                │
+│   129 │   │   except exceptions.CancelledError:                             │
+│   130 │   │   │   if self._interrupt_count > 0:                             │
+│   131 │   │   │   │   uncancel = getattr(task, "uncancel", None)            │
+│                                                                             │
+│ C:\Python314\Lib\asyncio\base_events.py:720 in run_until_complete           │
+│                                                                             │
+│    717 │   │   if not future.done():                                        │
+│    718 │   │   │   raise RuntimeError('Event loop stopped before Future     │
+│        completed.')                                                         │
+│    719 │   │                                                                │
+│ >  720 │   │   return future.result()                                       │
+│    721 │                                                                    │
+│    722 │   def stop(self):                                                  │
+│    723 │   │   """Stop running the event loop.                              │
+│                                                                             │
+│ C:\dev\p2-harbor\.venv\Lib\site-packages\harbor\utils\async_cleanup.py:20   │
+│ in with_async_cleanup                                                       │
+│                                                                             │
+│   17 │   async with AsyncExitStack() as stack:                              │
+│   18 │   │   token = _exit_stack.set(stack)                                 │
+│   19 │   │   try:                                                           │
+│ > 20 │   │   │   return await coro                                          │
+│   21 │   │   finally:                                                       │
+│   22 │   │   │   _exit_stack.reset(token)                                   │
+│   23                                                                        │
+│                                                                             │
+│ C:\dev\p2-harbor\.venv\Lib\site-packages\harbor\cli\jobs.py:2363 in         │
+│ _run_job                                                                    │
+│                                                                             │
+│   2360 │   │   │   )                                                        │
+│   2361 │   │   │   await hub_plugin.on_job_start(job)                       │
+│   2362 │   │                                                                │
+│ > 2363 │   │   job_result = await job.run()                                 │
+│   2364 │   │                                                                │
+│   2365 │   │   # Print the run summary BEFORE plugin and Harbor Hub         │
+│        finalize so users                                                    │
+│   2366 │   │   # see results even if downstream operations fail.            │
+│                                                                             │
+│ C:\dev\p2-harbor\.venv\Lib\site-packages\harbor\job.py:1137 in run          │
+│                                                                             │
+│   1134 │   │   │   │   │   │   completed=n_existing,                        │
+│   1135 │   │   │   │   │   )                                                │
+│   1136 │   │   │   │   │                                                    │
+│ > 1137 │   │   │   │   │   trial_results = await                            │
+│        self._run_trials_with_queue(                                         │
+│   1138 │   │   │   │   │   │   loading_progress, progress_task              │
+│   1139 │   │   │   │   │   )                                                │
+│   1140 │   │   │   else:                                                    │
+│                                                                             │
+│ C:\dev\p2-harbor\.venv\Lib\site-packages\harbor\job.py:1311 in              │
+│ _run_trials_with_queue                                                      │
+│                                                                             │
+│   1308 │   │                                                                │
+│   1309 │   │   coros =                                                      │
+│        self._trial_queue.submit_batch(self._remaining_trial_configs)        │
+│   1310 │   │                                                                │
+│ > 1311 │   │   async with asyncio.TaskGroup() as tg:                        │
+│   1312 │   │   │   tasks = [tg.create_task(coro) for coro in coros]         │
+│   1313 │   │                                                                │
+│   1314 │   │   return [t.result() for t in tasks]                           │
+│                                                                             │
+│ C:\Python314\Lib\asyncio\taskgroups.py:72 in __aexit__                      │
+│                                                                             │
+│    69 │   async def __aexit__(self, et, exc, tb):                           │
+│    70 │   │   tb = None                                                     │
+│    71 │   │   try:                                                          │
+│ >  72 │   │   │   return await self._aexit(et, exc)                         │
+│    73 │   │   finally:                                                      │
+│    74 │   │   │   # Exceptions are heavy objects that can have object       │
+│    75 │   │   │   # cycles (bad for GC); let's not keep a reference to      │
+│                                                                             │
+│ C:\Python314\Lib\asyncio\taskgroups.py:174 in _aexit                        │
+│                                                                             │
+│   171 │   │   │   │   self._parent_task.uncancel()                          │
+│   172 │   │   │   │   self._parent_task.cancel()                            │
+│   173 │   │   │   try:                                                      │
+│ > 174 │   │   │   │   raise BaseExceptionGroup(                             │
+│   175 │   │   │   │   │   'unhandled errors in a TaskGroup',                │
+│   176 │   │   │   │   │   self._errors,                                     │
+│   177 │   │   │   │   ) from None                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)
+
+┌───────────────────────────── Sub-exception #1 ──────────────────────────────┐
+│ ┌─────────────────── Traceback (most recent call last) ───────────────────┐ │
+│ │ C:\dev\p2-harbor\.venv\Lib\site-packages\harbor\trial\queue.py:242 in   │ │
+│ │ _run_trial                                                              │ │
+│ │                                                                         │ │
+│ │   239 │   async def _run_trial(self, trial_config: TrialConfig) ->      │ │
+│ │       TrialResult:                                                      │ │
+│ │   240 │   │   """Execute a single trial, acquiring the semaphore for    │ │
+│ │       concurrency control."""                                           │ │
+│ │   241 │   │   async with self._semaphore:                               │ │
+│ │ > 242 │   │   │   return await                                          │ │
+│ │       self._execute_trial_with_retries(trial_config)                    │ │
+│ │   243 │                                                                 │ │
+│ │   244 │   def submit(self, trial_config: TrialConfig) -> Coroutine[Any, │ │
+│ │       Any, TrialResult]:                                                │ │
+│ │   245 │   │   """                                                       │ │
+│ │                                                                         │ │
+│ │ C:\dev\p2-harbor\.venv\Lib\site-packages\harbor\trial\queue.py:203 in   │ │
+│ │ _execute_trial_with_retries                                             │ │
+│ │                                                                         │ │
+│ │   200 │   │   for attempt in range(self._retry_config.max_retries + 1): │ │
+│ │   201 │   │   │   trial = await Trial.create(trial_config)              │ │
+│ │   202 │   │   │   self._setup_hooks(trial)                              │ │
+│ │ > 203 │   │   │   result = await trial.run()                            │ │
+│ │   204 │   │   │                                                         │ │
+│ │   205 │   │   │   if result.exception_info is None:                     │ │
+│ │   206 │   │   │   │   return result                                     │ │
+│ │                                                                         │ │
+│ │ C:\dev\p2-harbor\.venv\Lib\site-packages\harbor\trial\trial.py:621 in   │ │
+│ │ run                                                                     │ │
+│ │                                                                         │ │
+│ │    618 │   │   │   self.logger.debug(f"Trial {self.config.trial_name}   │ │
+│ │        failed: {exc}")                                                  │ │
+│ │    619 │   │   │   self._record_exception(exc)                          │ │
+│ │    620 │   │   │   await self._close_bridge()                           │ │
+│ │ >  621 │   │   │   await self._recover_outputs()                        │ │
+│ │    622 │   │   finally:                                                 │ │
+│ │    623 │   │   │   try:                                                 │ │
+│ │    624 │   │   │   │   await self._finalize()                           │ │
+│ │                                                                         │ │
+│ │ C:\dev\p2-harbor\.venv\Lib\site-packages\harbor\trial\single_step.py:58 │ │
+│ │ in _recover_outputs                                                     │ │
+│ │                                                                         │ │
+│ │    55 │                                                                 │ │
+│ │    56 │   @override                                                     │ │
+│ │    57 │   async def _recover_outputs(self) -> None:                     │ │
+│ │ >  58 │   │   await self._sync_agent_output(self.result)                │ │
+│ │    59 │   │   await                                                     │ │
+│ │       self._collect_artifacts(stop_main_before_sidecars=False)          │ │
+│ │    60 │   │   await self._stop_agent_environment()                      │ │
+│ │    61                                                                   │ │
+│ │                                                                         │ │
+│ │ C:\dev\p2-harbor\.venv\Lib\site-packages\harbor\trial\trial.py:1171 in  │ │
+│ │ _sync_agent_output                                                      │ │
+│ │                                                                         │ │
+│ │   1168 │   │   await self._download_agent_logs()                        │ │
+│ │   1169 │   │   self._populate_agent_context(target.agent_result)        │ │
+│ │   1170 │   │   if target.agent_result is not None and                   │ │
+│ │        target.agent_result.model_usage is None:                         │ │
+│ │ > 1171 │   │   │   target.agent_result.model_usage =                    │ │
+│ │        load_model_usage_from_trajectory(                                │ │
+│ │   1172 │   │   │   │   (self.user_agent or self.agent).logs_dir /       │ │
+│ │        "trajectory.json"                                                │ │
+│ │   1173 │   │   │   )                                                    │ │
+│ │   1174 │   │   if self.user_agent is not None:                          │ │
+│ │                                                                         │ │
+│ │ C:\dev\p2-harbor\.venv\Lib\site-packages\harbor\utils\trajectory_utils. │ │
+│ │ py:56 in load_model_usage_from_trajectory                               │ │
+│ │                                                                         │ │
+│ │   53 ) -> dict[str, ModelUsage] | None:                                 │ │
+│ │   54 │   """Per-model usage from an ATIF file, or None if missing,      │ │
+│ │      invalid, or empty."""                                              │ │
+│ │   55 │   try:                                                           │ │
+│ │ > 56 │   │   trajectory =                                               │ │
+│ │      Trajectory.model_validate_json(trajectory_path.read_text())        │ │
+│ │   57 │   except (OSError, ValidationError):                             │ │
+│ │   58 │   │   return None                                                │ │
+│ │   59 │   return compute_model_usage(trajectory) or None                 │ │
+│ │                                                                         │ │
+│ │ C:\Python314\Lib\pathlib\__init__.py:788 in read_text                   │ │
+│ │                                                                         │ │
+│ │    785 │   │   # appropriate stack level.                               │ │
+│ │    786 │   │   encoding = io.text_encoding(encoding)                    │ │
+│ │    787 │   │   with self.open(mode='r', encoding=encoding,              │ │
+│ │        errors=errors, newline=newline) as f:                            │ │
+│ │ >  788 │   │   │   return f.read()                                      │ │
+│ │    789 │                                                                │ │
+│ │    790 │   def write_bytes(self, data):                                 │ │
+│ │    791 │   │   """                                                      │ │
+│ │                                                                         │ │
+│ │ C:\Python314\Lib\encodings\cp1252.py:23 in decode                       │ │
+│ │                                                                         │ │
+│ │    20                                                                   │ │
+│ │    21 class IncrementalDecoder(codecs.IncrementalDecoder):              │ │
+│ │    22 │   def decode(self, input, final=False):                         │ │
+│ │ >  23 │   │   return                                                    │ │
+│ │       codecs.charmap_decode(input,self.errors,decoding_table)[0]        │ │
+│ │    24                                                                   │ │
+│ │    25 class StreamWriter(Codec,codecs.StreamWriter):                    │ │
+│ │    26 │   pass                                                          │ │
+│ └─────────────────────────────────────────────────────────────────────────┘ │
+│ UnicodeDecodeError: 'charmap' codec can't decode byte 0x90 in position      │
+│ 1113547: character maps to <undefined>                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
