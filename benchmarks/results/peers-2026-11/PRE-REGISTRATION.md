@@ -158,3 +158,44 @@ degradation, so neither H7 nor P1 is affected. The fix rewrites every
 `.gnomon/profiles/*.toml` the same way. It was checked end to end against UX1's
 fake model: all four profile endpoints move to `bench`, and the task answers
 through it.
+
+## Amendment before launch: version records on tasks without a log mount
+
+Found in H7's readout, 2026-10-31 ~15:45Z, before any P1 trial. tb mounts the
+agent-logs volume only where a task's `docker-compose.yaml` asks for it, and
+`pandas-sql-query` (one of the 16) does not. Every arm writes its version to
+`/agent-logs/arm-version.txt` (gnomon: `gnomon-commit.txt`). On that task the
+file stays inside the container, and all 15 of its cells would have reached the
+collector with no version. Every setup already creates `/agent-logs`, so the arms
+install the same way on that task; only the record was lost.
+
+The fix: every setup also prints `ARM_VERSION=<first line of that file>` on the
+terminal. tb captures the terminal for every task, in `sessions/agent.log`. The
+collector reads the file first and falls back to that line. A cell with neither
+is still counted as having no version, and for gnomon as off-commit. The smoke run
+checks that the line appears for every arm.
+
+## Amendment before launch: what the 900 s cap is
+
+Found in H7's wall-clock check, 2026-10-31 ~15:50Z, before any P1 trial. H7 passed
+the same `--global-agent-timeout-sec 900`, yet its timed-out trials ended at
+**1,200 s**. The reason is in tb 0.2.18 under Python 3.12:
+- tb runs `perform_task` in an executor thread and gives up waiting at 900 s;
+- `asyncio.run` then joins that thread for up to 300 s (`THREAD_JOIN_TIMEOUT`);
+- a run that ends inside that window is scored on the state it leaves.
+  H7's `mailman` ended at 1,059 s, carries tb's `agent_timeout`, and is resolved.
+
+So the cap is **900 s, plus up to 300 s of grace in which a run that finishes
+still counts.** Every arm blocks on its command the same way (stock adapters and
+ours all pass `max_timeout_sec=inf`), so the cap is the same for all five. It is
+left as it is. Changing it now would make P1 incomparable with H7 and the August
+runs. The registered cap stays "900 s", with this footnote. "At the cap" is
+counted as tb's `agent_timeout`, not as a duration. Cells still running at
+1,200 s are counted separately, because their process may outlive the wait and
+overlap the tests.
+
+**Install time is spent from the cap.** tb runs each arm's setup inside the timed
+`perform_task`, as on its leaderboard. The arms install different things, so
+their working time differs by their setup time. Each setup now prints
+`ARM_SETUP_END=<epoch>`, and the collector reports setup seconds per arm. This is
+descriptive and is reported beside the pass rates. It is not corrected for.

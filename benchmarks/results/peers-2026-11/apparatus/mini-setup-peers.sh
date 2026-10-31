@@ -12,3 +12,7 @@ if python3 -m venv /opt/mswea >/dev/null 2>&1 \
 else
   echo "INSTALL_FAIL_STATUS"
 fi
+# Also on the terminal: tb captures the pane for every task, but some tasks (pandas-sql-query) mount no agent-logs volume.
+echo "ARM_VERSION=$(head -1 /agent-logs/arm-version.txt 2>/dev/null)"
+# When setup ended. tb starts the 900 s clock before setup, so install time is spent from the cap.
+echo "ARM_SETUP_END=$(date -u +%s)"

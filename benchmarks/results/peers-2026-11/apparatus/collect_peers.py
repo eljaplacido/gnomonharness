@@ -64,6 +64,18 @@ for d in sorted(runs.iterdir()):
     for f in ("arm-version.txt", "gnomon-commit.txt"):
         if (logs / f).exists():
             version = (logs / f).read_text().split("\n")[0].strip()
+    # Fallback for tasks that mount no agent-logs volume: each setup also prints the
+    # version on the terminal, which tb captures for every task.
+    pane = res.parent / "sessions" / "agent.log"
+    if version is None and pane.exists():
+        m2 = re.search(r"^ARM_VERSION=(\S[^\r\n]*)", pane.read_text(errors="replace"), re.M)
+        version = m2.group(1).strip() if m2 else None
+    setup_s = None
+    if pane.exists():
+        m3 = re.search(r"^ARM_SETUP_END=(\d+)", pane.read_text(errors="replace"), re.M)
+        if m3 and r.get("agent_started_at"):
+            t0 = datetime.fromisoformat(r["agent_started_at"].replace("Z", "+00:00")).timestamp()
+            setup_s = int(m3.group(1)) - t0
     if arm == "gnomon" and version != sha:
         wrong_commit += 1
     resolved = r.get("is_resolved")
@@ -88,6 +100,7 @@ for d in sorted(runs.iterdir()):
         "resolved": resolved, "failure_mode": r.get("failure_mode"),
         "agent_s": seconds(r.get("agent_started_at"), r.get("agent_ended_at")),
         "version": version,
+        "setup_s": setup_s,
         "tokens": tokens,
         "auto_rejects": (logs / "opencode.log").read_text(errors="ignore").count("auto-reject")
                         if (logs / "opencode.log").exists() else None,
@@ -169,9 +182,21 @@ print(f"\nopencode permission handicap: {blocked}/{len(oc)} cells logged an auto
       f"(the published run's failure mode; nonzero means its score is a floor)")
 
 durs = [c["agent_s"] for c in valid if c["agent_s"] is not None]
-at_cap = sum(1 for s in durs if s >= 890)
-print(f"\nwall-clock: {len(durs)} timed valid cells, {at_cap} at the 900 s cap, "
+# tb abandons the agent at 900 s, then Python 3.12's asyncio.run waits up to 300 s
+# (THREAD_JOIN_TIMEOUT) for its command to end; a run that ends in that window is
+# scored. "At the cap" is therefore tb's own agent_timeout, not a duration.
+at_cap = sum(1 for c in valid if c["failure_mode"] == "agent_timeout")
+print(f"\nwall-clock: {len(durs)} timed valid cells, {at_cap} past the 900 s cap (tb agent_timeout), "
+      f"{sum(1 for s in durs if s >= 1199)} still running at 1200 s, "
       f"{sum(1 for s in durs if s < 15)} under 15 s (check those)")
+print("setup seconds per arm (spent from the cap), median [min, max]:")
+for arm in ARMS:
+    ss = sorted(c["setup_s"] for c in cells if c["arm"] == arm and c.get("setup_s") is not None)
+    summary["arms"][arm]["setup_s"] = ss
+    if ss:
+        print(f"  {arm:8s} {ss[len(ss) // 2]:6.0f}  [{ss[0]:.0f}, {ss[-1]:.0f}]  n={len(ss)}")
+    else:
+        print(f"  {arm:8s}      -  (no ARM_SETUP_END line)")
 total = len(cells)
 assert total == len(valid) + sum(1 for c in cells if c["state"] != "valid") + \
        sum(1 for c in cells if c["state"] == "valid" and c["task"] in EXCLUDED_TASKS)

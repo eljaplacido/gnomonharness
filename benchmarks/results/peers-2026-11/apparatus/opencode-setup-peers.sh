@@ -31,3 +31,7 @@ if curl -fsSL "$url" -o /tmp/opencode.tar.gz >>/agent-logs/arm-install.log 2>&1 
    && tar xzf /tmp/opencode.tar.gz -C /opt/opencode >>/agent-logs/arm-install.log 2>&1 \
    && ln -sf /opt/opencode/opencode /usr/local/bin/opencode \
    && opencode --version > /agent-logs/arm-version.txt 2>&1; then :; else echo "INSTALL_FAIL_STATUS"; fi
+# Also on the terminal: tb captures the pane for every task, but some tasks (pandas-sql-query) mount no agent-logs volume.
+echo "ARM_VERSION=$(head -1 /agent-logs/arm-version.txt 2>/dev/null)"
+# When setup ended. tb starts the 900 s clock before setup, so install time is spent from the cap.
+echo "ARM_SETUP_END=$(date -u +%s)"
