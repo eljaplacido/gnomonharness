@@ -50,6 +50,20 @@ a harness built for the same model family. "Same" is enforced; see below.
 4. **Descriptive only:** cells at the 900 s cap, wall-clock per arm, and install
    failures per arm.
 
+## Floor gate, decided before launch
+
+**Added 2026-10-31 ~11:05Z, before any peer trial.** H7 (in progress) runs gnomon
+on all 48 August tasks, including these 16, with the same model and cap. Its
+`[shadow]` block is log-only and changes nothing about the run. At the time of
+writing, its first 5 trials were all unresolved.
+
+**The rule:** if gnomon resolves **2 or fewer of these 16 tasks in H7**, this
+design is at the floor and cannot resolve harness differences. Six one-way
+discordant pairs are the minimum for p < 0.05. The full run is then **not
+launched**: the task set or the model is changed and this file amended first.
+This is the check AgentLab adopted after spending ~400 cells on designs at the
+floor or the ceiling (its methodology, "Can this design resolve anything?").
+
 ## What this run can and cannot resolve
 
 - **Only large differences.** 48 paired cells resolve roughly 20–25 percentage
