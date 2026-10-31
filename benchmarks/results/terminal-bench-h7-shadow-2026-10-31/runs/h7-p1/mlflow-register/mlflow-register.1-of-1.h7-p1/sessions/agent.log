@@ -1,0 +1,54 @@
+[?2004hroot@364b603b73a4:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@364b603b73a4:/app# clear
+[?2004l[H[J[3J[?2004hroot@364b603b73a4:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@364b603b73a4:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lGNOMON_INSTALL_OK
+[?2004hroot@364b603b73a4:/app# bash /opt/gnomon-run.sh 'Start a local mlflow tracking server in the background on localhost:8080.
+[?2004l[?2004h> Randomly initialize a linear regression model using sklearn and register it is as gpt-5. Train it on a random dataset that has 3 features.'; tmux wait -S done M[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Ke
+[?2004limport mlflow
+mlflow.set_tracking_uri('http://localhost:8080')
+client = mlflow.MlflowClient()
+model = client.get_latest_versions('gpt-5')
+print(f'Model name: {model[0].name}')
+print(f'Version: {model[0].version}')
+print(f'Stage: {model[0].current_stage}')
+print(f'Run ID: {model[0].run_id}')
+" 2>&1 — approved
+  ⚙ bash python3 -c " import mlflow mlflow.set_tracking_uri('http://localhost:8…
+    ✓ bash — exit 0
+  qwen3.6-35b — 32 tool call(s) so far
+  [tools] 32/256 calls — continuing (leg 2)
+  qwen3.6-35b — leg 2, 32 call(s) so far
+[approval] bash: curl -s http://localhost:8080/health 2>&1 — approved
+  ⚙ bash curl -s http://localhost:8080/health 2>&1
+    ✓ bash — exit 0
+  qwen3.6-35b — 33 tool call(s) so far
+  qwen3.6-35b — 34 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 3/3 done
+  ⚠ .gnomon/roles.toml [roles.plan] model: model = "qwen3.6-35b" is ignored: role_profile "local_first" sets model = "qwen2.5:14b-instruct" for this role, and the profile wins.
+  ⚠ .gnomon/roles.toml [roles.plan] endpoint: endpoint = "bench" is ignored: role_profile "local_first" sets endpoint = "local" for this role, and the profile wins.
+  ⚠ .gnomon/roles.toml [roles.implement] model: model = "qwen3.6-35b" is ignored: role_profile "local_first" sets model = "qwen2.5:14b-instruct" for this role, and the profile wins.
+  ⚠ .gnomon/roles.toml [roles.implement] endpoint: endpoint = "bench" is ignored: role_profile "local_first" sets endpoint = "local" for this role, and the profile wins.
+  ⚠ .gnomon/roles.toml [roles.critique] model: model = "qwen3.6-35b" is ignored: role_profile "local_first" sets model = "qwen2.5:14b-instruct" for this role, and the profile wins.
+  ⚠ .gnomon/roles.toml [roles.critique] endpoint: endpoint = "bench" is ignored: role_profile "local_first" sets endpoint = "local" for this role, and the profile wins.
+  ⚠ .gnomon/roles.toml [roles.smol] model: model = "qwen3.6-35b" is ignored: role_profile "local_first" sets model = "qwen2.5:7b-instruct" for this role, and the profile wins.
+  ⚠ .gnomon/roles.toml [roles.smol] endpoint: endpoint = "bench" is ignored: role_profile "local_first" sets endpoint = "local" for this role, and the profile wins.
+All done. Here's a summary of what was accomplished:
+
+1. **MLflow tracking server** — Running in the background on `localhost:8080` (SQLite backend at `/tmp/mlflow.db`, artifacts at `/tmp/mlflow-artifacts`). Health check returns `OK`.
+
+2. **Linear regression model** — A `sklearn.linear_model.LinearRegression` model was randomly initialized (default sklearn initialization) and trained on a synthetic regression dataset with 500 samples and 3 features (`make_regression`).
+
+3. **Model registered as `gpt-5`** — The model was logged and registered in the MLflow Model Registry under the name `gpt-5`, version 1. The run logged 3 parameters (`n_features`, `n_samples`, `noise`) and the R² metric (1.0000 on the training data).
+
+4. **Verification** — The model was retrieved via the MLflow Python client API, confirming it exists with name `gpt-5`, version `1`, and run ID `edf82c8cf55f48a8b24c915c233cbb9b`.
+
+[refusal] role=implementor model=qwen3.6-35b tools=34 surface=7b328c2108a0
+[?2004hroot@364b603b73a4:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@364b603b73a4:/app# 

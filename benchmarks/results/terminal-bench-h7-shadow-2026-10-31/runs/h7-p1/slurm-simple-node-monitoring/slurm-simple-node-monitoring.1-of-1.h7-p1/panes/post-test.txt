@@ -1,0 +1,153 @@
+root@9c4f3db41b46:/app# asciinema rec --stdin /logs/tests.cast
+asciinema: recording asciicast to /logs/tests.cast
+asciinema: press <ctrl-d> or type "exit" when you're done
+root@9c4f3db41b46:/app# clear
+root@9c4f3db41b46:/app# bash /tests/run-tests.sh; tmux wait -S done
+Hit:1 http://ports.ubuntu.com/ubuntu-ports jammy InRelease
+Hit:2 http://ports.ubuntu.com/ubuntu-ports jammy-updates InRelease
+Hit:3 http://ports.ubuntu.com/ubuntu-ports jammy-backports InRelease
+Hit:4 http://ports.ubuntu.com/ubuntu-ports jammy-security InRelease
+Reading package lists... Done
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+The following NEW packages will be installed:
+  curl
+0 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.
+Need to get 190 kB of archives.
+After this operation, 440 kB of additional disk space will be used.
+Get:1 http://ports.ubuntu.com/ubuntu-ports jammy-updates/main arm64 curl arm64 7.81.0-1ubuntu1.30 [190 kB]
+Fetched 190 kB in 0s (3098 kB/s)
+debconf: delaying package configuration, since apt-utils is not installed
+Selecting previously unselected package curl.
+(Reading database ... 20439 files and directories currently installed.)
+Preparing to unpack .../curl_7.81.0-1ubuntu1.30_arm64.deb ...
+Unpacking curl (7.81.0-1ubuntu1.30) ...
+Setting up curl (7.81.0-1ubuntu1.30) ...
+downloading uv 0.7.13 aarch64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Using CPython 3.11.13 interpreter at: /opt/conda/bin/python
+Creating virtual environment at: .tbench-testing
+Activate with: source .tbench-testing/bin/activate
+Using Python 3.11.13 environment at: .tbench-testing
+Resolved 5 packages in 48ms
+Prepared 5 packages in 60ms
+Installed 5 packages in 7ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+Using Python 3.11.13 environment at: .tbench-testing
+Audited 1 package in 1ms
+===================================================================== test session starts ======================================================================
+platform linux -- Python 3.11.13, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 5 items
+
+../tests/test_outputs.py FFFFF                                                                                                                           [100%]
+
+=========================================================================== FAILURES ===========================================================================
+_____________________________________________________________________ test_out_log_exists ______________________________________________________________________
+
+    def test_out_log_exists():
+        """
+        Test that the output log file exists.
+        """
+        out_log_path = Path("/app/protocol_idle.log")
+>       assert out_log_path.exists(), f"Output log file {out_log_path} does not exist."
+E       AssertionError: Output log file /app/protocol_idle.log does not exist.
+E       assert False
+E        +  where False = exists()
+E        +    where exists = PosixPath('/app/protocol_idle.log').exists
+
+/tests/test_outputs.py:32: AssertionError
+____________________________________________________________________ test_out_log_not_empty ____________________________________________________________________
+
+    def test_out_log_not_empty():
+        """
+        Test that the output log file is not empty.
+        """
+        out_log_path = Path("/app/protocol_idle.log")
+>       assert out_log_path.stat().st_size > 0, f"Output log file {out_log_path} is empty."
+               ^^^^^^^^^^^^^^^^^^^
+
+/tests/test_outputs.py:40:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = PosixPath('/app/protocol_idle.log')
+
+    def stat(self, *, follow_symlinks=True):
+        """
+        Return the result of the stat() system call on this path, like
+        os.stat() does.
+        """
+>       return os.stat(self, follow_symlinks=follow_symlinks)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/app/protocol_idle.log'
+
+/opt/conda/lib/python3.11/pathlib.py:1013: FileNotFoundError
+_____________________________________________________________ test_out_log_contains_expected_data ______________________________________________________________
+
+    def test_out_log_contains_expected_data():
+        """
+        Test that the output log file contains expected data.
+        """
+        out_log_path = Path("/app/protocol_idle.log")
+>       with open(out_log_path, "r") as f:
+             ^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/app/protocol_idle.log'
+
+/tests/test_outputs.py:48: FileNotFoundError
+_____________________________________________________________________ test_out_log_format ______________________________________________________________________
+
+    def test_out_log_format():
+        """
+        Test that the output log file has the correct format.
+        Example of output:
+        timestamp,total,idle,fraction
+        2025-05-31 02:29:36,32,26,0.8125
+        """
+
+        total_nodes = get_total_nodes()
+        global TOTAL_NODES
+        TOTAL_NODES = total_nodes
+        out_log_path = Path("/app/protocol_idle.log")
+>       with open(out_log_path, "r") as f:
+             ^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/app/protocol_idle.log'
+
+/tests/test_outputs.py:88: FileNotFoundError
+____________________________________________________________________ test_out_log_fraction _____________________________________________________________________
+
+    def test_out_log_fraction():
+        """
+        Test that the output log file has the correct fraction of idle nodes.
+        dummy log file format:
+        Current time: <timestamp>, Idle nodes: <num_current_idle_nodes>
+        """
+        out_log_path = Path("/app/protocol_idle.log")
+        dummy_log_path = Path("/logs/submit_dummy_jobs.log")
+
+>       with open(out_log_path, "r") as f:
+             ^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/app/protocol_idle.log'
+
+/tests/test_outputs.py:177: FileNotFoundError
+=================================================================== short test summary info ====================================================================
+FAILED ../tests/test_outputs.py::test_out_log_exists - AssertionError: Output log file /app/protocol_idle.log does not exist.
+FAILED ../tests/test_outputs.py::test_out_log_not_empty - FileNotFoundError: [Errno 2] No such file or directory: '/app/protocol_idle.log'
+FAILED ../tests/test_outputs.py::test_out_log_contains_expected_data - FileNotFoundError: [Errno 2] No such file or directory: '/app/protocol_idle.log'
+FAILED ../tests/test_outputs.py::test_out_log_format - FileNotFoundError: [Errno 2] No such file or directory: '/app/protocol_idle.log'
+FAILED ../tests/test_outputs.py::test_out_log_fraction - FileNotFoundError: [Errno 2] No such file or directory: '/app/protocol_idle.log'
+====================================================================== 5 failed in 0.06s =======================================================================
+root@9c4f3db41b46:/app#

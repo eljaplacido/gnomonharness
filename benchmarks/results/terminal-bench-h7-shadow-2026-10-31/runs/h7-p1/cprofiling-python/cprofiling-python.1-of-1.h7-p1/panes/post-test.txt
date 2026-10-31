@@ -1,0 +1,110 @@
+root@4aa510b1983c:/app# bash /tests/run-tests.sh; tmux wait -S done
+Hit:1 http://deb.debian.org/debian bookworm InRelease
+Hit:2 http://deb.debian.org/debian bookworm-updates InRelease
+Hit:3 http://deb.debian.org/debian-security bookworm-security InRelease
+Reading package lists... Done
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+curl is already the newest version (7.88.1-10+deb12u15).
+0 upgraded, 0 newly installed, 0 to remove and 45 not upgraded.
+downloading uv 0.13.6 aarch64-unknown-linux-gnu
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Using CPython 3.13.1 interpreter at: /usr/local/bin/python
+Creating virtual environment at: .tbench-testing
+Activate with: source .tbench-testing/bin/activate
+Using Python 3.13.1 environment at: .tbench-testing
+Resolved 10 packages in 187ms
+Prepared 10 packages in 561ms
+Installed 10 packages in 25ms
+ + imagehash==4.3.2
+ + iniconfig==2.3.1
+ + numpy==2.5.4
+ + packaging==26.3
+ + pillow==11.2.1
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+ + pywavelets==1.10.0
+ + scipy==1.18.1
+===================================================================== test session starts ======================================================================
+platform linux -- Python 3.13.1, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 2 items
+
+../tests/test_outputs.py .F                                                                                                                              [100%]
+
+=========================================================================== FAILURES ===========================================================================
+_____________________________________________________________________ test_image_download ______________________________________________________________________
+
+    def test_image_download():
+        """
+        Test that the downloaded images are correct by computing their hashes.
+
+        This test processes all image files in both downloaded_images_fast and
+        downloaded_images_fastest directories, computes average hashes
+        for each image, and verifies that the combined hash matches the expected value.
+        This ensures that both fast.py and fastest.py downloaded the correct images.
+        """
+        image_dirs = [
+            Path("/app/downloaded_images_fast"),
+            Path("/app/downloaded_images_fastest"),
+        ]
+
+        for image_dir in image_dirs:
+            hash_values = []
+            for file in sorted(image_dir.glob("*")):
+                if file.suffix.lower() in [
+                    ".bmp",
+                    ".gif",
+                    ".jpg",
+                    ".jpeg",
+                    ".png",
+                    ".webp",
+                ]:
+                    try:
+                        img = Image.open(file)
+                        hash_value = imagehash.average_hash(img)
+                        hash_values.append(hash_value)
+                        print(f"{hash_value}  {file.name}")
+                    except Exception as e:
+                        print(f"Error with {file.name}: {e}", file=sys.stderr)
+
+            # Calculate a combined hash of all image hashes
+            combined_hash = int(
+                hashlib.sha1(str(tuple(str(h) for h in hash_values)).encode()).hexdigest()[
+                    :16
+                ],
+                16,
+            )
+>           assert combined_hash == 536601250958665318
+E           assert 7853106948596726547 == 536601250958665318
+
+/tests/test_outputs.py:83: AssertionError
+--------------------------------------------------------------------- Captured stdout call ---------------------------------------------------------------------
+00037fdcffefe0ec  image_160.jpg
+ff800080ffffffff  image_2275.jpg
+ff01018183ffffff  image_3031.jpg
+0090e0c0c1ffffff  image_334.jpg
+0203035fdffffc20  image_4020.jpg
+0160e0f8e7fe7e18  image_4641.jpg
+00030000feffefff  image_7752.jpg
+e004070ffffff0c0  image_8361.jpg
+00301f1ffcf8f080  image_9361.jpg
+============================================================================ PASSES ============================================================================
+____________________________________________________________________ test_speed_comparison _____________________________________________________________________
+--------------------------------------------------------------------- Captured stdout call ---------------------------------------------------------------------
+fast_time: 1.1351194899999981, fastest_time: 0.23143775100000014
+=================================================================== short test summary info ====================================================================
+PASSED ../tests/test_outputs.py::test_speed_comparison
+FAILED ../tests/test_outputs.py::test_image_download - assert 7853106948596726547 == 536601250958665318
+================================================================= 1 failed, 1 passed in 1.72s ==================================================================
+root@4aa510b1983c:/app#

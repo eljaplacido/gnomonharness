@@ -22,13 +22,17 @@ def seconds(a, b):
     return (f(b) - f(a)).total_seconds()
 
 
-trials, wrong_commit = [], 0
+trials, wrong_commit, unrecorded = [], 0, 0
 for res_file in sorted(run_dir.glob("*/*/results.json")):
     r = json.loads(res_file.read_text())
     logs = res_file.parent / "agent-logs"
     commit_file = logs / "gnomon-commit.txt"
     commit = commit_file.read_text().split()[0] if commit_file.exists() else None
-    if commit != expected_sha:
+    # No file is not a wrong commit: tasks whose compose file mounts no agent-logs
+    # volume (cprofiling-python, pandas-sql-query) keep it inside the container.
+    if commit is None:
+        unrecorded += 1
+    elif commit != expected_sha:
         wrong_commit += 1
     shadow = logs / "shadow" / "gnomon.jsonl"
     recs = [json.loads(l) for l in shadow.read_text().splitlines() if l.strip()] if shadow.exists() else []
@@ -41,6 +45,7 @@ for res_file in sorted(run_dir.glob("*/*/results.json")):
         "failure_mode": r.get("failure_mode"),
         "agent_s": seconds(r.get("agent_started_at"), r.get("agent_ended_at")),
         "commit_ok": commit == expected_sha,
+        "commit": "ok" if commit == expected_sha else ("unrecorded" if commit is None else "WRONG"),
         "abort": by.get("abort", 0),
         "role": by.get("role", 0),
         "approval": by.get("approval", 0),
@@ -62,7 +67,7 @@ for res_file in sorted(run_dir.glob("*/*/results.json")):
 for t in trials:
     s = f"{t['agent_s']:.0f}s" if t["agent_s"] is not None else "?"
     print(f"{t['trial'][:58]:58s} resolved={str(t['resolved']):5s} {t['failure_mode']!s:28s} agent={s:>6s} "
-          f"commit={'ok' if t['commit_ok'] else 'WRONG'} abort={t['abort']} role={t['role']} "
+          f"commit={t['commit']} abort={t['abort']} role={t['role']} "
           f"approval={t['approval']} turn_end={t['turn_end']} err={t['errors']} stopped={t['stopped']} "
           f"label={'ok' if t['label_ok'] else 'NO'} audit={'yes' if t['audit'] else 'no'} shadow={t['shadow']}")
 (run_dir / "h7-trials.json").write_text(json.dumps(trials, indent=1))
@@ -75,7 +80,7 @@ unresolved = sum(1 for t in trials if t["resolved"] is False)
 unknown = n - resolved - unresolved
 assert resolved + unresolved + unknown == n
 print(f"\n{n} trials: {resolved} resolved, {unresolved} unresolved, {unknown} no verdict; "
-      f"{wrong_commit} on the wrong commit; "
+      f"{wrong_commit} on the wrong commit, {unrecorded} with the commit unrecorded; "
       f"{sum(1 for t in trials if t['turn_end'] == 0)} without turn_end; "
       f"{sum(1 for t in trials if not t['label_ok'])} without a matching run_label")
 sys.exit(1 if wrong_commit else 0)

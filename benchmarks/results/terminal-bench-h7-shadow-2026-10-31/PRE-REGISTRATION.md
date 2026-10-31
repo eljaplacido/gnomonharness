@@ -72,7 +72,8 @@ claimed. The score is reported descriptively, with its interval.
       at 3 s in the smoke test).
 - [x] Instrument proven before the night: the `h7-control` run.
 - [x] Task-selection file non-empty (asserted).
-- [ ] Wall-clock per trial inspected after the run, for ~0 or exactly 900 s.
+- [x] Wall-clock per trial inspected after the run, for ~0 or exactly 900 s.
+      It found the 1,200 s timeouts below.
 - Not applicable: control arm, noise floor, peer symmetry. There is one arm and
   no comparison is claimed.
 
@@ -94,3 +95,43 @@ claimed. The score is reported descriptively, with its interval.
   Dockerfile downloads `training.lczero.org/get_network?sha=47e3…`, which now
   returns 404. The image cannot be built anywhere, so no agent ran. It is
   excluded as pre-registered and reported separately.
+
+## After the run, 2026-10-31 15:40Z: what the records show
+
+Written before any abort scoring, which is agentcenter's.
+
+**Of the 48 registered tasks, 44 produced a trial; 4 never started.** The image
+build failed for `leelachess0-pytorch-conversion` (upstream 404, above),
+`fix-git`, `broken-networking` and `accelerate-maximal-square`. tb's log keeps
+only the failed `docker compose build`, not the build output, so the cause of the
+last three is not recorded. No agent ran on them.
+
+**Of the 44:**
+- 17 resolved, 27 not. 0 ran a wrong commit; 3 have no commit record.
+- `cprofiling-python` and `pandas-sql-query`: gnomon ran and gave answers (the
+  terminal log shows its `[result]` line), but neither task's compose file
+  mounts tb's agent-logs volume. The commit file and the shadow records stayed in
+  the container, so they cannot be attributed to `800ee65` and carry no shadow.
+  The first printout called these "wrong commit". `collect_h7.py` now says
+  "unrecorded", which is accurate.
+- `slurm-simple-node-monitoring`: the agent ended in 0.05 s
+  (`unknown_agent_error`). Apparatus.
+- Shadow: 34 complete, 7 incomplete, 3 absent (the three above). Six of the
+  incomplete were still running at 1,200 s, so the turn never ended and the
+  audit copy never ran. The seventh, `find-restaurant`, ended at 236 s without a
+  timeout and without a `turn_end`. It is unexplained and was passed to
+  agentcenter.
+
+**The cap was 900 s plus up to 300 s, not 900 s.**
+- tb 0.2.18 stops waiting for the agent at `--global-agent-timeout-sec 900`.
+- Under Python 3.12, `asyncio.run` then joins tb's executor thread for up to
+  300 s (`THREAD_JOIN_TIMEOUT`), and the agent's command keeps running meanwhile.
+- So timed-out trials end at 1,200 s. A run that finishes inside the grace is
+  scored on what it left: `mailman` ended at 1,059 s, carries tb's
+  `agent_timeout`, and is resolved.
+- For the abort analysis: "passing" is tb's `is_resolved`, never
+  `failure_mode`.
+- Install time also runs on that clock: tb runs the setup inside the timed
+  `perform_task`.
+- The same holds for every tb run on this host with this venv, including P1. P1
+  records it as an amendment before launch.

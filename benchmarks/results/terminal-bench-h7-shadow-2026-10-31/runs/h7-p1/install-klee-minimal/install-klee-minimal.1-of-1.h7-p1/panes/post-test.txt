@@ -1,0 +1,125 @@
+root@50fe0a060016:/app# bash /tests/run-tests.sh; tmux wait -S done
+Hit:1 http://ports.ubuntu.com/ubuntu-ports noble InRelease
+Hit:2 http://ports.ubuntu.com/ubuntu-ports noble-updates InRelease
+Hit:3 http://ports.ubuntu.com/ubuntu-ports noble-backports InRelease
+Hit:4 http://ports.ubuntu.com/ubuntu-ports noble-security InRelease
+Reading package lists... Done
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+curl is already the newest version (8.5.0-2ubuntu10.16).
+0 upgraded, 0 newly installed, 0 to remove and 36 not upgraded.
+downloading uv 0.7.13 aarch64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Using CPython 3.12.3 interpreter at: /usr/bin/python3
+Creating virtual environment at: .tbench-testing
+Activate with: source .tbench-testing/bin/activate
+Using Python 3.12.3 environment at: .tbench-testing
+Resolved 5 packages in 52ms
+Prepared 5 packages in 56ms
+Installed 5 packages in 5ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+===================================================================== test session starts ======================================================================
+platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 2 items
+
+../tests/test_outputs.py FF                                                                                                                              [100%]
+
+=========================================================================== FAILURES ===========================================================================
+______________________________________________________________________ test_klee_version _______________________________________________________________________
+
+    def test_klee_version():
+        """
+        Test that KLEE is installed and can report its version.
+        """
+        result = subprocess.run(
+            ["bash", "-c", "source ~/.bashrc && klee --version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+>       assert result.returncode == 0, (
+            f"KLEE --version failed with return code {result.returncode}. "
+            f"stderr: {result.stderr}"
+        )
+E       AssertionError: KLEE --version failed with return code 127. stderr: bash: line 1: klee: command not found
+E
+E       assert 127 == 0
+E        +  where 127 = CompletedProcess(args=['bash', '-c', 'source ~/.bashrc && klee --version'], returncode=127, stdout='', stderr='bash: line 1: klee: comma
+nd not found\n').returncode
+
+/tests/test_outputs.py:22: AssertionError
+______________________________________________________________ test_klee_basic_symbolic_execution ______________________________________________________________
+
+    def test_klee_basic_symbolic_execution():
+        """
+        Test KLEE with a basic symbolic execution example that creates two paths.
+        Verifies KLEE runs successfully and explores both branches.
+        """
+        # C source code with symbolic execution
+        klee_test_source = """
+    #include <klee/klee.h>
+
+    int main() {
+        int a;
+        klee_make_symbolic(&a, sizeof(a), "a");
+
+        if (a > 10) {
+            return 1;
+        } else {
+            return 0;
+        }
+    }
+    """
+
+        # Write the C source file
+        with open("test.c", "w") as f:
+            f.write(klee_test_source)
+
+        # Compile C to LLVM bitcode (uses CPATH from environment)
+        compile_result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                "source ~/.bashrc && clang-16 -emit-llvm -c -g -O0 -Xclang -disable-O0-optnone test.c -o test.bc",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+>       assert compile_result.returncode == 0, (
+            f"Compilation failed with return code {compile_result.returncode}. "
+            f"stderr: {compile_result.stderr}"
+        )
+E       AssertionError: Compilation failed with return code 1. stderr: test.c:2:10: fatal error: 'klee/klee.h' file not found
+E         #include <klee/klee.h>
+E                  ^~~~~~~~~~~~~
+E         1 error generated.
+E
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '-c', 'source ~/.bashrc && clang-16 -emit-llvm -c -g -O0 -Xclang -disable-O0-optnone te...2:10: fatal error
+: 'klee/klee.h' file not found\n#include <klee/klee.h>\n         ^~~~~~~~~~~~~\n1 error generated.\n").returncode
+
+/tests/test_outputs.py:65: AssertionError
+=================================================================== short test summary info ====================================================================
+FAILED ../tests/test_outputs.py::test_klee_version - AssertionError: KLEE --version failed with return code 127. stderr: bash: line 1: klee: command not found
+FAILED ../tests/test_outputs.py::test_klee_basic_symbolic_execution - AssertionError: Compilation failed with return code 1. stderr: test.c:2:10: fatal error: '
+klee/klee.h' file not found
+====================================================================== 2 failed in 0.04s =======================================================================
+root@50fe0a060016:/app#
