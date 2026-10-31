@@ -2675,6 +2675,11 @@ const NEVER_WALKED = new Set([
   "vendor",
   ".gnomon-audit",
   ".gnomon-sessions",
+  // Decision-shadow records, appended off the critical path WHILE tools run.
+  // Walked, every append would move the worktree stamp under a step that
+  // changed nothing, and `worktree_changed` drives the idle nudge and the step
+  // fold -- so a log-only shadow would have changed the run it was observing.
+  ".gnomon-shadow",
   // Build artefacts of the same family as dist/target/.next, and absent from
   // this set until 2026-09-05. The cost was not hypothetical: `pnpm run
   // coverage` writes into `coverage/` WHILE the suite runs, so the worktree

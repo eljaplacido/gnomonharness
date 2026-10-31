@@ -441,3 +441,36 @@ change was judged by), `checks`, `exit`; optionally `audit` (`trail`, `seq`,
 asserts the code's check ids and statuses, this table, and the fixture are the
 same sets, and validates a document the real binary printed against the
 fixture's key lists.
+
+## 7. Decision-shadow record — `v: 1`
+
+What a declared `[shadow]` writes (README, `[shadow]`). There is one JSON line
+per entry, in `.gnomon-shadow/gnomon.jsonl`, or in
+`$DECISION_SHADOW_DIR/gnomon.jsonl` when that directory is outside the project.
+It extends agentcenter's `docs/DECISION_SHADOW.md` v1. A readout parses it
+without reading this code, so renaming a key, decision or label is a contract
+change.
+
+| `decision` | When | Keys beyond the common set |
+|---|---|---|
+| `abort` | after each scored tool call (every call up to 30, then every 5th) | `subject_id` `<session>.<turn>:<k>`, `model`, `question` `gnomon_abort.v1`, `order`, `labels`, `probs`?, `live` `continue`, `excerpt`, `latency_ms`, `error` |
+| `role` | once per prompt | as `abort`; `subject_id` `<session>.<turn>`, `question` `gnomon_routing.v1`, `live` = the role that ran or `chain:<a>><b>…` |
+| `approval` | after each tool call | as `abort`; `question` `needs_approval.v1`, `live` one of `not_gated`, `asked:approved`, `asked:declined`, `standing:approved`, `flag:approved`, `default:declined`, `policy:<bucket>` |
+| `turn_end` | once per turn, or per chain stage | `subject_id`, `stop_reason`, `code`, `bucket`, `verify` (`pass`, `fail`, `none`, or the raw `unrunnable`/`declined`/`skipped`), `tool_steps`, `tokens`, `duration_ms` |
+| `shadow` | once, when the shadow stops after three connection failures | `error` |
+
+**Common keys:**
+- `v`, `ts`, `project` (`gnomon`), `machine` (the hostname), `gnomon` (the
+  build), `run_label` (only when `$DECISION_SHADOW_RUN` is set);
+- `calib_key`: `<version>:<surface hash with the [shadow] table cut out>`;
+- `surface_hash` (full), and `cell` (`sha256(calib_key|agent_model|endpoint_url)[:12]`);
+- `role`, `depth`, `agent_model`, `endpoint_url`. The `shadow` record carries
+  none of these four and no `cell`.
+
+`probs` is absent when `error` is set. `labels` lists the options in the order
+they were asked: `rev` is the bench's own order reversed. Only `asked:declined`
+is a person refusing.
+
+**Fixture**: `conformance/shadow_record.json`. `packages/gnomon-core/src/shadow.test.ts`
+emits each kind of record and asserts its keys, labels and question ids against
+the fixture. It also asserts that this section names the same decisions.

@@ -26,6 +26,27 @@
 
 ## [Unreleased]
 
+- **`[shadow]`: a log-only decision-model shadow.** When a surface declares it,
+  a typed decision model (`/v1/systemone`: state plus typed questions in,
+  probabilities out) is asked three things, each logged beside what gnomon
+  did:
+  - after each tool call, whether the run will pass;
+  - for each prompt, which role should handle it;
+  - for each call, whether the operator should have been asked.
+
+  Nothing reads the answers back. Questions and text are agentcenter
+  decisionbench's, ported and pinned by a parity test against the bench's own
+  output. Records follow agentcenter's `DECISION_SHADOW.md` v1, plus a
+  shadow-free calibration key, a `cell` id, a model-free `turn_end` per turn,
+  and a `run_label` from `$DECISION_SHADOW_RUN` when set, so a benchmark
+  trial's verdict joins to its records. See the README's `[shadow]` section.
+- **`.gnomon-shadow/` is never walked, and `init` gitignores it.** Records
+  appended under the project root moved the worktree stamp, which flipped
+  `worktree_changed` for read-only commands. That drives the idle nudge, so a
+  shadow meant to observe would have changed the run. Found in review by
+  agentcenter before shipping. A test runs the same turn shadow-off and on, and
+  fails with `worktree_moves` 0 → 2 if the directory is walked.
+
 ## [0.3.1] — 2026-10-21
 
 Fixes from the first day of real use after the announcement, on a project

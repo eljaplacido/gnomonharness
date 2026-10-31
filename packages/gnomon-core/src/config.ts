@@ -34,6 +34,36 @@ export interface Config {
   routing?: RoutingConfig;
   audit?: import("./audit.js").AuditConfig;
   session?: import("./session_store.js").SessionConfig;
+  shadow?: ShadowConfig;
+}
+
+/**
+ * config.toml [shadow] — what a decision model WOULD have decided, logged.
+ *
+ * At three points -- abort after a tool call, role for a prompt, approval for
+ * a call -- a typed decision model is asked the decisionbench question, and its
+ * answer is written beside what gnomon actually did. Nothing reads the answer
+ * back. The block exists so decision models can be ranked on real runs without
+ * any of them deciding anything.
+ *
+ * Declared here rather than switched on by the machine, because of Rule 1: a
+ * run that called a model after every tool call is a different run, and the
+ * hash has to say so even when the calls changed nothing.
+ */
+export interface ShadowConfig {
+  enabled?: boolean;
+  /** A `/v1/systemone` endpoint: state + typed questions in, probabilities out */
+  url?: string;
+  /** Models asked the abort question at each scored tool call */
+  abort?: string[];
+  /** Models asked which role should handle each prompt */
+  role?: string[];
+  /** Models asked whether each tool call should have been put to the operator */
+  approval?: string[];
+  /** Option orders asked: "fwd" as the bench wrote them, "rev" reversed */
+  orders?: string[];
+  timeout_ms?: number;
+  abort_timeout_ms?: number;
 }
 
 /**
@@ -1438,6 +1468,9 @@ const KNOWN_BLOCKS = new Set([
   // harness's agent by. Listed with the feature, for the reason [chain] above
   // gives.
   "check",
+  // resolveShadow reads [shadow]. Listed with the feature, for the reason
+  // [chain] above gives.
+  "shadow",
 ]);
 
 /**
@@ -1562,6 +1595,8 @@ const BLOCK_OWNER: Record<string, BlockOwner> = {
   // a loop DECLARATION in .gnomon/loops/*.toml, and two schemas behind one
   // name is how a declared setting silently reverts to a default.
   turn: { file: "config.toml", read: true },
+  // resolveShadow reads config.config.shadow.
+  shadow: { file: "config.toml", read: true },
   // NOT read: ProcessConfig is typed on Config and no consumer exists.
   process: { file: "config.toml", read: false },
   roles: { file: "roles.toml", read: true },
@@ -2037,6 +2072,99 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
       fix: 'Declare [verify] command in policy.toml, or set gate = "on_refusal".',
       fatal: false,
     });
+  }
+}
+
+// [shadow] is log-only, so nothing in it is fatal: a shadow that cannot run
+// changes nothing about the run. What it can do is look like it is recording
+// while it records nothing -- a misspelled key, an order nobody asks, a list
+// that is not a list, `enabled` with no url or no model -- and that is the
+// inert-setting failure this audit exists for.
+{
+  const raw = (config.config as { shadow?: Record<string, unknown> } | undefined)?.shadow;
+  if (raw && typeof raw === "object") {
+    const where = ".gnomon/config.toml [shadow]";
+    for (const key of Object.keys(raw)) {
+      if (SHADOW_KEYS.includes(key)) continue;
+      const near = SHADOW_KEYS.map((k) => [k, editDistance(key, k)] as const)
+        .filter(([, d]) => d <= 2)
+        .sort((a, b) => a[1] - b[1])[0]?.[0];
+      problems.push({
+        where,
+        problem: `${key} is not a key [shadow] reads; it does nothing` + (near ? `. Did you mean "${near}"?` : "."),
+        fix: `[shadow] reads: ${SHADOW_KEYS.join(", ")}.`,
+        fatal: false,
+      });
+    }
+    for (const key of ["abort", "role", "approval", "orders"]) {
+      const v = raw[key];
+      if (v === undefined) continue;
+      if (!Array.isArray(v) || !v.every((x) => typeof x === "string" && x.trim() !== "")) {
+        problems.push({
+          where: `${where} ${key}`,
+          problem: `${key} is not a list of names, so it is ignored and the default is used.`,
+          fix: key === "orders" ? 'orders = ["fwd", "rev"]' : `${key} = ["<model name the server knows>"]`,
+          fatal: false,
+        });
+      }
+    }
+    if (Array.isArray(raw.orders)) {
+      const bad = raw.orders.filter(
+        (o) => typeof o === "string" && !(SHADOW_ORDERS as readonly string[]).includes(o)
+      );
+      if (bad.length > 0) {
+        problems.push({
+          where: `${where} orders`,
+          problem: `${bad.map((o) => `"${o}"`).join(", ")} is not an order; it is skipped.`,
+          fix: `orders takes ${SHADOW_ORDERS.map((o) => `"${o}"`).join(" and ")}.`,
+          fatal: false,
+        });
+      }
+    }
+    if (raw.url !== undefined && !(typeof raw.url === "string" && validShadowUrl(raw.url))) {
+      problems.push({
+        where: `${where} url`,
+        problem: `url is not an http(s) URL, so the shadow is off.`,
+        fix: 'url = "http://127.0.0.1:<port>/v1/systemone"',
+        fatal: false,
+      });
+    }
+    for (const key of ["timeout_ms", "abort_timeout_ms"] as const) {
+      const v = raw[key];
+      if (v !== undefined && !(typeof v === "number" && isFinite(v) && v > 0)) {
+        problems.push({
+          where: `${where} ${key}`,
+          problem: `${key} is not a positive number of milliseconds, so ${SHADOW_DEFAULTS[key]} is used.`,
+          fix: `${key} = ${SHADOW_DEFAULTS[key]}`,
+          fatal: false,
+        });
+      }
+    }
+    const s = resolveShadow(config);
+    if (raw.enabled === true) {
+      if (!s.url) {
+        problems.push({
+          where,
+          problem: "enabled = true with no usable url, so nothing is asked and nothing is recorded.",
+          fix: 'Add url = "http://127.0.0.1:<port>/v1/systemone", or remove enabled.',
+          fatal: false,
+        });
+      } else if (s.abort.length + s.role.length + s.approval.length === 0) {
+        problems.push({
+          where,
+          problem: "enabled = true but no model is named for abort, role or approval, so nothing is recorded.",
+          fix: 'Name at least one, e.g. abort = ["d1-3b"].',
+          fatal: false,
+        });
+      } else if (s.orders.length === 0) {
+        problems.push({
+          where: `${where} orders`,
+          problem: "no usable order is declared, so no question is asked.",
+          fix: 'orders = ["fwd", "rev"]',
+          fatal: false,
+        });
+      }
+    }
   }
 }
 
@@ -3100,6 +3228,138 @@ export function resolveLoop(config: GnomonConfig): ResolvedLoop {
     nudge_after_idle: Math.max(1, Math.floor(num(l?.nudge_after_idle, d.nudge_after_idle))),
     converge_refire: Math.max(1, Math.floor(num(l?.converge_refire, d.converge_refire))),
   };
+}
+
+/** The option orders a shadow question can be asked in. */
+export const SHADOW_ORDERS = ["fwd", "rev"] as const;
+export type ShadowOrder = (typeof SHADOW_ORDERS)[number];
+
+/** A resolved [shadow] block. */
+export interface ResolvedShadow {
+  /** True only when declared AND there is a usable url to ask */
+  enabled: boolean;
+  url: string;
+  abort: string[];
+  role: string[];
+  approval: string[];
+  orders: ShadowOrder[];
+  timeout_ms: number;
+  abort_timeout_ms: number;
+}
+
+/**
+ * No url by default. A shadow server is somebody's infrastructure, not a
+ * property of the harness, and a built-in port would be a guess that points
+ * every surface that says `enabled = true` at whatever happens to listen there.
+ *
+ * Both orders by default. The bench found every decision model flips its top
+ * answer on more than 10% of items for some task when the options are
+ * reversed, so a single-order record cannot be read on its own.
+ */
+export const SHADOW_DEFAULTS: ResolvedShadow = {
+  enabled: false,
+  url: "",
+  abort: [],
+  role: [],
+  approval: [],
+  orders: ["fwd", "rev"],
+  timeout_ms: 1500,
+  abort_timeout_ms: 3000,
+};
+
+const SHADOW_KEYS = Object.keys(SHADOW_DEFAULTS);
+
+export function validShadowUrl(u: string): boolean {
+  try {
+    const p = new URL(u);
+    return p.protocol === "http:" || p.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/** Read [shadow] from config.toml. Off unless declared, and off without a url. */
+export function resolveShadow(config: GnomonConfig): ResolvedShadow {
+  const s = (config.config as { shadow?: Record<string, unknown> } | undefined)?.shadow;
+  const d = SHADOW_DEFAULTS;
+  const names = (v: unknown, dflt: string[]) =>
+    Array.isArray(v) && v.every((x) => typeof x === "string" && x.trim() !== "")
+      ? [...new Set((v as string[]).map((x) => x.trim()))]
+      : dflt;
+  const ms = (v: unknown, dflt: number) =>
+    typeof v === "number" && isFinite(v) && v > 0 ? Math.floor(v) : dflt;
+  const url = typeof s?.url === "string" && validShadowUrl(s.url) ? s.url : d.url;
+  const orders = Array.isArray(s?.orders)
+    ? [
+        ...new Set(
+          (s!.orders as unknown[]).filter(
+            (o): o is ShadowOrder =>
+              typeof o === "string" && (SHADOW_ORDERS as readonly string[]).includes(o)
+          )
+        ),
+      ]
+    : d.orders;
+  return {
+    enabled: s?.enabled === true && url !== "",
+    url,
+    abort: names(s?.abort, d.abort),
+    role: names(s?.role, d.role),
+    approval: names(s?.approval, d.approval),
+    orders,
+    timeout_ms: ms(s?.timeout_ms, d.timeout_ms),
+    abort_timeout_ms: ms(s?.abort_timeout_ms, d.abort_timeout_ms),
+  };
+}
+
+/**
+ * A TOML document with one top-level table (and its sub-tables) cut out.
+ *
+ * Line-based on purpose: it has to give the same bytes on every machine for the
+ * same input, and it only ever has to recognise table headers, which TOML puts
+ * on lines of their own.
+ */
+export function stripTomlTable(text: string, table: string): string {
+  const header = /^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$/;
+  const out: string[] = [];
+  let inside = false;
+  for (const line of text.split("\n")) {
+    const m = header.exec(line);
+    if (m) inside = m[1] === table || m[1]!.startsWith(`${table}.`);
+    if (!inside) out.push(line);
+  }
+  return out.join("\n");
+}
+
+/**
+ * The surface hash with config.toml's [shadow] table cut out.
+ *
+ * A shadow changes what is recorded, not what the agent does, and a decision
+ * model's calibration is bound to the surface it was fitted on. Keying it on
+ * the full hash would make switching a shadow on, or naming one more model, a
+ * new calibration cell, and no shadow-on surface could ever match the
+ * shadow-off runs it is compared against. Same algorithm as recomputeManifest;
+ * a surface with no [shadow] table gives exactly its surface hash.
+ */
+export function shadowFreeSurfaceHash(gnomonDir: string): string {
+  const { manifest } = recomputeManifest(gnomonDir);
+  const h = createHash("sha256");
+  for (const source of manifest) {
+    let sha = source.sha256;
+    if (source.path === ".gnomon/config.toml" && sha !== null) {
+      try {
+        const text = readFileSync(join(gnomonDir, "config.toml"), "utf8");
+        const stripped = stripTomlTable(text, "shadow");
+        if (stripped !== text) sha = createHash("sha256").update(stripped).digest("hex");
+      } catch {
+        // Unreadable now, readable a moment ago: keep the manifest's hash.
+      }
+    }
+    h.update(source.path);
+    h.update(":");
+    h.update(sha ?? "null");
+    h.update("\n");
+  }
+  return h.digest("hex");
 }
 
 /** A resolved [verify] block, or null when the surface declares none. */
