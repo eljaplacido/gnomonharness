@@ -207,19 +207,19 @@ than in the surface, so two people with identical surface hashes on different
 builds can get different behaviour. Until this field existed, no record said so,
 and every benchmark record written before it is under-identified.
 
-Resolution order: `GNOMON_BUILD` if a release or CI stamped one — the only form
-that carries a commit through `npm install`, where there is no repository to
-ask; otherwise `git rev-parse --short HEAD` in the harness's own tree, suffixed
-`-dirty` when that tree has uncommitted changes; otherwise the literal `npm`
-when the harness is running from inside a `node_modules` tree, and the literal
-`unknown` when it is not.
+Resolution order (`conformance/build_field.json`): `GNOMON_BUILD` if a release
+or CI stamped the environment; then, for an installed copy (running from inside
+a `node_modules` tree), the `gnomonBuild` stamp the release job writes into
+gnomon-core's `package.json` before packing, or the literal `npm` without one;
+then, only in gnomon's own checkout, `git rev-parse --short HEAD`, suffixed
+`-dirty` when that tree has uncommitted changes; otherwise the literal `unknown`.
 
-`npm` was added 2026-09-07 with the published package. It says less than a
-commit and more than nothing: an installed copy cannot know its revision, but
-"this is a published build" is true, checkable and useful, where `unknown` for
-every install made the field worthless in the one place provenance is hardest
-to reconstruct afterwards. Set `GNOMON_BUILD` from a release archive's
-`GNOMON_BUILD` file to get the commit back.
+An installed copy never asks git. Until 2026-10-31 git came first, and git
+answers for whatever work tree an install sits in: a project-local or CI
+`npm i` stamped the *project's* commit on every record as gnomon's build. The
+v0.3.1 release, installed under a benchmark directory, called itself
+`gnomon/0.3.1+1afd251-dirty`. `npm` still says less than a commit and more than
+nothing; releases from then on say `<tag>-<sha>` through the package stamp.
 
 A build made from an edited tree must not claim to be the commit it sits on, and
 a missing provenance string is said plainly rather than guessed — a wrong one is
