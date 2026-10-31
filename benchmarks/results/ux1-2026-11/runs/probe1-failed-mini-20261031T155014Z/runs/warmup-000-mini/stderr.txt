@@ -1,0 +1,297 @@
+Warning: Input is not a terminal (fd=0).
+Retrying <unknown> in 4 seconds as it raised ModuleNotFoundError: No module named 'mcp'.
+Retrying <unknown> in 4 seconds as it raised ModuleNotFoundError: No module named 'mcp'.
+Retrying <unknown> in 4 seconds as it raised ModuleNotFoundError: No module named 'mcp'.
+Retrying <unknown> in 8 seconds as it raised ModuleNotFoundError: No module named 'mcp'.
+Retrying <unknown> in 16 seconds as it raised ModuleNotFoundError: No module named 'mcp'.
+Retrying <unknown> in 32 seconds as it raised ModuleNotFoundError: No module named 'mcp'.
+Retrying <unknown> in 60 seconds as it raised ModuleNotFoundError: No module named 'mcp'.
+Retrying <unknown> in 60 seconds as it raised ModuleNotFoundError: No module named 'mcp'.
+Retrying <unknown> in 60 seconds as it raised ModuleNotFoundError: No module named 'mcp'.
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/minisweagent/run/mini.py:102 in main           │
+│                                                                              │
+│    99 │   model = get_model(config=config.get("model", {}))                  │
+│   100 │   env = get_environment(config.get("environment", {}),               │
+│       default_type="local")                                                  │
+│   101 │   agent = get_agent(model, env, config.get("agent", {}),             │
+│       default_type="interactive")                                            │
+│ ❱ 102 │   agent.run(run_task)                                                │
+│   103 │   if (output_path := config.get("agent", {}).get("output_path")):    │
+│   104 │   │   console.print(f"Saved trajectory to [bold                      │
+│       green]'{output_path}'[/bold green]")                                   │
+│   105 │   return agent                                                       │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/minisweagent/agents/default.py:98 in run       │
+│                                                                              │
+│    95 │   │   )                                                              │
+│    96 │   │   while True:                                                    │
+│    97 │   │   │   try:                                                       │
+│ ❱  98 │   │   │   │   self.step()                                            │
+│    99 │   │   │   │   self.n_consecutive_format_errors = 0  # reset on any   │
+│       clean step                                                             │
+│   100 │   │   │   except FormatError as e:                                   │
+│   101 │   │   │   │   # The call was billed before parsing failed, so        │
+│       query() never got to charge it.                                        │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/minisweagent/agents/interactive.py:113 in step │
+│                                                                              │
+│   110 │   │   # Override the step method to handle user interruption         │
+│   111 │   │   try:                                                           │
+│   112 │   │   │   console.print(Rule())                                      │
+│ ❱ 113 │   │   │   return super().step()                                      │
+│   114 │   │   except KeyboardInterrupt:                                      │
+│   115 │   │   │   interruption_message =                                     │
+│       self._prompt_and_handle_slash_commands(                                │
+│   116 │   │   │   │   "\n\n[bold yellow]Interrupted.[/bold yellow] "         │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/minisweagent/agents/default.py:128 in step     │
+│                                                                              │
+│   125 │                                                                      │
+│   126 │   def step(self) -> list[dict]:                                      │
+│   127 │   │   """Query the LM, execute actions."""                           │
+│ ❱ 128 │   │   return self.execute_actions(self.query())                      │
+│   129 │                                                                      │
+│   130 │   def query(self) -> dict:                                           │
+│   131 │   │   """Query the model and return model messages. Override to add  │
+│       hooks."""                                                              │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/minisweagent/agents/interactive.py:74 in query │
+│                                                                              │
+│    71 │   │   │   │   │   return msg                                         │
+│    72 │   │   try:                                                           │
+│    73 │   │   │   with console.status("Waiting for the LM to respond..."):   │
+│ ❱  74 │   │   │   │   return super().query()                                 │
+│    75 │   │   except TimeExceeded:                                           │
+│    76 │   │   │   # A wall-clock limit can't be lifted by raising the        │
+│       step/cost limits                                                       │
+│    77 │   │   │   # (the next query re-checks the clock and raises again),   │
+│       so prompting                                                           │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/minisweagent/agents/default.py:149 in query    │
+│                                                                              │
+│   146 │   │   │   │   }                                                      │
+│   147 │   │   │   )                                                          │
+│   148 │   │   self.n_calls += 1                                              │
+│ ❱ 149 │   │   message = self.model.query(self.messages)                      │
+│   150 │   │   self.cost += message.get("extra", {}).get("cost", 0.0)         │
+│   151 │   │   self.add_messages(message)                                     │
+│   152 │   │   return message                                                 │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/minisweagent/models/litellm_model.py:82 in     │
+│ query                                                                        │
+│                                                                              │
+│    79 │   │   return set_cache_control(prepared,                             │
+│       mode=self.config.set_cache_control)                                    │
+│    80 │                                                                      │
+│    81 │   def query(self, messages: list[dict[str, str]], **kwargs) -> dict: │
+│ ❱  82 │   │   for attempt in retry(logger=logger,                            │
+│       abort_exceptions=self.abort_exceptions):                               │
+│    83 │   │   │   with attempt:                                              │
+│    84 │   │   │   │   response =                                             │
+│       self._query(self._prepare_messages_for_api(messages), **kwargs)        │
+│    85 │   │   cost_output = self._calculate_cost(response)                   │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/tenacity/__init__.py:514 in __iter__           │
+│                                                                              │
+│   511 │   │                                                                  │
+│   512 │   │   retry_state = RetryCallState(self, fn=None, args=(),           │
+│       kwargs={})                                                             │
+│   513 │   │   while True:                                                    │
+│ ❱ 514 │   │   │   do = self.iter(retry_state=retry_state)                    │
+│   515 │   │   │   if isinstance(do, DoAttempt):                              │
+│   516 │   │   │   │   yield AttemptManager(retry_state=retry_state)          │
+│   517 │   │   │   elif isinstance(do, DoSleep):                              │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/tenacity/__init__.py:440 in iter               │
+│                                                                              │
+│   437 │   │   self._begin_iter(retry_state)                                  │
+│   438 │   │   result = None                                                  │
+│   439 │   │   for action in self.iter_state.actions:                         │
+│ ❱ 440 │   │   │   result = action(retry_state)                               │
+│   441 │   │   return result                                                  │
+│   442 │                                                                      │
+│   443 │   def _begin_iter(self, retry_state: "RetryCallState") -> None:      │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/tenacity/__init__.py:482 in exc_check          │
+│                                                                              │
+│   479 │   │   │   │   fut = t.cast("Future", rs.outcome)                     │
+│   480 │   │   │   │   retry_exc = self.retry_error_cls(fut)                  │
+│   481 │   │   │   │   if self.reraise:                                       │
+│ ❱ 482 │   │   │   │   │   retry_exc.reraise()                                │
+│   483 │   │   │   │   raise retry_exc from fut.exception()                   │
+│   484 │   │   │                                                              │
+│   485 │   │   │   self._add_action_func(exc_check)                           │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/tenacity/__init__.py:216 in reraise            │
+│                                                                              │
+│   213 │   │   │   │   cause = exc.__cause__ or exc.__context__               │
+│   214 │   │   │   │   if cause is not None:                                  │
+│   215 │   │   │   │   │   raise cause.with_traceback(cause.__traceback__)    │
+│       from None                                                              │
+│ ❱ 216 │   │   │   raise self.last_attempt.result()                           │
+│   217 │   │   raise self                                                     │
+│   218 │                                                                      │
+│   219 │   @override                                                          │
+│                                                                              │
+│ /usr/lib/python3.12/concurrent/futures/_base.py:449 in result                │
+│                                                                              │
+│   446 │   │   │   │   if self._state in [CANCELLED, CANCELLED_AND_NOTIFIED]: │
+│   447 │   │   │   │   │   raise CancelledError()                             │
+│   448 │   │   │   │   elif self._state == FINISHED:                          │
+│ ❱ 449 │   │   │   │   │   return self.__get_result()                         │
+│   450 │   │   │   │                                                          │
+│   451 │   │   │   │   self._condition.wait(timeout)                          │
+│   452                                                                        │
+│                                                                              │
+│ /usr/lib/python3.12/concurrent/futures/_base.py:401 in __get_result          │
+│                                                                              │
+│   398 │   def __get_result(self):                                            │
+│   399 │   │   if self._exception:                                            │
+│   400 │   │   │   try:                                                       │
+│ ❱ 401 │   │   │   │   raise self._exception                                  │
+│   402 │   │   │   finally:                                                   │
+│   403 │   │   │   │   # Break a reference cycle with the exception in        │
+│       self._exception                                                        │
+│   404 │   │   │   │   self = None                                            │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/minisweagent/models/litellm_model.py:84 in     │
+│ query                                                                        │
+│                                                                              │
+│    81 │   def query(self, messages: list[dict[str, str]], **kwargs) -> dict: │
+│    82 │   │   for attempt in retry(logger=logger,                            │
+│       abort_exceptions=self.abort_exceptions):                               │
+│    83 │   │   │   with attempt:                                              │
+│ ❱  84 │   │   │   │   response =                                             │
+│       self._query(self._prepare_messages_for_api(messages), **kwargs)        │
+│    85 │   │   cost_output = self._calculate_cost(response)                   │
+│    86 │   │   GLOBAL_MODEL_STATS.add(cost_output["cost"])                    │
+│    87 │   │   # Note: all model.query() implementations must persist the     │
+│       response and cost on FormatError.                                      │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/minisweagent/models/litellm_model.py:66 in     │
+│ _query                                                                       │
+│                                                                              │
+│    63 │                                                                      │
+│    64 │   def _query(self, messages: list[dict[str, str]], **kwargs):        │
+│    65 │   │   try:                                                           │
+│ ❱  66 │   │   │   return litellm.completion(                                 │
+│    67 │   │   │   │   model=self.config.model_name,                          │
+│    68 │   │   │   │   messages=messages,                                     │
+│    69 │   │   │   │   tools=[BASH_TOOL],                                     │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/litellm/chat_completions/dispatch.py:91 in     │
+│ completion                                                                   │
+│                                                                              │
+│    88 │   **kwargs: object,  # kwargs-ok: preserve the public chat           │
+│       completions call shape                                                 │
+│    89 ) -> ChatResult | Coroutine[object, object, ChatResult]:               │
+│    90 │   python: Final = _PYTHON_COMPLETION                                 │
+│ ❱  91 │   return _DISPATCH.run(                                              │
+│    92 │   │   args,                                                          │
+│    93 │   │   kwargs,                                                        │
+│    94 │   │   python=python,                                                 │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/litellm/rust_bridge/dispatch.py:81 in run      │
+│                                                                              │
+│    78 │   │   │   │   rules=selected_rules,                                  │
+│    79 │   │   │   )                                                          │
+│    80 │   │   if not self._requires_projection(selected_rules):              │
+│ ❱  81 │   │   │   return python(*args, **kwargs)                             │
+│    82 │   │   request: Final = self.request(args, kwargs)                    │
+│    83 │   │   if request is None or (self.bypass is not None and             │
+│       self.bypass(request)):                                                 │
+│    84 │   │   │   return python(*args, **kwargs)                             │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/litellm/utils.py:1983 in wrapper               │
+│                                                                              │
+│    1980 │   │   │   │   logging_obj.failure_handler(                         │
+│    1981 │   │   │   │   │   e, traceback_exception, start_time, end_time     │
+│    1982 │   │   │   │   )  # DO NOT MAKE THREADED - router retry fallback    │
+│         relies on this!                                                      │
+│ ❱  1983 │   │   │   raise e                                                  │
+│    1984 │                                                                    │
+│    1985 │   @wraps(original_function)                                        │
+│    1986 │   async def wrapper_async(*args, **kwargs):                        │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/litellm/utils.py:1834 in wrapper               │
+│                                                                              │
+│    1831 │   │   │   │   except Exception as e:                               │
+│    1832 │   │   │   │   │   print_verbose(f"Error while checking max token   │
+│         limit: {e}")                                                         │
+│    1833 │   │   │   # MODEL CALL                                             │
+│ ❱  1834 │   │   │   result = original_function(*args, **kwargs)              │
+│    1835 │   │   │   end_time = datetime.datetime.now()                       │
+│    1836 │   │   │   if _is_streaming_request(                                │
+│    1837 │   │   │   │   kwargs=kwargs,                                       │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/litellm/main.py:5297 in completion             │
+│                                                                              │
+│   5294 │   control_options: Final = _resolve_control_options(kwargs, model)  │
+│   5295 │   skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)  │
+│   5296 │   if not skip_mcp_handler and tools:                                │
+│ ❱ 5297 │   │   from litellm.responses.mcp.chat_completions_handler import    │
+│        acompletion_with_mcp                                                  │
+│   5298 │   │   from litellm.responses.mcp.litellm_proxy_mcp_handler import ( │
+│   5299 │   │   │   LiteLLM_Proxy_MCP_Handler,                                │
+│   5300 │   │   )                                                             │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/litellm/responses/mcp/chat_completions_handler │
+│ .py:10 in <module>                                                           │
+│                                                                              │
+│     7 from typing_extensions import TypedDict, Unpack                        │
+│     8                                                                        │
+│     9 from litellm.litellm_core_utils.hidden_params import                   │
+│       HIDDEN_PARAMS_ATTR, set_hidden_params                                  │
+│ ❱  10 from litellm.responses.mcp.litellm_proxy_mcp_handler import (          │
+│    11 │   LiteLLM_Proxy_MCP_Handler,                                         │
+│    12 )                                                                      │
+│    13 from litellm.responses.mcp.request_context import MCPRequestContext    │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/litellm/responses/mcp/litellm_proxy_mcp_handle │
+│ r.py:13 in <module>                                                          │
+│                                                                              │
+│     10 from litellm._logging import verbose_logger                           │
+│     11 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG          │
+│     12 from litellm.litellm_core_utils.litellm_logging import Logging as     │
+│        LiteLLMLoggingObj                                                     │
+│ ❱   13 from litellm.proxy._experimental.mcp_server.catalog import            │
+│        catalog_operation, global_manager                                     │
+│     14 from litellm.proxy._experimental.mcp_server.utils import (            │
+│     15 │   iter_known_server_prefixes,                                       │
+│     16 │   logging_safe_mcp_headers,                                         │
+│                                                                              │
+│ /home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/mswea │
+│ /lib/python3.12/site-packages/litellm/proxy/_experimental/mcp_server/catalog │
+│ .py:20 in <module>                                                           │
+│                                                                              │
+│     17 from types import MappingProxyType                                    │
+│     18 from typing import TYPE_CHECKING, Final, Generic, ParamSpec,          │
+│        TypeAlias, TypeVar, cast                                              │
+│     19                                                                       │
+│ ❱   20 from mcp.types import CacheableResult                                 │
+│     21 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter    │
+│     22                                                                       │
+│     23 from litellm._logging import verbose_logger                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ModuleNotFoundError: No module named 'mcp'
