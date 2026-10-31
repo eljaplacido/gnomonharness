@@ -126,7 +126,9 @@ floor or the ceiling (its methodology, "Can this design resolve anything?").
       nothing else on `:18080`.
 - [x] Task list non-empty (asserted); validity rule and analysis written before
       any trial.
-- [ ] Smoke: every arm resolves or at least runs hello-world before the full run.
+- [x] Smoke: every arm resolves or at least runs hello-world before the full run.
+      Done 16:28Z after four rounds of fixes (amendments below). All five resolve
+      hello-world with metered model calls and recorded versions.
 - [ ] After the run: wall-clock inspected for ~0 s or exactly 900 s, and versions
       read back per cell.
 
