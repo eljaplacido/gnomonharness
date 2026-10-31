@@ -95,3 +95,40 @@ every harness that uses it, and these costs are not.
 3. **Only the first request was recorded.** opencode and goose send a small side
    request first (a title; goose also lists `/models`). Every request is now kept,
    and the largest is reported beside the total.
+
+## Amendment after the first readout: gnomon has two forms, and only one was measured
+
+Found 2026-10-31 ~16:40Z, after the first warm readout (`runs/warm-20261031T162845Z`).
+The four peers were measured as their releases install them. gnomon was measured
+as its **checkout** runs it: `gnomon.js`, which runs `src/` through `tsx` in a
+second node process. gnomon's release form is different:
+- `scripts/install.sh` installs the release tarballs;
+- they run compiled `dist/` through `bin/gnomon.mjs` with plain node.
+
+So the first readout compared gnomon's development build with the peers'
+releases. That asymmetry runs against gnomon.
+
+**The fix:** the warm phase is re-run with six arms:
+- `gnomon-rel`, the v0.3.1 release tarballs, verified against the release's
+  `SHA256SUMS`;
+- `gnomon`, the checkout form, as before;
+- the four peers.
+
+Interleaved, n = 20, the same scoring. Both gnomon forms are reported, and
+neither replaces the other:
+- the release form is the like-for-like comparison with the peers;
+- the checkout form is what a gnomon developer, and this user, runs daily.
+
+The first readout stays in the record as measured.
+
+Two facts found on the way, reported rather than fixed here:
+- **v0.3.1 is still a draft release** (since 2026-10-21). GitHub's "latest" is
+  v0.3.0, so `install.sh` installs v0.3.0 today, and `GNOMON_VERSION=0.3.1`
+  gets a 404. The tarballs here came through an authenticated `gh release
+  download`.
+- **An installed copy reports the wrong build inside a git work tree.**
+  `harnessBuild()` runs `git rev-parse` in the module's own directory. The
+  release installed under this repository's `tools/` reported
+  `gnomon/0.3.1+1afd251-dirty`, the commit of the repository around it. A
+  project-local or CI `npm i` would stamp the project's commit into gnomon's
+  audit records as the harness build.

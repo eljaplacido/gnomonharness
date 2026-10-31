@@ -35,6 +35,33 @@ def boot_diff(a: list[float], b: list[float], rng: random.Random) -> tuple[float
     return d, ds[int(0.025 * RESAMPLES)], ds[int(0.975 * RESAMPLES) - 1]
 
 
+def compare(runs, arms, ref, rng, out) -> None:
+    g = [r for r in runs if r["arm"] == ref and r["valid"]]
+    print(f"\n{ref} minus each other arm, median difference [95% bootstrap]; |d| < {PRACTICAL_MS} ms is no practical difference")
+    out.setdefault("vs", {})[ref] = {}
+    for arm in arms:
+        if arm == ref:
+            continue
+        p = [r for r in runs if r["arm"] == arm and r["valid"]]
+        res = {}
+        for key in ("cpu_ms", "wall_ms", "first_request_ms"):
+            a = [r[key] for r in g if r.get(key) is not None]
+            b = [r[key] for r in p if r.get(key) is not None]
+            if not a or not b:
+                continue
+            d, lo, hi = boot_diff(a, b, rng)
+            if abs(d) < PRACTICAL_MS:
+                verdict = "no practical difference"
+            elif lo <= 0 <= hi:
+                verdict = "cannot tell"
+            else:
+                verdict = f"{ref} faster" if d < 0 else f"{ref} slower"
+            res[key] = {"diff_ms": d, "ci95": [lo, hi], "verdict": verdict}
+            print(f"  vs {arm:11s} {key:17s} {d:+7.0f} ms [{lo:+6.0f}, {hi:+6.0f}]  {verdict}")
+        out["vs"][ref][arm] = res
+
+
+
 def main() -> None:
     warm_dir = Path(sys.argv[1])
     first_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else None
@@ -72,28 +99,8 @@ def main() -> None:
     print("  (* = varied across runs; [IQR])")
 
     rng = random.Random(0)
-    g = [r for r in runs if r["arm"] == "gnomon" and r["valid"]]
-    print(f"\ngnomon minus peer, median difference [95% bootstrap]; |d| < {PRACTICAL_MS} ms is no practical difference")
-    for arm in arms:
-        if arm == "gnomon":
-            continue
-        p = [r for r in runs if r["arm"] == arm and r["valid"]]
-        res = {}
-        for key in ("cpu_ms", "wall_ms", "first_request_ms"):
-            a = [r[key] for r in g if r.get(key) is not None]
-            b = [r[key] for r in p if r.get(key) is not None]
-            if not a or not b:
-                continue
-            d, lo, hi = boot_diff(a, b, rng)
-            if abs(d) < PRACTICAL_MS:
-                verdict = "no practical difference"
-            elif lo <= 0 <= hi:
-                verdict = "cannot tell"
-            else:
-                verdict = "gnomon faster" if d < 0 else "gnomon slower"
-            res[key] = {"diff_ms": d, "ci95": [lo, hi], "verdict": verdict}
-            print(f"  vs {arm:9s} {key:17s} {d:+7.0f} ms [{lo:+6.0f}, {hi:+6.0f}]  {verdict}")
-        out["vs_gnomon"][arm] = res
+    for ref in [a for a in ("gnomon", "gnomon-rel") if a in arms]:
+        compare(runs, arms, ref, rng, out)
 
     loads = [r["load1"] for r in runs]
     print(f"\nload average (1 min) over the warm phase: median {med(loads):.1f}, max {max(loads):.1f}"

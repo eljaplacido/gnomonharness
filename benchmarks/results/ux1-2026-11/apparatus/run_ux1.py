@@ -41,8 +41,8 @@ def gnomon_patch() -> str:
     return m.group(1)
 
 
-def setup_gnomon(home: Path, proj: Path, env: dict) -> None:
-    subprocess.run(["gnomon", "init"], cwd=proj, env=env, check=True,
+def setup_gnomon(home: Path, proj: Path, env: dict, gnomon: str = "gnomon") -> None:
+    subprocess.run([gnomon, "init"], cwd=proj, env=env, check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     (home / "ux1-patch.js").write_text(gnomon_patch())
     subprocess.run(["node", str(home / "ux1-patch.js")], cwd=proj, check=True,
@@ -75,7 +75,24 @@ def no_setup(home: Path, proj: Path, env: dict) -> None:
     pass
 
 
+RELEASE = TOOLS / "gnomon-release"
+
 ARMS = {
+    # The release form, as scripts/install.sh installs it: the v0.3.1 release
+    # tarballs (verified against the release's SHA256SUMS), run by bin/gnomon.mjs
+    # on compiled dist/ with plain node. Added after the first readout, which had
+    # measured only the checkout form below against the peers' releases.
+    "gnomon-rel": {
+        "cmd": [str(RELEASE / "bin" / "gnomon"), "task", PROMPT, "--role", "implementor", "--yes"],
+        "env": {}, "setup": lambda h, p, e: setup_gnomon(h, p, e, str(RELEASE / "bin" / "gnomon")),
+        "fake": {},
+        # Not `gnomon --version`: an installed copy inside a git work tree reports
+        # that tree's commit as its build (harnessBuild); the tarball checksum is
+        # what identifies this one.
+        "version": ["grep", "gnomon-harness-0.3.1.tgz", str(RELEASE / "dl" / "SHA256SUMS")],
+    },
+    # The checkout form: the repository's own launcher, gnomon.js, running src/
+    # through tsx. What a developer working on gnomon -- and this user, daily -- runs.
     "gnomon": {
         "cmd": ["gnomon", "task", PROMPT, "--role", "implementor", "--yes"],
         "env": {}, "setup": setup_gnomon, "fake": {},
