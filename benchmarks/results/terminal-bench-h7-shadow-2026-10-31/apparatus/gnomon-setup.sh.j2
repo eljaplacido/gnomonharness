@@ -1,0 +1,88 @@
+#!/bin/bash
+# Capture the TASK directory before anything can change it. tb starts this
+# script in the task's WORKDIR, which is NOT always /app: fix-git lives in
+# /app/personal-site, swe-bench-astropy-2 in /app/astropy, prove-plus-comm in
+# /workspace (where /app does not exist at all). An earlier fix guessed
+# "${TB_TASK_DIR:-/app}" — that variable exists in 0 files of terminal-bench,
+# so it silently hardcoded /app and would have rooted the surface in an empty
+# directory for those tasks. Record the real one instead of guessing.
+printf '%s' "$PWD" > /opt/task-cwd 2>/dev/null || true
+# Install gnomon into a terminal-bench task container and write /opt/gnomon-run.sh.
+# `gnomon task` needs only node + pnpm deps (no Rust build), so this stays light.
+set -e
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq >/dev/null 2>&1 || true
+apt-get install -y -qq curl git ca-certificates >/dev/null 2>&1 || true
+
+export NVM_DIR="$HOME/.nvm"
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash >/dev/null 2>&1
+. "$NVM_DIR/nvm.sh"
+nvm install 22 >/dev/null 2>&1
+npm i -g pnpm >/dev/null 2>&1
+
+# Abort loudly if the pinned ref is unreachable. It used to be cloned with all
+# output suppressed and no status check, so an unreachable ref fell back to
+# whatever git did next and the trial measured something nobody chose -- the
+# failure that made three earlier arms unattributable to any commit.
+if ! git clone --depth 1 --branch "${GNOMON_REF:-master}" \
+     https://github.com/eljaplacido/gnomonharness.git /opt/gnomon 2>/tmp/clone.err; then
+  echo "FATAL: could not clone ref '${GNOMON_REF:-master}'" >&2
+  cat /tmp/clone.err >&2
+  exit 1
+fi
+# And that it landed on the ref we asked for, not merely on something.
+mkdir -p /agent-logs
+if [ -n "${GNOMON_EXPECT_SHA:-}" ]; then
+  got=$(cd /opt/gnomon && git rev-parse HEAD)
+  if [ "$got" != "$GNOMON_EXPECT_SHA" ]; then
+    echo "FATAL: expected $GNOMON_EXPECT_SHA, cloned $got" >&2
+    exit 1
+  fi
+fi
+(cd /opt/gnomon && pnpm install --silent >/dev/null 2>&1)
+# Which commit this trial actually measured. Every previous arm cloned the
+# default branch and recorded nothing, so no result was attributable to a ref.
+mkdir -p /agent-logs && (cd /opt/gnomon && git rev-parse HEAD; git rev-parse --abbrev-ref HEAD) > /agent-logs/gnomon-commit.txt 2>/dev/null || true
+
+# Run helper: build a fresh surface in the task dir, point every role at the
+# bench endpoint/model (greedy, approval off for headless), then solve.
+cat > /opt/gnomon-run.sh <<'RUN'
+#!/bin/bash
+set -e
+export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
+GN=/opt/gnomon/packages/gnomon-cli/gnomon.js
+INSTR="$1"
+# THE TASK DIRECTORY, explicitly. The setup script cd's to /opt/gnomon to build
+# gnomon, and that cwd persists into this shell — so `gnomon init` was rooting
+# the surface in the CLONED REPO, not the task. Every task deliverable lives in
+# /app, which is outside that root, so write/edit refused it: 21 of 42 trials in
+# the A0 arm hit "refused (outside sandbox)" and only 11 used write/edit at all.
+# Models that routed around it via bash passed; models that did not, failed.
+cd "$(cat /opt/task-cwd 2>/dev/null || echo /app)" 2>/dev/null || true
+echo "gnomon cwd: $(pwd)" >> /agent-logs/gnomon-cwd.txt 2>/dev/null || true
+node "$GN" init >/dev/null 2>&1 || true
+node -e '
+const fs=require("fs"), E=process.env;
+let c=fs.readFileSync(".gnomon/config.toml","utf8");
+if(!c.includes("[endpoints.bench]")){
+  const key=E.GNOMON_BENCH_KEYENV?`api_key_env = "${E.GNOMON_BENCH_KEYENV}"\n`:"";
+  c=`[endpoints.bench]\nurl = "${E.GNOMON_BENCH_URL}"\nkind = "openai"\n${key}\n`+c;
+  fs.writeFileSync(".gnomon/config.toml",c);
+}
+let r=fs.readFileSync(".gnomon/roles.toml","utf8");
+r=r.replace(/endpoint = "[^"]*"/g,`endpoint = "bench"`).replace(/model = "[^"]*"/g,`model = "${E.GNOMON_BENCH_MODEL}"`);
+fs.writeFileSync(".gnomon/roles.toml",r);
+let p=fs.readFileSync(".gnomon/policy.toml","utf8");
+if(!/\[approval\]/.test(p)) fs.writeFileSync(".gnomon/policy.toml",p+`\n[approval]\ngate = "never"\n`);
+let a=fs.readFileSync(".gnomon/config.toml","utf8");
+a=a.replace(/\[audit\]([\s\S]*?)enabled = false/, "[audit]$1enabled = true");
+fs.writeFileSync(".gnomon/config.toml",a);
+'
+mkdir -p /agent-logs
+# The score delta is below the noise floor at n=1; the MECHANISM metric is not.
+# Keep the full trace so "trials nudged with zero preceding write/edit" is countable.
+node "$GN" task "$INSTR" --role implementor --yes 2>&1 | tee /agent-logs/gnomon-full.log | tail -40
+RUN
+chmod +x /opt/gnomon-run.sh
+echo "GNOMON_INSTALL_OK"
