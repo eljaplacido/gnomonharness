@@ -65,6 +65,20 @@ for d in sorted(runs.iterdir()):
     if arm == "gnomon" and version != sha:
         wrong_commit += 1
     resolved = r.get("is_resolved")
+    tokens = None
+    tf = d / "tokens.json"
+    if tf.exists():
+        t = json.loads(tf.read_text())
+        if t.get("before") and t.get("after"):
+            delta = {k: t["after"][k] - t["before"].get(k, 0) for k in t["after"]}
+            tokens = {
+                "prompt": delta.get("prompt_tokens", 0),
+                "completion": delta.get("completion_tokens", 0),
+                "processed": delta.get("prompt_processed", 0),
+                "cached": delta.get("prompt_cached", 0),
+                "requests": delta.get("requests", 0),
+                "unmetered": delta.get("responses_without_usage", 0),
+            }
     cells.append({
         "k": k, "arm": arm, "task": task,
         # valid = the agent ran and tb returned a verdict; anything else is apparatus
@@ -72,6 +86,7 @@ for d in sorted(runs.iterdir()):
         "resolved": resolved, "failure_mode": r.get("failure_mode"),
         "agent_s": seconds(r.get("agent_started_at"), r.get("agent_ended_at")),
         "version": version,
+        "tokens": tokens,
     })
 
 valid = [c for c in cells if c["state"] == "valid" and c["task"] not in EXCLUDED_TASKS]
@@ -115,6 +130,33 @@ for arm in ("gnomon", "mini", "goose", "qwen"):
     flips = sum(1 for v in full if len(set(v)) > 1)
     summary["within_arm_flip"][arm] = {"tasks_with_2plus": len(full), "flipping": flips}
     print(f"  {arm:8s} {flips}/{len(full)} tasks flip")
+
+print("\ntokens (metered at the relay; one trial at a time, so a cell's traffic is its own):")
+summary["tokens"] = {}
+tok = {arm: {(c["task"], c["k"]): c for c in valid if c["arm"] == arm and c.get("tokens")} for arm in ("gnomon", "mini", "goose", "qwen")}
+for arm, cs in tok.items():
+    totals = [c["tokens"]["prompt"] + c["tokens"]["completion"] for c in cs.values()]
+    solved = [c for c in cs.values() if c["resolved"]]
+    proc = sum(c["tokens"]["processed"] for c in cs.values())
+    cach = sum(c["tokens"]["cached"] for c in cs.values())
+    unmet = sum(c["tokens"]["unmetered"] for c in cs.values())
+    med = sorted(totals)[len(totals) // 2] if totals else None
+    per_solved = sum(totals) / len(solved) if solved else None
+    share = cach / (cach + proc) if cach + proc else None
+    summary["tokens"][arm] = {"cells": len(totals), "median_per_cell": med, "per_resolved_task": per_solved,
+                              "prompt_cache_share": share, "unmetered_responses": unmet}
+    print(f"  {arm:8s} cells={len(totals):3d} median/cell={med if med is not None else '-':>8} "
+          f"per resolved task={round(per_solved) if per_solved else '-':>9} "
+          f"cache share={f'{share:.2f}' if share is not None else '-':>5} unmetered={unmet}")
+print("  paired against gnomon (sign test on cells both completed; fewer tokens wins):")
+for arm in ("mini", "goose", "qwen"):
+    pairs = set(tok["gnomon"]) & set(tok[arm])
+    tot = lambda c: c["tokens"]["prompt"] + c["tokens"]["completion"]
+    g = sum(1 for x in pairs if tot(tok["gnomon"][x]) < tot(tok[arm][x]))
+    q = sum(1 for x in pairs if tot(tok[arm][x]) < tot(tok["gnomon"][x]))
+    p = mcnemar_exact(g, q)  # the same exact binomial sign test
+    summary["tokens"][f"gnomon_vs_{arm}"] = {"pairs": len(pairs), "gnomon_fewer": g, "peer_fewer": q, "sign_test_p": p}
+    print(f"    gnomon vs {arm:6s} pairs={len(pairs):3d} gnomon fewer={g:2d} peer fewer={q:2d} exact sign-test p={p:.4f}")
 
 durs = [c["agent_s"] for c in valid if c["agent_s"] is not None]
 at_cap = sum(1 for s in durs if s >= 890)

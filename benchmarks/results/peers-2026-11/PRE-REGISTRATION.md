@@ -70,9 +70,27 @@ floor or the ceiling (its methodology, "Can this design resolve anything?").
   points between two arms, depending on how often they disagree. A 10-point gap
   is below what this design can see, and the result will say "cannot tell"
   rather than "equal".
-- **Tokens are not compared.** tb's installed agents report no token counts and
-  there is no per-arm proxy. The token-efficiency hypothesis (H16, against goose)
-  needs a different instrument.
+- **Tokens: amended 2026-10-31, before any peer trial.** They were "not compared"
+  in the first version of this file. They are now metered by the relay
+  (`relay-meter.mjs`). Trials run strictly one at a time and only container
+  traffic passes through it, so the counter delta around a cell is that cell's
+  traffic. The counts are what llama-server reports, never estimates:
+  - `usage` when present, otherwise its `timings` (prompt = cached + processed,
+    completion = predicted);
+  - a response carrying neither is counted as unmetered and reported per arm.
+
+  Secondary endpoints, fixed now:
+  - tokens per resolved task (all tokens an arm spent, divided by the tasks it
+    resolved);
+  - median tokens per cell;
+  - prompt-cache share (cached / (cached + processed): the latency side of
+    lean);
+  - **paired**, against gnomon: an exact sign test over cells both arms
+    completed, on which used fewer tokens.
+
+  This is the instrument H16 (the token comparison against goose) needed. A
+  lower token count with a lower pass rate is not "leaner", which is why
+  per-resolved-task is listed first.
 - **Not in this run:** pi (no tb adapter), Claude Code and opencode. They need the
   Harbor/AgentLab route on an x86 host. Terminal-Bench 4.0's images are
   amd64-only and its tasks allow 8 h.

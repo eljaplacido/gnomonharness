@@ -45,11 +45,15 @@ say "waiting for gpu.lock"
 flock -w 7200 9 || { say "FATAL: gpu.lock not free within 2 h"; exit 1; }
 say "holding gpu.lock (pid $$); gnomon arm = v0.3.1 = $GNOMON_SHA"
 
-node "$HERE/relay.mjs" >"$BENCH/relay-$MODE.log" 2>&1 &
+# The metering relay: the same bridge exposure as relay.mjs for :18080 (this run
+# never uses :18195), plus token counters read from what llama-server reports.
+RELAY_PORT=18080 node "$HERE/relay-meter.mjs" >"$BENCH/relay-$MODE.log" 2>&1 &
 RELAY=$!
 trap 'kill $RELAY 2>/dev/null' EXIT
 sleep 1
 kill -0 $RELAY 2>/dev/null || { say "FATAL: relay did not start"; exit 1; }
+counters() { curl -s -m 5 http://127.0.0.1:18099/counters; }
+counters | grep -q prompt_tokens || { say "FATAL: meter counters not answering"; exit 1; }
 curl -s -m 10 http://127.0.0.1:18080/v1/models | grep -q "$MODEL_ID" || { say "FATAL: $MODEL_ID not served on :18080"; exit 1; }
 docker network prune -f >/dev/null 2>&1
 
@@ -70,13 +74,20 @@ for k in $(seq 1 "$ATTEMPTS"); do
       id="p-k$k-$arm-$task"
       if compgen -G "$BENCH/runs/$id/*/*/results.json" >/dev/null; then say "SKIP $id (done)"; continue; fi
       say "START $id"
+      before=$(counters)
       "$BENCH/tbvenv/bin/tb" run \
         --agent-import-path "peer_agents:${CLS[$arm]}" --model "${MODEL[$arm]}" \
         --dataset-path "$BENCH/terminal-bench/original-tasks" --task-id "$task" \
         --n-attempts 1 --n-concurrent 1 --run-id "$id" \
         --global-agent-timeout-sec "$TIMEOUT" --output-path "$BENCH/runs" --no-cleanup \
         >"$BENCH/logs/$id.log" 2>&1
-      say "END   $id (tb exit $?)"
+      rc=$?
+      # One trial at a time and only container traffic on the relay, so the
+      # difference is this cell's model traffic, exactly.
+      after=$(counters)
+      mkdir -p "$BENCH/runs/$id"
+      printf '{"before": %s, "after": %s}\n' "${before:-null}" "${after:-null}" > "$BENCH/runs/$id/tokens.json"
+      say "END   $id (tb exit $rc)"
     done
   done
 done
