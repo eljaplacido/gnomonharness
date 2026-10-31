@@ -1,0 +1,58 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..42f08b3 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -2,8 +2,11 @@
+ 
+ 
+ def parse_qty(text):
+-    """Parse a quantity such as "3" or " 12 ". Raises ValueError if it is not an integer."""
+-    return int(text.strip())
++    """Parse a quantity such as "3" or " 12 ". Raises ValueError if it is not a positive integer."""
++    qty = int(text.strip())
++    if qty <= 0:
++        raise ValueError(f"quantity must be a positive integer, got {qty}")
++    return qty
+ 
+ 
+ class Stock:
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..2f3d7c4 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -12,6 +12,30 @@ def test_parse_qty_rejects_text():
+         parse_qty("twelve")
+ 
+ 
++# Regression: parse_qty accepted "0" and "-3", but a quantity is a *positive*
++# integer, so zero and negative input must be rejected the same way non-integer
++# input is.
++#
++# Preconditions: `text` is a string. (parse_qty's own contract already covers
++#   the "not an integer" case; these cases are integers, just not usable ones.)
++# Postconditions: parse_qty("0"), parse_qty("-3") and any other input whose
++#   integer value is <= 0 raise ValueError, and no quantity is returned.
++# Undefined behaviour (no assertions): the exception message, the exception
++#   type for subclasses of ValueError, and whether surrounding whitespace such
++#   as " 0 " is tolerated before the check -- only "must be positive" is
++#   specified, so only that is pinned here.
++@pytest.mark.parametrize("text", ["0", "-3", "-1", " 0 ", " -3 "])
++def test_parse_qty_rejects_zero_and_negative(text):
++    with pytest.raises(ValueError):
++        parse_qty(text)
++
++
++def test_parse_qty_accepts_positive():
++    # The fix must not over-reject: 1 is the smallest legal quantity.
++    assert parse_qty("1") == 1
++    assert parse_qty(" +1 ") == 1
++
++
+ def test_add_and_remove():
+     s = Stock()
+     s.add("widget", 5)
+
+# ignored files present at the end: .env, var/local.db

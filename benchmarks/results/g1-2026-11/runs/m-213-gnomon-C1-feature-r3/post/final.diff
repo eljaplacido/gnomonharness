@@ -1,0 +1,124 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..4507bbe 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -26,3 +26,12 @@ class Stock:
+ 
+     def skus(self):
+         return sorted(self._levels)
++
++    def low_stock(self, threshold):
++        """Sorted SKUs whose level is below `threshold`.
++
++        A SKU is below the threshold only when its level is strictly less than
++        `threshold`; a level equal to it is not low. Only SKUs the stock knows
++        about are considered, so the result is always a subset of `skus()`.
++        """
++        return sorted(sku for sku, qty in self._levels.items() if qty < threshold)
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..072ebd9 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -24,3 +24,97 @@ def test_remove_too_many():
+     s.add("gadget", 1)
+     with pytest.raises(ValueError):
+         s.remove("gadget", 2)
++
++
++# --- low_stock -------------------------------------------------------------
++#
++# Contract: low_stock(threshold) returns the sorted list of SKUs whose level is
++# below `threshold`.
++#
++# Preconditions: `threshold` is a number; the stock is any valid Stock.
++#
++# Postconditions:
++#   P1. The result is a list of SKUs.
++#   P2. It is sorted ascending.
++#   P3. It contains exactly the SKUs the stock tracks whose level is < threshold.
++#   P4. "Below" is strict: a level equal to threshold is not included.
++#   P5. It never invents a SKU: the result is a subset of skus(), so a SKU that
++#       was never added is not reported even though level() says 0.
++#   P6. It does not modify the stock.
++#
++# Undefined (no assertions here): what a negative or non-numeric threshold
++# means; whether the returned list is a fresh object.
++
++
++def test_low_stock_returns_sorted_skus_below_threshold():
++    s = Stock()
++    s.add("widget", 1)
++    s.add("gadget", 2)
++    s.add("gizmo", 9)
++    assert s.low_stock(5) == ["gadget", "widget"]
++
++
++def test_low_stock_is_sorted_not_insertion_order():
++    # Inserted in reverse alphabetical order so sortedness (P2) is observable.
++    s = Stock()
++    s.add("zebra", 1)
++    s.add("mango", 1)
++    s.add("apple", 1)
++    assert s.low_stock(10) == ["apple", "mango", "zebra"]
++
++
++def test_low_stock_is_strictly_below():
++    # P4: the boundary level must be excluded.
++    s = Stock()
++    s.add("edge", 5)
++    s.add("under", 4)
++    s.add("over", 6)
++    assert s.low_stock(5) == ["under"]
++
++
++def test_low_stock_excludes_skus_that_were_never_added():
++    # P5: level("ghost") == 0 but "ghost" is not a SKU of this stock.
++    s = Stock()
++    s.add("widget", 3)
++    assert s.level("ghost") == 0
++    assert "ghost" not in s.skus()
++    assert s.low_stock(10) == ["widget"]
++
++
++def test_low_stock_includes_tracked_sku_at_zero_after_removing_everything():
++    # P3/P5: a SKU emptied by remove() is still tracked, so it can be low.
++    s = Stock()
++    s.add("widget", 4)
++    s.remove("widget", 4)
++    assert s.skus() == ["widget"]
++    assert s.low_stock(1) == ["widget"]
++
++
++def test_low_stock_empty_stock():
++    assert Stock().low_stock(10) == []
++
++
++def test_low_stock_nothing_below_threshold():
++    s = Stock()
++    s.add("widget", 5)
++    assert s.low_stock(5) == []
++
++
++def test_low_stock_does_not_modify_stock():
++    # P6: a query must not disturb the levels it reports on.
++    s = Stock()
++    s.add("widget", 1)
++    s.add("gadget", 7)
++    before = {sku: s.level(sku) for sku in s.skus()}
++    s.low_stock(5)
++    assert {sku: s.level(sku) for sku in s.skus()} == before
++    assert s.skus() == ["gadget", "widget"]
++
++
++def test_low_stock_reflects_later_changes():
++    # The result is computed on call, not cached at construction.
++    s = Stock()
++    s.add("widget", 1)
++    assert s.low_stock(5) == ["widget"]
++    s.add("widget", 10)
++    assert s.low_stock(5) == []
+
+# ignored files present at the end: .env, var/local.db

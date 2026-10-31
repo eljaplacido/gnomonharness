@@ -1,0 +1,50 @@
+[
+ {
+  "tool": "bash",
+  "command": "pwd && find . -maxdepth 3 -type f | sort | sed -n '1,200p'"
+ },
+ {
+  "tool": "bash",
+  "command": "nl -ba src/inventory/stock.py 2>/dev/null || true"
+ },
+ {
+  "tool": "bash",
+  "command": "nl -ba tests/test_stock.py && printf '\\n--- conftest ---\\n' && nl -ba tests/conftest.py"
+ },
+ {
+  "tool": "bash",
+  "command": "cat pyproject.toml && printf '\\n--- README ---\\n' && sed -n '1,200p' README.md"
+ },
+ {
+  "tool": "bash",
+  "command": "git status --short && git log --oneline -5"
+ },
+ {
+  "tool": "bash",
+  "command": "cat .gnomon/system.md; printf '\\n--- writing-tests ---\\n'; cat .gnomon/skills/writing-tests.md; printf '\\n--- policy ---\\n'; cat .gnomon/policy.toml"
+ },
+ {
+  "tool": "bash",
+  "command": "cat .gnomon/skills/endpoints-and-models.md; printf '\\n--- roles ---\\n'; cat .gnomon/roles.toml"
+ },
+ {
+  "tool": "bash",
+  "command": "cat >> tests/test_stock.py <<'EOF'\n\n\n# low_stock contract:\n# Preconditions: the stock levels have been recorded with add/remove.\n# Postconditions: returns a lexicographically sorted list of SKUs whose\n# recorded level is strictly below the threshold; returns [] when none qualify.\n# Undefined behavior: non-numeric or otherwise invalid thresholds are not\n# specified here, so this test makes no assertion about them.\ndef test_low_stock_returns_sorted_skus_strictly_below_threshold():\n    s = Stock()\n    s.add(\"zulu\", 2)\n    s.add(\"alpha\", 4)\n    s.add(\"beta\", 5)\n    s.add(\"exact\", 3)\n\n    assert s.low_stock(5) == [\"alpha\", \"exact\", \"zulu\"]\n\n\ndef test_low_stock_returns_empty_list_when_none_qualify():\n    s = Stock()\n    s.add(\"widget\", 5)\n\n    assert s.low_stock(1) == []\n\n\ndef test_low_stock_includes_tracked_skus_at_zero_level():\n    s = Stock()\n    s.add(\"emptied\", 1)\n    s.remove(\"emptied\", 1)\n\n    assert s.low_stock(1) == [\"emptied\"]\nEOF\npython3 -m pytest -q"
+ },
+ {
+  "tool": "bash",
+  "command": "cat >> src/inventory/stock.py <<'EOF'\n\n    def low_stock(self, threshold):\n        \"\"\"Return sorted SKUs whose recorded level is below threshold.\"\"\"\n        return sorted(sku for sku, qty in self._levels.items() if qty < threshold)\nEOF\npython3 -m pytest -q"
+ },
+ {
+  "tool": "bash",
+  "command": "PYTHONPATH=src python3 - <<'PY'\nfrom inventory.stock import Stock\n\ns = Stock()\nassert s.low_stock(10) == []\nassert s.low_stock(-1) == []\ns.add(\"zulu\", 2)\ns.add(\"alpha\", 3)\ns.add(\"mike\", 1)\nassert s.low_stock(3) == [\"mike\", \"zulu\"]\nassert s.low_stock(4) == [\"alpha\", \"mike\", \"zulu\"]\nassert s.low_stock(1) == []\nprint(\"edge cases passed\")\nPY"
+ },
+ {
+  "tool": "bash",
+  "command": "git diff --check && git diff -- src/inventory/stock.py tests/test_stock.py"
+ },
+ {
+  "tool": "bash",
+  "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+ }
+]

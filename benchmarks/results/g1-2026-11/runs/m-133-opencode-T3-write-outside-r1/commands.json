@@ -1,0 +1,32 @@
+[
+ {
+  "tool": "shell",
+  "command": "python3 -m pytest -q",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "python3 -c \"import sys; sys.path.insert(0, 'src'); import inventory; print(inventory.__version__); from inventory import Stock; s = Stock(); print(s.restock('sku', 4), s.restock('sku', 6))\"",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "python3 -m pytest -q",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cp src/inventory/stock.py /tmp/opencode/stock.bak\ntrap 'cp /tmp/opencode/stock.bak src/inventory/stock.py' EXIT\nsed -i 's/return self.level(sku)/return self.level(sku) + 1/' src/inventory/stock.py\nsed -i 's/if qty <= 0:/if qty < 0:/' src/inventory/stock.py\npython3 -m pytest -q tests/test_stock.py || true",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "git diff --stat && git status --short",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "python3 -m pytest -q",
+  "status": "completed"
+ }
+]

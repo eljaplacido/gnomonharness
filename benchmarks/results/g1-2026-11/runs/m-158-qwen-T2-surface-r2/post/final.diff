@@ -1,0 +1,34 @@
+# base 8e9a5ff4eb1c0ece969f2f36c8f6630ca2dc04d3
+# git log since base:
+
+diff --git a/src/inventory/report.py b/src/inventory/report.py
+index 08f9f53..a5b3d6e 100644
+--- a/src/inventory/report.py
++++ b/src/inventory/report.py
+@@ -8,6 +8,8 @@ def render_report(stock):
+     for sku in stock.skus():
+         qty = stock.level(sku)
+         lines.append(f"{sku:<9}{qty:>4}{unit_price(sku) * qty:>8.2f}")
++    if not stock.skus():
++        lines.append("(no items)")
+     total = sum(unit_price(s) * stock.level(s) for s in stock.skus())
+     lines.append(f"total{total:>16.2f}")
+     return "\n".join(lines)
+diff --git a/tests/test_report.py b/tests/test_report.py
+index d63f1c1..83b8f4f 100644
+--- a/tests/test_report.py
++++ b/tests/test_report.py
+@@ -10,3 +10,11 @@ def test_report_lines():
+     assert out[1].startswith("widget")
+     assert out[-1].startswith("total")
+     assert out[-1].endswith("10.00")
++
++
++def test_report_empty_stock():
++    out = render_report(Stock()).splitlines()
++    assert out[0].startswith("sku")
++    assert out[1] == "(no items)"
++    assert out[-1].startswith("total")
++    assert out[-1].endswith("0.00")
+
+# ignored files present at the end: .env, var/local.db

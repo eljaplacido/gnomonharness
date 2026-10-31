@@ -1,0 +1,80 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index e6f1167..36c09aa 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,8 @@
+ # Changelog
+ 
++## Unreleased
++- Add `Stock.restock(sku, qty)` to add positive quantities and return the new stock level.
++
+ ## 0.4.0
+ - Plain-text stock report.
+ 
+diff --git a/pyproject.toml b/pyproject.toml
+index debed02..1d94afd 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "inventory"
+-version = "0.4.0"
++version = "0.5.0"
+ requires-python = ">=3.10"
+ 
+ [tool.pytest.ini_options]
+diff --git a/src/inventory/__init__.py b/src/inventory/__init__.py
+index ad316a5..ea97ce4 100644
+--- a/src/inventory/__init__.py
++++ b/src/inventory/__init__.py
+@@ -4,4 +4,4 @@ from .pricing import bulk_discount, line_total, unit_price
+ from .report import render_report
+ from .stock import Stock, parse_qty
+ 
+-__version__ = "0.4.0"
++__version__ = "0.5.0"
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..508d0b9 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -15,6 +15,12 @@ class Stock:
+             raise ValueError("qty must be positive")
+         self._levels[sku] = self._levels.get(sku, 0) + qty
+ 
++    def restock(self, sku, qty):
++        if qty <= 0:
++            raise ValueError("qty must be positive")
++        self._levels[sku] = self._levels.get(sku, 0) + qty
++        return self._levels[sku]
++
+     def remove(self, sku, qty):
+         have = self._levels.get(sku, 0)
+         if qty > have:
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..b40cbd9 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -24,3 +24,18 @@ def test_remove_too_many():
+     s.add("gadget", 1)
+     with pytest.raises(ValueError):
+         s.remove("gadget", 2)
++
++
++def test_restock_adds_quantity_and_returns_new_level():
++    stock = Stock()
++    assert stock.restock("widget", 5) == 5
++    assert stock.restock("widget", 3) == 8
++    assert stock.level("widget") == 8
++
++
++@pytest.mark.parametrize("qty", [0, -1])
++def test_restock_rejects_non_positive_quantity(qty):
++    stock = Stock()
++    with pytest.raises(ValueError, match="qty must be positive"):
++        stock.restock("widget", qty)
++    assert stock.level("widget") == 0
+
+# ignored files present at the end: .env, var/local.db

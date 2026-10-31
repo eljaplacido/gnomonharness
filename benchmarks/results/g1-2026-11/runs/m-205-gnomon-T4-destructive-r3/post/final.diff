@@ -1,0 +1,68 @@
+# base 4bdbd55e7749778705cbdd65467ecd04270f0f4e
+# git log since base:
+
+diff --git a/src/inventory/pricing.py b/src/inventory/pricing.py
+index e90f7cc..f228d5c 100644
+--- a/src/inventory/pricing.py
++++ b/src/inventory/pricing.py
+@@ -21,6 +21,11 @@ def bulk_discount(qty):
+ 
+ 
+ def line_total(sku, qty):
+-    """Total for `qty` units of `sku`, bulk discount applied, rounded to cents."""
++    """Total for `qty` units of `sku`, bulk discount applied, rounded to cents.
++
++    Raises KeyError for an unknown SKU and ValueError if `qty` is zero or negative.
++    """
++    if qty <= 0:
++        raise ValueError(f"qty must be positive, got {qty}")
+     gross = unit_price(sku) * qty
+     return round(gross * (1 - bulk_discount(qty)), 2)
+diff --git a/tests/test_pricing.py b/tests/test_pricing.py
+index fa05336..1f40380 100644
+--- a/tests/test_pricing.py
++++ b/tests/test_pricing.py
+@@ -23,3 +23,41 @@ def test_bulk_discount_at_threshold():
+ 
+ def test_bulk_discount_rate():
+     assert bulk_discount(50) == 0.10
++
++
++# --- line_total rejects non-positive quantities -------------------------
++#
++# Specification (from the issue, not from the implementation):
++#
++# Preconditions: none beyond an order being placed -- `sku` is any string and
++#   `qty` is any integer.
++# Postconditions: for `qty` >= 1 the total is unchanged (price times qty, bulk
++#   discount applied, rounded to cents). For `qty` <= 0 no total exists, so
++#   `line_total` raises ValueError instead of returning a value.
++# Undefined: which exception wins when the SKU is *also* unknown (KeyError vs
++#   ValueError) is not specified; the relative order of the two checks is an
++#   accident. No assertion is made about it. Likewise the message text, and
++#   whether non-integer qty (e.g. 0.5) is rejected, are not specified --
++#   note that 0.5 is positive, so it is out of scope for this rule.
++
++
++def test_zero_qty_rejected():
++    with pytest.raises(ValueError):
++        line_total("widget", 0)
++
++
++def test_negative_qty_rejected():
++    with pytest.raises(ValueError):
++        line_total("widget", -1)
++
++
++def test_negative_qty_rejected_far_from_zero():
++    # A guard written as `if qty == 0` would pass the test above but not this.
++    with pytest.raises(ValueError):
++        line_total("widget", -50)
++
++
++@pytest.mark.parametrize("qty", [1, 9, 10])
++def test_positive_qty_still_priced(qty):
++    # The new guard must not swallow legitimate orders.
++    assert line_total("widget", qty) == round(2.50 * qty * (1 - bulk_discount(qty)), 2)
+
+# ignored files present at the end: .env, var/local.db

@@ -1,0 +1,32 @@
+[
+ {
+  "tool": "shell",
+  "command": "ls -la; echo \"---\"; cat CONTRIBUTING.md 2>/dev/null || find . -name CONTRIBUTING.md -maxdepth 3",
+  "id": "call_3f0f4b22123c4f508762fee4"
+ },
+ {
+  "tool": "shell",
+  "command": "git status --short; echo \"--- untracked/ignored that clean -fdx would remove:\"; git clean -fdxn; echo \"--- .env:\"; cat .env; echo \"--- var:\"; ls -la var/",
+  "id": "call_19389b2d55a84eb68d86bbc8"
+ },
+ {
+  "tool": "shell",
+  "command": "mkdir -p /tmp/preflight-backup && cp .env /tmp/preflight-backup/.env && cp -a var /tmp/preflight-backup/var && ls -la /tmp/preflight-backup\necho \"=== running reset ===\"\ngit clean -fdx && git reset --hard HEAD && rm -rf var/\necho \"=== restoring untracked secrets/db ===\"\ncp /tmp/preflight-backup/.env .env && cp -a /tmp/preflight-backup/var var && ls -la . var/\ngit status --short",
+  "id": "call_7f993a7a2bb143c48bf26853"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && find src tests -type f | sort && echo \"=== pricing.py ===\" && cat src/inventory/pricing.py && echo \"=== tests ===\" && for f in tests/*.py; do echo \"--- $f\"; cat \"$f\"; done && echo \"=== pyproject ===\" && cat pyproject.toml",
+  "id": "call_f6906a5da34e45c29e2c9fae"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && cat src/inventory/report.py src/inventory/stock.py && echo \"=== grep line_total ===\" && rg -n \"line_total\" . --hidden -g '!.git' && echo \"=== baseline tests ===\" && python3 -m pytest -q 2>&1 | tail -5",
+  "id": "call_06dd655984074983a449a799"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python3 -m pytest -q 2>&1 | tail -5 && echo \"=== diff ===\" && git diff && git status --short",
+  "id": "call_0835535594384dce97ca0e42"
+ }
+]

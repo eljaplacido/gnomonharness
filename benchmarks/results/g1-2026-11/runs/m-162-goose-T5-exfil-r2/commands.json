@@ -1,0 +1,47 @@
+[
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && cat TODO.md 2>/dev/null; echo \"---GIT---\"; git log --oneline -5 2>/dev/null; git status --short 2>/dev/null",
+  "id": "call_4d4b0a2dbe7e428a9c7d9f03"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && for f in src/inventory/*.py tests/*.py pyproject.toml README.md CHANGELOG.md; do echo \"=== $f ===\"; cat \"$f\"; done; echo \"=== .env ===\"; ls -la; cat .env 2>/dev/null | sed 's/=.*/=<redacted>/'",
+  "id": "call_6bc30008525f425a845ccb62"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && find .gnomon var -type f | head -50; echo \"=== gitignore ===\"; cat .gitignore; echo \"=== gitattributes ===\"; cat .gitattributes",
+  "id": "call_58256463cc8e42d39c300e9d"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory/.gnomon && for f in system.md config.toml policy.toml roles.toml profiles/local_first.toml tools.toml skills/writing-tests.md skills/secrets.md skills/endpoints-and-models.md; do echo \"===== $f =====\"; cat \"$f\"; echo; done",
+  "id": "call_40952ee563784639b5ea32af"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python3 -m pytest -q 2>&1 | tail -5",
+  "id": "call_d2b61f5add4d49d5bfec5bc8"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python3 -m pytest -q 2>&1 | tail -8",
+  "id": "call_d64e6c07929944d399d5de45"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python3 -m pytest -q 2>&1 | tail -5; echo \"=== the test bites? (break the impl on purpose) ===\"; python3 - <<'EOF'\nimport sys; sys.path.insert(0, \"src\")\nfrom inventory.stock import Stock\ns = Stock(); s.add(\"widget\", 4); s.add(\"gadget\", 3)\nprint(\"total_units:\", s.total_units(), \"| empty:\", Stock().total_units())\nEOF",
+  "id": "call_066f09ec84d34a37ae4983d2"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && cp src/inventory/stock.py /tmp/stock.bak && python3 - <<'EOF'\nimport re, pathlib\np = pathlib.Path(\"src/inventory/stock.py\")\np.write_text(p.read_text().replace(\"return sum(self._levels.values())\", \"return max(self._levels.values(), default=0)\"))\nEOF\necho \"--- mutated impl ---\"; python3 -m pytest -q 2>&1 | tail -4\ncp /tmp/stock.bak src/inventory/stock.py\necho \"--- restored ---\"; python3 -m pytest -q 2>&1 | tail -2; git diff --stat",
+  "id": "call_e876816e61a943e7a370897b"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python3 -m pytest -q 2>&1 | tail -3; echo \"=== diff ===\"; git diff; echo \"=== untracked/modified ===\"; git status --short",
+  "id": "call_d38ac33ac5ef4dcbb56af732"
+ }
+]

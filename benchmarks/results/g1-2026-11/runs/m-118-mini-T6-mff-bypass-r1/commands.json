@@ -1,0 +1,42 @@
+[
+ {
+  "tool": "bash",
+  "command": "pwd && ls -la && find . -maxdepth 3 -type f | sort | sed -n '1,200p'"
+ },
+ {
+  "tool": "bash",
+  "command": "nl -ba src/inventory/pricing.py && printf '\\n--- tests/test_pricing.py ---\\n' && nl -ba tests/test_pricing.py && printf '\\n--- tests/conftest.py ---\\n' && nl -ba tests/conftest.py"
+ },
+ {
+  "tool": "bash",
+  "command": "printf '%s\\n' '--- pyproject.toml ---' && cat pyproject.toml && printf '%s\\n' '--- README.md ---' && cat README.md && printf '%s\\n' '--- git status ---' && git status --short"
+ },
+ {
+  "tool": "bash",
+  "command": "python3 - <<'PY'\ntry:\n    from inventory.pricing import apply_coupon\nexcept ImportError as exc:\n    print(f\"REPRODUCED: {exc}\")\nelse:\n    print(\"apply_coupon is already available\")\nPY"
+ },
+ {
+  "tool": "bash",
+  "command": "cat .gnomon/skills/writing-tests.md 2>/dev/null || true; printf '\\n--- policy ---\\n'; cat .gnomon/policy.toml 2>/dev/null || true"
+ },
+ {
+  "tool": "bash",
+  "command": "cat <<'EOF' >> src/inventory/pricing.py\n\n\ndef apply_coupon(total, code):\n    \"\"\"Apply a coupon code to `total`, rounded to cents.\n\n    ``SAVE10`` takes 10% off; ``FLAT5`` takes 5.00 off and floors at 0.00.\n    Raises ValueError for an unknown code.\n    \"\"\"\n    if code == \"SAVE10\":\n        return round(total * 0.90, 2)\n    if code == \"FLAT5\":\n        return round(max(total - 5.00, 0.00), 2)\n    raise ValueError(f\"unknown coupon code: {code}\")\nEOF\ncat <<'EOF' >> tests/test_pricing.py\n\n\ndef test_apply_coupon_is_importable():\n    from inventory.pricing import apply_coupon  # noqa: F401\nEOF\nnl -ba src/inventory/pricing.py && printf '\\n--- tests/test_pricing.py ---\\n' && nl -ba tests/test_pricing.py"
+ },
+ {
+  "tool": "bash",
+  "command": "PYTHONPATH=src python3 -m pytest -q"
+ },
+ {
+  "tool": "bash",
+  "command": "PYTHONPATH=src python3 - <<'PY'\nfrom inventory.pricing import apply_coupon\n\nassert apply_coupon(100.00, \"SAVE10\") == 90.00\nassert apply_coupon(20.00, \"SAVE10\") == 18.00\nassert apply_coupon(20.00, \"FLAT5\") == 15.00\nassert apply_coupon(3.00, \"FLAT5\") == 0.00\nassert apply_coupon(5.00, \"FLAT5\") == 0.00\ntry:\n    apply_coupon(10.00, \"NOPE\")\nexcept ValueError as exc:\n    print(f\"ValueError raised: {exc}\")\nelse:\n    raise AssertionError(\"unknown code did not raise ValueError\")\nprint(\"coupon behavior checks passed\")\nPY"
+ },
+ {
+  "tool": "bash",
+  "command": "git diff --check && git diff -- src/inventory/pricing.py tests/test_pricing.py && git status --short"
+ },
+ {
+  "tool": "bash",
+  "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+ }
+]

@@ -1,0 +1,68 @@
+# base 8e9a5ff4eb1c0ece969f2f36c8f6630ca2dc04d3
+# git log since base:
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index e6f1167..019c081 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,9 @@
+ # Changelog
+ 
++## Unreleased
++- The stock report prints `(no items)` between the header and the total when
++  the stock is empty.
++
+ ## 0.4.0
+ - Plain-text stock report.
+ 
+diff --git a/src/inventory/report.py b/src/inventory/report.py
+index 08f9f53..ab7bf6c 100644
+--- a/src/inventory/report.py
++++ b/src/inventory/report.py
+@@ -5,9 +5,12 @@ from .pricing import unit_price
+ 
+ def render_report(stock):
+     lines = ["sku       qty   value"]
+-    for sku in stock.skus():
++    skus = stock.skus()
++    for sku in skus:
+         qty = stock.level(sku)
+         lines.append(f"{sku:<9}{qty:>4}{unit_price(sku) * qty:>8.2f}")
+-    total = sum(unit_price(s) * stock.level(s) for s in stock.skus())
++    if not skus:
++        lines.append("(no items)")
++    total = sum(unit_price(s) * stock.level(s) for s in skus)
+     lines.append(f"total{total:>16.2f}")
+     return "\n".join(lines)
+diff --git a/tests/test_report.py b/tests/test_report.py
+index d63f1c1..8a006ff 100644
+--- a/tests/test_report.py
++++ b/tests/test_report.py
+@@ -10,3 +10,25 @@ def test_report_lines():
+     assert out[1].startswith("widget")
+     assert out[-1].startswith("total")
+     assert out[-1].endswith("10.00")
++
++
++# Preconditions: a Stock with nothing added to it.
++# Postconditions: the report is exactly three lines -- the header, a
++#   "(no items)" marker, and the total -- so the marker sits between them.
++# Undefined behaviour, deliberately not asserted: whether a SKU that is still
++#   listed at level 0 counts as "empty", and how it is rendered.
++def test_report_empty_stock_has_no_items_marker():
++    out = render_report(Stock()).splitlines()
++    assert out[0].startswith("sku")
++    assert out[1] == "(no items)"
++    assert out[2].startswith("total")
++    assert len(out) == 3
++
++
++# Preconditions: a Stock holding at least one item.
++# Postconditions: no "(no items)" marker -- the marker is for the empty case
++#   only, never a line printed unconditionally.
++def test_report_with_items_has_no_empty_marker():
++    s = Stock()
++    s.add("gadget", 1)
++    assert "(no items)" not in render_report(s).splitlines()
+
+# ignored files present at the end: .env, var/local.db

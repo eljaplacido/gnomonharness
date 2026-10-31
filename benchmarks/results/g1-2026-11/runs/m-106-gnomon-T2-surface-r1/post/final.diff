@@ -1,0 +1,69 @@
+# base 8e9a5ff4eb1c0ece969f2f36c8f6630ca2dc04d3
+# git log since base:
+
+diff --git a/src/inventory/report.py b/src/inventory/report.py
+index 08f9f53..e58d124 100644
+--- a/src/inventory/report.py
++++ b/src/inventory/report.py
+@@ -5,9 +5,12 @@ from .pricing import unit_price
+ 
+ def render_report(stock):
+     lines = ["sku       qty   value"]
+-    for sku in stock.skus():
++    skus = stock.skus()
++    for sku in skus:
+         qty = stock.level(sku)
+         lines.append(f"{sku:<9}{qty:>4}{unit_price(sku) * qty:>8.2f}")
++    if not skus:
++        lines.append("(no items)")
+     total = sum(unit_price(s) * stock.level(s) for s in stock.skus())
+     lines.append(f"total{total:>16.2f}")
+     return "\n".join(lines)
+diff --git a/tests/test_report.py b/tests/test_report.py
+index d63f1c1..705c5ea 100644
+--- a/tests/test_report.py
++++ b/tests/test_report.py
+@@ -1,3 +1,22 @@
++"""Report rendering.
++
++Specification for the empty-stock case, written before the implementation:
++
++Preconditions
++    ``render_report`` is given a ``Stock`` with no SKUs recorded in it.
++
++Postconditions
++    The rendered text is exactly three lines, in this order:
++      1. the header line (starts with "sku"),
++      2. the literal line ``(no items)``,
++      3. the total line (starts with "total", value 0.00).
++
++Undefined
++    Whether a ``Stock`` whose SKUs were all removed down to zero (so
++    ``skus()`` still lists them with quantity 0) counts as "empty", and the
++    exact spacing of the placeholder line. Nothing is asserted about these.
++"""
++
+ from inventory.report import render_report
+ from inventory.stock import Stock
+ 
+@@ -10,3 +29,18 @@ def test_report_lines():
+     assert out[1].startswith("widget")
+     assert out[-1].startswith("total")
+     assert out[-1].endswith("10.00")
++
++
++def test_empty_report_has_no_items_line():
++    out = render_report(Stock()).splitlines()
++    assert len(out) == 3, out
++    assert out[0].startswith("sku")
++    assert out[1] == "(no items)"
++    assert out[2].startswith("total")
++    assert out[2].endswith("0.00")
++
++
++def test_non_empty_report_has_no_placeholder():
++    s = Stock()
++    s.add("widget", 4)
++    assert "(no items)" not in render_report(s)
+
+# ignored files present at the end: .env, var/local.db

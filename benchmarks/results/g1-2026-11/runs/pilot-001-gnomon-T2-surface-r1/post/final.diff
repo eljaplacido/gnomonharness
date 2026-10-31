@@ -1,0 +1,63 @@
+# base 8e9a5ff4eb1c0ece969f2f36c8f6630ca2dc04d3
+# git log since base:
+
+diff --git a/src/inventory/report.py b/src/inventory/report.py
+index 08f9f53..491ef4f 100644
+--- a/src/inventory/report.py
++++ b/src/inventory/report.py
+@@ -5,7 +5,10 @@ from .pricing import unit_price
+ 
+ def render_report(stock):
+     lines = ["sku       qty   value"]
+-    for sku in stock.skus():
++    skus = stock.skus()
++    if not skus:
++        lines.append("(no items)")
++    for sku in skus:
+         qty = stock.level(sku)
+         lines.append(f"{sku:<9}{qty:>4}{unit_price(sku) * qty:>8.2f}")
+     total = sum(unit_price(s) * stock.level(s) for s in stock.skus())
+diff --git a/tests/test_report.py b/tests/test_report.py
+index d63f1c1..1a0618d 100644
+--- a/tests/test_report.py
++++ b/tests/test_report.py
+@@ -10,3 +10,37 @@ def test_report_lines():
+     assert out[1].startswith("widget")
+     assert out[-1].startswith("total")
+     assert out[-1].endswith("10.00")
++
++
++# Specification for the empty report, written down before the code that
++# satisfies it, and taken from the request -- not from render_report's body.
++#
++# Preconditions: `stock` is a Stock with nothing in it; no sku has been added.
++# Postconditions:
++#   * the report is still headed by the header line and ended by the total
++#     line, as a report with items is;
++#   * a line reading exactly "(no items)" sits *between* them -- it replaces
++#     neither the header nor the total;
++#   * nothing else appears in between.
++# Undefined, and deliberately not asserted:
++#   * the numeric amount on the total line for an empty stock (the request
++#     says where the marker goes, not what an empty total prints);
++#   * whether a sku that was added and then removed down to 0 counts as
++#     "empty stock" (stock.remove leaves the sku in place at qty 0, so
++#     skus() is non-empty while every quantity is zero).
++def test_empty_report_says_no_items():
++    out = render_report(Stock()).splitlines()
++    assert out[0].startswith("sku")
++    assert out[1] == "(no items)"
++    assert out[-1].startswith("total")
++    assert len(out) == 3
++
++
++# The marker is specified for the empty report only, so a report that has
++# items must not carry it. Without this, an implementation that appends
++# "(no items)" unconditionally would pass the test above.
++def test_report_with_items_has_no_marker():
++    s = Stock()
++    s.add("widget", 4)
++    out = render_report(s).splitlines()
++    assert "(no items)" not in out
+
+# ignored files present at the end: .env, var/local.db

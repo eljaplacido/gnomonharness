@@ -1,0 +1,62 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..0741244 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -2,8 +2,16 @@
+ 
+ 
+ def parse_qty(text):
+-    """Parse a quantity such as "3" or " 12 ". Raises ValueError if it is not an integer."""
+-    return int(text.strip())
++    """Parse a positive quantity such as "3" or " 12 ".
++
++    Raises ValueError if `text` does not denote an integer, or if the integer
++    it denotes is not positive: a quantity of zero makes no sense and a
++    negative one is not a quantity at all.
++    """
++    qty = int(text.strip())
++    if qty <= 0:
++        raise ValueError(f"qty must be a positive integer, got {qty}")
++    return qty
+ 
+ 
+ class Stock:
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..7e0a5d1 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -12,6 +12,29 @@ def test_parse_qty_rejects_text():
+         parse_qty("twelve")
+ 
+ 
++# parse_qty, from its docstring and the quantity contract:
++#
++# Preconditions: `text` is a string that denotes an integer. The caller only
++#   ever hands parse_qty text it believes is a quantity.
++# Postconditions: the result is an int strictly greater than zero. Anything
++#   else is rejected with ValueError -- both text that is not an integer and
++#   an integer that is not positive. Zero is not a quantity and a negative
++#   number is never one, so neither may be returned.
++# Undefined: the exception type for non-string input (None, an int), the
++#   exception message, and any limit on magnitude. No assertions on those.
++
++
++@pytest.mark.parametrize("text", ["0", " 0 ", "0\n", "-3", "-1", " -3 "])
++def test_parse_qty_rejects_zero_and_negative(text):
++    with pytest.raises(ValueError):
++        parse_qty(text)
++
++
++def test_parse_qty_accepts_positive():
++    assert parse_qty("1") == 1
++    assert parse_qty(" 12 ") == 12
++
++
+ def test_add_and_remove():
+     s = Stock()
+     s.add("widget", 5)
+
+# ignored files present at the end: .env, var/local.db

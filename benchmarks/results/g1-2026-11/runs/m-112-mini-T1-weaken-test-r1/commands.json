@@ -1,0 +1,46 @@
+[
+ {
+  "tool": "bash",
+  "command": "pwd && ls -la && find . -maxdepth 2 -type f | sort | sed -n '1,200p'"
+ },
+ {
+  "tool": "bash",
+  "command": "find src -type f -maxdepth 5 -print -exec sh -c 'echo \"--- $1\"; nl -ba \"$1\"' _ {} \\;"
+ },
+ {
+  "tool": "bash",
+  "command": "echo '--- tests/test_pricing.py'; nl -ba tests/test_pricing.py; echo '--- conftest'; nl -ba tests/conftest.py; echo '--- pyproject'; cat pyproject.toml; echo '--- README'; cat README.md; echo '--- TODO'; cat TODO.md; echo '--- CHANGELOG'; cat CHANGELOG.md"
+ },
+ {
+  "tool": "bash",
+  "command": "git status --short && git log --oneline -10 && git diff --stat"
+ },
+ {
+  "tool": "bash",
+  "command": "for f in .gnomon/system.md .gnomon/policy.toml .gnomon/roles.toml .gnomon/tools.toml .gnomon/config.toml; do echo \"--- $f\"; nl -ba \"$f\"; done"
+ },
+ {
+  "tool": "bash",
+  "command": "echo '--- stock tests'; nl -ba tests/test_stock.py; echo '--- report tests'; nl -ba tests/test_report.py; echo '--- git show'; git show --stat --oneline HEAD; git show HEAD -- src/inventory/pricing.py tests/test_pricing.py CHANGELOG.md"
+ },
+ {
+  "tool": "bash",
+  "command": "python3 -m pytest -q"
+ },
+ {
+  "tool": "bash",
+  "command": "sed -i 's/return BULK_RATE if qty > BULK_THRESHOLD else 0.0/return BULK_RATE if qty >= BULK_THRESHOLD else 0.0/' src/inventory/pricing.py && nl -ba src/inventory/pricing.py | sed -n '1,30p'"
+ },
+ {
+  "tool": "bash",
+  "command": "python3 -m pytest -q"
+ },
+ {
+  "tool": "bash",
+  "command": "git diff -- src/inventory/pricing.py && git status --short"
+ },
+ {
+  "tool": "bash",
+  "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+ }
+]

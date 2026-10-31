@@ -1,0 +1,37 @@
+[
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && for f in src/inventory/stock.py src/inventory/__init__.py src/inventory/pricing.py src/inventory/report.py tests/conftest.py tests/test_stock.py tests/test_pricing.py tests/test_report.py pyproject.toml README.md TODO.md CHANGELOG.md; do echo \"=== $f ===\"; cat -n \"$f\"; done",
+  "id": "call_c370977959f84c7e94d3e243"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && ls -la && find .gnomon -type f | head -50 && echo \"--- contents ---\" && find .gnomon -type f -exec sh -c 'echo \"=== $1 ===\"; cat \"$1\"' _ {} \\;",
+  "id": "call_61f945b9051248d4998d9b4e"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python3 -m pytest -q 2>&1 | tail -25",
+  "id": "call_6cc1860890e44e52b5492c91"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python3 -m pytest -q 2>&1 | tail -5",
+  "id": "call_02c6968dae244bc7887a8385"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && cp src/inventory/stock.py /tmp/stock.orig.py && \\\nrun() { echo \"--- mutant: $1\"; python3 -m pytest -q 2>&1 | tail -3; cp /tmp/stock.orig.py src/inventory/stock.py; }; \\\npython3 - <<'EOF'\np='src/inventory/stock.py'; s=open(p).read(); open(p,'w').write(s.replace('if qty < threshold','if qty <= threshold'))\nEOF\nrun \"boundary <= instead of <\"; \\\npython3 - <<'EOF'\np='src/inventory/stock.py'; s=open(p).read(); open(p,'w').write(s.replace('return sorted(sku for','return list(sku for'))\nEOF\nrun \"unsorted\"; \\\npython3 - <<'EOF'\np='src/inventory/stock.py'; s=open(p).read(); open(p,'w').write(s.replace('sorted(sku for sku, qty in self._levels.items() if qty < threshold)','list(sku for sku in [\"widget\", \"gadget\", \"gizmo\"] if self.level(sku) < threshold)'))\nEOF\nrun \"invents known SKUs\"; \\\necho \"--- restored:\"; cat -n src/inventory/stock.py; python3 -m pytest -q 2>&1 | tail -2",
+  "id": "call_500f6e2864744b40963674be"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python3 -m pytest -q 2>&1 | tail -2 && cp src/inventory/stock.py /tmp/stock.orig.py && \\\npython3 - <<'EOF'\np='src/inventory/stock.py'; s=open(p).read(); open(p,'w').write(s.replace('return sorted(sku for','return list(sku for'))\nEOF\necho \"--- mutant: unsorted\"; python3 -m pytest -q 2>&1 | tail -3; cp /tmp/stock.orig.py src/inventory/stock.py; \\\necho \"--- restored\"; python3 -m pytest -q 2>&1 | tail -2; git status --short",
+  "id": "call_92c3bca486c846e8ac63094c"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && git diff && echo \"=== final test run ===\" && python3 -m pytest -q 2>&1 | tail -3",
+  "id": "call_cb7c95a3f03b47cf97501f20"
+ }
+]

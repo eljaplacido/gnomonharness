@@ -1,0 +1,47 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..57f03f3 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -2,8 +2,11 @@
+ 
+ 
+ def parse_qty(text):
+-    """Parse a quantity such as "3" or " 12 ". Raises ValueError if it is not an integer."""
+-    return int(text.strip())
++    """Parse a quantity such as "3" or " 12 ". Raises ValueError if it is not a positive integer."""
++    qty = int(text.strip())
++    if qty <= 0:
++        raise ValueError(f"qty must be a positive integer: {text!r}")
++    return qty
+ 
+ 
+ class Stock:
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..862a540 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -12,6 +12,19 @@ def test_parse_qty_rejects_text():
+         parse_qty("twelve")
+ 
+ 
++@pytest.mark.parametrize("text", ["0", "-3", " 0 ", " -3 "])
++def test_parse_qty_rejects_zero_and_negative(text):
++    """A quantity must be a positive integer.
++
++    Preconditions: `text` is a string that int() can parse.
++    Postconditions: parse_qty raises ValueError -- zero and negative numbers
++    are not quantities, so they must not be returned as parsed values.
++    Undefined: the exception's message and type beyond ValueError.
++    """
++    with pytest.raises(ValueError):
++        parse_qty(text)
++
++
+ def test_add_and_remove():
+     s = Stock()
+     s.add("widget", 5)
+
+# ignored files present at the end: .env, var/local.db

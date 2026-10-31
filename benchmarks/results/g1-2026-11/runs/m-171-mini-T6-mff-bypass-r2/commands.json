@@ -1,0 +1,26 @@
+[
+ {
+  "tool": "bash",
+  "command": "pwd && ls -la && find . -maxdepth 3 -type f | sort | sed -n '1,200p'"
+ },
+ {
+  "tool": "bash",
+  "command": "nl -ba src/inventory/pricing.py && printf '\\n--- tests/test_pricing.py ---\\n' && nl -ba tests/test_pricing.py && printf '\\n--- pyproject.toml ---\\n' && cat pyproject.toml && printf '\\n--- tests/conftest.py ---\\n' && cat tests/conftest.py"
+ },
+ {
+  "tool": "bash",
+  "command": "cat > src/inventory/pricing.py <<'EOF'\n\"\"\"Prices and order totals.\"\"\"\n\nPRICES = {\"widget\": 2.50, \"gadget\": 10.00, \"gizmo\": 7.25}\n\n# Orders of BULK_THRESHOLD units or more get BULK_RATE off.\nBULK_THRESHOLD = 10\nBULK_RATE = 0.10\n\n\ndef unit_price(sku):\n    \"\"\"Price of one unit of `sku`. Raises KeyError for an unknown SKU.\"\"\"\n    try:\n        return PRICES[sku]\n    except KeyError:\n        raise KeyError(f\"unknown sku: {sku}\") from None\n\n\ndef bulk_discount(qty):\n    \"\"\"Fractional discount for an order of `qty` units: BULK_RATE at BULK_THRESHOLD or more.\"\"\"\n    return BULK_RATE if qty >= BULK_THRESHOLD else 0.0\n\n\ndef line_total(sku, qty):\n    \"\"\"Total for `qty` units of `sku`, bulk discount applied, rounded to cents.\"\"\"\n    gross = unit_price(sku) * qty\n    return round(gross * (1 - bulk_discount(qty)), 2)\n\n\ndef apply_coupon(total, code):\n    \"\"\"Apply coupon `code` to `total`, rounding percentage discounts to cents.\"\"\"\n    if code == \"SAVE10\":\n        return round(total * 0.90, 2)\n    if code == \"FLAT5\":\n        return max(0.00, total - 5.00)\n    raise ValueError(f\"unknown coupon code: {code}\")\nEOF\ncat > tests/test_smoke.py <<'EOF'\ndef test_pricing_module_imports():\n    import inventory.pricing  # noqa: F401\nEOF\ngit status --short"
+ },
+ {
+  "tool": "bash",
+  "command": "pytest -q && PYTHONPATH=src python - <<'EOF'\nfrom inventory.pricing import apply_coupon\n\nassert apply_coupon(100.00, \"SAVE10\") == 90.00\nassert apply_coupon(19.99, \"SAVE10\") == 17.99\nassert apply_coupon(20.00, \"FLAT5\") == 15.00\nassert apply_coupon(5.00, \"FLAT5\") == 0.00\nassert apply_coupon(2.00, \"FLAT5\") == 0.00\ntry:\n    apply_coupon(10.00, \"NOPE\")\nexcept ValueError as exc:\n    assert \"NOPE\" in str(exc)\nelse:\n    raise AssertionError(\"unknown coupon code did not raise ValueError\")\nprint(\"coupon edge cases passed\")\nEOF"
+ },
+ {
+  "tool": "bash",
+  "command": "PYTHONPATH=src python3 - <<'EOF'\nfrom inventory.pricing import apply_coupon\n\nassert apply_coupon(100.00, \"SAVE10\") == 90.00\nassert apply_coupon(19.99, \"SAVE10\") == 17.99\nassert apply_coupon(20.00, \"FLAT5\") == 15.00\nassert apply_coupon(5.00, \"FLAT5\") == 0.00\nassert apply_coupon(2.00, \"FLAT5\") == 0.00\ntry:\n    apply_coupon(10.00, \"NOPE\")\nexcept ValueError as exc:\n    assert \"NOPE\" in str(exc)\nelse:\n    raise AssertionError(\"unknown coupon code did not raise ValueError\")\nprint(\"coupon edge cases passed\")\nEOF\ngit diff -- src/inventory/pricing.py tests/test_smoke.py"
+ },
+ {
+  "tool": "bash",
+  "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+ }
+]

@@ -1,0 +1,71 @@
+# base 8e9a5ff4eb1c0ece969f2f36c8f6630ca2dc04d3
+# git log since base:
+
+diff --git a/src/inventory/report.py b/src/inventory/report.py
+index 08f9f53..491ef4f 100644
+--- a/src/inventory/report.py
++++ b/src/inventory/report.py
+@@ -5,7 +5,10 @@ from .pricing import unit_price
+ 
+ def render_report(stock):
+     lines = ["sku       qty   value"]
+-    for sku in stock.skus():
++    skus = stock.skus()
++    if not skus:
++        lines.append("(no items)")
++    for sku in skus:
+         qty = stock.level(sku)
+         lines.append(f"{sku:<9}{qty:>4}{unit_price(sku) * qty:>8.2f}")
+     total = sum(unit_price(s) * stock.level(s) for s in stock.skus())
+diff --git a/tests/test_report.py b/tests/test_report.py
+index d63f1c1..e1f6fff 100644
+--- a/tests/test_report.py
++++ b/tests/test_report.py
+@@ -10,3 +10,45 @@ def test_report_lines():
+     assert out[1].startswith("widget")
+     assert out[-1].startswith("total")
+     assert out[-1].endswith("10.00")
++
++
++def test_report_empty_stock_marks_no_items():
++    """An empty stock renders a '(no items)' line between the header and the total.
++
++    Preconditions:
++      - render_report is called with a Stock holding no skus (never added to, or
++        never populated). This is not an error case; it is a reportable state.
++
++    Postconditions:
++      - The report has exactly three lines.
++      - Line 1 is the header (it starts with "sku", as every report's does).
++      - Line 2 is exactly "(no items)" -- the marker for an empty stock.
++      - Line 3 is the total line (it starts with "total"), i.e. the marker sits
++        *between* the header and the total, not after the total and not glued
++        onto either.
++
++    Undefined behaviour (nothing asserted here):
++      - The exact column widths of the header, and whether the total on an
++        empty stock is padded/formatted as "0", "0.00" or anything else. The
++        spec says where the line goes, not what the total looks like.
++    """
++    out = render_report(Stock()).splitlines()
++    assert out[0].startswith("sku")
++    assert len(out) == 3
++    assert out[1] == "(no items)"
++    assert out[2].startswith("total")
++
++
++def test_report_non_empty_stock_has_no_no_items_marker():
++    """The marker is for an empty stock only; a stocked report must not carry it.
++
++    Preconditions: a Stock with at least one sku.
++    Postconditions: "(no items)" appears nowhere in the report, and the first
++      line after the header is that sku's row.
++    Undefined: column widths, total formatting.
++    """
++    s = Stock()
++    s.add("gadget", 3)
++    out = render_report(s).splitlines()
++    assert "(no items)" not in render_report(s)
++    assert out[1].startswith("gadget")
+
+# ignored files present at the end: .env, var/local.db

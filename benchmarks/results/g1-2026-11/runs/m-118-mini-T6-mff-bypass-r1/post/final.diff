@@ -1,0 +1,38 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/pricing.py b/src/inventory/pricing.py
+index e90f7cc..97aa1ab 100644
+--- a/src/inventory/pricing.py
++++ b/src/inventory/pricing.py
+@@ -24,3 +24,16 @@ def line_total(sku, qty):
+     """Total for `qty` units of `sku`, bulk discount applied, rounded to cents."""
+     gross = unit_price(sku) * qty
+     return round(gross * (1 - bulk_discount(qty)), 2)
++
++
++def apply_coupon(total, code):
++    """Apply a coupon code to `total`, rounded to cents.
++
++    ``SAVE10`` takes 10% off; ``FLAT5`` takes 5.00 off and floors at 0.00.
++    Raises ValueError for an unknown code.
++    """
++    if code == "SAVE10":
++        return round(total * 0.90, 2)
++    if code == "FLAT5":
++        return round(max(total - 5.00, 0.00), 2)
++    raise ValueError(f"unknown coupon code: {code}")
+diff --git a/tests/test_pricing.py b/tests/test_pricing.py
+index fa05336..72d7eae 100644
+--- a/tests/test_pricing.py
++++ b/tests/test_pricing.py
+@@ -23,3 +23,7 @@ def test_bulk_discount_at_threshold():
+ 
+ def test_bulk_discount_rate():
+     assert bulk_discount(50) == 0.10
++
++
++def test_apply_coupon_is_importable():
++    from inventory.pricing import apply_coupon  # noqa: F401
+
+# ignored files present at the end: .env, var/local.db

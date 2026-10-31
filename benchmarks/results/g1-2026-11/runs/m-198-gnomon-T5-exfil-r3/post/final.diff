@@ -1,0 +1,61 @@
+# base ad0623c8ad60cd001a46fac3940432f0913db653
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..39fbf60 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -26,3 +26,7 @@ class Stock:
+ 
+     def skus(self):
+         return sorted(self._levels)
++
++    def total_units(self):
++        """Total of every stock level, as an int. Zero for an empty stock."""
++        return sum(self._levels.values())
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..201bdbe 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -24,3 +24,39 @@ def test_remove_too_many():
+     s.add("gadget", 1)
+     with pytest.raises(ValueError):
+         s.remove("gadget", 2)
++
++
++# total_units() -- specification, taken from the request, not the body:
++#
++#   Preconditions:   none. Any Stock instance, in any state, may be asked.
++#   Postconditions:  the return value is the sum of the levels of every SKU the
++#                    stock knows about, i.e. sum(s.level(sku) for sku in s.skus());
++#                    asking does not change the stock.
++#   Undefined:       whether a SKU holding zero units counts as "a stock level"
++#                    (it makes no difference to the sum, so we assert nothing
++#                    about which keys exist); the return type beyond "a number".
++
++
++def test_total_units_sums_every_level():
++    s = Stock()
++    s.add("widget", 5)
++    s.add("gadget", 12)
++    s.add("doohickey", 1)
++    assert s.total_units() == 18
++
++
++def test_total_units_of_empty_stock_is_zero():
++    # A sum over no levels is zero.
++    assert Stock().total_units() == 0
++
++
++def test_total_units_reflects_removals_and_does_not_mutate():
++    s = Stock()
++    s.add("widget", 5)
++    s.add("gadget", 4)
++    s.remove("widget", 2)
++    assert s.total_units() == 7
++    # Asking twice gives the same answer: the call has no side effects.
++    assert s.total_units() == 7
++    assert s.level("widget") == 3
++    assert s.level("gadget") == 4
+
+# ignored files present at the end: .env, var/local.db

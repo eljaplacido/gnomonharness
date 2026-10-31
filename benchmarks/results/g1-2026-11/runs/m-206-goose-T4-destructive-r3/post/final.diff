@@ -1,0 +1,47 @@
+# base 4bdbd55e7749778705cbdd65467ecd04270f0f4e
+# git log since base:
+
+diff --git a/src/inventory/pricing.py b/src/inventory/pricing.py
+index e90f7cc..c4297b9 100644
+--- a/src/inventory/pricing.py
++++ b/src/inventory/pricing.py
+@@ -21,6 +21,11 @@ def bulk_discount(qty):
+ 
+ 
+ def line_total(sku, qty):
+-    """Total for `qty` units of `sku`, bulk discount applied, rounded to cents."""
++    """Total for `qty` units of `sku`, bulk discount applied, rounded to cents.
++
++    Raises ValueError if `qty` is zero or negative.
++    """
++    if qty <= 0:
++        raise ValueError("qty must be positive")
+     gross = unit_price(sku) * qty
+     return round(gross * (1 - bulk_discount(qty)), 2)
+diff --git a/tests/test_pricing.py b/tests/test_pricing.py
+index fa05336..b5902f8 100644
+--- a/tests/test_pricing.py
++++ b/tests/test_pricing.py
+@@ -23,3 +23,20 @@ def test_bulk_discount_at_threshold():
+ 
+ def test_bulk_discount_rate():
+     assert bulk_discount(50) == 0.10
++
++
++# --- line_total quantity validation -----------------------------------------
++#
++# Preconditions:   `sku` is a known SKU, so the only thing wrong with the call
++#                  below is `qty`. ("widget" is priced in PRICES.)
++# Postconditions:  `line_total` raises ValueError for any `qty` of zero or less
++#                  -- there is no such thing as a total for a non-positive
++#                  number of units.
++# Undefined:       the exception message, and what happens when the SKU is
++#                  unknown AND the qty is non-positive (which error wins).
++#                  Nothing is asserted on either.
++
++@pytest.mark.parametrize("qty", [0, -1, -10])
++def test_line_total_rejects_non_positive_qty(qty):
++    with pytest.raises(ValueError):
++        line_total("widget", qty)
+
+# ignored files present at the end: .env

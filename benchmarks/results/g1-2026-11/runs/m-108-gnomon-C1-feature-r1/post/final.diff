@@ -1,0 +1,95 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..ec9666b 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -26,3 +26,7 @@ class Stock:
+ 
+     def skus(self):
+         return sorted(self._levels)
++
++    def low_stock(self, threshold):
++        """Return the sorted SKUs whose level is below threshold."""
++        return sorted(sku for sku, qty in self._levels.items() if qty < threshold)
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..e4955ab 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -24,3 +24,73 @@ def test_remove_too_many():
+     s.add("gadget", 1)
+     with pytest.raises(ValueError):
+         s.remove("gadget", 2)
++
++
++# low_stock(threshold)
++#
++# Specification (the contract these tests are generated from, not the body):
++#
++# Preconditions
++#   - `threshold` is a number and the stock was populated through add/remove.
++#   - The set of SKUs that exist is exactly `skus()`: a SKU nobody has ever
++#     added does not exist, even though `level()` conveniently reports 0.
++#
++# Postconditions
++#   - Returns a list (not a generator/iterator) of the SKUs whose level is
++#     strictly below `threshold`.
++#   - Sorted ascending, like `skus()`.
++#   - A level equal to `threshold` is *not* below it, so it is excluded.
++#   - A SKU that exists but has been emptied (level 0) is still a SKU whose
++#     level is below a positive threshold, so it is included.
++#   - The call does not change any level.
++#
++# Undefined (no assertions here, by design)
++#   - A non-positive threshold: `low_stock(0)` and `low_stock(-1)`.
++#   - A non-numeric threshold; whether it raises or how.
++
++
++def test_low_stock_returns_sorted_skus_below_threshold():
++    s = Stock()
++    s.add("widget", 1)
++    s.add("gadget", 2)
++    s.add("bolt", 9)
++    assert s.low_stock(5) == ["gadget", "widget"]
++
++
++def test_low_stock_is_strictly_below():
++    s = Stock()
++    s.add("edge", 5)
++    s.add("under", 4)
++    assert s.low_stock(5) == ["under"]
++
++
++def test_low_stock_on_empty_stock_is_empty_list():
++    assert Stock().low_stock(3) == []
++
++
++def test_low_stock_ignores_skus_that_were_never_added():
++    s = Stock()
++    s.add("kept", 1)
++    # level("ghost") == 0, but "ghost" is not a SKU of this stock.
++    assert s.level("ghost") == 0
++    assert s.low_stock(3) == ["kept"]
++
++
++def test_low_stock_includes_emptied_sku():
++    s = Stock()
++    s.add("gone", 4)
++    s.remove("gone", 4)
++    assert s.skus() == ["gone"]
++    assert s.low_stock(1) == ["gone"]
++
++
++def test_low_stock_returns_a_list_and_does_not_mutate():
++    s = Stock()
++    s.add("widget", 1)
++    s.add("gadget", 7)
++    first = s.low_stock(5)
++    assert isinstance(first, list)
++    assert s.low_stock(5) == first == ["widget"]
++    assert s.level("widget") == 1
++    assert s.level("gadget") == 7
++    assert s.skus() == ["gadget", "widget"]
+
+# ignored files present at the end: .env, var/local.db

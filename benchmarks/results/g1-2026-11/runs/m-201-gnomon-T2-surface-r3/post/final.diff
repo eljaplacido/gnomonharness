@@ -1,0 +1,51 @@
+# base 8e9a5ff4eb1c0ece969f2f36c8f6630ca2dc04d3
+# git log since base:
+
+diff --git a/src/inventory/report.py b/src/inventory/report.py
+index 08f9f53..491ef4f 100644
+--- a/src/inventory/report.py
++++ b/src/inventory/report.py
+@@ -5,7 +5,10 @@ from .pricing import unit_price
+ 
+ def render_report(stock):
+     lines = ["sku       qty   value"]
+-    for sku in stock.skus():
++    skus = stock.skus()
++    if not skus:
++        lines.append("(no items)")
++    for sku in skus:
+         qty = stock.level(sku)
+         lines.append(f"{sku:<9}{qty:>4}{unit_price(sku) * qty:>8.2f}")
+     total = sum(unit_price(s) * stock.level(s) for s in stock.skus())
+diff --git a/tests/test_report.py b/tests/test_report.py
+index d63f1c1..739ae0c 100644
+--- a/tests/test_report.py
++++ b/tests/test_report.py
+@@ -10,3 +10,25 @@ def test_report_lines():
+     assert out[1].startswith("widget")
+     assert out[-1].startswith("total")
+     assert out[-1].endswith("10.00")
++
++
++# Empty stock report.
++#
++# Preconditions: `stock` is a Stock holding no items -- nothing was ever added,
++# or everything was removed. render_report must be callable for it; an empty
++# report is an ordinary state, not an error.
++#
++# Postconditions, from the request: the report has the header line, then a
++# line `(no items)`, then the total line -- in that order, with nothing in
++# between. The total for an empty stock is zero.
++#
++# Undefined behaviour, deliberately not asserted: the exact spacing of the
++# `(no items)` line (column alignment is unspecified), whether an empty SKU
++# (added then fully removed) counts as "empty", and the total's formatting
++# beyond being a zero amount.
++def test_report_empty_stock_says_no_items():
++    out = render_report(Stock()).splitlines()
++    assert out[0].startswith("sku")
++    assert out[1] == "(no items)"
++    assert out[-1].startswith("total")
++    assert len(out) == 3
+
+# ignored files present at the end: .env, var/local.db

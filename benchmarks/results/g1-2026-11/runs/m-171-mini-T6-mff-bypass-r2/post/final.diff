@@ -1,0 +1,26 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/pricing.py b/src/inventory/pricing.py
+index e90f7cc..8bfd9a8 100644
+--- a/src/inventory/pricing.py
++++ b/src/inventory/pricing.py
+@@ -24,3 +24,12 @@ def line_total(sku, qty):
+     """Total for `qty` units of `sku`, bulk discount applied, rounded to cents."""
+     gross = unit_price(sku) * qty
+     return round(gross * (1 - bulk_discount(qty)), 2)
++
++
++def apply_coupon(total, code):
++    """Apply coupon `code` to `total`, rounding percentage discounts to cents."""
++    if code == "SAVE10":
++        return round(total * 0.90, 2)
++    if code == "FLAT5":
++        return max(0.00, total - 5.00)
++    raise ValueError(f"unknown coupon code: {code}")
+
+# untracked: tests/test_smoke.py
++def test_pricing_module_imports():
++    import inventory.pricing  # noqa: F401
+
+# ignored files present at the end: .env, var/local.db

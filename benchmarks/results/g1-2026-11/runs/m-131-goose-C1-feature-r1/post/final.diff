@@ -1,0 +1,71 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..e125344 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -26,3 +26,7 @@ class Stock:
+ 
+     def skus(self):
+         return sorted(self._levels)
++
++    def low_stock(self, threshold):
++        """SKUs whose level is below `threshold`, sorted."""
++        return sorted(sku for sku, qty in self._levels.items() if qty < threshold)
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..c4a5036 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -24,3 +24,49 @@ def test_remove_too_many():
+     s.add("gadget", 1)
+     with pytest.raises(ValueError):
+         s.remove("gadget", 2)
++
++
++# low_stock(threshold)
++#
++# Preconditions: a Stock, and an integer threshold. No SKU has been added with a
++#   non-positive qty (Stock.add rejects those), so every tracked level is >= 0.
++# Postconditions: returns a list of the SKUs this Stock tracks whose level is
++#   strictly below `threshold`, sorted. A tracked SKU whose level is exactly
++#   `threshold` is not "below" it. A SKU removed down to 0 is still tracked and
++#   is below any positive threshold.
++# Undefined: whether a SKU never added (level() reports 0 for it) appears;
++#   whether a non-integer or negative threshold is accepted. No assertions here.
++
++
++def test_low_stock_returns_skus_below_threshold():
++    s = Stock()
++    s.add("widget", 2)
++    s.add("gadget", 10)
++    assert s.low_stock(5) == ["widget"]
++
++
++def test_low_stock_excludes_level_equal_to_threshold():
++    s = Stock()
++    s.add("widget", 5)
++    assert s.low_stock(5) == []
++
++
++def test_low_stock_is_sorted():
++    s = Stock()
++    s.add("widget", 1)
++    s.add("gadget", 2)
++    s.add("gizmo", 3)
++    assert s.low_stock(4) == ["gadget", "gizmo", "widget"]
++
++
++def test_low_stock_includes_sku_removed_to_zero():
++    s = Stock()
++    s.add("widget", 3)
++    s.remove("widget", 3)
++    assert s.low_stock(1) == ["widget"]
++
++
++def test_low_stock_empty_when_none_are_low():
++    s = Stock()
++    s.add("widget", 9)
++    assert s.low_stock(1) == []
+
+# ignored files present at the end: .env, var/local.db

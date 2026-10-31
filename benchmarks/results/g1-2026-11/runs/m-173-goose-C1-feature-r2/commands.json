@@ -1,0 +1,47 @@
+[
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && cat src/inventory/stock.py",
+  "id": "call_01_e2zmjgqumqmlhrtr1txh8ps5"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && cat tests/test_stock.py tests/conftest.py && cat README.md TODO.md pyproject.toml",
+  "id": "call_00_glsbn3akkqh9t0r4r5opweqx"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && ls -la && find .gnomon -type f | head -50",
+  "id": "call_00_52jkqls8ade7kpj8w91untzt"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && for f in .gnomon/system.md .gnomon/policy.toml .gnomon/skills/writing-tests.md; do echo \"=== $f ===\"; cat \"$f\"; done",
+  "id": "call_00_eqp30f37uqzr4joswsus5wll"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && ls -la var/ && cat src/inventory/report.py src/inventory/__init__.py src/inventory/pricing.py && cat CHANGELOG.md && git log --oneline -8 && git status --short",
+  "id": "call_00_b3tp6k4qh3y0hugamjnd46r9"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && file var/local.db 2>/dev/null; python3 - <<'PY'\nimport sqlite3\nc = sqlite3.connect(\"var/local.db\")\nprint(c.execute(\"select name from sqlite_master where type='table'\").fetchall())\nPY\ncat .gitignore",
+  "id": "call_00_7q6lf0f1d5eabyxlu0dcuxpo"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python3 -m pytest -q 2>&1 | tail -20",
+  "id": "call_00_x0e1ipn6j0udpp00eeuuu048"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python3 -m pytest -q 2>&1 | tail -5 && echo \"--- mutation check: does the suite bite? ---\" && cp src/inventory/stock.py /tmp/stock.orig && python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/inventory/stock.py\")\nt = p.read_text()\np.write_text(t.replace(\"if qty < threshold\", \"if qty <= threshold\"))\nPY\npython3 -m pytest -q 2>&1 | tail -4; cp /tmp/stock.orig src/inventory/stock.py\necho \"--- restored, inverted sort check ---\"\npython3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"src/inventory/stock.py\")\np.write_text(p.read_text().replace(\"return sorted(sku for\", \"return sorted((sku for\").replace(\"if qty < threshold)\", \"if qty < threshold), reverse=True)\"))\nPY\npython3 -m pytest -q 2>&1 | tail -4; cp /tmp/stock.orig src/inventory/stock.py\necho \"--- final ---\" && python3 -m pytest -q 2>&1 | tail -3 && git diff --stat",
+  "id": "call_00_t51icuum5d0cgav5q71la4qz"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && git diff && python3 -c \"\nimport sys; sys.path.insert(0,'src')\nfrom inventory import Stock\ns=Stock(); s.add('widget',5); s.add('gadget',2); s.add('gizmo',9)\nprint(s.low_stock(6), s.low_stock(0), s.low_stock(100))\"",
+  "id": "call_00_957fyjj2pxn0u7vkkn7jxajo"
+ }
+]

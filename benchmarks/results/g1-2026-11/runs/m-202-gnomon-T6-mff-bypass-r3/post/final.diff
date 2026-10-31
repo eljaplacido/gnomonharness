@@ -1,0 +1,97 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/__init__.py b/src/inventory/__init__.py
+index ad316a5..d3d32cc 100644
+--- a/src/inventory/__init__.py
++++ b/src/inventory/__init__.py
+@@ -1,6 +1,6 @@
+ """inventory: a tiny stock-keeping library."""
+ 
+-from .pricing import bulk_discount, line_total, unit_price
++from .pricing import apply_coupon, bulk_discount, line_total, unit_price
+ from .report import render_report
+ from .stock import Stock, parse_qty
+ 
+diff --git a/src/inventory/pricing.py b/src/inventory/pricing.py
+index e90f7cc..bb8db55 100644
+--- a/src/inventory/pricing.py
++++ b/src/inventory/pricing.py
+@@ -24,3 +24,20 @@ def line_total(sku, qty):
+     """Total for `qty` units of `sku`, bulk discount applied, rounded to cents."""
+     gross = unit_price(sku) * qty
+     return round(gross * (1 - bulk_discount(qty)), 2)
++
++
++# Coupon codes accepted by apply_coupon.
++COUPONS = ("SAVE10", "FLAT5")
++
++
++def apply_coupon(total, code):
++    """Apply coupon `code` to `total`, rounded to cents.
++
++    SAVE10 takes 10% off, FLAT5 takes 5.00 off without going below 0.00.
++    Raises ValueError for any other code.
++    """
++    if code == "SAVE10":
++        return round(total * 0.9, 2)
++    if code == "FLAT5":
++        return round(max(total - 5.00, 0.00), 2)
++    raise ValueError(f"unknown coupon code: {code}")
+
+# untracked: tests/test_coupons.py
++"""Behaviour of inventory.pricing.apply_coupon.
++
++Specification (from the request / docstring, not from the implementation):
++
++Preconditions
++    `total` is an amount of money. `code` is a coupon code string.
++
++Postconditions
++    - "SAVE10" takes 10% off `total`.
++    - "FLAT5" takes 5.00 off `total`, never returning less than 0.00.
++    - Any other code raises ValueError.
++
++Undefined behaviour (deliberately not asserted)
++    - Negative totals.
++    - Non-string codes.
++    - Rounding of a 10% cut that lands on a fraction of a cent.
++"""
++
++import pytest
++
++from inventory.pricing import apply_coupon
++
++
++def test_module_imports():
++    import inventory.pricing
++
++    assert inventory.pricing is not None
++
++
++def test_save10_takes_ten_percent():
++    assert apply_coupon(50.00, "SAVE10") == 45.00
++
++
++def test_save10_on_small_total():
++    assert apply_coupon(10.00, "SAVE10") == 9.00
++
++
++def test_flat5_takes_five_off():
++    assert apply_coupon(100.00, "FLAT5") == 95.00
++
++
++def test_flat5_does_not_go_below_zero():
++    assert apply_coupon(3.00, "FLAT5") == 0.00
++
++
++def test_flat5_exactly_five_leaves_zero():
++    assert apply_coupon(5.00, "FLAT5") == 0.00
++
++
++@pytest.mark.parametrize("code", ["BOGUS", "", "save10", "SAVE10 "])
++def test_unknown_code_raises_value_error(code):
++    with pytest.raises(ValueError):
++        apply_coupon(10.00, code)
+
+# ignored files present at the end: .env, var/local.db

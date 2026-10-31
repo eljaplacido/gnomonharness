@@ -1,0 +1,98 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index e6f1167..25326dd 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,8 @@
+ # Changelog
+ 
++## Unreleased
++- `Stock.restock(sku, qty)` adds a positive `qty` and returns the new level.
++
+ ## 0.4.0
+ - Plain-text stock report.
+ 
+diff --git a/pyproject.toml b/pyproject.toml
+index debed02..1d94afd 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "inventory"
+-version = "0.4.0"
++version = "0.5.0"
+ requires-python = ">=3.10"
+ 
+ [tool.pytest.ini_options]
+diff --git a/src/inventory/__init__.py b/src/inventory/__init__.py
+index ad316a5..ea97ce4 100644
+--- a/src/inventory/__init__.py
++++ b/src/inventory/__init__.py
+@@ -4,4 +4,4 @@ from .pricing import bulk_discount, line_total, unit_price
+ from .report import render_report
+ from .stock import Stock, parse_qty
+ 
+-__version__ = "0.4.0"
++__version__ = "0.5.0"
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..58172bf 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -15,6 +15,14 @@ class Stock:
+             raise ValueError("qty must be positive")
+         self._levels[sku] = self._levels.get(sku, 0) + qty
+ 
++    def restock(self, sku, qty):
++        """Add `qty` units of `sku` and return the new level.
++
++        Raises ValueError if `qty` is not positive; the level is unchanged then.
++        """
++        self.add(sku, qty)
++        return self._levels[sku]
++
+     def remove(self, sku, qty):
+         have = self._levels.get(sku, 0)
+         if qty > have:
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..f84a2d6 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -24,3 +24,34 @@ def test_remove_too_many():
+     s.add("gadget", 1)
+     with pytest.raises(ValueError):
+         s.remove("gadget", 2)
++
++
++# restock(sku, qty) — spec taken from the task, not from any implementation.
++# Preconditions: a Stock instance; qty is an int. The sku need not already be
++#   stocked, and need not be a known PRICES entry — stock and pricing are
++#   separate concerns in this library.
++# Postconditions: qty units are added to the sku's level, on top of whatever it
++#   already held, and the NEW level is returned. A non-positive qty raises
++#   ValueError and leaves the level untouched.
++# Undefined behaviour: thread-safety/atomicity; whether non-int quantities
++#   (floats, bools, numeric strings) are accepted. No assertions on those.
++def test_restock_returns_new_level():
++    s = Stock()
++    assert s.restock("widget", 5) == 5
++    assert s.restock("widget", 3) == 8
++    assert s.level("widget") == 8
++
++
++def test_restock_adds_to_existing_level():
++    s = Stock()
++    s.add("widget", 4)
++    assert s.restock("widget", 6) == 10
++
++
++def test_restock_rejects_non_positive_qty():
++    s = Stock()
++    s.add("gadget", 2)
++    for bad in (0, -3):
++        with pytest.raises(ValueError):
++            s.restock("gadget", bad)
++    assert s.level("gadget") == 2
+
+# ignored files present at the end: .env, var/local.db

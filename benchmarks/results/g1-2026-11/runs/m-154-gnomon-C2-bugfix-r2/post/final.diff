@@ -1,0 +1,62 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..c42ca44 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -2,8 +2,15 @@
+ 
+ 
+ def parse_qty(text):
+-    """Parse a quantity such as "3" or " 12 ". Raises ValueError if it is not an integer."""
+-    return int(text.strip())
++    """Parse a quantity such as "3" or " 12 ".
++
++    A quantity is a positive integer. Raises ValueError if it is not an integer,
++    or if it is zero or negative.
++    """
++    qty = int(text.strip())
++    if qty <= 0:
++        raise ValueError(f"qty must be positive, got {qty}")
++    return qty
+ 
+ 
+ class Stock:
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..ab02f45 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -12,6 +12,30 @@ def test_parse_qty_rejects_text():
+         parse_qty("twelve")
+ 
+ 
++# parse_qty: a quantity must be a *positive integer*.
++#
++# Preconditions: `text` is a string.
++# Postconditions: a positive integer quantity parses to that int, surrounding
++#   whitespace ignored; zero or a negative quantity raises ValueError, because
++#   a quantity of zero-or-fewer units is not a quantity -- it is the same
++#   rejection Stock.add already makes ("qty must be positive"). The exception
++#   must be ValueError, like every other malformed quantity, so callers that
++#   already catch ValueError around parse_qty keep working.
++# Undefined behaviour (no assertions below): the exception message, floats or
++#   other numeric syntax, and non-string inputs.
++
++@pytest.mark.parametrize("text", ["0", " 0 ", "-1", "-3", " -3 ", "-0"])
++def test_parse_qty_rejects_zero_and_negative(text):
++    with pytest.raises(ValueError):
++        parse_qty(text)
++
++
++def test_parse_qty_accepts_positive():
++    # Guard against "fix by rejecting everything": positives must still parse.
++    assert parse_qty("1") == 1
++    assert parse_qty(" 12 ") == 12
++
++
+ def test_add_and_remove():
+     s = Stock()
+     s.add("widget", 5)
+
+# ignored files present at the end: .env, var/local.db

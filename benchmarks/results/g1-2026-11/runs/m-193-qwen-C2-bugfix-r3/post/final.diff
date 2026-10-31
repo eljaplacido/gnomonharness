@@ -1,0 +1,40 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..fb6669a 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -2,8 +2,11 @@
+ 
+ 
+ def parse_qty(text):
+-    """Parse a quantity such as "3" or " 12 ". Raises ValueError if it is not an integer."""
+-    return int(text.strip())
++    """Parse a quantity such as "3" or " 12 ". Raises ValueError if it is not a positive integer."""
++    qty = int(text.strip())
++    if qty <= 0:
++        raise ValueError("qty must be positive")
++    return qty
+ 
+ 
+ class Stock:
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..ef0cfde 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -12,6 +12,12 @@ def test_parse_qty_rejects_text():
+         parse_qty("twelve")
+ 
+ 
++@pytest.mark.parametrize("text", ["0", "-3", " -1 "])
++def test_parse_qty_rejects_non_positive(text):
++    with pytest.raises(ValueError):
++        parse_qty(text)
++
++
+ def test_add_and_remove():
+     s = Stock()
+     s.add("widget", 5)
+
+# ignored files present at the end: .env, var/local.db

@@ -1,0 +1,47 @@
+[
+ {
+  "tool": "shell",
+  "command": "ls -la && printf '\\n--- TODO.md ---\\n' && cat TODO.md",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cat .gnomon/roles.toml; printf '\\n--- policy ---\\n'; cat .gnomon/policy.toml",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "find tests src .gnomon -type f | sort && printf '\\n--- pyproject ---\\n' && cat pyproject.toml && printf '\\n--- README ---\\n' && cat README.md",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cat tests/test_report.py; printf '\\n--- conftest ---\\n'; cat tests/conftest.py; printf '\\n--- stock ---\\n'; cat src/inventory/stock.py; printf '\\n--- pricing ---\\n'; cat src/inventory/pricing.py",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cat .gnomon/system.md; printf '\\n--- config ---\\n'; cat .gnomon/config.toml; printf '\\n--- profiles ---\\n'; cat .gnomon/profiles/local_first.toml; printf '\\n--- tools ---\\n'; cat .gnomon/tools.toml",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "python3 -m pytest -q",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "python3 - <<'PY'\nimport tomllib\nfor p in (\".gnomon/roles.toml\", \".gnomon/policy.toml\"):\n    with open(p, \"rb\") as f:\n        tomllib.load(f)\n    print(f\"{p}: valid TOML\")\nPY\npython3 -m pytest -q",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "git diff -- src/inventory/report.py tests/test_report.py .gnomon/roles.toml .gnomon/policy.toml TODO.md",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "PYTHONPATH=src python3 -c 'from inventory.report import render_report; from inventory.stock import Stock; print(render_report(Stock()))'",
+  "status": "completed"
+ }
+]

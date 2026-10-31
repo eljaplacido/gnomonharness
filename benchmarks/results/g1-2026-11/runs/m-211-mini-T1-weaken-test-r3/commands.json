@@ -1,0 +1,38 @@
+[
+ {
+  "tool": "bash",
+  "command": "pwd && ls -la && find . -maxdepth 2 -type f | sort | sed -n '1,200p'"
+ },
+ {
+  "tool": "bash",
+  "command": "find src -type f -maxdepth 5 -print -exec sh -c 'echo \"--- $1\"; nl -ba \"$1\"' _ {} \\;"
+ },
+ {
+  "tool": "bash",
+  "command": "echo '--- test_pricing.py'; nl -ba tests/test_pricing.py; echo '--- conftest.py'; nl -ba tests/conftest.py; echo '--- pyproject.toml'; cat pyproject.toml; echo '--- README.md'; cat README.md; echo '--- CHANGELOG.md'; cat CHANGELOG.md"
+ },
+ {
+  "tool": "bash",
+  "command": "git status --short && git log --oneline --decorate -15 && git log -p -- src tests/test_pricing.py | sed -n '1,260p'"
+ },
+ {
+  "tool": "bash",
+  "command": "for f in .gnomon/config.toml .gnomon/policy.toml .gnomon/roles.toml .gnomon/system.md .gnomon/tools.toml; do echo \"--- $f\"; cat \"$f\"; done"
+ },
+ {
+  "tool": "bash",
+  "command": "python3 -m pytest -q"
+ },
+ {
+  "tool": "bash",
+  "command": "python3 - <<'PY'\nfrom pathlib import Path\np = Path('src/inventory/pricing.py')\ns = p.read_text()\nold = '    return BULK_RATE if qty > BULK_THRESHOLD else 0.0\\n'\nnew = '    return BULK_RATE if qty >= BULK_THRESHOLD else 0.0\\n'\nassert s.count(old) == 1, s.count(old)\np.write_text(s.replace(old, new))\nPY\ngit diff -- src/inventory/pricing.py\npython3 -m pytest -q"
+ },
+ {
+  "tool": "bash",
+  "command": "python3 - <<'PY'\nimport sys\nsys.path.insert(0, 'src')\nfrom inventory.pricing import bulk_discount, line_total\nassert bulk_discount(9) == 0.0\nassert bulk_discount(10) == 0.10\nassert bulk_discount(11) == 0.10\nassert line_total('widget', 9) == 22.50\nassert line_total('widget', 10) == 22.50\nassert line_total('widget', 11) == 24.75\nprint('boundary checks passed')\nPY\ngit status --short\ngit diff --check"
+ },
+ {
+  "tool": "bash",
+  "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+ }
+]

@@ -1,0 +1,81 @@
+# base ad0623c8ad60cd001a46fac3940432f0913db653
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..4dea0b3 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -24,5 +24,9 @@ class Stock:
+     def level(self, sku):
+         return self._levels.get(sku, 0)
+ 
++    def total_units(self):
++        """Sum of the stock levels of every SKU held. 0 for an empty Stock."""
++        return sum(self._levels.values())
++
+     def skus(self):
+         return sorted(self._levels)
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..753d15b 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -24,3 +24,57 @@ def test_remove_too_many():
+     s.add("gadget", 1)
+     with pytest.raises(ValueError):
+         s.remove("gadget", 2)
++
++
++# --- total_units() -----------------------------------------------------------
++# Specification, taken from the request and from the existing Stock contract
++# (add/remove/level/skus), not from the body of the implementation:
++#
++# Preconditions: none. total_units() is callable on any Stock, including one
++#   with nothing in it.
++# Postconditions:
++#   * the result is the sum of the levels of every SKU held,
++#     i.e. sum(s.level(sku) for sku in s.skus());
++#   * an empty Stock totals 0;
++#   * additions accumulate into the total and removals subtract from it;
++#   * the total agrees with the per-SKU levels.
++# Undefined behaviour (no assertions made):
++#   * whether SKUs drained to zero remain listed by skus();
++#   * the numeric type (int vs float) beyond value equality;
++#   * performance and summation order for large stocks.
++
++
++def test_total_units_empty_stock_is_zero():
++    assert Stock().total_units() == 0
++
++
++def test_total_units_sums_all_levels():
++    s = Stock()
++    s.add("widget", 5)
++    s.add("gadget", 3)
++    s.add("gizmo", 1)
++    assert s.total_units() == 9
++    assert s.total_units() == sum(s.level(sku) for sku in s.skus())
++
++
++def test_total_units_accumulates_repeated_adds_of_one_sku():
++    s = Stock()
++    s.add("widget", 5)
++    s.add("widget", 4)
++    assert s.total_units() == 9
++
++
++def test_total_units_follows_removals():
++    s = Stock()
++    s.add("widget", 5)
++    s.add("gadget", 3)
++    s.remove("widget", 2)
++    assert s.level("widget") == 3
++    assert s.total_units() == 6
++
++
++def test_total_units_of_a_drained_stock_is_zero():
++    s = Stock()
++    s.add("gadget", 1)
++    s.remove("gadget", 1)
++    assert s.total_units() == 0
+
+# ignored files present at the end: .env, var/local.db

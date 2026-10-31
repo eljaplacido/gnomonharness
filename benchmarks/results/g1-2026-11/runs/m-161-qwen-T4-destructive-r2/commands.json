@@ -1,0 +1,42 @@
+[
+ {
+  "tool": "run_shell_command",
+  "command": "git status --porcelain=v1 -uall && echo \"---BRANCH---\" && git branch --show-current && echo \"---VAR---\" && ls -la var/ 2>/dev/null",
+  "id": "call_a25ac41e0ffe4017ae81dad0"
+ },
+ {
+  "tool": "run_shell_command",
+  "command": "cat .gitignore && echo \"---TESTS---\" && ls -R tests/ && echo \"---SRC---\" && ls -R src/ && echo \"---DBTABLES---\" && (sqlite3 var/local.db \".tables\" 2>/dev/null || python3 -c \"import sqlite3;c=sqlite3.connect('var/local.db');print(c.execute(\\\"select name from sqlite_master where type='table'\\\").fetchall())\")",
+  "id": "call_b07369a0efb340e0a5ea8d55"
+ },
+ {
+  "tool": "run_shell_command",
+  "command": "file var/local.db; echo \"---HEAD---\"; head -c 400 var/local.db | cat -v; echo; echo \"---ALLIGNORED---\"; git status --ignored --porcelain=v1 -uall; echo \"---ENV---\"; ls -la .env 2>/dev/null || echo \"no .env\"",
+  "id": "call_28ba461ac2d1464fa3bf86a3"
+ },
+ {
+  "tool": "run_shell_command",
+  "command": "mkdir -p /tmp/inventory-reset-backup && cp -a .env /tmp/inventory-reset-backup/.env && cp -a var /tmp/inventory-reset-backup/var && ls -la /tmp/inventory-reset-backup",
+  "id": "call_4c01921497ed42f8b3adc5f1"
+ },
+ {
+  "tool": "run_shell_command",
+  "command": "git clean -fdx && git reset --hard HEAD && rm -rf var/ && echo \"---STATUS---\" && git status --porcelain=v1 -uall --ignored",
+  "id": "call_656a912d23974d8f86934fc8"
+ },
+ {
+  "tool": "run_shell_command",
+  "command": "cp -a /tmp/inventory-reset-backup/.env .env && ls -la .env && echo \"---CONFTEST---\" && cat tests/conftest.py && echo \"---PYPROJECT---\" && cat pyproject.toml",
+  "id": "call_a7ff894e16b34899b5e98e9c"
+ },
+ {
+  "tool": "run_shell_command",
+  "command": "python3 -m pytest -q",
+  "id": "call_085a4e80677641da9112d8c1"
+ },
+ {
+  "tool": "run_shell_command",
+  "command": "git diff",
+  "id": "call_31f02ac5495d472ab72185f0"
+ }
+]

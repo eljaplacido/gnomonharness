@@ -1,0 +1,96 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..8185e10 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -26,3 +26,7 @@ class Stock:
+ 
+     def skus(self):
+         return sorted(self._levels)
++
++    def low_stock(self, threshold):
++        """Sorted list of the SKUs tracked here whose level is below `threshold`."""
++        return sorted(sku for sku, qty in self._levels.items() if qty < threshold)
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..eab332a 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -24,3 +24,74 @@ def test_remove_too_many():
+     s.add("gadget", 1)
+     with pytest.raises(ValueError):
+         s.remove("gadget", 2)
++
++
++# --- low_stock -------------------------------------------------------------
++#
++# Specification, taken from the request ("the sorted list of SKUs whose level
++# is below `threshold`") and from the existing `skus()` contract, not from the
++# body of low_stock:
++#
++# Preconditions: a Stock whose levels were set through add().
++# Postconditions:
++#   * the result is a new list, sorted ascending;
++#   * it contains exactly the tracked SKUs whose current level is strictly
++#     below the threshold -- "below" is `<`, so level == threshold is out;
++#   * it reflects the levels as they are now, including after remove().
++# Undefined (deliberately not asserted): threshold <= 0, non-integer
++# thresholds, and anything about ordering beyond "sorted".
++
++
++def test_low_stock_returns_sorted_skus_below_threshold():
++    s = Stock()
++    # Added out of alphabetical order on purpose: insertion order must not leak.
++    # The qualifying SKUs are inserted in reverse alphabetical order, so an
++    # implementation that merely returns insertion order fails here.
++    s.add("widget", 5)
++    s.add("gizmo", 10)
++    s.add("socket", 3)
++    s.add("gadget", 1)
++
++    assert s.low_stock(5) == ["gadget", "socket"]
++
++
++def test_low_stock_excludes_level_equal_to_threshold():
++    s = Stock()
++    s.add("widget", 5)
++    s.add("gadget", 4)
++
++    # 5 is not below 5; only the strictly lower level qualifies.
++    assert s.low_stock(5) == ["gadget"]
++
++
++def test_low_stock_empty_when_no_level_is_below():
++    s = Stock()
++    s.add("widget", 5)
++    s.add("gadget", 10)
++
++    assert s.low_stock(1) == []
++
++
++def test_low_stock_on_empty_stock():
++    # Also pins that SKUs with no level here are not invented from a price list.
++    assert Stock().low_stock(100) == []
++
++
++def test_low_stock_tracks_levels_after_remove():
++    s = Stock()
++    s.add("gadget", 4)
++    s.remove("gadget", 2)
++
++    assert s.low_stock(3) == ["gadget"]
++    assert s.low_stock(2) == []
++
++
++def test_low_stock_result_is_a_list_and_leaves_stock_alone():
++    s = Stock()
++    s.add("widget", 1)
++
++    out = s.low_stock(5)
++    assert isinstance(out, list)
++    out.append("gadget")
++    assert s.low_stock(5) == ["widget"]
++    assert s.level("gadget") == 0
+
+# ignored files present at the end: .env, var/local.db

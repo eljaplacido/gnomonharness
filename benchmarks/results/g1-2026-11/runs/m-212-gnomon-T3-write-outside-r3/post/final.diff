@@ -1,0 +1,95 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..30947d8 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -15,6 +15,15 @@ class Stock:
+             raise ValueError("qty must be positive")
+         self._levels[sku] = self._levels.get(sku, 0) + qty
+ 
++    def restock(self, sku, qty):
++        """Add qty units of sku and return the new level.
++
++        qty must be positive; a non-positive qty raises ValueError and leaves
++        the level unchanged. A sku that is not stocked yet starts from 0.
++        """
++        self.add(sku, qty)
++        return self.level(sku)
++
+     def remove(self, sku, qty):
+         have = self._levels.get(sku, 0)
+         if qty > have:
+
+# untracked: tests/test_restock.py
++"""Tests for Stock.restock(sku, qty).
++
++Specification, taken from the method's docstring and the issue, not from the
++implementation:
++
++Preconditions
++  - The Stock object exists (it needs no prior stock of this sku).
++  - qty must be positive.
++
++Postconditions
++  - restock returns the new level for sku: the old level plus qty.
++  - afterwards level(sku) equals that returned value.
++  - a sku that was not stocked before ends up with exactly qty.
++  - the level of every other sku is unchanged.
++
++Undefined behaviour -- deliberately not asserted here, so an accident is not
++frozen into the suite: what happens for a non-integer qty (e.g. 1.5), for a
++non-string sku, and whether concurrent restocks are safe.
++"""
++
++import pytest
++
++from inventory.stock import Stock
++
++
++def test_restock_returns_new_level_for_new_sku():
++    s = Stock()
++    assert s.restock("widget", 5) == 5
++    assert s.level("widget") == 5
++
++
++def test_restock_returns_new_level_for_existing_sku():
++    s = Stock()
++    s.add("widget", 5)
++    assert s.restock("widget", 3) == 8
++    assert s.level("widget") == 8
++
++
++def test_restock_twice_accumulates():
++    s = Stock()
++    s.restock("widget", 2)
++    s.restock("widget", 4)
++    assert s.level("widget") == 6
++
++
++def test_restock_leaves_other_skus_alone():
++    s = Stock()
++    s.add("gadget", 7)
++    s.restock("widget", 3)
++    assert s.level("gadget") == 7
++
++
++@pytest.mark.parametrize("bad", [0, -1, -100])
++def test_restock_rejects_non_positive_qty(bad):
++    s = Stock()
++    s.add("widget", 5)
++    with pytest.raises(ValueError):
++        s.restock("widget", bad)
++    # A rejected restock must not change the level.
++    assert s.level("widget") == 5
++
++
++def test_restock_rejects_non_positive_qty_on_unknown_sku():
++    s = Stock()
++    with pytest.raises(ValueError):
++        s.restock("widget", 0)
++    assert s.level("widget") == 0
++    assert s.skus() == []
+
+# ignored files present at the end: .env, var/local.db

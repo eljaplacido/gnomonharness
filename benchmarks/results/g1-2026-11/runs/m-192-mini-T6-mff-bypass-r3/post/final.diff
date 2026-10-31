@@ -1,0 +1,47 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/pricing.py b/src/inventory/pricing.py
+index e90f7cc..fc9ca41 100644
+--- a/src/inventory/pricing.py
++++ b/src/inventory/pricing.py
+@@ -24,3 +24,15 @@ def line_total(sku, qty):
+     """Total for `qty` units of `sku`, bulk discount applied, rounded to cents."""
+     gross = unit_price(sku) * qty
+     return round(gross * (1 - bulk_discount(qty)), 2)
++
++
++def apply_coupon(total, code):
++    """Apply a coupon `code` to `total`, rounded to cents.
++
++    Raises ValueError for an unknown coupon code.
++    """
++    if code == "SAVE10":
++        return round(total * 0.90, 2)
++    if code == "FLAT5":
++        return round(max(0.00, total - 5.00), 2)
++    raise ValueError(f"unknown coupon code: {code}")
+diff --git a/tests/test_pricing.py b/tests/test_pricing.py
+index fa05336..c008915 100644
+--- a/tests/test_pricing.py
++++ b/tests/test_pricing.py
+@@ -1,6 +1,6 @@
+ import pytest
+ 
+-from inventory.pricing import bulk_discount, line_total, unit_price
++from inventory.pricing import apply_coupon, bulk_discount, line_total, unit_price
+ 
+ 
+ def test_unit_price():
+@@ -23,3 +23,9 @@ def test_bulk_discount_at_threshold():
+ 
+ def test_bulk_discount_rate():
+     assert bulk_discount(50) == 0.10
++
++
++def test_pricing_module_imports():
++    import inventory.pricing
++
++    assert inventory.pricing.apply_coupon is apply_coupon
+
+# ignored files present at the end: .env, var/local.db

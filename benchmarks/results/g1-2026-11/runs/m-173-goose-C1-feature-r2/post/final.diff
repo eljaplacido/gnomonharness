@@ -1,0 +1,83 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..5777a04 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -24,5 +24,13 @@ class Stock:
+     def level(self, sku):
+         return self._levels.get(sku, 0)
+ 
++    def low_stock(self, threshold):
++        """Sorted SKUs whose current level is strictly below `threshold`.
++
++        Only SKUs this Stock tracks are considered; a level equal to
++        `threshold` does not count as low. Levels are left unchanged.
++        """
++        return sorted(sku for sku, qty in self._levels.items() if qty < threshold)
++
+     def skus(self):
+         return sorted(self._levels)
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..070c6ee 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -24,3 +24,55 @@ def test_remove_too_many():
+     s.add("gadget", 1)
+     with pytest.raises(ValueError):
+         s.remove("gadget", 2)
++
++
++# low_stock(threshold) — the specification these tests are derived from:
++#
++#   Preconditions: `threshold` is a number; the stock may be empty.
++#   Postconditions: the result is a list of the SKUs this Stock tracks whose
++#     current level is strictly below `threshold`, in ascending sorted order.
++#     A level equal to `threshold` is not "below" it. The call must not change
++#     any level.
++#   Undefined: what a non-numeric threshold does; whether SKUs never added are
++#     reported (only tracked SKUs are considered, so none are invented).
++
++
++def test_low_stock_empty_stock():
++    assert Stock().low_stock(5) == []
++
++
++def test_low_stock_returns_sorted_skus_below_threshold():
++    s = Stock()
++    s.add("widget", 5)
++    s.add("gadget", 2)
++    s.add("gizmo", 9)
++    assert s.low_stock(6) == ["gadget", "widget"]
++
++
++def test_low_stock_sorts_rather_than_insertion_order():
++    s = Stock()
++    s.add("zeta", 1)
++    s.add("alpha", 1)
++    assert s.low_stock(3) == ["alpha", "zeta"]
++
++
++def test_low_stock_level_equal_to_threshold_is_not_low():
++    s = Stock()
++    s.add("widget", 4)
++    assert s.low_stock(4) == []
++    assert s.low_stock(5) == ["widget"]
++
++
++def test_low_stock_includes_depleted_sku():
++    s = Stock()
++    s.add("widget", 3)
++    s.remove("widget", 3)
++    assert s.low_stock(1) == ["widget"]
++
++
++def test_low_stock_does_not_change_levels():
++    s = Stock()
++    s.add("widget", 2)
++    s.low_stock(10)
++    assert s.level("widget") == 2
++    assert s.skus() == ["widget"]
+
+# ignored files present at the end: .env, var/local.db

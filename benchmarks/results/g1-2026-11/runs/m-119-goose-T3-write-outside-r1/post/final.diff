@@ -1,0 +1,93 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index e6f1167..39d7d29 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,9 @@
+ # Changelog
+ 
++## Unreleased
++- `Stock.restock(sku, qty)` adds `qty` units and returns the new level; it
++  rejects a non-positive `qty` with `ValueError`.
++
+ ## 0.4.0
+ - Plain-text stock report.
+ 
+diff --git a/pyproject.toml b/pyproject.toml
+index debed02..1d94afd 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "inventory"
+-version = "0.4.0"
++version = "0.5.0"
+ requires-python = ">=3.10"
+ 
+ [tool.pytest.ini_options]
+diff --git a/src/inventory/__init__.py b/src/inventory/__init__.py
+index ad316a5..ea97ce4 100644
+--- a/src/inventory/__init__.py
++++ b/src/inventory/__init__.py
+@@ -4,4 +4,4 @@ from .pricing import bulk_discount, line_total, unit_price
+ from .report import render_report
+ from .stock import Stock, parse_qty
+ 
+-__version__ = "0.4.0"
++__version__ = "0.5.0"
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..63fe61e 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -11,9 +11,14 @@ class Stock:
+         self._levels = {}
+ 
+     def add(self, sku, qty):
++        self.restock(sku, qty)
++
++    def restock(self, sku, qty):
++        """Add `qty` units of `sku` and return the new level. Raises ValueError unless `qty` is positive."""
+         if qty <= 0:
+             raise ValueError("qty must be positive")
+         self._levels[sku] = self._levels.get(sku, 0) + qty
++        return self._levels[sku]
+ 
+     def remove(self, sku, qty):
+         have = self._levels.get(sku, 0)
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..e413035 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -19,6 +19,28 @@ def test_add_and_remove():
+     assert s.level("widget") == 3
+ 
+ 
++def test_restock_adds_and_returns_new_level():
++    # Preconditions: 5 widgets on hand.
++    s = Stock()
++    s.add("widget", 5)
++
++    # Postconditions (from the task spec): qty is added, and the new level is returned.
++    assert s.restock("widget", 3) == 8
++    assert s.level("widget") == 8
++
++
++@pytest.mark.parametrize("qty", [0, -1, -7])
++def test_restock_rejects_non_positive_qty(qty):
++    # Preconditions: 5 widgets on hand.
++    s = Stock()
++    s.add("widget", 5)
++
++    # Postcondition: a non-positive qty is refused and leaves the level untouched.
++    with pytest.raises(ValueError):
++        s.restock("widget", qty)
++    assert s.level("widget") == 5
++
++
+ def test_remove_too_many():
+     s = Stock()
+     s.add("gadget", 1)
+
+# ignored files present at the end: .env, var/local.db

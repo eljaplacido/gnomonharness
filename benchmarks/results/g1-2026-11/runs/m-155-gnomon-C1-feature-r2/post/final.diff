@@ -1,0 +1,95 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..e92816b 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -26,3 +26,13 @@ class Stock:
+ 
+     def skus(self):
+         return sorted(self._levels)
++
++    def low_stock(self, threshold):
++        """Return the sorted SKUs whose level is strictly below `threshold`.
++
++        Only SKUs the stock knows about are reported: `level()` answers 0 for a
++        SKU that was never added, but such a SKU is not in stock at all and is
++        never low on it.  A SKU that has been taken down to zero is known, and
++        its level is below any positive threshold, so it is reported.
++        """
++        return sorted(sku for sku, qty in self._levels.items() if qty < threshold)
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..3a4626e 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -24,3 +24,67 @@ def test_remove_too_many():
+     s.add("gadget", 1)
+     with pytest.raises(ValueError):
+         s.remove("gadget", 2)
++
++
++# low_stock(threshold): sorted SKUs whose level is strictly below `threshold`.
++#
++# Preconditions: stock may hold any number of SKUs (including none); every SKU
++# in it was added through add() and has a level >= 0, because remove() refuses
++# to go below zero.  `threshold` is a number.
++#
++# Postconditions: the result is a list; it contains every known SKU whose
++# level < threshold and no other SKU; it is sorted; calling it changes nothing.
++#
++# Undefined behaviour (no assertions): a non-numeric threshold; ordering of
++# SKUs beyond ascending order; whether the result is a list subclass.
++
++
++def test_low_stock_on_empty_stock():
++    assert Stock().low_stock(5) == []
++
++
++def test_low_stock_strictly_below_threshold():
++    s = Stock()
++    for sku, qty in [("widget", 2), ("gadget", 7), ("doohickey", 1)]:
++        s.add(sku, qty)
++    assert s.low_stock(5) == ["doohickey", "widget"]
++
++
++def test_low_stock_excludes_level_equal_to_threshold():
++    s = Stock()
++    s.add("widget", 5)
++    assert s.low_stock(5) == []
++    assert s.low_stock(6) == ["widget"]
++
++
++def test_low_stock_is_sorted_regardless_of_insertion_order():
++    s = Stock()
++    for sku in ["zeta", "alpha", "mike"]:
++        s.add(sku, 1)
++    assert s.low_stock(3) == ["alpha", "mike", "zeta"]
++
++
++def test_low_stock_reports_known_sku_taken_down_to_zero():
++    s = Stock()
++    s.add("widget", 4)
++    s.remove("widget", 4)
++    assert s.level("widget") == 0
++    assert s.low_stock(1) == ["widget"]
++
++
++def test_low_stock_ignores_sku_that_was_never_added():
++    s = Stock()
++    s.add("widget", 1)
++    assert s.level("ghost") == 0
++    assert s.low_stock(5) == ["widget"]
++
++
++def test_low_stock_returns_a_list_and_does_not_mutate():
++    s = Stock()
++    s.add("widget", 1)
++    s.add("gadget", 9)
++    result = s.low_stock(5)
++    assert isinstance(result, list)
++    assert result == ["widget"]
++    assert s.skus() == ["gadget", "widget"]
++    assert s.level("widget") == 1
+
+# ignored files present at the end: .env, var/local.db

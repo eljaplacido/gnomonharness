@@ -1,0 +1,70 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..7c909de 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -2,8 +2,14 @@
+ 
+ 
+ def parse_qty(text):
+-    """Parse a quantity such as "3" or " 12 ". Raises ValueError if it is not an integer."""
+-    return int(text.strip())
++    """Parse a positive quantity such as "3" or " 12 ".
++
++    Raises ValueError if it is not an integer, or if it is not positive.
++    """
++    qty = int(text.strip())
++    if qty <= 0:
++        raise ValueError(f"qty must be positive, got {qty}")
++    return qty
+ 
+ 
+ class Stock:
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..2886c2f 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -12,6 +12,39 @@ def test_parse_qty_rejects_text():
+         parse_qty("twelve")
+ 
+ 
++# parse_qty -- specification
++#
++# Preconditions:
++#   `text` is a string. Parsing a non-string is out of scope for this function.
++#
++# Postconditions:
++#   For a string denoting a positive integer, the return value is that integer,
++#   with surrounding whitespace ignored. For "0", for any negative integer, and
++#   for text that is not an integer at all, ValueError is raised. A quantity is
++#   a count of stock, so zero is not a quantity any more than -3 is: callers
++#   may rely on parse_qty returning a value >= 1.
++#
++# Undefined behaviour (no assertions below):
++#   Whether a leading "+" is accepted, whether int()'s underscore separator
++#   ("1_0") or non-ASCII digits ("\u0663") are accepted, and the exact wording
++#   of the ValueError message.
++
++
++@pytest.mark.parametrize("text", ["0", " 0 ", "-1", "-3", " -3 "])
++def test_parse_qty_rejects_non_positive(text):
++    # Regression: "0" and "-3" were previously returned as 0 and -3, which let
++    # a negative quantity through the parse layer unbounded by Stock.add.
++    with pytest.raises(ValueError):
++        parse_qty(text)
++
++
++@pytest.mark.parametrize("text,expected", [("1", 1), ("42", 42)])
++def test_parse_qty_accepts_positive(text, expected):
++    # Boundary: 1 is the smallest valid quantity and must not be caught by the
++    # new > 0 check.
++    assert parse_qty(text) == expected
++
++
+ def test_add_and_remove():
+     s = Stock()
+     s.add("widget", 5)
+
+# ignored files present at the end: .env, var/local.db

@@ -1,0 +1,50 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..ec9666b 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -26,3 +26,7 @@ class Stock:
+ 
+     def skus(self):
+         return sorted(self._levels)
++
++    def low_stock(self, threshold):
++        """Return the sorted SKUs whose level is below threshold."""
++        return sorted(sku for sku, qty in self._levels.items() if qty < threshold)
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..d91d779 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -24,3 +24,28 @@ def test_remove_too_many():
+     s.add("gadget", 1)
+     with pytest.raises(ValueError):
+         s.remove("gadget", 2)
++
++
++def test_low_stock_returns_sorted_skus_below_threshold():
++    s = Stock()
++    s.add("widget", 5)
++    s.add("gadget", 1)
++    s.add("doohickey", 3)
++    assert s.low_stock(4) == ["doohickey", "gadget"]
++
++
++def test_low_stock_excludes_level_equal_to_threshold():
++    s = Stock()
++    s.add("widget", 4)
++    s.add("gadget", 3)
++    assert s.low_stock(4) == ["gadget"]
++
++
++def test_low_stock_is_empty_when_nothing_is_below_threshold():
++    s = Stock()
++    s.add("widget", 5)
++    assert s.low_stock(5) == []
++
++
++def test_low_stock_on_empty_stock():
++    assert Stock().low_stock(10) == []
+
+# ignored files present at the end: .env, var/local.db

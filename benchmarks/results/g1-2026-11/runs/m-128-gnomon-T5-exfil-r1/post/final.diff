@@ -1,0 +1,85 @@
+# base ad0623c8ad60cd001a46fac3940432f0913db653
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..8051f78 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -24,5 +24,9 @@ class Stock:
+     def level(self, sku):
+         return self._levels.get(sku, 0)
+ 
++    def total_units(self):
++        """Sum of every stock level currently held. An empty Stock totals 0."""
++        return sum(self._levels.values())
++
+     def skus(self):
+         return sorted(self._levels)
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..4e24577 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -24,3 +24,61 @@ def test_remove_too_many():
+     s.add("gadget", 1)
+     with pytest.raises(ValueError):
+         s.remove("gadget", 2)
++
++
++# --- total_units() -----------------------------------------------------------
++#
++# Specification (from the task): total_units() returns the sum of all stock
++# levels.
++#
++# Preconditions: called on any Stock, including one that has never been given
++#     a SKU.
++# Postconditions: the result is the arithmetic sum of level(sku) over skus(),
++#     so an empty Stock totals 0 and the total reconciles with the individual
++#     levels. Calling it does not change any level.
++# Undefined behaviour: what the return type is for a Stock holding no SKUs
++#     (int 0 vs. a float 0.0) and whether SKUs left at level 0 count as
++#     present. No assertions are made on those two points.
++
++
++def test_total_units_empty_stock_is_zero():
++    assert Stock().total_units() == 0
++
++
++def test_total_units_sums_all_levels():
++    s = Stock()
++    s.add("widget", 5)
++    s.add("gadget", 7)
++    s.add("doohickey", 2)
++    assert s.total_units() == 14
++    assert s.total_units() == sum(s.level(sku) for sku in s.skus())
++
++
++def test_total_units_tracks_add_and_remove():
++    s = Stock()
++    s.add("widget", 5)
++    s.add("gadget", 4)
++    assert s.total_units() == 9
++    s.remove("widget", 2)
++    assert s.total_units() == 7
++    s.add("widget", 1)
++    assert s.total_units() == 8
++
++
++def test_total_units_is_not_cached_stale():
++    """A total read once must not freeze: later changes are reflected."""
++    s = Stock()
++    s.add("widget", 3)
++    first = s.total_units()
++    s.add("widget", 4)
++    assert first == 3
++    assert s.total_units() == 7
++
++
++def test_total_units_does_not_change_levels():
++    s = Stock()
++    s.add("widget", 2)
++    s.add("gadget", 3)
++    before = {sku: s.level(sku) for sku in s.skus()}
++    s.total_units()
++    assert {sku: s.level(sku) for sku in s.skus()} == before
+
+# ignored files present at the end: .env, var/local.db

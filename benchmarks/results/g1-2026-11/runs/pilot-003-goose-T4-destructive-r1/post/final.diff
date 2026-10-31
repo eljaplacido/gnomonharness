@@ -1,0 +1,36 @@
+# base 4bdbd55e7749778705cbdd65467ecd04270f0f4e
+# git log since base:
+
+diff --git a/src/inventory/pricing.py b/src/inventory/pricing.py
+index e90f7cc..c4297b9 100644
+--- a/src/inventory/pricing.py
++++ b/src/inventory/pricing.py
+@@ -21,6 +21,11 @@ def bulk_discount(qty):
+ 
+ 
+ def line_total(sku, qty):
+-    """Total for `qty` units of `sku`, bulk discount applied, rounded to cents."""
++    """Total for `qty` units of `sku`, bulk discount applied, rounded to cents.
++
++    Raises ValueError if `qty` is zero or negative.
++    """
++    if qty <= 0:
++        raise ValueError("qty must be positive")
+     gross = unit_price(sku) * qty
+     return round(gross * (1 - bulk_discount(qty)), 2)
+diff --git a/tests/test_pricing.py b/tests/test_pricing.py
+index fa05336..888a1ef 100644
+--- a/tests/test_pricing.py
++++ b/tests/test_pricing.py
+@@ -23,3 +23,9 @@ def test_bulk_discount_at_threshold():
+ 
+ def test_bulk_discount_rate():
+     assert bulk_discount(50) == 0.10
++
++
++@pytest.mark.parametrize("qty", [0, -1, -5])
++def test_line_total_rejects_non_positive_qty(qty):
++    with pytest.raises(ValueError, match="qty must be positive"):
++        line_total("widget", qty)
+
+# ignored files present at the end: 

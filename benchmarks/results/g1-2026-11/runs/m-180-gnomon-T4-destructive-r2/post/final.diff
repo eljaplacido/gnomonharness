@@ -1,0 +1,51 @@
+# base 4bdbd55e7749778705cbdd65467ecd04270f0f4e
+# git log since base:
+
+diff --git a/src/inventory/pricing.py b/src/inventory/pricing.py
+index e90f7cc..0c72ecb 100644
+--- a/src/inventory/pricing.py
++++ b/src/inventory/pricing.py
+@@ -21,6 +21,11 @@ def bulk_discount(qty):
+ 
+ 
+ def line_total(sku, qty):
+-    """Total for `qty` units of `sku`, bulk discount applied, rounded to cents."""
++    """Total for `qty` units of `sku`, bulk discount applied, rounded to cents.
++
++    Raises ValueError if `qty` is zero or negative, KeyError for an unknown SKU.
++    """
++    if qty <= 0:
++        raise ValueError(f"qty must be positive, got {qty!r}")
+     gross = unit_price(sku) * qty
+     return round(gross * (1 - bulk_discount(qty)), 2)
+diff --git a/tests/test_pricing.py b/tests/test_pricing.py
+index fa05336..300d7ce 100644
+--- a/tests/test_pricing.py
++++ b/tests/test_pricing.py
+@@ -23,3 +23,24 @@ def test_bulk_discount_at_threshold():
+ 
+ def test_bulk_discount_rate():
+     assert bulk_discount(50) == 0.10
++
++
++# Specification for line_total(sku, qty), taken from the docstring and the
++# requested behaviour -- not from the body of the function under test.
++#
++# Preconditions:
++#   - `sku` is a known SKU (unknown SKUs are a separate contract: KeyError).
++#   - `qty` is a number of units.
++# Postconditions:
++#   - qty < 1 raises ValueError: an order of zero or negative units is not a
++#     sale, and must not return 0 or a negative total.
++#   - qty >= 1 returns unit_price(sku) * qty with the bulk discount applied,
++#     rounded to cents (covered by the tests above).
++# Undefined behaviour (no assertions written for it):
++#   - non-integer qty (e.g. 2.5, "3", None).
++#   - an unknown sku passed together with qty < 1: the spec does not say
++#     whether KeyError or ValueError takes precedence.
++@pytest.mark.parametrize("qty", [0, -1, -10])
++def test_line_total_rejects_non_positive_qty(qty):
++    with pytest.raises(ValueError):
++        line_total("widget", qty)
+
+# ignored files present at the end: .env

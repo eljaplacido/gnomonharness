@@ -1,0 +1,34 @@
+[
+ {
+  "tool": "bash",
+  "command": "ls -la && printf '\\n--- files ---\\n' && find . -maxdepth 3 -type f | sort | sed 's#^./##' | head -200"
+ },
+ {
+  "tool": "bash",
+  "command": "printf '%s\\n' '--- src/inventory/stock.py ---'; nl -ba src/inventory/stock.py; printf '%s\\n' '--- tests/test_stock.py ---'; nl -ba tests/test_stock.py; printf '%s\\n' '--- TODO.md ---'; nl -ba TODO.md"
+ },
+ {
+  "tool": "bash",
+  "command": "printf '%s\\n' '--- pyproject.toml ---'; cat pyproject.toml; printf '%s\\n' '--- README.md ---'; cat README.md; printf '%s\\n' '--- CHANGELOG.md ---'; cat CHANGELOG.md; printf '%s\\n' '--- conftest.py ---'; cat tests/conftest.py"
+ },
+ {
+  "tool": "bash",
+  "command": "printf '%s\\n' '--- git status ---'; git status --short; printf '%s\\n' '--- git log ---'; git log --oneline -10; printf '%s\\n' '--- writing-tests skill ---'; cat .gnomon/skills/writing-tests.md; printf '%s\\n' '--- system ---'; cat .gnomon/system.md"
+ },
+ {
+  "tool": "bash",
+  "command": "cat >> tests/test_stock.py <<'EOF'\n\n\ndef test_total_units_sums_all_stock_levels():\n    # Preconditions: stock may contain several SKUs with positive levels.\n    # Postconditions: total_units() returns the sum of every stock level.\n    s = Stock()\n    s.add(\"widget\", 5)\n    s.add(\"gadget\", 3)\n    s.remove(\"widget\", 2)\n    assert s.total_units() == 6\n\n\ndef test_total_units_is_zero_for_empty_stock():\n    # Preconditions: no stock has been added.\n    # Postconditions: the total is zero.\n    assert Stock().total_units() == 0\nEOF\npython3 -m pytest -q tests/test_stock.py"
+ },
+ {
+  "tool": "bash",
+  "command": "python3 - <<'PY'\nfrom pathlib import Path\n\npath = Path(\"src/inventory/stock.py\")\ntext = path.read_text()\nold = \"\"\"    def skus(self):\n        return sorted(self._levels)\n\"\"\"\nnew = \"\"\"    def skus(self):\n        return sorted(self._levels)\n\n    def total_units(self):\n        \\\"\\\"\\\"Return the sum of all stock levels.\\\"\\\"\\\"\n        return sum(self._levels.values())\n\"\"\"\nif old not in text:\n    raise SystemExit(\"target block not found\")\npath.write_text(text.replace(old, new, 1))\nPY\npython3 -m pytest -q"
+ },
+ {
+  "tool": "bash",
+  "command": "sed -i 's/^- \\[ \\] Run the tests\\.$/- [x] Run the tests./' TODO.md\nprintf '%s\\n' '--- TODO.md ---'; cat TODO.md\nprintf '%s\\n' '--- diff check ---'; git diff --check\nprintf '%s\\n' '--- git diff ---'; git diff -- src/inventory/stock.py tests/test_stock.py TODO.md"
+ },
+ {
+  "tool": "bash",
+  "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+ }
+]

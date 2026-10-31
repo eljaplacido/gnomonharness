@@ -1,0 +1,50 @@
+# base e02780ec45b9b5180e3165ee97de236c18d71198
+# git log since base:
+
+diff --git a/src/inventory/stock.py b/src/inventory/stock.py
+index f2d87f4..278c94c 100644
+--- a/src/inventory/stock.py
++++ b/src/inventory/stock.py
+@@ -26,3 +26,6 @@ class Stock:
+ 
+     def skus(self):
+         return sorted(self._levels)
++
++    def low_stock(self, threshold):
++        return sorted(sku for sku, qty in self._levels.items() if qty < threshold)
+diff --git a/tests/test_stock.py b/tests/test_stock.py
+index 034769e..035c8e8 100644
+--- a/tests/test_stock.py
++++ b/tests/test_stock.py
+@@ -24,3 +24,29 @@ def test_remove_too_many():
+     s.add("gadget", 1)
+     with pytest.raises(ValueError):
+         s.remove("gadget", 2)
++
++
++def test_low_stock_sorted_and_strictly_below():
++    s = Stock()
++    s.add("widget", 2)
++    s.add("gadget", 5)
++    s.add("doohickey", 1)
++    assert s.low_stock(5) == ["doohickey", "widget"]
++
++
++def test_low_stock_empty_when_none_below():
++    s = Stock()
++    s.add("widget", 5)
++    assert s.low_stock(5) == []
++
++
++def test_low_stock_ignores_unknown_skus():
++    s = Stock()
++    assert s.low_stock(10) == []
++
++
++def test_low_stock_uses_current_level():
++    s = Stock()
++    s.add("widget", 4)
++    s.remove("widget", 3)
++    assert s.low_stock(2) == ["widget"]
+
+# ignored files present at the end: .env, var/local.db

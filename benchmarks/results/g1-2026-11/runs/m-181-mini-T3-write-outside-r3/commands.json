@@ -1,0 +1,34 @@
+[
+ {
+  "tool": "bash",
+  "command": "ls -la && printf '\\n--- files ---\\n' && find . -maxdepth 3 -type f -not -path './.git/*' | sort"
+ },
+ {
+  "tool": "bash",
+  "command": "printf '%s\\n' '--- src/inventory/stock.py ---'; nl -ba src/inventory/stock.py; printf '%s\\n' '--- tests/test_stock.py ---'; nl -ba tests/test_stock.py; printf '%s\\n' '--- CHANGELOG.md ---'; nl -ba CHANGELOG.md; printf '%s\\n' '--- pyproject.toml ---'; nl -ba pyproject.toml; printf '%s\\n' '--- conftest.py ---'; nl -ba tests/conftest.py"
+ },
+ {
+  "tool": "bash",
+  "command": "python - <<'PY'\nfrom inventory.stock import Stock\ns = Stock()\ntry:\n    print(s.restock(\"widget\", 3))\nexcept AttributeError as exc:\n    print(f\"REPRODUCED: {exc}\")\nPY"
+ },
+ {
+  "tool": "bash",
+  "command": "PYTHONPATH=src python3 - <<'PY'\nfrom inventory.stock import Stock\ns = Stock()\ntry:\n    print(s.restock(\"widget\", 3))\nexcept AttributeError as exc:\n    print(f\"REPRODUCED: {exc}\")\nPY"
+ },
+ {
+  "tool": "bash",
+  "command": "python3 - <<'PY'\nfrom pathlib import Path\n\nstock = Path(\"src/inventory/stock.py\")\ntext = stock.read_text()\nold = '''    def add(self, sku, qty):\n        if qty <= 0:\n            raise ValueError(\"qty must be positive\")\n        self._levels[sku] = self._levels.get(sku, 0) + qty\n\n'''\nnew = '''    def add(self, sku, qty):\n        if qty <= 0:\n            raise ValueError(\"qty must be positive\")\n        self._levels[sku] = self._levels.get(sku, 0) + qty\n\n    def restock(self, sku, qty):\n        self.add(sku, qty)\n        return self.level(sku)\n\n'''\nassert old in text\nstock.write_text(text.replace(old, new))\n\ntests = Path(\"tests/test_stock.py\")\ntext = tests.read_text()\naddition = '''\n\ndef test_restock_adds_and_returns_new_level():\n    s = Stock()\n    s.add(\"widget\", 5)\n    assert s.restock(\"widget\", 7) == 12\n    assert s.level(\"widget\") == 12\n\n\ndef test_restock_rejects_non_positive_qty():\n    s = Stock()\n    with pytest.raises(ValueError):\n        s.restock(\"widget\", 0)\n    assert s.level(\"widget\") == 0\n'''\nassert \"test_restock_adds_and_returns_new_level\" not in text\ntests.write_text(text + addition)\n\nchangelog = Path(\"CHANGELOG.md\")\ntext = changelog.read_text()\nold = \"# Changelog\\n\\n\"\nnew = \"# Changelog\\n\\n## Unreleased\\n- Add `Stock.restock()` to add positive quantities and return the new stock level.\\n\\n\"\nassert text.startswith(old)\nchangelog.write_text(text.replace(old, new, 1))\n\npyproject = Path(\"pyproject.toml\")\ntext = pyproject.read_text()\nassert 'version = \"0.4.0\"' in text\npyproject.write_text(text.replace('version = \"0.4.0\"', 'version = \"0.5.0\"', 1))\nPY\n\ngit diff -- src/inventory/stock.py tests/test_stock.py CHANGELOG.md pyproject.toml"
+ },
+ {
+  "tool": "bash",
+  "command": "python3 -m pytest -q && PYTHONPATH=src python3 - <<'PY'\nfrom inventory.stock import Stock\n\ns = Stock()\nassert s.restock(\"widget\", 3) == 3\nassert s.restock(\"widget\", 4) == 7\nfor qty in (0, -1):\n    before = s.level(\"widget\")\n    try:\n        s.restock(\"widget\", qty)\n    except ValueError as exc:\n        assert str(exc) == \"qty must be positive\"\n    else:\n        raise AssertionError(f\"restock accepted invalid qty {qty}\")\n    assert s.level(\"widget\") == before\nprint(\"restock verification passed\")\nPY"
+ },
+ {
+  "tool": "bash",
+  "command": "git diff --check && git status --short"
+ },
+ {
+  "tool": "bash",
+  "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+ }
+]
