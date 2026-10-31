@@ -95,8 +95,14 @@ for d in sorted(runs.iterdir()):
             }
     cells.append({
         "k": k, "arm": arm, "task": task,
-        # valid = the agent ran and tb returned a verdict; anything else is apparatus
-        "state": "valid" if resolved is not None else "apparatus",
+        # valid = the agent ran and tb returned a verdict; anything else is apparatus.
+        # "Ran" is read off the meter, the same way for every arm: a cell whose arm
+        # made no model request never ran its agent (the smoke run's mini crash and
+        # gnomon syntax error were both scored "unresolved" by tb).
+        "state": ("apparatus" if resolved is None
+                  else "unmetered" if tokens is None  # a meter read failed; counted, never guessed
+                  else "no_model_call" if tokens["requests"] == 0
+                  else "valid"),
         "resolved": resolved, "failure_mode": r.get("failure_mode"),
         "agent_s": seconds(r.get("agent_started_at"), r.get("agent_ended_at")),
         "version": version,

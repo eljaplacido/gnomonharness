@@ -223,3 +223,45 @@ is kept under `runs-smoke-failed/`, and the mini smoke is re-run before launch.
 This also belongs in the result: as of 2026-10-31, a fresh
 `pip install mini-swe-agent==2.4.6` cannot call a model with tools until
 litellm fixes this or is pinned.
+
+## Amendment before launch: the gnomon arm's setup, and "the agent ran"
+
+Found by the smoke run, 2026-10-31 16:00Z, before any full-run trial. Two faults,
+both in this run's own apparatus.
+
+1. **A quoting bug in the gnomon run script.** The profile patch added earlier
+   (the first amendment) sits inside `node -e '…'`, and one of its comments said
+   "scaffold's". The apostrophe closed the shell string, so the run script failed
+   to parse and gnomon never started. The patch had been checked by extracting it
+   with a regex and running node on the file, which bypasses bash's quoting. It
+   is now reworded.
+   - `preflight_setups.sh` checks each setup through bash itself before every
+     run: it writes the run script with the setup's own heredoc, runs `bash -n`
+     on it, and runs `node --check` on each `node -e` block as bash passes it.
+   - It was proven against a copy with the apostrophe restored, where it fails
+     with the smoke run's exact error.
+2. **The gnomon setup leaked `set -e` into tb's shell.**
+   - tb *sources* each setup into the shell that later runs the agent. The
+     gnomon setup, inherited from the August adapter and used unchanged in H7,
+     starts with `set -e`.
+   - In the smoke, the run script's failure therefore killed tb's shell before
+     `tmux wait -S done`. tb waited out the whole cap (900 s plus the 300 s join)
+     and then scored a timeout for an agent that never ran.
+   - The peer setups never `exit` and set no options. The gnomon setup's body now
+     runs in a child bash, and only its verdict (`INSTALL_FAIL_STATUS` or not)
+     reaches tb's shell. Proven with a mock: the failing body reports the
+     failure, and tb's shell survives with errexit off.
+   - H7 was not hit. Its run script exits 0 on every path but this one, and its
+     six 1,200 s trials show gnomon working throughout: 20 to 256 shadow abort
+     records each.
+
+**A validity rule, the same for every arm.** The registered rule called a cell
+valid when "the agent started and tb returned a verdict". tb returns a verdict
+even when the agent never ran. Both failed smoke cells (mini's crash, gnomon's
+parse error) came back as tb verdicts, "unresolved". "Started" is now read off
+the meter: **a cell whose arm made no model request is `no_model_call`, counted
+per arm as apparatus and never scored.** A cell whose meter read failed is
+`unmetered`, counted separately. Fixed now, before any full-run cell exists.
+
+Both failed smoke cells move to `runs-smoke-failed/` and are re-run before
+launch.

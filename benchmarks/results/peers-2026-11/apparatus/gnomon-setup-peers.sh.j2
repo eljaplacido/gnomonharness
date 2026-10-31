@@ -1,4 +1,14 @@
 #!/bin/bash
+# tb SOURCES this file into the shell that later runs the agent, so the `set -e`
+# and `exit` below would apply to that shell: a failure would kill it before
+# `tmux wait -S done`, and tb would wait out the whole cap and score a timeout.
+# (The 2026-10-31 smoke run's gnomon cell did exactly that.) The body therefore
+# runs in a child bash, and only its verdict reaches tb's shell. The peer setups
+# never `exit` and set no options, so this brings the gnomon arm level with them.
+if [ -z "${GNOMON_SETUP_CHILD:-}" ]; then
+  if GNOMON_SETUP_CHILD=1 bash "${BASH_SOURCE[0]}"; then :; else echo "INSTALL_FAIL_STATUS"; fi
+  return 0 2>/dev/null || true
+fi
 # Capture the TASK directory before anything can change it. tb starts this
 # script in the task's WORKDIR, which is NOT always /app: fix-git lives in
 # /app/personal-site, swe-bench-astropy-2 in /app/astropy, prove-plus-comm in
@@ -83,9 +93,9 @@ if(!c.includes("[endpoints.bench]")){
 let r=fs.readFileSync(".gnomon/roles.toml","utf8");
 r=r.replace(/endpoint = "[^"]*"/g,`endpoint = "bench"`).replace(/model = "[^"]*"/g,`model = "${E.GNOMON_BENCH_MODEL}"`);
 fs.writeFileSync(".gnomon/roles.toml",r);
-// The scaffold's role_profile (local_first) is merged OVER roles.toml per field,
+// The role_profile of the scaffold (local_first) is merged OVER roles.toml per field,
 // so every profile gets the same rewrite. Without it, plan/implement/critique/smol
-// stay on the scaffold's local endpoint; `implementor` never was (it is not in the
+// stay on the local endpoint of the scaffold; `implementor` never was (it is not in the
 // profile), which is why the August runs and H7 worked -- but smol, the summary
 // role, would have pointed at nothing in any multi-turn run.
 const pd=".gnomon/profiles";
