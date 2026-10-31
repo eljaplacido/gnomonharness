@@ -1,0 +1,54 @@
+{
+  "version": "1",
+  "_comment": [
+    "The decision-shadow record (docs/CONTRACTS.md section 7): one JSON line per entry in",
+    ".gnomon-shadow/gnomon.jsonl, or $DECISION_SHADOW_DIR/gnomon.jsonl when that is set",
+    "outside the project. agentcenter's readout parses it without reading the code (its",
+    "docs/DECISION_SHADOW.md is the shared contract this extends), so a key dropped, a",
+    "decision renamed or a label reordered is a contract change. packages/gnomon-core/src/",
+    "shadow.test.ts emits every kind of record and asserts its keys, labels and question",
+    "ids against this file, and that CONTRACTS.md section 7 names the same decisions."
+  ],
+  "v": 1,
+  "decisions": ["abort", "role", "approval", "turn_end", "shadow"],
+  "questions": {
+    "abort": { "id": "gnomon_abort.v1", "labels": ["will_pass", "will_fail"] },
+    "role": {
+      "id": "gnomon_routing.v1",
+      "labels": ["plan", "coordinator", "implement", "implementor", "verifier", "critique", "smol"]
+    },
+    "approval": { "id": "needs_approval.v1", "labels": ["proceed", "ask_first"] }
+  },
+  "orders": ["fwd", "rev"],
+  "keys": {
+    "question": {
+      "required": [
+        "v", "ts", "project", "machine", "calib_key", "cell", "surface_hash", "gnomon",
+        "role", "depth", "agent_model", "endpoint_url", "decision", "subject_id", "model",
+        "question", "order", "labels", "live", "excerpt", "latency_ms", "error"
+      ],
+      "optional": ["run_label", "probs"]
+    },
+    "turn_end": {
+      "required": [
+        "v", "ts", "project", "machine", "calib_key", "cell", "surface_hash", "gnomon",
+        "role", "depth", "agent_model", "endpoint_url", "decision", "subject_id",
+        "stop_reason", "code", "bucket", "verify", "tool_steps", "tokens", "duration_ms"
+      ],
+      "optional": ["run_label"]
+    },
+    "shadow": {
+      "required": ["v", "ts", "project", "decision", "machine", "calib_key", "surface_hash", "gnomon", "error"],
+      "optional": ["run_label"]
+    }
+  },
+  "live": {
+    "abort": ["continue"],
+    "approval": [
+      "not_gated", "asked:approved", "asked:declined", "standing:approved", "flag:approved",
+      "default:declined", "policy:result", "policy:refusal", "policy:apparatus_failure"
+    ],
+    "role": "the role that ran, or chain:<stage>><stage>... when a declared chain ran"
+  },
+  "verify": ["pass", "fail", "none", "unrunnable", "declined", "skipped"]
+}
