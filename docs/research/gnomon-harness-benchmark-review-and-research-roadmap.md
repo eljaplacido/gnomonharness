@@ -139,6 +139,13 @@ The strongest commercial wedge is regulated or high-assurance engineering on loc
 
 ## Hypotheses to test
 
+> **Status as of 2026-10-31:** see
+> [harness-landscape-2026-10-31.md](harness-landscape-2026-10-31.md).
+> - H2, H6, H7, H9 and H10 strengthened.
+> - H1 and H11 weakened in part.
+> - H5 and H8 need new evidence.
+> - H13–H17 added.
+
 | ID | Hypothesis | Minimal experiment | Primary metric | Guardrail |
 |---|---|---|---|---|
 | H1 | Wall-clock-aware convergence improves completion more than step-fraction convergence. | Paired A/B on the three residual losses plus 15 medium-difficulty tasks, five attempts each. | Paired pass-rate difference. | Cost and apparatus failure must not rise materially. |
