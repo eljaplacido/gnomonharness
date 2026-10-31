@@ -52,8 +52,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1286 TypeScript tests (1049 core, 212 cli, 18
-> natives, 7 tui) and 60 Rust tests — **1346 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1304 TypeScript tests (1067 core, 212 cli, 18
+> natives, 7 tui) and 60 Rust tests — **1364 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -875,6 +875,95 @@ be worse than showing what the model wrote.
 #### `[audit]` and `[session]`
 
 See [Governance and Audit](#governance-and-audit) and [Sessions](#sessions).
+
+#### `[shadow]` — what a decision model would have decided, logged
+
+Off unless declared. When it is on, a typed decision model is asked a
+question at three points, and its answer is written down beside what gnomon
+actually did:
+
+- **abort**: after a tool call, "will the tests pass at the end?"
+- **role**: for each prompt, which role should handle it
+- **approval**: for each tool call, whether the operator should have been asked
+
+Nothing reads the answers back. The block exists so that decision models can be
+ranked on real runs without any of them deciding anything.
+
+```toml
+[shadow]
+enabled = true
+url = "http://127.0.0.1:18195/v1/systemone"   # state + typed questions in, probabilities out
+abort = ["d1-3b", "h2o-lightning-4b"]
+role = ["vllm-d3"]
+approval = ["vllm-d3"]
+orders = ["fwd", "rev"]     # each question asked as written and with its options reversed
+timeout_ms = 1500
+abort_timeout_ms = 3000
+```
+
+There is no default `url`. A shadow server is somebody's infrastructure, and a
+built-in port would point every `enabled = true` at whatever happens to listen
+there. Both orders are the default, because every model in agentcenter's
+decisionbench replay flipped its top answer on more than 10% of items for some
+task when the options were reversed.
+
+**The questions and the text are the bench's.** They are agentcenter's
+`decisionbench` questions, word for word, with versioned ids:
+`gnomon_abort.v1`, `gnomon_routing.v1` and `needs_approval.v1`. The abort
+question reads a port of the bench's run summary:
+- elapsed time, tool calls, how many errored or were refused, and tokens used;
+- the last 15 calls;
+- scored after every call up to 30, then every 5th.
+
+`shadow.test.ts` checks the port against strings produced by running the bench's
+own Python, so a live record and a bench item ask the same question of the same
+text.
+
+**Records** go to `.gnomon-shadow/gnomon.jsonl`, one JSON line per answer. If
+`DECISION_SHADOW_DIR` is set to a directory outside the project, they go there
+instead. Each answer carries:
+- the model, the order and the labels as asked;
+- the probabilities, what gnomon did (`live`), a scrubbed excerpt, the latency,
+  and any error.
+
+Every record names the turn's role, model and endpoint. When
+`DECISION_SHADOW_RUN` is set, every record also carries its value as
+`run_label`: the id a benchmark adapter already has for the trial, so a verdict
+joins without the session id. Every record carries a calibration key: the
+gnomon version plus the surface hash with the `[shadow]` table cut out. Switching a shadow on, or naming one more model, therefore never
+starts a new calibration cell. Each turn also gets one `turn_end` record with no
+model in it (`stop_reason`, `code`, verify result, steps, tokens, duration), so
+answers join to outcomes even when `[audit]` is off.
+
+**Why it changes nothing, and what pins that.**
+
+- The loop tells the shadow what happened only after it has acted. Requests run
+  in a background queue, two at a time, each with its own timeout.
+- An error is written down and swallowed. After three connection failures in a
+  row the shadow stops for the session and says so once.
+- `.gnomon-shadow/` is never walked. An append there would move the worktree
+  stamp, which drives the idle nudge and the step fold, so a log-only shadow
+  would have changed the run it watched. For the same reason, a
+  `DECISION_SHADOW_DIR` inside the project is refused, out loud.
+- The test that holds this runs the same scripted turn with the shadow off and
+  on. The task record and the audit trail come out the same; only the surface
+  hash differs. With `.gnomon-shadow` removed from the walk's exclusions, it
+  fails: `worktree_moves` goes from 0 to 2.
+
+**Why it is in the surface at all.** It is in the hashed surface, not switched on
+by the machine, because of Rule 1. A run that called a model after every tool
+call is a different run, and the hash has to say so even though the calls
+changed nothing.
+
+**Limits, stated:**
+- `gnomon task` waits at most 3 s at the end for answers still in flight.
+- In an interactive session, `/quit` and Ctrl-C drop them. `turn_end` is written
+  synchronously and is never lost.
+- A delegated `task` sub-turn is not scored on its own.
+- `machine` is the hostname.
+- Not measured: no in-loop result exists yet. The case for the abort question is
+  an offline replay of 231 recorded runs, and an in-loop shadow is the only test
+  of whether that ranking holds.
 
 ### `roles.toml`
 

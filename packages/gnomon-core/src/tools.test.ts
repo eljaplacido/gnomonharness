@@ -1817,7 +1817,13 @@ describe("bash_deny — the guardrail on operations that are not undoable", () =
       const r = await run(cmd);
       expect(r.code, cmd).not.toBe(TOOL_DENIED);
     }
-  });
+    // Its own budget, because these seven commands really RUN once the guardrail
+    // lets them through -- the only test in this block that executes anything.
+    // On macos-latest (2026-10-31, twice in a row) the run passed 5 s and timed
+    // out; locally the seven take ~90 ms. Which command is slow there is NOT
+    // verified (a toolchain shim behind `cargo` is the likeliest). The assertion is
+    // about what the guardrail refuses, which a slow command does not change.
+  }, 30_000);
 
   it("catches a denied command hidden behind a permitted one", async () => {
     const r = await run("git status && git push --force origin main");

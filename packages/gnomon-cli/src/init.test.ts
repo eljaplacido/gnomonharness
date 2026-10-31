@@ -275,7 +275,7 @@ describe("initSurface", () => {
     // committed them on the first `git add .`.
     writeFileSync(join(root, ".gitignore"), "node_modules\n/.gnomon-sessions/");
     const r = await initSurface({ dir: root });
-    expect(r.gitignore).toEqual([".gnomon-audit", ".gnomon-out", ".gnomon-jobs", ".gnomon-loops"]);
+    expect(r.gitignore).toEqual([".gnomon-audit", ".gnomon-out", ".gnomon-jobs", ".gnomon-loops", ".gnomon-shadow"]);
     const text = readFileSync(join(root, ".gitignore"), "utf-8");
     expect(text.startsWith("node_modules\n/.gnomon-sessions/\n")).toBe(true);
     expect(text).toContain(".gnomon-audit/\n");

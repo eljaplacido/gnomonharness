@@ -94,6 +94,12 @@ import {
   withWorkingContext,
 } from "./skills.js";
 import { AuditTrail, resolveAudit, type AuditKind } from "./audit.js";
+import {
+  ShadowRecorder,
+  type ShadowTurnEnd,
+  type ShadowTurnInfo,
+  type TurnShadow,
+} from "./shadow.js";
 import { recordDegradation } from "./degradation.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
 import { applyCredentials } from "./credentials.js";
@@ -1925,6 +1931,14 @@ export interface TurnDeps {
    * prints outside `say`, so a pending chunk has to be flushed before it.
    */
   standingApproval?: () => boolean;
+  /**
+   * The decision-model shadow for this turn, when the surface declares one.
+   *
+   * Told what happened after each tool call, and never asked anything: the
+   * loop has already acted by the time it calls this, and nothing comes back.
+   * Read only at depth 0 -- a delegated sub-turn is part of its parent's call.
+   */
+  shadow?: TurnShadow;
 }
 
 /** One step held back by the fold, kept so `/expand` can print it. */
@@ -2783,6 +2797,30 @@ export function buildSystemPrompt(
   ) + platformBlock() + `\n\n${sessionModeBlock(state.interactive === true && !opts.delegated)}`;
 }
 
+/** A turn's model-free outcome, as the shadow's `turn_end` record carries it. */
+export function shadowOutcome(r: TurnResult, t0: number): ShadowTurnEnd {
+  return {
+    stop_reason: r.stop_reason,
+    code: r.code,
+    bucket: mapBucket(r.code),
+    verify: r.verify,
+    tool_steps: r.toolSteps,
+    tokens: (r.usage?.input ?? 0) + (r.usage?.output ?? 0),
+    duration_ms: Date.now() - t0,
+  };
+}
+
+/** Where a shadowed turn starts: who runs it, on which declared route. */
+export function shadowTurnInfo(
+  sessionId: string,
+  label: string,
+  role: string,
+  route: ReturnType<typeof routeRole>,
+  t0: number = Date.now()
+): ShadowTurnInfo {
+  return { sessionId, label, role, model: route.target.model, endpointUrl: route.target.url, t0 };
+}
+
 export async function runAgenticTurn(
   state: PromptState,
   /** The role THIS turn runs as — a `/plan …` prefix differs from the
@@ -2899,6 +2937,21 @@ export async function runAgenticTurn(
   const declaredNetwork = (policy.sandbox as { network?: boolean } | undefined)?.network;
   const network = state.network ?? declaredNetwork;
 
+  // The shadow is told about each tool call after it has run. A delegated
+  // sub-turn is part of its parent's call and is not scored on its own.
+  const shadow = depth === 0 ? deps.shadow : undefined;
+  // The first approval asked during the current call: what the operator (or
+  // the flag, or the default) answered. Only the first, because a `task` call
+  // asks for the delegation and then its sub-turn asks for its own calls.
+  let callApproval: { summary: string; approved: boolean } | undefined;
+  const approve: Approver = shadow
+    ? async (req) => {
+        const ok = await deps.approve(req);
+        callApproval ??= { summary: req.summary, approved: ok };
+        return ok;
+      }
+    : deps.approve;
+
   const ctx: ToolContext = {
     audit: deps.audit,
     config,
@@ -2915,7 +2968,7 @@ export async function runAgenticTurn(
     // asks for it.
     exec: resolveExec(config, role),
     gate,
-    approve: deps.approve,
+    approve,
     timeoutMs: toolTimeoutMs(config),
     maxOutputBytes: 32_000,
     // Created once per session and memoised, so file numbering is continuous
@@ -4007,6 +4060,7 @@ export async function runAgenticTurn(
         );
       }
 
+      callApproval = undefined;
       const outcome: ToolOutcome =
         (await prefetched.get(callIndex)) ??
         (await executeTool(call.name, call.args, ctx, offered));
@@ -4088,6 +4142,22 @@ export async function runAgenticTurn(
         summary: outcome.summary,
         args: deps.audit.text(JSON.stringify(call.args)),
         result: deps.audit.text(outcome.content),
+      });
+
+      // After the call and its record, never before: the shadow is told what
+      // happened and the loop takes nothing back. `turnUsage` here covers the
+      // model call that produced this tool call and not the next one, which
+      // has not been made yet.
+      shadow?.call({
+        tool: call.name,
+        args: call.args,
+        code: outcome.code,
+        bucket: mapBucket(outcome.code),
+        summary: outcome.summary,
+        gated,
+        standing,
+        approval: callApproval,
+        tokens: (turnUsage?.input ?? 0) + (turnUsage?.output ?? 0),
       });
 
       const bucket = mapBucket(outcome.code);
@@ -4714,6 +4784,13 @@ export async function runTask(
   };
   const surface_hash = recomputeManifest(config.gnomonDir).surface_hash;
 
+  // The decision-model shadow, when the surface declares one. Log-only: it is
+  // told what each turn did and changes none of it (shadow.ts).
+  const shadowStart = Date.now();
+  const shadow = ShadowRecorder.create(config, { warn });
+  // `--yes` answers for nobody; without it, nobody answers and the default is no.
+  const shadowApprover = options.yes ? "flag" : "default";
+
   audit.write("session_start", {
     surface_hash,
     // The trail names its harness for the same reason the record does.
@@ -4757,6 +4834,12 @@ export async function runTask(
       return Boolean(options.yes);
       };
 
+  shadow?.role(
+    shadowTurnInfo(sessionId, "t1", role, route, shadowStart),
+    input,
+    chain.length >= 2 ? `chain:${chain.join(">")}` : role
+  );
+
   const start = Date.now();
   const stageRecords: NonNullable<TaskRecord["stages"]> = [];
   let turn: TurnResult;
@@ -4783,6 +4866,7 @@ export async function runTask(
           stageInput
         );
         note(`[chain] stage ${i + 1}/${chain.length} — ${stageRole}`);
+        const stageInfo = shadowTurnInfo(sessionId, `t1.s${i + 1}`, stageRole, stageRoute);
         const r = await runAgenticTurn(stageState, stageRole, stageRoute, stageMsgs.messages, {
           approve: approveHere,
           progress: new Progress(ui, process.stderr as NodeJS.WriteStream),
@@ -4790,7 +4874,9 @@ export async function runTask(
           say: note,
           warn,
           audit: auditForTurn,
+          shadow: shadow?.turn(stageInfo, shadowApprover),
         });
+        shadow?.turnEnd(stageInfo, shadowOutcome(r, stageInfo.t0));
         stageRecords.push({
           stage: i + 1,
           role: stageRole,
@@ -4841,6 +4927,8 @@ export async function runTask(
       }
       turn = last!;
     } else {
+      // The run starts at session start, as it did in the bench's trails.
+      const turnInfo = shadowTurnInfo(sessionId, "t1", role, route, shadowStart);
       turn = await runAgenticTurn(state, role, route, built.messages, {
         approve: approveHere,
         progress: new Progress(ui, process.stderr as NodeJS.WriteStream),
@@ -4848,7 +4936,9 @@ export async function runTask(
         say: note,
         warn,
         audit: auditForTurn,
+        shadow: shadow?.turn(turnInfo, shadowApprover),
       });
+      shadow?.turnEnd(turnInfo, shadowOutcome(turn, turnInfo.t0));
     }
   } finally {
     // Subprocesses outlive the turn otherwise, and `gnomon task` is the entry
@@ -4898,6 +4988,8 @@ export async function runTask(
     output: audit.text(turn.content),
   });
   audit.write("session_end", { turns: 1, surface_hash });
+  // Bounded: a slow or dead shadow server costs a scripted run at most this.
+  await shadow?.flush();
 
   return {
     surface_hash,
@@ -7268,6 +7360,23 @@ export async function runPromptLoop(
     console.log("");
   }
 
+  // The decision-model shadow, when the surface declares one. Rebuilt when the
+  // surface reloads: a different surface is a different calibration key.
+  //
+  // Its notes arrive from background requests, at any moment -- printed then,
+  // they would land inside the spinner's row. So they wait for the prompt.
+  const shadowNotes: string[] = [];
+  let shadowRecorder: ShadowRecorder | undefined;
+  let shadowConfig: GnomonConfig | undefined;
+  const shadowFor = (c: GnomonConfig): ShadowRecorder | undefined => {
+    if (c !== shadowConfig) {
+      void shadowRecorder?.flush();
+      shadowRecorder = ShadowRecorder.create(c, { warn: (line) => shadowNotes.push(line) });
+      shadowConfig = c;
+    }
+    return shadowRecorder;
+  };
+
   try {
     while (true) {
       // The surface as it stands NOW. /models and the surface-edit reload put
@@ -7275,6 +7384,7 @@ export async function runPromptLoop(
       // was started with -- so a model picked mid-session was written, hashed
       // and announced, and the next turn still routed to the old one.
       const config = state.config;
+      for (const line of shadowNotes.splice(0)) console.log(paint(uiOf(state), "gray", line));
       // Show the prompt only when actually waiting on the user —
       // buffered (typed-ahead) lines replay silently instead.
       if (!closed && lineQueue.length === 0) {
@@ -7283,6 +7393,7 @@ export async function runPromptLoop(
       }
       const input = await readLine();
       if (input === null) {
+        await shadowRecorder?.flush();
         audit.write("session_end", {
           turns: state.exchanges.length,
           surface_hash: surfaceHash,
@@ -7683,6 +7794,14 @@ export async function runPromptLoop(
       // three would be worse than having no chain. So does a /role SWITCH --
       // see chainForTurn.
       const turnChain = chainForTurn(config, role, routingOf(state).default, prefixed);
+      // What a decision model would have routed this prompt to, beside what ran.
+      const shadow = shadowFor(config);
+      const shadowLabel = `t${state.exchanges.length + 1}`;
+      shadow?.role(
+        shadowTurnInfo(sessionIdOf(state), shadowLabel, role, route, start),
+        cleanedInput,
+        turnChain.length >= 2 ? `chain:${turnChain.join(">")}` : role
+      );
       let turn: TurnResult;
       try {
         if (turnChain.length >= 2) {
@@ -7706,6 +7825,9 @@ export async function runPromptLoop(
             progress.print(
               paint(ui, "gray", `  [chain] stage ${i + 1}/${turnChain.length} — ${stageRole}`)
             );
+            const stageInfo = shadowTurnInfo(
+              sessionIdOf(state), `${shadowLabel}.s${i + 1}`, stageRole, stageRoute
+            );
             const r = await runAgenticTurn(
               stageState,
               stageRole,
@@ -7719,8 +7841,10 @@ export async function runPromptLoop(
                 signal: controller.signal,
                 audit,
                 standingApproval: () => approveRestOfSession || approveRestOfTurn,
+                shadow: shadow?.turn(stageInfo, "asked"),
               }
             );
+            shadow?.turnEnd(stageInfo, shadowOutcome(r, stageInfo.t0));
             audit?.write("chain_stage", {
               stage: i + 1,
               of: turnChain.length,
@@ -7754,6 +7878,7 @@ export async function runPromptLoop(
           }
           turn = last!;
         } else {
+          const turnInfo = shadowTurnInfo(sessionIdOf(state), shadowLabel, role, route, start);
           turn = await runAgenticTurn(state, role, route, built.messages, {
             approve,
             progress,
@@ -7766,7 +7891,9 @@ export async function runPromptLoop(
             signal: controller.signal,
             audit,
             standingApproval: () => approveRestOfSession || approveRestOfTurn,
+            shadow: shadow?.turn(turnInfo, "asked"),
           });
+          shadow?.turnEnd(turnInfo, shadowOutcome(turn, turnInfo.t0));
         }
       } finally {
         cancelTurn = null;

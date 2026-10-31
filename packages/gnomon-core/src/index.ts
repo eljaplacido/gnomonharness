@@ -37,6 +37,8 @@ export * from "./audit.js";
 // banner carried a hardcoded version literal instead: the function that knows
 // which build is running was not reachable from the package that prints it.
 export * from "./build.js";
+// The decision-model shadow: log-only records for agentcenter's readout.
+export * from "./shadow.js";
 export * from "./session_store.js";
 export * from "./explain.js";
 export * from "./credentials.js";
