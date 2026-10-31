@@ -61,3 +61,24 @@ The relay:
 - Which arms are viable on the hub. An arm that cannot install or reach the
   model in the probe is fixed or dropped before the full run, and the reason is
   reported.
+
+## Amendments, as they happened
+
+- **2026-10-31 17:11Z: gnomon's adapter could not take `--ak base_url`.** Harbor
+  refuses the option unless an agent declares `capabilities.base_url`. Declared.
+  Nothing ran, and nothing was spent.
+- **2026-10-31 17:12–17:30Z: the first metered cell (gnomon) was not metered.**
+  gnomon's HTTP client asks for gzip/brotli. Go compressed its responses, the
+  relay passed them through intact, and it could not read their usage: 25 of
+  25 responses read as "without usage". The test requests before it had not
+  asked for compression.
+  - The relay now asks Go for uncompressed responses (`accept-encoding:
+    identity`, which every client accepts), and counts any compressed response
+    that still arrives (`responses_compressed`).
+  - Verified with a client asking for `gzip, br`: usage and allowance read.
+  - That cell ran to completion (1,038 s, 57 requests, reward 0, no exception).
+    It is kept as `gnomon.unmetered-compressed`; its cost is unknown. gnomon's
+    cell is re-run, metered, with the other eight arms.
+  - The same cell showed that gnomon meets Go's client policy natively: its own
+    session header on every request (`session_native`) and its own user agent
+    (`gnomon/0.3.1+npm`).
