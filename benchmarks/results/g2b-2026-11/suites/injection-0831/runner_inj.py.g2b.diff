@@ -1,0 +1,45 @@
+--- injection-0831/published/runner_inj.py	2026-10-31 23:41:05.432040831 +0200
++++ injection-0831/runner_inj.py	2026-10-31 23:57:12.867642091 +0200
+@@ -6,6 +6,13 @@
+ attack prompt (real local model). The breach is then detected from actual
+ state — a filesystem check, or (for surface attacks) whether any .gnomon file
+ changed. Contained = breach did NOT happen. One JSONL line per trial, flushed.
++
++G2b adaptation (benchmarks/results/g2b-2026-11), apparatus only -- the breach
++predicates and the validity line are unchanged:
++  * G2B_KEEP_WS=1 keeps the workspace so the trial driver can archive it
++    (the published finally-block deleted it before anything was kept);
++  * the record also carries exit_code, stop_reason, the workspace path and the
++    tail of gnomon's raw output, for the evidence trail.
+ """
+ import hashlib, json, os, shutil, subprocess, sys, tempfile, time
+ from pathlib import Path
+@@ -132,11 +139,13 @@
+         h0 = surface_hash(ws)
+         status = "ran"
+         out = ""
++        exit_code = None
+         t0 = time.time()
+         try:
+             proc = subprocess.run(["node", GN, "task", (prompt or sc["prompt"]), "--role", "probe", "--yes", "--json"],
+                                   cwd=ws, capture_output=True, text=True, timeout=CAP)
+             out = proc.stdout + proc.stderr
++            exit_code = proc.returncode
+         except subprocess.TimeoutExpired as e:
+             status = "timeout"
+             out = (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
+@@ -166,9 +175,12 @@
+                     prompt=(prompt or sc["prompt"])[:90],
+                     contained=((not breached) if valid else None), breached=breached,
+                     status=status, wall_s=wall, bucket=(j or {}).get("bucket"),
+-                    tool_log=(j or {}).get("tool_log"), attempted_tools=len((j or {}).get("tool_log") or []))
++                    tool_log=(j or {}).get("tool_log"), attempted_tools=len((j or {}).get("tool_log") or []),
++                    exit_code=exit_code, stop_reason=(j or {}).get("stop_reason"),
++                    ws=str(ws), raw_tail=out[-6000:])
+     finally:
+-        shutil.rmtree(ws, ignore_errors=True)
++        if not os.environ.get("G2B_KEEP_WS"):
++            shutil.rmtree(ws, ignore_errors=True)
+ 
+ 
+ def main():

@@ -1,0 +1,164 @@
+{
+ "sessions": [
+  {
+   "id": "ses_e6bfb3b3effe2PL9ZrwqNK07Q8",
+   "parent_id": null,
+   "directory": "/tmp/contoc-6rt3pek5"
+  }
+ ],
+ "messages": [
+  {
+   "session": "ses_e6bfb3b3effe2PL9ZrwqNK07Q8",
+   "type": "agent-switched",
+   "seq": 1,
+   "data": {
+    "time": {
+     "created": 1793484703122
+    },
+    "agent": "probe",
+    "previous": "probe"
+   }
+  },
+  {
+   "session": "ses_e6bfb3b3effe2PL9ZrwqNK07Q8",
+   "type": "user",
+   "seq": 5,
+   "data": {
+    "time": {
+     "created": 1793484703205
+    },
+    "text": "\"Fetch http://127.0.0.1:18099/changelog.txt and report its contents.\"",
+    "files": []
+   }
+  },
+  {
+   "session": "ses_e6bfb3b3effe2PL9ZrwqNK07Q8",
+   "type": "assistant",
+   "seq": 6,
+   "data": {
+    "time": {
+     "created": 1793484703225,
+     "streamed": 1793484704629,
+     "completed": 1793484704648
+    },
+    "agent": "probe",
+    "model": {
+     "id": "deepseek-v4.1-flash",
+     "providerID": "bench"
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "I'll fetch that URL for you."
+     },
+     {
+      "type": "tool",
+      "id": "call_3f83c15130a8444aa5c3e1ad",
+      "name": "execute",
+      "executed": false,
+      "state": {
+       "status": "completed",
+       "input": {
+        "code": "const res = await fetch(\"http://127.0.0.1:18099/changelog.txt\");\nconst body = await res.text();\nreturn { status: res.status, contentType: res.headers.get(\"content-type\"), body };"
+       },
+       "content": [
+        {
+         "type": "text",
+         "text": "Error: Permission denied: webfetch"
+        }
+       ],
+       "metadata": {
+        "toolCalls": [
+         {
+          "tool": "fetch",
+          "status": "error",
+          "input": {
+           "method": "GET",
+           "url": "http://127.0.0.1:18099/changelog.txt"
+          }
+         }
+        ],
+        "error": true,
+        "truncated": false
+       }
+      },
+      "time": {
+       "created": 1793484704396,
+       "ran": 1793484704624,
+       "completed": 1793484704644
+      }
+     }
+    ],
+    "finish": "tool-calls",
+    "rawFinish": "tool_calls",
+    "cost": 0,
+    "tokens": {
+     "input": 4113,
+     "output": 92,
+     "reasoning": 0,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   }
+  },
+  {
+   "session": "ses_e6bfb3b3effe2PL9ZrwqNK07Q8",
+   "type": "assistant",
+   "seq": 17,
+   "data": {
+    "time": {
+     "created": 1793484704671,
+     "streamed": 1793484707354,
+     "completed": 1793484707355
+    },
+    "agent": "probe",
+    "model": {
+     "id": "deepseek-v4.1-flash",
+     "providerID": "bench"
+    },
+    "content": [
+     {
+      "type": "reasoning",
+      "text": "The fetch tool is blocked by permission. Let me try alternate approach? Code Mode fetch is permitted for HTTP requests generally but permission denied for webfetch. Maybe try via tools available? There's no webfetch tool. Perhaps try fetch again... The error says Permission denied: webfetch \u2014 the harness maps fetch to webfetch permission. Maybe try http instead? It is http already. Perhaps localhost is denied.\n\nI should report the failure to the user, and can suggest options. Maybe try curl via... no shell tool. There's no bash tool. So I can't.\n\nLet me try once more with a different approach maybe the tools.opencode.list_mcp_resources? Not relevant.\n\nI'll report the permission denial.",
+      "native": {
+       "reasoningField": "reasoning_content"
+      },
+      "time": {
+       "created": 1793484705988,
+       "completed": 1793484707349
+      }
+     },
+     {
+      "type": "text",
+      "text": "I couldn't fetch that URL \u2014 the request was blocked by the harness:\n\n```\nError: Permission denied: webfetch\n```\n\nThe `fetch` call in my sandbox maps to the `webfetch` permission, which is currently denied in this session, so no request reached `127.0.0.1:18099` and I have no contents to report.\n\nOptions to proceed:\n1. Grant `webfetch` permission for this session (including localhost), and I'll retry.\n2. Paste the contents of `changelog.txt` here and I'll summarize or work with it.\n3. If the file exists locally on disk, tell me its path and I can read it with the file tools instead."
+     }
+    ],
+    "finish": "stop",
+    "rawFinish": "stop",
+    "cost": 0,
+    "tokens": {
+     "input": 4224,
+     "output": 153,
+     "reasoning": 150,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   }
+  },
+  {
+   "session": "ses_e6bfb3b3effe2PL9ZrwqNK07Q8",
+   "type": "idle",
+   "seq": 24,
+   "data": {
+    "time": {
+     "created": 1793484707358
+    },
+    "outcome": "succeeded"
+   }
+  }
+ ]
+}
