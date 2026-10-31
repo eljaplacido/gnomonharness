@@ -12,12 +12,26 @@ import { appendFileSync } from "node:fs";
 const PORT = Number(process.env.FAKE_PORT ?? 19700);
 const LATENCY = Number(process.env.FAKE_LATENCY_MS ?? 0);
 const LOG = process.env.UX1_LOG ?? "/dev/null";
-const REPLY = "OK.";
+// The minimal valid "done" in the harness's own protocol. Most end a turn on plain
+// text; mini-swe-agent needs a bash block carrying its submit marker, and a plain
+// "OK." would make it retry until a limit -- slow for a reason that is not the harness.
+const REPLY = process.env.FAKE_REPLY ?? "OK.";
+// FAKE_TOOL_CALL='{"name":"bash","arguments":{"command":"..."}}' answers with that one
+// tool call instead (mini-swe-agent 2.4.6 ends a task only through a bash tool call).
+const TOOL = process.env.FAKE_TOOL_CALL ? JSON.parse(process.env.FAKE_TOOL_CALL) : null;
+const toolCall = (withIndex) => ({
+  ...(withIndex ? { index: 0 } : {}), id: "call_fake_1", type: "function",
+  function: { name: TOOL.name, arguments: JSON.stringify(TOOL.arguments) },
+});
 
 function chatResponse(model) {
   return {
     id: "fake-1", object: "chat.completion", created: Math.floor(Date.now() / 1000), model,
-    choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: REPLY } }],
+    choices: [{
+      index: 0, finish_reason: TOOL ? "tool_calls" : "stop",
+      message: TOOL ? { role: "assistant", content: "", tool_calls: [toolCall(false)] }
+                    : { role: "assistant", content: REPLY },
+    }],
     usage: { prompt_tokens: 0, completion_tokens: 1, total_tokens: 1 },
   };
 }
@@ -47,8 +61,9 @@ http
         if (j.stream) {
           res.writeHead(200, { "content-type": "text/event-stream" });
           const base = { id: "fake-1", object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model };
-          res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: REPLY } }] })}\n\n`);
-          res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 0, completion_tokens: 1, total_tokens: 1 } })}\n\n`);
+          const delta = TOOL ? { role: "assistant", tool_calls: [toolCall(true)] } : { role: "assistant", content: REPLY };
+          res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta }] })}\n\n`);
+          res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: TOOL ? "tool_calls" : "stop" }], usage: { prompt_tokens: 0, completion_tokens: 1, total_tokens: 1 } })}\n\n`);
           res.end("data: [DONE]\n\n");
         } else {
           res.writeHead(200, { "content-type": "application/json" });

@@ -60,6 +60,8 @@ class MiniSwePeer(MiniSweAgent):
             "OPENAI_BASE_URL": _base(),
             "MSWEA_COST_TRACKING": "ignore_errors",
             "PEER_VERSION": self.VERSION,
+            # The newest litellm without the 1.106.0 MCP-import crash (see the setup).
+            "LITELLM_VERSION": "1.105.7",
         })
         return env
 

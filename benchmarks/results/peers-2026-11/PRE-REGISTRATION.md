@@ -199,3 +199,27 @@ overlap the tests.
 their working time differs by their setup time. Each setup now prints
 `ARM_SETUP_END=<epoch>`, and the collector reports setup seconds per arm. This is
 descriptive and is reported beside the pass rates. It is not corrected for.
+
+## Amendment before launch: the mini-swe-agent arm pins litellm
+
+Found by the smoke run, 2026-10-31 15:55Z, before any full-run trial. The mini
+cell on hello-world crashed before its first model request:
+`ModuleNotFoundError: No module named 'mcp'`.
+- mini-swe-agent 2.4.6 (2026-07-23) accepts any `litellm >= 1.75.5`, so each
+  container installs the newest, 1.106.6.
+- From **1.106.0**, litellm's `completion()` imports its proxy's MCP handler
+  whenever tools are passed. `mcp` is only a `proxy`/`mcp` extra, so the import
+  fails.
+- Bisected in a clean venv against UX1's fake model: 1.105.0 and 1.105.7 work;
+  1.106.0, 1.106.5 and 1.106.6 crash.
+
+The arm now installs `litellm==1.105.7`, the newest release without the bug,
+and records it in `arm-version.txt`
+(`mini-swe-agent 2.4.6 litellm 1.105.7`). mini's own code is unchanged. Without
+the pin, every mini cell would have run the agent with no model call: a valid
+tb verdict, "unresolved", for a harness that never ran. The failed smoke cell
+is kept under `runs-smoke-failed/`, and the mini smoke is re-run before launch.
+
+This also belongs in the result: as of 2026-10-31, a fresh
+`pip install mini-swe-agent==2.4.6` cannot call a model with tools until
+litellm fixes this or is pinned.
