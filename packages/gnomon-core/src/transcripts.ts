@@ -20,7 +20,8 @@
  *                their changes are in the same diff. A subagent file names
  *                its agent type in `attributionAgent`.
  *   opencode     `opencode export <session>` (one JSON document: `info.agent`,
- *                `messages[].parts[]` with `type: "tool"`, `tool: "bash"`,
+ *                `messages[].parts[]` with `type: "tool"`, `tool: "bash"`
+ *                (opencode V2: `tool: "shell"`, the same part otherwise),
  *                `state.input.command`), or the event stream of
  *                `opencode run --format json` (one JSON event per line,
  *                `{type, timestamp, sessionID, …}`; a `tool_use` event's
@@ -152,7 +153,10 @@ function readOpenCode(path: string, text: string): TranscriptRead {
   }
   const commands: TranscriptCommand[] = [];
   const fromPart = (part: unknown, at: string) => {
-    if (!isObj(part) || part.type !== "tool" || part.tool !== "bash") return;
+    // opencode 1.x names its shell tool "bash"; V2 (2.2.5) names it "shell", with the
+    // same part shape. Reading only "bash" made check 5 read zero commands from every
+    // V2 run -- skipped, not failed (G1 benchmark, 2026-11-01). Both are the shell.
+    if (!isObj(part) || part.type !== "tool" || (part.tool !== "bash" && part.tool !== "shell")) return;
     const state = isObj(part.state) ? part.state : {};
     const input = isObj(state.input) ? state.input : {};
     if (typeof input.command === "string") commands.push({ tool: "bash", command: input.command, at });
