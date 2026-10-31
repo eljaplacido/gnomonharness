@@ -28,6 +28,11 @@ PEERS_SETUP = UX1.parent / "peers-2026-11" / "apparatus" / "gnomon-setup-peers.s
 PORT = 19700
 BASE = f"http://127.0.0.1:{PORT}/v1"
 PROMPT = "Reply with OK."
+# UX1b: a scripted session. The fake model drives each harness's own shell tool through
+# `cat notes/chunk_<i>.txt` for SESSION_TURNS turns; the notes are written by the runner.
+SESSION_TURNS = 10
+SESSION_PROMPT = (f"Read notes/chunk_0.txt through notes/chunk_{SESSION_TURNS - 1}.txt one at a time "
+                  "with the shell, then reply Done.")
 CAP_S = 120
 SUBMIT = {"name": "bash", "arguments": {"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"}}
 
@@ -147,7 +152,17 @@ def port_open() -> bool:
         return s.connect_ex(("127.0.0.1", PORT)) == 0
 
 
-def one_run(out: Path, arm: str, phase: str, i: int, home: Path) -> dict:
+def note(i: int) -> str:
+    # 2 KB of deterministic, incompressible-looking text per note
+    import hashlib as _h
+    lines, k = [], 0
+    while sum(len(l) + 1 for l in lines) < 2048:
+        lines.append(_h.sha256(f"note-{i}-{k}".encode()).hexdigest() + " " + _h.sha256(f"x-{i}-{k}".encode()).hexdigest()[:30])
+        k += 1
+    return "\n".join(lines)[:2047] + "\n"
+
+
+def one_run(out: Path, arm: str, phase: str, i: int, home: Path, session: bool = False) -> dict:
     a = ARMS[arm]
     rd = out / "runs" / f"{phase}-{i:03d}-{arm}"
     rd.mkdir(parents=True)
@@ -156,14 +171,25 @@ def one_run(out: Path, arm: str, phase: str, i: int, home: Path) -> dict:
     env = {**base_env(home), **a["env"]}
     subprocess.run(["git", "init", "-q", "."], cwd=proj, env=env, check=True)
     (proj / "README.md").write_text("# demo\n")
+    if session:
+        (proj / "notes").mkdir()
+        for k in range(SESSION_TURNS):
+            (proj / "notes" / f"chunk_{k}.txt").write_text(note(k))
     a["setup"](home, proj, env)  # untimed: in daily dev the surface already exists
 
     log = rd / "requests.jsonl"
     log.touch()
     assert not port_open(), "something is already on the fake model's port"
+    fake_env = {"PATH": os.environ["PATH"], "FAKE_PORT": str(PORT), "UX1_LOG": str(log), **a["fake"]}
+    cmd = list(a["cmd"])
+    if session:
+        fake_env.pop("FAKE_TOOL_CALL", None)
+        fake_env["FAKE_SCRIPT_TURNS"] = str(SESSION_TURNS)
+        if arm == "mini":
+            fake_env["FAKE_SCRIPT_SUBMIT"] = "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+        cmd = [SESSION_PROMPT if c == PROMPT else c for c in cmd]
     fake = subprocess.Popen(["node", str(HERE / "fake-model.mjs")],
-                            env={"PATH": os.environ["PATH"], "FAKE_PORT": str(PORT),
-                                 "UX1_LOG": str(log), **a["fake"]},
+                            env=fake_env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(200):
         if port_open():
@@ -174,7 +200,7 @@ def one_run(out: Path, arm: str, phase: str, i: int, home: Path) -> dict:
         t0 = time.time_ns()
         with open(rd / "stdout.txt", "wb") as so, open(rd / "stderr.txt", "wb") as se:
             # %M peak RSS (KB, largest process), %U/%S CPU seconds of the whole tree
-            p = subprocess.Popen(["/usr/bin/time", "-f", "%M %U %S", "-o", str(rd / "rusage.txt")] + a["cmd"],
+            p = subprocess.Popen(["/usr/bin/time", "-f", "%M %U %S", "-o", str(rd / "rusage.txt")] + cmd,
                                  cwd=proj, env=env, stdin=subprocess.DEVNULL, stdout=so, stderr=se)
             # A blocking wait, not wait(timeout=...): that polls with a backoff capped at
             # 50 ms, and the first probe's wall times came back in 50 ms steps.
@@ -189,7 +215,9 @@ def one_run(out: Path, arm: str, phase: str, i: int, home: Path) -> dict:
     finally:
         fake.terminate()
         fake.wait()
-    reqs = [json.loads(l) for l in log.read_text().splitlines() if l.strip()]
+    lines = [json.loads(l) for l in log.read_text().splitlines() if l.strip()]
+    reqs = [r for r in lines if "path" in r]
+    done = {r["arrived"]: r["t_done"] for r in lines if "t_done" in r}
     chat = [r for r in reqs if "chat/completions" in r["path"] or r["path"].endswith("/responses")]
     ru = (rd / "rusage.txt").read_text().strip().splitlines() if (rd / "rusage.txt").exists() else []
     ru = ru[-1].split() if ru and len(ru[-1].split()) == 3 else None
@@ -211,6 +239,19 @@ def one_run(out: Path, arm: str, phase: str, i: int, home: Path) -> dict:
         # valid: the harness exited 0 after reaching the model at least once
         "valid": rc == 0 and len(chat) > 0,
     }
+    if session:
+        shells = {"bash", "shell", "run_shell_command", "developer__shell"}
+        main = [r for r in chat if shells & set(r.get("tool_names") or [])]
+        turns = max((r.get("turn_results") or 0 for r in chat), default=0)
+        # The harness's own time per turn: from our response leaving to its next request
+        # arriving. It includes running `cat`, which is the same for every arm.
+        gaps = [nxt["t"] - done[prev["t"]] for prev, nxt in zip(main, main[1:]) if prev["t"] in done]
+        rec.update({
+            "turns_completed": turns,
+            "session_bytes": [r["bytes"] for r in main],
+            "turn_gap_ms": gaps,
+            "valid": rc == 0 and turns >= SESSION_TURNS,
+        })
     shutil.rmtree(proj, ignore_errors=True)
     with open(out / "ux1-runs.jsonl", "a") as f:
         f.write(json.dumps(rec) + "\n")
@@ -223,7 +264,8 @@ def one_run(out: Path, arm: str, phase: str, i: int, home: Path) -> dict:
 
 def main() -> None:
     mode = sys.argv[1]
-    n = int(sys.argv[2]) if len(sys.argv) > 2 else {"probe": 1, "warm": 20, "first": 3}[mode]
+    n = int(sys.argv[2]) if len(sys.argv) > 2 else {"probe": 1, "warm": 20, "first": 3, "session": 10}[mode]
+    session = mode == "session"
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     out = UX1 / "runs" / f"{mode}-{stamp}"
     out.mkdir(parents=True)
@@ -238,7 +280,7 @@ def main() -> None:
     (out / "versions.json").write_text(json.dumps(versions, indent=1))
     print(json.dumps(versions))
 
-    if mode in ("probe", "warm"):
+    if mode in ("probe", "warm", "session"):
         homes = {arm: out / "homes" / arm for arm in arms}
         for h in homes.values():
             h.mkdir(parents=True)
@@ -246,11 +288,11 @@ def main() -> None:
         # migrations and the page cache settle here.
         for w in range(2):
             for arm in arms:
-                one_run(out, arm, "warmup", w, homes[arm])
+                one_run(out, arm, "warmup", w, homes[arm], session)
         for r in range(n):
             for k in range(len(arms)):
                 arm = arms[(r + k) % len(arms)]
-                one_run(out, arm, "warm" if mode == "warm" else "probe", r, homes[arm])
+                one_run(out, arm, {"warm": "warm", "probe": "probe"}.get(mode, mode), r, homes[arm], session)
     else:
         for r in range(n):
             for k in range(len(arms)):

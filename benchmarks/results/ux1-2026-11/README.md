@@ -166,3 +166,43 @@ change: it runs the same code, the request bytes are identical, and no
 surface, bucket or enumeration is involved. "If behaviour changed, the hash
 changed" is not engaged, because behaviour did not change. The freshness
 check above is what keeps that true once the bundle ships.
+
+## UX1b: a scripted 10-turn session (`runs/session-20261031T213415Z/`)
+
+Design: the UX1b section of `PRE-REGISTRATION.md`. The fake model drives each
+harness's own shell tool through `cat notes/chunk_<i>.txt` ten times; every arm
+receives byte-identical tool results. n = 10 per arm, 60 of 60 runs valid.
+
+| arm | base context (1st request) | growth per turn | total sent | harness time per turn | wall | CPU | RSS |
+|---|---|---|---|---|---|---|---|
+| **gnomon v0.3.1** | **8.4 KB** | 2.3 KB | **215 KB** | 49 ms | 663 ms | **275 ms** | **88 MB** |
+| gnomon (checkout) | 8.4 KB | 2.3 KB | 215 KB | 50 ms | 872 ms | 565 ms | 118 MB |
+| goose | 17.6 KB | 2.3 KB | 314 KB | **22 ms** | **577 ms** | 395 ms | 139 MB |
+| opencode V2 | 34.0 KB | 2.3 KB | 491 KB | 32 ms | 1,315 ms | 2,655 ms | 422 MB |
+| Qwen Code | 69.0 KB | 2.4 KB | 921 KB | 56 ms | 1,764 ms | 2,490 ms | 414 MB |
+| mini-swe-agent | 3.5 KB | 2.4 KB | 167 KB | 11 ms | 2,248 ms | 2,180 ms | 212 MB |
+
+- **Every arm grows by the same ~2.3 KB per turn.** None compacts within 10
+  turns, so the differences are base payload: system prompt and tool schemas.
+  Among harnesses that ship a real tool set, gnomon's is the smallest, and it
+  re-sends the least over the session.
+- **gnomon's own time per tool turn was its one clear loss: 49 ms against
+  goose's 22.** Root cause, found the same night:
+  - The audit trail was ablated, on vs off, n = 10 each: 48 vs 48 ms. Not it.
+  - A CPU profile showed the session mostly idle.
+  - The bash tool waited a fixed 40 ms after every command exited (`setTimeout(…,
+    40)` on `exit`) to drain output. That guards against backgrounded jobs that
+    hold the pipes open, but it charged every command.
+  - **Fix, PR #61:** also finish on `close`, which means both pipes are drained,
+    and keep the drain only for the backgrounded case.
+  - Measured with this runner, interleaved, n = 10 each: **48 → 9 ms per tool
+    turn, 817 → 417 ms session wall**, identical bytes, and 186/186 tool tests
+    pass.
+- Two smaller costs the same profile found:
+  - two synchronous `git` spawns per task, for the tree-delta measurement
+    (~35 ms per task);
+  - `harnessBuild()` asking git inside an installed copy (~21 ms per start;
+    removed by PR #58's fix).
+  - Also noted for large repos: `worktreeStampOf` walks and stats the whole
+    tree before and after every shell command. It is cheap here (12 files) but
+    scales with the repository, and is worth measuring on a real one.

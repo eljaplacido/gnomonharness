@@ -132,3 +132,38 @@ Two facts found on the way, reported rather than fixed here:
   `gnomon/0.3.1+1afd251-dirty`, the commit of the repository around it. A
   project-local or CI `npm i` would stamp the project's commit into gnomon's
   audit records as the harness build.
+
+## UX1b, a scripted session (added 2026-10-31 ~21:40Z, before its measured runs)
+
+One probe run (`runs/session-20261031T213322Z`, n = 1 per arm) proved the
+instrument and is not analysed.
+
+**Question:** over a multi-turn session, how much does each harness re-send per
+turn, and how long does it take between a model response and its next request?
+
+**Design:**
+- the same six arms, homes and isolation as the six-arm warm rerun;
+- the fake model drives the harness's **own shell tool** (`bash`, `shell` or
+  `run_shell_command`, found by name in the request's tools);
+- it runs `cat notes/chunk_<i>.txt` for i = 0..9, then ends. It replies "Done."
+  for most arms; for mini-swe-agent, whose protocol has no other end, it sends
+  its submit command;
+- each note is 2 KB of deterministic text written by the runner, so every arm
+  receives byte-identical tool results. The only command run is that `cat`;
+- n = 10 per arm, interleaved, after 2 warm-ups.
+
+**A run is valid** if it exits 0 and completed all 10 tool turns.
+
+**Endpoints, per arm (medians, IQR):**
+- bytes of the first and the last main request;
+- per-turn growth: (last − first) / 10;
+- total bytes sent;
+- the harness's time per turn, from our response's last byte to its next
+  request (it includes running `cat`, the same for every arm);
+- wall clock, CPU and peak RSS.
+
+The comparison is gnomon (both forms) against each peer, scored as UX1 is.
+
+**What it cannot say:** 10 turns is below any compaction threshold, so this
+measures a harness's base context and per-turn framing, not compaction. A real
+model's turns take seconds, and those are shared by every arm.
