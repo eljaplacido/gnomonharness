@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Peer-harness benchmark on gx10. Design: ../PRE-REGISTRATION.md.
 #
-#   MODE=smoke ./run_peers.sh   hello-world x 4 arms x 1: proves every arm installs and
+#   MODE=smoke ./run_peers.sh   hello-world x 5 arms x 1: proves every arm installs and
 #                               reaches the model. Not analysed.
-#   MODE=full  ./run_peers.sh   16 tasks x 4 arms x 3 attempts, interleaved.
+#   MODE=full  ./run_peers.sh   16 tasks x 5 arms x 3 attempts, interleaved.
 #
 # Interleaved, never blocked by arm: within each attempt the tasks run in a seeded
-# shuffle, and on each task the four arms run back to back in an order that rotates
+# shuffle, and on each task the five arms run back to back in an order that rotates
 # with the task. Drift over a long run (AgentLab exp. 61/62 measured it on
 # byte-identical config) then lands on every arm alike instead of aliasing with one.
 #
@@ -22,9 +22,9 @@ MODEL_ID="qwen3.6-35b"
 TIMEOUT=900
 LOCK="$HOME/.opencode/central-brain/runtime/decisionbench/gpu.lock"
 STATUS="$BENCH/STATUS-$MODE.txt"
-ARMS=(gnomon mini goose qwen)
-declare -A CLS=([gnomon]=GnomonPeer [mini]=MiniSwePeer [goose]=GoosePeer [qwen]=QwenPeer)
-declare -A MODEL=([gnomon]="local/$MODEL_ID" [mini]="openai/$MODEL_ID" [goose]="openai/$MODEL_ID" [qwen]="local/$MODEL_ID")
+ARMS=(gnomon mini goose qwen opencode)
+declare -A CLS=([gnomon]=GnomonPeer [mini]=MiniSwePeer [goose]=GoosePeer [qwen]=QwenPeer [opencode]=OpencodePeer)
+declare -A MODEL=([gnomon]="local/$MODEL_ID" [mini]="openai/$MODEL_ID" [goose]="openai/$MODEL_ID" [qwen]="local/$MODEL_ID" [opencode]="llamacpp/$MODEL_ID")
 
 case "$MODE" in
   smoke) TASKS=(hello-world); ATTEMPTS=1 ;;
@@ -69,8 +69,8 @@ for k in $(seq 1 "$ATTEMPTS"); do
   mapfile -t ORDER < <(printf '%s\n' "${TASKS[@]}" | python3 -I -c "import random,sys; t=sys.stdin.read().split(); random.Random($k).shuffle(t); print('\n'.join(t))")
   for i in "${!ORDER[@]}"; do
     task="${ORDER[$i]}"
-    for j in 0 1 2 3; do
-      arm="${ARMS[$(( (i + k + j) % 4 ))]}"
+    for j in "${!ARMS[@]}"; do
+      arm="${ARMS[$(( (i + k + j) % ${#ARMS[@]} ))]}"
       id="p-k$k-$arm-$task"
       if compgen -G "$BENCH/runs/$id/*/*/results.json" >/dev/null; then say "SKIP $id (done)"; continue; fi
       say "START $id"

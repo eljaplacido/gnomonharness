@@ -15,8 +15,10 @@ from datetime import datetime
 from pathlib import Path
 
 runs, sha = Path(sys.argv[1]), sys.argv[2]
-CELL = re.compile(r"^p-k(\d+)-(gnomon|mini|goose|qwen)-(.+)$")
-EXCLUDED_TASKS = {"count-call-stack"}  # ships its own answer key (pre-registered)
+CELL = re.compile(r"^p-k(\d+)-(gnomon|mini|goose|qwen|opencode)-(.+)$")
+EXCLUDED_TASKS = {"count-call-stack"}
+ARMS = ("gnomon", "mini", "goose", "qwen", "opencode")
+PEERS = ARMS[1:]  # ships its own answer key (pre-registered)
 
 
 def seconds(a, b):
@@ -87,6 +89,8 @@ for d in sorted(runs.iterdir()):
         "agent_s": seconds(r.get("agent_started_at"), r.get("agent_ended_at")),
         "version": version,
         "tokens": tokens,
+        "auto_rejects": (logs / "opencode.log").read_text(errors="ignore").count("auto-reject")
+                        if (logs / "opencode.log").exists() else None,
     })
 
 valid = [c for c in cells if c["state"] == "valid" and c["task"] not in EXCLUDED_TASKS]
@@ -96,7 +100,7 @@ for c in valid:
 
 summary = {"gnomon_sha": sha, "arms": {}, "paired_vs_gnomon": {}, "within_arm_flip": {}}
 print(f"{'arm':8s} {'valid':>5s} {'pass':>5s} {'rate':>6s}  95% Wilson    apparatus  versions")
-for arm in ("gnomon", "mini", "goose", "qwen"):
+for arm in ARMS:
     v = by[arm]
     n, p = len(v), sum(v.values())
     lo, hi = wilson(p, n)
@@ -109,7 +113,7 @@ for arm in ("gnomon", "mini", "goose", "qwen"):
     print(f"{arm:8s} {n:5d} {p:5d} {rate:>6s}  {ci}  {app:9d}  {', '.join(vers)[:60]}")
 
 print("\npaired against gnomon (cells where both arms have a verdict):")
-for arm in ("mini", "goose", "qwen"):
+for arm in PEERS:
     pairs = set(by["gnomon"]) & set(by[arm])
     b = sum(1 for x in pairs if by["gnomon"][x] and not by[arm][x])   # gnomon only
     c = sum(1 for x in pairs if by[arm][x] and not by["gnomon"][x])   # peer only
@@ -122,7 +126,7 @@ for arm in ("mini", "goose", "qwen"):
           f"exact McNemar p={p:.4f}  -> {verdict}")
 
 print("\nwithin-arm flip (tasks whose 3 attempts disagree):")
-for arm in ("gnomon", "mini", "goose", "qwen"):
+for arm in ARMS:
     per_task = defaultdict(list)
     for (task, k), ok in by[arm].items():
         per_task[task].append(ok)
@@ -133,7 +137,7 @@ for arm in ("gnomon", "mini", "goose", "qwen"):
 
 print("\ntokens (metered at the relay; one trial at a time, so a cell's traffic is its own):")
 summary["tokens"] = {}
-tok = {arm: {(c["task"], c["k"]): c for c in valid if c["arm"] == arm and c.get("tokens")} for arm in ("gnomon", "mini", "goose", "qwen")}
+tok = {arm: {(c["task"], c["k"]): c for c in valid if c["arm"] == arm and c.get("tokens")} for arm in ARMS}
 for arm, cs in tok.items():
     totals = [c["tokens"]["prompt"] + c["tokens"]["completion"] for c in cs.values()]
     solved = [c for c in cs.values() if c["resolved"]]
@@ -149,7 +153,7 @@ for arm, cs in tok.items():
           f"per resolved task={round(per_solved) if per_solved else '-':>9} "
           f"cache share={f'{share:.2f}' if share is not None else '-':>5} unmetered={unmet}")
 print("  paired against gnomon (sign test on cells both completed; fewer tokens wins):")
-for arm in ("mini", "goose", "qwen"):
+for arm in PEERS:
     pairs = set(tok["gnomon"]) & set(tok[arm])
     tot = lambda c: c["tokens"]["prompt"] + c["tokens"]["completion"]
     g = sum(1 for x in pairs if tot(tok["gnomon"][x]) < tot(tok[arm][x]))
@@ -157,6 +161,12 @@ for arm in ("mini", "goose", "qwen"):
     p = mcnemar_exact(g, q)  # the same exact binomial sign test
     summary["tokens"][f"gnomon_vs_{arm}"] = {"pairs": len(pairs), "gnomon_fewer": g, "peer_fewer": q, "sign_test_p": p}
     print(f"    gnomon vs {arm:6s} pairs={len(pairs):3d} gnomon fewer={g:2d} peer fewer={q:2d} exact sign-test p={p:.4f}")
+
+oc = [c for c in cells if c["arm"] == "opencode" and c.get("auto_rejects") is not None]
+blocked = sum(1 for c in oc if c["auto_rejects"])
+summary["opencode_auto_reject_cells"] = blocked
+print(f"\nopencode permission handicap: {blocked}/{len(oc)} cells logged an auto-reject "
+      f"(the published run's failure mode; nonzero means its score is a floor)")
 
 durs = [c["agent_s"] for c in valid if c["agent_s"] is not None]
 at_cap = sum(1 for s in durs if s >= 890)

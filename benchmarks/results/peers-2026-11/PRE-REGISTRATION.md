@@ -8,20 +8,28 @@ and are not analysed.
 ## Question
 
 On the same model, the same tasks and the same time cap, does gnomon's harness
-resolve more or fewer Terminal-Bench tasks than three peers? The peers are the
-minimal floor and reference harness, the peer gnomon was last compared with, and
-a harness built for the same model family. "Same" is enforced; see below.
+resolve more or fewer Terminal-Bench tasks than four peers? "Same" is enforced;
+see below. The peers are:
+- the minimal floor and reference harness;
+- the peer gnomon was last compared with;
+- a harness built for the same model family;
+- **opencode**, the peer gnomon's published claims are built around. The
+  gnomonharness.com headline is "50.0% vs 47.1%, p = 1.0, 34 tasks", a 2026-09-02
+  run whose README says the definitive version still had to be done: opencode
+  with the same consent gnomon is given.
+
+*Amended 2026-10-31, before any trial: the opencode arm was added.*
 
 ## Design
 
 | | |
 |---|---|
-| arms | **gnomon** v0.3.1 (`7012c5a6d80516891b061cc0f07ac1724b6289a0`, fetched by SHA, the August adapter, `--role implementor`, approval never)<br>**mini-swe-agent** 2.4.6 (tb's run command)<br>**goose** v1.57.0 (tb's recipe and run command)<br>**Qwen Code** 0.26.4 (`-p … --approval-mode yolo`) |
+| arms | **gnomon** v0.3.1 (`7012c5a6d80516891b061cc0f07ac1724b6289a0`, fetched by SHA, the August adapter, `--role implementor`, approval never)<br>**mini-swe-agent** 2.4.6 (tb's run command)<br>**goose** v1.57.0 (tb's recipe and run command)<br>**Qwen Code** 0.26.4 (`-p … --approval-mode yolo`)<br>**opencode** V2 v2.2.5, the newest line: a GitHub release binary, auto-update off, `run --standalone --auto`, where `--auto` approves everything not explicitly denied. The run is logged, and any auto-reject is counted per cell; a nonzero count makes that cell's opencode score a floor and is reported as such |
 | model | `qwen3.6-35b` on gx10's llama-server (`:18080`, `--parallel 1`). Every arm reaches it through the same relay on the docker bridge |
 | tasks | the 16 tasks of `sample16-hunch.txt`: a fixed-hash subset of the pre-registered August 48, chosen by name, not by outcome. Task clone at laude-institute/terminal-bench `d28711d`, the same as H7 |
-| n | 3 attempts per (arm, task), so 48 cells per arm and 192 in all |
+| n | 3 attempts per (arm, task), so 48 cells per arm and 240 in all (about 38 h at about 9.5 min a cell) |
 | cap | 900 s per agent run (`--global-agent-timeout-sec`), identical for every arm |
-| order | interleaved. Each attempt shuffles the tasks with a fixed seed, and on each task the four arms run back to back in an order that rotates with the task. One `tb run` per cell |
+| order | interleaved. Each attempt shuffles the tasks with a fixed seed, and on each task the five arms run back to back in an order that rotates with the task. One `tb run` per cell |
 | runner | tb 0.2.18, one trial at a time, holding `decisionbench/gpu.lock` |
 
 ## Scoring, fixed in advance
@@ -121,3 +129,17 @@ floor or the ceiling (its methodology, "Can this design resolve anything?").
 - [ ] Smoke: every arm resolves or at least runs hello-world before the full run.
 - [ ] After the run: wall-clock inspected for ~0 s or exactly 900 s, and versions
       read back per cell.
+
+## Phase 2, registered separately before it runs
+
+This run uses one local model. The user also holds an OpenCode license
+(`OPENCODE_API_KEY` is in gnomon's credential store), which pays for OpenCode's
+hosted models. That makes two further experiments possible, each with its own
+pre-registration:
+- **cloud model:** gnomon against opencode, on the same hosted model;
+- **hybrid:** gnomon's `frontier_plan` profile (plan on a hosted model, implement
+  locally) against all-local and all-hosted.
+
+The hosted models need no GPU. So these belong on AgentLab on the hub, which has
+both adapters already, and can run alongside this gx10 run without sharing its
+Docker host or its model.
