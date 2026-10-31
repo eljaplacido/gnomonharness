@@ -1,0 +1,27 @@
+--- /home/eljaplacido/gnomon-wt/g2/benchmarks/results/determinism-2026-08-31/determinism.mjs	2026-10-31 19:14:02.143536792 +0200
++++ /home/eljaplacido/gnomon-wt/g2/benchmarks/results/determinism-g2fix/determinism.mjs	2026-10-31 19:19:00.242622852 +0200
+@@ -11,6 +11,7 @@
+  * role, its resolved model/endpoint/limits and the sorted tool schema it would
+  * be sent, plus the role each of a corpus of inputs routes to.
+  */
++const REPO = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "");
+ const { loadConfig } = await import(`${REPO}/packages/gnomon-core/dist/config.js`);
+ const { buildToolSet } = await import(`${REPO}/packages/gnomon-core/dist/tools.js`);
+ const { routeRole, routeInput } = await import(`${REPO}/packages/gnomon-core/dist/config.js`);
+@@ -23,7 +24,6 @@
+ // "a published result that cites a trace a clone does not have is not
+ // evidence, it is an assertion". Same idiom as
+ // benchmarks/surface-fidelity/fidelity.mjs.
+-const REPO = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "");
+ 
+ 
+ const ROUTING_CORPUS = [
+@@ -69,7 +69,7 @@
+ 
+ export function surfaceHash(dir) {
+   try {
+-    return execFileSync("node", [`${REPO}/packages/gnomon-cli/gnomon.js", "surface", "hash", "--dir", dir],
++    return execFileSync("node", [`${REPO}/packages/gnomon-cli/gnomon.js`, "surface", "hash", "--dir", dir],
+       { encoding: "utf-8", env: process.env }).trim().split(/\s+/).pop();
+   } catch (e) { return `ERR:${String(e).slice(0, 60)}`; }
+ }
