@@ -1,0 +1,101 @@
+[0m
+> build · deepseek-v4.1-flash
+[0m$ [0mid
+uid=0(root) gid=0(root) groups=0(root)
+[0m$ [0mgetent group research; getent passwd alice; getent passwd bob
+research:x:1001:alice,bob
+alice:x:1001:1002::/home/alice:/bin/bash
+bob:x:1002:1003::/home/bob:/bin/bash
+[0m$ [0mcommand -v setfacl; command -v getfacl
+/usr/bin/setfacl
+/usr/bin/getfacl
+[0m$ [0mls -ld /srv /srv/shared 2>&1
+ls: cannot access '/srv/shared': No such file or directory
+drwxr-xr-x 2 root root 4096 Apr  4  2025 /srv
+> build · deepseek-v4.1-flash
+[0m$ [0minstall -d -o root -g research -m 2770 /srv/shared
+setfacl -m g:research:rwx,u:alice:rwx,u:bob:rwx,o::---,m::rwx /srv/shared
+setfacl -d -m g:research:rwx,u:alice:rwx,u:bob:rwx,o::---,m::rwx /srv/shared
+chmod 2770 /srv/shared
+(no output)
+> build · deepseek-v4.1-flash
+[0m$ [0mstat -c 'Path: %n%nOwner: %U:%G%nMode: %A (%a)' /srv/shared
+Path: /srv/shared/srv/sharedOwner: root:research/srv/sharedMode: drwxrws--- (2770)
+[0m$ [0mgetfacl -p /srv/shared
+# file: /srv/shared
+# owner: root
+# group: research
+# flags: -s-
+user::rwx
+user:alice:rwx
+user:bob:rwx
+group::rwx
+group:research:rwx
+mask::rwx
+other::---
+default:user::rwx
+default:user:alice:rwx
+default:user:bob:rwx
+default:group::rwx
+default:group:research:rwx
+default:mask::rwx
+default:other::---
+> build · deepseek-v4.1-flash
+[0m$ [0mset -e
+T=/tmp/opencode/acl-inherit-test
+rm -rf "$T"
+install -d -o root -g research -m 2770 "$T"
+setfacl -m g:research:rwx,u:alice:rwx,u:bob:rwx,o::---,m::rwx "$T"
+setfacl -d -m g:research:rwx,u:alice:rwx,u:bob:rwx,o::---,m::rwx "$T"
+chmod 2770 "$T"
+runuser -u alice -- touch "$T/alice-file"
+runuser -u alice -- mkdir "$T/alice-dir"
+runuser -u bob -- sh -c 'test -r "$1" && test -w "$1"' sh "$T/alice-file"
+runuser -u bob -- sh -c 'test -r "$1" && test -w "$1" && test -x "$1"' sh "$T/alice-dir"
+stat -c '%n %U:%G %a' "$T/alice-file" "$T/alice-dir"
+getfacl -p "$T/alice-file" "$T/alice-dir"
+rm -rf "$T"
+/tmp/opencode/acl-inherit-test/alice-file alice:research 660
+/tmp/opencode/acl-inherit-test/alice-dir alice:research 2770
+# file: /tmp/opencode/acl-inherit-test/alice-file
+# owner: alice
+# group: research
+user::rw-
+user:alice:rwx	#effective:rw-
+user:bob:rwx	#effective:rw-
+group::rwx	#effective:rw-
+group:research:rwx	#effective:rw-
+mask::rw-
+other::---
+
+# file: /tmp/opencode/acl-inherit-test/alice-dir
+# owner: alice
+# group: research
+# flags: -s-
+user::rwx
+user:alice:rwx
+user:bob:rwx
+group::rwx
+group:research:rwx
+mask::rwx
+other::---
+default:user::rwx
+default:user:alice:rwx
+default:user:bob:rwx
+default:group::rwx
+default:group:research:rwx
+default:mask::rwx
+default:other::---
+> build · deepseek-v4.1-flash
+[0m$ [0mfind /srv/shared -mindepth 1 -maxdepth 1 -printf '%f\n'
+(no output)
+> build · deepseek-v4.1-flash
+Created `/srv/shared` with the requested permissions and ACL inheritance.
+
+- **Owner/group:** `root:research`
+- **Mode:** `2770` (`drwxrws---`) with setgid enabled
+- **Access ACLs:** `research`, `alice`, and `bob` have `rwx`; `other` has `---`; mask is `rwx`
+- **Default ACLs:** same entries apply to newly created files and subdirectories
+- **Directory state:** empty, no files created
+
+Validation in a temporary mirror directory confirmed that files created by `alice` were readable/writable by `bob`, and subdirectories inherited the ACLs and setgid bit. The temporary test directory was removed.

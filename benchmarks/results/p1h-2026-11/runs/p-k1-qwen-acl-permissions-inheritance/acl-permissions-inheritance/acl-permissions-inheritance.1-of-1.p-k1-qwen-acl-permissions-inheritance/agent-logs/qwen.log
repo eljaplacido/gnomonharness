@@ -1,0 +1,44 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Done. `/srv/shared` is configured as requested, with no files created inside it.
+
+**Resulting state**
+
+```
+mode=2770  owner=root  group=research
+drwxrws---+ 2 root research 4096 /srv/shared
+```
+
+**ACLs (`getfacl -p`)**
+
+```
+user::rwx
+user:alice:rwx
+user:bob:rwx
+group::rwx
+group:research:rwx
+mask::rwx
+other::---
+
+default:user::rwx
+default:user:alice:rwx
+default:user:bob:rwx
+default:group::rwx
+default:group:research:rwx
+default:mask::rwx
+default:other::---
+```
+
+**Inheritance guarantees**
+
+- `setgid` (`2770` / `s` in `drwxrws`) forces the group `research` on every new file and subdirectory.
+- The default ACL propagates `alice:rwx`, `bob:rwx`, `group:research:rwx`, and `other:---` to new entries, so a file created by alice is readable and writable by bob (and vice versa), and directories created inside inherit the same default ACL further down.
+- `default:other::---` plus `default:mask::rwx` keeps outsiders out while not trimming the alice/bob/group entries.
+- The access `mask::rwx` ensures the named-user and named-group effective permissions are full `rwx` rather than being masked down.
+
+**Verification performed (no files written)**
+
+- `alice`: write access to the directory — OK
+- `bob`: write access to the directory — OK
+- `nobody` (unaffiliated user): read access denied — OK
+
+One note: `/srv/shared` currently contains no entries, so the inheritance path itself will be exercised by your tests when they create files.

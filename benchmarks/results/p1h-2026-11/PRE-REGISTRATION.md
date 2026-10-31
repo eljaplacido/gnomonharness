@@ -43,3 +43,28 @@ A harness difference is called model-robust only if P1 and P1-H both show it in
 the same direction, and at least one of them significantly (exact McNemar
 p < 0.05 with ≥ 6 discordant pairs). A difference in one only is reported as
 model-specific.
+
+## Amendment, 2026-11-01 ~01:40Z: the relays now refuse off-upstream targets
+
+G2b's negative control found a key-exposure path in `relay-go.mjs`, which every
+hosted benchmark shares:
+- **Key exposure.** An absolute-form request target (`GET https://host/x
+  HTTP/1.1`) resolved past the configured upstream. The relay would have
+  forwarded it, **with the Go key injected**, to any host the request named.
+- **Crash.** An `http:` target threw inside the handler.
+
+P1-H's agents run model-generated commands in containers that can reach the
+relay on the docker bridge. Exploiting this needs a deliberately crafted
+request, but the key is the user's.
+
+**The fix:** G2b's guard was installed. A target that does not resolve under
+the upstream's origin and path gets a 403 and is counted
+(`refused_off_upstream`). Both P1-H relays were restarted with it at ~01:40Z.
+- A restart resets the relay counters, so the two cells in flight have no
+  usable token delta: `p-k1-qwen-hf-train-lora-adapter` and
+  `p-k1-opencode-hf-train-lora-adapter`.
+- The collector now treats any negative delta as **unmetered**, never a
+  number. Those two cells keep their tb verdicts if their agent logs show
+  model calls, and are listed in the result as metering-void.
+- The replaced user agent now says `(gnomon-p1h-benchmark)`.
+- No other cell is affected.

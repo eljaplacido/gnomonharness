@@ -84,7 +84,11 @@ for d in sorted(runs.iterdir()):
     if tf.exists():
         t = json.loads(tf.read_text())
         if t.get("before") and t.get("after"):
-            delta = {k: t["after"][k] - t["before"].get(k, 0) for k in t["after"]}
+            delta = {k: t["after"][k] - t["before"].get(k, 0) for k in t["after"] if isinstance(t["after"][k], (int, float))}
+        # A relay restarted mid-cell resets its counters, so the delta goes negative.
+        # That cell is unmetered, never a number (P1-H amendment, 2026-11-01).
+        if t.get("before") and t.get("after") and any(v < 0 for v in delta.values()):
+            t = {}
             tokens = {
                 "prompt": delta.get("prompt_tokens", 0),
                 "completion": delta.get("completion_tokens", 0),

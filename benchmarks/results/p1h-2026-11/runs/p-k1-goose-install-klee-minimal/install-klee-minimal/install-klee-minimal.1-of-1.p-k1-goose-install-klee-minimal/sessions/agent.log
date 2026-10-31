@@ -1,0 +1,1309 @@
+[?2004hroot@c02285156f16:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@c02285156f16:/app# clear
+[?2004l[H[J[3J[?2004hroot@c02285156f16:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@c02285156f16:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION= 1.57.0
+ARM_SETUP_END=1793486174
+[?2004hroot@c02285156f16:/app# cat > ~/terminal-bench-recipe.yaml << 'EOF'
+[?2004l[?2004h> description: terminal-bench recipe
+[?2004l[?2004h> instructions: You are given a task and you need to complete it. You are currently
+[?2004l[?2004h>   executing in a docker container where you are being evaluated on a benchmark for
+[?2004l[?2004h>   LLM agents. Act autonomously. You will not receive any feedback on your progress,
+[?2004l[?2004h>   so you must use your own tools to complete the task without any intervention.
+[?2004l[?2004h> prompt: 'Install the symbolic execution tool KLEE with stp as its solver and llvm-16
+[?2004l[?2004h>   (no uClibc).
+[?2004l[?2004h> 
+[?2004l[?2004h>   You can assume the system already has llvm-16 installed (clang-16 and llvm-config-16
+[?2004l[?2004h>   are available).
+[?2004l[?2004h> 
+[?2004l[?2004h>   Make sure we are able to call `klee` from the command line, and the klee header
+[?2004l[?2004h>   is included in the `CPATH` environment variable.
+[?2004l[?2004h> 
+[?2004l[?2004h> 
+[?2004l[?2004h>   Note: The tests will verify your installation by sourcing ~/.bashrc to load the
+[?2004l[?2004h>   environment variables you set up. Ensure that relevant environmental variables are
+[?2004l[?2004h>   properly configured in ~/.bashrc.'
+[?2004l[?2004h> title: terminal-bench
+[?2004l[?2004h> version: 1.0.0
+[?2004l[?2004h> EOF
+[?2004l[?2004hroot@c02285156f16:/app# goose run --recipe ~/terminal-bench-recipe.yaml; tmux wait -S done
+[?2004l[32m[1mLoading recipe:[0m [32mterminal-bench[0m
+[1mDescription:[0m terminal-bench recipe
+
+]0;🪿 app
+  [37m  __( O)>[0m  [32m●[0m [2mnew session[0m [2m·[0m [2mopenai[0m [36mdeepseek-v4.1-flash[0m
+  [37m \____)[0m  [2m [0m [2m20261031_1[0m [2m· /app[0m
+  [37m   L L[0m  [37m   goose is ready[0m
+[37mI'll start by exploring the[0m[37m system environment to[0m[37m understand what's available.[0m
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcat /etc/os-release; echo "---"; which clang-16 llvm-config-16 cmake ninja make g++ python3 git wget curl 2>&1; echo "---"; llvm-config-16 --ver...[0m
+
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mls -la /app; echo "---"; cat ~/.bashrc 2>/dev/null | tail -30; echo "---"; echo $CPATH[0m
+
+    [2mtotal 8[0m
+    [2mdrwxr-xr-x 1 root root 4096 Oct 31 22:36 .[0m
+    [2mdrwxr-xr-x 1 root root 4096 Oct 31 22:36 ..[0m
+    [2m---[0m
+    [2m    test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"[0m
+    [2m    alias ls='ls --color=auto'[0m
+    [2m    #alias dir='dir --color=auto'[0m
+    [2m    #alias vdir='vdir --color=auto'[0m
+    [2m[0m
+    [2m    alias grep='grep --color=auto'[0m
+    [2m[3m... (15 lines hidden, /toggle to show all)[0m
+    [2m    . ~/.bash_aliases[0m
+    [2mfi[0m
+    [2m[0m
+    [2m# enable programmable completion features (you don't need to enable[0m
+    [2m# this, if it's already enabled in /etc/bash.bashrc and /etc/profile[0m
+    [2m# sources /etc/bash.bashrc).[0m
+    [2m#if [ -f /etc/bash_completion ] && ! shopt -oq posix; then[0m
+    [2m#    . /etc/bash_completion[0m
+    [2m#fi[0m
+    [2m---[0m
+    [2mPRETTY_NAME="Ubuntu 24.04.2 LTS"[0m
+    [2mNAME="Ubuntu"[0m
+    [2mVERSION_ID="24.04"[0m
+    [2mVERSION="24.04.2 LTS (Noble Numbat)"[0m
+    [2mVERSION_CODENAME=noble[0m
+    [2mID=ubuntu[0m
+    [2mID_LIKE=debian[0m
+    [2mHOME_URL="https://www.ubuntu.com/"[0m
+    [2mSUPPORT_URL="https://help.ubuntu.com/"[0m
+    [2mBUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"[0m
+    [2m[3m... (5 lines hidden, /toggle to show all)[0m
+    [2m/usr/bin/llvm-config-16[0m
+    [2m/usr/bin/python3[0m
+    [2m/usr/bin/curl[0m
+    [2m---[0m
+    [2m16.0.6[0m
+    [2m---[0m
+    [2m20[0m
+    [2m               total        used        free      shared  buff/cache   available[0m
+    [2mMem:             121          54          22           0          46          67[0m
+    [2mSwap:             15           9           6[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && timeout 300 apt-get update -qq 2>&1 | tail -5; echo "EXIT=$?"; apt-cache policy stp libstp-dev minisat libminisat-dev z3 libz3-dev 2>...[0m
+    [2mtimeout_secs[0m: [33m400[0m
+
+    [2mEXIT=0[0m
+    [2mminisat:[0m
+    [2m  Installed: (none)[0m
+    [2m  Candidate: 1:2.2.1-8build1[0m
+    [2m  Version table:[0m
+    [2m     1:2.2.1-8build1 500[0m
+    [2m        500 http://ports.ubuntu.com/ubuntu-ports noble/universe arm64 Packages[0m
+    [2mz3:[0m
+    [2m  Installed: (none)[0m
+    [2m  Candidate: 4.8.12-3.1build1[0m
+    [2m  Version table:[0m
+    [2m     4.8.12-3.1build1 500[0m
+    [2m        500 http://ports.ubuntu.com/ubuntu-ports noble/universe arm64 Packages[0m
+    [2mlibz3-dev:[0m
+    [2m  Installed: 4.8.12-3.1build1[0m
+    [2m  Candidate: 4.8.12-3.1build1[0m
+    [2m  Version table:[0m
+    [2m *** 4.8.12-3.1build1 500[0m
+    [2m        500 http://ports.ubuntu.com/ubuntu-ports noble/universe arm64 Packages[0m
+    [2m        100 /var/lib/dpkg/status[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && DEBIAN_FRONTEND=noninteractive timeout 900 apt-get install -y -qq build-essential cmake ninja-build git python3-dev python3-tabulate ...[0m
+    [2mtimeout_secs[0m: [33m1000[0m
+
+    [2mSetting up libopenmpi-dev:arm64 (4.1.6-7ubuntu2) ...[0m
+    [2mupdate-alternatives: using /usr/lib/aarch64-linux-gnu/openmpi/include to provide /usr/include/aarch64-linux-gnu/mpi (mpi-aarch64-linux-gnu) in auto mode[0m
+    [2mSetting up libboost-graph-parallel1.83-dev (1.83.0-2.1ubuntu3.2) ...[0m
+    [2mSetting up libboost-mpi-python1.83.0 (1.83.0-2.1ubuntu3.2) ...[0m
+    [2mSetting up libcoarrays-openmpi-dev:arm64 (2.10.2+ds-2.1build2) ...[0m
+    [2mupdate-alternatives: using /usr/lib/aarch64-linux-gnu/open-coarrays/openmpi/bin/caf to provide /usr/bin/caf.openmpi (caf-openmpi) in auto mode[0m
+    [2mupdate-alternatives: using /usr/bin/caf.openmpi to provide /usr/bin/caf (caf) in auto mode[0m
+    [2mSetting up libboost-graph-parallel-dev (1.83.0.1ubuntu2) ...[0m
+    [2mSetting up mpi-default-dev (1.15build1) ...[0m
+    [2mSetting up libboost-mpi1.83-dev (1.83.0-2.1ubuntu3.2) ...[0m
+    [2m[3m... (1 lines hidden, /toggle to show all)[0m
+    [2mSetting up libboost-mpi-python1.83-dev (1.83.0-2.1ubuntu3.2) ...[0m
+    [2mSetting up libboost-mpi-python-dev (1.83.0.1ubuntu2) ...[0m
+    [2mSetting up libboost-all-dev (1.83.0.1ubuntu2) ...[0m
+    [2mProcessing triggers for libc-bin (2.39-0ubuntu8.9) ...[0m
+    [2mProcessing triggers for ca-certificates (20260816ubuntu0.24.04.1) ...[0m
+    [2mUpdating certificates in /etc/ssl/certs...[0m
+    [2m0 added, 0 removed; done.[0m
+    [2mRunning hooks in /etc/ca-certificates/update.d...[0m
+    [2mdone.[0m
+    [2mEXIT=0[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && git ls-remote --tags https://github.com/stp/stp.git 2>&1 | tail -12; cmake --version | head -1[0m
+    [2mtimeout_secs[0m: [33m180[0m
+
+    [2m3ae3e92b29b9551cd146a2382d8391a6c89ef102	refs/tags/2.1.0[0m
+    [2m1fdabf26b8f329d077f65facd116bf12fe8d72dd	refs/tags/2.1.1[0m
+    [2m9c22ea1682eed439577fb1ebc89dd1047d365d7f	refs/tags/2.1.2[0m
+    [2m15943d7fa821106c350a367d83aaf143d4720023	refs/tags/2.3.1[0m
+    [2ma58a4ab2f42a334854c7e7485593e33cd4b4ee53	refs/tags/2.3.2[0m
+    [2m7a3fd493ae6f0a524f853946308f4f3c3ddcbe76	refs/tags/2.3.3[0m
+    [2md70085462f07c8a5a2f1225f727cda3ef505b141	refs/tags/2.3.4[0m
+    [2m207c63a88c67a4ec673da519039ce1212565c49c	refs/tags/2.3.4_cadical[0m
+    [2m8c1af1c2e34dd9e9d2087ef8d3ac7ca703b1c472	refs/tags/2.4.0[0m
+    [2m295953fc1f7424cc4822a02f5c7964e0aafbdf10	refs/tags/2.4.1[0m
+    [2mac1b92b181c293a00360a028857cb76a6cc8b191	refs/tags/smtcomp2020[0m
+    [2m9b9021b28bf95c3851835e0c836a05cb5baa4670	refs/tags/stp-2.2.0[0m
+    [2mcmake version 3.28.3[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && git clone --depth 1 https://github.com/klee/klee.git klee-src 2>&1 | tail -3; cd klee-src && git log -1 --format='%H %ad %s' && grep ...[0m
+    [2mtimeout_secs[0m: [33m300[0m
+
+    [2mCloning into 'klee-src'...[0m
+    [2m78df9e234fdb806530184ecd8963268da87418c5 Fri Oct 16 10:11:54 2026 +0300 [OpenBSD] Fall back to stat() in ktest-gen[0m
+    [2m114:find_package(LLVM REQUIRED CONFIG HINTS "${LLVM_DIR}")[0m
+    [2m116:if (LLVM_VERSION_MAJOR LESS 15)[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mls -d /usr/lib/llvm-16/lib/cmake/llvm 2>&1; ls /usr/lib/llvm-16/include/llvm/IR/LLVMContext.h 2>&1; ls /usr/bin/llvm-config* /usr/bin/clang* 2>&...[0m
+
+    [2m/usr/lib/llvm-16/lib/cmake/llvm[0m
+    [2m/usr/lib/llvm-16/include/llvm/IR/LLVMContext.h[0m
+    [2m/usr/bin/clang++-16[0m
+    [2m/usr/bin/clang-16[0m
+    [2m/usr/bin/clang-cpp-16[0m
+    [2m/usr/bin/llvm-config-16[0m
+    [2m---[0m
+    [2m################################################################################[0m
+    [2minclude(GNUInstallDirs)[0m
+    [2minclude(CheckCSourceCompiles)[0m
+    [2m[3m... (39 lines hidden, /toggle to show all)[0m
+    [2m    "LLVM was built with assertions but KLEE will be built without them.\n"[0m
+    [2m    "This might lead to unexpected behaviour."[0m
+    [2m  )[0m
+    [2melseif ((NOT LLVM_ENABLE_ASSERTIONS) AND ENABLE_KLEE_ASSERTS)[0m
+    [2m  message(WARNING[0m
+    [2m    "LLVM was built without assertions but KLEE will be built with them.\n"[0m
+    [2m    "This might lead to unexpected behaviour."[0m
+    [2m  )[0m
+    [2mendif()[0m
+    [2m---[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/klee-src && ls .github/workflows/ && grep -rn "llvm" .github/workflows/build.yaml 2>/dev/null | head -30; echo ---; grep -rn "LLVM_VERSI...[0m
+
+    [2mbuild.yaml[0m
+    [2mdifferential-shellcheck.yml[0m
+    [2mdocker_release_push.yml[0m
+    [2m158:                cmake ninja gmake z3 llvm18 pkgconf google-perftools googletest \[0m
+    [2m173:                -DLLVM_DIR=`sysctl -n user.localbase`/lib/cmake/llvm \[0m
+    [2m---[0m
+    [2mLLVM_VERSION_MAJOR < 19[0m
+    [2mLLVM_VERSION_MAJOR >= 17[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && git clone --depth 1 --branch 2.3.4 https://github.com/stp/stp.git stp-src 2>&1 | tail -2; cd stp-src && cat cmake/options.cmake 2>/de...[0m
+    [2mtimeout_secs[0m: [33m300[0m
+
+    [2mTurn off this advice by setting config variable advice.detachedHead to false[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/stp-src && ls; ls cmake 2>/dev/null; grep -rn "option(" CMakeLists.txt | head -30[0m
+
+    [2mAUTHORS[0m
+    [2mCMakeLists.txt[0m
+    [2mDocker.ubuntu20[0m
+    [2mDockerfile[0m
+    [2mLICENSE[0m
+    [2mLICENSE_COMPONENTS[0m
+    [2mREADME.markdown[0m
+    [2mSTPConfig.cmake.in[0m
+    [2mSTPConfigVersion.cmake.in[0m
+    [2mappveyor.yml[0m
+    [2m[3m... (21 lines hidden, /toggle to show all)[0m
+    [2m369:option(TUNE_NATIVE "Use -mtune=native" OFF)[0m
+    [2m374:option(COVERAGE "Build with coverage check" OFF)[0m
+    [2m379:option(WERROR "Build with warnings as errors" OFF)[0m
+    [2m391:option(USE_THREAD_LOCAL "Use thread-local storage when available" ON)[0m
+    [2m452:option(ONLY_SIMPLE "Only build very simplistic executable -- no Boost needed" OFF)[0m
+    [2m465:option(USE_RISS "Try to use Riss" OFF)[0m
+    [2m477:option(NOCRYPTOMINISAT "Don't try to use cryptominisat" OFF)[0m
+    [2m499:option(FORCE_CMS "Must build with CryptoMiniSat" OFF)[0m
+    [2m661:option(ENABLE_TESTING "Enable testing" OFF)[0m
+    [2m681:option(BUILD_EXECUTABLES "Build executables" ON)[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/stp-src && grep -rn "PYTHON\|python" CMakeLists.txt | head -20[0m
+
+    [2m151:    set(ENABLE_PYTHON_INTERFACE OFF)[0m
+    [2m635:  # directory (eg. MSBuild), since some targets (e.g. python-interface-tests)[0m
+    [2m663:# try finding python if the user did not explicitly said that[0m
+    [2m664:# he/she does not want python bindings[0m
+    [2m665:if((NOT DEFINED ENABLE_PYTHON_INTERFACE) OR ENABLE_PYTHON_INTERFACE)[0m
+    [2m667:    if(PYTHON_EXECUTABLE AND BUILD_SHARED_LIBS)[0m
+    [2m668:        set(ENABLE_PYTHON_INTERFACE ON)[0m
+    [2m670:        set(ENABLE_PYTHON_INTERFACE OFF)[0m
+    [2m673:add_feature_info(PythonInterface ENABLE_PYTHON_INTERFACE "Enables Python interface")[0m
+    [2m704:if(ENABLE_TESTING AND NOT PYTHON_EXECUTABLE)[0m
+    [2m705:    message(STATUS "Python interpreter cannot be found. Please install it to have the python interface and to enable testing")[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && rm -rf stp-build && mkdir stp-build && cd stp-build && cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DENABLE_PYT...[0m
+    [2mtimeout_secs[0m: [33m300[0m
+
+    [2mEXIT=1[0m
+    [2m-- Performing Test HAVE_FLAG_-Wparentheses - Success[0m
+    [2m-- Performing Test HAVE_FLAG_-Wunreachable-code[0m
+    [2m-- Performing Test HAVE_FLAG_-Wunreachable-code - Success[0m
+    [2m-- GIT hash found: d70085462f07c8a5a2f1225f727cda3ef505b141[0m
+    [2m-- PROJECT_VERSION: 2.3.3[0m
+    [2m-- PROJECT_VERSION_MAJOR: 2[0m
+    [2m-- PROJECT_VERSION_MINOR: 3[0m
+    [2m-- PROJECT_VERSION_PATCH: 3[0m
+    [2m-- Found Boost: /usr/lib/aarch64-linux-gnu/cmake/Boost-1.83.0/BoostConfig.cmake (found suitable version "1.83.0", minimum required is "1.46") found components: program_options [0m
+    [2m[3m... (6 lines hidden, /toggle to show all)[0m
+    [2m-- looking at:  [0m
+    [2m-- found: MINISAT_LIBRARY: MINISAT_LIBRARY-NOTFOUND[0m
+    [2m-- Could NOT find minisat (missing: MINISAT_LIBRARY MINISAT_INCLUDE_DIR) [0m
+    [2m-- Not found using installed MiniSat, looking for built MiniSat[0m
+    [2m-- Could NOT find minisat (missing: minisat_DIR)[0m
+    [2mCMake Error at CMakeLists.txt:561 (message):[0m
+    [2m  You must install minisat from https://github.com/stp/minisat[0m
+    [2m[0m
+    [2m[0m
+    [2m-- Configuring incomplete, errors occurred![0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && git clone --depth 1 https://github.com/stp/minisat.git minisat-src 2>&1 | tail -2; ls minisat-src; sed -n 1,60p minisat-src/CMakeList...[0m
+    [2mtimeout_secs[0m: [33m300[0m
+
+    [2mCloning into 'minisat-src'...[0m
+    [2mCMakeLists.txt[0m
+    [2mLICENSE[0m
+    [2mMakefile[0m
+    [2mREADME[0m
+    [2mappveyor.yml[0m
+    [2mcmake_uninstall.cmake.in[0m
+    [2mdoc[0m
+    [2mminisat[0m
+    [2mminisatConfig.cmake.in[0m
+    [2m[3m... (51 lines hidden, /toggle to show all)[0m
+    [2mif (STATICCOMPILE)[0m
+    [2m    set(BUILD_SHARED_LIBS OFF)[0m
+    [2mendif()[0m
+    [2m[0m
+    [2mif (NOT BUILD_SHARED_LIBS)[0m
+    [2m    if (NOT MSVC)[0m
+    [2m        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static -Wl,--whole-archive -lpthread -Wl,--no-whole-archive -static ")[0m
+    [2m        set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")[0m
+    [2m[0m
+    [2m        # removing -rdynamic that's automatically added[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && rm -rf minisat-build && mkdir minisat-build && cd minisat-build && cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF ...[0m
+    [2mtimeout_secs[0m: [33m900[0m
+
+    [2mCFG=0[0m
+    [2m-- Detecting CXX compiler ABI info - done[0m
+    [2m-- Check for working CXX compiler: /usr/bin/c++ - skipped[0m
+    [2m-- Detecting CXX compile features[0m
+    [2m-- Detecting CXX compile features - done[0m
+    [2m-- Found ZLIB: /usr/lib/aarch64-linux-gnu/libz.so (found version "1.3")  [0m
+    [2m-- Configuring done (0.3s)[0m
+    [2m-- Generating done (0.0s)[0m
+    [2m-- Build files have been written to: /tmp/minisat-build[0m
+    [2mBUILD=0[0m
+    [2m[3m... (16 lines hidden, /toggle to show all)[0m
+    [2m-- Installing: /usr/local/include/minisat/core[0m
+    [2m-- Installing: /usr/local/include/minisat/core/Dimacs.h[0m
+    [2m-- Installing: /usr/local/include/minisat/core/ExternalPropagator.h[0m
+    [2m-- Installing: /usr/local/include/minisat/core/Solver.h[0m
+    [2m-- Installing: /usr/local/include/minisat/core/SolverTypes.h[0m
+    [2m-- Installing: /usr/local/include/minisat/simp[0m
+    [2m-- Installing: /usr/local/include/minisat/simp/SimpSolver.h[0m
+    [2m-- Installing: /usr/local/lib/cmake/minisat/minisatConfig.cmake[0m
+    [2m-- Installing: /usr/local/lib/cmake/minisat/minisatTargets.cmake[0m
+    [2m-- Installing: /usr/local/lib/cmake/minisat/minisatTargets-release.cmake[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mls /usr/local/lib/libminisat* /usr/local/lib/cmake/minisat 2>&1; cd /tmp/stp-build && cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_L...[0m
+    [2mtimeout_secs[0m: [33m300[0m
+
+    [2m/usr/local/lib/libminisat.a[0m
+    [2m[0m
+    [2m/usr/local/lib/cmake/minisat:[0m
+    [2mminisatConfig.cmake[0m
+    [2mminisatTargets-release.cmake[0m
+    [2mminisatTargets.cmake[0m
+    [2mEXIT=0[0m
+    [2m-- Finding minisat headers...[0m
+    [2m-- found: MINISAT_INCLUDE_DIR: /usr/local/include[0m
+    [2m-- Finding minisat libs...[0m
+    [2m-- found: MINISAT_LIBRARY: /usr/local/lib/libminisat.a[0m
+    [2m-- Found minisat: /usr/local/lib/libminisat.a  [0m
+    [2m-- OK, found Minisat library under /usr/local/lib/libminisat.a and Minisat include dirs under /usr/local/include[0m
+    [2m * CryptoMiniSat, Enables CryptoMiniSat solver, allows --cryptominisat5 option[0m
+[37mConfigure[0m[37md successfully[0m[37m with minisat.[0m[37m Now[0m[37m building STP ([0m[37mthis takes a while).[0m
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/stp-build && ninja -j20 > /tmp/stp-build.log 2>&1; echo BUILD=$?; tail -5 /tmp/stp-build.log; ninja install > /tmp/stp-install.log 2>&1;...[0m
+    [2mtimeout_secs[0m: [33m2400[0m
+
+    [2mBUILD=0[0m
+    [2m 2257 |     const unsigned size = products[column].size();[0m
+    [2m      |                    ^~~~[0m
+    [2m[130/132] Linking CXX static library lib/libstp.a[0m
+    [2m[131/132] Linking CXX executable stp_simple[0m
+    [2m[132/132] Linking CXX executable stp[0m
+    [2mINST=0[0m
+    [2m-- Installing: /usr/local/lib/cmake/STP/STPTargets.cmake[0m
+    [2m-- Installing: /usr/local/lib/cmake/STP/STPTargets-release.cmake[0m
+    [2m-- Installing: /usr/local/lib/libstp.a[0m
+    [2m-- Installing: /usr/local/include/stp/c_interface.h[0m
+    [2m-- Installing: /usr/local/bin/stp[0m
+    [2m-- Installing: /usr/local/bin/stp_simple[0m
+    [2mSTPConfig.cmake[0m
+    [2mSTPConfigVersion.cmake[0m
+    [2mSTPTargets-release.cmake[0m
+    [2mSTPTargets.cmake[0m
+    [2m-rwxr-xr-x 1 root root 4448320 Oct 31 22:37 /usr/local/bin/stp[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mls /usr/lib/llvm-16/bin/clang /usr/lib/llvm-16/bin/clang++ 2>&1; echo "(assert (= (_ bv1 8) (_ bv1 8)))" > /tmp/t.cvc; printf "QUERY FALSE;\n" >...[0m
+    [2mtimeout_secs[0m: [33m600[0m
+
+    [2m/usr/lib/llvm-16/bin/clang[0m
+    [2m/usr/lib/llvm-16/bin/clang++[0m
+    [2mInvalid.[0m
+    [2mSTP_EXIT=0[0m
+    [2mCFG=1[0m
+    [2m-- Could NOT find zstd (missing: zstd_LIBRARY zstd_INCLUDE_DIR) [0m
+    [2m-- Found LibXml2: /usr/lib/aarch64-linux-gnu/libxml2.so (found version "2.9.14") [0m
+    [2m-- Could NOT find CURL (missing: CURL_LIBRARY CURL_INCLUDE_DIR) [0m
+    [2m-- LLVM directory /usr/lib/llvm-16/lib/cmake/llvm[0m
+    [2mCMake Warning at CMakeLists.txt:146 (message):[0m
+    [2m[3m... (15 lines hidden, /toggle to show all)[0m
+    [2m-- Zlib support enabled[0m
+    [2m-- TCMalloc support enabled[0m
+    [2m-- Looking for C++ include gperftools/malloc_extension.h[0m
+    [2m-- Looking for C++ include gperftools/malloc_extension.h - found[0m
+    [2m-- Could NOT find SQLite3 (missing: SQLite3_INCLUDE_DIR SQLite3_LIBRARY) [0m
+    [2mCMake Error at CMakeLists.txt:313 (message):[0m
+    [2m  SQLite3 not found, please install[0m
+    [2m[0m
+    [2m[0m
+    [2m-- Configuring incomplete, errors occurred![0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mDEBIAN_FRONTEND=noninteractive apt-get install -y -qq libsqlite3-dev libzstd-dev libcurl4-openssl-dev 2>&1 | tail -3; cd /tmp/klee-build && cmak...[0m
+    [2mtimeout_secs[0m: [33m600[0m
+
+    [2mSetting up libsqlite3-dev:arm64 (3.45.1-1ubuntu2.8) ...[0m
+    [2mSetting up libcurl4-openssl-dev:arm64 (8.5.0-2ubuntu10.16) ...[0m
+    [2mProcessing triggers for libc-bin (2.39-0ubuntu8.9) ...[0m
+    [2mCFG=0[0m
+    [2m-- Performing Test FSTATAT_PATH_ACCEPTS_NULL[0m
+    [2m-- Performing Test FSTATAT_PATH_ACCEPTS_NULL - Failed[0m
+    [2m-- KLEE_RUNTIME_BUILD_TYPE is not set. Setting default[0m
+    [2m-- The available runtime build types are: Release;Release+Debug;Release+Asserts;Release+Debug+Asserts;Debug;Debug+Asserts[0m
+    [2m-- KLEE_RUNTIME_BUILD_TYPE: Debug+Asserts[0m
+    [2m-- Performing Test CHECK_M32_SUPPORT[0m
+    [2m[3m... (9 lines hidden, /toggle to show all)[0m
+    [2m-- KLEE_COMPONENT_CXX_FLAGS: '-UNDEBUG;-fno-exceptions;-fno-builtin-malloc;-fno-builtin-calloc;-fno-builtin-realloc;-fno-builtin-free'[0m
+    [2m-- KLEE_SOLVER_LIBRARIES: 'stp'[0m
+    [2m-- LIB_BC_SUFFIX: 64_Release;64_Release+Debug;64_Release+Asserts;64_Release+Debug+Asserts;64_Debug;64_Debug+Asserts[0m
+    [2m-- KLEE_RUNTIME_DIRECTORY: /tmp/klee-build/runtime/lib[0m
+    [2m-- Testing is disabled[0m
+    [2m-- Unit tests disabled[0m
+    [2m-- System tests disabled[0m
+    [2m-- Configuring done (0.5s)[0m
+    [2m-- Generating done (0.0s)[0m
+    [2m-- Build files have been written to: /tmp/klee-build[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/klee-build && cmake -DKLEE_RUNTIME_BUILD_TYPE=Release . > /tmp/klee-cmake2.log 2>&1; echo CFG=$?; ninja -j20 > /tmp/klee-build.log 2>&1;...[0m
+    [2mtimeout_secs[0m: [33m3600[0m
+
+    [2mCFG=0[0m
+    [2mBUILD=1[0m
+    [2m/tmp/klee-src/runtime/POSIX/fd.c:685:12: note: '__df_chown' declared here[0m
+    [2mstatic int __df_chown(exe_disk_file_t *df, uid_t owner, gid_t group) {[0m
+    [2m           ^[0m
+    [2m/tmp/klee-src/runtime/POSIX/fd.c:1246:18: error: use of undeclared identifier '__NR_readlink'[0m
+    [2m  return syscall(__NR_readlink, path, buf, bufsize);[0m
+    [2m                 ^[0m
+    [2m/tmp/klee-src/runtime/POSIX/fd.c:1313:21: error: use of undeclared identifier '__NR_select'[0m
+    [2m    int r = syscall(__NR_select, os_nfds, [0m
+    [2m[3m... (2 lines hidden, /toggle to show all)[0m
+    [2m[366/449] Generating illegal64_Debug.bc[0m
+    [2m[367/449] Generating klee_init_env64_Debug.bc[0m
+    [2m[368/449] Generating fd_init64_Debug.bc[0m
+    [2m[369/449] Generating stubs64_Debug+Asserts.bc[0m
+    [2m[370/449] Building CXX object lib/Core/CMakeFiles/kleeCore.dir/ExecutorUtil.cpp.o[0m
+    [2m[371/449] Building CXX object lib/Core/CMakeFiles/kleeCore.dir/ExecutionState.cpp.o[0m
+    [2m[372/449] Building CXX object lib/Core/CMakeFiles/kleeCore.dir/SpecialFunctionHandler.cpp.o[0m
+    [2m[373/449] Building CXX object lib/Core/CMakeFiles/kleeCore.dir/StatsTracker.cpp.o[0m
+    [2m[374/449] Building CXX object lib/Core/CMakeFiles/kleeCore.dir/Executor.cpp.o[0m
+    [2mninja: build stopped: subcommand failed.[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mgrep -n "error:" /tmp/klee-build.log | head -30[0m
+
+    [2m358:/tmp/klee-src/runtime/POSIX/fd.c:98:18: error: use of undeclared identifier '__NR_access'[0m
+    [2m361:/tmp/klee-src/runtime/POSIX/fd.c:178:25: error: use of undeclared identifier '__NR_open'; did you mean '__fd_open'?[0m
+    [2m368:/tmp/klee-src/runtime/POSIX/fd.c:270:18: error: use of undeclared identifier '__NR_utimes'[0m
+    [2m371:/tmp/klee-src/runtime/POSIX/fd.c:292:18: error: use of undeclared identifier '__NR_futimesat'[0m
+    [2m374:/tmp/klee-src/runtime/POSIX/fd.c:540:20: error: use of undeclared identifier '__NR_stat'; did you mean '__fd_stat'?[0m
+    [2m381:/tmp/klee-src/runtime/POSIX/fd.c:591:20: error: use of undeclared identifier '__NR_lstat'; did you mean '__fd_lstat'?[0m
+    [2m388:/tmp/klee-src/runtime/POSIX/fd.c:658:18: error: use of undeclared identifier '__NR_chmod'; did you mean '__df_chmod'?[0m
+    [2m395:/tmp/klee-src/runtime/POSIX/fd.c:698:18: error: use of undeclared identifier '__NR_chown'; did you mean '__df_chown'?[0m
+    [2m402:/tmp/klee-src/runtime/POSIX/fd.c:724:18: error: use of undeclared identifier '__NR_chown'; did you mean '__df_chown'?[0m
+    [2m409:/tmp/klee-src/runtime/POSIX/fd.c:1246:18: error: use of undeclared identifier '__NR_readlink'[0m
+    [2m[3m... (2 lines hidden, /toggle to show all)[0m
+    [2m431:/tmp/klee-src/runtime/POSIX/fd.c:178:25: error: use of undeclared identifier '__NR_open'; did you mean '__fd_open'?[0m
+    [2m438:/tmp/klee-src/runtime/POSIX/fd.c:270:18: error: use of undeclared identifier '__NR_utimes'[0m
+    [2m441:/tmp/klee-src/runtime/POSIX/fd.c:292:18: error: use of undeclared identifier '__NR_futimesat'[0m
+    [2m444:/tmp/klee-src/runtime/POSIX/fd.c:540:20: error: use of undeclared identifier '__NR_stat'; did you mean '__fd_stat'?[0m
+    [2m451:/tmp/klee-src/runtime/POSIX/fd.c:591:20: error: use of undeclared identifier '__NR_lstat'; did you mean '__fd_lstat'?[0m
+    [2m458:/tmp/klee-src/runtime/POSIX/fd.c:658:18: error: use of undeclared identifier '__NR_chmod'; did you mean '__df_chmod'?[0m
+    [2m465:/tmp/klee-src/runtime/POSIX/fd.c:698:18: error: use of undeclared identifier '__NR_chown'; did you mean '__df_chown'?[0m
+    [2m472:/tmp/klee-src/runtime/POSIX/fd.c:724:18: error: use of undeclared identifier '__NR_chown'; did you mean '__df_chown'?[0m
+    [2m479:/tmp/klee-src/runtime/POSIX/fd.c:1246:18: error: use of undeclared identifier '__NR_readlink'[0m
+    [2m482:/tmp/klee-src/runtime/POSIX/fd.c:1313:21: error: use of undeclared identifier '__NR_select'[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/klee-src/runtime/POSIX && sed -n 80,110p fd.c; echo ...; sed -n 1240,1260p fd.c; echo ...; sed -n 1290,1330p fd.c; echo ---; grep -rn "a...[0m
+
+    [2mstatic exe_file_t *__get_file(int fd) {[0m
+    [2m  if (fd>=0 && fd<MAX_FDS) {[0m
+    [2m    exe_file_t *f = &__exe_env.fds[fd];[0m
+    [2m    if (f->flags & eOpen)[0m
+    [2m      return f;[0m
+    [2m  }[0m
+    [2m[0m
+    [2m  return 0;[0m
+    [2m}[0m
+    [2m[0m
+    [2m[3m... (116 lines hidden, /toggle to show all)[0m
+    [2mfd.c:772:  return syscall(__NR_ftruncate64, f->fd, length);[0m
+    [2mfd.c:838:      off64_t s = syscall(__NR_lseek, f->fd, os_pos, SEEK_SET);[0m
+    [2mfd.c:841:      int res = syscall(__NR_getdents64, f->fd, dirp, count);[0m
+    [2mfd.c:844:        f->off = syscall(__NR_lseek, f->fd, 0, SEEK_CUR);[0m
+    [2mfd.c:1007:  return syscall(__NR_ioctl, f->fd, request, buf);[0m
+    [2mfd.c:1080:  return syscall(__NR_fcntl, f->fd, cmd, arg);[0m
+    [2mfd.c:1092:  return syscall(__NR_statfs, __concretize_string(path), buf);[0m
+    [2mfd.c:1108:  return syscall(__NR_fstatfs, f->fd, buf);[0m
+    [2mfd.c:1120:  return syscall(__NR_fsync, f->fd);[0m
+    [2mfd.c:1246:  return syscall(__NR_readlink, path, buf, bufsize);[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/klee-src/runtime/POSIX && sed -n 170,190p fd.c; echo ---260; sed -n 255,300p fd.c; echo ---530; sed -n 528,600p fd.c; echo ---650; sed -...[0m
+
+    [2m      return -1;[0m
+    [2m    }[0m
+    [2m[0m
+    [2m    if (!has_permission(flags, df->stat)) {[0m
+    [2m      errno = EACCES;[0m
+    [2m      return -1;[0m
+    [2m    }[0m
+    [2m  } else {    [0m
+    [2m    int os_fd = syscall(__NR_open, __concretize_string(pathname), flags, mode);[0m
+    [2m    if (os_fd == -1)[0m
+    [2m[3m... (204 lines hidden, /toggle to show all)[0m
+    [2m    return __df_chown(df, owner, group);[0m
+    [2m  }[0m
+    [2m[0m
+    [2m  return syscall(__NR_chown, __concretize_string(path), owner, group);[0m
+    [2m}[0m
+    [2m[0m
+    [2mint __fd_fstat(int fd, struct stat64 *buf) {[0m
+    [2m  exe_file_t *f = __get_file(fd);[0m
+    [2m[0m
+    [2m  if (!f) {[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/klee-build && grep -n "fd.c" /tmp/klee-build.log | head -3; ninja -t commands runtime/POSIX/CMakeFiles/kleeRuntimePOSIX64_Debug+Asserts....[0m
+
+    [2m357:cd /tmp/klee-build/runtime/POSIX && /usr/lib/llvm-16/bin/clang -c -emit-llvm -g -D_DEBUG -I/tmp/klee-src/include -I/tmp/klee-build/include -D_FORTIFY_SOURCE=0 -D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS -Wall -Wwrite-strings -Xclang -disable-O0-optnone -std=gnu89 /tmp/klee-src/runtime/POSIX/fd.c -o /tmp/klee-build/runtime/POSIX/fd64_Debug+Asserts.bc[0m
+    [2m358:/tmp/klee-src/runtime/POSIX/fd.c:98:18: error: use of undeclared identifier '__NR_access'[0m
+    [2m361:/tmp/klee-src/runtime/POSIX/fd.c:178:25: error: use of undeclared identifier '__NR_open'; did you mean '__fd_open'?[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/klee-src/runtime/POSIX && sed -n 1,80p fd.c[0m
+
+    [2m//===-- fd.c --------------------------------------------------------------===//[0m
+    [2m//[0m
+    [2m//                     The KLEE Symbolic Virtual Machine[0m
+    [2m//[0m
+    [2m// This file is distributed under the University of Illinois Open Source[0m
+    [2m// License. See LICENSE.TXT for details.[0m
+    [2m//[0m
+    [2m//===----------------------------------------------------------------------===//[0m
+    [2m[0m
+    [2m#define _LARGEFILE64_SOURCE[0m
+    [2m[3m... (60 lines hidden, /toggle to show all)[0m
+    [2m  [0m
+    [2m  return NULL;[0m
+    [2m}[0m
+    [2m[0m
+    [2mstatic void *__concretize_ptr(const void *p);[0m
+    [2mstatic size_t __concretize_size(size_t s);[0m
+    [2mstatic const char *__concretize_string(const char *s);[0m
+    [2m[0m
+    [2m/* Returns pointer to the file entry for a valid fd */[0m
+    [2mstatic exe_file_t *__get_file(int fd) {[0m
+[37mNow[0m[37m I'll patch the POSIX[0m[37m runtime for a[0m[37march64 (missing legacy[0m[37m [0m[32m`[0m[32m__NR_*[0m[32m`[0m[37m syscall[0m[37m numbers):[0m
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/klee-src/runtime/POSIX && python3 - <<'EOF'
+import re
+p='fd.c'
+s=open(p).read()
+
+helpers = r'''
+/* AArch64 does not provide the legacy n...[0m
+
+    [2mpatched 4[0m
+    [2m610:    return syscall(__NR_stat64, __concretize_string(path), buf);[0m
+    [2m661:    return syscall(__NR_lstat64, __concretize_string(path), buf);[0m
+    [2m676:  return syscall(__NR_chdir, __concretize_string(path));[0m
+    [2m693:  return syscall(__NR_fchdir, f->fd);[0m
+    [2m1439:  r = syscall(__NR_getcwd, buf, size);[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/klee-build && ninja -j20 > /tmp/klee-build.log 2>&1; echo BUILD=$?; grep -n "error:" /tmp/klee-build.log | head -20; tail -5 /tmp/klee-b...[0m
+    [2mtimeout_secs[0m: [33m3600[0m
+
+    [2mBUILD=0[0m
+    [2m[73/77] Linking CXX executable bin/klee-exec-tree[0m
+    [2m[74/77] Building CXX object tools/kleaver/CMakeFiles/kleaver.dir/main.cpp.o[0m
+    [2m[75/77] Linking CXX executable bin/kleaver[0m
+    [2m[76/77] Building CXX object tools/klee/CMakeFiles/klee.dir/main.cpp.o[0m
+    [2m[77/77] Linking CXX executable bin/klee[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/klee-build && ninja install > /tmp/klee-install.log 2>&1; echo INST=$?; tail -5 /tmp/klee-install.log; echo ---; ls /usr/local/bin | hea...[0m
+    [2mtimeout_secs[0m: [33m600[0m
+
+    [2mINST=0[0m
+    [2m-- Set non-toolchain portion of runtime path of "/usr/local/bin/klee-replay" to "/usr/lib/llvm-16/lib"[0m
+    [2m-- Installing: /usr/local/bin/klee-stats[0m
+    [2m-- Installing: /usr/local/bin/klee-zesti[0m
+    [2m-- Installing: /usr/local/bin/ktest-tool[0m
+    [2m-- Installing: /usr/local/include/klee/klee.h[0m
+    [2m---[0m
+    [2mkleaver[0m
+    [2mklee[0m
+    [2mklee-exec-tree[0m
+    [2m[3m... (9 lines hidden, /toggle to show all)[0m
+    [2mlibkleeRuntimeFortify64_Debug+Asserts.bca[0m
+    [2mlibkleeRuntimeFortify64_Debug.bca[0m
+    [2mlibkleeRuntimeFortify64_Release+Asserts.bca[0m
+    [2mlibkleeRuntimeFortify64_Release+Debug+Asserts.bca[0m
+    [2mlibkleeRuntimeFortify64_Release+Debug.bca[0m
+    [2mlibkleeRuntimeFortify64_Release.bca[0m
+    [2mlibkleeRuntimeFreestanding64_Debug+Asserts.bca[0m
+    [2mlibkleeRuntimeFreestanding64_Debug.bca[0m
+    [2mlibkleeRuntimeFreestanding64_Release+Asserts.bca[0m
+    [2mlibkleeRuntimeFreestanding64_Release+Debug+Asserts.bca[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mexport PATH=/usr/local/bin:$PATH; klee --version; echo "EXIT=$?"; echo ---; ldd /usr/local/bin/klee | grep -i "not found" ; echo "LDD_OK"[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2mKLEE 3.4-pre (https://klee-se.org/)[0m
+    [2m  Build mode: Release (Asserts: ON)[0m
+    [2m  Build revision: 78df9e234fdb806530184ecd8963268da87418c5[0m
+    [2m[0m
+    [2mUbuntu LLVM version 16.0.6[0m
+    [2m  Optimized build.[0m
+    [2mEXIT=0[0m
+    [2m---[0m
+    [2mLDD_OK[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mmkdir -p /tmp/kt && cd /tmp/kt && cat > get_sign.c <<'EOF'
+#include <klee/klee.h>
+int get_sign(int x) { if (x == 0) return 0; if (x < 0) return ...[0m
+    [2mtimeout_secs[0m: [33m300[0m
+
+    [2mKLEE: output directory is "/tmp/kt/klee-out-0"[0m
+    [2mKLEE: Using STP solver backend[0m
+    [2mKLEE: SAT solver: MiniSat[0m
+    [2mKLEE: Deterministic allocator: Using quarantine queue size 8[0m
+    [2mKLEE: Deterministic allocator: globals (start-address=0xf856c9e00000 size=10 GiB)[0m
+    [2mKLEE: Deterministic allocator: constants (start-address=0xf85449e00000 size=10 GiB)[0m
+    [2mKLEE: Deterministic allocator: heap (start-address=0xf75449e00000 size=1024 GiB)[0m
+    [2mKLEE: Deterministic allocator: stack (start-address=0xf73449e00000 size=128 GiB)[0m
+    [2m[0m
+    [2mCommand timed out after 300 seconds[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/kt && ls -la klee-out-0 2>/dev/null | head; ulimit -a; cat /proc/sys/vm/overcommit_memory[0m
+
+    [2mtotal 80[0m
+    [2mdrwxr-xr-x 2 root root  4096 Oct 31 22:39 .[0m
+    [2mdrwxr-xr-x 3 root root  4096 Oct 31 22:39 ..[0m
+    [2m-rw-r--r-- 1 root root  5431 Oct 31 22:39 assembly.ll[0m
+    [2m-rw-r--r-- 1 root root   116 Oct 31 22:39 info[0m
+    [2m-rw-r--r-- 1 root root   446 Oct 31 22:39 messages.txt[0m
+    [2m-rw-r--r-- 1 root root     0 Oct 31 22:39 run.istats[0m
+    [2m-rw-r--r-- 1 root root  4096 Oct 31 22:39 run.stats[0m
+    [2m-rw-r--r-- 1 root root 32768 Oct 31 22:39 run.stats-shm[0m
+    [2m-rw-r--r-- 1 root root 12392 Oct 31 22:39 run.stats-wal[0m
+    [2m[3m... (8 lines hidden, /toggle to show all)[0m
+    [2mopen files                          (-n) 1024[0m
+    [2mpipe size                (512 bytes, -p) 8[0m
+    [2mPOSIX message queues         (bytes, -q) 819200[0m
+    [2mreal-time priority                  (-r) 0[0m
+    [2mstack size                  (kbytes, -s) 8192[0m
+    [2mcpu time                   (seconds, -t) unlimited[0m
+    [2mmax user processes                  (-u) unlimited[0m
+    [2mvirtual memory              (kbytes, -v) unlimited[0m
+    [2mfile locks                          (-x) unlimited[0m
+    [2m0[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/kt && cat klee-out-0/messages.txt; echo ---; cat klee-out-0/info; echo ---; ps aux | grep -c klee; ls /tmp/kt[0m
+
+    [2mKLEE: Using STP solver backend[0m
+    [2mKLEE: SAT solver: MiniSat[0m
+    [2mKLEE: Deterministic allocator: Using quarantine queue size 8[0m
+    [2mKLEE: Deterministic allocator: globals (start-address=0xf856c9e00000 size=10 GiB)[0m
+    [2mKLEE: Deterministic allocator: constants (start-address=0xf85449e00000 size=10 GiB)[0m
+    [2mKLEE: Deterministic allocator: heap (start-address=0xf75449e00000 size=1024 GiB)[0m
+    [2mKLEE: Deterministic allocator: stack (start-address=0xf73449e00000 size=128 GiB)[0m
+    [2m---[0m
+    [2mklee get_sign.bc[0m
+    [2mPID: 10259[0m
+    [2mUsing monotonic steady clock with 1/1000000000s resolution[0m
+    [2mStarted: 2026-10-31 22:39:18[0m
+    [2m---[0m
+    [2m2[0m
+    [2mget_sign.bc[0m
+    [2mget_sign.c[0m
+    [2mklee-last[0m
+    [2mklee-out-0[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mpkill -f "klee get_sign" ; sleep 1; which strace gdb perf; cd /tmp/kt && rm -rf klee-out-0 klee-last && (timeout -s INT 15 strace -f -c -o /tmp/...[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2m(no output)[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mwhich strace gdb perf ltrace 2>&1; echo "---"; ps aux | grep -i klee | grep -v grep | head[0m
+
+    [2m---[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mDEBIAN_FRONTEND=noninteractive apt-get install -y -qq strace gdb 2>&1 | tail -2; cd /tmp/kt && rm -rf klee-out-* klee-last; timeout 60 strace -f...[0m
+    [2mtimeout_secs[0m: [33m180[0m
+
+    [2mSetting up gdb (15.1-1ubuntu1~24.04.1) ...[0m
+    [2mProcessing triggers for libc-bin (2.39-0ubuntu8.9) ...[0m
+    [2m[0m
+    [2mCommand timed out after 180 seconds[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mps aux | grep -w klee | grep -v grep | head -3; echo ---; wc -l /tmp/st.txt 2>/dev/null; tail -15 /tmp/st.txt 2>/dev/null; echo ---; tail -5 /tm...[0m
+
+    [2mroot       10469  0.0  0.0   2672  1648 pts/1    S    22:44   0:00 timeout 60 strace -f -o /tmp/st.txt -e trace=mmap,munmap,madvise,write,read /usr/local/bin/klee get_sign.bc[0m
+    [2mroot       10470  0.0  0.0   4484  3180 pts/1    S    22:44   0:00 strace -f -o /tmp/st.txt -e trace=mmap,munmap,madvise,write,read /usr/local/bin/klee get_sign.bc[0m
+    [2mroot       10473  0.0  0.0 1229108952 64416 pts/1 S   22:44   0:00 /usr/local/bin/klee get_sign.bc[0m
+    [2m---[0m
+    [2m199 /tmp/st.txt[0m
+    [2m10473 mmap(NULL, 32768, PROT_READ|PROT_WRITE, MAP_SHARED, 8, 0) = 0xe03bc4978000[0m
+    [2m10473 read(10, "TZif2\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"..., 4096) = 114[0m
+    [2m10473 read(10, "TZif2\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"..., 4096) = 60[0m
+    [2m10473 write(5, "/usr/local/bin/klee get_sign.bc\n"..., 131) = 131[0m
+    [2m10474 +++ exited with 0 +++[0m
+    [2m[3m... (6 lines hidden, /toggle to show all)[0m
+    [2m10473 --- SIGCONT {si_signo=SIGCONT, si_code=SI_USER, si_pid=10469, si_uid=0} ---[0m
+    [2m10476 --- SIGCONT {si_signo=SIGCONT, si_code=SI_USER, si_pid=10469, si_uid=0} ---[0m
+    [2m10473 write(2, "KLEE: ctrl-c detected, requestin"..., 55) = 55[0m
+    [2m10476 write(2, "KLEE: ctrl-c detected, requestin"..., 55) = 55[0m
+    [2m---[0m
+    [2mKLEE: Deterministic allocator: constants (start-address=0xe036ba800000 size=10 GiB)[0m
+    [2mKLEE: Deterministic allocator: heap (start-address=0xdf36ba800000 size=1024 GiB)[0m
+    [2mKLEE: Deterministic allocator: stack (start-address=0xdf16ba800000 size=128 GiB)[0m
+    [2mKLEE: ctrl-c detected, requesting interpreter to halt.[0m
+    [2mKLEE: ctrl-c detected, requesting interpreter to halt.[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mpkill -f "/usr/local/bin/klee" ; sleep 1; cd /tmp/kt && rm -rf klee-out-* klee-last; nohup /usr/local/bin/klee get_sign.bc > /tmp/klee-run2.log ...[0m
+    [2mtimeout_secs[0m: [33m180[0m
+
+    [2m(no output)[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mpkill -x klee; sleep 1; cd /tmp/kt && rm -rf klee-out-* klee-last; nohup /usr/local/bin/klee get_sign.bc > /tmp/klee-run2.log 2>&1 & sleep 12; P...[0m
+    [2mtimeout_secs[0m: [33m180[0m
+
+    [2mPID=10491[0m
+    [2m1[0m
+    [2mCould not attach to process.  If your uid matches the uid of the target[0m
+    [2mprocess, check the setting of /proc/sys/kernel/yama/ptrace_scope, or try[0m
+    [2magain as the root user.  For more details, see /etc/sysctl.d/10-ptrace.conf[0m
+    [2mptrace: Inappropriate ioctl for device.[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mPID=$(pgrep -x klee | head -1); echo PID=$PID; cat /proc/$PID/status | grep -E "State|Threads|VmRSS"; cat /proc/$PID/wchan; echo; cat /proc/$PID...[0m
+    [2mtimeout_secs[0m: [33m60[0m
+
+    [2mPID=10491[0m
+    [2mState:	S (sleeping)[0m
+    [2mVmRSS:	   64412 kB[0m
+    [2mThreads:	1[0m
+    [2mdo_wait[0m
+    [2mcat: /proc/10491/syscall: Operation not permitted[0m
+    [2m---[0m
+    [2mMiB Swap:  16384.0 total,   6570.8 free,   9813.2 used.  66588.5 avail Mem [0m
+    [2m[0m
+    [2m    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND[0m
+    [2m  10491 root      20   0 1172.2g  64412  49256 S   0.0   0.1   0:00.03 klee[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mPID=$(pgrep -x klee | head -1); echo PID=$PID; ps -ef --forest | grep -A5 -w "klee" | head -20; echo "---children"; for c in $(pgrep -P $PID); d...[0m
+
+    [2mPID=10491[0m
+    [2mroot       10522     360  0 22:48 pts/1    00:00:00  |                   \_ bash -c PID=$(pgrep -x klee | head -1); echo PID=$PID; ps -ef --forest | grep -A5 -w "klee" | head -20; echo "---children"; for c in $(pgrep -P $PID); do echo "child $c: $(cat /proc/$c/cmdline | tr '\0' ' ')"; cat /proc/$c/wchan; echo; cat /proc/$c/status | grep State; done[0m
+    [2mroot       10526   10522  0 22:48 pts/1    00:00:00  |                       \_ ps -ef --forest[0m
+    [2mroot       10527   10522  0 22:48 pts/1    00:00:00  |                       \_ grep -A5 -w klee[0m
+    [2mroot       10528   10522  0 22:48 pts/1    00:00:00  |                       \_ head -20[0m
+    [2mroot          36      33  0 22:36 ?        00:00:00  \_ sh -c cat > /logs/agent.log[0m
+    [2mroot          38      36  0 22:36 ?        00:00:00      \_ cat[0m
+    [2mroot       10491       1  0 22:47 pts/1    00:00:00 /usr/local/bin/klee get_sign.bc[0m
+    [2mroot       10495   10491 99 22:47 pts/1    00:00:20  \_ /usr/local/bin/klee get_sign.bc[0m
+    [2m---children[0m
+    [2mchild 10495: /usr/local/bin/klee get_sign.bc [0m
+    [2m0[0m
+    [2mState:	R (running)[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/kt && ls klee-out-* 2>/dev/null; cat klee-out-0/messages.txt; echo ---; cat > trivial.c <<'EOF'
+int main(void){ return 0; }
+EOF
+clang-16...[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2massembly.ll[0m
+    [2minfo[0m
+    [2mmessages.txt[0m
+    [2mrun.istats[0m
+    [2mrun.stats[0m
+    [2mrun.stats-shm[0m
+    [2mrun.stats-wal[0m
+    [2mtest000001.ktest[0m
+    [2mwarnings.txt[0m
+    [2mKLEE: Using STP solver backend[0m
+    [2m[3m... (3 lines hidden, /toggle to show all)[0m
+    [2mKLEE: Deterministic allocator: constants (start-address=0xf117f5e00000 size=10 GiB)[0m
+    [2mKLEE: Deterministic allocator: heap (start-address=0xf017f5e00000 size=1024 GiB)[0m
+    [2mKLEE: Deterministic allocator: stack (start-address=0xeff7f5e00000 size=128 GiB)[0m
+    [2m---[0m
+    [2mEXIT=0[0m
+    [2m[0m
+    [2mKLEE: done: total instructions = 3[0m
+    [2mKLEE: done: completed paths = 1[0m
+    [2mKLEE: done: partially completed paths = 0[0m
+    [2mKLEE: done: generated tests = 1[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/kt && cat klee-out-0/warnings.txt; echo "=== klee with max-time"; pkill -x klee; rm -rf klee-out-1 klee-last; timeout 120 /usr/local/bin...[0m
+    [2mtimeout_secs[0m: [33m180[0m
+
+    [2m=== klee with max-time[0m
+    [2m[0m
+    [2mCommand timed out after 180 seconds[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mpkill -x klee; sleep 1; pkill -9 -x klee; sleep 1; ps -ef | grep -w klee | grep -v grep | head; cat > /tmp/q.smt2 <<'EOF'
+(set-logic QF_BV)
+(dec...[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2msat[0m
+    [2mSTP_EXIT=0[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/kt && rm -rf klee-out-* klee-last; (timeout -k 2 20 /usr/local/bin/klee --debug-print-instructions=all get_sign.bc > /tmp/gs3.log 2>&1);...[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2mEXIT=1[0m
+    [2m1 /tmp/gs3.log[0m
+    [2mklee: for the --debug-print-instructions option: Cannot find option named 'all'![0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32m/usr/local/bin/klee --help 2>&1 | grep -i -A3 "debug-print-instructions\|solver-timeout\|max-solver" | head -40[0m
+
+    [2m  --max-solver-time=<string>                              - Maximum amount of time for a single SMT query (default=0s (off)). Enables --use-forked-solver[0m
+    [2m  --max-sym-array-size=<uint>                             - If a symbolic array exceeds this size (in bytes), symbolic addresses into this array are concretized.  Set to 0 to disable (default=0)[0m
+    [2m  --min-query-time-to-log=<string>                        - Set time threshold for queries logged in files. Only queries longer than threshold will be logged. (default=0s)[0m
+    [2m  --optimize-array=<value>                                - Optimize accesses to either concrete or concrete/symbolic arrays. (default=false)[0m
+    [2m--[0m
+    [2m  --debug-print-instructions=<value>                      - Log instructions during execution.[0m
+    [2m    =all:stderr                                           -   Log all instructions to stderr in format [src, inst_id, llvm_inst][0m
+    [2m    =src:stderr                                           -   Log all instructions to stderr in format [src, inst_id][0m
+    [2m    =compact:stderr                                       -   Log all instructions to stderr in format [inst_id][0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/kt && rm -rf klee-out-* klee-last; (timeout -k 2 20 /usr/local/bin/klee --debug-print-instructions=compact:stderr get_sign.bc > /tmp/gs4...[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2mbash: line 1: 10576 Killed                  ( timeout -k 2 20 /usr/local/bin/klee --debug-print-instructions=compact:stderr get_sign.bc > /tmp/gs4.log 2>&1 )[0m
+    [2mEXIT=137[0m
+    [2m32 /tmp/gs4.log[0m
+    [2mKLEE: Deterministic allocator: stack (start-address=0xe1110fc00000 size=128 GiB)[0m
+    [2m45:1[0m
+    [2m46:1[0m
+    [2m47:1[0m
+    [2m48:1[0m
+    [2m49:1[0m
+    [2m50:1[0m
+    [2m[3m... (8 lines hidden, /toggle to show all)[0m
+    [2m19:1[0m
+    [2m23:2[0m
+    [2m20:1[0m
+    [2m36:1[0m
+    [2m24:2[0m
+    [2m37:1[0m
+    [2m52:1[0m
+    [2m25:2[0m
+    [2mKLEE: ctrl-c detected, requesting interpreter to halt.[0m
+    [2mKLEE: ctrl-c detected, requesting interpreter to halt.[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/kt && rm -rf klee-out-* klee-last; (timeout -k 2 30 /usr/local/bin/klee --use-forked-solver=false get_sign.bc > /tmp/gs5.log 2>&1); echo...[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2mEXIT=124[0m
+    [2mKLEE: output directory is "/tmp/kt/klee-out-0"[0m
+    [2mKLEE: Using STP solver backend[0m
+    [2mKLEE: SAT solver: MiniSat[0m
+    [2mKLEE: Deterministic allocator: Using quarantine queue size 8[0m
+    [2mKLEE: Deterministic allocator: globals (start-address=0xfebfa3c00000 size=10 GiB)[0m
+    [2mKLEE: Deterministic allocator: constants (start-address=0xfebd23c00000 size=10 GiB)[0m
+    [2mKLEE: Deterministic allocator: heap (start-address=0xfdbd23c00000 size=1024 GiB)[0m
+    [2mKLEE: Deterministic allocator: stack (start-address=0xfd9d23c00000 size=128 GiB)[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mmkdir -p /tmp/stpapi && cd /tmp/stpapi && cat > t.cpp <<'EOF'
+#include <stp/c_interface.h>
+#include <cstdio>
+int main() {
+  VC vc = vc_createVal...[0m
+    [2mtimeout_secs[0m: [33m180[0m
+
+    [2m      |                 ^~~~~~~~~~~[0m
+    [2mt.cpp:13:28: error: ‘vc_sbvAddExpr’ was not declared in this scope; did you mean ‘vc_sbvModExpr’?[0m
+    [2m   13 |   Expr n = vc_simplify(vc, vc_sbvAddExpr(vc, a, zero));[0m
+    [2m      |                            ^~~~~~~~~~~~~[0m
+    [2m      |                            vc_sbvModExpr[0m
+    [2mBUILD=0[0m
+    [2mtimeout: failed to run command ‘./t’: No such file or directory[0m
+    [2mEXIT=127[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/stpapi && sed -i 's/vc_sbvAddExpr(vc, a, zero)/vc_bvPlusExpr(vc, 32, a, zero)/' t.cpp && g++ -O2 -I/usr/local/include t.cpp -o t /usr/lo...[0m
+    [2mtimeout_secs[0m: [33m180[0m
+
+    [2m4[0m
+    [2mtimeout: failed to run command ‘./t’: No such file or directory[0m
+    [2mEXIT=127[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/stpapi && g++ -O2 -I/usr/local/include t.cpp -o t /usr/local/lib/libstp.a /usr/local/lib/libminisat.a -lz 2>&1 | grep -B2 -A5 "error" | ...[0m
+    [2mtimeout_secs[0m: [33m180[0m
+
+    [2mt.cpp: In function ‘int main()’:[0m
+    [2mt.cpp:5:15: error: invalid conversion from ‘char’ to ‘VC’ {aka ‘void*’} [-fpermissive][0m
+    [2m    5 |   vc_setFlags('n');[0m
+    [2m      |               ^~~[0m
+    [2m      |               |[0m
+    [2m      |               char[0m
+    [2mt.cpp:5:14: error: too few arguments to function ‘void vc_setFlags(VC, char, int)’[0m
+    [2m    5 |   vc_setFlags('n');[0m
+    [2m      |   ~~~~~~~~~~~^~~~~[0m
+    [2mIn file included from t.cpp:1:[0m
+    [2m[3m... (4 lines hidden, /toggle to show all)[0m
+    [2m    6 |   vc_setFlags('d');[0m
+    [2m      |               ^~~[0m
+    [2m      |               |[0m
+    [2m      |               char[0m
+    [2mt.cpp:6:14: error: too few arguments to function ‘void vc_setFlags(VC, char, int)’[0m
+    [2m    6 |   vc_setFlags('d');[0m
+    [2m      |   ~~~~~~~~~~~^~~~~[0m
+    [2m/usr/local/include/stp/c_interface.h:132:17: note: declared here[0m
+    [2m  132 | DLL_PUBLIC void vc_setFlags(VC vc, char c,[0m
+    [2m      |                 ^~~~~~~~~~~[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/stpapi && sed -i "s/vc_setFlags('n');/vc_setFlags(vc, 'n', 1);/; s/vc_setFlags('d');/vc_setFlags(vc, 'd', 1);/" t.cpp && g++ -O2 -I/usr/...[0m
+    [2mtimeout_secs[0m: [33m180[0m
+
+    [2m0[0m
+    [2mquerying eq...[0m
+    [2mvalid? 0[0m
+    [2msimp: 0x00000001 [0m
+    [2mtimeout: the monitored command dumped core[0m
+    [2mbash: line 1: 10616 Segmentation fault      timeout -k 2 25 ./t[0m
+    [2mEXIT=139[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && cat > /tmp/q.kquery <<'EOF'
+array a[4] : w32 -> w8 = symbolic
+(query [] (Eq (ReadLSB w32 0 a) N0))
+EOF
+timeout -k 2 20 /usr/local/bin...[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2m/tmp/q.kquery:2:32: error: invalid expression label reference.[0m
+    [2m(query [] (Eq (ReadLSB w32 0 a) N0))[0m
+    [2m                                ~~[0m
+    [2m/tmp/q.kquery: parse failure: 1 errors.[0m
+    [2mEXIT=1[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && cat > /tmp/q.kquery <<'EOF'
+array a[4] : w32 -> w8 = symbolic
+(query [] (Eq (ReadLSB w32 0 a) 0x00000000))
+EOF
+timeout -k 2 30 /usr/l...[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2mKLEE: Using STP solver backend[0m
+    [2mKLEE: SAT solver: MiniSat[0m
+    [2mQuery 0:	INVALID[0m
+    [2m--[0m
+    [2mtotal queries = 1[0m
+    [2mtotal query constructs = 13[0m
+    [2mvalid queries = 0[0m
+    [2minvalid queries = 1[0m
+    [2mquery cex = 1[0m
+    [2mEXIT=0[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32m/usr/local/bin/klee --help 2>&1 | grep -i -B2 -A4 "determ\|quarantine" | head -40; echo "=== single branch test"; cd /tmp/kt && cat > one.c <<'E...[0m
+    [2mtimeout_secs[0m: [33m180[0m
+
+    [2mThese options control memory management.[0m
+    [2m[0m
+    [2m  --kdalloc                                               - Allocate memory deterministically (default=true)[0m
+    [2m  --kdalloc-constants-size=<uint>                         - Reserved memory for constant globals in GiB (default=10)[0m
+    [2m  --kdalloc-constants-start-address=<ulong>               - Start address for constant globals segment (has to be page aligned)[0m
+    [2m  --kdalloc-globals-size=<uint>                           - Reserved memory for globals in GiB (default=10)[0m
+    [2m  --kdalloc-globals-start-address=<ulong>                 - Start address for globals segment (has to be page aligned)[0m
+    [2m--[0m
+    [2m  --kdalloc-heap-start-address=<ulong>                    - Start address for heap segment (has to be page aligned)[0m
+    [2m  --kdalloc-mark-as-unneeded                              - Mark allocations as unneeded after external function calls (default=true)[0m
+    [2m[3m... (9 lines hidden, /toggle to show all)[0m
+    [2mKLEE: Deterministic allocator: Using quarantine queue size 8[0m
+    [2mKLEE: Deterministic allocator: globals (start-address=0xf590c0c00000 size=10 GiB)[0m
+    [2mKLEE: Deterministic allocator: constants (start-address=0xf58e40c00000 size=10 GiB)[0m
+    [2mKLEE: Deterministic allocator: heap (start-address=0xf48e40c00000 size=1024 GiB)[0m
+    [2mKLEE: Deterministic allocator: stack (start-address=0xf46e40c00000 size=128 GiB)[0m
+    [2m[0m
+    [2mKLEE: done: total instructions = 16[0m
+    [2mKLEE: done: completed paths = 2[0m
+    [2mKLEE: done: partially completed paths = 0[0m
+    [2mKLEE: done: generated tests = 2[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/kt && cat > two.c <<'EOF'
+#include <klee/klee.h>
+int main(void){ int a; klee_make_symbolic(&a, sizeof(a), "a"); if (a < 0) return 1; ret...[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2mEXIT=0[0m
+    [2mKLEE: Deterministic allocator: stack (start-address=0xf7cdc0400000 size=128 GiB)[0m
+    [2m[0m
+    [2mKLEE: done: total instructions = 16[0m
+    [2mKLEE: done: completed paths = 2[0m
+    [2mKLEE: done: partially completed paths = 0[0m
+    [2mKLEE: done: generated tests = 2[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/kt && rm -rf klee-out-* klee-last && (timeout -k 2 30 /usr/local/bin/klee --debug-print-instructions=src:stderr get_sign.bc > /tmp/gs6.l...[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2mbash: line 1: 10650 Killed                  ( timeout -k 2 30 /usr/local/bin/klee --debug-print-instructions=src:stderr get_sign.bc > /tmp/gs6.log 2>&1 )[0m
+    [2mEXIT=137[0m
+    [2m     get_sign.c:2 0:12:1[0m
+    [2m     get_sign.c:2 18:13:1[0m
+    [2m     get_sign.c:2 27:14:1[0m
+    [2m     get_sign.c:2 29:15:1[0m
+    [2m     get_sign.c:2 27:16:1[0m
+    [2m     get_sign.c:2 35:19:1[0m
+    [2m     get_sign.c:2 49:23:2[0m
+    [2m     get_sign.c:2 35:20:1[0m
+    [2m[3m... (6 lines hidden, /toggle to show all)[0m
+    [2mKLEE: ctrl-c detected, requesting interpreter to halt.[0m
+    [2massembly.ll[0m
+    [2minfo[0m
+    [2mmessages.txt[0m
+    [2mrun.istats[0m
+    [2mrun.stats[0m
+    [2mrun.stats-shm[0m
+    [2mrun.stats-wal[0m
+    [2mtest000001.ktest[0m
+    [2mwarnings.txt[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/kt && cat > three.c <<'EOF'
+#include <klee/klee.h>
+int main(void){ int a; klee_make_symbolic(&a, sizeof(a), "a");
+  if (a == 0) return 0...[0m
+    [2mtimeout_secs[0m: [33m180[0m
+
+    [2mbash: line 10: 10662 Killed                  ( timeout -k 2 25 /usr/local/bin/klee three.bc > /tmp/three.log 2>&1 )[0m
+    [2mTHREE_EXIT=137[0m
+    [2mKLEE: Deterministic allocator: heap (start-address=0xf52de8600000 size=1024 GiB)[0m
+    [2mKLEE: Deterministic allocator: stack (start-address=0xf50de8600000 size=128 GiB)[0m
+    [2mKLEE: ctrl-c detected, requesting interpreter to halt.[0m
+    [2mKLEE: ctrl-c detected, requesting interpreter to halt.[0m
+    [2m=== get_sign -O0 single statement version[0m
+    [2mbash: line 11: 10672 Killed                  ( timeout -k 2 25 /usr/local/bin/klee gs2.bc > /tmp/gs7.log 2>&1 )[0m
+    [2mGS2_EXIT=137[0m
+    [2mKLEE: Deterministic allocator: heap (start-address=0xe3e5ea400000 size=1024 GiB)[0m
+    [2mKLEE: Deterministic allocator: stack (start-address=0xe3c5ea400000 size=128 GiB)[0m
+    [2mKLEE: ctrl-c detected, requesting interpreter to halt.[0m
+    [2mKLEE: ctrl-c detected, requesting interpreter to halt.[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && cat > /tmp/q2.kquery <<'EOF'
+array a[4] : w32 -> w8 = symbolic
+(query [(Not (Eq (ReadLSB w32 0 a) 0x00000000))] (Slt (ReadLSB w32 0 a...[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2mKLEE: Using STP solver backend[0m
+    [2mKLEE: SAT solver: MiniSat[0m
+    [2mEXIT=124[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && run(){ printf "%s\n" "$2" > /tmp/qq.kquery; echo "--- $1"; timeout -k 2 10 /usr/local/bin/kleaver --solver-backend=stp /tmp/qq.kquery...[0m
+    [2mtimeout_secs[0m: [33m180[0m
+
+    [2m--- slt-no-assumption[0m
+    [2mvalid queries = 0[0m
+    [2minvalid queries = 1[0m
+    [2mquery cex = 1[0m
+    [2mexit=0[0m
+    [2m--- eq-with-assumption[0m
+    [2mvalid queries = 0[0m
+    [2minvalid queries = 1[0m
+    [2mquery cex = 1[0m
+    [2mexit=0[0m
+    [2m--- slt-const-only[0m
+    [2m(query [] (Slt 0x00000001 0x00000000))[0m
+    [2m           ~~~[0m
+    [2m/tmp/qq.kquery: parse failure: 1 errors.[0m
+    [2mexit=0[0m
+    [2m--- var-slt-assumption[0m
+    [2mvalid queries = 0[0m
+    [2minvalid queries = 1[0m
+    [2mquery cex = 1[0m
+    [2mexit=0[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/stpapi && cat > t2.cpp <<'EOF'
+#include <stp/c_interface.h>
+#include <cstdio>
+int main() {
+  VC vc = vc_createValidityChecker();
+  vc_se...[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2m1[0m
+    [2mtimeout: failed to run command ‘./t2’: No such file or directory[0m
+    [2mEXIT=127[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/stpapi && g++ -O2 -I/usr/local/include t2.cpp -o t2 /usr/local/lib/libstp.a /usr/local/lib/libminisat.a -lz 2>&1 | grep -A5 error | head...[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2mt2.cpp:12:11: error: ‘vc_query_with_assumption’ was not declared in this scope[0m
+    [2m   12 |   int r = vc_query_with_assumption(vc, slt, ne);[0m
+    [2m      |           ^~~~~~~~~~~~~~~~~~~~~~~~[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mgrep -n "query" /usr/local/include/stp/c_interface.h | head -30[0m
+
+    [2m406://! \brief Prints the counter example after an invalid query to stdout.[0m
+    [2m408://! This method should only be called after a query which returns false.[0m
+    [2m432://! \brief Prints the state of the query to a buffer allocated by STP[0m
+    [2m439://! to enable simplifications of the query state during printing.[0m
+    [2m457://! \brief Prints the query to stdout in presentation language.[0m
+    [2m489:DLL_PUBLIC int vc_query_with_timeout(VC vc, Expr e, int timeout_max_conflicts, int timeout_max_time);[0m
+    [2m494://! This simply forwards to 'vc_query_with_timeout'.[0m
+    [2m496://! Note: Read the documentation of 'vc_query_with_timeout' for more information[0m
+    [2m499:DLL_PUBLIC int vc_query(VC vc, Expr e);[0m
+    [2m501://! \brief Returns the counter example after an invalid query.[0m
+    [2m505://! \brief Returns an array from a counter example after an invalid query.[0m
+    [2m1021://! \brief Returns the hash of the given query state.[0m
+    [2m1023:DLL_PUBLIC int vc_getHashQueryStateToBuffer(VC vc, Expr query);[0m
+    [2m1162://!        query and assertion information into the 'outQuery' and 'outAsserts'[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/klee-src && grep -n "vc_" lib/Solver/STPSolver.cpp | head -40; echo ---; grep -n "assumption" lib/Solver/STPSolver.cpp /usr/local/includ...[0m
+
+    [2m65:#define vc_bvBoolExtract IAMTHESPAWNOFSATAN[0m
+    [2m117:    : vc(vc_createValidityChecker()),[0m
+    [2m125:  // pointers at vc_Destroy time.  This caused double-free errors[0m
+    [2m127:  // the pointers using vc_DeleteExpr.  By setting EXPRDELETE to 0[0m
+    [2m129:  vc_setInterfaceFlags(vc, EXPRDELETE, 0);[0m
+    [2m136:    SATSolverAvailable = vc_useMinisat(vc);[0m
+    [2m140:    SATSolverAvailable = vc_useSimplifyingMinisat(vc);[0m
+    [2m144:    SATSolverAvailable = vc_useCryptominisat(vc);[0m
+    [2m148:    SATSolverAvailable = vc_useRiss(vc);[0m
+    [2m158:  if (vc_isUsingMinisat(vc))[0m
+    [2m[3m... (8 lines hidden, /toggle to show all)[0m
+    [2m220:  vc_pop(vc);[0m
+    [2m265:  hasSolution = !vc_query(vc, q);[0m
+    [2m277:          vc_getCounterExample(vc, builder->getInitialRead(object, offset));[0m
+    [2m317:    int res = vc_query(vc, q);[0m
+    [2m322:              vc_getCounterExample(vc, builder->getInitialRead(object, offset));[0m
+    [2m392:  vc_push(vc);[0m
+    [2m395:    vc_assertFormula(vc, builder->construct(constraint));[0m
+    [2m405:    vc_printQueryStateToBuffer(vc, stp_e, &buf, &len, false);[0m
+    [2m429:  vc_pop(vc);[0m
+    [2m---[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp/stpapi && cat > t3.cpp <<'EOF'
+#include <stp/c_interface.h>
+#include <cstdio>
+int main() {
+  VC vc = vc_createValidityChecker();
+  vc_se...[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2m0[0m
+    [2museMinisat: 1[0m
+    [2mquery Slt(x,0) with assumption Not(x==0)...[0m
+    [2mEXIT=124[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && cat > /tmp/a.smt2 <<'EOF'
+(set-logic QF_BV)
+(declare-fun x () (_ BitVec 32))
+(assert (not (= x #x00000000)))
+(assert (bvslt x #x00000...[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2mCLI_EXIT=124[0m
+    [2msat[0m
+    [2mCLI2_EXIT=0[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && t(){ printf "%s\n" "$2" > /tmp/v.smt2; echo "--- $1"; (timeout -k 2 8 /usr/local/bin/stp --SMTLIB2 /tmp/v.smt2); echo "exit=$?"; }
+t ...[0m
+    [2mtimeout_secs[0m: [33m120[0m
+
+    [2m--- ne0-only[0m
+    [2msat[0m
+    [2mexit=0[0m
+    [2m--- ne5+slt0[0m
+    [2mexit=124[0m
+    [2m--- ne0+bvult[0m
+    [2munsat[0m
+    [2mexit=0[0m
+    [2m--- ne0+eq1[0m
+    [2msat[0m
+    [2mexit=0[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32m/usr/local/bin/stp --help 2>&1 | grep -i -A2 "simpl\|wordlevel\|bitblast" | head -40; echo "=== klee STPSolver init"; sed -n 110,180p /tmp/klee-...[0m
+
+    [2mSimplifications:[0m
+    [2m  --disable-simplifications             disable all simplifications[0m
+    [2m  -w [ --switch-word ]                  switch off wordlevel solver[0m
+    [2m  -a [ --disable-opt-inc ]              disable rewriting simplifier[0m
+    [2m  --disable-cbitp                       disable constant bit propagation[0m
+    [2m  --disable-equality                    disable equality propagation[0m
+    [2m  --size-reducing-only                  size reducing simplifications only[0m
+    [2m  --unconstrained-variable-elimination arg (=1)[0m
+    [2m                                        Unconstrained variables are eliminated.[0m
+    [2m--[0m
+    [2m[3m... (92 lines hidden, /toggle to show all)[0m
+    [2m    klee_message("Fallback SAT solver: %s", SATName.c_str());[0m
+    [2m  }[0m
+    [2m[0m
+    [2m  make_division_total(vc);[0m
+    [2m[0m
+    [2m  vc_registerErrorHandler(::stp_error_handler);[0m
+    [2m[0m
+    [2m  if (useForkedSTP) {[0m
+    [2m    assert(shared_memory_id == 0 && "shared memory id already allocated");[0m
+    [2m    shared_memory_id =[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && for opt in "--disable-simplifications" "--disable-cbitp" "--disable-equality" "-a" "-w" "--size-reducing-only" "--use-intervals 0"; d...[0m
+    [2mtimeout_secs[0m: [33m180[0m
+

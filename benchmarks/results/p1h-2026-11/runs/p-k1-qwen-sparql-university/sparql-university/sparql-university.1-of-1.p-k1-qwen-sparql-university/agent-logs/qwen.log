@@ -1,0 +1,18 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Created `/app/solution.sparql` and verified it by executing it against the graph (Comunica SPARQL 1.1 engine).
+
+**Query logic**
+- **Full professors:** `role` starts with `"Professor"` and does not contain `"Assistant"`/`"Associate"`.
+- **EU department:** `FILTER EXISTS` over the professor's departments, checking the university's `locatedInCountry` against the 27 EU alpha-2 codes as of 2025-08-16 (`AT, BE, BG, HR, CY, CZ, DK, EE, FI, FR, DE, GR, HU, IE, IT, LV, LT, LU, MT, NL, PL, PT, RO, SK, SI, ES, SE`).
+- **Department size:** subquery grouped by `(?professor, ?largeDept)` with `HAVING (COUNT(DISTINCT ?student) > 10)`. Students count as *currently enrolled* when `hasEnrollmentDate <= 2025-08-16` and there is no `hasGraduationDate <= 2025-08-16`.
+- **Countries:** joined over all departments the professor works in (not just EU ones), so `GROUP_CONCAT` reflects every country of employment.
+
+**Verified output (3 rows)**
+
+| professorName | countries |
+|---|---|
+| Aristotle Tympas | GR |
+| Orfeas Menis | GR, US |
+| Pepe Attanasio | PT, GR |
+
+**Why others were excluded:** Athanasios Voulodimos and Stefan Mueller are assistant professors; John Smith works only in the US (and his department has 7 enrolled students); Marie Dubois is in France but Mathematics_Sorbonne has only 6 currently enrolled students (many graduated in June/July 2025).

@@ -1,0 +1,1895 @@
+  source "${DIR}/common-functions"
+  with_sudo apt update -y
+
+  dependencies=(
+    build-essential
+    bison
+    ca-certificates
+    cmake
+    flex
+    git
+    zlib1g-dev
+    libtinfo-dev
+  )
+
+  #Install essential dependencies
+  with_sudo apt -y --no-install-recommends install "${dependencies[@]}"
+}--- stp version
+# Build information for STP solver
+required_variables_stp=(
+  "STP_VERSION"
+  "MINISAT_VERSION"
+)
+
+# On which artifacts does STP depend on
+artifact_dependency_stp=("sanitizer")
+
+artifact_dependency_stp() {
+  echo "sanitizer"
+  if [[ "${SANITIZER_BUILD:-}" == "memory" ]]; then
+    echo "llvm"
+  fi
+}--- klee ubuntu deps
+install_build_dependencies_klee() {
+  source "${DIR}/common-functions"
+
+  # Install KLEE's dependencies
+  dependencies=(
+    build-essential
+    gcc-multilib # to generate 32bit
+    zlib1g-dev
+    python3
+    python3-setuptools
+    python3-pip
+    python3-venv # Needed to install lit and tabulate in a venv
+    python3-wheel
+    libtinfo-dev
+  )
+
+  if [[ "${DISTRIBUTION_VER}" == "24.04" ]]; then
+    # Clang can select GCC 14 even though build-essential installs G++ 13.
+    dependencies+=(libstdc++-14-dev)
+  fi
+
+  if [[ "${SOLVERS:-}" == "metaSMT" ]]; then
+    dependencies+=(
+      libboost-dev
+      libgmp-dev
+    )
+  fi
+  if [[ $(to_bool "${COVERAGE}") -eq 1 ]]; then
+    dependencies+=(lcov curl git)
+  fi
+
+  if [[ $(to_bool "${ENABLE_DOXYGEN}") -eq 1 ]]; then
+    dependencies+=(doxygen graphviz)
+  fi
+
+  with_sudo apt-get -y --no-install-recommends install "${dependencies[@]}"
+
+  # Prepend the venv to PATH, so its python3 (wi
+<output_tail>
+#######
+# Handle setting up solver configure flags for KLEE
+###############################################################################
+
+  local KLEE_Z3_CONFIGURE_OPTION=("-DENABLE_SOLVER_Z3=OFF")
+  local KLEE_STP_CONFIGURE_OPTION=("-DENABLE_SOLVER_STP=OFF")
+  local KLEE_METASMT_CONFIGURE_OPTION=("-DENABLE_SOLVER_METASMT=OFF")
+
+
+  for solver in "${SELECTED_SOLVERS[@]}"; do
+    echo "Setting CMake configuration option for ${solver}"
+    case "${solver}" in
+    stp)
+      KLEE_STP_CONFIGURE_OPTION=(
+        "-DENABLE_SOLVER_STP=TRUE"
+        "-DSTP_DIR=${STP_INSTALL_PATH}/"
+      )
+      CMAKE_PREFIX_PATH+=("${STP_INSTALL_PATH}")
+      ;;
+    z3)
+      echo "Z3"
+      KLEE_Z3_CONFIGURE_OPTION=(
+        "-DENABLE_SOLVER_Z3=TRUE"
+        "-DZ3_INCLUDE_DIRS=${Z3_INSTALL_PATH}/include"
+        "-DZ3_LIBRARIES=${Z3_INSTALL_PATH}/lib/libz3.so"
+      )
+      ;;
+    metasmt)
+      echo "metaSMT"
+      if [ "X${METASMT_DEFAULT}" == "X" ]; then
+        METASMT_DEFAULT=STP
+      fi
+      KLEE_METASMT_CONFIGURE_OPTION=(
+        "-DENABLE_SOLVER_METASMT=TRUE"
+        "-DmetaSMT_DIR=${METASMT_BUILD_PATH}"
+        "-DMETASMT_DEFAULT_BACKEND=${METASMT_DEFAULT}"
+      )
+      ;;
+    *)
+      echo "Unknown solver ${solver}"
+      exit 1
+    esac
+  done
+
+  CMAKE_ARGUMENTS+=(
+    "${KLEE_Z3_CONFIGURE_OPTION[@]}"
+    "${KLEE_STP_CONFIGURE_OPTION[@]}"
+    "${KLEE_METASMT_CONFIGURE_OPTION[@]}"
+  )
+
+###############################################################################
+# Handle additional configure flags
+###############################################################################
+
+  if [[ $(to_bool "${USE_TCMALLOC}") -eq 1 ]] ; then
+    CMAKE_PREFIX_PATH+=("${TCMALLOC_INSTALL_PATH}")
+    CMAKE_ARGUMENTS+=("-DENABLE_TCMALLOC=TRUE")
+  else
+    CMAKE_ARGUMENTS+=("-DENABLE_TCMALLOC=FALSE")
+  fi
+
+  CMAKE_PREFIX_PATH+=("${SQLITE_INSTALL_PATH}")
+###############################################################################
+# KLEE
+###############################################################################
+
+  if [ "X${DISABLE_ASSERTIONS}" == "X1" ]; then
+    CMAKE_ARGUMENTS+=("-DENABLE_KLEE_ASSERTS=FALSE")
+  else
+    CMAKE_ARGUMENTS+=("-DENABLE_KLEE_ASSERTS=TRUE")
+  fi
+
+  if [ "X${ENABLE_OPTIMIZED}" == "X1" ]; then
+    CMAKE_ARGUMENTS+=("-DCMAKE_BUILD_TYPE=RelWithDebInfo")
+  else
+    CMAKE_ARGUMENTS+=("-DCMAKE_BUILD_TYPE=Debug")
+  fi
+
+  CMAKE_ARGUMENTS+=("-DKLEE_RUNTIME_BUILD_TYPE=${KLEE_RUNTIME_BUILD}")
+
+# TODO: We should support Ninja too
+# Configure KLEE
+
+  local CXX_FLAGS=("")
+  local C_FLAGS=("")
+  local LD_FLAGS=("")
+
+  if [ "${COVERAGE}" -eq 1 ]; then
+    CXX_FLAGS+=("-fprofile-arcs" "-ftest-coverage")
+    C_FLAGS+=("-fprofile-arcs" "-ftest-coverage")
+    LD_FLAGS+=("-fprofile-arcs" "-ftest-coverage")
+  fi
+
+  if [[ -n "${SANITIZER_BUILD}" ]]; then
+    C_FLAGS+=("${SANITIZER_C_FLAGS[@]}")
+    CXX_FLAGS+=("${SANITIZER_CXX_FLAGS[@]}")
+    LD_FLAGS+=("${SANITIZER_LD_FLAGS[@]}")
+
+    SANITIZER_DIR="$(cd "$(dirname "${SANITIZER_BITCODE_CC}")" && pwd)"
+
+    CMAKE_ARGUMENTS+=(
+      "-DCMAKE_C_COMPILER=${SANITIZER_C_COMPILER}"
+      "-DCMAKE_CXX_COMPILER=${SANITIZER_CXX_COMPILER}"
+    )
+  fi
+
+  CMAKE_ARGUMENTS+=(
+    "-DLLVMCC=${BITCODE_CC}"
+    "-DLLVMCXX=${BITCODE_CXX}"
+  )
+
+
+--- solvers
+# Meta-package for solvers
+required_variables_solvers=(
+  "SOLVERS"
+)
+
+required_variables_check_solvers() {
+  local solvers
+  IFS=":" read -r -a solvers <<< "${SOLVERS}"
+  [[ -z "${solvers[*]}" ]] && { echo "SOLVERS can't be empty"; exit 1; }
+
+  for solver in "${solvers[@]}"; do
+    [[ -z "${solver}" ]] && continue
+    solver="$(to_lower ${solver})"
+
+    [[ "${solver}" == "z3" ]] && continue
+    [[ "${solver}" == "stp" ]] && continue
+    [[ "${solver}" == "metasmt" ]] && continue
+
+    echo "Unknown solver: \"$solver\""
+    exit 1
+  done
+}
+
+# On which artifacts does SOLVERS depend on
+artifact_dependency_solvers() {
+  # Setup variables first to get selected solvers
+  setup_variables_solvers
+  for solver in "${SELECTED_SOLVERS[@]}"; do
+    echo "${solver}"
+  done
+}
+
+# On which artifacts does SOLVERS depend on
+runtime_artifact_dependency_solvers() {
+  # Setup variables first to get selected solvers
+  setup_variables_solvers
+  for solver in "${SELECTED_SOLVERS[@]}"; do
+    echo "${solver}"
+  done
+}
+
+# Setup general variables
+setup_variables_solvers() {
+  local solvers
+  IFS=":" read -r -a solvers <<< "${SOLVERS}"
+
+  SELECTED_SOLVERS=()
+  for solver in "${solvers[@]}"; do
+    [[ -z "${solver}" ]] && continue
+    solver="$(to_lower ${solver})"
+    [[ "${solver}" == "z3" ]] && SELECTED_SOLVERS+=("z3") && continue
+    [[ "${solver}" == "stp" ]] && SELECTED_SOLVERS+=("stp") && continue
+    [[ "${solver}" == "metasmt" ]] && SELECTED_SOLVERS+=("metasmt") && continue
+
+    echo "Unknown solver: \"$solver\""
+    exit 1
+  done
+
+  # Sort solvers
+  SELECTED_SOLVERS=( $( for e in "${SELECTED_SOLVERS[@]}"; do echo "$e"; done | sort|uniq) )
+# TODO Add specific suffix of each solver
+  SOLVER_SUFFIX=$(IFS=_ ; echo "${SELECTED_SOLVERS[*]}")
+}
+<elided_chars>
+1976
+<warning>
+Output too long.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 9, $0.00):
+```
+cd /app/klee-src && cat README-CMake.md
+```
+
+Tool:
+<returncode>
+0
+<output>
+# CMake build system
+
+KLEE has a CMake build system.
+
+## Useful top-level targets
+
+* `check` - Build and run all tests.
+* `clean` - Clean the build tree.
+* `docs` - Build documentation.
+* `edit_cache` - Show cmake/ccmake/cmake-gui interface for changing configure options.
+* `help` - Show list of top-level targets.
+* `systemtests` - Build and run system tests.
+* `unittests` - Build and run unit tests.
+
+## Useful CMake variables
+
+These can be set by passing `-DVAR_NAME=VALUE` to the CMake invocation.
+
+e.g.
+
+```
+cmake -DCMAKE_BUILD_TYPE=Release /path/to/klee/src
+```
+* `LLVMCC` (STRING) - Path to the LLVM C compiler (e.g. Clang).
+
+* `LLVMCXX` (STRING) - Path to the LLVM C++ compiler (e.g. Clang++).
+
+* `CMAKE_BUILD_TYPE` (STRING) - Build type for KLEE. Can be
+  `Debug`, `Release`, `RelWithDebInfo` or `MinSizeRel`.
+
+* `DOWNLOAD_LLVM_TESTING_TOOLS` (BOOLEAN) - Force downloading
+   of LLVM testing tool sources.
+
+* `ENABLE_DOCS` (BOOLEAN) - Enable building documentation.
+
+* `ENABLE_DOXYGEN` (BOOLEAN) - Enable building doxygen documentation.
+
+* `ENABLE_SYSTEM_TESTS` (BOOLEAN) - Enable KLEE system tests.
+
+* `ENABLE_KLEE_ASSERTS` (BOOLEAN) - Enable assertions when building KLEE.
+
+* `ENABLE_KLEE_EH_CXX` (BOOLEAN) - Enable support for C++ Exceptions.
+
+* `ENABLE_KLEE_LIBCXX` (BOOLEAN) - Enable libc++ for klee.
+
+* `ENABLE_POSIX_RUNTIME` (BOOLEAN) - Enable POSIX runtime.
+
+* `ENABLE_SOLVER_METASMT` (BOOLEAN) - Enable MetaSMT solver support.
+
+* `ENABLE_SOLVER_STP` (BOOLEAN) - Enable STP solver support.
+
+* `ENABLE_SOLVER_Z3` (BOOLEAN) - Enable Z3 solver support.
+
+* `ENABLE_TCMALLOC` (BOOLEAN) - Enable TCMalloc support.
+
+* `ENABLE_UNIT_TESTS` (BOOLEAN) - Enable KLEE unit tests.
+
+* `ENABLE_ZLIB` (BOOLEAN) - Enable zlib support.
+
+* `GTEST_SRC_DIR` (STRING) - Path to Google Test source tree. If it is not
+   specified, CMake will try to reuse the version included within the LLVM
+   source tree or find a system installation of Google Test.
+
+* `GTEST_INCLUDE_DIR` (STRING) - Path to Google Test include directory,
+   if it is not under `GTEST_SRC_DIR`.
+
+* `KLEE_ENABLE_TIMESTAMP` (BOOLEAN) - Enable timestamps in KLEE sources.
+
+* `KLEE_LIBCXX_DIR` (STRING) - Path to directory containing libc++ shared object (bitcode).
+
+* `KLEE_LIBCXX_INCLUDE_DIR` (STRING) - Path to libc++ include directory.
+
+* `KLEE_LIBCXXABI_SRC_DIR` (STRING) - Path to libc++abi source directory.
+
+* `KLEE_UCLIBC_PATH` (STRING) - Path to klee-uclibc root directory.
+
+* `KLEE_RUNTIME_BUILD_TYPE` (STRING) - Build type for KLEE's runtimes.
+   Can be `Release`, `Release+Asserts`, `Debug` or `Debug+Asserts`.
+
+* `LIT_TOOL` (STRING) - Path to lit testing tool.
+
+* `LIT_ARGS` (STRING) - Semi-colon separated list of lit options.
+
+* `LLVM_DIR` (STRING) - Path to the target LLVM install directory
+
+* `metaSMT_DIR` (STRING) - Provides a hint to CMake, where the metaSMT constraint
+  solver can be found.  This should be an absolute path to a directory
+  containing the file `metaSMTConfig.cmake`.
+
+* `STP_DIR` (STRING) - Provides a hint to CMake, where the STP constraint
+  solver can be found.  This should be an absolute path to a directory
+  containing the file `STPConfig.cmake`. This file is installed by STP
+  but also exists in its build directory. This allows KLEE to link
+  against STP in a build directory or an installed copy.
+
+* `WARNINGS_AS_ERRORS` (BOOLEAN) - Treat warnings as errors when building KLEE.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 10, $0.00):
+I'll build STP 2.3.4 (the version KLEE's own build scripts target) with MiniSat, then build KLEE v3.3 against LLVM 16. First, install the required libraries and
+fetch sources.
+
+```
+export DEBIAN_FRONTEND=noninteractive
+apt-get install -y -q zlib1g-dev libtinfo-dev python3-setuptools python3-wheel libsqlite3-dev libboost-dev libgtest-dev libgoogle-perftools-dev
+>/tmp/apt-install2.log 2>&1 && echo deps-ok || { tail -100 /tmp/apt-install2.log; exit 1; }
+cd /app && rm -rf stp-src minisat-src && git clone --depth 1 --branch 2.3.4 https://github.com/stp/stp.git stp-src >/tmp/clone-stp.log 2>&1 && git clone --depth
+1 https://github.com/stp/minisat.git minisat-src >/tmp/clone-minisat.log 2>&1 && echo clones-ok || { tail -50 /tmp/clone-stp.log /tmp/clone-minisat.log; exit 1;
+}
+grep -n "option\|CMAKE_INSTALL_PREFIX\|MINISAT" /app/stp-src/CMakeLists.txt | head -80
+```
+
+Tool:
+<returncode>
+0
+<output>
+deps-ok
+clones-ok
+39:    # Allow to override options via regular variables
+70:      message(STATUS "You can choose the type of build, options are: ${build_types}")
+76:      # Provide drop down menu options in cmake-gui
+101:option(ENABLE_ASSERTIONS "Build with assertions enabled" ON)
+124:option(SANITIZE "Use Clang sanitizers" OFF)
+147:option(BUILD_SHARED_LIBS "Build the shared library" ON)
+148:option(STATICCOMPILE "Compile static library and executable" OFF)
+203:option(SUPPRESS_WARNINGS "Silence all warnings" OFF)
+206:    add_compile_options( -g)
+207:    add_compile_options( -pthread )
+209:    add_compile_options("$<$<CONFIG:RELWITHDEBINFO>:-O2>")
+211:    add_compile_options("$<$<CONFIG:RELEASE>:-O2>")
+212:    add_compile_options("$<$<CONFIG:RELEASE>:-g0>")
+214:    add_compile_options("$<$<CONFIG:DEBUG>:-O0>")
+225:    add_compile_options("$<$<CONFIG:RELWITHDEBINFO>:/O2>")
+226:    add_compile_options("$<$<CONFIG:RELWITHDEBINFO>:/ZI>")
+228:    add_compile_options("$<$<CONFIG:RELEASE>:/O2>")
+229:    add_compile_options("$<$<CONFIG:RELEASE>:/D>")
+230:    add_compile_options("$<$<CONFIG:RELEASE>:/NDEBUG>")
+232:    add_compile_options("$<$<CONFIG:DEBUG>:/Od>")
+253:        add_compile_options(/MT)
+257:    add_compile_options(/GS)
+261:        add_compile_options(/W0)
+263:        add_compile_options(/W1)
+267:    add_compile_options(/wd4251)
+268:    add_compile_options(/D_CRT_SECURE_NO_WARNINGS)
+272:    # add_compile_options(/Wall)
+277:    # add_compile_options(/Za)
+279:    add_compile_options(/fp:precise)
+283:    add_compile_options(/EHsc)
+369:option(TUNE_NATIVE "Use -mtune=native" OFF)
+374:option(COVERAGE "Build with coverage check" OFF)
+379:option(WERROR "Build with warnings as errors" OFF)
+391:option(USE_THREAD_LOCAL "Use thread-local storage when available" ON)
+452:option(ONLY_SIMPLE "Only build very simplistic executable -- no Boost needed" OFF)
+454:  find_package( Boost 1.46 COMPONENTS program_options)
+460:add_feature_info(SimpleOptions ONLY_SIMPLE "Simplifies command-line interface, only a few command-line options will be available")
+465:option(USE_RISS "Try to use Riss" OFF)
+477:option(NOCRYPTOMINISAT "Don't try to use cryptominisat" OFF)
+479:if (NOT NOCRYPTOMINISAT)
+487:  if (cryptominisat5_FOUND AND HAVE_FLAG_STD_CPP11 AND (NOT NOCRYPTOMINISAT))
+488:    message(STATUS "CryptoMiniSat5 dynamic lib: ${CRYPTOMINISAT5_LIBRARIES}")
+489:    message(STATUS "CryptoMiniSat5 static lib:  ${CRYPTOMINISAT5_STATIC_LIBRARIES}")
+490:    message(STATUS "CryptoMiniSat5 static lib deps: ${CRYPTOMINISAT5_STATIC_LIBRARIES_DEPS}")
+491:    message(STATUS "CryptoMiniSat5 include dirs: ${CRYPTOMINISAT5_INCLUDE_DIRS}")
+492:    add_definitions(-DUSE_CRYPTOMINISAT)
+493:    set(USE_CRYPTOMINISAT ON)
+497:add_feature_info(CryptoMiniSat USE_CRYPTOMINISAT "Enables CryptoMiniSat solver, allows --cryptominisat5 option")
+499:option(FORCE_CMS "Must build with CryptoMiniSat" OFF)
+500:if (FORCE_CMS AND NOT USE_CRYPTOMINISAT)
+528:                ARGS  --name="Simple Theorem Prover SMT solver" --version-string=${STP_FULL_VERSION} --help-option="--help" $<TARGET_FILE:stp-bin> -o
+${CMAKE_CURRENT_BINARY_DIR}/stp.1
+533:                DESTINATION ${CMAKE_INSTALL_PREFIX}/man/man1)
+549:set(MINISAT_INCLUDE_DIR "" CACHE PATH "MiniSat include directory")
+550:set(MINISAT_LIBRARY "" CACHE PATH "MiniSat library directory")
+553:    message(STATUS "OK, found Minisat library under ${MINISAT_LIBRARIES} and Minisat include dirs under ${MINISAT_INCLUDE_DIRS}")
+559:        message(STATUS "OK, found Minisat library under ${MINISAT_LIBRARIES} and Minisat include dirs under ${MINISAT_INCLUDE_DIRS}")
+565:include_directories(SYSTEM ${MINISAT_INCLUDE_DIRS})
+566:set(LIBS ${LIBS} ${MINISAT_LIBRARIES})
+658:# Testing and Python interface options
+661:option(ENABLE_TESTING "Enable testing" OFF)
+681:option(BUILD_EXECUTABLES "Build executables" ON)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 11, $0.00):
+Sources are ready. Now I'll build MiniSat and STP into `/opt/klee`, following KLEE's build configuration.
+
+```
+set -e
+mkdir -p /opt/klee /app/build
+rm -rf /app/build/minisat /opt/klee/minisat
+mkdir -p /app/build/minisat
+cd /app/build/minisat
+cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/klee/minisat /app/minisat-src > /tmp/minisat-cmake.log 2>&1
+make -j"$(nproc)" > /tmp/minisat-build.log 2>&1
+make install > /tmp/minisat-install.log 2>&1
+echo minisat-installed
+find /opt/klee/minisat -maxdepth 3 -type f | sort | head -30
+```
+
+Tool:
+<returncode>
+0
+<output>
+minisat-installed
+/opt/klee/minisat/bin/minisat
+/opt/klee/minisat/bin/minisat_core
+/opt/klee/minisat/lib/libminisat.so.2.1.0
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 12, $0.00):
+```
+find /opt/klee/minisat -type f -o -type l | sort; echo '---'; ls -la /opt/klee/minisat/lib; echo '--- minisat cmake install sections'; grep -n
+"install\|include" /app/minisat-src/CMakeLists.txt | head -100
+```
+
+Tool:
+<returncode>
+0
+<output>
+/opt/klee/minisat/bin/minisat
+/opt/klee/minisat/bin/minisat_core
+/opt/klee/minisat/include/minisat/core/Dimacs.h
+/opt/klee/minisat/include/minisat/core/ExternalPropagator.h
+/opt/klee/minisat/include/minisat/core/Solver.h
+/opt/klee/minisat/include/minisat/core/SolverTypes.h
+/opt/klee/minisat/include/minisat/mtl/Alg.h
+/opt/klee/minisat/include/minisat/mtl/Alloc.h
+/opt/klee/minisat/include/minisat/mtl/Heap.h
+/opt/klee/minisat/include/minisat/mtl/IntMap.h
+/opt/klee/minisat/include/minisat/mtl/IntTypes.h
+/opt/klee/minisat/include/minisat/mtl/Map.h
+/opt/klee/minisat/include/minisat/mtl/Queue.h
+/opt/klee/minisat/include/minisat/mtl/Rnd.h
+/opt/klee/minisat/include/minisat/mtl/Sort.h
+/opt/klee/minisat/include/minisat/mtl/Vec.h
+/opt/klee/minisat/include/minisat/mtl/XAlloc.h
+/opt/klee/minisat/include/minisat/simp/SimpSolver.h
+/opt/klee/minisat/include/minisat/utils/Options.h
+/opt/klee/minisat/include/minisat/utils/ParseUtils.h
+/opt/klee/minisat/include/minisat/utils/System.h
+/opt/klee/minisat/lib/cmake/minisat/minisatConfig.cmake
+/opt/klee/minisat/lib/cmake/minisat/minisatTargets-release.cmake
+/opt/klee/minisat/lib/cmake/minisat/minisatTargets.cmake
+/opt/klee/minisat/lib/libminisat.so
+/opt/klee/minisat/lib/libminisat.so.2
+/opt/klee/minisat/lib/libminisat.so.2.1.0
+---
+total 164
+drwxr-xr-x 3 root root   4096 Oct 31 22:33 .
+drwxr-xr-x 5 root root   4096 Oct 31 22:33 ..
+drwxr-xr-x 3 root root   4096 Oct 31 22:33 cmake
+lrwxrwxrwx 1 root root     15 Oct 31 22:33 libminisat.so -> libminisat.so.2
+lrwxrwxrwx 1 root root     19 Oct 31 22:33 libminisat.so.2 -> libminisat.so.2.1.0
+-rw-r--r-- 1 root root 151880 Oct 31 22:33 libminisat.so.2.1.0
+--- minisat cmake install sections
+26:# Reference specific library paths used during linking for install
+37:include_directories(${ZLIB_INCLUDE_DIR})
+38:include_directories(${minisat_SOURCE_DIR})
+39:include (GenerateExportHeader)
+75:    # when building, don't use the install RPATH already
+76:    # (but later on when installing)
+82:    # which point to directories outside the build tree to the install RPATH
+85:    # the RPATH to be used when installing, but only if it's not a system directory
+115:    # /ZI = include debug info
+180:# Add uninstall target for makefiles
+183:    "${CMAKE_CURRENT_SOURCE_DIR}/cmake_uninstall.cmake.in"
+184:    "${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
+188:add_custom_target(uninstall
+189:    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake
+235:install(TARGETS minisat minisat_core minisat_simp
+241:install(DIRECTORY minisat/mtl minisat/utils minisat/core minisat/simp
+242:        DESTINATION include/minisat
+271:set(EXPORT_TYPE "installed")
+276:install(FILES
+281:# Install the export set for use with the install-tree
+282:install(
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 13, $0.00):
+MiniSat installed successfully. Next, configure and build STP with the no-Boost simple configuration used by KLEE's CI.
+
+```
+set -e
+rm -rf /app/build/stp /opt/klee/stp
+mkdir -p /app/build/stp
+cd /app/build/stp
+cmake \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=/opt/klee/stp \
+  -DCMAKE_PREFIX_PATH=/opt/klee/minisat \
+  -DBUILD_SHARED_LIBS=ON \
+  -DNO_BOOST:BOOL=ON \
+  -DENABLE_PYTHON_INTERFACE:BOOL=OFF \
+  -DONLY_SIMPLE:BOOL=ON \
+  -DNOCRYPTOMINISAT=ON \
+  /app/stp-src > /tmp/stp-cmake.log 2>&1 || { tail -100 /tmp/stp-cmake.log; exit 1; }
+make -j"$(nproc)" > /tmp/stp-build.log 2>&1 || { tail -200 /tmp/stp-build.log; exit 1; }
+make install > /tmp/stp-install.log 2>&1 || { tail -100 /tmp/stp-install.log; exit 1; }
+echo stp-installed
+find /opt/klee/stp -maxdepth 3 \( -type f -o -type l \) | sort | head -60
+echo '--- stp version'; /opt/klee/stp/bin/stp --version 2>&1 | head -20
+```
+
+Tool:
+<returncode>
+0
+<output>
+stp-installed
+/opt/klee/stp/bin/stp_simple
+/opt/klee/stp/include/stp/c_interface.h
+/opt/klee/stp/lib/libstp.so
+/opt/klee/stp/lib/libstp.so.2.3
+--- stp version
+/bin/sh: 19: /opt/klee/stp/bin/stp: not found
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 14, $0.00):
+```
+find /opt/klee/stp -type f -o -type l | sort; echo '--- cmake files'; find /opt/klee/stp -name 'STPConfig.cmake' -o -name '*.cmake' | sort; echo '--- linker';
+ldd /opt/klee/stp/lib/libstp.so; echo '--- stp_simple'; /opt/klee/stp/bin/stp_simple --version 2>&1 | head -20
+```
+
+Tool:
+<returncode>
+0
+<output>
+/opt/klee/stp/bin/stp_simple
+/opt/klee/stp/include/stp/c_interface.h
+/opt/klee/stp/lib/cmake/STP/STPConfig.cmake
+/opt/klee/stp/lib/cmake/STP/STPConfigVersion.cmake
+/opt/klee/stp/lib/cmake/STP/STPTargets-release.cmake
+/opt/klee/stp/lib/cmake/STP/STPTargets.cmake
+/opt/klee/stp/lib/libstp.so
+/opt/klee/stp/lib/libstp.so.2.3
+--- cmake files
+/opt/klee/stp/lib/cmake/STP/STPConfig.cmake
+/opt/klee/stp/lib/cmake/STP/STPConfigVersion.cmake
+/opt/klee/stp/lib/cmake/STP/STPTargets-release.cmake
+/opt/klee/stp/lib/cmake/STP/STPTargets.cmake
+--- linker
+        linux-vdso.so.1 (0x0000e9823c14c000)
+        libminisat.so.2 => /opt/klee/minisat/lib/libminisat.so.2 (0x0000e9823bea0000)
+        libstdc++.so.6 => /lib/aarch64-linux-gnu/libstdc++.so.6 (0x0000e9823bc10000)
+        libm.so.6 => /lib/aarch64-linux-gnu/libm.so.6 (0x0000e9823bb60000)
+        libgcc_s.so.1 => /lib/aarch64-linux-gnu/libgcc_s.so.1 (0x0000e9823bb20000)
+        libc.so.6 => /lib/aarch64-linux-gnu/libc.so.6 (0x0000e9823b960000)
+        /lib/ld-linux-aarch64.so.1 (0x0000e9823c110000)
+--- stp_simple
+/opt/klee/stp/bin/stp_simple: error while loading shared libraries: libstp.so.2.3: cannot open shared object file: No such file or directory
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 15, $0.00):
+STP is built. Now I'll inspect KLEE's CMake options for the no-uClibc configuration and confirm the LLVM 16 CMake config and compiler paths.
+
+```
+cd /app/klee-src && grep -n
+"ENABLE_POSIX_RUNTIME\|KLEE_UCLIBC\|ENABLE_KLEE_LIBCXX\|ENABLE_SOLVER_STP\|ENABLE_UNIT_TESTS\|ENABLE_SYSTEM_TESTS\|ENABLE_TCMALLOC\|ENABLE_ZLIB" CMakeLists.txt
+| head -100; echo '--- llvm files'; ls -d /usr/lib/llvm-16/lib/cmake/llvm /usr/bin/clang++-16 /usr/bin/llvm-link-16 /usr/bin/llvm-ar-16 /usr/bin/llvm-as-16
+2>&1; echo '--- LLVM config vars'; grep -E "LLVM_ENABLE_RTTI|LLVM_ENABLE_EH|LLVM_ENABLE_ASSERTIONS|LLVM_LINK_LLVM_DYLIB"
+/usr/lib/llvm-16/lib/cmake/llvm/LLVMConfig.cmake | head -30; echo '--- python'; python3 --version; pip3 --version
+```
+
+Tool:
+<returncode>
+0
+<output>
+215:    "\"-DENABLE_SOLVER_STP=ON\"\n"
+250:  set(ENABLE_ZLIB_DEFAULT ON)
+252:  set(ENABLE_ZLIB_DEFAULT OFF)
+254:option(ENABLE_ZLIB "Enable use of zlib" ${ENABLE_ZLIB_DEFAULT})
+255:if (ENABLE_ZLIB)
+261:    message(FATAL_ERROR "ENABLE_ZLIB is true but zlib could not be found")
+271:OPTION(ENABLE_TCMALLOC "Enable TCMalloc support" ON)
+272:if (ENABLE_TCMALLOC)
+475:option(ENABLE_POSIX_RUNTIME "Enable KLEE's POSIX runtime" OFF)
+476:if (ENABLE_POSIX_RUNTIME)
+485:set(KLEE_UCLIBC_PATH "" CACHE PATH "Path to klee-uclibc root directory")
+486:set(KLEE_UCLIBC_BCA_NAME "klee-uclibc.bca")
+487:if (NOT KLEE_UCLIBC_PATH STREQUAL "")
+489:  set(KLEE_UCLIBC_C_BCA "${KLEE_UCLIBC_PATH}/lib/libc.a")
+490:  if (NOT EXISTS "${KLEE_UCLIBC_C_BCA}")
+492:      "klee-uclibc library not found at \"${KLEE_UCLIBC_C_BCA}\". Set KLEE_UCLIBC_PATH to klee-uclibc root directory or empty string.")
+494:  message(STATUS "Found klee-uclibc library: \"${KLEE_UCLIBC_C_BCA}\"")
+495:  # Copy KLEE_UCLIBC_C_BCA so KLEE can find it where it is expected.
+497:    "${KLEE_UCLIBC_C_BCA}"
+498:    "${KLEE_RUNTIME_DIRECTORY}/${KLEE_UCLIBC_BCA_NAME}"
+507:option(ENABLE_KLEE_LIBCXX "Enable libc++ for klee" OFF)
+508:if (ENABLE_KLEE_LIBCXX)
+570:  if (NOT ENABLE_KLEE_LIBCXX)
+572:      "Pass -DENABLE_KLEE_LIBCXX=ON to CMake to enable it.")
+672:option(ENABLE_UNIT_TESTS "Enable unit tests" OFF)
+673:option(ENABLE_SYSTEM_TESTS "Enable system tests" ON)
+675:if (ENABLE_UNIT_TESTS OR ENABLE_SYSTEM_TESTS)
+699:      "\"-DENABLE_UNIT_TESTS=OFF -DENABLE_SYSTEM_TESTS=OFF\" to cmake"
+717:if (ENABLE_UNIT_TESTS)
+724:if (ENABLE_SYSTEM_TESTS)
+--- llvm files
+/usr/bin/clang++-16
+/usr/bin/llvm-ar-16
+/usr/bin/llvm-as-16
+/usr/bin/llvm-link-16
+/usr/lib/llvm-16/lib/cmake/llvm
+--- LLVM config vars
+set(LLVM_LINK_LLVM_DYLIB ON)
+set(LLVM_ENABLE_ASSERTIONS OFF)
+set(LLVM_ENABLE_EH OFF)
+set(LLVM_ENABLE_RTTI ON)
+--- python
+Python 3.12.3
+pip 24.0 from /usr/lib/python3/dist-packages/pip (python 3.12)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 16, $0.00):
+```
+cd /app/klee-src && sed -n '100,290p' CMakeLists.txt; echo '--- 450-590'; sed -n '450,590p' CMakeLists.txt; echo '--- 650-740'; sed -n '650,740p' CMakeLists.txt
+```
+
+Tool:
+<returncode>
+0
+<output_head>
+################################################################################
+include(GNUInstallDirs)
+include(CheckCSourceCompiles)
+include(CheckCXXSymbolExists)
+include(CheckFunctionExists)
+include(CheckIncludeFile)
+include(CheckIncludeFileCXX)
+include(CheckLibraryExists)
+include(CheckPrototypeDefinition)
+include(CMakePushCheckState)
+
+################################################################################
+# Find LLVM
+################################################################################
+find_package(LLVM REQUIRED CONFIG HINTS "${LLVM_DIR}")
+message(STATUS "LLVM directory ${LLVM_DIR}")
+if (LLVM_VERSION_MAJOR LESS 15)
+  message(FATAL_ERROR "KLEE requires LLVM 15 or newer")
+endif()
+set(LLVMCC "${LLVM_TOOLS_BINARY_DIR}/clang"
+  CACHE
+  PATH
+  "Path to C bitcode compiler"
+  )
+set(LLVMCXX "${LLVM_TOOLS_BINARY_DIR}/clang++"
+  CACHE
+  PATH
+  "Path to C++ bitcode compiler"
+)
+
+if (LLVM_ENABLE_ASSERTIONS)
+  # Certain LLVM debugging macros only work when LLVM was built with asserts
+  set(ENABLE_KLEE_DEBUG 1) # for config.h
+else()
+  unset(ENABLE_KLEE_DEBUG) # for config.h
+endif()
+
+# Warn about mixing build types.
+# This is likely a bad idea because some of LLVM's header files use the NDEBUG
+# macro which can change things like data layout.
+if (LLVM_ENABLE_ASSERTIONS AND (NOT ENABLE_KLEE_ASSERTS))
+  message(WARNING
+    "LLVM was built with assertions but KLEE will be built without them.\n"
+    "This might lead to unexpected behaviour."
+  )
+elseif ((NOT LLVM_ENABLE_ASSERTIONS) AND ENABLE_KLEE_ASSERTS)
+  message(WARNING
+    "LLVM was built without assertions but KLEE will be built with them.\n"
+    "This might lead to unexpected behaviour."
+  )
+endif()
+
+list(APPEND KLEE_COMPONENT_CXX_DEFINES ${LLVM_DEFINITIONS})
+list(APPEND KLEE_COMPONENT_EXTRA_INCLUDE_DIRS ${LLVM_INCLUDE_DIRS})
+
+# Find llvm-link
+set(LLVM_LINK "${LLVM_TOOLS_BINARY_DIR}/llvm-link"
+  CACHE
+  PATH
+  "Path to bitcode linker"
+  )
+if (NOT EXISTS "${LLVM_LINK}")
+  message(FATAL_ERROR "Failed to find llvm-link at \"${LLVM_LINK}\"")
+endif()
+
+# Find llvm-ar
+set(LLVM_AR "${LLVM_TOOLS_BINARY_DIR}/llvm-ar"
+  CACHE
+  PATH
+  "Path to bitcode archive tool"
+  )
+if (NOT EXISTS "${LLVM_AR}")
+  message(FATAL_ERROR "Failed to find llvm-ar at \"${LLVM_AR}\"")
+endif()
+
+# Find llvm-as
+set(LLVM_AS "${LLVM_TOOLS_BINARY_DIR}/llvm-as"
+  CACHE
+  PATH
+  "Path to bitcode assembly tool"
+  )
+if (NOT EXISTS "${LLVM_AS}")
+  message(FATAL_ERROR "Failed to find llvm-as at \"${LLVM_AS}\"")
+endif()
+
+# Check for dynamic linking
+if (LLVM_LINK_LLVM_DYLIB)
+  set(USE_LLVM_SHARED USE_SHARED)
+endif()
+
+################################################################################
+# C++ version
+################################################################################
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+################################################################################
+# Warnings
+################################################################################
+include(${CMAKE_SOURCE_DIR}/cmake/compiler_warnings.cmake)
+
+################################################################################
+# Solvers
+################################################################################
+# STP
+include(${CMAKE_SOURCE_DIR}/cmake/find_stp.cmake)
+# Z3
+include(${CMAKE_SOURCE_DIR}/cmake/find_z3.cmake)
+# metaSMT
+include(${CMAKE_SOURCE_DIR}/cmake/find_metasmt.cmake)
+
+if ((NOT ${ENABLE_Z3}) AND (NOT ${ENABLE_STP}) AND (NOT ${ENABLE_METASMT}))
+  message(FATAL_ERROR "No solver was specified. At least one solver is required."
+    "You should enable a solver by passing one of more the following options"
+    " to cmake:\n"
+    "\"-DENABLE_SOLVER_STP=ON\"\n"
+    "\"-DENABLE_SOLVER_Z3=ON\"\n"
+    "\"-DENABLE_SOLVER_METASMT=ON\"")
+endif()
+
+###############################################################################
+# Exception handling
+###############################################################################
+if (NOT LLVM_ENABLE_EH)
+  if (ENABLE_SOLVER_METASMT)
+    message(WARNING "Not disabling exceptions because metaSMT uses them")
+  else()
+    list(APPEND KLEE_COMPONENT_CXX_FLAGS "-fno-exceptions")
+  endif()
+endif()
+
+###############################################################################
+# RTTI
+###############################################################################
+if (NOT LLVM_ENABLE_RTTI)
+  if (ENABLE_SOLVER_METASMT AND metaSMT_REQUIRE_RTTI)
+    message(FATAL_ERROR
+      "RTTI cannot be disabled because metaSMT uses them."
+      "This build configuration is not supported and will likely not work."
+      "You should recompile LLVM with RTTI enabled.")
+  else()
+    list(APPEND KLEE_COMPONENT_CXX_FLAGS "-fno-rtti")
+  endif()
+endif()
+
+################################################################################
+# Support for compressed logs
+################################################################################
+find_package(ZLIB)
+if (ZLIB_FOUND)
+  set(ENABLE_ZLIB_DEFAULT ON)
+else()
+  set(ENABLE_ZLIB_DEFAULT OFF)
+
+<output_tail>
+
+  )
+
+  if (NOT EXISTS ${KLEE_LIBCXX_INCLUDE_PATH})
+    message (FATAL_ERROR "Could not find path to libc++ include directory")
+  endif()
+
+  message(STATUS "Found libc++ include path: ${KLEE_LIBCXX_INCLUDE_PATH} and ${KLEE_LIBCXX_PLATFORM_INCLUDE_PATH} ")
+
+
+  # Copy KLEE_LIBCXX_BC_PATH so KLEE can find it where it is expected.
+  file(MAKE_DIRECTORY "${KLEE_RUNTIME_DIRECTORY}")
+  execute_process(COMMAND ${CMAKE_COMMAND} -E copy
+    "${KLEE_LIBCXX_BC_PATH}"
+    "${KLEE_RUNTIME_DIRECTORY}/${KLEE_LIBCXX_BC_PATH}"
+  )
+  list(APPEND KLEE_COMPONENT_CXX_DEFINES
+    -DKLEE_LIBCXX_BC_NAME=\"${KLEE_LIBCXX_BC_PATH}\")
+
+else()
+  message(STATUS "libc++ support disabled")
+  set(SUPPORT_KLEE_LIBCXX 0) # For config.h
+endif()
+
+################################################################################
+# KLEE Exception Handling Support for C++
+################################################################################
+option(ENABLE_KLEE_EH_CXX "Enable support for C++ Exceptions" OFF)
+if (ENABLE_KLEE_EH_CXX)
+  if (NOT ENABLE_KLEE_LIBCXX)
+    message(FATAL_ERROR "C++ Exception support requires klee-libc++."
+      "Pass -DENABLE_KLEE_LIBCXX=ON to CMake to enable it.")
+  endif()
+
+  set(KLEE_LIBCXXABI_SRC_DIR "" CACHE PATH "Path to libc++abi source directory")
+  if (NOT EXISTS "${KLEE_LIBCXXABI_SRC_DIR}")
+    message(FATAL_ERROR
+      "KLEE_LIBCXXABI_SRC_DIR (\"${KLEE_LIBCXXABI_SRC_DIR}\") does not exist.\n"
+      "Try passing -DKLEE_LIBCXXABI_SRC_DIR=<path> to CMake where <path> is the"
+      "libc++abi source directory.")
+  endif()
+  message(STATUS "Use libc++abi source path: \"${KLEE_LIBCXXABI_SRC_DIR}\"")
+
+  set(SUPPORT_KLEE_EH_CXX 1) # For config.h
+  message(STATUS "Support for C++ Exceptions enabled")
+
+else()
+  set(SUPPORT_KLEE_EH_CXX 0) # For config.h
+endif()
+
+--- 650-740
+################################################################################
+# Report the value of various variables to aid debugging
+################################################################################
+message(STATUS "KLEE_COMPONENT_EXTRA_INCLUDE_DIRS: '${KLEE_COMPONENT_EXTRA_INCLUDE_DIRS}'")
+message(STATUS "KLEE_COMPONENT_CXX_DEFINES: '${KLEE_COMPONENT_CXX_DEFINES}'")
+message(STATUS "KLEE_COMPONENT_CXX_FLAGS: '${KLEE_COMPONENT_CXX_FLAGS}'")
+message(STATUS "KLEE_SOLVER_LIBRARIES: '${KLEE_SOLVER_LIBRARIES}'")
+
+################################################################################
+# KLEE components
+################################################################################
+add_subdirectory(lib)
+add_subdirectory(runtime)
+
+################################################################################
+# KLEE tools
+################################################################################
+add_subdirectory(tools)
+
+################################################################################
+# Testing
+################################################################################
+option(ENABLE_UNIT_TESTS "Enable unit tests" OFF)
+option(ENABLE_SYSTEM_TESTS "Enable system tests" ON)
+
+if (ENABLE_UNIT_TESTS OR ENABLE_SYSTEM_TESTS)
+  message(STATUS "Testing is enabled")
+
+  # Find lit
+  set(LIT_TOOL_NAMES "llvm-lit" "lit")
+  find_program(
+    LIT_TOOL
+    NAMES ${LIT_TOOL_NAMES}
+    HINTS "${LLVM_TOOLS_BINARY_DIR}" "${LIT_DIR}"
+    DOC "Path to lit tool"
+  )
+
+  set(LIT_ARGS
+    "-v;-s"
+    CACHE
+    STRING
+    "Lit arguments"
+  )
+
+  if ((NOT LIT_TOOL) OR (NOT EXISTS "${LIT_TOOL}"))
+    message(FATAL_ERROR "The lit tool is required for testing."
+      " CMake tried to find lit with the following names \"${LIT_TOOL_NAMES}\""
+      " but it could not be found.\n"
+      "You should either disable testing by passing "
+      "\"-DENABLE_UNIT_TESTS=OFF -DENABLE_SYSTEM_TESTS=OFF\" to cmake"
+      " or you should install the lit tool from the Python Package Index by running"
+      " \"pip install lit\". Note \"pip\" requires root privileges to run. If you"
+      " don't have root privileges you can create a virtual python environment using"
+      " the \"virtualenv\" tool and run \"pip\" from there.")
+  else()
+    message(STATUS "Using lit: ${LIT_TOOL}")
+  endif()
+
+  # Add global test target
+  add_custom_target(check
+    COMMENT "Running tests"
+  )
+else()
+  message(STATUS "Testing is disabled")
+endif()
+
+
+if (ENABLE_UNIT_TESTS)
+  message(STATUS "Unit tests enabled")
+  add_subdirectory(unittests)
+  add_dependencies(check unittests)
+else()
+  message(STATUS "Unit tests disabled")
+endif()
+if (ENABLE_SYSTEM_TESTS)
+  message(STATUS "System tests enabled")
+  add_subdirectory(test)
+  add_dependencies(check systemtests)
+else()
+  message(STATUS "System tests disabled")
+endif()
+
+################################################################################
+# Documentation
+################################################################################
+option(ENABLE_DOCS "Enable building documentation" ON)
+if (ENABLE_DOCS)
+  add_subdirectory(docs)
+endif()
+
+################################################################################
+
+<elided_chars>
+5017
+<warning>
+Output too long.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 17, $0.00):
+```
+cd /app/klee-src && cat cmake/find_stp.cmake; echo '--- STP config'; cat /opt/klee/stp/lib/cmake/STP/STPConfig.cmake; echo '--- targets'; head -80
+/opt/klee/stp/lib/cmake/STP/STPTargets.cmake
+```
+
+Tool:
+<returncode>
+0
+<output>
+#===------------------------------------------------------------------------===#
+#
+#                     The KLEE Symbolic Virtual Machine
+#
+# This file is distributed under the University of Illinois Open Source
+# License. See LICENSE.TXT for details.
+#
+#===------------------------------------------------------------------------===#
+# STP: Use CMake facility to detect. The user can pass `-DSTP_DIR=` to force
+# a particular directory.
+
+# Although find_package() will set `STP_DIR` for us add it here so that
+# is displayed in `ccmake` and `cmake-gui`.
+set(STP_DIR "" CACHE PATH "Path to directory containing STPConfig.cmake")
+find_package(STP CONFIG)
+
+# Set the default so that if the following is true:
+# * STP was found
+# * ENABLE_SOLVER_STP is not already set as a cache variable
+#
+# then the default is set to `ON`. Otherwise set the default to `OFF`.
+# A consequence of this is if we fail to detect STP the first time
+# subsequent calls to CMake will not change the default.
+if (STP_FOUND)
+  set(ENABLE_SOLVER_STP_DEFAULT ON)
+else()
+  set(ENABLE_SOLVER_STP_DEFAULT OFF)
+endif()
+option(ENABLE_SOLVER_STP "Enable STP solver support" ${ENABLE_SOLVER_STP_DEFAULT})
+
+if (ENABLE_SOLVER_STP)
+  message(STATUS "STP solver support enabled")
+  if (STP_FOUND)
+    message(STATUS "Found STP version ${STP_VERSION}")
+    # Try the STP shared library first
+    if ("${STP_SHARED_LIBRARY}" STREQUAL "")
+      # Try the static library instead
+      if ("${STP_STATIC_LIBRARY}" STREQUAL "")
+        message(FATAL_ERROR "Couldn't find STP shared or static library")
+      endif()
+      message(STATUS "Using STP static library")
+      list(APPEND KLEE_SOLVER_LIBRARIES "${STP_STATIC_LIBRARY}")
+    else()
+      message(STATUS "Using STP shared library")
+      list(APPEND KLEE_SOLVER_LIBRARIES "${STP_SHARED_LIBRARY}")
+    endif()
+    list(APPEND KLEE_SOLVER_INCLUDE_DIRS ${STP_INCLUDE_DIRS})
+    message(STATUS "STP_DIR: ${STP_DIR}")
+    set(ENABLE_STP 1) # For config.h
+  else()
+    message(FATAL_ERROR "STP not found. Try setting `-DSTP_DIR=/path` where"
+      " `/path` is the directory containing `STPConfig.cmake`")
+  endif()
+else()
+  message(STATUS "STP solver support disabled")
+  set(ENABLE_STP 0) # For config.h
+endif()
+--- STP config
+# Config file for the installed STP Package
+# It defines the following variables
+#  STP_INCLUDE_DIRS - include directories for STP
+#  STP_STATIC_LIBRARY - static library target (empty if not built)
+#  STP_SHARED_LIBRARY - dynamic library target (empty if not built)
+#  STP_EXECUTABLE     - the stp executable
+#  STP_VERSION_*      - the stp MAJOR/MINOR/PATCH versions
+#  STP_VERSION        - the stp complete version string
+
+# Compute paths
+get_filename_component(STP_CMAKE_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH)
+set(STP_INCLUDE_DIRS "/opt/klee/stp/include")
+
+
+if ("" STREQUAL "ON")
+    include(CMakeFindDependencyMacro)
+    find_dependency(cryptominisat5)
+endif()
+
+# Our library dependencies (contains definitions for IMPORTED targets)
+include("${STP_CMAKE_DIR}/STPTargets.cmake")
+
+# These are IMPORTED targets created by STPTargets.cmake
+set(STP_EXECUTABLE stp)
+
+set(STP_STATIC_LIBRARY stp)
+set(STP_SHARED_LIBRARY stp)
+
+# Note version variables are implicitly set by STPConfigVersion.cmake
+--- targets
+# Generated by CMake
+
+if("${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION}" LESS 2.8)
+   message(FATAL_ERROR "CMake >= 2.8.0 required")
+endif()
+if(CMAKE_VERSION VERSION_LESS "2.8.3")
+   message(FATAL_ERROR "CMake >= 2.8.3 required")
+endif()
+cmake_policy(PUSH)
+cmake_policy(VERSION 2.8.3...3.26)
+#----------------------------------------------------------------
+# Generated CMake target import file.
+#----------------------------------------------------------------
+
+# Commands may need to know the format version.
+set(CMAKE_IMPORT_FILE_VERSION 1)
+
+# Protect against multiple inclusion, which would fail when already imported targets are added once more.
+set(_cmake_targets_defined "")
+set(_cmake_targets_not_defined "")
+set(_cmake_expected_targets "")
+foreach(_cmake_expected_target IN ITEMS stp)
+  list(APPEND _cmake_expected_targets "${_cmake_expected_target}")
+  if(TARGET "${_cmake_expected_target}")
+    list(APPEND _cmake_targets_defined "${_cmake_expected_target}")
+  else()
+    list(APPEND _cmake_targets_not_defined "${_cmake_expected_target}")
+  endif()
+endforeach()
+unset(_cmake_expected_target)
+if(_cmake_targets_defined STREQUAL _cmake_expected_targets)
+  unset(_cmake_targets_defined)
+  unset(_cmake_targets_not_defined)
+  unset(_cmake_expected_targets)
+  unset(CMAKE_IMPORT_FILE_VERSION)
+  cmake_policy(POP)
+  return()
+endif()
+if(NOT _cmake_targets_defined STREQUAL "")
+  string(REPLACE ";" ", " _cmake_targets_defined_text "${_cmake_targets_defined}")
+  string(REPLACE ";" ", " _cmake_targets_not_defined_text "${_cmake_targets_not_defined}")
+  message(FATAL_ERROR "Some (but not all) targets in this export set were already defined.\nTargets Defined: ${_cmake_targets_defined_text}\nTargets not yet
+defined: ${_cmake_targets_not_defined_text}\n")
+endif()
+unset(_cmake_targets_defined)
+unset(_cmake_targets_not_defined)
+unset(_cmake_expected_targets)
+
+
+# Compute the installation prefix relative to this file.
+get_filename_component(_IMPORT_PREFIX "${CMAKE_CURRENT_LIST_FILE}" PATH)
+get_filename_component(_IMPORT_PREFIX "${_IMPORT_PREFIX}" PATH)
+get_filename_component(_IMPORT_PREFIX "${_IMPORT_PREFIX}" PATH)
+get_filename_component(_IMPORT_PREFIX "${_IMPORT_PREFIX}" PATH)
+if(_IMPORT_PREFIX STREQUAL "/")
+  set(_IMPORT_PREFIX "")
+endif()
+
+# Create imported target stp
+add_library(stp SHARED IMPORTED)
+
+set_target_properties(stp PROPERTIES
+  INTERFACE_LINK_LIBRARIES "/opt/klee/minisat/lib/libminisat.so"
+)
+
+if(CMAKE_VERSION VERSION_LESS 2.8.12)
+  message(FATAL_ERROR "This file relies on consumers using CMake 2.8.12 or greater.")
+endif()
+
+# Load information for each installed configuration.
+file(GLOB _cmake_config_files "${CMAKE_CURRENT_LIST_DIR}/STPTargets-*.cmake")
+foreach(_cmake_config_file IN LISTS _cmake_config_files)
+  include("${_cmake_config_file}")
+endforeach()
+unset(_cmake_config_file)
+unset(_cmake_config_files)
+
+# Cleanup temporary variables.
+set(_IMPORT_PREFIX)
+
+# Loop over all imported files and verify that they actually exist
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 18, $0.00):
+The system LLVM 16 has RTTI enabled and exceptions disabled, matching KLEE's requirements. I'll now configure KLEE with STP support and POSIX/uClibc disabled,
+using the freestanding runtime.
+
+```
+nproc; free -h; cd /app && rm -rf build/klee && mkdir -p build/klee
+cd /app/build/klee
+cmake -S /app/klee-src -B /app/build/klee \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=/opt/klee \
+  -DLLVM_DIR=/usr/lib/llvm-16/lib/cmake/llvm \
+  -DLLVMCC=/usr/bin/clang-16 \
+  -DLLVMCXX=/usr/bin/clang++-16 \
+  -DENABLE_SOLVER_STP=ON \
+  -DSTP_DIR=/opt/klee/stp/lib/cmake/STP \
+  -DENABLE_SOLVER_Z3=OFF \
+  -DENABLE_SOLVER_METASMT=OFF \
+  -DENABLE_POSIX_RUNTIME=OFF \
+  -DENABLE_KLEE_LIBCXX=OFF \
+  -DENABLE_KLEE_EH_CXX=OFF \
+  -DENABLE_TCMALLOC=OFF \
+  -DENABLE_UNIT_TESTS=OFF \
+  -DENABLE_SYSTEM_TESTS=OFF \
+  -DENABLE_DOCS=OFF \
+  > /tmp/klee-cmake.log 2>&1 || { tail -150 /tmp/klee-cmake.log; exit 1; }
+tail -80 /tmp/klee-cmake.log
+```
+
+Tool:
+<returncode>
+0
+<output>
+20
+               total        used        free      shared  buff/cache   available
+Mem:           121Gi        55Gi        21Gi       943Mi        47Gi        66Gi
+Swap:           15Gi       9.6Gi       6.4Gi
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- KLEE version 3.3
+-- CMake generator: Unix Makefiles
+-- Build type: Release
+-- KLEE assertions enabled
+-- Performing Test HAVE_FFI_CALL
+-- Performing Test HAVE_FFI_CALL - Success
+-- Found FFI: /usr/lib/aarch64-linux-gnu/libffi.so
+-- Performing Test Terminfo_LINKABLE
+-- Performing Test Terminfo_LINKABLE - Success
+-- Found Terminfo: /usr/lib/aarch64-linux-gnu/libtinfo.so
+-- Found ZLIB: /usr/lib/aarch64-linux-gnu/libz.so (found version "1.3")
+-- Could NOT find zstd (missing: zstd_LIBRARY zstd_INCLUDE_DIR)
+-- Found LibXml2: /usr/lib/aarch64-linux-gnu/libxml2.so (found version "2.9.14")
+-- Could NOT find CURL (missing: CURL_LIBRARY CURL_INCLUDE_DIR)
+-- LLVM directory /usr/lib/llvm-16/lib/cmake/llvm
+CMake Warning at CMakeLists.txt:146 (message):
+  LLVM was built without assertions but KLEE will be built with them.
+
+  This might lead to unexpected behaviour.
+
+
+-- Not treating compiler warnings as errors
+-- STP solver support enabled
+-- Found STP version 2.3.3
+-- Using STP shared library
+-- STP_DIR: /opt/klee/stp/lib/cmake/STP
+-- Found Z3 libraries: "/usr/lib/aarch64-linux-gnu/libz3.so"
+-- Found Z3 include path: "/usr/include"
+-- Found Z3: /usr/include
+-- Z3 solver support disabled
+-- metaSMT solver support disabled
+-- Zlib support enabled
+-- TCMalloc support disabled
+-- Found SQLite3: /usr/include (found version "3.45.1")
+-- Looking for sys/capability.h
+-- Looking for sys/capability.h - not found
+-- Found libutil /usr/lib/aarch64-linux-gnu/libutil.a
+-- Found libutil include dir /usr/include
+-- Looking for __ctype_b_loc
+-- Looking for __ctype_b_loc - found
+-- Looking for mallinfo
+-- Looking for mallinfo - found
+-- Looking for mallinfo2
+-- Looking for mallinfo2 - found
+-- Looking for malloc_zone_statistics
+-- Looking for malloc_zone_statistics - not found
+-- Looking for selinux/selinux.h
+-- Looking for selinux/selinux.h - not found
+-- Looking for sys/acl.h
+-- Looking for sys/acl.h - not found
+-- SELinux support disabled
+-- Performing Test FSTATAT_PATH_ACCEPTS_NULL
+-- Performing Test FSTATAT_PATH_ACCEPTS_NULL - Failed
+-- KLEE_RUNTIME_BUILD_TYPE is not set. Setting default
+-- The available runtime build types are: Release;Release+Debug;Release+Asserts;Release+Debug+Asserts;Debug;Debug+Asserts
+-- KLEE_RUNTIME_BUILD_TYPE: Debug+Asserts
+-- Performing Test CHECK_M32_SUPPORT
+-- Performing Test CHECK_M32_SUPPORT - Failed
+-- 32bit platform supported: 0
+-- POSIX runtime disabled
+-- Skipping copying of klee-uclibc runtime
+-- libc++ support disabled
+-- CMAKE_CXX_FLAGS:
+-- KLEE_GIT_SHA1HASH: 74f49f1d243f0e1692a00ac688a7b805b37c5646
+-- KLEE_COMPONENT_EXTRA_INCLUDE_DIRS: '/usr/lib/llvm-16/include;/usr/include'
+-- KLEE_COMPONENT_CXX_DEFINES: '-D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS'
+-- KLEE_COMPONENT_CXX_FLAGS: '-UNDEBUG;-fno-exceptions'
+-- KLEE_SOLVER_LIBRARIES: 'stp'
+-- LIB_BC_SUFFIX: 64_Release;64_Release+Debug;64_Release+Asserts;64_Release+Debug+Asserts;64_Debug;64_Debug+Asserts
+-- KLEE_RUNTIME_DIRECTORY: /app/build/klee/runtime/lib
+-- Testing is disabled
+-- Unit tests disabled
+-- System tests disabled
+-- Configuring done (0.9s)
+-- Generating done (0.0s)
+-- Build files have been written to: /app/build/klee
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 19, $0.00):
+KLEE configured successfully with STP and no POSIX/uClibc runtime. I'll build and install it now.
+
+```
+set -o pipefail
+cd /app/build/klee
+make -j"$(nproc)" > /tmp/klee-build.log 2>&1 || { tail -250 /tmp/klee-build.log; exit 1; }
+make install > /tmp/klee-install.log 2>&1 || { tail -150 /tmp/klee-install.log; exit 1; }
+echo klee-built-and-installed
+find /opt/klee -maxdepth 2 -type d | sort | head -50
+echo '--- binaries'; find /opt/klee -maxdepth 2 -type f -perm -111 | sort | head -50
+```
+
+Tool:
+<returncode>
+2
+<output>
+/bin/sh: 1: set: Illegal option -o pipefail
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 20, $0.00):
+```
+cd /app/build/klee
+make -j"$(nproc)" > /tmp/klee-build.log 2>&1 || { tail -300 /tmp/klee-build.log; exit 1; }
+make install > /tmp/klee-install.log 2>&1 || { tail -150 /tmp/klee-install.log; exit 1; }
+echo klee-built-and-installed
+find /opt/klee -maxdepth 2 -type d | sort | head -50
+echo '--- binaries'; find /opt/klee -maxdepth 2 -type f -perm -111 | sort | head -50
+```
+
+Tool:
+<returncode>
+0
+<output>
+klee-built-and-installed
+/opt/klee
+/opt/klee/bin
+/opt/klee/include
+/opt/klee/include/klee
+/opt/klee/lib
+/opt/klee/lib/klee
+/opt/klee/minisat
+/opt/klee/minisat/bin
+/opt/klee/minisat/include
+/opt/klee/minisat/lib
+/opt/klee/stp
+/opt/klee/stp/bin
+/opt/klee/stp/include
+/opt/klee/stp/lib
+--- binaries
+/opt/klee/bin/kleaver
+/opt/klee/bin/klee
+/opt/klee/bin/klee-exec-tree
+/opt/klee/bin/klee-replay
+/opt/klee/bin/klee-stats
+/opt/klee/bin/klee-zesti
+/opt/klee/bin/ktest-gen
+/opt/klee/bin/ktest-randgen
+/opt/klee/bin/ktest-tool
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 21, $0.00):
+KLEE built and installed. Now I'll test the binary, verify the STP solver is compiled in, and inspect the installed include/runtime layout.
+
+```
+echo '--- env for run'; /bin/bash -c 'export LD_LIBRARY_PATH=/opt/klee/lib:/opt/klee/stp/lib:/opt/klee/minisat/lib; /opt/klee/bin/klee --version'; echo '---
+installed include top'; find /opt/klee/include -maxdepth 3 -type f | sort | head -30; echo '--- installed libs'; find /opt/klee/lib -maxdepth 3 -type f -o -type
+l | sort; echo '--- klee help solver'; /bin/bash -c 'export LD_LIBRARY_PATH=/opt/klee/lib:/opt/klee/stp/lib:/opt/klee/minisat/lib; /opt/klee/bin/klee --help
+2>&1 | grep -i -E "solver|stp|version" | head -30'
+```
+
+Tool:
+<returncode>
+0
+<output>
+--- env for run
+KLEE 3.3 (https://klee-se.org/)
+  Build mode: Release (Asserts: ON)
+  Build revision: 74f49f1d243f0e1692a00ac688a7b805b37c5646
+
+Ubuntu LLVM version 16.0.6
+  Optimized build.
+--- installed include top
+/opt/klee/include/klee/klee.h
+--- installed libs
+/opt/klee/lib/klee/runtime/libkleeRuntimeFortify64_Debug+Asserts.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeFortify64_Debug.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeFortify64_Release+Asserts.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeFortify64_Release+Debug+Asserts.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeFortify64_Release+Debug.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeFortify64_Release.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeFreestanding64_Debug+Asserts.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeFreestanding64_Debug.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeFreestanding64_Release+Asserts.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeFreestanding64_Release+Debug+Asserts.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeFreestanding64_Release+Debug.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeFreestanding64_Release.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeIntrinsic64_Debug+Asserts.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeIntrinsic64_Debug.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeIntrinsic64_Release+Asserts.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeIntrinsic64_Release+Debug+Asserts.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeIntrinsic64_Release+Debug.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeIntrinsic64_Release.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeKLEELibc64_Debug+Asserts.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeKLEELibc64_Debug.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeKLEELibc64_Release+Asserts.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeKLEELibc64_Release+Debug+Asserts.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeKLEELibc64_Release+Debug.bca
+/opt/klee/lib/klee/runtime/libkleeRuntimeKLEELibc64_Release.bca
+/opt/klee/lib/klee/runtime/libkleeUBSan64_Debug+Asserts.bca
+/opt/klee/lib/klee/runtime/libkleeUBSan64_Debug.bca
+/opt/klee/lib/klee/runtime/libkleeUBSan64_Release+Asserts.bca
+/opt/klee/lib/klee/runtime/libkleeUBSan64_Release+Debug+Asserts.bca
+/opt/klee/lib/klee/runtime/libkleeUBSan64_Release+Debug.bca
+/opt/klee/lib/klee/runtime/libkleeUBSan64_Release.bca
+/opt/klee/lib/libkleeRuntest.so
+/opt/klee/lib/libkleeRuntest.so.1.0
+--- klee help solver
+  --cex-cache-superset                                    - Try substituting SAT superset counterexample before asking the SMT solver (default=false)
+  --cex-cache-try-all                                     - Try substituting all counterexamples before asking the SMT solver (default=false)
+  --debug-assignment-validating-solver                    - Debug the correctness of generated assignments (default=false)
+  --debug-crosscheck-core-solver=<value>                  - Specifiy a solver to use for crosschecking the results of the core solver
+    =stp                                                  -   STP
+    =dummy                                                -   Dummy solver
+  --debug-dump-stp-queries                                - Dump every STP query to stderr (default=false)
+  --debug-validate-solver                                 - Crosscheck the results of the solver chain above the core solver with the results of the core solver
+(default=false)
+  --equality-substitution                                 - Simplify equality expressions before querying the solver (default=true)
+  --ignore-stp-failures                                   - Ignore any STP solver failures (default=false)
+  --log-partial-queries-early                             - Log queries before calling the solver (default=false)
+  --max-solver-time=<string>                              - Maximum amount of time for a single SMT query (default=0s (off)). Enables --use-forked-solver
+  --solver-backend=<value>                                - Specifiy the core solver backend to use
+    =stp                                                  -   STP (default)
+    =dummy                                                -   Dummy solver
+  --solver-optimize-divides                               - Optimize constant divides into add/shift/multiplies before passing them to the core SMT solver
+(default=false)
+  --stp-sat-solver=<value>                                - Set the underlying SAT solver for STP (default=cryptominisat)
+  --use-fast-cex-solver                                   - Enable an experimental range-based solver (default=false)
+  --use-forked-solver                                     - Run the core SMT solver in a forked process (default=true)
+  --use-independent-solver                                - Use constraint independence (default=true)
+    =solver:kquery                                        -   All queries reaching the solver in .kquery (KQuery) format
+    =solver:smt2                                          -   All queries reaching the solver in .smt2 (SMT-LIBv2) format
+  --use-construct-hash-stp                                - Use hash-consing during STP query construction (default=true)
+  --version                                               - Display the version of this program
+  --libc=<value>                                          - Choose libc version (none by default).
+  --runtime-build=<string>                                - Link with versions of the runtime library that were built with the provided configuration
+(default=Debug+Asserts).
+    =ImplicitTruncation                                   -   Implicit conversion from integer of larger bit width to smaller bit width that results in data
+loss
+    =ImplicitConversion                                   -   Implicit conversion between integer types that changes the sign of the value
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 22, $0.00):
+KLEE runs and reports STP as the default solver backend. I'll now configure `~/.bashrc` and run an end-to-end symbolic execution test.
+
+```
+echo '--- .bashrc'; nl -ba ~/.bashrc; echo '--- .profile'; nl -ba ~/.profile
+```
+
+Tool:
+<returncode>
+0
+<output>
+--- .bashrc
+     1  # ~/.bashrc: executed by bash(1) for non-login shells.
+     2  # see /usr/share/doc/bash/examples/startup-files (in the package bash-doc)
+     3  # for examples
+     4
+     5  # If not running interactively, don't do anything
+     6  [ -z "$PS1" ] && return
+     7
+     8  # don't put duplicate lines in the history. See bash(1) for more options
+     9  # ... or force ignoredups and ignorespace
+    10  HISTCONTROL=ignoredups:ignorespace
+    11
+    12  # append to the history file, don't overwrite it
+    13  shopt -s histappend
+    14
+    15  # for setting history length see HISTSIZE and HISTFILESIZE in bash(1)
+    16  HISTSIZE=1000
+    17  HISTFILESIZE=2000
+    18
+    19  # check the window size after each command and, if necessary,
+    20  # update the values of LINES and COLUMNS.
+    21  shopt -s checkwinsize
+    22
+    23  # make less more friendly for non-text input files, see lesspipe(1)
+    24  [ -x /usr/bin/lesspipe ] && eval "$(SHELL=/bin/sh lesspipe)"
+    25
+    26  # set variable identifying the chroot you work in (used in the prompt below)
+    27  if [ -z "$debian_chroot" ] && [ -r /etc/debian_chroot ]; then
+    28      debian_chroot=$(cat /etc/debian_chroot)
+    29  fi
+    30
+    31  # set a fancy prompt (non-color, unless we know we "want" color)
+    32  case "$TERM" in
+    33      xterm-color) color_prompt=yes;;
+    34  esac
+    35
+    36  # uncomment for a colored prompt, if the terminal has the capability; turned
+    37  # off by default to not distract the user: the focus in a terminal window
+    38  # should be on the output of commands, not on the prompt
+    39  #force_color_prompt=yes
+    40
+    41  if [ -n "$force_color_prompt" ]; then
+    42      if [ -x /usr/bin/tput ] && tput setaf 1 >&/dev/null; then
+    43          # We have color support; assume it's compliant with Ecma-48
+    44          # (ISO/IEC-6429). (Lack of such support is extremely rare, and such
+    45          # a case would tend to support setf rather than setaf.)
+    46          color_prompt=yes
+    47      else
+    48          color_prompt=
+    49      fi
+    50  fi
+    51
+    52  if [ "$color_prompt" = yes ]; then
+    53      PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
+    54  else
+    55      PS1='${debian_chroot:+($debian_chroot)}\u@\h:\w\$ '
+    56  fi
+    57  unset color_prompt force_color_prompt
+    58
+    59  # If this is an xterm set the title to user@host:dir
+    60  case "$TERM" in
+    61  xterm*|rxvt*)
+    62      PS1="\[\e]0;${debian_chroot:+($debian_chroot)}\u@\h: \w\a\]$PS1"
+    63      ;;
+    64  *)
+    65      ;;
+    66  esac
+    67
+    68  # enable color support of ls and also add handy aliases
+    69  if [ -x /usr/bin/dircolors ]; then
+    70      test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"
+    71      alias ls='ls --color=auto'
+    72      #alias dir='dir --color=auto'
+    73      #alias vdir='vdir --color=auto'
+    74
+    75      alias grep='grep --color=auto'
+    76      alias fgrep='fgrep --color=auto'
+    77      alias egrep='egrep --color=auto'
+    78  fi
+    79
+    80  # some more ls aliases
+    81  alias ll='ls -alF'
+    82  alias la='ls -A'
+    83  alias l='ls -CF'
+    84
+    85  # Alias definitions.
+    86  # You may want to put all your additions into a separate file like
+    87  # ~/.bash_aliases, instead of adding them here directly.
+    88  # See /usr/share/doc/bash-doc/examples in the bash-doc package.
+    89
+    90  if [ -f ~/.bash_aliases ]; then
+    91      . ~/.bash_aliases
+    92  fi
+    93
+    94  # enable programmable completion features (you don't need to enable
+    95  # this, if it's already enabled in /etc/bash.bashrc and /etc/profile
+    96  # sources /etc/bash.bashrc).
+    97  #if [ -f /etc/bash_completion ] && ! shopt -oq posix; then
+    98  #    . /etc/bash_completion
+    99  #fi
+--- .profile
+     1  # ~/.profile: executed by Bourne-compatible login shells.
+     2
+     3  if [ "$BASH" ]; then
+     4    if [ -f ~/.bashrc ]; then
+     5      . ~/.bashrc
+     6    fi
+     7  fi
+     8
+     9  mesg n 2> /dev/null || true
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 23, $0.00):
+I'll add the environment setup at the very top of `~/.bashrc`, before its non-interactive early return, so sourcing it always exposes KLEE, its headers through
+`CPATH`, and its shared libraries.
+
+```
+cp ~/.bashrc ~/.bashrc.klee-backup
+cat > /tmp/klee-bashrc-header <<'EOF'
+# KLEE symbolic execution tool environment
+export PATH="/opt/klee/bin${PATH:+:$PATH}"
+export CPATH="/opt/klee/include${CPATH:+:$CPATH}"
+export LD_LIBRARY_PATH="/opt/klee/lib:/opt/klee/stp/lib:/opt/klee/minisat/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+EOF
+cat /tmp/klee-bashrc-header ~/.bashrc.klee-backup > ~/.bashrc
+chmod 644 ~/.bashrc
+echo '--- top of bashrc'; head -10 ~/.bashrc
+echo '--- source test'; /bin/bash -c 'source ~/.bashrc; echo PATH=$PATH; echo CPATH=$CPATH; echo LD_LIBRARY_PATH=$LD_LIBRARY_PATH; command -v klee; klee
+--version; printf "#include <klee/klee.h>\nint main(void){return 0;}\n" > /tmp/header_test.c; clang-16 -fsyntax-only /tmp/header_test.c && echo header-ok'
+```
+
+Tool:
+<returncode>
+0
+<output>
+--- top of bashrc
+# KLEE symbolic execution tool environment
+export PATH="/opt/klee/bin${PATH:+:$PATH}"
+export CPATH="/opt/klee/include${CPATH:+:$CPATH}"
+export LD_LIBRARY_PATH="/opt/klee/lib:/opt/klee/stp/lib:/opt/klee/minisat/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# ~/.bashrc: executed by bash(1) for non-login shells.
+# see /usr/share/doc/bash/examples/startup-files (in the package bash-doc)
+# for examples
+
+# If not running interactively, don't do anything
+[ -z "$PS1" ] && return
+--- source test
+PATH=/opt/klee/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CPATH=/opt/klee/include
+LD_LIBRARY_PATH=/opt/klee/lib:/opt/klee/stp/lib:/opt/klee/minisat/lib
+/opt/klee/bin/klee
+KLEE 3.3 (https://klee-se.org/)
+  Build mode: Release (Asserts: ON)
+  Build revision: 74f49f1d243f0e1692a00ac688a7b805b37c5646
+
+Ubuntu LLVM version 16.0.6
+  Optimized build.
+header-ok
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 24, $0.00):
+Environment variables and header inclusion work. I'll run a complete symbolic-execution smoke test with a KLEE-generated test case.
+
+```
+rm -rf /tmp/klee-smoke && mkdir -p /tmp/klee-smoke && cd /tmp/klee-smoke
+cat > test.c <<'EOF'
+#include <klee/klee.h>
+int main(void) {
+  int x;
+  klee_make_symbolic(&x, sizeof(x), "x");
+  if (x == 42)
+    return 0;
+  else
+    return 1;
+}
+EOF
+/bin/bash -c 'source ~/.bashrc; set -e; cd /tmp/klee-smoke; clang-16 -emit-llvm -c -g -O0 -Xclang -disable-O0-optnone test.c -o test.bc; klee
+--output-dir=/tmp/klee-smoke/klee-out test.bc' > /tmp/klee-smoke/run.log 2>&1 || { cat /tmp/klee-smoke/run.log; exit 1; }
+echo '--- KLEE output'; cat /tmp/klee-smoke/run.log
+echo '--- generated tests'; find /tmp/klee-smoke/klee-out -maxdepth 2 -type f | sort | head -30
+```
+
+Tool:
+<returncode>
+0
+<output>
+--- KLEE output
+KLEE: output directory is "/tmp/klee-smoke/klee-out"
+KLEE: Using STP solver backend
+KLEE: SAT solver: MiniSat
+KLEE: Deterministic allocator: Using quarantine queue size 8
+KLEE: Deterministic allocator: globals (start-address=0xfe7743400000 size=10 GiB)
+KLEE: Deterministic allocator: constants (start-address=0xfe74c3400000 size=10 GiB)
+KLEE: Deterministic allocator: heap (start-address=0xfd74c3400000 size=1024 GiB)
+KLEE: Deterministic allocator: stack (start-address=0xfd54c3400000 size=128 GiB)
+KLEE: Deterministic allocator: Using quarantine queue size 8
+KLEE: Deterministic allocator: globals (start-address=0xfd5243400000 size=10 GiB)
+KLEE: Deterministic allocator: constants (start-address=0xfd4fc3400000 size=10 GiB)
+KLEE: Deterministic allocator: heap (start-address=0xfc4fc3400000 size=1024 GiB)
+KLEE: Deterministic allocator: stack (start-address=0xfc2fc3400000 size=128 GiB)
+
+KLEE: done: total instructions = 16
+KLEE: done: completed paths = 2
+KLEE: done: partially completed paths = 0
+KLEE: done: generated tests = 2
+--- generated tests
+/tmp/klee-smoke/klee-out/assembly.ll
+/tmp/klee-smoke/klee-out/info
+/tmp/klee-smoke/klee-out/messages.txt
+/tmp/klee-smoke/klee-out/run.istats
+/tmp/klee-smoke/klee-out/run.stats
+/tmp/klee-smoke/klee-out/test000001.ktest
+/tmp/klee-smoke/klee-out/test000002.ktest
+/tmp/klee-smoke/klee-out/warnings.txt
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 25, $0.00):
+The end-to-end test succeeded: KLEE used STP/MiniSat and generated two test cases. I'll also expose the STP and MiniSat binaries on `PATH` and verify both the
+KLEE and STP command-line tools from a newly sourced shell.
+
+```
+ln -sf /opt/klee/stp/bin/stp_simple /opt/klee/stp/bin/stp
+sed -i 's|export PATH="/opt/klee/bin${PATH:+:$PATH}"|export PATH="/opt/klee/bin:/opt/klee/stp/bin:/opt/klee/minisat/bin${PATH:+:$PATH}"|' ~/.bashrc
+head -5 ~/.bashrc
+echo '--- noninteractive source checks'; /bin/bash -c 'source ~/.bashrc; command -v klee; command -v stp; command -v minisat; echo "CPATH=$CPATH"; stp --version
+2>&1 | head -10; klee --help 2>&1 | grep -A2 -- "--solver-backend" | head -5'
+```
+
+Tool:
+<returncode>
+0
+<output>
+# KLEE symbolic execution tool environment
+export PATH="/opt/klee/bin:/opt/klee/stp/bin:/opt/klee/minisat/bin${PATH:+:$PATH}"
+export CPATH="/opt/klee/include${CPATH:+:$CPATH}"
+export LD_LIBRARY_PATH="/opt/klee/lib:/opt/klee/stp/lib:/opt/klee/minisat/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# ~/.bashrc: executed by bash(1) for non-login shells.
+--- noninteractive source checks
+/opt/klee/bin/klee
+/opt/klee/stp/bin/stp
+/opt/klee/minisat/bin/minisat
+CPATH=/opt/klee/include
+Fatal Error: Cannot open --version
+STP Error: Cannot open --version
+  --solver-backend=<value>                                - Specifiy the core solver backend to use
+    =stp                                                  -   STP (default)
+    =metasmt                                              -   metaSMT
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 26, $0.00):
+The required KLEE checks pass. For completeness, I'll see whether a full STP executable (with `--version`) can be built; if the needed Boost library is already
+present, I'll install it without disturbing the working KLEE setup.
+
+```
+ldconfig -p | grep -i boost_program_options || true; ls /usr/lib/aarch64-linux-gnu/libboost_program_options* 2>/dev/null || true; dpkg -l | grep -E
+'libboost.*(program|dev)' | head -20
+```
+
+Tool:
+<returncode>
+0
+<output>
+ii  libboost-dev:arm64              1.83.0.1ubuntu2                   arm64        Boost C++ Libraries development files (default version)
+ii  libboost1.83-dev:arm64          1.83.0-2.1ubuntu3.2               arm64        Boost C++ Libraries development files
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 27, $0.00):
+I'll install the Boost program-options development package and build the full STP CLI into a separate prefix, preserving the working KLEE-linked STP library.
+
+```
+export DEBIAN_FRONTEND=noninteractive
+apt-get install -y -q libboost-program-options-dev >/tmp/apt-boost.log 2>&1 && echo boost-ok || { tail -80 /tmp/apt-boost.log; exit 1; }
+rm -rf /app/build/stp-full /opt/klee/stp-full
+mkdir -p /app/build/stp-full
+cd /app/build/stp-full
+cmake \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=/opt/klee/stp-full \
+  -DCMAKE_PREFIX_PATH=/opt/klee/minisat \
+  -DBUILD_SHARED_LIBS=ON \
+  -DNO_BOOST:BOOL=OFF \
+  -DENABLE_PYTHON_INTERFACE:BOOL=OFF \
+  -DONLY_SIMPLE:BOOL=OFF \
+  -DNOCRYPTOMINISAT=ON \
+  /app/stp-src > /tmp/stp-full-cmake.log 2>&1 || { tail -120 /tmp/stp-full-cmake.log; exit 1; }
+make -j"$(nproc)" > /tmp/stp-full-build.log 2>&1 || { tail -200 /tmp/stp-full-build.log; exit 1; }
+make install > /tmp/stp-full-install.log 2>&1 || { tail -100 /tmp/stp-full-install.log; exit 1; }
+echo stp-full-installed
+find /opt/klee/stp-full/bin -maxdepth 1 -type f -perm -111 -printf '%f\n' | sort
+LD_LIBRARY_PATH=/opt/klee/stp-full/lib:/opt/klee/minisat/lib /opt/klee/stp-full/bin/stp --version 2>&1 | head -20
+```
+
+Tool:
+<returncode>
+0
+<output>
+boost-ok
+stp-full-installed
+stp
+stp_simple
+STP version 2.3.3
+STP version SHA string d70085462f07c8a5a2f1225f727cda3ef505b141
+STP compilation options CMAKE_CXX_COMPILER = /usr/bin/c++ | CMAKE_CXX_FLAGS =  -Wall -Wextra -Wunused -pedantic -Wsign-compare -Wtype-limits -Wuninitialized
+-Wno-deprecated -Wstrict-aliasing -Wpointer-arith -Wpointer-arith -Wformat-nonliteral -Winit-self -Wparentheses -Wunreachable-code | COMPILE_DEFINES =  -DNDEBUG
+-D__STDC_LIMIT_MACROS | ONLY_SIMPLE = OFF | Boost_FOUND = TRUE | STATICCOMPILE = OFF | TUNE_NATIVE = OFF | COVERAGE = OFF | FORCE_CMS = OFF | LIBS =
+/opt/klee/minisat/lib/libminisat.so | ENABLE_TESTING = OFF | ENABLE_PYTHON_INTERFACE = OFF | PYTHON_EXECUTABLE =  | PYTHON_LIBRARY =  | PYTHON_INCLUDE_DIRS =  |
+| compilation date time = Oct 31 2026 22:35:21
+c compiled with gcc version 13.3.0
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 28, $0.00):
+The full STP CLI built successfully and reports its version. I'll update the environment to expose it and verify KLEE still executes correctly using the full
+STP library.
+
+```
+cp ~/.bashrc ~/.bashrc.before-stp-full
+python3 - <<'PY'
+from pathlib import Path
+p = Path.home() / '.bashrc'
+s = p.read_text()
+s = s.replace('/opt/klee/bin:/opt/klee/stp/bin:/opt/klee/minisat/bin', '/opt/klee/bin:/opt/klee/stp-full/bin:/opt/klee/minisat/bin')
+s = s.replace('/opt/klee/lib:/opt/klee/stp/lib:/opt/klee/minisat/lib', '/opt/klee/lib:/opt/klee/stp-full/lib:/opt/klee/stp/lib:/opt/klee/minisat/lib')
+p.write_text(s)
+PY
+head -5 ~/.bashrc
+echo '--- verify fresh source + full stp'; /bin/bash -c 'source ~/.bashrc; command -v klee; command -v stp; stp --version 2>&1 | head -2; klee --version | head
+-5'
+echo '--- rerun symbolic smoke test with updated env'; rm -rf /tmp/klee-smoke2 && mkdir -p /tmp/klee-smoke2 && cd /tmp/klee-smoke2
+info=$(/bin/bash -c 'source ~/.bashrc; cd /tmp/klee-smoke2; clang-16 -emit-llvm -c -g -O0 -Xclang -disable-O0-optnone /tmp/klee-smoke/test.c -o test.bc; klee
+--output-dir=/tmp/klee-smoke2/out test.bc' 2>&1); rc=$?; echo "$info"; echo "exit=$rc"; find /tmp/klee-smoke2/out -name '*.ktest' | wc -l
+```
+
+Tool:
+<returncode>
+0
+<output>
+# KLEE symbolic execution tool environment
+export PATH="/opt/klee/bin:/opt/klee/stp-full/bin:/opt/klee/minisat/bin${PATH:+:$PATH}"
+export CPATH="/opt/klee/include${CPATH:+:$CPATH}"
+export LD_LIBRARY_PATH="/opt/klee/lib:/opt/klee/stp-full/lib:/opt/klee/stp/lib:/opt/klee/minisat/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# ~/.bashrc: executed by bash(1) for non-login shells.
+--- verify fresh source + full stp
+/opt/klee/bin/klee
+/opt/klee/stp-full/bin/stp
+STP version 2.3.3
+STP version SHA string d70085462f07c8a5a2f1225f727cda3ef505b141
+KLEE 3.3 (https://klee-se.org/)
+  Build mode: Release (Asserts: ON)
+  Build revision: 74f49f1d243f0e1692a00ac688a7b805b37c5646
+
+Ubuntu LLVM version 16.0.6
+--- rerun symbolic smoke test with updated env
+KLEE: output directory is "/tmp/klee-smoke2/out"
+KLEE: Using STP solver backend
+KLEE: SAT solver: MiniSat
+KLEE: Deterministic allocator: Using quarantine queue size 8
+KLEE: Deterministic allocator: globals (start-address=0xf24c14800000 size=10 GiB)
+KLEE: Deterministic allocator: constants (start-address=0xf24994800000 size=10 GiB)
+KLEE: Deterministic allocator: heap (start-address=0xf14994800000 size=1024 GiB)
+KLEE: Deterministic allocator: stack (start-address=0xf12994800000 size=128 GiB)
+KLEE: Deterministic allocator: Using quarantine queue size 8
+KLEE: Deterministic allocator: globals (start-address=0xf12714800000 size=10 GiB)
+KLEE: Deterministic allocator: constants (start-address=0xf12494800000 size=10 GiB)
+KLEE: Deterministic allocator: heap (start-address=0xf02494800000 size=1024 GiB)
+KLEE: Deterministic allocator: stack (start-address=0xf00494800000 size=128 GiB)
+
+KLEE: done: total instructions = 16
+KLEE: done: completed paths = 2
+KLEE: done: partially completed paths = 0
+KLEE: done: generated tests = 2
+exit=0
+2
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 29, $0.00):
+The full STP CLI is installed and KLEE still works with STP/MiniSat. I'll do a final verification from a clean, non-interactive Bash environment that only
+sources `~/.bashrc`, matching the test procedure.
+
+```
+env -i HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin bash --noprofile --norc -c '
+  source ~/.bashrc
+  echo "klee=$(command -v klee)"
+  echo "stp=$(command -v stp)"
+  echo "CPATH=$CPATH"
+  echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+  test -f "${CPATH%%:*}/klee/klee.h" && echo "header=$CPATH/klee/klee.h"
+  printf "#include <klee/klee.h>\nint main(void){ int x; klee_make_symbolic(&x,sizeof(x),\"x\"); return x == 0; }\n" > /tmp/final_klee_test.c
+  clang-16 -emit-llvm -c -g -O0 -Xclang -disable-O0-optnone /tmp/final_klee_test.c -o /tmp/final_klee_test.bc
+  rm -rf /tmp/final-klee-out
+  klee --output-dir=/tmp/final-klee-out /tmp/final_klee_test.bc > /tmp/final_klee_run.log 2>&1
+  grep -E "Using STP solver backend|generated tests" /tmp/final_klee_run.log
+  test "$(find /tmp/final-klee-out -name "*.ktest" | wc -l)" -ge 1
+  echo FINAL_VERIFICATION_OK
+'
+```
+
+Tool:
+<returncode>
+0
+<output>
+klee=/opt/klee/bin/klee
+stp=/opt/klee/stp-full/bin/stp
+CPATH=/opt/klee/include
+LD_LIBRARY_PATH=/opt/klee/lib:/opt/klee/stp-full/lib:/opt/klee/stp/lib:/opt/klee/minisat/lib
+header=/opt/klee/include/klee/klee.h
+KLEE: Using STP solver backend
+KLEE: done: generated tests = 1
+FINAL_VERIFICATION_OK
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+mini-swe-agent (step 30, $0.00):
+```
+echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+```
+
+Tool:
+<returncode>
+-1
+<output>
+
+<exception_info>
+action was not executed
+
+Exit:
+
+Saved trajectory to '/root/.config/mini-swe-agent/last_mini_run.traj.json'
+root@bbe5ca768ea0:/app#

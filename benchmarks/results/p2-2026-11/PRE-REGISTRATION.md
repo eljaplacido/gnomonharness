@@ -92,3 +92,12 @@ compare with eight peer harnesses on:
   are Harbor's stock adapters with a pinned version.
 - Install time is outside the agent cap in Harbor (setup has its own timeout),
   unlike tb 0.2.18 in P1.
+
+## Amendment, 2026-11-01, before any full-run cell: relay upstream guard
+
+`apparatus/relay-go.mjs` now refuses any request target outside the configured
+upstream (403, counted as `refused_off_upstream`). G2b's negative control
+showed that an absolute-form target would otherwise have received the injected
+Go key, and an `http:` target crashed the relay. Cells are unaffected: harnesses
+send origin-form targets. Probe cells ran without the guard; nothing in their
+traffic reached another host (each cell's requests all returned Go usage).

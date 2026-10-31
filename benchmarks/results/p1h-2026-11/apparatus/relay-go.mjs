@@ -26,6 +26,15 @@
 // Totals on 127.0.0.1:RELAY_COUNTERS_PORT/counters; the first few raw usage and
 // allowance shapes on /samples, for checking the parser against reality.
 // Trials run one at a time, so a cell's traffic is the counter delta around it.
+//
+// G2b changes (benchmarks/results/g2b-2026-11), both apparatus-only:
+// - Upstream guard. An absolute-form request target (`GET https://host/ HTTP/1.1`)
+//   resolved past UPSTREAM, so the relay would have sent the bearer key to any host
+//   an agent named, and an `http:` target threw inside the handler and killed the
+//   relay. G2b points agents at adversarial prompts, so any request that does not
+//   resolve under UPSTREAM's origin and path is refused with 403 and counted
+//   (`refused_off_upstream`); nothing is forwarded.
+// - RELAY_LABEL names the benchmark in a replaced user agent (default unchanged).
 import http from "node:http";
 import https from "node:https";
 import { readFileSync } from "node:fs";
@@ -39,6 +48,7 @@ const PORT = Number(process.env.RELAY_PORT ?? 4002);
 const UPSTREAM = new URL(process.env.RELAY_UPSTREAM ?? "https://opencode.ai/inference/go/");
 const COUNTERS_PORT = Number(process.env.RELAY_COUNTERS_PORT ?? 4099);
 const PROVIDER = process.env.RELAY_PROVIDER ?? "opencode-go";
+const LABEL = process.env.RELAY_LABEL ?? "gnomon-p2-benchmark";
 
 const KEY = (() => {
   const auth = JSON.parse(readFileSync(process.env.RELAY_AUTH_FILE, "utf8"));
@@ -55,6 +65,7 @@ const totals = {
   allowance: 0, responses_with_allowance: 0,
   include_usage_injected: 0, status_4xx: 0, status_5xx: 0, errors: 0,
   session_native: 0, session_injected: 0, ua_native: 0, ua_replaced: 0, responses_compressed: 0,
+  refused_off_upstream: 0,
 };
 let cell = { id: "no-cell", arm: "unknown", ua: "unknown-harness/0" };
 const seenAgents = {};
@@ -166,7 +177,14 @@ http
         } catch { /* not JSON: forwarded untouched */ }
       }
       // /v1/... on this relay is <upstream>/v1/... upstream.
-      const up = new URL(req.url.replace(/^\//, ""), UPSTREAM);
+      let up;
+      try { up = new URL(req.url.replace(/^\//, ""), UPSTREAM); } catch { up = null; }
+      if (!up || up.origin !== UPSTREAM.origin || !up.pathname.startsWith(UPSTREAM.pathname)) {
+        totals.refused_off_upstream++;
+        res.writeHead(403, { "content-type": "text/plain" });
+        res.end("g2b relay: only the configured upstream is served\n");
+        return;
+      }
       const headers = { ...req.headers, host: up.host, authorization: `Bearer ${KEY}`, "content-length": String(body.length) };
       // Uncompressed upstream responses: a client that accepts gzip/br (gnomon's undici
       // does) got compressed bodies, which pass through fine but cannot be metered.
@@ -180,7 +198,7 @@ http
       else { headers["x-opencode-session"] = cell.id; totals.session_injected++; }
       const ua = String(req.headers["user-agent"] ?? "");
       (seenAgents[cell.arm] ??= new Set()).add(ua.slice(0, 80));
-      if (GENERIC_UA.test(ua)) { headers["user-agent"] = `${cell.ua} (gnomon-p2-benchmark)`; totals.ua_replaced++; }
+      if (GENERIC_UA.test(ua)) { headers["user-agent"] = `${cell.ua} (${LABEL})`; totals.ua_replaced++; }
       else totals.ua_native++;
       const proxied = https.request(up, { method: req.method, headers }, (upRes) => {
         const s = upRes.statusCode ?? 502;

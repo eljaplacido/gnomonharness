@@ -1,0 +1,32 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+KLEE is installed and verified.
+
+## Installed
+
+- **KLEE 3.3** (Release, assertions on) — `/usr/local/bin/klee`
+- **LLVM 16.0.6** (`clang-16`) as the toolchain
+- **STP 2.4.1** as the solver backend, built with MiniSat, installed under `/usr/local`
+- **No uClibc** — `KLEE_UCLIBC_PATH` left unset and uClibc runtime not built
+- Header at `/usr/local/include/klee/klee.h`, runtime bitcode under `/usr/local/lib/klee/runtime`
+- Sources retained in `/opt/src/{klee,stp,minisat}`
+
+## Environment (`~/.bashrc`)
+
+Exports are placed **before** Ubuntu's non-interactive `return` guard so `source ~/.bashrc` works in test shells:
+
+```bash
+export PATH="/usr/local/bin:$PATH"
+export CPATH="/usr/local/include${CPATH:+:$CPATH}"
+export LD_LIBRARY_PATH="/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
+
+## Verification
+
+In a clean non-interactive shell with `~/.bashrc` sourced:
+
+- `command -v klee` → `/usr/local/bin/klee`
+- `$CPATH` → `/usr/local/include`
+- `#include <klee/klee.h>` compiles with `clang-16` **without** `-I`
+- A symbolic-execution run reports `KLEE: Using STP solver backend`, `SAT solver: MiniSat`, finds the seeded assertion, and generates test cases
+
+One note: KLEE's POSIX runtime is disabled. Its upstream `runtime/POSIX/fd.c` uses legacy x86 `__NR_*` syscall constants that glibc does not define on aarch64, so it cannot compile here; this also aligns with the no-uClibc requirement. Core KLEE symbolic execution works fully.

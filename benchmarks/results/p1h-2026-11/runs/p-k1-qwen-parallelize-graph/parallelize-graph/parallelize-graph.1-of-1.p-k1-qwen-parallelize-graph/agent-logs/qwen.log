@@ -1,0 +1,37 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Done. Both assemblers are built and verified against the provided input.
+
+## Deliverables in `/app`
+
+| File | Description |
+|---|---|
+| `serial.c` → `serial` | Serial hash-table graph construction + traversal |
+| `pgen.upc` → `pgen` | Parallel UPC implementation (SMP, pthreads) |
+| `Makefile` | `make`, `make run`, `make check`, `make clean` |
+| `verify.py` | Sorted-set comparison of `serial.out` vs `pgen*.out` |
+| `README.md` | Build prerequisites, algorithm, design notes |
+| `serial.out`, `pgen_0..3.out` | Current 4-thread outputs |
+
+Berkeley UPC 2022.10.0 was downloaded, configured with the requested flags, and installed to `/usr/local`.
+
+## Implementation
+
+- **Graph**: unique k-mers in a shared hash table with separate chaining; an edge exists only if the right-extended k-mer is present. Contigs are maximal non-branching paths; pure cycles are emitted once from their smallest-index node so output is thread-count independent.
+- **Parallelism (`pgen.upc`)**:
+  1. Input split into `THREADS` line-aligned byte ranges; each thread counts then parses its range, and a prefix sum gives each thread a contiguous slice of a shared `upc_all_alloc` k-mer array.
+  2. Bucket `b` lives on thread `b % THREADS`, so each thread inserts only its own buckets — **lock-free construction** (one writer per bucket).
+  3. In-degrees computed in parallel; each element has a single writer because every k-mer has at most one predecessor.
+  4. Traversal is distributed by bucket ownership (disjoint contigs per thread); cycles are claimed by the owner of the cycle's minimum-index node. Each thread streams to `pgen_<thread>.out`.
+
+## Verification
+
+- `serial.out`: **6 contigs, 10,108 bases** (lengths 3598, 3590, 1467, 846, 380, 227).
+- Parallel union is byte-identical after sorting at **n = 1, 2, 3, 4, 5, 7, 8** threads, and via an absolute-path invocation from another directory.
+- Also validated on synthetic graphs with convergences/dead ends and a forced pure cycle, plus a 59,799-k-mer genome-derived graph (3 contigs), against an independent Python reference: all matched.
+- Timing as expected for this 230 KB input: serial ≈ 0.00 s, `pgen` (4 threads) ≈ 1.08 s (UPC startup/shared-memory overhead dominates).
+
+Run it yourself with:
+
+```sh
+cd /app && make check
+```
