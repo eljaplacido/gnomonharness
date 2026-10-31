@@ -143,3 +143,18 @@ pre-registration:
 The hosted models need no GPU. So these belong on AgentLab on the hub, which has
 both adapters already, and can run alongside this gx10 run without sharing its
 Docker host or its model.
+
+## Amendment before launch: the gnomon arm's surface patch
+
+Found while building UX1, before any P1 trial ran. The August adapter (also used by
+H7) rewrote `roles.toml` only, but `gnomon init` scaffolds `role_profile =
+"local_first"`, which is merged over roles.toml field by field. `--role
+implementor` is not in that profile, so the main loop always used the bench
+endpoint; H7's audit trails confirm every turn reached `qwen3.6-35b` at the bench
+URL. But plan, implement, critique and smol stayed on the scaffold's local
+endpoint, and smol is the summary role. In single-turn task mode summary
+compaction never runs: H7 recorded 0 dropped-context turns and no failed-summary
+degradation, so neither H7 nor P1 is affected. The fix rewrites every
+`.gnomon/profiles/*.toml` the same way. It was checked end to end against UX1's
+fake model: all four profile endpoints move to `bench`, and the task answers
+through it.

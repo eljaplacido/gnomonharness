@@ -80,6 +80,18 @@ if(!c.includes("[endpoints.bench]")){
 let r=fs.readFileSync(".gnomon/roles.toml","utf8");
 r=r.replace(/endpoint = "[^"]*"/g,`endpoint = "bench"`).replace(/model = "[^"]*"/g,`model = "${E.GNOMON_BENCH_MODEL}"`);
 fs.writeFileSync(".gnomon/roles.toml",r);
+// The scaffold's role_profile (local_first) is merged OVER roles.toml per field,
+// so every profile gets the same rewrite. Without it, plan/implement/critique/smol
+// stay on the scaffold's local endpoint; `implementor` never was (it is not in the
+// profile), which is why the August runs and H7 worked -- but smol, the summary
+// role, would have pointed at nothing in any multi-turn run.
+const pd=".gnomon/profiles";
+if(fs.existsSync(pd)) for(const f of fs.readdirSync(pd)){
+  if(!f.endsWith(".toml")) continue;
+  let t=fs.readFileSync(pd+"/"+f,"utf8");
+  t=t.replace(/endpoint = "[^"]*"/g,`endpoint = "bench"`).replace(/model = "[^"]*"/g,`model = "${E.GNOMON_BENCH_MODEL}"`);
+  fs.writeFileSync(pd+"/"+f,t);
+}
 let p=fs.readFileSync(".gnomon/policy.toml","utf8");
 if(!/\[approval\]/.test(p)) fs.writeFileSync(".gnomon/policy.toml",p+`\n[approval]\ngate = "never"\n`);
 let a=fs.readFileSync(".gnomon/config.toml","utf8");
