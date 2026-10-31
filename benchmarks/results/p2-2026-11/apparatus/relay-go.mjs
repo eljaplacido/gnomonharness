@@ -52,7 +52,7 @@ const totals = {
   prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0,
   allowance: 0, responses_with_allowance: 0,
   include_usage_injected: 0, status_4xx: 0, status_5xx: 0, errors: 0,
-  session_native: 0, session_injected: 0, ua_native: 0, ua_replaced: 0,
+  session_native: 0, session_injected: 0, ua_native: 0, ua_replaced: 0, responses_compressed: 0,
 };
 let cell = { id: "no-cell", arm: "unknown", ua: "unknown-harness/0" };
 const seenAgents = {};
@@ -166,6 +166,11 @@ http
       // /v1/... on this relay is <upstream>/v1/... upstream.
       const up = new URL(req.url.replace(/^\//, ""), UPSTREAM);
       const headers = { ...req.headers, host: up.host, authorization: `Bearer ${KEY}`, "content-length": String(body.length) };
+      // Uncompressed upstream responses: a client that accepts gzip/br (gnomon's undici
+      // does) got compressed bodies, which pass through fine but cannot be metered.
+      // Found on the probe's first gnomon cell: 25 responses, no usage read. Every
+      // client accepts identity, so this changes nothing a client sees.
+      headers["accept-encoding"] = "identity";
       // Anthropic's API authenticates with x-api-key; the others with a bearer token.
       if (req.url.includes("/anthropic/")) headers["x-api-key"] = KEY;
       else delete headers["x-api-key"];
@@ -186,7 +191,9 @@ http
         });
         upRes.on("end", () => {
           res.end();
-          if (isModel && s < 400) account(tail, upRes.headers, streamed || /event-stream/.test(String(upRes.headers["content-type"] ?? "")));
+          if (isModel && s < 400 && upRes.headers["content-encoding"] && upRes.headers["content-encoding"] !== "identity") {
+            totals.responses_compressed++;  // upstream ignored identity: counted, never guessed
+          } else if (isModel && s < 400) account(tail, upRes.headers, streamed || /event-stream/.test(String(upRes.headers["content-type"] ?? "")));
         });
       });
       proxied.on("error", () => {
