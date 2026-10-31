@@ -93,7 +93,7 @@ compare with eight peer harnesses on:
 - Install time is outside the agent cap in Harbor (setup has its own timeout),
   unlike tb 0.2.18 in P1.
 
-## Amendment, 2026-11-01, before any full-run cell: relay upstream guard
+## Amendment, 2026-10-31 ~23:30Z, before any full-run cell: relay upstream guard
 
 `apparatus/relay-go.mjs` now refuses any request target outside the configured
 upstream (403, counted as `refused_off_upstream`). G2b's negative control

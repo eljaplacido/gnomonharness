@@ -44,7 +44,7 @@ the same direction, and at least one of them significantly (exact McNemar
 p < 0.05 with ≥ 6 discordant pairs). A difference in one only is reported as
 model-specific.
 
-## Amendment, 2026-11-01 ~01:40Z: the relays now refuse off-upstream targets
+## Amendment, 2026-10-31 ~23:30Z: the relays now refuse off-upstream targets
 
 G2b's negative control found a key-exposure path in `relay-go.mjs`, which every
 hosted benchmark shares:
@@ -59,7 +59,7 @@ request, but the key is the user's.
 
 **The fix:** G2b's guard was installed. A target that does not resolve under
 the upstream's origin and path gets a 403 and is counted
-(`refused_off_upstream`). Both P1-H relays were restarted with it at ~01:40Z.
+(`refused_off_upstream`). Both P1-H relays were restarted with it at ~23:30Z.
 - A restart resets the relay counters, so the two cells in flight have no
   usable token delta: `p-k1-qwen-hf-train-lora-adapter` and
   `p-k1-opencode-hf-train-lora-adapter`.
