@@ -26,6 +26,17 @@
 
 ## [Unreleased]
 
+- **The determinism suite measured nothing for eight weeks, and said it passed.**
+  Since `65274f6` (2026-09-07), `benchmarks/results/determinism-2026-08-31/determinism.mjs`
+  did not parse: a template literal opened with a backtick and closed with `"`,
+  and `REPO` was used by the imports above its declaration. Every spawn died,
+  and two identical errors compared equal, so `run.mjs` printed `9/10 matched`
+  and exited 0. Both are fixed. On v0.3.1 the suite now measures 10/10, matching
+  the published figure from 2026-08-31, before the break. `run.mjs` now treats
+  a row with no fingerprint as INVALID and exits 2, and exits 1 on a mismatch.
+  Proven against the broken file: `0/10, 10 INVALID`, exit 2. Found by the G2
+  re-run of the property suites.
+
 - **`[shadow]`: a log-only decision-model shadow.** When a surface declares it,
   a typed decision model (`/v1/systemone`: state plus typed questions in,
   probabilities out) is asked three things, each logged beside what gnomon
