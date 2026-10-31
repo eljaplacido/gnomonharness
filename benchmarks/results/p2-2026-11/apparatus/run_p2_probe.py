@@ -28,17 +28,21 @@ MODEL = "deepseek-v4.1-flash"
 CAP_S = 1800
 TB4_AGENT_TIMEOUT_S = 28800  # every TB 4.0 task declares 8 h
 
-# (arm, agent, provider, base path, version kwarg or None, key variables, user agent)
+# (arm, agent, provider, base path, version kwarg or None, key variables, user agent[, extra args])
 ARMS = [
     ("gnomon",      "p2_agents:Gnomon",      "openai",    "/openai/v1", None,       ["OPENAI_API_KEY"], "gnomon/0.3.1"),
     ("claude-code", "claude-code",           "anthropic", "/anthropic", "2.1.316",  ["ANTHROPIC_API_KEY"], "claude-code/2.1.316"),
     ("codex",       "codex",                 "openai",    "/openai/v1", "0.166.0",  ["OPENAI_API_KEY", "CODEX_API_KEY"], "codex/0.166.0"),
     ("opencode-v2", "p2_agents:OpencodeV2",  "openai",    "/openai/v1", None,       ["OPENAI_API_KEY"], "opencode/2.2.5"),
-    ("openhands",   "openhands",             "openai",    "/openai/v1", "1.11.0",   ["LLM_API_KEY"], "openhands/1.11.0"),
+    # Harbor's `openhands` adapter targets the pre-1.0 layout (`openhands.core.main`,
+    # gone in openhands-ai 1.11.0); `openhands-sdk` is its adapter for the current one.
+    ("openhands",   "openhands-sdk",         "openai",    "/openai/v1", "1.59.0",   ["LLM_API_KEY", "OPENAI_API_KEY"], "openhands-sdk/1.59.0"),
     ("aider",       "p2_agents:AiderPinned", "openai",    "/openai/v1", None,       ["OPENAI_API_KEY"], "aider/0.86.2"),
     ("goose",       "goose",                 "openai",    "/openai/v1", "v1.57.0",  ["OPENAI_API_KEY"], "goose/1.57.0"),
-    ("mini",        "mini-swe-agent",        "openai",    "/openai/v1", "2.4.6",    ["MSWEA_API_KEY", "OPENAI_API_KEY"], "mini-swe-agent/2.4.6"),
-    ("pi",          "pi",                    "openai",    "/openai/v1", "0.85.1",   ["OPENAI_API_KEY"], "pi/0.85.1"),
+    ("mini",        "p2_agents:MiniPinned",  "openai",    "/openai/v1", "2.4.6",    ["MSWEA_API_KEY", "OPENAI_API_KEY"], "mini-swe-agent/2.4.6"),
+    # pi accepts a custom endpoint only with an API style and a key reference.
+    ("pi",          "pi",                    "openai",    "/openai/v1", "0.85.1",   ["OPENAI_API_KEY"], "pi/0.85.1",
+     ["--ak", "model_api=openai-completions", "--api-key-name", "OPENAI_API_KEY"]),
 ]
 
 
@@ -65,8 +69,11 @@ def main() -> None:
         "PYTHONPATH": str(ROOT / "apparatus"),
         "GNOMON_RELEASE": "0.3.1",
         "PYTHONIOENCODING": "utf-8",
+        # Harbor on Windows read and wrote agent output in cp1252 and crashed on the
+        # first non-Latin-1 character (Claude Code, goose, mini in the first pass).
+        "PYTHONUTF8": "1",
     }
-    for arm, agent, provider, path, version, keys, ua in ARMS:
+    for arm, agent, provider, path, version, keys, ua, *extra in ARMS:
         if only and arm not in only:
             continue
         cell = f"p2probe-{arm}"
@@ -82,6 +89,8 @@ def main() -> None:
                "--allow-agent-host", "host.docker.internal", "-q"]
         if version:
             cmd += ["--ak", f"version={version}"]
+        if extra:
+            cmd += extra[0]
         cell_env = dict(env)
         for k in keys:
             # A placeholder: the relay replaces it with the real key, which never

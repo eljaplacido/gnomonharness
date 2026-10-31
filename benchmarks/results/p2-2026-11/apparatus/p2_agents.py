@@ -9,6 +9,10 @@
                permission not explicitly denied -- the consent every arm runs with.
 - AiderPinned: aider-chat 0.86.2. The stock adapter runs aider.chat/install.sh,
                which installs whatever is newest; a benchmark arm needs a version.
+- MiniPinned:  mini-swe-agent 2.4.6 with litellm 1.105.7. Harbor installs
+               `--with litellm` unpinned, and litellm >= 1.106.0 imports the
+               proxy's MCP module on every completion() with tools (`mcp` is a
+               proxy extra): the probe's mini cell crashed on it, as P1's smoke did.
 
 Every other arm is Harbor's stock adapter with `--ak version=<pin>`.
 """
@@ -18,6 +22,7 @@ from typing import override
 
 from harbor.agents.installed.aider import Aider
 from harbor.agents.installed.base import with_prompt_template
+from harbor.agents.installed.mini_swe_agent import _MINI_SWE_AGENT_PYTHON_VERSION, MiniSweAgent
 from harbor.agents.installed.opencode import OpenCode
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
@@ -26,6 +31,7 @@ from gnomon_harbor import Gnomon  # noqa: F401  (re-exported for --agent p2_agen
 
 OPENCODE_V2 = "v2.2.5"
 AIDER = "0.86.2"
+LITELLM = "1.105.7"
 PROVIDER = "p2go"  # the provider id opencode's config gives the relay
 
 
@@ -65,7 +71,9 @@ class OpencodeV2(OpenCode):
             raise ValueError("Model name must be in the format provider/model_name")
         _, model = self._parse_model_name(self.model_name)
         env = dict(self.model_connection.env)
-        base = (env.get("OPENAI_BASE_URL") or env.get("OPENAI_API_BASE") or "").rstrip("/")
+        # The stock opencode spec keeps the URL out of the environment
+        # (base_url_destination None); Harbor's resolved execution URL has it.
+        base = (self._execution_base_url or env.get("OPENAI_BASE_URL") or "").rstrip("/")
         if not base:
             raise ValueError("opencode-v2: no base URL resolved (--ak base_url=...)")
         env["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
@@ -107,6 +115,32 @@ class AiderPinned(Aider):
                 "set -euo pipefail; "
                 "if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi; "
                 'export PATH="$HOME/.local/bin:$PATH"; '
-                f"uv tool install --python 3.12 aider-chat=={AIDER} && aider --version"
+                f"uv tool install --python 3.12 aider-chat=={AIDER} && aider --version && "
+                # The stock run step sources ~/.local/bin/env, which only uv's own
+                # installer writes; an image that already had uv lacks it.
+                '{ [ -f "$HOME/.local/bin/env" ] || '
+                "printf 'export PATH=\"$HOME/.local/bin:$PATH\"\\n' > \"$HOME/.local/bin/env\"; }"
+            ),
+        )
+
+
+class MiniPinned(MiniSweAgent):
+    @staticmethod
+    @override
+    def name() -> str:
+        return "mini-swe-agent-pinned"
+
+    @override
+    async def install(self, environment: BaseEnvironment) -> None:
+        await super().install(environment)
+        # The same tool, re-installed with litellm pinned; everything else as Harbor has it.
+        py = shlex.quote(_MINI_SWE_AGENT_PYTHON_VERSION)
+        await self.exec_as_agent(
+            environment,
+            command=(
+                'set -euo pipefail; export PATH="$HOME/.local/bin:$PATH"; '
+                f"uv tool install --force --python {py} mini-swe-agent=={self._version} "
+                f"--with litellm=={LITELLM} --with orjson --with fastapi && "
+                "mini-swe-agent --help >/dev/null"
             ),
         )

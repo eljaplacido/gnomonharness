@@ -82,3 +82,30 @@ The relay:
   - The same cell showed that gnomon meets Go's client policy natively: its own
     session header on every request (`session_native`) and its own user agent
     (`gnomon/0.3.1+npm`).
+- **2026-10-31 18:36Z: pass 1 ended with 3 of 9 arms running cleanly.** gnomon
+  ($0.059, 63 requests), Codex ($0.027, 32) and Claude Code ($0.084, 60) reached
+  the model. Six arms failed on apparatus, five of them before any model call.
+  Each cause was read from Harbor's own records, then fixed:
+  - **Harbor on Windows wrote agent output in cp1252** and crashed on the first
+    `●` or `│` (Claude Code after its run, goose, mini). Harbor now runs with
+    `PYTHONUTF8=1`.
+  - **mini-swe-agent:** Harbor installs `--with litellm` unpinned, so it crashed
+    on the litellm ≥ 1.106 `mcp` import, as in P1. `p2_agents.MiniPinned`
+    re-installs it with `litellm==1.105.7`.
+  - **OpenHands:** Harbor's `openhands` adapter runs `openhands.core.main`, which
+    openhands-ai 1.11.0 no longer has. The arm now uses Harbor's `openhands-sdk`
+    adapter, pinned at 1.59.0.
+  - **aider:** the image already had uv, so uv's installer, which writes the
+    `~/.local/bin/env` the run step sources, never ran. `AiderPinned` writes
+    the file.
+  - **opencode V2:** our subclass read the base URL from the environment, where
+    the stock spec does not put it. It now uses Harbor's resolved execution URL.
+  - **pi:** a custom endpoint needs an API style and a key reference: `--ak
+    model_api=openai-completions --api-key-name OPENAI_API_KEY`.
+  The failed cells are kept as `*.failed-pass1`. The seven arms re-run as
+  pass 2, Claude Code included, so that its cell ends in a verdict. gnomon and
+  Codex are not re-run.
+- **Noticed in the task text:** TB 4.0's instruction tells every agent "You have
+  28800 seconds". The probe stops agents at 1,800 s. That is the same for every
+  arm, and it is recorded so that a full P2 can decide whether to say so in the
+  prompt.
