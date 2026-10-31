@@ -27,12 +27,20 @@ npm i -g pnpm >/dev/null 2>&1
 # output suppressed and no status check, so an unreachable ref fell back to
 # whatever git did next and the trial measured something nobody chose -- the
 # failure that made three earlier arms unattributable to any commit.
-if ! git clone --depth 1 --branch "${GNOMON_REF:-master}" \
-     https://github.com/eljaplacido/gnomonharness.git /opt/gnomon 2>/tmp/clone.err; then
-  echo "FATAL: could not clone ref '${GNOMON_REF:-master}'" >&2
+# H7 AMENDMENT (2026-10-31 ~10:05Z, during h7-p1): fetch the EXACT commit, not a
+# branch. The run first cloned --branch feat/decision-shadow; a test-only commit
+# pushed to that PR branch mid-run moved its head, and every later trial would
+# have failed the SHA check below. Fetching by SHA pins the same build (800ee65)
+# with no dependency on where any branch points. The SHA check is unchanged.
+mkdir -p /opt/gnomon && cd /opt/gnomon && git init -q . \
+  && git remote add origin https://github.com/eljaplacido/gnomonharness.git \
+  && git fetch -q --depth 1 origin "${GNOMON_EXPECT_SHA:?GNOMON_EXPECT_SHA is required}" 2>/tmp/clone.err \
+  && git checkout -q FETCH_HEAD || {
+  echo "FATAL: could not fetch commit '${GNOMON_EXPECT_SHA:-}' (ref ${GNOMON_REF:-unset})" >&2
   cat /tmp/clone.err >&2
   exit 1
-fi
+}
+cd "$(cat /opt/task-cwd 2>/dev/null || echo /)"
 # And that it landed on the ref we asked for, not merely on something.
 mkdir -p /agent-logs
 if [ -n "${GNOMON_EXPECT_SHA:-}" ]; then

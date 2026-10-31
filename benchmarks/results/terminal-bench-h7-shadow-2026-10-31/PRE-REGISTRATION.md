@@ -75,3 +75,22 @@ claimed. The score is reported descriptively, with its interval.
 - [ ] Wall-clock per trial inspected after the run, for ~0 or exactly 900 s.
 - Not applicable: control arm, noise floor, peer symmetry. There is one arm and
   no comparison is claimed.
+
+## Amendments, logged as they happened
+
+- **2026-10-31 ~10:00Z, during `h7-p1`: the setup now fetches the exact commit.**
+  - Before, containers cloned `--branch feat/decision-shadow` and checked the
+    SHA. A test-only commit (`8d2bb70`, a CI timeout fix) was then pushed to that
+    PR branch. Its head moved, so every later trial would have failed the SHA
+    check at install.
+  - Restoring the branch would have needed a force push, which was not done.
+    Instead `gnomon-setup-h7.sh.j2` was replaced atomically to fetch
+    `800ee65` by SHA.
+  - The build under test, and the SHA check, are unchanged. No trial started
+    between the push and the repair: trial 1 had ended and trial 2 had cloned
+    `800ee65` before the push.
+  - Lesson, kept: pin the commit, never a branch someone may push to.
+- **Trial 1, `leelachess0-pytorch-conversion`: apparatus failure.** Its
+  Dockerfile downloads `training.lczero.org/get_network?sha=47e3…`, which now
+  returns 404. The image cannot be built anywhere, so no agent ran. It is
+  excluded as pre-registered and reported separately.
