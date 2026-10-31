@@ -1,0 +1,125 @@
+#!/bin/bash
+# tb SOURCES this file into the shell that later runs the agent, so the `set -e`
+# and `exit` below would apply to that shell: a failure would kill it before
+# `tmux wait -S done`, and tb would wait out the whole cap and score a timeout.
+# (The 2026-10-31 smoke run's gnomon cell did exactly that.) The body therefore
+# runs in a child bash, and only its verdict reaches tb's shell. The peer setups
+# never `exit` and set no options, so this brings the gnomon arm level with them.
+if [ -z "${GNOMON_SETUP_CHILD:-}" ]; then
+  if GNOMON_SETUP_CHILD=1 bash "${BASH_SOURCE[0]}"; then :; else echo "INSTALL_FAIL_STATUS"; fi
+  return 0 2>/dev/null || true
+fi
+# Capture the TASK directory before anything can change it. tb starts this
+# script in the task's WORKDIR, which is NOT always /app: fix-git lives in
+# /app/personal-site, swe-bench-astropy-2 in /app/astropy, prove-plus-comm in
+# /workspace (where /app does not exist at all). An earlier fix guessed
+# "${TB_TASK_DIR:-/app}" — that variable exists in 0 files of terminal-bench,
+# so it silently hardcoded /app and would have rooted the surface in an empty
+# directory for those tasks. Record the real one instead of guessing.
+printf '%s' "$PWD" > /opt/task-cwd 2>/dev/null || true
+# Install gnomon into a terminal-bench task container and write /opt/gnomon-run.sh.
+# Peer-benchmark copy of the H7 setup (bench/h7 8a2a16e) with the [shadow] block
+# removed: the gnomon arm is the 0.3.1 release as shipped, fetched by SHA.
+# `gnomon task` needs only node + pnpm deps (no Rust build), so this stays light.
+set -e
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq >/dev/null 2>&1 || true
+apt-get install -y -qq curl git ca-certificates >/dev/null 2>&1 || true
+
+export NVM_DIR="$HOME/.nvm"
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash >/dev/null 2>&1
+. "$NVM_DIR/nvm.sh"
+nvm install 22 >/dev/null 2>&1
+npm i -g pnpm >/dev/null 2>&1
+
+# Abort loudly if the pinned ref is unreachable. It used to be cloned with all
+# output suppressed and no status check, so an unreachable ref fell back to
+# whatever git did next and the trial measured something nobody chose -- the
+# failure that made three earlier arms unattributable to any commit.
+# Fetched by exact SHA, never by branch: during H7 a push to the pinned branch
+# moved its head mid-run. A SHA cannot move. The check below is unchanged.
+mkdir -p /opt/gnomon && cd /opt/gnomon && git init -q . \
+  && git remote add origin https://github.com/eljaplacido/gnomonharness.git \
+  && git fetch -q --depth 1 origin "${GNOMON_EXPECT_SHA:?GNOMON_EXPECT_SHA is required}" 2>/tmp/clone.err \
+  && git checkout -q FETCH_HEAD || {
+  echo "FATAL: could not fetch commit '${GNOMON_EXPECT_SHA:-}' (ref ${GNOMON_REF:-unset})" >&2
+  cat /tmp/clone.err >&2
+  exit 1
+}
+cd "$(cat /opt/task-cwd 2>/dev/null || echo /)"
+# And that it landed on the ref we asked for, not merely on something.
+mkdir -p /agent-logs
+if [ -n "${GNOMON_EXPECT_SHA:-}" ]; then
+  got=$(cd /opt/gnomon && git rev-parse HEAD)
+  if [ "$got" != "$GNOMON_EXPECT_SHA" ]; then
+    echo "FATAL: expected $GNOMON_EXPECT_SHA, cloned $got" >&2
+    exit 1
+  fi
+fi
+(cd /opt/gnomon && pnpm install --silent >/dev/null 2>&1)
+# Which commit this trial actually measured. Every previous arm cloned the
+# default branch and recorded nothing, so no result was attributable to a ref.
+mkdir -p /agent-logs && (cd /opt/gnomon && git rev-parse HEAD; git rev-parse --abbrev-ref HEAD) > /agent-logs/gnomon-commit.txt 2>/dev/null || true
+# Also on the terminal: tb captures the pane for every task, but some tasks
+# (pandas-sql-query) mount no agent-logs volume.
+echo "ARM_VERSION=$(head -1 /agent-logs/gnomon-commit.txt 2>/dev/null)"
+
+# Run helper: build a fresh surface in the task dir, point every role at the
+# bench endpoint/model (greedy, approval off for headless), then solve.
+cat > /opt/gnomon-run.sh <<'RUN'
+#!/bin/bash
+set -e
+export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
+GN=/opt/gnomon/packages/gnomon-cli/gnomon.js
+INSTR="$1"
+# THE TASK DIRECTORY, explicitly. The setup script cd's to /opt/gnomon to build
+# gnomon, and that cwd persists into this shell — so `gnomon init` was rooting
+# the surface in the CLONED REPO, not the task. Every task deliverable lives in
+# /app, which is outside that root, so write/edit refused it: 21 of 42 trials in
+# the A0 arm hit "refused (outside sandbox)" and only 11 used write/edit at all.
+# Models that routed around it via bash passed; models that did not, failed.
+cd "$(cat /opt/task-cwd 2>/dev/null || echo /app)" 2>/dev/null || true
+echo "gnomon cwd: $(pwd)" >> /agent-logs/gnomon-cwd.txt 2>/dev/null || true
+node "$GN" init >/dev/null 2>&1 || true
+node -e '
+const fs=require("fs"), E=process.env;
+let c=fs.readFileSync(".gnomon/config.toml","utf8");
+if(!c.includes("[endpoints.bench]")){
+  const key=E.GNOMON_BENCH_KEYENV?`api_key_env = "${E.GNOMON_BENCH_KEYENV}"\n`:"";
+  c=`[endpoints.bench]\nurl = "${E.GNOMON_BENCH_URL}"\nkind = "openai"\n${key}\n`+c;
+  fs.writeFileSync(".gnomon/config.toml",c);
+}
+let r=fs.readFileSync(".gnomon/roles.toml","utf8");
+r=r.replace(/endpoint = "[^"]*"/g,`endpoint = "bench"`).replace(/model = "[^"]*"/g,`model = "${E.GNOMON_BENCH_MODEL}"`);
+fs.writeFileSync(".gnomon/roles.toml",r);
+// The role_profile of the scaffold (local_first) is merged OVER roles.toml per field,
+// so every profile gets the same rewrite. Without it, plan/implement/critique/smol
+// stay on the local endpoint of the scaffold; `implementor` never was (it is not in the
+// profile), which is why the August runs and H7 worked -- but smol, the summary
+// role, would have pointed at nothing in any multi-turn run.
+const pd=".gnomon/profiles";
+if(fs.existsSync(pd)) for(const f of fs.readdirSync(pd)){
+  if(!f.endsWith(".toml")) continue;
+  let t=fs.readFileSync(pd+"/"+f,"utf8");
+  t=t.replace(/endpoint = "[^"]*"/g,`endpoint = "bench"`).replace(/model = "[^"]*"/g,`model = "${E.GNOMON_BENCH_MODEL}"`);
+  fs.writeFileSync(pd+"/"+f,t);
+}
+let p=fs.readFileSync(".gnomon/policy.toml","utf8");
+if(!/\[approval\]/.test(p)) fs.writeFileSync(".gnomon/policy.toml",p+`\n[approval]\ngate = "never"\n`);
+let a=fs.readFileSync(".gnomon/config.toml","utf8");
+a=a.replace(/\[audit\]([\s\S]*?)enabled = false/, "[audit]$1enabled = true");
+fs.writeFileSync(".gnomon/config.toml",a);
+'
+mkdir -p /agent-logs
+# The score delta is below the noise floor at n=1; the MECHANISM metric is not.
+# Keep the full trace so "trials nudged with zero preceding write/edit" is countable.
+node "$GN" task "$INSTR" --role implementor --yes 2>&1 | tee /agent-logs/gnomon-full.log | tail -40
+# The audit trail lives in the task dir, which goes away with the container.
+cp -r .gnomon-audit /agent-logs/audit 2>/dev/null || true
+cp .gnomon/config.toml /agent-logs/surface-config.toml 2>/dev/null || true
+RUN
+chmod +x /opt/gnomon-run.sh
+echo "GNOMON_INSTALL_OK"
+# When setup ended. tb starts the 900 s clock before setup, so install time is spent from the cap.
+echo "ARM_SETUP_END=$(date -u +%s)"
