@@ -26,6 +26,20 @@
 
 ## [Unreleased]
 
+- **Every shell command returns ~40 ms sooner.** The bash tool waited a fixed
+  40 ms after every command exited, to drain output still in flight. It listens
+  for `exit`, not `close`, because a backgrounded job keeps the pipes open and
+  `close` never comes. It now also finishes on `close`, which means both pipes
+  are drained, so every byte is in. That arrives within a millisecond for any
+  command that leaves no job behind. The backgrounded-job path is unchanged
+  (exit + 40 ms).
+  - Measured with UX1b's scripted 10-turn session, interleaved, n = 10 each:
+    gnomon's own time per tool turn went from 48 to 9 ms (goose: 22, mini: 11),
+    and the session's wall clock from 817 to 417 ms. Requests were
+    byte-identical.
+  - All 186 tool tests pass, including "a backgrounded job returns at once,
+    however its streams are redirected".
+
 - **`[shadow]`: a log-only decision-model shadow.** When a surface declares it,
   a typed decision model (`/v1/systemone`: state plus typed questions in,
   probabilities out) is asked three things, each logged beside what gnomon

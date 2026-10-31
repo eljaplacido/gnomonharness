@@ -1804,6 +1804,14 @@ async function bashTool(
       if (settled) return;
       setTimeout(() => finish(exit, signal), 40);
     });
+    // ...but only when the streams are still open. `close` means sh has exited AND
+    // both pipes are drained, so nothing is left in flight: finish at once. It
+    // fires within a millisecond of `exit` for any command that leaves no job
+    // holding the pipes, which is nearly every command. The 40 ms drain used to
+    // be paid on every one of them: UX1b measured gnomon at 48 ms of its own time
+    // per tool turn against goose's 22, and the drain was 40 of the 48. The
+    // backgrounded-job case above still ends on exit + 40 ms, as before.
+    proc.on("close", (exit, signal) => finish(exit, signal));
     const finish = (exit: number | null, signal?: NodeJS.Signals | null) => {
       if (settled) return;
       settled = true;
