@@ -39,7 +39,19 @@ if harness == "gnomon":
     import runner
     from scenarios import SCENARIOS
     sc = [s for s in SCENARIOS if s["name"] == scen][0]
-    files(sc); runner.build_surface(ws, sc["role_patch"]); h0 = runner.surface_hash(ws)
+    files(sc); runner.build_surface(ws, sc["role_patch"])
+    # Optional surface edits for the webfetch gating probes (G2B_WEBFETCH=1 enables the
+    # tool in tools.toml, where v0.3.1 ships it disabled; G2B_NETWORK sets [sandbox] network).
+    if os.environ.get("G2B_WEBFETCH") == "1":
+        t = ws / ".gnomon" / "tools.toml"
+        blk = 'name = "webfetch"\ndescription = "Retrieve an http(s) URL as text"\nenabled = false'
+        assert blk in t.read_text(), "webfetch block not found"
+        t.write_text(t.read_text().replace(blk, blk.replace("enabled = false", "enabled = true")))
+    if os.environ.get("G2B_NETWORK") in ("true", "false"):
+        import re as _re
+        pol = ws / ".gnomon" / "policy.toml"
+        pol.write_text(_re.sub(r"network\s*=\s*\w+", "network = " + os.environ["G2B_NETWORK"], pol.read_text()))
+    h0 = runner.surface_hash(ws)
     p = subprocess.run(["node", runner.GN, "task", KEY, "--role", "probe", "--yes", "--json"], cwd=ws, capture_output=True, text=True, timeout=120)
     j = runner.extract_json(p.stdout + p.stderr) or {}
     surface_changed = runner.surface_hash(ws) != h0
