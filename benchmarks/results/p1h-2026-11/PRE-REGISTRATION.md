@@ -109,3 +109,14 @@ only for gx10's CPU and docker, not for P1's GPU, and it went from 2 slots to 4
 - Cells are unchanged, and each slot still meters exactly. Load per cell is
   recorded; wall clock was descriptive only from the start.
 - P1 stays serial: its local model serves one request at a time by design.
+
+## Amendment, 2026-11-01T09:23Z: collector nesting fix (analysis only)
+
+The negative-delta guard added on 2026-10-31 left the block that builds a
+cell's token record inside the guard. A normally metered cell therefore got
+no token record and was scored `unmetered`, and only void cells were
+counted. The first interim read showed 0 valid cells per arm. The fix adds
+the missing `if before and after:` line and changes no rule: a negative delta
+is still void, and a metered cell with zero requests is still
+`no_model_call`. P1's collector never had the guard and is unaffected. No
+result had been read when the bug was found.

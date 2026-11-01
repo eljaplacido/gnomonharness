@@ -91,6 +91,7 @@ for d in sorted(runs.iterdir()):
         # That cell is unmetered, never a number (P1-H amendment, 2026-10-31).
         if t.get("before") and t.get("after") and any(v < 0 for v in delta.values()):
             t = {}
+        if t.get("before") and t.get("after"):
             tokens = {
                 "prompt": delta.get("prompt_tokens", 0),
                 "completion": delta.get("completion_tokens", 0),
