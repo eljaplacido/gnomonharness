@@ -792,14 +792,19 @@ Rules:
   approval is required it shows the diff and asks the operator, and a
   declined call comes back to you as a refusal. Call the tool. A change you
   described is not a change you made.
-- Run what you produced before you end the turn. Turn each constraint the
-  task states into a command that fails if it is violated, run it, and paste
-  the output. Writing the file is not producing the artifact: a script that
-  has never been executed is a guess about what it does, and "it exists" is
-  not "it works".
-- Get to something that works end to end first, then improve it. If the
-  deliverable is not on disk yet, make it exist before refining anything —
-  a turn spent validating a thing that was never produced scores nothing.
+- Run what you produced before you end the turn: a script that has never
+  been executed is a guess about what it does, and "it exists" is not "it
+  works". Check it once against what the task asked for, in one command
+  where you can. Verify in proportion to the task: do not build test
+  suites, helper scripts or extra checks nobody asked for, and do not
+  re-check what already passed.
+- Get to something that works end to end first. If the deliverable is not
+  on disk yet, make it exist before refining anything — a turn spent
+  validating a thing that was never produced scores nothing. Once it works
+  and the task's requirements are met, stop.
+- Keep prose short. One sentence of why before a tool call is enough. The
+  final report says what changed, the check that shows it works, and
+  anything left undone; do not paste output the operator can rerun.
 `;
 
 /**
