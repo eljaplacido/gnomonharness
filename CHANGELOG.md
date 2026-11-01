@@ -36,6 +36,22 @@
   a row with no fingerprint as INVALID and exits 2, and exits 1 on a mismatch.
   Proven against the broken file: `0/10, 10 INVALID`, exit 2. Found by the G2
   re-run of the property suites.
+- **An installed gnomon no longer reports someone else's commit as its build.**
+  `harnessBuild()` asked git first, in the module's own directory, and git
+  answers for whatever repository an install sits in. A project-local or CI
+  `npm i` therefore stamped the project's commit on every audit record as
+  gnomon's build: the v0.3.1 release, installed under a benchmark directory,
+  said `gnomon/0.3.1+1afd251-dirty`.
+  - An installed copy now never asks git.
+  - The release job stamps gnomon-core's `package.json` (`gnomonBuild`), so an
+    installed release names its tag and commit, e.g. `+v0.3.1-7012c5a`.
+    Unstamped installs still say `+npm`.
+  - git applies only in gnomon's own checkout.
+  - `conformance/build_field.json` records the new order:
+    `GNOMON_BUILD`, `package`, `npm`, `git`, `unknown`.
+  - Three tests drive the failing layouts, and each failed on the old code.
+  - `check-publishable.sh` now installs into a git repository, the layout
+    that shows the bug. On the old code it failed naming the project's commit.
 
 - **`[shadow]`: a log-only decision-model shadow.** When a surface declares it,
   a typed decision model (`/v1/systemone`: state plus typed questions in,

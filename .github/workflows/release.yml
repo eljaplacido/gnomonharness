@@ -344,16 +344,24 @@ jobs:
           cache: pnpm
 
       - name: Pack the npm packages
+        env:
+          STAMP: ${{ needs.verify.outputs.stamp }}
         run: |
           set -euo pipefail
           pnpm install --frozen-lockfile
           pnpm -r run build
+          # The provenance an installed copy reports (build.ts, rule `package`).
+          # The binary archives carry STAMP in a GNOMON_BUILD file; the npm
+          # tarballs had nothing, so every installed release said only `+npm`.
+          # Written into this runner's checkout only, never committed.
+          ( cd packages/gnomon-core && npm pkg set gnomonBuild="$STAMP" )
           for p in gnomon-core gnomon-natives gnomon-tui gnomon-cli; do
             ( cd "packages/$p" && pnpm pack --pack-destination "$GITHUB_WORKSPACE/dist" )
           done
           # The same gate .gnomon/ci.sh runs: if the tarball cannot install and
           # run, it must not reach a release page where someone will try it.
-          bash scripts/check-publishable.sh
+          # Here it must also report the stamp it was packed with.
+          EXPECT_REVISION="$STAMP" bash scripts/check-publishable.sh
 
       # No third-party release action. The token that can publish a release is
       # the most privileged thing in this repository's CI, and `gh` is already
