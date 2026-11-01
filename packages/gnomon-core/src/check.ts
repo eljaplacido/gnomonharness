@@ -56,11 +56,14 @@ import {
   bashPolicy,
   executeTool,
   inSurface,
+  resolveSandboxLevel,
   writeAllowed,
-  type SandboxLevel,
   type ToolContext,
 } from "./tools.js";
 import { toolTimeoutMs } from "./prompt_loop.js";
+// Which role a foreign agent is judged as: one function for check and guard,
+// so a call and the change it was part of answer to the same role.
+import { resolveCheckRole } from "./guard.js";
 
 // ---------------------------------------------------------------------------
 // The verdict
@@ -196,55 +199,6 @@ function parseNameStatus(out: Buffer): Array<{ status: string; path: string }> {
  * is surface, so leaving them out cannot hide an edit to the rules.
  */
 const OWN_STATE = [".gnomon-audit", ".gnomon-sessions", ".gnomon-jobs", ".gnomon-out", ".gnomon-loops"];
-
-// ---------------------------------------------------------------------------
-// Role
-// ---------------------------------------------------------------------------
-
-/**
- * Which role a foreign agent's change is judged as.
- *
- * `--role` wins. Otherwise the BASE surface's `[check.roles]` maps the
- * harness's agent name (from `--agent`, or read from the transcript) to a role.
- * Neither → refuse: guessing a role would pick whose rules apply, which is the
- * one thing a governance check may not do on its own.
- */
-export function resolveCheckRole(
-  config: GnomonConfig,
-  given: { role?: string; agent?: string }
-): { role: string; source: string } | { error: string } {
-  const declared = Object.keys(config.roles ?? {});
-  const known = (r: string) => declared.includes(r);
-  if (given.role) {
-    return known(given.role)
-      ? { role: given.role, source: "--role" }
-      : { error: `--role ${given.role} is not a role in the base surface (declared: ${declared.join(", ") || "none"})` };
-  }
-  const map = ((config.policy as { check?: { roles?: Record<string, unknown> } }).check?.roles ?? {}) as Record<
-    string,
-    unknown
-  >;
-  if (!given.agent) {
-    return {
-      error:
-        "no role: pass --role <role>, or --agent <name> with a [check.roles] entry in .gnomon/policy.toml " +
-        "mapping that agent to a role. A role is never guessed.",
-    };
-  }
-  const mapped = map[given.agent];
-  if (typeof mapped !== "string" || !mapped) {
-    const names = Object.keys(map);
-    return {
-      error:
-        `agent "${given.agent}" has no entry in [check.roles] of the base surface` +
-        (names.length ? ` (mapped: ${names.join(", ")})` : " (the table is empty or absent)") +
-        `. Add \`${given.agent} = "<role>"\` there, or pass --role.`,
-    };
-  }
-  return known(mapped)
-    ? { role: mapped, source: `[check.roles] ${given.agent}` }
-    : { error: `[check.roles] maps "${given.agent}" to "${mapped}", which is not a role in the base surface` };
-}
 
 // ---------------------------------------------------------------------------
 // Restore journal
@@ -506,7 +460,9 @@ async function judge(
     writeAllow: roleDef?.write_allow,
     root: projRoot,
     sandbox: resolveSandboxLevel(config),
-    extraRoots: resolveExtraRoots(config),
+    // Relative extra_roots resolve against the tree being judged, not the
+    // temporary copy of the rules, which holds .gnomon/ and nothing else.
+    extraRoots: resolveExtraRoots({ ...config, gnomonDir: join(treeRoot, surfaceRel) }),
     exec: resolveExec(config, role),
     network: (config.policy.sandbox as { network?: boolean } | undefined)?.network,
     // Nothing here asks anyone: the declared check is the surface's, and a

@@ -86,6 +86,8 @@ import {
   ARGS_MALFORMED,
   type SpillSink,
   DIFF_ELIDED,
+  resolveApprovalGate,
+  resolveSandboxLevel,
 } from "./tools.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { harnessBuild } from "./build.js";
@@ -2975,6 +2977,8 @@ export async function runAgenticTurn(
   const offered = new Set(toolSet.schemas.map((t) => t.function.name));
 
   const policy = config.policy ?? {};
+  // One resolver each, shared with `gnomon guard`, so another harness's call
+  // is gated by the same reading of the surface this loop makes.
   const gate: ApprovalGate = resolveApprovalGate(config);
   const sandbox: SandboxLevel = state.sandbox ?? resolveSandboxLevel(config);
 

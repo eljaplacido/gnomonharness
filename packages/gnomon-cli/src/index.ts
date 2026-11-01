@@ -1971,6 +1971,7 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "uninstall" },
   { name: "check" },
   { name: "trust" },
+  { name: "guard" },
 ];
 
 function showHelp(): void {
@@ -2093,6 +2094,19 @@ Commands:
     or mini-swe-agent.
     --install-hook claude-code prints the SessionStart + Stop hooks that
     run this on every Claude Code session (it edits nothing).
+
+  guard --tool <bash|write|edit|read|webfetch> --input <json> [--role <r> | --agent <a>]
+  guard --from claude-code|opencode|cursor|generic  (the call on stdin)
+    Decide one tool call another harness is about to make, before it runs,
+    by this surface's rules as committed (the session's recorded base, else
+    HEAD): allow, deny or ask, with the rule and the reason, as
+    gnomon.guard/1 JSON. The same prechecks gnomon's own tools run decide it.
+    Exit: 0 allow, 2 deny, 3 ask, 10 no decision (answered as ask). With
+    --from claude-code|cursor it answers in that harness's hook format.
+    Recorded in the audit trail when [audit] is on.
+  guard install claude-code|opencode|cursor [--write]
+    Print the hook (Claude Code PreToolUse, an opencode 2.2 plugin, Cursor
+    hooks.json), or with --write add it to this project's own config.
 
   prompt [--continue | --resume <id>] [--trust]
     Interactive agent loop. --continue resumes the most recent session,
@@ -2282,6 +2296,13 @@ async function main(): Promise<void> {
       break;
     case "check":
       process.exit(await cmdCheck(args));
+    case "guard": {
+      // Its own argv parser and a lean import: see guard_main.ts.
+      const { cmdGuard } = await import("./guard.js");
+      const at = process.argv.indexOf("guard", 2);
+      process.exitCode = await cmdGuard(process.argv.slice(at + 1));
+      return;
+    }
     default:
       console.error(`Unknown command: ${args.command}`);
       showHelp();

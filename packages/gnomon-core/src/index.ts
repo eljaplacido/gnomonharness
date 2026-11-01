@@ -33,6 +33,8 @@ export * from "./shell.js";
 export * from "./must_fail_first.js";
 // `gnomon check`: the same rules, asked of a change another harness made.
 export * from "./check.js";
+// `gnomon guard`: the same rules, asked of one tool call another harness is about to make.
+export * from "./guard.js";
 export * from "./transcripts.js";
 export * from "./skills.js";
 export * from "./audit.js";

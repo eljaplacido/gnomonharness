@@ -569,3 +569,65 @@ the permission options, the stop-reason map and the tool kinds against the
 fixture, and asserts this section names the same methods.
 `packages/gnomon-cli/src/acp.test.ts` drives the real command with a scripted
 client against a fake model.
+
+---
+
+## 10. `gnomon guard` — schema `gnomon.guard/1`
+
+The decision on one tool call another harness is about to make (README,
+[Governing other harnesses](../README.md#governing-other-harnesses)). A hook
+gates the call on it: deny is refused with `reason`, ask goes to a person,
+allow changes nothing. One JSON object per call on stdout.
+
+| Decision | Exit | Means |
+|---|---|---|
+| `allow` | 0 | No rule refuses the call and the `[approval]` gate would not ask. Not a permission: the adapters print nothing on allow, so the host harness's own prompt still applies. |
+| `deny` | 2 | A rule refuses it — the same refusal gnomon's own tool would return, `rule` names which. |
+| `ask` | 3 | The `[approval]` gate would ask a person first (`rule: "approval"`). |
+
+Exit **10** is no decision: the document says `decision: "ask"`, `rule:
+"error"`, and why in `error` (no role, no committed surface at the base, a
+surface that does not load, an audit trail that could not be written). A
+decision gnomon could not make is never an allow.
+
+| Rule | When |
+|---|---|
+| `tools` | the role was not given this tool |
+| `malformed` | the arguments cannot be read as that tool's (`write` with no `content`, `bash` with a non-string `command`) |
+| `bash_deny` | a `bash_deny` pattern matched (`pattern` names it) |
+| `bash_allow` | a segment is not on the role's `bash_allow`, or the command substitutes or redirects |
+| `sudo` | sudo at command position, on the host |
+| `sandbox` | a path outside the root and every granted `extra_roots` |
+| `surface` | a write or edit inside `.gnomon/` |
+| `write_allow` | a path outside the role's `write_allow` |
+| `network` | `[sandbox] network = false` |
+| `url` | a scheme other than http(s), or a private, loopback or link-local address |
+| `approval` | the gate would ask (decision `ask`) |
+| `ungoverned` | no `.gnomon/` above the working directory, or a tool gnomon has no pre-execution rule for (decision `allow`) |
+| `error` | no decision could be made (exit 10) |
+
+`rule` is `null` on an allow that nothing stopped. Tools decided (`tool`):
+`bash`, `write`, `edit`, `read`, `webfetch` — gnomon's own names and argument
+names. Anything else is `allow` with rule `ungoverned`, never guessed at.
+
+Keys: `schema`, `decision`, `rule`, `reason`, `tool`, `role`, `base` (the
+commit the rules were read from, full sha), `surface_hash` (the surface at
+`base`), `governed`, `elapsed_ms`; optionally `pattern`, `audit` (`trail`,
+`seq`, `hash`, when `[audit] enabled = true`), `error`.
+
+**Input.** `--tool <kind> --input <json>`, or on stdin `{"tool", "input",
+"cwd"?, "session_id"?}`. With `--from claude-code | opencode | cursor` stdin
+is that harness's own hook payload, and the answer is in its own format
+(`harness_answers` in the fixture): Claude Code gets nothing on allow and
+`hookSpecificOutput.permissionDecision` deny or ask otherwise, exit 0; Cursor
+gets `{}` on allow and `permission` / `user_message` / `agent_message`
+otherwise, exit 0; opencode's plugin reads the generic document.
+
+**Fixtures**: `conformance/guard_decision.json` (this contract) and
+`conformance/guard_cases.json` (calls and the decision each must reach).
+`packages/gnomon-cli/src/guard.test.ts` asserts the code's `GUARD_DECISIONS`,
+`GUARD_RULES`, `GUARD_TOOLS` and `guardExit`, the two tables above and the
+fixture are the same sets, validates documents the real binary printed against
+`verdict_keys`, and puts every case to the real binary.
+`packages/gnomon-core/src/guard.test.ts` puts every case to gnomon's own turn
+loop as well, and fails if the two decide differently.

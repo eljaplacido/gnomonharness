@@ -135,6 +135,7 @@ import { loadSkills, selectSkills } from "./skills.js";
 import { resolveAudit, verifyTrail, AuditRecord, AuditDetail } from "./audit.js";
 import { harnessBuild } from "./build.js";
 import { checkExit, type CheckId, type CheckStatus } from "./check.js";
+import { guardExit, type GuardDecisionValue } from "./guard.js";
 
 // ---------------------------------------------------------------------------
 // The partition this module is built on
@@ -974,6 +975,18 @@ export function replay(
           tcmp(e, "check.exit", record.exit, checkExit(record.checks as Array<{ id: CheckId; status: CheckStatus }>));
         } else {
           uncheckable(e, "check.exit", "trail", "the record carries no checks or no exit to compare");
+        }
+        break;
+      }
+
+      case "guard": {
+        // A `gnomon guard` decision. The rules it applied live at a base
+        // revision this replay does not hold; what it can re-derive is that
+        // the exit recorded is the one the decision maps to.
+        if (typeof record.decision === "string" && typeof record.exit === "number") {
+          tcmp(e, "guard.exit", record.exit, guardExit(record.decision as GuardDecisionValue, record.error !== undefined));
+        } else {
+          uncheckable(e, "guard.exit", "trail", "the record carries no decision or no exit to compare");
         }
         break;
       }

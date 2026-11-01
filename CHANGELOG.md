@@ -291,6 +291,37 @@ the shell runs it, new transcript readers for `gnomon check`, and the guide
   `install.ps1` take the registry only when it prints the version asked for.
 - **Docs: gnomon is on npm.** `npm i -g gnomon-harness` works; the README and
   GETTING_STARTED no longer say it 404s.
+- **`gnomon guard`: the repository's rules, before another harness's tool
+  call runs.** `check` judges a change after the fact; `guard` decides one
+  proposed call — a shell command, a file write or edit, a read, a fetch — from
+  inside the other harness's pre-tool hook, and answers allow, deny or ask with
+  the rule and the reason (`gnomon.guard/1`, CONTRACTS.md §10; exit 0 / 2 / 3,
+  and 10 for no decision, which says `ask`). There is no second policy: the
+  tools' own prechecks were extracted (`bashPrecheck`, `writePrecheck`,
+  `readPrecheck`, `webfetchPrecheck`) and `toolCallPolicy` calls them and then
+  the `[approval]` gate, so the loop and the guard run the same code. The
+  shared cases in `conformance/guard_cases.json` go through both, and the
+  suite fails if they disagree. Rules come from a committed base (the session's
+  start, else HEAD), never the working tree; `[audit] enabled = true` records
+  every decision on one sealed chain per session.
+- **Adapters: `gnomon guard install claude-code | opencode | cursor`.** Claude
+  Code: a `PreToolUse` hook beside the existing `check` SessionStart / Stop
+  hooks (`--write` merges without duplicating them); allow prints nothing, so
+  Claude Code's own prompt still applies. opencode 2.2: a plugin in
+  `.opencode/plugins/` — deny fails the call with gnomon's reason, ask goes to
+  opencode's own permission prompt; verified end to end in opencode 2.2.5.
+  Cursor: `beforeShellExecution` and `beforeReadFile` in `.cursor/hooks.json`,
+  checked against Cursor 3.0.16's validators. Cursor file writes have no
+  documented pre-execution hook and are left to `check`.
+- **Latency.** A warm decision is 3–5 ms; a whole `gnomon guard` process from
+  the published install is about 50–60 ms on the gx10 under load, of which bare
+  Node start-up is 22–28 ms. The published launcher loads a guard-only entry
+  (`dist/guard_main.js`, `gnomon-core/guard`), not the harness; the rules are
+  materialised once per `.gnomon/` tree, and a warm call spawns no `git`.
+- **`check` resolves relative `[sandbox] extra_roots` against the tree being
+  judged**, not its temporary copy of the rules. Latent: none of check's
+  current checks reads them, but the guard does, and the two now build their
+  context the same way.
 
 - **`[shadow]`: a log-only decision-model shadow.** When a surface declares it,
   a typed decision model (`/v1/systemone`: state plus typed questions in,

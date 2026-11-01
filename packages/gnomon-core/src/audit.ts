@@ -33,7 +33,7 @@
  * signer. Without that declaration the limit above is exactly the guarantee.
  */
 
-import { appendFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, existsSync, readFileSync, openSync, readSync, closeSync, fstatSync } from "node:fs";
 import { join, resolve, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
 import { GnomonConfig } from "./config.js";
@@ -183,6 +183,11 @@ export type AuditKind =
   // records carry the hash of a surface whose permissions did not all apply,
   // and the trail has to say so where a reader of that hash will look.
   | "trust"
+  // One decision of `gnomon guard` on a tool call another harness was about
+  // to make: the call's target, allow / deny / ask, the rule and the base the
+  // rules were read from. Its own kind for the reason `check` is: no model
+  // produced it, and it is not a turn.
+  | "guard"
   | "session_end";
 
 export interface AuditRecord {
@@ -246,6 +251,37 @@ export function recordHash(record: AuditRecord): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * The last record of a trail file, reading only its tail. Null when the file
+ * is absent or empty. A tail that does not parse is thrown, not skipped: a
+ * chain continued from the wrong record is a broken chain that looks whole.
+ */
+function lastRecord(file: string): AuditRecord | null {
+  let fd: number;
+  try {
+    fd = openSync(file, "r");
+  } catch {
+    return null;
+  }
+  try {
+    const size = fstatSync(fd).size;
+    if (size === 0) return null;
+    // Records are one line each; grow the window until it holds a whole one.
+    for (let window = 64 * 1024; ; window *= 4) {
+      const len = Math.min(size, window);
+      const buf = Buffer.alloc(len);
+      readSync(fd, buf, 0, len, size - len);
+      const lines = buf.toString("utf-8").split("\n").filter((l) => l.trim());
+      if (lines.length >= 2 || len === size) {
+        const line = lines[lines.length - 1];
+        return line ? (JSON.parse(line) as AuditRecord) : null;
+      }
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
  * An append-only audit log for one session.
  *
  * A disabled trail is a no-op object rather than a null check at every call
@@ -261,11 +297,26 @@ export class AuditTrail {
 
   constructor(
     private readonly settings: ResolvedAudit,
-    private readonly sessionId: string
+    private readonly sessionId: string,
+    /**
+     * Continue an existing trail file rather than start one. `gnomon guard`
+     * runs as one process per tool call, and every decision of one session
+     * belongs on one chain: the next record's `seq` and `prev` come from the
+     * file's last record. The caller holds a lock across the append, because
+     * two processes reading the same tail would fork the chain.
+     */
+    opts: { append?: boolean } = {}
   ) {
     if (!settings.enabled) return;
     mkdirSync(settings.dir, { recursive: true });
     this.file = join(settings.dir, `${sessionId}.jsonl`);
+    if (opts.append) {
+      const last = lastRecord(this.file);
+      if (last) {
+        this.seq = last.seq + 1;
+        this.prev = last.hash ?? null;
+      }
+    }
 
     const attest = settings.attest;
     if (attest?.enabled) {
