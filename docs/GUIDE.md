@@ -267,8 +267,9 @@ irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/i
 
 It checks for Node 20+ and npm (if missing, it prints the command for your OS
 and stops; it never installs Node as root), resolves the latest release,
-installs the npm package from the release's tarballs (`gnomon-harness` is not
-on the npm registry yet), and puts the native binaries in
+installs the npm package (from the npm registry, where `gnomon-harness` is
+published from 0.3.2 on; from the release's own tarballs for a version that is
+not there), and puts the native binaries in
 `~/.local/share/gnomon/bin` (`%LOCALAPPDATA%\gnomon\bin` on Windows). No sudo:
 if npm's global prefix is not writable it installs under `~/.local`. Every
 download is checked against the release's `SHA256SUMS`.

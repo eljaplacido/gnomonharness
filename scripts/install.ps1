@@ -106,7 +106,7 @@ function Install-Gnomon {
         } else {
             # Not on the registry, so its libraries cannot be resolved by name
             # either: all four tarballs go to npm in one command.
-            Write-Host '  from the release tarballs (not on the npm registry)'
+            Write-Host '  from the release tarballs (this version is not on the npm registry)'
             $tgz = @()
             foreach ($p in ($libs + $package)) { $tgz += Save-Verified $ctx "$p-$version.tgz" }
             Invoke-Npm (@('install', '-g', '--prefix', $prefix, '--no-audit', '--no-fund') + $tgz)

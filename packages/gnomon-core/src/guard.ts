@@ -54,6 +54,8 @@ import {
   recomputeManifest,
   resolveExec,
   resolveExtraRoots,
+  resolveApprovalGate,
+  resolveSandboxLevel,
   type GnomonConfig,
 } from "./config.js";
 import { AuditTrail, redact, resolveAudit } from "./audit.js";
@@ -61,8 +63,6 @@ import { harnessBuild } from "./build.js";
 import {
   POLICY_TOOLS,
   buildToolSet,
-  resolveApprovalGate,
-  resolveSandboxLevel,
   toolCallPolicy,
   type PolicyDecision,
   type PolicyRule,

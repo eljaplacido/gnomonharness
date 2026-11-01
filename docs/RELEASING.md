@@ -119,6 +119,14 @@ anything is downloaded. `--provenance` needs no secret: the job's
 `id-token: write` permission is what lets npm record which workflow run, commit
 and repository published each version.
 
+**Trusted publishing (no token), now possible.** npm's trusted publishing lets
+this workflow authenticate with GitHub's OIDC identity instead of a stored
+token. It is configured per package on npmjs.com (package → Settings → Trusted
+publisher: GitHub Actions, repository `eljaplacido/gnomonharness`, workflow
+`publish-npm.yml`), and a package has to exist before it can be configured —
+all four do since 0.3.2. Until all four are configured, the `NPM_TOKEN` path
+above stays; once they are, the secret can be deleted and the token revoked.
+
 To see what a release would publish, without publishing it:
 
 ```bash
@@ -137,7 +145,9 @@ npm login
 bash scripts/publish-npm.sh /tmp/rel 0.3.1
 ```
 
-0.3.1 was published by hand, before the workflow existed.
+0.3.2 was the first version on npm, published by hand on 2026-11-01 with a
+granular token, before the workflow existed. 0.3.1 and earlier are GitHub
+releases only.
 
 | Published name | What it is |
 |---|---|
@@ -173,7 +183,7 @@ both live in `publishConfig` so the workspace is untouched:
   dependency, inside the process that decides what an agent may run.
   `check-publishable.sh` fails if any appears.
 
-## Not published to npm — until 0.3.1
+## Not published to npm — until 0.3.2
 
 *(kept for the record: this section described the state before the above.)*
 
@@ -181,5 +191,5 @@ There is no `npm publish` step and no `NPM_TOKEN` anywhere in CI. The release is
 GitHub binaries and a git tag. Adding a registry publish is a decision about
 distribution, not a missing chore.
 
-It was decided for 0.3.1: published by hand, then automated by
+It was decided for 0.3.1, and first carried out for 0.3.2: published by hand, then automated by
 `publish-npm.yml` for every release after it.

@@ -257,7 +257,7 @@ main() {
     else
         # Not on the registry, so its three libraries cannot be resolved by
         # name either: all four tarballs go to npm in one command.
-        say "  from the release tarballs (not on the npm registry)"
+        say "  from the release tarballs (this version is not on the npm registry)"
         TGZ=""
         for p in $LIBS $PACKAGE; do
             fetch_verified "$p-$VERSION.tgz"

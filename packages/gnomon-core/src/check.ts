@@ -56,7 +56,6 @@ import {
   bashPolicy,
   executeTool,
   inSurface,
-  resolveSandboxLevel,
   writeAllowed,
   type ToolContext,
 } from "./tools.js";

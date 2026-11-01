@@ -4202,19 +4202,7 @@ function notOffered(name: string, offered: Set<string>): Precheck {
 // The decision alone
 // ---------------------------------------------------------------------------
 
-/** The approval gate the loop runs under, as the surface declares it. */
-export function resolveApprovalGate(config: GnomonConfig): ApprovalGate {
-  const declared =
-    (config.policy?.approval as { gate?: string } | undefined)?.gate ?? config.config.defaults?.approval ?? "on_write";
-  return declared as ApprovalGate;
-}
 
-/** The sandbox level, as the surface declares it. */
-export function resolveSandboxLevel(config: GnomonConfig): SandboxLevel {
-  return ((config.policy?.sandbox as { level?: string } | undefined)?.level ??
-    config.config.defaults?.sandbox ??
-    "confined") as SandboxLevel;
-}
 
 /** The tools whose calls `toolCallPolicy` decides. Everything else has no pre-execution rule. */
 export const POLICY_TOOLS = ["bash", "write", "edit", "read", "webfetch"] as const;

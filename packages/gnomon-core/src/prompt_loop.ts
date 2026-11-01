@@ -86,8 +86,6 @@ import {
   ARGS_MALFORMED,
   type SpillSink,
   DIFF_ELIDED,
-  resolveApprovalGate,
-  resolveSandboxLevel,
 } from "./tools.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { harnessBuild } from "./build.js";

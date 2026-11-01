@@ -439,7 +439,7 @@ npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/
 not a path there. The installer one-liners above are the cross-shell route. -->
 
 From the registry this is `npm i -g gnomon-harness` (or
-`npm i -g gnomon-harness@0.3.1` to pin), which resolves the other three by
+`npm i -g gnomon-harness@0.3.2` to pin), which resolves the other three by
 name. Releases reach npm when they are published on GitHub, by
 [`publish-npm.yml`](.github/workflows/publish-npm.yml), with npm provenance.
 

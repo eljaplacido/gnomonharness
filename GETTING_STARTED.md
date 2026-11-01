@@ -84,7 +84,7 @@ npm i -g "$B/gnomon-core-$V.tgz" "$B/gnomon-natives-$V.tgz" "$B/gnomon-tui-$V.tg
 Two blocks because they have to be: `V=0.3.2` is not an assignment in
 PowerShell and `\` is not its line continuation. The four are one package split
 up — `gnomon-harness` is the CLI and the other three its libraries — so npm
-needs all four URLs until there is a registry entry to resolve them from. This
+needs all four URLs; from the registry, one name is enough (below). This
 route does not fetch the native binaries; see
 [Prebuilt binaries](#prebuilt-binaries--if-you-would-rather-not-install-rust).
 
