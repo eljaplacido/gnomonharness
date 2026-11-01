@@ -608,7 +608,17 @@ decision gnomon could not make is never an allow.
 
 `rule` is `null` on an allow that nothing stopped. Tools decided (`tool`):
 `bash`, `write`, `edit`, `read`, `webfetch` — gnomon's own names and argument
-names. Anything else is `allow` with rule `ungoverned`, never guessed at.
+names — and `execute` (`{ "code" }`), JavaScript a harness runs itself
+(opencode V2's Code Mode). `execute` is decided as the equivalent bash call
+`node -e '<code>'`; for a role without `bash` it is `ask` with rule `tools`.
+Anything else is `allow` with rule `ungoverned`, never guessed at.
+
+`write_allow` binds bash too: a file a shell command names as its output
+(a redirection; the operands of `rm`, `mv`, `cp`, `tee`, `sed -i` and the like;
+a literal path inline python, node, perl or ruby code writes) is refused with
+rule `write_allow` when it is inside the repository and outside the list. A
+path that starts with a variable, one outside the repository, and anything a
+script file does are not judged.
 
 Keys: `schema`, `decision`, `rule`, `reason`, `tool`, `role`, `base` (the
 commit the rules were read from, full sha), `surface_hash` (the surface at

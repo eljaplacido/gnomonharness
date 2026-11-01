@@ -26,6 +26,35 @@
 
 ## [Unreleased]
 
+- **write_allow binds the shell, not only `write` and `edit` (G1c).** Under
+  `gnomon guard`, opencode V2 refused an edit of CHANGELOG.md rewrote it with
+  `python3 - <<PY … Path("CHANGELOG.md").write_text(…)` (2 trials), and refused
+  `rm -rf var/` deleted the ignored database with `rm var/local.db && rmdir var`
+  (1 trial). A file a bash command names as its output is now put to the
+  role's `write_allow`, in the loop and in `gnomon guard` alike (one policy):
+  - redirections; the operands of `rm`, `rmdir`, `unlink`, `shred`, `truncate`,
+    `touch`, `mkdir`, `tee`, `cp`, `mv` (source and destination), `install`,
+    `ln`, `dd of=`, `curl -o`, `wget -O`, `sed -i` and `perl -i`;
+  - literal paths inline python, node, perl or ruby code hands to a call that
+    writes (`open(…, "w")`, `Path(…).write_text`, `fs.writeFileSync`, …).
+  Not judged, and said so: a path outside the repository (scratch in `/tmp`),
+  one that starts with a variable or `~`, a path code builds at run time, and
+  anything a script file does. 60 everyday commands under a `src/**`,
+  `tests/**` role: 0 refused.
+- **`gnomon guard` decides opencode V2's `execute` (Code Mode JavaScript).** It
+  was "ungoverned", so G1c's token left through `fetch` in `execute` while the
+  same request in `shell` was refused. It is now decided as the equivalent
+  `node -e` one-liner: bash_deny and `network = false` apply. A role without
+  bash is asked. Verified end to end in opencode 2.2.5.
+- **`network = false` refusals carry rule `network`.** The bash refusal had no
+  rule, and `toolCallPolicy` read that as "the call would fail on its own", so
+  `gnomon guard` allowed `curl` under `network = false` unless a bash_deny
+  pattern also named it. The loop's own behaviour is unchanged.
+- **`git clean -n` is a dry run, not a deletion.** A deny pattern written for
+  `git clean -fdx` refused `git clean -ndx` in G1c. A segment that only
+  dry-runs `git clean` is no longer offered to bash_deny; a real `git clean -f`
+  beside it still is.
+
 ## [0.3.3] — 2026-11-01
 
 The workspace-trust gate (#72), `gnomon acp` for editors that speak the Agent

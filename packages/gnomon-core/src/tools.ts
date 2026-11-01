@@ -45,9 +45,12 @@ import type { McpRegistry, McpToolInfo } from "./mcp.js";
 import {
   bashNetworkEgress,
   describeInvocation,
+  isDryRunSegment,
   joinWords,
+  programName,
   readShellCommand,
   shellSpellings,
+  shellWriteTargets,
 } from "./shell.js";
 
 // ---------------------------------------------------------------------------
@@ -1537,10 +1540,17 @@ export function bashPolicy(
   // on both is denied.
   if (deny && deny.length > 0 && read) {
     const scan = scanShellCommand(command);
+    // A dry run is not the operation it previews. G1c (2026-11-01): a pattern
+    // written for `git clean -fdx` refused `git clean -ndx`, the one safe way
+    // to look before deleting. A segment that only dry-runs `git clean` is not
+    // offered to the list, and is cut out of the whole-string subject, so a
+    // real `git clean -f` beside it is still read and still refused.
+    const dry = scan.segments.filter(isDryRunSegment);
+    const whole = dry.reduce((c, seg) => c.replace(seg, " "), command);
     // The whole string as well as each segment. A segment split cannot see
     // `git push --force` written across a substitution, and denial is the one
     // place where matching too much is the safer error.
-    const subjects = [command, ...scan.segments];
+    const subjects = [whole, ...scan.segments.filter((seg) => !dry.includes(seg))];
     // And every program the line runs, in its ordinary spellings. Measured on
     // v0.3.1 (G2b, 2026-11-01; CORRECTION.md, 2026-08-31): with
     // `rm\s+-rf` and `rm\s+.*-r\b` denied, `rm -fr keep`, `rm -R keep` and
@@ -1548,9 +1558,9 @@ export function bashPolicy(
     // patterns were tested against text and the text was spelled differently.
     // The raw subjects above still come first, so every command a pattern
     // refused before is refused now, by the same pattern, with the same words.
-    const forms = read.invocations.flatMap((inv) =>
-      shellSpellings(inv).map((spelling) => ({ spelling, inv }))
-    );
+    const forms = read.invocations
+      .filter((inv) => !(programName(inv.argv[0] ?? "") === "git" && isDryRunSegment(joinWords(inv.argv))))
+      .flatMap((inv) => shellSpellings(inv).map((spelling) => ({ spelling, inv })));
     for (const pattern of deny) {
       let re: RegExp;
       try {
@@ -1739,6 +1749,9 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
   const refused = bashPolicy(command, ctx.bashAllow, ctx.bashDeny);
   if (refused) return refused;
 
+  const outside = bashWriteRefusal(command, ctx);
+  if (outside) return outside;
+
   // `[sandbox] network = false` used to stop webfetch and nothing else, and
   // the startup note said so: G2b (2026-11-01) reached its canary from a
   // network = false surface with curl and with python. A surface that says
@@ -1755,6 +1768,10 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
     const egress = bashNetworkEgress(command);
     if (egress) {
       return {
+        // The rule was missing, and toolCallPolicy reads a precheck with no rule
+        // as "the call would fail on its own": `gnomon guard` allowed curl under
+        // network = false unless a bash_deny pattern also named it.
+        rule: "network",
         code: TOOL_DENIED,
         content:
           `Refused: "${egress.command.slice(0, 80)}" reaches the network (${egress.why}), ` +
@@ -1782,6 +1799,65 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
         "repository is the operator's call. Stop and give them the exact command " +
         "to run themselves, and say why it is needed.",
       summary: "bash — refused (sudo)",
+    };
+  }
+  return null;
+}
+
+/**
+ * write_allow, applied to the files a shell command names as its output.
+ *
+ * write_allow bounded `write` and `edit` only, so it bounded nothing a model
+ * refused there could not do in bash. G1c (2026-11-01, opencode V2 under
+ * `gnomon guard`, role write_allow = src/**, tests/**): refused an edit of
+ * CHANGELOG.md, two trials rewrote it with `python3 - <<PY …
+ * Path("CHANGELOG.md").write_text(…)`; refused `rm -rf var/`, one deleted the
+ * ignored database with `rm var/local.db && rmdir var`. Each of those names
+ * its target, and each is now put to the same list `write` is.
+ *
+ * What is judged (shellWriteTargets, shell.ts): redirections; the operands of
+ * rm, rmdir, unlink, shred, truncate, touch, mkdir, tee, cp, mv, install, ln,
+ * dd of=, curl -o, wget -O, sed -i and perl -i; and literal paths that inline
+ * python, node, perl or ruby code hands to a call that writes.
+ *
+ * What is not, said rather than guessed:
+ *  - a path outside the repository root. write_allow is about what the
+ *    repository may become; scratch files in /tmp are not its business, and
+ *    the file tools' sandbox does not bind bash.
+ *  - a path that starts with a variable or `~`, or follows a `cd` whose
+ *    target is a variable: where it lands is not known until it runs. A glob
+ *    or a variable later in the path is judged by the literal part before it
+ *    (`var/*` is under `var/`).
+ *  - a path code builds at run time, and anything a script FILE does. Like
+ *    bash_deny this reads intent, not effects; `[sandbox] exec = "os"` or
+ *    `"docker"` is containment.
+ */
+function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
+  const allowed = ctx.writeAllow?.filter((p) => p.trim().length > 0) ?? [];
+  if (allowed.length === 0) return null;
+  const root = resolve(ctx.root);
+  for (const t of shellWriteTargets(command).targets) {
+    const cut = t.path.search(/[$`*?[{]/);
+    if (cut === 0 || t.path.startsWith("~")) continue;
+    const literal = cut < 0 ? t.path : `${t.path.slice(0, cut)}x`;
+    let abs: string;
+    if (isAbsolute(literal)) abs = resolve(literal);
+    else if (t.cwd === null) continue;
+    else abs = resolve(root, t.cwd, literal);
+    const rel = relative(root, abs);
+    if (rel.startsWith("..") || isAbsolute(rel)) continue;
+    const scope = writeAllowed(ctx, abs);
+    if (scope.ok) continue;
+    return {
+      rule: "write_allow",
+      code: TOOL_DENIED,
+      content:
+        `Refused: this command writes "${scope.rel}" (${t.how}), and this role may write ` +
+        `${scope.listed}.\n\n` +
+        `write_allow binds the shell as well as write and edit. Do not reach the same ` +
+        `file another way: a different command writing it is the same change and is ` +
+        `refused for the same reason. If the task needs it, say so plainly.`,
+      summary: `bash — writes ${scope.rel}, not permitted for this role`,
     };
   }
   return null;
