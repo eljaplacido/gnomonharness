@@ -1,6 +1,6 @@
 # Pre-registration — P2G: P2 on the gx10 (aarch64)
 
-**Status: DRAFT.** It becomes final with a timestamped line below, written after
+**Status: FINAL as of 2026-11-01T21:20Z** (see the last line). Written after
 the oracle check and the probe and before any measured cell.
 
 ## Why this run exists
@@ -118,10 +118,38 @@ risk-scorer-replay and fin-saccr-rwa**, all oracle 1. The 29 tasks are in
   rebuilds from the layer cache, in seconds and outside the agent's cap, and the
   disk does not grow per cell.
 
-## Probe, one task, every arm once
+## Probe, one task, every arm once, 2026-11-01 19:43–21:15Z
 
-(filled in after the probe)
+`interleaved-vigenere` (TB 4.0's expert estimate is 2 h), every arm once,
+through the relays, 3 slots, with the oracle check running alongside (load up to
+17.5). The probe's purpose is apparatus, not score: every harness must install
+and run on arm64 and be metered.
 
-## Amendments
+| arm | version recorded by Harbor | install (s) | wall (s) | requests | with usage | 4xx | Go $ | reward | exception |
+|---|---|---|---|---|---|---|---|---|---|
+| aider | 0.86.2 | 14 | 608 | 4 | 5 | 0 | 0.041 | 0 | – |
+| claude-code | 2.1.316 | 74 | 1906 | 92 | 91 | 0 | 0.269 | 0 | AgentTimeoutError |
+| codex | 0.166.0 | 72 | 1491 | 113 | 106 | 7 | 0.205 | 0 | NonZeroAgentExitCodeError |
+| gnomon | v0.3.1 `16954919e21165e8` | 10 | 1842 | 38 | 36 | 0 | 0.150 | 0 | AgentTimeoutError |
+| goose | v1.57.0 | 12 | 1843 | 65 | 64 | 1 | 0.170 | 0 | AgentTimeoutError |
+| mini | 2.4.6 | 31 | 1861 | 95 | 94 | 0 | 0.196 | 0 | AgentTimeoutError |
+| opencode-v2 | v2.2.5 | 8 | 1838 | 123 | 123 | 0 | 0.323 | 0 | AgentTimeoutError |
+| openhands | 1.59.0 | 9 | 1839 | 80 | 81 | 0 | 0.213 | 0 | AgentTimeoutError |
+| pi | 0.85.1 | 9 | 1838 | 76 | 77 | 0 | 0.142 | 0 | AgentTimeoutError |
 
-(none yet)
+**Result:**
+- **Every arm installed its pinned version on arm64 and reached the model through its relay,** with usage on every response. No adapter needed a change for arm64: opencode V2's installer already chooses the arm64 tarball, and every other installer resolves the architecture itself. Total $1.71.
+- **No arm solved the task; eight hit the 1,800 s cap.** On a 2-hour task that is plausible and says nothing about the arms. The probe tests the apparatus.
+- **codex ended early on a Go incompatibility, not on arm64.** Its "remote compaction" step failed (`remote compaction v2 expected exactly one compaction output item, got 0`). Its 7 4xx are Responses-WebSocket upgrades that Go refuses, after which codex falls back to HTTP. Both come from OpenCode Go's Responses API, not from this host. Under P2's validity rule such a cell is valid (verifier reward plus metered usage) and counts as unresolved. Compaction failures are counted per arm in the analysis.
+
+## Amendments, all logged before the first measured cell
+
+1. **Unpinned images** (`apparatus/unpin_images.py`). Harbor 0.25.0 starts the separate verifier environment with `force_build=False` (`harbor/trial/trial.py`), so with the pins in place it pulled the amd64 verifier image, which failed. The first smoke oracle cell showed exactly that. Removing the `docker_image =` lines makes Harbor build both environments from the task's Dockerfiles. Nothing else in any task changes. Dataset fingerprint (the script's own): `302c0df93c9a32da` before, `1d61f143bbf7051c` after; 66 tasks unpinned.
+2. **Per-trial cleanup:** Harbor's default `--delete`, as in P2. The oracle and the probe ran with `--no-delete`, which left one image per trial; those images were removed after the check.
+3. **Tasks:** six replacements under P2's rule; see the oracle table.
+4. **Concurrency:** 3 slots and a 36 GB memory budget. P1 still shares the machine, and later GPU runs will too. Nine harnesses at P2's 6 slots plus P1's cell exceed the 20 cores, since a TB 4.0 task declares 4 CPUs.
+5. **Build timeout:** ×4. Builds sit outside the agent's cap.
+6. **The run's ETA,** derived from the probe and P2's hub pace (about 40 slot-minutes per cell): one attempt of 261 cells at 3 slots is roughly 36–58 hours. Three attempts take several days. The run is not shortened to fit; the floor/ceiling and budget gates after attempt 1 apply as pre-registered.
+
+**Final:** this file is the P2G pre-registration as of 2026-11-01T21:20Z, before
+any measured `g2-k*` cell. Changes after this point are timestamped amendments.
