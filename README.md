@@ -52,8 +52,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1304 TypeScript tests (1067 core, 212 cli, 18
-> natives, 7 tui) and 60 Rust tests — **1364 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1330 TypeScript tests (1088 core, 217 cli, 18
+> natives, 7 tui) and 60 Rust tests — **1390 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -88,6 +88,7 @@ does not. Behaviour is readable because something is holding still.
 - [Sessions](#sessions)
 - [Governance and Audit](#governance-and-audit)
 - [Governing other harnesses](#governing-other-harnesses)
+- [In your editor — `gnomon acp`](#in-your-editor--gnomon-acp)
 - [CLI Reference](#cli-reference)
 - [Interactive Commands](#interactive-commands)
 - [Adopting gnomon in an Existing Project](#adopting-gnomon-in-an-existing-project)
@@ -365,6 +366,16 @@ implementations agree.
 Node >= 20 and nothing else.
 
 ```bash
+npm i -g gnomon-harness
+```
+
+That gives you `gnomon` (the package is `gnomon-harness`: the name `gnomon` on
+npm belongs to an unrelated logging utility). It covers `launch`, `prompt`,
+`task`, `acp` and `init`. The installer below does the same and also fetches
+the native binaries that `surface`, `enumerations`, `session`, `apply` and
+`simulate` need:
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.sh | sh
 ```
 
@@ -376,8 +387,9 @@ The installer ([`scripts/install.sh`](scripts/install.sh),
 [`scripts/install.ps1`](scripts/install.ps1)) checks Node and, if it is missing
 or older than 20, prints the command for your OS instead of running one as root.
 It resolves the latest release (`GNOMON_VERSION=0.3.1` pins one), installs the
-npm package — from the registry once `gnomon-harness` is published there, from
-the release's own tarballs until then — and puts the native binaries in
+npm package — from the registry when that version is published there, from
+the release's own tarballs when it is not (an older pin, or the minute between
+a release and its npm publish) — and puts the native binaries in
 `~/.local/share/gnomon/bin` (`%LOCALAPPDATA%\gnomon\bin`), where gnomon finds
 them with no environment variable. Every download is checked against the
 release's `SHA256SUMS`; a mismatch stops the install before anything is
@@ -404,8 +416,9 @@ package, and `npm rm -g gnomon-harness` alone leaves three behind. Your stored
 keys (`~/.local/share/gnomon/credentials.json`) and each project's `.gnomon/`
 are left alone.
 
-**By hand**, without the installer — the same four packages the release job
-builds and refuses to publish unless they install and run:
+**By hand from the release**, without the registry — the same four packages
+the release job builds, refuses to publish unless they install and run, and
+then publishes to npm byte for byte:
 
 ```bash
 V=0.3.1; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
@@ -415,8 +428,10 @@ npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/
 <!-- bash only: `V=0.3.1` is not an assignment in PowerShell, and `$B/...` is
 not a path there. The installer one-liners above are the cross-shell route. -->
 
-Once `gnomon-harness` is on the registry this is `npm i -g gnomon-harness`;
-today that 404s.
+From the registry this is `npm i -g gnomon-harness` (or
+`npm i -g gnomon-harness@0.3.1` to pin), which resolves the other three by
+name. Releases reach npm when they are published on GitHub, by
+[`publish-npm.yml`](.github/workflows/publish-npm.yml), with npm provenance.
 
 Requires **Node ≥ 20** and a model endpoint — [Ollama](https://ollama.com) for
 local inference, or any OpenAI-shaped API. A **Rust toolchain** is needed only
@@ -455,9 +470,11 @@ the shim anyway"; it does not.
 
 `pnpm run unlink:global` removes it.
 
-> Not on npm yet: the workspace packages are `private` and depend on each other
-> via `workspace:*`. Publishing means making them public and versioning the
-> internal dependencies.
+> On npm since 0.3.1 as `gnomon-harness`, `gnomon-core`, `gnomon-natives` and
+> `gnomon-tui`. In the workspace they depend on each other via `workspace:*`;
+> `pnpm pack` pins each to the release's exact version, and
+> `scripts/check-publishable.sh` installs the packed result in an empty
+> directory before any release is drafted.
 
 ---
 
@@ -1799,6 +1816,83 @@ that needs them reports *could not run*, not a pass.
 
 ---
 
+## In your editor — `gnomon acp`
+
+`gnomon acp` speaks the [Agent Client Protocol](https://agentclientprotocol.com)
+(ACP, by Zed Industries) on stdin and stdout, so any editor that drives ACP
+agents can run gnomon in its agent panel. The editor starts the process; you
+configure it once.
+
+**ACP is only a transport.** A prompt from the editor runs the same turn the
+terminal runs — the same function, not a copy (`runSessionTurn` in
+`packages/gnomon-core/src/prompt_loop.ts`) — under the same `.gnomon/`, roles,
+routing, `[chain]`, tool gate, sandbox, `write_allow`, `[verify]`, session
+snapshots and audit records. What changes is only how gnomon asks and tells:
+
+| In the terminal | In the editor |
+|---|---|
+| `approve>` y · a · s · N | a permission prompt with the same four answers: this call, the rest of this turn, the rest of the session (writes included), refuse |
+| `/role <name>` | the mode picker: roles are the session's modes |
+| `/<role> <text>` | the same text; roles are offered as slash commands |
+| a `suggest` routing proposal | a permission prompt to switch role, once or for the session |
+| Esc | the editor's stop button (`session/cancel`) |
+| `⚙` tool lines | tool-call cards, with the diff gnomon is asking about |
+
+The audit trail's `session_start` record says `mode: "acp"` and names the
+editor; approval records read `by: "human"`, as they do at the terminal.
+
+**Zed** — in `settings.json` (or Agent Settings → External Agents → Add
+Custom Agent):
+
+```json
+{
+  "agent_servers": {
+    "gnomon": {
+      "type": "custom",
+      "command": "gnomon",
+      "args": ["acp"],
+      "env": {}
+    }
+  }
+}
+```
+
+**JetBrains IDEs** (AI Assistant) — AI Chat → ⋯ → Add Custom Agent, which
+opens `~/.jetbrains/acp.json`:
+
+```json
+{
+  "agent_servers": {
+    "gnomon": {
+      "command": "gnomon",
+      "args": ["acp"]
+    }
+  }
+}
+```
+
+If the editor cannot find `gnomon` on its PATH, give the full path
+(`which gnomon`). `--role plan` starts sessions in another role;
+`--profile <name>` applies a routing profile, as it does for `prompt`.
+
+Three things are deliberate, and each is the terminal's behaviour kept:
+
+- **The project needs a `.gnomon/` first.** Run `gnomon launch` (or `init`)
+  there once. The editor gets a clear error rather than a surface written for
+  it — writing a surface is a human act.
+- **Files are read and written on disk, by gnomon's own tools,** not through the
+  editor's buffers. ACP makes the editor's `fs/*` methods optional; routing
+  `write` through them would bypass the sandbox check, `write_allow` and the
+  surface-drift detection, all of which act on the file on disk. Editors
+  reload changed files.
+- **MCP servers the editor offers are not connected.** Tools come from
+  `.gnomon/` so the surface hash covers them; gnomon says so in the session.
+  Declare a server under `[mcp_servers]` in `.gnomon/tools.toml` instead.
+
+Slash commands other than a role prefix are terminal-only.
+
+---
+
 ## CLI Reference
 
 | Command | Description |
@@ -1807,6 +1901,7 @@ that needs them reports *could not run*, not a pass.
 | `gnomon init [--from <path>] [--force]` | Write a surface. `--from` copies an existing one. |
 | `gnomon migrate [--check]` | Bring an existing `.gnomon/` up to the current shipped defaults. `--check` reports without writing and exits 1 if anything is pending. |
 | `gnomon prompt [--continue \| --resume <id>]` | Interactive loop. |
+| `gnomon acp [--role <name>] [--profile <name>]` | Serve the Agent Client Protocol on stdio for an editor (Zed, JetBrains). Same surface, roles, approvals and audit as `prompt`. See [In your editor](#in-your-editor--gnomon-acp). |
 | `gnomon task "<what to do>" [--role <name>] [--yes] [--json]` | One task, no terminal. Exit code carries the bucket. |
 | `gnomon sessions` | Saved sessions. |
 | `gnomon skill [list\|accept <id>\|reject <id>]` | Learned skills and proposals. |
