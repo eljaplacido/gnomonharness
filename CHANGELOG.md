@@ -26,6 +26,13 @@
 
 ## [Unreleased]
 
+## [0.3.3] — 2026-11-01
+
+The workspace-trust gate (#72), `gnomon acp` for editors that speak the Agent
+Client Protocol plus automatic npm publishing (#73), `gnomon guard` for other
+harnesses at runtime (#76), first-run fixes (#71), and Windows test fixes
+(#78). Integrated in #77.
+
 - **`gnomon acp` sessions settle workspace trust, as `gnomon task` does.** An
   editor cannot answer the trust prompt, so an untrusted surface that grants
   more than the scaffold runs clamped to it, on load and after a turn reloads
@@ -2688,7 +2695,8 @@ was written.
   `git tag`, not a documentation edit as well.
 -->
 
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.3
 [0.3.2]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.2
 [0.3.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.1
 [0.3.0]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.0
