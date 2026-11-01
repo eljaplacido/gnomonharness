@@ -520,3 +520,52 @@ interactive prompt exits **3** (`refused_by_gate`) with nothing run.
 asserts the code's `TRUST_DECISIONS` and `TRUST_BY` equal the fixture; the end-to-end
 tests there and in `packages/gnomon-cli/src/trust.test.ts` read the `trust` field
 and the audit record back from real runs.
+
+---
+
+## 9. `gnomon acp` — the Agent Client Protocol surface
+
+`gnomon acp` serves [ACP](https://agentclientprotocol.com) protocol version
+**1** as newline-delimited JSON-RPC 2.0 on stdio. An editor configured against
+it depends on the method set and on what each answer means, so both are
+pinned. ACP is a transport only: turns run through the terminal's own
+`runSessionTurn`, and the audit records are the terminal's, with
+`session_start.mode = "acp"`.
+
+| Direction | Methods |
+|---|---|
+| editor → gnomon, requests | `initialize`, `authenticate`, `session/new`, `session/set_mode`, `session/prompt` |
+| editor → gnomon, notifications | `session/cancel` |
+| gnomon → editor, requests | `session/request_permission` |
+| gnomon → editor, notifications | `session/update`: `agent_message_chunk`, `agent_thought_chunk`, `tool_call`, `tool_call_update`, `available_commands_update`, `current_mode_update` |
+
+Not served: `session/load` (`loadSession: false`), the client's `fs/*` and
+`terminal/*` methods (gnomon's own tools act on disk, inside its sandbox), and
+MCP servers offered in `session/new` (tools come from `.gnomon/` only).
+
+**The approval ladder.** Every gated call asks with these four options; any
+other answer, including `cancelled`, is a refusal.
+
+| `optionId` | `kind` | Terminal answer | Scope |
+|---|---|---|---|
+| `once` | `allow_once` | `y` | this call |
+| `turn` | `allow_always` | `a` | every gated call for the rest of this turn |
+| `session` | `allow_always` | `s` | every gated call for the rest of the session, writes included |
+| `no` | `reject_once` | `N` | refused (code 2, refusal) |
+
+**Stop reasons.** gnomon's `stop_reason` (§1) is kept in the audit record and
+the snapshot; the prompt response carries ACP's nearest word: `cancelled` →
+`cancelled`, `step_wall` → `max_turn_requests`, `truncated` → `max_tokens`,
+everything else → `end_turn`.
+
+**Tool kinds.** `read` → `read`; `write`, `edit` → `edit`; `glob`, `grep` →
+`search`; `bash` → `execute`; `webfetch` → `fetch`; `todo`, `note` → `think`;
+anything else → `other`. A finished call is `completed` when its bucket is
+`result` and any shell command exited 0, otherwise `failed`.
+
+**Fixture**: `conformance/acp_mapping.json`. `packages/gnomon-core/src/acp.test.ts`
+reads the methods and session updates out of `acp.ts` itself and asserts them,
+the permission options, the stop-reason map and the tool kinds against the
+fixture, and asserts this section names the same methods.
+`packages/gnomon-cli/src/acp.test.ts` drives the real command with a scripted
+client against a fake model.

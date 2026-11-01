@@ -22,6 +22,18 @@ still works if you prefer it.
 
 ## 2. Install
 
+### From npm
+
+```bash
+npm i -g gnomon-harness
+```
+
+The package is `gnomon-harness` and the command is `gnomon` (the name `gnomon`
+on npm belongs to an unrelated logging utility). That is enough for `launch`,
+`prompt`, `task`, `acp` and `init`; the one-liner below also installs the
+native binaries `surface`, `enumerations`, `session`, `apply` and `simulate`
+need.
+
 ### The one-liner — any machine with Node
 
 ```bash
@@ -76,10 +88,11 @@ needs all four URLs until there is a registry entry to resolve them from. This
 route does not fetch the native binaries; see
 [Prebuilt binaries](#prebuilt-binaries--if-you-would-rather-not-install-rust).
 
-Once `gnomon-harness` is on the registry, `npm install -g gnomon-harness` will
-work too (today it 404s; the installer switches to the registry by itself the
-moment it does not). The package is `gnomon-harness` and the binary is
-`gnomon`: the name `gnomon` on npm belongs to an unrelated logging utility.
+From the registry the same four are one command, `npm i -g gnomon-harness`,
+because npm resolves the three libraries by name. The installer uses the
+registry whenever the release it is installing is there, and these tarballs
+when it is not (an older pinned release). Each release's npm packages are the
+release's own tarballs, published byte for byte when the release is.
 
 Everything below is the from-source path — for working ON gnomon, or for
 running the version in your own checkout.
@@ -300,6 +313,39 @@ Prefer one shot, no terminal? The exit code carries the outcome:
 ```bash
 gnomon task "fix the bug in add()" --yes
 ```
+
+## 6. In your editor (Zed, JetBrains)
+
+`gnomon acp` runs gnomon behind the [Agent Client
+Protocol](https://agentclientprotocol.com), so it appears in an editor's agent
+panel with the same surface, roles, approvals and audit trail as the terminal.
+The approval prompt becomes the editor's permission prompt, with the same four
+answers, and roles become its modes. Run `gnomon launch` in the project once
+first: the editor uses the `.gnomon/` it finds there and does not create one.
+
+Zed, in `settings.json`:
+
+```json
+{
+  "agent_servers": {
+    "gnomon": { "type": "custom", "command": "gnomon", "args": ["acp"], "env": {} }
+  }
+}
+```
+
+JetBrains (AI Assistant): AI Chat → ⋯ → **Add Custom Agent**, then in
+`~/.jetbrains/acp.json`:
+
+```json
+{
+  "agent_servers": {
+    "gnomon": { "command": "gnomon", "args": ["acp"] }
+  }
+}
+```
+
+Use the full path from `which gnomon` if the editor cannot find it. More in
+[README → In your editor](README.md#in-your-editor--gnomon-acp).
 
 ## Local vs cloud endpoints, and using a keyed cloud model
 

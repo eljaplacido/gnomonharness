@@ -1,0 +1,100 @@
+# Publish to npm — when a human publishes a GitHub release.
+#
+# release.yml builds on a tag push and stops at a DRAFT on purpose: the tag
+# builds and uploads, a person reads the draft and presses Publish. This
+# workflow is what happens after that press, and only after it. It does not
+# build, pack or choose anything. It downloads the release's own four npm
+# tarballs and SHA256SUMS, checks every tarball against that file (the same
+# digests scripts/install.sh checks), and publishes exactly those bytes:
+# libraries first, gnomon-harness last. scripts/publish-npm.sh holds the logic
+# so it can be run locally with --dry-run, and docs/RELEASING.md explains it.
+#
+# Safety properties, in the same spirit as release.yml's:
+#
+#   1. `on: release: published` and nothing else. Not `created` (a draft is
+#      created first and must not publish anything), no `workflow_dispatch`, no
+#      push. A failed run is retried with "Re-run jobs", which is safe because:
+#   2. Idempotent. A version already on the registry is skipped, so a re-run
+#      after a partial publish finishes the rest and changes nothing else.
+#   3. The token is the repository secret NPM_TOKEN, which a maintainer adds;
+#      this file never creates one. Without it the job fails at its first step,
+#      saying so, before anything is downloaded.
+#   4. --provenance: npm records which workflow run, commit and repository
+#      published each version, which is why this job, and only this job, holds
+#      `id-token: write`.
+#
+# A prerelease (`v0.4.0-rc.1`, or a release marked pre-release) publishes under
+# the `next` dist-tag, so `npm i -g gnomon-harness` keeps resolving the latest
+# stable release.
+
+name: Publish to npm
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish ${{ github.event.release.tag_name }} to npm
+    # Release tags only, as in release.yml: a `baseline-…` benchmark marker
+    # published as a release must not reach the registry.
+    if: startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Require NPM_TOKEN
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::The NPM_TOKEN repository secret is not set. See docs/RELEASING.md → Publishing to npm."
+            exit 1
+          fi
+
+      # The tag's tree, for scripts/publish-npm.sh. The tarballs are NOT built
+      # from it; they come from the release below.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          # Writes an .npmrc that reads NODE_AUTH_TOKEN; the token itself is
+          # only ever in the environment of the publish step.
+          registry-url: https://registry.npmjs.org
+
+      - name: Download the release's npm tarballs and SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist \
+            --pattern '*.tgz' --pattern 'SHA256SUMS'
+          ls -l dist
+
+      - name: Verify and publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          tag_flag=()
+          if [ "$PRERELEASE" = "true" ] || [[ "$version" == *-* ]]; then
+            tag_flag=(--tag next)
+          fi
+          bash scripts/publish-npm.sh dist "$version" --provenance "${tag_flag[@]}"

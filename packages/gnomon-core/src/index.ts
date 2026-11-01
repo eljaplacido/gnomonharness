@@ -48,3 +48,6 @@ export * from "./credentials.js";
 export * from "./loops.js";
 // Workspace trust: whether this machine's user accepted what a surface grants.
 export * from "./trust.js";
+// `gnomon acp`: the Agent Client Protocol server. A transport for the same
+// session turn the terminal runs (prompt_loop.ts:runSessionTurn), nothing more.
+export * from "./acp.js";

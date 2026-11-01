@@ -32,6 +32,10 @@ windows-x64) and the four npm tarballs the documented install uses, and opens a
 human presses Publish. That is deliberate: the workflow decides nothing about
 whether a build is fit to install.
 
+Pressing Publish is also what puts the release on npm:
+`.github/workflows/publish-npm.yml` runs on `release: published` and publishes
+that release's own four tarballs. See [Publishing to npm](#publishing-to-npm).
+
 ## Why a script rather than an instruction
 
 The version is written down in eight places:
@@ -78,17 +82,62 @@ exactly one draft per tag.
 
 ## Publishing to npm
 
-The four packages are publishable as of 2026-09-07. `.gnomon/ci.sh` proves the
-tarball installs and runs on every run, so the only thing left at release time
-is the credential.
+Automatic, and gated on the same human act as the release itself. When a
+maintainer publishes a drafted release on GitHub,
+[`publish-npm.yml`](../.github/workflows/publish-npm.yml) runs
+[`scripts/publish-npm.sh`](../scripts/publish-npm.sh), which:
+
+1. **downloads the release's own assets** — the four `.tgz` files and
+   `SHA256SUMS` — rather than packing anything again. These are the bytes the
+   release job packed, ran `check-publishable.sh` against, and a human looked
+   at before pressing Publish;
+2. **checks every tarball against `SHA256SUMS`**, and that each one's manifest
+   is the package and version it is named for, not private, and pins its
+   `gnomon-*` dependencies to that exact version (no `workspace:*` left);
+3. **publishes libraries first and `gnomon-harness` last**, with
+   `npm publish <tarball> --access public --provenance`. The harness pins its
+   libraries, and `scripts/install.sh` switches to the registry as soon as
+   `gnomon-harness@<version>` resolves — so it goes last, once everything it
+   needs is already there;
+4. **skips any version already on the registry.** npm refuses to publish a
+   version twice, so a run that failed after two of four is fixed with
+   "Re-run jobs": it finishes the other two and touches nothing else. Only a
+   definite 404 counts as "not there"; any other failure to ask stops the run.
+
+A prerelease (a `-` in the version, or a release marked pre-release) is
+published under the `next` dist-tag, so `npm i -g gnomon-harness` keeps
+resolving the latest stable release.
+
+**One-time setup: the maintainer adds `NPM_TOKEN`.** The workflow reads the
+repository secret `NPM_TOKEN` and nothing else; nothing in this repository
+creates one. On npmjs.com, create a **granular access token** with read and
+write access to `gnomon-harness`, `gnomon-core`, `gnomon-natives` and
+`gnomon-tui` (an automation token also works), then add it under GitHub →
+Settings → Secrets and variables → Actions → New repository secret, named
+`NPM_TOKEN`. Without it the job fails at its first step, saying so, before
+anything is downloaded. `--provenance` needs no secret: the job's
+`id-token: write` permission is what lets npm record which workflow run, commit
+and repository published each version.
+
+To see what a release would publish, without publishing it:
 
 ```bash
-npm login                      # once; the release does not store a token
-pnpm -r --filter './packages/*' publish --access public --no-git-checks
+pnpm -r run build
+mkdir -p /tmp/rel && for p in gnomon-core gnomon-natives gnomon-tui gnomon-cli; do
+  (cd packages/$p && pnpm pack --pack-destination /tmp/rel); done
+(cd /tmp/rel && sha256sum ./*.tgz | sed 's|  \./|  |' > SHA256SUMS)
+bash scripts/publish-npm.sh /tmp/rel 0.3.1 --dry-run
 ```
 
-Order does not matter — npm resolves `gnomon-core@0.2.2` once it exists, and
-pnpm rewrites `workspace:*` to the real version as it publishes.
+**By hand**, if the workflow cannot run — the same order, the same files:
+
+```bash
+gh release download v0.3.1 --pattern '*.tgz' --pattern SHA256SUMS --dir /tmp/rel
+npm login
+bash scripts/publish-npm.sh /tmp/rel 0.3.1
+```
+
+0.3.1 was published by hand, before the workflow existed.
 
 | Published name | What it is |
 |---|---|
@@ -98,11 +147,14 @@ pnpm rewrites `workspace:*` to the real version as it publishes.
 | `gnomon-tui` | the session reader |
 
 The installers (`scripts/install.sh`, `scripts/install.ps1`, and `gnomon
-update`, which runs them) need no change for this: they ask
-`npm view gnomon-harness@<version>` and install from the registry once that
-version resolves, from the release tarballs until then. They always fetch the
-native archive from the GitHub release, and verify it against `SHA256SUMS`, so
-publish the npm packages with the same version as a release that exists.
+update`, which runs them) ask `npm view gnomon-harness@<version> version` and
+install from the registry when it prints that version, from the release
+tarballs otherwise — an older pinned release, or the minute between a release
+being published and its npm publish finishing. They compare the printed
+version rather than trusting the exit status, because npm before 10 exited 0
+with no output for a version that did not exist. They always fetch the native
+archive from the GitHub release and verify it against `SHA256SUMS`, which is
+why npm only ever receives versions that are GitHub releases.
 
 **The package is `gnomon-harness`, the command is `gnomon`.** The bare name on
 npm belongs to an unrelated logging utility and has for years; `gnomon-harness`
@@ -121,10 +173,13 @@ both live in `publishConfig` so the workspace is untouched:
   dependency, inside the process that decides what an agent may run.
   `check-publishable.sh` fails if any appears.
 
-## Not published to npm — until 0.2.2
+## Not published to npm — until 0.3.1
 
 *(kept for the record: this section described the state before the above.)*
 
 There is no `npm publish` step and no `NPM_TOKEN` anywhere in CI. The release is
 GitHub binaries and a git tag. Adding a registry publish is a decision about
 distribution, not a missing chore.
+
+It was decided for 0.3.1: published by hand, then automated by
+`publish-npm.yml` for every release after it.

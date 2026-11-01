@@ -1,0 +1,49 @@
+{
+  "contract": "acp",
+  "version": 1,
+  "description": "What `gnomon acp` speaks: the ACP methods it serves and calls, the session updates it sends, and how gnomon's approval ladder, stop reasons and tools map onto ACP's words. docs/CONTRACTS.md §8.",
+  "protocol_version": 1,
+  "agent_requests": [
+    "authenticate",
+    "initialize",
+    "session/new",
+    "session/prompt",
+    "session/set_mode"
+  ],
+  "agent_notifications": ["session/cancel"],
+  "client_requests": ["session/request_permission"],
+  "client_notifications": ["session/update"],
+  "session_updates": [
+    "agent_message_chunk",
+    "agent_thought_chunk",
+    "available_commands_update",
+    "current_mode_update",
+    "tool_call",
+    "tool_call_update"
+  ],
+  "permission_options": [
+    { "optionId": "once", "kind": "allow_once", "terminal": "y" },
+    { "optionId": "turn", "kind": "allow_always", "terminal": "a" },
+    { "optionId": "session", "kind": "allow_always", "terminal": "s" },
+    { "optionId": "no", "kind": "reject_once", "terminal": "N" }
+  ],
+  "stop_reason": {
+    "cancelled": "cancelled",
+    "step_wall": "max_turn_requests",
+    "truncated": "max_tokens",
+    "*": "end_turn"
+  },
+  "tool_kind": {
+    "read": "read",
+    "write": "edit",
+    "edit": "edit",
+    "glob": "search",
+    "grep": "search",
+    "bash": "execute",
+    "webfetch": "fetch",
+    "todo": "think",
+    "note": "think",
+    "*": "other"
+  },
+  "audit_session_start_mode": "acp"
+}

@@ -255,6 +255,43 @@ the shell runs it, new transcript readers for `gnomon check`, and the guide
   Benchmark adapters running a hand-loosened surface through `gnomon task`
   must now pass `--trust`, or the run is clamped, with a stderr line and
   `trust.decision = "clamped"` on the record.
+- **`gnomon acp`: gnomon in Zed, JetBrains and any other ACP editor.** Serves
+  the Agent Client Protocol (v1) on stdio. ACP is only a transport: a prompt
+  from the editor runs the terminal's own turn, under the same surface, roles,
+  routing, chain, tool gate, sandbox, audit records and session snapshots. The
+  approval ladder (`y` / `a` / `s` / `N`) becomes a permission prompt with the
+  same four answers; roles become the session's modes and its slash commands;
+  a `suggest` routing proposal becomes a mode-switch prompt; Esc becomes
+  `session/cancel`; tool calls stream as tool-call cards. `session_start` says
+  `mode: "acp"` and names the editor. No SDK: the protocol subset is
+  implemented directly, keeping zero third-party runtime dependencies.
+  Deliberately not used: the editor's `fs/*` methods (writes stay on disk
+  behind the sandbox and `write_allow`) and editor-supplied MCP servers (tools
+  come from `.gnomon/`, so the hash covers them; the session says so). Setup
+  for Zed and JetBrains is in the README and GETTING_STARTED. Contract:
+  `docs/CONTRACTS.md` §9, fixture `conformance/acp_mapping.json`.
+- **The terminal turn is now one shared function.** `chooseTurnRole` and
+  `runSessionTurn` are the body of `runPromptLoop`'s turn, lifted out
+  unchanged so `gnomon acp` runs the same code rather than a copy; this file
+  has had "a fact plumbed into one entry point and not the other" three times.
+  `runAgenticTurn` gained an optional, told-never-asked `events` hook (tool
+  start/end and reply text) that the terminal does not pass.
+- **npm releases are automatic.** `.github/workflows/publish-npm.yml` runs when
+  a human publishes a drafted release: it downloads that release's own four
+  tarballs, checks each against `SHA256SUMS` and its manifest, and runs
+  `npm publish <tarball> --access public --provenance`, libraries first and
+  `gnomon-harness` last. A version already on the registry is skipped, so a
+  re-run finishes a partial publish. Prereleases go to the `next` dist-tag. The
+  maintainer adds the `NPM_TOKEN` secret once (docs/RELEASING.md). The logic is
+  `scripts/publish-npm.sh`, which runs locally with `--dry-run`.
+- **The installers compare the version npm prints.** Now that
+  `gnomon-harness` is on npm, `npm view gnomon-harness@<old version>` on npm
+  before 10 exits 0 with no output, which would have sent a pinned older
+  release to a registry install that cannot resolve it. `install.sh` and
+  `install.ps1` take the registry only when it prints the version asked for.
+- **Docs: gnomon is on npm.** `npm i -g gnomon-harness` works; the README and
+  GETTING_STARTED no longer say it 404s.
+
 - **`[shadow]`: a log-only decision-model shadow.** When a surface declares it,
   a typed decision model (`/v1/systemone`: state plus typed questions in,
   probabilities out) is asked three things, each logged beside what gnomon
