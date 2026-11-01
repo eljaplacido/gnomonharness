@@ -25,8 +25,10 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { loadConfig, recomputeManifest } from "./config.js";
+import { bashPolicy } from "./tools.js";
 import {
   SCAFFOLD_ROLES,
+  BASH_PROBES,
   surfaceGrants,
   clampToDefaults,
   evaluateTrust,
@@ -190,6 +192,37 @@ describe("what counts as looser than the defaults", () => {
     const loose = project({ roles: `${base}\n\n[roles.helper]\nmodel = "stub"\ntools = ['read', 'bash']\n` });
     expect(keys(loose)).toContain("role:helper:bash:git push --force origin feature");
   });
+});
+
+describe("the probe comparison", () => {
+  // loosenedProbes skips the probes for lists identical to the default and asks
+  // the default first. Both are shortcuts over a pure function, so the grants must
+  // be exactly what the plain comparison gives, for every role and every variant.
+  const plain = (allow: string[] | undefined, deny: string[] | undefined, base: { bash_allow?: string[]; bash_deny?: string[] }) =>
+    BASH_PROBES.filter((p) => bashPolicy(p, allow, deny) === null && bashPolicy(p, base.bash_allow, base.bash_deny) !== null);
+  const variants = (r: { bash_allow?: string[]; bash_deny?: string[] }): Array<[string, string[] | undefined, string[] | undefined]> => [
+    ["unchanged", r.bash_allow, r.bash_deny],
+    ["deny reordered", r.bash_allow, r.bash_deny && [...r.bash_deny].reverse()],
+    ["one deny dropped", r.bash_allow, r.bash_deny?.slice(1)],
+    ["deny emptied", r.bash_allow, []],
+    ["deny extra", r.bash_allow, [...(r.bash_deny ?? []), String.raw`\bcurl\b`]],
+    ["allow everything", [".*"], r.bash_deny],
+    ["allow dropped", undefined, r.bash_deny],
+  ];
+  for (const [role, base] of Object.entries(SCAFFOLD_ROLES).filter(([, r]) => r.tools.includes("bash"))) {
+    for (const [label, allow, deny] of variants(base)) {
+      it(`${role}, ${label}: the grants equal the plain comparison`, () => {
+        const block = [
+          `[roles.${role}]`, `model = "stub"`, `endpoint = "local"`, `tools = ${lit(base.tools)}`,
+          allow ? `bash_allow = ${lit(allow)}` : "",
+          deny ? `bash_deny = ${lit(deny)}` : "",
+        ].filter(Boolean).join("\n");
+        const roles = scaffoldRoles().replace(new RegExp(String.raw`\[roles\.${role}\][\s\S]*?(?=\n\n\[roles\.|$)`), block);
+        const got = keys(project({ roles })).filter((k) => k.startsWith(`role:${role}:bash:`)).map((k) => k.slice(`role:${role}:bash:`.length));
+        expect(got).toEqual(plain(allow, deny, base));
+      });
+    }
+  }
 });
 
 describe("clamping", () => {
