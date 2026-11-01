@@ -852,6 +852,12 @@ export interface ToolContext {
    */
   extraRoots?: string[];
   /**
+   * Below this many files the worktree stamp walks the tree instead of asking
+   * git. Undefined means STAMP_WALK_BELOW, which is what every caller in the
+   * product uses; tests set 0 to put a small fixture through the git path.
+   */
+  stampWalkBelow?: number;
+  /**
    * Roles the current role may delegate to. Undefined means every role, which
    * is what shipped; see RoleDef.task_allow for why that is worth declaring.
    */
@@ -2013,13 +2019,15 @@ export function surfaceHashOf(ctx: ToolContext): string | null {
  * move it (#62): a partial answer reported as a whole one, so the command was
  * recorded as changing nothing and counted toward the nudge.
  *
- * Inside a git work tree it asks git (gitStampOf) instead of walking. The walk
- * stat'd every file in JS before AND after every command: per tool turn, 50ms
- * at 0 files, 104ms at 5k and 260ms at 20k, where goose stayed flat at ~22ms
- * (#62, UX1c). Outside git it walks, as it always did.
+ * A tree of STAMP_WALK_BELOW files or more, inside a git work tree, is asked of
+ * git (gitStampOf) instead. The walk stat'd every file in JS before AND after
+ * every command: per tool turn, 50ms at 0 files, 104ms at 5k and 260ms at 20k,
+ * where goose stayed flat at ~22ms (#62, UX1c). Smaller trees, and trees
+ * outside git, are walked as they always were.
  */
 export function worktreeStampOf(ctx: ToolContext, alsoRoot?: string): string | null {
   try {
+    const below = ctx.stampWalkBelow ?? STAMP_WALK_BELOW;
     const h = createHash("sha256");
     // A second root, when the shell is working somewhere else. This walked only
     // ctx.root, so a task whose work is an apt install, an /etc config or a
@@ -2033,12 +2041,20 @@ export function worktreeStampOf(ctx: ToolContext, alsoRoot?: string): string | n
     // one moved. Weaker than it could be; never wrong.
     const roots = alsoRoot && alsoRoot !== ctx.root ? [ctx.root, alsoRoot] : [ctx.root];
     for (const base of roots) {
-      let one = gitStampOf(base);
-      if (one === undefined) one = walkStampOf(base);
+      // Small: walked, exact under its bound and cheaper than starting git.
+      // Null here only means "bigger than that".
+      let one: string | null | undefined = walkStampOf(base, below);
+      if (one === null) {
+        one = gitStampOf(base);
+        if (one === undefined) one = walkStampOf(base, WALK_MAX_FILES);
+      }
       if (one === null) return null;
       // Which method made it is inside `one`: a git stamp and a walk stamp of
       // the same tree are different digests, so a root that changes method
-      // between before and after reads as moved, never as unchanged.
+      // between before and after reads as moved, never as unchanged. It can
+      // only change method by gaining or losing files across the bound -- a
+      // change -- or, at worst, files under .gnomon/ or .gnomon-loops/, which
+      // the bound counts and the stamp ignores: reported as moved, never hid.
       h.update(`${base}\0${one}\n`);
     }
     return h.digest("hex");
@@ -2105,13 +2121,28 @@ function stampSkips(rel: string, isDir: boolean): boolean {
 }
 
 /**
- * The walk, for a root outside git. Null when it reached WALK_MAX_FILES: the
- * files past the cap were never looked at, so a stamp would describe part of
- * the tree while claiming to describe all of it.
+ * Below this many files the walk is the cheaper stamp, and the stamp walks.
+ *
+ * A git stamp costs a process (two, the first time): on gx10 ~3.5ms a status
+ * at 0 files, against the walk's 0.2ms, and the walk catches up at about 700
+ * files. On the Windows runner a git process costs ~35ms -- this repository's
+ * own 482-file tree took ~45ms more a stamp through git than walked, and a
+ * 26-call test that passed in 3.9s on master ran out its 5s. Where the walk
+ * pays ~4us a file on Linux and several times that on NTFS, 2,000 leaves
+ * small trees, which is most daily work, as fast as they were, and sends
+ * everything past it to git, where the walk's cost and its cap were the bug.
  */
-function walkStampOf(base: string): string | null {
-  const files = walkFiles(base, base);
-  if (files.length >= WALK_MAX_FILES) return null;
+const STAMP_WALK_BELOW = 2_000;
+
+/**
+ * The walk. Null when it reached `max`: the files past it were never looked
+ * at, so a stamp would describe part of the tree while claiming to describe
+ * all of it. At WALK_MAX_FILES that is "unknown"; at a smaller bound it is
+ * the caller's cue to ask git instead.
+ */
+function walkStampOf(base: string, max: number): string | null {
+  const files = walkFiles(base, base, max);
+  if (files.length >= max) return null;
   const h = createHash("sha256");
   h.update("walk\n");
   for (const rel of files) {
@@ -2253,11 +2284,11 @@ function gitRootOf(base: string): GitRoot | null {
  * Cost, measured on gx10 under load (refreshed index; walk in brackets): one
  * status 3.5ms at 0 files [0.2], 8.7ms at 5k [39], 25ms at 20k [162] and 53ms
  * at 50k [131, and 12 of 20 edits missed] -- git's parallel lstat of the index
- * and a readdir of every directory, in C. Below ~500 files the walk is the
- * cheaper of the two by ~3ms a stamp; one method per kind of tree is worth
- * that. The JS side is O(listed paths), in daily work the handful being
- * edited. There is no cap on the tracked tree: WALK_MAX_FILES bounds only what
- * has to be stat'd here, and past it the stamp is unknown rather than partial.
+ * and a readdir of every directory, in C. Small trees never get here
+ * (STAMP_WALK_BELOW). The JS side is O(listed paths), in daily work the
+ * handful being edited. There is no cap on the tracked tree: WALK_MAX_FILES
+ * bounds only what has to be stat'd here, and past it the stamp is unknown
+ * rather than partial.
  */
 function gitStampOf(base: string): string | null | undefined {
   const root = gitRootOf(base);
@@ -2997,8 +3028,11 @@ const SEARCH_MAX_HITS = 200;
  * Sorted because the model's next move is decided by what comes back: an
  * order that depended on the filesystem would make an identical repository
  * answer the same question differently on two machines.
+ *
+ * `max` is WALK_MAX_FILES everywhere but the worktree stamp, which first asks
+ * whether a tree is small enough to walk at all (STAMP_WALK_BELOW).
  */
-function walkFiles(root: string, dir: string): string[] {
+function walkFiles(root: string, dir: string, max: number = WALK_MAX_FILES): string[] {
   // A file is a valid scope of exactly one file. Without this, readdirSync
   // throws ENOTDIR, the catch below swallows it, and `grep` answers
   // "No match for /x/ under path/to/file" for a file that contains x — a wrong
@@ -3014,7 +3048,7 @@ function walkFiles(root: string, dir: string): string[] {
   }
   const out: string[] = [];
   const stack: string[] = [dir];
-  while (stack.length > 0 && out.length < WALK_MAX_FILES) {
+  while (stack.length > 0 && out.length < max) {
     const cur = stack.pop()!;
     let entries: Dirent[];
     try {
@@ -3030,7 +3064,7 @@ function walkFiles(root: string, dir: string): string[] {
         stack.push(abs);
       } else if (e.isFile()) {
         out.push(relative(root, abs).split(sep).join("/"));
-        if (out.length >= WALK_MAX_FILES) break;
+        if (out.length >= max) break;
       }
     }
   }

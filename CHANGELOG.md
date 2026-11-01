@@ -54,13 +54,18 @@
   seen, so on a 30,000-file tree 7 of 20 edits did not move the stamp. A
   command that changed files was then recorded as changing nothing and counted
   toward the idle nudge.
-  - Inside a git work tree, the stamp is HEAD's commit id plus the size and
-    mtime of every path `git status --porcelain=v2` lists, including untracked
-    and gitignored files. Directories git does not look into (an ignored
-    `out/`, a nested repository) are walked. `.gnomon/`, `.gnomon-loops/` and
-    the never-walked directories stay out, as before. The tracked tree has no
-    file cap. One difference from the walk: a file rewritten with the same
-    bytes no longer counts as a change, because git compares content.
+  - For a tree of 2,000 files or more inside a git work tree, the stamp is
+    HEAD's commit id plus the size and mtime of every path
+    `git status --porcelain=v2` lists, including untracked and gitignored
+    files. Directories git does not look into (an ignored `out/`, a nested
+    repository) are walked. `.gnomon/`, `.gnomon-loops/` and the never-walked
+    directories stay out, as before. The tracked tree has no file cap. One
+    difference from the walk: a file rewritten with the same bytes no longer
+    counts as a change, because git compares content.
+  - Smaller trees are walked, as before. Starting git costs more than walking
+    a few hundred files: ~3.5 ms a status on gx10, and ~35 ms a process on the
+    Windows CI runner. With git at every size, this repository's own 482-file
+    tree took ~45 ms longer per stamp there.
   - Measured with the same UX1c session, master against this change (n = 3
     per size, gx10 under load), gnomon's own time per tool turn: 49 → 55 ms at
     0 files, 98 → 62 at 5k, 244 → 81 at 20k, and 244 → 120 at 50k. At 0 files

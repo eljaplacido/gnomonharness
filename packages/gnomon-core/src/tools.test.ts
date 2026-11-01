@@ -1962,8 +1962,10 @@ describe("the worktree stamp, inside a git work tree", () => {
     git(dir, "add", "-A");
     git(dir, "commit", "-qm", "base");
   };
+  // stampWalkBelow 0: these fixtures are a handful of files, which the stamp
+  // would walk (STAMP_WALK_BELOW). The git path is what is under test here.
   const moved = async (command: string, over: Partial<ToolContext> = {}) => {
-    const out = await executeTool("bash", { command }, ctx(over), offered);
+    const out = await executeTool("bash", { command }, ctx({ stampWalkBelow: 0, ...over }), offered);
     expect(out.code).toBe(TOOL_OK);
     return out.worktree_changed;
   };
@@ -2037,6 +2039,21 @@ describe("the worktree stamp, inside a git work tree", () => {
     expect(await moved("echo more >> s.txt", sub)).toBe(true);
     // Outside the root being stamped, as the walk never looked there either.
     expect(await moved(`echo more >> "${join(root, "a.txt").replace(/\\/g, "/")}"`, sub)).toBe(false);
+  });
+
+  it("walks a small tree even inside git, and asks git past the bound", async () => {
+    // One observable difference between the two methods: a tracked file
+    // rewritten with the same bytes. The walk sees a new mtime; git compares
+    // content and sees nothing. So `touch` says which method answered.
+    writeFileSync(join(root, "a.txt"), "a\n");
+    commitAll(root);
+    const touched = async (over: Partial<ToolContext>) =>
+      (await executeTool("bash", { command: "touch a.txt" }, ctx(over), offered)).worktree_changed;
+    // A handful of files, under the default bound: walked, as before #62.
+    expect(await touched({})).toBe(true);
+    // Past the bound: git.
+    expect(await touched({ stampWalkBelow: 0 })).toBe(false);
+    expect(await touched({ stampWalkBelow: 2 })).toBe(false);
   });
 
   it("still walks a directory that is not in a work tree", async () => {
