@@ -2131,7 +2131,9 @@ describe("network = false refuses obvious network egress through bash (#63)", ()
   const offer = new Set(["bash"]);
   // Loopback, port 1: if a refusal ever failed, the command would get an
   // immediate connection refused and nothing would leave the machine.
-  const URL = "http://127.0.0.1:1/canary";
+  // Not loopback: a local server is not egress, and curl to localhost passes
+  // network = false (shell.ts, LOOPBACK_CLIENTS). `.invalid` never resolves (RFC 2606).
+  const URL = "http://example.invalid/canary";
 
   it("refuses network clients and connecting one-liners, before anything runs", async () => {
     let asked = false;

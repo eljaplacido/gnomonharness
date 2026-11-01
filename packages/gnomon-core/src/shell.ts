@@ -1303,6 +1303,72 @@ const NET_CLIENTS = new Set([
  */
 const SELF_ONLY = new Set(["-V", "--version", "-h", "--help"]);
 
+/**
+ * Local-server requests are not egress.
+ *
+ * `curl http://localhost:3000/health` is how a developer -- and a model --
+ * checks that the thing it just started is up. Refusing it under the default
+ * `network = false` broke ordinary local work (and Terminal-Bench tasks such
+ * as nginx-request-logging) while protecting nothing: the data does not leave
+ * the machine. So curl and wget pass when EVERY operand is a URL or host whose
+ * hostname is a literal loopback, and nothing in the call can send the request
+ * elsewhere. What disqualifies it:
+ *   - a proxy (`-x`, `--proxy*`, `--preproxy`, `--socks*`, or any word that says
+ *     "proxy", which also catches `http_proxy=` and wget's `-e use_proxy=…`);
+ *   - `--resolve` / `--connect-to`, which map localhost to another address;
+ *   - a config or input file (`-K`, `--config`, `-e`, `--execute`, `-i`,
+ *     `--input-file`, `-B`), whose contents are not on the command line;
+ *   - any operand that is neither a loopback target nor the value of a flag
+ *     known to take one -- so `curl http://localhost/ example.com` is refused.
+ * Hostnames are compared literally after WHATWG URL parsing (no DNS, so
+ * `127.0.0.1.nip.io` is not loopback, and `http://localhost@evil.com/` is
+ * evil.com). Interpreter one-liners are not exempt: their targets cannot be
+ * read reliably from the command line.
+ */
+const LOOPBACK_CLIENTS = new Set(["curl", "wget"]);
+const LOOPBACK_DISQUALIFY = /^(-x|-K|-e|-i|-B|--(pre)?proxy.*|--socks.*|--noproxy|--resolve|--connect-to|--config|--execute|--input-file|--base)(=|$)/;
+/** Flags whose next word is a value, not a target (curl and wget, the common ones). */
+const VALUE_FLAGS = new Set([
+  "-H", "--header", "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "--json",
+  "-X", "--request", "-o", "--output", "-O", "--output-document", "-A", "--user-agent", "-U",
+  "-w", "--write-out", "-m", "--max-time", "--connect-timeout", "-u", "--user", "-F", "--form",
+  "-b", "--cookie", "-c", "--cookie-jar", "-r", "--range", "-T", "--upload-file", "--retry",
+  "--retry-delay", "--retry-max-time", "-t", "--tries", "--timeout", "--post-data", "--method",
+  "--output-file", "-a", "--append-output", "--cacert", "--cert", "--key",
+]);
+/** Short flags that take a value, when they end a cluster (`-sSo out`, `-qO-`). */
+const VALUE_SHORT = new Set(["H", "d", "X", "o", "O", "A", "U", "w", "m", "u", "F", "b", "c", "r", "T", "t", "a"]);
+
+function loopbackHost(target: string): boolean {
+  let host: string;
+  try {
+    host = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(target) ? target : `http://${target}`).hostname;
+  } catch {
+    return false;
+  }
+  return host === "localhost" || host === "[::1]" || /^127(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(host);
+}
+
+function onlyLoopback(args: string[]): boolean {
+  let targets = 0;
+  for (let i = 0; i < args.length; i++) {
+    const w = args[i];
+    if (/proxy/i.test(w) || LOOPBACK_DISQUALIFY.test(w)) return false;
+    if (w.startsWith("--")) {
+      if (!w.includes("=") && VALUE_FLAGS.has(w)) i++;
+      continue;
+    }
+    if (/^-[A-Za-z]+$/.test(w)) {
+      if (VALUE_FLAGS.has(w) || VALUE_SHORT.has(w[w.length - 1])) i++;
+      continue;
+    }
+    if (/^-[A-Za-z]/.test(w)) continue; // `-qO-`, `-o/dev/null`: the value is attached
+    if (!loopbackHost(w)) return false;
+    targets++;
+  }
+  return targets > 0;
+}
+
 /** Copy tools that only leave the machine when an operand names a remote. */
 const REMOTE_COPY = new Set(["scp", "rsync"]);
 
@@ -1400,6 +1466,9 @@ export function bashNetworkEgress(command: string): NetworkEgress | null {
     }
     if (NET_CLIENTS.has(prog)) {
       if (args.length > 0 && args.every((a) => SELF_ONLY.has(a))) continue;
+      // The whole call, not just argv: the parser drops `http_proxy=…` prefixes, and any
+      // proxy anywhere in the command can carry a loopback-looking request elsewhere.
+      if (LOOPBACK_CLIENTS.has(prog) && !/proxy/i.test(command) && onlyLoopback(args)) continue;
       return { command: shown, why: `${prog} is a network client` };
     }
     if (REMOTE_COPY.has(prog)) {

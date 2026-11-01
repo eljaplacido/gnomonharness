@@ -26,6 +26,20 @@
 
 ## [Unreleased]
 
+- **`network = false` still lets curl and wget reach a local server.** A request
+  whose every target is a literal loopback (`localhost`, `127.0.0.0/8`, `[::1]`)
+  is not egress. `curl http://localhost:3000/health` is how a developer, or a
+  model, checks that what it started is up. Refusing it under the default
+  surface broke ordinary local work, and Terminal-Bench tasks such as
+  nginx-request-logging, while protecting nothing. The exemption is strict:
+  - any proxy anywhere in the command cancels it (including an `http_proxy=`
+    prefix);
+  - so do `--resolve`, `--connect-to`, config and input files, and any operand
+    that is not a loopback target;
+  - hostnames are compared literally after URL parsing, so
+    `http://localhost@evil.example/` and `127.0.0.1.nip.io` are refused;
+  - interpreter one-liners stay refused.
+
 - **`bash_deny` and `bash_allow` read the command the shell runs, not its text
   (#63).** On v0.3.1, with `rm\s+-rf` and `rm\s+.*-r\b` denied, `rm -fr keep`,
   `rm -R keep` and `rm --recursive --force keep` deleted the directory. A role
