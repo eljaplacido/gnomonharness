@@ -27,6 +27,8 @@ import {
   resolveResilience,
   resolveExtraRoots,
   resolveExec,
+  resolveApprovalGate,
+  resolveSandboxLevel,
   resolveChain,
   resolveChainGate,
   type ChainGate,
@@ -55,6 +57,10 @@ import {
   SurfaceProblem,
   EndpointConfig,
   roleWriteTarget,
+  roleMirrorTarget,
+  type RoleWriteTarget,
+  reloadConfig,
+  endpointKind,
 } from "./config.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence,
   safeForPrompt, traceLines, isEmptyReasoning, terminalWidth,
@@ -1277,8 +1283,9 @@ async function callEndpoint(
   // writes for every role. The failure names a field the user never wrote, in a
   // request they cannot see, so there is nothing in the surface to go and fix.
   //
-  // `kind` is already resolved on the target and defaults to ollama, matching
-  // how /endpoints renders it.
+  // `kind` is already resolved on the target by endpointKind: the declared
+  // kind, else the shape the URL names, else ollama. /endpoints renders the
+  // same function's answer.
   // Messages carry BOTH spellings of a tool result — `tool_call_id` (OpenAI)
   // and `tool_name` (Ollama) — for the same "send both and hope" reason the
   // sampling params did. Strict providers reject the surplus one:
@@ -1639,7 +1646,7 @@ export function describeEndpoints(config: GnomonConfig): EndpointRow[] {
   const roles = listRoles(config);
   return listEndpoints(config).map((name) => {
     const endpoint = resolveEndpoint(config, name);
-    const cls = endpointClass(endpoint.url, endpoint.kind, endpoint.provider);
+    const cls = endpointClass(endpoint.url, endpointKind(endpoint), endpoint.provider);
     const primary = roles.filter((r) => (config.roles[r]?.endpoint ?? "local") === name);
     const fallback = roles.filter((r) => config.roles[r]?.fallback?.endpoint === name);
     const probeModel =
@@ -1790,7 +1797,7 @@ export function printEndpoints(
   for (const row of group) {
     const { name, endpoint: ep } = row;
     console.log(
-      `  ${paint(ui, "bold", name)}: ${ep.url}  [${ep.kind ?? "ollama"}] · ${row.provider}`
+      `  ${paint(ui, "bold", name)}: ${ep.url}  [${endpointKind(ep)}] · ${row.provider}`
     );
 
     // An endpoint nothing points at is declared, not used. Saying so is the
@@ -2922,16 +2929,9 @@ export async function runAgenticTurn(
   }
   const offered = new Set(toolSet.schemas.map((t) => t.function.name));
 
-  const defaults = config.config.defaults ?? {};
   const policy = config.policy ?? {};
-  const gate = ((policy.approval as { gate?: string } | undefined)?.gate ??
-    defaults.approval ??
-    "on_write") as ApprovalGate;
-  const sandbox =
-    state.sandbox ??
-    (((policy.sandbox as { level?: string } | undefined)?.level ??
-      defaults.sandbox ??
-      "confined") as SandboxLevel);
+  const gate: ApprovalGate = resolveApprovalGate(config);
+  const sandbox: SandboxLevel = state.sandbox ?? resolveSandboxLevel(config);
 
   // Session grant wins over the declared default; the surface is unchanged.
   const declaredNetwork = (policy.sandbox as { network?: boolean } | undefined)?.network;
@@ -4480,7 +4480,7 @@ export async function listModels(config: GnomonConfig): Promise<EndpointModels[]
 
   for (const name of listEndpoints(config)) {
     const ep = resolveEndpoint(config, name);
-    const kind = ep.kind ?? "ollama";
+    const kind = endpointKind(ep);
     // Ollama lists at /api/tags; OpenAI-shaped APIs at /v1/models.
     const listUrl =
       kind === "ollama"
@@ -4643,6 +4643,48 @@ export interface RunTaskOptions {
 }
 
 /**
+ * The record of a task that never started: apparatus_failure, exit code 10.
+ *
+ * Used for a surface whose audit finds a fatal problem, and by `gnomon task`
+ * when there is no surface to load at all. The second case used to throw out
+ * of the command, reach main's catch and exit 1. 1 is `failed`, which is in the
+ * `result` bucket, so a caller gating on the bucket read a run that never
+ * started as one that ran and concluded (docs/CONTRACTS.md §1: `task` exits 0,
+ * 2 or 10).
+ */
+export function unstartedTaskRecord(
+  input: string,
+  role: string | undefined,
+  output: string
+): TaskRecord {
+  return {
+    input,
+    harness: harnessBuild(),
+    output,
+    role: role ?? "unknown",
+    model: "",
+    code: 10,
+    bucket: "apparatus_failure",
+    stop_reason: "apparatus",
+    tool_steps: 0,
+    tool_log: [],
+    skills: [],
+    surface_hash: "",
+    counters: {
+      writes: 0,
+      worktree_moves: 0,
+      nudges: 0,
+      final_step_was_write: false,
+      per_tool: {},
+    },
+    // The record shape is the same whether or not the run reached a model.
+    // A consumer parsing --json must not have to special-case the failure
+    // that never started, which is the one it is most likely to hit.
+    volatile: { duration_ms: 0 },
+  };
+}
+
+/**
  * Run one task without a terminal.
  *
  * This is the invocation a composition layer can put in a runbook: it takes a
@@ -4700,31 +4742,7 @@ export async function runTask(
       const detail = fatal
         .map((p) => `${p.where}: ${p.problem}\n    ${p.fix}`)
         .join("\n  ");
-      return {
-        input,
-        harness: harnessBuild(),
-        output: `Surface cannot be used:\n  ${detail}`,
-        role: options.role ?? "unknown",
-        model: "",
-        code: 10,
-        bucket: "apparatus_failure",
-        stop_reason: "apparatus",
-        tool_steps: 0,
-        tool_log: [],
-        skills: [],
-        surface_hash: "",
-        counters: {
-          writes: 0,
-          worktree_moves: 0,
-          nudges: 0,
-          final_step_was_write: false,
-          per_tool: {},
-        },
-        // The record shape is the same whether or not the run reached a model.
-        // A consumer parsing --json must not have to special-case the failure
-        // that never started, which is the one it is most likely to hit.
-        volatile: { duration_ms: 0 },
-      };
+      return unstartedTaskRecord(input, options.role, `Surface cannot be used:\n  ${detail}`);
     }
   }
 
@@ -5412,17 +5430,25 @@ export function chainForTurn(
  * A `[roles.<name>.fallback]` block starts with `[`, so it ends the section
  * and is left alone — changing a role's model must not silently change what
  * it falls back to.
+ *
+ * `onlyExisting` replaces lines and never adds one, and leaves a file with no
+ * such section unchanged. pointRoleAt uses it to bring roles.toml into line
+ * with a profile without adding routing lines to it.
  */
 export function setRoleModel(
   text: string,
   role: string,
   model: string,
-  endpoint?: string
+  endpoint?: string,
+  opts: { onlyExisting?: boolean } = {}
 ): string {
   const lines = text.split("\n");
   const header = new RegExp(`^\\s*\\[roles\\.${role.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]\\s*$`);
   const start = lines.findIndex((l) => header.test(l));
   if (start === -1) {
+    // A mirror write (see pointRoleAt) has nothing to keep in step with when
+    // the role is not in this file at all.
+    if (opts.onlyExisting) return text;
     throw new Error(`no [roles.${role}] section to edit in this file.`);
   }
   let end = lines.length;
@@ -5438,13 +5464,54 @@ export function setRoleModel(
       (l, i) => i > start && i < end && new RegExp(`^\\s*${key}\\s*=`).test(l)
     );
     const line = `${key} = "${value}"`;
-    if (at === -1) lines.splice(start + 1, 0, line);
-    else lines[at] = line;
+    if (at === -1) {
+      if (!opts.onlyExisting) lines.splice(start + 1, 0, line);
+    } else lines[at] = line;
   };
 
   put("model", model);
   if (endpoint) put("endpoint", endpoint);
   return lines.join("\n");
+}
+
+/**
+ * Point a role at a model in every file that says where it goes.
+ *
+ * The one write path for /models, `gnomon endpoint add --role` and launch's
+ * first-run picker. It edits the file a run reads (roleWriteTarget), then
+ * updates roles.toml to match when a profile is that file (roleMirrorTarget),
+ * so that after the pick the two files agree. Edits go into `files`, keyed by
+ * path, and are not written here: `endpoint add` points several roles in one
+ * pass and writes each file once.
+ *
+ * Returns the file a run reads, for the caller's message, and the mirror when
+ * one was updated.
+ */
+export function pointRoleAt(
+  config: GnomonConfig,
+  role: string,
+  model: string,
+  endpoint: string | undefined,
+  files: Map<string, { label: string; text: string }>
+): { target: RoleWriteTarget; mirrored?: RoleWriteTarget } {
+  const edit = (t: RoleWriteTarget, onlyExisting: boolean): boolean => {
+    let file = files.get(t.path);
+    if (!file) {
+      file = { label: t.label, text: readFileSync(t.path, "utf-8") };
+      files.set(t.path, file);
+    }
+    const before = file.text;
+    file.text = setRoleModel(file.text, role, model, endpoint, { onlyExisting });
+    return file.text !== before;
+  };
+
+  const target = roleWriteTarget(config, role);
+  edit(target, false);
+  const mirror = roleMirrorTarget(config, role);
+  // A mirror that already said the same thing was not changed, and saying it
+  // was would announce an edit that did not happen.
+  const mirrored = mirror && existsSync(mirror.path) && edit(mirror, true) ? mirror : undefined;
+  return { target, ...(mirrored ? { mirrored } : {}) };
 }
 
 /**
@@ -5829,6 +5896,10 @@ export function processCommand(cmd: string, state: PromptState): boolean {
   const command = parts[0].toLowerCase();
 
   switch (command) {
+    // The running loop never sends these here: it ends the session itself, so
+    // the trail is sealed first (see runPromptLoop). This is the forced exit,
+    // reached only by a second /quit typed while the first is still waiting
+    // for a turn to unwind, and from callers with no loop around them.
     case "/quit":
     case "/exit":
     case "/q":
@@ -6146,11 +6217,10 @@ export function processCommand(cmd: string, state: PromptState): boolean {
 
     case "/sandbox": {
       const wanted = (parts[1] ?? "").trim().toLowerCase();
-      const declared = ((state.config.policy as { sandbox?: { level?: string } } | undefined)
-        ?.sandbox?.level ?? "confined") as SandboxLevel;
+      const declared: SandboxLevel = resolveSandboxLevel(state.config);
       const current = state.sandbox ?? declared;
       if (!wanted) {
-        console.log(`\nSandbox: ${current}${state.sandbox ? " (this session)" : " (from policy.toml)"}`);
+        console.log(`\nSandbox: ${current}${state.sandbox ? " (this session)" : " (from the surface)"}`);
         console.log("  strict   — the project root only, symlinks resolved.");
         console.log("  confined — the project root. (default)");
         console.log("  off      — anywhere the process can reach, including other repositories.");
@@ -6878,6 +6948,12 @@ export async function runPromptLoop(
   let cancelTurn: (() => void) | null = null;
   // Set by a `/quit` typed mid-turn; a second one exits without waiting.
   let quitRequested = false;
+  // The main loop is waiting on the role prompt, not on an approval or a
+  // suggestion, so a Ctrl+C here means "leave".
+  let atPrompt = false;
+  // The session ended on /quit (or Ctrl+C at the prompt), which exits 0 once
+  // the trail is sealed and the finally has run.
+  let quitByCommand = false;
   // The progress line of the turn in flight, so typing can silence it.
   let activeProgress: InstanceType<typeof Progress> | null = null;
   // True while the session picker owns the keyboard.
@@ -6927,6 +7003,16 @@ export async function runPromptLoop(
     if (picking) return;
     if (cancelTurn) {
       cancelTurn();
+      return;
+    }
+    // At the prompt, leave the way /quit does, so the trail is sealed and the
+    // finally runs. Anywhere else (a /models query, compaction between turns)
+    // nothing is waiting on a line to carry the quit, and an immediate exit is
+    // what Ctrl+C has always meant there.
+    if (atPrompt && notify) {
+      const n = notify;
+      notify = null;
+      n("/quit");
       return;
     }
     console.log("\nSession complete. See you next turn.");
@@ -7327,10 +7413,7 @@ export async function runPromptLoop(
       }
     }
     const policy = config.policy ?? {};
-    const sandboxLevel =
-      (policy.sandbox as { level?: string } | undefined)?.level ??
-      config.config.defaults?.sandbox ??
-      "confined";
+    const sandboxLevel = resolveSandboxLevel(config);
     const networkDeclared =
       (policy.sandbox as { network?: boolean } | undefined)?.network;
     if (sandboxLevel !== "off" && networkDeclared === false) {
@@ -7391,14 +7474,26 @@ export async function runPromptLoop(
         rl.setPrompt(`${state.currentRole} ▸ `);
         rl.prompt();
       }
+      atPrompt = true;
       const input = await readLine();
-      if (input === null) {
+      atPrompt = false;
+      // /quit leaves by the same path as end-of-input. It used to fall through
+      // to processCommand, whose process.exit(0) ended the process before
+      // anything below ran: no session_end, so `gnomon audit verify` reported
+      // an ordinary session as "NOT SEALED (truncated, or the run was killed)",
+      // and no `finally`, so the MCP servers were left to the OS. Ctrl-D sealed
+      // the trail and /quit did not, and /quit is the exit the banner names.
+      // Found 2026-11-01 while verifying the guide (#69).
+      const verb = (input?.trim().split(/\s+/)[0] ?? "").toLowerCase();
+      const quitting = input !== null && QUIT_COMMANDS.has(verb);
+      if (input === null || quitting) {
         await shadowRecorder?.flush();
         audit.write("session_end", {
           turns: state.exchanges.length,
           surface_hash: surfaceHash,
         });
         console.log("\nSession complete. See you next turn.");
+        quitByCommand = quitting;
         break;
       }
 
@@ -7586,28 +7681,29 @@ export async function runPromptLoop(
           // hash, and changed nothing: the pick was overridden at the next
           // load, and the startup audit then warned about the very line this
           // command wrote. `gnomon endpoint add --role` already did this.
-          const target = roleWriteTarget(config, pickedRole);
+          // pointRoleAt also updates roles.toml to match, so the next start
+          // has no disagreement between the two files to warn about.
+          const files = new Map<string, { label: string; text: string }>();
+          let wrote: ReturnType<typeof pointRoleAt>;
           try {
-            const before = readFileSync(target.path, "utf-8");
-            writeFileSync(
-              target.path,
-              setRoleModel(before, pickedRole, modelTag, pickedEndpoint),
-              "utf-8"
-            );
+            wrote = pointRoleAt(config, pickedRole, modelTag, pickedEndpoint, files);
+            for (const [path, file] of files) writeFileSync(path, file.text, "utf-8");
           } catch (err) {
+            const where = [...files.values()].map((f) => f.label).join(", ") || "the surface";
             console.log(
               paint(ui0, "yellow",
-                `  Could not write ${target.label}: ${err instanceof Error ? err.message : String(err)}`)
+                `  Could not write ${where}: ${err instanceof Error ? err.message : String(err)}`)
             );
             continue;
           }
+          const { target, mirrored } = wrote;
 
           // roles.toml is part of the surface, so this changed the hash on
           // purpose. Reload rather than asking for a restart — but say what
           // moved, because a surface that changes without saying so is the
-          // thing this harness exists to prevent.
-          const projectRoot = resolve(config.gnomonDir, "..");
-          const fresh = loadConfig(projectRoot);
+          // thing this harness exists to prevent. Under the same --profile:
+          // see reloadConfig.
+          const fresh = reloadConfig(config);
           state.config = fresh;
           console.log(
             `\n  ${paint(ui0, "green", "✓")} ${paint(ui0, "bold", pickedRole)} → ` +
@@ -7617,6 +7713,7 @@ export async function runPromptLoop(
             paint(ui0, "gray",
               `  ${target.label} written` +
                 (target.profile ? ` (profile "${target.profile}" governs ${pickedRole})` : "") +
+                (mirrored ? `, and ${mirrored.label} to match` : "") +
                 ` · surface now ` +
                 `${recomputeManifest(fresh.gnomonDir).surface_hash.slice(0, 16)}…`)
           );
@@ -7956,7 +8053,8 @@ export async function runPromptLoop(
           );
         }
         try {
-          const reloaded = loadConfig(resolve(state.config.gnomonDir, ".."));
+          // Under the same --profile the session started with; see reloadConfig.
+          const reloaded = reloadConfig(state.config);
           state.config = reloaded;
           const short = recomputeManifest(reloaded.gnomonDir).surface_hash.slice(0, 16);
           progress.print(
@@ -8078,4 +8176,10 @@ export async function runPromptLoop(
     state.mcp = undefined;
     rl.close();
   }
+
+  // /quit has always exited 0 straight away, and it still does, but only
+  // after the trail is sealed and the finally above has run. Returning instead
+  // would leave the exit to whatever else still holds the event loop, and on a
+  // terminal stdin is still open.
+  if (quitByCommand) process.exit(0);
 }

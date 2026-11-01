@@ -856,3 +856,88 @@ describe("numbers the docs state are read back from what they describe", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Claims found stale while verifying the guide (#69), 2026-11-01
+// ---------------------------------------------------------------------------
+
+/** Every non-test source file in the workspace packages. */
+const sources = (): Array<{ path: string; text: string }> => {
+  const out: Array<{ path: string; text: string }> = [];
+  for (const pkg of readdirSync(join(repoRoot, "packages"))) {
+    const src = join(repoRoot, "packages", pkg, "src");
+    if (!existsSync(src)) continue;
+    for (const f of readdirSync(src)) {
+      if (!f.endsWith(".ts") || f.endsWith(".test.ts")) continue;
+      out.push({ path: `packages/${pkg}/src/${f}`, text: readFileSync(join(src, f), "utf-8") });
+    }
+  }
+  return out;
+};
+
+describe("the help, the build script and the docs say what the code does", () => {
+  // --help listed GNOMON_DIR as "Override .gnomon/ directory path" from the
+  // first commit, and nothing ever read it: `gnomon session` only SETS it for
+  // the commands it runs. A variable that is set is not one that is read.
+  it("every variable --help's Environment section names is read somewhere", () => {
+    const section = help.slice(help.indexOf("\nEnvironment:\n"));
+    const named = [...section.matchAll(/^ {2}([A-Z][A-Z0-9_]+) {2,}/gm)].map((m) => m[1]!);
+    expect(named.length, "the Environment section moved or emptied").toBeGreaterThan(0);
+    const all = sources();
+    for (const name of named) {
+      const read = new RegExp(`\\benv(?:\\.${name}\\b|\\[["'\`]${name}["'\`]\\])`);
+      expect(
+        all.some((s) => read.test(s.text)),
+        `--help documents ${name}, and no source file reads it`
+      ).toBe(true);
+    }
+  });
+
+  // NATIVE_ONLY_COMMANDS exists so this list is not kept by hand; the build
+  // script cannot import it (it runs before anything is built), and its skip
+  // message named three of the five.
+  it("build-native.mjs's skip message names every native-only command", () => {
+    const script = readFileSync(join(repoRoot, "scripts/build-native.mjs"), "utf-8");
+    const surface = readFileSync(join(repoRoot, "packages/gnomon-natives/src/surface.ts"), "utf-8");
+    const declared = [
+      ...surface.match(/NATIVE_ONLY_COMMANDS = \[([\s\S]*?)\] as const;/)![1]!.matchAll(/"([a-z]+)"/g),
+    ].map((m) => m[1]!);
+    const needs = script.slice(script.indexOf("Needs it:"), script.indexOf("To get it:"));
+    expect(needs.length, "the skip message no longer has a \"Needs it\" line").toBeGreaterThan(0);
+    for (const cmd of declared) {
+      expect(new RegExp(`\\b${cmd}\\b`).test(needs), `build-native.mjs omits \`${cmd}\``).toBe(true);
+    }
+  });
+
+  // README's "fifth limit" said `gnomon audit verify` does not check
+  // signatures, long after the CLI began passing [audit.attest] and printing
+  // an anchor line. A reader deciding whether to declare a signer was told the
+  // command would never look at it.
+  it("README describes the anchor check `gnomon audit verify` performs", () => {
+    expect(help, "the CLI no longer passes [audit.attest] to verifyTrail").toMatch(
+      /verifyTrail\(path, attest \? \{ attest \} : \{\}\)/
+    );
+    const flat = readme.replace(/\s+/g, " ");
+    expect(flat).not.toMatch(/audit verify` does not check signatures/);
+    // Every anchor status the CLI can print for a real trail. NOT CHECKED is
+    // excluded: it is reachable only if resolveAudit stops resolving attest.
+    const statuses = [...help.matchAll(/anchor: ([A-Z][A-Z ]*[A-Z]) —/g)]
+      .map((m) => m[1]!)
+      .filter((s, i, a) => a.indexOf(s) === i && s !== "NOT CHECKED");
+    expect(statuses.sort()).toEqual(["BROKEN", "NOT SIGNED", "SIGNED", "UNVERIFIABLE"]);
+    for (const s of statuses) expect(flat, `README does not name \`${s}\``).toContain(`\`${s}\``);
+  });
+
+  // DESIGN.md said `discard` is the default compaction for two months after
+  // the default became `summary`.
+  it("DESIGN.md names the compaction default the code applies", () => {
+    const design = readFileSync(join(repoRoot, "docs/DESIGN.md"), "utf-8").replace(/\s+/g, " ");
+    // The code's default, from a surface that declares none -- not the
+    // scaffold, which writes the value out.
+    const actual = resolveContext({ config: {} } as Parameters<typeof resolveContext>[0]).compaction;
+    for (const m of design.matchAll(/`(discard|summary|truncate)` is the default/g)) {
+      expect(m[1], "DESIGN.md states a compaction default the code does not use").toBe(actual);
+    }
+    expect(design).toContain(`\`${actual}\` is the default`);
+  });
+});

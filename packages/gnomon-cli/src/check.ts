@@ -275,6 +275,13 @@ function emit(verdict: CheckVerdict, args: CheckCliArgs, out: (s: string) => voi
   } catch {
     ui = { color: false } as ResolvedUi;
   }
+  // ...but only on a terminal. `check` is the command CI runs, and its verdict
+  // reached CI logs and pipes as `[32mHELD[0m`. main() sets NO_COLOR when a
+  // reporting command is piped, and deliberately not for `check`: the variable
+  // would be inherited by the verify command the check runs. Colour is decided
+  // here instead, at render time, after every command has run. FORCE_COLOR opts
+  // back in, as it does for main()'s rule.
+  if (!process.stdout.isTTY && !process.env.FORCE_COLOR) ui = { ...ui, color: false };
   for (const line of renderVerdict(verdict, ui)) out(line);
 }
 

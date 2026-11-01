@@ -14,7 +14,7 @@
  * learn what a deterministic harness does.
  */
 
-import { GnomonConfig, resolveContext, resolveRouting, resolveEndpoint, listEndpoints, endpointClass, listRoles, recomputeManifest, resolveVerify, resolveExtraRoots } from "./config.js";
+import { GnomonConfig, resolveContext, resolveRouting, resolveEndpoint, listEndpoints, endpointClass, listRoles, recomputeManifest, resolveVerify, resolveExtraRoots, resolveApprovalGate, resolveSandboxLevel, endpointKind } from "./config.js";
 import { resolveAudit } from "./audit.js";
 import { resolveSessionStore } from "./session_store.js";
 import { loadSkills, loadProposedSkills } from "./skills.js";
@@ -149,7 +149,7 @@ const TOPICS: Record<ExplainTopic, Builder> = {
 
   sandbox: (config, role) => {
     const policy = (config.policy ?? {}) as { sandbox?: { level?: string; network?: boolean } };
-    const level = policy.sandbox?.level ?? "confined";
+    const level = resolveSandboxLevel(config);
     const extra = resolveExtraRoots(config);
     const allow = config.roles[role]?.bash_allow ?? [];
     const deny = config.roles[role]?.bash_deny ?? [];
@@ -225,10 +225,7 @@ const TOPICS: Record<ExplainTopic, Builder> = {
   },
 
   approval: (config, role) => {
-    const gate =
-      (config.policy?.approval as { gate?: string } | undefined)?.gate ??
-      config.config.defaults?.approval ??
-      "on_write";
+    const gate = resolveApprovalGate(config);
     const set = buildToolSet(config, role);
     const gated = set.schemas
       .map((t) => t.function.name)
@@ -325,9 +322,9 @@ const TOPICS: Record<ExplainTopic, Builder> = {
         const key = ep.api_key_env
           ? `  key $${ep.api_key_env} ${process.env[ep.api_key_env] ? "(set)" : "(NOT SET)"}`
           : "";
-        const cls = endpointClass(ep.url, ep.kind, ep.provider);
+        const cls = endpointClass(ep.url, endpointKind(ep), ep.provider);
         return [
-          bullet(`${name.padEnd(8)} ${ep.url}  [${ep.kind ?? "ollama"}] · ${cls.where} · ${cls.provider}${key}`),
+          bullet(`${name.padEnd(8)} ${ep.url}  [${endpointKind(ep)}] · ${cls.where} · ${cls.provider}${key}`),
           bullet(
             `         ${
               primary.length || fb.length

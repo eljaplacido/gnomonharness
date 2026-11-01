@@ -45,6 +45,7 @@ import {
   recomputeManifest,
   resolveExec,
   resolveExtraRoots,
+  resolveSandboxLevel,
   resolveVerify,
   type GnomonConfig,
 } from "./config.js";
@@ -504,9 +505,7 @@ async function judge(
     config: { ...config, gnomonDir: join(treeRoot, surfaceRel) },
     writeAllow: roleDef?.write_allow,
     root: projRoot,
-    sandbox: ((config.policy.sandbox as { level?: string } | undefined)?.level ??
-      config.config.defaults?.sandbox ??
-      "confined") as SandboxLevel,
+    sandbox: resolveSandboxLevel(config),
     extraRoots: resolveExtraRoots(config),
     exec: resolveExec(config, role),
     network: (config.policy.sandbox as { network?: boolean } | undefined)?.network,

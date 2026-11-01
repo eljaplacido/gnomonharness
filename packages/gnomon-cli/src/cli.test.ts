@@ -275,3 +275,55 @@ describe("first-contact output", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// `gnomon task` exit codes: 0, 2 or 10, and nothing else
+// ---------------------------------------------------------------------------
+//
+// docs/CONTRACTS.md §1: "`gnomon task` exits `0`, `2` or `10` — the bucket".
+// With no .gnomon/ the loader threw, main's catch printed it and exited 1 --
+// `failed`, in the `result` bucket -- so a CI step switching on the bucket read
+// a task that never started as one that ran and concluded. Found 2026-11-01
+// while verifying the guide (#69). Neither case reaches a model, so these
+// spawn the real CLI with no endpoint at all.
+describe("gnomon task — a task that cannot start exits 10", () => {
+  const CLI = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
+  const run = (args: string[]) => {
+    const r = spawnSync(process.execPath, ["--import", "tsx", CLI, ...args], {
+      encoding: "utf-8",
+      timeout: 60_000,
+    });
+    return { code: r.status ?? -1, stdout: r.stdout ?? "", out: (r.stdout ?? "") + (r.stderr ?? "") };
+  };
+
+  it("with no .gnomon/ there, and says why", () => {
+    const empty = mkdtempSync(join(tmpdir(), "gnomon-nosurface-"));
+    try {
+      const { code, out } = run(["task", "do a thing", "--dir", empty]);
+      expect(out).toContain(".gnomon/ not found");
+      expect(out).toContain("[apparatus_failure]");
+      expect(code).toBe(10);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it("and --json still prints the one record shape a caller parses", () => {
+    const empty = mkdtempSync(join(tmpdir(), "gnomon-nosurface-"));
+    try {
+      const { code, stdout } = run(["task", "do a thing", "--json", "--dir", empty]);
+      expect(code).toBe(10);
+      const record = JSON.parse(stdout) as { bucket: string; code: number; stop_reason: string; output: string };
+      expect(record).toMatchObject({ bucket: "apparatus_failure", code: 10, stop_reason: "apparatus" });
+      expect(record.output).toContain(".gnomon/ not found");
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it("with no task text either: usage, then 10, not `failed`", () => {
+    const { code, out } = run(["task"]);
+    expect(out).toContain("Usage: gnomon task");
+    expect(code).toBe(10);
+  });
+});
