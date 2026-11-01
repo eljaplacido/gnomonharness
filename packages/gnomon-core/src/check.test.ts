@@ -379,6 +379,23 @@ describe("gnomon check — with a transcript (check 5)", () => {
     expect(byId(v, "bash_allow")).toMatchObject({ status: "fail", findings: [{ rule: "bash_deny", at: "s.jsonl:3" }] });
   });
 
+  it("reads another harness's command as the shell would, like the loop does (#63)", async () => {
+    // One matcher, two callers: the spelling that gets past bashTool must not
+    // get past check 5, or the two would disagree on the first command nobody
+    // tried. `git -C . push -fu` matched none of the pattern's text.
+    surface();
+    put(".gnomon/roles.toml", `[roles.implement]\nmodel = "m"\nwrite_allow = ["src/**"]\n${deny}`);
+    const base = commit("base");
+    const v = await runCheck({
+      dir: repo,
+      base,
+      role: "implement",
+      transcript: { format: "claude-code", commands: [{ tool: "Bash", command: "git -C . push -fu origin feature", at: "s.jsonl:7" }] },
+    });
+    expect(v.exit).toBe(2);
+    expect(byId(v, "bash_allow")).toMatchObject({ status: "fail", findings: [{ rule: "bash_deny", at: "s.jsonl:7" }] });
+  });
+
   it("an unreadable transcript is could-not-run", async () => {
     surface();
     const base = commit("base");
