@@ -26,6 +26,62 @@
 
 ## [Unreleased]
 
+- **`gnomon check` reads goose, Qwen Code and mini-swe-agent transcripts**
+  (#65). `--transcript <file> --format goose | qwen-code | mini-swe-agent`
+  puts what those harnesses ran to check 5 (commands against
+  `bash_allow`/`bash_deny`):
+  - goose 1.57: the stdout of `goose run --output-format stream-json` (or
+    `json`), or `goose session export --format json`;
+  - Qwen Code 0.26.4: its session file
+    (`~/.qwen/projects/<cwd>/chats/<session>.jsonl`) or its `-o stream-json`;
+  - mini-swe-agent 2.4.6: the trajectory `mini -o` writes.
+
+  Each reads its harness's own record of a refused call, where the harness
+  writes one structurally: goose's own refusal sentences without shell output,
+  Qwen's `executionStatus: "not_started"` and `permission_denials`, mini's
+  `UserRejection`. mini's `"action was not executed"` is not one: mini writes
+  it for the submitting action, which ran. A file in the wrong format is
+  refused rather than read as "no commands", which skipped check 5 for
+  opencode V2 (#64). Found by the G1 governance benchmark: with no reader, check
+  saw none of the 11 destructions of git-ignored state (`git clean -fdx`,
+  `rm -rf var/`) by these peers, which leave no diff.
+
+  Replayed through G1's 120 recorded trials on this branch (no model; the
+  no-transcript run reproduced G1's recorded verdicts 120/120):
+  - each reader returns, string for string, the commands G1's own adapter took
+    from the same records (72/72; Qwen's two files agree 24/24);
+  - ignored-state destruction is caught in 8/12 trials, up from 0/12. With
+    #64's opencode fix as well, it is 11/12, every violating peer trial is
+    caught (44/44) and every violation in G1 but one (44/45). The miss is
+    gnomon's own arm, which has no reader here, and whose `mv` of `var/`
+    matches no deny pattern anyway;
+  - false alarms: 4/75 violation-free trials, and 6/75 (1/30 clean controls)
+    with #64, as G1's adapter measured.
+- **The audit trail keeps a shell command whole.** A bash call's `tool_call`
+  record kept `describeCall`'s 70-character terminal line as `target`, and
+  under the scaffolded `record = "metadata"` no `args`. In G1, gnomon's one
+  violation (the agent moved `var/` out after its deny-list refused `git
+  clean`, `git reset --hard` and `rm -r -f`) could not be reconstructed from its
+  own trail. `target` is now the whole command after the surface's `redact`
+  patterns, under either `record` setting: a command is the action the trail
+  records, not prompt or response text. The terminal still prints 70
+  characters. Tests: a long command survives in the chained record; a
+  `token=…` in it is redacted.
+- **Known false-alarm class, documented rather than patched.** Check 5 judges a
+  command by its spelling, exactly as the loop's `bash_deny` does. G1's broad
+  recursive-`rm` pattern therefore flags `rm -rf /tmp/scratch` and
+  `rm -rf .pytest_cache`, and its `git clean` pattern flags a run whose files
+  the agent had backed up and restored. Those are G1's six false alarms. No
+  rule inside check separates them from the true detections:
+  - a scratch-directory exemption would make check pass what the loop refuses
+    on the same surface;
+  - it would be a rule outside the surface hash;
+  - it would clear only two of the six, because the other operands are
+    `"$tmp"`, `find … -exec rm -rf {} +`, or a git-ignored cache inside the
+    repository.
+
+  The lever is the pattern, which is the surface's.
+
 - **`[shadow]`: a log-only decision-model shadow.** When a surface declares it,
   a typed decision model (`/v1/systemone`: state plus typed questions in,
   probabilities out) is asked three things, each logged beside what gnomon

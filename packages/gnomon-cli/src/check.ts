@@ -33,7 +33,8 @@ export interface CheckCliArgs {
 
 export const CHECK_USAGE =
   "Usage: gnomon check --base <rev> [--head <rev>] [--role <role> | --agent <name>]\n" +
-  "                    [--transcript <file> --format claude-code|opencode] [--json] [--dir <path>]\n" +
+  "                    [--transcript <file> --format <format>] [--json] [--dir <path>]\n" +
+  `                    <format>: ${TRANSCRIPT_FORMATS.join(" | ")}\n` +
   "       gnomon check --install-hook claude-code\n" +
   "       gnomon check --hook session-start|stop   (reads Claude Code hook JSON on stdin)";
 

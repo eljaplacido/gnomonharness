@@ -52,8 +52,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1304 TypeScript tests (1067 core, 212 cli, 18
-> natives, 7 tui) and 60 Rust tests — **1364 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1322 TypeScript tests (1081 core, 216 cli, 18
+> natives, 7 tui) and 60 Rust tests — **1382 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1622,7 +1622,8 @@ chain = true
 | Attribution to a configuration | Every record carries the `surface_hash` that determined the behaviour |
 | Human-oversight evidence | Approval decisions record who decided. A non-interactive run writes `by: "flag:--yes"` or `"default:no-operator"` — never implying oversight that did not happen |
 | Data minimisation | `record = "metadata"` writes decisions and outcomes but **no prompt or response text** |
-| Redaction | Patterns scrubbed from any recorded text |
+| What was done | A shell call's `tool_call` record keeps the **whole command** in `target`, after `redact`, under either `record` setting: the command is the action, not prompt or response text. A file tool's `target` is its path |
+| Redaction | Patterns scrubbed from any recorded text, and from every recorded command |
 
 ```bash
 gnomon audit show      # trails
@@ -1738,8 +1739,24 @@ gnomon check --base "$SESSION_START_REV" --agent frontend-developer \
 | 2 | `surface` | the change edits `.gnomon/` — an agent may not edit its own rules |
 | 3 | `verify` | the `[verify]` command fails on head |
 | 4 | `must_fail_first` | a new or changed test still passes with every other file put back to base — it pins nothing (only when `test_must_fail_first = true` and the change touched a test) |
-| 5 | `bash_allow` | a shell command in the agent's transcript (`--transcript <file> --format claude-code\|opencode`) breaks the role's `bash_allow` / `bash_deny`. A command the harness itself refused is listed, not failed |
+| 5 | `bash_allow` | a shell command in the agent's transcript (`--transcript <file> --format claude-code\|opencode\|goose\|qwen-code\|mini-swe-agent`) breaks the role's `bash_allow` / `bash_deny`. A command the harness itself refused is listed, not failed |
 | 6 | `audit` | the verdict could not be appended to the hash-chained trail |
+
+**Which transcript**, per harness (the versions each reader was checked
+against, and how each marks a call it refused, are in the header of
+`packages/gnomon-core/src/transcripts.ts`):
+
+- `claude-code`: `~/.claude/projects/<project>/<session>.jsonl`; its subagents are read too.
+- `opencode`: `opencode export <session>`, or the stdout of `opencode run --format json`.
+- `goose`: the stdout of `goose run --output-format stream-json` (or `json`), or
+  `goose session export --format json`.
+- `qwen-code`: `~/.qwen/projects/<cwd>/chats/<session>.jsonl`, or the stdout of
+  `qwen -o stream-json`.
+- `mini-swe-agent`: the trajectory `mini -o <file>` writes.
+
+Check 5 judges a command by its spelling, exactly as the loop's own `bash_deny`
+does, not by what it did. A broad recursive-`rm` pattern therefore flags
+`rm -rf /tmp/scratch` as surely as `rm -rf var/`; narrow the pattern, not the check.
 
 The rules come from **`--base`, never from head**: a change that widens its own
 `write_allow` is reported by check 2 and still judged by the old list. The diff

@@ -1885,8 +1885,10 @@ Commands:
     [check.roles] in policy.toml maps --agent to one; never guessed. The
     verdict is appended to the hash-chained audit trail; --json carries
     the record's hash. Exit: 0 held, 2 a check failed, 10 no verdict.
-    --transcript <file> --format claude-code|opencode also puts every
-    shell command the agent ran to the role's bash_allow / bash_deny.
+    --transcript <file> --format <format> also puts every shell command
+    the agent ran to the role's bash_allow / bash_deny. <format> is the
+    harness that wrote the file: claude-code, opencode, goose, qwen-code
+    or mini-swe-agent.
     --install-hook claude-code prints the SessionStart + Stop hooks that
     run this on every Claude Code session (it edits nothing).
 

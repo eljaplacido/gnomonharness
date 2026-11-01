@@ -1961,6 +1961,8 @@ export interface TurnAudit {
   write(kind: AuditKind, fields: Record<string, unknown>): void;
   /** Undefined when the trail records metadata only — the redaction contract. */
   text(value: string | undefined): string | undefined;
+  /** A shell command, whole and redacted, under either `record` setting. */
+  action(value: string): string;
 }
 
 /**
@@ -4134,8 +4136,12 @@ export async function runAgenticTurn(
       deps.audit?.write("tool_call", {
         role,
         tool: call.name,
-        // The target is metadata; the content it carries is not.
-        target: describeCall(call),
+        // The target is metadata; the content it carries is not. For bash the
+        // target IS the action, so it is the whole command (redacted), not
+        // the 70-character line the terminal prints (AuditTrail.action).
+        target: call.name === "bash" && typeof call.args.command === "string"
+          ? deps.audit.action(call.args.command)
+          : describeCall(call),
         gated,
         code: outcome.code,
         bucket: mapBucket(outcome.code),
@@ -4292,7 +4298,12 @@ export async function runAgenticTurn(
   }
 }
 
-/** A short, readable form of a tool call for the transcript. */
+/**
+ * A short, readable form of a tool call, for the terminal and the compaction
+ * summary. Not for the audit trail: a command cut at 70 characters, with its
+ * whitespace folded, is not a record of what ran (the tool_call record keeps
+ * the whole command — AuditTrail.action).
+ */
 function describeCall(call: ToolCall): string {
   const a = call.args;
   if (typeof a.path === "string") return String(a.path);
@@ -4781,6 +4792,7 @@ export async function runTask(
       audit.write(kind, fields);
     },
     text: (value) => audit.text(value),
+    action: (value) => audit.action(value),
   };
   const surface_hash = recomputeManifest(config.gnomonDir).surface_hash;
 

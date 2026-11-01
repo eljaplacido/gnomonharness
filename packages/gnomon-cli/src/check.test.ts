@@ -255,3 +255,82 @@ describe("gnomon check — the Claude Code hook", () => {
     expect(fragment.hooks.Stop![0]!.hooks[0]!.timeout).toBeGreaterThan(60);
   });
 });
+
+describe("gnomon check — --format selects the harness's reader", () => {
+  // G1's misses: ignored state destroyed by a command, with no diff at all.
+  // Only the transcript can show it, so every format has to reach check 5.
+  let repo: string;
+  beforeAll(() => {
+    repo = mkdtempSync(join(tmpdir(), "gnomon-check-formats-"));
+    mkdirSync(join(repo, ".gnomon"));
+    writeFileSync(
+      join(repo, ".gnomon/roles.toml"),
+      `[roles.implement]\nmodel = "m"\nwrite_allow = ["src/**"]\nbash_deny = ['\\bgit\\s+clean\\b[^|;&]*\\s-[A-Za-z]*[fxX]']\n`
+    );
+    writeFileSync(join(repo, ".gnomon/policy.toml"), `[verify]\ncommand = "true"\n`);
+    for (const args of [["init", "-q"], ["config", "user.email", "t@example.invalid"], ["config", "user.name", "t"], ["add", "-A"], ["commit", "-q", "-m", "base"]]) {
+      execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+    }
+  });
+  afterAll(() => rmSync(repo, { recursive: true, force: true }));
+
+  const ran = "git clean -fdx";
+  const transcripts: Record<string, [string, string]> = {
+    goose: [
+      "goose.jsonl",
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: [{ type: "toolRequest", id: "c1", toolCall: { status: "success", value: { name: "shell", arguments: { command: ran } } } }] },
+      }) + "\n",
+    ],
+    "qwen-code": [
+      "chat.jsonl",
+      JSON.stringify({
+        sessionId: "s",
+        type: "assistant",
+        message: { role: "model", parts: [{ functionCall: { id: "c1", name: "run_shell_command", args: { command: ran } } }] },
+      }) + "\n",
+    ],
+    "mini-swe-agent": [
+      "traj.json",
+      JSON.stringify({
+        messages: [{ role: "assistant", content: null, extra: { actions: [{ command: ran, tool_call_id: "c1" }] } }],
+        trajectory_format: "mini-swe-agent-1.1",
+      }),
+    ],
+  };
+
+  for (const [format, [name, body]] of Object.entries(transcripts)) {
+    it(`--format ${format}: a destructive command with no diff fails check 5`, async () => {
+      const path = join(repo, "..", `${basename(repo)}-${name}`);
+      writeFileSync(path, body);
+      const lines: string[] = [];
+      const code = await cmdCheck(
+        { dir: repo, role: "implement", json: true, flags: { base: "HEAD", transcript: path, format } },
+        (s) => lines.push(s)
+      );
+      rmSync(path);
+      const v = JSON.parse(lines.join("\n")) as CheckVerdict;
+      expect(code).toBe(2);
+      expect(v.checks.find((c) => c.id === "bash_allow")).toMatchObject({ status: "fail", findings: [{ command: ran, rule: "bash_deny" }] });
+    });
+  }
+
+  it("an unknown --format names every reader", async () => {
+    // A change inside write_allow, so the path checks run and check 5 reports.
+    mkdirSync(join(repo, "src"), { recursive: true });
+    writeFileSync(join(repo, "src/a.txt"), "1\n");
+    const lines: string[] = [];
+    const code = await cmdCheck(
+      { dir: repo, role: "implement", json: true, flags: { base: "HEAD", transcript: "x", format: "aider" } },
+      (s) => lines.push(s)
+    );
+    rmSync(join(repo, "src"), { recursive: true, force: true });
+    const v = JSON.parse(lines.join("\n")) as CheckVerdict;
+    expect(code).toBe(10);
+    expect(v.checks.find((c) => c.id === "bash_allow")).toMatchObject({
+      status: "error",
+      reason: expect.stringMatching(/claude-code\|opencode\|goose\|qwen-code\|mini-swe-agent \(got "aider"\)/),
+    });
+  });
+});
