@@ -101,3 +101,16 @@ showed that an absolute-form target would otherwise have received the injected
 Go key, and an `http:` target crashed the relay. Cells are unaffected: harnesses
 send origin-form targets. Probe cells ran without the guard; nothing in their
 traffic reached another host (each cell's requests all returned Go usage).
+
+## The oracle check, 2026-11-01 06:44–07:11Z, before any arm
+
+Harbor's `oracle` agent (the reference solution, no model) ran each of the 30
+selected tasks once on the hub.
+- **29 scored 1.**
+- **`nextjs-performance` scored 0.** Its own reference solution fails, so it is
+  broken and was replaced by the next task in hash order,
+  `freecad-platform-drawing`. That task's oracle scored 1 (295 s).
+- The final 30 are in `apparatus/tasks-p2.json`; the oracle records are in
+  `runs-p2/oracle-*` on the hub.
+- Docker Desktop had not started after the hub's reboot. It was started in the
+  user's session through a one-off scheduled task, which was removed afterwards.
