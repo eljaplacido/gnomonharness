@@ -1,6 +1,6 @@
 # Pre-registration — P2G: P2 on the gx10 (aarch64)
 
-**Status: FINAL as of 2026-11-01T21:20Z** (see the last line). Written after
+**Status: FINAL as of 2026-11-01T21:16:00Z, commit c9a40e72** (see the last line). Written after
 the oracle check and the probe and before any measured cell.
 
 ## Why this run exists
@@ -151,5 +151,12 @@ and run on arm64 and be metered.
 5. **Build timeout:** ×4. Builds sit outside the agent's cap.
 6. **The run's ETA,** derived from the probe and P2's hub pace (about 40 slot-minutes per cell): one attempt of 261 cells at 3 slots is roughly 36–58 hours. Three attempts take several days. The run is not shortened to fit; the floor/ceiling and budget gates after attempt 1 apply as pre-registered.
 
-**Final:** this file is the P2G pre-registration as of 2026-11-01T21:20Z, before
+**Final:** this file is the P2G pre-registration as of commit `c9a40e72` (2026-11-01T21:16:00Z), before
 any measured `g2-k*` cell. Changes after this point are timestamped amendments.
+
+## Amendment, 2026-11-01T21:17Z: timestamp correction only
+
+The "final" lines above first read 21:20Z, an estimate written before the
+commit. The pre-registration was committed as `c9a40e72` at 21:16:00Z, and
+attempt 1 started at 21:16:09Z, so the file was final before the first measured
+cell. Only the timestamp text changed.
