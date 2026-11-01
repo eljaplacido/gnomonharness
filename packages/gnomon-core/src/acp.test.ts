@@ -13,8 +13,8 @@ import { describe, it, expect } from "vitest";
 import { PassThrough } from "node:stream";
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, dirname, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   ACP_PROTOCOL_VERSION,
   JsonRpcPeer,
@@ -155,13 +155,16 @@ describe("tool calls", () => {
 
 describe("prompt content", () => {
   it("joins text and names attached files", () => {
+    // Absolute on this platform: an editor on Windows sends file:///C:/…, and a
+    // drive-less file:///tmp/… is not a path there.
+    const a = resolve("/tmp/a.ts"), b = resolve("/tmp/b.ts");
     const { text, skipped } = promptText([
       { type: "text", text: "explain" },
-      { type: "resource_link", uri: "file:///tmp/a.ts", name: "a.ts" },
-      { type: "resource", resource: { uri: "file:///tmp/b.ts", text: "const b = 1;" } },
+      { type: "resource_link", uri: pathToFileURL(a).href, name: "a.ts" },
+      { type: "resource", resource: { uri: pathToFileURL(b).href, text: "const b = 1;" } },
       { type: "image", data: "", mimeType: "image/png" },
     ]);
-    expect(text).toBe('explain @/tmp/a.ts\n<file path="/tmp/b.ts">\nconst b = 1;\n</file>');
+    expect(text).toBe(`explain @${a}\n<file path="${b}">\nconst b = 1;\n</file>`);
     expect(skipped).toEqual(["image"]);
   });
 

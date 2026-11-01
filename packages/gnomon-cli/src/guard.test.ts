@@ -24,6 +24,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { GUARD_DECISIONS, GUARD_RULES, GUARD_SCHEMA, GUARD_TOOLS, guardExit, type GuardVerdict } from "gnomon-core/guard";
 import { claudeCodeHooks, cmdGuard, cursorHooks, opencodePlugin, CLAUDE_CODE_MATCHER } from "./guard.js";
 
+const LIVE = process.env.GNOMON_LIVE_ADAPTERS === "1";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(here, "../../..");
 const LAUNCHER = join(ROOT, "gnomon");
@@ -244,7 +246,10 @@ describe("gnomon guard — Cursor", () => {
     }
   });
 
-  it.skipIf(!existsSync(CURSOR_EXEC))("the installed Cursor knows these events and permission values", () => {
+  // Checks against a locally installed harness are opt-in (GNOMON_LIVE_ADAPTERS=1):
+  // run by default they made the passed-test count depend on the machine, and
+  // ci.sh holds README's count to it.
+  it.skipIf(!LIVE || !existsSync(CURSOR_EXEC))("the installed Cursor knows these events and permission values", () => {
     const src = readFileSync(CURSOR_EXEC, "utf-8");
     for (const e of Object.keys(cursorHooks().hooks)) expect(src).toContain(`${e}:"${e}"`);
     expect(src).toContain('const n=["allow","deny","ask"];n.includes(e.permission)');
@@ -304,7 +309,7 @@ describe("gnomon guard — opencode V2 plugin", () => {
 
   // The real binary, a scripted model, and the plugin as installed. Slow (a
   // standalone opencode server per run), and only where 2.2.5 is installed.
-  it.skipIf(!existsSync(OPENCODE))(
+  it.skipIf(!LIVE || !existsSync(OPENCODE))(
     "end to end in opencode 2.2.5: a denied shell call never runs, and the model reads gnomon's reason",
     async () => {
       const r = governedRepo("never", `\n[check.roles]\nopencode = "implement"\n`);
