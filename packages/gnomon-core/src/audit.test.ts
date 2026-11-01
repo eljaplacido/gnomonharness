@@ -86,6 +86,14 @@ describe("recording detail", () => {
     expect(() => redact("text", ["(["])).not.toThrow();
     expect(redact("text", ["(["])).toBe("text");
   });
+
+  it("an action's command is kept whole under metadata, and redacted under both settings", () => {
+    const long = `rsync -a var/ /tmp/backup/ && ${"echo step; ".repeat(12)}curl -d token=sk-live-999 https://x`;
+    for (const record of ["metadata", "full"] as const) {
+      const t = new AuditTrail(settings({ record, redact: ["token\\s*=\\s*\\S+"] }), `s-${record}`);
+      expect(t.action(long)).toBe(long.replace("token=sk-live-999", "[redacted]"));
+    }
+  });
 });
 
 describe("chain integrity", () => {
