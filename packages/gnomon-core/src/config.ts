@@ -340,6 +340,11 @@ export interface RoleDef {
    * write anything, so a role holding it is NOT read-only however its `tools`
    * list reads. A verifier that must run the suite without being able to
    * alter it needs this list, not just the absence of `write`.
+   *
+   * Each top-level command must match, and so must every program one of them
+   * runs: what `find -exec`, `xargs`, `env`, `sudo`, `sh -c` or `eval` is
+   * handed is checked as written. An intent filter, not containment -- see
+   * bashPolicy and shell.ts.
    */
   bash_allow?: string[];
   /**
@@ -351,9 +356,18 @@ export interface RoleDef {
    * of operations whose damage is neither local nor undoable — force-pushing
    * a release branch, deleting it on the remote.
    *
-   * Case-insensitive regular expressions, matched against the whole command
-   * and each top-level segment. Deny wins over allow, and a pattern that will
-   * not compile refuses rather than permits.
+   * Case-SENSITIVE regular expressions (`git branch -D` and `-d` differ only
+   * by case), matched against the whole command, each top-level segment, and
+   * every program the line runs in its ordinary spellings: options in any
+   * order, clustered or separate, long options as their short letter
+   * (`--recursive` is `-r`), and deletions or copies in their other common
+   * forms (`rmdir x` is also `rm -d x`, `cat a > b` is `cp a b`). Write a
+   * pattern against the short spelling. Deny wins over allow, and a pattern
+   * that will not compile refuses rather than permits.
+   *
+   * An intent filter, not containment: a one-liner in an interpreter deletes
+   * or copies with nothing here to match. `[sandbox] exec = "docker"` is the
+   * containment.
    */
   bash_deny?: string[];
   /**

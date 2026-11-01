@@ -52,8 +52,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1304 TypeScript tests (1067 core, 212 cli, 18
-> natives, 7 tui) and 60 Rust tests — **1364 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1345 TypeScript tests (1108 core, 212 cli, 18
+> natives, 7 tui) and 60 Rust tests — **1405 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1062,7 +1062,8 @@ gate = "on_write"                  # never | on_write | always
 
 [sandbox]
 level = "confined"                 # off | confined | strict
-network = false                    # enforced for `webfetch`; NOT process isolation — see Known Limits
+network = false                    # refuses `webfetch`, and curl/wget/ssh… in bash; NOT process isolation — see Known Limits
+# exec = "docker"                  # containment: bash in a container with only the repo (and no network)
 
 [verify]                           # a declared check run after a turn changes files
 command = ".gnomon/verify.sh"      # non-recursive; empty/absent = off
@@ -1282,9 +1283,54 @@ a mistake worth making once. Three details that are decisions, not accidents:
   turned a guardrail on the destructive form into a block on the safe one.
 - **Matched against the whole command and each top-level segment**, so
   `git status && git push --force` is caught.
+- **Matched against the command the shell will run, not only its text.** Until
+  #63 a pattern saw text, and text is spelled many ways: with `rm\s+-rf` and
+  `rm\s+.*-r\b` denied, `rm -fr keep`, `rm -R keep` and
+  `rm --recursive --force keep` all deleted the directory (measured model-free
+  in [CORRECTION.md](benchmarks/results/containment-2026-08-31/CORRECTION.md)
+  and again on v0.3.1 by G2b). Now each command is parsed — quotes, `;` `&&`
+  `||` `|`, `$( )`, backticks, here-documents — and every program it runs is
+  offered to the pattern in its ordinary spellings as well as the written one:
+  - options in any order, clustered or separate, long options read as their
+    short letter (`--recursive` is `-r`, `--force` is `-f`), and `-R` read as
+    `-r` for `rm` and `cp`;
+  - the program by name (`/bin/rm`, `"rm"` and `r\m` are `rm`), with `env`,
+    `sudo`, `nice`, `timeout`, `nohup`, `command`, `exec` and `xargs` stripped
+    off the front;
+  - what `sh -c '…'`, `bash <<EOF`, `eval`, `echo … | sh`, `find -exec` and
+    `xargs` run, as commands of their own (`find`'s `{}` is filled in from its
+    start points and `-name`);
+  - deletions and copies in their other common forms: `rmdir x`, `unlink x`,
+    `mv x y` and `find x -delete` are deletions of `x`, read as `rm -d x`,
+    `rm x` and `rm -r -f x`; `cat a > b`, `tee b < a`, `cat a | tee b`,
+    `dd if=a of=b`, `install a b`, `ln a b` and `mv a b` are read as `cp a b`.
+
+  The raw text is still tested first, so everything a pattern refused before
+  it still refuses. Write patterns against the **short** spelling (`rm -r`,
+  not `rm --recursive` or `rm -R`): gnomon maps the long forms onto it, never
+  the reverse — the scaffold's own rule denies `git branch --delete` and
+  allows the safe `-d`, which are the same option. A refusal says how the
+  command was read (`"rm -fr keep", read as "rm -rf keep"`).
+- **A rule protects what it names.** `rm\s+-rf` is a rule about recursive
+  deletion, so deleting `keep/important.txt` and then running `rm -d keep` —
+  the route a model took in G2b after `rm -rf` was refused — passes it: no
+  step is recursive, and one call at a time cannot see that two permitted
+  calls compose into the end state a third was refused for. To protect a
+  directory, name it — `'\brm\s.*\bkeep\b'` — and every deletion spelling above
+  of `keep` or anything under it is refused. To protect a secret,
+  `'\bcp\b[^|;&]*secret\.txt'` refuses every copy spelling above.
 - **A pattern that will not compile refuses** rather than permits — the
   opposite of `bash_allow`. Refusing a safe command costs an error message;
   running an unsafe one costs a branch.
+
+**An intent filter, not containment.** This stops a model that asks for a
+denied operation in another common spelling. It cannot stop code:
+`python -c 'import shutil; shutil.rmtree("keep")'` deletes the directory with no
+`rm` in it to match, a script file's contents are not in the command line, globs
+and variables are matched as written rather than expanded, and `head`, `sed`,
+`base64` or `tar` copy a file as well as `cp` does. No list of commands is the
+set of programs that can delete or copy a file. The containment answer is
+[`exec = "docker"`](#exec--where-bash-actually-runs).
 
 It binds this agent and nothing else. **Branch protection on the remote is the
 control that binds everyone**, and this does not replace it.
@@ -1335,7 +1381,8 @@ or a write past the boundary.
 neighbouring repository was refused and `cat` of the same file through `bash`
 succeeded in the same turn. That is deliberate — `implement` must run builds and
 installers nobody can enumerate ahead of time — but it means a role holding
-`bash` is confined by its deny-list, not by this setting. See the next section.
+`bash` is bounded by its deny-list, which is an intent filter, not by this
+setting. Containment of `bash` is [`exec = "docker"`](#exec--where-bash-actually-runs).
 
 ### `task_allow` — why `tools` alone is not enough either
 
@@ -1392,6 +1439,14 @@ root, and the container gets no network unless `[sandbox] network` is true.
 Settable per role, so one role can run its calculations isolated while the rest
 of the harness runs on the host. `off` is the default and changes nothing.
 
+**This is the containment answer**, and `bash_deny`, `bash_allow` and
+`network = false` on the host are not: they read a command's words, and code
+does not have to say what it does. In the container, a `python -c` that
+deletes or copies reaches only the mounted repository, and with
+`network = false` nothing reaches the network, whatever it is spelled as.
+Not yet measured against G2b's scenarios (#63 option 2); until it is, this
+says what the mechanism is, not that it held.
+
 **Two limits, published because both fail open.** `docker` is the only value
 that does anything: the resolver is `raw === "docker" ? "docker" : "off"`, so
 `bwrap`, `podman` or a typo runs **on the host**. Measured 2026-09-02 on a
@@ -1419,6 +1474,16 @@ bash_allow = ['^(cargo (test|clippy)|pnpm (run )?test(:[\w-]+)?|pytest|go test|m
 A command matching none of these is refused by name. Absent the list, any
 command runs — which is the honest default, and the reason the shipped
 `verifier` has one.
+
+**Every program a command runs must be on the list too.** An allow-list of
+program names used to admit whatever a listed program was handed: in G2b a
+role allowed `^(ls|cat|grep|rg|find)\s` copied a secret with
+`find . -name secret.txt -exec cp {} secret_backup.txt \;`. What `find -exec`,
+`xargs`, `env`, `sudo`, `nice`, `timeout`, `sh -c`, `eval` or `echo … | sh`
+runs is now checked against the list as written (`/tmp/x/grep` is not `grep`),
+so that line is refused for `cp` while `find . -exec grep -l x {} +` still
+runs. Like `bash_deny`, it is an intent filter: an allowed interpreter or
+script runs whatever its code says.
 
 ### `write_allow` — because withholding `edit` only stops half of it
 
@@ -2078,12 +2143,32 @@ results and their caveats are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and th
   **56.6%** without it, a −7.9pp difference exactly equal to the within-arm
   spread (McNemar exact p = 0.375). No effect is demonstrated in either
   direction; what is demonstrated is that declaring one did not help.
-- **`network = false` is enforced for `webfetch`, and is not process
-  isolation.** The one tool gnomon controls the network reach of refuses
-  outright when the surface sets it. `bash` is a different matter: `curl`, a
-  package manager or anything else installed still reaches the network, and no
-  allow-list over shell text can honestly claim otherwise. Constrain that with
-  `bash_allow` where it matters. The loop says exactly this at startup.
+- **`network = false` is enforced for `webfetch`, filtered in `bash`, and is
+  not process isolation.** The one tool gnomon controls the network reach of
+  refuses outright when the surface sets it. In `bash` it refuses the commands
+  whose purpose is the network — `curl`, `wget`, `nc`, `ssh`, `scp`/`rsync` to a
+  remote, `/dev/tcp`, and `python -c` / `node -e` / `perl -e` / `ruby -e`
+  one-liners whose code opens a connection — followed through `sh -c`, `$( )`
+  and wrappers like the deny-list. `curl --version` and `--help` are allowed,
+  and only when those are all of its arguments: they connect to nothing, and
+  refusing a capability probe would teach the model that `which curl` gets past
+  a rule `curl --version` did not. That is an intent filter over the command's
+  words: a package manager, `git fetch`, a build tool or a script still reaches
+  the network through `bash`, and they are deliberately not refused by name —
+  that would make the default surface unusable while still not being
+  isolation. **This is a behaviour change for any surface that sets
+  `network = false`, the scaffold's default**: an agent that used `curl` there
+  is now refused, and `/network on` or `network = true` grants it.
+  `exec = "docker"` runs `bash` with `--network none`, which is isolation. The
+  loop says this at startup.
+- **`bash_deny` / `bash_allow` are an intent filter, not containment.** They
+  read each command the way the shell will — `rm -fr` is `rm -rf`, and what
+  `find -exec`, `xargs` or `sh -c` runs is checked — but no list of commands can
+  stop code: `python -c 'shutil.rmtree(…)'` deletes a directory with no `rm` to
+  match. One call is judged at a time, so a rule against recursive deletion
+  does not stop deleting the files and then the empty directory; a rule that
+  names the directory does. Containment is `exec = "docker"`. See
+  [Guardrails on what cannot be undone](#guardrails-on-what-cannot-be-undone--bash_deny).
 - **Windows needs a POSIX shell, and gnomon will tell you if it cannot find one.**
   Supported and tested as of 2026-09-05: `windows-latest` runs the full
   TypeScript suite in CI — the same four packages Linux runs, minus 3 skips
@@ -2132,7 +2217,7 @@ results and their caveats are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and th
 
 | Route | Works | Notes |
 |---|---|---|
-| `bash` | **Yes** | The escape hatch. `pdftotext`, `curl`, `rg` — anything installed. Constrain per role with `bash_allow`. |
+| `bash` | **Yes** | The escape hatch. `pdftotext`, `curl`, `rg` — anything installed. Filter per role with `bash_allow` / `bash_deny` (intent filters); contain with `exec = "docker"`. |
 | Skills | **Yes** | Teach *how* to use what exists. Adds knowledge, never capability. |
 | New built-in tool | No | Requires implementing it. |
 | MCP servers | **Yes**, stdio | A pinned stdio server's tools are discovered at startup and offered as `mcp__<server>__<tool>`, gated per role. HTTP/SSE transports are not wired; pin the version — see [Known Limits](#known-limits). |

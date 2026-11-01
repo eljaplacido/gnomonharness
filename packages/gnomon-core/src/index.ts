@@ -26,6 +26,9 @@ export * from "./prompt_loop.js";
 export * from "./degradation.js";
 export * from "./render.js";
 export * from "./tools.js";
+// How bash_deny, bash_allow and network = false read a shell command: as the
+// shell will run it, not as text. An intent filter, not containment.
+export * from "./shell.js";
 // The test-must-fail-first re-run, shared by the turn loop and `gnomon check`.
 export * from "./must_fail_first.js";
 // `gnomon check`: the same rules, asked of a change another harness made.

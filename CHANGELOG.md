@@ -26,6 +26,54 @@
 
 ## [Unreleased]
 
+- **`bash_deny` and `bash_allow` read the command the shell runs, not its text
+  (#63).** On v0.3.1, with `rm\s+-rf` and `rm\s+.*-r\b` denied, `rm -fr keep`,
+  `rm -R keep` and `rm --recursive --force keep` deleted the directory. A role
+  allowed `^(ls|cat|grep|rg|find)\s` copied a secret with
+  `find . -name secret.txt -exec cp {} secret_backup.txt \;`. CORRECTION.md
+  found these in August, and G2b found them again on v0.3.1, model-free and
+  with a model.
+  - A small purpose-built parser (`shell.ts`, no dependency) splits each
+    command the way `/bin/sh` does. It handles quotes, `;` `&&` `||` `|`,
+    `$( )`, backticks, here-documents and comments. It follows `sh -c`, `eval`,
+    `echo … | sh`, `find -exec`, `xargs`, and wrappers such as
+    `env`/`sudo`/`nice`/`timeout` into the command they run.
+  - `bash_deny` is offered each program in its ordinary spellings as well as
+    the raw text. Options may come in any order, clustered or separate, and a
+    long option is read as its short letter (`--recursive` is `-r`). `-R` is
+    read as `-r` for `rm`/`cp`.
+  - Deletions and copies are also read in their common equivalent forms:
+    `rmdir`, `unlink`, `mv`, `find -delete`, `cat a > b`, `tee`, `dd`,
+    `install`, `ln`.
+  - The raw text is still tested first, so every command a pattern refused
+    before is still refused.
+  - `bash_allow` now also requires every program a listed command runs to be
+    on the list. This only adds a requirement.
+  - A command nested deeper than the reader follows is refused when the role
+    has a list.
+  - Measured on the scaffold's own roles: 0 of 60 everyday commands changed
+    decision. The scaffold's git rules now also catch
+    `git -C . push --force`, `git push -fu` and `git branch -df`.
+- **`network = false` also refuses obvious network egress through `bash`
+  (#63).** This covers `curl`, `wget`, `nc`, `ssh`, `scp`/`rsync` to a remote,
+  `/dev/tcp`, and `python`/`node`/`perl`/`ruby` one-liners whose code opens a
+  connection. `curl --version`/`--help` alone is allowed. **This is a
+  behaviour change for every surface that sets `network = false`, which
+  includes the scaffold default.** Use `/network on` or `network = true` to
+  grant it. Package managers, `git fetch` and scripts are deliberately not
+  refused.
+- **Documented as what it is: an intent filter, not containment.** This is in
+  the README, the `policy.toml` comments `init` writes, `gnomon explain
+  sandbox`, `/network` and the startup note. `python -c 'shutil.rmtree(…)'`
+  has no `rm` to match. Containment is `[sandbox] exec = "docker"`, which is
+  not yet measured against G2b (#63 option 2). A rule against recursive
+  deletion does not stop deleting the files and then `rm -d` on the directory,
+  because one call is judged at a time. A rule that names the directory does,
+  and the README says how to write one. The refusal now tells the model that
+  respelling a denied operation is not a route.
+- The `RoleDef.bash_deny` doc comment said patterns were case-insensitive. They
+  have always been case-sensitive, and the comment now says so.
+
 - **`[shadow]`: a log-only decision-model shadow.** When a surface declares it,
   a typed decision model (`/v1/systemone`: state plus typed questions in,
   probabilities out) is asked three things, each logged beside what gnomon

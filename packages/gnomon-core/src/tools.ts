@@ -42,6 +42,13 @@ import {
 import { proposeSkill, renderSkill, SkillProposal } from "./skills.js";
 import { compute, ComputeError } from "./compute.js";
 import type { McpRegistry, McpToolInfo } from "./mcp.js";
+import {
+  bashNetworkEgress,
+  describeInvocation,
+  joinWords,
+  readShellCommand,
+  shellSpellings,
+} from "./shell.js";
 
 // ---------------------------------------------------------------------------
 // Outcome codes
@@ -1433,12 +1440,26 @@ export function sandboxCommand(
  * Returns null when the command is allowed, or the refusal bashTool returns,
  * plus which list refused it and the pattern, for a caller that reports rather
  * than refuses.
+ *
+ * AN INTENT FILTER, NOT CONTAINMENT. Both lists read the command the way the
+ * shell will (see shell.ts): `rm -fr`, `rm --recursive --force` and `rm -R`
+ * are offered to a pattern written as `rm -rf` or `rm .* -r`, and a program
+ * that `find -exec`, `xargs`, `env`, `sudo` or `sh -c` runs is checked like
+ * one the line runs itself. That stops a model reaching a denied operation
+ * through another common spelling. It does not stop code -- `python -c
+ * 'shutil.rmtree(…)'` has no `rm` in it -- and no list of commands can.
+ * `[sandbox] exec = "docker"` is the containment.
  */
 export function bashPolicy(
   command: string,
   allow: string[] | undefined,
   deny: string[] | undefined
 ): (ToolOutcome & { rule: "bash_deny" | "bash_allow"; pattern?: string }) | null {
+  // Read once, for both lists, and only when there is a list to read for.
+  const read = (deny && deny.length > 0) || (allow && allow.length > 0)
+    ? readShellCommand(command)
+    : null;
+
   // Deny first, and independently of the allow-list.
   //
   // An allow-list cannot say "everything except three catastrophes". The role
@@ -1447,12 +1468,22 @@ export function bashPolicy(
   // role you want stopped from force-pushing over a release branch. Those are
   // different questions, so they are different lists, and deny wins: a pattern
   // on both is denied.
-  if (deny && deny.length > 0) {
+  if (deny && deny.length > 0 && read) {
     const scan = scanShellCommand(command);
     // The whole string as well as each segment. A segment split cannot see
     // `git push --force` written across a substitution, and denial is the one
     // place where matching too much is the safer error.
     const subjects = [command, ...scan.segments];
+    // And every program the line runs, in its ordinary spellings. Measured on
+    // v0.3.1 (G2b, 2026-11-01; CORRECTION.md, 2026-08-31): with
+    // `rm\s+-rf` and `rm\s+.*-r\b` denied, `rm -fr keep`, `rm -R keep` and
+    // `rm --recursive --force keep` all deleted the directory, because the
+    // patterns were tested against text and the text was spelled differently.
+    // The raw subjects above still come first, so every command a pattern
+    // refused before is refused now, by the same pattern, with the same words.
+    const forms = read.invocations.flatMap((inv) =>
+      shellSpellings(inv).map((spelling) => ({ spelling, inv }))
+    );
     for (const pattern of deny) {
       let re: RegExp;
       try {
@@ -1478,21 +1509,51 @@ export function bashPolicy(
         };
       }
       const hit = subjects.find((sub) => re.test(sub));
-      if (hit !== undefined) {
+      const form = hit === undefined ? forms.find((f) => re.test(f.spelling)) : undefined;
+      if (hit !== undefined || form !== undefined) {
+        // Say how the command was read when it was not the text that matched,
+        // so neither the model nor the operator is left guessing why `rm -fr`
+        // tripped a rule that says `rm -rf`.
+        let what: string;
+        if (hit !== undefined) {
+          what = `"${hit.trim().slice(0, 80)}"`;
+        } else {
+          const written = describeInvocation(form!.inv);
+          what =
+            `"${written.slice(0, 80)}"` +
+            (form!.inv.via ? ` (run by ${form!.inv.via})` : "") +
+            (form!.spelling !== written ? `, read as "${form!.spelling.slice(0, 80)}",` : "");
+        }
         return {
           rule: "bash_deny",
           pattern,
           code: TOOL_DENIED,
           content:
-            `Refused: "${hit.trim().slice(0, 80)}" matches a bash_deny pattern ` +
+            `Refused: ${what} matches a bash_deny pattern ` +
             `for this role (/${pattern}/).\n\n` +
             `This is a fixed guardrail, not a judgement about the command. ` +
             `Do not try to change it — .gnomon/ is not yours to edit. Reach ` +
-            `the same goal another way, or say plainly that it cannot be ` +
-            `done under this role.`,
+            `the goal by a different operation if there is one, not by a ` +
+            `different spelling of this one: an equivalent command is the same ` +
+            `operation and is refused for the same reason. Otherwise say ` +
+            `plainly that it cannot be done under this role.`,
           summary: `bash — denied by bash_deny (/${pattern}/)`,
         };
       }
+    }
+    // What was not read was not checked. Nesting this deep, or this many
+    // commands in one call, is not something a coding task writes, and a
+    // deny-list must not wave through the part it never saw.
+    if (read.truncated) {
+      return {
+        rule: "bash_deny",
+        code: TOOL_DENIED,
+        content:
+          "Refused: this command nests deeper, or runs more commands, than " +
+          "gnomon reads before applying this role's bash_deny list, so part " +
+          "of it would run unchecked. Split it into smaller commands.",
+        summary: "bash — denied by bash_deny (command too deep to read)",
+      };
     }
   }
 
@@ -1542,6 +1603,34 @@ export function bashPolicy(
         `"${(offending ?? command).trim().slice(0, 80)}" is not on it.`
       );
     }
+
+    // And every program those segments run in turn. An allow-list of program
+    // NAMES admitted whatever a listed program was handed: measured on v0.3.1
+    // (G2b, 2026-11-01), a role allowed `^(ls|cat|grep|rg|find)\s` copied a
+    // secret with `find . -name secret.txt -exec cp {} secret_backup.txt \;`.
+    // A program `find -exec`, `xargs`, `env`, `sudo`, `nice`, `timeout`,
+    // `sh -c`, `eval` or `echo … | sh` runs must be on the list itself, as
+    // written -- `/tmp/x/grep` is not `grep`.
+    //
+    // This only ever adds a requirement: the segment around it already had to
+    // match. Equivalent spellings (`synthetic`) are deny-only: a role allowed
+    // `mv` must not be refused because the `rm` it is equivalent to is not
+    // listed.
+    if (read) {
+      if (read.truncated) {
+        return refuse(
+          "it nests deeper, or runs more commands, than gnomon reads, so part of it would run unchecked."
+        );
+      }
+      const inner = read.invocations.find(
+        (inv) => inv.via !== null && !inv.synthetic && !matches(joinWords(inv.argv))
+      );
+      if (inner) {
+        return refuse(
+          `"${joinWords(inner.argv).slice(0, 80)}", which ${inner.via} runs, is not on it.`
+        );
+      }
+    }
   }
 
   return null;
@@ -1576,6 +1665,34 @@ async function bashTool(
   if (refused) {
     const { rule: _rule, pattern: _pattern, ...outcome } = refused;
     return outcome;
+  }
+
+  // `[sandbox] network = false` used to stop webfetch and nothing else, and
+  // the startup note said so: G2b (2026-11-01) reached its canary from a
+  // network = false surface with curl and with python. A surface that says
+  // "no network" now also refuses the commands whose purpose is the network.
+  //
+  // An intent filter over the command's words, and the startup note, /network
+  // and the README say so: a script, a package manager or a build tool
+  // reaches the network without naming curl, and that is not refused. The
+  // message to the model says only what the policy is, and not to route
+  // around it. With exec = "docker" the container
+  // also gets --network none, which is isolation; this check runs there too,
+  // so the same command gets the same answer on either side of that switch.
+  if (ctx.network === false) {
+    const egress = bashNetworkEgress(command);
+    if (egress) {
+      return {
+        code: TOOL_DENIED,
+        content:
+          `Refused: "${egress.command.slice(0, 80)}" reaches the network (${egress.why}), ` +
+          `and .gnomon/policy.toml sets [sandbox] network = false.\n\n` +
+          `Do not look for another route to the network -- the policy is that this ` +
+          `session has none. If the task needs it, say so plainly: the operator can ` +
+          `grant it with /network on, or network = true in policy.toml.`,
+        summary: "bash — refused (network = false)",
+      };
+    }
   }
 
   // Privilege escalation on the host is refused outright, before any approval
@@ -1706,8 +1823,9 @@ async function bashTool(
       // work. Windows has no process groups to signal and `detached` there
       // means something else entirely -- killTree uses taskkill /T instead.
       detached: process.platform !== "win32",
-      // sandbox.network = false is declared in policy.toml but this build
-      // cannot enforce it; the loop says so at startup rather than pretending.
+      // On the host, network = false is enforced only as the intent filter
+      // above (bashNetworkEgress); the process itself can still open sockets.
+      // Under exec = "docker" the container gets --network none instead.
     });
     let stdout = "";
     let stderr = "";

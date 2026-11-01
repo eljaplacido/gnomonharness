@@ -5166,10 +5166,16 @@ export const LIVE_SAFE_COMMANDS = new Set([
 
 /**
  * The startup note for `network = false`: what it stops, and what it does not.
- * Not process isolation -- bash is the hole, and bash_allow the remedy.
+ *
+ * It said "stops webfetch only" until #63, which was true: G2b reached its
+ * canary from a network = false surface with curl. bash now refuses the
+ * obvious clients too (bashNetworkEgress), and that is still an intent filter
+ * -- a script or a package manager reaches the network without naming curl --
+ * so the note keeps saying what it is not, and points at the setting that is
+ * isolation: [sandbox] exec = "docker", which runs bash with --network none.
  */
 export const NETWORK_OFF_NOTE =
-  "  note: network = false stops webfetch only — bash can still reach the network (see bash_allow)";
+  "  note: network = false refuses webfetch and curl/ssh in bash — a filter, not isolation (see exec)";
 
 /** The verbs that end the session. See processCommand. */
 const QUIT_COMMANDS = new Set(["/quit", "/exit", "/q"]);
@@ -6110,15 +6116,21 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       const current = state.network ?? declared ?? false;
       if (!wanted) {
         console.log(`\nNetwork: ${current ? "on" : "off"}${state.network !== undefined ? " (this session)" : " (from policy.toml)"}`);
-        console.log("  on  — webfetch may retrieve URLs.");
-        console.log("  off — webfetch refuses outright. (default)");
+        console.log("  on  — webfetch may retrieve URLs, and bash may run network clients.");
+        console.log(
+          "  off — webfetch refuses outright, and bash refuses curl, wget, nc, ssh and the"
+        );
+        console.log("        like, and one-liners that open a connection. (default)");
         console.log(
           "\n  A session grant: policy.toml is unchanged and the next session starts from it again."
         );
         console.log(
-          "  Not process isolation — a role holding `bash` can reach the network either way;"
+          "  Not process isolation — `off` is an intent filter over the command's words, and a"
         );
-        console.log("  constrain that with bash_allow if it matters.");
+        console.log(
+          "  script, build tool or package manager run through `bash` still reaches the network."
+        );
+        console.log('  [sandbox] exec = "docker" runs bash with no network at all.');
         return true;
       }
       if (wanted !== "on" && wanted !== "off") {
@@ -6134,12 +6146,12 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         // text: this is the moment the operator forms a belief about what they
         // just permitted.
         console.log(
-          "  Note: this governs the `webfetch` tool. It is NOT process isolation —"
+          "  Note: this lifts webfetch's refusal and bash's network-client filter. With"
         );
         console.log(
-          "  a role holding `bash` could already reach the network via curl or a"
+          "  network off they were NOT process isolation: a package manager or a script"
         );
-        console.log("  package manager. Constrain that with bash_allow if it matters.");
+        console.log('  run through `bash` reached the network anyway. [sandbox] exec = "docker" is.');
       }
       return true;
     }
