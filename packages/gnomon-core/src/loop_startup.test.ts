@@ -450,6 +450,40 @@ tools = ["read", "bash"]
     expect(note!.replace(/\x1b\[[0-9;]*m/g, "").length).toBeLessThanOrEqual(100);
   }, 15000);
 
+  it("under exec = \"os\", reports what the kernel enforces -- or that bash will refuse", async () => {
+    // Either answer is correct depending on the machine; what is not allowed is
+    // silence, because an operator who declared a sandbox must learn at the
+    // door whether they have one. And when it IS enforcing, the line that says
+    // "bash can still reach the network" would now be false, so it must go.
+    const dir = surface({
+      "config.toml": BASE_CONFIG,
+      "policy.toml": `
+[approval]
+gate = "never"
+
+[sandbox]
+level = "confined"
+network = false
+exec = "os"
+`,
+      "roles.toml": `
+[roles.implement]
+model = "test-model"
+tools = ["read", "bash"]
+`,
+      "tools.toml": FOUR_TOOLS,
+    });
+
+    const r = await run(dir, []);
+    const line = r.lines.find((l) => l.includes('sandbox: exec = "os"'));
+    expect(line, "startup must say what exec = os does here").toBeDefined();
+    const enforcing = /egress blocked, loopback allowed/.test(line!);
+    expect(enforcing || /bash will refuse every command/.test(line!), line).toBe(true);
+    const stale = r.lines.find((l) => l.includes("bash can still reach the network"));
+    if (enforcing) expect(stale, "the network-off caveat is false while os enforces").toBeUndefined();
+    else expect(stale).toBeDefined();
+  }, 15000);
+
   it("says nothing when the surface never declared network = false", async () => {
     // The control. A note printed unconditionally would carry no information,
     // and would pass the assertions above on every surface in existence.

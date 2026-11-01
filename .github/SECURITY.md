@@ -41,7 +41,14 @@ defeated before it was added:**
 - `sandbox` — path containment on **real** paths. `resolve()` is string algebra;
   a symlink escaped it in both directions until realpath was applied, dangling
   links included. The level governs tool paths and **not** `bash`.
-- `exec = "docker"` — the only setting that actually contains the shell:
+- `exec = "os"` — contains the shell on the host, in the kernel: Landlock
+  confines writes to the root, a per-call temp dir and `extra_roots`; with
+  `network = false` a seccomp filter plus a connect supervisor allow loopback
+  only; `no_new_privs` stops setuid. Reads, unix sockets (the docker socket, the
+  user bus) and everything inside the root are NOT restricted — the full list
+  is in the README and in `gnomon-exec sandbox-probe`. Refuses where the kernel
+  cannot enforce it; never falls back to unsandboxed.
+- `exec = "docker"` — contains the shell in a container:
   `--network none`, the caller's own uid/gid (`--user $(id -u):$(id -g)`, so the
   operator can still edit their repository afterwards — NOT a guarantee of
   non-root: gnomon running as root gives root in the container), one bind
@@ -57,7 +64,9 @@ defeated before it was added:**
 - `gnomon-surface` hashes files — no code execution
 - `gnomon-edit` does exact-substring and regex replacement with SHA-256 drift
   detection — no parser, no AST, no shell
-- `gnomon-exec` spawns processes with timeouts and process-group kill
+- `gnomon-exec` spawns processes with timeouts and process-group kill, and
+  (`sandbox`) applies Landlock / seccomp / sandbox-exec before exec'ing a
+  command — the one part of it the agent loop reaches, under `exec = "os"`
 - `gnomon-core` and `gnomon-natives` are TypeScript, run under Node
 
 **Zero third-party runtime dependencies.** No package outside this workspace is

@@ -5,6 +5,10 @@
 //!   - Maps exit codes to outcome buckets (result/refusal/apparatus_failure)
 //!   - Records ordered session steps with manifest + step outcomes
 //!   - Validates sessions against conformance fixtures
+//!   - Runs a command under the OS sandbox (`sandbox`, `sandbox-probe`): the
+//!     backend of `[sandbox] exec = "os"`. See src/sandbox.rs.
+
+mod sandbox;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -537,6 +541,49 @@ fn print_usage() {
     println!("  gnomon-exec step     --cmd <command> [--timeout-ms <ms>]");
     println!("  gnomon-exec validate   --session <file> [--fixture <golden.json>]");
     println!("  gnomon-exec hash       --session <file>");
+    println!("  gnomon-exec sandbox    --root <dir> [--write <dir>]... [--network on|off] -- <program> [args...]");
+    println!("  gnomon-exec sandbox-probe");
+}
+
+/// `gnomon-exec sandbox`. Every usage error is a refusal (exit 125): a wrapper
+/// that guessed at a malformed policy would be running SOMETHING unsandboxed.
+fn sandbox_cmd(args: &[String]) -> ! {
+    let mut root: Option<std::path::PathBuf> = None;
+    let mut writable = Vec::new();
+    let mut network = false;
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        let value = |i: usize| -> &String {
+            args.get(i + 1).unwrap_or_else(|| sandbox::refuse(&format!("{a} needs a value")))
+        };
+        match a {
+            "--root" => {
+                root = Some(value(i).into());
+                i += 2;
+            }
+            "--write" => {
+                writable.push(value(i).into());
+                i += 2;
+            }
+            "--network" => {
+                network = match value(i).as_str() {
+                    "on" => true,
+                    "off" => false,
+                    v => sandbox::refuse(&format!("--network must be on or off, not {v:?}")),
+                };
+                i += 2;
+            }
+            "--" => {
+                i += 1;
+                break;
+            }
+            other => sandbox::refuse(&format!("unknown argument {other:?} (the command goes after `--`)")),
+        }
+    }
+    let Some(root) = root else { sandbox::refuse("--root is required") };
+    let policy = sandbox::Policy { root, writable, network };
+    sandbox::run(&policy, &args[i..])
 }
 
 fn main() {
@@ -689,6 +736,12 @@ fn main() {
             });
 
             println!("{}", session_steps_hash(&record.session.steps));
+        }
+
+        "sandbox" => sandbox_cmd(&args[2..]),
+
+        "sandbox-probe" => {
+            println!("{}", serde_json::to_string_pretty(&sandbox::probe()).unwrap());
         }
 
         "--help" | "-h" => print_usage(),

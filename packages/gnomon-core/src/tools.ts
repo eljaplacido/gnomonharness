@@ -27,14 +27,18 @@ import {
   mkdirSync,
   rmSync,
   lstatSync,
-  readlinkSync
+  readlinkSync,
+  mkdtempSync
 } from "node:fs";
+import { tmpdir } from "node:os";
+import { osSandbox, type OsSandbox } from "gnomon-natives";
 import { resolve, relative, isAbsolute, dirname, join, sep, win32 as win32Path } from "node:path";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
 import { promisify } from "node:util";
 import {
   GnomonConfig,
+  type ExecMode,
   declaredTools,
   isToolEnabled,
   recomputeManifest,
@@ -854,7 +858,7 @@ export interface ToolContext {
    * Where `bash` runs. Undefined or mode "off" means the host, which is the
    * default and the behaviour that shipped. See resolveExec.
    */
-  exec?: { mode: "off" | "docker"; image: string; network: boolean };
+  exec?: { mode: ExecMode; image: string; network: boolean };
   gate: ApprovalGate;
   approve: Approver;
   /** bash timeout, ms */
@@ -1374,11 +1378,13 @@ export function shq(value: string): string {
 
 export function sandboxCommand(
   command: string,
-  ctx: { root: string; exec?: { mode: "off" | "docker"; image: string; network: boolean } },
+  ctx: { root: string; exec?: { mode: ExecMode; image: string; network: boolean } },
   name: string
 ): string {
   const ex = ctx.exec;
-  if (!ex || ex.mode === "off") return command;
+  // "os" is not a rewrite of the command line: bashTool spawns gnomon-exec
+  // directly with an argv (osSandboxPlan), so no second shell parses anything.
+  if (!ex || ex.mode !== "docker") return command;
   // Single-quoted for `sh -c`, so only the quote character needs escaping --
   // and it was escaped WRONG. The POSIX idiom is `'\''`: close the quote,
   // emit a backslash-escaped quote, reopen. That is four characters. Written as
@@ -1419,6 +1425,129 @@ export function sandboxCommand(
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+/**
+ * How `[sandbox] exec = "os"` runs one command: `gnomon-exec sandbox`, with the
+ * project root, a fresh per-call temp directory and any `extra_roots` as the
+ * only writable trees, and `--network off` unless the session allows the
+ * network. See crates/gnomon-exec/src/sandbox.rs for what the kernel enforces.
+ *
+ * An argv, not a shell line: the command reaches `sh -c` as one argument, so
+ * there is no second round of quoting to get wrong (sandboxCommand's history is
+ * the reason to want none).
+ *
+ * REFUSES -- returns a refusal instead of a plan -- on every path where the
+ * sandbox cannot be applied: no gnomon-exec, a gnomon-exec too old to sandbox,
+ * a kernel without Landlock, network = false where the network half cannot be
+ * enforced, Windows. It never falls back to running the command on the host:
+ * a sandbox that degrades to "off" in silence is the failure
+ * docs/SANDBOX-DESIGN.md records this repository shipping once already.
+ *
+ * `probe` is injectable so the refusals can be tested on any machine.
+ */
+export function osSandboxPlan(
+  command: string,
+  ctx: { root: string; extraRoots?: string[]; network?: boolean; exec?: { network: boolean } },
+  shellBin: string,
+  probe: () => OsSandbox = osSandbox
+):
+  | { refusal: ToolOutcome }
+  | { file: string; args: string[]; env: NodeJS.ProcessEnv; tmp: string; network: boolean } {
+  const refuse = (why: string, summary: string): { refusal: ToolOutcome } => ({
+    refusal: {
+      code: TOOL_FAILED,
+      content:
+        `Refused: [sandbox] exec = "os" is declared, and ${why}\n\n` +
+        `The command was NOT run. gnomon does not fall back to running it unsandboxed. ` +
+        `This is a property of the machine, not of the command, so retrying it will not help: ` +
+        `stop and tell the operator.`,
+      summary: `bash — refused (${summary})`,
+    },
+  });
+  if (process.platform === "win32") {
+    return refuse(
+      "Windows has no OS sandbox gnomon can apply. Run gnomon inside WSL2 (where Landlock " +
+        "is available on a 5.13+ kernel), or set exec = \"docker\", or exec = \"off\" to run " +
+        "bash unsandboxed on purpose.",
+      "os sandbox unsupported on Windows"
+    );
+  }
+  const sb = probe();
+  if ("error" in sb) return refuse(`gnomon-exec, which applies the sandbox, is unavailable: ${sb.error}`, "no gnomon-exec");
+  if (!sb.probe.supported) {
+    return refuse(`this machine cannot enforce it: ${sb.probe.reason ?? "unsupported"}.`, "os sandbox unsupported here");
+  }
+  // The session grant (/network) wins over the declaration, as it does for
+  // webfetch. Only an explicit true opens the network.
+  const network = (ctx.network ?? ctx.exec?.network) === true;
+  if (!network && !sb.probe.network_supported) {
+    return refuse(
+      `network = false cannot be enforced on this machine: ${sb.probe.reason ?? "unsupported"}. ` +
+        `Setting [sandbox] network = true would run it with the filesystem sandbox only.`,
+      "network sandbox unsupported here"
+    );
+  }
+  const tmp = mkdtempSync(join(tmpdir(), "gnomon-sbx-"));
+  // Only roots that exist: gnomon-exec refuses a --write it cannot resolve,
+  // and a granted root that is not there grants nothing anyway.
+  const extra = (ctx.extraRoots ?? []).filter((r) => {
+    try {
+      return statSync(r).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  return {
+    file: sb.bin,
+    args: [
+      "sandbox",
+      "--root", ctx.root,
+      "--write", tmp,
+      ...extra.flatMap((r) => ["--write", r]),
+      "--network", network ? "on" : "off",
+      "--",
+      shellBin, "-c", command,
+    ],
+    // Point every temp-dir convention at the writable one, so tools that
+    // write scratch files (pytest, mktemp, compilers) work unchanged.
+    env: { ...process.env, TMPDIR: tmp, TMP: tmp, TEMP: tmp },
+    tmp,
+    network,
+  };
+}
+
+/**
+ * One line for the operator: what `exec = "os"` will enforce on this machine,
+ * or that bash will refuse every command. Printed at startup and by
+ * `gnomon explain sandbox`, so the answer arrives before the first command.
+ */
+export function osSandboxSummary(
+  network: boolean,
+  probe: () => OsSandbox = osSandbox
+): { ok: boolean; line: string } {
+  if (process.platform === "win32") {
+    return { ok: false, line: `sandbox: exec = "os" is unsupported on Windows — bash will refuse every command (use WSL2, or exec = "docker")` };
+  }
+  const sb = probe();
+  if ("error" in sb) {
+    return { ok: false, line: `sandbox: exec = "os" cannot run — bash will refuse every command: ${sb.error.split("\n")[0]}` };
+  }
+  const p = sb.probe;
+  if (!p.supported) {
+    return { ok: false, line: `sandbox: exec = "os" is unsupported here — bash will refuse every command: ${p.reason ?? "no reason given"}` };
+  }
+  if (!network && !p.network_supported) {
+    return { ok: false, line: `sandbox: exec = "os" cannot enforce network = false here — bash will refuse every command: ${p.reason ?? "no reason given"}` };
+  }
+  const abi = p.landlock_abi !== undefined ? `, Landlock ABI ${p.landlock_abi}` : "";
+  return {
+    ok: true,
+    line:
+      `sandbox: exec = "os" (${p.mechanism}${abi}) — bash writes only inside the root and a per-call temp dir; ` +
+      (network ? "network open" : "egress blocked, loopback allowed") +
+      (p.degraded.length > 0 ? `. Not on this kernel: ${p.degraded.join("; ")}` : ""),
+  };
 }
 
 /**
@@ -1693,9 +1822,14 @@ async function bashTool(
     };
   }
 
-  return new Promise<ToolOutcome>((done) => {
-    const proc = spawn(shellBin, ["-c", spawned], {
+  // exec = "os": run through gnomon-exec instead, or refuse. See osSandboxPlan.
+  const osPlan = ctx.exec?.mode === "os" ? osSandboxPlan(command, ctx, shellBin) : undefined;
+  if (osPlan && "refusal" in osPlan) return osPlan.refusal;
+
+  const running = new Promise<ToolOutcome>((done) => {
+    const proc = spawn(osPlan ? osPlan.file : shellBin, osPlan ? osPlan.args : ["-c", spawned], {
       cwd: ctx.root,
+      env: osPlan ? osPlan.env : process.env,
       // stdin closed, stdout/stderr piped. An inherited stdin pipe that nobody
       // ever writes to makes any command that reads stdin block until the tool
       // timeout kills it -- `cat` with no argument, an npm prompt, a git
@@ -1860,6 +1994,17 @@ async function bashTool(
         surface_drift: drift ?? undefined,
       });
     };
+  });
+  if (!osPlan) return running;
+  // The per-call temp dir lives exactly as long as the call. A job the command
+  // backgrounded loses it too -- such a job should keep its files under the
+  // repository, which is where the background recipe already logs.
+  return running.finally(() => {
+    try {
+      rmSync(osPlan.tmp, { recursive: true, force: true });
+    } catch {
+      // best-effort: a file a still-running job holds open is the job's
+    }
   });
 }
 

@@ -14,11 +14,11 @@
  * learn what a deterministic harness does.
  */
 
-import { GnomonConfig, resolveContext, resolveRouting, resolveEndpoint, listEndpoints, endpointClass, listRoles, recomputeManifest, resolveVerify, resolveExtraRoots } from "./config.js";
+import { GnomonConfig, resolveContext, resolveRouting, resolveEndpoint, listEndpoints, endpointClass, listRoles, recomputeManifest, resolveVerify, resolveExtraRoots, resolveExec } from "./config.js";
 import { resolveAudit } from "./audit.js";
 import { resolveSessionStore } from "./session_store.js";
 import { loadSkills, loadProposedSkills } from "./skills.js";
-import { buildToolSet, MUTATING } from "./tools.js";
+import { buildToolSet, MUTATING, osSandboxSummary } from "./tools.js";
 
 export interface Explanation {
   topic: string;
@@ -153,6 +153,13 @@ const TOPICS: Record<ExplainTopic, Builder> = {
     const extra = resolveExtraRoots(config);
     const allow = config.roles[role]?.bash_allow ?? [];
     const deny = config.roles[role]?.bash_deny ?? [];
+    const ex = resolveExec(config, role);
+    const execLine =
+      ex.mode === "os"
+        ? `os — ${osSandboxSummary(policy.sandbox?.network === true).line.replace(/^sandbox: exec = "os" /, "")}`
+        : ex.mode === "docker"
+          ? `docker (${ex.image}), network ${ex.network ? "on" : "none"}`
+          : "off — bash runs on the host, bounded by the rules above only";
     return {
       topic: "sandbox",
       summary: SUMMARIES.sandbox,
@@ -168,8 +175,14 @@ const TOPICS: Record<ExplainTopic, Builder> = {
         "allow-list is only as tight as its least-constrained entry. One that",
         "admits an interpreter or a compiler admits everything they can run.",
         "",
-        "Network isolation is declared but not enforced: it stops the webfetch",
-        "tool, not curl.",
+        "[sandbox] exec decides where bash runs. 'off' is the host. 'docker' is a",
+        "container. 'os' is the host under a kernel sandbox (Landlock on Linux,",
+        "sandbox-exec on macOS): writes only inside the root and a per-call temp",
+        "dir, and with network = false no egress (loopback stays reachable). It",
+        "refuses to run a command on a machine that cannot enforce it.",
+        "",
+        "Without exec = 'os' or 'docker', network = false stops the webfetch tool,",
+        "not curl.",
       ],
       here: [
         `level           ${level}`,
@@ -179,6 +192,7 @@ const TOPICS: Record<ExplainTopic, Builder> = {
         `bash_allow      ${allow.length === 0 ? `none declared — role "${role}" may run anything not denied` : `${allow.length} pattern(s)`}`,
         ...allow.slice(0, 6).map((x) => bullet(x)),
         `bash_deny       ${deny.length} pattern(s)`,
+        `exec            ${execLine}`,
       ],
       next: [
         "To let the agent reach one other checkout, name it rather than turning",

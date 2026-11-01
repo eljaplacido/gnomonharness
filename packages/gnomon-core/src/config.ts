@@ -1490,7 +1490,7 @@ const KNOWN_BLOCKS = new Set([
  * `[sandbox] level = "confined"` and `exec = "dokcer"`: auditSurface returned
  * 0 problems before this change and 1 after.
  */
-const EXEC_VALUES = ["off", "docker"] as const;
+export const EXEC_VALUES = ["off", "docker", "os"] as const;
 
 interface EnumSpec {
   block: string;
@@ -1502,7 +1502,7 @@ interface EnumSpec {
 const ENUM_KEYS: EnumSpec[] = [
   { block: "approval", key: "gate", values: ["never", "on_write", "always"], falls_back_to: "on_write" },
   { block: "sandbox", key: "level", values: ["off", "confined", "strict"], falls_back_to: "confined" },
-  // resolveExec: anything that is not exactly "docker" resolves to "off".
+  // resolveExec: anything that is not exactly "docker" or "os" resolves to "off".
   { block: "sandbox", key: "exec", values: EXEC_VALUES, falls_back_to: "off" },
   { block: "verify", key: "after", values: ["write", "change", "always"], falls_back_to: "write" },
 ];
@@ -1986,7 +1986,7 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
 
     // A per-role `exec` override falls back exactly like the [sandbox] one:
     // resolveExec reads `roleDef?.exec ?? sandbox.exec` and resolves anything
-    // that is not the string "docker" to "off". ROLE_KEYS catches a misspelled
+    // that is not the string "docker" or "os" to "off". ROLE_KEYS catches a misspelled
     // KEY; nothing caught a misspelled VALUE, so `exec = "dokcer"` on a role
     // read as an isolation request and ran on the host.
     {
@@ -1997,7 +1997,7 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
           problem:
             `exec = "${value}" is not one of ${EXEC_VALUES.join(" | ")}, so this role ` +
             `silently falls back to "off" — no sandbox, and no warning.`,
-          fix: `Use one of: ${EXEC_VALUES.join(", ")}. Only "docker" is wired in this build.`,
+          fix: `Use one of: ${EXEC_VALUES.join(", ")}.`,
           fatal: false,
         });
       }
@@ -2877,9 +2877,12 @@ export function resolveExtraRoots(config: GnomonConfig): string[] {
     .map((r) => (isAbsolute(r) ? resolve(r) : resolve(root, r)));
 }
 
+/** The published `[sandbox] exec` values. See the enumerations contract. */
+export type ExecMode = (typeof EXEC_VALUES)[number];
+
 /** Where `bash` actually runs. See resolveExec. */
 export interface ResolvedExec {
-  mode: "off" | "docker";
+  mode: ExecMode;
   image: string;
   /** Whether the sandbox gets a network. Follows [sandbox] network. */
   network: boolean;
@@ -2897,12 +2900,17 @@ export interface ResolvedExec {
  * opt-in per surface and per role, which is the point -- one role can run its
  * calculations in a container while the rest of the harness runs on the host.
  *
- * Only "docker" is wired. bwrap was tested first and cannot work on stock
- * Ubuntu without relaxing the AppArmor restriction on unprivileged user
- * namespaces: `bwrap: setting up uid map: Permission denied`, with
- * /proc/sys/kernel/unprivileged_userns_clone already 1. A backend that cannot
- * start must refuse rather than silently run unsandboxed, so it is not offered
- * rather than offered-and-broken.
+ * "docker" runs the command in a container (sandboxCommand). "os" runs it on
+ * the host under a kernel sandbox -- Landlock (+ seccomp for network = false)
+ * on Linux, sandbox-exec on macOS -- through `gnomon-exec sandbox`; a machine
+ * that cannot enforce it REFUSES the command rather than running it
+ * unsandboxed (see bashTool and crates/gnomon-exec/src/sandbox.rs).
+ *
+ * bwrap was tested first and cannot work on stock Ubuntu without relaxing the
+ * AppArmor restriction on unprivileged user namespaces: `bwrap: setting up uid
+ * map: Permission denied`, with /proc/sys/kernel/unprivileged_userns_clone
+ * already 1. Landlock and seccomp need no namespace, which is why "os" is
+ * built on them rather than on bwrap.
  */
 export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
   const sandbox = (config.policy?.sandbox ?? {}) as {
@@ -2912,7 +2920,7 @@ export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
   };
   const roleDef = role ? (config.roles?.[role] as RoleDef | undefined) : undefined;
   const raw = (roleDef?.exec ?? sandbox.exec) as unknown;
-  const mode = raw === "docker" ? "docker" : "off";
+  const mode: ExecMode = raw === "docker" ? "docker" : raw === "os" ? "os" : "off";
   const image =
     (typeof roleDef?.image === "string" && roleDef.image) ||
     (typeof sandbox.image === "string" && sandbox.image) ||

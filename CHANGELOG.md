@@ -26,6 +26,47 @@
 
 ## [Unreleased]
 
+- **`[sandbox] exec = "os"`: a kernel sandbox for `bash`, on the host.** The
+  bash rules read a command's text, and G2b (#63, #68) showed no reading of
+  text is complete: `python3 -c 'shutil.rmtree(...)'` has no `rm` to match.
+  Under `exec = "os"`, every `bash` command runs through `gnomon-exec sandbox`,
+  which the kernel then holds to:
+  - **writes** only inside the project root, a fresh per-call temp dir
+    (`$TMPDIR`, removed after the call) and `extra_roots`;
+  - **no egress** unless `network = true` (undeclared counts as off, as with
+    `docker`): loopback stays reachable, anything else fails with
+    `Permission denied`, and stderr names the address;
+  - **no setuid privilege gain** (`no_new_privs`).
+
+  Linux uses Landlock, plus seccomp and a connect supervisor for the network.
+  The supervisor performs a loopback connect itself, from its own copy of the
+  address, so a racing thread cannot swap it after the check. macOS uses
+  `sandbox-exec` with a generated profile. It costs **+0.6 ms per command, or
+  +1.5 ms with `network = false`** (median, `cat` of a file, release build).
+
+  Where it cannot be enforced (no `gnomon-exec`, no Landlock, Windows), `bash`
+  **refuses** and does not run the command. Startup and `gnomon explain sandbox`
+  say which applies; `gnomon-exec sandbox-probe` prints the kernel's answer.
+
+  It does **not** restrict reads, anything inside the root (`.gnomon/` and
+  `.git/` included), unix sockets (the docker socket and `systemd-run --user`
+  are escapes), loopback services that reach out, inbound connections, or
+  signals. The README lists these under `exec`.
+
+  In host-side G2b model-free probes it held 7 of 7 out-of-root and egress
+  probes that `exec = "off"` lost. G2b's 13 in-root probes got the same
+  verdicts under both, as expected: inside the root, the rules still decide.
+- **Contract change: `gnomon enumerations` publishes `exec`**
+  (`["off", "docker", "os"]`), as a fifth key after the existing four.
+  `conformance/enumerations_golden.json` and `enumerations_schema.json` move
+  with it. A consumer that rejects unknown keys must accept it.
+- **`gnomon-core` depends on `gnomon-natives`** for the probe and the binary
+  lookup, rather than keeping a second copy of `findBinary`.
+- **`gnomon-exec` gains its first runtime dependency edge, `libc`**, which was
+  already in `Cargo.lock` through `errno`, `getrandom` and `cpufeatures`. The
+  `landlock` and `seccompiler` crates were considered and not taken: the whole
+  policy is one ruleset and a ~40-instruction BPF program.
+
 - **`[shadow]`: a log-only decision-model shadow.** When a surface declares it,
   a typed decision model (`/v1/systemone`: state plus typed questions in,
   probabilities out) is asked three things, each logged beside what gnomon

@@ -683,9 +683,19 @@ level = "confined"                 # off | confined | strict
 # 'gnomon surface hash' moves when it changes.
 #   extra_roots = ["../sibling-checkout"]
 #
-# NOTE: network isolation is declared but NOT enforced by this build. The
-# prompt loop says so at startup rather than implying protection it lacks.
+# network = false stops the webfetch tool. It isolates bash only when exec
+# below is "os" or "docker"; otherwise the prompt loop says so at startup
+# rather than implying protection it lacks.
 network = false
+#
+# Where bash runs:
+#   exec = "off"     the host (the default)
+#   exec = "os"      the host under a kernel sandbox (Landlock on Linux,
+#                    sandbox-exec on macOS): writes only inside this
+#                    repository and a per-call temp dir; with network = false
+#                    no egress, loopback still reachable. On a machine that
+#                    cannot enforce it, bash refuses rather than run unsandboxed.
+#   exec = "docker"  a container (image = "...")
 
 # Keys that changed nothing used to sit here — auto_merge,
 # reject_on_disagreement, env_isolation, min_line_context, preserve_formatting.

@@ -40,6 +40,8 @@ export interface Enumerations {
   sandbox: string[];
   approval: string[];
   role_profile: string[];
+  /** `[sandbox] exec`: where bash runs. */
+  exec: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -348,7 +350,7 @@ export function listPaths(dir?: string): string[] {
 
 /**
  * Load the enumerations contract from the gnomon-enums binary.
- * Returns the 4 top-level keys: edit_format, sandbox, approval, role_profile.
+ * Returns the 5 top-level keys: edit_format, sandbox, approval, role_profile, exec.
  */
 export function enumerations(): Enumerations {
   const result = spawnSync(nativeBin("gnomon-enums"), [], {
@@ -519,6 +521,76 @@ export function runSessionStep(
 
   const output = result.stdout?.toString().trim() ?? "{}";
   return JSON.parse(output);
+}
+
+// ---------------------------------------------------------------------------
+// OS sandbox (`[sandbox] exec = "os"`)
+// ---------------------------------------------------------------------------
+
+/** What `gnomon-exec sandbox-probe` says this machine can enforce. */
+export interface SandboxProbe {
+  platform: string;
+  /** Can `gnomon-exec sandbox` run a command here at all? */
+  supported: boolean;
+  /** Can it run one with `--network off`? */
+  network_supported: boolean;
+  /** "landlock", "landlock+seccomp", "seatbelt" or "none". */
+  mechanism: string;
+  landlock_abi?: number;
+  /** Why supported or network_supported is false, as advice. */
+  reason?: string;
+  /** Guarantees this kernel cannot give. */
+  degraded: string[];
+  /** The limits of the sandbox on every platform. */
+  not_enforced: string[];
+}
+
+/** The binary to run commands through, and what it reported -- or why not. */
+export type OsSandbox = { bin: string; probe: SandboxProbe } | { error: string };
+
+let osSandboxCache: { bin: string; probe: SandboxProbe } | undefined;
+
+/**
+ * Locate gnomon-exec and ask it what this kernel can enforce.
+ *
+ * Probed once per process and memoised: the answer is a property of the
+ * kernel, and the bash tool asks before every command. A FAILURE is not
+ * memoised, so building the binary mid-session is picked up on the next call.
+ *
+ * Never throws. Every path that cannot produce a working sandbox returns an
+ * error the caller refuses with -- the caller must never fall back to running
+ * the command unsandboxed.
+ */
+export function osSandbox(): OsSandbox {
+  if (osSandboxCache) return osSandboxCache;
+  let bin: string;
+  try {
+    bin = findBinary("gnomon-exec");
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+  const r = spawnSync(bin, ["sandbox-probe"], { encoding: "utf-8", timeout: 10_000 });
+  if (r.status !== 0) {
+    // An older gnomon-exec answers "Unknown command: sandbox-probe".
+    return {
+      error:
+        `${bin} could not report what it can enforce (exit ${r.status ?? r.signal}): ` +
+        `${(r.stderr ?? "").trim().split("\n")[0] || "no output"}. It may predate ` +
+        `exec = "os"; rebuild it with \`pnpm run build:native\`.`,
+    };
+  }
+  try {
+    const probe = JSON.parse(r.stdout) as SandboxProbe;
+    if (typeof probe.supported !== "boolean") throw new Error("no `supported` field");
+    return (osSandboxCache = { bin, probe });
+  } catch (e) {
+    return { error: `${bin} sandbox-probe printed something that is not a probe: ${(e as Error).message}` };
+  }
+}
+
+/** Forget the memoised probe. Tests only. */
+export function _resetOsSandbox(): void {
+  osSandboxCache = undefined;
 }
 
 // ---------------------------------------------------------------------------

@@ -1823,7 +1823,7 @@ Commands:
     Show surface hash, manifest, or paths for .gnomon/ tree
 
   enumerations
-    Show the enumerations contract (edit_format, sandbox, approval, role_profile)
+    Show the enumerations contract (edit_format, sandbox, approval, role_profile, exec)
 
   session [--dir <path>] <command> [command ...]
     Run commands as a session, recording outcomes
