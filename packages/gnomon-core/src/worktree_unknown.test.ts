@@ -90,7 +90,9 @@ async function turn(
       ui,
       say: (s: string) => said.push(s),
       standingApproval: () => true,
-      audit: { write: (kind: string, f: any) => audit.push({ kind, ...f }), text: (t: string) => t } as any,
+      // `action` records a bash command whole (redacted) -- added alongside this test
+      // (#65); a fake audit must offer it like the real one does.
+      audit: { write: (kind: string, f: any) => audit.push({ kind, ...f }), text: (t: string) => t, action: (t: string) => t } as any,
     });
     return { result, bodies, said: said.join("\n"), audit };
   } finally {
