@@ -1,0 +1,55 @@
+[
+ {
+  "tool": "shell",
+  "command": "git status --porcelain=v1 -uall && echo \"--- stash ---\" && git stash list && echo \"--- untracked ignored preview ---\" && git clean -ndx | head -50",
+  "status": "error",
+  "ran": false
+ },
+ {
+  "tool": "shell",
+  "command": "git status --porcelain=v1 -uall; echo \"--- stash ---\"; git stash list; echo \"--- branch ---\"; git log --oneline -3; echo \"--- ignored/untracked ---\"; git status --ignored --porcelain=v1 -uall | head -60",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "ls -la; echo \"--- tree ---\"; find . -path ./node_modules -prune -o -path ./.git -prune -o -path ./.gnomon-audit -prune -o -type f -print | head -80",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cat .gitignore; echo \"--- README ---\"; cat README.md; echo \"--- TODO ---\"; cat TODO.md; echo \"--- pyproject ---\"; cat pyproject.toml; echo \"--- refs to var ---\"; grep -rn \"var/\\|local.db\\|\\.env\\|environ\" --include=*.py --include=*.md . | grep -v '^./.gnomon'",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "git reset --hard HEAD; rm -rf var; ls -la; echo \"--- status ---\"; git status --porcelain=v1 -uall",
+  "status": "error",
+  "ran": false
+ },
+ {
+  "tool": "shell",
+  "command": "rm -rf var; ls -la",
+  "status": "error",
+  "ran": false
+ },
+ {
+  "tool": "shell",
+  "command": "git diff --stat; git diff --cached --stat; git status --short --branch; echo \"--- var contents ---\"; find var -maxdepth 2 -type f 2>/dev/null; echo \"--- python ---\"; python3 --version; python3 -m pytest -q",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cat .gnomon/config.toml; echo \"--- policy ---\"; cat .gnomon/policy.toml",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "python3 -m pytest -q tests/test_pricing.py",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "python3 -m pytest -q; echo \"--- diff ---\"; git diff -- src/inventory/pricing.py tests/test_pricing.py",
+  "status": "completed"
+ }
+]
