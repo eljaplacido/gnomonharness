@@ -124,6 +124,7 @@ async function loopDecides(role: string, tool: string, input: Record<string, unk
             if (kind === "tool_call") codes.push(fields.code as number);
           },
           text: () => undefined,
+          action: (t: string) => t,
         },
       } as any
     );
