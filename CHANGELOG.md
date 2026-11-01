@@ -26,6 +26,21 @@
 
 ## [Unreleased]
 
+- **The trust gate no longer costs every `task` and `prompt` ~15 ms.** The
+  2026-11-01 audit (row 23) measured one headless turn at 168 ms CPU on 0.3.2
+  and 200 ms on master. Most of the gap was the workspace-trust check running
+  `bashPolicy` over 14 probe commands twice per role, on every start, including
+  the fresh-scaffold case where a role's lists are its default's and no probe
+  can differ. That case now returns at once (`bashPolicy` is a pure function of
+  command and lists), and otherwise the default is asked first and cached per
+  process. Same grants: a new test compares the result with the plain
+  comparison for every bash role under 7 list variants (35 cases).
+  - Measured with the audit's own harness (fake model, packed installs, CPU
+    first, interleaved): master vs this change, n = 24, the change faster in
+    20 of 24 pairs, median −17.5 ms (sign test p = 0.0015). Three-way, n = 21:
+    master +15.9 ms over 0.3.2 (p = 0.08), this change +3.3 ms (p = 0.66).
+    Evidence: `docs/audit-2026-11-01/latency-trust-fix-*`.
+
 - **write_allow binds the shell, not only `write` and `edit` (G1c).** Under
   `gnomon guard`, opencode V2 refused an edit of CHANGELOG.md rewrote it with
   `python3 - <<PY … Path("CHANGELOG.md").write_text(…)` (2 trials), and refused

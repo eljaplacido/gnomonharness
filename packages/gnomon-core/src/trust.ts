@@ -243,6 +243,39 @@ function permits(command: string, allow?: string[], deny?: string[]): boolean {
   return bashPolicy(command, allow, deny) === null;
 }
 
+/** The same list of patterns, in the same order -- or both absent. */
+function sameRules(a?: string[], b?: string[]): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+// What each scaffold role permits of the probes. It depends only on the role's
+// fixed lists, so it is worked out once per process, not once per check.
+const scaffoldPermits = new WeakMap<ScaffoldRole, Map<string, boolean>>();
+function scaffoldPermitsProbe(base: ScaffoldRole, probe: string): boolean {
+  let seen = scaffoldPermits.get(base);
+  if (!seen) scaffoldPermits.set(base, (seen = new Map()));
+  let v = seen.get(probe);
+  if (v === undefined) seen.set(probe, (v = permits(probe, base.bash_allow, base.bash_deny)));
+  return v;
+}
+
+/**
+ * The probes a role's shell lists permit and its scaffold default refuses.
+ *
+ * `bashPolicy` is a pure function of (command, allow, deny), so a role whose
+ * lists are its default's, pattern for pattern, cannot permit a probe its
+ * default refuses: that case returns nothing without parsing a probe. It is the
+ * case on every fresh scaffold, and the probe loop was most of the trust gate's
+ * cost on every `task` and `prompt` (2026-11-01 audit, row 23). Otherwise the
+ * default is asked first, and the role only for the probes the default refuses.
+ * The answer is the one the loop gave before.
+ */
+function loosenedProbes(base: ScaffoldRole, allow?: string[], deny?: string[]): string[] {
+  if (sameRules(allow, base.bash_allow) && sameRules(deny, base.bash_deny)) return [];
+  return BASH_PROBES.filter((p) => !scaffoldPermitsProbe(base, p) && permits(p, allow, deny));
+}
+
 function hostOf(url: string): string {
   try {
     return new URL(url).hostname.toLowerCase();
@@ -347,10 +380,8 @@ export function surfaceGrants(config: GnomonConfig): Grant[] {
     if (tools.includes("bash")) {
       const allow = strList(def.bash_allow);
       const deny = strList(def.bash_deny);
-      for (const probe of BASH_PROBES) {
-        if (permits(probe, allow, deny) && !permits(probe, base.bash_allow, base.bash_deny)) {
-          add({ key: `role:${role}:bash:${probe}`, subject: `role ${role}`, grants: `may run \`${probe}\``, default: "refused" });
-        }
+      for (const probe of loosenedProbes(base, allow, deny)) {
+        add({ key: `role:${role}:bash:${probe}`, subject: `role ${role}`, grants: `may run \`${probe}\``, default: "refused" });
       }
     }
     if (base.write_allow && (tools.includes("write") || tools.includes("edit"))) {
@@ -427,9 +458,7 @@ export function clampToDefaults(config: GnomonConfig): GnomonConfig {
     const kept = tools.filter((t) => base.tools.includes(t) || t.startsWith("mcp__"));
     if (kept.length !== tools.length) def.tools = kept;
     if (kept.includes("bash")) {
-      const loose = BASH_PROBES.some(
-        (p) => permits(p, def.bash_allow, def.bash_deny) && !permits(p, base.bash_allow, base.bash_deny)
-      );
+      const loose = loosenedProbes(base, def.bash_allow, def.bash_deny).length > 0;
       if (loose) {
         if (base.bash_allow) def.bash_allow = [...base.bash_allow];
         def.bash_deny = [...new Set([...(def.bash_deny ?? []), ...(base.bash_deny ?? [])])];
