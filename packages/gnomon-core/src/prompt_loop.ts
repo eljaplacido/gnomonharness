@@ -1939,6 +1939,43 @@ export interface TurnDeps {
    * Read only at depth 0 -- a delegated sub-turn is part of its parent's call.
    */
   shadow?: TurnShadow;
+  /**
+   * Structured events for a front end that is not a terminal (`gnomon acp`).
+   *
+   * Told, never asked: every hook runs after the loop has decided, nothing it
+   * returns is read, and a turn without it is the turn it always was. The
+   * terminal passes none and keeps rendering from `say`.
+   */
+  events?: TurnEvents;
+}
+
+/** A tool call as `TurnEvents` reports it. */
+export interface TurnEventCall {
+  /** The id the model gave the call. Not unique across a session. */
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  /** What the transcript prints beside the tool name: a path or a command */
+  describe: string;
+  /** Whether the approval gate applies to this call */
+  gated: boolean;
+  /** 0 for the turn a person asked for, 1 for a delegated sub-turn */
+  depth: number;
+}
+
+/** What `TurnDeps.events` is told. Every hook is optional. */
+export interface TurnEvents {
+  /**
+   * The text of a reply that also called tools: its <think> reasoning
+   * (`thought`) and its prose (`message`). A delegated sub-turn's prose
+   * arrives as `thought`, since it is not the answer the person receives.
+   * The final answer is the turn's own `content` and is not repeated here.
+   */
+  text?(kind: "thought" | "message", text: string): void;
+  /** A call is about to run. Before its approval prompt, when it has one. */
+  toolStart?(call: TurnEventCall): void;
+  /** A call ran (or was refused), after its audit record was written. */
+  toolEnd?(call: TurnEventCall, outcome: ToolOutcome): void;
 }
 
 /** One step held back by the fold, kept so `/expand` can print it. */
@@ -3929,6 +3966,12 @@ export async function runAgenticTurn(
     // no reason for it. Approving a row of symbols is not oversight.
     // /cot decides how much of the live "while it works" trace to show.
     const split = splitThinking(result.content ?? "");
+    if (deps.events?.text) {
+      const think = split.think.trim();
+      const prose = split.answer.trim();
+      if (think) deps.events.text("thought", think);
+      if (prose) deps.events.text(depth > 0 ? "thought" : "message", prose);
+    }
     // `work` shows the reasoning and the prose in full — it folds STEPS, not
     // thinking. Leaving it out here made the new default hide the chain of
     // thought, which is the opposite of what folding is for.
@@ -4060,6 +4103,18 @@ export async function runAgenticTurn(
         );
       }
 
+      const eventCall: TurnEventCall | undefined = deps.events
+        ? {
+            id: call.id ?? "",
+            name: call.name,
+            args: call.args,
+            describe: describeCall(call),
+            gated,
+            depth,
+          }
+        : undefined;
+      if (eventCall) deps.events?.toolStart?.(eventCall);
+
       callApproval = undefined;
       const outcome: ToolOutcome =
         (await prefetched.get(callIndex)) ??
@@ -4143,6 +4198,7 @@ export async function runAgenticTurn(
         args: deps.audit.text(JSON.stringify(call.args)),
         result: deps.audit.text(outcome.content),
       });
+      if (eventCall) deps.events?.toolEnd?.(eventCall, outcome);
 
       // After the call and its record, never before: the shadow is told what
       // happened and the loop takes nothing back. `turnUsage` here covers the
@@ -6482,6 +6538,470 @@ A role prefix applies to that one turn only; /role switches for good.
  * Reads user input from stdin, infers role, calls model API,
  * displays results.
  */
+/**
+ * Which role a turn runs as: a `/role ` prefix, else the surface's routing.
+ *
+ * Shared by the terminal loop and `gnomon acp`, so the editor and the terminal
+ * cannot route the same input differently -- the "fact plumbed into one entry
+ * point and not the other" bug this file has already had three times (MCP
+ * servers, the surface audit, context counters). `suggest` is how a `suggest`
+ * routing mode asks; undefined means nobody can be asked, and the turn stays on
+ * its role and says what it would have proposed.
+ */
+export interface TurnRoleChoice {
+  role: string;
+  /** The input with any role prefix removed */
+  input: string;
+  /** True when a `/role ` prefix chose the role */
+  prefixed: boolean;
+}
+
+export async function chooseTurnRole(
+  state: PromptState,
+  input: string,
+  opts: {
+    log: (line: string) => void;
+    suggest?: (from: string, to: string, why: string) => Promise<"once" | "always" | "no">;
+  }
+): Promise<TurnRoleChoice> {
+  const config = state.config;
+  // A role prefix routes THIS turn only. It used to overwrite
+  // state.currentRole, so one `/smol ...` silently pinned every later
+  // turn to smol with no way back — use /role to switch for real.
+  let role = state.currentRole;
+  let cleanedInput = input;
+  let prefixed = false;
+
+  for (const candidate of listRoles(config)) {
+    const prefix = `/${candidate} `;
+    if (input.startsWith(prefix)) {
+      role = candidate;
+      cleanedInput = input.slice(prefix.length);
+      prefixed = true;
+      break;
+    }
+  }
+
+  const uiEarly = uiOf(state);
+  const routing = routingOf(state);
+
+  // The surface's rules choose in auto, propose in suggest. An explicit
+  // prefix always wins in either: asking for a role and being overruled
+  // would be worse than not having the mode at all.
+  if (routing.mode !== "manual" && !prefixed) {
+    const decision = routeInput(config, cleanedInput, routing);
+    if (decision.problem) {
+      opts.log(
+        paint(uiEarly, "yellow", `  [routing] ${decision.problem}`)
+      );
+    }
+
+    const why = decision.rule
+      ? decision.rule.why ?? decision.rule.match
+      : "no rule matched — the default";
+
+    if (decision.role !== role) {
+      if (routing.mode === "auto") {
+        opts.log(
+          paint(uiEarly, "cyan", `  ⇢ auto: ${role} → ${decision.role}`) +
+            paint(uiEarly, "gray", `  (${why})`)
+        );
+        role = decision.role;
+      } else {
+        // suggest: ask. A non-TTY has nobody to ask, so it keeps the
+        // current role and says what it would have proposed — a scripted
+        // run must not depend on an answer nobody can give.
+        if (!opts.suggest) {
+          opts.log(
+            paint(
+              uiEarly,
+              "gray",
+              `  ⇢ would suggest ${decision.role} (${why}) — not interactive, staying on ${role}`
+            )
+          );
+        } else {
+          const accepted = await opts.suggest(role, decision.role, why);
+          if (accepted === "once") {
+            role = decision.role;
+          } else if (accepted === "always") {
+            role = decision.role;
+            state.currentRole = decision.role;
+            opts.log(
+              paint(uiEarly, "gray", `  session role is now ${decision.role}`)
+            );
+          }
+        }
+      }
+    }
+  }
+
+
+  return { role, input: cleanedInput, prefixed };
+}
+
+/** What one recorded turn needs from whichever front end is running it. */
+export interface SessionTurnDeps {
+  approve: Approver;
+  /** Whether a standing approval covers gated calls right now */
+  standingApproval: () => boolean;
+  /** Aborted to cancel the turn: Esc in the terminal, `session/cancel` over ACP */
+  signal: AbortSignal;
+  audit: TurnAudit;
+  /** The surface hash the session started under, stamped on the turn record */
+  surfaceHash: string;
+  shadow?: ShadowRecorder;
+  /** Save the session snapshot */
+  persist: () => void;
+  /** Lines printed before and after the model runs (skills, context, cancel) */
+  log: (line: string) => void;
+  /** The turn's progress line; stopped when the turn ends */
+  progress: Progress;
+  /** Lines printed while the turn runs. Defaults to `progress.print`. */
+  print?: (line: string) => void;
+  /** Structured tool and text events, for a front end that is not a terminal */
+  events?: TurnEvents;
+}
+
+/** One turn as it was run and recorded. */
+export interface SessionTurn {
+  turn: TurnResult;
+  exchange: PromptExchange;
+  systemPrompt: string;
+  route: ReturnType<typeof routeRole>;
+  ui: ResolvedUi;
+}
+
+/**
+ * Run one turn of a session and record it: skills, context window, the
+ * declared [chain], the decision-model shadow, the tool loop, a surface reload
+ * when `.gnomon/` moved, the exchange, the snapshot and the `turn` audit record.
+ *
+ * This is the body of the terminal loop's turn, lifted out unchanged so that
+ * `gnomon acp` runs the same code rather than a copy of it. A copy is how a
+ * surface has, three times already, behaved differently depending on the entry
+ * point. What stays in each front end is only how it asks and how it prints.
+ */
+export async function runSessionTurn(
+  state: PromptState,
+  role: string,
+  cleanedInput: string,
+  prefixed: boolean,
+  deps: SessionTurnDeps
+): Promise<SessionTurn> {
+  const config = state.config;
+  const route = routeRole(config, role);
+
+  const ui = uiOf(state);
+  const print = deps.print ?? ((line: string) => deps.progress.print(line));
+
+  // Skills that apply to this role and input join the system prompt.
+  // Selection is by declared pattern, not model judgement, so the same
+  // input loads the same skills on every machine.
+  const active = selectSkills(loadSkills(config), role, cleanedInput);
+  if (active.length > 0) {
+    deps.log(
+      paint(
+        ui,
+        "gray",
+        `  [skills] ${active.map((sk) => sk.name).join(", ")}`
+      )
+    );
+  }
+  const systemPrompt = buildSystemPrompt(state, role, cleanedInput);
+
+  // Build the window from prior turns before calling.
+  const built = buildMessages(state, systemPrompt, cleanedInput);
+  if (built.notice) {
+    deps.log(paint(ui, "yellow", `  [context] ${built.notice}`));
+  }
+  if (built.dropped > 0) {
+    deps.log(
+      paint(
+        ui,
+        "gray",
+        `  [context] ${built.dropped} earlier turn(s) did not fit the window`
+      )
+    );
+  }
+
+  // Run the turn: model, tools, approvals, until it answers in prose.
+  const progress = deps.progress;
+  const carried =
+    built.included > 0 ? ` · ${built.included} turn(s) of context` : "";
+  progress.start(
+    state.exchanges.length === 0
+      ? `${route.model} — loading model${carried}`
+      : `${route.model}${carried}`
+  );
+
+  const start = Date.now();
+  // A declared chain shapes the turn here exactly as it does in
+  // `gnomon task`. It was wired into runTask only, so a surface declaring
+  // [chain] got three stages from `gnomon task` and one role from
+  // `gnomon prompt` -- the same surface, the same hash, different behaviour
+  // depending on the entry point. That is precisely the bug fixed for MCP
+  // one release earlier, and it belongs to the entry point that an operator
+  // actually spends their day in.
+  //
+  // An explicit /role prefix has already set `state.currentRole` for this
+  // turn, and it wins here too: asking for one role and silently getting
+  // three would be worse than having no chain. So does a /role SWITCH --
+  // see chainForTurn.
+  const turnChain = chainForTurn(config, role, routingOf(state).default, prefixed);
+  // What a decision model would have routed this prompt to, beside what ran.
+  const shadow = deps.shadow;
+  const shadowLabel = `t${state.exchanges.length + 1}`;
+  shadow?.role(
+    shadowTurnInfo(sessionIdOf(state), shadowLabel, role, route, start),
+    cleanedInput,
+    turnChain.length >= 2 ? `chain:${turnChain.join(">")}` : role
+  );
+  let turn: TurnResult;
+  try {
+    if (turnChain.length >= 2) {
+      let carriedAnswer = "";
+      let last: TurnResult | null = null;
+      for (let i = 0; i < turnChain.length; i++) {
+        const stageRole = turnChain[i];
+        const stageRoute = routeRole(config, stageRole);
+        const stageInput = carriedAnswer
+          ? `${cleanedInput}\n\n---\nThe previous stage (${turnChain[i - 1]}) reported:\n${carriedAnswer}`
+          : cleanedInput;
+        // The stage sees the conversation so far plus its own instruction;
+        // it does NOT see the previous stage's tool calls, only what that
+        // stage reported. Same contract as runTask and the `task` tool.
+        const stageState: PromptState = { ...state, currentRole: stageRole };
+        const stageBuilt = buildMessages(
+          stageState,
+          buildSystemPrompt(stageState, stageRole, stageInput),
+          stageInput
+        );
+        print(
+          paint(ui, "gray", `  [chain] stage ${i + 1}/${turnChain.length} — ${stageRole}`)
+        );
+        const stageInfo = shadowTurnInfo(
+          sessionIdOf(state), `${shadowLabel}.s${i + 1}`, stageRole, stageRoute
+        );
+        const r = await runAgenticTurn(
+          stageState,
+          stageRole,
+          stageRoute,
+          stageBuilt.messages,
+          {
+            approve: deps.approve,
+            progress,
+            ui,
+            say: print,
+            events: deps.events,
+            signal: deps.signal,
+            audit: deps.audit,
+            standingApproval: deps.standingApproval,
+            shadow: shadow?.turn(stageInfo, "asked"),
+          }
+        );
+        shadow?.turnEnd(stageInfo, shadowOutcome(r, stageInfo.t0));
+        deps.audit.write("chain_stage", {
+          stage: i + 1,
+          of: turnChain.length,
+          role: stageRole,
+          bucket: mapBucket(r.code),
+          code: r.code,
+          stop_reason: r.stop_reason,
+          tool_steps: r.toolSteps,
+        });
+        last = r;
+        carriedAnswer = r.content;
+        // A dead endpoint is not an answer to hand onward, and Esc must
+        // stop the whole chain rather than only the stage in flight.
+        if (r.code === 10 || r.code === 12 || r.code === 13) break;
+        if (deps.signal.aborted) break;
+        const stop = chainStop(resolveChainGate(config), r);
+        if (stop) {
+          print(
+            paint(ui, "yellow",
+              `  [chain] stopped after stage ${i + 1}/${turnChain.length} (${stageRole}) — ${stop}`)
+          );
+          deps.audit.write("chain_stage", {
+            stage: i + 1,
+            of: turnChain.length,
+            role: stageRole,
+            stopped_by: stop,
+            gate: resolveChainGate(config),
+          });
+          break;
+        }
+      }
+      turn = last!;
+    } else {
+      const turnInfo = shadowTurnInfo(sessionIdOf(state), shadowLabel, role, route, start);
+      turn = await runAgenticTurn(state, role, route, built.messages, {
+        approve: deps.approve,
+        progress,
+        ui,
+        // Through the spinner, which clears its frame first and redraws
+        // after. console.log wrote straight onto the live row, so a turn
+        // that explained itself opened with the spinner spliced into the
+        // text.
+        say: print,
+        events: deps.events,
+        signal: deps.signal,
+        audit: deps.audit,
+        standingApproval: deps.standingApproval,
+        shadow: shadow?.turn(turnInfo, "asked"),
+      });
+      shadow?.turnEnd(turnInfo, shadowOutcome(turn, turnInfo.t0));
+    }
+  } finally {
+    progress.stop();
+  }
+
+  // What the turn actually did to the tree, measured. Printed rather than
+  // left in the record, because the failure this catches is a turn that
+  // SAYS "31 insertions" over a 2,492-line diff and is believed — an
+  // external review of a real audit run found three errors of exactly that
+  // shape and none in the code analysis itself.
+  // Citations are checked inside the turn (see runAgenticTurn), so the
+  // one-shot `gnomon task --json` record carries them too -- that is the
+  // scripted path, and a record is exactly where a measured fact belongs.
+  // This only renders them.
+  const cites = turn.counters.citations;
+  if (cites && cites.broken > 0) {
+    print(
+      paint(ui, "yellow",
+        `  [cites] ${cites.broken} of ${cites.checked} citation(s) in that answer do not land — ` +
+        `re-read before trusting them`)
+    );
+  } else if (cites && cites.checked > 0) {
+    print(paint(ui, "gray", `  [cites] ${cites.ok}/${cites.checked} citation(s) check out`));
+  }
+
+  const td = turn.counters.tree_delta;
+  if (td && !td.unavailable && td.files > 0) {
+    print(
+      paint(ui, "gray",
+        `  [tree] ${td.files} file(s), +${td.insertions} −${td.deletions} (measured, git)`)
+    );
+    if (td.crlf_only > 0) {
+      print(
+        paint(ui, "yellow",
+          `  [tree] ${td.crlf_only} of those changed ONLY line endings — that is churn, not work. ` +
+          `A .gitattributes with * text=auto is the one-file fix.`)
+      );
+    }
+  }
+
+  // The surface moved during that turn — reload, so the session actually
+  // runs under the rules it just wrote.
+  //
+  // Until now nothing did. The write tool printed "the next turn runs under
+  // the new rules" and the session went on using the config it loaded at
+  // startup: a user changed the plan role's model, watched that line, then
+  // saw /role report the old model, three times, across two sessions.
+  // `/models` already reloads after writing roles.toml, so the capability
+  // existed and only this path did not use it.
+  //
+  // Said out loud, with both hashes. A surface that changes silently is the
+  // thing this harness exists to prevent, and that applies to a change the
+  // harness itself made.
+  if (turn.surface_changed && turn.surface_changed.length > 0) {
+    for (const d of turn.surface_changed) {
+      print(
+        paint(ui, "yellow", `  surface moved: ${d.notice}`)
+      );
+    }
+    try {
+      const reloaded = loadConfig(resolve(state.config.gnomonDir, ".."));
+      state.config = reloaded;
+      const short = recomputeManifest(reloaded.gnomonDir).surface_hash.slice(0, 16);
+      print(
+        paint(ui, "green", `  ✓ surface reloaded — now ${short}… · this session runs under it from the next turn`)
+      );
+      // Roles, models and endpoints all come from the surface, so say what
+      // the current role resolves to NOW. That is the line the user was
+      // looking for and did not get.
+      const rt = routeRole(reloaded, state.currentRole);
+      print(
+        paint(ui, "gray", `    ${state.currentRole} → ${rt.target.model} @${rt.target.endpoint ?? "local"}`)
+      );
+    } catch (err) {
+      print(
+        paint(ui, "red",
+          `  ✗ the surface moved but could not be reloaded: ` +
+          `${err instanceof Error ? err.message : String(err)}\n` +
+          `    This session is still running the previous surface. Restart to pick it up.`)
+      );
+    }
+  }
+  const duration = Date.now() - start;
+
+  if (turn.content === CANCELLED) {
+    deps.log(paint(ui, "yellow", "  ⚠ cancelled"));
+  }
+
+  const exchange: PromptExchange = {
+    turn: state.exchanges.length + 1,
+    role,
+    input: cleanedInput,
+    output: turn.content,
+    model: turn.model,
+    code: turn.code,
+    bucket: mapBucket(turn.code),
+    duration_ms: duration,
+    context_turns: built.included,
+    context_dropped: built.dropped,
+    context_tokens: built.tokens,
+    tool_steps: turn.toolSteps,
+    tool_log: turn.toolLog,
+    usage: turn.usage,
+    stop_reason: turn.stop_reason,
+    stop_detail: turn.stop_detail,
+    counters: turn.counters,
+  };
+
+  state.exchanges.push(exchange);
+  deps.persist();
+  deps.audit.write("turn", {
+    turn: exchange.turn,
+    role,
+    model: exchange.model,
+    endpoint: turn.endpoint ?? route.target.endpoint,
+    // The NAME alone cannot answer "where did this actually go?".
+    // GNOMON_MODEL_URL replaces the declared url at resolve time, so two
+    // runs with the same surface hash and the same endpoint name can reach
+    // different servers, and nothing in the trail distinguishes them. The
+    // loop announces the override on the console; a console line is not a
+    // record. DESIGN.md's claim is "if behaviour changed, the hash changed"
+    // -- this is the one path where behaviour changes and it does not, so
+    // the resolved destination has to be written down instead.
+    endpoint_url: turn.endpoint_url ?? route.target.url,
+    endpoint_overridden: process.env.GNOMON_MODEL_URL ? true : undefined,
+    bucket: exchange.bucket,
+    code: exchange.code,
+    duration_ms: duration,
+    tool_steps: exchange.tool_steps,
+    tool_log: exchange.tool_log,
+    skills: active.map((sk) => sk.id),
+    context_turns: built.included,
+    context_dropped: built.dropped,
+    context_tokens: built.tokens,
+    // What the turn actually SPENT, as the backend reported it — distinct
+    // from context_tokens, which is this harness's own estimate of the
+    // window it sent. Without it the audit trail can say what a run did but
+    // not what it cost, and a token-efficiency claim has to be taken on
+    // trust. Undefined when the backend reports no usage, because a
+    // confident 0 is worse than a blank.
+    usage: exchange.usage,
+    stop_reason: exchange.stop_reason,
+    stop_detail: exchange.stop_detail,
+    counters: exchange.counters,
+    surface_hash: deps.surfaceHash,
+    input: deps.audit.text(cleanedInput),
+    output: deps.audit.text(turn.content),
+  });
+
+  return { turn, exchange, systemPrompt, route, ui };
+}
+
 export interface PromptLoopOptions {
   /** Resume a saved session: an id, or true for the most recent */
   resume?: string | true;
@@ -7659,391 +8179,39 @@ export async function runPromptLoop(
         }
       }
 
-      // A role prefix routes THIS turn only. It used to overwrite
-      // state.currentRole, so one `/smol ...` silently pinned every later
-      // turn to smol with no way back — use /role to switch for real.
-      let role = state.currentRole;
-      let cleanedInput = input;
-      let prefixed = false;
-
-      for (const candidate of listRoles(config)) {
-        const prefix = `/${candidate} `;
-        if (input.startsWith(prefix)) {
-          role = candidate;
-          cleanedInput = input.slice(prefix.length);
-          prefixed = true;
-          break;
-        }
-      }
-
-      const uiEarly = uiOf(state);
-      const routing = routingOf(state);
-
-      // The surface's rules choose in auto, propose in suggest. An explicit
-      // prefix always wins in either: asking for a role and being overruled
-      // would be worse than not having the mode at all.
-      if (routing.mode !== "manual" && !prefixed) {
-        const decision = routeInput(config, cleanedInput, routing);
-        if (decision.problem) {
-          console.log(
-            paint(uiEarly, "yellow", `  [routing] ${decision.problem}`)
-          );
-        }
-
-        const why = decision.rule
-          ? decision.rule.why ?? decision.rule.match
-          : "no rule matched — the default";
-
-        if (decision.role !== role) {
-          if (routing.mode === "auto") {
-            console.log(
-              paint(uiEarly, "cyan", `  ⇢ auto: ${role} → ${decision.role}`) +
-                paint(uiEarly, "gray", `  (${why})`)
-            );
-            role = decision.role;
-          } else {
-            // suggest: ask. A non-TTY has nobody to ask, so it keeps the
-            // current role and says what it would have proposed — a scripted
-            // run must not depend on an answer nobody can give.
-            if (!process.stdin.isTTY) {
-              console.log(
-                paint(
-                  uiEarly,
-                  "gray",
-                  `  ⇢ would suggest ${decision.role} (${why}) — not interactive, staying on ${role}`
-                )
-              );
-            } else {
-              const accepted = await suggestRole(role, decision.role, why);
-              if (accepted === "once") {
-                role = decision.role;
-              } else if (accepted === "always") {
-                role = decision.role;
-                state.currentRole = decision.role;
-                console.log(
-                  paint(uiEarly, "gray", `  session role is now ${decision.role}`)
-                );
-              }
-            }
-          }
-        }
-      }
-
-      const route = routeRole(config, role);
+      const choice = await chooseTurnRole(state, input, {
+        log: (line) => console.log(line),
+        // A non-TTY has nobody to ask; chooseTurnRole stays and says so.
+        suggest: process.stdin.isTTY ? suggestRole : undefined,
+      });
 
       const ui = uiOf(state);
-
-      // Skills that apply to this role and input join the system prompt.
-      // Selection is by declared pattern, not model judgement, so the same
-      // input loads the same skills on every machine.
-      const active = selectSkills(loadSkills(config), role, cleanedInput);
-      if (active.length > 0) {
-        console.log(
-          paint(
-            uiEarly,
-            "gray",
-            `  [skills] ${active.map((sk) => sk.name).join(", ")}`
-          )
-        );
-      }
-      const systemPrompt = buildSystemPrompt(state, role, cleanedInput);
-
-      // Build the window from prior turns before calling.
-      const built = buildMessages(state, systemPrompt, cleanedInput);
-      if (built.notice) {
-        console.log(paint(ui, "yellow", `  [context] ${built.notice}`));
-      }
-      if (built.dropped > 0) {
-        console.log(
-          paint(
-            ui,
-            "gray",
-            `  [context] ${built.dropped} earlier turn(s) did not fit the window`
-          )
-        );
-      }
-
       // Run the turn: model, tools, approvals, until it answers in prose.
       const progress = new Progress(ui);
       activeProgress = progress;
-      const carried =
-        built.included > 0 ? ` · ${built.included} turn(s) of context` : "";
-      progress.start(
-        state.exchanges.length === 0
-          ? `${route.model} — loading model${carried}`
-          : `${route.model}${carried}`
-      );
-
       // Scope check: a standing approval given for one turn ends with it.
       approveRestOfTurn = false;
       menu.clear();
-
-      const start = Date.now();
       const controller = new AbortController();
       cancelTurn = () => controller.abort();
-      // A declared chain shapes the turn here exactly as it does in
-      // `gnomon task`. It was wired into runTask only, so a surface declaring
-      // [chain] got three stages from `gnomon task` and one role from
-      // `gnomon prompt` -- the same surface, the same hash, different behaviour
-      // depending on the entry point. That is precisely the bug fixed for MCP
-      // one release earlier, and it belongs to the entry point that an operator
-      // actually spends their day in.
-      //
-      // An explicit /role prefix has already set `state.currentRole` for this
-      // turn, and it wins here too: asking for one role and silently getting
-      // three would be worse than having no chain. So does a /role SWITCH --
-      // see chainForTurn.
-      const turnChain = chainForTurn(config, role, routingOf(state).default, prefixed);
-      // What a decision model would have routed this prompt to, beside what ran.
-      const shadow = shadowFor(config);
-      const shadowLabel = `t${state.exchanges.length + 1}`;
-      shadow?.role(
-        shadowTurnInfo(sessionIdOf(state), shadowLabel, role, route, start),
-        cleanedInput,
-        turnChain.length >= 2 ? `chain:${turnChain.join(">")}` : role
-      );
-      let turn: TurnResult;
+      let done: SessionTurn;
       try {
-        if (turnChain.length >= 2) {
-          let carriedAnswer = "";
-          let last: TurnResult | null = null;
-          for (let i = 0; i < turnChain.length; i++) {
-            const stageRole = turnChain[i];
-            const stageRoute = routeRole(config, stageRole);
-            const stageInput = carriedAnswer
-              ? `${cleanedInput}\n\n---\nThe previous stage (${turnChain[i - 1]}) reported:\n${carriedAnswer}`
-              : cleanedInput;
-            // The stage sees the conversation so far plus its own instruction;
-            // it does NOT see the previous stage's tool calls, only what that
-            // stage reported. Same contract as runTask and the `task` tool.
-            const stageState: PromptState = { ...state, currentRole: stageRole };
-            const stageBuilt = buildMessages(
-              stageState,
-              buildSystemPrompt(stageState, stageRole, stageInput),
-              stageInput
-            );
-            progress.print(
-              paint(ui, "gray", `  [chain] stage ${i + 1}/${turnChain.length} — ${stageRole}`)
-            );
-            const stageInfo = shadowTurnInfo(
-              sessionIdOf(state), `${shadowLabel}.s${i + 1}`, stageRole, stageRoute
-            );
-            const r = await runAgenticTurn(
-              stageState,
-              stageRole,
-              stageRoute,
-              stageBuilt.messages,
-              {
-                approve,
-                progress,
-                ui,
-                say: (l) => progress.print(l),
-                signal: controller.signal,
-                audit,
-                standingApproval: () => approveRestOfSession || approveRestOfTurn,
-                shadow: shadow?.turn(stageInfo, "asked"),
-              }
-            );
-            shadow?.turnEnd(stageInfo, shadowOutcome(r, stageInfo.t0));
-            audit?.write("chain_stage", {
-              stage: i + 1,
-              of: turnChain.length,
-              role: stageRole,
-              bucket: mapBucket(r.code),
-              code: r.code,
-              stop_reason: r.stop_reason,
-              tool_steps: r.toolSteps,
-            });
-            last = r;
-            carriedAnswer = r.content;
-            // A dead endpoint is not an answer to hand onward, and Esc must
-            // stop the whole chain rather than only the stage in flight.
-            if (r.code === 10 || r.code === 12 || r.code === 13) break;
-            if (controller.signal.aborted) break;
-            const stop = chainStop(resolveChainGate(config), r);
-            if (stop) {
-              progress.print(
-                paint(ui, "yellow",
-                  `  [chain] stopped after stage ${i + 1}/${turnChain.length} (${stageRole}) — ${stop}`)
-              );
-              audit?.write("chain_stage", {
-                stage: i + 1,
-                of: turnChain.length,
-                role: stageRole,
-                stopped_by: stop,
-                gate: resolveChainGate(config),
-              });
-              break;
-            }
-          }
-          turn = last!;
-        } else {
-          const turnInfo = shadowTurnInfo(sessionIdOf(state), shadowLabel, role, route, start);
-          turn = await runAgenticTurn(state, role, route, built.messages, {
-            approve,
-            progress,
-            ui,
-            // Through the spinner, which clears its frame first and redraws
-            // after. console.log wrote straight onto the live row, so a turn
-            // that explained itself opened with the spinner spliced into the
-            // text.
-            say: (line) => progress.print(line),
-            signal: controller.signal,
-            audit,
-            standingApproval: () => approveRestOfSession || approveRestOfTurn,
-            shadow: shadow?.turn(turnInfo, "asked"),
-          });
-          shadow?.turnEnd(turnInfo, shadowOutcome(turn, turnInfo.t0));
-        }
+        done = await runSessionTurn(state, choice.role, choice.input, choice.prefixed, {
+          approve,
+          standingApproval: () => approveRestOfSession || approveRestOfTurn,
+          signal: controller.signal,
+          audit,
+          surfaceHash,
+          shadow: shadowFor(config),
+          persist,
+          log: (line) => console.log(line),
+          progress,
+        });
       } finally {
         cancelTurn = null;
+        activeProgress = null;
       }
-      progress.stop();
-      activeProgress = null;
-
-      // What the turn actually did to the tree, measured. Printed rather than
-      // left in the record, because the failure this catches is a turn that
-      // SAYS "31 insertions" over a 2,492-line diff and is believed — an
-      // external review of a real audit run found three errors of exactly that
-      // shape and none in the code analysis itself.
-      // Citations are checked inside the turn (see runAgenticTurn), so the
-      // one-shot `gnomon task --json` record carries them too -- that is the
-      // scripted path, and a record is exactly where a measured fact belongs.
-      // This only renders them.
-      const cites = turn.counters.citations;
-      if (cites && cites.broken > 0) {
-        progress.print(
-          paint(ui, "yellow",
-            `  [cites] ${cites.broken} of ${cites.checked} citation(s) in that answer do not land — ` +
-            `re-read before trusting them`)
-        );
-      } else if (cites && cites.checked > 0) {
-        progress.print(paint(ui, "gray", `  [cites] ${cites.ok}/${cites.checked} citation(s) check out`));
-      }
-
-      const td = turn.counters.tree_delta;
-      if (td && !td.unavailable && td.files > 0) {
-        progress.print(
-          paint(ui, "gray",
-            `  [tree] ${td.files} file(s), +${td.insertions} −${td.deletions} (measured, git)`)
-        );
-        if (td.crlf_only > 0) {
-          progress.print(
-            paint(ui, "yellow",
-              `  [tree] ${td.crlf_only} of those changed ONLY line endings — that is churn, not work. ` +
-              `A .gitattributes with * text=auto is the one-file fix.`)
-          );
-        }
-      }
-
-      // The surface moved during that turn — reload, so the session actually
-      // runs under the rules it just wrote.
-      //
-      // Until now nothing did. The write tool printed "the next turn runs under
-      // the new rules" and the session went on using the config it loaded at
-      // startup: a user changed the plan role's model, watched that line, then
-      // saw /role report the old model, three times, across two sessions.
-      // `/models` already reloads after writing roles.toml, so the capability
-      // existed and only this path did not use it.
-      //
-      // Said out loud, with both hashes. A surface that changes silently is the
-      // thing this harness exists to prevent, and that applies to a change the
-      // harness itself made.
-      if (turn.surface_changed && turn.surface_changed.length > 0) {
-        for (const d of turn.surface_changed) {
-          progress.print(
-            paint(ui, "yellow", `  surface moved: ${d.notice}`)
-          );
-        }
-        try {
-          const reloaded = loadConfig(resolve(state.config.gnomonDir, ".."));
-          state.config = reloaded;
-          const short = recomputeManifest(reloaded.gnomonDir).surface_hash.slice(0, 16);
-          progress.print(
-            paint(ui, "green", `  ✓ surface reloaded — now ${short}… · this session runs under it from the next turn`)
-          );
-          // Roles, models and endpoints all come from the surface, so say what
-          // the current role resolves to NOW. That is the line the user was
-          // looking for and did not get.
-          const rt = routeRole(reloaded, state.currentRole);
-          progress.print(
-            paint(ui, "gray", `    ${state.currentRole} → ${rt.target.model} @${rt.target.endpoint ?? "local"}`)
-          );
-        } catch (err) {
-          progress.print(
-            paint(ui, "red",
-              `  ✗ the surface moved but could not be reloaded: ` +
-              `${err instanceof Error ? err.message : String(err)}\n` +
-              `    This session is still running the previous surface. Restart to pick it up.`)
-          );
-        }
-      }
-      const duration = Date.now() - start;
-
-      if (turn.content === CANCELLED) {
-        console.log(paint(ui, "yellow", "  ⚠ cancelled"));
-      }
-
-      const exchange: PromptExchange = {
-        turn: state.exchanges.length + 1,
-        role,
-        input: cleanedInput,
-        output: turn.content,
-        model: turn.model,
-        code: turn.code,
-        bucket: mapBucket(turn.code),
-        duration_ms: duration,
-        context_turns: built.included,
-        context_dropped: built.dropped,
-        context_tokens: built.tokens,
-        tool_steps: turn.toolSteps,
-        tool_log: turn.toolLog,
-        usage: turn.usage,
-        stop_reason: turn.stop_reason,
-        stop_detail: turn.stop_detail,
-        counters: turn.counters,
-      };
-
-      state.exchanges.push(exchange);
-      persist();
-      audit.write("turn", {
-        turn: exchange.turn,
-        role,
-        model: exchange.model,
-        endpoint: turn.endpoint ?? route.target.endpoint,
-        // The NAME alone cannot answer "where did this actually go?".
-        // GNOMON_MODEL_URL replaces the declared url at resolve time, so two
-        // runs with the same surface hash and the same endpoint name can reach
-        // different servers, and nothing in the trail distinguishes them. The
-        // loop announces the override on the console; a console line is not a
-        // record. DESIGN.md's claim is "if behaviour changed, the hash changed"
-        // -- this is the one path where behaviour changes and it does not, so
-        // the resolved destination has to be written down instead.
-        endpoint_url: turn.endpoint_url ?? route.target.url,
-        endpoint_overridden: process.env.GNOMON_MODEL_URL ? true : undefined,
-        bucket: exchange.bucket,
-        code: exchange.code,
-        duration_ms: duration,
-        tool_steps: exchange.tool_steps,
-        tool_log: exchange.tool_log,
-        skills: active.map((sk) => sk.id),
-        context_turns: built.included,
-        context_dropped: built.dropped,
-        context_tokens: built.tokens,
-        // What the turn actually SPENT, as the backend reported it — distinct
-        // from context_tokens, which is this harness's own estimate of the
-        // window it sent. Without it the audit trail can say what a run did but
-        // not what it cost, and a token-efficiency claim has to be taken on
-        // trust. Undefined when the backend reports no usage, because a
-        // confident 0 is worse than a blank.
-        usage: exchange.usage,
-        stop_reason: exchange.stop_reason,
-        stop_detail: exchange.stop_detail,
-        counters: exchange.counters,
-        surface_hash: surfaceHash,
-        input: audit.text(cleanedInput),
-        output: audit.text(turn.content),
-      });
+      const { exchange, systemPrompt } = done;
       printExchange(exchange, ui);
 
       // Fold anything the window has shed. After the turn, not during it, so

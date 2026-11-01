@@ -43,3 +43,6 @@ export * from "./session_store.js";
 export * from "./explain.js";
 export * from "./credentials.js";
 export * from "./loops.js";
+// `gnomon acp`: the Agent Client Protocol server. A transport for the same
+// session turn the terminal runs (prompt_loop.ts:runSessionTurn), nothing more.
+export * from "./acp.js";

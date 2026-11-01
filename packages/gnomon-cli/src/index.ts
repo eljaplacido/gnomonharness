@@ -14,6 +14,7 @@
  */
 
 import {
+  runAcpServer,
   harnessBuild,
   recomputeManifest,
   declaredKeyVars,
@@ -1709,6 +1710,34 @@ async function offerModelSetup(args: CliArgs, target: string): Promise<void> {
   }
 }
 
+/**
+ * `gnomon acp`: serve the Agent Client Protocol on stdio, for an editor.
+ *
+ * stdout IS the protocol channel from here on, so every other writer is moved
+ * off it first. One stray `console.log` -- a tool, an MCP server's report, a
+ * progress line -- would be a line the editor cannot parse, and the session
+ * would die on it. The protocol keeps the only handle on the real stdout.
+ */
+async function cmdAcp(args: CliArgs): Promise<void> {
+  const protocolOut = process.stdout.write.bind(process.stdout);
+  const toStderr = process.stderr.write.bind(process.stderr);
+  process.stdout.write = toStderr as typeof process.stdout.write;
+  console.log = console.error;
+  console.info = console.error;
+  console.warn = console.error;
+  console.debug = console.error;
+
+  await runAcpServer({
+    input: process.stdin,
+    write: (line) => {
+      protocolOut(line);
+    },
+    profile: args.flags["profile"],
+    role: args.role,
+  });
+  process.exit(0);
+}
+
 async function cmdPrompt(args: CliArgs): Promise<void> {
   const config = loadConfig(args.dir, args.flags['profile']);
   // A resumed session keeps its own role unless one is named here.
@@ -1784,6 +1813,7 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "skill", aliases: ["skills"] },
   { name: "task" },
   { name: "prompt", aliases: ["run"] },
+  { name: "acp" },
   { name: "loop", aliases: ["loops"] },
   { name: "tui" },
   { name: "migrate" },
@@ -1896,6 +1926,12 @@ Commands:
 
   run
     Alias for \`prompt\`
+
+  acp [--role <name>] [--profile <name>]
+    Serve the Agent Client Protocol on stdin/stdout, for an editor (Zed,
+    JetBrains, any ACP client). The same surface, roles, approval gate and
+    audit trail as \`prompt\`: approvals become the editor's permission
+    prompts, roles its modes. The editor starts this; you configure it once.
 
   update [--check] [--force] [--notice on|off]
     Show this version, the latest release and its changelog, then update
@@ -2052,6 +2088,9 @@ async function main(): Promise<void> {
     case "run":
       maybeNotifyUpdate(args.command, !!args.json);
       await cmdPrompt(args);
+      break;
+    case "acp":
+      await cmdAcp(args);
       break;
     case "loop":
     case "loops":
