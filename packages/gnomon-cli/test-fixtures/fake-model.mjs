@@ -13,10 +13,13 @@
 // schemas -- "context on the wire", counted off the wire, not estimated.
 import http from "node:http";
 import { appendFileSync } from "node:fs";
+import { devNull } from "node:os";
 
 const PORT = Number(process.env.FAKE_PORT ?? 19700);
 const LATENCY = Number(process.env.FAKE_LATENCY_MS ?? 0);
-const LOG = process.env.UX1_LOG ?? "/dev/null";
+// os.devNull, not "/dev/null": on Windows that names <drive>:\dev\null, the append
+// throws, and the fake dies before it answers a single request.
+const LOG = process.env.UX1_LOG ?? devNull;
 // The minimal valid "done" in the harness's own protocol. Most end a turn on plain
 // text; mini-swe-agent needs a bash block carrying its submit marker, and a plain
 // "OK." would make it retry until a limit -- slow for a reason that is not the harness.

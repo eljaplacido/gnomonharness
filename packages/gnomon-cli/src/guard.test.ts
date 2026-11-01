@@ -52,9 +52,13 @@ function governedRepo(gate: string, extraPolicy = ""): string {
   return r;
 }
 
-/** The real binary, through the checkout launcher (tsx), run where the call is made. */
+/**
+ * The real binary, through the checkout launcher (tsx), run where the call is made.
+ * Through node explicitly: Windows cannot execute a script by its shebang, and
+ * spawning it directly failed there before gnomon ran at all (status null).
+ */
 function guardBin(args: string[], input: string, cwd = repo): { code: number; stdout: string } {
-  const r = spawnSync(LAUNCHER, ["guard", ...args], { cwd, input, encoding: "utf-8" });
+  const r = spawnSync(process.execPath, [LAUNCHER, "guard", ...args], { cwd, input, encoding: "utf-8" });
   return { code: r.status ?? -1, stdout: r.stdout };
 }
 
