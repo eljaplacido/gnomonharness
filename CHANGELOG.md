@@ -61,6 +61,12 @@
     the never-walked directories stay out, as before. The tracked tree has no
     file cap. One difference from the walk: a file rewritten with the same
     bytes no longer counts as a change, because git compares content.
+  - Measured with the same UX1c session, master against this change (n = 3
+    per size, gx10 under load), gnomon's own time per tool turn: 49 → 55 ms at
+    0 files, 98 → 62 at 5k, 244 → 81 at 20k, and 244 → 120 at 50k. At 0 files
+    it is ~3 ms a stamp slower, because starting git costs more than walking
+    an empty tree. On a 50,000-file tree, 20 of 20 sampled edits move the
+    stamp; the walk saw 8.
   - Outside git, it walks as before. A walk that reaches the cap is now
     **unknown**, not a partial stamp.
   - `worktree_changed` is now `true`, `false` or `null` (unknown). An unknown
