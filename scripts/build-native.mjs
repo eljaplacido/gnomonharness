@@ -30,12 +30,17 @@ function haveCargo() {
   return !r.error && r.status === 0;
 }
 
+// "Needs it" is NATIVE_ONLY_COMMANDS in packages/gnomon-natives/src/surface.ts.
+// It cannot be imported here: this script runs before anything is built. It
+// named three of the five commands until 2026-11-01, the drift that constant
+// exists to prevent, so docs.test.ts now reads this line too.
 if (!haveCargo()) {
   process.stdout.write(
     "\n" +
       "  cargo not found - SKIPPING the native build (this is not an error).\n" +
       "  Works without it:  gnomon launch | prompt | task | init\n" +
-      "  Needs it:          gnomon surface | apply | session, and the Rust tests\n" +
+      "  Needs it:          gnomon surface | enumerations | session | apply | simulate,\n" +
+      "                     and the Rust tests\n" +
       "  To get it:         https://rustup.rs\n" +
       "                     then re-run: pnpm run build:native\n" +
       "  Or unpack a release archive and point GNOMON_BIN_OVERRIDE at it -\n" +

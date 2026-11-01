@@ -103,6 +103,24 @@ describe("gnomon check — through the real binary", () => {
     live = v;
   });
 
+  // `check` is the command CI runs, and its piped verdict carried raw escape
+  // codes into the log. The surface here says nothing about [ui], so colour is
+  // on by default; a pipe is what has to turn it off. Found 2026-11-01 (#69).
+  it("prints no escape codes into a pipe, and the verdict still reads", () => {
+    const env = { ...process.env };
+    delete env.NO_COLOR;
+    delete env.FORCE_COLOR;
+    const r = spawnSync(
+      process.execPath,
+      ["--import", "tsx", CLI, "check", "--base", "HEAD", "--role", "implement", "--dir", repo],
+      { encoding: "utf-8", timeout: 60_000, env }
+    );
+    expect(r.status).toBe(2);
+    expect(r.stdout).toContain("FAILED");
+    expect(r.stdout).toContain("✗ write_allow");
+    expect(r.stdout).not.toContain("\x1b[");
+  });
+
   // ── The contract: code, CONTRACTS.md §6 and the fixture are one set ──────
   let live: CheckVerdict | undefined;
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");

@@ -28,6 +28,8 @@ import {
   acceptSkill,
   rejectSkill,
   runTask,
+  unstartedTaskRecord,
+  type TaskRecord,
   resolveAudit,
   loadLoops,
   runTick,
@@ -54,8 +56,7 @@ import {
   describeEndpoints,
   printEndpoints,
   setEndpointBlock,
-  setRoleModel,
-  roleWriteTarget,
+  pointRoleAt,
   modelEditTarget,
   listRoles,
   countNonConversations,
@@ -1100,24 +1101,20 @@ async function endpointAdd(
     // base role, so for a role the active profile declares -- which, in a
     // scaffolded project, is every role that has a model -- editing roles.toml
     // changes nothing a run reads, and this command used to report a routing
-    // change that never happened.
+    // change that never happened. pointRoleAt then updates roles.toml to
+    // match, so the next start has no disagreement between the files to warn
+    // about.
     const edits = new Map<string, { label: string; text: string }>();
     for (const role of chosen) {
       if (!roleNames.includes(role)) {
         console.error(`  ⚠ no [roles.${role}] — skipped.`);
         continue;
       }
-      const target = roleWriteTarget(config, role);
-      let file = edits.get(target.path);
-      if (!file) {
-        file = { label: target.label, text: readFileSync(target.path, "utf-8") };
-        edits.set(target.path, file);
-      }
       // The cheap tier gets the cheap model init would have chosen, when
       // there is one. Pointing `smol` at the same 35B as everything else
       // works, and makes every summary cost a full reasoning turn.
       const tag = opts.quick && role === "smol" && smallModel ? smallModel : model;
-      file.text = setRoleModel(file.text, role, tag, name);
+      const { target } = pointRoleAt(config, role, tag, name, edits);
       console.log(
         `  ✓ ${role} → ${tag} @${name}` +
           (target.profile ? ` (via profile "${target.profile}")` : "")
@@ -1403,17 +1400,31 @@ async function cmdAudit(args: CliArgs): Promise<void> {
 
 async function cmdTask(args: CliArgs): Promise<void> {
   const text = [args.subcommand, ...args.positional].filter(Boolean).join(" ").trim();
+  // Every way out of this command exits 0, 2 or 10, the bucket, as
+  // docs/CONTRACTS.md §1 says it does. A missing task and a missing surface
+  // both used to exit 1, which is `failed` in the `result` bucket: a caller
+  // switching on the bucket read a task that never started as one that ran.
+  // Neither started, so both are launch failures (10).
   if (!text) {
     console.error('Usage: gnomon task "<what to do>" [--role <name>] [--yes] [--json]');
-    process.exit(1);
+    process.exit(10);
   }
 
-  const config = loadConfig(args.dir, args.flags['profile']);
-  const record = await runTask(config, text, {
-    role: args.role,
-    yes: args.yes,
-    verbose: !args.json,
-  });
+  let record: TaskRecord;
+  try {
+    const config = loadConfig(args.dir, args.flags['profile']);
+    record = await runTask(config, text, {
+      role: args.role,
+      yes: args.yes,
+      verbose: !args.json,
+    });
+  } catch (err) {
+    // No .gnomon/ above the cwd, a --dir without one, a --role the surface
+    // does not define: the throw used to reach main's catch and exit 1. It
+    // gets the same record shape as a fatal surface, so --json still parses.
+    const why = err instanceof Error ? err.message : String(err);
+    record = unstartedTaskRecord(text, args.role, `gnomon task could not start: ${why}`);
+  }
 
   // Non-fatal surface problems go to stderr in BOTH modes. They are the ones
   // that change what ran without stopping it -- a role_profile whose file is
@@ -1793,6 +1804,15 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
 ];
 
 function showHelp(): void {
+  // The Environment list at the end names only variables something reads.
+  // GNOMON_DIR was listed there from the first commit as "Override .gnomon/
+  // directory path", and nothing has ever read it. It is only exported, by
+  // `gnomon session`, to the commands that session runs. An environment
+  // variable that chose which surface governs a run would be the machine-scoped
+  // configuration Rule 1 rules out, and --dir already does the same thing
+  // explicitly, on the command line. So the line went, rather than gaining an
+  // implementation.
+  //
   // Derived, never a literal. This line read `gnomon v0.1.0` while every
   // package.json, Cargo.toml and the tag said 0.1.1 — so the one version string
   // a human actually reads was the one that could not be trusted, and
@@ -1826,7 +1846,8 @@ Commands:
     Show the enumerations contract (edit_format, sandbox, approval, role_profile)
 
   session [--dir <path>] <command> [command ...]
-    Run commands as a session, recording outcomes
+    Run commands as a session, recording outcomes. Each command runs with
+    GNOMON_DIR set to the .gnomon/ directory the session used.
 
   apply <patchset.json> [--dir <path>]
     Apply a patchset to a directory
@@ -1931,7 +1952,6 @@ Getting started in a project:
 
 Environment:
   GNOMON_BIN_OVERRIDE     Path to gnomon binary (for testing)
-  GNOMON_DIR              Override .gnomon/ directory path
   GNOMON_NO_UPDATE_CHECK  Set to 1 to never look for a newer release
 `);
 }

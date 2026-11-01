@@ -25,11 +25,12 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { PassThrough, Writable } from "node:stream";
-import { mkdtempSync, cpSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, cpSync, rmSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadConfig, routeRole } from "./config.js";
 import { runPromptLoop, COMMANDS } from "./prompt_loop.js";
+import { verifyTrail } from "./audit.js";
 import { stubDeclaredKeys } from "./test_support.js";
 
 // The real surface, copied per test. loadConfig is fine on the repo itself, but
@@ -86,6 +87,8 @@ const drive = async (
     onExit?: (code: number, stop: () => void) => void;
     /** Safety net: end the input if the loop stops asking for lines. */
     budgetMs?: number;
+    /** Start the session under `--profile <name>`. */
+    profile?: string;
   } = {}
 ): Promise<Driven> => {
   const input = new PassThrough();
@@ -179,7 +182,7 @@ const drive = async (
 
   const guard = setTimeout(stop, opts.budgetMs ?? 15000);
   try {
-    await runPromptLoop(loadConfig(root), opts.initialRole, {
+    await runPromptLoop(loadConfig(root, opts.profile), opts.initialRole, {
       io: { input, output },
     });
   } finally {
@@ -369,10 +372,11 @@ describe("slash commands inside the running loop", () => {
     // had exited; the terminal was simply hung". So the thing worth asserting
     // is that the returned promise RESOLVES, not merely that a flag was set.
     //
-    // Honest limit, stated rather than papered over: /quit terminates via
-    // process.exit(0) inside processCommand, so an in-process test must stub
-    // process.exit. The stub does what a real exit does to the loop -- stops
-    // feeding it input -- and the promise below is genuinely awaited.
+    // Honest limit, stated rather than papered over: /quit still ends with
+    // process.exit(0), now after the trail is sealed and the finally has run,
+    // so an in-process test must stub process.exit. The stub does what a real
+    // exit does to the loop -- stops feeding it input -- and the promise below
+    // is genuinely awaited.
     const root = makeProject();
     try {
       const r = await drive(root, ["/quit", "this line must never be reached"], {
@@ -382,6 +386,40 @@ describe("slash commands inside the running loop", () => {
       expect(r.exits).toEqual([0]);
       expect(r.log).toContain("Session complete.");
       expect(r.calls).toHaveLength(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it("/quit seals the audit trail before the process exits, as end-of-input does", async () => {
+    // /quit reached processCommand, whose process.exit(0) came before the
+    // session_end record, so `gnomon audit verify` called an ordinary session
+    // "NOT SEALED (truncated, or the run was killed)". Ctrl-D sealed it. The
+    // trail is read at the moment process.exit is called, because whatever is
+    // on disk then is all a real exit leaves behind.
+    const root = makeProject();
+    const cfg = join(root, ".gnomon", "config.toml");
+    const on = readFileSync(cfg, "utf8").replace(/^enabled = false$/m, "enabled = true");
+    expect(on).toMatch(/^\[audit\][\s\S]*?^enabled = true$/m);
+    writeFileSync(cfg, on);
+    const trail = (): string => {
+      const dir = join(root, ".gnomon-audit");
+      const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
+      expect(files).toHaveLength(1);
+      return join(dir, files[0]!);
+    };
+    try {
+      let sealedAtExit: boolean | undefined;
+      const r = await drive(root, ["a turn", "/quit"], {
+        onExit: (_code, stop) => {
+          sealedAtExit = verifyTrail(trail()).sealed;
+          stop();
+        },
+      });
+      expect(r.exits).toEqual([0]);
+      expect(sealedAtExit).toBe(true);
+      const v = verifyTrail(trail());
+      expect(v).toMatchObject({ ok: true, sealed: true });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -609,4 +647,40 @@ describe("a surface written mid-session takes effect", () => {
     expect(seen.seen).toMatch(/surface reloaded — now [0-9a-f]{16}/);
     rmSync(root, { recursive: true, force: true });
   });
+
+  // The reload called loadConfig(root) with no profile, so a session started
+  // under --profile came back on the surface's role_profile and nothing on
+  // screen said so. /models reloaded the same way, right after writing its
+  // pick into the --profile's file.
+  it("reloads under the --profile the session started with", async () => {
+    const root = makeProject();
+    writeFileSync(
+      join(root, ".gnomon", "profiles", "alt.toml"),
+      `[profile]\nname = "alt"\n\n[roles.implement]\nmodel = "alt-model"\nendpoint = "local"\n`
+    );
+    try {
+      let call = 0;
+      const seen = await drive(root, ["/allow all", "touch the surface", "y", "and again", "/quit"], {
+        initialRole: "implement",
+        profile: "alt",
+        onExit: (_code, stop) => stop(),
+        reply: () => {
+          call++;
+          return call === 1
+            ? { message: { content: "", tool_calls: [{ function: {
+                name: "write",
+                arguments: { path: ".gnomon/system.md", content: "rewritten by the turn\n" },
+              } }] } }
+            : { message: { content: "done" } };
+        },
+      });
+      expect(seen.seen).toContain("surface reloaded");
+      expect(seen.seen).toContain("implement → alt-model @local");
+      // Every call, before the reload and after it, went to the profile's model.
+      expect(seen.calls.length).toBeGreaterThanOrEqual(3);
+      expect(seen.calls.map((c) => c.body.model)).toEqual(seen.calls.map(() => "alt-model"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
 });

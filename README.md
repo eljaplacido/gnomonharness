@@ -674,16 +674,22 @@ choosing a model per role is neither guesswork nor hand-editing TOML:
 
 Arrows move, Enter chooses, and **typing filters** — sixty models from a
 hosted endpoint narrow to the one you meant instead of scrolling past. Pick a
-model, then pick the role to give it to, and `.gnomon/roles.toml` is rewritten
-in place: only that role's `model` and `endpoint` lines change, comments and
-every other role untouched, and the role's `fallback` block is deliberately
-left alone.
+model, then pick the role to give it to, and the file that routes that role is
+rewritten in place. That file is the active profile when the profile names the
+role's model, as a scaffolded project's `local_first.toml` does, and
+`.gnomon/roles.toml` otherwise. When the profile is the surface's own
+`role_profile`, the `model` and `endpoint` lines `roles.toml` already has for
+that role are updated to match, so the two files agree and the next start has
+nothing to warn about. A pick made under `--profile` changes that profile only.
+Only the role's `model` and `endpoint` lines change, comments and every other
+role are untouched, and the role's `fallback` block is deliberately left alone.
+`gnomon endpoint add --role` and the first-run picker write the same way.
 
 That edits the surface, so the hash changes and the new value is reported:
 
 ```
   ✓ plan → qwen3.6:35b @local
-  .gnomon/roles.toml written · surface now 3f9c1a04b71e2d55…
+  .gnomon/profiles/local_first.toml written (profile "local_first" governs plan), and .gnomon/roles.toml to match · surface now 3f9c1a04b71e2d55…
 ```
 
 `/models --list` prints the plain list instead, which is also what you get when
@@ -1702,7 +1708,7 @@ chain = true
 
 ```bash
 gnomon audit show      # trails
-gnomon audit verify    # exit 1 if any chain is broken
+gnomon audit verify    # exit 1 if any chain, or an anchor the surface declares, is broken
 ```
 
 **This is an evidence layer, not a compliance claim.** Whether a deployment
@@ -1783,14 +1789,17 @@ find them in the source:
    Whether a particular smartcard agent works through this interface is
    unmeasured.
 
-**And a fifth limit, about the CLI rather than the mechanism: `gnomon audit
-verify` does not check signatures.** It calls `verifyTrail(path)` with no
-attestation settings, so it reports chain integrity only — a trail whose heads
-were deleted still prints `intact`. Attestation verification is library-only
-today (`verifyTrail(path, { attest })`, or `verifyAttestation` directly), and
-`replay` has no command either. Both are exercised by the suite — 31 tests for
-`attest.ts`, 42 for `replay.ts` — but neither is reachable from a terminal.
-Wiring them to subcommands is not done.
+**`gnomon audit verify` checks the anchor as well as the chain.** It passes
+the surface's `[audit.attest]` to `verifyTrail`, and under each trail's chain
+line it prints an `anchor:` line. `SIGNED` gives the heads verified and the
+last sequence number they cover, plus a count of any later records that are
+not yet anchored. `BROKEN`, `UNVERIFIABLE` and `NOT SIGNED` on a surface that
+declares a signer each exit 1. A surface that declares no signer gets `NOT
+SIGNED` with a note that the chain alone does not prove the file is the one
+written, and the exit code is decided by the chain. Limit 2 still applies:
+heads deleted line by line from the same directory do not show. `replay` has
+no command yet. It is library-only and exercised by the suite (42 tests in
+`replay.test.ts`), but no terminal command reaches it.
 
 ## Governing other harnesses
 

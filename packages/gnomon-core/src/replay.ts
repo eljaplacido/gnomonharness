@@ -127,6 +127,7 @@ import {
   recomputeManifest,
   resolveChain,
   resolveVerify,
+  resolveApprovalGate,
 } from "./config.js";
 import { mapBucket } from "./session.js";
 import { buildToolSet, needsApproval, ApprovalGate } from "./tools.js";
@@ -439,9 +440,7 @@ export function replay(
   const detail = resolveDetail(records);
 
   // Resolved once: the same values the loop resolves once per turn.
-  const gateNow = ((config.policy as { approval?: { gate?: string } } | undefined)?.approval?.gate ??
-    config.config.defaults?.approval ??
-    "on_write") as ApprovalGate;
+  const gateNow: ApprovalGate = resolveApprovalGate(config);
   const offeredByRole = new Map<string, Set<string>>();
   const offeredFor = (role: string): Set<string> => {
     let s = offeredByRole.get(role);

@@ -285,6 +285,66 @@ the shell runs it, new transcript readers for `gnomon check`, and the guide
     one go (a racy index) costs ~20 ms per status instead of ~5 ms, for the
     whole session.
 
+### First-run and daily-dev papercuts (#69's gap list)
+
+Found while every documented command was verified for the guide. Each fix has
+a test that fails on the code before it.
+
+- **Picking a model no longer leaves a warning on every start.** The first-run
+  picker, `/models` and `gnomon endpoint add --role` wrote the active profile
+  and left `roles.toml`'s old tag. Every later start then printed 4–8 lines of
+  `… is ignored: role_profile "local_first" sets …`, and their suggested fix
+  was the command that had caused them. A pick now also updates `roles.toml`
+  to match (`pointRoleAt`), with two limits. It replaces only lines that
+  `roles.toml` already has, so a surface that keeps routing in its profiles
+  stays that way. And it does this only under the surface's own
+  `role_profile`: a pick made under `--profile` changes that profile alone.
+  The warning itself is unchanged, and still fires for a hand edit.
+- **A mid-session reload keeps `--profile`.** After `/models` wrote a pick, or
+  a turn changed the surface, the session reloaded on the surface's
+  `role_profile`. A session started with `--profile frontier_plan` therefore
+  switched profile with no notice, and the model `/models` had just announced
+  was not the one the next turn used.
+- **`/quit` seals the audit trail.** It called `process.exit(0)` before
+  `session_end` was written and before the `finally` that closes MCP servers,
+  so `gnomon audit verify` called a normal session `NOT SEALED`. `/quit`, and
+  Ctrl+C at the prompt, now leave by the same path as Ctrl-D, then exit 0. A
+  second `/quit` typed while a turn is unwinding is still an immediate exit.
+- **`gnomon task` exits 10 when it cannot start.** With no `.gnomon/`, an
+  unknown `--role` or no task text, it exited 1. 1 is `failed`, in the `result`
+  bucket, while CONTRACTS.md §1 says `task` exits 0, 2 or 10. `--json` now
+  prints the same record shape as a fatal surface (`apparatus_failure`,
+  `stop_reason: "apparatus"`).
+- **An endpoint with no `kind` takes the shape its URL names.** Hand-written
+  blocks got the Ollama request shape even at `…/v1/chat/completions`. A path
+  ending `/chat/completions` or `/v1` now means `openai`, and `/api/chat`
+  means `ollama`. A URL that names neither keeps the old default, so no
+  working config changes, and the startup audit names the kind it used.
+- **`approval`/`sandbox` set in both files is reported.** `config.toml
+  [defaults]` and `policy.toml` can both set them, and policy.toml wins. A
+  difference between the two is now a startup warning that names the value
+  used, and says when that value is the looser one. Both are resolved in one
+  place (`resolveApprovalGate`, `resolveSandboxLevel`). As a result, `/sandbox`
+  and `/explain sandbox` no longer report `confined` for turns that ran under
+  `[defaults] sandbox = "off"`.
+- **`GNOMON_MODEL_URL=""` is not an override.** `??` kept the empty string,
+  and every route failed with `Failed to parse URL from`.
+- **`gnomon check` prints no escape codes into a pipe.** The command CI runs
+  wrote `[32mHELD[0m` into logs. `FORCE_COLOR` still forces colour.
+- **Docs that said the opposite of the code.**
+  - `--help` no longer lists `GNOMON_DIR`. Nothing ever read it; `gnomon
+    session` only exports it to its commands, and that command's help now says
+    so.
+  - README now describes the anchor check `gnomon audit verify` has run for a
+    while, replacing its "does not check signatures" limit.
+  - `docs/DESIGN.md` names `summary` as the default compaction.
+  - The scaffolded `policy.toml` says `network = false` is enforced for
+    `webfetch` and is not process isolation, instead of "NOT enforced".
+  - `build-native.mjs`'s skip message names all five native-only commands.
+  - README's `/models` section said a pick rewrites `roles.toml`, and
+    GETTING_STARTED sent new users to edit `roles.toml`, whose model lines the
+    scaffold's `local_first` profile overrides. Both now name the profile.
+
 ## [0.3.1] — 2026-10-21
 
 Fixes from the first day of real use after the announcement, on a project

@@ -263,9 +263,12 @@ Tools (implement): bash, compute, edit, glob, grep, note, read, todo, write
 
 ## 4. Two things to do right after
 
-1. **Check `.gnomon/roles.toml`.** `init` asks your model host what it has and
+1. **Check the model tags.** `init` asks your model host what it has and
    writes real model tags. If nothing was reachable it falls back to generic
-   tags — which will be wrong. Point them at models you actually have.
+   tags — which will be wrong. Point them at models you actually have with
+   `/models`, which writes the file that routes each role. By hand, edit the
+   profile your `role_profile` names (`.gnomon/profiles/local_first.toml` in a
+   scaffolded project), because it is merged over `.gnomon/roles.toml`.
 2. **Ignore the run dirs.** Add `.gnomon-sessions/`, `.gnomon-audit/`,
    `.gnomon-jobs/` and `.gnomon-out/` to your
    `.gitignore`.
@@ -338,8 +341,12 @@ api_key_env = "OPENROUTER_API_KEY"
 ```
 
 Then point a role at it. In the loop, **`/models`** lists what each endpoint
-serves — pick one and it writes both `model` and `endpoint` into that role. Or
-edit `.gnomon/roles.toml`:
+serves — pick one and it writes both `model` and `endpoint` into that role, in
+`.gnomon/profiles/local_first.toml` and `.gnomon/roles.toml` alike, so the two
+agree. To edit by hand instead, change the role's block in the profile your
+`role_profile` names (`local_first.toml` in a scaffolded project), because a
+profile is merged over `.gnomon/roles.toml`. A `roles.toml` value the profile
+overrides is ignored, and gnomon warns at startup when one is:
 
 ```toml
 [roles.plan]
