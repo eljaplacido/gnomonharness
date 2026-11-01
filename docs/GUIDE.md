@@ -68,9 +68,12 @@ like code; you run local or self-hosted models, or mix them with cloud ones; you
 must be able to say afterwards what an agent was allowed to do; or you want a
 governance layer over the agents you already use.
 
-**A poor fit if** you need an IDE plugin, cloud or background execution (there
-is no queue and no daemon), HTTP/SSE MCP servers (only stdio is wired), or the
-widest provider support (there are two request shapes: `openai` and `ollama`).
+**A poor fit if** you need cloud or background execution (there is no queue
+and no daemon), HTTP/SSE MCP servers (only stdio is wired), the widest provider
+support (there are two request shapes: `openai` and `ollama`), or an editor
+that does not speak the Agent Client Protocol: gnomon runs in the agent panel
+of ACP editors such as Zed and JetBrains IDEs ([7.8](#78-in-your-editor-gnomon-acp)),
+and has no extension of its own for any other.
 Status is **pre-1.0**: interfaces can still move, and the README's
 [Known Limits](../README.md#known-limits) is specific on purpose.
 
@@ -679,14 +682,18 @@ api_key_env = "OPENAI_API_KEY"   # the NAME of the variable, never the key
 | Command | What it does | When to use it |
 |---|---|---|
 | `gnomon launch [--dir P]` | Creates `.gnomon/` if missing, offers model setup if nothing answers, opens the loop | Daily start. The one to remember. |
-| `gnomon prompt [ROLE] [--continue \| --resume ID] [--profile N]` | The interactive loop (alias `run`) | Resume a session; start in a role |
-| `gnomon task "TEXT" [--role R] [--yes] [--json] [--profile N]` | One task, no terminal. Gated calls are refused unless `--yes`. | Scripts, CI, cron |
+| `gnomon prompt [ROLE] [--continue \| --resume ID] [--profile N] [--trust]` | The interactive loop (alias `run`). A surface looser than the defaults that this machine has not trusted is shown and asked about first. | Resume a session; start in a role |
+| `gnomon task "TEXT" [--role R] [--yes] [--json] [--profile N] [--trust]` | One task, no terminal. Gated calls are refused unless `--yes`. An untrusted loosening surface runs clamped to the defaults unless `--trust`. | Scripts, CI, cron |
 | `gnomon init [--from P] [--force] [--no-verify]` | Writes a surface. `--from` copies another project's `.gnomon/`. | New project; team template |
 | `gnomon migrate [--check]` | Brings a surface up to current scaffold defaults. `--check` writes nothing and exits 1 if anything is pending. | After `gnomon update` |
 | `gnomon endpoint [list \| test NAME \| add …]` | Lists endpoints and keys and cross-checks model ids; runs one token; declares an endpoint end to end | Model setup, diagnosis |
 | `gnomon key [set \| list \| unset] NAME` | The machine-local credential store | Keys |
-| `gnomon check --base REV [--head REV] [--role R \| --agent N] [--transcript F --format claude-code\|opencode] [--json]` | Judges a change by this surface's rules as they stood at `REV`. Exit 0 held, 2 failed, 10 no verdict. | CI, hooks, other harnesses |
+| `gnomon check --base REV [--head REV] [--role R \| --agent N] [--transcript F --format FMT] [--json]` | Judges a change by this surface's rules as they stood at `REV`. Exit 0 held, 2 failed, 10 no verdict. `FMT`: `claude-code`, `opencode`, `goose`, `qwen-code` or `mini-swe-agent`. | CI, hooks, other harnesses |
 | `gnomon check --install-hook claude-code` | Prints the Claude Code hooks JSON and writes nothing | Governing Claude Code |
+| `gnomon guard --tool T --input JSON [--role R \| --agent N]`, or `--from claude-code\|opencode\|cursor\|generic` with the call on stdin | Decides one tool call another harness is about to make, by the committed rules: exit 0 allow, 2 deny, 3 ask, 10 no decision (answered as ask) | Governing another agent at run time |
+| `gnomon guard install claude-code\|opencode\|cursor [--write]` | Prints the hook or plugin for that harness; `--write` adds it to this project's config | Setting up `guard` |
+| `gnomon acp [--role R] [--profile N]` | Serves the Agent Client Protocol on stdin/stdout for an editor. Same surface, roles, approvals and audit as `prompt`. | Zed, JetBrains IDEs |
+| `gnomon trust [list \| grant \| revoke]` | What this project's `.gnomon/` grants beyond the defaults, and whether this machine trusts it | A repository you did not write |
 | `gnomon audit [show \| verify]` | Lists trails; checks every chain, seal and signature anchor. `verify` exits 1 on a break or when there is nothing to verify. | Review, release gates |
 | `gnomon sessions` | Saved interactive sessions, newest last | Find one to resume |
 | `gnomon skill [list \| accept ID \| reject ID]` | Active skills and the proposals the agent made | Reviewing what it learned |
@@ -816,6 +823,39 @@ A check that does not apply says `skipped` and gives the reason; it never
 counts as a pass. Every verdict is written to `.gnomon-audit/check-*.jsonl`,
 even with `[audit] enabled = false`.
 
+**At run time, before each call: `gnomon guard`.** `check` judges a change
+after it is made. `guard` decides one tool call at a time, from inside the
+other harness's own pre-tool hook, with the same code gnomon's own loop uses:
+
+```bash
+gnomon guard --role implement --tool bash --input '{"command":"git push --force origin main"}'
+# {"schema":"gnomon.guard/1","decision":"deny","rule":"bash_deny","reason":"Refused: …", …}   exit 2
+```
+
+| Exit | Decision |
+|---|---|
+| 0 | allow |
+| 2 | deny, with the rule and the reason |
+| 3 | ask: the harness's own prompt decides. Under the default `on_write` gate, any shell command asks. |
+| 10 | no decision could be made; the document says `ask`, never a silent allow |
+
+The rules are the committed ones (the session's starting HEAD, else HEAD),
+never the working tree, so an agent cannot loosen them by editing `.gnomon/`.
+Install the adapter for a harness with `gnomon guard install <harness>`, which
+prints it, or `--write` to add it to this project's config:
+
+| Harness | What is installed |
+|---|---|
+| Claude Code | a `PreToolUse` hook, beside the `check` hooks, in `.claude/settings.json` |
+| opencode 2.2 | a plugin, `.opencode/plugins/gnomon-guard.js` |
+| Cursor | `.cursor/hooks.json` for shell commands and file reads; writes are left to `check` |
+| anything with a pre-tool hook | `gnomon guard --from generic`, with `{"tool": "bash", "input": {"command": "…"}, "cwd": "…", "session_id": "…"}` on stdin |
+
+`guard` stops only what a hook shows it; a harness without one is judged after
+the fact by `check`. The README section
+[Before the call: `gnomon guard`](../README.md#before-the-call-gnomon-guard)
+has each harness's answer format and the measured latency.
+
 ### 7.4 Scheduled loops
 
 A loop is a deterministic shell guard plus an action, run by cron. There is no
@@ -937,6 +977,79 @@ jobs:
       - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"   # in case npm's prefix was not writable
       - run: gnomon check --base origin/main --head HEAD --role implement --json
 ```
+
+### 7.8 In your editor: `gnomon acp`
+
+`gnomon acp` speaks the [Agent Client Protocol](https://agentclientprotocol.com)
+on stdin and stdout, so an editor that hosts ACP agents runs gnomon in its
+agent panel. A prompt from the editor runs the same turn as the terminal, under
+the same `.gnomon/`, roles, approval gate, sandbox and audit trail. Approvals
+become the editor's permission prompts, and roles become its modes.
+
+**Zed:** open Agent Settings, go to External Agents, choose Add Agent, then
+Add Custom Agent. Or add this to `settings.json` directly:
+
+```json
+{
+  "agent_servers": {
+    "gnomon": {
+      "type": "custom",
+      "command": "gnomon",
+      "args": ["acp"],
+      "env": {}
+    }
+  }
+}
+```
+
+**JetBrains IDEs** (AI Assistant): AI Chat, then ⋯, then Add Custom Agent,
+which opens `~/.jetbrains/acp.json`:
+
+```json
+{
+  "agent_servers": {
+    "gnomon": {
+      "command": "gnomon",
+      "args": ["acp"]
+    }
+  }
+}
+```
+
+- If the editor cannot find `gnomon`, give the full path (`which gnomon`).
+  `"args": ["acp", "--role", "plan"]` starts sessions in another role.
+- **The project needs a `.gnomon/` first.** Run `gnomon launch` or
+  `gnomon init` there once from a terminal. The editor gets an error, not a
+  surface written for it: writing a surface is a human act.
+- Files are read and written on disk by gnomon's own tools, not through the
+  editor's buffers, so the sandbox, `write_allow` and drift detection still
+  apply. MCP servers the editor offers are not connected; declare them in
+  `.gnomon/tools.toml`.
+
+### 7.9 A repository you did not write: workspace trust
+
+A cloned repository's `.gnomon/` could ship `approval = "never"`,
+`network = true` or a role allowed any command. gnomon measures what a surface
+grants beyond the scaffold `gnomon init` writes. A surface that grants nothing
+more, which includes every scaffolded project, is never asked about.
+
+```bash
+gnomon trust            # this project's grants, and what this machine trusts
+gnomon trust grant      # trust the current surface here
+gnomon trust revoke     # forget every trust for this project; the next launch asks again
+```
+
+- **On a terminal** (`launch`, `prompt`), an untrusted surface that grants more
+  is shown against the defaults before anything runs. `y` trusts it and runs it
+  as declared. Enter runs this session **clamped** to the defaults. `q` exits 3.
+- **Headless** (`task`, CI, no terminal), it runs clamped and prints one line
+  on stderr naming what was withheld, for example:
+  `untrusted surface 17b7b90a14f5 grants more than the defaults (approval: never …) — running clamped to the defaults`.
+  `--trust`, or `GNOMON_TRUST=<surface hash or a 12+ character prefix>`, runs
+  it as declared for that invocation only.
+- Trust is kept outside the repository, beside the key store, keyed by project
+  and surface hash. A changed surface that grants something new is asked about
+  again; a tightening is not.
 
 ---
 
@@ -1154,8 +1267,22 @@ Yes, stdio servers declared under `[mcp_servers]` in `tools.toml`. Their tools
 appear as `mcp__<server>__<tool>`, gated per role. HTTP and SSE are not wired.
 Pin the server version, because its behaviour is outside the hash.
 
-**Is there an IDE plugin or a background mode?**
-No. The unattended paths are `gnomon task` and cron-scheduled `gnomon loop`s.
+**Can I use it in my editor?**
+In editors that host Agent Client Protocol agents, such as Zed and JetBrains
+IDEs: `gnomon acp` ([7.8](#78-in-your-editor-gnomon-acp)). There is no
+extension for other editors, and no background mode: the unattended paths are
+`gnomon task` and cron-scheduled `gnomon loop`s.
+
+**Can gnomon stop another agent before it acts, not only judge it after?**
+Yes, where that agent has a pre-tool hook: `gnomon guard` decides each call
+by this repository's committed rules ([7.3](#73-governing-claude-code-opencode-and-other-harnesses)).
+Adapters exist for Claude Code, opencode 2.2 and Cursor (shell and reads).
+
+**I cloned a repository and gnomon says it is running clamped. Why?**
+Its `.gnomon/` grants more than gnomon's defaults, and this machine has not
+trusted it. `gnomon trust` shows what it grants. Trust it with
+`gnomon trust grant` if you accept that, or keep running clamped
+([7.9](#79-a-repository-you-did-not-write-workspace-trust)).
 
 **How do I make it ask less, or more?**
 `[approval] gate` in `policy.toml`: `always` (every call), `on_write`
@@ -1209,7 +1336,10 @@ and stop and report at any failure. Do not improvise around a failed step.
    as root yourself. Verify: `gnomon --version`, `gnomon enumerations`.
 3. **Initialise** in the project root: `gnomon init`. Read its output (models
    detected or placeholders, the `[verify]` command). Never `--force` over an
-   existing surface without the user's say-so.
+   existing surface without the user's say-so. If the project already has a
+   `.gnomon/`, run `gnomon trust` and show the user anything it lists as
+   granted beyond the defaults. Whether to trust it is their decision
+   ([7.9](#79-a-repository-you-did-not-write-workspace-trust)).
 4. **Choose a model route** with the user: local ([5.1](#51-local-ollama-on-this-machine),
    [5.2](#52-local-ollama-on-another-machine-llamacpp-any-openai-compatible-server)),
    cloud ([5.4](#54-cloud-providers)) or hybrid ([5.3](#53-hybrid-plan-in-the-cloud-implement-locally)).
@@ -1230,8 +1360,12 @@ and stop and report at any failure. Do not improvise around a failed step.
    Only with the user's consent, since a cloud call is billed:
    `gnomon endpoint test <name>` (one token) or `gnomon task "Reply with OK"`.
 7. **Report:** the surface hash (`gnomon surface hash`), each role's model and
-   endpoint, which keys are stored, the `[verify]` command, and every warning
-   you did not resolve. Suggest committing `.gnomon/` and `.gitattributes`.
+   endpoint, which keys are stored, the `[verify]` command, any trust grants
+   still pending, and every warning you did not resolve. Suggest committing
+   `.gnomon/` and `.gitattributes`. If the user asked for editor use or for
+   governing another agent, point them to `gnomon acp` (7.8) or
+   `gnomon guard install` (7.3); installing either into their config is a
+   change for them to approve.
 
 ### 11.3 Never
 
@@ -1242,6 +1376,9 @@ and stop and report at any failure. Do not improvise around a failed step.
   Make the smallest change, say which file and why, show `git diff .gnomon/`.
 - **Never accept a skill on the user's behalf.** `gnomon skill accept` is the
   human act.
+- **Never grant workspace trust on the user's behalf**: no `gnomon trust grant`,
+  `--trust` or `GNOMON_TRUST=…` unless the user has seen what
+  `gnomon trust` lists and asked for exactly that.
 - **Never disable or weaken audit silently**: no `[audit] enabled = false`,
   `chain = false` or `record = "full"`, and no deleting `.gnomon-audit/`,
   unless the user asks for exactly that.
@@ -1276,3 +1413,13 @@ and stop and report at any failure. Do not improvise around a failed step.
   installers, Windows, macOS, docker exec and the Actions job were not run.
   `docs/reconciliation.json` flags this guide for a re-read when the CLI or
   installers change.
+- **0.3.3 additions** (`guard`, `acp`, `trust`, `--trust`, sections 6.1, 7.3,
+  7.8, 7.9, the FAQ and 11) were run on `master` at `414d420`, the same way:
+  `guard` deny, ask and stdin decisions with their exit codes,
+  `guard install claude-code`, the `trust` list, grant and revoke cycle on a
+  surface set to `approval = "never"`, the clamp line from a headless run and
+  its absence under `GNOMON_TRUST`, and the ACP `initialize` handshake plus the
+  `session/new` error in a directory without `.gnomon/`. The Zed configuration
+  was checked against Zed's External Agents documentation on 2026-11-01. The
+  JetBrains configuration is the README's and was not run here, and no editor
+  was driven end to end.
