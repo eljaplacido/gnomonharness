@@ -1939,17 +1939,24 @@ describe("shell-mediated work is observed, not inferred", () => {
   });
 });
 
+// Fixture git. HOME is an empty directory under vitest.setup.ts, so there is no
+// identity to commit with unless one is given. autocrlf off and output
+// discarded: on the Windows runner `git add` of 20,000 files printed an
+// "LF will be replaced by CRLF" line for each, past execFileSync's 1MB buffer,
+// and the fixture died of ENOBUFS before the test began. A failing command
+// still throws on its exit status.
+const gitIn = (dir: string, ...args: string[]) =>
+  execFileSync(
+    "git",
+    ["-c", "user.email=t@example.invalid", "-c", "user.name=t", "-c", "core.autocrlf=false", ...args],
+    { cwd: dir, stdio: "ignore" }
+  );
+
 // #62. Inside a git work tree the stamp asks git instead of stat'ing every file
 // in JS twice a command (260ms a tool turn at 20k files), and it has to answer
 // exactly the questions the walk answered.
 describe("the worktree stamp, inside a git work tree", () => {
-  // HOME is an empty directory under vitest.setup.ts, so there is no identity
-  // to commit with unless one is given.
-  const git = (dir: string, ...args: string[]) =>
-    execFileSync("git", ["-c", "user.email=t@example.invalid", "-c", "user.name=t", ...args], {
-      cwd: dir,
-      stdio: "pipe",
-    });
+  const git = gitIn;
   const commitAll = (dir: string) => {
     git(dir, "init", "-q", ".");
     git(dir, "add", "-A");
@@ -2057,13 +2064,15 @@ describe("past the walk's 20,000-file cap", () => {
       writeFileSync(join(d, `f${i}.txt`), `file ${i}\n`);
     }
   }, 120_000);
+  // Its own timeout: removing 20,000 files and a .git took longer than the
+  // default 10s hook budget on a CI runner, and failed a suite that had passed.
   afterAll(() => {
     try {
       rmSync(big, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
     } catch {
       // the OS temp dir reaps it; not this test's subject
     }
-  });
+  }, 120_000);
   const bigCtx = () => ctx({ root: big });
 
   it("outside git, a truncated walk is unknown -- never 'changed nothing'", async () => {
@@ -2077,15 +2086,14 @@ describe("past the walk's 20,000-file cap", () => {
     expect(look.worktree_changed).toBeNull();
   }, 60_000);
 
-  it("inside git, every one of 20 edits spread across the tree moves the stamp", async () => {
-    const git = (...args: string[]) =>
-      execFileSync("git", ["-c", "user.email=t@example.invalid", "-c", "user.name=t", ...args], {
-        cwd: big,
-        stdio: "pipe",
-      });
-    git("init", "-q", ".");
-    git("add", "-A");
-    git("commit", "-qm", "big");
+  // Not on Windows, for time and nothing else: the runner spent 82s in this
+  // fixture's `git add` of 20,000 files and had not finished. What is under
+  // test -- git's listing and this stamp's reading of it -- is the same code on
+  // every platform, and the six cases above run the git path on Windows too.
+  it.skipIf(process.platform === "win32")("inside git, every one of 20 edits spread across the tree moves the stamp", async () => {
+    gitIn(big, "init", "-q", ".");
+    gitIn(big, "add", "-A");
+    gitIn(big, "commit", "-qm", "big");
     const dirs = readdirSync(join(big, "src")).sort();
     const step = Math.floor(dirs.length / 20);
     let seen = 0;
