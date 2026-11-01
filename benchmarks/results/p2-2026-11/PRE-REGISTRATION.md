@@ -114,3 +114,13 @@ selected tasks once on the hub.
   `runs-p2/oracle-*` on the hub.
 - Docker Desktop had not started after the hub's reboot. It was started in the
   user's session through a one-off scheduled task, which was removed afterwards.
+
+## Amendment, 2026-11-01T10:37Z: cumulative-layout-shift excluded from all arms
+
+Harbor 0.25.0 refuses to start an agent on this task unless the agent
+declares `capabilities.skills = True`. The aider, mini-swe-agent and gnomon
+adapters do not, so those cells end in 6–7 s with `ValueError: Agent … does
+not support skills` and no model request. The oracle check ran no agent, so
+it could not see this. Under the symmetry rule the task is excluded from
+every arm, including those that ran it. The run is not restarted; the
+collector drops the task. Scoring now uses 29 tasks.
