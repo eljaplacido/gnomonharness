@@ -3,7 +3,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
 import {
   mkdtempSync,
   rmSync,
@@ -1937,6 +1937,200 @@ describe("shell-mediated work is observed, not inferred", () => {
     expect(out.code).toBe(TOOL_OK);
     expect(out.worktree_changed).toBe(false);
   });
+});
+
+// Fixture git. HOME is an empty directory under vitest.setup.ts, so there is no
+// identity to commit with unless one is given. autocrlf off and output
+// discarded: on the Windows runner `git add` of 20,000 files printed an
+// "LF will be replaced by CRLF" line for each, past execFileSync's 1MB buffer,
+// and the fixture died of ENOBUFS before the test began. A failing command
+// still throws on its exit status.
+const gitIn = (dir: string, ...args: string[]) =>
+  execFileSync(
+    "git",
+    ["-c", "user.email=t@example.invalid", "-c", "user.name=t", "-c", "core.autocrlf=false", ...args],
+    { cwd: dir, stdio: "ignore" }
+  );
+
+// #62. Inside a git work tree the stamp asks git instead of stat'ing every file
+// in JS twice a command (260ms a tool turn at 20k files), and it has to answer
+// exactly the questions the walk answered.
+describe("the worktree stamp, inside a git work tree", () => {
+  const git = gitIn;
+  const commitAll = (dir: string) => {
+    git(dir, "init", "-q", ".");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "base");
+  };
+  // stampWalkBelow 0: these fixtures are a handful of files, which the stamp
+  // would walk (STAMP_WALK_BELOW). The git path is what is under test here.
+  const moved = async (command: string, over: Partial<ToolContext> = {}) => {
+    const out = await executeTool("bash", { command }, ctx({ stampWalkBelow: 0, ...over }), offered);
+    expect(out.code).toBe(TOOL_OK);
+    return out.worktree_changed;
+  };
+
+  it("sees a modify, a create, a second edit to that new file, a delete and a rename", async () => {
+    writeFileSync(join(root, "a.txt"), "a\n");
+    writeFileSync(join(root, "c.txt"), "c\n");
+    commitAll(root);
+    expect(await moved("echo more >> a.txt")).toBe(true);
+    expect(await moved("echo new > b.txt")).toBe(true);
+    // b.txt is untracked now and stays listed as `? b.txt` whatever is in it:
+    // only its own size and mtime can show this edit.
+    expect(await moved("echo again >> b.txt")).toBe(true);
+    expect(await moved("rm c.txt")).toBe(true);
+    expect(await moved("mv hello.txt renamed.txt")).toBe(true);
+    // ...and it still says no when nothing changed, including after the
+    // agent's own `git status`, which may rewrite .git/index.
+    expect(await moved("cat a.txt && git status")).toBe(false);
+  });
+
+  it("sees a checkout between two clean trees, and does not count staging as work", async () => {
+    writeFileSync(join(root, "a.txt"), "one\n");
+    commitAll(root);
+    git(root, "checkout", "-qb", "other");
+    writeFileSync(join(root, "a.txt"), "two\n");
+    git(root, "commit", "-qam", "two");
+    git(root, "checkout", "-q", "-");
+    // Clean before, clean after: git lists nothing either side. Only HEAD's
+    // commit id, hashed in for every file git does not list, can see it.
+    expect(await moved("git checkout -q other")).toBe(true);
+    expect(await moved("echo d > d.txt")).toBe(true);
+    // The index moved and the tree did not. The walk never counted this.
+    expect(await moved("git add d.txt")).toBe(false);
+  });
+
+  it("counts gitignored files as the project, as the walk did", async () => {
+    // A .env written for a config task, a binary from make: ignored by git and
+    // still the work. A stamp that cannot see them nudges an agent doing it.
+    writeFileSync(join(root, ".gitignore"), ".env\nout/\n");
+    commitAll(root);
+    expect(await moved("echo SECRET=1 > .env")).toBe(true);
+    expect(await moved("mkdir -p out/bin && echo v1 > out/bin/app")).toBe(true);
+    // git lists `! out/` and does not look inside; the stamp does.
+    expect(await moved("echo v2 > out/bin/app")).toBe(true);
+    expect(await moved("ls out/bin")).toBe(false);
+  });
+
+  it("ignores .gnomon/, .gnomon-loops/ and the never-walked directories, tracked or not", async () => {
+    mkdirSync(join(root, ".gnomon"));
+    writeFileSync(join(root, ".gnomon", "policy.toml"), "# tracked\n");
+    writeFileSync(join(root, "a.txt"), "a\n");
+    commitAll(root);
+    // Tracked, so `git status` lists it as modified -- the walk skipped it by
+    // name, and so must this.
+    expect(await moved("echo '# edited' >> .gnomon/policy.toml")).toBe(false);
+    expect(await moved("echo x > .gnomon/scratch.txt")).toBe(false);
+    expect(await moved("mkdir -p .gnomon-loops && echo tick >> .gnomon-loops/cron.log")).toBe(false);
+    // Not gitignored here, so git lists both; NEVER_WALKED is not git's list.
+    expect(
+      await moved("mkdir -p .gnomon-shadow coverage && echo r >> .gnomon-shadow/gnomon.jsonl && echo c > coverage/out.json")
+    ).toBe(false);
+    // And the guard did not go blind next to them.
+    expect(await moved("echo b >> a.txt")).toBe(true);
+  });
+
+  it("stamps a root that is a subdirectory of the repository, and only that subtree", async () => {
+    writeFileSync(join(root, "a.txt"), "a\n");
+    writeFileSync(join(root, "sub", "s.txt"), "s\n");
+    commitAll(root);
+    const sub = { root: join(root, "sub") };
+    expect(await moved("echo more >> s.txt", sub)).toBe(true);
+    // Outside the root being stamped, as the walk never looked there either.
+    expect(await moved(`echo more >> "${join(root, "a.txt").replace(/\\/g, "/")}"`, sub)).toBe(false);
+  });
+
+  it("walks a small tree even inside git, and asks git past the bound", async () => {
+    // One observable difference between the two methods: a tracked file
+    // rewritten with the same bytes. The walk sees a new mtime; git compares
+    // content and sees nothing. So `touch` says which method answered.
+    writeFileSync(join(root, "a.txt"), "a\n");
+    commitAll(root);
+    const touched = async (over: Partial<ToolContext>) =>
+      (await executeTool("bash", { command: "touch a.txt" }, ctx(over), offered)).worktree_changed;
+    // A handful of files, under the default bound: walked, as before #62.
+    expect(await touched({})).toBe(true);
+    // Past the bound: git.
+    expect(await touched({ stampWalkBelow: 0 })).toBe(false);
+    expect(await touched({ stampWalkBelow: 2 })).toBe(false);
+  });
+
+  it("still walks a directory that is not in a work tree", async () => {
+    // The fallback. tmpdir is not inside a repository on any CI runner; if it
+    // ever is, this says so rather than passing on git's answer.
+    expect(() => execFileSync("git", ["rev-parse", "--git-dir"], { cwd: root, stdio: "pipe" })).toThrow();
+    expect(await moved("echo more >> hello.txt")).toBe(true);
+    expect(await moved("echo new > sub/new.txt")).toBe(true);
+    expect(await moved("cat hello.txt")).toBe(false);
+  });
+});
+
+// The cap was a correctness bug as well as a cost (#62): the walk stopped at
+// WALK_MAX_FILES and stamped whatever it had visited by then, so on a 30,000-
+// file tree 7 of 20 sampled edits did not move the stamp. A command that
+// changed files was recorded as changing nothing and counted toward the nudge.
+describe("past the walk's 20,000-file cap", () => {
+  let big: string;
+  const FILES = 20_100;
+  beforeAll(() => {
+    big = mkdtempSync(join(tmpdir(), "gnomon-bigtree-"));
+    for (let i = 0; i < FILES; i++) {
+      const d = join(big, "src", `d${String(Math.floor(i / 100)).padStart(4, "0")}`);
+      if (i % 100 === 0) mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, `f${i}.txt`), `file ${i}\n`);
+    }
+  }, 120_000);
+  // Its own timeout: removing 20,000 files and a .git took longer than the
+  // default 10s hook budget on a CI runner, and failed a suite that had passed.
+  afterAll(() => {
+    try {
+      rmSync(big, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
+    } catch {
+      // the OS temp dir reaps it; not this test's subject
+    }
+  }, 120_000);
+  const bigCtx = () => ctx({ root: big });
+
+  it("outside git, a truncated walk is unknown -- never 'changed nothing'", async () => {
+    expect(tools.worktreeStampOf(bigCtx())).toBeNull();
+    const edit = await executeTool("bash", { command: "echo x >> src/d0200/f20099.txt" }, bigCtx(), offered);
+    expect(edit.code).toBe(TOOL_OK);
+    expect(edit.worktree_changed).toBeNull();
+    // Unknown for a read too: the walk cannot tell the two apart, and saying
+    // false for one of them would be a guess.
+    const look = await executeTool("bash", { command: "ls src/d0000" }, bigCtx(), offered);
+    expect(look.worktree_changed).toBeNull();
+  }, 60_000);
+
+  // Not on Windows, for time and nothing else: the runner spent 82s in this
+  // fixture's `git add` of 20,000 files and had not finished. What is under
+  // test -- git's listing and this stamp's reading of it -- is the same code on
+  // every platform, and the six cases above run the git path on Windows too.
+  it.skipIf(process.platform === "win32")("inside git, every one of 20 edits spread across the tree moves the stamp", async () => {
+    gitIn(big, "init", "-q", ".");
+    gitIn(big, "add", "-A");
+    gitIn(big, "commit", "-qm", "big");
+    const dirs = readdirSync(join(big, "src")).sort();
+    const step = Math.floor(dirs.length / 20);
+    let seen = 0;
+    for (let k = 0; k < 20; k++) {
+      const d = dirs[k * step]!;
+      const f = join(big, "src", d, readdirSync(join(big, "src", d))[0]!);
+      const before = tools.worktreeStampOf(bigCtx());
+      writeFileSync(f, `changed ${k}\n`, { flag: "a" });
+      const after = tools.worktreeStampOf(bigCtx());
+      expect(before).not.toBeNull();
+      expect(after).not.toBeNull();
+      if (after !== before) seen++;
+    }
+    expect(seen).toBe(20);
+    // And through the tool, end to end.
+    const edit = await executeTool("bash", { command: "echo y >> src/d0200/f20099.txt" }, bigCtx(), offered);
+    expect(edit.worktree_changed).toBe(true);
+    const look = await executeTool("bash", { command: "ls src/d0000" }, bigCtx(), offered);
+    expect(look.worktree_changed).toBe(false);
+  }, 120_000);
 });
 
 describe("task_allow bounds what delegation can reach", () => {
