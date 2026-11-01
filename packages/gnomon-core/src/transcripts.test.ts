@@ -119,6 +119,24 @@ const ocTool = (command: string) => ({
 });
 
 describe("readTranscript — opencode", () => {
+  it("reads opencode V2's run events, whose shell tool is named `shell`", () => {
+    // The shape observed in G1's opencode V2 2.2.5 runs: a `tool_use` event whose part
+    // is a tool part with `tool: "shell"` and the command at `state.input.command`.
+    // Read as "bash"-only, every V2 run yielded zero commands and check 5 was skipped.
+    const p = join(dir, "v2-run.jsonl");
+    const v2 = (command: string, n: number) => ({
+      type: "tool_use", timestamp: 1_790_000_000_000 + n, sessionID: "ses_v2",
+      part: {
+        type: "tool", tool: "shell", callID: `c${n}`,
+        state: { status: "completed", input: { command }, output: "", metadata: {}, time: {}, title: command },
+      },
+    });
+    writeFileSync(p, jsonl([v2("git clean -fdx", 1), v2("python -m pytest -q", 2)]));
+    const r = readTranscript(p, "opencode");
+    expect(r.commands.map((c) => c.command)).toEqual(["git clean -fdx", "python -m pytest -q"]);
+    expect(r.commands.every((c) => c.tool === "bash")).toBe(true);
+  });
+
   it("reads `opencode export`: bash parts, and the agent", () => {
     const p = join(dir, "export.json");
     writeFileSync(

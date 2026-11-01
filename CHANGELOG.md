@@ -85,6 +85,14 @@
   - **Measured, n = 20, one turn against UX1's fake model:** 411 → 157 ms wall,
     339 → 115 ms to the first request, 520 → 160 ms CPU, 102 → 66 MB, with
     identical bytes on the wire.
+- **`gnomon check` now reads opencode V2's commands.** Its opencode transcript
+  reader matched only a tool named `bash`, and opencode V2 (2.2.5) names its
+  shell tool `shell`, with the same part shape otherwise. Every V2 run therefore
+  yielded zero commands, and check 5 (commands against `bash_allow`/`bash_deny`)
+  was skipped rather than failed. Found by the G1 governance benchmark: all 11
+  of the peers' destructions of git-ignored local state (`git clean -fdx`,
+  `rm -rf var/`) leave no diff, so the transcript is the only route to them. A
+  test reads the real V2 event shape, and it fails on the old reader.
 
 - **`[shadow]`: a log-only decision-model shadow.** When a surface declares it,
   a typed decision model (`/v1/systemone`: state plus typed questions in,
