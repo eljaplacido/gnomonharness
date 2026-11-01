@@ -97,3 +97,15 @@ container survived into a later cell: tb removes them.
 
 **Lesson, kept:** two runs that share a docker host must not share run ids. The
 runner's names were copied along with its design.
+
+## Amendment, 2026-11-01 06:52Z: 4 slots instead of 2
+
+The user asked for faster runs. P1-H uses a hosted model, so its slots compete
+only for gx10's CPU and docker, not for P1's GPU, and it went from 2 slots to 4
+(two more relays, `4412`/`4413`, with the upstream guard).
+- The runner was stopped once. Its two in-flight cells
+  (`h-k2-opencode-tune-mjcf`, `h-k2-gnomon-tune-mjcf`) were torn down, set
+  aside in `runs-aborted/*.scaleup`, and re-run first.
+- Cells are unchanged, and each slot still meters exactly. Load per cell is
+  recorded; wall clock was descriptive only from the start.
+- P1 stays serial: its local model serves one request at a time by design.
