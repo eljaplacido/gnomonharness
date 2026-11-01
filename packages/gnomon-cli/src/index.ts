@@ -62,6 +62,18 @@ import {
   countNonConversations,
   resolveUi,
   isLocalEndpoint,
+  AuditTrail,
+  settleTrust,
+  settleTrustHeadless,
+  evaluateTrust,
+  grantTrust,
+  revokeTrust,
+  loadTrust,
+  trustPath,
+  describeGrants,
+  type GnomonConfig,
+  type TrustOutcome,
+  type SettleOptions,
 } from "gnomon-core";
 import {
   manifest as surfaceManifest,
@@ -115,6 +127,8 @@ interface CliArgs {
   role?: string;
   yes?: boolean;
   json?: boolean;
+  /** Run an untrusted surface as declared, this invocation only (trust.ts). */
+  trust?: boolean;
   resume?: string | true;
   positional: string[];
   /**
@@ -174,6 +188,11 @@ export function parseArgs(args: string[]): CliArgs {
       result.yes = true;
     } else if (arg === "--json") {
       result.json = true;
+    } else if (arg === "--trust") {
+      // A bare flag. Through the generic branch below it would swallow the
+      // next argument as its value -- `task --trust "fix it"` would lose the
+      // task text into flags.trust.
+      result.trust = true;
     } else if (arg === "-p") {
       // Already handled above
     } else if (arg.startsWith("-")) {
@@ -1410,13 +1429,20 @@ async function cmdTask(args: CliArgs): Promise<void> {
     process.exit(10);
   }
 
+  // A task has nobody to ask. An untrusted surface that grants more than the
+  // defaults runs clamped to them, with one line on stderr -- never blocked,
+  // never silently widened.
   let record: TaskRecord;
   try {
-    const config = loadConfig(args.dir, args.flags['profile']);
-    record = await runTask(config, text, {
+    const settled = settleTrustHeadless(
+      loadConfig(args.dir, args.flags['profile']),
+      trustOptions(args)
+    );
+    record = await runTask(settled.config, text, {
       role: args.role,
       yes: args.yes,
       verbose: !args.json,
+      trust: settled.outcome,
     });
   } catch (err) {
     // No .gnomon/ above the cwd, a --dir without one, a --role the surface
@@ -1721,10 +1747,121 @@ async function offerModelSetup(args: CliArgs, target: string): Promise<void> {
 }
 
 async function cmdPrompt(args: CliArgs): Promise<void> {
-  const config = loadConfig(args.dir, args.flags['profile']);
+  const declared = loadConfig(args.dir, args.flags['profile']);
+  // On a terminal an untrusted surface that grants more than the defaults is
+  // shown and asked about; off one it runs clamped. A scaffolded surface
+  // grants nothing extra and never gets here.
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY && !args.json);
+  const settled = await settleTrust(declared, {
+    ...trustOptions(args),
+    interactive,
+    ask: (q) => ask(q, ""),
+  });
+  if (settled.quit) {
+    // A refusal by the trust gate: 3, refused_by_gate (docs/CONTRACTS.md §1).
+    console.log("  Not started. Nothing ran.");
+    process.exit(3);
+  }
   // A resumed session keeps its own role unless one is named here.
   const role = args.resume ? args.subcommand || undefined : args.subcommand || "implement";
-  await runPromptLoop(config, role, { resume: args.resume });
+  await runPromptLoop(settled.config, role, {
+    resume: args.resume,
+    trust: settled.outcome,
+    // A surface reloaded mid-session goes through the same gate, headless:
+    // trusted or covered runs as written, anything looser is clamped and said.
+    reconfigure: (fresh: GnomonConfig) => settleTrustHeadless(fresh, trustOptions(args)).config,
+  });
+}
+
+/** What the invocation says about trust: --trust, and GNOMON_TRUST=<surface hash>. */
+function trustOptions(args: CliArgs): Omit<SettleOptions, "interactive"> {
+  return { flag: Boolean(args.trust), env: process.env.GNOMON_TRUST };
+}
+
+/**
+ * `gnomon trust` -- list, grant for the current surface, revoke.
+ *
+ * Trust is this machine's user accepting what a surface grants beyond the
+ * scaffold, in one project. It lives beside the credential store, never in
+ * the repository and never in the hash (trust.ts says why that is not a Rule 1
+ * exception). Grants and revokes are written to the audit trail when the
+ * surface keeps one.
+ */
+async function cmdTrust(args: CliArgs): Promise<void> {
+  const config = loadConfig(args.dir, args.flags['profile']);
+  const sub = subcommandOr(args, "list");
+  const ev = evaluateTrust(config, { env: process.env.GNOMON_TRUST });
+  const record = (decision: TrustOutcome["decision"]): void => {
+    const id = `trust-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
+    const trail = new AuditTrail(resolveAudit(config), id);
+    trail.write("session_start", {
+      surface_hash: ev.surface_hash,
+      harness: harnessBuild(),
+      cwd: process.cwd(),
+      mode: "trust",
+    });
+    const outcome: TrustOutcome = {
+      decision,
+      by: "command:trust",
+      surface_hash: ev.surface_hash,
+      grants: ev.grants.map((g) => g.key).sort(),
+    };
+    trail.write("trust", { ...outcome, root: ev.root });
+    trail.write("session_end", {});
+  };
+
+  if (sub === "grant") {
+    if (ev.grants.length === 0) {
+      console.log(
+        `Nothing to trust: this surface (${ev.surface_hash.slice(0, 12)}) grants nothing beyond gnomon's defaults.`
+      );
+      return;
+    }
+    grantTrust(config, "command:trust");
+    record("granted");
+    console.log(`Trusted ${ev.root} at surface ${ev.surface_hash.slice(0, 12)}:`);
+    for (const line of describeGrants(ev.grants, [])) console.log(line);
+    console.log(`Recorded in ${trustPath()} — not in the repository.`);
+    return;
+  }
+
+  if (sub === "revoke") {
+    const n = revokeTrust(config);
+    if (n > 0) record("revoked");
+    console.log(
+      n > 0
+        ? `Revoked ${n} trusted surface${n === 1 ? "" : "s"} for ${ev.root}. The next launch asks again.`
+        : `Nothing was trusted for ${ev.root}.`
+    );
+    return;
+  }
+
+  if (sub !== "list" && sub !== "show") {
+    console.error(`Unknown trust subcommand: ${sub}. Use: list | grant | revoke`);
+    process.exit(1);
+  }
+
+  console.log(`This project: ${ev.root}`);
+  console.log(`  surface ${ev.surface_hash.slice(0, 12)}`);
+  if (ev.status === "default") {
+    console.log("  grants nothing beyond gnomon's defaults — never asks.");
+  } else {
+    console.log(
+      ev.status === "trusted"
+        ? `  trusted (${ev.via === "store:covered" ? "no looser than a surface you trusted here" : ev.via})`
+        : "  NOT trusted — a terminal session asks; a headless run is clamped to the defaults"
+    );
+    for (const line of describeGrants(ev.grants, ev.uncovered)) console.log(line);
+  }
+  const entries = loadTrust().entries;
+  console.log("");
+  console.log(`Trusted on this machine (${trustPath()}): ${entries.length === 0 ? "none" : ""}`);
+  for (const e of entries) {
+    console.log(
+      `  ${e.root}  ${e.surface_hash.slice(0, 12)}  ${e.at.slice(0, 10)}  ` +
+        `${e.grants.length} grant${e.grants.length === 1 ? "" : "s"}  by ${e.by}`
+    );
+  }
 }
 
 async function cmdSessions(args: CliArgs): Promise<void> {
@@ -1801,6 +1938,7 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "update", aliases: ["upgrade"] },
   { name: "uninstall" },
   { name: "check" },
+  { name: "trust" },
 ];
 
 function showHelp(): void {
@@ -1880,11 +2018,22 @@ Commands:
     .gnomon/skills/proposed/; accepting moves it into .gnomon/skills/,
     which changes the surface hash and applies from the next session.
 
-  task "<what to do>" [--role <name>] [--yes] [--json] [--dir <path>]
+  task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--dir <path>]
     Run one task without a terminal and print the result. --json emits a
     record whose only run-to-run differences are under "volatile".
     Gated tool calls are REFUSED unless --yes: a non-interactive run has
     nobody to ask. Exit code: 0 result, 2 refusal, 10 apparatus_failure.
+    A surface granting more than the defaults that this machine has not
+    trusted runs CLAMPED to the defaults, with one line on stderr; --trust
+    (or GNOMON_TRUST=<surface hash>) runs it as declared.
+
+  trust [list|grant|revoke] [--dir <path>]
+    Whether this machine's user trusts what this project's .gnomon/ grants
+    beyond gnomon's defaults (approval never, network, a wider shell, an MCP
+    server, ...). list shows the grants against the defaults; grant trusts
+    the current surface; revoke forgets every trust for this project. Kept
+    beside the key store, never in the repository or the surface hash. A
+    scaffolded surface grants nothing extra and is never asked about.
 
   sessions [--dir <path>]
     Saved sessions, newest last.
@@ -1913,9 +2062,11 @@ Commands:
     --install-hook claude-code prints the SessionStart + Stop hooks that
     run this on every Claude Code session (it edits nothing).
 
-  prompt [--continue | --resume <id>]
+  prompt [--continue | --resume <id>] [--trust]
     Interactive agent loop. --continue resumes the most recent session,
     --resume <id> a specific one. Conversations are saved after every turn.
+    An untrusted surface granting more than the defaults is shown and asked
+    about first: [y] trust it, [N] run with the defaults, [q] quit (exit 3).
 
   run
     Alias for \`prompt\`
@@ -1936,7 +2087,7 @@ Flags that apply across commands:
                           roles for this run. It rewrites per-role model and
                           endpoint — i.e. which machine runs inference and who
                           is billed — and is accepted by simulate, endpoint,
-                          audit, task, skill, prompt and sessions. It is
+                          audit, task, skill, prompt, sessions and trust. It is
                           machine-scoped: it does NOT move the surface hash,
                           so two machines can disagree about routing while
                           agreeing about behaviour. A name with no file in
@@ -1953,6 +2104,9 @@ Getting started in a project:
 Environment:
   GNOMON_BIN_OVERRIDE     Path to gnomon binary (for testing)
   GNOMON_NO_UPDATE_CHECK  Set to 1 to never look for a newer release
+  GNOMON_TRUST            A surface hash (or 12+ char prefix): run THAT surface
+                          as declared even though it is untrusted. Any other
+                          surface is still clamped. See \`gnomon trust\`.
 `);
 }
 
@@ -1993,7 +2147,7 @@ async function main(): Promise<void> {
   // them when stdout is not a terminal. Not for commands that run tools: the
   // variable would be inherited by the project's own commands and change what
   // they print, which is not this flag's business. FORCE_COLOR opts back in.
-  const reporting = ["endpoint", "key", "audit", "sessions", "skill", "surface", "init", "migrate", "enumerations"];
+  const reporting = ["endpoint", "key", "audit", "sessions", "skill", "surface", "init", "migrate", "enumerations", "trust"];
   if (reporting.includes(args.command) && !process.stdout.isTTY && !process.env.FORCE_COLOR) {
     process.env.NO_COLOR = "1";
   }
@@ -2081,6 +2235,9 @@ async function main(): Promise<void> {
       break;
     case "tui":
       await cmdTui(args);
+      break;
+    case "trust":
+      await cmdTrust(args);
       break;
     case "check":
       process.exit(await cmdCheck(args));

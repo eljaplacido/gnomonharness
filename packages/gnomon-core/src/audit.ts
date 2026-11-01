@@ -177,6 +177,12 @@ export type AuditKind =
   // base, head and role it judged, each check's status and findings, the exit.
   // Its own kind because it is not a turn and nothing in it came from a model.
   | "check"
+  // Whether this machine's user had accepted what the surface grants beyond
+  // the scaffold, and what was done about it: trusted, granted now, clamped to
+  // the defaults, or revoked (trust.ts). Its own kind because a clamped run's
+  // records carry the hash of a surface whose permissions did not all apply,
+  // and the trail has to say so where a reader of that hash will look.
+  | "trust"
   | "session_end";
 
 export interface AuditRecord {

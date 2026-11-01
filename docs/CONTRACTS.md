@@ -474,3 +474,49 @@ is a person refusing.
 **Fixture**: `conformance/shadow_record.json`. `packages/gnomon-core/src/shadow.test.ts`
 emits each kind of record and asserts its keys, labels and question ids against
 the fixture. It also asserts that this section names the same decisions.
+
+## 8. Workspace trust — `v: 1`
+
+Whether this machine's user accepted what a surface grants beyond the scaffold
+`gnomon init` writes (README, "Workspace trust"). A surface that grants nothing
+extra produces none of the records below.
+
+**Audit record** — kind `trust`, written right after `session_start` by
+`launch`/`prompt`/`task`, and in its own sealed trail by `gnomon trust grant` /
+`revoke`. Keys: `decision`, `by`, `surface_hash`, `grants` (sorted grant keys),
+`root` (the project's real path).
+
+**Task record** — `gnomon task --json` carries the same object, without `root`,
+as `trust`. Absent when the surface grants nothing extra.
+
+| `decision` | Meaning |
+|---|---|
+| `trusted` | Already trusted; `by` says how |
+| `granted` | Accepted now, and recorded in the store |
+| `clamped` | Ran with every grant taken back to the scaffold's value |
+| `revoked` | `gnomon trust revoke` forgot this project |
+
+| `by` | Who |
+|---|---|
+| `store` | This (root, surface hash) is in the store |
+| `store:covered` | A different hash, granting nothing one trusted surface in this project did not |
+| `flag:--trust` | `--trust` on this invocation |
+| `env:GNOMON_TRUST` | `GNOMON_TRUST` names this surface's hash (full, or a prefix of 12+) |
+| `human` | Answered `y` at the prompt |
+| `human:declined` | Answered `n` / Enter at the prompt |
+| `default:no-operator` | Nobody to ask: headless, or five unreadable answers |
+| `command:trust` | `gnomon trust grant` / `revoke` |
+
+**Store** — `trust.json` in the credential store's directory (`$XDG_DATA_HOME/gnomon`,
+else `%APPDATA%\gnomon` on Windows, else `~/.local/share/gnomon`), mode 0600:
+`{ "v": 1, "entries": [{ "root", "surface_hash", "grants", "at", "by" }] }`.
+Never inside a repository; never part of the surface hash. A store that does not
+parse trusts nothing.
+
+**Exit codes.** A clamped run exits by its bucket like any other. Quitting at the
+interactive prompt exits **3** (`refused_by_gate`) with nothing run.
+
+**Fixture**: `conformance/trust_record.json`. `packages/gnomon-core/src/trust.test.ts`
+asserts the code's `TRUST_DECISIONS` and `TRUST_BY` equal the fixture; the end-to-end
+tests there and in `packages/gnomon-cli/src/trust.test.ts` read the `trust` field
+and the audit record back from real runs.
