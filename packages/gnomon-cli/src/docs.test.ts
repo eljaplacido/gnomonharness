@@ -548,6 +548,7 @@ describe("the docs name the same native-only commands the code does", () => {
   for (const [label, path] of [
     ["README.md", "README.md"],
     ["GETTING_STARTED.md", "GETTING_STARTED.md"],
+    ["docs/GUIDE.md", "docs/GUIDE.md"],
   ] as const) {
     it(`${label} names all five wherever it explains the native requirement`, () => {
       const text = readFileSync(join(repoRoot, path), "utf-8");
@@ -853,6 +854,65 @@ describe("numbers the docs state are read back from what they describe", () => {
         readmeRow![1].includes(s),
         `README's loop row omits \`${s}\``
       ).toBe(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// docs/GUIDE.md — the adoption guide is held to the code like the README
+// ---------------------------------------------------------------------------
+//
+// The guide exists for adoption, and its readers include agents that will run
+// what it says verbatim. A command that is not dispatched, a slash command
+// that is not registered, or a TOML block gnomon's own parser refuses costs
+// more trust than the guide earns, so each is checked here rather than by
+// reading.
+describe("docs/GUIDE.md names only what exists", () => {
+  const guide = readFileSync(join(repoRoot, "docs/GUIDE.md"), "utf-8");
+
+  it("every `gnomon <command>` it quotes is dispatched", () => {
+    const registry = new Set(CLI_COMMANDS.flatMap((c) => [c.name, ...(c.aliases ?? [])]));
+    // The troubleshooting table's first column quotes what gnomon PRINTS
+    // (`gnomon needs Node.js 20 or newer`), which is not a command. Its other
+    // columns are checked like the rest of the guide.
+    const start = guide.indexOf("## 9. Troubleshooting");
+    const end = guide.indexOf("## 10. FAQ");
+    expect(start > 0 && end > start, "GUIDE.md's troubleshooting section moved").toBe(true);
+    const trouble = guide
+      .slice(start, end)
+      .split("\n")
+      .map((l) => (l.startsWith("| ") ? l.replace(/^\|[^|]*\|/, "|") : l))
+      .join("\n");
+    const commands = guide.slice(0, start) + trouble + guide.slice(end);
+    const quoted = [...commands.matchAll(/`gnomon ([a-z][a-z-]*)/g)].map((m) => m[1]!);
+    expect(quoted.length, "found no quoted commands; did the guide's format change?").toBeGreaterThan(20);
+    const unknown = [...new Set(quoted)].filter((c) => !registry.has(c));
+    expect(unknown, `GUIDE.md quotes commands the CLI does not dispatch: ${unknown.join(", ")}`).toEqual([]);
+  });
+
+  it("every slash command it quotes is registered, or is a role prefix", async () => {
+    const { COMMANDS } = await import("gnomon-core");
+    const registered = new Set(COMMANDS.map((c: { name: string }) => c.name));
+    const roles = await scaffold((root) => new Set(listRoles(loadConfig(root)).map((r) => `/${r}`)));
+    // A backtick opening on `/word`, followed by a space or the closing
+    // backtick, so `/v1/models` and `/api/tags` (URL paths) are not read as commands.
+    const quoted = [...guide.matchAll(/`(\/[a-z]+)(?=[\s`])/g)].map((m) => m[1]!);
+    expect(quoted.length).toBeGreaterThan(10);
+    const unknown = [...new Set(quoted)].filter((c) => !registered.has(c) && !roles.has(c));
+    expect(unknown, `GUIDE.md quotes slash commands that are not registered: ${unknown.join(", ")}`).toEqual([]);
+  });
+
+  it("every TOML block parses with gnomon's own parser and names only real roles", async () => {
+    const { parseToml } = await import("gnomon-core");
+    const blocks = [...guide.matchAll(/^```toml\n([\s\S]*?)^```$/gm)].map((m) => m[1]!);
+    expect(blocks.length, "found no TOML blocks").toBeGreaterThan(10);
+    const roles = await scaffold((root) => new Set(listRoles(loadConfig(root))));
+    for (const block of blocks) {
+      let parsed: Record<string, unknown> = {};
+      expect(() => (parsed = parseToml(block)), `gnomon cannot parse:\n${block}`).not.toThrow();
+      const named = Object.keys((parsed.roles ?? {}) as Record<string, unknown>);
+      const strangers = named.filter((r) => !roles.has(r));
+      expect(strangers, `a GUIDE.md block configures roles the scaffold does not have:\n${block}`).toEqual([]);
     }
   });
 });

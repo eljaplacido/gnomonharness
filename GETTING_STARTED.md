@@ -359,6 +359,8 @@ Start with `/explain endpoints` or `/help`.
 
 ## Where to next
 
+- **[docs/GUIDE.md](docs/GUIDE.md)** — model recipes (local, cloud, hybrid),
+  use-case patterns, troubleshooting and an FAQ.
 - **[README.md](README.md)** — architecture, the content-hashed surface, roles,
   tools, and safety, in full.
 - **[docs/](docs/)** — DESIGN, CONTRACTS, POSITIONING, and benchmark results.

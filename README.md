@@ -23,6 +23,15 @@ irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/i
 Update with `gnomon update`; `gnomon uninstall` prints how to remove it.
 [Install](#install) has what the installer does and the manual route.
 
+> **Start here: [the gnomon guide](docs/GUIDE.md).** What gnomon is in one page,
+> a [five-minute quick start](docs/GUIDE.md#4-quick-start-five-minutes-to-a-first-useful-result)
+> on a local or a cloud model, copy-paste [model recipes](docs/GUIDE.md#5-model-setup-recipes)
+> (Ollama, llama.cpp, OpenRouter, OpenCode, hybrid local + cloud),
+> [troubleshooting](docs/GUIDE.md#9-troubleshooting) and an [FAQ](docs/GUIDE.md#10-faq).
+> Setting gnomon up for someone as an AI agent? Follow
+> [the agent procedure](docs/GUIDE.md#11-for-agents-configuring-gnomon).
+> This README is the full reference.
+
 <p align="center">
   <img src="docs/img/gnomon-session.png" alt="A gnomon session: the startup banner naming the role, model and the tools withheld from it; a glob and a read; an approval gate showing the exact diff before the edit is allowed; then the result and a meta line" width="820">
 </p>
@@ -52,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1304 TypeScript tests (1067 core, 212 cli, 18
-> natives, 7 tui) and 60 Rust tests — **1364 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1308 TypeScript tests (1067 core, 216 cli, 18
+> natives, 7 tui) and 60 Rust tests — **1368 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -71,6 +80,7 @@ does not. Behaviour is readable because something is holding still.
 
 ## Contents
 
+- [The gnomon guide](docs/GUIDE.md): quick start, model recipes, FAQ
 - [Why "gnomon"](#why-gnomon)
 - [Why this exists](#why-this-exists)
 - [What actually happens when you type](#what-actually-happens-when-you-type)

@@ -12,6 +12,7 @@ changed; it is written down now.
 | You want | Look at |
 |---|---|
 | To install it and run one turn | [GETTING_STARTED.md](../GETTING_STARTED.md) |
+| A model recipe, a fix for an error message, or a quick answer | [docs/GUIDE.md](../docs/GUIDE.md) — model setup, troubleshooting, FAQ |
 | What a flag, command or default does | [README.md](../README.md) — it is checked against the code by `packages/gnomon-cli/src/docs.test.ts`, so it is not allowed to drift |
 | What a contract guarantees | [docs/CONTRACTS.md](../docs/CONTRACTS.md) and the fixtures in `conformance/` |
 | Why a behaviour is the way it is | [CHANGELOG.md](../CHANGELOG.md) — entries name the failure that produced the change |
@@ -25,16 +26,17 @@ about a config you have edited.
 ## Where to take it
 
 **A question — "how do I", "is this supposed to", "which role should".**
-→ [Discussions](https://github.com/eljaplacido/gnomonharness/discussions).
+→ [Discussions, Q&A](https://github.com/eljaplacido/gnomonharness/discussions/new?category=q-a).
 Include the output of `gnomon --version` and the `.gnomon/` files that matter
 (`roles.toml`, `policy.toml`) if the behaviour depends on the surface — most of
 it does.
 
 **A bug — something behaves differently from what a doc or a test claims.**
-→ [Open a bug report](https://github.com/eljaplacido/gnomonharness/issues/new?template=bug_report.md).
-The template asks where your expectation comes from (a README line, a test, a
+→ [Open a bug report](https://github.com/eljaplacido/gnomonharness/issues/new?template=bug_report.yml).
+The form asks where your expectation comes from (a README line, a test, a
 contract) on purpose: that sentence is what separates a bug from a
-disagreement about design, and it is what makes the report actionable.
+disagreement about design, and it is what makes the report actionable. It also
+asks for `gnomon --version`, the OS, the endpoint kind and the surface hash.
 
 **A change you want — a new tool, a surface contract, a behaviour change.**
 → [Open a change proposal](https://github.com/eljaplacido/gnomonharness/issues/new?template=proposal.md)
@@ -57,7 +59,7 @@ second reviewer — see the review contract in
 worth. They are targets, stated so you can tell the difference between "slow"
 and "abandoned"; they are not an SLA, and nobody is paid to meet them.
 
-NOT verified from the repository tree: whether GitHub Discussions is enabled on
-this repository. `.github/ISSUE_TEMPLATE/config.yml` has linked to it since
-before this file existed, and that link 404s if the feature is switched off. If
-it does, open a question as an issue instead and say so in the issue.
+Discussions is enabled on this repository (checked 2026-11-01 through the
+GitHub API: `has_discussions: true`, with a Q&A category). If the link ever
+404s, the feature was switched off; open a question as an issue instead and say
+so in the issue.
