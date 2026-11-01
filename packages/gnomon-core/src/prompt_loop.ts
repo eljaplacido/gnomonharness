@@ -2442,6 +2442,11 @@ export interface TurnCounters {
    * `writes` cannot see. The pair separates "never wrote a file" from "wrote
    * through the shell", which are opposite diagnoses. */
   worktree_moves: number;
+  /** Bash calls whose stamp could not be taken, so whether they changed the
+   * worktree is unknown (tools.ts worktreeMoved). Counted in neither
+   * `worktree_moves` nor the idle streak. Absent when there were none, so a
+   * reader can tell "0 moves" from "0 moves that anyone could see". */
+  worktree_unknown?: number;
   /** Anti-flailing nudges fired, and where the first one landed. */
   nudges: number;
   first_nudge_step?: number;
@@ -3095,6 +3100,11 @@ export async function runAgenticTurn(
   // changing meaning underneath every existing surface. This exists so the gap
   // can be DISCLOSED instead.
   let shellTouchedWorktree = false;
+  // A shell call whose effect on the tree is unknown (the stamp could not be
+  // taken). Not a change, and not proof of none: `after = "change"` runs the
+  // check for it, because skipping a declared check on a guess is the failure
+  // the gate exists to prevent. Nothing else reads it.
+  let shellMayHaveTouched = false;
   const verify = resolveVerify(config);
   const resilience = resolveResilience(config);
   let verifyRounds = 0;
@@ -3510,7 +3520,9 @@ export async function runAgenticTurn(
           // "change": the same question asked of the tree rather than of the
           // tool name, so heredoc and sed -i work is checked too, while a
           // question-only turn that moved nothing is not charged a full suite.
-          (verify.after === "change" && shellTouchedWorktree));
+          // A shell call the stamp could not see counts: "moved nothing" has
+          // to be known to skip a check, not assumed.
+          (verify.after === "change" && (shellTouchedWorktree || shellMayHaveTouched)));
 
       // The gate did not apply, and the reason is one the operator would want
       // to know: the surface declared a check, the turn changed the worktree,
@@ -4129,6 +4141,20 @@ export async function runAgenticTurn(
         shellTouchedWorktree = true;
         callsSinceWrite = 0;
         callsAtLastNudge = 0;
+      } else if (outcome.worktree_changed === null) {
+        // Ran, and nobody can say whether it changed anything: the tree could
+        // not be stamped (tools.ts worktreeMoved). Until #62 this case did not
+        // exist -- the walk stopped at its cap and stamped what it had seen,
+        // so in a 30,000-file tree 7 of 20 edits did not move the stamp, and
+        // a working agent's commands were counted as idle and it was nudged.
+        //
+        // Neither progress nor idling, so the streak neither restarts nor
+        // grows: the call is taken back out of the count it was added to at
+        // the top of this loop. The nudge says "N calls without changing a
+        // file", and this call is not known to be one of them.
+        counters.worktree_unknown = (counters.worktree_unknown ?? 0) + 1;
+        callsSinceWrite--;
+        shellMayHaveTouched = true;
       }
 
       deps.audit?.write("tool_call", {
@@ -4140,6 +4166,10 @@ export async function runAgenticTurn(
         code: outcome.code,
         bucket: mapBucket(outcome.code),
         summary: outcome.summary,
+        // What the stamp observed, for a call that took one: true, false, or
+        // null for unknown. Written as observed, so an unknown is never
+        // recorded as the false it used to be read as.
+        ...(outcome.worktree_changed !== undefined ? { worktree_changed: outcome.worktree_changed } : {}),
         args: deps.audit.text(JSON.stringify(call.args)),
         result: deps.audit.text(outcome.content),
       });
@@ -4195,7 +4225,9 @@ export async function runAgenticTurn(
           // stops a failing test run or a broken script being counted as one
           // more quiet step. Undefined means the tool ran no command.
           (outcome.shell_exit === undefined || outcome.shell_exit === 0) &&
-          !outcome.worktree_changed &&
+          // The folded line ends "nothing changed". Unknown (null) is not
+          // nothing, so a call the stamp could not see is printed in full.
+          (outcome.worktree_changed === undefined || outcome.worktree_changed === false) &&
           !outcome.surface_drift &&
           !askedIndividually;
         if (foldable) {

@@ -13,7 +13,7 @@
  * No dependencies.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { recordDegradation, type DegradationSink } from "./degradation.js";
 import {
   readFileSync,
@@ -79,8 +79,14 @@ export interface ToolOutcome {
    * `"always"` for any turn that ever shelled out — widening a declared value
    * without declaring it. This exists so the anti-flailing nudge can tell work
    * from idling; the verify gate keeps its own, narrower meaning.
+   *
+   * Three-valued for a command that ran: true, false, or null when the tree
+   * could not be stamped on one side and nobody can say (worktreeMoved).
+   * Undefined means no stamp was taken -- another tool, or a bash call refused
+   * before it ran. Read `=== false` for "changed nothing", never `!value`:
+   * null is falsy and is not an answer.
    */
-  worktree_changed?: boolean;
+  worktree_changed?: boolean | null;
   /**
    * The COMMAND's exit status, when the tool ran one.
    *
@@ -1997,16 +2003,20 @@ export function surfaceHashOf(ctx: ToolContext): string | null {
  *
  * Observation, not inference: a pattern list over `sed|tee|make` would be a
  * behaviour-deciding rule living outside the content-hashed surface, and it
- * would be wrong on the first command it had not been taught. This reuses the
- * same walk `glob`/`grep` use, so it inherits their fixed ignore set and their
- * file cap, and it never reads file contents.
+ * would be wrong on the first command it had not been taught. It never reads
+ * file contents.
  *
  * Returns null when the tree cannot be stamped, which callers must read as
- * "unknown", never as "unchanged".
+ * "unknown", never as "unchanged". A walk that reached WALK_MAX_FILES is one of
+ * those. It used to return a stamp of the first 20,000 files it happened to
+ * visit, and on a 30,000-file tree 7 of 20 sampled single-file edits did not
+ * move it (#62): a partial answer reported as a whole one, so the command was
+ * recorded as changing nothing and counted toward the nudge.
  *
- * Cost, measured: 1.4ms on this repo (273 walked files) and 79.6ms on a
- * synthetic tree at the WALK_MAX_FILES cap — so at most ~160ms per bash call,
- * against a measured model round-trip of 7.4s median. It stats, never reads.
+ * Inside a git work tree it asks git (gitStampOf) instead of walking. The walk
+ * stat'd every file in JS before AND after every command: per tool turn, 50ms
+ * at 0 files, 104ms at 5k and 260ms at 20k, where goose stayed flat at ~22ms
+ * (#62, UX1c). Outside git it walks, as it always did.
  */
 export function worktreeStampOf(ctx: ToolContext, alsoRoot?: string): string | null {
   try {
@@ -2018,32 +2028,18 @@ export function worktreeStampOf(ctx: ToolContext, alsoRoot?: string): string | n
     // "98 call(s) without changing a file" immediately after postconf -e,
     // service start and chown, with two of its tests already passing. The
     // nudge was not wrong to fire on its premise; the premise was false.
+    //
+    // Either root unknown makes the whole stamp unknown, even when the other
+    // one moved. Weaker than it could be; never wrong.
     const roots = alsoRoot && alsoRoot !== ctx.root ? [ctx.root, alsoRoot] : [ctx.root];
-    for (const base of roots)
-    for (const rel of walkFiles(base, base)) {
-      // .gnomon/ has its own stamp (surfaceHashOf) and its own meaning; a
-      // surface edit is drift, not progress.
-      //
-      // .gnomon-loops/ is gnomon's OWN state, the same family as .gnomon-audit
-      // and .gnomon-sessions in NEVER_WALKED: `gnomon loop install` puts cron
-      // on a schedule and every tick appends to cron.log and rewrites
-      // <loop>.json. That made the tree move under a step that changed
-      // nothing, so `worktree_changed` came back true for read-only work and
-      // the anti-flailing nudge lost its premise -- exactly what adding
-      // coverage/ to NEVER_WALKED fixed on 2026-09-05, arriving instead
-      // through a directory the harness writes itself. It is excluded HERE
-      // rather than in NEVER_WALKED so glob and grep can still read it; only
-      // the "did the agent change anything" question ignores it.
-      // (String, not loops.ts's LOOP_STATE_DIR: loops.ts imports this module.)
-      if (rel === ".gnomon" || rel.startsWith(".gnomon/")) continue;
-      if (rel === ".gnomon-loops" || rel.startsWith(".gnomon-loops/")) continue;
-      let st: Stats;
-      try {
-        st = statSync(join(base, rel));
-      } catch {
-        continue; // vanished mid-walk: the next stamp will differ anyway
-      }
-      h.update(`${base}/${rel}:${st.size}:${st.mtimeMs}\n`);
+    for (const base of roots) {
+      let one = gitStampOf(base);
+      if (one === undefined) one = walkStampOf(base);
+      if (one === null) return null;
+      // Which method made it is inside `one`: a git stamp and a walk stamp of
+      // the same tree are different digests, so a root that changes method
+      // between before and after reads as moved, never as unchanged.
+      h.update(`${base}\0${one}\n`);
     }
     return h.digest("hex");
   } catch {
@@ -2052,14 +2048,313 @@ export function worktreeStampOf(ctx: ToolContext, alsoRoot?: string): string | n
 }
 
 /**
- * Did the worktree move? Only a stamp taken on both sides can say so; an
- * unstampable tree is unknown, and unknown must not read as changed (that
- * would disarm the nudge) nor as unchanged in a way anyone relies on.
+ * Did the worktree move? Only a stamp taken on both sides can say so. Three
+ * answers, and the third is not a spelling of the second:
+ *
+ *   true   both stamps exist and differ;
+ *   false  both stamps exist and agree;
+ *   null   either side could not be stamped -- unknown.
+ *
+ * This returned false for unknown, on the reasoning that unknown must not read
+ * as changed (that would disarm the nudge). That half holds. Reading it as
+ * unchanged is the same mistake the other way: it counts a working agent's
+ * commands toward "N calls without changing a file". So unknown is said, and
+ * the nudge, the fold, the verify gate and the audit each decide what it means
+ * for them (prompt_loop.ts).
  */
-export function worktreeMoved(ctx: ToolContext, before: string | null, alsoRoot?: string): boolean {
-  if (before === null) return false;
+export function worktreeMoved(
+  ctx: ToolContext,
+  before: string | null,
+  alsoRoot?: string
+): boolean | null {
+  if (before === null) return null;
   const after = worktreeStampOf(ctx, alsoRoot);
-  return after !== null && after !== before;
+  if (after === null) return null;
+  return after !== before;
+}
+
+/**
+ * The stamp's exclusions, as a question about one path relative to the root
+ * being stamped. Shared by the walk and the git stamp, so the two give the same
+ * answer about the same tree.
+ *
+ * .gnomon/ has its own stamp (surfaceHashOf) and its own meaning; a surface
+ * edit is drift, not progress.
+ *
+ * .gnomon-loops/ is gnomon's OWN state, the same family as .gnomon-audit and
+ * .gnomon-sessions in NEVER_WALKED: `gnomon loop install` puts cron on a
+ * schedule and every tick appends to cron.log and rewrites <loop>.json. That
+ * made the tree move under a step that changed nothing, so `worktree_changed`
+ * came back true for read-only work and the anti-flailing nudge lost its
+ * premise -- exactly what adding coverage/ to NEVER_WALKED fixed on 2026-09-05,
+ * arriving instead through a directory the harness writes itself. It is
+ * excluded HERE rather than in NEVER_WALKED so glob and grep can still read it;
+ * only the "did the agent change anything" question ignores it. (String, not
+ * loops.ts's LOOP_STATE_DIR: loops.ts imports this module.)
+ *
+ * NEVER_WALKED itself the walk applies on its own. git has never heard of it,
+ * so a path git lists is checked against it here: otherwise an un-ignored
+ * `.gnomon-shadow/` or `coverage/` comes back into the stamp through git status,
+ * and with it the false "changed" each was added to the list to stop.
+ */
+function stampSkips(rel: string, isDir: boolean): boolean {
+  const segs = rel.replace(/\/+$/, "").split("/");
+  if (segs[0] === ".gnomon" || segs[0] === ".gnomon-loops") return true;
+  const dirs = isDir ? segs : segs.slice(0, -1);
+  return dirs.some((d) => NEVER_WALKED.has(d));
+}
+
+/**
+ * The walk, for a root outside git. Null when it reached WALK_MAX_FILES: the
+ * files past the cap were never looked at, so a stamp would describe part of
+ * the tree while claiming to describe all of it.
+ */
+function walkStampOf(base: string): string | null {
+  const files = walkFiles(base, base);
+  if (files.length >= WALK_MAX_FILES) return null;
+  const h = createHash("sha256");
+  h.update("walk\n");
+  for (const rel of files) {
+    if (stampSkips(rel, false)) continue;
+    let st: Stats;
+    try {
+      st = statSync(join(base, rel));
+    } catch {
+      continue; // vanished mid-walk: the next stamp will differ anyway
+    }
+    h.update(`${rel}:${st.size}:${st.mtimeMs}\n`);
+  }
+  return h.digest("hex");
+}
+
+/** A status this slow is worth falling back from, not waiting on twice a command. */
+const GIT_STAMP_TIMEOUT_MS = 5_000;
+/** Far past what a WALK_MAX_FILES budget of listed paths can print. */
+const GIT_STAMP_MAX_BUFFER = 32 * 1024 * 1024;
+
+/** stdout of one git call in `cwd`, or null if it did not start or did not exit 0. */
+function stampGit(cwd: string, args: string[]): string | null {
+  const r = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: GIT_STAMP_TIMEOUT_MS,
+    maxBuffer: GIT_STAMP_MAX_BUFFER,
+    windowsHide: true,
+  });
+  return r.error || r.status !== 0 ? null : r.stdout;
+}
+
+/** The directory holding the nearest `.git` at or above `dir`, or null. */
+function nearestDotGit(dir: string): string | null {
+  for (let d = resolve(dir); ; ) {
+    if (existsSync(join(d, ".git"))) return d;
+    const up = dirname(d);
+    if (up === d) return null;
+    d = up;
+  }
+}
+
+/**
+ * Where `base` sits inside its git work tree, as git spells it ("" at the top,
+ * "sub/dir/" below it), or null when base is not in a work tree.
+ *
+ * The prefix, not `--show-toplevel`: git prints the toplevel as a real path,
+ * and the root may not be one -- macOS's tmpdir is /var -> /private/var, a
+ * Windows temp path can carry 8.3 short names. Joined to the toplevel, every
+ * listed path would come out "outside" the root and the stamp would fall back
+ * to the walk for exactly the trees it was written for. Stripping git's own
+ * prefix and joining the rest to `base` never compares two spellings of a path.
+ *
+ * Asked once per root rather than twice per command: it costs as much as the
+ * status call it serves, ~2ms each on gx10, and at 0 files that doubled the
+ * stamp. The cached answer is reused only while the nearest `.git` above the
+ * root is the one it was given under, so a `git init` or an `rm -rf .git` asks
+ * again. GIT_DIR or GIT_WORK_TREE in the environment puts the repository where
+ * no `.git` check can see, so with either set it always asks.
+ *
+ * `refreshed` is whether this process has run one ordinary status here yet;
+ * see gitStampOf.
+ */
+interface GitRoot {
+  near: string | null;
+  prefix: string | null;
+  refreshed: boolean;
+}
+const gitRoots = new Map<string, GitRoot>();
+
+function gitRootOf(base: string): GitRoot | null {
+  const envRepo = process.env.GIT_DIR !== undefined || process.env.GIT_WORK_TREE !== undefined;
+  const near = nearestDotGit(base);
+  // No .git anywhere above and none named by the environment: git's own
+  // discovery would find nothing either, and a process to hear that costs ms.
+  if (near === null && !envRepo) return null;
+  const hit = gitRoots.get(base);
+  if (hit && hit.near === near && !envRepo) return hit.prefix === null ? null : hit;
+  const out = stampGit(base, ["rev-parse", "--is-inside-work-tree", "--show-prefix"]);
+  const [inside, prefix] = (out ?? "").split("\n");
+  const answer = inside === "true" && prefix !== undefined ? prefix : null;
+  const entry: GitRoot = {
+    near,
+    prefix: answer,
+    // Asked again under GIT_DIR, or after a .git appeared: the same repository
+    // keeps the one refresh it already had.
+    refreshed: hit !== undefined && hit.near === near && hit.prefix === answer && hit.refreshed,
+  };
+  gitRoots.set(base, entry);
+  return answer === null ? null : entry;
+}
+
+/**
+ * The stamp, asked of git. undefined when git cannot answer for this root --
+ * not a work tree, no git, a failed or slow status, or a root git itself
+ * ignores -- and the caller walks instead. null when git answered and the stamp
+ * is still unknown: the budget below ran out.
+ *
+ * What it hashes:
+ *   - HEAD's commit id. Every tracked file git does not list is identical to
+ *     its copy there, so the id stands in for all of them. Without it a
+ *     `git checkout` or `git pull` from one clean tree to another reads as no
+ *     change.
+ *   - every path `git status` lists -- modified, staged, deleted, renamed,
+ *     untracked, ignored -- with its size and mtime, as the walk took them.
+ *     Not git's status letters: those describe the index, and `git add` moves
+ *     the index, not the tree. The walk never counted staging as work; nor
+ *     does this.
+ *   - the files inside a directory git lists without looking into: an ignored
+ *     directory (`! out/`), a nested repository (`? vendor-x/`), a submodule.
+ *     Walked, against the same budget.
+ *
+ * Ignored files are in it on purpose. The question is "did the agent change
+ * the project", not "did it change what git tracks": a `.env` written for a
+ * config task or a binary from `make` is gitignored and IS the work, and a
+ * stamp blind to it fires the nudge on an agent doing its job -- the failure
+ * this stamp exists to prevent. The walk saw them, so this does. What the walk
+ * never entered (NEVER_WALKED) stays out, through stampSkips.
+ *
+ * One deliberate difference from the walk: a tracked file rewritten with the
+ * same bytes (`touch`, a formatter that changed nothing) moved the walk's stamp
+ * and does not move this one. git compares content, and that is the better
+ * answer to the question.
+ *
+ * Locks. Every status after the first passes `--no-optional-locks`: this runs
+ * beside the operator's own git and the agent's, a status that refreshes the
+ * index holds index.lock while it does, and a `git commit` landing in that
+ * moment fails. Editors pass it for the same reason. The FIRST status per root
+ * per process is an ordinary one, refresh and all, because a racy index never
+ * heals without one. A repository built and committed in one go -- a benchmark
+ * fixture, a scaffold, a fresh clone's last second -- has entries git cannot
+ * trust by stat and re-reads on every status. Measured: a 2,000-file one costs
+ * ~20ms a status until refreshed and ~5ms after, and gnomon's own turn-start
+ * `git diff --numstat HEAD` does not refresh it. One status as the operator
+ * would run it, once a session, is the cost of not paying that twice a
+ * command for the rest of it.
+ *
+ * Cost, measured on gx10 under load (refreshed index; walk in brackets): one
+ * status 3.5ms at 0 files [0.2], 8.7ms at 5k [39], 25ms at 20k [162] and 53ms
+ * at 50k [131, and 12 of 20 edits missed] -- git's parallel lstat of the index
+ * and a readdir of every directory, in C. Below ~500 files the walk is the
+ * cheaper of the two by ~3ms a stamp; one method per kind of tree is worth
+ * that. The JS side is O(listed paths), in daily work the handful being
+ * edited. There is no cap on the tracked tree: WALK_MAX_FILES bounds only what
+ * has to be stat'd here, and past it the stamp is unknown rather than partial.
+ */
+function gitStampOf(base: string): string | null | undefined {
+  const root = gitRootOf(base);
+  if (root === null || root.prefix === null) return undefined;
+  const prefix = root.prefix;
+  const out = stampGit(base, [
+    ...(root.refreshed ? ["--no-optional-locks"] : []),
+    "status",
+    "--porcelain=v2",
+    "-z",
+    "--branch",
+    "--no-ahead-behind",
+    "--untracked-files=all",
+    "--ignored=matching",
+    "--",
+    ".",
+  ]);
+  if (out === null) {
+    gitRoots.delete(base);
+    return undefined;
+  }
+  root.refreshed = true;
+
+  // Collected, then sorted: git prints tracked changes, then untracked, then
+  // ignored, so `git add` would reorder the same files into a new stamp.
+  let head = "";
+  const lines: string[] = [];
+  let budget = WALK_MAX_FILES;
+  const recs = out.split("\0");
+  for (let i = 0; i < recs.length; i++) {
+    const rec = recs[i]!;
+    if (rec === "") continue;
+    if (rec.startsWith("# branch.oid ")) {
+      head = rec;
+      continue;
+    }
+    // The other headers name the branch and its upstream. `git checkout -b`
+    // and `git fetch` change them, and change no file.
+    if (rec.startsWith("#")) continue;
+    // Space-separated fields before the path, per porcelain v2. A rename or
+    // copy (`2`) is followed by its original path as a record of its own.
+    const kind = rec[0];
+    const fields =
+      kind === "1" ? 8 : kind === "2" ? 9 : kind === "u" ? 10 : kind === "?" || kind === "!" ? 1 : -1;
+    // A record this parser was not written for: let the walk answer rather
+    // than hash something misread.
+    if (fields < 0) return undefined;
+    let at = 0;
+    for (let f = 0; f < fields; f++) {
+      const space = rec.indexOf(" ", at);
+      if (space < 0) return undefined;
+      at = space + 1;
+    }
+    const paths = [rec.slice(at)];
+    if (kind === "2") paths.push(recs[++i] ?? "");
+
+    for (const p of paths) {
+      // git lists the root itself, or a directory holding it, when the whole
+      // root is ignored or untracked (`! out/` asked from out/deep/). git has
+      // nothing to add there, so the walk answers.
+      if (!p.startsWith(prefix) || p.length === prefix.length) return undefined;
+      // A trailing slash is git saying "directory, not looked into".
+      const rel = p.slice(prefix.length).replace(/\/$/, "");
+      const abs = join(base, rel);
+      if (stampSkips(rel, p.endsWith("/"))) continue;
+      let st: Stats | undefined;
+      try {
+        // lstat, not stat: a listed symlink is stamped as the link and never
+        // followed out of the tree -- the line the walk draws too.
+        st = lstatSync(abs);
+      } catch {
+        st = undefined;
+      }
+      if (st === undefined) {
+        // Deleted, or the old side of a rename.
+        lines.push(`${rel}:-`);
+      } else if (st.isDirectory()) {
+        const files = walkFiles(abs, abs);
+        budget -= files.length;
+        if (files.length >= WALK_MAX_FILES || budget < 0) return null;
+        for (const f of files) {
+          let fst: Stats;
+          try {
+            fst = statSync(join(abs, f));
+          } catch {
+            continue;
+          }
+          lines.push(`${rel}/${f}:${fst.size}:${fst.mtimeMs}`);
+        }
+      } else {
+        if (--budget < 0) return null;
+        lines.push(`${rel}:${st.size}:${st.mtimeMs}`);
+      }
+    }
+  }
+  lines.sort();
+  return createHash("sha256").update(`git\n${head}\n${lines.join("\n")}\n`).digest("hex");
 }
 
 export function inSurface(ctx: ToolContext, abs: string): boolean {

@@ -46,6 +46,35 @@
   shadow meant to observe would have changed the run. Found in review by
   agentcenter before shipping. A test runs the same turn shadow-off and on, and
   fails with `worktree_moves` 0 → 2 if the directory is walked.
+- **The worktree stamp asks git, and says "unknown" instead of guessing
+  (#62).** Before and after every shell command, gnomon walked and stat'd every
+  file in the project to answer "did this command change anything". Per tool
+  turn that cost 50 ms at 0 files, 104 ms at 5k and 260 ms at 20k, where goose
+  stayed at ~22 ms. Past 20,000 files the walk stopped and stamped what it had
+  seen, so on a 30,000-file tree 7 of 20 edits did not move the stamp. A
+  command that changed files was then recorded as changing nothing and counted
+  toward the idle nudge.
+  - Inside a git work tree, the stamp is HEAD's commit id plus the size and
+    mtime of every path `git status --porcelain=v2` lists, including untracked
+    and gitignored files. Directories git does not look into (an ignored
+    `out/`, a nested repository) are walked. `.gnomon/`, `.gnomon-loops/` and
+    the never-walked directories stay out, as before. The tracked tree has no
+    file cap. One difference from the walk: a file rewritten with the same
+    bytes no longer counts as a change, because git compares content.
+  - Outside git, it walks as before. A walk that reaches the cap is now
+    **unknown**, not a partial stamp.
+  - `worktree_changed` is now `true`, `false` or `null` (unknown). An unknown
+    call does not count toward the nudge or the stall check, is never folded
+    under "nothing changed", and runs a check declared with
+    `[verify] after = "change"`. The audit records it on each `tool_call`, and
+    the turn's counters have a new `worktree_unknown` count, present only when
+    it is not zero.
+  - The first status per root in a process refreshes the index, as the
+    operator's own `git status` would. After that, every status passes
+    `--no-optional-locks`, so it never holds `index.lock` against a concurrent
+    `git commit`. Without that one refresh, a repository built and committed in
+    one go (a racy index) costs ~20 ms per status instead of ~5 ms, for the
+    whole session.
 
 ## [0.3.1] — 2026-10-21
 

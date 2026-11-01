@@ -52,8 +52,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1304 TypeScript tests (1067 core, 212 cli, 18
-> natives, 7 tui) and 60 Rust tests — **1364 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1317 TypeScript tests (1080 core, 212 cli, 18
+> natives, 7 tui) and 60 Rust tests — **1377 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -780,7 +780,7 @@ nothing in the record could say so.
 | `max_steps` | The default for a role that declares no `max_steps`. The role's own value wins where it has one. `/roles` prints which of the two you are getting. |
 | `legs` | `max_steps_total` defaults to `max_steps × legs`. `max_steps` is a checkpoint — the harness compacts and continues — and this is how many checkpoints there are before the wall. `1` restores stop-at-the-first-checkpoint. |
 | `stall_repeats` | Identical consecutive tool calls that mean the model is going in circles. Ends the turn with `stop_reason: stall`. |
-| `nudge_after_idle` | Calls without changing a file before the model is nudged to act or conclude — and re-nudged every this-many after that. A nudge, not a wall: persistence is what wins hard-but-solvable tasks. |
+| `nudge_after_idle` | Calls without changing a file before the model is nudged to act or conclude — and re-nudged every this-many after that. A nudge, not a wall: persistence is what wins hard-but-solvable tasks. A shell call counts only when gnomon saw that it changed nothing: in a git work tree it asks `git status`; elsewhere it walks the tree, and past 20,000 files the answer is unknown and the call is not counted. |
 | `converge_refire` | Calls between convergence re-pushes once `converge_after` is reached. A single "submit what you have" is easy to ignore. |
 
 Values are floored where a zero would mean the opposite of what it reads:
