@@ -474,3 +474,160 @@ is a person refusing.
 **Fixture**: `conformance/shadow_record.json`. `packages/gnomon-core/src/shadow.test.ts`
 emits each kind of record and asserts its keys, labels and question ids against
 the fixture. It also asserts that this section names the same decisions.
+
+## 8. Workspace trust — `v: 1`
+
+Whether this machine's user accepted what a surface grants beyond the scaffold
+`gnomon init` writes (README, "Workspace trust"). A surface that grants nothing
+extra produces none of the records below.
+
+**Audit record** — kind `trust`, written right after `session_start` by
+`launch`/`prompt`/`task`, and in its own sealed trail by `gnomon trust grant` /
+`revoke`. Keys: `decision`, `by`, `surface_hash`, `grants` (sorted grant keys),
+`root` (the project's real path).
+
+**Task record** — `gnomon task --json` carries the same object, without `root`,
+as `trust`. Absent when the surface grants nothing extra.
+
+| `decision` | Meaning |
+|---|---|
+| `trusted` | Already trusted; `by` says how |
+| `granted` | Accepted now, and recorded in the store |
+| `clamped` | Ran with every grant taken back to the scaffold's value |
+| `revoked` | `gnomon trust revoke` forgot this project |
+
+| `by` | Who |
+|---|---|
+| `store` | This (root, surface hash) is in the store |
+| `store:covered` | A different hash, granting nothing one trusted surface in this project did not |
+| `flag:--trust` | `--trust` on this invocation |
+| `env:GNOMON_TRUST` | `GNOMON_TRUST` names this surface's hash (full, or a prefix of 12+) |
+| `human` | Answered `y` at the prompt |
+| `human:declined` | Answered `n` / Enter at the prompt |
+| `default:no-operator` | Nobody to ask: headless, or five unreadable answers |
+| `command:trust` | `gnomon trust grant` / `revoke` |
+
+**Store** — `trust.json` in the credential store's directory (`$XDG_DATA_HOME/gnomon`,
+else `%APPDATA%\gnomon` on Windows, else `~/.local/share/gnomon`), mode 0600:
+`{ "v": 1, "entries": [{ "root", "surface_hash", "grants", "at", "by" }] }`.
+Never inside a repository; never part of the surface hash. A store that does not
+parse trusts nothing.
+
+**Exit codes.** A clamped run exits by its bucket like any other. Quitting at the
+interactive prompt exits **3** (`refused_by_gate`) with nothing run.
+
+**Fixture**: `conformance/trust_record.json`. `packages/gnomon-core/src/trust.test.ts`
+asserts the code's `TRUST_DECISIONS` and `TRUST_BY` equal the fixture; the end-to-end
+tests there and in `packages/gnomon-cli/src/trust.test.ts` read the `trust` field
+and the audit record back from real runs.
+
+---
+
+## 9. `gnomon acp` — the Agent Client Protocol surface
+
+`gnomon acp` serves [ACP](https://agentclientprotocol.com) protocol version
+**1** as newline-delimited JSON-RPC 2.0 on stdio. An editor configured against
+it depends on the method set and on what each answer means, so both are
+pinned. ACP is a transport only: turns run through the terminal's own
+`runSessionTurn`, and the audit records are the terminal's, with
+`session_start.mode = "acp"`.
+
+| Direction | Methods |
+|---|---|
+| editor → gnomon, requests | `initialize`, `authenticate`, `session/new`, `session/set_mode`, `session/prompt` |
+| editor → gnomon, notifications | `session/cancel` |
+| gnomon → editor, requests | `session/request_permission` |
+| gnomon → editor, notifications | `session/update`: `agent_message_chunk`, `agent_thought_chunk`, `tool_call`, `tool_call_update`, `available_commands_update`, `current_mode_update` |
+
+Not served: `session/load` (`loadSession: false`), the client's `fs/*` and
+`terminal/*` methods (gnomon's own tools act on disk, inside its sandbox), and
+MCP servers offered in `session/new` (tools come from `.gnomon/` only).
+
+**The approval ladder.** Every gated call asks with these four options; any
+other answer, including `cancelled`, is a refusal.
+
+| `optionId` | `kind` | Terminal answer | Scope |
+|---|---|---|---|
+| `once` | `allow_once` | `y` | this call |
+| `turn` | `allow_always` | `a` | every gated call for the rest of this turn |
+| `session` | `allow_always` | `s` | every gated call for the rest of the session, writes included |
+| `no` | `reject_once` | `N` | refused (code 2, refusal) |
+
+**Stop reasons.** gnomon's `stop_reason` (§1) is kept in the audit record and
+the snapshot; the prompt response carries ACP's nearest word: `cancelled` →
+`cancelled`, `step_wall` → `max_turn_requests`, `truncated` → `max_tokens`,
+everything else → `end_turn`.
+
+**Tool kinds.** `read` → `read`; `write`, `edit` → `edit`; `glob`, `grep` →
+`search`; `bash` → `execute`; `webfetch` → `fetch`; `todo`, `note` → `think`;
+anything else → `other`. A finished call is `completed` when its bucket is
+`result` and any shell command exited 0, otherwise `failed`.
+
+**Fixture**: `conformance/acp_mapping.json`. `packages/gnomon-core/src/acp.test.ts`
+reads the methods and session updates out of `acp.ts` itself and asserts them,
+the permission options, the stop-reason map and the tool kinds against the
+fixture, and asserts this section names the same methods.
+`packages/gnomon-cli/src/acp.test.ts` drives the real command with a scripted
+client against a fake model.
+
+---
+
+## 10. `gnomon guard` — schema `gnomon.guard/1`
+
+The decision on one tool call another harness is about to make (README,
+[Governing other harnesses](../README.md#governing-other-harnesses)). A hook
+gates the call on it: deny is refused with `reason`, ask goes to a person,
+allow changes nothing. One JSON object per call on stdout.
+
+| Decision | Exit | Means |
+|---|---|---|
+| `allow` | 0 | No rule refuses the call and the `[approval]` gate would not ask. Not a permission: the adapters print nothing on allow, so the host harness's own prompt still applies. |
+| `deny` | 2 | A rule refuses it — the same refusal gnomon's own tool would return, `rule` names which. |
+| `ask` | 3 | The `[approval]` gate would ask a person first (`rule: "approval"`). |
+
+Exit **10** is no decision: the document says `decision: "ask"`, `rule:
+"error"`, and why in `error` (no role, no committed surface at the base, a
+surface that does not load, an audit trail that could not be written). A
+decision gnomon could not make is never an allow.
+
+| Rule | When |
+|---|---|
+| `tools` | the role was not given this tool |
+| `malformed` | the arguments cannot be read as that tool's (`write` with no `content`, `bash` with a non-string `command`) |
+| `bash_deny` | a `bash_deny` pattern matched (`pattern` names it) |
+| `bash_allow` | a segment is not on the role's `bash_allow`, or the command substitutes or redirects |
+| `sudo` | sudo at command position, on the host |
+| `sandbox` | a path outside the root and every granted `extra_roots` |
+| `surface` | a write or edit inside `.gnomon/` |
+| `write_allow` | a path outside the role's `write_allow` |
+| `network` | `[sandbox] network = false` |
+| `url` | a scheme other than http(s), or a private, loopback or link-local address |
+| `approval` | the gate would ask (decision `ask`) |
+| `ungoverned` | no `.gnomon/` above the working directory, or a tool gnomon has no pre-execution rule for (decision `allow`) |
+| `error` | no decision could be made (exit 10) |
+
+`rule` is `null` on an allow that nothing stopped. Tools decided (`tool`):
+`bash`, `write`, `edit`, `read`, `webfetch` — gnomon's own names and argument
+names. Anything else is `allow` with rule `ungoverned`, never guessed at.
+
+Keys: `schema`, `decision`, `rule`, `reason`, `tool`, `role`, `base` (the
+commit the rules were read from, full sha), `surface_hash` (the surface at
+`base`), `governed`, `elapsed_ms`; optionally `pattern`, `audit` (`trail`,
+`seq`, `hash`, when `[audit] enabled = true`), `error`.
+
+**Input.** `--tool <kind> --input <json>`, or on stdin `{"tool", "input",
+"cwd"?, "session_id"?}`. With `--from claude-code | opencode | cursor` stdin
+is that harness's own hook payload, and the answer is in its own format
+(`harness_answers` in the fixture): Claude Code gets nothing on allow and
+`hookSpecificOutput.permissionDecision` deny or ask otherwise, exit 0; Cursor
+gets `{}` on allow and `permission` / `user_message` / `agent_message`
+otherwise, exit 0; opencode's plugin reads the generic document.
+
+**Fixtures**: `conformance/guard_decision.json` (this contract) and
+`conformance/guard_cases.json` (calls and the decision each must reach).
+`packages/gnomon-cli/src/guard.test.ts` asserts the code's `GUARD_DECISIONS`,
+`GUARD_RULES`, `GUARD_TOOLS` and `guardExit`, the two tables above and the
+fixture are the same sets, validates documents the real binary printed against
+`verdict_keys`, and puts every case to the real binary.
+`packages/gnomon-core/src/guard.test.ts` puts every case to gnomon's own turn
+loop as well, and fails if the two decide differently.

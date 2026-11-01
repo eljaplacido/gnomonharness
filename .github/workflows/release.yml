@@ -363,6 +363,12 @@ jobs:
           # Here it must also report the stamp it was packed with.
           EXPECT_REVISION="$STAMP" bash scripts/check-publishable.sh
 
+      # npm publish is NOT a step here, deliberately. This job ends at a draft,
+      # and a draft is not a decision to ship. The publish runs in
+      # publish-npm.yml, on `release: published` — after a human has pressed
+      # Publish on this draft — and it publishes these exact tarballs, checked
+      # against the SHA256SUMS written below, rather than packing again.
+
       # No third-party release action. The token that can publish a release is
       # the most privileged thing in this repository's CI, and `gh` is already
       # on the runner — handing that token to an action outside this workspace
@@ -408,7 +414,15 @@ jobs:
 
           Already installed: \`gnomon update\`.
 
-          By hand, npm only (one line, identical in bash and PowerShell):
+          From npm — published from this release's own tarballs when the
+          release is published:
+
+          \`\`\`
+          npm i -g gnomon-harness@$VERSION
+          \`\`\`
+
+          By hand from this release, no registry (one line, identical in bash
+          and PowerShell):
 
           \`\`\`
           npm i -g https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/gnomon-core-$VERSION.tgz https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/gnomon-natives-$VERSION.tgz https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/gnomon-tui-$VERSION.tgz https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/gnomon-harness-$VERSION.tgz

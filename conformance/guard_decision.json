@@ -1,0 +1,58 @@
+{
+  "version": "0.1.0",
+  "_comment": [
+    "The `gnomon guard` answer, schema gnomon.guard/1 (docs/CONTRACTS.md §10).",
+    "",
+    "A hook in another harness gates a tool call on it without reading the code: deny is",
+    "refused with `reason`, ask goes to a person, allow changes nothing. A decision, rule or",
+    "key renamed, or an exit code moved, is therefore a contract change, and this file is the",
+    "third point that makes it deliberate: packages/gnomon-cli/src/guard.test.ts asserts the",
+    "code's GUARD_DECISIONS / GUARD_RULES / guardExit, the tables in CONTRACTS.md §10 and the",
+    "lists here are the same sets, and validates documents the real binary printed against",
+    "`verdict_keys`. The per-harness answers (`harness_answers`) are checked the same way."
+  ],
+  "schema": "gnomon.guard/1",
+  "decisions": ["allow", "deny", "ask"],
+  "rules": [
+    "tools",
+    "malformed",
+    "bash_deny",
+    "bash_allow",
+    "sudo",
+    "sandbox",
+    "surface",
+    "write_allow",
+    "network",
+    "url",
+    "approval",
+    "ungoverned",
+    "error"
+  ],
+  "tools": ["bash", "write", "edit", "read", "webfetch"],
+  "exit_codes": {
+    "0": "allow",
+    "2": "deny",
+    "3": "ask",
+    "10": "no decision could be made; the document says decision ask, rule error, and why in `error`"
+  },
+  "verdict_keys": {
+    "required": ["schema", "decision", "rule", "reason", "tool", "role", "base", "surface_hash", "governed", "elapsed_ms"],
+    "optional": ["pattern", "audit", "error"]
+  },
+  "audit_keys": {
+    "required": ["trail", "seq", "hash"],
+    "optional": []
+  },
+  "harness_answers": {
+    "claude-code": {
+      "allow": "",
+      "deny": { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "<string>" } },
+      "ask": { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "<string>" } }
+    },
+    "cursor": {
+      "allow": {},
+      "deny": { "permission": "deny", "user_message": "<string>", "agent_message": "<string>" },
+      "ask": { "permission": "ask", "user_message": "<string>", "agent_message": "<string>" }
+    }
+  }
+}

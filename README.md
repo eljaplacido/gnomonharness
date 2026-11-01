@@ -61,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1390 TypeScript tests (1142 core, 223 cli, 18
-> natives, 7 tui) and 60 Rust tests — **1450 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1549 TypeScript tests (1265 core, 259 cli, 18
+> natives, 7 tui) and 60 Rust tests — **1609 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -98,6 +98,7 @@ does not. Behaviour is readable because something is holding still.
 - [Sessions](#sessions)
 - [Governance and Audit](#governance-and-audit)
 - [Governing other harnesses](#governing-other-harnesses)
+- [In your editor — `gnomon acp`](#in-your-editor--gnomon-acp)
 - [CLI Reference](#cli-reference)
 - [Interactive Commands](#interactive-commands)
 - [Adopting gnomon in an Existing Project](#adopting-gnomon-in-an-existing-project)
@@ -375,6 +376,16 @@ implementations agree.
 Node >= 20 and nothing else.
 
 ```bash
+npm i -g gnomon-harness
+```
+
+That gives you `gnomon` (the package is `gnomon-harness`: the name `gnomon` on
+npm belongs to an unrelated logging utility). It covers `launch`, `prompt`,
+`task`, `acp` and `init`. The installer below does the same and also fetches
+the native binaries that `surface`, `enumerations`, `session`, `apply` and
+`simulate` need:
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.sh | sh
 ```
 
@@ -386,8 +397,9 @@ The installer ([`scripts/install.sh`](scripts/install.sh),
 [`scripts/install.ps1`](scripts/install.ps1)) checks Node and, if it is missing
 or older than 20, prints the command for your OS instead of running one as root.
 It resolves the latest release (`GNOMON_VERSION=0.3.2` pins one), installs the
-npm package — from the registry once `gnomon-harness` is published there, from
-the release's own tarballs until then — and puts the native binaries in
+npm package — from the registry when that version is published there, from
+the release's own tarballs when it is not (an older pin, or the minute between
+a release and its npm publish) — and puts the native binaries in
 `~/.local/share/gnomon/bin` (`%LOCALAPPDATA%\gnomon\bin`), where gnomon finds
 them with no environment variable. Every download is checked against the
 release's `SHA256SUMS`; a mismatch stops the install before anything is
@@ -414,8 +426,9 @@ package, and `npm rm -g gnomon-harness` alone leaves three behind. Your stored
 keys (`~/.local/share/gnomon/credentials.json`) and each project's `.gnomon/`
 are left alone.
 
-**By hand**, without the installer — the same four packages the release job
-builds and refuses to publish unless they install and run:
+**By hand from the release**, without the registry — the same four packages
+the release job builds, refuses to publish unless they install and run, and
+then publishes to npm byte for byte:
 
 ```bash
 V=0.3.2; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
@@ -425,8 +438,10 @@ npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/
 <!-- bash only: `V=0.3.2` is not an assignment in PowerShell, and `$B/...` is
 not a path there. The installer one-liners above are the cross-shell route. -->
 
-Once `gnomon-harness` is on the registry this is `npm i -g gnomon-harness`;
-today that 404s.
+From the registry this is `npm i -g gnomon-harness` (or
+`npm i -g gnomon-harness@0.3.2` to pin), which resolves the other three by
+name. Releases reach npm when they are published on GitHub, by
+[`publish-npm.yml`](.github/workflows/publish-npm.yml), with npm provenance.
 
 Requires **Node ≥ 20** and a model endpoint — [Ollama](https://ollama.com) for
 local inference, or any OpenAI-shaped API. A **Rust toolchain** is needed only
@@ -465,9 +480,11 @@ the shim anyway"; it does not.
 
 `pnpm run unlink:global` removes it.
 
-> Not on npm yet: the workspace packages are `private` and depend on each other
-> via `workspace:*`. Publishing means making them public and versioning the
-> internal dependencies.
+> On npm since 0.3.1 as `gnomon-harness`, `gnomon-core`, `gnomon-natives` and
+> `gnomon-tui`. In the workspace they depend on each other via `workspace:*`;
+> `pnpm pack` pins each to the release's exact version, and
+> `scripts/check-publishable.sh` installs the packed result in an empty
+> directory before any release is drafted.
 
 ---
 
@@ -674,16 +691,22 @@ choosing a model per role is neither guesswork nor hand-editing TOML:
 
 Arrows move, Enter chooses, and **typing filters** — sixty models from a
 hosted endpoint narrow to the one you meant instead of scrolling past. Pick a
-model, then pick the role to give it to, and `.gnomon/roles.toml` is rewritten
-in place: only that role's `model` and `endpoint` lines change, comments and
-every other role untouched, and the role's `fallback` block is deliberately
-left alone.
+model, then pick the role to give it to, and the file that routes that role is
+rewritten in place. That file is the active profile when the profile names the
+role's model, as a scaffolded project's `local_first.toml` does, and
+`.gnomon/roles.toml` otherwise. When the profile is the surface's own
+`role_profile`, the `model` and `endpoint` lines `roles.toml` already has for
+that role are updated to match, so the two files agree and the next start has
+nothing to warn about. A pick made under `--profile` changes that profile only.
+Only the role's `model` and `endpoint` lines change, comments and every other
+role are untouched, and the role's `fallback` block is deliberately left alone.
+`gnomon endpoint add --role` and the first-run picker write the same way.
 
 That edits the surface, so the hash changes and the new value is reported:
 
 ```
   ✓ plan → qwen3.6:35b @local
-  .gnomon/roles.toml written · surface now 3f9c1a04b71e2d55…
+  .gnomon/profiles/local_first.toml written (profile "local_first" governs plan), and .gnomon/roles.toml to match · surface now 3f9c1a04b71e2d55…
 ```
 
 `/models --list` prints the plain list instead, which is also what you get when
@@ -1527,6 +1550,94 @@ is a human act that changes the surface hash; a role that could reach
 `.gnomon/skills/` with plain `write` would grant itself a standing instruction
 and skip that entirely.
 
+### Workspace trust
+
+Everything above is set by the repository's own `.gnomon/`, which is Rule 1
+working as designed. It is also a hole: a repository you just cloned can ship
+`approval = "never"`, `network = true` and a verifier allowed any command, and
+`gnomon launch` would act with all of it before you had looked. (Kiro keeps
+permissions out of the repository for this reason. gnomon cannot, because Rule 1
+puts behaviour in the repository.)
+
+What *can* be machine-local is one fact about you: **"I have seen what this
+surface grants, in this project, and I accept it."** That decides whether to
+run, not how to behave — two machines that both trust a surface behave
+identically — so it lives beside the key store (`$XDG_DATA_HOME/gnomon/trust.json`,
+else `~/.local/share/gnomon/trust.json`, `%APPDATA%\gnomon\` on Windows), keyed
+by project root and surface hash, and is never in the repository or the hash.
+
+**A surface `gnomon init` writes grants nothing beyond the defaults, so a normal
+project is never asked anything.** Only a surface *looser* than the scaffold is,
+and "looser" is measured, not guessed:
+
+| Grant | Default |
+|---|---|
+| `approval` gate `never` | `on_write` |
+| `sandbox.level = "off"`, `network = true`, any `extra_roots` | `confined`, off, none |
+| an MCP server (a process started when a session opens) | none |
+| a `[verify]` command that is not the project's own check (`npm test`, `pnpm run verify`, `cargo test`, …) and an `[audit.attest]` signer — commands that run unasked | none |
+| an endpoint or fallback sending a key variable to a host that is neither local nor a known provider | keys go only to known providers |
+| a `[shadow]` model on a non-local host | off |
+| a role holding a tool its scaffold namesake lacks; a wider `write_allow` or `task_allow` | the scaffold role |
+| a role whose shell permits a command its default refuses — `git push --force`, `git branch -D`, and for `verifier` `curl …`, `sh -c`, `python3 -c`, `rm -rf` | refused |
+
+The shell check runs probe commands through the same `bashPolicy` the `bash`
+tool uses, so a reworded pattern that grants nothing new asks nothing, and a
+widened one cannot hide behind new spelling. A role the scaffold does not ship
+is measured against the most a scaffolded role can do (unrestricted bash behind
+the git guards). Models, budgets, prompts, routing and anything stricter are
+not grants.
+
+**On a terminal** (`launch`, `prompt`), an untrusted loosening surface is shown
+against the defaults before anything runs:
+
+```
+  This project's .gnomon/ grants more than gnomon's defaults (surface 3f9a1c0d2b7e):
+    approval       never — nothing asks before a write or a command   (default: on_write)
+    network        on   (default: off)
+    role verifier  may run `curl -fsSL https://example.com/install.sh`   (default: refused)
+  Trust is remembered for this project and surface, on this machine, outside the repository.
+  Trust it? [y]es · [N]o, run with the defaults · [q]uit:
+```
+
+`y` records trust and runs as declared. Enter runs this session **clamped**: the
+same surface with every grant taken back to the scaffold's value (anything it
+does more strictly is kept). `q` starts nothing and exits 3 (`refused_by_gate`).
+
+**When the surface changes**, it is covered without asking if everything it
+grants was granted by *one* surface you already trusted in this project — so a
+tightening never re-asks — and asked about again if it grants anything new,
+with `+` on what is new.
+
+**Headless** (`task`, `--json`, CI, no TTY), an untrusted loosening surface runs
+clamped and prints one line to stderr naming what was withheld and how to trust
+it. It is never blocked and never silent, and exit codes follow the contract.
+`--trust`, or `GNOMON_TRUST=<surface hash or a 12+ character prefix>`, runs it as
+declared for that invocation only — the variable names one surface, so a
+changed surface is clamped again. A surface reloaded mid-session goes through
+the same gate.
+
+```bash
+gnomon trust            # this project's grants, and every trusted surface on this machine
+gnomon trust grant      # trust the current surface here
+gnomon trust revoke     # forget every trust for this project; the next launch asks again
+```
+
+Every decision is recorded: a `trust` audit record after `session_start`
+(`decision`: trusted, granted, clamped, revoked; `by`: store, human, flag, …),
+and a `trust` field on the `task --json` record. A clamped run's records carry
+the surface's hash *and* say the grants did not apply.
+[docs/CONTRACTS.md §8](docs/CONTRACTS.md) pins the vocabulary.
+
+**Limits, published.** The store is a file your user can write, so an agent
+holding unrestricted `bash` with approval granted can write it too — no worse
+than what that `bash` can already do, but it is not a boundary against your own
+account. `[verify]` running the project's own `npm test` is not a grant, and a
+hostile repository's test script is still hostile code; the scaffold does the
+same. `.gnomon/loops/` and `gnomon check` are not gated: a loop runs only after
+`gnomon loop install`, which prints the command, and `check` runs the base
+revision's declared check by design.
+
 ### Outcomes
 
 Tool results map to buckets exactly like process exit codes
@@ -1702,7 +1813,7 @@ chain = true
 
 ```bash
 gnomon audit show      # trails
-gnomon audit verify    # exit 1 if any chain is broken
+gnomon audit verify    # exit 1 if any chain, or an anchor the surface declares, is broken
 ```
 
 **This is an evidence layer, not a compliance claim.** Whether a deployment
@@ -1783,21 +1894,25 @@ find them in the source:
    Whether a particular smartcard agent works through this interface is
    unmeasured.
 
-**And a fifth limit, about the CLI rather than the mechanism: `gnomon audit
-verify` does not check signatures.** It calls `verifyTrail(path)` with no
-attestation settings, so it reports chain integrity only — a trail whose heads
-were deleted still prints `intact`. Attestation verification is library-only
-today (`verifyTrail(path, { attest })`, or `verifyAttestation` directly), and
-`replay` has no command either. Both are exercised by the suite — 31 tests for
-`attest.ts`, 42 for `replay.ts` — but neither is reachable from a terminal.
-Wiring them to subcommands is not done.
+**`gnomon audit verify` checks the anchor as well as the chain.** It passes
+the surface's `[audit.attest]` to `verifyTrail`, and under each trail's chain
+line it prints an `anchor:` line. `SIGNED` gives the heads verified and the
+last sequence number they cover, plus a count of any later records that are
+not yet anchored. `BROKEN`, `UNVERIFIABLE` and `NOT SIGNED` on a surface that
+declares a signer each exit 1. A surface that declares no signer gets `NOT
+SIGNED` with a note that the chain alone does not prove the file is the one
+written, and the exit code is decided by the chain. Limit 2 still applies:
+heads deleted line by line from the same directory do not show. `replay` has
+no command yet. It is library-only and exercised by the suite (42 tests in
+`replay.test.ts`), but no terminal command reaches it.
 
 ## Governing other harnesses
 
 Every rule above is enforced inside gnomon's own tool loop, so work done by
 Claude Code, opencode or a factory's container never meets it. `gnomon check`
 asks the same rules after the fact, of a change any harness made, from the
-repository alone:
+repository alone — and [`gnomon guard`](#before-the-call-gnomon-guard) asks
+them before each tool call, from inside the other harness's own hook:
 
 ```bash
 # CI: judge the branch against the rules as they stood on main
@@ -1889,6 +2004,163 @@ outright. A named `--head` that is not what is checked out is judged in a
 temporary `git worktree`, which has no installed dependencies — a `[verify]`
 that needs them reports *could not run*, not a pass.
 
+### Before the call: `gnomon guard`
+
+`check` answers after the fact. `gnomon guard` answers at run time, one tool
+call at a time, from inside the other harness's own hook — before a shell
+command runs, a file is written or edited, a file is read or a URL fetched:
+
+```bash
+gnomon guard --role implement --tool bash --input '{"command":"git push --force origin main"}'
+# {"schema":"gnomon.guard/1","decision":"deny","rule":"bash_deny","reason":"Refused: …",
+#  "tool":"bash","role":"implement","base":"bc8f27a…","surface_hash":"01ba64…", …}   exit 2
+```
+
+The answer is **allow** (exit 0), **deny** (2) or **ask** (3), with the rule
+and the reason; **10** means no decision could be made, and the document then
+says `ask` — never a silent allow. The full contract is
+[CONTRACTS.md §10](docs/CONTRACTS.md).
+
+**The same code decides as in gnomon's own loop.** There is no second policy:
+`toolCallPolicy` (`tools.ts`) calls the prechecks `bash`, `write`, `edit`,
+`read` and `webfetch` themselves run before they do anything — the role's tool
+list, `bash_deny` / `bash_allow`, sudo, the sandbox, `.gnomon/`, `write_allow`,
+`[sandbox] network`, private addresses — then the `[approval]` gate, which is
+where `ask` comes from. The cases in `conformance/guard_cases.json` are put to
+both the guard and the real turn loop in the test suite, which fails if they
+decide differently.
+
+**The rules are committed ones**, as in `check`: the HEAD the session started
+at (recorded by the Claude Code SessionStart hook, or by the guard at a
+session's first call), else HEAD — never the working tree. An agent cannot
+loosen the policy it is held to by editing `.gnomon/`, or by committing an edit
+mid-session. The role is `--role`, else `--agent <name>` through
+`[check.roles]`, as for `check`. With `[audit] enabled = true` every decision
+is appended to `.gnomon-audit/guard-<session>.jsonl`, one sealed hash chain per
+session that `gnomon audit verify` reads.
+
+**Adapters.** `gnomon guard install <harness>` prints what to install, and
+`--write` adds it to this project's own config (never a user-wide one):
+
+| Harness | What is installed | deny | ask | allow |
+|---|---|---|---|---|
+| Claude Code | a `PreToolUse` hook on Bash, Write, Edit, MultiEdit, NotebookEdit, Read and WebFetch, added beside the `check` SessionStart and Stop hooks (`.claude/settings.json`) | `permissionDecision: "deny"` — Claude reads the reason | `"ask"` — Claude Code prompts | nothing printed: Claude Code's own permission flow decides |
+| opencode 2.2 | a plugin, `.opencode/plugins/gnomon-guard.js`, on `tool.hook("execute.before")` for shell, write, edit, patch, read, webfetch | the call fails with gnomon's reason, which the model reads | opencode's own permission prompt (`permission.hook("evaluate")`). A non-interactive `opencode run` rejects it; `--auto` approves it, as it does every ask | nothing |
+| Cursor | `.cursor/hooks.json`: `beforeShellExecution` and `beforeReadFile` | `permission: "deny"` with `user_message` / `agent_message` | `permission: "ask"` (a read that would be asked is denied: `beforeReadFile` cannot ask) | `{}` |
+| anything else with a pre-tool hook | `gnomon guard` with the call on stdin: `{"tool": "bash", "input": {"command": "…"}, "cwd": "…", "session_id": "…"}` in gnomon's own tool and argument names | exit 2 | exit 3 | exit 0 |
+
+Verified against the installed harnesses: the Claude Code and Cursor configs
+against the schemas in Claude Code 2.1.316 and Cursor 3.0.16, and the opencode
+plugin end to end in opencode 2.2.5 with a scripted model — a denied
+`git push --force` never ran, the model was handed gnomon's reason, and an
+`ask` reached opencode's permission prompt. Cursor was not driven end to end
+(it has no headless agent to drive); its `ask` on a shell command is passed as
+Cursor's own `ask`.
+
+Because the rules are gnomon's, so are their consequences: under the default
+`sandbox = "confined"` a read or write outside the repository is denied — a
+Claude Code `Read` of a file in your home directory included — exactly as in
+gnomon's loop. Grant a path with `[sandbox] extra_roots`, or leave `Read` out
+of the hook's matcher.
+
+**Not done.** Cursor file **writes**: its documented hooks give none before a
+write happens (`afterFileEdit` is after; `preToolUse` does not document Write's
+input), so writes in Cursor are left to `gnomon check`. MCP tools and any tool
+gnomon has no rule of its own for (Glob, Grep, Task…) are `allow` with rule
+`ungoverned` — the harness's own permissions apply.
+
+**Latency**, measured on the gx10 (aarch64) under a load average of ~14:
+the decision itself takes 3–5 ms (p50; the test suite holds it under 50 ms),
+a whole `gnomon guard` process from the published install about 50–60 ms p50,
+of which a bare `node -e 0` is 22–28 ms. The rules are materialised once per
+`.gnomon/` tree under `.git/gnomon-guard/`, and a warm call spawns no `git`.
+A checkout's `./gnomon` runs through tsx and costs several hundred
+milliseconds more.
+
+**What this does and does not pin.** gnomon decides each tool call the other
+agent proposes; it does not steer, re-prompt or constrain the agent itself,
+and what it cannot see it cannot refuse — a shell command can still do
+anything `bash_allow` lets through, exactly as in gnomon's own loop. An agent
+whose harness has no pre-tool hook cannot be stopped before a call at all;
+`gnomon check` still judges its work after the fact.
+
+---
+
+## In your editor — `gnomon acp`
+
+`gnomon acp` speaks the [Agent Client Protocol](https://agentclientprotocol.com)
+(ACP, by Zed Industries) on stdin and stdout, so any editor that drives ACP
+agents can run gnomon in its agent panel. The editor starts the process; you
+configure it once.
+
+**ACP is only a transport.** A prompt from the editor runs the same turn the
+terminal runs — the same function, not a copy (`runSessionTurn` in
+`packages/gnomon-core/src/prompt_loop.ts`) — under the same `.gnomon/`, roles,
+routing, `[chain]`, tool gate, sandbox, `write_allow`, `[verify]`, session
+snapshots and audit records. What changes is only how gnomon asks and tells:
+
+| In the terminal | In the editor |
+|---|---|
+| `approve>` y · a · s · N | a permission prompt with the same four answers: this call, the rest of this turn, the rest of the session (writes included), refuse |
+| `/role <name>` | the mode picker: roles are the session's modes |
+| `/<role> <text>` | the same text; roles are offered as slash commands |
+| a `suggest` routing proposal | a permission prompt to switch role, once or for the session |
+| Esc | the editor's stop button (`session/cancel`) |
+| `⚙` tool lines | tool-call cards, with the diff gnomon is asking about |
+
+The audit trail's `session_start` record says `mode: "acp"` and names the
+editor; approval records read `by: "human"`, as they do at the terminal.
+
+**Zed** — in `settings.json` (or Agent Settings → External Agents → Add
+Custom Agent):
+
+```json
+{
+  "agent_servers": {
+    "gnomon": {
+      "type": "custom",
+      "command": "gnomon",
+      "args": ["acp"],
+      "env": {}
+    }
+  }
+}
+```
+
+**JetBrains IDEs** (AI Assistant) — AI Chat → ⋯ → Add Custom Agent, which
+opens `~/.jetbrains/acp.json`:
+
+```json
+{
+  "agent_servers": {
+    "gnomon": {
+      "command": "gnomon",
+      "args": ["acp"]
+    }
+  }
+}
+```
+
+If the editor cannot find `gnomon` on its PATH, give the full path
+(`which gnomon`). `--role plan` starts sessions in another role;
+`--profile <name>` applies a routing profile, as it does for `prompt`.
+
+Three things are deliberate, and each is the terminal's behaviour kept:
+
+- **The project needs a `.gnomon/` first.** Run `gnomon launch` (or `init`)
+  there once. The editor gets a clear error rather than a surface written for
+  it — writing a surface is a human act.
+- **Files are read and written on disk, by gnomon's own tools,** not through the
+  editor's buffers. ACP makes the editor's `fs/*` methods optional; routing
+  `write` through them would bypass the sandbox check, `write_allow` and the
+  surface-drift detection, all of which act on the file on disk. Editors
+  reload changed files.
+- **MCP servers the editor offers are not connected.** Tools come from
+  `.gnomon/` so the surface hash covers them; gnomon says so in the session.
+  Declare a server under `[mcp_servers]` in `.gnomon/tools.toml` instead.
+
+Slash commands other than a role prefix are terminal-only.
+
 ---
 
 ## CLI Reference
@@ -1898,14 +2170,17 @@ that needs them reports *could not run*, not a pass.
 | `gnomon launch` | Create `.gnomon/` if missing, then open the loop. **The one to remember.** |
 | `gnomon init [--from <path>] [--force]` | Write a surface. `--from` copies an existing one. |
 | `gnomon migrate [--check]` | Bring an existing `.gnomon/` up to the current shipped defaults. `--check` reports without writing and exits 1 if anything is pending. |
-| `gnomon prompt [--continue \| --resume <id>]` | Interactive loop. |
-| `gnomon task "<what to do>" [--role <name>] [--yes] [--json]` | One task, no terminal. Exit code carries the bucket. |
+| `gnomon prompt [--continue \| --resume <id>] [--trust]` | Interactive loop. An untrusted surface that grants more than the defaults is shown and asked about first. |
+| `gnomon acp [--role <name>] [--profile <name>]` | Serve the Agent Client Protocol on stdio for an editor (Zed, JetBrains). Same surface, roles, approvals and audit as `prompt`. See [In your editor](#in-your-editor--gnomon-acp). |
+| `gnomon task "<what to do>" [--role <name>] [--yes] [--json] [--trust]` | One task, no terminal. Exit code carries the bucket. An untrusted surface that grants more than the defaults runs clamped to them. |
+| `gnomon trust [list\|grant\|revoke]` | Whether this machine trusts what this project's `.gnomon/` grants beyond the defaults. See [Workspace trust](#workspace-trust). |
 | `gnomon sessions` | Saved sessions. |
 | `gnomon skill [list\|accept <id>\|reject <id>]` | Learned skills and proposals. |
 | `gnomon key [set\|list\|unset] <endpoint\|VAR>` | Store an API key for an endpoint that declares one. |
 | `gnomon endpoint [add\|test\|list]` | Declare an endpoint end to end — provider, key, model, roles — and prove it runs one token before writing anything. Presets: `opencode-go`, `opencode-zen`, `openrouter`, `ollama`. |
 | `gnomon audit [show\|verify]` | Audit trails. |
 | `gnomon check --base <rev> [--head <rev>] [--role <r> \| --agent <name>] [--json]` | Judge a change another harness made by this surface's rules as of `<rev>`. Exit 0 held, 2 failed, 10 no verdict. See [Governing other harnesses](#governing-other-harnesses). |
+| `gnomon guard [--from claude-code\|opencode\|cursor] [--tool <kind> --input <json>] [--role <r> \| --agent <name>]` | Decide one tool call another harness is about to make, by the committed rules: allow (0), deny (2), ask (3), no decision (10). `gnomon guard install claude-code\|opencode\|cursor [--write]` installs the hook. See [Before the call](#before-the-call-gnomon-guard). |
 | `gnomon surface [hash\|manifest\|paths]` | Inspect the surface. |
 | `gnomon enumerations` | The enumerations contract. |
 | `gnomon session <cmd>` | Run shell commands as recorded session steps. |
@@ -1916,7 +2191,7 @@ that needs them reports *could not run*, not a pass.
 | `gnomon loop\|loops [list\|status\|dry-run\|run\|install\|uninstall\|reset\|kill]` | Cron-scheduled guard/act supervision with a circuit breaker. No daemon. |
 
 **`--profile <name>`** is accepted by `simulate`, `endpoint`, `audit`, `task`,
-`skill`, `prompt` and `sessions`. It merges `.gnomon/profiles/<name>.toml` over
+`skill`, `prompt`, `sessions` and `trust`. It merges `.gnomon/profiles/<name>.toml` over
 the base roles for that run, which rewrites per-role `model` and `endpoint` —
 which machine runs inference, and who is billed. It is deliberately
 **machine-scoped and does not move the surface hash**: routing is where the

@@ -110,7 +110,7 @@ provider-specific features.
 |---|---|---|
 | **MCP (HTTP/SSE)** | Cline, Goose, Continue, Claude Code | stdio MCP is wired — a pinned server's tools are discovered and offered per role, no `gnomon-core` change needed. The remaining gap is the HTTP/SSE transports and the breadth of the server ecosystem. |
 | **Cloud / async execution** | Codex, Cursor, OpenHands | No queue, no worktree pool, no issue-to-PR while you do something else. Cron-scheduled `loops` are the one unattended path — single guard/act ticks, not a queue. |
-| **IDE surface** | Cursor, Cline, Continue, Windsurf, Roo | Terminal only. |
+| **IDE surface** | Cursor, Cline, Continue, Windsurf, Roo | `gnomon acp` puts the same loop in any Agent Client Protocol editor (Zed, JetBrains): the agent panel, permission prompts and tool-call cards. No inline completions, no editor-buffer edits, no VS Code extension of its own. |
 | **Sandboxed isolation** | OpenHands | `confined` is filesystem path containment, not a container. `bash` reaches the network. |
 | **Ecosystem** | all of them | This is one repository. |
 | **Repo map / semantic context** | Aider, Cursor | Context is a sliding window over turns, not a ranked map of the repository. |
@@ -140,7 +140,8 @@ commit and review like code; you work with local or self-hosted models; you
 need to answer afterwards what an agent was permitted to do; or you want a
 small harness you can read end to end and extend.
 
-**A poor fit if** you want IDE integration, HTTP/SSE MCP transports, cloud
+**A poor fit if** you want deep IDE integration (inline edits, completions; an
+ACP agent panel is what there is), HTTP/SSE MCP transports, cloud
 execution, or the broadest model support. Those are real requirements and other
 harnesses serve them better.
 

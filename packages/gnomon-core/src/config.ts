@@ -935,6 +935,63 @@ export function modelEditTarget(config: GnomonConfig): RoleWriteTarget {
   return best?.target ?? base;
 }
 
+/**
+ * The second file a model pick has to touch: roles.toml, when the profile is
+ * the target.
+ *
+ * `roleWriteTarget` made the pickers write the file a run reads, and that fixed
+ * the routing. It left the surface disagreeing with itself. The scaffold
+ * restates every role's `model` and `endpoint` in both roles.toml and
+ * `local_first.toml`, and a pick changed only the profile, so roles.toml kept
+ * the old tag. On every start after that, the shadowed-routing audit printed
+ * one "is ignored" line per changed field, four to eight of them after the
+ * first-run picker. Each was true, and each pointed at /models or
+ * `gnomon endpoint add` as the fix, which are the commands that had caused it.
+ * Found 2026-11-01 while every documented command was verified for the guide
+ * (#69).
+ *
+ * So a pick changes both files, and the two agree again. The profile is still
+ * the file that decides the route. roles.toml is updated so that it no longer
+ * states a different value, and two limits keep that from becoming a second
+ * routing change:
+ *
+ * - **Only the surface's own profile.** A `--profile` override is chosen for
+ *   one run. A pick made under it goes to that profile alone. Copying it into
+ *   roles.toml would move the base that `role_profile` and every other profile
+ *   inherit from, and would bring the warning back on the next ordinary start.
+ * - **Only lines roles.toml already has.** The pick replaces an existing
+ *   `model` or `endpoint` line and never adds one. A surface that keeps routing
+ *   in its profiles stays that way. A field roles.toml does not set cannot
+ *   disagree with anything.
+ *
+ * Undefined when roles.toml is already the target, or when it must be left as
+ * it is.
+ */
+export function roleMirrorTarget(config: GnomonConfig, role: string): RoleWriteTarget | undefined {
+  const target = roleWriteTarget(config, role);
+  if (!target.profile) return undefined;
+  const own = (config.config.defaults as { role_profile?: string } | undefined)?.role_profile;
+  if (target.profile !== own) return undefined;
+  return { path: join(config.gnomonDir, "roles.toml"), label: ".gnomon/roles.toml" };
+}
+
+/**
+ * Load the same surface again, under the same `--profile`.
+ *
+ * Both mid-session reloads (after /models writes a pick, and after a turn moves
+ * the surface) called `loadConfig(root)` with no profile. A session started
+ * with `--profile frontier_plan` therefore came back on the surface's
+ * `role_profile` with nothing on screen to say so. /models had just written its
+ * pick into frontier_plan.toml, the profile the reload stopped reading, so the
+ * model it announced was not the one the next turn used.
+ */
+export function reloadConfig(config: GnomonConfig): GnomonConfig {
+  return loadConfig(
+    resolve(config.gnomonDir, ".."),
+    config.profile?.overridden ? config.profile.requested : undefined
+  );
+}
+
 export function loadConfig(root?: string, profileOverride?: string): GnomonConfig {
   const gnomonDir = resolveGnomonDir(root);
   const baseRoles = ((loadToml<Record<string, unknown>>(gnomonDir, "roles.toml") as Record<string, unknown>).roles ?? {}) as Roles;
@@ -1281,6 +1338,54 @@ const BUILTIN_ENDPOINTS: Record<string, EndpointConfig> = {
 };
 
 /**
+ * The request shape a URL's path names, if it names one.
+ *
+ * `/api/chat` is Ollama's own route. `/chat/completions` is OpenAI's, which
+ * every OpenAI-compatible server copies, Ollama's `/v1` included, and a path
+ * that ends in a version segment (`/v1`) is the base of one. Any other path
+ * gives no answer.
+ */
+export function kindFromUrl(url: string): EndpointKind | undefined {
+  let path: string;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    path = url.split(/[?#]/)[0] ?? "";
+  }
+  path = path.replace(/\/+$/, "").toLowerCase();
+  if (/\/api\/chat$/.test(path)) return "ollama";
+  if (/\/chat\/completions$/.test(path) || /\/v\d+$/.test(path)) return "openai";
+  return undefined;
+}
+
+/**
+ * The request shape an endpoint is sent: its declared `kind`, else what its URL
+ * names, else `unclear`.
+ *
+ * A block with no `kind` used to get the Ollama shape whatever its URL said.
+ * A hand-written `[endpoints.vllm]` with `url = ".../v1/chat/completions"`
+ * therefore sent `options: {temperature}` and `tool_name` to an OpenAI server.
+ * Strict servers reject those fields with a 400, and nothing named the missing
+ * line as the cause. `gnomon endpoint add` had always read the kind off the URL
+ * (`/api/chat` is ollama, anything else openai). Only hand-written blocks went
+ * without it, and the guide's recipes are hand-written blocks.
+ *
+ * `unclear` is what each caller used before this function existed, so a URL
+ * that names no shape behaves exactly as it did. The primary route defaulted
+ * to ollama and a fallback to openai. Nothing that worked can change: an
+ * Ollama-native URL ends in `/api/chat`, and that still resolves to ollama.
+ * auditSurface reports a kind-less block whose URL names no shape, because
+ * there the kind is still a guess.
+ */
+export function endpointKind(
+  endpoint: { url?: string; kind?: EndpointKind },
+  unclear: EndpointKind = "ollama"
+): EndpointKind {
+  if (endpoint.kind) return endpoint.kind;
+  return kindFromUrl(endpoint.url ?? "") ?? unclear;
+}
+
+/**
  * Resolve a named endpoint from the surface.
  *
  * `local` has a built-in default so a surface that never mentions endpoints
@@ -1590,7 +1695,7 @@ const BLOCK_OWNER: Record<string, BlockOwner> = {
   verify: { file: "policy.toml", read: true },
   approval: { file: "policy.toml", read: true },
   sandbox: { file: "policy.toml", read: true },
-  // resolveCheckRole (check.ts) reads config.policy.check.roles.
+  // resolveCheckRole (guard.ts, shared by check and guard) reads config.policy.check.roles.
   check: { file: "policy.toml", read: true },
   // NOT read: no consumer of config.policy.exit_codes anywhere in this build.
   exit_codes: { file: "policy.toml", read: false },
@@ -1770,6 +1875,29 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
         fatal: false,
       });
     }
+  }
+
+  // approval and sandbox, set in both files to different values. The policy.toml
+  // value is used. Before this check, `[defaults] approval = "never"` beside the
+  // scaffold's `gate = "on_write"` did nothing and nothing said so. The edit
+  // was simply lost, and in the other direction a stricter `[defaults]` value
+  // that loses means the run asks less than one of the files says it will.
+  for (const s of SPLIT_SETTINGS) {
+    const { policy, defaults, used } = readSplit(config, s);
+    if (policy === undefined || defaults === undefined || policy === defaults) continue;
+    const rank = (v: unknown) => (s.order as readonly unknown[]).indexOf(v);
+    const looser = rank(defaults) > rank(used) && rank(used) !== -1;
+    problems.push({
+      where: `.gnomon/config.toml [defaults] ${s.defaultsKey}`,
+      problem:
+        `${s.defaultsKey} = "${String(defaults)}" is ignored: .gnomon/policy.toml [${s.block}] ` +
+        `${s.key} = "${String(policy)}" is also set, and policy.toml wins. This run uses "${used}"` +
+        (looser ? `, which is looser than the value here.` : `.`),
+      fix:
+        `Set ${s.key} in .gnomon/policy.toml [${s.block}], the one a run reads, and delete ` +
+        `${s.defaultsKey} from [defaults] (or make the two agree).`,
+      fatal: false,
+    });
   }
 
   // A published option that this build does not implement, named in the
@@ -2300,6 +2428,23 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
         fatal: true,
       });
     }
+
+    // No kind, and a URL that does not name one, so the request shape is a
+    // guess. A URL that does name one is not reported: the shape follows from
+    // a line in the surface (see endpointKind), and warning on every start
+    // about a correct inference would teach people to skip the warnings.
+    if (kind === undefined && typeof block.url === "string" && block.url && !kindFromUrl(block.url)) {
+      problems.push({
+        where,
+        problem:
+          `no kind, and the url does not name a request shape, so requests go out as ` +
+          `kind = "${endpointKind({ url: block.url })}".`,
+        fix:
+          `Add kind = "openai" for a server that answers at …/chat/completions, ` +
+          `or kind = "ollama" for Ollama's own …/api/chat.`,
+        fatal: false,
+      });
+    }
   }
 
   const known = new Set(listEndpoints(config));
@@ -2497,7 +2642,7 @@ export async function probeEndpointAuth(
     return { ok: false, detail: `$${endpoint.api_key_env} is not set` };
   }
 
-  const ollama = (endpoint.kind ?? "ollama") === "ollama";
+  const ollama = endpointKind(endpoint) === "ollama";
   const body = ollama
     ? { model, messages: [{ role: "user", content: "hi" }], stream: false }
     : { model, messages: [{ role: "user", content: "hi" }], max_tokens: 1 };
@@ -2681,10 +2826,15 @@ export function routeRole(
     model,
     temperature,
     top_p,
-    url: process.env.GNOMON_MODEL_URL ?? endpoint.url,
+    // `||`, not `??`. A variable set to nothing (`GNOMON_MODEL_URL= gnomon …`,
+    // or a blank entry in a CI env block) is how people switch one off, and
+    // `??` kept the empty string. Every route then failed with "Failed to
+    // parse URL from", while the startup note, which tests the variable for
+    // truthiness, said nothing was overridden.
+    url: process.env.GNOMON_MODEL_URL || endpoint.url,
     apiKeyEnv: endpoint.api_key_env,
     endpoint: endpointName,
-    kind: endpoint.kind ?? "ollama",
+    kind: endpointKind(endpoint),
   };
 
   let fallback: RouteTarget | undefined;
@@ -2703,7 +2853,9 @@ export function routeRole(
       url: fb.url ?? fbEndpoint?.url ?? "",
       apiKeyEnv: fb.api_key_env ?? fbEndpoint?.api_key_env,
       endpoint: fbEndpointName,
-      kind: fbEndpoint?.kind ?? "openai",
+      // A fallback with no kind has always defaulted to openai, so that stays
+      // the default for a URL that names no shape.
+      kind: endpointKind(fbEndpoint ?? { url: fb.url }, "openai"),
     };
   }
 
@@ -2889,6 +3041,47 @@ export function resolveExtraRoots(config: GnomonConfig): string[] {
   return raw
     .filter((r): r is string => typeof r === "string" && r.trim().length > 0)
     .map((r) => (isAbsolute(r) ? resolve(r) : resolve(root, r)));
+}
+
+/**
+ * The two settings that have two homes, and the order they are read in.
+ *
+ * `approval` and `sandbox` can each be set in config.toml `[defaults]` and in
+ * policy.toml (`[approval] gate`, `[sandbox] level`). policy.toml wins. That
+ * order was spelled out at eight call sites, and two of them left out the
+ * `[defaults]` step: `/sandbox` and `explain sandbox` reported "confined" for a
+ * surface whose turns ran under `[defaults] sandbox = "off"`. Each setting is
+ * now resolved in one place, and auditSurface names the losing value when the
+ * two files disagree (see SPLIT_SETTINGS).
+ */
+const SPLIT_SETTINGS = [
+  { defaultsKey: "approval", block: "approval", key: "gate", fallback: "on_write",
+    order: ["never", "on_write", "always"] },
+  { defaultsKey: "sandbox", block: "sandbox", key: "level", fallback: "confined",
+    order: ["off", "confined", "strict"] },
+] as const;
+
+type SplitSetting = (typeof SPLIT_SETTINGS)[number];
+
+/** Each file's value for one split setting, and the one a run uses. */
+function readSplit(
+  config: GnomonConfig,
+  s: SplitSetting
+): { policy?: unknown; defaults?: unknown; used: string } {
+  const policy = ((config.policy ?? {}) as Record<string, Record<string, unknown> | undefined>)[s.block]?.[s.key];
+  const defaults = (config.config.defaults as Record<string, unknown> | undefined)?.[s.defaultsKey];
+  const used = (policy ?? defaults ?? s.fallback) as string;
+  return { policy, defaults, used };
+}
+
+/** The approval gate a turn runs under: policy.toml, then `[defaults]`, then on_write. */
+export function resolveApprovalGate(config: GnomonConfig): "never" | "on_write" | "always" {
+  return readSplit(config, SPLIT_SETTINGS[0]).used as "never" | "on_write" | "always";
+}
+
+/** The sandbox level a turn runs under: policy.toml, then `[defaults]`, then confined. */
+export function resolveSandboxLevel(config: GnomonConfig): "off" | "confined" | "strict" {
+  return readSplit(config, SPLIT_SETTINGS[1]).used as "off" | "confined" | "strict";
 }
 
 /** Where `bash` actually runs. See resolveExec. */

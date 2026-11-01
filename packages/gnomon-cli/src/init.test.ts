@@ -54,6 +54,19 @@ describe("template hygiene", () => {
     expect(tools).not.toContain("[verify]");
   });
 
+  it("the scaffolded network note says what network = false enforces", async () => {
+    // Every new policy.toml said network isolation was "declared but NOT
+    // enforced", beside a tools.toml saying webfetch is refused outright when
+    // network = false -- which it is. A note that undersells a control is a
+    // reason to delete the line. Both halves have to be there: what it stops,
+    // and that bash is not isolated by it.
+    await initSurface({ dir: root });
+    const policy = readFileSync(join(root, ".gnomon", "policy.toml"), "utf-8");
+    expect(policy).not.toMatch(/NOT enforced by this build/);
+    expect(policy).toMatch(/network = false is enforced for the `webfetch` tool/);
+    expect(policy).toMatch(/NOT process isolation/);
+  });
+
   it("the embedded templates contain no unescaped backticks", () => {
     // The templates live in JS template literals, so a markdown-style
     // `word` closes the literal and breaks the build. This has happened

@@ -88,8 +88,12 @@ function Install-Gnomon {
 
         # -- the npm package -------------------------------------------------
         Write-Step "Installing $package $version into $prefix"
-        Invoke-Native (Get-Npm) @('view', "$package@$version", 'version') | Out-Null
-        if ($LASTEXITCODE -eq 0) {
+        # By what npm prints, not its exit status alone: see install.sh. npm
+        # before 10 exited 0 with no output for a version that was not there.
+        # Invoke-Native folds stderr in, so look for the line, not the first one.
+        $viewed = @(Invoke-Native (Get-Npm) @('view', "$package@$version", 'version'))
+        $onRegistry = ($LASTEXITCODE -eq 0) -and (@($viewed | Where-Object { "$_".Trim() -eq $version }).Count -gt 0)
+        if ($onRegistry) {
             Write-Host '  from the npm registry'
             Invoke-Npm @('install', '-g', '--prefix', $prefix, '--no-audit', '--no-fund', "$package@$version")
             # A tarball install left the libraries as separate globals; the
@@ -102,7 +106,7 @@ function Install-Gnomon {
         } else {
             # Not on the registry, so its libraries cannot be resolved by name
             # either: all four tarballs go to npm in one command.
-            Write-Host '  from the release tarballs (not on the npm registry)'
+            Write-Host '  from the release tarballs (this version is not on the npm registry)'
             $tgz = @()
             foreach ($p in ($libs + $package)) { $tgz += Save-Verified $ctx "$p-$version.tgz" }
             Invoke-Npm (@('install', '-g', '--prefix', $prefix, '--no-audit', '--no-fund') + $tgz)

@@ -33,6 +33,8 @@ export * from "./shell.js";
 export * from "./must_fail_first.js";
 // `gnomon check`: the same rules, asked of a change another harness made.
 export * from "./check.js";
+// `gnomon guard`: the same rules, asked of one tool call another harness is about to make.
+export * from "./guard.js";
 export * from "./transcripts.js";
 export * from "./skills.js";
 export * from "./audit.js";
@@ -46,3 +48,8 @@ export * from "./session_store.js";
 export * from "./explain.js";
 export * from "./credentials.js";
 export * from "./loops.js";
+// Workspace trust: whether this machine's user accepted what a surface grants.
+export * from "./trust.js";
+// `gnomon acp`: the Agent Client Protocol server. A transport for the same
+// session turn the terminal runs (prompt_loop.ts:runSessionTurn), nothing more.
+export * from "./acp.js";

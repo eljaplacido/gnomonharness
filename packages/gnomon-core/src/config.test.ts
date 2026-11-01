@@ -27,6 +27,11 @@ import {
   auditSurface,
   recomputeManifest,
   PROBE_TIMEOUT_MS,
+  kindFromUrl,
+  endpointKind,
+  resolveApprovalGate,
+  resolveSandboxLevel,
+  explain,
 } from "./index.js";
 import { join, resolve } from "node:path";
 import { mkdirSync, rmSync, mkdtempSync, writeFileSync, renameSync, readdirSync } from "node:fs";
@@ -1317,5 +1322,137 @@ describe("resolveResilience: a default is not a declaration", () => {
   it("does not count a value it rejected as a declaration", () => {
     expect(resolveResilience(withResilience({ transport_grace_ms: -5 })).transport_grace_declared).toBe(false);
     expect(resolveResilience(withResilience({ transport_grace_ms: "60s" })).transport_grace_declared).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Papercuts found while verifying the guide (#69), 2026-11-01
+// ---------------------------------------------------------------------------
+
+// A block with no `kind` got the Ollama request shape whatever its URL said,
+// so a hand-written vLLM or llama.cpp block sent `options` and `tool_name` to
+// an OpenAI server. `endpoint add` always read the kind off the URL; hand-
+// written blocks, which is what the guide's recipes are, did not.
+describe("an endpoint with no kind takes the shape its URL names", () => {
+  const fixtureRoot = "../../conformance/fixture_tree";
+  const withEndpoints = (endpoints: Record<string, unknown>, roles: Record<string, unknown>): any => {
+    const c: any = loadConfig(fixtureRoot);
+    c.config = { ...c.config, endpoints };
+    c.roles = roles;
+    return c;
+  };
+
+  it("reads the shape off the path, and gives no answer for a path that names none", () => {
+    expect(kindFromUrl("http://127.0.0.1:8000/v1/chat/completions")).toBe("openai");
+    expect(kindFromUrl("http://127.0.0.1:11434/v1/chat/completions")).toBe("openai");
+    expect(kindFromUrl("https://openrouter.ai/api/v1/chat/completions/")).toBe("openai");
+    expect(kindFromUrl("http://127.0.0.1:8080/v1")).toBe("openai");
+    expect(kindFromUrl("http://127.0.0.1:11434/api/chat")).toBe("ollama");
+    expect(kindFromUrl("https://gateway.example/llm")).toBeUndefined();
+    expect(kindFromUrl("not a url")).toBeUndefined();
+  });
+
+  it("routes a kind-less /v1/chat/completions block as openai", () => {
+    const c = withEndpoints(
+      { vllm: { url: "http://127.0.0.1:8000/v1/chat/completions" } },
+      { r: { model: "m", endpoint: "vllm" } }
+    );
+    expect(routeRole(c, "r").target.kind).toBe("openai");
+  });
+
+  it("leaves Ollama blocks, and a declared kind, exactly as they were", () => {
+    const c = withEndpoints(
+      {
+        ollama: { url: "http://127.0.0.1:11434/api/chat" },
+        odd: { url: "https://gateway.example/llm" },
+        declared: { url: "http://127.0.0.1:8000/v1/chat/completions", kind: "ollama" },
+      },
+      { a: { model: "m", endpoint: "ollama" }, b: { model: "m", endpoint: "odd" }, d: { model: "m", endpoint: "declared" } }
+    );
+    expect(routeRole(c, "a").target.kind).toBe("ollama");
+    expect(routeRole(c, "b").target.kind).toBe("ollama");
+    expect(routeRole(c, "d").target.kind).toBe("ollama");
+  });
+
+  it("keeps a fallback's own default for a URL that names nothing", () => {
+    expect(endpointKind({ url: "https://gateway.example/llm" }, "openai")).toBe("openai");
+    const c = withEndpoints(
+      {},
+      { r: { model: "m", fallback: { model: "f", url: "http://127.0.0.1:11434/api/chat" } } }
+    );
+    expect(routeRole(c, "r").fallback?.kind).toBe("ollama");
+  });
+
+  it("warns only where the kind is still a guess, naming the one used", () => {
+    const surface = (endpoints: Record<string, unknown>) =>
+      ({ gnomonDir: "/nowhere", config: { endpoints }, roles: {}, policy: {}, profiles: {}, tools: {},
+         system: { content: "", version: "0.1" } }) as never;
+    expect(auditSurface(surface({ v: { url: "http://h:8000/v1/chat/completions" } }))).toEqual([]);
+    expect(auditSurface(surface({ o: { url: "http://h:11434/api/chat" } }))).toEqual([]);
+    const found = auditSurface(surface({ g: { url: "https://gateway.example/llm" } }));
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ where: ".gnomon/config.toml [endpoints.g]", fatal: false });
+    expect(found[0]!.problem).toContain('kind = "ollama"');
+  });
+});
+
+// `??` kept an empty GNOMON_MODEL_URL, and every route failed with "Failed to
+// parse URL from" while the startup note said nothing was overridden.
+describe("GNOMON_MODEL_URL set to nothing is not an override", () => {
+  it("routes to the surface's url", () => {
+    const before = process.env.GNOMON_MODEL_URL;
+    process.env.GNOMON_MODEL_URL = "";
+    try {
+      const c: any = loadConfig("../../conformance/fixture_tree");
+      c.config = { ...c.config, endpoints: { e: { url: "http://127.0.0.1:9/api/chat", kind: "ollama" } } };
+      c.roles = { r: { model: "m", endpoint: "e" } };
+      expect(routeRole(c, "r").target.url).toBe("http://127.0.0.1:9/api/chat");
+    } finally {
+      if (before === undefined) delete process.env.GNOMON_MODEL_URL;
+      else process.env.GNOMON_MODEL_URL = before;
+    }
+  });
+});
+
+// approval and sandbox each have two homes, and policy.toml wins. A
+// `[defaults] approval = "never"` beside the scaffold's `gate = "on_write"`
+// did nothing, silently.
+describe("approval and sandbox set in both files", () => {
+  const surface = (defaults: Record<string, unknown>, policy: Record<string, unknown>) =>
+    ({ gnomonDir: "/nowhere", config: { defaults }, roles: {}, policy, profiles: {}, tools: {},
+       system: { content: "", version: "0.1" } }) as never;
+  const split = (c: never) => auditSurface(c).filter((p) => p.where.startsWith(".gnomon/config.toml [defaults]"));
+
+  it("names the value that loses, the one that is used, and is not fatal", () => {
+    const c = surface({ approval: "never", sandbox: "strict" }, { approval: { gate: "on_write" }, sandbox: { level: "confined" } });
+    const found = split(c);
+    expect(found.map((p) => p.where)).toEqual([
+      ".gnomon/config.toml [defaults] approval",
+      ".gnomon/config.toml [defaults] sandbox",
+    ]);
+    expect(found.every((p) => !p.fatal)).toBe(true);
+    expect(found[0]!.problem).toContain('approval = "never" is ignored');
+    expect(found[0]!.problem).toContain('gate = "on_write"');
+    // The losing value was stricter: say the run is looser than it reads.
+    expect(found[1]!.problem).toContain('uses "confined", which is looser');
+    expect(resolveApprovalGate(c)).toBe("on_write");
+    expect(resolveSandboxLevel(c)).toBe("confined");
+  });
+
+  it("says nothing when the two agree, or only one file sets the value", () => {
+    expect(split(surface({ approval: "on_write" }, { approval: { gate: "on_write" } }))).toEqual([]);
+    expect(split(surface({ approval: "never" }, {}))).toEqual([]);
+    expect(split(surface({}, { sandbox: { level: "strict" } }))).toEqual([]);
+  });
+
+  // /sandbox and `explain sandbox` read policy.toml alone and reported
+  // "confined" for turns that ran under `[defaults] sandbox = "off"`.
+  it("is read the same way by the loop and by explain", () => {
+    const c: any = loadConfig("../../conformance/fixture_tree");
+    c.config = { ...c.config, defaults: { ...(c.config.defaults ?? {}), sandbox: "off" } };
+    c.policy = { ...c.policy, sandbox: { network: false } };
+    expect(resolveSandboxLevel(c)).toBe("off");
+    const role = Object.keys(c.roles)[0]!;
+    expect(explain(c, role, "sandbox")!.here.join("\n")).toMatch(/level\s+off/);
   });
 });

@@ -55,8 +55,12 @@ and writes real tags once, at scaffold time; the result is fixed data.
 `compaction = "summary"` asks a model what mattered in the turns it is folding
 away. Two runs can summarise differently. The surface still determines *that*
 summarisation happens and *which role* does it, but the output is not
-reproducible — which is why `discard` is the default and the trade-off is
-stated wherever it appears.
+reproducible. `summary` is the default anyway, since 2026-09-04. `discard`,
+the default before it, scored 0/9 on context retention against 9/9 for
+`summary`, and a session that forgets and then answers as though it never knew
+costs more than a summary worded differently on a second run. The trade-off is
+stated wherever it appears, and `compaction = "discard"` remains for a surface
+that needs the reproducibility more.
 
 ## The split between Rust and TypeScript
 

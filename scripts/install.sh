@@ -233,7 +233,17 @@ main() {
 
     # ── the npm package ───────────────────────────────────────────────────
     step "Installing $PACKAGE $VERSION into $PREFIX"
-    if npm view "$PACKAGE@$VERSION" version >/dev/null 2>&1; then
+    # The registry when it has THIS version, by what npm prints rather than by
+    # its exit status alone: npm before 10 printed nothing and exited 0 for a
+    # package that exists at some other version, which now that gnomon-harness
+    # is published would send a pinned older release (GNOMON_VERSION=0.2.3) to
+    # a registry install that cannot resolve it. Anything else -- not
+    # published, offline, a registry that will not answer -- takes the
+    # release's own tarballs, which are checked against SHA256SUMS below.
+    # gnomon-harness is published LAST (scripts/publish-npm.sh), so when it
+    # resolves, the three libraries it pins already do.
+    ON_REGISTRY=$(npm view "$PACKAGE@$VERSION" version 2>/dev/null || :)
+    if [ "$ON_REGISTRY" = "$VERSION" ]; then
         say "  from the npm registry"
         npm install -g --prefix "$PREFIX" --no-audit --no-fund "$PACKAGE@$VERSION" >"$WORK/npm.log" 2>&1 \
             || { cat "$WORK/npm.log" >&2; die "npm install failed (log above)"; }
@@ -247,7 +257,7 @@ main() {
     else
         # Not on the registry, so its three libraries cannot be resolved by
         # name either: all four tarballs go to npm in one command.
-        say "  from the release tarballs (not on the npm registry)"
+        say "  from the release tarballs (this version is not on the npm registry)"
         TGZ=""
         for p in $LIBS $PACKAGE; do
             fetch_verified "$p-$VERSION.tgz"
