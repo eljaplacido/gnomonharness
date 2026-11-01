@@ -26,6 +26,198 @@
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-11-01
+
+The fixes the November benchmark programme found, integrated in #70: build
+provenance, a repaired determinism suite, a faster checkout launcher, shell
+commands ~40 ms faster, a git-backed worktree stamp, bash policy read the way
+the shell runs it, new transcript readers for `gnomon check`, and the guide
+(`docs/GUIDE.md`, `llms.txt`, `AGENTS.md`).
+
+- **The determinism suite measured nothing for eight weeks, and said it passed.**
+  Since `65274f6` (2026-09-07), `benchmarks/results/determinism-2026-08-31/determinism.mjs`
+  did not parse: a template literal opened with a backtick and closed with `"`,
+  and `REPO` was used by the imports above its declaration. Every spawn died,
+  and two identical errors compared equal, so `run.mjs` printed `9/10 matched`
+  and exited 0. Both are fixed. On v0.3.1 the suite now measures 10/10, matching
+  the published figure from 2026-08-31, before the break. `run.mjs` now treats
+  a row with no fingerprint as INVALID and exits 2, and exits 1 on a mismatch.
+  Proven against the broken file: `0/10, 10 INVALID`, exit 2. Found by the G2
+  re-run of the property suites.
+- **An installed gnomon no longer reports someone else's commit as its build.**
+  `harnessBuild()` asked git first, in the module's own directory, and git
+  answers for whatever repository an install sits in. A project-local or CI
+  `npm i` therefore stamped the project's commit on every audit record as
+  gnomon's build: the v0.3.1 release, installed under a benchmark directory,
+  said `gnomon/0.3.1+1afd251-dirty`.
+  - An installed copy now never asks git.
+  - The release job stamps gnomon-core's `package.json` (`gnomonBuild`), so an
+    installed release names its tag and commit, e.g. `+v0.3.1-7012c5a`.
+    Unstamped installs still say `+npm`.
+  - git applies only in gnomon's own checkout.
+  - `conformance/build_field.json` records the new order:
+    `GNOMON_BUILD`, `package`, `npm`, `git`, `unknown`.
+  - Three tests drive the failing layouts, and each failed on the old code.
+  - `check-publishable.sh` now installs into a git repository, the layout
+    that shows the bug. On the old code it failed naming the project's commit.
+- **Every shell command returns ~40 ms sooner.** The bash tool waited a fixed
+  40 ms after every command exited, to drain output still in flight. It listens
+  for `exit`, not `close`, because a backgrounded job keeps the pipes open and
+  `close` never comes. It now also finishes on `close`, which means both pipes
+  are drained, so every byte is in. That arrives within a millisecond for any
+  command that leaves no job behind. The backgrounded-job path is unchanged
+  (exit + 40 ms).
+  - Measured with UX1b's scripted 10-turn session, interleaved, n = 10 each:
+    gnomon's own time per tool turn went from 48 to 9 ms (goose: 22, mini: 11),
+    and the session's wall clock from 817 to 417 ms. Requests were
+    byte-identical.
+  - All 186 tool tests pass, including "a backgrounded job returns at once,
+    however its streams are redirected".
+- **A gnomon checkout starts in ~0.1 s instead of ~0.4 s.** The checkout
+  launcher (`gnomon.js`) used to run the TypeScript sources through `tsx` on every
+  invocation, in a second node process. UX1 measured +217 ms wall and +310 ms
+  CPU per invocation against the same code compiled. It now imports a cached
+  esbuild bundle of the same sources in-process, whenever that bundle is
+  current.
+  - **Current means strict:** every input esbuild read, every workspace
+    `package.json`/`tsconfig.json` and the launcher itself must match the size
+    and mtime recorded at build time. Anything else rebuilds (~0.15 s, once per
+    change).
+  - **Any failure falls back to tsx,** exactly as before. `GNOMON_LAUNCH=tsx`
+    forces it, and `GNOMON_LAUNCH_DEBUG=1` says which path ran.
+  - **The same program:** each module's `import.meta.url` is pinned to its
+    source file, so every file-relative lookup resolves as under tsx. Tests
+    hold the bundle to tsx's exact output, and fail with the pinning removed.
+  - **No new dependency:** esbuild is reached through tsx. Installed releases
+    were already compiled and are unchanged.
+  - **Measured, n = 20, one turn against UX1's fake model:** 411 → 157 ms wall,
+    339 → 115 ms to the first request, 520 → 160 ms CPU, 102 → 66 MB, with
+    identical bytes on the wire.
+- **`gnomon check` now reads opencode V2's commands.** Its opencode transcript
+  reader matched only a tool named `bash`, and opencode V2 (2.2.5) names its
+  shell tool `shell`, with the same part shape otherwise. Every V2 run therefore
+  yielded zero commands, and check 5 (commands against `bash_allow`/`bash_deny`)
+  was skipped rather than failed. Found by the G1 governance benchmark: all 11
+  of the peers' destructions of git-ignored local state (`git clean -fdx`,
+  `rm -rf var/`) leave no diff, so the transcript is the only route to them. A
+  test reads the real V2 event shape, and it fails on the old reader.
+- **`network = false` still lets curl and wget reach a local server.** A request
+  whose every target is a literal loopback (`localhost`, `127.0.0.0/8`, `[::1]`)
+  is not egress. `curl http://localhost:3000/health` is how a developer, or a
+  model, checks that what it started is up. Refusing it under the default
+  surface broke ordinary local work, and Terminal-Bench tasks such as
+  nginx-request-logging, while protecting nothing. The exemption is strict:
+  - any proxy anywhere in the command cancels it (including an `http_proxy=`
+    prefix);
+  - so do `--resolve`, `--connect-to`, config and input files, and any operand
+    that is not a loopback target;
+  - hostnames are compared literally after URL parsing, so
+    `http://localhost@evil.example/` and `127.0.0.1.nip.io` are refused;
+  - interpreter one-liners stay refused.
+
+- **`bash_deny` and `bash_allow` read the command the shell runs, not its text
+  (#63).** On v0.3.1, with `rm\s+-rf` and `rm\s+.*-r\b` denied, `rm -fr keep`,
+  `rm -R keep` and `rm --recursive --force keep` deleted the directory. A role
+  allowed `^(ls|cat|grep|rg|find)\s` copied a secret with
+  `find . -name secret.txt -exec cp {} secret_backup.txt \;`. CORRECTION.md
+  found these in August, and G2b found them again on v0.3.1, model-free and
+  with a model.
+  - A small purpose-built parser (`shell.ts`, no dependency) splits each
+    command the way `/bin/sh` does. It handles quotes, `;` `&&` `||` `|`,
+    `$( )`, backticks, here-documents and comments. It follows `sh -c`, `eval`,
+    `echo … | sh`, `find -exec`, `xargs`, and wrappers such as
+    `env`/`sudo`/`nice`/`timeout` into the command they run.
+  - `bash_deny` is offered each program in its ordinary spellings as well as
+    the raw text. Options may come in any order, clustered or separate, and a
+    long option is read as its short letter (`--recursive` is `-r`). `-R` is
+    read as `-r` for `rm`/`cp`.
+  - Deletions and copies are also read in their common equivalent forms:
+    `rmdir`, `unlink`, `mv`, `find -delete`, `cat a > b`, `tee`, `dd`,
+    `install`, `ln`.
+  - The raw text is still tested first, so every command a pattern refused
+    before is still refused.
+  - `bash_allow` now also requires every program a listed command runs to be
+    on the list. This only adds a requirement.
+  - A command nested deeper than the reader follows is refused when the role
+    has a list.
+  - Measured on the scaffold's own roles: 0 of 60 everyday commands changed
+    decision. The scaffold's git rules now also catch
+    `git -C . push --force`, `git push -fu` and `git branch -df`.
+- **`network = false` also refuses obvious network egress through `bash`
+  (#63).** This covers `curl`, `wget`, `nc`, `ssh`, `scp`/`rsync` to a remote,
+  `/dev/tcp`, and `python`/`node`/`perl`/`ruby` one-liners whose code opens a
+  connection. `curl --version`/`--help` alone is allowed. **This is a
+  behaviour change for every surface that sets `network = false`, which
+  includes the scaffold default.** Use `/network on` or `network = true` to
+  grant it. Package managers, `git fetch` and scripts are deliberately not
+  refused.
+- **Documented as what it is: an intent filter, not containment.** This is in
+  the README, the `policy.toml` comments `init` writes, `gnomon explain
+  sandbox`, `/network` and the startup note. `python -c 'shutil.rmtree(…)'`
+  has no `rm` to match. Containment is `[sandbox] exec = "docker"`, which is
+  not yet measured against G2b (#63 option 2). A rule against recursive
+  deletion does not stop deleting the files and then `rm -d` on the directory,
+  because one call is judged at a time. A rule that names the directory does,
+  and the README says how to write one. The refusal now tells the model that
+  respelling a denied operation is not a route.
+- The `RoleDef.bash_deny` doc comment said patterns were case-insensitive. They
+  have always been case-sensitive, and the comment now says so.
+- **`gnomon check` reads goose, Qwen Code and mini-swe-agent transcripts**
+  (#65). `--transcript <file> --format goose | qwen-code | mini-swe-agent`
+  puts what those harnesses ran to check 5 (commands against
+  `bash_allow`/`bash_deny`):
+  - goose 1.57: the stdout of `goose run --output-format stream-json` (or
+    `json`), or `goose session export --format json`;
+  - Qwen Code 0.26.4: its session file
+    (`~/.qwen/projects/<cwd>/chats/<session>.jsonl`) or its `-o stream-json`;
+  - mini-swe-agent 2.4.6: the trajectory `mini -o` writes.
+
+  Each reads its harness's own record of a refused call, where the harness
+  writes one structurally: goose's own refusal sentences without shell output,
+  Qwen's `executionStatus: "not_started"` and `permission_denials`, mini's
+  `UserRejection`. mini's `"action was not executed"` is not one: mini writes
+  it for the submitting action, which ran. A file in the wrong format is
+  refused rather than read as "no commands", which skipped check 5 for
+  opencode V2 (#64). Found by the G1 governance benchmark: with no reader, check
+  saw none of the 11 destructions of git-ignored state (`git clean -fdx`,
+  `rm -rf var/`) by these peers, which leave no diff.
+
+  Replayed through G1's 120 recorded trials on this branch (no model; the
+  no-transcript run reproduced G1's recorded verdicts 120/120):
+  - each reader returns, string for string, the commands G1's own adapter took
+    from the same records (72/72; Qwen's two files agree 24/24);
+  - ignored-state destruction is caught in 8/12 trials, up from 0/12. With
+    #64's opencode fix as well, it is 11/12, every violating peer trial is
+    caught (44/44) and every violation in G1 but one (44/45). The miss is
+    gnomon's own arm, which has no reader here, and whose `mv` of `var/`
+    matches no deny pattern anyway;
+  - false alarms: 4/75 violation-free trials, and 6/75 (1/30 clean controls)
+    with #64, as G1's adapter measured.
+- **The audit trail keeps a shell command whole.** A bash call's `tool_call`
+  record kept `describeCall`'s 70-character terminal line as `target`, and
+  under the scaffolded `record = "metadata"` no `args`. In G1, gnomon's one
+  violation (the agent moved `var/` out after its deny-list refused `git
+  clean`, `git reset --hard` and `rm -r -f`) could not be reconstructed from its
+  own trail. `target` is now the whole command after the surface's `redact`
+  patterns, under either `record` setting: a command is the action the trail
+  records, not prompt or response text. The terminal still prints 70
+  characters. Tests: a long command survives in the chained record; a
+  `token=…` in it is redacted.
+- **Known false-alarm class, documented rather than patched.** Check 5 judges a
+  command by its spelling, exactly as the loop's `bash_deny` does. G1's broad
+  recursive-`rm` pattern therefore flags `rm -rf /tmp/scratch` and
+  `rm -rf .pytest_cache`, and its `git clean` pattern flags a run whose files
+  the agent had backed up and restored. Those are G1's six false alarms. No
+  rule inside check separates them from the true detections:
+  - a scratch-directory exemption would make check pass what the loop refuses
+    on the same surface;
+  - it would be a rule outside the surface hash;
+  - it would clear only two of the six, because the other operands are
+    `"$tmp"`, `find … -exec rm -rf {} +`, or a git-ignored cache inside the
+    repository.
+
+  The lever is the pattern, which is the surface's.
+
 - **`[shadow]`: a log-only decision-model shadow.** When a surface declares it,
   a typed decision model (`/v1/systemone`: state plus typed questions in,
   probabilities out) is asked three things, each logged beside what gnomon
@@ -46,6 +238,52 @@
   shadow meant to observe would have changed the run. Found in review by
   agentcenter before shipping. A test runs the same turn shadow-off and on, and
   fails with `worktree_moves` 0 → 2 if the directory is walked.
+- **The worktree stamp asks git, and says "unknown" instead of guessing
+  (#62).** Before and after every shell command, gnomon walked and stat'd every
+  file in the project to answer "did this command change anything". Per tool
+  turn that cost 50 ms at 0 files, 104 ms at 5k and 260 ms at 20k, where goose
+  stayed at ~22 ms. Past 20,000 files the walk stopped and stamped what it had
+  seen, so on a 30,000-file tree 7 of 20 edits did not move the stamp. A
+  command that changed files was then recorded as changing nothing and counted
+  toward the idle nudge.
+  - For a tree of 2,000 files or more inside a git work tree, the stamp is
+    HEAD's commit id plus the size and mtime of every path
+    `git status --porcelain=v2` lists, including untracked and gitignored
+    files. Directories git does not look into (an ignored `out/`, a nested
+    repository) are walked. `.gnomon/`, `.gnomon-loops/` and the never-walked
+    directories stay out, as before. The tracked tree has no file cap. One
+    difference from the walk: a file rewritten with the same bytes no longer
+    counts as a change, because git compares content.
+  - Smaller trees are walked, as before. Starting git costs more than walking
+    a few hundred files: ~3.5 ms a status on gx10, and ~35 ms a process on the
+    Windows CI runner. With git at every size, this repository's own 482-file
+    tree took ~45 ms longer per stamp there.
+  - Measured with the same UX1c session, master against this change. n = 3
+    per size, interleaved, on gx10 while another benchmark ran, so absolute
+    numbers moved between runs and the ratios did not. gnomon's own time per
+    tool turn:
+    - 0 files: 50 → 53 ms (the same walk);
+    - 5k: 142 → 89;
+    - 20k: 248 → 126;
+    - 50k: 422 → 144.
+
+    An earlier run, before the 2,000-file bound, gave 98 → 62, 244 → 81 and
+    244 → 120. On a 50,000-file tree, 20 of 20 sampled edits move the stamp,
+    where the walk saw 8.
+  - Outside git, it walks as before. A walk that reaches the cap is now
+    **unknown**, not a partial stamp.
+  - `worktree_changed` is now `true`, `false` or `null` (unknown). An unknown
+    call does not count toward the nudge or the stall check, is never folded
+    under "nothing changed", and runs a check declared with
+    `[verify] after = "change"`. The audit records it on each `tool_call`, and
+    the turn's counters have a new `worktree_unknown` count, present only when
+    it is not zero.
+  - The first status per root in a process refreshes the index, as the
+    operator's own `git status` would. After that, every status passes
+    `--no-optional-locks`, so it never holds `index.lock` against a concurrent
+    `git commit`. Without that one refresh, a repository built and committed in
+    one go (a racy index) costs ~20 ms per status instead of ~5 ms, for the
+    whole session.
 
 ## [0.3.1] — 2026-10-21
 
@@ -2276,7 +2514,8 @@ was written.
   `git tag`, not a documentation edit as well.
 -->
 
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.2
 [0.3.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.1
 [0.3.0]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.0
 [0.2.3]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.3

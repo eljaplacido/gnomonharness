@@ -426,7 +426,7 @@ describe("gate: a record names the harness that produced it", () => {
     };
     const revPattern = new RegExp(spec.revision_pattern);
     const rules = spec.resolution_order.map((r) => r.rule);
-    expect(rules).toEqual(["GNOMON_BUILD", "git", "npm", "unknown"]);
+    expect(rules).toEqual(["GNOMON_BUILD", "package", "npm", "git", "unknown"]);
 
     const saved = process.env.GNOMON_BUILD;
     try {
@@ -532,7 +532,11 @@ describe("gate: a record names the harness that produced it", () => {
     try {
       git("init", "-q", "-b", "main");
       writeFileSync(join(repo, "a.txt"), "committed\n");
-      git("add", "a.txt");
+      // The git rule applies only in gnomon's own checkout, recognised by the
+      // file this module is, so the throwaway repository carries that marker.
+      mkdirSync(join(repo, "packages", "gnomon-core", "src"), { recursive: true });
+      writeFileSync(join(repo, "packages", "gnomon-core", "src", "build.ts"), "// checkout marker\n");
+      git("add", "a.txt", "packages");
       git("-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q", "-m", "one");
 
       process.env.GIT_DIR = join(repo, ".git");
@@ -561,6 +565,72 @@ describe("gate: a record names the harness that produced it", () => {
       else process.env.GIT_WORK_TREE = saved.work;
       if (saved.build !== undefined) process.env.GNOMON_BUILD = saved.build;
       vi.resetModules();
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  // The three layouts below are where the old resolution order went wrong: git
+  // DOES answer in each of them, for a repository that is not gnomon. Found
+  // 2026-10-31, when the v0.3.1 release installed under a benchmark directory
+  // reported `gnomon/0.3.1+1afd251-dirty` -- the benchmark repository's commit.
+  // Each test first proves git would have answered (the control), then that the
+  // build string does not repeat it.
+  function foreignRepo(): { repo: string; sha: string } {
+    const repo = mkdtempSync(join(tmpdir(), "gnomon-foreign-"));
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(repo, "app.txt"), "someone else's project\n");
+    git("add", "app.txt");
+    git("-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q", "-m", "theirs");
+    return { repo, sha: git("rev-parse", "--short", "HEAD") };
+  }
+  // Only PATH: no GIT_DIR, no GNOMON_BUILD, nothing from the machine running the tests.
+  const bareEnv = { PATH: process.env.PATH ?? "" };
+  const answersFor = (dir: string) =>
+    execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: dir, encoding: "utf8", env: bareEnv }).trim();
+
+  it("an installed copy inside someone's repository says +npm, not their commit", async () => {
+    const { resolveHarnessBuild } = await import("./build.js");
+    const { repo, sha } = foreignRepo();
+    try {
+      const pkg = join(repo, "node_modules", "gnomon-core");
+      mkdirSync(join(pkg, "dist"), { recursive: true });
+      writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "gnomon-core", version: "1.2.3" }));
+      expect(answersFor(join(pkg, "dist")), "control: git answers inside the install").toBe(sha);
+      expect(resolveHarnessBuild(join(pkg, "dist"), bareEnv)).toBe("gnomon/1.2.3+npm");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("an installed release names the stamp it was packed with", async () => {
+    const { resolveHarnessBuild } = await import("./build.js");
+    const { repo, sha } = foreignRepo();
+    try {
+      const pkg = join(repo, "node_modules", "gnomon-core");
+      mkdirSync(join(pkg, "dist"), { recursive: true });
+      writeFileSync(join(pkg, "package.json"),
+        JSON.stringify({ name: "gnomon-core", version: "1.2.3", gnomonBuild: "v1.2.3-abc1234" }));
+      expect(answersFor(join(pkg, "dist"))).toBe(sha);
+      expect(resolveHarnessBuild(join(pkg, "dist"), bareEnv)).toBe("gnomon/1.2.3+v1.2.3-abc1234");
+      // The environment still wins over the package, as it always did.
+      expect(resolveHarnessBuild(join(pkg, "dist"), { ...bareEnv, GNOMON_BUILD: "ci-77" })).toBe("gnomon/1.2.3+ci-77");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("sources copied into another repository say +unknown, not that repository's commit", async () => {
+    const { resolveHarnessBuild } = await import("./build.js");
+    const { repo, sha } = foreignRepo();
+    try {
+      const src = join(repo, "vendor", "gnomon-core", "src");
+      mkdirSync(src, { recursive: true });
+      writeFileSync(join(repo, "vendor", "gnomon-core", "package.json"), JSON.stringify({ version: "1.2.3" }));
+      expect(answersFor(src)).toBe(sha);
+      expect(resolveHarnessBuild(src, bareEnv)).toBe("gnomon/1.2.3+unknown");
+    } finally {
       rmSync(repo, { recursive: true, force: true });
     }
   });

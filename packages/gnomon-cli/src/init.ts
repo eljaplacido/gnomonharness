@@ -675,6 +675,18 @@ level = "confined"                 # off | confined | strict
 # that runs builds and installers cannot have its shell enumerated in advance.
 # A role holding bash is bounded by bash_deny/bash_allow, not by this line.
 #
+# And bash_deny/bash_allow are an INTENT FILTER, not containment. gnomon reads
+# each command the way the shell will -- 'rm -fr', 'rm -R' and
+# 'rm --recursive --force' are all 'rm -rf', and whatever 'find -exec',
+# 'xargs', 'env' or 'sh -c' runs is checked as well -- so a denied operation
+# asked for in another common spelling is still refused. Code is not:
+# python -c 'import shutil; shutil.rmtree("keep")' deletes a directory with no
+# rm in it to match, and no list of commands names every program that can
+# delete or copy a file. Containment is running bash in a container that sees
+# only this repository (needs a docker daemon; not on native Windows):
+#   exec  = "docker"
+#   image = "debian:stable-slim"
+#
 # To let the agent reach ONE other checkout, name it here rather than turning
 # the sandbox off. Paths are relative to this repository root, so the grant
 # means the same thing on every clone -- an absolute path would be
@@ -683,8 +695,13 @@ level = "confined"                 # off | confined | strict
 # 'gnomon surface hash' moves when it changes.
 #   extra_roots = ["../sibling-checkout"]
 #
-# NOTE: network isolation is declared but NOT enforced by this build. The
-# prompt loop says so at startup rather than implying protection it lacks.
+# network = false refuses the webfetch tool outright, and refuses the commands
+# whose purpose is the network in bash: curl, wget, nc, ssh, scp/rsync to a
+# remote, and python/node/perl/ruby one-liners that open a connection. That is
+# the same kind of intent filter, not isolation: a script, a build tool or a
+# package manager run through bash still reaches the network, and the prompt
+# loop says so at startup. With exec = "docker" the container gets no network
+# at all, which is.
 network = false
 
 # Keys that changed nothing used to sit here — auto_merge,

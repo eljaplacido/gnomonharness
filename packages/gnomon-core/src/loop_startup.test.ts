@@ -410,12 +410,13 @@ tools = ["read"]
 });
 
 describe("runPromptLoop: the sandbox note publishes the limit of network = false", () => {
-  it("says network = false stops webfetch and does NOT stop bash", async () => {
-    // The dial reads like process isolation and is not. A role holding `bash`
-    // reaches the network through curl or a package manager whatever this says,
-    // so the startup note has to state its own limit -- an operator who trusts
-    // `network = false` to contain a bash-holding role is wrong about the one
-    // thing they were relying on. Publishing the limit IS the claim being made.
+  it("says what network = false refuses in bash, and that it is not isolation", async () => {
+    // The dial reads like process isolation and is not. Since #63 bash refuses
+    // the obvious clients (curl, ssh, …), but a script or a package manager
+    // still reaches the network whatever this says, so the startup note has to
+    // state its own limit -- an operator who trusts `network = false` to
+    // contain a bash-holding role is wrong about the one thing they were
+    // relying on. Publishing the limit IS the claim being made.
     const dir = surface({
       "config.toml": BASE_CONFIG,
       "policy.toml": `
@@ -440,11 +441,13 @@ tools = ["read", "bash"]
 
     // What it covers,
     expect(note).toContain("webfetch");
-    // what it does not,
+    expect(note).toContain("curl");
+    // what it is not,
     expect(note).toContain("bash");
-    expect(note).toMatch(/webfetch only/);
+    expect(note).toMatch(/not isolation/);
     // and what to do instead -- a limit published without a remedy is a shrug.
-    expect(note).toContain("bash_allow");
+    // The remedy is the docker exec sandbox, which runs bash with no network.
+    expect(note).toContain("exec");
     // On one line. It was a 4-line wall at 110 columns on every launch, and a
     // note printed every time has to be short enough to keep being read.
     expect(note!.replace(/\x1b\[[0-9;]*m/g, "").length).toBeLessThanOrEqual(100);
@@ -473,7 +476,7 @@ tools = ["read", "bash"]
 
     const r = await run(dir, []);
     expect(r.lines.some((l) => l.includes("network = false"))).toBe(false);
-    expect(r.lines.some((l) => l.includes("webfetch only"))).toBe(false);
+    expect(r.lines.some((l) => l.includes("not isolation"))).toBe(false);
   }, 15000);
 });
 

@@ -1961,6 +1961,8 @@ export interface TurnAudit {
   write(kind: AuditKind, fields: Record<string, unknown>): void;
   /** Undefined when the trail records metadata only — the redaction contract. */
   text(value: string | undefined): string | undefined;
+  /** A shell command, whole and redacted, under either `record` setting. */
+  action(value: string): string;
 }
 
 /**
@@ -2442,6 +2444,11 @@ export interface TurnCounters {
    * `writes` cannot see. The pair separates "never wrote a file" from "wrote
    * through the shell", which are opposite diagnoses. */
   worktree_moves: number;
+  /** Bash calls whose stamp could not be taken, so whether they changed the
+   * worktree is unknown (tools.ts worktreeMoved). Counted in neither
+   * `worktree_moves` nor the idle streak. Absent when there were none, so a
+   * reader can tell "0 moves" from "0 moves that anyone could see". */
+  worktree_unknown?: number;
   /** Anti-flailing nudges fired, and where the first one landed. */
   nudges: number;
   first_nudge_step?: number;
@@ -3095,6 +3102,11 @@ export async function runAgenticTurn(
   // changing meaning underneath every existing surface. This exists so the gap
   // can be DISCLOSED instead.
   let shellTouchedWorktree = false;
+  // A shell call whose effect on the tree is unknown (the stamp could not be
+  // taken). Not a change, and not proof of none: `after = "change"` runs the
+  // check for it, because skipping a declared check on a guess is the failure
+  // the gate exists to prevent. Nothing else reads it.
+  let shellMayHaveTouched = false;
   const verify = resolveVerify(config);
   const resilience = resolveResilience(config);
   let verifyRounds = 0;
@@ -3510,7 +3522,9 @@ export async function runAgenticTurn(
           // "change": the same question asked of the tree rather than of the
           // tool name, so heredoc and sed -i work is checked too, while a
           // question-only turn that moved nothing is not charged a full suite.
-          (verify.after === "change" && shellTouchedWorktree));
+          // A shell call the stamp could not see counts: "moved nothing" has
+          // to be known to skip a check, not assumed.
+          (verify.after === "change" && (shellTouchedWorktree || shellMayHaveTouched)));
 
       // The gate did not apply, and the reason is one the operator would want
       // to know: the surface declared a check, the turn changed the worktree,
@@ -4129,17 +4143,39 @@ export async function runAgenticTurn(
         shellTouchedWorktree = true;
         callsSinceWrite = 0;
         callsAtLastNudge = 0;
+      } else if (outcome.worktree_changed === null) {
+        // Ran, and nobody can say whether it changed anything: the tree could
+        // not be stamped (tools.ts worktreeMoved). Until #62 this case did not
+        // exist -- the walk stopped at its cap and stamped what it had seen,
+        // so in a 30,000-file tree 7 of 20 edits did not move the stamp, and
+        // a working agent's commands were counted as idle and it was nudged.
+        //
+        // Neither progress nor idling, so the streak neither restarts nor
+        // grows: the call is taken back out of the count it was added to at
+        // the top of this loop. The nudge says "N calls without changing a
+        // file", and this call is not known to be one of them.
+        counters.worktree_unknown = (counters.worktree_unknown ?? 0) + 1;
+        callsSinceWrite--;
+        shellMayHaveTouched = true;
       }
 
       deps.audit?.write("tool_call", {
         role,
         tool: call.name,
-        // The target is metadata; the content it carries is not.
-        target: describeCall(call),
+        // The target is metadata; the content it carries is not. For bash the
+        // target IS the action, so it is the whole command (redacted), not
+        // the 70-character line the terminal prints (AuditTrail.action).
+        target: call.name === "bash" && typeof call.args.command === "string"
+          ? deps.audit.action(call.args.command)
+          : describeCall(call),
         gated,
         code: outcome.code,
         bucket: mapBucket(outcome.code),
         summary: outcome.summary,
+        // What the stamp observed, for a call that took one: true, false, or
+        // null for unknown. Written as observed, so an unknown is never
+        // recorded as the false it used to be read as.
+        ...(outcome.worktree_changed !== undefined ? { worktree_changed: outcome.worktree_changed } : {}),
         args: deps.audit.text(JSON.stringify(call.args)),
         result: deps.audit.text(outcome.content),
       });
@@ -4195,7 +4231,9 @@ export async function runAgenticTurn(
           // stops a failing test run or a broken script being counted as one
           // more quiet step. Undefined means the tool ran no command.
           (outcome.shell_exit === undefined || outcome.shell_exit === 0) &&
-          !outcome.worktree_changed &&
+          // The folded line ends "nothing changed". Unknown (null) is not
+          // nothing, so a call the stamp could not see is printed in full.
+          (outcome.worktree_changed === undefined || outcome.worktree_changed === false) &&
           !outcome.surface_drift &&
           !askedIndividually;
         if (foldable) {
@@ -4292,7 +4330,12 @@ export async function runAgenticTurn(
   }
 }
 
-/** A short, readable form of a tool call for the transcript. */
+/**
+ * A short, readable form of a tool call, for the terminal and the compaction
+ * summary. Not for the audit trail: a command cut at 70 characters, with its
+ * whitespace folded, is not a record of what ran (the tool_call record keeps
+ * the whole command — AuditTrail.action).
+ */
 function describeCall(call: ToolCall): string {
   const a = call.args;
   if (typeof a.path === "string") return String(a.path);
@@ -4781,6 +4824,7 @@ export async function runTask(
       audit.write(kind, fields);
     },
     text: (value) => audit.text(value),
+    action: (value) => audit.action(value),
   };
   const surface_hash = recomputeManifest(config.gnomonDir).surface_hash;
 
@@ -5166,10 +5210,16 @@ export const LIVE_SAFE_COMMANDS = new Set([
 
 /**
  * The startup note for `network = false`: what it stops, and what it does not.
- * Not process isolation -- bash is the hole, and bash_allow the remedy.
+ *
+ * It said "stops webfetch only" until #63, which was true: G2b reached its
+ * canary from a network = false surface with curl. bash now refuses the
+ * obvious clients too (bashNetworkEgress), and that is still an intent filter
+ * -- a script or a package manager reaches the network without naming curl --
+ * so the note keeps saying what it is not, and points at the setting that is
+ * isolation: [sandbox] exec = "docker", which runs bash with --network none.
  */
 export const NETWORK_OFF_NOTE =
-  "  note: network = false stops webfetch only — bash can still reach the network (see bash_allow)";
+  "  note: network = false refuses webfetch and curl/ssh in bash — a filter, not isolation (see exec)";
 
 /** The verbs that end the session. See processCommand. */
 const QUIT_COMMANDS = new Set(["/quit", "/exit", "/q"]);
@@ -6110,15 +6160,21 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       const current = state.network ?? declared ?? false;
       if (!wanted) {
         console.log(`\nNetwork: ${current ? "on" : "off"}${state.network !== undefined ? " (this session)" : " (from policy.toml)"}`);
-        console.log("  on  — webfetch may retrieve URLs.");
-        console.log("  off — webfetch refuses outright. (default)");
+        console.log("  on  — webfetch may retrieve URLs, and bash may run network clients.");
+        console.log(
+          "  off — webfetch refuses outright, and bash refuses curl, wget, nc, ssh and the"
+        );
+        console.log("        like, and one-liners that open a connection. (default)");
         console.log(
           "\n  A session grant: policy.toml is unchanged and the next session starts from it again."
         );
         console.log(
-          "  Not process isolation — a role holding `bash` can reach the network either way;"
+          "  Not process isolation — `off` is an intent filter over the command's words, and a"
         );
-        console.log("  constrain that with bash_allow if it matters.");
+        console.log(
+          "  script, build tool or package manager run through `bash` still reaches the network."
+        );
+        console.log('  [sandbox] exec = "docker" runs bash with no network at all.');
         return true;
       }
       if (wanted !== "on" && wanted !== "off") {
@@ -6134,12 +6190,12 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         // text: this is the moment the operator forms a belief about what they
         // just permitted.
         console.log(
-          "  Note: this governs the `webfetch` tool. It is NOT process isolation —"
+          "  Note: this lifts webfetch's refusal and bash's network-client filter. With"
         );
         console.log(
-          "  a role holding `bash` could already reach the network via curl or a"
+          "  network off they were NOT process isolation: a package manager or a script"
         );
-        console.log("  package manager. Constrain that with bash_allow if it matters.");
+        console.log('  run through `bash` reached the network anyway. [sandbox] exec = "docker" is.');
       }
       return true;
     }

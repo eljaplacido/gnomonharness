@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vites
 import { loadConfig, endpointClass, resolveUi } from "./config.js";
 import { stubDeclaredKeys } from "./test_support.js";
 import { mapBucket } from "./session.js";
+import { AuditTrail, recordHash } from "./audit.js";
 import * as promptLoop from "./prompt_loop.js";
 import { resolve as resolvePath, join as joinPath } from "node:path";
 import { setRoleModel } from "./prompt_loop.js";
@@ -3918,7 +3919,7 @@ describe("the degradation contract", () => {
     progress: { start() {}, update() {}, stop() {} } as any,
     ui: UI,
     say: (l: string) => said.push(l),
-    audit: { write: (kind: string, f: any) => recs.push({ kind, ...f }), text: (t: string) => t } as any,
+    audit: { write: (kind: string, f: any) => recs.push({ kind, ...f }), text: (t: string) => t, action: (t: string) => t } as any,
   });
 
   // A fallback is the one degradation where the operator is not merely running
@@ -4299,7 +4300,7 @@ describe("a reply with no usable tool call gets a bounded repair turn", () => {
     progress: { start() {}, update() {}, stop() {} } as any,
     ui: UI,
     say: (l: string) => said.push(l),
-    audit: { write: (kind: string, f: any) => recs.push({ kind, ...f }), text: (t: string) => t } as any,
+    audit: { write: (kind: string, f: any) => recs.push({ kind, ...f }), text: (t: string) => t, action: (t: string) => t } as any,
   });
   const stateWith = (turn?: Record<string, unknown>): any => {
     const config: any = loadConfig("../..");
@@ -4537,4 +4538,69 @@ describe("chainForTurn", () => {
   it("is off for a one-turn prefix, as before", () => {
     expect(promptLoop.chainForTurn(withChain(["a", "b"]), "implement", "implement", true)).toEqual([]);
   });
+});
+
+describe("the audit trail's tool_call record says what a bash call did", () => {
+  // G1 (benchmarks/results/g1-2026-11, on bench/peers-2026-11): gnomon's one
+  // violation in 24 trials was a command that moved `var/` out of the checkout,
+  // and its own trail could not show it. Under `record = "metadata"` the record
+  // kept describeCall's 70-character terminal form and left `args` out, so the
+  // part of the command that did it was gone.
+  const REDACT = ["(api[_-]?key|token|secret|password)\\s*[:=]\\s*\\S+"];
+  const turnWith = async (command: string) => {
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-audit-target-"));
+    const audit = new AuditTrail(
+      { enabled: true, dir, record: "metadata", redact: REDACT, chain: true, invalid_redact: [] },
+      "s"
+    );
+    const config: any = loadConfig("../..");
+    const state: any = {
+      config, exchanges: [], currentRole: "implement",
+      ui: { ...resolveUi(config), cot: "work", think: "hide", color: false },
+    };
+    let call = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => ({
+      ok: true,
+      json: async () => ({
+        message: call++ === 0
+          ? { content: "", tool_calls: [{ id: "c1", function: { name: "bash", arguments: JSON.stringify({ command }) } }] }
+          : { content: "done" },
+      }),
+    })) as unknown as typeof fetch;
+    try {
+      await promptLoop.runAgenticTurn(
+        state, "implement",
+        { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+        [{ role: "user", content: "go" }],
+        { approve: async () => true, progress: { start() {}, update() {}, stop() {} } as any, ui: state.ui, say: () => {}, audit }
+      );
+      const raw = readFileSync(audit.path!, "utf-8");
+      const records = raw.split("\n").filter(Boolean).map((l) => JSON.parse(l));
+      return { raw, record: records.find((r) => r.kind === "tool_call" && r.tool === "bash") };
+    } finally {
+      globalThis.fetch = original;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it("keeps a long command whole in metadata mode, in the record the chain hashes", async () => {
+    // Only echo: the loop really runs it, in this repository.
+    const command =
+      "echo 'moving var/ out of the checkout' && echo 'the part past the old seventy-character cut' && echo END";
+    expect(command.length).toBeGreaterThan(100);
+    const { record } = await turnWith(command);
+    expect(record.target).toBe(command);
+    // Still metadata: the arguments and the output are not recorded.
+    expect(record.args).toBeUndefined();
+    expect(record.result).toBeUndefined();
+    // The hash covers the whole target, so the command cannot be edited unseen.
+    expect(record.hash).toBe(recordHash(record));
+  }, 20000);
+
+  it("scrubs a token from the recorded command with the surface's redact patterns", async () => {
+    const { record, raw } = await turnWith(`echo uploading ${"x".repeat(60)} token=s3cr3t-value-123 && echo sent`);
+    expect(record.target).toBe(`echo uploading ${"x".repeat(60)} [redacted] && echo sent`);
+    expect(raw).not.toContain("s3cr3t-value-123");
+  }, 20000);
 });
