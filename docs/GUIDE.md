@@ -275,7 +275,7 @@ download is checked against the release's `SHA256SUMS`.
 
 | Variable | Effect |
 |---|---|
-| `GNOMON_VERSION=0.3.1` | Pin a release (`curl … \| GNOMON_VERSION=0.3.1 sh`) |
+| `GNOMON_VERSION=0.3.2` | Pin a release (`curl … \| GNOMON_VERSION=0.3.2 sh`) |
 | `GNOMON_NPM_PREFIX` | Where npm installs |
 | `GNOMON_NO_NATIVE=1` | Skip the native binaries |
 | `GITHUB_TOKEN` | Lift GitHub's anonymous API rate limit |
@@ -289,14 +289,14 @@ and `simulate` will not work unless you build from source; everything else does.
 The four packages are one program split up, so npm needs all four URLs:
 
 ```bash
-V=0.3.1
+V=0.3.2
 B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz \
          $B/gnomon-tui-$V.tgz  $B/gnomon-harness-$V.tgz
 ```
 
 ```powershell
-$V="0.3.1"
+$V="0.3.2"
 $B="https://github.com/eljaplacido/gnomonharness/releases/download/v$V"
 npm i -g "$B/gnomon-core-$V.tgz" "$B/gnomon-natives-$V.tgz" "$B/gnomon-tui-$V.tgz" "$B/gnomon-harness-$V.tgz"
 ```
@@ -323,7 +323,7 @@ global link, run `~/gnomon/gnomon <command>` from any project. Windows steps:
 ### 3.4 Verify the install
 
 ```bash
-gnomon --version        # gnomon/0.3.1+npm for a release install; +<commit> from a checkout
+gnomon --version        # gnomon/0.3.2+npm for a release install; +<commit> from a checkout
 gnomon enumerations     # prints the enumerations JSON: proves the native binaries are found
 ```
 

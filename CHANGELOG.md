@@ -26,6 +26,14 @@
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-11-01
+
+The fixes the November benchmark programme found, integrated in #70: build
+provenance, a repaired determinism suite, a faster checkout launcher, shell
+commands ~40 ms faster, a git-backed worktree stamp, bash policy read the way
+the shell runs it, new transcript readers for `gnomon check`, and the guide
+(`docs/GUIDE.md`, `llms.txt`, `AGENTS.md`).
+
 - **The determinism suite measured nothing for eight weeks, and said it passed.**
   Since `65274f6` (2026-09-07), `benchmarks/results/determinism-2026-08-31/determinism.mjs`
   did not parse: a template literal opened with a backtick and closed with `"`,
@@ -2506,7 +2514,8 @@ was written.
   `git tag`, not a documentation edit as well.
 -->
 
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.2
 [0.3.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.1
 [0.3.0]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.0
 [0.2.3]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.2.3
