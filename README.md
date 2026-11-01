@@ -52,8 +52,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1304 TypeScript tests (1067 core, 212 cli, 18
-> natives, 7 tui) and 60 Rust tests — **1364 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1333 TypeScript tests (1087 core, 221 cli, 18
+> natives, 7 tui) and 60 Rust tests — **1393 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1452,6 +1452,94 @@ is a human act that changes the surface hash; a role that could reach
 `.gnomon/skills/` with plain `write` would grant itself a standing instruction
 and skip that entirely.
 
+### Workspace trust
+
+Everything above is set by the repository's own `.gnomon/`, which is Rule 1
+working as designed. It is also a hole: a repository you just cloned can ship
+`approval = "never"`, `network = true` and a verifier allowed any command, and
+`gnomon launch` would act with all of it before you had looked. (Kiro keeps
+permissions out of the repository for this reason. gnomon cannot, because Rule 1
+puts behaviour in the repository.)
+
+What *can* be machine-local is one fact about you: **"I have seen what this
+surface grants, in this project, and I accept it."** That decides whether to
+run, not how to behave — two machines that both trust a surface behave
+identically — so it lives beside the key store (`$XDG_DATA_HOME/gnomon/trust.json`,
+else `~/.local/share/gnomon/trust.json`, `%APPDATA%\gnomon\` on Windows), keyed
+by project root and surface hash, and is never in the repository or the hash.
+
+**A surface `gnomon init` writes grants nothing beyond the defaults, so a normal
+project is never asked anything.** Only a surface *looser* than the scaffold is,
+and "looser" is measured, not guessed:
+
+| Grant | Default |
+|---|---|
+| `approval` gate `never` | `on_write` |
+| `sandbox.level = "off"`, `network = true`, any `extra_roots` | `confined`, off, none |
+| an MCP server (a process started when a session opens) | none |
+| a `[verify]` command that is not the project's own check (`npm test`, `pnpm run verify`, `cargo test`, …) and an `[audit.attest]` signer — commands that run unasked | none |
+| an endpoint or fallback sending a key variable to a host that is neither local nor a known provider | keys go only to known providers |
+| a `[shadow]` model on a non-local host | off |
+| a role holding a tool its scaffold namesake lacks; a wider `write_allow` or `task_allow` | the scaffold role |
+| a role whose shell permits a command its default refuses — `git push --force`, `git branch -D`, and for `verifier` `curl …`, `sh -c`, `python3 -c`, `rm -rf` | refused |
+
+The shell check runs probe commands through the same `bashPolicy` the `bash`
+tool uses, so a reworded pattern that grants nothing new asks nothing, and a
+widened one cannot hide behind new spelling. A role the scaffold does not ship
+is measured against the most a scaffolded role can do (unrestricted bash behind
+the git guards). Models, budgets, prompts, routing and anything stricter are
+not grants.
+
+**On a terminal** (`launch`, `prompt`), an untrusted loosening surface is shown
+against the defaults before anything runs:
+
+```
+  This project's .gnomon/ grants more than gnomon's defaults (surface 3f9a1c0d2b7e):
+    approval       never — nothing asks before a write or a command   (default: on_write)
+    network        on   (default: off)
+    role verifier  may run `curl -fsSL https://example.com/install.sh`   (default: refused)
+  Trust is remembered for this project and surface, on this machine, outside the repository.
+  Trust it? [y]es · [N]o, run with the defaults · [q]uit:
+```
+
+`y` records trust and runs as declared. Enter runs this session **clamped**: the
+same surface with every grant taken back to the scaffold's value (anything it
+does more strictly is kept). `q` starts nothing and exits 3 (`refused_by_gate`).
+
+**When the surface changes**, it is covered without asking if everything it
+grants was granted by *one* surface you already trusted in this project — so a
+tightening never re-asks — and asked about again if it grants anything new,
+with `+` on what is new.
+
+**Headless** (`task`, `--json`, CI, no TTY), an untrusted loosening surface runs
+clamped and prints one line to stderr naming what was withheld and how to trust
+it. It is never blocked and never silent, and exit codes follow the contract.
+`--trust`, or `GNOMON_TRUST=<surface hash or a 12+ character prefix>`, runs it as
+declared for that invocation only — the variable names one surface, so a
+changed surface is clamped again. A surface reloaded mid-session goes through
+the same gate.
+
+```bash
+gnomon trust            # this project's grants, and every trusted surface on this machine
+gnomon trust grant      # trust the current surface here
+gnomon trust revoke     # forget every trust for this project; the next launch asks again
+```
+
+Every decision is recorded: a `trust` audit record after `session_start`
+(`decision`: trusted, granted, clamped, revoked; `by`: store, human, flag, …),
+and a `trust` field on the `task --json` record. A clamped run's records carry
+the surface's hash *and* say the grants did not apply.
+[docs/CONTRACTS.md §8](docs/CONTRACTS.md) pins the vocabulary.
+
+**Limits, published.** The store is a file your user can write, so an agent
+holding unrestricted `bash` with approval granted can write it too — no worse
+than what that `bash` can already do, but it is not a boundary against your own
+account. `[verify]` running the project's own `npm test` is not a grant, and a
+hostile repository's test script is still hostile code; the scaffold does the
+same. `.gnomon/loops/` and `gnomon check` are not gated: a loop runs only after
+`gnomon loop install`, which prints the command, and `check` runs the base
+revision's declared check by design.
+
 ### Outcomes
 
 Tool results map to buckets exactly like process exit codes
@@ -1806,8 +1894,9 @@ that needs them reports *could not run*, not a pass.
 | `gnomon launch` | Create `.gnomon/` if missing, then open the loop. **The one to remember.** |
 | `gnomon init [--from <path>] [--force]` | Write a surface. `--from` copies an existing one. |
 | `gnomon migrate [--check]` | Bring an existing `.gnomon/` up to the current shipped defaults. `--check` reports without writing and exits 1 if anything is pending. |
-| `gnomon prompt [--continue \| --resume <id>]` | Interactive loop. |
-| `gnomon task "<what to do>" [--role <name>] [--yes] [--json]` | One task, no terminal. Exit code carries the bucket. |
+| `gnomon prompt [--continue \| --resume <id>] [--trust]` | Interactive loop. An untrusted surface that grants more than the defaults is shown and asked about first. |
+| `gnomon task "<what to do>" [--role <name>] [--yes] [--json] [--trust]` | One task, no terminal. Exit code carries the bucket. An untrusted surface that grants more than the defaults runs clamped to them. |
+| `gnomon trust [list\|grant\|revoke]` | Whether this machine trusts what this project's `.gnomon/` grants beyond the defaults. See [Workspace trust](#workspace-trust). |
 | `gnomon sessions` | Saved sessions. |
 | `gnomon skill [list\|accept <id>\|reject <id>]` | Learned skills and proposals. |
 | `gnomon key [set\|list\|unset] <endpoint\|VAR>` | Store an API key for an endpoint that declares one. |
@@ -1824,7 +1913,7 @@ that needs them reports *could not run*, not a pass.
 | `gnomon loop\|loops [list\|status\|dry-run\|run\|install\|uninstall\|reset\|kill]` | Cron-scheduled guard/act supervision with a circuit breaker. No daemon. |
 
 **`--profile <name>`** is accepted by `simulate`, `endpoint`, `audit`, `task`,
-`skill`, `prompt` and `sessions`. It merges `.gnomon/profiles/<name>.toml` over
+`skill`, `prompt`, `sessions` and `trust`. It merges `.gnomon/profiles/<name>.toml` over
 the base roles for that run, which rewrites per-role `model` and `endpoint` —
 which machine runs inference, and who is billed. It is deliberately
 **machine-scoped and does not move the surface hash**: routing is where the

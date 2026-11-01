@@ -43,3 +43,5 @@ export * from "./session_store.js";
 export * from "./explain.js";
 export * from "./credentials.js";
 export * from "./loops.js";
+// Workspace trust: whether this machine's user accepted what a surface grants.
+export * from "./trust.js";

@@ -103,6 +103,7 @@ import {
 import { recordDegradation } from "./degradation.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
 import { applyCredentials } from "./credentials.js";
+import type { TrustOutcome } from "./trust.js";
 import {
   resolveSessionStore,
   saveSession,
@@ -4568,6 +4569,13 @@ export interface TaskRecord {
    */
   surface_problems?: Array<{ where: string; problem: string; fatal: boolean }>;
   /**
+   * Present only when the surface grants more than the scaffold `gnomon init`
+   * writes: whether this machine's user had trusted it, and if not, that the
+   * run was clamped to the defaults. A clamped record's `surface_hash` names a
+   * surface whose extra grants did NOT apply, and this is where it says so.
+   */
+  trust?: TrustOutcome;
+  /**
    * Which harness build produced this record, e.g. `gnomon/0.1.0+abf40c0`.
    *
    * The surface hash says what rules the run was under; this says what code
@@ -4640,6 +4648,13 @@ export interface RunTaskOptions {
   yes?: boolean;
   /** Emit progress lines to stderr */
   verbose?: boolean;
+  /**
+   * How the caller settled workspace trust (trust.ts), when the surface grants
+   * more than the scaffold. Written to the trail after session_start and
+   * carried on the record. The config passed in is already the one that
+   * decision produced -- clamped or not -- so this only reports it.
+   */
+  trust?: TrustOutcome;
 }
 
 /**
@@ -4801,6 +4816,7 @@ export async function runTask(
     record: auditSettings.record,
     approvals: options.yes ? "granted" : "refused",
   });
+  if (options.trust) audit.write("trust", { ...options.trust, root: resolve(config.gnomonDir, "..") });
 
   // Connect declared MCP servers here too. They were wired only in
   // runPromptLoop, so a surface declaring [mcp_servers] handed its tools to
@@ -4994,6 +5010,7 @@ export async function runTask(
   return {
     surface_hash,
     harness: harnessBuild(),
+    ...(options.trust ? { trust: options.trust } : {}),
     // Non-fatal surface findings, so a scripted consumer can see what the
     // interactive operator would have been shown. Omitted when clean rather
     // than emitted as an empty array: a field that is always present teaches a
@@ -6501,6 +6518,16 @@ export interface PromptLoopOptions {
    * than its terminal handling.
    */
   io?: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream };
+  /** How workspace trust was settled for this session; recorded after session_start. */
+  trust?: TrustOutcome;
+  /**
+   * Applied to every surface the loop reloads mid-session (`/models`, a
+   * consented surface write). Without it a session started clamped would
+   * reload the surface from disk and drop the clamp, and a trusted session
+   * would pick up a loosening nobody had accepted. The CLI passes the trust
+   * gate here; absent, a reload is used as read.
+   */
+  reconfigure?: (fresh: GnomonConfig) => GnomonConfig;
 }
 
 export async function runPromptLoop(
@@ -6583,6 +6610,8 @@ export async function runPromptLoop(
     roles: listRoles(config),
     record: auditSettings.record,
   });
+  if (options.trust) audit.write("trust", { ...options.trust, root: resolve(config.gnomonDir, "..") });
+  const reconfigure = options.reconfigure ?? ((fresh: GnomonConfig) => fresh);
 
   // Connect any declared MCP servers before the first turn, so their tools are
   // in the set the model sees. A server that will not connect is reported and
@@ -7607,7 +7636,7 @@ export async function runPromptLoop(
           // moved, because a surface that changes without saying so is the
           // thing this harness exists to prevent.
           const projectRoot = resolve(config.gnomonDir, "..");
-          const fresh = loadConfig(projectRoot);
+          const fresh = reconfigure(loadConfig(projectRoot));
           state.config = fresh;
           console.log(
             `\n  ${paint(ui0, "green", "✓")} ${paint(ui0, "bold", pickedRole)} → ` +
@@ -7956,7 +7985,7 @@ export async function runPromptLoop(
           );
         }
         try {
-          const reloaded = loadConfig(resolve(state.config.gnomonDir, ".."));
+          const reloaded = reconfigure(loadConfig(resolve(state.config.gnomonDir, "..")));
           state.config = reloaded;
           const short = recomputeManifest(reloaded.gnomonDir).surface_hash.slice(0, 16);
           progress.print(

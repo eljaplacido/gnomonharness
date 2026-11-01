@@ -26,6 +26,43 @@
 
 ## [Unreleased]
 
+- **Workspace trust: a cloned repository can no longer grant itself powers
+  unseen.** A repository's `.gnomon/` sets its own approval gate, sandbox and
+  shell scope (Rule 1). A hostile one could ship `approval = "never"`,
+  `network = true` and a verifier allowed any command, and `gnomon launch`
+  would act with them without anyone looking (research review, 2026-11-01).
+  Now a surface looser than the scaffold `gnomon init` writes is gated:
+  - on a terminal (`launch`, `prompt`), what it grants is shown against the
+    defaults and you are asked. `y` trusts it, Enter runs it clamped to the
+    defaults, `q` quits with exit 3;
+  - headless (`task`, `--json`, CI, no TTY), it runs clamped, with one line on
+    stderr. `--trust` or `GNOMON_TRUST=<surface hash>` runs it as declared for
+    that invocation.
+
+  "Looser" is measured. It covers approval `never`, sandbox `off`, network,
+  `extra_roots`, MCP servers, a `[verify]` command or `[audit.attest]` signer
+  that runs unasked, a key sent to an unknown host, a remote `[shadow]`, and
+  per-role tools, `write_allow` and `task_allow`. Shell scope is checked by
+  running probe commands (`git push --force`, `curl …`, `sh -c`) through the
+  real `bashPolicy`.
+
+  Trust is kept per (project root, surface hash) in `trust.json` beside the
+  key store: never in the repository, never in the hash. A changed surface is
+  covered if one trusted surface in the project already granted everything it
+  grants. A tightening is never asked about again; a loosening is, with what
+  is new marked `+`. A surface reloaded mid-session goes through the same
+  gate.
+
+  `gnomon trust [list|grant|revoke]` manages it. Every decision is a `trust`
+  audit record and a `trust` field on the task record (CONTRACTS.md §8,
+  `conformance/trust_record.json`).
+
+  **A scaffolded project is never asked anything.** A surface scaffolded by an
+  older release whose `bash_deny` predates the refspec guards
+  (`git push origin +main`) is asked about once, because it does permit that.
+  Benchmark adapters running a hand-loosened surface through `gnomon task`
+  must now pass `--trust`, or the run is clamped, with a stderr line and
+  `trust.decision = "clamped"` on the record.
 - **`[shadow]`: a log-only decision-model shadow.** When a surface declares it,
   a typed decision model (`/v1/systemone`: state plus typed questions in,
   probabilities out) is asked three things, each logged beside what gnomon
