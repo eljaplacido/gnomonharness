@@ -15,7 +15,9 @@ from datetime import datetime
 from pathlib import Path
 
 runs, sha = Path(sys.argv[1]), sys.argv[2]
-CELL = re.compile(r"^p-k(\d+)-(gnomon|mini|goose|qwen|opencode)-(.+)$")
+# P1-H: cells run before 2026-11-01 02:11Z are named p-k…, later ones h-k… (the
+# names had collided with P1's own compose projects; see the amendment).
+CELL = re.compile(r"^[ph]-k(\d+)-(gnomon|mini|goose|qwen|opencode)-(.+)$")
 EXCLUDED_TASKS = {"count-call-stack"}
 ARMS = ("gnomon", "mini", "goose", "qwen", "opencode")
 PEERS = ARMS[1:]  # ships its own answer key (pre-registered)
@@ -51,7 +53,7 @@ def mcnemar_exact(b, c):
 cells, wrong_commit = [], 0
 for d in sorted(runs.iterdir()):
     m = CELL.match(d.name)
-    if not m or d.name.startswith("p-k0"):
+    if not m or d.name[2:].startswith("k0"):
         continue
     k, arm, task = int(m.group(1)), m.group(2), m.group(3)
     res = next(d.glob("*/*/results.json"), None)

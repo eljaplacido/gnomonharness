@@ -68,3 +68,32 @@ the upstream's origin and path gets a 403 and is counted
   model calls, and are listed in the result as metering-void.
 - The replaced user agent now says `(gnomon-p1h-benchmark)`.
 - No other cell is affected.
+
+## Amendment, 2026-11-01 ~02:15Z: cell names collided with P1's
+
+**What happened.** P1-H named its cells exactly as P1 does (`p-k<k>-<arm>-<task>`),
+in P1's own per-attempt order. tb names the docker compose project after the run
+id. Around 01:03Z, P1-H (2 slots, a faster model) caught up with P1's position
+in that order, and **four cells ran under the same compose project in both runs
+at once**:
+- `p-k1-opencode-polyglot-c-py`
+- `p-k1-mini-tune-mjcf`
+- `p-k1-goose-tune-mjcf`
+- `p-k1-qwen-tune-mjcf`
+
+All four P1-H copies failed within ~15 s at `docker compose`. No stale
+container survived into a later cell: tb removes them.
+
+**What was done.**
+- The runner was stopped at ~02:11Z.
+- Its four in-flight attempt-2 cells were torn down and set aside in
+  `runs-aborted/`: mini-prove-plus-comm, qwen-polyglot-c-py,
+  opencode-polyglot-c-py and gnomon-polyglot-c-py.
+- The four collided attempt-1 cells were set aside in `runs-superseded/`.
+- From now on, cells are named `h-k<k>-<arm>-<task>`. A cell that finished
+  under its old `p-` name counts as done (76 attempt-1 cells and 4 attempt-2
+  cells did), and every set-aside cell re-runs under its `h-` name.
+- The collector reads both prefixes. Nothing set aside is scored.
+
+**Lesson, kept:** two runs that share a docker host must not share run ids. The
+runner's names were copied along with its design.

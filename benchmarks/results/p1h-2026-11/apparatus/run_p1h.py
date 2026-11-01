@@ -58,7 +58,12 @@ def set_cell(slot: int, cell: str, arm: str) -> None:
 
 def run_cell(cid: str, arm: str, task: str, slot: int) -> None:
     runs = BENCH / "runs"
-    if list((runs / cid).glob("*/*/results.json")):
+    # Until 2026-11-01 02:11Z cells were named p-k…, identical to P1's: tb names the
+    # compose project after the run id, so a P1-H cell and the same P1 cell running at
+    # once collided (4 cells each). New cells are h-k…; a cell finished under its old
+    # name counts as done.
+    old = "p" + cid[1:]
+    if list((runs / cid).glob("*/*/results.json")) or list((runs / old).glob("*/*/results.json")):
         say(f"SKIP {cid} (done)")
         return
     base = f"http://172.17.0.1:{RELAY_PORT0 + slot}/openai/v1"
@@ -101,7 +106,7 @@ def main() -> None:
         for i, task in enumerate(order):
             for j in range(len(ARMS)):
                 arm = ARMS[(i + k + j) % len(ARMS)]
-                queue.append((f"p-k{k}-{arm}-{task}", arm, task))
+                queue.append((f"h-k{k}-{arm}-{task}", arm, task))
         say(f"ATTEMPT {k}: {len(queue)} cells")
         qlock = threading.Lock()
 

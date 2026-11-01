@@ -290,3 +290,19 @@ From the smoke re-runs, 2026-10-31 16:20–16:35Z, before any full-run trial.
   tokens), goose (9,108), opencode (11,593), qwen (56,004);
 - opencode logged 0 auto-rejects;
 - setup seconds: gnomon 18, goose 27, opencode 10, qwen 9, mini 47–72.
+
+## Amendment, 2026-11-01 ~02:15Z: four P1 cells disturbed by P1-H
+
+P1-H (`../p1h-2026-11/`) copied this run's cell names, and tb names docker
+compose projects after them. Around 01:03Z, four cells ran in both runs under
+the same compose project:
+- `p-k1-goose-tune-mjcf` and `p-k1-mini-tune-mjcf` ended in 15–16 s, an
+  apparatus failure in this run too;
+- `p-k1-opencode-polyglot-c-py` (428 s) and `p-k1-qwen-tune-mjcf` (767 s) ran
+  on, but shared their compose project with a failing twin, and are treated as
+  possibly disturbed.
+
+All four are **re-run after this run's pass** and scored on the re-run; the
+originals are kept aside. P1-H now uses distinct names (`h-k…`), so it cannot
+recur. No other P1 cell overlapped a same-named P1-H cell (checked from both
+status logs). This run's runner and files were not touched.
