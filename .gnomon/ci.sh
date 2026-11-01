@@ -687,6 +687,18 @@ else
     fail "The published package does not install-and-run — see above"
 fi
 
+# ── 13. The property suites hold their published figures ──
+# Five model-free suites back published claims (README, the website): surface
+# fidelity 13/13, degradations 14/14, faults disclosed 8/8, silent success 0/11,
+# determinism 10/10. None ran here until 2026-11-01, so the degradation suite
+# read 11/14 for a whole release (#82) while CI stayed green. The script holds
+# each to its figure, case count included, in a stranger's state (empty HOME,
+# no keys). About 20 s, most of it surface fidelity.
+echo ""
+echo "═══ Property suites at their published figures ═══"
+node scripts/property_suites.mjs || fail "A property suite is below its published figure"
+pass "Property suites hold"
+
 # ── 10. Which prose documents are owed a reading ──
 #
 # A REPORT, never a failure, and the distinction is the whole design. Prose rot
