@@ -1453,6 +1453,8 @@ CI job's end-to-end tests, not yet run on a Mac by hand.
 - **Package caches in `$HOME` are read-only**, so a tool that writes one (npm,
   pip, cargo's registry) fails unless it is pointed at the temp dir or the
   cache is granted with `extra_roots`.
+- **On macOS, a server under `network = false` must bind loopback**
+  (`127.0.0.1`, not `0.0.0.0`). Linux allows either.
 - **Older kernels give less.** Below Landlock ABI 3 (Linux 6.2), `truncate(2)`
   of a file outside the root is not blocked; below ABI 2 (5.19), renaming a file
   into another directory fails even inside the root. The probe names what this

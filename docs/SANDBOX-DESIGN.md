@@ -209,7 +209,10 @@ caller that reads to EOF wait for the job — measured, and fixed before shippin
 **macOS — `sandbox-exec`.** A generated SBPL profile: `(allow default)`,
 `(deny file-write*)`, writes re-allowed beneath the same directories, and for
 `network = false` Bazel's four lines (`deny network*`, allow `localhost` local
-and remote, allow unix sockets) plus `network-bind` on any address. **Not run
+and remote, allow unix sockets). A fifth, `network-bind` on any address, was
+tried so a server binding every interface could start; on the macos-latest CI
+runner it let a connect to 192.0.2.1 through, so it was removed, and on macOS a
+server under `network = false` must bind loopback. **Not run
 on a Mac by the author of this change**: the macOS CI job runs the TypeScript
 suite, which exercises it end to end.
 

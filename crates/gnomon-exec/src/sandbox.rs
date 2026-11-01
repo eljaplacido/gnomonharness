@@ -221,15 +221,17 @@ mod macos {
         }
         p.push_str("  (regex #\"^/dev/fd/[0-9]+$\")\n  (regex #\"^/dev/ttys[0-9]+$\"))\n");
         if !policy.network {
-            // Bazel's darwin sandbox uses the same four lines for
-            // --sandbox_block_network; the bind rule is added so a server that
-            // binds every interface (python -m http.server) can still start.
+            // Bazel's darwin sandbox, verbatim (--sandbox_block_network).
+            // A fifth line, `(allow network-bind (local ip "*:*"))`, was
+            // tried so a server binding every interface could start; on
+            // macos-latest CI, curl to 192.0.2.1 then hung instead of being
+            // refused. So a server under network = false on macOS must bind
+            // loopback, and the README says so.
             p.push_str(
                 "(deny network*)\n\
                  (allow network* (local ip \"localhost:*\"))\n\
                  (allow network* (remote ip \"localhost:*\"))\n\
-                 (allow network* (remote unix-socket))\n\
-                 (allow network-bind (local ip \"*:*\"))\n",
+                 (allow network* (remote unix-socket))\n",
             );
         }
         p

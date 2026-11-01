@@ -260,7 +260,9 @@ describe("bash under exec = \"os\" — the kernel, not the rules, holds the line
     it.skipIf(!!curlWhy)(label("curl to an external host fails in the kernel", curlWhy), async () => {
       // A literal address: no DNS, so only the connect itself can refuse. And
       // TEST-NET-1 (RFC 5737), so even an unsandboxed control reaches nobody.
-      const out = await bash("curl -sS --max-time 5 http://192.0.2.1/", ctx());
+      // --max-time 3 inside a 20 s test: an unrefused connect must fail the
+      // ASSERTION below, with curl's own message, not the test runner's clock.
+      const out = await bash("curl -sS --max-time 3 http://192.0.2.1/", ctx());
       expect(out.shell_exit).not.toBe(0);
       if (linux) {
         // The supervisor's own line. An offline machine also fails this
@@ -269,7 +271,7 @@ describe("bash under exec = \"os\" — the kernel, not the rules, holds the line
       } else {
         expect(out.content).toMatch(/Operation not permitted|Permission denied/);
       }
-    });
+    }, 20_000);
 
     it.skipIf(!!curlWhy)(label("curl to a local server succeeds", curlWhy), async () => {
       for (const host of ["127.0.0.1", "localhost"]) {
