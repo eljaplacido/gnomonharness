@@ -1,0 +1,28 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Done. `vectorops` is built and a local PyPI index is running on port 8080.
+
+**What was created in `/app`**
+- `vectorops/__init__.py` — `dotproduct(a, b)` (length-checked, `sum(x*y ...)`) plus `__version__ = "0.1.0"`
+- `pyproject.toml` — setuptools build, version `0.1.0`
+- `dist/` — `vectorops-0.1.0-py3-none-any.whl` and `.tar.gz`
+- `packages/` — the artifacts served by pypiserver
+- `serve.sh` — rebuilds and serves the index (`PORT` env, default 8080)
+- `tests/test_dotproduct.py` — 6 pytest cases
+- `README.md`
+
+**Server**
+`pypi-server` is running on `0.0.0.0:8080` with `--disable-fallback` (local only, no proxy to pypi.org). `/simple/vectorops/` returns 200 listing both artifacts; an unknown package returns 404, confirming no upstream fallback.
+
+**Verification** (fresh venv, exact command from the spec):
+```
+$ pip install --no-cache-dir --index-url http://localhost:8080/simple vectorops==0.1.0
+Looking in indexes: http://localhost:8080/simple
+Downloading http://localhost:8080/packages/vectorops-0.1.0-py3-none-any.whl
+Successfully installed vectorops-0.1.0
+
+$ python -c "from vectorops import dotproduct; assert 1 == dotproduct([1,1], [0,1])"
+installed 0.1.0 from .../site-packages/vectorops/__init__.py
+```
+`pytest tests -q` → `6 passed`.
+
+Note: the server is a background process of this session. If it stops, restart with `/app/serve.sh` (rebuilds everything and serves on 8080).

@@ -1,0 +1,63 @@
+[?2004hroot@040e1d6169ce:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@040e1d6169ce:/app# clear
+[?2004l[H[J[3J[?2004hroot@040e1d6169ce:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@040e1d6169ce:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=7012c5a6d80516891b061cc0f07ac1724b6289a0
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793517254
+[?2004hroot@040e1d6169ce:/app# bash /opt/gnomon-run.sh 'Write me a single file in /app/polyglot/main.py.c which is a polyglot, that is, I can run
+[?2004l[?2004h> 
+[?2004l[?2004h> `python3 /app/polyglot/main.py.c N`
+[?2004l[?2004h> or
+[?2004l[?2004h> `gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cmain N`
+[?2004l[?2004h> 
+[?2004l[?2004h> Both of these should print to stdout the kth Fibonacci number, f(0) = 0, f(1) = 1, etc.
+[?2004l[?2004h> 
+[?2004l[?2004h> I'"'"'m using python3 3.12.3 and gcc 13.2.0.'; tmux wait -S done
+[?2004l
+Two mutually-exclusive fences:
+
+```
+#if 0          ├─ C: enters a skipped conditional
+r""" # "       │  Python: `#if 0` is a comment; `r"""` opens a raw string
+#endif         ┤  C: skipped; Python: comment
+  ...C code... │  C: live code.  Python: swallowed by the raw string
+#if 0          ├─ C: skipped block covering the Python section
+""" # "        ┤  Python: closes the raw string, so what follows is code
+  ...Python... │  C: skipped
+#endif         ┘
+```
+
+Two details that make it clean rather than merely working:
+- The delimiters are `r"""` / plain `"""`, not a matched pair of `r"""`. A raw string can't end in a backslash, and the C code does contain `\n` in `fprintf` — raw on the opening side keeps those intact while a plain closing quote can't be accidentally escaped.
+- The trailing ` # "` on each fence line pads the quote count to an even 4. With a bare `"""` gcc emits `warning: missing terminating " character` twice (odd quote count makes the skipped region look like it has an open string literal). Padded, `gcc -Wall -Wextra` is silent.
+
+## Verification
+
+| Check | Result |
+|---|---|
+| `python3 main.py.c N` / `gcc` + `cmain N` (your exact commands) | both print `f(40) = 102334155` |
+| Differential, 84 N values (0–60 plus 61…100000) | 0 mismatches |
+| Independent oracle (matrix power, 45 values incl. random) | 0 mismatches |
+| Cassini `f(n-1)f(n+1)-f(n)²=(-1)ⁿ`, `gcd(f(n),f(n+1))=1`, `n|m ⟹ f(n)|f(m)` | 0 violations |
+| `gcc -Wall -Wextra` | no output |
+| `-std=c89/c99/c11/c17 -pedantic` | builds (c89 only warns about `long long`) |
+| ASan+UBSan at n=0,1,100,9999,100000 | clean, output identical |
+| `python3 -W error`, `py_compile` | clean, valid 3.12 source |
+
+## Notes
+
+- `f(0)=0, f(1)=1`; max N is 100000 (C: ~0.9 s, Python: ~25 ms; f(100000) is 20899 digits). Out-of-range and negative N exit 1 with a usage message in both languages; no argument prints `f(0)`.
+- **Python:** needs `sys.set_int_max_str_digits(0)` — 3.12 caps int→str at 4300 digits, which silently breaks anything past roughly n=20000. Set, so it matches C everywhere.
+- **C:** uses base-1e9 limbs rather than `unsigned long long`, because f(93) is the last value that fits in 64 bits. `MAXLIMBS` is 2400 = 21600 digits, sized against f(100000)=20899.
+- The C `#include` lines sit inside a Python *string*, not a comment, so they're inert either way; the `#endif` on line 92 is the only thing after the Python code, and it's a comment in Python.
+- `cmain` was removed after testing — only `main.py.c` is left, so the build in your second command starts fresh.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=31 surface=9e36cdc3535a
+[?2004hroot@040e1d6169ce:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@040e1d6169ce:/app# 

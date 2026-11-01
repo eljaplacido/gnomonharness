@@ -1,0 +1,1248 @@
+root@ef574e37916b:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+root@ef574e37916b:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+ARM_VERSION= 1.57.0
+ARM_SETUP_END=1793517917
+root@ef574e37916b:/app# cat > ~/terminal-bench-recipe.yaml << 'EOF'
+> description: terminal-bench recipe
+> instructions: You are given a task and you need to complete it. You are currently
+>   executing in a docker container where you are being evaluated on a benchmark for
+>   LLM agents. Act autonomously. You will not receive any feedback on your progress,
+>   so you must use your own tools to complete the task without any intervention.
+> prompt: "Parallelize a de Bruijn graph construction and traversal algorithm for genome\
+>   \ assembly using Unified Parallel C (UPC).\n\nYour task is to parallelize the serial\
+>   \ graph construction and traversal algorithm and generate the same set of contigs\
+>   \ as the serial version. The algorithm works with unique k-mers and their forward/backward\
+>   \ extensions to construct a de Bruijn graph represented as a hash table with separate\
+>   \ chaining.\n\nReference: Georganas, E., Bulu\xE7, A., Chapman, J., Oliker, L.,\
+>   \ Rokhsar, D., & Yelick, K. (2014, November). Parallel de bruijn graph construction\
+>   \ and traversal for de novo genome assembly. In SC'14: Proceedings of the International\
+>   \ Conference for High Performance Computing, Networking, Storage and Analysis (pp.\
+>   \ 437-448). IEEE.\n\nInput format: Each line contains KMER followed by tab and two\
+>   \ characters representing left and right extensions (A/C/G/T/F where F means no\
+>   \ extension).\n\nOutput format: Each output file should contain DNA contigs (sequences\
+>   \ of A/C/G/T characters), one contig per line.\n\nRequirements:\n- Implement both\
+>   \ serial and parallel UPC versions of the de Bruijn graph algorithm\n- A test input\
+>   \ file named 'test' is provided in the current directory (10,000 lines of k-mers)\n\
+>   - Create a Makefile that builds both executables: 'serial' (serial version) and\
+>   \ 'pgen' (parallel version)\n- Serial version must output contigs to '/app/serial.out'\n\
+>   - Parallel version must output to files starting with 'pgen' and ending with '.out'\
+>   \ (e.g., /app/pgen_0.out, /app/pgen_1.out)\n- Verify correctness by ensuring parallel\
+>   \ version generates identical contigs to /app/serial.out version (order may differ)\n\
+>   \nImplementation notes:\n- You will need to install Berkeley UPC compiler (download\
+>   \ from https://upc.lbl.gov/download/release/berkeley_upc-2022.10.0.tar.gz)\n- Configure\
+>   \ Berkeley UPC for SMP mode: ./configure --prefix=/usr/local --disable-mpi --enable-smp\
+>   \ --disable-ibv --disable-shmem --disable-ofi --disable-ucx\n- When running pgen\
+>   \ with pthreads, use: upcrun -n <num_threads> -shared-heap 256MB /app/pgen <input_file>\n\
+>   - Due to the small dataset size, the parallel implementation is expected to be slower\
+>   \ than the serial version due to UPC runtime overhead, thread synchronization, and\
+>   \ communication costs\n- For creating source files, you may use any method (vim,\
+>   \ nano, echo, cat with heredoc, etc.). If using heredoc, remember to put the delimiter\
+>   \ (e.g., EOF) on its own line\n\nExpected deliverables:\n- Working serial executable\
+>   \ named 'serial'\n- Working parallel UPC executable named 'pgen' \n- Makefile for\
+>   \ compilation\n- Output files (/app/serial.out and /app/pgen_*.out) showing identical\
+>   \ contigs between serial and parallel versions"
+> title: terminal-bench
+> version: 1.0.0
+> EOF
+root@ef574e37916b:/app# goose run --recipe ~/terminal-bench-recipe.yaml; tmux wait -S done
+Loading recipe: terminal-bench
+Description: terminal-bench recipe
+
+
+    __( O)>  ● new session · openai deepseek-v4.1-flash
+   \____)    20261101_1 · /app
+     L L     goose is ready
+I'll start by exploring the current environment and the test input.
+  ────────────────────────────────────────
+  ▸ shell
+    command: pwd; ls -la /app; echo "---"; head -5 /app/test; echo "---"; wc -l /app/test
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: which upc gcc g++ make gfortran perl 2>/dev/null; echo "---"; cat /etc/os-release | head -3; echo "---"; nproc; free -g | head -2
+
+    /app
+    total 236
+    drwxr-xr-x 1 root root   4096 Nov  1 07:25 .
+    drwxr-xr-x 1 root root   4096 Nov  1 07:25 ..
+    -rw-rw-r-- 1 root root 230000 Oct 31 09:48 test
+    ---
+    ATAGCCAGTGCCTGATACT FG
+    TAGCCAGTGCCTGATACTG AG
+    AGCCAGTGCCTGATACTGG TC
+    GCCAGTGCCTGATACTGGC AT
+    CCAGTGCCTGATACTGGCT GG
+    ---
+    10000 /app/test
+    /usr/bin/gcc
+    /usr/bin/g++
+    /usr/bin/make
+    /usr/bin/perl
+    ---
+    PRETTY_NAME="Ubuntu 24.04.2 LTS"
+    NAME="Ubuntu"
+    VERSION_ID="24.04"
+    ---
+    20
+                   total        used        free      shared  buff/cache   available
+    Mem:             121          56          36           0          30          65
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app; awk -F'\t' '{print length($1)}' test | sort -u; echo "---"; awk -F'\t' '{print $2}' test | sort | uniq -c; echo "---"; sort test | uniq...
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /tmp && timeout 60 curl -sI https://upc.lbl.gov/download/release/berkeley_upc-2022.10.0.tar.gz | head -20
+
+    19
+    ---
+        664 AA
+        685 AC
+          2 AF
+        618 AG
+        627 AT
+        620 CA
+        577 CC
+          1 CF
+    ... (8 lines hidden, /toggle to show all)
+        620 GG
+        626 GT
+        676 TA
+        577 TC
+          1 TF
+        615 TG
+        600 TT
+    ---
+    --- dup count:
+    0
+    HTTP/2 200
+    date: Sun, 01 Nov 2026 07:25:24 GMT
+    content-type: application/x-gzip
+    content-length: 5980624
+    server: cloudflare
+    x-frame-options: sameorigin
+    content-security-policy: frame-ancestors 'self'; object-src 'self'
+    x-xss-protection: 1; mode=block
+    referrer-policy: same-origin
+    strict-transport-security: max-age=31536000
+    last-modified: Fri, 28 Oct 2022 20:56:58 GMT
+    etag: "5b41d0-5ec1e7fa13a80"
+    accept-ranges: bytes
+    cache-control: max-age=600, s-max-age=3600, stale-if-error=86400, stale-while-revalidate=86400, no-store
+    link: <https://upc.lbl.gov/download/release/berkeley_upc-2022.10.0.tar.gz>; rel="canonical"
+    set-cookie: __cf_bm=Ke557IjQzrnbz.6fkYIvkzeBr_TqXfF2AYzLSF77tMg-1793517924.1746297-1.0.1.1-1b2TexSxwp9FLFF7hHBvVuvpbQuISEdKc5YsIYV93KH8PZo11Ieru67HWtZroEGDw
+CPx1047m1chWKyNTOmktoOk1NU7j06yituzU8ayp8FZpD89ZXwxn7g00teJ4b0O; HttpOnly; SameSite=None; Secure; Path=/; Domain=upc.lbl.gov; Expires=Sun, 01 Nov 2026 07:55:24
+GMT
+    age: 170
+    cf-cache-status: HIT
+    cf-ray: a5392a5219a8ced8-HEL
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /tmp && (nohup bash -c 'curl -sL -o bu.tar.gz https://upc.lbl.gov/download/release/berkeley_upc-2022.10.0.tar.gz && tar xzf bu.tar.gz && cd b...
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: dpkg -l | grep -E 'gcc|gfortran|libc6-dev' | head -20; echo ---; gcc --version | head -1
+
+    ii  gcc                             4:13.2.0-7ubuntu1                 arm64        GNU C compiler
+    ii  gcc-13                          13.3.0-6ubuntu2~24.04.1           arm64        GNU C compiler
+    ii  gcc-13-aarch64-linux-gnu        13.3.0-6ubuntu2~24.04.1           arm64        GNU C compiler for the aarch64-linux-gnu architecture
+    ii  gcc-13-base:arm64               13.3.0-6ubuntu2~24.04.1           arm64        GCC, the GNU Compiler Collection (base package)
+    ii  gcc-14-base:arm64               14.2.0-4ubuntu2~24.04.1           arm64        GCC, the GNU Compiler Collection (base package)
+    ii  gcc-aarch64-linux-gnu           4:13.2.0-7ubuntu1                 arm64        GNU C compiler for the arm64 architecture
+    ii  libc6-dev:arm64                 2.39-0ubuntu8.9                   arm64        GNU C Library: Development Libraries and Header Files
+    ii  libgcc-13-dev:arm64             13.3.0-6ubuntu2~24.04.1           arm64        GCC support library (development files)
+    ii  libgcc-s1:arm64                 14.2.0-4ubuntu2~24.04.1           arm64        GCC support library
+    ---
+    gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+    total 5884
+    drwxrwxrwt  1 root   root      4096 Nov  1 07:25 .
+    drwxr-xr-x  1 root   root      4096 Nov  1 07:25 ..
+    drwxr-xr-x  2 root   root      4096 Nov  1 07:25 .tmpYaQrtt
+    drwxr-xr-x 19  19214   5513    4096 Nov  1 07:25 berkeley_upc-2022.10.0
+    -rw-r--r--  1 root   root   5980624 Nov  1 07:25 bu.tar.gz
+    -rw-r--r--  1 root   root         0 Nov  1 07:25 build.out
+    -rw-r--r--  1 root   root     12426 Nov  1 07:25 conf.log
+    -rwxrwxr-x  1 ubuntu ubuntu     923 Oct 31 09:48 get-asciinema-timestamp.sh
+    drwx------  2 root   root      4096 Nov  1 07:25 tmux-0
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /tmp && tail -3 conf.log; ls build.status 2>/dev/null; ps aux | grep -c '[m]ake'
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+lines=[l.rstrip('\n').split('\t') for l in open('test')]
+print(len(lines), lines[:2], lines[-2:])
+km={l[0]:(l[1],l[...
+
+    checking for sin in -lm... yes
+    checking for Linux flavor... generic
+    checking for working pthreads support... 1
+    Traceback (most recent call last):
+    10000 [['ATAGCCAGTGCCTGATACT', 'FG'], ['TAGCCAGTGCCTGATACTG', 'AG']] [['CACTGACCGGAACAGCGTT', 'CT'], ['ACTGACCGGAACAGCGTTT', 'CA']]
+      File "<stdin>", line 3, in <module>
+    IndexError: list index out of range
+
+    Command exited with code 1
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && awk -F'\t' 'NF!=2' test | head -5; echo "---"; awk -F'\t' 'NF!=2' test | wc -l; echo "--- tabs"; grep -c $'\t' test; echo "--- last b...
+
+    ---
+    0
+    --- tabs
+    10000
+    --- last bytes
+    0000000  \t   G   T  \n   C   A   C   T   G   A   C   C   G   G   A   A
+    0000020   C   A   G   C   G   T   T  \t   C   T  \n   A   C   T   G   A
+    0000040   C   C   G   G   A   A   C   A   G   C   G   T   T   T  \t   C
+    0000060   A  \n
+    0000062
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 -c "
+lines=[l.rstrip('\n').split('\t') for l in open('test')]
+bad=[(i,l) for i,l in enumerate(lines) if len(l)!=2]
+print(len(...
+
+    0 []
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+from collections import Counter
+lines=[l.rstrip('\n').split('\t') for l in open('test')]
+km={l[0]:(l[1][0],l[1][1])...
+
+    indeg dist: Counter({1: 9994, 0: 6})
+    left ext F: 6 right F: 5
+    node has right ext but target missing: 1
+    node has left ext but pred missing: 0
+    num contigs 6 total bases 10108
+    [3598, 3590, 1467, 846, 380, 227]
+    [3598, 3590, 1467, 846, 380, 227]
+    Counter({3598: 1, 3590: 1, 1467: 1, 846: 1, 380: 1, 227: 1})
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /tmp && tail -2 conf.log; cat build.status 2>/dev/null; tail -3 make.log 2>/dev/null; ls /usr/local/bin 2>/dev/null | head
+
+    SUCCESS! The configure step is now complete. You should now proceed with:
+     gmake ; gmake install
+    make[6]: Entering directory '/tmp/berkeley_upc-2022.10.0/dbg'
+    /usr/bin/gcc   -D_GNU_SOURCE=1 -DGASNET_PAR -D_REENTRANT     -I/tmp/berkeley_upc-2022.10.0/gasnet -I/tmp/berkeley_upc-2022.10.0/gasnet/udp-conduit -I/tmp/be
+rkeley_upc-2022.10.0/gasnet/other -I/tmp/berkeley_upc-2022.10.0/gasnet/other/amudp -I/tmp/berkeley_upc-2022.10.0/dbg/gasnet/other/amudp   -I/tmp/berkeley_upc-20
+22.10.0/gasnet/extended-ref/vis -I/tmp/berkeley_upc-2022.10.0/gasnet/extended-ref/coll -I/tmp/berkeley_upc-2022.10.0/gasnet/extended-ref/ratomic -I/tmp/berkeley
+_upc-2022.10.0/gasnet/extended-ref -I/tmp/berkeley_upc-2022.10.0/gasnet/other/kinds -I/tmp/berkeley_upc-2022.10.0/dbg/gasnet   -I/tmp/berkeley_upc-2022.10.0 -I/
+tmp/berkeley_upc-2022.10.0/dbg -DUPCRI_SUPPORT_PTHREADS=1 -DUPCRI_UPC_PTHREADS=1   -I/tmp/berkeley_upc-2022.10.0/umalloc   -Wall -Wpointer-arith -Wnested-extern
+s -Wwrite-strings -Wmissing-format-attribute -Winit-self -Wvla -Wexpansion-to-defined -Woverlength-strings -Wclobbered -Wcast-function-type -Wempty-body -Wignor
+ed-qualifiers -Wimplicit-fallthrough -Wmissing-parameter-type -Wold-style-declaration -Wuninitialized -Wshift-negative-value -Wno-format-overflow -Wno-format-tr
+uncation   -g3   -Wno-array-bounds -Wno-stringop-overflow -Wno-dangling-pointer -Wno-use-after-free -Wno-unused -Wunused-result -Wno-unused-parameter -Wno-addre
+ss    -fno-strict-aliasing -fcommon  -DUPCRI_BUILDING_LIBUPCR=1 -DUPCRI_COLL_RED_OPS=UPCRI_COLL_NONINT -DUPCRI_COLL_RED_SUFF=LD -DUPCRI_COLL_RED_TYPE="UPCRI_COL
+L_LONG_DOUBLE" -DUPCRI_BUILD_REDUCE \
+        -c -o upcr_reduceLD-udp-par.o /tmp/berkeley_upc-2022.10.0/upcr_coll_templates.c
+Build is running. Now writing the serial implementation.
+  ────────────────────────────────────────
+  ▸ write
+    path /app/serial.c
+    content: /*
+ * Serial de Bruijn graph construction and traversal for genome assembly.
+ *
+ * Input  : one line per unique k-mer:  <KMER>\t<LEFT_EXT><RIGHT...
+
+    Created /app/serial.c (279 lines)
+
+  ────────────────────────────────────────
+  ▸ edit
+    path /app/serial.c
+    before:         uint64_t p = (suffix << 2) | (uint64_t)c;
+        if (lex[0] == 'F' && 0) { /* no-op, keeps intent explicit */ }
+        int32_t j = look...
+    after:         uint64_t p = (suffix << 2) | (uint64_t)c;
+        int32_t j = lookup(p);
+
+    Edited /app/serial.c (3 lines -> 2 lines)
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && gcc -O2 -Wall -o serial serial.c 2>&1 | head -20; ./serial test && wc -l serial.out && awk '{print length($0)}' serial.out | sort -n ...
+
+    serial.c:110:16: warning: ‘predecessor’ defined but not used [-Wunused-function]
+      110 | static int32_t predecessor(int32_t i)
+          |                ^~~~~~~~~~~
+    serial: 10000 k-mers, k=19 -> /app/serial.out
+    7331 serial.out
+    19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 1
+9 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+ 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19
+19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 19 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 2
+0 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+ 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 2
+0 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+ 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 2
+0 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+ 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 2
+0 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+ 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 2
+0 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+ 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 2
+0 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+ 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 2
+0 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+ 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 2
+0 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+ 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 2
+0 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+ 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20
+20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 21 21 21 21 21 21 21 21 21 21 2
+1 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21
+ 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21
+21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 2
+1 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21
+ 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21
+21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 2
+1 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21
+ 21 21 21 21 21 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22
+22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 22 23 23 23 23 23 23 23 23 2
+3 23 23 23 23 23 23 23 23 23 23 23 23 23 23 23 23 23 24 24 24 24 24 25 25 26
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+import re
+s=open('serial.c').read()
+s=s.replace("""        uint64_t suffix = key[i] >> 2;
+        int want = (int)(...
+
+      110 | static int32_t predecessor(int32_t i)
+          |                ^~~~~~~~~~~
+    serial: 10000 k-mers, k=19 -> /app/serial.out
+    6
+    bases: 10108
+    3598 3590 1467 846 380 227
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+from collections import Counter
+lines=[l.rstrip('\n').split('\t') for l in open('test')]
+km={l[0]:(l[1][0],l[1][1])...
+
+    python set == serial set: True 6 6
+    === upc build ===
+    DONE
+    ln -s opt/upcrun upcrun
+    make[1]: Leaving directory '/tmp/berkeley_upc-2022.10.0'
+    upc_trace
+    upcc
+    upcc_multi
+    upcc_multi.pl
+    upcdecl
+    upcrun
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: ls /usr/local/bin; echo ---; which upc upcc upcrun; echo ---; cd /tmp && cat > h.upc <<'EOF'
+#include <upc.h>
+#include <upc_relaxed.h>
+#include ...
+
+    upc_trace
+    upcc
+    upcc_multi
+    upcc_multi.pl
+    upcdecl
+    upcrun
+    ---
+    /usr/local/bin/upcc
+    /usr/local/bin/upcrun
+    ---
+    bash: line 8: upc: command not found
+
+    Command exited with code 127
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /tmp && upcc -O2 -o h h.upc && upcrun -n 4 -shared-heap 256MB ./h; echo "exit=$?"
+
+    upcc: unrecognized flag '-2'
+    exit=255
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: upcc --help 2>&1 | head -60
+
+    Usage: upcc [options] foo.upc [ bar.c someobject.o ... ]
+    For detailed documentation, please see man upcc(1) or https://upc.lbl.gov/docs/
+
+    Standard C compiler options:
+       -c                 Compile source files, but do not link.
+       -DFOO[=bar]        Define preprocessor symbol FOO [to optional value].
+       -E                 Preprocess source files (output sent to stdout).
+       -g                 Generate debug objects/executables
+       -I path            Add path to directories searched for header files.
+       -lfoo              Link executable with libfoo.a.
+    ... (39 lines hidden, /toggle to show all)
+       -h -? -help        Print this message.
+       -conf=FILE         Read FILE instead of $HOME/.upccrc configuration file.
+       -norc              Do not read $HOME/.upccrc configuration file.
+                          This can also be achieved by setting the UPCC_NORC
+                          environment variable.  Overrides -conf.
+       -smart-output      Output file name will be auto-generated based on first
+                          .c/.upc/.o file on command line (ignored if -o passed).
+       -V -version        Show version information.
+       -v                 Verbose: display programs invoked by compiler.
+       -vv                Extra verbose: pass verbose flag to programs invoked.
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /tmp && upcc -O -o h h.upc && upcrun -n 4 -shared-heap 256MB ./h; echo "exit=$?"; upcc -version 2>&1|head -20
+
+    upcrun: nodes not specified!  See RUNNING UDP-BASED UPC JOBS in 'man upcrun'
+    exit=255
+    This is upcc (the Berkeley Unified Parallel C compiler), v. 2022.10.0
+      (getting remote translator settings...)
+    ----------------------+---------------------------------------------------------
+     UPC Runtime          | v. 2022.10.0, built on Nov  1 2026 at 07:26:37
+    ----------------------+---------------------------------------------------------
+     UPC-to-C translator  | v. 2.28.4, built on Oct 27 2022 at 22:40:34
+                          | host 140-211-168-66-openstack.osuosl.org
+                          | linux-powerpc/64
+    ... (2 lines hidden, /toggle to show all)
+     Translator location  | http://upc-translator.lbl.gov/upcc-2022.10.0.cgi
+    ----------------------+---------------------------------------------------------
+     networks supported   | smp udp
+    ----------------------+---------------------------------------------------------
+     default network      | udp
+    ----------------------+---------------------------------------------------------
+     pthreads support     | available (if used, default is 2 pthreads per process)
+    ----------------------+---------------------------------------------------------
+     Configured with      | '--with-translator=http://upc-translator.lbl.gov/upcc-2
+                          | 022.10.0.cgi' '--disable-mpi' '--enable-smp'
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /tmp && upcc -O -network=smp -o h2 h.upc && echo built; upcrun -n 4 -shared-heap 256MB ./h2; echo "exit=$?"
+
+    built
+    UPCR: UPC thread 0 of 4 on ef574e37916b (pshm node 0 of 1, process 0 of 4, pid=28383)
+    UPCR: UPC thread 1 of 4 on ef574e37916b (pshm node 0 of 1, process 1 of 4, pid=28401)
+    UPCR: UPC thread 3 of 4 on ef574e37916b (pshm node 0 of 1, process 3 of 4, pid=28403)
+    UPCR: UPC thread 2 of 4 on ef574e37916b (pshm node 0 of 1, process 2 of 4, pid=28402)
+    UPC Runtime warning: Requested shared memory (256 MB) > available (9 MB) on node 0 (ef574e37916b): using 9 MB per thread instead
+    0 1 2 3
+    exit=0
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: upcrun --help 2>&1 | head -50; echo ===; df -h /dev/shm; echo ===; ls /usr/local/upc 2>/dev/null | head
+
+    Usage: upcrun [options] program-name [ program-arguments ... ]
+    For detailed documentation, please see man upcrun(1)
+    or visit https://upc.lbl.gov/docs/
+
+    Options:
+        -h -? -help
+                See this message
+        -help-gasnet [network_name]
+                See the GASNet documentation, or the GASNet documentation
+                for a particular network conduit.
+    ... (34 lines hidden, /toggle to show all)
+                which will be different if pthreads is also in use.
+                A value of 0 (the default) means no limit is imposed.
+                A value of 1 essentially disables PSHM.
+        -bind-threads
+                Bind (aka pin) UPC threads to processors.
+                (Silently ignored on unsupported platforms).
+    ===
+    Filesystem      Size  Used Avail Use% Mounted on
+    shm              64M   24K   64M   1% /dev/shm
+    ===
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: upcc --help 2>&1 | grep -i -A3 pthread; echo ===; mount -o remount,size=2G /dev/shm 2>&1; df -h /dev/shm
+
+                          threads.  (Available only for '-network=smp -pthreads')
+                      If available, on by default if -T passed a power-of-two value.
+       -opt-enable=OPT1[,OPT2]
+       -opt-disable=OPT3[,OPT4]
+    --
+       -[no]link-cache    Disable the use of the pthread-link cache directory used
+                          to speed up linking of multi-file pthread applications.
+       -link-with <PROG>  Use PROG to as the back-end linker.  Use to combine
+                          UPC code with external C++ and/or MPI code.
+       -nightly           Use nightly build of UPC-to-C translator at
+    ... (9 lines hidden, /toggle to show all)
+                          UPC_PTHREADS_MAP environment variables).  A value of
+                          N=0 disables creation of a pthreaded executable.
+       -[no]require-size  Die at startup if amount of shared memory available is
+                          less than requested: off by default. Can be overridden at
+                          startup by setting the UPC_REQUIRE_SHARED_SIZE
+    ===
+    mount: /dev/shm: permission denied.
+           dmesg(1) may have more information after failed mount system call.
+    Filesystem      Size  Used Avail Use% Mounted on
+    shm              64M   24K   64M   1% /dev/shm
+UPC works. Now the parallel implementation.
+  ────────────────────────────────────────
+  ▸ write
+    path /app/pgen.upc
+    content: /*
+ * Parallel (UPC) de Bruijn graph construction and traversal for genome
+ * assembly.
+ *
+ *   input : one line per unique k-mer:  <KMER>\t<LEF...
+
+    Created /app/pgen.upc (400 lines)
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && sed -i 's/^        upc_free(sh_k);$//' pgen.upc && upcc -O -network=smp -pthreads=32 -o pgen pgen.upc 2>&1 | head -40
+
+    pgen.upc:74: warning: control reaches the end of non-VOID function
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && sed -n '66,80p' pgen.upc; echo "=== run ==="; time upcrun -n 4 -shared-heap 256MB /app/pgen /app/test 2>&1 | tail -8; echo "=== files...
+
+    > TTGGGTGACTGGAATAAGC
+    > TTGGTCATTTGAGAGCATG
+    > TTGGTGCTATAGACCGTTT
+    > TTGGTGGTTCCTTCGTTTC
+    > TTGTCCGGGGCTCACTGTTT
+    > TTGTGCAACGCCTGTTTCA
+    > TTGTGCGACACGAACCGGA
+    > TTGTGGCTGACGGTTTAAT
+    > TTGTTCATGACCCACCCGC
+    > TTGTTGCGATACAGCGCCA
+    ... (30 lines hidden, /toggle to show all)
+    > TTTTCGAACATCCAGGAAT
+    > TTTTCGCGCTGCGGCGAAG
+    > TTTTGATTCTCCAGTTTTG
+    > TTTTGGTGGTTCCTTCGTT
+    > TTTTTACGGGAAACATTGT
+    > TTTTTAGCTTTATTGAGTG
+    > TTTTTATTGAGAAAATGAGATG
+    > TTTTTGTGCACCGTATTGC
+    > TTTTTTATGCCCTGGATCG
+    1855 /tmp/par.txt
+    [Output exceeded 50000 byte limit (52528 bytes total). Full output saved to /tmp/.tmpYaQrtt/stdout-7. Read it with shell commands like `head`, `tail`, or `s
+ed -n '100,200p'` up to 2000 lines at a time.]
+    [Output exceeded 50000 byte limit (52571 bytes total). Full output saved to /tmp/.tmpYaQrtt/output-7. Read it with shell commands like `head`, `tail`, or `s
+ed -n '100,200p'` up to 2000 lines at a time.]
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && upcrun -n 1 -shared-heap 256MB /app/pgen /app/test 2>&1 | head -3; sort pgen_0.out | md5sum; sort serial.out | md5sum; wc -l pgen_0.o...
+
+    UPCR: UPC thread 0 of 1 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=28581)
+    UPC Runtime warning: Requested shared memory (256 MB) > available (57 MB) on node 0 (ef574e37916b): using 57 MB per thread instead
+    thread 0: 10000 nodes, 6 contigs -> /app/pgen_0.out
+    045cb833c45ef39a36b8e53f9926cd6c  -
+    045cb833c45ef39a36b8e53f9926cd6c  -
+        6 pgen_0.out
+        6 serial.out
+       12 total
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && cp pgen.upc /tmp/pgen_dbg.upc && python3 - <<'EOF'
+s=open('/tmp/pgen_dbg.upc').read()
+s=s.replace("""    traverse(pat);""","""    {  ...
+
+    /tmp/pgen_dbg.upc:74: warning: control reaches the end of non-VOID function
+    UPC Runtime warning: Requested shared memory (128 MB) > available (56 MB) on node 0 (ef574e37916b): using 28 MB per thread instead
+    dbg t1: myBegin=9999 myCnt=0 localMax=9999 N=9999 nBuckets=65536 bad=0 badkmer=0
+    dbg t0: myBegin=0 myCnt=9999 localMax=9999 N=9999 nBuckets=65536 bad=0 badkmer=0
+    thread 1: 0 nodes, 0 contigs -> /app/pgen_1.out
+    thread 0: 9999 nodes, 2503 contigs -> /app/pgen_0.out
+Found two bugs: hash geometry computed after the histogram, and a chunk-boundary line wrongly skipped.
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+s=open('pgen.upc').read()
+
+# --- fix 1: skip-partial-line must not drop a line that starts exactly at lo
+s=s.replac...
+
+    236:    buckPerThread = 1;
+    237-    while (buckPerThread * THREADS < 4 * (N > 1 ? N : 1)) buckPerThread <<= 1;
+    238-    nBuckets = buckPerThread * THREADS;
+    239-
+
+    Command exited with code 1
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && for n in 1 2 3 4 8; do upcrun -n $n -shared-heap 256MB /app/pgen /app/test 2>/dev/null; cat pgen_*.out | sort > /tmp/par_$n.txt; echo...
+
+    UPCR: UPC thread 0 of 1 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=28837)
+    n=1 contigs=6 MATCH
+    UPCR: UPC threads 0..1 of 2 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=28862)
+    n=2 contigs=6 MATCH
+    UPCR: UPC threads 0..2 of 3 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=28888)
+    n=3 contigs=6 MATCH
+    UPCR: UPC threads 0..3 of 4 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=28915)
+    n=4 contigs=6 MATCH
+    UPCR: UPC threads 0..7 of 8 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=28943)
+    n=8 contigs=6 MATCH
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+import random
+random.seed(7)
+# build a pseudo-genome: random bases with some repeats
+g=''.join(random.choice('ACGT'...
+
+    lines 200000
+    -rw-r--r-- 1 root root 5000000 Nov  1 07:31 /tmp/test_big
+
+    Command timed out after 300 seconds
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && head -20000 /tmp/test_big > /tmp/t20k && time ./serial /tmp/t20k /tmp/s20.out; wc -l < /tmp/s20.out; head -50000 /tmp/test_big > /tmp...
+
+    serial: 20000 k-mers, k=21 -> /tmp/s20.out
+
+    real        0m0.005s
+    user        0m0.004s
+    sys 0m0.001s
+    1
+    serial: 50000 k-mers, k=21 -> /tmp/s50.out
+
+    real        0m0.011s
+    user        0m0.010s
+    sys 0m0.001s
+    1
+Serial hangs on a large cyclic input — the cycle detection is quadratic. Fixing both versions.
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+s=open('serial.c').read()
+
+s=s.replace("""/* Is `start` the canonical representative of its (cyclic) component?
+ * ...
+
+    serial: 10000 k-mers, k=19 -> /app/serial.out
+    6
+    serial: 200000 k-mers, k=21 -> /tmp/ser_big.out
+
+    real        0m0.061s
+    user        0m0.056s
+    sys 0m0.005s
+    1
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+s=open('pgen.upc').read()
+
+s=s.replace("""static shared int32_t  *s_buckets;""",
+"""static shared int32_t  *s_bucke...
+
+    pgen.upc:75: warning: control reaches the end of non-VOID function
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && sed -n '60,80p' pgen.upc
+
+    static long localMax;        /* node slots reserved per thread (>= sh_tot) */
+    static long buckPerThread;   /* buckets owned per thread                   */
+    static long nBuckets;        /* total buckets                              */
+    static long myBegin, myCnt;  /* node range owned by this thread            */
+
+    /* ------------------------------ helpers -------------------------------- */
+    static inline int base_code(unsigned char c)
+    {
+        switch (c) {
+            case 'A': return 0;
+    ... (1 lines hidden, /toggle to show all)
+            case 'G': return 2;
+            case 'T': return 3;
+            default:  return 0;
+        }
+    }
+
+    static inline char code_base(int c) { return "ACGT"[c]; }
+
+    static inline uint64_t encode(const char *s, int k)
+    {
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+s=open('pgen.upc').read()
+s=s.replace("""        case 'T': return 3;
+        default:  return 0;
+    }
+}""","""    ...
+
+    build ok
+    UPCR: UPC thread 0 of 1 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=29213)
+    test n=1: MATCH (6 contigs)
+    UPCR: UPC threads 0..1 of 2 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=29238)
+    test n=2: MATCH (6 contigs)
+    UPCR: UPC threads 0..3 of 4 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=29264)
+    test n=4: MATCH (6 contigs)
+    UPCR: UPC threads 0..4 of 5 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=29292)
+    test n=5: MATCH (6 contigs)
+    UPCR: UPC threads 0..7 of 8 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=29321)
+    test n=8: MATCH (6 contigs)
+    UPCR: UPC threads 0..15 of 16 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=29353)
+    test n=16: MATCH (6 contigs)
+    UPCR: UPC threads 0..19 of 20 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=29393)
+    test n=20: MATCH (6 contigs)
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && for n in 1 4 8 20; do rm -f pgen_*.out; upcrun -n $n -shared-heap 256MB /app/pgen /tmp/test_big 2>/dev/null; cat pgen_*.out | sort > ...
+
+    UPCR: UPC thread 0 of 1 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=29438)
+    big n=1: MATCH (1 contigs, 200020 bases)
+    UPCR: UPC threads 0..3 of 4 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=29464)
+    big n=4: MATCH (1 contigs, 200020 bases)
+    UPCR: UPC threads 0..7 of 8 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=29493)
+    big n=8: MATCH (1 contigs, 200020 bases)
+    UPCR: UPC threads 0..19 of 20 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=29526)
+    big n=20: MATCH (1 contigs, 200020 bases)
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+import random
+random.seed(11)
+K=15
+def add(m, s):
+    """add all k-mers of s; extensions from s, F at the ends"""
+ ...
+
+    lines 4258
+    serial: 4258 k-mers, k=15 -> /tmp/ser_cyc.out
+    6
+    UPCR: UPC thread 0 of 1 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=29576)
+    cyc n=1 MATCH (6)
+    UPCR: UPC threads 0..2 of 3 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=29601)
+    cyc n=3 MATCH (6)
+    UPCR: UPC threads 0..3 of 4 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=29628)
+    cyc n=4 MATCH (6)
+    UPCR: UPC threads 0..7 of 8 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=29656)
+    cyc n=8 MATCH (6)
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && awk '{print length($0)}' /tmp/ser_cyc.out | sort -rn | tr '\n' ' '; echo; head -c 60 /tmp/ser_cyc.out; echo; echo "--- verify circula...
+
+    3014 400 400 400 64 64
+    TACATGCGTCGTAGCGCGCTGAAAAGGTAATCTCTTTGGTCGTCCCCATTCCGAGAACTG
+    --- verify circular genome is present:
+    len-3014 contig found: 1 AAAAAGTGTTTTAAGATACA
+
+  ────────────────────────────────────────
+  ▸ write
+    path /app/Makefile
+    content: # ---------------------------------------------------------------------------
+# de Bruijn graph construction + traversal for genome assembly
+#
+#...
+
+    Created /app/Makefile (53 lines)
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && make clean && time make 2>&1 | tail -8 && ls -la serial pgen
+
+    rm -f serial pgen pgen_*.out serial.out
+    cc -O2 -Wall -o serial serial.c
+    serial.c:110:16: warning: ‘predecessor’ defined but not used [-Wunused-function]
+      110 | static int32_t predecessor(int32_t i)
+          |                ^~~~~~~~~~~
+    upcc -O -network=smp -pthreads=32 -o pgen pgen.upc
+
+    real        0m1.532s
+    user        0m0.430s
+    sys 0m0.168s
+    -rwxr-xr-x 1 root root 925488 Nov  1 07:38 pgen
+    -rwxr-xr-x 1 root root  71664 Nov  1 07:38 serial
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+s=open('serial.c').read()
+i=s.index("/* unique predecessor of node i")
+j=s.index("/* ------------------------------...
+
+    177:            /* candidate predecessor: base c prepended to suffix           */
+    cc -O2 -Wall -o serial serial.c
+    upcc -O -network=smp -pthreads=32 -o pgen pgen.upc
+    === check ===
+    thread 3: 1260 nodes, 1 contigs -> /app/pgen_3.out
+    thread 5: 1223 nodes, 2 contigs -> /app/pgen_5.out
+    thread 0: 1185 nodes, 1 contigs -> /app/pgen_0.out
+    thread 1: 1250 nodes, 1 contigs -> /app/pgen_1.out
+    /bin/sh: 1: Syntax error: "(" unexpected
+    make: *** [Makefile:44: check] Error 2
+
+  ────────────────────────────────────────
+  ▸ edit
+    path /app/Makefile
+    before:     @cat pgen_*.out | sort > /tmp/pgen_all.out
+        @if diff -q <(sort serial.out) /tmp/pgen_all.out > /dev/null; then \
+            echo "OK: parallel contig ...
+    after:      @cat pgen_*.out | sort > /tmp/pgen_all.out
+        @sort serial.out > /tmp/serial_all.out
+        @if cmp -s /tmp/serial_all.out /tmp/pgen_all.out; then \
+           ...
+
+    Edited /app/Makefile (6 lines -> 7 lines)
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && make check 2>&1 | grep -v "^thread\|^UPCR" | tail -5; echo; echo "=== files ==="; ls -la /app/serial.out /app/pgen_*.out; echo; wc -l...
+
+    serial: 10000 k-mers, k=19 -> /app/serial.out
+    rm -f pgen_*.out
+    upcrun -n 8 -shared-heap 256MB ./pgen test
+    UPC Runtime warning: Requested shared memory (2048 MB) > available (56 MB) on node 0 (ef574e37916b): using 7 MB per thread instead
+    OK: parallel contig set == serial contig set (6 contigs)
+
+    === files ===
+    -rw-r--r-- 1 root root  1468 Nov  1 07:39 /app/pgen_0.out
+    -rw-r--r-- 1 root root  3591 Nov  1 07:39 /app/pgen_1.out
+    -rw-r--r-- 1 root root     0 Nov  1 07:39 /app/pgen_2.out
+    ... (7 lines hidden, /toggle to show all)
+        6 /app/serial.out
+        1 /app/pgen_0.out
+        1 /app/pgen_1.out
+        0 /app/pgen_2.out
+        1 /app/pgen_3.out
+        1 /app/pgen_4.out
+        2 /app/pgen_5.out
+        0 /app/pgen_6.out
+        0 /app/pgen_7.out
+       12 total
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && rm -f pgen_*.out && time upcrun -n 40 -shared-heap 256MB ./pgen /tmp/test_big 2>&1 | grep -v "^UPCR:" | tail -2; cat pgen_*.out | sor...
+
+    thread 7: 12491 nodes, 0 contigs -> /app/pgen_7.out
+    thread 39: 12444 nodes, 1 contigs -> /app/pgen_39.out
+
+    real        0m1.172s
+    user        0m0.556s
+    sys 0m1.695s
+    n=40 MULTI-PROCESS MATCH
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && echo "serial:"; for i in 1 2 3; do /usr/bin/time -f "  %e s" ./serial test 2>&1 | tail -1; done; for n in 1 4 8 20; do rm -f pgen_*.o...
+
+    serial:
+      0.00 s
+      0.00 s
+      0.00 s
+    pgen n=1:
+      1.03 s
+    pgen n=4:
+      1.04 s
+    pgen n=8:
+      1.05 s
+    pgen n=20:
+      1.41 s
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+# serial: fall back to /app/test when no argument and ./test is missing
+s=open('serial.c').read()
+s=s.replace("""  ...
+
+    cc -O2 -Wall -o serial serial.c
+    upcc -O -network=smp -pthreads=32 -o pgen pgen.upc
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && make check 2>&1 | grep -vE "^thread|^UPCR|Runtime warning" | tail -4; echo "--- run from /tmp with no args:"; cd /tmp && /app/serial ...
+
+    serial: 10000 k-mers, k=19 -> /app/serial.out
+    rm -f pgen_*.out
+    upcrun -n 8 -shared-heap 256MB ./pgen test
+    OK: parallel contig set == serial contig set (6 contigs)
+    --- run from /tmp with no args:
+    test: No such file or directory
+    045cb833c45ef39a36b8e53f9926cd6c  -
+    UPCR: UPC threads 0..5 of 6 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=30346)
+    045cb833c45ef39a36b8e53f9926cd6c  -
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /tmp && /app/serial && sort /app/serial.out | md5sum && rm -f /app/pgen_*.out && upcrun -n 5 -shared-heap 256MB /app/pgen 2>/dev/null && cat ...
+
+    serial: 10000 k-mers, k=19 -> /app/serial.out
+    045cb833c45ef39a36b8e53f9926cd6c  -
+    UPCR: UPC threads 0..4 of 5 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=30377)
+    045cb833c45ef39a36b8e53f9926cd6c  -
+    /app/pgen_0.out
+    /app/pgen_1.out
+    /app/pgen_2.out
+    /app/pgen_3.out
+    /app/pgen_4.out
+
+  ────────────────────────────────────────
+  ▸ read_image
+    source: /app/pgen.upc
+
+    Error: unsupported image format; supported formats are png, jpeg, gif, and webp
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && sed -n '1,120p' pgen.upc
+
+    /*
+     * Parallel (UPC) de Bruijn graph construction and traversal for genome
+     * assembly.
+     *
+     *   input : one line per unique k-mer:  <KMER>\t<LEFT_EXT><RIGHT_EXT>
+     *           extension characters in {A,C,G,T}, 'F' meaning "no extension".
+     *   output: /app/pgen_<MYTHREAD>.out -- one DNA contig per line.
+     *
+     * Parallelisation strategy (following Georganas et al., SC'14):
+     *
+    ... (100 lines hidden, /toggle to show all)
+
+    static inline int owner_of_bucket(long b) { return (int)(b / buckPerThread); }
+
+    /* --------------------------- table lookups ----------------------------- */
+    static int32_t lookup(uint64_t kmer)
+    {
+        long b = bucket_of(kmer);
+        for (int32_t i = s_buckets[b]; i >= 0; i = s_next[i])
+            if (s_kmer[i] == kmer)
+                return i;
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && sed -n '120,300p' pgen.upc
+
+                return i;
+        return -1;
+    }
+
+    static int32_t successor(int32_t i)
+    {
+        char r = s_rext[i];
+        if (r == 'F')
+            return -1;
+        uint64_t mask = ((uint64_t)1 << (2 * (K - 1))) - 1ULL;
+    ... (161 lines hidden, /toggle to show all)
+            long b = bucket_of(lkey[i]);
+            int  d = owner_of_bucket(b);
+            long idx = (long)d * localMax + base[d] + used[d]++;
+            s_kmer[idx] = lkey[i];
+            s_lext[idx] = (char)llex[i];
+            s_rext[idx] = (char)lrex[i];
+            s_next[idx] = -1;
+        }
+
+        upc_barrier;
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && sed -n '300,420p' pgen.upc
+
+        upc_barrier;
+
+        /* ---- build the chains of my own buckets (purely local) ----------- */
+        myBegin = (long)MYTHREAD * localMax;
+        myCnt   = sh_tot[MYTHREAD];
+        for (long i = myBegin; i < myBegin + myCnt; i++) {
+            long b = bucket_of(s_kmer[i]);
+            s_next[i] = s_buckets[b];
+            s_buckets[b] = (int32_t)i;
+        }
+    ... (100 lines hidden, /toggle to show all)
+        upc_barrier;
+        /* all threads agree on k (it is a property of the input) */
+        {
+            shared int *sh_k = (shared int *)upc_all_alloc(1, sizeof(int));
+            if (MYTHREAD == 0) *sh_k = K;
+            upc_barrier;
+            K = *sh_k;
+            upc_barrier;
+
+        }
+
+  ────────────────────────────────────────
+  ▸ write
+    path /app/README.md
+    content: # Parallel de Bruijn graph construction & traversal (UPC)
+
+De Bruijn graph based contig generation for de novo genome assembly, implemented
+twic...
+
+    Created /app/README.md (134 lines)
+Now a final clean build and full verification:
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && make clean && make && echo "=== serial ===" && ./serial test && echo "=== parallel (8 threads) ===" && upcrun -n 8 -shared-heap 256MB...
+
+    rm -f serial pgen pgen_*.out serial.out
+    cc -O2 -Wall -o serial serial.c
+    upcc -O -network=smp -pthreads=32 -o pgen pgen.upc
+    === serial ===
+    serial: 10000 k-mers, k=19 -> /app/serial.out
+    === parallel (8 threads) ===
+    UPC Runtime warning: Requested shared memory (2048 MB) > available (56 MB) on node 0 (ef574e37916b): using 7 MB per thread instead
+    thread 7: 1251 nodes, 0 contigs -> /app/pgen_7.out
+    thread 6: 1233 nodes, 0 contigs -> /app/pgen_6.out
+    thread 5: 1223 nodes, 2 contigs -> /app/pgen_5.out
+    ... (8 lines hidden, /toggle to show all)
+    10108 total bases
+    -rw-r--r-- 1 root root  1468 Nov  1 07:40 /app/pgen_0.out
+    -rw-r--r-- 1 root root  3591 Nov  1 07:40 /app/pgen_1.out
+    -rw-r--r-- 1 root root     0 Nov  1 07:40 /app/pgen_2.out
+    -rw-r--r-- 1 root root   381 Nov  1 07:40 /app/pgen_3.out
+    -rw-r--r-- 1 root root   228 Nov  1 07:40 /app/pgen_4.out
+    -rw-r--r-- 1 root root  4446 Nov  1 07:40 /app/pgen_5.out
+    -rw-r--r-- 1 root root     0 Nov  1 07:40 /app/pgen_6.out
+    -rw-r--r-- 1 root root     0 Nov  1 07:40 /app/pgen_7.out
+    -rw-r--r-- 1 root root 10114 Nov  1 07:40 /app/serial.out
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && for n in 1 2 3 4 5 8 16 20; do rm -f pgen_*.out; upcrun -n $n -shared-heap 256MB ./pgen test 2>/dev/null; s=$(cat pgen_*.out|sort|md5...
+
+    UPCR: UPC thread 0 of 1 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=30555)
+    n=1 OK
+    UPCR: UPC threads 0..1 of 2 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=30583)
+    n=2 OK
+    UPCR: UPC threads 0..2 of 3 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=30612)
+    n=3 OK
+    UPCR: UPC threads 0..3 of 4 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=30642)
+    n=4 OK
+    UPCR: UPC threads 0..4 of 5 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=30673)
+    n=5 OK
+    UPCR: UPC threads 0..7 of 8 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=30705)
+    n=8 OK
+    UPCR: UPC threads 0..15 of 16 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=30740)
+    n=16 OK
+    UPCR: UPC threads 0..19 of 20 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=30783)
+    n=20 OK
+    --- no -shared-heap flag:
+    UPCR: UPC threads 0..3 of 4 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=30830)
+    OK
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && rm -f pgen_*.out && upcrun -n 8 -shared-heap 256MB /app/pgen test 2>/dev/null; echo "final files:"; ls -la /app; echo; echo "serial c...
+
+    UPCR: UPC threads 0..7 of 8 on ef574e37916b (pshm node 0 of 1, process 0 of 1, pid=30862)
+    final files:
+    total 1192
+    drwxr-xr-x 1 root root   4096 Nov  1 07:40 .
+    drwxr-xr-x 1 root root   4096 Nov  1 07:25 ..
+    -rw-r--r-- 1 root root   1620 Nov  1 07:39 Makefile
+    -rw-r--r-- 1 root root   5573 Nov  1 07:40 README.md
+    -rwxr-xr-x 1 root root 925456 Nov  1 07:40 pgen
+    -rw-r--r-- 1 root root  14226 Nov  1 07:39 pgen.upc
+    -rw-r--r-- 1 root root   1468 Nov  1 07:40 pgen_0.out
+    ... (8 lines hidden, /toggle to show all)
+    drwx------ 2 root root   4096 Nov  1 07:40 pgen_pthread-link
+    -rwxr-xr-x 1 root root  71704 Nov  1 07:40 serial
+    -rw-r--r-- 1 root root   8429 Nov  1 07:39 serial.c
+    -rw-r--r-- 1 root root  10114 Nov  1 07:40 serial.out
+    -rw-rw-r-- 1 root root 230000 Oct 31 09:48 test
+
+    serial contig lengths:
+    3598 3590 1467 846 380 227
+    parallel (all threads) contig count: 6
+    SETS IDENTICAL
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && rm -rf pgen_dbg_pthread-link && sed -i 's|^\trm -f $(TARGETS) pgen_\*.out serial.out$|\trm -f $(TARGETS) pgen_*.out serial.out\n\trm ...
+
+    makefile ok
+    clean:
+        rm -f $(TARGETS) pgen_*.out serial.out
+        rm -rf pgen_pthread-link
+
+    total 1184
+    drwxr-xr-x 1 root root   4096 Nov  1 07:40 .
+    drwxr-xr-x 1 root root   4096 Nov  1 07:25 ..
+    -rw-r--r-- 1 root root   1646 Nov  1 07:40 Makefile
+    -rw-r--r-- 1 root root   5573 Nov  1 07:40 README.md
+    ... (4 lines hidden, /toggle to show all)
+    -rw-r--r-- 1 root root      0 Nov  1 07:40 pgen_2.out
+    -rw-r--r-- 1 root root    381 Nov  1 07:40 pgen_3.out
+    -rw-r--r-- 1 root root    228 Nov  1 07:40 pgen_4.out
+    -rw-r--r-- 1 root root   4446 Nov  1 07:40 pgen_5.out
+    -rw-r--r-- 1 root root      0 Nov  1 07:40 pgen_6.out
+    -rw-r--r-- 1 root root      0 Nov  1 07:40 pgen_7.out
+    -rwxr-xr-x 1 root root  71704 Nov  1 07:40 serial
+    -rw-r--r-- 1 root root   8429 Nov  1 07:39 serial.c
+    -rw-r--r-- 1 root root  10114 Nov  1 07:40 serial.out
+    -rw-rw-r-- 1 root root 230000 Oct 31 09:48 test
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && make check 2>&1 | grep -vE "^thread|^UPCR|Runtime warning" ; ls /app | tr '\n' ' '
+
+    ./serial test
+    serial: 10000 k-mers, k=19 -> /app/serial.out
+    rm -f pgen_*.out
+    upcrun -n 8 -shared-heap 256MB ./pgen test
+    OK: parallel contig set == serial contig set (6 contigs)
+    Makefile README.md pgen pgen.upc pgen_0.out pgen_1.out pgen_2.out pgen_3.out pgen_4.out pgen_5.out pgen_6.out pgen_7.out serial serial.c serial.out test
+Done. Everything is built, verified, and in place.
+
+## What was delivered (in `/app`)
+
+| file                      | purpose                                                            |
+|---------------------------|--------------------------------------------------------------------|
+| `serial.c` → `serial`     | serial de Bruijn graph build + traversal (gcc)                     |
+| `pgen.upc` → `pgen`       | parallel UPC implementation (Berkeley UPC 2022.10.0, SMP/pthreads) |
+| `Makefile`                | builds both, plus `make check` / `make clean`                      |
+| `serial.out`              | serial contigs (6 contigs, 10,108 bases)                           |
+| `pgen_0.out … pgen_7.out` | per-thread contigs of the parallel run                             |
+| `README.md`               | design, usage, verification                                        |
+## Algorithm (Georganas et al., SC'14 formulation)
+- Nodes = unique k-mers (2-bit encoded in `uint64_t`), hash table with **separate chaining**; node → at most one successor (`kmer[1..k-1]+rightExt`), in-degree
+from ≤4 candidate predecessors.
+- Contigs = maximal non-branching paths, each uniquely identified by its start node (in-degree ≠ 1); residual nodes lie on pure cycles and are emitted once from
+ the cycle's smallest k-mer (layout/thread-count independent).
+
+## Parallelisation in UPC
+1. **Parallel input** — file split into `THREADS` byte ranges (line-boundary aligned), each thread parses with its own `FILE*`.
+2. **Hash redistribution** — histogram + `THREADS×THREADS` count matrix in shared memory drives an all-to-all exchange, so each thread owns a contiguous, exclus
+ive slice of the shared node array.
+3. **Local chain building** — bucket space partitioned evenly too → **no locks, no atomics, no remote updates**.
+4. **Parallel traversal by ownership** — each thread walks only contigs starting at nodes it owns; a shared visited array (single writer per node) makes cycle d
+etection race-free.
+5. **Parallel output** — each thread writes its own `pgen_<thread>.out`.
+
+## Verification
+- `make check` → `OK: parallel contig set == serial contig set (6 contigs)`.
+- Identical contig sets for **n = 1, 2, 3, 4, 5, 6, 8, 16, 20, 40** threads (40 spans multiple processes), with and without `-shared-heap`.
+- Also validated on a 200,000-k-mer synthetic input and on inputs containing pure cycles + branches.
+- As expected for a 10k-line dataset, the serial run is ~5 ms while the parallel run is ~1 s, dominated by UPC runtime start-up.
+root@ef574e37916b:/app#

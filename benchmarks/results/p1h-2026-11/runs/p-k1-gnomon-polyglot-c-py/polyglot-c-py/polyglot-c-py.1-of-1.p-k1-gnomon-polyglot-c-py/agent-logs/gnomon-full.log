@@ -1,0 +1,497 @@
+  │ I'll start by checking the repository layout and the toolchain.
+[approval] bash: ls -la /app 2>/dev/null; echo "---"; ls -la /app/polyglot 2>/dev/null; echo "---"; python3 --version; gcc --version | head -1 — approved
+  ⚙ bash ls -la /app 2>/dev/null; echo "---"; ls -la /app/polyglot 2>/dev/null;…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: pwd; ls -la — approved
+  ⚙ bash pwd; ls -la
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  │ Repo root is `/app`, toolchain confirmed (gcc 13.x, Python 3.12.3). Let m…
+  deepseek-v4.1-flash — 3 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 0/4 done · Write /app/polyglot/main.py.c polyglot
+[approval] bash: mkdir -p /app/polyglot && ls -la /app/polyglot; cat /app/.gitattributes; cat /app/.gitignore — approved
+  ⚙ bash mkdir -p /app/polyglot && ls -la /app/polyglot; cat /app/.gitattribute…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ Now write the file. I'll write it and then test. To make it robust, I'll …
+  │ Actually developing the polyglot directly is fine since gcc will tell me …
+  │ Let me write the file.
+[approval] write polyglot/main.py.c (+272 −0) [new file] — approved
+  ⚙ write polyglot/main.py.c
+    ✓ write polyglot/main.py.c (+272 −0)
+  deepseek-v4.1-flash — 5 tool call(s) so far
+  │ The file has some scratch junk I need to clean up, and more importantly t…
+[approval] bash: mkdir -p /app/polyglot/.scratch && cd /app/polyglot/.scratch && cat > t1.c <<'EOF'
+#if 0
+x = """
+#endif
+int main(void){return 0;}
+EOF
+gcc -Wall -Wextra -std=c11 t1.c -o t1 2>&1; echo "exit=$?" — approved
+  ⚙ bash mkdir -p /app/polyglot/.scratch && cd /app/polyglot/.scratch && cat > …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+[approval] bash: cd /app/polyglot/.scratch && cat > t2.py <<'EOF'
+#if 0
+x = 1
+"""
+#endif
+int main(void){return 0;}
+#if 0
+"""
+#endif
+print("py ok")
+EOF
+python3 -Wall t2.py 2>&1; echo "exit=$?" — approved
+  ⚙ bash cd /app/polyglot/.scratch && cat > t2.py <<'EOF' #if 0 x = 1 """ #endi…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+  │ gcc emits a warning for unbalanced quotes even in skipped blocks. Let me …
+[approval] bash: cd /app/polyglot/.scratch
+echo "=== A: '#' comment lines inside #if 0 ==="
+cat > a.c <<'EOF'
+#if 0
+# this is a python comment
+x = 1
+#endif
+int main(void){return 0;}
+EOF
+gcc -Wall -Wextra a.c -o a 2>&1; echo "exit=$?"
+echo "=== B: hash followed by keyword ==="
+cat > b.c <<'EOF'
+#if 0
+#define foo 1
+#include <x>
+#hello
+#endif
+int main(void){return 0;}
+EOF
+gcc -Wall -Wextra b.c -o b 2>&1; echo "exit=$?"
+echo "=== C: balanced quotes only ==="
+cat > c.c <<'EOF'
+#if 0
+s = "abc"
+t = '''x'''
+#endif
+int main(void){return 0;}
+EOF
+gcc -Wall -Wextra c.c -o c 2>&1; echo "exit=$?" — approved
+  ⚙ bash cd /app/polyglot/.scratch echo "=== A: '#' comment lines inside #if 0 …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  │ `'#define'` lines are silently skipped, but unbalanced quotes warn. Let m…
+[approval] bash: cd /app/polyglot/.scratch
+echo "=== V1: bare triple quote alone in #if 0 ==="
+printf '#if 0\n"""\n#endif\nint main(void){return 0;}\n' > v1.c
+gcc -Wall -Wextra v1.c -o v1 2>&1; echo "exit=$?"
+echo "=== V4: unbalanced quote spanning two lines in skipped block ==="
+printf '#if 0\nx = "abc\ndef"\n#endif\nint main(void){return 0;}\n' > v4.c
+gcc -Wall -Wextra v4.c -o v4 2>&1; echo "exit=$?"
+echo "=== V5: triple-quote open then close, both in skipped block ==="
+printf '#if 0\n"""\nhidden text\n"""\n#endif\nint main(void){return 0;}\n' > v5.c
+gcc -Wall -Wextra v5.c -o v5 2>&1; echo "exit=$?"
+echo "=== V6: same but also -pedantic -Werror-ish check ==="
+gcc -Wall -Wextra -Wpedantic v5.c -o v5b 2>&1; echo "exit=$?" — approved
+  ⚙ bash cd /app/polyglot/.scratch echo "=== V1: bare triple quote alone in #if…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+  │ Key finding: gcc lexes skipped blocks and warns on unbalanced quotes. Let…
+[approval] bash: cd /app/polyglot/.scratch
+echo "=== plain gcc on triple-quote skipped block ==="
+gcc v5.c -o v5plain 2>&1; echo "exit=$?"
+echo "=== plain gcc, -w ==="
+gcc -w v5.c -o v5w 2>&1; echo "exit=$?"
+echo "=== is there a -W flag for it? ==="
+gcc -Q --help=warnings 2>/dev/null | grep -i -E "terminating|comment" ; echo "grep-exit=$?"
+echo "=== odd apostrophes in skipped block ==="
+printf "#if 0\ndon't stop\n'''\n#endif\nint main(void){return 0;}\n" > ap.c
+gcc -Wall -Wextra ap.c -o ap 2>&1; echo "exit=$?" — approved
+  ⚙ bash cd /app/polyglot/.scratch echo "=== plain gcc on triple-quote skipped …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+  │ gcc lexes skipped blocks line-by-line and warns on odd quote counts — tha…
+[approval] bash: cd /app/polyglot/.scratch
+echo "=== quotes inside a C block comment are ignored? ==="
+cat > cc.c <<'EOF'
+#if 0
+hidden
+#endif
+/* """ # */
+int main(void){return 0;}
+EOF
+gcc -Wall -Wextra cc.c -o cc 2>&1; echo "exit=$?"
+echo "=== python: raw triple string opened with 4 quotes, closed by /* \"\"\" # */ ==="
+cat > pp.py <<'EOF'
+x = 1
+r""" # "
+here is C code with "quotes" and 'apostrophes' and \n backslashes
+int main(void) { return 0; }
+/* """ # tail is a python comment */
+print("py ok", x)
+EOF
+python3 -Wall pp.py 2>&1; echo "exit=$?"
+echo "=== gcc on the whole pp.py as C: is it silent? ==="
+gcc -Wall -Wextra pp.py -o ppbin 2>&1 | head -20; echo "compile-attempt-done" — approved
+  ⚙ bash cd /app/polyglot/.scratch echo "=== quotes inside a C block comment ar…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  │ Three facts established: quotes inside C block comments are ignored; gcc …
+[approval] bash: cd /app/polyglot/.scratch
+cat > sk.py.c <<'PYEOF'
+#if 0
+import sys
+
+def fib(n):
+    a, b = 0, 1
+    for bit in bin(n)[2:]:
+        c = a * ((b << 1) - a)
+        d = a * a + b * b
+        if bit == "1":
+            a, b = d, c + d
+        else:
+            a, b = c, d
+    return a
+
+print(fib(int(sys.argv[1])))
+c = r""""
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(int argc, char **argv) {
+    printf("C ok args=%d first=%s\n", argc, argc > 1 ? argv[1] : "-");
+    return 0;
+}
+
+/* """  # this line closes the python string */
+PYEOF
+echo "=== gcc ==="; gcc -Wall -Wextra sk.py.c -o skbin 2>&1; echo "gcc exit=$?"
+echo "=== c run ==="; ./skbin 42 2>&1
+echo "=== python run ==="; python3 -W error sk.py.c 12 2>&1; echo "py exit=$?"
+echo "=== python -m py_compile ==="; python3 -m py_compile sk.py.c 2>&1; echo "compile exit=$?" — approved
+  ⚙ bash cd /app/polyglot/.scratch cat > sk.py.c <<'PYEOF' #if 0 import sys def…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  │ Structure verified end-to-end. Now I'll write the real file with that arc…
+[approval] write polyglot/main.py.c (+225 −181) — approved
+  ⚙ write polyglot/main.py.c
+    ✓ write polyglot/main.py.c (+225 −181)
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  │ Now the full test suite: compile with warnings, run both modes, and diff …
+[approval] bash: cd /app/polyglot
+echo "=== gcc -Wall -Wextra (must be silent) ==="
+gcc -Wall -Wextra main.py.c -o cmain 2>&1; echo "gcc exit=$?"
+echo "=== gcc -std=c11 -pedantic -Wall -Wextra ==="
+gcc -std=c11 -pedantic -Wall -Wextra -O2 main.py.c -o cmain_ped 2>&1; echo "gcc exit=$?"
+echo "=== py_compile ==="
+python3 -m py_compile main.py.c 2>&1; echo "py exit=$?" — approved
+  ⚙ bash cd /app/polyglot echo "=== gcc -Wall -Wextra (must be silent) ===" gcc…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+[approval] bash: cd /app/polyglot
+echo "=== grep for odd-quote risk lines in python region ==="
+awk 'NR<70' main.py.c | grep -n "'" ; echo "---apostrophes above---"
+echo "=== sample runs python ==="
+for k in 0 1 2 3 10 20; do printf "%s -> " "$k"; python3 main.py.c "$k"; done
+echo "=== sample runs C ==="
+for k in 0 1 2 3 10 20; do printf "%s -> " "$k"; ./cmain "$k"; done — approved
+  ⚙ bash cd /app/polyglot echo "=== grep for odd-quote risk lines in python reg…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 15 tool call(s) so far
+  │ Compiles clean and Python is correct, but C output is garbage even for n=…
+[approval] bash: cd /app/polyglot/.scratch
+sed -n '/^static uint64_t fib_u64/,/^}/p' ../main.py.c > fibu64.inc
+cat fibu64.inc
+cat > drv.c <<'EOF'
+#include <stdio.h>
+#include <stdint.h>
+#include "fibu64.inc"
+int main(void){
+    for (unsigned n = 0; n <= 10; n++) printf("%u -> %llu\n", n, (unsigned long long)fib_u64(n));
+    return 0;
+}
+EOF
+gcc -Wall -Wextra drv.c -o drv 2>&1; echo "exit=$?"; ./drv — approved
+  ⚙ bash cd /app/polyglot/.scratch sed -n '/^static uint64_t fib_u64/,/^}/p' ..…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+  │ The doubling loop returns garbage even for n=1, which contradicts my trac…
+[approval] bash: cd /app/polyglot/.scratch
+cat > dbg.c <<'EOF'
+#include <stdio.h>
+#include <stdint.h>
+
+static uint64_t fib_u64(unsigned n) {
+    uint64_t f = 0, g = 1;
+    int started = 0;
+    int i;
+    for (i = 63; i >= 0; i--) {
+        uint64_t c, d;
+        if (!started) {
+            if (((n >> i) & 1u) == 0) continue;
+            started = 1;
+        }
+        c = f * ((g << 1) - f);
+        d = f * f + g * g;
+        printf("  i=%d bit=%llu c=%llu d=%llu\n", i, (unsigned long long)((n>>i)&1u), (unsigned long long)c, (unsigned long long)d);
+        if ((n >> i) & 1u) { f = d; g = c + d; }
+        else               { f = c; g = d; }
+    }
+    return f;
+}
+int main(void){ printf("n=1 -> %llu\n", (unsigned long long)fib_u64(1)); return 0; }
+EOF
+gcc -Wall -Wextra dbg.c -o dbg 2>&1; ./dbg — approved
+  ⚙ bash cd /app/polyglot/.scratch cat > dbg.c <<'EOF' #include <stdio.h> #incl…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 17 tool call(s) so far
+  │ Found it: `n` is `unsigned` (32-bit), so `n >> i` for i≥32 is undefined a…
+[approval] edit polyglot/main.py.c (+4 −2) — approved
+  ⚙ edit polyglot/main.py.c
+    ✓ edit polyglot/main.py.c (+4 −2)
+  deepseek-v4.1-flash — 18 tool call(s) so far
+  │ Now the same class of bug check on the bignum path, plus a full rebuild a…
+[approval] bash: cd /app/polyglot
+gcc -Wall -Wextra -std=c11 -pedantic -O2 main.py.c -o cmain 2>&1; echo "gcc exit=$?"
+echo "=== quick ==="
+for k in 0 1 2 3 10 20 50 91 92 93; do printf "%s -> C=%s PY=%s\n" "$k" "$(./cmain $k)" "$(python3 main.py.c $k)"; done — approved
+  ⚙ bash cd /app/polyglot gcc -Wall -Wextra -std=c11 -pedantic -O2 main.py.c -o…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 19 tool call(s) so far
+  │ Both agree through the 93/94 boundary. Now let me align argument parsing …
+[approval] edit polyglot/main.py.c (+1 −0) — approved
+  ⚙ edit polyglot/main.py.c
+    ✓ edit polyglot/main.py.c (+1 −0)
+  deepseek-v4.1-flash — 20 tool call(s) so far
+[approval] bash: cd /app/polyglot
+sed -i 's/#include <errno.h>/#include <ctype.h>\n#include <errno.h>/' main.py.c
+grep -n "include" main.py.c
+gcc -Wall -Wextra -std=c11 -pedantic -O2 main.py.c -o cmain 2>&1; echo "gcc exit=$?" — approved
+  ⚙ bash cd /app/polyglot sed -i 's/#include <errno.h>/#include <ctype.h>\n#inc…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 21 tool call(s) so far
+  │ Now a comprehensive cross-check: both modes against an independent refere…
+[approval] bash: cd /app/polyglot
+cat > .scratch/ref.py <<'EOF'
+import sys
+def ref(n):
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b
+    return a
+print(ref(int(sys.argv[1])))
+EOF
+fail=0
+for k in $(seq 0 40) 91 92 93 94 95 100 200 300 500 1000 2000; do
+  r=$(python3 .scratch/ref.py $k)
+  c=$(./cmain $k)
+  p=$(python3 main.py.c $k)
+  if [ "$r" != "$c" ]; then echo "BAD C   k=$k ref=$r got=$c"; fail=1; fi
+  if [ "$r" != "$p" ]; then echo "BAD PY  k=$k ref=$r got=$p"; fail=1; fi
+done
+echo "sweep done fail=$fail"
+echo "--- spot values ---"
+./cmain 10; ./cmain 100; python3 main.py.c 1000 | head -c 60; echo — approved
+  ⚙ bash cd /app/polyglot cat > .scratch/ref.py <<'EOF' import sys def ref(n): …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 22 tool call(s) so far
+  │ All indices match the independent reference. Now the edge cases: large in…
+[approval] bash: cd /app/polyglot
+echo "=== exact user commands ==="
+python3 /app/polyglot/main.py.c 30
+gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cmain 30
+echo "=== agreement on large k ==="
+for k in 5000 10000 20000; do
+  a=$(./cmain $k); b=$(python3 main.py.c $k)
+  if [ "$a" = "$b" ]; then echo "k=$k MATCH (len=${#a})"; else echo "k=$k MISMATCH"; fi
+done — approved
+  ⚙ bash cd /app/polyglot echo "=== exact user commands ===" python3 /app/polyg…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 23 tool call(s) so far
+[approval] bash: cd /app/polyglot
+echo "=== error handling parity (C then Python) ==="
+for arg in "" "abc" "-1" "3x" " 7 "; do
+  echo "--- arg=[$arg] ---"
+  ./cmain "$arg" 2>&1; echo "  C exit=$?"
+  python3 main.py.c "$arg" 2>&1; echo "  PY exit=$?"
+done
+echo "=== no-arg ==="
+./cmain 2>&1; echo "  C exit=$?"
+python3 main.py.c 2>&1; echo "  PY exit=$?" — approved
+  ⚙ bash cd /app/polyglot echo "=== error handling parity (C then Python) ===" …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 24 tool call(s) so far
+  │ Both modes are in lockstep, including errors and whitespace-tolerant pars…
+[approval] bash: cd /app/polyglot
+gcc -Wall -Wextra -std=c11 -pedantic -g -fsanitize=address,undefined main.py.c -o cmain_san 2>&1; echo "gcc exit=$?"
+for k in 0 1 93 94 1000 25000 100000; do
+  out=$(./cmain_san $k 2>&1); st=$?
+  echo "k=$k exit=$st len=${#out}"
+  if echo "$out" | grep -qi -E "runtime error|ERROR: |LeakSanitizer"; then echo "SANITIZER PROBLEM at k=$k"; echo "$out" | head -20; fi
+done
+echo "=== 100000 parity (length only, then full compare) ==="
+a=$(./cmain 100000); b=$(python3 main.py.c 100000)
+[ "$a" = "$b" ] && echo "k=100000 MATCH len=${#a}" || echo "MISMATCH" — approved
+  ⚙ bash cd /app/polyglot gcc -Wall -Wextra -std=c11 -pedantic -g -fsanitize=ad…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 25 tool call(s) so far
+  │ C is exact (20899 digits) but Python 3.12 refuses to *print* integers ove…
+[approval] edit polyglot/main.py.c (+7 −0) — approved
+  ⚙ edit polyglot/main.py.c
+    ✓ edit polyglot/main.py.c (+7 −0)
+  deepseek-v4.1-flash — 26 tool call(s) so far
+[approval] bash: cd /app/polyglot
+gcc -Wall -Wextra -std=c11 -pedantic -O2 main.py.c -o cmain 2>&1; echo "gcc exit=$?"
+echo "=== re-verify big range parity ==="
+for k in 20000 50000 100000; do
+  a=$(./cmain $k); b=$(python3 main.py.c $k)
+  [ "$a" = "$b" ] && echo "k=$k MATCH len=${#a}" || echo "k=$k MISMATCH"
+done — approved
+  ⚙ bash cd /app/polyglot gcc -Wall -Wextra -std=c11 -pedantic -O2 main.py.c -o…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 27 tool call(s) so far
+  │ Both halves now agree exactly through 100000 digits. Final consolidated v…
+[approval] bash: cd /app/polyglot
+cat > .scratch/verify.sh <<'EOF'
+#!/bin/sh
+# Verify every constraint in the request; exit nonzero if any fails.
+set -u
+F=/app/polyglot/main.py.c
+dd=$(mktemp -d)
+fail=0
+chk() { if [ "$2" != "$3" ]; then echo "FAIL: $1 (want=$2 got=$3)"; fail=1; else echo "ok: $1"; fi; }
+
+# 1. the two exact commands from the request, run from a neutral cwd
+py=$(cd / && python3 /app/polyglot/main.py.c 30)
+cc=$(cd / && { gcc /app/polyglot/main.py.c -o "$dd/cmain" && "$dd/cmain" 30; })
+chk "python3 ... 30" 832040 "$py"
+chk "gcc + run 30"  832040 "$cc"
+
+# 2. compile must be warning-free, plain and strict
+gcc "$F" -o "$dd/a" 2>"$dd/w1"; chk "plain gcc no warnings" "" "$(cat "$dd/w1")"
+gcc -Wall -Wextra -std=c11 -pedantic "$F" -o "$dd/b" 2>"$dd/w2"; chk "strict gcc no warnings" "" "$(cat "$dd/w2")"
+python3 -m py_compile "$F" 2>"$dd/w3"; chk "py_compile no warnings" "" "$(cat "$dd/w3")"
+
+# 3. both halves vs an independent O(n) reference, incl. the u64/bignum seam
+for k in 0 1 2 3 4 5 10 20 40 91 92 93 94 95 200 1000 5000; do
+  want=$(python3 -c "a,b=0,1
+for _ in range($k): a,b=b,a+b
+print(a)")
+  chk "C  f($k)" "$want" "$("$dd/b" "$k")"
+  chk "PY f($k)" "$want" "$(python3 "$F" "$k")"
+done
+
+# 4. C and Python agree where no cheap reference exists
+for k in 20000 100000; do
+  chk "C==PY f($k)" "$(python3 "$F" "$k")" "$("$dd/b" "$k")"
+done
+
+# 5. bad input fails cleanly in both, without a traceback
+for bad in "" abc -1 3x; do
+  "$dd/b" "$bad" >/dev/null 2>&1; chk "C  rejects [$bad] exit 2" 2 "$?"
+  o=$(python3 "$F" "$bad" 2>&1 >/dev/null); st=$?
+  chk "PY rejects [$bad] exit 2" 2 "$st"
+  case "$o" in *Traceback*) echo "FAIL: PY traceback for [$bad]"; fail=1;; esac
+done
+
+rm -rf "$dd"
+[ "$fail" -eq 0 ] && echo "ALL CHECKS PASSED" || echo "THERE WERE FAILURES"
+exit "$fail"
+EOF
+sh .scratch/verify.sh 2>&1 | tail -50; echo "VERIFY EXIT=$?" — approved
+  ⚙ bash cd /app/polyglot cat > .scratch/verify.sh <<'EOF' #!/bin/sh # Verify e…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 28 tool call(s) so far
+  │ All checks pass. Let me capture the real exit status (not `tail`'s), clea…
+[approval] bash: cd /app/polyglot
+sh .scratch/verify.sh > /tmp/v.log 2>&1; echo "REAL VERIFY EXIT=$?"; tail -3 /tmp/v.log — approved
+  ⚙ bash cd /app/polyglot sh .scratch/verify.sh > /tmp/v.log 2>&1; echo "REAL V…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 29 tool call(s) so far
+[approval] bash: cd /app/polyglot
+cp .scratch/verify.sh ./verify_polyglot.sh
+rm -rf .scratch cmain cmain_san cmain_ped cmain_ped__ 2>/dev/null
+rm -rf __pycache__ 2>/dev/null
+ls -la /app/polyglot
+echo "=== clean-state smoke test: exactly the requested commands ==="
+rm -f /app/polyglot/cmain
+python3 /app/polyglot/main.py.c 0; python3 /app/polyglot/main.py.c 1; python3 /app/polyglot/main.py.c 50
+gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cmain 0 && /app/polyglot/cmain 1 && /app/polyglot/cmain 50
+echo "gcc-run exit=$?" — approved
+  ⚙ bash cd /app/polyglot cp .scratch/verify.sh ./verify_polyglot.sh rm -rf .sc…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 30 tool call(s) so far
+[approval] bash: cd /app/polyglot
+sh verify_polyglot.sh >/tmp/v2.log 2>&1; echo "VERIFY EXIT=$?"; tail -2 /tmp/v2.log
+echo "=== final: file is the deliverable, no stray build output ==="
+rm -f cmain; rm -rf __pycache__
+ls -la /app/polyglot — approved
+  ⚙ bash cd /app/polyglot sh verify_polyglot.sh >/tmp/v2.log 2>&1; echo "VERIFY…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 31 tool call(s) so far
+  deepseek-v4.1-flash — 32 tool call(s) so far
+  ⚙ read polyglot/main.py.c
+    ✓ read polyglot/main.py.c — 327 lines
+  [tools] 32/256 calls — continuing (leg 2)
+  deepseek-v4.1-flash — leg 2, 32 call(s) so far
+  │ Everything is in place and verified. One last consideration: the `#` line…
+  │ Let me update the todo list to complete and give final report.
+  │ Also, let me double check the `%lu` for base-1e9 limbs — limb[0] is < BAS…
+  │ … 4 more line(s) — /think show for all
+  deepseek-v4.1-flash — 33 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 4/4 done
+[approval] bash: cd /app/polyglot
+echo "=== LF endings, no CR ==="; file main.py.c; grep -c $'\r' main.py.c 2>/dev/null || echo "no CR"
+echo "=== final confirmation of both exact commands ==="
+python3 /app/polyglot/main.py.c 100
+gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cmain 100
+rm -f /app/polyglot/cmain; rm -rf /app/polyglot/__pycache__
+echo "=== delivered files ==="; ls -la /app/polyglot — approved
+  ⚙ bash cd /app/polyglot echo "=== LF endings, no CR ==="; file main.py.c; gre…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 34 tool call(s) so far
+Done. `/app/polyglot/main.py.c` is written and verified.
+
+## How the trick works
+
+```
+#if 0            ← Python: an ordinary comment. gcc: block skipped.
+  ...Python...   ← gcc never parses it.
+_polyglot_c_source = r""""    ← opens a raw string with 4 quotes
+#endif
+  ...C...        ← Python: it is just text inside that string.
+/* """  # this closes the raw string
+```
+
+Two details that took measurement rather than assumption:
+
+- **gcc lexes skipped `#if 0` bodies line by line**, and warns (`missing terminating " character`) on any line with an odd number of quotes — even at `-w`-off defaults. So every Python line must be quote-balanced. That ruled out docstrings (`"""` alone on a line) and measured quoting, so the Python half uses `#` comments exclusively.
+- **`r""""`**: Python takes the first three quotes as the delimiter and the fourth as content, so the string opens with one trailing quote — which is what balances that line for gcc. The C half then contains free `"` and `'` (it has apostrophes in comments) with no escaping, because Python is inside a *raw* string.
+
+Neither side ever parses the other's code, so both halves are plain idiomatic code rather than deliberately obfuscated lines.
+
+## Correctness
+
+Both halves use fast doubling (O(log n)). The C half computes in `uint64_t` up to f(93) = 12200160415121876738, then switches to a base-1e9 bignum, so it is exact for *all* N, not just those fitting in 64 bits — matching Python, which is why f(20000) and f(100000) (20899 digits) agree byte-for-byte.
+
+Two real bugs found and fixed by testing, not inspection:
+1. `fib_u64` shifted a **32-bit `unsigned`** by up to 63 — undefined behaviour; x86 masked the count to `n >> 0`, fabricating a set bit at i=32 and returning garbage for n=1. Fixed by shifting a 64-bit copy.
+2. Python 3.12 refuses int→str above 4300 digits (`ValueError: Exceeds the limit`), which crashed `python3 main.py.c 20000` while the C side worked. Fixed with a guarded `sys.set_int_max_str_digits(0)`.
+
+## Verification
+
+`verify_polyglot.sh` (left in the directory) asserts every constraint and **exits 0 — ALL CHECKS PASSED**:
+
+- both exact commands from your request, run from a neutral cwd → `832040`
+- **zero warnings** from plain `gcc`, from `gcc -Wall -Wextra -std=c11 -pedantic`, and `py_compile`; also clean under `-fsanitize=address,undefined` up to f(100000), no leaks
+- both binaries vs an independent O(n) reference at k = 0–5, 10, 20, 40, **91, 92, 93, 94, 95** (the `uint64_t`/bignum seam), 200, 1000, 5000
+- cross-mode agreement at 20000 and 100000
+- bad input (`""`, `abc`, `-1`, `3x`) exits 2 in both with a one-line message and no traceback
+
+On the file name: you specified the path, so `main.py.c` it is. Note that `python3 main.py.c` and `gcc main.py.c` both work, but a bare `python3 main.py` won't — the `.c` is part of the name.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=34 surface=a57c8a7444d5

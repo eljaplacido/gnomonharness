@@ -1,0 +1,23 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Done. All three files are created and verified.
+
+**`/app/cmd.sh`**
+```sh
+jq --indent 2 '[.[] | select(.status == "active") | {user_id: .id, username: .username, email: .email, last_login: (.last_login[0:10]), role_count: ((.roles // []) | length), primary_role: ((.roles // [])[0])}] | sort_by(.username)' /app/users.json > /app/active_users_report.json
+```
+
+**`/app/jq_args.yaml`**
+```yaml
+filter: '[.[] | select(.status == "active") | {user_id: .id, username: .username, email: .email, last_login: (.last_login[0:10]), role_count: ((.roles // []) | length), primary_role: ((.roles // [])[0])}] | sort_by(.username)'
+args:
+  - "--indent 2"
+```
+
+Verification performed:
+- Output has **346** records (matches the number of `active` users in the input).
+- Rebuilding the command from `jq_args.yaml` (`jq $(yq -r '.args[]' ...) "$(yq -r '.filter' ...)" users.json`) produced a byte-identical file.
+- All `last_login` values match `YYYY-MM-DD`; `primary_role` is a real JSON `null` for the 50 users with empty `roles`.
+- Usernames are in ascending sorted order; no output record has a non-active source `id`.
+- Output is pretty-printed with 2-space indentation.
+
+Note: three usernames appear more than once in the input, so `sort_by(.username)` result is stable per jq's semantics; no duplicate usernames remain among the active records.

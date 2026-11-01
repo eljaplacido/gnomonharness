@@ -1,0 +1,489 @@
+[0m
+> build · deepseek-v4.1-flash
+[0m$ [0mls -la /app/model_cache /app/merged_model 2>&1; df -h /app | tail -2; nvidia-smi 2>&1 | head -5
+ls: cannot access '/app/model_cache': No such file or directory
+ls: cannot access '/app/merged_model': No such file or directory
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         1.8T  1.5T  221G  88% /
+/bin/bash: line 1: nvidia-smi: command not found
+[0m$ [0mls -la /app && python -c "import torch, transformers, peft; print(torch.__version__, transformers.__version__, peft.__version__)" 2>&1 | tail -5
+total 8
+drwxr-xr-x 2 root root 4096 Mar 21  2025 .
+drwxr-xr-x 1 root root 4096 Nov  1 07:06 ..
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import torch, transformers, peft; print(torch.__version__, transformers.__version__, peft.__version__)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ModuleNotFoundError: No module named 'torch'
+> build · deepseek-v4.1-flash
+[0m$ [0mpython --version; pip --version; pip list 2>/dev/null | head -40
+Python 3.13.1
+pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)
+Package Version
+------- -------
+pip     24.3.1
+[0m$ [0mcurl -sS -m 15 -o /dev/null -w "%{http_code}\n" https://huggingface.co/facebook/xlm-roberta-base 2>&1; curl -sS -m 15 -o /dev/null -w "%{http_code}\n" https://pypi.org/simple/ 2>&1
+401
+200
+> build · deepseek-v4.1-flash
+[0m$ [0mpip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu 2>&1 | tail -20
+Downloading fsspec-2026.9.0-py3-none-any.whl (221 kB)
+Downloading networkx-3.7-py3-none-any.whl (2.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 88.3 MB/s eta 0:00:00
+Downloading pillow-13.0.0-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl (6.5 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 6.5/6.5 MB 104.9 MB/s eta 0:00:00
+Downloading https://download.pytorch.org/whl/setuptools-78.1.0-py3-none-any.whl (1.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.3/1.3 MB 68.9 MB/s eta 0:00:00
+Downloading sympy-1.14.0-py3-none-any.whl (6.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 6.3/6.3 MB 90.0 MB/s eta 0:00:00
+Downloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+Downloading filelock-4.2.4-py3-none-any.whl (162 kB)
+Downloading https://download.pytorch.org/whl/jinja2-3.1.6-py3-none-any.whl (134 kB)
+Downloading numpy-2.5.4-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl (15.7 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 15.7/15.7 MB 98.2 MB/s eta 0:00:00
+Downloading https://download.pytorch.org/whl/markupsafe-3.0.3-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (24 kB)
+Downloading mpmath-1.3.0-py3-none-any.whl (536 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 536.2/536.2 kB 131.5 MB/s eta 0:00:00
+Installing collected packages: mpmath, typing-extensions, sympy, setuptools, pillow, numpy, networkx, MarkupSafe, fsspec, filelock, jinja2, torch, torchvision, torchaudio
+Successfully installed MarkupSafe-3.0.3 filelock-4.2.4 fsspec-2026.9.0 jinja2-3.1.6 mpmath-1.3.0 networkx-3.7 numpy-2.5.4 pillow-13.0.0 setuptools-78.1.0 sympy-1.14.0 torch-2.15.0+cpu torchaudio-2.11.1+cpu torchvision-0.29.2+cpu typing-extensions-4.16.0
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable.It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+> build · deepseek-v4.1-flash
+[0m$ [0mpip install --no-cache-dir transformers peft accelerate sentencepiece protobuf huggingface_hub 2>&1 | tail -8
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.3/1.3 MB 53.0 MB/s eta 0:00:00
+Downloading mdurl-0.1.2-py3-none-any.whl (10.0 kB)
+Installing collected packages: truststore, tqdm, shellingham, sentencepiece, safetensors, regex, pyyaml, pygments, psutil, protobuf, packaging, mdurl, idna, hf-xet, h11, click, annotated-doc, markdown-it-py, httpcore2, anyio, rich, httpx2, typer, huggingface_hub, tokenizers, accelerate, transformers, peft
+Successfully installed accelerate-1.15.0 annotated-doc-0.0.5 anyio-4.15.1 click-8.5.0 h11-0.16.0 hf-xet-1.8.0 httpcore2-2.16.0 httpx2-2.16.0 huggingface_hub-2.4.0 idna-3.20 markdown-it-py-4.2.0 mdurl-0.1.2 packaging-26.3 peft-0.21.2 protobuf-7.36.2 psutil-7.2.2 pygments-2.21.0 pyyaml-6.0.3 regex-2026.9.29 rich-15.0.0 safetensors-0.8.0 sentencepiece-0.2.2 shellingham-1.5.4 tokenizers-0.23.3 tqdm-4.70.1 transformers-5.22.1 truststore-0.10.5 typer-0.27.3
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable.It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+
+[notice] A new release of pip is available: 24.3.1 -> 26.2.2
+[notice] To update, run: pip install --upgrade pip
+> build · deepseek-v4.1-flash
+[0m$ [0mcd /app && python - <<'PY'
+from huggingface_hub import snapshot_download
+try:
+    p = snapshot_download('FacebookAI/xlm-roberta-base', local_dir='/app/model_cache/xlm-roberta-base')
+    print("BASE OK", p)
+except Exception as e:
+    print("BASE ERR", type(e).__name__, e)
+PY
+Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Fetching 11 files:   9%|▉         | 1/11 [00:00<00:01,  5.68it/s]Fetching 11 files:  36%|███▋      | 4/11 [00:00<00:00, 13.02it/s]Fetching 11 files:  55%|█████▍    | 6/11 [00:00<00:00, 14.47it/s]Fetching 11 files:  55%|█████▍    | 6/11 [00:19<00:00, 14.47it/s]Fetching 11 files:  64%|██████▎   | 7/11 [00:49<00:46, 11.61s/it]Fetching 11 files:  82%|████████▏ | 9/11 [00:49<00:13,  6.97s/it]Fetching 11 files: 100%|██████████| 11/11 [00:57<00:00,  5.93s/it]Fetching 11 files: 100%|██████████| 11/11 [00:57<00:00,  5.24s/it]
+BASE OK /app/model_cache/xlm-roberta-base
+> build · deepseek-v4.1-flash
+[0m$ [0mcd /app && python - <<'PY'
+from huggingface_hub import snapshot_download
+try:
+    p = snapshot_download('dominguesm/xlm-roberta-base-lora-language-detection', local_dir='/app/adapter_src')
+    print("ADAPTER OK", p)
+except Exception as e:
+    print("ADAPTER ERR", type(e).__name__, e)
+PY
+Fetching 8 files:   0%|          | 0/8 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Fetching 8 files:  12%|█▎        | 1/8 [00:00<00:01,  5.75it/s]Fetching 8 files:  75%|███████▌  | 6/8 [00:01<00:00,  5.20it/s]Fetching 8 files: 100%|██████████| 8/8 [00:01<00:00,  4.77it/s]Fetching 8 files: 100%|██████████| 8/8 [00:01<00:00,  4.89it/s]
+ADAPTER OK /app/adapter_src
+> build · deepseek-v4.1-flash
+[0m$ [0mfind /app/adapter_src -maxdepth 2 -type f -printf '%P %s\n' | sort; echo '--- config ---'; cat /app/adapter_src/adapter_config.json
+.gitattributes 1528
+.gitignore 13
+README.md 8237
+adapter_config.json 321
+adapter_model.bin 3622413
+config.json 1395
+--- config ---
+{
+  "base_model_name_or_path": "xlm-roberta-base",
+  "bias": "none",
+  "fan_in_fan_out": false,
+  "inference_mode": true,
+  "lora_alpha": 16,
+  "lora_dropout": 0.1,
+  "modules_to_save": [
+    "classifier"
+  ],
+  "peft_type": "LORA",
+  "r": 8,
+  "target_modules": [
+    "query",
+    "value"
+  ],
+  "task_type": "SEQ_CLS"
+}
+[0m$ [0mfind /app/model_cache/xlm-roberta-base -maxdepth 1 -type f -printf '%f %s\n' | sort; echo '--- config ---'; cat /app/model_cache/xlm-roberta-base/config.json
+.gitattributes 445
+README.md 5238
+config.json 615
+flax_model.msgpack 1113187999
+model.onnx 1881470773
+model.safetensors 1115567652
+pytorch_model.bin 1115590446
+sentencepiece.bpe.model 5069051
+tf_model.h5 1112441536
+tokenizer.json 9096718
+tokenizer_config.json 25
+--- config ---
+{
+  "architectures": [
+    "XLMRobertaForMaskedLM"
+  ],
+  "attention_probs_dropout_prob": 0.1,
+  "bos_token_id": 0,
+  "eos_token_id": 2,
+  "hidden_act": "gelu",
+  "hidden_dropout_prob": 0.1,
+  "hidden_size": 768,
+  "initializer_range": 0.02,
+  "intermediate_size": 3072,
+  "layer_norm_eps": 1e-05,
+  "max_position_embeddings": 514,
+  "model_type": "xlm-roberta",
+  "num_attention_heads": 12,
+  "num_hidden_layers": 12,
+  "output_past": true,
+  "pad_token_id": 1,
+  "position_embedding_type": "absolute",
+  "transformers_version": "4.17.0.dev0",
+  "type_vocab_size": 1,
+  "use_cache": true,
+  "vocab_size": 250002
+}
+> build · deepseek-v4.1-flash
+[0m$ [0mcat /app/adapter_src/config.json; echo '--- keys ---'; python - <<'PY'
+import torch
+sd = torch.load('/app/adapter_src/adapter_model.bin', map_location='cpu', weights_only=True)
+for k,v in sd.items():
+    if 'classifier' in k or 'modules_to_save' in k:
+        print(k, tuple(v.shape))
+print('total keys', len(sd))
+print(list(sd)[:10])
+PY
+{
+  "_name_or_path": "xlm-roberta-base",
+  "architectures": [
+    "XLMRobertaForSequenceClassification"
+  ],
+  "attention_probs_dropout_prob": 0.1,
+  "bos_token_id": 0,
+  "classifier_dropout": null,
+  "eos_token_id": 2,
+  "hidden_act": "gelu",
+  "hidden_dropout_prob": 0.1,
+  "hidden_size": 768,
+  "id2label": {
+    "0": "ar",
+    "1": "bg",
+    "2": "de",
+    "3": "el",
+    "4": "en",
+    "5": "es",
+    "6": "fr",
+    "7": "hi",
+    "8": "it",
+    "9": "ja",
+    "10": "nl",
+    "11": "pl",
+    "12": "pt",
+    "13": "ru",
+    "14": "sw",
+    "15": "th",
+    "16": "tr",
+    "17": "ur",
+    "18": "vi",
+    "19": "zh"
+  },
+  "initializer_range": 0.02,
+  "intermediate_size": 3072,
+  "label2id": {
+    "ar": 0,
+    "bg": 1,
+    "de": 2,
+    "el": 3,
+    "en": 4,
+    "es": 5,
+    "fr": 6,
+    "hi": 7,
+    "it": 8,
+    "ja": 9,
+    "nl": 10,
+    "pl": 11,
+    "pt": 12,
+    "ru": 13,
+    "sw": 14,
+    "th": 15,
+    "tr": 16,
+    "ur": 17,
+    "vi": 18,
+    "zh": 19
+  },
+  "layer_norm_eps": 1e-05,
+  "max_position_embeddings": 514,
+  "model_type": "xlm-roberta",
+  "num_attention_heads": 12,
+  "num_hidden_layers": 12,
+  "output_past": true,
+  "pad_token_id": 1,
+  "position_embedding_type": "absolute",
+  "problem_type": "single_label_classification",
+  "torch_dtype": "float32",
+  "transformers_version": "4.27.0.dev0",
+  "type_vocab_size": 1,
+  "use_cache": true,
+  "vocab_size": 250002
+}
+--- keys ---
+base_model.model.classifier.dense.weight (768, 768)
+base_model.model.classifier.dense.bias (768,)
+base_model.model.classifier.out_proj.weight (20, 768)
+base_model.model.classifier.out_proj.bias (20,)
+total keys 52
+['base_model.model.roberta.encoder.layer.0.attention.self.query.lora_A.weight', 'base_model.model.roberta.encoder.layer.0.attention.self.query.lora_B.weight', 'base_model.model.roberta.encoder.layer.0.attention.self.value.lora_A.weight', 'base_model.model.roberta.encoder.layer.0.attention.self.value.lora_B.weight', 'base_model.model.roberta.encoder.layer.1.attention.self.query.lora_A.weight', 'base_model.model.roberta.encoder.layer.1.attention.self.query.lora_B.weight', 'base_model.model.roberta.encoder.layer.1.attention.self.value.lora_A.weight', 'base_model.model.roberta.encoder.layer.1.attention.self.value.lora_B.weight', 'base_model.model.roberta.encoder.layer.2.attention.self.query.lora_A.weight', 'base_model.model.roberta.encoder.layer.2.attention.self.query.lora_B.weight']
+> build · deepseek-v4.1-flash
+[0m$ [0mcd /app && mv /app/model_cache/xlm-roberta-base /app/base_src && mkdir -p /app/model_cache/xlm-roberta-base && python - <<'PY'
+import torch, transformers
+from transformers import AutoTokenizer, XLMRobertaForSequenceClassification
+print("transformers", transformers.__version__)
+src='/app/base_src'
+tok=AutoTokenizer.from_pretrained(src)
+model=XLMRobertaForSequenceClassification.from_pretrained(src, num_labels=20, ignore_mismatched_sizes=True)
+print(type(model), model.config.num_labels, model.classifier.out_proj)
+model.save_pretrained('/app/model_cache/xlm-roberta-base')
+tok.save_pretrained('/app/model_cache/xlm-roberta-base')
+print("saved configured model+tokenizer")
+PY
+find /app/model_cache/xlm-roberta-base -maxdepth 1 -type f -printf '%f %s\n' | sort
+transformers 5.22.1
+Loading weights:   0%|          | 0/197 [00:00<?, ?it/s]Loading weights: 100%|██████████| 197/197 [00:00<00:00, 6010.56it/s]
+[transformers] [1mXLMRobertaForSequenceClassification LOAD REPORT[0m from: /app/base_src
+Key                         | Status     | 
+----------------------------+------------+-
+lm_head.dense.weight        | UNEXPECTED | 
+lm_head.dense.bias          | UNEXPECTED | 
+lm_head.layer_norm.bias     | UNEXPECTED | 
+roberta.pooler.dense.bias   | UNEXPECTED | 
+lm_head.bias                | UNEXPECTED | 
+lm_head.layer_norm.weight   | UNEXPECTED | 
+roberta.pooler.dense.weight | UNEXPECTED | 
+classifier.dense.weight     | MISSING    | 
+classifier.dense.bias       | MISSING    | 
+classifier.out_proj.bias    | MISSING    | 
+classifier.out_proj.weight  | MISSING    | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+- MISSING:	those params were newly initialized because missing from the checkpoint. Consider training on your downstream task.
+<class 'transformers.models.xlm_roberta.modeling_xlm_roberta.XLMRobertaForSequenceClassification'> 20 Linear(in_features=768, out_features=20, bias=True)
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:01<00:00,  1.44s/it]Writing model shards: 100%|██████████| 1/1 [00:01<00:00,  1.44s/it]
+saved configured model+tokenizer
+config.json 1602
+model.safetensors 1112260376
+tokenizer.json 17098086
+tokenizer_config.json 342
+> build · deepseek-v4.1-flash
+[0m$ [0mcd /app && python - <<'PY'
+import torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from peft import PeftModel
+
+base='/app/model_cache/xlm-roberta-base'
+adapter='/app/adapter_src'
+tok=AutoTokenizer.from_pretrained(base)
+model=AutoModelForSequenceClassification.from_pretrained(base)
+print("num_labels before:", model.config.num_labels)
+model = PeftModel.from_pretrained(model, adapter)
+print("peft model loaded:", type(model))
+# check classifier weights loaded
+print("out_proj:", model.base_model.model.classifier.out_proj.weight.shape)
+merged = model.merge_and_unload()
+print("merged:", type(merged), merged.config.num_labels)
+merged.save_pretrained('/app/merged_model')
+tok.save_pretrained('/app/merged_model')
+print("saved merged")
+PY
+Loading weights:   0%|          | 0/201 [00:00<?, ?it/s]Loading weights: 100%|██████████| 201/201 [00:00<00:00, 8425.66it/s]
+num_labels before: 20
+peft model loaded: <class 'peft.peft_model.PeftModelForSequenceClassification'>
+out_proj: torch.Size([20, 768])
+merged: <class 'transformers.models.xlm_roberta.modeling_xlm_roberta.XLMRobertaForSequenceClassification'> 20
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:01<00:00,  1.39s/it]Writing model shards: 100%|██████████| 1/1 [00:01<00:00,  1.39s/it]
+saved merged
+> build · deepseek-v4.1-flash
+[0m$ [0mcd /app && python - <<'PY'
+import json, torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+tok=AutoTokenizer.from_pretrained('/app/merged_model')
+model=AutoModelForSequenceClassification.from_pretrained('/app/merged_model')
+model.eval()
+
+samples=[
+"Bonjour, comment allez-vous aujourd'hui?",
+"Hola, ¿cómo estás hoy?",
+"Guten Tag, wie geht es Ihnen?",
+"Ciao, come stai oggi?",
+"Olá, como você está?",
+"Привет, как дела?",
+"こんにちは、お元気ですか？",
+"你好，你好吗？",
+"مرحبا، كيف حالك؟",
+"Hello, how are you?",
+]
+results=[]
+with torch.no_grad():
+    for text in samples:
+        enc=tok(text, return_tensors='pt', truncation=True, max_length=512)
+        logits=model(**enc).logits[0]
+        probs=torch.softmax(logits, dim=-1)
+        cid=int(torch.argmax(logits).item())
+        conf=float(probs[cid].item())
+        results.append({"text":text,"predicted_class_id":cid,"confidence":round(conf,6)})
+        print(cid, f"{conf:.4f}", text)
+with open('/app/detection_results.json','w',encoding='utf-8') as f:
+    json.dump(results,f,ensure_ascii=False,indent=2)
+print("wrote /app/detection_results.json")
+PY
+cat /app/detection_results.json
+Loading weights:   0%|          | 0/201 [00:00<?, ?it/s]Loading weights: 100%|██████████| 201/201 [00:00<00:00, 7744.82it/s]
+6 0.9753 Bonjour, comment allez-vous aujourd'hui?
+5 0.9890 Hola, ¿cómo estás hoy?
+2 0.9973 Guten Tag, wie geht es Ihnen?
+8 0.9888 Ciao, come stai oggi?
+12 0.9896 Olá, como você está?
+13 0.9856 Привет, как дела?
+9 0.9649 こんにちは、お元気ですか？
+19 0.9360 你好，你好吗？
+0 0.9880 مرحبا، كيف حالك؟
+4 0.9737 Hello, how are you?
+wrote /app/detection_results.json
+[
+  {
+    "text": "Bonjour, comment allez-vous aujourd'hui?",
+    "predicted_class_id": 6,
+    "confidence": 0.975284
+  },
+  {
+    "text": "Hola, ¿cómo estás hoy?",
+    "predicted_class_id": 5,
+    "confidence": 0.989017
+  },
+  {
+    "text": "Guten Tag, wie geht es Ihnen?",
+    "predicted_class_id": 2,
+    "confidence": 0.997299
+  },
+  {
+    "text": "Ciao, come stai oggi?",
+    "predicted_class_id": 8,
+    "confidence": 0.988789
+  },
+  {
+    "text": "Olá, como você está?",
+    "predicted_class_id": 12,
+    "confidence": 0.989584
+  },
+  {
+    "text": "Привет, как дела?",
+    "predicted_class_id": 13,
+    "confidence": 0.985558
+  },
+  {
+    "text": "こんにちは、お元気ですか？",
+    "predicted_class_id": 9,
+    "confidence": 0.96494
+  },
+  {
+    "text": "你好，你好吗？",
+    "predicted_class_id": 19,
+    "confidence": 0.935988
+  },
+  {
+    "text": "مرحبا، كيف حالك؟",
+    "predicted_class_id": 0,
+    "confidence": 0.988026
+  },
+  {
+    "text": "Hello, how are you?",
+    "predicted_class_id": 4,
+    "confidence": 0.973709
+  }
+]
+> build · deepseek-v4.1-flash
+[0m$ [0mcd /app && python - <<'PY'
+import json
+for p in ['/app/model_cache/xlm-roberta-base/config.json','/app/merged_model/config.json']:
+    c=json.load(open(p))
+    print(p)
+    print(' architectures:', c.get('architectures'))
+    print(' num_labels:', c.get('num_labels'), 'id2label entries:', len(c.get('id2label',{})))
+    print(' id2label:', c.get('id2label'))
+PY
+find /app/merged_model -maxdepth 1 -type f -printf '%f %s\n' | sort
+/app/model_cache/xlm-roberta-base/config.json
+ architectures: ['XLMRobertaForSequenceClassification']
+ num_labels: None id2label entries: 20
+ id2label: {'0': 'LABEL_0', '1': 'LABEL_1', '2': 'LABEL_2', '3': 'LABEL_3', '4': 'LABEL_4', '5': 'LABEL_5', '6': 'LABEL_6', '7': 'LABEL_7', '8': 'LABEL_8', '9': 'LABEL_9', '10': 'LABEL_10', '11': 'LABEL_11', '12': 'LABEL_12', '13': 'LABEL_13', '14': 'LABEL_14', '15': 'LABEL_15', '16': 'LABEL_16', '17': 'LABEL_17', '18': 'LABEL_18', '19': 'LABEL_19'}
+/app/merged_model/config.json
+ architectures: ['XLMRobertaForSequenceClassification']
+ num_labels: None id2label entries: 20
+ id2label: {'0': 'LABEL_0', '1': 'LABEL_1', '2': 'LABEL_2', '3': 'LABEL_3', '4': 'LABEL_4', '5': 'LABEL_5', '6': 'LABEL_6', '7': 'LABEL_7', '8': 'LABEL_8', '9': 'LABEL_9', '10': 'LABEL_10', '11': 'LABEL_11', '12': 'LABEL_12', '13': 'LABEL_13', '14': 'LABEL_14', '15': 'LABEL_15', '16': 'LABEL_16', '17': 'LABEL_17', '18': 'LABEL_18', '19': 'LABEL_19'}
+config.json 1602
+model.safetensors 1112260376
+tokenizer.json 17098086
+tokenizer_config.json 342
+> build · deepseek-v4.1-flash
+[0m$ [0mcd /app && python - <<'PY'
+import torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+tok=AutoTokenizer.from_pretrained('/app/merged_model')
+model=AutoModelForSequenceClassification.from_pretrained('/app/merged_model').eval()
+samples={
+'bg':'Здравей, как си днес?',
+'el':'Γεια σου, τι κάνεις σήμερα;',
+'hi':'नमस्ते, आप आज कैसे हैं?',
+'nl':'Hallo, hoe gaat het vandaag?',
+'pl':'Cześć, jak się dzisiaj masz?',
+'sw':'Habari, unaendeleaje leo?',
+'th':'สวัสดี วันนี้คุณเป็นอย่างไรบ้าง',
+'tr':'Merhaba, bugün nasılsın?',
+'ur':'سلام، آج آپ کیسے ہیں؟',
+'vi':'Xin chào, hôm nay bạn thế nào?',
+}
+with torch.no_grad():
+    for lang,text in samples.items():
+        logits=model(**tok(text,return_tensors='pt',truncation=True,max_length=512)).logits[0]
+        print(lang, int(logits.argmax()), f"{torch.softmax(logits,-1).max():.3f}", text)
+PY
+Loading weights:   0%|          | 0/201 [00:00<?, ?it/s]Loading weights: 100%|██████████| 201/201 [00:00<00:00, 7181.91it/s]
+bg 1 0.986 Здравей, как си днес?
+el 3 0.991 Γεια σου, τι κάνεις σήμερα;
+hi 7 0.989 नमस्ते, आप आज कैसे हैं?
+nl 10 0.997 Hallo, hoe gaat het vandaag?
+pl 11 0.996 Cześć, jak się dzisiaj masz?
+sw 14 0.985 Habari, unaendeleaje leo?
+th 15 0.994 สวัสดี วันนี้คุณเป็นอย่างไรบ้าง
+tr 16 0.994 Merhaba, bugün nasılsın?
+ur 17 0.984 سلام، آج آپ کیسے ہیں؟
+vi 18 0.982 Xin chào, hôm nay bạn thế nào?
+> build · deepseek-v4.1-flash
+Setup complete. All artifacts are in place:
+
+- **Base model + tokenizer (configured for 20 classes):** `/app/model_cache/xlm-roberta-base`
+- **LoRA adapter merged into the base model:** `/app/merged_model/`
+- **Detection results:** `/app/detection_results.json`
+
+The adapter's classifier head loaded correctly (20 output classes), and the merged model was verified on the 10 test samples. Predictions were:
+
+| Text | Predicted class ID | Confidence |
+|---|---:|---:|
+| Bonjour, comment allez-vous aujourd'hui? | 6 | 0.9753 |
+| Hola, ¿cómo estás hoy? | 5 | 0.9890 |
+| Guten Tag, wie geht es Ihnen? | 2 | 0.9973 |
+| Ciao, come stai oggi? | 8 | 0.9888 |
+| Olá, como você está? | 12 | 0.9896 |
+| Привет, как дела? | 13 | 0.9856 |
+| こんにちは、お元気ですか？ | 9 | 0.9649 |
+| 你好，你好吗？ | 19 | 0.9360 |
+| مرحبا، كيف حالك؟ | 0 | 0.9880 |
+| Hello, how are you? | 4 | 0.9737 |
+
+I also spot-checked one sample from each of the remaining 10 adapter languages (Bulgarian, Greek, Hindi, Dutch, Polish, Swahili, Thai, Turkish, Urdu, Vietnamese); all resolved to distinct expected class IDs with 0.98–0.997 confidence.
+
+`detection_results.json` follows the requested schema with `text`, `predicted_class_id`, and `confidence`.

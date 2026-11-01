@@ -1,0 +1,63 @@
+[?2004hroot@f0ae322900d7:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@f0ae322900d7:/app# clear
+[?2004l[H[J[3J[?2004hroot@f0ae322900d7:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@f0ae322900d7:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=7012c5a6d80516891b061cc0f07ac1724b6289a0
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793500942
+[?2004hroot@f0ae322900d7:/app# bash /opt/gnomon-run.sh 'Write me a single file in /app/polyglot/main.py.c which is a polyglot, that is, I can run
+[?2004l[?2004h> 
+[?2004l[?2004h> `python3 /app/polyglot/main.py.c N`
+[?2004l[?2004h> or
+[?2004l[?2004h> `gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cmain N`
+[?2004l[?2004h> 
+[?2004l[?2004h> Both of these should print to stdout the kth Fibonacci number, f(0) = 0, f(1) = 1, etc.
+[?2004l[?2004h> 
+[?2004l[?2004h> I'"'"'m using python3 3.12.3 and gcc 13.2.0.'; tmux wait -S done
+[?2004lPY — approved
+  ⚙ bash cd /tmp && python3 - <<'PY' import subprocess, sys sys.set_int_max_str…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 39 tool call(s) so far
+[approval] bash: rm -f /app/polyglot/cmain; ls -la /app/polyglot — approved
+  ⚙ bash rm -f /app/polyglot/cmain; ls -la /app/polyglot
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 40 tool call(s) so far
+  deepseek-v4.1-flash — 41 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 4/4 done
+Done. `/app/polyglot/main.py.c` is a working Python/C polyglot (1,925 bytes).
+
+## How it works
+
+The file is arranged so each language sees the other's code as something to skip:
+
+| | Lines 1–5 | Line 74 | Lines 75–98 |
+|---|---|---|---|
+| **C** | `#if 0` block (skipped) | `/*'''#*/` = comment → `#` → comment | `#if 0` block (skipped) |
+| **Python** | `#` comment; `'''` opens a string | `'''` closes the string; `#*/` comment | real code, `#if 0` is a comment |
+
+Line 1 must be `#if 0 /*` rather than a shebang (`#!` is an invalid C directive) and rather than a bare `/*` (which Python can't parse) — that constraint drove the final layout.
+
+## Behaviour
+
+- **Python path**: plain big-int addition, so results are exact and unbounded. It calls `sys.set_int_max_str_digits(0)` to lift Python 3.11+'s 4300-digit `int`→`str` cap, which would otherwise crash around `N ≈ 20575`.
+- **C path**: base-10⁹ little-endian limb arithmetic with buffers sized from `N·log₁₀φ/9 + 4`, so it is exact for *any* N — no `unsigned long long` overflow at `N=93`, and no arbitrary output cap. Output is byte-identical to Python (zero-padded 9-digit limbs).
+
+## Verification
+
+- **Clean compile**: `gcc -Wall -Wextra -pedantic` → **0 warnings**, verified under `-std=c89/c99/c11/c17/gnu89/gnu17`. (Apostrophes inside the `#if 0` Python block *do* trigger `missing terminating '` warnings, so the Python section is deliberately apostrophe-free.)
+- **Correctness**: 509 values (`0`–`500` plus up to `N=50000`) checked in both languages against an independent fast-doubling reference — 0 failures.
+- **Scale**: exact Python/C agreement verified to `N=500000` (a 104,494-digit result).
+- **Contract test**: 214 invocations asserting stdout is exactly `f(N)\n` and exit code 0 — all pass. Output confirmed byte-identical via `cmp`/`od`.
+- **Edge cases**: `N=0` → `0`; negative → `0`; missing arg → usage on stderr, exit 2 in both languages.
+
+Two things worth flagging: the only behavioural divergence is malformed input like `0x10`, which C's `strtol` accepts as 16 while Python's `int()` rejects — outside the decimal-`N` contract. And the build artifact `cmain` is intentionally absent, since your command creates it; I removed my test binaries so the directory holds only the source.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=41 surface=9e36cdc3535a
+[?2004hroot@f0ae322900d7:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@f0ae322900d7:/app# 

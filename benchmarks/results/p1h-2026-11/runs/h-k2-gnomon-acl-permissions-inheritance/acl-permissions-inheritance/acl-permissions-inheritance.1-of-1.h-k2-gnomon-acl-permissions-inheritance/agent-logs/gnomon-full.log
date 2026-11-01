@@ -1,0 +1,202 @@
+  │ I'll start by inspecting the environment to see what's available (root pr…
+[approval] bash: id; echo "---"; uname -a; echo "---"; which setfacl getfacl setfattr 2>&1; echo "---"; ls -la /srv 2>&1 — approved
+  ⚙ bash id; echo "---"; uname -a; echo "---"; which setfacl getfacl setfattr 2…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: ls -la; echo "---"; cat /etc/os-release 2>/dev/null | head -5 — approved
+  ⚙ bash ls -la; echo "---"; cat /etc/os-release 2>/dev/null | head -5
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  │ Root access confirmed with ACL tools present. Let me check users, groups,…
+[approval] bash: getent group research; echo "g_rc=$?"; getent passwd alice; echo "a_rc=$?"; getent passwd bob; echo "b_rc=$?"; echo "---"; which sudo su useradd groupadd adduser; echo "---"; df -T /srv 2>&1; echo "---"; mount | grep -E ' / | /srv '  — approved
+  ⚙ bash getent group research; echo "g_rc=$?"; getent passwd alice; echo "a_rc…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: cat .gitattributes .gitignore; echo "---"; ls -la .gnomon-audit 2>&1 | head — approved
+  ⚙ bash cat .gitattributes .gitignore; echo "---"; ls -la .gnomon-audit 2>&1 |…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ Group `research` already exists with `alice` and `bob` as members. Let me…
+  deepseek-v4.1-flash — 5 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 0/5 done · Verify POSIX ACL support on the overlay 
+[approval] bash: mkdir -p /tmp/acltest && cd /tmp/acltest && touch f && setfacl -m u:alice:rwx f 2>&1; echo "setfacl_rc=$?"; getfacl f 2>&1 — approved
+  ⚙ bash mkdir -p /tmp/acltest && cd /tmp/acltest && touch f && setfacl -m u:al…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  │ ACLs work on this overlay filesystem. Group `research` (alice, bob) alrea…
+[approval] bash: set -e
+mkdir -p /srv/shared
+chgrp research /srv/shared
+chmod 2770 /srv/shared
+# Access ACL
+setfacl -m 'u::rwx,g::rwx,g:research:rwx,u:alice:rwx,u:bob:rwx,m::rwx,o::---' /srv/shared
+# Default ACL (inheritance)
+setfacl -d -m 'u::rwx,g::rwx,g:research:rwx,u:alice:rwx,u:bob:rwx,m::rwx,o::---' /srv/shared
+echo "=== ls -ld ==="; ls -ld /srv/shared
+echo "=== getfacl ==="; getfacl /srv/shared — approved
+  ⚙ bash set -e mkdir -p /srv/shared chgrp research /srv/shared chmod 2770 /srv…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+  │ Directory is correct. Now verifying end-to-end behavior as the actual use…
+[approval] bash: set -x
+# alice creates a file, bob creates a subdir + file
+su - alice -c 'umask 022; touch /srv/shared/alice_file.txt && echo "alice write ok"'
+su - bob   -c 'umask 022; mkdir /srv/shared/bob_dir && echo "bob data" > /srv/shared/bob_dir/bob_file.txt && echo "bob write ok"'
+su - alice -c 'umask 022; touch /srv/shared/bob_dir/alice_in_bob.txt && echo "alice-in-bobdir ok"'
+set +x
+echo "=== tree ==="; ls -laR /srv/shared
+echo "=== getfacl alice_file ==="; getfacl /srv/shared/alice_file.txt
+echo "=== getfacl bob_dir ==="; getfacl /srv/shared/bob_dir
+echo "=== getfacl bob_file ==="; getfacl /srv/shared/bob_dir/bob_file.txt — approved
+  ⚙ bash set -x # alice creates a file, bob creates a subdir + file su - alice …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+[approval] bash: getent passwd nobody; getent group nogroup; echo "---"; getent passwd | wc -l — approved
+  ⚙ bash getent passwd nobody; getent group nogroup; echo "---"; getent passwd …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+  │ Inheritance works correctly: subdirectories keep the setgid bit and full …
+[approval] bash: echo "=== alice reads/writes bob's file ==="
+su - alice -c 'cat /srv/shared/bob_dir/bob_file.txt && echo "alice READ ok"; echo "alice-appended" >> /srv/shared/bob_dir/bob_file.txt && echo "alice WRITE ok"'
+echo "=== bob reads/writes alice's file ==="
+su - bob -c 'echo "bob was here" >> /srv/shared/alice_file.txt && echo "bob WRITE ok"; cat /srv/shared/bob_dir/bob_file.txt'
+echo "=== bob reads alice_in_bob ==="
+su - bob -c 'cat /srv/shared/bob_dir/alice_in_bob.txt; echo "rc=$?"'
+echo "=== outsider (nobody) must be denied ==="
+su -s /bin/sh nobody -c 'ls /srv/shared' 2>&1; echo "ls_rc=$?"
+su -s /bin/sh nobody -c 'cat /srv/shared/alice_file.txt' 2>&1; echo "read_rc=$?"
+su -s /bin/sh nobody -c 'touch /srv/shared/nobody_file' 2>&1; echo "write_rc=$?"
+su -s /bin/sh nobody -c 'ls /srv/shared/bob_dir' 2>&1; echo "subdir_rc=$?" — approved
+  ⚙ bash echo "=== alice reads/writes bob's file ===" su - alice -c 'cat /srv/s…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+  │ All behaviors verified. Now removing the test artifacts so `/srv/shared` …
+[approval] bash: rm -rf /srv/shared/bob_dir /srv/shared/alice_file.txt /srv/shared/nobody_file /srv/shared/bob_file.txt
+echo "=== contents (must be empty) ==="; ls -A /srv/shared; echo "entries=$(ls -A /srv/shared | wc -l)"
+echo "=== mode/owner ==="; stat -c '%a %U %G %n' /srv/shared; ls -ld /srv/shared
+echo "=== final getfacl ==="; getfacl -p /srv/shared — approved
+  ⚙ bash rm -rf /srv/shared/bob_dir /srv/shared/alice_file.txt /srv/shared/nobo…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  │ Directory is empty and correct. Let me clean up the temp probe and check …
+[approval] bash: rm -rf /tmp/acltest
+su - alice -c 'umask 077; touch /srv/shared/strict.txt'
+echo "--- umask 077 file ---"; getfacl -p /srv/shared/strict.txt 2>/dev/null
+echo "--- bob access to it ---"; su - bob -c 'echo x >> /srv/shared/strict.txt && echo "bob ok" || echo "bob DENIED"'
+su - alice -c 'umask 022; touch /srv/shared/default_umask.txt'
+echo "--- umask 022 file ---"; getfacl -p /srv/shared/default_umask.txt 2>/dev/null
+echo "--- bob access ---"; su - bob -c 'echo x >> /srv/shared/default_umask.txt && echo "bob ok" || echo "bob DENIED"'
+rm -f /srv/shared/strict.txt /srv/shared/default_umask.txt
+echo "entries=$(ls -A /srv/shared | wc -l)" — approved
+  ⚙ bash rm -rf /tmp/acltest su - alice -c 'umask 077; touch /srv/shared/strict…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  │ Both users retain access even under a hostile `umask 077` — because the d…
+[approval] bash: fail=0
+chk(){ if [ "$2" = "1" ]; then echo "PASS  $1"; else echo "FAIL  $1"; fail=1; fi; }
+
+[ -d /srv/shared ]; chk "/srv/shared exists" $?
+[ "$(stat -c %G /srv/shared)" = research ]; chk "group is research" $?
+[ "$(stat -c %a /srv/shared)" = 2770 ]; chk "mode is 2770 (setgid)" $?
+stat -c %A /srv/shared | grep -q '^drwxrws' ; chk "setgid bit set (rwxrws---)" $?
+
+G=$(getfacl -cp /srv/shared)
+echo "$G" | grep -qx 'group:research:rwx';              chk "access: group research rwx" $?
+echo "$G" | grep -qx 'user:alice:rwx';                  chk "access: alice rwx" $?
+echo "$G" | grep -qx 'user:bob:rwx';                    chk "access: bob rwx" $?
+echo "$G" | grep -qx 'other::---';                      chk "access: other ---" $?
+echo "$G" | grep -qx 'mask::rwx';                       chk "access: mask rwx" $?
+echo "$G" | grep -qx 'default:group:research:rwx';      chk "default: group research rwx" $?
+echo "$G" | grep -qx 'default:user:alice:rwx';          chk "default: alice rwx" $?
+echo "$G" | grep -qx 'default:user:bob:rwx';            chk "default: bob rwx" $?
+echo "$G" | grep -qx 'default:other::---';              chk "default: other ---" $?
+echo "$G" | grep -qx 'default:mask::rwx';               chk "default: mask rwx" $?
+
+# behavioural: inheritance + mutual access + outsider denial
+su - bob -c 'mkdir /srv/shared/_t 2>/dev/null; echo hi > /srv/shared/_t/f' >/dev/null 2>&1
+su - alice -c 'echo a >> /srv/shared/_t/f' >/dev/null 2>&1
+[ $? -eq 0 ]; chk "alice can write bob-created file" $?
+[ "$(stat -c %G /srv/shared/_t/f)" = research ]; chk "new file group inherited research" $?
+su -s /bin/sh nobody -c 'ls /srv/shared' >/dev/null 2>&1; [ $? -ne 0 ]; chk "outsider denied" $?
+rm -rf /srv/shared/_t
+echo "entries=$(ls -A /srv/shared | wc -l)"; chk "directory is empty" $?
+echo; [ $fail -eq 0 ] && echo "ALL CHECKS PASSED" || echo "SOME CHECKS FAILED" — approved
+  ⚙ bash fail=0 chk(){ if [ "$2" = "1" ]; then echo "PASS $1"; else echo "FAIL …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  │ My check harness has an inverted exit-status test (success is `0`, I comp…
+[approval] bash: fail=0
+chk(){ if [ "$2" = "0" ]; then echo "PASS  $1"; else echo "FAIL  $1"; fail=1; fi; }
+
+[ -d /srv/shared ]; chk "/srv/shared exists" $?
+[ "$(stat -c %G /srv/shared)" = research ]; chk "group is research" $?
+[ "$(stat -c %a /srv/shared)" = 2770 ]; chk "mode is 2770 (setgid)" $?
+stat -c %A /srv/shared | grep -q '^drwxrws'; chk "setgid bit set (rwxrws---)" $?
+
+G=$(getfacl -cp /srv/shared)
+echo "$G" | grep -qx 'group:research:rwx';         chk "access: group research rwx" $?
+echo "$G" | grep -qx 'user:alice:rwx';             chk "access: alice rwx" $?
+echo "$G" | grep -qx 'user:bob:rwx';               chk "access: bob rwx" $?
+echo "$G" | grep -qx 'other::---';                 chk "access: other ---" $?
+echo "$G" | grep -qx 'mask::rwx';                  chk "access: mask rwx" $?
+echo "$G" | grep -qx 'default:group:research:rwx'; chk "default: group research rwx" $?
+echo "$G" | grep -qx 'default:user:alice:rwx';     chk "default: alice rwx" $?
+echo "$G" | grep -qx 'default:user:bob:rwx';       chk "default: bob rwx" $?
+echo "$G" | grep -qx 'default:other::---';         chk "default: other ---" $?
+echo "$G" | grep -qx 'default:mask::rwx';          chk "default: mask rwx" $?
+
+su - bob -c 'mkdir /srv/shared/_t; echo hi > /srv/shared/_t/f' >/dev/null 2>&1
+chk "bob creates subdir+file (inheritance)" $?
+su - alice -c 'echo a >> /srv/shared/_t/f' >/dev/null 2>&1
+chk "alice writes bob-created file" $?
+[ "$(stat -c %G /srv/shared/_t/f)" = research ]; chk "new file group inherited research" $?
+[ "$(stat -c %A /srv/shared/_t | cut -c7)" = s ]; chk "new subdir inherited setgid" $?
+su -s /bin/sh nobody -c 'ls /srv/shared' >/dev/null 2>&1; [ $? -ne 0 ]; chk "outsider denied" $?
+rm -rf /srv/shared/_t
+[ "$(ls -A /srv/shared | wc -l)" = 0 ]; chk "directory left empty" $?
+echo; [ $fail -eq 0 ] && echo "ALL CHECKS PASSED" || echo "SOME CHECKS FAILED" — approved
+  ⚙ bash fail=0 chk(){ if [ "$2" = "0" ]; then echo "PASS $1"; else echo "FAIL …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+  deepseek-v4.1-flash — 15 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 5/5 done
+Done. `/srv/shared` is built, verified end-to-end against real logins, and left empty.
+
+## Final state
+
+```
+drwxrws---+ 2 root research  /srv/shared      # mode 2770, setgid
+```
+```
+user::rwx              default:user::rwx
+user:alice:rwx         default:user:alice:rwx
+user:bob:rwx           default:user:bob:rwx
+group::rwx             default:group::rwx
+group:research:rwx     default:group:research:rwx
+mask::rwx              default:mask::rwx
+other::---             default:other::---
+```
+
+## What I did
+
+Group `research` and users `alice`/`bob` already existed (`research:x:1001:alice,bob`), so I reused them rather than recreating. I confirmed the overlay root filesystem supports POSIX ACLs before relying on them, then created the directory, set group/mode, and applied an **access ACL** and a matching **default ACL**.
+
+## Verification (as the real users, not inferred)
+
+- alice wrote a file; bob created a subdir + file; alice wrote *inside bob's subdir* — all succeeded.
+- bob wrote to alice's file and read his own back — cross-user access works both directions.
+- `nobody` was denied on list, read, write, and on a nested subdir (`Permission denied`, exit 2/1).
+- Inheritance measured on real created objects: new files inherited group `research` (alice's file shows `alice research`), new subdirs kept `drwxrws---+`, and the full default ACL propagated.
+- A 20-point assertion script over ownership, mode, every ACL entry, and the behaviours above: **ALL CHECKS PASSED**, with `entries=0` at the end.
+
+## Two things worth knowing
+
+**`umask` does not defeat this.** I tested `umask 077` on the creating user: the created file came out `mask::rw-` and bob *still* had access, because the default ACL takes precedence and the umask is not consulted when a default ACL exists. So "created by alice is accessible by bob" holds regardless of the creator's umask.
+
+**The ACL mask caps the group class, and `rwx` does not survive onto plain files.** Newly created *files* are `-rw-rw----+` with `mask::rw-` — that is the kernel's own file-creation rule (base mode 0666 for a non-executable file), not a misconfiguration. Files therefore inherit `rw`, not `rwx`; `rwx` is what sub*directories* inherit, which is where it matters. If your tests assert `mask::rwx` on a newly created *file*, that assertion would be wrong — it should be `rw-`.
+
+One caveat on durability: `/srv` is on a Docker **overlay** filesystem, which is not persistent across container recreation. The structure is correct and live now, but it will not survive the container being rebuilt unless `/srv` is on a volume or the setup is scripted into the image.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=15 surface=a57c8a7444d5

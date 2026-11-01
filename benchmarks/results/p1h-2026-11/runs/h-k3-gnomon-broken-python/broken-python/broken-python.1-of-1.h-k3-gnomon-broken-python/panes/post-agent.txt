@@ -1,0 +1,55 @@
+root@69fc2120c329:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+root@69fc2120c329:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+ARM_VERSION=7012c5a6d80516891b061cc0f07ac1724b6289a0
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793521255
+root@69fc2120c329:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with
+ pip.'; tmux wait -S done
+No `pip/` directory. Against pip's own `RECORD` manifest, **841 of 852 files were missing**. The `/usr/local/bin/pip` and `/usr/local/bin/pip3` launcher scripts
+ were still present and intact, which is why the symptom looked like "the pip command is broken" rather than "pip isn't installed":
+
+```
+File "/usr/local/bin/pip", line 5, in <module>
+    from pip._internal.cli.main import main
+ModuleNotFoundError: No module named 'pip'
+```
+
+`python3 -m pip` failed the same way. This is the signature of a partially-removed or interrupted install/uninstall — a `rm -rf` of the package dir, or a corrup
+ted image layer.
+
+## The fix
+
+The trap here: `python3 -m ensurepip --upgrade` would have **silently done nothing**. ensurepip compares the bundled wheel version against installed metadata, a
+nd the stale `dist-info` still claimed `24.3.1` — identical to the bundled wheel. It would have concluded pip was already current and skipped the install, leavi
+ng you exactly where you started.
+
+So I first moved the stale metadata out of the way (backed up to `/root/pip-repair-backup/`, not deleted), then:
+
+```
+python3 -m ensurepip --default-pip
+→ Successfully installed pip-24.3.1
+```
+
+## Verification
+
+- `pip -V`, `pip3 -V`, `python3 -m pip -V` — all resolve to `24.3.1` in `/usr/local/lib/python3.13/site-packages/pip`
+- RECORD audit — **0 missing files** (all 852 restored)
+- `pip check` — no broken requirements
+- Real install from a local wheel → succeeded
+- Real install from PyPI (`pip install six`) → `Successfully installed six-1.17.0`, so index access works too
+
+No Python config, `.pth`, or env-var anomalies found, and no `EXTERNALLY-MANAGED` marker is present, so system-wide installs aren't being blocked on purpose.
+
+## Two notes
+
+**The backup** at `/root/pip-repair-backup/pip-24.3.1.dist-info` is the broken stale metadata, kept only for forensics. It's safe to delete once you're satisfie
+d.
+
+**I changed nothing in this repository.** `/app` contains only `.gitattributes`, `.gitignore` and the `.gnomon/` harness dirs — the defect was in the system Pyt
+hon at `/usr/local`, so that's where the repair went. Worth knowing if you were expecting a repo diff.
+
+If you'd like to guard against a recurrence, `pip install --upgrade pip` currently works and would land 26.2.2; and pinning your Python work into a `venv` means
+ a damaged system site-packages can't take your tooling down with it again.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=21 surface=08138f62e950
+root@69fc2120c329:/app#

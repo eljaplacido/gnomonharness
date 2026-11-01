@@ -1,0 +1,221 @@
+[0m
+> build · deepseek-v4.1-flash
+[0m$ [0mwc -l /app/university_graph.ttl && head -100 /app/university_graph.ttl
+305 /app/university_graph.ttl
+@prefix uni: <http://university.org/ontology/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# ---------------------------
+# Universities
+# ---------------------------
+uni:ETHZurich a uni:University ;
+    uni:hasName "ETH Zurich" ;
+    uni:locatedInCountry "CH" .
+
+uni:UPM a uni:University ;
+    uni:hasName "Universidad Politécnica de Madrid" ;
+    uni:locatedInCountry "ES" .
+
+uni:IST a uni:University ;
+    uni:hasName "Instituto Superior Técnico" ;
+    uni:locatedInCountry "PT" .
+
+uni:NTUA a uni:University ;
+    uni:hasName "National Technical University of Athens" ;
+    uni:locatedInCountry "GR" .
+
+uni:NKUA a uni:University ;
+    uni:hasName "National and Kapodistrian University of Athens" ;
+    uni:locatedInCountry "GR" .
+
+uni:Sorbonne a uni:University ;
+    uni:hasName "Sorbonne University" ;
+    uni:locatedInCountry "FR" .
+
+uni:MIT a uni:University ;
+    uni:hasName "Massachusetts Institute of Technology" ;
+    uni:locatedInCountry "US" .
+
+uni:Berkeley a uni:University ;
+    uni:hasName "University of California, Berkeley" ;
+    uni:locatedInCountry "US" .
+
+uni:LMU a uni:University ;
+    uni:hasName "Ludwig Maximilian University of Munich" ;
+    uni:locatedInCountry "DE" .
+
+# ---------------------------
+# Departments
+# ---------------------------
+uni:ComputerScience_NTUA a uni:Department ;
+    uni:belongsTo uni:NTUA .
+
+uni:MechEngineering_NTUA a uni:Department ;
+    uni:belongsTo uni:NTUA .
+
+uni:Mathematics_IST a uni:Department ;
+    uni:belongsTo uni:IST .
+
+uni:Mathematics_Sorbonne a uni:Department ;
+    uni:belongsTo uni:Sorbonne .
+
+uni:Physics_ETH a uni:Department ;
+    uni:belongsTo uni:ETHZurich .
+
+uni:Biology_MIT a uni:Department ;
+    uni:belongsTo uni:MIT .
+
+uni:Sloan_MIT a uni:Department ;
+    uni:belongsTo uni:MIT .
+
+uni:Engineering_LMU a uni:Department ;
+    uni:belongsTo uni:LMU .
+
+uni:Engineering_Berkeley a uni:Department ;
+    uni:belongsTo uni:Berkeley .
+
+uni:Robotics_UPM a uni:Department ;
+    uni:belongsTo uni:UPM .
+
+uni:HistoryAndPhilosophy_NKUA a uni:Department ;
+    uni:belongsTo uni:NKUA .
+
+# ---------------------------
+# Courses
+# ---------------------------
+uni:CS101 a uni:Course ;
+    uni:isTaughtIn uni:ComputerScience_NTUA .
+
+uni:AI101 a uni:Course ;
+    uni:isTaughtIn uni:ComputerScience_NTUA .
+
+uni:Math101 a uni:Course ;
+    uni:isTaughtIn uni:Mathematics_IST .
+
+uni:Math201 a uni:Course ;
+    uni:isTaughtIn uni:Mathematics_Sorbonne .
+
+uni:Physics301 a uni:Course ;
+    uni:isTaughtIn uni:Physics_ETH .
+
+uni:Bio101 a uni:Course ;
+    uni:isTaughtIn uni:Biology_MIT .
+
+uni:Eng202 a uni:Course ;
+> build · deepseek-v4.1-flash
+[0m→ [0mRead university_graph.ttl [90m[offset=100, limit=210][0m
+> build · deepseek-v4.1-flash
+[0m← [0mWrite solution.sparql
+Created file successfully: solution.sparql
+> build · deepseek-v4.1-flash
+[0m$ [0mcd /app && python3 -c "import rdflib; print(rdflib.__version__)" 2>/dev/null || echo "no rdflib"; which arq sparql 2>/dev/null
+no rdflib
+> build · deepseek-v4.1-flash
+[0m$ [0mpip install rdflib -q 2>&1 | tail -2; python3 -c "import rdflib; print(rdflib.__version__)"
+/bin/bash: line 1: pip: command not found
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+ModuleNotFoundError: No module named 'rdflib'
+> build · deepseek-v4.1-flash
+[0m$ [0mpython3 -m pip install rdflib -q 2>&1 | tail -3; python3 -c "import rdflib; print(rdflib.__version__)"
+/usr/bin/python3: No module named pip
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+ModuleNotFoundError: No module named 'rdflib'
+> build · deepseek-v4.1-flash
+[0m$ [0mwhich java node npm npx curl 2>/dev/null; ls /usr/share/java 2>/dev/null | head
+/usr/bin/curl
+> build · deepseek-v4.1-flash
+[0m$ [0mcd /app && python3 - <<'PY'
+import re, datetime
+from collections import defaultdict
+txt=open('university_graph.ttl').read()
+# remove prefix lines
+txt=re.sub(r'@prefix[^\n]*\n','',txt)
+# split statements by '.'
+# crude: use regex per line groups
+course_dept={}
+for m in re.finditer(r'uni:(\w+)\s+a\s+uni:Course\s*;\s*uni:isTaughtIn\s+uni:(\w+)',txt):
+    course_dept[m.group(1)]=m.group(2)
+# enroll blocks
+enroll=defaultdict(set); enroll_date={}; grad={}
+for m in re.finditer(r'uni:(\w+)\s+uni:isEnrolledIn\s+([^;]+);\s*uni:hasEnrollmentDate\s+"([^"]+)"\^\^xsd:date\s*(?:;\s*uni:hasGraduationDate\s+"([^"]+)"\^\^xsd:date)?\s*\.',txt):
+    s=m.group(1); courses=[c.strip().split(':')[1] for c in m.group(2).split(',')]
+    ed=m.group(3); gd=m.group(4)
+    for c in courses: enroll[c].add(s)
+    enroll_date[s]=ed; grad[s]=gd
+ref='2025-08-16'
+print("courses:", course_dept)
+# dept -> students current
+dept_students=defaultdict(set)
+for c,sset in enroll.items():
+    d=course_dept.get(c)
+    if not d: continue
+    for s in sset:
+        if enroll_date.get(s,ref)<=ref and (grad.get(s) is None or grad[s]>ref):
+            dept_students[d].add(s)
+for d,ss in sorted(dept_students.items()):
+    print(d,len(ss),sorted(ss))
+PY
+courses: {'CS101': 'ComputerScience_NTUA', 'AI101': 'ComputerScience_NTUA', 'Math101': 'Mathematics_IST', 'Math201': 'Mathematics_Sorbonne', 'Physics301': 'Physics_ETH', 'Bio101': 'Biology_MIT', 'Eng202': 'Engineering_LMU', 'EngUS302': 'Engineering_Berkeley', 'STS101': 'HistoryAndPhilosophy_NKUA'}
+Biology_MIT 7 ['Student1', 'Student10', 'Student11', 'Student2', 'Student3', 'Student7', 'Student9']
+ComputerScience_NTUA 12 ['Student1', 'Student10', 'Student11', 'Student12', 'Student2', 'Student3', 'Student4', 'Student5', 'Student6', 'Student7', 'Student8', 'Student9']
+Engineering_Berkeley 11 ['Student1', 'Student10', 'Student11', 'Student13', 'Student14', 'Student15', 'Student2', 'Student3', 'Student4', 'Student5', 'Student6']
+HistoryAndPhilosophy_NKUA 12 ['Student1', 'Student10', 'Student11', 'Student12', 'Student13', 'Student14', 'Student15', 'Student16', 'Student24', 'Student4', 'Student5', 'Student8']
+Mathematics_Sorbonne 6 ['Student13', 'Student14', 'Student15', 'Student16', 'Student17', 'Student24']
+> build · deepseek-v4.1-flash
+[0m$ [0mcd /app && python3 - <<'PY'
+import re, datetime
+from collections import defaultdict
+txt=open('university_graph.ttl').read(); txt=re.sub(r'@prefix[^\n]*\n','',txt)
+course_dept={m.group(1):m.group(2) for m in re.finditer(r'uni:(\w+)\s+a\s+uni:Course\s*;\s*uni:isTaughtIn\s+uni:(\w+)',txt)}
+enroll=defaultdict(set); edate={}; grad={}
+for m in re.finditer(r'uni:(\w+)\s+uni:isEnrolledIn\s+([^;]+);\s*uni:hasEnrollmentDate\s+"([^"]+)"\^\^xsd:date\s*(?:;\s*uni:hasGraduationDate\s+"([^"]+)"\^\^xsd:date)?\s*\.',txt):
+    s=m.group(1)
+    for c in [c.strip().split(':')[1] for c in m.group(2).split(',')]: enroll[c].add(s)
+    edate[s]=m.group(3); grad[s]=m.group(4)
+ref='2025-08-16'
+dept_students=defaultdict(set)
+for c,ss in enroll.items():
+    d=course_dept.get(c)
+    if d:
+        for s in ss:
+            if edate.get(s,ref)<=ref and (grad.get(s) is None or grad[s]>ref): dept_students[d].add(s)
+big={d for d,ss in dept_students.items() if len(ss)>10}
+# dept -> uni -> country
+dept_uni={m.group(1):m.group(2) for m in re.finditer(r'uni:(\w+)\s+a\s+uni:Department\s*;\s*uni:belongsTo\s+uni:(\w+)',txt)}
+uni_country={m.group(1):m.group(2) for m in re.finditer(r'uni:(\w+)\s+a\s+uni:University\s*;\s*uni:hasName\s+"[^"]*"\s*;\s*uni:locatedInCountry\s+"(\w+)"',txt)}
+EU=set("AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL RO SK SI ES SE".split())
+# professors
+for m in re.finditer(r'uni:(\w+)\s+a\s+uni:Person\s*;\s*uni:hasName\s+"([^"]+)"\s*;\s*uni:role\s+"([^"]+)"[^.]*?uni:worksIn\s+([^.\n]+)',txt,re.S):
+    pid,name,role,depts=m.group(1),m.group(2),m.group(3),m.group(4)
+    if not role.startswith('Professor'): continue
+    ds=[d.strip().split(':')[1] for d in depts.split(',')]
+    countries=[uni_country[dept_uni[d]] for d in ds]
+    eu=any(c in EU for c in countries); hasbig=any(d in big for d in ds)
+    print(name, role, ds, countries, 'EU',eu,'BIG',hasbig, '=>', eu and hasbig, sorted(set(countries)))
+PY
+Orfeas Menis Professor of Computer Science ['ComputerScience_NTUA', 'Sloan_MIT'] ['GR', 'US'] EU True BIG True => True ['GR', 'US']
+Pepe Attanasio Professor of Mathematics ['Mathematics_IST', 'ComputerScience_NTUA'] ['PT', 'GR'] EU True BIG True => True ['GR', 'PT']
+Aristotle Tympas Professor of History of Scienceand Technology ['HistoryAndPhilosophy_NKUA'] ['GR'] EU True BIG True => True ['GR']
+John Smith Professor of Biology ['Biology_MIT'] ['US'] EU False BIG False => False ['US']
+Marie Dubois Professor of Mathematics ['Mathematics_Sorbonne'] ['FR'] EU True BIG False => False ['FR']
+> build · deepseek-v4.1-flash
+[0m→ [0mRead solution.sparql 
+> build · deepseek-v4.1-flash
+Saved the query to `/app/solution.sparql`.
+
+It:
+- Matches full professors via `role` starting with `"Professor"` (thereby excluding Assistant/Associate Professors).
+- Joins each professor’s departments to their universities and countries.
+- Uses the 2025-08-16 reference date to count only students whose enrollment has started and who have not yet graduated.
+- Requires at least one department in an EU member state (the 27 official 2025 EU ISO codes) and at least one department with more than 10 currently enrolled students.
+- Groups by professor and concatenates all countries where they work.
+
+Expected results from the provided data:
+
+| professorName | countries |
+|---|---|
+| Orfeas Menis | GR, US |
+| Pepe Attanasio | GR, PT |
+| Aristotle Tympas | GR |

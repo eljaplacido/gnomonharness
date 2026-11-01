@@ -1,0 +1,287 @@
+  │ We need to create a polyglot file /app/polyglot/main.py.c that is valid P…
+  │ Important: Python reads the file, C compiles it. We need the file to be b…
+  │ Classic approach: C preprocessor tricks. In Python, `#` starts a comment.…
+  │ … 482 more line(s) — /think show for all
+[approval] bash: pwd; ls -la; echo ---; ls -la /app 2>/dev/null; echo ---; which gcc python3; gcc --version | head -1; python3 --version — approved
+  ⚙ bash pwd; ls -la; echo ---; ls -la /app 2>/dev/null; echo ---; which gcc py…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: ls -la /app/polyglot 2>&1 | head -20 — approved
+  ⚙ bash ls -la /app/polyglot 2>&1 | head -20
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  │ Repo root is /app. gcc 13.3.0 (user said 13.2.0, close enough — same beha…
+  │ Let's create /app/polyglot/main.py.c. Relative path: polyglot/main.py.c.
+  │ First test the quote-parity concern with a scratch file.
+  │ … 23 more line(s) — /think show for all
+[approval] bash: mkdir -p /app/polyglot && echo ok — approved
+  ⚙ bash mkdir -p /app/polyglot && echo ok
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+  │ Now write the file.
+[approval] write polyglot/main.py.c (+79 −0) [new file] — approved
+  ⚙ write polyglot/main.py.c
+    ✓ write polyglot/main.py.c (+79 −0)
+  deepseek-v4.1-flash — 4 tool call(s) so far
+[approval] bash: cd /app/polyglot && python3 main.py.c 10; echo "py-exit=$?"; gcc main.py.c -o cmain 2>&1 | head -20; echo "gcc-exit=${PIPESTATUS[0]}" — approved
+  ⚙ bash cd /app/polyglot && python3 main.py.c 10; echo "py-exit=$?"; gcc main.…
+    ✗ bash — exit 2
+  deepseek-v4.1-flash — 5 tool call(s) so far
+  │ Python side works (55 = f(10)), C compiled but with two "missing terminat…
+[approval] write polyglot/main.py.c (+9 −12) — approved
+  ⚙ write polyglot/main.py.c
+    ✓ write polyglot/main.py.c (+9 −12)
+  deepseek-v4.1-flash — 6 tool call(s) so far
+[approval] bash: cd /app/polyglot && rm -f cmain && gcc -Wall -Wextra main.py.c -o cmain > gcc.log 2>&1; echo "gcc-exit=$?"; cat gcc.log; echo "--- py ---"; python3 main.py.c 10; echo "py-exit=$?"; ./cmain 10; echo "c-exit=$?" — approved
+  ⚙ bash cd /app/polyglot && rm -f cmain && gcc -Wall -Wextra main.py.c -o cmai…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+  │ Both clean and agreeing. Now a thorough differential test.
+[approval] bash: cd /app/polyglot && fail=0; for n in 0 1 2 3 4 5 6 7 8 9 10 20 45 46 47 92 93 94 100 200 499 500 1000 2000; do p=$(python3 main.py.c $n); c=$(./cmain $n); if [ "$p" != "$c" ]; then echo "MISMATCH n=$n"; fail=1; fi; done; echo "differential fail=$fail"; echo "--- spot checks ---"; python3 main.py.c 0; python3 main.py.c 1; python3 main.py.c 2; python3 main.py.c 20; python3 main.py.c 100 — approved
+  ⚙ bash cd /app/polyglot && fail=0; for n in 0 1 2 3 4 5 6 7 8 9 10 20 45 46 4…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+[approval] bash: cd /tmp && python3 -c "
+def f(n):
+    a,b=0,1
+    for _ in range(n): a,b=b,a+b
+    return a
+print(f(0),f(1),f(10),f(100),f(47840)%1000000, len(str(f(47840))))
+" — approved
+  ⚙ bash cd /tmp && python3 -c " def f(n): a,b=0,1 for _ in range(n): a,b=b,a+b…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 9 tool call(s) so far
+  │ Python 3.12 has a 4300-digit cap on int→str conversion; I need to lift th…
+[approval] bash: cd /app/polyglot && time ./cmain 10000 > /tmp/c10k.txt; wc -c /tmp/c10k.txt; time ./cmain 50000 > /tmp/c50k.txt; wc -c /tmp/c50k.txt — approved
+  ⚙ bash cd /app/polyglot && time ./cmain 10000 > /tmp/c10k.txt; wc -c /tmp/c10…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+[approval] bash: cd /app/polyglot && s=$(date +%s%N); ./cmain 47700 > /tmp/c47k.txt; e=$(date +%s%N); echo "ms=$(( (e-s)/1000000 )) digits=$(wc -c < /tmp/c47k.txt)" — approved
+  ⚙ bash cd /app/polyglot && s=$(date +%s%N); ./cmain 47700 > /tmp/c47k.txt; e=…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  │ Python needs the 4300-digit int→str cap lifted. I'll switch to fast doubl…
+[approval] write polyglot/main.py.c (+33 −16) — approved
+  ⚙ write polyglot/main.py.c
+    ✓ write polyglot/main.py.c (+33 −16)
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  │ MAXLIMBS 5000 limbs = 45000 digits. f(200000) has how many digits? 200000…
+  │ Also the C loop is O(n^2) in limbs: 200000 iterations with average 2323 l…
+  │ Let me time it. First compute digits of f(200000).
+  │ … 2 more line(s) — /think show for all
+[approval] bash: cd /app/polyglot && python3 -c "
+import sys
+sys.set_int_max_str_digits(0)
+def fp(n):
+    if n==0: return (0,1)
+    a,b=fp(n>>1); c=a*((b<<1)-a); d=a*a+b*b
+    return (d,c+d) if n&1 else (c,d)
+for n in (20000,200000):
+    print(n, len(str(fp(n)[0])), -(-len(str(fp(n)[0]))//9))
+" — approved
+  ⚙ bash cd /app/polyglot && python3 -c " import sys sys.set_int_max_str_digits…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  │ Need MAXLIMBS >= 4646 for n=200000. Set 4800. Let's test timing at 200000…
+  │ Actually let me reconsider MAXN. The user just says "kth Fibonacci number…
+[approval] bash: cd /app/polyglot && sed -i 's/#define MAXLIMBS 5000/#define MAXLIMBS 4800/' main.py.c && rm -f cmain && gcc -Wall -Wextra main.py.c -o cmain > gcc.log 2>&1; echo "gcc-exit=$?"; cat gcc.log; s=$(date +%s%N); ./cmain 200000 > /tmp/c200k.txt; e=$(date +%s%N); echo "C ms=$(( (e-s)/1000000 ))"; s=$(date +%s%N); python3 main.py.c 200000 > /tmp/p200k.txt; e=$(date +%s%N); echo "PY ms=$(( (e-s)/1000000 ))"; cmp /tmp/c200k.txt /tmp/p200k.txt && echo "200000 MATCH (digits=$(wc -c < /tmp/c200k.txt))" — approved
+  ⚙ bash cd /app/polyglot && sed -i 's/#define MAXLIMBS 5000/#define MAXLIMBS 4…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+  │ C is 3.4 s at n=200000 (pure O(n²) addition). I'll cap at 100000 for a su…
+[approval] bash: cd /app/polyglot && python3 -c "
+import sys; sys.set_int_max_str_digits(0)
+def fp(n):
+    if n==0: return (0,1)
+    a,b=fp(n>>1); c=a*((b<<1)-a); d=a*a+b*b
+    return (d,c+d) if n&1 else (c,d)
+d=len(str(fp(100000)[0])); print(d, -(-d//9))" — approved
+  ⚙ bash cd /app/polyglot && python3 -c " import sys; sys.set_int_max_str_digit…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 15 tool call(s) so far
+[approval] bash: cd /app/polyglot && sed -i -e 's/#define MAXLIMBS 4800/#define MAXLIMBS 2400/' -e 's/#define MAXN 200000/#define MAXN 100000/' -e 's/N <= 200000/N <= 100000/' main.py.c && sed -i 's/if n < 0 or n > 200000:/if n < 0 or n > 100000:/' main.py.c && grep -n "MAXLIMBS\|MAXN\|100000\|200000" main.py.c — approved
+  ⚙ bash cd /app/polyglot && sed -i -e 's/#define MAXLIMBS 4800/#define MAXLIMB…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+[approval] bash: cd /app/polyglot && rm -f cmain && gcc -Wall -Wextra main.py.c -o cmain > gcc.log 2>&1; echo "gcc-exit=$?"; cat gcc.log; echo "=== differential 0..60, plus spread ==="; fail=0; ns=""; i=0; while [ $i -le 60 ]; do ns="$ns $i"; i=$((i+1)); done; ns="$ns 61 77 89 91 92 93 94 95 100 123 200 500 777 1000 2018 5000 9999 10000 12345 29999 50000 99999 100000"; for n in $ns; do p=$(python3 main.py.c $n); c=$(./cmain $n); if [ "$p" != "$c" ]; then echo "MISMATCH n=$n"; echo " py=$p"; echo " c =$c"; fail=1; fi; done; echo "differential fail=$fail ($(echo $ns | wc -w) cases)" — approved
+  ⚙ bash cd /app/polyglot && rm -f cmain && gcc -Wall -Wextra main.py.c -o cmai…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 17 tool call(s) so far
+[approval] bash: cd /app/polyglot && echo "=== known values ==="; for n in 0 1 2 3 4 5 6 7 8 9 10; do printf "f(%s)=%s\n" $n "$(./cmain $n)"; done; echo "--- f(93)/f(94) ---"; ./cmain 93; ./cmain 94; echo "--- f(100) ---"; ./cmain 100 — approved
+  ⚙ bash cd /app/polyglot && echo "=== known values ==="; for n in 0 1 2 3 4 5 …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 18 tool call(s) so far
+  │ All 84 cases match. Now the exact commands from the request, edge cases, …
+[approval] bash: cd /tmp && rm -rf /app/polyglot/cmain && python3 /app/polyglot/main.py.c 30 && gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cmain 30 && echo "=== exact user commands OK ==="; echo "--- cwd independence ---"; cd / && python3 /app/polyglot/main.py.c 25; /app/polyglot/cmain 25 — approved
+  ⚙ bash cd /tmp && rm -rf /app/polyglot/cmain && python3 /app/polyglot/main.py…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 19 tool call(s) so far
+[approval] bash: cd /app/polyglot && echo "--- no arg ---"; python3 main.py.c; ./cmain; echo "--- negative ---"; python3 main.py.c -1; echo "py-exit=$?"; ./cmain -1; echo "c-exit=$?"; echo "--- too large ---"; python3 main.py.c 100001; echo "py-exit=$?"; ./cmain 100001; echo "c-exit=$?" — approved
+  ⚙ bash cd /app/polyglot && echo "--- no arg ---"; python3 main.py.c; ./cmain;…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 20 tool call(s) so far
+  │ Both behave identically on edge cases. Now an independent oracle (matrix …
+[approval] bash: cd /app/polyglot && python3 - <<'EOF'
+import subprocess, random
+def matfib(n):                       # independent oracle: matrix power, no doubling
+    def mul(X,Y):
+        return [[X[0][0]*Y[0][0]+X[0][1]*Y[1][0], X[0][0]*Y[0][1]+X[0][1]*Y[1][1]],
+                [X[1][0]*Y[0][0]+X[1][1]*Y[1][0], X[1][0]*Y[0][1]+X[1][1]*Y[1][1]]]
+    r=[[1,0],[0,1]]; b=[[1,1],[1,0]]
+    while n:
+        if n&1: r=mul(r,b)
+        b=mul(b,b); n>>=1
+    return r[0][1]
+
+def run(cmd,n):
+    return subprocess.run(cmd+[str(n)],capture_output=True,text=True).stdout.strip()
+
+ns=[0,1,2,3,5,8,13,50,97,128,255,256,511,512,1000,1024,2047,2048,4096,10000]
+ns+= [random.randrange(0,100001) for _ in range(25)]
+bad=0
+for n in ns:
+    o=str(matfib(n))
+    p=run(["python3","main.py.c"],n)
+    c=run(["./cmain"],n)
+    if not (o==p==c):
+        bad+=1; print("BAD",n,o[:30],p[:30],c[:30])
+print("oracle cases:",len(ns),"mismatches:",bad)
+
+# identities: Cassini f(n-1)f(n+1)-f(n)^2 = (-1)^n ; gcd(f(n),f(n+1))==1
+import math
+def f(n): return int(run(["./cmain"],n))
+cass=0
+for n in [1,2,3,7,12,40,101,500,1234,9999]:
+    if f(n-1)*f(n+1)-f(n)**2 != (-1)**n: cass+=1
+for n in [0,1,5,50,500,5000]:
+    if math.gcd(f(n),f(n+1)) != 1: cass+=1
+# divisibility: n | m  =>  f(n) | f(m)
+for n,m in [(3,9),(7,21),(12,60),(25,100),(100,1000)]:
+    if f(m) % f(n) != 0: cass+=1
+print("identity violations:", cass)
+EOF — approved
+  ⚙ bash cd /app/polyglot && python3 - <<'EOF' import subprocess, random def ma…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 21 tool call(s) so far
+  │ The oracle script's str(matfib(n)) hits the limit. Set sys.set_int_max_st…
+[approval] bash: cd /app/polyglot && python3 - <<'EOF'
+import subprocess, random, sys, math
+sys.set_int_max_str_digits(0)
+def matfib(n):
+    def mul(X,Y):
+        return [[X[0][0]*Y[0][0]+X[0][1]*Y[1][0], X[0][0]*Y[0][1]+X[0][1]*Y[1][1]],
+                [X[1][0]*Y[0][0]+X[1][1]*Y[1][0], X[1][0]*Y[0][1]+X[1][1]*Y[1][1]]]
+    r=[[1,0],[0,1]]; b=[[1,1],[1,0]]
+    while n:
+        if n&1: r=mul(r,b)
+        b=mul(b,b); n>>=1
+    return r[0][1]
+def run(cmd,n):
+    return subprocess.run(cmd+[str(n)],capture_output=True,text=True).stdout.strip()
+ns=[0,1,2,3,5,8,13,50,97,128,255,256,511,512,1000,1024,2047,2048,4096,10000]
+random.seed(7)
+ns+=[random.randrange(0,100001) for _ in range(25)]
+bad=0
+for n in ns:
+    o=str(matfib(n)); p=run(["python3","main.py.c"],n); c=run(["./cmain"],n)
+    if not (o==p==c): bad+=1; print("BAD",n,o[:30],p[:30],c[:30])
+print("oracle cases:",len(ns),"mismatches:",bad)
+def f(n): return int(run(["./cmain"],n))
+cass=0
+for n in [1,2,3,7,12,40,101,500,1234,9999]:
+    if f(n-1)*f(n+1)-f(n)**2 != (-1)**n: cass+=1; print("cassini fail",n)
+for n in [0,1,5,50,500,5000]:
+    if math.gcd(f(n),f(n+1)) != 1: cass+=1; print("gcd fail",n)
+for n,m in [(3,9),(7,21),(12,60),(25,100),(100,1000)]:
+    if f(m) % f(n) != 0: cass+=1; print("divisibility fail",n,m)
+print("identity violations:", cass)
+EOF — approved
+  ⚙ bash cd /app/polyglot && python3 - <<'EOF' import subprocess, random, sys, …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 22 tool call(s) so far
+  │ Zero mismatches across 45 oracle cases, and all identities hold. Final ha…
+[approval] bash: cd /app/polyglot && for std in c89 c99 c11 c17; do gcc -std=$std -Wall -Wextra -pedantic main.py.c -o /tmp/cm_$std > /tmp/g_$std.log 2>&1; echo "std=$std exit=$? $(cat /tmp/g_$std.log | tr '\n' ' ')"; done — approved
+  ⚙ bash cd /app/polyglot && for std in c89 c99 c11 c17; do gcc -std=$std -Wall…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 23 tool call(s) so far
+[approval] bash: cd /app/polyglot && gcc -fsanitize=address,undefined -g main.py.c -o /tmp/cm_san > /tmp/san_build.log 2>&1; echo "build=$?"; for n in 0 1 100 9999 100000; do /tmp/cm_san $n > /tmp/san_$n.txt 2>/tmp/san_$n.err; echo "n=$n exit=$? stderr=$(wc -c < /tmp/san_$n.err)"; done; cmp /tmp/san_100000.txt <(./cmain 100000) && echo "sanitized max-N output matches" — approved
+  ⚙ bash cd /app/polyglot && gcc -fsanitize=address,undefined -g main.py.c -o /…
+    ✗ bash — exit 2
+  deepseek-v4.1-flash — 24 tool call(s) so far
+  │ Process substitution isn't available in `/bin/sh`. Re-running the sanitiz…
+[approval] bash: cd /app/polyglot && gcc -fsanitize=address,undefined -g main.py.c -o /tmp/cm_san > /tmp/san_build.log 2>&1; echo "build=$?"; for n in 0 1 100 9999 100000; do /tmp/cm_san $n > /tmp/san_$n.txt 2>/tmp/san_$n.err; echo "n=$n exit=$? sanitizer_stderr_bytes=$(wc -c < /tmp/san_$n.err)"; done; ./cmain 100000 > /tmp/plain_100000.txt; cmp /tmp/san_100000.txt /tmp/plain_100000.txt && echo "sanitized max-N output matches plain build" — approved
+  ⚙ bash cd /app/polyglot && gcc -fsanitize=address,undefined -g main.py.c -o /…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 25 tool call(s) so far
+[approval] bash: cd /app/polyglot && s=$(date +%s%N); ./cmain 100000 > /tmp/t100k.txt; e=$(date +%s%N); echo "C max-N ms=$(( (e-s)/1000000 )) digits=$(($(wc -c < /tmp/t100k.txt)-1))"; s=$(date +%s%N); python3 main.py.c 100000 > /tmp/tp100k.txt; e=$(date +%s%N); echo "PY max-N ms=$(( (e-s)/1000000 ))"; cmp /tmp/t100k.txt /tmp/tp100k.txt && echo "MATCH at n=100000" — approved
+  ⚙ bash cd /app/polyglot && s=$(date +%s%N); ./cmain 100000 > /tmp/t100k.txt; …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 26 tool call(s) so far
+  │ Everything is clean. Final verification of the file contents and a warnin…
+[approval] bash: cd /app/polyglot && python3 -W error -W error::SyntaxWarning main.py.c 15 && echo "python -W error: clean"; python3 -c "
+import py_compile,sys
+py_compile.compile('main.py.c', cfile='/tmp/pyc_check.pyc', doraise=True)
+print('py_compile: OK (valid Python 3.12 source)')"; echo "--- hash-bang-free sanity: file is text ---"; file main.py.c; wc -l main.py.c — approved
+  ⚙ bash cd /app/polyglot && python3 -W error -W error::SyntaxWarning main.py.c…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 27 tool call(s) so far
+[approval] bash: cd /app/polyglot && cat -n main.py.c — approved
+  ⚙ bash cd /app/polyglot && cat -n main.py.c
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 28 tool call(s) so far
+  │ All green. Final cleanup and one last run of the exact commands from the …
+[approval] bash: cd /app/polyglot && cat /app/.gitignore; rm -f gcc.log; rm -f /tmp/cm_* /tmp/g_*.log /tmp/cm_san /tmp/san_*.txt /tmp/san_*.err /tmp/pyc_check.pyc; ls -la — approved
+  ⚙ bash cd /app/polyglot && cat /app/.gitignore; rm -f gcc.log; rm -f /tmp/cm_…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 29 tool call(s) so far
+[approval] bash: rm -f /app/polyglot/cmain; cd /tmp && python3 /app/polyglot/main.py.c 40; gcc /app/polyglot/main.py.c -o /app/polyglot/cmain; echo "gcc-exit=$?"; /app/polyglot/cmain 40; for n in 0 1 2 10 50 100 1000; do p=$(python3 /app/polyglot/main.py.c $n); c=$(/app/polyglot/cmain $n); [ "$p" = "$c" ] && echo "n=$n OK $p" || echo "n=$n MISMATCH $p vs $c"; done — approved
+  ⚙ bash rm -f /app/polyglot/cmain; cd /tmp && python3 /app/polyglot/main.py.c …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 30 tool call(s) so far
+[approval] bash: rm -f /app/polyglot/cmain; ls -la /app/polyglot — approved
+  ⚙ bash rm -f /app/polyglot/cmain; ls -la /app/polyglot
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 31 tool call(s) so far
+Done. `/app/polyglot/main.py.c` exists and works both ways.
+
+## How the polyglot works
+
+Two mutually-exclusive fences:
+
+```
+#if 0          ├─ C: enters a skipped conditional
+r""" # "       │  Python: `#if 0` is a comment; `r"""` opens a raw string
+#endif         ┤  C: skipped; Python: comment
+  ...C code... │  C: live code.  Python: swallowed by the raw string
+#if 0          ├─ C: skipped block covering the Python section
+""" # "        ┤  Python: closes the raw string, so what follows is code
+  ...Python... │  C: skipped
+#endif         ┘
+```
+
+Two details that make it clean rather than merely working:
+- The delimiters are `r"""` / plain `"""`, not a matched pair of `r"""`. A raw string can't end in a backslash, and the C code does contain `\n` in `fprintf` — raw on the opening side keeps those intact while a plain closing quote can't be accidentally escaped.
+- The trailing ` # "` on each fence line pads the quote count to an even 4. With a bare `"""` gcc emits `warning: missing terminating " character` twice (odd quote count makes the skipped region look like it has an open string literal). Padded, `gcc -Wall -Wextra` is silent.
+
+## Verification
+
+| Check | Result |
+|---|---|
+| `python3 main.py.c N` / `gcc` + `cmain N` (your exact commands) | both print `f(40) = 102334155` |
+| Differential, 84 N values (0–60 plus 61…100000) | 0 mismatches |
+| Independent oracle (matrix power, 45 values incl. random) | 0 mismatches |
+| Cassini `f(n-1)f(n+1)-f(n)²=(-1)ⁿ`, `gcd(f(n),f(n+1))=1`, `n|m ⟹ f(n)|f(m)` | 0 violations |
+| `gcc -Wall -Wextra` | no output |
+| `-std=c89/c99/c11/c17 -pedantic` | builds (c89 only warns about `long long`) |
+| ASan+UBSan at n=0,1,100,9999,100000 | clean, output identical |
+| `python3 -W error`, `py_compile` | clean, valid 3.12 source |
+
+## Notes
+
+- `f(0)=0, f(1)=1`; max N is 100000 (C: ~0.9 s, Python: ~25 ms; f(100000) is 20899 digits). Out-of-range and negative N exit 1 with a usage message in both languages; no argument prints `f(0)`.
+- **Python:** needs `sys.set_int_max_str_digits(0)` — 3.12 caps int→str at 4300 digits, which silently breaks anything past roughly n=20000. Set, so it matches C everywhere.
+- **C:** uses base-1e9 limbs rather than `unsigned long long`, because f(93) is the last value that fits in 64 bits. `MAXLIMBS` is 2400 = 21600 digits, sized against f(100000)=20899.
+- The C `#include` lines sit inside a Python *string*, not a comment, so they're inert either way; the `#endif` on line 92 is the only thing after the Python code, and it's a comment in Python.
+- `cmain` was removed after testing — only `main.py.c` is left, so the build in your second command starts fresh.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=31 surface=9e36cdc3535a

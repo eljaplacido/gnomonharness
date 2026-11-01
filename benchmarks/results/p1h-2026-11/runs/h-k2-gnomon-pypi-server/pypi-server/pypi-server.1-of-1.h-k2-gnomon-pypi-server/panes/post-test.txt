@@ -1,0 +1,161 @@
+root@5262141a79a1:/app# bash /tests/run-tests.sh; tmux wait -S done
+Hit:1 http://deb.debian.org/debian bookworm InRelease
+Hit:2 http://deb.debian.org/debian bookworm-updates InRelease
+Hit:3 http://deb.debian.org/debian-security bookworm-security InRelease
+Reading package lists... Done
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+curl is already the newest version (7.88.1-10+deb12u15).
+0 upgraded, 0 newly installed, 0 to remove and 45 not upgraded.
+downloading uv 0.7.13 aarch64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Using CPython 3.13.1 interpreter at: /usr/local/bin/python3
+Creating virtual environment at: .tbench-testing
+Activate with: source .tbench-testing/bin/activate
+Using Python 3.13.1 environment at: .tbench-testing
+Resolved 5 packages in 39ms
+Prepared 5 packages in 53ms
+Installed 5 packages in 8ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+Using Python 3.13.1 environment at: .tbench-testing
+Resolved 1 package in 23ms
+Prepared 1 package in 55ms
+Installed 1 package in 12ms
+ + pip==25.2
+warning: `VIRTUAL_ENV=.tbench-testing` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment
+instead
+Using CPython 3.13.1 interpreter at: /usr/local/bin/python3
+Creating virtual environment at: .venv
+      Built vectorops @ file:///app
+Installed 1 package in 0.44ms
+===================================================================== test session starts ======================================================================
+platform linux -- Python 3.13.1, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 1 item
+
+../tests/test_outputs.py F                                                                                                                               [100%]
+
+=========================================================================== FAILURES ===========================================================================
+___________________________________________________________________________ test_api ___________________________________________________________________________
+
+    def test_api():
+        """Test the vectorops package API functionality.
+
+        This function imports the vectorops package and tests its dotproduct function
+        with various input vectors to ensure it calculates dot products correctly.
+
+        Tests include:
+        - 2D vectors: [1,1] · [0,1] = 1
+        - 3D vectors: [1,1,0] · [1,1,0] = 2
+        - 4D vectors with zeros: [1,1,0,0] · [1,0,0,21.2] = 1
+        - 4D vectors with negative and decimal values: [1,-1,0,0.01] · [0,0,10,0] = 0
+
+        Raises:
+            AssertionError: If any dot product calculation doesn't match expected result.
+            ImportError: If vectorops package cannot be imported.
+        """
+>       install()
+
+/tests/test_outputs.py:82:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+/tests/test_outputs.py:36: in install
+    result = subprocess.run(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+input = None, capture_output = True, timeout = None, check = True, popenargs = (['python', '-m', 'pip', 'uninstall', '-y', 'vectorops'],)
+kwargs = {'stderr': -1, 'stdout': -1, 'text': True}, process = <Popen: returncode: 1 args: ['python', '-m', 'pip', 'uninstall', '-y', 'vect...>, stdout = ''
+stderr = '/app/.venv/bin/python: No module named pip\n', retcode = 1
+
+    def run(*popenargs,
+            input=None, capture_output=False, timeout=None, check=False, **kwargs):
+        """Run command with arguments and return a CompletedProcess instance.
+
+        The returned instance will have attributes args, returncode, stdout and
+        stderr. By default, stdout and stderr are not captured, and those attributes
+        will be None. Pass stdout=PIPE and/or stderr=PIPE in order to capture them,
+        or pass capture_output=True to capture both.
+
+        If check is True and the exit code was non-zero, it raises a
+        CalledProcessError. The CalledProcessError object will have the return code
+        in the returncode attribute, and output & stderr attributes if those streams
+        were captured.
+
+        If timeout is given, and the process takes too long, a TimeoutExpired
+        exception will be raised.
+
+        There is an optional argument "input", allowing you to
+        pass bytes or a string to the subprocess's stdin.  If you use this argument
+        you may not also use the Popen constructor's "stdin" argument, as
+        it will be used internally.
+
+        By default, all communication is in bytes, and therefore any "input" should
+        be bytes, and the stdout and stderr will be bytes. If in text mode, any
+        "input" should be a string, and stdout and stderr will be strings decoded
+        according to locale encoding, or by "encoding" if set. Text mode is
+        triggered by setting any of text, encoding, errors or universal_newlines.
+
+        The other arguments are the same as for the Popen constructor.
+        """
+        if input is not None:
+            if kwargs.get('stdin') is not None:
+                raise ValueError('stdin and input arguments may not both be used.')
+            kwargs['stdin'] = PIPE
+
+        if capture_output:
+            if kwargs.get('stdout') is not None or kwargs.get('stderr') is not None:
+                raise ValueError('stdout and stderr arguments may not be used '
+                                 'with capture_output.')
+            kwargs['stdout'] = PIPE
+            kwargs['stderr'] = PIPE
+
+        with Popen(*popenargs, **kwargs) as process:
+            try:
+                stdout, stderr = process.communicate(input, timeout=timeout)
+            except TimeoutExpired as exc:
+                process.kill()
+                if _mswindows:
+                    # Windows accumulates the output in a single blocking
+                    # read() call run on child threads, with the timeout
+                    # being done in a join() on those threads.  communicate()
+                    # _after_ kill() is required to collect that and add it
+                    # to the exception.
+                    exc.stdout, exc.stderr = process.communicate()
+                else:
+                    # POSIX _communicate already populated the output so
+                    # far into the TimeoutExpired exception.
+                    process.wait()
+                raise
+            except:  # Including KeyboardInterrupt, communicate handled that.
+                process.kill()
+                # We don't call process.wait() as .__exit__ does that for us.
+                raise
+            retcode = process.poll()
+            if check and retcode:
+>               raise CalledProcessError(retcode, process.args,
+                                         output=stdout, stderr=stderr)
+E               subprocess.CalledProcessError: Command '['python', '-m', 'pip', 'uninstall', '-y', 'vectorops']' returned non-zero exit status 1.
+
+/usr/local/lib/python3.13/subprocess.py:577: CalledProcessError
+--------------------------------------------------------------------- Captured stdout call ---------------------------------------------------------------------
+Uninstalling any existing vectorops package...
+Uninstall failed with error: /app/.venv/bin/python: No module named pip
+
+=================================================================== short test summary info ====================================================================
+FAILED ../tests/test_outputs.py::test_api - subprocess.CalledProcessError: Command '['python', '-m', 'pip', 'uninstall', '-y', 'vectorops']' returned non-zero e
+xit status 1.
+====================================================================== 1 failed in 0.06s =======================================================================
+root@5262141a79a1:/app#

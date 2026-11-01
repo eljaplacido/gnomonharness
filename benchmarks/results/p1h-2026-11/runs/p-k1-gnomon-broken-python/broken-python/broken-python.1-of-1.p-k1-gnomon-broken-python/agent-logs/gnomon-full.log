@@ -1,0 +1,195 @@
+  │ I'll start by looking at what's actually in this repository.
+[approval] bash: pwd; ls -la — approved
+  ⚙ bash pwd; ls -la
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  ⚙ read .
+    ✓ read ./ — 4 entries
+  │ The repo holds only the harness surface — nothing about Python. The actua…
+[approval] bash: which -a python python3 pip pip3 2>&1; echo '---'; python3 -V 2>&1; echo '---'; python3 -c 'import sys; print(sys.executable); print(sys.prefix); print(sys.base_prefix)' 2>&1 — approved
+  ⚙ bash which -a python python3 pip pip3 2>&1; echo '---'; python3 -V 2>&1; ec…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: python3 -m pip --version 2>&1; echo '=== exit:' $? — approved
+  ⚙ bash python3 -m pip --version 2>&1; echo '=== exit:' $?
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ Interesting — `pip` is on PATH but `python3 -m pip` says there's no `pip`…
+[approval] bash: ls -la /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/python /usr/local/bin/python3 2>&1; echo '=== pip shebang:'; head -3 /usr/local/bin/pip 2>&1; echo '=== run pip:'; pip --version 2>&1; echo 'exit:' $? — approved
+  ⚙ bash ls -la /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/python /u…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: python3 -c 'import sys; print("\n".join(sys.path))' 2>&1; echo '=== site-packages:'; ls /usr/local/lib/python3.13/site-packages 2>&1 | head -40 — approved
+  ⚙ bash python3 -c 'import sys; print("\n".join(sys.path))' 2>&1; echo '=== si…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  │ Found the shape of it: `pip`'s metadata (`pip-24.3.1.dist-info`) is prese…
+[approval] bash: ls -la /usr/local/lib/python3.13/site-packages 2>&1; echo '=== RECORD head:'; head -5 /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD 2>&1 — approved
+  ⚙ bash ls -la /usr/local/lib/python3.13/site-packages 2>&1; echo '=== RECORD …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: ls -la /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info 2>&1; echo '=== ensurepip:'; python3 -c 'import ensurepip; print(ensurepip.__file__); print(ensurepip.version())' 2>&1 — approved
+  ⚙ bash ls -la /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info 2>…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  │ `ensurepip` is intact, which means the repair path exists locally. Let me…
+[approval] bash: ls -la /usr/local/lib/python3.13/ensurepip/_bundled 2>&1; echo '=== installer:'; cat /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/INSTALLER 2>&1 — approved
+  ⚙ bash ls -la /usr/local/lib/python3.13/ensurepip/_bundled 2>&1; echo '=== in…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: echo '=== top_level:'; cat /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/top_level.txt 2>&1; echo '=== writable?'; test -w /usr/local/lib/python3.13/site-packages && echo yes || echo no; echo '=== RECORD lines mentioning /pip/:'; grep -c '^pip/' /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD 2>&1 — approved
+  ⚙ bash echo '=== top_level:'; cat /usr/local/lib/python3.13/site-packages/pip…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+  │ Confirmed the exact failure: `RECORD` lists 841 files under `pip/`, but t…
+[approval] bash: python3 -m ensurepip --help 2>&1 — approved
+  ⚙ bash python3 -m ensurepip --help 2>&1
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+[approval] bash: mkdir -p /tmp/piptriage && cp -a /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info /usr/local/lib/python3.13/site-packages/README.txt /tmp/piptriage/ && echo "backup ok" && ls /tmp/piptriage — approved
+  ⚙ bash mkdir -p /tmp/piptriage && cp -a /usr/local/lib/python3.13/site-packag…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  │ `--upgrade` is the force path here. Running the repair:
+[approval] bash: cd /tmp && python3 -m ensurepip --upgrade 2>&1; echo "=== exit: $?" — approved
+  ⚙ bash cd /tmp && python3 -m ensurepip --upgrade 2>&1; echo "=== exit: $?"
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  │ ensurepip short-circuited on the stale `dist-info`, claiming success whil…
+[approval] bash: ls -la /usr/local/bin/pip3.13 2>&1; echo '=== removing broken metadata + scripts'; rm -rf /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info /usr/local/bin/pip3.13; echo "rm exit: $?"; ls /usr/local/lib/python3.13/site-packages — approved
+  ⚙ bash ls -la /usr/local/bin/pip3.13 2>&1; echo '=== removing broken metadata…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+[approval] bash: cd /tmp && python3 -m ensurepip --default-pip 2>&1; echo "=== exit: $?" — approved
+  ⚙ bash cd /tmp && python3 -m ensurepip --default-pip 2>&1; echo "=== exit: $?…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 15 tool call(s) so far
+  │ Now verifying the repair actually works end to end, not just that it repo…
+[approval] bash: echo '=== python3 -m pip:'; python3 -m pip --version 2>&1; echo '=== pip:'; pip --version 2>&1; echo '=== pip3:'; pip3 --version 2>&1; echo '=== import:'; python3 -c 'import pip, pip._internal; print("import ok", pip.__version__)' 2>&1; echo '=== package dir restored:'; ls -d /usr/local/lib/python3.13/site-packages/pip 2>&1 — approved
+  ⚙ bash echo '=== python3 -m pip:'; python3 -m pip --version 2>&1; echo '=== p…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+[approval] bash: echo '=== files under pip/ vs RECORD count:'; find /usr/local/lib/python3.13/site-packages/pip -type f 2>/dev/null | wc -l; grep -c '^pip/' /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD — approved
+  ⚙ bash echo '=== files under pip/ vs RECORD count:'; find /usr/local/lib/pyth…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 17 tool call(s) so far
+  │ 841 restored files, exactly matching `RECORD`. Now the real test — that p…
+[approval] bash: cd /tmp && python3 -m venv piptest 2>&1 | tail -3; echo "venv exit: $?"; ./piptest/bin/python -m pip --version 2>&1 — approved
+  ⚙ bash cd /tmp && python3 -m venv piptest 2>&1 | tail -3; echo "venv exit: $?…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 18 tool call(s) so far
+[approval] bash: cd /tmp && timeout 60 python3 -m pip install --no-cache-dir --dry-run six 2>&1 | tail -15; echo "=== exit: $?" — approved
+  ⚙ bash cd /tmp && timeout 60 python3 -m pip install --no-cache-dir --dry-run …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 19 tool call(s) so far
+[approval] bash: cd /tmp && ./piptest/bin/python -m pip install --no-cache-dir six 2>&1 | tail -4; echo '=== import in venv:'; ./piptest/bin/python -c 'import six; print("six", six.__version__)' 2>&1 — approved
+  ⚙ bash cd /tmp && ./piptest/bin/python -m pip install --no-cache-dir six 2>&1…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 20 tool call(s) so far
+[approval] bash: echo '=== scripts:'; ls -la /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.13 2>&1; echo '=== pip check:'; python3 -m pip check 2>&1; echo '=== system pip list:'; python3 -m pip list 2>&1 — approved
+  ⚙ bash echo '=== scripts:'; ls -la /usr/local/bin/pip /usr/local/bin/pip3 /us…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 21 tool call(s) so far
+  │ All green. Final consolidated check that fails loudly if anything regress…
+[approval] bash: cat > /tmp/verify_pip.sh <<'EOF'
+#!/bin/sh
+fail=0
+chk() { if eval "$2" >/dev/null 2>&1; then echo "PASS  $1"; else echo "FAIL  $1"; fail=1; fi; }
+
+chk "python3 -m pip --version"        'python3 -m pip --version'
+chk "pip --version (bare)"            'pip --version'
+chk "pip3 --version"                  'pip3 --version'
+chk "import pip"                      'python3 -c "import pip"'
+chk "pip.__version__ == 24.3.1"       'python3 -c "import pip; assert pip.__version__==\"24.3.1\""'
+chk "pip submodules importable"       'python3 -c "from pip._internal.cli.main import main"'
+chk "site-packages/pip exists"        'test -d /usr/local/lib/python3.13/site-packages/pip'
+chk "no stale/missing-file state"     'python3 -m pip check'
+chk "pip list runs"                   'python3 -m pip list'
+chk "pip can resolve a real install"  'python3 -m pip install --dry-run --no-cache-dir six'
+
+n=$(find /usr/local/lib/python3.13/site-packages/pip -type f | wc -l)
+r=$(grep -c '^pip/' /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD)
+if [ "$n" = "$r" ]; then echo "PASS  file count matches RECORD ($n)"; else echo "FAIL  file count $n != RECORD $r"; fail=1; fi
+
+echo "---"
+[ "$fail" = 0 ] && echo "ALL CHECKS PASSED" || echo "SOME CHECKS FAILED"
+exit $fail
+EOF
+sh /tmp/verify_pip.sh; echo "script exit: $?" — approved
+  ⚙ bash cat > /tmp/verify_pip.sh <<'EOF' #!/bin/sh fail=0 chk() { if eval "$2"…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 22 tool call(s) so far
+[approval] bash: rm -rf /tmp/piptest && echo "test venv removed"; ls /tmp/piptriage — approved
+  ⚙ bash rm -rf /tmp/piptest && echo "test venv removed"; ls /tmp/piptriage
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 23 tool call(s) so far
+## What was wrong
+
+It wasn't a permissions or network problem — the `pip` **package directory had been deleted**, leaving only its metadata behind.
+
+`site-packages` contained:
+
+```
+README.txt
+pip-24.3.1.dist-info/     ← metadata claiming pip 24.3.1 is installed
+```
+
+…but no `pip/` directory. `RECORD` listed 841 files under `pip/`, and none of them existed. So `/usr/local/bin/pip` was a real launcher whose shebang pointed at a working `python3.13`, and it died on line 5:
+
+```
+ModuleNotFoundError: No module named 'pip'
+```
+
+That's the confusing part of this failure mode: the `pip` command exists, the metadata says pip is installed, and `--version` still fails, because nothing can import it.
+
+## The trap I hit first
+
+The obvious repair, `python3 -m ensurepip --upgrade`, **silently did nothing** and exited 0:
+
+```
+Requirement already satisfied: pip in /usr/local/lib/python3.13/site-packages (24.3.1)
+```
+
+`ensurepip` trusts the leftover `dist-info` and concludes pip is fine. The stale metadata has to be cleared before it will reinstall from the bundled wheel.
+
+## The fix
+
+The offline wheel `ensurepip/_bundled/pip-24.3.1-py3-none-any.whl` was intact, so no network was needed:
+
+1. Backed up the broken metadata to `/tmp/piptriage/`.
+2. Removed `site-packages/pip-24.3.1.dist-info` and the orphaned `/usr/local/bin/pip3.13`.
+3. `python3 -m ensurepip --default-pip` → reinstalled pip 24.3.1 from the local wheel.
+
+## Verification
+
+`/tmp/verify_pip.sh` — I wrote it to fail if any of this regresses, and it passes end to end:
+
+```
+PASS  python3 -m pip --version
+PASS  pip --version (bare)
+PASS  pip3 --version
+PASS  import pip
+PASS  pip.__version__ == 24.3.1
+PASS  pip submodules importable
+PASS  site-packages/pip exists
+PASS  no stale/missing-file state
+PASS  pip list runs
+PASS  pip can resolve a real install
+PASS  file count matches RECORD (841)
+---
+ALL CHECKS PASSED
+```
+
+The last check is the one that matters most for your symptom: I did a genuine `pip install six` in a throwaway venv (`Successfully installed six-1.17.0`, then `import six` → `1.17.0`), and a `--dry-run` install against the network. Both work. `pip check` reports `No broken requirements found.`
+
+## Two things worth noting
+
+- **This was damage, not misconfiguration.** The directory was deleted at some point (note the site-packages mtime of Oct 31 vs the package files' Jan 14) — likely a manual `rm`, or an interrupted/interleaved install. It'll recur if whatever deleted it runs again; check any cleanup or image-pruning scripts that touch `site-packages`.
+- **pip 24.3.1 is behind** (26.2.2 is current). I deliberately left it — you asked me to fix a broken install, not to change your package versions. `python3 -m pip install --upgrade pip` when you want it.
+
+Backup of the broken metadata is at `/tmp/piptriage/` if you want to inspect it; delete it whenever. The script is at `/tmp/verify_pip.sh`.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=23 surface=a57c8a7444d5

@@ -1,0 +1,334 @@
+[?2004hroot@90ba06d7c50e:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@90ba06d7c50e:/app# clear
+[?2004l[H[J[3J[?2004hroot@90ba06d7c50e:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@90ba06d7c50e:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION= 1.57.0
+ARM_SETUP_END=1793521079
+[?2004hroot@90ba06d7c50e:/app# cat > ~/terminal-bench-recipe.yaml << 'EOF'
+[?2004l[?2004h> description: terminal-bench recipe
+[?2004l[?2004h> instructions: You are given a task and you need to complete it. You are currently
+[?2004l[?2004h>   executing in a docker container where you are being evaluated on a benchmark for
+[?2004l[?2004h>   LLM agents. Act autonomously. You will not receive any feedback on your progress,
+[?2004l[?2004h>   so you must use your own tools to complete the task without any intervention.
+[?2004l[?2004h> prompt: There's something wrong with my system-wide python installation - I can't
+[?2004l[?2004h>   seem to install packages with pip.
+[?2004l[?2004h> title: terminal-bench
+[?2004l[?2004h> version: 1.0.0
+[?2004l[?2004h> EOF
+[?2004l[?2004hroot@90ba06d7c50e:/app# goose run --recipe ~/terminal-bench-recipe.yaml; tmux wait -S done
+[?2004l[32m[1mLoading recipe:[0m [32mterminal-bench[0m
+[1mDescription:[0m terminal-bench recipe
+
+]0;🪿 app
+  [37m  __( O)>[0m  [32m●[0m [2mnew session[0m [2m·[0m [2mopenai[0m [36mdeepseek-v4.1-flash[0m
+  [37m \____)[0m  [2m [0m [2m20261101_1[0m [2m· /app[0m
+  [37m   L L[0m  [37m   goose is ready[0m
+[37mI'll investigate[0m[37m your Python installation and[0m[37m pip configuration.[0m
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mwhich -a python python3 pip pip3 2>&1; echo "---"; python3 --version 2>&1; echo "---"; pip3 --version 2>&1; echo "---"; cat /etc/os-release 2>&1...[0m
+
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mecho "== pip config =="; pip3 config list 2>&1; echo "== env vars =="; env | grep -i -E "pip|python|virtual" 2>&1; echo "== pip.conf files =="; ...[0m
+
+    [2m/usr/local/bin/python[0m
+    [2m/usr/local/bin/python3[0m
+    [2m/usr/bin/python3[0m
+    [2m/bin/python3[0m
+    [2m/usr/local/bin/pip[0m
+    [2m/usr/local/bin/pip3[0m
+    [2m---[0m
+    [2mPython 3.13.1[0m
+    [2m---[0m
+    [2mTraceback (most recent call last):[0m
+    [2m  File "/usr/local/bin/pip3", line 5, in <module>[0m
+    [2m    from pip._internal.cli.main import main[0m
+    [2mModuleNotFoundError: No module named 'pip'[0m
+    [2m---[0m
+    [2mPRETTY_NAME="Debian GNU/Linux 12 (bookworm)"[0m
+    [2mNAME="Debian GNU/Linux"[0m
+    [2mVERSION_ID="12"[0m
+    [2mVERSION="12 (bookworm)"[0m
+    [2mVERSION_CODENAME=bookworm[0m
+    [2m== pip config ==[0m
+    [2mTraceback (most recent call last):[0m
+    [2m  File "/usr/local/bin/pip3", line 5, in <module>[0m
+    [2m    from pip._internal.cli.main import main[0m
+    [2mModuleNotFoundError: No module named 'pip'[0m
+    [2m== env vars ==[0m
+    [2mPYTHON_SHA256=9cf9427bee9e2242e3877dd0f6b641c1853ca461f39d6503ce260a59c80bf0d9[0m
+    [2mPYTHON_VERSION=3.13.1[0m
+    [2m== pip.conf files ==[0m
+    [2mls: cannot access '/etc/pip.conf': No such file or directory[0m
+    [2mls: cannot access '/root/.pip/pip.conf': No such file or directory[0m
+    [2mls: cannot access '/root/.config/pip/pip.conf': No such file or directory[0m
+    [2m[0m
+    [2mCommand exited with code 2[0m
+[37mFound it —[0m[37m `pip` the[0m[37m script exists but the [0m[32m`[0m[32mpip[0m[32m`[0m[37m [0m[1;33m**[0m[1;33mmodule[0m[1;33m**[0m[37m is gone[0m[37m from site[0m[37m-packages. Let me confirm[0m[37m scope[0m[37m.[0m
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mpython3 -c "import sys, site; print(sys.prefix); print(sys.executable); print(site.getsitepackages())" 2>&1; echo "== site-packages =="; ls /usr...[0m
+
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mecho "== stdlib check =="; python3 -c "import json, ssl, sqlite3, ctypes, zlib, lzma, bz2, hashlib, decimal, email, http.client; print('stdlib O...[0m
+
+    [2m== stdlib check ==[0m
+    [2mstdlib OK[0m
+    [2m== /usr/bin/python3 ==[0m
+    [2mPython 3.11.2[0m
+    [2m/usr/bin/python3: No module named pip[0m
+    [2m[0m
+    [2mCommand exited with code 1[0m
+    [2m/usr/local[0m
+    [2m/usr/local/bin/python3[0m
+    [2m['/usr/local/lib/python3.13/site-packages'][0m
+    [2m== site-packages ==[0m
+    [2mREADME.txt[0m
+    [2mpip-24.3.1.dist-info[0m
+    [2m== ensurepip ==[0m
+    [2m/usr/local/lib/python3.13/ensurepip/__init__.py[0m
+[32m`[0m[32mpip[0m[32m`[0m[37m's package[0m[37m directory was[0m[37m deleted while its[0m[37m metadata[0m[37m ([0m[32m`[0m[32mpip-24.3.1.dist-info[0m[32m`[0m[37m) remained[0m[37m. Let me confirm and[0m[37m repair[0m[37m.[0m
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mls -la /usr/local/lib/python3.13/site-packages/; echo "== RECORD head =="; head -5 /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/...[0m
+
+    [2mtotal 24[0m
+    [2mdrwxr-xr-x 1 root root 4096 Oct 31 13:45 .[0m
+    [2mdrwxr-xr-x 1 root root 4096 Jan 14  2025 ..[0m
+    [2m-rw-r--r-- 1 root root  119 Jan 14  2025 README.txt[0m
+    [2mdrwxr-xr-x 2 root root 4096 Jan 14  2025 pip-24.3.1.dist-info[0m
+    [2m== RECORD head ==[0m
+    [2m../../../bin/pip3,sha256=0b9s6uF-112mlJv1gtUrMFJh6BKXbpJf0_WlXw7hrMo,230[0m
+    [2m../../../bin/pip3.13,sha256=0b9s6uF-112mlJv1gtUrMFJh6BKXbpJf0_WlXw7hrMo,230[0m
+    [2mpip-24.3.1.dist-info/AUTHORS.txt,sha256=Cbb630k8EL9FkBzX9Vpi6hpYWrLSlh08eXodL5u0eLI,10925[0m
+    [2mpip-24.3.1.dist-info/INSTALLER,sha256=zuuue4knoyJ-UwPPXg8fezS7VCrXJQrAP7zeNuwvFQg,4[0m
+    [2mpip-24.3.1.dist-info/LICENSE.txt,sha256=Y0MApmnUmurmWxLGxIySTFGkzfPR_whtw0VtyLyqIQQ,1093[0m
+    [2m== README ==[0m
+    [2mThis directory exists so that 3rd party packages can be installed[0m
+    [2mhere.  Read the source for site.py for more details.[0m
+[37mConfirmed[0m[37m diagnosis[0m[37m. The[0m[37m [0m[32m`[0m[32mpip/[0m[32m`[0m[37m package directory was[0m[37m deleted;[0m[37m only leftover[0m[37m `dist-info` metadata[0m[37m remains,[0m[37m which is why the[0m[37m [0m[32m`[0m[32mpip3[0m[32m`[0m[37m script exists[0m[37m but crashes[0m[37m. Let me repair it.[0m
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && python3 -m ensurepip --upgrade --default-pip 2>&1 | tail -20[0m
+
+    [2mLooking in links: /tmp/tmpin9l9jwe[0m
+    [2mRequirement already satisfied: pip in /usr/local/lib/python3.13/site-packages (24.3.1)[0m
+    [2mWARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable.It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.[0m
+[32m`[0m[32mensurepip[0m[32m`[0m[37m skipped[0m[37m because of[0m[37m the stale metadata. I[0m[37m'll remove the orphan[0m[37med [0m[32m`[0m[32mdist-info[0m[32m`[0m[37m and[0m[37m re-run so[0m[37m it install[0m[37ms from its[0m[37m bundled wheel.[0m
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mls /usr/local/lib/python3.13/ensurepip/_bundled/ 2>&1; echo "== dist-info contents =="; ls -la /usr/local/lib/python3.13/site-packages/pip-24.3....[0m
+
+    [2mpip-24.3.1-py3-none-any.whl[0m
+    [2m== dist-info contents ==[0m
+    [2mtotal 112[0m
+    [2mdrwxr-xr-x 2 root root  4096 Jan 14  2025 .[0m
+    [2mdrwxr-xr-x 1 root root  4096 Oct 31 13:45 ..[0m
+    [2m-rw-r--r-- 1 root root 10925 Jan 14  2025 AUTHORS.txt[0m
+    [2m-rw-r--r-- 1 root root     4 Jan 14  2025 INSTALLER[0m
+    [2m-rw-r--r-- 1 root root  1093 Jan 14  2025 LICENSE.txt[0m
+    [2m-rw-r--r-- 1 root root  3677 Jan 14  2025 METADATA[0m
+    [2m-rw-r--r-- 1 root root 65525 Jan 14  2025 RECORD[0m
+    [2m-rw-r--r-- 1 root root     0 Jan 14  2025 REQUESTED[0m
+    [2m-rw-r--r-- 1 root root    91 Jan 14  2025 WHEEL[0m
+    [2m-rw-r--r-- 1 root root    87 Jan 14  2025 entry_points.txt[0m
+    [2m-rw-r--r-- 1 root root     4 Jan 14  2025 top_level.txt[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && mv /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info /tmp/pip-24.3.1.dist-info.bak && python3 -m ensurepip --upgrade --def...[0m
+
+    [2mLooking in links: /tmp/tmpytrzpcsz[0m
+    [2mProcessing ./tmpytrzpcsz/pip-24.3.1-py3-none-any.whl[0m
+    [2mInstalling collected packages: pip[0m
+    [2mSuccessfully installed pip-24.3.1[0m
+    [2mWARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable.It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.[0m
+    [2m=== VERIFY ===[0m
+    [2m/usr/local/lib/python3.13/site-packages/pip[0m
+    [2mpip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)[0m
+    [2mpip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)[0m
+[37mpip is restored. Now let[0m[37m me verify an[0m[37m actual package install works end-to[0m[37m-end (including[0m[37m network/[0m[37mSSL[0m[37m).[0m
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && timeout 120 python3 -m pip install --no-cache-dir six 2>&1 | tail -15[0m
+
+    [2mCollecting six[0m
+    [2m  Downloading six-1.17.0-py2.py3-none-any.whl.metadata (1.7 kB)[0m
+    [2mDownloading six-1.17.0-py2.py3-none-any.whl (11 kB)[0m
+    [2mInstalling collected packages: six[0m
+    [2mSuccessfully installed six-1.17.0[0m
+    [2mWARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable.It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.[0m
+    [2m[0m
+    [2m[notice] A new release of pip is available: 24.3.1 -> 26.2.2[0m
+    [2m[notice] To update, run: pip install --upgrade pip[0m
+[37mWorking[0m[37m.[0m[37m Let me clean up the test[0m[37m package[0m[37m and verify[0m[37m nothing[0m[37m else is broken.[0m
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && python3 -m pip uninstall -y six 2>&1 | tail -3; echo "== pip check =="; python3 -m pip check 2>&1; echo "== pip list =="; python3 -m ...[0m
+
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mecho "== other python entry points =="; ls /usr/local/lib/python3.13/site-packages/ ; echo "== ensurepip wheels intact =="; ls -la /usr/local/li...[0m
+
+    [2m== other python entry points ==[0m
+    [2mREADME.txt[0m
+    [2m__pycache__[0m
+    [2mpip[0m
+    [2mpip-24.3.1.dist-info[0m
+    [2msix-1.17.0.dist-info[0m
+    [2msix.py[0m
+    [2m== ensurepip wheels intact ==[0m
+    [2mtotal 1792[0m
+    [2mdrwxr-xr-x 2 root root    4096 Jan 14  2025 .[0m
+    [2mdrwxr-xr-x 1 root root    4096 Jan 14  2025 ..[0m
+    [2m-rw-r--r-- 1 root root 1822182 Jan 14  2025 pip-24.3.1-py3-none-any.whl[0m
+    [2m== setuptools ==[0m
+    [2mTraceback (most recent call last):[0m
+    [2m  File "<string>", line 1, in <module>[0m
+    [2m    import setuptools; print(setuptools.__version__)[0m
+    [2m    ^^^^^^^^^^^^^^^^^[0m
+    [2mModuleNotFoundError: No module named 'setuptools'[0m
+    [2m[0m
+    [2mCommand exited with code 1[0m
+    [2mUninstalling six-1.17.0:[0m
+    [2m  Successfully uninstalled six-1.17.0[0m
+    [2mWARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable.It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.[0m
+    [2m== pip check ==[0m
+    [2mNo broken requirements found.[0m
+    [2m== pip list ==[0m
+    [2mPackage Version[0m
+    [2m------- -------[0m
+    [2mpip     24.3.1[0m
+    [2m== scripts ==[0m
+    [2m-rwxr-xr-x 1 root root 227 Nov  1 08:18 /usr/local/bin/pip[0m
+    [2m-rwxr-xr-x 1 root root 227 Nov  1 08:18 /usr/local/bin/pip3[0m
+    [2m-rwxr-xr-x 1 root root 227 Nov  1 08:18 /usr/local/bin/pip3.13[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mls /usr/local/lib/python3.13/site-packages/; echo "== six gone? =="; python3 -c "import six" 2>&1 | tail -1[0m
+
+    [2mREADME.txt[0m
+    [2mpip[0m
+    [2mpip-24.3.1.dist-info[0m
+    [2m== six gone? ==[0m
+    [2mModuleNotFoundError: No module named 'six'[0m
+[37mpip[0m[37m is clean and[0m[37m working. Let me validate[0m[37m the harder[0m[37m case — building from[0m[37m source[0m[37m (which[0m[37m needs[0m[37m the [0m[32m`[0m[32msetuptools[0m[32m`[0m[37m build backend[0m[37m, absent[0m[37m since[0m[37m Python 3.13's[0m[37m `ensurepip` no longer[0m[37m ships it).[0m
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && timeout 180 python3 -m pip install --no-cache-dir --no-binary :all: charset-normalizer 2>&1 | tail -12[0m
+
+    [2mBuilding wheels for collected packages: charset-normalizer[0m
+    [2m  Building wheel for charset-normalizer (pyproject.toml): started[0m
+    [2m  Building wheel for charset-normalizer (pyproject.toml): finished with status 'done'[0m
+    [2m  Created wheel for charset-normalizer: filename=charset_normalizer-3.5.2-py3-none-any.whl size=68872 sha256=54c6b8dde2b003f877f7d69b583a835ecbad381c29c038d4e69c1a1a7589e38e[0m
+    [2m  Stored in directory: /tmp/pip-ephem-wheel-cache-kiiv40d1/wheels/f4/05/90/ca8ca36e9b5abbe220fe6470cee36910df5851c096b28be4fc[0m
+    [2mSuccessfully built charset-normalizer[0m
+    [2mInstalling collected packages: charset-normalizer[0m
+    [2mSuccessfully installed charset-normalizer-3.5.2[0m
+    [2mWARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable.It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.[0m
+    [2m[0m
+    [2m[notice] A new release of pip is available: 24.3.1 -> 26.2.2[0m
+    [2m[notice] To update, run: pip install --upgrade pip[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && python3 -m pip uninstall -y charset-normalizer 2>&1 | grep -i success; echo "=== FINAL STATE ==="; python3 -m pip --version; pip --ve...[0m
+
+    [2m  Successfully uninstalled charset-normalizer-3.5.2[0m
+    [2m=== FINAL STATE ===[0m
+    [2mpip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)[0m
+    [2mpip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)[0m
+    [2mpip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)[0m
+    [2mNo broken requirements found.[0m
+    [2mPackage Version[0m
+    [2m------- -------[0m
+    [2mpip     24.3.1[0m
+    [2m=== install smoke test (dry) ===[0m
+    [2m[0m
+    [2m[notice] A new release of pip is available: 24.3.1 -> 26.2.2[0m
+    [2m[notice] To update, run: pip install --upgrade pip[0m
+
+  [2m────────────────────────────────────────[0m
+  [2m▸[0m [2mshell[0m
+    [2mcommand[0m: [32mcd /tmp && python3 -m pip install --dry-run --no-cache-dir requests 2>&1 | grep -E "Would install|Collecting|ERROR" | head -6[0m
+
+    [2mCollecting requests[0m
+    [2mCollecting charset_normalizer<4,>=2 (from requests)[0m
+    [2mCollecting idna<4,>=2.5 (from requests)[0m
+    [2mCollecting urllib3<3,>=1.26 (from requests)[0m
+    [2mCollecting certifi>=2023.5.7 (from requests)[0m
+    [2mWould install certifi-2026.10.23 charset-normalizer-3.5.2 idna-3.20 requests-2.34.2 urllib3-2.8.0[0m
+[37mFixed. Here's what[0m[37m was wrong[0m[37m and what I did[0m[37m.[0m
+
+[34m##[0m[37m [0m[34mRoot cause[0m
+
+[37mYour[0m[37m [0m[32m`[0m[32mpip[0m[32m`[0m[37m [0m[1;33m**[0m[1;33mlauncher scripts existed but the actual [0m[1;32m`[0m[1;32mpip[0m[1;32m`[0m[1;33m package was deleted.[0m[1;33m**[0m
+
+[32m`[0m[32m/usr/local/lib/python3.13/site-packages/[0m[32m`[0m[37m contained only leftovers[0m[37m:[0m
+
+[37m```[0m
+[37mREADME[0m[37m.txt[0m
+[37mpip-[0m[37m24.3.1.d[0m[37mist-info/     ← metadata[0m[37m survived[0m
+[37m```[0m
+
+[37mThe [0m[32m`[0m[32mpip/[0m[32m`[0m[37m directory itself was[0m[37m gone ([0m[37msite-packages was[0m[37m last[0m[37m modified Oct 31 13[0m[37m:45,[0m[37m while the metadata[0m[37m dated[0m[37m back[0m[37m to the[0m[37m image build). So every [0m[32m`[0m[32mpip[0m[32m`[0m[37m invocation died[0m[37m at import time[0m[37m:[0m
+
+[37m```[0m
+[37m$[0m[37m pip[0m[37m3 --version[0m
+[37mTrace[0m[37mback (most recent call last[0m[37m):[0m
+[37m  File "/usr/local[0m[37m/bin/pip3", line[0m[37m 5, in <module[0m[38;5;9m>[0m
+[38;5;9m    from pip.[0m[35m_[0m[35minternal.cli.main import main[0m
+[35mModuleNotFoundError: No module named 'pip'[0m
+[35m```[0m
+
+[35mThis is a classic half-deleted install: something removed the package tree but left `dist-info` behind. That leftover metadata is also why the obvious fix fails — `ensurepip` checks the metadata first:[0m
+
+[35m```[0m
+[35m$ python3 -m ensurepip --upgrade --default-pip[0m
+[35mRequirement already satisfied: pip in .../site-packages (24.3.1)   ← lies[0m
+[35m```[0m
+
+[35m## The fix[0m
+
+[35m1. Moved the orphaned metadata out of the way (backed up to `/tmp/pip-24.3.1.dist-info.bak`):[0m
+[35m   ```bash[0m
+[35m   mv /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info /tmp/pip-24.3.1.dist-info.bak[0m
+[35m   [0m[35m```[0m
+[37m2. Re-ran [0m[32m`[0m[32mensurepip[0m[32m`[0m[37m, which then installed cleanly from its bundled wheel:[0m
+[37m   [0m[37m```[0m[38;5;9mbash[0m
+[37m   [0m[37mpython3[0m[37m -[0m[37mm[0m[37m ensurepip[0m[37m --[0m[37mupgrade[0m[37m --[0m[37mdefault-pip[0m
+[37m   [0m[38;5;8m#[0m[38;5;8m Successfully installed pip-24.3.1[0m
+[37m   [0m[37m```[0m
+
+[34m##[0m[37m [0m[34mVerification[0m
+
+[37m|[0m[37m Check [0m[37m|[0m[37m Result [0m[37m|[0m
+[37m|[0m[37m---[0m[37m|[0m[37m---[0m[37m|[0m
+[37m|[0m[37m [0m[32m`[0m[32mpython3 -m pip --version[0m[32m`[0m[37m [0m[37m|[0m[37m [0m[32m`[0m[32mpip 24.3.1 ... (python 3.13)[0m[32m`[0m[37m [0m[37m|[0m
+[37m|[0m[37m [0m[32m`[0m[32mpip --version[0m[32m`[0m[37m / [0m[32m`[0m[32mpip3 --version[0m[32m`[0m[37m [0m[37m|[0m[37m OK [0m[37m|[0m
+[37m|[0m[37m [0m[32m`[0m[32mpip check[0m[32m`[0m[37m [0m[37m|[0m[37m No broken requirements found [0m[37m|[0m
+[37m|[0m[37m Wheel install ([0m[32m`[0m[32msix[0m[32m`[0m[37m) [0m[37m|[0m[37m ✅ installed, then removed [0m[37m|[0m
+[37m|[0m[37m [0m[1;33m**[0m[1;33mSource build[0m[1;33m**[0m[37m ([0m[32m`[0m[32m--no-binary :all: charset-normalizer[0m[32m`[0m[37m) [0m[37m|[0m[37m ✅ built + installed, then removed [0m[37m|[0m
+[37m|[0m[37m Dependency resolution ([0m[32m`[0m[32mrequests[0m[32m`[0m[37m dry-run) [0m[37m|[0m[37m ✅ resolves all 5 deps [0m[37m|[0m
+
+[37mI uninstalled the test packages afterwards, so site-packages is back to just [0m[32m`[0m[32mpip[0m[32m`[0m[37m.[0m
+
+[34m##[0m[37m [0m[34mTwo things worth knowing[0m
+
+[37m-[0m[37m [0m[1;33m**[0m[1;32m`[0m[1;32m/usr/bin/python3[0m[1;32m`[0m[1;33m (Python 3.11) has no pip either.[0m[1;33m**[0m[37m That's Debian's own interpreter, separate from your [0m[32m`[0m[32m/usr/local/bin/python3[0m[32m`[0m[37m (3.13.1) that owns [0m[32m`[0m[32mpip[0m[32m`[0m[37m/[0m[32m`[0m[32mpip3[0m[32m`[0m[37m. It was already that way and isn't what was broken. If you need it, use [0m[32m`[0m[32mapt install python3-pip[0m[32m`[0m[37m rather than touching [0m[32m`[0m[32m/usr/local[0m[32m`[0m[37m.[0m
+[37m-[0m[37m [0m[1;33m**[0m[1;32m`[0m[1;32msetuptools[0m[1;32m`[0m[1;33m isn't installed[0m[1;33m**[0m[37m — that's normal for Python 3.13, whose [0m[32m`[0m[32mensurepip[0m[32m`[0m[37m no longer bundles it. Modern pip uses build isolation and fetches build backends on demand, which the source-build test above confirmed. Only install it if you use legacy tooling that does its own [0m[32m`[0m[32msetup.py[0m[32m`[0m[37m imports.[0m
+
+[37mTo avoid recurrence, prefer virtualenvs ([0m[32m`[0m[32mpython3 -m venv .venv[0m[32m`[0m[37m) rather than installing into site-packages directly — a stray [0m[32m`[0m[32mrm -rf[0m[32m`[0m[37m can't break your interpreter that way.[0m
+[?2004hroot@90ba06d7c50e:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@90ba06d7c50e:/app# 

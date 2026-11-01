@@ -1,0 +1,35 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+KLEE 3.1 is installed and working with the STP solver on LLVM 16, without uClibc.
+
+## What was built and installed (all under `/usr/local`)
+
+| Component | Version | Notes |
+|---|---|---|
+| MiniSat | 2.1.0 (`stp/minisat` fork) | STP's SAT backend; not packaged in Ubuntu 24.04 |
+| STP | 2.3.4 (upstream reports 2.3.3) | `-DENABLE_PYTHON_INTERFACE=OFF`, shared libs, `/usr/local/lib/cmake/STP` |
+| KLEE | 3.1 (`fe22b90`) | `ENABLE_SOLVER_STP=ON`, `ENABLE_KLEE_UCLIBC=OFF`, `ENABLE_POSIX_RUNTIME=OFF`, LLVM 16.0.6 |
+
+Build dependencies installed: `cmake`, `ninja-build`, `build-essential`, `bison`, `flex`, `libboost-all-dev`, `libgmp-dev`, `libgoogle-perftools-dev`, `libsqlite3-dev`, `zlib1g-dev`, `libedit-dev`, `pkg-config`.
+
+KLEE's RPATH already covers `/usr/local/lib` and `/usr/lib/llvm-16/lib`, and I also added `/etc/ld.so.conf.d/usr-local.conf` + `ldconfig` so `libstp`/`libminisat` resolve without extra env vars.
+
+## Environment in `~/.bashrc`
+
+Ubuntu's `.bashrc` returns early for non-interactive shells (`[ -z "$PS1" ] && return` at line 8), which would have skipped any exports appended at the bottom when a test does `source ~/.bashrc`. So the block is placed **above** that early return, and it is idempotent:
+
+```bash
+case ":$PATH:" in *:/usr/local/bin:*) ;; *) export PATH="/usr/local/bin:$PATH" ;; esac
+case ":$CPATH:" in *:/usr/local/include:*) ;; *) export CPATH="/usr/local/include${CPATH:+:$CPATH}" ;; esac
+case ":$LD_LIBRARY_PATH:" in *:/usr/local/lib:*) ;; *) export LD_LIBRARY_PATH="/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;; esac
+```
+
+`CPATH=/usr/local/include` makes `#include <klee/klee.h>` resolvable with no `-I` flag (header installed at `/usr/local/include/klee/klee.h`).
+
+## Verification (run from `bash -c 'source ~/.bashrc; ...'`)
+
+- `command -v klee` → `/usr/local/bin/klee`; `klee --version` → `KLEE 3.1`, `Build mode: Release (Asserts: ON)`, `Ubuntu LLVM version 16.0.6`
+- Compiled a test program with plain `clang-16 -emit-llvm -c -g -O0` (no `-I`) — header resolved purely via `CPATH`
+- `klee add.bc` → `KLEE: Using STP solver backend`, `SAT solver: MiniSat`, symbolic `a+b == 7` assertion found, 2 `.ktest` files generated (STP is the default backend, no flag needed)
+- No uClibc present anywhere; `POSIX runtime disabled`, `klee-uclibc runtime` copy skipped
+
+Sources/build trees remain in `/tmp/{minisat,stp,klee}{,-build}` (~70 MB) in case you want to rebuild or run KLEE's own test suites.

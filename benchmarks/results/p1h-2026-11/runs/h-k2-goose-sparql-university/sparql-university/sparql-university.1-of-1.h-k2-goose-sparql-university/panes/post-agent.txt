@@ -1,0 +1,443 @@
+root@6f3c03f00b21:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+root@6f3c03f00b21:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+ARM_VERSION= 1.57.0
+ARM_SETUP_END=1793514579
+root@6f3c03f00b21:/app# cat > ~/terminal-bench-recipe.yaml << 'EOF'
+> description: terminal-bench recipe
+> instructions: You are given a task and you need to complete it. You are currently
+>   executing in a docker container where you are being evaluated on a benchmark for
+>   LLM agents. Act autonomously. You will not receive any feedback on your progress,
+>   so you must use your own tools to complete the task without any intervention.
+> prompt: "You are provided with a Turtle file at `/app/university_graph.ttl` containing\
+>   \ both the ontology and the instance data for a knowledge graph describing universities,\
+>   \ departments, employees, students, classes, and related information.\n\nYour task:\n\
+>   - Create a SPARQL query that retrieves all professors meeting all of the following\
+>   \ criteria:\n    1. They are full professors.\n    2. They work in at least one\
+>   \ department of a university located in a European Union country.\n    3. Among\
+>   \ all departments they work in, at least one has more than 10 students currently\
+>   \ enrolled in any classes taught in that department.\n\nUse 2025-08-16 as the reference\
+>   \ (today) date wherever needed.\nFor the purpose of this task, assume that \"European\
+>   \ Union countries\" refers to the official EU member states as of 2025-08-16 (the\
+>   \ reference date).\nIn the knowledge graph, countries are represented using their\
+>   \ two-letter ISO 3166-1 alpha-2 codes as string values.\nFor example, Greece is\
+>   \ represented as \"GR\".\n\nThe query should return: \n```\nSELECT ?professorName\
+>   \ (GROUP_CONCAT(DISTINCT ?country; separator=\", \") AS ?countries)\n``` \nwhere\
+>   \ ?professorName is the professor's name, and ?countries lists all countries where\
+>   \ the professor currently works in.\nSave your query in `/app/solution.sparql`."
+> title: terminal-bench
+> version: 1.0.0
+> EOF
+root@6f3c03f00b21:/app# goose run --recipe ~/terminal-bench-recipe.yaml; tmux wait -S done
+Loading recipe: terminal-bench
+Description: terminal-bench recipe
+
+
+    __( O)>  ● new session · openai deepseek-v4.1-flash
+   \____)    20261101_1 · /app
+     L L     goose is ready
+I'll start by examining the Turtle file to understand the ontology and data.
+  ────────────────────────────────────────
+  ▸ shell
+    command: wc -l /app/university_graph.ttl && head -200 /app/university_graph.ttl
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: ls -la /app
+
+    305 /app/university_graph.ttl
+    @prefix uni: <http://university.org/ontology/> .
+    @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+    # ---------------------------
+    # Universities
+    # ---------------------------
+    uni:ETHZurich a uni:University ;
+        uni:hasName "ETH Zurich" ;
+        uni:locatedInCountry "CH" .
+    ... (181 lines hidden, /toggle to show all)
+        uni:hasName "Sofia Conti" ;
+        uni:role "Student" .
+
+    uni:Student10 a uni:Person ;
+        uni:hasName "Elias Jensen" ;
+        uni:role "Student" .
+
+    uni:Student11 a uni:Person ;
+        uni:hasName "Clara Novak" ;
+        uni:role "Student" .
+    total 20
+    drwxr-xr-x 1 root root  4096 Nov  1 06:29 .
+    drwxr-xr-x 1 root root  4096 Nov  1 06:29 ..
+    -rw-rw-r-- 1 root root 10481 Oct 31 09:48 university_graph.ttl
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: sed -n 200,305p /app/university_graph.ttl
+
+        uni:role "Student" .
+
+    uni:Student12 a uni:Person ;
+        uni:hasName "Liam Schneider" ;
+        uni:role "Student" .
+
+    uni:Student13 a uni:Person ;
+        uni:hasName "Mia Laurent" ;
+        uni:role "Student" .
+
+    ... (86 lines hidden, /toggle to show all)
+    uni:Student18 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-07-12"^^xsd:date.
+    uni:Student19 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-12"^^xsd:date.
+    uni:Student20 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-15"^^xsd:date.
+    uni:Student21 uni:isEnrolledIn uni:Math201, uni:STS101 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-12"^^xsd:date.
+    uni:Student22 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-12"^^xsd:date.
+    uni:Student23 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-11"^^xsd:date.
+    uni:Student24 uni:isEnrolledIn uni:Math201, uni:STS101 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2026-06-12"^^xsd:date.
+    uni:Student25 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-12"^^xsd:date.
+    uni:Student26 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-02"^^xsd:date.
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: tail -15 /app/university_graph.ttl | cat -A | tail -5; echo ---; sed -n '290,305p' /app/university_graph.ttl
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: which arq sparql riot rdfpipe python3; python3 -c "import rdflib; print(rdflib.__version__)"
+
+    uni:Student23 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-11"^^xsd:date.^M$
+    uni:Student24 uni:isEnrolledIn uni:Math201, uni:STS101 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2026-06-12"^^xsd:date.^M$
+    uni:Student25 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-12"^^xsd:date.^M$
+    uni:Student26 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-02"^^xsd:date.^M$
+    ^M$
+    ---
+
+    uni:Student13 uni:isEnrolledIn uni:Math201, uni:EngUS302, uni:STS101 ; uni:hasEnrollmentDate "2024-01-10"^^xsd:date .
+    uni:Student14 uni:isEnrolledIn uni:Math201, uni:EngUS302, uni:STS101 ; uni:hasEnrollmentDate "2024-01-11"^^xsd:date .
+    uni:Student15 uni:isEnrolledIn uni:Math201, uni:EngUS302, uni:STS101 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date .
+    ... (2 lines hidden, /toggle to show all)
+    uni:Student18 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-07-12"^^xsd:date.
+    uni:Student19 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-12"^^xsd:date.
+    uni:Student20 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-15"^^xsd:date.
+    uni:Student21 uni:isEnrolledIn uni:Math201, uni:STS101 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-12"^^xsd:date.
+    uni:Student22 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-12"^^xsd:date.
+    uni:Student23 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-11"^^xsd:date.
+    uni:Student24 uni:isEnrolledIn uni:Math201, uni:STS101 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2026-06-12"^^xsd:date.
+    uni:Student25 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-12"^^xsd:date.
+    uni:Student26 uni:isEnrolledIn uni:Math201 ; uni:hasEnrollmentDate "2024-01-12"^^xsd:date ; uni:hasGraduationDate "2025-06-02"^^xsd:date.
+
+    /usr/bin/python3
+    Traceback (most recent call last):
+      File "<string>", line 1, in <module>
+    ModuleNotFoundError: No module named 'rdflib'
+
+    Command exited with code 1
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: grep -n "Professor\|worksIn\|role " /app/university_graph.ttl | head -60
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: pip3 install rdflib 2>&1 | tail -2
+
+    109:# Professors
+    114:    uni:role "Professor of Computer Science" ;
+    116:    uni:worksIn uni:ComputerScience_NTUA , uni:Sloan_MIT .
+    120:    uni:role "Assistant Professor of Computer Science" ;
+    122:    uni:worksIn uni:ComputerScience_NTUA .
+    126:    uni:role "Professor of Mathematics" ;
+    128:    uni:worksIn uni:Mathematics_IST , uni:ComputerScience_NTUA .
+    132:    uni:role "Professor of History of Scienceand Technology" ;
+    134:    uni:worksIn uni:HistoryAndPhilosophy_NKUA .
+    138:    uni:role "Professor of Biology" ;
+    ... (25 lines hidden, /toggle to show all)
+    240:    uni:role "Student" .
+    244:    uni:role "Student" .
+    248:    uni:role "Student" .
+    252:    uni:role "Student" .
+    256:    uni:role "Student" .
+    260:    uni:role "Student" .
+    264:    uni:role "Student" .
+    268:    uni:role "Student" .
+    272:    uni:role "Student" .
+    276:    uni:role "Student" .
+    bash: line 1: pip3: command not found
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: python3 -m pip --version 2>&1 | head -2; ls /usr/bin | grep -i -E "sparql|arq|raptor|rdf" ; apt list --installed 2>/dev/null | grep -i rdf | head
+
+    /usr/bin/python3: No module named pip
+No rdflib available, so I'll verify with a small custom evaluator over this simple data.
+  ────────────────────────────────────────
+  ▸ write
+    path /app/check.py
+    content: import re, datetime
+from collections import defaultdict
+
+txt = open('/app/university_graph.ttl', encoding='utf-8').read()
+# strip comments
+txt =...
+
+    Created /app/check.py (91 lines)
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 check.py
+
+    Traceback (most recent call last):
+      File "/app/check.py", line 36, in <module>
+        triples.append((subj, p, obj(o)))
+                                 ^^^^^^
+      File "/app/check.py", line 16, in obj
+        v = m.group(1)
+            ^^^^^^^
+    AttributeError: 'NoneType' object has no attribute 'group'
+
+    Command exited with code 1
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+import re
+txt=open('university_graph.ttl',encoding='utf-8').read()
+txt=re.sub(r'#[^\n]*','',txt).replace('\r','')
+s...
+
+    BADOBJ '"University of California' | stmt: 'uni:Berkeley a uni:University ;\n    uni:hasName "University of California, Berke'
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+import re
+p='/app/check.py'
+s=open(p).read()
+s=s.replace("""        for o in toks[1].split(','):
+            triple...
+
+    Traceback (most recent call last):
+    triples: 289
+      File "/app/check.py", line 58, in <module>
+        for s, po in g.items():
+    RuntimeError: dictionary changed size during iteration
+
+    Command exited with code 1
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+p='/app/check.py'
+s=open(p).read()
+s=s.replace("g = defaultdict(lambda: defaultdict(list))","g = defaultdict(lambda...
+
+    triples: 289
+    Traceback (most recent call last):
+      File "/app/check.py", line 61, in <module>
+        dept = g[c].get('isTaughtIn', [])
+               ~^^^
+    KeyError: 'Bio10'
+
+    Command exited with code 1
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && sed -i 's/dept = g\[c\].get/dept = g.get(c, {}).get/' check.py && python3 check.py
+
+    triples: 289
+    --- dept student counts ---
+    ComputerScience_NTUA 12
+    HistoryAndPhilosophy_NKUA 12
+    Engineering_Berkeley 11
+    Biology_MIT 7
+    Mathematics_Sorbonne 6
+    departments with >10: {'ComputerScience_NTUA', 'Engineering_Berkeley', 'HistoryAndPhilosophy_NKUA'}
+    ['Orfeas Menis']: role=['Professor of Computer Science'] depts=['ComputerScience_NTUA', 'Sloan_MIT'] countries=['GR', 'US'] eu=True bigDept=True
+    ['Pepe Attanasio']: role=['Professor of Mathematics'] depts=['Mathematics_IST', 'ComputerScience_NTUA'] countries=['GR', 'PT'] eu=True bigDept=True
+    ['Aristotle Tympas']: role=['Professor of History of Scienceand Technology'] depts=['HistoryAndPhilosophy_NKUA'] countries=['GR'] eu=True bigDept=True
+    ['John Smith']: role=['Professor of Biology'] depts=['Biology_MIT'] countries=['US'] eu=False bigDept=False
+    ['Marie Dubois']: role=['Professor of Mathematics'] depts=['Mathematics_Sorbonne'] countries=['FR'] eu=True bigDept=False
+
+    ANSWER:
+    Orfeas Menis | GR, US
+    Pepe Attanasio | GR, PT
+    Aristotle Tympas | GR
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && timeout 15 python3 -c "
+import urllib.request
+print(urllib.request.urlopen('https://pypi.org/simple/rdflib/', timeout=8).status)
+" 2>...
+
+    200
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && (python3 -m ensurepip --upgrade 2>&1 | tail -1) && python3 -m pip install -q rdflib 2>&1 | tail -2 && python3 -c "import rdflib; prin...
+
+    /usr/bin/python3: No module named ensurepip
+    /usr/bin/python3: No module named pip
+    Traceback (most recent call last):
+      File "<string>", line 1, in <module>
+    ModuleNotFoundError: No module named 'rdflib'
+
+    Command exited with code 1
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /tmp && (curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py && python3 get-pip.py --user 2>&1 | tail -3) || echo FAIL;C
+
+
+    note: If you believe this is a mistake, please contact your Python installation or OS distribution provider. You can override this, at the risk of breaking
+your Python installation or OS, by passing --break-system-packages.
+    hint: See PEP 668 for the detailed specification.
+    bash: line 1: C: command not found
+
+    Command exited with code 127
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /tmp && python3 get-pip.py --user --break-system-packages 2>&1 | tail -2; python3 -m pip install --user --break-system-packages -q rdflib 2>&...
+
+    Successfully installed pip-26.2.2
+    WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your
+system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what y
+ou are doing and want to suppress this warning.
+    WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your
+system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what y
+ou are doing and want to suppress this warning.
+    7.6.0
+
+  ────────────────────────────────────────
+  ▸ write
+    path /app/solution.sparql
+    content: PREFIX uni: <http://university.org/ontology/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+# Professors who are full professors, work in at ...
+
+    Created /app/solution.sparql (70 lines)
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+import rdflib
+from rdflib import Graph
+g = Graph()
+g.parse('university_graph.ttl', format='turtle')
+print('triples'...
+
+    triples 289
+    ['professorName', 'countries']
+    ('Aristotle Tympas', 'GR')
+    ('Orfeas Menis', 'US, GR')
+    ('Pepe Attanasio', 'PT, GR')
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+import rdflib
+from rdflib import Graph
+g=Graph(); g.parse('university_graph.ttl', format='turtle')
+q='''PREFIX uni:...
+
+    (rdflib.term.URIRef('http://university.org/ontology/CS101'), rdflib.term.Literal('12', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#integer
+')), rdflib.term.Literal('12', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#integer')))
+    (rdflib.term.URIRef('http://university.org/ontology/AI101'), rdflib.term.Literal('0', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#integer'
+)), rdflib.term.Literal('0', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#integer')))
+    (rdflib.term.URIRef('http://university.org/ontology/Math101'), rdflib.term.Literal('0', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#intege
+r')), rdflib.term.Literal('0', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#integer')))
+    (rdflib.term.URIRef('http://university.org/ontology/Math201'), rdflib.term.Literal('6', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#intege
+r')), rdflib.term.Literal('14', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#integer')))
+    (rdflib.term.URIRef('http://university.org/ontology/Physics301'), rdflib.term.Literal('0', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#int
+eger')), rdflib.term.Literal('0', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#integer')))
+    (rdflib.term.URIRef('http://university.org/ontology/Bio101'), rdflib.term.Literal('7', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#integer
+')), rdflib.term.Literal('7', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#integer')))
+    (rdflib.term.URIRef('http://university.org/ontology/Eng202'), rdflib.term.Literal('0', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#integer
+')), rdflib.term.Literal('0', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#integer')))
+    (rdflib.term.URIRef('http://university.org/ontology/EngUS302'), rdflib.term.Literal('11', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#inte
+ger')), rdflib.term.Literal('11', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#integer')))
+    (rdflib.term.URIRef('http://university.org/ontology/STS101'), rdflib.term.Literal('12', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#intege
+r')), rdflib.term.Literal('13', datatype=rdflib.term.URIRef('http://www.w3.org/2001/XMLSchema#integer')))
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && rm -f check.py && python3 - <<'EOF'
+from rdflib import Graph
+g=Graph(); g.parse('university_graph.ttl', format='turtle')
+print('Resul...
+
+    Results:
+      Aristotle Tympas | GR
+      Orfeas Menis | GR, US
+      Pepe Attanasio | PT, GR
+    total 16
+    -rw-r--r-- 1 root root  2677 Nov  1 06:30 solution.sparql
+    -rw-rw-r-- 1 root root 10481 Oct 31 09:48 university_graph.ttl
+Done. The query is saved at `/app/solution.sparql` and was verified against the graph with rdflib.
+
+## Query
+
+```sparql
+PREFIX uni: <http://university.org/ontology/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+SELECT ?professorName (GROUP_CONCAT(DISTINCT ?country; separator=", ") AS ?countries)
+WHERE {
+  # 1) full professors
+  { SELECT DISTINCT ?professor WHERE {
+      ?professor a uni:Person ; uni:role ?role .
+      FILTER(ISLITERAL(?role))
+      FILTER(STRSTARTS(STR(?role), "Professor"))
+      FILTER(!CONTAINS(LCASE(STR(?role)), "assistant"))
+      FILTER(!CONTAINS(LCASE(STR(?role)), "associate"))
+      FILTER(!CONTAINS(LCASE(STR(?role)), "adjunct"))
+      FILTER(!CONTAINS(LCASE(STR(?role)), "emeritus"))
+  } }
+
+  # 2) at least one department of a university in an EU member state
+  { SELECT DISTINCT ?professor WHERE {
+      ?professor a uni:Person ; uni:role ?role ; uni:worksIn ?euDepartment .
+      FILTER(ISLITERAL(?role)) FILTER(STRSTARTS(STR(?role), "Professor"))
+      ?euDepartment uni:belongsTo/uni:locatedInCountry ?euCountry .
+      VALUES ?euCountry { "AT" "BE" "BG" "HR" "CY" "CZ" "DK" "EE" "FI" "FR" "DE" "GR"
+                          "HU" "IE" "IT" "LV" "LT" "LU" "MT" "NL" "PL" "PT" "RO" "SK"
+                          "SI" "ES" "SE" }
+  } }
+
+  # 3) one of their departments has >10 currently enrolled students
+  { SELECT ?professor WHERE {
+      ?professor uni:worksIn ?bigDepartment .
+      ?course uni:isTaughtIn ?bigDepartment .
+      ?student uni:isEnrolledIn ?course .
+      FILTER NOT EXISTS { ?student uni:hasEnrollmentDate ?e . FILTER(?e > "2025-08-16"^^xsd:date) }
+      FILTER NOT EXISTS { ?student uni:hasGraduationDate ?gd . FILTER(?gd <= "2025-08-16"^^xsd:date) }
+    } GROUP BY ?professor ?bigDepartment
+      HAVING (COUNT(DISTINCT ?student) > 10) }
+
+  ?professor uni:hasName ?professorName ; uni:worksIn ?department .
+  ?department uni:belongsTo/uni:locatedInCountry ?country .
+}
+GROUP BY ?professorName
+ORDER BY ?professorName
+```
+
+## Result
+
+| professorName    | countries |
+|------------------|-----------|
+| Aristotle Tympas | GR        |
+| Orfeas Menis     | GR, US    |
+| Pepe Attanasio   | PT, GR    |
+Key reasoning points:
+- **Full professors** = role starting with "Professor" (excludes "Assistant Professor"; also guards against Associate/Adjunct/Emeritus).
+- **EU check** uses the 27 member states as of 2025-08-16, with ISO alpha-2 codes as used in the graph (`GR` for Greece).
+- **Currently enrolled** = enrolled on/before 2025-08-16 and no graduation date on/before that date (so e.g. Math201 drops from 14 to 6, disqualifying Marie Dub
+ois; STS101 drops from 13 to 12, keeping Aristotle Tympas).
+- Departments qualifying with >10 current students: `ComputerScience_NTUA` (12), `HistoryAndPhilosophy_NKUA` (12), `Engineering_Berkeley` (11 — US, no professor
+ assigned there).
+- `?countries` aggregates **all** countries where the professor works, hence Orfeas Menis includes `US` (Sloan_MIT) alongside `GR`.
+root@6f3c03f00b21:/app#

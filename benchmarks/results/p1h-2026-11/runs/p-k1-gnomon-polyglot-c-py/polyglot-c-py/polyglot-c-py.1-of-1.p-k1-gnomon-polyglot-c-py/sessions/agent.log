@@ -1,0 +1,63 @@
+[?2004hroot@2b0e44f23f5c:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@2b0e44f23f5c:/app# clear
+[?2004l[H[J[3J[?2004hroot@2b0e44f23f5c:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@2b0e44f23f5c:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=7012c5a6d80516891b061cc0f07ac1724b6289a0
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793494444
+[?2004hroot@2b0e44f23f5c:/app# bash /opt/gnomon-run.sh 'Write me a single file in /app/polyglot/main.py.c which is a polyglot, that is, I can run
+[?2004l[?2004h> 
+[?2004l[?2004h> `python3 /app/polyglot/main.py.c N`
+[?2004l[?2004h> or
+[?2004l[?2004h> `gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cmain N`
+[?2004l[?2004h> 
+[?2004l[?2004h> Both of these should print to stdout the kth Fibonacci number, f(0) = 0, f(1) = 1, etc.
+[?2004l[?2004h> 
+[?2004l[?2004h> I'"'"'m using python3 3.12.3 and gcc 13.2.0.'; tmux wait -S done
+[?2004l
+## How the trick works
+
+```
+#if 0            ← Python: an ordinary comment. gcc: block skipped.
+  ...Python...   ← gcc never parses it.
+_polyglot_c_source = r""""    ← opens a raw string with 4 quotes
+#endif
+  ...C...        ← Python: it is just text inside that string.
+/* """  # this closes the raw string
+```
+
+Two details that took measurement rather than assumption:
+
+- **gcc lexes skipped `#if 0` bodies line by line**, and warns (`missing terminating " character`) on any line with an odd number of quotes — even at `-w`-off defaults. So every Python line must be quote-balanced. That ruled out docstrings (`"""` alone on a line) and measured quoting, so the Python half uses `#` comments exclusively.
+- **`r""""`**: Python takes the first three quotes as the delimiter and the fourth as content, so the string opens with one trailing quote — which is what balances that line for gcc. The C half then contains free `"` and `'` (it has apostrophes in comments) with no escaping, because Python is inside a *raw* string.
+
+Neither side ever parses the other's code, so both halves are plain idiomatic code rather than deliberately obfuscated lines.
+
+## Correctness
+
+Both halves use fast doubling (O(log n)). The C half computes in `uint64_t` up to f(93) = 12200160415121876738, then switches to a base-1e9 bignum, so it is exact for *all* N, not just those fitting in 64 bits — matching Python, which is why f(20000) and f(100000) (20899 digits) agree byte-for-byte.
+
+Two real bugs found and fixed by testing, not inspection:
+1. `fib_u64` shifted a **32-bit `unsigned`** by up to 63 — undefined behaviour; x86 masked the count to `n >> 0`, fabricating a set bit at i=32 and returning garbage for n=1. Fixed by shifting a 64-bit copy.
+2. Python 3.12 refuses int→str above 4300 digits (`ValueError: Exceeds the limit`), which crashed `python3 main.py.c 20000` while the C side worked. Fixed with a guarded `sys.set_int_max_str_digits(0)`.
+
+## Verification
+
+`verify_polyglot.sh` (left in the directory) asserts every constraint and **exits 0 — ALL CHECKS PASSED**:
+
+- both exact commands from your request, run from a neutral cwd → `832040`
+- **zero warnings** from plain `gcc`, from `gcc -Wall -Wextra -std=c11 -pedantic`, and `py_compile`; also clean under `-fsanitize=address,undefined` up to f(100000), no leaks
+- both binaries vs an independent O(n) reference at k = 0–5, 10, 20, 40, **91, 92, 93, 94, 95** (the `uint64_t`/bignum seam), 200, 1000, 5000
+- cross-mode agreement at 20000 and 100000
+- bad input (`""`, `abc`, `-1`, `3x`) exits 2 in both with a one-line message and no traceback
+
+On the file name: you specified the path, so `main.py.c` it is. Note that `python3 main.py.c` and `gcc main.py.c` both work, but a bare `python3 main.py` won't — the `.c` is part of the name.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=34 surface=a57c8a7444d5
+[?2004hroot@2b0e44f23f5c:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@2b0e44f23f5c:/app# 

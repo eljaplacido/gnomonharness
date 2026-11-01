@@ -1,0 +1,1964 @@
+
+We have received a registration request for the email address
+
+    639b0dba536de13c@local.edu
+
+Before you can start using GNU Mailman at this site, you must first confirm
+that this is your email address.  You can do this by replying to this message.
+
+Or you should include the following line -- and only the following
+line -- in a message to reading-group-request@local.edu:
+
+    confirm f7e752c57541fa8b33...
+Reply to reading-group-confirm+f7e752c57541fa8b3393ff8c75d52fe15240442a@local.edu from 639b0dba536de13c@local.edu for join
+Retrying in 2 seconds...
+639b0dba536de13c has confirmed their subscription
+EXIT:0
+> build · deepseek-v4.1-flash
+$ cat > /tmp/test_full.py <<'PY'
+import os, sys, mailbox
+sys.path.insert(0, '/app')
+import eval as E
+
+def mbox_has(user, subject):
+    m = mailbox.mbox(f"/var/mail/{user}")
+    return any(msg.get('Subject','') == subject for msg in m)
+
+u1 = os.urandom(6).hex(); u2 = os.urandom(6).hex()
+E.add_user(u1); E.add_user(u2)
+for u in (u1,u2):
+    E.send_email(body='', subject='', from_addr=f'{u}@local.edu', to_addr=E.JOIN_LIST)
+    E.retry(lambda: os.path.exists(f'/var/mail/{u}'))
+    E.retry(lambda u=u: E.confirm_last_reply(u, 'join'))
+    E.retry(lambda u=u: (_ for _ in ()).throw(AssertionError('not member')) if E.get_mlist().members.get_member(f'{u}@local.edu') is None else None)
+print('both joined')
+
+subject='Test Announcement 12345'
+E.send_email(body='hello everyone', subject=subject, from_addr=f'{u1}@local.edu', to_addr=E.MAILING_LIST)
+E.retry(lambda: mbox_has(u2, subject))
+print('announcement delivered')
+assert mbox_has(u1, subject), 'sender did not get own post (may be acceptable)'
+
+E.send_email(body='', subject='', from_addr=f'{u2}@local.edu', to_addr=E.LEAVE_LIST)
+E.retry(lambda u2=u2: E.confirm_last_reply(u2, 'leave'))
+E.retry(lambda: (_ for _ in ()).throw(AssertionError('still member')) if E.get_mlist().members.get_member(f'{u2}@local.edu') is not None else None)
+print('leave works')
+
+subject2='After Leave Announcement 67890'
+E.send_email(body='bye', subject=subject2, from_addr=f'{u1}@local.edu', to_addr=E.MAILING_LIST)
+import time
+time.sleep(5)
+assert not mbox_has(u2, subject2), 'left user still got post'
+print('left user no longer receives posts')
+PY
+cd /app && python3 /tmp/test_full.py 2>&1 | tail -60; echo "EXIT:${PIPESTATUS[0]}"
+c40a7ea78ec3 added successfully.
+b9ee9b55ab35 added successfully.
+c40a7ea78ec3 has 0 messages in their inbox
+the subjects are as follows:
+[]
+Found 0 candidate confirmation messages
+Retrying in 2 seconds...
+c40a7ea78ec3 has 0 messages in their inbox
+the subjects are as follows:
+[]
+Found 0 candidate confirmation messages
+Retrying in 4 seconds...
+c40a7ea78ec3 has 0 messages in their inbox
+the subjects are as follows:
+[]
+Found 0 candidate confirmation messages
+Retrying in 8 seconds...
+c40a7ea78ec3 has 0 messages in their inbox
+the subjects are as follows:
+[]
+Found 0 candidate confirmation messages
+Retrying in 16 seconds...
+c40a7ea78ec3 has 0 messages in their inbox
+the subjects are as follows:
+[]
+Found 0 candidate confirmation messages
+Traceback (most recent call last):
+  File "/tmp/test_full.py", line 14, in <module>
+    E.retry(lambda u=u: E.confirm_last_reply(u, 'join'))
+  File "/app/eval.py", line 49, in retry
+    raise e
+  File "/app/eval.py", line 45, in retry
+    return func()
+           ^^^^^^
+  File "/tmp/test_full.py", line 14, in <lambda>
+    E.retry(lambda u=u: E.confirm_last_reply(u, 'join'))
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/eval.py", line 114, in confirm_last_reply
+    assert candidate_msgs, "No 'reading-group-confirm' messages found"
+           ^^^^^^^^^^^^^^
+AssertionError: No 'reading-group-confirm' messages found
+EXIT:1
+> build · deepseek-v4.1-flash
+$ tail -80 /var/log/mail.log; echo "==="; tail -60 /var/log/mailman3/mailman.log; echo "==="; tail -40 /var/log/mailman3/smtp.log; echo "==="; tail -40 /var/log
+/mailman3/error.log 2>/dev/null; ls /var/log/mailman3
+Nov 01 03:37:51 localhost postfix/postfix-script[5245]: starting the Postfix mail system
+Nov 01 03:37:51 localhost postfix/master[5247]: daemon started -- version 3.8.6, configuration /etc/postfix
+Nov 01 03:37:53 localhost postfix/postfix-script[5273]: the Postfix mail system is running: PID: 5247
+Nov 01 03:37:55 localhost postfix/smtpd[5287]: connect from unknown[::1]
+Nov 01 03:37:55 localhost postfix/smtpd[5287]: F0F6428C2BDF: client=unknown[::1]
+Nov 01 03:37:55 localhost postfix/cleanup[5291]: F0F6428C2BDF: message-id=<20261101033755.F0F6428C2BDF@localhost.tailf09230.ts.net>
+Nov 01 03:37:55 localhost postfix/smtpd[5287]: disconnect from unknown[::1] ehlo=1 mail=1 rcpt=1 data=1 quit=1 commands=5
+Nov 01 03:37:55 localhost postfix/qmgr[5249]: F0F6428C2BDF: from=<tester@local.edu>, size=512, nrcpt=1 (queue active)
+Nov 01 03:37:55 localhost postfix/local[5292]: F0F6428C2BDF: to=<13ebaee2c5ef59a6@local.edu>, relay=local, delay=0.02, delays=0.01/0.01/0/0, dsn=2.0.0, status=s
+ent (delivered to mailbox)
+Nov 01 03:37:55 localhost postfix/qmgr[5249]: F0F6428C2BDF: removed
+Nov 01 03:37:58 localhost postfix/smtpd[5287]: connect from unknown[::1]
+Nov 01 03:37:58 localhost postfix/smtpd[5287]: 5016C28C2BDF: client=unknown[::1]
+Nov 01 03:37:58 localhost postfix/cleanup[5291]: 5016C28C2BDF: message-id=<20261101033758.5016C28C2BDF@localhost.tailf09230.ts.net>
+Nov 01 03:37:58 localhost postfix/smtpd[5287]: disconnect from unknown[::1] ehlo=1 mail=1 rcpt=1 data=1 quit=1 commands=5
+Nov 01 03:37:58 localhost postfix/qmgr[5249]: 5016C28C2BDF: from=<639b0dba536de13c@local.edu>, size=491, nrcpt=1 (queue active)
+Nov 01 03:37:58 localhost postfix/lmtp[5300]: 5016C28C2BDF: to=<reading-group-join@local.edu>, relay=127.0.0.1[127.0.0.1]:8024, delay=0.06, delays=0/0.01/0/0.04
+, dsn=2.0.0, status=sent (250 Ok)
+Nov 01 03:37:58 localhost postfix/qmgr[5249]: 5016C28C2BDF: removed
+Nov 01 03:38:00 localhost postfix/smtpd[5287]: connect from unknown[::1]
+Nov 01 03:38:00 localhost postfix/smtpd[5287]: 0DDC428C2BFE: client=unknown[::1]
+Nov 01 03:38:00 localhost postfix/cleanup[5291]: 0DDC428C2BFE: message-id=<179350427878.5149.5586744481862146109@5489624a513a>
+Nov 01 03:38:00 localhost postfix/qmgr[5249]: 0DDC428C2BFE: from=<reading-group-bounces@local.edu>, size=1806, nrcpt=1 (queue active)
+Nov 01 03:38:00 localhost postfix/smtpd[5287]: disconnect from unknown[::1] ehlo=1 mail=1 rcpt=1 data=1 quit=1 commands=5
+Nov 01 03:38:00 localhost postfix/local[5292]: 0DDC428C2BFE: to=<639b0dba536de13c@local.edu>, relay=local, delay=0.01, delays=0/0/0/0, dsn=2.0.0, status=sent (d
+elivered to mailbox)
+Nov 01 03:38:00 localhost postfix/qmgr[5249]: 0DDC428C2BFE: removed
+Nov 01 03:38:00 localhost postfix/smtpd[5287]: connect from unknown[::1]
+Nov 01 03:38:00 localhost postfix/smtpd[5287]: 525F728C2BFA: client=unknown[::1]
+Nov 01 03:38:00 localhost postfix/cleanup[5291]: 525F728C2BFA: message-id=<20261101033800.525F728C2BFA@localhost.tailf09230.ts.net>
+Nov 01 03:38:00 localhost postfix/smtpd[5287]: disconnect from unknown[::1] ehlo=1 mail=1 rcpt=1 data=1 quit=1 commands=5
+Nov 01 03:38:00 localhost postfix/qmgr[5249]: 525F728C2BFA: from=<639b0dba536de13c@local.edu>, size=579, nrcpt=1 (queue active)
+Nov 01 03:38:00 localhost postfix/lmtp[5300]: 525F728C2BFA: to=<reading-group-confirm+f7e752c57541fa8b3393ff8c75d52fe15240442a@local.edu>, relay=127.0.0.1[127.0
+.0.1]:8024, delay=0.01, delays=0/0/0/0.01, dsn=2.0.0, status=sent (250 Ok)
+Nov 01 03:38:00 localhost postfix/qmgr[5249]: 525F728C2BFA: removed
+Nov 01 03:38:02 localhost postfix/smtpd[5287]: connect from unknown[::1]
+Nov 01 03:38:02 localhost postfix/smtpd[5287]: 111D128C2BFE: client=unknown[::1]
+Nov 01 03:38:02 localhost postfix/cleanup[5291]: 111D128C2BFE: message-id=<179350428080.5149.7473107685649199245@5489624a513a>
+Nov 01 03:38:02 localhost postfix/smtpd[5287]: disconnect from unknown[::1] ehlo=1 mail=1 rcpt=1 data=1 quit=1 commands=5
+Nov 01 03:38:02 localhost postfix/qmgr[5249]: 111D128C2BFE: from=<reading-group-bounces@local.edu>, size=1433, nrcpt=1 (queue active)
+Nov 01 03:38:02 localhost postfix/local[5292]: 111D128C2BFE: to=<639b0dba536de13c@local.edu>, relay=local, delay=0, delays=0/0/0/0, dsn=2.0.0, status=sent (deli
+vered to mailbox)
+Nov 01 03:38:02 localhost postfix/qmgr[5249]: 111D128C2BFE: removed
+Nov 01 03:38:08 localhost postfix/smtpd[5287]: connect from unknown[::1]
+Nov 01 03:38:08 localhost postfix/smtpd[5287]: B6EAE28C2BEF: client=unknown[::1]
+Nov 01 03:38:08 localhost postfix/cleanup[5291]: B6EAE28C2BEF: message-id=<20261101033808.B6EAE28C2BEF@localhost.tailf09230.ts.net>
+Nov 01 03:38:08 localhost postfix/qmgr[5249]: B6EAE28C2BEF: from=<c40a7ea78ec3@local.edu>, size=487, nrcpt=1 (queue active)
+Nov 01 03:38:08 localhost postfix/smtpd[5287]: disconnect from unknown[::1] ehlo=1 mail=1 rcpt=1 data=1 quit=1 commands=5
+Nov 01 03:38:08 localhost postfix/lmtp[5300]: B6EAE28C2BEF: to=<reading-group-join@local.edu>, relay=127.0.0.1[127.0.0.1]:8024, delay=0.01, delays=0/0/0/0.01, d
+sn=2.0.0, status=sent (250 Ok)
+Nov 01 03:38:08 localhost postfix/qmgr[5249]: B6EAE28C2BEF: removed
+Nov 01 03:38:10 localhost postfix/smtpd[5287]: connect from unknown[::1]
+Nov 01 03:38:10 localhost postfix/smtpd[5287]: 1467428C2C0D: client=unknown[::1]
+Nov 01 03:38:10 localhost postfix/cleanup[5291]: 1467428C2C0D: message-id=<179350428882.5149.8540780528256963639@5489624a513a>
+Nov 01 03:38:10 localhost postfix/smtpd[5287]: disconnect from unknown[::1] ehlo=1 mail=1 rcpt=1 data=1 quit=1 commands=5
+Nov 01 03:38:10 localhost postfix/qmgr[5249]: 1467428C2C0D: from=<reading-group-bounces@local.edu>, size=1794, nrcpt=1 (queue active)
+Nov 01 03:38:10 localhost postfix/local[5292]: 1467428C2C0D: to=<c40a7ea78ec3@local.edu>, relay=local, delay=0.01, delays=0/0/0/0.01, dsn=5.2.0, status=bounced
+(cannot update mailbox /var/mail/c40a7ea78ec3 for user c40a7ea78ec3. cannot open file: Permission denied)
+Nov 01 03:38:10 localhost postfix/cleanup[5291]: 1771E28C2C22: message-id=<20261101033810.1771E28C2C22@localhost.tailf09230.ts.net>
+Nov 01 03:38:10 localhost postfix/bounce[5320]: 1467428C2C0D: sender non-delivery notification: 1771E28C2C22
+Nov 01 03:38:10 localhost postfix/qmgr[5249]: 1771E28C2C22: from=<>, size=4005, nrcpt=1 (queue active)
+Nov 01 03:38:10 localhost postfix/qmgr[5249]: 1467428C2C0D: removed
+Nov 01 03:38:10 localhost postfix/lmtp[5300]: 1771E28C2C22: to=<reading-group-bounces@local.edu>, relay=127.0.0.1[127.0.0.1]:8024, delay=0.01, delays=0/0/0/0.01
+, dsn=2.0.0, status=sent (250 Ok)
+Nov 01 03:38:10 localhost postfix/qmgr[5249]: 1771E28C2C22: removed
+===
+Nov 01 03:37:44 2026 (5141) Master started
+Nov 01 03:37:44 2026 (5159) digest runner started.
+Nov 01 03:37:44 2026 (5148) bounces runner started.
+Nov 01 03:37:44 2026 (5149) command runner started.
+Nov 01 03:37:44 2026 (5156) retry runner started.
+Nov 01 03:37:44 2026 (5158) virgin runner started.
+Nov 01 03:37:44 2026 (5150) in runner started.
+Nov 01 03:37:44 2026 (5152) nntp runner started.
+Nov 01 03:37:44 2026 (5154) pipeline runner started.
+Nov 01 03:37:45 2026 (5153) out runner started.
+Nov 01 03:37:45 2026 (5151) lmtp runner started.
+Nov 01 03:37:45 2026 (5155) rest runner started.
+[2026-11-01 03:37:45 +0000] [5155] [INFO] Starting gunicorn 20.1.0
+[2026-11-01 03:37:45 +0000] [5155] [INFO] Listening at: http://127.0.0.1:8001 (5155)
+[2026-11-01 03:37:45 +0000] [5155] [INFO] Using worker: sync
+[2026-11-01 03:37:45 +0000] [5162] [INFO] Booting worker with pid: 5162
+[2026-11-01 03:37:45 +0000] [5163] [INFO] Booting worker with pid: 5163
+Nov 01 03:37:45 2026 (5147) archive runner started.
+Nov 01 03:37:46 2026 (5157) task runner started.
+Nov 01 03:37:46 2026 (5157) Task runner evicted 0 expired pendings
+Nov 01 03:37:46 2026 (5157) Task runner deleted 0 orphaned workflows
+Nov 01 03:37:46 2026 (5157) Task runner deleted 0 orphaned requests
+Nov 01 03:37:46 2026 (5157) Task runner deleted 0 orphaned messages
+Nov 01 03:37:46 2026 (5157) Task runner evicted expired cache entries
+Nov 01 03:37:58 2026 (5149) deque: do_confirm_verify
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/mailman/app/workflow.py", line 69, in __next__
+    return step()
+           ^^^^^^
+  File "/usr/lib/python3/dist-packages/mailman/app/subscriptions.py", line 382, in _step_send_confirmation
+    raise StopIteration
+StopIteration
+Nov 01 03:38:08 2026 (5149) deque: do_confirm_verify
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/mailman/app/workflow.py", line 69, in __next__
+    return step()
+           ^^^^^^
+  File "/usr/lib/python3/dist-packages/mailman/app/subscriptions.py", line 382, in _step_send_confirmation
+    raise StopIteration
+StopIteration
+===
+Nov 01 03:38:00 2026 (5151) Available AUTH mechanisms: LOGIN(builtin) PLAIN(builtin)
+Nov 01 03:38:00 2026 (5151) Peer: ('127.0.0.1', 54920)
+Nov 01 03:38:00 2026 (5151) ('127.0.0.1', 54920) handling connection
+Nov 01 03:38:00 2026 (5151) ('127.0.0.1', 54920) >> b'LHLO localhost.tailf09230.ts.net'
+Nov 01 03:38:00 2026 (5151) ('127.0.0.1', 54920) >> b'MAIL FROM:<639b0dba536de13c@local.edu> SIZE=579'
+Nov 01 03:38:00 2026 (5151) ('127.0.0.1', 54920) sender: 639b0dba536de13c@local.edu
+Nov 01 03:38:00 2026 (5151) ('127.0.0.1', 54920) >> b'RCPT TO:<reading-group-confirm+f7e752c57541fa8b3393ff8c75d52fe15240442a@local.edu>'
+Nov 01 03:38:00 2026 (5151) ('127.0.0.1', 54920) recip: reading-group-confirm+f7e752c57541fa8b3393ff8c75d52fe15240442a@local.edu
+Nov 01 03:38:00 2026 (5151) ('127.0.0.1', 54920) >> b'DATA'
+Nov 01 03:38:00 2026 (5151) ('127.0.0.1', 54920) >> b'QUIT'
+Nov 01 03:38:00 2026 (5151) ('127.0.0.1', 54920) connection lost
+Nov 01 03:38:00 2026 (5151) ('127.0.0.1', 54920) Connection lost during _handle_client()
+Nov 01 03:38:02 2026 (5153) <179350428080.5149.7473107685649199245@5489624a513a> smtp to reading-group@local.edu for 1 recips, completed in 0.005635976791381836
+ seconds
+Nov 01 03:38:02 2026 (5153) <179350428080.5149.7473107685649199245@5489624a513a> post to reading-group@local.edu from reading-group-request@local.edu, 1205 byte
+s
+Nov 01 03:38:08 2026 (5151) Available AUTH mechanisms: LOGIN(builtin) PLAIN(builtin)
+Nov 01 03:38:08 2026 (5151) Peer: ('127.0.0.1', 38322)
+Nov 01 03:38:08 2026 (5151) ('127.0.0.1', 38322) handling connection
+Nov 01 03:38:08 2026 (5151) ('127.0.0.1', 38322) >> b'LHLO localhost.tailf09230.ts.net'
+Nov 01 03:38:08 2026 (5151) ('127.0.0.1', 38322) >> b'MAIL FROM:<c40a7ea78ec3@local.edu> SIZE=487'
+Nov 01 03:38:08 2026 (5151) ('127.0.0.1', 38322) sender: c40a7ea78ec3@local.edu
+Nov 01 03:38:08 2026 (5151) ('127.0.0.1', 38322) >> b'RCPT TO:<reading-group-join@local.edu>'
+Nov 01 03:38:08 2026 (5151) ('127.0.0.1', 38322) recip: reading-group-join@local.edu
+Nov 01 03:38:08 2026 (5151) ('127.0.0.1', 38322) >> b'DATA'
+Nov 01 03:38:08 2026 (5151) ('127.0.0.1', 38322) >> b'QUIT'
+Nov 01 03:38:08 2026 (5151) ('127.0.0.1', 38322) connection lost
+Nov 01 03:38:08 2026 (5151) ('127.0.0.1', 38322) Connection lost during _handle_client()
+Nov 01 03:38:10 2026 (5153) <179350428882.5149.8540780528256963639@5489624a513a> smtp to reading-group@local.edu for 1 recips, completed in 0.00513458251953125
+seconds
+Nov 01 03:38:10 2026 (5153) <179350428882.5149.8540780528256963639@5489624a513a> post to reading-group@local.edu from reading-group-confirm+6b2941bbd23b1366f4a9
+42924c70db8c7503e44e@local.edu, 1561 bytes
+Nov 01 03:38:10 2026 (5151) Available AUTH mechanisms: LOGIN(builtin) PLAIN(builtin)
+Nov 01 03:38:10 2026 (5151) Peer: ('127.0.0.1', 38348)
+Nov 01 03:38:10 2026 (5151) ('127.0.0.1', 38348) handling connection
+Nov 01 03:38:10 2026 (5151) ('127.0.0.1', 38348) >> b'LHLO localhost.tailf09230.ts.net'
+Nov 01 03:38:10 2026 (5151) ('127.0.0.1', 38348) >> b'MAIL FROM:<> SIZE=4005 BODY=8BITMIME'
+Nov 01 03:38:10 2026 (5151) ('127.0.0.1', 38348) sender: <>
+Nov 01 03:38:10 2026 (5151) ('127.0.0.1', 38348) >> b'RCPT TO:<reading-group-bounces@local.edu>'
+Nov 01 03:38:10 2026 (5151) ('127.0.0.1', 38348) recip: reading-group-bounces@local.edu
+Nov 01 03:38:10 2026 (5151) ('127.0.0.1', 38348) >> b'DATA'
+Nov 01 03:38:10 2026 (5151) ('127.0.0.1', 38348) >> b'QUIT'
+Nov 01 03:38:10 2026 (5151) ('127.0.0.1', 38348) connection lost
+Nov 01 03:38:10 2026 (5151) ('127.0.0.1', 38348) Connection lost during _handle_client()
+===
+bounce.log
+debug.log
+mailman.log
+plugins.log
+smtp.log
+> build · deepseek-v4.1-flash
+$ ls -la /var/mail/ | tail -20; echo "==="; id c40a7ea78ec3; stat /var/mail/c40a7ea78ec3 2>/dev/null; echo "==="; grep -E "c40a|b9ee" /var/log/mail.log | head -
+40
+total 20
+drwxrwsr-x 1 root             mail 4096 Nov  1 03:38 .
+drwxr-xr-x 1 root             root 4096 Apr  4  2025 ..
+-rw------- 1 13ebaee2c5ef59a6 mail  663 Nov  1 03:37 13ebaee2c5ef59a6
+-rw------- 1 639b0dba536de13c mail 3546 Nov  1 03:38 639b0dba536de13c
+-rw-r--r-- 1 root             mail    0 Nov  1 03:38 c40a7ea78ec3
+===
+uid=1003(c40a7ea78ec3) gid=1003(c40a7ea78ec3) groups=1003(c40a7ea78ec3)
+  File: /var/mail/c40a7ea78ec3
+  Size: 0               Blocks: 0          IO Block: 4096   regular empty file
+Device: 0,42    Inode: 42740721    Links: 1
+Access: (0644/-rw-r--r--)  Uid: (    0/    root)   Gid: (    8/    mail)
+Access: 2026-11-01 03:38:10.752195053 +0000
+Modify: 2026-11-01 03:38:08.752172688 +0000
+Change: 2026-11-01 03:38:08.752172688 +0000
+ Birth: 2026-11-01 03:38:08.752172688 +0000
+===
+Nov 01 03:38:08 localhost postfix/qmgr[5249]: B6EAE28C2BEF: from=<c40a7ea78ec3@local.edu>, size=487, nrcpt=1 (queue active)
+Nov 01 03:38:10 localhost postfix/local[5292]: 1467428C2C0D: to=<c40a7ea78ec3@local.edu>, relay=local, delay=0.01, delays=0/0/0/0.01, dsn=5.2.0, status=bounced
+(cannot update mailbox /var/mail/c40a7ea78ec3 for user c40a7ea78ec3. cannot open file: Permission denied)
+> build · deepseek-v4.1-flash
+$ grep -n "03:38:0[5-9]\|03:38:1[0-2]" /var/log/mail.log
+39:Nov 01 03:38:08 localhost postfix/smtpd[5287]: connect from unknown[::1]
+40:Nov 01 03:38:08 localhost postfix/smtpd[5287]: B6EAE28C2BEF: client=unknown[::1]
+41:Nov 01 03:38:08 localhost postfix/cleanup[5291]: B6EAE28C2BEF: message-id=<20261101033808.B6EAE28C2BEF@localhost.tailf09230.ts.net>
+42:Nov 01 03:38:08 localhost postfix/qmgr[5249]: B6EAE28C2BEF: from=<c40a7ea78ec3@local.edu>, size=487, nrcpt=1 (queue active)
+43:Nov 01 03:38:08 localhost postfix/smtpd[5287]: disconnect from unknown[::1] ehlo=1 mail=1 rcpt=1 data=1 quit=1 commands=5
+44:Nov 01 03:38:08 localhost postfix/lmtp[5300]: B6EAE28C2BEF: to=<reading-group-join@local.edu>, relay=127.0.0.1[127.0.0.1]:8024, delay=0.01, delays=0/0/0/0.01
+, dsn=2.0.0, status=sent (250 Ok)
+45:Nov 01 03:38:08 localhost postfix/qmgr[5249]: B6EAE28C2BEF: removed
+46:Nov 01 03:38:10 localhost postfix/smtpd[5287]: connect from unknown[::1]
+47:Nov 01 03:38:10 localhost postfix/smtpd[5287]: 1467428C2C0D: client=unknown[::1]
+48:Nov 01 03:38:10 localhost postfix/cleanup[5291]: 1467428C2C0D: message-id=<179350428882.5149.8540780528256963639@5489624a513a>
+49:Nov 01 03:38:10 localhost postfix/smtpd[5287]: disconnect from unknown[::1] ehlo=1 mail=1 rcpt=1 data=1 quit=1 commands=5
+50:Nov 01 03:38:10 localhost postfix/qmgr[5249]: 1467428C2C0D: from=<reading-group-bounces@local.edu>, size=1794, nrcpt=1 (queue active)
+51:Nov 01 03:38:10 localhost postfix/local[5292]: 1467428C2C0D: to=<c40a7ea78ec3@local.edu>, relay=local, delay=0.01, delays=0/0/0/0.01, dsn=5.2.0, status=bounc
+ed (cannot update mailbox /var/mail/c40a7ea78ec3 for user c40a7ea78ec3. cannot open file: Permission denied)
+52:Nov 01 03:38:10 localhost postfix/cleanup[5291]: 1771E28C2C22: message-id=<20261101033810.1771E28C2C22@localhost.tailf09230.ts.net>
+53:Nov 01 03:38:10 localhost postfix/bounce[5320]: 1467428C2C0D: sender non-delivery notification: 1771E28C2C22
+54:Nov 01 03:38:10 localhost postfix/qmgr[5249]: 1771E28C2C22: from=<>, size=4005, nrcpt=1 (queue active)
+55:Nov 01 03:38:10 localhost postfix/qmgr[5249]: 1467428C2C0D: removed
+56:Nov 01 03:38:10 localhost postfix/lmtp[5300]: 1771E28C2C22: to=<reading-group-bounces@local.edu>, relay=127.0.0.1[127.0.0.1]:8024, delay=0.01, delays=0/0/0/0
+.01, dsn=2.0.0, status=sent (250 Ok)
+57:Nov 01 03:38:10 localhost postfix/qmgr[5249]: 1771E28C2C22: removed
+> build · deepseek-v4.1-flash
+$ u=zztest$RANDOM; useradd $u; ls -la /var/mail/$u 2>&1; stat /var/mail/$u 2>&1 | head -8; echo "---"; userdel -r $u 2>/dev/null; true
+ls: cannot access '/var/mail/zztest263': No such file or directory
+stat: cannot statx '/var/mail/zztest263': No such file or directory
+---
+> build · deepseek-v4.1-flash
+$ cat > /tmp/race.py <<'PY'
+import os, sys, time, subprocess, mailbox
+sys.path.insert(0, '/app')
+import eval as E
+u = os.urandom(6).hex()
+E.add_user(u)
+print('user', u)
+E.send_email(body='', subject='', from_addr=f'{u}@local.edu', to_addr=E.JOIN_LIST)
+for i in range(100):
+    p=f'/var/mail/{u}'
+    if os.path.exists(p):
+        st=os.stat(p)
+        print(f'{i*0.1:.1f}s exists size={st.st_size} uid={st.st_uid} gid={st.st_gid} mode={oct(st.st_mode)}')
+        if st.st_uid != 0:
+            break
+    else:
+        if i%5==0: print(f'{i*0.1:.1f}s missing')
+    time.sleep(0.1)
+print('final stat', os.stat(f'/var/mail/{u}') if os.path.exists(f'/var/mail/{u}') else None)
+PY
+cd /app && python3 /tmp/race.py 2>&1 | tail -40
+8e79d1eab0e5 added successfully.
+user 8e79d1eab0e5
+0.0s missing
+0.5s missing
+1.0s missing
+1.5s missing
+1.8s exists size=1935 uid=1005 gid=8 mode=0o100600
+final stat os.stat_result(st_mode=33152, st_ino=42740752, st_dev=42, st_nlink=1, st_uid=1005, st_gid=8, st_size=1935, st_atime=1793504357, st_mtime=1793504357,
+st_ctime=1793504357)
+> build · deepseek-v4.1-flash
+$ grep -R "CREATE_MAIL_SPOOL\|MAIL_FILE\|MAIL_DIR" /etc/default/useradd /etc/login.defs /etc/adduser.conf 2>/dev/null; echo "---"; u=zzz$RANDOM; useradd $u; sle
+ep 0.2; stat /var/mail/$u 2>&1 | head -8; userdel -r $u 2>/dev/null; true
+/etc/default/useradd:# CREATE_MAIL_SPOOL=no
+/etc/login.defs:# Three items must be defined:  MAIL_DIR, ENV_SUPATH, and ENV_PATH.
+/etc/login.defs:#   home directory.  If you _do_ define MAIL_DIR and MAIL_FILE,
+/etc/login.defs:#   MAIL_DIR takes precedence.
+/etc/login.defs:#      - MAIL_DIR defines the location of users mail spool files
+/etc/login.defs:#        (for mbox use) by appending the username to MAIL_DIR as defined
+/etc/login.defs:#      - MAIL_FILE defines the location of the users mail spool files as the
+/etc/login.defs:#        directory before $MAIL_FILE
+/etc/login.defs:MAIL_DIR        /var/mail
+/etc/login.defs:#MAIL_FILE      .mail
+/etc/login.defs:# QMAIL_DIR
+---
+stat: cannot statx '/var/mail/zzz27372': No such file or directory
+> build · deepseek-v4.1-flash
+$ cd /app && python3 /tmp/test_full.py 2>&1 | tail -80; echo "EXIT:${PIPESTATUS[0]}"
+6e32357b65c3 added successfully.
+f42012af64b1 added successfully.
+6e32357b65c3 has 0 messages in their inbox
+the subjects are as follows:
+[]
+Found 0 candidate confirmation messages
+Retrying in 2 seconds...
+6e32357b65c3 has 0 messages in their inbox
+the subjects are as follows:
+[]
+Found 0 candidate confirmation messages
+Retrying in 4 seconds...
+6e32357b65c3 has 0 messages in their inbox
+the subjects are as follows:
+[]
+Found 0 candidate confirmation messages
+Retrying in 8 seconds...
+6e32357b65c3 has 0 messages in their inbox
+the subjects are as follows:
+[]
+Found 0 candidate confirmation messages
+Retrying in 16 seconds...
+6e32357b65c3 has 0 messages in their inbox
+the subjects are as follows:
+[]
+Found 0 candidate confirmation messages
+Traceback (most recent call last):
+  File "/tmp/test_full.py", line 14, in <module>
+    E.retry(lambda u=u: E.confirm_last_reply(u, 'join'))
+  File "/app/eval.py", line 49, in retry
+    raise e
+  File "/app/eval.py", line 45, in retry
+    return func()
+           ^^^^^^
+  File "/tmp/test_full.py", line 14, in <lambda>
+    E.retry(lambda u=u: E.confirm_last_reply(u, 'join'))
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/eval.py", line 114, in confirm_last_reply
+    assert candidate_msgs, "No 'reading-group-confirm' messages found"
+           ^^^^^^^^^^^^^^
+AssertionError: No 'reading-group-confirm' messages found
+EXIT:1
+> build · deepseek-v4.1-flash
+$ ls -la /var/mail/ | tail; echo "==="; grep -E "6e32357b65c3|f42012af64b1" /var/log/mail.log; echo "==="; tail -30 /var/log/mail.log
+total 24
+drwxrwsr-x 1 root             mail 4096 Nov  1 03:39 .
+drwxr-xr-x 1 root             root 4096 Apr  4  2025 ..
+-rw------- 1 13ebaee2c5ef59a6 mail  663 Nov  1 03:37 13ebaee2c5ef59a6
+-rw------- 1 639b0dba536de13c mail 3546 Nov  1 03:38 639b0dba536de13c
+-rw-r--r-- 1 root             mail    0 Nov  1 03:39 6e32357b65c3
+-rw------- 1 8e79d1eab0e5     mail 1935 Nov  1 03:39 8e79d1eab0e5
+-rw-r--r-- 1 root             mail    0 Nov  1 03:38 c40a7ea78ec3
+===
+Nov 01 03:39:26 localhost postfix/qmgr[5249]: 8E81228C2BED: from=<6e32357b65c3@local.edu>, size=487, nrcpt=1 (queue active)
+Nov 01 03:39:28 localhost postfix/local[5292]: 1F94F28C2C20: to=<6e32357b65c3@local.edu>, relay=local, delay=0, delays=0/0/0/0, dsn=5.2.0, status=bounced (canno
+t update mailbox /var/mail/6e32357b65c3 for user 6e32357b65c3. cannot open file: Permission denied)
+===
+Nov 01 03:39:15 localhost postfix/smtpd[5287]: disconnect from unknown[::1] ehlo=1 mail=1 rcpt=1 data=1 quit=1 commands=5
+Nov 01 03:39:15 localhost postfix/qmgr[5249]: 55DD828C2BE9: from=<8e79d1eab0e5@local.edu>, size=487, nrcpt=1 (queue active)
+Nov 01 03:39:15 localhost postfix/lmtp[5300]: 55DD828C2BE9: to=<reading-group-join@local.edu>, relay=127.0.0.1[127.0.0.1]:8024, delay=0.01, delays=0/0/0/0.01, d
+sn=2.0.0, status=sent (250 Ok)
+Nov 01 03:39:15 localhost postfix/qmgr[5249]: 55DD828C2BE9: removed
+Nov 01 03:39:17 localhost postfix/smtpd[5287]: connect from unknown[::1]
+Nov 01 03:39:17 localhost postfix/smtpd[5287]: 1C5E228C2C03: client=unknown[::1]
+Nov 01 03:39:17 localhost postfix/cleanup[5291]: 1C5E228C2C03: message-id=<179350435587.5149.8020753340027027535@5489624a513a>
+Nov 01 03:39:17 localhost postfix/smtpd[5287]: disconnect from unknown[::1] ehlo=1 mail=1 rcpt=1 data=1 quit=1 commands=5
+Nov 01 03:39:17 localhost postfix/qmgr[5249]: 1C5E228C2C03: from=<reading-group-bounces@local.edu>, size=1794, nrcpt=1 (queue active)
+Nov 01 03:39:17 localhost postfix/local[5292]: 1C5E228C2C03: to=<8e79d1eab0e5@local.edu>, relay=local, delay=0.01, delays=0/0/0/0, dsn=2.0.0, status=sent (deliv
+ered to mailbox)
+Nov 01 03:39:17 localhost postfix/qmgr[5249]: 1C5E228C2C03: removed
+Nov 01 03:39:26 localhost postfix/smtpd[5287]: connect from unknown[::1]
+Nov 01 03:39:26 localhost postfix/smtpd[5287]: 8E81228C2BED: client=unknown[::1]
+Nov 01 03:39:26 localhost postfix/cleanup[5291]: 8E81228C2BED: message-id=<20261101033926.8E81228C2BED@localhost.tailf09230.ts.net>
+Nov 01 03:39:26 localhost postfix/qmgr[5249]: 8E81228C2BED: from=<6e32357b65c3@local.edu>, size=487, nrcpt=1 (queue active)
+Nov 01 03:39:26 localhost postfix/smtpd[5287]: disconnect from unknown[::1] ehlo=1 mail=1 rcpt=1 data=1 quit=1 commands=5
+Nov 01 03:39:26 localhost postfix/lmtp[5300]: 8E81228C2BED: to=<reading-group-join@local.edu>, relay=127.0.0.1[127.0.0.1]:8024, delay=0.01, delays=0/0/0/0.01, d
+sn=2.0.0, status=sent (250 Ok)
+Nov 01 03:39:26 localhost postfix/qmgr[5249]: 8E81228C2BED: removed
+Nov 01 03:39:28 localhost postfix/smtpd[5287]: connect from unknown[::1]
+Nov 01 03:39:28 localhost postfix/smtpd[5287]: 1F94F28C2C20: client=unknown[::1]
+Nov 01 03:39:28 localhost postfix/cleanup[5291]: 1F94F28C2C20: message-id=<179350436690.5149.15794112450715649900@5489624a513a>
+Nov 01 03:39:28 localhost postfix/qmgr[5249]: 1F94F28C2C20: from=<reading-group-bounces@local.edu>, size=1795, nrcpt=1 (queue active)
+Nov 01 03:39:28 localhost postfix/smtpd[5287]: disconnect from unknown[::1] ehlo=1 mail=1 rcpt=1 data=1 quit=1 commands=5
+Nov 01 03:39:28 localhost postfix/local[5292]: 1F94F28C2C20: to=<6e32357b65c3@local.edu>, relay=local, delay=0, delays=0/0/0/0, dsn=5.2.0, status=bounced (canno
+t update mailbox /var/mail/6e32357b65c3 for user 6e32357b65c3. cannot open file: Permission denied)
+Nov 01 03:39:28 localhost postfix/cleanup[5291]: 207DC28C2C22: message-id=<20261101033928.207DC28C2C22@localhost.tailf09230.ts.net>
+Nov 01 03:39:28 localhost postfix/bounce[5320]: 1F94F28C2C20: sender non-delivery notification: 207DC28C2C22
+Nov 01 03:39:28 localhost postfix/qmgr[5249]: 207DC28C2C22: from=<>, size=4006, nrcpt=1 (queue active)
+Nov 01 03:39:28 localhost postfix/qmgr[5249]: 1F94F28C2C20: removed
+Nov 01 03:39:28 localhost postfix/lmtp[5300]: 207DC28C2C22: to=<reading-group-bounces@local.edu>, relay=127.0.0.1[127.0.0.1]:8024, delay=0.01, delays=0/0/0/0.01
+, dsn=2.0.0, status=sent (250 Ok)
+Nov 01 03:39:28 localhost postfix/qmgr[5249]: 207DC28C2C22: removed
+> build · deepseek-v4.1-flash
+$ stat /var/mail/6e32357b65c3; echo "---"; date
+File: /var/mail/6e32357b65c3
+  Size: 0               Blocks: 0          IO Block: 4096   regular empty file
+Device: 0,42    Inode: 42740762    Links: 1
+Access: (0644/-rw-r--r--)  Uid: (    0/    root)   Gid: (    8/    mail)
+Access: 2026-11-01 03:39:28.585045570 +0000
+Modify: 2026-11-01 03:39:26.585024176 +0000
+Change: 2026-11-01 03:39:26.585024176 +0000
+ Birth: 2026-11-01 03:39:26.585024176 +0000
+---
+Sun Nov  1 03:40:00 UTC 2026
+> build · deepseek-v4.1-flash
+$ cat > /tmp/test_full.py <<'PY'
+import os, sys, mailbox, time
+sys.path.insert(0, '/app')
+import eval as E
+
+def mbox_has(user, subject):
+    m = mailbox.mbox(f"/var/mail/{user}")
+    return any(msg.get('Subject','') == subject for msg in m)
+
+def assert_exists(u):
+    assert os.path.exists(f'/var/mail/{u}'), 'mailbox missing'
+
+def assert_member(u, want=True):
+    m = E.get_mlist().members.get_member(f'{u}@local.edu')
+    assert (m is not None) == want, f'membership for {u} != {want}'
+
+u1 = os.urandom(6).hex(); u2 = os.urandom(6).hex()
+E.add_user(u1); E.add_user(u2)
+for u in (u1,u2):
+    E.send_email(body='', subject='', from_addr=f'{u}@local.edu', to_addr=E.JOIN_LIST)
+    E.retry(lambda u=u: assert_exists(u))
+    E.retry(lambda u=u: E.confirm_last_reply(u, 'join'))
+    E.retry(lambda u=u: assert_member(u, True))
+print('both joined')
+
+subject='Test Announcement 12345'
+E.send_email(body='hello everyone', subject=subject, from_addr=f'{u1}@local.edu', to_addr=E.MAILING_LIST)
+E.retry(lambda: mbox_has(u2, subject))
+print('announcement delivered')
+assert mbox_has(u1, subject), 'sender did not get own post'
+
+E.send_email(body='', subject='', from_addr=f'{u2}@local.edu', to_addr=E.LEAVE_LIST)
+E.retry(lambda u2=u2: E.confirm_last_reply(u2, 'leave'))
+E.retry(lambda: assert_member(u2, False))
+print('leave works')
+
+subject2='After Leave Announcement 67890'
+E.send_email(body='bye', subject=subject2, from_addr=f'{u1}@local.edu', to_addr=E.MAILING_LIST)
+time.sleep(6)
+assert not mbox_has(u2, subject2), 'left user still got post'
+print('left user no longer receives posts')
+PY
+cd /app && python3 /tmp/test_full.py 2>&1 | tail -60; echo "EXIT:${PIPESTATUS[0]}"
+ff0eaa3066d1 has 1 messages in their inbox
+the subjects are as follows:
+['Your confirmation is needed to join the reading-group@local.edu\n mailing list.']
+Found 1 candidate confirmation messages
+Message details:
+  From: reading-group-confirm+059159b2553e163b5982bba807a2c2c066fc155c@local.edu
+  To: ff0eaa3066d1@local.edu
+  Subject: Your confirmation is needed to join the reading-group@local.edu
+ mailing list.
+  Body: Email Address Registration Confirmation
+
+Hello, this is the GNU Mailman server at local.edu.
+
+We have received a registration request for the email address
+
+    ff0eaa3066d1@local.edu
+
+Before you can start using GNU Mailman at this site, you must first confirm
+that this is your email address.  You can do this by replying to this message.
+
+Or you should include the following line -- and only the following
+line -- in a message to reading-group-request@local.edu:
+
+    confirm 059159b2553e163b5982bb...
+Reply to reading-group-confirm+059159b2553e163b5982bba807a2c2c066fc155c@local.edu from ff0eaa3066d1@local.edu for join
+Retrying in 2 seconds...
+Retrying in 2 seconds...
+3c6de43e3320 has 1 messages in their inbox
+the subjects are as follows:
+['Your confirmation is needed to join the reading-group@local.edu\n mailing list.']
+Found 1 candidate confirmation messages
+Message details:
+  From: reading-group-confirm+e5d2d141c3e11178fa9c0e09ff6b7602ebb1b3ff@local.edu
+  To: 3c6de43e3320@local.edu
+  Subject: Your confirmation is needed to join the reading-group@local.edu
+ mailing list.
+  Body: Email Address Registration Confirmation
+
+Hello, this is the GNU Mailman server at local.edu.
+
+We have received a registration request for the email address
+
+    3c6de43e3320@local.edu
+
+Before you can start using GNU Mailman at this site, you must first confirm
+that this is your email address.  You can do this by replying to this message.
+
+Or you should include the following line -- and only the following
+line -- in a message to reading-group-request@local.edu:
+
+    confirm e5d2d141c3e11178fa9c0e...
+Reply to reading-group-confirm+e5d2d141c3e11178fa9c0e09ff6b7602ebb1b3ff@local.edu from 3c6de43e3320@local.edu for join
+Retrying in 2 seconds...
+both joined
+announcement delivered
+Traceback (most recent call last):
+  File "/tmp/test_full.py", line 29, in <module>
+    assert mbox_has(u1, subject), 'sender did not get own post'
+           ^^^^^^^^^^^^^^^^^^^^^
+AssertionError: sender did not get own post
+EXIT:1
+> build · deepseek-v4.1-flash
+$ grep -E "ff0eaa3066d1|3c6de43e3320" /var/log/mail.log | tail -40; echo "==="; grep -n "Test Announcement" -r /var/log/mailman3/ || true; echo "==="; ls -la /v
+ar/mail/ff0eaa3066d1 /var/mail/3c6de43e3320; echo "==="; python3 - <<'PY'
+import sys; sys.path.insert(0,'/app'); import eval as E, mailbox
+m=E.get_mlist()
+print('members', [str(x) for x in m.members.addresses])
+for u in ('ff0eaa3066d1','3c6de43e3320'):
+    mb=mailbox.mbox(f'/var/mail/{u}')
+    print(u, [str(x.get('Subject')) for x in mb])
+PY
+Nov 01 03:40:05 localhost postfix/qmgr[5249]: 5E13428C2C03: from=<ff0eaa3066d1@local.edu>, size=487, nrcpt=1 (queue active)
+Nov 01 03:40:07 localhost postfix/local[5292]: 2578F28C2C09: to=<ff0eaa3066d1@local.edu>, relay=local, delay=0.01, delays=0/0/0/0, dsn=2.0.0, status=sent (deliv
+ered to mailbox)
+Nov 01 03:40:07 localhost postfix/qmgr[5249]: 5F63828C2C03: from=<ff0eaa3066d1@local.edu>, size=575, nrcpt=1 (queue active)
+Nov 01 03:40:09 localhost postfix/local[5292]: 2882328C2C09: to=<ff0eaa3066d1@local.edu>, relay=local, delay=0.01, delays=0/0/0/0, dsn=2.0.0, status=sent (deliv
+ered to mailbox)
+Nov 01 03:40:09 localhost postfix/qmgr[5249]: B50AC28C2C03: from=<3c6de43e3320@local.edu>, size=487, nrcpt=1 (queue active)
+Nov 01 03:40:11 localhost postfix/local[5292]: 2C0D828C2C09: to=<3c6de43e3320@local.edu>, relay=local, delay=0.01, delays=0/0/0/0, dsn=2.0.0, status=sent (deliv
+ered to mailbox)
+Nov 01 03:40:11 localhost postfix/qmgr[5249]: B663028C2C03: from=<3c6de43e3320@local.edu>, size=575, nrcpt=1 (queue active)
+Nov 01 03:40:13 localhost postfix/local[5292]: 2F0E828C2C09: to=<3c6de43e3320@local.edu>, relay=local, delay=0.01, delays=0/0/0/0, dsn=2.0.0, status=sent (deliv
+ered to mailbox)
+Nov 01 03:40:13 localhost postfix/qmgr[5249]: B8FC728C2C03: from=<ff0eaa3066d1@local.edu>, size=516, nrcpt=1 (queue active)
+Nov 01 03:40:14 localhost postfix/local[5292]: 37FA528C2682: to=<3c6de43e3320@local.edu>, relay=local, delay=0.01, delays=0.01/0/0/0, dsn=2.0.0, status=sent (de
+livered to mailbox)
+Nov 01 03:40:14 localhost postfix/local[5292]: 37FA528C2682: to=<ff0eaa3066d1@local.edu>, relay=local, delay=0.01, delays=0.01/0.01/0/0, dsn=2.0.0, status=sent
+(delivered to mailbox)
+===
+===
+-rw------- 1 3c6de43e3320 mail 5273 Nov  1 03:40 /var/mail/3c6de43e3320
+-rw------- 1 ff0eaa3066d1 mail 5275 Nov  1 03:40 /var/mail/ff0eaa3066d1
+===
+members ['639b0dba536de13c@local.edu', 'ff0eaa3066d1@local.edu', '3c6de43e3320@local.edu']
+ff0eaa3066d1 ['Your confirmation is needed to join the reading-group@local.edu\n mailing list.', 'Welcome to the "Reading-group" mailing list', '[Reading-group]
+ Test Announcement 12345']
+3c6de43e3320 ['Your confirmation is needed to join the reading-group@local.edu\n mailing list.', 'Welcome to the "Reading-group" mailing list', '[Reading-group]
+ Test Announcement 12345']
+> build · deepseek-v4.1-flash
+$ cat > /tmp/test_leave.py <<'PY'
+import os, sys, mailbox, time
+sys.path.insert(0, '/app'); import eval as E
+u='3c6de43e3320'
+def member(): return E.get_mlist().members.get_member(f'{u}@local.edu')
+assert member(), 'not member before leave'
+E.send_email(body='', subject='', from_addr=f'{u}@local.edu', to_addr=E.LEAVE_LIST)
+E.retry(lambda: E.confirm_last_reply(u, 'leave'))
+E.retry(lambda: (_ for _ in ()).throw(AssertionError('still member')) if member() else None)
+print('leave works')
+PY
+cd /app && python3 /tmp/test_leave.py 2>&1 | tail -40; echo "EXIT:${PIPESTATUS[0]}"
+3c6de43e3320 has 3 messages in their inbox
+the subjects are as follows:
+['Your confirmation is needed to join the reading-group@local.edu\n mailing list.', 'Welcome to the "Reading-group" mailing list', '[Reading-group] Test Announc
+ement 12345']
+Found 0 candidate confirmation messages
+Retrying in 2 seconds...
+3c6de43e3320 has 4 messages in their inbox
+the subjects are as follows:
+['Your confirmation is needed to join the reading-group@local.edu\n mailing list.', 'Welcome to the "Reading-group" mailing list', '[Reading-group] Test Announc
+ement 12345', 'Your confirmation is needed to leave the reading-group@local.edu\n mailing list.']
+Found 1 candidate confirmation messages
+Message details:
+  From: reading-group-confirm+6e07d1808b3e4cfb8792590c68bcc5d933e39473@local.edu
+  To: 3c6de43e3320@local.edu
+  Subject: Your confirmation is needed to leave the reading-group@local.edu
+ mailing list.
+  Body: Email Address Unsubscription Confirmation
+
+Hello, this is the GNU Mailman server at local.edu.
+
+We have received an unsubscription request for the email address
+
+    3c6de43e3320@local.edu
+
+Before GNU Mailman can unsubscribe you, you must first confirm your request.
+You can do this by simply replying to this message.
+
+Or you should include the following line -- and only the following
+line -- in a message to reading-group-request@local.edu:
+
+    confirm 6e07d1808b3e4cfb8792590c68bcc5d933e39473
+
+N...
+Reply to reading-group-confirm+6e07d1808b3e4cfb8792590c68bcc5d933e39473@local.edu from 3c6de43e3320@local.edu for leave
+Retrying in 2 seconds...
+leave works
+EXIT:0
+> build · deepseek-v4.1-flash
+$ ls -la /etc/init.d/ | grep -E 'mail|postfix'; echo "==="; ls /lib/systemd/system/ 2>/dev/null | grep -E 'mailman|postfix'; echo "==="; command -v systemctl se
+rvice; echo "==="; cat /proc/1/cmdline | tr '\0' ' '; echo
+-rwxr-xr-x 1 root root 4477 Aug 21  2023 mailman3
+-rwxr-xr-x 1 root root 3089 Mar  5  2024 postfix
+===
+mailman3.service
+postfix-resolvconf.path
+postfix-resolvconf.service
+postfix.service
+postfix@.service
+===
+/usr/bin/systemctl
+/usr/sbin/service
+===
+sh -c sleep infinity
+> build · deepseek-v4.1-flash
+$ sed -n '1,160p' /etc/init.d/mailman3; echo "==="; sed -n '1,120p' /lib/systemd/system/mailman3.service
+#! /bin/sh
+### BEGIN INIT INFO
+# Provides:          mailman3
+# Required-Start:    $remote_fs $syslog
+# Required-Stop:     $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Mailman3 server
+# Description:       Starts and stops the Mailman3 server, used to
+#                    manage mailing lists, queues, and all client queries
+### END INIT INFO
+
+# Do NOT "set -e"
+
+# PATH should only include /usr/* if it runs after the mountnfs.sh script
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
+DESC="Mailman3 program"
+NAME=mailman3
+DAEMON=/usr/bin/mailman
+DAEMON_ARGS="-C /etc/mailman3/mailman.cfg start"
+PIDDIR=/run/mailman3
+PIDFILE=${PIDDIR}/master.pid
+INTERPRETER=python3
+RUNNER=/usr/lib/mailman3/bin/runner
+SCRIPTNAME=/etc/init.d/$NAME
+USER=list
+GROUP=list
+
+# Exit if the package is not installed
+[ -x "$DAEMON" ] || exit 0
+
+[ ! -d ${PIDDIR} ] && (mkdir -p ${PIDDIR} && chown ${USER}:${GROUP} ${PIDDIR})
+
+# Read configuration variable file if it is present
+[ -r $ENVIRONMENTFILE ] && . $ENVIRONMENTFILE
+
+# Load the VERBOSE setting and other rcS variables
+. /lib/init/vars.sh
+
+# Define LSB log_* functions.
+# Depend on lsb-base (>= 3.2-14) to ensure that this file is present
+# and status_of_proc is working.
+. /lib/lsb/init-functions
+
+#
+# Function that starts the daemon/service
+#
+do_start() {
+    # Return
+    #   0 if daemon has been started
+    #   1 if daemon was already running
+    #   2 if daemon could not be started
+    start-stop-daemon --start --quiet --pidfile $PIDFILE --exec "$(which $INTERPRETER)" \
+        --test > /dev/null || return 1
+    start-stop-daemon --start --quiet --pidfile $PIDFILE --chuid ${USER}:${GROUP} \
+        --exec $DAEMON -- $DAEMON_ARGS || return 2
+}
+
+#
+# Function that stops the daemon/service
+#
+do_stop() {
+    # Return
+    #   0 if daemon has been stopped
+    #   1 if daemon was already stopped
+    #   2 if daemon could not be stopped
+    #   other if a failure occurred
+    start-stop-daemon --stop --quiet --retry=TERM/30/KILL/5 --pidfile $PIDFILE \
+        --user $USER --name $INTERPRETER
+    RETVAL="$?"
+    [ "$RETVAL" = 2 ] && return 2
+
+    # Wait for children to finish too if this is a daemon that forks
+    # and if the daemon is only ever run from this initscript.
+    # If the above conditions are not satisfied then add some other code
+    # that waits for the process to drop all resources that could be
+    # needed by services started subsequently.  A last resort is to
+    # sleep for some time.
+
+    REMAINING_PIDS=`pgrep -f ${RUNNER}`
+
+    if [ "$REMAINING_PIDS" ]; then
+        for PID in $REMAINING_PIDS; do
+            start-stop-daemon --stop --quiet --oknodo --retry 1 \
+                --pid $PID --user $USER
+        done
+    fi
+
+    # Many daemons don't delete their pidfiles when they exit.
+    rm -f $PIDFILE
+
+    return "$RETVAL"
+}
+
+#
+# Function that sends a SIGHUP to the daemon/service
+#
+do_reload() {
+    #
+    # If the daemon can reload its configuration without
+    # restarting (for example, when it is sent a SIGHUP),
+    # then implement that here.
+    #
+    start-stop-daemon --stop --signal HUP --quiet --pidfile $PIDFILE --name $NAME
+    return 0
+}
+
+case "$1" in
+  start)
+    [ "$VERBOSE" != "no" ] && log_daemon_msg "Starting $DESC" "$NAME"
+    do_start
+    case "$?" in
+      0|1)
+        [ "$VERBOSE" != "no" ] && log_end_msg 0
+        ;;
+      2)
+        [ "$VERBOSE" != "no" ] && log_end_msg 1
+        ;;
+    esac
+    ;;
+  stop)
+    [ "$VERBOSE" != "no" ] && log_daemon_msg "Stopping $DESC" "$NAME"
+    do_stop
+    case "$?" in
+      0|1)
+        [ "$VERBOSE" != "no" ] && log_end_msg 0
+        ;;
+      2)
+        [ "$VERBOSE" != "no" ] && log_end_msg 1
+        ;;
+    esac
+    ;;
+  status)
+    status_of_proc -p $PIDFILE $DAEMON $NAME && exit 0 || exit $?
+    ;;
+  reload|force-reload)
+    log_daemon_msg "Reloading $DESC" "$NAME"
+    do_reload
+    log_end_msg $?
+    ;;
+  restart)
+    log_daemon_msg "Restarting $DESC" "$NAME"
+    do_stop
+    case "$?" in
+      0|1)
+        do_start
+        case "$?" in
+          0)
+            log_end_msg 0
+            ;;
+          1)
+            # Old process is still running
+            log_end_msg 1
+            ;;
+          *)
+            # Failed to start
+            log_end_msg 1
+            ;;
+        esac
+        ;;
+===
+# systemd service template for mailman3 program
+
+[Unit]
+Description=Mailman3 server
+Documentation=man:mailman(1)
+Documentation=https://mailman.readthedocs.io/
+ConditionPathExists=/etc/mailman3/mailman.cfg
+After=mariadb.service
+Wants=mariadb.service
+
+[Service]
+ExecStart=/usr/bin/mailman -C /etc/mailman3/mailman.cfg start --force
+ExecReload=/usr/bin/mailman -C /etc/mailman3/mailman.cfg restart
+ExecStop=/usr/bin/mailman -C /etc/mailman3/mailman.cfg stop
+Type=forking
+PIDFile=/run/mailman3/master.pid
+SyslogIdentifier=mailman3
+User=list
+Group=list
+
+[Install]
+WantedBy=multi-user.target
+> build · deepseek-v4.1-flash
+$ cat > /tmp/clean.py <<'PY'
+from mailman.core.initialize import initialize
+from mailman.interfaces.listmanager import IListManager
+from zope.component import getUtility
+initialize('/etc/mailman3/mailman.cfg')
+m = getUtility(IListManager).get('reading-group@local.edu')
+for member in list(m.members.members):
+    print('removing', member.address.email)
+    m.members.unregister(member.address.email)
+print('members now:', [x.email for x in m.members.addresses])
+print('owner:', [x.email for x in m.owners.addresses])
+print('policy:', m.subscription_policy, m.unsubscription_policy)
+PY
+su list -s /bin/bash -c 'python3 /tmp/clean.py' 2>&1
+removing 639b0dba536de13c@local.edu
+Traceback (most recent call last):
+  File "/tmp/clean.py", line 8, in <module>
+    m.members.unregister(member.address.email)
+    ^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MemberRoster' object has no attribute 'unregister'
+> build · deepseek-v4.1-flash
+$ grep -n "def remove\|def unregister\|def unsubscribe" -A 5 /usr/lib/python3/dist-packages/mailman/interfaces/member.py /usr/lib/python3/dist-packages/mailman/
+model/member.py /usr/lib/python3/dist-packages/mailman/interfaces/mailinglist.py | head -60
+/usr/lib/python3/dist-packages/mailman/interfaces/member.py:210:    def unsubscribe():
+/usr/lib/python3/dist-packages/mailman/interfaces/member.py-211-        """Unsubscribe (and delete) this member from the mailing list."""
+/usr/lib/python3/dist-packages/mailman/interfaces/member.py-212-
+/usr/lib/python3/dist-packages/mailman/interfaces/member.py-213-    acknowledge_posts = Attribute(
+/usr/lib/python3/dist-packages/mailman/interfaces/member.py-214-        """Send an acknowledgment for every posting?
+/usr/lib/python3/dist-packages/mailman/interfaces/member.py-215-
+--
+/usr/lib/python3/dist-packages/mailman/model/member.py:225:    def unsubscribe(self, store):
+/usr/lib/python3/dist-packages/mailman/model/member.py-226-        """See `IMember`."""
+/usr/lib/python3/dist-packages/mailman/model/member.py-227-        # Yes, this must get triggered before self is deleted.
+/usr/lib/python3/dist-packages/mailman/model/member.py-228-        notify(UnsubscriptionEvent(self.mailing_list, self))
+/usr/lib/python3/dist-packages/mailman/model/member.py-229-        store.delete(self.preferences)
+/usr/lib/python3/dist-packages/mailman/model/member.py-230-        store.delete(self)
+--
+/usr/lib/python3/dist-packages/mailman/interfaces/mailinglist.py:805:    def remove(alias):
+/usr/lib/python3/dist-packages/mailman/interfaces/mailinglist.py-806-        """Remove the given address as an acceptable aliases for posting.
+/usr/lib/python3/dist-packages/mailman/interfaces/mailinglist.py-807-
+/usr/lib/python3/dist-packages/mailman/interfaces/mailinglist.py-808-        :param alias: The email address to no longer accept as a recipient for
+/usr/lib/python3/dist-packages/mailman/interfaces/mailinglist.py-809-            implicit destination posting purposes.
+/usr/lib/python3/dist-packages/mailman/interfaces/mailinglist.py-810-        :type alias: string
+--
+/usr/lib/python3/dist-packages/mailman/interfaces/mailinglist.py:933:    def remove(header, pattern):
+/usr/lib/python3/dist-packages/mailman/interfaces/mailinglist.py-934-        """Remove the given rule from this mailing list's header match list.
+/usr/lib/python3/dist-packages/mailman/interfaces/mailinglist.py-935-
+/usr/lib/python3/dist-packages/mailman/interfaces/mailinglist.py-936-        :param header: The email header part of the rule to be removed.
+/usr/lib/python3/dist-packages/mailman/interfaces/mailinglist.py-937-        :type header: string
+/usr/lib/python3/dist-packages/mailman/interfaces/mailinglist.py-938-        :param pattern: The regular expression part of the rule to be removed.
+> build · deepseek-v4.1-flash
+$ grep -rn "class MemberRoster" -A 80 /usr/lib/python3/dist-packages/mailman/model/roster.py | head -120; echo "==="; grep -rn "def unsubscribe" -A 15 /usr/lib/
+python3/dist-packages/mailman/model/mailinglist.py | head -60
+145:class MemberRoster(AbstractRoster):
+146-    """Return all the members of a list."""
+147-
+148-    name = 'member'
+149-    role = MemberRole.member
+150-
+151-
+152-@public
+153-class NonmemberRoster(AbstractRoster):
+154-    """Return all the nonmembers of a list."""
+155-
+156-    name = 'nonmember'
+157-    role = MemberRole.nonmember
+158-
+159-
+160-@public
+161-class OwnerRoster(AbstractRoster):
+162-    """Return all the owners of a list."""
+163-
+164-    name = 'owner'
+165-    role = MemberRole.owner
+166-
+167-
+168-@public
+169-class ModeratorRoster(AbstractRoster):
+170-    """Return all the moderators of a list."""
+171-
+172-    name = 'moderator'
+173-    role = MemberRole.moderator
+174-
+175-
+176-@public
+177-class AdministratorRoster(AbstractRoster):
+178-    """Return all the administrators of a list."""
+179-
+180-    name = 'administrator'
+181-
+182-    @dbconnection
+183-    def _query(self, store):
+184-        return store.query(Member).filter(
+185-            Member.list_id == self._mlist.list_id,
+186-            or_(Member.role == MemberRole.owner,
+187-                Member.role == MemberRole.moderator))
+188-
+189-    @dbconnection
+190-    def get_member(self, store, email):
+191-        """See `IRoster`."""
+192-        members = store.query(Member).filter(
+193-            Member.list_id == self._mlist.list_id,
+194-            or_(Member.role == MemberRole.moderator,
+195-                Member.role == MemberRole.owner),
+196-            Address.email == email,
+197-            Member.address_id == Address.id).all()
+198-        if len(members) == 0:
+199-            return None
+200-        for member in members:
+201-            if member.role == MemberRole.owner:
+202-                return member
+203-        assert len(members) == 1, 'mlist.administrators has too many members'
+204-        return members[0]
+205-
+206-
+207-@public
+208-class DeliveryMemberRoster(AbstractRoster):
+209-    """Return all the members having a particular kind of delivery."""
+210-
+211-    role = MemberRole.member
+212-
+213-    @property
+214-    def member_count(self):
+215-        """See `IRoster`."""
+216-        # XXX 2012-03-15 BAW: It would be nice to make this more efficient.
+217-        # The problem is that you'd have to change the loop in _get_members()
+218-        # checking the delivery mode to a query parameter.
+219-        return len(tuple(self.members))
+220-
+221-    @dbconnection
+222-    def _get_members(self, store, *delivery_modes):
+223-        """The set of members for a mailing list, filter by delivery mode.
+224-
+225-        :param delivery_modes: The modes to filter on.
+===
+328:    def unsubscribe_address(self):
+329-        """See `IMailingList`."""
+330-        return '{}-unsubscribe@{}'.format(self.list_name, self.mail_host)
+331-
+332-    def confirm_address(self, cookie):
+333-        """See `IMailingList`."""
+334-        local_part = expand(config.mta.verp_confirm_format, self, dict(
+335-            address='{}-confirm'.format(self.list_name),
+336-            cookie=cookie))
+337-        return '{}@{}'.format(local_part, self.mail_host)
+338-
+339-    @property
+340-    def preferred_language(self):
+341-        """See `IMailingList`."""
+342-        return getUtility(ILanguageManager)[self._preferred_language]
+343-
+> build · deepseek-v4.1-flash
+$ sed -n '1,145p' /usr/lib/python3/dist-packages/mailman/model/roster.py
+# Copyright (C) 2007-2023 by the Free Software Foundation, Inc.
+#
+# This file is part of GNU Mailman.
+#
+# GNU Mailman is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option)
+# any later version.
+#
+# GNU Mailman is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+# more details.
+#
+# You should have received a copy of the GNU General Public License along with
+# GNU Mailman.  If not, see <https://www.gnu.org/licenses/>.
+
+"""An implementation of an IRoster.
+
+These are hard-coded rosters which know how to filter a set of members to find
+the ones that fit a particular role.  These are used as the member, owner,
+moderator, and administrator roster filters.
+"""
+
+from enum import Enum
+from mailman.database.transaction import dbconnection
+from mailman.interfaces.member import DeliveryMode, MemberRole
+from mailman.interfaces.roster import IRoster
+from mailman.model.address import Address
+from mailman.model.member import Member
+from public import public
+from sqlalchemy import or_
+from zope.interface import implementer
+
+
+@public
+class RosterVisibility(Enum):
+    # The member roster is entirely public.
+    public = 0
+    # Any list member can view the member roster.
+    members = 1
+    # Only list moderators and above (list owners, domain owners, admins,
+    # superusers) can view the member roster.
+    moderators = 2
+
+
+@public
+@implementer(IRoster)
+class AbstractRoster:
+    """An abstract IRoster class.
+
+    This class takes the simple approach of implemented the 'users' and
+    'addresses' properties in terms of the 'members' property.  This may not
+    be the most efficient way, but it works.
+
+    This requires that subclasses implement the 'members' property.
+    """
+    role = None
+
+    def __init__(self, mlist):
+        self._mlist = mlist
+
+    @dbconnection
+    def _query(self, store):
+        return store.query(Member).filter(
+            Member.list_id == self._mlist.list_id,
+            Member.role == self.role)
+
+    @property
+    def members(self):
+        """See `IRoster`."""
+        yield from self._query()
+
+    @property
+    def member_count(self):
+        """See `IRoster`."""
+        return self._query().count()
+
+    @property
+    def users(self):
+        """See `IRoster`."""
+        # Members are linked to addresses, which in turn are linked to users.
+        # So while the 'members' attribute does most of the work, we have to
+        # keep a set of unique users.  It's possible for the same user to be
+        # subscribed to a mailing list multiple times with different
+        # addresses.
+        yield from set(member.address.user for member in self.members)
+
+    @property
+    def addresses(self):
+        """See `IRoster`."""
+        # Every Member is linked to exactly one address so the 'members'
+        # attribute does most of the work.
+        for member in self.members:
+            yield member.address
+
+    @dbconnection
+    def _get_all_memberships(self, store, email):
+        # Avoid circular imports.
+        from mailman.model.user import User
+
+        # Here's a query that finds all members subscribed with an explicit
+        # email address.
+        members_a = store.query(Member).filter(
+            Member.list_id == self._mlist.list_id,
+            Member.role == self.role,
+            Address.email == email,
+            Member.address_id == Address.id)
+        # Here's a query that finds all members subscribed with their
+        # preferred address.
+        members_u = store.query(Member).filter(
+            Member.list_id == self._mlist.list_id,
+            Member.role == self.role,
+            Address.email == email,
+            Member.user_id == User.id,
+            User._preferred_address_id == Address.id)
+        return members_a.union(members_u).all()
+
+    def get_member(self, email):
+        """See ``IRoster``."""
+        memberships = self._get_all_memberships(email)
+        count = len(memberships)
+        if count == 0:
+            return None
+        elif count == 1:
+            return memberships[0]
+        assert count == 2, 'Unexpected membership count: {}'.format(count)
+        # This is the case where the email address is subscribed both
+        # explicitly and indirectly through the preferred address.  By
+        # definition, we return the explicit address membership only.
+        return (memberships[0]
+                if memberships[0]._address is not None
+                else memberships[1])
+
+    def get_memberships(self, email):
+        """See ``IRoster``."""
+        memberships = self._get_all_memberships(email)
+        count = len(memberships)
+        assert 0 <= count <= 2, 'Unexpected membership count: {}'.format(
+            count)
+        return memberships
+
+
+@public
+class MemberRoster(AbstractRoster):
+> build · deepseek-v4.1-flash
+$ grep -rn "def unregister" -A 30 /usr/lib/python3/dist-packages/mailman/app/subscriptions.py | head -80; echo "==="; grep -rn "config.db" /usr/lib/python3/dist
+-packages/mailman/commands/cli_delmembers.py /usr/lib/python3/dist-packages/mailman/app/*.py | head
+587:    def unregister(self, subscriber=None, *,
+588-                   pre_confirmed=False, pre_approved=False):
+589-        workflow = UnSubscriptionWorkflow(
+590-            self._mlist, subscriber,
+591-            pre_confirmed=pre_confirmed,
+592-            pre_approved=pre_approved)
+593-        list(workflow)
+594-        return workflow.token, workflow.token_owner, workflow.member
+595-
+596-    def confirm(self, token):
+597-        if token is None:
+598-            raise LookupError
+599-        pendable = getUtility(IPendings).confirm(token, expunge=False)
+600-        if pendable is None:
+601-            raise LookupError
+602-        workflow_type = pendable.get('type')
+603-        assert workflow_type in (PendableSubscription.PEND_TYPE,
+604-                                 PendableUnsubscription.PEND_TYPE)
+605-        workflow = (SubscriptionWorkflow
+606-                    if workflow_type == PendableSubscription.PEND_TYPE
+607-                    else UnSubscriptionWorkflow)(self._mlist)
+608-        workflow.token = token
+609-        workflow.restore()
+610-        # In order to just run the whole workflow, all we need to do
+611-        # is iterate over the workflow object. On calling the __next__
+612-        # over the workflow iterator it automatically executes the steps
+613-        # that needs to be done.
+614-        list(workflow)
+615-        return workflow.token, workflow.token_owner, workflow.member
+616-
+617-    def discard(self, token):
+===
+> build · deepseek-v4.1-flash
+$ cat > /tmp/clean.py <<'PY'
+from mailman.core.initialize import initialize
+from mailman.interfaces.listmanager import IListManager
+from mailman.interfaces.subscriptions import ISubscriptionManager
+from zope.component import getUtility
+initialize('/etc/mailman3/mailman.cfg')
+m = getUtility(IListManager).get('reading-group@local.edu')
+for member in list(m.members.members):
+    print('removing', member.address.email)
+    ISubscriptionManager(m).unregister(member.address.email,
+                                       pre_confirmed=True, pre_approved=True)
+print('members now:', [x.email for x in m.members.addresses])
+print('owner:', [x.email for x in m.owners.addresses])
+print('policy:', m.subscription_policy, m.unsubscription_policy)
+PY
+su list -s /bin/bash -c 'python3 /tmp/clean.py' 2>&1
+removing 639b0dba536de13c@local.edu
+Traceback (most recent call last):
+  File "/tmp/clean.py", line 9, in <module>
+    ISubscriptionManager(m).unregister(member.address.email,
+  File "/usr/lib/python3/dist-packages/mailman/app/subscriptions.py", line 593, in unregister
+    list(workflow)
+  File "/usr/lib/python3/dist-packages/mailman/app/workflow.py", line 69, in __next__
+    return step()
+           ^^^^^^
+  File "/usr/lib/python3/dist-packages/mailman/app/subscriptions.py", line 447, in _step_subscription_checks
+    assert (self.member is not None and
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+> build · deepseek-v4.1-flash
+$ cat > /tmp/clean.py <<'PY'
+from mailman.core.initialize import initialize
+from mailman.interfaces.listmanager import IListManager
+from mailman.interfaces.subscriptions import ISubscriptionManager
+from zope.component import getUtility
+initialize('/etc/mailman3/mailman.cfg')
+m = getUtility(IListManager).get('reading-group@local.edu')
+for member in list(m.members.members):
+    print('removing', member.address.email)
+    ISubscriptionManager(m).unregister(member, pre_confirmed=True, pre_approved=True)
+print('members now:', [x.email for x in m.members.addresses])
+print('owner:', [x.email for x in m.owners.addresses])
+print('policy:', m.subscription_policy, m.unsubscription_policy)
+PY
+su list -s /bin/bash -c 'python3 /tmp/clean.py' 2>&1
+removing 639b0dba536de13c@local.edu
+Traceback (most recent call last):
+  File "/tmp/clean.py", line 9, in <module>
+    ISubscriptionManager(m).unregister(member, pre_confirmed=True, pre_approved=True)
+  File "/usr/lib/python3/dist-packages/mailman/app/subscriptions.py", line 593, in unregister
+    list(workflow)
+  File "/usr/lib/python3/dist-packages/mailman/app/workflow.py", line 69, in __next__
+    return step()
+           ^^^^^^
+  File "/usr/lib/python3/dist-packages/mailman/app/subscriptions.py", line 447, in _step_subscription_checks
+    assert (self.member is not None and
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+> build · deepseek-v4.1-flash
+$ sed -n '400,470p' /usr/lib/python3/dist-packages/mailman/app/subscriptions.py; echo "==="; sed -n '1,120p' /usr/lib/python3/dist-packages/mailman/commands/cli
+_delmembers.py
+else:
+            assert self.which is WhichSubscriber.user
+            self.subscriber = self.user
+        # Reset the token so it can't be used in a replay attack.
+        self._set_token(TokenOwner.no_one)
+        # The user has confirmed their subscription request, and also verified
+        # their email address if necessary.  This latter needs to be set on the
+        # IAddress, but there's nothing more to do about the confirmation step.
+        # We just continue along with the workflow.
+        if self.address.verified_on is None:
+            self.address.verified_on = now()
+        # The next step depends on the mailing list's subscription policy.
+        next_step = ('moderation_checks'
+                     if self.mlist.subscription_policy in (
+                         SubscriptionPolicy.moderate,
+                         SubscriptionPolicy.confirm_then_moderate,
+                         ) and not self.invitation
+                     else 'do_subscription')
+        self.push(next_step)
+
+
+@public
+class UnSubscriptionWorkflow(_SubscriptionWorkflowCommon):
+    """Workflow of a unsubscription request."""
+
+    PENDABLE_CLASS = PendableUnsubscription
+    INITIAL_STATE = 'subscription_checks'
+    SAVE_ATTRIBUTES = (
+        'pre_approved',
+        'pre_confirmed',
+        'address_key',
+        'user_key',
+        'subscriber_key',
+        'token_owner_key',
+        )
+
+    def __init__(self, mlist, subscriber=None, *,
+                 pre_approved=False, pre_confirmed=False):
+        super().__init__(mlist, subscriber)
+        if IAddress.providedBy(subscriber) or IUser.providedBy(subscriber):
+            self.member = self.mlist.regular_members.get_member(
+                self.address.email)
+        self.pre_confirmed = pre_confirmed
+        self.pre_approved = pre_approved
+
+    def _step_subscription_checks(self):
+        # XXX assert self.member is not None is sufficient, but ...
+        assert (self.member is not None and
+                self.mlist.is_subscribed(self.member.subscriber))
+        self.push('confirmation_checks')
+
+    def _step_confirmation_checks(self):
+        # If list's unsubscription policy is open, the user can unsubscribe
+        # right now.
+        if self.mlist.unsubscription_policy is SubscriptionPolicy.open:
+            self.push('do_unsubscription')
+            return
+        # If we don't need the user's confirmation, then skip to the moderation
+        # checks.
+        if self.mlist.unsubscription_policy is SubscriptionPolicy.moderate:
+            self.push('moderation_checks')
+            return
+        # If the request is pre-confirmed, then the user can unsubscribe right
+        # now.
+        if self.pre_confirmed:
+            self.push('do_unsubscription')
+            return
+        # The user must confirm their un-subsbcription.
+        self.push('send_confirmation')
+
+    def _step_send_confirmation(self):
+===
+# Copyright (C) 2009-2023 by the Free Software Foundation, Inc.
+#
+# This file is part of GNU Mailman.
+#
+# GNU Mailman is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option)
+# any later version.
+#
+# GNU Mailman is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+# more details.
+#
+# You should have received a copy of the GNU General Public License along with
+# GNU Mailman.  If not, see <https://www.gnu.org/licenses/>.
+
+"""The 'delmembers' subcommand."""
+
+import sys
+import click
+
+from email.utils import formataddr, parseaddr
+from mailman.app.membership import delete_member
+from mailman.core.i18n import _
+from mailman.database.transaction import transactional
+from mailman.interfaces.command import ICLISubCommand
+from mailman.interfaces.listmanager import IListManager
+from mailman.interfaces.member import NotAMemberError
+from mailman.utilities.options import I18nCommand
+from public import public
+from zope.component import getUtility
+from zope.interface import implementer
+
+
+@transactional
+def delete_members(mlists, memb_list, goodbye_msg, admin_notify):
+    """Delete one or more members from one or more mailing lists."""
+    mlists = list(mlists)
+    for mlist in mlists:
+        for display_name, email in memb_list:
+            try:
+                delete_member(mlist, email, admin_notif=admin_notify,
+                              userack=goodbye_msg)
+            except NotAMemberError:
+                email = formataddr((display_name, email))
+                if len(mlists) == 1:
+                    print(_('Member not subscribed (skipping): ${email}'),
+                          file=sys.stderr)
+
+
+@click.command(
+    cls=I18nCommand,
+    help=_("""\
+    Delete members from a mailing list."""))
+@click.option(
+    '--list', '-l', '_list', metavar='LISTSPEC',
+    help=_("""\
+    The list to operate on.  Required unless --fromall is specified.
+    """))
+@click.option(
+    '--file', '-f', 'in_fp', metavar='FILENAME',
+    type=click.File(encoding='utf-8'),
+    help=_("""\
+    Delete list members whose addresses are in FILENAME in addition to those
+    specified with -m/--member if any.  FILENAME can be '-' to indicate
+    standard input.  Blank lines and lines that start with a '#' are ignored.
+    """))
+@click.option(
+    '--member', '-m', metavar='ADDRESS',  multiple=True,
+    help=_("""\
+    Delete the list member whose address is ADDRESS in addition to those
+    specified with -f/--file if any.  This option may be repeated for
+    multiple addresses.
+    """))
+@click.option(
+    '--all', '-a', '_all',
+    is_flag=True, default=False,
+    help=_("""\
+    Delete all the members of the list.  If specified, none of -f/--file,
+    -m/--member or --fromall may be specified.
+    """))
+@click.option(
+    '--fromall',
+    is_flag=True, default=False,
+    help=_("""\
+    Delete the member(s) specified by -m/--member and/or -f/--file from all
+    lists in the installation.  This may not be specified together with
+    -a/--all or -l/--list.
+    """))
+@click.option(
+    '--goodbye-msg/--no-goodbye-msg', '-g/-G', 'goodbye_msg', default=None,
+    help=_("""\
+    Override the list's setting for send_goodbye_message to
+    deleted members."""))
+@click.option(
+    '--admin-notify/--no-admin-notify', '-n/-N', 'admin_notify', default=None,
+    help=_("""\
+    Override the list's setting for admin_notify_mchanges."""))
+@click.pass_context
+def delmembers(ctx, _list, in_fp, member, _all, fromall, goodbye_msg,
+               admin_notify):
+    """Delete members from mailing lists."""
+    if fromall:
+        if _list is not None or _all:
+            ctx.fail('--fromall may not be specified with -l/--list, '
+                     'or -a/--all')
+    elif _all:
+        if in_fp is not None or len(member) != 0:
+            ctx.fail('-a/--all must not be specified with '
+                     '-f/--file or -m/--member.')
+    if _list is None and not fromall:
+        ctx.fail('Without --fromall, -l/--list is required.')
+    if not _all and in_fp is None and len(member) == 0:
+        ctx.fail('At least one of -a/--all, -f/--file or -m/--member '
+                 'is required.')
+    list_manager = getUtility(IListManager)
+    if fromall:
+        mlists = list_manager.mailing_lists
+    else:
+> build · deepseek-v4.1-flash
+$ su list -s /bin/bash -c '/usr/lib/mailman3/bin/mailman delmembers -l reading-group@local.edu -a' 2>&1; echo "EXIT:$?"; cat > /tmp/check.py <<'PY'
+from mailman.core.initialize import initialize
+from mailman.interfaces.listmanager import IListManager
+from zope.component import getUtility
+initialize('/etc/mailman3/mailman.cfg')
+m = getUtility(IListManager).get('reading-group@local.edu')
+print('members:', [x.email for x in m.members.addresses])
+print('owners:', [x.email for x in m.owners.addresses])
+print('policy:', m.subscription_policy, m.unsubscription_policy)
+PY
+su list -s /bin/bash -c 'python3 /tmp/check.py' 2>&1
+EXIT:0
+members: []
+owners: ['postmaster@local.edu']
+policy: SubscriptionPolicy.confirm SubscriptionPolicy.confirm
+> build · deepseek-v4.1-flash
+$ grep -rn "config.db.commit\|config.db.store.flush\|transactional" /usr/lib/python3/dist-packages/mailman/commands/cli_shell.py /usr/lib/python3/dist-packages/
+mailman/database/transaction.py /usr/lib/python3/dist-packages/mailman/commands/cli_withlist.py | head -40; echo "==="; sed -n '1,100p' /usr/lib/python3/dist-pa
+ckages/mailman/database/transaction.py
+grep: /usr/lib/python3/dist-packages/mailman/commands/cli_shell.py: No such file or directory
+/usr/lib/python3/dist-packages/mailman/database/transaction.py:35:        config.db.commit()
+/usr/lib/python3/dist-packages/mailman/database/transaction.py:39:def transactional(function):
+/usr/lib/python3/dist-packages/mailman/database/transaction.py:40:    """Decorator for transactional support.
+/usr/lib/python3/dist-packages/mailman/database/transaction.py:51:            config.db.commit()
+/usr/lib/python3/dist-packages/mailman/database/transaction.py:61:    """Decorator for transactional support in REST API.
+/usr/lib/python3/dist-packages/mailman/database/transaction.py:63:    Difference between this and :py:func:`transactional` is just that this
+/usr/lib/python3/dist-packages/mailman/database/transaction.py:70:            config.db.commit()
+/usr/lib/python3/dist-packages/mailman/database/transaction.py:93:    config.db.store.flush()
+/usr/lib/python3/dist-packages/mailman/commands/cli_withlist.py:112:        commit=config.db.commit,
+===
+# Copyright (C) 2006-2023 by the Free Software Foundation, Inc.
+#
+# This file is part of GNU Mailman.
+#
+# GNU Mailman is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option)
+# any later version.
+#
+# GNU Mailman is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+# more details.
+#
+# You should have received a copy of the GNU General Public License along with
+# GNU Mailman.  If not, see <https://www.gnu.org/licenses/>.
+
+"""Transactional support."""
+
+from contextlib import contextmanager
+from mailman.config import config
+from public import public
+
+
+@public
+@contextmanager
+def transaction():
+    """Context manager for ensuring the transaction is complete."""
+    try:
+        yield
+    except:                                              # noqa: E722
+        config.db.abort()
+        raise
+    else:
+        config.db.commit()
+
+
+@public
+def transactional(function):
+    """Decorator for transactional support.
+
+    When the function this decorator wraps exits cleanly, the current
+    transaction is committed.  When it exits uncleanly (i.e. because of an
+    exception, the transaction is aborted.
+
+    Either way, the current transaction is completed.
+    """
+    def wrapper(*args, **kws):
+        try:
+            rtn = function(*args, **kws)
+            config.db.commit()
+            return rtn
+        except:                                  # noqa: E722 pragma: nocover
+            config.db.abort()
+            raise
+    return wrapper
+
+
+@public
+def api_transaction(function):
+    """Decorator for transactional support in REST API.
+
+    Difference between this and :py:func:`transactional` is just that this
+    one also closes the session. This is used in REST API to ensure that
+    no state is retained after a request-response cycle.
+    """
+    def wrapper(*args, **kws):
+        try:
+            rtn = function(*args, **kws)
+            config.db.commit()
+            config.db.close_session()
+            return rtn
+        except:                                  # noqa: E722 pragma: nocover
+            config.db.abort()
+            config.db.close_session()
+            raise
+    return wrapper
+
+
+@public
+@contextmanager
+def flush():
+    """Context manager for flushing SQLAlchemy.
+
+    We need this for SA whereas we didn't need it for Storm because the latter
+    did auto-reloads.  However, in SA this is needed when we add or delete
+    objects from the database.  Use it when you need the id after adding, or
+    when you want to be sure the object won't be found after a delete.
+
+    This is lighter weight than committing the transaction.
+    """
+    yield
+    config.db.store.flush()
+
+
+@public
+def dbconnection(function):
+    """Decorator for getting at the database connection.
+
+    Use this to avoid having to access the global `config.db.store`
+> build · deepseek-v4.1-flash
+$ cat > /tmp/setup_list.py <<'PY'
+from mailman.core.initialize import initialize
+from mailman.database.transaction import transaction
+from mailman.interfaces.listmanager import IListManager
+from mailman.interfaces.mailinglist import SubscriptionPolicy
+from mailman.interfaces.action import Action
+from zope.component import getUtility
+
+initialize('/etc/mailman3/mailman.cfg')
+with transaction():
+    mlist = getUtility(IListManager).get('reading-group@local.edu')
+    mlist.subscription_policy = SubscriptionPolicy.open
+    mlist.unsubscription_policy = SubscriptionPolicy.confirm
+    mlist.default_member_action = Action.accept
+    mlist.default_nonmember_action = Action.accept
+print('set')
+PY
+su list -s /bin/bash -c 'python3 /tmp/setup_list.py' 2>&1
+su list -s /bin/bash -c 'python3 /tmp/check.py' 2>&1
+set
+members: []
+owners: ['postmaster@local.edu']
+policy: SubscriptionPolicy.open SubscriptionPolicy.confirm
+> build · deepseek-v4.1-flash
+$ su list -s /bin/bash -c '/usr/lib/mailman3/bin/mailman restart' 2>&1; sleep 4; su list -s /bin/bash -c '/usr/lib/mailman3/bin/mailman status' 2>&1; echo "==="
+; cd /app && python3 eval.py 2>&1 | tail -50; echo "EXIT:${PIPESTATUS[0]}"
+Restarting the Mailman runners
+GNU Mailman is running (master pid: 5141)
+===
+38d1203fd7e6506d added successfully.
+Retrying in 2 seconds...
+Direct delivery to 38d1203fd7e6506d works: Direct Message
+0c0537ae96ce3f09 added successfully.
+0c0537ae96ce3f09 sends a join request
+0c0537ae96ce3f09 has not yet confirmed their subscription
+Retrying in 2 seconds...
+0c0537ae96ce3f09 has 1 messages in their inbox
+the subjects are as follows:
+['Your confirmation is needed to join the reading-group@local.edu\n mailing list.']
+Found 1 candidate confirmation messages
+Message details:
+  From: reading-group-confirm+bf54356632727bd8770783c85c399ea352f510b1@local.edu
+  To: 0c0537ae96ce3f09@local.edu
+  Subject: Your confirmation is needed to join the reading-group@local.edu
+ mailing list.
+  Body: Email Address Registration Confirmation
+
+Hello, this is the GNU Mailman server at local.edu.
+
+We have received a registration request for the email address
+
+    0c0537ae96ce3f09@local.edu
+
+Before you can start using GNU Mailman at this site, you must first confirm
+that this is your email address.  You can do this by replying to this message.
+
+Or you should include the following line -- and only the following
+line -- in a message to reading-group-request@local.edu:
+
+    confirm bf54356632727bd877...
+Reply to reading-group-confirm+bf54356632727bd8770783c85c399ea352f510b1@local.edu from 0c0537ae96ce3f09@local.edu for join
+Retrying in 2 seconds...
+0c0537ae96ce3f09 has confirmed their subscription
+EXIT:0
+> build · deepseek-v4.1-flash
+$ cat > /tmp/test_full2.py <<'PY'
+import os, sys, mailbox, time
+sys.path.insert(0, '/app')
+import eval as E
+
+def subjects(user):
+    return [str(m.get('Subject','')) for m in mailbox.mbox(f'/var/mail/{user}')]
+
+def assert_exists(u):
+    assert os.path.exists(f'/var/mail/{u}'), 'mailbox missing'
+
+def assert_member(u, want=True):
+    m = E.get_mlist().members.get_member(f'{u}@local.edu')
+    assert (m is not None) == want, f'membership for {u} != {want}'
+
+def assert_has(u, subj):
+    ss = subjects(u)
+    assert any(subj in s for s in ss), f'{subj!r} not in {ss}'
+
+def assert_not_has(u, subj):
+    ss = subjects(u)
+    assert not any(subj in s for s in ss), f'{subj!r} unexpectedly in {ss}'
+
+u1 = os.urandom(6).hex(); u2 = os.urandom(6).hex()
+E.add_user(u1); E.add_user(u2)
+for u in (u1,u2):
+    E.send_email(body='', subject='', from_addr=f'{u}@local.edu', to_addr=E.JOIN_LIST)
+    E.retry(lambda u=u: assert_exists(u))
+    E.retry(lambda u=u: E.confirm_last_reply(u, 'join'))
+    E.retry(lambda u=u: assert_member(u, True))
+print('both joined')
+
+subj1='Announcement Before Leave 111'
+E.send_email(body='hello', subject=subj1, from_addr=f'{u1}@local.edu', to_addr=E.MAILING_LIST)
+E.retry(lambda: assert_has(u1, subj1))
+E.retry(lambda: assert_has(u2, subj1))
+print('announcement delivered to both')
+
+E.send_email(body='', subject='', from_addr=f'{u2}@local.edu', to_addr=E.LEAVE_LIST)
+E.retry(lambda u2=u2: assert_exists(u2))
+E.retry(lambda u2=u2: E.confirm_last_reply(u2, 'leave'))
+E.retry(lambda: assert_member(u2, False))
+print('leave works')
+
+subj2='Announcement After Leave 222'
+E.send_email(body='bye', subject=subj2, from_addr=f'{u1}@local.edu', to_addr=E.MAILING_LIST)
+E.retry(lambda: assert_has(u1, subj2))
+time.sleep(5)
+assert_not_has(u2, subj2)
+print('left user no longer receives posts')
+PY
+cd /app && python3 /tmp/test_full2.py 2>&1 | tail -50; echo "EXIT:${PIPESTATUS[0]}"
+Or you should include the following line -- and only the following
+line -- in a message to reading-group-request@local.edu:
+
+    confirm 773ddde5671dec6b6eddeb...
+Reply to reading-group-confirm+773ddde5671dec6b6eddebb02e42e7be3fe2a047@local.edu from 196ed6d15977@local.edu for join
+Retrying in 2 seconds...
+both joined
+Retrying in 2 seconds...
+announcement delivered to both
+196ed6d15977 has 3 messages in their inbox
+the subjects are as follows:
+['Your confirmation is needed to join the reading-group@local.edu\n mailing list.', 'Welcome to the "Reading-group" mailing list', '[Reading-group] Announcement
+ Before Leave 111']
+Found 0 candidate confirmation messages
+Retrying in 2 seconds...
+196ed6d15977 has 3 messages in their inbox
+the subjects are as follows:
+['Your confirmation is needed to join the reading-group@local.edu\n mailing list.', 'Welcome to the "Reading-group" mailing list', '[Reading-group] Announcement
+ Before Leave 111']
+Found 0 candidate confirmation messages
+Retrying in 4 seconds...
+196ed6d15977 has 4 messages in their inbox
+the subjects are as follows:
+['Your confirmation is needed to join the reading-group@local.edu\n mailing list.', 'Welcome to the "Reading-group" mailing list', '[Reading-group] Announcement
+ Before Leave 111', 'Your confirmation is needed to leave the reading-group@local.edu\n mailing list.']
+Found 1 candidate confirmation messages
+Message details:
+  From: reading-group-confirm+1645ea2df9ab52db66e2c0a5232569bcb8756c7b@local.edu
+  To: 196ed6d15977@local.edu
+  Subject: Your confirmation is needed to leave the reading-group@local.edu
+ mailing list.
+  Body: Email Address Unsubscription Confirmation
+
+Hello, this is the GNU Mailman server at local.edu.
+
+We have received an unsubscription request for the email address
+
+    196ed6d15977@local.edu
+
+Before GNU Mailman can unsubscribe you, you must first confirm your request.
+You can do this by simply replying to this message.
+
+Or you should include the following line -- and only the following
+line -- in a message to reading-group-request@local.edu:
+
+    confirm 1645ea2df9ab52db66e2c0a5232569bcb8756c7b
+
+N...
+Reply to reading-group-confirm+1645ea2df9ab52db66e2c0a5232569bcb8756c7b@local.edu from 196ed6d15977@local.edu for leave
+Retrying in 2 seconds...
+leave works
+Retrying in 2 seconds...
+left user no longer receives posts
+EXIT:0
+> build · deepseek-v4.1-flash
+$ su list -s /bin/bash -c '/usr/lib/mailman3/bin/mailman delmembers -l reading-group@local.edu -a' 2>&1; echo "DELMEMBERS:$?"
+for f in /var/mail/*; do u=$(basename "$f"); if id "$u" >/dev/null 2>&1; then chown "$u":mail "$f" 2>/dev/null || true; fi; done
+ls -la /var/mail/
+su list -s /bin/bash -c 'python3 /tmp/check.py' 2>&1
+su list -s /bin/bash -c '/usr/lib/mailman3/bin/mailman status' 2>&1
+postfix status 2>&1
+grep -E '^reading-group(@|-join@|-leave@)' /var/lib/mailman3/data/postfix_lmtp
+DELMEMBERS:0
+total 76
+drwxrwsr-x 1 root             mail 4096 Nov  1 03:41 .
+drwxr-xr-x 1 root             root 4096 Apr  4  2025 ..
+-rw------- 1 0c0537ae96ce3f09 mail 6848 Nov  1 03:41 0c0537ae96ce3f09
+-rw------- 1 13ebaee2c5ef59a6 mail  663 Nov  1 03:37 13ebaee2c5ef59a6
+-rw------- 1 196ed6d15977     mail 8089 Nov  1 03:41 196ed6d15977
+-rw------- 1 38d1203fd7e6506d mail  663 Nov  1 03:41 38d1203fd7e6506d
+-rw------- 1 3c6de43e3320     mail 8208 Nov  1 03:40 3c6de43e3320
+-rw------- 1 639b0dba536de13c mail 6348 Nov  1 03:41 639b0dba536de13c
+-rw-r--r-- 1 6e32357b65c3     mail    0 Nov  1 03:39 6e32357b65c3
+-rw------- 1 8e79d1eab0e5     mail 1935 Nov  1 03:39 8e79d1eab0e5
+-rw------- 1 c214375d55ad     mail 6797 Nov  1 03:41 c214375d55ad
+-rw-r--r-- 1 c40a7ea78ec3     mail    0 Nov  1 03:38 c40a7ea78ec3
+-rw------- 1 ff0eaa3066d1     mail 6288 Nov  1 03:41 ff0eaa3066d1
+members: []
+owners: ['postmaster@local.edu']
+policy: SubscriptionPolicy.open SubscriptionPolicy.confirm
+GNU Mailman is running (master pid: 5141)
+postfix/postlog: the Postfix mail system is running: PID: 5247
+reading-group@local.edu                       lmtp:[127.0.0.1]:8024
+reading-group-join@local.edu                  lmtp:[127.0.0.1]:8024
+reading-group-leave@local.edu                 lmtp:[127.0.0.1]:8024
+> build · deepseek-v4.1-flash
+$ diff -u /etc/mailman3/mailman.cfg.bak /etc/mailman3/mailman.cfg | head -40; echo "==="; postconf -n | grep -E 'mydestination|transport_maps|local_recipient_ma
+ps|maillog_file'; echo "==="; ls -l /var/lib/mailman3/data/postfix_lmtp*
+--- /etc/mailman3/mailman.cfg.bak       2026-11-01 03:37:27.648044944 +0000
++++ /etc/mailman3/mailman.cfg   2026-11-01 03:37:27.673627541 +0000
+@@ -25,7 +25,7 @@
+ # delivered to a human, but which can't be delivered to a list owner (e.g. a
+ # bounce from a list owner), will be sent to this address.  It should point to
+ # a human.
+-site_owner: changeme@example.com
++site_owner: postmaster@local.edu
+
+ # This is the local-part of an email address used in the From field whenever a
+ # message comes from some entity to which there is no natural reply recipient.
+===
+local_recipient_maps = proxy:unix:passwd.byname $alias_maps hash:/var/lib/mailman3/data/postfix_lmtp
+maillog_file = /var/log/mail.log
+mydestination = $myhostname, localhost, localhost.localdomain, local.edu, localhost
+transport_maps = hash:/var/lib/mailman3/data/postfix_lmtp
+===
+-rw-rw---- 1 list list   990 Nov  1 03:37 /var/lib/mailman3/data/postfix_lmtp
+-rw-r----- 1 list list 12288 Nov  1 03:37 /var/lib/mailman3/data/postfix_lmtp.db
+> build · deepseek-v4.1-flash
+$ cat > /tmp/check2.py <<'PY'
+from mailman.core.initialize import initialize
+from mailman.interfaces.listmanager import IListManager
+from zope.component import getUtility
+initialize('/etc/mailman3/mailman.cfg')
+m = getUtility(IListManager).get('reading-group@local.edu')
+print('subscription_policy:', m.subscription_policy)
+print('unsubscription_policy:', m.unsubscription_policy)
+print('default_member_action:', m.default_member_action)
+print('default_nonmember_action:', m.default_nonmember_action)
+print('fqdn:', m.fqdn_listname, 'host:', m.mail_host)
+print('members:', [x.email for x in m.members.addresses])
+PY
+su list -s /bin/bash -c 'python3 /tmp/check2.py'
+subscription_policy: SubscriptionPolicy.open
+unsubscription_policy: SubscriptionPolicy.confirm
+default_member_action: Action.accept
+default_nonmember_action: Action.accept
+fqdn: reading-group@local.edu host: local.edu
+members: []
+> build · deepseek-v4.1-flash
+$ mailq 2>&1 | tail -10; echo "==="; grep -iE "error|traceback|exception" /var/log/mailman3/mailman.log | tail -10; echo "==="; ps -ef | grep -E 'mailman|postfi
+x' | grep -v grep | wc -l
+Mail queue is empty
+===
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+AssertionError
+Traceback (most recent call last):
+AssertionError
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+===
+30
+> build · deepseek-v4.1-flash
+$ tail -100 /var/log/mailman3/mailman.log
+File "/usr/lib/python3/dist-packages/mailman/app/workflow.py", line 69, in __next__
+    return step()
+           ^^^^^^
+  File "/usr/lib/python3/dist-packages/mailman/app/subscriptions.py", line 476, in _step_send_confirmation
+    raise StopIteration
+StopIteration
+Nov 01 03:40:54 2026 (5568) deque:
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/mailman/app/workflow.py", line 69, in __next__
+    return step()
+           ^^^^^^
+  File "/usr/lib/python3/dist-packages/mailman/app/subscriptions.py", line 447, in _step_subscription_checks
+    assert (self.member is not None and
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+Nov 01 03:40:57 2026 (5573) deque:
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/mailman/app/workflow.py", line 69, in __next__
+    return step()
+           ^^^^^^
+  File "/usr/lib/python3/dist-packages/mailman/app/subscriptions.py", line 447, in _step_subscription_checks
+    assert (self.member is not None and
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+Nov 01 03:41:15 2026 (5141) Master watcher caught SIGUSR1.  Exiting.
+Nov 01 03:41:15 2026 (5152) nntp runner caught SIGUSR1.  Stopping.
+Nov 01 03:41:15 2026 (5156) retry runner caught SIGUSR1.  Stopping.
+Nov 01 03:41:15 2026 (5149) command runner caught SIGUSR1.  Stopping.
+Nov 01 03:41:15 2026 (5147) archive runner caught SIGUSR1.  Stopping.
+Nov 01 03:41:15 2026 (5156) retry runner exiting.
+Nov 01 03:41:15 2026 (5153) out runner caught SIGUSR1.  Stopping.
+Nov 01 03:41:15 2026 (5152) nntp runner exiting.
+Nov 01 03:41:15 2026 (5149) command runner exiting.
+Nov 01 03:41:15 2026 (5154) pipeline runner caught SIGUSR1.  Stopping.
+Nov 01 03:41:15 2026 (5148) bounces runner caught SIGUSR1.  Stopping.
+Nov 01 03:41:15 2026 (5147) archive runner exiting.
+Nov 01 03:41:15 2026 (5153) out runner exiting.
+Nov 01 03:41:15 2026 (5150) in runner caught SIGUSR1.  Stopping.
+Nov 01 03:41:15 2026 (5158) virgin runner caught SIGUSR1.  Stopping.
+Nov 01 03:41:15 2026 (5159) digest runner caught SIGUSR1.  Stopping.
+Nov 01 03:41:15 2026 (5148) bounces runner exiting.
+Nov 01 03:41:15 2026 (5154) pipeline runner exiting.
+Nov 01 03:41:15 2026 (5150) in runner exiting.
+Nov 01 03:41:15 2026 (5151) lmtp runner caught SIGUSR1.  Stopping.
+Nov 01 03:41:15 2026 (5158) virgin runner exiting.
+Nov 01 03:41:15 2026 (5151) lmtp runner exiting.
+Nov 01 03:41:15 2026 (5159) digest runner exiting.
+Nov 01 03:41:15 2026 (5157) task runner caught SIGUSR1.  Stopping.
+Nov 01 03:41:15 2026 (5157) task runner exiting.
+[2026-11-01 03:41:15 +0000] [5155] [INFO] Handling signal: usr1
+Nov 01 03:41:16 2026 (5598) retry runner started.
+Nov 01 03:41:16 2026 (5597) lmtp runner started.
+Nov 01 03:41:16 2026 (5602) command runner started.
+Nov 01 03:41:16 2026 (5606) digest runner started.
+Nov 01 03:41:16 2026 (5603) pipeline runner started.
+Nov 01 03:41:16 2026 (5608) virgin runner started.
+Nov 01 03:41:16 2026 (5607) task runner started.
+Nov 01 03:41:16 2026 (5607) Task runner evicted 0 expired pendings
+Nov 01 03:41:16 2026 (5607) Task runner deleted 0 orphaned workflows
+Nov 01 03:41:16 2026 (5607) Task runner deleted 0 orphaned requests
+Nov 01 03:41:16 2026 (5607) Task runner deleted 0 orphaned messages
+Nov 01 03:41:16 2026 (5607) Task runner evicted expired cache entries
+Nov 01 03:41:17 2026 (5605) archive runner started.
+Nov 01 03:41:17 2026 (5599) in runner started.
+Nov 01 03:41:17 2026 (5604) out runner started.
+Nov 01 03:41:18 2026 (5601) nntp runner started.
+Nov 01 03:41:23 2026 (5602) deque: do_confirm_verify
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/mailman/app/workflow.py", line 69, in __next__
+    return step()
+           ^^^^^^
+  File "/usr/lib/python3/dist-packages/mailman/app/subscriptions.py", line 382, in _step_send_confirmation
+    raise StopIteration
+StopIteration
+Nov 01 03:41:32 2026 (5602) deque: do_confirm_verify
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/mailman/app/workflow.py", line 69, in __next__
+    return step()
+           ^^^^^^
+  File "/usr/lib/python3/dist-packages/mailman/app/subscriptions.py", line 382, in _step_send_confirmation
+    raise StopIteration
+StopIteration
+Nov 01 03:41:35 2026 (5602) deque: do_confirm_verify
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/mailman/app/workflow.py", line 69, in __next__
+    return step()
+           ^^^^^^
+  File "/usr/lib/python3/dist-packages/mailman/app/subscriptions.py", line 382, in _step_send_confirmation
+    raise StopIteration
+StopIteration
+Nov 01 03:41:39 2026 (5599) ACCEPT: <20261101034138.A11F728C7661@localhost.tailf09230.ts.net>
+Nov 01 03:41:41 2026 (5602) deque: do_confirm_verify
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/mailman/app/workflow.py", line 69, in __next__
+    return step()
+           ^^^^^^
+  File "/usr/lib/python3/dist-packages/mailman/app/subscriptions.py", line 476, in _step_send_confirmation
+    raise StopIteration
+StopIteration
+Nov 01 03:41:49 2026 (5599) ACCEPT: <20261101034148.A7B4228C7699@localhost.tailf09230.ts.net>
+> build · deepseek-v4.1-flash
+Configured and verified the full stack. Summary of what’s running:
+
+- **Mailman 3** is configured via `/etc/mailman3/mailman.cfg` and running as the `list` user.
+- **Postfix** is configured to:
+  - Treat `local.edu` as a local domain.
+  - Route Mailman list addresses to Mailman’s LMTP server on `127.0.0.1:8024`.
+  - Deliver ordinary users’ mail to `/var/mail/<username>`.
+- **Mailing list** `reading-group@local.edu` was created with:
+  - `subscription_policy = open`
+  - `unsubscription_policy = confirm`
+  - member and non-member posting actions set to `accept`
+- Mailman-generated aliases exist for:
+  - `reading-group@local.edu`
+  - `reading-group-join@local.edu`
+  - `reading-group-leave@local.edu`
+  - `reading-group-confirm+...@local.edu`
+
+Validation completed:
+- `/app/eval.py` passes.
+- Join → confirmation → membership works.
+- Posting to the list delivers to all subscribers.
+- Leave → confirmation → removal works, and removed users stop receiving posts.
+
+Both `postfix` and `mailman3` are currently running with an empty mail queue.
+root@5489624a513a:/app#

@@ -1,0 +1,435 @@
+root@dd7f7baf90c5:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+root@dd7f7baf90c5:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+ARM_VERSION= 1.57.0
+ARM_SETUP_END=1793512496
+root@dd7f7baf90c5:/app# cat > ~/terminal-bench-recipe.yaml << 'EOF'
+nting\
+  \ LoRA fine-tuning.\n7. Create a results file at /app/lora_results.json with the\
+  \ exact schema below\n\nRequired /app/lora_results.json schema:\n{\n  \"model\"\
+  : string,           // Base model name used (e.g., \"openai-community/gpt2\")\n\
+  \  \"lora_config\": {\n    \"r\": number,            // LoRA rank (must be 8)\n\
+  \    \"alpha\": number,        // LoRA alpha (must be 16)\n    \"epochs\": number\
+  \        // Number of training epochs\n  },\n  \"training_samples\": number,   \
+  \  // Number of training samples used\n  \"validation_samples\": number    // Number\
+  \ of validation samples used\n}\n\nExpected outputs:\n- /app/train_lora.py: Your\
+  \ training script\n- /app/experiments/lora_adapter/: Directory containing the LoRA\
+  \ adapter weights and configuration, and can be loaded to generate responses\n-\
+  \ /app/lora_results.json: JSON file matching the schema above\n\nPerformance target:\
+  \ The fine-tuned model should achieve >35% accuracy on the held-out biomedical QA\
+  \ test set."
+title: terminal-bench
+version: 1.0.0
+EOF
+> description: terminal-bench recipe
+> instructions: You are given a task and you need to complete it. You are currently
+>   executing in a docker container where you are being evaluated on a benchmark for
+>   LLM agents. Act autonomously. You will not receive any feedback on your progress,
+>   so you must use your own tools to complete the task without any intervention.
+> prompt: "Train a LoRA (Low-Rank Adaptation) adapter for a Hugging Face language model\
+>   \ to perform biomedical question answering.\n\nYou are provided with a biomedical\
+>   \ multiple-choice QA dataset in the /app/data directory containing:\n- train.json:\
+>   \ 300 training samples\n- val.json: 100 validation samples\n\nNOTE: The test set\
+>   \ is NOT available in the data folder during training to prevent overfitting. \n\
+>   It is stored separately and only accessible during the evaluation phase.\n\nEach\
+>   \ sample has the following structure:\n{\n  \"question\": \"What is the primary\
+>   \ function of hemoglobin?\",\n  \"options\": [\"A) Transport oxygen\", \"B) Fight\
+>   \ infections\", \"C) Clot blood\", \"D) Digest food\"],  // Exactly 4 options (A,\
+>   \ B, C, D)\n  \"answer\": \"A\"\n}\n\nRequirements:\n1. Use the openai-community/gpt2\
+>   \ model as the base model for fine-tuning\n2. Implement LoRA fine-tuning with the\
+>   \ following configuration:\n   - LoRA rank (r): 8\n   - LoRA alpha: 16\n   - Target\
+>   \ modules: ['c_attn'] (attention layers)\n3. Train the model using the provided\
+>   \ training and validation sets\n4. Save your training script to /app/train_lora.py\
+>   \ for verification\n5. Save the trained LoRA adapter to /app/experiments/lora_adapter,\
+>   \ including:\n   - adapter_config.json (LoRA configuration)\n   - adapter_model.safetensors\
+>   \ (LoRA weights)\n   - tokenizer_config.json (tokenizer configuration)\n   - adapter_config\
+>   \ should include default arguments including 'base_model_name_or_path' and 'task_type'\
+>   \ \n6. It is recommended to use the PEFT (peft==0.15.0) library for implementing\
+>   \ LoRA fine-tuning.\n7. Create a results file at /app/lora_results.json with the\
+>   \ exact schema below\n\nRequired /app/lora_results.json schema:\n{\n  \"model\"\
+>   : string,           // Base model name used (e.g., \"openai-community/gpt2\")\n\
+>   \  \"lora_config\": {\n    \"r\": number,            // LoRA rank (must be 8)\n\
+>   \    \"alpha\": number,        // LoRA alpha (must be 16)\n    \"epochs\": number\
+>   \        // Number of training epochs\n  },\n  \"training_samples\": number,   \
+>   \  // Number of training samples used\n  \"validation_samples\": number    // Number\
+>   \ of validation samples used\n}\n\nExpected outputs:\n- /app/train_lora.py: Your\
+>   \ training script\n- /app/experiments/lora_adapter/: Directory containing the LoRA\
+>   \ adapter weights and configuration, and can be loaded to generate responses\n-\
+>   \ /app/lora_results.json: JSON file matching the schema above\n\nPerformance target:\
+>   \ The fine-tuned model should achieve >35% accuracy on the held-out biomedical QA\
+>   \ test set."
+> title: terminal-bench
+> version: 1.0.0
+> EOF
+root@dd7f7baf90c5:/app# goose run --recipe ~/terminal-bench-recipe.yaml; tmux wait -S done
+Loading recipe: terminal-bench
+Description: terminal-bench recipe
+
+
+    __( O)>  ● new session · openai deepseek-v4.1-flash
+   \____)    20261101_1 · /app
+     L L     goose is ready
+I'll start by exploring the environment and data.
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && ls -la && echo "---" && ls -la data/ && echo "---" && head -c 1000 data/train.json && echo && echo "---" && python3 -c "import torch,...
+
+    total 12
+    drwxr-xr-x 1 root root 4096 Nov  1 05:54 .
+    drwxr-xr-x 1 root root 4096 Nov  1 05:54 ..
+    drwxr-xr-x 2 root root 4096 Oct 31 09:48 data
+    ---
+    total 188
+    drwxr-xr-x 2 root root   4096 Oct 31 09:48 .
+    drwxr-xr-x 1 root root   4096 Nov  1 05:54 ..
+    -rw-rw-r-- 1 root root    406 Oct 31 09:48 metadata.json
+    -rw-rw-r-- 1 root root 134918 Oct 31 09:48 train.json
+    ... (28 lines hidden, /toggle to show all)
+        "id": 2,
+        "question": "What is the origin of eukaryotic information processing genes and where are eukaryotic membrane phospholipids synthesis genes and energy me
+tabolism genes thought to have
+    ---
+    Traceback (most recent call last):
+      File "<string>", line 1, in <module>
+        import torch, transformers, peft; print(torch.__version__, transformers.__version__, peft.__version__)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ModuleNotFoundError: No module named 'torch'
+
+    Command exited with code 1
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && cat data/metadata.json && echo "---" && which python3 pip3 && ls /usr/lib/python3*/dist-packages 2>/dev/null | head && echo "--- venv...
+
+    {
+      "dataset": "CRAFT-BioQA",
+      "subset": "M",
+      "total_samples": 500,
+      "splits": {
+        "train": 300,
+        "val": 100,
+        "test": 100
+      },
+      "format": {
+    ... (9 lines hidden, /toggle to show all)
+    asciinema-2.2.0.dist-info
+    pkg_resources
+    share
+    --- venvs ---
+    terminal-bench-recipe.yaml
+    --- pip list ---
+    Package Version
+    ------- -------
+    pip     24.3.1
+    bash: line 1: nvidia-smi: command not found
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && ls ~/.cache/huggingface 2>/dev/null; echo "--- net ---"; timeout 20 pip3 download --no-deps -d /tmp/t peft==0.15.0 2>&1 | tail -5; ec...
+
+    --- net ---
+    Saved /tmp/t/peft-0.15.0-py3-none-any.whl
+    Successfully downloaded peft
+
+    [notice] A new release of pip is available: 24.3.1 -> 26.2.2
+    [notice] To update, run: pip install --upgrade pip
+    ---
+    20
+    bash: line 1: free: command not found
+    overlay         1.8T  1.5T  221G  88% /
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu 2>&1 | tail -3 && pip3 install --no-cache-dir tran...
+    timeout_secs: 1800
+
+    Installing collected packages: mpmath, typing-extensions, sympy, setuptools, networkx, MarkupSafe, fsspec, filelock, jinja2, torch
+    Successfully installed MarkupSafe-3.0.3 filelock-4.2.4 fsspec-2026.9.0 jinja2-3.1.6 mpmath-1.3.0 networkx-3.7 setuptools-78.1.0 sympy-1.14.0 torch-2.15.0+cp
+u typing-extensions-4.16.0
+    WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your
+system unusable.It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what yo
+u are doing and want to suppress this warning.
+
+    [notice] A new release of pip is available: 24.3.1 -> 26.2.2
+    [notice] To update, run: pip install --upgrade pip
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 -c "import torch, transformers, peft, datasets; print(torch.__version__, transformers.__version__, peft.__version__)"
+    timeout_secs: 300
+
+    2.15.0+cpu 5.22.1 0.15.0
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 -c "
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import LoraConfig, get_peft_model, PeftModel, Tas...
+    timeout_secs: 600
+
+    Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+    Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 16847.79it/s]
+    /usr/local/lib/python3.13/site-packages/peft/tuners/lora/layer.py:1768: UserWarning: fan_in_fan_out is set to False but the target module is `Conv1D`. Setti
+ng fan_in_fan_out to True.
+      warnings.warn(
+    trainable params: 294,912 || all params: 124,734,720 || trainable%: 0.2364
+    <class 'peft.peft_model.PeftModelForCausalLM'>
+Environment ready (CPU-only, 20 cores). Now let me examine the data more closely.
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 -c "
+import json, collections
+tr=json.load(open('data/train.json')); va=json.load(open('data/val.json'))
+print(len(tr), len(v...
+
+    300 100
+    Counter({'C': 100, 'B': 91, 'A': 59, 'D': 50})
+    Counter({'C': 35, 'B': 32, 'A': 22, 'D': 11})
+    Counter({0: 300})
+    q len 105.81
+    opt len 200.17333333333335
+    {'id': 0, 'question': "Which discovery about DNA's role in shaping cells was made in the study mentioned in the text?", 'options': ['A. DNA acts as a struct
+ural component of the cell membrane.', 'B. DNA is responsible for generating the internal pressure in cells.', 'C. DNA is necessary for the synthesis of peptido
+glycan.', 'D. DNA plays no role in the shaping of cells.'], 'answer': 'B', 'is_few_shot': 0}
+    {'id': 1, 'question': "Which type of bone has a defect in membranous ossification leading to a syndrome called 'cleidocranial dysplasia'?", 'options': ['A.
+Compact bone', 'B. Cancellous bone', 'C. Membrane bone', 'D. Endochondral bone'], 'answer': 'C', 'is_few_shot': 0}
+    []
+Now I'll write the training script with prompt-format augmentation for robustness to unknown eval prompt templates.
+  ────────────────────────────────────────
+  ▸ write
+    path /app/train_lora.py
+    content: #!/usr/bin/env python3
+"""
+LoRA fine-tuning of openai-community/gpt2 for biomedical multiple-choice QA
+(CRAFT-BioQA, subset M).
+
+Configuration (...
+
+    Created /app/train_lora.py (378 lines)
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+import time, json, importlib.util, torch
+spec = importlib.util.spec_from_file_location("tl", "/app/train_lora.py")
+...
+    timeout_secs: 900
+
+    Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 8027.58it/s]
+    /usr/local/lib/python3.13/site-packages/peft/tuners/lora/layer.py:1768: UserWarning: fan_in_fan_out is set to False but the target module is `Conv1D`. Setti
+ng fan_in_fan_out to True.
+      warnings.warn(
+    [transformers] `loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+    [transformers] A decoder-only architecture is being used, but right-padding was detected! For correct generation results, please set `padding_side='left'` w
+hen initializing the tokenizer.
+    [transformers] A decoder-only architecture is being used, but right-padding was detected! For correct generation results, please set `padding_side='left'` w
+hen initializing the tokenizer.
+    seq len torch.Size([16, 135]) target tokens/seq tensor([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+    fwd+bwd batch16: 2.84 s  loss 7.121
+    eval_logits full val: 8.0 s
+    eval_gen 32: 4.3 s
+
+  ────────────────────────────────────────
+  ▸ edit
+    path /app/train_lora.py
+    before:     model.eval()
+    tok = tokenizer
+    correct = 0
+    letter_ids = {}
+    for L in LETTERS:
+        ids = set()
+        for form in (f" {L}", ...
+    after:     model.eval()
+    tok = tokenizer
+    prev_side = tok.padding_side
+    tok.padding_side = "left"  # required for correct batched generation
+   ...
+
+    Edited /app/train_lora.py (22 lines -> 24 lines)
+
+  ────────────────────────────────────────
+  ▸ edit
+    path /app/train_lora.py
+    before:                 pred = m.group(1) if m else random.choice(LETTERS)
+            correct += int(pred == s["answer"])
+    model.train()
+    return c...
+    after:                 pred = m.group(1) if m else random.choice(LETTERS)
+            correct += int(pred == s["answer"])
+    tok.padding_side = prev_sid...
+
+    Edited /app/train_lora.py (4 lines -> 5 lines)
+Now running the full training:
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && nohup python3 train_lora.py > /app/train_log.txt 2>&1 &
+sleep 120 && tail -20 /app/train_log.txt
+    timeout_secs: 200
+
+    train=300 val=100 device=cpu
+    Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 15823.53it/s]
+    /usr/local/lib/python3.13/site-packages/peft/tuners/lora/layer.py:1768: UserWarning: fan_in_fan_out is set to False but the target module is `Conv1D`. Setti
+ng fan_in_fan_out to True.
+      warnings.warn(
+    trainable params: 294,912 || all params: 124,734,720 || trainable%: 0.2364
+    [epoch 0] gen=0.220 logit=0.220 gen_paren=0.250 logit_paren=0.220 logit_bare=0.220 mean=0.226
+    [transformers] `loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+
+    Output may be incomplete because stream draining timed out after process exit.
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: sleep 400 && tail -15 /app/train_log.txt
+    timeout_secs: 450
+
+    train=300 val=100 device=cpu
+    Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 15823.53it/s]
+    /usr/local/lib/python3.13/site-packages/peft/tuners/lora/layer.py:1768: UserWarning: fan_in_fan_out is set to False but the target module is `Conv1D`. Setti
+ng fan_in_fan_out to True.
+      warnings.warn(
+    trainable params: 294,912 || all params: 124,734,720 || trainable%: 0.2364
+    [epoch 0] gen=0.220 logit=0.220 gen_paren=0.250 logit_paren=0.220 logit_bare=0.220 mean=0.226
+    [transformers] `loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: ps aux | grep -c "train_lora" ; ps -o pid,etime,pcpu,rss,cmd -C python3 | head; echo ---; cat /sys/fs/cgroup/cpu.max 2>/dev/null; uptime
+
+    bash: line 1: ps: command not found
+    0
+    bash: line 1: ps: command not found
+    ---
+    max 100000
+    bash: line 1: uptime: command not found
+
+    Command exited with code 127
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /proc && for p in $(ls -d [0-9]*); do c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null); case "$c" in *train_lora*) echo "$p $c";; esac; done; echo "...
+
+    647 bash -c cd /proc && for p in $(ls -d [0-9]*); do c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null); case "$c" in *train_lora*) echo "$p $c";; esac; done; echo "
+--- loadavg:"; cat /proc/loadavg; echo "--- threads:"; python3 -c "import os;print(os.cpu_count(), len(os.sched_getaffinity(0)))"
+    bash: line 1: 648/cmdline: No such file or directory
+    --- loadavg:
+    14.23 15.56 14.84 17/5319 681
+    --- threads:
+    20 20
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /proc && for p in $(ls -d [0-9]* 2>/dev/null); do c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null); [ -n "$c" ] && echo "$p :: $c" | head -c 200 && ...
+
+    bash: line 1: 685/cmdline: No such file or directory
+    46 :: /usr/bin/python3 /usr/bin/asciinema rec --stdin /logs/agent.cast
+    47 :: /usr/bin/python3 /usr/bin/asciinema rec --stdin /logs/agent.cast
+    48 :: /usr/bin/python3 /usr/bin/asciinema rec --stdin /logs/agent.cast
+    682 :: bash -c cd /proc && for p in $(ls -d [0-9]* 2>/dev/null); do c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null); [ -n "$c" ] && echo "$p :: $c" | head -c 200
+&& echo; done | grep -i pyth; echo "=== log
+    683 :: bash -c cd /proc && for p in $(ls -d [0-9]* 2>/dev/null); do c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null); [ -n "$c" ] && echo "$p :: $c" | head -c 200
+&& echo; done | grep -i pyth; echo "=== log
+    684 :: grep -i pyth
+    === log ===
+    /usr/local/lib/python3.13/site-packages/peft/tuners/lora/layer.py:1768: UserWarning: fan_in_fan_out is set to False but the target module is `Conv1D`. Setti
+ng fan_in_fan_out to True.
+      warnings.warn(
+    trainable params: 294,912 || all params: 124,734,720 || trainable%: 0.2364
+    [epoch 0] gen=0.220 logit=0.220 gen_paren=0.250 logit_paren=0.220 logit_bare=0.220 mean=0.226
+    [transformers] `loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+    7 /app/train_log.txt
+Background processes get killed when the shell call ends. Running in the foreground with a long timeout:
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 -u train_lora.py > /app/train_log.txt 2>&1; echo "EXIT=$?"; tail -30 /app/train_log.txt
+    timeout_secs: 3000
+
+    EXIT=137
+    bash: line 1:   759 Killed                  python3 -u train_lora.py > /app/train_log.txt 2>&1
+    train=300 val=100 device=cpu
+    Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 3088.28it/s]
+    /usr/local/lib/python3.13/site-packages/peft/tuners/lora/layer.py:1768: UserWarning: fan_in_fan_out is set to False but the target module is `Conv1D`. Setti
+ng fan_in_fan_out to True.
+      warnings.warn(
+    trainable params: 294,912 || all params: 124,734,720 || trainable%: 0.2364
+    [epoch 0] gen=0.220 logit=0.220 gen_paren=0.250 logit_paren=0.220 logit_bare=0.220 mean=0.226
+    [transformers] `loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.peak 2>/dev/null; cat /sys/fs/cgroup/memory/memory.limit_in_by...
+
+    4294967296
+    91475968
+    4294967296
+    MemTotal:       127535724 kB
+    MemAvailable:   67722028 kB
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && cat > /tmp/memtest.py <<'EOF'
+import os, json, random, torch, importlib.util
+spec = importlib.util.spec_from_file_location("tl", "/ap...
+    timeout_secs: 900
+
+    Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 2273.19it/s]
+      warnings.warn(
+    after load RSS MB: 431
+    [transformers] `loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+    step 0 loss 7.121 RSS 1517 MB
+    step 1 loss 7.137 RSS 1447 MB
+    step 2 loss 6.585 RSS 1325 MB
+    step 3 loss 6.453 RSS 1502 MB
+    step 4 loss 6.107 RSS 1655 MB
+    step 5 loss 5.760 RSS 1373 MB
+Found it — OOM from glibc malloc arenas with 20 threads (4 GB cgroup limit). Applying memory fixes:
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && python3 - <<'EOF'
+import re
+p='/app/train_lora.py'
+s=open(p).read()
+
+s = s.replace('''import json
+import math
+import os
+import random...
+
+    35:os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+    70:torch.set_num_threads(min(8, max(1, os.cpu_count() or 1)))
+    353:                if "lora_" in k
+    360:        missing, unexpected = model.load_state_dict(best_state, strict=False)
+    370:    del model, optim, sched, best_state
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=8 python3 -u train_lora.py > /app/train_log.txt 2>&1; echo "EXIT=$?"; grep -v "Warning\|warn\|Load...
+    timeout_secs: 3000
+
+    bash: line 1:   935 Killed                  MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=8 python3 -u train_lora.py > /app/train_log.txt 2>&1
+    EXIT=137
+    train=300 val=100 device=cpu
+    trainable params: 294,912 || all params: 124,734,720 || trainable%: 0.2364
+    [epoch 0] gen=0.220 logit=0.220 gen_paren=0.250 logit_paren=0.220 logit_bare=0.220 mean=0.226
+    [transformers] `loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cat /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.peak 2>/dev/null; echo "---"; cat /sys/fs/cgroup/memory.current; dmesg 2>/dev/null | tail -5
+
+    low 0
+    high 0
+    max 38810
+    oom 19
+    oom_kill 3
+    oom_group_kill 0
+    4294967296
+    ---
+    91144192
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /app && cat > /tmp/memtest2.py <<'EOF'
+import os, json, random, gc, torch, importlib.util
+spec = importlib.util.spec_from_file_location("tl",...
+    timeout_secs: 1800
+
+

@@ -1,0 +1,2233 @@
+[?2004hroot@817b9087381b:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@817b9087381b:/app# clear
+[?2004l[H[J[3J[?2004hroot@817b9087381b:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@817b9087381b:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=opencode v2.2.5
+ARM_SETUP_END=1793525412
+[?2004hroot@817b9087381b:/app# opencode run --standalone --auto -m llamacpp/deepseek-v4.1-flash 'You are provided with a JSON file located at '"'"'/app/users.json'"'"' containing user data. Your task is to use jq to transform this data and produce a new JSON file at '"'"'/app/active_users_report.json'"'"' that meets the following criteria:
+[?2004l[?2004h> 1. **Filter Users**: Include only users who are '"'"'active'"'"' (status is '"'"'active'"'"').
+[?2004l[?2004h> 2. **Parse and Format Dates**: Convert the '"'"'last_login'"'"' ISO 8601 timestamp into a date string in the format '"'"'YYYY-MM-DD'"'"'.
+[?2004l[?2004h> 3. **Extract and Rename Fields**:
+[?2004l[?2004h>    - Extract '"'"'id'"'"' as '"'"'user_id'"'"'.
+[?2004l[?2004h>    - Extract '"'"'username'"'"'.
+[?2004l[?2004h>    - Extract '"'"'email'"'"'.
+[?2004l[?2004h>    - Extract and format '"'"'last_login'"'"'.
+[?2004l[?2004h>    - Extract the count of roles as '"'"'role_count'"'"'.
+[?2004l[?2004h>    - Extract the first role from the '"'"'roles'"'"' array as '"'"'primary_role'"'"' (if roles exist, otherwise null).
+[?2004l[?2004h> 4. **Sort Users**: Sort the resulting users alphabetically by their '"'"'username'"'"' in ascending order.
+[?2004l[?2004h> 5. **Output Format**: The output must be a JSON array of objects formatted with indentation of 2 spaces.
+[?2004l[?2004h> 6. **Save Command**: Save the exact jq command you execute to a file named '"'"'/app/cmd.sh'"'"'. This file should contain the complete jq command used to generate the output, including all options and arguments.
+[?2004l[?2004h> 7. **Save Arguments**: Save all jq arguments(excluding input/output files) to a YAML file named '"'"'/app/jq_args.yaml'"'"'. This file should contain exactly two keys:
+[?2004l[?2004h>    - '"'"'filter'"'"': A string containing the jq filter expression
+[?2004l[?2004h>    - '"'"'args'"'"': A list of strings, each representing a complete jq argument including both flags and values
+[?2004l[?2004h>    
+[?2004l[?2004h>    '"'"'/app/jq_args.yaml'"'"' Example format:
+[?2004l[?2004h>    ```
+[?2004l[?2004h>    filter: "group_by(.address.city)"
+[?2004l[?2004h>    args:
+[?2004l[?2004h>      - "--unbuffered"
+[?2004l[?2004h>      - "--argjson min_count 5"
+[?2004l[?2004h>      - "--tab"
+[?2004l[?2004h>    ```
+[?2004l[?2004h>    
+[?2004l[?2004h>    '"'"'/app/jq_args.yaml'"'"' will be used to construct and execute a single jq command as follows:
+[?2004l[?2004h>    `jq $(yq -r '"'"'.args[]'"'"' /app/jq_args.yaml) "$(yq -r '"'"'.filter'"'"' /app/jq_args.yaml)" /app/users.json > /app/active_users_report.json`
+[?2004l[?2004h>    
+[?2004l[?2004h>    For the example above, the constructed command would be:
+[?2004l[?2004h>    `jq --unbuffered --argjson min_count 5 --tab '"'"'group_by(.address.city)'"'"' /app/users.json > /app/active_users_report.json`
+[?2004l[?2004h> 
+[?2004l[?2004h>    This means:
+[?2004l[?2004h>    1. All arguments in the '"'"'args'"'"' list will be passed directly to jq
+[?2004l[?2004h>    2. The filter string will be passed as the jq filter expression
+[?2004l[?2004h>    3. The input file '"'"'/app/users.json'"'"' is fixed and will be used as input
+[?2004l[?2004h>    4. The output will be redirected to '"'"'/app/active_users_report.json'"'"'
+[?2004l[?2004h>    5. jq will be executed exactly once with all these components
+[?2004l[?2004h>    
+[?2004l[?2004h>    Requirements for the YAML file:
+[?2004l[?2004h>    - The '"'"'args'"'"' list should contain complete jq arguments, with both flags and their values (if any)
+[?2004l[?2004h>    - Each argument should be a separate string in the list
+[?2004l[?2004h>    - For flag-only arguments, include just the flag (e.g., '"'"'--unbuffered'"'"', '"'"'--tab'"'"')
+[?2004l[?2004h>    - For arguments with values, include both the flag and value as a single string (e.g., '"'"'--argjson min_count 5'"'"')
+[?2004l[?2004h>    - Do not include the jq command itself, the filter expression, or file paths in the args list
+[?2004l[?2004h>    - File paths other than the required input file '"'"'/app/users.json'"'"' and output redirections should not appear in the args
+[?2004l[?2004h>    - The filter should be a single string containing the complete jq filter expression
+[?2004l[?2004h> 
+[?2004l[?2004h> **Note on examples below**: In the following Data Schema sections, all content following the '"'"'#'"'"' symbol is just explanatory commentary and will NOT appear in the actual JSON files. These comments are only provided to clarify the structure and requirements.
+[?2004l[?2004h> 
+[?2004l[?2004h> **Input Data Schema**:
+[?2004l[?2004h> The input JSON file '"'"'/app/users.json'"'"' is an array of user objects with the following structure:
+[?2004l[?2004h> [
+[?2004l[?2004h>   {
+[?2004l[?2004h>     "id": 1,                  # Unique numeric identifier for the user
+[?2004l[?2004h>     "username": "john_doe",   # User'"'"'s unique username (string)
+[?2004l[?2004h>     "email": "john@example.com",  # User'"'"'s email address (string)
+[?2004l[?2004h>     "status": "active",       # User status: '"'"'active'"'"' or '"'"'inactive'"'"'
+[?2004l[?2004h>     "last_login": "2024-10-02T20:59:10.109812Z",  # ISO 8601 timestamp (UTC) of the last login
+[?2004l[?2004h>     "roles": ["admin", "editor"]  # Array of roles assigned to the user (may be empty)
+[?2004l[?2004h>   },
+[?2004l[?2004h>   ...
+[?2004l[?2004h> ]
+[?2004l[?2004h> 
+[?2004l[?2004h> **Output Data Schema**:
+[?2004l[?2004h> The output JSON file '"'"'/app/active_users_report.json'"'"' must be an array of objects with the following structure:
+[?2004l[?2004h> [
+[?2004l[?2004h>   {
+[?2004l[?2004h>     "user_id": 1,                 # Derived from '"'"'id'"'"' in input 
+[?2004l[?2004h>     "username": "john_doe",       # Retained from input 
+[?2004l[?2004h>     "email": "john@example.com",  # Retained from input 
+[?2004l[?2004h>     "last_login": "2024-10-02",   # Formatted from '"'"'last_login'"'"' in input
+[?2004l[?2004h>     "role_count": 2,              # Count of '"'"'roles'"'"' from input
+[?2004l[?2004h>     "primary_role": "admin"       # If '"'"'roles'"'"' is empty, this must be null (JSON null, not "null")
+[?2004l[?2004h>   },
+[?2004l[?2004h>   ...
+[?2004l[?2004h> ]
+[?2004l[?2004h> 
+[?2004l[?2004h> **Requirements**:
+[?2004l[?2004h> - You must use jq to perform this transformation. Using other programming languages (e.g., Python, Ruby) is strictly prohibited.
+[?2004l[?2004h> - Ensure that the output JSON is properly formatted with 2-space indentation.
+[?2004l[?2004h> - The output file must be created at the exact path '"'"'/app/active_users_report.json'"'"'.
+[?2004l[?2004h> - The jq command used to generate the output(along with the output redirection) must be saved to '"'"'/app/cmd.sh'"'"'. This file will be used to verify the correctness of your solution.
+[?2004l[?2004h> - The jq arguments and filter must be saved to '"'"'/app/jq_args.yaml'"'"' as specified in the instructions above.  ' 2>&1 | tee /agent-logs/opencode.log; tmux wait -S done
+[?2004l[0m
+> build · deepseek-v4.1-flash
+I'll start by examining the input file and available tools.
+[0m$ [0mcat /app/users.json
+},
+  {
+    "id": 327,
+    "username": "rreynolds",
+    "email": "nmiller@hotmail.com",
+    "status": "active",
+    "last_login": "2026-01-04T15:06:40.760295Z",
+    "roles": [
+      "admin"
+    ]
+  },
+  {
+    "id": 328,
+    "username": "lauren11",
+    "email": "normanbowers@yahoo.com",
+    "status": "active",
+    "last_login": "2026-08-08T15:06:40.760397Z",
+    "roles": [
+      "contributor"
+    ]
+  },
+  {
+    "id": 329,
+    "username": "jodistewart",
+    "email": "smithkyle@gmail.com",
+    "status": "active",
+    "last_login": "2026-08-22T15:06:40.760535Z",
+    "roles": [
+      "viewer",
+      "editor"
+    ]
+  },
+  {
+    "id": 330,
+    "username": "kathleen12",
+    "email": "ryanhawkins@gmail.com",
+    "status": "active",
+    "last_login": "2026-04-05T15:06:40.760637Z",
+    "roles": []
+  },
+  {
+    "id": 331,
+    "username": "fgarcia",
+    "email": "carlsonkristen@yahoo.com",
+    "status": "inactive",
+    "last_login": "2026-03-16T15:06:40.760750Z",
+    "roles": []
+  },
+  {
+    "id": 332,
+    "username": "asmith",
+    "email": "hardyanita@yahoo.com",
+    "status": "active",
+    "last_login": "2026-07-15T15:06:40.760864Z",
+    "roles": [
+      "admin",
+      "user",
+      "contributor"
+    ]
+  },
+  {
+    "id": 333,
+    "username": "ashleyjackson",
+    "email": "dominicturner@yahoo.com",
+    "status": "active",
+    "last_login": "2026-10-06T15:06:40.761006Z",
+    "roles": [
+      "moderator",
+      "editor",
+      "contributor",
+      "viewer"
+    ]
+  },
+  {
+    "id": 334,
+    "username": "kthomas",
+    "email": "robert71@yahoo.com",
+    "status": "inactive",
+    "last_login": "2026-02-01T15:06:40.761085Z",
+    "roles": [
+      "contributor",
+      "viewer",
+      "moderator"
+    ]
+  },
+  {
+    "id": 335,
+    "username": "johnathan37",
+    "email": "stephentaylor@hotmail.com",
+    "status": "inactive",
+    "last_login": "2026-07-10T15:06:40.761190Z",
+    "roles": [
+      "admin",
+      "user"
+    ]
+  },
+  {
+    "id": 336,
+    "username": "rushmartin",
+    "email": "vbrock@hotmail.com",
+    "status": "inactive",
+    "last_login": "2026-07-31T15:06:40.761307Z",
+    "roles": [
+      "user",
+      "contributor",
+      "editor"
+    ]
+  },
+  {
+    "id": 337,
+    "username": "pcook",
+    "email": "kevinmorrison@hotmail.com",
+    "status": "active",
+    "last_login": "2026-06-19T15:06:40.761422Z",
+    "roles": []
+  },
+  {
+    "id": 338,
+    "username": "timothythompson",
+    "email": "kelly79@yahoo.com",
+    "status": "active",
+    "last_login": "2026-02-22T15:06:40.761526Z",
+    "roles": [
+      "user",
+      "moderator",
+      "editor"
+    ]
+  },
+  {
+    "id": 339,
+    "username": "markramirez",
+    "email": "daniel93@yahoo.com",
+    "status": "active",
+    "last_login": "2026-05-08T15:06:40.761631Z",
+    "roles": []
+  },
+  {
+    "id": 340,
+    "username": "erinpierce",
+    "email": "nhahn@hotmail.com",
+    "status": "pending",
+    "last_login": "2025-11-23T15:06:40.761746Z",
+    "roles": []
+  },
+  {
+    "id": 341,
+    "username": "ssalinas",
+    "email": "ichambers@gmail.com",
+    "status": "active",
+    "last_login": "2026-01-13T15:06:40.761835Z",
+    "roles": []
+  },
+  {
+    "id": 342,
+    "username": "john26",
+    "email": "colecarla@yahoo.com",
+    "status": "active",
+    "last_login": "2026-04-02T15:06:40.761938Z",
+    "roles": []
+  },
+  {
+    "id": 343,
+    "username": "sferguson",
+    "email": "gibbsmichael@yahoo.com",
+    "status": "active",
+    "last_login": "2025-11-19T15:06:40.762053Z",
+    "roles": [
+      "admin",
+      "moderator",
+      "user",
+      "analyst"
+    ]
+  },
+  {
+    "id": 344,
+    "username": "rodriguezjohn",
+    "email": "gabriel90@hotmail.com",
+    "status": "active",
+    "last_login": "2026-02-01T15:06:40.762158Z",
+    "roles": []
+  },
+  {
+    "id": 345,
+    "username": "vrasmussen",
+    "email": "smithjonathan@yahoo.com",
+    "status": "active",
+    "last_login": "2026-07-18T15:06:40.762276Z",
+    "roles": [
+      "editor",
+      "analyst",
+      "admin"
+    ]
+  },
+  {
+    "id": 346,
+    "username": "seanmyers",
+    "email": "michaeljohnson@hotmail.com",
+    "status": "active",
+    "last_login": "2026-04-24T15:06:40.762417Z",
+    "roles": [
+      "editor",
+      "user",
+      "contributor",
+      "moderator"
+    ]
+  },
+  {
+    "id": 347,
+    "username": "phillipssamantha",
+    "email": "guerrajessica@gmail.com",
+    "status": "active",
+    "last_login": "2026-09-09T15:06:40.762560Z",
+    "roles": [
+      "contributor",
+      "moderator",
+      "analyst"
+    ]
+  },
+  {
+    "id": 348,
+    "username": "larry73",
+    "email": "gbailey@hotmail.com",
+    "status": "inactive",
+    "last_login": "2026-01-12T15:06:40.762637Z",
+    "roles": [
+      "viewer",
+      "editor",
+      "admin",
+      "user",
+      "contributor"
+    ]
+  },
+  {
+    "id": 349,
+    "username": "cbowen",
+    "email": "evanslisa@yahoo.com",
+    "status": "active",
+    "last_login": "2026-09-05T15:06:40.762752Z",
+    "roles": [
+      "moderator",
+      "user"
+    ]
+  },
+  {
+    "id": 350,
+    "username": "johnsonmatthew",
+    "email": "sarahyang@gmail.com",
+    "status": "active",
+    "last_login": "2025-12-03T15:06:40.762893Z",
+    "roles": [
+      "analyst",
+      "moderator",
+      "viewer",
+      "user"
+    ]
+  },
+  {
+    "id": 351,
+    "username": "andrearivera",
+    "email": "zhall@yahoo.com",
+    "status": "active",
+    "last_login": "2025-12-28T15:06:40.763008Z",
+    "roles": [
+      "moderator",
+      "viewer",
+      "editor",
+      "admin",
+      "user"
+    ]
+  },
+  {
+    "id": 352,
+    "username": "jacobsandoval",
+    "email": "mclaughlinnicole@yahoo.com",
+    "status": "active",
+    "last_login": "2026-08-15T15:06:40.763151Z",
+    "roles": [
+      "viewer",
+      "admin",
+      "user",
+      "contributor"
+    ]
+  },
+  {
+    "id": 353,
+    "username": "yvargas",
+    "email": "jamiegoodwin@gmail.com",
+    "status": "active",
+    "last_login": "2026-08-10T15:06:40.763267Z",
+    "roles": [
+      "moderator",
+      "contributor",
+      "editor",
+      "analyst",
+      "admin"
+    ]
+  },
+  {
+    "id": 354,
+    "username": "raylauren",
+    "email": "michaelgonzalez@hotmail.com",
+    "status": "active",
+    "last_login": "2026-08-29T15:06:40.763408Z",
+    "roles": [
+      "contributor",
+      "moderator",
+      "admin",
+      "viewer",
+      "user"
+    ]
+  },
+  {
+    "id": 355,
+    "username": "bakermichelle",
+    "email": "candice96@hotmail.com",
+    "status": "pending",
+    "last_login": "2026-10-16T15:06:40.763513Z",
+    "roles": [
+      "moderator"
+    ]
+  },
+  {
+    "id": 356,
+    "username": "baileymegan",
+    "email": "lisamccarthy@hotmail.com",
+    "status": "active",
+    "last_login": "2025-11-21T15:06:40.763658Z",
+    "roles": [
+      "analyst",
+      "contributor"
+    ]
+  },
+  {
+    "id": 357,
+    "username": "samantha91",
+    "email": "lawrenceallen@hotmail.com",
+    "status": "active",
+    "last_login": "2026-03-21T15:06:40.763763Z",
+    "roles": [
+      "moderator",
+      "user",
+      "editor",
+      "admin",
+      "viewer"
+    ]
+  },
+  {
+    "id": 358,
+    "username": "whiteheather",
+    "email": "ibarnes@hotmail.com",
+    "status": "active",
+    "last_login": "2026-09-20T15:06:40.763877Z",
+    "roles": []
+  },
+  {
+    "id": 359,
+    "username": "fhenderson",
+    "email": "angelaburns@hotmail.com",
+    "status": "pending",
+    "last_login": "2026-05-16T15:06:40.763990Z",
+    "roles": [
+      "viewer",
+      "user",
+      "moderator",
+      "editor"
+    ]
+  },
+  {
+    "id": 360,
+    "username": "jacobwilkinson",
+    "email": "glennstephanie@hotmail.com",
+    "status": "active",
+    "last_login": "2026-04-06T15:06:40.764129Z",
+    "roles": [
+      "admin"
+    ]
+  },
+  {
+    "id": 361,
+    "username": "ytaylor",
+    "email": "fortiz@hotmail.com",
+    "status": "inactive",
+    "last_login": "2026-01-03T15:06:40.764216Z",
+    "roles": [
+      "viewer",
+      "moderator"
+    ]
+  },
+  {
+    "id": 362,
+    "username": "cmckinney",
+    "email": "christopherjohnson@yahoo.com",
+    "status": "inactive",
+    "last_login": "2026-02-25T15:06:40.764331Z",
+    "roles": [
+      "editor",
+      "moderator"
+    ]
+  },
+  {
+    "id": 363,
+    "username": "kellyhill",
+    "email": "gary79@hotmail.com",
+    "status": "active",
+    "last_login": "2026-03-02T15:06:40.764433Z",
+    "roles": [
+      "user",
+      "viewer",
+      "admin",
+      "editor"
+    ]
+  },
+  {
+    "id": 364,
+    "username": "hdunn",
+    "email": "adamsamy@hotmail.com",
+    "status": "active",
+    "last_login": "2026-01-09T15:06:40.764547Z",
+    "roles": []
+  },
+  {
+    "id": 365,
+    "username": "amber07",
+    "email": "veronicagarcia@hotmail.com",
+    "status": "inactive",
+    "last_login": "2026-08-27T15:06:40.764648Z",
+    "roles": []
+  },
+  {
+    "id": 366,
+    "username": "kennethkidd",
+    "email": "michael17@yahoo.com",
+    "status": "inactive",
+    "last_login": "2026-04-24T15:06:40.764751Z",
+    "roles": []
+  },
+  {
+    "id": 367,
+    "username": "rowejoel",
+    "email": "michelle96@hotmail.com",
+    "status": "active",
+    "last_login": "2026-09-01T15:06:40.764854Z",
+    "roles": [
+      "viewer",
+      "contributor",
+      "moderator",
+      "admin"
+    ]
+  },
+  {
+    "id": 368,
+    "username": "christinaglover",
+    "email": "hudsonamanda@gmail.com",
+    "status": "inactive",
+    "last_login": "2026-06-27T15:06:40.764996Z",
+    "roles": [
+      "moderator",
+      "editor",
+      "viewer"
+    ]
+  },
+  {
+    "id": 369,
+    "username": "mariopadilla",
+    "email": "stephanie81@yahoo.com",
+    "status": "active",
+    "last_login": "2025-12-18T15:06:40.765104Z",
+    "roles": [
+      "analyst",
+      "admin",
+      "editor",
+      "user",
+      "contributor"
+    ]
+  },
+  {
+    "id": 370,
+    "username": "sydneyfloyd",
+    "email": "michelle22@gmail.com",
+    "status": "active",
+    "last_login": "2025-11-16T15:06:40.765208Z",
+    "roles": []
+  },
+  {
+    "id": 371,
+    "username": "dustinmorris",
+    "email": "kburns@gmail.com",
+    "status": "pending",
+    "last_login": "2026-01-14T15:06:40.765324Z",
+    "roles": [
+      "contributor",
+      "user",
+      "editor"
+    ]
+  },
+  {
+    "id": 372,
+    "username": "courtney67",
+    "email": "powellkara@gmail.com",
+    "status": "active",
+    "last_login": "2026-08-30T15:06:40.765428Z",
+    "roles": []
+  },
+  {
+    "id": 373,
+    "username": "shawn75",
+    "email": "meltonmelanie@hotmail.com",
+    "status": "active",
+    "last_login": "2026-01-02T15:06:40.765531Z",
+    "roles": [
+      "admin"
+    ]
+  },
+  {
+    "id": 374,
+    "username": "simonstephen",
+    "email": "melissa86@hotmail.com",
+    "status": "active",
+    "last_login": "2026-02-04T15:06:40.765634Z",
+    "roles": [
+      "moderator",
+      "editor",
+      "admin",
+      "analyst",
+      "user"
+    ]
+  },
+  {
+    "id": 375,
+    "username": "tammysummers",
+    "email": "marcus45@yahoo.com",
+    "status": "active",
+    "last_login": "2026-01-07T15:06:40.765738Z",
+    "roles": [
+      "contributor",
+      "editor",
+      "viewer",
+      "user"
+    ]
+  },
+  {
+    "id": 376,
+    "username": "ashleewashington",
+    "email": "williamsconnie@yahoo.com",
+    "status": "active",
+    "last_login": "2026-07-07T15:06:40.765879Z",
+    "roles": [
+      "editor",
+      "contributor",
+      "viewer",
+      "analyst",
+      "admin"
+    ]
+  },
+  {
+    "id": 377,
+    "username": "ksmith",
+    "email": "bsmith@yahoo.com",
+    "status": "active",
+    "last_login": "2025-11-17T15:06:40.765970Z",
+    "roles": []
+  },
+  {
+    "id": 378,
+    "username": "wendyblankenship",
+    "email": "erik41@hotmail.com",
+    "status": "active",
+    "last_login": "2026-05-05T15:06:40.766073Z",
+    "roles": [
+      "user",
+      "viewer",
+      "moderator"
+    ]
+  },
+  {
+    "id": 379,
+    "username": "john52",
+    "email": "ugarrett@gmail.com",
+    "status": "pending",
+    "last_login": "2026-04-16T15:06:40.766151Z",
+    "roles": [
+      "editor",
+      "contributor",
+      "moderator"
+    ]
+  },
+  {
+    "id": 380,
+    "username": "rubendavis",
+    "email": "lewischristian@gmail.com",
+    "status": "active",
+    "last_login": "2026-09-03T15:06:40.766293Z",
+    "roles": [
+      "user",
+      "admin",
+      "moderator"
+    ]
+  },
+  {
+    "id": 381,
+    "username": "aprilwallace",
+    "email": "lisa62@gmail.com",
+    "status": "active",
+    "last_login": "2026-05-25T15:06:40.766396Z",
+    "roles": [
+      "moderator",
+      "analyst",
+      "contributor"
+    ]
+  },
+  {
+    "id": 382,
+    "username": "yjones",
+    "email": "garciamichael@gmail.com",
+    "status": "active",
+    "last_login": "2026-09-30T15:06:40.766511Z",
+    "roles": [
+      "user",
+      "analyst",
+      "contributor",
+      "editor",
+      "viewer"
+    ]
+  },
+  {
+    "id": 383,
+    "username": "derrick22",
+    "email": "bishopfrank@gmail.com",
+    "status": "active",
+    "last_login": "2026-02-04T15:06:40.766615Z",
+    "roles": []
+  },
+  {
+    "id": 384,
+    "username": "jennifer26",
+    "email": "fheath@hotmail.com",
+    "status": "active",
+    "last_login": "2026-05-03T15:06:40.766692Z",
+    "roles": [
+      "viewer",
+      "admin",
+      "user",
+      "contributor"
+    ]
+  },
+  {
+    "id": 385,
+    "username": "taylordavid",
+    "email": "bbell@hotmail.com",
+    "status": "active",
+    "last_login": "2026-04-09T15:06:40.766807Z",
+    "roles": [
+      "viewer",
+      "analyst"
+    ]
+  },
+  {
+    "id": 386,
+    "username": "kylie34",
+    "email": "wrightcarolyn@hotmail.com",
+    "status": "active",
+    "last_login": "2026-08-24T15:06:40.766910Z",
+    "roles": [
+      "admin",
+      "viewer",
+      "moderator",
+      "editor"
+    ]
+  },
+  {
+    "id": 387,
+    "username": "kimberly04",
+    "email": "juliephillips@gmail.com",
+    "status": "active",
+    "last_login": "2025-12-27T15:06:40.767014Z",
+    "roles": [
+      "moderator"
+    ]
+  },
+  {
+    "id": 388,
+    "username": "bowerslaura",
+    "email": "pcruz@gmail.com",
+    "status": "inactive",
+    "last_login": "2026-08-19T15:06:40.767129Z",
+    "roles": [
+      "contributor"
+    ]
+  },
+  {
+    "id": 389,
+    "username": "elittle",
+    "email": "hatfieldsarah@hotmail.com",
+    "status": "active",
+    "last_login": "2026-04-19T15:06:40.767246Z",
+    "roles": [
+      "viewer",
+      "user",
+      "admin"
+    ]
+  },
+  {
+    "id": 390,
+    "username": "paulcombs",
+    "email": "amy27@yahoo.com",
+    "status": "inactive",
+    "last_login": "2026-01-30T15:06:40.767350Z",
+    "roles": [
+      "editor",
+      "analyst",
+      "contributor"
+    ]
+  },
+  {
+    "id": 391,
+    "username": "smithcarlos",
+    "email": "billbrown@yahoo.com",
+    "status": "pending",
+    "last_login": "2025-12-10T15:06:40.767492Z",
+    "roles": [
+      "admin",
+      "user",
+      "contributor",
+      "analyst"
+    ]
+  },
+  {
+    "id": 392,
+    "username": "ohunter",
+    "email": "zhenderson@hotmail.com",
+    "status": "active",
+    "last_login": "2026-10-15T15:06:40.767582Z",
+    "roles": [
+      "user",
+      "admin",
+      "viewer",
+      "analyst",
+      "contributor"
+    ]
+  },
+  {
+    "id": 393,
+    "username": "davidsonamanda",
+    "email": "christopher18@gmail.com",
+    "status": "active",
+    "last_login": "2026-10-28T15:06:40.767688Z",
+    "roles": [
+      "admin",
+      "viewer",
+      "user",
+      "editor"
+    ]
+  },
+  {
+    "id": 394,
+    "username": "terrimoore",
+    "email": "wwillis@yahoo.com",
+    "status": "active",
+    "last_login": "2026-02-17T15:06:40.767804Z",
+    "roles": [
+      "contributor",
+      "user"
+    ]
+  },
+  {
+    "id": 395,
+    "username": "collinssamuel",
+    "email": "sanchezsandy@gmail.com",
+    "status": "active",
+    "last_login": "2026-03-05T15:06:40.767946Z",
+    "roles": [
+      "moderator",
+      "viewer"
+    ]
+  },
+  {
+    "id": 396,
+    "username": "chavezchelsea",
+    "email": "davidzimmerman@yahoo.com",
+    "status": "active",
+    "last_login": "2026-05-13T15:06:40.768087Z",
+    "roles": [
+      "contributor",
+      "admin",
+      "editor",
+      "viewer",
+      "analyst"
+    ]
+  },
+  {
+    "id": 397,
+    "username": "martinstephanie",
+    "email": "gary24@hotmail.com",
+    "status": "active",
+    "last_login": "2026-01-09T15:06:40.768192Z",
+    "roles": [
+      "viewer",
+      "user",
+      "contributor",
+      "editor",
+      "admin"
+    ]
+  },
+  {
+    "id": 398,
+    "username": "wiseanthony",
+    "email": "alexandria49@yahoo.com",
+    "status": "active",
+    "last_login": "2026-04-14T15:06:40.768298Z",
+    "roles": [
+      "contributor"
+    ]
+  },
+  {
+    "id": 399,
+    "username": "crawfordwilliam",
+    "email": "kvillarreal@gmail.com",
+    "status": "active",
+    "last_login": "2026-04-12T15:06:40.768413Z",
+    "roles": [
+      "moderator"
+    ]
+  },
+  {
+    "id": 400,
+    "username": "eric19",
+    "email": "perezwilliam@hotmail.com",
+    "status": "active",
+    "last_login": "2026-01-18T15:06:40.768517Z",
+    "roles": []
+  },
+  {
+    "id": 401,
+    "username": "trevinoalexander",
+    "email": "jcox@gmail.com",
+    "status": "active",
+    "last_login": "2026-08-13T15:06:40.768631Z",
+    "roles": [
+      "admin",
+      "contributor",
+      "editor"
+    ]
+  },
+  {
+    "id": 402,
+    "username": "sarahmathews",
+    "email": "pwalker@hotmail.com",
+    "status": "active",
+    "last_login": "2026-01-23T15:06:40.768751Z",
+    "roles": []
+  },
+  {
+    "id": 403,
+    "username": "umoon",
+    "email": "duncandavid@yahoo.com",
+    "status": "inactive",
+    "last_login": "2025-11-28T15:06:40.768866Z",
+    "roles": [
+      "viewer",
+      "editor",
+      "moderator",
+      "contributor",
+      "user"
+    ]
+  },
+  {
+    "id": 404,
+    "username": "whitelinda",
+    "email": "djones@gmail.com",
+    "status": "pending",
+    "last_login": "2026-05-22T15:06:40.768982Z",
+    "roles": [
+      "viewer",
+      "contributor",
+      "admin",
+      "analyst",
+      "moderator"
+    ]
+  },
+  {
+    "id": 405,
+    "username": "kiara45",
+    "email": "msmith@gmail.com",
+    "status": "active",
+    "last_login": "2025-12-15T15:06:40.769060Z",
+    "roles": []
+  },
+  {
+    "id": 406,
+    "username": "anne49",
+    "email": "frichardson@gmail.com",
+    "status": "active",
+    "last_login": "2025-10-31T15:06:40.769138Z",
+    "roles": [
+      "moderator",
+      "analyst",
+      "admin",
+      "contributor"
+    ]
+  },
+  {
+    "id": 407,
+    "username": "jessicapayne",
+    "email": "adamortiz@gmail.com",
+    "status": "active",
+    "last_login": "2026-06-22T15:06:40.769282Z",
+    "roles": [
+      "editor",
+      "admin",
+      "user",
+      "analyst",
+      "viewer"
+    ]
+  },
+  {
+    "id": 408,
+    "username": "amberfields",
+    "email": "tapiaaaron@hotmail.com",
+    "status": "active",
+    "last_login": "2026-08-17T15:06:40.769424Z",
+    "roles": []
+  },
+  {
+    "id": 409,
+    "username": "usweeney",
+    "email": "harristonya@yahoo.com",
+    "status": "pending",
+    "last_login": "2025-11-07T15:06:40.769541Z",
+    "roles": [
+      "contributor",
+      "analyst",
+      "admin"
+    ]
+  },
+  {
+    "id": 410,
+    "username": "dvasquez",
+    "email": "christopher38@gmail.com",
+    "status": "active",
+    "last_login": "2026-04-14T15:06:40.769620Z",
+    "roles": [
+      "analyst",
+      "viewer",
+      "admin"
+    ]
+  },
+  {
+    "id": 411,
+    "username": "xhaynes",
+    "email": "carpenterwilliam@yahoo.com",
+    "status": "active",
+    "last_login": "2026-06-07T15:06:40.769735Z",
+    "roles": [
+      "admin",
+      "user",
+      "viewer",
+      "moderator",
+      "analyst"
+    ]
+  },
+  {
+    "id": 412,
+    "username": "kjones",
+    "email": "ibates@gmail.com",
+    "status": "inactive",
+    "last_login": "2026-03-12T15:06:40.769824Z",
+    "roles": [
+      "editor",
+      "analyst",
+      "viewer",
+      "user",
+      "contributor"
+    ]
+  },
+  {
+    "id": 413,
+    "username": "kellyrosales",
+    "email": "louis43@yahoo.com",
+    "status": "active",
+    "last_login": "2026-03-06T15:06:40.769932Z",
+    "roles": [
+      "moderator",
+      "admin"
+    ]
+  },
+  {
+    "id": 414,
+    "username": "hardingderek",
+    "email": "moorefrank@hotmail.com",
+    "status": "active",
+    "last_login": "2026-05-12T15:06:40.770076Z",
+    "roles": [
+      "admin",
+      "user",
+      "viewer",
+      "contributor"
+    ]
+  },
+  {
+    "id": 415,
+    "username": "hedwards",
+    "email": "tami37@hotmail.com",
+    "status": "active",
+    "last_login": "2026-08-12T15:06:40.770156Z",
+    "roles": [
+      "admin"
+    ]
+  },
+  {
+    "id": 416,
+    "username": "steven11",
+    "email": "margaret90@gmail.com",
+    "status": "active",
+    "last_login": "2025-12-19T15:06:40.770225Z",
+    "roles": [
+      "analyst",
+      "viewer",
+      "admin",
+      "moderator",
+      "user"
+    ]
+  },
+  {
+    "id": 417,
+    "username": "marymurphy",
+    "email": "tanyafoster@gmail.com",
+    "status": "inactive",
+    "last_login": "2025-12-28T15:06:40.770372Z",
+    "roles": [
+      "contributor"
+    ]
+  },
+  {
+    "id": 418,
+    "username": "byrdjorge",
+    "email": "cranemelissa@gmail.com",
+    "status": "active",
+    "last_login": "2025-11-10T15:06:40.770517Z",
+    "roles": [
+      "user",
+      "viewer",
+      "analyst",
+      "editor",
+      "moderator"
+    ]
+  },
+  {
+    "id": 419,
+    "username": "codygarcia",
+    "email": "smithmaria@gmail.com",
+    "status": "active",
+    "last_login": "2026-01-27T15:06:40.770662Z",
+    "roles": [
+      "admin",
+      "viewer",
+      "moderator"
+    ]
+  },
+  {
+    "id": 420,
+    "username": "davidcolon",
+    "email": "aguilarjonathan@yahoo.com",
+    "status": "active",
+    "last_login": "2026-03-19T15:06:40.770807Z",
+    "roles": [
+      "editor",
+      "contributor"
+    ]
+  },
+  {
+    "id": 421,
+    "username": "johnsoncaleb",
+    "email": "flamb@hotmail.com",
+    "status": "active",
+    "last_login": "2026-02-19T15:06:40.770925Z",
+    "roles": [
+      "viewer",
+      "moderator",
+      "analyst",
+      "admin"
+    ]
+  },
+  {
+    "id": 422,
+    "username": "david70",
+    "email": "zunderwood@gmail.com",
+    "status": "active",
+    "last_login": "2026-10-21T15:06:40.771005Z",
+    "roles": [
+      "user",
+      "analyst",
+      "moderator",
+      "editor",
+      "contributor"
+    ]
+  },
+  {
+    "id": 423,
+    "username": "rjohnson",
+    "email": "michaelodonnell@yahoo.com",
+    "status": "inactive",
+    "last_login": "2025-11-20T15:06:40.771124Z",
+    "roles": [
+      "admin",
+      "editor",
+      "moderator",
+      "viewer",
+      "user"
+    ]
+  },
+  {
+    "id": 424,
+    "username": "joshua20",
+    "email": "deborahporter@hotmail.com",
+    "status": "active",
+    "last_login": "2025-12-19T15:06:40.771231Z",
+    "roles": [
+      "editor"
+    ]
+  },
+  {
+    "id": 425,
+    "username": "rbrown",
+    "email": "robertday@yahoo.com",
+    "status": "active",
+    "last_login": "2026-04-07T15:06:40.771350Z",
+    "roles": [
+      "contributor",
+      "admin"
+    ]
+  },
+  {
+    "id": 426,
+    "username": "crystalpham",
+    "email": "wcasey@gmail.com",
+    "status": "active",
+    "last_login": "2026-01-23T15:06:40.771468Z",
+    "roles": [
+      "contributor",
+      "user",
+      "moderator",
+      "admin"
+    ]
+  },
+  {
+    "id": 427,
+    "username": "fstephens",
+    "email": "paul20@yahoo.com",
+    "status": "active",
+    "last_login": "2026-03-02T15:06:40.771549Z",
+    "roles": [
+      "contributor",
+      "editor"
+    ]
+  },
+  {
+    "id": 428,
+    "username": "carla04",
+    "email": "xmoreno@gmail.com",
+    "status": "inactive",
+    "last_login": "2026-07-20T15:06:40.771630Z",
+    "roles": [
+      "analyst"
+    ]
+  },
+  {
+    "id": 429,
+    "username": "terrigarcia",
+    "email": "josephvelasquez@hotmail.com",
+    "status": "active",
+    "last_login": "2026-04-10T15:06:40.771774Z",
+    "roles": [
+      "user"
+    ]
+  },
+  {
+    "id": 430,
+    "username": "gallagherstacie",
+    "email": "lkelly@hotmail.com",
+    "status": "active",
+    "last_login": "2026-03-27T15:06:40.771891Z",
+    "roles": [
+      "moderator",
+      "viewer"
+    ]
+  },
+  {
+    "id": 431,
+    "username": "joelstewart",
+    "email": "robin05@hotmail.com",
+    "status": "active",
+    "last_login": "2026-08-14T15:06:40.771994Z",
+    "roles": [
+      "editor",
+      "admin"
+    ]
+  },
+  {
+    "id": 432,
+    "username": "annalopez",
+    "email": "gregory01@yahoo.com",
+    "status": "active",
+    "last_login": "2025-11-15T15:06:40.772097Z",
+    "roles": [
+      "contributor",
+      "moderator"
+    ]
+  },
+  {
+    "id": 433,
+    "username": "halljeffery",
+    "email": "nsmith@hotmail.com",
+    "status": "pending",
+    "last_login": "2025-11-29T15:06:40.772212Z",
+    "roles": [
+      "moderator",
+      "admin",
+      "contributor"
+    ]
+  },
+  {
+    "id": 434,
+    "username": "lindsaypeterson",
+    "email": "brian29@gmail.com",
+    "status": "active",
+    "last_login": "2026-10-15T15:06:40.772317Z",
+    "roles": [
+      "contributor",
+      "viewer",
+      "analyst",
+      "editor"
+    ]
+  },
+  {
+    "id": 435,
+    "username": "kimmathis",
+    "email": "brookssheri@yahoo.com",
+    "status": "active",
+    "last_login": "2026-10-04T15:06:40.772458Z",
+    "roles": [
+      "moderator",
+      "user",
+      "editor"
+    ]
+  },
+  {
+    "id": 436,
+    "username": "vwillis",
+    "email": "derek26@yahoo.com",
+    "status": "active",
+    "last_login": "2026-10-20T15:06:40.772536Z",
+    "roles": [
+      "analyst",
+      "editor"
+    ]
+  },
+  {
+    "id": 437,
+    "username": "lbanks",
+    "email": "jeffrey92@hotmail.com",
+    "status": "active",
+    "last_login": "2026-06-25T15:06:40.772614Z",
+    "roles": [
+      "viewer",
+      "analyst",
+      "user"
+    ]
+  },
+  {
+    "id": 438,
+    "username": "sparker",
+    "email": "gregorysmith@yahoo.com",
+    "status": "inactive",
+    "last_login": "2026-02-20T15:06:40.772728Z",
+    "roles": [
+      "editor",
+      "user"
+    ]
+  },
+  {
+    "id": 439,
+    "username": "xrosales",
+    "email": "whitelucas@hotmail.com",
+    "status": "active",
+    "last_login": "2026-05-22T15:06:40.772843Z",
+    "roles": [
+      "moderator",
+      "editor",
+      "viewer"
+    ]
+  },
+  {
+    "id": 440,
+    "username": "daniellegarcia",
+    "email": "markmiller@yahoo.com",
+    "status": "pending",
+    "last_login": "2026-09-24T15:06:40.772984Z",
+    "roles": [
+      "analyst",
+      "user",
+      "moderator",
+      "contributor",
+      "editor"
+    ]
+  },
+  {
+    "id": 441,
+    "username": "toni21",
+    "email": "sean43@hotmail.com",
+    "status": "active",
+    "last_login": "2026-10-27T15:06:40.773051Z",
+    "roles": [
+      "moderator",
+      "contributor",
+      "user"
+    ]
+  },
+  {
+    "id": 442,
+    "username": "heatherbell",
+    "email": "williamssamuel@gmail.com",
+    "status": "inactive",
+    "last_login": "2026-04-03T15:06:40.773191Z",
+    "roles": []
+  },
+  {
+    "id": 443,
+    "username": "acosta",
+    "email": "ybell@yahoo.com",
+    "status": "active",
+    "last_login": "2026-04-05T15:06:40.773281Z",
+    "roles": [
+      "admin"
+    ]
+  },
+  {
+    "id": 444,
+    "username": "poolekristina",
+    "email": "franciscojones@hotmail.com",
+    "status": "active",
+    "last_login": "2026-10-25T15:06:40.773421Z",
+    "roles": [
+      "admin",
+      "contributor",
+      "user",
+      "moderator",
+      "analyst"
+    ]
+  },
+  {
+    "id": 445,
+    "username": "phillipslucas",
+    "email": "petersonpamela@gmail.com",
+    "status": "active",
+    "last_login": "2025-11-07T15:06:40.773628Z",
+    "roles": [
+      "admin",
+      "analyst",
+      "contributor",
+      "user"
+    ]
+  },
+  {
+    "id": 446,
+    "username": "jessicapayne",
+    "email": "brooke97@gmail.com",
+    "status": "inactive",
+    "last_login": "2026-05-14T15:06:40.773733Z",
+    "roles": [
+      "editor",
+      "moderator",
+      "admin",
+      "viewer",
+      "contributor"
+    ]
+  },
+  {
+    "id": 447,
+    "username": "reynoldsdesiree",
+    "email": "gmoore@hotmail.com",
+    "status": "inactive",
+    "last_login": "2025-11-12T15:06:40.773848Z",
+    "roles": [
+      "moderator",
+      "contributor",
+      "viewer",
+      "admin"
+    ]
+  },
+  {
+    "id": 448,
+    "username": "jamie36",
+    "email": "donna43@hotmail.com",
+    "status": "active",
+    "last_login": "2026-03-28T15:06:40.773915Z",
+    "roles": [
+      "admin"
+    ]
+  },
+  {
+    "id": 449,
+    "username": "williamsashley",
+    "email": "briansmith@yahoo.com",
+    "status": "active",
+    "last_login": "2026-07-01T15:06:40.774057Z",
+    "roles": [
+      "analyst",
+      "user",
+      "editor",
+      "admin"
+    ]
+  },
+  {
+    "id": 450,
+    "username": "phillipsebony",
+    "email": "bgonzalez@hotmail.com",
+    "status": "active",
+    "last_login": "2026-02-14T15:06:40.774174Z",
+    "roles": [
+      "admin",
+      "contributor",
+      "editor",
+      "user",
+      "moderator"
+    ]
+  },
+  {
+    "id": 451,
+    "username": "georgecarter",
+    "email": "tanthony@gmail.com",
+    "status": "active",
+    "last_login": "2026-06-02T15:06:40.774292Z",
+    "roles": [
+      "viewer",
+      "analyst",
+      "moderator",
+      "admin"
+    ]
+  },
+  {
+    "id": 452,
+    "username": "qruiz",
+    "email": "maypaul@yahoo.com",
+    "status": "inactive",
+    "last_login": "2025-12-05T15:06:40.774408Z",
+    "roles": [
+      "viewer",
+      "user",
+      "moderator"
+    ]
+  },
+  {
+    "id": 453,
+    "username": "nicole52",
+    "email": "bakersteven@yahoo.com",
+    "status": "active",
+    "last_login": "2026-04-10T15:06:40.774514Z",
+    "roles": [
+      "admin",
+      "analyst"
+    ]
+  },
+  {
+    "id": 454,
+    "username": "maryelliott",
+    "email": "millermaurice@gmail.com",
+    "status": "active",
+    "last_login": "2026-02-26T15:06:40.774656Z",
+    "roles": [
+      "analyst"
+    ]
+  },
+  {
+    "id": 455,
+    "username": "larellano",
+    "email": "randallloretta@gmail.com",
+    "status": "inactive",
+    "last_login": "2026-10-30T15:06:40.774772Z",
+    "roles": [
+      "contributor",
+      "admin",
+      "moderator"
+    ]
+  },
+  {
+    "id": 456,
+    "username": "rsheppard",
+    "email": "thomasmiller@yahoo.com",
+    "status": "active",
+    "last_login": "2026-05-25T15:06:40.774889Z",
+    "roles": [
+      "contributor"
+    ]
+  },
+  {
+    "id": 457,
+    "username": "shawrachel",
+    "email": "davidtodd@hotmail.com",
+    "status": "active",
+    "last_login": "2026-07-05T15:06:40.775031Z",
+    "roles": [
+      "contributor",
+      "editor",
+      "user",
+      "moderator",
+      "analyst"
+    ]
+  },
+  {
+    "id": 458,
+    "username": "stacyjackson",
+    "email": "davidhenderson@gmail.com",
+    "status": "active",
+    "last_login": "2026-01-13T15:06:40.775174Z",
+    "roles": [
+      "admin",
+      "viewer"
+    ]
+  },
+  {
+    "id": 459,
+    "username": "oharris",
+    "email": "luis11@gmail.com",
+    "status": "active",
+    "last_login": "2026-08-04T15:06:40.775254Z",
+    "roles": [
+      "contributor",
+      "admin",
+      "viewer"
+    ]
+  },
+  {
+    "id": 460,
+    "username": "jhawkins",
+    "email": "april09@yahoo.com",
+    "status": "active",
+    "last_login": "2026-08-03T15:06:40.775333Z",
+    "roles": [
+      "admin",
+      "analyst",
+      "contributor"
+    ]
+  },
+  {
+    "id": 461,
+    "username": "jrodriguez",
+    "email": "buckleyanna@gmail.com",
+    "status": "active",
+    "last_login": "2026-03-29T15:06:40.775450Z",
+    "roles": [
+      "analyst",
+      "user",
+      "viewer",
+      "moderator",
+      "contributor"
+    ]
+  },
+  {
+    "id": 462,
+    "username": "floydmikayla",
+    "email": "pbaker@yahoo.com",
+    "status": "active",
+    "last_login": "2026-04-21T15:06:40.775567Z",
+    "roles": [
+      "editor",
+      "contributor",
+      "moderator"
+    ]
+  },
+  {
+    "id": 463,
+    "username": "earmstrong",
+    "email": "joshuathomas@gmail.com",
+    "status": "active",
+    "last_login": "2026-06-26T15:06:40.775683Z",
+    "roles": [
+      "user",
+      "viewer"
+    ]
+  },
+  {
+    "id": 464,
+    "username": "vwilliams",
+    "email": "brandonalvarez@hotmail.com",
+    "status": "pending",
+    "last_login": "2026-08-15T15:06:40.775799Z",
+    "roles": [
+      "contributor",
+      "analyst",
+      "user",
+      "moderator",
+      "admin"
+    ]
+  },
+  {
+    "id": 465,
+    "username": "penny05",
+    "email": "juan71@yahoo.com",
+    "status": "active",
+    "last_login": "2026-10-29T15:06:40.775866Z",
+    "roles": [
+      "user",
+      "editor"
+    ]
+  },
+  {
+    "id": 466,
+    "username": "dennismccann",
+    "email": "joseph69@yahoo.com",
+    "status": "active",
+    "last_login": "2026-04-13T15:06:40.775968Z",
+    "roles": [
+      "editor"
+    ]
+  },
+  {
+    "id": 467,
+    "username": "lopezjason",
+    "email": "xmalone@yahoo.com",
+    "status": "active",
+    "last_login": "2026-08-25T15:06:40.776081Z",
+    "roles": [
+      "editor"
+    ]
+  },
+  {
+    "id": 468,
+    "username": "robertsonerik",
+    "email": "htaylor@yahoo.com",
+    "status": "active",
+    "last_login": "2026-02-25T15:06:40.776194Z",
+    "roles": [
+      "admin",
+      "contributor"
+    ]
+  },
+  {
+    "id": 469,
+    "username": "thompsonnancy",
+    "email": "wrightstephen@gmail.com",
+    "status": "active",
+    "last_login": "2026-01-24T15:06:40.776335Z",
+    "roles": [
+      "analyst"
+    ]
+  },
+  {
+    "id": 470,
+    "username": "janet45",
+    "email": "hreid@yahoo.com",
+    "status": "active",
+    "last_login": "2026-06-30T15:06:40.776412Z",
+    "roles": []
+  },
+  {
+    "id": 471,
+    "username": "allentracy",
+    "email": "susanwells@yahoo.com",
+    "status": "inactive",
+    "last_login": "2025-12-22T15:06:40.776552Z",
+    "roles": [
+      "contributor",
+      "editor",
+      "user",
+      "viewer"
+    ]
+  },
+  {
+    "id": 472,
+    "username": "max41",
+    "email": "hughesfrank@yahoo.com",
+    "status": "active",
+    "last_login": "2025-11-25T15:06:40.776656Z",
+    "roles": []
+  },
+  {
+    "id": 473,
+    "username": "mercedesholland",
+    "email": "josephortiz@hotmail.com",
+    "status": "pending",
+    "last_login": "2026-03-27T15:06:40.776795Z",
+    "roles": [
+      "contributor",
+      "admin",
+      "viewer"
+    ]
+  },
+  {
+    "id": 474,
+    "username": "hancocktammy",
+    "email": "wellsdavid@hotmail.com",
+    "status": "pending",
+    "last_login": "2025-11-05T15:06:40.776937Z",
+    "roles": [
+      "moderator",
+      "contributor",
+      "admin",
+      "editor",
+      "viewer"
+    ]
+  },
+  {
+    "id": 475,
+    "username": "carolynsmith",
+    "email": "jennifer46@yahoo.com",
+    "status": "active",
+    "last_login": "2026-10-06T15:06:40.777040Z",
+    "roles": [
+      "editor",
+      "analyst",
+      "user",
+      "admin",
+      "contributor"
+    ]
+  },
+  {
+    "id": 476,
+    "username": "dyork",
+    "email": "stevenbyrd@yahoo.com",
+    "status": "active",
+    "last_login": "2026-01-11T15:06:40.777155Z",
+    "roles": [
+      "contributor",
+      "admin",
+      "editor",
+      "moderator",
+      "user"
+    ]
+  },
+  {
+    "id": 477,
+    "username": "asilva",
+    "email": "anna99@hotmail.com",
+    "status": "active",
+    "last_login": "2026-10-09T15:06:40.777232Z",
+    "roles": [
+      "moderator",
+      "viewer"
+    ]
+  },
+  {
+    "id": 478,
+    "username": "kenneth17",
+    "email": "vanessa54@gmail.com",
+    "status": "inactive",
+    "last_login": "2026-08-19T15:06:40.777301Z",
+    "roles": [
+      "contributor"
+    ]
+  },
+  {
+    "id": 479,
+    "username": "diana43",
+    "email": "racheltrujillo@gmail.com",
+    "status": "active",
+    "last_login": "2026-08-21T15:06:40.777404Z",
+    "roles": [
+      "editor",
+      "contributor",
+      "moderator",
+      "user"
+    ]
+  },
+  {
+    "id": 480,
+    "username": "rguerrero",
+    "email": "rioswhitney@gmail.com",
+    "status": "active",
+    "last_login": "2026-04-27T15:06:40.777520Z",
+    "roles": [
+      "contributor",
+      "viewer",
+      "analyst",
+      "editor"
+    ]
+  },
+  {
+    "id": 481,
+    "username": "rebecca66",
+    "email": "aguilarwanda@hotmail.com",
+    "status": "active",
+    "last_login": "2026-07-04T15:06:40.777624Z",
+    "roles": [
+      "admin",
+      "moderator"
+    ]
+  },
+  {
+    "id": 482,
+    "username": "matthewreeves",
+    "email": "qknox@hotmail.com",
+    "status": "active",
+    "last_login": "2025-11-11T15:06:40.777739Z",
+    "roles": [
+      "admin",
+      "viewer",
+      "analyst",
+      "user",
+      "moderator"
+    ]
+  },
+  {
+    "id": 483,
+    "username": "william28",
+    "email": "connor24@gmail.com",
+    "status": "active",
+    "last_login": "2026-04-09T15:06:40.777806Z",
+    "roles": [
+      "admin",
+      "viewer",
+      "contributor"
+    ]
+  },
+  {
+    "id": 484,
+    "username": "staceylam",
+    "email": "walkerjeffrey@hotmail.com",
+    "status": "inactive",
+    "last_login": "2026-03-24T15:06:40.777949Z",
+    "roles": [
+      "contributor",
+      "user"
+    ]
+  },
+  {
+    "id": 485,
+    "username": "robert55",
+    "email": "steven17@yahoo.com",
+    "status": "inactive",
+    "last_login": "2026-07-06T15:06:40.778018Z",
+    "roles": [
+      "analyst",
+      "contributor"
+    ]
+  },
+  {
+    "id": 486,
+    "username": "delacruzbrandy",
+    "email": "kennedyjames@hotmail.com",
+    "status": "active",
+    "last_login": "2025-12-08T15:06:40.778160Z",
+    "roles": [
+      "user",
+      "viewer"
+    ]
+  },
+  {
+    "id": 487,
+    "username": "dillonpatrick",
+    "email": "jbrown@yahoo.com",
+    "status": "inactive",
+    "last_login": "2025-11-28T15:06:40.778278Z",
+    "roles": [
+      "analyst",
+      "viewer"
+    ]
+  },
+  {
+    "id": 488,
+    "username": "victoriacooper",
+    "email": "tthomas@hotmail.com",
+    "status": "inactive",
+    "last_login": "2026-10-19T15:06:40.778399Z",
+    "roles": [
+      "viewer"
+    ]
+  },
+  {
+    "id": 489,
+    "username": "kimberlyfreeman",
+    "email": "lawrencebrown@hotmail.com",
+    "status": "active",
+    "last_login": "2026-05-26T15:06:40.778542Z",
+    "roles": [
+      "moderator"
+    ]
+  },
+  {
+    "id": 490,
+    "username": "whill",
+    "email": "tracygallagher@gmail.com",
+    "status": "pending",
+    "last_login": "2026-05-13T15:06:40.778658Z",
+    "roles": [
+      "editor",
+      "viewer",
+      "analyst",
+      "moderator",
+      "contributor"
+    ]
+  },
+  {
+    "id": 491,
+    "username": "andersonryan",
+    "email": "epatterson@yahoo.com",
+    "status": "active",
+    "last_login": "2026-06-15T15:06:40.778774Z",
+    "roles": [
+      "analyst",
+      "editor"
+    ]
+  },
+  {
+    "id": 492,
+    "username": "ismith",
+    "email": "stephanie58@gmail.com",
+    "status": "inactive",
+    "last_login": "2026-07-29T15:06:40.778853Z",
+    "roles": [
+      "contributor",
+      "user"
+    ]
+  },
+  {
+    "id": 493,
+    "username": "andrewsmith",
+    "email": "jeremywiley@hotmail.com",
+    "status": "active",
+    "last_login": "2026-09-29T15:06:40.778995Z",
+    "roles": []
+  },
+  {
+    "id": 494,
+    "username": "david68",
+    "email": "gary04@hotmail.com",
+    "status": "active",
+    "last_login": "2026-03-07T15:06:40.779061Z",
+    "roles": [
+      "moderator"
+    ]
+  },
+  {
+    "id": 495,
+    "username": "stephen89",
+    "email": "ryan25@hotmail.com",
+    "status": "active",
+    "last_login": "2026-03-06T15:06:40.779128Z",
+    "roles": [
+      "editor"
+    ]
+  },
+  {
+    "id": 496,
+    "username": "mhoward",
+    "email": "osmith@gmail.com",
+    "status": "active",
+    "last_login": "2026-07-01T15:06:40.779218Z",
+    "roles": [
+      "viewer",
+      "admin",
+      "editor",
+      "user",
+      "contributor"
+    ]
+  },
+  {
+    "id": 497,
+    "username": "jasonjohnson",
+    "email": "daviddawson@hotmail.com",
+    "status": "pending",
+    "last_login": "2025-11-25T15:06:40.779361Z",
+    "roles": [
+      "editor",
+      "moderator",
+      "viewer",
+      "user",
+      "admin"
+    ]
+  },
+  {
+    "id": 498,
+    "username": "brooksdanielle",
+    "email": "wheelerbrandon@hotmail.com",
+    "status": "active",
+    "last_login": "2026-10-04T15:06:40.779508Z",
+    "roles": [
+      "viewer"
+    ]
+  },
+  {
+    "id": 499,
+    "username": "valdezandrew",
+    "email": "butleromar@hotmail.com",
+    "status": "active",
+    "last_login": "2026-10-21T15:06:40.779650Z",
+    "roles": [
+      "admin",
+      "moderator",
+      "editor"
+    ]
+  },
+  {
+    "id": 500,
+    "username": "thomas23",
+    "email": "turnerdorothy@hotmail.com",
+    "status": "active",
+    "last_login": "2025-12-11T15:06:40.779755Z",
+    "roles": []
+  }
+]
+
+[showing lines 3718-5717 of 5717; full output saved to /root/.local/share/opencode/shell/8ec1110cd11dac116fc0e62fa7858525638127ba/sh_19671fee2001PLkEodL7eMt9rd.out]
+[0m$ [0mjq --version; which yq; yq --version
+jq-1.6
+/usr/bin/yq
+yq 0.0.0
+> build · deepseek-v4.1-flash
+[0m$ [0mhead -c 600 /app/users.json; echo; jq 'length' /app/users.json
+[
+  {
+    "id": 1,
+    "username": "johnsonjoshua",
+    "email": "jillrhodes@gmail.com",
+    "status": "inactive",
+    "last_login": "2026-03-30T15:06:40.723617Z",
+    "roles": [
+      "viewer",
+      "moderator",
+      "analyst"
+    ]
+  },
+  {
+    "id": 2,
+    "username": "garzaanthony",
+    "email": "jesseguzman@gmail.com",
+    "status": "active",
+    "last_login": "2026-08-21T15:06:40.723810Z",
+    "roles": [
+      "analyst",
+      "editor",
+      "admin"
+    ]
+  },
+  {
+    "id": 3,
+    "username": "jennifermiles",
+    "email": "shaneramirez@yahoo.com",
+    "status": "inactive",
+    "last_l
+500
+[0m$ [0myq --help 2>&1 | head -20
+usage: yq [options] <jq filter> [input file...]
+          [--indentless-lists] [--in-place] [--version]
+          [jq_filter] [files ...]
+
+yq: Command-line YAML processor - jq wrapper for YAML documents
+
+yq transcodes YAML documents to JSON and passes them to jq.
+See https://github.com/kislyuk/yq for more information.
+
+positional arguments:
+  jq_filter
+  files
+
+options:
+  -h, --help            show this help message and exit
+  --yaml-output, --yml-output, -y
+                        Transcode jq JSON output back into YAML and emit it
+  --yaml-roundtrip, --yml-roundtrip, -Y
+                        Transcode jq JSON output back into YAML and emit it. Preserve YAML tags and styles by representing them as extra items in their enclosing mappings and sequences while in JSON. This option is incompatible with jq filters that do not expect these extra items.
+  --yaml-output-grammar-version {1.1,1.2}, --yml-out-ver {1.1,1.2}
+> build · deepseek-v4.1-flash
+[0m$ [0mcd /app && jq --indent 2 '. | map(select(.status == "active") | {user_id: .id, username: .username, email: .email, last_login: (.last_login | .[0:10]), role_count: (.roles | length), primary_role: (if (.roles | length) > 0 then .roles[0] else null end)}) | sort_by(.username)' /app/users.json > /app/active_users_report.json && jq 'length' /app/active_users_report.json && head -30 /app/active_users_report.json && jq '[.[] | select(.primary_role == null)] | length' /app/active_users_report.json
+346
+[
+  {
+    "user_id": 443,
+    "username": "acosta",
+    "email": "ybell@yahoo.com",
+    "last_login": "2026-04-05",
+    "role_count": 1,
+    "primary_role": "admin"
+  },
+  {
+    "user_id": 273,
+    "username": "alexisrogers",
+    "email": "gregorychase@yahoo.com",
+    "last_login": "2026-04-06",
+    "role_count": 1,
+    "primary_role": "user"
+  },
+  {
+    "user_id": 292,
+    "username": "allencarlos",
+    "email": "griffinemily@hotmail.com",
+    "last_login": "2026-04-09",
+    "role_count": 2,
+    "primary_role": "viewer"
+  },
+  {
+    "user_id": 224,
+    "username": "alyssasanders",
+    "email": "john10@hotmail.com",
+    "last_login": "2026-01-18",
+50
+> build · deepseek-v4.1-flash
+[0m← [0mWrite jq_args.yaml
+Created file successfully: jq_args.yaml
+[0m← [0mWrite cmd.sh
+Created file successfully: cmd.sh
+> build · deepseek-v4.1-flash
+[0m$ [0mcd /app && bash cmd.sh && jq -r '[.[] | select(.status == "active")] | length' users.json && jq 'length' active_users_report.json && head -6 cmd.sh && cat jq_args.yaml
+346
+346
+jq --indent 2 '. | map(select(.status == "active") | {user_id: .id, username: .username, email: .email, last_login: (.last_login | .[0:10]), role_count: (.roles | length), primary_role: (if (.roles | length) > 0 then .roles[0] else null end)}) | sort_by(.username)' /app/users.json > /app/active_users_report.json
+filter: ". | map(select(.status == \"active\") | {user_id: .id, username: .username, email: .email, last_login: (.last_login | .[0:10]), role_count: (.roles | length), primary_role: (if (.roles | length) > 0 then .roles[0] else null end)}) | sort_by(.username)"
+args:
+  - "--indent 2"
+[0m$ [0mcd /app && cp active_users_report.json /tmp/opencode/expected.json && jq $(yq -r '.args[]' /app/jq_args.yaml) "$(yq -r '.filter' /app/jq_args.yaml)" /app/users.json > /app/active_users_report.json && diff /tmp/opencode/expected.json /app/active_users_report.json && echo RECONSTRUCT_OK && jq -e 'type == "array" and length > 0' /app/active_users_report.json >/dev/null && jq -r '[.[].username] == ([.[].username] | sort)' /app/active_users_report.json && jq -r '[.[] | select(.user_id and .username and .email and (.last_login | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) and (.role_count | type == "number"))] | length' /app/active_users_report.json
+RECONSTRUCT_OK
+true
+346
+> build · deepseek-v4.1-flash
+Done. All three artifacts are in place and verified.
+
+**Files created:**
+
+- `/app/active_users_report.json` — 346 active users (of 500), sorted by `username`, 2-space indented.
+- `/app/cmd.sh` — the exact command executed:
+```bash
+jq --indent 2 '. | map(select(.status == "active") | {user_id: .id, username: .username, email: .email, last_login: (.last_login | .[0:10]), role_count: (.roles | length), primary_role: (if (.roles | length) > 0 then .roles[0] else null end)}) | sort_by(.username)' /app/users.json > /app/active_users_report.json
+```
+- `/app/jq_args.yaml`:
+```yaml
+filter: ". | map(select(.status == \"active\") | {user_id: .id, username: .username, email: .email, last_login: (.last_login | .[0:10]), role_count: (.roles | length), primary_role: (if (.roles | length) > 0 then .roles[0] else null end)}) | sort_by(.username)"
+args:
+  - "--indent 2"
+```
+
+**Verification performed:**
+- Ran the reconstruction command exactly as specified: `jq $(yq -r '.args[]' /app/jq_args.yaml) "$(yq -r '.filter' /app/jq_args.yaml) /app/users.json > /app/active_users_report.json` — output byte-identical to the direct run.
+- Active-user count matches the source (`346`), timestamps are `YYYY-MM-DD`, `role_count` is numeric, empty-role users produce JSON `null` for `primary_role` (50 such users), and usernames are in ascending sorted order.
+[?2004hroot@817b9087381b:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@817b9087381b:/app# 

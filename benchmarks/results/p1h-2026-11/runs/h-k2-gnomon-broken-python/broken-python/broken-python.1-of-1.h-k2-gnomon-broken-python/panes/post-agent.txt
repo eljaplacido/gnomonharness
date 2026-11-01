@@ -1,0 +1,53 @@
+root@029be9653e79:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+root@029be9653e79:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+ARM_VERSION=7012c5a6d80516891b061cc0f07ac1724b6289a0
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793516116
+root@029be9653e79:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with
+ pip.'; tmux wait -S done
+## Fixed
+
+Your pip wasn't broken by a permissions or config problem — **the code was actually deleted.**
+
+`/usr/local/bin/pip3` was still there and executable, but every time you ran it you got:
+
+```
+ModuleNotFoundError: No module named 'pip'
+```
+
+The cause: `pip`'s code directory (`site-packages/pip/`) had been removed, while its metadata (`pip-24.3.1.dist-info/`) was left behind. Of the 852 files pip's
+own `RECORD` file lists, **841 were missing** and only the 11 metadata files survived.
+
+That combination is why the obvious fixes failed. `python -m ensurepip --upgrade` is the standard repair, but it refused to work:
+
+```
+Requirement already satisfied: pip in /usr/local/lib/python3.13/site-packages (24.3.1)
+```
+
+It checked the metadata, concluded pip was already installed, and did nothing — leaving you with a pip that existed on paper only.
+
+### What I did
+1. Backed up the orphaned metadata to `/tmp/pip-repair-backup/` (outside your repo).
+2. Removed the stale `pip-24.3.1.dist-info/`, so pip was genuinely absent.
+3. Ran `python3 -m ensurepip --upgrade`, which rebuilt pip from the wheel bundled inside Python 3.13.1 — no network needed.
+
+### Verified, not assumed
+- `RECORD` re-check: **852 recorded, 0 missing.**
+- `pip3`, `pip`, and `python3 -m pip` all report 24.3.1.
+- **Real install** of `six` into system Python → imported fine → uninstalled cleanly (system left as found).
+- **Real install** in a throwaway venv: `requests` pulled in all 5 dependencies, imported, and made a live HTTPS call to PyPI returning `HTTP 200`.
+
+Test packages and the venv are deleted; the repo was never touched.
+
+### Two things worth knowing
+- **The deletion itself is unexplained.** Code vanishing while metadata stays is not something pip does on its own — it looks like an interrupted uninstall, a d
+isk-cleanup script, or a manual `rm`. It wasn't Docker cache pruning either, since the container was created Jan 2025 and the directory's mtime was Oct 31. If i
+t recurs, check whatever cleanup tooling runs in this image.
+- **pip is now one release behind** (24.3.1 vs 26.2.2). I deliberately did *not* upgrade, because replacing the bundled version wasn't part of the repair — say
+the word if you want it.
+
+One caution: this Python is your **system** interpreter and you're running as root. There's no `EXTERNALLY-MANAGED` marker here, so pip will happily install int
+o system Python and can genuinely break OS tooling. For real work, `python3 -m venv` is the safer habit — that path is confirmed working now.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=15 surface=a57c8a7444d5
+root@029be9653e79:/app#

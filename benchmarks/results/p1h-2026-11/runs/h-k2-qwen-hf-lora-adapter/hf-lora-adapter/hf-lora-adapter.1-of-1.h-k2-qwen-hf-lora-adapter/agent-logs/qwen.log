@@ -1,0 +1,38 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Done. All seven steps completed and verified.
+
+## What was built
+
+| Step | Result |
+|---|---|
+| 1–2 | Downloaded `FacebookAI/xlm-roberta-base` and the LoRA adapter via `snapshot_download` |
+| 3 | Base configured as `XLMRobertaForSequenceClassification` with **20** labels (`ignore_mismatched_sizes=True`), `id2label`/`label2id` taken from the adapter's `config.json` so class indexing matches training |
+| 4 | Saved to `/app/model_cache/xlm-roberta-base` (config, safetensors, tokenizer.json + sentencepiece vocab) |
+| 5 | `PeftModel.from_pretrained(...)` — adapter uses `modules_to_save: ["classifier"]`, so the trained head (`dense` 768×768, `out_proj` 20×768) is restored, not random |
+| 6 | `merge_and_unload()` → `/app/merged_model` (self-contained, no `lora` keys remain) |
+| 7 | `/app/detection_results.json` (10 entries, schema-validated) |
+
+Key detail: the adapter's `adapter_model.bin` carries the entire fine-tuned classification head. `build_model.py` asserts `torch.equal` between the adapter's `classifier.out_proj.weight` and the head in the PEFT model and again after merging, so a random-head silent failure can't slip through.
+
+## Detection results (argmax of logits)
+
+```
+ 6  fr  0.9753  Bonjour, comment allez-vous aujourd'hui?
+ 5  es  0.9890  Hola, ¿cómo estás hoy?
+ 2  de  0.9973  Guten Tag, wie geht es Ihnen?
+ 8  it  0.9888  Ciao, come stai oggi?
+12  pt  0.9896  Olá, como você está?
+13  ru  0.9856  Привет, как дела?
+ 9  ja  0.9649  こんにちは、お元気ですか？
+19  zh  0.9360  你好，你好吗？
+ 0  ar  0.9880  مرحبا، كيف حالك؟
+ 4  en  0.9737  Hello, how are you?
+```
+
+10/10 distinct classes, mean confidence 0.979.
+
+## Verification beyond the seed samples
+
+Loaded the **saved merged model fresh** (not the in-memory object) and ran one unseen sentence in each of the 20 languages: **20/20 correct**, confidences 0.90–0.999, lowest on Thai (0.901). Both tokenizer classes (`XLMRobertaTokenizer` and the fast variant) load from both output directories.
+
+Files: `build_model.py`, `detect.py`, `detection_results.json`, plus the two model directories. Note this environment had no Python ML packages, so I installed CPU-only `torch` 2.15, `transformers` 5.22.1, `peft` 0.21.2 into the system Python — flagging that since it mutates the global environment rather than a venv.

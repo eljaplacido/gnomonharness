@@ -1,0 +1,184 @@
+  │ I'll diagnose the actual Python/pip situation before saying anything abou…
+[approval] bash: echo "--- uname ---"; uname -a; echo "--- pwd ---"; pwd; echo "--- python ---"; which -a python python3 pip pip3 2>&1; echo "--- versions ---"; python3 -V 2>&1; pip3 --version 2>&1 — approved
+  ⚙ bash echo "--- uname ---"; uname -a; echo "--- pwd ---"; pwd; echo "--- pyt…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  ⚙ read .
+    ✓ read ./ — 4 entries
+  │ Reproduced already: `pip3` exists as a script but its module is gone. Let…
+[approval] bash: echo "--- sys.path ---"; python3 -c 'import sys; print(sys.executable); print(sys.prefix); print(sys.version); [print(" ",p) for p in sys.path]'
+echo "--- pip3 script ---"; cat /usr/local/bin/pip3 2>&1 | head -20
+echo "--- pip3 realpath ---"; ls -la /usr/local/bin/pip /usr/local/bin/pip3 2>&1
+echo "--- which python3 real ---"; ls -la /usr/local/bin/python3 /usr/bin/python3 2>&1 — approved
+  ⚙ bash echo "--- sys.path ---"; python3 -c 'import sys; print(sys.executable)…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: echo "--- site-packages listing ---"; for d in /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/dist-packages /usr/lib/python3/dist-packages; do echo "== $d"; ls -la "$d" 2>&1 | head -30; done
+echo "--- pip dirs anywhere ---"; find / -maxdepth 7 -name "pip" -type d -not -path "*/node_modules/*" 2>/dev/null | head -20
+echo "--- pip dist-info ---"; find / -maxdepth 8 -iname "pip-*.dist-info" -o -maxdepth 8 -iname "pip-*.egg-info" 2>/dev/null | head — approved
+  ⚙ bash echo "--- site-packages listing ---"; for d in /usr/local/lib/python3.…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ `pip`'s package directory is missing while its `dist-info` metadata survi…
+[approval] bash: echo "--- dist-info contents ---"; ls -la /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/
+echo "--- RECORD head ---"; head -20 /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD 2>&1
+echo "--- record line count ---"; wc -l /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD 2>&1
+echo "--- how many of those files exist? ---"; python3 - <<'EOF'
+import os
+base="/usr/local/lib/python3.13/site-packages"
+rec=base+"/pip-24.3.1.dist-info/RECORD"
+try:
+    lines=open(rec).read().splitlines()
+except Exception as e:
+    print("no RECORD:",e); raise SystemExit
+missing=0; present=0
+for l in lines:
+    p=l.split(",")[0]
+    if not p: continue
+    full=os.path.join(base,p) if not os.path.isabs(p) else p
+    if os.path.exists(full): present+=1
+    else: missing+=1
+print("recorded:",len(lines),"present:",present,"missing:",missing)
+EOF — approved
+  ⚙ bash echo "--- dist-info contents ---"; ls -la /usr/local/lib/python3.13/si…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: echo "--- writable? ---"; test -w /usr/local/lib/python3.13/site-packages && echo "site-packages WRITABLE" || echo "site-packages NOT writable"
+echo "--- whoami ---"; id
+echo "--- ensurepip available? ---"; python3 -c 'import ensurepip; print("ensurepip OK", ensurepip.__file__)' 2>&1
+echo "--- bundled wheels ---"; ls -la /usr/local/lib/python3.13/ensurepip/_bundled/ 2>&1 | head
+echo "--- network? ---"; timeout 8 python3 -c 'import urllib.request; urllib.request.urlopen("https://pypi.org/simple/",timeout=6); print("pypi REACHABLE")' 2>&1 | tail -3
+echo "--- apt python3-pip? ---"; ls /usr/lib/python3/dist-packages/ 2>&1 | grep -i pip || echo "no apt-installed pip" — approved
+  ⚙ bash echo "--- writable? ---"; test -w /usr/local/lib/python3.13/site-packa…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  │ Diagnosis is clear: **841 of 852 files of the pip installation are gone.*…
+  deepseek-v4.1-flash — 7 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 1/4 done · Restore pip via bundled ensurepip wheel
+[approval] bash: echo "--- run ensurepip (may skip due to surviving metadata) ---"; python3 -m ensurepip --version 2>&1; echo "exit=$?"
+echo "--- attempt default upgrade ---"; python3 -m ensurepip --upgrade >/tmp/ep.log 2>&1; echo "exit=$?"; tail -20 /tmp/ep.log
+echo "--- pip module now? ---"; python3 -c 'import pip; print("pip", pip.__version__)' 2>&1 | tail -2 — approved
+  ⚙ bash echo "--- run ensurepip (may skip due to surviving metadata) ---"; pyt…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  │ `ensurepip` refuses to repair it: it sees the orphaned metadata and says …
+[approval] bash: set -e
+SP=/usr/local/lib/python3.13/site-packages
+mkdir -p /tmp/pip-repair-backup
+cp -a "$SP/pip-24.3.1.dist-info" /tmp/pip-repair-backup/
+echo "backed up to /tmp/pip-repair-backup:"; ls /tmp/pip-repair-backup
+echo "--- removing orphaned metadata ---"
+rm -rf "$SP/pip-24.3.1.dist-info"
+ls -la "$SP"
+echo "--- reinstalling from bundled wheel (offline) ---"
+python3 -m ensurepip --upgrade >/tmp/ep2.log 2>&1; echo "ensurepip exit=$?"
+cat /tmp/ep2.log — approved
+  ⚙ bash set -e SP=/usr/local/lib/python3.13/site-packages mkdir -p /tmp/pip-re…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+  │ Pip reinstalled. Now verifying it *actually works* — not just that the mo…
+[approval] bash: echo "--- pip module ---"; python3 -c 'import pip; print("pip", pip.__version__)'
+echo "--- pip3 CLI ---"; pip3 --version; echo "exit=$?"
+echo "--- pip3 install --help works ---"; pip3 install --help >/dev/null 2>&1; echo "install-cmd exit=$?"
+echo "--- entry points present ---"; ls -la /usr/local/bin/pip*
+echo "--- RECORD completeness re-check ---"; python3 - <<'EOF'
+import os
+base="/usr/local/lib/python3.13/site-packages"
+rec=base+"/pip-24.3.1.dist-info/RECORD"
+lines=open(rec).read().splitlines()
+missing=[l.split(",")[0] for l in lines if l.split(",")[0] and not os.path.exists(os.path.join(base,l.split(",")[0]) if not os.path.isabs(l.split(",")[0]) else l.split(",")[0])]
+print("recorded:",len(lines),"missing:",len(missing))
+print(missing[:5])
+EOF — approved
+  ⚙ bash echo "--- pip module ---"; python3 -c 'import pip; print("pip", pip.__…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+[approval] bash: echo "--- PEP668 marker? ---"; ls -la /usr/local/lib/python3.13/EXTERNALLY-MANAGED 2>&1 || echo "no EXTERNALLY-MANAGED marker (pip installs to system python allowed)"
+echo "--- config ---"; pip3 config list 2>&1
+echo "--- env overrides ---"; env | grep -i -E '^(PIP_|PYTHON|VIRTUAL_ENV)' || echo "no PIP_/PYTHON env overrides" — approved
+  ⚙ bash echo "--- PEP668 marker? ---"; ls -la /usr/local/lib/python3.13/EXTERN…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  │ All 852 files restored, 0 missing. Now the real proof — an actual install…
+[approval] bash: cd /tmp
+echo "===== TEST 1: direct system install of a real package ====="
+pip3 install --quiet six >/tmp/t1.log 2>&1; echo "install exit=$?"
+tail -5 /tmp/t1.log
+python3 -c 'import six; print("import OK, six", six.__version__)' 2>&1 | tail -2
+echo "--- uninstall to leave system clean ---"
+pip3 uninstall -y six >/tmp/t2.log 2>&1; echo "uninstall exit=$?"; tail -3 /tmp/t2.log
+python3 -c 'import six' 2>&1 | tail -1 — approved
+  ⚙ bash cd /tmp echo "===== TEST 1: direct system install of a real package ==…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+[approval] bash: cd /tmp
+echo "===== TEST 2: venv + multi-dependency install ====="
+rm -rf /tmp/piptest-venv
+python3 -m venv /tmp/piptest-venv >/tmp/v1.log 2>&1; echo "venv create exit=$?"
+/tmp/piptest-venv/bin/pip install --quiet requests >/tmp/v2.log 2>&1; echo "requests install exit=$?"
+tail -5 /tmp/v2.log
+/tmp/piptest-venv/bin/pip list 2>/dev/null
+/tmp/piptest-venv/bin/python -c 'import requests; print("requests", requests.__version__, "-> real HTTP lib import OK")' 2>&1 | tail -2
+echo "--- functional network check through installed lib ---"
+timeout 15 /tmp/piptest-venv/bin/python -c 'import requests; r=requests.get("https://pypi.org/pypi/six/json",timeout=10); print("HTTP", r.status_code, "latest six:", r.json()["info"]["version"])' 2>&1 | tail -3 — approved
+  ⚙ bash cd /tmp echo "===== TEST 2: venv + multi-dependency install =====" rm …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  │ Everything works end to end. Cleaning up test artifacts and confirming th…
+[approval] bash: rm -rf /tmp/piptest-venv /tmp/t1.log /tmp/t2.log /tmp/v1.log /tmp/v2.log /tmp/ep.log /tmp/ep2.log
+echo "--- final state (fresh shell) ---"
+pip3 --version; echo "pip3 exit=$?"
+pip --version; echo "pip exit=$?"
+python3 -m pip --version; echo "python3 -m pip exit=$?"
+echo "--- nothing stray left in system site-packages ---"
+ls /usr/local/lib/python3.13/site-packages/
+echo "--- backup retained ---"; ls /tmp/pip-repair-backup/
+echo "--- repo untouched? ---"; ls -a /app — approved
+  ⚙ bash rm -rf /tmp/piptest-venv /tmp/t1.log /tmp/t2.log /tmp/v1.log /tmp/v2.l…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+  deepseek-v4.1-flash — 15 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 4/4 done
+## Fixed
+
+Your pip wasn't broken by a permissions or config problem — **the code was actually deleted.**
+
+`/usr/local/bin/pip3` was still there and executable, but every time you ran it you got:
+
+```
+ModuleNotFoundError: No module named 'pip'
+```
+
+The cause: `pip`'s code directory (`site-packages/pip/`) had been removed, while its metadata (`pip-24.3.1.dist-info/`) was left behind. Of the 852 files pip's own `RECORD` file lists, **841 were missing** and only the 11 metadata files survived.
+
+That combination is why the obvious fixes failed. `python -m ensurepip --upgrade` is the standard repair, but it refused to work:
+
+```
+Requirement already satisfied: pip in /usr/local/lib/python3.13/site-packages (24.3.1)
+```
+
+It checked the metadata, concluded pip was already installed, and did nothing — leaving you with a pip that existed on paper only.
+
+### What I did
+1. Backed up the orphaned metadata to `/tmp/pip-repair-backup/` (outside your repo).
+2. Removed the stale `pip-24.3.1.dist-info/`, so pip was genuinely absent.
+3. Ran `python3 -m ensurepip --upgrade`, which rebuilt pip from the wheel bundled inside Python 3.13.1 — no network needed.
+
+### Verified, not assumed
+- `RECORD` re-check: **852 recorded, 0 missing.**
+- `pip3`, `pip`, and `python3 -m pip` all report 24.3.1.
+- **Real install** of `six` into system Python → imported fine → uninstalled cleanly (system left as found).
+- **Real install** in a throwaway venv: `requests` pulled in all 5 dependencies, imported, and made a live HTTPS call to PyPI returning `HTTP 200`.
+
+Test packages and the venv are deleted; the repo was never touched.
+
+### Two things worth knowing
+- **The deletion itself is unexplained.** Code vanishing while metadata stays is not something pip does on its own — it looks like an interrupted uninstall, a disk-cleanup script, or a manual `rm`. It wasn't Docker cache pruning either, since the container was created Jan 2025 and the directory's mtime was Oct 31. If it recurs, check whatever cleanup tooling runs in this image.
+- **pip is now one release behind** (24.3.1 vs 26.2.2). I deliberately did *not* upgrade, because replacing the bundled version wasn't part of the repair — say the word if you want it.
+
+One caution: this Python is your **system** interpreter and you're running as root. There's no `EXTERNALLY-MANAGED` marker here, so pip will happily install into system Python and can genuinely break OS tooling. For real work, `python3 -m venv` is the safer habit — that path is confirmed working now.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=15 surface=a57c8a7444d5

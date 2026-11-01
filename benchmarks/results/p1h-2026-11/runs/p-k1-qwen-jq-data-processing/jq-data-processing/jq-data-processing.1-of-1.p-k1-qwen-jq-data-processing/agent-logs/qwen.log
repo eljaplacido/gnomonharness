@@ -1,0 +1,17 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Done. Three files created and verified in `/app`:
+
+**`active_users_report.json`** — 346 active users (matches the input's active count), all dates as `YYYY-MM-DD`, keys exactly `user_id, username, email, last_login, role_count, primary_role`, sorted ascending by `username`, 2-space indent.
+
+**`cmd.sh`**
+```
+jq '[.[] | select(.status == "active") | {user_id: .id, username: .username, email: .email, last_login: (.last_login | sub("\\.[0-9]+"; "") | fromdateiso8601 | strftime("%Y-%m-%d")), role_count: (.roles | length), primary_role: (.roles[0] // null)}] | sort_by(.username)' /app/users.json > /app/active_users_report.json
+```
+
+**`jq_args.yaml`** — same filter string; `args: []` because no jq flags are needed (2-space indent is jq's default).
+
+Notes:
+- The timestamp is stripped of fractional seconds before `fromdateiso8601`, since jq 1.6 rejects `2026-03-30T15:06:40.723617Z` with that function otherwise.
+- `primary_role: (.roles[0] // null)` yields real JSON `null` for the 50 active users with empty `roles` (verified: 50 zero-role records, 50 `null` primary roles, 0 mismatches).
+
+Verification run: `bash cmd.sh` and the reconstructed `jq $(yq -r '.args[]' jq_args.yaml) "$(yq -r '.filter' jq_args.yaml)" /app/users.json > /app/active_users_report.json` produced byte-identical output (`diff` clean), and jq checks confirmed valid date format, exact key set, correct `role_count` types, and sort order.

@@ -1,0 +1,1916 @@
+
+# On macOS, search Homebrew for keg-only versions of Bison and Flex. Xcode does
+# not provide new enough versions for us to use.
+if (CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
+    execute_process(
+        COMMAND brew --prefix bison
+        RESULT_VARIABLE BREW_BISON
+        OUTPUT_VARIABLE BREW_BISON_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if (BREW_BISON EQUAL 0 AND EXISTS "${BREW_BISON_PREFIX}")
+        message(STATUS "Found Bison keg installed by Homebrew at ${BREW_BISON_PREFIX}")
+        set(BISON_EXECUTABLE "${BREW_BISON_PREFIX}/bin/bison")
+    endif()
+
+    execute_process(
+        COMMAND brew --prefix flex
+        RESULT_VARIABLE BREW_FLEX
+        OUTPUT_VARIABLE BREW_FLEX_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if (BREW_FLEX EQUAL 0 AND EXISTS "${BREW_FLEX_PREFIX}")
+        message(STATUS "Found Flex keg installed by Homebrew at ${BREW_FLEX_PREFIX}")
+        set(FLEX_EXECUTABLE "${BREW_FLEX_PREFIX}/bin/flex")
+    endif()
+endif()
+
+
+find_package(BISON REQUIRED)
+find_package(FLEX REQUIRED)
+
+if (BISON_VERSION VERSION_LESS "2.6")
+    message(FATAL_ERROR "STP requires Bison 2.6 or newer")
+endif()
+
+# -----------------------------------------------------------------------------
+# Floating-point support (uses the header-only SymFPU library)
+# -----------------------------------------------------------------------------
+# Required: every build of STP solves the SMT-LIB floating-point theory.
+# SYMFPU_INCLUDE_DIRS still names a directory containing a symfpu clone, and
+# cmake/FindSymFPU.cmake can fetch and patch one otherwise.
+find_package(SymFPU REQUIRED)
+
+# LibBF folds the real literals in floating-point input -- ((_ to_fp 8 24)
+# RNE 1.5) -- to their exactly-rounded bits while parsing. It is required, and
+# with -DENABLE_AUTO_DOWNLOAD=ON it does not have to be installed: see
+# cmake/FindLibBF.cmake.
+find_package(LibBF REQUIRED)
+find_package(IMath REQUIRED)
+option(ENABLE_HIGHS "Enable optional HiGHS LP/MIP proposals with exact certification" OFF)
+option(ENABLE_HIGHS_CUT_LOG "Enable the optional HiGHS 1.12.0 root-cut recipe patch" OFF)
+if(ENABLE_HIGHS_CUT_LOG AND NOT ENABLE_HIGHS)
+  message(FATAL_ERROR "ENABLE_HIGHS_CUT_LOG requires ENABLE_HIGHS")
+endif()
+if(ENABLE_HIGHS)
+  find_package(HiGHS REQUIRED)
+endif()
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/klee && find . -iname '*docker*' -o -iname '*.sh' | grep -Ei 'docker|build' | head -30; grep -rn "stp" .github/workflows/*.yml 2>/dev/nul
+l | head -30
+./scripts/build/run-tests.sh
+./scripts/build/build.sh
+./utils/grafana/Dockerfile
+./.github/workflows/docker_release_push.yml
+./.dockerignore
+./Dockerfile
+$ cd /tmp/opencode/src/stp && git ls-remote --tags origin | grep -E 'refs/tags/(2\.|3\.)' | tail -30
+3ae3e92b29b9551cd146a2382d8391a6c89ef102        refs/tags/2.1.0
+1fdabf26b8f329d077f65facd116bf12fe8d72dd        refs/tags/2.1.1
+9c22ea1682eed439577fb1ebc89dd1047d365d7f        refs/tags/2.1.2
+15943d7fa821106c350a367d83aaf143d4720023        refs/tags/2.3.1
+a58a4ab2f42a334854c7e7485593e33cd4b4ee53        refs/tags/2.3.2
+7a3fd493ae6f0a524f853946308f4f3c3ddcbe76        refs/tags/2.3.3
+d70085462f07c8a5a2f1225f727cda3ef505b141        refs/tags/2.3.4
+207c63a88c67a4ec673da519039ce1212565c49c        refs/tags/2.3.4_cadical
+8c1af1c2e34dd9e9d2087ef8d3ac7ca703b1c472        refs/tags/2.4.0
+295953fc1f7424cc4822a02f5c7964e0aafbdf10        refs/tags/2.4.1
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/klee && cat cmake/find_stp.cmake; echo '---'; grep -rn "STP_VERSION\|stp_version\|STP_" lib/Expr/*.cpp include/klee/Expr/*.h cmake/find_s
+tp.cmake | head -40
+#===------------------------------------------------------------------------===#
+#
+#                     The KLEE Symbolic Virtual Machine
+#
+# This file is distributed under the University of Illinois Open Source
+# License. See LICENSE.TXT for details.
+#
+#===------------------------------------------------------------------------===#
+# STP: Use CMake facility to detect. The user can pass `-DSTP_DIR=` to force
+# a particular directory.
+
+# Although find_package() will set `STP_DIR` for us add it here so that
+# is displayed in `ccmake` and `cmake-gui`.
+set(STP_DIR "" CACHE PATH "Path to directory containing STPConfig.cmake")
+find_package(STP CONFIG)
+
+# Set the default so that if the following is true:
+# * STP was found
+# * ENABLE_SOLVER_STP is not already set as a cache variable
+#
+# then the default is set to `ON`. Otherwise set the default to `OFF`.
+# A consequence of this is if we fail to detect STP the first time
+# subsequent calls to CMake will not change the default.
+if (STP_FOUND)
+  set(ENABLE_SOLVER_STP_DEFAULT ON)
+else()
+  set(ENABLE_SOLVER_STP_DEFAULT OFF)
+endif()
+option(ENABLE_SOLVER_STP "Enable STP solver support" ${ENABLE_SOLVER_STP_DEFAULT})
+
+if (ENABLE_SOLVER_STP)
+  message(STATUS "STP solver support enabled")
+  if (STP_FOUND)
+    message(STATUS "Found STP version ${STP_VERSION}")
+    # Try the STP shared library first
+    if ("${STP_SHARED_LIBRARY}" STREQUAL "")
+      # Try the static library instead
+      if ("${STP_STATIC_LIBRARY}" STREQUAL "")
+        message(FATAL_ERROR "Couldn't find STP shared or static library")
+      endif()
+      message(STATUS "Using STP static library")
+      list(APPEND KLEE_SOLVER_LIBRARIES "${STP_STATIC_LIBRARY}")
+    else()
+      message(STATUS "Using STP shared library")
+      list(APPEND KLEE_SOLVER_LIBRARIES "${STP_SHARED_LIBRARY}")
+    endif()
+    list(APPEND KLEE_SOLVER_INCLUDE_DIRS ${STP_INCLUDE_DIRS})
+    message(STATUS "STP_DIR: ${STP_DIR}")
+    set(ENABLE_STP 1) # For config.h
+  else()
+    message(FATAL_ERROR "STP not found. Try setting `-DSTP_DIR=/path` where"
+      " `/path` is the directory containing `STPConfig.cmake`")
+  endif()
+else()
+  message(STATUS "STP solver support disabled")
+  set(ENABLE_STP 0) # For config.h
+endif()
+---
+cmake/find_stp.cmake:9:# STP: Use CMake facility to detect. The user can pass `-DSTP_DIR=` to force
+cmake/find_stp.cmake:12:# Although find_package() will set `STP_DIR` for us add it here so that
+cmake/find_stp.cmake:14:set(STP_DIR "" CACHE PATH "Path to directory containing STPConfig.cmake")
+cmake/find_stp.cmake:24:if (STP_FOUND)
+cmake/find_stp.cmake:25:  set(ENABLE_SOLVER_STP_DEFAULT ON)
+cmake/find_stp.cmake:27:  set(ENABLE_SOLVER_STP_DEFAULT OFF)
+cmake/find_stp.cmake:29:option(ENABLE_SOLVER_STP "Enable STP solver support" ${ENABLE_SOLVER_STP_DEFAULT})
+cmake/find_stp.cmake:33:  if (STP_FOUND)
+cmake/find_stp.cmake:34:    message(STATUS "Found STP version ${STP_VERSION}")
+cmake/find_stp.cmake:36:    if ("${STP_SHARED_LIBRARY}" STREQUAL "")
+cmake/find_stp.cmake:38:      if ("${STP_STATIC_LIBRARY}" STREQUAL "")
+cmake/find_stp.cmake:42:      list(APPEND KLEE_SOLVER_LIBRARIES "${STP_STATIC_LIBRARY}")
+cmake/find_stp.cmake:45:      list(APPEND KLEE_SOLVER_LIBRARIES "${STP_SHARED_LIBRARY}")
+cmake/find_stp.cmake:47:    list(APPEND KLEE_SOLVER_INCLUDE_DIRS ${STP_INCLUDE_DIRS})
+cmake/find_stp.cmake:48:    message(STATUS "STP_DIR: ${STP_DIR}")
+cmake/find_stp.cmake:51:    message(FATAL_ERROR "STP not found. Try setting `-DSTP_DIR=/path` where"
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/stp && for t in 2.3.3 2.3.4 2.4.0 2.4.1; do git fetch --depth 1 origin refs/tags/$t:refs/tags/$t >/dev/null 2>&1; echo "=== $t $(git log
+-1 --format=%cs $t) ==="; git show $t:CMakeLists.txt | grep -nE "find_package\((SymFPU|LibBF|IMath)|option\((USE_MINISAT|USE_CRYPTOMINISAT|USE_CADICAL)|NO.*(BOO
+ST|MINISAT)|ENABLE_PYTHON|ONLY_SIMPLE" | head -20; done
+=== 2.3.3 2019-03-02 ===
+134:    set(ENABLE_PYTHON_INTERFACE OFF)
+410:option(ONLY_SIMPLE "Only build very simplistic executable -- no Boost needed" OFF)
+411:if (NOT ONLY_SIMPLE)
+416:    set(ONLY_SIMPLE ON)
+438:option(NOCRYPTOMINISAT "Don't try to use cryptominisat" OFF)
+440:if (NOT NOCRYPTOMINISAT)
+443:  if (cryptominisat5_FOUND AND HAVE_FLAG_STD_CPP11 AND (NOT NOCRYPTOMINISAT))
+457:if (FORCE_CMS AND NOT USE_CRYPTOMINISAT)
+476:        if (NOT ONLY_SIMPLE)
+507:if (NOT MINISAT_FOUND)
+609:if ((NOT DEFINED ENABLE_PYTHON_INTERFACE) OR ENABLE_PYTHON_INTERFACE)
+625:        set(ENABLE_PYTHON_INTERFACE ON)
+=== 2.3.4 2024-06-11 ===
+151:    set(ENABLE_PYTHON_INTERFACE OFF)
+452:option(ONLY_SIMPLE "Only build very simplistic executable -- no Boost needed" OFF)
+453:if (NOT ONLY_SIMPLE)
+458:    set(ONLY_SIMPLE ON)
+460:add_feature_info(SimpleOptions ONLY_SIMPLE "Simplifies command-line interface, only a few command-line options will be available")
+477:option(NOCRYPTOMINISAT "Don't try to use cryptominisat" OFF)
+479:if (NOT NOCRYPTOMINISAT)
+487:  if (cryptominisat5_FOUND AND HAVE_FLAG_STD_CPP11 AND (NOT NOCRYPTOMINISAT))
+500:if (FORCE_CMS AND NOT USE_CRYPTOMINISAT)
+519:        if (NOT ONLY_SIMPLE)
+665:if((NOT DEFINED ENABLE_PYTHON_INTERFACE) OR ENABLE_PYTHON_INTERFACE)
+668:        set(ENABLE_PYTHON_INTERFACE ON)
+670:        set(ENABLE_PYTHON_INTERFACE OFF)
+673:add_feature_info(PythonInterface ENABLE_PYTHON_INTERFACE "Enables Python interface")
+=== 2.4.0 2026-07-31 ===
+135:    set(ENABLE_PYTHON_INTERFACE OFF)
+571:option(ONLY_SIMPLE "Only build very simplistic executable -- no Boost needed" OFF)
+572:if (NOT ONLY_SIMPLE)
+577:    set(ONLY_SIMPLE ON)
+579:add_feature_info(SimpleOptions ONLY_SIMPLE "Simplifies command-line interface, only a few command-line options will be available")
+596:option(USE_CADICAL "Try to use Cadical" OFF)
+709:option(NOCRYPTOMINISAT "Don't try to use cryptominisat" OFF)
+711:if (NOT NOCRYPTOMINISAT)
+725:  if (cryptominisat5_FOUND AND HAVE_FLAG_STD_CPP11 AND (NOT NOCRYPTOMINISAT))
+738:if (FORCE_CMS AND NOT USE_CRYPTOMINISAT)
+757:        if (NOT ONLY_SIMPLE)
+903:if((NOT DEFINED ENABLE_PYTHON_INTERFACE) OR ENABLE_PYTHON_INTERFACE)
+937:        set(ENABLE_PYTHON_INTERFACE ON)
+939:        set(ENABLE_PYTHON_INTERFACE OFF)
+942:add_feature_info(PythonInterface ENABLE_PYTHON_INTERFACE "Enables Python interface")
+=== 2.4.1 2026-08-01 ===
+135:    set(ENABLE_PYTHON_INTERFACE OFF)
+571:option(ONLY_SIMPLE "Only build very simplistic executable -- no Boost needed" OFF)
+572:if (NOT ONLY_SIMPLE)
+577:    set(ONLY_SIMPLE ON)
+579:add_feature_info(SimpleOptions ONLY_SIMPLE "Simplifies command-line interface, only a few command-line options will be available")
+596:option(USE_CADICAL "Try to use Cadical" OFF)
+709:option(NOCRYPTOMINISAT "Don't try to use cryptominisat" OFF)
+711:if (NOT NOCRYPTOMINISAT)
+725:  if (cryptominisat5_FOUND AND HAVE_FLAG_STD_CPP11 AND (NOT NOCRYPTOMINISAT))
+738:if (FORCE_CMS AND NOT USE_CRYPTOMINISAT)
+757:        if (NOT ONLY_SIMPLE)
+903:if((NOT DEFINED ENABLE_PYTHON_INTERFACE) OR ENABLE_PYTHON_INTERFACE)
+937:        set(ENABLE_PYTHON_INTERFACE ON)
+939:        set(ENABLE_PYTHON_INTERFACE OFF)
+942:add_feature_info(PythonInterface ENABLE_PYTHON_INTERFACE "Enables Python interface")
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/stp && git show 2.4.1:CMakeLists.txt | sed -n '430,480p;560,620p;700,790p'; echo '---FindMiniSat---'; git show 2.4.1:cmake/FindMiniSat.cm
+ake | sed -n '1,160p'
+if(WIN32)
+  set(FLEX_PATH_HINT "e:/cygwin/bin" CACHE STRING "Flex path hints, can be null if on your path")
+  set(BISON_PATH_HINT "e:/cygwin/bin" CACHE STRING "Bison path hints, can be null if on your path")
+  set(PERL_PATH_HINT "C:/Perl/bin" CACHE STRING "Perl path hints, can be null if on your pat")
+
+  set(PHINTS ${PERL_PATH_HINT} ${FLEX_PATH_HINT} ${BISON_PATH_HINT})
+  add_definitions(${STP_DEFS_COMM})
+endif()
+
+# -----------------------------------------------------------------------------
+# Add GIT version
+# -----------------------------------------------------------------------------
+function(SetVersionNumber PREFIX VERSION_MAJOR VERSION_MINOR VERSION_PATCH)
+  set(${PREFIX}_VERSION_MAJOR ${VERSION_MAJOR} PARENT_SCOPE)
+  set(${PREFIX}_VERSION_MINOR ${VERSION_MINOR} PARENT_SCOPE)
+  set(${PREFIX}_VERSION_PATCH ${VERSION_PATCH} PARENT_SCOPE)
+  set(${PREFIX}_VERSION
+        "${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}"
+        PARENT_SCOPE)
+endfunction()
+
+find_program (GIT_EXECUTABLE git)
+if (GIT_EXECUTABLE)
+  include(GetGitRevisionDescription)
+  get_git_head_revision(GIT_REFSPEC GIT_SHA)
+  MESSAGE(STATUS "GIT hash found: ${GIT_SHA}")
+else()
+  set(GIT_SHA "GIT-hash-notfound")
+endif()
+set(STP_FULL_VERSION "2.4.1")
+
+string(REPLACE "." ";" STP_FULL_VERSION_LIST ${STP_FULL_VERSION})
+SetVersionNumber("PROJECT" ${STP_FULL_VERSION_LIST})
+MESSAGE(STATUS "PROJECT_VERSION: ${PROJECT_VERSION}")
+MESSAGE(STATUS "PROJECT_VERSION_MAJOR: ${PROJECT_VERSION_MAJOR}")
+MESSAGE(STATUS "PROJECT_VERSION_MINOR: ${PROJECT_VERSION_MINOR}")
+MESSAGE(STATUS "PROJECT_VERSION_PATCH: ${PROJECT_VERSION_PATCH}")
+
+# -----------------------------------------------------------------------------
+# Write out the config.h
+# -----------------------------------------------------------------------------
+
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/include/stp/config.h.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/include/stp/config.h"
+)
+
+# -----------------------------------------------------------------------------
+# Set up includes
+# -----------------------------------------------------------------------------
+
+# Check size of long
+CHECK_TYPE_SIZE("long" SIZEOF_LONG)
+add_definitions(-DSIZEOF_LONG=${SIZEOF_LONG})
+
+# Check size of int
+CHECK_TYPE_SIZE("int" SIZEOF_INT)
+add_definitions(-DSIZEOF_INT=${SIZEOF_INT})
+
+
+
+option(ONLY_SIMPLE "Only build very simplistic executable -- no Boost needed" OFF)
+if (NOT ONLY_SIMPLE)
+  find_package( Boost 1.46 COMPONENTS program_options)
+endif()
+
+if(NOT Boost_FOUND)
+    set(ONLY_SIMPLE ON)
+endif()
+add_feature_info(SimpleOptions ONLY_SIMPLE "Simplifies command-line interface, only a few command-line options will be available")
+
+# -----------------------------------------------------------------------------
+# Find Riss
+# -----------------------------------------------------------------------------
+option(USE_RISS "Try to use Riss" OFF)
+add_feature_info(Riss USE_RISS "Enables Riss solver")
+
+if (USE_RISS)
+    add_definitions(-DUSE_RISS)
+    include_directories(${RISS_DIR}/)        # should point to the base directory: ~/git/riss/
+    link_directories(${RISS_DIR}/build/lib)  # should point to the base directory: ~/git/riss/build/lib
+endif()
+
+# -----------------------------------------------------------------------------
+# Setup Cadical
+# -----------------------------------------------------------------------------
+option(USE_CADICAL "Try to use Cadical" OFF)
+add_feature_info(Cadical USE_CADICAL "Enables Cadical solver")
+
+if (USE_CADICAL)
+    set(CADICAL_DIR "" CACHE PATH "Path to a CaDiCaL checkout (the directory containing src/cadical.hpp and build/libcadical.a)")
+    find_path(CADICAL_INCLUDE_DIR NAMES src/cadical.hpp HINTS ${CADICAL_DIR})
+    find_library(CADICAL_LIBRARY NAMES cadical HINTS ${CADICAL_DIR}/build)
+    if (NOT CADICAL_INCLUDE_DIR OR NOT CADICAL_LIBRARY)
+        message(FATAL_ERROR "USE_CADICAL is set but CaDiCaL was not found. "
+                "Set CADICAL_DIR to a CaDiCaL checkout containing src/cadical.hpp and build/libcadical.a")
+    endif()
+    message(STATUS "Found CaDiCaL: ${CADICAL_LIBRARY}")
+    add_definitions(-DUSE_CADICAL)
+    include_directories(${CADICAL_INCLUDE_DIR})
+    link_libraries(${CADICAL_LIBRARY})
+endif()
+
+# -----------------------------------------------------------------------------
+# Allocator selection
+# -----------------------------------------------------------------------------
+# STP is allocation-heavy at every stage: bit-blasting and CNF generation churn
+# the AIG and CNF data structures, and the SAT solvers churn clause memory.
+# The C library allocator is the bottleneck; any of the modern replacements is
+# ~15% faster to CNF, ~14% faster for CaDiCaL solving and ~7% for CryptoMiniSat,
+# with identical results. mimalloc is vendored as a submodule so that a fast
+            "not '${STP_ALLOCATOR}'")
+endif()
+
+add_feature_info(Allocator "NOT STP_ALLOCATOR STREQUAL system"
+                 "Links ${STP_ALLOCATOR} for faster allocation")
+
+# -----------------------------------------------------------------------------
+# Find CryptoMiniSat
+# -----------------------------------------------------------------------------
+option(NOCRYPTOMINISAT "Don't try to use cryptominisat" OFF)
+
+if (NOT NOCRYPTOMINISAT)
+  set(cryptominisat5_DIR "" CACHE PATH "Path to directory containing cryptominisat5Config.cmake")
+  find_package(GMP REQUIRED)
+  message(STATUS "GMP includes: ${GMP_INCLUDE_DIRS}")
+  message(STATUS "GMP libraries: ${GMP_LIBRARIES}")
+  include_directories(SYSTEM ${GMP_INCLUDE_DIRS})
+  set(LIBS ${LIBS} ${GMP_LIBRARIES})
+  # A static CryptoMiniSat references cadical/cadiback imported targets but its
+  # config file does not find them itself; a shared CryptoMiniSat has no such
+  # packages, hence QUIET. cadical's export in turn references Threads::Threads.
+  find_package(Threads QUIET)
+  find_package(cadical CONFIG QUIET)
+  find_package(cadiback CONFIG QUIET)
+  find_package(cryptominisat5 CONFIG)
+  if (cryptominisat5_FOUND AND HAVE_FLAG_STD_CPP11 AND (NOT NOCRYPTOMINISAT))
+    message(STATUS "CryptoMiniSat5 dynamic lib: ${CRYPTOMINISAT5_LIBRARIES}")
+    message(STATUS "CryptoMiniSat5 static lib:  ${CRYPTOMINISAT5_STATIC_LIBRARIES}")
+    message(STATUS "CryptoMiniSat5 static lib deps: ${CRYPTOMINISAT5_STATIC_LIBRARIES_DEPS}")
+    message(STATUS "CryptoMiniSat5 include dirs: ${CRYPTOMINISAT5_INCLUDE_DIRS}")
+    add_definitions(-DUSE_CRYPTOMINISAT)
+    set(USE_CRYPTOMINISAT ON)
+  else()
+  endif()
+endif()
+add_feature_info(CryptoMiniSat USE_CRYPTOMINISAT "Enables CryptoMiniSat solver, allows --cryptominisat5 option")
+
+option(FORCE_CMS "Must build with CryptoMiniSat" OFF)
+if (FORCE_CMS AND NOT USE_CRYPTOMINISAT)
+    message(FATAL_ERROR "CryptoMiniSat 5.x was not found but it was requested. Exiting.")
+endif()
+
+# -----------------------------------------------------------------------------
+# Find ZLIB (needed for MiniSat)
+# yes, we need to include the zlib header location or STP will not build
+# thanks to MiniSat include-ing it n the header
+# -----------------------------------------------------------------------------
+find_package(ZLIB)
+include_directories(${ZLIB_INCLUDE_DIR})
+include_directories(${minisat_SOURCE_DIR})
+
+# ----------
+# manpage
+# ----------
+if (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+    find_program(HELP2MAN_FOUND help2man)
+    if (HELP2MAN_FOUND)
+        if (NOT ONLY_SIMPLE)
+            ADD_CUSTOM_TARGET(man_stp
+                ALL
+                DEPENDS stp-bin
+            )
+
+            ADD_CUSTOM_COMMAND(
+                TARGET man_stp
+                COMMAND help2man
+                ARGS  --name="Simple Theorem Prover SMT solver" --version-string=${STP_FULL_VERSION} --help-option="--help" $<TARGET_FILE:stp-bin> -o ${CMAKE_CU
+RRENT_BINARY_DIR}/stp.1
+            )
+
+            INSTALL(
+                FILES ${CMAKE_CURRENT_BINARY_DIR}/stp.1
+                DESTINATION ${CMAKE_INSTALL_PREFIX}/man/man1)
+            message(STATUS "Manpage will be created and installed")
+        endif()
+    else()
+        MESSAGE(STATUS "Cannot find help2man, not creating manpage")
+    endif()
+else()
+    MESSAGE(STATUS "Not on Linux, not creating manpage")
+endif()
+
+
+# -----------------------------------------------------------------------------
+# Find Minisat
+# -----------------------------------------------------------------------------
+
+find_package(minisat)
+set(MINISAT_INCLUDE_DIR "" CACHE PATH "MiniSat include directory")
+set(MINISAT_LIBRARY "" CACHE PATH "MiniSat library directory")
+
+if (minisat_FOUND)
+---FindMiniSat---
+fatal: path 'cmake/FindMiniSat.cmake' exists on disk, but not in '2.4.1'
+> build · deepseek-v4.1-flash
+$ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libgmp-dev help2man 2>&1 | tail -5; cd /tmp/opencode/src/stp && git checkout -q 2.4.
+1 && mkdir -p build && cd build && cmake -S .. -B . -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=ON -DENABLE_PYTHON
+_INTERFACE=OFF -DENABLE_TESTING=OFF -DUSE_CADICAL=OFF -DNOCRYPTOMINISAT=OFF 2>&1 | tail -40
+Setting up libgmpxx4ldbl:arm64 (2:6.3.0+dfsg-2ubuntu6.1) ...
+Setting up liblocale-gettext-perl (1.07-6ubuntu5) ...
+Setting up libgmp-dev:arm64 (2:6.3.0+dfsg-2ubuntu6.1) ...
+Setting up help2man (1.49.3) ...
+Processing triggers for libc-bin (2.39-0ubuntu8.9) ...
+-- Performing Test HAVE_FLAG_-Wheader-guard - Failed
+-- Performing Test HAVE_FLAG_-Wformat-nonliteral
+-- Performing Test HAVE_FLAG_-Wformat-nonliteral - Success
+-- Performing Test HAVE_FLAG_-Winit-self
+-- Performing Test HAVE_FLAG_-Winit-self - Success
+-- Performing Test HAVE_FLAG_-Wparentheses
+-- Performing Test HAVE_FLAG_-Wparentheses - Success
+-- Performing Test HAVE_FLAG_-Wunreachable-code
+-- Performing Test HAVE_FLAG_-Wunreachable-code - Success
+-- Performing Test HAVE_FLAG_-fvisibility=hidden
+-- Performing Test HAVE_FLAG_-fvisibility=hidden - Success
+-- Performing Test HAVE_LINKER_FLAG_BSYMBOLIC_FUNCTIONS
+-- Performing Test HAVE_LINKER_FLAG_BSYMBOLIC_FUNCTIONS - Success
+-- Performing Test HAVE_FLAG_-mpopcnt
+-- Performing Test HAVE_FLAG_-mpopcnt - Failed
+-- GIT hash found: 295953fc1f7424cc4822a02f5c7964e0aafbdf10
+-- PROJECT_VERSION: 2.4.1
+-- PROJECT_VERSION_MAJOR: 2
+-- PROJECT_VERSION_MINOR: 4
+-- PROJECT_VERSION_PATCH: 1
+-- Looking for sys/types.h
+-- Looking for sys/types.h - found
+-- Looking for stdint.h
+-- Looking for stdint.h - found
+-- Looking for stddef.h
+-- Looking for stddef.h - found
+-- Check size of void*
+-- Check size of void* - done
+-- Check size of long
+-- Check size of long - done
+-- Check size of int
+-- Check size of int - done
+-- Found Boost: /usr/lib/aarch64-linux-gnu/cmake/Boost-1.83.0/BoostConfig.cmake (found suitable version "1.83.0", minimum required is "1.46") found components:
+program_options
+CMake Error at CMakeLists.txt:647 (message):
+  STP_ALLOCATOR=mimalloc but lib/extlib-mimalloc is empty.  Run: git
+  submodule update --init lib/extlib-mimalloc (or configure with
+  -DSTP_ALLOCATOR=system).
+
+
+-- Configuring incomplete, errors occurred!
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/stp/build && cmake -S .. -B . -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=ON -DENABLE_PYTHO
+N_INTERFACE=OFF -DENABLE_TESTING=OFF -DUSE_CADICAL=OFF -DNOCRYPTOMINISAT=OFF -DSTP_ALLOCATOR=system 2>&1 | tail -45
+-- CryptoMiniSat5 include dirs: /usr/include
+-- Found ZLIB: /usr/lib/aarch64-linux-gnu/libz.so (found version "1.3")
+-- Manpage will be created and installed
+-- Finding minisat headers...
+-- looking at:
+-- found: MINISAT_INCLUDE_DIR: /usr/include
+-- Finding minisat libs...
+-- looking at:
+-- found: MINISAT_LIBRARY: /lib/libminisat.so
+-- Found minisat: /lib/libminisat.so
+-- OK, found Minisat library under /lib/libminisat.so and Minisat include dirs under /usr/include
+-- Found BISON: /usr/bin/bison (found version "3.8.2")
+-- Found FLEX: /usr/bin/flex (found version "2.6.4")
+-- Found Perl: /usr/bin/perl (found version "5.38.2")
+-- All defines at startup:  -DNDEBUG -D__STDC_LIMIT_MACROS -DLIN64 -DSIZEOF_VOID_P=8 -DSIZEOF_LONG=8 -DSIZEOF_INT=4 -DUSE_CRYPTOMINISAT
+-- Final CXX flags  -Wall -Wextra -Wunused -pedantic -Wsign-compare -Wtype-limits -Wuninitialized -Wno-deprecated -Wstrict-aliasing -Wpointer-arith -Wpointer-ar
+ith -Wformat-nonliteral -Winit-self -Wparentheses -Wunreachable-code -fvisibility=hidden
+-- Looking for unistd.h
+-- Looking for unistd.h - found
+CMake Error at lib/CMakeLists.txt:168 (add_subdirectory):
+  The source directory
+
+    /tmp/opencode/src/stp/lib/extlib-abc
+
+  does not contain a CMakeLists.txt file.
+
+
+-- The following features have been enabled:
+
+ * ThreadLocal, Enables use of thread-local storage when available
+ * CryptoMiniSat, Enables CryptoMiniSat solver, allows --cryptominisat5 option
+ * Executables, Enables executables compilation
+
+-- The following features have been disabled:
+
+ * Assertions, Enables assertions
+ * Sanitizers, Enables Clang sanitizers, will force using clang++ as the compiler
+ * Static, Compiles static library and executable
+ * SimpleOptions, Simplifies command-line interface, only a few command-line options will be available
+ * Riss, Enables Riss solver
+ * Cadical, Enables Cadical solver
+ * Allocator, Links system for faster allocation
+ * PythonInterface, Enables Python interface
+ * Tests, Enables tests
+
+-- Configuring incomplete, errors occurred!
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/stp && cat .gitmodules; git submodule update --init --recursive 2>&1 | tail -20; ls lib/extlib-abc | head; ls lib/extlib-mimalloc | head
+[submodule "lib/extlib-abc"]
+        path = lib/extlib-abc
+        url = https://github.com/berkeley-abc/abc.git
+[submodule "lib/extlib-mimalloc"]
+        path = lib/extlib-mimalloc
+        url = https://github.com/microsoft/mimalloc.git
+Submodule 'lib/extlib-abc' (https://github.com/berkeley-abc/abc.git) registered for path 'lib/extlib-abc'
+Submodule 'lib/extlib-mimalloc' (https://github.com/microsoft/mimalloc.git) registered for path 'lib/extlib-mimalloc'
+Cloning into '/tmp/opencode/src/stp/lib/extlib-abc'...
+Cloning into '/tmp/opencode/src/stp/lib/extlib-mimalloc'...
+Submodule path 'lib/extlib-abc': checked out '95393064368b7c05da4d6f0264fc3419c175c7cb'
+Submodule path 'lib/extlib-mimalloc': checked out '30ac9d56b8b9ea57ae84bc8ef17ef39000da08fe'
+CMakeLists.txt
+Makefile
+README.md
+abc.rc
+abcexe.dsp
+abclib.dsp
+abcspace.dsw
+arch_flags.c
+copyright.txt
+depends.sh
+CMakeLists.txt
+LICENSE
+SECURITY.md
+azure-pipelines.yml
+bin
+cmake
+contrib
+doc
+docs
+ide
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/stp/build && cmake -S .. -B . -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=ON -DENABLE_PYTHO
+N_INTERFACE=OFF -DENABLE_TESTING=OFF -DUSE_CADICAL=OFF -DNOCRYPTOMINISAT=OFF -DSTP_ALLOCATOR=system 2>&1 | tail -25 && ninja -j20 2>&1 | tail -25
+-- Performing Test C_COMPILER_SUPPORTS__-Wno-unused-but-set-variable
+-- Performing Test C_COMPILER_SUPPORTS__-Wno-unused-but-set-variable - Success
+-- Performing Test CXX_COMPILER_SUPPORTS__-Wno-unused-but-set-variable
+-- Performing Test CXX_COMPILER_SUPPORTS__-Wno-unused-but-set-variable - Success
+-- The following features have been enabled:
+
+ * ThreadLocal, Enables use of thread-local storage when available
+ * CryptoMiniSat, Enables CryptoMiniSat solver, allows --cryptominisat5 option
+ * Executables, Enables executables compilation
+
+-- The following features have been disabled:
+
+ * Assertions, Enables assertions
+ * Sanitizers, Enables Clang sanitizers, will force using clang++ as the compiler
+ * Static, Compiles static library and executable
+ * SimpleOptions, Simplifies command-line interface, only a few command-line options will be available
+ * Riss, Enables Riss solver
+ * Cadical, Enables Cadical solver
+ * Allocator, Links system for faster allocation
+ * PythonInterface, Enables Python interface
+ * Tests, Enables tests
+
+-- Configuring done (1.0s)
+-- Generating done (0.1s)
+-- Build files have been written to: /tmp/opencode/src/stp/build
+      |                                                                                                                                          ^~~~~~~~~~~~~~~
+~~~~~~~~~
+/tmp/opencode/src/stp/lib/extlib-abc/src/base/abc/abcHieNew.c: In function ‘Au_NtkDeriveFlatGia_rec’:
+/tmp/opencode/src/stp/lib/extlib-abc/src/base/abc/abcHieNew.c:61:28: note: while referencing ‘Fanins’
+   61 |     int                    Fanins[2];          // fanin literals
+      |                            ^~~~~~
+In function ‘Au_ObjFaninId’,
+    inlined from ‘Au_ObjFanin’ at /tmp/opencode/src/stp/lib/extlib-abc/src/base/abc/abcHieNew.c:169:83,
+    inlined from ‘Au_ObjFanin2’ at /tmp/opencode/src/stp/lib/extlib-abc/src/base/abc/abcHieNew.c:172:83,
+    inlined from ‘Au_ObjGetXsimFan2’ at /tmp/opencode/src/stp/lib/extlib-abc/src/base/abc/abcHieNew.c:1310:17,
+    inlined from ‘Au_NtkTerSimulate_rec’ at /tmp/opencode/src/stp/lib/extlib-abc/src/base/abc/abcHieNew.c:1355:17:
+/tmp/opencode/src/stp/lib/extlib-abc/src/base/abc/abcHieNew.c:165:138: warning: array subscript 2 is above array bounds of ‘int[2]’ [-Warray-bounds=]
+  165 | static inline int          Au_ObjFaninId( Au_Obj_t * p, int i )          { assert(i >= 0 && i < (int)p->nFanins && p->Fanins[i]); return Au_Lit2Var(p->F
+anins[i]);     }
+      |                                                                                                                                          ^~~~~~~~~~~~~~~
+~~~~~~~~~
+/tmp/opencode/src/stp/lib/extlib-abc/src/base/abc/abcHieNew.c: In function ‘Au_NtkTerSimulate_rec’:
+/tmp/opencode/src/stp/lib/extlib-abc/src/base/abc/abcHieNew.c:61:28: note: while referencing ‘Fanins’
+   61 |     int                    Fanins[2];          // fanin literals
+      |                            ^~~~~~
+[20/1118] Building C object lib/extlib-abc/CMakeFiles/libabc-pic.dir/src/base/abc/abcBlifMv.c.o
+[21/1118] Building CXX object lib/AST/CMakeFiles/AST.dir/ASTInterior.cpp.o
+[22/1118] Building CXX object lib/AST/CMakeFiles/AST.dir/ASTUtil.cpp.o
+[23/1118] Building CXX object lib/Globals/CMakeFiles/stpglobals.dir/Globals.cpp.o
+[24/1118] Building CXX object lib/AST/CMakeFiles/AST.dir/ASTBVConst.cpp.o
+[25/1118] Building CXX object lib/AST/CMakeFiles/AST.dir/ASTNode.cpp.o
+[26/1118] Building C object lib/extlib-abc/CMakeFiles/libabc-pic.dir/src/base/abc/abcDfs.c.o
+ninja: build stopped: subcommand failed.
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/stp/build && ninja -j20 2>&1 | grep -Ei 'error:|FAILED:' -B8 -A15 | head -150
+[44/1095] Building CXX object lib/Parser/CMakeFiles/parser.dir/LetMgr.cpp.o
+[45/1095] Building CXX object lib/Printer/CMakeFiles/printer.dir/PLPrinter.cpp.o
+[46/1095] Building CXX object lib/Printer/CMakeFiles/printer.dir/GDLPrinter.cpp.o
+[47/1095] Building CXX object lib/Simplifier/CMakeFiles/simplifier.dir/constantBitP/ConstantBitP_MaxPrecision.cpp.o
+[48/1095] Building CXX object lib/Printer/CMakeFiles/printer.dir/SMTLIB1Printer.cpp.o
+[49/1095] Building CXX object lib/Printer/CMakeFiles/printer.dir/BenchPrinter.cpp.o
+[50/1095] Building CXX object lib/Util/CMakeFiles/util.dir/GitSHA1.cpp.o
+[51/1095] Building CXX object lib/Sat/CMakeFiles/sat.dir/MinisatCore.cpp.o
+FAILED: lib/Sat/CMakeFiles/sat.dir/MinisatCore.cpp.o
+/usr/bin/c++ -DLIN64 -DNDEBUG -DSIZEOF_INT=4 -DSIZEOF_LONG=8 -DSIZEOF_VOID_P=8 -DUSE_CRYPTOMINISAT -D__STDC_LIMIT_MACROS -I/tmp/opencode/src/stp/include -I/tmp/
+opencode/src/stp/build/include -I/tmp/opencode/src/stp/lib -isystem /tmp/opencode/src/stp/lib/extlib-abc/src -Wall -Wextra -Wunused -pedantic -Wsign-compare -Wt
+ype-limits -Wuninitialized -Wno-deprecated -Wstrict-aliasing -Wpointer-arith -Wpointer-arith -Wformat-nonliteral -Winit-self -Wparentheses -Wunreachable-code -f
+visibility=hidden -O3  -std=gnu++17 -fPIC   -D STP_EXPORTS -g -pthread -O3 -fno-tree-vectorize -g0 -MD -MT lib/Sat/CMakeFiles/sat.dir/MinisatCore.cpp.o -MF lib/
+Sat/CMakeFiles/sat.dir/MinisatCore.cpp.o.d -o lib/Sat/CMakeFiles/sat.dir/MinisatCore.cpp.o -c /tmp/opencode/src/stp/lib/Sat/MinisatCore.cpp
+In file included from /tmp/opencode/src/stp/include/stp/Sat/SATSolver.h:29,
+                 from /tmp/opencode/src/stp/include/stp/Sat/MinisatCore.h:32,
+                 from /tmp/opencode/src/stp/lib/Sat/MinisatCore.cpp:26:
+/tmp/opencode/src/stp/lib/Sat/MinisatCore.cpp: In member function ‘bool stp::MinisatCore::propagateWithAssumptions(const stp::SATSolver::vec_literals&)’:
+/tmp/opencode/src/stp/lib/Sat/MinisatCore.cpp:82:42: error: expected unqualified-id before ‘(’ token
+   82 |   return ret != (Minisat::lbool)Minisat::l_False;
+      |                                          ^~~~~~~
+/tmp/opencode/src/stp/lib/Sat/MinisatCore.cpp: In member function ‘virtual bool stp::MinisatCore::solveInternal(bool&)’:
+/tmp/opencode/src/stp/lib/Sat/MinisatCore.cpp:92:39: error: expected unqualified-id before ‘(’ token
+   92 |   if (ret == (Minisat::lbool)Minisat::l_Undef)
+      |                                       ^~~~~~~
+/tmp/opencode/src/stp/lib/Sat/MinisatCore.cpp:97:42: error: expected unqualified-id before ‘(’ token
+   97 |   return ret == (Minisat::lbool)Minisat::l_True;
+      |                                          ^~~~~~
+[52/1095] Building CXX object lib/Parser/CMakeFiles/parser.dir/lexcvc.cpp.o
+[53/1095] Building CXX object lib/Sat/CMakeFiles/sat.dir/SimplifyingMinisat.cpp.o
+FAILED: lib/Sat/CMakeFiles/sat.dir/SimplifyingMinisat.cpp.o
+/usr/bin/c++ -DLIN64 -DNDEBUG -DSIZEOF_INT=4 -DSIZEOF_LONG=8 -DSIZEOF_VOID_P=8 -DUSE_CRYPTOMINISAT -D__STDC_LIMIT_MACROS -I/tmp/opencode/src/stp/include -I/tmp/
+opencode/src/stp/build/include -I/tmp/opencode/src/stp/lib -isystem /tmp/opencode/src/stp/lib/extlib-abc/src -Wall -Wextra -Wunused -pedantic -Wsign-compare -Wt
+ype-limits -Wuninitialized -Wno-deprecated -Wstrict-aliasing -Wpointer-arith -Wpointer-arith -Wformat-nonliteral -Winit-self -Wparentheses -Wunreachable-code -f
+visibility=hidden -O3  -std=gnu++17 -fPIC   -D STP_EXPORTS -g -pthread -O3 -fno-tree-vectorize -g0 -MD -MT lib/Sat/CMakeFiles/sat.dir/SimplifyingMinisat.cpp.o -
+MF lib/Sat/CMakeFiles/sat.dir/SimplifyingMinisat.cpp.o.d -o lib/Sat/CMakeFiles/sat.dir/SimplifyingMinisat.cpp.o -c /tmp/opencode/src/stp/lib/Sat/SimplifyingMini
+sat.cpp
+In file included from /tmp/opencode/src/stp/include/stp/Sat/SATSolver.h:29,
+                 from /tmp/opencode/src/stp/include/stp/Sat/SimplifyingMinisat.h:28,
+                 from /tmp/opencode/src/stp/lib/Sat/SimplifyingMinisat.cpp:26:
+/tmp/opencode/src/stp/lib/Sat/SimplifyingMinisat.cpp: In member function ‘virtual bool stp::SimplifyingMinisat::solveInternal(bool&)’:
+/tmp/opencode/src/stp/lib/Sat/SimplifyingMinisat.cpp:76:39: error: expected unqualified-id before ‘(’ token
+   76 |   if (ret == (Minisat::lbool)Minisat::l_Undef)
+      |                                       ^~~~~~~
+[54/1095] Building CXX object lib/Sat/CMakeFiles/sat.dir/CryptoMinisat5.cpp.o
+FAILED: lib/Sat/CMakeFiles/sat.dir/CryptoMinisat5.cpp.o
+/usr/bin/c++ -DLIN64 -DNDEBUG -DSIZEOF_INT=4 -DSIZEOF_LONG=8 -DSIZEOF_VOID_P=8 -DUSE_CRYPTOMINISAT -D__STDC_LIMIT_MACROS -I/tmp/opencode/src/stp/include -I/tmp/
+opencode/src/stp/build/include -I/tmp/opencode/src/stp/lib -isystem /tmp/opencode/src/stp/lib/extlib-abc/src -Wall -Wextra -Wunused -pedantic -Wsign-compare -Wt
+ype-limits -Wuninitialized -Wno-deprecated -Wstrict-aliasing -Wpointer-arith -Wpointer-arith -Wformat-nonliteral -Winit-self -Wparentheses -Wunreachable-code -f
+visibility=hidden -O3  -std=gnu++17 -fPIC   -D STP_EXPORTS -g -pthread -O3 -fno-tree-vectorize -g0 -MD -MT lib/Sat/CMakeFiles/sat.dir/CryptoMinisat5.cpp.o -MF l
+ib/Sat/CMakeFiles/sat.dir/CryptoMinisat5.cpp.o.d -o lib/Sat/CMakeFiles/sat.dir/CryptoMinisat5.cpp.o -c /tmp/opencode/src/stp/lib/Sat/CryptoMinisat5.cpp
+In file included from /tmp/opencode/src/stp/include/stp/Sat/SATSolver.h:29,
+                 from /tmp/opencode/src/stp/include/stp/Sat/CryptoMinisat5.h:31,
+                 from /tmp/opencode/src/stp/lib/Sat/CryptoMinisat5.cpp:25:
+/usr/include/cryptominisat5/solvertypesmini.h:35:20: error: expected unqualified-id before ‘-’ token
+   35 | constexpr uint32_t var_Undef(0xffffffffU >> 4);
+      |                    ^~~~~~~~~
+/usr/include/cryptominisat5/solvertypesmini.h:35:20: error: expected ‘)’ before ‘-’ token
+   35 | constexpr uint32_t var_Undef(0xffffffffU >> 4);
+      |                    ^~~~~~~~~
+/usr/include/cryptominisat5/solvertypesmini.h:166:17: error: ‘CMSat::lbool’ cannot be used as a function
+  166 | constexpr lbool l_True = lbool((uint8_t)0);
+      |                 ^~~~~~
+In file included from /usr/include/cryptominisat5/cryptominisat.h:32,
+                 from /tmp/opencode/src/stp/lib/Sat/CryptoMinisat5.cpp:26:
+/usr/include/cryptominisat5/solvertypesmini.h:167:11: error: redefinition of ‘constexpr const int CMSat::lbool’
+  167 | constexpr lbool l_False = lbool((uint8_t)1);
+      |           ^~~~~
+/usr/include/cryptominisat5/solvertypesmini.h:166:11: note: ‘constexpr const int CMSat::lbool’ previously defined here
+  166 | constexpr lbool l_True = lbool((uint8_t)0);
+      |           ^~~~~
+/usr/include/cryptominisat5/solvertypesmini.h:167:17: error: ‘CMSat::lbool’ cannot be used as a function
+  167 | constexpr lbool l_False = lbool((uint8_t)1);
+      |                 ^~~~~~~
+/usr/include/cryptominisat5/solvertypesmini.h:168:11: error: redefinition of ‘constexpr const int CMSat::lbool’
+  168 | constexpr lbool l_Undef = lbool((uint8_t)2);
+      |           ^~~~~
+/usr/include/cryptominisat5/solvertypesmini.h:166:11: note: ‘constexpr const int CMSat::lbool’ previously defined here
+  166 | constexpr lbool l_True = lbool((uint8_t)0);
+      |           ^~~~~
+/usr/include/cryptominisat5/solvertypesmini.h:168:17: error: ‘CMSat::lbool’ cannot be used as a function
+  168 | constexpr lbool l_Undef = lbool((uint8_t)2);
+      |                 ^~~~~~~
+/usr/include/cryptominisat5/solvertypesmini.h:170:8: error: ‘lbool’ does not name a type
+  170 | inline lbool toLbool(uint32_t v)
+      |        ^~~~~
+/usr/include/cryptominisat5/solvertypesmini.h:178:35: error: ‘constexpr const uint32_t CMSat::toInt’ redeclared as different kind of entity
+  178 | constexpr inline uint32_t toInt  (lbool l)
+      |                                   ^~~~~
+/usr/include/cryptominisat5/solvertypesmini.h:163:33: note: previous declaration ‘constexpr uint32_t CMSat::toInt(lbool)’
+  163 |     constexpr friend uint32_t   toInt  (lbool l);
+      |                                 ^~~~~
+/usr/include/cryptominisat5/solvertypesmini.h:178:40: error: expected ‘)’ before ‘l’
+  178 | constexpr inline uint32_t toInt  (lbool l)
+      |                                  ~     ^~
+      |                                        )
+/usr/include/cryptominisat5/solvertypesmini.h:183:8: error: ‘lbool’ does not name a type
+  183 | inline lbool boolToLBool(const bool b)
+      |        ^~~~~
+/usr/include/cryptominisat5/solvertypesmini.h:192:59: error: ‘lbool’ does not name a type
+  192 | inline std::ostream& operator<<(std::ostream& cout, const lbool val)
+      |                                                           ^~~~~
+/usr/include/cryptominisat5/solvertypesmini.h: In function ‘std::ostream& CMSat::operator<<(std::ostream&, int)’:
+/usr/include/cryptominisat5/solvertypesmini.h:194:16: error: ‘CMSat::lbool’ cannot be used as a function
+  194 |     if (val == l_True) cout << "l_True";
+      |                ^~~~~~
+/usr/include/cryptominisat5/solvertypesmini.h:195:16: error: ‘CMSat::lbool’ cannot be used as a function
+  195 |     if (val == l_False) cout << "l_False";
+      |                ^~~~~~~
+/usr/include/cryptominisat5/solvertypesmini.h:196:16: error: ‘CMSat::lbool’ cannot be used as a function
+  196 |     if (val == l_Undef) cout << "l_Undef";
+      |                ^~~~~~~
+/usr/include/cryptominisat5/solvertypesmini.h: In function ‘std::ostream& CMSat::operator<<(std::ostream&, const BNN&)’:
+/usr/include/cryptominisat5/solvertypesmini.h:384:19: error: ambiguous overload for ‘operator<<’ (operand types are ‘std::basic_ostream<char>’ and ‘const int32_
+t’ {aka ‘const int’})
+  384 |     os << " >=  " << bnn.cutoff;
+      |     ~~~~~~~~~~~~~ ^~ ~~~~~~~~~~
+      |        |                 |
+      |        |                 const int32_t {aka const int}
+      |        std::basic_ostream<char>
+In file included from /usr/include/c++/13/iostream:41,
+                 from /tmp/opencode/src/stp/include/stp/Sat/SATSolver.h:34:
+/usr/include/c++/13/ostream:168:7: note: candidate: ‘std::basic_ostream<_CharT, _Traits>::__ostream_type& std::basic_ostream<_CharT, _Traits>::operator<<(long i
+nt) [with _CharT = char; _Traits = std::char_traits<char>; __ostream_type = std::basic_ostream<char>]’
+  168 |       operator<<(long __n)
+      |       ^~~~~~~~
+/usr/include/c++/13/ostream:172:7: note: candidate: ‘std::basic_ostream<_CharT, _Traits>::__ostream_type& std::basic_ostream<_CharT, _Traits>::operator<<(long u
+nsigned int) [with _CharT = char; _Traits = std::char_traits<char>; __ostream_type = std::basic_ostream<char>]’
+  172 |       operator<<(unsigned long __n)
+      |       ^~~~~~~~
+/usr/include/c++/13/ostream:176:7: note: candidate: ‘std::basic_ostream<_CharT, _Traits>::__ostream_type& std::basic_ostream<_CharT, _Traits>::operator<<(bool)
+[with _CharT = char; _Traits = std::char_traits<char>; __ostream_type = std::basic_ostream<char>]’
+  176 |       operator<<(bool __n)
+--
+      |       ^~~~~~~~
+/usr/include/c++/13/ostream:234:7: note: candidate: ‘std::basic_ostream<_CharT, _Traits>::__ostream_type& std::basic_ostream<_CharT, _Traits>::operator<<(long d
+ouble) [with _CharT = char; _Traits = std::char_traits<char>; __ostream_type = std::basic_ostream<char>]’
+  234 |       operator<<(long double __f)
+      |       ^~~~~~~~
+/usr/include/cryptominisat5/solvertypesmini.h:192:22: note: candidate: ‘std::ostream& CMSat::operator<<(std::ostream&, int)’
+  192 | inline std::ostream& operator<<(std::ostream& cout, const lbool val)
+      |                      ^~~~~~~~
+/usr/include/cryptominisat5/cryptominisat.h: At global scope:
+/usr/include/cryptominisat5/cryptominisat.h:76:9: error: ‘lbool’ does not name a type
+   76 |         lbool solve(const std::vector<Lit>* assumptions = 0, bool only_indep_solution = false); //solve the problem, optionally with assumptions. If onl
+y_indep_solution is set, only the independent variables set with set_independent_vars() are returned in the solution
+      |         ^~~~~
+/usr/include/cryptominisat5/cryptominisat.h:77:9: error: ‘lbool’ does not name a type
+   77 |         lbool simplify(const std::vector<Lit>* assumptions = NULL, const std::string* strategy = NULL); //simplify the problem, optionally with assumpti
+ons
+      |         ^~~~~
+/usr/include/cryptominisat5/cryptominisat.h:78:32: error: type/value mismatch at argument 1 in template parameter list for ‘template<class _Tp, class _Alloc> cl
+ass std::vector’
+   78 |         const std::vector<lbool>& get_model() const; //get model that satisfies the problem. Only makes sense if previous solve()/simplify() call was l_
+True
+      |                                ^
+/usr/include/cryptominisat5/cryptominisat.h:78:32: note:   expected a type, got ‘CMSat::lbool’
+/usr/include/cryptominisat5/cryptominisat.h:78:32: error: template argument 2 is invalid
+/usr/include/cryptominisat5/cryptominisat.h:232:9: error: ‘lbool’ does not name a type
+  232 |         lbool find_fast_backw(FastBackwData fast_backw);
+      |         ^~~~~
+/usr/include/cryptominisat5/cryptominisat.h:234:9: error: ‘lbool’ does not name a type
+  234 |         lbool probe(Lit l, uint32_t& min_props);
+      |         ^~~~~
+/usr/include/cryptominisat5/cryptominisat.h:267:45: error: type/value mismatch at argument 1 in template parameter list for ‘template<class _Tp, class _Alloc> c
+lass std::vector’
+  267 |         static std::pair<lbool, std::vector<lbool>> extend_solution(void* s, const std::vector<lbool>& simp_sol);
+      |                                             ^~~~~
+/usr/include/cryptominisat5/cryptominisat.h:267:45: note:   expected a type, got ‘CMSat::lbool’
+/usr/include/cryptominisat5/cryptominisat.h:267:45: error: template argument 2 is invalid
+/usr/include/cryptominisat5/cryptominisat.h:267:50: error: type/value mismatch at argument 1 in template parameter list for ‘template<class _T1, class _T2> stru
+ct std::pair’
+  267 |         static std::pair<lbool, std::vector<lbool>> extend_solution(void* s, const std::vector<lbool>& simp_sol);
+      |                                                  ^~
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/stp && grep -rn "define l_True\|define l_False\|define l_Undef\|define var_Undef\|l_True" include lib | head -30; echo '---system minisat
+---'; grep -rn "l_True\|l_False\|l_Undef" /usr/include/minisat/core/SolverTypes.h | head; echo '---cms header---'; sed -n '20,45p;155,185p' /usr/include/cryptom
+inisat5/solvertypesmini.h
+lib/extlib-abc/src/sat/bsat2/MainSat.cpp:174:        printf(ret == l_True ? "SATISFIABLE\n" : ret == l_False ? "UNSATISFIABLE\n" : "INDETERMINATE\n");
+lib/extlib-abc/src/sat/bsat2/MainSat.cpp:176:            if (ret == l_True){
+lib/extlib-abc/src/sat/bsat2/MainSat.cpp:180:                        fprintf(res, "%s%s%d", (i==0)?"":" ", (S.model[i]==l_True)?"":"-", i+1);
+lib/extlib-abc/src/sat/bsat2/MainSat.cpp:190://        exit(ret == l_True ? 10 : ret == l_False ? 20 : 0);     // (faster than "return", which will invoke the d
+estructor for 'Solver')
+lib/extlib-abc/src/sat/bsat2/MainSat.cpp:192:        return (ret == l_True ? 10 : ret == l_False ? 20 : 0);
+lib/extlib-abc/src/sat/bsat2/MainSimp.cpp:183:        printf(ret == l_True ? "SATISFIABLE\n" : ret == l_False ? "UNSATISFIABLE\n" : "INDETERMINATE\n");
+lib/extlib-abc/src/sat/bsat2/MainSimp.cpp:185:            if (ret == l_True){
+lib/extlib-abc/src/sat/bsat2/MainSimp.cpp:189:                        fprintf(res, "%s%s%d", (i==0)?"":" ", (S.model[i]==l_True)?"":"-", i+1);
+lib/extlib-abc/src/sat/bsat2/MainSimp.cpp:199://        exit(ret == l_True ? 10 : ret == l_False ? 20 : 0);     // (faster than "return", which will invoke the
+destructor for 'Solver')
+lib/extlib-abc/src/sat/bsat2/MainSimp.cpp:201:        return (ret == l_True ? 10 : ret == l_False ? 20 : 0);
+lib/extlib-abc/src/sat/bsat2/Solver.cpp:143:        if (value(ps[i]) == l_True || ps[i] == ~p)
+lib/extlib-abc/src/sat/bsat2/Solver.cpp:202:        if (value(c[i]) == l_True)
+lib/extlib-abc/src/sat/bsat2/Solver.cpp:466:            if (value(blocker) == l_True){
+lib/extlib-abc/src/sat/bsat2/Solver.cpp:481:            if (first != blocker && value(first) == l_True){
+lib/extlib-abc/src/sat/bsat2/Solver.cpp:612:|    'l_True' if a partial assigment that is consistent with respect to the clauseset is found. If
+lib/extlib-abc/src/sat/bsat2/Solver.cpp:680:                if (value(p) == l_True){
+lib/extlib-abc/src/sat/bsat2/Solver.cpp:699:                    return l_True;
+lib/extlib-abc/src/sat/bsat2/Solver.cpp:786:    if (status == l_True){
+lib/extlib-abc/src/sat/bsat2/Solver.h:317:inline bool     Solver::locked          (const Clause& c) const { return value(c[0]) == l_True && reason(var(c[0])) !=
+ CRef_Undef && ca.lea(reason(var(c[0]))) == &c; }
+lib/extlib-abc/src/sat/bsat2/Solver.h:353:inline bool     Solver::solve         ()                    { budgetOff(); assumptions.clear(); return solve_() == l_T
+rue; }
+lib/extlib-abc/src/sat/bsat2/Solver.h:354:inline bool     Solver::solve         (Lit p)               { budgetOff(); assumptions.clear(); assumptions.push(p); r
+eturn solve_() == l_True; }
+lib/extlib-abc/src/sat/bsat2/Solver.h:355:inline bool     Solver::solve         (Lit p, Lit q)        { budgetOff(); assumptions.clear(); assumptions.push(p); a
+ssumptions.push(q); return solve_() == l_True; }
+lib/extlib-abc/src/sat/bsat2/Solver.h:356:inline bool     Solver::solve         (Lit p, Lit q, Lit r) { budgetOff(); assumptions.clear(); assumptions.push(p); a
+ssumptions.push(q); assumptions.push(r); return solve_() == l_True; }
+lib/extlib-abc/src/sat/bsat2/Solver.h:357:inline bool     Solver::solve         (const vec<Lit>& assumps){ budgetOff(); assumps.copyTo(assumptions); return solv
+e_() == l_True; }
+lib/extlib-abc/src/sat/bsat2/SolverTypes.h:45:#define var_Undef (-1)
+lib/extlib-abc/src/sat/bsat2/SolverTypes.h:86:#define l_True  (lbool((uint8_t)0)) // gcc does not do constant propagation if these are real constants.
+lib/extlib-abc/src/sat/bsat2/SolverTypes.h:87:#define l_False (lbool((uint8_t)1))
+lib/extlib-abc/src/sat/bsat2/SolverTypes.h:88:#define l_Undef (lbool((uint8_t)2))
+lib/extlib-abc/src/sat/bsat2/SimpSolver.cpp:98:    lbool    result = l_True;
+lib/extlib-abc/src/sat/bsat2/SimpSolver.cpp:119:    if (result == l_True)
+---system minisat---
+84:#define l_True  (lbool((uint8_t)0)) // gcc does not do constant propagation if these are real constants.
+85:#define l_False (lbool((uint8_t)1))
+86:#define l_Undef (lbool((uint8_t)2))
+---cms header---
+THE SOFTWARE.
+***********************************************/
+
+#ifndef SOLVERTYPESMINI_H
+#define SOLVERTYPESMINI_H
+
+#include <cstdint>
+#include <iostream>
+#include <cassert>
+#include <vector>
+#include <array>
+#include <algorithm>
+
+namespace CMSat {
+
+constexpr uint32_t var_Undef(0xffffffffU >> 4);
+
+class TooManyVarsError {};
+class TooLongClauseError {};
+
+class Lit
+{
+    uint32_t x;
+    constexpr explicit Lit(uint32_t i) : x(i) { }
+public:
+    constexpr Lit() : x(var_Undef<<1) {}   // (lit_Undef)
+    template<class Archive>
+    void serialize(Archive& ar, const unsigned int /*version*/) {
+        ar & value;
+    }
+
+    constexpr uint8_t getValue() const { return value; }
+
+    friend lbool toLbool(uint32_t   v);
+    constexpr friend uint32_t   toInt  (lbool l);
+};
+
+constexpr lbool l_True = lbool((uint8_t)0);
+constexpr lbool l_False = lbool((uint8_t)1);
+constexpr lbool l_Undef = lbool((uint8_t)2);
+
+inline lbool toLbool(uint32_t v)
+{
+    lbool l;
+    l.value = v;
+    return l;
+}
+
+
+constexpr inline uint32_t toInt  (lbool l)
+{
+    return l.value;
+}
+
+inline lbool boolToLBool(const bool b)
+{
+    if (b) {
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/stp && sed -n '1,80p' include/stp/Sat/SATSolver.h; echo '---cms h---'; sed -n '1,60p' include/stp/Sat/CryptoMinisat5.h; echo '---abc incl
+ude dirs cmake---'; grep -rn "extlib-abc\|include_directories" lib/CMakeLists.txt CMakeLists.txt | head -40
+/********************************************************************
+ * AUTHORS: Trevor Hansen, Andrew V. Jones
+ *
+ * BEGIN DATE: Aug, 2010
+ *
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+********************************************************************/
+
+#ifndef SATSOLVER_H_
+#define SATSOLVER_H_
+
+#include "SearchBias.h"
+#include "minisat/core/SolverTypes.h"
+#include "minisat/mtl/Vec.h"
+#include <cassert>
+#include <chrono>
+#include <cstdint>
+#include <iostream>
+
+// Don't let the defines escape outside.
+
+namespace stp
+{
+class SATSolver
+{
+private:
+  SATSolver(const SATSolver&);      // no copy
+  void operator=(const SATSolver&); // no assign.
+
+public:
+  SATSolver() {}
+
+  virtual ~SATSolver() {}
+
+  class vec_literals : public Minisat::vec<Minisat::Lit>
+  {
+  };
+
+  virtual bool addClause(
+      const SATSolver::vec_literals& ps) = 0; // Add a clause to the solver.
+
+  virtual bool okay() const = 0; // FALSE means solver is in a conflicting state
+
+  // Search without assumptions.
+  //
+  // Not virtual: this enforces the parts of the resource budget that do not
+  // depend on the backend, then delegates to solveInternal(). Backends
+  // override solveInternal(), not this.
+  bool solve(bool& timeout_expired)
+  {
+    // The budget can already be spent before we ever reach the solver, either
+    // because the caller asked for a zero budget or because an earlier
+    // refinement iteration used it all up. Don't rely on the backend noticing:
+    // a solver that cannot be interrupted mid-search would run to completion,
+    // and even one that can only notices when it next polls.
+    if (timeLimitExpired())
+    {
+      timeout_expired = true;
+      return false;
+    }
+
+    return solveInternal(timeout_expired);
+  }
+
+---cms h---
+/********************************************************************
+ * AUTHORS: Mate Soos, Andrew V. Jones
+ *
+ * BEGIN DATE: November, 2013
+ *
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+********************************************************************/
+
+/*
+ * Wraps around Cryptominisat minisat.
+ */
+#ifndef CRYPTOMINISAT5_H_
+#define CRYPTOMINISAT5_H_
+
+#include "stp/Sat/SATSolver.h"
+#include <unordered_set>
+
+namespace CMSat
+{
+class SATSolver;
+}
+
+namespace stp
+{
+#if defined(__GNUC__) || defined(__clang__)
+  class __attribute__((visibility("default"))) CryptoMiniSat5 : public SATSolver
+#else
+  class CryptoMiniSat5 : public SATSolver
+#endif
+
+{
+  CMSat::SATSolver* s;
+
+public:
+  CryptoMiniSat5(int num_threads);
+
+  ~CryptoMiniSat5();
+
+  void setMaxConflicts(int64_t max_confl) override; // set max solver conflicts
+
+  bool addClause(const vec_literals& ps) override; // Add a clause to the solver.
+
+  bool okay() const override; // FALSE means solver is in a conflicting state
+
+---abc include dirs cmake---
+lib/CMakeLists.txt:168:add_subdirectory(extlib-abc EXCLUDE_FROM_ALL)
+CMakeLists.txt:279:        include_directories(${STP_INCL_COMM})
+CMakeLists.txt:481:include_directories("${CMAKE_CURRENT_SOURCE_DIR}/include")
+CMakeLists.txt:482:include_directories("${CMAKE_CURRENT_BINARY_DIR}/include")
+CMakeLists.txt:485:include_directories(# For extlib-constbv
+CMakeLists.txt:500:if(STP_ABC_PATCHES AND EXISTS "${PROJECT_SOURCE_DIR}/lib/extlib-abc/src/opt/dar/darCut.c")
+CMakeLists.txt:509:                    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/lib/extlib-abc"
+CMakeLists.txt:515:                      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/lib/extlib-abc"
+CMakeLists.txt:519:                "Failed to apply ${_patch_name} to lib/extlib-abc:\n${_err}"
+CMakeLists.txt:533:include_directories(SYSTEM ${PROJECT_SOURCE_DIR}/lib/extlib-abc/src)
+CMakeLists.txt:589:    include_directories(${RISS_DIR}/)        # should point to the base directory: ~/git/riss/
+CMakeLists.txt:609:    include_directories(${CADICAL_INCLUDE_DIR})
+CMakeLists.txt:716:  include_directories(SYSTEM ${GMP_INCLUDE_DIRS})
+CMakeLists.txt:748:include_directories(${ZLIB_INCLUDE_DIR})
+CMakeLists.txt:749:include_directories(${minisat_SOURCE_DIR})
+CMakeLists.txt:803:include_directories(SYSTEM ${MINISAT_INCLUDE_DIRS})
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/stp && sed -n '780,880p' CMakeLists.txt; echo '---find minisat module---'; find cmake -iname '*minisat*' -o -iname '*MiniSat*'; echo '---
+scripts deps---'; find . -path '*deps*' -maxdepth 4 -type f | head -30; sed -n '1,160p' scripts/deps/minisat.sh 2>/dev/null
+# -----------------------------------------------------------------------------
+# Find Minisat
+# -----------------------------------------------------------------------------
+
+find_package(minisat)
+set(MINISAT_INCLUDE_DIR "" CACHE PATH "MiniSat include directory")
+set(MINISAT_LIBRARY "" CACHE PATH "MiniSat library directory")
+
+if (minisat_FOUND)
+    message(STATUS "OK, found Minisat library under ${MINISAT_LIBRARIES} and Minisat include dirs under ${MINISAT_INCLUDE_DIRS}")
+else()
+    message(STATUS "Not found using installed MiniSat, looking for built MiniSat")
+    find_package(minisat CONFIG)
+
+    if (minisat_FOUND)
+        message(STATUS "OK, found Minisat library under ${MINISAT_LIBRARIES} and Minisat include dirs under ${MINISAT_INCLUDE_DIRS}")
+    else()
+        message(FATAL_ERROR "You must install minisat from https://github.com/stp/minisat")
+    endif()
+endif()
+
+include_directories(SYSTEM ${MINISAT_INCLUDE_DIRS})
+set(LIBS ${LIBS} ${MINISAT_LIBRARIES})
+
+# -----------------------------------------------------------------------------
+# Find Parser and Lexer generators
+# -----------------------------------------------------------------------------
+
+# On macOS, search Homebrew for keg-only versions of Bison and Flex. Xcode does
+# not provide new enough versions for us to use.
+if (CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
+    execute_process(
+        COMMAND brew --prefix bison
+        RESULT_VARIABLE BREW_BISON
+        OUTPUT_VARIABLE BREW_BISON_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if (BREW_BISON EQUAL 0 AND EXISTS "${BREW_BISON_PREFIX}")
+        message(STATUS "Found Bison keg installed by Homebrew at ${BREW_BISON_PREFIX}")
+        set(BISON_EXECUTABLE "${BREW_BISON_PREFIX}/bin/bison")
+    endif()
+
+    execute_process(
+        COMMAND brew --prefix flex
+        RESULT_VARIABLE BREW_FLEX
+        OUTPUT_VARIABLE BREW_FLEX_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if (BREW_FLEX EQUAL 0 AND EXISTS "${BREW_FLEX_PREFIX}")
+        message(STATUS "Found Flex keg installed by Homebrew at ${BREW_FLEX_PREFIX}")
+        set(FLEX_EXECUTABLE "${BREW_FLEX_PREFIX}/bin/flex")
+    endif()
+endif()
+
+
+find_package(BISON REQUIRED)
+find_package(FLEX REQUIRED)
+
+if (BISON_VERSION VERSION_LESS "2.6")
+    message(FATAL_ERROR "STP requires Bison 2.6 or newer")
+endif()
+
+# required for genkinds.pl and a few other scripts
+find_package(Perl REQUIRED)
+
+# -----------------------------------------------------------------------------
+# Query definitions
+# -----------------------------------------------------------------------------
+get_directory_property( DirDefs DIRECTORY ${CMAKE_SOURCE_DIR} COMPILE_DEFINITIONS )
+set(COMPILE_DEFINES)
+foreach( d ${DirDefs} )
+    # message( STATUS "Found Define: " ${d} )
+    set(COMPILE_DEFINES "${COMPILE_DEFINES} -D${d}")
+endforeach()
+message(STATUS "All defines at startup: ${COMPILE_DEFINES}")
+
+# -----------------------------------------------------------------------------
+# Setup library build path (this is **not** the library install path)
+# -----------------------------------------------------------------------------
+if(WIN32)
+  # Create a single bin/ output directory so that DLL files can be
+  # readily found on DLL platforms.
+  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
+  set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
+  set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
+endif()
+
+if(DEFINED CMAKE_CONFIGURATION_TYPES)
+  # Placing the binaries in ${CMAKE_*_OUTPUT_DIRECTORY} without regard to
+  # the debug/release/... configuration. This is needed for build systems
+  # where files for multiple configurations are kept within the same build
+  # directory (eg. MSBuild), since some targets (e.g. python-interface-tests)
+  # require the path to the stp library to be given in a configuration file.
+  # Note: the paths could be determined in a cleaner fashion by using generator
+  # expressions, which were used up to commit 1af1f5. However, that solution
+  # was not feasible, since CMake versions provided by recent Debian versions
+  # are buggy w.r.t. generator expressions.
+  foreach(OUTPUTCONFIG ${CMAKE_CONFIGURATION_TYPES})
+    string(TOUPPER ${OUTPUTCONFIG} OUTPUTCONFIG_UPPER)
+---find minisat module---
+cmake/modules/Findminisat.cmake
+---scripts deps---
+./build/.ninja_deps
+./scripts/deps/setup-cadical.sh
+./scripts/deps/setup-minisat.sh
+./scripts/deps/setup-outputcheck.sh
+./scripts/deps/cache-key.sh
+./scripts/deps/setup-cms.sh
+./scripts/deps/setup-gtest.sh
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/stp && cat scripts/deps/setup-minisat.sh; echo '---Findminisat---'; sed -n '1,180p' cmake/modules/Findminisat.cmake
+#!/usr/bin/env bash
+
+set -e -u -o pipefail
+
+dep_dir="deps"
+install_dir=$(readlink -fm "${dep_dir}"/install)
+
+[ ! -d "${install_dir}" ] && mkdir -p "${install_dir}"
+
+dep="minisat"
+
+cd "${dep_dir}"
+git clone https://github.com/stp/minisat "${dep}"
+cd "${dep}"
+# We specify the tags/commits for the other repositories, so do for this too.
+# A commit rather than a tag: stp/minisat carries only the upstream 2.0/2.2.x
+# release tags, none of which name the fork's own history.
+#
+# This is what a released binary links against, so it should move because
+# someone chose to move it. Bumping it also changes the CI dependency cache
+# key, since cache-key.sh hashes this script.
+git checkout 14c78206cd12d1d36b7e042fa758747c135670a4
+mkdir build && cd build
+# minisat's cmake_minimum_required predates 3.5, which CMake 4 removed
+# support for; the same floor is passed in the Windows CI job.
+#
+# Build a static (PIC) library, like setup-cms.sh does for CryptoMiniSat: it
+# gets linked into libstp, so the installed stp/libstp do not depend on a
+# libminisat.so that this script only installs inside the source checkout.
+# minisat's CMake never sets PIC itself, so ask for it globally; without it
+# the archive cannot be folded into the shared libstp.so. This also serves
+# static STP builds, which look for libminisat.a.
+#
+# Extra arguments are forwarded to CMake, so a caller that needs a different
+# flavour of the library can still ask for one.
+cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.12 -DSTATICCOMPILE=ON \
+      -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+      -DCMAKE_INSTALL_PREFIX:PATH="${install_dir}" "$@" ..
+cmake --build . --parallel "$(nproc)"
+cmake --install .
+cd ..
+
+# EOF
+---Findminisat---
+# AUTHORS: Dan Liew, Ryan Govostes, Mate Soos
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
+# - Try to find minisat
+# Once done this will define
+#  MINISAT_FOUND - System has minisat
+#  MINISAT_INCLUDE_DIRS - The minisat include directories
+#  MINISAT_LIBRARIES - The libraries needed to use minisat
+#  MINISAT_DEFINITIONS - Compiler switches required for using minisat
+
+set(MINISAT_DEFINITIONS "")
+
+message(STATUS "Finding minisat headers...")
+message(STATUS "looking at:  ${MINISAT_INCLUDE_DIRS}")
+find_path(MINISAT_INCLUDE_DIR minisat/core/Solver.h
+          HINTS ${MINISAT_INCLUDE_DIRS}
+          PATH_SUFFIXES minisat minisat2 )
+message(STATUS "found: MINISAT_INCLUDE_DIR: ${MINISAT_INCLUDE_DIR}")
+
+message(STATUS "Finding minisat libs...")
+message(STATUS "looking at:  ${MINISAT_LIBDIR}")
+find_library(MINISAT_LIBRARY NAMES minisat minisat2
+         HINTS ${MINISAT_LIBDIR} ${MINISAT_LIBDIR}/lib ${MINISAT_LIBRARY_DIRS} )
+message(STATUS "found: MINISAT_LIBRARY: ${MINISAT_LIBRARY}")
+
+set(MINISAT_LIBRARIES ${MINISAT_LIBRARY} )
+set(MINISAT_INCLUDE_DIRS ${MINISAT_INCLUDE_DIR} )
+
+include(FindPackageHandleStandardArgs)
+# handle the QUIETLY and REQUIRED arguments and set MINISAT_FOUND to TRUE
+# if all listed variables are set
+find_package_handle_standard_args(minisat  DEFAULT_MSG
+                                  MINISAT_LIBRARY MINISAT_INCLUDE_DIR)
+
+mark_as_advanced(MINISAT_INCLUDE_DIR MINISAT_LIBRARY )
+> build · deepseek-v4.1-flash
+$ mkdir -p /tmp/opencode/src && cd /tmp/opencode/src && git clone https://github.com/stp/minisat.git minisat && cd minisat && git checkout 14c78206cd12d1d36b7e0
+42fa758747c135670a4 && mkdir -p build && cd build && cmake -S .. -B . -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.12 -DSTATICCOMPILE=ON -DCMAKE_POSITION_INDEPENDE
+NT_CODE=ON -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_BUILD_TYPE=Release 2>&1 | tail -10 && ninja -j20 2>&1 | tail -10 && ninja install 2>&1 | tail -10; echo '--
+-check macros---'; grep -n "l_True\|var_Undef" /usr/local/include/minisat/core/SolverTypes.h | head; ls -l /usr/local/lib/libminisat*
+Cloning into 'minisat'...
+Note: switching to '14c78206cd12d1d36b7e042fa758747c135670a4'.
+
+You are in 'detached HEAD' state. You can look around, make experimental
+changes and commit them, and you can discard any commits you make in this
+state without impacting any branches by switching back to a branch.
+
+If you want to create a new branch to retain commits you create, you may
+do so (now or later) by using -c with the switch command. Example:
+
+  git switch -c <new-branch-name>
+
+Or undo this operation with:
+
+  git switch -
+
+Turn off this advice by setting config variable advice.detachedHead to false
+
+HEAD is now at 14c7820 Merge pull request #6 from xgqt/fix_musl
+-- Found ZLIB: /usr/lib/aarch64-linux-gnu/libz.so (found version "1.3")
+-- Configuring done (0.3s)
+-- Generating done (0.0s)
+CMake Warning:
+  Manually-specified variables were not used by the project:
+
+    CMAKE_POLICY_VERSION_MINIMUM
+
+
+-- Build files have been written to: /tmp/opencode/src/minisat/build
+[1/9] Building CXX object CMakeFiles/minisat.dir/minisat/utils/System.cc.o
+[2/9] Building CXX object CMakeFiles/minisat.dir/minisat/utils/Options.cc.o
+[3/9] Building CXX object CMakeFiles/minisat_simp.dir/minisat/simp/Main.cc.o
+[4/9] Building CXX object CMakeFiles/minisat_core.dir/minisat/core/Main.cc.o
+[5/9] Building CXX object CMakeFiles/minisat.dir/minisat/simp/SimpSolver.cc.o
+[6/9] Building CXX object CMakeFiles/minisat.dir/minisat/core/Solver.cc.o
+[7/9] Linking CXX static library libminisat.a
+[8/9] Linking CXX executable minisat_core
+[9/9] Linking CXX executable minisat
+-- Installing: /usr/local/include/minisat/utils/Options.h
+-- Installing: /usr/local/include/minisat/core
+-- Installing: /usr/local/include/minisat/core/Dimacs.h
+-- Installing: /usr/local/include/minisat/core/Solver.h
+-- Installing: /usr/local/include/minisat/core/SolverTypes.h
+-- Installing: /usr/local/include/minisat/simp
+-- Installing: /usr/local/include/minisat/simp/SimpSolver.h
+-- Installing: /usr/local/lib/cmake/minisat/minisatConfig.cmake
+-- Installing: /usr/local/lib/cmake/minisat/minisatTargets.cmake
+-- Installing: /usr/local/lib/cmake/minisat/minisatTargets-release.cmake
+---check macros---
+45:#define var_Undef (-1)
+47:  const Var var_Undef = -1;
+74://const Lit lit_Undef = mkLit(var_Undef, false);  // }- Useful special constants.
+75://const Lit lit_Error = mkLit(var_Undef, true );  // }
+124:  #define l_True  (lbool((uint8_t)0)) // gcc does not do constant propagation if these are real constants.
+128:  const lbool l_True ((uint8_t)0);
+-rw-r--r-- 1 root root 165264 Nov  1 03:13 /usr/local/lib/libminisat.a
+> build · deepseek-v4.1-flash
+$ sed -n '100,145p' /usr/local/include/minisat/core/SolverTypes.h; echo '---build defines---'; grep -rn "MINISAT_CONSTANTS_AS_MACROS\|l_True" /tmp/opencode/src/
+minisat/minisat/core/SolverTypes.h | head -20; grep -rn "MINISAT_CONSTANTS_AS_MACROS" /tmp/opencode/src/minisat/CMakeLists.txt /tmp/opencode/src/minisat/minisat
+ | head
+lbool()       : value(0) { }
+    explicit lbool(bool x) : value(!x) { }
+
+    bool  operator == (lbool b) const { return ((b.value&2) & (value&2)) | (!(b.value&2)&(value == b.value)); }
+    bool  operator != (lbool b) const { return !(*this == b); }
+    lbool operator ^  (bool  b) const { return lbool((uint8_t)(value^(uint8_t)b)); }
+
+    lbool operator && (lbool b) const {
+        uint8_t sel = (this->value << 1) | (b.value << 3);
+        uint8_t v   = (0xF7F755F4 >> sel) & 3;
+        return lbool(v); }
+
+    lbool operator || (lbool b) const {
+        uint8_t sel = (this->value << 1) | (b.value << 3);
+        uint8_t v   = (0xFCFCF400 >> sel) & 3;
+        return lbool(v); }
+
+    friend int   toInt  (lbool l);
+    friend lbool toLbool(int   v);
+};
+inline int   toInt  (lbool l) { return l.value; }
+inline lbool toLbool(int   v) { return lbool((uint8_t)v);  }
+
+#if defined(MINISAT_CONSTANTS_AS_MACROS)
+  #define l_True  (lbool((uint8_t)0)) // gcc does not do constant propagation if these are real constants.
+  #define l_False (lbool((uint8_t)1))
+  #define l_Undef (lbool((uint8_t)2))
+#else
+  const lbool l_True ((uint8_t)0);
+  const lbool l_False((uint8_t)1);
+  const lbool l_Undef((uint8_t)2);
+#endif
+
+
+//=================================================================================================
+// Clause -- a simple class for representing a clause:
+
+class Clause;
+typedef RegionAllocator<uint32_t>::Ref CRef;
+
+class Clause {
+    struct {
+        unsigned mark      : 2;
+        unsigned learnt    : 1;
+        unsigned has_extra : 1;
+        unsigned reloced   : 1;
+---build defines---
+44:#if defined(MINISAT_CONSTANTS_AS_MACROS)
+123:#if defined(MINISAT_CONSTANTS_AS_MACROS)
+124:  #define l_True  (lbool((uint8_t)0)) // gcc does not do constant propagation if these are real constants.
+128:  const lbool l_True ((uint8_t)0);
+/tmp/opencode/src/minisat/minisat/core/SolverTypes.h:44:#if defined(MINISAT_CONSTANTS_AS_MACROS)
+/tmp/opencode/src/minisat/minisat/core/SolverTypes.h:123:#if defined(MINISAT_CONSTANTS_AS_MACROS)
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/stp && rm -rf build && mkdir build && cd build && cmake -S .. -B . -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
+-DBUILD_SHARED_LIBS=ON -DENABLE_PYTHON_INTERFACE=OFF -DENABLE_TESTING=OFF -DUSE_CADICAL=OFF -DNOCRYPTOMINISAT=OFF -DSTP_ALLOCATOR=system -DMINISAT_INCLUDE_DIRS=
+/usr/local/include -DMINISAT_LIBDIR=/usr/local/lib 2>&1 | grep -Ei 'minisat|error|CryptoMiniSat|found' | head -30 && ninja -j20 2>&1 | tail -15
+-- GIT hash found: 295953fc1f7424cc4822a02f5c7964e0aafbdf10
+-- Looking for sys/types.h - found
+-- Looking for stdint.h - found
+-- Looking for stddef.h - found
+-- Found Boost: /usr/lib/aarch64-linux-gnu/cmake/Boost-1.83.0/BoostConfig.cmake (found suitable version "1.83.0", minimum required is "1.46") found components:
+program_options
+--   Found gmp, version 6.3.0
+-- Found GMP: /usr/lib/aarch64-linux-gnu/libgmpxx.so
+-- CryptoMiniSat5 dynamic lib: cryptominisat5
+-- CryptoMiniSat5 static lib:  cryptominisat5
+-- CryptoMiniSat5 static lib deps:
+-- CryptoMiniSat5 include dirs: /usr/include
+-- Found ZLIB: /usr/lib/aarch64-linux-gnu/libz.so (found version "1.3")
+-- Finding minisat headers...
+-- found: MINISAT_INCLUDE_DIR: /usr/local/include
+-- Finding minisat libs...
+-- found: MINISAT_LIBRARY: /usr/local/lib/libminisat.a
+-- Found minisat: /usr/local/lib/libminisat.a
+-- OK, found Minisat library under /usr/local/lib/libminisat.a and Minisat include dirs under /usr/local/include
+-- Found BISON: /usr/bin/bison (found version "3.8.2")
+-- Found FLEX: /usr/bin/flex (found version "2.6.4")
+-- Found Perl: /usr/bin/perl (found version "5.38.2")
+-- All defines at startup:  -DNDEBUG -D__STDC_LIMIT_MACROS -DLIN64 -DSIZEOF_VOID_P=8 -DSIZEOF_LONG=8 -DSIZEOF_INT=4 -DUSE_CRYPTOMINISAT
+-- Looking for unistd.h - found
+ * CryptoMiniSat, Enables CryptoMiniSat solver, allows --cryptominisat5 option
+  623 |   virtual void BDDGenerateAig(Gia_Man_t *pNew, Vec_Int_t *vSupp) {
+      |                               ~~~~~~~~~~~^~~~
+/tmp/opencode/src/stp/lib/extlib-abc/src/aig/gia/giaTtopt.cpp:623:59: warning: unused parameter ‘vSupp’ [-Wunused-parameter]
+  623 |   virtual void BDDGenerateAig(Gia_Man_t *pNew, Vec_Int_t *vSupp) {
+      |                                                ~~~~~~~~~~~^~~~~
+[1109/1118] Building CXX object tools/stp_simple/CMakeFiles/stp_simple-bin.dir/__/stp/main_common.cpp.o
+[1110/1118] Building CXX object tools/stp/CMakeFiles/stp-bin.dir/main_common.cpp.o
+[1111/1118] Building CXX object tools/stp/CMakeFiles/stp-bin.dir/main.cpp.o
+[1112/1118] Building CXX object lib/extlib-abc/CMakeFiles/libabc-pic.dir/src/aig/gia/giaTransduction.cpp.o
+[1113/1118] Linking CXX static library lib/libabc-pic.a
+[1114/1118] Linking CXX shared library lib/libstp.so.2.4
+[1115/1118] Creating library symlink lib/libstp.so
+[1116/1118] Linking CXX executable stp_simple
+[1117/1118] Linking CXX executable stp
+[1118/1118] Running utility command for man_stp
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/stp/build && ninja install 2>&1 | tail -20 && ldconfig && which stp && stp --version && echo '(set-logic QF_BV)(assert (= (bvadd (_ bv1 4
+) (_ bv2 4)) (_ bv3 4)))(check-sat)(exit)' | stp
+[1/2] Running utility command for man_stp
+[1/2] Install the project...
+-- Install configuration: "Release"
+-- Installing: /usr/local/man/man1/stp.1
+-- Installing: /usr/local/lib/libstp.so.2.4
+-- Set non-toolchain portion of runtime path of "/usr/local/lib/libstp.so.2.4" to "/usr/local/lib"
+-- Installing: /usr/local/lib/libstp.so
+-- Installing: /usr/local/include/stp/c_interface.h
+-- Installing: /usr/local/bin/stp
+-- Set non-toolchain portion of runtime path of "/usr/local/bin/stp" to "/usr/local/lib"
+-- Installing: /usr/local/bin/stp_simple
+-- Set non-toolchain portion of runtime path of "/usr/local/bin/stp_simple" to "/usr/local/lib"
+-- Installing: /usr/local/lib/cmake/STP/STPConfig.cmake
+-- Installing: /usr/local/lib/cmake/STP/STPConfigVersion.cmake
+-- Installing: /usr/local/lib/cmake/STP/STPTargets.cmake
+-- Installing: /usr/local/lib/cmake/STP/STPTargets-release.cmake
+/usr/local/bin/stp
+STP version 2.4.1
+STP version SHA string 295953fc1f7424cc4822a02f5c7964e0aafbdf10
+STP compilation options CMAKE_CXX_COMPILER = /usr/bin/c++ | CMAKE_CXX_FLAGS =  -Wall -Wextra -Wunused -pedantic -Wsign-compare -Wtype-limits -Wuninitialized -Wn
+o-deprecated -Wstrict-aliasing -Wpointer-arith -Wpointer-arith -Wformat-nonliteral -Winit-self -Wparentheses -Wunreachable-code -fvisibility=hidden | COMPILE_DE
+FINES =  -DNDEBUG -D__STDC_LIMIT_MACROS -DLIN64 -DSIZEOF_VOID_P=8 -DSIZEOF_LONG=8 -DSIZEOF_INT=4 -DUSE_CRYPTOMINISAT | ONLY_SIMPLE = OFF | Boost_FOUND = TRUE |
+STATICCOMPILE = OFF | TUNE_NATIVE = OFF | COVERAGE = OFF | FORCE_CMS = OFF | LIBS = /usr/lib/aarch64-linux-gnu/libgmpxx.so;/usr/lib/aarch64-linux-gnu/libgmp.so;
+/usr/local/lib/libminisat.a | ENABLE_TESTING = OFF | ENABLE_PYTHON_INTERFACE = OFF | PYTHON_EXECUTABLE =  | PYTHON_LIBRARY =  | PYTHON_INCLUDE_DIRS =  |  | comp
+ilation date time = Nov  1 2026 03:14:05
+c compiled with gcc version 13.3.0
+sat
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/klee && grep -n "option(\|UCLIBC\|uclibc\|ENABLE_SOLVER\|ENABLE_POSIX\|GTEST\|ENABLE_UNIT\|ENABLE_SYSTEM\|ENABLE_TESTS\|KLEE_UCLIBC" CMak
+eLists.txt | head -100
+82:option(ENABLE_KLEE_ASSERTS "Enable KLEE assertions" ON)
+96:option(KLEE_ENABLE_TIMESTAMP "Add timestamps to KLEE sources" OFF)
+215:    "\"-DENABLE_SOLVER_STP=ON\"\n"
+216:    "\"-DENABLE_SOLVER_Z3=ON\"\n"
+217:    "\"-DENABLE_SOLVER_METASMT=ON\"")
+224:  if (ENABLE_SOLVER_METASMT)
+235:  if (ENABLE_SOLVER_METASMT AND metaSMT_REQUIRE_RTTI)
+254:option(ENABLE_ZLIB "Enable use of zlib" ${ENABLE_ZLIB_DEFAULT})
+477:option(ENABLE_POSIX_RUNTIME "Enable KLEE's POSIX runtime" OFF)
+478:if (ENABLE_POSIX_RUNTIME)
+485:# KLEE uclibc support
+487:set(KLEE_UCLIBC_PATH "" CACHE PATH "Path to klee-uclibc root directory")
+488:set(KLEE_UCLIBC_BCA_NAME "klee-uclibc.bca")
+489:if (NOT KLEE_UCLIBC_PATH STREQUAL "")
+491:  set(KLEE_UCLIBC_C_BCA "${KLEE_UCLIBC_PATH}/lib/libc.a")
+492:  if (NOT EXISTS "${KLEE_UCLIBC_C_BCA}")
+494:      "klee-uclibc library not found at \"${KLEE_UCLIBC_C_BCA}\". Set KLEE_UCLIBC_PATH to klee-uclibc root directory or empty string.")
+496:  message(STATUS "Found klee-uclibc library: \"${KLEE_UCLIBC_C_BCA}\"")
+497:  # Copy KLEE_UCLIBC_C_BCA so KLEE can find it where it is expected.
+499:    "${KLEE_UCLIBC_C_BCA}"
+500:    "${KLEE_RUNTIME_DIRECTORY}/${KLEE_UCLIBC_BCA_NAME}"
+503:  message(STATUS "Skipping copying of klee-uclibc runtime")
+509:option(ENABLE_KLEE_LIBCXX "Enable libc++ for klee" OFF)
+570:option(ENABLE_KLEE_EH_CXX "Enable support for C++ Exceptions" OFF)
+674:option(ENABLE_UNIT_TESTS "Enable unit tests" OFF)
+675:option(ENABLE_SYSTEM_TESTS "Enable system tests" ON)
+677:if (ENABLE_UNIT_TESTS OR ENABLE_SYSTEM_TESTS)
+701:      "\"-DENABLE_UNIT_TESTS=OFF -DENABLE_SYSTEM_TESTS=OFF\" to cmake"
+719:if (ENABLE_UNIT_TESTS)
+726:if (ENABLE_SYSTEM_TESTS)
+737:option(ENABLE_DOCS "Enable building documentation" ON)
+$ cd /tmp/opencode/src/klee && ls; sed -n '1,160p' README.md 2>/dev/null | head -80; find . -maxdepth 2 -iname '*build*' -o -iname '*docker*' | head
+CMakeLists.txt
+Dockerfile
+LICENSE.TXT
+NEWS
+README-CMake.md
+README.md
+cmake
+docs
+examples
+include
+lib
+runtime
+scripts
+test
+tools
+unittests
+utils
+KLEE Symbolic Virtual Machine
+=============================
+
+[![Build Status](https://github.com/klee/klee/workflows/CI/badge.svg)](https://github.com/klee/klee/actions?query=workflow%3ACI)
+[![Coverage](https://codecov.io/gh/klee/klee/branch/master/graph/badge.svg)](https://codecov.io/gh/klee/klee)
+
+`KLEE` is a symbolic virtual machine built on top of the LLVM compiler
+infrastructure. Currently, there are two primary components:
+
+  1. The core symbolic virtual machine engine; this is responsible for
+     executing LLVM bitcode modules with support for symbolic
+     values. This is comprised of the code in lib/.
+
+  2. A POSIX/Linux emulation layer oriented towards supporting uClibc,
+     with additional support for making parts of the operating system
+     environment symbolic.
+
+Additionally, there is a simple library for replaying computed inputs
+on native code (for closed programs). There is also a more complicated
+infrastructure for replaying the inputs generated for the POSIX/Linux
+emulation layer, which handles running native programs in an
+environment that matches a computed test input, including setting up
+files, pipes, environment variables, and passing command line
+arguments.
+
+For further information, see the [webpage](https://klee-se.org/).
+./scripts/build
+./.dockerignore
+./Dockerfile
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/klee && mkdir -p build && cd build && cmake -S .. -B . -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DLLVM_DIR=/
+usr/lib/llvm-16/lib/cmake/llvm -DLLVMCC=/usr/lib/llvm-16/bin/clang -DLLVMCXX=/usr/lib/llvm-16/bin/clang++ -DENABLE_SOLVER_STP=ON -DENABLE_SOLVER_Z3=OFF -DENABLE
+_SOLVER_METASMT=OFF -DENABLE_UNIT_TESTS=OFF -DENABLE_SYSTEM_TESTS=OFF -DENABLE_DOCS=OFF -DENABLE_POSIX_RUNTIME=OFF -DKLEE_UCLIBC_PATH='' 2>&1 | tail -60
+This might lead to unexpected behaviour.
+
+
+-- Not treating compiler warnings as errors
+-- STP solver support enabled
+-- Found STP version 2.4.1
+-- Using STP shared library
+-- STP_DIR: /usr/local/lib/cmake/STP
+-- Found Z3 libraries: "/usr/lib/aarch64-linux-gnu/libz3.so"
+-- Found Z3 include path: "/usr/include"
+-- Found Z3: /usr/include
+-- Z3 solver support disabled
+-- metaSMT solver support disabled
+-- Zlib support enabled
+-- TCMalloc support enabled
+-- Looking for C++ include gperftools/malloc_extension.h
+-- Looking for C++ include gperftools/malloc_extension.h - found
+-- Found SQLite3: /usr/include (found version "3.45.1")
+-- Looking for sys/capability.h
+-- Looking for sys/capability.h - not found
+-- Found libutil /usr/lib/aarch64-linux-gnu/libutil.a
+-- Found libutil include dir /usr/include
+-- Looking for __ctype_b_loc
+-- Looking for __ctype_b_loc - found
+-- Looking for mallinfo
+-- Looking for mallinfo - found
+-- Looking for mallinfo2
+-- Looking for mallinfo2 - found
+-- Looking for malloc_zone_statistics
+-- Looking for malloc_zone_statistics - not found
+-- Looking for selinux/selinux.h
+-- Looking for selinux/selinux.h - not found
+-- Looking for sys/acl.h
+-- Looking for sys/acl.h - not found
+-- SELinux support disabled
+-- Performing Test FSTATAT_PATH_ACCEPTS_NULL
+-- Performing Test FSTATAT_PATH_ACCEPTS_NULL - Failed
+-- KLEE_RUNTIME_BUILD_TYPE is not set. Setting default
+-- The available runtime build types are: Release;Release+Debug;Release+Asserts;Release+Debug+Asserts;Debug;Debug+Asserts
+-- KLEE_RUNTIME_BUILD_TYPE: Debug+Asserts
+-- Performing Test CHECK_M32_SUPPORT
+-- Performing Test CHECK_M32_SUPPORT - Failed
+-- 32bit platform supported: 0
+-- POSIX runtime disabled
+-- Skipping copying of klee-uclibc runtime
+-- libc++ support disabled
+-- CMAKE_CXX_FLAGS:
+-- KLEE_GIT_SHA1HASH: 78df9e234fdb806530184ecd8963268da87418c5
+-- KLEE_COMPONENT_EXTRA_INCLUDE_DIRS: '/usr/lib/llvm-16/include;/usr/include;/usr/include'
+-- KLEE_COMPONENT_CXX_DEFINES: '-D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS'
+-- KLEE_COMPONENT_CXX_FLAGS: '-UNDEBUG;-fno-exceptions;-fno-builtin-malloc;-fno-builtin-calloc;-fno-builtin-realloc;-fno-builtin-free'
+-- KLEE_SOLVER_LIBRARIES: 'stp'
+-- LIB_BC_SUFFIX: 64_Release;64_Release+Debug;64_Release+Asserts;64_Release+Debug+Asserts;64_Debug;64_Debug+Asserts
+-- KLEE_RUNTIME_DIRECTORY: /tmp/opencode/src/klee/build/runtime/lib
+-- Testing is disabled
+-- Unit tests disabled
+-- System tests disabled
+-- Configuring done (0.8s)
+-- Generating done (0.0s)
+-- Build files have been written to: /tmp/opencode/src/klee/build
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/klee/build && ninja -j20 2>&1 | tail -30
+[360/389] Generating ubsan_handlers64_Release+Debug+Asserts.bc
+[361/389] Generating ../lib/libkleeUBSan64_Release+Asserts.bca
+[362/389] Generating ../lib/libkleeUBSan64_Release.bca
+[363/389] Generating ../lib/libkleeUBSan64_Release+Debug+Asserts.bca
+[364/389] Generating ../lib/libkleeUBSan64_Release+Debug.bca
+[365/389] Building CXX object tools/ktest-randgen/CMakeFiles/ktest-randgen.dir/ktest-randgen.cpp.o
+[366/389] Building C object tools/klee-replay/CMakeFiles/klee-replay.dir/fd_init.c.o
+[367/389] Building CXX object lib/Core/CMakeFiles/kleeCore.dir/ExternalDispatcher.cpp.o
+[368/389] Building C object tools/klee-replay/CMakeFiles/klee-replay.dir/klee-replay.c.o
+[369/389] Building C object tools/klee-replay/CMakeFiles/klee-replay.dir/file-creator.c.o
+[370/389] Building C object tools/klee-replay/CMakeFiles/klee-replay.dir/klee_init_env.c.o
+[371/389] Building CXX object lib/Core/CMakeFiles/kleeCore.dir/MemoryManager.cpp.o
+[372/389] Building CXX object tools/ktest-gen/CMakeFiles/ktest-gen.dir/ktest-gen.cpp.o
+[373/389] Linking CXX executable bin/ktest-randgen
+[374/389] Linking CXX executable bin/klee-replay
+[375/389] Building CXX object lib/Core/CMakeFiles/kleeCore.dir/ExecutionState.cpp.o
+[376/389] Linking CXX executable bin/ktest-gen
+[377/389] Building CXX object tools/klee-exec-tree/CMakeFiles/klee-exec-tree.dir/main.cpp.o
+[378/389] Building CXX object tools/klee-exec-tree/CMakeFiles/klee-exec-tree.dir/DFSVisitor.cpp.o
+[379/389] Building CXX object tools/klee-exec-tree/CMakeFiles/klee-exec-tree.dir/Tree.cpp.o
+[380/389] Building CXX object lib/Core/CMakeFiles/kleeCore.dir/SpecialFunctionHandler.cpp.o
+[381/389] Building CXX object tools/klee-exec-tree/CMakeFiles/klee-exec-tree.dir/Printers.cpp.o
+[382/389] Linking CXX executable bin/klee-exec-tree
+[383/389] Building CXX object tools/kleaver/CMakeFiles/kleaver.dir/main.cpp.o
+[384/389] Building CXX object lib/Core/CMakeFiles/kleeCore.dir/StatsTracker.cpp.o
+[385/389] Linking CXX executable bin/kleaver
+[386/389] Building CXX object tools/klee/CMakeFiles/klee.dir/main.cpp.o
+[387/389] Building CXX object lib/Core/CMakeFiles/kleeCore.dir/Executor.cpp.o
+[388/389] Linking CXX static library lib/libkleeCore.a
+[389/389] Linking CXX executable bin/klee
+> build · deepseek-v4.1-flash
+$ cd /tmp/opencode/src/klee/build && ninja install 2>&1 | tail -25; ldconfig; echo '---bin---'; ls -l /usr/local/bin | grep -E 'klee|ktest'; echo '---include---
+'; find /usr/local/include -maxdepth 2 -type d | grep -i klee; find /usr/local/include/klee -maxdepth 1 -type f | head; echo '---lib---'; ls /usr/local/lib | gr
+ep -i klee | head -30
+-- Installing: /usr/local/lib/klee/runtime/libkleeRuntimeIntrinsic64_Debug.bca
+-- Installing: /usr/local/lib/klee/runtime/libkleeRuntimeFreestanding64_Release+Debug+Asserts.bca
+-- Installing: /usr/local/lib/klee/runtime/libkleeRuntimeFreestanding64_Release.bca
+-- Installing: /usr/local/lib/klee/runtime/libkleeRuntimeFreestanding64_Release+Asserts.bca
+-- Installing: /usr/local/lib/klee/runtime/libkleeRuntimeKLEELibc64_Debug+Asserts.bca
+-- Installing: /usr/local/lib/klee/runtime/libkleeUBSan64_Release+Debug+Asserts.bca
+-- Installing: /usr/local/lib/klee/runtime/libkleeRuntimeIntrinsic64_Debug+Asserts.bca
+-- Installing: /usr/local/lib/klee/runtime/libkleeRuntimeFreestanding64_Debug.bca
+-- Installing: /usr/local/lib/klee/runtime/libkleeRuntimeIntrinsic64_Release.bca
+-- Installing: /usr/local/lib/klee/runtime/libkleeRuntimeKLEELibc64_Release+Debug.bca
+-- Installing: /usr/local/bin/ktest-gen
+-- Set non-toolchain portion of runtime path of "/usr/local/bin/ktest-gen" to "/usr/lib/llvm-16/lib"
+-- Installing: /usr/local/bin/ktest-randgen
+-- Set non-toolchain portion of runtime path of "/usr/local/bin/ktest-randgen" to "/usr/lib/llvm-16/lib"
+-- Installing: /usr/local/bin/kleaver
+-- Set non-toolchain portion of runtime path of "/usr/local/bin/kleaver" to "/usr/lib/llvm-16/lib:/usr/local/lib"
+-- Installing: /usr/local/bin/klee
+-- Set non-toolchain portion of runtime path of "/usr/local/bin/klee" to "/usr/local/lib:/usr/lib/llvm-16/lib"
+-- Installing: /usr/local/bin/klee-exec-tree
+-- Installing: /usr/local/bin/klee-replay
+-- Set non-toolchain portion of runtime path of "/usr/local/bin/klee-replay" to "/usr/lib/llvm-16/lib"
+-- Installing: /usr/local/bin/klee-stats
+-- Installing: /usr/local/bin/klee-zesti
+-- Installing: /usr/local/bin/ktest-tool
+-- Installing: /usr/local/include/klee/klee.h
+---bin---
+-rwxr-xr-x 1 root root 2291808 Nov  1 03:15 klee
+-rwxr-xr-x 1 root root   89800 Nov  1 03:14 klee-exec-tree
+-rwxr-xr-x 1 root root   76744 Nov  1 03:14 klee-replay
+-rwxr-xr-x 1 root root   24538 Nov  1 03:12 klee-stats
+-rwxr-xr-x 1 root root    3736 Nov  1 03:12 klee-zesti
+-rwxr-xr-x 1 root root   72720 Nov  1 03:14 ktest-gen
+-rwxr-xr-x 1 root root   72328 Nov  1 03:14 ktest-randgen
+-rwxr-xr-x 1 root root    6665 Nov  1 03:12 ktest-tool
+---include---
+/usr/local/include/klee
+/usr/local/include/klee/klee.h
+---lib---
+klee
+libkleeRuntest.so
+libkleeRuntest.so.1.0
+> build · deepseek-v4.1-flash
+$ cat > /tmp/opencode/klee_test.c <<'EOF'
+#include <klee/klee.h>
+#include <assert.h>
+int main(void) {
+  int a;
+  klee_make_symbolic(&a, sizeof(a), "a");
+  if (a == 42) {
+    klee_assert(0);
+  }
+  return 0;
+}
+EOF
+clang-16 -I/usr/local/include -emit-llvm -c -g -O0 -Xclang -disable-O0-optnone /tmp/opencode/klee_test.c -o /tmp/opencode/klee_test.bc && rm -rf /tmp/opencode/k
+lee_out && klee --solver-backend=stp --output-dir=/tmp/opencode/klee_out /tmp/opencode/klee_test.bc 2>&1 | tail -30; echo "exit=$?"; ls /tmp/opencode/klee_out |
+ head
+KLEE: output directory is "/tmp/opencode/klee_out"
+KLEE: Using STP solver backend
+KLEE: SAT solver: CryptoMiniSat
+KLEE: Deterministic allocator: Using quarantine queue size 8
+KLEE: Deterministic allocator: globals (start-address=0xe6742ac00000 size=10 GiB)
+KLEE: Deterministic allocator: constants (start-address=0xe671aac00000 size=10 GiB)
+KLEE: Deterministic allocator: heap (start-address=0xe571aac00000 size=1024 GiB)
+KLEE: Deterministic allocator: stack (start-address=0xe551aac00000 size=128 GiB)
+KLEE: ERROR: /tmp/opencode/klee_test.c:7: ASSERTION FAIL: 0
+KLEE: NOTE: now ignoring this error at this location
+KLEE: Deterministic allocator: Using quarantine queue size 8
+KLEE: Deterministic allocator: globals (start-address=0xe54f2ac00000 size=10 GiB)
+KLEE: Deterministic allocator: constants (start-address=0xe54caac00000 size=10 GiB)
+KLEE: Deterministic allocator: heap (start-address=0xe44caac00000 size=1024 GiB)
+KLEE: Deterministic allocator: stack (start-address=0xe42caac00000 size=128 GiB)
+
+KLEE: done: total instructions = 10
+KLEE: done: completed paths = 1
+KLEE: done: partially completed paths = 1
+KLEE: done: generated tests = 2
+exit=0
+assembly.ll
+info
+messages.txt
+run.istats
+run.stats
+test000001.assert.err
+test000001.kquery
+test000001.ktest
+test000002.ktest
+warnings.txt
+> build · deepseek-v4.1-flash
+$ sed -n '1,30p' ~/.bashrc; echo '---'; grep -n 'return\|interactive\|non-interactive' ~/.bashrc | head -20
+# ~/.bashrc: executed by bash(1) for non-login shells.
+# see /usr/share/doc/bash/examples/startup-files (in the package bash-doc)
+# for examples
+
+# If not running interactively, don't do anything
+[ -z "$PS1" ] && return
+
+# don't put duplicate lines in the history. See bash(1) for more options
+# ... or force ignoredups and ignorespace
+HISTCONTROL=ignoredups:ignorespace
+
+# append to the history file, don't overwrite it
+shopt -s histappend
+
+# for setting history length see HISTSIZE and HISTFILESIZE in bash(1)
+HISTSIZE=1000
+HISTFILESIZE=2000
+
+# check the window size after each command and, if necessary,
+# update the values of LINES and COLUMNS.
+shopt -s checkwinsize
+
+# make less more friendly for non-text input files, see lesspipe(1)
+[ -x /usr/bin/lesspipe ] && eval "$(SHELL=/bin/sh lesspipe)"
+
+# set variable identifying the chroot you work in (used in the prompt below)
+if [ -z "$debian_chroot" ] && [ -r /etc/debian_chroot ]; then
+    debian_chroot=$(cat /etc/debian_chroot)
+fi
+
+---
+5:# If not running interactively, don't do anything
+6:[ -z "$PS1" ] && return
+> build · deepseek-v4.1-flash
+$ klee --version 2>&1 | head -10; echo '---'; klee --help 2>&1 | grep -iE 'solver|version|uclibc' | head -20; echo '---runtime---'; ls /usr/local/lib/klee/runti
+me | head -5; echo '---install config---'; grep -rn "KLEE_INSTALL_RUNTIME_DIR\|KLEE_RUNTIME_DIRECTORY" /tmp/opencode/src/klee/build/include/klee/Config/config.h
+ /tmp/opencode/src/klee/CMakeLists.txt | head -20
+KLEE 3.4-pre (https://klee-se.org/)
+  Build mode: Release (Asserts: ON)
+  Build revision: 78df9e234fdb806530184ecd8963268da87418c5
+
+Ubuntu LLVM version 16.0.6
+  Optimized build.
+---
+  --cex-cache-superset                                    - Try substituting SAT superset counterexample before asking the SMT solver (default=false)
+  --cex-cache-try-all                                     - Try substituting all counterexamples before asking the SMT solver (default=false)
+  --debug-assignment-validating-solver                    - Debug the correctness of generated assignments (default=false)
+  --debug-crosscheck-core-solver=<value>                  - Specifiy a solver to use for crosschecking the results of the core solver
+    =dummy                                                -   Dummy solver
+  --debug-validate-solver                                 - Crosscheck the results of the solver chain above the core solver with the results of the core solver
+ (default=false)
+  --equality-substitution                                 - Simplify equality expressions before querying the solver (default=true)
+  --ignore-stp-failures                                   - Ignore any STP solver failures (default=false)
+  --log-partial-queries-early                             - Log queries before calling the solver (default=false)
+  --max-solver-time=<string>                              - Maximum amount of time for a single SMT query (default=0s (off)). Enables --use-forked-solver
+  --solver-backend=<value>                                - Specifiy the core solver backend to use
+    =dummy                                                -   Dummy solver
+  --solver-optimize-divides                               - Optimize constant divides into add/shift/multiplies before passing them to the core SMT solver (defa
+ult=false)
+  --stp-sat-solver=<value>                                - Set the underlying SAT solver for STP (default=cryptominisat)
+  --use-fast-cex-solver                                   - Enable an experimental range-based solver (default=false)
+  --use-forked-solver                                     - Run the core SMT solver in a forked process (default=true)
+  --use-independent-solver                                - Use constraint independence (default=true)
+    =solver:kquery                                        -   All queries reaching the solver in .kquery (KQuery) format
+    =solver:smt2                                          -   All queries reaching the solver in .smt2 (SMT-LIBv2) format
+  --version                                               - Display the version of this program
+---runtime---
+libkleeRuntimeFortify64_Debug+Asserts.bca
+libkleeRuntimeFortify64_Debug.bca
+libkleeRuntimeFortify64_Release+Asserts.bca
+libkleeRuntimeFortify64_Release+Debug+Asserts.bca
+libkleeRuntimeFortify64_Release+Debug.bca
+---install config---
+/tmp/opencode/src/klee/build/include/klee/Config/config.h:105:#define KLEE_INSTALL_RUNTIME_DIR "/usr/local/lib/klee/runtime"
+/tmp/opencode/src/klee/CMakeLists.txt:467:set(KLEE_INSTALL_RUNTIME_DIR "${CMAKE_INSTALL_FULL_LIBDIR}/klee/runtime")
+/tmp/opencode/src/klee/CMakeLists.txt:470:set(KLEE_RUNTIME_DIRECTORY "${CMAKE_BINARY_DIR}/runtime/lib")
+/tmp/opencode/src/klee/CMakeLists.txt:472:file(MAKE_DIRECTORY ${KLEE_RUNTIME_DIRECTORY})
+/tmp/opencode/src/klee/CMakeLists.txt:500:    "${KLEE_RUNTIME_DIRECTORY}/${KLEE_UCLIBC_BCA_NAME}"
+/tmp/opencode/src/klee/CMakeLists.txt:554:  file(MAKE_DIRECTORY "${KLEE_RUNTIME_DIRECTORY}")
+/tmp/opencode/src/klee/CMakeLists.txt:557:    "${KLEE_RUNTIME_DIRECTORY}/${KLEE_LIBCXX_BC_PATH}"
+> build · deepseek-v4.1-flash
+← Edit /root/.bashrc
+Index: /root/.bashrc
+===================================================================
+--- /root/.bashrc
++++ /root/.bashrc
+@@ -1,8 +1,29 @@
+ # ~/.bashrc: executed by bash(1) for non-login shells.
+ # see /usr/share/doc/bash/examples/startup-files (in the package bash-doc)
+ # for examples
+
++# KLEE (LLVM 16, STP solver) environment.  Keep this before the
++# non-interactive guard below so it is also configured when this file is
++# sourced by a non-interactive shell.
++case ":$PATH:" in
++  *":/usr/local/bin:"*) ;;
++  *) export PATH="/usr/local/bin:$PATH" ;;
++esac
++case ":$CPATH:" in
++  *":/usr/local/include:"*) ;;
++  *) export CPATH="/usr/local/include${CPATH:+:$CPATH}" ;;
++esac
++case ":$CPATH:" in
++  *":/usr/local/include/klee:"*) ;;
++  *) export CPATH="/usr/local/include/klee${CPATH:+:$CPATH}" ;;
++esac
++case ":$LD_LIBRARY_PATH:" in
++  *":/usr/local/lib:"*) ;;
++  *) export LD_LIBRARY_PATH="/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
++esac
++export KLEE_INSTALL_RUNTIME_DIR="/usr/local/lib/klee/runtime"
++
+ # If not running interactively, don't do anything
+ [ -z "$PS1" ] && return
+
+ # don't put duplicate lines in the history. See bash(1) for more options
+
+> build · deepseek-v4.1-flash
+$ bash --noprofile --norc -c 'source ~/.bashrc; echo "PATH=$PATH"; echo "CPATH=$CPATH"; echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"; command -v klee; klee --version
+ | head -5' ; echo '---compile using CPATH---'; bash --noprofile --norc -c 'source ~/.bashrc; printf "#include <klee/klee.h>\nint main(void){int x; klee_make_sy
+mbolic(&x,sizeof x,\"x\"); return x==7;}\n" > /tmp/opencode/cpath_test.c; clang-16 -emit-llvm -c -g -O0 -Xclang -disable-O0-optnone /tmp/opencode/cpath_test.c -
+o /tmp/opencode/cpath_test.bc && echo COMPILE_OK' ; echo '---source twice---'; bash --noprofile --norc -c 'source ~/.bashrc; source ~/.bashrc; echo "$CPATH"; ec
+ho "$PATH"'
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CPATH=/usr/local/include/klee:/usr/local/include
+LD_LIBRARY_PATH=/usr/local/lib
+/usr/local/bin/klee
+KLEE 3.4-pre (https://klee-se.org/)
+  Build mode: Release (Asserts: ON)
+  Build revision: 78df9e234fdb806530184ecd8963268da87418c5
+
+Ubuntu LLVM version 16.0.6
+---compile using CPATH---
+COMPILE_OK
+---source twice---
+/usr/local/include/klee:/usr/local/include
+/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+> build · deepseek-v4.1-flash
+$ bash --noprofile --norc -c 'source ~/.bashrc; rm -rf /tmp/opencode/klee_out2; klee --output-dir=/tmp/opencode/klee_out2 /tmp/opencode/cpath_test.bc 2>&1 | gre
+p -E "Using .*solver|SAT solver|KLEE: done|KLEE: ERROR" | head -20; echo "exit=${PIPESTATUS[0]}"'
+KLEE: Using STP solver backend
+KLEE: SAT solver: CryptoMiniSat
+KLEE: done: total instructions = 9
+KLEE: done: completed paths = 1
+KLEE: done: partially completed paths = 0
+KLEE: done: generated tests = 1
+exit=0
+> build · deepseek-v4.1-flash
+$ ldconfig -p | grep -E 'libstp|libcryptominisat' | head; echo '---without LD_LIBRARY_PATH---'; env -u LD_LIBRARY_PATH bash --noprofile --norc -c 'source ~/.bas
+hrc; PATH=/usr/local/bin:/usr/bin:/bin; klee --version >/dev/null && echo KLEE_RUNS'; echo '---ldd---'; ldd /usr/local/bin/klee | grep -E 'stp|LLVM|not found' |
+ head
+libstp.so.2.4 (libc6,AArch64) => /usr/local/lib/libstp.so.2.4
+        libstp.so (libc6,AArch64) => /usr/local/lib/libstp.so
+        libcryptominisat5.so.5.11 (libc6,AArch64) => /lib/aarch64-linux-gnu/libcryptominisat5.so.5.11
+        libcryptominisat5.so (libc6,AArch64) => /lib/aarch64-linux-gnu/libcryptominisat5.so
+---without LD_LIBRARY_PATH---
+KLEE_RUNS
+---ldd---
+        libstp.so.2.4 => /usr/local/lib/libstp.so.2.4 (0x0000fdc725f90000)
+        libLLVM-16.so.1 => /usr/lib/llvm-16/lib/libLLVM-16.so.1 (0x0000fdc71eae0000)
+> build · deepseek-v4.1-flash
+KLEE is installed and configured.
+
+**Installed:**
+- **KLEE 3.4-pre** built against **LLVM 16**
+- **STP 2.4.1** as KLEE's solver backend (default `--solver-backend=stp`)
+- STP using **CryptoMiniSat** as its SAT backend
+- **No uClibc** configured
+- Installed under `/usr/local`
+
+**Environment in `/root/.bashrc`:**
+- `/usr/local/bin` added to `PATH`
+- `/usr/local/include` and `/usr/local/include/klee` added to `CPATH`
+- `/usr/local/lib` added to `LD_LIBRARY_PATH`
+- KLEE runtime path configured
+
+The entries are placed **before** the non-interactive guard, so they load even when `~/.bashrc` is sourced by a non-interactive shell.
+
+**Verified:**
+```bash
+source ~/.bashrc
+which klee          # /usr/local/bin/klee
+klee --version      # KLEE 3.4-pre, LLVM 16.0.6
+```
+
+A symbolic C test compiled with `#include <klee/klee.h>` and executed successfully using the STP backend.
+root@f3ab44d18294:/app#

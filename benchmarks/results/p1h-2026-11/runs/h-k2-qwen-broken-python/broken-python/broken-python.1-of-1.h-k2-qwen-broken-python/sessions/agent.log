@@ -1,0 +1,61 @@
+[?2004hroot@b8929a4f9e05:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@b8929a4f9e05:/app# clear
+[?2004l[H[J[3J[?2004hroot@b8929a4f9e05:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@b8929a4f9e05:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=0.26.4
+ARM_SETUP_END=1793515990
+[?2004hroot@b8929a4f9e05:/app# source "$HOME/.nvm/nvm.sh" >/dev/null 2>&1; qwen -p 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with pip.' --approval-mode yolo 2>&1 | tee /agent-logs/qwen.log; tmux wait -S done
+[?2004lWarning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Fixed. Here's what was actually wrong and what I did.
+
+## Root cause
+
+Not a PATH problem or a broken `pip` script — your `/usr/local/bin/pip` was fine. The **importable `pip` package directory had been deleted** from site-packages while its metadata was left behind:
+
+```
+/usr/local/lib/python3.13/site-packages/
+├── README.txt
+└── pip-24.3.1.dist-info   ← metadata present, claimed pip was installed
+```
+
+`pip` therefore crashed at startup on `from pip._internal.cli.main import main` → `ModuleNotFoundError: No module named 'pip'`.
+
+Two things compounded it:
+- The **orphaned `dist-info` made `ensurepip` refuse to repair**, reporting `Requirement already satisfied` while the code was still absent.
+- Nothing else blocked you: no `EXTERNALLY-MANAGED` marker for 3.13, site-packages writable, 221 GB free.
+
+Directory timestamps suggest the `pip/` folder was removed around **Oct 31 13:45** (parent dir modified then) while the Jan 2025 metadata survived — typical of an interrupted upgrade or a partial delete.
+
+## Fix
+
+1. Backed up the orphaned metadata to `/tmp/pip-24.3.1.dist-info.bak`.
+2. Moved it aside to `/tmp/pip-24.3.1.dist-info.orphan`.
+3. Re-ran `python3 -m ensurepip --upgrade --default-pip`, which installed pip from the bundled `pip-24.3.1-py3-none-any.whl` — **no network required**.
+
+## Verified
+
+| Check | Result |
+|---|---|
+| `pip --version` / `pip3 --version` | `pip 24.3.1 ... (python 3.13)` |
+| `python3 -m pip --version` | works |
+| `import pip` | resolves to `.../site-packages/pip/__init__.py` |
+| `pip check` | No broken requirements found |
+| PyPI index access | reachable (`six` 1.17.0 listed) |
+| Real install | `Successfully installed six-1.17.0` |
+| Uninstall | `Successfully uninstalled six-1.17.0` |
+
+I uninstalled the test package afterward, so your environment is left as I found it apart from the repair.
+
+## Two things worth knowing
+
+- **`/usr/bin/python3` (Debian's 3.11) has no pip at all** — a separate install from the one you were hitting. If you need it, that's `apt install python3-pip`, not `ensurepip`; note it carries an `EXTERNALLY-MANAGED` marker, so it resists system-wide installs by design. The `python3`/`pip` on your `PATH` is the 3.13 one I just repaired.
+- You're running as **root**, which is why every command printed pip's "Running pip as the 'root' user" warning. For actual project work prefer a venv (`python3 -m venv .venv`) to avoid this class of damage recurring — but system-wide installs will work now.
+
+Once you're happy, you can delete the two backups: `rm -rf /tmp/pip-24.3.1.dist-info.bak /tmp/pip-24.3.1.dist-info.orphan`. I left them in place in case you want to inspect them.
+[?2004hroot@b8929a4f9e05:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@b8929a4f9e05:/app# 

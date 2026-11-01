@@ -1,0 +1,23 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+The query is written to `/app/solution.sparql` and validated against the graph.
+
+**Approach**
+
+- **Full professors**: `uni:role` filtered to contain "Professor" but not "Assistant"/"Associate"/"Adjunct"/"Visiting" (this excludes `Athanasios_Voulodimos` and `Stefan_Mueller`).
+- **EU location**: `VALUES ?euCountry` lists the 27 member states as of 2025-08-16 (incl. `GR`, `PT`, `ES`, `FR`, `DE`); the department's `uni:belongsTo` → `uni:locatedInCountry` must match.
+- **Currently enrolled** (relative to 2025-08-16): enrollment date ≤ today and no graduation date, or graduation date > today (this drops Students 18–23, 25, 26 whose graduation already passed).
+- **>10 students**: a sub-select counts `DISTINCT` students over all courses with `uni:isTaughtIn` that department, with `HAVING (COUNT(DISTINCT ?student) > 10)`.
+- **`?countries`**: a separate `worksIn` → department → university → country path so the concat covers *all* departments the professor works in, not just the qualifying one.
+
+**Verification output** (rdflib, `python3-rdflib` installed via apt):
+
+```
+rows: 3
+{Aristotle Tympas, GR}
+{Orfeas Menis,   US, GR}
+{Pepe Attanasio, GR, PT}
+```
+
+Department counts backing the filter: `ComputerScience_NTUA` 12, `HistoryAndPhilosophy_NKUA` 12, `Engineering_Berkeley` 11 (US — correctly rejected), `Biology_MIT` 7, `Mathematics_Sorbonne` 6.
+
+One note: rdflib.js (tried first) rejects `VALUES` and comment lines, but the file is standard SPARQL 1.1 and parses fine in rdflib/ARQ.

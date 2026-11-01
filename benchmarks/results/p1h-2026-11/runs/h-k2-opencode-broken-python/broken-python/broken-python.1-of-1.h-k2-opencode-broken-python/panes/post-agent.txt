@@ -1,0 +1,253 @@
+root@8709aded7731:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+root@8709aded7731:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+ARM_VERSION=opencode v2.2.5
+ARM_SETUP_END=1793516095
+root@8709aded7731:/app# opencode run --standalone --auto -m llamacpp/deepseek-v4.1-flash 'There'"'"'s something wrong with my system-wide python installation -
+I can'"'"'t seem to install packages with pip.' 2>&1 | tee /agent-logs/opencode.log; tmux wait -S done
+
+> build · deepseek-v4.1-flash
+I'll take a look at the Python/pip setup and try to reproduce the failure.
+$ cat /etc/os-release 2>&1; echo "---"; ls -la /app 2>&1 | head -40
+PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"
+NAME="Debian GNU/Linux"
+VERSION_ID="12"
+VERSION="12 (bookworm)"
+VERSION_CODENAME=bookworm
+ID=debian
+HOME_URL="https://www.debian.org/"
+SUPPORT_URL="https://www.debian.org/support"
+BUG_REPORT_URL="https://bugs.debian.org/"
+---
+total 8
+drwxr-xr-x 2 root root 4096 Mar 21  2025 .
+drwxr-xr-x 1 root root 4096 Nov  1 06:54 ..
+$ which -a python python3 pip pip3 2>&1; echo "---"; python3 --version 2>&1; pip3 --version 2>&1; echo "---"; python3 -c "import sys; print(sys.executable); pri
+nt(sys.prefix); print(sys.base_prefix)" 2>&1
+/usr/local/bin/python
+/usr/local/bin/python3
+/usr/bin/python3
+/bin/python3
+/usr/local/bin/pip
+/usr/local/bin/pip3
+---
+Python 3.13.1
+Traceback (most recent call last):
+  File "/usr/local/bin/pip3", line 5, in <module>
+    from pip._internal.cli.main import main
+ModuleNotFoundError: No module named 'pip'
+---
+/usr/local/bin/python3
+/usr/local
+/usr/local
+> build · deepseek-v4.1-flash
+$ python3 -c "import sys,site; print(sys.path); print(site.getsitepackages())" 2>&1; echo "---"; ls /usr/local/lib/python3.13/site-packages 2>&1 | head -30; ech
+o "---"; ls /usr/local/lib/ 2>&1
+['', '/usr/local/lib/python313.zip', '/usr/local/lib/python3.13', '/usr/local/lib/python3.13/lib-dynload', '/usr/local/lib/python3.13/site-packages']
+['/usr/local/lib/python3.13/site-packages']
+---
+README.txt
+pip-24.3.1.dist-info
+---
+libpython3.13.so
+libpython3.13.so.1.0
+libpython3.so
+pkgconfig
+python3.11
+python3.13
+$ head -3 /usr/local/bin/pip3 /usr/local/bin/pip 2>&1; echo "---"; ls -la /usr/local/bin/python* /usr/local/bin/pip* 2>&1; echo "---"; /usr/bin/python3 --versio
+n 2>&1; /usr/bin/python3 -c "import pip; print(pip.__version__)" 2>&1
+==> /usr/local/bin/pip3 <==
+#!/usr/local/bin/python3.13
+# -*- coding: utf-8 -*-
+import re
+
+==> /usr/local/bin/pip <==
+#!/usr/local/bin/python3.13
+# -*- coding: utf-8 -*-
+import re
+---
+lrwxrwxrwx 1 root root     4 Jan 14  2025 /usr/local/bin/pip -> pip3
+-rwxr-xr-x 1 root root   230 Jan 14  2025 /usr/local/bin/pip3
+-rwxr-xr-x 1 root root   230 Jan 14  2025 /usr/local/bin/pip3.13
+lrwxrwxrwx 1 root root     7 Jan 14  2025 /usr/local/bin/python -> python3
+lrwxrwxrwx 1 root root    14 Jan 14  2025 /usr/local/bin/python-config -> python3-config
+lrwxrwxrwx 1 root root    10 Jan 14  2025 /usr/local/bin/python3 -> python3.13
+lrwxrwxrwx 1 root root    17 Jan 14  2025 /usr/local/bin/python3-config -> python3.13-config
+-rwxr-xr-x 1 root root 67600 Jan 14  2025 /usr/local/bin/python3.13
+-rwxr-xr-x 1 root root  3129 Jan 14  2025 /usr/local/bin/python3.13-config
+---
+Python 3.11.2
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+ModuleNotFoundError: No module named 'pip'
+> build · deepseek-v4.1-flash
+$ ls -la /usr/local/lib/python3.13/site-packages/ 2>&1; echo "--- RECORD head ---"; head -20 /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD
+ 2>&1; echo "--- top_level ---"; cat /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/top_level.txt 2>&1
+total 24
+drwxr-xr-x 1 root root 4096 Oct 31 13:45 .
+drwxr-xr-x 1 root root 4096 Jan 14  2025 ..
+-rw-r--r-- 1 root root  119 Jan 14  2025 README.txt
+drwxr-xr-x 2 root root 4096 Jan 14  2025 pip-24.3.1.dist-info
+--- RECORD head ---
+../../../bin/pip3,sha256=0b9s6uF-112mlJv1gtUrMFJh6BKXbpJf0_WlXw7hrMo,230
+../../../bin/pip3.13,sha256=0b9s6uF-112mlJv1gtUrMFJh6BKXbpJf0_WlXw7hrMo,230
+pip-24.3.1.dist-info/AUTHORS.txt,sha256=Cbb630k8EL9FkBzX9Vpi6hpYWrLSlh08eXodL5u0eLI,10925
+pip-24.3.1.dist-info/INSTALLER,sha256=zuuue4knoyJ-UwPPXg8fezS7VCrXJQrAP7zeNuwvFQg,4
+pip-24.3.1.dist-info/LICENSE.txt,sha256=Y0MApmnUmurmWxLGxIySTFGkzfPR_whtw0VtyLyqIQQ,1093
+pip-24.3.1.dist-info/METADATA,sha256=V8iCNK1GYbC82PWsLMsASDh9AO4veocRlM4Pn9q2KFI,3677
+pip-24.3.1.dist-info/RECORD,,
+pip-24.3.1.dist-info/REQUESTED,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
+pip-24.3.1.dist-info/WHEEL,sha256=OVMc5UfuAQiSplgO0_WdW7vXVGAt9Hdd6qtN4HotdyA,91
+pip-24.3.1.dist-info/entry_points.txt,sha256=eeIjuzfnfR2PrhbjnbzFU6MnSS70kZLxwaHHq6M-bD0,87
+pip-24.3.1.dist-info/top_level.txt,sha256=zuuue4knoyJ-UwPPXg8fezS7VCrXJQrAP7zeNuwvFQg,4
+pip/__init__.py,sha256=faXY_neeYrA_88plEhkyhwAaYeds7wu5U1iGwP24J0s,357
+pip/__main__.py,sha256=WzbhHXTbSE6gBY19mNN9m4s5o_365LOvTYSgqgbdBhE,854
+pip/__pip-runner__.py,sha256=cPPWuJ6NK_k-GzfvlejLFgwzmYUROmpAR6QC3Q-vkXQ,1450
+pip/__pycache__/__init__.cpython-313.pyc,,
+pip/__pycache__/__main__.cpython-313.pyc,,
+pip/__pycache__/__pip-runner__.cpython-313.pyc,,
+pip/_internal/__init__.py,sha256=MfcoOluDZ8QMCFYal04IqOJ9q6m2V7a0aOsnI-WOxUo,513
+pip/_internal/__pycache__/__init__.cpython-313.pyc,,
+pip/_internal/__pycache__/build_env.cpython-313.pyc,,
+--- top_level ---
+pip
+$ echo "PYTHONPATH=$PYTHONPATH"; echo "PIP_CONFIG_FILE=$PIP_CONFIG_FILE"; env | grep -i -E '^(PYTHON|PIP)' 2>&1; echo "--- pip conf ---"; ls -la /etc/pip.conf ~
+/.pip/pip.conf ~/.config/pip/pip.conf 2>&1; echo "--- ensurepip ---"; python3 -m ensurepip --version 2>&1
+PYTHONPATH=
+PIP_CONFIG_FILE=
+PYTHON_SHA256=9cf9427bee9e2242e3877dd0f6b641c1853ca461f39d6503ce260a59c80bf0d9
+PYTHON_VERSION=3.13.1
+--- pip conf ---
+ls: cannot access '/etc/pip.conf': No such file or directory
+ls: cannot access '/root/.pip/pip.conf': No such file or directory
+ls: cannot access '/root/.config/pip/pip.conf': No such file or directory
+--- ensurepip ---
+pip 24.3.1
+> build · deepseek-v4.1-flash
+$ cat /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/INSTALLER 2>&1; echo "---"; stat /usr/local/lib/python3.13/site-packages 2>&1; echo "--- hist
+ory clues ---"; ls -la /root 2>&1 | head -20; cat /root/.bash_history 2>/dev/null | tail -50
+pip
+---
+  File: /usr/local/lib/python3.13/site-packages
+  Size: 4096            Blocks: 16         IO Block: 4096   directory
+Device: 0,122   Inode: 35806119    Links: 1
+Access: (0755/drwxr-xr-x)  Uid: (    0/    root)   Gid: (    0/    root)
+Access: 2026-10-31 13:45:16.490499530 +0000
+Modify: 2026-10-31 13:45:16.174088470 +0000
+Change: 2026-10-31 13:45:16.174088470 +0000
+ Birth: 2026-10-31 13:45:16.138565244 +0000
+--- history clues ---
+total 32
+drwx------ 1 root root 4096 Nov  1 06:54 .
+drwxr-xr-x 1 root root 4096 Nov  1 06:54 ..
+-rw-r--r-- 1 root root  571 Apr 10  2021 .bashrc
+drwxr-xr-x 3 root root 4096 Nov  1 06:54 .cache
+drwxr-xr-x 4 root root 4096 Nov  1 06:54 .config
+drwxr-xr-x 4 root root 4096 Nov  1 06:54 .local
+-rw-r--r-- 1 root root  161 Jul  9  2019 .profile
+-rw------- 1 root root    0 Jan 14  2025 .python_history
+-rw-r--r-- 1 root root  169 Jan 14  2025 .wget-hsts
+$ python3 -m pip --version 2>&1; echo "exit=$?"; echo "--- find pip dirs ---"; find / -xdev -maxdepth 8 -type d -name pip 2>/dev/null | head -20; echo "--- ensu
+repip bundled ---"; python3 -c "import ensurepip,os; p=os.path.join(os.path.dirname(ensurepip.__file__),'_bundled'); print(p); print(os.listdir(p))" 2>&1
+/usr/local/bin/python3: No module named pip
+exit=1
+--- find pip dirs ---
+--- ensurepip bundled ---
+/usr/local/lib/python3.13/ensurepip/_bundled
+['pip-24.3.1-py3-none-any.whl']
+> build · deepseek-v4.1-flash
+Found the actual fault. Let me confirm the repair path before changing anything.
+$ python3 -m ensurepip --upgrade 2>&1; echo "exit=$?"
+Looking in links: /tmp/tmpif0yqsep
+Requirement already satisfied: pip in /usr/local/lib/python3.13/site-packages (24.3.1)
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your syst
+em unusable.It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you ar
+e doing and want to suppress this warning.
+exit=0
+> build · deepseek-v4.1-flash
+`ensurepip` was fooled by the leftover metadata. The package files are gone while `pip-24.3.1.dist-info` remains, so pip "thinks" it's installed. I'll move that
+ orphaned metadata aside and reinstall pip from the bundled wheel.
+$ mkdir -p /tmp/opencode/pip-repair-backup && mv /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info /tmp/opencode/pip-repair-backup/ && python3 -m ens
+urepip --upgrade --default-pip 2>&1; echo "exit=$?"
+Looking in links: /tmp/tmpfxqwzksf
+Processing /tmp/tmpfxqwzksf/pip-24.3.1-py3-none-any.whl
+Installing collected packages: pip
+Successfully installed pip-24.3.1
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your syst
+em unusable.It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you ar
+e doing and want to suppress this warning.
+exit=0
+> build · deepseek-v4.1-flash
+$ pip --version 2>&1; pip3 --version 2>&1; python3 -m pip --version 2>&1; echo "--- pip location ---"; python3 -c "import pip; print(pip.__file__, pip.__version
+__)" 2>&1
+pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)
+pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)
+pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)
+--- pip location ---
+/usr/local/lib/python3.13/site-packages/pip/__init__.py 24.3.1
+$ pip install --target /tmp/opencode/pip-smoke --no-cache-dir --quiet six 2>&1; echo "install_exit=$?"; python3 -c "import sys; sys.path.insert(0,'/tmp/opencode
+/pip-smoke'); import six; print('six', six.__version__)" 2>&1
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your syst
+em unusable.It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you ar
+e doing and want to suppress this warning.
+
+[notice] A new release of pip is available: 24.3.1 -> 26.2.2
+[notice] To update, run: pip install --upgrade pip
+install_exit=0
+six 1.17.0
+> build · deepseek-v4.1-flash
+$ rm -rf /tmp/opencode/pip-smoke; ls /usr/local/lib/python3.13/site-packages/
+README.txt
+pip
+pip-24.3.1.dist-info
+> build · deepseek-v4.1-flash
+Fixed — pip is working again.
+
+## What was wrong
+
+`/usr/local/bin/python3` (Python 3.13.1) had **no `pip` package installed at all**, but its metadata folder was left behind:
+
+```
+/usr/local/lib/python3.13/site-packages/
+├── README.txt
+└── pip-24.3.1.dist-info/   ← metadata said "pip is installed"
+```
+
+The `pip/` code directory was missing, so every invocation failed with:
+
+```
+ModuleNotFoundError: No module named 'pip'
+```
+
+This is why `python3 -m ensurepip --upgrade` didn't help at first — it saw the leftover `pip-24.3.1.dist-info` and concluded pip was already installed.
+
+## What I did
+
+1. Moved the orphaned metadata to `/tmp/opencode/pip-repair-backup/` (kept as a backup, safe to delete).
+2. Reinstalled pip from Python's own bundled wheel — no network needed:
+   ```
+   python3 -m ensurepip --upgrade --default-pip
+   ```
+
+## Verified
+
+```
+$ pip --version
+pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)
+```
+
+I also did a real end-to-end install test (`six` into a throwaway target dir), which succeeded, then removed it.
+
+## One recommendation
+
+Installing system-wide works now, but on Debian with a source-built Python it's easy to break like this again. For project work, prefer a virtual environment:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install <package>
+```
+
+Note: `/usr/bin/python3` (Debian's 3.11) is a separate interpreter and has no pip — that's normal for Debian; it would come from apt's `python3-pip`. The `pytho
+n3`/`pip` on your `PATH` resolve to `/usr/local/bin` 3.13, which is what I repaired.
+root@8709aded7731:/app#

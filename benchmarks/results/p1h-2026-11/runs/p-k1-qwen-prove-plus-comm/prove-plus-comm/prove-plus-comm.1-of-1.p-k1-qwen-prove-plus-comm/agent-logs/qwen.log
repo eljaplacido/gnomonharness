@@ -1,0 +1,32 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Proof complete and verified. `/workspace/plus_comm.vo` was produced by `coqc`.
+
+**Final proof** (`/workspace/plus_comm.v`):
+
+```coq
+Require Import Arith.
+
+Theorem plus_comm : forall n m : nat,
+  n + m = m + n.
+Proof.
+  intros n m.
+  induction n as [|n' IHn'].
+  - simpl.
+    induction m as [|m' IHm'].
+    + reflexivity.
+    + simpl.
+      rewrite <- IHm'.
+      reflexivity.
+  - simpl.
+    rewrite <- plus_n_Sm.
+    rewrite IHn'.
+    reflexivity.
+Qed.
+```
+
+What was missing and why:
+
+- **Base case** (`n = 0`): after `simpl`, the goal is `m = m + 0`. Since `m` was introduced by `intros` and is still arbitrary, a nested `induction m` is needed. Its hypothesis comes out as `IHm' : m' = m' + 0`, so the rewrite must be `rewrite <- IHm'` (right-to-left); a forward rewrite would loop the goal into `S (m' + 0 + 0)`.
+- **Step case** (`n = S n'`): after `simpl` the goal is `S (n' + m) = m + S n'`. `plus_n_Sm` must be applied with `<-` because Coq 8.18 states it as `S (n + m) = n + S m`; a forward rewrite would incorrectly hit the left-hand side and give `n' + S m`. Expanding `m + S n'` yields `S (m + n')`, and then `IHn'` closes the goal.
+
+Verification run: `coqc plus_comm.v` exits 0, and `Print Assumptions plus_comm` reports **"Closed under the global context"** — no `admit`, no axioms.

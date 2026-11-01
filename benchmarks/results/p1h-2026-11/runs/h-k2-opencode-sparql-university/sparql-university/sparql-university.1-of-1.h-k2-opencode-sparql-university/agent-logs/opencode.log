@@ -1,0 +1,368 @@
+[0m
+> build · deepseek-v4.1-flash
+[0m$ [0mwc -l /app/university_graph.ttl && head -100 /app/university_graph.ttl
+305 /app/university_graph.ttl
+@prefix uni: <http://university.org/ontology/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# ---------------------------
+# Universities
+# ---------------------------
+uni:ETHZurich a uni:University ;
+    uni:hasName "ETH Zurich" ;
+    uni:locatedInCountry "CH" .
+
+uni:UPM a uni:University ;
+    uni:hasName "Universidad Politécnica de Madrid" ;
+    uni:locatedInCountry "ES" .
+
+uni:IST a uni:University ;
+    uni:hasName "Instituto Superior Técnico" ;
+    uni:locatedInCountry "PT" .
+
+uni:NTUA a uni:University ;
+    uni:hasName "National Technical University of Athens" ;
+    uni:locatedInCountry "GR" .
+
+uni:NKUA a uni:University ;
+    uni:hasName "National and Kapodistrian University of Athens" ;
+    uni:locatedInCountry "GR" .
+
+uni:Sorbonne a uni:University ;
+    uni:hasName "Sorbonne University" ;
+    uni:locatedInCountry "FR" .
+
+uni:MIT a uni:University ;
+    uni:hasName "Massachusetts Institute of Technology" ;
+    uni:locatedInCountry "US" .
+
+uni:Berkeley a uni:University ;
+    uni:hasName "University of California, Berkeley" ;
+    uni:locatedInCountry "US" .
+
+uni:LMU a uni:University ;
+    uni:hasName "Ludwig Maximilian University of Munich" ;
+    uni:locatedInCountry "DE" .
+
+# ---------------------------
+# Departments
+# ---------------------------
+uni:ComputerScience_NTUA a uni:Department ;
+    uni:belongsTo uni:NTUA .
+
+uni:MechEngineering_NTUA a uni:Department ;
+    uni:belongsTo uni:NTUA .
+
+uni:Mathematics_IST a uni:Department ;
+    uni:belongsTo uni:IST .
+
+uni:Mathematics_Sorbonne a uni:Department ;
+    uni:belongsTo uni:Sorbonne .
+
+uni:Physics_ETH a uni:Department ;
+    uni:belongsTo uni:ETHZurich .
+
+uni:Biology_MIT a uni:Department ;
+    uni:belongsTo uni:MIT .
+
+uni:Sloan_MIT a uni:Department ;
+    uni:belongsTo uni:MIT .
+
+uni:Engineering_LMU a uni:Department ;
+    uni:belongsTo uni:LMU .
+
+uni:Engineering_Berkeley a uni:Department ;
+    uni:belongsTo uni:Berkeley .
+
+uni:Robotics_UPM a uni:Department ;
+    uni:belongsTo uni:UPM .
+
+uni:HistoryAndPhilosophy_NKUA a uni:Department ;
+    uni:belongsTo uni:NKUA .
+
+# ---------------------------
+# Courses
+# ---------------------------
+uni:CS101 a uni:Course ;
+    uni:isTaughtIn uni:ComputerScience_NTUA .
+
+uni:AI101 a uni:Course ;
+    uni:isTaughtIn uni:ComputerScience_NTUA .
+
+uni:Math101 a uni:Course ;
+    uni:isTaughtIn uni:Mathematics_IST .
+
+uni:Math201 a uni:Course ;
+    uni:isTaughtIn uni:Mathematics_Sorbonne .
+
+uni:Physics301 a uni:Course ;
+    uni:isTaughtIn uni:Physics_ETH .
+
+uni:Bio101 a uni:Course ;
+    uni:isTaughtIn uni:Biology_MIT .
+
+uni:Eng202 a uni:Course ;
+> build · deepseek-v4.1-flash
+[0m→ [0mRead university_graph.ttl [90m[offset=100][0m
+> build · deepseek-v4.1-flash
+[0m$ [0mwhich arq sparql riot 2>/dev/null; python3 -c "import rdflib; print(rdflib.__version__)" 2>/dev/null; node -e "try{console.log(require.resolve('n3'))}catch(e){console.log('no n3')}" 2>/dev/null
+(no output)
+> build · deepseek-v4.1-flash
+[0m$ [0mpython3 --version; pip list 2>/dev/null | head -50
+Python 3.12.3
+> build · deepseek-v4.1-flash
+[0m$ [0mpip install rdflib -q 2>&1 | tail -5
+/bin/bash: line 1: pip: command not found
+> build · deepseek-v4.1-flash
+[0m$ [0mwhich pip3; pip3 install rdflib -q 2>&1 | tail -5
+/bin/bash: line 1: pip3: command not found
+> build · deepseek-v4.1-flash
+[0m$ [0mls /usr/bin | grep -i -E 'sparql|rdf|jena|arq' ; find / -maxdepth 4 -iname '*rdflib*' 2>/dev/null | head
+(no output)
+> build · deepseek-v4.1-flash
+[0m$ [0mcat > /tmp/check.py <<'EOF'
+import re
+from collections import defaultdict
+text=open('/app/university_graph.ttl').read()
+
+# split blocks by subject lines ending with properties until blank
+# simple parse: statements are subject predicate/object pairs; handle multi-line blocks ending with '.'
+# strip comments
+text=re.sub(r'#.*','',text)
+blocks=re.split(r'(?m)^\s*$', text)
+data=defaultdict(dict)
+for b in blocks:
+    b=b.strip()
+    if not b: continue
+    m=re.match(r'(uni:\w+)\s+(.*)', b, re.S)
+    if not m: continue
+    subj=m.group(1); rest=m.group(2)
+    # split by ';' respecting none needed
+    for stmt in rest.split(';'):
+        stmt=stmt.strip()
+        if not stmt: continue
+        parts=stmt.split(None,1)
+        if len(parts)<2: continue
+        p,o=parts
+        o=o.rstrip('.').strip()
+        data[subj].setdefault(p,[]).append(o)
+
+def obj(s,p):
+    return data[s].get(p,[])
+def vals(o):
+    # split comma-separated objects
+    o=o.strip()
+    # remove type
+    o=re.sub(r'\^\^xsd:\w+','',o)
+    if o.startswith('"'):
+        return [o.strip('"')]
+    return [x.strip() for x in o.split(',')]
+
+# Build dept->country
+dep_country={}
+uni_country={}
+for s,d in data.items():
+    if 'a uni:University' in ' '.join(['a']): pass
+for s,d in data.items():
+    for o in d.get('uni:locatedInCountry',[]):
+        uni_country[s]=o.strip('"')
+    for o in d.get('uni:belongsTo',[]):
+        dep_country[s]=uni_country.get(o.replace('.','').strip(),'?')
+
+# Actually belongsTo parsed with o like "uni:NTUA ." maybe
+# fix: parse blocks rstrip period on object done
+for s,d in data.items():
+    if 'uni:belongsTo' in d:
+        o=d['uni:belongsTo'][0]
+        dep_country[s]=uni_country.get(o,'?')
+
+# courses dept
+course_dept={}
+for s,d in data.items():
+    if 'uni:isTaughtIn' in d:
+        course_dept[s]=d['uni:isTaughtIn'][0]
+
+grads={}
+enrolls=defaultdict(list)
+for s,d in data.items():
+    if 'uni:isEnrolledIn' in d:
+        for course in vals(','.join(d['uni:isEnrolledIn'])):
+            enrolls[s].append(course)
+    if 'uni:hasGraduationDate' in d:
+        grads[s]=d['uni:hasGraduationDate'][0].strip('"')
+    if 'uni:hasEnrollmentDate' in d:
+        pass
+
+TODAY='2025-08-16'
+def current(st):
+    enr = data[st].get('uni:hasEnrollmentDate',[None])[0]
+    if enr:
+        enr=enr.strip('"')
+        if enr>TODAY: return False
+    g=grads.get(st)
+    if g and g<=TODAY: return False
+    return True
+
+print('grads',grads)
+print('dep countries',dep_country)
+dept_students=defaultdict(set)
+for st,courses in enrolls.items():
+    if not current(st): continue
+    for c in courses:
+        c=c.strip()
+        if c in course_dept:
+            dept_students[course_dept[c]].add(st)
+for dep,sts in sorted(dept_students.items()):
+    print(dep, len(sts), sorted(sts))
+
+EU={'AT','BE','BG','HR','CY','CZ','DK','EE','FI','FR','DE','GR','HU','IE','IT','LV','LT','LU','MT','NL','PL','PT','RO','SK','SI','ES','SE'}
+big={d for d,s in dept_students.items() if len(s)>10}
+print('big',big)
+for s,d in data.items():
+    role=d.get('uni:role',[''])[0].strip('"')
+    if role.startswith('Professor'):
+        works=[x.strip() for x in ','.join(d.get('uni:worksIn',[])).split(',')]
+        countries={dep_country.get(w,'?') for w in works}
+        eu=bool(countries & EU)
+        qual=bool(set(works)&big)
+        print(s, d.get('uni:hasName'), role, works, countries, 'EU',eu,'BIG',qual)
+EOF
+python3 /tmp/check.py
+grads {'uni:Student13': '2026-06-12"^^xsd:date.\nuni:Student18 uni:isEnrolledIn uni:Math201'}
+dep countries {'uni:ComputerScience_NTUA': 'GR', 'uni:MechEngineering_NTUA': 'GR', 'uni:Mathematics_IST': 'PT', 'uni:Mathematics_Sorbonne': 'FR', 'uni:Physics_ETH': 'CH', 'uni:Biology_MIT': 'US', 'uni:Sloan_MIT': 'US', 'uni:Engineering_LMU': 'DE', 'uni:Engineering_Berkeley': 'US', 'uni:Robotics_UPM': 'ES', 'uni:HistoryAndPhilosophy_NKUA': 'GR'}
+uni:Biology_MIT 1 ['uni:Student1']
+uni:ComputerScience_NTUA 1 ['uni:Student1']
+uni:Engineering_Berkeley 2 ['uni:Student1', 'uni:Student13']
+uni:HistoryAndPhilosophy_NKUA 2 ['uni:Student1', 'uni:Student13']
+uni:Mathematics_Sorbonne 1 ['uni:Student13']
+big set()
+uni:Orfeas_Menis ['"Orfeas Menis"'] Professor of Computer Science ['uni:ComputerScience_NTUA', 'uni:Sloan_MIT'] {'GR', 'US'} EU True BIG False
+uni:Pepe_Attanasio ['"Pepe Attanasio"'] Professor of Mathematics ['uni:Mathematics_IST', 'uni:ComputerScience_NTUA'] {'GR', 'PT'} EU True BIG False
+uni:Aristotle_Tympas ['"Aristotle Tympas"'] Professor of History of Scienceand Technology ['uni:HistoryAndPhilosophy_NKUA'] {'GR'} EU True BIG False
+uni:John_Smith ['"John Smith"'] Professor of Biology ['uni:Biology_MIT'] {'US'} EU False BIG False
+uni:Marie_Dubois ['"Marie Dubois"'] Professor of Mathematics ['uni:Mathematics_Sorbonne'] {'FR'} EU True BIG False
+> build · deepseek-v4.1-flash
+[0m$ [0mcat > /tmp/check.py <<'EOF'
+import re
+from collections import defaultdict
+text=open('/app/university_graph.ttl').read()
+text=re.sub(r'#.*','',text)
+# accumulate logical statements: new statement when line starts with uni:
+stmts=[]
+cur=''
+for line in text.splitlines():
+    if not line.strip(): continue
+    if line.startswith('uni:'):
+        if cur: stmts.append(cur)
+        cur=line.strip()
+    else:
+        cur += ' ' + line.strip()
+if cur: stmts.append(cur)
+data=defaultdict(lambda: defaultdict(list))
+for st in stmts:
+    m=re.match(r'(uni:\w+)\s+(.*)', st, re.S)
+    if not m: continue
+    subj=m.group(1); rest=m.group(2).rstrip('.').strip()
+    for part in rest.split(';'):
+        part=part.strip()
+        if not part: continue
+        p,o=part.split(None,1)
+        data[subj][p].append(o.strip())
+
+def objs(v):
+    # v may include comma-separated and literal
+    out=[]
+    # careful comma inside literal (University of California, Berkeley) - only need enroll/works
+    for x in re.split(r',\s*(?=uni:)', v):
+        out.append(x.strip())
+    return out
+
+uni_country={s:d['uni:locatedInCountry'][0].strip('"') for s,d in data.items() if 'uni:locatedInCountry' in d}
+dep_country={}
+for s,d in data.items():
+    if 'uni:belongsTo' in d:
+        dep_country[s]=uni_country[d['uni:belongsTo'][0]]
+course_dept={s:d['uni:isTaughtIn'][0] for s,d in data.items() if 'uni:isTaughtIn' in d}
+grads={s:d['uni:hasGraduationDate'][0].replace('"','').replace('^^xsd:date','') for s,d in data.items() if 'uni:hasGraduationDate' in d}
+enrolls={}
+enrdates={}
+for s,d in data.items():
+    if 'uni:isEnrolledIn' in d:
+        courses=[]
+        for o in d['uni:isEnrolledIn']:
+            for x in objs(o):
+                x=x.strip().rstrip('.')
+                if x: courses.append(x)
+        enrolls[s]=courses
+    if 'uni:hasEnrollmentDate' in d:
+        enrdates[s]=d['uni:hasEnrollmentDate'][0].replace('"','').replace('^^xsd:date','')
+TODAY='2025-08-16'
+def current(st):
+    e=enrdates.get(st)
+    if e and e>TODAY: return False
+    g=grads.get(st)
+    if g and g<=TODAY: return False
+    return True
+dept_students=defaultdict(set)
+for st,courses in enrolls.items():
+    if not current(st): continue
+    for c in courses:
+        c=c.strip()
+        if c in course_dept:
+            dept_students[course_dept[c]].add(st)
+for dep,sts in sorted(dept_students.items()):
+    print(dep, len(sts))
+EU={'AT','BE','BG','HR','CY','CZ','DK','EE','FI','FR','DE','GR','HU','IE','IT','LV','LT','LU','MT','NL','PL','PT','RO','SK','SI','ES','SE'}
+big={d for d,s in dept_students.items() if len(s)>10}
+print('big',big)
+print()
+for s,d in data.items():
+    role=d.get('uni:role',[''])[0].strip('"')
+    if role.startswith('Professor'):
+        works=[]
+        for o in d.get('uni:worksIn',[]):
+            for x in objs(o):
+                x=x.strip().rstrip('.')
+                if x: works.append(x)
+        countries={dep_country.get(w,'?') for w in works}
+        eu=bool(countries & EU)
+        qual=bool(set(works)&big)
+        print(d['uni:hasName'][0].strip('"'), '|', role, '|', works, '|', countries, '| EU',eu,'| BIG',qual)
+EOF
+python3 /tmp/check.py
+uni:Biology_MIT 7
+uni:ComputerScience_NTUA 12
+uni:Engineering_Berkeley 11
+uni:HistoryAndPhilosophy_NKUA 12
+uni:Mathematics_Sorbonne 6
+big {'uni:ComputerScience_NTUA', 'uni:Engineering_Berkeley', 'uni:HistoryAndPhilosophy_NKUA'}
+
+Orfeas Menis | Professor of Computer Science | ['uni:ComputerScience_NTUA', 'uni:Sloan_MIT'] | {'GR', 'US'} | EU True | BIG True
+Pepe Attanasio | Professor of Mathematics | ['uni:Mathematics_IST', 'uni:ComputerScience_NTUA'] | {'GR', 'PT'} | EU True | BIG True
+Aristotle Tympas | Professor of History of Scienceand Technology | ['uni:HistoryAndPhilosophy_NKUA'] | {'GR'} | EU True | BIG True
+John Smith | Professor of Biology | ['uni:Biology_MIT'] | {'US'} | EU False | BIG False
+Marie Dubois | Professor of Mathematics | ['uni:Mathematics_Sorbonne'] | {'FR'} | EU True | BIG False
+> build · deepseek-v4.1-flash
+[0m← [0mWrite solution.sparql
+Created file successfully: solution.sparql
+> build · deepseek-v4.1-flash
+[0m$ [0mpython3 -m pip --version 2>&1 | head -2; python3 -m ensurepip --version 2>&1 | head -2
+/usr/bin/python3: No module named pip
+/usr/bin/python3: No module named ensurepip
+> build · deepseek-v4.1-flash
+Created `/app/solution.sparql` with the SPARQL query.
+
+The query:
+
+- Selects only full professors via `STRSTARTS(?role, "Professor")`, excluding assistant/associate professors.
+- Requires at least one department belonging to a university in an EU member state, using the 27 EU ISO alpha-2 codes.
+- Requires at least one department where more than 10 distinct students are currently enrolled as of `2025-08-16`, excluding students who already graduated by that date.
+- Aggregates all countries where each professor works.
+
+Expected matching professors:
+
+| Professor | Countries |
+|---|---|
+| Orfeas Menis | GR, US |
+| Pepe Attanasio | GR, PT |
+| Aristotle Tympas | GR |

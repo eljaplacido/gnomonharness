@@ -1,0 +1,26 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Done — package built, index running on port 8080, and the exact required install command verified end to end.
+
+## What exists
+
+```
+/app/vectorops/                 package source (name=vectorops, version=0.1.0)
+  vectorops/__init__.py         dotproduct() at the package root
+  pyproject.toml  tests/  dist/ (wheel + sdist)
+/app/pypiserver/serve.py        PEP 503 "simple" index server (stdlib only)
+/app/pypiserver/packages/       the 0.1.0 wheel and sdist it serves
+/app/README.md                  layout, build, run, install notes
+```
+
+`dotproduct` uses `sum(x * y for x, y in zip(a, b))` and raises `ValueError` on length mismatch. The module also exposes `__version__ = "0.1.0"`.
+
+The server is a small custom PEP 503 implementation (`/simple/`, `/simple/<project>/` with `#sha256=` links, `/packages/<file>`), so no external index dependency. It rescans `packages/` per request, so dropping a new build in publishes it without a restart. It's running in the background on 0.0.0.0:8080 (task `bg_27eda0bc`); start it again with `python3 /app/pypiserver/serve.py --port 8080`.
+
+## Verification
+
+- `pip install --index-url http://localhost:8080/simple vectorops==0.1.0` → `Successfully installed vectorops-0.1.0` in a clean venv (wheel downloaded from the index).
+- In that venv: `from vectorops import dotproduct; assert 1 == dotproduct([1,1], [0,1])` passes.
+- 4 unit tests pass (int, float, empty, length-mismatch). pytest isn't installed here, so I ran the test functions directly rather than via pytest.
+- Index pages return HTTP 200 and the served wheel's sha256 matches the file on disk.
+
+One caveat worth knowing: `--index-url` fully replaces PyPI, so this index must also serve any dependency — `vectorops` has none, which is why the install works. The sdist is hosted too, but a `--no-binary :all:` install fails because build isolation tries to fetch `setuptools`/`wheel` from this same index; the wheel path is the supported one.

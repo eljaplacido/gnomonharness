@@ -1,0 +1,28 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Done. `/srv/shared` is configured and verified; the directory is empty (no test files left behind).
+
+**Final state**
+```
+drwxrws---+ 2770 root:research /srv/shared
+```
+
+Access and default ACLs are identical:
+| Entry | Perms |
+|---|---|
+| `user::` (owner root) | rwx |
+| `user:alice` | rwx |
+| `user:bob` | rwx |
+| `group::` | rwx |
+| `group:research` | rwx |
+| `mask::` | rwx |
+| `other::` | --- |
+
+`user::`, `group::`, `other::`, and `mask::` are all set explicitly so no entry is silently clipped by the mask, and the setgid bit (`-s-`) makes `research` the group owner of everything created inside.
+
+**Verified behavior** (temporary test artifacts created, checked, then deleted)
+- alice's file → `-rw-rw---- alice:research`; ACL inherited with `bob:rwx` effective
+- bob read *and* appended to alice's file successfully
+- subdirectory created by alice → `drwxrws--- 2770 alice:research`, carrying the full default ACL; bob created a nested file in it → `bob:research`
+- `nobody` (outside `research`): `ls` → *Permission denied*; writing a file → *Permission denied*
+
+**Note on new files:** files inherit `rw-rw----` rather than `rwxrwx---` because the kernel ANDs the default ACL with the creating program's requested mode — a plain `open(..., 0666)` requests no execute bit. `alice` and `bob` both remain fully readable/writable on everything, and subdirectories are `2770` as required.

@@ -1,0 +1,29 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Done. All three deliverables are in place and verified.
+
+**Filter used**
+```jq
+map(select(.status == "active"))
+| map({
+    user_id: .id,
+    username: .username,
+    email: .email,
+    last_login: (.last_login | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | strftime("%Y-%m-%d")),
+    role_count: (.roles | length),
+    primary_role: (.roles[0] // null)
+  })
+| sort_by(.username)
+```
+
+**Files**
+- `/app/active_users_report.json` — 346 active users, 2-space indented, sorted by `username` ascending.
+- `/app/cmd.sh` — the exact executed command: `jq --indent 2 '<filter>' /app/users.json > /app/active_users_report.json`.
+- `/app/jq_args.yaml` — `filter` (single-quoted YAML scalar so `\.` survives) plus `args: ["--indent 2"]`.
+
+**Verification**
+- Rebuilding via `jq $(yq -r '.args[]' /app/jq_args.yaml) "$(yq -r '.filter' /app/jq_args.yaml) /app/users.json` produced byte-identical output (`diff` clean).
+- Output user_id set equals exactly the `status == "active"` id set (346 of 500; 98 inactive, 56 pending excluded).
+- All `last_login` values match `^\d{4}-\d{2}-\d{2}$`; all usernames are in sorted order.
+- 50 users have empty `roles` and yield JSON `null` for `primary_role`; no mismatches between `role_count == 0` and null `primary_role`.
+
+One note on the date parsing: jq 1.6's `fromdateiso8601` rejects fractional seconds, so the filter strips `.<fraction>Z` → `Z` before parsing, converting through `strftime` rather than truncating the string.

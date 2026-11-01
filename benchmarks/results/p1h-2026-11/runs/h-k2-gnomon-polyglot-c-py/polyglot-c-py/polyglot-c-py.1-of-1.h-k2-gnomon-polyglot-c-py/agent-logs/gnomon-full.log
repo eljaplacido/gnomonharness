@@ -1,0 +1,346 @@
+  │ I'll start by checking the repository layout and the target directory.
+[approval] bash: ls -la /app 2>/dev/null; echo "---"; ls -la /app/polyglot 2>/dev/null; echo "---"; python3 --version; gcc --version | head -1 — approved
+  ⚙ bash ls -la /app 2>/dev/null; echo "---"; ls -la /app/polyglot 2>/dev/null;…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: pwd; ls -la — approved
+  ⚙ bash pwd; ls -la
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  │ Repo root is `/app` and `/app/polyglot` doesn't exist yet. Let me set up …
+  deepseek-v4.1-flash — 3 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 0/4 done · Create /app/polyglot directory
+[approval] bash: mkdir -p /app/polyglot && ls -la /app/polyglot — approved
+  ⚙ bash mkdir -p /app/polyglot && ls -la /app/polyglot
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ Directory created. Now I'll write the polyglot — Python sees the C code i…
+[approval] write polyglot/main.py.c (+87 −0) [new file] — approved
+  ⚙ write polyglot/main.py.c
+    ✓ write polyglot/main.py.c (+87 −0)
+  deepseek-v4.1-flash — 5 tool call(s) so far
+  │ Now let me run both paths, starting with Python.
+[approval] bash: cd /app/polyglot && for n in 0 1 2 3 4 5 6 7 8 9 10 20 50 100; do printf '%s -> ' "$n"; python3 main.py.c "$n"; done — approved
+  ⚙ bash cd /app/polyglot && for n in 0 1 2 3 4 5 6 7 8 9 10 20 50 100; do prin…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+[approval] bash: cd /app/polyglot && gcc -Wall -Wextra -o cmain main.py.c > gcc.log 2>&1; echo "gcc exit=$?"; cat gcc.log — approved
+  ⚙ bash cd /app/polyglot && gcc -Wall -Wextra -o cmain main.py.c > gcc.log 2>&…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+  │ Python works. C fails on the shebang line (`#!` is not a valid C directiv…
+[approval] bash: cd /app/polyglot && python3 - <<'EOF'
+p = 'main.py.c'
+s = open(p).read()
+assert s.startswith('#!/usr/bin/env python3\n'), repr(s[:40])
+s = s[len('#!/usr/bin/env python3\n'):]
+open(p, 'w').write(s)
+print(open(p).read()[:120])
+EOF — approved
+  ⚙ bash cd /app/polyglot && python3 - <<'EOF' p = 'main.py.c' s = open(p).read…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+[approval] bash: cd /app/polyglot && gcc -Wall -Wextra -o cmain main.py.c > gcc.log 2>&1; echo "gcc exit=$?"; cat gcc.log — approved
+  ⚙ bash cd /app/polyglot && gcc -Wall -Wextra -o cmain main.py.c > gcc.log 2>&…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: cd /app/polyglot && for n in 0 1 2 5 10 20 50 100; do printf '%s py=' "$n"; python3 main.py.c "$n" | tr -d '\n'; printf ' c='; ./cmain "$n" 2>/dev/null || echo "(no binary yet)"; done — approved
+  ⚙ bash cd /app/polyglot && for n in 0 1 2 5 10 20 50 100; do printf '%s py=' …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+  │ Both paths work, but gcc emits warnings about the `'''` lines. Let me eli…
+[approval] write polyglot/main.py.c (+16 −15) — approved
+  ⚙ write polyglot/main.py.c
+    ✓ write polyglot/main.py.c (+16 −15)
+  deepseek-v4.1-flash — 11 tool call(s) so far
+[approval] bash: cd /app/polyglot && rm -f cmain gcc.log && gcc -Wall -Wextra -o cmain main.py.c > gcc.log 2>&1; echo "gcc exit=$?"; echo "--- warnings/errors ---"; cat gcc.log; echo "--- end ---" — approved
+  ⚙ bash cd /app/polyglot && rm -f cmain gcc.log && gcc -Wall -Wextra -o cmain …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+[approval] bash: cd /app/polyglot && python3 -c "
+import subprocess,sys
+for n in [0,1,2,3,5,10,77,100]:
+    p=subprocess.run([sys.executable,'main.py.c',str(n)],capture_output=True,text=True)
+    print(n, 'rc=%d'%p.returncode, 'py=%r'%p.stdout, 'err=%r'%p.stderr)
+" — approved
+  ⚙ bash cd /app/polyglot && python3 -c " import subprocess,sys for n in [0,1,2…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  │ Clean compile with `-Wall -Wextra`, and Python output is right. Now a rig…
+[approval] bash: cd /app/polyglot && python3 - <<'EOF'
+import subprocess, sys
+
+def ref(n):  # independent reference: matrix exponentiation
+    def mul(A,B):
+        return [[A[0][0]*B[0][0]+A[0][1]*B[1][0], A[0][0]*B[0][1]+A[0][1]*B[1][1]],
+                [A[1][0]*B[0][0]+A[1][1]*B[1][0], A[1][0]*B[0][1]+A[1][1]*B[1][1]]]
+    R=[[1,0],[0,1]]; M=[[1,1],[1,0]]; e=n
+    while e:
+        if e&1: R=mul(R,M)
+        M=mul(M,M); e>>=1
+    return R[0][1]
+
+ns = list(range(0,401)) + [500, 1000, 2000, 5000]
+bad = 0
+for n in ns:
+    py = subprocess.run([sys.executable,'main.py.c',str(n)],capture_output=True,text=True)
+    c  = subprocess.run(['./cmain',str(n)],capture_output=True,text=True)
+    if py.returncode or c.returncode:
+        print('FAIL rc', n, py.returncode, c.returncode, py.stderr, c.stderr); bad+=1; continue
+    a, b, r = py.stdout.strip(), c.stdout.strip(), str(ref(n))
+    if not (a == b == r):
+        print('MISMATCH n=%d py=%s c=%s ref=%s' % (n,a[:40],b[:40],r[:40])); bad+=1
+print('checked %d values, mismatches=%d' % (len(ns), bad))
+EOF — approved
+  ⚙ bash cd /app/polyglot && python3 - <<'EOF' import subprocess, sys def ref(n…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+  │ All 405 values agree across Python, C, and an independent reference. Now …
+[approval] bash: cd /tmp && rm -f /app/polyglot/cmain && echo "== python3 ==" && python3 /app/polyglot/main.py.c 30 && echo "== gcc+run ==" && gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cmain 30 — approved
+  ⚙ bash cd /tmp && rm -f /app/polyglot/cmain && echo "== python3 ==" && python…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 15 tool call(s) so far
+[approval] bash: cd /app/polyglot && echo "== large N ==" && for n in 1000 5000 10000; do p=$(python3 main.py.c $n); c=$(./cmain $n); if [ "$p" = "$c" ]; then echo "n=$n OK digits=${#p}"; else echo "n=$n MISMATCH"; fi; done; echo "== no-arg behaviour ==" ; python3 main.py.c; echo "py rc=$?"; ./cmain; echo "c rc=$?" — approved
+  ⚙ bash cd /app/polyglot && echo "== large N ==" && for n in 1000 5000 10000; …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+  │ Everything matches through 10000 digits. Let me check the overflow guard,…
+[approval] bash: cd /app/polyglot && echo "== negative ==" && python3 main.py.c -- -5 2>/dev/null || python3 -c "
+import subprocess,sys
+print('py:',subprocess.run([sys.executable,'main.py.c','-5'],capture_output=True,text=True).stdout.strip())
+print('c :',subprocess.run(['./cmain','-5'],capture_output=True,text=True).stdout.strip())
+"; echo "== guard trip point ==" ; ./cmain 400000; echo "c rc=$?"; python3 main.py.c 400000 | cut -c1-20; echo "py ok" — approved
+  ⚙ bash cd /app/polyglot && echo "== negative ==" && python3 main.py.c -- -5 2…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 17 tool call(s) so far
+[approval] bash: cd /app/polyglot && for std in c89 c99 c11 c17 gnu17; do printf '%-6s ' "$std"; gcc -std=$std -Wall -Wextra -o t_$std main.py.c 2>&1 | head -5; printf 'exit='; gcc -std=$std -Wall -Wextra -o t_$std main.py.c >/dev/null 2>&1; echo "$? out=$(./t_$std 25)"; done; rm -f t_c89 t_c99 t_c11 t_c17 t_gnu17 — approved
+  ⚙ bash cd /app/polyglot && for std in c89 c99 c11 c17 gnu17; do printf '%-6s …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 18 tool call(s) so far
+  │ Two issues surfaced: the `//` comment breaks under `-std=c89`, and Python…
+[approval] write polyglot/main.py.c (+23 −15) — approved
+  ⚙ write polyglot/main.py.c
+    ✓ write polyglot/main.py.c (+23 −15)
+  deepseek-v4.1-flash — 19 tool call(s) so far
+  │ Wait, the floating point estimate 0.208987... = log10(phi). Using double …
+  │ But actually, using floating point for sizes is a bit fragile. Alternativ…
+  │ Hmm, but there's a subtlety: is 0.20898764024997873 exactly log10(phi)? l…
+  │ … 7 more line(s) — /think show for all
+[approval] bash: cd /app/polyglot && rm -f cmain && gcc -Wall -Wextra -o cmain main.py.c > g.log 2>&1; echo "gcc exit=$? (empty log follows)"; cat g.log; echo "== std sweep =="; for std in c89 c99 c11 c17 gnu17 gnu99; do gcc -std=$std -Wall -Wextra -o t main.py.c > e.log 2>&1; echo "$std exit=$? warns=$(wc -c < e.log) out=$(./t 25)"; done; rm -f t e.log — approved
+  ⚙ bash cd /app/polyglot && rm -f cmain && gcc -Wall -Wextra -o cmain main.py.…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 20 tool call(s) so far
+[approval] bash: cd /app/polyglot && for n in 0 1 2 10 45 46 92 93 1000 20000 50000; do p=$(python3 main.py.c $n) || { echo "n=$n PY FAIL"; continue; }; c=$(./cmain $n) || { echo "n=$n C FAIL"; continue; }; if [ "$p" = "$c" ]; then echo "n=$n OK digits=${#p}"; else echo "n=$n MISMATCH"; fi; done — approved
+  ⚙ bash cd /app/polyglot && for n in 0 1 2 10 45 46 92 93 1000 20000 50000; do…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 21 tool call(s) so far
+  │ The C side is clean across all standards, but I broke Python: `/*` on lin…
+[approval] write polyglot/main.py.c (+5 −2) — approved
+  ⚙ write polyglot/main.py.c
+    ✓ write polyglot/main.py.c (+5 −2)
+  deepseek-v4.1-flash — 22 tool call(s) so far
+  │ The comment on line 45 `/* limbs needed ~ n * log10(phi) / 9, with slack …
+  │ Now test both.
+[approval] bash: cd /app/polyglot && echo "== python ==" && for n in 0 1 2 10 100; do printf '%s -> ' $n; python3 main.py.c $n; done; echo "== gcc ==" && gcc -Wall -Wextra -o cmain main.py.c > g.log 2>&1; echo "gcc exit=$? log_bytes=$(wc -c < g.log)"; cat g.log — approved
+  ⚙ bash cd /app/polyglot && echo "== python ==" && for n in 0 1 2 10 100; do p…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 23 tool call(s) so far
+  │ One warning remains — an apostrophe in a Python comment. Let me look at t…
+[approval] bash: cd /app/polyglot && sed -n '66,84p' main.py.c | cat -A | sed -n '1,20p' | cut -c1-100 — approved
+  ⚙ bash cd /app/polyglot && sed -n '66,84p' main.py.c | cat -A | sed -n '1,20p…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 24 tool call(s) so far
+[approval] bash: cd /tmp && rm -rf pt && mkdir pt && cd pt && printf '#if 0 /*\n%s\n*/\n#endif\n\nint main(void){return 0;}\n\n/*%s#*/\n#if 0\n# comment with 11+%ss apostrophe\n#endif\n' "'''" "'''" "'" > a.c && cat a.c && echo "--- compile ---" && gcc -Wall -Wextra -o a a.c; echo "exit=$?" — approved
+  ⚙ bash cd /tmp && rm -rf pt && mkdir pt && cd pt && printf '#if 0 /*\n%s\n*/\…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 25 tool call(s) so far
+  │ Confirmed: gcc warns on unterminated quotes even inside `#if 0`. The fix …
+[approval] edit polyglot/main.py.c (+2 −1) — approved
+  ⚙ edit polyglot/main.py.c
+    ✓ edit polyglot/main.py.c (+2 −1)
+  deepseek-v4.1-flash — 26 tool call(s) so far
+[approval] bash: cd /app/polyglot && rm -f cmain && gcc -Wall -Wextra -o cmain main.py.c > g.log 2>&1; echo "gcc exit=$? log_bytes=$(wc -c < g.log)"; cat g.log; echo "== std sweep =="; for std in c89 c99 c11 c17 gnu89 gnu17; do gcc -std=$std -Wall -Wextra -pedantic -o t main.py.c > e.log 2>&1; echo "$std exit=$? warns=$(wc -c < e.log) out=$(./t 30)"; done; rm -f t e.log — approved
+  ⚙ bash cd /app/polyglot && rm -f cmain && gcc -Wall -Wextra -o cmain main.py.…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 27 tool call(s) so far
+[approval] bash: cd /app/polyglot && for n in 0 1 2 10 1000 20000 50000; do p=$(python3 main.py.c $n) || { echo "n=$n PY FAIL"; continue; }; c=$(./cmain $n) || { echo "n=$n C FAIL"; continue; }; if [ "$p" = "$c" ]; then echo "n=$n OK digits=${#p}"; else echo "n=$n MISMATCH"; fi; done — approved
+  ⚙ bash cd /app/polyglot && for n in 0 1 2 10 1000 20000 50000; do p=$(python3…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 28 tool call(s) so far
+  │ Zero warnings under `-Wall -Wextra -pedantic` across all standards, and l…
+[approval] bash: cd /app/polyglot && python3 - <<'EOF'
+import subprocess, sys
+
+def ref(n):  # independent: fast-doubling identities
+    def fd(n):
+        if n == 0: return (0, 1)
+        a, b = fd(n >> 1)
+        c = a * (2*b - a)
+        d = a*a + b*b
+        return (d, c+d) if n & 1 else (c, d)
+    return fd(n)[0]
+
+ns = list(range(0, 501)) + [1000, 1234, 2000, 3000, 5000, 10000, 20000, 50000]
+bad = 0
+for n in ns:
+    py = subprocess.run([sys.executable,'main.py.c',str(n)],capture_output=True,text=True)
+    c  = subprocess.run(['./cmain',str(n)],capture_output=True,text=True)
+    if py.returncode or c.returncode:
+        print('FAIL rc n=%d py=%d c=%d %r %r' % (n, py.returncode, c.returncode, py.stderr[:80], c.stderr[:80])); bad+=1; continue
+    a, b, r = py.stdout.strip(), c.stdout.strip(), str(ref(n))
+    if not (a == b == r):
+        print('MISMATCH n=%d' % n); bad+=1
+print('checked %d values (both languages, vs independent ref), failures=%d' % (len(ns), bad))
+EOF — approved
+  ⚙ bash cd /app/polyglot && python3 - <<'EOF' import subprocess, sys def ref(n…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 29 tool call(s) so far
+  │ My test harness hit the digit cap (not the program). Fixing the harness:
+[approval] bash: cd /app/polyglot && python3 - <<'EOF'
+import subprocess, sys
+sys.set_int_max_str_digits(0)
+
+def ref(n):  # independent: fast-doubling identities
+    def fd(n):
+        if n == 0: return (0, 1)
+        a, b = fd(n >> 1)
+        c = a * (2*b - a)
+        d = a*a + b*b
+        return (d, c+d) if n & 1 else (c, d)
+    return fd(n)[0]
+
+ns = list(range(0, 501)) + [1000, 1234, 2000, 3000, 5000, 10000, 20000, 50000]
+bad = 0
+for n in ns:
+    py = subprocess.run([sys.executable,'main.py.c',str(n)],capture_output=True,text=True)
+    c  = subprocess.run(['./cmain',str(n)],capture_output=True,text=True)
+    if py.returncode or c.returncode:
+        print('FAIL rc n=%d py=%d c=%d %r %r' % (n, py.returncode, c.returncode, py.stderr[:80], c.stderr[:80])); bad+=1; continue
+    a, b, r = py.stdout.strip(), c.stdout.strip(), str(ref(n))
+    if not (a == b == r):
+        print('MISMATCH n=%d' % n); bad+=1
+print('checked %d values (both languages vs independent ref), failures=%d' % (len(ns), bad))
+EOF — approved
+  ⚙ bash cd /app/polyglot && python3 - <<'EOF' import subprocess, sys sys.set_i…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 30 tool call(s) so far
+  │ All 509 values agree in both languages. Now the exact commands from the r…
+[approval] bash: cd /tmp && rm -rf /app/polyglot/cmain /app/polyglot/g.log && echo "--- python3 path ---" && python3 /app/polyglot/main.py.c 20 && echo "--- gcc + run path ---" && gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cmain 20 && echo "--- byte-identical? ---" && python3 /app/polyglot/main.py.c 20 > p.out && /app/polyglot/cmain 20 > c.out && cmp p.out c.out && echo "identical" && od -c p.out | head -2 — approved
+  ⚙ bash cd /tmp && rm -rf /app/polyglot/cmain /app/polyglot/g.log && echo "---…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 31 tool call(s) so far
+[approval] bash: cd /app/polyglot && echo "== edge cases ==" && for arg in "-1" "0x10" " 7" "12 "; do printf 'arg=[%s] py=' "$arg"; python3 main.py.c "$arg" 2>&1 | head -1 | tr -d '\n'; printf ' c='; ./cmain "$arg" 2>&1 | head -1; done; echo "== no arg =="; python3 main.py.c >/dev/null 2>&1; echo "py rc=$?"; ./cmain >/dev/null 2>&1; echo "c rc=$?"; echo "== first line of file =="; head -1 main.py.c — approved
+  ⚙ bash cd /app/polyglot && echo "== edge cases ==" && for arg in "-1" "0x10" …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 32 tool call(s) so far
+  [tools] 32/256 calls — continuing (leg 2)
+  deepseek-v4.1-flash — leg 2, 32 call(s) so far
+  │ Both invocation paths produce byte-identical output. The only divergence …
+  deepseek-v4.1-flash — 33 tool call(s) so far
+  ⚙ read polyglot/main.py.c
+    ✓ read polyglot/main.py.c — 99 lines
+  │ The file is clean. Let me stress-test the size estimate at larger N and c…
+[approval] bash: cd /app/polyglot && python3 - <<'EOF'
+import subprocess, sys, time
+sys.set_int_max_str_digits(0)
+for n in [99999, 100000, 123457, 200000, 500000]:
+    t=time.time()
+    py = subprocess.run([sys.executable,'main.py.c',str(n)],capture_output=True,text=True)
+    c  = subprocess.run(['./cmain',str(n)],capture_output=True,text=True)
+    ok = py.returncode==0 and c.returncode==0 and py.stdout==c.stdout
+    print('n=%-7d digits=%-6d match=%s  pyerr=%r cerr=%r  (%.1fs)'
+          % (n, len(py.stdout.strip()), ok, py.stderr[:40], c.stderr[:40], time.time()-t))
+EOF — approved
+  ⚙ bash cd /app/polyglot && python3 - <<'EOF' import subprocess, sys, time sys…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 34 tool call(s) so far
+[approval] bash: cd /app && cat .gitignore; echo "--- gitattributes ---"; cat .gitattributes; echo "--- status ---"; git status --short 2>/dev/null | head -20 — approved
+  ⚙ bash cd /app && cat .gitignore; echo "--- gitattributes ---"; cat .gitattri…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 35 tool call(s) so far
+  │ Verified up to N=500000 (104,494 digits) with exact agreement. Now cleani…
+[approval] bash: cd /app/polyglot && rm -f p.out c.out g.log e.log cmain t && ls -la && echo "--- git ---" && cd /app && git status --short 2>&1 | head — approved
+  ⚙ bash cd /app/polyglot && rm -f p.out c.out g.log e.log cmain t && ls -la &&…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 36 tool call(s) so far
+[approval] bash: cd /app/polyglot && rm -f gcc.log && ls -la — approved
+  ⚙ bash cd /app/polyglot && rm -f gcc.log && ls -la
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 37 tool call(s) so far
+  │ Directory contains only the deliverable. Final end-to-end run of the two …
+[approval] bash: cd /tmp && rm -f /app/polyglot/cmain && set -e
+echo "### exact command 1"
+python3 /app/polyglot/main.py.c 10
+echo "### exact command 2"
+gcc /app/polyglot/main.py.c -o /app/polyglot/cmain
+/app/polyglot/cmain 10
+echo "### exit: both succeeded"
+ — approved
+  ⚙ bash cd /tmp && rm -f /app/polyglot/cmain && set -e echo "### exact command…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 38 tool call(s) so far
+  │ Both exact commands work. Final assertion sweep over the required contrac…
+[approval] bash: cd /tmp && python3 - <<'PY'
+import subprocess, sys
+sys.set_int_max_str_digits(0)
+
+def ref(n):
+    def fd(m):
+        if m == 0: return (0,1)
+        a,b = fd(m>>1); c = a*(2*b-a); d = a*a+b*b
+        return (d, c+d) if m&1 else (c,d)
+    return fd(n)[0]
+
+fails = []
+cases = list(range(0,101)) + [200, 500, 1000, 5000, 30000, 100000]
+for n in cases:
+    py = subprocess.run(['python3','/app/polyglot/main.py.c',str(n)],capture_output=True,text=True)
+    c  = subprocess.run(['/app/polyglot/cmain',str(n)],capture_output=True,text=True)
+    want = str(ref(n)) + '\n'
+    # contract: stdout exactly the kth Fibonacci number followed by newline
+    if py.returncode != 0 or py.stdout != want: fails.append(('py', n, py.returncode, py.stdout[:30]))
+    if c.returncode  != 0 or c.stdout  != want: fails.append(('c',  n, c.returncode,  c.stdout[:30]))
+print('cases:', len(cases), '| invocations:', 2*len(cases), '| failures:', len(fails))
+for f in fails[:5]: print('  FAIL', f)
+print('RESULT:', 'ALL PASS' if not fails else 'FAILURES')
+PY — approved
+  ⚙ bash cd /tmp && python3 - <<'PY' import subprocess, sys sys.set_int_max_str…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 39 tool call(s) so far
+[approval] bash: rm -f /app/polyglot/cmain; ls -la /app/polyglot — approved
+  ⚙ bash rm -f /app/polyglot/cmain; ls -la /app/polyglot
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 40 tool call(s) so far
+  deepseek-v4.1-flash — 41 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 4/4 done
+Done. `/app/polyglot/main.py.c` is a working Python/C polyglot (1,925 bytes).
+
+## How it works
+
+The file is arranged so each language sees the other's code as something to skip:
+
+| | Lines 1–5 | Line 74 | Lines 75–98 |
+|---|---|---|---|
+| **C** | `#if 0` block (skipped) | `/*'''#*/` = comment → `#` → comment | `#if 0` block (skipped) |
+| **Python** | `#` comment; `'''` opens a string | `'''` closes the string; `#*/` comment | real code, `#if 0` is a comment |
+
+Line 1 must be `#if 0 /*` rather than a shebang (`#!` is an invalid C directive) and rather than a bare `/*` (which Python can't parse) — that constraint drove the final layout.
+
+## Behaviour
+
+- **Python path**: plain big-int addition, so results are exact and unbounded. It calls `sys.set_int_max_str_digits(0)` to lift Python 3.11+'s 4300-digit `int`→`str` cap, which would otherwise crash around `N ≈ 20575`.
+- **C path**: base-10⁹ little-endian limb arithmetic with buffers sized from `N·log₁₀φ/9 + 4`, so it is exact for *any* N — no `unsigned long long` overflow at `N=93`, and no arbitrary output cap. Output is byte-identical to Python (zero-padded 9-digit limbs).
+
+## Verification
+
+- **Clean compile**: `gcc -Wall -Wextra -pedantic` → **0 warnings**, verified under `-std=c89/c99/c11/c17/gnu89/gnu17`. (Apostrophes inside the `#if 0` Python block *do* trigger `missing terminating '` warnings, so the Python section is deliberately apostrophe-free.)
+- **Correctness**: 509 values (`0`–`500` plus up to `N=50000`) checked in both languages against an independent fast-doubling reference — 0 failures.
+- **Scale**: exact Python/C agreement verified to `N=500000` (a 104,494-digit result).
+- **Contract test**: 214 invocations asserting stdout is exactly `f(N)\n` and exit code 0 — all pass. Output confirmed byte-identical via `cmp`/`od`.
+- **Edge cases**: `N=0` → `0`; negative → `0`; missing arg → usage on stderr, exit 2 in both languages.
+
+Two things worth flagging: the only behavioural divergence is malformed input like `0x10`, which C's `strtol` accepts as 16 while Python's `int()` rejects — outside the decimal-`N` contract. And the build artifact `cmain` is intentionally absent, since your command creates it; I removed my test binaries so the directory holds only the source.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=41 surface=9e36cdc3535a

@@ -1,0 +1,76 @@
+[?2004hroot@48af2d10f60a:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@48af2d10f60a:/app# clear
+[?2004l[H[J[3J[?2004hroot@48af2d10f60a:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@48af2d10f60a:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=7012c5a6d80516891b061cc0f07ac1724b6289a0
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793520690
+[?2004hroot@48af2d10f60a:/app# bash /opt/gnomon-run.sh 'Create a shared directory structure with Linux ACLs that demonstrates proper permission inheritance.
+[?2004l[?2004h> 
+[?2004l[?2004h> Requirements:
+[?2004l[?2004h> 1. Create directory /srv/shared with the following properties:
+[?2004l[?2004h>    - Owned by group "research" 
+[?2004l[?2004h>    - Set the setgid bit so new files inherit the group
+[?2004l[?2004h>    - Base permissions: 2770 (rwxrws---)
+[?2004l[?2004h> 
+[?2004l[?2004h> 2. Configure ACLs on /srv/shared:
+[?2004l[?2004h>    - Group "research": full rwx permissions (both current and default)
+[?2004l[?2004h>    - Users "alice" and "bob": full rwx permissions (both current and default)  
+[?2004l[?2004h>    - Others: no permissions (both current and default)
+[?2004l[?2004h>    - Set proper mask to allow full permissions
+[?2004l[?2004h> 
+[?2004l[?2004h> 3. The ACL configuration must ensure that:
+[?2004l[?2004h>    - Any file created by alice or bob in /srv/shared is accessible by both users
+[?2004l[?2004h>    - The permissions are inherited by subdirectories and files
+[?2004l[?2004h>    - Users outside the research group cannot access the directory or its contents
+[?2004l[?2004h> 
+[?2004l[?2004h> Note: Do NOT create any files in the directory. The tests will verify permission inheritance
+[?2004l[?2004h> by creating files during the testing phase.
+[?2004l[?2004h> END'; tmux wait -S done
+[?2004l# flags: -s-
+user::rwx          default:user::rwx
+user:alice:rwx     default:user:alice:rwx
+user:bob:rwx       default:user:bob:rwx
+group::rwx         default:group::rwx
+group:research:rwx default:group:research:rwx
+mask::rwx          default:mask::rwx
+other::---         default:other::---
+
+mode=2770 (drwxrws---) owner=root group=research
+entries inside: 0        <-- no files created, as required
+```
+
+## Verification (actually executed)
+
+```
+RESULT: PASS (0 failures)
+ok  : group = research / perms = drwxrws--- / setgid bit set
+ok  : all current + default ACL entries rwx, mask::rwx, other::---
+ok  : no unexpected named users/groups
+ok  : entries inside /srv/shared = 0
+ok  : alice can read+write a file bob created
+ok  : bob can read+write a file alice created in a subdir
+ok  : new file group = research      (setgid inheritance)
+ok  : new subdir mode has setgid = 2770 (recursive inheritance)
+ok  : outsider denied listing / denied reading
+```
+
+I proved the checker **bites** rather than passing vacuously: stripping the default ACL gave exit 1 with 10 failures; removing setgid and narrowing the mask to `r-x` gave exit 1 with 12 failures, including the `#effective:r-x` caps that would silently break alice/bob access. Restored afterwards, and re-running provisioning twice confirms it's idempotent.
+
+## Notes
+
+- **Inheritance was tested without touching `/srv/shared`.** The task forbids creating files there, so the probe copies the exact ACL onto a `mktemp -d` directory (verifying the two ACLs are byte-identical first) and creates files as alice/bob there. The real directory is only ever read.
+- **The `mask` is load-bearing, not decoration.** `setfacl -m` recomputes the mask; if it were left at `r-x` every named-user entry would be silently capped to read-only while `getfacl` still printed `rwx`. I set the mode *before* applying ACLs for this reason (chmod rewrites the mask) and re-assert `m::rwx` last.
+- **No `sudo` used or needed** — the session is already `uid=0`. My first call attempted `sudo -n true` out of habit and the harness refused it; I dropped it and continued directly.
+- **Outsider denial does not depend on the ACL alone.** `other::---` on the directory blocks traversal, so a non-`research` user cannot even reach files inside regardless of their own mode — that's what the `nobody` tests confirm.
+
+Two artifacts are in the repo root: `provision-shared-acl.sh` (idempotent, creates the state) and `verify-shared-acl.sh` (read-only against the real dir; `--probe-inheritance` adds the scratch-dir tests). One caveat worth flagging: `/` is an **overlayfs** volume, so these ACLs live in this container's writable layer and will not survive the container being recreated — re-run `./provision-shared-acl.sh` in any fresh environment.
+
+[refusal] role=implementor model=deepseek-v4.1-flash tools=27 surface=08138f62e950
+[?2004hroot@48af2d10f60a:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@48af2d10f60a:/app# 

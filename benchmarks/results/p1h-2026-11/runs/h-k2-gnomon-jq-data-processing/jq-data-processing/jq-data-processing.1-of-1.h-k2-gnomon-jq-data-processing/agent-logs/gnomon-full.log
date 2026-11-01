@@ -1,0 +1,176 @@
+  │ I'll start by inspecting the input data and environment.
+[approval] bash: ls -la /app/ 2>&1; echo "---"; head -c 2000 /app/users.json; echo; echo "---"; which jq yq; jq --version — approved
+  ⚙ bash ls -la /app/ 2>&1; echo "---"; head -c 2000 /app/users.json; echo; ech…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: pwd; ls -la — approved
+  ⚙ bash pwd; ls -la
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+[approval] bash: cd /app; jq 'length' users.json; jq -r 'map(.status) | unique | join(",")' users.json; echo "--- roles types"; jq -r 'map(.roles|type) | unique | join(",")' users.json; echo "--- last_login types / nulls"; jq -r '[.[] | select(.last_login == null)] | length' users.json; echo "--- last_login non-string"; jq -r '[.[] | select((.last_login|type) != "string")] | length' users.json; echo "--- distinct login formats"; jq -r '[.[].last_login] | map(. as $s | if test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]+Z$") then "frac" else . end) | unique | .[0:5] | .[]' users.json — approved
+  ⚙ bash cd /app; jq 'length' users.json; jq -r 'map(.status) | unique | join("…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: yq --version; echo "---"; jq --version; echo "--- keys"; cd /app; jq -r '[.[]|keys[]]|unique|join(",")' users.json; echo "--- empty roles count"; jq '[.[]|select((.roles|length)==0)]|length' users.json; echo "--- usernames unique?"; jq '[.[].username]|length - (unique|length)' users.json — approved
+  ⚙ bash yq --version; echo "---"; jq --version; echo "--- keys"; cd /app; jq -…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ Data inspected: 500 users, statuses include `pending` (excluded), all `la…
+[approval] bash: cd /app
+FILTER='[.[] | select(.status == "active")] | map({user_id: .id, username: .username, email: .email, last_login: (.last_login | .[0:10]), role_count: (.roles | length), primary_role: (.roles[0] // null)}) | sort_by(.username)'
+printf 'jq --indent 2 %s /app/users.json > /app/active_users_report.json\n' "'$FILTER'" > cmd.sh
+chmod +x cmd.sh
+cat cmd.sh — approved
+  ⚙ bash cd /app FILTER='[.[] | select(.status == "active")] | map({user_id: .i…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: cd /app
+cat > jq_args.yaml <<'EOF'
+filter: '[.[] | select(.status == "active")] | map({user_id: .id, username: .username, email: .email, last_login: (.last_login | .[0:10]), role_count: (.roles | length), primary_role: (.roles[0] // null)}) | sort_by(.username)'
+args:
+  - "--indent 2"
+EOF
+echo "=== yaml contents ==="; cat jq_args.yaml
+echo "=== yq parse check ==="
+yq -r '.filter' jq_args.yaml
+echo "--- args:"
+yq -r '.args[]' jq_args.yaml
+echo "--- keys:"
+yq -r 'keys | join(",")' jq_args.yaml — approved
+  ⚙ bash cd /app cat > jq_args.yaml <<'EOF' filter: '[.[] | select(.status == "…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+[approval] bash: cd /app
+echo "=== run cmd.sh ==="
+sh cmd.sh && echo "cmd.sh OK"
+cp active_users_report.json /tmp/from_cmd_sh.json
+echo "=== run constructed command from YAML ==="
+jq $(yq -r '.args[]' /app/jq_args.yaml) "$(yq -r '.filter' /app/jq_args.yaml)" /app/users.json > /tmp/from_yaml.json && echo "yaml command OK"
+echo "=== byte-identical? ==="
+cmp /tmp/from_cmd_sh.json /tmp/from_yaml.json && echo "IDENTICAL"
+cmp /app/active_users_report.json /tmp/from_yaml.json && echo "OUTPUT MATCHES YAML COMMAND RESULT"
+echo "=== artifact ==="; ls -l /app/active_users_report.json; head -30 /app/active_users_report.json — approved
+  ⚙ bash cd /app echo "=== run cmd.sh ===" sh cmd.sh && echo "cmd.sh OK" cp act…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: cd /app
+echo "=== 1. active count vs output length ==="
+act=$(jq '[.[]|select(.status=="active")]|length' users.json); out=$(jq 'length' active_users_report.json); echo "input active=$act output=$out"; [ "$act" = "$out" ] && echo "COUNT OK"
+echo "=== 2. all outputs are active users, field-for-field (independent rebuild via split) ==="
+jq -n --slurpfile u users.json --slurpfile o active_users_report.json '
+  ($u[0] | map(select(.status=="active"))) as $exp
+  | ($exp | sort_by([.username]) | map({user_id:.id, username, email,
+        last_login:(.last_login|split("T")[0]), role_count:(.roles|length),
+        primary_role:(if (.roles|length)>0 then .roles[0] else null end)})) as $e
+  | if $o[0] == $e then "CONTENT OK" else "CONTENT MISMATCH" end'
+echo "=== 3. no pending/inactive leaked ==="
+jq -n --slurpfile u users.json --slurpfile o active_users_report.json '
+  ($u[0] | map({key:.id, value:.status}) | from_entries) as $st
+  | [ $o[0][] | select($st[.user_id|tostring] != "active") ] | if length==0 then "STATUS FILTER OK" else "LEAK" end'
+echo "=== 4. sorted ascending by username (C locale sort) ==="
+jq -r '.[].username' active_users_report.json > /tmp/unsorted.txt
+LC_ALL=C sort /tmp/unsorted.txt > /tmp/sorted.txt
+cmp /tmp/unsorted.txt /tmp/sorted.txt && echo "SORT OK"
+echo "=== 5. key order + exact types + date format ==="
+jq -n --slurpfile o active_users_report.json '
+  ($o[0]) as $out
+  | [ $out[] | {k:(keys_unsorted|join(",")), t:([(.user_id|type),(.username|type),(.email|type),(.last_login|type),(.role_count|type),(.primary_role|type)]|join(",")), d:(.last_login|test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")), rc:(.role_count == (.primary_role!=null) + (if .role_count>1 then .role_count-1 else 0 end))} ] as $rows
+  | "keyorder variants: " + ([$rows[].k]|unique|join(" | ")),
+    "types variants: " + ([$rows[].t]|unique|join(" | ")),
+    "bad dates: " + ([$rows[]|select(.d|not)]|length|tostring),
+    "null primary_role count: " + ([ $out[]|select(.primary_role==null)]|length|tostring)' — approved
+  ⚙ bash cd /app echo "=== 1. active count vs output length ===" act=$(jq '[.[]…
+    ✗ bash — exit 5
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  │ Two verification snippets had jq precedence bugs (the checks themselves, …
+[approval] bash: cd /app
+echo "=== 3. no pending/inactive leaked ==="
+jq -n --slurpfile u users.json --slurpfile o active_users_report.json '
+  ($u[0] | map({key:(.id|tostring), value:.status}) | from_entries) as $st
+  | [ $o[0][] | select($st[(.user_id|tostring)] != "active") ]
+  | if length==0 then "STATUS FILTER OK" else "LEAK: \(length)" end'
+echo "=== 5. key order, types, date format, role consistency ==="
+jq -n --slurpfile u users.json --slurpfile o active_users_report.json '
+  ($o[0]) as $out
+  | ($u[0] | map({key:(.id|tostring), value:(.roles|length)}) | from_entries) as $rc
+  | [ $out[] | {k:(keys_unsorted|join(",")),
+      t:([(.user_id|type),(.username|type),(.email|type),(.last_login|type),(.role_count|type),(.primary_role|type)]|join(",")),
+      d:(.last_login|test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")),
+      rc:(.role_count == $rc[(.user_id|tostring)])} ] as $rows
+  | "key order variants: " + ([$rows[].k]|unique|join(" || ")),
+    "type variants: " + ([$rows[].t]|unique|join(" || ")),
+    "rows with bad date: " + ([$rows[]|select(.d|not)]|length|tostring),
+    "rows with mismatched role_count: " + ([$rows[]|select(.rc|not)]|length|tostring),
+    "null primary_role rows: " + ([ $out[]|select(.primary_role==null)]|length|tostring)'
+echo "=== 6. primary_role equals first input role / null when roles empty ==="
+jq -n --slurpfile u users.json --slurpfile o active_users_report.json '
+  ($u[0] | map({key:(.id|tostring), value:.roles}) | from_entries) as $r
+  | [ $o[0][] | select((if ($r[(.user_id|tostring)]|length) > 0 then $r[(.user_id|tostring)][0] else null end) != .primary_role) ]
+  | if length==0 then "PRIMARY_ROLE OK" else "MISMATCH: \(length)" end'
+echo "=== 7. output is valid JSON with 2-space indentation ==="
+jq -e 'type=="array"' active_users_report.json >/dev/null && echo "valid JSON array"
+awk 'NR>1 && match($0,/^ +/) && RLENGTH%2==1 {bad++} END{print "odd-indent lines:", bad+0}' active_users_report.json
+grep -c $'^\t' active_users_report.json || echo "no tab indentation" — approved
+  ⚙ bash cd /app echo "=== 3. no pending/inactive leaked ===" jq -n --slurpfile…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: cd /app
+echo "=== determinism: rebuild from scratch via cmd.sh ==="
+rm -f active_users_report.json
+sh /app/cmd.sh
+md5sum active_users_report.json
+cp active_users_report.json /tmp/a.json; sh /app/cmd.sh; md5sum active_users_report.json
+cmp /tmp/a.json active_users_report.json && echo "DETERMINISTIC"
+echo "=== empty-roles rows in output (must be role_count 0, primary_role JSON null) ==="
+jq -c '[.[]|select(.role_count==0)][0:2]' active_users_report.json
+jq '[.[]|select(.role_count==0)]|length' active_users_report.json
+echo "=== serialize check: null is JSON null not string ==="
+grep -c '"primary_role": null' active_users_report.json; grep -c '"primary_role": "null"' active_users_report.json || true
+echo "=== final files ==="
+echo "--- /app/cmd.sh:"; cat /app/cmd.sh
+echo "--- /app/jq_args.yaml:"; cat /app/jq_args.yaml
+echo "--- sizes:"; ls -l /app/cmd.sh /app/jq_args.yaml /app/active_users_report.json
+echo "--- no leftover temp files in /app:"; ls /app — approved
+  ⚙ bash cd /app echo "=== determinism: rebuild from scratch via cmd.sh ===" rm…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+[approval] bash: cd /app
+jq $(yq -r '.args[]' /app/jq_args.yaml) "$(yq -r '.filter' /app/jq_args.yaml)" /app/users.json > /tmp/yaml_out.json
+md5sum /tmp/yaml_out.json /app/active_users_report.json
+cmp /tmp/yaml_out.json /app/active_users_report.json && echo "GRADER-CONSTRUCTED COMMAND REPRODUCES ARTIFACT EXACTLY"
+echo "=== sample of output (first + last user) ==="
+jq '.[0], .[-1]' active_users_report.json
+jq 'length' active_users_report.json — approved
+  ⚙ bash cd /app jq $(yq -r '.args[]' /app/jq_args.yaml) "$(yq -r '.filter' /ap…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+Done. All three files are in place and verified.
+
+## Files produced
+
+**`/app/active_users_report.json`** — 346 active users (from 500 input records; `pending` was excluded along with `inactive`), each with `user_id`, `username`, `email`, `last_login` (`YYYY-MM-DD`), `role_count`, `primary_role`, sorted ascending by `username`, indented 2 spaces.
+
+**`/app/cmd.sh`**
+```sh
+jq --indent 2 '[.[] | select(.status == "active")] | map({user_id: .id, username: .username, email: .email, last_login: (.last_login | .[0:10]), role_count: (.roles | length), primary_role: (.roles[0] // null)}) | sort_by(.username)' /app/users.json > /app/active_users_report.json
+```
+
+**`/app/jq_args.yaml`**
+```yaml
+filter: '[.[] | select(.status == "active")] | map({user_id: .id, username: .username, email: .email, last_login: (.last_login | .[0:10]), role_count: (.roles | length), primary_role: (.roles[0] // null)}) | sort_by(.username)'
+args:
+  - "--indent 2"
+```
+
+## Notes on the approach
+- Date formatting uses string slicing (`.last_login | .[0:10]`) rather than `fromdate`, so it is independent of the jq build's `strptime` support — the input format (fractional seconds + `Z`) is fixed and every value matched it.
+- `--indent 2` was the only needed jq argument; the filter has no external variables, so `args` holds exactly one entry and `cmd.sh` and the YAML describe the same invocation.
+- `primary_role` uses `.roles[0] // null`, which yields real JSON `null` for the 50 active users with empty `roles` (verified: 50 `null` values, zero `"null"` strings).
+
+## Verification run
+- Ran `cmd.sh`, then also the grader's own construction `jq $(yq -r '.args[]' …) "$(yq -r '.filter' …)" /app/users.json` — both md5 `85a1cde6a540e1607dffe0d26743e2de`, byte-identical.
+- Content compared against an independently rebuilt expected array (`split("T")[0]`, `if…then` instead of `//`): `CONTENT OK`.
+- Count: input active = 346, output length = 346. Status filter: no non-active id leaked. Sort: output usernames byte-identical to `LC_ALL=C sort`. Types: `number,string,string,string,number,(null|string)`; key order identical on every row; 0 bad dates; 0 `role_count` mismatches; 0 odd-indent or tab-indented lines.
+- Rebuilding from scratch twice reproduced the same hash (deterministic).
+
+[result] role=implementor model=deepseek-v4.1-flash tools=11 surface=9e36cdc3535a

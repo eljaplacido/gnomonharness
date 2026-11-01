@@ -1,0 +1,37 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Mailing list server is up and verified. `eval.py` passes end-to-end:
+
+```
+3b9e300d428853a9 added successfully.
+Direct delivery to 3b9e300d428853a9 works: Direct Message
+e5fd2ae516a961ce sends a join request
+e5fd2ae516a961ce has not yet confirmed their subscription
+e5fd2ae516a961ce has confirmed their subscription
+```
+
+## What was configured
+
+**Mailman** (`/etc/mailman3/mailman.cfg`)
+- `site_owner: root@local.edu` (bounce/owner notifications land in a local mailbox)
+- `[mta] incoming: mailman.mta.postfix.LMTP`, LMTP on `127.0.0.1:8024`, outgoing SMTP to `localhost:25`
+- Debian paths/layout left intact; DB at `/var/lib/mailman3/data/mailman.db`
+
+**List** `reading-group@local.edu`
+- Created with owner `root@local.edu`
+- `subscription_policy: open` (no owner approval needed), `default_member_action: accept`, `default_nonmember_action: accept`
+- Join/leave still require the user to reply to the confirmation message (Mailman's native `-join`/`-leave`/`-confirm` robot addresses)
+
+**Postfix**
+- `mydestination = $myhostname, localhost, localhost.localdomain, local.edu` and `myorigin = local.edu`, so `<user>@local.edu` is delivered by `local(8)` into `/var/mail/<user>` (mbox)
+- `transport_maps = hash:/var/lib/mailman3/data/postfix_lmtp, regexp:/etc/postfix/mailman_transport.regexp` — the first is Mailman-generated (`reading-group`, `-join`, `-leave`, `-confirm`, `-request`, `-bounces`, `-owner`, ...); the regexp map catches the VERP-style `reading-group-confirm+<cookie>@local.edu` reply addresses
+- `local_recipient_maps` includes the Mailman transport map so list addresses aren't rejected as unknown local users
+- `postfix_lmtp`/`postfix_domains` and the regexp map are world-readable so the postfix daemon (non-root) can read them
+
+## Verification
+- Direct local delivery: OK
+- Join (with confirmation): OK
+- Post to `reading-group@local.edu` reaches all subscribers (tested with a second member): OK
+- Leave (with confirmation) removes membership and stops further deliveries: OK
+- Survives a `mailman restart` + `postfix reload`; both are currently running (Mailman master PID 1335, Postfix PID 1535).
+
+Test users and memberships were removed afterwards, leaving an empty, ready-to-use list. Note there is no systemd in this container, so the services were started manually and must be restarted the same way after a container reboot: `su list -c "mailman -C /etc/mailman3/mailman.cfg start"` and `postfix start`.

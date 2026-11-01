@@ -1,0 +1,28 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Created `/app/solution.sparql` and verified it by loading `university_graph.ttl` into rdflib and executing it.
+
+**Query logic**
+
+| Criterion | How it's expressed |
+|---|---|
+| Full professor | `?professor uni:role ?role` with `FILTER(STRSTARTS(?role, "Professor "))` — excludes "Assistant Professor …" |
+| EU department | `FILTER EXISTS { ?professor uni:worksIn ?euDepartment . ?euDepartment uni:belongsTo ?euUniversity . ?euUniversity uni:locatedInCountry ?euCountry . FILTER(?euCountry IN (<27 EU codes>)) }` |
+| Large department | Aggregating subquery: group by `(?professor ?largeDepartment)`, count **distinct** students enrolled in courses via `uni:isTaughtIn`, `HAVING (COUNT(DISTINCT ?student) > 10)` |
+| Currently enrolled | `?enrollmentDate <= "2025-08-16"^^xsd:date` and `!BOUND(?graduationDate) \|\| ?graduationDate > "2025-08-16"^^xsd:date` |
+| Output | Outer pattern walks **all** `worksIn` departments to bind `?country`, then `GROUP_CONCAT(DISTINCT ?country; separator=", ")` per professor name |
+
+**Verification run output**
+
+```
+ - Orfeas Menis     | GR, US
+ - Pepe Attanasio   | PT, GR
+ - Aristotle Tympas | GR
+```
+
+**Why these and not others**
+- Currently-enrolled counts: ComputerScience_NTUA **12**, HistoryAndPhilosophy_NKUA **12**, Engineering_Berkeley **11**, Biology_MIT 7, Mathematics_Sorbonne 6 (8 students graduated on/before 2025-08-16).
+- Orfeas Menis: CS_NTUA (GR, 12 students) plus Sloan_MIT (US) → qualifies, and both countries appear in `?countries` since that column is defined as *all* countries where they work.
+- Pepe Attanasio: CS_NTUA (GR) qualifies; also IST (PT).
+- Aristotle Tympas: NKUA (GR) qualifies.
+- John Smith (Biology_MIT, US only), Marie Dubois (Sorbonne, 6 students), Athanasios Voulodimos and Stefan Mueller (assistant professors) are correctly excluded.
+- The `uni:Bio10` typo in Student5's enrollments has no effect, as it matches no course.

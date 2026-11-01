@@ -1,0 +1,492 @@
+  │ I'll start by inspecting the Turtle file to understand the ontology and d…
+[approval] bash: wc -l /app/university_graph.ttl; ls -la /app — approved
+  ⚙ bash wc -l /app/university_graph.ttl; ls -la /app
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  ⚙ read /app/university_graph.ttl
+    ✓ read /app/university_graph.ttl — 306 lines · CRLF
+[approval] bash: which python3 arq sparql riot 2>/dev/null; python3 -c "import rdflib; print(rdflib.__version__)" 2>&1 | tail -1 — approved
+  ⚙ bash which python3 arq sparql riot 2>/dev/null; python3 -c "import rdflib; …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: cat /app/.gitattributes /app/.gitignore; ls -a /app/.gnomon-audit | head — approved
+  ⚙ bash cat /app/.gitattributes /app/.gitignore; ls -a /app/.gnomon-audit | he…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+[approval] bash: cd /app && pip install rdflib >/tmp/pip.log 2>&1; echo "exit=$?"; tail -5 /tmp/pip.log — approved
+  ⚙ bash cd /app && pip install rdflib >/tmp/pip.log 2>&1; echo "exit=$?"; tail…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: cd /app && python3 -m pip install rdflib >/tmp/pip.log 2>&1; echo "exit=$?"; tail -8 /tmp/pip.log — approved
+  ⚙ bash cd /app && python3 -m pip install rdflib >/tmp/pip.log 2>&1; echo "exi…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+[approval] bash: which node npm java apt-get curl wget 2>/dev/null; node -v 2>/dev/null; java -version 2>&1 | head -2 — approved
+  ⚙ bash which node npm java apt-get curl wget 2>/dev/null; node -v 2>/dev/null…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: cd /tmp && timeout 30 curl -sI https://registry.npmjs.org/ 2>&1 | head -3; echo "curl_exit=$?" — approved
+  ⚙ bash cd /tmp && timeout 30 curl -sI https://registry.npmjs.org/ 2>&1 | head…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+[approval] bash: cd /tmp && curl -sSL -o get-pip.py https://bootstrap.pypa.io/get-pip.py >/dev/null 2>&1 && python3 get-pip.py >/tmp/pip2.log 2>&1; echo "exit=$?"; tail -3 /tmp/pip2.log — approved
+  ⚙ bash cd /tmp && curl -sSL -o get-pip.py https://bootstrap.pypa.io/get-pip.p…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: cd /tmp && python3 -m venv /tmp/venv >/tmp/venv.log 2>&1; echo "venv_exit=$?"; tail -3 /tmp/venv.log — approved
+  ⚙ bash cd /tmp && python3 -m venv /tmp/venv >/tmp/venv.log 2>&1; echo "venv_e…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+[approval] bash: cd /tmp && mkdir -p sparqltest && cd sparqltest && npm init -y >/dev/null 2>&1 && timeout 180 npm install rdflib >/tmp/npm.log 2>&1; echo "exit=$?"; tail -5 /tmp/npm.log — approved
+  ⚙ bash cd /tmp && mkdir -p sparqltest && cd sparqltest && npm init -y >/dev/n…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+[approval] bash: cd /app && head -c 3000 .gnomon-audit/*.jsonl — approved
+  ⚙ bash cd /app && head -c 3000 .gnomon-audit/*.jsonl
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  │ Now I understand the data. Let me build a draft query and a test harness …
+[approval] write /app/solution.sparql (+67 −0) [new file] — approved
+  ⚙ write /app/solution.sparql
+    ✓ write /app/solution.sparql (+67 −0)
+  deepseek-v4.1-flash — 13 tool call(s) so far
+[approval] bash: cat > /tmp/sparqltest/run.js <<'EOF'
+const fs = require('fs');
+const $rdf = require('rdflib');
+const path = process.argv[2];
+const qpath = process.argv[3] || '/app/solution.sparql';
+const store = $rdf.graph();
+$rdf.parse(fs.readFileSync(path,'utf8'), store, 'http://university.org/ontology/', 'text/turtle');
+const query = $rdf.SPARQLToQuery(fs.readFileSync(qpath,'utf8'), false, store);
+const res = [];
+store.query(query, r => res.push(r), () => {}, {});
+console.log('rows:', res.length);
+for (const r of res) {
+  const out = {};
+  for (const k in r) { const t = r[k]; out[k] = t && t.value !== undefined ? t.value : String(t); }
+  console.log(JSON.stringify(out));
+}
+EOF
+cd /tmp/sparqltest && node run.js /app/university_graph.ttl 2>&1 | head -30 — approved
+  ⚙ bash cat > /tmp/sparqltest/run.js <<'EOF' const fs = require('fs'); const $…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+[approval] bash: cd /tmp && python3 get-pip.py --break-system-packages >/tmp/pip3.log 2>&1; echo "exit=$?"; tail -3 /tmp/pip3.log — approved
+  ⚙ bash cd /tmp && python3 get-pip.py --break-system-packages >/tmp/pip3.log 2…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 15 tool call(s) so far
+[approval] bash: cd /tmp && python3 -m pip install --break-system-packages rdflib >/tmp/pip4.log 2>&1; echo "exit=$?"; tail -3 /tmp/pip4.log; python3 -c "import rdflib; print(rdflib.__version__)" — approved
+  ⚙ bash cd /tmp && python3 -m pip install --break-system-packages rdflib >/tmp…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+[approval] bash: cat > /tmp/run.py <<'EOF'
+import sys, rdflib
+g = rdflib.Graph()
+g.parse('/app/university_graph.ttl', format='turtle')
+q = open(sys.argv[1] if len(sys.argv)>1 else '/app/solution.sparql').read()
+res = g.query(q)
+print('vars:', [str(v) for v in res.vars])
+rows = list(res)
+print('rows:', len(rows))
+for r in rows:
+    print(' | '.join(str(x) for x in r))
+EOF
+cd /tmp && python3 run.py 2>&1 | tail -20 — approved
+  ⚙ bash cat > /tmp/run.py <<'EOF' import sys, rdflib g = rdflib.Graph() g.pars…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 17 tool call(s) so far
+  │ Query runs. Now let me independently verify the results with a separate c…
+[approval] bash: cat > /tmp/verify.py <<'EOF'
+import rdflib
+from collections import defaultdict
+g = rdflib.Graph(); g.parse('/app/university_graph.ttl', format='turtle')
+U = 'http://university.org/ontology/'
+TODAY = rdflib.Literal('2025-08-16', datatype=rdflib.XSD.date)
+q = lambda s,p,o: list(g.triples((s, rdflib.URIRef(U+p) if not p.startswith('a') else rdflib.RDF.type, o)))
+
+EU = set("AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE".split())
+print("EU count:", len(EU))
+
+# departments -> university -> country
+dept_country = {}
+for d, _, u in g.triples((None, rdflib.RDF.type, rdflib.URIRef(U+'Department'))):
+    for _,_,uni in g.triples((d, rdflib.URIRef(U+'belongsTo'), None)):
+        for _,_,c in g.triples((uni, rdflib.URIRef(U+'locatedInCountry'), None)):
+            dept_country[d] = str(c)
+
+# currently enrolled per department (independent path: iterate students)
+enrolled = defaultdict(set)   # dept -> students
+for s in g.subjects(rdflib.RDF.type, rdflib.URIRef(U+'Person')):
+    enr = list(g.objects(s, rdflib.URIRef(U+'isEnrolledIn')))
+    if not enr: continue
+    ed = list(g.objects(s, rdflib.URIRef(U+'hasEnrollmentDate')))
+    if not ed or ed[0] > TODAY:      # not yet enrolled -> not currently enrolled
+        continue
+    gd = list(g.objects(s, rdflib.URIRef(U+'hasGraduationDate')))
+    if gd and gd[0] <= TODAY:        # already graduated
+        continue
+    for course in enr:
+        for d in g.objects(course, rdflib.URIRef(U+'isTaughtIn')):
+            enrolled[d].add(s)
+
+print("\nCurrently-enrolled students per department:")
+for d in sorted(enrolled, key=str):
+    print(f"  {str(d).split('/')[-1]:32s} {dept_country.get(d,'?'):3s} {len(enrolled[d])}")
+for d in sorted(dept_country, key=str):
+    if d not in enrolled: print(f"  {str(d).split('/')[-1]:32s} {dept_country[d]:3s} 0  (no courses/enrolments)")
+
+big = {d for d,n in enrolled.items() if n > 10}
+print("\nDepartments with >10 currently enrolled:", sorted(str(d).split('/')[-1] for d in big))
+
+print("\nAll people with a Professor role:")
+for p in g.subjects(rdflib.RDF.type, rdflib.URIRef(U+'Person')):
+    r = list(g.objects(p, rdflib.URIRef(U+'role')))
+    if not r or 'rofessor' not in str(r[0]): continue
+    name = str(list(g.objects(p, rdflib.URIRef(U+'hasName')))[0])
+    full = str(r[0]).startswith('Professor')
+    depts = list(g.objects(p, rdflib.URIRef(U+'worksIn')))
+    eu = [d for d in depts if dept_country.get(d) in EU]
+    bigd = [d for d in depts if d in big]
+    ok = full and eu and bigd
+    print(f"  {name:22s} role={str(r[0])[:42]:44s} full={full!s:5s} EU={[dept_country.get(d) for d in eu]} >10={[str(d).split('/')[-1] for d in bigd]} => {'PASS' if ok else 'fail'}")
+    if ok:
+        print(f"      countries(all depts): {sorted({dept_country[d] for d in depts})}")
+EOF
+cd /tmp && python3 verify.py — approved
+  ⚙ bash cat > /tmp/verify.py <<'EOF' import rdflib from collections import def…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 18 tool call(s) so far
+[approval] bash: cd /tmp && sed -i 's/if n > 10}/if len(n) > 10}/' verify.py && python3 verify.py — approved
+  ⚙ bash cd /tmp && sed -i 's/if n > 10}/if len(n) > 10}/' verify.py && python3…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 19 tool call(s) so far
+  │ Results match my independent verification. Note the graduation filter mat…
+[approval] bash: cd /tmp/sparqltest && timeout 240 npm install oxigraph >/tmp/oxi.log 2>&1; echo "exit=$?"; tail -3 /tmp/oxi.log — approved
+  ⚙ bash cd /tmp/sparqltest && timeout 240 npm install oxigraph >/tmp/oxi.log 2…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 20 tool call(s) so far
+[approval] bash: cd /tmp && cat > /tmp/percourse.py <<'EOF'
+import rdflib
+from collections import defaultdict
+g = rdflib.Graph(); g.parse('/app/university_graph.ttl', format='turtle')
+U='http://university.org/ontology/'
+T=rdflib.Literal('2025-08-16',datatype=rdflib.XSD.date)
+per=defaultdict(set); dept=defaultdict(set)
+for s in g.subjects(rdflib.RDF.type, rdflib.URIRef(U+'Person')):
+    enr=list(g.objects(s,rdflib.URIRef(U+'isEnrolledIn')))
+    if not enr: continue
+    ed=list(g.objects(s,rdflib.URIRef(U+'hasEnrollmentDate')))
+    if not ed or ed[0]>T: continue
+    gd=list(g.objects(s,rdflib.URIRef(U+'hasGraduationDate')))
+    if gd and gd[0]<=T: continue
+    for c in enr:
+        per[c].add(s)
+        for d in g.objects(c,rdflib.URIRef(U+'isTaughtIn')): dept[d].add(s)
+print("per-course current enrolment:")
+for c in sorted(per,key=str): print("  ",str(c).split('/')[-1], len(per[c]))
+print("per-department (union of courses):")
+for d in sorted(dept,key=str): print("  ",str(d).split('/')[-1], len(dept[d]))
+EOF
+python3 /tmp/percourse.py — approved
+  ⚙ bash cd /tmp && cat > /tmp/percourse.py <<'EOF' import rdflib from collecti…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 21 tool call(s) so far
+[approval] bash: cat > /tmp/sparqltest/oxi.mjs <<'EOF'
+import { Store, Parser } from 'oxigraph';
+import fs from 'fs';
+const store = new Store();
+store.load(fs.readFileSync('/app/university_graph.ttl','utf8'), {format:'text/turtle'});
+const q = fs.readFileSync(process.argv[2]||'/app/solution.sparql','utf8');
+const res = store.query(q);
+const rows=[...res];
+console.log('rows:', rows.length);
+for (const r of rows) console.log(JSON.stringify(Object.fromEntries([...r].map(([k,v])=>[k, v.value]))));
+EOF
+cd /tmp/sparqltest && node oxi.mjs 2>&1 | tail -10 — approved
+  ⚙ bash cat > /tmp/sparqltest/oxi.mjs <<'EOF' import { Store, Parser } from 'o…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 22 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && cat > oxi.cjs <<'EOF'
+const fs = require('fs');
+const pkg = require('oxigraph');
+const store = new pkg.Store();
+store.load(fs.readFileSync('/app/university_graph.ttl','utf8'), {format:'text/turtle'});
+const q = fs.readFileSync(process.argv[2]||'/app/solution.sparql','utf8');
+const rows = [...store.query(q)];
+console.log('rows:', rows.length);
+for (const r of rows) {
+  const o = {}; for (const [k,v] of r) o[k]=v.value; console.log(JSON.stringify(o));
+}
+EOF
+node oxi.cjs 2>&1 | tail -10 — approved
+  ⚙ bash cd /tmp/sparqltest && cat > oxi.cjs <<'EOF' const fs = require('fs'); …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 23 tool call(s) so far
+  │ Both engines agree. Let me verify the arithmetic that decides the answer,…
+  deepseek-v4.1-flash — 24 tool call(s) so far
+  ⚙ compute 
+    ✓ compute 14 - 8 = 6
+[approval] bash: cd /app && grep -n "role" university_graph.ttl | grep -vi "Professor of\|Student\""  — approved
+  ⚙ bash cd /app && grep -n "role" university_graph.ttl | grep -vi "Professor o…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 25 tool call(s) so far
+[approval] write /app/solution.sparql (+30 −25) — approved
+  ⚙ write /app/solution.sparql
+    ✓ write /app/solution.sparql (+30 −25)
+  deepseek-v4.1-flash — 26 tool call(s) so far
+[approval] bash: cd /tmp && python3 run.py 2>&1 | tail -8; echo "---- oxigraph ----"; cd /tmp/sparqltest && node oxi.cjs 2>&1 | tail -8 — approved
+  ⚙ bash cd /tmp && python3 run.py 2>&1 | tail -8; echo "---- oxigraph ----"; c…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 27 tool call(s) so far
+  │ rdflib disagrees — I need the query to be portable. Let me isolate what r…
+[approval] bash: cd /tmp && cat > dbg.py <<'EOF'
+import rdflib
+g=rdflib.Graph(); g.parse('/app/university_graph.ttl',format='turtle')
+P='PREFIX uni: <http://university.org/ontology/>\nPREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n'
+tests={
+ 'cast': P+'''SELECT (COUNT(*) AS ?n) WHERE { BIND("2025-08-16"^^xsd:date AS ?today) ?s uni:hasEnrollmentDate ?e . FILTER(xsd:date(?e) <= ?today) }''',
+ 'nofilter': P+'''SELECT (COUNT(*) AS ?n) WHERE { BIND("2025-08-16"^^xsd:date AS ?today) ?s uni:hasEnrollmentDate ?e . FILTER(?e <= ?today) }''',
+ 'subq_2grp': P+'''SELECT ?p (COUNT(DISTINCT ?s) AS ?n) WHERE { ?p uni:worksIn ?d . ?c uni:isTaughtIn ?d . ?s uni:isEnrolledIn ?c } GROUP BY ?p ?d''',
+ 'subq_inwhere': P+'''SELECT ?p WHERE { { SELECT ?p WHERE { ?p uni:worksIn ?d . ?c uni:isTaughtIn ?d . ?s uni:isEnrolledIn ?c } GROUP BY ?p ?d HAVING(COUNT(DISTINCT ?s) > 10) } }''',
+ 'strstarts': P+'''SELECT ?n WHERE { ?p uni:hasName ?n ; uni:role ?r . FILTER(STRSTARTS(STR(?r), "Professor") || CONTAINS(STR(?r), "Full Professor")) }''',
+ 'inlist': P+'''SELECT ?c WHERE { ?u uni:locatedInCountry ?c . FILTER(?c IN ("GR","FR","US")) }''',
+}
+for k,q in tests.items():
+    try:
+        r=list(g.query(q)); print(k,'->',[tuple(str(x) for x in row) for row in r][:6])
+    except Exception as e: print(k,'ERROR',type(e).__name__,e)
+EOF
+python3 dbg.py — approved
+  ⚙ bash cd /tmp && cat > dbg.py <<'EOF' import rdflib g=rdflib.Graph(); g.pars…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 28 tool call(s) so far
+  │ rdflib's `xsd:date()` cast is broken (silently matches nothing) — I must …
+[approval] write /app/solution.sparql (+24 −16) — approved
+  ⚙ write /app/solution.sparql
+    ✓ write /app/solution.sparql (+24 −16)
+  deepseek-v4.1-flash — 29 tool call(s) so far
+[approval] bash: cd /tmp && echo "== rdflib =="; python3 run.py 2>&1 | tail -8; echo "== oxigraph =="; cd /tmp/sparqltest && node oxi.cjs 2>&1 | tail -8 — approved
+  ⚙ bash cd /tmp && echo "== rdflib =="; python3 run.py 2>&1 | tail -8; echo "=…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 30 tool call(s) so far
+  │ Both engines now agree with my independent verification. Let me write a c…
+[approval] bash: cat > /tmp/test_solution.py <<'PYEOF'
+"""Constraint tests for /app/solution.sparql. Each test fails loudly if violated."""
+import rdflib, sys, itertools
+from collections import defaultdict
+
+TTL = '/app/university_graph.ttl'
+Q = '/app/solution.sparql'
+U = 'http://university.org/ontology/'
+T = rdflib.Literal('2025-08-16', datatype=rdflib.XSD.date)
+EU = set("AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE".split())
+fails, passes = [], 0
+
+def check(name, cond, detail=''):
+    global passes
+    if cond: passes += 1; print(f"  PASS  {name}")
+    else: fails.append(name); print(f"  FAIL  {name}  {detail}")
+
+def run(path=Q, g=None):
+    g = g or rdflib.Graph()
+    if g is None or len(g) == 0: g.parse(TTL, format='turtle')
+    return g, g.query(open(path).read())
+
+def as_set(res):
+    return {(str(r[0]), frozenset(c.strip() for c in str(r[1]).split(','))) for r in res}
+
+print("== 1. result shape ==")
+g, res = run()
+check("exactly two result variables, named professorName and countries",
+      [str(v) for v in res.vars] == ['professorName', 'countries'], str(res.vars))
+
+rows = as_set(res)
+expected = {
+    ('Aristotle Tympas', frozenset({'GR'})),
+    ('Orfeas Menis',    frozenset({'US', 'GR'})),
+    ('Pepe Attanasio',  frozenset({'PT', 'GR'})),
+}
+print("== 2. exact expected answer ==")
+check("result set equals expected", rows == expected, f"got {sorted(rows)}")
+check("no duplicate rows", len(list(res)) == len(rows))
+
+print("== 3. exclusion / inclusion rules ==")
+names = {n for n, _ in rows}
+check("assistant professors excluded (Athanasios Voulodimos, Stefan Mueller)",
+      not ({'Athanasios Voulodimos', 'Stefan Mueller'} & names))
+check("non-EU-only full professor excluded (John Smith, MIT/US)", 'John Smith' not in names)
+check("EU professor whose departments all have <=10 current students excluded (Marie Dubois, FR/6)",
+      'Marie Dubois' not in names)
+check("student-only person never returned", 'Sophia Müller' not in names)
+check("?countries includes non-EU countries where the professor works (Menis: US kept)",
+      ('Orfeas Menis', frozenset({'US', 'GR'})) in rows)
+check("?countries lists ALL of a multi-department EU professor's countries (Attanasio: PT+GR)",
+      ('Pepe Attanasio', frozenset({'PT', 'GR'})) in rows)
+
+print("== 4. independent recomputation of the ground truth ==")
+def compute(g):
+    dept_country = {}
+    for d in g.subjects(rdflib.RDF.type, rdflib.URIRef(U+'Department')):
+        for uni in g.objects(d, rdflib.URIRef(U+'belongsTo')):
+            for c in g.objects(uni, rdflib.URIRef(U+'locatedInCountry')):
+                dept_country[d] = str(c)
+    cur = defaultdict(set)
+    for s in g.subjects(rdflib.RDF.type, rdflib.URIRef(U+'Person')):
+        enr = list(g.objects(s, rdflib.URIRef(U+'isEnrolledIn')))
+        if not enr: continue
+        ed = list(g.objects(s, rdflib.URIRef(U+'hasEnrollmentDate')))
+        if not ed or ed[0] > T: continue
+        gd = list(g.objects(s, rdflib.URIRef(U+'hasGraduationDate')))
+        if gd and gd[0] <= T: continue
+        for c in enr:
+            for d in g.objects(c, rdflib.URIRef(U+'isTaughtIn')): cur[d].add(s)
+    out = set()
+    for p in g.subjects(rdflib.RDF.type, rdflib.URIRef(U+'Person')):
+        role = list(g.objects(p, rdflib.URIRef(U+'role')))
+        if not role or not str(role[0]).startswith('Professor'): continue
+        depts = list(g.objects(p, rdflib.URIRef(U+'worksIn')))
+        if not any(dept_country.get(d) in EU for d in depts): continue
+        if not any(len(cur[d]) > 10 for d in depts): continue
+        nm = str(list(g.objects(p, rdflib.URIRef(U+'hasName')))[0])
+        out.add((nm, frozenset(dept_country[d] for d in depts)))
+    return out
+gt = compute(g)
+check("query result == independent ground-truth recomputation", rows == gt, f"gt={sorted(gt)}")
+
+print("== 5. EU country list integrity ==")
+qtext = open(Q).read()
+codes = {c for c in EU if f'"{c}"' in qtext}
+check("all 27 EU member state codes appear in the query", codes == EU, f"missing {sorted(EU-codes)}")
+for non_eu in ['GB', 'UK', 'CH', 'NO', 'US', 'IS', 'TR', 'RS', 'UA', 'BA', 'ME', 'MK', 'AL']:
+    check(f"non-EU code {non_eu} not whitelisted", f'"{non_eu}"' not in qtext)
+check("reference date 2025-08-16 used", '2025-08-16' in qtext)
+
+print("== 6. mutation tests: wrong readings must NOT reproduce the result ==")
+# (a) ignoring graduation dates would make Mathematics_Sorbonne 14 > 10 -> Marie Dubois appears
+m = rdflib.Graph(); m.parse(TTL, format='turtle')
+for s, p, o in list(m.triples((None, rdflib.URIRef(U+'hasGraduationDate'), None))): m.remove((s, p, o))
+_, r2 = run(g=m); names2 = {str(x[0]) for x in r2}
+check("graduation date handling is load-bearing (dropping it wrongly admits Marie Dubois)",
+      'Marie Dubois' in names2)
+
+# (b) summing a professor's departments instead of taking the max would admit John Smith
+#     (Biology_MIT 7) if he had a second small dept; build the case explicitly.
+m2 = rdflib.Graph(); m2.parse(TTL, format='turtle')
+NTUA, UPM = rdflib.URIRef(U+'NTUA'), rdflib.URIRef(U+'UPM')
+smith = rdflib.URIRef(U+'John_Smith')
+dept = rdflib.URIRef(U+'Biology_UPM'); m2.add((dept, rdflib.RDF.type, rdflib.URIRef(U+'Department')))
+m2.add((dept, rdflib.URIRef(U+'belongsTo'), UPM))
+m2.add((smith, rdflib.URIRef(U+'worksIn'), dept))
+c = rdflib.URIRef(U+'Bio_UPM_1'); m2.add((c, rdflib.URIRef(U+'isTaughtIn'), dept))
+# 5 extra current students in that new dept -> 7 + 5 = 12 total, but 7 and 5 individually
+for i in range(5):
+    st = rdflib.URIRef(U+f'MutStu{i}')
+    m2.add((st, rdflib.RDF.type, rdflib.URIRef(U+'Person')))
+    m2.add((st, rdflib.URIRef(U+'isEnrolledIn'), c))
+    m2.add((st, rdflib.URIRef(U+'hasEnrollmentDate'), rdflib.Literal('2024-02-01', datatype=rdflib.XSD.date)))
+_, r3 = run(g=m2); names3 = {str(x[0]) for x in r3}
+check("per-department threshold, not a sum over departments (7+5=12 must not qualify John Smith)",
+      'John Smith' not in names3, str(names3))
+check("baseline professors still returned in the mutated graph", {'Orfeas Menis','Pepe Attanasio','Aristotle Tympas'} <= names3)
+
+# (c) a professor working in an EU dept with >10 students must be found even if a
+#     *different* dept is the big one (Pepe: big dept is CS_NTUA, EU dept also IST)
+check("criterion 3 is independent of which department satisfies criterion 2 (Attanasio)",
+      'Pepe Attanasio' in names)
+
+print(f"\n{passes} passed, {len(fails)} failed")
+if fails:
+    print("FAILURES:"); [print(" -", f) for f in fails]; sys.exit(1)
+print("ALL TESTS PASSED")
+PYEOF
+cd /tmp && python3 test_solution.py — approved
+  ⚙ bash cat > /tmp/test_solution.py <<'PYEOF' """Constraint tests for /app/sol…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 31 tool call(s) so far
+  │ All 29 tests pass. Let me check one remaining interpretation boundary — w…
+[approval] bash: cat > /tmp/edge.py <<'PYEOF'
+import rdflib
+U='http://university.org/ontology/'
+T=rdflib.Literal('2025-08-16',datatype=rdflib.XSD.date)
+# Marie Dubois (FR, Math_Sorbonne=6 current) gets a non-EU dept that HAS >10 students.
+m=rdflib.Graph(); m.parse('/app/university_graph.ttl',format='turtle')
+m.add((rdflib.URIRef(U+'Marie_Dubois'), rdflib.URIRef(U+'worksIn'), rdflib.URIRef(U+'Engineering_Berkeley')))
+r=list(m.query(open('/app/solution.sparql').read()))
+print("Marie Dubois with a US big dept + small FR dept:")
+for x in r: print("  ", x[0], '|', x[1])
+PYEOF
+python3 /tmp/edge.py — approved
+  ⚙ bash cat > /tmp/edge.py <<'PYEOF' import rdflib U='http://university.org/on…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 32 tool call(s) so far
+  [tools] 32/256 calls — continuing (leg 2)
+  deepseek-v4.1-flash — leg 2, 32 call(s) so far
+  │ Confirmed: criteria 2 and 3 are independent existentials, matching the ta…
+[approval] bash: cat >> /tmp/test_solution.py <<'PYEOF'
+
+print("== 7. documented interpretation boundaries ==")
+# (d) criterion 3 is about ANY department they work in, not only EU ones.
+m4 = rdflib.Graph(); m4.parse(TTL, format='turtle')
+m4.add((rdflib.URIRef(U+'Marie_Dubois'), rdflib.URIRef(U+'worksIn'), rdflib.URIRef(U+'Engineering_Berkeley')))
+_, r4 = run(g=m4); n4 = {str(x[0]) for x in r4}
+check("big non-EU department satisfies criterion 3 (separate existential from criterion 2)",
+      'Marie Dubois' in n4, str(n4))
+check("...and its non-EU country is reported in ?countries",
+      ('Marie Dubois', frozenset({'US', 'FR'})) in as_set(r4))
+
+# (e) the dangling 'Bio10' course reference must not be silently treated as Bio101.
+m5 = rdflib.Graph(); m5.parse(TTL, format='turtle')
+check("undeclared course uni:Bio10 carries no isTaughtIn edge (cannot inflate a department)",
+      list(m5.objects(rdflib.URIRef(U+'Bio10'), rdflib.URIRef(U+'isTaughtIn'))) == [])
+_, r5 = run(g=m5)
+check("dangling course reference does not change the answer", as_set(r5) == expected)
+
+print(f"\nFINAL: {passes} passed, {len(fails)} failed")
+if fails:
+    print("FAILURES:"); [print(" -", f) for f in fails]; sys.exit(1)
+print("ALL TESTS PASSED")
+PYEOF
+cd /tmp && python3 test_solution.py 2>&1 | tail -14 — approved
+  ⚙ bash cat >> /tmp/test_solution.py <<'PYEOF' print("== 7. documented interpr…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 33 tool call(s) so far
+  │ 33/33 passing. Final check: run the exact file on both engines once more …
+[approval] bash: cd /tmp && echo "== rdflib 7.6.0 =="; python3 run.py 2>&1 | tail -6; echo; echo "== oxigraph =="; cd /tmp/sparqltest && node oxi.cjs 2>&1 | tail -6; echo; echo "== deliverable =="; ls -l /app/solution.sparql; echo; grep -c "" /app/solution.sparql — approved
+  ⚙ bash cd /tmp && echo "== rdflib 7.6.0 =="; python3 run.py 2>&1 | tail -6; e…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 34 tool call(s) so far
+Done. `/app/solution.sparql` is written and verified.
+
+## Result
+
+| professorName | countries |
+|---|---|
+| Aristotle Tympas | GR |
+| Orfeas Menis | US, GR |
+| Pepe Attanasio | PT, GR |
+
+Verified identical on two independent SPARQL engines (rdflib 7.6.0 and oxigraph), and against a separate Python ground-truth recomputation that shares no query logic.
+
+## How each criterion is encoded
+
+1. **Full professor** — `uni:role` is a free-text string, so rank is tested by regex: contains `Professor` but *not* `Assistant|Associate|Adjunct|Visiting|Emerit|Lecturer|…`. This excludes "Assistant Professor of Computer Science" (Voulodimos) and "Assistant Professor of Engineering" (Mueller).
+2. **EU department** — an explicit whitelist of the 27 member-state codes as of 2025-08-16. Note `CH` (ETH Zurich) and `US` are correctly not members. Hard-coding the list is deliberate: the graph stores bare ISO codes with no country-level membership triples, so there is nothing in the data to join against.
+3. **>10 current students** — inner `SELECT` grouped by **`?professor ?department`**, so the threshold is per department and two small departments can never sum past 10. "Currently enrolled" = enrolment date ≤ reference date **and** no graduation date ≤ reference date.
+
+`?countries` aggregates over *all* the professor's departments, which is why Menis shows `US` — his Sloan_MIT post is reported even though his qualifying EU department is CS_NTUA.
+
+## Two subtleties worth flagging
+
+- **The graduation filter is load-bearing.** `Mathematics_Sorbonne` has 14 enrolments but only 6 current students; 8 graduated by 2025-08-16. Ignoring graduation dates wrongly admits **Marie Dubois**. Mutation test covers this.
+- **rdflib's `xsd:date()` cast is broken** — `FILTER(xsd:date(?d) <= ?today)` silently matches *nothing* in rdflib 7.6.0, yielding 0 rows while oxigraph returned 3. I removed the casts and compare the `xsd:date` literals directly, which both engines evaluate correctly. Worth knowing if this query is ever run under rdflib.
+
+## Interpretation choices (documented in the file header)
+
+Criteria 2 and 3 are treated as **independent existentials**, per the task's "Among all departments they work in". So a professor can qualify via a small EU department plus a large non-EU one. I confirmed this is what the query does (adding a large US department to Marie Dubois admits her, reporting `US, FR`) rather than assuming it.
+
+## Testing
+
+33 assertions in `/tmp/test_solution.py`, all passing: exact expected result set, result-shape, each exclusion rule, full independent recomputation, EU-whitelist integrity (27 codes present, 13 non-EU codes absent), and four mutation tests that confirm each subtle rule actually changes the output. The test file and runner live in `/tmp` — tell me if you'd rather they be committed alongside the query.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=34 surface=9e36cdc3535a

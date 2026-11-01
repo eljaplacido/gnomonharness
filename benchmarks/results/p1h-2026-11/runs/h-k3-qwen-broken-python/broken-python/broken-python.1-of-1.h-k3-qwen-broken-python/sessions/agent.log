@@ -1,0 +1,52 @@
+[?2004hroot@10acc285fb9c:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@10acc285fb9c:/app# clear
+[?2004l[H[J[3J[?2004hroot@10acc285fb9c:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@10acc285fb9c:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=0.26.4
+ARM_SETUP_END=1793521157
+[?2004hroot@10acc285fb9c:/app# source "$HOME/.nvm/nvm.sh" >/dev/null 2>&1; qwen -p 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with pip.' --approval-mode yolo 2>&1 | tee /agent-logs/qwen.log; tmux wait -S done
+[?2004lWarning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Fixed. Here's what was wrong and what I did.
+
+## Root cause
+
+Your default `python3` is a source build at `/usr/local/bin/python3.13` (CPython 3.13.1). Its site-packages directory had been gutted:
+
+- `/usr/local/lib/python3.13/site-packages/pip/` — **the entire pip package was gone** (~840 files)
+- `/usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/` — the metadata was still there
+- `/usr/local/bin/pip` and `pip3` still existed and still pointed at `python3.13`
+
+So every `pip` invocation died at import time:
+
+```
+ModuleNotFoundError: No module named 'pip'
+```
+
+The site-packages directory's mtime was `Oct 31 13:45`, i.e. someone/something deleted the `pip/` directory (a partial uninstall or a stray `rm -rf`) without touching the dist-info or the console scripts.
+
+## Fix
+
+1. Moved the orphaned `pip-24.3.1.dist-info` to `/tmp` — without this, the bootstrap sees "pip 24.3.1 already installed" and silently does nothing.
+2. Ran `python3 -m ensurepip --upgrade --default-pip`, which reinstalled pip 24.3.1 from the interpreter's own bundled wheel (`ensurepip/_bundled/pip-24.3.1-py3-none-any.whl`) — no network needed.
+
+## Verification
+
+- `python3 -m pip --version` → `pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)`
+- `/usr/local/bin/pip --version` → same (console scripts work again)
+- `import pip` succeeds; `pip/` now has 841 files
+- End-to-end test: downloaded `six`, installed it with `pip install`, and imported it successfully — index access and installation both work
+- Temp test dirs and the `/tmp` backup were cleaned up
+
+## Two things worth knowing
+
+- **There's a second interpreter with no pip:** `/usr/bin/python3` is Debian's Python 3.11.2. It has neither `pip` nor `ensurepip` (Debian strips both). That's normal for Debian, not damage — install `python3-pip` via `apt` if you ever need that interpreter, and don't run `get-pip.py` against it, which can conflict with apt-managed packages.
+- **pip itself is a bit old:** 24.3.1, and it notices a newer 26.2.2. I left it alone since upgrading wasn't part of the request — run `python3 -m pip install --upgrade pip` when you want it. Also note you're operating as root, so pip warns about system-wide installs; for project work a virtualenv (`python3 -m venv .venv`) is the safer default.
+
+Since `pip` was working before Oct 31, whatever removed that directory could recur (e.g. a cleanup script or tool that manages `/usr/local/lib`). If it happens again, `python3 -m ensurepip --upgrade` after clearing the stale dist-info is the whole repair.
+[?2004hroot@10acc285fb9c:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@10acc285fb9c:/app# 

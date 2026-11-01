@@ -1,0 +1,33 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Done. `vectorops` 0.1.0 is built and installable from a local PyPI server on port 8080.
+
+**Project layout (`/app`)**
+```
+pyproject.toml            # name=vectorops, version=0.1.0, setuptools backend
+vectorops/__init__.py     # dotproduct + __version__
+tests/test_dotproduct.py  # 5 unittest cases
+dist/
+  vectorops-0.1.0-py3-none-any.whl
+  vectorops-0.1.0.tar.gz
+serve.sh                  # starts pypiserver on 0.0.0.0:8080 serving dist/
+pypi-server.log
+```
+
+`dotproduct` lives in the package root (`vectorops/__init__.py`) and raises `ValueError` on mismatched lengths.
+
+**Server** — running detached via `setsid` (`pypi-server run --port 8080 --interface 0.0.0.0 -a . -P . dist`), auth disabled, simple index at `http://localhost:8080/simple/`. Restart with `./serve.sh`; logs go to `pypi-server.log`.
+
+**Verified**
+- `python -m unittest discover -s tests -v` → 5 tests OK
+- `python -m build` → sdist + wheel built
+- `/simple/vectorops/` returns 200 and lists both 0.1.0 artifacts
+- In a fresh venv from `/tmp` (outside the source tree):
+  ```
+  pip install --index-url http://localhost:8080/simple vectorops==0.1.0
+  → Successfully installed vectorops-0.1.0
+  from vectorops import dotproduct; assert 1 == dotproduct([1,1], [0,1])
+  → assertion OK; version: 0.1.0
+  ```
+- TCP connect to `127.0.0.1:8080` succeeds after cleanup.
+
+Caveat: the server is a detached local process; if the machine/container restarts, rerun `/app/serve.sh`.

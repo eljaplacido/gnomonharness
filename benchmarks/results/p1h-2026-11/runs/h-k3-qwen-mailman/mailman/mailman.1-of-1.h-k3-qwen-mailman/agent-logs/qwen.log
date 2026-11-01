@@ -1,0 +1,35 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Mail server is up and verified.
+
+## What was configured
+
+**Mailman** — `/etc/mailman3/mailman.cfg`
+- `site_owner: reading-group-owner@local.edu`
+- LMTP intake on `127.0.0.1:8024`, outgoing SMTP to `localhost:25`, SQLite DB at `/var/lib/mailman3/data/mailman.db`
+
+**List** `reading-group@local.edu`
+- `subscription_policy = open` (no owner approval; subscriber still gets a confirmation mail)
+- `unsubscription_policy = confirm` (leave also requires the confirmation reply)
+- `default_member_action = accept`, `default_nonmember_action = accept` (posts are not held for moderation)
+
+**Postfix**
+- `mydestination` includes `local.edu`, so `<user>@local.edu` is delivered to `/var/mail/<user>`
+- `transport_maps = hash:/var/lib/mailman3/data/postfix_lmtp`, so `reading-group*@local.edu` goes to Mailman's LMTP runner
+- `local_recipient_maps` includes the same map plus unix passwd, so list addresses are accepted and unknown local users rejected
+- Aliases (`-join`, `-leave`, `-confirm`, `-bounce`, …) generated with `mailman aliases` and made readable by Postfix
+
+**Processes** (no init system in this container)
+- Postfix master and full Mailman runner set are running
+- Helper: `/usr/local/bin/mail-services {start|stop|restart|status}` (idempotent, detaches Mailman properly)
+
+## Verification
+
+`python3 /app/eval.py` passes: direct local delivery, list existence, and the full join → confirmation → membership flow.
+
+I also ran an extra end-to-end check that passed:
+- member announcement delivered to the other subscriber
+- non-member announcement accepted and delivered
+- `reading-group-leave@local.edu` sends a confirmation, member remains subscribed until the reply, then is removed
+- no list mail delivered after leaving
+
+Note: the container's PID 1 is `sleep infinity`, so daemons do not auto-start across a restart — run `mail-services start` in that case.

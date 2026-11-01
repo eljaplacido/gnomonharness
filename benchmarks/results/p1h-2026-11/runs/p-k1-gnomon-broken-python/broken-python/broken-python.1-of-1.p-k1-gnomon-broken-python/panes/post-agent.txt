@@ -1,0 +1,52 @@
+root@2cfb3577137d:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+root@2cfb3577137d:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+ARM_VERSION=7012c5a6d80516891b061cc0f07ac1724b6289a0
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793495910
+root@2cfb3577137d:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with
+ pip.'; tmux wait -S done
+`ensurepip` trusts the leftover `dist-info` and concludes pip is fine. The stale metadata has to be cleared before it will reinstall from the bundled wheel.
+
+## The fix
+
+The offline wheel `ensurepip/_bundled/pip-24.3.1-py3-none-any.whl` was intact, so no network was needed:
+
+1. Backed up the broken metadata to `/tmp/piptriage/`.
+2. Removed `site-packages/pip-24.3.1.dist-info` and the orphaned `/usr/local/bin/pip3.13`.
+3. `python3 -m ensurepip --default-pip` → reinstalled pip 24.3.1 from the local wheel.
+
+## Verification
+
+`/tmp/verify_pip.sh` — I wrote it to fail if any of this regresses, and it passes end to end:
+
+```
+PASS  python3 -m pip --version
+PASS  pip --version (bare)
+PASS  pip3 --version
+PASS  import pip
+PASS  pip.__version__ == 24.3.1
+PASS  pip submodules importable
+PASS  site-packages/pip exists
+PASS  no stale/missing-file state
+PASS  pip list runs
+PASS  pip can resolve a real install
+PASS  file count matches RECORD (841)
+---
+ALL CHECKS PASSED
+```
+
+The last check is the one that matters most for your symptom: I did a genuine `pip install six` in a throwaway venv (`Successfully installed six-1.17.0`, then `
+import six` → `1.17.0`), and a `--dry-run` install against the network. Both work. `pip check` reports `No broken requirements found.`
+
+## Two things worth noting
+
+- **This was damage, not misconfiguration.** The directory was deleted at some point (note the site-packages mtime of Oct 31 vs the package files' Jan 14) — lik
+ely a manual `rm`, or an interrupted/interleaved install. It'll recur if whatever deleted it runs again; check any cleanup or image-pruning scripts that touch `
+site-packages`.
+- **pip 24.3.1 is behind** (26.2.2 is current). I deliberately left it — you asked me to fix a broken install, not to change your package versions. `python3 -m
+pip install --upgrade pip` when you want it.
+
+Backup of the broken metadata is at `/tmp/piptriage/` if you want to inspect it; delete it whenever. The script is at `/tmp/verify_pip.sh`.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=23 surface=a57c8a7444d5
+root@2cfb3577137d:/app#

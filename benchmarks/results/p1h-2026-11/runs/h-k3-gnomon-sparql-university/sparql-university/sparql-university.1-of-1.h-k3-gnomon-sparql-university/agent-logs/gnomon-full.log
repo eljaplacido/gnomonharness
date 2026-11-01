@@ -1,0 +1,539 @@
+  │ I'll start by inspecting the Turtle file to understand the ontology and i…
+[approval] bash: ls -la /app/ && wc -l /app/university_graph.ttl — approved
+  ⚙ bash ls -la /app/ && wc -l /app/university_graph.ttl
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: head -100 /app/university_graph.ttl — approved
+  ⚙ bash head -100 /app/university_graph.ttl
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+[approval] bash: sed -n '100,305p' /app/university_graph.ttl — approved
+  ⚙ bash sed -n '100,305p' /app/university_graph.ttl
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: tail -20 /app/university_graph.ttl; echo ---; grep -n "Student27\|Student28\|Student29\|Student30\|hasGraduationDate" /app/university_graph.ttl | tail -20 — approved
+  ⚙ bash tail -20 /app/university_graph.ttl; echo ---; grep -n "Student27\|Stud…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+[approval] bash: grep -n "role\|worksIn\|teaches\|isTaughtIn\|locatedInCountry\|belongsTo\|isEnrolledIn" /app/university_graph.ttl | grep -v "^.*Student" | head -60 — approved
+  ⚙ bash grep -n "role\|worksIn\|teaches\|isTaughtIn\|locatedInCountry\|belongs…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: sed -n '255,290p' /app/university_graph.ttl — approved
+  ⚙ bash sed -n '255,290p' /app/university_graph.ttl
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+[approval] bash: which python3 arq roqet sparql jena 2>/dev/null; python3 -c "import rdflib; print('rdflib', rdflib.__version__)" 2>&1 | tail -2 — approved
+  ⚙ bash which python3 arq roqet sparql jena 2>/dev/null; python3 -c "import rd…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: cd /tmp && timeout 60 pip install rdflib 2>&1 | tail -5 — approved
+  ⚙ bash cd /tmp && timeout 60 pip install rdflib 2>&1 | tail -5
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+[approval] bash: grep -n "@prefix\|rdfs:Class\|owl:Class\|subClassOf\|ontology" /app/university_graph.ttl — approved
+  ⚙ bash grep -n "@prefix\|rdfs:Class\|owl:Class\|subClassOf\|ontology" /app/un…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: ls -la / 2>/dev/null; ls -la /app/.gnomon /app/.gnomon-audit 2>/dev/null; cat /app/.gitignore /app/.gitattributes — approved
+  ⚙ bash ls -la / 2>/dev/null; ls -la /app/.gnomon /app/.gnomon-audit 2>/dev/nu…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+[approval] bash: python3 -m pip --version 2>&1 | tail -2; ls /usr/lib/python3/dist-packages 2>/dev/null | head -20; find / -maxdepth 3 -name "*sparql*" -o -maxdepth 3 -name "*rdflib*" 2>/dev/null | head — approved
+  ⚙ bash python3 -m pip --version 2>&1 | tail -2; ls /usr/lib/python3/dist-pack…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+[approval] bash: which java node npm curl 2>/dev/null; timeout 15 python3 -c "import urllib.request;print(urllib.request.urlopen('https://pypi.org/simple/',timeout=10).status)" 2>&1 | tail -2 — approved
+  ⚙ bash which java node npm curl 2>/dev/null; timeout 15 python3 -c "import ur…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  │ Now I'll write the query, then set up a SPARQL engine to verify it.
+[approval] write /app/solution.sparql (+54 −0) [new file] — approved
+  ⚙ write /app/solution.sparql
+    ✓ write /app/solution.sparql (+54 −0)
+  deepseek-v4.1-flash — 13 tool call(s) so far
+[approval] bash: cd /tmp && timeout 120 python3 -m ensurepip --user 2>&1 | tail -3 — approved
+  ⚙ bash cd /tmp && timeout 120 python3 -m ensurepip --user 2>&1 | tail -3
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+[approval] bash: cd /tmp && (timeout 180 apt-get install -y python3-rdflib >/tmp/apt.log 2>&1; echo "exit=$?"; tail -5 /tmp/apt.log) — approved
+  ⚙ bash cd /tmp && (timeout 180 apt-get install -y python3-rdflib >/tmp/apt.lo…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 15 tool call(s) so far
+[approval] bash: cd /tmp && python3 - <<'EOF'
+import rdflib
+g = rdflib.Graph()
+g.parse('/app/university_graph.ttl', format='turtle')
+print("triples:", len(g))
+q = open('/app/solution.sparql').read()
+res = g.query(q)
+print("vars:", [str(v) for v in res.vars])
+for row in res:
+    print(tuple(str(x) for x in row))
+EOF — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' import rdflib g = rdflib.Graph() g.parse(…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+  │ Now let me verify these results independently, with a script that doesn't…
+[approval] bash: cd /tmp && python3 - <<'EOF'
+import rdflib
+from rdflib import Namespace
+from datetime import date
+U = Namespace("http://university.org/ontology/")
+g = rdflib.Graph(); g.parse('/app/university_graph.ttl', format='turtle')
+TODAY = date(2025,8,16)
+
+def val(s,p):
+    return [o for o in g.objects(s,p)]
+
+# current enrollments per department
+dept_students = {}
+for s,p,o in g.triples((None, U.isEnrolledIn, None)):
+    courses = [o]
+    enr = val(s, U.hasEnrollmentDate)
+    grad = val(s, U.hasGraduationDate)
+    current = all(e.toPython() <= TODAY for e in enr) and not any(x.toPython() <= TODAY for x in grad)
+    for c in courses:
+        for d in g.objects(c, U.isTaughtIn):
+            if current:
+                dept_students.setdefault(d, set()).add(s)
+print("current students per department:")
+for d,n in sorted(dept_students.items(), key=lambda kv: str(kv[0])):
+    print(" ", str(d).split('/')[-1], len(n), "CROWDED>10" if len(n)>10 else "")
+
+EU = set("AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE".split())
+print("\nprofessors:")
+for p in g.subjects(rdflib.RDF.type, U.Person):
+    roles=[str(r) for r in g.objects(p,U.role)]
+    if not any(r.startswith("Professor") for r in roles): continue
+    name=str(next(iter(g.objects(p,U.hasName))))
+    works=list(g.objects(p,U.worksIn))
+    depts=[(str(d).split('/')[-1], str(next(iter(g.objects(next(iter(g.objects(d,U.belongsTo))),U.locatedInCountry)))), len(dept_students.get(d,()))) for d in works]
+    print(f"  {name:22s} role={roles[0]!r:45s} depts={depts}")
+EOF — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' import rdflib from rdflib import Namespac…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 17 tool call(s) so far
+  │ Independent recomputation matches. Let me make the EU-country test maxima…
+[approval] edit /app/solution.sparql (+5 −5) — approved
+  ⚙ edit /app/solution.sparql
+    ✓ edit /app/solution.sparql (+5 −5)
+  deepseek-v4.1-flash — 18 tool call(s) so far
+[approval] bash: cd /tmp && python3 - <<'EOF'
+import rdflib
+g = rdflib.Graph(); g.parse('/app/university_graph.ttl', format='turtle')
+rows = [tuple(str(x) for x in r) for r in g.query(open('/app/solution.sparql').read())]
+for r in rows: print(r)
+expected = {("Aristotle Tympas","GR"), ("Orfeas Menis","GR, US"), ("Pepe Attanasio","PT, GR")}
+assert set(rows) == expected, (rows, expected)
+assert [str(v) for v in g.query(open('/app/solution.sparql').read()).vars] == ['professorName','countries']
+print("\nOK: results and projection match expectations")
+EOF — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' import rdflib g = rdflib.Graph(); g.parse…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 19 tool call(s) so far
+[approval] bash: cd /tmp && python3 - <<'EOF'
+# Sanity checks that the query is not trivially passing: each criterion must matter.
+import rdflib
+g = rdflib.Graph(); g.parse('/app/university_graph.ttl', format='turtle')
+base = open('/app/solution.sparql').read()
+
+def run(q): return sorted(tuple(str(x) for x in r) for r in g.query(q))
+
+# A: drop EU filter -> John Smith (US) may appear
+noeu = base.replace('VALUES ?euCountry {', 'VALUES ?euCountry {\n    "US" "CH"')
+print("with US/CH allowed:", run(noeu))
+
+# B: allow associate/assistant -> more names
+noassoc = base.replace('FILTER(!REGEX(STR(?role), "^(Assistant|Associate) "))\n', '')
+print("including assistants:", run(noassoc))
+
+# C: threshold lowered to >0 -> also Marie Dubois / John Smith enrolled depts
+low = base.replace('COUNT(DISTINCT ?student) > 10', 'COUNT(DISTINCT ?student) > 0')
+print("threshold >0:", run(low))
+
+# D: graduation filter removed -> Math201/Sorbonne counts rise
+nograd = base.replace('''      FILTER NOT EXISTS {
+        ?student uni:hasGraduationDate ?graduationDate .
+        FILTER(?graduationDate <= "2025-08-16"^^xsd:date)
+      }''', '')
+print("graduation ignoring:", run(nograd))
+EOF — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' # Sanity checks that the query is not tri…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 20 tool call(s) so far
+  │ Two things to fix: the concat order isn't deterministic across engines, a…
+[approval] bash: cd /tmp && python3 - <<'EOF'
+import rdflib
+g = rdflib.Graph(); g.parse('/app/university_graph.ttl', format='turtle')
+q_sub = """
+PREFIX uni: <http://university.org/ontology/>
+SELECT ?professorName (GROUP_CONCAT(DISTINCT ?country; separator=", ") AS ?countries)
+WHERE {
+  { SELECT ?professor ?professorName ?country WHERE {
+      ?professor uni:hasName ?professorName ; uni:worksIn ?d .
+      ?d uni:belongsTo ?u . ?u uni:locatedInCountry ?country .
+    } ORDER BY ?professorName ?country }
+}
+GROUP BY ?professorName
+"""
+for r in g.query(q_sub): print(tuple(str(x) for x in r))
+EOF — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' import rdflib g = rdflib.Graph(); g.parse…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 21 tool call(s) so far
+  │ Ordering via an ordered sub-select yields deterministic country lists. Le…
+[approval] write /app/solution.sparql (+24 −16) — approved
+  ⚙ write /app/solution.sparql
+    ✓ write /app/solution.sparql (+24 −16)
+  deepseek-v4.1-flash — 22 tool call(s) so far
+[approval] bash: cd /tmp && python3 - <<'EOF'
+import rdflib
+from rdflib import Namespace
+g = rdflib.Graph(); g.parse('/app/university_graph.ttl', format='turtle')
+q = open('/app/solution.sparql').read()
+res = g.query(q)
+rows = [tuple(str(x) for x in r) for r in res]
+for r in rows: print(r)
+print("vars:", [str(v) for v in res.vars])
+expected = [("Aristotle Tympas","GR"), ("Orfeas Menis","GR, US"), ("Pepe Attanasio","GR, PT")]
+assert [str(v) for v in res.vars] == ['professorName','countries'], res.vars
+assert rows == expected, rows
+print("OK")
+EOF — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' import rdflib from rdflib import Namespac…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 23 tool call(s) so far
+[approval] bash: cd /tmp && python3 - <<'EOF'
+# Criterion sensitivity: each constraint must be load-bearing.
+import rdflib
+g = rdflib.Graph(); g.parse('/app/university_graph.ttl', format='turtle')
+base = open('/app/solution.sparql').read()
+def run(q): return sorted(tuple(str(x) for x in r) for r in g.query(q))
+
+# 1. break the "full professor" filter properly (allow any 'Professor' role incl. Assistant)
+q = base.replace('FILTER(REGEX(STR(?role), "^Professor( |$)"))', 'FILTER(CONTAINS(STR(?role), "Professor"))') \
+        .replace('FILTER(!REGEX(STR(?role), "^(Assistant|Associate) "))', '')
+print("assistants allowed:", run(q))
+
+# 2. non-EU countries allowed
+q = base.replace('"AT" "BE" "BG" "HR" "CY" "CZ" "DK" "EE" "FI" "FR" "DE" "GR" "HU"',
+                 '"AT" "BE" "BG" "HR" "CY" "CZ" "DK" "EE" "FI" "FR" "DE" "GR" "HU" "US" "CH"')
+print("US/CH allowed:  ", run(q))
+
+# 3. threshold relaxed
+print("threshold >0:   ", run(base.replace('COUNT(DISTINCT ?student) > 10','COUNT(DISTINCT ?student) > 0')))
+
+# 4. graduation filter dropped
+grad_block = '''      FILTER NOT EXISTS {
+        ?student uni:hasGraduationDate ?graduationDate .
+        FILTER(?graduationDate <= "2025-08-16"^^xsd:date)
+      }'''
+print("+graduates kept:", run(base.replace(grad_block, '')))
+EOF — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' # Criterion sensitivity: each constraint …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 24 tool call(s) so far
+  │ The last two tests were likely no-ops — let me verify the replacements ac…
+[approval] bash: cd /tmp && python3 - <<'EOF'
+import rdflib
+g = rdflib.Graph(); g.parse('/app/university_graph.ttl', format='turtle')
+base = open('/app/solution.sparql').read()
+grad_block = '''      FILTER NOT EXISTS {
+        ?student uni:hasGraduationDate ?graduationDate .
+        FILTER(?graduationDate <= "2025-08-16"^^xsd:date)
+      }'''
+print("grad replacement applied:", grad_block in base)
+eu_vals = '"AT" "BE" "BG" "HR" "CY" "CZ" "DK" "EE" "FI" "FR" "DE" "GR" "HU"'
+print("eu replacement applied:", eu_vals in base)
+EOF — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' import rdflib g = rdflib.Graph(); g.parse…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 25 tool call(s) so far
+  │ Both replacements did apply (they add Marie Dubois via Sorbonne's 14 tota…
+[approval] bash: cd /tmp && python3 - <<'EOF'
+import rdflib
+g = rdflib.Graph(); g.parse('/app/university_graph.ttl', format='turtle')
+base = open('/app/solution.sparql').read()
+TTL = """
+@prefix uni: <http://university.org/ontology/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+uni:Menis2 a uni:Person ; uni:hasName "Only US Full Prof" ; uni:role "Professor of CS" ;
+    uni:worksIn uni:Sloan_MIT .
+uni:FutureProf a uni:Person ; uni:hasName "Late Enrol Prof" ; uni:role "Professor of X" ;
+    uni:worksIn uni:KleinDept .
+uni:KleinDept a uni:Department ; uni:belongsTo uni:LMU .
+uni:KleinCourse a uni:Course ; uni:isTaughtIn uni:KleinDept .
+"""
+extra = rdflib.Graph(); extra.parse(data=TTL, format='turtle')
+for t in extra: g.add(t)
+# 11 fresh students in Sloan_MIT (US) and 11 in KleinDept (DE, EU), all enrolled today-ish
+for i in range(11):
+    s = rdflib.URIRef(f"http://university.org/ontology/SloanStu{i}")
+    g.add((s, rdflib.RDF.type, rdflib.URIRef("http://university.org/ontology/Person")))
+    g.add((s, rdflib.URIRef("http://university.org/ontology/isEnrolledIn"), rdflib.URIRef("http://university.org/ontology/Bio101")))
+    g.add((s, rdflib.URIRef("http://university.org/ontology/hasEnrollmentDate"), rdflib.Literal("2024-05-01", datatype=rdflib.XSD.date)))
+    k = rdflib.URIRef(f"http://university.org/ontology/KStu{i}")
+    g.add((k, rdflib.RDF.type, rdflib.URIRef("http://university.org/ontology/Person")))
+    g.add((k, rdflib.URIRef("http://university.org/ontology/isEnrolledIn"), rdflib.URIRef("http://university.org/ontology/KleinCourse")))
+    # enrolled AFTER the reference date -> must NOT count as currently enrolled
+    g.add((k, rdflib.URIRef("http://university.org/ontology/hasEnrollmentDate"), rdflib.Literal("2025-09-01", datatype=rdflib.XSD.date)))
+
+def run(q): return sorted(tuple(str(x) for x in r) for r in g.query(q))
+print("synthetic run:", run(base))
+print("if EU filter dropped:", run(base.replace('"SE"\n  }', '"SE" "US"\n  }')))
+# sanity: KleinDept has 11 students but all enrolled in the future -> Late Enrol Prof must be absent
+EOF — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' import rdflib g = rdflib.Graph(); g.parse…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 26 tool call(s) so far
+  │ Let me confirm there are no employment-date predicates I've missed, and s…
+[approval] bash: grep -o "uni:[a-zA-Z]*" /app/university_graph.ttl | sort -u — approved
+  ⚙ bash grep -o "uni:[a-zA-Z]*" /app/university_graph.ttl | sort -u
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 27 tool call(s) so far
+[approval] bash: cd /tmp && mkdir -p spjs && cd spjs && timeout 180 npm install sparqljs --silent 2>&1 | tail -3; echo "installed=$?" — approved
+  ⚙ bash cd /tmp && mkdir -p spjs && cd spjs && timeout 180 npm install sparqlj…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 28 tool call(s) so far
+[approval] bash: cd /tmp/spjs && node -e "
+const sparqljs = require('sparqljs');
+const q = require('fs').readFileSync('/app/solution.sparql','utf8');
+const parsed = new sparqljs.Parser().parse(q);
+console.log('parsed ok; type =', parsed.type);
+console.log('variables =', JSON.stringify(parsed.variables.map(v=>v.expression ? v.expression.args[0].value+' AS '+v.variable.value : v.value)));
+" — approved
+  ⚙ bash cd /tmp/spjs && node -e " const sparqljs = require('sparqljs'); const …
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 29 tool call(s) so far
+  │ Parse succeeded ("type = query"); the error was only my JS inspection. Le…
+[approval] bash: cd /tmp/spjs && node -e "
+const sparqljs = require('sparqljs');
+const q = require('fs').readFileSync('/app/solution.sparql','utf8');
+const parsed = new sparqljs.Parser().parse(q);
+console.log(JSON.stringify(parsed.variables, null, 1));
+console.log('group keys:', parsed.group.map(g=>g.type));
+" — approved
+  ⚙ bash cd /tmp/spjs && node -e " const sparqljs = require('sparqljs'); const …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 30 tool call(s) so far
+[approval] bash: cd /tmp && python3 -c "
+import rdflib
+from rdflib.plugins.sparql import parser
+q = open('/app/solution.sparql').read()
+parser.parseQuery(q)
+print('rdflib: parses OK')
+" — approved
+  ⚙ bash cd /tmp && python3 -c " import rdflib from rdflib.plugins.sparql impor…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 31 tool call(s) so far
+  │ Let me check whether the "per department" vs "per class" reading of crite…
+[approval] bash: cd /tmp && python3 - <<'EOF'
+import rdflib
+g = rdflib.Graph(); g.parse('/app/university_graph.ttl', format='turtle')
+base = open('/app/solution.sparql').read()
+# Variant: count per course (class) instead of per department
+q = base.replace("""    SELECT ?crowdedDepartment
+    WHERE {
+      ?course uni:isTaughtIn ?crowdedDepartment .""",
+"""    SELECT ?crowdedDepartment
+    WHERE {
+      ?course uni:isTaughtIn ?crowdedDepartment .""")
+q2 = base.replace("""      ?course uni:isTaughtIn ?crowdedDepartment .
+      ?student uni:isEnrolledIn ?course ;""",
+"""      ?course uni:isTaughtIn ?crowdedDepartment .
+      ?student uni:isEnrolledIn ?course ;""")
+for name, q in [("per-department", base)]:
+    print(name, sorted(tuple(str(x) for x in r) for r in g.query(q)))
+
+# per-class variant built by grouping on course
+per_class = """
+PREFIX uni: <http://university.org/ontology/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?professorName (GROUP_CONCAT(DISTINCT ?country; separator=", ") AS ?countries) WHERE {
+  { SELECT ?professor ?professorName ?country WHERE {
+      ?professor uni:hasName ?professorName ; uni:worksIn ?d .
+      ?d uni:belongsTo ?u . ?u uni:locatedInCountry ?country .
+    } ORDER BY ?professorName ?country }
+  ?professor uni:role ?role . FILTER(REGEX(STR(?role), "^Professor( |$)"))
+  ?professor uni:worksIn ?dep .
+  ?dep uni:belongsTo ?euU . ?euU uni:locatedInCountry ?euC .
+  VALUES ?euC { "GR" "PT" "FR" "DE" "ES" }
+  ?professor uni:worksIn ?dep2 . ?course uni:isTaughtIn ?dep2 .
+  { SELECT ?dep2 WHERE {
+      ?c uni:isTaughtIn ?dep2 . ?s uni:isEnrolledIn ?c ; uni:hasEnrollmentDate ?ed .
+      FILTER(?ed <= "2025-08-16"^^xsd:date)
+      FILTER NOT EXISTS { ?s uni:hasGraduationDate ?gd . FILTER(?gd <= "2025-08-16"^^xsd:date) }
+    } GROUP BY ?dep2 HAVING (COUNT(DISTINCT ?s) > 10) }
+} GROUP BY ?professorName ORDER BY ?professorName
+"""
+print("(per-class grouping is same construct here)")
+# actual per-class counts
+TODAY=rdflib.Literal("2025-08-16", datatype=rdflib.XSD.date)
+U=rdflib.Namespace("http://university.org/ontology/")
+from collections import defaultdict
+c=defaultdict(set)
+for s in set(g.subjects(U.isEnrolledIn,None)):
+    grad=[x.toPython() for x in g.objects(s,U.hasGraduationDate)]
+    if any(x<=TODAY.toPython() for x in grad): continue
+    for cr in g.objects(s,U.isEnrolledIn):
+        c[cr].add(s)
+for cr,n in sorted(c.items(), key=lambda kv:str(kv[0])):
+    print(" class", str(cr).split('/')[-1], len(n), ">10" if len(n)>10 else "")
+EOF — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' import rdflib g = rdflib.Graph(); g.parse…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 32 tool call(s) so far
+  [tools] 32/256 calls — continuing (leg 2)
+  deepseek-v4.1-flash — leg 2, 32 call(s) so far
+  │ Let me make the full-professor test robust to "Full Professor" phrasing, …
+[approval] edit /app/solution.sparql (+4 −3) — approved
+  ⚙ edit /app/solution.sparql
+    ✓ edit /app/solution.sparql (+4 −3)
+  deepseek-v4.1-flash — 33 tool call(s) so far
+[approval] bash: cd /tmp && python3 - <<'EOF'
+import rdflib
+g = rdflib.Graph(); g.parse('/app/university_graph.ttl', format='turtle')
+q = open('/app/solution.sparql').read()
+res = g.query(q)
+rows = [tuple(str(x) for x in r) for r in res]
+print("vars:", [str(v) for v in res.vars])
+for r in rows: print(" ", r)
+assert [str(v) for v in res.vars] == ['professorName','countries']
+assert rows == [("Aristotle Tympas","GR"), ("Orfeas Menis","GR, US"), ("Pepe Attanasio","GR, PT")], rows
+print("PASS: main query")
+
+# 'Full Professor' phrasing must still be recognised
+TTL = """@prefix uni: <http://university.org/ontology/> .
+uni:FP a uni:Person ; uni:hasName "Full Prof Test" ; uni:role "Full Professor of Physics" ;
+  uni:worksIn uni:ComputerScience_NTUA ."""
+extra = rdflib.Graph(); extra.parse(data=TTL, format='turtle')
+for t in extra: g.add(t)
+names = [tuple(str(x) for x in r) for r in g.query(q)]
+assert ("Full Prof Test", "GR") in names, names
+print("PASS: 'Full Professor' phrasing recognised")
+assert not any(n[0] in ("Athanasios Voulodimos","Stefan Mueller") for n in names)
+print("PASS: assistant professors excluded")
+EOF — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' import rdflib g = rdflib.Graph(); g.parse…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 34 tool call(s) so far
+[approval] bash: cd /tmp && python3 - <<'EOF'
+# Negative controls: each criterion must be load-bearing on a mutated graph.
+import rdflib
+U = "http://university.org/ontology/"
+base = open('/app/solution.sparql').read()
+def load():
+    g = rdflib.Graph(); g.parse('/app/university_graph.ttl', format='turtle'); return g
+def names(g): return sorted(tuple(str(x) for x in r) for r in g.query(base))
+
+# Control 1: move NTUA from GR to a non-EU code -> Menis/Pepe/Aristotle lose their EU dept.
+g = load()
+for t in list(g.triples((rdflib.URIRef(U+"NTUA"), rdflib.URIRef(U+"locatedInCountry"), None))): g.remove(t)
+g.add((rdflib.URIRef(U+"NTUA"), rdflib.URIRef(U+"locatedInCountry"), rdflib.Literal("US")))
+print("NTUA->US:", names(g))
+
+# Control 2: make every graduation date far in the future? No: make CS101 enrolments all graduate.
+g = load()
+for s in set(g.subjects(rdflib.URIRef(U+"isEnrolledIn"), rdflib.URIRef(U+"CS101"))):
+    g.add((s, rdflib.URIRef(U+"hasGraduationDate"), rdflib.Literal("2025-01-01", datatype=rdflib.XSD.date)))
+print("CS101 grads:", names(g))
+
+# Control 3: push enrollment dates after the reference date -> nobody currently enrolled.
+g = load()
+for s in set(g.subjects(rdflib.URIRef(U+"hasEnrollmentDate"), None)):
+    for t in list(g.triples((s, rdflib.URIRef(U+"hasEnrollmentDate"), None))): g.remove(t)
+    g.add((s, rdflib.URIRef(U+"hasEnrollmentDate"), rdflib.Literal("2025-09-01", datatype=rdflib.XSD.date)))
+print("future enrolments:", names(g))
+EOF — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' # Negative controls: each criterion must …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 35 tool call(s) so far
+  deepseek-v4.1-flash — 36 tool call(s) so far
+  ⚙ read /app/solution.sparql
+    ✓ read /app/solution.sparql — 63 lines
+[approval] bash: cd /tmp && python3 - <<'EOF'
+# Robustness of the final answer to plausible alternative readings of "currently enrolled".
+import rdflib
+U=rdflib.Namespace("http://university.org/ontology/")
+TODAY="2025-08-16"
+base=open('/app/solution.sparql').read()
+
+def load():
+    g=rdflib.Graph(); g.parse('/app/university_graph.ttl',format='turtle'); return g
+def run(g,q=base): return sorted(tuple(str(x) for x in r) for r in g.query(q))
+
+variants = {}
+# A: exclude anyone who has ANY graduation date (even future)
+variants['exclude any graduation date'] = base.replace(
+    'FILTER(?graduationDate <= "2025-08-16"^^xsd:date)',
+    'FILTER(true)')
+# B: ignore graduation entirely
+variants['ignore graduation'] = base.replace('''      FILTER NOT EXISTS {
+        ?student uni:hasGraduationDate ?graduationDate .
+        FILTER(?graduationDate <= "2025-08-16"^^xsd:date)
+      }''', '')
+# C: ignore enrollment date
+variants['ignore enrolment date'] = base.replace('FILTER(?enrollmentDate <= "2025-08-16"^^xsd:date)', 'FILTER(true)')
+# D: ignore both dates
+variants['ignore both dates'] = variants['ignore graduation'].replace('FILTER(?enrollmentDate <= "2025-08-16"^^xsd:date)','FILTER(true)')
+
+for k,v in variants.items():
+    print(f"{k:32s}", run(load(), v))
+print(f"{'chosen query':32s}", run(load()))
+EOF — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' # Robustness of the final answer to plaus…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 37 tool call(s) so far
+  │ The query is verified. Final confirmation run:
+[approval] bash: cd /tmp && python3 - <<'EOF'
+import rdflib, re
+path='/app/solution.sparql'
+q=open(path).read()
+# required projection line must be present verbatim
+req='SELECT ?professorName (GROUP_CONCAT(DISTINCT ?country; separator=", ") AS ?countries)'
+assert req in q, "projection line missing"
+print("projection OK:", req)
+g=rdflib.Graph(); g.parse('/app/university_graph.ttl', format='turtle')
+res=g.query(q)
+print("vars:", [str(v) for v in res.vars])
+for r in res: print("  ", tuple(str(x) for x in r))
+EOF
+echo "--- file ---"; ls -l /app/solution.sparql — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' import rdflib, re path='/app/solution.spa…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 38 tool call(s) so far
+Done. `/app/solution.sparql` is written and verified by execution against the graph.
+
+## Query
+
+```sparql
+SELECT ?professorName (GROUP_CONCAT(DISTINCT ?country; separator=", ") AS ?countries)
+```
+with three criteria in the `WHERE` clause:
+
+1. **Full professors** — `uni:role` starts with `Professor` (or `Full Professor`) and is not `Assistant`/`Associate`/`Adjunct`/`Visiting`. The role is free text (`"Professor of Computer Science"`), and `uni:Person` also covers students, so the filter is on role text, not type.
+2. **EU department** — a `VALUES` list of the 27 official member states as of 2025‑08‑16 (`AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE`) matched against `uni:locatedInCountry`. Switzerland and the US are correctly excluded.
+3. **Crowded department** — a `GROUP BY`/`HAVING (COUNT(DISTINCT ?student) > 10)` sub-select counts students enrolled in courses `uni:isTaughtIn` each department, treating a student as *currently* enrolled if `hasEnrollmentDate <= 2025-08-16` and they have no graduation date on or before that date.
+
+Countries are gathered over **all** departments the professor works in (not just the qualifying one), via an ordered sub-select so the `GROUP_CONCAT` order is deterministic.
+
+## Verified output
+
+| ?professorName | ?countries |
+|---|---|
+| Aristotle Tympas | GR |
+| Orfeas Menis | GR, US |
+| Pepe Attanasio | GR, PT |
+
+Checks I ran, not just eyeballed:
+- **Independent recomputation** in Python (no SPARQL reuse) gave the same per‑department current enrolments: ComputerScience_NTUA 12, HistoryAndPhilosophy_NKUA 12, Engineering_Berkeley 11 (all >10), Biology_MIT 7, Mathematics_Sorbonne 6.
+- **Parsed** by both rdflib and sparqljs; projection confirmed as exactly `?professorName`, `?countries`.
+- **Negative controls** on mutated graphs: moving NTUA to `US` drops Menis and flips Pepe to `PT, US`; giving all CS101 students past graduation dates empties the result; pushing all enrolment dates to 2025‑09‑01 empties it — so each criterion is load‑bearing.
+- **Exclusions confirmed**: Athanasios Voulodimos and Stefan Mueller (assistant) are out; John Smith (US) and Marie Dubois (FR, 6 < 10) are out.
+
+Two judgement calls worth flagging: a student with a *future* graduation date counts as enrolled (the only alternative reading, "exclude anyone with any graduation date", yields the same three names here); and Sorbonne's Marie Dubois is excluded because only 6 of its 14 Math201 enrollers are still enrolled — that's what the reference date is doing.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=38 surface=9e36cdc3535a
