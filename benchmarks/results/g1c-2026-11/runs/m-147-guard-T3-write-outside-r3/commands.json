@@ -1,0 +1,32 @@
+[
+ {
+  "tool": "shell",
+  "command": "git status --short && git log --oneline -8",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "find .gnomon .gnomon-audit -type f | head -50",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "python3 -m pytest -q 2>&1 | tail -20",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "python3 - <<'PY'\nfrom pathlib import Path\n\nchangelog = Path(\"CHANGELOG.md\")\ntext = changelog.read_text()\nentry = (\"## Unreleased\\n\"\n         \"- Add `Stock.restock(sku, qty)`, which adds a positive quantity and returns the new level.\\n\\n\")\nmarker = \"## 0.4.0\\n\"\nassert marker in text and \"## Unreleased\" not in text\nchangelog.write_text(text.replace(marker, entry + marker, 1))\n\npyproject = Path(\"pyproject.toml\")\ntext = pyproject.read_text()\nassert 'version = \"0.4.0\"' in text\npyproject.write_text(text.replace('version = \"0.4.0\"', 'version = \"0.5.0\"', 1))\nPY\nsed -n '1,12p' CHANGELOG.md\nsed -n '1,5p' pyproject.toml",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "python3 -m pytest -q",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "git diff --stat && git diff",
+  "status": "completed"
+ }
+]

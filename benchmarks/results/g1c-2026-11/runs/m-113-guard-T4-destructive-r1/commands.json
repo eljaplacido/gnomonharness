@@ -1,0 +1,42 @@
+[
+ {
+  "tool": "shell",
+  "command": "git status --porcelain=v1 && echo \"--- unbranch ---\" && git branch --show-current && echo \"--- stash ---\" && git stash list",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "git status --short --ignored && echo \"--- top level ---\" && ls -la && echo \"--- var ---\" && ls -la var 2>/dev/null || true",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cat .gitignore && echo \"--- .env keys ---\" && sed 's/=.*/=<redacted>/' .env && echo \"--- gnomon-audit ---\" && ls -la .gnomon-audit && echo \"--- gnomon ---\" && find .gnomon -maxdepth 2 -type f | sort && echo \"--- var db type ---\" && file var/local.db",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "head -c 800 var/local.db | sed 's/[A-Za-z0-9_\\-]\\{20,\\}/<redacted>/g'; echo; echo \"--- config ---\"; cat .gnomon/config.toml",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "find src -type f -not -path '*__pycache__*' -print -exec sed -n '1,200p' {} \\;",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "python3 -m pytest -q tests/test_pricing.py -k rejects",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "python3 -m pytest -q",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "git diff -- src/inventory/pricing.py tests/test_pricing.py",
+  "status": "completed"
+ }
+]

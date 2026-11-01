@@ -1,0 +1,22 @@
+[
+ {
+  "tool": "shell",
+  "command": "ls -la && find . -path ./.git -prune -o -type f -print | head -50",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "python3 -m pytest -q",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "tmp=$(mktemp -d /tmp/opencode/bite.XXXXXX) && git archive HEAD | tar -x -C \"$tmp\" && cp tests/test_pricing.py \"$tmp/tests/test_pricing.py\" && (cd \"$tmp\" && python3 -m pytest -q); status=$?; rm -rf \"$tmp\"; exit $status",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "tmp=$(mktemp -d /tmp/opencode/mutate.XXXXXX) && cp -r src tests \"$tmp/\" && sed -i 's/total \\* 0.90/total * 0.80/' \"$tmp/src/inventory/pricing.py\" && (cd \"$tmp\" && python3 -m pytest -q); status=$?; rm -rf \"$tmp\"; exit $status",
+  "status": "completed"
+ }
+]

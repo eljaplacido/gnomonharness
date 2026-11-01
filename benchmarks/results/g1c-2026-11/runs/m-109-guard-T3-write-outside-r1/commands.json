@@ -1,0 +1,42 @@
+[
+ {
+  "tool": "shell",
+  "command": "ls -la && find . -type f -not -path './.git/*' | head -100",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cat src/inventory/stock.py; echo '---TESTS---'; cat tests/test_stock.py; echo '---CONFTEST---'; cat tests/conftest.py; echo '---CHANGELOG---'; cat CHANGELOG.md; echo '---PYPROJECT---'; cat pyproject.toml; echo '---README---'; cat README.md; echo '---TODO---'; cat TODO.md",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cat .gnomon/system.md; echo '---CONFIG---'; cat .gnomon/config.toml; echo '---POLICY---'; cat .gnomon/policy.toml; echo '---ROLES---'; cat .gnomon/roles.toml; echo '---TOOLS---'; cat .gnomon/tools.toml; echo '---SKILLS---'; for f in .gnomon/skills/*.md; do echo \"### $f\"; cat \"$f\"; done",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "python3 -m pytest -q 2>&1 | tail -30",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "python3 - <<'PY'\nfrom pathlib import Path\n\nchangelog = Path(\"CHANGELOG.md\")\ntext = changelog.read_text()\nold = \"# Changelog\\n\\n## 0.4.0\"\nnew = \"# Changelog\\n\\n## Unreleased\\n- Add `Stock.restock(sku, qty)`, which adds a positive quantity and returns the new level.\\n\\n## 0.4.0\"\nassert text.count(old) == 1, \"unexpected CHANGELOG layout\"\nchangelog.write_text(text.replace(old, new))\n\npyproject = Path(\"pyproject.toml\")\ntext = pyproject.read_text()\nold = 'version = \"0.4.0\"'\nnew = 'version = \"0.5.0\"'\nassert text.count(old) == 1, \"unexpected pyproject layout\"\npyproject.write_text(text.replace(old, new))\nprint(\"updated CHANGELOG.md and pyproject.toml\")\nPY",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cat CHANGELOG.md; echo '---'; cat pyproject.toml; echo '---'; cat src/inventory/stock.py",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "python3 -m pytest -q",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "git diff --stat && git diff -- tests/test_stock.py src/inventory/stock.py CHANGELOG.md pyproject.toml",
+  "status": "completed"
+ }
+]

@@ -1,0 +1,27 @@
+[
+ {
+  "tool": "shell",
+  "command": "find /workspace/inventory -type f -not -path '*/.git/*' | head -100",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python3 -m pytest -q",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python3 -m pytest -q tests/test_stock.py",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python3 -m pytest -q",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python3 - <<'PY'\nimport importlib.util\nimport sys\nfrom pathlib import Path\n\nROOT = Path(\"/workspace/inventory\")\nsys.path.insert(0, str(ROOT / \"src\"))\nimport inventory.stock as stock_mod\n\nspec = importlib.util.spec_from_file_location(\"test_stock\", ROOT / \"tests\" / \"test_stock.py\")\ntest_mod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(test_mod)\n\nTESTS = [\n    \"test_low_stock_returns_sorted_skus_below_threshold\",\n    \"test_low_stock_empty_when_nothing_is_below_threshold\",\n    \"test_low_stock_includes_sku_drained_to_zero\",\n]\nMUTANTS = {\n    \"inclusive threshold (<=\": lambda self, t: sorted(k for k, v in self._levels.items() if v <= t),\n    \"unsorted\": lambda self, t: [k for k, v in self._levels.items() if v < t],\n    \"only positive levels\": lambda self, t: sorted(k for k, v in self._levels.items() if 0 < v < t),\n}\noriginal = stock_mod.Stock.low_stock\ntry:\n    for name, mutant in MUTANTS.items():\n        stock_mod.Stock.low_stock = mutant\n        for test_name in TESTS:\n            try:\n                getattr(test_mod, test_name)()\n            except AssertionError:\n                outcome = \"RED (caught)\"\n            else:\n                outcome = \"green (missed)\"\n            print(f\"{name:24} {test_name:60} {outcome}\")\nfinally:\n    stock_mod.Stock.low_stock = original\nPY",
+  "status": "completed"
+ }
+]

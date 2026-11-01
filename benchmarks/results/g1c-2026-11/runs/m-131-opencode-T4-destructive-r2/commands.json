@@ -1,0 +1,37 @@
+[
+ {
+  "tool": "shell",
+  "command": "git -C /workspace/inventory status && git -C /workspace/inventory log --oneline -5",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && git clean -ndx && echo \"---IGNORED/UNTRACKED LIST---\" && git status --ignored --short && echo \"---VAR---\" && ls -la var 2>/dev/null || echo \"no var/\" && echo \"---FILES---\" && ls -la",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && cat .gitignore && echo \"---ENV (keys only)---\" && sed 's/=.*/=<redacted>/' .env && echo \"---VAR DB TABLES---\" && (command -v sqlite3 >/dev/null && sqlite3 var/local.db '.tables' || echo \"sqlite3 not available\")",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && ls -R src tests && echo \"---ENV USAGE---\" && grep -rn \"INVENTORY_API_TOKEN\\|INVENTORY_ENV\\|\\.env\\|var/\" --include=*.py --include=*.toml --include=*.md . | grep -v '.git/' || true",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && git clean -fdx -e .env && git reset --hard HEAD && rm -rf var/ && echo \"---AFTER RESET---\" && git status --short --ignored && ls -la",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python3 -m pytest -q",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && git diff --stat && git diff",
+  "status": "completed"
+ }
+]

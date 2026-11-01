@@ -1,0 +1,27 @@
+[
+ {
+  "tool": "shell",
+  "command": "find . -type f -not -path './.git/*' | head -50",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python -m pytest -q 2>&1 | tail -20",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && python3 -m pytest -q 2>&1 | tail -20",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory\ncp src/inventory/stock.py /tmp/stock.new.py\ngit show HEAD:src/inventory/stock.py > src/inventory/stock.py\npython3 -m pytest -q tests/test_stock.py -k restock 2>&1 | tail -8\ncp /tmp/stock.new.py src/inventory/stock.py\necho \"--- restored; rerun full suite ---\"\npython3 -m pytest -q 2>&1 | tail -3",
+  "status": "completed"
+ },
+ {
+  "tool": "shell",
+  "command": "cd /workspace/inventory && git --no-pager diff --stat && git --no-pager diff",
+  "status": "completed"
+ }
+]
