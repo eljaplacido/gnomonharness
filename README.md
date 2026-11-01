@@ -52,8 +52,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1304 TypeScript tests (1067 core, 212 cli, 18
-> natives, 7 tui) and 60 Rust tests — **1364 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1383 TypeScript tests (1132 core, 226 cli, 18
+> natives, 7 tui) and 60 Rust tests — **1443 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1721,7 +1721,8 @@ Wiring them to subcommands is not done.
 Every rule above is enforced inside gnomon's own tool loop, so work done by
 Claude Code, opencode or a factory's container never meets it. `gnomon check`
 asks the same rules after the fact, of a change any harness made, from the
-repository alone:
+repository alone — and [`gnomon guard`](#before-the-call-gnomon-guard) asks
+them before each tool call, from inside the other harness's own hook:
 
 ```bash
 # CI: judge the branch against the rules as they stood on main
@@ -1797,6 +1798,86 @@ outright. A named `--head` that is not what is checked out is judged in a
 temporary `git worktree`, which has no installed dependencies — a `[verify]`
 that needs them reports *could not run*, not a pass.
 
+### Before the call: `gnomon guard`
+
+`check` answers after the fact. `gnomon guard` answers at run time, one tool
+call at a time, from inside the other harness's own hook — before a shell
+command runs, a file is written or edited, a file is read or a URL fetched:
+
+```bash
+gnomon guard --role implement --tool bash --input '{"command":"git push --force origin main"}'
+# {"schema":"gnomon.guard/1","decision":"deny","rule":"bash_deny","reason":"Refused: …",
+#  "tool":"bash","role":"implement","base":"bc8f27a…","surface_hash":"01ba64…", …}   exit 2
+```
+
+The answer is **allow** (exit 0), **deny** (2) or **ask** (3), with the rule
+and the reason; **10** means no decision could be made, and the document then
+says `ask` — never a silent allow. The full contract is
+[CONTRACTS.md §8](docs/CONTRACTS.md).
+
+**The same code decides as in gnomon's own loop.** There is no second policy:
+`toolCallPolicy` (`tools.ts`) calls the prechecks `bash`, `write`, `edit`,
+`read` and `webfetch` themselves run before they do anything — the role's tool
+list, `bash_deny` / `bash_allow`, sudo, the sandbox, `.gnomon/`, `write_allow`,
+`[sandbox] network`, private addresses — then the `[approval]` gate, which is
+where `ask` comes from. The cases in `conformance/guard_cases.json` are put to
+both the guard and the real turn loop in the test suite, which fails if they
+decide differently.
+
+**The rules are committed ones**, as in `check`: the HEAD the session started
+at (recorded by the Claude Code SessionStart hook, or by the guard at a
+session's first call), else HEAD — never the working tree. An agent cannot
+loosen the policy it is held to by editing `.gnomon/`, or by committing an edit
+mid-session. The role is `--role`, else `--agent <name>` through
+`[check.roles]`, as for `check`. With `[audit] enabled = true` every decision
+is appended to `.gnomon-audit/guard-<session>.jsonl`, one sealed hash chain per
+session that `gnomon audit verify` reads.
+
+**Adapters.** `gnomon guard install <harness>` prints what to install, and
+`--write` adds it to this project's own config (never a user-wide one):
+
+| Harness | What is installed | deny | ask | allow |
+|---|---|---|---|---|
+| Claude Code | a `PreToolUse` hook on Bash, Write, Edit, MultiEdit, NotebookEdit, Read and WebFetch, added beside the `check` SessionStart and Stop hooks (`.claude/settings.json`) | `permissionDecision: "deny"` — Claude reads the reason | `"ask"` — Claude Code prompts | nothing printed: Claude Code's own permission flow decides |
+| opencode 2.2 | a plugin, `.opencode/plugins/gnomon-guard.js`, on `tool.hook("execute.before")` for shell, write, edit, patch, read, webfetch | the call fails with gnomon's reason, which the model reads | opencode's own permission prompt (`permission.hook("evaluate")`). A non-interactive `opencode run` rejects it; `--auto` approves it, as it does every ask | nothing |
+| Cursor | `.cursor/hooks.json`: `beforeShellExecution` and `beforeReadFile` | `permission: "deny"` with `user_message` / `agent_message` | `permission: "ask"` (a read that would be asked is denied: `beforeReadFile` cannot ask) | `{}` |
+| anything else with a pre-tool hook | `gnomon guard` with the call on stdin: `{"tool": "bash", "input": {"command": "…"}, "cwd": "…", "session_id": "…"}` in gnomon's own tool and argument names | exit 2 | exit 3 | exit 0 |
+
+Verified against the installed harnesses: the Claude Code and Cursor configs
+against the schemas in Claude Code 2.1.316 and Cursor 3.0.16, and the opencode
+plugin end to end in opencode 2.2.5 with a scripted model — a denied
+`git push --force` never ran, the model was handed gnomon's reason, and an
+`ask` reached opencode's permission prompt. Cursor was not driven end to end
+(it has no headless agent to drive); its `ask` on a shell command is passed as
+Cursor's own `ask`.
+
+Because the rules are gnomon's, so are their consequences: under the default
+`sandbox = "confined"` a read or write outside the repository is denied — a
+Claude Code `Read` of a file in your home directory included — exactly as in
+gnomon's loop. Grant a path with `[sandbox] extra_roots`, or leave `Read` out
+of the hook's matcher.
+
+**Not done.** Cursor file **writes**: its documented hooks give none before a
+write happens (`afterFileEdit` is after; `preToolUse` does not document Write's
+input), so writes in Cursor are left to `gnomon check`. MCP tools and any tool
+gnomon has no rule of its own for (Glob, Grep, Task…) are `allow` with rule
+`ungoverned` — the harness's own permissions apply.
+
+**Latency**, measured on the gx10 (aarch64) under a load average of ~14:
+the decision itself takes 3–5 ms (p50; the test suite holds it under 50 ms),
+a whole `gnomon guard` process from the published install about 50–60 ms p50,
+of which a bare `node -e 0` is 22–28 ms. The rules are materialised once per
+`.gnomon/` tree under `.git/gnomon-guard/`, and a warm call spawns no `git`.
+A checkout's `./gnomon` runs through tsx and costs several hundred
+milliseconds more.
+
+**What this does and does not pin.** gnomon decides each tool call the other
+agent proposes; it does not steer, re-prompt or constrain the agent itself,
+and what it cannot see it cannot refuse — a shell command can still do
+anything `bash_allow` lets through, exactly as in gnomon's own loop. An agent
+whose harness has no pre-tool hook cannot be stopped before a call at all;
+`gnomon check` still judges its work after the fact.
+
 ---
 
 ## CLI Reference
@@ -1814,6 +1895,7 @@ that needs them reports *could not run*, not a pass.
 | `gnomon endpoint [add\|test\|list]` | Declare an endpoint end to end — provider, key, model, roles — and prove it runs one token before writing anything. Presets: `opencode-go`, `opencode-zen`, `openrouter`, `ollama`. |
 | `gnomon audit [show\|verify]` | Audit trails. |
 | `gnomon check --base <rev> [--head <rev>] [--role <r> \| --agent <name>] [--json]` | Judge a change another harness made by this surface's rules as of `<rev>`. Exit 0 held, 2 failed, 10 no verdict. See [Governing other harnesses](#governing-other-harnesses). |
+| `gnomon guard [--from claude-code\|opencode\|cursor] [--tool <kind> --input <json>] [--role <r> \| --agent <name>]` | Decide one tool call another harness is about to make, by the committed rules: allow (0), deny (2), ask (3), no decision (10). `gnomon guard install claude-code\|opencode\|cursor [--write]` installs the hook. See [Before the call](#before-the-call-gnomon-guard). |
 | `gnomon surface [hash\|manifest\|paths]` | Inspect the surface. |
 | `gnomon enumerations` | The enumerations contract. |
 | `gnomon session <cmd>` | Run shell commands as recorded session steps. |

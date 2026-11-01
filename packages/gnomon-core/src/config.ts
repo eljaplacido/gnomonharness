@@ -1576,7 +1576,7 @@ const BLOCK_OWNER: Record<string, BlockOwner> = {
   verify: { file: "policy.toml", read: true },
   approval: { file: "policy.toml", read: true },
   sandbox: { file: "policy.toml", read: true },
-  // resolveCheckRole (check.ts) reads config.policy.check.roles.
+  // resolveCheckRole (guard.ts, shared by check and guard) reads config.policy.check.roles.
   check: { file: "policy.toml", read: true },
   // NOT read: no consumer of config.policy.exit_codes anywhere in this build.
   exit_codes: { file: "policy.toml", read: false },

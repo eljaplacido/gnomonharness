@@ -1065,29 +1065,47 @@ function clampEnds(text: string, ctx: ToolContext, label: string): string {
   );
 }
 
-async function readTool(
+/** What `read` refuses before it would ask or touch the filesystem. */
+export function readPrecheck(
   args: Record<string, unknown>,
   ctx: ToolContext
-): Promise<ToolOutcome> {
+): { refusal: Precheck } | { abs: string } {
   // A missing, empty or non-string path resolved to "" and then to the
   // FILESYSTEM ROOT — `read / — 1 entries` — rather than being refused. The
   // model asked for nothing and got a listing of somewhere it never named.
   if (typeof args.path !== "string" || args.path.trim() === "") {
     return {
-      code: TOOL_DENIED,
-      content: `Refused: read needs a \`path\`. Nothing was given, and an absent path is not a path.`,
-      summary: `read — no path given`,
+      refusal: {
+        rule: "malformed",
+        code: TOOL_DENIED,
+        content: `Refused: read needs a \`path\`. Nothing was given, and an absent path is not a path.`,
+        summary: `read — no path given`,
+      },
     };
   }
   const path = args.path;
   const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
   if (!abs) {
     return {
-      code: TOOL_OUT_OF_SANDBOX,
-      content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
-      summary: `read ${path} — refused (outside sandbox)`,
+      refusal: {
+        rule: "sandbox",
+        code: TOOL_OUT_OF_SANDBOX,
+        content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
+        summary: `read ${path} — refused (outside sandbox)`,
+      },
     };
   }
+  return { abs };
+}
+
+async function readTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolOutcome> {
+  const pre = readPrecheck(args, ctx);
+  if ("refusal" in pre) return outcomeOf(pre.refusal);
+  const path = args.path as string;
+  const abs = pre.abs;
   // Ask BEFORE touching the filesystem.
   //
   // The existence probe used to run first, so under approval = "always" a
@@ -1422,6 +1440,43 @@ export function sandboxCommand(
 }
 
 /**
+ * Which rule refused a call before it ran. A published enumeration: `gnomon
+ * guard` reports it (CONTRACTS.md §8), so a caller can switch on why.
+ *
+ *   tools        the role was not given this tool
+ *   malformed    the call's arguments cannot be read as that tool's
+ *   bash_deny    a bash_deny pattern matched
+ *   bash_allow   a segment is not on the role's bash_allow
+ *   sudo         sudo on the host
+ *   sandbox      a path outside the root and every granted extra_roots
+ *   surface      a write or edit inside `.gnomon/`
+ *   write_allow  a path outside the role's write_allow
+ *   network      `[sandbox] network = false`
+ *   url          a scheme other than http(s), or a private / loopback address
+ */
+export const POLICY_RULES = [
+  "tools",
+  "malformed",
+  "bash_deny",
+  "bash_allow",
+  "sudo",
+  "sandbox",
+  "surface",
+  "write_allow",
+  "network",
+  "url",
+] as const;
+export type PolicyRule = (typeof POLICY_RULES)[number];
+
+/**
+ * What a tool's precheck says before it would ask anyone or do anything.
+ * With `rule`: a refusal, and the rule that made it. Without: the call would
+ * fail on its own (an empty command, a URL that does not parse) -- the tool's
+ * answer, not a policy's.
+ */
+export type Precheck = ToolOutcome & { rule?: PolicyRule; pattern?: string };
+
+/**
  * Does a role's bash_allow / bash_deny let this command through?
  *
  * The decision bashTool makes before it runs anything, as a function of the
@@ -1547,10 +1602,17 @@ export function bashPolicy(
   return null;
 }
 
-async function bashTool(
-  args: Record<string, unknown>,
-  ctx: ToolContext
-): Promise<ToolOutcome> {
+/**
+ * Everything bashTool refuses before it would ask anyone or run anything: a
+ * malformed call, bash_deny / bash_allow, sudo on the host. Null when none of
+ * them applies.
+ *
+ * Extracted so `gnomon guard` decides another harness's shell call with the
+ * code this loop runs, not a copy of it: bashTool calls this first and returns
+ * what it returns. An outcome with no `rule` is not a refusal -- the empty
+ * command fails, nothing refuses it.
+ */
+export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): Precheck | null {
   // String({}) is "[object Object]", which the shell dutifully tried to run
   // and reported as exit 127. A malformed call should be refused, not executed.
   // Only a NON-STRING is refused. An empty string is harmless -- the shell runs
@@ -1558,6 +1620,7 @@ async function bashTool(
   // a refusal, which is a contract this suite already pins.
   if (typeof args.command !== "string") {
     return {
+      rule: "malformed",
       code: TOOL_DENIED,
       content:
         `Refused: bash needs a \`command\` string, and got ${
@@ -1573,10 +1636,7 @@ async function bashTool(
 
   // Deny first, then the allow-list: see bashPolicy.
   const refused = bashPolicy(command, ctx.bashAllow, ctx.bashDeny);
-  if (refused) {
-    const { rule: _rule, pattern: _pattern, ...outcome } = refused;
-    return outcome;
-  }
+  if (refused) return refused;
 
   // Privilege escalation on the host is refused outright, before any approval
   // prompt. Session-wide approval ("s") covers every gated call, and stdin is
@@ -1586,6 +1646,7 @@ async function bashTool(
   // Inside the docker sandbox it is the container's root, not the host's.
   if (ctx.exec?.mode !== "docker" && SUDO_AT_COMMAND_POSITION.test(command)) {
     return {
+      rule: "sudo",
       code: TOOL_DENIED,
       content:
         "Refused: gnomon does not run sudo. Changing the machine outside this " +
@@ -1594,6 +1655,22 @@ async function bashTool(
       summary: "bash — refused (sudo)",
     };
   }
+  return null;
+}
+
+/** A precheck's answer, minus the bookkeeping a tool does not hand the model. */
+function outcomeOf(pre: Precheck): ToolOutcome {
+  const { rule: _rule, pattern: _pattern, ...outcome } = pre;
+  return outcome;
+}
+
+async function bashTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolOutcome> {
+  const pre = bashPrecheck(args, ctx);
+  if (pre) return outcomeOf(pre);
+  const command = args.command as string;
 
   if (needsApproval("bash", ctx.gate)) {
     const ok = await ctx.approve({
@@ -2535,27 +2612,37 @@ function htmlToText(html: string): string {
  * and names the file, so the default surface has no network reach and gaining
  * it is a visible edit that moves the surface hash.
  */
-async function webfetchTool(
+/**
+ * What `webfetch` refuses before it would ask or connect: the network switch,
+ * the scheme, an address this machine can reach and the network cannot.
+ * Async because the last of those resolves the name.
+ */
+export async function webfetchPrecheck(
   args: Record<string, unknown>,
   ctx: ToolContext
-): Promise<ToolOutcome> {
+): Promise<{ refusal: Precheck } | { url: URL }> {
   const raw = String(args.url ?? "").trim();
   if (!raw) {
     return {
-      code: TOOL_FAILED,
-      content: "webfetch needs a `url`.",
-      summary: "webfetch — no url",
+      refusal: {
+        code: TOOL_FAILED,
+        content: "webfetch needs a `url`.",
+        summary: "webfetch — no url",
+      },
     };
   }
 
   if (ctx.network === false) {
     return {
-      code: TOOL_DENIED,
-      content:
-        `Refused: .gnomon/policy.toml sets [sandbox] network = false, so tools ` +
-        `may not reach the network. Set it to true to allow webfetch — that is ` +
-        `an edit to the surface, and it changes the surface hash.`,
-      summary: `webfetch ${raw} — refused (network disabled)`,
+      refusal: {
+        rule: "network",
+        code: TOOL_DENIED,
+        content:
+          `Refused: .gnomon/policy.toml sets [sandbox] network = false, so tools ` +
+          `may not reach the network. Set it to true to allow webfetch — that is ` +
+          `an edit to the surface, and it changes the surface hash.`,
+        summary: `webfetch ${raw} — refused (network disabled)`,
+      },
     };
   }
 
@@ -2564,34 +2651,51 @@ async function webfetchTool(
     url = new URL(raw);
   } catch {
     return {
-      code: TOOL_FAILED,
-      content: `"${raw}" is not a valid URL.`,
-      summary: "webfetch — bad url",
+      refusal: {
+        code: TOOL_FAILED,
+        content: `"${raw}" is not a valid URL.`,
+        summary: "webfetch — bad url",
+      },
     };
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     // file: would read the filesystem with none of the sandbox checks that
     // `read` applies; the rest are not fetchable in any useful sense.
     return {
-      code: TOOL_DENIED,
-      content: `Refused: only http and https are fetchable, not "${url.protocol}".`,
-      summary: `webfetch — ${url.protocol} refused`,
+      refusal: {
+        rule: "url",
+        code: TOOL_DENIED,
+        content: `Refused: only http and https are fetchable, not "${url.protocol}".`,
+        summary: `webfetch — ${url.protocol} refused`,
+      },
     };
   }
 
   const blocked = await resolvesToBlocked(url.hostname);
   if (blocked) {
     return {
-      code: TOOL_DENIED,
-      content:
-        `Refused: ${url.hostname} resolves to ${blocked}, a private, loopback ` +
-        `or link-local address. Fetching those would let a URL reach services ` +
-        `this machine can see and the network cannot — including cloud ` +
-        `metadata endpoints.`,
-      summary: `webfetch ${url.hostname} — refused (private address)`,
+      refusal: {
+        rule: "url",
+        code: TOOL_DENIED,
+        content:
+          `Refused: ${url.hostname} resolves to ${blocked}, a private, loopback ` +
+          `or link-local address. Fetching those would let a URL reach services ` +
+          `this machine can see and the network cannot — including cloud ` +
+          `metadata endpoints.`,
+        summary: `webfetch ${url.hostname} — refused (private address)`,
+      },
     };
   }
+  return { url };
+}
 
+async function webfetchTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolOutcome> {
+  const pre = await webfetchPrecheck(args, ctx);
+  if ("refusal" in pre) return outcomeOf(pre.refusal);
+  const url = pre.url;
   const denied = await gateReadOnly("webfetch", `webfetch ${url.href}`, ctx, [
     `  GET ${url.href}`,
   ]);
@@ -2958,6 +3062,101 @@ async function grepTool(
   };
 }
 
+/**
+ * What `write` and `edit` refuse before they read, diff or ask: a write with
+ * no content, a path outside the sandbox, the surface, write_allow.
+ *
+ * Returns the refusal, or where the call would land and whether that is the
+ * surface -- which only a `write` under human consent (/allow custom|all) gets
+ * past. `gnomon guard` calls this with the context it built from the base
+ * surface; the tools call it first and return what it refuses.
+ */
+export function writePrecheck(
+  tool: "write" | "edit",
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): { refusal: Precheck } | { abs: string; surface: boolean } {
+  const path = String(args.path ?? "");
+  if (tool === "write" && typeof args.content !== "string") {
+    return {
+      refusal: {
+        rule: "malformed",
+        // TOOL_DENIED (a refusal), not TOOL_FAILED (11, apparatus_failure).
+        // CONTRACTS.md draws that line explicitly: 11 means "understood the
+        // request and could not carry it out", and "a model's malformed argument
+        // arriving there would make it meaningless" — apparatus_failure is the
+        // signal to go and look at the harness. A missing argument is the model
+        // getting it wrong, so the harness says no.
+        code: TOOL_DENIED,
+        content:
+          `Refused: write needs a \`content\` string. Omitting it would empty ` +
+          `${path || "the file"}, which is not what a missing argument should mean. ` +
+          `Send content: "" if you meant to empty it.`,
+        summary: `write — no content given`,
+      },
+    };
+  }
+  const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
+  if (!abs) {
+    return {
+      refusal: {
+        rule: "sandbox",
+        code: TOOL_OUT_OF_SANDBOX,
+        content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
+        summary: `${tool} ${path} — refused (outside sandbox)`,
+      },
+    };
+  }
+  if (inSurface(ctx, abs)) {
+    if (tool === "edit") {
+      return {
+        refusal: {
+          rule: "surface",
+          code: TOOL_DENIED,
+          content:
+            `Refused: "${path}" is inside .gnomon/, the surface that decides how ` +
+            `this agent behaves. It is not editable by a tool call — changing it ` +
+            `is a human act, because it changes the surface hash and the rules ` +
+            `the next turn runs under. Once the human allows it (/allow custom|all) ` +
+            `a surface file is changed by a full-file write, not an in-place edit.`,
+          summary: `edit ${path} — refused (surface is read-only)`,
+        },
+      };
+    }
+    if ((ctx.allow ?? "strict") === "strict") {
+      return {
+        refusal: {
+          rule: "surface",
+          code: TOOL_DENIED,
+          content:
+            `Refused: "${path}" is inside .gnomon/, the surface that decides how ` +
+            `this agent behaves. It is not writable by a tool call — editing it ` +
+            `is a human act, because it changes the surface hash and the rules ` +
+            `the next turn runs under. The human can allow it for this session ` +
+            `with /allow custom (each edit approved) or /allow all; to propose ` +
+            `durable guidance instead, use the skill tool.`,
+          summary: `write ${path} — refused (surface is read-only)`,
+        },
+      };
+    }
+    return { abs, surface: true };
+  }
+  const scope = writeAllowed(ctx, abs);
+  if (!scope.ok) {
+    return {
+      refusal: {
+        rule: "write_allow",
+        code: TOOL_DENIED,
+        content:
+          `Refused: "${scope.rel}" is not a path this role may ${tool === "write" ? "write" : "modify"}.\n` +
+          `This role may write ${scope.listed}.`,
+        summary: `${tool} ${path} — not permitted for this role`,
+      },
+    };
+  }
+  return { abs, surface: false };
+}
+
 async function writeTool(
   args: Record<string, unknown>,
   ctx: ToolContext
@@ -2967,50 +3166,18 @@ async function writeTool(
   // TRUNCATED the file and reported success: an existing file went to zero
   // bytes with summary "write src/a.txt (+0 −2)" and code 0. Small models omit
   // arguments routinely, so this was one malformed tool call away from silent
-  // data loss, reported as a result rather than a refusal.
+  // data loss, reported as a result rather than a refusal. writePrecheck
+  // refuses it. An empty string is still a legitimate write; an ABSENT one is not.
   //
-  // An empty string is still a legitimate write; an ABSENT one is not.
-  if (typeof args.content !== "string") {
-    return {
-      // TOOL_DENIED (a refusal), not TOOL_FAILED (11, apparatus_failure).
-      // CONTRACTS.md draws that line explicitly: 11 means "understood the
-      // request and could not carry it out", and "a model's malformed argument
-      // arriving there would make it meaningless" — apparatus_failure is the
-      // signal to go and look at the harness. A missing argument is the model
-      // getting it wrong, so the harness says no.
-      code: TOOL_DENIED,
-      content:
-        `Refused: write needs a \`content\` string. Omitting it would empty ` +
-        `${path || "the file"}, which is not what a missing argument should mean. ` +
-        `Send content: "" if you meant to empty it.`,
-      summary: `write — no content given`,
-    };
-  }
-  const content = args.content;
-  const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
-  if (!abs) {
-    return {
-      code: TOOL_OUT_OF_SANDBOX,
-      content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
-      summary: `write ${path} — refused (outside sandbox)`,
-    };
-  }
+  // The sandbox, the surface (when consent is strict) and write_allow are
+  // refused there too, in that order.
+  const pre = writePrecheck("write", args, ctx);
+  if ("refusal" in pre) return outcomeOf(pre.refusal);
+  const content = args.content as string;
+  const abs = pre.abs;
 
-  if (inSurface(ctx, abs)) {
+  if (pre.surface) {
     const consent = ctx.allow ?? "strict";
-    if (consent === "strict") {
-      return {
-        code: TOOL_DENIED,
-        content:
-          `Refused: "${path}" is inside .gnomon/, the surface that decides how ` +
-          `this agent behaves. It is not writable by a tool call — editing it ` +
-          `is a human act, because it changes the surface hash and the rules ` +
-          `the next turn runs under. The human can allow it for this session ` +
-          `with /allow custom (each edit approved) or /allow all; to propose ` +
-          `durable guidance instead, use the skill tool.`,
-        summary: `write ${path} — refused (surface is read-only)`,
-      };
-    }
     // The human consented to surface edits this session (/allow custom|all).
     // This is the one path that writes inside .gnomon/, so it is deliberate and
     // loud: it always announces that the hash moved.
@@ -3072,17 +3239,6 @@ async function writeTool(
         summary: `write ${path} — failed`,
       };
     }
-  }
-
-  const scope = writeAllowed(ctx, abs);
-  if (!scope.ok) {
-    return {
-      code: TOOL_DENIED,
-      content:
-        `Refused: "${scope.rel}" is not a path this role may write.\n` +
-        `This role may write ${scope.listed}.`,
-      summary: `write ${path} — not permitted for this role`,
-    };
   }
 
   if (existsSync(abs) && statSync(abs).isDirectory()) {
@@ -3177,37 +3333,10 @@ async function editTool(
   const path = String(args.path ?? "");
   const oldTextRaw = String(args.old_text ?? "");
   const newTextRaw = String(args.new_text ?? "");
-  const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
-  if (!abs) {
-    return {
-      code: TOOL_OUT_OF_SANDBOX,
-      content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
-      summary: `edit ${path} — refused (outside sandbox)`,
-    };
-  }
-
-  if (inSurface(ctx, abs)) {
-    return {
-      code: TOOL_DENIED,
-      content:
-        `Refused: "${path}" is inside .gnomon/, the surface that decides how ` +
-        `this agent behaves. It is not editable by a tool call — changing it ` +
-        `is a human act, because it changes the surface hash and the rules ` +
-        `the next turn runs under. Once the human allows it (/allow custom|all) ` +
-        `a surface file is changed by a full-file write, not an in-place edit.`,
-      summary: `edit ${path} — refused (surface is read-only)`,
-    };
-  }
-  const scope = writeAllowed(ctx, abs);
-  if (!scope.ok) {
-    return {
-      code: TOOL_DENIED,
-      content:
-        `Refused: "${scope.rel}" is not a path this role may modify.\n` +
-        `This role may write ${scope.listed}.`,
-      summary: `edit ${path} — not permitted for this role`,
-    };
-  }
+  // The sandbox, the surface (never editable in place) and write_allow.
+  const pre = writePrecheck("edit", args, ctx);
+  if ("refusal" in pre) return outcomeOf(pre.refusal);
+  const abs = pre.abs;
   if (!existsSync(abs)) {
     return {
       code: TOOL_FAILED,
@@ -3603,21 +3732,128 @@ export function noteTool(args: Record<string, unknown>, ctx: ToolContext): ToolO
   };
 }
 
+function notOffered(name: string, offered: Set<string>): Precheck {
+  return {
+    rule: "tools",
+    code: TOOL_NOT_DECLARED,
+    content:
+      `Refused: "${name}" is not available to this role. ` +
+      `Available: ${[...offered].join(", ") || "(none)"}.`,
+    summary: `${name} — not available to this role`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The decision alone
+// ---------------------------------------------------------------------------
+
+/** The approval gate the loop runs under, as the surface declares it. */
+export function resolveApprovalGate(config: GnomonConfig): ApprovalGate {
+  const declared =
+    (config.policy?.approval as { gate?: string } | undefined)?.gate ?? config.config.defaults?.approval ?? "on_write";
+  return declared as ApprovalGate;
+}
+
+/** The sandbox level, as the surface declares it. */
+export function resolveSandboxLevel(config: GnomonConfig): SandboxLevel {
+  return ((config.policy?.sandbox as { level?: string } | undefined)?.level ??
+    config.config.defaults?.sandbox ??
+    "confined") as SandboxLevel;
+}
+
+/** The tools whose calls `toolCallPolicy` decides. Everything else has no pre-execution rule. */
+export const POLICY_TOOLS = ["bash", "write", "edit", "read", "webfetch"] as const;
+export type PolicyTool = (typeof POLICY_TOOLS)[number];
+
+export interface PolicyDecision {
+  decision: "allow" | "deny" | "ask";
+  /** The rule that refused, "approval" for the gate, null when nothing stopped the call. */
+  rule: PolicyRule | "approval" | null;
+  /** In words, for whoever is told: the model on deny, the person on ask. */
+  reason: string;
+  /** The bash_allow / bash_deny pattern, when one decided. */
+  pattern?: string;
+  /** The tool outcome code the loop would have returned, on deny. */
+  code?: number;
+}
+
+/**
+ * What this loop would do with a tool call, decided without doing it.
+ *
+ * Every answer comes from the code the tool itself runs first -- the role's
+ * tool list, then the tool's precheck (bashPrecheck, writePrecheck,
+ * readPrecheck, webfetchPrecheck), then needsApproval under ctx.gate. So
+ * `gnomon guard` and the loop cannot disagree about a call: there is one copy
+ * of each rule, and both callers reach it.
+ *
+ *   deny   the loop refuses it (a refusal code, 2-4) and never asks
+ *   ask    the loop would ask the person before running it
+ *   allow  the loop would run it without asking. Including a call the tool
+ *          would then fail on its own (an empty command): failing is not
+ *          refusing, and the reason says so.
+ *
+ * Only the POLICY_TOOLS are decided; anything else is an error to the caller,
+ * never a silent allow.
+ */
+export async function toolCallPolicy(
+  name: string,
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  offered: Set<string>
+): Promise<PolicyDecision> {
+  const deny = (r: Precheck): PolicyDecision => ({
+    decision: "deny",
+    rule: r.rule ?? null,
+    reason: r.content,
+    code: r.code,
+    ...(r.pattern ? { pattern: r.pattern } : {}),
+  });
+  if (!offered.has(name)) return deny(notOffered(name, offered));
+  let pre: Precheck | null;
+  switch (name) {
+    case "bash":
+      pre = bashPrecheck(args, ctx);
+      break;
+    case "write":
+    case "edit": {
+      const w = writePrecheck(name, args, ctx);
+      pre = "refusal" in w ? w.refusal : null;
+      break;
+    }
+    case "read": {
+      const r = readPrecheck(args, ctx);
+      pre = "refusal" in r ? r.refusal : null;
+      break;
+    }
+    case "webfetch": {
+      const f = await webfetchPrecheck(args, ctx);
+      pre = "refusal" in f ? f.refusal : null;
+      break;
+    }
+    default:
+      throw new Error(`no pre-execution policy for "${name}" (decided: ${POLICY_TOOLS.join(", ")})`);
+  }
+  if (pre?.rule) return deny(pre);
+  if (pre) {
+    return { decision: "allow", rule: null, reason: `no rule refuses it; the call itself would fail: ${pre.summary}` };
+  }
+  if (needsApproval(name, ctx.gate)) {
+    return {
+      decision: "ask",
+      rule: "approval",
+      reason: `[approval] gate = "${ctx.gate}" asks a person before ${ctx.gate === "always" ? "every" : "every mutating"} call — this is a ${name} call`,
+    };
+  }
+  return { decision: "allow", rule: null, reason: "no rule refuses it" };
+}
+
 export async function executeTool(
   name: string,
   args: Record<string, unknown>,
   ctx: ToolContext,
   offered: Set<string>
 ): Promise<ToolOutcome> {
-  if (!offered.has(name)) {
-    return {
-      code: TOOL_NOT_DECLARED,
-      content:
-        `Refused: "${name}" is not available to this role. ` +
-        `Available: ${[...offered].join(", ") || "(none)"}.`,
-      summary: `${name} — not available to this role`,
-    };
-  }
+  if (!offered.has(name)) return outcomeOf(notOffered(name, offered));
 
   // A call the endpoint never finished emitting. Named as such rather than
   // dispatched with the arguments stripped: a truncated `read {"path": "src/ma`

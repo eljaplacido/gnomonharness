@@ -122,7 +122,9 @@ describe("gnomon check — through the real binary", () => {
     expect(fixture.schema).toBe(CHECK_SCHEMA);
     expect(Object.keys(fixture.exit_codes)).toEqual(["0", "2", "10"]);
     const doc = readFileSync(join(repoRoot, "docs/CONTRACTS.md"), "utf-8");
-    const section = doc.slice(doc.indexOf("## 6. `gnomon check --json`"));
+    // §6 only: later sections have tables of their own (§8, gnomon guard).
+    const start = doc.indexOf("## 6. `gnomon check --json`");
+    const section = doc.slice(start, doc.indexOf("\n## ", start + 1));
     const rows = [...section.matchAll(/^\| `([a-z_]+)` \| ([a-z, ]+) \|$/gm)];
     expect(rows.map((m) => m[1])).toEqual(fixture.check_ids);
     for (const m of rows) {

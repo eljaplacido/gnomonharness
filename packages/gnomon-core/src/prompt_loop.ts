@@ -80,6 +80,8 @@ import {
   ARGS_MALFORMED,
   type SpillSink,
   DIFF_ELIDED,
+  resolveApprovalGate,
+  resolveSandboxLevel,
 } from "./tools.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { harnessBuild } from "./build.js";
@@ -2922,16 +2924,11 @@ export async function runAgenticTurn(
   }
   const offered = new Set(toolSet.schemas.map((t) => t.function.name));
 
-  const defaults = config.config.defaults ?? {};
   const policy = config.policy ?? {};
-  const gate = ((policy.approval as { gate?: string } | undefined)?.gate ??
-    defaults.approval ??
-    "on_write") as ApprovalGate;
-  const sandbox =
-    state.sandbox ??
-    (((policy.sandbox as { level?: string } | undefined)?.level ??
-      defaults.sandbox ??
-      "confined") as SandboxLevel);
+  // One resolver each, shared with `gnomon guard`, so another harness's call
+  // is gated by the same reading of the surface this loop makes.
+  const gate = resolveApprovalGate(config);
+  const sandbox = state.sandbox ?? resolveSandboxLevel(config);
 
   // Session grant wins over the declared default; the surface is unchanged.
   const declaredNetwork = (policy.sandbox as { network?: boolean } | undefined)?.network;

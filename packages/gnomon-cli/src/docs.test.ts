@@ -319,8 +319,11 @@ describe("the README outcome table matches the tool result codes", () => {
   });
 
   it("the guards do return it", () => {
-    expect(tools).toContain("summary: `write ${path} — not permitted for this role`");
-    expect(tools).toContain("summary: `edit ${path} — not permitted for this role`");
+    // One precheck refuses for both tools (`gnomon guard` calls it too), and
+    // both tools call it.
+    expect(tools).toContain("summary: `${tool} ${path} — not permitted for this role`");
+    expect(tools).toContain('writePrecheck("write", args, ctx)');
+    expect(tools).toContain('writePrecheck("edit", args, ctx)');
   });
 
   it("the stop_reason enumeration, its fixture and its documentation are one set", () => {

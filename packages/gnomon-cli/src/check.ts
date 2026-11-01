@@ -253,6 +253,9 @@ function installHook(target: string, out: (s: string) => void): number {
       "",
       "or replace `--agent claude-code` with `--role <role>`. timeout is seconds: the Stop hook",
       "runs [verify], and must-fail-first runs it again.",
+      "",
+      "To also decide each tool call BEFORE it runs, `gnomon guard install claude-code` prints",
+      "these two hooks plus a PreToolUse hook (`--write` merges them without duplicating).",
     ].join("\n")
   );
   return 0;
