@@ -44,6 +44,13 @@
     { "name": "a read outside the repository", "role": "implement", "tool": "read", "input": { "path": "/etc/hostname" }, "rule": "sandbox", "expect": { "never": "deny", "on_write": "deny" } },
     { "name": "a fetch of a non-http scheme", "role": "implement", "tool": "webfetch", "input": { "url": "file:///etc/passwd" }, "rule": "url", "expect": { "never": "deny", "on_write": "deny" } },
     { "name": "a fetch of the metadata address", "role": "implement", "tool": "webfetch", "input": { "url": "http://169.254.169.254/latest/meta-data/" }, "rule": "url", "expect": { "never": "deny", "on_write": "deny" } },
-    { "name": "a role without webfetch may not fetch", "role": "readonly", "tool": "webfetch", "input": { "url": "https://example.invalid/" }, "rule": "tools", "expect": { "never": "deny", "on_write": "deny" } }
+    { "name": "a role without webfetch may not fetch", "role": "readonly", "tool": "webfetch", "input": { "url": "https://example.invalid/" }, "rule": "tools", "expect": { "never": "deny", "on_write": "deny" } },
+    { "name": "a shell redirect outside write_allow is denied (G1c)", "role": "implement", "tool": "bash", "input": { "command": "echo '## 0.2.0' >> CHANGELOG.md" }, "rule": "write_allow", "expect": { "never": "deny", "on_write": "deny" } },
+    { "name": "python code rewriting a file outside write_allow is denied (G1c T3)", "role": "implement", "tool": "bash", "input": { "command": "python3 - <<'PY'\nfrom pathlib import Path\nPath(\"CHANGELOG.md\").write_text(\"## 0.2.0\\n\")\nPY" }, "rule": "write_allow", "expect": { "never": "deny", "on_write": "deny" } },
+    { "name": "deleting an ignored file and its directory outside write_allow is denied (G1c T4)", "role": "implement", "tool": "bash", "input": { "command": "rm var/local.db && rmdir var" }, "rule": "write_allow", "expect": { "never": "deny", "on_write": "deny" } },
+    { "name": "sed -i on a file outside write_allow is denied", "role": "implement", "tool": "bash", "input": { "command": "sed -i 's/0.1.0/0.2.0/' pyproject.toml" }, "rule": "write_allow", "expect": { "never": "deny", "on_write": "deny" } },
+    { "name": "a shell write inside write_allow is the gate's call", "role": "implement", "tool": "bash", "input": { "command": "printf 'x = 1\\n' > src/b.ts" }, "rule": null, "expect": { "never": "allow", "on_write": "ask" } },
+    { "name": "a scratch write outside the repository is not write_allow's", "role": "implement", "tool": "bash", "input": { "command": "cp src/a.ts /tmp/gnomon-guard-scratch.ts" }, "rule": null, "expect": { "never": "allow", "on_write": "ask" } },
+    { "name": "a target that starts with a variable is not judged", "role": "implement", "tool": "bash", "input": { "command": "echo x > \"$TMPDIR/out.txt\"" }, "rule": null, "expect": { "never": "allow", "on_write": "ask" } }
   ]
 }

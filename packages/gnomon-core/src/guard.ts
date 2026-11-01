@@ -59,6 +59,7 @@ import {
   type GnomonConfig,
 } from "./config.js";
 import { AuditTrail, redact, resolveAudit } from "./audit.js";
+import { joinWords } from "./shell.js";
 import { harnessBuild } from "./build.js";
 import {
   POLICY_TOOLS,
@@ -103,8 +104,13 @@ export const GUARD_RULES = [
 ] as const;
 export type GuardRule = (typeof GUARD_RULES)[number];
 
-/** The tool kinds a call is decided as: gnomon's own tool names. */
-export const GUARD_TOOLS = POLICY_TOOLS;
+/**
+ * The tool kinds a call is decided as: gnomon's own tool names, plus
+ * `execute`, code a harness runs itself (opencode V2's Code Mode). gnomon has
+ * no such tool; an `execute` call is decided as the `node -e` one-liner it is
+ * equivalent to (see decide).
+ */
+export const GUARD_TOOLS = [...POLICY_TOOLS, "execute"] as const;
 
 export interface GuardVerdict {
   schema: typeof GUARD_SCHEMA;
@@ -569,7 +575,44 @@ export async function decide(
     allow: "strict",
   };
   const offered = new Set(buildToolSet(config, role).schemas.map((s) => s.function.name));
+  if (call.tool === "execute") return decideExecute(call, ctx, offered);
   return toolCallPolicy(call.tool, call.input, ctx, offered);
+}
+
+/**
+ * opencode V2's `execute` runs JavaScript in its Code Mode runtime: `fetch`
+ * reaches the network directly, and every other effect goes through tool
+ * calls, which reach this guard on their own. G1c (2026-11-01): with the guard
+ * refusing `curl` with the token, the same token left through `execute` and
+ * `fetch`, because a tool gnomon had no rule for was allowed as ungoverned.
+ *
+ * gnomon's own roles run code through bash, so the call is decided as the
+ * equivalent one-liner, `node -e '<code>'`, by the same bash rules: a
+ * bash_deny pattern naming node one-liners with fetch refuses it, and
+ * `[sandbox] network = false` refuses code that opens a connection. A role
+ * that holds no bash cannot run code that way at all; the call is put to a
+ * person rather than refused, because Code Mode also scripts calls to other
+ * tools, which are decided one by one.
+ */
+async function decideExecute(call: GuardCall, ctx: ToolContext, offered: Set<string>): Promise<PolicyDecision> {
+  const code = call.input.code;
+  if (typeof code !== "string") {
+    return { decision: "deny", rule: "malformed", reason: "Refused: execute needs a `code` string." };
+  }
+  if (!offered.has("bash")) {
+    return {
+      decision: "ask",
+      rule: "tools",
+      reason:
+        "This role does not run code (it holds no bash), and opencode's execute runs JavaScript. " +
+        "A person decides whether this code may run.",
+    };
+  }
+  const p = await toolCallPolicy("bash", { command: joinWords(["node", "-e", code]) }, ctx, offered);
+  return {
+    ...p,
+    reason: `opencode's execute runs JavaScript, decided as the equivalent node -e one-liner. ${p.reason}`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -742,7 +785,8 @@ export function fromClaudeCode(raw: Record<string, unknown>): HarnessRequest {
 /**
  * opencode V2 (2.2.x): the `tool.hook("execute.before", e)` event a plugin
  * receives — `{ tool, sessionID, agent, input }`. Tool ids are its own:
- * `shell`, `write`, `edit`, `patch`, `read`, `webfetch`. The plugin passes the
+ * `shell`, `write`, `edit`, `patch`, `read`, `webfetch`, and `execute` (Code
+ * Mode JavaScript, `{ code }`). The plugin passes the
  * event as it came, plus the directory it was loaded for.
  */
 export function fromOpencode(raw: Record<string, unknown>): HarnessRequest {
@@ -775,6 +819,9 @@ export function fromOpencode(raw: Record<string, unknown>): HarnessRequest {
       return { ...base, calls: [{ tool: "read", input: { path: input.path ?? input.filePath } }] };
     case "webfetch":
       return { ...base, calls: [{ tool: "webfetch", input: { url: input.url } }] };
+    case "execute":
+      // Code Mode: `{ code }`, JavaScript with fetch (opencode 2.2.5).
+      return { ...base, calls: [{ tool: "execute", input: { code: input.code } }] };
     default:
       return { ...base, calls: [] };
   }

@@ -1488,3 +1488,277 @@ export function bashNetworkEgress(command: string): NetworkEgress | null {
   }
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// Where a command writes
+// ---------------------------------------------------------------------------
+//
+// write_allow bounded `write` and `edit` and nothing else, so a role allowed
+// `src/**` rewrote CHANGELOG.md through the shell the moment its edit was
+// refused. Measured by G1c (2026-11-01, opencode V2 under `gnomon guard`): two
+// trials did it with `python3 - <<PY … Path("CHANGELOG.md").write_text(…)`,
+// and one deleted an ignored database with `rm var/local.db && rmdir var`
+// after `rm -rf var/` was refused.
+//
+// This reads the files a command names as its OUTPUT: redirections, and the
+// operands of the programs whose job is to create, change or remove a file.
+// Like the rest of this file it reads what is written, never what runs: a
+// variable is not expanded, a glob is not matched, a script file is not
+// opened, and code is read only for a literal path handed to a call that
+// writes. What it finds is put to write_allow; what it cannot find is not
+// claimed. Containment is `[sandbox] exec = "os"` or `"docker"`.
+
+/** One file a command would create, change or remove. */
+export interface WriteTarget {
+  /** The path as written, quotes removed. */
+  path: string;
+  /** How it is written to, for the refusal: "> redirect", "rm", "python3 code". */
+  how: string;
+  /**
+   * The directory a relative `path` is relative to, from the `cd`s before it:
+   * "" for where the command starts, null when a `cd` made it unknowable.
+   */
+  cwd: string | null;
+}
+
+/** Where output goes that is not a file anyone keeps. */
+const NOT_A_FILE = /^(\/dev\/(null|stdout|stderr|tty|zero|fd\/\d+)|-|&?\d+)$/;
+
+/** Redirections that open their target for writing. */
+const WRITE_REDIRECTS = new Set([">", ">>", ">|", "&>", "&>>", "<>", ">&"]);
+
+/**
+ * For each program that changes files: which operands it writes, and which of
+ * its short and long options take a value (so the value is not mistaken for
+ * an operand). `all`: every operand; `last`: the destination; `-t DIR` /
+ * `--target-directory` names it instead.
+ */
+interface WriterSpec {
+  operands: "all" | "last" | "mv";
+  arg: string;
+  longArg?: string[];
+}
+const WRITERS: Record<string, WriterSpec> = {
+  rm: { operands: "all", arg: "" },
+  rmdir: { operands: "all", arg: "" },
+  unlink: { operands: "all", arg: "" },
+  shred: { operands: "all", arg: "nsx", longArg: ["iterations", "size", "random-source"] },
+  truncate: { operands: "all", arg: "sr", longArg: ["size", "reference"] },
+  touch: { operands: "all", arg: "drt", longArg: ["date", "reference", "time"] },
+  mkdir: { operands: "all", arg: "m", longArg: ["mode", "context"] },
+  tee: { operands: "all", arg: "", longArg: ["output-error"] },
+  cp: { operands: "last", arg: "tS", longArg: ["target-directory", "suffix", "sparse", "reflink", "backup", "preserve", "no-preserve"] },
+  install: { operands: "last", arg: "tSgmo", longArg: ["target-directory", "suffix", "group", "mode", "owner", "backup"] },
+  ln: { operands: "last", arg: "tS", longArg: ["target-directory", "suffix", "backup"] },
+  mv: { operands: "mv", arg: "tS", longArg: ["target-directory", "suffix", "backup"] },
+};
+
+/** Operands of `argv` (options, and the values options take, removed), plus a `-t DIR`. */
+function writerOperands(argv: string[], spec: { arg: string; longArg?: string[] }): { ops: string[]; target?: string } {
+  const ops: string[] = [];
+  let target: string | undefined;
+  for (let i = 1; i < argv.length; i++) {
+    const w = argv[i]!;
+    if (w === "--") {
+      ops.push(...argv.slice(i + 1));
+      break;
+    }
+    if (w.startsWith("--") && w.length > 2) {
+      const [name, value] = w.slice(2).split(/=(.*)/s);
+      if (name === "target-directory") target = value ?? argv[++i];
+      else if (value === undefined && spec.longArg?.includes(name!)) i++;
+      continue;
+    }
+    if (w.startsWith("-") && w.length > 1) {
+      for (let j = 1; j < w.length; j++) {
+        const c = w[j]!;
+        if (spec.arg.includes(c)) {
+          const value = j + 1 < w.length ? w.slice(j + 1) : argv[++i];
+          if (c === "t") target = value;
+          break;
+        }
+      }
+      continue;
+    }
+    ops.push(w);
+  }
+  return { ops, target };
+}
+
+/** A string literal: group 1 the quote, group 2 its text. */
+const LIT = String.raw`(['"\x60])((?:(?!\1)[^\\\n]|\\.)*)\1`;
+const lit = (before: string, after = "") => new RegExp(before + LIT + after, "g");
+/**
+ * Calls that write the file their first literal argument names (python, node,
+ * ruby, perl). Approximate on purpose: a path built at run time is not seen,
+ * and that is said, not guessed.
+ */
+const CODE_WRITES_FIRST: RegExp[] = [
+  lit(String.raw`\bopen\(\s*`, String.raw`\s*,\s*(?:mode\s*=\s*)?['"][^'"]*[wax+][^'"]*['"]`),
+  lit(String.raw`\bPath\(\s*`, String.raw`\s*\)\s*\.\s*(?:write_text|write_bytes|unlink|touch|mkdir|rmdir|rename|replace|open\(\s*['"][wax])`),
+  lit(String.raw`\bos\.(?:remove|unlink|rmdir|removedirs|truncate|mkdir|makedirs)\(\s*`),
+  lit(String.raw`\bshutil\.rmtree\(\s*`),
+  lit(String.raw`\b(?:writeFileSync|appendFileSync|rmSync|unlinkSync|rmdirSync|truncateSync|mkdirSync|writeFile|appendFile)\(\s*`),
+  lit(String.raw`\bFile\.(?:write|delete|unlink)\(\s*`),
+  lit(String.raw`\bFileUtils\.(?:rm|rm_f|rm_r|rm_rf|touch|mkdir_p)\(\s*`),
+  lit(String.raw`\bopen\s*\(?\s*(?:my\s+)?\$\w+\s*,\s*['"](?:>|>>|\+<|\+>)['"]\s*,\s*`),
+  lit(String.raw`\bunlink\s*\(?\s*`),
+];
+/** Two-argument calls: the second literal is written; a move also empties the first. */
+const CODE_WRITES_SECOND = new RegExp(
+  String.raw`\b(shutil\.(?:copy|copy2|copyfile|copytree|move)|os\.(?:rename|replace)|(?:renameSync|copyFileSync|cpSync|rename|copyFile)|FileUtils\.(?:mv|cp))\(\s*` +
+    LIT.replaceAll("\\1", "\\2") + String.raw`\s*,\s*` + LIT.replaceAll("\\1", "\\4"),
+  "g"
+);
+
+/** The literal paths inline code writes. */
+export function codeWriteTargets(code: string): string[] {
+  const out: string[] = [];
+  for (const re of CODE_WRITES_FIRST) for (const m of code.matchAll(re)) if (m[2]) out.push(m[2]);
+  for (const m of code.matchAll(CODE_WRITES_SECOND)) {
+    if (m[5]) out.push(m[5]);
+    if (/move|rename|replace|mv/.test(m[1]!) && m[3]) out.push(m[3]);
+  }
+  return out;
+}
+
+/** The flags that hand each interpreter its program inline. */
+const CODE_FLAGS: Record<string, string[]> = {
+  python: ["-c"],
+  node: ["-e", "--eval", "-p", "--print"],
+  perl: ["-e", "-E"],
+  ruby: ["-e"],
+};
+
+/** `sed -i` / `perl -i`: the files edited in place, or null when the program does not edit in place. */
+function inPlaceFiles(prog: string, argv: string[]): string[] | null {
+  if (prog === "sed") {
+    let inPlace = false;
+    let scriptGiven = false;
+    const ops: string[] = [];
+    for (let i = 1; i < argv.length; i++) {
+      const w = argv[i]!;
+      if (w === "--in-place" || w.startsWith("--in-place=")) inPlace = true;
+      else if (w === "-e" || w === "-f" || w === "--expression" || w === "--file") {
+        scriptGiven = true;
+        i++;
+      } else if (w.startsWith("--expression=") || w.startsWith("--file=")) scriptGiven = true;
+      else if (/^-[a-zA-Z]+/.test(w) && !w.startsWith("--")) {
+        if (w.includes("i")) inPlace = true;
+        if (/e|f/.test(w.slice(1).replace(/i.*$/, ""))) {
+          scriptGiven = true;
+          i++;
+        }
+      } else if (!w.startsWith("-")) ops.push(w);
+    }
+    if (!inPlace) return null;
+    return scriptGiven ? ops : ops.slice(1);
+  }
+  if (prog === "perl") {
+    let inPlace = false;
+    let codeGiven = false;
+    const ops: string[] = [];
+    for (let i = 1; i < argv.length; i++) {
+      const w = argv[i]!;
+      if (/^-[a-zA-Z]+/.test(w)) {
+        if (/^-[a-zA-Z]*i/.test(w)) inPlace = true;
+        if (/e$/.test(w) || w === "-E") {
+          codeGiven = true;
+          i++;
+        }
+      } else ops.push(w);
+    }
+    if (!inPlace) return null;
+    return codeGiven ? ops : ops.slice(1);
+  }
+  return null;
+}
+
+/**
+ * The files a bash command would write, as far as its text says.
+ *
+ * Read by `bashPrecheck` against write_allow (tools.ts), so `gnomon guard` and
+ * the loop judge another harness's shell write and their own the same way.
+ */
+export function shellWriteTargets(command: string): { targets: WriteTarget[]; truncated: boolean } {
+  const read = readShellCommand(command);
+  const targets: WriteTarget[] = [];
+  const seen = new Set<string>();
+  let cwd: string | null = "";
+  const add = (path: string, how: string) => {
+    if (!path || NOT_A_FILE.test(path)) return;
+    const key = `${cwd}\0${path}\0${how}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    targets.push({ path, how, cwd });
+  };
+  for (const inv of read.invocations) {
+    if (inv.synthetic) continue;
+    const prog = programName(inv.argv[0]!);
+    if (prog === "cd" && inv.via === null) {
+      const to = inv.argv[1];
+      if (to === undefined || to === "-" || /[$`~*?[]/.test(to)) cwd = null;
+      else if (cwd !== null) cwd = to.startsWith("/") ? to : cwd ? `${cwd}/${to}` : to;
+      continue;
+    }
+    for (const r of inv.redirects) {
+      if (WRITE_REDIRECTS.has(r.op)) add(r.target, `${r.op} redirect`);
+    }
+    const w = WRITERS[prog];
+    if (w) {
+      const { ops, target } = writerOperands(inv.argv, w);
+      if (target !== undefined) add(target, prog);
+      if (w.operands === "all") for (const o of ops) add(o, prog);
+      else if (target === undefined && ops.length >= 2) add(ops[ops.length - 1]!, prog);
+      if (w.operands === "mv") for (const o of target === undefined ? ops.slice(0, -1) : ops) add(o, "mv (source)");
+      continue;
+    }
+    if (prog === "dd") {
+      for (const a of inv.argv) if (a.startsWith("of=")) add(a.slice(3), "dd");
+      continue;
+    }
+    if (prog === "curl" || prog === "wget") {
+      for (let i = 1; i < inv.argv.length; i++) {
+        const a = inv.argv[i]!;
+        if (prog === "curl" && (a === "-o" || a === "--output")) add(inv.argv[++i] ?? "", prog);
+        else if (prog === "curl" && a.startsWith("--output=")) add(a.slice(9), prog);
+        else if (prog === "wget" && (a === "-O" || a === "--output-document")) add(inv.argv[++i] ?? "", prog);
+        else if (prog === "wget" && a.startsWith("--output-document=")) add(a.slice(18), prog);
+      }
+      continue;
+    }
+    const inPlace = inPlaceFiles(prog, inv.argv);
+    if (inPlace) for (const f of inPlace) add(f, `${prog} -i`);
+    const lang = /^python[\d.]*$/.test(prog) ? "python" : prog === "nodejs" ? "node" : prog;
+    const flags = CODE_FLAGS[lang];
+    if (flags) {
+      for (const code of inlineCode(inv.argv, flags, inv.redirects)) {
+        for (const p of codeWriteTargets(code)) add(p, `${prog} code`);
+      }
+    }
+  }
+  return { targets, truncated: read.truncated };
+}
+
+/**
+ * `git clean -n` / `--dry-run` lists what would go and removes nothing. A
+ * deny pattern written for `git clean -fdx` refused `git clean -ndx` in G1c,
+ * a false refusal of the one safe way to look first. True for a segment whose
+ * every program is a dry-run `git clean`.
+ */
+export function isDryRunSegment(segment: string): boolean {
+  const read = readShellCommand(segment);
+  if (read.truncated) return false;
+  const real = read.invocations.filter((i) => !i.synthetic);
+  if (real.length === 0) return false;
+  return real.every((inv) => {
+    if (programName(inv.argv[0]!) !== "git") return false;
+    let i = 1;
+    // git's own options before the subcommand: -C dir, -c k=v
+    while (i < inv.argv.length && inv.argv[i]!.startsWith("-")) i += /^-(C|c)$/.test(inv.argv[i]!) ? 2 : 1;
+    if (inv.argv[i] !== "clean") return false;
+    const rest = inv.argv.slice(i + 1);
+    if (rest.some((a) => a === "-i" || a === "--interactive" || (/^-[a-zA-Z]+$/.test(a) && a.includes("i")))) return false;
+    return rest.some((a) => a === "--dry-run" || (/^-[a-zA-Z]+$/.test(a) && a.includes("n")));
+  });
+}
