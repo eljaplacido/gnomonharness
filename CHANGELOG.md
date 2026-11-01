@@ -65,6 +65,26 @@
     byte-identical.
   - All 186 tool tests pass, including "a backgrounded job returns at once,
     however its streams are redirected".
+- **A gnomon checkout starts in ~0.1 s instead of ~0.4 s.** The checkout
+  launcher (`gnomon.js`) used to run the TypeScript sources through `tsx` on every
+  invocation, in a second node process. UX1 measured +217 ms wall and +310 ms
+  CPU per invocation against the same code compiled. It now imports a cached
+  esbuild bundle of the same sources in-process, whenever that bundle is
+  current.
+  - **Current means strict:** every input esbuild read, every workspace
+    `package.json`/`tsconfig.json` and the launcher itself must match the size
+    and mtime recorded at build time. Anything else rebuilds (~0.15 s, once per
+    change).
+  - **Any failure falls back to tsx,** exactly as before. `GNOMON_LAUNCH=tsx`
+    forces it, and `GNOMON_LAUNCH_DEBUG=1` says which path ran.
+  - **The same program:** each module's `import.meta.url` is pinned to its
+    source file, so every file-relative lookup resolves as under tsx. Tests
+    hold the bundle to tsx's exact output, and fail with the pinning removed.
+  - **No new dependency:** esbuild is reached through tsx. Installed releases
+    were already compiled and are unchanged.
+  - **Measured, n = 20, one turn against UX1's fake model:** 411 → 157 ms wall,
+    339 → 115 ms to the first request, 520 → 160 ms CPU, 102 → 66 MB, with
+    identical bytes on the wire.
 
 - **`[shadow]`: a log-only decision-model shadow.** When a surface declares it,
   a typed decision model (`/v1/systemone`: state plus typed questions in,
