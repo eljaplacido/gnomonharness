@@ -26,6 +26,180 @@
 
 ## [Unreleased]
 
+- **`gnomon acp` sessions settle workspace trust, as `gnomon task` does.** An
+  editor cannot answer the trust prompt, so an untrusted surface that grants
+  more than the scaffold runs clamped to it, on load and after a turn reloads
+  the surface; `--trust` and `GNOMON_TRUST` apply as on the terminal. The
+  terminal's post-turn reload keeps both its `--profile` and its trust decision.
+  Found integrating #72 with #73, which moved the reload into `runSessionTurn`.
+
+- **Workspace trust: a cloned repository can no longer grant itself powers
+  unseen.** A repository's `.gnomon/` sets its own approval gate, sandbox and
+  shell scope (Rule 1). A hostile one could ship `approval = "never"`,
+  `network = true` and a verifier allowed any command, and `gnomon launch`
+  would act with them without anyone looking (research review, 2026-11-01).
+  Now a surface looser than the scaffold `gnomon init` writes is gated:
+  - on a terminal (`launch`, `prompt`), what it grants is shown against the
+    defaults and you are asked. `y` trusts it, Enter runs it clamped to the
+    defaults, `q` quits with exit 3;
+  - headless (`task`, `--json`, CI, no TTY), it runs clamped, with one line on
+    stderr. `--trust` or `GNOMON_TRUST=<surface hash>` runs it as declared for
+    that invocation.
+
+  "Looser" is measured. It covers approval `never`, sandbox `off`, network,
+  `extra_roots`, MCP servers, a `[verify]` command or `[audit.attest]` signer
+  that runs unasked, a key sent to an unknown host, a remote `[shadow]`, and
+  per-role tools, `write_allow` and `task_allow`. Shell scope is checked by
+  running probe commands (`git push --force`, `curl …`, `sh -c`) through the
+  real `bashPolicy`.
+
+  Trust is kept per (project root, surface hash) in `trust.json` beside the
+  key store: never in the repository, never in the hash. A changed surface is
+  covered if one trusted surface in the project already granted everything it
+  grants. A tightening is never asked about again; a loosening is, with what
+  is new marked `+`. A surface reloaded mid-session goes through the same
+  gate.
+
+  `gnomon trust [list|grant|revoke]` manages it. Every decision is a `trust`
+  audit record and a `trust` field on the task record (CONTRACTS.md §8,
+  `conformance/trust_record.json`).
+
+  **A scaffolded project is never asked anything.** A surface scaffolded by an
+  older release whose `bash_deny` predates the refspec guards
+  (`git push origin +main`) is asked about once, because it does permit that.
+  Benchmark adapters running a hand-loosened surface through `gnomon task`
+  must now pass `--trust`, or the run is clamped, with a stderr line and
+  `trust.decision = "clamped"` on the record.
+- **`gnomon acp`: gnomon in Zed, JetBrains and any other ACP editor.** Serves
+  the Agent Client Protocol (v1) on stdio. ACP is only a transport: a prompt
+  from the editor runs the terminal's own turn, under the same surface, roles,
+  routing, chain, tool gate, sandbox, audit records and session snapshots. The
+  approval ladder (`y` / `a` / `s` / `N`) becomes a permission prompt with the
+  same four answers; roles become the session's modes and its slash commands;
+  a `suggest` routing proposal becomes a mode-switch prompt; Esc becomes
+  `session/cancel`; tool calls stream as tool-call cards. `session_start` says
+  `mode: "acp"` and names the editor. No SDK: the protocol subset is
+  implemented directly, keeping zero third-party runtime dependencies.
+  Deliberately not used: the editor's `fs/*` methods (writes stay on disk
+  behind the sandbox and `write_allow`) and editor-supplied MCP servers (tools
+  come from `.gnomon/`, so the hash covers them; the session says so). Setup
+  for Zed and JetBrains is in the README and GETTING_STARTED. Contract:
+  `docs/CONTRACTS.md` §9, fixture `conformance/acp_mapping.json`.
+- **The terminal turn is now one shared function.** `chooseTurnRole` and
+  `runSessionTurn` are the body of `runPromptLoop`'s turn, lifted out
+  unchanged so `gnomon acp` runs the same code rather than a copy; this file
+  has had "a fact plumbed into one entry point and not the other" three times.
+  `runAgenticTurn` gained an optional, told-never-asked `events` hook (tool
+  start/end and reply text) that the terminal does not pass.
+- **npm releases are automatic.** `.github/workflows/publish-npm.yml` runs when
+  a human publishes a drafted release: it downloads that release's own four
+  tarballs, checks each against `SHA256SUMS` and its manifest, and runs
+  `npm publish <tarball> --access public --provenance`, libraries first and
+  `gnomon-harness` last. A version already on the registry is skipped, so a
+  re-run finishes a partial publish. Prereleases go to the `next` dist-tag. The
+  maintainer adds the `NPM_TOKEN` secret once (docs/RELEASING.md). The logic is
+  `scripts/publish-npm.sh`, which runs locally with `--dry-run`.
+- **The installers compare the version npm prints.** Now that
+  `gnomon-harness` is on npm, `npm view gnomon-harness@<old version>` on npm
+  before 10 exits 0 with no output, which would have sent a pinned older
+  release to a registry install that cannot resolve it. `install.sh` and
+  `install.ps1` take the registry only when it prints the version asked for.
+- **Docs: gnomon is on npm.** `npm i -g gnomon-harness` works; the README and
+  GETTING_STARTED no longer say it 404s.
+- **`gnomon guard`: the repository's rules, before another harness's tool
+  call runs.** `check` judges a change after the fact; `guard` decides one
+  proposed call — a shell command, a file write or edit, a read, a fetch — from
+  inside the other harness's pre-tool hook, and answers allow, deny or ask with
+  the rule and the reason (`gnomon.guard/1`, CONTRACTS.md §10; exit 0 / 2 / 3,
+  and 10 for no decision, which says `ask`). There is no second policy: the
+  tools' own prechecks were extracted (`bashPrecheck`, `writePrecheck`,
+  `readPrecheck`, `webfetchPrecheck`) and `toolCallPolicy` calls them and then
+  the `[approval]` gate, so the loop and the guard run the same code. The
+  shared cases in `conformance/guard_cases.json` go through both, and the
+  suite fails if they disagree. Rules come from a committed base (the session's
+  start, else HEAD), never the working tree; `[audit] enabled = true` records
+  every decision on one sealed chain per session.
+- **Adapters: `gnomon guard install claude-code | opencode | cursor`.** Claude
+  Code: a `PreToolUse` hook beside the existing `check` SessionStart / Stop
+  hooks (`--write` merges without duplicating them); allow prints nothing, so
+  Claude Code's own prompt still applies. opencode 2.2: a plugin in
+  `.opencode/plugins/` — deny fails the call with gnomon's reason, ask goes to
+  opencode's own permission prompt; verified end to end in opencode 2.2.5.
+  Cursor: `beforeShellExecution` and `beforeReadFile` in `.cursor/hooks.json`,
+  checked against Cursor 3.0.16's validators. Cursor file writes have no
+  documented pre-execution hook and are left to `check`.
+- **Latency.** A warm decision is 3–5 ms; a whole `gnomon guard` process from
+  the published install is about 50–60 ms on the gx10 under load, of which bare
+  Node start-up is 22–28 ms. The published launcher loads a guard-only entry
+  (`dist/guard_main.js`, `gnomon-core/guard`), not the harness; the rules are
+  materialised once per `.gnomon/` tree, and a warm call spawns no `git`.
+- **`check` resolves relative `[sandbox] extra_roots` against the tree being
+  judged**, not its temporary copy of the rules. Latent: none of check's
+  current checks reads them, but the guard does, and the two now build their
+  context the same way.
+
+
+### First-run and daily-dev papercuts (#69's gap list)
+
+Found while every documented command was verified for the guide. Each fix has
+a test that fails on the code before it.
+
+- **Picking a model no longer leaves a warning on every start.** The first-run
+  picker, `/models` and `gnomon endpoint add --role` wrote the active profile
+  and left `roles.toml`'s old tag. Every later start then printed 4–8 lines of
+  `… is ignored: role_profile "local_first" sets …`, and their suggested fix
+  was the command that had caused them. A pick now also updates `roles.toml`
+  to match (`pointRoleAt`), with two limits. It replaces only lines that
+  `roles.toml` already has, so a surface that keeps routing in its profiles
+  stays that way. And it does this only under the surface's own
+  `role_profile`: a pick made under `--profile` changes that profile alone.
+  The warning itself is unchanged, and still fires for a hand edit.
+- **A mid-session reload keeps `--profile`.** After `/models` wrote a pick, or
+  a turn changed the surface, the session reloaded on the surface's
+  `role_profile`. A session started with `--profile frontier_plan` therefore
+  switched profile with no notice, and the model `/models` had just announced
+  was not the one the next turn used.
+- **`/quit` seals the audit trail.** It called `process.exit(0)` before
+  `session_end` was written and before the `finally` that closes MCP servers,
+  so `gnomon audit verify` called a normal session `NOT SEALED`. `/quit`, and
+  Ctrl+C at the prompt, now leave by the same path as Ctrl-D, then exit 0. A
+  second `/quit` typed while a turn is unwinding is still an immediate exit.
+- **`gnomon task` exits 10 when it cannot start.** With no `.gnomon/`, an
+  unknown `--role` or no task text, it exited 1. 1 is `failed`, in the `result`
+  bucket, while CONTRACTS.md §1 says `task` exits 0, 2 or 10. `--json` now
+  prints the same record shape as a fatal surface (`apparatus_failure`,
+  `stop_reason: "apparatus"`).
+- **An endpoint with no `kind` takes the shape its URL names.** Hand-written
+  blocks got the Ollama request shape even at `…/v1/chat/completions`. A path
+  ending `/chat/completions` or `/v1` now means `openai`, and `/api/chat`
+  means `ollama`. A URL that names neither keeps the old default, so no
+  working config changes, and the startup audit names the kind it used.
+- **`approval`/`sandbox` set in both files is reported.** `config.toml
+  [defaults]` and `policy.toml` can both set them, and policy.toml wins. A
+  difference between the two is now a startup warning that names the value
+  used, and says when that value is the looser one. Both are resolved in one
+  place (`resolveApprovalGate`, `resolveSandboxLevel`). As a result, `/sandbox`
+  and `/explain sandbox` no longer report `confined` for turns that ran under
+  `[defaults] sandbox = "off"`.
+- **`GNOMON_MODEL_URL=""` is not an override.** `??` kept the empty string,
+  and every route failed with `Failed to parse URL from`.
+- **`gnomon check` prints no escape codes into a pipe.** The command CI runs
+  wrote `[32mHELD[0m` into logs. `FORCE_COLOR` still forces colour.
+- **Docs that said the opposite of the code.**
+  - `--help` no longer lists `GNOMON_DIR`. Nothing ever read it; `gnomon
+    session` only exports it to its commands, and that command's help now says
+    so.
+  - README now describes the anchor check `gnomon audit verify` has run for a
+    while, replacing its "does not check signatures" limit.
+  - `docs/DESIGN.md` names `summary` as the default compaction.
+  - The scaffolded `policy.toml` says `network = false` is enforced for
+    `webfetch` and is not process isolation, instead of "NOT enforced".
+  - `build-native.mjs`'s skip message names all five native-only commands.
+  - README's `/models` section said a pick rewrites `roles.toml`, and
+    GETTING_STARTED sent new users to edit `roles.toml`, whose model lines the
+    scaffold's `local_first` profile overrides. Both now name the profile.
+
+
 ## [0.3.2] — 2026-11-01
 
 The fixes the November benchmark programme found, integrated in #70: build
@@ -218,111 +392,6 @@ the shell runs it, new transcript readers for `gnomon check`, and the guide
 
   The lever is the pattern, which is the surface's.
 
-- **Workspace trust: a cloned repository can no longer grant itself powers
-  unseen.** A repository's `.gnomon/` sets its own approval gate, sandbox and
-  shell scope (Rule 1). A hostile one could ship `approval = "never"`,
-  `network = true` and a verifier allowed any command, and `gnomon launch`
-  would act with them without anyone looking (research review, 2026-11-01).
-  Now a surface looser than the scaffold `gnomon init` writes is gated:
-  - on a terminal (`launch`, `prompt`), what it grants is shown against the
-    defaults and you are asked. `y` trusts it, Enter runs it clamped to the
-    defaults, `q` quits with exit 3;
-  - headless (`task`, `--json`, CI, no TTY), it runs clamped, with one line on
-    stderr. `--trust` or `GNOMON_TRUST=<surface hash>` runs it as declared for
-    that invocation.
-
-  "Looser" is measured. It covers approval `never`, sandbox `off`, network,
-  `extra_roots`, MCP servers, a `[verify]` command or `[audit.attest]` signer
-  that runs unasked, a key sent to an unknown host, a remote `[shadow]`, and
-  per-role tools, `write_allow` and `task_allow`. Shell scope is checked by
-  running probe commands (`git push --force`, `curl …`, `sh -c`) through the
-  real `bashPolicy`.
-
-  Trust is kept per (project root, surface hash) in `trust.json` beside the
-  key store: never in the repository, never in the hash. A changed surface is
-  covered if one trusted surface in the project already granted everything it
-  grants. A tightening is never asked about again; a loosening is, with what
-  is new marked `+`. A surface reloaded mid-session goes through the same
-  gate.
-
-  `gnomon trust [list|grant|revoke]` manages it. Every decision is a `trust`
-  audit record and a `trust` field on the task record (CONTRACTS.md §8,
-  `conformance/trust_record.json`).
-
-  **A scaffolded project is never asked anything.** A surface scaffolded by an
-  older release whose `bash_deny` predates the refspec guards
-  (`git push origin +main`) is asked about once, because it does permit that.
-  Benchmark adapters running a hand-loosened surface through `gnomon task`
-  must now pass `--trust`, or the run is clamped, with a stderr line and
-  `trust.decision = "clamped"` on the record.
-- **`gnomon acp`: gnomon in Zed, JetBrains and any other ACP editor.** Serves
-  the Agent Client Protocol (v1) on stdio. ACP is only a transport: a prompt
-  from the editor runs the terminal's own turn, under the same surface, roles,
-  routing, chain, tool gate, sandbox, audit records and session snapshots. The
-  approval ladder (`y` / `a` / `s` / `N`) becomes a permission prompt with the
-  same four answers; roles become the session's modes and its slash commands;
-  a `suggest` routing proposal becomes a mode-switch prompt; Esc becomes
-  `session/cancel`; tool calls stream as tool-call cards. `session_start` says
-  `mode: "acp"` and names the editor. No SDK: the protocol subset is
-  implemented directly, keeping zero third-party runtime dependencies.
-  Deliberately not used: the editor's `fs/*` methods (writes stay on disk
-  behind the sandbox and `write_allow`) and editor-supplied MCP servers (tools
-  come from `.gnomon/`, so the hash covers them; the session says so). Setup
-  for Zed and JetBrains is in the README and GETTING_STARTED. Contract:
-  `docs/CONTRACTS.md` §9, fixture `conformance/acp_mapping.json`.
-- **The terminal turn is now one shared function.** `chooseTurnRole` and
-  `runSessionTurn` are the body of `runPromptLoop`'s turn, lifted out
-  unchanged so `gnomon acp` runs the same code rather than a copy; this file
-  has had "a fact plumbed into one entry point and not the other" three times.
-  `runAgenticTurn` gained an optional, told-never-asked `events` hook (tool
-  start/end and reply text) that the terminal does not pass.
-- **npm releases are automatic.** `.github/workflows/publish-npm.yml` runs when
-  a human publishes a drafted release: it downloads that release's own four
-  tarballs, checks each against `SHA256SUMS` and its manifest, and runs
-  `npm publish <tarball> --access public --provenance`, libraries first and
-  `gnomon-harness` last. A version already on the registry is skipped, so a
-  re-run finishes a partial publish. Prereleases go to the `next` dist-tag. The
-  maintainer adds the `NPM_TOKEN` secret once (docs/RELEASING.md). The logic is
-  `scripts/publish-npm.sh`, which runs locally with `--dry-run`.
-- **The installers compare the version npm prints.** Now that
-  `gnomon-harness` is on npm, `npm view gnomon-harness@<old version>` on npm
-  before 10 exits 0 with no output, which would have sent a pinned older
-  release to a registry install that cannot resolve it. `install.sh` and
-  `install.ps1` take the registry only when it prints the version asked for.
-- **Docs: gnomon is on npm.** `npm i -g gnomon-harness` works; the README and
-  GETTING_STARTED no longer say it 404s.
-- **`gnomon guard`: the repository's rules, before another harness's tool
-  call runs.** `check` judges a change after the fact; `guard` decides one
-  proposed call — a shell command, a file write or edit, a read, a fetch — from
-  inside the other harness's pre-tool hook, and answers allow, deny or ask with
-  the rule and the reason (`gnomon.guard/1`, CONTRACTS.md §10; exit 0 / 2 / 3,
-  and 10 for no decision, which says `ask`). There is no second policy: the
-  tools' own prechecks were extracted (`bashPrecheck`, `writePrecheck`,
-  `readPrecheck`, `webfetchPrecheck`) and `toolCallPolicy` calls them and then
-  the `[approval]` gate, so the loop and the guard run the same code. The
-  shared cases in `conformance/guard_cases.json` go through both, and the
-  suite fails if they disagree. Rules come from a committed base (the session's
-  start, else HEAD), never the working tree; `[audit] enabled = true` records
-  every decision on one sealed chain per session.
-- **Adapters: `gnomon guard install claude-code | opencode | cursor`.** Claude
-  Code: a `PreToolUse` hook beside the existing `check` SessionStart / Stop
-  hooks (`--write` merges without duplicating them); allow prints nothing, so
-  Claude Code's own prompt still applies. opencode 2.2: a plugin in
-  `.opencode/plugins/` — deny fails the call with gnomon's reason, ask goes to
-  opencode's own permission prompt; verified end to end in opencode 2.2.5.
-  Cursor: `beforeShellExecution` and `beforeReadFile` in `.cursor/hooks.json`,
-  checked against Cursor 3.0.16's validators. Cursor file writes have no
-  documented pre-execution hook and are left to `check`.
-- **Latency.** A warm decision is 3–5 ms; a whole `gnomon guard` process from
-  the published install is about 50–60 ms on the gx10 under load, of which bare
-  Node start-up is 22–28 ms. The published launcher loads a guard-only entry
-  (`dist/guard_main.js`, `gnomon-core/guard`), not the harness; the rules are
-  materialised once per `.gnomon/` tree, and a warm call spawns no `git`.
-- **`check` resolves relative `[sandbox] extra_roots` against the tree being
-  judged**, not its temporary copy of the rules. Latent: none of check's
-  current checks reads them, but the guard does, and the two now build their
-  context the same way.
-
 - **`[shadow]`: a log-only decision-model shadow.** When a surface declares it,
   a typed decision model (`/v1/systemone`: state plus typed questions in,
   probabilities out) is asked three things, each logged beside what gnomon
@@ -389,66 +458,6 @@ the shell runs it, new transcript readers for `gnomon check`, and the guide
     `git commit`. Without that one refresh, a repository built and committed in
     one go (a racy index) costs ~20 ms per status instead of ~5 ms, for the
     whole session.
-
-### First-run and daily-dev papercuts (#69's gap list)
-
-Found while every documented command was verified for the guide. Each fix has
-a test that fails on the code before it.
-
-- **Picking a model no longer leaves a warning on every start.** The first-run
-  picker, `/models` and `gnomon endpoint add --role` wrote the active profile
-  and left `roles.toml`'s old tag. Every later start then printed 4–8 lines of
-  `… is ignored: role_profile "local_first" sets …`, and their suggested fix
-  was the command that had caused them. A pick now also updates `roles.toml`
-  to match (`pointRoleAt`), with two limits. It replaces only lines that
-  `roles.toml` already has, so a surface that keeps routing in its profiles
-  stays that way. And it does this only under the surface's own
-  `role_profile`: a pick made under `--profile` changes that profile alone.
-  The warning itself is unchanged, and still fires for a hand edit.
-- **A mid-session reload keeps `--profile`.** After `/models` wrote a pick, or
-  a turn changed the surface, the session reloaded on the surface's
-  `role_profile`. A session started with `--profile frontier_plan` therefore
-  switched profile with no notice, and the model `/models` had just announced
-  was not the one the next turn used.
-- **`/quit` seals the audit trail.** It called `process.exit(0)` before
-  `session_end` was written and before the `finally` that closes MCP servers,
-  so `gnomon audit verify` called a normal session `NOT SEALED`. `/quit`, and
-  Ctrl+C at the prompt, now leave by the same path as Ctrl-D, then exit 0. A
-  second `/quit` typed while a turn is unwinding is still an immediate exit.
-- **`gnomon task` exits 10 when it cannot start.** With no `.gnomon/`, an
-  unknown `--role` or no task text, it exited 1. 1 is `failed`, in the `result`
-  bucket, while CONTRACTS.md §1 says `task` exits 0, 2 or 10. `--json` now
-  prints the same record shape as a fatal surface (`apparatus_failure`,
-  `stop_reason: "apparatus"`).
-- **An endpoint with no `kind` takes the shape its URL names.** Hand-written
-  blocks got the Ollama request shape even at `…/v1/chat/completions`. A path
-  ending `/chat/completions` or `/v1` now means `openai`, and `/api/chat`
-  means `ollama`. A URL that names neither keeps the old default, so no
-  working config changes, and the startup audit names the kind it used.
-- **`approval`/`sandbox` set in both files is reported.** `config.toml
-  [defaults]` and `policy.toml` can both set them, and policy.toml wins. A
-  difference between the two is now a startup warning that names the value
-  used, and says when that value is the looser one. Both are resolved in one
-  place (`resolveApprovalGate`, `resolveSandboxLevel`). As a result, `/sandbox`
-  and `/explain sandbox` no longer report `confined` for turns that ran under
-  `[defaults] sandbox = "off"`.
-- **`GNOMON_MODEL_URL=""` is not an override.** `??` kept the empty string,
-  and every route failed with `Failed to parse URL from`.
-- **`gnomon check` prints no escape codes into a pipe.** The command CI runs
-  wrote `[32mHELD[0m` into logs. `FORCE_COLOR` still forces colour.
-- **Docs that said the opposite of the code.**
-  - `--help` no longer lists `GNOMON_DIR`. Nothing ever read it; `gnomon
-    session` only exports it to its commands, and that command's help now says
-    so.
-  - README now describes the anchor check `gnomon audit verify` has run for a
-    while, replacing its "does not check signatures" limit.
-  - `docs/DESIGN.md` names `summary` as the default compaction.
-  - The scaffolded `policy.toml` says `network = false` is enforced for
-    `webfetch` and is not process isolation, instead of "NOT enforced".
-  - `build-native.mjs`'s skip message names all five native-only commands.
-  - README's `/models` section said a pick rewrites `roles.toml`, and
-    GETTING_STARTED sent new users to edit `roles.toml`, whose model lines the
-    scaffold's `local_first` profile overrides. Both now name the profile.
 
 ## [0.3.1] — 2026-10-21
 
