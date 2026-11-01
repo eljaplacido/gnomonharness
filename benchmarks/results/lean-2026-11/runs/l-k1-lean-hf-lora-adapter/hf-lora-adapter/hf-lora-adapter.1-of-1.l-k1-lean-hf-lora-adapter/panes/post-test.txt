@@ -1,0 +1,576 @@
+root@935d03b0c569:/app# bash /tests/run-tests.sh; tmux wait -S done
+Hit:1 http://deb.debian.org/debian bookworm InRelease
+Hit:2 http://deb.debian.org/debian bookworm-updates InRelease
+Hit:3 http://deb.debian.org/debian-security bookworm-security InRelease
+Reading package lists... Done
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+curl is already the newest version (7.88.1-10+deb12u15).
+0 upgraded, 0 newly installed, 0 to remove and 45 not upgraded.
+downloading uv 0.7.13 aarch64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Using CPython 3.13.1 interpreter at: /usr/local/bin/python
+Creating virtual environment at: .tbench-testing
+Activate with: source .tbench-testing/bin/activate
+Using Python 3.13.1 environment at: .tbench-testing
+Resolved 32 packages in 216ms
+Prepared 32 packages in 2.36s
+Installed 32 packages in 168ms
+ + accelerate==1.15.0
+ + certifi==2026.10.23
+ + charset-normalizer==3.5.2
+ + filelock==4.2.6
+ + fsspec==2026.9.0
+ + hf-xet==1.8.0
+ + huggingface-hub==0.36.2
+ + idna==3.20
+ + iniconfig==2.3.1
+ + jinja2==3.1.6
+ + markupsafe==3.0.4
+ + mpmath==1.3.0
+ + networkx==3.7
+ + numpy==2.5.4
+ + packaging==26.3
+ + peft==0.12.0
+ + pluggy==1.7.0
+ + psutil==7.0.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+ + pyyaml==6.0.3
+ + regex==2026.9.29
+ + requests==2.34.2
+ + safetensors==0.8.0
+ + setuptools==84.2.1
+ + sympy==1.14.0
+ + tokenizers==0.21.4
+ + torch==2.7.1
+ + tqdm==4.70.1
+ + transformers==4.52.4
+ + typing-extensions==4.16.0
+ + urllib3==2.8.0
+===================================================================== test session starts ======================================================================
+platform linux -- Python 3.13.1, pytest-8.4.1, pluggy-1.7.0 -- /app/.tbench-testing/bin/python3
+cachedir: .pytest_cache
+rootdir: /tests
+collected 4 items
+
+../tests/test_outputs.py::test_model_downloaded FAILED                                                                                                   [ 25%]
+../tests/test_outputs.py::test_model_configuration FAILED                                                                                                [ 50%]
+../tests/test_outputs.py::test_detection_results FAILED                                                                                                  [ 75%]
+../tests/test_outputs.py::test_merged_model_accuracy FAILED                                                                                              [100%]
+
+=========================================================================== FAILURES ===========================================================================
+____________________________________________________________________ test_model_downloaded _____________________________________________________________________
+
+    def test_model_downloaded():
+        """Test that model files were downloaded correctly."""
+        model_path = "/app/model_cache/xlm-roberta-base"
+
+>       assert os.path.exists(f"{model_path}/config.json"), "Model config not found"
+E       AssertionError: Model config not found
+E       assert False
+E        +  where False = <function exists at 0xf57b552eea20>('/app/model_cache/xlm-roberta-base/config.json')
+E        +    where <function exists at 0xf57b552eea20> = <module 'posixpath' (frozen)>.exists
+E        +      where <module 'posixpath' (frozen)> = os.path
+
+/tests/test_outputs.py:14: AssertionError
+___________________________________________________________________ test_model_configuration ___________________________________________________________________
+
+path_or_repo_id = '/app/model_cache/xlm-roberta-base', filenames = ['config.json'], cache_dir = '/root/.cache/huggingface/hub', force_download = False
+resume_download = None, proxies = None, token = None, revision = None, local_files_only = False, subfolder = '', repo_type = None
+user_agent = 'transformers/4.52.4; python/3.13.1; session_id/243d5cd8555a45b690735b0fdb44407c; torch/2.7.1; file_type/config; from_auto_class/True'
+_raise_exceptions_for_gated_repo = True, _raise_exceptions_for_missing_entries = True, _raise_exceptions_for_connection_errors = True, _commit_hash = None
+deprecated_kwargs = {}, use_auth_token = None, full_filenames = ['config.json'], existing_files = [], filename = 'config.json'
+
+    def cached_files(
+        path_or_repo_id: Union[str, os.PathLike],
+        filenames: list[str],
+        cache_dir: Optional[Union[str, os.PathLike]] = None,
+        force_download: bool = False,
+        resume_download: Optional[bool] = None,
+        proxies: Optional[dict[str, str]] = None,
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        local_files_only: bool = False,
+        subfolder: str = "",
+        repo_type: Optional[str] = None,
+        user_agent: Optional[Union[str, dict[str, str]]] = None,
+        _raise_exceptions_for_gated_repo: bool = True,
+        _raise_exceptions_for_missing_entries: bool = True,
+        _raise_exceptions_for_connection_errors: bool = True,
+        _commit_hash: Optional[str] = None,
+        **deprecated_kwargs,
+    ) -> Optional[str]:
+        """
+        Tries to locate several files in a local folder and repo, downloads and cache them if necessary.
+
+        Args:
+            path_or_repo_id (`str` or `os.PathLike`):
+                This can be either:
+                - a string, the *model id* of a model repo on huggingface.co.
+                - a path to a *directory* potentially containing the file.
+            filenames (`List[str]`):
+                The name of all the files to locate in `path_or_repo`.
+            cache_dir (`str` or `os.PathLike`, *optional*):
+                Path to a directory in which a downloaded pretrained model configuration should be cached if the standard
+                cache should not be used.
+            force_download (`bool`, *optional*, defaults to `False`):
+                Whether or not to force to (re-)download the configuration files and override the cached versions if they
+                exist.
+            resume_download:
+                Deprecated and ignored. All downloads are now resumed by default when possible.
+                Will be removed in v5 of Transformers.
+            proxies (`Dict[str, str]`, *optional*):
+                A dictionary of proxy servers to use by protocol or endpoint, e.g., `{'http': 'foo.bar:3128',
+                'http://hostname': 'foo.bar:4012'}.` The proxies are used on each request.
+            token (`str` or *bool*, *optional*):
+                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
+                when running `huggingface-cli login` (stored in `~/.huggingface`).
+            revision (`str`, *optional*, defaults to `"main"`):
+                The specific model version to use. It can be a branch name, a tag name, or a commit id, since we use a
+                git-based system for storing models and other artifacts on huggingface.co, so `revision` can be any
+                identifier allowed by git.
+            local_files_only (`bool`, *optional*, defaults to `False`):
+                If `True`, will only try to load the tokenizer configuration from local files.
+            subfolder (`str`, *optional*, defaults to `""`):
+                In case the relevant files are located inside a subfolder of the model repo on huggingface.co, you can
+                specify the folder name here.
+            repo_type (`str`, *optional*):
+                Specify the repo type (useful when downloading from a space for instance).
+
+        Private args:
+            _raise_exceptions_for_gated_repo (`bool`):
+                if False, do not raise an exception for gated repo error but return None.
+            _raise_exceptions_for_missing_entries (`bool`):
+                if False, do not raise an exception for missing entries but return None.
+            _raise_exceptions_for_connection_errors (`bool`):
+                if False, do not raise an exception for connection errors but return None.
+            _commit_hash (`str`, *optional*):
+                passed when we are chaining several calls to various files (e.g. when loading a tokenizer or
+                a pipeline). If files are cached for this commit hash, avoid calls to head and get from the cache.
+
+        <Tip>
+
+        Passing `token=True` is required when you want to use a private model.
+
+        </Tip>
+
+        Returns:
+            `Optional[str]`: Returns the resolved file (to the cache folder if downloaded from a repo).
+
+        Examples:
+
+        ```python
+        # Download a model weight from the Hub and cache it.
+        model_weights_file = cached_file("google-bert/bert-base-uncased", "pytorch_model.bin")
+        ```
+        """
+        use_auth_token = deprecated_kwargs.pop("use_auth_token", None)
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("`token` and `use_auth_token` are both specified. Please set only the argument `token`.")
+            token = use_auth_token
+
+        if is_offline_mode() and not local_files_only:
+            logger.info("Offline mode: forcing local_files_only=True")
+            local_files_only = True
+        if subfolder is None:
+            subfolder = ""
+
+        # Add folder to filenames
+        full_filenames = [os.path.join(subfolder, file) for file in filenames]
+
+        path_or_repo_id = str(path_or_repo_id)
+        existing_files = []
+        for filename in full_filenames:
+            if os.path.isdir(path_or_repo_id):
+                resolved_file = os.path.join(path_or_repo_id, filename)
+                if not os.path.isfile(resolved_file):
+                    if _raise_exceptions_for_missing_entries and filename != os.path.join(subfolder, "config.json"):
+                        revision_ = "main" if revision is None else revision
+                        raise OSError(
+                            f"{path_or_repo_id} does not appear to have a file named {filename}. Checkout "
+                            f"'https://huggingface.co/{path_or_repo_id}/tree/{revision_}' for available files."
+                        )
+                    else:
+                        return None
+                existing_files.append(resolved_file)
+
+        # All files exist
+        if len(existing_files) == len(full_filenames):
+            return existing_files
+
+        if cache_dir is None:
+            cache_dir = TRANSFORMERS_CACHE
+        if isinstance(cache_dir, Path):
+            cache_dir = str(cache_dir)
+
+        existing_files = []
+        file_counter = 0
+        if _commit_hash is not None and not force_download:
+            for filename in full_filenames:
+                # If the file is cached under that commit hash, we return it directly.
+                resolved_file = try_to_load_from_cache(
+                    path_or_repo_id, filename, cache_dir=cache_dir, revision=_commit_hash, repo_type=repo_type
+                )
+                if resolved_file is not None:
+                    if resolved_file is not _CACHED_NO_EXIST:
+                        file_counter += 1
+                        existing_files.append(resolved_file)
+                    elif not _raise_exceptions_for_missing_entries:
+                        file_counter += 1
+                    else:
+                        raise OSError(f"Could not locate {filename} inside {path_or_repo_id}.")
+
+        # Either all the files were found, or some were _CACHED_NO_EXIST but we do not raise for missing entries
+        if file_counter == len(full_filenames):
+            return existing_files if len(existing_files) > 0 else None
+
+        user_agent = http_user_agent(user_agent)
+        # download the files if needed
+        try:
+            if len(full_filenames) == 1:
+                # This is slightly better for only 1 file
+>               hf_hub_download(
+                    path_or_repo_id,
+                    filenames[0],
+                    subfolder=None if len(subfolder) == 0 else subfolder,
+                    repo_type=repo_type,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    user_agent=user_agent,
+                    force_download=force_download,
+                    proxies=proxies,
+                    resume_download=resume_download,
+                    token=token,
+                    local_files_only=local_files_only,
+                )
+
+.tbench-testing/lib/python3.13/site-packages/transformers/utils/hub.py:470:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.tbench-testing/lib/python3.13/site-packages/huggingface_hub/utils/_validators.py:106: in _inner_fn
+    validate_repo_id(arg_value)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+repo_id = '/app/model_cache/xlm-roberta-base'
+
+    def validate_repo_id(repo_id: str) -> None:
+        """Validate `repo_id` is valid.
+
+        This is not meant to replace the proper validation made on the Hub but rather to
+        avoid local inconsistencies whenever possible (example: passing `repo_type` in the
+        `repo_id` is forbidden).
+
+        Rules:
+        - Between 1 and 96 characters.
+        - Either "repo_name" or "namespace/repo_name"
+        - [a-zA-Z0-9] or "-", "_", "."
+        - "--" and ".." are forbidden
+
+        Valid: `"foo"`, `"foo/bar"`, `"123"`, `"Foo-BAR_foo.bar123"`
+
+        Not valid: `"datasets/foo/bar"`, `".repo_id"`, `"foo--bar"`, `"foo.git"`
+
+        Example:
+        ```py
+        >>> from huggingface_hub.utils import validate_repo_id
+        >>> validate_repo_id(repo_id="valid_repo_id")
+        >>> validate_repo_id(repo_id="other..repo..id")
+        huggingface_hub.utils._validators.HFValidationError: Cannot have -- or .. in repo_id: 'other..repo..id'.
+        ```
+
+        Discussed in https://github.com/huggingface/huggingface_hub/issues/1008.
+        In moon-landing (internal repository):
+        - https://github.com/huggingface/moon-landing/blob/main/server/lib/Names.ts#L27
+        - https://github.com/huggingface/moon-landing/blob/main/server/views/components/NewRepoForm/NewRepoForm.svelte#L138
+        """
+        if not isinstance(repo_id, str):
+            # Typically, a Path is not a repo_id
+            raise HFValidationError(f"Repo id must be a string, not {type(repo_id)}: '{repo_id}'.")
+
+        if repo_id.count("/") > 1:
+>           raise HFValidationError(
+                "Repo id must be in the form 'repo_name' or 'namespace/repo_name':"
+                f" '{repo_id}'. Use `repo_type` argument if needed."
+            )
+E           huggingface_hub.errors.HFValidationError: Repo id must be in the form 'repo_name' or 'namespace/repo_name': '/app/model_cache/xlm-roberta-base'. Use
+ `repo_type` argument if needed.
+
+.tbench-testing/lib/python3.13/site-packages/huggingface_hub/utils/_validators.py:154: HFValidationError
+
+During handling of the above exception, another exception occurred:
+
+cls = <class 'transformers.configuration_utils.PretrainedConfig'>, pretrained_model_name_or_path = '/app/model_cache/xlm-roberta-base'
+kwargs = {'name_or_path': '/app/model_cache/xlm-roberta-base'}, cache_dir = None, force_download = False, resume_download = None, proxies = None, token = None
+local_files_only = False, revision = None
+
+    @classmethod
+    def _get_config_dict(
+        cls, pretrained_model_name_or_path: Union[str, os.PathLike], **kwargs
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        cache_dir = kwargs.pop("cache_dir", None)
+        force_download = kwargs.pop("force_download", False)
+        resume_download = kwargs.pop("resume_download", None)
+        proxies = kwargs.pop("proxies", None)
+        token = kwargs.pop("token", None)
+        local_files_only = kwargs.pop("local_files_only", False)
+        revision = kwargs.pop("revision", None)
+        trust_remote_code = kwargs.pop("trust_remote_code", None)
+        subfolder = kwargs.pop("subfolder", "")
+        from_pipeline = kwargs.pop("_from_pipeline", None)
+        from_auto_class = kwargs.pop("_from_auto", False)
+        commit_hash = kwargs.pop("_commit_hash", None)
+
+        gguf_file = kwargs.get("gguf_file", None)
+
+        if trust_remote_code is True:
+            logger.warning(
+                "The argument `trust_remote_code` is to be used with Auto classes. It has no effect here and is"
+                " ignored."
+            )
+
+        user_agent = {"file_type": "config", "from_auto_class": from_auto_class}
+        if from_pipeline is not None:
+            user_agent["using_pipeline"] = from_pipeline
+
+        pretrained_model_name_or_path = str(pretrained_model_name_or_path)
+
+        is_local = os.path.isdir(pretrained_model_name_or_path)
+        if os.path.isfile(os.path.join(subfolder, pretrained_model_name_or_path)):
+            # Special case when pretrained_model_name_or_path is a local file
+            resolved_config_file = pretrained_model_name_or_path
+            is_local = True
+        elif is_remote_url(pretrained_model_name_or_path):
+            configuration_file = pretrained_model_name_or_path if gguf_file is None else gguf_file
+            resolved_config_file = download_url(pretrained_model_name_or_path)
+        else:
+            configuration_file = kwargs.pop("_configuration_file", CONFIG_NAME) if gguf_file is None else gguf_file
+
+            try:
+                # Load from local folder or from cache or download from model Hub and cache
+>               resolved_config_file = cached_file(
+                    pretrained_model_name_or_path,
+                    configuration_file,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    proxies=proxies,
+                    resume_download=resume_download,
+                    local_files_only=local_files_only,
+                    token=token,
+                    user_agent=user_agent,
+                    revision=revision,
+                    subfolder=subfolder,
+                    _commit_hash=commit_hash,
+                )
+
+.tbench-testing/lib/python3.13/site-packages/transformers/configuration_utils.py:654:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.tbench-testing/lib/python3.13/site-packages/transformers/utils/hub.py:312: in cached_file
+    file = cached_files(path_or_repo_id=path_or_repo_id, filenames=[filename], **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.tbench-testing/lib/python3.13/site-packages/transformers/utils/hub.py:523: in cached_files
+    _get_cache_file_to_return(path_or_repo_id, filename, cache_dir, revision) for filename in full_filenames
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.tbench-testing/lib/python3.13/site-packages/transformers/utils/hub.py:140: in _get_cache_file_to_return
+    resolved_file = try_to_load_from_cache(path_or_repo_id, full_filename, cache_dir=cache_dir, revision=revision)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.tbench-testing/lib/python3.13/site-packages/huggingface_hub/utils/_validators.py:106: in _inner_fn
+    validate_repo_id(arg_value)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+repo_id = '/app/model_cache/xlm-roberta-base'
+
+    def validate_repo_id(repo_id: str) -> None:
+        """Validate `repo_id` is valid.
+
+        This is not meant to replace the proper validation made on the Hub but rather to
+        avoid local inconsistencies whenever possible (example: passing `repo_type` in the
+        `repo_id` is forbidden).
+
+        Rules:
+        - Between 1 and 96 characters.
+        - Either "repo_name" or "namespace/repo_name"
+        - [a-zA-Z0-9] or "-", "_", "."
+        - "--" and ".." are forbidden
+
+        Valid: `"foo"`, `"foo/bar"`, `"123"`, `"Foo-BAR_foo.bar123"`
+
+        Not valid: `"datasets/foo/bar"`, `".repo_id"`, `"foo--bar"`, `"foo.git"`
+
+        Example:
+        ```py
+        >>> from huggingface_hub.utils import validate_repo_id
+        >>> validate_repo_id(repo_id="valid_repo_id")
+        >>> validate_repo_id(repo_id="other..repo..id")
+        huggingface_hub.utils._validators.HFValidationError: Cannot have -- or .. in repo_id: 'other..repo..id'.
+        ```
+
+        Discussed in https://github.com/huggingface/huggingface_hub/issues/1008.
+        In moon-landing (internal repository):
+        - https://github.com/huggingface/moon-landing/blob/main/server/lib/Names.ts#L27
+        - https://github.com/huggingface/moon-landing/blob/main/server/views/components/NewRepoForm/NewRepoForm.svelte#L138
+        """
+        if not isinstance(repo_id, str):
+            # Typically, a Path is not a repo_id
+            raise HFValidationError(f"Repo id must be a string, not {type(repo_id)}: '{repo_id}'.")
+
+        if repo_id.count("/") > 1:
+>           raise HFValidationError(
+                "Repo id must be in the form 'repo_name' or 'namespace/repo_name':"
+                f" '{repo_id}'. Use `repo_type` argument if needed."
+            )
+E           huggingface_hub.errors.HFValidationError: Repo id must be in the form 'repo_name' or 'namespace/repo_name': '/app/model_cache/xlm-roberta-base'. Use
+ `repo_type` argument if needed.
+
+.tbench-testing/lib/python3.13/site-packages/huggingface_hub/utils/_validators.py:154: HFValidationError
+
+During handling of the above exception, another exception occurred:
+
+    def test_model_configuration():
+        """Test that model has correct 20-label configuration."""
+>       config = AutoConfig.from_pretrained("/app/model_cache/xlm-roberta-base")
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/tests/test_outputs.py:28:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.tbench-testing/lib/python3.13/site-packages/transformers/models/auto/configuration_auto.py:1153: in from_pretrained
+    config_dict, unused_kwargs = PretrainedConfig.get_config_dict(pretrained_model_name_or_path, **kwargs)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.tbench-testing/lib/python3.13/site-packages/transformers/configuration_utils.py:595: in get_config_dict
+    config_dict, kwargs = cls._get_config_dict(pretrained_model_name_or_path, **kwargs)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+cls = <class 'transformers.configuration_utils.PretrainedConfig'>, pretrained_model_name_or_path = '/app/model_cache/xlm-roberta-base'
+kwargs = {'name_or_path': '/app/model_cache/xlm-roberta-base'}, cache_dir = None, force_download = False, resume_download = None, proxies = None, token = None
+local_files_only = False, revision = None
+
+    @classmethod
+    def _get_config_dict(
+        cls, pretrained_model_name_or_path: Union[str, os.PathLike], **kwargs
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        cache_dir = kwargs.pop("cache_dir", None)
+        force_download = kwargs.pop("force_download", False)
+        resume_download = kwargs.pop("resume_download", None)
+        proxies = kwargs.pop("proxies", None)
+        token = kwargs.pop("token", None)
+        local_files_only = kwargs.pop("local_files_only", False)
+        revision = kwargs.pop("revision", None)
+        trust_remote_code = kwargs.pop("trust_remote_code", None)
+        subfolder = kwargs.pop("subfolder", "")
+        from_pipeline = kwargs.pop("_from_pipeline", None)
+        from_auto_class = kwargs.pop("_from_auto", False)
+        commit_hash = kwargs.pop("_commit_hash", None)
+
+        gguf_file = kwargs.get("gguf_file", None)
+
+        if trust_remote_code is True:
+            logger.warning(
+                "The argument `trust_remote_code` is to be used with Auto classes. It has no effect here and is"
+                " ignored."
+            )
+
+        user_agent = {"file_type": "config", "from_auto_class": from_auto_class}
+        if from_pipeline is not None:
+            user_agent["using_pipeline"] = from_pipeline
+
+        pretrained_model_name_or_path = str(pretrained_model_name_or_path)
+
+        is_local = os.path.isdir(pretrained_model_name_or_path)
+        if os.path.isfile(os.path.join(subfolder, pretrained_model_name_or_path)):
+            # Special case when pretrained_model_name_or_path is a local file
+            resolved_config_file = pretrained_model_name_or_path
+            is_local = True
+        elif is_remote_url(pretrained_model_name_or_path):
+            configuration_file = pretrained_model_name_or_path if gguf_file is None else gguf_file
+            resolved_config_file = download_url(pretrained_model_name_or_path)
+        else:
+            configuration_file = kwargs.pop("_configuration_file", CONFIG_NAME) if gguf_file is None else gguf_file
+
+            try:
+                # Load from local folder or from cache or download from model Hub and cache
+                resolved_config_file = cached_file(
+                    pretrained_model_name_or_path,
+                    configuration_file,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    proxies=proxies,
+                    resume_download=resume_download,
+                    local_files_only=local_files_only,
+                    token=token,
+                    user_agent=user_agent,
+                    revision=revision,
+                    subfolder=subfolder,
+                    _commit_hash=commit_hash,
+                )
+                if resolved_config_file is None:
+                    return None, kwargs
+                commit_hash = extract_commit_hash(resolved_config_file, commit_hash)
+            except OSError:
+                # Raise any environment error raise by `cached_file`. It will have a helpful error message adapted to
+                # the original exception.
+                raise
+            except Exception:
+                # For any other exception, we throw a generic error.
+>               raise OSError(
+                    f"Can't load the configuration of '{pretrained_model_name_or_path}'. If you were trying to load it"
+                    " from 'https://huggingface.co/models', make sure you don't have a local directory with the same"
+                    f" name. Otherwise, make sure '{pretrained_model_name_or_path}' is the correct path to a directory"
+                    f" containing a {configuration_file} file"
+                )
+E               OSError: Can't load the configuration of '/app/model_cache/xlm-roberta-base'. If you were trying to load it from 'https://huggingface.co/models'
+, make sure you don't have a local directory with the same name. Otherwise, make sure '/app/model_cache/xlm-roberta-base' is the correct path to a directory con
+taining a config.json file
+
+.tbench-testing/lib/python3.13/site-packages/transformers/configuration_utils.py:677: OSError
+____________________________________________________________________ test_detection_results ____________________________________________________________________
+
+    def test_detection_results():
+        """Test that detection results exist with correct format and values."""
+        results_file = "/app/detection_results.json"
+
+>       assert os.path.exists(results_file), "Results file not found"
+E       AssertionError: Results file not found
+E       assert False
+E        +  where False = <function exists at 0xf57b552eea20>('/app/detection_results.json')
+E        +    where <function exists at 0xf57b552eea20> = <module 'posixpath' (frozen)>.exists
+E        +      where <module 'posixpath' (frozen)> = os.path
+
+/tests/test_outputs.py:36: AssertionError
+__________________________________________________________________ test_merged_model_accuracy __________________________________________________________________
+
+    def test_merged_model_accuracy():
+        """Test the merged model on a larger evaluation dataset."""
+        merged_model_path = "/app/merged_model"
+
+        # Check merged model exists
+>       assert os.path.exists(merged_model_path), "Merged model directory not found"
+E       AssertionError: Merged model directory not found
+E       assert False
+E        +  where False = <function exists at 0xf57b552eea20>('/app/merged_model')
+E        +    where <function exists at 0xf57b552eea20> = <module 'posixpath' (frozen)>.exists
+E        +      where <module 'posixpath' (frozen)> = os.path
+
+/tests/test_outputs.py:78: AssertionError
+=================================================================== short test summary info ====================================================================
+FAILED ../tests/test_outputs.py::test_model_downloaded - AssertionError: Model config not found
+FAILED ../tests/test_outputs.py::test_model_configuration - OSError: Can't load the configuration of '/app/model_cache/xlm-roberta-base'. If you were trying to
+load it from 'https://huggingface.co/models', make sure...
+FAILED ../tests/test_outputs.py::test_detection_results - AssertionError: Results file not found
+FAILED ../tests/test_outputs.py::test_merged_model_accuracy - AssertionError: Merged model directory not found
+====================================================================== 4 failed in 2.55s =======================================================================
+root@935d03b0c569:/app#

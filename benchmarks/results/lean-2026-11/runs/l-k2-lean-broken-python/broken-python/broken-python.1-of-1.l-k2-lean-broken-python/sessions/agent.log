@@ -1,0 +1,55 @@
+[?2004hroot@4a2a2577e375:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@4a2a2577e375:/app# clear
+[?2004l[H[J[3J[?2004hroot@4a2a2577e375:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@4a2a2577e375:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=eb56ab069a72b0aa9bd75bb9a9e8cc58788c2b21
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793533969
+[?2004hroot@4a2a2577e375:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with pip.'; tmux wait -S done
+[?2004limport os
+missing = [l.split(',')[0] for l in open('pip-24.3.1.dist-info/RECORD')
+           if not l.split(',')[0].startswith('..') and not os.path.exists(l.split(',')[0])]
+print("still missing:", len(missing))
+print(missing[:5])
+EOF — approved
+  ⚙ bash cd /usr/local/lib/python3.13/site-packages && python3 - <<'EOF' 2>&1 i…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 17 tool call(s) so far
+[approval] bash: cd /tmp && pip check 2>&1; echo "check_exit=$?"; python3 -m pip --version 2>&1; echo "=== can resolve/build a wheel offline:"; python3 -m pip install --no-index --no-build-isolation --dry-run . 2>&1 | tail -3 — approved
+  ⚙ bash cd /tmp && pip check 2>&1; echo "check_exit=$?"; python3 -m pip --vers…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 18 tool call(s) so far
+  │ The last error was just `/tmp` having no project — pip's resolver ran cor…
+[approval] bash: cd /tmp && rm -rf piptest && mkdir piptest && pip install --no-index --target /tmp/piptest /usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl >/tmp/inst.log 2>&1; echo "install_exit=$?"; tail -3 /tmp/inst.log; ls /tmp/piptest | head — approved
+  ⚙ bash cd /tmp && rm -rf piptest && mkdir piptest && pip install --no-index -…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 19 tool call(s) so far
+[approval] bash: rm -rf /tmp/piptest /tmp/inst.log; cd /tmp && pip --version && pip list 2>&1 | head -5 — approved
+  ⚙ bash rm -rf /tmp/piptest /tmp/inst.log; cd /tmp && pip --version && pip lis…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 20 tool call(s) so far
+Fixed. `pip` is working again.
+
+**What was wrong:** your `pip` package files had been deleted from disk, but its metadata was left behind. `/usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/` was fully intact while the `pip/` module directory next to it was gone — 841 of 850 recorded files missing. So `/usr/local/bin/pip3` still existed and ran, and died on line 5 with `ModuleNotFoundError: No module named 'pip'`. That error is why installs failed: pip never got far enough to look at a package index.
+
+This also explains why `python3 -m ensurepip --upgrade` did *not* fix it. `ensurepip` checks whether pip is installed by looking for the `dist-info` metadata, found the orphaned directory, concluded `Requirement already satisfied`, and did nothing. The usual repair is a silent no-op on this specific breakage.
+
+**What I did:** extracted Python's own bundled wheel, `/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl`, straight into `site-packages`. A wheel is a zip, so this needed no working pip and no network.
+
+**Verification:** all 850 recorded files now present (0 missing); `pip --version`, `python3 -m pip`, and `pip list` all work; `pip check` reports no broken requirements; and a real `pip install` of a wheel completed successfully.
+
+Two things worth flagging:
+
+- **I could not test an actual PyPI download** — this session has network disabled by policy, so I verified only the offline path. If installs still fail for you, the remaining error will be a network/proxy one, which is a different problem from the one I fixed.
+- **The repo itself is untouched.** Every change was to `/usr/local/lib/python3.13/site-packages`; `/app` still contains only the `.gnomon/` harness surface. Nothing to commit.
+
+The likely cause of the original deletion is an interrupted uninstall or an aggressive cleanup of `site-packages`. If you want to guard against a repeat, installing into a virtualenv instead of the system interpreter avoids it — but note that setuptools and wheel are also absent here, which will matter if you build packages from source.
+
+[refusal] role=implementor model=deepseek-v4.1-flash tools=20 surface=103984024bca
+[?2004hroot@4a2a2577e375:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@4a2a2577e375:/app# 

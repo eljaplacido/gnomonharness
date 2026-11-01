@@ -1,0 +1,66 @@
+root@de32838af4ec:/app# bash /tests/run-tests.sh; tmux wait -S done
+Hit:1 http://ports.ubuntu.com/ubuntu-ports noble InRelease
+Hit:2 http://ports.ubuntu.com/ubuntu-ports noble-updates InRelease
+Hit:3 http://ports.ubuntu.com/ubuntu-ports noble-backports InRelease
+Hit:4 http://ports.ubuntu.com/ubuntu-ports noble-security InRelease
+Reading package lists... Done
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+curl is already the newest version (8.5.0-2ubuntu10.16).
+0 upgraded, 0 newly installed, 0 to remove and 55 not upgraded.
+downloading uv 0.7.13 aarch64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Using CPython 3.12.3 interpreter at: /usr/bin/python3
+Creating virtual environment at: .tbench-testing
+Activate with: source .tbench-testing/bin/activate
+Using Python 3.12.3 environment at: .tbench-testing
+Resolved 5 packages in 53ms
+Prepared 5 packages in 72ms
+Installed 5 packages in 14ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+===================================================================== test session starts ======================================================================
+platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 1 item
+
+../tests/test_outputs.py F                                                                                                                               [100%]
+
+=========================================================================== FAILURES ===========================================================================
+___________________________________________________________________ test_fibonacci_polyglot ____________________________________________________________________
+
+    def test_fibonacci_polyglot():
+        """
+        Test that main.py.c is a valid polyglot that runs with both python3 and gcc,
+        produces correct Fibonacci numbers, and is contained in a single file.
+        """
+
+        # Verify that only main.py.c exists in /app/polyglot
+        polyglot_files = os.listdir("/app/polyglot")
+>       assert polyglot_files == ["main.py.c"], (
+            f"Expected only main.py.c, found: {polyglot_files}"
+        )
+E       AssertionError: Expected only main.py.c, found: ['main.py.c', 'cmain']
+E       assert ['main.py.c', 'cmain'] == ['main.py.c']
+E
+E         Left contains one more item: 'cmain'
+E         Use -v to get more diff
+
+/tests/test_outputs.py:18: AssertionError
+=================================================================== short test summary info ====================================================================
+FAILED ../tests/test_outputs.py::test_fibonacci_polyglot - AssertionError: Expected only main.py.c, found: ['main.py.c', 'cmain']
+====================================================================== 1 failed in 0.03s =======================================================================
+root@de32838af4ec:/app#

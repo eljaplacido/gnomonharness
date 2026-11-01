@@ -1,0 +1,55 @@
+[?2004hroot@f13a2ceb68d3:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@f13a2ceb68d3:/app# clear
+[?2004l[H[J[3J[?2004hroot@f13a2ceb68d3:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@f13a2ceb68d3:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=68abc510c31f7173b520a0e77b5a63aaadc753d1
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793536827
+[?2004hroot@f13a2ceb68d3:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with pip.'; tmux wait -S done
+[?2004l
+```
+Requirement already satisfied: pip in .../site-packages (24.3.1)
+```
+
+`ensurepip` consults installed metadata to decide whether to act. The orphaned `dist-info` asserted pip 24.3.1 was installed, so the installer skipped the work — leaving you exactly as broken as before, with a success exit code. Worth remembering: `ensurepip` reporting success is not evidence that pip exists.
+
+## The fix
+
+1. Moved the lying metadata aside: `pip-24.3.1.dist-info` → `/tmp/pip-orphan-backup/`
+2. `/usr/local/bin/python3 -m ensurepip --upgrade --default-pip` — this time it installed from the wheel bundled inside CPython itself, so **no network access was needed** to repair pip.
+
+## Verification
+
+I wrote the checks as a script that fails non-zero, at `.gnomon-out/verify_pip.sh` (that path is gitignored, so it won't be committed):
+
+```
+PASS  python3 imports pip
+PASS  pip3 reports a version
+PASS  pip (bare name) works
+PASS  python -m pip works
+PASS  dependency graph intact
+PASS  pip package dir is real
+PASS  exactly one pip dist-info
+PASS  can resolve deps from PyPI
+
+ALL CHECKS PASSED   (exit 0)
+```
+
+Beyond the script, a real end-to-end install into a throwaway venv: `pip install packaging` → `import packaging` → `26.3`. `pip check` reports `No broken requirements found.` I used venvs for these tests deliberately — I did not install third-party packages into the system site-packages just to prove it works. `--dry-run` confirmed the system pip can also resolve a full dependency tree (`requests` → certifi, charset-normalizer, idna, urllib3).
+
+## Two things to know
+
+**A second, separate Python exists and still has no pip.** `/usr/bin/python3` is Python **3.11.2**, distinct from the 3.13.1 you were hitting. It has no pip either, but I left it alone on purpose: it carries `/usr/lib/python3.11/EXTERNALLY-MANAGED`, so it's a distro-managed interpreter where system-wide `pip install` is blocked by design. Using `pip` against it is the wrong move — use `python3 -m venv` there. Your 3.13 has no such marker, so it accepts installs.
+
+**Your pip is 24.3.1 and 26.2.2 is available.** I did not upgrade it, since that wasn't the problem and upgrading a system pip is a change you may want to make deliberately. When you do, prefer `python3 -m pip install --upgrade pip` in a user or venv context.
+
+Root cause is worth a second look on your side: pip's code was removed but its metadata wasn't, so whatever deleted it ran non-atomically. If that was an image build or a provisioning script, it will likely do the same thing again on the next run.
+
+[refusal] role=implementor model=deepseek-v4.1-flash tools=29 surface=a825037b110a
+[?2004hroot@f13a2ceb68d3:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@f13a2ceb68d3:/app# 

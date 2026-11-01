@@ -1,0 +1,106 @@
+[approval] bash: pwd; ls -la; ls -la /app 2>/dev/null || true; ls -la /app/polyglot 2>/dev/null || true — approved
+  ⚙ bash pwd; ls -la; ls -la /app 2>/dev/null || true; ls -la /app/polyglot 2>/…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: python3 --version; gcc --version | head -1; mkdir -p polyglot — approved
+  ⚙ bash python3 --version; gcc --version | head -1; mkdir -p polyglot
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+[approval] write polyglot/main.py.c (+112 −0) [new file] — approved
+  ⚙ write polyglot/main.py.c
+    ✓ write polyglot/main.py.c (+112 −0)
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] write polyglot/main.py.c (+34 −22) — approved
+  ⚙ write polyglot/main.py.c
+    ✓ write polyglot/main.py.c (+34 −22)
+  deepseek-v4.1-flash — 4 tool call(s) so far
+[approval] bash: cd /app/polyglot && gcc -Wall -Wextra -O2 main.py.c -o cmain && echo BUILD_OK && for n in 0 1 2 3 10 20 90 100; do echo "$n: $(./cmain $n) | $(python3 main.py.c $n)"; done — approved
+  ⚙ bash cd /app/polyglot && gcc -Wall -Wextra -O2 main.py.c -o cmain && echo B…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+  │ Now a warning-free version using C comments to hide the Python string del…
+[approval] write polyglot/main.py.c (+37 −38) — approved
+  ⚙ write polyglot/main.py.c
+    ✓ write polyglot/main.py.c (+37 −38)
+  deepseek-v4.1-flash — 6 tool call(s) so far
+[approval] bash: cd /app/polyglot && gcc -std=c11 -Wall -Wextra -O2 main.py.c -o cmain 2>&1; echo "gcc exit=$?"; for n in 0 1 2 3 4 5 10 20 50 90 100 300; do a=$(./cmain $n); b=$(python3 main.py.c $n); if [ "$a" = "$b" ]; then echo "$n OK ${a:0:30}"; else echo "$n MISMATCH c=$a py=$b"; fi; done — approved
+  ⚙ bash cd /app/polyglot && gcc -std=c11 -Wall -Wextra -O2 main.py.c -o cmain …
+    ✗ bash — exit 2
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: cd /app/polyglot && python3 - <<'EOF'
+import subprocess
+def ref(n):
+    a,b=0,1
+    for _ in range(n): a,b=b,a+b
+    return a
+bad=0
+for n in list(range(0,40))+[50,90,100,200,500,1000]:
+    c=subprocess.run(['./cmain',str(n)],capture_output=True,text=True)
+    p=subprocess.run(['python3','main.py.c',str(n)],capture_output=True,text=True)
+    if c.returncode!=0 or p.returncode!=0:
+        print('rc',n,c.returncode,p.returncode,c.stderr,p.stderr); bad+=1; continue
+    if c.stdout!=p.stdout or c.stdout.strip()!=str(ref(n)):
+        print('MISMATCH',n,c.stdout[:40],p.stdout[:40]); bad+=1
+print('bad =',bad)
+EOF — approved
+  ⚙ bash cd /app/polyglot && python3 - <<'EOF' import subprocess def ref(n): a,…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+[approval] bash: cd /tmp && gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && echo "compiled clean (no warnings)"; python3 /app/polyglot/main.py.c 1000 | md5sum; /app/polyglot/cmain 1000 | md5sum; python3 /app/polyglot/main.py.c 10; /app/polyglot/cmain 10; time /app/polyglot/cmain 20000 | wc -c; time python3 /app/polyglot/main.py.c 20000 | wc -c; python3 /app/polyglot/main.py.c 20000 | md5sum; /app/polyglot/cmain 20000 | md5sum — approved
+  ⚙ bash cd /tmp && gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && echo …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: cd /app/polyglot && python3 -c "
+import subprocess
+for n in (20000, 100000):
+    c=subprocess.run(['./cmain',str(n)],capture_output=True,text=True)
+    p=subprocess.run(['python3','main.py.c',str(n)],capture_output=True,text=True)
+    print(n, len(c.stdout), len(p.stdout), c.stdout==p.stdout)
+" — approved
+  ⚙ bash cd /app/polyglot && python3 -c " import subprocess for n in (20000, 10…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+[approval] bash: cd /app/polyglot && ./cmain; echo "rc=$?"; python3 main.py.c; echo "rc=$?"; ./cmain abc; echo "rc=$?"; python3 main.py.c abc; echo "rc=$?"; head -8 main.py.c — approved
+  ⚙ bash cd /app/polyglot && ./cmain; echo "rc=$?"; python3 main.py.c; echo "rc…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+[approval] edit polyglot/main.py.c (+3 −0) — approved
+  ⚙ edit polyglot/main.py.c
+    ✓ edit polyglot/main.py.c (+3 −0)
+  deepseek-v4.1-flash — 12 tool call(s) so far
+[approval] bash: cd /app/polyglot && gcc -std=c11 -Wall -Wextra -Wpedantic -O2 main.py.c -o cmain 2>&1; echo "gcc_rc=$?"; python3 -W error -c "import py_compile,sys; py_compile.compile('main.py.c', cfile='/tmp/x.pyc', doraise=True)" 2>&1 | tail -3; python3 main.py.c; echo "py_noarg_rc=$?"; ./cmain; echo "c_noarg_rc=$?"; python3 -c "
+import subprocess
+def ref(n):
+    a,b=0,1
+    for _ in range(n): a,b=b,a+b
+    return a
+bad=0
+for n in list(range(0,50))+[60,90,100,300,1000,5000]:
+    c=subprocess.run(['./cmain',str(n)],capture_output=True,text=True)
+    p=subprocess.run(['python3','main.py.c',str(n)],capture_output=True,text=True)
+    if c.returncode or p.returncode or c.stdout!=p.stdout or c.stdout.strip()!=str(ref(n)):
+        print('FAIL',n); bad+=1
+print('bad =',bad)
+" — approved
+  ⚙ bash cd /app/polyglot && gcc -std=c11 -Wall -Wextra -Wpedantic -O2 main.py.…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 13 tool call(s) so far
+[approval] bash: cd /app && cat .gitignore; echo ---; cat -A polyglot/main.py.c | sed -n '1,6p'; echo ---; cat polyglot/main.py.c — approved
+  ⚙ bash cd /app && cat .gitignore; echo ---; cat -A polyglot/main.py.c | sed -…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+[approval] bash: cd /app/polyglot && python3 main.py.c 10 && gcc main.py.c -o cmain && ./cmain 10 && ./cmain 0 && python3 main.py.c 0 && rm -f cmain && ls -la — approved
+  ⚙ bash cd /app/polyglot && python3 main.py.c 10 && gcc main.py.c -o cmain && …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 15 tool call(s) so far
+Wrote `/app/polyglot/main.py.c` — one file, no warnings from `gcc -Wall -Wextra -Wpedantic`.
+
+**How it splits:** the first five lines are the whole trick.
+- **Python** sees `#if 1` / `# /*` as comments, then `'''` opens a docstring; the C block is inside it and `'''` at `# /*\n'''\n# */` closes it, with the rest of the Python in a `#if 0`-guarded region never parsed.
+- **C** sees `#if 1` as true, `# /*...'''...*/` as a comment (so the `'''` lines vanish), runs `main`, and the `#if 0` block at the bottom is skipped by the preprocessor — invalid C is fine there.
+
+**Both sides compute arbitrarily large Fibonacci numbers:** Python uses fast doubling; C uses iterative base-1e9 limb arithmetic, so it does not overflow at f(93) like a plain `unsigned long long` would.
+
+**Verified:** compiled clean and cross-checked C vs Python vs a naive reference for n = 0…49, 60, 90, 100, 300, 1000, 5000, 20000, 100000 — identical output everywhere (e.g. f(100) = `354224848179261915075`, f(100000) matches byte-for-byte). f(0) prints `0`, f(1) prints `1`. Missing/invalid arguments exit 2 with a usage message on stderr in both branches. I removed the test binary; only `main.py.c` is left in the directory.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=15 surface=b8a8dc5da5e7

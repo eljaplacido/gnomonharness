@@ -1,0 +1,175 @@
+  │ I'll start by inspecting the repository and environment.
+[approval] bash: id; echo "---"; uname -a; echo "---"; ls -la /; echo "---"; pwd; ls -la — approved
+  ⚙ bash id; echo "---"; uname -a; echo "---"; ls -la /; echo "---"; pwd; ls -l…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: which setfacl getfacl 2>&1; echo "---"; cat /etc/os-release 2>&1 — approved
+  ⚙ bash which setfacl getfacl 2>&1; echo "---"; cat /etc/os-release 2>&1
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  │ I'm root in a container. Need to create group "research", users alice and…
+  │ Let me check the .gnomon surface for the harness rules... The rules say d…
+  │ Let me check if there are existing tests or a Makefile.
+  │ … 1 more line(s) — /think show for all
+[approval] bash: getent group research; echo "grp rc=$?"; getent passwd alice; echo "alice rc=$?"; getent passwd bob; echo "bob rc=$?"; echo "---"; ls -la /srv; echo "---"; cat /app/.gitattributes /app/.gitignore — approved
+  ⚙ bash getent group research; echo "grp rc=$?"; getent passwd alice; echo "al…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: ls -la /app/.gnomon /app/.gnomon-audit; echo "---"; find /app/.gnomon -maxdepth 2 -type f | head -50 — approved
+  ⚙ bash ls -la /app/.gnomon /app/.gnomon-audit; echo "---"; find /app/.gnomon …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ Group `research` (gid 1001) already exists with alice and bob as members.…
+[approval] bash: awk -F: '$3>=1000 && $3<65534 {print $1, $3, $4, $7}' /etc/passwd; echo "--- umask:"; umask; echo "--- acl support on /srv (mount):"; findmnt -no FSTYPE,OPTIONS -T /srv — approved
+  ⚙ bash awk -F: '$3>=1000 && $3<65534 {print $1, $3, $4, $7}' /etc/passwd; ech…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: id alice; id bob; echo "---"; getent group 1002 1003; echo "--- acl pkg:"; dpkg -l acl 2>/dev/null | tail -2 — approved
+  ⚙ bash id alice; id bob; echo "---"; getent group 1002 1003; echo "--- acl pk…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  │ Group `research` and both users already exist. Let me verify ACLs actuall…
+[approval] bash: mkdir -p /tmp/acltest && cd /tmp/acltest && rm -rf d && mkdir d && chgrp research d && chmod 2770 d && setfacl -m g::rwx,u:alice:rwx,u:bob:rwx,o::--- d && setfacl -m m::rwx d; echo "setfacl rc=$?"; getfacl d; echo "=== now try named owning-group entry ==="; setfacl -m g:research:rwx d; echo "rc=$?"; getfacl d — approved
+  ⚙ bash mkdir -p /tmp/acltest && cd /tmp/acltest && rm -rf d && mkdir d && chg…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+  │ ACLs work on this overlayfs mount. Now let me write an idempotent setup s…
+[approval] write setup-shared-acls.sh (+57 −0) [new file] — approved
+  ⚙ write setup-shared-acls.sh
+    ✓ write setup-shared-acls.sh (+57 −0)
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  │ Run it.
+[approval] bash: cd /app && chmod +x setup-shared-acls.sh && ./setup-shared-acls.sh; echo "=== exit=$?" — approved
+  ⚙ bash cd /app && chmod +x setup-shared-acls.sh && ./setup-shared-acls.sh; ec…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+  │ Now let me verify inheritance actually works end-to-end, then clean up so…
+[approval] write verify-shared-acls.sh (+84 −0) [new file] — approved
+  ⚙ write verify-shared-acls.sh
+    ✓ write verify-shared-acls.sh (+84 −0)
+  deepseek-v4.1-flash — 10 tool call(s) so far
+[approval] bash: cd /app && chmod +x verify-shared-acls.sh && ./verify-shared-acls.sh 2>&1; echo "=== exit=$?" — approved
+  ⚙ bash cd /app && chmod +x verify-shared-acls.sh && ./verify-shared-acls.sh 2…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  │ Two failures — both are my *checker's* assertions being wrong, not the AC…
+[approval] bash: cd /srv/shared && rm -f t1 t2 && sh -c 'umask 077; : > t1' && echo "--- t1 from '>' (open mode 0666):" && getfacl -c t1 && install -m 0777 /dev/null t2 && echo "--- t2 from install -m 0777:" && getfacl -c t2; stat -c '%A' /srv/shared; ls -ld /srv/shared; rm -f t1 t2 — approved
+  ⚙ bash cd /srv/shared && rm -f t1 t2 && sh -c 'umask 077; : > t1' && echo "--…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+[approval] bash: stat --version | head -1; echo "---"; stat -c '%a %A' /srv/shared; echo "--- ls:"; ls -ld /srv/shared — approved
+  ⚙ bash stat --version | head -1; echo "---"; stat -c '%a %A' /srv/shared; ech…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  │ Both failures are my checker's fault. Confirming: `stat %A` (coreutils 9.…
+[approval] bash: cd /srv/shared && rm -f t3 && python3 -c "import os; fd=os.open('t3', os.O_CREAT|os.O_WRONLY, 0o777); os.close(fd)" && echo "--- t3 created with mode 0777:" && getfacl -c t3; stat -c '%a %A' t3; rm -f t3; echo "--- entries left: $(find /srv/shared -mindepth 1 | wc -l)" — approved
+  ⚙ bash cd /srv/shared && rm -f t3 && python3 -c "import os; fd=os.open('t3', …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+  │ Behaviour confirmed and correct. Fixing the two faulty assertions in my v…
+[approval] edit verify-shared-acls.sh (+5 −1) — approved
+  ⚙ edit verify-shared-acls.sh
+    ✓ edit verify-shared-acls.sh (+5 −1)
+  deepseek-v4.1-flash — 15 tool call(s) so far
+  │ Now fix section 5. Replace the file ACL block.
+[approval] edit verify-shared-acls.sh (+20 −2) — approved
+  ⚙ edit verify-shared-acls.sh
+    ✓ edit verify-shared-acls.sh (+20 −2)
+  deepseek-v4.1-flash — 16 tool call(s) so far
+  │ Update cleanup to include the new file.
+[approval] edit verify-shared-acls.sh (+1 −1) — approved
+  ⚙ edit verify-shared-acls.sh
+    ✓ edit verify-shared-acls.sh (+1 −1)
+  deepseek-v4.1-flash — 17 tool call(s) so far
+[approval] bash: cd /app && ./verify-shared-acls.sh 2>&1; echo "=== exit=$?" — approved
+  ⚙ bash cd /app && ./verify-shared-acls.sh 2>&1; echo "=== exit=$?"
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 18 tool call(s) so far
+  │ Off-by-one in my cut index — the setgid `s` is the 7th character. Let me …
+[approval] bash: cd /app && stat -c %A /srv/shared | awk '{for(i=1;i<=length($0);i++) printf "%d=%s\n", i, substr($0,i,1)}' — approved
+  ⚙ bash cd /app && stat -c %A /srv/shared | awk '{for(i=1;i<=length($0);i++) p…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 19 tool call(s) so far
+  │ Position 7 is `s`. My cut was wrong.
+[approval] edit verify-shared-acls.sh (+1 −1) — approved
+  ⚙ edit verify-shared-acls.sh
+    ✓ edit verify-shared-acls.sh (+1 −1)
+  deepseek-v4.1-flash — 20 tool call(s) so far
+[approval] bash: cd /app && ./verify-shared-acls.sh 2>&1 | tail -20; echo "=== exit=${PIPESTATUS:-$?}" — approved
+  ⚙ bash cd /app && ./verify-shared-acls.sh 2>&1 | tail -20; echo "=== exit=${P…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 21 tool call(s) so far
+  │ All pass. Now confirm the real exit code, idempotency, and that the direc…
+[approval] bash: cd /app && ./verify-shared-acls.sh >/tmp/v.log 2>&1; echo "verify exit=$?"; ./setup-shared-acls.sh >/tmp/s2.log 2>&1; echo "rerun setup exit=$?"; ./verify-shared-acls.sh >/tmp/v2.log 2>&1; echo "verify after rerun exit=$?" — approved
+  ⚙ bash cd /app && ./verify-shared-acls.sh >/tmp/v.log 2>&1; echo "verify exit…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 22 tool call(s) so far
+[approval] bash: echo "=== /srv/shared contents (should be empty):"; find /srv/shared -mindepth 1 -print; echo "count=$(find /srv/shared -mindepth 1 | wc -l)"; echo; echo "=== final state:"; ls -ld /srv/shared; getfacl --absolute-names /srv/shared — approved
+  ⚙ bash echo "=== /srv/shared contents (should be empty):"; find /srv/shared -…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 23 tool call(s) so far
+  │ Let me add one stronger check — a file created *inside a subdirectory* by…
+[approval] edit verify-shared-acls.sh (+8 −0) — approved
+  ⚙ edit verify-shared-acls.sh
+    ✓ edit verify-shared-acls.sh (+8 −0)
+  deepseek-v4.1-flash — 24 tool call(s) so far
+[approval] bash: cd /app && ./verify-shared-acls.sh >/tmp/v3.log 2>&1; echo "exit=$?"; sed -n '/== 6/,$p' /tmp/v3.log — approved
+  ⚙ bash cd /app && ./verify-shared-acls.sh >/tmp/v3.log 2>&1; echo "exit=$?"; …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 25 tool call(s) so far
+  │ All passing, exit 0, directory empty.
+  │ Let me do a final confirmation of state and also check the .gnomon verify…
+  │ Actually, let me check whether .gnomon/config.toml declares a verify comm…
+  │ … 1 more line(s) — /think show for all
+[approval] bash: cd /app && grep -n -A8 '\[verify\]' .gnomon/config.toml 2>/dev/null; echo "rc=$?" — approved
+  ⚙ bash cd /app && grep -n -A8 '\[verify\]' .gnomon/config.toml 2>/dev/null; e…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 26 tool call(s) so far
+[approval] bash: echo "=== FINAL ==="; ls -ld /srv/shared; echo; echo "contents: $(find /srv/shared -mindepth 1 | wc -l) entries"; echo; getfacl --absolute-names /srv/shared; echo "=== acl helpers:"; command -v getfacl setfacl — approved
+  ⚙ bash echo "=== FINAL ==="; ls -ld /srv/shared; echo; echo "contents: $(find…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 27 tool call(s) so far
+  │ No `[verify]` check is declared, so the scripts I wrote are the check. Fi…
+[approval] bash: cd /app && ./setup-shared-acls.sh >/tmp/final-setup.log 2>&1; echo "setup exit=$?"; ./verify-shared-acls.sh >/tmp/final-verify.log 2>&1; echo "verify exit=$?"; grep -c '  ok ' /tmp/final-verify.log | sed 's/^/ok checks: /'; grep -c 'FAIL' /tmp/final-verify.log | sed 's/^/failures: /'; tail -3 /tmp/final-verify.log; echo "entries in /srv/shared: $(find /srv/shared -mindepth 1 | wc -l)" — approved
+  ⚙ bash cd /app && ./setup-shared-acls.sh >/tmp/final-setup.log 2>&1; echo "se…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 28 tool call(s) so far
+Done. `/srv/shared` is provisioned, verified end-to-end, and left empty.
+
+## Final state
+
+```
+drwxrws---+ 2 root research 4096  /srv/shared
+
+# owner: root      # group: research      # flags: -s-
+user::rwx                  default:user::rwx
+user:alice:rwx             default:user:alice:rwx
+user:bob:rwx               default:user:bob:rwx
+group::rwx                 default:group::rwx
+group:research:rwx         default:group:research:rwx
+mask::rwx                  default:mask::rwx
+other::---                 default:other::---
+```
+
+`research` (gid 1001) and users `alice`/`bob` already existed with correct membership, so the script only had to fix permissions.
+
+## Files written
+
+- `setup-shared-acls.sh` — idempotent provisioning (creates group/users only if missing, sets ownership, `2770`, access + default ACLs, masks).
+- `verify-shared-acls.sh` — 49 assertions covering metadata, ACL entries, inheritance, real cross-user access, and outsider lockout. Creates throwaway files, then removes them.
+
+Verified: setup exit 0, verify exit 0, 49 ok / 0 failures, and `0` entries remaining in `/srv/shared`.
+
+## Notes on two things I got wrong first
+
+Both initial failures were **bugs in my verifier, not the ACLs** — worth flagging since they're easy to misread as real problems:
+
+1. **`stat -c %A` does not print the ACL `+` marker** (coreutils 9.4); `ls -ld` does. My check asserted `drwxrws---+` against `stat` output. Now checks both spellings.
+
+2. **Default-ACL entries are ANDed with the file's create mode.** A file made by `echo hi > f` uses mode `0666`, so the inherited `user:bob:rwx` resolves to mask `rw-` and `getfacl` prints `user:bob:rwx #effective:rw-`. That is correct POSIX behaviour and still gives both users read+write. My original assertion grepped for a literal `user:bob:rwx` line and failed on the `#effective:` suffix. Now normalizes the suffix away, and additionally checks a `0777`-created file, which *does* inherit full `rwx`.
+
+## One caveat worth your attention
+
+Inheritance guarantees the **ACL entries**, not `rwx` on every file. A file created with mode `0666` gets `mask::rw-` — both alice and bob can read and write it, which satisfies requirement 3, but it is not `rwx`. Only files created with mode `0777` inherit full `rwx`. No default ACL can change this; it's how the kernel combines create mode with inherited entries. If tests expect literal `rwx` on files created with a plain redirect, that expectation conflicts with POSIX and should target the effective access instead.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=28 surface=a825037b110a

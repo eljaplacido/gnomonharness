@@ -1,0 +1,378 @@
+  │ I'll start by inspecting the repository and environment.
+[approval] bash: pwd; ls -la; echo "---"; ls -la test 2>/dev/null | head — approved
+  ⚙ bash pwd; ls -la; echo "---"; ls -la test 2>/dev/null | head
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: which upcrun upcc gcc g++ make 2>&1; echo "---"; ls /usr/local 2>/dev/null; ls /usr/local/upc 2>/dev/null; echo "---"; cat /etc/os-release | head -3; nproc — approved
+  ⚙ bash which upcrun upcc gcc g++ make 2>&1; echo "---"; ls /usr/local 2>/dev/…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+[approval] bash: head -5 test; echo "---"; wc -l test; echo "---"; awk -F'\t' '{print length($1), length($2)}' test | sort -u | head — approved
+  ⚙ bash head -5 test; echo "---"; wc -l test; echo "---"; awk -F'\t' '{print l…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: ls -R .gnomon | head -50; echo "---"; cat .gitignore; echo "---"; cat .gitattributes — approved
+  ⚙ bash ls -R .gnomon | head -50; echo "---"; cat .gitignore; echo "---"; cat …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+[approval] bash: cd /app && awk -F'\t' '{print $1}' test | sort | uniq -d | head; echo "dups above"; awk -F'\t' '{print $2}' test | sort | uniq -c; echo "---"; tail -3 test — approved
+  ⚙ bash cd /app && awk -F'\t' '{print $1}' test | sort | uniq -d | head; echo …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+  ⚙ bash cd /app && timeout 60 curl -sSI https://upc.lbl.gov/download/release/b…
+    ⚠ bash — refused (network = false)
+  deepseek-v4.1-flash — 6 tool call(s) so far
+[approval] bash: cd /app && cat .gnomon/policy.toml — approved
+  ⚙ bash cd /app && cat .gnomon/policy.toml
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: ls / /opt /usr/local/src /root 2>/dev/null; echo "---"; find / -maxdepth 4 -iname "*berkeley_upc*" -o -maxdepth 4 -iname "upcc" -o -maxdepth 4 -iname "upcrun" 2>/dev/null | head -20 — approved
+  ⚙ bash ls / /opt /usr/local/src /root 2>/dev/null; echo "---"; find / -maxdep…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+[approval] bash: cd /tmp && timeout 60 apt-get update >/tmp/apt.log 2>&1; echo "exit=$?"; tail -5 /tmp/apt.log — approved
+  ⚙ bash cd /tmp && timeout 60 apt-get update >/tmp/apt.log 2>&1; echo "exit=$?…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: ls /opt/gnomon /opt/task-cwd 2>/dev/null | head -30; echo "---"; apt-cache search upc 2>/dev/null | head; echo "---"; dpkg -l | grep -i -E "upc|mpi" | head — approved
+  ⚙ bash ls /opt/gnomon /opt/task-cwd 2>/dev/null | head -30; echo "---"; apt-c…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+[approval] bash: which python3; ls /protected /installed-agent 2>/dev/null | head; apt-cache search berkeley 2>/dev/null | head -20; echo "--- vendors"; apt-cache search parallel 2>/dev/null | grep -i upc | head — approved
+  ⚙ bash which python3; ls /protected /installed-agent 2>/dev/null | head; apt-…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'EOF'
+lines=[l.rstrip('\n') for l in open('test') if l.strip()]
+km={}
+for l in lines:
+    k,e=l.split('\t')
+    km[k]=(e[0],e[1])
+k=len(next(iter(km)))
+print("k",k,"n",len(km))
+succ={}; pred={}
+for s,(lc,rc) in km.items():
+    if rc!='F':
+        t=s[1:]+rc
+        if t in km: succ[s]=t; pred[t]=s
+    if lc!='F':
+        t=lc+s[:-1]
+        if t in km: pred[s]=t; succ[t]=s
+# check consistency
+bad=0
+for s,t in succ.items():
+    if t in pred and pred[t]!=s: bad+=1
+print("inconsist",bad)
+starts=[s for s in km if s not in pred]
+print("starts",len(starts))
+print("no succ",sum(1 for s in km if s not in succ))
+# walk
+seen=set(); contigs=[]
+for s in km:
+    if s in pred: continue
+    cur=s; seq=s
+    while cur in succ and cur not in seen:
+        seen.add(cur); cur=succ[cur]; seq+=cur[-1]
+    seen.add(cur); contigs.append(seq)
+print("contigs",len(contigs),"lens",sorted(set(len(c) for c in contigs))[-5:])
+print("total seq",sum(len(c) for c in contigs))
+print("unvisited",len(km)-len(seen))
+print(contigs[0][:80])
+EOF — approved
+  ⚙ bash cd /app && python3 - <<'EOF' lines=[l.rstrip('\n') for l in open('test…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  │ Environment noted: `test` has 10,000 unique 19-mers forming 6 linear chai…
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 1/8 done · Write dbg_common.h (packing, hashing, pa
+[approval] bash: cd /app && python3 -c "
+lines=[l.rstrip('\n') for l in open('test') if l.strip()]
+ex=set()
+for l in lines: ex|=set(l.split('\t')[1])
+print(sorted(ex))
+print('all ACGT kmer:', all(set(l.split('\t')[0])<=set('ACGT') for l in lines))
+" — approved
+  ⚙ bash cd /app && python3 -c " lines=[l.rstrip('\n') for l in open('test') if…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+  [retry] timed out (deadline now 599998ms) — attempt 1 of 3, waiting 500ms
+  │ Data confirmed consistent (6 linear chains). Now writing the shared heade…
+[approval] write dbg_common.h (+161 −0) [new file] — approved
+  ⚙ write dbg_common.h
+    ✓ write dbg_common.h (+161 −0)
+  deepseek-v4.1-flash — 15 tool call(s) so far
+  │ Now the serial implementation.
+[approval] write serial.c (+361 −0) [new file] — approved
+  ⚙ write serial.c
+    ✓ write serial.c (+361 −0)
+  deepseek-v4.1-flash — 16 tool call(s) so far
+[approval] edit serial.c (+2 −4) — approved
+  ⚙ edit serial.c
+    ✓ edit serial.c (+2 −4)
+  deepseek-v4.1-flash — 17 tool call(s) so far
+[approval] bash: cd /app && gcc -O2 -std=c99 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -o serial serial.c 2>&1 | head -30; echo "build exit=$?"; ./serial test /app/serial.out; echo "run exit=$?"; echo "---"; cat /app/serial.out | awk '{print length($0)}'; echo "---"; head -1 /app/serial.out — approved
+  ⚙ bash cd /app && gcc -O2 -std=c99 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -o…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 18 tool call(s) so far
+  │ Two fixes in the header: a wrong call to `dbg_parse_kmer` and a `/*` insi…
+[approval] bash: cd /app && python3 - <<'PY'
+import re
+p='dbg_common.h'
+s=open(p).read()
+s=s.replace("if (dbg_parse_kmer(s, (size_t) k, &code) != 0) return -1;",
+            "if (dbg_parse_kmer(s, (size_t) k, k, &code) != 0) return -1;")
+s=s.replace(" * Returns 0 and fills *ocode/*olc/*orc, or -1 if the line is to be skipped",
+            " * Returns 0 and fills ocode, olc, orc; or -1 if the line is to be skipped")
+open(p,'w').write(s)
+PY
+gcc -O2 -std=c99 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -o serial serial.c 2>&1 | head -30; ls -l serial; ./serial test /app/serial.out; echo "---"; awk '{print length($0)}' /app/serial.out; head -1 /app/serial.out — approved
+  ⚙ bash cd /app && python3 - <<'PY' import re p='dbg_common.h' s=open(p).read(…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 19 tool call(s) so far
+  │ Serial works and matches my independent Python analysis (6 contigs, 10,10…
+[approval] write upc_shim.h (+46 −0) [new file] — approved
+  ⚙ write upc_shim.h
+    ✓ write upc_shim.h (+46 −0)
+  deepseek-v4.1-flash — 20 tool call(s) so far
+[approval] write upc_shim.c (+137 −0) [new file] — approved
+  ⚙ write upc_shim.c
+    ✓ write upc_shim.c (+137 −0)
+  deepseek-v4.1-flash — 21 tool call(s) so far
+[approval] edit upc_shim.c (+7 −3) — approved
+  ⚙ edit upc_shim.c
+    ✓ edit upc_shim.c (+7 −3)
+  deepseek-v4.1-flash — 22 tool call(s) so far
+  │ Now the UPC implementation itself — the core deliverable.
+[approval] write pgen.upc (+705 −0) [new file] — approved
+  ⚙ write pgen.upc
+    ✓ write pgen.upc (+705 −0)
+  deepseek-v4.1-flash — 23 tool call(s) so far
+  │ The first draft has several real bugs (macro recursion, no thread spawnin…
+[approval] write pgen.upc (+513 −485) — approved
+  ⚙ write pgen.upc
+    ✓ write pgen.upc (+513 −485)
+  deepseek-v4.1-flash — 24 tool call(s) so far
+  │ Now fixing the scoping bugs I just introduced (stale `total_records`, bog…
+[approval] bash: cd /app && python3 - <<'PY'
+p='pgen.upc'
+s=open(p).read()
+
+# 1) keep total_records in a real variable rather than reusing x_val (which
+#    phase E overwrites with the per-thread start counts)
+s = s.replace("""        uint64_t max_total, nbuckets, nbuckets_log2;
+        uint64_t lo, hi;""",
+"""        uint64_t max_total, nbuckets;
+        uint64_t lo, hi, total_records;""")
+
+s = s.replace("""        nbuckets_log2 = 0;
+        while ((1ULL << nbuckets_log2) < nbuckets) nbuckets_log2++;
+        g_nbuckets = nbuckets;""",
+"""        g_nbuckets = nbuckets;""")
+
+s = s.replace("""        {
+            uint64_t total_records = 0;
+            for (i = 0; i < THREADS; i++) total_records += s_nrec[i];""",
+"""        {
+            total_records = 0;
+            for (i = 0; i < THREADS; i++) total_records += s_nrec[i];""")
+
+s = s.replace("""        UPC_BARRIER();
+        {
+            uint64_t total_records = x_val[0];
+            if (total_records > 0xFFFFFFFFULL)
+                die("too many k-mers for 32-bit node indices", NULL);
+        }""",
+"""        UPC_BARRIER();
+        if (total_records > 0xFFFFFFFFULL)
+            die("too many k-mers for 32-bit node indices", NULL);""")
+
+s = s.replace("""                fprintf(stderr, "pgen: records=%llu distinct-kmers=%s\\n",
+                        (unsigned long long) x_val[0], m);""",
+"""                fprintf(stderr, "pgen: records=%llu distinct-kmers=%s\\n",
+                        (unsigned long long) total_records, m);""")
+
+s = s.replace("""            uint64_t nstarts = 0, j, total_records = x_val[0];""",
+"""            uint64_t nstarts = 0, j;""")
+
+s = s.replace("""            if (MYTHREAD == 0) {
+                uint64_t tc = 0, tb = 0, nstart_total = 0;
+                for (i = 0; i < THREADS; i++) { tc += out_ncontigs[i]; tb += out_bases[i]; }
+                for (i = 0; i < THREADS; i++) nstart_total += 0; /* starts already counted */
+                fprintf(stderr,""",
+"""            if (MYTHREAD == 0) {
+                uint64_t tc = 0, tb = 0;
+                for (i = 0; i < THREADS; i++) { tc += out_ncontigs[i]; tb += out_bases[i]; }
+                fprintf(stderr,""")
+
+s = s.replace("""
+    (void) nbuckets_log2_dummy_unused_guard();
+    return EXIT_SUCCESS;""",
+"""
+    return EXIT_SUCCESS;""")
+open(p,'w').write(s)
+PY
+grep -n "nbuckets_log2\|dummy_unused\|x_val\[0\]" pgen.upc — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='pgen.upc' s=open(p).read() # 1) keep to…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 25 tool call(s) so far
+[approval] bash: cd /app && cat >> upc_shim.h <<'EOF'
+
+/* Run `body` once per UPC thread on its own pthread, after reserving the shared
+ * heap.  Thread-count and heap options are read from the command line with the
+ * same spelling upcrun uses (-n, -shared-heap).  Returns body's exit status of
+ * thread 0. */
+int upc_shim_run(int argc, char **argv, int (*body)(int, char **));
+EOF
+python3 - <<'PY'
+p='upc_shim.c'
+s=open(p).read()
+s=s.replace('#include <errno.h>','#include <errno.h>\n#include <ctype.h>')
+s += '''
+/* ---------------------------------------------------------------- launcher */
+typedef struct {
+    int (*body)(int, char **);
+    int argc;
+    char **argv;
+} shim_job_t;
+
+static shim_job_t g_job;
+
+static void *shim_thread_main(void *arg)
+{
+    long t = (long) arg;
+    upc_shim_set_thread((int) t);
+    /* every thread runs the same body; the collective allocations inside it are
+     * matched because all threads call them in the same order */
+    g_job.body(g_job.argc, g_job.argv);
+    return NULL;
+}
+
+/* Accepts "-n N", "-nN", "-shared-heap SIZE" the way upcrun does, and leaves
+ * every other argument for the program. */
+static void shim_parse(int argc, char **argv, int *nthreads, size_t *heap)
+{
+    int i;
+    for (i = 1; i < argc; i++) {
+        const char *a = argv[i];
+        if (!strcmp(a, "-n") && i + 1 < argc) {
+            *nthreads = atoi(argv[++i]);
+        } else if (!strncmp(a, "-n", 2) && isdigit((unsigned char) a[2])) {
+            *nthreads = atoi(a + 2);
+        } else if (!strcmp(a, "-shared-heap") && i + 1 < argc) {
+            const char *hs = argv[++i];
+            char *endp = NULL;
+            double v = strtod(hs, &endp);
+            if (endp && (*endp == 'M' || *endp == 'm')) v *= 1024.0 * 1024.0;
+            else if (endp && (*endp == 'G' || *endp == 'g')) v *= 1024.0 * 1024.0 * 1024.0;
+            else if (endp && (*endp == 'K' || *endp == 'k')) v *= 1024.0;
+            if (v > 0.0) *heap = (size_t) v;
+        } else if (!strcmp(a, "-shared-heap") || !strcmp(a, "-n")) {
+            if (i + 1 < argc) i++;
+        }
+    }
+}
+
+int upc_shim_run(int argc, char **argv, int (*body)(int, char **))
+{
+    int nthreads = 1, i;
+    size_t heap = (size_t) 256 << 20;
+    pthread_t *tids;
+    const char *env;
+
+    env = getenv("UPC_NTHREADS");
+    if (env) nthreads = atoi(env);
+    env = getenv("UPC_SHARED_HEAP");
+    if (env) { char *e = NULL; double v = strtod(env, &e);
+               if (e && (*e == 'M' || *e == 'm')) v *= 1024.0 * 1024.0;
+               if (v > 0) heap = (size_t) v; }
+
+    shim_parse(argc, argv, &nthreads, &heap);
+    if (nthreads < 1) nthreads = 1;
+
+    upc_shim_init(nthreads, heap);
+
+    g_job.body = body;
+    g_job.argc = argc;
+    g_job.argv = argv;
+
+    tids = (pthread_t *) calloc((size_t) nthreads, sizeof(pthread_t));
+    if (!tids) shim_die("cannot allocate the thread table");
+
+    for (i = 1; i < nthreads; i++) {   /* thread 0 is this thread */
+        if (pthread_create(&tids[i], NULL, shim_thread_main, (void *) (long) i) != 0)
+            shim_die("cannot create a UPC thread");
+    }
+    {
+        upc_shim_set_thread(0);
+        body(argc, argv);
+    }
+    for (i = 1; i < nthreads; i++) pthread_join(tids[i], NULL);
+    free(tids);
+
+    return EXIT_SUCCESS;
+}
+'''
+open(p,'w').write(s)
+PY
+gcc -O2 -std=gnu99 -Wall -Wextra -DUPC_SHIM -c upc_shim.c -o upc_shim.o 2>&1 | head -20; echo "shim build done" — approved
+  ⚙ bash cd /app && cat >> upc_shim.h <<'EOF' /* Run `body` once per UPC thread…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 26 tool call(s) so far
+[approval] bash: cd /app && gcc -O2 -std=gnu99 -Wall -Wextra -DUPC_SHIM -o pgen pgen.upc upc_shim.c -lpthread 2>&1 | head -40 — approved
+  ⚙ bash cd /app && gcc -O2 -std=gnu99 -Wall -Wextra -DUPC_SHIM -o pgen pgen.up…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 27 tool call(s) so far
+[approval] bash: cd /app && gcc -O2 -std=gnu99 -Wall -Wextra -DUPC_SHIM -x c -o pgen pgen.upc upc_shim.c -lpthread 2>&1 | head -40 — approved
+  ⚙ bash cd /app && gcc -O2 -std=gnu99 -Wall -Wextra -DUPC_SHIM -x c -o pgen pg…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 28 tool call(s) so far
+  │ Clean compile. Running it:
+[approval] bash: cd /app && rm -f pgen_*.out && ./pgen -n 4 -shared-heap 256MB test; echo "exit=$?"; echo "--- files:"; ls -l pgen_*.out 2>/dev/null; echo "--- lines per file:"; wc -l pgen_*.out 2>/dev/null — approved
+  ⚙ bash cd /app && rm -f pgen_*.out && ./pgen -n 4 -shared-heap 256MB test; ec…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 29 tool call(s) so far
+[approval] bash: cd /app && sort serial.out > /tmp/s.txt && cat pgen_*.out | sort > /tmp/p.txt && diff /tmp/s.txt /tmp/p.txt && echo "IDENTICAL contig sets"; echo "---"; python3 -c "
+s=sorted(open('/app/serial.out').read().split())
+p=sorted(open('/tmp/p.txt').read().split())
+print('serial:',len(s),'pgen union:',len(p),'equal:',s==p, 'total bases', sum(map(len,s)), sum(map(len,p)))
+" — approved
+  ⚙ bash cd /app && sort serial.out > /tmp/s.txt && cat pgen_*.out | sort > /tm…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 30 tool call(s) so far
+  │ Identical on the first run. Now stressing it: many thread counts, repeats…
+[approval] bash: cd /app && for n in 1 2 3 4 5 7 8 13 16 20; do rm -f pgen_*.out; ./pgen -n $n test >/dev/null 2>/tmp/e.$n || { echo "n=$n FAILED"; cat /tmp/e.$n; continue; }; cat pgen_*.out | sort > /tmp/p.$n; if diff -q /tmp/s.txt /tmp/p.$n >/dev/null; then echo "n=$n OK ($(ls pgen_*.out | wc -l) files, $(cat pgen_*.out | wc -l) contigs)"; else echo "n=$n MISMATCH"; fi; done — approved
+  ⚙ bash cd /app && for n in 1 2 3 4 5 7 8 13 16 20; do rm -f pgen_*.out; ./pge…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 31 tool call(s) so far
+[approval] bash: cd /app && rm -f pgen_*.out && ./pgen -n 3 test 2>&1 | tail -6; echo "--- lines:"; awk '{print length($0)}' pgen_*.out; echo "--- diff vs serial:"; cat pgen_*.out | sort > /tmp/p3; diff /tmp/s.txt /tmp/p3 | head -20 — approved
+  ⚙ bash cd /app && rm -f pgen_*.out && ./pgen -n 3 test 2>&1 | tail -6; echo "…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 32 tool call(s) so far
+  [tools] 32/256 calls — continuing (leg 2)
+  deepseek-v4.1-flash — leg 2, 32 call(s) so far
+[approval] bash: cd /app && for n in 3 4 7 13 16 20; do rm -f pgen_*.out; ./pgen -n $n test >/dev/null 2>/tmp/e.$n; cat pgen_*.out | sort > /tmp/p.$n; if diff -q /tmp/s.txt /tmp/p.$n >/dev/null; then echo "n=$n OK"; else echo "n=$n MISMATCH"; diff /tmp/s.txt /tmp/p.$n | cut -c1-60 | head -8; fi; done — approved
+  ⚙ bash cd /app && for n in 3 4 7 13 16 20; do rm -f pgen_*.out; ./pgen -n $n …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 33 tool call(s) so far
+  │ Found a real race: thread 0's cycle sweep runs concurrently with other th…
+  deepseek-v4.1-flash — 34 tool call(s) so far
+  ⚙ read pgen.upc
+    ✓ read pgen.upc — 726 lines
+[approval] bash: cd /app && grep -n "cycles have no start node" -A 12 -B 4 pgen.upc — approved
+  ⚙ bash cd /app && grep -n "cycles have no start node" -A 12 -B 4 pgen.upc
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 35 tool call(s) so far
+[approval] edit pgen.upc (+6 −0) — approved
+  ⚙ edit pgen.upc
+    ✓ edit pgen.upc (+6 −0)
+  deepseek-v4.1-flash — 36 tool call(s) so far
+[approval] bash: cd /app && gcc -O2 -std=gnu99 -Wall -Wextra -DUPC_SHIM -x c -o pgen pgen.upc upc_shim.c -lpthread 2>&1 | head -20; for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 20 24 32; do rm -f pgen_*.out; ./pgen -n $n test >/dev/null 2>/tmp/e.$n || { echo "n=$n FAILED"; cat /tmp/e.$n; continue; }; cat pgen_*.out | sort > /tmp/p.$n; if diff -q /tmp/s.txt /tmp/p.$n >/dev/null; then echo "n=$n OK ($(cat pgen_*.out | wc -l) contigs, $(ls pgen_*.out | wc -l) files)"; else echo "n=$n MISMATCH"; fi; done — approved
+  ⚙ bash cd /app && gcc -O2 -std=gnu99 -Wall -Wextra -DUPC_SHIM -x c -o pgen pg…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 37 tool call(s) so far
+  │ All thread counts now agree. Time to stress the parallel version against …
+[approval] write tests/gen_cases.py (+112 −0) [new file] — approved
+  ⚙ write tests/gen_cases.py
+    ✓ write tests/gen_cases.py (+112 −0)
+  deepseek-v4.1-flash — 38 tool call(s) so far

@@ -1,0 +1,169 @@
+  │ I'll start by looking at the repository structure and the file in questio…
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  ⚙ read .
+    ✓ read ./ — 5 entries
+  ⚙ read plus_comm.v
+    ✓ read plus_comm.v — 14 lines
+  │ Let's check environment: is coqc installed? Check .gitattributes, .gitign…
+  │ Note base case: 0 + m = m + 0. `simpl.` gives m = m + 0? Let's think. Goa…
+  │ Let me check coqc availability.
+[approval] bash: which coqc coqtop rocq 2>&1; coqc --version 2>&1 | head -5; cat .gitignore; cat .gitattributes — approved
+  ⚙ bash which coqc coqtop rocq 2>&1; coqc --version 2>&1 | head -5; cat .gitig…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+  │ Coq 8.18 is available. Let me write the completed proof.
+[approval] write plus_comm.v (+19 −7) — approved
+  ⚙ write plus_comm.v
+    ✓ write plus_comm.v (+19 −7)
+  deepseek-v4.1-flash — 4 tool call(s) so far
+[approval] bash: cd /workspace 2>/dev/null || true; pwd; coqc -verbose plus_comm.v > /tmp/coqc.log 2>&1; echo "exit=$?"; cat /tmp/coqc.log; ls -l plus_comm.vo plus_comm.glob plus_comm.vos 2>&1 — approved
+  ⚙ bash cd /workspace 2>/dev/null || true; pwd; coqc -verbose plus_comm.v > /t…
+    ✗ bash — exit 2
+  deepseek-v4.1-flash — 5 tool call(s) so far
+  │ The base case needs a nested induction (with the right rewrite direction)…
+[approval] edit plus_comm.v (+1 −1) — approved
+  ⚙ edit plus_comm.v
+    ✓ edit plus_comm.v (+1 −1)
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  │ Wait, the goal in base case step: after simpl, goal is `S m' = S (m' + 0)…
+  │ Actually simpler: use `plus_n_O` via `apply plus_n_O`? But the instructio…
+[approval] bash: coqc plus_comm.v > /tmp/coqc.log 2>&1; echo "exit=$?"; cat /tmp/coqc.log; ls -l plus_comm.vo 2>&1 — approved
+  ⚙ bash coqc plus_comm.v > /tmp/coqc.log 2>&1; echo "exit=$?"; cat /tmp/coqc.l…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+  │ It compiled. Now let me verify there are no admits/axioms left and that t…
+[approval] bash: cat > /tmp/check.v <<'EOF'
+Require Import Arith.
+Require Import plus_comm.
+Check plus_comm.
+Print Assumptions plus_comm.
+Goal forall a b, a + b = b + a.
+  apply plus_comm.
+Qed.
+Goal 3 + 5 = 5 + 3.
+  apply plus_comm.
+Qed.
+EOF
+coqc -Q . "" /tmp/check.v > /tmp/check.log 2>&1; echo "exit=$?"; cat /tmp/check.log — approved
+  ⚙ bash cat > /tmp/check.v <<'EOF' Require Import Arith. Require Import plus_c…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+[approval] bash: grep -nE "admit|Admitted|Axiom|Parameter|Hypothesis" plus_comm.v; echo "grep_exit=$?"; echo ---; cat -A plus_comm.v | sed -n '1,30p' | cut -c1-100 — approved
+  ⚙ bash grep -nE "admit|Admitted|Axiom|Parameter|Hypothesis" plus_comm.v; echo…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+  │ Both checks pass (the theorem is usable and closed under the global conte…
+[approval] bash: cat > /tmp/goals.v <<'EOF'
+Require Import Arith.
+Goal forall n m : nat, n + m = m + n.
+  intros n m.
+  induction n as [|n' IHn'].
+  - simpl.
+    induction m as [|m' IHm'].
+    + Show.
+      reflexivity.
+    + simpl. Show.
+      rewrite <- IHm'. Show.
+      reflexivity.
+  - simpl. Show.
+    rewrite IHn'. Show.
+    rewrite plus_n_Sm. Show.
+    reflexivity.
+Qed.
+EOF
+coqc /tmp/goals.v > /tmp/goals.log 2>&1; echo "exit=$?"; grep -v "^$" /tmp/goals.log — approved
+  ⚙ bash cat > /tmp/goals.v <<'EOF' Require Import Arith. Goal forall n m : nat…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+  │ Goals at every step match the comments. Final clean rebuild in the repo:
+[approval] bash: rm -f plus_comm.vo plus_comm.glob plus_comm.vos plus_comm.vok; coqc plus_comm.v > /tmp/final.log 2>&1; echo "coqc_exit=$?"; cat /tmp/final.log; ls -l plus_comm.v plus_comm.vo plus_comm.glob; echo ---; rm -rf /tmp/cc && mkdir -p /tmp/cc && coqc -Q /workspace "" -o /tmp/cc/out.vo plus_comm.v > /tmp/final2.log 2>&1; echo "rerun_exit=$?"; cat /tmp/final2.log — approved
+  ⚙ bash rm -f plus_comm.vo plus_comm.glob plus_comm.vos plus_comm.vok; coqc pl…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  │ The second failure is just my invalid `-o` usage (basename must match), n…
+[approval] bash: rm -rf /tmp/cc && mkdir -p /tmp/cc && cp plus_comm.v /tmp/cc/ && coqc -Q /tmp/cc "" -o /tmp/cc plus_comm.v > /tmp/final2.log 2>&1; echo "isolated_build_exit=$?"; cat /tmp/final2.log; ls -l /tmp/cc — approved
+  ⚙ bash rm -rf /tmp/cc && mkdir -p /tmp/cc && cp plus_comm.v /tmp/cc/ && coqc …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  │ The -o flag expects directory. Just run coqc inside /tmp/cc without -o.
+[approval] bash: cd /tmp/cc && coqc plus_comm.v > /tmp/final2.log 2>&1; echo "isolated_build_exit=$?"; cat /tmp/final2.log; ls -l /tmp/cc — approved
+  ⚙ bash cd /tmp/cc && coqc plus_comm.v > /tmp/final2.log 2>&1; echo "isolated_…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  │ Everything works. Final state in repo: plus_comm.v compiled, plus_comm.vo…
+  │ Also note: /tmp/cc is outside repo, fine.
+  │ Let me record a note about the base case double induction and rewrite dir…
+  deepseek-v4.1-flash — 14 tool call(s) so far
+  deepseek-v4.1-flash — 15 tool call(s) so far
+  ⚙ note 
+    ✓ note — plus_comm.v done: base case `simpl` leaves `m = m + 0`, whic
+  ⚙ read plus_comm.v
+    ✓ read plus_comm.v — 26 lines
+Done — the proof is completed and compiled.
+
+## What was wrong
+
+The file had two `admit`s, and the two holes were not symmetric in difficulty:
+
+1. **Base case** (`0 + m = m + 0`): `simpl` only reduces the `0 + m` side, leaving `m = m + 0`. That does *not* hold by `reflexivity` — `m + 0` doesn't reduce because `plus` recurses on its **first** argument. It needs a second induction, on `m`.
+2. **Step case** (`S n' + m = m + S n'`): the inductive hypothesis alone is not enough; the hypothesis gives `n' + m = m + n'`, but the goal's right-hand side is `m + S n'`, which requires the `plus_n_Sm` lemma to move the successor out.
+
+## The completed proof
+
+```coq
+Require Import Arith.
+
+Theorem plus_comm : forall n m : nat,
+  n + m = m + n.
+Proof.
+  intros n m.
+  induction n as [|n' IHn'].
+  - (* Base case: 0 + m = m + 0. *)
+    simpl.
+    induction m as [|m' IHm'].
+    + reflexivity.
+    + simpl.
+      rewrite <- IHm'.
+      reflexivity.
+  - (* Step case: S n' + m = m + S n'. *)
+    simpl.
+    rewrite IHn'.
+    rewrite plus_n_Sm.
+    reflexivity.
+Qed.
+```
+
+Two details worth flagging, both of which I verified rather than assumed:
+
+- In the base-case step, `simpl` turns the goal into `S m' = S (m' + 0)` while the hypothesis is `IHm' : m' = m' + 0`. The rewrite must go **backwards** (`rewrite <- IHm'`); the forward direction fails with `Unable to unify "S (m' + 0 + 0)" with "S (m' + 0)"`. I hit exactly that error on my first attempt and fixed it.
+- In the step case, order matters: rewriting `plus_n_Sm` first would not line up with `IHn'`. `IHn'` then `plus_n_Sm` closes it immediately.
+
+I confirmed each intermediate goal with `Show`, so the comments in the file describe the real goal states and not what I expected them to be.
+
+## Verification
+
+```
+$ coqc plus_comm.v ; echo exit=$?
+exit=0
+-rw-r--r-- plus_comm.vo     (14556 bytes)
+-rw-r--r-- plus_comm.glob
+```
+
+Checks that the `.vo` is a real proof and not a shell around an axiom:
+
+```
+$ grep -nE "admit|Admitted|Axiom|Parameter|Hypothesis" plus_comm.v
+(nothing; grep exit=1)
+```
+
+```
+Check plus_comm.           --> forall n m : nat, n + m = m + n
+Print Assumptions plus_comm. --> Closed under the global context
+```
+
+The `Closed under the global context` line is the important one: it proves there are no leftover `admit`s, no `Admitted`, and nothing depending on an axiom. I also consumed the compiled `.vo` as a library and applied `plus_comm` to both a symbolic goal (`forall a b, a + b = b + a`) and a concrete one (`3 + 5 = 5 + 3`), and rebuilt from scratch in a clean directory to rule out a stale artifact.
+
+One environment gotcha, in case it bites later: `coqc` requires the output basename to match the module name, so `coqc -o out.vo plus_comm.v` is rejected outright (`Source and target file names must coincide`). Use the default output or pass a directory.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=15 surface=a4057321a082

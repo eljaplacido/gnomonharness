@@ -1,0 +1,113 @@
+root@8f61a1cf81a8:/app# bash /tests/run-tests.sh; tmux wait -S done
+Hit:1 http://ports.ubuntu.com/ubuntu-ports noble InRelease
+Hit:2 http://ports.ubuntu.com/ubuntu-ports noble-updates InRelease
+Hit:3 http://ports.ubuntu.com/ubuntu-ports noble-backports InRelease
+Hit:4 http://ports.ubuntu.com/ubuntu-ports noble-security InRelease
+Reading package lists... Done
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+curl is already the newest version (8.5.0-2ubuntu10.16).
+0 upgraded, 0 newly installed, 0 to remove and 41 not upgraded.
+downloading uv 0.7.13 aarch64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Using CPython 3.12.3 interpreter at: /usr/bin/python3
+Creating virtual environment at: .tbench-testing
+Activate with: source .tbench-testing/bin/activate
+Using Python 3.12.3 environment at: .tbench-testing
+Resolved 5 packages in 61ms
+Prepared 5 packages in 156ms
+Installed 5 packages in 34ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+===================================================================== test session starts ======================================================================
+platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 9 items
+
+../tests/test_outputs.py ..F.....F                                                                                                                       [100%]
+
+=========================================================================== FAILURES ===========================================================================
+_____________________________________________________________________ test_makefile_exists _____________________________________________________________________
+
+    def test_makefile_exists():
+        """Check that a Makefile was created for compilation."""
+        makefile_path = Path("/app/Makefile")
+>       assert makefile_path.exists(), f"Makefile {makefile_path} does not exist"
+E       AssertionError: Makefile /app/Makefile does not exist
+E       assert False
+E        +  where False = exists()
+E        +    where exists = PosixPath('/app/Makefile').exists
+
+/tests/test_outputs.py:32: AssertionError
+__________________________________________________________________ test_outputs_are_identical __________________________________________________________________
+
+    def test_outputs_are_identical():
+        """Check that serial and parallel versions produce identical contigs when sorted."""
+        serial_out = Path("/app/serial.out")
+
+        # Collect all contigs from serial output
+        serial_contigs = set()
+        if serial_out.exists():
+            content = serial_out.read_text()
+            for line in content.strip().split("\n"):
+                if line.strip():
+                    serial_contigs.add(line.strip())
+
+        # Collect all contigs from parallel outputs
+        parallel_contigs = set()
+        pgen_files = list(Path("/app").glob("pgen*.out"))
+        for pgen_file in pgen_files:
+            if pgen_file.exists():
+                content = pgen_file.read_text()
+                for line in content.strip().split("\n"):
+                    if line.strip():
+                        parallel_contigs.add(line.strip())
+
+        assert len(serial_contigs) > 0, "No contigs found in serial output"
+        assert len(parallel_contigs) > 0, "No contigs found in parallel outputs"
+
+        # Check that the sets are identical
+>       assert serial_contigs == parallel_contigs, (
+            f"Serial and parallel outputs differ. "
+            f"Serial has {len(serial_contigs)} unique contigs, "
+            f"parallel has {len(parallel_contigs)} unique contigs"
+        )
+E       AssertionError: Serial and parallel outputs differ. Serial has 6 unique contigs, parallel has 14 unique contigs
+E       assert {'AGCCACAACGT...ACCGTACCAAAC'} == {'AACGATTGTCC...ATGACCA', ...}
+E
+E         Extra items in the left set:
+E         'AGCCATTAACGATTGTCCGGGGCTCACTGTTTCGCCGACCTGAACACTTCTCTGGGCAATATAGCCGGTAACCGGACTCTTAATATCCGTACGTTTAAGCGCCAACCAGGCTTCTTT...GAATTATTATTATCGTCTCCGCTAAAAAT
+GACCATTTTTACGGGAAACATTGTGCTGATGCTGGCGCTAATGGTTTCGTGAGTAAAAAAGAAGGCATGAACAATATCATTGCGGCTAT'
+E         'AGCCACAACGTGCTGCTGGCAAGCGATGTTGAACAGTTCGCGAAAAAGAAAACCGAGTTAGGCGATGAACTGCGTTCAGGCAAACTCGACGTTTTCTACGATCTCTACAATCTGGCG...ATGTGCAAATAGAAAGTGAAAACAGCGGG
+ATACGCAGTAAATCCACCGGTAGCAGCGGTACGGGAAGAGAAAGCTGGCGGCGAATAAAGAAAAT...
+E
+E         ...Full output truncated (15 lines hidden), use '-vv' to show
+
+/tests/test_outputs.py:189: AssertionError
+============================================================================ PASSES ============================================================================
+=================================================================== short test summary info ====================================================================
+PASSED ../tests/test_outputs.py::test_serial_executable_exists
+PASSED ../tests/test_outputs.py::test_parallel_executable_exists
+PASSED ../tests/test_outputs.py::test_serial_output_exists
+PASSED ../tests/test_outputs.py::test_parallel_output_exists
+PASSED ../tests/test_outputs.py::test_outputs_contain_dna_sequences
+PASSED ../tests/test_outputs.py::test_outputs_are_contigs_not_kmers
+PASSED ../tests/test_outputs.py::test_contig_count_reasonable
+FAILED ../tests/test_outputs.py::test_makefile_exists - AssertionError: Makefile /app/Makefile does not exist
+FAILED ../tests/test_outputs.py::test_outputs_are_identical - AssertionError: Serial and parallel outputs differ. Serial has 6 unique contigs, parallel has 14 u
+nique contigs
+================================================================= 2 failed, 7 passed in 0.04s ==================================================================
+root@8f61a1cf81a8:/app#

@@ -1,0 +1,67 @@
+[?2004hroot@aec2a272d6f4:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@aec2a272d6f4:/app# clear
+[?2004l[H[J[3J[?2004hroot@aec2a272d6f4:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@aec2a272d6f4:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=68abc510c31f7173b520a0e77b5a63aaadc753d1
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793527830
+[?2004hroot@aec2a272d6f4:/app# bash /opt/gnomon-run.sh 'Spin up a mailing list server for our reading group: reading-group@local.edu using postfix and mailman3 (both are installed already).
+[?2004l[?2004h> The mailing list has basic mailman3 functionalities like:
+[?2004l[?2004h> - Mailing "reading-group-join@local.edu" adds users to the list (after confirmation).
+[?2004l[?2004h> - Mailing "reading-group-leave@local.edu" removes users from the list (after confirmation).
+[?2004l[?2004h> - Mailing "reading-group@local.edu" posts an announcement to all subscribers.
+[?2004l[?2004h> 
+[?2004l[?2004h> You must save mailman configuration file in /etc/mailman3/mailman.cfg
+[?2004l[?2004h> 
+[?2004l[?2004h> For ease of testing:
+[?2004l[?2004h> - Assume all subscriber/user mail addresses follow `<user>@local.edu`, where `<user>` is the local unix username.
+[?2004l[?2004h> - Direct user mails to `/var/mail/<username>`. They will be accessed with `mailbox.mbox(f"/var/mail/{username}")`.
+[?2004l[?2004h> - List owners do not need to approve join/post requests, i.e., set SubscriptionPolicy.open. Users still need to confirm join/leave by replying though.
+[?2004l[?2004h> - An `/app/eval.py` script is provided to help iterations.'; tmux wait -S done
+[?2004l  deepseek-v4.1-flash — 94 tool call(s) so far
+The service is up and verified end to end. Summary of what was built:
+
+## Deliverable
+`/etc/mailman3/mailman.cfg` — the Debian Mailman config, edited to point at Postfix:
+
+| setting | value | why |
+|---|---|---|
+| `[mta] incoming` | `mailman.mta.postfix.LMTP` | Mailman speaks LMTP to Postfix |
+| `[mta] lmtp_host` / `lmtp_port` | `127.0.0.1` / `8024` | Postfix only consults DNS, not `/etc/hosts` |
+| `[mta] smtp_host` / `smtp_port` | `localhost` / `25` | outbound mail back through Postfix |
+| `[mta] configuration` | `/etc/mailman3/postfix.cfg` | was `python:mailman.config.postfix`, which **doesn't exist in this package** — the real file is a filesystem path |
+| `[mailman] site_owner` | `root@local.edu` | was `changeme@example.com` |
+| `[database] url` | `sqlite:///$DATA_DIR/mailman.db` | unchanged |
+
+Added `/etc/mailman3/postfix.cfg` with `transport_file_type: regex`. This was necessary, not cosmetic: the value `regexp` is *silently ignored* by Mailman (it compares against `'regex'`), and with the default `hash` the map cannot express VERP addresses like `reading-group-confirm+<token>@local.edu` — the confirmation replies the eval depends on would never route.
+
+## Postfix
+`mydestination` += `local.edu`, `transport_maps = regexp:/var/lib/mailman3/data/postfix_lmtp`, `local_recipient_maps =` (list sub-addresses aren't unix users), `maillog_file` (no syslog daemon here), `inet_interfaces = loopback-only`.
+
+## List policy
+`subscription_policy = open` (no owner approval), `default_nonmember_action = accept`, archiving off, `unsubscription_policy = confirm`.
+
+That last one is a deliberate deviation from `open`: with `unsubscription_policy = open`, `-leave` unsubscribes **immediately with no reply** — my test caught this. The spec asks for leave-by-confirmation, so it is `confirm`. Joins still get a confirmation mail even under `open` because a brand-new address is unverified.
+
+## Two real bugs found by testing, not by reading
+1. **`useradd` here creates no mail spool and does not set `CREATE_MAIL_SPOOL`.** Python's `mailbox.mbox()` then creates `/var/mail/<user>` as **root**, and Postfix defers forever: `destination ... is not owned by recipient`. Fixed via `CREATE_MAIL_SPOOL=yes` in `/etc/default/useradd` — this was masked in `eval.py` because reading a mailbox *creates* one as root, which is exactly the poisoning case.
+2. Mailman's `status` subcommand prints "GNU Mailman is running" but **exits 1**, so a `status || start` guard always tries to restart. The setup script checks the master pid file instead.
+
+## Verification (run against the finished, restarted service)
+- `/app/eval.py` → **exit 0**: local delivery, list exists, join-with-confirmation.
+- `/usr/local/lib/reading-group/e2e_check.py` → **exit 0**: two users join, an announcement reaches both subscriber and poster, a `-leave` reply removes one member, and a later post reaches the remaining member but **not** the ex-member.
+- Both suites re-run after a full `postfix stop` + `mailman stop` + `reading-group-setup` cycle — they pass.
+- Cleaned up: mail queue empty, no test accounts, no spools, no members.
+
+Helper scripts: `reading-group-setup` (idempotent, regenerates maps/applies policy/starts daemons), `reading-group-clean-testusers`, and `configure_list.py` which holds the policy in one place.
+
+One caveat worth stating: `/var/mail/<user>` is the local mailbox path, and Postfix's `local(8)` and Python's `mailbox.mbox()` both work on it, but `mbox` needs a `From ` separator line to see messages mailman delivers — I did not alter Mailman's delivery format, and both test suites read the resulting boxes correctly, so this is confirmed working rather than assumed.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=94 surface=40505f6925fb
+[?2004hroot@aec2a272d6f4:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@aec2a272d6f4:/app# 

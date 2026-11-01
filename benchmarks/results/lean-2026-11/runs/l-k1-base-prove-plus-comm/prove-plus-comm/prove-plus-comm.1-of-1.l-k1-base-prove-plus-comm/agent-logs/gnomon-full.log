@@ -1,0 +1,120 @@
+  │ I'll start by inspecting the repository and the file.
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  ⚙ read .
+    ✓ read ./ — 5 entries
+[approval] bash: cat plus_comm.v 2>/dev/null; echo "---exit:$?"; which coqc coqtop; coqc --version 2>&1 | head -5 — approved
+  ⚙ bash cat plus_comm.v 2>/dev/null; echo "---exit:$?"; which coqc coqtop; coq…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  │ The proof stub uses `admit.` in both branches. Let me check what lemmas a…
+[approval] bash: mkdir -p /tmp/scratch && cd /tmp/scratch && cat > t.v <<'EOF'
+Require Import Arith.
+Check plus_n_Sm.
+Check Nat.add_0_r.
+Check Nat.add_succ_r.
+EOF
+coqc t.v; echo "exit=$?" — approved
+  ⚙ bash mkdir -p /tmp/scratch && cd /tmp/scratch && cat > t.v <<'EOF' Require …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: cd /tmp/scratch && cat > a.v <<'EOF'
+Require Import Arith.
+
+Theorem plus_comm : forall n m : nat, n + m = m + n.
+Proof.
+  intros n m.
+  induction n as [|n' IHn'].
+  - simpl. induction m as [|m' IHm'].
+    + reflexivity.
+    + simpl. rewrite <- IHm'. reflexivity.
+  - simpl. rewrite <- plus_n_Sm. rewrite IHn'. reflexivity.
+Qed.
+EOF
+coqc a.v; echo "exit=$?" — approved
+  ⚙ bash cd /tmp/scratch && cat > a.v <<'EOF' Require Import Arith. Theorem plu…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ Proof validated in scratch. Now writing it into the repository file with …
+[approval] write plus_comm.v (+21 −7) — approved
+  ⚙ write plus_comm.v
+    ✓ write plus_comm.v (+21 −7)
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: cd /tmp/scratch && rm -f plus_comm.vo plus_comm.glob plus_comm.vos plus_comm.vok 2>/dev/null; cd - >/dev/null; rm -f plus_comm.vo plus_comm.glob plus_comm.vos plus_comm.vok; coqc plus_comm.v > /tmp/coqc.log 2>&1; echo "coqc exit=$?"; cat /tmp/coqc.log; ls -l plus_comm.vo plus_comm.glob 2>&1 — approved
+  ⚙ bash cd /tmp/scratch && rm -f plus_comm.vo plus_comm.glob plus_comm.vos plu…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  │ Compiled cleanly. Now verifying the artifact rather than just trusting th…
+[approval] bash: cd /tmp/scratch && rm -rf out && mkdir out && cp /tmp/../"$OLDPWD"/plus_comm.vo out/ 2>/dev/null; echo "--- grep for escapes in source (must be empty):"; grep -nE 'admit|Admitted|Axiom|Parameter|Abort' plus_comm.v; echo "grep exit=$? (1 = none found, good)" — approved
+  ⚙ bash cd /tmp/scratch && rm -rf out && mkdir out && cp /tmp/../"$OLDPWD"/plu…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: cd "$(pwd)" && ls -l plus_comm.vo && cat > /tmp/check.v <<'EOF'
+Require Import plus_comm.
+Require Import Arith.
+Print plus_comm.
+Print Assumptions plus_comm.
+Theorem smoke : forall n m : nat, n + m = m + n.
+Proof. exact plus_comm. Qed.
+Example e1 : 3 + 4 = 4 + 3. reflexivity. Qed.
+Example e2 : 0 + 0 = 0 + 0. reflexivity. Qed.
+EOF
+cp /tmp/check.v check_proof.v && coqc check_proof.v > /tmp/check.log 2>&1; echo "coqc exit=$?"; cat /tmp/check.log — approved
+  ⚙ bash cd "$(pwd)" && ls -l plus_comm.vo && cat > /tmp/check.v <<'EOF' Requir…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  │ The smoke test accidentally resolved `plus_comm` to the *library* notatio…
+[approval] bash: rm -f check_proof.v check_proof.vo check_proof.glob check_proof.vos check_proof.vok
+echo "=== source greps (count; 0 = no escapes) ==="
+grep -cE 'admit|Admitted|Axiom|Parameter|Abort|admit_tactic' plus_comm.v; echo "matches=$?"
+grep -nE 'admit|Admitted|Axiom|Parameter|Abort' plus_comm.v; echo "grep_exit=$? (1 = none)" — approved
+  ⚙ bash rm -f check_proof.v check_proof.vo check_proof.glob check_proof.vos ch…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: mkdir -p /tmp/iso && cp plus_comm.v plus_comm.vo /tmp/iso/ && cd /tmp/iso && cat > iso.v <<'EOF'
+Require Import plus_comm.
+Print plus_comm.plus_comm.
+Print Assumptions plus_comm.plus_comm.
+Theorem smoke : forall n m : nat, n + m = m + n.
+Proof. exact plus_comm.plus_comm. Qed.
+Print Assumptions smoke.
+EOF
+coqc iso.v; echo "iso coqc exit=$?" — approved
+  ⚙ bash mkdir -p /tmp/iso && cp plus_comm.v plus_comm.vo /tmp/iso/ && cd /tmp/…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+  │ Everything verified:
+  │ - Our theorem term printed, closed under the global context (no axioms).
+  │ - The .vo compiles and is importable.
+  │ … 1 more line(s) — /think show for all
+[approval] bash: ls -l; echo "=== final source ==="; cat plus_comm.v; echo "=== recompile fresh in repo ==="; rm -f plus_comm.vo plus_comm.glob plus_comm.vos plus_comm.vok; coqc plus_comm.v; echo "coqc exit=$?"; ls -l plus_comm.vo — approved
+  ⚙ bash ls -l; echo "=== final source ==="; cat plus_comm.v; echo "=== recompi…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  │ Note .vok/.vos created by coqc? Actually coqc creates .vo, .glob, .vok, .…
+  │ Let me check .gitignore to note whether .vo is ignored (task deliverable …
+[approval] bash: cat .gitignore; echo "=== git status ==="; git status --short; echo "=== is .vo ignored? ==="; git check-ignore -v plus_comm.vo || echo "NOT ignored -> untracked artifact will need committing" — approved
+  ⚙ bash cat .gitignore; echo "=== git status ==="; git status --short; echo "=…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+Done. The proof is complete and compiled.
+
+## What was wrong
+
+`plus_comm.v` had both branches of the induction closed with `admit.` — the base case `0 + m = m + 0` and the inductive case `S n' + m = m + S n'`. Nothing about the theorem was proven; the file only type-checked because `admit` discharges any goal.
+
+## The two missing steps
+
+1. **Base case** — `0 + m` reduces to `m`, but the goal is then `m = m + 0`, which `reflexivity` cannot close. The missing step is a *second induction on `m`*: at `m = 0` both sides are `0`; at `m = S m'` the goal becomes `S m' = S (m' + 0)`, closed by rewriting with the inner hypothesis `IHm' : m' = m' + 0`.
+
+2. **Inductive case** — `simpl` gives `S (n' + m) = m + S n'`. The missing step is `rewrite <- plus_n_Sm` (`S (n + m) = n + S m`, available from `Arith`), which flips the right-hand side into `S (m + n')` so the outer hypothesis `IHn' : n' + m = m + n'` applies, then `rewrite IHn'` followed by `reflexivity`.
+
+## Verification (run, not assumed)
+
+- Sources contain no escape hatches: `grep -nE 'admit|Admitted|Axiom|Parameter|Abort' plus_comm.v` → no matches (`grep_exit=1`).
+- Fresh compile: removed the stale artifacts and ran `coqc plus_comm.v` → `coqc exit=0`, producing `plus_comm.vo` (14570 bytes) alongside `plus_comm.glob`/`.vok`/`.vos`.
+- Imported the artifact in a separate directory and printed the proof term — it is the real `nat_ind`/`nat_ind`/`plus_n_Sm` term, and both `Print Assumptions` checks report **“Closed under the global context”** (no axioms assumed).
+- A smoke test restating `forall n m : nat, n + m = m + n` and discharging it with `exact plus_comm.plus_comm` type-checks, so the compiled `.vo` actually exports a usable theorem.
+
+One thing worth flagging: the name `plus_comm` collides with the `Arith` notation that is deprecated in favour of `Nat.add_comm`. My first smoke test silently resolved to the *library* lemma instead of yours, which would have been a false pass; I re-ran it fully qualified (`plus_comm.plus_comm`) so it genuinely exercises the compiled proof. If you later want to avoid the ambiguity, renaming the theorem (e.g. `plus_comm'` or `my_plus_comm`) or omitting `Require Import Arith` would do it.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=12 surface=a825037b110a

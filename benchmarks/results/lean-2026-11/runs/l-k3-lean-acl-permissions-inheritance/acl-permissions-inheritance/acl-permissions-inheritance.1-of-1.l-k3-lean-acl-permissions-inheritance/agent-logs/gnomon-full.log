@@ -1,0 +1,296 @@
+[approval] bash: id; uname -a; which setfacl getfacl useradd groupadd 2>&1; ls /srv 2>&1 — approved
+  ⚙ bash id; uname -a; which setfacl getfacl useradd groupadd 2>&1; ls /srv 2>&…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: ls -a; cat /etc/os-release 2>/dev/null | head -5 — approved
+  ⚙ bash ls -a; cat /etc/os-release 2>/dev/null | head -5
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+[approval] bash: getent group research; getent passwd alice bob; df -T /srv; mount | grep -E ' / | /srv '  — approved
+  ⚙ bash getent group research; getent passwd alice bob; df -T /srv; mount | gr…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: ls -la /srv 2>&1; cat /etc/fstab 2>/dev/null — approved
+  ⚙ bash ls -la /srv 2>&1; cat /etc/fstab 2>/dev/null
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+[approval] bash: mkdir -p /srv/shared && setfacl -m u:alice:rwx /srv/shared; echo "exit=$?"; getfacl /srv/shared — approved
+  ⚙ bash mkdir -p /srv/shared && setfacl -m u:alice:rwx /srv/shared; echo "exit…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: set -e
+chown root:research /srv/shared
+chmod 2770 /srv/shared
+# access ACL
+setfacl -m g:research:rwx,u:alice:rwx,u:bob:rwx,m::rwx,o::--- /srv/shared
+# default (inheritable) ACL
+setfacl -d -m u::rwx,g:research:rwx,u:alice:rwx,u:bob:rwx,g::rwx,m::rwx,o::--- /srv/shared
+echo "--- access ---"; getfacl -p /srv/shared
+echo "--- default ---"; getfacl -p -d /srv/shared
+echo "--- stat ---"; stat -c '%A %a %U:%G %n' /srv/shared — approved
+  ⚙ bash set -e chown root:research /srv/shared chmod 2770 /srv/shared # access…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+[approval] bash: getent passwd | awk -F: '$3>=1000 && $3<65534 {print $1, $4}' — approved
+  ⚙ bash getent passwd | awk -F: '$3>=1000 && $3<65534 {print $1, $4}'
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: id alice; id bob — approved
+  ⚙ bash id alice; id bob
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+[approval] write test_shared_acl.sh (+100 −0) [new file] — approved
+  ⚙ write test_shared_acl.sh
+    ✓ write test_shared_acl.sh (+100 −0)
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: chmod +x test_shared_acl.sh && sh test_shared_acl.sh; echo "exit=$?" — approved
+  ⚙ bash chmod +x test_shared_acl.sh && sh test_shared_acl.sh; echo "exit=$?"
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+[approval] bash: cd /tmp; getfacl -p -c -d /srv/shared; echo "--- rc=$? ---"; getfacl -p -c /srv/shared | od -c | head -20 — approved
+  ⚙ bash cd /tmp; getfacl -p -c -d /srv/shared; echo "--- rc=$? ---"; getfacl -…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+[approval] bash: su -s /bin/sh alice -c "printf hello > /srv/shared/probe_a"; getfacl -p /srv/shared/probe_a; echo ---; su -s /bin/sh bob -c "mkdir /srv/shared/probe_d"; getfacl -p /srv/shared/probe_d; rm -rf /srv/shared/probe_a /srv/shared/probe_d — approved
+  ⚙ bash su -s /bin/sh alice -c "printf hello > /srv/shared/probe_a"; getfacl -…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+[approval] bash: cd /srv/shared && stat -c %A . | cut -c1-10 | od -c | head -2 — approved
+  ⚙ bash cd /srv/shared && stat -c %A . | cut -c1-10 | od -c | head -2
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 13 tool call(s) so far
+[approval] bash: sh -c 'D=/srv/shared; echo "[$(stat -c %A "$D" | cut -c6)]"'; sh -c 'echo "[$(stat -c %A /srv/shared)]"' — approved
+  ⚙ bash sh -c 'D=/srv/shared; echo "[$(stat -c %A "$D" | cut -c6)]"'; sh -c 'e…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+[approval] edit test_shared_acl.sh (+20 −13) — approved
+  ⚙ edit test_shared_acl.sh
+    ✓ edit test_shared_acl.sh (+20 −13)
+  deepseek-v4.1-flash — 15 tool call(s) so far
+[approval] edit test_shared_acl.sh (+3 −3) — approved
+  ⚙ edit test_shared_acl.sh
+    ✓ edit test_shared_acl.sh (+3 −3)
+  deepseek-v4.1-flash — 16 tool call(s) so far
+[approval] bash: sh test_shared_acl.sh; echo "exit=$?" — approved
+  ⚙ bash sh test_shared_acl.sh; echo "exit=$?"
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 17 tool call(s) so far
+[approval] bash: sh -c 'echo "PATH=$PATH"; command -v getfacl; f=/srv/shared; want=user:alice:rwx; getfacl -p -c "$f" 2>&1 | grep -qx -- "$want"; echo "grep_rc=$?"; getfacl -p -c "$f" 2>&1 | head -3' — approved
+  ⚙ bash sh -c 'echo "PATH=$PATH"; command -v getfacl; f=/srv/shared; want=user…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 18 tool call(s) so far
+[approval] bash: cat > /tmp/dbg.sh <<'EOF'
+f=/srv/shared
+hasacl() {
+  f=$1; want=$2; shift 2
+  echo "DEBUG args=[$*] want=[$want]"
+  getfacl -p -c "$@" "$f" 2>&1 | sed 's/^/DBG: /'
+  if getfacl -p -c "$@" "$f" 2>/dev/null | grep -qx -- "$want"; then echo MATCH; else echo NOMATCH; fi
+}
+hasacl "$f" 'user:alice:rwx'
+hasacl "$f" 'default:user:alice:rwx' -d
+EOF
+sh /tmp/dbg.sh — approved
+  ⚙ bash cat > /tmp/dbg.sh <<'EOF' f=/srv/shared hasacl() { f=$1; want=$2; shif…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 19 tool call(s) so far
+[approval] bash: sh -c 'D=/srv/shared; m=$(stat -c %A "$D"); printf "m=[%s] len=%s\n" "$m" "${#m}"; printf "%s" "$m" | sed "s/^.\{5\}\(.\).*/\1/" | od -c' — approved
+  ⚙ bash sh -c 'D=/srv/shared; m=$(stat -c %A "$D"); printf "m=[%s] len=%s\n" "…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 20 tool call(s) so far
+[approval] bash: cd /tmp; echo "A:"; getfacl -p -c -d /srv/shared | head -3; echo "B:"; sh -c 'getfacl -p -c -d /srv/shared' | head -3; echo "C:"; sh -c 'f=/srv/shared; a="-d"; getfacl -p -c "$a" "$f"' | head -3; echo "D:"; getfacl -d -p -c /srv/shared | head -3 — approved
+  ⚙ bash cd /tmp; echo "A:"; getfacl -p -c -d /srv/shared | head -3; echo "B:";…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 21 tool call(s) so far
+[approval] bash: sh -x /tmp/dbg.sh 2>&1 | sed -n '1,40p' — approved
+  ⚙ bash sh -x /tmp/dbg.sh 2>&1 | sed -n '1,40p'
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 22 tool call(s) so far
+[approval] bash: cd /tmp; echo "E:"; getfacl -p -c -d /srv/shared 2>/dev/null | head -3; echo "F:"; getfacl -p -c -d /srv/shared 2>/dev/null | cat; echo "G:"; getfacl -p -c -d /srv/shared > /tmp/o.txt 2>/dev/null; head -3 /tmp/o.txt — approved
+  ⚙ bash cd /tmp; echo "E:"; getfacl -p -c -d /srv/shared 2>/dev/null | head -3…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 23 tool call(s) so far
+[approval] bash: cd /tmp; m=drwxrws---; echo "$m" | sed 's/^.\{5\}\(.\).*/\1/'; echo "$m" | cut -c6; echo "$m" | cut -b6 — approved
+  ⚙ bash cd /tmp; m=drwxrws---; echo "$m" | sed 's/^.\{5\}\(.\).*/\1/'; echo "$…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 24 tool call(s) so far
+[approval] bash: getfacl --help 2>&1 | grep -E '^\s+-(E|n|d|c|e)' ; getfacl --version — approved
+  ⚙ bash getfacl --help 2>&1 | grep -E '^\s+-(E|n|d|c|e)' ; getfacl --version
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 25 tool call(s) so far
+[approval] bash: cd /tmp; getfacl -d /srv/shared; echo "=== no flags ==="; getfacl /srv/shared | head -30 — approved
+  ⚙ bash cd /tmp; getfacl -d /srv/shared; echo "=== no flags ==="; getfacl /srv…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 26 tool call(s) so far
+[approval] bash: cd /tmp; su -s /bin/sh alice -c "printf hello > /srv/shared/probe_a"; getfacl -p -c -E /srv/shared/probe_a; rm -f /srv/shared/probe_a — approved
+  ⚙ bash cd /tmp; su -s /bin/sh alice -c "printf hello > /srv/shared/probe_a"; …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 27 tool call(s) so far
+[approval] bash: cd /tmp; for opts in "-d" "-c" "-d -c" "-c -d" "-p -d" "-d -p"; do echo "=== getfacl $opts ==="; getfacl $opts /srv/shared 2>/dev/null | head -2; done — approved
+  ⚙ bash cd /tmp; for opts in "-d" "-c" "-d -c" "-c -d" "-p -d" "-d -p"; do ech…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 28 tool call(s) so far
+[approval] bash: cd /tmp; echo "1:"; getfacl -p -c -d /srv/shared 2>/dev/null; echo "2:"; getfacl -c -d /srv/shared 2>/dev/null — approved
+  ⚙ bash cd /tmp; echo "1:"; getfacl -p -c -d /srv/shared 2>/dev/null; echo "2:…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 29 tool call(s) so far
+[approval] bash: cd /tmp && python3 - <<'EOF'
+p='/root/x'
+import re
+f='/workspace/test_shared_acl.sh'
+EOF
+echo skip — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' p='/root/x' import re f='/workspace/test_…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 30 tool call(s) so far
+  deepseek-v4.1-flash — 31 tool call(s) so far
+  ⚙ read test_shared_acl.sh
+    ✓ read test_shared_acl.sh — 107 lines
+  │ Three bugs in my checker (wrong column for setgid, `-d` output lacks the …
+[approval] bash: cd /workspace 2>/dev/null || cd "$(pwd)"; python3 - <<'EOF'
+import io
+p='test_shared_acl.sh'
+s=open(p).read()
+s=s.replace("""check "setgid flag" "$(stat -c %A "$DIR" | sed 's/^.\\{5\\}\\(.\\).*/\\1/')" "s\"""",
+"""check "setgid flag" "$(stat -c %A "$DIR" | sed 's/^.\\{6\\}\\(.\\).*/\\1/')" "s\"""")
+s=s.replace("""# hasacl <file> <expected line> [getfacl args...]
+hasacl() {
+  f=$1; want=$2; shift 2
+  if getfacl -p -c "$@" "$f" 2>/dev/null | grep -qx -- "$want"; then""",
+"""# hasacl <file> <expected line> [getfacl args...]
+# -E suppresses the "#effective:" comments, which would otherwise make an exact
+# line match fail for entries narrowed by the mask (e.g. new files are 644).
+# With -d, getfacl lists the default entries without the "default:" prefix.
+hasacl() {
+  f=$1; want=$2; shift 2
+  case " $* " in *" -d "*) want=${want#default:} ;; esac
+  if getfacl -p -c -E "$@" "$f" 2>/dev/null | grep -qx -- "$want"; then""")
+open(p,'w').write(s)
+EOF
+grep -n 'setgid flag\|hasacl() {\|want=\${want' test_shared_acl.sh — approved
+  ⚙ bash cd /workspace 2>/dev/null || cd "$(pwd)"; python3 - <<'EOF' import io …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 32 tool call(s) so far
+  [tools] 32/256 calls — continuing (leg 2)
+  deepseek-v4.1-flash — leg 2, 32 call(s) so far
+[approval] bash: sh test_shared_acl.sh; echo "exit=$?"; ls -A /srv/shared | wc -l — approved
+  ⚙ bash sh test_shared_acl.sh; echo "exit=$?"; ls -A /srv/shared | wc -l
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 33 tool call(s) so far
+[approval] bash: cd "$(pwd)"; python3 - <<'EOF'
+p='test_shared_acl.sh'
+s=open(p).read()
+s=s.replace("""  case " $* " in *" -d "*) want=${want#default:} ;; esac""",
+"""  label=""
+  case " $* " in *" -d "*) want=${want#default:}; label=" (default)" ;; esac""")
+s=s.replace("""    ok "$f has $want\"""","""    ok "$f has$label $want\"""")
+s=s.replace("""    bad "$f is missing $want\"""","""    bad "$f is missing$label $want\"""")
+open(p,'w').write(s)
+EOF
+sh test_shared_acl.sh | tail -12 — approved
+  ⚙ bash cd "$(pwd)"; python3 - <<'EOF' p='test_shared_acl.sh' s=open(p).read()…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 34 tool call(s) so far
+[approval] bash: sh test_shared_acl.sh | head -14 — approved
+  ⚙ bash sh test_shared_acl.sh | head -14
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 35 tool call(s) so far
+[approval] bash: ls -A /srv/shared | wc -l; getfacl -p /srv/shared 2>/dev/null; stat -c '%A %a %U:%G %n' /srv/shared — approved
+  ⚙ bash ls -A /srv/shared | wc -l; getfacl -p /srv/shared 2>/dev/null; stat -c…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 36 tool call(s) so far
+  │ The count of 1 was the parallel test run mid-flight. Confirming the direc…
+[approval] bash: ls -A /srv/shared; echo "count=$(ls -A /srv/shared | wc -l)" — approved
+  ⚙ bash ls -A /srv/shared; echo "count=$(ls -A /srv/shared | wc -l)"
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 37 tool call(s) so far
+[approval] bash: rm -f /srv/shared/.acltest_alice; ls -A /srv/shared; echo "count=$(ls -A /srv/shared | wc -l)" — approved
+  ⚙ bash rm -f /srv/shared/.acltest_alice; ls -A /srv/shared; echo "count=$(ls …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 38 tool call(s) so far
+[approval] bash: sh test_shared_acl.sh > /tmp/run1.log 2>&1; echo "clean-run exit=$?"; tail -1 /tmp/run1.log
+# bite check 1: drop default ACLs
+setfacl -b -d /srv/shared 2>/dev/null || setfacl -k /srv/shared
+sh test_shared_acl.sh > /tmp/run2.log 2>&1; echo "no-default exit=$?"; grep -c FAIL /tmp/run2.log — approved
+  ⚙ bash sh test_shared_acl.sh > /tmp/run1.log 2>&1; echo "clean-run exit=$?"; …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 39 tool call(s) so far
+[approval] bash: set -e
+setfacl -m g:research:rwx,u:alice:rwx,u:bob:rwx,m::rwx,o::--- /srv/shared
+setfacl -d -m u::rwx,g:research:rwx,u:alice:rwx,u:bob:rwx,g::rwx,m::rwx,o::--- /srv/shared
+sh test_shared_acl.sh > /tmp/run3.log 2>&1; echo "restored exit=$?"; tail -1 /tmp/run3.log
+# bite check 2: wrong group owner
+chgrp root /srv/shared
+sh test_shared_acl.sh > /tmp/run4.log 2>&1; echo "wrong-group exit=$?"; grep FAIL /tmp/run4.log
+chgrp research /srv/shared
+# bite check 3: setgid removed
+chmod 0770 /srv/shared
+sh test_shared_acl.sh > /tmp/run5.log 2>&1; echo "no-setgid exit=$?"; grep FAIL /tmp/run5.log
+chmod 2770 /srv/shared — approved
+  ⚙ bash set -e setfacl -m g:research:rwx,u:alice:rwx,u:bob:rwx,m::rwx,o::--- /…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 40 tool call(s) so far
+[approval] bash: stat -c '%A %a %U:%G' /srv/shared; cat /tmp/run4.log | head -20 — approved
+  ⚙ bash stat -c '%A %a %U:%G' /srv/shared; cat /tmp/run4.log | head -20
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 41 tool call(s) so far
+[approval] bash: chgrp research /srv/shared
+chmod 0770 /srv/shared
+sh test_shared_acl.sh > /tmp/run5.log 2>&1; echo "no-setgid exit=$?"; grep FAIL /tmp/run5.log
+chmod 2770 /srv/shared
+# bite check 4: other granted
+setfacl -m o::r-x /srv/shared
+sh test_shared_acl.sh > /tmp/run6.log 2>&1; echo "other-open exit=$?"; grep FAIL /tmp/run6.log
+setfacl -m o::--- /srv/shared
+sh test_shared_acl.sh > /tmp/run7.log 2>&1; echo "final exit=$?"; tail -1 /tmp/run7.log — approved
+  ⚙ bash chgrp research /srv/shared chmod 0770 /srv/shared sh test_shared_acl.s…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 42 tool call(s) so far
+[approval] bash: chmod 0770 /srv/shared; stat -c '%A %a' /srv/shared; chmod u-s,g-s /srv/shared; stat -c '%A %a' /srv/shared; chmod 2770 /srv/shared; stat -c '%A %a' /srv/shared — approved
+  ⚙ bash chmod 0770 /srv/shared; stat -c '%A %a' /srv/shared; chmod u-s,g-s /sr…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 43 tool call(s) so far
+[approval] bash: chmod g-s /srv/shared; stat -c '%A %a' /srv/shared
+sh test_shared_acl.sh > /tmp/run5.log 2>&1; echo "no-setgid exit=$?"; grep FAIL /tmp/run5.log
+chmod 2770 /srv/shared; stat -c '%A %a' /srv/shared
+sh test_shared_acl.sh > /tmp/run8.log 2>&1; echo "final exit=$?"; tail -1 /tmp/run8.log; ls -A /srv/shared | wc -l — approved
+  ⚙ bash chmod g-s /srv/shared; stat -c '%A %a' /srv/shared sh test_shared_acl.…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 44 tool call(s) so far
+[approval] bash: pwd; ls -A; git status --short 2>&1 | head — approved
+  ⚙ bash pwd; ls -A; git status --short 2>&1 | head
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 45 tool call(s) so far
+[approval] bash: stat -c '%A %a %U:%G %n' /srv/shared; getfacl -p /srv/shared 2>/dev/null; echo "entries=$(ls -A /srv/shared | wc -l)" — approved
+  ⚙ bash stat -c '%A %a %U:%G %n' /srv/shared; getfacl -p /srv/shared 2>/dev/nu…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 46 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  deepseek-v4.1-flash — 46 tool call(s) so far
+Done. The ACL state is in place and verified.
+
+**What was created on the system**
+
+`/srv/shared` — `drwxrws--- 2770 root:research`, setgid set (`# flags: -s-`), with:
+
+```
+user::rwx          default:user::rwx
+user:alice:rwx     default:user:alice:rwx
+user:bob:rwx       default:user:bob:rwx
+group::r-x         default:group::rwx
+group:research:rwx default:group:research:rwx
+mask::rwx          default:mask::rwx
+other::---         default:other::---
+```
+
+Both access and default entries were applied in one `setfacl` call each, after `chown root:research` and `chmod 2770` — order matters, because `chmod` recomputes the ACL mask and would have clobbered `mask::rwx` if run afterwards. No files were left in the directory (`ls -A` → 0 entries).
+
+**The check**
+
+`test_shared_acl.sh` (in the repo root, run with `sh test_shared_acl.sh`) asserts the spec, not the implementation: group owner, mode `2770`, setgid flag, each access and default ACL entry, an outsider (`ubuntu`) unable to list the directory, and live inheritance — it has alice and bob create a file and a subdirectory, then checks the new group is `research`, the subdirectory is `2770`, alice and bob can each read *and* write the other's file, and the outsider cannot read it. It cleans up after itself and asserts the directory is empty again. Result: **all 24 checks pass**.
+
+I confirmed it bites by breaking each property in turn and restoring it: removing the default ACLs → 11 failures; `chgrp root` → group-owner and inheritance failures; `chmod g-s` → 4 failures (including new files landing in group `alice`); granting `other::r-x` → mode, `other::---` and outsider-access failures. All restored, final run green.
+
+Two notes: `/` here is overlayfs with `nouserxattr`, so POSIX ACLs work only because the kernel is 6.17 (overlayfs nfs_export/vfsuid); on an older kernel or a filesystem without ACL support this layout would silently collapse to mode bits. Also, inherited *file* ACLs are narrowed by the file's own creation mode (`0644` → effective `rw-` for alice/bob), which is sufficient for the requirement that both users can read and write each other's files, but it means a created file is not literally `rwx` for them — if the tests demand `rwx` on files, an extra step (e.g. a per-user umask of `0077` or a `setfacl` post-create hook) would be needed, which the ACLs alone cannot impose.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=46 surface=c8c9507b08fa

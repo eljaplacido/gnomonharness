@@ -1,0 +1,188 @@
+  │ Let me start by inspecting the repository to understand context. The task…
+  │ The instruction says "Do not read .gnomon/ unless the task is about the h…
+  │ Let me list the root.
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  ⚙ read .
+    ✓ read ./ — 4 entries
+[approval] bash: pwd; ls -la — approved
+  ⚙ bash pwd; ls -la
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  │ The repo is empty apart from harness files. The actual job is the Python …
+[approval] bash: which -a python python3 pip pip3 2>&1; echo ---; python3 -V 2>&1; python -V 2>&1; echo ---; python3 -m pip --version 2>&1; echo ---; cat /etc/os-release 2>&1 | head -5 — approved
+  ⚙ bash which -a python python3 pip pip3 2>&1; echo ---; python3 -V 2>&1; pyth…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: python3 -m pip install --dry-run requests 2>&1 | tail -30 — approved
+  ⚙ bash python3 -m pip install --dry-run requests 2>&1 | tail -30
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ Found the first symptom: `/usr/local/bin/python3` (the one first on PATH)…
+[approval] bash: echo "== /usr/local/bin/pip =="; ls -l /usr/local/bin/pip /usr/local/bin/pip3 2>&1; echo; head -3 /usr/local/bin/pip 2>&1; echo; echo "== it runs? =="; /usr/local/bin/pip --version 2>&1 | head -20; echo "exit=$?" — approved
+  ⚙ bash echo "== /usr/local/bin/pip =="; ls -l /usr/local/bin/pip /usr/local/b…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: echo "== /usr/bin/python3 =="; /usr/bin/python3 -V 2>&1; /usr/bin/python3 -m pip --version 2>&1; echo; echo "== local prefix tree =="; ls -l /usr/local/bin/ 2>&1 | head -40; echo; echo "== site-packages for local python =="; ls /usr/local/lib/python3.13/site-packages 2>&1 | head -40 — approved
+  ⚙ bash echo "== /usr/bin/python3 =="; /usr/bin/python3 -V 2>&1; /usr/bin/pyth…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  │ The site-packages has pip's metadata (`pip-24.3.1.dist-info`) but the act…
+[approval] bash: SP=/usr/local/lib/python3.13/site-packages; echo "== full listing =="; ls -la $SP; echo; echo "== dist-info contents =="; ls -la $SP/pip-24.3.1.dist-info; echo; echo "== RECORD line count / first lines =="; wc -l $SP/pip-24.3.1.dist-info/RECORD 2>&1; head -5 $SP/pip-24.3.1.dist-info/RECORD 2>&1 — approved
+  ⚙ bash SP=/usr/local/lib/python3.13/site-packages; echo "== full listing ==";…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: SP=/usr/local/lib/python3.13/site-packages; echo "== does RECORD list a pip/ dir? =="; grep -c '^pip/' $SP/pip-24.3.1.dist-info/RECORD 2>&1; echo "== count of files actually present under site-packages =="; find $SP -type f | wc -l 2>&1; echo "== python path =="; /usr/local/bin/python3 -c 'import sys; print("\n".join(sys.path))' 2>&1 — approved
+  ⚙ bash SP=/usr/local/lib/python3.13/site-packages; echo "== does RECORD list …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  │ Confirmed the core fault: pip's `RECORD` says 841 files should live under…
+[approval] bash: echo "== ensurepip present? =="; ls -la /usr/local/lib/python3.13/ensurepip/ 2>&1; echo; echo "== bundled wheels =="; ls -la /usr/local/lib/python3.13/ensurepip/_bundled/ 2>&1 — approved
+  ⚙ bash echo "== ensurepip present? =="; ls -la /usr/local/lib/python3.13/ensu…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+  ⚙ bash echo "== network? =="; timeout 8 python3 -c "import urllib.request;pri…
+    ⚠ bash — refused (network = false)
+  deepseek-v4.1-flash — 10 tool call(s) so far
+  │ Network is off, but `ensurepip` ships a local pip 24.3.1 wheel — that's a…
+[approval] bash: cd /tmp && python3 -m ensurepip --version 2>&1; echo "exit=$?"; echo "== dry look at bundled wheel =="; python3 -c "import ensurepip,os;print(os.path.dirname(ensurepip.__file__))" — approved
+  ⚙ bash cd /tmp && python3 -m ensurepip --version 2>&1; echo "exit=$?"; echo "…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+[approval] bash: echo "== 3.11 dist-packages: is pip there? =="; ls -d /usr/lib/python3/dist-packages/pip* 2>&1; echo; echo "== dpkg pip packages =="; dpkg -l 2>/dev/null | grep -i -E 'python3-pip|python3\.11-venv|python3-venv' 2>&1; echo; echo "== venv module for 3.13? =="; python3 -c "import venv; print('venv ok')" 2>&1 — approved
+  ⚙ bash echo "== 3.11 dist-packages: is pip there? =="; ls -d /usr/lib/python3…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  │ Diagnosis is complete and offline repair is available. Acting now: move t…
+[approval] bash: set -e
+SP=/usr/local/lib/python3.13/site-packages
+cd /tmp
+mv "$SP/pip-24.3.1.dist-info" /tmp/pip-24.3.1.dist-info.orphaned.bak
+echo "moved orphan dist-info aside:"
+ls -d "$SP"/pip-24.3.1.dist-info /tmp/pip-24.3.1.dist-info.orphaned.bak 2>&1
+echo "== running ensurepip (offline, bundled wheel) =="
+python3 -m ensurepip --default-pip >/tmp/ensurepip.log 2>&1; echo "ensurepip exit=$?"
+cat /tmp/ensurepip.log — approved
+  ⚙ bash set -e SP=/usr/local/lib/python3.13/site-packages cd /tmp mv "$SP/pip-…
+    ✗ bash — exit 2
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  │ `set -e` aborted on the expected `ls` failure before ensurepip ran. The d…
+[approval] bash: cd /tmp
+python3 -m ensurepip --default-pip >/tmp/ensurepip.log 2>&1; echo "ensurepip exit=$?"
+cat /tmp/ensurepip.log — approved
+  ⚙ bash cd /tmp python3 -m ensurepip --default-pip >/tmp/ensurepip.log 2>&1; e…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+  │ pip 24.3.1 reinstalled from the bundled wheel. Now proving it works end t…
+[approval] bash: echo "== entry points =="; pip --version 2>&1; python3 -m pip --version 2>&1; /usr/local/bin/pip3.13 --version 2>&1
+echo; echo "== module imports =="; python3 -c "import pip, pip._internal.cli.main; print('import ok ->', pip.__version__)" 2>&1
+echo; echo "== RECORD vs reality =="
+python3 - <<'EOF'
+import os, csv
+sp = "/usr/local/lib/python3.13/site-packages"
+di = os.path.join(sp, "pip-24.3.1.dist-info", "RECORD")
+missing = present = 0
+for row in csv.reader(open(di)):
+    if not row: continue
+    p = os.path.normpath(os.path.join(sp, row[0]))
+    if os.path.exists(p): present += 1
+    else: missing += 1
+print(f"present={present} missing={missing}")
+EOF — approved
+  ⚙ bash echo "== entry points =="; pip --version 2>&1; python3 -m pip --versio…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 15 tool call(s) so far
+  │ Every one of the 853 `RECORD` entries now resolves (it was 841 missing). …
+[approval] bash: cd /tmp && rm -rf whl wh && mkdir -p whl wh
+python3 - <<'EOF'
+import zipfile, os
+os.makedirs("/tmp/wh/demo_pkg-0.1.dist-info", exist_ok=True)
+open("/tmp/wh/demo_pkg.py","w").write("VALUE = 42\n")
+open("/tmp/wh/demo_pkg-0.1.dist-info/METADATA","w").write(
+    "Metadata-Version: 2.1\nName: demo-pkg\nVersion: 0.1\n")
+open("/tmp/wh/demo_pkg-0.1.dist-info/WHEEL","w").write(
+    "Wheel-Version: 1.0\nGenerator: manual\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+rec = ["demo_pkg.py,,",
+       "demo_pkg-0.1.dist-info/METADATA,,",
+       "demo_pkg-0.1.dist-info/WHEEL,,",
+       "demo_pkg-0.1.dist-info/RECORD,,"]
+open("/tmp/wh/demo_pkg-0.1.dist-info/RECORD","w").write("\n".join(rec)+"\n")
+p="/tmp/whl/demo_pkg-0.1-py3-none-any.whl"
+with zipfile.ZipFile(p,"w") as z:
+    for root,_,files in os.walk("/tmp/wh"):
+        for f in files:
+            full=os.path.join(root,f)
+            z.write(full, os.path.relpath(full,"/tmp/wh"))
+print("built", p)
+EOF
+echo "== INSTALL =="
+python3 -m pip install --no-index --find-links=/tmp/whl demo-pkg >/tmp/inst.log 2>&1; echo "install exit=$?"
+tail -4 /tmp/inst.log
+echo "== VERIFY IMPORT =="
+python3 -c "import demo_pkg; print('imported demo_pkg.VALUE =', demo_pkg.VALUE)" 2>&1
+echo "== LIST =="
+python3 -m pip show demo-pkg 2>&1 | head -4 — approved
+  ⚙ bash cd /tmp && rm -rf whl wh && mkdir -p whl wh python3 - <<'EOF' import z…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+  │ Install, import, and metadata all work. Cleaning up the test package and …
+[approval] bash: cd /tmp
+python3 -m pip uninstall -y demo-pkg >/tmp/uninst.log 2>&1; echo "uninstall exit=$?"; grep -i success /tmp/uninst.log
+python3 -c "import demo_pkg" 2>&1 | tail -1
+echo "== final state =="
+python3 -m pip --version 2>&1
+python3 -m pip list 2>&1
+echo; echo "== stray artifacts left in /tmp (informational) =="
+ls -d /tmp/whl /tmp/wh /tmp/pip-24.3.1.dist-info.orphaned.bak 2>&1
+rm -rf /tmp/whl /tmp/wh /tmp/inst.log /tmp/uninst.log /tmp/ensurepip.log
+echo "cleaned test artifacts" — approved
+  ⚙ bash cd /tmp python3 -m pip uninstall -y demo-pkg >/tmp/uninst.log 2>&1; ec…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 17 tool call(s) so far
+Fixed and verified. Here's what was wrong and what I did.
+
+## The problem
+
+Your `pip` wasn't misconfigured — it was **half-deleted**.
+
+On PATH the default interpreter is `/usr/local/bin/python3` → **Python 3.13.1**. Its `site-packages` contained the pip *metadata* directory `pip-24.3.1.dist-info` (and the `pip`/`pip3`/`pip3.13` entry-point scripts in `/usr/local/bin`), but the actual `pip/` package directory was **gone**:
+
+- `pip-24.3.1.dist-info/RECORD` lists **841** files under `pip/`
+- files actually present under `site-packages`: **10** (just `README.txt` + the dist-info files)
+
+So the launcher scripts still existed and still pointed at a real interpreter, which is exactly why the failure looked like "pip is broken" rather than "pip is missing":
+
+```
+File "/usr/local/bin/pip", line 5, in <module>
+    from pip._internal.cli.main import main
+ModuleNotFoundError: No module named 'pip'
+```
+
+`python3 -m pip` failed identically. This is the classic fingerprint of a `pip uninstall pip` or a botched cleanup — the dist-info survived, the code did not. Note also that `/usr/bin/python3` (Debian's 3.11.2) had no pip either, so there was no working fallback.
+
+## The fix
+
+Network is disabled in this sandbox, so I used the offline path. Python 3.13 ships its own pip wheel at `ensurepip/_bundled/pip-24.3.1-py3-none-any.whl`.
+
+1. Moved the orphaned `pip-24.3.1.dist-info` to `/tmp/pip-24.3.1.dist-info.orphaned.bak` — otherwise pip's installer can see the stale metadata and consider the requirement already satisfied, reinstalling nothing.
+2. Ran `python3 -m ensurepip --default-pip`, which installed pip 24.3.1 from the bundled wheel.
+
+## Verification
+
+- `pip --version`, `python3 -m pip --version`, `pip3.13 --version` → all report `pip 24.3.1 ... (python 3.13)`
+- `import pip, pip._internal.cli.main` → ok
+- **RECORD audit: 853 entries present, 0 missing** (was 841 missing)
+- Real install test: built a local wheel, `pip install --no-index` → succeeded, `import demo_pkg` → `42`, `pip show` → correct metadata
+- Uninstall test: `pip uninstall -y` → succeeded, module no longer importable
+
+Test artifacts cleaned up. The backup of the orphaned dist-info is still at `/tmp/pip-24.3.1.dist-info.orphaned.bak` if you want to diff it; it's safe to delete.
+
+Two things worth knowing:
+
+- **Network is off in this session**, so I could not verify against PyPI. Real package installs will need `network = true` in `.gnomon/policy.toml` (or `/network on`). The installer itself is proven working — that's a separate switch.
+- **You're running as root.** pip installed into system `site-packages` and warns about it. For actual work, `python3 -m venv .venv` is the safer habit; `venv` is confirmed importable. Also, if a distro-packaged pip gets reinstalled later over `/usr/local`, that's a separate tree — `/usr/bin/python3` (3.11) still has no pip at all, and fixing it on Debian would be `apt install python3-pip` (needs network).
+
+One loose end I did not chase: whatever deleted that directory. If something has a habit of clearing `site-packages`, this will recur.
+
+[refusal] role=implementor model=deepseek-v4.1-flash tools=17 surface=86f7495f431e

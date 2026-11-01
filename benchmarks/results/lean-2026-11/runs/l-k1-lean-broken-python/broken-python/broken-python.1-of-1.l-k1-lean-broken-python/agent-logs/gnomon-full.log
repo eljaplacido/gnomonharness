@@ -1,0 +1,123 @@
+[approval] bash: pwd; ls -a; echo "---"; which -a python python3 pip pip3 2>&1; echo "---"; python3 --version 2>&1; pip3 --version 2>&1 — approved
+  ⚙ bash pwd; ls -a; echo "---"; which -a python python3 pip pip3 2>&1; echo "-…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: cat /etc/os-release 2>&1 | head -5; echo "---"; echo "PYTHONPATH=$PYTHONPATH"; echo "PYTHONHOME=$PYTHONHOME"; echo "PIP_*:"; env | grep -i pip — approved
+  ⚙ bash cat /etc/os-release 2>&1 | head -5; echo "---"; echo "PYTHONPATH=$PYTH…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 2 tool call(s) so far
+[approval] bash: cd /tmp; python3 -c "import sys, sysconfig; print(sys.executable); print(sys.prefix); print(sys.path); print(sysconfig.get_paths())" 2>&1 — approved
+  ⚙ bash cd /tmp; python3 -c "import sys, sysconfig; print(sys.executable); pri…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: ls -la /usr/local/lib/ 2>&1 | head -30; echo "=== python3.13 site-packages ==="; ls -la /usr/local/lib/python3.13/site-packages 2>&1 | head -50 — approved
+  ⚙ bash ls -la /usr/local/lib/ 2>&1 | head -30; echo "=== python3.13 site-pack…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+[approval] bash: find / -maxdepth 8 -name "pip" -type d -not -path "*/node_modules/*" 2>/dev/null; echo "--- ensurepip bundles ---"; ls -la /usr/local/lib/python3.13/ensurepip/_bundled/ 2>&1; echo "--- dist-info ---"; cat /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD 2>/dev/null | head -5; ls /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/ — approved
+  ⚙ bash find / -maxdepth 8 -name "pip" -type d -not -path "*/node_modules/*" 2…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: ls -la /usr/local/lib/python3.11/ 2>&1; echo "=== 3.11 site-packages ==="; ls -la /usr/local/lib/python3.11/site-packages 2>&1 | head -40; echo "=== bin ==="; ls -la /usr/local/bin/ 2>&1 — approved
+  ⚙ bash ls -la /usr/local/lib/python3.11/ 2>&1; echo "=== 3.11 site-packages =…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+[approval] bash: cd /tmp; echo "=== pip3 script ==="; cat /usr/local/bin/pip3; echo "=== /usr/bin/python3 ==="; /usr/bin/python3 --version 2>&1; /usr/bin/python3 -m pip --version 2>&1 | tail -3; echo "=== find pip anywhere (dirs/files named pip*) ==="; find / -name "pip*" -maxdepth 9 2>/dev/null | grep -v node_modules | head -40 — approved
+  ⚙ bash cd /tmp; echo "=== pip3 script ==="; cat /usr/local/bin/pip3; echo "==…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: echo "=== site-packages full listing ==="; ls -la /usr/local/lib/python3.13/site-packages/; echo "=== pth files ==="; cat /usr/local/lib/python3.13/site-packages/*.pth 2>/dev/null; echo "=== pip configs ==="; ls -la /etc/pip.conf /etc/xdg/pip/pip.conf ~/.pip/pip.conf ~/.config/pip/pip.conf 2>&1; echo "=== sitecustomize ==="; find / -name "sitecustomize.py" -o -name "usercustomize.py" 2>/dev/null | head — approved
+  ⚙ bash echo "=== site-packages full listing ==="; ls -la /usr/local/lib/pytho…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  │ Found it: `/usr/local/lib/python3.13/site-packages/` has pip's `dist-info…
+[approval] bash: cat /usr/local/lib/python3.13/site-packages/README.txt; echo "=== INSTALLER ==="; cat /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/INSTALLER; echo "=== top_level ==="; cat /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/top_level.txt; echo "=== EXTERNALLY-MANAGED? ==="; ls -la /usr/local/lib/python3.13/EXTERNALLY-MANAGED /usr/lib/python3.11/EXTERNALLY-MANAGED 2>&1; echo "=== ensurepip available? ==="; cd /tmp; python3 -c "import ensurepip; print(ensurepip.version())" 2>&1 — approved
+  ⚙ bash cat /usr/local/lib/python3.13/site-packages/README.txt; echo "=== INST…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+  │ Diagnosis is clear: the `pip/` package directory was deleted from `/usr/l…
+[approval] bash: cd /tmp; python3 -m ensurepip --upgrade > /tmp/ensurepip.log 2>&1; echo "exit=$?"; tail -20 /tmp/ensurepip.log — approved
+  ⚙ bash cd /tmp; python3 -m ensurepip --upgrade > /tmp/ensurepip.log 2>&1; ech…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+  │ `ensurepip` short-circuits on the stale `dist-info`. I'll move it aside a…
+[approval] bash: cd /usr/local/lib/python3.13/site-packages; mv pip-24.3.1.dist-info /tmp/pip-24.3.1.dist-info.broken.bak; echo "moved: $?"; cd /tmp; python3 -m ensurepip --upgrade > /tmp/ensurepip2.log 2>&1; echo "ensurepip exit=$?"; cat /tmp/ensurepip2.log — approved
+  ⚙ bash cd /usr/local/lib/python3.13/site-packages; mv pip-24.3.1.dist-info /t…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  │ pip is restored. Now verifying it actually works end to end, including a …
+[approval] bash: cd /tmp; echo "=== pip3 --version ==="; pip3 --version 2>&1; echo "=== pip --version ==="; pip --version 2>&1; echo "=== pip3.13 ==="; pip3.13 --version 2>&1; echo "=== import check ==="; python3 -c "import pip; print('pip pkg ok', pip.__version__)" 2>&1; echo "=== package dir ==="; ls -d /usr/local/lib/python3.13/site-packages/pip /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info — approved
+  ⚙ bash cd /tmp; echo "=== pip3 --version ==="; pip3 --version 2>&1; echo "===…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+[approval] bash: cd /tmp; pip3 check > /tmp/check.log 2>&1; echo "check exit=$?"; cat /tmp/check.log; echo "=== install test ==="; pip3 install --dry-run six > /tmp/dry.log 2>&1; echo "dry-run exit=$?"; tail -5 /tmp/dry.log — approved
+  ⚙ bash cd /tmp; pip3 check > /tmp/check.log 2>&1; echo "check exit=$?"; cat /…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 13 tool call(s) so far
+[approval] bash: cd /tmp; rm -rf /tmp/insttest; pip3 install --target /tmp/insttest --quiet six > /tmp/real.log 2>&1; echo "real install exit=$?"; ls /tmp/insttest 2>&1; python3 -c "import sys; sys.path.insert(0,'/tmp/insttest'); import six; print('six imported OK', six.__version__)" 2>&1 — approved
+  ⚙ bash cd /tmp; rm -rf /tmp/insttest; pip3 install --target /tmp/insttest --q…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+[approval] bash: cd /tmp; echo "=== pip self-consistency (uninstall dry-run) ==="; pip3 uninstall --dry-run pip > /tmp/self.log 2>&1; echo "exit=$?"; head -8 /tmp/self.log; echo "=== any leftover broken dirs? ==="; ls -la /usr/local/lib/python3.13/site-packages/ — approved
+  ⚙ bash cd /tmp; echo "=== pip self-consistency (uninstall dry-run) ==="; pip3…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 15 tool call(s) so far
+[approval] bash: cd /usr/local/lib/python3.13/site-packages; python3 - <<'EOF' 2>&1
+import csv, os
+base = "/usr/local/lib/python3.13/site-packages"
+missing = 0; total = 0
+with open(os.path.join(base, "pip-24.3.1.dist-info/RECORD")) as f:
+    for row in csv.reader(f):
+        if not row: continue
+        total += 1
+        p = os.path.normpath(os.path.join(base, row[0]))
+        if not os.path.exists(p):
+            missing += 1; print("MISSING:", row[0])
+print(f"RECORD entries={total} missing={missing}")
+EOF
+rm -rf /tmp/insttest /tmp/ensurepip.log /tmp/ensurepip2.log /tmp/dry.log /tmp/real.log /tmp/check.log /tmp/self.log — approved
+  ⚙ bash cd /usr/local/lib/python3.13/site-packages; python3 - <<'EOF' 2>&1 imp…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+  deepseek-v4.1-flash — 17 tool call(s) so far
+  ⚙ note 
+    ✓ note — System python (/usr/local/bin/python3 = 3.13.1) had pip's di
+Fixed.
+
+## What was wrong
+
+Not a permissions or config problem — pip's actual code was missing.
+
+```
+/usr/local/lib/python3.13/site-packages/
+├── pip-24.3.1.dist-info/   ← metadata present
+└── (no pip/ directory)     ← the package itself was gone
+```
+
+So `/usr/local/bin/pip3` existed and ran, but died on its first import:
+
+```
+ModuleNotFoundError: No module named 'pip'
+```
+
+Something deleted the `pip/` package directory while leaving its `dist-info` behind. This also meant the usual repair, `python3 -m ensurepip --upgrade`, silently no-opped with *"Requirement already satisfied: pip"* — it saw the stale metadata and assumed pip was installed.
+
+## What I did
+
+1. Moved the orphaned `pip-24.3.1.dist-info` aside (backup kept at `/tmp/pip-24.3.1.dist-info.broken.bak`).
+2. Ran `python3 -m ensurepip --upgrade`, which reinstalled pip 24.3.1 from the bundled wheel in `/usr/local/lib/python3.13/ensurepip/_bundled/` — no network needed.
+
+## Verification
+
+- `pip3`, `pip`, `pip3.13` all report `pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)`
+- `pip3 check` → `No broken requirements found.`
+- Real install works: installed `six` to a scratch target and imported it successfully (`1.17.0`)
+- All 852 files listed in pip's `RECORD` now exist — the installation is complete, not just importable
+
+## Two things worth knowing
+
+**`/usr/bin/python3` (3.11) has no pip at all**, and it's marked `EXTERNALLY-MANAGED`, so Debian intends for you not to install into it directly. I left it alone. Use `/usr/local/bin/python3` (3.13) — it's first on your `PATH`, so plain `python3`/`pip3` already resolve there.
+
+**You're running pip as root into the system interpreter**, which is what let a bare `rm` break it in the first place. For anything you actually need, `python3 -m venv` will keep future damage contained. If you want, I can also raise pip to 26.2.2 — it flagged that upgrade as available, but I didn't apply it since you didn't ask and the version you have now works.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=17 surface=103984024bca

@@ -1,0 +1,56 @@
+root@16ab3782d55d:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+root@16ab3782d55d:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+ARM_VERSION=68abc510c31f7173b520a0e77b5a63aaadc753d1
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793533991
+root@16ab3782d55d:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with
+ pip.'; tmux wait -S done
+On PATH the default interpreter is `/usr/local/bin/python3` → **Python 3.13.1**. Its `site-packages` contained the pip *metadata* directory `pip-24.3.1.dist-inf
+o` (and the `pip`/`pip3`/`pip3.13` entry-point scripts in `/usr/local/bin`), but the actual `pip/` package directory was **gone**:
+
+- `pip-24.3.1.dist-info/RECORD` lists **841** files under `pip/`
+- files actually present under `site-packages`: **10** (just `README.txt` + the dist-info files)
+
+So the launcher scripts still existed and still pointed at a real interpreter, which is exactly why the failure looked like "pip is broken" rather than "pip is
+missing":
+
+```
+File "/usr/local/bin/pip", line 5, in <module>
+    from pip._internal.cli.main import main
+ModuleNotFoundError: No module named 'pip'
+```
+
+`python3 -m pip` failed identically. This is the classic fingerprint of a `pip uninstall pip` or a botched cleanup — the dist-info survived, the code did not. N
+ote also that `/usr/bin/python3` (Debian's 3.11.2) had no pip either, so there was no working fallback.
+
+## The fix
+
+Network is disabled in this sandbox, so I used the offline path. Python 3.13 ships its own pip wheel at `ensurepip/_bundled/pip-24.3.1-py3-none-any.whl`.
+
+1. Moved the orphaned `pip-24.3.1.dist-info` to `/tmp/pip-24.3.1.dist-info.orphaned.bak` — otherwise pip's installer can see the stale metadata and consider the
+ requirement already satisfied, reinstalling nothing.
+2. Ran `python3 -m ensurepip --default-pip`, which installed pip 24.3.1 from the bundled wheel.
+
+## Verification
+
+- `pip --version`, `python3 -m pip --version`, `pip3.13 --version` → all report `pip 24.3.1 ... (python 3.13)`
+- `import pip, pip._internal.cli.main` → ok
+- **RECORD audit: 853 entries present, 0 missing** (was 841 missing)
+- Real install test: built a local wheel, `pip install --no-index` → succeeded, `import demo_pkg` → `42`, `pip show` → correct metadata
+- Uninstall test: `pip uninstall -y` → succeeded, module no longer importable
+
+Test artifacts cleaned up. The backup of the orphaned dist-info is still at `/tmp/pip-24.3.1.dist-info.orphaned.bak` if you want to diff it; it's safe to delete
+.
+
+Two things worth knowing:
+
+- **Network is off in this session**, so I could not verify against PyPI. Real package installs will need `network = true` in `.gnomon/policy.toml` (or `/networ
+k on`). The installer itself is proven working — that's a separate switch.
+- **You're running as root.** pip installed into system `site-packages` and warns about it. For actual work, `python3 -m venv .venv` is the safer habit; `venv`
+is confirmed importable. Also, if a distro-packaged pip gets reinstalled later over `/usr/local`, that's a separate tree — `/usr/bin/python3` (3.11) still has n
+o pip at all, and fixing it on Debian would be `apt install python3-pip` (needs network).
+
+One loose end I did not chase: whatever deleted that directory. If something has a habit of clearing `site-packages`, this will recur.
+
+[refusal] role=implementor model=deepseek-v4.1-flash tools=17 surface=86f7495f431e
+root@16ab3782d55d:/app#

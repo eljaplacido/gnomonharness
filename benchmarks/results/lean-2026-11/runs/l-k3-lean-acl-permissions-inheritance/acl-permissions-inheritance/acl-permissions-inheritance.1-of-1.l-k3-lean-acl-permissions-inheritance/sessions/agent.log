@@ -1,0 +1,76 @@
+[?2004hroot@3421dbaf3c01:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@3421dbaf3c01:/app# clear
+[?2004l[H[J[3J[?2004hroot@3421dbaf3c01:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@3421dbaf3c01:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=eb56ab069a72b0aa9bd75bb9a9e8cc58788c2b21
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793536629
+[?2004hroot@3421dbaf3c01:/app# bash /opt/gnomon-run.sh 'Create a shared directory structure with Linux ACLs that demonstrates proper permission inheritance.
+[?2004l[?2004h> 
+[?2004l[?2004h> Requirements:
+[?2004l[?2004h> 1. Create directory /srv/shared with the following properties:
+[?2004l[?2004h>    - Owned by group "research" 
+[?2004l[?2004h>    - Set the setgid bit so new files inherit the group
+[?2004l[?2004h>    - Base permissions: 2770 (rwxrws---)
+[?2004l[?2004h> 
+[?2004l[?2004h> 2. Configure ACLs on /srv/shared:
+[?2004l[?2004h>    - Group "research": full rwx permissions (both current and default)
+[?2004l[?2004h>    - Users "alice" and "bob": full rwx permissions (both current and default)  
+[?2004l[?2004h>    - Others: no permissions (both current and default)
+[?2004l[?2004h>    - Set proper mask to allow full permissions
+[?2004l[?2004h> 
+[?2004l[?2004h> 3. The ACL configuration must ensure that:
+[?2004l[?2004h>    - Any file created by alice or bob in /srv/shared is accessible by both users
+[?2004l[?2004h>    - The permissions are inherited by subdirectories and files
+[?2004l[?2004h>    - Users outside the research group cannot access the directory or its contents
+[?2004l[?2004h> 
+[?2004l[?2004h> Note: Do NOT create any files in the directory. The tests will verify permission inheritance
+[?2004l[?2004h> by creating files during the testing phase.
+[?2004l[?2004h> END'; tmux wait -S done
+[?2004l  ⚙ bash chmod g-s /srv/shared; stat -c '%A %a' /srv/shared sh test_shared_acl.…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 44 tool call(s) so far
+[approval] bash: pwd; ls -A; git status --short 2>&1 | head — approved
+  ⚙ bash pwd; ls -A; git status --short 2>&1 | head
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 45 tool call(s) so far
+[approval] bash: stat -c '%A %a %U:%G %n' /srv/shared; getfacl -p /srv/shared 2>/dev/null; echo "entries=$(ls -A /srv/shared | wc -l)" — approved
+  ⚙ bash stat -c '%A %a %U:%G %n' /srv/shared; getfacl -p /srv/shared 2>/dev/nu…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 46 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  deepseek-v4.1-flash — 46 tool call(s) so far
+Done. The ACL state is in place and verified.
+
+**What was created on the system**
+
+`/srv/shared` — `drwxrws--- 2770 root:research`, setgid set (`# flags: -s-`), with:
+
+```
+user::rwx          default:user::rwx
+user:alice:rwx     default:user:alice:rwx
+user:bob:rwx       default:user:bob:rwx
+group::r-x         default:group::rwx
+group:research:rwx default:group:research:rwx
+mask::rwx          default:mask::rwx
+other::---         default:other::---
+```
+
+Both access and default entries were applied in one `setfacl` call each, after `chown root:research` and `chmod 2770` — order matters, because `chmod` recomputes the ACL mask and would have clobbered `mask::rwx` if run afterwards. No files were left in the directory (`ls -A` → 0 entries).
+
+**The check**
+
+`test_shared_acl.sh` (in the repo root, run with `sh test_shared_acl.sh`) asserts the spec, not the implementation: group owner, mode `2770`, setgid flag, each access and default ACL entry, an outsider (`ubuntu`) unable to list the directory, and live inheritance — it has alice and bob create a file and a subdirectory, then checks the new group is `research`, the subdirectory is `2770`, alice and bob can each read *and* write the other's file, and the outsider cannot read it. It cleans up after itself and asserts the directory is empty again. Result: **all 24 checks pass**.
+
+I confirmed it bites by breaking each property in turn and restoring it: removing the default ACLs → 11 failures; `chgrp root` → group-owner and inheritance failures; `chmod g-s` → 4 failures (including new files landing in group `alice`); granting `other::r-x` → mode, `other::---` and outsider-access failures. All restored, final run green.
+
+Two notes: `/` here is overlayfs with `nouserxattr`, so POSIX ACLs work only because the kernel is 6.17 (overlayfs nfs_export/vfsuid); on an older kernel or a filesystem without ACL support this layout would silently collapse to mode bits. Also, inherited *file* ACLs are narrowed by the file's own creation mode (`0644` → effective `rw-` for alice/bob), which is sufficient for the requirement that both users can read and write each other's files, but it means a created file is not literally `rwx` for them — if the tests demand `rwx` on files, an extra step (e.g. a per-user umask of `0077` or a `setfacl` post-create hook) would be needed, which the ACLs alone cannot impose.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=46 surface=c8c9507b08fa
+[?2004hroot@3421dbaf3c01:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@3421dbaf3c01:/app# 

@@ -1,0 +1,257 @@
+  │ I'll start by looking at the repository to understand what I'm working wi…
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  ⚙ read .
+    ✓ read ./ — 4 entries
+[approval] bash: pwd && ls -la — approved
+  ⚙ bash pwd && ls -la
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  │ The repo itself is empty (just harness files) — so this is a diagnosis ta…
+[approval] bash: which -a python python3 pip pip3 2>&1; echo "---"; python3 -V 2>&1; echo "---"; python3 -c "import sys; print(sys.executable); print(sys.prefix); print(sys.version)" 2>&1 — approved
+  ⚙ bash which -a python python3 pip pip3 2>&1; echo "---"; python3 -V 2>&1; ec…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: python3 -m pip --version 2>&1; echo "=== exit $? ==="; echo "---"; pip3 --version 2>&1; echo "=== exit $? ===" — approved
+  ⚙ bash python3 -m pip --version 2>&1; echo "=== exit $? ==="; echo "---"; pip…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ Found the failure. `pip` and `pip3` scripts exist but the `pip` **module*…
+[approval] bash: echo "=== /usr/local site-packages ==="; ls /usr/local/lib/python3.13/site-packages 2>&1 | head -50; echo; echo "=== count ==="; ls /usr/local/lib/python3.13/site-packages 2>&1 | wc -l — approved
+  ⚙ bash echo "=== /usr/local site-packages ==="; ls /usr/local/lib/python3.13/…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: echo "=== pip scripts ==="; ls -la /usr/local/bin/pip* 2>&1; echo; echo "=== head of pip3 ==="; cat /usr/local/bin/pip3 2>&1; echo; echo "=== /usr/bin/python3 ==="; /usr/bin/python3 -V 2>&1; /usr/bin/python3 -m pip --version 2>&1 — approved
+  ⚙ bash echo "=== pip scripts ==="; ls -la /usr/local/bin/pip* 2>&1; echo; ech…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  │ The diagnosis is clear: `pip-24.3.1.dist-info` is present but the `pip/` …
+  deepseek-v4.1-flash — 7 tool call(s) so far
+  ⚙ note 
+    ✓ note — System python3.13 at /usr/local/bin/python3 has pip-24.3.1.d
+[approval] bash: cd /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info && ls -la; echo "=== RECORD head ==="; head -5 RECORD; echo "=== RECORD lines ==="; wc -l < RECORD — approved
+  ⚙ bash cd /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info && ls …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+[approval] bash: python3 -c "import ensurepip; print('ensurepip OK', ensurepip.__file__)" 2>&1; echo "---"; ls /usr/local/lib/python3.13/ensurepip/_bundled/ 2>&1 — approved
+  ⚙ bash python3 -c "import ensurepip; print('ensurepip OK', ensurepip.__file__…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+  │ Confirmed: `ensurepip` is intact and bundles **pip-24.3.1** — the exact s…
+[approval] bash: cd /usr/local/lib/python3.13/site-packages && total=0; missing=0; while IFS=, read -r p rest; do case "$p" in ../../../bin/*) continue;; esac; total=$((total+1)); [ -e "$p" ] || missing=$((missing+1)); done < pip-24.3.1.dist-info/RECORD; echo "recorded=$total missing=$missing" — approved
+  ⚙ bash cd /usr/local/lib/python3.13/site-packages && total=0; missing=0; whil…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+[approval] bash: cd /usr/local/lib/python3.13/site-packages && grep -c '^pip/' pip-24.3.1.dist-info/RECORD; echo "--- actual pip dir? ---"; ls -d pip 2>&1 — approved
+  ⚙ bash cd /usr/local/lib/python3.13/site-packages && grep -c '^pip/' pip-24.3…
+    ✗ bash — exit 2
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  │ 841 missing = exactly the 841 `pip/` entries in RECORD. The entire packag…
+[approval] bash: ls /usr/local/lib/python3.13/EXTERNALLY-MANAGED 2>&1; echo "--- marker? ---"; cat /usr/local/lib/python3.13/EXTERNALLY-MANAGED 2>/dev/null | head -20; echo "--- pyvenv.cfg ---"; cat /usr/local/pyvenv.cfg 2>&1; echo "--- README ---"; cat /usr/local/lib/python3.13/site-packages/README.txt 2>&1 — approved
+  ⚙ bash ls /usr/local/lib/python3.13/EXTERNALLY-MANAGED 2>&1; echo "--- marker…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+[approval] bash: echo "=== env ==="; env | grep -i -E 'pip|python|proxy' 2>&1; echo "=== pip.conf ==="; cat /etc/pip.conf 2>&1; cat ~/.pip/pip.conf 2>&1; cat ~/.config/pip/pip.conf 2>&1 — approved
+  ⚙ bash echo "=== env ==="; env | grep -i -E 'pip|python|proxy' 2>&1; echo "==…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  [tools] 13 call(s) without changing a file — nudging to decide
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  │ Environment is clean — no `EXTERNALLY-MANAGED` marker, no `pip.conf`, no …
+[approval] bash: cd /tmp && python3 -m ensurepip --upgrade --default-pip 2>&1; echo "=== exit=$? ===" — approved
+  ⚙ bash cd /tmp && python3 -m ensurepip --upgrade --default-pip 2>&1; echo "==…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+  │ As predicted, `ensurepip` trusted the orphaned `dist-info` and did nothin…
+[approval] bash: python3 -m pip --version 2>&1; echo "=== exit=$? ==="; ls -d /usr/local/lib/python3.13/site-packages/pip 2>&1 — approved
+  ⚙ bash python3 -m pip --version 2>&1; echo "=== exit=$? ==="; ls -d /usr/loca…
+    ✗ bash — exit 2
+  deepseek-v4.1-flash — 15 tool call(s) so far
+  │ Now I'll install the bundled wheel directly — a wheel is just a zip, so I…
+[approval] bash: cd /usr/local/lib/python3.13/site-packages && python3 - <<'EOF'
+import zipfile, os
+w = "/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl"
+z = zipfile.ZipFile(w)
+names = z.namelist()
+print("wheel entries:", len(names))
+print("pip/ entries:", sum(1 for n in names if n.startswith("pip/")))
+bad = [n for n in names if n.startswith("/") or ".." in n.split("/")]
+print("unsafe entries:", bad)
+EOF — approved
+  ⚙ bash cd /usr/local/lib/python3.13/site-packages && python3 - <<'EOF' import…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+  │ Wheel is clean and safe. Backing up the existing metadata, then extractin…
+[approval] bash: cd /usr/local/lib/python3.13/site-packages && cp -a pip-24.3.1.dist-info /tmp/pip-dist-info.backup && echo "backup OK" && ls /tmp/pip-dist-info.backup | head — approved
+  ⚙ bash cd /usr/local/lib/python3.13/site-packages && cp -a pip-24.3.1.dist-in…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 17 tool call(s) so far
+[approval] bash: cd /usr/local/lib/python3.13/site-packages && python3 - <<'EOF'
+import zipfile
+w = "/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl"
+z = zipfile.ZipFile(w)
+z.extractall(".")   # extract pip/ tree + pristine dist-info metadata
+print("extracted to site-packages")
+EOF
+echo "=== verify ==="; ls -d /usr/local/lib/python3.13/site-packages/pip; ls /usr/local/lib/python3.13/site-packages/pip | head — approved
+  ⚙ bash cd /usr/local/lib/python3.13/site-packages && python3 - <<'EOF' import…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 18 tool call(s) so far
+  │ The `pip/` package tree is restored. Now verifying against the RECORD man…
+[approval] bash: cd /usr/local/lib/python3.13/site-packages && total=0; missing=0; while IFS=, read -r p rest; do case "$p" in ../../../bin/*) continue;; esac; total=$((total+1)); [ -e "$p" ] || { missing=$((missing+1)); echo "MISSING: $p"; }; done < pip-24.3.1.dist-info/RECORD; echo "recorded=$total missing=$missing" — approved
+  ⚙ bash cd /usr/local/lib/python3.13/site-packages && total=0; missing=0; whil…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 19 tool call(s) so far
+[approval] bash: python3 -m pip --version 2>&1; echo "=== exit=$? ==="; echo "---"; pip --version 2>&1; echo "exit=$?"; echo "---"; pip3 --version 2>&1; echo "exit=$?" — approved
+  ⚙ bash python3 -m pip --version 2>&1; echo "=== exit=$? ==="; echo "---"; pip…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 20 tool call(s) so far
+  │ All 437 recorded files restored, zero missing. But "pip --version works" …
+[approval] bash: cd /tmp && rm -rf piptest && python3 -m venv piptest >/dev/null 2>&1; echo "venv exit=$?"; /tmp/piptest/bin/python -m pip --version 2>&1 — approved
+  ⚙ bash cd /tmp && rm -rf piptest && python3 -m venv piptest >/dev/null 2>&1; …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 21 tool call(s) so far
+[approval] bash: cd /tmp && timeout 60 pip install --dry-run six 2>&1 | tail -15; echo "=== exit=${PIPESTATUS:-$?} ===" — approved
+  ⚙ bash cd /tmp && timeout 60 pip install --dry-run six 2>&1 | tail -15; echo …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 22 tool call(s) so far
+  │ Network, index resolution, and `venv` all work. Now a real (non-dry-run) …
+[approval] bash: cd /tmp && timeout 120 /tmp/piptest/bin/python -m pip install six 2>&1 | tail -6; echo "--- import test ---"; /tmp/piptest/bin/python -c "import six; print('six', six.__version__)" 2>&1 — approved
+  ⚙ bash cd /tmp && timeout 120 /tmp/piptest/bin/python -m pip install six 2>&1…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 23 tool call(s) so far
+  │ Full install path works. Let me confirm the system-wide install path spec…
+[approval] bash: cd /tmp && timeout 120 pip install --root-user-action=ignore six 2>&1 | tail -4; echo "--- system import ---"; python3 -c "import six; print('system-wide six', six.__version__)" 2>&1 — approved
+  ⚙ bash cd /tmp && timeout 120 pip install --root-user-action=ignore six 2>&1 …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 24 tool call(s) so far
+[approval] bash: cd /usr/local/lib/python3.13/site-packages && python3 -m compileall -q pip >/tmp/cb.log 2>&1; echo "compileall exit=$?"; wc -l < /tmp/cb.log — approved
+  ⚙ bash cd /usr/local/lib/python3.13/site-packages && python3 -m compileall -q…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 25 tool call(s) so far
+  │ System-wide install works and the whole tree byte-compiles cleanly. Now l…
+[approval] bash: pip uninstall -y --root-user-action=ignore six 2>&1 | tail -3; echo "---"; python3 -c "import six" 2>&1 | tail -1; rm -rf /tmp/piptest /tmp/cb.log; echo "cleaned" — approved
+  ⚙ bash pip uninstall -y --root-user-action=ignore six 2>&1 | tail -3; echo "-…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 26 tool call(s) so far
+  │ Uninstall working is further proof pip's full machinery is intact. Now a …
+[approval] write check_pip_health.sh (+101 −0) [new file] — approved
+  ⚙ write check_pip_health.sh
+    ✓ write check_pip_health.sh (+101 −0)
+  deepseek-v4.1-flash — 27 tool call(s) so far
+[approval] bash: cd /app && chmod +x check_pip_health.sh && sh check_pip_health.sh; echo "=== EXIT=$? ===" — approved
+  ⚙ bash cd /app && chmod +x check_pip_health.sh && sh check_pip_health.sh; ech…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 28 tool call(s) so far
+  │ The check passes on the healthy system. But a check that has never failed…
+[approval] bash: cd /tmp && rm -rf fake && mkdir -p fake/lib/python3.13/site-packages && cp -a /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info fake/lib/python3.13/site-packages/ && PYTHONPATH=/tmp/fake/lib/python3.13/site-packages python3 -c "import pip" 2>&1 | tail -2 — approved
+  ⚙ bash cd /tmp && rm -rf fake && mkdir -p fake/lib/python3.13/site-packages &…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 29 tool call(s) so far
+  │ PYTHONPATH fell through to the real pip. Let me reproduce the failure fai…
+[approval] bash: cd /tmp && rm -rf fake && python3 -m venv broken >/dev/null 2>&1 && rm -rf /tmp/broken/lib/python3.13/site-packages/pip && echo "deleted pip/ from venv, dist-info remains:" && ls -d /tmp/broken/lib/python3.13/site-packages/pip-*.dist-info && /tmp/broken/bin/python -m pip --version 2>&1 | tail -2 — approved
+  ⚙ bash cd /tmp && rm -rf fake && python3 -m venv broken >/dev/null 2>&1 && rm…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 30 tool call(s) so far
+  │ I've exactly reproduced the original symptom. Now the real test: does my …
+[approval] bash: cd /app && PYTHON=/tmp/broken/bin/python sh check_pip_health.sh; echo "=== EXIT=$? (expect 1) ===" — approved
+  ⚙ bash cd /app && PYTHON=/tmp/broken/bin/python sh check_pip_health.sh; echo …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 31 tool call(s) so far
+  │ The checker correctly fails and reports exactly the same "841 missing" I …
+[approval] edit check_pip_health.sh (+8 −3) — approved
+  ⚙ edit check_pip_health.sh
+    ✓ edit check_pip_health.sh (+8 −3)
+  deepseek-v4.1-flash — 32 tool call(s) so far
+  [tools] 32/256 calls — continuing (leg 2)
+  deepseek-v4.1-flash — leg 2, 32 call(s) so far
+[approval] bash: cd /app && echo "### BROKEN (expect exit 1) ###" && PYTHON=/tmp/broken/bin/python sh check_pip_health.sh 2>&1 | sed -n '/console scripts/,/^$/p'; echo "exit=$?"; echo; echo "### HEALTHY (expect exit 0) ###" && sh check_pip_health.sh 2>&1 | sed -n '/console scripts/,/^$/p'; sh check_pip_health.sh >/dev/null 2>&1; echo "healthy exit=$?" — approved
+  ⚙ bash cd /app && echo "### BROKEN (expect exit 1) ###" && PYTHON=/tmp/broken…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 33 tool call(s) so far
+  │ Now the console-script check catches the venv's own broken pip (that `exi…
+[approval] bash: cd /app && PYTHON=/tmp/broken/bin/python sh check_pip_health.sh >/tmp/b.log 2>&1; echo "broken exit=$?"; tail -3 /tmp/b.log; echo; sh check_pip_health.sh >/tmp/h.log 2>&1; echo "healthy exit=$?"; tail -2 /tmp/h.log — approved
+  ⚙ bash cd /app && PYTHON=/tmp/broken/bin/python sh check_pip_health.sh >/tmp/…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 34 tool call(s) so far
+  │ Exit codes are correct: 1 when broken, 0 when healthy. Let me verify the …
+[approval] bash: /tmp/broken/bin/python -m ensurepip --upgrade >/tmp/e.log 2>&1; echo "ensurepip exit=$?"; /tmp/broken/bin/python -m pip --version 2>&1; echo "---"; cd /app && PYTHON=/tmp/broken/bin/python sh check_pip_health.sh >/tmp/b2.log 2>&1; echo "recheck exit=$?"; tail -2 /tmp/b2.log — approved
+  ⚙ bash /tmp/broken/bin/python -m ensurepip --upgrade >/tmp/e.log 2>&1; echo "…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 35 tool call(s) so far
+  │ Important finding: `ensurepip` does **not** repair this — the orphaned di…
+[approval] bash: cd /tmp/broken/lib/python3.13/site-packages && python3 - <<'EOF'
+import zipfile
+w="/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl"
+zipfile.ZipFile(w).extractall(".")
+print("extracted wheel")
+EOF
+/tmp/broken/bin/python -m pip --version 2>&1; echo "---"; cd /app && PYTHON=/tmp/broken/bin/python sh check_pip_health.sh >/tmp/b3.log 2>&1; echo "recheck exit=$?"; tail -2 /tmp/b3.log — approved
+  ⚙ bash cd /tmp/broken/lib/python3.13/site-packages && python3 - <<'EOF' impor…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 36 tool call(s) so far
+  │ The wheel-based repair is the one that actually works, and it brings the …
+[approval] edit check_pip_health.sh (+10 −1) — approved
+  ⚙ edit check_pip_health.sh
+    ✓ edit check_pip_health.sh (+10 −1)
+  deepseek-v4.1-flash — 37 tool call(s) so far
+  │ Let me verify the repair snippet it prints is actually executable and cor…
+[approval] bash: cd /tmp && rm -rf broken2 && python3 -m venv broken2 >/dev/null 2>&1 && rm -rf /tmp/broken2/lib/python3.13/site-packages/pip && cd /app && PYTHON=/tmp/broken2/bin/python sh check_pip_health.sh >/tmp/b4.log 2>&1; echo "before exit=$?"; sed -n '/^Repair/,$p' /tmp/b4.log — approved
+  ⚙ bash cd /tmp && rm -rf broken2 && python3 -m venv broken2 >/dev/null 2>&1 &…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 38 tool call(s) so far
+  │ Now executing that printed snippet verbatim to prove it works:
+[approval] bash: cd /tmp && PY=/tmp/broken2/bin/python
+SP=$("$PY" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+WHL=$("$PY" -c 'import ensurepip, os; d=os.path.join(os.path.dirname(ensurepip.__file__),"_bundled"); print(os.path.join(d, sorted(os.listdir(d))[0]))')
+echo "SP=$SP"; echo "WHL=$WHL"
+"$PY" -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$WHL" "$SP"
+echo "extract exit=$?"; "$PY" -m pip --version 2>&1 — approved
+  ⚙ bash cd /tmp && PY=/tmp/broken2/bin/python SP=$("$PY" -c 'import sysconfig;…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 39 tool call(s) so far
+  │ The printed repair snippet works exactly as documented. Final verificatio…
+[approval] bash: cd /app && sh check_pip_health.sh; echo "=== SYSTEM EXIT=$? ===" — approved
+  ⚙ bash cd /app && sh check_pip_health.sh; echo "=== SYSTEM EXIT=$? ==="
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 40 tool call(s) so far
+[approval] bash: rm -rf /tmp/broken /tmp/broken2 /tmp/fake /tmp/b.log /tmp/h.log /tmp/b2.log /tmp/b3.log /tmp/b4.log /tmp/e.log; echo "temp cleaned"; echo "--- site-packages top level ---"; ls /usr/local/lib/python3.13/site-packages; echo "--- six gone? ---"; python3 -c "import six" 2>&1 | tail -1 — approved
+  ⚙ bash rm -rf /tmp/broken /tmp/broken2 /tmp/fake /tmp/b.log /tmp/h.log /tmp/b…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 41 tool call(s) so far
+[approval] bash: cd /app && ls -la; echo "--- final smoke test ---"; pip install --dry-run --quiet requests >/dev/null 2>&1; echo "resolve requests exit=$?"; python3 -m pip --version — approved
+  ⚙ bash cd /app && ls -la; echo "--- final smoke test ---"; pip install --dry-…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 42 tool call(s) so far
+Fixed. Your system-wide pip works again.
+
+## What was actually wrong
+
+Not a permissions or network problem — **pip's code was deleted from disk**. In `/usr/local/lib/python3.13/site-packages` the `pip/` package directory was gone, while `pip-24.3.1.dist-info/` and the `/usr/local/bin/pip{,3}` launcher scripts survived. So pip looked installed, but every invocation died importing code that no longer existed:
+
+```
+ModuleNotFoundError: No module named 'pip'
+```
+
+I confirmed the scope by checking the installed `RECORD` manifest: **841 of 850 recorded files were missing** — precisely the 841 entries under `pip/`. The metadata was the only thing left. There was no `EXTERNALLY-MANAGED` marker, no `pip.conf`, and no proxy variables, so nothing else was interfering.
+
+## The trap worth knowing about
+
+My first repair attempt was `python3 -m ensurepip --upgrade` — the standard fix. **It silently did nothing**, reporting "Requirement already satisfied". The orphaned `dist-info` makes `ensurepip` believe pip is installed, so it skips the work. If you'd tried that yourself, it would have looked like it succeeded while changing nothing. I verified this reproduces on a fresh venv, and it's why the repair instructions I wrote steer away from it.
+
+## The fix
+
+I re-extracted pip's own bundled wheel (`ensurepip/_bundled/pip-24.3.1-py3-none-any.whl` — the exact matching version, already on disk, no network needed) into site-packages. That restored all 437 recorded files, with **zero missing**, and the tree byte-compiles cleanly. I backed up the old metadata to `/tmp/pip-dist-info.backup`.
+
+Verified end to end rather than just `--version`: created a venv, installed `six` for real, imported it, uninstalled it, and confirmed a system-wide install works too. All test artifacts were then removed — site-packages contains only `pip` and `pip-24.3.1.dist-info`, as it should.
+
+## Regression check
+
+`check_pip_health.sh` in the repo root catches this specific failure mode. It's not a check I only ran against a passing system — I reproduced the breakage in a throwaway venv and confirmed it exits **1** and pinpoints the cause, versus **0** on the healthy system. It validates that every file in pip's RECORD actually exists, which is the check that would have caught this immediately.
+
+One bug I found and fixed in my own script: it originally checked `pip` via `PATH`, so a broken venv was masked by the healthy system pip and falsely reported `ok`. It now resolves scripts relative to the target interpreter's own `bin` directory.
+
+The repair commands it prints are ones I executed verbatim against a broken venv to confirm they work, not untested suggestions.
+
+Two caveats worth flagging: I never determined *what* deleted the `pip/` directory — if it was a cleanup script, container layer squash, or aggressive disk pruning, it could recur, and `check_pip_health.sh` will tell you fast if it does. Also, `/usr/bin/python3` (3.11.2, a separate Debian interpreter) still has no pip; I left it untouched since it wasn't your system python and modifying OS-managed packages risks breaking `apt`.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=42 surface=a825037b110a

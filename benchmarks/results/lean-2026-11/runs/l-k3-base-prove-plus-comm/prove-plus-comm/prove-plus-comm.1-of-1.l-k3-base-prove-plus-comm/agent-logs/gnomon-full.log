@@ -1,0 +1,298 @@
+  │ I'll start by looking at the repository and the file in question.
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  ⚙ read .
+    ✓ read ./ — 5 entries
+[approval] bash: cat plus_comm.v 2>/dev/null || echo "NOT FOUND" — approved
+  ⚙ bash cat plus_comm.v 2>/dev/null || echo "NOT FOUND"
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+[approval] bash: which coqc coqtop; coqc --version 2>&1 | head -5 — approved
+  ⚙ bash which coqc coqtop; coqc --version 2>&1 | head -5
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: cat .gitignore; ls -la; cat .gitattributes — approved
+  ⚙ bash cat .gitignore; ls -la; cat .gitattributes
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ Coq 8.18 is available. Now let me write the completed proof and test it.
+[approval] write plus_comm.v (+12 −5) — approved
+  ⚙ write plus_comm.v
+    ✓ write plus_comm.v (+12 −5)
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: cd "$(pwd)" && rm -f plus_comm.vo plus_comm.glob plus_comm.vok plus_comm.vos plus_comm.au; coqc plus_comm.v >coqc.log 2>&1; echo "exit=$?"; cat coqc.log; ls -la plus_comm.* — approved
+  ⚙ bash cd "$(pwd)" && rm -f plus_comm.vo plus_comm.glob plus_comm.vok plus_co…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  │ The inductive case works but `simpl` behaved oddly in the base case. Let …
+[approval] bash: cd "$(pwd)" && printf 'Require Import Arith.\nGoal forall m : nat, m = m + 0.\nintros m.\ninduction m as [|m IHm].\nShow.\nsimpl.\nShow.\n' | coqtop -quiet 2>&1 | tail -30 — approved
+  ⚙ bash cd "$(pwd)" && printf 'Require Import Arith.\nGoal forall m : nat, m =…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: cd "$(pwd)" && printf 'Require Import Arith.\nGoal forall n m : nat, n + m = m + n.\nintros n m.\ninduction n as [|n IHn].\nShow.\nsimpl.\nShow.\n' | coqtop -quiet 2>&1 | tail -20 — approved
+  ⚙ bash cd "$(pwd)" && printf 'Require Import Arith.\nGoal forall n m : nat, n…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  │ The base case needs a different route — my inner `rewrite` picked the wro…
+[approval] write plus_comm.v (+5 −7) — approved
+  ⚙ write plus_comm.v
+    ✓ write plus_comm.v (+5 −7)
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: cd "$(pwd)" && rm -f plus_comm.vo plus_comm.glob plus_comm.vok plus_comm.vos plus_comm.au coqc.log; coqc plus_comm.v >coqc.log 2>&1; echo "coqc exit=$?"; cat coqc.log; ls -la plus_comm.* — approved
+  ⚙ bash cd "$(pwd)" && rm -f plus_comm.vo plus_comm.glob plus_comm.vok plus_co…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+[approval] bash: cd "$(pwd)" && printf 'Require Import Arith.\nGoal forall n m : nat, n + m = m + n.\nintros n m.\ninduction n as [|n IHn].\n- apply plus_n_O.\n- simpl.\nShow.\n' | coqtop -quiet 2>&1 | tail -12 — approved
+  ⚙ bash cd "$(pwd)" && printf 'Require Import Arith.\nGoal forall n m : nat, n…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  │ `plus_n_Sm` in Coq 8.18 is stated as `S (n + m) = n + S m`, so it must be…
+[approval] bash: cd "$(pwd)" && printf 'Require Import Arith.\nCheck plus_n_Sm.\nCheck plus_n_O.\nGoal forall n m : nat, n + m = m + n.\nintros n m.\ninduction n as [|n IHn].\n- simpl. apply plus_n_O.\n- simpl. rewrite <- plus_n_Sm. rewrite IHn. reflexivity.\nQed.\n' | coqtop -quiet 2>&1 | tail -12 — approved
+  ⚙ bash cd "$(pwd)" && printf 'Require Import Arith.\nCheck plus_n_Sm.\nCheck …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  │ The proof closes. Let me write the final file and compile it.
+[approval] write plus_comm.v (+6 −5) — approved
+  ⚙ write plus_comm.v
+    ✓ write plus_comm.v (+6 −5)
+  deepseek-v4.1-flash — 13 tool call(s) so far
+[approval] bash: cd "$(pwd)" && rm -f plus_comm.vo plus_comm.glob plus_comm.vok plus_comm.vos plus_comm.au coqc.log; coqc plus_comm.v >coqc.log 2>&1; echo "coqc exit=$?"; echo '--- log ---'; cat coqc.log; echo '--- artifacts ---'; ls -la plus_comm.* — approved
+  ⚙ bash cd "$(pwd)" && rm -f plus_comm.vo plus_comm.glob plus_comm.vok plus_co…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+  │ Compiled cleanly with exit 0. Now let me verify the artifact independentl…
+[approval] bash: cd "$(pwd)" && echo '=== 1. no admits/axioms in source ==='; grep -nE 'admit|Admitted|Axiom|Parameter|Hypothesis' plus_comm.v && echo "FAIL: found admit/axiom" || echo "OK: none found"
+echo
+echo '=== 2. coqc compiles clean ==='; coqc plus_comm.v >/dev/null 2>&1; echo "coqc exit=$?"
+echo
+echo '=== 3. plus_comm.vo exists and is non-empty ==='; test -s plus_comm.vo && echo "OK: $(wc -c < plus_comm.vo) bytes" || echo "FAIL: missing/empty" — approved
+  ⚙ bash cd "$(pwd)" && echo '=== 1. no admits/axioms in source ==='; grep -nE …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 15 tool call(s) so far
+[approval] bash: cd "$(pwd)" && cat > /tmp/verify.v <<'EOF'
+Require Import plus_comm.
+
+(* The compiled artifact must expose the theorem at the stated type. *)
+Check plus_comm.
+Print plus_comm.
+Print Assumptions plus_comm.
+EOF
+coqtop -quiet -Q . "" -l /tmp/verify.v 2>&1 | tail -20 — approved
+  ⚙ bash cd "$(pwd)" && cat > /tmp/verify.v <<'EOF' Require Import plus_comm. (…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+  │ `Closed under the global context` — no axioms or admits. Final check: use…
+[approval] bash: cd "$(pwd)" && cat > /tmp/use.v <<'EOF'
+Require Import plus_comm.
+Require Import Arith.
+
+(* Usable as a rewrite rule downstream: this fails if the statement is weakened. *)
+Goal forall a b c : nat, a + b + c = c + b + a.
+Proof.
+  intros a b c.
+  rewrite plus_comm.
+  rewrite plus_comm with (n := c).
+  rewrite plus_comm with (n := a).
+  reflexivity.
+Qed.
+
+(* Concrete instances evaluate as expected. *)
+Goal 3 + 5 = 5 + 3. Proof. apply plus_comm. Qed.
+Goal 0 + 7 = 7 + 0. Proof. apply plus_comm. Qed.
+Goal 7 + 0 = 0 + 7. Proof. apply plus_comm. Qed.
+EOF
+coqtop -quiet -Q . "" -l /tmp/use.v 2>&1 | tail -8 — approved
+  ⚙ bash cd "$(pwd)" && cat > /tmp/use.v <<'EOF' Require Import plus_comm. Requ…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 17 tool call(s) so far
+  │ That failure was my test script's associativity juggling, not the theorem…
+[approval] bash: cd "$(pwd)" && cat > /tmp/use.v <<'EOF'
+Require Import plus_comm.
+
+(* Usable as a rewrite rule downstream: fails if the statement is weakened. *)
+Goal forall a b : nat, a + b = b + a. Proof. apply plus_comm. Qed.
+
+Goal forall a b : nat, a + b + 0 = b + a. Proof. intros. rewrite plus_comm. reflexivity. Qed.
+
+(* Concrete instances. *)
+Goal 3 + 5 = 5 + 3. Proof. apply plus_comm. Qed.
+Goal 0 + 7 = 7 + 0. Proof. apply plus_comm. Qed.
+Goal 7 + 0 = 0 + 7. Proof. apply plus_comm. Qed.
+Goal 100 + 23 = 23 + 100. Proof. apply plus_comm. Qed.
+EOF
+coqtop -quiet -Q . "" -l /tmp/use.v 2>&1 | grep -vE '^Welcome|deprecated' | tail -8 — approved
+  ⚙ bash cd "$(pwd)" && cat > /tmp/use.v <<'EOF' Require Import plus_comm. (* U…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 18 tool call(s) so far
+  │ My test goals were sloppy again. Clean version:
+[approval] bash: cd "$(pwd)" && cat > /tmp/use.v <<'EOF'
+Require Import plus_comm.
+
+Goal forall a b : nat, a + b = b + a. Proof. apply plus_comm. Qed.
+Goal forall a b c : nat, a + (b + c) = a + (c + b). Proof. intros. rewrite plus_comm. reflexivity. Qed.
+Goal forall a b : nat, a + b + 0 = b + a. Proof. intros. rewrite plus_comm. rewrite plus_n_O. reflexivity. Qed.
+
+Goal 3 + 5 = 5 + 3. Proof. apply plus_comm. Qed.
+Goal 0 + 7 = 7 + 0. Proof. apply plus_comm. Qed.
+Goal 7 + 0 = 0 + 7. Proof. apply plus_comm. Qed.
+Goal 100 + 23 = 23 + 100. Proof. apply plus_comm. Qed.
+EOF
+coqtop -quiet -Q . "" -l /tmp/use.v 2>&1 | grep -vE '^Welcome|deprecated' | tail -8; echo "=== final file ==="; cat plus_comm.v; echo "=== artifacts ==="; ls -la plus_comm.vo — approved
+  ⚙ bash cd "$(pwd)" && cat > /tmp/use.v <<'EOF' Require Import plus_comm. Goal…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 19 tool call(s) so far
+  │ My ad-hoc test goals kept rewriting the wrong occurrence. Writing them co…
+[approval] bash: cd "$(pwd)" && cat > /tmp/use.v <<'EOF'
+Require Import plus_comm.
+
+(* 1. Exposed at the exact stated type. *)
+Goal forall a b : nat, a + b = b + a. Proof. apply plus_comm. Qed.
+
+(* 2. Usable with explicit argument instantiation. *)
+Goal forall a b c : nat, a + (b + c) = a + (c + b).
+Proof. intros. rewrite (plus_comm b c). reflexivity. Qed.
+
+(* 3. Usable as a general rewrite. *)
+Goal forall a b : nat, a + b + 0 = b + a.
+Proof. intros. rewrite plus_comm. rewrite plus_n_O. reflexivity. Qed.
+
+(* 4. Concrete instances, including edge cases. *)
+Goal 3 + 5 = 5 + 3. Proof. apply plus_comm. Qed.
+Goal 0 + 7 = 7 + 0. Proof. apply plus_comm. Qed.
+Goal 7 + 0 = 0 + 7. Proof. apply plus_comm. Qed.
+Goal 100 + 23 = 23 + 100. Proof. apply plus_comm. Qed.
+EOF
+coqtop -quiet -Q . "" -l /tmp/use.v 2>&1 | grep -vE '^Welcome|deprecated' | tail -8; echo "downstream-exit=$?" — approved
+  ⚙ bash cd "$(pwd)" && cat > /tmp/use.v <<'EOF' Require Import plus_comm. (* 1…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 20 tool call(s) so far
+[approval] bash: cd "$(pwd)" && cat > /tmp/use.v <<'EOF'
+Require Import plus_comm.
+
+(* 1. Exposed at the exact stated type. *)
+Goal forall a b : nat, a + b = b + a. Proof. apply plus_comm. Qed.
+
+(* 2. Usable with explicit argument instantiation. *)
+Goal forall a b c : nat, a + (b + c) = a + (c + b).
+Proof. intros. rewrite (plus_comm b c). reflexivity. Qed.
+
+(* 3. Usable as a rewrite step inside a larger proof. *)
+Goal forall a b : nat, a + b + 0 = b + a.
+Proof. intros. rewrite (plus_comm a b). rewrite plus_n_O. reflexivity. Qed.
+
+(* 4. Concrete instances, including edge cases. *)
+Goal 3 + 5 = 5 + 3. Proof. apply plus_comm. Qed.
+Goal 0 + 7 = 7 + 0. Proof. apply plus_comm. Qed.
+Goal 7 + 0 = 0 + 7. Proof. apply plus_comm. Qed.
+Goal 100 + 23 = 23 + 100. Proof. apply plus_comm. Qed.
+EOF
+coqtop -quiet -Q . "" -l /tmp/use.v >/tmp/use.log 2>&1; echo "downstream coqtop exit=$?"; grep -vE '^Welcome|deprecated' /tmp/use.log | tail -8; echo '--- error count ---'; grep -c '^Error' /tmp/use.log — approved
+  ⚙ bash cd "$(pwd)" && cat > /tmp/use.v <<'EOF' Require Import plus_comm. (* 1…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 21 tool call(s) so far
+  │ All downstream checks pass with 0 errors (the `exit: 1` is just `grep -c`…
+[approval] bash: cd "$(pwd)" && rm -f plus_comm.glob plus_comm.vok plus_comm.vos coqc.log /tmp/verify.v /tmp/use.v /tmp/use.log
+echo '=== repo state ==='; ls -la
+echo; echo '=== git status ==='; git status --porcelain 2>&1 | head — approved
+  ⚙ bash cd "$(pwd)" && rm -f plus_comm.glob plus_comm.vok plus_comm.vos coqc.l…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 22 tool call(s) so far
+[approval] bash: cd "$(pwd)" && rm -f .plus_comm.aux; ls -la
+echo '=== final compile from clean ==='; rm -f plus_comm.vo; coqc plus_comm.v >/tmp/c.log 2>&1; echo "coqc exit=$?"; cat /tmp/c.log
+test -s plus_comm.vo && echo "OK plus_comm.vo present ($(wc -c < plus_comm.vo) bytes)" || echo "FAIL no .vo"
+rm -f .plus_comm.aux /tmp/c.log — approved
+  ⚙ bash cd "$(pwd)" && rm -f .plus_comm.aux; ls -la echo '=== final compile fr…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 23 tool call(s) so far
+[approval] bash: cd "$(pwd)" && ls -la; echo '=== plus_comm.v ==='; cat -n plus_comm.v — approved
+  ⚙ bash cd "$(pwd)" && ls -la; echo '=== plus_comm.v ==='; cat -n plus_comm.v
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 24 tool call(s) so far
+[approval] bash: cd "$(pwd)" && rm -f plus_comm.glob plus_comm.vok plus_comm.vos .plus_comm.aux
+echo '=== FINAL STATE ==='; ls -la
+echo
+echo '=== ACCEPTANCE CHECKS ==='
+echo -n "1. no admit/Admitted/Axiom in source: "; grep -qE 'admit|Admitted|Axiom|Parameter' plus_comm.v && echo FAIL || echo PASS
+echo -n "2. coqc compiles with exit 0:        "; coqc plus_comm.v >/dev/null 2>&1 && echo PASS || echo FAIL
+echo -n "3. plus_comm.vo exists, non-empty:   "; test -s plus_comm.vo && echo "PASS ($(wc -c < plus_comm.vo) bytes)" || echo FAIL
+echo -n "4. theorem type in .vo is unweakened: "
+coqtop -quiet -Q . "" -l /dev/stdin >/tmp/a.log 2>&1 <<'EOF'
+Require Import plus_comm.
+Check plus_comm.
+Print Assumptions plus_comm.
+EOF
+grep -q 'forall n m : nat, n + m = m + n' /tmp/a.log && echo -n "PASS (type matches) " || echo -n "FAIL "
+grep -q 'Closed under the global context' /tmp/a.log && echo "PASS (no axioms)" || echo "FAIL (axioms present)"
+rm -f plus_comm.glob plus_comm.vok plus_comm.vos .plus_comm.aux /tmp/a.log
+echo; echo '=== artifacts left behind ==='; ls -la plus_comm.* — approved
+  ⚙ bash cd "$(pwd)" && rm -f plus_comm.glob plus_comm.vok plus_comm.vos .plus_…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 25 tool call(s) so far
+  │ Check 4's `-l /dev/stdin` didn't feed the script properly. Let me redo th…
+[approval] bash: cd "$(pwd)" && cat > /tmp/a.v <<'EOF'
+Require Import plus_comm.
+Check plus_comm.
+Print Assumptions plus_comm.
+EOF
+coqtop -quiet -Q . "" -l /tmp/a.v >/tmp/a.log 2>&1
+echo "=== log ==="; grep -vE '^Welcome|deprecated' /tmp/a.log
+echo "=== checks ==="
+grep -q 'forall n m : nat, n + m = m + n' /tmp/a.log && echo "PASS: exposed type is unweakened" || echo "FAIL: type mismatch"
+grep -q 'Closed under the global context' /tmp/a.log && echo "PASS: no axioms/admits" || echo "FAIL: axioms present"
+rm -f /tmp/a.v /tmp/a.log .plus_comm.aux plus_comm.glob plus_comm.vok plus_comm.vos — approved
+  ⚙ bash cd "$(pwd)" && cat > /tmp/a.v <<'EOF' Require Import plus_comm. Check …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 26 tool call(s) so far
+[approval] bash: cd "$(pwd)" && ls -la; echo '--- final compile sanity ---'; rm -f plus_comm.vo; coqc plus_comm.v; echo "coqc exit=$?"; ls -la plus_comm.vo; rm -f plus_comm.glob plus_comm.vok plus_comm.vos .plus_comm.aux; echo '--- final ---'; ls -la — approved
+  ⚙ bash cd "$(pwd)" && ls -la; echo '--- final compile sanity ---'; rm -f plus…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 27 tool call(s) so far
+Done. The proof is complete and compiled.
+
+## What was wrong
+
+The file had two `admit`s. Completing them was not just "fill in the blanks" — each needed the right lemma, and one needed the right *direction*:
+
+- **Base case:** after `induction n` and `simpl`, the goal is `m = m + 0`. My first attempt (`induction m` + `rewrite IHm'`) failed because `simpl` had already reduced the goal to `S (m' + 0 + 0)` vs `S (m' + 0)`. The goal is literally `plus_n_O`, so `apply plus_n_O` closes it directly.
+- **Inductive case:** after `simpl` the goal is `S (n' + m) = m + S n'`. My first attempt used `rewrite plus_n_Sm` and failed with *"Found no subterm matching `n' + m`"* — because in Coq 8.18 `plus_n_Sm` is stated as `S (n + m) = n + S m`, i.e. the successor is already on the left. It has to be used **right-to-left** (`rewrite <- plus_n_Sm`) to push the successor on `m` outwards and expose the inductive hypothesis.
+
+## Final proof
+
+```coq
+Require Import Arith.
+
+Theorem plus_comm : forall n m : nat,
+  n + m = m + n.
+Proof.
+  intros n m.
+  induction n as [|n' IHn'].
+  - simpl.
+    (* Base case.  The goal is [m = m + 0], i.e. exactly [plus_n_O]. *)
+    apply plus_n_O.
+  - simpl.
+    (* Inductive case.  The goal is [S (n' + m) = m + S n'].
+       [plus_n_Sm] is stated as [S (n + m) = n + S m], so it is used
+       right-to-left to move the successor on [m] outwards.  The goal
+       then matches the inductive hypothesis, which closes it. *)
+    rewrite <- plus_n_Sm.
+    rewrite IHn'.
+    reflexivity.
+Qed.
+```
+
+## Verification
+
+I compiled with `coqc` and checked the artifact rather than trusting that it exists:
+
+| Check | Result |
+|---|---|
+| `coqc plus_comm.v` from clean | **exit 0**, no warnings/errors |
+| `plus_comm.vo` produced | **14476 bytes** |
+| `grep` for `admit`/`Admitted`/`Axiom`/`Parameter` | **none** |
+| `Check plus_comm` via `Require Import plus_comm` | `forall n m : nat, n + m = m + n` (unweakened) |
+| `Print Assumptions plus_comm` | **Closed under the global context** (no axioms) |
+
+I also confirmed the compiled lemma is genuinely usable downstream, not just type-correct in isolation — `apply plus_comm` on concrete goals (`3 + 5 = 5 + 3`, `0 + 7 = 7 + 0`, `7 + 0 = 0 + 7`, `100 + 23 = 23 + 100`) and `rewrite (plus_comm b c)` inside a larger proof all close with zero errors.
+
+Two notes on process: my first few downstream test scripts had *my own* bugs (sloppy goal statements and occurrence-selection in `rewrite`), which produced errors I initially mistook for problems with the theorem — the theorem was fine each time. And a `coqtop -l /dev/stdin` invocation silently fed nothing, giving a spurious "axioms present" result on an acceptance check; re-running with a real temp file gave the correct PASS. Build byproducts (`plus_comm.glob`, `.vok`, `.vos`, `.plus_comm.aux`) were cleaned up, leaving only `plus_comm.v` and the required `plus_comm.vo`.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=27 surface=40505f6925fb

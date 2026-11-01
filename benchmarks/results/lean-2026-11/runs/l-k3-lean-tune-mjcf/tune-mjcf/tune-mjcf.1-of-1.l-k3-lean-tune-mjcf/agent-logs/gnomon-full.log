@@ -1,0 +1,776 @@
+  │ I'll start by exploring the repository structure and the eval script.
+[approval] bash: ls -la /app — approved
+  ⚙ bash ls -la /app
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: cat /app/eval.py — approved
+  ⚙ bash cat /app/eval.py
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+[approval] bash: cat /app/model_ref.xml; echo ---; cat /app/.gitattributes; echo ---; cat /app/.gitignore — approved
+  ⚙ bash cat /app/model_ref.xml; echo ---; cat /app/.gitattributes; echo ---; c…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: cd /app && python -c "import mujoco; print(mujoco.__version__)" — approved
+  ⚙ bash cd /app && python -c "import mujoco; print(mujoco.__version__)"
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+[approval] bash: cd /app && python -c "
+import mujoco
+m = mujoco.MjModel.from_xml_path('model_ref.xml')
+print('nbody',m.nbody,'njnt',m.njnt,'nq',m.nq,'nv',m.nv,'neq',m.neq,'nu',m.nu,'ngeom',m.ngeom,'nM',m.nM)
+print('timestep',m.opt.timestep,'integrator',m.opt.integrator,'solver',m.opt.solver,'iterations',m.opt.iterations,'tolerance',m.opt.tolerance)
+print('jacobian',m.opt.jacobian,'cone',m.opt.cone,'memory',m.narena)
+for i in range(m.njnt):
+    print(i, m.joint(i).name, m.jnt_type[i], m.jnt_dofadr[i], m.jnt_damping[i], m.jnt_limited[i])
+print('dof damping', m.dof_damping[:5])
+print('body mass', m.body_mass[:5], m.body_mass.sum())
+"
+ — approved
+  ⚙ bash cd /app && python -c " import mujoco m = mujoco.MjModel.from_xml_path(…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: cd /app && python -c "
+import mujoco, numpy as np
+print([x for x in dir(mujoco.mjtState) if not x.startswith('_')])
+" — approved
+  ⚙ bash cd /app && python -c " import mujoco, numpy as np print([x for x in di…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+[approval] bash: cd /app && python -c "
+import mujoco, numpy as np, time
+m = mujoco.MjModel.from_xml_path('model_ref.xml')
+for i in range(m.njnt):
+    print(i, repr(m.joint(i).name), 'type', m.jnt_type[i], 'qposadr', m.jnt_qposadr[i], 'dofadr', m.jnt_dofadr[i], 'damp', m.dof_damping[m.jnt_dofadr[i]] if m.jnt_dofadr[i]>=0 else None)
+print('body mass sum', m.body_mass.sum())
+print('dof damping uniq', np.unique(m.dof_damping))
+"
+ — approved
+  ⚙ bash cd /app && python -c " import mujoco, numpy as np, time m = mujoco.MjM…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco, numpy as np, time
+m = mujoco.MjModel.from_xml_path('model_ref.xml')
+d = mujoco.MjData(m)
+mujoco.mj_forward(m,d)
+nstep = int(2.0/m.opt.timestep)
+t=time.perf_counter()
+for _ in range(nstep): mujoco.mj_step(m,d)
+print('sim time', time.perf_counter()-t, 'nstep', nstep)
+# breakdown
+import mujoco as mj
+d2 = mujoco.MjData(m)
+t0=time.perf_counter()
+for _ in range(1000):
+    mj.mj_step1(m,d2); mj.mj_step2(m,d2)
+print('step1/2 1000', time.perf_counter()-t0)
+d3=mujoco.MjData(m); mj.mj_forward(m,d3)
+t0=time.perf_counter()
+for _ in range(1000): mj.mj_fwdPosition(m,d3)
+print('fwdPosition 1000', time.perf_counter()-t0)
+d4=mujoco.MjData(m); mj.mj_forward(m,d4)
+t0=time.perf_counter()
+for _ in range(1000): mj.mj_fwdVelocity(m,d4)
+print('fwdVelocity 1000', time.perf_counter()-t0)
+d5=mujoco.MjData(m); mj.mj_forward(m,d5)
+t0=time.perf_counter()
+for _ in range(1000): mj.mj_fwdAcceleration(m,d5)
+print('fwdAcceleration 1000', time.perf_counter()-t0)
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco, numpy as np, time m = mujoc…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco as mj, numpy as np, time
+m = mj.MjModel.from_xml_path('model_ref.xml')
+d = mj.MjData(m)
+mj.mj_forward(m,d)
+print('ncon', d.ncon, 'nefc', d.nefc, 'nactive', d.nefc)
+def bench(fn, n=1000):
+    t=time.perf_counter()
+    for _ in range(n): fn()
+    return (time.perf_counter()-t)/n*1e6
+fns = {
+ 'kinematics': lambda: mj.mj_kinematics(m,d),
+ 'comPos': lambda: mj.mj_comPos(m,d),
+ 'camlight': lambda: mj.mj_camlight(m,d),
+ 'flexcomp': lambda: mj.mj_flex(m,d),
+ 'makeConstraint': lambda: mj.mj_makeConstraint(m,d),
+ 'transmission': lambda: mj.mj_transmission(m,d),
+ 'crb': lambda: mj.mj_crb(m,d),
+ 'factorM': lambda: mj.mj_factorM(m,d),
+ 'comVel': lambda: mj.mj_comVel(m,d),
+ 'passive': lambda: mj.mj_passive(m,d),
+ 'constraint': lambda: mj.mj_constraintUpdate(m,d,d.qfrc_constraint,0),
+ 'fwdAcceleration': lambda: mj.mj_fwdAcceleration(m,d),
+ 'sensor': lambda: mj.mj_sensor(m,d),
+ 'energy': lambda: mj.mj_energyPos(m,d),
+ 'step2': lambda: mj.mj_step2(m,d),
+ 'step1': lambda: mj.mj_step1(m,d),
+ 'step': lambda: mj.mj_step(m,d),
+}
+for k,v in fns.items():
+    try: print(f'{k:20s} {bench(v):8.1f} us')
+    except Exception as e: print(k, 'ERR', e)
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco as mj, numpy as np, time m =…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco as mj, numpy as np, time
+m = mj.MjModel.from_xml_path('model_ref.xml')
+d = mj.MjData(m)
+mj.mj_forward(m,d)
+niter=[]
+t=time.perf_counter()
+for i in range(200):
+    mj.mj_step(m,d)
+    niter.append(d.solver_niter[0])
+print('avg step us', (time.perf_counter()-t)/200*1e6)
+print('solver_niter set', np.unique(niter), 'mean', np.mean(niter))
+print('nefc', d.nefc)
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco as mj, numpy as np, time m =…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco as mj, numpy as np, time
+m = mj.MjModel.from_xml_path('model_ref.xml')
+d = mj.MjData(m)
+mj.mj_forward(m,d)
+# careful timing: run step1 once per iteration and time components inside
+def timeit(f, reps=200):
+    t=time.perf_counter()
+    for _ in range(reps):
+        f()
+    return (time.perf_counter()-t)/reps*1e6
+# prepare a mid-step state
+mj.mj_step1(m,d)
+print('kinematics', timeit(lambda: mj.mj_kinematics(m,d)))
+print('comPos', timeit(lambda: mj.mj_comPos(m,d)))
+print('camlight', timeit(lambda: mj.mj_camlight(m,d)))
+print('makeConstraint', timeit(lambda: mj.mj_makeConstraint(m,d)))
+print('transmission', timeit(lambda: mj.mj_transmission(m,d)))
+print('crb', timeit(lambda: mj.mj_crb(m,d)))
+print('factorM', timeit(lambda: mj.mj_factorM(m,d)))
+print('comVel', timeit(lambda: mj.mj_comVel(m,d)))
+print('passive', timeit(lambda: mj.mj_passive(m,d)))
+cost=np.zeros(1)
+print('constraintUpdate', timeit(lambda: mj.mj_constraintUpdate(m,d,d.qfrc_constraint,cost,0)))
+print('fwdAccel', timeit(lambda: mj.mj_fwdAcceleration(m,d)))
+print('sensor', timeit(lambda: mj.mj_sensorPos(m,d)))
+print('energy', timeit(lambda: mj.mj_energyPos(m,d)))
+print('step1', timeit(lambda: mj.mj_step1(m,d)))
+print('step2', timeit(lambda: mj.mj_step2(m,d)))
+print('ncon',d.ncon,'nefc',d.nefc,'niter',d.solver_niter)
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco as mj, numpy as np, time m =…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 11 tool call(s) so far
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco as mj, numpy as np, time
+m = mj.MjModel.from_xml_path('model_ref.xml')
+d = mj.MjData(m)
+mj.mj_forward(m,d)
+def timeit(f, reps=500):
+    t=time.perf_counter()
+    for _ in range(reps): f()
+    return (time.perf_counter()-t)/reps*1e6
+print('nefc',d.nefc)
+jar = np.zeros(d.nefc)
+print('solveM(flg_acc=0)', timeit(lambda: mj.mj_solveM(m,d,jar)))
+print('projectConstraint', timeit(lambda: mj.mj_projectConstraint(m,d)))
+print('fwdAcceleration', timeit(lambda: mj.mj_fwdAcceleration(m,d)))
+print('fwdActuation', timeit(lambda: mj.mj_fwdActuation(m,d)))
+print('fwdVelocity', timeit(lambda: mj.mj_fwdVelocity(m,d)))
+print('fwdPosition', timeit(lambda: mj.mj_fwdPosition(m,d)))
+print('sensorVel', timeit(lambda: mj.mj_sensorVel(m,d)))
+print('energyVel', timeit(lambda: mj.mj_energyVel(m,d)))
+print('step1', timeit(lambda: mj.mj_step1(m,d)))
+print('step2', timeit(lambda: mj.mj_step2(m,d)))
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco as mj, numpy as np, time m =…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  │ Micro-profiling isn't converging; let me get the real in-engine timer bre…
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco as mj, numpy as np
+m = mj.MjModel.from_xml_path('model_ref.xml')
+d = mj.MjData(m)
+print('has timer:', hasattr(d,'timer'))
+if hasattr(d,'timer'):
+    print([a for a in dir(d.timer) if not a.startswith('_')][:40])
+mj.mj_forward(m,d)
+nc=[]
+for _ in range(1000):
+    mj.mj_step(m,d); nc.append(d.ncon)
+print('max ncon over 2s:', max(nc), 'nefc', d.nefc)
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco as mj, numpy as np m = mj.Mj…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 13 tool call(s) so far
+[approval] bash: cd /app && python -c "
+import mujoco, inspect
+print(mujoco.mjtTimer.__doc__ if hasattr(mujoco,'mjtTimer') else 'no mjtTimer')
+" ; python -c "import mujoco; print([x for x in dir(mujoco) if 'Timer' in x or 'timer' in x])" — approved
+  ⚙ bash cd /app && python -c " import mujoco, inspect print(mujoco.mjtTimer.__…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco as mj, numpy as np
+m = mj.MjModel.from_xml_path('model_ref.xml')
+d = mj.MjData(m)
+mj.mj_forward(m,d)
+mj.mj_resetDataTimer(m,d)
+for _ in range(1000): mj.mj_step(m,d)
+dur = d.timer.duration
+num = d.timer.number
+names={v:k for k,v in vars(mj.mjtTimer).items() if isinstance(v,int)}
+tot=dur[mj.mjtTimer.mjTIMER_STEP]
+for i in range(mj.mjtTimer.mjNTIMER):
+    if dur[i]>0:
+        print(f'{names.get(i,i):28s} {dur[i]/1000*1e6:9.1f} us/step  calls {num[i]}')
+print('total step', tot/1000*1e6)
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco as mj, numpy as np m = mj.Mj…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 15 tool call(s) so far
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco as mj, numpy as np
+m = mj.MjModel.from_xml_path('model_ref.xml')
+for mode in [0,2]:
+    m.opt.enableflags = 0
+    m.opt.timersize = mj.mjMAXTIMERSIZE if hasattr(mj,'mjMAXTIMERSIZE') else 0
+    d = mj.MjData(m)
+    mj.mj_forward(m,d)
+    d.timer.duration[:] = 0
+    st = d.timer.duration
+    t=0
+    for _ in range(1000): mj.mj_step(m,d)
+    dur=d.timer.duration; num=d.timer.number
+    names={v:k for k,v in vars(mj.mjtTimer).items() if isinstance(v,int)}
+    for i in range(mj.mjtTimer.mjNTIMER):
+        if dur[i]>0:
+            print(f'{names.get(i,i):28s} {dur[i]/num[mj.mjtTimer.mjTIMER_STEP]*1e6:9.1f} us/step  calls {num[i]}')
+    print('total step', dur[mj.mjtTimer.mjTIMER_STEP]/num[mj.mjtTimer.mjTIMER_STEP]*1e6)
+    break
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco as mj, numpy as np m = mj.Mj…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 16 tool call(s) so far
+  │ Profiling suggests per-step cost is dense-matrix work. Since the system i…
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco as mj, numpy as np, time
+from pathlib import Path
+ref = mj.MjModel.from_xml_path('model_ref.xml')
+d = mj.MjData(ref)
+print('state size fullphysics', mj.mj_stateSize(ref, mj.mjtState.mjSTATE_FULLPHYSICS), 'nq',ref.nq,'nv',ref.nv,'na',ref.na,'nplugin', mj.mj_stateSize(ref, mj.mjtState.mjSTATE_PLUGIN))
+
+def run(m, seed):
+    d = mj.MjData(m)
+    nstep = int(2.0/m.opt.timestep)
+    rng = np.random.default_rng(seed)
+    d.qpos += rng.normal(0, 0.01, size=d.qpos.shape)
+    mj.mj_forward(m,d)
+    for _ in range(nstep): mj.mj_step(m,d)
+    s = np.zeros(mj.mj_stateSize(m, mj.mjtState.mjSTATE_FULLPHYSICS))
+    mj.mj_getState(m,d,s,mj.mjtState.mjSTATE_FULLPHYSICS)
+    return s,d
+
+for seed in [0,1]:
+    s_ref,dref = run(ref,seed)
+    print('seed',seed,'final |qvel| max', np.abs(dref.qvel).max(), 'time field', s_ref[0])
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco as mj, numpy as np, time fro…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 17 tool call(s) so far
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco as mj, numpy as np
+ref = mj.MjModel.from_xml_path('model_ref.xml')
+FS = mj.mjtState.mjSTATE_FULLPHYSICS
+def run(m, seed, T=2.0):
+    d = mj.MjData(m)
+    rng = np.random.default_rng(seed)
+    d.qpos += rng.normal(0,0.01,size=d.qpos.shape)
+    mj.mj_forward(m,d)
+    for _ in range(int(T/m.opt.timestep)): mj.mj_step(m,d)
+    s = np.zeros(mj.mj_stateSize(m,FS)); mj.mj_getState(m,d,s,FS); return s,d
+s0,d0 = run(ref,0)
+print('qpos norm',np.linalg.norm(s0[:ref.nq]),'qvel norm',np.linalg.norm(d0.qvel))
+for ts in [0.001, 0.0025, 0.0005]:
+    m2 = mj.MjModel.from_xml_path('model_ref.xml'); m2.opt.timestep=ts
+    s2,d2 = run(m2,0)
+    print(ts,'max abs diff', np.abs(s0-s2).max(), 'norm', np.linalg.norm(s0-s2), 'allclose', np.allclose(s0,s2,atol=1e-5), '|qvel|',np.linalg.norm(d2.qvel))
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco as mj, numpy as np ref = mj.…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 18 tool call(s) so far
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco as mj, numpy as np, time
+m = mj.MjModel.from_xml_path('model_ref.xml')
+print([a for a in dir(m.opt) if not a.startswith('_')])
+d = mj.MjData(m); mj.mj_forward(m,d)
+def timeit(f, reps=400):
+    t=time.perf_counter()
+    for _ in range(reps): f()
+    return (time.perf_counter()-t)/reps*1e6
+cost=np.zeros(1)
+tests = {}
+for name in ['mj_step1','mj_step2','mj_fwdVelocity','mj_fwdActuation','mj_fwdAcceleration','mj_fwdConstraint','mj_advance','mj_Euler','mj_passive','mj_crb','mj_factorM','mj_comVel','mj_solveM','mj_projectConstraint','mj_makeConstraint','mj_kinematics','mj_comPos','mj_sensorAcc']:
+    if hasattr(mj,name):
+        f=getattr(mj,name)
+        try:
+            t=timeit(lambda: f(m,d))
+            print(f'{name:22s} {t:8.1f} us')
+        except Exception as e:
+            print(f'{name:22s} ERR {type(e).__name__}: {str(e)[:80]}')
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco as mj, numpy as np, time m =…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 19 tool call(s) so far
+  │ Per-step constraint machinery looks suspiciously expensive for `nefc=3`. …
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco as mj, numpy as np, time
+m = mj.MjModel.from_xml_path('model_ref.xml')
+print('njmax',m.njmax if hasattr(m,'njmax') else '?', 'nconmax', getattr(m,'nconmax','?'), 'narena', m.narena, 'nstack', m.nstack)
+d=mj.MjData(m)
+print('nefc arr shape', d.efc_J.shape, 'dims', getattr(m,'nJmom','?'))
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco as mj, numpy as np, time m =…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 20 tool call(s) so far
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco as mj, numpy as np, time
+m = mj.MjModel.from_xml_path('model_ref.xml')
+for a in ['njmax','nconmax','narena','nA','nbody','nv','nJmom','nD','nC']:
+    print(a, getattr(m,a,'-'))
+d=mj.MjData(m)
+for a in ['efc_J','efc_AR','qM','efc_force']:
+    v=getattr(d,a); print(a, v.shape, v.dtype)
+print('nA actual', d.qM.shape)
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco as mj, numpy as np, time m =…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 21 tool call(s) so far
+  │ Timers need enabling; let me inspect the constraint array sizes and check…
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco as mj, numpy as np
+m = mj.MjModel.from_xml_path('model_ref.xml')
+d = mj.MjData(m); mj.mj_forward(m,d)
+print('nefc', d.nefc, 'ncon', d.ncon)
+for a in ['efc_J','efc_AR','efc_force','efc_diagApprox','efc_R']:
+    print(a, getattr(d,a).shape)
+print('njmax implied', d.efc_J.size//m.nv if m.nv else 0)
+print('nD', m.nD, 'nC', m.nC, 'nM?', d.qM.shape)
+print('solver', m.opt.solver, 'iterations', m.opt.iterations, 'ls_iterations', m.opt.ls_iterations, 'tolerance', m.opt.tolerance)
+print('ccd', m.opt.ccd_iterations, m.opt.ccd_tolerance)
+print('integrator', m.opt.integrator)
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco as mj, numpy as np m = mj.Mj…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 22 tool call(s) so far
+[approval] bash: which py-spy perf gcc 2>&1; python -c "import line_profiler" 2>&1 | tail -1 — approved
+  ⚙ bash which py-spy perf gcc 2>&1; python -c "import line_profiler" 2>&1 | ta…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 23 tool call(s) so far
+[approval] bash: cd /app && python -c "
+import mujoco as mj
+print([x for x in dir(mj) if 'imer' in x])
+print([x for x in dir(mj.mjtEnableBit) if not x.startswith('_')])
+" — approved
+  ⚙ bash cd /app && python -c " import mujoco as mj print([x for x in dir(mj) i…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 24 tool call(s) so far
+  [tools] 24 call(s) without changing a file — nudging to decide
+  deepseek-v4.1-flash — 24 tool call(s) so far
+  │ Enough profiling — the cost is dense matrix work (`factorM`/`fwdConstrain…
+[approval] bash: cd /app && cat > /tmp/screen.py <<'EOF'
+import mujoco as mj, numpy as np, time, copy
+FS = mj.mjtState.mjSTATE_FULLPHYSICS
+
+def run(m, seed, T=2.0):
+    d = mj.MjData(m)
+    rng = np.random.default_rng(seed)
+    d.qpos += rng.normal(0,0.01,size=d.qpos.shape)
+    mj.mj_forward(m,d)
+    for _ in range(int(T/m.opt.timestep)): mj.mj_step(m,d)
+    s = np.zeros(mj.mj_stateSize(m,FS)); mj.mj_getState(m,d,s,FS); return s
+
+def timeit(m, seed, T=2.0, reps=3):
+    ts=[]
+    for _ in range(reps):
+        t=time.perf_counter(); run(m,seed,T); ts.append(time.perf_counter()-t)
+    return min(ts)
+
+ref = mj.MjModel.from_xml_path('model_ref.xml')
+seed = 1234
+sref = run(ref, seed)
+tref = timeit(ref, seed)
+print(f'REF time {tref*1e3:.1f} ms')
+
+cases = {
+ 'baseline': {},
+ 'jac_sparse': {'jacobian':1},
+ 'solver_pgs': {'solver':0},
+ 'solver_cg': {'solver':1},
+ 'sparse+pgs': {'jacobian':1,'solver':0},
+ 'sparse+cg': {'jacobian':1,'solver':1},
+ 'iters20': {'iterations':20},
+ 'ls_iter10': {'ls_iterations':10},
+ 'tol1e-6': {'tolerance':1e-6},
+ 'disable_island': {},
+}
+for name, opts in cases.items():
+    m = mj.MjModel.from_xml_path('model_ref.xml')
+    for k,v in opts.items(): setattr(m.opt,k,v)
+    try:
+        s = run(m, seed)
+        t = timeit(m, seed)
+        d = np.abs(s-sref).max()
+        ok = np.allclose(s,sref,atol=1e-5)
+        print(f'{name:16s} {t*1e3:7.1f} ms  ratio {t/tref:5.2f}  maxdiff {d:.2e}  pass={ok}')
+    except Exception as e:
+        print(f'{name:16s} ERR {type(e).__name__}: {str(e)[:70]}')
+EOF
+python /tmp/screen.py — approved
+  ⚙ bash cd /app && cat > /tmp/screen.py <<'EOF' import mujoco as mj, numpy as …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 25 tool call(s) so far
+  │ `solver="PGS"` alone cuts time to 50% with a 3.7e-8 state difference. Let…
+[approval] bash: cd /app && cat > /tmp/screen2.py <<'EOF'
+import mujoco as mj, numpy as np, time
+FS = mj.mjtState.mjSTATE_FULLPHYSICS
+def run(m, seed, T=2.0):
+    d = mj.MjData(m); rng = np.random.default_rng(seed)
+    d.qpos += rng.normal(0,0.01,size=d.qpos.shape); mj.mj_forward(m,d)
+    for _ in range(int(T/m.opt.timestep)): mj.mj_step(m,d)
+    s = np.zeros(mj.mj_stateSize(m,FS)); mj.mj_getState(m,d,s,FS); return s
+def timeit(m, seed, reps=3):
+    ts=[]
+    for _ in range(reps):
+        t=time.perf_counter(); run(m,seed); ts.append(time.perf_counter()-t)
+    return min(ts)
+ref = mj.MjModel.from_xml_path('model_ref.xml')
+seed=1234; sref=run(ref,seed); tref=timeit(ref,seed)
+print(f'REF {tref*1e3:.1f} ms')
+cases = {
+ 'pgs': {'solver':0},
+ 'pgs_iter50': {'solver':0,'iterations':50},
+ 'pgs_iter20': {'solver':0,'iterations':20},
+ 'pgs_tol1e-6': {'solver':0,'tolerance':1e-6},
+ 'pgs_tol1e-5': {'solver':0,'tolerance':1e-5},
+ 'pgs_ls10': {'solver':0,'ls_iterations':10},
+ 'pgs_ccd0': {'solver':0,'ccd_iterations':0},
+ 'pgs_noslip2': {'solver':0,'noslip_iterations':2},
+}
+for name,opts in cases.items():
+    m = mj.MjModel.from_xml_path('model_ref.xml')
+    for k,v in opts.items(): setattr(m.opt,k,v)
+    try:
+        s=run(m,seed); t=timeit(m,seed); d=np.abs(s-sref).max()
+        print(f'{name:16s} {t*1e3:7.1f} ms ratio {t/tref:5.2f} maxdiff {d:.2e} pass={np.allclose(s,sref,atol=1e-5)}')
+    except Exception as e:
+        print(f'{name:16s} ERR {type(e).__name__}: {str(e)[:60]}')
+EOF
+python /tmp/screen2.py — approved
+  ⚙ bash cd /app && cat > /tmp/screen2.py <<'EOF' import mujoco as mj, numpy as…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 26 tool call(s) so far
+  │ Solver swap alone hits 0.50× with 3.7e-8 state error. Let me profile what…
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco as mj, numpy as np, time
+m = mj.MjModel.from_xml_path('model_ref.xml'); m.opt.solver=0
+d = mj.MjData(m); mj.mj_forward(m,d)
+def timeit(f, reps=400):
+    t=time.perf_counter()
+    for _ in range(reps): f()
+    return (time.perf_counter()-t)/reps*1e6
+for name in ['mj_step1','mj_step2','mj_fwdConstraint','mj_Euler','mj_passive','mj_crb','mj_factorM','mj_fwdVelocity']:
+    f=getattr(mj,name); print(f'{name:20s} {timeit(lambda: f(m,d)):8.1f} us')
+print('niter', d.solver_niter, 'nefc', d.nefc)
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco as mj, numpy as np, time m =…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 27 tool call(s) so far
+  │ PGS gets us to 0.50×. Now the critical check: robustness across many rand…
+[approval] bash: cd /app && cat > /tmp/multiseed.py <<'EOF'
+import mujoco as mj, numpy as np
+FS = mj.mjtState.mjSTATE_FULLPHYSICS
+def run(m, seed):
+    d = mj.MjData(m); rng = np.random.default_rng(seed)
+    d.qpos += rng.normal(0,0.01,size=d.qpos.shape); mj.mj_forward(m,d)
+    nc=[0]
+    for _ in range(int(2.0/m.opt.timestep)):
+        mj.mj_step(m,d); nc[0]=max(nc[0],d.ncon)
+    s = np.zeros(mj.mj_stateSize(m,FS)); mj.mj_getState(m,d,s,FS); return s,nc[0]
+ref = mj.MjModel.from_xml_path('model_ref.xml')
+tuned = mj.MjModel.from_xml_path('model_ref.xml'); tuned.opt.solver=0
+worst=0; worstseed=None; anynan=False; maxcon=0
+for seed in range(40):
+    sr,ncr = run(ref,seed); st,nct = run(tuned,seed)
+    maxcon=max(maxcon,ncr,nct)
+    if np.isnan(st).any() or np.isinf(st).any(): anynan=True
+    dd=np.abs(sr-st).max()
+    if dd>worst: worst,worstseed=dd,seed
+print(f'worst max|diff| over 40 seeds: {worst:.3e} at seed {worstseed}  (atol 1e-5)')
+print('any NaN/Inf:', anynan, ' max ncon seen:', maxcon)
+EOF
+python /tmp/multiseed.py — approved
+  ⚙ bash cd /app && cat > /tmp/multiseed.py <<'EOF' import mujoco as mj, numpy …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 28 tool call(s) so far
+  │ Robustness holds (worst 3.7e-6 over 40 seeds, no NaN). Let me cache refer…
+[approval] bash: cd /app && cat > /tmp/cache_ref.py <<'EOF'
+import mujoco as mj, numpy as np
+FS = mj.mjtState.mjSTATE_FULLPHYSICS
+ref = mj.MjModel.from_xml_path('model_ref.xml')
+out={}
+for seed in range(30):
+    d = mj.MjData(ref); rng = np.random.default_rng(seed)
+    d.qpos += rng.normal(0,0.01,size=d.qpos.shape); mj.mj_forward(ref,d)
+    for _ in range(int(2.0/ref.opt.timestep)): mj.mj_step(ref,d)
+    s=np.zeros(mj.mj_stateSize(ref,FS)); mj.mj_getState(ref,d,s,FS); out[seed]=s
+np.savez('/tmp/refstates.npz', **{str(k):v for k,v in out.items()})
+print('cached', len(out))
+EOF
+python /tmp/cache_ref.py — approved
+  ⚙ bash cd /app && cat > /tmp/cache_ref.py <<'EOF' import mujoco as mj, numpy …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 29 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/screen3.py <<'EOF'
+import mujoco as mj, numpy as np, time
+FS = mj.mjtState.mjSTATE_FULLPHYSICS
+refstates = np.load('/tmp/refstates.npz')
+def run(m, seed):
+    d = mj.MjData(m); rng = np.random.default_rng(seed)
+    d.qpos += rng.normal(0,0.01,size=d.qpos.shape); mj.mj_forward(m,d)
+    for _ in range(int(2.0/m.opt.timestep)): mj.mj_step(m,d)
+    s=np.zeros(mj.mj_stateSize(m,FS)); mj.mj_getState(m,d,s,FS); return s
+def timeit(m, seed, reps=3):
+    ts=[]
+    for _ in range(reps):
+        t=time.perf_counter(); run(m,seed); ts.append(time.perf_counter()-t)
+    return min(ts)
+ref = mj.MjModel.from_xml_path('model_ref.xml')
+tref=timeit(ref,1234)
+cases = {
+ 'pgs':{'solver':0},
+ 'pgs_ts0.004':{'solver':0,'timestep':0.004},
+ 'pgs_ts0.005':{'solver':0,'timestep':0.005},
+ 'pgs_ts0.0025':{'solver':0,'timestep':0.0025},
+ 'pgs_gravity0':{'solver':0},
+}
+for name,opts in cases.items():
+    m = mj.MjModel.from_xml_path('model_ref.xml')
+    for k,v in opts.items(): setattr(m.opt,k,v)
+    if name=='pgs_gravity0': m.opt.gravity[:]=0
+    # state check across seeds
+    ds=[np.abs(run(m,s)-refstates[str(s)]).max() for s in range(6)]
+    t=timeit(m,1234)
+    print(f'{name:16s} {t*1e3:7.1f} ms ratio {t/tref:5.2f}  worstdiff {max(ds):.2e}')
+EOF
+python /tmp/screen3.py — approved
+  ⚙ bash cd /app && cat > /tmp/screen3.py <<'EOF' import mujoco as mj, numpy as…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 30 tool call(s) so far
+  │ Solver `PGS` gives a clean 0.49–0.50×. Timestep increases break accuracy …
+[approval] bash: cd /app && cat > /tmp/screen4.py <<'EOF'
+import mujoco as mj, numpy as np, time
+FS = mj.mjtState.mjSTATE_FULLPHYSICS
+refstates = np.load('/tmp/refstates.npz')
+def run(m, seed):
+    d = mj.MjData(m); rng = np.random.default_rng(seed)
+    d.qpos += rng.normal(0,0.01,size=d.qpos.shape); mj.mj_forward(m,d)
+    for _ in range(int(2.0/m.opt.timestep)): mj.mj_step(m,d)
+    s=np.zeros(mj.mj_stateSize(m,FS)); mj.mj_getState(m,d,s,FS); return s
+def timeit(m, seed, reps=3):
+    ts=[]
+    for _ in range(reps):
+        t=time.perf_counter(); run(m,seed); ts.append(time.perf_counter()-t)
+    return min(ts)
+ref = mj.MjModel.from_xml_path('model_ref.xml'); tref=timeit(ref,1234)
+cases={
+ 'pgs':{'solver':0},
+ 'pgs_tol1e-10':{'solver':0,'tolerance':1e-10},
+ 'pgs_tol1e-12':{'solver':0,'tolerance':1e-12},
+ 'pgs_it200_tol1e-12':{'solver':0,'iterations':200,'tolerance':1e-12},
+}
+for name,opts in cases.items():
+    m=mj.MjModel.from_xml_path('model_ref.xml')
+    for k,v in opts.items(): setattr(m.opt,k,v)
+    ds=[np.abs(run(m,s)-refstates[str(s)]).max() for s in range(10)]
+    t=timeit(m,1234)
+    print(f'{name:20s} {t*1e3:7.1f}ms ratio {t/tref:5.2f} worstdiff {max(ds):.2e}')
+EOF
+python /tmp/screen4.py — approved
+  ⚙ bash cd /app && cat > /tmp/screen4.py <<'EOF' import mujoco as mj, numpy as…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 31 tool call(s) so far
+  │ 0.49–0.50× with 3.7e-8 accuracy. Let me check the remaining cost breakdow…
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco as mj, numpy as np, time
+m = mj.MjModel.from_xml_path('model_ref.xml'); m.opt.solver=0; m.opt.tolerance=1e-12
+d = mj.MjData(m); mj.mj_forward(m,d)
+def T(f, reps=600):
+    t=time.perf_counter()
+    for _ in range(reps): f()
+    return (time.perf_counter()-t)/reps*1e6
+pos = T(lambda: mj.mj_fwdPosition(m,d))
+print(f'fwdPosition  {pos:7.1f}')
+print(f'  kinematics {T(lambda: mj.mj_kinematics(m,d)):7.1f}')
+print(f'  comPos     {T(lambda: mj.mj_comPos(m,d)):7.1f}')
+print(f'  camlight   {T(lambda: mj.mj_camlight(m,d)):7.1f}')
+print(f'  collision  {T(lambda: mj.mj_collision(m,d)):7.1f}')
+print(f'  makeConstr {T(lambda: mj.mj_makeConstraint(m,d)):7.1f}')
+print(f'fwdVelocity  {T(lambda: mj.mj_fwdVelocity(m,d)):7.1f}')
+print(f'fwdConstr    {T(lambda: mj.mj_fwdConstraint(m,d)):7.1f}')
+print(f'Euler        {T(lambda: mj.mj_Euler(m,d)):7.1f}')
+print(f'factorM      {T(lambda: mj.mj_factorM(m,d)):7.1f}')
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco as mj, numpy as np, time m =…
+    ✗ bash — exit 139
+  deepseek-v4.1-flash — 32 tool call(s) so far
+  [tools] 32/256 calls — continuing (leg 2)
+  deepseek-v4.1-flash — leg 2, 32 call(s) so far
+  │ Cost floor is the dense `factorM`; solver swap is the win. Writing `model…
+[approval] write /app/model.xml (+60 −0) [new file] — approved
+  ⚙ write /app/model.xml
+    ✓ write /app/model.xml (+60 −0)
+  deepseek-v4.1-flash — 33 tool call(s) so far
+[approval] bash: cd /app && python - <<'EOF'
+import mujoco as mj, numpy as np
+a=mj.MjModel.from_xml_path('model_ref.xml'); b=mj.MjModel.from_xml_path('model.xml')
+# confirm physics identical
+for attr in ['body_mass','dof_damping','qpos0','jnt_type','jnt_range','geom_size','body_pos','body_quat','actuator_gear','eq_data','eq_type']:
+    x,y=getattr(a,attr),getattr(b,attr)
+    print(attr, np.array_equal(x,y))
+print('timestep', a.opt.timestep, b.opt.timestep, 'gravity eq', np.array_equal(a.opt.gravity,b.opt.gravity))
+print('solver', a.opt.solver, '->', b.opt.solver, ' tol', a.opt.tolerance, '->', b.opt.tolerance)
+print('nq nv nM', a.nq==b.nq, a.nv==b.nv, a.nM==b.nM, 'neq', a.neq, b.neq)
+EOF — approved
+  ⚙ bash cd /app && python - <<'EOF' import mujoco as mj, numpy as np a=mj.MjMo…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 34 tool call(s) so far
+  │ Physics arrays are byte-identical to the reference. Now the real test — r…
+[approval] bash: cd /app && python eval.py 2>&1 | tail -20 — approved
+  ⚙ bash cd /app && python eval.py 2>&1 | tail -20
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 35 tool call(s) so far
+  │ Passing at 0.50 (target ≤0.60), but the margin is thinner than I'd like. …
+[approval] bash: cd /app && for i in 1 2 3 4 5; do python eval.py 2>&1 | grep -E "Time pctg|Final state"; done — approved
+  ⚙ bash cd /app && for i in 1 2 3 4 5; do python eval.py 2>&1 | grep -E "Time …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 36 tool call(s) so far
+  │ Stable at 0.49–0.50. Let me try to widen the margin with changes that can…
+[approval] bash: cd /app && cat > /tmp/screen5.py <<'EOF'
+import mujoco as mj, numpy as np, time
+FS=mj.mjtState.mjSTATE_FULLPHYSICS
+def run(m,seed):
+    d=mj.MjData(m); rng=np.random.default_rng(seed)
+    d.qpos+=rng.normal(0,0.01,size=d.qpos.shape); mj.mj_forward(m,d)
+    for _ in range(int(2.0/m.opt.timestep)): mj.mj_step(m,d)
+    s=np.zeros(mj.mj_stateSize(m,FS)); mj.mj_getState(m,d,s,FS); return s
+def timeit(m,seed,reps=3):
+    ts=[]
+    for _ in range(reps):
+        t=time.perf_counter(); run(m,seed); ts.append(time.perf_counter()-t)
+    return min(ts)
+ref=mj.MjModel.from_xml_path('model_ref.xml'); tref=timeit(ref,1234)
+tuned=mj.MjModel.from_xml_path('model.xml'); s0=run(tuned,1234)
+base=timeit(tuned,1234)
+print(f'ref {tref*1e3:.1f}ms  tuned {base*1e3:.1f}ms  ratio {base/tref:.3f}')
+for name,fn in {
+ 'memory_256k': lambda m: setattr(m,'narena',256*1024),
+ 'disable_energy': lambda m: setattr(m.opt,'enableflags',m.opt.enableflags),
+ 'ccd0': lambda m: setattr(m.opt,'ccd_iterations',0),
+ 'noslip0': lambda m: setattr(m.opt,'noslip_iterations',0),
+ 'disable_contact': lambda m: setattr(m.opt,'disableflags', mj.mjtDisableBit.mjDSBL_CONTACT),
+ 'ls_iter1': lambda m: setattr(m.opt,'ls_iterations',1),
+}.items():
+    m=mj.MjModel.from_xml_path('model.xml')
+    try:
+        fn(m)
+        s=run(m,1234); t=timeit(m,1234)
+        print(f'{name:16s} {t*1e3:6.1f}ms ratio {t/tref:.3f} diff {np.abs(s-s0).max():.2e}')
+    except Exception as e:
+        print(f'{name:16s} ERR {str(e)[:60]}')
+EOF
+python /tmp/screen5.py — approved
+  ⚙ bash cd /app && cat > /tmp/screen5.py <<'EOF' import mujoco as mj, numpy as…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 37 tool call(s) so far
+  │ Main win is confirmed. Let me do a final broad correctness sweep on `mode…
+[approval] bash: cd /app && cat > /tmp/final_check.py <<'EOF'
+import mujoco as mj, numpy as np
+FS=mj.mjtState.mjSTATE_FULLPHYSICS
+def run(m,seed):
+    d=mj.MjData(m); rng=np.random.default_rng(seed)
+    d.qpos+=rng.normal(0,0.01,size=d.qpos.shape); mj.mj_forward(m,d)
+    for _ in range(int(2.0/m.opt.timestep)): mj.mj_step(m,d)
+    s=np.zeros(mj.mj_stateSize(m,FS)); mj.mj_getState(m,d,s,FS); return s
+ref=mj.MjModel.from_xml_path('model_ref.xml'); tun=mj.MjModel.from_xml_path('model.xml')
+worst=0; bad=[]
+for seed in range(100):
+    a=run(ref,seed); b=run(tun,seed)
+    assert not (np.isnan(b).any() or np.isinf(b).any()), f'NaN/Inf seed {seed}'
+    dd=np.abs(a-b).max(); worst=max(worst,dd)
+    if not np.allclose(a,b,atol=1e-5): bad.append(seed)
+print(f'100 seeds: worst max|diff| = {worst:.3e} (atol 1e-5), failures = {len(bad)}, no NaN/Inf')
+EOF
+python /tmp/final_check.py — approved
+  ⚙ bash cd /app && cat > /tmp/final_check.py <<'EOF' import mujoco as mj, nump…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 38 tool call(s) so far
+[approval] bash: cd /app && python eval.py 2>&1 | grep -vE "^$" ; echo "exit=$?"; git status --short 2>/dev/null | head — approved
+  ⚙ bash cd /app && python eval.py 2>&1 | grep -vE "^$" ; echo "exit=$?"; git s…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 39 tool call(s) so far
+Done. Both eval tests pass.
+
+## What I changed
+
+`/app/model.xml` — a copy of `model_ref.xml` with **one added line**:
+
+```xml
+<option solver="PGS" tolerance="1e-12"/>
+```
+
+Everything else (bodies, joints, geoms, masses, composite plugin config, damping, equality constraint, actuator, timestep, gravity) is byte-identical to the reference — I verified `body_mass`, `dof_damping`, `qpos0`, `jnt_type/range`, `geom_size`, `body_pos/quat`, `actuator_gear`, `eq_data/type` are all array-equal.
+
+## Why this is the right lever
+
+Profiling the reference showed the cost is **not** the physics or the collision pipeline (`ncon` is 0 for the entire 2 s — the `connect` equality is the only constraint, `nefc=3`). The time goes to building and factorising the constraint Hessian every step: 278 µs/step, of which `mj_factorM` is ~40 µs and `mj_fwdConstraint` ~155 µs under the default Newton solver.
+
+That is wasted work here: with 3 active constraints, Newton's dense factorisation buys nothing that projected Gauss-Seidel doesn't deliver. Swapping to PGS drops `mj_fwdConstraint` from 155 µs to 3.5 µs. I tightened `tolerance` to `1e-12` so the remaining error is negligible rather than merely within tolerance.
+
+## The check
+
+```
+Final state difference: 0.0000
+Avg simulation time: 0.1417 secs
+Avg simulation time (ref): 0.2827 secs
+Speedup: 1.99x
+Time pctg: 0.50          # need <= 0.60
+```
+
+Stable across 5 consecutive eval runs (0.49–0.50), and across **100 random seeds**: worst `max|state difference|` = **3.67e-08** (tolerance is 1e-5 — ~270× margin), zero failures, no NaN/Inf.
+
+## Things I rejected, and why
+
+The obvious speed lever — a **larger timestep** — is a trap here. The chain is still moving at t=2 s (`|qvel|` ≈ 0.18), so the final state is genuinely timestep-sensitive rather than settled:
+
+| timestep | time ratio | state error |
+|---|---|---|
+| 0.002 (ref) | 1.00 | — |
+| 0.0025 | 0.39 | 6.7e-04 ✗ |
+| 0.004 | 0.25 | 3.0e-03 ✗ |
+| 0.005 | 0.20 | 4.5e-03 ✗ |
+
+All fail the 1e-5 tolerance by 2–3 orders of magnitude, and they'd be fragile under the eval's random seed anyway. `solver="CG"` (0.80×) and sparse Jacobians (1.01× — no gain, since there are no contacts to make sparse) were also dead ends. Zeroing gravity to quiesce the model "safely" would be a physics change and misses by 5e-01.
+
+One caveat worth stating plainly: 0.50 vs the 0.60 threshold is a solid but not enormous margin. It is not noise — I took the min of 3 and the mean of 20 in the eval, and both land at 0.49–0.50 — but if the grading host has a very different CPU and memory-bandwidth profile, that ratio is what would move.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=39 surface=103984024bca

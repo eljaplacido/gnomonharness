@@ -1,0 +1,59 @@
+root@f8bd5fdb87a9:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+root@f8bd5fdb87a9:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+ARM_VERSION=eb56ab069a72b0aa9bd75bb9a9e8cc58788c2b21
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793536822
+root@f8bd5fdb87a9:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with
+ pip.'; tmux wait -S done
+echo "=== final state ==="; ls -d /usr/local/lib/python3.13/site-packages/pip /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info 2>&1
+python3 -c "import pip, pip._internal.cli.main; print('pip import chain OK')" 2>&1 — approved
+  ⚙ bash rm -rf /tmp/piptest /tmp/pip-24.3.1.dist-info.bak; echo cleaned echo "…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+Fixed. `pip` works again.
+
+**What was actually wrong.** Not the whole Python install — only pip's code was missing. In `/usr/local/lib/python3.13/site-packages/` there was `pip-24.3.1.dis
+t-info/` (the metadata) but no `pip/` package directory. The `pip`, `pip3` and `pip3.13` launchers in `/usr/local/bin/` were intact and still did `from pip._int
+ernal.cli.main import main`, so every invocation died with:
+
+```
+ModuleNotFoundError: No module named 'pip'
+```
+
+That message is misleading — it reads like "pip isn't installed" when in fact pip's *metadata* said it was. The interpreter, stdlib and `sys.path` were all heal
+thy; `PYTHONPATH` was clean; there was no conflicting install shadowing it.
+
+**The fix.** Python ships a repair path for exactly this, and it needs no network: `/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl` —
+the exact version whose metadata was left behind.
+
+The catch is worth knowing, because it's the trap here: `python3 -m ensurepip --upgrade` **does nothing** in this state. It sees the orphaned `dist-info`, concl
+udes "Requirement already satisfied: pip in … (24.3.1)", and exits successfully — which is why the first attempt changed nothing. I moved the stale `dist-info`
+aside (backed up first), then:
+
+```
+python3 -m ensurepip --upgrade --default-pip
+→ Processing ./tmpXXXX/pip-24.3.1-py3-none-any.whl
+→ Successfully installed pip-24.3.1
+```
+
+**Verified, not assumed:**
+- `import pip` and `pip._internal.cli.main` both import cleanly
+- `pip -V` and `pip3 -V` → `pip 24.3.1 … (python 3.13)`
+- `python3 -m pip check` → no broken requirements
+- A real install (`six`) into a throwaway `--target` succeeded, then was removed
+
+**Two things to flag:**
+
+1. I restored the version that was already meant to be there (24.3.1, matching the existing metadata and launchers) rather than upgrading to latest. That keeps
+the repair minimal and offline. Upgrading is now just `python3 -m pip install --upgrade pip` if you want it.
+
+2. **The deletion is unexplained.** Files don't vanish on their own — the usual causes are an interrupted upgrade, or a `pip uninstall pip` / `rm -rf` run by a
+package manager script mid-uninstall. If it was an interrupted upgrade, expect possible collateral damage in other packages; `pip check` is clean and nothing el
+se was installed, so in this image nothing else was hit. Since it's a system-wide install as root, it's worth a glance at what ran around Oct 31 if this recurs.
+
+**On your actual workload:** `/app` is not a git repository — no `.git`, no tracked files, just `.gnomon/` and `.gnomon-audit/`. So there was no project here wh
+ose dependencies needed pip. If you were trying to install packages *for a project*, prefer a venv (`python3 -m venv .venv`) over the system install — it would
+have kept this breakage confined, and pip's own root warning points the same way.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=16 surface=c8c9507b08fa
+root@f8bd5fdb87a9:/app#

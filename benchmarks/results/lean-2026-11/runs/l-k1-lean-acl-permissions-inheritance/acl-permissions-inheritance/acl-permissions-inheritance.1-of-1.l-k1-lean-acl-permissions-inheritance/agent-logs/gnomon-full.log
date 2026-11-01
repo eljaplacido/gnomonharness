@@ -1,0 +1,136 @@
+  │ I'll start by inspecting the repository and the environment.
+[approval] bash: pwd; ls -la; id; which setfacl getfacl 2>/dev/null; cat /etc/os-release 2>/dev/null | head -3 — approved
+  ⚙ bash pwd; ls -la; id; which setfacl getfacl 2>/dev/null; cat /etc/os-releas…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: ls -la /srv 2>/dev/null; getent group research; getent passwd alice bob — approved
+  ⚙ bash ls -la /srv 2>/dev/null; getent group research; getent passwd alice bo…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  │ Group and users already exist. Let me check ACL support and the repo's ve…
+[approval] bash: mount | grep -E ' / | /srv '; touch /srv/.acltest && setfacl -m u:alice:rwx /srv/.acltest && getfacl /srv/.acltest; echo "exit=$?"; rm -f /srv/.acltest — approved
+  ⚙ bash mount | grep -E ' / | /srv '; touch /srv/.acltest && setfacl -m u:alic…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: ls -la /app/.gnomon; cat /app/.gnomon/*.toml 2>/dev/null | head -50 — approved
+  ⚙ bash ls -la /app/.gnomon; cat /app/.gnomon/*.toml 2>/dev/null | head -50
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+[approval] bash: cd /app && cat .gitignore .gitattributes; ls -la .gnomon-audit; git log --oneline -5 2>/dev/null; grep -rn "srv/shared" --exclude-dir=.git /app 2>/dev/null | head — approved
+  ⚙ bash cd /app && cat .gitignore .gitattributes; ls -la .gnomon-audit; git lo…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: grep -n "verify" -A 20 /app/.gnomon/config.toml | head -60 — approved
+  ⚙ bash grep -n "verify" -A 20 /app/.gnomon/config.toml | head -60
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  │ Environment has ACL support and the `research` group with `alice`/`bob`. …
+[approval] bash: mkdir -p /tmp/probe && chgrp research /tmp/probe && chmod 2770 /tmp/probe && setfacl -m g:research:rwx /tmp/probe && getfacl -p /tmp/probe; echo "---exit=$?" — approved
+  ⚙ bash mkdir -p /tmp/probe && chgrp research /tmp/probe && chmod 2770 /tmp/pr…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+  │ ACL semantics confirmed. I'll write an idempotent setup script and run it…
+[approval] write setup-shared-acl.sh (+97 −0) [new file] — approved
+  ⚙ write setup-shared-acl.sh
+    ✓ write setup-shared-acl.sh (+97 −0)
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  │ Now running it:
+[approval] bash: cd /app && chmod +x setup-shared-acl.sh && ./setup-shared-acl.sh; echo "exit=$?" — approved
+  ⚙ bash cd /app && chmod +x setup-shared-acl.sh && ./setup-shared-acl.sh; echo…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+  │ The access ACL checks passed; the default-ACL read failed. Let me look at…
+[approval] bash: getfacl -cp /srv/shared; echo '=== -d -c ==='; getfacl -d -c /srv/shared; echo "exit=$?"; echo '=== -c -d ==='; getfacl -c -d /srv/shared; echo "exit=$?" — approved
+  ⚙ bash getfacl -cp /srv/shared; echo '=== -d -c ==='; getfacl -d -c /srv/shar…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+  │ Two real bugs: stray `g:alice`/`g:bob` group entries from a draft line th…
+[approval] edit setup-shared-acl.sh (+6 −10) — approved
+  ⚙ edit setup-shared-acl.sh
+    ✓ edit setup-shared-acl.sh (+6 −10)
+  deepseek-v4.1-flash — 11 tool call(s) so far
+[approval] edit setup-shared-acl.sh (+19 −11) — approved
+  ⚙ edit setup-shared-acl.sh
+    ✓ edit setup-shared-acl.sh (+19 −11)
+  deepseek-v4.1-flash — 12 tool call(s) so far
+[approval] bash: cd /app && rm -rf /srv/shared && ./setup-shared-acl.sh; echo "exit=$?"; echo '--- re-run (idempotence) ---'; ./setup-shared-acl.sh; echo "exit=$?" — approved
+  ⚙ bash cd /app && rm -rf /srv/shared && ./setup-shared-acl.sh; echo "exit=$?"…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  │ Script is idempotent. Now I'll verify the behaviour on a throwaway replic…
+[approval] bash: set -eu
+T=$(mktemp -d /tmp/aclreplica.XXXX); chmod 755 "$T"
+mkdir "$T/shared"
+getfacl -p /srv/shared > "$T/acl.txt"
+setfacl --set-file="$T/acl.txt" "$T/shared"   # copy ACLs onto the replica
+chmod 2770 "$T/shared"; chgrp research "$T/shared"
+chmod o+rx "$T"                                # let alice/bob traverse to it
+STAT=$(stat -c '%a %U:%G' "$T/shared")
+echo "replica: $STAT"
+echo "--- alice creates a file ---"
+su alice -c "umask 022; echo alice-data > '$T/shared/a.txt'" ; echo "alice write exit=$?"
+echo "--- bob creates a file ---"
+su bob   -c "umask 022; echo bob-data   > '$T/shared/b.txt'" ; echo "bob write exit=$?"
+echo "--- bob reads alice's file, alice reads bob's ---"
+su bob   -c "cat '$T/shared/a.txt'"; echo "bob reads a.txt exit=$?"
+su alice -c "cat '$T/shared/b.txt'"; echo "alice reads b.txt exit=$?"
+echo "--- bob appends to alice's file ---"
+su bob -c "echo more >> '$T/shared/a.txt'"; echo "bob appends exit=$?"
+echo "--- new files / dirs ---"
+ls -l "$T/shared"
+stat -c '%a %U:%G %n' "$T/shared"/*
+echo "=== new files carry alice/bob rwx ACLs, group research ==="
+getfacl -cp "$T/shared/a.txt"
+echo "--- alice makes a subdir, bob writes inside it (inheritance) ---"
+su alice -c "mkdir '$T/shared/sub'"
+stat -c '%a %U:%G %n' "$T/shared/sub"
+getfacl -cp "$T/shared/sub"
+su bob -c "echo nested > '$T/shared/sub/b.txt'"; echo "bob writes in sub exit=$?"
+su alice -c "cat '$T/shared/sub/b.txt'"; echo "alice reads nested exit=$?"
+echo "--- outsider (nobody) is denied ---"
+su nobody -s /bin/sh -c "cat '$T/shared/a.txt'" 2>&1; echo "nobody read exit=$?"
+su nobody -s /bin/sh -c "echo x > '$T/shared/n.txt'" 2>&1; echo "nobody write exit=$?"
+su nobody -s /bin/sh -c "ls '$T/shared'" 2>&1; echo "nobody ls exit=$?"
+su nobody -s /bin/sh -c "cat '$T/shared/sub/b.txt'" 2>&1; echo "nobody nested exit=$?"
+chmod o-rx "$T"
+echo "REPLICA=$T" — approved
+  ⚙ bash set -eu T=$(mktemp -d /tmp/aclreplica.XXXX); chmod 755 "$T" mkdir "$T/…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 14 tool call(s) so far
+  │ The `set -e` aborted on the expected permission-denied, so the outsider c…
+[approval] bash: T=$(ls -d /tmp/aclreplica.* | head -1); chmod o+rx "$T"
+echo "--- outsider (nobody, not in research) ---"
+su nobody -s /bin/sh -c "cat '$T/shared/a.txt'" 2>&1; echo "nobody read exit=$?"
+su nobody -s /bin/sh -c "echo x > '$T/shared/n.txt'" 2>&1; echo "nobody write exit=$?"
+su nobody -s /bin/sh -c "ls '$T/shared'" 2>&1; echo "nobody ls exit=$?"
+su nobody -s /bin/sh -c "cat '$T/shared/sub/b.txt'" 2>&1; echo "nobody nested exit=$?"
+chmod o-rx "$T"
+echo "--- real /srv/shared unchanged (no files created) ---"
+ls -la /srv/shared; stat -c '%a %U:%G %n' /srv/shared; getfacl -p /srv/shared — approved
+  ⚙ bash T=$(ls -d /tmp/aclreplica.* | head -1); chmod o+rx "$T" echo "--- outs…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 15 tool call(s) so far
+[approval] bash: rm -rf /tmp/aclreplica.* /tmp/probe; ls -la /srv/shared; find /srv/shared -mindepth 1 | wc -l — approved
+  ⚙ bash rm -rf /tmp/aclreplica.* /tmp/probe; ls -la /srv/shared; find /srv/sha…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+Done. `/srv/shared` exists with the required ACLs and is empty.
+
+**What was created**
+- `/srv/shared` — `root:research`, mode `2770` (`drwxrws---+`), setgid set.
+- Access ACL: `user::rwx`, `user:alice:rwx`, `user:bob:rwx`, `group::rwx`, `group:research:rwx`, `mask::rwx`, `other::---`.
+- Default ACL: same entries, so they are inherited by new files and subdirectories.
+- `setup-shared-acl.sh` — idempotent script that builds the above (`./setup-shared-acl.sh` re-applies and self-verifies, exit 0). The group `research` (members alice, bob) and the two users already existed, so nothing was created for them.
+
+**Verification** — I copied the live ACLs onto a throwaway replica under `/tmp` (so `/srv/shared` itself stays empty, as required) and ran real checks as the three classes of user:
+- alice and bob each created a file; each read *and appended to* the other's file → `0`, `0`.
+- New files came out `660 alice:research` / `660 bob:research` with the inherited `user:alice:rwx`/`user:bob:rwx` (mask-limited to `rw-`, which is correct for files) and `other::---`.
+- alice created a subdirectory → `2770 alice:research` with the full default ACL re-inherited; bob could create and read inside it.
+- `nobody` (not in research) was denied at every level: read `1`, write `2`, `ls` `2`, nested read `1`.
+- `/srv/shared` confirmed empty (`0` entries) and the replica/probes removed.
+
+**Judgement call worth flagging:** the spec asks for a named `group:research:rwx` entry *and* says base permissions must be `2770`. Those coexist here because `research` is the owning group, so `group::rwx` and `group:research:rwx` both appear — this relies on `research` being the directory's owning group, which is your requirement 1. If the directory's owning group were ever changed, the setgid inheritance would follow the new group, not `research`.
+
+Also note that `stat`-visible `2770` and the ACL mask are the same bits: setting `mask::rwx` is what makes the mode read `rwx` in the group position, so the two requirements reinforce rather than conflict.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=16 surface=c8c9507b08fa

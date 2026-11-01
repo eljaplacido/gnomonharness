@@ -1,0 +1,55 @@
+[?2004hroot@caade3c9413f:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@caade3c9413f:/app# clear
+[?2004l[H[J[3J[?2004hroot@caade3c9413f:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@caade3c9413f:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=eb56ab069a72b0aa9bd75bb9a9e8cc58788c2b21
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793529315
+[?2004hroot@caade3c9413f:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with pip.'; tmux wait -S done
+[?2004l    ✓ note — System python (/usr/local/bin/python3 = 3.13.1) had pip's di
+Fixed.
+
+## What was wrong
+
+Not a permissions or config problem — pip's actual code was missing.
+
+```
+/usr/local/lib/python3.13/site-packages/
+├── pip-24.3.1.dist-info/   ← metadata present
+└── (no pip/ directory)     ← the package itself was gone
+```
+
+So `/usr/local/bin/pip3` existed and ran, but died on its first import:
+
+```
+ModuleNotFoundError: No module named 'pip'
+```
+
+Something deleted the `pip/` package directory while leaving its `dist-info` behind. This also meant the usual repair, `python3 -m ensurepip --upgrade`, silently no-opped with *"Requirement already satisfied: pip"* — it saw the stale metadata and assumed pip was installed.
+
+## What I did
+
+1. Moved the orphaned `pip-24.3.1.dist-info` aside (backup kept at `/tmp/pip-24.3.1.dist-info.broken.bak`).
+2. Ran `python3 -m ensurepip --upgrade`, which reinstalled pip 24.3.1 from the bundled wheel in `/usr/local/lib/python3.13/ensurepip/_bundled/` — no network needed.
+
+## Verification
+
+- `pip3`, `pip`, `pip3.13` all report `pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)`
+- `pip3 check` → `No broken requirements found.`
+- Real install works: installed `six` to a scratch target and imported it successfully (`1.17.0`)
+- All 852 files listed in pip's `RECORD` now exist — the installation is complete, not just importable
+
+## Two things worth knowing
+
+**`/usr/bin/python3` (3.11) has no pip at all**, and it's marked `EXTERNALLY-MANAGED`, so Debian intends for you not to install into it directly. I left it alone. Use `/usr/local/bin/python3` (3.13) — it's first on your `PATH`, so plain `python3`/`pip3` already resolve there.
+
+**You're running pip as root into the system interpreter**, which is what let a bare `rm` break it in the first place. For anything you actually need, `python3 -m venv` will keep future damage contained. If you want, I can also raise pip to 26.2.2 — it flagged that upgrade as available, but I didn't apply it since you didn't ask and the version you have now works.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=17 surface=103984024bca
+[?2004hroot@caade3c9413f:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@caade3c9413f:/app# 

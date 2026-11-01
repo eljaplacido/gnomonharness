@@ -1,0 +1,63 @@
+[?2004hroot@33dcfdfc73dc:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@33dcfdfc73dc:/app# clear
+[?2004l[H[J[3J[?2004hroot@33dcfdfc73dc:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@33dcfdfc73dc:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=68abc510c31f7173b520a0e77b5a63aaadc753d1
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793530336
+[?2004hroot@33dcfdfc73dc:/app# bash /opt/gnomon-run.sh 'Write me a single file in /app/polyglot/main.py.c which is a polyglot, that is, I can run
+[?2004l[?2004h> 
+[?2004l[?2004h> `python3 /app/polyglot/main.py.c N`
+[?2004l[?2004h> or
+[?2004l[?2004h> `gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cmain N`
+[?2004l[?2004h> 
+[?2004l[?2004h> Both of these should print to stdout the kth Fibonacci number, f(0) = 0, f(1) = 1, etc.
+[?2004l[?2004h> 
+[?2004l[?2004h> I'"'"'m using python3 3.12.3 and gcc 13.2.0.'; tmux wait -S done
+[?2004l  │ Let me clean and then do final verification in a temp dir so no artifacts…
+[approval] bash: cd /app/polyglot && rm -rf __pycache__ cmain && ls -la; echo "=== FINAL: exact user commands, artifacts in /tmp ==="; python3 /app/polyglot/main.py.c 20; gcc /app/polyglot/main.py.c -o /tmp/cmain_final && /tmp/cmain_final 20 — approved
+  ⚙ bash cd /app/polyglot && rm -rf __pycache__ cmain && ls -la; echo "=== FINA…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 29 tool call(s) so far
+[approval] bash: cd /app/polyglot && echo "== deliverable =="; ls -l main.py.c; echo "== both paths, sample values =="; for n in 0 1 2 3 4 5 10 90; do printf "f(%s)=%s\n" "$n" "$(python3 main.py.c $n)"; done; echo "== C same values =="; /tmp/cmain_final 90 — approved
+  ⚙ bash cd /app/polyglot && echo "== deliverable =="; ls -l main.py.c; echo "=…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 30 tool call(s) so far
+Done. `/app/polyglot/main.py.c` is a single file that runs under both interpreters.
+
+## How it works
+
+Two rules make one file legal in both languages:
+
+| | Python sees | gcc sees |
+|---|---|---|
+| Line 1 `#/*` | a comment | null directive + **opens a block comment** |
+| after line 84 `r'''` | **opens a raw string** | the `*/` that closes the block comment |
+| last line `//'''` | a comment | a line comment |
+
+So C's block comment swallows the entire Python half, and Python's string literal swallows the entire C half. Neither language ever parses the other's code. The only hazard is a literal `*/` appearing in the Python half (it would close the C comment early) and a run of three quotes in the C half — both are absent, and I verified that.
+
+## Implementation
+
+Both halves compute **fast doubling** over the bits of N, most-significant first, using `f(2m) = a(2b−a)` and `f(2m+1) = a²+b²`:
+
+- **Python** uses exact ints — correct for *any* N. It lifts the 3.11+ `set_int_max_str_digits` cap so huge results actually print.
+- **C** has no bignums, so I wrote base-10⁹ limb arrays with schoolbook add/sub/mul. Buffers are sized from the input and N is capped at 10⁶, so an oversized argument is refused rather than overflowing or thrashing.
+
+## Verification
+
+- **`gcc` clean** under `-Wall -Wextra -Wpedantic -Werror` in `c99/c11/c17/gnu17`.
+- **ASan+UBSan** clean at multiple sizes, including n=300000.
+- **Correctness**: matched an independent slow addition reference; 0–200 identical between the two halves; 48 random/edge values matched a *third* independent method (matrix exponentiation); Python and C were **byte-identical at n=10⁶** (208,989 digits, C in 0.85 s).
+- **Input handling**: both reject `-1`, `+5`, `abc`, `5x`, `3.0`, `" 5"`, extra args, and even Unicode `１` (Python's `isdigit` would otherwise accept it) — with exit 2 and no stdout.
+
+One deliberate asymmetry: the C limit of 10⁶ is a real constraint of schoolbook arithmetic in C, so it exits 3 with a message instead of printing a wrong number. Python has no such limit. I removed the `__pycache__` and `cmain` build artifacts, so only the requested file is there.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=30 surface=40505f6925fb
+[?2004hroot@33dcfdfc73dc:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@33dcfdfc73dc:/app# 

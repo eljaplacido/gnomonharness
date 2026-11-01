@@ -1,0 +1,168 @@
+  │ I'll start by inspecting the repository and environment.
+[approval] bash: id; echo "---"; uname -a; echo "---"; ls -la /srv 2>&1; echo "---"; which setfacl getfacl 2>&1 — approved
+  ⚙ bash id; echo "---"; uname -a; echo "---"; ls -la /srv 2>&1; echo "---"; wh…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  ⚙ read .
+    ✓ read ./ — 4 entries
+  │ Root, ACL tools present. Let me check filesystem ACL support and existing…
+[approval] bash: df -T /srv / 2>&1; echo "--- mount"; mount | grep -E ' / | /srv ' ; echo "--- groups"; getent group research; getent passwd alice bob; echo "--- test acl"; mkdir -p /tmp/acltest && setfacl -m u:root:rwx /tmp/acltest && getfacl -p /tmp/acltest; echo "exit=$?" — approved
+  ⚙ bash df -T /srv / 2>&1; echo "--- mount"; mount | grep -E ' / | /srv ' ; ec…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: cat .gitignore 2>&1; echo "---"; cat .gitattributes 2>&1; echo "--- gnomon dir"; ls -la .gnomon/ 2>&1 — approved
+  ⚙ bash cat .gitignore 2>&1; echo "---"; cat .gitattributes 2>&1; echo "--- gn…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ ACLs work on this overlayfs, and `research` exists with alice and bob. Le…
+[approval] bash: getent passwd | awk -F: '$3>=1000{print $1" uid="$3" gid="$4}'; echo "--- groups"; getent group | awk -F: '$3>=1000'; echo "--- umask"; umask; echo "--- su test"; su alice -s /bin/sh -c 'id; umask' 2>&1 — approved
+  ⚙ bash getent passwd | awk -F: '$3>=1000{print $1" uid="$3" gid="$4}'; echo "…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: ls -la /srv/ 2>&1; getfacl -p /srv 2>&1 — approved
+  ⚙ bash ls -la /srv/ 2>&1; getfacl -p /srv 2>&1
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  │ Environment is clear: `research` (gid 1001) with alice and bob already a …
+[approval] write srv-shared-acl/setup.sh (+57 −0) [new file] — approved
+  ⚙ write srv-shared-acl/setup.sh
+    ✓ write srv-shared-acl/setup.sh (+57 −0)
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] write srv-shared-acl/verify.sh (+98 −0) [new file] — approved
+  ⚙ write srv-shared-acl/verify.sh
+    ✓ write srv-shared-acl/verify.sh (+98 −0)
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  │ Now let me run the setup and the verification.
+[approval] bash: cd /srv-shared-acl 2>/dev/null; cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; pwd; chmod +x srv-shared-acl/setup.sh srv-shared-acl/verify.sh; sh srv-shared-acl/setup.sh; echo "setup exit=$?"; echo "=== getfacl ==="; getfacl -p /srv/shared; echo "=== stat ==="; stat -c '%A %a %U:%G' /srv/shared — approved
+  ⚙ bash cd /srv-shared-acl 2>/dev/null; cd "$(git rev-parse --show-toplevel 2>…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: cd /app && sh srv-shared-acl/verify.sh; echo "verify exit=$?" — approved
+  ⚙ bash cd /app && sh srv-shared-acl/verify.sh; echo "verify exit=$?"
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+  │ Two failures — both look like bugs in my *verification* script, not the c…
+[approval] bash: cd /tmp && su alice -s /bin/sh -c "printf x > /srv/shared/probe.txt; mkdir /srv/shared/probe.d"; echo "=== file ==="; getfacl -p /srv/shared/probe.txt; stat -c '%A %a' /srv/shared/probe.txt; echo "=== dir ==="; getfacl -p /srv/shared/probe.d; echo "=== stat -c %A char positions ==="; stat -c %A /srv/shared | cut -c1-10 | cat -A | head -1; rm -rf /srv/shared/probe.txt /srv/shared/probe.d — approved
+  ⚙ bash cd /tmp && su alice -s /bin/sh -c "printf x > /srv/shared/probe.txt; m…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  │ Both are defects in my checker, confirmed against real output: `%A` puts …
+[approval] edit srv-shared-acl/verify.sh (+6 −2) — approved
+  ⚙ edit srv-shared-acl/verify.sh
+    ✓ edit srv-shared-acl/verify.sh (+6 −2)
+  deepseek-v4.1-flash — 12 tool call(s) so far
+[approval] edit srv-shared-acl/verify.sh (+5 −2) — approved
+  ⚙ edit srv-shared-acl/verify.sh
+    ✓ edit srv-shared-acl/verify.sh (+5 −2)
+  deepseek-v4.1-flash — 13 tool call(s) so far
+[approval] bash: cd /app && sh srv-shared-acl/verify.sh; echo "verify exit=$?" — approved
+  ⚙ bash cd /app && sh srv-shared-acl/verify.sh; echo "verify exit=$?"
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+  │ All 32 checks pass. Now the important part: confirm the test actually *bi…
+[approval] bash: cd /app
+echo "########## idempotency: re-run setup ##########"
+sh srv-shared-acl/setup.sh; echo "rerun exit=$?"
+sh srv-shared-acl/verify.sh >/tmp/v2.log 2>&1; echo "verify after rerun exit=$?"; tail -2 /tmp/v2.log
+
+echo
+echo "########## BREAK 1: strip default ACL (inheritance gone) ##########"
+setfacl -k /srv/shared
+sh srv-shared-acl/verify.sh 2>&1 | grep -c '^FAIL'
+sh srv-shared-acl/verify.sh 2>&1 | grep '^FAIL' | head -8
+
+echo
+echo "########## BREAK 2: drop mask to r-- (alice/bob capped) ##########"
+sh srv-shared-acl/setup.sh
+setfacl -m m::r-- /srv/shared
+sh srv-shared-acl/verify.sh 2>&1 | grep '^FAIL' | head -8
+
+echo
+echo "########## BREAK 3: open to others ##########"
+sh srv-shared-acl/setup.sh
+chmod o+rx /srv/shared
+sh srv-shared-acl/verify.sh 2>&1 | grep '^FAIL' | head -5 — approved
+  ⚙ bash cd /app echo "########## idempotency: re-run setup ##########" sh srv-…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 15 tool call(s) so far
+  │ The test bites on all three break modes. Restoring the correct state and …
+[approval] bash: cd /app
+sh srv-shared-acl/setup.sh; echo "restore exit=$?"
+sh srv-shared-acl/verify.sh >/tmp/final.log 2>&1; echo "final verify exit=$?"; tail -3 /tmp/final.log
+echo "=== final state ==="
+getfacl -p /srv/shared
+stat -c 'mode=%a perms=%A owner=%U group=%G' /srv/shared
+echo "=== contents (must be empty) ==="
+ls -A /srv/shared | wc -l
+echo "=== leftover test files anywhere? ==="
+ls -A /srv/shared — approved
+  ⚙ bash cd /app sh srv-shared-acl/setup.sh; echo "restore exit=$?" sh srv-shar…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+  │ Configuration verified and directory is empty. Let me document the design…
+[approval] write srv-shared-acl/README.md (+79 −0) [new file] — approved
+  ⚙ write srv-shared-acl/README.md
+    ✓ write srv-shared-acl/README.md (+79 −0)
+  deepseek-v4.1-flash — 17 tool call(s) so far
+  deepseek-v4.1-flash — 18 tool call(s) so far
+  ⚙ note 
+    ✓ note — /srv/shared is configured (2770 root:research + full access/
+  │ One last check: prove the script works from a clean slate, not just as a …
+[approval] bash: cd /app
+echo "### teardown ###"
+setfacl -b -k /srv/shared 2>/dev/null; rmdir /srv/shared; ls -d /srv/shared 2>&1
+echo "### setup from scratch ###"
+sh srv-shared-acl/setup.sh; echo "exit=$?"
+sh srv-shared-acl/verify.sh >/tmp/scratch.log 2>&1; echo "verify exit=$?"; grep -c '^PASS' /tmp/scratch.log; tail -2 /tmp/scratch.log
+echo "### final ###"
+stat -c '%a %A %U:%G' /srv/shared; ls -A /srv/shared | wc -l
+ls -l srv-shared-acl/ — approved
+  ⚙ bash cd /app echo "### teardown ###" setfacl -b -k /srv/shared 2>/dev/null;…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 19 tool call(s) so far
+Done. `/srv/shared` is configured, verified, and left empty.
+
+## Final state
+
+```
+$ stat -c '%A %a %U:%G' /srv/shared
+drwxrws--- 2770 root:research
+
+$ getfacl -p /srv/shared
+# flags: -s-
+user::rwx          user:alice:rwx     user:bob:rwx
+group::rwx         group:research:rwx mask::rwx        other::---
+default:user::rwx  default:user:alice:rwx  default:user:bob:rwx
+default:group::rwx default:group:research:rwx default:mask::rwx default:other::---
+```
+
+## What I built
+
+`/srv/shared` is the artifact; `srv-shared-acl/` holds the reproducible form:
+
+- **`setup.sh`** — idempotent. Creates `research`/`alice`/`bob` only if missing, then sets ownership, `2770`, and both ACLs via `setfacl --set` (so the result is exactly the listed entries, not an accumulation).
+- **`verify.sh`** — 32 assertions, **all passing**, exit non-zero on failure.
+- **`README.md`** — the state and the reasoning per entry.
+
+Verified from a clean slate (I deleted the directory, rebuilt it, re-ran): 32/32 pass.
+
+## Checks that actually bite
+
+I deliberately broke the config three ways and confirmed the suite goes red, then restored:
+
+| Break | Result |
+| --- | --- |
+| `setfacl -k` (strip default ACL) | 12 failures — inheritance entries gone, new files dropped to `664` |
+| `setfacl -m m::r--` (mask caps users) | alice couldn't even create files; bob lost read/write |
+| `chmod o+rx` (open to others) | outsider `nobody` could list the directory |
+
+## Three things worth flagging
+
+1. **The mask is the load-bearing entry.** With `m::r--`, alice's and bob's `rwx` entries still *display* as `rwx` but degrade to `r--`. Anyone copying this config must keep `m::rwx`.
+2. **Order matters: `chmod` after `setfacl` rewrites the mask.** `setup.sh` therefore re-asserts `chmod 2770` last, and `verify.sh` re-checks the mode afterwards to catch drift.
+3. **Inherited files show `#effective:rw-`.** This is correct, not a fault: default ACL entries are `rwx`, but a regular file has no execute bit, so its mask is `rw-` and alice/bob get effective `rw-` — read and write, which is what was asked. I initially wrote the checker assuming a literal `user:bob:rwx` match and it failed; I confirmed against real `getfacl` output that the config was right and the checker was wrong, and fixed the checker rather than loosening the requirement. Two other checker bugs (`%A` setgid is character 7, not 6; `getfacl`'s `#effective:` suffix) were caught the same way.
+
+The verification creates probe files as alice and bob to prove inheritance works for real, then removes them — the directory is empty (`0` entries), as required.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=19 surface=a4057321a082
