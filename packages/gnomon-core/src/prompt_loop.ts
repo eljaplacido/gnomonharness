@@ -80,6 +80,7 @@ import {
   ARGS_MALFORMED,
   type SpillSink,
   DIFF_ELIDED,
+  osSandboxSummary,
 } from "./tools.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { harnessBuild } from "./build.js";
@@ -7333,10 +7334,20 @@ export async function runPromptLoop(
       "confined";
     const networkDeclared =
       (policy.sandbox as { network?: boolean } | undefined)?.network;
-    if (sandboxLevel !== "off" && networkDeclared === false) {
+    // exec = "os": say what the kernel will enforce, or that bash will refuse.
+    // Probed here, at the door, so an unsupported kernel is found before the
+    // first command rather than by it.
+    const execHere = resolveExec(config, state.currentRole);
+    const osSummary =
+      execHere.mode === "os" ? osSandboxSummary((state.network ?? networkDeclared) === true) : undefined;
+    if (osSummary) console.log(paint(ui, osSummary.ok ? "gray" : "red", `  ${osSummary.line}`));
+    if (sandboxLevel !== "off" && networkDeclared === false && !(osSummary?.ok)) {
       // One line. It printed four on every launch, which is a wall nobody
       // reads by the third session; the substance fits in one, and `/network`
       // and `gnomon explain` carry the long form for whoever asks.
+      //
+      // Not printed when exec = "os" is enforcing: then bash IS isolated from
+      // the network, and the line above says so.
       console.log(paint(ui, "yellow", NETWORK_OFF_NOTE));
     }
     // No declared check means no turn is ever checked: "done" is the model's

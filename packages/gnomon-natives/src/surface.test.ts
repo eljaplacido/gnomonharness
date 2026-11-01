@@ -66,11 +66,11 @@ describe("gnomon-natives surface", () => {
   });
 
   describe("enumerations", () => {
-    it("returns exactly 4 keys", () => {
+    it("returns exactly 5 keys", () => {
       const e = enumerations();
-      expect(Object.keys(e)).toHaveLength(4);
+      expect(Object.keys(e)).toHaveLength(5);
       expect(Object.keys(e)).toEqual(
-        expect.arrayContaining(["edit_format", "sandbox", "approval", "role_profile"])
+        expect.arrayContaining(["edit_format", "sandbox", "approval", "role_profile", "exec"])
       );
     });
 

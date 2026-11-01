@@ -171,8 +171,16 @@ so both format drift and non-determinism fail the build.
   "edit_format": ["ast", "hashline", "str_replace"],
   "sandbox": ["off", "confined", "strict"],
   "approval": ["never", "on_write", "always"],
-  "role_profile": ["local_first", "frontier_plan", "all_remote"]
+  "role_profile": ["local_first", "frontier_plan", "all_remote"],
+  "exec": ["off", "docker", "os"]
 ```
+
+**`exec` was added 2026-11-01** with the `os` value, as the fifth key and the
+last, so the four published before it keep their positions. It was the one
+enumerated surface key missing from the contract: `[sandbox] exec` had a closed
+set of values in `config.ts` (`EXEC_VALUES`) and an audit for misspellings, but
+`gnomon enumerations` did not publish it. All three values are implemented.
+`os_sandbox.test.ts` fails if `EXEC_VALUES` and the golden disagree.
 
 **`role_profile` is implemented.** This paragraph said it was "declared and not
 implemented" and stayed there after `495fa40` made it route: `applyProfile`

@@ -67,7 +67,9 @@ the same hash independently with a test holding the two together. They
 disagreed once; that test is why they no longer can.
 
 `gnomon-edit` and `gnomon-enums` back CLI commands — `apply`, `simulate`,
-`enumerations`. `gnomon-exec` backs **none**: this line named it behind
+`enumerations`. `gnomon-exec` backs **no command**, and one tool: `bash` under
+`[sandbox] exec = "os"` runs every command through `gnomon-exec sandbox`
+(2026-11-01; see docs/SANDBOX-DESIGN.md). This line named it behind
 `session` for months, and `gnomon session` does not call it. `session` uses
 `gnomon-surface` for its manifest and then runs each command through
 `SessionManager.run` in `session.ts`, which is `node:child_process.spawn` with
@@ -78,11 +80,12 @@ with a `gnomon-exec` on the binary path that exits 42 and announces itself,
 `gnomon-surface` failed the command at once, so the probe could have seen a
 call had there been one.
 
-Those crates are deliberately outside the agent loop, which reaches files
+Those crates are otherwise outside the agent loop, which reaches files
 through a TypeScript exact-string `edit` tool and processes through `spawn`.
 Moving editing and execution into the crates would put a checkable boundary
-around the loop's most dangerous operations; it is a design worth having, it is
-what `gnomon-exec` was built for, and it is not what this build does.
+around the loop's most dangerous operations. `exec = "os"` is the first piece
+of that: the boundary around `bash` is now enforced by `gnomon-exec` and the
+kernel rather than by reading the command's text. Editing is not moved.
 
 TypeScript owns the loop — turns, tools, context, skills, audit, sessions —
 where the cost of change is low and the shape is still moving.

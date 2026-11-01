@@ -13,6 +13,9 @@ pub struct Enumerations {
     pub sandbox: Vec<String>,
     pub approval: Vec<String>,
     pub role_profile: Vec<String>,
+    /// `[sandbox] exec`: where `bash` runs. Added last, so the four keys
+    /// published before it keep their positions.
+    pub exec: Vec<String>,
 }
 
 impl Enumerations {
@@ -22,6 +25,7 @@ impl Enumerations {
             sandbox: vec!["off".into(), "confined".into(), "strict".into()],
             approval: vec!["never".into(), "on_write".into(), "always".into()],
             role_profile: vec!["local_first".into(), "frontier_plan".into(), "all_remote".into()],
+            exec: vec!["off".into(), "docker".into(), "os".into()],
         }
     }
 }
@@ -52,6 +56,7 @@ mod tests {
         assert!(json.contains("sandbox"));
         assert!(json.contains("approval"));
         assert!(json.contains("role_profile"));
+        assert!(json.contains("\"exec\""));
 
         // Must be valid JSON
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -62,6 +67,7 @@ mod tests {
         assert_eq!(obj.get("sandbox").unwrap().as_array().unwrap().len(), 3);
         assert_eq!(obj.get("approval").unwrap().as_array().unwrap().len(), 3);
         assert_eq!(obj.get("role_profile").unwrap().as_array().unwrap().len(), 3);
+        assert_eq!(obj.get("exec").unwrap().as_array().unwrap().len(), 3);
     }
 
     #[test]
@@ -74,6 +80,7 @@ mod tests {
         assert_eq!(enums.sandbox, decoded.sandbox);
         assert_eq!(enums.approval, decoded.approval);
         assert_eq!(enums.role_profile, decoded.role_profile);
+        assert_eq!(enums.exec, decoded.exec);
     }
 
     #[test]
@@ -91,6 +98,10 @@ mod tests {
 
         // role_profile values
         assert_eq!(enums.role_profile, vec!["local_first", "frontier_plan", "all_remote"]);
+
+        // exec values: config.ts EXEC_VALUES must say the same, and
+        // os_sandbox.test.ts holds the two together through the golden.
+        assert_eq!(enums.exec, vec!["off", "docker", "os"]);
     }
 
     #[test]
@@ -102,10 +113,11 @@ mod tests {
         // Should not have any extra keys
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let obj = parsed.as_object().unwrap();
-        assert_eq!(obj.len(), 4);
+        assert_eq!(obj.len(), 5);
         assert!(obj.contains_key("edit_format"));
         assert!(obj.contains_key("sandbox"));
         assert!(obj.contains_key("approval"));
         assert!(obj.contains_key("role_profile"));
+        assert!(obj.contains_key("exec"));
     }
 }
