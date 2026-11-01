@@ -66,12 +66,18 @@
     a few hundred files: ~3.5 ms a status on gx10, and ~35 ms a process on the
     Windows CI runner. With git at every size, this repository's own 482-file
     tree took ~45 ms longer per stamp there.
-  - Measured with the same UX1c session, master against this change (n = 3
-    per size, gx10 under load), gnomon's own time per tool turn: 49 → 55 ms at
-    0 files, 98 → 62 at 5k, 244 → 81 at 20k, and 244 → 120 at 50k. At 0 files
-    it is ~3 ms a stamp slower, because starting git costs more than walking
-    an empty tree. On a 50,000-file tree, 20 of 20 sampled edits move the
-    stamp; the walk saw 8.
+  - Measured with the same UX1c session, master against this change. n = 3
+    per size, interleaved, on gx10 while another benchmark ran, so absolute
+    numbers moved between runs and the ratios did not. gnomon's own time per
+    tool turn:
+    - 0 files: 50 → 53 ms (the same walk);
+    - 5k: 142 → 89;
+    - 20k: 248 → 126;
+    - 50k: 422 → 144.
+
+    An earlier run, before the 2,000-file bound, gave 98 → 62, 244 → 81 and
+    244 → 120. On a 50,000-file tree, 20 of 20 sampled edits move the stamp,
+    where the walk saw 8.
   - Outside git, it walks as before. A walk that reaches the cap is now
     **unknown**, not a partial stamp.
   - `worktree_changed` is now `true`, `false` or `null` (unknown). An unknown
