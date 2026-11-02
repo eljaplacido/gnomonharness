@@ -26,6 +26,15 @@
 
 ## [Unreleased]
 
+- **Windows: a timed-out bash command has exited before the tool reports the
+  timeout.** `killTree` fired `taskkill /T /F` and returned at once, so the
+  tool reported "timed out" while the killed tree still held the shell's
+  working directory. Removing it failed with EPERM/EBUSY for about 0.4–0.5 s
+  (WINP, 2026-11-02, 3/3; reproduced on windows-latest CI as EBUSY). On win32
+  the timeout and Esc paths now wait for taskkill to finish and the shell to
+  exit, at most 2 s, before returning. Linux and macOS don't wait; the group
+  SIGKILL is synchronous, and #61's timing is unchanged.
+
 - **write_allow follows a path bound to a name in inline code.** The two
   rewrites G1c's agents used to get past a refused edit bound the path first
   (`changelog = Path("CHANGELOG.md")` ... `changelog.write_text(...)`), in a

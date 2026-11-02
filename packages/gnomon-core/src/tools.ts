@@ -1336,10 +1336,15 @@ export const NO_POSIX_SHELL =
   "    PowerShell:  $env:GNOMON_SHELL = \"C:\\path\\to\\bash.exe\"\n" +
   "    cmd:         set GNOMON_SHELL=C:\\path\\to\\bash.exe";
 
+/**
+ * Kill the command and its children. Resolves once the kill has been carried
+ * out -- on Windows, when taskkill has exited, since taskkill /T /F is what
+ * ends the tree; elsewhere at once, because the group SIGKILL is synchronous.
+ */
 function killTree(
   proc: { pid?: number; kill: (sig: NodeJS.Signals) => boolean },
   containerName?: string
-): void {
+): Promise<void> {
   // A container is not in the process group. Killing `docker run` returns the
   // shell to us and leaves the container running, so a timed-out command would
   // keep working -- writing into the repository -- after the turn had given up
@@ -1357,10 +1362,17 @@ function killTree(
   if (typeof proc.pid === "number" && process.platform === "win32") {
     // No process groups to signal. /T walks the tree, /F is SIGKILL's analogue.
     try {
-      spawn("taskkill", ["/pid", String(proc.pid), "/T", "/F"], {
+      const tk = spawn("taskkill", ["/pid", String(proc.pid), "/T", "/F"], {
         stdio: "ignore",
-      }).unref();
-      return;
+      });
+      // Not unref'd: whoever awaits this kill must keep the process alive until
+      // it settles. An unref'd taskkill plus an unref'd cap timer let Node exit
+      // mid-wait with code 13 (an unsettled top-level await) when nothing else
+      // was pending -- the Windows property-suite gate caught it.
+      return new Promise<void>((done) => {
+        tk.once("exit", () => done());
+        tk.once("error", () => done());
+      });
     } catch {
       // fall through to the direct kill below
     }
@@ -1368,7 +1380,7 @@ function killTree(
   if (typeof proc.pid === "number") {
     try {
       process.kill(-proc.pid, "SIGKILL");
-      return;
+      return Promise.resolve();
     } catch {
       // group already gone, or no permission — fall through
     }
@@ -1378,6 +1390,26 @@ function killTree(
   } catch {
     // already exited
   }
+  return Promise.resolve();
+}
+
+/**
+ * On Windows, a timed-out or cancelled command is reported only once its tree
+ * has actually gone: taskkill has finished and the shell has exited, bounded
+ * by KILL_SETTLE_MS. Fired-and-forgotten, the report raced the kill and the
+ * command's working directory stayed locked for ~0.4-0.5 s afterwards, so a
+ * caller's cleanup failed with EPERM (WINP, 2026-11-02, 3/3). Elsewhere the
+ * group SIGKILL has already done its work, and nothing waits: the timing #61
+ * measured is unchanged.
+ */
+const KILL_SETTLE_MS = 2000;
+function settleKill(killed: Promise<void>, exited: Promise<void>): Promise<void> {
+  if (process.platform !== "win32") return Promise.resolve();
+  let timer: NodeJS.Timeout | undefined;
+  const cap = new Promise<void>((done) => {
+    timer = setTimeout(done, KILL_SETTLE_MS);
+  });
+  return Promise.race([Promise.all([killed, exited]).then(() => undefined), cap]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -1997,11 +2029,16 @@ async function bashTool(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    // Resolves when the shell itself has exited, however that happened.
+    const exited = new Promise<void>((ok) => {
+      if (proc.exitCode !== null || proc.signalCode !== null) ok();
+      else proc.once("exit", () => ok());
+    });
 
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       if (settled) return;
       settled = true;
-      killTree(proc, sandboxed ? sandboxName : undefined);
+      await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
       // What the command printed before it was killed is evidence the harness
       // already holds: the failing test, the last line of a build, the prompt it
       // was blocked on. Discarding it left the model with nothing to act on but
@@ -2036,11 +2073,11 @@ async function bashTool(
 
     // The operator pressing Esc must reach the process, not merely be noticed
     // once it has finished.
-    const onAbort = () => {
+    const onAbort = async () => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      killTree(proc, sandboxed ? sandboxName : undefined);
+      await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
       releasePipes(proc);
       done({
         code: TOOL_FAILED,
