@@ -9,11 +9,11 @@
  */
 
 import * as readline from "node:readline";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { checkCitations } from "./citations.js";
 import { mustFailFirst, readVerifyExit } from "./must_fail_first.js";
-import { resolve, dirname, join, basename } from "node:path";
-import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync} from "node:fs";
+import { resolve, dirname, join, basename, sep } from "node:path";
+import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   GnomonConfig,
@@ -2322,9 +2322,12 @@ export function measureTreeDelta(
    */
   baseline?: TreeSnapshot,
   /** Internal: return the raw snapshot instead of a delta. */
-  wantSnapshot = false
+  wantSnapshot = false,
+  /** Internal, tests only: force the pre-2026-11-02 call sequence. */
+  opts: { legacy?: boolean } = {}
 ): TreeDelta & { __snapshot?: TreeState } {
   const run = (args: string[]): string | null => {
+    __treeGitCalls.n++;
     try {
       return execFileSync("git", args, {
         cwd: root, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"],
@@ -2350,7 +2353,25 @@ export function measureTreeDelta(
     }
     return m;
   };
-  const plain = run(["diff", "--numstat", "HEAD"]) ?? run(["diff", "--numstat"]);
+  // FEWER GIT PROCESSES, SAME ANSWER (2026-11-02).
+  //
+  // A turn used to spawn git ten times for this bookkeeping: four calls for the
+  // baseline, six for the end, four of them failing by design in a repository
+  // with no commits. On Windows each call costs ~18 ms, which made it half of
+  // a whole turn (UX1W: 319 ms with git on PATH, 156 ms without, identical
+  // bytes on the wire). One `git status --porcelain=v2` now says whether there
+  // is anything for the other calls to find; they run only when there is.
+  // Anything the status call cannot vouch for falls back to the old sequence,
+  // so the numbers are the same in every case (tests compare both paths).
+  const fast = opts.legacy ? null : gitStatusGate(root);
+  if (fast === "not-a-repo") {
+    return { files: 0, insertions: 0, deletions: 0, crlf_only: 0, unavailable: "not a git worktree" };
+  }
+  const plain = fast
+    ? (!fast.trackedChanged ? ""
+      : fast.head ? run(["diff", "--numstat", "HEAD"]) ?? run(["diff", "--numstat"])
+      : run(["diff", "--numstat"]))
+    : run(["diff", "--numstat", "HEAD"]) ?? run(["diff", "--numstat"]);
   if (plain === null) return { files: 0, insertions: 0, deletions: 0, crlf_only: 0, unavailable: "not a git worktree" };
 
   // UNTRACKED FILES ARE THE POINT, and they were invisible.
@@ -2362,11 +2383,12 @@ export function measureTreeDelta(
   // {"files":0,"insertions":0}. Both tests added with the baseline used files
   // the fixture had committed, so neither could see it.
   const untracked = new Map<string, number | null>();
-  for (const rel of (run(["ls-files", "--others", "--exclude-standard"]) ?? "")
-    .split("\n").map((l) => l.trim()).filter(Boolean)) {
-    untracked.set(rel, countLines(join(root, rel)));
-  }
-  const head = (run(["rev-parse", "HEAD"]) ?? "").trim() || null;
+  const untrackedRels = fast && fast.untracked !== null
+    ? fast.untracked
+    : (run(["ls-files", "--others", "--exclude-standard"]) ?? "")
+      .split("\n").map((l) => l.trim()).filter(Boolean);
+  for (const rel of untrackedRels) untracked.set(rel, countLines(join(root, rel)));
+  const head = fast ? fast.head : (run(["rev-parse", "HEAD"]) ?? "").trim() || null;
   const a = parse(plain);
 
   if (wantSnapshot) {
@@ -2390,7 +2412,14 @@ export function measureTreeDelta(
     };
   }
 
-  const b = parse(run(["diff", "--numstat", "--ignore-cr-at-eol", "HEAD"]) ?? run(["diff", "--numstat", "--ignore-cr-at-eol"]) ?? "");
+  // Asked only when a tracked file actually reaches the CRLF question below:
+  // with nothing changed, its answer could not move any count.
+  let b: Map<string, [number | null, number | null]> | undefined;
+  const crlfAware = (): Map<string, [number | null, number | null]> =>
+    (b ??= parse(
+      (fast && !fast.head ? null : run(["diff", "--numstat", "--ignore-cr-at-eol", "HEAD"]))
+        ?? run(["diff", "--numstat", "--ignore-cr-at-eol"]) ?? ""));
+  if (opts.legacy) crlfAware();   // the old sequence asked it every time
   let insertions = 0, deletions = 0, crlfOnly = 0, files = 0;
 
   for (const [file, [i, d]] of a) {
@@ -2412,7 +2441,7 @@ export function measureTreeDelta(
     if (baseline && di === 0 && dd === 0) continue;
     files++;
     insertions += di; deletions += dd;
-    if (!b.has(file)) crlfOnly++;
+    if (!crlfAware().has(file)) crlfOnly++;
   }
 
   // A file the turn REVERTED to its committed state leaves the numstat
@@ -2443,6 +2472,79 @@ export function measureTreeDelta(
   }
 
   return { files, insertions, deletions, crlf_only: crlfOnly };
+}
+
+/** Internal, tests only: how many git processes the tree bookkeeping started. */
+export const __treeGitCalls = { n: 0 };
+
+/**
+ * One `git status --porcelain=v2 -z` in place of the calls it can stand in for.
+ *
+ * - `head`: the commit, or null before the first commit (`(initial)`).
+ * - `trackedChanged`: whether any tracked path differs from HEAD in the index
+ *   or the worktree. When false, `git diff --numstat [HEAD]` is empty too.
+ * - `untracked`: the paths `git ls-files --others --exclude-standard` would
+ *   print from `root`, or null when that cannot be reproduced exactly (a path
+ *   git would quote, or a root git might place elsewhere), so the caller asks
+ *   ls-files itself.
+ *
+ * Returns "not-a-repo" when git says so, and null on any other failure; the
+ * caller then runs the old call sequence unchanged.
+ */
+function gitStatusGate(root: string):
+  | { head: string | null; trackedChanged: boolean; untracked: string[] | null }
+  | "not-a-repo" | null {
+  // An environment that points git elsewhere: the walk below could not know.
+  if (process.env.GIT_DIR || process.env.GIT_WORK_TREE) return null;
+  __treeGitCalls.n++;
+  const r = spawnSync("git", ["--no-optional-locks", "status", "--porcelain=v2", "-z",
+    "--branch", "--untracked-files=all"], { cwd: root, encoding: "utf8", timeout: 5000 });
+  if (r.status !== 0 || typeof r.stdout !== "string") {
+    return /not a git repository/i.test(String(r.stderr ?? "")) ? "not-a-repo" : null;
+  }
+  let head: string | null = null, trackedChanged = false;
+  const untrackedTop: string[] = [];
+  const tok = r.stdout.split("\0");
+  for (let i = 0; i < tok.length; i++) {
+    const t = tok[i]!;
+    if (t === "") continue;
+    if (t.startsWith("# branch.oid ")) { const o = t.slice(13); head = o === "(initial)" ? null : o; continue; }
+    if (t.startsWith("#")) continue;
+    const kind = t[0];
+    if (kind === "1" || kind === "u") trackedChanged = true;
+    else if (kind === "2") { trackedChanged = true; i++; }     // a rename's original path follows
+    else if (kind === "?") untrackedTop.push(t.slice(2));
+  }
+  if (untrackedTop.length === 0) return { head, trackedChanged, untracked: [] };
+  // ls-files prints paths relative to `root` and only below it; status prints
+  // them from the repository's top. And ls-files (without -z) quotes any path
+  // with a control character, a quote, a backslash or a non-ASCII byte, which
+  // changes what countLines can read. Reproduce it only where that is exact.
+  if (untrackedTop.some((p) => !/^[\x20-\x7e]+$/.test(p) || p.includes('"') || p.includes("\\"))) {
+    return { head, trackedChanged, untracked: null };
+  }
+  const top = worktreeTop(root);
+  if (top === null) return { head, trackedChanged, untracked: null };
+  let real: string;
+  try { real = realpathSync(root); } catch { return { head, trackedChanged, untracked: null }; }
+  const prefix = real === top ? "" : real.startsWith(top + sep) ? real.slice(top.length + 1).split(sep).join("/") + "/" : null;
+  if (prefix === null) return { head, trackedChanged, untracked: null };
+  return {
+    head, trackedChanged,
+    untracked: untrackedTop.filter((p) => p.startsWith(prefix)).map((p) => p.slice(prefix.length)),
+  };
+}
+
+/** The nearest directory at or above `root` holding `.git`, resolved; null when none. */
+function worktreeTop(root: string): string | null {
+  let dir: string;
+  try { dir = realpathSync(root); } catch { return null; }
+  for (;;) {
+    if (existsSync(join(dir, ".git"))) return dir;
+    const up = dirname(dir);
+    if (up === dir) return null;
+    dir = up;
+  }
 }
 
 /** Line count of a file, or null when it is binary or unreadable. */

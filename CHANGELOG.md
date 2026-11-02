@@ -39,6 +39,26 @@
     (p < 0.0001), $ per solved task 0.052 → 0.035, 37 vs 34 tasks solved
     (not significant).
   - Stage 2 runs the same A/B on the local model before this merges.
+- **A turn spawns git 2 times instead of 7–10. On Windows a turn takes 209 ms
+  instead of 335.** gnomon measures what each turn changed in the worktree
+  (`tree_delta`) with git, and spent ten processes on it: four for the
+  baseline, six at the end, four of them failing by design before a
+  repository's first commit. UX1W (2026-11-02) found that half of a Windows
+  turn. One `git --no-optional-locks status --porcelain=v2` now decides which
+  of the other calls can find anything, and the rest run only then. A status
+  that fails falls back to the old sequence.
+  - **Same numbers:** ten scenarios are measured both ways and must agree
+    exactly (nothing changed, a shell-only edit, an untracked file beside an
+    ignored one, a deleted file, no commits, a non-repository, a project in a
+    subdirectory, paths git quotes, a staged rename, CRLF churn with a
+    binary).
+  - **Windows** (the hub, UX1W's warm one-turn harness, n = 20 paired against
+    master `891b559`): wall 335 → 209 ms (lower in 20/20), CPU 281 → 156 ms
+    (19/20), first request 48 ms sooner, 22 → 6 processes, identical bytes on
+    the wire.
+  - **Linux** (gx10 at load ~15, n = 20 paired): CPU −10.5 ms (16/20) with no
+    commits, −13.2 ms (15/20) with one. git is cheap there.
+  - Evidence: `docs/perf-2026-11-02-git-calls/`.
 
 - **The trust gate no longer costs every `task` and `prompt` ~15 ms.** The
   2026-11-01 audit (row 23) measured one headless turn at 168 ms CPU on 0.3.2
