@@ -72,3 +72,16 @@ that it was measured on the hosted model only.
 P1-H measured gnomon flipping on 3 of 16 tasks across its 3 attempts. The
 base arm also replicates P1-H's gnomon arm on v0.3.2; a large difference
 between the two would point at the build, not the prompt, and is reported.
+
+## Amendment, 2026-11-02T05:44Z: stage 2 apparatus, before any stage-2 cell
+
+Stage 2 runs on P1's local apparatus, unchanged except for the arms:
+`apparatus/run_lean_local.sh`, adapted from `peers-2026-11/apparatus/run_peers.sh`.
+- **Same as P1:** it holds gpu.lock; relay-meter listens on 172.17.0.1:18080 and forwards to llama-server on 127.0.0.1:18080, with counters on :18099; 900 s cap; one cell at a time; seed = attempt.
+- **Cells:** ids `ll-k1-<arm>-<task>`, 16 tasks × 1 attempt × 2 arms = 32.
+- **Analysis:** `apparatus/collect_lean_local.py`, which is `collect_lean.py` with the cell prefix `ll-` and its own summary file. The rule is unchanged: lean ships only if it solves at least (base − 2).
+- **Local cells have no Go allowance,** so $ per solved is 0 there and is not reported for stage 2.
+
+P1 released the GPU at 2026-11-01T23:20Z. Nothing was queued to start stage 2
+automatically, so the GPU sat idle until this launch. That changes the timing,
+not the design.
