@@ -1257,6 +1257,14 @@ describe("model API errors", () => {
     expect(c({ errName: "TimeoutError", message: "The operation timed out" })).toBe(11);
     expect(c({ message: "fetch failed: ECONNREFUSED" })).toBe(12);
     expect(c({ status: 400, message: "maximum context length exceeded" })).toBe(13);
+    // llama.cpp's wording (R1, 2026-11-02): read as 10 it ended the turn.
+    expect(
+      c({
+        status: 400,
+        message:
+          '{"error":{"code":400,"message":"request (107910 tokens) exceeds the available context size (98304 tokens), try increasing it","type":"exceed_context_size_error"}}',
+      })
+    ).toBe(13);
   });
 
   it("retries a transient failure and reports each attempt", async () => {
@@ -2343,6 +2351,37 @@ describe("runTask — the non-interactive contract", () => {
     }) as unknown as typeof fetch;
 
     await withFetch(overflowThenFine, async () => {
+      const record = await promptLoop.runTask(config, "do the thing", { role: "implement", yes: true });
+      expect(record.output).toContain("recovered");
+      expect(call).toBeGreaterThanOrEqual(2);
+    });
+  }, 20000);
+
+  it("recovers from llama.cpp's context overflow, which it words differently", async () => {
+    const config: any = loadConfig("../..");
+    let call = 0;
+    const llamaOverflowThenFine = (async () => {
+      call++;
+      if (call === 1) {
+        return {
+          ok: false,
+          status: 400,
+          statusText: "Bad Request",
+          text: async () =>
+            JSON.stringify({
+              error: {
+                code: 400,
+                message:
+                  "request (107910 tokens) exceeds the available context size (98304 tokens), try increasing it",
+                type: "exceed_context_size_error",
+              },
+            }),
+        };
+      }
+      return { ok: true, json: async () => ({ message: { content: "recovered and answered" } }) };
+    }) as unknown as typeof fetch;
+
+    await withFetch(llamaOverflowThenFine, async () => {
       const record = await promptLoop.runTask(config, "do the thing", { role: "implement", yes: true });
       expect(record.output).toContain("recovered");
       expect(call).toBeGreaterThanOrEqual(2);
