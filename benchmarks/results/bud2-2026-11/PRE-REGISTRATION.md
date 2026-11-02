@@ -89,3 +89,18 @@ reported per arm and asserted to sum to n.
 7. Clean up (`apparatus/cleanup-hub-lane.sh`: stop the hub server and close the tunnel; the GGUF stays).
 
 **Final:** smoke passed (`smoke-summary.txt`); this file is the BUD-2 pre-registration as of 2026-11-02T15:37:34Z, before any measured `b2-` cell.
+
+## Amendment, 2026-11-02T15:42Z: paused for the user's reprioritisation
+
+The user asked to put today's effort into the hybrid task-completion runs, so R1H
+takes the hub lane now. BUD-2 is paused at 2026-11-02T15:42Z.
+- **Kept:** 2 finished cells (b2-k1-budget-fix-code-vulnerability and b2-k1-base-fix-code-vulnerability).
+- **Aborted and excluded:** the in-flight cell b2-k1-base-parallelize-graph, moved to `runs-aborted/`. It re-runs from scratch on resume.
+
+**Resume:** later, on the same hub lane, with everything else unchanged:
+- the same cap (270 s), builds (base d59e6c19, budget c3bcb997), runner (`apparatus/run_bud2.sh`) and task order;
+- the runner skips finished cells;
+- `-np 1`, as pre-registered: R1H's concurrency amendment does not apply here, and the lane is restarted with `-np 1` before BUD-2 resumes.
+
+The analysis covers all 96 cells and is run only when the run is complete. Nothing is
+read from the 2 finished cells before then.
