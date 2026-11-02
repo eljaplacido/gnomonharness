@@ -26,6 +26,19 @@
 
 ## [Unreleased]
 
+- **Verification in proportion to the task: about a third less spent per
+  solved task on a hosted model.** The scaffold's `system.md` told the model to
+  turn every constraint into its own check and paste the output. On DeepSeek
+  V4.1 Flash that produced test suites, helper scripts and mutation testing
+  nobody asked for, and gnomon spent the most per solved task of five
+  harnesses (P1-H). The rule keeps its core: run what you produced. It loses
+  the per-constraint mandate, and adds "stop once the requirements are met"
+  and short reports. `gnomon migrate` replaces the exact old block only.
+  - Pre-registered A/B (`benchmarks/results/lean-2026-11/`, branch
+    `bench/peers-2026-11`), hosted model, 48 pairs: output tokens −28%
+    (p < 0.0001), $ per solved task 0.052 → 0.035, 37 vs 34 tasks solved
+    (not significant).
+  - Stage 2 runs the same A/B on the local model before this merges.
 - **`gnomon check --format gnomon` reads gnomon's own audit trail.** G1-R
   (bench/peers-2026-11, `benchmarks/results/g1r-2026-11/`) re-scored G1 on master:
   check now catches 44/44 of the peers' violations, and its one miss was gnomon's

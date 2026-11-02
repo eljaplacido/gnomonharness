@@ -105,6 +105,36 @@ describe("gnomon migrate — daily-use defaults (2026-09-29)", () => {
     expect(pendingMigrations(gnomonDir)).toEqual([]);
   });
 
+  it("replaces only the exact scaffold verification rule, keeping line endings (2026-11-01)", () => {
+    const OLD =
+      "- Run what you produced before you end the turn. Turn each constraint the\n" +
+      "  task states into a command that fails if it is violated, run it, and paste\n" +
+      "  the output. Writing the file is not producing the artifact: a script that\n" +
+      "  has never been executed is a guess about what it does, and \"it exists\" is\n" +
+      "  not \"it works\".\n" +
+      "- Get to something that works end to end first, then improve it. If the\n" +
+      "  deliverable is not on disk yet, make it exist before refining anything —\n" +
+      "  a turn spent validating a thing that was never produced scores nothing.\n";
+    for (const nl of ["\n", "\r\n"]) {
+      const before = ("Rules:\n- first rule\n" + OLD).replace(/\n/g, nl);
+      writeFileSync(join(gnomonDir, "system.md"), before, "utf-8");
+      applyMigrations(pendingMigrations(gnomonDir));
+      const out = readFileSync(join(gnomonDir, "system.md"), "utf-8");
+      expect(out).not.toContain("Turn each constraint");
+      expect(out).toContain(`Verify in proportion to the task`);
+      expect(out.startsWith(`Rules:${nl}- first rule${nl}`)).toBe(true);
+      expect(out.split(nl).length).toBe(out.split("\n").length);
+      expect(pendingMigrations(gnomonDir)).toEqual([]);
+    }
+    // The migrated text is exactly what a fresh scaffold writes.
+    const scaffold = readFileSync(new URL("./init.ts", import.meta.url), "utf-8");
+    const migrated = readFileSync(join(gnomonDir, "system.md"), "utf-8").replace(/\r\n/g, "\n");
+    expect(scaffold).toContain(migrated.slice("Rules:\n- first rule\n".length));
+    // An edited rule is somebody's choice, and is left alone.
+    writeFileSync(join(gnomonDir, "system.md"), OLD.replace("paste\n  the output", "show\n  the output"), "utf-8");
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+  });
+
   it("adds the project's own check when policy.toml declares none, and never invents one", () => {
     writeFileSync(join(gnomonDir, "policy.toml"), "[approval]\ngate = \"on_write\"\n# [verify]\n# command = \"pytest -q\"\n", "utf-8");
     expect(pendingMigrations(gnomonDir)).toEqual([]);
