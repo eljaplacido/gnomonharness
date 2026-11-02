@@ -3998,7 +3998,9 @@ describe("measureTreeDelta — fewer git processes, the same numbers", () => {
   it("a path git would quote falls back to ls-files and still agrees", () => {
     const root = init(true);
     both(root, () => writeFileSync(join(root, "päivä.txt"), "a\nb\n"));
-    both(root, () => writeFileSync(join(root, 'quo"te.txt'), "q\n"));
+    // Windows forbids " in file names, so that spelling can't occur there; the
+    // non-ASCII name above is the quoted case every platform can hold.
+    if (process.platform !== "win32") both(root, () => writeFileSync(join(root, 'quo"te.txt'), "q\n"));
     rmSync(root, { recursive: true, force: true });
   });
 
