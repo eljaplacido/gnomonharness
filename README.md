@@ -61,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1643 TypeScript tests (1358 core, 260 cli, 18
-> natives, 7 tui) and 60 Rust tests — **1703 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1646 TypeScript tests (1360 core, 261 cli, 18
+> natives, 7 tui) and 60 Rust tests — **1706 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
