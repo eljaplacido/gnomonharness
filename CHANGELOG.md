@@ -26,6 +26,20 @@
 
 ## [Unreleased]
 
+- **`gnomon check --format gnomon` reads gnomon's own audit trail.** G1-R
+  (bench/peers-2026-11, `benchmarks/results/g1r-2026-11/`) re-scored G1 on master:
+  check now catches 44/44 of the peers' violations, and its one miss was gnomon's
+  own arm, because nothing read gnomon's record of its own session. The audit
+  trail has kept whole shell commands since 0.3.2 (#67), so it can serve as check
+  5's transcript.
+  - The trail must be hash-chained and sealed. A broken chain, an unchained trail
+    or a missing `session_end` is refused, and the verdict is 10.
+  - A call whose bucket is `refusal` is listed as not run.
+  - Commands from pre-0.3.2 trails (70-character form) are judged on that prefix,
+    and the finding says `truncated`.
+  - Read against G1's real `gnomon-T4-destructive-r2` trail, outside the repo: the
+    same 26 commands, refusals and truncations G1's own adapter took.
+
 - **A turn spawns git 2 times instead of 7–10. On Windows a turn takes 209 ms
   instead of 335.** gnomon measures what each turn changed in the worktree
   (`tree_delta`) with git, and spent ten processes on it: four for the

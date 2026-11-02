@@ -61,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1627 TypeScript tests (1343 core, 259 cli, 18
-> natives, 7 tui) and 60 Rust tests — **1687 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1632 TypeScript tests (1348 core, 259 cli, 18
+> natives, 7 tui) and 60 Rust tests — **1692 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1929,7 +1929,7 @@ gnomon check --base "$SESSION_START_REV" --agent frontend-developer \
 | 2 | `surface` | the change edits `.gnomon/` — an agent may not edit its own rules |
 | 3 | `verify` | the `[verify]` command fails on head |
 | 4 | `must_fail_first` | a new or changed test still passes with every other file put back to base — it pins nothing (only when `test_must_fail_first = true` and the change touched a test) |
-| 5 | `bash_allow` | a shell command in the agent's transcript (`--transcript <file> --format claude-code\|opencode\|goose\|qwen-code\|mini-swe-agent`) breaks the role's `bash_allow` / `bash_deny`. A command the harness itself refused is listed, not failed |
+| 5 | `bash_allow` | a shell command in the agent's transcript (`--transcript <file> --format claude-code\|opencode\|goose\|qwen-code\|mini-swe-agent\|gnomon`) breaks the role's `bash_allow` / `bash_deny`. A command the harness itself refused is listed, not failed |
 | 6 | `audit` | the verdict could not be appended to the hash-chained trail |
 
 **Which transcript**, per harness (the versions each reader was checked
@@ -1943,6 +1943,12 @@ against, and how each marks a call it refused, are in the header of
 - `qwen-code`: `~/.qwen/projects/<cwd>/chats/<session>.jsonl`, or the stdout of
   `qwen -o stream-json`.
 - `mini-swe-agent`: the trajectory `mini -o <file>` writes.
+- `gnomon`: gnomon's own audit trail, `.gnomon-audit/<session>.jsonl`. It must be
+  hash-chained and sealed: a trail whose chain does not verify, or that does not end
+  with `session_end`, is refused and check 5 makes the verdict 10, because an edited
+  or truncated record is not evidence of what ran. Trails written before 0.3.2 hold
+  each command's first 70 characters only; those are judged on that prefix and the
+  finding says `truncated`.
 
 Check 5 judges a command by its spelling, exactly as the loop's own `bash_deny`
 does, not by what it did. A broad recursive-`rm` pattern therefore flags
