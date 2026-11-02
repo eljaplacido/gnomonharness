@@ -22,8 +22,8 @@ amendments logged before the results they concern were read.
 
 The Linux hashes are the same from natives built from master and from the
 v0.3.3 release binary (`runs/linux-hashes.txt`). The same committed `.gnomon/`
-names the same rules on both operating systems: \`git ls-files --eol\` shows
-\`eol=lf\` in index and worktree on the Windows clone.
+names the same rules on both operating systems: `git ls-files --eol` shows
+`eol=lf` in index and worktree on the Windows clone.
 
 ## What did not work as written on Windows (findings)
 
