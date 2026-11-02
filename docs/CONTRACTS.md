@@ -662,5 +662,6 @@ alone). `skill_reject` adds `reason` when `--reason` was given.
 A reject's two surface hashes are equal, because proposals are not hashed. They
 are kept so that one reader handles both kinds.
 
-**Fixture**: `packages/gnomon-core/src/skills.test.ts` accepts and rejects
-proposals and reads these keys back off the trail.
+**Fixture**: `conformance/skill_decision.json`. `packages/gnomon-core/src/skills.test.ts`
+accepts and rejects proposals, reads the records back off the trail, and
+asserts their kinds and keys against the fixture.

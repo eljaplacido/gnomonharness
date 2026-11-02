@@ -276,6 +276,30 @@ describe("accept and reject leave a record", () => {
     expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["n"]);
   });
 
+  it("matches conformance/skill_decision.json", () => {
+    const fixture = JSON.parse(
+      readFileSync(join(process.cwd(), "..", "..", "conformance", "skill_decision.json"), "utf-8")
+    );
+    const base = ["seq", "ts", "kind", "prev", "hash"];
+    proposeSkill(cfg(), { name: "a", body: "b" });
+    proposeSkill(cfg(), { name: "c", body: "d" });
+    acceptSkill(cfg(), "a");
+    rejectSkill(cfg(), "c", { reason: "why" });
+    const decided = trails().map((t) => {
+      expect(t.records.map((r) => r.kind)).toEqual(["session_start", t.records[1].kind, "session_end"]);
+      expect(t.records[0].mode).toBe(fixture.session_start_mode);
+      return t.records[1];
+    });
+    for (const r of decided) {
+      expect(fixture.audit_kinds).toContain(r.kind);
+      expect(Object.keys(r).filter((k) => !base.includes(k)).sort()).toEqual(
+        [...fixture.audit_keys[r.kind as string]].sort()
+      );
+      expect(r.by).toBe(fixture.by_from_cli);
+    }
+    expect(decided.find((r) => r.kind === "skill_accept")?.evidence).toBe(fixture.evidence_without_report);
+  });
+
   it("a reject whose record cannot be written leaves the proposal", () => {
     proposeSkill(cfg(), { name: "n", body: "b" });
     writeFileSync(join(root, "blocked"), "not a directory", "utf-8");
