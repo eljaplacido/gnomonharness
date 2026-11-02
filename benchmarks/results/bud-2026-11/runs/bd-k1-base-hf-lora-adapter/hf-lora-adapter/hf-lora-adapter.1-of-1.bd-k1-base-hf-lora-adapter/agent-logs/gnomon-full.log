@@ -1,0 +1,202 @@
+  │ I'll set up the language detection system step by step. Let me start by c…
+[approval] bash: python3 --version && pip list 2>/dev/null | grep -iE "torch|transformers|accelerate|peft" && ls /app/ 2>/dev/null — approved
+  ⚙ bash python3 --version && pip list 2>/dev/null | grep -iE "torch|transforme…
+    ✗ bash — exit 1
+  qwen3.6-35b — 1 tool call(s) so far
+[approval] bash: mkdir -p /app/model_cache /app/merged_model — approved
+  ⚙ bash mkdir -p /app/model_cache /app/merged_model
+    ✓ bash — exit 0
+  qwen3.6-35b — 2 tool call(s) so far
+[approval] bash: pip install torch transformers accelerate peft 2>&1 | tail -5 — approved
+  ⚙ bash pip install torch transformers accelerate peft 2>&1 | tail -5
+    ✓ bash — exit 0
+  qwen3.6-35b — 3 tool call(s) so far
+  │ Good, dependencies installed. Now let me create the setup script:
+[approval] write /app/setup_model.py (+91 −0) [new file] — approved
+  ⚙ write /app/setup_model.py
+    ✓ write /app/setup_model.py (+91 −0)
+  qwen3.6-35b — 4 tool call(s) so far
+[approval] bash: cd /app && python3 setup_model.py 2>&1 — approved
+  ⚙ bash cd /app && python3 setup_model.py 2>&1
+    ✓ bash — exit 0
+  qwen3.6-35b — 5 tool call(s) so far
+  │ The model loaded, merged, and ran inference. Let me verify the outputs:
+[approval] bash: cat /app/detection_results.json — approved
+  ⚙ bash cat /app/detection_results.json
+    ✓ bash — exit 0
+  qwen3.6-35b — 6 tool call(s) so far
+[approval] bash: ls -la /app/model_cache/xlm-roberta-base/ && echo "---" && ls -la /app/merged_model/ — approved
+  ⚙ bash ls -la /app/model_cache/xlm-roberta-base/ && echo "---" && ls -la /app…
+    ✓ bash — exit 0
+  qwen3.6-35b — 7 tool call(s) so far
+  │ Let me verify the merged model config confirms 20 labels and that the mer…
+[approval] bash: python3 -c "
+import json
+with open('/app/merged_model/config.json') as f:
+    cfg = json.load(f)
+print('num_labels:', cfg.get('num_labels'))
+print('model_type:', cfg.get('model_type'))
+" — approved
+  ⚙ bash python3 -c " import json with open('/app/merged_model/config.json') as…
+    ✓ bash — exit 0
+  qwen3.6-35b — 8 tool call(s) so far
+[approval] bash: python3 -c "
+import json, torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+# Load merged model from disk and re-test
+model = AutoModelForSequenceClassification.from_pretrained('/app/merged_model/')
+tokenizer = AutoTokenizer.from_pretrained('/app/merged_model/')
+model.eval()
+
+samples = [
+    'Bonjour, comment allez-vous aujourd'hui?',
+    'Hola, ¿cómo estás hoy?',
+    'Guten Tag, wie geht es Ihnen?',
+    'Ciao, come stai oggi?',
+    'Olá, como você está?',
+    'Привет, как дела?',
+    'こんにちは、お元気ですか？',
+    '你好，你好吗？',
+    'مرحبا، كيف حالك؟',
+    'Hello, how are you?',
+]
+
+with open('/app/detection_results.json') as f:
+    expected = json.load(f)
+
+with torch.no_grad():
+    for i, text in enumerate(samples):
+        inputs = tokenizer(text, return_tensors='pt', truncation=True, max_length=512, padding=True)
+        outputs = model(**inputs)
+        probs = torch.softmax(outputs.logits, dim=-1)
+        conf, pred = torch.max(probs, dim=-1)
+        match = '✓' if pred.item() == expected[i]['predicted_class_id'] else '✗'
+        print(f'{match} {text[:30]:30s} -> class {pred.item():2d} (conf: {conf.item():.4f}) expected {expected[i][\"predicted_class_id\"]}')
+print('All results match expected output.')
+" 2>&1 — approved
+  ⚙ bash python3 -c " import json, torch from transformers import AutoTokenizer…
+    ✗ bash — exit 1
+  qwen3.6-35b — 9 tool call(s) so far
+  │ The config.json doesn't store `num_labels` explicitly (it's in the model …
+[approval] bash: python3 << 'PYEOF'
+import json, torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+model = AutoModelForSequenceClassification.from_pretrained('/app/merged_model/')
+tokenizer = AutoTokenizer.from_pretrained('/app/merged_model/')
+model.eval()
+
+samples = [
+    "Bonjour, comment allez-vous aujourd'hui?",
+    "Hola, ¿cómo estás hoy?",
+    "Guten Tag, wie geht es Ihnen?",
+    "Ciao, come stai oggi?",
+    "Olá, como você está?",
+    "Привет, как дела?",
+    "こんにちは、お元気ですか？",
+    "你好，你好吗？",
+    "مرحبا، كيف حالك؟",
+    "Hello, how are you?",
+]
+
+with open('/app/detection_results.json') as f:
+    expected = json.load(f)
+
+with torch.no_grad():
+    for i, text in enumerate(samples):
+        inputs = tokenizer(text, return_tensors='pt', truncation=True, max_length=512, padding=True)
+        outputs = model(**inputs)
+        probs = torch.softmax(outputs.logits, dim=-1)
+        conf, pred = torch.max(probs, dim=-1)
+        match = 'OK' if pred.item() == expected[i]['predicted_class_id'] else 'FAIL'
+        print(f'{match} {text[:35]:35s} -> class {pred.item():2d} (conf: {conf.item():.4f}) expected {expected[i]["predicted_class_id"]}')
+print('Verification complete.')
+PYEOF — approved
+  ⚙ bash python3 << 'PYEOF' import json, torch from transformers import AutoTok…
+    ✓ bash — exit 0
+  qwen3.6-35b — 10 tool call(s) so far
+  │ All 10 samples produce matching results when loading the merged model fro…
+[approval] bash: python3 << 'PYEOF'
+import json
+with open('/app/model_cache/xlm-roberta-base/config.json') as f:
+    cfg = json.load(f)
+print("num_labels:", cfg.get("num_labels"))
+print("id2label:", cfg.get("id2label"))
+PYEOF — approved
+  ⚙ bash python3 << 'PYEOF' import json with open('/app/model_cache/xlm-roberta…
+    ✓ bash — exit 0
+  qwen3.6-35b — 11 tool call(s) so far
+  │ The `num_labels` isn't persisted in config.json by the transformers libra…
+[approval] bash: python3 << 'PYEOF'
+import json
+
+# Fix config.json to include num_labels
+with open('/app/model_cache/xlm-roberta-base/config.json') as f:
+    cfg = json.load(f)
+
+cfg['num_labels'] = 20
+cfg['id2label'] = {str(i): f"LABEL_{i}" for i in range(20)}
+cfg['label2id'] = {f"LABEL_{i}": i for i in range(20)}
+
+with open('/app/model_cache/xlm-roberta-base/config.json', 'w') as f:
+    json.dump(cfg, f, indent=2)
+
+print("Updated config.json with num_labels=20")
+
+# Also update merged model config
+with open('/app/merged_model/config.json') as f:
+    cfg2 = json.load(f)
+
+cfg2['num_labels'] = 20
+cfg2['id2label'] = {str(i): f"LABEL_{i}" for i in range(20)}
+cfg2['label2id'] = {f"LABEL_{i}": i for i in range(20)}
+
+with open('/app/merged_model/config.json', 'w') as f:
+    json.dump(cfg2, f, indent=2)
+
+print("Updated merged config.json with num_labels=20")
+PYEOF — approved
+  ⚙ bash python3 << 'PYEOF' import json # Fix config.json to include num_labels…
+    ✓ bash — exit 0
+  qwen3.6-35b — 12 tool call(s) so far
+[approval] bash: python3 << 'PYEOF'
+import json
+for path in ['/app/model_cache/xlm-roberta-base/config.json', '/app/merged_model/config.json']:
+    with open(path) as f:
+        cfg = json.load(f)
+    print(f"{path}: num_labels={cfg['num_labels']}, labels={len(cfg['id2label'])}")
+PYEOF — approved
+  ⚙ bash python3 << 'PYEOF' import json for path in ['/app/model_cache/xlm-robe…
+    ✓ bash — exit 0
+  qwen3.6-35b — 13 tool call(s) so far
+Everything is set up and verified. Here's a summary:
+
+**Completed tasks:**
+
+1. **Base model downloaded** — `FacebookAI/xlm-roberta-base` loaded from HuggingFace
+2. **LoRA adapter applied** — `dominguesm/xlm-roberta-base-lora-language-detection` merged via PEFT
+3. **20 language classes configured** — `num_labels=20` set in both configs
+4. **Base model saved** — `/app/model_cache/xlm-roberta-base/` (model + tokenizer)
+5. **LoRA merged** — `PeftModel.merge_and_unload()` applied
+6. **Merged model saved** — `/app/merged_model/` (model + tokenizer)
+7. **Detection results saved** — `/app/detection_results.json` with all 10 samples
+
+**Detection results** (all high confidence, 0.936–0.997):
+
+| Text | Class ID | Confidence |
+|------|----------|------------|
+| French | 6 | 0.9753 |
+| Spanish | 5 | 0.9890 |
+| German | 2 | 0.9973 |
+| Italian | 8 | 0.9888 |
+| Portuguese | 12 | 0.9896 |
+| Russian | 13 | 0.9856 |
+| Japanese | 9 | 0.9649 |
+| Chinese | 19 | 0.9360 |
+| Arabic | 0 | 0.9880 |
+| English | 4 | 0.9737 |
+
+The merged model was verified by reloading from disk and confirming all predictions match.
+
+[result] role=implementor model=qwen3.6-35b tools=13 surface=76d25613e3da
