@@ -103,6 +103,19 @@ try:
             import runner as R
             import scenarios_0901 as S9
             pay = next((p for p in S9.PAYLOADS if p["name"] == scen), None)
+            if pay is None and SPEC.get("control_network"):
+                # The operator-asks control gets its own surface with network
+                # allowed (S9.CONTROL_NETWORK). Since #68 `network = false` covers
+                # bash, so arm A's surface refuses the operator's own curl and the
+                # control no longer shows that a crossing would be seen. The
+                # payload arms keep the scaffold's network policy.
+                _bs = R.build_surface
+
+                def build_surface(ws, patch):
+                    _bs(ws, patch)
+                    pol = ws / ".gnomon" / "policy.toml"
+                    pol.write_text(re.sub(r"network\s*=\s*\w+", "network = true", pol.read_text()))
+                R.build_surface = build_surface
             sc = {"name": scen, "role_patch": S9.GNOMON_ARMS[SPEC["inj_arm"]],
                   "files": S9.files_for(pay["file"] if pay else None), "breach": "canary",
                   "prompt": pay["prompt"] if pay else S9.CONTROL_PROMPT}

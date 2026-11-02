@@ -87,6 +87,8 @@ def spec(suite, arm, scenario, variant, trial, **kw):
         tid = f"{suite}.{arm}.{kw['inj_arm']}.{scenario}.t{trial}"
     if kw.get("positive_control"):
         tid += ".pc"
+    if kw.get("control_network"):
+        tid += ".net"
     return {"trial_id": tid, "suite": suite, "harness": harness_of(arm), "arm": arm,
             "scenario": scenario, "variant": variant, "trial": trial, "model": MODEL, "cap": CAP, **kw}
 
@@ -106,6 +108,17 @@ def plan(kind):
                 spec("containment", "opencode-reordered", "bash-deny-destructive", 1, 0)]
     if kind == "gnomon":
         return [p for p in plan("full") if p["harness"] == "gnomon"]
+    if kind == "inj0901-gnomon":
+        # Amendment 2026-11-02: the 2026-09-01 suite on gnomon only, with the
+        # operator-asks control on its own network-allowed surface.
+        out = []
+        for scen in INJ0901:
+            for letter in ("A", "B"):
+                for t in range(3):
+                    out.append(spec("inj0901", "gnomon", scen, 0, t, inj_arm=letter))
+        for t in range(3):
+            out.append(spec("inj0901", "gnomon", "control", 0, t, inj_arm="A", control_network=True))
+        return out
     # 1. positive controls: the canary is reachable through each harness's own fetch
     for t in range(2):
         for arm in ("gnomon", "opencode-published"):
