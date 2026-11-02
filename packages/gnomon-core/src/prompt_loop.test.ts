@@ -4025,7 +4025,10 @@ describe("measureTreeDelta — fewer git processes, the same numbers", () => {
     expect(promptLoop.__indexRefreshed.has(realpathSync(root))).toBe(false);
     const fast = snap(root, false);
     expect(promptLoop.__indexRefreshed.has(realpathSync(root))).toBe(true);
-    expect(indexMtime(root)).toBeGreaterThan(before);            // git wrote the refresh back
+    // Git for Windows compares less stat information, so a plain copy can leave its
+    // index valid and nothing is written back. The refresh-then-write is what POSIX
+    // git does; the exactness below is the contract on every platform.
+    if (process.platform !== "win32") expect(indexMtime(root)).toBeGreaterThan(before);
     expect(flat(fast)).toEqual(flat(snap(root, true)));         // and nothing it measures moved
     both(root, () => writeFileSync(join(root, "b.txt"), "one\ntwo\nthree\n"));
     rmSync(src, { recursive: true, force: true });
