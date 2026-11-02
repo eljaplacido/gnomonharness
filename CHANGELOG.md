@@ -37,6 +37,18 @@
   windows-latest runs it after the native build. The degradation suite's final
   cleanup retries, because a killed timeout probe can hold its folder for about
   0.5 s on Windows.
+- **A copied or freshly checked-out repository no longer re-hashes every file
+  on every turn.** Since #90 the tree bookkeeping runs `git status` with
+  `--no-optional-locks`, so git never wrote a refreshed stat cache back. A
+  clean tree with a stale index (a `cp -a` copy, a fresh checkout) was re-hashed
+  in full by every status: 0.21–0.24 s per call at 30k files against 0.05 s
+  refreshed (UX2). The first status per process and repository may now take
+  git's optional index lock and write the refresh back; every later call keeps
+  `--no-optional-locks`. git rewrites only stat info, so nothing measured moves.
+  - A/B (`benchmarks/results/idx-2026-11/` on `bench/peers-2026-11`), 20 paired
+    rounds at 30k files: session CPU −130 ms [−170, −60], lower in 16/20.
+  - Two tests: a clean stale copy is refreshed once with identical numbers
+    (fails on master), and a later status never writes the index.
 
 - **The 2026-09-01 injection suite has a positive control again.** Since #68,
   `network = false` covers bash, so the operator-asks control (a `curl` to the
