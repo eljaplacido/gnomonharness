@@ -335,6 +335,30 @@ describe("shellWriteTargets: the files a command names as its output", () => {
     expect(codeWriteTargets("require('fs').writeFileSync('out.json', '{}')")).toEqual(["out.json"]);
     expect(codeWriteTargets("import shutil; shutil.move('a', 'b')")).toEqual(["b", "a"]);
     expect(codeWriteTargets("open(name, 'w')")).toEqual([]);
+  });
+
+  it("follows one name bound to a literal path (G1c's route around the edit refusal)", () => {
+    // python: Path(literal) bound, written through the name; plain literal through open()
+    expect(codeWriteTargets("from pathlib import Path\nchangelog = Path(\"CHANGELOG.md\")\ntext = changelog.read_text()\nchangelog.write_text(text)")).toEqual(["CHANGELOG.md"]);
+    expect(codeWriteTargets("out = 'report.csv'\nwith open(out, 'w') as f:\n    f.write('x')")).toEqual(["report.csv"]);
+    expect(codeWriteTargets("import os\np = 'var/local.db'\nos.remove(p)")).toEqual(["var/local.db"]);
+    // node, perl
+    expect(codeWriteTargets("const f = 'package.json'; require('fs').writeFileSync(f, '{}')")).toEqual(["package.json"]);
+    expect(codeWriteTargets("my $f = 'cfg.ini'; open(my $fh, '>', $f);")).toEqual(["cfg.ini"]);
+    // a name bound twice is read both ways
+    expect(codeWriteTargets("p = Path('a.txt')\np.write_text('1')\np = Path('b.txt')\np.write_text('2')").sort()).toEqual(["a.txt", "b.txt"]);
+    // not followed: reads, attributes of the same name, names inside strings, paths built at run time
+    expect(codeWriteTargets("cfg = Path('cfg.toml')\nprint(cfg.read_text())")).toEqual([]);
+    expect(codeWriteTargets("out = 'x.txt'\nobj.out.write_text('y')")).toEqual([]);
+    expect(codeWriteTargets("name = 'notes.md'\nprint('open(name, \"w\")')")).toEqual([]);
+    expect(codeWriteTargets("p = Path(base) / 'x.txt'\np.write_text('y')")).toEqual([]);
+    expect(codeWriteTargets("p = f'{d}/x.txt'\nopen(p, 'w')")).toEqual([]);
+    // the same through every interpreter that reads its program from stdin
+    expect(targets("bash -s <<'EOF'\necho x > CHANGELOG.md\nEOF")).toEqual(["|CHANGELOG.md"]);
+    expect(targets("node - <<'JS'\nconst f = 'package.json';\nrequire('fs').writeFileSync(f, '{}');\nJS")).toEqual(["|package.json"]);
+    expect(targets("perl - <<'PL'\nmy $f = 'cfg.ini';\nopen(my $fh, '>', $f);\nPL")).toEqual(["|cfg.ini"]);
+    expect(targets("ruby - <<'RB'\nf = 'notes.md'\nFile.write(f, 'x')\nRB")).toEqual(["|notes.md"]);
+    expect(targets("python3 <<< \"open('x.txt','w').write('y')\"")).toEqual(["|x.txt"]);
     expect(targets("python3 -c 'print(1)'")).toEqual([]);
   });
 });

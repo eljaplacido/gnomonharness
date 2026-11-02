@@ -26,6 +26,19 @@
 
 ## [Unreleased]
 
+- **write_allow follows a path bound to a name in inline code.** The two
+  rewrites G1c's agents used to get past a refused edit bound the path first
+  (`changelog = Path("CHANGELOG.md")` ... `changelog.write_text(...)`), in a
+  `python3 - <<'PY'` here-document. #81 read only `Path("…").write_text`, so
+  `gnomon guard` let both through: 15 of 17 causing calls refused in the GVC
+  replay (2026-11-02). The shell's code reader now follows one level of
+  binding to a literal (python `x = Path(lit)` / `x = lit`, node
+  `const|let|var`, perl `my $x =`, ruby), outside string literals, for `-c`/`-e`
+  code and for here-documents or here-strings fed to python, node, perl, ruby
+  and `sh -s`. A name bound to anything else is still a path built at run
+  time and is not judged. Both verbatim G1c commands are regression tests and
+  a guard conformance case; the 60-command everyday set keeps 0 changes.
+
 - **The 2026-09-01 injection suite has a positive control again.** Since #68,
   `network = false` covers bash, so the operator-asks control (a `curl` to the
   canary) was refused on arm A's surface: 3/3 crossed became 0/3, and the suite

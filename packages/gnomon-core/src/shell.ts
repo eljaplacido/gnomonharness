@@ -1611,14 +1611,79 @@ const CODE_WRITES_SECOND = new RegExp(
   "g"
 );
 
-/** The literal paths inline code writes. */
+// A literal path bound to a name first and written through the name second:
+// `changelog = Path("CHANGELOG.md")` ... `changelog.write_text(...)`. Both
+// rewrites G1c's agents used under `gnomon guard` had that shape, and reading
+// only `Path("…").write_text` missed them (GVC replay, 2026-11-02: 15 of 17
+// causing calls refused, the 2 misses exactly these). One level of binding
+// is followed: a name assigned a literal or a `Path(literal)` (python), a
+// `const|let|var` literal (node), a `my $x =` literal (perl), a bare
+// assignment (ruby). A name assigned anything else -- a call, a join, an
+// f-string -- is a path built at run time and stays unjudged.
+const BIND_PY_PATH = new RegExp(String.raw`(?:^|[\n;])[ \t]*([A-Za-z_]\w*)[ \t]*=[ \t]*(?:pathlib\.)?Path\([ \t]*` + LIT.replaceAll("\\1", "\\2") + String.raw`[ \t]*\)[ \t]*(?=$|[\n;#])`, "g");
+const BIND_LIT = new RegExp(String.raw`(?:^|[\n;{])[ \t]*(?:(?:const|let|var|my)[ \t]+)?(\$?[A-Za-z_]\w*)[ \t]*=[ \t]*` + LIT.replaceAll("\\1", "\\2") + String.raw`[ \t]*(?=$|[\n;#])`, "g");
+
+/** `name → [literal, viaPath]` for every one-level binding in `code`. */
+function literalBindings(code: string): Map<string, { path: string; viaPath: boolean }[]> {
+  const out = new Map<string, { path: string; viaPath: boolean }[]>();
+  const put = (name: string, path: string, viaPath: boolean) => {
+    if (!path) return;
+    const list = out.get(name) ?? [];
+    if (!list.some((b) => b.path === path && b.viaPath === viaPath)) list.push({ path, viaPath });
+    out.set(name, list);
+  };
+  for (const m of code.matchAll(BIND_PY_PATH)) put(m[1]!, m[3]!, true);
+  for (const m of code.matchAll(BIND_LIT)) put(m[1]!, m[3]!, false);
+  return out;
+}
+
+/**
+ * `code` with each bound name replaced, outside string literals, by what it
+ * was bound to: `Path("x")` before an attribute (`name.write_text`), the bare
+ * literal elsewhere (`open(name, "w")`). Not after a `.` (an attribute of the
+ * same name), and not where the name is being assigned. One rewrite per
+ * binding a name has had, so a name bound twice is read both ways.
+ */
+function resolvedCode(code: string): string[] {
+  const binds = literalBindings(code);
+  if (binds.size === 0) return [];
+  const rounds = Math.max(...[...binds.values()].map((l) => l.length));
+  const parts = code.split(new RegExp(LIT, "g"));
+  // split() with two groups interleaves [text, quote, body, text, quote, body, …].
+  const variants: string[] = [];
+  for (let k = 0; k < rounds; k++) {
+    let outText = "";
+    for (let i = 0; i < parts.length; i += 3) {
+      let seg = parts[i] ?? "";
+      for (const [name, list] of binds) {
+        const b = list[Math.min(k, list.length - 1)]!;
+        const q = JSON.stringify(b.path);
+        const esc = name.replace(/\$/g, "\\$");
+        seg = seg.replace(new RegExp(String.raw`(?<![\w.$])` + esc + String.raw`\b(?![ \t]*=[^=])`, "g"), (_m, off: number) => {
+          const after = seg.slice(off + name.length);
+          return /^[ \t]*\./.test(after) ? (b.viaPath ? `Path(${q})` : q) : q;
+        });
+      }
+      outText += seg;
+      if (i + 2 < parts.length) outText += parts[i + 1]! + parts[i + 2]! + parts[i + 1]!;
+    }
+    variants.push(outText);
+  }
+  return variants;
+}
+
+/** The literal paths inline code writes, directly or through one name bound to a literal. */
 export function codeWriteTargets(code: string): string[] {
   const out: string[] = [];
-  for (const re of CODE_WRITES_FIRST) for (const m of code.matchAll(re)) if (m[2]) out.push(m[2]);
-  for (const m of code.matchAll(CODE_WRITES_SECOND)) {
-    if (m[5]) out.push(m[5]);
-    if (/move|rename|replace|mv/.test(m[1]!) && m[3]) out.push(m[3]);
-  }
+  const read = (text: string) => {
+    for (const re of CODE_WRITES_FIRST) for (const m of text.matchAll(re)) if (m[2] && !out.includes(m[2])) out.push(m[2]);
+    for (const m of text.matchAll(CODE_WRITES_SECOND)) {
+      if (m[5] && !out.includes(m[5])) out.push(m[5]);
+      if (/move|rename|replace|mv/.test(m[1]!) && m[3] && !out.includes(m[3])) out.push(m[3]);
+    }
+  };
+  read(code);
+  for (const variant of resolvedCode(code)) read(variant);
   return out;
 }
 

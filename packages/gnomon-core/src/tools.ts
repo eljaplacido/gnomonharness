@@ -1818,7 +1818,9 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
  * What is judged (shellWriteTargets, shell.ts): redirections; the operands of
  * rm, rmdir, unlink, shred, truncate, touch, mkdir, tee, cp, mv, install, ln,
  * dd of=, curl -o, wget -O, sed -i and perl -i; and literal paths that inline
- * python, node, perl or ruby code hands to a call that writes.
+ * python, node, perl or ruby code hands to a call that writes, directly or
+ * through one name bound to the literal (`p = Path("x")` ... `p.write_text`),
+ * in `-c`/`-e` code or a here-document fed to the interpreter.
  *
  * What is not, said rather than guessed:
  *  - a path outside the repository root. write_allow is about what the
