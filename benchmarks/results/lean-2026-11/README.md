@@ -33,3 +33,41 @@ Paired tests (48 pairs):
 Against the P1-H peers on the same tasks and model, lean's \$0.035 per solved
 task is inside their range (\$0.019–0.032 → mid-pack instead of last), with the
 caveat that the peers were measured in a different run.
+
+## Stage 2 result: local qwen3.6-35b (2026-11-02, 05:45–09:08Z)
+
+Base v0.3.2 against lean `eb56ab0`, 16 tasks × 1 attempt, P1's local apparatus.
+31 of 32 cells are valid; lean's pypi-server cell is apparatus (tb returned no
+verdict).
+
+| | base | lean |
+|---|---|---|
+| solved | 10/16 (62.5%) | 10/15 (66.7%) |
+| paired outcome (15 pairs) | base-only 0 | lean-only 0 (identical) |
+| median requests per task | 26 | 25 |
+| output tokens, total | — | 0.99 × base (sign test p = 0.61) |
+| requests, total | — | 1.41 × base (p = 0.79) |
+| prompt tokens, total | — | 2.00 × base (p = 1.0) |
+| tasks lost at the time cap | 2 | 3 |
+
+**Decision, stage 2: passes.** The pre-registered rule asks only that lean solve
+at least (base − 2) tasks on the local model. It solved the same tasks.
+
+**What it shows about cost on the local model:** no saving, and on failing tasks
+the opposite.
+- **Easy tasks:** lean is cheaper, for example git-workflow-hack 672k → 154k
+  prompt tokens and hf-lora-adapter 280k → 120k.
+- **Tasks both arms fail:** lean keeps trying longer. tune-mjcf went from
+  10 → 176 requests, mailman 6.7M → 10.5M prompt tokens, and hf-train-lora-adapter
+  1.0M → 3.1M. Those three drive the 2.0× total.
+- **Caveat:** with one attempt per task, these are single observations. The median request count is unchanged.
+
+The hosted-model saving (stage 1) does not carry over to the mid-size local
+model, as stage 2 was built to check. Its pass-rate guard holds.
+
+**The lever this points to:** bounding effort on tasks that are failing. Two
+candidates:
+- show the model its step and time budget;
+- a stop-doomed-runs decision.
+
+Each needs its own pre-registered A/B.
