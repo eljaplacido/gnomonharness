@@ -166,3 +166,13 @@ smoke: PASS (arms seen: ['BC', 'C', 'EF', 'L', 'NEG', 'PC'])
 ```
 
 From here on, changes to this file are timestamped amendments.
+
+## Amendment, 2026-11-02T17:49Z: arms narrowed to L, C, PC for the rest of the run
+
+The user asked for the most conclusive local/cloud/hybrid comparison before shutting both machines down in 2–3 hours.
+- **What changes:** BC and EF are dropped from all remaining cells. Their finished cells stay in `runs/`, and the collector reports them as partial arms.
+  - BC: local coordinator, cloud implementor. Interim 3/10. It delegated in only 5 of 10 cells.
+  - EF: cloud with local smol. Interim 9/10. Its local smol was reached in 0 of 10 cells, so EF has not exercised its mechanism and is effectively a second C.
+- **Why:** the single GPU slot now cycles L and PC only, about doubling the rate of L/PC pairs. Nothing else changes: build `d59e6c19`, tasks, seeds, cap, meters and the validity rule.
+- **Mechanics:** the runner was stopped at 17:5xZ. The in-flight cell `r1-k1-l-tune-mjcf` (started 17:28Z, no verdict) moved to `runs-aborted/` and re-runs from scratch. The runner restarts with `R1_ARMS=L,C,PC` and skips finished cells.
+- **Arm order changes:** rotation over three arms orders cells differently from rotation over five, so the remaining cells run in a different order than pre-registered. Attempt barriers and seeds are unchanged.

@@ -55,7 +55,9 @@ ARMS = {
     # must flag it misrouted, or the routing assertion detects nothing.
     "NEG": {"entry": "implementor", "routes": dict.fromkeys(ROLES, C_), "asserted_as": "L"},
 }
-ORDER = ["L", "C", "PC", "BC", "EF"]
+# R1_ARMS narrows the arms (amendment 2026-11-02 ~17:50Z: BC and EF dropped for the rest of the
+# run so L/C/PC gather pairs faster before the user's shutdown). Default: all five.
+ORDER = [a for a in os.environ.get("R1_ARMS", "L,C,PC,BC,EF").split(",") if a]
 SLOT_OF = {"C": "cloud", "NEG": "cloud"}  # every other arm needs the local model
 
 SLOTS = {
