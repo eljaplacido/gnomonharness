@@ -1,8 +1,7 @@
 # UX2: daily-dev overhead refreshed on gnomon master (pre-registration)
 
-Status: **draft**, written 2026-11-02 before any measured run. A "final" line
-with the commit and time is added before the first measured run; later changes
-are timestamped amendments.
+Status: **final** (see the end). Written 2026-11-02 before any measured run;
+later changes are timestamped amendments.
 
 ## Question
 
@@ -77,3 +76,18 @@ reported.
 - Overhead only. A fake model answers at once, so nothing here says anything about tasks solved or tokens with a real model.
 - One machine per OS.
 - Peer versions are the UX1 pins (October), not their latest releases.
+
+## Apparatus notes, logged before the first measured run (2026-11-02T09:48Z)
+
+1. **Probe:** every arm ran once and was valid, Linux and Windows (`runs/probe-*`, and `C:\dev\ux1w\runs\ux2-probe-*`).
+   - Master sends 8,688 bytes in its one request, against 8,361 for v0.3.3: #80's verification rule is longer.
+2. **Negative control:** every arm, pointed at a closed port, came back invalid (`runs/neg-*`). Both gnomon builds exited 10 in 3.7 s; opencode and Qwen Code exited 1 after ~90–105 s of retries; goose exited 1; mini hit the 120 s cap.
+3. **Templates:** each template repository is packed once (`git gc`) with auto-gc off. A background `git gc` had raced a copy of the 50k template.
+4. **Index refresh:** each copied repository gets an untimed `git update-index -q --refresh` before the run.
+   - A copy has new inodes and ctimes, so git's index stat cache is stale and every `git --no-optional-locks status` re-hashes the tree, since it never writes the refresh back. At 30k files that is 0.21–0.24 s per call, against 0.05 s refreshed.
+   - A developer's own repository has a fresh index, so the measured runs use refreshed copies.
+   - The stale-index cost is reported separately as an exploratory observation, not as a UX1c figure.
+5. **Change-detection probe:** it runs at 30,000 and 50,000 files, as UX1c's original probe ran at 30,000. Its first, setup-time run (20/20 seen for both builds at both sizes) was an apparatus check; it is repeated after this point and only the repeat counts.
+6. **Trust on Windows:** the Windows gnomon arms reach the trusted state through UX1W's untimed `gnomon trust grant` in setup, rather than `--trust` on the command line. Same effect.
+
+**Final:** this file as committed now (2026-11-02T09:48Z), before any measured run of UX2.
