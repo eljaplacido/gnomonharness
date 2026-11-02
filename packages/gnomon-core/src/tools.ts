@@ -2426,6 +2426,12 @@ export function worktreeMoved(
  * only the "did the agent change anything" question ignores it. (String, not
  * loops.ts's LOOP_STATE_DIR: loops.ts imports this module.)
  *
+ * .gnomon-out/ is the same case, found 2026-11-02: a `read` or `bash` whose
+ * output is too large spills it there, so any overflowing call -- or another
+ * session's, in the same project -- moved the stamp under a step that changed
+ * nothing. Excluded here and not walked-never, because the agent is pointed at
+ * those files and must still be able to grep them.
+ *
  * NEVER_WALKED itself the walk applies on its own. git has never heard of it,
  * so a path git lists is checked against it here: otherwise an un-ignored
  * `.gnomon-shadow/` or `coverage/` comes back into the stamp through git status,
@@ -2433,7 +2439,7 @@ export function worktreeMoved(
  */
 function stampSkips(rel: string, isDir: boolean): boolean {
   const segs = rel.replace(/\/+$/, "").split("/");
-  if (segs[0] === ".gnomon" || segs[0] === ".gnomon-loops") return true;
+  if (segs[0] === ".gnomon" || segs[0] === ".gnomon-loops" || segs[0] === OVERFLOW_DIR) return true;
   const dirs = isDir ? segs : segs.slice(0, -1);
   return dirs.some((d) => NEVER_WALKED.has(d));
 }
