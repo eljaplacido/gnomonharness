@@ -32,3 +32,22 @@ Linux? Model-free, no API keys, no cost.
 - Any difference from the Linux figures is a finding, reported with its cause where found.
 - A suite that cannot run on Windows is reported as such, never as a pass.
 - No timings are claimed: the hub's GPU is in use by another lane, and timing isn't the point.
+
+## Amendment, 2026-11-02T10:40Z, before any suite was run on Windows
+
+**Finding:** the suites themselves, not only the runner, are POSIX-only as
+written. Each one:
+- computes `REPO = new URL("../../", import.meta.url).pathname`, which is `/C:/...` on Windows;
+- `import()`s plain paths;
+- runs `node_modules/.bin/tsx`, which is a `.cmd` shim on Windows that Node won't spawn without a shell.
+
+So "as written" they cannot run natively on Windows. That is reported as a result in its own right.
+
+**To measure gnomon rather than the scripts,** the copies in the throwaway clone
+(C:\dev\winp\repo) get a path-only portability patch,
+`apparatus/winp_port.mjs`. It changes nothing a suite asserts:
+1. `REPO` via `fileURLToPath`;
+2. `import(pathToFileURL(p).href)` for dynamic imports;
+3. `<REPO>/node_modules/.bin/tsx <args>` becomes `node <REPO>/node_modules/tsx/dist/cli.mjs <args>`.
+
+The patch is committed with the result, and the patched files' diff is recorded.
