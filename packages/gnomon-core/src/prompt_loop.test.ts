@@ -3901,6 +3901,139 @@ describe("measureTreeDelta — measured, not asserted", () => {
   });
 });
 
+describe("measureTreeDelta — fewer git processes, the same numbers", () => {
+  // The status-gated path must give exactly what the old call sequence gave,
+  // in every case the old one handled. Each scenario is measured both ways.
+  const git = (root: string, ...a: string[]) =>
+    execFileSync("git", a, { cwd: root, stdio: "ignore" });
+  const init = (commit: boolean): string => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-tdf-"));
+    git(root, "init", "-q");
+    git(root, "config", "user.email", "t@t");
+    git(root, "config", "user.name", "t");
+    git(root, "config", "core.autocrlf", "false");
+    writeFileSync(join(root, "a.txt"), "alpha\nbeta\ngamma\n");
+    writeFileSync(join(root, "b.txt"), "one\ntwo\n");
+    writeFileSync(join(root, ".gitignore"), "ignored.log\n");
+    if (commit) { git(root, "add", "-A"); git(root, "commit", "-qm", "init"); }
+    return root;
+  };
+  const snap = (root: string, legacy: boolean) =>
+    promptLoop.measureTreeDelta(root, undefined, true, { legacy }).__snapshot ?? null;
+  const flat = (s: ReturnType<typeof snap>) =>
+    s && { head: s.head, tracked: [...s.tracked].sort(), untracked: [...s.untracked].sort() };
+  /** Snapshot, mutate, measure: both ways, and the two must agree exactly. */
+  const both = (root: string, mutate: () => void) => {
+    const f0 = snap(root, false), l0 = snap(root, true);
+    expect(flat(f0)).toEqual(flat(l0));
+    mutate();
+    const fast = promptLoop.measureTreeDelta(root, f0, false, { legacy: false });
+    const legacy = promptLoop.measureTreeDelta(root, l0, false, { legacy: true });
+    expect(fast).toEqual(legacy);
+    return fast;
+  };
+
+  it("a turn that changes nothing", () => {
+    const root = init(true);
+    expect(both(root, () => {})).toMatchObject({ files: 0, insertions: 0, deletions: 0 });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("a tracked file changed by a shell command (no write tool involved)", () => {
+    const root = init(true);
+    expect(both(root, () => writeFileSync(join(root, "b.txt"), "one\ntwo\nthree\n")))
+      .toMatchObject({ files: 1, insertions: 1, deletions: 0 });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("an untracked new file, next to an ignored one", () => {
+    const root = init(true);
+    expect(both(root, () => {
+      writeFileSync(join(root, "new.txt"), "x\ny\n");
+      writeFileSync(join(root, "ignored.log"), "noise\n");
+    })).toMatchObject({ files: 1, insertions: 2 });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("a deleted tracked file", () => {
+    const root = init(true);
+    expect(both(root, () => rmSync(join(root, "a.txt"))))
+      .toMatchObject({ files: 1, insertions: 0, deletions: 3 });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("a repository with no commits yet", () => {
+    const root = init(false);
+    expect(both(root, () => writeFileSync(join(root, "c.txt"), "1\n2\n3\n")))
+      .toMatchObject({ files: 1, insertions: 3 });
+    // Staged but uncommitted, then edited: still no HEAD to diff against.
+    git(root, "add", "a.txt");
+    both(root, () => writeFileSync(join(root, "a.txt"), "alpha\n"));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("a directory that is not a repository", () => {
+    const bare = mkdtempSync(join(tmpdir(), "gnomon-tdf-nogit-"));
+    const fast = promptLoop.measureTreeDelta(bare, undefined, false, { legacy: false });
+    const legacy = promptLoop.measureTreeDelta(bare, undefined, false, { legacy: true });
+    expect(fast).toEqual(legacy);
+    expect(fast.unavailable).toBeTruthy();
+    rmSync(bare, { recursive: true, force: true });
+  });
+
+  it("a project in a subdirectory: untracked files outside it are not its own", () => {
+    const top = init(true);
+    mkdirSync(join(top, "proj"));
+    writeFileSync(join(top, "proj", "p.txt"), "p\n");
+    git(top, "add", "-A"); git(top, "commit", "-qm", "proj");
+    const root = join(top, "proj");
+    expect(both(root, () => {
+      writeFileSync(join(root, "inside.txt"), "in\n");
+      writeFileSync(join(top, "outside.txt"), "out\n");
+      writeFileSync(join(top, "b.txt"), "one\ntwo\nthree\n");   // tracked, outside
+    })).toMatchObject({ files: 2 });
+    rmSync(top, { recursive: true, force: true });
+  });
+
+  it("a path git would quote falls back to ls-files and still agrees", () => {
+    const root = init(true);
+    both(root, () => writeFileSync(join(root, "päivä.txt"), "a\nb\n"));
+    both(root, () => writeFileSync(join(root, 'quo"te.txt'), "q\n"));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("a staged rename", () => {
+    const root = init(true);
+    both(root, () => git(root, "mv", "a.txt", "renamed.txt"));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("CRLF-only churn and a binary file", () => {
+    const root = init(true);
+    writeFileSync(join(root, "img.bin"), Buffer.from([0, 1, 2]));
+    git(root, "add", "-A"); git(root, "commit", "-qm", "bin");
+    expect(both(root, () => {
+      writeFileSync(join(root, "a.txt"), "alpha\r\nbeta\r\ngamma\r\n");
+      writeFileSync(join(root, "img.bin"), Buffer.from([0, 9, 9]));
+    })).toMatchObject({ files: 2, crlf_only: 1 });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("spends far fewer git processes on a turn that changed nothing", () => {
+    // UX1W, Windows: ten git calls per turn, ~18 ms each, half of the turn.
+    const root = init(false);   // no commits: four of the old ten failed by design
+    const count = (legacy: boolean) => {
+      const n0 = promptLoop.__treeGitCalls.n;
+      const s = snap(root, legacy);
+      promptLoop.measureTreeDelta(root, s, false, { legacy });
+      return promptLoop.__treeGitCalls.n - n0;
+    };
+    expect(count(true)).toBe(10);
+    expect(count(false)).toBe(2);
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
 describe("the degradation contract", () => {
   const UI = { meta: [], meta_style: "line", think: "hide", spinner: false, color: false, cot: "work" } as any;
   // Local to this block, and returns what `run` returned -- the assertions here
