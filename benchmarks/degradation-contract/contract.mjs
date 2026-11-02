@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath, pathToFileURL } from "node:url";
 /**
  * degradation-contract — every declared degradation, announced AND recorded.
  *
@@ -15,8 +16,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
-const REPO = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
-const core = (m) => import(`${REPO}/packages/gnomon-core/dist/${m}`);
+const REPO = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]$/, "");
+const core = (m) => import(pathToFileURL(`${REPO}/packages/gnomon-core/dist/${m}`).href);
 const { loadConfig } = await core("config.js");
 const { runAgenticTurn, buildMessages } = await core("prompt_loop.js");
 const { executeTool, createSpillSink } = await core("tools.js");
@@ -25,8 +26,8 @@ const { DEGRADATION_IDS } = await core("degradation.js");
 
 function scaffold() {
   const root = mkdtempSync(join(tmpdir(), "gnomon-degrade-"));
-  execFileSync(`${REPO}/node_modules/.bin/tsx`,
-    [`${REPO}/packages/gnomon-cli/src/index.ts`, "init"], { cwd: root, stdio: "pipe" });
+  execFileSync(process.execPath,
+    [`${REPO}/node_modules/tsx/dist/cli.mjs`, `${REPO}/packages/gnomon-cli/src/index.ts`, "init"], { cwd: root, stdio: "pipe" });
   return root;
 }
 
@@ -405,7 +406,9 @@ for (const id of DEGRADATION_IDS) {
   }
   rows.push({ id, recordedBy: probe.recordedBy, ...r });
 }
-rmSync(root, { recursive: true, force: true });
+// Retried: on Windows a command the timeout probe killed can hold its folder for
+// ~0.5 s after the tool returns (WINP, 2026-11-02). Every row is measured by now.
+rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 
 console.log(`degradation-contract — ${rows.length} declared paths\n`);
 for (const r of rows) {
