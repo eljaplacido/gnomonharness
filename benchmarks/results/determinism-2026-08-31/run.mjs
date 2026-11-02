@@ -1,3 +1,4 @@
+import { fileURLToPath, pathToFileURL } from "node:url";
 /**
  * Drive the fingerprint under conditions that differ in every way EXCEPT the
  * surface. Anything that shifts is machine-scoped behaviour, which is the one
@@ -11,7 +12,7 @@ import { join } from "node:path";
 const SRC = process.argv[2];
 const runIn = (dir, env, cwd) =>
   JSON.parse(execFileSync("node", ["-e", `
-    import(${JSON.stringify(join(process.cwd(), "determinism.mjs"))}).then(m => {
+    import(${JSON.stringify(pathToFileURL(join(process.cwd(), "determinism.mjs")).href)}).then(m => {
       const fp = m.fingerprint(${JSON.stringify(dir)});
       console.log(JSON.stringify({ hash: fp.hash, surface: m.surfaceHash(${JSON.stringify(dir)}) }));
     });`],

@@ -25,14 +25,17 @@
  * credentials measures this machine (benchmark-discipline, 2026-09-02).
  *
  * Usage: node scripts/property_suites.mjs   (after `pnpm -r run build` and
- * `cargo build --workspace --bins`, which ci.sh does first)
+ * `cargo build --workspace --bins`, which ci.sh does first). Runs unchanged on
+ * Linux, macOS and Windows; CI runs it on Linux (ci.sh) and on windows-latest.
  */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const REPO = new URL("../", import.meta.url).pathname.replace(/\/$/, "");
+const REPO = fileURLToPath(new URL("../", import.meta.url)).replace(/[\\/]$/, "");
+const WIN = process.platform === "win32";
 const work = mkdtempSync(join(tmpdir(), "gnomon-suites-"));
 for (const d of ["home", "xdg-data", "xdg-config", "tmp"]) mkdirSync(join(work, d));
 
@@ -44,11 +47,24 @@ const env = {
   TMPDIR: join(work, "tmp"),
   LANG: "C.UTF-8",
   GNOMON_NO_UPDATE_CHECK: "1",
+  // Windows reads its home and temp from these, and a child process cannot
+  // start without SystemRoot; the stranger's state is the same dirs as above.
+  ...(WIN
+    ? {
+        SystemRoot: process.env.SystemRoot,
+        PATHEXT: process.env.PATHEXT,
+        USERPROFILE: join(work, "home"),
+        APPDATA: join(work, "xdg-config"),
+        LOCALAPPDATA: join(work, "xdg-data"),
+        TEMP: join(work, "tmp"),
+        TMP: join(work, "tmp"),
+      }
+    : {}),
 };
 // The native binaries ci.sh just built. Without them, surface hashing falls back
 // to an error and every determinism row would be INVALID.
 const bins = join(REPO, "target", "debug");
-if (existsSync(join(bins, "gnomon-surface"))) env.GNOMON_BIN_OVERRIDE = bins;
+if (existsSync(join(bins, WIN ? "gnomon-surface.exe" : "gnomon-surface"))) env.GNOMON_BIN_OVERRIDE = bins;
 
 const run = (cwd, args) => {
   const t0 = Date.now();
@@ -135,8 +151,11 @@ const check = (name, r, problems) => {
   const proj = join(work, "proj");
   mkdirSync(proj);
   spawnSync("git", ["init", "-q"], { cwd: proj, env });
-  const init = spawnSync(join(REPO, "node_modules/.bin/tsx"),
-    [join(REPO, "packages/gnomon-cli/src/index.ts"), "init"], { cwd: proj, env, encoding: "utf-8" });
+  // tsx's CLI through node, not node_modules/.bin/tsx: on Windows that is a
+  // .cmd shim, which Node will not spawn without a shell.
+  const init = spawnSync(process.execPath,
+    [join(REPO, "node_modules/tsx/dist/cli.mjs"), join(REPO, "packages/gnomon-cli/src/index.ts"), "init"],
+    { cwd: proj, env, encoding: "utf-8" });
   const dir = join(REPO, "benchmarks/results/determinism-2026-08-31");
   const r = init.status === 0
     ? run(dir, ["run.mjs", proj])

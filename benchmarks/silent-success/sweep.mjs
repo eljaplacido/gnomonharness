@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath, pathToFileURL } from "node:url";
 /**
  * silent-success — does anything here report success while the thing
  * underneath it failed?
@@ -17,8 +18,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
-const REPO = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
-const core = (m) => import(`${REPO}/packages/gnomon-core/dist/${m}`);
+const REPO = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]$/, "");
+const core = (m) => import(pathToFileURL(`${REPO}/packages/gnomon-core/dist/${m}`).href);
 const { loadConfig } = await core("config.js");
 const { runAgenticTurn } = await core("prompt_loop.js");
 const { executeTool } = await core("tools.js");
@@ -27,8 +28,8 @@ const { checkCitations } = await core("citations.js");
 
 function scaffold() {
   const root = mkdtempSync(join(tmpdir(), "gnomon-silent-"));
-  execFileSync(`${REPO}/node_modules/.bin/tsx`,
-    [`${REPO}/packages/gnomon-cli/src/index.ts`, "init"], { cwd: root, stdio: "pipe" });
+  execFileSync(process.execPath,
+    [`${REPO}/node_modules/tsx/dist/cli.mjs`, `${REPO}/packages/gnomon-cli/src/index.ts`, "init"], { cwd: root, stdio: "pipe" });
   return root;
 }
 
