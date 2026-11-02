@@ -3470,15 +3470,30 @@ export async function runAgenticTurn(
     return r;
   };
 
+  // Once the primary has failed and the fallback answered, the rest of this
+  // turn stays on the fallback. Re-asking the primary at every step paid the
+  // whole retry grace again each time (60 s by default for a 5xx), so a short
+  // outage turned into a turn spent knocking on a door already known to be
+  // shut. Measured: R1H (2026-11-02) lost 20 of 30 local-model cells to a 502
+  // outage. The next turn starts on the primary again.
+  let onFallback = false;
+
   for (;;) {
     if (deps.signal?.aborted) return cancelled();
 
-    let result = await call(route.target);
-    usedModel = route.model;
+    let result: InferenceResult;
+    if (onFallback && route.fallback) {
+      usedModel = route.fallback.model;
+      usedTarget = route.fallback;
+      result = await call(route.fallback);
+    } else {
+      result = await call(route.target);
+      usedModel = route.model;
+    }
 
     if (deps.signal?.aborted) return cancelled();
 
-    if (result.code !== 0 && route.fallback) {
+    if (result.code !== 0 && route.fallback && !onFallback) {
       // Announced on the spinner ONLY, until 2026-09-05. `progress.update` is
       // overwritten by the very next frame, and `gnomon task` in a script has
       // no scrollback to overwrite — so the single most consequential thing
@@ -3514,6 +3529,16 @@ export async function runAgenticTurn(
       usedTarget = route.fallback;
       result = await call(route.fallback);
       if (deps.signal?.aborted) return cancelled();
+      if (result.code === 0) {
+        onFallback = true;
+        warn(
+          paint(
+            deps.ui,
+            "gray",
+            `  [endpoint] staying on ${route.fallback.model} for the rest of this turn.`
+          )
+        );
+      }
     }
 
     code = worse(code, result.code);

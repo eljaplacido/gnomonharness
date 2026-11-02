@@ -4200,6 +4200,61 @@ describe("the degradation contract", () => {
     expect(turn.endpoint_url).toBe("http://fallback.invalid");
   });
 
+  it("stays on the fallback for the rest of the turn once the primary has failed", async () => {
+    // Re-asking a primary already known to be down at every step paid the whole
+    // retry grace again each time; R1H lost 20 of 30 local-model cells to a 502
+    // outage that way.
+    const dir = mkdtempSync(join(tmpdir(), "fb-"));
+    writeFileSync(join(dir, "a.txt"), "content-a\n");
+    const config: any = loadConfig("../..");
+    config.config = { ...config.config, resilience: { attempts: 1, backoff_ms: 1, transport_grace_ms: 0 } };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const said: string[] = [];
+    const recs: any[] = [];
+    const asked: string[] = [];
+    let fallbackCalls = 0;
+    const turn = await withFetch(
+      (async (url: string) => {
+        asked.push(String(url));
+        if (String(url).includes("primary.invalid")) {
+          throw Object.assign(new Error("fetch failed"), { name: "TypeError" });
+        }
+        if (++fallbackCalls === 1) {
+          return {
+            ok: true,
+            json: async () => ({
+              message: { content: "", tool_calls: [{ function: { name: "read", arguments: { path: join(dir, "a.txt") } } }] },
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ message: { content: "done on the fallback" } }) };
+      }) as unknown as typeof fetch,
+      async () =>
+        await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          {
+            model: "primary-model", temperature: 0, top_p: 1,
+            target: { model: "primary-model", temperature: 0, top_p: 1, url: "http://primary.invalid", endpoint: "primary" },
+            fallback: { model: "fallback-model", temperature: 0, top_p: 1, url: "http://fallback.invalid", endpoint: "secondary" },
+          } as any,
+          [{ role: "user", content: "go" }],
+          deps(said, recs)
+        )
+    );
+    rmSync(dir, { recursive: true, force: true });
+
+    expect(turn.content).toContain("done on the fallback");
+    // The primary was asked once, at the first step, and not again.
+    expect(asked.filter((u) => u.includes("primary.invalid"))).toHaveLength(1);
+    expect(asked.filter((u) => u.includes("fallback.invalid"))).toHaveLength(2);
+    expect(said.join("\n")).toMatch(/staying on fallback-model/);
+    // One degradation record for the switch, not one per step.
+    expect(recs.filter((r) => r.kind === "degradation" && r.id === "endpoint_fallback")).toHaveLength(1);
+    expect(turn.model).toBe("fallback-model");
+    expect(turn.endpoint).toBe("secondary");
+  });
+
   // A reply cut off twice was allowed to stand -- deliberate -- and recorded as
   // `answered`, which is not. Same class as `exit null` read as a clean zero.
   it("records a twice-truncated answer as truncated, not answered", async () => {

@@ -49,6 +49,15 @@
   - The overflow latch now allows another trim once the turn has made progress
     since the last one, so a long turn that outgrows the window twice is
     trimmed twice. An overflow straight after a trim still ends the turn.
+- **A fallback that has answered keeps the rest of the turn.** With
+  `[roles.<name>.fallback]` declared, a failed primary fell back for one step and
+  was asked again at the next, paying the whole retry grace each time (60 s by
+  default for a 5xx). During an outage, a turn spent most of its time knocking on
+  a primary already known to be down. R1H (2026-11-02) lost 20 of 30
+  local-model cells to a 502 outage on its local lane. Now, once the fallback has
+  answered, the turn stays on it; the switch is said, recorded once
+  (`endpoint_fallback`), and the turn record names the endpoint that answered.
+  The next turn starts on the primary again.
 
 - **Windows: a timed-out bash command has exited before the tool reports the
   timeout.** `killTree` fired `taskkill /T /F` and returned at once, so the

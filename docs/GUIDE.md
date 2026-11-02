@@ -616,7 +616,8 @@ the project default, set `role_profile = "frontier_plan"` under `[defaults]` in
 `config.toml`; that moves the hash, which is the point. **All-cloud** is the
 same file with every role on the cloud endpoint, saved as
 `profiles/all_remote.toml`. **Cloud only as a fallback**, tried when the local
-primary fails or times out:
+primary fails or times out; once it has answered, the rest of that turn stays
+on it, and the next turn starts on the primary again:
 
 ```toml
 # .gnomon/roles.toml, under the role it backs up
