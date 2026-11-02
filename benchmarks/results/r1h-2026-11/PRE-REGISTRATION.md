@@ -169,3 +169,47 @@ r1h-s-neg-hello-world              misrouted             0          4 0.0003    
 r1h-s-pc-hello-world               valid                 5          7 0.0040     1.6  implementor         295412075ba5
 smoke: PASS (arms seen: ['C', 'L', 'NEG', 'PC'])
 ```
+
+## Amendment, 2026-11-02T17:21Z: lane outage from 16:11:10Z; endpoint-outage cells are apparatus; 23 cells re-run
+
+**What happened.**
+- At 2026-11-02T16:11:10Z, BUD-2's armed lane cleanup (`../bud2-2026-11/apparatus/cleanup-hub-lane.sh`)
+  fired. It had a fallback that fires after 30 minutes with no `bud2-chain.sh` process, and
+  BUD-2 had been paused at about 15:42Z. It stopped the shared hub llama-server and killed
+  every `tunnel-hub.sh` loop and ssh forward on gx10, R1H's included. Evidence:
+  - BUD-2's STATUS (`16:11:10Z CLEANUP hub llama-server stopped / tunnel closed`);
+  - the hub server log ends at 16:11:08Z in the middle of normal work, with no error or crash;
+  - R1H's `tunnel.log` shows no respawn, because the loop itself was killed.
+- From then on, every local request from R1H got a 502 from its meter, whose upstream
+  connection was refused. R1H's meters counted 407 of 646 and 462 of 702 requests as
+  errors. The lane at `--parallel 2` was not at fault: no server error appears before
+  16:11:08Z.
+
+**Detected by the coordinator,** from cells that read `[apparatus_failure]` after
+"Model API error: 502 Bad Gateway". R1H was stopped at about 17:16Z, finished cells kept.
+
+**Fix:**
+1. Both cleanups are scoped to their own run. BUD-2's fires only on its own `CHAIN DONE`
+   (no idle fallback) and kills only `bud2-2026-11/…/tunnel-hub.sh`. R1H's cleanup kills only
+   `r1h-2026-11/…/tunnel-hub.sh` and the lane's ssh forward. The tunnel is now launched by
+   absolute path, so the scoped pattern matches it.
+2. The lane was restarted unchanged (`--parallel 2`, 2 × 98304 ctx, DFlash draft; VRAM
+   27,786 MiB).
+3. Soak probe (`soak-2026-11-02.txt`): 50 requests, 2 at a time, ~3,000-token prompt,
+   through a fresh meter and the tunnel. **50/50 HTTP 200, meter errors 0**, p50 0.43 s,
+   p95 0.76 s.
+
+**Rule, applied to every arm in `collect_r1h.py`:** a cell is `endpoint_outage` (apparatus,
+reported, never scored) if gnomon's logs (gnomon-full.log and the terminal capture) record
+an endpoint given up after its whole retry grace ("grace spent … giving up"). This covers
+lane arms whose cloud coordinator carried on after its local sub-turns failed (PC), not
+only cells that ended in `apparatus_failure`. A single 5xx that recovered within the grace
+doesn't count.
+
+**Cells moved to `runs-aborted/` and re-run on the fixed lane:**
+- 23 cells: 12 L and 11 PC, all attempt 1, started or running after 16:11Z. 22 are
+  endpoint_outage; `r1h-k1-pc-broken-python` had no tb verdict (apparatus).
+- Also `r1h-k1-c-polyglot-c-py`, in flight when R1H was stopped.
+
+No C cell had an outage: C never uses the lane. Finished cells (18) are kept. The re-runs
+use the same build, arms, seeds and cap; only timing differs, which is recorded per cell.

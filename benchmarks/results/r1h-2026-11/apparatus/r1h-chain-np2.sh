@@ -57,7 +57,7 @@ R1H_SHA="$SHA" python3 -I "$HERE/run_r1h.py" smoke >>"$BENCH/run-smoke.log" 2>&1
 if ! python3 -I "$HERE/collect_r1h.py" "$BENCH/runs-smoke" --smoke > "$BENCH/smoke-summary.txt" 2>&1; then
   cp "$BENCH/smoke-summary.txt" "$BENCH/SMOKE-FAILED.txt"
   say "SMOKE FAILED (smoke-summary.txt); R1H not started. Needs a fix logged as an amendment."
-  hubps "$STOP_HUB" >/dev/null; pkill -f '[t]unnel-hub.sh'; pkill -f 'ssh -N .*127.0.0.1:18280:127.0.0.1:18380'
+  hubps "$STOP_HUB" >/dev/null; pkill -f '[r]1h-2026-11/apparatus/tunnel-hub.sh'; pkill -f '[s]sh -N .*18280:127.0.0.1:18380'
   say "CLEANUP after failed smoke: hub server stopped, tunnel closed"
   exit 1
 fi
@@ -87,6 +87,6 @@ commit "bench(r1h): run complete — summary and runs (RESULT.md to follow)" \
   && say "results committed: $(git -C "$WT" rev-parse --short HEAD)" || say "results commit failed; files are on disk"
 git -C "$WT" push -q 2>/dev/null || true
 hubps "$STOP_HUB" >/dev/null && say "CLEANUP hub llama-server stopped" || say "CLEANUP could not reach the hub; see C:\\dev\\bud-lane\\STOP-ME.txt"
-pkill -f '[t]unnel-hub.sh'; pkill -f 'ssh -N .*127.0.0.1:18280:127.0.0.1:18380'
+pkill -f '[r]1h-2026-11/apparatus/tunnel-hub.sh'; pkill -f '[s]sh -N .*18280:127.0.0.1:18380'
 say "CLEANUP tunnel closed"
 say "DONE"

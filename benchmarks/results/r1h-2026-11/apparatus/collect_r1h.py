@@ -98,6 +98,14 @@ for d in sorted(runs.iterdir()):
     else:
         m2 = re.search(r"^ARM_VERSION=(\S+)", text, re.M)
         version = m2.group(1) if m2 else None
+    # Endpoint outage (amendment 2026-11-02, every arm): gnomon gave up on a model
+    # endpoint after its whole retry grace ("grace spent ... giving up"). The model
+    # was unreachable, so the cell measured the apparatus, not the arm. Both logs are
+    # read, since a task may mount no agent-logs volume.
+    both_logs = "".join(f.read_text(errors="replace")
+                        for f in (logs / "gnomon-full.log", res.parent / "sessions" / "agent.log")
+                        if f.exists())
+    outage = both_logs.count("grace spent")
     t = json.loads((d / "tokens.json").read_text()) if (d / "tokens.json").exists() else {}
     dl, dc = delta(t.get("local")), delta(t.get("cloud"))
     deleg = [x[0] for x in DELEG.findall(text)]
@@ -106,7 +114,7 @@ for d in sorted(runs.iterdir()):
               "agent_s": seconds(r.get("agent_started_at"), r.get("agent_ended_at")),
               "wall_s": (meta.get("end", 0) - meta.get("start", 0)) or None,
               "version": version, "sha": meta.get("sha"), "deleg": deleg,
-              "surface": surf[-1] if surf else None})
+              "surface": surf[-1] if surf else None, "outage": outage})
     if dl is not None and dc is not None:
         c.update({"lc": dl.get("chat_requests", 0), "cc": dc.get("chat_requests", 0),
                   "l_tok": dl.get("prompt_tokens", 0) + dl.get("completion_tokens", 0),
@@ -115,6 +123,7 @@ for d in sorted(runs.iterdir()):
                   "usd": dc.get("allowance", 0.0) or 0.0, "gpu_s": (dl.get("gpu_ms", 0) or 0) / 1000})
     c["state"] = ("apparatus" if c["resolved"] is None
                   else "unmetered" if dl is None or dc is None
+                  else "endpoint_outage" if outage
                   else "no_model_call" if c["lc"] + c["cc"] == 0
                   else "wrong_commit" if version != c["sha"]
                   else "misrouted" if not route_ok(c["asserted"], c["lc"], c["cc"], deleg)
