@@ -615,7 +615,9 @@ Anything else is `allow` with rule `ungoverned`, never guessed at.
 
 `write_allow` binds bash too: a file a shell command names as its output
 (a redirection; the operands of `rm`, `mv`, `cp`, `tee`, `sed -i` and the like;
-a literal path inline python, node, perl or ruby code writes) is refused with
+a literal path inline python, node, perl or ruby code writes, directly or
+through one name bound to it, whether the code is a `-c`/`-e` argument or a
+here-document on the interpreter's stdin) is refused with
 rule `write_allow` when it is inside the repository and outside the list. A
 path that starts with a variable, one outside the repository, and anything a
 script file does are not judged.
