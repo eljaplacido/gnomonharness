@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath, pathToFileURL } from "node:url";
 /**
  * surface-fidelity — does a change to the surface move the hash exactly when it
  * moves behaviour?
@@ -17,8 +18,8 @@ import { join, relative, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 
 
-const REPO = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
-const core = (m) => import(`${REPO}/packages/gnomon-core/dist/${m}`);
+const REPO = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]$/, "");
+const core = (m) => import(pathToFileURL(`${REPO}/packages/gnomon-core/dist/${m}`).href);
 
 const { loadConfig, recomputeManifest, resolveContext, resolveRouting, resolveUi,
         resolveVerify, resolveChain, resolveLoop, resolveResilience, resolveExec,
@@ -191,8 +192,8 @@ function variants(baseAbs, kind) {
 
 function scaffold() {
   const root = mkdtempSync(join(tmpdir(), "gnomon-fidelity-"));
-  execFileSync(`${REPO}/node_modules/.bin/tsx`,
-    [`${REPO}/packages/gnomon-cli/src/index.ts`, "init"],
+  execFileSync(process.execPath,
+    [`${REPO}/node_modules/tsx/dist/cli.mjs`, `${REPO}/packages/gnomon-cli/src/index.ts`, "init"],
     { cwd: root, stdio: "pipe" });
   return root;
 }
