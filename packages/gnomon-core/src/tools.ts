@@ -1365,7 +1365,10 @@ function killTree(
       const tk = spawn("taskkill", ["/pid", String(proc.pid), "/T", "/F"], {
         stdio: "ignore",
       });
-      tk.unref();
+      // Not unref'd: whoever awaits this kill must keep the process alive until
+      // it settles. An unref'd taskkill plus an unref'd cap timer let Node exit
+      // mid-wait with code 13 (an unsettled top-level await) when nothing else
+      // was pending -- the Windows property-suite gate caught it.
       return new Promise<void>((done) => {
         tk.once("exit", () => done());
         tk.once("error", () => done());
@@ -1405,7 +1408,6 @@ function settleKill(killed: Promise<void>, exited: Promise<void>): Promise<void>
   let timer: NodeJS.Timeout | undefined;
   const cap = new Promise<void>((done) => {
     timer = setTimeout(done, KILL_SETTLE_MS);
-    timer.unref?.();
   });
   return Promise.race([Promise.all([killed, exited]).then(() => undefined), cap]).finally(() => clearTimeout(timer));
 }
