@@ -26,6 +26,21 @@
 
 ## [Unreleased]
 
+- **A long local generation is no longer cut off at 300 s.** Node's fetch (undici)
+  puts its own 300 s headersTimeout and bodyTimeout on every request, and a model
+  call is not streamed, so headers arrive only when the generation is done. A
+  steady local generation therefore died at 300 s whatever `[resilience]
+  request_timeout_ms` said: the timeout escalation doubled the deadline to 600 s
+  and the next attempt died at 300 s again, as `fetch failed
+  (UND_ERR_HEADERS_TIMEOUT)`, reported as "endpoint unreachable". Two R1 cells
+  (local qwen3.6-35b, 2026-11-02) ended `apparatus_failure` this way.
+  - Model calls now use Node's own undici Agent with both timeouts off, so
+    gnomon's deadline (and Esc) is the only clock. No new dependency.
+  - undici's timeout errors, if they occur, are classified as a timeout (11),
+    not an unreachable endpoint.
+  - Tests install a global dispatcher with a 400 ms limit and show a model call
+    ignoring it; they fail on the previous code.
+
 - **Windows: a timed-out bash command has exited before the tool reports the
   timeout.** `killTree` fired `taskkill /T /F` and returned at once, so the
   tool reported "timed out" while the killed tree still held the shell's

@@ -1175,6 +1175,44 @@ export function isLoopbackUrl(url: string): boolean {
  * every transport failure looked identical. Walk the chain (bounded; causes can
  * be self-referential) and return the first `code` found.
  */
+/**
+ * The fetch dispatcher a model call uses: Node's own undici Agent, with its two
+ * hidden timeouts switched off.
+ *
+ * Node's fetch is undici, and undici gives every request a 300 s headersTimeout
+ * and a 300 s bodyTimeout of its own. A model call is not streamed, so headers
+ * arrive only when the whole generation is done, and a long, steady local
+ * generation was cut off at exactly 300 s however long gnomon's deadline was:
+ * the timeout escalation in callEndpointWithRetry doubled the deadline to 600 s
+ * and the next attempt died at 300 s again, as `fetch failed
+ * (UND_ERR_HEADERS_TIMEOUT)`, read as "endpoint unreachable". Measured in R1
+ * (2026-11-02, local qwen3.6-35b): two cells ended apparatus_failure this way.
+ *
+ * With both off, the deadline gnomon passes (AbortSignal.timeout, plus Esc) is
+ * the only clock, which is what [resilience] request_timeout_ms always claimed.
+ * The Agent class is taken from the global dispatcher Node installs, so nothing
+ * new is depended on. Where that is not an undici Agent (a replaced global
+ * dispatcher, another runtime), the call goes out exactly as before.
+ */
+let modelDispatcherCache: unknown | null | undefined;
+export function modelFetchDispatcher(): unknown | undefined {
+  if (modelDispatcherCache === undefined) {
+    modelDispatcherCache = null;
+    try {
+      const current = (globalThis as unknown as Record<symbol, unknown>)[
+        Symbol.for("undici.globalDispatcher.1")
+      ] as { constructor?: unknown } | undefined;
+      const Agent = current?.constructor as (new (opts: object) => unknown) | undefined;
+      if (typeof Agent === "function" && Agent.name === "Agent") {
+        modelDispatcherCache = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+      }
+    } catch {
+      modelDispatcherCache = null;
+    }
+  }
+  return modelDispatcherCache ?? undefined;
+}
+
 export function causeCode(err: unknown): string | undefined {
   let cur: unknown = err;
   for (let i = 0; i < 8 && cur; i++) {
@@ -1192,7 +1230,7 @@ export function causeCode(err: unknown): string | undefined {
  */
 const PROCESS_SESSION = `gnomon-${process.pid}-${Date.now()}`;
 
-async function callEndpoint(
+export async function callEndpoint(
   target: RouteTarget,
   messages: ChatMessage[],
   tools: unknown[],
@@ -1324,6 +1362,7 @@ async function callEndpoint(
   if (tools.length > 0) payload.tools = tools;
 
   try {
+    const dispatcher = modelFetchDispatcher();
     const res = await fetch(target.url, {
       method: "POST",
       headers,
@@ -1332,7 +1371,9 @@ async function callEndpoint(
       signal: signal
         ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal])
         : AbortSignal.timeout(timeoutMs),
-    });
+      // No undici timeouts of its own: the deadline above is the only clock.
+      ...(dispatcher ? { dispatcher } : {}),
+    } as RequestInit);
 
     if (!res.ok) {
       // The body carries the reason; the status alone does not. Reporting
@@ -1520,10 +1561,14 @@ async function callEndpoint(
         // The errno is the whole diagnosis and Node buries it on `.cause`, so
         // surface it. Without this every transport failure read "fetch failed".
         (errno && !msg.includes(errno) ? ` (${errno})` : ""),
-      code: classifyFailure({
-        errName: err instanceof Error ? err.name : undefined,
-        message: msg,
-      }),
+      // undici's own deadlines are a timeout, not an unreachable endpoint: the
+      // server accepted the request and was still working on it.
+      code: /^UND_ERR_(HEADERS|BODY)_TIMEOUT$/.test(errno ?? "")
+        ? 11
+        : classifyFailure({
+            errName: err instanceof Error ? err.name : undefined,
+            message: msg,
+          }),
       toolCalls: [],
     };
   }
