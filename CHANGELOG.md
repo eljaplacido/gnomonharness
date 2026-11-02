@@ -36,6 +36,32 @@
     with 18/18 delivered.
   - The suite's code is a reconstruction on `bench/peers-2026-11`
     (`benchmarks/results/g2br-2026-11/`); its README on master says so.
+- **Verification in proportion to the task: about a third less spent per
+  solved task on a hosted model.** The scaffold's `system.md` told the model to
+  turn every constraint into its own check and paste the output. On DeepSeek
+  V4.1 Flash that produced test suites, helper scripts and mutation testing
+  nobody asked for, and gnomon spent the most per solved task of five
+  harnesses (P1-H). The rule keeps its core: run what you produced. It loses
+  the per-constraint mandate, and adds "stop once the requirements are met"
+  and short reports. `gnomon migrate` replaces the exact old block only.
+  - Pre-registered A/B (`benchmarks/results/lean-2026-11/`, branch
+    `bench/peers-2026-11`), hosted model, 48 pairs: output tokens −28%
+    (p < 0.0001), $ per solved task 0.052 → 0.035, 37 vs 34 tasks solved
+    (not significant).
+  - Stage 2 runs the same A/B on the local model before this merges.
+- **`gnomon check --format gnomon` reads gnomon's own audit trail.** G1-R
+  (bench/peers-2026-11, `benchmarks/results/g1r-2026-11/`) re-scored G1 on master:
+  check now catches 44/44 of the peers' violations, and its one miss was gnomon's
+  own arm, because nothing read gnomon's record of its own session. The audit
+  trail has kept whole shell commands since 0.3.2 (#67), so it can serve as check
+  5's transcript.
+  - The trail must be hash-chained and sealed. A broken chain, an unchained trail
+    or a missing `session_end` is refused, and the verdict is 10.
+  - A call whose bucket is `refusal` is listed as not run.
+  - Commands from pre-0.3.2 trails (70-character form) are judged on that prefix,
+    and the finding says `truncated`.
+  - Read against G1's real `gnomon-T4-destructive-r2` trail, outside the repo: the
+    same 26 commands, refusals and truncations G1's own adapter took.
 
 - **A turn spawns git 2 times instead of 7–10. On Windows a turn takes 209 ms
   instead of 335.** gnomon measures what each turn changed in the worktree

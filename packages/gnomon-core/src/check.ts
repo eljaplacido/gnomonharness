@@ -130,6 +130,12 @@ export interface TranscriptCommand {
    * Reported, not failed: the rule held, just not by gnomon's hand.
    */
   ran?: false;
+  /**
+   * The record held only the start of the command (a gnomon trail written
+   * before 0.3.2 kept the 70-character terminal form). Judged on that prefix,
+   * and said so in any finding: a rule that would match the rest cannot.
+   */
+  truncated?: true;
 }
 
 export interface CheckOptions {
@@ -658,6 +664,7 @@ export function judgeTranscript(
       ...(refused.pattern ? { pattern: refused.pattern } : {}),
       ...(c.at ? { at: c.at } : {}),
     };
+    if (c.truncated) finding.truncated = true;
     if (c.ran === false) finding.ran = false;
     else failed++;
     findings.push(finding);

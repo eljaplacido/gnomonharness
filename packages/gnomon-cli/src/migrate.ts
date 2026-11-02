@@ -81,6 +81,35 @@ function retypeKey(
   return changed ? lines.join("\n") : null;
 }
 
+
+// The scaffold's verification rule before and after 2026-11-01. Kept verbatim
+// so a hand-edited system.md is never touched.
+const SYSTEM_MD_VERIFY_OLD =
+  "- Run what you produced before you end the turn. Turn each constraint the\n" +
+  "  task states into a command that fails if it is violated, run it, and paste\n" +
+  "  the output. Writing the file is not producing the artifact: a script that\n" +
+  "  has never been executed is a guess about what it does, and \"it exists\" is\n" +
+  "  not \"it works\".\n" +
+  "- Get to something that works end to end first, then improve it. If the\n" +
+  "  deliverable is not on disk yet, make it exist before refining anything —\n" +
+  "  a turn spent validating a thing that was never produced scores nothing.\n";
+const SYSTEM_MD_VERIFY_NEW =
+  "- Run what you produced before you end the turn: a script that has never\n" +
+  "  been executed is a guess about what it does, and \"it exists\" is not \"it\n" +
+  "  works\". Check it once against what the task asked for, in one command\n" +
+  "  where you can. Verify in proportion to the task: do not build test\n" +
+  "  suites, helper scripts or extra checks nobody asked for, and do not\n" +
+  "  re-check what already passed.\n" +
+  "- Get to something that works end to end first. If the deliverable is not\n" +
+  "  on disk yet, make it exist before refining anything — a turn spent\n" +
+  "  validating a thing that was never produced scores nothing. Once it works\n" +
+  "  and the task's requirements are met, stop.\n" +
+  "- Keep prose short. One sentence of why before a tool call is enough. The\n" +
+  "  final report says what changed, the check that shows it works, and\n" +
+  "  anything left undone; do not paste output the operator can rerun.\n";
+
+const eol = (text: string): string => (text.includes("\r\n") ? "\r\n" : "\n");
+
 export const MIGRATIONS: Migration[] = [
   {
     id: "compaction-summary",
@@ -118,6 +147,22 @@ export const MIGRATIONS: Migration[] = [
           "  report. Whether anyone can answer a question is stated under \"This\n" +
           "  session\" at the end of this prompt."
       );
+    },
+  },
+  {
+    id: "system-md-proportionate-verify",
+    file: "system.md",
+    what: `system.md: "turn each constraint into a command" → verify in proportion`,
+    why: [
+      "P1-H (2026-11-01, DeepSeek V4.1 Flash, 15 tasks x 3): gnomon made 1.5-3x",
+      "the peers' requests and wrote 1.5-4x their output on almost every task,",
+      "building test suites and helper scripts nobody asked for, and hit the",
+      "time cap most often. Only the exact scaffold block is replaced.",
+    ],
+    apply: (text) => {
+      const old = SYSTEM_MD_VERIFY_OLD.replace(/\n/g, eol(text));
+      if (!text.includes(old)) return null;
+      return text.replace(old, () => SYSTEM_MD_VERIFY_NEW.replace(/\n/g, eol(text)));
     },
   },
   {
