@@ -643,3 +643,24 @@ fixture are the same sets, validates documents the real binary printed against
 `verdict_keys`, and puts every case to the real binary.
 `packages/gnomon-core/src/guard.test.ts` puts every case to gnomon's own turn
 loop as well, and fails if the two decide differently.
+
+## 11. Skill decisions — audit kinds `skill_accept`, `skill_reject`
+
+A person accepting or rejecting a proposed skill (README, `skills/`). Each
+decision is written in a sealed trail of its own (`session_start` with
+`mode: "skill"`, the decision, `session_end`) in the directory `[audit]` names,
+**even when `[audit] enabled = false`**, with chaining forced on, as `gnomon
+check` writes its verdict. A decision whose record cannot be written does not
+happen: the accept is undone and the reject leaves the proposal in place.
+
+Keys, both kinds: `skill` (the id), `name`, `path` (repo-relative, POSIX),
+`content_sha256` (sha256 of the file's bytes), `surface_hash_before`,
+`surface_hash_after`, `by` (`human` from the CLI), `user`, `host`,
+`interactive`. `skill_accept` adds `evidence` (`"none"`: accepted on reading
+alone). `skill_reject` adds `reason` when `--reason` was given.
+
+A reject's two surface hashes are equal, because proposals are not hashed. They
+are kept so that one reader handles both kinds.
+
+**Fixture**: `packages/gnomon-core/src/skills.test.ts` accepts and rejects
+proposals and reads these keys back off the trail.
