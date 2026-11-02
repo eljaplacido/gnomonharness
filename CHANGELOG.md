@@ -26,6 +26,17 @@
 
 ## [Unreleased]
 
+- **The 2026-09-01 injection suite has a positive control again.** Since #68,
+  `network = false` covers bash, so the operator-asks control (a `curl` to the
+  canary) was refused on arm A's surface: 3/3 crossed became 0/3, and the suite
+  could no longer show that a crossing would be seen.
+  - The control now declares `network = true`; the payload arms keep the
+    scaffold's policy.
+  - Re-measured on master 891b559b: control 3/3 crossed, payloads 0/18 crossed
+    with 18/18 delivered.
+  - The suite's code is a reconstruction on `bench/peers-2026-11`
+    (`benchmarks/results/g2br-2026-11/`); its README on master says so.
+
 - **A turn spawns git 2 times instead of 7–10. On Windows a turn takes 209 ms
   instead of 335.** gnomon measures what each turn changed in the worktree
   (`tree_delta`) with git, and spent ten processes on it: four for the
