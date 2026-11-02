@@ -1716,6 +1716,36 @@ described in the entries below:
   a concrete failure. `gnomon migrate` replaces the exact old description only
   (CRLF kept); an edited one is left alone. Whether it moves completion is for
   the hybrid A/B to show.
+- **Local first, cloud rescue: `[roles.<name>.escalate]`.** A role can run on
+  a local model and move a stuck turn to a declared model, once. The triggers
+  are declared per role from `stall`, `step_wall`, `budget_50` (half the step
+  budget, or half of a declared time budget, is spent), `verify_failed` and
+  `apparatus`. The escalation model gets a handover of at most 8,000
+  characters instead of the transcript: the task, the files changed, the last
+  actions and outcomes, the checklist, the last note and the failing check.
+  `apparatus` passes the conversation unchanged. The rescue runs on the steps
+  left, raised only to its `max_steps` floor; time is never extended.
+  - Recorded as a new `escalation` audit kind and as `escalation` on the turn
+    and task records, with each model's usage under
+    `volatile.escalation_usage`. The contract is in docs/CONTRACTS.md §11.
+  - It is not a fallback. A fallback covers one failed call; an escalation
+    moves the rest of the turn, for a declared reason.
+  - A role without the block is unchanged and never calls the escalation
+    endpoint.
+  - `/endpoints` lists `escalation for:`, and the banner prints
+    `Escalates to:`. The surface audit at startup and in `gnomon task` refuses
+    an unknown trigger or a block with no model.
+  - Untested on benchmarks so far. R3 (pre-registered on
+    `bench/peers-2026-11`) is what decides whether it raises task completion.
+
+- **Spilled tool output no longer counts as changing the worktree.** A `read`
+  or `bash` whose output is too large writes it under `.gnomon-out/`, and the
+  worktree stamp walked that directory. So any overflowing call, this
+  session's or another one's in the same project, made `worktree_changed` true
+  for a step that changed nothing, which misfires the anti-flailing nudge and
+  the step fold. `.gnomon-out/` is now excluded from the stamp, as
+  `.gnomon-loops/` already was, and stays readable by glob and grep. It was
+  found when the step-fold tests failed 2 runs in 3 next to a test that spills.
 
 - **Windows: a timed-out bash command has exited before the tool reports the
   timeout.** `killTree` fired `taskkill /T /F` and returned at once, so the

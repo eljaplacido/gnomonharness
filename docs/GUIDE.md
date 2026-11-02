@@ -242,6 +242,7 @@ flowchart LR
     F2 --> LOC
     F1 --> CLOUD["endpoints.openrouter<br/>api_key_env = OPENROUTER_API_KEY<br/>billed per token"]
     FB["roles.ROLE.fallback<br/>tried when the primary<br/>fails or times out"] -.-> CLOUD
+    ESC["roles.ROLE.escalate<br/>takes over a stuck turn,<br/>once, with a handover"] -.-> CLOUD
 ```
 
 The enumerations publish three profile names: `local_first`, `frontier_plan`
@@ -834,6 +835,45 @@ on it, and the next turn starts on the primary again:
 model = "<openrouter-model-id>"
 endpoint = "openrouter"
 ```
+
+**Local first, cloud rescue.** Work locally, and move a turn that gets stuck to
+the cloud model, once:
+
+```toml
+# .gnomon/roles.toml (or the active profile), under the role it rescues
+[roles.implementor.escalate]
+model = "<openrouter-model-id>"
+endpoint = "openrouter"
+on = ["stall", "step_wall", "budget_50"]
+```
+
+The triggers are the ways a local turn usually fails:
+
+| `on` | The turn moves when |
+|---|---|
+| `stall` | the local model repeats a call without progress |
+| `step_wall` | it reaches `max_steps_total` |
+| `budget_50` | half of `max_steps_total` is used and it has not finished (and half of the time, when the run declares a time budget) |
+| `verify_failed` | the declared `[verify]` check still fails after its last round |
+| `apparatus` | the local endpoint is down, after retries and after any `fallback` |
+
+The cloud model does not get the local model's transcript. It gets a handover
+of at most 8,000 characters: the task, the files changed so far, the last
+twelve actions and what they returned, the checklist, the last thing the local
+model said, and the failing check. It reads the files on disk for the rest. Only
+`apparatus` passes the conversation as it is, since that model was not stuck.
+
+It differs from `fallback` in three ways. `fallback` covers one failed call and
+the next call returns to the primary; `escalate` moves the rest of the turn. It
+fires for a reason you declared, not only for an endpoint failure. And it is
+recorded as itself: an `escalation` audit record, a yellow `[escalate]` line, and
+an `escalation` object in `gnomon task --json` with the trigger, the step, both
+models, the handover's size, the model the turn ended on, and each model's
+token usage. It happens at most once per turn: a rescue that stalls ends the turn
+like any stall. The rescue runs on the steps that are left, raised only so it
+gets at least the role's `max_steps` (`max_steps = N` in the block overrides
+that); time is never extended. `/endpoints` lists the role under
+`escalation for:`, and the banner prints `Escalates to: …` under the model.
 
 ### 5.4 Cloud providers
 

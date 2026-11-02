@@ -79,6 +79,10 @@ a turn's own loop. They are here because a consumer reads them on the same
 records: `gnomon task --json`, the `turn` audit record, and
 `<session>.record.json`.
 
+After an escalation (section 11), `stop_reason` is how the escalated model
+ended the turn; what moved the turn is `escalation.trigger`, never a
+`stop_reason` value.
+
 `apparatus` exists because every failure of that kind previously borrowed
 `answered`, which recorded a run that never started as a turn that concluded.
 
@@ -3631,3 +3635,43 @@ and runs `gnomon task --deadline <cap less the copy-out time>`.
 
 **Fixture**: `conformance/checkpoint_grind.json`;
 `packages/gnomon-core/src/checkpoint_grind.test.ts` asserts the code equals it.
+
+---
+
+## 42. Escalation — local first, cloud rescue
+
+What `[roles.<name>.escalate]` records when it moves a turn to its declared
+model (README, "Local first, cloud rescue"). A role without the block produces
+none of the fields below, and its records are byte-for-byte what they were.
+
+**Triggers** — `on` is a list of these; anything else is a fatal surface problem.
+
+| trigger | fires when | what the escalated model is given |
+|---|---|---|
+| `stall` | the stall check would have ended the turn (`stop_reason` `stall`) | a handover |
+| `step_wall` | `max_steps_total` would have ended the turn | a handover |
+| `budget_50` | after a step, when half of `max_steps_total` is used, or half of a declared time budget (`TurnDeps.deadline`, which #93's `--deadline` sets) has passed | a handover |
+| `verify_failed` | the declared `[verify]` check still fails after its last round | a handover, with the check's output |
+| `apparatus` | the role's endpoint failed in a way retries and `fallback` did not fix (bucket `apparatus_failure`) | the conversation as it stands |
+
+At most one escalation per turn. The escalated model is never itself escalated.
+
+**Audit record** — kind `escalation`, written once at the move. Keys: `role`,
+`depth`, `trigger`, `at_step`, `from` and `to` (`{ model, endpoint }`),
+`carried` (`handover` | `context`), `handover_chars`, `max_steps_total_after`
+(only when the move raised the wall), and `handover` (the text, under
+`[audit] record = "full"` only). The `turn` record carries the same
+`escalation` object as the turn result.
+
+**Task record** — `gnomon task --json` carries `escalation`: `trigger`,
+`at_step`, `from`, `to`, `carried`, `handover_chars`, `max_steps_total_after`?,
+and `final_model` (the model the turn ended on). Each model's backend usage is
+under `volatile.escalation_usage` (`before`, `after`), beside the other token
+counts, because it is not reproducible. Both are absent when nothing moved.
+
+**Fixture**: `conformance/escalation_record.json`.
+`packages/gnomon-core/src/escalation.test.ts` asserts the code's
+`ESCALATE_TRIGGERS`, the trigger table above and the fixture are one set, and
+checks the keys of a real audit record and task record against it. It also
+runs each trigger against scripted endpoints, the once-per-turn rule, and that
+a role without the block never calls its escalation endpoint.

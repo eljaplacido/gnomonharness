@@ -288,6 +288,12 @@ export type AuditKind =
   // before it) and what came back (provider tokens, reasoning, code, clock).
   // Metadata only: no prompt or response text. mediators.ts.
   | "model_call"
+  // A turn moved to its role's escalation model ("local first, cloud rescue"):
+  // the trigger, the step, from where to where, and the handover's size. Its
+  // own kind because it is a routing decision inside a turn, not a turn, and a
+  // reader asking "which model did this work" has to find it without parsing
+  // turn records.
+  | "escalation"
   | "session_end";
 
 export interface AuditRecord {

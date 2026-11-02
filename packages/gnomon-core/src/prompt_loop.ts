@@ -74,6 +74,8 @@ import {
   taskResilience,
   workRootOf,
   steerRoleOf,
+  type EscalateTrigger,
+  type EscalateRoute,
 } from "./config.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence,
   safeForPrompt, traceLines, isEmptyReasoning, terminalWidth,
@@ -1012,6 +1014,22 @@ export function readUsage(json: unknown): TokenUsage | undefined {
 }
 
 /** Add one call's usage into a running total for the turn. */
+/** What `total` added since `before`: the usage of one part of a turn. */
+export function usageSince(
+  before: TokenUsage | undefined,
+  total: TokenUsage | undefined
+): TokenUsage | undefined {
+  if (!total) return undefined;
+  if (!before) return { ...total };
+  const sub = (a?: number, b?: number) =>
+    a === undefined ? undefined : Math.max(0, a - (b ?? 0));
+  return {
+    input: sub(total.input, before.input),
+    output: sub(total.output, before.output),
+    ...(total.ms !== undefined ? { ms: sub(total.ms, before.ms) } : {}),
+  };
+}
+
 export function addUsage(
   total: TokenUsage | undefined,
   next: TokenUsage | undefined
@@ -3045,6 +3063,8 @@ export interface EndpointRow {
   primary: string[];
   /** Roles naming it only as a fallback */
   fallback: string[];
+  /** Roles naming it as where a stuck turn escalates ([roles.<name>.escalate]) */
+  escalation: string[];
   /**
    * A model to test with — the first role that routes here. Without one there
    * is nothing to probe: an endpoint has no opinion about auth until it is
@@ -3063,10 +3083,12 @@ export function describeEndpoints(config: GnomonConfig): EndpointRow[] {
     const cls = endpointClass(endpoint.url, endpointKind(endpoint), endpoint.provider);
     const primary = roles.filter((r) => (config.roles[r]?.endpoint ?? "local") === name);
     const fallback = roles.filter((r) => config.roles[r]?.fallback?.endpoint === name);
+    const escalation = roles.filter((r) => config.roles[r]?.escalate?.endpoint === name);
     const probeModel =
       (primary[0] ? config.roles[primary[0]]?.model : undefined) ??
-      (fallback[0] ? config.roles[fallback[0]]?.fallback?.model : undefined);
-    return { name, endpoint, where: cls.where, provider: cls.provider, primary, fallback, probeModel };
+      (fallback[0] ? config.roles[fallback[0]]?.fallback?.model : undefined) ??
+      (escalation[0] ? config.roles[escalation[0]]?.escalate?.model : undefined);
+    return { name, endpoint, where: cls.where, provider: cls.provider, primary, fallback, escalation, probeModel };
   });
 }
 
@@ -3171,6 +3193,9 @@ export async function checkRoleModels(
       if (config.roles[r]?.fallback?.endpoint === row.name) {
         consider(r + " (fallback)", config.roles[r]?.fallback?.model);
       }
+      if (config.roles[r]?.escalate?.endpoint === row.name) {
+        consider(r + " (escalation)", config.roles[r]?.escalate?.model);
+      }
     }
     if (checks.length > 0) out.set(row.name, checks);
   }
@@ -3217,11 +3242,12 @@ export function printEndpoints(
     // An endpoint nothing points at is declared, not used. Saying so is the
     // difference between "it is not configured" and "it is configured and
     // nothing routes to it" — which look identical from a listing.
-    if (row.primary.length === 0 && row.fallback.length === 0) {
+    if (row.primary.length === 0 && row.fallback.length === 0 && row.escalation.length === 0) {
       console.log(`      used by: (no role — declared but nothing routes here)`);
     } else {
       if (row.primary.length > 0) console.log(`      used by: ${row.primary.join(", ")}`);
       if (row.fallback.length > 0) console.log(`      fallback for: ${row.fallback.join(", ")}`);
+      if (row.escalation.length > 0) console.log(`      escalation for: ${row.escalation.join(", ")}`);
     }
 
     if (ep.api_key_env) {
@@ -3610,6 +3636,128 @@ export interface TurnResult {
    * bash and read by nothing at all.
    */
   surface_changed?: SurfaceDrift[];
+  /**
+   * Set when the turn moved to its role's escalation model ("local first,
+   * cloud rescue"): why, when, from where to where, how big the handover was,
+   * and the backend usage on each side of the move. Absent when nothing moved,
+   * so a turn record without an escalation is byte-identical to before.
+   */
+  escalation?: EscalationRecord;
+}
+
+/**
+ * One move of a turn to its role's escalation model.
+ *
+ * Not a verdict and not a second outcome: the turn still has exactly one
+ * bucket, from how it ended. This records that the ending came from a
+ * different model than the one it started on, and why.
+ */
+export interface EscalationRecord {
+  trigger: EscalateTrigger;
+  /** Tool calls the turn had made when it moved */
+  at_step: number;
+  from: { model: string; endpoint?: string };
+  to: { model: string; endpoint?: string };
+  /**
+   * What the escalation model was given: "handover" — a compact summary in
+   * place of the transcript; "context" — the conversation as it stood (only
+   * for `apparatus`, where the first model was not stuck, its endpoint was).
+   */
+  carried: "handover" | "context";
+  /** Characters of handover text sent (0 when the context was carried) */
+  handover_chars: number;
+  /** The step ceiling after the move, when it had to be raised */
+  max_steps_total_after?: number;
+  /** The model the turn ended on */
+  final_model: string;
+  /** Backend-reported usage before and after the move; volatile run to run */
+  usage_before?: TokenUsage;
+  usage_after?: TokenUsage;
+}
+
+/** The most a handover carries, in characters. */
+export const HANDOVER_MAX_CHARS = 8000;
+
+export interface HandoverInput {
+  /** The request the turn was answering */
+  request: string;
+  trigger: EscalateTrigger;
+  stepsUsed: number;
+  stepsLeft: number;
+  /** Paths changed in the worktree so far */
+  changed: string[];
+  /** The last actions and their outcomes, oldest first */
+  recent: string[];
+  todos: Array<{ content: string; status: string }>;
+  /** What the first model last said */
+  lastNote?: string;
+  /** Output of a declared check that failed */
+  verifyOutput?: string;
+}
+
+const HANDOVER_WHY: Record<EscalateTrigger, string> = {
+  stall: "the previous model repeated a call without making progress",
+  step_wall: "the previous model used its whole step budget",
+  budget_50: "half of the budget is spent and the task is not done",
+  verify_failed: "the repository's declared check still fails",
+  apparatus: "the previous model's endpoint stopped answering",
+};
+
+/**
+ * What the escalation model is told instead of the transcript.
+ *
+ * Bounded on purpose: a stuck model's transcript is mostly the being-stuck,
+ * and resending it costs the escalation model the most where it is most
+ * expensive. The files on disk are the state; this says where to look.
+ */
+export function buildHandover(h: HandoverInput, maxChars: number = HANDOVER_MAX_CHARS): string {
+  const clip = (text: string, n: number): string =>
+    text.length > n ? `${text.slice(0, n)}…[cut]` : text;
+  const tail = (text: string, n: number): string =>
+    text.length > n ? `[cut]…${text.slice(-n)}` : text;
+  const changed = h.changed.length > 0
+    ? h.changed.slice(0, 40).map((p) => `- ${p}`).join("\n") +
+      (h.changed.length > 40 ? `\n- … and ${h.changed.length - 40} more` : "")
+    : "(none detected)";
+  const parts = [
+    `You are taking over a task another model started. It stopped because ` +
+      `${HANDOVER_WHY[h.trigger]}, after ${h.stepsUsed} tool call(s). You have ` +
+      `about ${h.stepsLeft} tool call(s) left. The files on disk are the current ` +
+      `state: inspect them rather than trusting this summary, then finish the task.`,
+    `## The task\n${clip(h.request.trim(), 3000)}`,
+    `## Files changed so far\n${changed}`,
+    h.recent.length > 0
+      ? `## Its last actions and their outcomes\n${h.recent.slice(-12).map((r) => `- ${clip(r, 300)}`).join("\n")}`
+      : "",
+    h.todos.length > 0
+      ? `## Its checklist\n${h.todos.slice(0, 20).map((t) => `- [${t.status === "completed" ? "x" : " "}] ${clip(t.content, 200)}`).join("\n")}`
+      : "",
+    h.lastNote && h.lastNote.trim() ? `## What it last said\n${clip(h.lastNote.trim(), 800)}` : "",
+    h.verifyOutput ? `## The failing check\n${tail(h.verifyOutput, 1500)}` : "",
+  ].filter((p) => p.length > 0);
+  const out = parts.join("\n\n");
+  return out.length > maxChars ? `${out.slice(0, maxChars - 20)}\n…[handover cut]` : out;
+}
+
+/** Paths git reports as changed or new in the worktree. Empty when git cannot say. */
+function gitChangedPaths(root: string): string[] {
+  const r = safeGit(["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+    cwd: root,
+    timeout: 10_000,
+    stdio: ["ignore", "pipe", "ignore"],
+    hot: true,
+  });
+  if (r.status !== 0 || typeof r.stdout !== "string") return [];
+  const out: string[] = [];
+  const entries = r.stdout.split("\0");
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (e.length < 4) continue;
+    out.push(e.slice(3));
+    // A rename or copy carries its source as the next NUL-separated field.
+    if (e[0] === "R" || e[0] === "C") i++;
+  }
+  return out;
 }
 
 /**
@@ -5121,7 +5269,9 @@ async function agenticTurn(
     typeof roleDef.max_steps === "number" ? roleDef.max_steps : loop.max_steps;
   // max_steps is a checkpoint; this is the wall. A session left running for
   // hours cannot be asked to notice a stall and re-prompt by hand.
-  const maxTotal =
+  // `let` only so an escalation can guarantee the escalated model its declared
+  // minimum of calls (EscalateDef.max_steps); nothing else moves the wall.
+  let maxTotal =
     typeof roleDef.max_steps_total === "number"
       ? roleDef.max_steps_total
       : maxSteps * loop.legs;
@@ -5202,6 +5352,17 @@ async function agenticTurn(
   // the moment a fallback fires, and the record has to follow the request
   // rather than the declaration.
   let usedTarget = route.target;
+  // Local first, cloud rescue. `active` is where model calls go: the declared
+  // route until a declared trigger moves the turn, once, to the role's
+  // escalation model for the rest of it. Absent escalation, `active` is
+  // `route.target` for the whole turn and nothing below behaves differently.
+  const escalateDecl: EscalateRoute | undefined = route.escalate;
+  let active: RouteTarget = route.target;
+  let escalation: EscalationRecord | undefined;
+  let lastVerifyOutput: string | undefined;
+  // The last actions and their outcomes, for a handover. Kept only when an
+  // escalation is declared, so a turn without one does no extra work.
+  const recentActions: string[] = [];
   // One re-prompt for an empty completion, per nudge cycle — not one per turn.
   //
   // The nudge re-fires every nudge_after_idle calls for as long as the turn
@@ -5557,7 +5718,7 @@ async function agenticTurn(
     // No answer was produced, so there is nothing to cite-check. Left unset
     // rather than zeroed: "no citations checked" and "checked, none found"
     // are different facts.
-    return {
+    return withEscalation({
     content: CANCELLED,
     code: settle(code, 2),
     model: usedModel,
@@ -5572,7 +5733,7 @@ async function agenticTurn(
     counters,
     modelCalls: measured(),
     surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
-    };
+    });
   };
 
   /**
@@ -6044,6 +6205,116 @@ async function agenticTurn(
     deps.progress.start(`${route.model}`);
   }
 
+  /**
+   * Move the rest of this turn to the role's escalation model, if `trigger` is
+   * one it declared and nothing has moved yet. Returns whether it moved.
+   *
+   * Once per turn, by construction: a rescue that can itself be rescued is a
+   * routing loop, and the second move would hide the first in the record.
+   */
+  const escalateNow = (
+    trigger: EscalateTrigger,
+    opts: { lastNote?: string; verifyOutput?: string } = {}
+  ): boolean => {
+    if (!escalateDecl || escalation || !escalateDecl.on.includes(trigger)) return false;
+    const keepContext = trigger === "apparatus";
+    // The escalation runs on what is left of the step budget, raised only to
+    // guarantee its declared floor (always needed for step_wall). Time is never
+    // extended: a --deadline still means what it said.
+    const floor = escalateDecl.max_steps ?? maxSteps;
+    let raisedTo: number | undefined;
+    if (maxTotal - steps < floor) {
+      maxTotal = steps + floor;
+      raisedTo = maxTotal;
+    }
+    let handover = "";
+    if (!keepContext) {
+      const root = workRootOf(state.config);
+      const lastUser = [...messages].reverse().find((m) => m.role === "user");
+      handover = buildHandover({
+        request: typeof lastUser?.content === "string" ? lastUser.content : "",
+        trigger,
+        stepsUsed: steps,
+        stepsLeft: Math.max(0, maxTotal - steps),
+        changed: gitChangedPaths(root),
+        recent: recentActions,
+        todos: state.todos ?? [],
+        lastNote: opts.lastNote,
+        verifyOutput: opts.verifyOutput,
+      });
+    }
+    escalation = {
+      trigger,
+      at_step: steps,
+      from: { model: usedModel, endpoint: usedTarget.endpoint },
+      to: { model: escalateDecl.model, endpoint: escalateDecl.endpoint },
+      carried: keepContext ? "context" : "handover",
+      handover_chars: handover.length,
+      ...(raisedTo !== undefined ? { max_steps_total_after: raisedTo } : {}),
+      final_model: escalateDecl.model,
+      ...(turnUsage ? { usage_before: { ...turnUsage } } : {}),
+    };
+    deps.audit?.write("escalation", {
+      role,
+      depth,
+      trigger,
+      at_step: steps,
+      from: escalation.from,
+      to: escalation.to,
+      carried: escalation.carried,
+      handover_chars: escalation.handover_chars,
+      ...(raisedTo !== undefined ? { max_steps_total_after: raisedTo } : {}),
+      // The handover text itself only under record = "full"; metadata keeps
+      // its size and the decision, never content.
+      handover: keepContext ? undefined : deps.audit.text(handover),
+    });
+    deps.progress.stop();
+    warn(
+      paint(
+        deps.ui,
+        "yellow",
+        `  [escalate] ${trigger} — continuing on ${escalateDecl.model} at ` +
+          `${escalateDecl.endpoint || escalateDecl.url}` +
+          (keepContext
+            ? " with the conversation so far"
+            : ` with a ${handover.length}-character handover`) +
+          (raisedTo !== undefined ? ` (step ceiling raised to ${raisedTo})` : "")
+      )
+    );
+    active = escalateDecl;
+    usedModel = escalateDecl.model;
+    usedTarget = escalateDecl;
+    if (!keepContext) {
+      const system = messages[0]?.role === "system" ? messages[0] : undefined;
+      working.length = 0;
+      if (system) working.push(system);
+      working.push({ role: "user", content: handover });
+    }
+    // The new model starts with clean loop-detection state: the old model's
+    // repetition is not the new model's.
+    recentCalls.length = 0;
+    callsSinceWrite = 0;
+    callsAtLastNudge = 0;
+    consecutiveMalformed = 0;
+    consecutiveEmpty = 0;
+    verifyRounds = 0;
+    deps.progress.start(`${escalateDecl.model} — escalated (${trigger})`);
+    return true;
+  };
+
+  /** Every return carries the escalation, completed with the final model and usage. */
+  const withEscalation = (r: TurnResult): TurnResult =>
+    escalation
+      ? {
+          ...r,
+          escalation: {
+            ...escalation,
+            final_model: usedModel,
+            ...(turnUsage ? { usage_after: usageSince(escalation.usage_before, turnUsage) } : {}),
+          },
+        }
+      : r;
+
   // `--deadline`: the next fraction of the budget whose note is still unsent.
   let deadlineNoteNext = 0;
   // `[turn] deadline_note = "upfront"`: whether the budget has been stated.
@@ -6139,7 +6410,7 @@ async function agenticTurn(
     // result per call: between two batches the request grows only at its
     // end, so the endpoint's cached prefix stays valid (context_hygiene.ts).
     if (mask) {
-      const next = onFallback && route.fallback ? route.fallback : route.target;
+      const next = escalation ? active : onFallback && route.fallback ? route.fallback : route.target;
       const window = resolveContext(config, next).max_context_tokens;
       const batch = maskObservations(working, observations, mask, window, lastChangeSeq);
       if (batch) {
@@ -6170,7 +6441,13 @@ async function agenticTurn(
     }
 
     let result: InferenceResult;
-    if (onFallback && route.fallback) {
+    if (escalation) {
+      // Escalated: the rest of the turn is on the escalation model, and the
+      // primary's fallback no longer applies.
+      usedModel = active.model;
+      usedTarget = active;
+      result = await call(active);
+    } else if (onFallback && route.fallback) {
       usedModel = route.fallback.model;
       usedTarget = route.fallback;
       result = await call(route.fallback);
@@ -6183,7 +6460,7 @@ async function agenticTurn(
 
     if (deps.signal?.aborted) return cancelled();
 
-    if (result.code !== 0 && route.fallback && !onFallback) {
+    if (result.code !== 0 && route.fallback && !onFallback && !escalation) {
       // Announced on the spinner ONLY, until 2026-09-05. `progress.update` is
       // overwritten by the very next frame, and `gnomon task` in a script has
       // no scrollback to overwrite — so the single most consequential thing
@@ -6229,6 +6506,15 @@ async function agenticTurn(
           )
         );
       }
+    }
+
+    // apparatus: the endpoint is down after retries (and after any fallback).
+    // Not the same as fallback: this moves the REST of the turn, once, and
+    // carries the conversation, since the first model was not stuck.
+    if (result.code !== 0 && mapBucket(result.code) === "apparatus_failure" && escalateNow("apparatus")) {
+      result = await call(active);
+      usedModel = active.model;
+      if (deps.signal?.aborted) return cancelled();
     }
 
     code = worse(code, result.code);
@@ -6773,6 +7059,7 @@ async function agenticTurn(
             // Already reported above, with the audit record saying why.
           } else if (!passed || pinsNothing) {
             verifyOutcome = "failed";
+            lastVerifyOutput = `$ ${verify.command}\n${check.content}`;
             // `warn`: a declared check failing is not chatter, and on
             // `gnomon task --json` it was the one line saying so (gnomon chaos,
             // late_system_dropped: a check that failed every round it was given
@@ -7241,6 +7528,17 @@ async function agenticTurn(
         continue;
       }
 
+      // verify_failed: the declared check still fails after every round this
+      // model was given. The escalation model gets the check's output and a
+      // fresh set of rounds.
+      if (
+        result.code === 0 &&
+        verifyOutcome === "failed" &&
+        escalateNow("verify_failed", { lastNote: result.content, verifyOutput: lastVerifyOutput })
+      ) {
+        continue;
+      }
+
       // Measured at the end of the turn, from git — never the model's account.
       // Nothing may be still held back when the turn ends: a folded chunk
       // printed after the answer would describe work the reader has already
@@ -7251,7 +7549,7 @@ async function agenticTurn(
       flushFold();
       counters.tree_delta = measureTreeDelta(workRootOf(state.config), treeBaseline);
       stampCitations(counters, result.content, workRootOf(state.config));
-      return {
+      return withEscalation({
         content: noteMarkupInAnswer(result.content, counters),
         code: settle(code, result.code),
         model: usedModel,
@@ -7277,7 +7575,7 @@ async function agenticTurn(
         counters,
         modelCalls: measured(),
         surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
-      };
+      });
     }
 
     // Stalled? Repeating one call verbatim is not progress, and on autopilot
@@ -7353,6 +7651,13 @@ async function agenticTurn(
     //
     // A ceiling a turn can walk through is worse than no ceiling: it is the one
     // bound an unattended session has, and the number in roles.toml was not it.
+    // stall / step_wall: the turn is about to stop without an answer it chose.
+    // A declared escalation takes it over instead of wrapping it up. The reply
+    // that hit the wall or repeated is dropped, as it would be here anyway.
+    if (!malformedOut && (stalled || wall) && escalateNow(stalled ? "stall" : "step_wall", { lastNote: result.content })) {
+      continue;
+    }
+
     if (malformedOut || cutOut || stalled || wall) {
       const note = cutOut
         ? `Stopped: ${consecutiveCut} repl${consecutiveCut === 1 ? "y" : "ies"} in a row had a ` +
@@ -7384,7 +7689,7 @@ async function agenticTurn(
           `an edit you did not make as though you made it. Then say what you ` +
           `were unable to examine, so the answer is legibly partial.`,
       });
-      const closingTarget = adaptTarget(state, route.target);
+      const closingTarget = adaptTarget(state, active);
       let closing = await callEndpoint(
         closingTarget,
         working,
@@ -7427,7 +7732,7 @@ async function agenticTurn(
       flushFold();
       counters.tree_delta = measureTreeDelta(workRootOf(state.config), treeBaseline);
       stampCitations(counters, content, workRootOf(state.config));
-      return {
+      return withEscalation({
         // The wall and stall paths are where markup actually survived: a turn
         // cut off mid-emission still returns whatever it had.
         content: noteMarkupInAnswer(content, counters),
@@ -7452,7 +7757,7 @@ async function agenticTurn(
         counters,
         modelCalls: measured(),
         surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
-      };
+      });
     }
 
     if (checkpoint) {
@@ -7733,6 +8038,10 @@ async function agenticTurn(
       code = worse(code, outcome.code);
       if (outcome.surface_drift) surfaceChanges.push(outcome.surface_drift);
       toolLog.push(outcome.summary);
+      if (escalateDecl && !escalation) {
+        recentActions.push(`${call.name} ${describeCall(call)} → ${outcome.summary}`.trim());
+        if (recentActions.length > 12) recentActions.shift();
+      }
       tally(call.name, "calls");
       const outcomeBucket = mapBucket(outcome.code);
       if (outcomeBucket === "refusal") {
@@ -8052,7 +8361,29 @@ async function agenticTurn(
       }, "converge"));
       deps.progress.start(`${usedModel} — ${steps} tool call(s), converging`);
     }
+
+    // budget_50: half the step budget (or of a declared deadline) is spent and
+    // the turn has not ended. Checked after the calls ran, so the move happens
+    // between steps, never in the middle of one.
+    if (escalateDecl && !escalation && escalateDecl.on.includes("budget_50")) {
+      const halfSteps = maxTotal > 0 && steps * 2 >= maxTotal;
+      const halfTime =
+        deps.deadline !== undefined &&
+        deps.deadline.total_ms > 0 &&
+        (Date.now() - deps.deadline.started_at) * 2 >= deps.deadline.total_ms;
+      if (halfSteps || halfTime) escalateNow("budget_50", { lastNote: lastRationale });
+    }
   }
+}
+
+/**
+ * The startup line for a role that escalates, or undefined when it does not.
+ * Said up front because "this turn may end on a different, billed model" is
+ * the thing an operator most needs to know before typing.
+ */
+export function describeEscalation(e: EscalateRoute | undefined): string | undefined {
+  if (!e) return undefined;
+  return `Escalates to: ${e.model} at ${e.endpoint || e.url}, once per turn, on ${e.on.join(", ")}`;
 }
 
 /**
@@ -8473,7 +8804,15 @@ export interface TaskRecord {
     deadline?: { at: string; budget_ms: number; margin_ms: number; source: "flag" | "env" };
     /** `counters.completion_gate.ms`, moved here: the gate's clock. §30. */
     completion_gate_ms?: number;
+    /** With an escalation: the usage before and after the move. */
+    escalation_usage?: { before?: TokenUsage; after?: TokenUsage };
   };
+  /**
+   * Present only when the turn moved to its role's escalation model: the
+   * trigger, the step, from and to, what was carried and its size, and the
+   * model the turn ended on. Usage on each side is under `volatile`.
+   */
+  escalation?: Omit<EscalationRecord, "usage_before" | "usage_after">;
 }
 
 /** One tool call's timing, as the record and the trail carry it (TB4). */
@@ -9158,6 +9497,7 @@ export async function runTask(
     stop_reason: turn.stop_reason,
     stop_detail: turn.stop_detail,
     counters: turn.counters,
+    ...(turn.escalation ? { escalation: turn.escalation } : {}),
     tokens_in: turn.usage?.input,
     tokens_out: turn.usage?.output,
     skills: active.map((sk) => sk.id),
@@ -9263,7 +9603,11 @@ export async function runTask(
       // Wall-clock spent in the completion gate, reviewer included. Present
       // only when a gate is declared.
       ...(turn.counters.completion_gate ? { completion_gate_ms: turn.counters.completion_gate.ms ?? 0 } : {}),
+      ...(turn.escalation
+        ? { escalation_usage: { before: turn.escalation.usage_before, after: turn.escalation.usage_after } }
+        : {}),
     },
+    ...(turn.escalation ? { escalation: escalationFields(turn.escalation) } : {}),
   };
   // The live record, final. Before the checkpoint below, which records the
   // state of every record file: written after it, the next session would
@@ -9284,6 +9628,12 @@ export async function runTask(
   // The shadow was flushed and closed above, before the turn record.
 
   return record;
+}
+
+/** The reproducible part of an escalation, for a record outside `volatile`. */
+function escalationFields(e: EscalationRecord): Omit<EscalationRecord, "usage_before" | "usage_after"> {
+  const { usage_before: _b, usage_after: _a, ...fields } = e;
+  return fields;
 }
 
 // ---------------------------------------------------------------------------
@@ -11323,6 +11673,7 @@ export async function runSessionTurn(
     // this turn was recorded: answers still in flight are `pending`, and
     // `session_end` carries the final count. Absent without a [shadow].
     shadow: deps.shadow?.coverage(),
+    ...(turn.escalation ? { escalation: turn.escalation } : {}),
     surface_hash: deps.surfaceHash,
     input: deps.audit.text(cleanedInput),
     output: deps.audit.text(turn.content),
@@ -11604,7 +11955,10 @@ export async function runPromptLoop(
   }
 
   console.log(`Role: ${state.currentRole}`);
-  console.log(`Model: ${routeRole(config, state.currentRole).model}`);
+  const startRoute = routeRole(config, state.currentRole);
+  console.log(`Model: ${startRoute.model}`);
+  const escLine = describeEscalation(startRoute.escalate);
+  if (escLine) console.log(escLine);
   console.log("");
 
   // Line-driven input with a queue: anything typed while the model is
