@@ -29,7 +29,7 @@ import {
   rmSync,
 } from "node:fs";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { hostname, userInfo } from "node:os";
 import { GnomonConfig, parseToml, recomputeManifest } from "./config.js";
 import { AuditTrail, resolveAudit, type AuditRecord } from "./audit.js";
@@ -393,7 +393,11 @@ function appendSkillDecision(
 ): { record: AuditRecord | null; trail: string | null } {
   const settings = resolveAudit(config);
   const forced = { ...settings, enabled: true, chain: true };
-  const id = `skill-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
+  // A random suffix as well as the time and pid: two decisions in one process
+  // inside one millisecond (a script accepting several proposals) would
+  // otherwise name the same file, and the second trail would restart at seq
+  // 0 on top of the first, a chain that no longer verifies.
+  const id = `skill-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}-${randomBytes(3).toString("hex")}`;
   const trail = new AuditTrail(forced, id);
   trail.write("session_start", {
     surface_hash: surfaceHash,

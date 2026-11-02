@@ -276,6 +276,16 @@ describe("accept and reject leave a record", () => {
     expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["n"]);
   });
 
+  it("two decisions in the same millisecond get two sealed trails", () => {
+    for (const n of ["a", "b", "c"]) proposeSkill(cfg(), { name: n, body: n });
+    acceptSkill(cfg(), "a");
+    acceptSkill(cfg(), "b");
+    rejectSkill(cfg(), "c");
+    const all = trails();
+    expect(all).toHaveLength(3);
+    for (const t of all) expect(verifyTrail(t.file)).toMatchObject({ ok: true, sealed: true });
+  });
+
   it("matches conformance/skill_decision.json", () => {
     const fixture = JSON.parse(
       readFileSync(join(process.cwd(), "..", "..", "conformance", "skill_decision.json"), "utf-8")
