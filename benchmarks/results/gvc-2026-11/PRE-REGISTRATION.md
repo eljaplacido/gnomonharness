@@ -56,3 +56,9 @@ The labelled calls are listed in the result for audit.
 A refusal in replay isn't a prevented violation: live, an agent routes around
 refusals (G1c saw it). The replay measures each gate's rule coverage on the
 same inputs.
+
+## Amendment, 2026-11-02T10:33Z, before any verdict was read
+
+Endpoint 3 said "the 26 trials with no violation". G1c has 48 measured trials,
+and 11 of them carry a violation, so the set is the **37** trials whose `gt`
+has no violation. A miscount in the text; the definition stands.
