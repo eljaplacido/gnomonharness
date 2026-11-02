@@ -158,7 +158,16 @@ describe("gnomon skill mine", () => {
     expect(pathPattern("src\\win\\a.rs")).toBe("src/win/*.rs");
   });
 
-  it("publishes only the signals it can emit", () => {
-    expect([...CANDIDATE_SIGNALS]).toEqual(["repeated_refusal"]);
+  it("publishes only the signals it can emit, as conformance/skill_candidate.json says", () => {
+    const fixture = JSON.parse(
+      readFileSync(join(process.cwd(), "..", "..", "conformance", "skill_candidate.json"), "utf-8")
+    );
+    expect([...CANDIDATE_SIGNALS]).toEqual(fixture.signals);
+    const t = new AuditTrail(settings(), "s");
+    for (const p of ["g/a.ts", "g/b.ts", "g/c.ts"]) refusedWrite(t, p);
+    const [c] = mineCandidates(cfg());
+    expect(Object.keys(c).sort()).toEqual([...fixture.keys].sort());
+    expect(Object.keys(c.records[0]).sort()).toEqual([...fixture.record_pointer_keys].sort());
+    expect(c.count).toBeGreaterThanOrEqual(fixture.min_repeats);
   });
 });

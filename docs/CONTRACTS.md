@@ -700,6 +700,7 @@ POSIX separators, checkable with `gnomon audit verify`.
 `gnomon skill mine --json` prints `{dir, fresh, candidates}`; `fresh` lists the
 ids that were not on disk before.
 
-**Fixture**: `packages/gnomon-core/src/skill_mine.test.ts`. A trail with four
+**Fixture**: `conformance/skill_candidate.json` (signals, keys), asserted by
+`packages/gnomon-core/src/skill_mine.test.ts`. There, a trail with four
 `write_allow` refusals of one path pattern yields exactly one candidate,
 pointing at those four records.
