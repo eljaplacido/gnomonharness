@@ -26,6 +26,21 @@
 
 ## [Unreleased]
 
+- **`gnomon skill trial ID`: measure a proposed skill before accepting it.**
+  A proposal could only be accepted on a reading of it. The trial runs the
+  tasks in `.gnomon/trials/<name>.toml` (hashed: they define "better") once
+  per arm per attempt, interleaved, each run in a fresh `git worktree` at
+  HEAD, with the proposal copied into the skill arm only. The two manifests
+  must differ in exactly that file. A cell counts only if it made a metered
+  model request and its `check` ran. The `check` exit code decides pass, not
+  the model. Pass uses exact McNemar and output tokens a sign test, against
+  thresholds declared before the run. The trial stops at `[budget]
+  max_requests`. Exit 0 / 2 / 10. Writes `.gnomon-trials/` (gitignored) and a
+  `skill_trial` audit record. Never accepts. The task record's `volatile`
+  gains `requests`, the number of metered model calls. Step 2 of
+  `docs/design/SKILL-TRIALS.md`. ST0/ST1 are pre-registered as a DRAFT and
+  have not run.
+
 - **Accepting or rejecting a skill is recorded.** `gnomon skill accept` moved
   the file and wrote nothing, so the trail showed the surface hash change and
   never that a person accepted a named skill, or what it said. Accept now

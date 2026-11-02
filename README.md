@@ -1167,6 +1167,22 @@ Each one points at the records it came from. A candidate is not loaded and not
 hashed, and a person decides what, if anything, becomes a skill
 (docs/CONTRACTS.md §12).
 
+Before accepting, you can measure a proposal:
+
+```bash
+gnomon skill trial cargo-suite --yes   # tasks from .gnomon/trials/default.toml
+```
+
+Each task runs several times **without** the skill and **with** it,
+interleaved, each run in a fresh `git worktree` at HEAD. The task's own
+`check` command judges every run. A run counts only if it made a metered
+model request. The report compares pass rate (exact McNemar) and output tokens
+(sign test) against thresholds the spec declared before the run. It exits 0
+when they are met, 2 when they are not, and 10 when it cannot answer: the
+endpoint was down, the budget ran out, or the effect is too small for the
+number of runs. A `skill_trial` audit record holds the report's hash. The
+trial never accepts anything (docs/CONTRACTS.md §13).
+
 ---
 
 ## Roles and the Trust Dial

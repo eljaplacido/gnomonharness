@@ -196,6 +196,11 @@ export type AuditKind =
   // own, like `check`.
   | "skill_accept"
   | "skill_reject"
+  // The outcome of `gnomon skill trial`: the skill's content hash, the report's
+  // hash, both arms' surface hashes, the model, the endpoints and
+  // `meets_thresholds` (skill_trial.ts). Its own kind because no turn produced
+  // it: it compares two arms of many turns against numbers declared before.
+  | "skill_trial"
   | "session_end";
 
 export interface AuditRecord {

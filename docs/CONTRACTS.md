@@ -709,3 +709,66 @@ ids that were not on disk before.
 `write_allow` refusals of one path pattern yields exactly one candidate,
 pointing at those four records, and the same five refusals inside one
 session yield none.
+
+## 13. Skill trials — `gnomon skill trial`, schema `gnomon.trial/1`
+
+Does the surface **with** a proposed skill do better than the surface
+**without** it, on this project's tasks and with this model?
+(`docs/design/SKILL-TRIALS.md`, part 2.)
+
+**Spec**: `.gnomon/trials/<name>.toml`, inside the surface and hashed. It
+holds `[trial]` (`role`, `model_profile`, `attempts` = 3, `order` =
+`"interleaved"`, the only order accepted, and `check_timeout_seconds` = 600),
+`[thresholds]` (`max_pass_drop` = 0, `min_output_token_gain` = 0.10,
+`min_pass_gain` = 1, `alpha` = 0.05), an optional `[budget]` (`max_requests`,
+`max_cost_usd`), and one `[[task]]` per task with `id`, `prompt`, `check`, and
+optionally `setup`. `replay_session` tasks are refused for now.
+
+**Arms.** Each cell runs in a fresh detached `git worktree` at HEAD. The skill
+arm has `.gnomon/skills/proposed/<id>.md` copied into `.gnomon/skills/`. The
+two manifests are compared before any cell runs, and they must differ in
+exactly that path. Pairs are task × attempt, and each pair runs its base cell
+and then its skill cell.
+
+**Validity.** A cell is scored only if its run made at least one metered model
+request (`volatile.requests` on the task record) and its check ran. A run
+ending in `apparatus_failure`, a cell on a different model or endpoint, a
+failed `setup`, or a drifted surface makes the cell `apparatus_failure`, and
+its pair is excluded. Pass is the check's exit 0.
+
+**Statistics.** Pass uses exact McNemar on the pairs, plus a Wilson interval
+per arm. Output tokens, requests and wall time use an exact sign test. `mde`
+gives the fewest discordant pairs, all one way, that can reach `alpha`.
+
+| `meets_thresholds` | When |
+|---|---|
+| `true` | No excess pass drop, and a declared gain (`min_pass_gain` pairs, or `min_output_token_gain`) whose test has p < `alpha` |
+| `false` | The skill arm solved more than `max_pass_drop` fewer pairs, decided on the number alone, or there is no declared gain |
+| `"undetermined"` | No valid pair, budget exhausted, or a declared gain that is not significant at `alpha` |
+
+| Exit | Means |
+|---|---|
+| 0 | `meets_thresholds: true` |
+| 2 | `meets_thresholds: false` |
+| 10 | `"undetermined"`, or the trial could not start: no spec, no proposal, arms not differing in exactly the skill, or a non-local endpoint without `[budget]` or `--yes-spend` |
+
+`status` is one of `complete`, `budget_exhausted` or `apparatus_failure`. The
+budget is checked between pairs. `max_cost_usd` is reported with
+`cost_enforced: false`, because gnomon reads no prices.
+
+**Output.** `.gnomon-trials/<id>/<utc>/report.json` (keys: `schema`, `skill`,
+`content_sha256`, `spec`, `harness`, `role`, `profile`, `model`, `endpoint`,
+`arms`, `pairs`, `cells`, `endpoints`, `mde`, `thresholds`, `budget`,
+`status`, `meets_thresholds`, `reasons`) and `cells.jsonl`, one line per
+cell. A `skill_trial` audit record is written in a sealed trail of its own,
+even when `[audit]` is off. It carries `content_sha256`, `report`,
+`report_sha256`, `spec`, `surface_hash_base`, `surface_hash_skill`, `role`,
+`model`, `endpoint`, `pairs`, `cells`, `endpoints`, `status` and
+`meets_thresholds`. A trial never accepts anything.
+
+**Fixture**: `conformance/skill_trial.json` (exit codes, verdicts, statuses,
+report and record keys), asserted by `packages/gnomon-core/src/skill_trial.test.ts`.
+In that test, a scripted fake model solves the task only when the skill's text is in its prompt. The tests
+cover a pass gain (exit 0), the negative control with that text removed
+(exit 2), and the endpoint down (exit 10). They also cover the budget stop, the
+billed-endpoint refusal, and the record.

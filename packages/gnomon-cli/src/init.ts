@@ -1098,6 +1098,7 @@ export const MACHINE_LOCAL_DIRS = [
   ".gnomon-loops",
   ".gnomon-shadow",
   ".gnomon-skills",
+  ".gnomon-trials",
 ];
 
 /**
