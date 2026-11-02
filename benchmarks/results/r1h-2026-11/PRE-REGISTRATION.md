@@ -123,3 +123,36 @@ A cell that breaks its arm's routing is `misrouted`, which counts as apparatus a
 5. Collect into `summary.txt` and commit it with the runs. Stop the hub server and close the tunnel.
 
 The narrative `RESULT.md` follows from the summary.
+
+## Amendment, 2026-11-02T15:44Z: 2 attempts and 2 concurrent lane slots (user's time window), before any cell
+
+The user asked for hybrid task-completion results within 3–5 hours. The original chain
+(`r1h-chain.sh`, waiting for BUD-2) is stopped, BUD-2 is paused (its own amendment,
+`f7a50a57`), and R1H starts now. No R1H cell had run.
+
+1. **Attempts: 2, not 3.** 16 tasks × 2 attempts × 3 arms = 96 cells: 64 on the lane (L, PC)
+   and 32 on the cloud slot (C). Per comparison that's 32 pairs instead of 48. Only large
+   pass-rate differences are detectable; the mechanism endpoints are paired per task and
+   carry more power.
+2. **Concurrency on the hub lane: 2 slots.**
+   - The server is restarted as llama-server `--ctx-size 196608 --parallel 2` (script
+     `C:\dev\bud-lane\start-server-r1h-np2.ps1`). Weights, flags and the DFlash draft are
+     otherwise unchanged.
+   - Verified before any cell: `/slots` reports 2 slots with `n_ctx` = **98304 each** (the
+     same context per request as R1 and the original R1H design), `kv_unified = false`, and
+     the DFlash draft loaded.
+   - VRAM is 27,766 of 32,607 MiB, with 3,223 MiB idle before the server.
+   - Two lane cells run at once, taken in plan order from one shared queue by slots `gpu`
+     and `gpu2`. Each slot has its own meters: the local meter on 172.17.0.1:18381/18397
+     (gpu) and 18383/18399 (gpu2), the cloud relay on 5110/5120 and 5112/5122. Each cell's
+     traffic is therefore still its own. Each `cell.json` records its slot and `gpu_slots = 2`.
+   - Concurrent requests share the GPU, so per-request speed is lower than with one slot.
+     Both arms are affected the same way.
+   - GPU-s per solved task counts each request's own prompt and generation time as
+     llama-server reports it. Overlapping requests share the GPU, so it's a within-R1H
+     relative figure.
+3. **Everything else is unchanged:** build `d59e6c19`, arms L, C, PC (+ NEG in the smoke),
+   tasks, 900 s cap, seeds, routing assertions, endpoints, the $8 cloud cap, and the rule
+   that R1H is never pooled with R1.
+4. The chain is replaced by `apparatus/r1h-chain-np2.sh`: the checksum check, smoke, Final,
+   the full run, collect, commit and cleanup, without the wait for BUD-2.

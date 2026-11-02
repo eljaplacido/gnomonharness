@@ -38,7 +38,12 @@ DATASET = BENCH / "terminal-bench" / "original-tasks"
 LOCK = Path.home() / ".opencode/central-brain/runtime/decisionbench/gpu.lock"
 STATUS = BENCH / "STATUS.txt"
 LOCAL_MODEL, CLOUD_MODEL = "qwen3.6-35b", "deepseek-v4.1-flash"
-TIMEOUT, ATTEMPTS, BUDGET = 900, 3, 8.0
+TIMEOUT, BUDGET = 900, 8.0
+# Amendment 2026-11-02 (user time window): 2 attempts, and 2 concurrent slots on the
+# hub lane (llama-server --parallel 2, 98304 ctx per slot). Both env-overridable for
+# the record; the pre-registered values after the amendment are these defaults.
+ATTEMPTS = int(os.environ.get("R1H_ATTEMPTS", "2"))
+GPU_SLOTS = int(os.environ.get("R1H_GPU_SLOTS", "2"))
 CREDS = Path.home() / ".local/share/gnomon/credentials.json"
 
 ROLES = ["coordinator", "implementor", "verifier", "plan", "implement", "critique", "smol"]
@@ -61,6 +66,7 @@ SLOT_OF = {"C": "cloud", "NEG": "cloud"}  # every other arm needs the local mode
 
 SLOTS = {
     "gpu":   {"local": ("172.17.0.1", 18381, 18397, "http://127.0.0.1:18280"), "cloud": (5110, 5120)},
+    "gpu2":  {"local": ("172.17.0.1", 18383, 18399, "http://127.0.0.1:18280"), "cloud": (5112, 5122)},
     "cloud": {"local": ("172.17.0.1", 18382, 18398, "http://127.0.0.1:9"),     "cloud": (5111, 5121)},
 }
 LOCK_S = threading.Lock()
@@ -142,7 +148,7 @@ def run_cell(cid: str, arm: str, task: str, slot: str, runs: Path, sha: str) -> 
                                                  "end": " ".join(f"{x:.2f}" for x in load1)}))
         (d / "cell.json").write_text(json.dumps({
             "arm": arm, "asserted_as": spec.get("asserted_as", arm), "slot": slot, "task": task,
-            "entry": spec["entry"], "routes": spec["routes"], "sha": sha,
+            "entry": spec["entry"], "routes": spec["routes"], "sha": sha, "gpu_slots": GPU_SLOTS,
             "start": t0, "end": time.time(), "tb_exit": rc}))
     usd = (a_cloud.get("allowance") or 0) - (b_cloud.get("allowance") or 0)
     with LOCK_S:
@@ -157,8 +163,14 @@ def run_cell(cid: str, arm: str, task: str, slot: str, runs: Path, sha: str) -> 
         say(f"PAUSE: cloud spend ${spent['usd']:.2f} over the ${BUDGET:.0f} cap; no new cell starts")
 
 
-def worker(queue: list, slot: str, runs: Path, sha: str) -> None:
-    for cid, arm, task in queue:
+def worker(queue: list, slot: str, runs: Path, sha: str, qlock: threading.Lock) -> None:
+    # Pops from a queue shared by every worker of the same slot group, so with two
+    # GPU slots the cells are taken in plan order by whichever slot is free.
+    while True:
+        with qlock:
+            if not queue:
+                return
+            cid, arm, task = queue.pop(0)
         if stop.is_set():
             say(f"NOT STARTED {cid} (paused)")
             continue
@@ -188,7 +200,7 @@ def main() -> None:
     r = urllib.request.urlopen("http://127.0.0.1:18280/v1/models", timeout=10).read().decode()
     if LOCAL_MODEL not in r:
         sys.exit(f"{LOCAL_MODEL} is not served through the hub tunnel on :18280")
-    slots = ["gpu", "cloud"]
+    slots = (["gpu", "gpu2"] if GPU_SLOTS == 2 else ["gpu"]) + ["cloud"]
     procs = start_relays(slots)
     try:
         if mode.startswith("smoke"):
@@ -208,11 +220,14 @@ def main() -> None:
                         cells.append((f"r1h-k{k}-{arm.lower()}-{task}", arm, task))
                 plan.append(cells)
         runs.mkdir(exist_ok=True)
-        say(f"R1H {mode}: sha={sha} attempts={len(plan)} cells={sum(len(p) for p in plan)} budget=${BUDGET:.0f}")
+        say(f"R1H {mode}: sha={sha} attempts={len(plan)} cells={sum(len(p) for p in plan)} gpu_slots={GPU_SLOTS} budget=${BUDGET:.0f}")
         for n, cells in enumerate(plan, 1):
             say(f"ATTEMPT {n}: {len(cells)} cells")
-            queues = {s: [c for c in cells if SLOT_OF.get(c[1], "gpu") == s] for s in slots}
-            threads = [threading.Thread(target=worker, args=(q, s, runs, sha)) for s, q in queues.items() if q]
+            gpuq = [c for c in cells if SLOT_OF.get(c[1], "gpu") == "gpu"]
+            cloudq = [c for c in cells if SLOT_OF.get(c[1], "gpu") == "cloud"]
+            gl, cl = threading.Lock(), threading.Lock()
+            threads = [threading.Thread(target=worker, args=(gpuq, s, runs, sha, gl)) for s in slots if s.startswith("gpu")]
+            threads.append(threading.Thread(target=worker, args=(cloudq, "cloud", runs, sha, cl)))
             for t in threads:
                 t.start()
             for t in threads:
