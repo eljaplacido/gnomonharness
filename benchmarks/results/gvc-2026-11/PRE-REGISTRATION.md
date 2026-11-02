@@ -62,3 +62,18 @@ same inputs.
 Endpoint 3 said "the 26 trials with no violation". G1c has 48 measured trials,
 and 11 of them carry a violation, so the set is the **37** trials whose `gt`
 has no violation. A miscount in the text; the definition stands.
+
+## Amendment, 2026-11-02T11:02Z: gnomon-only re-run for the binding fix, before any re-run verdict
+
+- **Build:** branch `fix/heredoc-interpreter-writes` at `64b26379` (master
+  `3a6a87b4` plus the fix). The fix lets write_allow follow one level of
+  binding to a literal path in inline code.
+- **What runs:** gnomon guard only, through `apparatus/gvc_replay_gnomon.mjs`.
+  Same calls, same remap, same fresh template copy per trial, same
+  `guard --from opencode` invocation as `gvc_replay.mjs`. cacogate's columns
+  are copied unchanged from `replay.jsonl`, so `gvc_analyze.py` reads both
+  files the same way.
+- **Endpoints:** gnomon's refusals of the 17 labelled causing calls (was 15/17),
+  and its false refusals on the violation-free trials (was 8 refusals, 3 false).
+- **Output:** `replay-bindfix.jsonl`, `RESULT-bindfix.md`. The original files
+  are unchanged.
