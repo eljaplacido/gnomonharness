@@ -26,6 +26,17 @@
 
 ## [Unreleased]
 
+- **The task tool asks for one delegation per job.** In R1 and R1H
+  (2026-11-02, cloud coordinator handing work to a local implementor), no
+  plan-in-cloud cell delegated once: coordinators handed the same job over 2-10
+  times, sending it to the verifier "independently" after a passing report and
+  then back to the implementor. Each sub-turn starts with no history and
+  re-reads the repo. The scaffold's `task` description now says to delegate a
+  job once with the complete plan and its check, and to delegate again only on
+  a concrete failure. `gnomon migrate` replaces the exact old description only
+  (CRLF kept); an edited one is left alone. Whether it moves completion is for
+  the hybrid A/B to show.
+
 - **Windows: a timed-out bash command has exited before the tool reports the
   timeout.** `killTree` fired `taskkill /T /F` and returned at once, so the
   tool reported "timed out" while the killed tree still held the shell's
