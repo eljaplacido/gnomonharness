@@ -1,0 +1,252 @@
+diff --git a/benchmarks/degradation-contract/contract.mjs b/benchmarks/degradation-contract/contract.mjs
+index 9c43a477..11e9708e 100644
+--- a/benchmarks/degradation-contract/contract.mjs
++++ b/benchmarks/degradation-contract/contract.mjs
+@@ -1,13 +1,14 @@
+-#!/usr/bin/env node
++´╗┐#!/usr/bin/env node
++import { fileURLToPath as __f2p, pathToFileURL as __p2f } from "node:url";
+ /**
+- * degradation-contract ÔÇö every declared degradation, announced AND recorded.
++ * degradation-contract ├óÔé¼ÔÇØ every declared degradation, announced AND recorded.
+  *
+  * Deterministic, no model, $0. See PRE-REGISTRATION.md for the scoring rule,
+  * fixed before the first run. Exit 1 if any declared degradation is incomplete,
+  * 2 if either negative control does not fire.
+  *
+  * The population comes from the CODE (`DEGRADATION_IDS`), never from a list
+- * kept here ÔÇö a benchmark holding its own copy of the population measures its
++ * kept here ├óÔé¼ÔÇØ a benchmark holding its own copy of the population measures its
+  * copy.
+  */
+ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+@@ -15,8 +16,8 @@ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import { execFileSync } from "node:child_process";
+ 
+-const REPO = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
+-const core = (m) => import(`${REPO}/packages/gnomon-core/dist/${m}`);
++const REPO = __f2p(new URL("../../", import.meta.url)).replace(/[\\/]$/, "");
++const core = (m) => import(__p2f(`${REPO}/packages/gnomon-core/dist/${m}`).href);
+ const { loadConfig } = await core("config.js");
+ const { runAgenticTurn, buildMessages } = await core("prompt_loop.js");
+ const { executeTool, createSpillSink } = await core("tools.js");
+@@ -25,8 +26,8 @@ const { DEGRADATION_IDS } = await core("degradation.js");
+ 
+ function scaffold() {
+   const root = mkdtempSync(join(tmpdir(), "gnomon-degrade-"));
+-  execFileSync(`${REPO}/node_modules/.bin/tsx`,
+-    [`${REPO}/packages/gnomon-cli/src/index.ts`, "init"], { cwd: root, stdio: "pipe" });
++  execFileSync(process.execPath,
++    [`${REPO}/node_modules/tsx/dist/cli.mjs`, `${REPO}/packages/gnomon-cli/src/index.ts`, "init"], { cwd: root, stdio: "pipe" });
+   return root;
+ }
+ 
+@@ -50,7 +51,7 @@ function collector() {
+   };
+ }
+ 
+-/** A trail that swallows everything ÔÇö the recorded-side negative control. */
++/** A trail that swallows everything ├óÔé¼ÔÇØ the recorded-side negative control. */
+ const blackhole = { records: [], write() {}, text: (t) => t, action: (t) => t };
+ 
+ const ok = (r) => ({ ok: true, json: async () => r });
+@@ -355,11 +356,11 @@ const PROBES = {
+   },
+ };
+ 
+-// ÔöÇÔöÇ The population is the code's, not this file's ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
++// ├óÔÇØÔé¼├óÔÇØÔé¼ The population is the code's, not this file's ├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼
+ const missing = DEGRADATION_IDS.filter((id) => !PROBES[id]);
+ const extra = Object.keys(PROBES).filter((id) => !DEGRADATION_IDS.includes(id));
+ if (missing.length || extra.length) {
+-  console.error("REGISTRY MISMATCH ÔÇö the declaration and the probes disagree.");
++  console.error("REGISTRY MISMATCH ├óÔé¼ÔÇØ the declaration and the probes disagree.");
+   if (missing.length) console.error(`  declared with no probe: ${missing.join(", ")}`);
+   if (extra.length) console.error(`  probed but not declared: ${extra.join(", ")}`);
+   process.exit(2);
+@@ -373,7 +374,7 @@ const score = (probe, r) => {
+   return { announced, misnamed, recorded: Boolean(r.recorded), complete: announced && Boolean(r.recorded) };
+ };
+ 
+-// ÔöÇÔöÇ Negative controls: both directions, before anything is measured ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
++// ├óÔÇØÔé¼├óÔÇØÔé¼ Negative controls: both directions, before anything is measured ├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼
+ const root = scaffold();
+ 
+ const announcedControl = score(
+@@ -388,12 +389,12 @@ console.log("negative controls (both must fire):");
+ console.log(`  a wrong sentence scores announced=false : ${!announcedControl.announced}`);
+ console.log(`  a swallowed trail scores recorded=false : ${!recordedControl.recorded}\n`);
+ if (announcedControl.announced || recordedControl.recorded) {
+-  console.error("A NEGATIVE CONTROL DID NOT FIRE ÔÇö the measurement below is void.");
++  console.error("A NEGATIVE CONTROL DID NOT FIRE ├óÔé¼ÔÇØ the measurement below is void.");
+   rmSync(root, { recursive: true, force: true });
+   process.exit(2);
+ }
+ 
+-// ÔöÇÔöÇ Measure ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
++// ├óÔÇØÔé¼├óÔÇØÔé¼ Measure ├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼├óÔÇØÔé¼
+ const rows = [];
+ for (const id of DEGRADATION_IDS) {
+   const probe = PROBES[id];
+@@ -405,19 +406,19 @@ for (const id of DEGRADATION_IDS) {
+   }
+   rows.push({ id, recordedBy: probe.recordedBy, ...r });
+ }
+-rmSync(root, { recursive: true, force: true });
++try { rmSync(root, { recursive: true, force: true }); } catch (e) { console.error("WINP-CLEANUP-FAILED", e.code, root); }
+ 
+-console.log(`degradation-contract ÔÇö ${rows.length} declared paths\n`);
++console.log(`degradation-contract ├óÔé¼ÔÇØ ${rows.length} declared paths\n`);
+ for (const r of rows) {
+   console.log(`  ${r.complete ? "ok  " : "MISS"}  ${r.id.padEnd(34)} announced=${String(r.announced).padEnd(5)} recorded=${r.recorded}`);
+-  if (!r.complete) console.log(`        expected in the record: ${r.recordedBy}${r.error ? ` ÔÇö threw: ${r.error}` : ""}`);
++  if (!r.complete) console.log(`        expected in the record: ${r.recordedBy}${r.error ? ` ├óÔé¼ÔÇØ threw: ${r.error}` : ""}`);
+ }
+ const a = rows.filter((r) => r.announced).length;
+ const rec = rows.filter((r) => r.recorded).length;
+ const c = rows.filter((r) => r.complete).length;
+ console.log(`\n  announced  ${a}/${rows.length}   (reported, NOT the headline)`);
+ console.log(`  recorded   ${rec}/${rows.length}   (reported, NOT the headline)`);
+-console.log(`  COMPLETE   ${c}/${rows.length} = ${((c / rows.length) * 100).toFixed(1)}%   ÔÇö must be 100%`);
++console.log(`  COMPLETE   ${c}/${rows.length} = ${((c / rows.length) * 100).toFixed(1)}%   ├óÔé¼ÔÇØ must be 100%`);
+ 
+ const out = process.argv.indexOf("--json");
+ if (out > -1 && process.argv[out + 1]) {
+diff --git a/benchmarks/fault-disclosure/disclose.mjs b/benchmarks/fault-disclosure/disclose.mjs
+index 0e0a939d..d0282fad 100755
+--- a/benchmarks/fault-disclosure/disclose.mjs
++++ b/benchmarks/fault-disclosure/disclose.mjs
+@@ -1,4 +1,5 @@
+ #!/usr/bin/env node
++import { fileURLToPath as __f2p, pathToFileURL as __p2f } from "node:url";
+ /**
+  * fault-disclosure ÔÇö inject a fault, then ask whether the operator was told.
+  *
+@@ -11,16 +12,16 @@ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import { execFileSync } from "node:child_process";
+ 
+-const REPO = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
+-const core = (m) => import(`${REPO}/packages/gnomon-core/dist/${m}`);
++const REPO = __f2p(new URL("../../", import.meta.url)).replace(/[\\/]$/, "");
++const core = (m) => import(__p2f(`${REPO}/packages/gnomon-core/dist/${m}`).href);
+ const { loadConfig } = await core("config.js");
+ const { runAgenticTurn } = await core("prompt_loop.js");
+ const { executeTool, createSpillSink } = await core("tools.js");
+ 
+ function scaffold() {
+   const root = mkdtempSync(join(tmpdir(), "gnomon-fault-"));
+-  execFileSync(`${REPO}/node_modules/.bin/tsx`,
+-    [`${REPO}/packages/gnomon-cli/src/index.ts`, "init"], { cwd: root, stdio: "pipe" });
++  execFileSync(process.execPath,
++    [`${REPO}/node_modules/tsx/dist/cli.mjs`, `${REPO}/packages/gnomon-cli/src/index.ts`, "init"], { cwd: root, stdio: "pipe" });
+   return root;
+ }
+ 
+diff --git a/benchmarks/results/determinism-2026-08-31/determinism.mjs b/benchmarks/results/determinism-2026-08-31/determinism.mjs
+index 7f92a425..541e80c5 100644
+--- a/benchmarks/results/determinism-2026-08-31/determinism.mjs
++++ b/benchmarks/results/determinism-2026-08-31/determinism.mjs
+@@ -1,3 +1,4 @@
++import { fileURLToPath as __f2p, pathToFileURL as __p2f } from "node:url";
+ /**
+  * T2 ÔÇö surface-replay determinism.
+  *
+@@ -19,10 +20,10 @@
+ // benchmarks/surface-fidelity/fidelity.mjs.
+ // Declared before the imports below use it: declared after them (65274f6,
+ // 2026-09-07), every import threw before initialization.
+-const REPO = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "");
+-const { loadConfig } = await import(`${REPO}/packages/gnomon-core/dist/config.js`);
+-const { buildToolSet } = await import(`${REPO}/packages/gnomon-core/dist/tools.js`);
+-const { routeRole, routeInput } = await import(`${REPO}/packages/gnomon-core/dist/config.js`);
++const REPO = __f2p(new URL("../../../", import.meta.url)).replace(/[\\/]$/, "");
++const { loadConfig } = await import(__p2f(`${REPO}/packages/gnomon-core/dist/config.js`).href);
++const { buildToolSet } = await import(__p2f(`${REPO}/packages/gnomon-core/dist/tools.js`).href);
++const { routeRole, routeInput } = await import(__p2f(`${REPO}/packages/gnomon-core/dist/config.js`).href);
+ import { createHash } from "node:crypto";
+ import { execFileSync } from "node:child_process";
+ 
+diff --git a/benchmarks/results/determinism-2026-08-31/run.mjs b/benchmarks/results/determinism-2026-08-31/run.mjs
+index 82c626e9..cdb2a539 100644
+--- a/benchmarks/results/determinism-2026-08-31/run.mjs
++++ b/benchmarks/results/determinism-2026-08-31/run.mjs
+@@ -1,3 +1,4 @@
++import { fileURLToPath as __f2p, pathToFileURL as __p2f } from "node:url";
+ /**
+  * Drive the fingerprint under conditions that differ in every way EXCEPT the
+  * surface. Anything that shifts is machine-scoped behaviour, which is the one
+@@ -11,7 +12,7 @@ import { join } from "node:path";
+ const SRC = process.argv[2];
+ const runIn = (dir, env, cwd) =>
+   JSON.parse(execFileSync("node", ["-e", `
+-    import(${JSON.stringify(join(process.cwd(), "determinism.mjs"))}).then(m => {
++    import(${JSON.stringify(__p2f(join(process.cwd(), "determinism.mjs")).href)}).then(m => {
+       const fp = m.fingerprint(${JSON.stringify(dir)});
+       console.log(JSON.stringify({ hash: fp.hash, surface: m.surfaceHash(${JSON.stringify(dir)}) }));
+     });`],
+diff --git a/benchmarks/silent-success/sweep.mjs b/benchmarks/silent-success/sweep.mjs
+index e36d77c1..303f5aaa 100644
+--- a/benchmarks/silent-success/sweep.mjs
++++ b/benchmarks/silent-success/sweep.mjs
+@@ -1,4 +1,5 @@
+ #!/usr/bin/env node
++import { fileURLToPath as __f2p, pathToFileURL as __p2f } from "node:url";
+ /**
+  * silent-success ÔÇö does anything here report success while the thing
+  * underneath it failed?
+@@ -17,8 +18,8 @@ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import { execFileSync } from "node:child_process";
+ 
+-const REPO = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
+-const core = (m) => import(`${REPO}/packages/gnomon-core/dist/${m}`);
++const REPO = __f2p(new URL("../../", import.meta.url)).replace(/[\\/]$/, "");
++const core = (m) => import(__p2f(`${REPO}/packages/gnomon-core/dist/${m}`).href);
+ const { loadConfig } = await core("config.js");
+ const { runAgenticTurn } = await core("prompt_loop.js");
+ const { executeTool } = await core("tools.js");
+@@ -27,8 +28,8 @@ const { checkCitations } = await core("citations.js");
+ 
+ function scaffold() {
+   const root = mkdtempSync(join(tmpdir(), "gnomon-silent-"));
+-  execFileSync(`${REPO}/node_modules/.bin/tsx`,
+-    [`${REPO}/packages/gnomon-cli/src/index.ts`, "init"], { cwd: root, stdio: "pipe" });
++  execFileSync(process.execPath,
++    [`${REPO}/node_modules/tsx/dist/cli.mjs`, `${REPO}/packages/gnomon-cli/src/index.ts`, "init"], { cwd: root, stdio: "pipe" });
+   return root;
+ }
+ 
+diff --git a/benchmarks/surface-fidelity/fidelity.mjs b/benchmarks/surface-fidelity/fidelity.mjs
+index f6573e51..98c97db6 100755
+--- a/benchmarks/surface-fidelity/fidelity.mjs
++++ b/benchmarks/surface-fidelity/fidelity.mjs
+@@ -1,4 +1,5 @@
+ #!/usr/bin/env node
++import { fileURLToPath as __f2p, pathToFileURL as __p2f } from "node:url";
+ /**
+  * surface-fidelity ÔÇö does a change to the surface move the hash exactly when it
+  * moves behaviour?
+@@ -17,8 +18,8 @@ import { join, relative, dirname } from "node:path";
+ import { execFileSync } from "node:child_process";
+ 
+ 
+-const REPO = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
+-const core = (m) => import(`${REPO}/packages/gnomon-core/dist/${m}`);
++const REPO = __f2p(new URL("../../", import.meta.url)).replace(/[\\/]$/, "");
++const core = (m) => import(__p2f(`${REPO}/packages/gnomon-core/dist/${m}`).href);
+ 
+ const { loadConfig, recomputeManifest, resolveContext, resolveRouting, resolveUi,
+         resolveVerify, resolveChain, resolveLoop, resolveResilience, resolveExec,
+@@ -191,8 +192,8 @@ function variants(baseAbs, kind) {
+ 
+ function scaffold() {
+   const root = mkdtempSync(join(tmpdir(), "gnomon-fidelity-"));
+-  execFileSync(`${REPO}/node_modules/.bin/tsx`,
+-    [`${REPO}/packages/gnomon-cli/src/index.ts`, "init"],
++  execFileSync(process.execPath,
++    [`${REPO}/node_modules/tsx/dist/cli.mjs`, `${REPO}/packages/gnomon-cli/src/index.ts`, "init"],
+     { cwd: root, stdio: "pipe" });
+   return root;
+ }
