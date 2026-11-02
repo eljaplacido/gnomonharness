@@ -269,6 +269,48 @@ export interface FallbackDef {
   api_key_env?: string;
 }
 
+/**
+ * Why a stuck turn may move to its role's escalation model ("local first,
+ * cloud rescue"). A published enumeration: a trigger outside it is a fatal
+ * surface problem, because an escalation that can never fire is a declared
+ * behaviour that silently does not exist.
+ *
+ *   stall          the loop stopped a call repeating without progress
+ *   step_wall      the turn reached max_steps_total
+ *   budget_50      half the step budget (or of a declared --deadline) is spent
+ *                  and the turn has not ended
+ *   verify_failed  the declared [verify] check still fails after every round
+ *   apparatus      the model endpoint failed after retries (and after any
+ *                  [roles.<name>.fallback])
+ */
+export type EscalateTrigger = "stall" | "step_wall" | "budget_50" | "verify_failed" | "apparatus";
+export const ESCALATE_TRIGGERS: readonly EscalateTrigger[] = [
+  "stall",
+  "step_wall",
+  "budget_50",
+  "verify_failed",
+  "apparatus",
+];
+
+/**
+ * `[roles.<name>.escalate]`: the model a stuck turn continues on.
+ *
+ * Unlike `fallback`, which retries ONE request elsewhere when an endpoint does
+ * not answer and returns to the primary on the next step, an escalation moves
+ * the REST of the turn, once, and only when a declared trigger fires.
+ */
+export interface EscalateDef extends FallbackDef {
+  /** Triggers that move the turn; see EscalateTrigger. Absent or empty: never. */
+  on?: string[];
+  /**
+   * The fewest tool calls the escalated part is guaranteed. The escalation runs
+   * on what is left of the step budget; when less than this is left (always
+   * the case for `step_wall`), the wall is raised so this many remain. Default:
+   * the role's max_steps (one leg). Time is never extended.
+   */
+  max_steps?: number;
+}
+
 export interface RoleDef {
   model?: string;
   temperature?: number;
@@ -387,6 +429,8 @@ export interface RoleDef {
    */
   write_allow?: string[];
   fallback?: FallbackDef;
+  /** Local first, cloud rescue: where a stuck turn continues. See EscalateDef. */
+  escalate?: EscalateDef;
   // Legacy field (kept for compat with older role files)
   profile?: string;
   allowed_edit_formats?: string[];
@@ -1722,7 +1766,7 @@ const BLOCK_OWNER: Record<string, BlockOwner> = {
   tools: { file: "tools.toml", read: true },
 };
 
-const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "model", "exec", "image", "profile", "task_allow", "temperature", "tools", "top_p", "write_allow"]);
+const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "escalate", "fallback", "max_steps", "max_steps_total", "model", "exec", "image", "profile", "task_allow", "temperature", "tools", "top_p", "write_allow"]);
 
 /**
  * Spellings people reach for when they mean to supply a secret directly.
@@ -2452,7 +2496,46 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
     const targets: Array<[string, string | undefined, string | undefined]> = [
       [`[roles.${role}]`, def?.endpoint, def?.model],
       [`[roles.${role}.fallback]`, def?.fallback?.endpoint, def?.fallback?.model],
+      [`[roles.${role}.escalate]`, def?.escalate?.endpoint, def?.escalate?.model],
     ];
+
+    if (def?.escalate) {
+      const where = `.gnomon/roles.toml [roles.${role}.escalate]`;
+      const on = def.escalate.on;
+      const unknown = (Array.isArray(on) ? on : []).filter(
+        (t) => !(ESCALATE_TRIGGERS as readonly string[]).includes(String(t))
+      );
+      if (on !== undefined && !Array.isArray(on)) {
+        problems.push({
+          where,
+          problem: `on must be a list of triggers.`,
+          fix: `on = ["stall", "step_wall"] — any of ${ESCALATE_TRIGGERS.join(", ")}.`,
+          fatal: true,
+        });
+      } else if (unknown.length > 0) {
+        problems.push({
+          where,
+          problem: `on names ${unknown.map((t) => `"${t}"`).join(", ")}, which ${unknown.length === 1 ? "is" : "are"} not a trigger.`,
+          fix: `Triggers: ${ESCALATE_TRIGGERS.join(", ")}.`,
+          fatal: true,
+        });
+      } else if (!on || on.length === 0) {
+        problems.push({
+          where,
+          problem: `declares an escalation model but no trigger, so it never fires.`,
+          fix: `Add on = [...] with any of ${ESCALATE_TRIGGERS.join(", ")}, or remove the block.`,
+          fatal: false,
+        });
+      }
+      if (!def.escalate.model) {
+        problems.push({
+          where,
+          problem: `has no model.`,
+          fix: `Add model = "<id the escalation endpoint serves>".`,
+          fatal: true,
+        });
+      }
+    }
 
     for (const [block, endpoint, model] of targets) {
       if (endpoint === undefined && model === undefined) continue;
@@ -2807,7 +2890,15 @@ export function endpointClass(
 export function routeRole(
   config: GnomonConfig,
   role: string
-): { model: string; temperature: number; top_p: number; description?: string; target: RouteTarget; fallback?: RouteTarget } {
+): {
+  model: string;
+  temperature: number;
+  top_p: number;
+  description?: string;
+  target: RouteTarget;
+  fallback?: RouteTarget;
+  escalate?: EscalateRoute;
+} {
   const roleDef = getRole(config, role);
 
   // Role-level overrides take precedence
@@ -2859,7 +2950,34 @@ export function routeRole(
     };
   }
 
-  return { model, temperature, top_p, description, target, fallback };
+  let escalate: EscalateRoute | undefined;
+  const esc = roleDef.escalate;
+  const on = (Array.isArray(esc?.on) ? esc.on : []).filter((t): t is EscalateTrigger =>
+    (ESCALATE_TRIGGERS as readonly string[]).includes(t)
+  );
+  if (esc?.model && on.length > 0) {
+    const escEndpointName = esc.endpoint ?? (esc.url ? undefined : DEFAULT_ENDPOINT);
+    const escEndpoint = escEndpointName ? resolveEndpoint(config, escEndpointName) : undefined;
+    escalate = {
+      model: esc.model,
+      temperature,
+      top_p,
+      url: esc.url ?? escEndpoint?.url ?? "",
+      apiKeyEnv: esc.api_key_env ?? escEndpoint?.api_key_env,
+      endpoint: escEndpointName,
+      kind: endpointKind(escEndpoint ?? { url: esc.url }, "openai"),
+      on,
+      ...(typeof esc.max_steps === "number" && esc.max_steps > 0 ? { max_steps: Math.floor(esc.max_steps) } : {}),
+    };
+  }
+
+  return { model, temperature, top_p, description, target, fallback, ...(escalate ? { escalate } : {}) };
+}
+
+/** A resolved `[roles.<name>.escalate]`: where to go, and when. */
+export interface EscalateRoute extends RouteTarget {
+  on: EscalateTrigger[];
+  max_steps?: number;
 }
 
 /**

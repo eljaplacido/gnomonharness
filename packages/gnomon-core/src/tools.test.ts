@@ -2299,6 +2299,20 @@ describe("shell-mediated work is observed, not inferred", () => {
     expect(out.code).toBe(TOOL_OK);
     expect(out.worktree_changed).toBe(false);
   });
+
+  it("does not report spilled tool output as worktree progress", async () => {
+    // A read or bash whose output is too large writes it under .gnomon-out/.
+    // The stamp walked it, so an overflowing call by this session or another
+    // moved the tree under a step that changed nothing.
+    const out = await executeTool(
+      "bash",
+      { command: `mkdir -p .gnomon-out/pid-1 && echo spill > .gnomon-out/pid-1/001-read-x.txt` },
+      ctx(),
+      offered
+    );
+    expect(out.code).toBe(TOOL_OK);
+    expect(out.worktree_changed).toBe(false);
+  });
 });
 
 // Fixture git. HOME is an empty directory under vitest.setup.ts, so there is no
@@ -2375,7 +2389,7 @@ describe("the worktree stamp, inside a git work tree", () => {
     expect(await moved("ls out/bin")).toBe(false);
   });
 
-  it("ignores .gnomon/, .gnomon-loops/ and the never-walked directories, tracked or not", async () => {
+  it("ignores .gnomon/, .gnomon-loops/, .gnomon-out/ and the never-walked directories, tracked or not", async () => {
     mkdirSync(join(root, ".gnomon"));
     writeFileSync(join(root, ".gnomon", "policy.toml"), "# tracked\n");
     writeFileSync(join(root, "a.txt"), "a\n");
@@ -2385,6 +2399,7 @@ describe("the worktree stamp, inside a git work tree", () => {
     expect(await moved("echo '# edited' >> .gnomon/policy.toml")).toBe(false);
     expect(await moved("echo x > .gnomon/scratch.txt")).toBe(false);
     expect(await moved("mkdir -p .gnomon-loops && echo tick >> .gnomon-loops/cron.log")).toBe(false);
+    expect(await moved("mkdir -p .gnomon-out/s && echo spill > .gnomon-out/s/001-read-a.txt")).toBe(false);
     // Not gitignored here, so git lists both; NEVER_WALKED is not git's list.
     expect(
       await moved("mkdir -p .gnomon-shadow coverage && echo r >> .gnomon-shadow/gnomon.jsonl && echo c > coverage/out.json")

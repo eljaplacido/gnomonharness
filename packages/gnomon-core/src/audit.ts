@@ -188,6 +188,12 @@ export type AuditKind =
   // rules were read from. Its own kind for the reason `check` is: no model
   // produced it, and it is not a turn.
   | "guard"
+  // A turn moved to its role's escalation model ("local first, cloud rescue"):
+  // the trigger, the step, from where to where, and the handover's size. Its
+  // own kind because it is a routing decision inside a turn, not a turn, and a
+  // reader asking "which model did this work" has to find it without parsing
+  // turn records.
+  | "escalation"
   | "session_end";
 
 export interface AuditRecord {

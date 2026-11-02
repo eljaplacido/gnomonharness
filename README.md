@@ -61,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1639 TypeScript tests (1354 core, 260 cli, 18
-> natives, 7 tui) and 60 Rust tests — **1699 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1662 TypeScript tests (1377 core, 260 cli, 18
+> natives, 7 tui) and 60 Rust tests — **1722 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -735,6 +735,50 @@ variable is actually set in your shell:
 "Not configured" and "configured but nothing routes to it" look identical in a
 plain listing, so the listing says which.
 
+#### Local first, cloud rescue — `[roles.<name>.escalate]`
+
+A role can run on a local model and move a turn that gets stuck to a stronger
+one, once:
+
+```toml
+[roles.implement.escalate]
+model = "<cloud-model-id>"
+endpoint = "openrouter"
+on = ["stall", "step_wall", "budget_50"]
+# max_steps = 12                   # calls the rescue is guaranteed; default: the role's max_steps
+```
+
+| Trigger | Fires when |
+|---|---|
+| `stall` | the turn would stop because the model repeats a call without progress |
+| `step_wall` | the turn would stop at `max_steps_total` |
+| `budget_50` | half of `max_steps_total` is used and the turn has not ended. A run with a declared time budget (`gnomon task --deadline`, #93; until it merges, steps alone) also counts half of that time |
+| `verify_failed` | the declared `[verify]` check still fails after its last round |
+| `apparatus` | the role's endpoint is down after retries and after any `fallback` |
+
+The rest of the turn runs on the escalation model. It is not given the
+transcript: it gets a **handover** of at most 8,000 characters, with the task,
+the files changed so far (from `git status`), the last twelve actions and their
+outcomes, the checklist, what the first model last said, and the failing check
+when there was one. The files on disk are the state. `apparatus` is the
+exception: the first model was not stuck, so the conversation is passed on as
+it stands.
+
+**Not a fallback.** `fallback` retries one *call* that failed on another
+endpoint, and the next call goes back to the primary. `escalate` moves the
+*rest of the turn*, for a reason the role declared, and says so: an
+`escalation` audit record, a line on the terminal, and `escalation` in the
+turn record and in `gnomon task --json` (the trigger, the step, both models,
+the handover's size, the model the turn ended on, and each model's usage under
+`volatile`). Both can be declared; `fallback` is tried first.
+
+**Once per turn.** A rescue that stalls ends the turn the way any stall does;
+it is never escalated again. **Budgets.** The rescue runs on what is left of
+`max_steps_total`, raised only to give it its `max_steps`; time is never
+extended. A role without the block behaves exactly as it did, and never
+calls the escalation endpoint. The startup banner prints `Escalates to: …` under
+the model, and `/endpoints` lists the role under `escalation for:`.
+
 #### `[context]` — conversation history
 
 ```toml
@@ -1026,6 +1070,7 @@ endpoint = "zen"
 | `max_steps_total` | Where a turn actually stops. Defaults to `max_steps × 8`. Set it equal to `max_steps` to stop at the first checkpoint. |
 | `converge_after` | Opt-in. A step-budget fraction past which the harness urges *submit or conclude* as the budget depletes. Absent = full exploration. |
 | `fallback` | Second endpoint tried when the primary fails or times out. |
+| `escalate` | A stronger model that takes over the rest of a stuck turn, once. See [Local first, cloud rescue](#local-first-cloud-rescue--rolesnameescalate). |
 
 ### `tools.toml`
 
