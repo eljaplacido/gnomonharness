@@ -2477,6 +2477,9 @@ export function measureTreeDelta(
 /** Internal, tests only: how many git processes the tree bookkeeping started. */
 export const __treeGitCalls = { n: 0 };
 
+/** Repositories whose index this process has already let git refresh (see gitStatusGate). */
+export const __indexRefreshed = new Set<string>();
+
 /**
  * One `git status --porcelain=v2 -z` in place of the calls it can stand in for.
  *
@@ -2497,7 +2500,20 @@ function gitStatusGate(root: string):
   // An environment that points git elsewhere: the walk below could not know.
   if (process.env.GIT_DIR || process.env.GIT_WORK_TREE) return null;
   __treeGitCalls.n++;
-  const r = spawnSync("git", ["--no-optional-locks", "status", "--porcelain=v2", "-z",
+  // The first status per process and repository may take git's optional index
+  // lock, so a stale stat cache (a copied or freshly checked-out tree) is
+  // refreshed once and written back. Every later call keeps
+  // --no-optional-locks. Without this, each status re-hashed the whole tree
+  // and threw the result away: at 30k files 0.21-0.24 s per call against
+  // 0.05 s refreshed (UX2, 2026-11-02). Only a clean tree stays stale: when a
+  // tracked file changed, the `git diff` below refreshes the index anyway
+  // (diff.autoRefreshIndex). git takes the lock only when it is free and
+  // writes only when the stat info changed; the content it compares is
+  // untouched, so the numbers below cannot move.
+  const key = (() => { try { return realpathSync(root); } catch { return root; } })();
+  const first = !__indexRefreshed.has(key);
+  __indexRefreshed.add(key);
+  const r = spawnSync("git", [...(first ? [] : ["--no-optional-locks"]), "status", "--porcelain=v2", "-z",
     "--branch", "--untracked-files=all"], { cwd: root, encoding: "utf8", timeout: 5000 });
   if (r.status !== 0 || typeof r.stdout !== "string") {
     return /not a git repository/i.test(String(r.stderr ?? "")) ? "not-a-repo" : null;
