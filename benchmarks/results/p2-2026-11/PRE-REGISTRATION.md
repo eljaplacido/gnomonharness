@@ -124,3 +124,17 @@ not support skills` and no model request. The oracle check ran no agent, so
 it could not see this. Under the symmetry rule the task is excluded from
 every arm, including those that ran it. The run is not restarted; the
 collector drops the task. Scoring now uses 29 tasks.
+
+## Amendment, 2026-11-02T05:53Z: P2 stopped; the partial attempt 1 is archived, superseded by P2G
+
+The user shut the hub down on 2026-11-01 around 21:00Z, with attempt 1 part-done.
+P2 is not resumed. It continues as **P2G** on the gx10 (`../p2g-2026-11/`):
+- 29 tasks, 23 shared with P2 and 6 replaced on arm64;
+- pre-registered before its first cell.
+
+The hub's partial data was copied here on 2026-11-02 into `hub-archive/`:
+- `p2-run.log`, `runs-p2/`, the oracle and probe logs, and the hub's `apparatus/` are committed;
+- the 1.6 GB of Harbor job directories (`jobs/`) are kept locally and gitignored.
+
+These cells are **never pooled with P2G**: different host, architecture and
+task set. They may be reported only as a separate, partial, descriptive record.
