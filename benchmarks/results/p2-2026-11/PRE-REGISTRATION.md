@@ -127,7 +127,7 @@ collector drops the task. Scoring now uses 29 tasks.
 
 ## Amendment, 2026-11-02T05:53Z: P2 stopped; the partial attempt 1 is archived, superseded by P2G
 
-The user shut the hub down on 2026-11-01 around 21:00Z, with attempt 1 part-done.
+The user shut the hub down at 2026-11-01T19:33Z, with attempt 1 part-done. The log has 154 END lines and 26 ERROR lines, all 26 at 19:33:19Z: cells cut off by the shutdown, never scored.
 P2 is not resumed. It continues as **P2G** on the gx10 (`../p2g-2026-11/`):
 - 29 tasks, 23 shared with P2 and 6 replaced on arm64;
 - pre-registered before its first cell.
