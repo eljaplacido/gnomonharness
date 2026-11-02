@@ -26,6 +26,18 @@
 
 ## [Unreleased]
 
+- **The property suites run on Windows, and CI's Windows job gates on them.**
+  Measured on Windows 11 (WINP, 2026-11-02), the five model-free suites could
+  not start as written: `new URL(...).pathname` gives `/C:/...`, `import()` of a
+  plain path fails, and `node_modules/.bin/tsx` is a `.cmd` shim Node won't
+  spawn without a shell. They now use `fileURLToPath`, file-URL imports and
+  tsx's CLI through node, which changes nothing they assert. Linux still reads
+  13/13, 14/14, 8/8, 0/11, 10/10. `scripts/property_suites.mjs` gives Windows
+  the same stranger's state (USERPROFILE, APPDATA, TEMP into the temp dirs), and
+  windows-latest runs it after the native build. The degradation suite's final
+  cleanup retries, because a killed timeout probe can hold its folder for about
+  0.5 s on Windows.
+
 - **The 2026-09-01 injection suite has a positive control again.** Since #68,
   `network = false` covers bash, so the operator-asks control (a `curl` to the
   canary) was refused on arm A's surface: 3/3 crossed became 0/3, and the suite

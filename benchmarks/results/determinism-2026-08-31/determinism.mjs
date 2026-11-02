@@ -1,3 +1,4 @@
+import { fileURLToPath, pathToFileURL } from "node:url";
 /**
  * T2 — surface-replay determinism.
  *
@@ -19,10 +20,10 @@
 // benchmarks/surface-fidelity/fidelity.mjs.
 // Declared before the imports below use it: declared after them (65274f6,
 // 2026-09-07), every import threw before initialization.
-const REPO = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "");
-const { loadConfig } = await import(`${REPO}/packages/gnomon-core/dist/config.js`);
-const { buildToolSet } = await import(`${REPO}/packages/gnomon-core/dist/tools.js`);
-const { routeRole, routeInput } = await import(`${REPO}/packages/gnomon-core/dist/config.js`);
+const REPO = fileURLToPath(new URL("../../../", import.meta.url)).replace(/[\\/]$/, "");
+const { loadConfig } = await import(pathToFileURL(`${REPO}/packages/gnomon-core/dist/config.js`).href);
+const { buildToolSet } = await import(pathToFileURL(`${REPO}/packages/gnomon-core/dist/tools.js`).href);
+const { routeRole, routeInput } = await import(pathToFileURL(`${REPO}/packages/gnomon-core/dist/config.js`).href);
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 
