@@ -36,7 +36,7 @@
   and short reports. `gnomon migrate` replaces the exact old block only.
   - Pre-registered A/B (`benchmarks/results/lean-2026-11/`, branch
     `bench/peers-2026-11`), hosted model, 48 pairs: output tokens −28%
-    (p < 0.0001), \$ per solved task 0.052 → 0.035, 37 vs 34 tasks solved
+    (p < 0.0001), $ per solved task 0.052 → 0.035, 37 vs 34 tasks solved
     (not significant).
   - Stage 2 runs the same A/B on the local model before this merges.
 
