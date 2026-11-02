@@ -77,3 +77,11 @@ has no violation. A miscount in the text; the definition stands.
   and its false refusals on the violation-free trials (was 8 refusals, 3 false).
 - **Output:** `replay-bindfix.jsonl`, `RESULT-bindfix.md`. The original files
   are unchanged.
+- **11:05Z correction, before any valid re-run verdict:** the first attempt
+  ran `packages/gnomon-cli/bin/gnomon.mjs` from the uncompiled workspace. It
+  could not load gnomon-core, so all 790 rows read `none`; they were discarded,
+  never analysed as a result. The re-run uses the repo-root checkout launcher
+  (`gnomon`), which runs the same source.
+  **Control:** every call whose decision differs from the original replay must
+  be one the fix explains (a write through a bound name). Any other difference
+  voids the comparison.
