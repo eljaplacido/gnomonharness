@@ -173,3 +173,5 @@ and only the model server changes. No BUD cell (smoke or measured) had run.
 - **Against other runs:** the hub is about 4–6× faster, so a 900 s cap buys more model work here. BUD's absolute numbers (tasks solved, cells lost at the cap, tokens) **cannot be compared with LEAN stage 2 or R1**; only the paired base-vs-budget contrast is the result.
 - **For the primary endpoint:** a faster lane may reach the cap less often. Fewer discordant cap pairs would lower its already low power. Stated in advance.
 - **Apparatus:** `run_bud_local.sh` takes the lane from environment variables, with the pre-registered gx10 values as defaults. `apparatus/bud-chain-hub.sh` is `bud-chain.sh` without the wait for R1. The smoke and its pass rule are unchanged.
+
+**Final:** smoke passed (`smoke-summary.txt`); this file is the BUD pre-registration as of 2026-11-02T10:38:27Z, before any measured `bd-` cell.
