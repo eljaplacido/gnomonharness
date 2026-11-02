@@ -156,3 +156,16 @@ The user asked for hybrid task-completion results within 3–5 hours. The origin
    that R1H is never pooled with R1.
 4. The chain is replaced by `apparatus/r1h-chain-np2.sh`: the checksum check, smoke, Final,
    the full run, collect, commit and cleanup, without the wait for BUD-2.
+
+## Final, 2026-11-02T15:47:32Z: smoke passed, before any measured `r1h-k` cell
+
+Build `d59e6c198f91d1469198b0677c008323f82d0345`. Hub lane props in `lane-props.json`. Smoke, every arm + NEG on hello-world (`smoke-summary.txt`):
+
+```
+cell                               state        local_chat cloud_chat  usd     gpu_s  deleg               surface
+r1h-s-c-hello-world                valid                 0          4 0.0004     0.0  -                   59338fa2ec97
+r1h-s-l-hello-world                valid                 3          0 0.0000     1.6  -                   f611e5b3d308
+r1h-s-neg-hello-world              misrouted             0          4 0.0003     0.0  -                   c5fe0d3f756d
+r1h-s-pc-hello-world               valid                 5          7 0.0040     1.6  implementor         295412075ba5
+smoke: PASS (arms seen: ['C', 'L', 'NEG', 'PC'])
+```
