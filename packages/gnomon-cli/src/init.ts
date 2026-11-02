@@ -602,7 +602,7 @@ enabled = true
 
 [[tools]]
 name = "task"
-description = "Run a sub-turn under another role, with its own context. It gets that role's tools."
+description = "Run a sub-turn under another role, with its own context and that role's tools. Delegate a job once: give the complete plan and everything it needs, including the check that shows it is done. Delegate again only when its report shows a concrete failure; a report whose check passed is finished work, so do not send it back to be redone or re-checked."
 enabled = true
 
 # Reaches the network, so it is gated like a write and refused outright when

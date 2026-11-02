@@ -110,6 +110,18 @@ const SYSTEM_MD_VERIFY_NEW =
 
 const eol = (text: string): string => (text.includes("\r\n") ? "\r\n" : "\n");
 
+// The scaffold's task tool before and after 2026-11-02, matched with the name
+// line above it, so no other tool's description is ever touched.
+const TASK_TOOL_OLD =
+  'name = "task"\n' +
+  "description = \"Run a sub-turn under another role, with its own context. It gets that role's tools.\"\n";
+const TASK_TOOL_NEW =
+  'name = "task"\n' +
+  "description = \"Run a sub-turn under another role, with its own context and that role's tools. " +
+  "Delegate a job once: give the complete plan and everything it needs, including the check that shows it is done. " +
+  "Delegate again only when its report shows a concrete failure; a report whose check passed is finished work, " +
+  "so do not send it back to be redone or re-checked.\"\n";
+
 export const MIGRATIONS: Migration[] = [
   {
     id: "compaction-summary",
@@ -163,6 +175,23 @@ export const MIGRATIONS: Migration[] = [
       const old = SYSTEM_MD_VERIFY_OLD.replace(/\n/g, eol(text));
       if (!text.includes(old)) return null;
       return text.replace(old, () => SYSTEM_MD_VERIFY_NEW.replace(/\n/g, eol(text)));
+    },
+  },
+  {
+    id: "task-delegate-once",
+    file: "tools.toml",
+    what: `tools.toml: task "Run a sub-turn ..." → delegate a job once`,
+    why: [
+      "R1/R1H (2026-11-02, cloud coordinator, local implementor): no",
+      "plan-in-cloud cell delegated once. Coordinators handed the same job",
+      "over 2-10 times (\"Verifying independently before I report\", then",
+      "implement again), and each sub-turn starts with no history and",
+      "re-reads the repo. Only the exact scaffold description is replaced.",
+    ],
+    apply: (text) => {
+      const old = TASK_TOOL_OLD.replace(/\n/g, eol(text));
+      if (!text.includes(old)) return null;
+      return text.replace(old, () => TASK_TOOL_NEW.replace(/\n/g, eol(text)));
     },
   },
   {

@@ -135,6 +135,31 @@ describe("gnomon migrate — daily-use defaults (2026-09-29)", () => {
     expect(pendingMigrations(gnomonDir)).toEqual([]);
   });
 
+  it("gives the task tool the delegate-once rule, only over the exact scaffold line (2026-11-02)", () => {
+    const OLD =
+      '[[tools]]\nname = "task"\n' +
+      "description = \"Run a sub-turn under another role, with its own context. It gets that role's tools.\"\n" +
+      "enabled = true\n";
+    for (const nl of ["\n", "\r\n"]) {
+      const before = ('[[tools]]\nname = "read"\nenabled = true\n\n' + OLD).replace(/\n/g, nl);
+      writeFileSync(join(gnomonDir, "tools.toml"), before, "utf-8");
+      applyMigrations(pendingMigrations(gnomonDir));
+      const out = readFileSync(join(gnomonDir, "tools.toml"), "utf-8");
+      expect(out).not.toContain("It gets that role's tools.");
+      expect(out).toContain("Delegate a job once");
+      expect(out.startsWith(`[[tools]]${nl}name = "read"${nl}`)).toBe(true);
+      expect(out.split(nl).length).toBe(out.split("\n").length);
+      expect(pendingMigrations(gnomonDir)).toEqual([]);
+    }
+    // The migrated line is exactly what a fresh scaffold writes.
+    const scaffold = readFileSync(new URL("./init.ts", import.meta.url), "utf-8");
+    const line = readFileSync(join(gnomonDir, "tools.toml"), "utf-8").split(/\r?\n/).find((l) => l.startsWith("description = \"Run a sub-turn"));
+    expect(scaffold).toContain(`name = "task"\n${line}\n`);
+    // A description somebody wrote is left alone.
+    writeFileSync(join(gnomonDir, "tools.toml"), OLD.replace("its own context", "a fresh context"), "utf-8");
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+  });
+
   it("adds the project's own check when policy.toml declares none, and never invents one", () => {
     writeFileSync(join(gnomonDir, "policy.toml"), "[approval]\ngate = \"on_write\"\n# [verify]\n# command = \"pytest -q\"\n", "utf-8");
     expect(pendingMigrations(gnomonDir)).toEqual([]);
