@@ -362,7 +362,10 @@ the smallest one able to summarise for `smol`). If the project declares a check
 (a `verify`, `check` or `test` script in `package.json`, or `Cargo.toml`,
 `go.mod`, Python test config, a Makefile `test:` target), `init` switches it on
 as `[verify]`. It also turns the audit trail on and gitignores the run
-directories. Then the session opens; the banner names the project, role, model,
+directories. It prints what it found on the machine, too: OS, CPU cores, RAM, each
+GPU with its memory (unified memory on Apple Silicon and NVIDIA GB10), and
+which of Ollama, LM Studio (:1234), llama.cpp (:8080) and vLLM (:8000) answer
+on 127.0.0.1. That probe only reads; it writes nothing and chooses nothing. Then the session opens; the banner names the project, role, model,
 and the tools the role does **not** hold. If Ollama is not running, `launch`
 offers a picker first: Ollama, OpenRouter, OpenCode Go, OpenCode Zen, Custom or
 Skip.

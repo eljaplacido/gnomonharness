@@ -111,6 +111,7 @@ import {
 import { pendingMigrations, applyMigrations, MIGRATIONS } from "./migrate.js";
 import { cmdUpdate, cmdUninstall, maybeNotifyUpdate } from "./update.js";
 import { cmdCheck } from "./check.js";
+import { probeMachine, formatProbe, probeAtInit } from "./probe.js";
 
 // ---------------------------------------------------------------------------
 // Argument parsing (minimal, no deps)
@@ -1586,6 +1587,11 @@ async function cmdMigrate(args: CliArgs): Promise<void> {
 }
 
 async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promise<void> {
+  // What this machine is and which model servers it runs, probed beside init's
+  // own model detection so it costs no extra wait. Shown, never written: the
+  // surface is exactly what it was. Read-only commands and 127.0.0.1 GETs, each
+  // with a deadline (probe.ts). Not for --from or --no-verify (probeAtInit).
+  const probing = probeAtInit(args) ? probeMachine().catch(() => null) : null;
   let result;
   try {
     result = await initSurface({ dir: args.dir, force: args.force, from: args.from, noVerify: args.noVerify });
@@ -1600,6 +1606,12 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
   for (const f of result.skipped) console.log(`  · .gnomon/${f} (kept existing)`);
   if (result.gitattributes) console.log("  + .gitattributes: .gnomon/** text eol=lf (same surface hash on Windows)");
   if (result.gitignore?.length) console.log(`  + .gitignore: ${result.gitignore.map((d) => d + "/").join(" ")} (machine-local, never committed)`);
+
+  const probe = probing ? await probing : null;
+  if (probe) {
+    console.log("");
+    for (const line of formatProbe(probe)) console.log(line);
+  }
 
   // Say which models were chosen and why. A tag appearing in roles.toml with
   // no explanation looks like a decision someone made on your behalf.
@@ -1689,7 +1701,8 @@ async function cmdLaunch(args: CliArgs): Promise<void> {
   // out (`gnomon endpoint add`) was nowhere on screen. Off a terminal there
   // is nobody to ask, and a script gets exactly what it got before.
   if (process.stdin.isTTY && process.stdout.isTTY) {
-    await offerModelSetup(args, target);
+    // A fresh surface's init has just printed the probe.
+    await offerModelSetup(args, target, { showProbe: !fresh });
   } else if (fresh) {
     console.log("");
     console.log("If those model tags are not ones you have, `gnomon endpoint add` sets one up.");
@@ -1708,8 +1721,9 @@ async function cmdLaunch(args: CliArgs): Promise<void> {
  * key, Ollama still stopped) lands back on the choice rather than in a
  * session that cannot work.
  */
-async function offerModelSetup(args: CliArgs, target: string): Promise<void> {
+async function offerModelSetup(args: CliArgs, target: string, opts: { showProbe?: boolean } = {}): Promise<void> {
   const role = args.subcommand || "implement";
+  let probeShown = !opts.showProbe;
   for (;;) {
     let config;
     try {
@@ -1721,6 +1735,16 @@ async function offerModelSetup(args: CliArgs, target: string): Promise<void> {
     const readiness = await checkReadiness(config, role);
     if (readiness.ready) return;
 
+    // What the machine has, before asking what to set up: a model server
+    // already running on another port is the answer to the question below.
+    if (!probeShown) {
+      probeShown = true;
+      const probe = await probeMachine().catch(() => null);
+      if (probe) {
+        console.log("");
+        for (const line of formatProbe(probe)) console.log(line);
+      }
+    }
     console.log("");
     console.log(`No model answers for this project yet: ${readiness.why}.`);
     console.log("Set one up now?\n");
