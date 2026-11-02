@@ -87,3 +87,5 @@ reported per arm and asserted to sum to n.
 5. Collect (`apparatus/collect_bud2.py`, BUD's collector with the `b2-` prefix).
 6. Write RESULT.md.
 7. Clean up (`apparatus/cleanup-hub-lane.sh`: stop the hub server and close the tunnel; the GGUF stays).
+
+**Final:** smoke passed (`smoke-summary.txt`); this file is the BUD-2 pre-registration as of 2026-11-02T15:37:34Z, before any measured `b2-` cell.
