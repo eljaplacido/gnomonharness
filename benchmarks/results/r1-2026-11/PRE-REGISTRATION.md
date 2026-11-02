@@ -147,3 +147,22 @@ Recorded in `BUILD.txt`, and in the final section below.
   - `r1-sc-neg-hello-world` was flagged `misrouted`: local 0 and cloud 5 while asserted L, $0.0039.
 - This proves the cloud slot, both meters and the negative control.
 - The GPU-slot arms are smoked by the chain at the pinned build, before anything is measured.
+
+## Final, before any measured cell (2026-11-02T10:06:58Z)
+
+Build under test: `d59e6c198f91d1469198b0677c008323f82d0345` (origin/master at decision time; contains #80: yes).
+Stage 2 verdict that decided it: base=10 lean=10 solved, rule lean >= base - 2 → **pass**.
+Smoke at this build, every arm + NEG on hello-world (`smoke-summary.txt`):
+
+```
+cell                               state        local_chat cloud_chat  usd     gpu_s  deleg               surface
+r1-s-bc-hello-world                valid                 2          0 0.0000     6.3  -                   52fb50d47b6f
+r1-s-c-hello-world                 valid                 0          4 0.0008     0.0  -                   15b66f2364ff
+r1-s-ef-hello-world                valid                 0          4 0.0007     0.0  -                   6a3b8e528c42
+r1-s-l-hello-world                 valid                 3          0 0.0000     4.1  -                   8b69bb363bdd
+r1-s-neg-hello-world               misrouted             0          4 0.0007     0.0  -                   533d88a83dae
+r1-s-pc-hello-world                valid                 7         10 0.0033    11.2  implementor,verifier  014270bbbbd4
+smoke: PASS (arms seen: ['BC', 'C', 'EF', 'L', 'NEG', 'PC'])
+```
+
+From here on, changes to this file are timestamped amendments.
