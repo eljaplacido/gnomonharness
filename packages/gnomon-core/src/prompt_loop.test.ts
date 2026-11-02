@@ -1257,6 +1257,14 @@ describe("model API errors", () => {
     expect(c({ errName: "TimeoutError", message: "The operation timed out" })).toBe(11);
     expect(c({ message: "fetch failed: ECONNREFUSED" })).toBe(12);
     expect(c({ status: 400, message: "maximum context length exceeded" })).toBe(13);
+    // llama.cpp's wording (R1, 2026-11-02): read as 10 it ended the turn.
+    expect(
+      c({
+        status: 400,
+        message:
+          '{"error":{"code":400,"message":"request (107910 tokens) exceeds the available context size (98304 tokens), try increasing it","type":"exceed_context_size_error"}}',
+      })
+    ).toBe(13);
   });
 
   it("retries a transient failure and reports each attempt", async () => {
@@ -2343,6 +2351,37 @@ describe("runTask — the non-interactive contract", () => {
     }) as unknown as typeof fetch;
 
     await withFetch(overflowThenFine, async () => {
+      const record = await promptLoop.runTask(config, "do the thing", { role: "implement", yes: true });
+      expect(record.output).toContain("recovered");
+      expect(call).toBeGreaterThanOrEqual(2);
+    });
+  }, 20000);
+
+  it("recovers from llama.cpp's context overflow, which it words differently", async () => {
+    const config: any = loadConfig("../..");
+    let call = 0;
+    const llamaOverflowThenFine = (async () => {
+      call++;
+      if (call === 1) {
+        return {
+          ok: false,
+          status: 400,
+          statusText: "Bad Request",
+          text: async () =>
+            JSON.stringify({
+              error: {
+                code: 400,
+                message:
+                  "request (107910 tokens) exceeds the available context size (98304 tokens), try increasing it",
+                type: "exceed_context_size_error",
+              },
+            }),
+        };
+      }
+      return { ok: true, json: async () => ({ message: { content: "recovered and answered" } }) };
+    }) as unknown as typeof fetch;
+
+    await withFetch(llamaOverflowThenFine, async () => {
       const record = await promptLoop.runTask(config, "do the thing", { role: "implement", yes: true });
       expect(record.output).toContain("recovered");
       expect(call).toBeGreaterThanOrEqual(2);
@@ -4159,6 +4198,61 @@ describe("the degradation contract", () => {
     expect(turn.model).toBe("fallback-model");
     expect(turn.endpoint).toBe("secondary");
     expect(turn.endpoint_url).toBe("http://fallback.invalid");
+  });
+
+  it("stays on the fallback for the rest of the turn once the primary has failed", async () => {
+    // Re-asking a primary already known to be down at every step paid the whole
+    // retry grace again each time; R1H lost 20 of 30 local-model cells to a 502
+    // outage that way.
+    const dir = mkdtempSync(join(tmpdir(), "fb-"));
+    writeFileSync(join(dir, "a.txt"), "content-a\n");
+    const config: any = loadConfig("../..");
+    config.config = { ...config.config, resilience: { attempts: 1, backoff_ms: 1, transport_grace_ms: 0 } };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const said: string[] = [];
+    const recs: any[] = [];
+    const asked: string[] = [];
+    let fallbackCalls = 0;
+    const turn = await withFetch(
+      (async (url: string) => {
+        asked.push(String(url));
+        if (String(url).includes("primary.invalid")) {
+          throw Object.assign(new Error("fetch failed"), { name: "TypeError" });
+        }
+        if (++fallbackCalls === 1) {
+          return {
+            ok: true,
+            json: async () => ({
+              message: { content: "", tool_calls: [{ function: { name: "read", arguments: { path: join(dir, "a.txt") } } }] },
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ message: { content: "done on the fallback" } }) };
+      }) as unknown as typeof fetch,
+      async () =>
+        await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          {
+            model: "primary-model", temperature: 0, top_p: 1,
+            target: { model: "primary-model", temperature: 0, top_p: 1, url: "http://primary.invalid", endpoint: "primary" },
+            fallback: { model: "fallback-model", temperature: 0, top_p: 1, url: "http://fallback.invalid", endpoint: "secondary" },
+          } as any,
+          [{ role: "user", content: "go" }],
+          deps(said, recs)
+        )
+    );
+    rmSync(dir, { recursive: true, force: true });
+
+    expect(turn.content).toContain("done on the fallback");
+    // The primary was asked once, at the first step, and not again.
+    expect(asked.filter((u) => u.includes("primary.invalid"))).toHaveLength(1);
+    expect(asked.filter((u) => u.includes("fallback.invalid"))).toHaveLength(2);
+    expect(said.join("\n")).toMatch(/staying on fallback-model/);
+    // One degradation record for the switch, not one per step.
+    expect(recs.filter((r) => r.kind === "degradation" && r.id === "endpoint_fallback")).toHaveLength(1);
+    expect(turn.model).toBe("fallback-model");
+    expect(turn.endpoint).toBe("secondary");
   });
 
   // A reply cut off twice was allowed to stand -- deliberate -- and recorded as

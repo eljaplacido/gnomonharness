@@ -751,7 +751,11 @@ export function classifyFailure(opts: {
 }): number {
   const { status, errName, message = "" } = opts;
   if (errName === "TimeoutError" || /timed? ?out/i.test(message)) return 11;
-  if (/context length|maximum context|too many tokens|context_length/i.test(message)) {
+  // llama.cpp says "request (107910 tokens) exceeds the available context size
+  // (98304 tokens)", type exceed_context_size_error. Read as 10 (a bad request),
+  // that overflow ended the turn instead of reaching the trim-and-retry below
+  // (R1, 2026-11-02, r1-k1-bc-fix-code-vulnerability).
+  if (/context length|maximum context|too many tokens|context_length|exceed_context_size|exceeds the available context/i.test(message)) {
     return 13;
   }
   if (status === undefined) {
@@ -1175,6 +1179,44 @@ export function isLoopbackUrl(url: string): boolean {
  * every transport failure looked identical. Walk the chain (bounded; causes can
  * be self-referential) and return the first `code` found.
  */
+/**
+ * The fetch dispatcher a model call uses: Node's own undici Agent, with its two
+ * hidden timeouts switched off.
+ *
+ * Node's fetch is undici, and undici gives every request a 300 s headersTimeout
+ * and a 300 s bodyTimeout of its own. A model call is not streamed, so headers
+ * arrive only when the whole generation is done, and a long, steady local
+ * generation was cut off at exactly 300 s however long gnomon's deadline was:
+ * the timeout escalation in callEndpointWithRetry doubled the deadline to 600 s
+ * and the next attempt died at 300 s again, as `fetch failed
+ * (UND_ERR_HEADERS_TIMEOUT)`, read as "endpoint unreachable". Measured in R1
+ * (2026-11-02, local qwen3.6-35b): two cells ended apparatus_failure this way.
+ *
+ * With both off, the deadline gnomon passes (AbortSignal.timeout, plus Esc) is
+ * the only clock, which is what [resilience] request_timeout_ms always claimed.
+ * The Agent class is taken from the global dispatcher Node installs, so nothing
+ * new is depended on. Where that is not an undici Agent (a replaced global
+ * dispatcher, another runtime), the call goes out exactly as before.
+ */
+let modelDispatcherCache: unknown | null | undefined;
+export function modelFetchDispatcher(): unknown | undefined {
+  if (modelDispatcherCache === undefined) {
+    modelDispatcherCache = null;
+    try {
+      const current = (globalThis as unknown as Record<symbol, unknown>)[
+        Symbol.for("undici.globalDispatcher.1")
+      ] as { constructor?: unknown } | undefined;
+      const Agent = current?.constructor as (new (opts: object) => unknown) | undefined;
+      if (typeof Agent === "function" && Agent.name === "Agent") {
+        modelDispatcherCache = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+      }
+    } catch {
+      modelDispatcherCache = null;
+    }
+  }
+  return modelDispatcherCache ?? undefined;
+}
+
 export function causeCode(err: unknown): string | undefined {
   let cur: unknown = err;
   for (let i = 0; i < 8 && cur; i++) {
@@ -1192,7 +1234,7 @@ export function causeCode(err: unknown): string | undefined {
  */
 const PROCESS_SESSION = `gnomon-${process.pid}-${Date.now()}`;
 
-async function callEndpoint(
+export async function callEndpoint(
   target: RouteTarget,
   messages: ChatMessage[],
   tools: unknown[],
@@ -1324,6 +1366,7 @@ async function callEndpoint(
   if (tools.length > 0) payload.tools = tools;
 
   try {
+    const dispatcher = modelFetchDispatcher();
     const res = await fetch(target.url, {
       method: "POST",
       headers,
@@ -1332,7 +1375,9 @@ async function callEndpoint(
       signal: signal
         ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal])
         : AbortSignal.timeout(timeoutMs),
-    });
+      // No undici timeouts of its own: the deadline above is the only clock.
+      ...(dispatcher ? { dispatcher } : {}),
+    } as RequestInit);
 
     if (!res.ok) {
       // The body carries the reason; the status alone does not. Reporting
@@ -1520,10 +1565,14 @@ async function callEndpoint(
         // The errno is the whole diagnosis and Node buries it on `.cause`, so
         // surface it. Without this every transport failure read "fetch failed".
         (errno && !msg.includes(errno) ? ` (${errno})` : ""),
-      code: classifyFailure({
-        errName: err instanceof Error ? err.name : undefined,
-        message: msg,
-      }),
+      // undici's own deadlines are a timeout, not an unreachable endpoint: the
+      // server accepted the request and was still working on it.
+      code: /^UND_ERR_(HEADERS|BODY)_TIMEOUT$/.test(errno ?? "")
+        ? 11
+        : classifyFailure({
+            errName: err instanceof Error ? err.name : undefined,
+            message: msg,
+          }),
       toolCalls: [],
     };
   }
@@ -3308,7 +3357,11 @@ export async function runAgenticTurn(
   // The finish_reason of the completion the turn ends on, so a reply the
   // backend cut off can be recorded as cut off rather than as an answer.
   let lastFinishReason: string | undefined;
-  let overflowTrimmed = false;
+  // The step count at the last overflow trim. Another trim is allowed once the
+  // turn has made progress since: a long turn can outgrow the window twice.
+  // An overflow straight after a trim (no step in between) still ends it, so a
+  // prompt too large even when trimmed cannot loop.
+  let overflowTrimmedAt = -1;
   // Consecutive replies with no usable tool call -- see `[turn]
   // max_consecutive_malformed`. Replaced a once-per-turn latch that covered
   // only markup-as-text: a model that wrote invalid arguments or named a tool
@@ -3417,15 +3470,30 @@ export async function runAgenticTurn(
     return r;
   };
 
+  // Once the primary has failed and the fallback answered, the rest of this
+  // turn stays on the fallback. Re-asking the primary at every step paid the
+  // whole retry grace again each time (60 s by default for a 5xx), so a short
+  // outage turned into a turn spent knocking on a door already known to be
+  // shut. Measured: R1H (2026-11-02) lost 20 of 30 local-model cells to a 502
+  // outage. The next turn starts on the primary again.
+  let onFallback = false;
+
   for (;;) {
     if (deps.signal?.aborted) return cancelled();
 
-    let result = await call(route.target);
-    usedModel = route.model;
+    let result: InferenceResult;
+    if (onFallback && route.fallback) {
+      usedModel = route.fallback.model;
+      usedTarget = route.fallback;
+      result = await call(route.fallback);
+    } else {
+      result = await call(route.target);
+      usedModel = route.model;
+    }
 
     if (deps.signal?.aborted) return cancelled();
 
-    if (result.code !== 0 && route.fallback) {
+    if (result.code !== 0 && route.fallback && !onFallback) {
       // Announced on the spinner ONLY, until 2026-09-05. `progress.update` is
       // overwritten by the very next frame, and `gnomon task` in a script has
       // no scrollback to overwrite — so the single most consequential thing
@@ -3461,6 +3529,16 @@ export async function runAgenticTurn(
       usedTarget = route.fallback;
       result = await call(route.fallback);
       if (deps.signal?.aborted) return cancelled();
+      if (result.code === 0) {
+        onFallback = true;
+        warn(
+          paint(
+            deps.ui,
+            "gray",
+            `  [endpoint] staying on ${route.fallback.model} for the rest of this turn.`
+          )
+        );
+      }
     }
 
     code = worse(code, result.code);
@@ -3639,10 +3717,11 @@ export async function runAgenticTurn(
     // to make the prompt smaller. The trim otherwise runs only at a leg
     // checkpoint, so a long first leg can overflow before it is ever consulted.
     //
-    // Once per turn: shrink hard and try again. Guarded by a latch so a prompt
-    // that is too large even when trimmed cannot loop.
-    if (result.code === 13 && !overflowTrimmed && steps < maxTotal) {
-      overflowTrimmed = true;
+    // Shrink hard and try again. Guarded by a latch so a prompt that is too
+    // large even when trimmed cannot loop: a second trim needs a step of
+    // progress since the first.
+    if (result.code === 13 && steps > overflowTrimmedAt && steps < maxTotal) {
+      overflowTrimmedAt = steps;
       const budget = Math.max(1024, Math.floor(ctxLimits.max_context_tokens * 0.5));
       const trimmed = trimWorking(working, budget);
       if (trimmed.dropped > 0) {

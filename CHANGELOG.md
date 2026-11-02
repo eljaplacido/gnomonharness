@@ -26,6 +26,49 @@
 
 ## [Unreleased]
 
+- **A long local generation is no longer cut off at 300 s.** Node's fetch (undici)
+  puts its own 300 s headersTimeout and bodyTimeout on every request, and a model
+  call is not streamed, so headers arrive only when the generation is done. A
+  steady local generation therefore died at 300 s whatever `[resilience]
+  request_timeout_ms` said: the timeout escalation doubled the deadline to 600 s
+  and the next attempt died at 300 s again, as `fetch failed
+  (UND_ERR_HEADERS_TIMEOUT)`, reported as "endpoint unreachable". Two R1 cells
+  (local qwen3.6-35b, 2026-11-02) ended `apparatus_failure` this way.
+  - Model calls now use Node's own undici Agent with both timeouts off, so
+    gnomon's deadline (and Esc) is the only clock. No new dependency.
+  - undici's timeout errors, if they occur, are classified as a timeout (11),
+    not an unreachable endpoint.
+  - Tests install a global dispatcher with a 400 ms limit and show a model call
+    ignoring it; they fail on the previous code.
+- **llama.cpp's context overflow is recognised, so the turn trims and goes on.**
+  llama-server reports an oversized prompt as `request (107910 tokens) exceeds
+  the available context size (98304 tokens)`, type `exceed_context_size_error`.
+  gnomon read that as 10 (a bad request) and ended the turn as
+  apparatus_failure, never reaching the trim-and-retry that 13 (context
+  exhausted) already has (R1, 2026-11-02, a local coordinator 18 steps in).
+  - The overflow latch now allows another trim once the turn has made progress
+    since the last one, so a long turn that outgrows the window twice is
+    trimmed twice. An overflow straight after a trim still ends the turn.
+- **A fallback that has answered keeps the rest of the turn.** With
+  `[roles.<name>.fallback]` declared, a failed primary fell back for one step and
+  was asked again at the next, paying the whole retry grace each time (60 s by
+  default for a 5xx). During an outage, a turn spent most of its time knocking on
+  a primary already known to be down. R1H (2026-11-02) lost 20 of 30
+  local-model cells to a 502 outage on its local lane. Now, once the fallback has
+  answered, the turn stays on it; the switch is said, recorded once
+  (`endpoint_fallback`), and the turn record names the endpoint that answered.
+  The next turn starts on the primary again.
+- **The task tool asks for one delegation per job.** In R1 and R1H
+  (2026-11-02, cloud coordinator handing work to a local implementor), no
+  plan-in-cloud cell delegated once: coordinators handed the same job over 2-10
+  times, sending it to the verifier "independently" after a passing report and
+  then back to the implementor. Each sub-turn starts with no history and
+  re-reads the repo. The scaffold's `task` description now says to delegate a
+  job once with the complete plan and its check, and to delegate again only on
+  a concrete failure. `gnomon migrate` replaces the exact old description only
+  (CRLF kept); an edited one is left alone. Whether it moves completion is for
+  the hybrid A/B to show.
+
 - **Windows: a timed-out bash command has exited before the tool reports the
   timeout.** `killTree` fired `taskkill /T /F` and returned at once, so the
   tool reported "timed out" while the killed tree still held the shell's
