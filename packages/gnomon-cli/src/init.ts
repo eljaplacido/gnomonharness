@@ -114,6 +114,7 @@ legs = 8                     # max_steps_total defaults to max_steps * legs (1 =
 stall_repeats = 3            # identical calls in a row that count as going in circles
 nudge_after_idle = 12        # calls without changing a file before the model is nudged to decide
 converge_refire = 6          # calls between convergence re-pushes once converge_after is reached
+budget_notes = true          # tell the model how much of its budget is left, at 50% and 80% (absent = off)
 
 # Known limit, stated rather than implied: this block declares TEN of the
 # loop's numbers. The A-B-A-B alternation window (8 calls, 2 distinct

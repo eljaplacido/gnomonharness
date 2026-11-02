@@ -1955,6 +1955,13 @@ export interface TurnDeps {
    * terminal passes none and keeps rendering from `say`.
    */
   events?: TurnEvents;
+  /**
+   * A time budget the run declared (`gnomon task --deadline`), used only to
+   * tell the model how much of it is left when `[turn] budget_notes` is on.
+   * Informational: nothing stops at it. The step wall and any external clock
+   * still apply exactly as before.
+   */
+  deadline?: { total_ms: number; started_at: number };
 }
 
 /** A tool call as `TurnEvents` reports it. */
@@ -2620,6 +2627,62 @@ export interface TurnCounters {
    * failed 9 of 31 calls" from "bash succeeded 31/31 and the answer was still
    * wrong". */
   per_tool: Record<string, { calls: number; refusals: number; apparatus: number }>;
+  /**
+   * Budget notes the model was given (`[turn] budget_notes`): at which step,
+   * for which budget, at which level. Absent when none fired. Step notes are
+   * reproducible from the step count; time notes depend on the clock, so
+   * `runTask` moves those to `volatile.time_notes` on the task record.
+   */
+  budget_notes?: Array<{ at_step: number; kind: "steps" | "time"; level: 50 | 80 }>;
+}
+
+/**
+ * Which budget level a used fraction has reached: 0 below half, 1 from half,
+ * 2 from four fifths. A batch that jumps past both thresholds at once reaches 2
+ * directly, so the model hears only the later, more urgent note.
+ */
+export function budgetLevel(fraction: number): 0 | 1 | 2 {
+  return fraction >= 0.8 ? 2 : fraction >= 0.5 ? 1 : 0;
+}
+
+/**
+ * The budget note's text. Built only from the step count and the DECLARED
+ * totals, never from the clock, so the same crossing always reads the same:
+ * "about 3 minutes left" is 20% of a declared 15-minute budget, not a reading
+ * of the time. Only WHEN a time note fires depends on the clock, and the
+ * record keeps that (`volatile.time_notes`).
+ */
+export function budgetNoteText(parts: {
+  steps?: { level: 1 | 2; used: number; total: number };
+  time?: { level: 1 | 2; total_ms: number };
+}): string {
+  const said: string[] = [];
+  let urgent = false;
+  if (parts.steps) {
+    const { level, used, total } = parts.steps;
+    if (level === 2) {
+      urgent = true;
+      said.push(`about ${Math.max(0, total - used)} of ${total} tool calls are left`);
+    } else {
+      said.push(`${used} of ${total} tool calls are used`);
+    }
+  }
+  if (parts.time) {
+    const minutes = Math.max(1, Math.round(parts.time.total_ms / 60_000));
+    if (parts.time.level === 2) {
+      urgent = true;
+      const left = Math.max(1, Math.round((parts.time.total_ms * 0.2) / 60_000));
+      said.push(`about ${left} of ${minutes} minutes are left`);
+    } else {
+      said.push(`about half of the ${minutes}-minute time budget is used`);
+    }
+  }
+  const head = `Budget: ${said.join("; ")}.`;
+  return urgent
+    ? `${head} Make sure what the task asks for exists and is saved now, then ` +
+        `finish. Do not start new exploration.`
+    : `${head} Keep going, and make sure what the task asks for will exist on ` +
+        `disk before the budget runs out.`;
 }
 
 /**
@@ -3267,6 +3330,10 @@ export async function runAgenticTurn(
   // remaining budget shrinks rather than being said once and forgotten. Seeded
   // so the first push lands exactly at convergeAt, then every converge_refire.
   let stepsAtLastConverge = convergeAt - loop.converge_refire;
+  // Budget levels already told to the model (0 none, 1 half, 2 four fifths),
+  // per budget, so each note is said once and only ever escalates.
+  let stepBudgetLevel = 0;
+  let timeBudgetLevel = 0;
   // Signatures of the last few calls, to notice a model going in circles.
   const recentCalls: string[] = [];
   // The prose the last step showed, so an identical next one is not repeated.
@@ -4488,6 +4555,38 @@ export async function runAgenticTurn(
       });
       deps.progress.start(`${usedModel} — ${steps} tool call(s), converging`);
     }
+
+    // Budget notes: tell the model how much of its budget is left, at half and
+    // at four fifths, so it can finish on purpose instead of being cut off. Off
+    // unless the surface declares `[turn] budget_notes = true`. A note only
+    // informs; no limit moves.
+    if (loop.budget_notes) {
+      const stepLevel = maxTotal > 0 ? budgetLevel(steps / maxTotal) : 0;
+      const timeLevel = deps.deadline && deps.deadline.total_ms > 0
+        ? budgetLevel((Date.now() - deps.deadline.started_at) / deps.deadline.total_ms)
+        : 0;
+      const stepNew = stepLevel > stepBudgetLevel ? (stepLevel as 1 | 2) : undefined;
+      const timeNew = timeLevel > timeBudgetLevel ? (timeLevel as 1 | 2) : undefined;
+      if (stepNew || timeNew) {
+        const notes = (counters.budget_notes ??= []);
+        if (stepNew) {
+          stepBudgetLevel = stepNew;
+          notes.push({ at_step: steps, kind: "steps", level: stepNew === 2 ? 80 : 50 });
+        }
+        if (timeNew) {
+          timeBudgetLevel = timeNew;
+          notes.push({ at_step: steps, kind: "time", level: timeNew === 2 ? 80 : 50 });
+        }
+        const text = budgetNoteText({
+          ...(stepNew ? { steps: { level: stepNew, used: steps, total: maxTotal } } : {}),
+          ...(timeNew && deps.deadline ? { time: { level: timeNew, total_ms: deps.deadline.total_ms } } : {}),
+        });
+        deps.progress.stop();
+        say(paint(deps.ui, "gray", `  [budget] ${text.split(".")[0].replace(/^Budget: /, "")}`));
+        working.push({ role: "system", content: text });
+        deps.progress.start(`${usedModel} — ${steps} tool call(s) so far`);
+      }
+    }
   }
 }
 
@@ -4788,6 +4887,12 @@ export interface TaskRecord {
    * benchmark record written before this field was under-identified.
    */
   harness: string;
+  /**
+   * The time budget this run declared (`gnomon task --deadline`), in ms. An
+   * input of the run, like `--profile`, so it sits outside `volatile`. Absent
+   * when none was given.
+   */
+  deadline_ms?: number;
   role: string;
   model: string;
   endpoint?: string;
@@ -4842,6 +4947,12 @@ export interface TaskRecord {
     tokens_in?: number;
     tokens_out?: number;
     model_ms?: number;
+    /**
+     * Time-budget notes the model was given: at which step, at which level.
+     * Here and not in `counters`, because when a note fires depends on the
+     * clock. Absent when none fired.
+     */
+    time_notes?: Array<{ at_step: number; level: 50 | 80 }>;
   };
 }
 
@@ -4858,6 +4969,12 @@ export interface RunTaskOptions {
    * decision produced -- clamped or not -- so this only reports it.
    */
   trust?: TrustOutcome;
+  /**
+   * A time budget for this run, in ms (`gnomon task --deadline`). Used only to
+   * tell the model how much of it is left, when `[turn] budget_notes` is on;
+   * nothing stops at it. Recorded on the task record as `deadline_ms`.
+   */
+  deadline_ms?: number;
 }
 
 /**
@@ -5079,6 +5196,12 @@ export async function runTask(
   );
 
   const start = Date.now();
+  // One budget for the whole run, chain or not: every stage is told the same
+  // deadline measured from the same start.
+  const deadline =
+    typeof options.deadline_ms === "number" && options.deadline_ms > 0
+      ? { total_ms: options.deadline_ms, started_at: start }
+      : undefined;
   const stageRecords: NonNullable<TaskRecord["stages"]> = [];
   let turn: TurnResult;
   try {
@@ -5113,6 +5236,7 @@ export async function runTask(
           warn,
           audit: auditForTurn,
           shadow: shadow?.turn(stageInfo, shadowApprover),
+          ...(deadline ? { deadline } : {}),
         });
         shadow?.turnEnd(stageInfo, shadowOutcome(r, stageInfo.t0));
         stageRecords.push({
@@ -5175,6 +5299,7 @@ export async function runTask(
         warn,
         audit: auditForTurn,
         shadow: shadow?.turn(turnInfo, shadowApprover),
+        ...(deadline ? { deadline } : {}),
       });
       shadow?.turnEnd(turnInfo, shadowOutcome(turn, turnInfo.t0));
     }
@@ -5229,9 +5354,13 @@ export async function runTask(
   // Bounded: a slow or dead shadow server costs a scripted run at most this.
   await shadow?.flush();
 
+  const timeNotes = (turn.counters.budget_notes ?? [])
+    .filter((n) => n.kind === "time")
+    .map((n) => ({ at_step: n.at_step, level: n.level }));
   return {
     surface_hash,
     harness: harnessBuild(),
+    ...(deadline ? { deadline_ms: deadline.total_ms } : {}),
     ...(options.trust ? { trust: options.trust } : {}),
     // Non-fatal surface findings, so a scripted consumer can see what the
     // interactive operator would have been shown. Omitted when clean rather
@@ -5259,7 +5388,9 @@ export async function runTask(
     skills: active.map((sk) => sk.id),
     stop_reason: turn.stop_reason,
     ...(turn.stop_detail ? { stop_detail: turn.stop_detail } : {}),
-    counters: turn.counters,
+    // Time notes leave `counters`: when they fire depends on the clock, and
+    // everything outside `volatile` must reproduce.
+    counters: recordCounters(turn.counters),
     // Present only when a chain ran, so a record from a single-role turn is
     // byte-identical to what it was before this existed.
     ...(stageRecords.length > 0 ? { stages: stageRecords } : {}),
@@ -5275,8 +5406,18 @@ export async function runTask(
       ...(turn.usage?.input !== undefined ? { tokens_in: turn.usage.input } : {}),
       ...(turn.usage?.output !== undefined ? { tokens_out: turn.usage.output } : {}),
       ...(turn.usage?.ms !== undefined ? { model_ms: turn.usage.ms } : {}),
+      ...(timeNotes.length > 0 ? { time_notes: timeNotes } : {}),
     },
   };
+}
+
+/** The turn's counters for the task record: step notes kept, time notes moved
+ * to `volatile.time_notes`, the key left off when nothing remains. */
+function recordCounters(c: TurnCounters): TurnCounters {
+  if (!c.budget_notes) return c;
+  const steps = c.budget_notes.filter((n) => n.kind === "steps");
+  const { budget_notes: _all, ...rest } = c;
+  return steps.length > 0 ? { ...rest, budget_notes: steps } : rest;
 }
 
 // ---------------------------------------------------------------------------

@@ -683,7 +683,7 @@ api_key_env = "OPENAI_API_KEY"   # the NAME of the variable, never the key
 |---|---|---|
 | `gnomon launch [--dir P]` | Creates `.gnomon/` if missing, offers model setup if nothing answers, opens the loop | Daily start. The one to remember. |
 | `gnomon prompt [ROLE] [--continue \| --resume ID] [--profile N] [--trust]` | The interactive loop (alias `run`). A surface looser than the defaults that this machine has not trusted is shown and asked about first. | Resume a session; start in a role |
-| `gnomon task "TEXT" [--role R] [--yes] [--json] [--profile N] [--trust]` | One task, no terminal. Gated calls are refused unless `--yes`. An untrusted loosening surface runs clamped to the defaults unless `--trust`. | Scripts, CI, cron |
+| `gnomon task "TEXT" [--role R] [--yes] [--json] [--profile N] [--trust] [--deadline 15m]` | One task, no terminal. Gated calls are refused unless `--yes`. An untrusted loosening surface runs clamped to the defaults unless `--trust`. `--deadline` tells the model its time budget when `[turn] budget_notes` is on; nothing stops at it. | Scripts, CI, cron |
 | `gnomon init [--from P] [--force] [--no-verify]` | Writes a surface. `--from` copies another project's `.gnomon/`. | New project; team template |
 | `gnomon migrate [--check]` | Brings a surface up to current scaffold defaults. `--check` writes nothing and exits 1 if anything is pending. | After `gnomon update` |
 | `gnomon endpoint [list \| test NAME \| add …]` | Lists endpoints and keys and cross-checks model ids; runs one token; declares an endpoint end to end | Model setup, diagnosis |
@@ -777,6 +777,12 @@ esac
   tokens) differs run to run. Warnings go to stderr, so stdout stays clean.
 - Switch on the **bucket** (0, 2, 10); that part of the
   [exit contract](CONTRACTS.md) is stable.
+- **Running under an outside clock** (a CI job timeout, a benchmark cap)? Pass it
+  as `--deadline`, a little under the real limit: `gnomon task "…" --yes
+  --deadline 14m`. With `[turn] budget_notes = true` (a fresh `gnomon init`
+  writes it), the model is told at half and at four fifths of its steps and of
+  that time, and at four fifths it is asked to make sure the deliverable exists,
+  then finish. Nothing stops at the deadline; the outside clock still does.
 
 ### 7.3 Governing Claude Code, opencode and other harnesses
 
