@@ -40,6 +40,15 @@
     not an unreachable endpoint.
   - Tests install a global dispatcher with a 400 ms limit and show a model call
     ignoring it; they fail on the previous code.
+- **llama.cpp's context overflow is recognised, so the turn trims and goes on.**
+  llama-server reports an oversized prompt as `request (107910 tokens) exceeds
+  the available context size (98304 tokens)`, type `exceed_context_size_error`.
+  gnomon read that as 10 (a bad request) and ended the turn as
+  apparatus_failure, never reaching the trim-and-retry that 13 (context
+  exhausted) already has (R1, 2026-11-02, a local coordinator 18 steps in).
+  - The overflow latch now allows another trim once the turn has made progress
+    since the last one, so a long turn that outgrows the window twice is
+    trimmed twice. An overflow straight after a trim still ends the turn.
 
 - **Windows: a timed-out bash command has exited before the tool reports the
   timeout.** `killTree` fired `taskkill /T /F` and returned at once, so the

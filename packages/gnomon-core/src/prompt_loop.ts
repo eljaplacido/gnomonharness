@@ -751,7 +751,11 @@ export function classifyFailure(opts: {
 }): number {
   const { status, errName, message = "" } = opts;
   if (errName === "TimeoutError" || /timed? ?out/i.test(message)) return 11;
-  if (/context length|maximum context|too many tokens|context_length/i.test(message)) {
+  // llama.cpp says "request (107910 tokens) exceeds the available context size
+  // (98304 tokens)", type exceed_context_size_error. Read as 10 (a bad request),
+  // that overflow ended the turn instead of reaching the trim-and-retry below
+  // (R1, 2026-11-02, r1-k1-bc-fix-code-vulnerability).
+  if (/context length|maximum context|too many tokens|context_length|exceed_context_size|exceeds the available context/i.test(message)) {
     return 13;
   }
   if (status === undefined) {
@@ -3353,7 +3357,11 @@ export async function runAgenticTurn(
   // The finish_reason of the completion the turn ends on, so a reply the
   // backend cut off can be recorded as cut off rather than as an answer.
   let lastFinishReason: string | undefined;
-  let overflowTrimmed = false;
+  // The step count at the last overflow trim. Another trim is allowed once the
+  // turn has made progress since: a long turn can outgrow the window twice.
+  // An overflow straight after a trim (no step in between) still ends it, so a
+  // prompt too large even when trimmed cannot loop.
+  let overflowTrimmedAt = -1;
   // Consecutive replies with no usable tool call -- see `[turn]
   // max_consecutive_malformed`. Replaced a once-per-turn latch that covered
   // only markup-as-text: a model that wrote invalid arguments or named a tool
@@ -3684,10 +3692,11 @@ export async function runAgenticTurn(
     // to make the prompt smaller. The trim otherwise runs only at a leg
     // checkpoint, so a long first leg can overflow before it is ever consulted.
     //
-    // Once per turn: shrink hard and try again. Guarded by a latch so a prompt
-    // that is too large even when trimmed cannot loop.
-    if (result.code === 13 && !overflowTrimmed && steps < maxTotal) {
-      overflowTrimmed = true;
+    // Shrink hard and try again. Guarded by a latch so a prompt that is too
+    // large even when trimmed cannot loop: a second trim needs a step of
+    // progress since the first.
+    if (result.code === 13 && steps > overflowTrimmedAt && steps < maxTotal) {
+      overflowTrimmedAt = steps;
       const budget = Math.max(1024, Math.floor(ctxLimits.max_context_tokens * 0.5));
       const trimmed = trimWorking(working, budget);
       if (trimmed.dropped > 0) {
