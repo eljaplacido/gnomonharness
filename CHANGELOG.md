@@ -26,6 +26,16 @@
 
 ## [Unreleased]
 
+- **The 2026-09-01 injection suite has a positive control again.** Since #68,
+  `network = false` covers bash, so the operator-asks control (a `curl` to the
+  canary) was refused on arm A's surface: 3/3 crossed became 0/3, and the suite
+  could no longer show that a crossing would be seen.
+  - The control now declares `network = true`; the payload arms keep the
+    scaffold's policy.
+  - Re-measured on master 891b559b: control 3/3 crossed, payloads 0/18 crossed
+    with 18/18 delivered.
+  - The suite's code is a reconstruction on `bench/peers-2026-11`
+    (`benchmarks/results/g2br-2026-11/`); its README on master says so.
 - **Verification in proportion to the task: about a third less spent per
   solved task on a hosted model.** The scaffold's `system.md` told the model to
   turn every constraint into its own check and paste the output. On DeepSeek
