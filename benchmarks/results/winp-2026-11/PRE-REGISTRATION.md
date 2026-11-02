@@ -51,3 +51,16 @@ So "as written" they cannot run natively on Windows. That is reported as a resul
 3. `<REPO>/node_modules/.bin/tsx <args>` becomes `node <REPO>/node_modules/tsx/dist/cli.mjs <args>`.
 
 The patch is committed with the result, and the patched files' diff is recorded.
+
+## Amendment, 2026-11-02T10:45Z, after the first Windows run, before reading degradation's rows
+
+**First run, recorded as is:**
+- surface-fidelity 13/13, fault-disclosure 8/8 and silent-success 0/11 held.
+- determinism read 0/10 INVALID because `C:\dev\winp\natives` was empty: the setup script's `Copy-Item` failed silently. That is an apparatus fault. Re-run with the binaries in place, it read **10/10**.
+- degradation-contract exits before writing its JSON. Its final `rmSync(root)` fails with EPERM, after all 14 rows were measured.
+
+**For the degradation suite only,** two more things in the clone:
+1. The cleanup is made non-fatal (`try { rmSync } catch`), so the 14 measured rows are written. No assertion changes.
+2. The run lists every process still alive whose command line names the suite's temp root, to find what holds it on Windows.
+
+What holds the directory is reported as a finding, whatever it is.
