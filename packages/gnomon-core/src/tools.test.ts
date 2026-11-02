@@ -337,20 +337,15 @@ describe("bash", () => {
 
   it("a timed-out command has exited before the tool returns, so its folder can be removed", async () => {
     // WINP (2026-11-02, Windows 11): taskkill was fired and not waited for, so
-    // the tool reported the timeout while the killed tree still held its
-    // working directory open; removing it failed with EPERM for ~0.4-0.5 s
-    // (3/3). A caller cleaning up after a timeout must not race the kill.
-    const work = join(root, "busy");
-    mkdirSync(work, { recursive: true });
-    const out = await executeTool(
-      "bash",
-      { command: "cd busy && sleep 30" },
-      ctx({ timeoutMs: 400 }),
-      offered
-    );
+    // the tool reported the timeout while the killed tree still held the
+    // command's working directory -- the root the shell was started in --
+    // and removing it failed with EPERM for ~0.4-0.5 s (3/3). A caller
+    // cleaning up after a timeout must not race the kill.
+    const own = mkdtempSync(join(tmpdir(), "gnomon-killwait-"));
+    const out = await executeTool("bash", { command: "sleep 7" }, ctx({ root: own, timeoutMs: 300 }), offered);
     expect(out.code).toBe(TOOL_FAILED);
     expect(out.content).toContain("timed out");
-    expect(() => rmSync(work, { recursive: true })).not.toThrow();
+    expect(() => rmSync(own, { recursive: true })).not.toThrow();
   });
 
   it("a timed-out command hands back what it printed before the kill", async () => {
