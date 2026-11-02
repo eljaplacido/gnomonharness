@@ -14,6 +14,9 @@ import {
   bashNetworkEgress,
   describeInvocation,
   programName,
+  shellWriteTargets,
+  codeWriteTargets,
+  isDryRunSegment,
 } from "./shell.js";
 
 const words = (cmd: string) => parseShell(cmd).commands.map((c) => c.words);
@@ -304,6 +307,45 @@ describe("bashNetworkEgress — what network = false refuses in bash", () => {
     // [sandbox] exec = "docker" is what removes the network from them.
     for (const cmd of ["npm install", "pip install requests", "git fetch origin", "bash ./deploy.sh"]) {
       expect(bashNetworkEgress(cmd), cmd).toBeNull();
+    }
+  });
+});
+
+describe("shellWriteTargets: the files a command names as its output", () => {
+  const targets = (cmd: string) => shellWriteTargets(cmd).targets.map((t) => `${t.cwd ?? "?"}|${t.path}`);
+
+  it("reads redirections, writers' operands, in-place edits and inline code", () => {
+    expect(targets("echo hi > out.txt 2>&1; echo x >/dev/null")).toEqual(["|out.txt"]);
+    expect(targets("rm var/local.db && rmdir var")).toEqual(["|var/local.db", "|var"]);
+    expect(targets("mv a.txt docs/b.txt")).toEqual(["|docs/b.txt", "|a.txt"]);
+    expect(targets("install -m 644 x -t dist")).toEqual(["|dist"]);
+    expect(targets("sed -i 's/a/b/' pyproject.toml")).toEqual(["|pyproject.toml"]);
+    expect(targets("sed -n 's/a/b/p' x")).toEqual([]);
+    expect(targets("perl -pi -e 's/a/b/' cfg.ini")).toEqual(["|cfg.ini"]);
+    expect(targets("dd if=/dev/zero of=disk.img bs=1M")).toEqual(["|disk.img"]);
+    expect(targets("curl -o page.html http://x")).toEqual(["|page.html"]);
+    expect(targets("cd docs && echo x > notes.md")).toEqual(["docs|notes.md"]);
+    expect(targets("cd $DIR && echo x > notes.md")).toEqual(["?|notes.md"]);
+  });
+
+  it("reads literal paths inline code writes, and only those", () => {
+    expect(codeWriteTargets("from pathlib import Path\nPath('CHANGELOG.md').write_text('x')")).toEqual(["CHANGELOG.md"]);
+    expect(codeWriteTargets("open('notes.txt', 'w').write('x')")).toEqual(["notes.txt"]);
+    expect(codeWriteTargets("open('notes.txt').read()")).toEqual([]);
+    expect(codeWriteTargets("require('fs').writeFileSync('out.json', '{}')")).toEqual(["out.json"]);
+    expect(codeWriteTargets("import shutil; shutil.move('a', 'b')")).toEqual(["b", "a"]);
+    expect(codeWriteTargets("open(name, 'w')")).toEqual([]);
+    expect(targets("python3 -c 'print(1)'")).toEqual([]);
+  });
+});
+
+describe("isDryRunSegment", () => {
+  it("is true only for git clean with -n or --dry-run, and not interactive", () => {
+    for (const c of ["git clean -ndx", "git clean -n -f", "git clean --dry-run", "git -C . clean -nd"]) {
+      expect(isDryRunSegment(c), c).toBe(true);
+    }
+    for (const c of ["git clean -fdx", "git clean -ni", "git clean -fdx && echo", "rm -rf x", "git status"]) {
+      expect(isDryRunSegment(c), c).toBe(false);
     }
   });
 });

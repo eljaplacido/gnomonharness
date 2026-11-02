@@ -5,11 +5,12 @@ import {
   loadConfig,
   modelEditTarget,
   roleWriteTarget,
+  reloadConfig,
   routeRole,
   type Roles,
   type Profiles,
 } from "./config.js";
-import { setRoleModel } from "./prompt_loop.js";
+import { setRoleModel, pointRoleAt } from "./prompt_loop.js";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -403,5 +404,129 @@ describe("a roles.toml edit the active profile overrides is reported", () => {
       "p"
     );
     expect(out.shadowed).toBeUndefined();
+  });
+});
+
+// The writers above fixed the route and left the surface disagreeing with
+// itself. The scaffold restates each role's model in roles.toml and in
+// local_first.toml; a pick changed only the profile, and every start after it
+// printed one "is ignored" warning per changed field -- four to eight after the
+// first-run picker -- whose fix named the command that had caused them. Found
+// 2026-11-01 while verifying the guide (#69).
+describe("a model pick leaves the two files agreeing", () => {
+  const surface = (
+    opts: { defaults?: string; rolesPlan?: string; profiles?: Record<string, string> } = {}
+  ): string => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-pick-"));
+    mkdirSync(join(root, ".gnomon", "profiles"), { recursive: true });
+    writeFileSync(join(root, ".gnomon", "config.toml"),
+      `[defaults]\n${opts.defaults ?? 'role_profile = "p"'}\n\n` +
+      `[endpoints.local]\nurl = "http://127.0.0.1:11434/api/chat"\nkind = "ollama"\n\n` +
+      `[endpoints.cloud]\nurl = "https://example.invalid/v1/chat/completions"\nkind = "openai"\n`);
+    writeFileSync(join(root, ".gnomon", "roles.toml"),
+      `# why plan is scoped this way\n[roles.plan]\n${opts.rolesPlan ?? 'model = "qwen"\nendpoint = "local"\n'}` +
+      `tools = ["read"]\n\n[roles.smol]\nmodel = "small"\nendpoint = "local"\ntools = ["read"]\n`);
+    writeFileSync(join(root, ".gnomon", "system.md"), "x\n");
+    const profiles = opts.profiles ?? { p: `name = "p"\n\n[roles.plan]\nmodel = "qwen"\nendpoint = "local"\n` };
+    for (const [name, body] of Object.entries(profiles)) {
+      writeFileSync(join(root, ".gnomon", "profiles", `${name}.toml`), body);
+    }
+    return root;
+  };
+  const pick = (root: string, role: string, model: string, endpoint: string, profile?: string) => {
+    const files = new Map<string, { label: string; text: string }>();
+    const out = pointRoleAt(loadConfig(root, profile), role, model, endpoint, files);
+    for (const [path, file] of files) writeFileSync(path, file.text);
+    return out;
+  };
+  const shadowFindings = (root: string, profile?: string) =>
+    auditSurface(loadConfig(root, profile)).filter((f) => f.where.startsWith(".gnomon/roles.toml [roles."));
+
+  it("routes to the pick, and the next start has nothing to warn about", () => {
+    const root = surface();
+    const out = pick(root, "plan", "glm", "cloud");
+    expect(out.target.label).toBe(".gnomon/profiles/p.toml");
+    expect(out.mirrored?.label).toBe(".gnomon/roles.toml");
+
+    const c = loadConfig(root);
+    expect(routeRole(c, "plan").target).toMatchObject({ model: "glm", endpoint: "cloud" });
+    expect(c.profile?.shadowed).toBeUndefined();
+    expect(shadowFindings(root)).toEqual([]);
+    // roles.toml now says what runs, and kept the prose and the other fields.
+    const roles = readFileSync(join(root, ".gnomon", "roles.toml"), "utf-8");
+    expect(roles).toMatch(/\[roles\.plan\]\nmodel = "glm"\nendpoint = "cloud"\ntools = \["read"\]/);
+    expect(roles).toContain("# why plan is scoped this way");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("adds no routing line to a roles.toml that keeps routing in the profile", () => {
+    const root = surface({ rolesPlan: "" });
+    const before = readFileSync(join(root, ".gnomon", "roles.toml"), "utf-8");
+    const out = pick(root, "plan", "glm", "cloud");
+    expect(out.mirrored).toBeUndefined();
+    expect(readFileSync(join(root, ".gnomon", "roles.toml"), "utf-8")).toBe(before);
+    expect(routeRole(loadConfig(root), "plan").target.model).toBe("glm");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("updates only the field roles.toml already sets", () => {
+    const root = surface({ rolesPlan: 'model = "qwen"\n' });
+    pick(root, "plan", "glm", "cloud");
+    const roles = readFileSync(join(root, ".gnomon", "roles.toml"), "utf-8");
+    expect(roles).toMatch(/\[roles\.plan\]\nmodel = "glm"\ntools/);
+    expect(shadowFindings(root)).toEqual([]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  // A --profile is chosen for one run. Copying its pick into roles.toml would
+  // move the base the surface's own profile inherits from, and bring the
+  // warning back on the next ordinary start.
+  it("leaves roles.toml alone under a --profile override", () => {
+    const root = surface({
+      profiles: {
+        p: `name = "p"\n\n[roles.plan]\nmodel = "qwen"\nendpoint = "local"\n`,
+        q: `name = "q"\n\n[roles.plan]\nmodel = "big"\nendpoint = "cloud"\n`,
+      },
+    });
+    const before = readFileSync(join(root, ".gnomon", "roles.toml"), "utf-8");
+    const out = pick(root, "plan", "glm", "cloud", "q");
+    expect(out.target.label).toBe(".gnomon/profiles/q.toml");
+    expect(out.mirrored).toBeUndefined();
+    expect(readFileSync(join(root, ".gnomon", "roles.toml"), "utf-8")).toBe(before);
+    expect(routeRole(loadConfig(root, "q"), "plan").target.model).toBe("glm");
+    // The ordinary start is exactly as it was: p and roles.toml still agree.
+    expect(shadowFindings(root)).toEqual([]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("writes roles.toml alone when no profile governs the role", () => {
+    const root = surface({ defaults: "" });
+    const out = pick(root, "plan", "glm", "cloud");
+    expect(out.target.label).toBe(".gnomon/roles.toml");
+    expect(out.mirrored).toBeUndefined();
+    expect(routeRole(loadConfig(root), "plan").target.model).toBe("glm");
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
+// Both mid-session reloads dropped --profile, so a session started under one
+// came back on the surface's role_profile with nothing on screen to say so.
+describe("reloadConfig keeps the --profile the session started with", () => {
+  it("reloads under the override, and under the surface's own when there was none", () => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-reload-"));
+    mkdirSync(join(root, ".gnomon", "profiles"), { recursive: true });
+    writeFileSync(join(root, ".gnomon", "config.toml"), `[defaults]\nrole_profile = "p"\n`);
+    writeFileSync(join(root, ".gnomon", "roles.toml"), `[roles.plan]\nmodel = "base"\n`);
+    writeFileSync(join(root, ".gnomon", "profiles", "p.toml"), `[roles.plan]\nmodel = "from-p"\n`);
+    writeFileSync(join(root, ".gnomon", "profiles", "q.toml"), `[roles.plan]\nmodel = "from-q"\n`);
+
+    const overridden = reloadConfig(loadConfig(root, "q"));
+    expect(overridden.profile).toMatchObject({ name: "q", overridden: true });
+    expect(routeRole(overridden, "plan").target.model).toBe("from-q");
+
+    const plain = reloadConfig(loadConfig(root));
+    expect(plain.profile).toMatchObject({ name: "p", overridden: false });
+    expect(routeRole(plain, "plan").target.model).toBe("from-p");
+    rmSync(root, { recursive: true, force: true });
   });
 });

@@ -14,6 +14,7 @@
  */
 
 import {
+  runAcpServer,
   harnessBuild,
   recomputeManifest,
   declaredKeyVars,
@@ -28,6 +29,8 @@ import {
   acceptSkill,
   rejectSkill,
   runTask,
+  unstartedTaskRecord,
+  type TaskRecord,
   resolveAudit,
   loadLoops,
   runTick,
@@ -54,13 +57,24 @@ import {
   describeEndpoints,
   printEndpoints,
   setEndpointBlock,
-  setRoleModel,
-  roleWriteTarget,
+  pointRoleAt,
   modelEditTarget,
   listRoles,
   countNonConversations,
   resolveUi,
   isLocalEndpoint,
+  AuditTrail,
+  settleTrust,
+  settleTrustHeadless,
+  evaluateTrust,
+  grantTrust,
+  revokeTrust,
+  loadTrust,
+  trustPath,
+  describeGrants,
+  type GnomonConfig,
+  type TrustOutcome,
+  type SettleOptions,
 } from "gnomon-core";
 import {
   manifest as surfaceManifest,
@@ -114,6 +128,8 @@ interface CliArgs {
   role?: string;
   yes?: boolean;
   json?: boolean;
+  /** Run an untrusted surface as declared, this invocation only (trust.ts). */
+  trust?: boolean;
   resume?: string | true;
   positional: string[];
   /**
@@ -173,6 +189,11 @@ export function parseArgs(args: string[]): CliArgs {
       result.yes = true;
     } else if (arg === "--json") {
       result.json = true;
+    } else if (arg === "--trust") {
+      // A bare flag. Through the generic branch below it would swallow the
+      // next argument as its value -- `task --trust "fix it"` would lose the
+      // task text into flags.trust.
+      result.trust = true;
     } else if (arg === "-p") {
       // Already handled above
     } else if (arg.startsWith("-")) {
@@ -1100,24 +1121,20 @@ async function endpointAdd(
     // base role, so for a role the active profile declares -- which, in a
     // scaffolded project, is every role that has a model -- editing roles.toml
     // changes nothing a run reads, and this command used to report a routing
-    // change that never happened.
+    // change that never happened. pointRoleAt then updates roles.toml to
+    // match, so the next start has no disagreement between the files to warn
+    // about.
     const edits = new Map<string, { label: string; text: string }>();
     for (const role of chosen) {
       if (!roleNames.includes(role)) {
         console.error(`  ⚠ no [roles.${role}] — skipped.`);
         continue;
       }
-      const target = roleWriteTarget(config, role);
-      let file = edits.get(target.path);
-      if (!file) {
-        file = { label: target.label, text: readFileSync(target.path, "utf-8") };
-        edits.set(target.path, file);
-      }
       // The cheap tier gets the cheap model init would have chosen, when
       // there is one. Pointing `smol` at the same 35B as everything else
       // works, and makes every summary cost a full reasoning turn.
       const tag = opts.quick && role === "smol" && smallModel ? smallModel : model;
-      file.text = setRoleModel(file.text, role, tag, name);
+      const { target } = pointRoleAt(config, role, tag, name, edits);
       console.log(
         `  ✓ ${role} → ${tag} @${name}` +
           (target.profile ? ` (via profile "${target.profile}")` : "")
@@ -1403,17 +1420,38 @@ async function cmdAudit(args: CliArgs): Promise<void> {
 
 async function cmdTask(args: CliArgs): Promise<void> {
   const text = [args.subcommand, ...args.positional].filter(Boolean).join(" ").trim();
+  // Every way out of this command exits 0, 2 or 10, the bucket, as
+  // docs/CONTRACTS.md §1 says it does. A missing task and a missing surface
+  // both used to exit 1, which is `failed` in the `result` bucket: a caller
+  // switching on the bucket read a task that never started as one that ran.
+  // Neither started, so both are launch failures (10).
   if (!text) {
     console.error('Usage: gnomon task "<what to do>" [--role <name>] [--yes] [--json]');
-    process.exit(1);
+    process.exit(10);
   }
 
-  const config = loadConfig(args.dir, args.flags['profile']);
-  const record = await runTask(config, text, {
-    role: args.role,
-    yes: args.yes,
-    verbose: !args.json,
-  });
+  // A task has nobody to ask. An untrusted surface that grants more than the
+  // defaults runs clamped to them, with one line on stderr -- never blocked,
+  // never silently widened.
+  let record: TaskRecord;
+  try {
+    const settled = settleTrustHeadless(
+      loadConfig(args.dir, args.flags['profile']),
+      trustOptions(args)
+    );
+    record = await runTask(settled.config, text, {
+      role: args.role,
+      yes: args.yes,
+      verbose: !args.json,
+      trust: settled.outcome,
+    });
+  } catch (err) {
+    // No .gnomon/ above the cwd, a --dir without one, a --role the surface
+    // does not define: the throw used to reach main's catch and exit 1. It
+    // gets the same record shape as a fatal surface, so --json still parses.
+    const why = err instanceof Error ? err.message : String(err);
+    record = unstartedTaskRecord(text, args.role, `gnomon task could not start: ${why}`);
+  }
 
   // Non-fatal surface problems go to stderr in BOTH modes. They are the ones
   // that change what ran without stopping it -- a role_profile whose file is
@@ -1709,11 +1747,152 @@ async function offerModelSetup(args: CliArgs, target: string): Promise<void> {
   }
 }
 
+/**
+ * `gnomon acp`: serve the Agent Client Protocol on stdio, for an editor.
+ *
+ * stdout IS the protocol channel from here on, so every other writer is moved
+ * off it first. One stray `console.log` -- a tool, an MCP server's report, a
+ * progress line -- would be a line the editor cannot parse, and the session
+ * would die on it. The protocol keeps the only handle on the real stdout.
+ */
+async function cmdAcp(args: CliArgs): Promise<void> {
+  const protocolOut = process.stdout.write.bind(process.stdout);
+  const toStderr = process.stderr.write.bind(process.stderr);
+  process.stdout.write = toStderr as typeof process.stdout.write;
+  console.log = console.error;
+  console.info = console.error;
+  console.warn = console.error;
+  console.debug = console.error;
+
+  await runAcpServer({
+    input: process.stdin,
+    write: (line) => {
+      protocolOut(line);
+    },
+    profile: args.flags["profile"],
+    role: args.role,
+    // An editor cannot answer the trust prompt: settle it as `task` does.
+    reconfigure: (fresh: GnomonConfig) => settleTrustHeadless(fresh, trustOptions(args)).config,
+  });
+  process.exit(0);
+}
+
 async function cmdPrompt(args: CliArgs): Promise<void> {
-  const config = loadConfig(args.dir, args.flags['profile']);
+  const declared = loadConfig(args.dir, args.flags['profile']);
+  // On a terminal an untrusted surface that grants more than the defaults is
+  // shown and asked about; off one it runs clamped. A scaffolded surface
+  // grants nothing extra and never gets here.
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY && !args.json);
+  const settled = await settleTrust(declared, {
+    ...trustOptions(args),
+    interactive,
+    ask: (q) => ask(q, ""),
+  });
+  if (settled.quit) {
+    // A refusal by the trust gate: 3, refused_by_gate (docs/CONTRACTS.md §1).
+    console.log("  Not started. Nothing ran.");
+    process.exit(3);
+  }
   // A resumed session keeps its own role unless one is named here.
   const role = args.resume ? args.subcommand || undefined : args.subcommand || "implement";
-  await runPromptLoop(config, role, { resume: args.resume });
+  await runPromptLoop(settled.config, role, {
+    resume: args.resume,
+    trust: settled.outcome,
+    // A surface reloaded mid-session goes through the same gate, headless:
+    // trusted or covered runs as written, anything looser is clamped and said.
+    reconfigure: (fresh: GnomonConfig) => settleTrustHeadless(fresh, trustOptions(args)).config,
+  });
+}
+
+/** What the invocation says about trust: --trust, and GNOMON_TRUST=<surface hash>. */
+function trustOptions(args: CliArgs): Omit<SettleOptions, "interactive"> {
+  return { flag: Boolean(args.trust), env: process.env.GNOMON_TRUST };
+}
+
+/**
+ * `gnomon trust` -- list, grant for the current surface, revoke.
+ *
+ * Trust is this machine's user accepting what a surface grants beyond the
+ * scaffold, in one project. It lives beside the credential store, never in
+ * the repository and never in the hash (trust.ts says why that is not a Rule 1
+ * exception). Grants and revokes are written to the audit trail when the
+ * surface keeps one.
+ */
+async function cmdTrust(args: CliArgs): Promise<void> {
+  const config = loadConfig(args.dir, args.flags['profile']);
+  const sub = subcommandOr(args, "list");
+  const ev = evaluateTrust(config, { env: process.env.GNOMON_TRUST });
+  const record = (decision: TrustOutcome["decision"]): void => {
+    const id = `trust-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
+    const trail = new AuditTrail(resolveAudit(config), id);
+    trail.write("session_start", {
+      surface_hash: ev.surface_hash,
+      harness: harnessBuild(),
+      cwd: process.cwd(),
+      mode: "trust",
+    });
+    const outcome: TrustOutcome = {
+      decision,
+      by: "command:trust",
+      surface_hash: ev.surface_hash,
+      grants: ev.grants.map((g) => g.key).sort(),
+    };
+    trail.write("trust", { ...outcome, root: ev.root });
+    trail.write("session_end", {});
+  };
+
+  if (sub === "grant") {
+    if (ev.grants.length === 0) {
+      console.log(
+        `Nothing to trust: this surface (${ev.surface_hash.slice(0, 12)}) grants nothing beyond gnomon's defaults.`
+      );
+      return;
+    }
+    grantTrust(config, "command:trust");
+    record("granted");
+    console.log(`Trusted ${ev.root} at surface ${ev.surface_hash.slice(0, 12)}:`);
+    for (const line of describeGrants(ev.grants, [])) console.log(line);
+    console.log(`Recorded in ${trustPath()} — not in the repository.`);
+    return;
+  }
+
+  if (sub === "revoke") {
+    const n = revokeTrust(config);
+    if (n > 0) record("revoked");
+    console.log(
+      n > 0
+        ? `Revoked ${n} trusted surface${n === 1 ? "" : "s"} for ${ev.root}. The next launch asks again.`
+        : `Nothing was trusted for ${ev.root}.`
+    );
+    return;
+  }
+
+  if (sub !== "list" && sub !== "show") {
+    console.error(`Unknown trust subcommand: ${sub}. Use: list | grant | revoke`);
+    process.exit(1);
+  }
+
+  console.log(`This project: ${ev.root}`);
+  console.log(`  surface ${ev.surface_hash.slice(0, 12)}`);
+  if (ev.status === "default") {
+    console.log("  grants nothing beyond gnomon's defaults — never asks.");
+  } else {
+    console.log(
+      ev.status === "trusted"
+        ? `  trusted (${ev.via === "store:covered" ? "no looser than a surface you trusted here" : ev.via})`
+        : "  NOT trusted — a terminal session asks; a headless run is clamped to the defaults"
+    );
+    for (const line of describeGrants(ev.grants, ev.uncovered)) console.log(line);
+  }
+  const entries = loadTrust().entries;
+  console.log("");
+  console.log(`Trusted on this machine (${trustPath()}): ${entries.length === 0 ? "none" : ""}`);
+  for (const e of entries) {
+    console.log(
+      `  ${e.root}  ${e.surface_hash.slice(0, 12)}  ${e.at.slice(0, 10)}  ` +
+        `${e.grants.length} grant${e.grants.length === 1 ? "" : "s"}  by ${e.by}`
+    );
+  }
 }
 
 async function cmdSessions(args: CliArgs): Promise<void> {
@@ -1784,15 +1963,27 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "skill", aliases: ["skills"] },
   { name: "task" },
   { name: "prompt", aliases: ["run"] },
+  { name: "acp" },
   { name: "loop", aliases: ["loops"] },
   { name: "tui" },
   { name: "migrate" },
   { name: "update", aliases: ["upgrade"] },
   { name: "uninstall" },
   { name: "check" },
+  { name: "trust" },
+  { name: "guard" },
 ];
 
 function showHelp(): void {
+  // The Environment list at the end names only variables something reads.
+  // GNOMON_DIR was listed there from the first commit as "Override .gnomon/
+  // directory path", and nothing has ever read it. It is only exported, by
+  // `gnomon session`, to the commands that session runs. An environment
+  // variable that chose which surface governs a run would be the machine-scoped
+  // configuration Rule 1 rules out, and --dir already does the same thing
+  // explicitly, on the command line. So the line went, rather than gaining an
+  // implementation.
+  //
   // Derived, never a literal. This line read `gnomon v0.1.0` while every
   // package.json, Cargo.toml and the tag said 0.1.1 — so the one version string
   // a human actually reads was the one that could not be trusted, and
@@ -1826,7 +2017,8 @@ Commands:
     Show the enumerations contract (edit_format, sandbox, approval, role_profile)
 
   session [--dir <path>] <command> [command ...]
-    Run commands as a session, recording outcomes
+    Run commands as a session, recording outcomes. Each command runs with
+    GNOMON_DIR set to the .gnomon/ directory the session used.
 
   apply <patchset.json> [--dir <path>]
     Apply a patchset to a directory
@@ -1859,11 +2051,22 @@ Commands:
     .gnomon/skills/proposed/; accepting moves it into .gnomon/skills/,
     which changes the surface hash and applies from the next session.
 
-  task "<what to do>" [--role <name>] [--yes] [--json] [--dir <path>]
+  task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--dir <path>]
     Run one task without a terminal and print the result. --json emits a
     record whose only run-to-run differences are under "volatile".
     Gated tool calls are REFUSED unless --yes: a non-interactive run has
     nobody to ask. Exit code: 0 result, 2 refusal, 10 apparatus_failure.
+    A surface granting more than the defaults that this machine has not
+    trusted runs CLAMPED to the defaults, with one line on stderr; --trust
+    (or GNOMON_TRUST=<surface hash>) runs it as declared.
+
+  trust [list|grant|revoke] [--dir <path>]
+    Whether this machine's user trusts what this project's .gnomon/ grants
+    beyond gnomon's defaults (approval never, network, a wider shell, an MCP
+    server, ...). list shows the grants against the defaults; grant trusts
+    the current surface; revoke forgets every trust for this project. Kept
+    beside the key store, never in the repository or the surface hash. A
+    scaffolded surface grants nothing extra and is never asked about.
 
   sessions [--dir <path>]
     Saved sessions, newest last.
@@ -1892,12 +2095,33 @@ Commands:
     --install-hook claude-code prints the SessionStart + Stop hooks that
     run this on every Claude Code session (it edits nothing).
 
-  prompt [--continue | --resume <id>]
+  guard --tool <bash|write|edit|read|webfetch> --input <json> [--role <r> | --agent <a>]
+  guard --from claude-code|opencode|cursor|generic  (the call on stdin)
+    Decide one tool call another harness is about to make, before it runs,
+    by this surface's rules as committed (the session's recorded base, else
+    HEAD): allow, deny or ask, with the rule and the reason, as
+    gnomon.guard/1 JSON. The same prechecks gnomon's own tools run decide it.
+    Exit: 0 allow, 2 deny, 3 ask, 10 no decision (answered as ask). With
+    --from claude-code|cursor it answers in that harness's hook format.
+    Recorded in the audit trail when [audit] is on.
+  guard install claude-code|opencode|cursor [--write]
+    Print the hook (Claude Code PreToolUse, an opencode 2.2 plugin, Cursor
+    hooks.json), or with --write add it to this project's own config.
+
+  prompt [--continue | --resume <id>] [--trust]
     Interactive agent loop. --continue resumes the most recent session,
     --resume <id> a specific one. Conversations are saved after every turn.
+    An untrusted surface granting more than the defaults is shown and asked
+    about first: [y] trust it, [N] run with the defaults, [q] quit (exit 3).
 
   run
     Alias for \`prompt\`
+
+  acp [--role <name>] [--profile <name>]
+    Serve the Agent Client Protocol on stdin/stdout, for an editor (Zed,
+    JetBrains, any ACP client). The same surface, roles, approval gate and
+    audit trail as \`prompt\`: approvals become the editor's permission
+    prompts, roles its modes. The editor starts this; you configure it once.
 
   update [--check] [--force] [--notice on|off]
     Show this version, the latest release and its changelog, then update
@@ -1915,7 +2139,7 @@ Flags that apply across commands:
                           roles for this run. It rewrites per-role model and
                           endpoint — i.e. which machine runs inference and who
                           is billed — and is accepted by simulate, endpoint,
-                          audit, task, skill, prompt and sessions. It is
+                          audit, task, skill, prompt, sessions and trust. It is
                           machine-scoped: it does NOT move the surface hash,
                           so two machines can disagree about routing while
                           agreeing about behaviour. A name with no file in
@@ -1931,8 +2155,10 @@ Getting started in a project:
 
 Environment:
   GNOMON_BIN_OVERRIDE     Path to gnomon binary (for testing)
-  GNOMON_DIR              Override .gnomon/ directory path
   GNOMON_NO_UPDATE_CHECK  Set to 1 to never look for a newer release
+  GNOMON_TRUST            A surface hash (or 12+ char prefix): run THAT surface
+                          as declared even though it is untrusted. Any other
+                          surface is still clamped. See \`gnomon trust\`.
 `);
 }
 
@@ -1973,7 +2199,7 @@ async function main(): Promise<void> {
   // them when stdout is not a terminal. Not for commands that run tools: the
   // variable would be inherited by the project's own commands and change what
   // they print, which is not this flag's business. FORCE_COLOR opts back in.
-  const reporting = ["endpoint", "key", "audit", "sessions", "skill", "surface", "init", "migrate", "enumerations"];
+  const reporting = ["endpoint", "key", "audit", "sessions", "skill", "surface", "init", "migrate", "enumerations", "trust"];
   if (reporting.includes(args.command) && !process.stdout.isTTY && !process.env.FORCE_COLOR) {
     process.env.NO_COLOR = "1";
   }
@@ -2055,6 +2281,9 @@ async function main(): Promise<void> {
       maybeNotifyUpdate(args.command, !!args.json);
       await cmdPrompt(args);
       break;
+    case "acp":
+      await cmdAcp(args);
+      break;
     case "loop":
     case "loops":
       await cmdLoop(args);
@@ -2062,8 +2291,18 @@ async function main(): Promise<void> {
     case "tui":
       await cmdTui(args);
       break;
+    case "trust":
+      await cmdTrust(args);
+      break;
     case "check":
       process.exit(await cmdCheck(args));
+    case "guard": {
+      // Its own argv parser and a lean import: see guard_main.ts.
+      const { cmdGuard } = await import("./guard.js");
+      const at = process.argv.indexOf("guard", 2);
+      process.exitCode = await cmdGuard(process.argv.slice(at + 1));
+      return;
+    }
     default:
       console.error(`Unknown command: ${args.command}`);
       showHelp();

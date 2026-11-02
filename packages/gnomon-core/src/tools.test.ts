@@ -2978,3 +2978,142 @@ describe("Windows: finding Git Bash, and CRLF in read/grep", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// G1c (2026-11-01): write_allow in the shell, a dry run, network = false
+// ---------------------------------------------------------------------------
+
+describe("write_allow binds the shell (G1c)", () => {
+  // G1's surface: role implement, write_allow src/** and tests/**, and its
+  // bash_deny patterns for destructive git, recursive rm and network clients.
+  const G1_DENY = [
+    String.raw`\bgit\s+clean\b[^|;&]*\s-[A-Za-z]*[fxX]`,
+    String.raw`\bgit\s+reset\b[^|;&]*--hard\b`,
+    String.raw`\brm\s+(-[A-Za-z]*[rR][A-Za-z]*|--recursive)\b`,
+    String.raw`\b(curl|wget|nc|ncat|netcat|socat|telnet)\b`,
+    String.raw`\b(python3?|node|perl|ruby)\b[^|;&]*\b(urllib|requests|http\.client|httpx|socket|fetch)\b`,
+  ];
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "gnomon-g1c-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  const c = (over: Partial<ToolContext> = {}): ToolContext => ({
+    root: dir,
+    sandbox: "confined",
+    gate: "never",
+    approve: async () => true,
+    timeoutMs: 10_000,
+    maxOutputBytes: 32_000,
+    writeAllow: ["src/**", "tests/**"],
+    bashDeny: G1_DENY,
+    ...over,
+  });
+  const pre = (command: string, over: Partial<ToolContext> = {}) => tools.bashPrecheck({ command }, c(over));
+
+  it("refuses the routes G1c's agents took after the edit or rm -rf was refused", () => {
+    for (const cmd of [
+      // T3 r1, r3: CHANGELOG.md and pyproject.toml rewritten through python.
+      "python3 - <<'PY'\nfrom pathlib import Path\nPath(\"CHANGELOG.md\").write_text(\"x\")\nPath(\"pyproject.toml\").write_text(\"y\")\nPY",
+      // T4 r2: the ignored database deleted file by file.
+      "rm var/local.db && rmdir var",
+      "echo '## 0.2.0' >> CHANGELOG.md",
+      "sed -i 's/0.1.0/0.2.0/' pyproject.toml",
+      "cd docs && echo x > notes.md",
+      "mv src/a.py old_a.py",
+      "node -e \"require('fs').writeFileSync('package.json', '{}')\"",
+      "rm var/*",
+    ]) {
+      const r = pre(cmd);
+      expect(r?.rule, cmd).toBe("write_allow");
+      expect(r?.code, cmd).toBe(TOOL_DENIED);
+    }
+    expect(pre("rm var/local.db && rmdir var")!.content).toContain('"var/local.db" (rm)');
+  });
+
+  it("leaves ordinary work alone: 60 everyday commands, 0 refused", () => {
+    // The over-blocking budget, stated as a number. Each of these is what a
+    // coding agent runs in a day's work in a repository whose role may write
+    // src/ and tests/; none may change decision.
+    const EVERYDAY = [
+      "git status", "git diff", "git log --oneline -5", "git add src/a.py", "git commit -m 'fix rounding'",
+      "git checkout -b fix/rounding", "git stash", "git branch -a", "ls -la", "ls src tests",
+      "cat src/a.py", "head -50 src/a.py", "tail -n 20 tests/test_a.py", "grep -rn 'def price' src",
+      "rg TODO", "find . -name '*.py' -not -path './.venv/*'", "wc -l src/*.py", "diff src/a.py src/b.py",
+      "pytest -q", "python -m pytest tests -x", "pytest -q 2>&1 | tail -20", "python3 -c 'print(1 + 1)'",
+      "python3 -c \"import inventory; print(inventory.__file__)\"", "node -e 'console.log(process.version)'",
+      "npm test", "npm run build", "pnpm install", "pip install -e .", "cargo test", "go test ./...",
+      "make test", "ruff check src", "mypy src", "npx tsc --noEmit", "echo hello",
+      "mkdir -p src/inventory/util", "touch tests/test_util.py", "cp src/a.py src/b.py",
+      "mv src/b.py src/c.py", "sed -n '1,20p' src/a.py", "sed -i 's/round(/round_half(/' src/a.py",
+      "cat > src/inventory/util.py <<'EOF'\ndef f():\n    return 1\nEOF", "printf 'x\\n' > tests/data.txt",
+      "echo scratch > /tmp/scratch.txt", "python3 script.py > /tmp/out.txt 2>&1",
+      "tar czf /tmp/src.tgz src", "cp -r src /tmp/src-backup", "rm -f /tmp/scratch.txt", "rm src/c.py",
+      "chmod +x src/run.sh", "cd src && ls", "cd tests && pytest -q", "which python3", "uname -a",
+      "du -sh .", "python3 -m venv /tmp/venv", "/tmp/venv/bin/pip install pytest", "env | sort",
+      "ps aux | head", "git rm --cached src/c.py",
+    ];
+    expect(EVERYDAY.length).toBe(60);
+    const refused = EVERYDAY.filter((cmd) => pre(cmd)?.rule !== undefined);
+    expect(refused).toEqual([]);
+  });
+
+  it("judges only what it can place: a variable, $HOME or a path outside the repository is not refused", () => {
+    for (const cmd of [
+      'echo x > "$OUT"',
+      "echo x > ~/notes.txt",
+      "cd $WORK && echo x > CHANGELOG.md",
+      "cp src/a.py /tmp/a.py",
+      "python3 -c \"open(name, 'w').write('x')\"",
+    ]) {
+      expect(pre(cmd), cmd).toBeNull();
+    }
+  });
+
+  it("applies only to a role that declares write_allow", () => {
+    expect(pre("echo x >> CHANGELOG.md", { writeAllow: undefined })).toBeNull();
+    expect(pre("echo x >> CHANGELOG.md", { writeAllow: [] })).toBeNull();
+  });
+
+  it("the loop refuses it before anything runs", async () => {
+    writeFileSync(join(dir, "CHANGELOG.md"), "# changes\n");
+    const r = await executeTool("bash", { command: "echo tampered >> CHANGELOG.md" }, c(), new Set(["bash"]));
+    expect(r.code).toBe(TOOL_DENIED);
+    expect(readFileSync(join(dir, "CHANGELOG.md"), "utf-8")).toBe("# changes\n");
+  });
+});
+
+describe("a dry run is not the operation it previews (G1c)", () => {
+  const deny = [String.raw`\bgit\s+clean\b[^|;&]*\s-[A-Za-z]*[fxX]`];
+  it("git clean -n / --dry-run passes a pattern written for git clean -fdx", () => {
+    for (const cmd of ["git clean -ndx", "git clean -n -d -x", "git clean --dry-run -x", "git -C . clean -ndX"]) {
+      expect(bashPolicy(cmd, undefined, deny), cmd).toBeNull();
+    }
+  });
+  it("the real thing is still refused, alone or beside a dry run", () => {
+    for (const cmd of ["git clean -fdx", "git clean -fx", "git clean -ndx && git clean -fdx", "git clean -ndx; git clean -fdx"]) {
+      expect(bashPolicy(cmd, undefined, deny)?.rule, cmd).toBe("bash_deny");
+    }
+  });
+  it("interactive is not a dry run", () => {
+    expect(bashPolicy("git clean -nix", undefined, deny)?.rule).toBe("bash_deny");
+  });
+});
+
+describe("network = false is a rule, not a failure (G1c)", () => {
+  it("toolCallPolicy denies curl with rule network, without any bash_deny", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-net-"));
+    try {
+      const d = await tools.toolCallPolicy(
+        "bash",
+        { command: "curl -s http://telemetry.example.invalid/x?token=abc" },
+        { root: dir, sandbox: "confined", gate: "never", approve: async () => true, timeoutMs: 0, maxOutputBytes: 0, network: false },
+        new Set(["bash"])
+      );
+      expect(d.decision).toBe("deny");
+      expect(d.rule).toBe("network");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

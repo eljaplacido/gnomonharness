@@ -44,11 +44,14 @@ function collector() {
     records,
     write(kind, fields) { records.push({ kind, ...fields }); },
     text: (t) => t,
+    // The real AuditLog gained action() in #67 (a shell command kept whole). Without
+    // it every verify path threw before announcing anything, and the suite read 11/14.
+    action: (t) => t,
   };
 }
 
 /** A trail that swallows everything — the recorded-side negative control. */
-const blackhole = { records: [], write() {}, text: (t) => t };
+const blackhole = { records: [], write() {}, text: (t) => t, action: (t) => t };
 
 const ok = (r) => ({ ok: true, json: async () => r });
 const toolCall = (name, args) => ok({ choices: [{ message: { content: "", tool_calls: [{ id: "c1", function: { name, arguments: args } }] } }] });

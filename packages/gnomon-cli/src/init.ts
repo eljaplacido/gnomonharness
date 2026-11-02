@@ -695,13 +695,13 @@ level = "confined"                 # off | confined | strict
 # 'gnomon surface hash' moves when it changes.
 #   extra_roots = ["../sibling-checkout"]
 #
-# network = false refuses the webfetch tool outright, and refuses the commands
-# whose purpose is the network in bash: curl, wget, nc, ssh, scp/rsync to a
-# remote, and python/node/perl/ruby one-liners that open a connection. That is
-# the same kind of intent filter, not isolation: a script, a build tool or a
-# package manager run through bash still reaches the network, and the prompt
-# loop says so at startup. With exec = "docker" the container gets no network
-# at all, which is.
+# network = false is enforced for the \`webfetch\` tool, which refuses outright,
+# and in bash for the commands whose purpose is the network: curl, wget, nc,
+# ssh, scp/rsync to a remote, and python/node/perl/ruby one-liners that open a
+# connection. It is NOT process isolation: a script, a build tool or a package
+# manager run through bash still reaches the network, and the prompt loop says
+# so at startup. With exec = "docker" the container gets no network at all,
+# which is isolation.
 network = false
 
 # Keys that changed nothing used to sit here — auto_merge,

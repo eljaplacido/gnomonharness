@@ -42,7 +42,11 @@ if (major < 20) {
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
-const entry = join(here, "..", "dist", "index.js");
+// `gnomon guard` runs once per tool call of another agent, so its start-up is
+// that agent's latency: it gets an entry that loads the decision and nothing
+// else (dist/guard_main.js), not the whole harness.
+const guard = process.argv[2] === "guard";
+const entry = join(here, "..", "dist", guard ? "guard_main.js" : "index.js");
 
 if (!existsSync(entry)) {
   console.error(
@@ -56,7 +60,25 @@ if (!existsSync(entry)) {
 
 // Imported rather than spawned: one process, no shell, and the exit code and
 // signals belong to the program the user actually invoked.
-import(pathToFileURL(entry).href).catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+const start = () =>
+  import(pathToFileURL(entry).href).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+// For guard, V8's compiled code is also kept on disk between calls (Node >=
+// 22.1; absent before, and then only slower): parsing and compiling the modules
+// was the larger part of a guard call's start-up, and it is the same work on
+// every call. A promise, not a top-level await, for the reason given above.
+if (guard) {
+  import("node:module")
+    .then((m) => {
+      try {
+        if (typeof m.enableCompileCache === "function") m.enableCompileCache();
+      } catch {
+        // a cache directory it cannot write: only slower
+      }
+    }, () => {})
+    .then(start);
+} else {
+  start();
+}
