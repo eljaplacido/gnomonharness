@@ -306,3 +306,15 @@ All four are **re-run after this run's pass** and scored on the re-run; the
 originals are kept aside. P1-H now uses distinct names (`h-k…`), so it cannot
 recur. No other P1 cell overlapped a same-named P1-H cell (checked from both
 status logs). This run's runner and files were not touched.
+
+## Amendment, 2026-11-02T05:46Z: analysis restricted to the pre-registered task list
+
+The smoke cells (`hello-world`, one per arm) share `runs/` with the full run,
+and the collector counted them: 49 cells per arm instead of 48. The collector
+now scores only tasks in `sample16-hunch.txt`. That is the pre-registered
+design and changes no rule; it lowers every arm by its one smoke cell.
+
+The four disturbed cells (amendment above) have not been re-run yet. `apparatus/rerun_disturbed.sh`
+waits for LEAN stage 2 to release the GPU, moves the originals to
+`runs-disturbed/`, and re-runs exactly those cells. Until then, P1's result is
+provisional.

@@ -1,0 +1,46 @@
+arm      valid  pass   rate  95% Wilson    apparatus  versions
+gnomon      48    33  0.688  [0.55, 0.80]          0  7012c5a6d80516891b061cc0f07ac1724b6289a0
+mini        46    28  0.609  [0.46, 0.74]          2  mini-swe-agent 2.4.6 litellm 1.105.7
+goose       47    34  0.723  [0.58, 0.83]          1  1.57.0
+qwen        47    29  0.617  [0.47, 0.74]          1  0.26.4
+opencode    45    29  0.644  [0.50, 0.77]          3  opencode v2.2.5
+
+paired against gnomon (cells where both arms have a verdict):
+  gnomon vs mini   pairs= 46 gnomon-only= 7 peer-only= 2 exact McNemar p=0.1797  -> no difference shown
+  gnomon vs goose  pairs= 47 gnomon-only= 3 peer-only= 4 exact McNemar p=1.0000  -> no difference shown
+  gnomon vs qwen   pairs= 47 gnomon-only= 7 peer-only= 4 exact McNemar p=0.5488  -> no difference shown
+  gnomon vs opencode pairs= 45 gnomon-only= 5 peer-only= 2 exact McNemar p=0.4531  -> no difference shown
+
+within-arm flip (tasks whose 3 attempts disagree):
+  gnomon   3/16 tasks flip
+  mini     3/16 tasks flip
+  goose    4/16 tasks flip
+  qwen     2/16 tasks flip
+  opencode 4/16 tasks flip
+
+tokens (metered at the relay; one trial at a time, so a cell's traffic is its own):
+  gnomon   cells= 48 median/cell=  500706 per resolved task=  2118653 cache share= 0.98 unmetered=0
+  mini     cells= 46 median/cell=  447335 per resolved task=  2259616 cache share= 0.99 unmetered=0
+  goose    cells= 47 median/cell=  341866 per resolved task=  1398911 cache share= 0.97 unmetered=0
+  qwen     cells= 47 median/cell=  679578 per resolved task=  3005750 cache share= 0.96 unmetered=5
+  opencode cells= 45 median/cell=  316044 per resolved task=  1937895 cache share= 0.97 unmetered=6
+  paired against gnomon (sign test on cells both completed; fewer tokens wins):
+    gnomon vs mini   pairs= 46 gnomon fewer=22 peer fewer=24 exact sign-test p=0.8830
+    gnomon vs goose  pairs= 47 gnomon fewer=15 peer fewer=32 exact sign-test p=0.0186
+    gnomon vs qwen   pairs= 47 gnomon fewer=27 peer fewer=20 exact sign-test p=0.3817
+    gnomon vs opencode pairs= 45 gnomon fewer=11 peer fewer=34 exact sign-test p=0.0008
+
+opencode permission handicap: 0/45 cells logged an auto-reject (the published run's failure mode; nonzero means its score is a floor)
+
+wall-clock: 233 timed valid cells, 59 past the 900 s cap (tb agent_timeout), 49 still running at 1200 s, 0 under 15 s (check those)
+setup seconds per arm (spent from the cap), median [min, max]:
+  gnomon       18  [11, 243]  n=49
+  mini         37  [25, 63]  n=48
+  goose         8  [6, 27]  n=48
+  qwen          9  [5, 64]  n=49
+  opencode      8  [4, 12]  n=48
+Traceback (most recent call last):
+  File "/home/eljaplacido/gnomon-wt/peers/benchmarks/results/peers-2026-11/apparatus/collect_peers.py", line 211, in <module>
+    assert total == len(valid) + sum(1 for c in cells if c["state"] != "valid") + \
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

@@ -17,6 +17,9 @@ from pathlib import Path
 runs, sha = Path(sys.argv[1]), sys.argv[2]
 CELL = re.compile(r"^p-k(\d+)-(gnomon|mini|goose|qwen|opencode)-(.+)$")
 EXCLUDED_TASKS = {"count-call-stack"}
+# Only the pre-registered task list counts; smoke cells (hello-world) share the runs
+# directory but are not part of the measured design (amendment 2026-11-02).
+MEASURED_TASKS = set((Path(__file__).resolve().parent / "sample16-hunch.txt").read_text().split())
 ARMS = ("gnomon", "mini", "goose", "qwen", "opencode")
 PEERS = ARMS[1:]  # ships its own answer key (pre-registered)
 
@@ -113,7 +116,7 @@ for d in sorted(runs.iterdir()):
                         if (logs / "opencode.log").exists() else None,
     })
 
-valid = [c for c in cells if c["state"] == "valid" and c["task"] not in EXCLUDED_TASKS]
+valid = [c for c in cells if c["state"] == "valid" and c["task"] not in EXCLUDED_TASKS and c["task"] in MEASURED_TASKS]
 by = defaultdict(dict)
 for c in valid:
     by[c["arm"]][(c["task"], c["k"])] = bool(c["resolved"])
