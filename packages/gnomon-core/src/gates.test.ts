@@ -689,6 +689,26 @@ describe("gate: the turn limits are surface-declared and stay in one place", () 
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("budget_notes: off when absent, on only for a real boolean, and nothing to warn about", async () => {
+    const { resolveLoop, auditSurface, loadConfig } = await import("./config.js");
+    const read = (toml: string) => {
+      const dir = surface({ "config.toml": toml });
+      try {
+        const config = loadConfig(dir);
+        return { on: resolveLoop(config).budget_notes, problems: auditSurface(config).map((p) => p.problem) };
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+    expect(read("[defaults]\n").on).toBe(false);
+    const on = read("[turn]\nbudget_notes = true\n");
+    expect(on.on).toBe(true);
+    expect(on.problems.filter((p) => /budget_notes/.test(p))).toEqual([]);
+    expect(read("[turn]\nbudget_notes = false\n").on).toBe(false);
+    // A string is not a boolean: the documented default, never a guess.
+    expect(read('[turn]\nbudget_notes = "true"\n').on).toBe(false);
+  });
+
   it('"turn" is a known block, so the auditor does not disown what the code reads', async () => {
     // Deleting this entry passed all 718 tests when the block was added --
     // exactly the [chain] regression the KNOWN_BLOCKS comment cites as the

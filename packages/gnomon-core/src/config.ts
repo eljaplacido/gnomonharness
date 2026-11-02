@@ -3354,6 +3354,19 @@ export interface ResolvedLoop {
    * is easy to ignore.
    */
   converge_refire: number;
+  /**
+   * Tell the model how much of its budget is left: a short system line at 50%
+   * and at 80% of the role's `max_steps_total`, and of the deadline when the run
+   * declares one (`gnomon task --deadline`). Informational only -- no limit
+   * moves. Measured motivation: on the local model gnomon kept going on tasks it
+   * failed anyway (tune-mjcf 10 -> 176 requests), and on the hosted model it lost
+   * the most tasks of five harnesses at the 900 s cap, without ever having been
+   * told how much budget it had.
+   *
+   * Off when absent, so a surface that does not say behaves as it always did;
+   * `gnomon init` writes it on, so turning it on moves the hash.
+   */
+  budget_notes: boolean;
 }
 
 /**
@@ -3375,6 +3388,7 @@ export const LOOP_DEFAULTS: ResolvedLoop = {
   stall_repeats: 3,
   nudge_after_idle: 12,
   converge_refire: 6,
+  budget_notes: false,
 };
 
 /**
@@ -3434,6 +3448,9 @@ export function resolveLoop(config: GnomonConfig): ResolvedLoop {
     // and turn a nudge into a wall of system messages.
     nudge_after_idle: Math.max(1, Math.floor(num(l?.nudge_after_idle, d.nudge_after_idle))),
     converge_refire: Math.max(1, Math.floor(num(l?.converge_refire, d.converge_refire))),
+    // A boolean or nothing: a string "true" is not read as on, so a typo leaves
+    // the documented default rather than a guessed one.
+    budget_notes: typeof l?.budget_notes === "boolean" ? l.budget_notes : d.budget_notes,
   };
 }
 

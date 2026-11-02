@@ -4739,3 +4739,157 @@ describe("the audit trail's tool_call record says what a bash call did", () => {
     expect(raw).not.toContain("s3cr3t-value-123");
   }, 20000);
 });
+
+describe("budget notes — the model is told how much of its budget is left", () => {
+  const withFetch = async (impl: typeof fetch, run: () => Promise<void>) => {
+    const original = globalThis.fetch;
+    globalThis.fetch = impl;
+    try {
+      await run();
+    } finally {
+      globalThis.fetch = original;
+    }
+  };
+  // n tool calls (harmless echoes), then a plain answer.
+  const probes = (n: number, bodies: any[]) => {
+    let call = 0;
+    return (async (_url: string, init: any) => {
+      bodies.push(JSON.parse(init.body));
+      call++;
+      const tool_calls =
+        call <= n ? [{ function: { name: "bash", arguments: { command: `echo probe ${call}` } } }] : undefined;
+      return { ok: true, json: async () => ({ message: { content: tool_calls ? "" : "done", tool_calls } }) };
+    }) as unknown as typeof fetch;
+  };
+  const withBudget = (on: boolean | undefined, maxTotal = 10) => {
+    const config: any = loadConfig("../..");
+    const turn = { ...(config.config?.turn ?? {}) };
+    if (on === undefined) delete turn.budget_notes;
+    else turn.budget_notes = on;
+    config.config = { ...config.config, turn };
+    config.roles = {
+      ...config.roles,
+      implement: { ...config.roles.implement, max_steps: 4, max_steps_total: maxTotal, converge_after: undefined },
+    };
+    return config;
+  };
+  const deps = (extra: Record<string, unknown> = {}) =>
+    ({
+      approve: async () => true,
+      progress: { start() {}, update() {}, stop() {} } as any,
+      ui: { meta: [], meta_style: "line", think: "hide", spinner: false, color: false },
+      say: () => {},
+      ...extra,
+    }) as any;
+  const route = { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any;
+  const notesIn = (bodies: any[]) =>
+    [...new Set(bodies.flatMap((b) => b.messages.filter((m: any) => m.role === "system" && String(m.content).startsWith("Budget:")).map((m: any) => m.content)))];
+
+  it("levels: nothing below half, 1 from half, 2 from four fifths", () => {
+    expect(promptLoop.budgetLevel(0)).toBe(0);
+    expect(promptLoop.budgetLevel(0.49)).toBe(0);
+    expect(promptLoop.budgetLevel(0.5)).toBe(1);
+    expect(promptLoop.budgetLevel(0.79)).toBe(1);
+    expect(promptLoop.budgetLevel(0.8)).toBe(2);
+    expect(promptLoop.budgetLevel(3)).toBe(2);
+  });
+
+  it("the text comes from counts and declared totals, never the clock", () => {
+    expect(promptLoop.budgetNoteText({ steps: { level: 1, used: 5, total: 10 } })).toBe(
+      "Budget: 5 of 10 tool calls are used. Keep going, and make sure what the task asks for will exist on disk before the budget runs out."
+    );
+    expect(promptLoop.budgetNoteText({ steps: { level: 2, used: 8, total: 10 } })).toBe(
+      "Budget: about 2 of 10 tool calls are left. Make sure what the task asks for exists and is saved now, then finish. Do not start new exploration."
+    );
+    // 20% of a declared 15 minutes is 3, whatever the clock says.
+    expect(promptLoop.budgetNoteText({ time: { level: 2, total_ms: 15 * 60_000 } })).toContain(
+      "about 3 of 15 minutes are left"
+    );
+    expect(promptLoop.budgetNoteText({ time: { level: 1, total_ms: 14 * 60_000 } })).toContain(
+      "about half of the 14-minute time budget is used"
+    );
+    const both = promptLoop.budgetNoteText({
+      steps: { level: 1, used: 5, total: 10 },
+      time: { level: 2, total_ms: 10 * 60_000 },
+    });
+    expect(both).toMatch(/^Budget: 5 of 10 tool calls are used; about 2 of 10 minutes are left\. Make sure/);
+  });
+
+  it("is off when the surface does not declare it: no note, no counter", async () => {
+    const bodies: any[] = [];
+    let turn: any;
+    await withFetch(probes(9, bodies), async () => {
+      turn = await promptLoop.runAgenticTurn(
+        { config: withBudget(undefined), exchanges: [], currentRole: "implement" } as any,
+        "implement", route, [{ role: "user", content: "fix it" }], deps()
+      );
+    });
+    expect(notesIn(bodies)).toEqual([]);
+    expect(turn.counters.budget_notes).toBeUndefined();
+  });
+
+  it("on: says half at 50% and the end at 80% of max_steps_total, once each", async () => {
+    const bodies: any[] = [];
+    let turn: any;
+    await withFetch(probes(9, bodies), async () => {
+      turn = await promptLoop.runAgenticTurn(
+        { config: withBudget(true), exchanges: [], currentRole: "implement" } as any,
+        "implement", route, [{ role: "user", content: "fix it" }], deps()
+      );
+    });
+    expect(notesIn(bodies)).toEqual([
+      "Budget: 5 of 10 tool calls are used. Keep going, and make sure what the task asks for will exist on disk before the budget runs out.",
+      "Budget: about 2 of 10 tool calls are left. Make sure what the task asks for exists and is saved now, then finish. Do not start new exploration.",
+    ]);
+    expect(turn.counters.budget_notes).toEqual([
+      { at_step: 5, kind: "steps", level: 50 },
+      { at_step: 8, kind: "steps", level: 80 },
+    ]);
+  });
+
+  it("time: a declared deadline is told in the same two steps", async () => {
+    const bodies: any[] = [];
+    let turn: any;
+    // A 10-minute deadline that started 9 minutes ago: past four fifths at once,
+    // so the model hears only the urgent note, and hears it once.
+    const deadline = { total_ms: 10 * 60_000, started_at: Date.now() - 9 * 60_000 };
+    await withFetch(probes(3, bodies), async () => {
+      turn = await promptLoop.runAgenticTurn(
+        { config: withBudget(true, 40), exchanges: [], currentRole: "implement" } as any,
+        "implement", route, [{ role: "user", content: "fix it" }], deps({ deadline })
+      );
+    });
+    const said = notesIn(bodies);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain("about 2 of 10 minutes are left");
+    expect(turn.counters.budget_notes).toEqual([{ at_step: 1, kind: "time", level: 80 }]);
+  });
+
+  it("the task record carries the deadline, keeps step notes in counters, moves time notes to volatile", async () => {
+    const bodies: any[] = [];
+    let record: any;
+    await withFetch(probes(9, bodies), async () => {
+      record = await promptLoop.runTask(withBudget(true), "fix it", {
+        role: "implement",
+        yes: true,
+        // 1 ms: past four fifths by the first check, whatever the machine's speed.
+        deadline_ms: 1,
+      });
+    });
+    expect(record.deadline_ms).toBe(1);
+    expect(record.counters.budget_notes?.every((n: any) => n.kind === "steps")).toBe(true);
+    expect(record.counters.budget_notes?.length).toBe(2);
+    expect(record.volatile.time_notes).toEqual([{ at_step: 1, level: 80 }]);
+  }, 20000);
+
+  it("a record with no deadline and no notes is byte-identical in shape to before", async () => {
+    const bodies: any[] = [];
+    let record: any;
+    await withFetch(probes(2, bodies), async () => {
+      record = await promptLoop.runTask(withBudget(undefined), "fix it", { role: "implement", yes: true });
+    });
+    expect("deadline_ms" in record).toBe(false);
+    expect("budget_notes" in record.counters).toBe(false);
+    expect("time_notes" in record.volatile).toBe(false);
+  }, 20000);
+});

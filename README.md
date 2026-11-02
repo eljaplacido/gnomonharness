@@ -61,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1633 TypeScript tests (1348 core, 260 cli, 18
-> natives, 7 tui) and 60 Rust tests — **1693 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1644 TypeScript tests (1356 core, 263 cli, 18
+> natives, 7 tui) and 60 Rust tests — **1704 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -822,6 +822,22 @@ array) and `stall_repeats = 0` would declare a stall on the first tool call of
 every turn, so both floor at 1. `max_consecutive_empty`,
 `max_consecutive_malformed` and `all_refused_notice` accept `0`, where it
 honestly means "never".
+
+**`budget_notes` — telling the model its budget.** `budget_notes = true` adds
+one short system line when the turn has used half of the role's
+`max_steps_total`, and another at four fifths. With `gnomon task --deadline 14m`
+the same two lines also cover time. The four-fifths line asks the model to make
+sure the deliverable exists and is saved, then finish, and not to start new
+exploration. Nothing stops at a note: the step wall and any external clock apply
+exactly as before. The text is built from the step count and the declared totals
+only ("about 3 of 15 minutes are left" is 20% of the declared 15), so the same
+crossing always reads the same; only *when* a time note fires depends on the
+clock. The task record says which notes fired: step notes in
+`counters.budget_notes`, time notes in `volatile.time_notes`, and the deadline in
+`deadline_ms`. Absent means off, so an existing surface behaves as it did;
+`gnomon init` writes it on, which is why turning it on moves the hash. A
+`--deadline` given to a surface with notes off has no effect, and the command
+says so on stderr.
 
 **Known limit.** `[turn]` declares ten of the loop's numbers, not all of them.
 The A-B-A-B alternation test (8-call window, 2 distinct signatures) and the
@@ -2178,7 +2194,7 @@ Slash commands other than a role prefix are terminal-only.
 | `gnomon migrate [--check]` | Bring an existing `.gnomon/` up to the current shipped defaults. `--check` reports without writing and exits 1 if anything is pending. |
 | `gnomon prompt [--continue \| --resume <id>] [--trust]` | Interactive loop. An untrusted surface that grants more than the defaults is shown and asked about first. |
 | `gnomon acp [--role <name>] [--profile <name>]` | Serve the Agent Client Protocol on stdio for an editor (Zed, JetBrains). Same surface, roles, approvals and audit as `prompt`. See [In your editor](#in-your-editor--gnomon-acp). |
-| `gnomon task "<what to do>" [--role <name>] [--yes] [--json] [--trust]` | One task, no terminal. Exit code carries the bucket. An untrusted surface that grants more than the defaults runs clamped to them. |
+| `gnomon task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--deadline <15m>]` | One task, no terminal. Exit code carries the bucket. An untrusted surface that grants more than the defaults runs clamped to them. `--deadline` is the run's time budget, told to the model when `[turn] budget_notes` is on; nothing stops at it. |
 | `gnomon trust [list\|grant\|revoke]` | Whether this machine trusts what this project's `.gnomon/` grants beyond the defaults. See [Workspace trust](#workspace-trust). |
 | `gnomon sessions` | Saved sessions. |
 | `gnomon skill [list\|accept <id>\|reject <id>]` | Learned skills and proposals. |

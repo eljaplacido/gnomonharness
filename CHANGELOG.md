@@ -26,6 +26,21 @@
 
 ## [Unreleased]
 
+- **Budget awareness: the model is told how much of its budget is left.**
+  `[turn] budget_notes = true` adds one short system line at half of the role's
+  `max_steps_total` and one at four fifths, and `gnomon task --deadline 14m`
+  extends the same two lines to time. The four-fifths line asks the model to
+  make sure the deliverable exists and is saved, then finish. Nothing stops at a
+  note. The text comes from the step count and declared totals only; the record
+  carries step notes in `counters.budget_notes`, time notes in
+  `volatile.time_notes` and the deadline in `deadline_ms`. Absent means off, so
+  existing surfaces are unchanged; `gnomon init` writes it on.
+  - Why: on the local model gnomon kept going on tasks it failed anyway
+    (`lean-2026-11` stage 2: tune-mjcf 10 → 176 requests), and on the hosted
+    model it lost the most tasks of five harnesses at the 900 s cap (P1-H),
+    never having been told its budget. Whether the notes help is measured by
+    the pre-registered `bud-2026-11` A/B before this merges.
+
 - **The 2026-09-01 injection suite has a positive control again.** Since #68,
   `network = false` covers bash, so the operator-asks control (a `curl` to the
   canary) was refused on arm A's surface: 3/3 crossed became 0/3, and the suite

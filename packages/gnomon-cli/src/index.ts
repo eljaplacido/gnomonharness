@@ -15,6 +15,7 @@
 
 import {
   runAcpServer,
+  resolveLoop,
   harnessBuild,
   recomputeManifest,
   declaredKeyVars,
@@ -111,6 +112,7 @@ import {
 import { pendingMigrations, applyMigrations, MIGRATIONS } from "./migrate.js";
 import { cmdUpdate, cmdUninstall, maybeNotifyUpdate } from "./update.js";
 import { cmdCheck } from "./check.js";
+import { parseDeadline, formatDeadline } from "./deadline.js";
 
 // ---------------------------------------------------------------------------
 // Argument parsing (minimal, no deps)
@@ -1426,8 +1428,22 @@ async function cmdTask(args: CliArgs): Promise<void> {
   // switching on the bucket read a task that never started as one that ran.
   // Neither started, so both are launch failures (10).
   if (!text) {
-    console.error('Usage: gnomon task "<what to do>" [--role <name>] [--yes] [--json]');
+    console.error('Usage: gnomon task "<what to do>" [--role <name>] [--yes] [--json] [--deadline <15m>]');
     process.exit(10);
+  }
+
+  // `--deadline` is the run's time budget. Refused when it does not parse, the
+  // same way a missing task is: a run that silently dropped the budget it was
+  // given would be a different run from the one asked for.
+  let deadlineMs: number | undefined;
+  if (args.flags["deadline"] !== undefined) {
+    deadlineMs = parseDeadline(args.flags["deadline"]);
+    if (deadlineMs === undefined) {
+      console.error(
+        `--deadline ${args.flags["deadline"]}: not a duration. Use seconds (840), or 840s, 14m, 1.5h.`
+      );
+      process.exit(10);
+    }
   }
 
   // A task has nobody to ask. An untrusted surface that grants more than the
@@ -1439,11 +1455,22 @@ async function cmdTask(args: CliArgs): Promise<void> {
       loadConfig(args.dir, args.flags['profile']),
       trustOptions(args)
     );
+    if (deadlineMs !== undefined) {
+      // Announced either way, on stderr so --json stays clean: the deadline is
+      // an input of the run, and whether it reached the model is the surface's
+      // decision, not the flag's.
+      console.error(
+        resolveLoop(settled.config).budget_notes
+          ? `  deadline ${formatDeadline(deadlineMs)}: the model is told how much of it is left. Nothing stops at it.`
+          : `  deadline ${formatDeadline(deadlineMs)}: no effect, because [turn] budget_notes is off in this surface.`
+      );
+    }
     record = await runTask(settled.config, text, {
       role: args.role,
       yes: args.yes,
       verbose: !args.json,
       trust: settled.outcome,
+      ...(deadlineMs !== undefined ? { deadline_ms: deadlineMs } : {}),
     });
   } catch (err) {
     // No .gnomon/ above the cwd, a --dir without one, a --role the surface
@@ -2051,9 +2078,11 @@ Commands:
     .gnomon/skills/proposed/; accepting moves it into .gnomon/skills/,
     which changes the surface hash and applies from the next session.
 
-  task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--dir <path>]
+  task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--deadline <15m>] [--dir <path>]
     Run one task without a terminal and print the result. --json emits a
     record whose only run-to-run differences are under "volatile".
+    --deadline is the run's time budget: with [turn] budget_notes on, the
+    model is told how much of it is left. Nothing stops at it.
     Gated tool calls are REFUSED unless --yes: a non-interactive run has
     nobody to ask. Exit code: 0 result, 2 refusal, 10 apparatus_failure.
     A surface granting more than the defaults that this machine has not
