@@ -1,0 +1,151 @@
+#!/bin/bash
+# tb SOURCES this file into the shell that later runs the agent, so the `set -e`
+# and `exit` below would apply to that shell: a failure would kill it before
+# `tmux wait -S done`, and tb would wait out the whole cap and score a timeout.
+# (The 2026-10-31 smoke run's gnomon cell did exactly that.) The body therefore
+# runs in a child bash, and only its verdict reaches tb's shell. The peer setups
+# never `exit` and set no options, so this brings the gnomon arm level with them.
+if [ -z "${GNOMON_SETUP_CHILD:-}" ]; then
+  if GNOMON_SETUP_CHILD=1 bash "${BASH_SOURCE[0]}"; then :; else echo "INSTALL_FAIL_STATUS"; fi
+  return 0 2>/dev/null || true
+fi
+# Capture the TASK directory before anything can change it. tb starts this
+# script in the task's WORKDIR, which is NOT always /app: fix-git lives in
+# /app/personal-site, swe-bench-astropy-2 in /app/astropy, prove-plus-comm in
+# /workspace (where /app does not exist at all). An earlier fix guessed
+# "${TB_TASK_DIR:-/app}" — that variable exists in 0 files of terminal-bench,
+# so it silently hardcoded /app and would have rooted the surface in an empty
+# directory for those tasks. Record the real one instead of guessing.
+printf '%s' "$PWD" > /opt/task-cwd 2>/dev/null || true
+# Install gnomon into a terminal-bench task container and write /opt/gnomon-run.sh.
+# R2 copy of R1's setup (gnomon-setup-r1.sh.j2). R2 adds: R1_ENTRY=chain runs `gnomon task`
+# with NO --role and writes `[chain] stages` from R2_CHAIN into config.toml; R2_PLAN_TOOLS
+# (when not "none") replaces the plan role's tool list in the profile, so a cloud planner
+# can read but not act. Every other arm is written exactly as R1 writes it.
+# R1 copy of LEAN/P1's peer setup (only the run helper differs: two endpoints, one profile).
+# Peer-benchmark copy of the H7 setup (bench/h7 8a2a16e) with the [shadow] block
+# removed: the gnomon arm is the 0.3.1 release as shipped, fetched by SHA.
+# `gnomon task` needs only node + pnpm deps (no Rust build), so this stays light.
+set -e
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq >/dev/null 2>&1 || true
+apt-get install -y -qq curl git ca-certificates >/dev/null 2>&1 || true
+
+export NVM_DIR="$HOME/.nvm"
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash >/dev/null 2>&1
+. "$NVM_DIR/nvm.sh"
+nvm install 22 >/dev/null 2>&1
+npm i -g pnpm >/dev/null 2>&1
+
+# Abort loudly if the pinned ref is unreachable. It used to be cloned with all
+# output suppressed and no status check, so an unreachable ref fell back to
+# whatever git did next and the trial measured something nobody chose -- the
+# failure that made three earlier arms unattributable to any commit.
+# Fetched by exact SHA, never by branch: during H7 a push to the pinned branch
+# moved its head mid-run. A SHA cannot move. The check below is unchanged.
+mkdir -p /opt/gnomon && cd /opt/gnomon && git init -q . \
+  && git remote add origin https://github.com/eljaplacido/gnomonharness.git \
+  && git fetch -q --depth 1 origin "${GNOMON_EXPECT_SHA:?GNOMON_EXPECT_SHA is required}" 2>/tmp/clone.err \
+  && git checkout -q FETCH_HEAD || {
+  echo "FATAL: could not fetch commit '${GNOMON_EXPECT_SHA:-}' (ref ${GNOMON_REF:-unset})" >&2
+  cat /tmp/clone.err >&2
+  exit 1
+}
+cd "$(cat /opt/task-cwd 2>/dev/null || echo /)"
+# And that it landed on the ref we asked for, not merely on something.
+mkdir -p /agent-logs
+if [ -n "${GNOMON_EXPECT_SHA:-}" ]; then
+  got=$(cd /opt/gnomon && git rev-parse HEAD)
+  if [ "$got" != "$GNOMON_EXPECT_SHA" ]; then
+    echo "FATAL: expected $GNOMON_EXPECT_SHA, cloned $got" >&2
+    exit 1
+  fi
+fi
+(cd /opt/gnomon && pnpm install --silent >/dev/null 2>&1)
+# Which commit this trial actually measured. Every previous arm cloned the
+# default branch and recorded nothing, so no result was attributable to a ref.
+mkdir -p /agent-logs && (cd /opt/gnomon && git rev-parse HEAD; git rev-parse --abbrev-ref HEAD) > /agent-logs/gnomon-commit.txt 2>/dev/null || true
+# Also on the terminal: tb captures the pane for every task, but some tasks
+# (pandas-sql-query) mount no agent-logs volume.
+echo "ARM_VERSION=$(head -1 /agent-logs/gnomon-commit.txt 2>/dev/null)"
+
+# Run helper: build a fresh surface in the task dir, point every role at the
+# bench endpoint/model (greedy, approval off for headless), then solve.
+cat > /opt/gnomon-run.sh <<'RUN'
+#!/bin/bash
+set -e
+export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
+GN=/opt/gnomon/packages/gnomon-cli/gnomon.js
+INSTR="$1"
+cd "$(cat /opt/task-cwd 2>/dev/null || echo /app)" 2>/dev/null || true
+echo "gnomon cwd: $(pwd)" >> /agent-logs/gnomon-cwd.txt 2>/dev/null || true
+node "$GN" init >/dev/null 2>&1 || true
+# R1: two endpoints, both metered outside the container, and ONE profile that
+# routes every role to one of them. roles.toml keeps capability only: its
+# model/endpoint lines are removed so the profile is the single source of
+# routing (GUIDE 5.0). role_profile names the profile, so the surface hash
+# differs between arms by exactly this routing.
+node -e '
+const fs=require("fs"), E=process.env;
+const ROLES=["coordinator","implementor","verifier","plan","implement","critique","smol"];
+const routes=Object.fromEntries(E.R1_ROUTES.split(",").map(p=>p.split("=")));
+for(const r of ROLES){ if(routes[r]!=="local"&&routes[r]!=="cloud") throw new Error(`R1_ROUTES has no local/cloud route for ${r}: ${E.R1_ROUTES}`); }
+const ep={local:"r1local",cloud:"r1cloud"}, model={local:E.R1_LOCAL_MODEL,cloud:E.R1_CLOUD_MODEL};
+let c=fs.readFileSync(".gnomon/config.toml","utf8");
+if(!c.includes("[endpoints.r1local]")){
+  c=c.replace(/\s*$/,"\n")+`\n[endpoints.r1local]\nurl = "${E.R1_LOCAL_URL}"\nkind = "openai"\n\n[endpoints.r1cloud]\nurl = "${E.R1_CLOUD_URL}"\nkind = "openai"\n`;
+}
+if(/role_profile = "[^"]*"/.test(c)) c=c.replace(/role_profile = "[^"]*"/,`role_profile = "r1"`);
+else c=c.replace(/\[defaults\]\r?\n/,`[defaults]\nrole_profile = "r1"\n`);
+if(!/role_profile = "r1"/.test(c)) throw new Error("could not set role_profile");
+c=c.replace(/\[audit\]([\s\S]*?)enabled = false/,"[audit]$1enabled = true");
+fs.writeFileSync(".gnomon/config.toml",c);
+let r=fs.readFileSync(".gnomon/roles.toml","utf8");
+r=r.replace(/^(model|endpoint) = .*\r?\n/gm,"");
+fs.writeFileSync(".gnomon/roles.toml",r);
+fs.mkdirSync(".gnomon/profiles",{recursive:true});
+let prof=`name = "r1"\ndescription = "R1 arm ${E.R1_ARM}: ${E.R1_ROUTES}"\n`;
+const planTools=(E.R2_PLAN_TOOLS||"none")==="none"?null:E.R2_PLAN_TOOLS.split(",");
+for(const role of ROLES){
+  prof+=`\n[roles.${role}]\nmodel = "${model[routes[role]]}"\nendpoint = "${ep[routes[role]]}"\n`;
+  if(role==="plan"&&planTools) prof+=`tools = [${planTools.map(t=>JSON.stringify(t)).join(", ")}]\n`;
+}
+const chain=(E.R2_CHAIN||"none")==="none"?null:E.R2_CHAIN.split(",");
+if(chain){
+  let cc=fs.readFileSync(".gnomon/config.toml","utf8");
+  if(!/^\[chain\]\r?$/m.test(cc)) cc=cc.replace(/\s*$/,"\n")+`\n[chain]\n`;
+  cc=cc.replace(/^\[chain\]\r?\n/m,`[chain]\nstages = [${chain.map(t=>JSON.stringify(t)).join(", ")}]\n`);
+  if(!/^stages = \[/m.test(cc)) throw new Error("could not write [chain] stages");
+  fs.writeFileSync(".gnomon/config.toml",cc);
+}
+if((E.R1_ENTRY==="chain")!==Boolean(chain)) throw new Error(`R1_ENTRY=${E.R1_ENTRY} and R2_CHAIN=${E.R2_CHAIN} disagree`);
+fs.writeFileSync(".gnomon/profiles/r1.toml",prof);
+let p=fs.readFileSync(".gnomon/policy.toml","utf8");
+if(!/\[approval\]/.test(p)) fs.writeFileSync(".gnomon/policy.toml",p+`\n[approval]\ngate = "never"\n`);
+'
+mkdir -p /agent-logs
+cp .gnomon/profiles/r1.toml /agent-logs/r1-profile.toml 2>/dev/null || true
+echo "R1_ARM=$R1_ARM R1_ENTRY=$R1_ENTRY R1_ROUTES=$R1_ROUTES R2_CHAIN=$R2_CHAIN R2_PLAN_TOOLS=$R2_PLAN_TOOLS"
+cp .gnomon/config.toml /agent-logs/r2-config.toml 2>/dev/null || true
+# --trust: the benchmark surface is looser than the scaffold on purpose
+# (approval off for a headless run). Since #72 an untrusted looser surface runs
+# clamped; every R1 arm runs its surface as declared, the same way.
+if [ "$R1_ENTRY" = "chain" ]; then
+  # R2 chain arms: no --role, so the declared [chain] runs (prompt_loop: an explicit role overrides it).
+  # Stage lines also go to the terminal as they happen (stderr, so not into tail): tb keeps
+  # the terminal for every task, including ones that mount no agent-logs, and a cell cut
+  # at the cap still shows which stages started. The trailing cat drains the pipe if the
+  # filter ever exits early, so tee can never take SIGPIPE and stop the run.
+  node "$GN" task "$INSTR" --yes --trust 2>&1 | tee /agent-logs/gnomon-full.log \
+    >(grep --line-buffered -E "\[chain\] (stage|stopped)" >&2; cat >/dev/null) | tail -40
+else
+  node "$GN" task "$INSTR" --role "$R1_ENTRY" --yes --trust 2>&1 | tee /agent-logs/gnomon-full.log | tail -40
+fi
+cp -r .gnomon-audit /agent-logs/audit 2>/dev/null || true
+cp .gnomon/config.toml /agent-logs/surface-config.toml 2>/dev/null || true
+RUN
+chmod +x /opt/gnomon-run.sh
+echo "GNOMON_INSTALL_OK"
+# When setup ended. tb starts the 900 s clock before setup, so install time is spent from the cap.
+echo "ARM_SETUP_END=$(date -u +%s)"
