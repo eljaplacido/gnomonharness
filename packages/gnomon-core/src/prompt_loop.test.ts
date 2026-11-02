@@ -10,7 +10,7 @@ import { AuditTrail, recordHash } from "./audit.js";
 import * as promptLoop from "./prompt_loop.js";
 import { resolve as resolvePath, join as joinPath } from "node:path";
 import { setRoleModel } from "./prompt_loop.js";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, existsSync, statSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
@@ -3993,6 +3993,63 @@ describe("measureTreeDelta — fewer git processes, the same numbers", () => {
       writeFileSync(join(top, "b.txt"), "one\ntwo\nthree\n");   // tracked, outside
     })).toMatchObject({ files: 2 });
     rmSync(top, { recursive: true, force: true });
+  });
+
+  // UX2 (2026-11-02): a copied tree has a stale index stat cache, and with
+  // --no-optional-locks every status re-hashed the whole tree and threw the result
+  // away. The first status per process and repository may now refresh it.
+  const indexMtime = (root: string) => statSync(join(root, ".git", "index")).mtimeMs;
+  const aged = (root: string) => {
+    // Files older than the index, so no entry is racily clean and git has no reason
+    // of its own to rewrite a fresh index.
+    const past = new Date(Date.now() - 3600_000);
+    for (const f of ["a.txt", "b.txt", ".gitignore"]) utimesSync(join(root, f), past, past);
+  };
+
+  it("a stale index (a copied repository) is refreshed once, and the numbers do not move", () => {
+    const src = mkdtempSync(join(tmpdir(), "gnomon-tdf-"));
+    git(src, "init", "-q");
+    git(src, "config", "user.email", "t@t");
+    git(src, "config", "user.name", "t");
+    git(src, "config", "core.autocrlf", "false");
+    writeFileSync(join(src, "a.txt"), "alpha\nbeta\ngamma\n");
+    writeFileSync(join(src, "b.txt"), "one\ntwo\n");
+    writeFileSync(join(src, ".gitignore"), "ignored.log\n");
+    aged(src);
+    git(src, "add", "-A"); git(src, "commit", "-qm", "init");
+    // A clean copy: new inodes and timestamps, so every index entry's stat info is
+    // stale, and nothing changed, so no `git diff` runs to refresh it in passing.
+    const root = mkdtempSync(join(tmpdir(), "gnomon-tdf-copy-"));
+    cpSync(src, root, { recursive: true });
+    const before = indexMtime(root);
+    expect(promptLoop.__indexRefreshed.has(realpathSync(root))).toBe(false);
+    const fast = snap(root, false);
+    expect(promptLoop.__indexRefreshed.has(realpathSync(root))).toBe(true);
+    // Git for Windows compares less stat information, so a plain copy can leave its
+    // index valid and nothing is written back. The refresh-then-write is what POSIX
+    // git does; the exactness below is the contract on every platform.
+    if (process.platform !== "win32") expect(indexMtime(root)).toBeGreaterThan(before);
+    expect(flat(fast)).toEqual(flat(snap(root, true)));         // and nothing it measures moved
+    both(root, () => writeFileSync(join(root, "b.txt"), "one\ntwo\nthree\n"));
+    rmSync(src, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("only the first status per repository may write the index", () => {
+    const root = init(false);
+    aged(root);
+    git(root, "add", "-A"); git(root, "commit", "-qm", "init");
+    snap(root, false);                                          // the first: may refresh
+    // Same content, new timestamp: stat info goes stale again. A later status must
+    // not take the lock to fix it, and must still report nothing changed.
+    const later = new Date(Date.now() - 60_000);
+    utimesSync(join(root, "a.txt"), later, later);
+    const before = indexMtime(root);
+    const second = snap(root, false);
+    expect(indexMtime(root)).toBe(before);
+    expect(flat(second)).toEqual(flat(snap(root, true)));
+    expect(second?.tracked.size).toBe(0);
+    rmSync(root, { recursive: true, force: true });
   });
 
   it("a path git would quote falls back to ls-files and still agrees", () => {
