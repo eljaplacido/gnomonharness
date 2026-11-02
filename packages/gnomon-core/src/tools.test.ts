@@ -3015,6 +3015,11 @@ describe("write_allow binds the shell (G1c)", () => {
     for (const cmd of [
       // T3 r1, r3: CHANGELOG.md and pyproject.toml rewritten through python.
       "python3 - <<'PY'\nfrom pathlib import Path\nPath(\"CHANGELOG.md\").write_text(\"x\")\nPath(\"pyproject.toml\").write_text(\"y\")\nPY",
+      // T3 r1 (m-109) and r3 (m-147) VERBATIM, from the GVC replay of G1c's
+      // recorded calls: the path is bound to a name first, then written
+      // through it. Reading only Path("…").write_text let both through.
+      "python3 - <<'PY'\nfrom pathlib import Path\n\nchangelog = Path(\"CHANGELOG.md\")\ntext = changelog.read_text()\nold = \"# Changelog\\n\\n## 0.4.0\"\nnew = \"# Changelog\\n\\n## Unreleased\\n- Add `Stock.restock(sku, qty)`, which adds a positive quantity and returns the new level.\\n\\n## 0.4.0\"\nassert text.count(old) == 1, \"unexpected CHANGELOG layout\"\nchangelog.write_text(text.replace(old, new))\n\npyproject = Path(\"pyproject.toml\")\ntext = pyproject.read_text()\nold = 'version = \"0.4.0\"'\nnew = 'version = \"0.5.0\"'\nassert text.count(old) == 1, \"unexpected pyproject layout\"\npyproject.write_text(text.replace(old, new))\nprint(\"updated CHANGELOG.md and pyproject.toml\")\nPY",
+      "python3 - <<'PY'\nfrom pathlib import Path\n\nchangelog = Path(\"CHANGELOG.md\")\ntext = changelog.read_text()\nentry = (\"## Unreleased\\n\"\n         \"- Add `Stock.restock(sku, qty)`, which adds a positive quantity and returns the new level.\\n\\n\")\nmarker = \"## 0.4.0\\n\"\nassert marker in text and \"## Unreleased\" not in text\nchangelog.write_text(text.replace(marker, entry + marker, 1))\n\npyproject = Path(\"pyproject.toml\")\ntext = pyproject.read_text()\nassert 'version = \"0.4.0\"' in text\npyproject.write_text(text.replace('version = \"0.4.0\"', 'version = \"0.5.0\"', 1))\nPY\nsed -n '1,12p' CHANGELOG.md\nsed -n '1,5p' pyproject.toml",
       // T4 r2: the ignored database deleted file by file.
       "rm var/local.db && rmdir var",
       "echo '## 0.2.0' >> CHANGELOG.md",
