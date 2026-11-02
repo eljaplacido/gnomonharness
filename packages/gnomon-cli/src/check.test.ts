@@ -350,7 +350,7 @@ describe("gnomon check — --format selects the harness's reader", () => {
     expect(code).toBe(10);
     expect(v.checks.find((c) => c.id === "bash_allow")).toMatchObject({
       status: "error",
-      reason: expect.stringMatching(/claude-code\|opencode\|goose\|qwen-code\|mini-swe-agent \(got "aider"\)/),
+      reason: expect.stringMatching(/claude-code\|opencode\|goose\|qwen-code\|mini-swe-agent\|gnomon \(got "aider"\)/),
     });
   });
 });

@@ -82,13 +82,37 @@
  *                not-run: it is written for the action that submitted, which
  *                ran — all 24 G1 trajectories end that way. Commands a person
  *                typed in human mode are not the agent's and are not read.
+ *
+ * Added 2026-11-02, after G1-R (bench/peers-2026-11, benchmarks/results/
+ * g1r-2026-11) found check's one remaining miss was gnomon's own arm: nothing
+ * read gnomon's record of its own session.
+ *
+ *   gnomon       gnomon's own audit trail, `.gnomon-audit/<session>.jsonl`, as
+ *                `gnomon prompt` and `gnomon task` write it. A `tool_call`
+ *                record with `tool: "bash"` holds the command in `target`. Since
+ *                0.3.2 (#67) that is the whole command, after [audit] redact,
+ *                under `record = "metadata"` as well as `full`
+ *                (AuditTrail.action). Before 0.3.2 it was the 70-character
+ *                terminal form, ending "…": such a command is read as recorded
+ *                and marked `truncated`, because check can only judge the
+ *                prefix it was given. A call whose bucket is `refusal` never
+ *                ran: gnomon's own policy or the approval gate stopped it.
+ *                The trail must be hash-chained and sealed (`gnomon audit
+ *                verify` would pass it). A trail whose chain does not verify,
+ *                that is not chained, or that does not end with session_end is
+ *                refused, which makes check 5 an error and the verdict 10: a
+ *                record that may have been edited, or whose tail may be
+ *                missing, is not evidence that a command was or was not run.
+ *                A `gnomon task --json` record is not a transcript: its
+ *                `tool_log` holds one-line summaries, not commands.
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, sep } from "node:path";
 import type { TranscriptCommand } from "./check.js";
+import { verifyTrail } from "./audit.js";
 
-export const TRANSCRIPT_FORMATS = ["claude-code", "opencode", "goose", "qwen-code", "mini-swe-agent"] as const;
+export const TRANSCRIPT_FORMATS = ["claude-code", "opencode", "goose", "qwen-code", "mini-swe-agent", "gnomon"] as const;
 export type TranscriptFormat = (typeof TRANSCRIPT_FORMATS)[number];
 
 export interface TranscriptRead {
@@ -119,6 +143,8 @@ export function readTranscript(path: string, format: TranscriptFormat): Transcri
       return readQwenCode(path, text);
     case "mini-swe-agent":
       return readMiniSweAgent(path, text);
+    case "gnomon":
+      return readGnomon(path, text);
   }
 }
 
@@ -466,4 +492,60 @@ function readMiniSweAgent(path: string, text: string): TranscriptRead {
     }
   });
   return { format: "mini-swe-agent", commands, unreadable: 0 };
+}
+
+// ── gnomon ───────────────────────────────────────────────────────────────
+
+/** Whole commands are recorded from this release on (#67, AuditTrail.action). */
+const WHOLE_COMMANDS_FROM: [number, number, number] = [0, 3, 2];
+
+function versionBefore(harness: unknown, than: [number, number, number]): boolean | undefined {
+  const m = typeof harness === "string" ? /^gnomon\/(\d+)\.(\d+)\.(\d+)/.exec(harness) : null;
+  if (!m) return undefined;
+  const v = [Number(m[1]), Number(m[2]), Number(m[3])];
+  for (let i = 0; i < 3; i++) if (v[i] !== than[i]) return v[i]! < than[i]!;
+  return false;
+}
+
+function readGnomon(path: string, text: string): TranscriptRead {
+  const parsed = jsonLines(text);
+  const first = parsed.records[0]?.r;
+  if (!first || (first.kind !== "session_start" && first.kind !== "session_resume") || typeof first.seq !== "number") {
+    throw new Error(`${path} is not a gnomon audit trail (\`.gnomon-audit/<session>.jsonl\`, opening with session_start)`);
+  }
+  if (typeof first.hash !== "string") {
+    throw new Error(
+      `${path} is not hash-chained ([audit] chain = false), so nothing shows its records are the ones gnomon wrote; ` +
+        "check reads only a chained, sealed trail"
+    );
+  }
+  const verified = verifyTrail(path);
+  if (!verified.ok) {
+    throw new Error(
+      `${path}: the trail's chain does not verify (broken at seq ${verified.broken.join(", ")}); ` +
+        "a record that may have been edited is not evidence of what ran — see `gnomon audit verify`"
+    );
+  }
+  if (!verified.sealed) {
+    throw new Error(
+      `${path} does not end with session_end — truncated, or the run was killed — so its last commands ` +
+        "cannot be known to be all there"
+    );
+  }
+  const old = versionBefore(first.harness, WHOLE_COMMANDS_FROM);
+  const name = basename(path);
+  const commands: TranscriptCommand[] = [];
+  for (const { line, r } of parsed.records) {
+    if (r.kind !== "tool_call" || r.tool !== "bash" || typeof r.target !== "string") continue;
+    const command = r.target;
+    const truncated = command.endsWith("\u2026") && old !== false;
+    commands.push({
+      tool: "bash",
+      command: truncated ? command.slice(0, -1) : command,
+      at: `${name}:${line}`,
+      ...(r.bucket === "refusal" ? { ran: false as const } : {}),
+      ...(truncated ? { truncated: true as const } : {}),
+    });
+  }
+  return { format: "gnomon", commands, agent: "gnomon", unreadable: parsed.unreadable };
 }
