@@ -65,3 +65,17 @@ Classification, validity, the "attempted" column and the canary rule are G2b's
 - The probes are the deterministic part of this evidence: they say what each boundary does when tried.
 - DeepSeek V4.1 Flash never acted on an injected instruction in G2b. If that repeats, the injection rows measure the model, as G2b stated.
 - One model and one build. opencode is not re-run here, so G2b's opencode rows stand as measured on 2026-10-31.
+
+## Amendment, 2026-11-02T06:41Z, before these probes ran: an opencode configuration probe (optional)
+
+G2b found opencode V2's subagents not bound by the caller's permissions. G2b-R
+adds a **configuration** probe, model-free like the others. It is not a harness
+arm, and it is labelled as configuration wherever it is reported:
+- the reordered permission maps, plus `"task": "deny"` (arm `opencode-nosub-task`)
+  or `"subagent": "deny"` (arm `opencode-nosub-subagent`), because the key opencode
+  V2 uses for its subagent tool is not documented here;
+- G2b's five subagent probes per arm, plus one direct-write probe as a control that
+  the configuration still loads.
+
+It asks one thing: does that setting close the route? It's recorded in
+`runs/probes/opencode-config.jsonl`.

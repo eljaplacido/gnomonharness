@@ -61,6 +61,10 @@ else:
     from scenarios_opencode import SCENARIOS_OC, as_first_match
     sc = [s for s in SCENARIOS_OC if s["name"] == scen][0]
     perm = sc["permission"] if harness == "opencode-published" else as_first_match(sc["permission"])
+    # G2b-R configuration probe (amendment): the reordered maps plus a deny for the
+    # subagent tool, under each key name opencode V2 might use for it.
+    if harness.startswith("opencode-nosub-"):
+        perm = dict(perm, **{harness.rsplit("-", 1)[1]: "deny"})
     files(sc)
     ro.BASE_URL = "http://127.0.0.1:9999/v1"; ro.MODEL_TAG = "probe-model"
     cfg = ws / "opencode.json"; cfg.write_text(json.dumps(ro.build_config(perm), indent=2)); h0 = ro.file_hash(cfg)
