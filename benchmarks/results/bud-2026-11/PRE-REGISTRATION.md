@@ -140,3 +140,36 @@ The chain (`apparatus/bud-chain.sh`) waits for R1's `DONE` line in
 has been alive for 30 min. Then it takes gpu.lock (the runner's own `flock`),
 smokes, commits the final line, and launches. 64 cells at about 6–8 min each is
 about 7–9 h.
+
+## Amendment, 2026-11-02T10:36Z, before any trial: the model server moves to a second lane (hub RTX 5090)
+
+The user asked for as many benchmarks as possible today. R1 holds the gx10 GPU
+lane for about 14–18 h. Instead of waiting behind it, BUD runs on a second lane,
+and only the model server changes. No BUD cell (smoke or measured) had run.
+
+**Second lane:**
+- **Hardware:** RTX 5090 (32 GB), Windows, driver 617.14.
+- **Server:** llama.cpp **b11739** (`0ce8cd114`, released 2026-10-19), the official `llama-b11739-bin-win-cuda-13.4-x64.zip` (sha256 `c7bfa71b…da7aa`) plus `cudart-llama-bin-win-cuda-13.4-x64.zip` (sha256 `738f8c25…fe668`). Both digests match GitHub's.
+- **Weights, identical to gx10's server:**
+  - `Qwen3.6-35B-A3B-UD-Q4_K_S.gguf`, sha256 `2bee952b…95d42`;
+  - DFlash draft `Qwen3.6-35B-A3B-DFlash-Q4_K_M.gguf`, sha256 `107b7a43…52f7`.
+
+  Both were copied from gx10 and verified on the hub.
+- **Flags, as gx10's `llama-server-qwen-q4` service:** `--alias qwen3.6-35b --ctx-size 98304 --parallel 1 --n-gpu-layers 99 --batch-size 2048 --ubatch-size 256 --cache-type-k q8_0 --cache-type-v q8_0 --spec-type draft-dflash --model-draft … --cont-batching --reasoning off`.
+  - Speculative decoding (DFlash) is **on**, as on gx10.
+  - `--mlock` is dropped, because Windows needs a privilege for it; the whole model is GPU-resident.
+  - The server binary differs: upstream b11739 here, against gx10's build `1281 (571d0d54)`.
+- **Binding:** 127.0.0.1:18380 on the hub only. gx10 reaches it through an SSH local forward (`apparatus/tunnel-hub.sh`, 127.0.0.1:18280, loopback on both ends).
+- **Metering:** a second meter on 172.17.0.1:18281, counters 127.0.0.1:18299 (`apparatus/relay-meter-lane.mjs` = R1's meter, which adds `chat_requests` and `gpu_ms`). No gpu.lock: this lane is not gx10's GPU.
+- **Throughput** (one fixed request each; gx10 from its own service journal, so nothing was sent to R1's server):
+
+  | | hub | gx10 (journal, last 2 h) |
+  |---|---|---|
+  | generation | ~375 tok/s (short prompt, 223/279 draft tokens accepted); ~260 tok/s after a 6k-token prompt | median 66 tok/s |
+  | prompt processing | ~4,000 tok/s (6k-token prompt) | median ~1,070 tok/s |
+
+**What this changes:**
+- **Within BUD: nothing that separates the arms.** Both arms run on this lane, one cell at a time, in the pre-registered order and cap. The A/B stays one variable (the build).
+- **Against other runs:** the hub is about 4–6× faster, so a 900 s cap buys more model work here. BUD's absolute numbers (tasks solved, cells lost at the cap, tokens) **cannot be compared with LEAN stage 2 or R1**; only the paired base-vs-budget contrast is the result.
+- **For the primary endpoint:** a faster lane may reach the cap less often. Fewer discordant cap pairs would lower its already low power. Stated in advance.
+- **Apparatus:** `run_bud_local.sh` takes the lane from environment variables, with the pre-registered gx10 values as defaults. `apparatus/bud-chain-hub.sh` is `bud-chain.sh` without the wait for R1. The smoke and its pass rule are unchanged.

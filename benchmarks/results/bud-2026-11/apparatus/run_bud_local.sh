@@ -9,7 +9,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 BENCH="$(cd "$HERE/.." && pwd)"
 declare -A SHA=([base]="d59e6c198f91d1469198b0677c008323f82d0345" [budget]="c3bcb997293f5cb8726b367a6716a5fbce32add3")
 MODEL_ID="qwen3.6-35b"; TIMEOUT=900; ATTEMPTS=${ATTEMPTS:-2}
+# Lane (amendment 2026-11-02): defaults are the gx10 GPU lane as pre-registered;
+# LANE=hub uses the RTX 5090 lane via an SSH tunnel, with no gpu.lock.
 LOCK="$HOME/.opencode/central-brain/runtime/decisionbench/gpu.lock"
+LANE="${LANE:-gx10}"
+LISTEN_PORT="${LISTEN_PORT:-18080}"; UPSTREAM="${UPSTREAM:-http://127.0.0.1:18080}"
+COUNTERS_PORT="${COUNTERS_PORT:-18099}"; METER="${METER:-relay-meter.mjs}"
 STATUS="$BENCH/STATUS${STATUS_SUFFIX:-}.txt"
 ARMS=(base budget)
 say() { echo "$(date -u +%FT%TZ) $*" | tee -a "$STATUS"; }
@@ -26,20 +31,24 @@ for a in base budget; do
     || { say "FATAL: commit ${SHA[$a]} ($a) not reachable"; exit 1; }
 done
 "$HERE/preflight_setups.sh" | tee -a "$STATUS" || { say "FATAL: preflight failed"; exit 1; }
-exec 9>"$LOCK"
-say "waiting for gpu.lock"
-flock -w 7200 9 || { say "FATAL: gpu.lock not free within 2 h"; exit 1; }
-say "holding gpu.lock (pid $$); base=${SHA[base]} budget=${SHA[budget]}"
-RELAY_PORT=18080 node "$HERE/relay-meter.mjs" >"$BENCH/relay${STATUS_SUFFIX:-}.log" 2>&1 &
+if [ "$LANE" = "gx10" ]; then
+  exec 9>"$LOCK"
+  say "waiting for gpu.lock"
+  flock -w 7200 9 || { say "FATAL: gpu.lock not free within 2 h"; exit 1; }
+  say "holding gpu.lock (pid $$); base=${SHA[base]} budget=${SHA[budget]}"
+else
+  say "lane $LANE (no gpu.lock): meter 172.17.0.1:$LISTEN_PORT -> $UPSTREAM; base=${SHA[base]} budget=${SHA[budget]}"
+fi
+RELAY_PORT="$LISTEN_PORT" RELAY_UPSTREAM="$UPSTREAM" RELAY_COUNTERS_PORT="$COUNTERS_PORT" node "$HERE/$METER" >"$BENCH/relay${STATUS_SUFFIX:-}.log" 2>&1 &
 RELAY=$!
 trap 'kill $RELAY 2>/dev/null' EXIT
 sleep 1
 kill -0 $RELAY 2>/dev/null || { say "FATAL: relay did not start"; exit 1; }
-counters() { curl -s -m 5 http://127.0.0.1:18099/counters; }
+counters() { curl -s -m 5 "http://127.0.0.1:$COUNTERS_PORT/counters"; }
 counters | grep -q prompt_tokens || { say "FATAL: meter counters not answering"; exit 1; }
-curl -s -m 10 http://127.0.0.1:18080/v1/models | grep -q "$MODEL_ID" || { say "FATAL: $MODEL_ID not served on :18080"; exit 1; }
-export GNOMON_LOCAL_URL="http://172.17.0.1:18080/v1/chat/completions"
-export PEER_MODEL_URL="http://172.17.0.1:18080/v1"
+curl -s -m 10 "${UPSTREAM}/v1/models" | grep -q "$MODEL_ID" || { say "FATAL: $MODEL_ID not served at $UPSTREAM"; exit 1; }
+export GNOMON_LOCAL_URL="http://172.17.0.1:$LISTEN_PORT/v1/chat/completions"
+export PEER_MODEL_URL="http://172.17.0.1:$LISTEN_PORT/v1"
 export OPENAI_API_KEY="not-needed" MSWEA_API_KEY="not-needed"
 export PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}"
 mkdir -p "$BENCH/logs" "$BENCH/runs"
