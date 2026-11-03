@@ -292,3 +292,143 @@ for append.
 - Byte-identical copies:
   - from R1H: `peer_agents_r1.py`, `gnomon_agent.py`, `relay-go.mjs`, `sample16-hunch.txt`;
   - from M1: `collect_m1.py`.
+
+## Amendment 1, 2026-11-03T16:11Z: S1 runs overnight on the user's gaming machine and gives the GPU back; before any S1 data
+
+**What happened.**
+- S1 was committed as `f8053383` and launched.
+- At 2026-11-03T15:14:30Z the operator stopped it while it was still waiting on the M1a5 chain's pid. It had started
+  nothing and measured nothing (`STATUS.txt`).
+- M1a5 has since ended.
+- The RTX 5090 hub is also the user's gaming machine tonight. S1 may run overnight, but it must never get in the
+  user's way.
+
+**What changes.** Only when the lane runs, and how the lane gives the GPU back. Nothing that is measured changes.
+
+### 1. Start condition: an idle GPU, not a pid
+
+The wait on M1a5's pid is removed. The chain samples the hub every **60 s**. A sample is *idle* when:
+- GPU memory used is **< 4,000 MiB**;
+- utilization is **< 15 %**;
+- no `llama-server.exe` is running;
+- the WSL distro `m1-vllm` is not running.
+
+The lane may start after **15 consecutive idle samples (15 min)**:
+- an unreadable sample, such as ssh failing, resets the count;
+- the chain waits indefinitely, up to the new-cell deadline;
+- right before each start, the original full check also runs (it adds "nothing listening on the hub's 18380").
+
+**Cost on the hub.** Each sample is one ssh into `cmd.exe` running `nvidia-smi`, `tasklist` and `wsl -l --running
+-q`. It takes about 0.3 s and starts no PowerShell.
+
+### 2. The gaming-yield watchdog
+
+The watchdog samples the same way every **30 s**, from the moment the lane process is created until the lane is
+stopped. It yields when any of these holds:
+
+- **(a) Memory over the limit.** GPU memory used exceeds the limit for **2 consecutive samples**.
+  - The limit is the lane's measured **warm level + 1,500 MiB**.
+  - The warm level is measured right after the lane is up: after the template gate and a warm-up of two concurrent
+    ~2,000-token requests, it is the maximum of three samples 5 s apart. It includes the desktop baseline.
+  - While the lane is still loading, the limit is provisional: the desktop baseline (the last idle sample) plus
+    R1H's measured lane footprint (24,543 MiB: 27,766 used with the lane, 3,223 without) plus 1,500 MiB. A game
+    started during the load is therefore caught too.
+- **(b) Our lane is gone.** Our `llama-server.exe` is no longer running: someone ran STOP-ME, or it crashed. The
+  yield is immediate. **Running `C:\dev\bud-lane\STOP-ME.ps1` is therefore the user's manual "give me the GPU" button.**
+- **(c) Something else wants the GPU.** Another `llama-server.exe`, or `m1-vllm`, is running. The yield is immediate.
+
+An unreadable sample is not evidence: it neither yields nor resets the count.
+
+Detecting a foreground or full-screen app is **not** used:
+- ssh sessions run outside the user's interactive desktop session and cannot see its foreground window;
+- launcher processes (Steam and the like) run while idle too.
+
+GPU memory is the signal.
+
+**Footprint check.** If the measured warm level minus the desktop baseline exceeds R1H's footprint + 1,500 MiB,
+something else is already on the GPU. That counts as a yield. Two such anomalies are fatal, so the user's machine
+never sees a start/stop loop.
+
+**On a yield, in this order:**
+1. **`YIELD-NOW` is written first.** From that moment, `run_s1_a1.py` starts no cell. Every cell in flight in
+   **both** arms is aborted:
+   - its tb process group is stopped;
+   - its compose project is removed by exact label;
+   - the cell moves to `runs-aborted/<cell>-yield` (`-yield-2`, … on a repeat).
+
+   This applies even to a cell whose tb finishes after the flag. Under the operator-abort rule these cells are re-run
+   from scratch on resume and never scored.
+2. **The lane stops:** R1H's `STOP-ME.ps1`, only if the running server is the pid this chain recorded. While the
+   pid is not yet recorded, the server stopped is the bud-lane server this chain created on a hub that had none.
+3. The chain closes its tunnel, keeps the server log as a segment (`lane-s1-server-<n>.log.gz`), logs `YIELD` in
+   STATUS and returns to the idle wait.
+
+### 3. Resume
+
+On each later start the lane is checked again before any cell:
+- R1H's script starts the lane, unchanged;
+- the **props/slots check** must match R1H's, as before; any difference is fatal;
+- the **template gate** (negative control) runs again on every start, which takes seconds;
+- the warm level and the limit are re-measured.
+
+What does not repeat, and what carries over:
+- **Once only:** the smoke, and the informational abort probe. They run on the first start only (`smoke-s1.txt`
+  ending `smoke: PASS`). The lane is the same lane; only the props check stands guard for it.
+- **Finished cells.** A cell with `cell.json` is finished and never re-run. A cell directory without one moves to
+  `runs-aborted/<cell>-incomplete` and the cell is re-run.
+- **Bounded lead 1.** It holds across a yield: both arms' in-flight cells are aborted together, and on resume each
+  arm skips what it finished. The invariant is checked where the lead is enforced, in the tests.
+- **A smoke interrupted by a yield** moves its cells to `runs-smoke-failed/<cell>-yield` and runs again. It does not
+  count as a failed try.
+
+### 4. Deadline
+
+The new-cell deadline is **2026-11-04T07:00:00Z**; `S1_DEADLINE` still overrides it.
+- No lane starts after the deadline.
+- Cells in flight finish under the watchdog.
+- The chain then collects and commits.
+
+### 5. Unchanged
+
+These stay exactly as pre-registered:
+- the build `8078df03e2a28c41753825dcccab13e8a0ac03dd`: PR #120, since merged into master, with the pinned SHA
+  kept so the pre-registration holds;
+- the arms and their one-line difference;
+- the tasks, order, cap, validity, meters, ports and gates;
+- the analysis (`collect_s1.py` reads `runs/` only; aborted cells are counted and never scored);
+- the commit lock;
+- the scoped cleanup.
+
+### Apparatus
+
+**Edited:**
+- `apparatus/s1-chain.sh` (it was not running).
+
+**New:**
+- `apparatus/s1-hubwatch.sh`: the idle detector, the yield decision and the watchdog, as pure functions of one sample.
+- `apparatus/run_s1_a1.py`: imports `run_s1.py` unchanged. It adds the cell.json skip, the yield abort, a SIGTERM
+  abort (tb runs in sessions of its own), and `abort-inflight` for the chain's fallback. The smoke stays
+  `run_s1.py smoke`.
+- Offline tests, none of which touches the hub:
+  - `test_hubwatch_s1.sh` (50 cases): the parser on the hub's real output, including UTF-16 from `wsl.exe`; every
+    idle condition; count resets; the deadline; the limits; every yield trigger; the watchdog loop writing the flag
+    before the stop.
+  - `test_run_s1_a1.py` (24 cases): skip and incomplete; a yield mid-attempt in both arms; a tb finishing after the
+    flag; resume with the lead invariant; SIGTERM; `abort-inflight`; refusing to start while `YIELD-NOW` exists.
+  - `test_chain_glue_s1.sh` (15 cases): the chain's own functions playing a full yield with fakes.
+
+  The chain runs all three before its first lane start, and any failure is fatal.
+
+### Caveats, stated now
+
+- **More time separation within S1.** Cells may be spread over several lane sessions in the night. Each restart
+  resets llama.cpp's prompt cache, for both arms alike. Within a session the two arms stay time-matched by the lead.
+- **Long cells are aborted more often.** They are likelier to be in flight at a yield. The aborted run is never
+  scored and the re-run is a full, fresh cell, so the kept result does not depend on the abort. Yields come from the
+  user's gaming, not from the cells.
+- **Detection delay.** A game is caught 30–60 s after its memory crosses the limit, plus a few seconds for STOP-ME.
+  - Cells that *finish* inside that window ran under GPU contention and are kept. They can be identified afterwards
+    from `hubwatch.log`.
+  - A game using less than 1,500 MiB above the lane's level is not detected and shares the GPU. The user can always
+    yield by running STOP-ME, which is detected within 30 s.
+- **Overhead.** Each resume costs about 3–5 min before cells run (load, gate, warm-up), and needs 15 idle minutes first.
