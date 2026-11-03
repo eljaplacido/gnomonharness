@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, existsSync, symlinkSync, readdirSync } from "node:fs";
 import { generateKeyPairSync } from "node:crypto";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -273,7 +273,8 @@ describe("between sessions: checkpoints (round 4)", () => {
     // Another process: a child node writing a sealed trail with gnomon's own writer.
     const here = fileURLToPath(new URL(".", import.meta.url));
     const script =
-      `import { AuditTrail } from ${JSON.stringify(join(here, "audit.ts"))};\n` +
+      // A file URL, not a path: on Windows `D:\\…\\audit.ts` is not a valid ESM specifier.
+      `import { AuditTrail } from ${JSON.stringify(pathToFileURL(join(here, "audit.ts")).href)};\n` +
       `const t = new AuditTrail({ enabled: true, dir: ${JSON.stringify(audit())}, record: "metadata", redact: [], chain: true, invalid_redact: [] }, "skill-other");\n` +
       `t.write("session_start", { mode: "skill" }); t.write("skill_reject", { skill: "x" }); t.write("session_end", {});\n`;
     const r = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { encoding: "utf-8", cwd: join(here, "..") });
