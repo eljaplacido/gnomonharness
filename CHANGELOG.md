@@ -26,6 +26,101 @@
 
 ## [Unreleased]
 
+- **Opt-in `reasoning_content` replay, per endpoint.** gnomon dropped the
+  reasoning from every assistant message it sent back; goose replays it.
+  DeepSeek's docs (api-docs.deepseek.com/guides/thinking_mode, read
+  2026-11-03) say that with tools in thinking mode, which is its default,
+  "reasoning_content must be fully passed back to the API in all subsequent
+  requests", or the API returns 400.
+  - `[endpoints.<name>] replay_reasoning = true` sends it on assistant
+    messages, streamed or not. Undeclared it is off, except for
+    `api.deepseek.com`, whose docs require it. Strict servers refuse unknown
+    message fields (opencode's Console Go: "Extra inputs are not permitted"),
+    so nothing else changes. Ollama's `/api/chat` is never sent it.
+  - Earlier turns too: the reasoning behind a turn's answer is kept on its
+    exchange (only where the role's endpoint or its fallback replays it) and
+    sent back with that answer, so a session's second turn does not get
+    DeepSeek's 400. That includes a turn that ended through the tool-less
+    wrap-up or was answered by the fallback, since the next turn starts on the
+    primary again.
+  - A non-streamed reply with `content: null` beside tool calls no longer has
+    its reasoning promoted into the content, as a streamed one never did.
+  - The turn record's `wire` says `replay_reasoning: true` when it was sent.
+  - Tests use fake servers on 127.0.0.1.
+- **Model calls carry a declared output limit, and a reply cut off by it is
+  handled.** gnomon sent no `max_tokens`, so a reply ran until the model
+  stopped. On P2G (2026-11, hosted DeepSeek V4.1 Flash) it wrote about twice the
+  output per step that opencode and goose did, up to nine times on some tasks,
+  most of it reasoning.
+  - The limit is the role's `max_tokens`, else the endpoint's, else `[defaults]
+    max_tokens`; absent from all three, none is sent, as before (Rule 1).
+    `gnomon init` writes `[defaults] max_tokens = 32768` and `gnomon migrate`
+    adds it (`output-limit`), creating `[defaults]` on a surface that has none. 32k because on DeepSeek and llama.cpp the limit
+    counts the thinking too, and a large file write after 9k tokens of thinking
+    needs ~19k. Ollama's `/api/chat` gets it as `options.num_predict`.
+  - An endpoint that refuses the limit by name gets the call once more in a
+    shape it takes: `max_completion_tokens` (OpenAI's reasoning models,
+    remembered), the maximum its error states (DeepSeek's `[1, 8192]`,
+    remembered; vLLM's room left by this prompt, this call only), or no limit
+    for this call. Said on the warning channel, counted in
+    `counters.output_limit_adapted`, and the remembered ones show in `wire`.
+  - A tool call the limit cut off mid-arguments is not run and not counted as
+    malformed: the model is told the limit and asked for the work in smaller
+    parts. Cut-offs in a row are bounded by `[turn] max_consecutive_malformed`,
+    then the turn ends through the wrap-up as `truncated`, on the `refusal`
+    floor with `stop_detail.repeats`. A cut text reply that stays cut is also
+    `truncated` but stands as the answer, a `result`: one stop_reason in two
+    buckets, deliberately, and CONTRACTS.md and `conformance/stop_reason.json`
+    say so.
+  - A reply that reached the limit while still thinking -- no text, no tool
+    call, or only reasoning standing in for the content, as a streamed reply
+    delivers it -- is asked for a shorter one, and the thinking is not echoed
+    back as its answer. The ask re-opens after a tool call rather than once per
+    turn.
+  - `[endpoints.<name>] max_context_tokens` declares the model's window, and
+    replaces `[defaults] max_context_tokens` for the turn's leg-checkpoint and
+    overflow trims. The 65536 default trimmed a cloud model's working context
+    to ~39k every leg.
+- **Model calls to OpenAI-shaped endpoints can be streamed, and a streamed
+  reply is timed by the gap between chunks.** Every call went out `stream:
+  false`, so nothing arrived until a generation was done, and
+  `request_timeout_ms` (300 s) was the only clock. On P2G (2026-11,
+  Terminal-Bench on hosted DeepSeek V4.1 Flash, v0.3.1) long replies were cut
+  off at 300 s and sent again from the start: 11 of 18 cells hit the 30-minute
+  cap, and the relay billed the abandoned generations (data-anonymization:
+  163,404 output tokens billed, 81,742 counted).
+  - Declared, not a new code default (Rule 1): `[defaults] stream = true`
+    streams every `kind = "openai"` endpoint that does not say `stream = false`
+    itself. `gnomon init` writes it; `gnomon migrate` adds it to an existing
+    surface (`stream-replies`), so the hash moves in plain sight. Absent, calls
+    go out unstreamed as before. Ollama's own `/api/chat` is never streamed.
+  - A streamed call asks for usage (`stream_options.include_usage`); a server
+    that ignores `stream: true` and answers with one JSON body is read as one.
+  - New `[resilience] stream_idle_timeout_ms` (300 s): a stream that goes
+    silent this long is aborted as a timeout (11) and asked again within
+    `attempts`. `stream_total_timeout_ms` (30 min) caps one streamed reply and
+    is not retried, since the same prompt would run as long again. The first
+    byte waits `request_timeout_ms`, with its existing escalation, and only
+    that wait is charged to the retry budget, so a long stream that stalls or
+    breaks is still retried, and a refused socket after it still gets
+    `transport_grace_ms`. The cost: one streamed call can take up to
+    `attempts` × `stream_total_timeout_ms` of wall time, which the scaffold
+    and the guide now state.
+  - Every early end -- a timeout, an error chunk, Esc -- closes the connection,
+    so the server stops generating what nobody will read.
+  - An error sent mid-stream with no numeric code (OpenAI's `server_error`,
+    `code: null`) is 12 and retried, unless it says the prompt did not fit
+    (13), timed out (11), or names an invalid request (10). A stream that
+    breaks off is 12 and spends a generation attempt, not the transport grace.
+  - A request that may have generated tokens nobody counted -- a 2xx reply
+    with no usage report (aborted, broken off, or a server that does not
+    report usage on a stream), or one a clock ran out on -- is counted in the
+    turn record's `counters.unmetered_calls`, so a token total that is a floor
+    says so. A refused request (a 429, a 400) generated nothing and is not
+    counted.
+  - Parallel tool calls sent whole at one index are kept apart by their ids.
+  - Turn records carry `wire`: whether the call was streamed and its clocks.
+  - Tests use fake servers on 127.0.0.1.
 - **More routes into gnomon's records are refused** (re-review of the
   `record` rule):
   - a hard link made earlier (checked by inode, only for files with more than

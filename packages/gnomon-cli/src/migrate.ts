@@ -234,6 +234,36 @@ export const MIGRATIONS: Migration[] = [
     apply: (text) => addKeyToSection(text, "verify", "test_must_fail_first", "true  # a new test must fail on the code as it was"),
   },
   {
+    id: "stream-replies",
+    file: "config.toml",
+    what: `[defaults] stream absent  →  true (stream replies from kind = "openai" endpoints)`,
+    why: [
+      "Unstreamed, a reply has one clock and a long generation reaches it: on",
+      "P2G (2026-11, hosted DeepSeek V4.1 Flash, v0.3.1) replies were cut off",
+      "at 300 s and sent again, 11 of 18 cells hit the 30-minute cap, and the",
+      "relay billed the abandoned generations. Streamed, a reply is timed by",
+      "the gap between chunks. Scaffolded on since 2026-11. Only a [defaults]",
+      "with no stream line is touched; an endpoint may still say stream = false.",
+    ],
+    apply: (text) =>
+      addKeyToSectionOrCreate(text, "defaults", "stream", 'true                     # stream replies from kind = "openai" endpoints'),
+  },
+  {
+    id: "output-limit",
+    file: "config.toml",
+    what: `[defaults] max_tokens absent  →  32768 (an output limit on every reply)`,
+    why: [
+      "With no limit a reply runs until the model stops, and a reasoning",
+      "model does not stop early: on P2G (2026-11, hosted DeepSeek V4.1",
+      "Flash) gnomon wrote about twice the output per step of opencode and",
+      "goose, up to 9x on some tasks, mostly thinking. 32k counts the thinking",
+      "and still fits a large file write after it. Scaffolded since 2026-11.",
+      "Only a [defaults] with no max_tokens line is touched.",
+    ],
+    apply: (text) =>
+      addKeyToSectionOrCreate(text, "defaults", "max_tokens", "32768                # output limit per reply, thinking included (0 = none)"),
+  },
+  {
     id: "audit-enabled",
     file: "config.toml",
     what: `[audit] enabled = false  →  true`,
@@ -298,6 +328,26 @@ function addKeyToSection(text: string, section: string, key: string, value: stri
   }
   lines.splice(last + 1, 0, `${key} = ${value}`);
   return lines.join("\n");
+}
+
+/**
+ * addKeyToSection, and when the section does not exist at all, a new one at
+ * the end of the file holding just the key.
+ *
+ * For `[defaults]`, which a hand-written surface can omit entirely. Without
+ * this, such a surface was never offered stream-replies or output-limit and
+ * was told nothing: `gnomon migrate` reported it current while it ran on the
+ * old behaviour. Only for sections whose absence means "all defaults" -- a
+ * `[verify]` block is a declaration of its own and is never invented here.
+ */
+function addKeyToSectionOrCreate(text: string, section: string, key: string, value: string): string | null {
+  const present = text
+    .split("\n")
+    .some((l) => (l.match(/^\s*\[([^\]]+)\]\s*$/)?.[1] ?? "").trim() === section);
+  if (present) return addKeyToSection(text, section, key, value);
+  const nl = eol(text);
+  const head = text.replace(/(\r?\n)*$/, "");
+  return (head ? `${head}${nl}${nl}` : "") + `[${section}]${nl}${key} = ${value}${nl}`;
 }
 
 export interface MigrationResult {
