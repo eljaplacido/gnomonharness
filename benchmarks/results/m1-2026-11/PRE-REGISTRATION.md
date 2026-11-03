@@ -241,3 +241,24 @@ So about 95–100 GiB is expected once R1H has finished, R1 and P2G are paused a
   - A second death means FAILED: `M1B-FAILED.txt` gets the reason, the qwen lane is restored, and R1 and P2G are resumed.
 - **Time.** One stream makes the 32 L cells take about 3.5 h at R1's mean L cell time. PC with one stream (about 5.6 h at R1's mean PC cell) will be partial at the 13:30Z deadline. Unstarted cells are reported as not run and never imputed, and every comparison uses paired valid cells only.
 - **The variable** is still the deployment recipe. fnx now matches the incumbent's (R1's) per-slot window, its single slot and its reasoning-off mode. Engine, quantisation and MTP drafts differ.
+
+## Amendment 2, 2026-11-03T09:06Z: q38 retried with the lane README's third fallback; before any q38 data
+
+**What happened.** M1a's chain skipped q38. Its 2-concurrent garble soak failed with MTP-3 (`probe_bad` 47 of 116) and with the pre-declared MTP-1 fallback (5 of 104). Every bad probe was a duplicated or dropped number in a 1–30 count (for example `… 24 24 25 …`), and the server stayed up (`soak-q38.txt`). M1a's decision (`decision-m1a.txt`: Glimmer 12 vs 21 paired, p=0.012, incumbent wins) stands as recorded. It is not re-litigated here.
+
+**Why retry.** The fix-don't-fail rule applies. The lane's own README-M1 pre-declared a third knob, "then without MTP (would need a start.sh edit to drop --speculative-config); each fallback is an amendment". The recipe author warns that "MTP + concurrency crashes this KV path".
+
+**Change (hub, WSL distro m1-vllm):**
+- `start.sh` now passes `--speculative-config` unless `SPEC_CONFIG=none`. The default behaviour is unchanged. The original is kept at `/home/bench/m1-chain/start.sh.orig-before-amendment2`.
+- New helpers: `/home/bench/m1-chain/start-nospec.sh` and `start-seq1.sh`, wrapped by `C:\dev\m1-chain\start-m1-{nospec,seq1}.ps1`.
+
+**Order, fixed now** (`apparatus/m1a2-chain.sh`):
+- **(a)** No speculative decoding, 2 seqs, 2 slots. Garble soak at 2 concurrent, 240 s, same gate (zero bad probes).
+- **(b)** Only if (a) fails: the recipe's own concurrency, 1 seq with its MTP-3, 1 slot. Garble soak at 1 concurrent, same gate.
+- If (b) fails too, q38 is reported as "did not run: the engine garbles under this recipe", with the soak evidence.
+
+The same smoke and commit-before-data steps follow, then the L arm (16 × 2, same cap, build `d59e6c19`, deadline 13:30Z for new cells). Then `collect_m1.py --decide m1a`, unchanged, writes `decision-m1a2.txt`, now with q38 included. If q38 wins, its PC arm runs until the deadline. Glimmer gets no PC arm.
+
+**Caveats, stated now:**
+- q38 runs about 2 h after Glimmer and about 6 h after the R1H incumbent cells (time-separated, as Glimmer was).
+- Without MTP, q38 is slower than the recipe intends. Wall-clock comparisons for q38 are therefore not the recipe's best case. Solve rate is the decision metric and is unaffected by MTP in principle.
