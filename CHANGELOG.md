@@ -333,6 +333,23 @@
     not an unreachable endpoint.
   - Tests install a global dispatcher with a 400 ms limit and show a model call
     ignoring it; they fail on the previous code.
+- **The fix above now also works in a fresh `gnomon task` process.** It built
+  its Agent from Node's global dispatcher, which Node creates only when its
+  fetch implementation first loads. In `gnomon task`, that happens at the first
+  model call. The lookup found nothing and cached the miss, so every call kept
+  undici's 300 s timeouts. Ollama and unstreamed endpoints still died at
+  exactly 300 s with `UND_ERR_HEADERS_TIMEOUT` (release audit, 2026-11-03).
+  The in-process test did not catch it because vitest had already loaded
+  undici.
+  - The lookup now loads the fetch implementation first by constructing a
+    `Headers`, which does no I/O. It caches only an Agent, never a miss.
+    Unstreamed calls are bounded by `request_timeout_ms`, streamed ones by
+    #114's clocks, and nothing else.
+  - New tests run in fresh child processes. One checks that the Agent exists
+    before the first fetch. Three run `gnomon task` with undici's lazily
+    created default scaled to 0.3 s: a slow Ollama reply, a stream with a long
+    gap, and a reply cut off at gnomon's own `request_timeout_ms`. All four
+    fail on the previous code.
 - **llama.cpp's context overflow is recognised, so the turn trims and goes on.**
   llama-server reports an oversized prompt as `request (107910 tokens) exceeds
   the available context size (98304 tokens)`, type `exceed_context_size_error`.
