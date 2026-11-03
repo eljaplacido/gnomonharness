@@ -15,8 +15,10 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTask, wireOf } from "./prompt_loop.js";
-import { auditSurface, loadConfig, resolveReplayReasoning, routeRole } from "./config.js";
+import { PassThrough } from "node:stream";
+import { callEndpoint, runSessionTurn, runTask, wireOf } from "./prompt_loop.js";
+import { auditSurface, loadConfig, resolveReplayReasoning, resolveUi, routeRole } from "./config.js";
+import { Progress } from "./render.js";
 
 let servers: Server[] = [];
 const roots: string[] = [];
@@ -56,7 +58,11 @@ async function serve(streamed: boolean) {
                     },
                   ],
                 }
-              : { choices: [{ message: { role: "assistant", content: "done" }, finish_reason: "stop" }] }
+              : {
+                  choices: [
+                    { message: { role: "assistant", content: "done", reasoning_content: "Done reasoning." }, finish_reason: "stop" },
+                  ],
+                }
           )
         );
         return;
@@ -123,7 +129,7 @@ describe("replaying reasoning_content", () => {
 
   it("does the same for a streamed reply, with the reasoning reassembled from its deltas", async () => {
     const { url, bodies } = await serve(true);
-    await runTask(loadConfig(surface(url, "replay_reasoning = true")), "read x.txt", { role: "smol", yes: true });
+    await runTask(loadConfig(surface(url, "stream = true\nreplay_reasoning = true")), "read x.txt", { role: "smol", yes: true });
     expect(bodies[0]!.stream).toBe(true);
     expect(assistants(bodies[1]!)[0]!.reasoning_content).toBe("I should read x.txt first.");
   });
@@ -133,6 +139,66 @@ describe("replaying reasoning_content", () => {
     await runTask(loadConfig(surface(url, "stream = false")), "read x.txt", { role: "smol", yes: true });
     expect(bodies.length).toBe(2);
     expect(JSON.stringify(bodies)).not.toContain("reasoning_content");
+  });
+});
+
+describe("review findings (2026-11-03)", () => {
+  it("the next user turn sends back the reasoning of the turn before (a session's second turn)", async () => {
+    const { url, bodies } = await serve(false);
+    const config = loadConfig(surface(url, "stream = false\nreplay_reasoning = true"));
+    const state: any = { config, exchanges: [], currentRole: "smol" };
+    const records: Array<[string, Record<string, unknown>]> = [];
+    const deps = {
+      approve: async () => true,
+      standingApproval: () => true,
+      signal: new AbortController().signal,
+      audit: { write: (k: string, f: Record<string, unknown>) => void records.push([k, f]), text: () => undefined, action: (v: string) => v },
+      surfaceHash: "test",
+      persist: () => undefined,
+      log: () => undefined,
+      print: () => undefined,
+      progress: new Progress(resolveUi(config), new PassThrough() as never),
+    } as never;
+    // Turn 1: a tool call with reasoning, then the answer "done" -- whose
+    // reasoning is what turn 2 must send back.
+    await runSessionTurn(state, "smol", "read x.txt", false, deps);
+    expect(state.exchanges).toHaveLength(1);
+    await runSessionTurn(state, "smol", "and again", false, deps);
+    const turn2 = bodies[bodies.length - 1]!;
+    const prior = (turn2.messages as Array<Record<string, unknown>>).filter((m) => m.role === "assistant");
+    expect(prior[0]!.content).toBe("done");
+    expect(prior[0]!.reasoning_content).toBe("Done reasoning.");
+  });
+
+  it("a non-streamed content: null beside tool calls does not turn the reasoning into content", async () => {
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: null,
+                  reasoning_content: "thinking about it",
+                  tool_calls: [{ id: "c1", type: "function", function: { name: "read", arguments: '{"path":"x.txt"}' } }],
+                },
+                finish_reason: "tool_calls",
+              },
+            ],
+          })
+        );
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/chat/completions`;
+    const r = await callEndpoint({ url, model: "m", kind: "openai", temperature: 0, top_p: 1 }, [{ role: "user", content: "hi" }], [], 5000);
+    expect(r.content).toBe("");
+    expect(r.reasoning).toBe("thinking about it");
+    expect(r.toolCalls).toHaveLength(1);
   });
 });
 

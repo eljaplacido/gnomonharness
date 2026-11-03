@@ -151,7 +151,16 @@ export interface PromptExchange {
   /** One line per tool call, for the transcript */
   tool_log?: string[];
   /** Folded into the running summary; no longer replayed verbatim */
-  folded?: boolean;  /**
+  folded?: boolean;
+  /**
+   * The reasoning behind `output`, kept only when the endpoint that answered
+   * declares replay_reasoning. DeepSeek's thinking mode with tools wants the
+   * reasoning of EVERY earlier assistant message back, earlier user turns
+   * included, or answers 400 -- so the second turn of a session needs the
+   * first turn's. Replayed by buildMessages; the wire filter in callEndpoint
+   * drops it for any endpoint that does not ask for it.
+   */
+  reasoning?: string;  /**
    * Why the turn ended, and the counters behind it.
    *
    * These were computed on every turn and then dropped on the interactive path:
@@ -565,6 +574,9 @@ export function buildMessages(
     messages.push({
       role: "assistant",
       content: splitThinking(e.output).answer || e.output,
+      // Present only where the answering endpoint replays reasoning, and sent
+      // only to one that does (the wire filter in callEndpoint).
+      ...(e.reasoning ? { reasoning_content: e.reasoning } : {}),
     });
   };
 
@@ -1727,17 +1739,22 @@ async function callEndpointOnce(
     // became the rationale of every step and, on 2026-10-21, the whole final
     // answer of a 75-call audit. It is an empty reply, and the loop's
     // empty-reply handling is what should see it.
+    //
+    // And only for a reply with no tool call -- the case it exists for, and
+    // what a streamed reply does. OpenAI-style servers send content: null
+    // beside tool_calls as a matter of course, and promoting the reasoning
+    // there replayed the model's thinking to it as something it had said.
     const reasoning = message.reasoning_content ?? message.reasoning;
-    const content =
-      message.content ??
-      json.response ??
-      (typeof reasoning === "string" && isEmptyReasoning(reasoning) ? "" : reasoning) ??
-      "";
-    const finishReason = json.choices?.[0]?.finish_reason ?? json.done_reason;
-
     const raw: unknown[] = Array.isArray(message.tool_calls)
       ? message.tool_calls
       : [];
+    const content =
+      message.content ??
+      json.response ??
+      (raw.length > 0 || (typeof reasoning === "string" && isEmptyReasoning(reasoning)) ? "" : reasoning) ??
+      "";
+    const finishReason = json.choices?.[0]?.finish_reason ?? json.done_reason;
+
     const toolCalls = normaliseToolCalls(raw);
     // The reasoning stood in for a null content (and no `response`).
     const reasoningOnly =
@@ -2668,6 +2685,12 @@ export interface TurnResult {
   endpoint_url?: string;
   /** How the call went out on the wire, from the same target. See wireOf. */
   wire?: WireRecord;
+  /**
+   * The reasoning behind the reply the turn ended on, when the endpoint that
+   * answered replays reasoning. Carried into the exchange so later turns can
+   * send it back.
+   */
+  reasoning?: string;
   /**
    * The outcome of the surface's declared `[verify]` check for this turn, when
    * one ran. Absent when no check is declared or none applied.
@@ -4698,6 +4721,8 @@ export async function runAgenticTurn(
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
         wire: wireOf(adaptOutputLimit(state, usedTarget)),
+        // Kept only where it will be sent back: see PromptExchange.reasoning.
+        ...(result.reasoning && usedTarget.replayReasoning ? { reasoning: result.reasoning } : {}),
         verify: verifyOutcome,
         toolSteps: steps,
         toolLog,
@@ -8047,6 +8072,7 @@ export async function runSessionTurn(
     stop_reason: turn.stop_reason,
     stop_detail: turn.stop_detail,
     counters: turn.counters,
+    ...(turn.reasoning ? { reasoning: turn.reasoning } : {}),
   };
 
   state.exchanges.push(exchange);

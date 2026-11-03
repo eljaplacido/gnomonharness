@@ -90,10 +90,13 @@
     `api.deepseek.com`, whose docs require it. Strict servers refuse unknown
     message fields (opencode's Console Go: "Extra inputs are not permitted"),
     so nothing else changes. Ollama's `/api/chat` is never sent it.
+  - Earlier turns too: the reasoning behind a turn's answer is kept on its
+    exchange (only where the endpoint replays it) and sent back with that
+    answer, so a session's second turn does not get DeepSeek's 400.
+  - A non-streamed reply with `content: null` beside tool calls no longer has
+    its reasoning promoted into the content, as a streamed one never did.
   - The turn record's `wire` says `replay_reasoning: true` when it was sent.
-  - Known limit: earlier turns are replayed as plain question/answer text, so
-    their reasoning is not sent back; only the current turn's messages carry it.
-  - Six tests, fake servers on 127.0.0.1; five fail on the previous code.
+  - Tests use fake servers on 127.0.0.1.
 - **Every model call carries an output limit, and a reply cut off by it is
   handled.** gnomon sent no `max_tokens`, so a reply ran until the model
   stopped. On P2G (2026-11, hosted DeepSeek V4.1 Flash) it wrote about twice the

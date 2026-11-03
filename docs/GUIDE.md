@@ -583,6 +583,7 @@ max_context_tokens = 131072   # the model's window, from the provider's docs
 
 **Reasoning replay.** `replay_reasoning = true` in an `[endpoints.<name>]`
 block sends each assistant message's reasoning back as `reasoning_content`.
+That covers earlier turns of the session as well as the current one.
 DeepSeek's API requires it in thinking mode with tools (a 400 otherwise), so
 `api.deepseek.com` gets it without the line; declare it for a relay or gateway
 in front of DeepSeek. Everywhere else it is off: strict OpenAI-compatible
