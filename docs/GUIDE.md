@@ -561,6 +561,21 @@ block. One that streams without reporting usage is counted in the turn
 record's `counters.unmetered_calls`, which says the token totals are a floor.
 Ollama's own `/api/chat` is never streamed.
 
+**Output and window.** Every call carries an output limit: the role's
+`max_tokens`, else the endpoint's, else `[defaults] max_tokens` (16384); 0
+sends none. An endpoint that refuses it by name is resent once in the shape it
+takes (`max_completion_tokens`, or no limit), and the turn record's `wire`
+says which. A cloud endpoint declaring `max_context_tokens = <window>` has its
+turns trimmed to that window rather than to `[defaults] max_context_tokens`.
+
+```toml
+[endpoints.deepseek]
+url = "https://api.deepseek.com/chat/completions"
+kind = "openai"
+api_key_env = "DEEPSEEK_API_KEY"
+max_context_tokens = 131072   # the model's window, from the provider's docs
+```
+
 **llama.cpp needs `--jinja`** for tool calling; the model id is what
 `/v1/models` reports, and `--alias` sets it. Loopback, private-range,
 Tailscale (`100.64–127.x`) and `*.local` addresses are listed as **LOCAL**: no

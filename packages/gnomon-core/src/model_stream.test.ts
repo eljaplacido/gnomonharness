@@ -479,7 +479,7 @@ describe("which endpoints stream, as the surface declares it", () => {
     expect(t.stream).toBe(true);
     expect(t.streamIdleMs).toBe(90_000);
     expect(t.streamTotalMs).toBe(600_000);
-    expect(wireOf(t)).toEqual({ stream: true, stream_idle_timeout_ms: 90_000, stream_total_timeout_ms: 600_000 });
+    expect(wireOf(t)).toMatchObject({ stream: true, stream_idle_timeout_ms: 90_000, stream_total_timeout_ms: 600_000 });
   });
 
   it("the surface audit accepts stream, and says when it can do nothing", () => {

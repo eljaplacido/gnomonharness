@@ -129,6 +129,18 @@ export interface EndpointConfig {
    * token counts blank.
    */
   stream?: boolean;
+  /**
+   * The output limit sent with every call here (`max_tokens`, or Ollama's
+   * `num_predict`). A role's own `max_tokens` wins; absent from both, it is
+   * `[defaults] max_tokens`. 0 sends none. See resolveMaxTokens.
+   */
+  max_tokens?: number;
+  /**
+   * The context window of the model behind this endpoint, in tokens. Replaces
+   * `[defaults] max_context_tokens` for a turn routed here, so a cloud model
+   * with a large window is not trimmed to a budget sized for a local one.
+   */
+  max_context_tokens?: number;
 }
 
 export type EndpointKind = "ollama" | "openai";
@@ -183,6 +195,8 @@ export interface Defaults {
    * `gnomon init` writes true and `gnomon migrate` adds it. See resolveStream.
    */
   stream?: boolean;
+  /** Output limit when neither the role nor its endpoint declares one. */
+  max_tokens?: number;
   compaction?: Compaction;
 }
 
@@ -293,6 +307,8 @@ export interface RoleDef {
   description?: string;
   /** Named endpoint from config.toml [endpoints]; defaults to "local" */
   endpoint?: string;
+  /** Output limit for this role's calls; wins over the endpoint's. 0 sends none. */
+  max_tokens?: number;
   /**
    * Roles this role may delegate to with the `task` tool.
    *
@@ -1149,6 +1165,13 @@ function pickInt(value: unknown, fallback: number): number {
   return fallback;
 }
 
+/** A declared positive whole number, or undefined. */
+function positiveInt(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
 /**
  * Resolve the context-window policy from config.toml.
  *
@@ -1156,18 +1179,28 @@ function pickInt(value: unknown, fallback: number): number {
  * declared in the surface and already part of the surface hash — this reads
  * what is there rather than introducing new configuration.
  */
-export function resolveContext(config: GnomonConfig): ResolvedContext {
+export function resolveContext(
+  config: GnomonConfig,
+  /**
+   * The target a turn is routed to. Its endpoint's declared window replaces
+   * `[defaults] max_context_tokens`: P2G (2026-11) ran a cloud model with a
+   * window of hundreds of thousands of tokens under the 65536 default, and the
+   * leg checkpoint trimmed its working context to ~39k every 12 steps.
+   */
+  target?: { contextTokens?: number }
+): ResolvedContext {
   const ctx = config.config.context ?? {};
   const defaults = config.config.defaults ?? {};
+  const window = target?.contextTokens ?? pickInt(defaults.max_context_tokens, 65536);
   return {
     policy: pickEnum(ctx.policy, CONTEXT_POLICIES, "sliding_window"),
     retain_after: pickInt(ctx.retain_after, 2048),
-    max_context_tokens: pickInt(defaults.max_context_tokens, 65536),
+    max_context_tokens: window,
     compaction: pickEnum(defaults.compaction, COMPACTIONS, "summary"),
     summary_role:
       typeof ctx.summary_role === "string" ? ctx.summary_role : "smol",
     reserve_output: (() => {
-      const budget = pickInt(defaults.max_context_tokens, 65536);
+      const budget = window;
       // 15% of the window, at least 1024 — but never more than 40% of it.
       // Without the cap a small max_context_tokens was consumed entirely by
       // the floor, leaving no room for history at all.
@@ -1283,6 +1316,15 @@ export interface RouteTarget {
   streamIdleMs?: number;
   /** `[resilience] stream_total_timeout_ms`, for a streamed call */
   streamTotalMs?: number;
+  /** The output limit sent with each call; 0 or absent sends none. */
+  maxTokens?: number;
+  /**
+   * The field the limit is sent as on an OpenAI-shaped endpoint. `max_tokens`
+   * unless the endpoint refused it by name for `max_completion_tokens`.
+   */
+  maxTokensField?: "max_tokens" | "max_completion_tokens";
+  /** `[endpoints.<name>] max_context_tokens`, when declared */
+  contextTokens?: number;
 }
 
 /** The routing policy, resolved with defaults. */
@@ -1470,7 +1512,44 @@ export function resolveStream(
 }
 
 /** The only keys an [endpoints.<name>] block may carry. */
-const ENDPOINT_KEYS = new Set(["url", "kind", "api_key_env", "provider", "stream"]);
+const ENDPOINT_KEYS = new Set([
+  "url",
+  "kind",
+  "api_key_env",
+  "provider",
+  "stream",
+  "max_tokens",
+  "max_context_tokens",
+]);
+
+/**
+ * The output limit when nothing declares one.
+ *
+ * gnomon sent no limit at all, so a reply ran until the model stopped, and a
+ * reasoning model does not stop early. On P2G (2026-11, hosted DeepSeek V4.1
+ * Flash) gnomon wrote about twice the output per step that opencode and goose
+ * did on the same tasks, up to nine times on some, most of it reasoning; one
+ * cell spent 221k output tokens and left its solution a stub. 16k is room for
+ * a long file write and the thinking before it.
+ */
+export const DEFAULT_MAX_TOKENS = 16_384;
+
+/**
+ * The output limit for a role on an endpoint: the role's own `max_tokens`,
+ * else the endpoint's, else `[defaults] max_tokens`, else DEFAULT_MAX_TOKENS.
+ * 0 at any level means "send none", and stops the search there.
+ */
+export function resolveMaxTokens(
+  config: GnomonConfig,
+  role: { max_tokens?: unknown } | undefined,
+  endpoint: { max_tokens?: unknown } | undefined
+): number {
+  const ok = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
+  for (const v of [role?.max_tokens, endpoint?.max_tokens, config.config?.defaults?.max_tokens]) {
+    if (ok(v)) return Math.floor(v);
+  }
+  return DEFAULT_MAX_TOKENS;
+}
 
 /**
  * Every key a [roles.*] block may carry.
@@ -1779,7 +1858,7 @@ const BLOCK_OWNER: Record<string, BlockOwner> = {
   tools: { file: "tools.toml", read: true },
 };
 
-const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "model", "exec", "image", "profile", "task_allow", "temperature", "tools", "top_p", "write_allow"]);
+const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "max_tokens", "model", "exec", "image", "profile", "task_allow", "temperature", "tools", "top_p", "write_allow"]);
 
 /**
  * Spellings people reach for when they mean to supply a secret directly.
@@ -2476,6 +2555,21 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
       });
     }
 
+    for (const field of ["max_tokens", "max_context_tokens"]) {
+      const v = block[field];
+      if (v !== undefined && !(typeof v === "number" && Number.isFinite(v) && v >= 0)) {
+        problems.push({
+          where,
+          problem: `${field} = ${JSON.stringify(v)} is not a whole number of tokens, so it is ignored.`,
+          fix:
+            field === "max_tokens"
+              ? "max_tokens = 16384 limits each reply; 0 sends no limit."
+              : "max_context_tokens = <the model's window in tokens>, e.g. 131072.",
+          fatal: false,
+        });
+      }
+    }
+
     if (block.stream !== undefined && typeof block.stream !== "boolean") {
       problems.push({
         where,
@@ -2920,6 +3014,8 @@ export function routeRole(
     stream: resolveStream(endpoint, "ollama", config.config.defaults?.stream),
     streamIdleMs: resilience.stream_idle_timeout_ms,
     streamTotalMs: resilience.stream_total_timeout_ms,
+    maxTokens: resolveMaxTokens(config, roleDef, endpoint),
+    contextTokens: positiveInt(endpoint.max_context_tokens),
   };
 
   let fallback: RouteTarget | undefined;
@@ -2944,6 +3040,8 @@ export function routeRole(
       stream: resolveStream(fbEndpoint ?? { url: fb.url }, "openai", config.config.defaults?.stream),
       streamIdleMs: resilience.stream_idle_timeout_ms,
       streamTotalMs: resilience.stream_total_timeout_ms,
+      maxTokens: resolveMaxTokens(config, roleDef, fbEndpoint),
+      contextTokens: positiveInt(fbEndpoint?.max_context_tokens),
     };
   }
 

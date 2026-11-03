@@ -225,6 +225,11 @@ export interface PromptState {
    */
   noToolModels?: Set<string>;
   /**
+   * Endpoint+model pairs that refused the output limit, and what was done: the
+   * field renamed, or the limit dropped. Paid once per session, as above.
+   */
+  outputLimitAdapted?: Map<string, "rename" | "drop">;
+  /**
    * The session checklist, as the `todo` tool last left it.
    *
    * Session state, not surface state: it lives in the saved conversation and
@@ -706,6 +711,11 @@ interface InferenceResult {
    * Their tokens are in no total. Summed into TurnCounters.unmetered_calls.
    */
   unmeteredCalls?: number;
+  /**
+   * A 400 that named the output limit. `rename`: the endpoint wants it as
+   * max_completion_tokens. `drop`: it refused the value. See adaptOutputLimit.
+   */
+  maxTokensRejected?: "rename" | "drop";
 }
 
 /**
@@ -1458,11 +1468,21 @@ async function callEndpointOnce(
     stream: streamed,
   };
   if (streamed) payload.stream_options = { include_usage: true };
+  // The output limit, in the field this endpoint takes: Ollama's num_predict
+  // inside `options`, else max_tokens -- or max_completion_tokens, for an
+  // endpoint that refused max_tokens by name (see the 400 branch below).
+  const maxTokens = Math.max(0, Math.floor(target.maxTokens ?? 0));
+  const maxTokensField = target.maxTokensField ?? "max_tokens";
   if ((target.kind ?? "ollama") === "ollama") {
-    payload.options = { temperature: target.temperature, top_p: target.top_p };
+    payload.options = {
+      temperature: target.temperature,
+      top_p: target.top_p,
+      ...(maxTokens > 0 ? { num_predict: maxTokens } : {}),
+    };
   } else {
     payload.temperature = target.temperature;
     payload.top_p = target.top_p;
+    if (maxTokens > 0) payload[maxTokensField] = maxTokens;
   }
   if (tools.length > 0) payload.tools = tools;
 
@@ -1575,6 +1595,19 @@ async function callEndpointOnce(
           toolCallUnparsed: detail.slice(0, 500),
         };
       }
+      // The endpoint refused the output limit itself: a value above its own
+      // maximum (DeepSeek's non-thinking models take 8k), more than the window
+      // has left (vLLM: "'max_tokens' ... is too large"), or the field name
+      // (OpenAI's reasoning models: "Use 'max_completion_tokens' instead").
+      // Named on the result so the caller can resend in the shape it accepts,
+      // announced and recorded, rather than ending the turn on a limit the
+      // harness chose. Only a 400 that names the field counts.
+      const maxTokensRejected: InferenceResult["maxTokensRejected"] =
+        res.status === 400 && maxTokens > 0 && /max_(?:completion_)?tokens|num_predict/i.test(detail)
+          ? maxTokensField === "max_tokens" && /use\W+max_completion_tokens/i.test(detail)
+            ? "rename"
+            : "drop"
+          : undefined;
       return {
         content:
           `Model API error: ${res.status} ${res.statusText}` +
@@ -1584,6 +1617,7 @@ async function callEndpointOnce(
         toolCalls: [],
         toolsUnsupported:
           res.status === 400 && /does not support tools/i.test(detail),
+        ...(maxTokensRejected ? { maxTokensRejected } : {}),
       };
     }
 
@@ -1973,6 +2007,12 @@ export interface WireRecord {
   stream: boolean;
   stream_idle_timeout_ms?: number;
   stream_total_timeout_ms?: number;
+  /** The output limit sent; 0 when none was */
+  max_tokens?: number;
+  /** Set only when the limit went out under another name */
+  max_tokens_field?: string;
+  /** The window the turn's working context was trimmed to */
+  max_context_tokens?: number;
 }
 
 /**
@@ -1985,13 +2025,35 @@ export interface WireRecord {
  * the precedence between them.
  */
 export function wireOf(target: RouteTarget): WireRecord {
-  return target.stream === true
-    ? {
-        stream: true,
-        stream_idle_timeout_ms: target.streamIdleMs,
-        stream_total_timeout_ms: target.streamTotalMs,
-      }
-    : { stream: false };
+  return {
+    ...(target.stream === true
+      ? {
+          stream: true,
+          stream_idle_timeout_ms: target.streamIdleMs,
+          stream_total_timeout_ms: target.streamTotalMs,
+        }
+      : { stream: false }),
+    max_tokens: target.maxTokens ?? 0,
+    ...(target.maxTokensField && target.maxTokensField !== "max_tokens"
+      ? { max_tokens_field: target.maxTokensField }
+      : {}),
+    ...(target.contextTokens ? { max_context_tokens: target.contextTokens } : {}),
+  };
+}
+
+/**
+ * A target with the output limit this session has learned the endpoint takes.
+ *
+ * A limit the endpoint refused by name is resent once in the shape it accepts
+ * -- renamed to max_completion_tokens, or dropped -- and remembered per
+ * endpoint and model, so the refusal is paid once per session. Exported for
+ * the tests.
+ */
+export function adaptOutputLimit(state: PromptState, target: RouteTarget): RouteTarget {
+  const seen = state.outputLimitAdapted?.get(`${target.url}|${target.model}`);
+  if (seen === "rename") return { ...target, maxTokensField: "max_completion_tokens" };
+  if (seen === "drop") return { ...target, maxTokens: 0 };
+  return target;
 }
 
 /** Marker text for a turn the user stopped. Code 2 → bucket `refusal`. */
@@ -3721,7 +3783,6 @@ export async function runAgenticTurn(
       ? Math.floor(maxTotal * Math.min(1, declaredConverge))
       : Infinity;
 
-  const ctxLimits = resolveContext(config);
   const working: ChatMessage[] = [...messages];
   const toolLog: string[] = [];
   const surfaceChanges: SurfaceDrift[] = [];
@@ -3833,7 +3894,7 @@ export async function runAgenticTurn(
     model: usedModel,
     endpoint: usedTarget.endpoint,
     endpoint_url: usedTarget.url,
-    wire: wireOf(usedTarget),
+    wire: wireOf(adaptOutputLimit(state, usedTarget)),
     verify: verifyOutcome,
     toolSteps: steps,
     toolLog,
@@ -3854,7 +3915,8 @@ export async function runAgenticTurn(
    * silent: a turn that ran with fewer tools than the surface declared is
    * exactly what system.md says must never pass unremarked.
    */
-  const call = async (target: typeof route.target) => {
+  const call = async (declared: typeof route.target) => {
+    let target = adaptOutputLimit(state, declared);
     const offer = noTools.has(target.model) ? [] : toolSet.schemas;
     let r = await callEndpointWithRetry(
       target,
@@ -3869,6 +3931,39 @@ export async function runAgenticTurn(
     );
     turnUsage = addUsage(turnUsage, r.usage);
     countUnmetered(r);
+
+    // The endpoint refused the output limit gnomon chose. Resent once in the
+    // shape it takes, said on the unsilenceable channel, and remembered for
+    // the session; the turn record's `wire` carries the limit that went out.
+    if (r.maxTokensRejected && (target.maxTokens ?? 0) > 0) {
+      const how = r.maxTokensRejected;
+      (state.outputLimitAdapted ??= new Map()).set(`${target.url}|${target.model}`, how);
+      deps.progress.stop();
+      warn(
+        paint(
+          deps.ui,
+          "yellow",
+          how === "rename"
+            ? `  [endpoint] ${target.model} takes its output limit as max_completion_tokens — resending under that name.`
+            : `  [endpoint] ${target.model} refused max_tokens = ${target.maxTokens} — resending with no output limit. ` +
+                `Declare a max_tokens it accepts on the role or [endpoints.${target.endpoint ?? "<name>"}].`
+        )
+      );
+      deps.progress.start(`${target.model}`);
+      target = adaptOutputLimit(state, declared);
+      r = await callEndpointWithRetry(
+        target,
+        working,
+        offer,
+        resilience.request_timeout_ms,
+        resilience,
+        deps.say,
+        deps.ui,
+        deps.signal,
+        state.sessionId
+      );
+      turnUsage = addUsage(turnUsage, r.usage);
+    }
 
     if (r.toolsUnsupported && offer.length > 0) {
       noTools.add(target.model);
@@ -4034,6 +4129,12 @@ export async function runAgenticTurn(
       }
     }
 
+    // Once per stretch of no progress, not once per turn. Now that every call
+    // carries an output limit, a long turn can meet it more than once, and a
+    // spent once-per-turn latch let the second cut-off reply stand as the
+    // answer. A reply that calls a tool is progress and re-opens the latch; a
+    // cut-off straight after a cut-off still stands, so this cannot loop.
+    if (result.code === 0 && result.toolCalls.length > 0) truncationRetried = false;
     if (
       result.code === 0 &&
       result.toolCalls.length === 0 &&
@@ -4042,15 +4143,30 @@ export async function runAgenticTurn(
       steps < maxTotal
     ) {
       truncationRetried = true;
+      const limit = adaptOutputLimit(state, usedTarget).maxTokens ?? 0;
+      const where = limit > 0 ? ` (max_tokens = ${limit})` : "";
+      // Nothing visible came back: the reasoning spent the whole limit. Asking
+      // it to "continue" would continue the thinking, which is the problem.
+      const spentOnThinking = !result.content.trim();
       say(
-        paint(deps.ui, "yellow", `  [loop] the reply was cut off at the token limit — asking for the rest`)
+        paint(
+          deps.ui,
+          "yellow",
+          spentOnThinking
+            ? `  [loop] the reply hit the output limit${where} before any answer — asking for a shorter one`
+            : `  [loop] the reply was cut off at the output limit${where} — asking for the rest`
+        )
       );
-      working.push({ role: "assistant", content: result.content });
+      if (!spentOnThinking) working.push({ role: "assistant", content: result.content });
       working.push({
         role: "user",
-        content:
-          `That reply was cut off at the token limit. Continue from exactly where ` +
-          `it stopped, or if the work is done, say so briefly.`,
+        content: spentOnThinking
+          ? `Your last reply reached the output limit${where} while still thinking, so ` +
+            `nothing came back: no answer and no tool call. Think less this time. ` +
+            `Make the next tool call now, or answer in a few sentences.`
+          : `That reply was cut off at the output limit${where}. Continue from exactly where ` +
+            `it stopped, or if the work is done, say so briefly. If you were writing a ` +
+            `long file, write it in parts.`,
       });
       continue;
     }
@@ -4155,7 +4271,10 @@ export async function runAgenticTurn(
     // progress since the first.
     if (result.code === 13 && steps > overflowTrimmedAt && steps < maxTotal) {
       overflowTrimmedAt = steps;
-      const budget = Math.max(1024, Math.floor(ctxLimits.max_context_tokens * 0.5));
+      const budget = Math.max(
+        1024,
+        Math.floor(resolveContext(config, usedTarget).max_context_tokens * 0.5)
+      );
       const trimmed = trimWorking(working, budget);
       if (trimmed.dropped > 0) {
         working.length = 0;
@@ -4406,7 +4525,7 @@ export async function runAgenticTurn(
         model: usedModel,
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
-        wire: wireOf(usedTarget),
+        wire: wireOf(adaptOutputLimit(state, usedTarget)),
         verify: verifyOutcome,
         toolSteps: steps,
         toolLog,
@@ -4524,7 +4643,7 @@ export async function runAgenticTurn(
           `were unable to examine, so the answer is legibly partial.`,
       });
       const closing = await callEndpoint(
-        route.target,
+        adaptOutputLimit(state, route.target),
         working,
         [],
         modelTimeoutMs(config),
@@ -4555,7 +4674,7 @@ export async function runAgenticTurn(
         model: usedModel,
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
-        wire: wireOf(usedTarget),
+        wire: wireOf(adaptOutputLimit(state, usedTarget)),
         verify: verifyOutcome,
         toolSteps: steps,
         toolLog,
@@ -4577,7 +4696,12 @@ export async function runAgenticTurn(
       leg++;
       stepsThisLeg = 0;
 
-      const budget = Math.max(1024, Math.floor(ctxLimits.max_context_tokens * 0.6));
+      // The window of the endpoint answering, when it declares one: a cloud
+      // model was trimmed to 60% of a default sized for a local one.
+      const budget = Math.max(
+        1024,
+        Math.floor(resolveContext(config, usedTarget).max_context_tokens * 0.6)
+      );
       const before = working.length;
       const trimmed = trimWorking(working, budget);
       if (trimmed.dropped > 0) {
@@ -5140,7 +5264,7 @@ export async function compactSession(
 
   const route = routeRole(state.config, role);
   const result = await callEndpoint(
-    route.target,
+    adaptOutputLimit(state, route.target),
     [
       { role: "system", content: SUMMARY_INSTRUCTION },
       { role: "user", content: `${priorSummary}${transcript}` },

@@ -3699,7 +3699,8 @@ describe("request shape follows the endpoint kind", () => {
 
   it("sends Ollama its nested options and no top-level sampling params", async () => {
     const body = await bodyFor("ollama", "http://127.0.0.1:11434/api/chat");
-    expect(body.options).toEqual({ temperature: 0.2, top_p: 0.9 });
+    // num_predict is Ollama's spelling of the output limit (16384 by default).
+    expect(body.options).toEqual({ temperature: 0.2, top_p: 0.9, num_predict: 16384 });
     expect(body).not.toHaveProperty("temperature");
     expect(body).not.toHaveProperty("top_p");
   });
@@ -3738,7 +3739,8 @@ describe("request shape follows the endpoint kind", () => {
       }
       for (const k of Object.keys(body)) {
         // stream_options is OpenAI's own: it asks a streamed reply for usage.
-        if (!["model", "messages", "stream", "stream_options", "temperature", "top_p", "tools"].includes(k)) {
+        // max_tokens is OpenAI's output limit.
+        if (!["model", "messages", "stream", "stream_options", "max_tokens", "temperature", "top_p", "tools"].includes(k)) {
           offenders.push(`payload.${k}`);
         }
       }
