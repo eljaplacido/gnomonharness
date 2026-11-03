@@ -126,6 +126,7 @@ export function classifyRefusal(
     [/refused \(surface is read-only\)$/, "surface"],
     [/refused \(network = false\)$/, "network"],
     [/refused \(sudo\)$/, "sudo"],
+    [/refused \(gnomon's records\)$/, "record"],
   ];
   const rule =
     typeof r.rule === "string" ? r.rule : fixed.find(([re]) => re.test(summary))?.[1];
