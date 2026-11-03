@@ -1466,7 +1466,7 @@ export function shq(value: string): string {
 
 export function sandboxCommand(
   command: string,
-  ctx: { root: string; exec?: { mode: "off" | "docker"; image: string; network: boolean } },
+  ctx: { root: string; exec?: { mode: "off" | "docker"; image: string; network: boolean }; agentSession?: string },
   name: string
 ): string {
   const ex = ctx.exec;
@@ -1506,6 +1506,10 @@ export function sandboxCommand(
     // its neighbours not.
     `-v ${shq(ctx.root)}:${shq(ctx.root)}`,
     `-w ${shq(ctx.root)}`,
+    // The agent-session marker, into the container too: a `gnomon skill
+    // accept` installed in the image is the agent's as much as one on the
+    // host. `-e NAME=value`, the value quoted for the host shell.
+    `-e ${AGENT_SESSION_ENV}=${shq(ctx.agentSession || `pid-${process.pid}`)}`,
     ex.image,
     `sh -c ${inner}`,
   ]

@@ -29,7 +29,8 @@
 - **The agent cannot accept its own skill.** `gnomon skill accept`, run
   through the agent's bash, used to work and recorded `by: "human"`.
   - The harness now sets `GNOMON_AGENT_SESSION=<session>` in every tool
-    subprocess (the bash shell and MCP servers).
+    subprocess (the bash shell and MCP servers), and passes it into the
+    docker sandbox with `-e`.
   - `skill accept` and `reject` refuse when they see it, with exit 3, and
     write nothing.
   - The variable can be removed, so records no longer claim a person. They

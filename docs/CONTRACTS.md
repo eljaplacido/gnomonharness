@@ -667,8 +667,8 @@ dashes. Anything else, such as `../keep`, is refused before it becomes a
 path.
 
 **Not from inside an agent.** The harness sets `GNOMON_AGENT_SESSION=<session>`
-in the environment of every tool subprocess: the bash tool's shell and every
-MCP server. `skill accept` and `skill reject` refuse when it is present, with
+in the environment of every tool subprocess: the bash tool's shell (inside
+the docker sandbox too, via `-e`) and every MCP server. `skill accept` and `skill reject` refuse when it is present, with
 exit **3** (`refused_by_gate`, §1), and write nothing.
 
 A process can remove the variable (`env -u`), so this check is a refusal with

@@ -2578,6 +2578,14 @@ describe("sandboxCommand — where bash actually runs", () => {
     expect(c).toContain("-w '/repo'");
   });
 
+  it("passes the agent-session marker into the container", () => {
+    // Found in round-3 review: the host shell got GNOMON_AGENT_SESSION, the
+    // container did not, so `gnomon skill accept` in the image ran unmarked.
+    expect(sandboxCommand("ls", { ...on, agentSession: "s-9" }, "n")).toContain("-e GNOMON_AGENT_SESSION='s-9'");
+    expect(sandboxCommand("ls", on, "n")).toMatch(/-e GNOMON_AGENT_SESSION='pid-\d+'/);
+    expect(sandboxCommand("ls", { root: "/repo" }, "n")).toBe("ls");
+  });
+
   it("maps the caller, or every file comes back owned by root", () => {
     // The first thing testing this found: without --user the operator cannot
     // edit their own repository after the agent writes in it.
