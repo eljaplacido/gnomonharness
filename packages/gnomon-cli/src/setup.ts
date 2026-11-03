@@ -123,6 +123,59 @@ export async function checkReadiness(
   return { ready: true };
 }
 
+/**
+ * Providers worth not making someone look up.
+ *
+ * A URL, a request shape and a key variable is the whole of an endpoint, and
+ * all three are things you can get subtly wrong in ways that surface much
+ * later as a 401 or an empty model list. Presets are not a feature; they are
+ * the three fields, already correct.
+ *
+ * Shared by `gnomon endpoint add` and `gnomon setup` (setup_wizard.ts).
+ */
+export interface EndpointPreset {
+  name: string;
+  url: string;
+  kind: string;
+  api_key_env?: string;
+  provider?: string;
+  note: string;
+}
+
+export const ENDPOINT_PRESETS: Record<string, EndpointPreset> = {
+  "opencode-go": {
+    name: "go",
+    url: "https://opencode.ai/zen/go/v1/chat/completions",
+    kind: "openai",
+    api_key_env: "OPENCODE_API_KEY",
+    provider: "opencode",
+    note: "OpenCode Go — the subscription tier at opencode.ai/go",
+  },
+  "opencode-zen": {
+    name: "zen",
+    url: "https://opencode.ai/zen/v1/chat/completions",
+    kind: "openai",
+    api_key_env: "OPENCODE_API_KEY",
+    provider: "opencode",
+    note: "OpenCode Zen — pay-as-you-go",
+  },
+  openrouter: {
+    name: "openrouter",
+    url: "https://openrouter.ai/api/v1/chat/completions",
+    kind: "openai",
+    api_key_env: "OPENROUTER_API_KEY",
+    provider: "openrouter",
+    note: "OpenRouter — many providers behind one key",
+  },
+  ollama: {
+    name: "local",
+    url: "http://127.0.0.1:11434/api/chat",
+    kind: "ollama",
+    provider: "ollama",
+    note: "Ollama on this machine — no key",
+  },
+};
+
 /** One row of the first-run picker. `preset` is a key of ENDPOINT_PRESETS. */
 export interface SetupChoice {
   preset: string;
@@ -132,9 +185,14 @@ export interface SetupChoice {
 
 /**
  * What the picker offers, in order. Local first: it needs no account and no
- * key, and on a machine that has Ollama it is one keystroke from working.
+ * key, and on a machine that has Ollama it is one keystroke from working. The
+ * guided setup leads, so Enter is the path that needs no knowledge at all.
+ * `setup` is not an ENDPOINT_PRESETS key: launch runs the wizard for it.
  */
 export const SETUP_CHOICES: SetupChoice[] = [
+  // The wizard first: it looks at this machine, recommends a model it can run
+  // and asks before downloading or writing anything (`gnomon setup`).
+  { preset: "setup", label: "Guided setup", note: "scan this machine, plug in a model it can run (gnomon setup)" },
   { preset: "ollama", label: "Ollama", note: "local, on this machine — no key" },
   { preset: "openrouter", label: "OpenRouter", note: "many providers behind one key" },
   { preset: "opencode-go", label: "OpenCode Go", note: "the opencode.ai subscription" },
