@@ -142,6 +142,11 @@ export interface EndpointConfig {
    * with a large window is not trimmed to a budget sized for a local one.
    */
   max_context_tokens?: number;
+  /**
+   * Send each assistant message's reasoning back as `reasoning_content`. See
+   * resolveReplayReasoning for the default and why it is off almost everywhere.
+   */
+  replay_reasoning?: boolean;
 }
 
 export type EndpointKind = "ollama" | "openai";
@@ -1329,6 +1334,8 @@ export interface RouteTarget {
   maxTokensField?: "max_tokens" | "max_completion_tokens";
   /** `[endpoints.<name>] max_context_tokens`, when declared */
   contextTokens?: number;
+  /** Replay reasoning_content on assistant messages. See resolveReplayReasoning. */
+  replayReasoning?: boolean;
 }
 
 /** The routing policy, resolved with defaults. */
@@ -1524,7 +1531,46 @@ const ENDPOINT_KEYS = new Set([
   "stream",
   "max_tokens",
   "max_context_tokens",
+  "replay_reasoning",
 ]);
+
+/**
+ * Hosts whose own API documentation requires reasoning to be sent back.
+ *
+ * DeepSeek, api-docs.deepseek.com/guides/thinking_mode (read 2026-11-03):
+ * thinking mode is on by default, and when `tools` are sent, "the
+ * reasoning_content must be fully passed back to the API in all subsequent
+ * requests" -- for turns with no tool call too -- and "If your code does not
+ * correctly pass back reasoning_content, the API will return a 400 error."
+ * Without tools it is ignored. Matched on the hostname only: a relay or a
+ * gateway in front of DeepSeek is a different server and says so itself.
+ */
+const REPLAY_REASONING_HOSTS = [/(^|\.)api\.deepseek\.com$/];
+
+/**
+ * Whether an endpoint gets `reasoning_content` back on assistant messages.
+ *
+ * Declared wins. Undeclared it is off, except for a host listed above, because
+ * the field is not part of OpenAI's message schema and strict servers refuse
+ * extra message fields: opencode's Console Go answered gnomon's surplus
+ * `tool_name` with "400 Extra inputs are not permitted". Ollama's /api/chat
+ * calls it `thinking` and is never sent it.
+ */
+export function resolveReplayReasoning(endpoint: {
+  url?: string;
+  kind?: EndpointKind;
+  replay_reasoning?: unknown;
+}, unclear: EndpointKind = "ollama"): boolean {
+  if (endpointKind(endpoint, unclear) === "ollama") return false;
+  if (typeof endpoint.replay_reasoning === "boolean") return endpoint.replay_reasoning;
+  let host = "";
+  try {
+    host = new URL(endpoint.url ?? "").hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  return REPLAY_REASONING_HOSTS.some((re) => re.test(host));
+}
 
 /**
  * The output limit `gnomon init` declares in `[defaults] max_tokens`.
@@ -2584,6 +2630,26 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
       }
     }
 
+    if (block.replay_reasoning !== undefined && typeof block.replay_reasoning !== "boolean") {
+      problems.push({
+        where,
+        problem: `replay_reasoning = ${JSON.stringify(block.replay_reasoning)} is not true or false, so it is ignored.`,
+        fix: "replay_reasoning = true sends reasoning_content back on assistant messages; false does not.",
+        fatal: false,
+      });
+    } else if (
+      block.replay_reasoning === true &&
+      endpointKind({ url: block.url as string | undefined, kind: block.kind as EndpointKind | undefined }) ===
+        "ollama"
+    ) {
+      problems.push({
+        where,
+        problem: `replay_reasoning = true on an Ollama /api/chat endpoint: that route is never sent reasoning_content, so the line does nothing.`,
+        fix: "Delete the line, or use the server's OpenAI route with kind = \"openai\".",
+        fatal: false,
+      });
+    }
+
     if (block.stream !== undefined && typeof block.stream !== "boolean") {
       problems.push({
         where,
@@ -3030,6 +3096,7 @@ export function routeRole(
     streamTotalMs: resilience.stream_total_timeout_ms,
     maxTokens: resolveMaxTokens(config, roleDef, endpoint),
     contextTokens: positiveInt(endpoint.max_context_tokens),
+    replayReasoning: resolveReplayReasoning(endpoint),
   };
 
   let fallback: RouteTarget | undefined;
@@ -3056,6 +3123,7 @@ export function routeRole(
       streamTotalMs: resilience.stream_total_timeout_ms,
       maxTokens: resolveMaxTokens(config, roleDef, fbEndpoint),
       contextTokens: positiveInt(fbEndpoint?.max_context_tokens),
+      replayReasoning: resolveReplayReasoning(fbEndpoint ?? { url: fb.url }, "openai"),
     };
   }
 

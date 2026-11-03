@@ -581,6 +581,13 @@ api_key_env = "DEEPSEEK_API_KEY"
 max_context_tokens = 131072   # the model's window, from the provider's docs
 ```
 
+**Reasoning replay.** `replay_reasoning = true` in an `[endpoints.<name>]`
+block sends each assistant message's reasoning back as `reasoning_content`.
+DeepSeek's API requires it in thinking mode with tools (a 400 otherwise), so
+`api.deepseek.com` gets it without the line; declare it for a relay or gateway
+in front of DeepSeek. Everywhere else it is off: strict OpenAI-compatible
+servers refuse unknown message fields.
+
 **llama.cpp needs `--jinja`** for tool calling; the model id is what
 `/v1/models` reports, and `--alias` sets it. Loopback, private-range,
 Tailscale (`100.64–127.x`) and `*.local` addresses are listed as **LOCAL**: no

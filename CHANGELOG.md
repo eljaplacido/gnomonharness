@@ -79,6 +79,59 @@
     that wait is charged to the retry budget, so a long stream that stalls or
     breaks is still retried, and a refused socket after it still gets
     `transport_grace_ms`.
+- **Opt-in `reasoning_content` replay, per endpoint.** gnomon dropped the
+  reasoning from every assistant message it sent back; goose replays it.
+  DeepSeek's docs (api-docs.deepseek.com/guides/thinking_mode, read
+  2026-11-03) say that with tools in thinking mode, which is its default,
+  "reasoning_content must be fully passed back to the API in all subsequent
+  requests", or the API returns 400.
+  - `[endpoints.<name>] replay_reasoning = true` sends it on assistant
+    messages, streamed or not. Undeclared it is off, except for
+    `api.deepseek.com`, whose docs require it. Strict servers refuse unknown
+    message fields (opencode's Console Go: "Extra inputs are not permitted"),
+    so nothing else changes. Ollama's `/api/chat` is never sent it.
+  - The turn record's `wire` says `replay_reasoning: true` when it was sent.
+  - Known limit: earlier turns are replayed as plain question/answer text, so
+    their reasoning is not sent back; only the current turn's messages carry it.
+  - Six tests, fake servers on 127.0.0.1; five fail on the previous code.
+- **Every model call carries an output limit, and a reply cut off by it is
+  handled.** gnomon sent no `max_tokens`, so a reply ran until the model
+  stopped. On P2G (2026-11, hosted DeepSeek V4.1 Flash) it wrote about twice the
+  output per step that opencode and goose did, up to nine times on some tasks,
+  most of it reasoning.
+  - The limit is the role's `max_tokens`, else the endpoint's, else `[defaults]
+    max_tokens`, else 16384; 0 sends none. Ollama's `/api/chat` gets it as
+    `options.num_predict`. `gnomon init` declares `[defaults] max_tokens`.
+  - An endpoint that refuses it by name is resent once in the shape it takes:
+    `max_completion_tokens` (OpenAI's reasoning models), or no limit (a value
+    above the provider's maximum). Said on the warning channel, remembered for
+    the session, and the turn record's `wire` carries the limit that went out.
+  - A reply that reached the limit while still thinking (no text, no tool call)
+    is asked for a shorter one rather than to "continue". The ask is once per
+    stretch without progress, not once per turn: a tool call re-opens it, so a
+    long turn's second cut-off no longer stands as the answer.
+  - `[endpoints.<name>] max_context_tokens` declares the model's window, and
+    replaces `[defaults] max_context_tokens` for the turn's leg-checkpoint and
+    overflow trims. The 65536 default trimmed a cloud model's working context
+    to ~39k every leg.
+  - Eight tests, fake servers on 127.0.0.1; all eight fail on the previous code.
+- **Model calls to OpenAI-shaped endpoints are streamed, and timed by the gap
+  between chunks.** Every call went out `stream: false`, so nothing arrived
+  until a generation was done, and `request_timeout_ms` (300 s) was the only
+  clock. On P2G (2026-11, Terminal-Bench on hosted DeepSeek V4.1 Flash, v0.3.1)
+  long replies were cut off at 300 s and sent again from the start: 11 of 18
+  cells hit the 30-minute cap, and the relay billed the abandoned generations
+  (data-anonymization: 163,404 output tokens billed, 81,742 counted).
+  - `kind = "openai"` endpoints stream (SSE) with `stream_options.include_usage`,
+    so the token counts are the provider's own, as before. `stream = false` in
+    an `[endpoints.<name>]` block turns it off; a server that ignores
+    `stream: true` and answers with one JSON body is read as one. Ollama's own
+    `/api/chat` is not streamed.
+  - New `[resilience] stream_idle_timeout_ms` (300 s): a streamed reply that
+    goes silent this long is aborted as a timeout (11) and asked again within
+    `attempts`. `stream_total_timeout_ms` (30 min) caps one streamed reply; it is
+    not retried, since the same prompt would run as long again. The first byte
+    still waits `request_timeout_ms`, with its existing escalation.
   - Every early end -- a timeout, an error chunk, Esc -- closes the connection,
     so the server stops generating what nobody will read.
   - An error sent mid-stream with no numeric code (OpenAI's `server_error`,

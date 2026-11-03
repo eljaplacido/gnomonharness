@@ -392,6 +392,11 @@ export interface ChatMessage {
   content: string;
   /** Echoed back verbatim on an assistant turn that called tools */
   tool_calls?: unknown[];
+  /**
+   * The reasoning behind an assistant message. Always kept here, and sent only
+   * to an endpoint with replay_reasoning on (see callEndpoint).
+   */
+  reasoning_content?: string;
   /** Set on a tool result; both spellings, since backends differ */
   tool_call_id?: string;
   tool_name?: string;
@@ -722,6 +727,12 @@ interface InferenceResult {
    * an answer is reading the model think.
    */
   reasoningOnly?: boolean;
+  /**
+   * The reply's reasoning channel (reasoning_content, or reasoning), when it
+   * had one and it did not stand in for the content. Replayed on the
+   * assistant message only where the endpoint asks for it.
+   */
+  reasoning?: string;
 }
 
 /**
@@ -1454,7 +1465,15 @@ async function callEndpointOnce(
   const OPENAI_MESSAGE_KEYS = new Set(["role", "content", "tool_calls", "tool_call_id", "name"]);
   const OLLAMA_MESSAGE_KEYS = new Set(["role", "content", "tool_calls", "tool_name"]);
   const isOllama = (target.kind ?? "ollama") === "ollama";
-  const allowedKeys = isOllama ? OLLAMA_MESSAGE_KEYS : OPENAI_MESSAGE_KEYS;
+  // reasoning_content is on the list only for an endpoint that asks for it
+  // (replay_reasoning), and only on assistant messages, which are the only
+  // ones that carry it. Everywhere else it is the surplus field this list
+  // exists to drop.
+  const allowedKeys = isOllama
+    ? OLLAMA_MESSAGE_KEYS
+    : target.replayReasoning
+      ? new Set([...OPENAI_MESSAGE_KEYS, "reasoning_content"])
+      : OPENAI_MESSAGE_KEYS;
   const wireMessages = messages.map((m) => {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(m as unknown as Record<string, unknown>)) {
@@ -1687,6 +1706,7 @@ async function callEndpointOnce(
         rawToolCalls: raw,
         usage: s.usage,
         finishReason: s.finishReason,
+        ...(!promoted && s.reasoning && !isEmptyReasoning(s.reasoning) ? { reasoning: s.reasoning } : {}),
       };
     }
 
@@ -1723,6 +1743,11 @@ async function callEndpointOnce(
     const reasoningOnly =
       message.content == null && json.response == null && content !== "" && content === reasoning;
 
+    // The reasoning, unless it already stands in for the content above.
+    const kept =
+      typeof reasoning === "string" && reasoning && !isEmptyReasoning(reasoning) && content !== reasoning
+        ? { reasoning }
+        : {};
     return {
       content,
       code: 0,
@@ -1731,6 +1756,7 @@ async function callEndpointOnce(
       usage: readUsage(json),
       finishReason,
       ...(reasoningOnly ? { reasoningOnly: true } : {}),
+      ...kept,
     };
   } catch (err) {
     if (signal?.aborted) {
@@ -2027,6 +2053,8 @@ export interface WireRecord {
   max_tokens_field?: string;
   /** The window the turn's working context was trimmed to */
   max_context_tokens?: number;
+  /** Present, and true, only when reasoning_content was sent back */
+  replay_reasoning?: boolean;
 }
 
 /**
@@ -2052,6 +2080,7 @@ export function wireOf(target: RouteTarget): WireRecord {
       ? { max_tokens_field: target.maxTokensField }
       : {}),
     ...(target.contextTokens ? { max_context_tokens: target.contextTokens } : {}),
+    ...(target.replayReasoning ? { replay_reasoning: true } : {}),
   };
 }
 
@@ -4286,7 +4315,13 @@ export async function runAgenticTurn(
             : `  [loop] the reply was cut off at the output limit${where} — asking for the rest`
         )
       );
-      if (!spentOnThinking) working.push({ role: "assistant", content: result.content });
+      if (!spentOnThinking) {
+        working.push({
+          role: "assistant",
+          content: result.content,
+          ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
+        });
+      }
       working.push({
         role: "user",
         content: spentOnThinking
@@ -4324,7 +4359,11 @@ export async function runAgenticTurn(
             "template may not match this endpoint's tool protocol"
         )
       ) {
-        working.push({ role: "assistant", content: result.content });
+        working.push({
+          role: "assistant",
+          content: result.content,
+          ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
+        });
         working.push({
           role: "user",
           content:
@@ -4619,7 +4658,11 @@ export async function runAgenticTurn(
           verifyOutcome = "failed";
           say(paint(deps.ui, "yellow",
             `    ⚠ verify failed — handing the turn back`));
-          working.push({ role: "assistant", content: result.content });
+          working.push({
+          role: "assistant",
+          content: result.content,
+          ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
+        });
           working.push({
             role: "system",
             content:
@@ -4868,6 +4911,8 @@ export async function runAgenticTurn(
       role: "assistant",
       content: result.content ?? "",
       tool_calls: result.rawToolCalls,
+      // Sent only where the endpoint declares replay_reasoning; see callEndpoint.
+      ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
     });
 
     // Models usually say why before they call something, and that text was
