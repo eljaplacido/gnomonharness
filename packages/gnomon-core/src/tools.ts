@@ -29,7 +29,7 @@ import {
   lstatSync,
   readlinkSync
 } from "node:fs";
-import { resolve, relative, isAbsolute, dirname, join, sep, win32 as win32Path } from "node:path";
+import { resolve, relative, isAbsolute, dirname, basename, join, sep, win32 as win32Path } from "node:path";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
 import { promisify } from "node:util";
@@ -1871,36 +1871,86 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
 function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
   const allowed = ctx.writeAllow?.filter((p) => p.trim().length > 0) ?? [];
   const root = resolve(ctx.root);
+  const resolveTarget = (path: string, cwd: string | null): string | null => {
+    const cut = path.search(/[$`*?[{]/);
+    if (cut === 0 || path.startsWith("~")) return null;
+    const literal = cut < 0 ? path : `${path.slice(0, cut)}x`;
+    if (isAbsolute(literal)) return resolve(literal);
+    if (cwd === null) return null;
+    return resolve(root, cwd, literal);
+  };
+  const recordHit = (path: string, how: string): Precheck => ({
+    ...recordRefusal("bash", path),
+    content:
+      `Refused: this command writes "${path}" (${how}), inside gnomon's own records ` +
+      `(${recordDirs(ctx).map((d) => relative(root, d).split(sep).join("/") || d).join(", ")}).\n\n` +
+      RECORD_WHY,
+  });
+
+  // What each target means. Most are written; some are not written but name
+  // what is (a patch's paths, an archive's members); a link's source is not
+  // written but must not be a record.
+  type Judged = { path: string; abs: string; how: string; writeAllow: boolean };
+  const judged: Judged[] = [];
   for (const t of shellWriteTargets(command).targets) {
-    const cut = t.path.search(/[$`*?[{]/);
-    if (cut === 0 || t.path.startsWith("~")) continue;
-    const literal = cut < 0 ? t.path : `${t.path.slice(0, cut)}x`;
-    let abs: string;
-    if (isAbsolute(literal)) abs = resolve(literal);
-    else if (t.cwd === null) continue;
-    else abs = resolve(root, t.cwd, literal);
+    // A glob that could name a record (`.gnomon-aud*/a.jsonl`): the literal
+    // part before the first wildcard is a prefix of a record directory.
+    // A wildcard at the start of a name says nothing; `*` does not match a
+    // dot-directory anyway.
+    const star = t.path.search(/[*?[{]/);
+    if (star > 0 && t.cwd !== null && !t.path.slice(0, star).includes("$")) {
+      const literal = t.path.slice(0, star);
+      const slash = literal.lastIndexOf("/");
+      const base = resolve(root, t.cwd, slash >= 0 ? literal.slice(0, slash + 1) : "");
+      const name = recordPathKey(slash >= 0 ? literal.slice(slash + 1) : literal);
+      const hit =
+        inRecordDir(ctx, base) ||
+        (name !== "" &&
+          recordDirs(ctx).some(
+            (d) => recordPathKey(dirname(d)) === recordPathKey(base) && recordPathKey(basename(d)).startsWith(name)
+          ));
+      if (hit) return recordHit(t.path, t.how);
+    }
+    const abs = resolveTarget(t.path, t.cwd);
+    if (!abs) continue;
+    if (t.how === "git apply (patch)") {
+      for (const p of patchPaths(abs)) {
+        const at = resolve(root, t.cwd ?? "", p);
+        judged.push({ path: p, abs: at, how: "git apply", writeAllow: true });
+      }
+      continue;
+    }
+    if (t.how === "tar -x (archive)" || t.how === "unzip (archive)") {
+      const into = shellWriteTargets(command).targets.find((x) => x.how === t.how.replace("(archive)", "(into)"));
+      const base = (into && resolveTarget(into.path, into.cwd)) ?? resolve(root, t.cwd ?? "");
+      for (const m of archiveMembers(abs, t.how.startsWith("tar") ? "tar" : "unzip")) {
+        judged.push({ path: m, abs: resolve(base, m), how: t.how.replace(" (archive)", ""), writeAllow: true });
+      }
+      continue;
+    }
+    // An extraction's own directory is judged by write_allow only when the
+    // command names it; "." (where the shell is) says nothing about members.
+    const writeAllow = t.how !== "ln (source)" && !((t.how === "tar -x (into)" || t.how === "unzip (into)") && t.path === ".");
+    judged.push({ path: t.path, abs, how: t.how, writeAllow });
+  }
+
+  for (const j of judged) {
     // gnomon's own records bind every role, with or without write_allow, and
     // are judged before the in-repository test: a custom [audit] dir may sit
-    // outside the root.
-    if (inRecordDir(ctx, abs)) {
-      return {
-        ...recordRefusal("bash", t.path),
-        content:
-          `Refused: this command writes "${t.path}" (${t.how}), inside gnomon's own records ` +
-          `(${recordDirs(ctx).map((d) => relative(root, d).split(sep).join("/") || d).join(", ")}).\n\n` +
-          RECORD_WHY,
-      };
-    }
-    const rel = relative(root, abs);
+    // outside the root. A second name for a record -- a hard link made
+    // earlier -- is the record.
+    if (inRecordDir(ctx, j.abs) || hardLinkedToRecord(ctx, j.abs)) return recordHit(j.path, j.how);
+    if (!j.writeAllow) continue;
+    const rel = relative(root, j.abs);
     if (rel.startsWith("..") || isAbsolute(rel)) continue;
     if (allowed.length === 0) continue;
-    const scope = writeAllowed(ctx, abs);
+    const scope = writeAllowed(ctx, j.abs);
     if (scope.ok) continue;
     return {
       rule: "write_allow",
       code: TOOL_DENIED,
       content:
-        `Refused: this command writes "${scope.rel}" (${t.how}), and this role may write ` +
+        `Refused: this command writes "${scope.rel}" (${j.how}), and this role may write ` +
         `${scope.listed}.\n\n` +
         `write_allow binds the shell as well as write and edit. Do not reach the same ` +
         `file another way: a different command writing it is the same change and is ` +
@@ -1909,6 +1959,47 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     };
   }
   return null;
+}
+
+/**
+ * The paths a patch file writes, read from its headers. Empty when the file
+ * cannot be read; capped, since a patch is the agent's to make arbitrarily
+ * large.
+ */
+function patchPaths(abs: string): string[] {
+  let text: string;
+  try {
+    if (statSync(abs).size > 8 * 1024 * 1024) return [];
+    text = readFileSync(abs, "utf-8");
+  } catch {
+    return [];
+  }
+  const out = new Set<string>();
+  for (const m of text.matchAll(/^(?:\+\+\+|---) (?:[ab]\/)?(\S+)/gm)) if (m[1] !== "/dev/null") out.add(m[1]!);
+  for (const m of text.matchAll(/^diff --git a\/(\S+) b\/(\S+)/gm)) {
+    out.add(m[1]!);
+    out.add(m[2]!);
+  }
+  for (const m of text.matchAll(/^(?:rename|copy) to (\S+)/gm)) out.add(m[1]!);
+  return [...out];
+}
+
+/**
+ * The members an archive would extract, listed by the archiver itself
+ * (`tar -tf`, `unzip -Z1`), with a short deadline. Empty when the archive is
+ * missing or the listing fails: unknown is reported as unknown, which is the
+ * pattern precheck's limit -- the kernel sandbox is what contains it.
+ */
+function archiveMembers(abs: string, kind: "tar" | "unzip"): string[] {
+  if (!existsSync(abs)) return [];
+  const r = spawnSync(kind, kind === "tar" ? ["-tf", abs] : ["-Z1", abs], {
+    encoding: "utf-8",
+    timeout: 5000,
+    windowsHide: true,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  if (r.status !== 0 || typeof r.stdout !== "string") return [];
+  return r.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 50_000);
 }
 
 /** A precheck's answer, minus the bookkeeping a tool does not hand the model. */
@@ -2749,10 +2840,26 @@ function recordDirs(ctx: ToolContext): string[] {
   return dirs;
 }
 
+/**
+ * A path as a case-insensitive filesystem sees it. On Windows and macOS (by
+ * default) `.GNOMON-AUDIT` IS `.gnomon-audit`, and Windows also drops trailing
+ * dots and spaces from a name, so `.gnomon-audit.` is the trail too. Found in
+ * re-review: both reached the trail past a byte-wise comparison. Over-inclusive
+ * on a case-sensitive APFS volume, which costs a refusal of a path that merely
+ * looks like the trail -- the direction the surface guard errs in as well.
+ */
+export function recordPathKey(p: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== "win32" && platform !== "darwin") return p;
+  const parts = p.split(/[\\/]/);
+  return parts
+    .map((c) => (platform === "win32" && c !== "." && c !== ".." ? c.replace(/[. ]+$/, "") : c).toLowerCase())
+    .join("/");
+}
+
 /** Whether a resolved path is inside one of gnomon's record directories. */
 export function inRecordDir(ctx: ToolContext, abs: string): boolean {
   const under = (base: string, p: string): boolean => {
-    const rel = relative(base, p);
+    const rel = relative(recordPathKey(base), recordPathKey(p));
     return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
   };
   // Lexical OR realpath, for the reason inSurface gives: a symlink can alias
@@ -2760,6 +2867,48 @@ export function inRecordDir(ctx: ToolContext, abs: string): boolean {
   return recordDirs(ctx).some(
     (d) => under(realpathOrSelf(d), realpathOfNearest(abs)) || under(d, resolve(abs))
   );
+}
+
+/**
+ * Whether an existing file is a hard link to a record. A hard link is the
+ * same file under a second name, so `write hl.jsonl` on one made earlier
+ * writes the trail -- re-review did exactly that with `ln`. Only a file with
+ * more than one link is checked, and then against the record directories'
+ * files (bounded), so the common write costs one stat.
+ */
+export function hardLinkedToRecord(ctx: ToolContext, abs: string): boolean {
+  let st: ReturnType<typeof statSync>;
+  try {
+    st = statSync(abs);
+  } catch {
+    return false;
+  }
+  if (!st.isFile() || st.nlink < 2) return false;
+  let budget = 20_000;
+  const walk = (dir: string): boolean => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const e of entries) {
+      if (--budget < 0) return false;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (walk(p)) return true;
+      } else if (e.isFile()) {
+        try {
+          const o = statSync(p);
+          if (o.ino === st.ino && o.dev === st.dev) return true;
+        } catch {
+          /* gone since the listing */
+        }
+      }
+    }
+    return false;
+  };
+  return recordDirs(ctx).some((d) => walk(d));
 }
 
 const RECORD_WHY =
@@ -3747,7 +3896,7 @@ export function writePrecheck(
       },
     };
   }
-  if (inRecordDir(ctx, abs)) return { refusal: recordRefusal(tool, path) };
+  if (inRecordDir(ctx, abs) || hardLinkedToRecord(ctx, abs)) return { refusal: recordRefusal(tool, path) };
   if (inSurface(ctx, abs)) {
     if (tool === "edit") {
       return {

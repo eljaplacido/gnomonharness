@@ -2,7 +2,7 @@
  * gnomon-core: Tool execution tests
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
 import {
   mkdtempSync,
@@ -13,6 +13,7 @@ import {
   readdirSync,
   existsSync,
   symlinkSync,
+  linkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import * as tools from "./tools.js";
@@ -3193,4 +3194,118 @@ describe("gnomon's own records are not writable by any role", () => {
   it("an ordinary write is unaffected", async () => {
     expect((await tryWrite("notes/audit.jsonl")).code).toBe(TOOL_OK);
   });
+});
+
+describe("gnomon's own records: the routes re-review found", () => {
+  // Each of these reached .gnomon-audit/ past the first version of the
+  // `record` rule. A pattern check over a command's text is not containment
+  // -- the kernel sandbox is -- but every route a reviewer can name should
+  // be one the check names too.
+  const pre = (command: string, over: Partial<ToolContext> = {}) => tools.bashPrecheck({ command }, ctx(over));
+  const trail = () => {
+    mkdirSync(join(root, ".gnomon-audit"), { recursive: true });
+    writeFileSync(join(root, ".gnomon-audit", "a.jsonl"), "{}\n");
+    return join(root, ".gnomon-audit", "a.jsonl");
+  };
+
+  it("a hard link made earlier is the record: write, edit and the shell refuse it", async () => {
+    const t = trail();
+    linkSync(t, join(root, "hl.jsonl"));
+    const w = await executeTool("write", { path: "hl.jsonl", content: "forged\n" }, ctx(), offered);
+    const e = await executeTool("edit", { path: "hl.jsonl", old_text: "{}", new_text: "forged" }, ctx(), offered);
+    expect([w.code, e.code]).toEqual([TOOL_DENIED, TOOL_DENIED]);
+    expect(pre("echo x >> hl.jsonl")?.rule).toBe("record");
+    expect(readFileSync(t, "utf-8")).toBe("{}\n");
+    // An ordinary file with one link costs one stat and passes.
+    writeFileSync(join(root, "plain.txt"), "x");
+    expect((await executeTool("write", { path: "plain.txt", content: "y" }, ctx(), offered)).code).toBe(TOOL_OK);
+  });
+
+  it("refuses ln into, out of, or naming the records, hard or symbolic", () => {
+    trail();
+    for (const command of [
+      "ln .gnomon-audit/a.jsonl hl.jsonl && echo x >> hl.jsonl",
+      "ln -s .gnomon-audit lnk && echo x >> lnk/a.jsonl",
+      "ln -s /tmp/forged .gnomon-audit/b.jsonl",
+      "ln -sf ../x .gnomon-trials/r",
+    ]) {
+      expect(pre(command)?.rule, command).toBe("record");
+    }
+    // write_allow judges the link, not its source.
+    expect(pre("ln -s ../outside/x src/link", { writeAllow: ["src/**"] })).toBeNull();
+  });
+
+  it("refuses git checkout, restore, clone, worktree add and apply into the records", () => {
+    trail();
+    for (const command of [
+      "git checkout evil -- .gnomon-audit/a.jsonl",
+      "git checkout -- .gnomon-audit/a.jsonl",
+      "git restore --source=evil .gnomon-audit/a.jsonl",
+      "git clone /tmp/x .gnomon-audit/y",
+      "git worktree add .gnomon-trials/wt",
+    ]) {
+      expect(pre(command)?.rule, command).toBe("record");
+    }
+    writeFileSync(
+      join(root, "forged.patch"),
+      "diff --git a/.gnomon-audit/a.jsonl b/.gnomon-audit/a.jsonl\n--- a/.gnomon-audit/a.jsonl\n+++ b/.gnomon-audit/a.jsonl\n@@ -1 +1 @@\n-{}\n+{\"forged\":1}\n"
+    );
+    expect(pre("git apply forged.patch")?.rule).toBe("record");
+    writeFileSync(join(root, "ok.patch"), "--- a/src/x.ts\n+++ b/src/x.ts\n@@ -1 +1 @@\n-a\n+b\n");
+    expect(pre("git apply ok.patch")).toBeNull();
+    // A branch switch and a checkout of ordinary paths are untouched.
+    expect(pre("git checkout main")).toBeNull();
+    expect(pre("git checkout -- src/x.ts")).toBeNull();
+  });
+
+  it("refuses extracting an archive into the records, or one whose members land there", () => {
+    trail();
+    for (const command of ["tar -xf a.tar -C .gnomon-audit", "tar xzf a.tgz --directory=.gnomon-trials", "unzip -o f.zip -d .gnomon-audit"]) {
+      expect(pre(command)?.rule, command).toBe("record");
+    }
+    // Members listed by tar itself: an archive carrying the trail's path.
+    mkdirSync(join(root, "stage", ".gnomon-audit"), { recursive: true });
+    writeFileSync(join(root, "stage", ".gnomon-audit", "a.jsonl"), "forged\n");
+    const made = spawnSync("tar", ["-cf", join(root, "forged.tar"), "-C", join(root, "stage"), ".gnomon-audit/a.jsonl"]);
+    if (made.status === 0) {
+      expect(pre("tar -xf forged.tar")?.rule).toBe("record");
+      expect(pre("tar -xf forged.tar -C sub")).toBeNull();
+    }
+  });
+
+  it("refuses rsync, a perl two-argument open, an awk redirect and pushd into the records", () => {
+    trail();
+    for (const command of [
+      "rsync /tmp/f .gnomon-audit/",
+      "perl -e 'open F,\">>.gnomon-audit/a.jsonl\"; print F \"x\"'",
+      "awk 'BEGIN{print \"x\" >> \".gnomon-audit/a.jsonl\"}'",
+      "pushd .gnomon-audit && echo x >> a.jsonl",
+    ]) {
+      expect(pre(command)?.rule, command).toBe("record");
+    }
+    expect(pre("awk '{ if ($1 > 2) print }' data.txt")).toBeNull();
+  });
+
+  it("refuses a glob that could name a record, and leaves ordinary globs alone", () => {
+    trail();
+    expect(pre("echo x >> .gnomon-aud*/a.jsonl")?.rule).toBe("record");
+    expect(pre("echo x >> .gnomon-audit/*.jsonl")?.rule).toBe("record");
+    expect(pre("rm -f *.log")).toBeNull();
+    expect(pre("touch sub/*.txt")).toBeNull();
+  });
+
+  it("folds case and trailing dots where the filesystem does", () => {
+    expect(tools.recordPathKey("/r/.GNOMON-AUDIT/a.jsonl", "darwin")).toBe(tools.recordPathKey("/r/.gnomon-audit/a.jsonl", "darwin"));
+    expect(tools.recordPathKey("C:\\r\\.gnomon-audit.\\a.jsonl", "win32")).toBe(tools.recordPathKey("C:\\r\\.GNOMON-AUDIT\\a.jsonl", "win32"));
+    expect(tools.recordPathKey("/r/.GNOMON-AUDIT/a", "linux")).not.toBe(tools.recordPathKey("/r/.gnomon-audit/a", "linux"));
+  });
+
+  it.runIf(process.platform === "win32" || process.platform === "darwin")(
+    "on a case-insensitive filesystem, another spelling of the trail is the trail",
+    () => {
+      trail();
+      expect(pre("echo x >> .GNOMON-AUDIT/a.jsonl")?.rule).toBe("record");
+      if (process.platform === "win32") expect(pre("echo x >> .gnomon-audit./a.jsonl")?.rule).toBe("record");
+    }
+  );
 });
