@@ -1508,9 +1508,12 @@ async function cmdSkill(args: CliArgs): Promise<void> {
     try {
       // Every decision leaves a record: the skill's content hash and the
       // surface hash before and after, in a sealed trail of its own.
-      const recorded = (d: { record: { seq: number; hash?: string } | null; trail: string | null }) => {
+      const recorded = (d: { record: { seq: number; hash?: string } | null; trail: string | null; sealed: boolean }) => {
         if (d.trail && d.record) {
           console.log(`Recorded in ${d.trail} (seq ${d.record.seq}, ${d.record.hash?.slice(0, 12) ?? "unchained"})`);
+        }
+        if (!d.sealed) {
+          console.error("⚠ The change was made and recorded, but the trail could not be sealed; `gnomon audit verify` will report it unsealed.");
         }
       };
       if (sub === "accept") {

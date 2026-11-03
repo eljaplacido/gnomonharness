@@ -31,7 +31,7 @@ import {
 import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { hostname, userInfo } from "node:os";
-import { GnomonConfig, parseToml, recomputeManifest } from "./config.js";
+import { GnomonConfig, parseToml, recomputeManifest, manifestHash } from "./config.js";
 import { AuditTrail, resolveAudit, type AuditRecord } from "./audit.js";
 import { harnessBuild } from "./build.js";
 
@@ -348,6 +348,12 @@ export interface SkillDecision {
   record: AuditRecord | null;
   /** The trail it was written to. */
   trail: string | null;
+  /**
+   * Whether the closing session_end was written. False means the change was
+   * made and recorded, but the trail is unsealed; `gnomon audit verify` will
+   * say so.
+   */
+  sealed: boolean;
 }
 
 /** sha256 of a skill file's bytes: the identity a trial and an accept agree on. */
@@ -373,8 +379,8 @@ function whoDecided(opts: SkillDecisionOptions): Record<string, unknown> {
 }
 
 /**
- * Append one skill decision to gnomon's own trail, as a sealed three-record
- * trail of its own (session_start, the decision, session_end).
+ * A skill decision on gnomon's own trail: a sealed three-record trail of its
+ * own (session_start, the decision, session_end).
  *
  * Written even when the surface has `[audit] enabled = false`, for the reason
  * `gnomon check` writes its verdict regardless (check.ts, appendVerdict). The
@@ -384,13 +390,22 @@ function whoDecided(opts: SkillDecisionOptions): Record<string, unknown> {
  * but a moved file: the trail showed the surface hash change, never that a
  * person accepted a named skill, or what its content was. Chaining is forced
  * on because the record's hash is what a later reader cites.
+ *
+ * Write-ahead, in two calls. `openSkillDecision` writes session_start and the
+ * decision BEFORE the file is touched; `seal` writes session_end after, saying
+ * whether the change was applied. So there is never a moved file without a
+ * record. A crash between the two leaves the record unsealed, which `gnomon
+ * audit verify` reports as such, rather than a sealed record of a change that
+ * did not happen. The order was the other way round until review found both
+ * halves of that: a crash after the move left an accept with no record, and a
+ * failed session_end undid an accept whose record was already written.
  */
-function appendSkillDecision(
+function openSkillDecision(
   config: GnomonConfig,
   kind: "skill_accept" | "skill_reject",
   fields: Record<string, unknown>,
   surfaceHash: string
-): { record: AuditRecord | null; trail: string | null } {
+): { record: AuditRecord | null; trail: string | null; seal: (end: Record<string, unknown>) => void } {
   const settings = resolveAudit(config);
   const forced = { ...settings, enabled: true, chain: true };
   // A random suffix as well as the time and pid: two decisions in one process
@@ -406,8 +421,21 @@ function appendSkillDecision(
     mode: "skill",
   });
   const record = trail.write(kind, fields);
-  trail.write("session_end", {});
-  return { record, trail: trail.path };
+  return { record, trail: trail.path, seal: (end) => void trail.write("session_end", end) };
+}
+
+/**
+ * The id a skill file must have: the slug `skillId` derives. Everything the
+ * CLI is given is checked against it before it becomes a path, so `skill
+ * reject ../keep` cannot reach `.gnomon/skills/keep.md` -- which it did.
+ */
+function assertSkillId(id: string): void {
+  if (skillId(id) !== id) {
+    throw new Error(
+      `"${id}" is not a skill id: ids are lower-case letters, digits and dashes ` +
+        `(\`gnomon skill list\` shows them).`
+    );
+  }
 }
 
 /**
@@ -419,36 +447,38 @@ function appendSkillDecision(
  *
  * The `skill_accept` record carries the skill's content hash and the surface
  * hash before and after, so the trail names the person's act and not only its
- * effect. An accept whose record cannot be written is undone: a change to the
- * agent that nobody can later show was made on purpose is the thing this
- * record exists to prevent.
+ * effect. It is written before the file moves (`openSkillDecision`); an accept
+ * whose record cannot be written does not happen, and one whose move fails is
+ * sealed `applied: false`.
  */
 export function acceptSkill(
   config: GnomonConfig,
   id: string,
   opts: SkillDecisionOptions = {}
 ): SkillDecision {
+  assertSkillId(id);
   const from = join(config.gnomonDir, PROPOSED_DIR, `${id}.md`);
   if (!existsSync(from)) {
     throw new Error(`No proposed skill "${id}". Run \`gnomon skill list\`.`);
   }
   const raw = readFileSync(from);
   const skill = parseSkill(id, raw.toString("utf-8"), true);
-  const before = recomputeManifest(config.gnomonDir).surface_hash;
-  const dir = join(config.gnomonDir, SKILLS_DIR);
-  mkdirSync(dir, { recursive: true });
-  const to = join(dir, `${id}.md`);
-  renameSync(from, to);
-  const after = recomputeManifest(config.gnomonDir).surface_hash;
+  const content = skillContentHash(raw);
+  const { manifest, surface_hash: before } = recomputeManifest(config.gnomonDir);
+  // The hash the move WILL produce, named before it happens.
+  const rel = `.gnomon/skills/${id}.md`;
+  const after = manifestHash([...manifest.filter((s) => s.path !== rel), { path: rel, sha256: content }]);
+
+  let open: ReturnType<typeof openSkillDecision>;
   try {
-    const { record, trail } = appendSkillDecision(
+    open = openSkillDecision(
       config,
       "skill_accept",
       {
         skill: id,
         name: skill.name,
-        path: `.gnomon/skills/${id}.md`,
-        content_sha256: skillContentHash(raw),
+        path: rel,
+        content_sha256: content,
         surface_hash_before: before,
         surface_hash_after: after,
         // A trial report's hash once `--evidence` exists. Until then the
@@ -456,19 +486,48 @@ export function acceptSkill(
         evidence: "none",
         ...whoDecided(opts),
       },
-      after
+      before
     );
-    return { path: to, record, trail };
   } catch (err) {
-    renameSync(to, from);
     const why = err instanceof Error ? err.message : String(err);
     throw new Error(`Not accepted: the skill_accept record could not be written (${why}).`);
+  }
+
+  const dir = join(config.gnomonDir, SKILLS_DIR);
+  const to = join(dir, `${id}.md`);
+  try {
+    mkdirSync(dir, { recursive: true });
+    renameSync(from, to);
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    sealQuietly(open, { applied: false, error: why });
+    throw new Error(`Not accepted: the proposal could not be moved (${why}). The record says so.`);
+  }
+  const sealed = sealQuietly(open, {
+    applied: true,
+    surface_hash_after: recomputeManifest(config.gnomonDir).surface_hash,
+  });
+  return { path: to, record: open.record, trail: open.trail, sealed };
+}
+
+/**
+ * Seal a decision, and say whether that worked rather than throw: by now the
+ * change is either made or refused, and undoing a made change because its
+ * closing record failed is the inconsistency the write-ahead order removes.
+ */
+function sealQuietly(open: { seal: (end: Record<string, unknown>) => void }, end: Record<string, unknown>): boolean {
+  try {
+    open.seal(end);
+    return true;
+  } catch {
+    return false;
   }
 }
 
 /**
  * Discard a proposal, and record that it happened. Active skills are never
- * removed by this.
+ * removed by this: the id is checked, so no path outside `proposed/` is
+ * reachable.
  *
  * The record is written BEFORE the file is removed, so a reject that cannot
  * be recorded leaves the proposal where it was. The surface hash is the same
@@ -480,6 +539,7 @@ export function rejectSkill(
   id: string,
   opts: SkillDecisionOptions = {}
 ): SkillDecision {
+  assertSkillId(id);
   const path = join(config.gnomonDir, PROPOSED_DIR, `${id}.md`);
   if (!existsSync(path)) {
     throw new Error(`No proposed skill "${id}".`);
@@ -487,7 +547,7 @@ export function rejectSkill(
   const raw = readFileSync(path);
   const skill = parseSkill(id, raw.toString("utf-8"), true);
   const surface = recomputeManifest(config.gnomonDir).surface_hash;
-  const { record, trail } = appendSkillDecision(
+  const open = openSkillDecision(
     config,
     "skill_reject",
     {
@@ -502,6 +562,13 @@ export function rejectSkill(
     },
     surface
   );
-  rmSync(path);
-  return { path, record, trail };
+  try {
+    rmSync(path);
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    sealQuietly(open, { applied: false, error: why });
+    throw new Error(`Not rejected: the proposal could not be removed (${why}). The record says so.`);
+  }
+  const sealed = sealQuietly(open, { applied: true });
+  return { path, record: open.record, trail: open.trail, sealed };
 }
