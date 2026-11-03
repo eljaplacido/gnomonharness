@@ -126,6 +126,7 @@ fn collect_surface(dir: &Path) -> Vec<Source> {
                     continue;
                 }
 
+
                 let hash = file_sha256(path);
                 sources.push(Source {
                     path: rel_str,
@@ -569,6 +570,20 @@ mod tests {
         .unwrap();
 
         tmp
+    }
+
+    #[test]
+    fn test_trials_are_hashed() {
+        // A trial spec decides what `require_trial` accepts, so it is part of
+        // the surface: editing one must move the hash, as in the TS walk.
+        let tmp = setup_test_dir();
+        let dir = tmp.path().join(".gnomon");
+        let before = compute_surface_hash(&build_sources(&dir));
+        fs::create_dir_all(dir.join("trials")).unwrap();
+        fs::write(dir.join("trials").join("default.toml"), "[[task]]\nid = \"t\"\n").unwrap();
+        let sources = build_sources(&dir);
+        assert!(sources.iter().any(|s| s.path == ".gnomon/trials/default.toml"));
+        assert_ne!(before, compute_surface_hash(&sources), "trials/ must move the hash");
     }
 
     #[test]

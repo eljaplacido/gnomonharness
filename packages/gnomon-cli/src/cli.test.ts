@@ -96,6 +96,22 @@ describe("the two surface-hash implementations agree", () => {
     );
   });
 
+  it("both hash trials/, which decides what require_trial accepts", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "gnomon-agree-"));
+    try {
+      const dir = join(tmp, ".gnomon");
+      mkdirSync(join(dir, "trials"), { recursive: true });
+      writeFileSync(join(dir, "system.md"), "x", "utf-8");
+      const before = [recomputeManifest(dir).surface_hash, surfaceHash(dir)];
+      writeFileSync(join(dir, "trials", "default.toml"), '[[task]]\nid = "t"\n', "utf-8");
+      const after = [recomputeManifest(dir).surface_hash, surfaceHash(dir)];
+      expect(after[0]).toBe(after[1]);
+      expect(after[0]).not.toBe(before[0]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("both track a change to the surface", () => {
     const tmp = mkdtempSync(join(tmpdir(), "gnomon-agree-"));
     try {

@@ -42,6 +42,36 @@
   The docs now state the threat model plainly. This is a pattern check over a
   command's text, not containment: run-time paths, scripts and MCP calls are
   not seen by it. The kernel sandbox is what contains them.
+- **`gnomon skill trial ID`: measure a proposed skill before accepting it.**
+  A proposal could only be accepted on a reading of it.
+  - The trial runs the tasks in `.gnomon/trials/<name>.toml` once per arm per
+    attempt, interleaved. Each run is in a private clone of HEAD (no remote,
+    its own refs, stash and config), with the proposal copied into the skill
+    arm only. The two manifests must differ in exactly that file, and the
+    checkout's surface must be HEAD's.
+  - A cell counts only if it made a metered model request and its `check`
+    ran. The `check` exit code decides pass, not the model.
+  - Pass uses exact McNemar, and output tokens a sign test that must also
+    agree in direction. Both are judged against thresholds declared before
+    the run.
+  - Trust is settled once, on the checkout under the spec's `model_profile`
+    (what the cells run), and a clamped surface is refused.
+  - Thresholds are bounded: `alpha` in (0, 0.2], gains and drops at least 0,
+    and at least one gain above 0. A metric at 0 never decides.
+  - The trial stops at `[budget] max_requests`, checked before every cell. A
+    non-local primary or fallback endpoint needs that cap or `--yes-spend`.
+  - Exit 0 / 2 / 10. Writes `.gnomon-trials/` (gitignored) and a
+    `skill_trial` audit record. Never accepts.
+  - The task record's `volatile` gains `requests`, the number of metered
+    model calls.
+  - `trials/` is part of the surface hash. A spec decides what
+    `require_trial` accepts, so the surface-fidelity suite counts it as
+    behaviour: 14/14 paths, up from 13/13, plus a check that a spec change
+    flips a verdict and moves the hash. Specs were briefly unhashed; the
+    maintainer session reversed that after review showed the agent's shell
+    could loosen a spec unseen.
+  - Step 2 of `docs/design/SKILL-TRIALS.md`. ST0/ST1 are pre-registered as a
+    DRAFT and have not run.
 
 - **Accepting or rejecting a skill is recorded.** `gnomon skill accept` moved
   the file and wrote nothing, so the trail showed the surface hash change and

@@ -652,6 +652,16 @@ export interface TokenUsage {
   output?: number;
   /** Model server's own wall-clock for the call, when it reports one. */
   ms?: number;
+  /**
+   * Model calls whose response reported usage: METERED requests, counted by
+   * gnomon rather than taken from the backend. Set by addUsage, so a single
+   * call's usage leaves it off and a turn's total carries it.
+   *
+   * A skill trial's validity rule needs it (skill_trial.ts): a cell that made
+   * no metered request never reached a model, and scoring it would score the
+   * apparatus.
+   */
+  requests?: number;
 }
 
 interface InferenceResult {
@@ -717,13 +727,14 @@ export function addUsage(
   next: TokenUsage | undefined
 ): TokenUsage | undefined {
   if (!next) return total;
-  if (!total) return { ...next };
+  if (!total) return { ...next, requests: next.requests ?? 1 };
   const add = (a?: number, b?: number) =>
     a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0);
   return {
     input: add(total.input, next.input),
     output: add(total.output, next.output),
     ms: add(total.ms, next.ms),
+    requests: (total.requests ?? 1) + (next.requests ?? 1),
   };
 }
 
@@ -4937,6 +4948,8 @@ export interface TaskRecord {
     tokens_in?: number;
     tokens_out?: number;
     model_ms?: number;
+    /** Metered model calls: those whose response reported usage. */
+    requests?: number;
   };
 }
 
@@ -5370,6 +5383,7 @@ export async function runTask(
       ...(turn.usage?.input !== undefined ? { tokens_in: turn.usage.input } : {}),
       ...(turn.usage?.output !== undefined ? { tokens_out: turn.usage.output } : {}),
       ...(turn.usage?.ms !== undefined ? { model_ms: turn.usage.ms } : {}),
+      ...(turn.usage?.requests !== undefined ? { requests: turn.usage.requests } : {}),
     },
   };
 }

@@ -1,7 +1,23 @@
 # Does the surface hash mean what the project says it means? — 2026-09-04
 
-**13 of 13 paths faithful. Zero false negatives, zero false positives.** Pre-registered in
-`PRE-REGISTRATION.md`; reproduce with `node fidelity.mjs`. Raw in `result.json`.
+**14 of 14 paths faithful, as of 2026-11-03. Zero false negatives, zero false
+positives.** Pre-registered in `PRE-REGISTRATION.md`; reproduce with
+`node fidelity.mjs`. Raw data is in `result-2026-11-03.json`; the earlier run
+is in `result.json`.
+
+> **Why 14, not 13 (2026-11-03).** The 14th path is `.gnomon/trials/probe.toml`.
+> A skill-trial spec (`gnomon skill trial`) doesn't change what the agent does.
+> It does change what `require_trial` lets a person accept, so the fingerprint
+> now counts each spec as behaviour: its parsed fields, and the verdict it gives
+> a fixed set of cells. A separate check, which must pass, changes one
+> threshold, then confirms that the verdict flips and the hash moves.
+>
+> Specs were briefly left out of the hash. That was the maintainer session's
+> call, reversed after review, because the agent's shell could then loosen a
+> spec (`alpha = 2`, `min_pass_gain = 0`) without moving the hash. With the
+> exclusion back in place, this suite would report that path as a **false
+> negative**. The count went 12 → 13 when `skills/writing-tests.md` was
+> scaffolded, and 13 → 14 here.
 
 ## What was measured
 
@@ -15,8 +31,9 @@ So: mutate every path under a scaffolded `.gnomon/`, and record whether the hash
 moved and whether *behaviour* moved. Behaviour is the **fingerprint**:
 everything the harness decides before the model is called — resolved context,
 routing, ui, verify, chain, loop and resilience settings; every role's model,
-endpoint, exec and tool schemas; every declared profile resolved; and the system
-prompt built for two fixed inputs. Model output is excluded on purpose: it is
+endpoint, exec and tool schemas; every declared profile resolved; every
+skill-trial spec parsed, with the verdict it gives fixed cells; and the system
+prompt built for fixed inputs. Model output is excluded on purpose: it is
 nondeterministic, and including it would turn an exact measurement into a noisy
 one.
 
