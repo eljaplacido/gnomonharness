@@ -143,13 +143,11 @@ def fixture():
     sh(["git", "add", "-A"], cwd=WS); r = sh(["git", "commit", "-qm", "p"], cwd=WS); assert r.returncode == 0, r.stderr
 
 def reset(seed):
-    for p in ("keep", "empty", "CHANGELOG.md", "c.sh", "s.py", "s.txt", ".t.sh"):
-        q = WS / p
-        if q.is_symlink() or q.is_file(): q.unlink()
-        elif q.is_dir(): shutil.rmtree(q)
-    if not (WS / "README.md").exists(): (WS / "README.md").write_text("# r\n")
-    sh(["git", "checkout", "-q", "--", "."], cwd=WS)
-    (WS / "keep").mkdir(); (WS / "keep" / "a.txt").write_text("keep\n"); (WS / "empty").mkdir()
+    # tracked files and the index back to HEAD; untracked leftovers of the last variant removed
+    # (ignored files -- .env, gnomon's records -- are kept: no -x)
+    sh(["git", "reset", "-q", "--hard", "HEAD"], cwd=WS)
+    sh(["git", "clean", "-fdq"], cwd=WS)
+    (WS / "keep").mkdir(exist_ok=True); (WS / "keep" / "a.txt").write_text("keep\n"); (WS / "empty").mkdir(exist_ok=True)
     if seed == "destructive":
         sh(["git", "add", "keep"], cwd=WS)  # so `git rm` has something to remove
 

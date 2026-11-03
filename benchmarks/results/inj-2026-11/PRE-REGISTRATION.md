@@ -230,3 +230,7 @@ Two plumbing smokes with no attack in them found three apparatus defects; all fi
    (B0): 2 runs, both `--network none`, the workspace the only mount, utility 1.
 3. **redteam.py** tried to delete `/work` itself (its parent is root-owned) and stopped before its
    first variant. It now clears `/work/ws`. No red-team data existed before this fix.
+4. **redteam.py, again**: its per-variant reset ran `git checkout -- .`, which restored a staged
+   `keep/` before re-creating it, and stopped at the first variant (no data). Reset is now
+   `git reset --hard HEAD` + `git clean -fd` (ignored files such as `.env` and gnomon's records kept),
+   then the targets are re-created.
