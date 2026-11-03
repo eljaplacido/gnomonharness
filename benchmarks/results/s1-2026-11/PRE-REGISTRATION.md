@@ -1,0 +1,294 @@
+# S1: does gnomon's mid-turn steering help when it actually reaches the model? (pre-registration)
+
+**Status: COMMITTED 2026-11-03T12:32Z by the coordinating session after review**, written 2026-11-03 before any S1 cell. The coordinating session reviewed this file and committed it
+before launch. The chain then writes every gate result into `STATUS.txt` and commits it, with the probe, smoke and
+lane files and the apparatus, **before the first measured cell**. It never edits this file. Any later change is a
+timestamped amendment at the end of this file.
+
+Modelled closely on M1 Amendment 3 (`../m1-2026-11/PRE-REGISTRATION.md`), with Amendments 4 and 5 applied: the
+abort-on-disconnect relay, and the template finding.
+
+## Question
+
+gnomon steers a turn with messages of its own:
+- the idle nudge ("You have run N tool calls without changing a file…");
+- the convergence push ("You have used N of M tool calls…");
+- the tool-less wrap-up;
+- a failed declared verification;
+- context-drop notices.
+
+At the build under test it sends them as `role: "system"` messages *after* the conversation has started.
+
+The incumbent local lane is R1H's: Unsloth's qwen3.6 template under llama.cpp. That template renders a system message at
+index 0, merges one at index 1, and **silently skips every other system message**. M1 Amendment 5 found this offline
+with jinja2, and `apparatus/probe_s1.py --offline` reproduces it on R1H's own `chat_template`. On that lane, none of
+gnomon's steering has ever reached the model: R1H, R1 and M1's incumbent references all ran that way. In R1H's L arm
+the idle nudge fired in 17 of 32 cells, and every one of those nudges was dropped.
+
+**S1 asks:** with the same build, lane, tasks and window, does delivering the steering, as user messages marked
+`[gnomon] `, change how many tasks gnomon solves and how its turns end?
+
+## Build
+
+Both arms run gnomon **`8078df03e2a28c41753825dcccab13e8a0ac03dd`**, the head of draft PR #120 (`fix/steer-role`).
+- Its parent is `166a9d3c`, master, which was M1a3's build.
+- It is fetched by SHA in every cell, checked on GitHub before each runner starts, and recorded per cell
+  (`agent-logs/gnomon-commit.txt`, `ARM_VERSION=`).
+- PR #120 adds the per-endpoint `steer_role = "system" | "user"`:
+  - **Undeclared, or `system`**, sends exactly what master sends; the PR states the request bodies hash the same.
+  - **`user`** sends each mid-turn system message as a user message starting `[gnomon] `. The leading system run
+    (the system prompt and a folded summary) becomes one system message, and adjacent user messages are merged.
+  - The PR also answers a template *refusal* by resending once in the user form (`counters.steer_role_adapted`).
+    A template that drops the message raises nothing, so on this lane neither arm should ever adapt; the smoke
+    checks this.
+
+## Arms (L routing only)
+
+| Arm | Cells | Build | `[endpoints.r1local]` |
+|---|---|---|---|
+| **S0** (control) | `s1-s0-…` | 8078df03 | `steer_role = "system"`, declared explicitly |
+| **S1** (treatment) | `s1-s1-…` | 8078df03 | `steer_role = "user"` |
+
+- **Surface difference.** The only surface difference is that one line. Each arm also points at its own meter port in
+  the `url` line (5410 vs 5412), as M1a3's G0/G1 did (5310 vs 5312).
+  - The profile, roles, policy, tools and system prompt are byte-identical, and `replay_reasoning` is undeclared in both.
+  - `preflight_s1.sh` asserts this on a scaffold.
+  - `wiretest-s1.txt` asserts it on the real `gnomon init` of 8078df03, with the port normalised.
+- **Wire difference, observed offline before any data** (`wiretest-s1.txt`). The setup's own node block runs on the real
+  `gnomon init`, then the real `gnomon task` at 8078df03, through `relay-meter-s1`, against a fake llama-style server
+  that forces the idle nudge:
+  - S0 sent the nudge as a late system message, the kind R1H's template drops: 4 requests, 0 `[gnomon]` notes, and the
+    turn record's `wire` carries no `steer_role`;
+  - S1 sent it as a `[gnomon]` note: 4 requests, 0 system messages after the first, and `wire.steer_role = "user"`;
+  - in both, `steer_role_adapted` is absent and `nudges` = 1.
+- **Unchanged from R1H's L arm:**
+  - the lane (below);
+  - the 16 tasks (`apparatus/sample16-hunch.txt`, byte-identical to R1H's) × 2 attempts, attempts as barriers, the
+    seed = attempt shuffle, the same order in both arms;
+  - the 900 s cap, tb 0.2.18 and its flags;
+  - routing: every role local, entry `implementor`;
+  - the cloud relay-go meter: unused in L, and a cell must read cloud = 0.
+- **Concurrency, as M1a3.** S0 and S1 run at the same time, one slot each, filling the lane's 2 slots as R1H's 2-slot
+  arms did.
+  - **Bounded lead 1:** an arm starts position *i* only once the other has started *i − 1*. An arm that has finished
+    or died never holds the other back.
+
+**Treatment side effects, stated now and counted as part of the treatment:**
+- **The template's "last query" moves.** In S1 a `[gnomon]` note is a user message, so the template's "last query"
+  moves to the latest note. Assistant messages before it then render without the empty `<think></think>` block the
+  template gives messages after the last query. In the offline render of probe cases A–C, S1's prompt has one
+  `<think>` fewer than S0's. This is how the template renders a user message; S1 cannot deliver the steering
+  without it.
+- **Merged messages.** S1 merges a context-drop notice into the adjacent user message (probe case E).
+- **Extra tokens.** S1's prompts are longer by the steering text, which S0's template discards.
+
+## Lane: the incumbent's own (R1H's), untouched
+
+- **Server.** llama.cpp **b11739** in `C:\dev\bud-lane` on the hub RTX 5090, serving `qwen3.6-35b`:
+  - weights: `Qwen3.6-35B-A3B-UD-Q4_K_S.gguf` + the DFlash draft;
+  - the chain checks both against R1H's sha256 (`2bee952b…`, `107b7a43…`) before starting;
+  - flags: `--ctx-size 196608 --parallel 2` (2 × 98,304), `--reasoning off`, q8_0 KV, bound to the hub's 127.0.0.1:18380.
+- **Start:** R1H's own `C:\dev\bud-lane\start-server-r1h-np2.ps1`, unchanged (sha256 `ce69d7d0…`, pinned in the
+  chain; any change is fatal).
+  - It is launched detached through `Win32_Process Create`, as R1H and BUD-2 did.
+  - The script overwrites `server-r1h-np2.log`, so R1H's copy is saved first as `lane-r1h-server-before-s1.log.gz`.
+- **Stop:** R1H's own `C:\dev\bud-lane\STOP-ME.ps1` (sha256 `ec69465d…`, pinned).
+  - It runs only if this chain started the lane, and only if the bud-lane `llama-server.exe` running is the pid this
+    chain recorded after its start.
+  - Otherwise S1 stops nothing and says so.
+- **Props gate.** `/props` and `/slots` must match R1H's `lane-props.json` and `lane-slots.json`:
+  - `build_info`, `model_path`, `model_alias`, `chat_template` (byte for byte) and its caps;
+  - `total_slots`, `n_ctx` and the slots' shape (2 × 98,304, speculative);
+  - every server-default sampling parameter (top_k 20, min_p 0.05, …).
+
+  Any difference is fatal.
+- **Route from the gx10:** S1's own SSH forward, `apparatus/tunnel-s1.sh`, from gx10 127.0.0.1:**18780** to hub
+  127.0.0.1:18380. It is launched in its own session, and stopped by its process group only.
+
+**Ports.** None is used by any other apparatus; all are checked free before start.
+
+| Arm | Local meter (relay-meter-s1) | Its counters | Cloud relay-go | Its counters |
+|---|---|---|---|---|
+| S0 | 172.17.0.1:5410 | 127.0.0.1:5420 | 172.17.0.1:5411 | 127.0.0.1:5421 |
+| S1 | 172.17.0.1:5412 | 127.0.0.1:5422 | 172.17.0.1:5413 | 127.0.0.1:5423 |
+| abort probe (pre-data, informational) | 127.0.0.1:5430 | 127.0.0.1:5431 | – | – |
+
+Cells go to `runs/` and `runs-smoke/`, ids `s1-s0-k<k>-l-<task>` and `s1-s1-k<k>-l-<task>`. No other run's globs match them.
+
+## Order, waiting and deadline (`apparatus/s1-chain.sh`)
+
+1. **Wait for M1a5.** Wait on the M1a5 chain's **pid** (`S1_WAIT_PID`, default 3062504), whose `/proc/<pid>/cmdline`
+   must contain `m1a5-chain.sh`. Never wait on a name.
+   - If that pid is something else while an M1a5 chain runs, the chain stops with FATAL.
+2. **Hub free.** The hub must be free, waiting up to 15 min:
+   - no `llama-server.exe` at all;
+   - GPU memory used under 4,000 MiB;
+   - the WSL distro `m1-vllm` not running;
+   - nothing listening on the hub's 18380.
+3. **New-cell deadline:** `S1_DEADLINE`, default **2026-11-03T22:00:00Z**.
+   - No cell starts after it. Unstarted cells are logged `NOT STARTED … (deadline)` and never imputed.
+   - Pairs are taken only where both arms ran.
+   - R1H's L cells took a median of 71 s, at most 1,200 s, so 32 positions per arm should fit in about 1–2 h.
+4. **One S1 chain at a time:** `flock` on `.chain.lock` here. Commits take the M1 chains' own lock
+   (`../m1-2026-11/.commit.lock`, opened for append), so S1 and M1 commits in the shared worktree never interleave.
+   Commits add only S1's paths.
+
+## Pre-data gates, in order (each result goes into STATUS)
+
+1. **Hub inputs.** The hub scripts' hashes are as pinned, and the weights' checksums are R1H's.
+2. **Evidence kept.** R1H's server log is saved before the start overwrites it.
+3. **Lane up.** The lane starts (one fix-don't-fail retry). Then the props gate above.
+4. **Template gate, the negative control. Must pass.** `probe_s1.py` renders each history of
+   `apparatus/probe-shapes-s1.json` through the live lane's `/apply-template`, which renders without generating.
+   - Each history comes in S0's shape, and in S1's shape as computed by **8078df03's own `steerAsUser`**
+     (`make_probe_shapes.mts`, not a re-implementation).
+   - Gate cases:
+     - **A:** a nudge after a tool result;
+     - **B:** a nudge followed by two more steps;
+     - **C:** the tool-less wrap-up.
+
+     In A, B and C the marker `MARKER-S1Q` must be **ABSENT under S0's shape and PRESENT under S1's shape**.
+   - **D** is the positive control: a system message at index 1 (a folded summary) must be **PRESENT under both**. So
+     the probe can see a system message that the template keeps, and A's absence is about position, not detection.
+   - E (a context-drop notice) and F (a failed verification) are informational.
+   - The shapes must have been made by the build under test (`PROBE_SHAPES_SHA`).
+   - The same gate passes offline now: jinja2 on R1H's `chat_template` (`preflight_s1.sh`). The live gate confirms
+     that llama.cpp renders it the same way.
+5. **Abort probe, informational.** Through `relay-meter-s1`, a streamed generation abandoned after 4 s must leave its
+   slot within 30 s (`/slots`; this lane serves no `/metrics`).
+6. **Smoke.** One hello-world cell per arm, concurrently. Each must be valid and solved, and:
+   - its surface carries its arm's `steer_role` line exactly once;
+   - every turn record has `wire.steer_role = "user"` (S1) or no `steer_role` (S0);
+   - `counters.steer_role_adapted` is 0;
+   - the meter shows no `reasoning_content` and no meter errors;
+   - **S0 sent no `[gnomon]` note**, the negative control on the wire;
+   - **S1 sent no system message after the first.**
+
+   Hello-world rarely triggers steering, so the smoke may pass without exercising it. That is logged; gate 4 and
+   `wiretest-s1.txt` cover the steering path. One retry is allowed, restarting the lane only if it stopped answering.
+   A second failure means S1 is not run.
+7. **Commit before data:** STATUS, the probe and smoke files, the lane's props, slots and models, R1H's server log,
+   `wiretest-s1.txt`, this file and `apparatus/`.
+
+## Meter: `relay-meter-s1.mjs`
+
+A copy of M1a3's `relay-meter-m1a3.mjs`; the original is untouched.
+- **Kept unchanged:** usage via `JSON.parse`, the timings fallback, the reasoning counters (expected 0 here).
+- **Added (1), abort on disconnect.** This is M1 Amendment 4's `relay-meter-r1-abort.mjs` behaviour. When the client
+  leaves before the reply is complete, the upstream request is destroyed, and the event is counted as `client_aborts`.
+- **Added (2), the mechanism metric**, read from each request body:
+  - system messages after the first;
+  - system messages R1H's template drops: index ≥ 2, or index 1 when index 0 is not a system message;
+  - `[gnomon] ` notes in user messages;
+  - per request and as volume, "new steering" requests (the count rose against the cell's previous request), and
+    which kind of steering, by gnomon's own wording: nudge, converge, wrapup, verify, context, other.
+- **Read-only.** The meter observes and never edits a body.
+- **Tests.** `test_relay_s1.mjs` has 36 offline cases: M1a3's 22, 10 on the mechanism metric, and 4 on loopback
+  sockets (abort, normal reply byte-identical and metered, refused upstream, counters).
+  - The abort case was checked against a copy of the relay with the abort removed; that copy fails the case.
+
+## Validity (M1's = R1H's, unchanged)
+
+- **One validity function for every cell.** `apparatus/collect_m1.py` is a byte-identical copy of M1's (hash pinned in
+  the preflight). Its `parse_cell` judges every S1 cell and R1H's L reference alike.
+- **A cell is valid when** tb returned a verdict, both meters read non-negative deltas, at least one chat request was
+  metered, it ran the pinned commit, and gnomon did not give up on an endpoint after its whole retry grace (R1H's
+  endpoint-outage rule).
+- **L routing:** cloud = 0 and local > 0.
+- **Every other state is apparatus.** Such cells are reported and never scored. Buckets are asserted to sum to n per arm.
+- **Outages and operator stops:**
+  - a lane outage makes the affected cells `endpoint_outage`; they are re-run once if time allows;
+  - a cell in flight when the chain is stopped moves to `runs-aborted/<cell>-<reason>` and is re-run from scratch.
+
+## Endpoints, declared now (`apparatus/collect_s1.py`)
+
+**Mechanism metric (resolvable).** Per arm, from the meter:
+- requests carrying a system message the template drops;
+- requests carrying a `[gnomon]` note;
+- requests with any system message after the first.
+
+Expected:
+- **S0:** dropped > 0, notes = 0;
+- **S1:** notes > 0, late system = 0;
+- **both:** `steer_role_adapted` = 0.
+
+Reported beside it, never instead of it:
+- the per-cell surface line;
+- the turn records' `wire.steer_role` and `counters.steer_role_adapted`;
+- `counters.nudges`;
+- the per-kind counts.
+
+If S0 shows notes, S1 shows late system messages, or S1 shows no notes in cells where steering fired, that is an
+apparatus finding. The score comparison is then not read as a test of steering.
+
+**Score metric (probably not resolvable at this n).** Pass rate with a Wilson 95% interval, and exact two-sided McNemar
+on (task, attempt) cells valid in both arms:
+1. **S1 vs S0, primary.** Same build, lane and window; one line apart.
+2. **S0 vs R1H L.** A build-change control: 8078df03 against d59e6c19, steering dropped in both. Time-separated,
+   descriptive.
+3. **S1 vs R1H L.** Time-separated, descriptive.
+
+**How turns end.** The distribution of the last turn record's `stop_reason` per arm, over all cells, valid cells, and
+valid unsolved cells: answered, stall, step_wall, truncated, malformed, with capped cells having none. The hypothesis
+predicts fewer `stall` and `step_wall` endings in S1. A competing prediction, stated equally: delivered nudges ("stop
+and answer") could end some solvable turns early.
+
+**Secondary, descriptive:**
+- steering exposure: valid cells where steering fired, and solved among them, per arm;
+- the discordant pairs, with each side's stop reason and nudge count;
+- capped cells, median agent wall time, local tokens per solved.
+
+**What counts as an answer:**
+- **S1 helps:** S1 solves significantly more than S0 (p < 0.05).
+- **S1 hurts:** S0 solves significantly more (p < 0.05).
+- **Anything else** is "no difference shown", reported with direction and intervals.
+- A mechanism win with no score movement is an honest partial result, declared here in advance.
+
+This run informs PR #120's default; it does not decide it alone. A significant S1 < S0 argues against a `user`
+default on this lane; a significant S1 > S0 argues for it.
+
+## Power and limitations, stated now
+
+- **Power.** At most 32 pairs. The measured self-flip rate is about 15% between attempts, so only pass-rate
+  differences of roughly 20 points or more are detectable.
+  - The baseline leaves little room. R1H's L arm solved 24 of 32 (75%). Of its 8 unsolved cells, 5 ended in `stall`
+    and 4 had a dropped nudge.
+  - A plausible effect is therefore a few cells, below the MDE. A non-significant S1 vs S0 is "no difference shown",
+    not "no effect". The mechanism metric and the stop-reason distributions carry most of the information.
+- **Time separation.** S0 and S1 are concurrent. The R1H comparisons are time-separated: R1H ran 2026-11-02/03 on
+  build d59e6c19 (unstreamed, no `max_tokens`, reasoning promotion; M1 Amendment 3 lists the differences) and through
+  `relay-meter-r1`.
+- **Shared gx10 host.** Task containers run on the gx10's docker alongside whatever else runs there (R1, P2G, M1b at
+  writing), with the same load for both arms at any moment. Only the bounded lead makes it equal over time.
+- **Bounded lead.** An arm sometimes waits while the other finishes, so the server occasionally sees one stream rather
+  than two. This applies to both arms alike.
+- **Different relay.** The abort-on-disconnect relay differs from R1H's only when a client abandons a request.
+- **Nudge counter scope.** `counters.nudges` counts idle nudges only. Convergence, wrap-up, verify and context
+  messages are counted by the meter, by kind.
+- **Budget.** L cells spend $0 of cloud. S1's own ledger (`spend.jsonl`) caps at $1.00 as a tripwire for misrouting.
+
+## Cleanup and scope
+
+The chain starts and stops only:
+- R1H's lane, via R1H's own scripts, under the pid rule above;
+- its own tunnel, by the process group it launched;
+- its own relays, started and stopped by `run_s1.py`.
+
+Cleanup runs only when the chain exits. There is no idle fallback and no `pkill` by pattern. Nothing under
+`benchmarks/results/` outside `s1-2026-11/` is written: R1H's and M1's files are read, and M1's commit lock is opened
+for append.
+
+## Files
+
+- `apparatus/s1-chain.sh`: the chain. `DRY=1` runs read-only checks.
+- `apparatus/run_s1.py`: the runner (`plan`, `smoke`, `full`).
+- `apparatus/collect_s1.py`: the analysis (`--smoke`, `--no-write`).
+- `apparatus/gnomon-setup-s1.sh.j2`, `apparatus/peer_agents_s1.py`: M1a3's setup and agent with the arm line changed.
+- `apparatus/relay-meter-s1.mjs`, `apparatus/test_relay_s1.mjs`: the meter and its tests.
+- `apparatus/probe_s1.py`, `apparatus/probe-shapes-s1.json`, `apparatus/make_probe_shapes.mts`: the template gate.
+- `apparatus/probe_abort_s1.mjs`: the abort probe.
+- `apparatus/wiretest_s1.mjs`, `wiretest-s1.txt`: the offline wire test.
+- `apparatus/preflight_s1.sh`, `apparatus/tunnel-s1.sh`: the preflight and the tunnel.
+- Byte-identical copies:
+  - from R1H: `peer_agents_r1.py`, `gnomon_agent.py`, `relay-go.mjs`, `sample16-hunch.txt`;
+  - from M1: `collect_m1.py`.

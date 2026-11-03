@@ -1,0 +1,28 @@
+== S1 wire test 2026-11-03T12:21:25.332Z: gnomon 8078df03e2a28c41753825dcccab13e8a0ac03dd (<git archive 8078df03e2a28c41753825dcccab13e8a0ac03dd>/packages/gnomon-cli/gnomon.js)
+
+S0 (steer_role = "system"): gnomon exit 0; 16 requests reached the fake server
+  relay: chat 16, late system 4 req, dropped (R1H template) 4 req (4 msgs, new 1), [gnomon] notes 0 req (0 msgs, new 0); kinds dropped/note: nudge 4/0, converge 0/0, wrapup 0/0, verify 0/0, context 0/0, other 0/0; client_aborts 0, errors 0
+  turn record: wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768}, nudges 1, steer_role_adapted absent, stop_reason answered
+  ok   gnomon task ran to an exit (not killed at 180 s)
+  ok   the idle nudge fired at least once
+  ok   the relay parsed every request the server saw
+  ok   no refusal was learned (steer_role_adapted absent or 0)
+  ok   S0: the nudge went out as a system message the R1H template drops
+  ok   S0: no [gnomon] note was sent
+  ok   S0: the turn record's wire carries no steer_role
+
+S1 (steer_role = "user"): gnomon exit 0; 16 requests reached the fake server
+  relay: chat 16, late system 0 req, dropped (R1H template) 0 req (0 msgs, new 0), [gnomon] notes 4 req (4 msgs, new 1); kinds dropped/note: nudge 0/4, converge 0/0, wrapup 0/0, verify 0/0, context 0/0, other 0/0; client_aborts 0, errors 0
+  turn record: wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"steer_role":"user"}, nudges 1, steer_role_adapted absent, stop_reason answered
+  ok   gnomon task ran to an exit (not killed at 180 s)
+  ok   the idle nudge fired at least once
+  ok   the relay parsed every request the server saw
+  ok   no refusal was learned (steer_role_adapted absent or 0)
+  ok   S1: the nudge went out as a [gnomon] user note
+  ok   S1: no system message after the first
+  ok   S1: the turn record's wire says steer_role user
+
+surface diff S0 vs S1: [["steer_role = \"system\"","steer_role = \"user\""]]
+  ok   the two surfaces differ by exactly the steer_role line (meter port normalised)
+
+wire test: PASS (gnomon 8078df03e2a28c41753825dcccab13e8a0ac03dd)
