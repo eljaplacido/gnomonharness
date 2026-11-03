@@ -81,6 +81,13 @@ attempts = 3              # generation retries. 1 disables THESE; transport
                           # attempts = 1 still knocks for the full grace.
 backoff_ms = 500          # doubled each attempt
 request_timeout_ms = 300000   # a reasoning model on a hard task exceeds 120s; a timed-out attempt doubles this
+                              # (for a streamed reply: the wait for its first byte)
+# A streamed reply -- every kind = "openai" endpoint unless it declares
+# stream = false -- is timed by the gap between chunks, so a long reply that is
+# still being written is never cut off for being long. An unstreamed one has
+# only request_timeout_ms, which a long generation reaches.
+stream_idle_timeout_ms = 300000    # silence mid-reply that counts as a stall; the request is aborted and asked again
+stream_total_timeout_ms = 1800000  # overall cap on one streamed reply; not retried, it would run as long again
 # An endpoint refusing the socket is not an attempt; it is knocked on for a
 # grace instead (0 disables). Left undeclared on purpose: undeclared, a remote
 # endpoint gets 60s (a provider blip) but a server on THIS machine that refuses

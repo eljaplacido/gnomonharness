@@ -118,6 +118,17 @@ export interface EndpointConfig {
    * that). Set it to name a custom or gateway endpoint the host can't guess.
    */
   provider?: string;
+  /**
+   * Stream the reply as server-sent events. Absent means streamed for
+   * `kind = "openai"` and not for Ollama's own /api/chat, which is called
+   * unstreamed whatever this says. See resolveStream.
+   *
+   * Declare `false` for an OpenAI-compatible server that cannot stream, or that
+   * streams without reporting usage: a streamed call asks for usage with
+   * `stream_options.include_usage`, and a server that ignores it leaves the
+   * token counts blank.
+   */
+  stream?: boolean;
 }
 
 export type EndpointKind = "ollama" | "openai";
@@ -1260,6 +1271,12 @@ export interface RouteTarget {
   /** Which named endpoint this came from, for display */
   endpoint?: string;
   kind?: EndpointKind;
+  /** Stream the reply (SSE). Absent means unstreamed. See resolveStream. */
+  stream?: boolean;
+  /** `[resilience] stream_idle_timeout_ms`, for a streamed call */
+  streamIdleMs?: number;
+  /** `[resilience] stream_total_timeout_ms`, for a streamed call */
+  streamTotalMs?: number;
 }
 
 /** The routing policy, resolved with defaults. */
@@ -1412,8 +1429,34 @@ export function resolveEndpoint(
   );
 }
 
+/**
+ * Whether calls to an endpoint are streamed.
+ *
+ * Declared `stream` wins. Undeclared, an OpenAI-shaped endpoint streams and
+ * Ollama's own /api/chat does not. Ollama's native route streams NDJSON, not
+ * server-sent events, and no reader for it exists here, so it is never
+ * streamed; auditSurface says so when a block declares it.
+ *
+ * Streaming is the default because an unstreamed reply has only one clock:
+ * nothing arrives until the whole generation is done, so a deadline long
+ * enough for the longest legitimate reply is also how long a dead one is
+ * waited on. Measured on P2G (2026-11, Terminal-Bench on hosted DeepSeek V4.1
+ * Flash, gnomon v0.3.1): 11 of 18 cells hit the 30-minute cap, with replies
+ * cut off at 300 s and sent again from the start. A streamed reply is timed
+ * by the gap between chunks instead, which a reply that is still being
+ * written never reaches.
+ */
+export function resolveStream(endpoint: {
+  url?: string;
+  kind?: EndpointKind;
+  stream?: unknown;
+}, unclear: EndpointKind = "ollama"): boolean {
+  if (endpointKind(endpoint, unclear) === "ollama") return false;
+  return typeof endpoint.stream === "boolean" ? endpoint.stream : true;
+}
+
 /** The only keys an [endpoints.<name>] block may carry. */
-const ENDPOINT_KEYS = new Set(["url", "kind", "api_key_env", "provider"]);
+const ENDPOINT_KEYS = new Set(["url", "kind", "api_key_env", "provider", "stream"]);
 
 /**
  * Every key a [roles.*] block may carry.
@@ -2419,6 +2462,30 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
       });
     }
 
+    if (block.stream !== undefined && typeof block.stream !== "boolean") {
+      problems.push({
+        where,
+        problem: `stream = ${JSON.stringify(block.stream)} is not true or false, so it is ignored.`,
+        fix: "stream = true streams the reply (the default for openai); false waits for it whole.",
+        fatal: false,
+      });
+    } else if (
+      block.stream === true &&
+      endpointKind({ url: block.url as string | undefined, kind: block.kind as EndpointKind | undefined }) ===
+        "ollama"
+    ) {
+      problems.push({
+        where,
+        problem:
+          `stream = true on an Ollama /api/chat endpoint: that route is always called ` +
+          `unstreamed, so the line does nothing.`,
+        fix:
+          `To stream from Ollama, point a kind = "openai" block at its OpenAI route, ` +
+          `http://127.0.0.1:11434/v1/chat/completions. Otherwise delete the line.`,
+        fatal: false,
+      });
+    }
+
     const kind = block.kind;
     if (kind !== undefined && kind !== "openai" && kind !== "ollama") {
       problems.push({
@@ -2822,6 +2889,7 @@ export function routeRole(
   // behaviour silently is exactly what Rule 1 exists to prevent.
   const endpointName = roleDef.endpoint ?? DEFAULT_ENDPOINT;
   const endpoint = resolveEndpoint(config, endpointName);
+  const resilience = resolveResilience(config);
   const target: RouteTarget = {
     model,
     temperature,
@@ -2835,6 +2903,9 @@ export function routeRole(
     apiKeyEnv: endpoint.api_key_env,
     endpoint: endpointName,
     kind: endpointKind(endpoint),
+    stream: resolveStream(endpoint),
+    streamIdleMs: resilience.stream_idle_timeout_ms,
+    streamTotalMs: resilience.stream_total_timeout_ms,
   };
 
   let fallback: RouteTarget | undefined;
@@ -2856,6 +2927,9 @@ export function routeRole(
       // A fallback with no kind has always defaulted to openai, so that stays
       // the default for a URL that names no shape.
       kind: endpointKind(fbEndpoint ?? { url: fb.url }, "openai"),
+      stream: resolveStream(fbEndpoint ?? { url: fb.url }, "openai"),
+      streamIdleMs: resilience.stream_idle_timeout_ms,
+      streamTotalMs: resilience.stream_total_timeout_ms,
     };
   }
 
@@ -3217,6 +3291,14 @@ export interface ResolvedResilience {
    * declaration. See the loopback branch in callEndpoint.
    */
   transport_grace_declared: boolean;
+  /**
+   * A streamed reply that sends nothing for this long has stalled, and the
+   * request is aborted. Counted from the first byte of the body; before it,
+   * `request_timeout_ms` is the wait, as it is for a whole unstreamed reply.
+   */
+  stream_idle_timeout_ms: number;
+  /** The overall cap on one streamed reply, however steadily it arrives. */
+  stream_total_timeout_ms: number;
 }
 
 /**
@@ -3250,6 +3332,16 @@ export function resolveResilience(config: GnomonConfig): ResolvedResilience {
     // endpoint that is still unreachable afterwards ends the turn.
     transport_grace_ms: Math.floor(num(r?.transport_grace_ms, 60_000)),
     transport_grace_declared: num(r?.transport_grace_ms, -1) >= 0,
+    // 300 s of silence: the longest gap a live stream is seen to leave is a
+    // reasoning model thinking with its reasoning hidden, and Codex's
+    // stream_idle_timeout_ms defaults to the same figure for that reason.
+    stream_idle_timeout_ms: Math.max(1000, Math.floor(num(r?.stream_idle_timeout_ms, 300_000))),
+    // 30 minutes. Generous on purpose: this is not the guard, the idle timeout
+    // is. It stops a reply that never ends, which no idle clock can see.
+    stream_total_timeout_ms: Math.max(
+      1000,
+      Math.floor(num(r?.stream_total_timeout_ms, 1_800_000))
+    ),
   };
 }
 

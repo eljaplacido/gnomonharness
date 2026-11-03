@@ -3737,7 +3737,8 @@ describe("request shape follows the endpoint kind", () => {
         for (const k of Object.keys(m)) if (!allowed.has(k)) offenders.push(k);
       }
       for (const k of Object.keys(body)) {
-        if (!["model", "messages", "stream", "temperature", "top_p", "tools"].includes(k)) {
+        // stream_options is OpenAI's own: it asks a streamed reply for usage.
+        if (!["model", "messages", "stream", "stream_options", "temperature", "top_p", "tools"].includes(k)) {
           offenders.push(`payload.${k}`);
         }
       }

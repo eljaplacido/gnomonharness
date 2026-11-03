@@ -681,6 +681,20 @@ interface InferenceResult {
    * remote outage -- see callEndpointWithRetry.
    */
   refusedLocally?: boolean;
+  /**
+   * Which clock ended the call, when one did. `first`: nothing arrived within
+   * the request deadline (for an unstreamed call, the whole reply). `idle`: a
+   * streamed reply went silent mid-way. `total`: a streamed reply ran past its
+   * overall cap. callEndpointWithRetry treats each differently.
+   */
+  timedOut?: "first" | "idle" | "total";
+  /**
+   * A streamed reply that started and then broke off: the connection dropped,
+   * or the stream ended with neither a finish_reason nor [DONE]. Code 12, but
+   * the endpoint answered, so it spends a generation attempt rather than the
+   * transport grace a refused socket gets.
+   */
+  streamBroken?: boolean;
 }
 
 /**
@@ -888,7 +902,7 @@ export function isMalformedCall(call: ToolCall, offered: Set<string>): boolean {
  * three tries read as one, which is the part of this that would actually
  * violate the harness's own claims — not the retry itself.
  */
-async function callEndpointWithRetry(
+export async function callEndpointWithRetry(
   target: RouteTarget,
   messages: ChatMessage[],
   tools: unknown[],
@@ -1012,7 +1026,7 @@ async function callEndpointWithRetry(
     if (r.refusedLocally && !resilience.transport_grace_declared) {
       graceMs = Math.min(declaredGraceMs, LOCAL_REFUSED_GRACE_MS);
     }
-    if (r.code === 12 && graceMs > 0) {
+    if (r.code === 12 && graceMs > 0 && !r.streamBroken) {
       transportTries++;
       const wait = Math.min(
         resilience.backoff_ms * Math.pow(2, transportTries - 1),
@@ -1067,6 +1081,23 @@ async function callEndpointWithRetry(
       attempt--;
       continue;
     }
+    if (r.code === 11 && r.timedOut === "total") {
+      // A streamed reply that was still arriving when the cap ran out was not
+      // stalled, it was long, and the same prompt runs as long again. Resending
+      // it is the blind retry: same request, same outcome, billed twice. The
+      // turn's fallback, if one is declared, is still tried by the caller.
+      if (say && ui) {
+        say(
+          paint(
+            ui,
+            "yellow",
+            `  [retry] not retried — the streamed reply ran past its overall cap ` +
+              `([resilience] stream_total_timeout_ms), and the same prompt would run as long again`
+          )
+        );
+      }
+      return r;
+    }
     if (r.code === 11) {
       // Stop while the answer still fits in the budget. Starting an attempt
       // that cannot finish inside it buys nothing and forfeits the record.
@@ -1084,7 +1115,11 @@ async function callEndpointWithRetry(
         }
         return r;
       }
-      deadline = Math.min(deadline * 2, remainingMs);
+      // A stream that went silent mid-reply had stalled; it did not need a
+      // longer wait for its first byte, so that deadline is not doubled. The
+      // stall is not a property of the prompt, and the aborted request has
+      // already stopped the generation, so asking again is not paying twice.
+      if (r.timedOut !== "idle") deadline = Math.min(deadline * 2, remainingMs);
     }
     if (attempt < resilience.attempts) {
       const wait = resilience.backoff_ms * Math.pow(2, attempt - 1);
@@ -1094,7 +1129,15 @@ async function callEndpointWithRetry(
           paint(
             ui,
             "yellow",
-            `  [retry] ${r.code === 11 ? `timed out (deadline now ${deadline}ms)` : transportKind(r)} ` +
+            `  [retry] ${
+              r.code === 11
+                ? r.timedOut === "idle"
+                  ? `the stream went silent mid-reply`
+                  : `timed out (deadline now ${deadline}ms)`
+                : r.streamBroken
+                  ? `the stream broke off mid-reply`
+                  : transportKind(r)
+            } ` +
               `— attempt ${attempt} of ${resilience.attempts}, waiting ${wait}ms`
           )
         );
@@ -1184,7 +1227,7 @@ export function isLoopbackUrl(url: string): boolean {
  * hidden timeouts switched off.
  *
  * Node's fetch is undici, and undici gives every request a 300 s headersTimeout
- * and a 300 s bodyTimeout of its own. A model call is not streamed, so headers
+ * and a 300 s bodyTimeout of its own. An unstreamed model call's headers
  * arrive only when the whole generation is done, and a long, steady local
  * generation was cut off at exactly 300 s however long gnomon's deadline was:
  * the timeout escalation in callEndpointWithRetry doubled the deadline to 600 s
@@ -1352,11 +1395,17 @@ export async function callEndpoint(
     return out;
   });
 
+  // Streamed when the endpoint is (resolveStream: OpenAI-shaped endpoints by
+  // default). Usage then arrives in a last chunk of its own, and only when it
+  // is asked for, so it is asked for: the token counts are what the benchmarks
+  // read, and a streamed call must report exactly what an unstreamed one did.
+  const streamed = target.stream === true;
   const payload: Record<string, unknown> = {
     model: target.model,
     messages: wireMessages,
-    stream: false,
+    stream: streamed,
   };
+  if (streamed) payload.stream_options = { include_usage: true };
   if ((target.kind ?? "ollama") === "ollama") {
     payload.options = { temperature: target.temperature, top_p: target.top_p };
   } else {
@@ -1365,19 +1414,51 @@ export async function callEndpoint(
   }
   if (tools.length > 0) payload.tools = tools;
 
+  // One controller for every way a call ends early: the deadline, a streamed
+  // reply going silent or running past its cap, and Esc. Aborting it closes
+  // the socket, which is how the server learns to stop generating. A reply
+  // nobody reads any more is still billed while it runs: on P2G (2026-11) the
+  // relay billed data-anonymization 163,404 output tokens where gnomon counted
+  // 81,742, the difference being generations abandoned at 300 s that ran on.
+  //
+  // Three clocks. `timeoutMs` (request_timeout_ms) is the wait for the first
+  // byte -- for an unstreamed call that is the whole reply, as it always was.
+  // Once a streamed body starts, every chunk re-arms the idle clock instead,
+  // so a reply that is still being written is never cut off for being long.
+  // The overall cap stops one that never ends.
+  const idleMs = Math.max(1, target.streamIdleMs ?? 300_000);
+  const totalMs = Math.max(1, target.streamTotalMs ?? 1_800_000);
+  const controller = new AbortController();
+  let timedOut: InferenceResult["timedOut"];
+  const expire = (why: NonNullable<InferenceResult["timedOut"]>) => () => {
+    timedOut = why;
+    controller.abort(new DOMException(`model call timed out (${why})`, "TimeoutError"));
+  };
+  let clock = setTimeout(expire("first"), timeoutMs);
+  const cap = streamed ? setTimeout(expire("total"), totalMs) : undefined;
+  const rearm = (): void => {
+    clearTimeout(clock);
+    clock = setTimeout(expire("idle"), idleMs);
+  };
+  const onCancel = (): void => controller.abort(signal?.reason);
+  if (signal?.aborted) controller.abort(signal.reason);
+  else signal?.addEventListener("abort", onCancel, { once: true });
+  // Set once the whole body has been read, so the finally below closes only a
+  // connection that something walked away from.
+  let drained = false;
+  let answered = false;
+
   try {
     const dispatcher = modelFetchDispatcher();
     const res = await fetch(target.url, {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
-      // Either the request deadline or the user pressing Esc ends the call.
-      signal: signal
-        ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal])
-        : AbortSignal.timeout(timeoutMs),
-      // No undici timeouts of its own: the deadline above is the only clock.
+      signal: controller.signal,
+      // No undici timeouts of its own: the clocks above are the only ones.
       ...(dispatcher ? { dispatcher } : {}),
     } as RequestInit);
+    answered = true;
 
     if (!res.ok) {
       // The body carries the reason; the status alone does not. Reporting
@@ -1453,7 +1534,59 @@ export async function callEndpoint(
       };
     }
 
+    // A server that ignores `stream: true` answers with one JSON body, and is
+    // read as one. Only a body that says it is an event stream is parsed as
+    // one, so a server that cannot stream needs no declaration to keep working.
+    const contentType = res.headers?.get?.("content-type") ?? "";
+    if (streamed && res.body && /text\/event-stream/i.test(contentType)) {
+      const s = await readChatStream(res.body, rearm);
+      drained = s.complete;
+      if (s.error) {
+        // An error sent in place of a chunk: the request was accepted and
+        // failed on the way. Read exactly as the same text in a non-2xx body.
+        if (/error parsing tool call|failed to parse (?:the )?(?:tool call|input at pos)/i.test(s.error.message)) {
+          return { content: "", code: 0, toolCalls: [], toolCallUnparsed: s.error.message.slice(0, 500), usage: s.usage };
+        }
+        return {
+          content: `Model API error (in the stream): ${s.error.message.slice(0, 500)}`,
+          code: classifyFailure({ status: s.error.status, message: s.error.message }),
+          toolCalls: [],
+          usage: s.usage,
+        };
+      }
+      if (!s.complete) {
+        return {
+          content:
+            `The stream from ${target.url} ended before the reply was complete ` +
+            `(no finish_reason and no [DONE]).`,
+          code: 12,
+          streamBroken: true,
+          toolCalls: [],
+          usage: s.usage,
+        };
+      }
+      const raw = s.toolCalls.map((c) => ({
+        ...(c.id !== undefined ? { id: c.id } : {}),
+        type: c.type ?? "function",
+        function: { name: c.name, arguments: c.args },
+      }));
+      // Content first and reasoning last, as below. A stream cannot tell a
+      // null content from an empty one, so the reasoning stands in only for a
+      // reply with no text and no tool call -- the case it exists for.
+      const content =
+        s.content !== "" || raw.length > 0 || isEmptyReasoning(s.reasoning) ? s.content : s.reasoning;
+      return {
+        content,
+        code: 0,
+        toolCalls: normaliseToolCalls(raw),
+        rawToolCalls: raw,
+        usage: s.usage,
+        finishReason: s.finishReason,
+      };
+    }
+
     const json = await res.json();
+    drained = true;
     const message = json.choices?.[0]?.message ?? json.message ?? {};
     // reasoning_content is read, and last. A reasoning model that answers only
     // in its thinking channel returns content: null, which this read as "" — an
@@ -1480,27 +1613,49 @@ export async function callEndpoint(
     const raw: unknown[] = Array.isArray(message.tool_calls)
       ? message.tool_calls
       : [];
-    const toolCalls: ToolCall[] = raw.map((c) => {
-      const call = c as {
-        id?: string;
-        name?: string;
-        arguments?: unknown;
-        function?: { name?: string; arguments?: unknown };
-      };
-      return {
-        id: call.id,
-        name: call.function?.name ?? call.name ?? "",
-        args: parseToolArgs(call.function?.arguments ?? call.arguments),
-      };
-    });
+    const toolCalls = normaliseToolCalls(raw);
 
     return { content, code: 0, toolCalls, rawToolCalls: raw, usage: readUsage(json), finishReason };
   } catch (err) {
     if (signal?.aborted) {
       return { content: CANCELLED, code: 2, toolCalls: [] };
     }
+    // One of gnomon's own clocks ran out. A timeout (11) whichever it was --
+    // the server accepted the request and was still working on it, or had
+    // stopped mid-reply -- never an unreachable endpoint (12).
+    if (timedOut) {
+      const secs = (ms: number) => `${Math.round(ms / 100) / 10}s`;
+      return {
+        content:
+          timedOut === "first"
+            ? `Model unavailable at ${target.url}: no ` +
+              (streamed ? "first byte" : "reply") +
+              ` within ${secs(timeoutMs)} ([resilience] request_timeout_ms)`
+            : timedOut === "idle"
+              ? `The stream from ${target.url} went silent for ${secs(idleMs)} mid-reply ` +
+                `([resilience] stream_idle_timeout_ms), so the request was aborted.`
+              : `The streamed reply from ${target.url} ran past ${secs(totalMs)} ` +
+                `([resilience] stream_total_timeout_ms), so the request was aborted.`,
+        code: 11,
+        timedOut,
+        toolCalls: [],
+      };
+    }
     const msg = err instanceof Error ? err.message : String(err);
     const errno = causeCode(err);
+
+    // A streamed body that broke off after the headers arrived: the endpoint
+    // answered, then the connection went. Not a refused socket.
+    if (streamed && answered) {
+      return {
+        content:
+          `The stream from ${target.url} broke off mid-reply: ${msg}` +
+          (errno && !msg.includes(errno) ? ` (${errno})` : ""),
+        code: 12,
+        streamBroken: true,
+        toolCalls: [],
+      };
+    }
 
     // Nothing is listening on this box.
     //
@@ -1575,7 +1730,181 @@ export async function callEndpoint(
           }),
       toolCalls: [],
     };
+  } finally {
+    clearTimeout(clock);
+    if (cap) clearTimeout(cap);
+    signal?.removeEventListener("abort", onCancel);
+    // A reply abandoned part-way -- an error chunk, a timeout, Esc -- has its
+    // connection closed here, so the server stops writing it.
+    if (!drained) controller.abort();
   }
+}
+
+/**
+ * Tool calls in the backend's shape, normalised. Ollama sends `arguments` as
+ * an object, OpenAI as a JSON string; parseToolArgs reads either.
+ */
+function normaliseToolCalls(raw: unknown[]): ToolCall[] {
+  return raw.map((c) => {
+    const call = c as {
+      id?: string;
+      name?: string;
+      arguments?: unknown;
+      function?: { name?: string; arguments?: unknown };
+    };
+    return {
+      id: call.id,
+      name: call.function?.name ?? call.name ?? "",
+      args: parseToolArgs(call.function?.arguments ?? call.arguments),
+    };
+  });
+}
+
+/** What a streamed chat completion added up to. */
+export interface StreamedReply {
+  content: string;
+  /** reasoning_content (DeepSeek, llama.cpp) or reasoning (OpenRouter, Ollama) */
+  reasoning: string;
+  /** Assembled by index; `args` is the concatenated arguments string */
+  toolCalls: Array<{ id?: string; type?: string; name: string; args: string }>;
+  finishReason?: string;
+  usage?: TokenUsage;
+  /** An `error` the server sent in place of a chunk */
+  error?: { message: string; status?: number };
+  /** A finish_reason or [DONE] arrived, so the reply is whole */
+  complete: boolean;
+}
+
+/**
+ * Read an OpenAI-shaped chat-completions stream (server-sent events) to its end.
+ *
+ * `onData` is called for every piece of the body that arrives, comments
+ * included: a server that sends `: keep-alive` while it queues the request
+ * (DeepSeek and OpenRouter both do) is alive, and the idle clock must see it.
+ *
+ * Usage is taken from whichever chunk carries it -- the empty-choices chunk
+ * `stream_options.include_usage` asks for, or the last delta on servers that
+ * attach it there -- and the last one wins, so a server that reports running
+ * totals is read at its final count.
+ */
+export async function readChatStream(
+  body: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
+  onData?: () => void
+): Promise<StreamedReply> {
+  const out: StreamedReply = { content: "", reasoning: "", toolCalls: [], complete: false };
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let data: string[] = [];
+  let done = false;
+
+  const dispatch = (): void => {
+    if (data.length === 0) return;
+    const text = data.join("\n");
+    data = [];
+    if (text.trim() === "[DONE]") {
+      out.complete = true;
+      done = true;
+      return;
+    }
+    let chunk: Record<string, any>;
+    try {
+      chunk = JSON.parse(text);
+    } catch {
+      return; // not JSON, so not a chunk
+    }
+    if (chunk?.error) {
+      const e = chunk.error;
+      const status = typeof e?.code === "number" ? e.code : typeof e?.status === "number" ? e.status : undefined;
+      out.error = {
+        message: typeof e === "string" ? e : typeof e?.message === "string" ? e.message : JSON.stringify(e),
+        status,
+      };
+      done = true;
+      return;
+    }
+    const usage = readUsage(chunk);
+    if (usage && (usage.input !== undefined || usage.output !== undefined)) out.usage = usage;
+    const choice = chunk?.choices?.[0];
+    if (!choice) return;
+    const delta = choice.delta ?? choice.message ?? {};
+    if (typeof delta.content === "string") out.content += delta.content;
+    const thought = delta.reasoning_content ?? delta.reasoning;
+    if (typeof thought === "string") out.reasoning += thought;
+    if (Array.isArray(delta.tool_calls)) {
+      for (const tc of delta.tool_calls) {
+        // By index, which every server checked sends. Without one, a new id
+        // opens a new call and anything else continues the last.
+        const at =
+          typeof tc?.index === "number"
+            ? tc.index
+            : tc?.id && !out.toolCalls.some((c) => c.id === tc.id)
+              ? out.toolCalls.length
+              : Math.max(0, out.toolCalls.length - 1);
+        const slot = (out.toolCalls[at] ??= { name: "", args: "" });
+        if (typeof tc?.id === "string" && tc.id) slot.id = tc.id;
+        if (typeof tc?.type === "string") slot.type = tc.type;
+        const name = tc?.function?.name;
+        if (typeof name === "string" && name !== slot.name) slot.name += name;
+        const args = tc?.function?.arguments;
+        if (typeof args === "string") slot.args += args;
+        else if (args && typeof args === "object") slot.args = JSON.stringify(args);
+      }
+    }
+    if (typeof choice.finish_reason === "string" && choice.finish_reason) {
+      out.finishReason = choice.finish_reason;
+      out.complete = true;
+    }
+  };
+
+  const take = (line: string): void => {
+    if (line === "") return dispatch();
+    if (line.startsWith(":")) return; // a comment: keep-alive
+    if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+    // event:, id: and retry: carry nothing a chat reply needs.
+  };
+
+  for await (const bytes of body as AsyncIterable<Uint8Array>) {
+    onData?.();
+    buffer += decoder.decode(bytes, { stream: true });
+    let nl: number;
+    while (!done && (nl = buffer.indexOf("\n")) >= 0) {
+      take(buffer.slice(0, nl).replace(/\r$/, ""));
+      buffer = buffer.slice(nl + 1);
+    }
+    if (done) break;
+  }
+  if (!done) {
+    buffer += decoder.decode();
+    for (const line of buffer.split("\n")) take(line.replace(/\r$/, ""));
+    dispatch();
+  }
+  return out;
+}
+
+/** The request settings a turn record carries. */
+export interface WireRecord {
+  stream: boolean;
+  stream_idle_timeout_ms?: number;
+  stream_total_timeout_ms?: number;
+}
+
+/**
+ * How a target's calls go out, for the turn record.
+ *
+ * Each value is declared in the surface or is a default of this build, and
+ * the surface hash covers only the first. Streaming in particular changed
+ * default without a surface changing (an OpenAI-shaped endpoint now streams
+ * unless it says stream = false), so the record says what was actually sent
+ * rather than leaving it to be inferred from the harness version.
+ */
+export function wireOf(target: RouteTarget): WireRecord {
+  return target.stream === true
+    ? {
+        stream: true,
+        stream_idle_timeout_ms: target.streamIdleMs,
+        stream_total_timeout_ms: target.streamTotalMs,
+      }
+    : { stream: false };
 }
 
 /** Marker text for a turn the user stopped. Code 2 → bucket `refusal`. */
@@ -2098,6 +2427,8 @@ export interface TurnResult {
    */
   endpoint?: string;
   endpoint_url?: string;
+  /** How the call went out on the wire, from the same target. See wireOf. */
+  wire?: WireRecord;
   /**
    * The outcome of the surface's declared `[verify]` check for this turn, when
    * one ran. Absent when no check is declared or none applied.
@@ -3403,6 +3734,7 @@ export async function runAgenticTurn(
     model: usedModel,
     endpoint: usedTarget.endpoint,
     endpoint_url: usedTarget.url,
+    wire: wireOf(usedTarget),
     verify: verifyOutcome,
     toolSteps: steps,
     toolLog,
@@ -3973,6 +4305,7 @@ export async function runAgenticTurn(
         model: usedModel,
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
+        wire: wireOf(usedTarget),
         verify: verifyOutcome,
         toolSteps: steps,
         toolLog,
@@ -4120,6 +4453,7 @@ export async function runAgenticTurn(
         model: usedModel,
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
+        wire: wireOf(usedTarget),
         verify: verifyOutcome,
         toolSteps: steps,
         toolLog,
@@ -5288,6 +5622,7 @@ export async function runTask(
     // different server and the record has to say which one.
     endpoint: turn.endpoint ?? route.target.endpoint,
     endpoint_url: turn.endpoint_url ?? route.target.url,
+    wire: turn.wire ?? wireOf(route.target),
     bucket: mapBucket(turn.code),
     code: turn.code,
     duration_ms: duration,
@@ -7325,6 +7660,7 @@ export async function runSessionTurn(
     // the resolved destination has to be written down instead.
     endpoint_url: turn.endpoint_url ?? route.target.url,
     endpoint_overridden: process.env.GNOMON_MODEL_URL ? true : undefined,
+    wire: turn.wire ?? wireOf(route.target),
     bucket: exchange.bucket,
     code: exchange.code,
     duration_ms: duration,

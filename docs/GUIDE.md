@@ -549,6 +549,15 @@ kind = "openai"
 # api_key_env = "VLLM_API_KEY"   # only if the server was started with a key
 ```
 
+**Every `kind = "openai"` endpoint is streamed** (server-sent events, with
+`stream_options.include_usage` so the token counts stay exact). A streamed
+reply is timed by the gap between chunks, `[resilience]
+stream_idle_timeout_ms` (default 300 s), under an overall cap,
+`stream_total_timeout_ms` (default 30 min); the first byte waits
+`request_timeout_ms`. A server that cannot stream, or that streams without
+reporting usage, takes `stream = false` in its block. Ollama's own `/api/chat`
+is never streamed.
+
 **llama.cpp needs `--jinja`** for tool calling; the model id is what
 `/v1/models` reports, and `--alias` sets it. Loopback, private-range,
 Tailscale (`100.64–127.x`) and `*.local` addresses are listed as **LOCAL**: no
@@ -1150,6 +1159,7 @@ chain measured 48.7% against 56.6% without one, within noise
 | `No model answers for this project yet: …` (from `launch`) | The default role's endpoint, key or model is not usable | Pick a provider in the picker, or Skip and run `gnomon endpoint add` later |
 | `No API key: endpoint "X" declares api_key_env = "VAR", and $VAR is not set` | Key not stored or exported | `gnomon key set X`. No request was sent. |
 | `Model API error: 401 …` / `The key came from $VAR … the provider rejected it` | Wrong or expired key, or an exported variable shadowing the stored one | `gnomon key set X` with a fresh key; `unset VAR` if an old one is exported |
+| `The stream from … went silent for 300s mid-reply` (exit 11) | A streamed reply stalled; the request was aborted, and is asked again within `[resilience] attempts` | Raise `[resilience] stream_idle_timeout_ms` for a model that thinks silently for longer, or `stream = false` on an endpoint whose streaming is unreliable |
 | `Model API error: 400`/`404` naming a model | The model id is not one the endpoint serves | `gnomon endpoint list` (it suggests the nearest id), or `/models` |
 | `⚠ .gnomon/roles.toml [roles.R] model … is ignored: role_profile "P" sets …` | The profile routes that role and wins | Edit `profiles/P.toml`, or remove the line from `roles.toml` ([5.0](#50-where-routing-lives-and-a-one-time-step)) |
 | Banner shows `Model: local:default` | No `model` for the role anywhere: a missing profile, or `roles.toml` stripped without a profile | Fix `role_profile` or the profile file. `✗ profile "X" is not in .gnomon/profiles/` names the problem. |
