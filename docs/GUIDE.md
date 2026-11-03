@@ -1265,7 +1265,8 @@ bootstrap = "env"
 [bootstrap.env]
 linux = [
   'uname -srm; grep "^PRETTY_NAME=" /etc/os-release; echo "shell: $0 (login $SHELL)"',
-  'export GOTOOLCHAIN=local COREPACK_ENABLE_NETWORK=0 RUSTUP_AUTO_INSTALL=0; to=$(command -v timeout >/dev/null && echo "timeout 5"); for t in python3 pip3 uv node npm pnpm yarn bun go cargo rustc java mvn gcc g++ clang make cmake ruby php dotnet apt-get dnf apk pacman docker; do command -v $t >/dev/null || continue; v=$($to $t --version 2>/dev/null </dev/null | head -n 1); test -n "$v" || v=$($to $t version 2>/dev/null </dev/null | head -n 1); echo "$t: ${v:-present, no version output}"; done',
+  'export GOTOOLCHAIN=local COREPACK_ENABLE_NETWORK=0 RUSTUP_AUTO_INSTALL=0; to=$(command -v timeout >/dev/null && echo "timeout 5"); for t in python3 node go rustc java gcc; do command -v $t >/dev/null || continue; v=$($to $t --version 2>/dev/null </dev/null | head -n 1); test -n "$v" || v=$($to $t version 2>/dev/null </dev/null | head -n 1); echo "$t: ${v:-present, no version output}"; done',
+  'printf "present:"; for t in pip3 uv npm pnpm yarn bun cargo mvn gradle clang make cmake ruby php dotnet apt-get dnf apk pacman docker; do command -v $t >/dev/null && printf " %s" $t; done; echo',
   'printf "not found:"; for t in python3 python pip3 node npm go cargo rustc java gcc make docker; do command -v $t >/dev/null || printf " %s" $t; done; echo',
   'pwd; git rev-parse --abbrev-ref HEAD 2>/dev/null; git log -1 --format="%h %s" 2>/dev/null; git status --short 2>/dev/null | head -n 5',
   'ls -A | head -n 20',
@@ -1274,7 +1275,8 @@ linux = [
 ]
 macos = [
   'sw_vers; uname -srm; echo "shell: $0 (login $SHELL)"',
-  'export GOTOOLCHAIN=local COREPACK_ENABLE_NETWORK=0 RUSTUP_AUTO_INSTALL=0; to=$(command -v timeout >/dev/null && echo "timeout 5"); for t in python3 pip3 uv node npm pnpm yarn bun go cargo rustc java mvn gcc clang make cmake ruby php dotnet brew xcrun docker; do command -v $t >/dev/null || continue; v=$($to $t --version 2>/dev/null </dev/null | head -n 1); test -n "$v" || v=$($to $t version 2>/dev/null </dev/null | head -n 1); echo "$t: ${v:-present, no version output}"; done',
+  'export GOTOOLCHAIN=local COREPACK_ENABLE_NETWORK=0 RUSTUP_AUTO_INSTALL=0; to=$(command -v timeout >/dev/null && echo "timeout 5"); for t in python3 node go rustc java clang; do command -v $t >/dev/null || continue; v=$($to $t --version 2>/dev/null </dev/null | head -n 1); test -n "$v" || v=$($to $t version 2>/dev/null </dev/null | head -n 1); echo "$t: ${v:-present, no version output}"; done',
+  'printf "present:"; for t in pip3 uv npm pnpm yarn bun cargo mvn gradle gcc make cmake ruby php dotnet brew docker; do command -v $t >/dev/null && printf " %s" $t; done; echo',
   'printf "not found:"; for t in python3 python pip3 node npm go cargo rustc java gcc make docker brew; do command -v $t >/dev/null || printf " %s" $t; done; echo',
   'pwd; git rev-parse --abbrev-ref HEAD 2>/dev/null; git log -1 --format="%h %s" 2>/dev/null; git status --short 2>/dev/null | head -n 5',
   'ls -A | head -n 20',
@@ -1283,7 +1285,8 @@ macos = [
 ]
 windows = [
   'uname -srm; cmd //c ver; echo "shell: $0 (Git Bash)"',
-  'export GOTOOLCHAIN=local COREPACK_ENABLE_NETWORK=0 RUSTUP_AUTO_INSTALL=0; to=; for t in py python pip uv node npm pnpm yarn go cargo rustc java gcc make cmake dotnet winget choco scoop docker; do command -v $t >/dev/null || continue; v=$($to $t --version 2>/dev/null </dev/null | head -n 1); test -n "$v" || v=$($to $t version 2>/dev/null </dev/null | head -n 1); echo "$t: ${v:-present, no version output}"; done',
+  'export GOTOOLCHAIN=local COREPACK_ENABLE_NETWORK=0 RUSTUP_AUTO_INSTALL=0; to=; for t in py python node go rustc java gcc; do command -v $t >/dev/null || continue; v=$($to $t --version 2>/dev/null </dev/null | head -n 1); test -n "$v" || v=$($to $t version 2>/dev/null </dev/null | head -n 1); echo "$t: ${v:-present, no version output}"; done',
+  'printf "present:"; for t in pip uv npm pnpm yarn cargo mvn gradle make cmake dotnet winget choco scoop docker; do command -v $t >/dev/null && printf " %s" $t; done; echo',
   'printf "not found:"; for t in python python3 py node npm go cargo java gcc make docker; do command -v $t >/dev/null || printf " %s" $t; done; echo',
   'pwd; git rev-parse --abbrev-ref HEAD 2>/dev/null; git log -1 --format="%h %s" 2>/dev/null; git status --short 2>/dev/null | head -n 5',
   'ls -A | head -n 20',
@@ -1306,6 +1309,10 @@ timeout_ms = 20000
   deadline. So the reference list turns that off (`RUSTUP_AUTO_INSTALL=0`,
   `COREPACK_ENABLE_NETWORK=0`, `GOTOOLCHAIN=local`), closes stdin, and gives
   each call 5 seconds where `timeout` exists.
+- **Versions only where they matter.** Only the six runtimes most often
+  confused are asked for `--version`. Everything else is checked with
+  `command -v`, which starts nothing. Asking twenty tools for their versions
+  took more than 20 seconds on GitHub's macOS and Windows runners.
 - **A probe is one string.** Each runs in a subshell with stderr folded in,
   so "command not found" is part of the snapshot. Its output is cut to
   `max_lines` lines. Keep `]` out of a probe: gnomon's TOML subset cannot read
