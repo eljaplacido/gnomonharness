@@ -660,6 +660,7 @@ describe("numbers the docs state are read back from what they describe", () => {
   const gettingStarted = readFileSync(join(repoRoot, "GETTING_STARTED.md"), "utf-8");
   const ciYml = readFileSync(join(repoRoot, ".github/workflows/ci.yml"), "utf-8");
   const releaseYml = readFileSync(join(repoRoot, ".github/workflows/release.yml"), "utf-8");
+  const buildReleaseYml = readFileSync(join(repoRoot, ".github/workflows/build-release.yml"), "utf-8");
 
   const WORDS = [
     "zero", "one", "two", "three", "four", "five", "six",
@@ -709,10 +710,15 @@ describe("numbers the docs state are read back from what they describe", () => {
   // ── B. Release targets ─────────────────────────────────────────────────
   //
   // Said "three targets (linux-x64, linux-arm64, darwin-arm64)" after
-  // windows-x64 joined the matrix on 2026-09-05.
-  it("the release-target list matches release.yml's build matrix", () => {
-    const targets = [...releaseYml.matchAll(/^\s+- name: ([a-z0-9]+-[a-z0-9]+)$/gm)].map((m) => m[1]);
-    expect(targets.length, "no build targets found in release.yml — the matrix moved").toBeGreaterThan(1);
+  // windows-x64 joined the matrix on 2026-09-05. The matrix moved from
+  // release.yml into the reusable build-release.yml (supply-chain change), and
+  // this read follows it; release.yml must still be the file that calls it.
+  it("the release-target list matches the release build matrix", () => {
+    expect(releaseYml, "release.yml no longer calls build-release.yml").toContain(
+      "uses: ./.github/workflows/build-release.yml"
+    );
+    const targets = [...buildReleaseYml.matchAll(/^\s+- name: ([a-z0-9]+-[a-z0-9]+)$/gm)].map((m) => m[1]);
+    expect(targets.length, "no build targets found in build-release.yml — the matrix moved").toBeGreaterThan(1);
 
     const claim = releasing.match(/builds binaries for (\w+) targets \(([^)]+)\)/s);
     expect(claim, "docs/RELEASING.md no longer states the target list").toBeTruthy();
@@ -721,7 +727,7 @@ describe("numbers the docs state are read back from what they describe", () => {
     for (const t of targets) {
       expect(
         claim![2].includes(t),
-        `docs/RELEASING.md's target list omits ${t}, which release.yml builds`
+        `docs/RELEASING.md's target list omits ${t}, which build-release.yml builds`
       ).toBe(true);
     }
   });

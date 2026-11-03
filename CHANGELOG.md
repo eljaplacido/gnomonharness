@@ -26,6 +26,29 @@
 
 ## [Unreleased]
 
+### Security — release supply chain (CI only; no runtime change)
+
+- **Signed build provenance (SLSA Build L3 on GitHub's documented path).** The
+  release build moved into a reusable workflow,
+  `.github/workflows/build-release.yml`, which attests every native archive
+  and npm tarball in the job that built it, then writes `SHA256SUMS` and an
+  SPDX SBOM and attests both. Releases gain `gnomon-<v>.spdx.json` and
+  `gnomon-<v>.intoto.jsonl` (every Sigstore bundle). `release.yml` verifies all
+  of it before it creates the draft, and the job that can write a release no
+  longer runs `pnpm install` or any build script.
+- **`scripts/verify-release.sh <version>`** checks a release's checksums,
+  provenance (exact signer: `build-release.yml` at the tag, GitHub-hosted
+  runner) and SBOM attestation. README → "Verify a release".
+- **npm trusted publishing.** `publish-npm.yml` publishes by OIDC once
+  npmjs.com trusts it for all four packages, keeps `NPM_TOKEN` only as a
+  fallback until then, and otherwise stops naming the four packages and the
+  fields to enter. docs/RELEASING.md has the one-time setup.
+- **Every third-party Action SHA-pinned** with its version in a comment, and
+  every workflow declares least-privilege `permissions:` (ci.yml had none).
+- **OpenSSF Scorecard** workflow, results to code scanning.
+- **SECURITY.md**: coordinated vulnerability disclosure with targets,
+  advisories and CVEs through GitHub, supported versions, and a CRA mapping.
+
 ## [0.4.0] — 2026-11-03
 
 **Upgrading from 0.3.x.** Run `gnomon migrate` in each project. It applies four
