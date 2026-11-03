@@ -26,6 +26,15 @@
 
 ## [Unreleased]
 
+- **The agent cannot accept its own skill.** `gnomon skill accept`, run
+  through the agent's bash, used to work and recorded `by: "human"`.
+  - The harness now sets `GNOMON_AGENT_SESSION=<session>` in every tool
+    subprocess (the bash shell and MCP servers).
+  - `skill accept` and `reject` refuse when they see it, with exit 3, and
+    write nothing.
+  - The variable can be removed, so records no longer claim a person. They
+    say `by: "cli"`, with `agent_session_marker`.
+
 - **Accepting or rejecting a skill is recorded.** `gnomon skill accept` moved
   the file and wrote nothing, so the trail showed the surface hash change and
   never that a person accepted a named skill, or what it said. Accept now

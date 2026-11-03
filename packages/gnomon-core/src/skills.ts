@@ -361,6 +361,27 @@ export function skillContentHash(raw: string | Buffer): string {
   return createHash("sha256").update(raw).digest("hex");
 }
 
+/**
+ * Refused: a skill decision made from inside an agent session.
+ *
+ * The harness sets GNOMON_AGENT_SESSION in every tool subprocess (tools.ts,
+ * AGENT_SESSION_ENV). Found in re-review: `gnomon skill accept` run through
+ * the agent's own bash was recorded `by: "human"`. Acceptance is a person's.
+ * The CLI exits 3 (refused_by_gate) for this.
+ */
+export class AgentSessionRefusal extends Error {}
+
+function refuseInAgentSession(verb: "accept" | "reject"): void {
+  const session = process.env.GNOMON_AGENT_SESSION;
+  if (session) {
+    throw new AgentSessionRefusal(
+      `Not ${verb === "accept" ? "accepted" : "rejected"}: this is running inside an agent session ` +
+        `(GNOMON_AGENT_SESSION=${session}). Accepting or rejecting a skill is a person's decision; ` +
+        `run \`gnomon skill ${verb}\` yourself, outside the agent.`
+    );
+  }
+}
+
 function whoDecided(opts: SkillDecisionOptions): Record<string, unknown> {
   let user: string | undefined;
   try {
@@ -371,7 +392,12 @@ function whoDecided(opts: SkillDecisionOptions): Record<string, unknown> {
     user = process.env.USER ?? process.env.USERNAME;
   }
   return {
-    by: opts.by ?? "human",
+    // "cli", not "human": the command cannot see who typed it. It refuses
+    // inside an agent session, but a process can drop the marker (`env -u`),
+    // and a record must not claim a certainty it does not have.
+    by: opts.by ?? "cli",
+    // Always "absent" on a record that was written: present is refused.
+    agent_session_marker: process.env.GNOMON_AGENT_SESSION ? "present" : "absent",
     user,
     host: hostname(),
     interactive: opts.interactive ?? Boolean(process.stdin.isTTY),
@@ -457,6 +483,7 @@ export function acceptSkill(
   opts: SkillDecisionOptions = {}
 ): SkillDecision {
   assertSkillId(id);
+  refuseInAgentSession("accept");
   const from = join(config.gnomonDir, PROPOSED_DIR, `${id}.md`);
   if (!existsSync(from)) {
     throw new Error(`No proposed skill "${id}". Run \`gnomon skill list\`.`);
@@ -540,6 +567,7 @@ export function rejectSkill(
   opts: SkillDecisionOptions = {}
 ): SkillDecision {
   assertSkillId(id);
+  refuseInAgentSession("reject");
   const path = join(config.gnomonDir, PROPOSED_DIR, `${id}.md`);
   if (!existsSync(path)) {
     throw new Error(`No proposed skill "${id}".`);

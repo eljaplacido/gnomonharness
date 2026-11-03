@@ -3169,6 +3169,7 @@ export async function runAgenticTurn(
   const ctx: ToolContext = {
     audit: deps.audit,
     config,
+    agentSession: state.sessionId ?? `pid-${process.pid}`,
     bashAllow: config.roles[role]?.bash_allow,
     bashDeny: config.roles[role]?.bash_deny,
     writeAllow: config.roles[role]?.write_allow,

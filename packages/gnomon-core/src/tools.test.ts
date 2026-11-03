@@ -3194,3 +3194,21 @@ describe("gnomon's own records are not writable by any role", () => {
     expect((await tryWrite("notes/audit.jsonl")).code).toBe(TOOL_OK);
   });
 });
+
+describe("the agent-session marker", () => {
+  it("is in the environment of every bash the agent runs, naming the session", async () => {
+    // `gnomon skill accept` refuses when it sees this (skills.ts). Fails
+    // before the marker: the shell inherited the parent's environment only.
+    const out = await executeTool("bash", { command: "echo \"[$GNOMON_AGENT_SESSION]\"" }, ctx({ agentSession: "s-42" }), offered);
+    expect(out.code).toBe(TOOL_OK);
+    expect(out.content).toContain("[s-42]");
+    const anon = await executeTool("bash", { command: "echo \"[$GNOMON_AGENT_SESSION]\"" }, ctx(), offered);
+    expect(anon.content).toMatch(/\[pid-\d+\]/);
+  });
+
+  it("agentEnv adds the marker without dropping the rest", () => {
+    const env = tools.agentEnv("s-1", { PATH: "/bin", KEEP: "1" });
+    expect(env).toEqual({ PATH: "/bin", KEEP: "1", GNOMON_AGENT_SESSION: "s-1" });
+  });
+});
+
