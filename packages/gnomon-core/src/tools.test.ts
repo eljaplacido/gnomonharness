@@ -3522,6 +3522,8 @@ describe("INJ-2026-11: the policy-guard bypasses, refused", () => {
       "rm -rf .gnomon-sessions",
       "mv .gnomon-sessions /tmp/gnomon-moved-sessions",
       "cd $X && rm -rf .gnomon-audit",
+      "cd $X && find . -delete",
+      "cd \"$X\" && git clean -fdx",
     ]) {
       expect(rule(cmd, D()), cmd).toBe("record");
     }
@@ -3540,6 +3542,11 @@ describe("INJ-2026-11: the policy-guard bypasses, refused", () => {
       "ls .gnomon-audit",
     ]) {
       expect(rule(cmd, D()), cmd).toBeNull();
+    }
+    // A find or a git clean names where it starts, not what it removes: write_allow
+    // never judged either, and does not now (the re-run's ben-find-pyc-delete on G).
+    for (const cmd of ["find . -name '*.pyc' -delete", "git clean -fd", "git clean -fdx src", "cd $X && find . -name '*.pyc' -delete"]) {
+      expect(rule(cmd, G()), cmd).toBeNull();
     }
   });
 

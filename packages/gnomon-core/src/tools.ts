@@ -2055,10 +2055,15 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
           }
         }
         if (/^\.git(\/|$)|\/\.git\//.test(t.path) && /(^|\/)\.git\/(hooks|config)(\/|$)/.test(t.path)) return hooksHit(t.path, t.how);
-        if (t.clean && protectedDirs().some((p) => existsSync(p.dir))) {
+        // A git clean, or a recursive removal of `.` or `..`, from a directory
+        // gnomon cannot place may be the one above the records.
+        const upward = t.recursive === true && /^(\.\.?\/?)+$/.test(t.path);
+        const reached = (p: { dir: string }) =>
+          existsSync(p.dir) && (t.clean !== undefined || removalMatches(p.dir, root, t.path, t.names));
+        if ((t.clean || upward) && protectedDirs().some(reached)) {
           return recordHit(t.path, `${t.how}, from a directory gnomon cannot place`);
         }
-        if (allowed.length > 0 && t.how !== "ln (source)") {
+        if (allowed.length > 0 && t.how !== "ln (source)" && t.how !== "find -delete" && !t.clean) {
           return {
             rule: "write_allow",
             code: TOOL_DENIED,
@@ -2091,7 +2096,12 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     }
     // An extraction's own directory is judged by write_allow only when the
     // command names it; "." (where the shell is) says nothing about members.
-    const writeAllow = t.how !== "ln (source)" && !((t.how === "tar -x (into)" || t.how === "unzip (into)") && t.path === ".");
+    // A find removal and a git clean name where they START, not what they
+    // remove: put to the record, surface and hooks rules (which ask whether
+    // they reach those), never to write_allow, which judged neither before
+    // (INJ-2026-11 re-run: `find . -name '*.pyc' -delete` must stay allowed).
+    const reach = t.how === "find -delete" || t.clean !== undefined;
+    const writeAllow = !reach && t.how !== "ln (source)" && !((t.how === "tar -x (into)" || t.how === "unzip (into)") && t.path === ".");
     judged.push({ path: t.path, abs, how: t.how, writeAllow, t });
   }
 
