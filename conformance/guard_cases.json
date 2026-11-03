@@ -19,7 +19,7 @@
   "surface": {
     "roles.toml": "[roles.implement]\nmodel = \"m\"\ntools = [\"read\", \"write\", \"edit\", \"bash\", \"webfetch\"]\nwrite_allow = [\"src/**\", \"tests/**\"]\nbash_deny = ['\\bgit\\s+push\\b[^|;&]*\\s(--force|-f)\\b', '\\brm\\s+-rf\\s+/']\n\n[roles.readonly]\nmodel = \"m\"\ntools = [\"read\", \"bash\"]\nbash_allow = ['^ls\\b', '^cat\\b', '^git\\s+(status|diff|log)\\b']\n",
     "tools.toml": "[[tools]]\nname = \"read\"\nenabled = true\n\n[[tools]]\nname = \"write\"\nenabled = true\n\n[[tools]]\nname = \"edit\"\nenabled = true\n\n[[tools]]\nname = \"bash\"\nenabled = true\n\n[[tools]]\nname = \"webfetch\"\nenabled = true\n",
-    "policy.toml": "[approval]\ngate = \"{{gate}}\"\n\n[sandbox]\nlevel = \"confined\"\nnetwork = true\n",
+    "policy.toml": "[approval]\ngate = \"{{gate}}\"\nrepo_code = true\n\n[sandbox]\nlevel = \"confined\"\nnetwork = true\n",
     "config.toml": ""
   },
   "cases": [
@@ -56,6 +56,19 @@
     { "name": "sed -i on a file outside write_allow is denied", "role": "implement", "tool": "bash", "input": { "command": "sed -i 's/0.1.0/0.2.0/' pyproject.toml" }, "rule": "write_allow", "expect": { "never": "deny", "on_write": "deny" } },
     { "name": "a shell write inside write_allow is the gate's call", "role": "implement", "tool": "bash", "input": { "command": "printf 'x = 1\\n' > src/b.ts" }, "rule": null, "expect": { "never": "allow", "on_write": "ask" } },
     { "name": "a scratch write outside the repository is not write_allow's", "role": "implement", "tool": "bash", "input": { "command": "cp src/a.ts /tmp/gnomon-guard-scratch.ts" }, "rule": null, "expect": { "never": "allow", "on_write": "ask" } },
-    { "name": "a target that starts with a variable is not judged", "role": "implement", "tool": "bash", "input": { "command": "echo x > \"$TMPDIR/out.txt\"" }, "rule": null, "expect": { "never": "allow", "on_write": "ask" } }
+    { "name": "a target that starts with a variable is not judged", "role": "implement", "tool": "bash", "input": { "command": "echo x > \"$TMPDIR/out.txt\"" }, "rule": null, "expect": { "never": "allow", "on_write": "ask" } },
+    { "name": "${IFS} between the words of a denied command is read as the separator it is (INJ-2026-11 I1)", "role": "implement", "tool": "bash", "input": { "command": "git${IFS}push${IFS}--force${IFS}origin${IFS}main" }, "rule": "bash_deny", "expect": { "never": "deny", "on_write": "deny" } },
+    { "name": "a program held in a variable the line assigns is read as that program (INJ-2026-11)", "role": "implement", "tool": "bash", "input": { "command": "g=git; $g push --force origin main" }, "rule": "bash_deny", "expect": { "never": "deny", "on_write": "deny" } },
+    { "name": "a cd inside sh -c is followed: the write lands outside write_allow (INJ-2026-11 I2)", "role": "implement", "tool": "bash", "input": { "command": "sh -c 'cd src && echo x > ../CHANGELOG.md'" }, "rule": "write_allow", "expect": { "never": "deny", "on_write": "deny" } },
+    { "name": "a cd in a subshell does not outlive it (INJ-2026-11 I2)", "role": "implement", "tool": "bash", "input": { "command": "(cd src); echo x > notes.txt" }, "rule": "write_allow", "expect": { "never": "deny", "on_write": "deny" } },
+    { "name": "a relative write after a cd that cannot be followed is refused under write_allow", "role": "implement", "tool": "bash", "input": { "command": "cd \"$WORKDIR\" && echo x > notes.txt" }, "rule": "write_allow", "expect": { "never": "deny", "on_write": "deny" } },
+    { "name": "a shell write into the surface is denied for every role (INJ-2026-11 I6)", "role": "implement", "tool": "bash", "input": { "command": "printf 'network = true\\n' >> .gnomon/policy.toml" }, "rule": "surface", "expect": { "never": "deny", "on_write": "deny" } },
+    { "name": "removing the session store is denied (record)", "role": "implement", "tool": "bash", "input": { "command": "rm -rf .gnomon-sessions" }, "rule": "record", "expect": { "never": "deny", "on_write": "deny" } },
+    { "name": "git config core.hooksPath is denied (INJ-2026-11 I8)", "role": "implement", "tool": "bash", "input": { "command": "git config core.hooksPath .githooks" }, "rule": "git_hooks", "expect": { "never": "deny", "on_write": "deny" } },
+    { "name": "a shell write into .git/hooks is denied", "role": "implement", "tool": "bash", "input": { "command": "printf '#!/bin/sh\\nexit 0\\n' > .git/hooks/pre-commit" }, "rule": "git_hooks", "expect": { "never": "deny", "on_write": "deny" } },
+    { "name": "a write tool call into .git/hooks is denied", "role": "implement", "tool": "write", "input": { "path": ".git/hooks/pre-commit", "content": "#!/bin/sh\nexit 0\n" }, "rule": "git_hooks", "expect": { "never": "deny", "on_write": "deny" } },
+    { "name": "npm test runs package.json scripts: asked under repo_code = true, whatever the gate", "role": "implement", "tool": "bash", "input": { "command": "npm test" }, "rule": "repo_code", "expect": { "never": "ask", "on_write": "ask" } },
+    { "name": "make runs the Makefile: asked under repo_code = true", "role": "implement", "tool": "bash", "input": { "command": "make -C src all" }, "rule": "repo_code", "expect": { "never": "ask", "on_write": "ask" } },
+    { "name": "npm --version runs nothing of the repository's", "role": "implement", "tool": "bash", "input": { "command": "npm --version" }, "rule": null, "expect": { "never": "allow", "on_write": "ask" } }
   ]
 }

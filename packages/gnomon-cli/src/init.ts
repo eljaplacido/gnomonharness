@@ -679,6 +679,13 @@ const POLICY_TOML = `# Policy: approval gates, sandbox level, edit format.
 # Non-interactive runs have nobody to ask, so a gated call is refused rather
 # than assumed; \`gnomon task --yes\` is what stands in for a person.
 gate = "on_write"                  # never | on_write | always
+#
+# 'npm test' runs package.json's pretest, 'npm install' its lifecycle scripts,
+# 'make' the Makefile: code the repository defines, which no rule over the
+# command line can read. Such a call always names what it runs when it asks.
+# To have every one of them asked, whatever the gate says:
+#   repo_code = true
+# Only a sandbox (exec = "docker" below) contains what that code does.
 
 [sandbox]
 level = "confined"                 # off | confined | strict
@@ -710,11 +717,12 @@ level = "confined"                 # off | confined | strict
 #
 # network = false is enforced for the \`webfetch\` tool, which refuses outright,
 # and in bash for the commands whose purpose is the network: curl, wget, nc,
-# ssh, scp/rsync to a remote, and python/node/perl/ruby one-liners that open a
-# connection. It is NOT process isolation: a script, a build tool or a package
-# manager run through bash still reaches the network, and the prompt loop says
-# so at startup. With exec = "docker" the container gets no network at all,
-# which is isolation.
+# ssh, scp/rsync to a remote, python/node/perl/ruby one-liners that open a
+# connection, git pushing to or fetching from a URL, and a package manager
+# handed a registry URL. It is NOT process isolation: a script, a build tool or
+# a package manager run through bash still reaches the network, and the prompt
+# loop says so at startup. With exec = "docker" the container gets no network
+# at all, which is isolation.
 network = false
 
 # Keys that changed nothing used to sit here — auto_merge,

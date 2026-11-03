@@ -32,6 +32,7 @@ import {
 import { resolve, relative, isAbsolute, dirname, basename, join, sep, win32 as win32Path } from "node:path";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
+import { homedir } from "node:os";
 import { promisify } from "node:util";
 import {
   GnomonConfig,
@@ -45,12 +46,17 @@ import type { McpRegistry, McpToolInfo } from "./mcp.js";
 import {
   bashNetworkEgress,
   describeInvocation,
+  gitExecConfigs,
   isDryRunSegment,
   joinWords,
   programName,
   readShellCommand,
+  repoCodeRuns,
   shellSpellings,
   shellWriteTargets,
+  type GitClean,
+  type RepoCodeRun,
+  type WriteTarget,
 } from "./shell.js";
 
 // ---------------------------------------------------------------------------
@@ -548,6 +554,51 @@ export function needsApproval(tool: string, gate: ApprovalGate): boolean {
   if (gate === "never") return false;
   // on_write: bash is included because a command can write anything.
   return MUTATING.has(tool);
+}
+
+/**
+ * `[approval] repo_code = true`: a bash call that runs repository-defined code
+ * -- package.json scripts through `npm test`, `npm install`'s lifecycle
+ * scripts, a Makefile, `pip install -e .` (shell.ts, repoCodeRuns) -- asks a
+ * person first, whatever `gate` says. Off unless declared.
+ *
+ * Why it exists, and why it is opt-in: INJ-2026-11 planted its payload as
+ * package.json's `pretest`, and `npm test` ran it on every surface without a
+ * container (0 of 40 blocked). The call names `npm test`; what runs is in the
+ * repository. No rule over the command line can judge that code, so this one
+ * does not try: it makes the call visible and puts it to a person. Asking on
+ * every `npm test` is a cost an unattended surface would not choose by
+ * default. Only a sandbox (`exec = "docker"`) contains what the script does.
+ */
+export function repoCodeAsks(ctx: ToolContext): boolean {
+  return (ctx.config?.policy as { approval?: { repo_code?: unknown } } | undefined)?.approval?.repo_code === true;
+}
+
+/**
+ * What the person asked about a call is told about the repository code it
+ * runs: the runner and what it runs, and for the npm family the scripts from
+ * package.json at the root that would run, as the file spells them.
+ */
+export function repoCodeNote(runs: RepoCodeRun[], root: string): string[] {
+  if (runs.length === 0) return [];
+  let scripts: Record<string, unknown> = {};
+  if (runs.some((r) => r.scripts)) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf-8")) as { scripts?: Record<string, unknown> };
+      scripts = pkg.scripts && typeof pkg.scripts === "object" ? pkg.scripts : {};
+    } catch {
+      scripts = {};
+    }
+  }
+  const lines: string[] = [];
+  for (const r of runs) {
+    lines.push(`runs repository-defined code: ${r.what} (${r.command.slice(0, 120)})`);
+    for (const name of r.scripts ?? []) {
+      const body = scripts[name];
+      if (typeof body === "string") lines.push(`  ${name}: ${body.replace(/\s+/g, " ").slice(0, 160)}`);
+    }
+  }
+  return lines;
 }
 
 /**
@@ -1527,11 +1578,17 @@ export function sandboxCommand(
  *   bash_allow   a segment is not on the role's bash_allow
  *   sudo         sudo on the host
  *   sandbox      a path outside the root and every granted extra_roots
- *   surface      a write or edit inside `.gnomon/`
- *   record       a write into gnomon's own records: the audit trail, trial reports
+ *   surface      a write or edit inside `.gnomon/` (and any shell write there)
+ *   record       a write into gnomon's own records: the audit trail, trial
+ *                reports, session snapshots
+ *   git_hooks    a write into `.git/hooks/` or `.git/config`, or a `git config`
+ *                that sets a key git runs as a program (core.hooksPath, …)
  *   write_allow  a path outside the role's write_allow
  *   network      `[sandbox] network = false`
  *   url          a scheme other than http(s), or a private / loopback address
+ *   repo_code    the call runs repository-defined code (`npm test`, `make`,
+ *                `pip install -e .`) and `[approval] repo_code = true` asks
+ *                a person first (decision ask, never deny)
  */
 export const POLICY_RULES = [
   "tools",
@@ -1542,9 +1599,11 @@ export const POLICY_RULES = [
   "sandbox",
   "surface",
   "record",
+  "git_hooks",
   "write_allow",
   "network",
   "url",
+  "repo_code",
 ] as const;
 export type PolicyRule = (typeof POLICY_RULES)[number];
 
@@ -1880,28 +1939,58 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
  * through one name bound to the literal (`p = Path("x")` ... `p.write_text`),
  * in `-c`/`-e` code or a here-document fed to the interpreter.
  *
+ * Beside write_allow, the same targets are put, for EVERY role, to the rules
+ * that guard what the agent must never rewrite (INJ-2026-11):
+ *  - `record`: gnomon's records, including a recursive removal of a directory
+ *    above them (`rm -rf ../repo`, `find . -delete`, `shutil.rmtree(".")`) and
+ *    a `git clean` / `git stash -u` that would remove them;
+ *  - `surface`: `.gnomon/` itself -- a shell write there is refused like the
+ *    record rule refuses one into the trail; the write tool under /allow is
+ *    the only consented route;
+ *  - `git_hooks`: `.git/hooks/` and `.git/config`, which git runs or reads on
+ *    the operator's next commit, outside any call gnomon decides.
+ *
  * What is not, said rather than guessed:
  *  - a path outside the repository root. write_allow is about what the
  *    repository may become; scratch files in /tmp are not its business, and
  *    the file tools' sandbox does not bind bash.
- *  - a path that starts with a variable or `~`, or follows a `cd` whose
- *    target is a variable: where it lands is not known until it runs. A glob
- *    or a variable later in the path is judged by the literal part before it
+ *  - a path that starts with a variable the line does not assign. A glob or a
+ *    variable later in the path is judged by the literal part before it
  *    (`var/*` is under `var/`).
  *  - a path code builds at run time, and anything a script FILE does. Like
  *    bash_deny this reads intent, not effects; `[sandbox] exec = "os"` or
  *    `"docker"` is containment.
+ *
+ * Where the shell IS when it writes is read through `cd`, `pushd` and `popd`
+ * in subshells, groups and nested shells (shell.ts, CwdTracker). A relative
+ * target after a `cd` gnomon cannot follow (`cd "$X"`) is refused under
+ * write_allow rather than waved through: a rule that bounds where a role
+ * writes cannot pass a write it cannot place.
  */
 function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
   const allowed = ctx.writeAllow?.filter((p) => p.trim().length > 0) ?? [];
   const root = resolve(ctx.root);
+  const home = homedir();
+  /** A directory the tracker names: relative to the root, absolute, or under ~. */
+  const dirAbs = (d: string): string => (d === "~" || d.startsWith("~/") ? join(home, d.slice(1)) : resolve(root, d));
+  const opts = {
+    dirExists: (d: string) => {
+      try {
+        return statSync(dirAbs(d)).isDirectory();
+      } catch {
+        return false;
+      }
+    },
+  };
   const resolveTarget = (path: string, cwd: string | null): string | null => {
     const cut = path.search(/[$`*?[{]/);
-    if (cut === 0 || path.startsWith("~")) return null;
+    if (cut === 0) return null;
     const literal = cut < 0 ? path : `${path.slice(0, cut)}x`;
+    if (literal === "~" || literal.startsWith("~/")) return join(home, literal.slice(1));
+    if (literal.startsWith("~")) return null;
     if (isAbsolute(literal)) return resolve(literal);
     if (cwd === null) return null;
-    return resolve(root, cwd, literal);
+    return resolve(dirAbs(cwd), literal);
   };
   const recordHit = (path: string, how: string): Precheck => ({
     ...recordRefusal("bash", path),
@@ -1910,52 +1999,100 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
       `(${recordDirs(ctx).map((d) => relative(root, d).split(sep).join("/") || d).join(", ")}).\n\n` +
       RECORD_WHY,
   });
+  const surfaceHit = (path: string, how: string): Precheck => ({
+    rule: "surface",
+    code: TOOL_DENIED,
+    content:
+      `Refused: this command writes "${path}" (${how}), inside .gnomon/, the surface that ` +
+      `decides how this agent behaves. No role changes it through the shell: a surface ` +
+      `change is a person's act -- proposed with the skill tool and accepted, or written ` +
+      `with the write tool once the person allows it (/allow custom|all) -- so that it ` +
+      `moves the surface hash where someone sees it.`,
+    summary: `bash ${path} — refused (surface is read-only)`,
+  });
+  const hooksHit = (path: string, how: string): Precheck => gitHooksRefusal("bash", path, how);
+
+  const { targets } = shellWriteTargets(command, opts);
+  const protectedDirs = (): Array<{ dir: string; kind: "record" | "surface" }> => [
+    ...recordDirs(ctx).map((dir) => ({ dir, kind: "record" as const })),
+    { dir: surfaceDir(ctx), kind: "surface" as const },
+  ];
 
   // What each target means. Most are written; some are not written but name
   // what is (a patch's paths, an archive's members); a link's source is not
   // written but must not be a record.
-  type Judged = { path: string; abs: string; how: string; writeAllow: boolean };
+  type Judged = { path: string; abs: string; how: string; writeAllow: boolean; t: WriteTarget };
   const judged: Judged[] = [];
-  for (const t of shellWriteTargets(command).targets) {
-    // A glob that could name a record (`.gnomon-aud*/a.jsonl`): the literal
-    // part before the first wildcard is a prefix of a record directory.
-    // A wildcard at the start of a name says nothing; `*` does not match a
-    // dot-directory anyway.
+  for (const t of targets) {
+    // A glob that could name a record or the surface (`.gnomon-aud*/a.jsonl`,
+    // `.[!.]*`): the literal part before the first wildcard is a prefix of
+    // one. A wildcard at the start of a name says nothing; `*` does not
+    // match a dot-directory anyway.
     const star = t.path.search(/[*?[{]/);
     if (star > 0 && t.cwd !== null && !t.path.slice(0, star).includes("$")) {
       const literal = t.path.slice(0, star);
       const slash = literal.lastIndexOf("/");
-      const base = resolve(root, t.cwd, slash >= 0 ? literal.slice(0, slash + 1) : "");
+      const base = resolve(dirAbs(t.cwd), slash >= 0 ? literal.slice(0, slash + 1) : "");
       const name = recordPathKey(slash >= 0 ? literal.slice(slash + 1) : literal);
-      const hit =
-        inRecordDir(ctx, base) ||
-        (name !== "" &&
-          recordDirs(ctx).some(
-            (d) => recordPathKey(dirname(d)) === recordPathKey(base) && recordPathKey(basename(d)).startsWith(name)
-          ));
-      if (hit) return recordHit(t.path, t.how);
+      if (inRecordDir(ctx, base)) return recordHit(t.path, t.how);
+      if (inSurface(ctx, base)) return surfaceHit(t.path, t.how);
+      for (const p of protectedDirs()) {
+        if (name !== "" && recordPathKey(dirname(p.dir)) === recordPathKey(base) && recordPathKey(basename(p.dir)).startsWith(name)) {
+          return p.kind === "record" ? recordHit(t.path, t.how) : surfaceHit(t.path, t.how);
+        }
+      }
     }
     const abs = resolveTarget(t.path, t.cwd);
-    if (!abs) continue;
+    if (!abs) {
+      // Where the shell is, is not known (`cd "$X"`), and the path is a
+      // literal relative one. A name that IS a protected directory is
+      // refused wherever it lands; under write_allow, so is the rest.
+      if (t.cwd === null && t.path.search(/[$`]/) !== 0 && !t.path.startsWith("~")) {
+        const names = t.path.split("/").map((c) => recordPathKey(c));
+        for (const p of protectedDirs()) {
+          if (names.includes(recordPathKey(basename(p.dir)))) {
+            return p.kind === "record" ? recordHit(t.path, t.how) : surfaceHit(t.path, t.how);
+          }
+        }
+        if (/^\.git(\/|$)|\/\.git\//.test(t.path) && /(^|\/)\.git\/(hooks|config)(\/|$)/.test(t.path)) return hooksHit(t.path, t.how);
+        if (t.clean && protectedDirs().some((p) => existsSync(p.dir))) {
+          return recordHit(t.path, `${t.how}, from a directory gnomon cannot place`);
+        }
+        if (allowed.length > 0 && t.how !== "ln (source)") {
+          return {
+            rule: "write_allow",
+            code: TOOL_DENIED,
+            content:
+              `Refused: this command writes "${t.path}" (${t.how}) after a \`cd\` gnomon cannot ` +
+              `follow, so where it lands is not known, and this role may write only ` +
+              `${allowed.map((p) => `"${p}"`).join(", ")}.\n\n` +
+              `write_allow refuses a write it cannot place. Write the path from the repository ` +
+              `root, or cd to a literal directory first.`,
+            summary: `bash — writes ${t.path}, not permitted for this role`,
+          };
+        }
+      }
+      continue;
+    }
     if (t.how === "git apply (patch)") {
       for (const p of patchPaths(abs)) {
-        const at = resolve(root, t.cwd ?? "", p);
-        judged.push({ path: p, abs: at, how: "git apply", writeAllow: true });
+        const at = resolve(dirAbs(t.cwd ?? ""), p);
+        judged.push({ path: p, abs: at, how: "git apply", writeAllow: true, t });
       }
       continue;
     }
     if (t.how === "tar -x (archive)" || t.how === "unzip (archive)") {
-      const into = shellWriteTargets(command).targets.find((x) => x.how === t.how.replace("(archive)", "(into)"));
-      const base = (into && resolveTarget(into.path, into.cwd)) ?? resolve(root, t.cwd ?? "");
+      const into = targets.find((x) => x.how === t.how.replace("(archive)", "(into)") && x.cwd === t.cwd);
+      const base = (into && resolveTarget(into.path, into.cwd)) ?? resolve(dirAbs(t.cwd ?? ""));
       for (const m of archiveMembers(abs, t.how.startsWith("tar") ? "tar" : "unzip")) {
-        judged.push({ path: m, abs: resolve(base, m), how: t.how.replace(" (archive)", ""), writeAllow: true });
+        judged.push({ path: m, abs: resolve(base, m), how: t.how.replace(" (archive)", ""), writeAllow: true, t });
       }
       continue;
     }
     // An extraction's own directory is judged by write_allow only when the
     // command names it; "." (where the shell is) says nothing about members.
     const writeAllow = t.how !== "ln (source)" && !((t.how === "tar -x (into)" || t.how === "unzip (into)") && t.path === ".");
-    judged.push({ path: t.path, abs, how: t.how, writeAllow });
+    judged.push({ path: t.path, abs, how: t.how, writeAllow, t });
   }
 
   for (const j of judged) {
@@ -1964,6 +2101,22 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     // outside the root. A second name for a record -- a hard link made
     // earlier -- is the record.
     if (inRecordDir(ctx, j.abs) || hardLinkedToRecord(ctx, j.abs)) return recordHit(j.path, j.how);
+    // A removal of a directory ABOVE the records (or the surface) removes
+    // them too: `rm -rf ../repo`, `find . -name '*.jsonl' -delete`.
+    if (j.t.clean) {
+      const hit = cleanReaches(ctx, j.abs, j.t.clean);
+      if (hit) return hit.kind === "record" ? recordHit(j.path, `${j.how}, which removes ${hit.what}`) : surfaceHit(j.path, `${j.how}, which removes ${hit.what}`);
+    } else if (j.t.recursive) {
+      for (const p of protectedDirs()) {
+        if (isAncestor(j.abs, p.dir) && removalMatches(p.dir, j.abs, j.path, j.t.names)) {
+          return p.kind === "record"
+            ? recordHit(j.path, `${j.how}, which removes everything below it`)
+            : surfaceHit(j.path, `${j.how}, which removes everything below it`);
+        }
+      }
+    }
+    if (inSurface(ctx, j.abs)) return surfaceHit(j.path, j.how);
+    if (inGitControl(ctx, j.abs)) return hooksHit(j.path, j.how);
     if (!j.writeAllow) continue;
     const rel = relative(root, j.abs);
     if (rel.startsWith("..") || isAbsolute(rel)) continue;
@@ -1982,9 +2135,203 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
       summary: `bash — writes ${scope.rel}, not permitted for this role`,
     };
   }
+
+  // `git config core.hooksPath …` and the other keys git runs: a persistent
+  // way to run code on the operator's next git command, which names no file.
+  const exec = gitExecConfigs(command)[0];
+  if (exec) {
+    return gitHooksRefusal("bash", exec.key, `git config ${exec.key}`);
+  }
   return null;
 }
 
+/** Whether `dir` is `p` or above it. */
+function isAncestor(dir: string, p: string): boolean {
+  const rel = relative(recordPathKey(resolve(dir)), recordPathKey(resolve(p)));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/** The surface directory a context guards. */
+function surfaceDir(ctx: ToolContext): string {
+  return ctx.config?.gnomonDir ? resolve(ctx.config.gnomonDir) : resolve(ctx.root, ".gnomon");
+}
+
+/** find's -name / -path pattern as a RegExp (fnmatch: `*` `?` `[…]`). */
+function fnmatch(glob: string, flags = ""): RegExp {
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!;
+    if (c === "*") re += ".*";
+    else if (c === "?") re += ".";
+    else if (c === "[") {
+      const end = glob.indexOf("]", i + 2);
+      if (end < 0) re += "\\[";
+      else {
+        re += "[" + glob.slice(i + 1, end).replace(/^!/, "^").replace(/\\/g, "\\\\") + "]";
+        i = end;
+      }
+    } else if (c === "\\" && i + 1 < glob.length) re += "\\" + glob[++i];
+    else re += c.replace(/[.+^${}()|\]\\/]/g, "\\$&");
+  }
+  return new RegExp(`^${re}$`, flags);
+}
+
+/**
+ * Whether a recursive removal starting at `start` and limited by find's name
+ * tests would reach anything in the protected directory `dir`. No tests:
+ * yes. With tests: each entry of `dir` (and `dir` itself) is put to them, a
+ * bounded walk; `-regex` is not evaluated and counts as a match.
+ */
+function removalMatches(dir: string, start: string, written: string, names?: string[]): boolean {
+  if (!names || names.length === 0) return true;
+  if (!existsSync(dir)) return false;
+  const tests = names.map((n) => {
+    const [kind, pat] = n.split("\0") as [string, string];
+    return { kind, re: /regex/.test(kind) ? null : fnmatch(pat, kind.startsWith("-i") ? "i" : "") };
+  });
+  const hit = (abs: string): boolean => {
+    const base = basename(abs);
+    const shown = `${written.replace(/\/+$/, "") || "."}/${relative(start, abs).split(sep).join("/")}`;
+    return tests.some((t) => t.re === null || t.re.test(/name$/.test(t.kind) ? base : shown));
+  };
+  if (hit(dir)) return true;
+  let budget = 20_000;
+  const walk = (d: string): boolean => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(d, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const e of entries) {
+      if (--budget < 0) return true; // too large to read: assume it is reached
+      const p = join(d, e.name);
+      if (hit(p)) return true;
+      if (e.isDirectory() && walk(p)) return true;
+    }
+    return false;
+  };
+  return walk(dir);
+}
+
+/**
+ * What a `git clean` (or `git stash --include-untracked`) run from `at` would
+ * remove of gnomon's records or surface: git's own account of which of their
+ * files are untracked or ignored, read with `git status`, filtered by the
+ * command's -x/-X, -e and pathspecs. When git cannot say, a record directory
+ * in reach counts as removed.
+ */
+function cleanReaches(ctx: ToolContext, at: string, clean: GitClean): { kind: "record" | "surface"; what: string } | null {
+  const reach = [
+    ...recordDirs(ctx).map((dir) => ({ dir, kind: "record" as const })),
+    { dir: surfaceDir(ctx), kind: "surface" as const },
+  ].filter((p) => existsSync(p.dir) && (isAncestor(at, p.dir) || isAncestor(p.dir, at)));
+  if (reach.length === 0) return null;
+  const specs = clean.pathspecs.map((s) => (/[*?[]/.test(s) ? null : resolve(at, s)));
+  const inSpecs = (abs: string) =>
+    clean.pathspecs.length === 0 || specs.some((s) => s === null || isAncestor(s, abs) || isAncestor(abs, s));
+  const excluded = (rel: string) =>
+    clean.excludes.some((e) => {
+      const pat = e.replace(/^\/|\/$/g, "");
+      return rel.split("/").some((c) => fnmatch(pat).test(c)) || fnmatch(pat).test(rel);
+    });
+  for (const p of reach) {
+    if (!inSpecs(p.dir)) continue;
+    const r = spawnSync("git", ["-C", at, "status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all", "--", p.dir], {
+      encoding: "utf-8",
+      timeout: 5000,
+      windowsHide: true,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (r.status !== 0 || typeof r.stdout !== "string") {
+      // Not a repository: git clean fails too. Anything else: assume reached.
+      if (/not a git repository/i.test(String(r.stderr ?? ""))) return null;
+      return { kind: p.kind, what: relative(resolve(ctx.root), p.dir) || p.dir };
+    }
+    for (const entry of r.stdout.split("\0")) {
+      const code = entry.slice(0, 2);
+      const file = entry.slice(3);
+      if (!file) continue;
+      const removed = (code === "??" && clean.untracked) || (code === "!!" && clean.ignored);
+      if (!removed) continue;
+      // Relative to the repository top: compare by the protected dir's name.
+      const rel = file.replace(/\/$/, "");
+      if (excluded(rel)) continue;
+      return { kind: p.kind, what: rel };
+    }
+  }
+  return null;
+}
+
+/**
+ * The repository's git control files a write must not reach: `.git/hooks/`
+ * (scripts git runs on the next commit or checkout) and `.git/config` (where
+ * `core.hooksPath`, a pager, a filter driver or an alias says what git runs).
+ * Found from the root upwards, through a linked worktree's `gitdir:` file to
+ * its common directory, where hooks and config live.
+ */
+function gitControlPaths(root: string): string[] {
+  const cached = GIT_CONTROL.get(root);
+  if (cached) return cached;
+  const out: string[] = [];
+  for (let d = resolve(root); ; d = dirname(d)) {
+    const dotGit = join(d, ".git");
+    if (existsSync(dotGit)) {
+      out.push(join(dotGit, "hooks"), join(dotGit, "config"));
+      try {
+        if (!statSync(dotGit).isDirectory()) {
+          const m = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, "utf-8"));
+          if (m) {
+            const gd = resolve(d, m[1]!);
+            out.push(join(gd, "hooks"), join(gd, "config"));
+            const common = join(gd, "commondir");
+            if (existsSync(common)) {
+              const c = resolve(gd, readFileSync(common, "utf-8").trim());
+              out.push(join(c, "hooks"), join(c, "config"));
+            }
+          }
+        }
+      } catch {
+        // unreadable: the lexical .git paths above still stand
+      }
+      break;
+    }
+    if (dirname(d) === d) break;
+  }
+  GIT_CONTROL.set(root, out);
+  return out;
+}
+const GIT_CONTROL = new Map<string, string[]>();
+
+/** Whether a resolved path is a git hook or the repository's git config. */
+export function inGitControl(ctx: ToolContext, abs: string): boolean {
+  const under = (base: string, p: string): boolean => {
+    const rel = relative(recordPathKey(base), recordPathKey(p));
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  };
+  return gitControlPaths(ctx.root).some((g) => under(realpathOrSelf(g), realpathOfNearest(abs)) || under(g, resolve(abs)));
+}
+
+const GIT_HOOKS_WHY =
+  `git runs what is there on the operator's next commit, checkout or push -- outside ` +
+  `any call gnomon decides, and on the host even when this session's bash runs in a ` +
+  `container. No role writes it. If the task needs a hook or a git setting, say so ` +
+  `plainly and give the person the exact command to run.`;
+
+function gitHooksRefusal(tool: string, path: string, how?: string): Precheck {
+  const what =
+    how === undefined
+      ? `"${path}" is in git's hooks or the repository's git config`
+      : how.startsWith("git config")
+        ? `\`${how}\` sets a key git runs as a program`
+        : `this command writes "${path}" (${how}), in git's hooks or the repository's git config`;
+  return {
+    rule: "git_hooks",
+    code: TOOL_DENIED,
+    content: `Refused: ${what}.\n\n${GIT_HOOKS_WHY}`,
+    summary: `${tool} ${path} — refused (git hooks)`,
+  };
+}
 /**
  * The paths a patch file writes, read from its headers. Empty when the file
  * cannot be read; capped, since a patch is the agent's to make arbitrarily
@@ -2040,11 +2387,15 @@ async function bashTool(
   if (pre) return outcomeOf(pre);
   const command = args.command as string;
 
-  if (needsApproval("bash", ctx.gate)) {
+  // Repository-defined code (npm test, make, pip install -e .) is named in the
+  // preview, and asked about whatever the gate says under repo_code = true.
+  const runs = repoCodeRuns(command);
+  const askRepo = runs.length > 0 && repoCodeAsks(ctx);
+  if (needsApproval("bash", ctx.gate) || askRepo) {
     const ok = await ctx.approve({
       tool: "bash",
-      summary: `bash: ${command}`,
-      preview: command.split("\n").map((l) => `  $ ${l}`),
+      summary: askRepo ? `bash (runs repository code): ${command}` : `bash: ${command}`,
+      preview: [...command.split("\n").map((l) => `  $ ${l}`), ...repoCodeNote(runs, ctx.root).map((l) => `  # ${l}`)],
     });
     if (!ok) {
       return {
@@ -2853,15 +3204,19 @@ function gitStampOf(base: string): string | null | undefined {
  * judged; what a script file does is not. `[audit.attest]` is what makes a
  * forged trail detectable.
  */
-export const RECORD_DIRS = [".gnomon-audit", ".gnomon-trials"] as const;
+export const RECORD_DIRS = [".gnomon-audit", ".gnomon-trials", ".gnomon-sessions"] as const;
 
 function recordDirs(ctx: ToolContext): string[] {
   const root = resolve(ctx.root);
   const dirs = RECORD_DIRS.map((d) => join(root, d));
-  // A surface that moved its trail ([audit] dir) moved what needs guarding.
-  const declared = (ctx.config?.config as { audit?: { dir?: unknown } } | undefined)?.audit?.dir;
-  if (typeof declared === "string" && declared.trim()) {
-    dirs.push(isAbsolute(declared) ? resolve(declared) : resolve(root, declared));
+  // A surface that moved its trail ([audit] dir) or its session store
+  // ([session] dir) moved what needs guarding.
+  const cfg = ctx.config?.config as { audit?: { dir?: unknown }; session?: { dir?: unknown } } | undefined;
+  for (const declared of [cfg?.audit?.dir, cfg?.session?.dir]) {
+    if (typeof declared === "string" && declared.trim()) {
+      const d = isAbsolute(declared) ? resolve(declared) : resolve(root, declared);
+      if (!dirs.includes(d)) dirs.push(d);
+    }
   }
   return dirs;
 }
@@ -2939,8 +3294,8 @@ export function hardLinkedToRecord(ctx: ToolContext, abs: string): boolean {
 
 const RECORD_WHY =
   `These directories are gnomon's own record of what was done here -- the audit ` +
-  `trail and skill-trial reports -- and no role may write them. A record the ` +
-  `agent could write is not evidence of anything.`;
+  `trail, skill-trial reports and session snapshots -- and no role may write or ` +
+  `remove them. A record the agent could write is not evidence of anything.`;
 
 function recordRefusal(tool: string, path: string): Precheck {
   return {
@@ -3923,6 +4278,10 @@ export function writePrecheck(
     };
   }
   if (inRecordDir(ctx, abs) || hardLinkedToRecord(ctx, abs)) return { refusal: recordRefusal(tool, path) };
+  // `.git/hooks/` and `.git/config`: run or read by git on the operator's next
+  // command, outside any call gnomon decides (INJ-2026-11: a pre-commit hook
+  // written with the write tool passed every surface without write_allow).
+  if (inGitControl(ctx, abs)) return { refusal: gitHooksRefusal(tool, path) };
   if (inSurface(ctx, abs)) {
     if (tool === "edit") {
       return {
@@ -4641,14 +5000,25 @@ export async function toolCallPolicy(
   if (pre) {
     return { decision: "allow", rule: null, reason: `no rule refuses it; the call itself would fail: ${pre.summary}` };
   }
+  // A call that runs repository-defined code says so to whoever is asked, and
+  // under `[approval] repo_code = true` it is asked whatever the gate says.
+  const runs = name === "bash" && typeof args.command === "string" ? repoCodeRuns(args.command) : [];
+  const note = runs.length > 0 ? ` It ${repoCodeNote(runs, ctx.root).join("; ").trim()}.` : "";
+  if (runs.length > 0 && repoCodeAsks(ctx)) {
+    return {
+      decision: "ask",
+      rule: "repo_code",
+      reason: `[approval] repo_code = true asks a person before a call that runs code the repository defines.${note}`,
+    };
+  }
   if (needsApproval(name, ctx.gate)) {
     return {
       decision: "ask",
       rule: "approval",
-      reason: `[approval] gate = "${ctx.gate}" asks a person before ${ctx.gate === "always" ? "every" : "every mutating"} call — this is a ${name} call`,
+      reason: `[approval] gate = "${ctx.gate}" asks a person before ${ctx.gate === "always" ? "every" : "every mutating"} call — this is a ${name} call${note ? `.${note}` : ""}`,
     };
   }
-  return { decision: "allow", rule: null, reason: "no rule refuses it" };
+  return { decision: "allow", rule: null, reason: `no rule refuses it${note ? `.${note}` : ""}` };
 }
 
 export async function executeTool(

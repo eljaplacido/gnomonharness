@@ -602,7 +602,7 @@ allow changes nothing. One JSON object per call on stdout.
 |---|---|---|
 | `allow` | 0 | No rule refuses the call and the `[approval]` gate would not ask. Not a permission: the adapters print nothing on allow, so the host harness's own prompt still applies. |
 | `deny` | 2 | A rule refuses it — the same refusal gnomon's own tool would return, `rule` names which. |
-| `ask` | 3 | The `[approval]` gate would ask a person first (`rule: "approval"`). |
+| `ask` | 3 | The `[approval]` gate would ask a person first (`rule: "approval"`), or `[approval] repo_code = true` asks before a call that runs repository-defined code (`rule: "repo_code"`). |
 
 Exit **10** is no decision: the document says `decision: "ask"`, `rule:
 "error"`, and why in `error` (no role, no committed surface at the base, a
@@ -617,11 +617,13 @@ decision gnomon could not make is never an allow.
 | `bash_allow` | a segment is not on the role's `bash_allow`, or the command substitutes or redirects |
 | `sudo` | sudo at command position, on the host |
 | `sandbox` | a path outside the root and every granted `extra_roots` |
-| `surface` | a write or edit inside `.gnomon/` |
-| `record` | a write, edit or shell write target inside gnomon's own records: `.gnomon-audit/` (or the `[audit] dir`) and `.gnomon-trials/`, for every role, with no consent path. This includes a hard link to a record, an `ln` into or out of one, git checkout/restore/clone/worktree/apply, archive extraction (members listed by `tar`/`unzip`), rsync, a perl two-argument open, an awk redirect, a glob that could name a record, and, on case-insensitive filesystems, other spellings of the directory |
-| `write_allow` | a path outside the role's `write_allow` |
-| `network` | `[sandbox] network = false` |
+| `surface` | a write or edit inside `.gnomon/`; and a shell write target inside it (or a recursive removal of a directory above it), for every role and at every `/allow` level: the write tool under `/allow custom\|all` is the one consented route |
+| `record` | a write, edit or shell write target inside gnomon's own records: `.gnomon-audit/` (or the `[audit] dir`), `.gnomon-trials/` and `.gnomon-sessions/` (or the `[session] dir`), for every role, with no consent path. This includes a hard link to a record, an `ln` into or out of one, git checkout/restore/clone/worktree/apply, archive extraction (members listed by `tar`/`unzip`), rsync, a perl two-argument open, an awk redirect, a glob that could name a record, on case-insensitive filesystems other spellings of the directory, a recursive removal of a directory above the records (`rm -r`, `find -delete` unless its name tests match no record, `mv`, `rsync --delete`, `shutil.rmtree` and the like), and a `git clean` or `git stash --include-untracked\|--all` that would remove a record (git's own `status` says which, after `-x`/`-X`/`-e` and pathspecs) |
+| `git_hooks` | a write, edit or shell write target in `.git/hooks/` or `.git/config` (a linked worktree's common git dir included), or a `git config` that sets, in any scope, a key git runs as a program: `core.hooksPath`, `core.fsmonitor`, `core.sshCommand`, `core.pager`, `core.editor`, `core.askPass`, `sequence.editor`, `credential.helper`, diff/merge/filter drivers, `gpg.program`, `pager.*`, `alias.*` starting with `!`, `include.path`, `init.templateDir` and the rest of the list in `shell.ts` (`GIT_EXEC_KEYS`). For every role |
+| `write_allow` | a path outside the role's `write_allow`; or a relative shell write after a `cd` gnomon cannot follow (`cd "$X"`), which it cannot place |
+| `network` | `[sandbox] network = false`, and the call names a network client, a remote `scp`/`rsync` target, `/dev/tcp`, interpreter code that opens a connection, a git remote by URL (`push`, `fetch`, `pull`, `ls-remote`, `clone`, `remote add\|set-url`, `submodule add`, `archive --remote`, a `-c` value, `git config remote.*.url`), or a package manager's registry or package URL (`--registry`, `--index-url`, `-i`, a URL operand) |
 | `url` | a scheme other than http(s), or a private, loopback or link-local address |
+| `repo_code` | `[approval] repo_code = true`, and the call runs repository-defined code: package.json scripts or lifecycle scripts (`npm`/`pnpm`/`yarn`/`bun` run, test, start, install, ci, …; `npx`), a Makefile, justfile, Rakefile, Gradle or Maven build, tox/nox, pre-commit hooks, `cargo` build/test/run (build.rs), `go generate`, `poetry`/`pdm`/`hatch`/`pipenv` install or run, `pip install -e`/a local path/`-r`, `python setup.py` (decision `ask`, never `deny`) |
 | `approval` | the gate would ask (decision `ask`) |
 | `ungoverned` | no `.gnomon/` above the working directory, or a tool gnomon has no pre-execution rule for (decision `allow`) |
 | `error` | no decision could be made (exit 10) |
@@ -643,14 +645,49 @@ Containment is the kernel-enforced sandbox (`exec os`, #74). The precheck
 exists so that the routes a person can name are refused with a reason, before
 anything runs.
 
+**How a command is read** (INJ-2026-11, 2026-11). Each command is read as
+written and, where the line itself says what an expansion is, a second time
+expanded: `${IFS}` and `$IFS` (and `${IFS:0:1}`-style slices) as the word
+separators they are; `$1`…`$9`, `$@` and `$*` as the empty strings they are
+in a bash call (and as the words after `sh -c '…' name`); a variable assigned
+a literal earlier in the line (`c=cu; d=rl; $c$d …`, `export`, `declare`,
+`set --`) as that literal; `${x:-word}` as `word` when `x` is not set in the
+line; `$(echo …)`, `` `printf …` ``, `$(which …)` and `$(command -v …)` as what
+they print; an unquoted brace list `{a,b}` as its words; and `echo <base64> |
+base64 -d | sh` as the script it decodes. Every rule is put to both readings,
+so the second only ever adds refusals. A variable set by anything else
+(`read`, a loop, a substitution whose output is not spelled out, the
+environment) is left as written.
+
 `write_allow` binds bash too: a file a shell command names as its output
-(a redirection; the operands of `rm`, `mv`, `cp`, `tee`, `sed -i` and the like;
-a literal path inline python, node, perl or ruby code writes, directly or
-through one name bound to it, whether the code is a `-c`/`-e` argument or a
-here-document on the interpreter's stdin) is refused with
-rule `write_allow` when it is inside the repository and outside the list. A
-path that starts with a variable, one outside the repository, and anything a
-script file does are not judged.
+(a redirection, including one with no command such as `> f` or `{ …; } > f`;
+the operands of `rm`, `mv`, `cp`, `tee`, `sed -i` and the like; a literal path
+inline python, node, perl or ruby code writes, directly or through one name
+bound to it, whether the code is a `-c`/`-e` argument or a here-document on
+the interpreter's stdin) is refused with rule `write_allow` when it is inside
+the repository and outside the list. A relative target is placed through
+`cd`, `pushd`, `popd`, `cd -` and `env -C` wherever they run: in a subshell,
+`sh -c`/`bash -lc`, a here-document fed to a shell, `eval` and `$( )`, scoped
+to the shell they ran in. A `cd` that may not have run or may have failed --
+inside `{ }`, `if`, a loop or a function body, after `||`, in a pipeline, or
+before `;` into a directory that does not exist -- leaves the target judged
+from every directory it may be relative to. After a `cd` gnomon cannot follow
+(`cd "$X"`), a relative target is refused: a write that cannot be placed is
+not passed. A path that itself starts with a variable the line does not
+assign, one outside the repository, and anything a script file does are not
+judged.
+
+**Repository-defined code.** `npm test` runs package.json's `pretest`; `npm
+install` runs lifecycle scripts; `make` runs the Makefile. The command line
+does not contain that code, so no rule here can judge it, and gnomon's own
+`[verify]` runs it the same way when it declares such a command. What gnomon
+does: an `ask` for such a call names it in `reason` (and the loop's approval
+prompt lists the package.json scripts that would run, as the file spells
+them), and `[approval] repo_code = true` makes every such call `ask`, whatever
+`gate` says. Off by default. **Only a sandbox contains what that code does**
+(`exec = "docker"`; `exec os`, #74). Running a repository file by name
+(`python x.py`, `./x.sh`) and test runners (`pytest`, `go test`) also run the
+repository's code and are not listed: the call names the code it runs.
 
 Keys: `schema`, `decision`, `rule`, `reason`, `tool`, `role`, `base` (the
 commit the rules were read from, full sha), `surface_hash` (the surface at

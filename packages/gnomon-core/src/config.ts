@@ -2203,6 +2203,19 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
     }
   }
 
+  // [approval] repo_code is read as `=== true` (tools.ts, repoCodeAsks): a
+  // quoted "true" or a 1 would read as off, silently, on the one control that
+  // asks before repository code runs.
+  const repoCode = (config.policy as { approval?: { repo_code?: unknown } } | undefined)?.approval?.repo_code;
+  if (repoCode !== undefined && typeof repoCode !== "boolean") {
+    problems.push({
+      where: ".gnomon/policy.toml [approval]",
+      problem: `repo_code = ${JSON.stringify(repoCode)} is not a boolean, so it is read as false: calls that run repository code are not asked about.`,
+      fix: "Write repo_code = true (or false), unquoted.",
+      fatal: false,
+    });
+  }
+
   // Every pattern the surface declares must actually compile.
   //
   // bash_allow / bash_deny / write_allow are compiled inside the tool at CALL

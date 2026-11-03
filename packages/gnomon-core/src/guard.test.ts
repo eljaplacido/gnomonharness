@@ -147,8 +147,9 @@ describe("gnomon guard — the same decision as gnomon's own loop", () => {
           expect(v.error).toBeUndefined();
           const loop = await loopDecides(c.role, c.tool, c.input);
           expect({ guard: v.decision, loop }).toEqual({ guard: c.expect[gate], loop: c.expect[gate] });
-          // The rule named is the one the case names (approval when it asks).
-          expect(v.rule).toBe(v.decision === "ask" ? "approval" : c.rule);
+          // The rule named is the one the case names (approval when it asks,
+          // unless the case names what asks: repo_code).
+          expect(v.rule).toBe(v.decision === "ask" ? c.rule ?? "approval" : c.rule);
           expect(v.reason.length).toBeGreaterThan(0);
         });
       }
