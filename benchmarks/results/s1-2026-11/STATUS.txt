@@ -7,3 +7,58 @@
 2026-11-03T15:03:06Z CHAIN-S1 waiting for the M1a5 chain (pid 3062504) to exit
 2026-11-03T15:14:30Z OPERATOR (main session): S1 chain stopped while still waiting on M1a5; it had started nothing. The user needs the RTX 5090 for other use and asked to conclude for now. S1 is postponed and nothing was measured.
 2026-11-03T15:14:30Z CHAIN-S1 chain received a signal; cleaning up
+2026-11-03T16:11:10Z CHAIN-S1 S1 chain start (pid 568292, pgid 568292); build 8078df03e2a28c41753825dcccab13e8a0ac03dd; Amendment 1 (gaming-yield); new-cell deadline 2026-11-04T07:00:00Z
+2026-11-03T16:11:10Z CHAIN-S1 thresholds: start after 15 consecutive idle samples (60 s apart; idle = < 4000 MiB, < 15 %, no llama-server.exe, m1-vllm not running); yield when GPU memory > the lane's warm level + 1500 MiB for 2 samples (30 s apart), or our server is gone, or another llama-server / m1-vllm runs
+2026-11-03T16:11:10Z CHAIN-S1 idle wait: gpu_used=2053 gpu_total=32607 util=0 llama=[] wsl=[] (1/15 idle; sampled 1)
+2026-11-03T16:25:15Z CHAIN-S1 idle wait: hub idle for 15 consecutive samples (15 min): gpu_used=2039 gpu_total=32607 util=0 llama=[] wsl=[]
+2026-11-03T16:25:18Z CHAIN-S1 offline test test_hubwatch_s1.sh: 50 passed, 0 failed
+2026-11-03T16:25:28Z CHAIN-S1 offline test test_run_s1_a1.py: 24 passed, 0 failed
+2026-11-03T16:25:39Z CHAIN-S1 offline test test_chain_glue_s1.sh: 15 passed, 0 failed
+2026-11-03T16:25:39Z CHAIN-S1 hub scripts: start=ce69d7d048faaf9ad1e8f3803ae1837d7da8284d9597947ab8f65e386d7233bf stop=ec69465d003c16c13b1dea836c2833ee01f6651872c93d78511ddf0d1706cc09 stopme_txt=True server_log=3593334 
+2026-11-03T16:26:00Z CHAIN-S1 hub weights match R1H's checksums (model and DFlash draft)
+2026-11-03T16:26:01Z CHAIN-S1 saved the hub's bud-lane server log as lane-r1h-server-before-s1.log.gz (291398 B)
+2026-11-03T16:26:01Z CHAIN-S1 lane: hub state before start: gpu_used=2039 llama=[] wsl=[] p18380=[]
+2026-11-03T16:26:01Z CHAIN-S1 lane: starting C:\dev\bud-lane\start-server-r1h-np2.ps1 (R1H's, unchanged) via Win32_Process Create, as R1H did
+2026-11-03T16:26:02Z CHAIN-S1 watchdog started (pid 593494): every 30 s, yield after 2 samples over the limit
+2026-11-03T16:26:02Z CHAIN-S1 lane: create rc=0 pid=28788
+2026-11-03T16:26:02Z CHAIN-S1 tunnel-s1 started by this chain (pid 593507, pgid 593507): gx10 127.0.0.1:18780 -> hub 127.0.0.1:18380
+2026-11-03T16:26:16Z CHAIN-S1 lane: qwen3.6-35b answering on 127.0.0.1:18780 (llama-server pid 39052 on the hub); hub gpu_used=26582 llama=[39052:C:\dev\bud-lane\llama\llama-server.exe] wsl=[] p18380=[39052]
+2026-11-03T16:26:16Z CHAIN-S1 lane: props and slots match R1H's lane (build, model, alias, template, caps, 2 slots x n_ctx, speculative, server defaults)
+2026-11-03T16:26:17Z CHAIN-S1 template gate (exit 0; probe-s1.txt): pass on shapes from 8078df03e2a28c41753825dcccab13e8a0ac03dd
+    == S1 template probe 2026-11-03T16:26:16Z (live http://127.0.0.1:18780/apply-template)
+    shapes: S0 = gnomon's mid-turn messages as role system; S1 = steerAsUser at 8078df03e2a28c41753825dcccab13e8a0ac03dd (make_probe_shapes.mts (gnomon's own steerAsUser)); marker MARKER-S1Q
+      A nudge after a tool result [S0]: marker absent; prompt 1553 chars, '<think>' x2; around marker: -
+      A nudge after a tool result [S1]: marker PRESENT; prompt 1832 chars, '<think>' x2; around marker: 'tool_response>\n3\n</tool_response><|im_end|>\n<|im_start|>user\n[gnomon] MARKER-S1Q You have run 8 tool calls without changing a file. If you have found '
+      -> A nudge after a tool result: as expected (gate; want S0 absent, S1 present): the negative control: a late system message is dropped (S0) and the same words as a [gnomon] user message are rendered (S1)
+      B nudge, then two more steps [S0]: marker absent; prompt 1775 chars, '<think>' x3; around marker: -
+      B nudge, then two more steps [S1]: marker PRESENT; prompt 2054 chars, '<think>' x3; around marker: 'tool_response>\n3\n</tool_response><|im_end|>\n<|im_start|>user\n[gnomon] MARKER-S1Q You have run 8 tool calls without changing a file. If you have found '
+      -> B nudge, then two more steps: as expected (gate; want S0 absent, S1 present): the steering stays in the history the model sees on later steps (S1) or never appears (S0)
+      C tool-less wrap-up [S0]: marker absent; prompt 439 chars, '<think>' x2; around marker: -
+      C tool-less wrap-up [S1]: marker PRESENT; prompt 570 chars, '<think>' x2; around marker: 'tool_response>\n3\n</tool_response><|im_end|>\n<|im_start|>user\n[gnomon] MARKER-S1Q No tools are attached to this final call, so answer now from what you'
+      -> C tool-less wrap-up: as expected (gate; want S0 absent, S1 present): the wrap-up call is sent with no tools; same rule
+      D folded summary at index 1 (positive control) [S0]: marker PRESENT; prompt 1472 chars, '<think>' x1; around marker: 'turns in this session, folded because they no longer fit the window:\n\nMARKER-S1Q the count was 3.<|im_end|>\n<|im_start|>user\nHow many files are in /ap'
+      D folded summary at index 1 (positive control) [S1]: marker PRESENT; prompt 1473 chars, '<think>' x1; around marker: 'turns in this session, folded because they no longer fit the window:\n\nMARKER-S1Q the count was 3.<|im_end|>\n<|im_start|>user\nHow many files are in /ap'
+      -> D folded summary at index 1 (positive control): as expected (gate; want S0 present, S1 present): the template renders a system message at index 1, so the probe can see a system message it keeps: A's absence is position, not detection
+      E context-drop notice after the instruction [S0]: marker absent; prompt 1553 chars, '<think>' x2; around marker: -
+      E context-drop notice after the instruction [S1]: marker PRESENT; prompt 1670 chars, '<think>' x2; around marker: 'many files are in /app? Write the number to /app/count.txt.\n\n[gnomon] MARKER-S1Q [gnomon context] 3 earlier step(s) in this turn were dropped to stay '
+      -> E context-drop notice after the instruction: as expected (informational; want S0 absent, S1 present): informational: S1 merges the notice into the instruction's user message
+      F verification failure after an answer [S0]: marker absent; prompt 1620 chars, '<think>' x3; around marker: -
+      F verification failure after an answer [S1]: marker PRESENT; prompt 1792 chars, '<think>' x3; around marker: 'stant\n<think>\n\n</think>\n\nDone: 3.<|im_end|>\n<|im_start|>user\n[gnomon] MARKER-S1Q The declared verification for this repository failed after your chang'
+      -> F verification failure after an answer: as expected (informational; want S0 absent, S1 present): informational
+    PROBE_SHAPES_SHA=8078df03e2a28c41753825dcccab13e8a0ac03dd
+    STEER_TEMPLATE_GATE=pass
+2026-11-03T16:26:35Z CHAIN-S1 lane: warm GPU level 26746 MiB (desktop baseline 2039 MiB, so the lane's footprint is 24707 MiB; R1H's: 24543 MiB); yield limit 28246 MiB of 32607 MiB
+2026-11-03T16:26:41Z CHAIN-S1 abort probe (informational; exit 0): abort probe: slots processing before=0 during=1 after=0 (1 s after the client left; first byte true; relay client_aborts=1) -> PASS
+2026-11-03T16:26:49Z S1RUN S1 smoke: sha=8078df03e2a28c41753825dcccab13e8a0ac03dd model=qwen3.6-35b upstream=http://127.0.0.1:18780 arms=S0(steer_role system),S1(steer_role user) attempts=1 cells=2 max_lead=1 (S1 spend so far $0.000) deadline=2026-11-04T07:00:00Z
+2026-11-03T16:26:49Z S1RUN s1 ATTEMPT 1: 1 positions x 2 arms
+2026-11-03T16:26:49Z S1RUN START s1-s1-s-l-hello-world arm=S1 pos=0 load=1.0
+2026-11-03T16:26:49Z S1RUN START s1-s0-s-l-hello-world arm=S0 pos=0 load=1.0
+2026-11-03T16:27:34Z S1RUN END   s1-s1-s-l-hello-world (tb exit 0) local_chat=3 cloud_chat=0 dropped_sys_req=0 note_req=0 new_dropped=0 new_note=0 late_sys_req=0 aborts=0 errors=0 usd=0.0000 s1_total_usd=0.000
+2026-11-03T16:27:34Z S1RUN END   s1-s0-s-l-hello-world (tb exit 0) local_chat=3 cloud_chat=0 dropped_sys_req=0 note_req=0 new_dropped=0 new_note=0 late_sys_req=0 aborts=0 errors=0 usd=0.0000 s1_total_usd=0.000
+2026-11-03T16:27:34Z S1RUN S1 smoke finished; this run's cloud spend $0.000, S1 total $0.000
+2026-11-03T16:27:35Z CHAIN-S1 smoke PASS (smoke-s1.txt)
+    cell                           state      resolved local_chat dropped_req note_req late_req nudges adapted  wire  surface
+    s1-s0-s-l-hello-world          valid      True              3           0        0        0      0       0  {'turns': 1, 'steer_role=absent': 1, 'replay_reasoning': 0, 'stream': 1}  ('system', 1)
+    s1-s1-s-l-hello-world          valid      True              3           0        0        0      0       0  {'turns': 1, 'steer_role=user': 1, 'replay_reasoning': 0, 'stream': 1}  ('user', 1)
+      !!! no steering fired in either smoke cell (hello-world rarely needs it), so the smoke checks the surface, the wire record and the negative controls only; the template probe and the offline wire test (wiretest-s1.txt) cover the steering path
+    smoke: PASS
