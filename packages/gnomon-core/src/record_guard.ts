@@ -50,6 +50,25 @@ export function recordDirsOf(config: GnomonConfig): string[] {
   return dirs;
 }
 
+/**
+ * Directories inside the record directories that are not records: the
+ * `[audit.anchor]` queue and receipts (anchor.ts), when it is declared.
+ *
+ * Left out of every snapshot and checkpoint map because a background delivery
+ * writes there after the session that queued it has ended, and a concurrent
+ * session would read that as tampering. Nothing in it is evidence of what the
+ * agent did: a receipt is checked against its witness (a token's signature,
+ * the remote's copy) when `gnomon audit verify` reads it, and a removed one
+ * shows there as a trail with no anchor. The `record` rule still refuses the
+ * agent's writes to it, because it is inside the trail directory.
+ *
+ * Absent `[audit.anchor]`, nothing is excluded: exactly the previous walk.
+ */
+export function recordExcludesOf(config: GnomonConfig): string[] {
+  const anchor = resolveAudit(config).anchor;
+  return anchor?.declared ? [resolve(anchor.dir)] : [];
+}
+
 // ---------------------------------------------------------------------------
 // gnomon's own writes
 // ---------------------------------------------------------------------------
@@ -117,9 +136,10 @@ export const SNAPSHOT_LIMITS = { maxEntries: 200_000, hashNewest: 16, hashMaxByt
  * Snapshot record directories. Symlinks are recorded as links (lstat), never
  * followed: a link into the records is itself a change to them.
  */
-export function snapshotRecords(dirs: string[]): RecordSnapshot {
+export function snapshotRecords(dirs: string[], exclude: string[] = []): RecordSnapshot {
   const t0 = performance.now();
   const files = new Map<string, RecordFileState>();
+  const skip = new Set(exclude.map((d) => resolve(d)));
   const stats: Array<[string, Stats]> = [];
   let budget = SNAPSHOT_LIMITS.maxEntries;
   let truncated = false;
@@ -143,7 +163,7 @@ export function snapshotRecords(dirs: string[]): RecordSnapshot {
         continue;
       }
       if (st.isDirectory()) {
-        walk(p);
+        if (skip.size === 0 || !skip.has(resolve(p))) walk(p);
         continue;
       }
       const state: RecordFileState = { key: stateKey(st) };
@@ -159,7 +179,7 @@ export function snapshotRecords(dirs: string[]): RecordSnapshot {
       files.set(p, state);
     }
   };
-  for (const d of dirs) if (existsSync(d)) walk(d);
+  for (const d of dirs) if (existsSync(d) && !skip.has(resolve(d))) walk(d);
   // The newest small files get a hash as well: the ones most likely to be the
   // target, read at bounded cost however large the directory grows.
   //
@@ -392,18 +412,19 @@ export class RecordGuard {
 
   constructor(
     private readonly dirs: string[],
-    private readonly place?: CheckpointPlace
+    private readonly place?: CheckpointPlace,
+    private readonly exclude: string[] = []
   ) {
-    this.baseline = snapshotRecords(dirs);
+    this.baseline = snapshotRecords(dirs, exclude);
     this.costs.push(this.baseline.ms);
   }
 
   static for(config: GnomonConfig): RecordGuard {
-    return new RecordGuard(recordDirsOf(config), checkpointPlace(config));
+    return new RecordGuard(recordDirsOf(config), checkpointPlace(config), recordExcludesOf(config));
   }
 
   check(when: TamperWhen): TamperFinding | null {
-    const now = snapshotRecords(this.dirs);
+    const now = snapshotRecords(this.dirs, this.exclude);
     this.costs.push(now.ms);
     const all = foreignChanges(this.baseline, now);
     // Changes gnomon's writer noticed at the moment it went to append.

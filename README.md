@@ -61,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1832 TypeScript tests (1533 core, 274 cli, 18
-> natives, 7 tui) and 61 Rust tests — **1893 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1871 TypeScript tests (1571 core, 275 cli, 18
+> natives, 7 tui) and 61 Rust tests — **1932 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1633,6 +1633,7 @@ and "looser" is measured, not guessed:
 | `sandbox.level = "off"`, `network = true`, any `extra_roots` | `confined`, off, none |
 | an MCP server (a process started when a session opens) | none |
 | a `[verify]` command that is not the project's own check (`npm test`, `pnpm run verify`, `cargo test`, …) and an `[audit.attest]` signer — commands that run unasked | none |
+| an `[audit.anchor]` witness: a push to its remote, a request to its time-stamp authority, or its command, at session end | no anchor |
 | an endpoint or fallback sending a key variable to a host that is neither local nor a known provider | keys go only to known providers |
 | a `[shadow]` model on a non-local host | off |
 | a role holding a tool its scaffold namesake lacks; a wider `write_allow` or `task_allow` | the scaffold role |
@@ -1867,12 +1868,13 @@ chain = true
 | Data minimisation | `record = "metadata"` writes decisions and outcomes but **no prompt or response text** |
 | What was done | A shell call's `tool_call` record keeps the **whole command** in `target`, after `redact`, under either `record` setting: the command is the action, not prompt or response text. A file tool's `target` is its path |
 | Redaction | Patterns scrubbed from any recorded text, and from every recorded command |
-| Not writable by the agent | `write`, `edit` and a shell command's named outputs (hard links, `ln`, git checkout/apply, archive members and more) are refused with rule `record` inside the trail directory (and `.gnomon-trials/`) for every role, whatever `write_allow` says. This is a pattern check, not containment. A path built at run time, a script file's writes and MCP calls are not seen by it. The kernel sandbox (`exec os`) contains those, and `[audit.attest]` makes a forged trail detectable |
+| Not writable by the agent | `write`, `edit` and a shell command's named outputs (hard links, `ln`, git checkout/apply, archive members and more) are refused with rule `record` inside the trail directory (and `.gnomon-trials/`) for every role, whatever `write_allow` says. This is a pattern check, not containment. A path built at run time, a script file's writes and MCP calls are not seen by it. The kernel sandbox (`exec os`) contains those; `[audit.attest]` and `[audit.anchor]` make a forged trail detectable |
 | Changes it did not make | The record guard snapshots the record directories (stat including ctime, plus a hash of the newest files) around every tool call that can write. Any change gnomon's own writer did not make stops the turn as `tamper`, writes a `record_tamper` record, and blocks `gnomon skill accept` until a person runs `gnomon audit resolve`, which needs a terminal or a person-present signer (`[audit.attest] person_present = true`). A checkpoint sealed at each session's end covers the gap between sessions. A new gnomon trail from another process only earns a `record_notice`. This guards against a careless agent and makes tampering visible; against a hostile one, a person-present signer or the kernel sandbox is the guarantee (docs/CONTRACTS.md §14) |
 
 ```bash
 gnomon audit show      # trails
 gnomon audit verify    # exit 1 if any chain, or an anchor the surface declares, is broken
+gnomon audit anchor    # deliver queued heads to the [audit.anchor] witness now
 ```
 
 **This is an evidence layer, not a compliance claim.** Whether a deployment
@@ -1983,6 +1985,46 @@ written, and the exit code is decided by the chain. Limit 2 still applies:
 heads deleted line by line from the same directory do not show. `replay` has
 no command yet. It is library-only and exercised by the suite (42 tests in
 `replay.test.ts`), but no terminal command reaches it.
+
+### `[audit.anchor]` — a copy of each sealed head off the machine
+
+A signer proves who signed. It does not keep a copy: the heads sit beside the
+trail, so whoever can write the trail can usually delete or re-sign them
+(limits 1 and 2 above). `[audit.anchor]` sends every **sealed** head to a
+**witness** that whoever writes the trail cannot rewrite. Each session's trail,
+its checkpoint, and every `check`, `guard`, skill-decision and tamper trail is
+anchored at its `session_end`.
+
+```toml
+[audit.anchor]
+backend = "git"                       # git | rfc3161 | cmd
+remote = "ssh://witness.example/anchors.git"
+# ref = "refs/heads/gnomon-anchors"   # default; protect this branch on the witness
+```
+
+| Backend | Witness | Against an attacker who knows the format |
+|---|---|---|
+| `git` | a commit per delivery on a ref pushed fast-forward only, never forced, to `remote` | **Holds**, when the witness refuses forced pushes and deletions (`receive.denyNonFastForwards` + `receive.denyDeletes`, or branch protection). git applies both to `refs/heads/*` only, which is why the default ref is a branch |
+| `rfc3161` | a signed time-stamp token from `url`, checked offline against `tsa_cert` | Proves **when**; the token is kept locally, and deleting it and re-stamping the forgery is not caught |
+| `cmd` | `command` (digest on stdin, receipt on stdout) and an optional `verify` | As strong as the witness the verifier asks |
+
+**The turn pays nothing.** Sealing queues one file (about 0.03 ms). After the
+checkpoint at session end, the CLI starts a detached `gnomon audit anchor
+--background` (about 5 ms) and exits. When the witness cannot be reached, the
+heads stay queued. The next session prints `[anchor] … not yet anchored …` and
+records a `degradation` (`audit_anchor_queued`). `gnomon audit anchor`
+delivers the queue now.
+
+`gnomon audit verify` reads the witness back and prints an `external anchor:`
+line under each trail. Like the session, it contacts the witness only for a
+surface you trust, or with `--trust`. `RE-CHAINED` names the anchored and current hash, the
+seq range the change is in, and the time after which it was made. A trail
+the witness names that is no longer on disk is reported, and so is a
+rolled-back checkpoint. Both used to be documented as undetectable.
+Measured in [auditability-2026-11-03](benchmarks/results/auditability-2026-11-03/):
+**9/9 with a git witness**, against an attacker who also wipes the local anchor
+state, tries a forced push, and anchors the forgery. Off, it is **8/9**,
+unchanged. Contract, statuses and limits: [docs/CONTRACTS.md §15](docs/CONTRACTS.md).
 
 ## Governing other harnesses
 

@@ -233,6 +233,7 @@ account of itself. Every one is reproducible from its directory.
 | # | Dimension | Result | Data |
 |---|---|---|---|
 | T1 | Tamper-evidence | **8/9** attacks caught | [`auditability-2026-08-31`](../benchmarks/results/auditability-2026-08-31/) |
+| T1b | Tamper-evidence with `[audit.anchor]` | **9/9** with a git witness, attacker anchoring-aware; 8/9 off (unchanged) | [`auditability-2026-11-03`](../benchmarks/results/auditability-2026-11-03/), standard: [`benchmarks/AUDITABILITY.md`](benchmarks/AUDITABILITY.md) |
 | T2 | Surface-replay determinism | **10/10** stable | [`determinism-2026-08-31`](../benchmarks/results/determinism-2026-08-31/) |
 | T3 | Context retention | `discard` **0/9** · `summary` **9/9** | [`context-2026-08-31`](../benchmarks/results/context-2026-08-31/) |
 | T4 | Tool-calling contract | **15/16** malformed calls refused, 0 crashes | [`tool-contract-2026-08-31`](../benchmarks/results/tool-contract-2026-08-31/) |

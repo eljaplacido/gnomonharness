@@ -102,6 +102,7 @@ import {
   withWorkingContext,
 } from "./skills.js";
 import { AuditTrail, resolveAudit, type AuditKind } from "./audit.js";
+import { announceAnchorBacklog } from "./anchor.js";
 import {
   ShadowRecorder,
   type ShadowTurnEnd,
@@ -6305,6 +6306,10 @@ export async function runTask(
     approvals: options.yes ? "granted" : "refused",
   });
   if (options.trust) audit.write("trust", { ...options.trust, root: resolve(config.gnomonDir, "..") });
+  // Sealed heads an earlier session could not anchor: announced on stderr and
+  // recorded (`audit_anchor_queued`), and retried in the background. Nothing
+  // when [audit.anchor] is absent; no network on this path either way.
+  announceAnchorBacklog(auditSettings.anchor, { say: warn, audit: auditForTurn });
 
   // Connect declared MCP servers here too. They were wired only in
   // runPromptLoop, so a surface declaring [mcp_servers] handed its tools to
@@ -8681,6 +8686,9 @@ export async function runPromptLoop(
     record: auditSettings.record,
   });
   if (options.trust) audit.write("trust", { ...options.trust, root: resolve(config.gnomonDir, "..") });
+  // As in runTask: heads an earlier session could not anchor are announced,
+  // recorded, and retried in the background.
+  announceAnchorBacklog(auditSettings.anchor, { say: (l) => console.log(l), audit });
   const reconfigure = options.reconfigure ?? ((fresh: GnomonConfig) => fresh);
 
   // Connect any declared MCP servers before the first turn, so their tools are

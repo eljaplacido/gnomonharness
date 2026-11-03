@@ -59,6 +59,8 @@ export const DEGRADATIONS = {
     "a command changed `.gnomon/` mid-turn, so the surface no longer matches the hash this session was stamped with",
   model_output_truncated:
     "the backend cut the completion off at its token limit, so the answer is incomplete",
+  audit_anchor_queued:
+    "the declared `[audit.anchor]` witness could not be reached, so sealed trail heads are queued on this machine and not yet anchored off it",
 } as const;
 
 /** The id of a declared degradation path. */

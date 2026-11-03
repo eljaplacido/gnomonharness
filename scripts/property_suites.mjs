@@ -13,7 +13,7 @@
  *
  *   surface-fidelity      14/14 faithful, 0 false negatives, 0 false positives, 0 unmeasurable,
  *                         and a trial-spec change that flips a verdict and moves the hash
- *   degradation-contract  14/14 complete
+ *   degradation-contract  15/15 complete
  *   fault-disclosure       8/8 disclosed, 0 misnamed
  *   silent-success         0/11 falsely successful, 0 void
  *   determinism           10/10 matched expectation
@@ -107,18 +107,22 @@ const check = (name, r, problems) => {
   check("surface-fidelity 14/14", r, p);
 }
 
-// ── degradation contract: 14/14 complete ──
+// ── degradation contract: 15/15 complete ──
+//
+// 14 until 2026-11-03. The 15th path is `audit_anchor_queued`: a sealed head
+// that could not reach its declared [audit.anchor] witness stays queued, and
+// the next session announces and records it.
 {
   const out = join(work, "dc.json");
   const r = run(join(REPO, "benchmarks/degradation-contract"), ["contract.mjs", "--json", out]);
   const p = [];
   if (existsSync(out)) {
     const rows = json(out).rows ?? [];
-    if (rows.length !== 14) p.push(`${rows.length} paths, published 14`);
+    if (rows.length !== 15) p.push(`${rows.length} paths, published 15`);
     const c = count(rows, (x) => x.complete === true);
-    if (c !== 14) p.push(`complete ${c}/14`);
+    if (c !== 15) p.push(`complete ${c}/15`);
   } else p.push("no JSON written");
-  check("degradation-contract 14/14", r, p);
+  check("degradation-contract 15/15", r, p);
 }
 
 // ── fault disclosure: 8/8 ──

@@ -26,6 +26,64 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`[audit.anchor]`: each sealed trail head copied to a witness off the
+  machine (GV4).** Opt-in. Absent, behaviour is exactly as before: nothing is
+  queued, the record guard excludes nothing, and nothing touches the network.
+  At every `session_end` of a chained trail, a `gnomon.anchor/1` statement
+  (trail, seq, hash, record count, seal time, checkout scope) is queued: one
+  file, about 0.03 ms. That covers sessions, checkpoints, `check`, `guard`,
+  skill decisions and tamper events. After the checkpoint at session end, the
+  CLI starts a detached `gnomon audit anchor --background` (about 5 ms) to
+  deliver the queue. The turn path is unchanged (a `tool_call` record
+  writes in 0.013 ms off and on).
+  Three backends, no new dependency:
+  - **git:** a commit per delivery on `refs/heads/gnomon-anchors`, pushed
+    fast-forward only.
+  - **rfc3161:** a time-stamp token, verified offline against a pinned
+    `tsa_cert` by a zero-dependency DER reader (`rfc3161.ts`). It is tested
+    on a real OpenSSL TSA token.
+  - **cmd:** an operator command, with an optional verifier.
+- **`gnomon audit verify` checks the witness.** It prints an `external
+  anchor:` line under each trail. `RE-CHAINED` names the anchored and current
+  hash, the seq range the change is in, and the time after which it was
+  made. A trail the witness names that is no longer on disk is reported, and
+  so is a rolled-back checkpoint, which CONTRACTS.md §14 had said nothing on
+  the machine could detect. `--offline` reads the local copy; `--scope <id>`
+  checks another checkout's anchors. `gnomon audit anchor` delivers queued
+  heads now.
+- **Degradation `audit_anchor_queued`.** When the witness cannot be reached,
+  the heads stay queued. The next session announces it on stderr (`--json`
+  too), records it, and retries. The degradation suite now holds **15/15**
+  (was 14/14).
+- **Tamper suite with an anchor:**
+  `benchmarks/results/auditability-2026-11-03`.
+  - **git witness: 9/9.** The attacker also wipes the local anchor state,
+    tries a forced push (refused 11/11) and anchors the forgery.
+  - **Anchoring off: 8/9**, unchanged.
+  - **RFC 3161 receipts kept locally, against that attacker: 8/9**, published
+    as that backend's limit.
+  - `anchor.test.ts` runs the off and git arms in CI.
+- **docs/benchmarks/AUDITABILITY.md:** a proposed open standard, the
+  *Auditability & Tamper-Evidence Suite*. It covers an attack taxonomy,
+  scoring, how to run it against other harnesses' logs, and reporting rules.
+
+### Security
+
+- **`[audit.anchor]` is a workspace-trust grant.** It pushes, posts or runs a
+  command unasked, at session end. An untrusted surface runs with the block
+  marked: it anchors nothing, and says why at session start. `gnomon audit
+  verify` and `gnomon audit anchor` reach the witness only for a trusted
+  surface, or with `--trust` / `GNOMON_TRUST`, which the detached delivery
+  inherits. A `remote` starting with `-` is refused, and the `ext::`
+  transport is disabled for anchor pushes.
+- **Found while testing:** git's `receive.denyNonFastForwards` and
+  `receive.denyDeletes` apply to `refs/heads/*` only. A forced push to
+  `refs/gnomon/anchors` was accepted with both set. The default anchor ref is
+  a branch for that reason, and a ref outside `refs/heads/` is reported as a
+  problem. `anchor.test.ts` pins git's behaviour on both sides.
+
 ## [0.4.0] — 2026-11-03
 
 **Upgrading from 0.3.x.** Run `gnomon migrate` in each project. It applies four
