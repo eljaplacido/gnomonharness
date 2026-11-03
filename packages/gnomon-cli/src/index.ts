@@ -1942,8 +1942,12 @@ async function cmdSetup(args: CliArgs, opts: { fromLaunch?: boolean } = {}): Pro
   const f = args.flags;
   const schema = "gnomon.setup/1";
   const usage = (m: string) => commandError(args, schema, m, SETUP_EXIT.usage);
-  for (const k of ["pull", "model", "mode", "cloud-endpoint", "cloud-model", "cloud-key-env", "hybrid-control", "catalog"]) {
+  for (const k of ["pull", "model", "mode", "cloud-endpoint", "cloud-model", "cloud-key-env", "hybrid-control", "catalog", "expect-proposal"]) {
     if (f[k] === "true") return usage(`--${k} needs a value.`);
+  }
+  const expect = f["expect-proposal"];
+  if (expect !== undefined && !/^[0-9a-f]{64}$/.test(expect)) {
+    return usage(`--expect-proposal takes the 64-hex \`proposal.digest\` of an earlier \`gnomon setup --json\`, not "${expect}".`);
   }
   let mode: Suggestion | undefined;
   if (f.mode) {
@@ -1976,6 +1980,7 @@ async function cmdSetup(args: CliArgs, opts: { fromLaunch?: boolean } = {}): Pro
       ...(f["cloud-endpoint"] ? { cloudEndpoint: f["cloud-endpoint"] } : {}),
       ...(f["cloud-model"] ? { cloudModel: f["cloud-model"] } : {}),
       ...(f["cloud-key-env"] ? { cloudKeyEnv: f["cloud-key-env"] } : {}),
+      ...(expect ? { expectProposal: expect } : {}),
       hybridControl: control,
       ...(opts.fromLaunch ? { fromLaunch: true } : {}),
     },
@@ -2284,13 +2289,16 @@ Commands:
   setup [--json] [--yes] [--pull TAG] [--model TAG] [--speed-check]
         [--mode local|hybrid|cloud] [--cloud-endpoint URL|preset|name]
         [--cloud-model NAME] [--cloud-key-env VAR] [--catalog FILE]
+        [--expect-proposal DIGEST]
     Scan this machine, plug in a local model it can run, then connect a
     cloud model. Recommends from a dated catalog and says why, pulls only on
     a yes, offers a short speed check, suggests local only, hybrid or cloud
     first, and writes .gnomon/ only after you accept the diff. Off a
     terminal: --yes approves the write and nothing else; a download needs
-    --pull TAG; nothing is spent. Exit 0 written, 4 needs consent or a model,
-    12 the model server stopped answering.
+    --pull TAG; nothing is spent. --expect-proposal writes only the change
+    whose proposal.digest an earlier --json run printed. Exit 0 written,
+    3 the surface or the change moved, 4 needs consent or a model, 12 the
+    model server stopped answering.
 
   doctor [--json] [--catalog FILE]
     Read-only: this machine, whether every role's model answers, and what

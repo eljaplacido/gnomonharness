@@ -1096,9 +1096,20 @@ check) needs a person at the prompt and never happens off one. A run without
 `--yes` prints the proposal (`proposal.files[].diff`) and exits 4: that is how
 a dashboard shows the change before applying it.
 
+**Writing the change that was reviewed.** `proposal.digest` names a proposal:
+the sha256 of the JSON array `[before, fresh, files]`, where `before` is
+the surface hash the plan was made against (null for a new `.gnomon/`) and
+each file is `[path, action, diff]`. `--yes --expect-proposal DIGEST` writes
+only when the run plans that same change; a surface edited since, or a machine
+that now plans differently (another model installed, say), exits 3 with
+`steps` ending `{"id": "write", "status": "proposal_changed"}` and writes
+nothing. The dashboard's Accept runs exactly this.
+
 **Exit codes:** **0** written, or the surface already said this; **1** usage
-(a flag without its value, an unknown `--mode` or `--hybrid-control`); **3**
-the surface changed while setup waited for consent, nothing written; **4**
+(a flag without its value, an unknown `--mode` or `--hybrid-control`, an
+`--expect-proposal` that is not 64 hex); **3** the surface changed while setup
+waited for consent, or the change is not the one `--expect-proposal` named,
+nothing written; **4**
 needs consent or a model (no `--yes`, a download not named by `--pull`, no
 local or cloud model to set up); **10** the catalog cannot be read; **12** the
 chosen model server stopped answering (the pull or the speed check).
@@ -1118,7 +1129,7 @@ chosen model server stopped answering (the pull or the speed check).
 
 Top-level keys: `schema`, `dir`, `catalog`, `local`, `pull`, `speed`, `cloud`,
 `mode`, `hybrid_control`, `proposal` (`fresh`, `files` of `{path, action,
-diff}`, `facts_file`, `applied`), `steps`, `next`, `exit`; optionally
+diff}`, `facts_file`, `applied`, `digest`), `steps`, `next`, `exit`; optionally
 `machine`, `runtimes`, `recommendation`, `surface_hash` (`before`, `after`),
 `why`. A key value is never in it: `cloud` carries `key_env` (a name) and
 `key_held` (a boolean).
@@ -1132,7 +1143,9 @@ same models write the same bytes and the same hash. The hardware facts go to
 
 **Fixture**: `conformance/setup_report.json`. `packages/gnomon-cli/src/setup_wizard.test.ts`
 asserts `HYBRID_CONTROLS`, `SETUP_EXIT` and the suggestion values equal the
-fixture's lists, and checks documents from a proposal, a write and a refusal
+fixture's lists, checks the `proposal` keys against `proposal_keys`, and that
+`--expect-proposal` writes a reviewed change and refuses a moved one (exit 3,
+surface bytes unchanged); it checks documents from a proposal, a write and a refusal
 against `report_keys`.
 
 ---

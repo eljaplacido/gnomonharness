@@ -333,6 +333,56 @@ describe("the surface is written only after a yes, as a diff", () => {
   });
 });
 
+describe("--expect-proposal: only the change that was reviewed is written", () => {
+  const surface = async () => {
+    const dir = tmpProject();
+    await initSurface({ dir, models: { large: "placeholder:1b", small: "placeholder:1b", detected: [] } });
+    return dir;
+  };
+
+  it("the digest a preview printed writes exactly that preview", async () => {
+    const dir = await surface();
+    const machine = gb10Ollama({ "qwen3.6:35b": 23.9e9 });
+    const seen = await runSetup(opts(dir, { json: true }), harness(machine).deps);
+    expect(seen.exit).toBe(SETUP_EXIT.needsConsent);
+    expect(seen.proposal?.digest).toMatch(/^[0-9a-f]{64}$/);
+    // The same plan again has the same digest: it is a name for the change.
+    expect((await runSetup(opts(dir, { json: true }), harness(machine).deps)).proposal?.digest).toBe(seen.proposal?.digest);
+
+    const w = await runSetup(opts(dir, { json: true, yes: true, expectProposal: seen.proposal!.digest }), harness(machine).deps);
+    expect(w.exit, w.why).toBe(SETUP_EXIT.written);
+    expect(w.proposal?.files).toEqual(seen.proposal?.files);
+    expect(w.surface_hash?.before).toBe(seen.surface_hash?.before);
+  });
+
+  it("a surface edited after the preview: exit 3, nothing written", async () => {
+    const dir = await surface();
+    const machine = gb10Ollama({ "qwen3.6:35b": 23.9e9 });
+    const seen = await runSetup(opts(dir, { json: true }), harness(machine).deps);
+    const rolesPath = join(dir, ".gnomon", "roles.toml");
+    writeFileSync(rolesPath, readFileSync(rolesPath, "utf-8") + "\n# edited after the review\n");
+    const edited = recomputeManifest(join(dir, ".gnomon")).surface_hash;
+
+    const w = await runSetup(opts(dir, { json: true, yes: true, expectProposal: seen.proposal!.digest }), harness(machine).deps);
+    expect(w.exit).toBe(SETUP_EXIT.surfaceMoved);
+    expect(w.steps.at(-1)).toEqual({ id: "write", status: "proposal_changed" });
+    expect(w.proposal?.applied).toBe(false);
+    expect(recomputeManifest(join(dir, ".gnomon")).surface_hash).toBe(edited);
+    expect(existsSync(join(dir, SETUP_FACTS_FILE))).toBe(false);
+  });
+
+  it("a machine that now plans differently (a small model installed since): exit 3, nothing written", async () => {
+    const dir = await surface();
+    const seen = await runSetup(opts(dir, { json: true }), harness(gb10Ollama({ "qwen3.6:35b": 23.9e9 })).deps);
+    const before = recomputeManifest(join(dir, ".gnomon")).surface_hash;
+    const later = harness(gb10Ollama({ "qwen3.6:35b": 23.9e9, "qwen3:8b": 5.2e9 }));
+    const w = await runSetup(opts(dir, { json: true, yes: true, expectProposal: seen.proposal!.digest }), later.deps);
+    expect(w.exit).toBe(SETUP_EXIT.surfaceMoved);
+    expect(w.proposal?.digest).not.toBe(seen.proposal?.digest);
+    expect(recomputeManifest(join(dir, ".gnomon")).surface_hash).toBe(before);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The whole interactive path: scan, plug in a local model, connect a cloud one
 // ---------------------------------------------------------------------------
@@ -481,6 +531,7 @@ describe("resolving --cloud-endpoint", () => {
 describe("the --json document (schema gnomon.setup/1)", () => {
   const fixture = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "conformance", "setup_report.json"), "utf-8")) as {
     report_keys: { required: string[]; optional: string[] };
+    proposal_keys: string[];
     suggestions: string[];
     hybrid_controls: string[];
     exit_codes: Record<string, string>;
@@ -493,6 +544,7 @@ describe("the --json document (schema gnomon.setup/1)", () => {
     for (const k of keys) expect([...fixture.report_keys.required, ...fixture.report_keys.optional], k).toContain(k);
     for (const s of r.steps) expect(fixture.step_ids).toContain(s.id);
     expect(Object.keys(fixture.exit_codes)).toContain(String(r.exit));
+    if (r.proposal) expect(Object.keys(r.proposal).sort()).toEqual([...fixture.proposal_keys].sort());
   };
 
   it("a proposal, a write and a refusal all match the published keys", async () => {
@@ -526,6 +578,12 @@ describe("gnomon setup / doctor on the command line", () => {
     const r = run(["setup", "--mode", "turbo", "--json", "--dir", tmpProject()]);
     expect(r.code).toBe(SETUP_EXIT.usage);
     expect(JSON.parse(r.out)).toEqual({ schema: "gnomon.setup/1", error: "--mode turbo: use local, hybrid or cloud.", exit: 1 });
+  }, 60_000);
+
+  it("--expect-proposal takes a digest and nothing else", () => {
+    const r = run(["setup", "--expect-proposal", "HEAD", "--yes", "--json", "--dir", tmpProject()]);
+    expect(r.code).toBe(SETUP_EXIT.usage);
+    expect(JSON.parse(r.out).error).toMatch(/--expect-proposal takes the 64-hex/);
   }, 60_000);
 
   it("--pull with no tag is refused: a download must be named", () => {

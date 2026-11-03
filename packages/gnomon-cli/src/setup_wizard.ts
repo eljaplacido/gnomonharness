@@ -22,6 +22,7 @@
  * fake machine, a fake Ollama and a scripted person, and no network.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { recomputeManifest } from "gnomon-core";
@@ -150,6 +151,13 @@ export interface SetupOptions {
   hybridControl: HybridControl;
   /** Run from `gnomon launch`'s picker: it starts the session itself. */
   fromLaunch?: boolean;
+  /**
+   * `--expect-proposal DIGEST`: write only if the change is exactly the one a
+   * person reviewed (`proposal.digest` of an earlier run without `--yes`).
+   * Anything else exits 3 and writes nothing. This is how the dashboard's
+   * Accept writes the diff it showed, and not a re-plan of a moved surface.
+   */
+  expectProposal?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -169,7 +177,14 @@ export interface SetupReport {
   cloud: null | { endpoint: string; url: string; model: string; key_env?: string; key_held: boolean; checked: "ok" | "failed" | "skipped"; detail?: string };
   mode: null | { suggested: Suggestion; chosen: Suggestion; role_profile: string; why: string; provisional: boolean };
   hybrid_control: null | { value: HybridControl; active: false; note: string };
-  proposal: null | { fresh: boolean; files: Array<{ path: string; action: "create" | "modify"; diff: string[] }>; facts_file: string; applied: boolean };
+  proposal: null | {
+    fresh: boolean;
+    files: Array<{ path: string; action: "create" | "modify"; diff: string[] }>;
+    facts_file: string;
+    applied: boolean;
+    /** sha256 of the surface hash before and the files' diffs: what `--expect-proposal` names. */
+    digest: string;
+  };
   surface_hash?: { before?: string; after?: string };
   steps: Array<{ id: string; status: string }>;
   next: string[];
@@ -803,11 +818,17 @@ export async function runSetup(opts: SetupOptions, deps: SetupDeps): Promise<Set
   if (report.cloud && planned.cloudEndpoint) report.cloud.endpoint = planned.cloudEndpoint;
   const before = fresh ? undefined : safeHash(gnomonDir);
   report.surface_hash = before ? { before } : {};
+  const files = planned.changes.map((c) => ({
+    path: c.path,
+    action: c.before === undefined ? ("create" as const) : ("modify" as const),
+    diff: changeDiff(c),
+  }));
   report.proposal = {
     fresh,
-    files: planned.changes.map((c) => ({ path: c.path, action: c.before === undefined ? "create" : "modify", diff: changeDiff(c) })),
+    files,
     facts_file: SETUP_FACTS_FILE,
     applied: false,
+    digest: proposalDigest(before, fresh, files),
   };
   heading("The change");
   if (fresh) say(`  No .gnomon/ in ${root}: it is created with \`gnomon init\`'s scaffold, and then:`);
@@ -817,6 +838,19 @@ export async function runSetup(opts: SetupOptions, deps: SetupDeps): Promise<Set
     for (const l of changeDiff(c)) say(`    ${l}`);
   }
   say(`  + ${SETUP_FACTS_FILE} beside .gnomon/: this machine's facts for \`gnomon doctor\` (gitignored, not part of the surface)`);
+
+  // The change a person reviewed elsewhere (the dashboard, a script that kept
+  // an earlier --json) is the only one that may be written under its name. A
+  // surface edited since, or a machine that now plans differently, is a new
+  // proposal that nobody has seen.
+  if (opts.expectProposal !== undefined && opts.expectProposal !== report.proposal.digest) {
+    step("write", "proposal_changed");
+    return done(
+      SETUP_EXIT.surfaceMoved,
+      `The change is not the one that was reviewed (proposal ${opts.expectProposal.slice(0, 12)}, now ${report.proposal.digest.slice(0, 12)}): ` +
+        ".gnomon/ or this machine changed since. Nothing was written; review the change again."
+    );
+  }
 
   let consent = opts.yes;
   if (!consent && io.interactive) consent = yes(await io.ask("  Write this? [y/N] ", "n"));
@@ -868,6 +902,20 @@ export async function runSetup(opts: SetupOptions, deps: SetupDeps): Promise<Set
   say("Next:");
   for (const n of report.next) say(`  ${n}`);
   return done(SETUP_EXIT.written);
+}
+
+/**
+ * What `--expect-proposal` compares: the surface hash the plan was made
+ * against and every file's diff, in order. Two runs that would write the same
+ * bytes over the same surface agree; anything else differs.
+ */
+export function proposalDigest(
+  before: string | undefined,
+  fresh: boolean,
+  files: ReadonlyArray<{ path: string; action: string; diff: readonly string[] }>
+): string {
+  const canonical = JSON.stringify({ before: before ?? null, fresh, files: files.map((f) => [f.path, f.action, f.diff]) });
+  return createHash("sha256").update(canonical).digest("hex");
 }
 
 function label(m: Suggestion): string {
