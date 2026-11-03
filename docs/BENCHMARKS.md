@@ -256,7 +256,7 @@ own 11.9–14.9% self-flip.
 
 | Suite | Result | Data |
 |---|---|---|
-| Surface-hash fidelity | **12/12 paths faithful**, 0 false negatives | [`surface-fidelity`](../benchmarks/surface-fidelity/) |
+| Surface-hash fidelity | **14/14 paths faithful**, 0 false negatives (14 since 2026-11-03: skill-trial specs count as behaviour) | [`surface-fidelity`](../benchmarks/surface-fidelity/) |
 | Fault disclosure | **8/8 faults disclosed**, after 3 defects | [`fault-disclosure`](../benchmarks/fault-disclosure/) |
 | Degradation, recorded | **12/12 announced AND recorded**, after 3 more | [`degradation-contract`](../benchmarks/degradation-contract/) |
 | Silent success | **0/11 falsely successful**, 0 void | [`silent-success`](../benchmarks/silent-success/) |

@@ -689,9 +689,19 @@ will produce, computed before it.
 dashes. Anything else, such as `../keep`, is refused before it becomes a
 path.
 
+**Not from inside an agent.** The harness sets `GNOMON_AGENT_SESSION=<session>`
+in the environment of every tool subprocess: the bash tool's shell (inside
+the docker sandbox too, via `-e`) and every MCP server. `skill accept` and `skill reject` refuse when it is present, with
+exit **3** (`refused_by_gate`, §1), and write nothing.
+
+A process can remove the variable (`env -u`), so this check is a refusal with
+a reason, not a proof. For the same reason a record says `by: "cli"`, not
+`"human"`: the command cannot see who typed it. `agent_session_marker` records
+what the command saw, and on a written record it is always `"absent"`.
+
 Keys, both kinds: `skill` (the id), `name`, `path` (repo-relative, POSIX),
 `content_sha256` (sha256 of the file's bytes), `surface_hash_before`,
-`surface_hash_after`, `by` (`human` from the CLI), `user`, `host`,
+`surface_hash_after`, `by` (`cli` from the CLI), `agent_session_marker`, `user`, `host`,
 `interactive`. `skill_accept` adds `evidence` (`"none"`: accepted on reading
 alone). `skill_reject` adds `reason` when `--reason` was given.
 
@@ -732,3 +742,114 @@ ids that were not on disk before.
 `write_allow` refusals of one path pattern yields exactly one candidate,
 pointing at those four records, and the same five refusals inside one
 session yield none.
+
+## 13. Skill trials — `gnomon skill trial`, schema `gnomon.trial/1`
+
+Does the surface **with** a proposed skill do better than the surface
+**without** it, on this project's tasks and with this model?
+(`docs/design/SKILL-TRIALS.md`, part 2.)
+
+**Spec**: `.gnomon/trials/<name>.toml`. It holds `[trial]` (`role`,
+`model_profile`, `attempts` = 3, `order` = `"interleaved"`, the only order
+accepted, and `check_timeout_seconds` = 600), `[thresholds]` (`max_pass_drop`
+= 0, `min_output_token_gain` = 0.10, `min_pass_gain` = 1, `alpha` = 0.05), an
+optional `[budget]` (`max_requests`, `max_cost_usd`), and one `[[task]]` per
+task with `id`, `prompt`, `check`, and optionally `setup`. `replay_session`
+tasks are refused for now.
+
+`trials/` **is hashed**, like the rest of `.gnomon/`. A spec doesn't change
+what the agent does, but it does decide what `require_trial` accepts. The
+surface-fidelity suite counts it as behaviour, and its 14th path is a trial
+spec. Each report and `skill_trial` record also carries the spec's `sha256`.
+
+For a short while the maintainer session left `trials/` out of the hash. It
+reversed that choice after review: the agent's shell could then loosen a spec
+(`alpha = 2`, `min_pass_gain = 0`) without moving the hash, and a skill with no
+effect passed `require_trial`. With specs hashed, an uncommitted edit makes this
+checkout's surface differ from HEAD's, and the trial refuses to start.
+
+**Bounds**, refused when the spec is loaded (exit 10):
+- `alpha` must be in (0, 0.2];
+- `max_pass_drop` and `min_pass_gain` must be at least 0;
+- `min_output_token_gain` must be in [0, 1];
+- at least one of the two gains must be above 0. A metric whose threshold is 0
+  never decides, since no change at all would meet it.
+
+**Arms.** Each cell runs in its own private clone (`git clone --shared`, with
+no remote) at the commit HEAD named when the trial began. A clone, not a
+worktree, so a cell's branches, stash and repository config never reach the
+operator's repository. The skill arm has `.gnomon/skills/proposed/<id>.md`
+copied into `.gnomon/skills/`. Before any cell runs, the two manifests must
+differ in exactly that path, and this checkout's surface hash must be HEAD's.
+Pairs are task × attempt, and each pair runs its base cell and then its skill
+cell. A clone that cannot be removed is listed in `leftovers` and never
+aborts the trial. On SIGINT or SIGTERM, every clone still on disk is removed
+before the signal takes effect.
+
+**Trust** is settled once, on this checkout under the trial's profile, which
+is the configuration the cells actually run. That profile is the spec's
+`model_profile`. If the spec names none, it is the profile the caller chose
+(`gnomon skill trial --profile X`). Failing both, it is the surface's
+default. Trust, the billed-endpoint check and every cell all use that one
+profile. If it was clamped, the trial refuses
+to start: the cells would run the scaffold's defaults while the report named
+the declared surface. The report's `trust` is the decision, or `null` when the
+surface grants nothing beyond the scaffold. A `model_profile` that doesn't
+exist is refused.
+
+**Validity.** A cell is scored only if its run made at least one metered model
+request (`volatile.requests` on the task record) and its check ran. A run
+ending in `apparatus_failure`, a cell on a different model or endpoint, a
+failed `setup`, or a drifted surface makes the cell `apparatus_failure`, and
+its pair is excluded. Pass is the check's exit 0.
+
+**Statistics.** Pass uses exact McNemar on the pairs, plus a Wilson interval
+per arm. Output tokens, requests and wall time use an exact sign test. `mde`
+gives the fewest discordant pairs, all one way, that can reach `alpha`. A
+token gain counts only when three things hold: the totals fall by
+`min_output_token_gain` (which must be above 0), more pairs fall than rise
+(`skill_lower > skill_higher`), and the sign test has p < `alpha`. A pass gain
+counts only when `min_pass_gain` is above 0. Without the middle
+condition, a single outlier pair could carry the gain.
+
+| `meets_thresholds` | When |
+|---|---|
+| `true` | No excess pass drop, and a declared gain (`min_pass_gain` pairs, or `min_output_token_gain` as above) whose test has p < `alpha` |
+| `false` | The skill arm solved more than `max_pass_drop` fewer pairs, decided on the number alone, or there is no declared gain |
+| `"undetermined"` | No valid pair, budget exhausted, or a declared gain that is not significant at `alpha` |
+
+Exit codes follow the bucket convention of `gnomon task` (§1): 0 is a
+result, 2 a refusal (the skill is declined), 10 an apparatus failure.
+
+| Exit | Means |
+|---|---|
+| 0 | `meets_thresholds: true` |
+| 2 | `meets_thresholds: false` |
+| 10 | `"undetermined"`, or the trial could not start. That covers: no spec, or one out of bounds; no proposal; arms not differing in exactly the skill; this checkout's surface hash not HEAD's; trust clamped under the spec's profile; or an endpoint (primary or fallback) that is not local, with no `[budget] max_requests` and no `--yes-spend` |
+
+`status` is one of `complete`, `budget_exhausted` or `apparatus_failure`. The
+budget is checked before every cell, so a base cell that spent it gets no
+skill cell. One cell can overshoot by its own requests. Only `max_requests` is
+enforced. `max_cost_usd` is reported with `cost_enforced: false`, because
+gnomon reads no prices, and it does not count as a cap for a billed endpoint.
+
+**Output.** `.gnomon-trials/<id>/<utc>-<suffix>/report.json` and
+`cells.jsonl`, one line per cell. The report's keys are `schema`, `skill`,
+`content_sha256`, `spec`, `harness`, `role`, `profile`, `model`, `endpoint`,
+`arms`, `pairs`, `cells`, `endpoints`, `mde`, `thresholds`, `budget`, `trust`,
+`leftovers`, `status`, `meets_thresholds` and `reasons`. A `skill_trial`
+audit record is written in a sealed trail of its own, even when `[audit]` is
+off. It carries `content_sha256`, `report`, `report_sha256`, `spec`,
+`surface_hash_base`, `surface_hash_skill`, `role`, `model`, `endpoint`,
+`pairs`, `cells`, `endpoints`, `status` and `meets_thresholds`. A trial never
+accepts anything.
+
+**Fixture**: `conformance/skill_trial.json` (exit codes, verdicts, statuses,
+report and record keys, and the rules above), asserted by
+`packages/gnomon-core/src/skill_trial.test.ts`. In that test, a scripted fake
+model solves the task only when the skill's text is in its prompt. The tests
+cover:
+- a pass gain (exit 0), the negative control with that text removed (exit 2),
+  and the endpoint down (exit 10);
+- the per-cell budget stop, the billed and fallback refusals, clamped trust,
+  clone isolation, leftovers, SIGINT cleanup, token direction, and the record.

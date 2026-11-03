@@ -61,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1740 TypeScript tests (1448 core, 267 cli, 18
-> natives, 7 tui) and 60 Rust tests — **1800 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1772 TypeScript tests (1478 core, 269 cli, 18
+> natives, 7 tui) and 61 Rust tests — **1833 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1156,7 +1156,10 @@ gnomon skill reject cargo-suite --reason "duplicates verifying-changes"
 
 Each decision is recorded: a `skill_accept` or `skill_reject` audit record
 holding the skill's content hash, the surface hash before and after, and who
-decided, in a sealed trail of its own (docs/CONTRACTS.md §11). It is written
+decided, in a sealed trail of its own (docs/CONTRACTS.md §11). Both refuse
+to run inside an agent session: the harness marks every tool subprocess with
+`GNOMON_AGENT_SESSION`, so the agent's own bash cannot accept a skill. The
+record says `by: "cli"` rather than claiming a person it cannot see. It is written
 even when `[audit]` is off, because an accept is the one act that changes what
 the agent is on purpose.
 
@@ -1166,6 +1169,25 @@ help, such as one rule refusing one role on the same paths again and again.
 Each one points at the records it came from. A candidate is not loaded and not
 hashed, and a person decides what, if anything, becomes a skill
 (docs/CONTRACTS.md §12).
+
+Before accepting, you can measure a proposal:
+
+```bash
+gnomon skill trial cargo-suite --yes   # tasks from .gnomon/trials/default.toml
+```
+
+Each task runs several times **without** the skill and **with** it,
+interleaved, each run in a private clone of HEAD (no remote, its own refs).
+The task's own `check` command judges every run. A run counts only if it made a metered
+model request. The report compares pass rate (exact McNemar) and output tokens
+(sign test) against thresholds the spec declared before the run. It exits 0
+when they are met, 2 when they are not, and 10 when it cannot answer: the
+endpoint was down, the budget ran out, or the effect is too small for the
+number of runs. A `skill_trial` audit record holds the report's hash. The
+trial never accepts anything. Trial specs are part of the surface hash,
+because they decide what a trial lets you accept. Thresholds that would pass a
+skill that did nothing, such as `alpha = 2`, are refused (docs/CONTRACTS.md
+§13).
 
 ---
 

@@ -28,10 +28,14 @@ import {
   loadProposedSkills,
   acceptSkill,
   rejectSkill,
+  SkillRefusal,
   mineCandidates,
   writeCandidates,
   loadCandidates,
   MIN_REPEATS,
+  runTrial,
+  recordTrial,
+  trialExit,
   runTask,
   unstartedTaskRecord,
   type TaskRecord,
@@ -1517,6 +1521,72 @@ async function cmdSkill(args: CliArgs): Promise<void> {
     return;
   }
 
+  if (sub === "trial") {
+    // docs/CONTRACTS.md §13: 0 meets the declared thresholds, 2 does not, 10
+    // no answer (apparatus failure, budget, or an effect below significance).
+    // A trial that cannot start is 10 as well: it produced no answer.
+    if (!id) {
+      console.error("Usage: gnomon skill trial <id> [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]");
+      process.exit(10);
+    }
+    const specName = typeof args.flags.spec === "string" && args.flags.spec !== "true" ? args.flags.spec : undefined;
+    const yesSpend = args.flags["yes-spend"] !== undefined || args.positional.includes("--yes-spend");
+    let outcome: Awaited<ReturnType<typeof runTrial>>;
+    try {
+      // Trust is settled ONCE, on this checkout under the spec's profile --
+      // the configuration the cells actually run (runTrial calls this).
+      // Trust is keyed by a project's real path, so settling it per cell
+      // found every temporary clone untrusted and ran it clamped, while the
+      // report named the declared surface; settling it on the default profile
+      // missed grants the spec's profile adds. A clamped outcome is refused by
+      // the trial; a trusted one runs its cells as declared (their surface is
+      // this checkout's, which the trial checks, plus the skill).
+      let trust: TrustOutcome | undefined;
+      outcome = await runTrial(config, {
+        skill: id,
+        spec: specName,
+        yesSpend,
+        settleTrust: (c) => (trust = settleTrustHeadless(c, trustOptions(args)).outcome),
+        // Each cell is a `gnomon task` in its own clone, with the approval
+        // rule of `gnomon task`: --yes approves gated calls in the clone;
+        // without it they are refused.
+        runCell: (wt, prompt, o) =>
+          runTask(loadConfig(wt, o.profile), prompt, {
+            role: o.role,
+            yes: args.yes,
+            trust,
+          }),
+        log: args.json ? undefined : (line) => console.error(line),
+      });
+    } catch (err) {
+      console.error(`gnomon skill trial could not start: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(10);
+    }
+    const { report, cells } = outcome;
+    const out = recordTrial(config, report, cells);
+    if (args.json) {
+      console.log(JSON.stringify({ ...report, report_path: out.report_path, report_sha256: out.report_sha256 }, null, 2));
+    } else {
+      const p = report.endpoints.pass;
+      console.log(`Trial of ${id} on ${report.model ?? "?"} (${report.role}), ${report.pairs.valid}/${report.pairs.planned} valid pairs`);
+      console.log(`  pass       base ${p.base.passes}/${p.base.n}  skill ${p.skill.passes}/${p.skill.n}  McNemar p = ${p.mcnemar_p}`);
+      const t = report.endpoints.output_tokens;
+      console.log(`  out tokens base ${t.base}  skill ${t.skill}  gain ${t.gain === null ? "?" : `${(t.gain * 100).toFixed(1)}%`}  sign p = ${t.sign.p.toFixed(4)}`);
+      console.log(`  requests   base ${report.endpoints.requests.base}  skill ${report.endpoints.requests.skill}`);
+      console.log(`  cells      ${report.cells.result} result, ${report.cells.refusal} refusal, ${report.cells.apparatus_failure} apparatus_failure`);
+      console.log(`  meets_thresholds: ${String(report.meets_thresholds)} (${report.status})`);
+      for (const r of report.reasons) console.log(`    ${r}`);
+      if (report.leftovers.length > 0) {
+        console.log(`  leftovers  ${report.leftovers.length} sandbox(es) could not be removed:`);
+        for (const l of report.leftovers) console.log(`    ${l}`);
+      }
+      console.log(`Report: ${out.report_path}`);
+      if (out.record) console.log(`Recorded in ${out.trail} (seq ${out.record.seq}, ${out.record.hash?.slice(0, 12)})`);
+      console.log("Nothing was accepted. `gnomon skill accept` remains a person's decision.");
+    }
+    process.exit(trialExit(report.meets_thresholds));
+  }
+
   if (sub === "list") {
     const active = loadSkills(config);
     const pending = loadProposedSkills(config);
@@ -1569,12 +1639,15 @@ async function cmdSkill(args: CliArgs): Promise<void> {
       }
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
-      process.exit(1);
+      // A rule saying no -- an agent session, and the refusals that later
+      // steps add as subclasses -- is a refusal (3, refused_by_gate,
+      // docs/CONTRACTS.md §1), not the `failed` result 1 means.
+      process.exit(err instanceof SkillRefusal ? 3 : 1);
     }
     return;
   }
 
-  console.error(`Unknown skill subcommand: ${sub}. Use: list | accept | reject | mine`);
+  console.error(`Unknown skill subcommand: ${sub}. Use: list | accept | reject | mine | trial`);
   process.exit(1);
 }
 
@@ -2107,6 +2180,14 @@ Commands:
     mine reads the audit trails, with no model call, and writes skill
     candidates (evidence with record pointers, not skill text) to
     .gnomon-skills/candidates/, which is not hashed.
+
+  skill trial <id> [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]
+    Measure a proposal on the tasks in .gnomon/trials/<name>.toml (default
+    "default"): each task x attempt runs once without the skill and once
+    with it, interleaved, each in a fresh private clone at HEAD, judged by
+    the task's check command. Writes .gnomon-trials/<id>/<utc>/ and a
+    skill_trial audit record. Exit 0 meets the declared thresholds, 2 does
+    not, 10 no answer. Never accepts anything.
 
   task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--dir <path>]
     Run one task without a terminal and print the result. --json emits a

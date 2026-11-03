@@ -86,3 +86,19 @@ identical prompt is invisible here and would be recorded as `false-positive`
 when it is really out of scope. `.gnomon/system.md` is the obvious case — it
 changes the prompt, which the fingerprint *does* capture, so this limit binds
 narrower than it sounds.
+
+## Amendment, 2026-11-03: trial specs are behaviour
+
+The scoring rule is unchanged. The definition of behaviour gains one component.
+Each `.gnomon/trials/*.toml` contributes its parsed fields and the verdict it
+gives a fixed set of cells (`verdictOf` in `skill_trial.ts`). `trials/` is
+added to the directories probed even when the scaffold has none, as
+`extensions/` and `skills/proposed/` already are.
+
+The reason: a trial spec decides what `require_trial` accepts, which is the
+system's behaviour even though it isn't the agent's. A spec change that is
+invisible to the hash is a governance hole. One existed, briefly, and review
+found it.
+
+Recorded here because it changes the path count from 13 to 14.
+

@@ -2579,6 +2579,14 @@ describe("sandboxCommand — where bash actually runs", () => {
     expect(c).toContain("-w '/repo'");
   });
 
+  it("passes the agent-session marker into the container", () => {
+    // Found in round-3 review: the host shell got GNOMON_AGENT_SESSION, the
+    // container did not, so `gnomon skill accept` in the image ran unmarked.
+    expect(sandboxCommand("ls", { ...on, agentSession: "s-9" }, "n")).toContain("-e GNOMON_AGENT_SESSION='s-9'");
+    expect(sandboxCommand("ls", on, "n")).toMatch(/-e GNOMON_AGENT_SESSION='pid-\d+'/);
+    expect(sandboxCommand("ls", { root: "/repo" }, "n")).toBe("ls");
+  });
+
   it("maps the caller, or every file comes back owned by root", () => {
     // The first thing testing this found: without --user the operator cannot
     // edit their own repository after the agent writes in it.
@@ -3309,3 +3317,21 @@ describe("gnomon's own records: the routes re-review found", () => {
     }
   );
 });
+
+describe("the agent-session marker", () => {
+  it("is in the environment of every bash the agent runs, naming the session", async () => {
+    // `gnomon skill accept` refuses when it sees this (skills.ts). Fails
+    // before the marker: the shell inherited the parent's environment only.
+    const out = await executeTool("bash", { command: "echo \"[$GNOMON_AGENT_SESSION]\"" }, ctx({ agentSession: "s-42" }), offered);
+    expect(out.code).toBe(TOOL_OK);
+    expect(out.content).toContain("[s-42]");
+    const anon = await executeTool("bash", { command: "echo \"[$GNOMON_AGENT_SESSION]\"" }, ctx(), offered);
+    expect(anon.content).toMatch(/\[pid-\d+\]/);
+  });
+
+  it("agentEnv adds the marker without dropping the rest", () => {
+    const env = tools.agentEnv("s-1", { PATH: "/bin", KEEP: "1" });
+    expect(env).toEqual({ PATH: "/bin", KEEP: "1", GNOMON_AGENT_SESSION: "s-1" });
+  });
+});
+

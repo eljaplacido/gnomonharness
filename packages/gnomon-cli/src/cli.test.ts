@@ -96,6 +96,22 @@ describe("the two surface-hash implementations agree", () => {
     );
   });
 
+  it("both hash trials/, which decides what require_trial accepts", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "gnomon-agree-"));
+    try {
+      const dir = join(tmp, ".gnomon");
+      mkdirSync(join(dir, "trials"), { recursive: true });
+      writeFileSync(join(dir, "system.md"), "x", "utf-8");
+      const before = [recomputeManifest(dir).surface_hash, surfaceHash(dir)];
+      writeFileSync(join(dir, "trials", "default.toml"), '[[task]]\nid = "t"\n', "utf-8");
+      const after = [recomputeManifest(dir).surface_hash, surfaceHash(dir)];
+      expect(after[0]).toBe(after[1]);
+      expect(after[0]).not.toBe(before[0]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("both track a change to the surface", () => {
     const tmp = mkdtempSync(join(tmpdir(), "gnomon-agree-"));
     try {
@@ -255,6 +271,23 @@ describe("first-contact output", () => {
     expect(code).toBe(0);
     expect(out.trim().split("\n")).toHaveLength(1);
     expect(out).toMatch(/^gnomon\/\d+\.\d+\.\d+/);
+  });
+
+  it("skill accept inside an agent session is refused with exit 3, and the proposal stays", () => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-agentaccept-"));
+    try {
+      mkdirSync(join(root, ".gnomon", "skills", "proposed"), { recursive: true });
+      writeFileSync(join(root, ".gnomon", "config.toml"), "[defaults]\n");
+      writeFileSync(join(root, ".gnomon", "roles.toml"), `[roles.smol]\nmodel = "m"\n`);
+      writeFileSync(join(root, ".gnomon", "system.md"), "x\n");
+      writeFileSync(join(root, ".gnomon", "skills", "proposed", "n.md"), "+++\nname = \"n\"\n+++\nbody\n");
+      const { code, out } = run(["skill", "accept", "n", "--dir", root], { GNOMON_AGENT_SESSION: "s-cli" });
+      expect(code).toBe(3);
+      expect(out).toMatch(/agent session/);
+      expect(readFileSync(join(root, ".gnomon", "skills", "proposed", "n.md"), "utf-8")).toContain("body");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("endpoint test on an endpoint nothing routes to says so and does not exit 0", () => {
