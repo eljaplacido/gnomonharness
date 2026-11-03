@@ -776,7 +776,7 @@ export class ShadowRecorder {
         id: "shadow_unreachable",
         declared: `[shadow] url = ${url}`,
         actual:
-          phase === "start"
+          by === "probe"
             ? `unreachable (${cause}); the shadow stopped and records nothing this session`
             : `unreachable after ${failures} connection failures in a row (${cause}); the shadow stopped ` +
               `and records nothing for the rest of this session`,
@@ -785,9 +785,11 @@ export class ShadowRecorder {
     } catch {
       // A trail that cannot be written is the trail's problem, not the run's.
     }
+    // Worded by what found it, so the line is true when it is read: the start
+    // check speaks at the start; three failures can come hours into a session.
     const { attempted, recorded } = this;
     this.warn(
-      phase === "start"
+      by === "probe"
         ? `  [shadow] unreachable at session start: ${url} (${cause}). Off for this session; nothing is recorded.`
         : `  [shadow] unreachable after ${failures} failed connections: ${url} (${cause}). ` +
             `Off for the rest of this session; ${recorded} of ${attempted} decisions recorded.`
