@@ -12,11 +12,12 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { loadConfig, recomputeManifest } from "./config.js";
 import { runTask, type TaskRecord } from "./prompt_loop.js";
 import { verifyTrail, type AuditRecord } from "./audit.js";
 import { settleTrustHeadless } from "./trust.js";
+import { acceptSkill } from "./skills.js";
 import {
   runTrial,
   recordTrial,
@@ -68,6 +69,8 @@ function project(
     profiles?: Record<string, string>;
     /** Lines added to [defaults], e.g. role_profile. */
     defaultsExtra?: string;
+    /** Declare an [audit.attest] signer (an Ed25519 key in the fixture). */
+    attest?: boolean;
     /** Replaces the [thresholds] body. */
     thresholds?: string;
   } = {}
@@ -76,10 +79,24 @@ function project(
     mkdirSync(join(root, rel, ".."), { recursive: true });
     writeFileSync(join(root, rel), text, "utf-8");
   };
+  let attest = "";
+  if (opts.attest) {
+    const keys = generateKeyPairSync("ed25519");
+    // Under .gnomon/: require_trial accepts only a verifier the surface hash pins.
+    put(".gnomon/keys/audit.pub", keys.publicKey.export({ format: "pem", type: "spki" }).toString());
+    put(
+      "signer.mjs",
+      `import { readFileSync } from "node:fs";\nimport { createPrivateKey, sign } from "node:crypto";\n` +
+        `const k = createPrivateKey(${JSON.stringify(keys.privateKey.export({ format: "pem", type: "pkcs8" }).toString())});\n` +
+        `process.stdout.write(sign(null, readFileSync(0), k).toString("base64"));\n`
+    );
+    attest = `\n[audit.attest]\nsign = '"${process.execPath}" "${join(root, "signer.mjs")}"'\npublic_key = ".gnomon/keys/audit.pub"\n`;
+  }
   put(
     ".gnomon/config.toml",
     `[defaults]\napproval = "on_write"\n${opts.defaultsExtra ?? ""}\n[endpoints.local]\nurl = "${opts.url ?? "http://127.0.0.1:9/api/chat"}"\nkind = "ollama"\n\n` +
-      `[resilience]\nattempts = 1\ntransport_grace_ms = 0\n`
+      `[resilience]\nattempts = 1\ntransport_grace_ms = 0\n` +
+      attest
   );
   put(".gnomon/roles.toml", opts.roles ?? `[roles.implement]\nmodel = "stub"\nendpoint = "local"\ntools = ['read', 'write']\n`);
   put(".gnomon/tools.toml", `[[tools]]\nname = "read"\nenabled = true\n\n[[tools]]\nname = "write"\nenabled = true\n`);
@@ -178,7 +195,7 @@ afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe("gnomon skill trial", () => {
   it("reports a pass gain when the skill's text is what solves the task (exit 0)", async () => {
-    project();
+    project({ attest: true });
     const { report, cells } = await trial(scripted);
 
     expect(report.arms.differ).toEqual([".gnomon/skills/fix-it.md"]);
@@ -203,6 +220,18 @@ describe("gnomon skill trial", () => {
     expect(existsSync(join(root, ".gnomon", "skills", "proposed", "fix-it.md"))).toBe(true);
     expect(existsSync(join(root, ".gnomon", "skills", "fix-it.md"))).toBe(false);
     expect(existsSync(join(root, "fixed.txt"))).toBe(false);
+
+    // A person can then cite it: the base arm's surface is this checkout's
+    // and the surface declares a signer, so the report passes every check
+    // `require_trial` makes, the signed head included.
+    const out = recordTrial(loadConfig(root), report, cells);
+    const config = loadConfig(root);
+    const strict = { ...config, policy: { ...config.policy, skills: { require_trial: true } } };
+    const d = acceptSkill(strict, "fix-it", { evidence: out.report_path, interactive: false });
+    expect(d.record).toMatchObject({
+      evidence: { report: out.report_path, report_sha256: out.report_sha256, meets_thresholds: true, attested: true },
+      require_trial: true,
+    });
   }, 120_000);
 
   it("negative control: without the skill's text in the prompt there is no gain (exit 2)", async () => {
@@ -544,6 +573,26 @@ describe("gnomon skill trial", () => {
 });
 
 describe("recording a trial", () => {
+  it("records only a report runTrial produced, unchanged, with its own cells", async () => {
+    // Round-3 review called recordTrial with a report it made up, and the
+    // declared signer signed it. Fails before the fix.
+    project({ tasks: 1, attempts: 1, check: `node -e "process.exit(0)"` });
+    const { report, cells } = await runTrial(loadConfig(root), { skill: "fix-it", runCell: tokens(() => 1) });
+    const forged = { ...report, meets_thresholds: true, reasons: ["forged"] } as typeof report;
+    expect(() => recordTrial(loadConfig(root), forged, cells)).toThrow(/only a report that runTrial produced/);
+    expect(() => recordTrial(loadConfig(root), report, [...cells])).toThrow(/only a report that runTrial produced/);
+    // And the real one cannot be edited in place first.
+    expect(() => {
+      (report as { meets_thresholds: unknown }).meets_thresholds = true;
+    }).toThrow(TypeError);
+    expect(() => {
+      (report.endpoints.pass as { gain: number }).gain = 99;
+    }).toThrow(TypeError);
+    expect(existsSync(join(root, ".gnomon-trials"))).toBe(false);
+    expect(recordTrial(loadConfig(root), report, cells).record?.kind).toBe("skill_trial");
+  }, 120_000);
+
+
   it("two trials recorded in the same millisecond get two report directories and two sealed trails", async () => {
     // Fails before the suffix: the second overwrote the first's report.json,
     // appended to its cells.jsonl, and restarted its trail at seq 0.

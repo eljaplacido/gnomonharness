@@ -137,6 +137,33 @@
   The docs now state the threat model plainly. This is a pattern check over a
   command's text, not containment: run-time paths, scripts and MCP calls are
   not seen by it. The kernel sandbox is what contains them.
+- **`gnomon skill accept ID --evidence REPORT` and `[skills] require_trial`.**
+  An accept can now cite a `gnomon skill trial` report. The `skill_accept`
+  record carries the report's hash and points at the `skill_trial` record
+  that vouches for it. That record must be alone in a sealed trail whose
+  chain verifies, and must agree with the report. With `[audit.attest]`
+  declared, the trail must also be covered by signed heads. The citation is
+  refused, with exit 3, when the report is for different skill content, ran
+  against a different base surface hash, or no record vouches for it.
+  `require_trial = true` in `policy.toml` is off by default. When it is on,
+  accept refuses in three cases: without such a report, with one that did not
+  meet its thresholds, or when no `[audit.attest]` signer is declared. A
+  signer is required because without one a sealed trail can be built by
+  hand.
+  - The verifier must be pinned by the surface hash: a `public_key` that
+    gnomon checks itself, inline or under `.gnomon/`. A `verify` command
+    alone is refused, because `make` and `npm run` run files the hash does
+    not cover.
+  - `recordTrial` signs only reports `runTrial` produced, frozen. That does
+    not stop forgery: a stubbed runner plus a key-file signer still passes.
+  - The docs say plainly what each kind of signer proves. A key file any of
+    your processes can use does not stop an agent with a shell. A
+    person-present signer (`ssh-add -c`, a FIDO key, a passphrase) or the
+    kernel sandbox does.
+
+  Nothing accepts a skill automatically. Step 3 of
+  `docs/design/SKILL-TRIALS.md`.
+
 - **`gnomon skill trial ID`: measure a proposed skill before accepting it.**
   A proposal could only be accepted on a reading of it.
   - The trial runs the tasks in `.gnomon/trials/<name>.toml` once per arm per

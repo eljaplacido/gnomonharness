@@ -1189,6 +1189,25 @@ because they decide what a trial lets you accept. Thresholds that would pass a
 skill that did nothing, such as `alpha = 2`, are refused (docs/CONTRACTS.md
 §13).
 
+To accept on that evidence, cite the report:
+
+```bash
+gnomon skill accept cargo-suite --evidence .gnomon-trials/cargo-suite/<utc>/report.json
+```
+
+The citation is refused, with exit 3, unless three things hold. The report
+must be for this exact skill content and must have run against the current
+surface hash. And a `skill_trial` record must vouch for it: that record must
+sit in a sealed trail of its own whose chain verifies, and must agree with
+the report. With `[audit.attest]` declared, the trail must also be covered by
+signed heads.
+The `skill_accept` record then carries the report's hash. With
+`[skills] require_trial = true` in `policy.toml`, accept also refuses in
+three cases: without such a report, with one that did not meet its
+thresholds, or with no `[audit.attest]` signer declared. A signer is needed
+because without one, anyone with a shell can build a sealed trail by hand. That setting is
+off by default: a small project should not need a trial to save a note.
+
 ---
 
 ## Roles and the Trust Dial
@@ -1884,7 +1903,7 @@ chain = true                       # required; attest with chain off is refused 
 [audit.attest]
 sign = "./sign-head.sh"            # digest on stdin → signature on stdout. Declaring it is what turns signing on.
 verify = "./verify-head.sh"        # optional external checker; exit 0 = valid. For keys node:crypto cannot check.
-public_key = "keys/audit.pub"      # PEM inline or a path, for in-process verification
+public_key = ".gnomon/keys/audit.pub"  # PEM inline or a path; under require_trial it must be in the surface (inline, or under .gnomon/)
 key_id = "ops-2026"                # opaque label, recorded in each head and passed to the signer
 algorithm = "ed25519"              # default
 signature_encoding = "base64"      # base64 (default) | hex
@@ -1892,6 +1911,25 @@ every = 0                          # sign a head every N records; 0 = only when 
 timeout_sec = 10                   # default; the signer is killed after this
 dir = ".gnomon-audit/heads"        # default: a heads/ subdirectory beside the trail
 ```
+
+**What a signer proves depends on who can make it sign.** Against an agent
+with a shell on this machine, the guarantee comes **only** from the last two
+rows. With a key file, the agent can run the signer too. A script that runs a
+trial with a stubbed runner and lets that signer sign gets an accepted skill.
+Restricting `recordTrial` to reports that `runTrial` produced does not change
+this.
+
+| Signer | Proves | Stops an agent with a shell? |
+|---|---|---|
+| A key file, or an ssh-agent without confirmation | The trail was not edited afterwards by someone without the key | **No.** Any process of yours, the agent's shell included, can sign, and that includes signing a stubbed trial |
+| ssh-agent with `ssh-add -c`, a FIDO or hardware key that needs a touch, a passphrase prompt | A person confirmed each signature, at the end of the trial they ran | Yes, as long as the person checks what they are confirming |
+| Any signer, with the agent in the kernel sandbox (`exec os`, #74) | The agent could not reach the key | Yes |
+
+`[skills] require_trial` is **off by default**, and opt-in. When it is on,
+gnomon checks evidence against a `public_key` it verifies itself: inline, or a
+file under `.gnomon/`. Swapping that key moves the surface hash, so the
+surface needs trust again. A `verify` command alone is refused, because
+`make`, `npm run` or `python -m` can run files the hash does not cover.
 
 Signer output over **8 KiB** is refused — enough for an Ed25519 signature (88
 base64 chars), an RSA-4096 one (684) or an armoured PGP block, and bounded so a
