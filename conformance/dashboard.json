@@ -1,6 +1,6 @@
 {
   "schema": "gnomon.dashboard/1",
-  "description": "gnomon dashboard (alias ui): the local read-only command center. CONTRACTS.md section 17. Pinned by packages/gnomon-cli/src/dashboard.test.ts against dashboard_server.ts and dashboard.ts.",
+  "description": "gnomon dashboard (alias ui): the local command center. CONTRACTS.md section 17. Pinned by packages/gnomon-cli/src/dashboard.test.ts against dashboard_actions.ts, dashboard_server.ts and dashboard.ts.",
   "exit_codes": {
     "stopped": 0,
     "usage": 1,
@@ -8,17 +8,24 @@
     "launch_failed": 10
   },
   "action_states": ["enabled", "planned"],
+  "action_confirms": ["none", "required"],
   "actions": [
-    { "name": "audit.verify", "argv": ["audit", "verify"], "state": "enabled" },
-    { "name": "doctor.scan", "argv": ["doctor", "--json"], "state": "enabled" },
-    { "name": "check.run", "argv": ["check", "--base", "<rev>", "--json"], "state": "planned" },
-    { "name": "trust.grant", "argv": ["trust", "grant"], "state": "planned" },
-    { "name": "trust.revoke", "argv": ["trust", "revoke"], "state": "planned" },
-    { "name": "init", "argv": ["init"], "state": "planned" },
-    { "name": "guard.install", "argv": ["guard", "install", "<harness>"], "state": "planned" },
-    { "name": "setup.pull", "argv": ["setup", "--pull", "<tag>", "--yes", "--json"], "state": "planned" },
-    { "name": "setup.speed_check", "argv": ["setup", "--speed-check", "--json"], "state": "planned" }
+    { "name": "audit.verify", "argv": ["audit", "verify"], "state": "enabled", "confirm": "none" },
+    { "name": "doctor.scan", "argv": ["doctor", "--json", "--dir", "<dir>"], "state": "enabled", "confirm": "none" },
+    { "name": "setup.plan", "argv": ["setup", "--json", "--dir", "<dir>", "<choices>"], "state": "enabled", "confirm": "none" },
+    { "name": "setup.pull", "argv": ["setup", "--pull", "<tag>", "--json", "--dir", "<dir>", "<choices>"], "state": "enabled", "confirm": "required" },
+    { "name": "setup.speed_check", "argv": ["setup", "--model", "<tag>", "--speed-check", "--json", "--dir", "<dir>"], "state": "enabled", "confirm": "none" },
+    { "name": "key.set", "argv": ["key", "set", "<variable>", "--dir", "<dir>"], "state": "enabled", "confirm": "required" },
+    { "name": "setup.apply", "argv": ["setup", "--yes", "--expect-proposal", "<digest>", "--json", "--dir", "<dir>", "<choices>"], "state": "enabled", "confirm": "required" },
+    { "name": "check.run", "argv": ["check", "--base", "<rev>", "--json", "--dir", "<dir>"], "state": "enabled", "confirm": "none" },
+    { "name": "trust.grant", "argv": ["trust", "grant", "--dir", "<dir>"], "state": "enabled", "confirm": "required" },
+    { "name": "trust.revoke", "argv": ["trust", "revoke", "--dir", "<dir>"], "state": "enabled", "confirm": "required" },
+    { "name": "endpoint.test", "argv": ["endpoint", "test", "<endpoint>", "--dir", "<dir>"], "state": "enabled", "confirm": "required" },
+    { "name": "init", "argv": ["init", "--dir", "<dir>"], "state": "planned", "confirm": "required" },
+    { "name": "guard.install", "argv": ["guard", "install", "<harness>"], "state": "planned", "confirm": "required" }
   ],
+  "choices": ["model", "cloud_endpoint", "cloud_model", "cloud_key_env", "mode", "hybrid_control"],
+  "confirm_status": 428,
   "routes": {
     "static": ["/", "/app.js", "/app.css", "/icon.svg", "/fonts/cinzel-wordmark.woff2", "/fonts/OFL.txt"],
     "unauthenticated": ["POST /auth"],
@@ -32,7 +39,8 @@
       "GET /api/p/<id>/governance",
       "GET /api/p/<id>/measurements",
       "GET /api/p/<id>/contracts",
-      "POST /api/actions/<name>"
+      "POST /api/actions/<name>",
+      "GET /api/jobs/<id>"
     ]
   },
   "csp": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"

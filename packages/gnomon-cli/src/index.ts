@@ -2440,12 +2440,13 @@ Commands:
     hooks.json), or with --write add it to this project's own config.
 
   dashboard [--port <n>] [--no-open] [--dir <path>]
-    A read-only command center in the browser: projects, sessions as a
-    timeline, what the policy refused, audit-chain verification, contracts
-    and token measurements, all read from what gnomon already records.
-    Serves 127.0.0.1 only; the printed link signs one tab in once. Writes
-    nothing. Ctrl-C stops it. Exit 0 stopped, 4 port unavailable, 10 failed
-    to start. Alias: ui.
+    A command center in the browser: projects, sessions as a timeline, what
+    the policy refused, audit-chain verification, contracts and token
+    measurements, read from what gnomon already records; and setup, check,
+    trust and endpoint test as buttons that run these same commands. A
+    change asks you to confirm what it will do first. Serves 127.0.0.1 only;
+    the printed link signs one tab in once. Ctrl-C stops it. Exit 0 stopped,
+    4 port unavailable, 10 failed to start. Alias: ui.
 
   prompt [--continue | --resume <id>] [--trust]
     Interactive agent loop. --continue resumes the most recent session,

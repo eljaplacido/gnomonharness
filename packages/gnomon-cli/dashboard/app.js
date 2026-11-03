@@ -4,9 +4,12 @@
 // HTML. Styles are set through the CSSOM, which the page's CSP allows; it
 // forbids inline style attributes and inline script.
 //
-// Every button names the gnomon command it maps to. Read-only ones run; the
-// rest show the command in the "Runs as" bar, disabled, until a later PR
-// wires them through the server's action table.
+// Every button names the gnomon command it maps to, and the server runs that
+// command from its own action table; the page never sends an argv. A button
+// that writes, downloads or may spend asks first: the server says what it will
+// do, and only the Confirm in that dialog sends the one-use nonce that runs
+// it. A key is typed into that dialog and goes to `gnomon key set` on stdin;
+// the page keeps no copy.
 
 const TOKEN_KEY = "gnomon.dashboard.token";
 const S = {
@@ -21,8 +24,9 @@ const S = {
   sel: null,
   open: {},
   verify: {},
-  doctor: null,
-  setupStep: 1,
+  setup: null,
+  checks: {},
+  checkRev: {},
   tables: {},
   loading: false,
 };
@@ -165,7 +169,7 @@ function renderGate(text) {
       h("span", { class: "brand" }, sundial(), h("span", { class: "wordmark", text: "GNOMON" })),
       h("h1", { text: "Sign in from the terminal" }),
       h("p", { class: "lede", text }),
-      h("p", { class: "muted small", text: "The dashboard serves this machine only (127.0.0.1) and reads what gnomon already records. It changes nothing." })));
+      h("p", { class: "muted small", text: "The dashboard serves this machine only (127.0.0.1) and reads what gnomon already records. Anything it changes runs as a gnomon command, after you confirm it." })));
 }
 
 // ── routing ─────────────────────────────────────────────────────────────────
@@ -233,23 +237,40 @@ async function fetchScreen() {
 const current = () => S.data[`${S.screen}:${S.pid}:${S.trail || ""}`];
 
 // ── actions: the "Runs as" bar ──────────────────────────────────────────────
-function commandFor(name, fill = {}, pid = S.pid) {
+// The argv a button runs, as the server's own table has it. `<dir>` is the
+// project's root, `<choices>` the setup flags; the server fills both again
+// from its own list when it runs, so this text is for reading, not sending.
+function fillArgv(name, params = {}, pid = S.pid) {
   const a = S.meta.actions.find((x) => x.name === name);
-  const argv = a.argv.map((x) => (x.startsWith("<") ? fill[x.slice(1, -1)] || x : x));
   const p = S.meta.projects.find((x) => x.id === pid);
-  const dir = p && p.source !== "here" ? ` --dir ${p.root}` : "";
-  return `gnomon ${argv.join(" ")}${dir}`;
+  const c = params.choices || {};
+  const flags = [
+    ["--model", c.model], ["--cloud-endpoint", c.cloud_endpoint], ["--cloud-model", c.cloud_model],
+    ["--cloud-key-env", c.cloud_key_env], ["--mode", c.mode], ["--hybrid-control", c.hybrid_control],
+  ].filter(([, v]) => v).flat();
+  return a.argv.flatMap((x) => {
+    if (x === "<dir>") return [p ? p.root : x];
+    if (x === "<choices>") return flags;
+    if (x.startsWith("<")) return [params[x.slice(1, -1)] || x];
+    return [x];
+  });
 }
+function commandFor(name, params = {}, pid = S.pid) {
+  return "gnomon " + fillArgv(name, params, pid).map((a) => (/^[A-Za-z0-9_./\\:@~^{}+=<>-]+$/.test(a) ? a : JSON.stringify(a))).join(" ");
+}
+const actionOf = (name) => S.meta.actions.find((x) => x.name === name);
 function actionButton(name, label, opts = {}) {
-  const a = S.meta.actions.find((x) => x.name === name);
+  const a = actionOf(name);
   const planned = !a || a.state !== "enabled";
-  const text = opts.command || commandFor(name, opts.fill, opts.pid);
+  const params = opts.params || opts.fill || {};
+  const text = opts.command || commandFor(name, params, opts.pid);
   return h("button", {
     type: "button",
     class: `btn${opts.primary ? " primary" : ""}${opts.big ? " big" : ""}`,
-    title: planned ? `next PR · ${text}` : text,
+    disabled: opts.disabled ? true : null,
+    title: planned ? `next PR · ${text}` : a.confirm === "required" ? `asks you first · ${text}` : text,
     "aria-describedby": planned ? "runbar-note" : null,
-    onClick: () => (planned ? stage({ text, planned: true }) : opts.run ? opts.run(text) : null),
+    onClick: () => (planned ? stage({ text, planned: true }) : opts.run ? opts.run(text) : perform(name, params, { pid: opts.pid })),
   }, label, planned ? h("span", { class: "sr-only", text: " (next PR)" }) : null);
 }
 function plainCommand(label, text, note) {
@@ -259,23 +280,134 @@ function stage(bar) {
   S.bar = bar;
   renderBar();
 }
-async function runAction(name, body, text, pid = S.pid) {
-  stage({ text, running: true });
+
+/**
+ * The server says what a confirmed action will do; this shows it and waits for
+ * the person. A key, when the action takes one, is typed here and handed back
+ * once: it is never kept in the page's state.
+ */
+function confirmDialog({ title, command, effect, details, confirmLabel, secretLabel }) {
+  return new Promise((done) => {
+    const pw = secretLabel ? h("input", { type: "password", class: "field", autocomplete: "off", spellcheck: "false", "aria-label": secretLabel }) : null;
+    const msg = h("p", { class: "bad small", role: "alert" });
+    let dlg = null;
+    const finish = (yes) => {
+      let value;
+      if (yes && pw) {
+        value = pw.value.trim();
+        if (!value) {
+          msg.textContent = "Paste the key first.";
+          pw.focus();
+          return;
+        }
+      }
+      if (pw) pw.value = "";
+      dlg.close();
+      dlg.remove();
+      done(yes ? { value } : null);
+    };
+    dlg = h("dialog", { class: "confirm", "aria-labelledby": "dlg-h" },
+      h("h2", { id: "dlg-h", text: title }),
+      h("ul", { class: "effect" }, effect.map((e) => h("li", { text: e }))),
+      details || null,
+      pw ? h("label", { class: "picker" }, secretLabel, pw) : null,
+      msg,
+      h("p", { class: "muted small" }, "Runs as ", h("code", { text: command })),
+      h("div", { class: "row" },
+        h("button", { type: "button", class: "btn primary", text: confirmLabel || "Confirm", onClick: () => finish(true) }),
+        h("button", { type: "button", class: "btn", text: "Cancel", onClick: () => finish(false) })));
+    dlg.addEventListener("cancel", (e) => {
+      e.preventDefault();
+      finish(false);
+    });
+    document.body.append(dlg);
+    dlg.showModal();
+    (pw || dlg.querySelector(".btn.primary")).focus();
+  });
+}
+
+/** POST an action; answers {status, body} without throwing on 4xx, which carry the reason. */
+async function call(name, body) {
+  const res = await fetch(`/api/actions/${name}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${S.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    cache: "no-store",
+    credentials: "omit",
+  });
+  let json = null;
   try {
-    const r = await api(`/api/actions/${name}`, { method: "POST", body: JSON.stringify({ project: pid, ...body }) });
-    stage({ text, done: r });
-    return r;
+    json = await res.json();
+  } catch {
+    json = null;
+  }
+  if (res.status === 401) {
+    S.token = null;
+    try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* storage off */ }
+    renderGate("This tab is not signed in. Use the link the terminal printed; press Enter there for a new one.");
+    throw new Error("unauthorized");
+  }
+  return { status: res.status, body: json };
+}
+
+const CONFIRM_TITLE = {
+  "setup.pull": "Download this model?",
+  "key.set": "Store this key?",
+  "setup.apply": "Write this change to .gnomon/?",
+  "trust.grant": "Trust this surface on this machine?",
+  "trust.revoke": "Revoke trust for this project?",
+  "endpoint.test": "Send one token through this endpoint?",
+};
+
+/**
+ * Run one action from the server's table. One that asks first gets a 428 with
+ * what it will do, shown in a dialog; only the person's Confirm sends the
+ * one-use nonce that runs it. Answers the server's body, or null.
+ */
+async function perform(name, params = {}, o = {}) {
+  const pid = o.pid || S.pid;
+  const body = { project: pid, ...params };
+  let text = commandFor(name, params, pid);
+  stage({ text, running: true, name });
+  let r;
+  try {
+    r = await call(name, body);
+    if (r.status === 428) {
+      const c = r.body.confirm;
+      text = c.command;
+      stage({ text, confirming: true, name });
+      const answer = await confirmDialog({
+        title: o.title || CONFIRM_TITLE[name] || "Run this?",
+        command: c.command,
+        effect: c.effect,
+        details: o.details ? o.details(r.body) : null,
+        confirmLabel: o.confirmLabel,
+        secretLabel: o.secretLabel,
+      });
+      if (!answer) {
+        stage({ text, cancelled: true, name });
+        return null;
+      }
+      stage({ text, running: true, name });
+      r = await call(name, { ...body, confirm: c.nonce, ...(answer.value !== undefined ? { value: answer.value } : {}) });
+    }
   } catch (e) {
-    stage({ text, error: e.message });
+    if (e.message !== "unauthorized") stage({ text, error: e.message, name });
     return null;
   }
+  if (r.status >= 400) {
+    stage({ text, error: (r.body && r.body.error) || `HTTP ${r.status}`, name });
+    return { failed: true, status: r.status, ...(r.body || {}) };
+  }
+  stage({ text: r.body.command || text, done: r.body, name });
+  return r.body;
 }
+
 function verifyNow(trail, pid = S.pid) {
   const p = S.meta.projects.find((x) => x.id === pid);
   if (!p?.hasSurface) return;
-  const text = commandFor("audit.verify", {}, pid) + (trail ? ` ${trail}` : "");
-  runAction("audit.verify", trail ? { trail } : {}, text, pid).then((r) => {
-    if (r) {
+  perform("audit.verify", trail ? { trail } : {}, { pid }).then((r) => {
+    if (r && !r.failed) {
       S.verify[`${pid}:${trail || "*"}`] = r;
       render();
     }
@@ -289,13 +421,28 @@ function verifySummary(r) {
   const unsealed = r.trails.filter((t) => !t.sealed).length;
   return `exit ${r.exit} · ${n - broken} of ${plural(n, "trail")} intact${broken ? `, ${broken} BROKEN` : ""}${unsealed ? ` · ${unsealed} not sealed` : ""}`;
 }
+const CHECK_VERDICT = { 0: "held", 2: "a check failed", 10: "no verdict" };
+function doneNote(d) {
+  const exit = `exit ${d.exit}${d.timed_out ? " (stopped: it ran past its time limit)" : ""}`;
+  switch (d.action) {
+    case "audit.verify": return `Ran in-process with the function \`gnomon audit verify\` uses: ${verifySummary(d)}.`;
+    case "doctor.scan": return d.available ? exit : "This build has no `gnomon doctor`.";
+    case "check.run": return `${exit}: ${CHECK_VERDICT[d.exit] || "see the output"}. Recorded as a \`check\` record, as the command records it.`;
+    case "trust.grant": return `${exit}${d.trusted === true ? ": trusted, as recorded in the trust store" : d.trusted === false ? ": the trust store does not show this surface trusted" : ""}.`;
+    case "trust.revoke": return `${exit}.`;
+    case "key.set": return d.exit === 0 ? `${exit}: stored. The page kept no copy.` : `${exit}: not stored.`;
+    case "endpoint.test": return `${exit}: ${d.exit === 0 ? "it answered" : d.exit === 10 ? "not tested" : "it did not answer"}.`;
+    case "setup.pull": return d.job ? "Downloading: progress is on the Setup screen." : exit;
+    default: return d.json && d.json.why ? `${exit}: ${d.json.why}` : exit;
+  }
+}
 function renderBar() {
   const bar = document.getElementById("runbar");
   if (!bar) return;
   const b = S.bar;
   const kids = [h("span", { class: "label" }, icon(ICONS.prompt, 18), "Runs as")];
   if (!b) {
-    kids.push(h("span", { class: "say", text: "Every button here is a gnomon command. Read-only ones run; the rest show their command." }));
+    kids.push(h("span", { class: "say", text: "Every button here is a gnomon command. One that writes, downloads or spends asks you first." }));
   } else {
     kids.push(h("code", { text: b.text }));
     const row = h("div", { class: "row" });
@@ -306,15 +453,17 @@ function renderBar() {
     row.append(h("button", { type: "button", class: "btn", text: "Dismiss", onClick: () => stage(null) }));
     kids.push(row);
     let note = "";
-    if (b.planned) note = b.note || "Planned: the dashboard runs this in a later PR. It is read-only today; run it in a terminal.";
+    if (b.planned) note = b.note || "Planned: the dashboard runs this in a later PR; run it in a terminal.";
     else if (b.running) note = "Running…";
-    else if (b.error) note = `Failed: ${b.error}`;
-    else if (b.done?.action === "audit.verify") note = `Ran in-process with the function \`gnomon audit verify\` uses: ${verifySummary(b.done)}.`;
-    else if (b.done?.action === "doctor.scan") note = b.done.available ? `exit ${b.done.exit}${b.done.timed_out ? " (timed out)" : ""}` : "This build has no `gnomon doctor`: it arrives with the setup wizard.";
+    else if (b.confirming) note = "Waiting for your confirmation. Nothing has run.";
+    else if (b.cancelled) note = "Cancelled: nothing ran.";
+    else if (b.error) note = `Not run, or failed: ${b.error}`;
+    else if (b.done) note = doneNote(b.done);
     kids.push(h("span", { class: "note", id: "runbar-note", text: note }));
   }
   bar.replaceChildren(...kids);
 }
+const sleep = (n) => new Promise((r) => setTimeout(r, n));
 
 // ── shell ───────────────────────────────────────────────────────────────────
 function sundial() {
@@ -341,7 +490,7 @@ function render() {
       h("strong", null, icon(ICONS.lock, 16), "This machine only"),
       h("span", { class: "mono", text: location.host }),
       h("span", { text: S.meta.harness }),
-      h("span", { text: "Read-only: this build changes nothing." })));
+      h("span", { text: "Changes run as gnomon commands, after you confirm them." })));
   const main = h("main", { class: "main", id: "main" },
     h("div", { class: "runbar", id: "runbar", role: "status", "aria-live": "polite" }),
     h("div", { class: "wrap" }, screen()));
@@ -461,69 +610,107 @@ function projectCard(p) {
         h("span", { class: "muted tiny", text: `Last ${p.ticks.length} turns in run order (newest right)` }))
       : null,
     h("div", { class: "cardfoot" },
-      actionButton("check.run", "Run check", { fill: { rev: "HEAD~1" }, pid: p.id }),
+      actionButton("check.run", "Run check", { params: { rev: "HEAD~1" }, pid: p.id, run: () => runCheck("HEAD~1", p.id) }),
       h("button", { type: "button", class: "btn", text: "Verify trail", onClick: () => verifyNow(null, p.id) }),
       h("a", { class: "btn", href: `#/session/${p.id}` }, "Sessions", icon(ICONS.arrow, 16))));
 }
 
 // ── 2. Setup ────────────────────────────────────────────────────────────────
+// `gnomon setup`, one step per screen, through its --json interface. Every
+// step but the last runs setup WITHOUT --yes, which writes nothing and stops
+// at the proposal (exit 4). The download is its own confirmed action; the key
+// goes to `gnomon key set` on stdin; the write is `--yes --expect-proposal`
+// with the digest of the diff shown here, so setup itself refuses anything
+// else.
 const SETUP_STEPS = [
   [1, "Scan this machine"],
   [2, "Pick a local model"],
-  [3, "Connect a cloud model"],
-  [4, "Choose how work splits"],
-  [5, "Review the change"],
+  [3, "Speed check"],
+  [4, "Connect a cloud model"],
+  [5, "Choose how work splits"],
+  [6, "Review and accept"],
 ];
+const freshSetup = (pid) => ({
+  pid, step: 1, doctor: null, plan: null, model: null, job: null, speed: null,
+  cloudForm: { preset: "", url: "", key_env: "CLOUD_API_KEY", model: "" }, cloud: null, cloudPlan: null,
+  mode: null, control: "observe", modePlan: null, review: null, result: null, tested: null, busy: false,
+});
+function setupState() {
+  if (!S.setup || S.setup.pid !== S.pid) S.setup = freshSetup(S.pid);
+  return S.setup;
+}
+function setupChoices(o = {}) {
+  const u = setupState();
+  const c = {};
+  if (u.model) c.model = u.model;
+  const cloud = o.cloud === undefined ? u.cloud : o.cloud;
+  if (cloud) {
+    c.cloud_endpoint = cloud.endpoint;
+    if (cloud.model) c.cloud_model = cloud.model;
+    if (cloud.key_env) c.cloud_key_env = cloud.key_env;
+  }
+  if (!o.noMode && u.mode) c.mode = u.mode;
+  if (!o.noMode && u.mode === "hybrid") c.hybrid_control = u.control;
+  return c;
+}
+/** Anything chosen before this step changes what the later ones planned. */
+function forgetFrom(step) {
+  const u = setupState();
+  if (step <= 3) u.speed = null;
+  if (step <= 4) u.cloudPlan = null;
+  if (step <= 5) u.modePlan = null;
+  u.review = null;
+  u.result = null;
+}
+async function busyDo(fn) {
+  const u = setupState();
+  u.busy = true;
+  render();
+  try {
+    await fn();
+  } finally {
+    u.busy = false;
+    if (S.screen === "setup") render();
+  }
+}
+const report = (r) => (r && !r.failed && r.json && r.json.schema === "gnomon.setup/1" ? r.json : null);
+const whyOf = (r) => (r ? (r.json && (r.json.why || r.json.error)) || r.error || (r.stderr || "").trim().split("\n").pop() || `exit ${r.exit}` : "");
+
 function setupScreen(d) {
-  const lands = "Available after setup lands: the setup wizard (doctor, setup, proposal) is built on its own branch, feat/setup-wizard, and this screen calls it once it is in your build.";
-  const step = S.setupStep;
-  const stepPanel = () => {
-    if (step === 1) {
-      if (!d.commands.doctor) {
-        return h("div", { class: "panel" },
-          h("h2", { text: "Scan your hardware" }),
-          h("p", { class: "lede", text: "gnomon reads what this machine has: operating system, memory, graphics, and any model server already running here. It only reads." }),
-          h("p", { class: "empty", text: lands }),
-          h("div", { class: "row" }, h("button", { type: "button", class: "btn primary", disabled: true, title: "after setup lands · gnomon doctor --json", text: "Scan this machine" }),
-            h("span", { class: "muted small mono", text: "gnomon doctor --json" })));
-      }
-      const r = S.doctor;
-      return h("div", { class: "panel" },
-        h("h2", { text: "Scan your hardware" }),
-        h("p", { class: "lede", text: "Runs `gnomon doctor --json`: it reads the machine and any model server listening here. Nothing is written or sent anywhere." }),
-        h("div", { class: "row" }, h("button", {
-          type: "button", class: "btn primary", text: "Scan this machine",
-          onClick: () => runAction("doctor.scan", {}, "gnomon doctor --json").then((x) => { S.doctor = x; render(); }),
-        })),
-        r ? doctorResult(r) : null);
-    }
-    const planned = {
-      2: ["Your recommended local model", "Picked from gnomon's dated model catalog for what the scan found. Nothing downloads until you press the button, which shows the size.", "gnomon setup --pull <tag> --yes --json"],
-      3: ["Connect a cloud model (optional)", "A cloud model can plan while the local one builds. The key goes to gnomon's key store on stdin, never into .gnomon/ and never on a command line.", "gnomon endpoint add · gnomon key set <NAME> --stdin · gnomon endpoint test <name>"],
-      4: ["Choose how gnomon splits the work", "Local only, hybrid or cloud first, from your own speed check. The choice is written as a proposal, not straight into the surface.", "gnomon setup --speed-check --json"],
-      5: ["Review the change", "Everything setup would write into .gnomon/, as a diff. Nothing changes until you accept it, and then the surface hash moves once.", "gnomon proposal accept <id>"],
-    }[step];
-    return h("div", { class: "panel" },
-      h("h2", { text: planned[0] }), h("p", { class: "lede", text: planned[1] }),
-      h("p", { class: "empty", text: (step === 3 ? "`gnomon endpoint add` works today in a terminal. " : "") +
-        ((step === 5 ? d.commands.proposal : d.commands.setup)
-          ? "This build has the command. Running it from here, with its consent steps as buttons, is the next dashboard PR; run it in a terminal for now."
-          : lands) }),
-      h("div", { class: "row" }, h("button", { type: "button", class: "btn primary", disabled: true, title: `after setup lands · ${planned[2]}`, text: "Continue" }),
-        h("span", { class: "muted small mono", text: planned[2] })));
+  const u = setupState();
+  const step = u.step;
+  if (!d.commands.setup || !d.commands.doctor) {
+    return [
+      header("First run", "Set up gnomon", "This screen runs `gnomon doctor` and `gnomon setup`, and this build of the CLI has neither."),
+      h("p", { class: "empty", text: "Update gnomon (`gnomon update`), then start `gnomon dashboard` again." }),
+    ];
+  }
+  const goStep = (n) => { u.step = n; render(); enterStep(d); };
+  const nav = (back, next, nextLabel = "Continue") => h("div", { class: "row" },
+    back ? h("button", { type: "button", class: "btn", text: "Back", onClick: () => goStep(back) }) : null,
+    next ? h("button", { type: "button", class: "btn primary", text: nextLabel, disabled: u.busy ? true : null, onClick: () => goStep(next) }) : null);
+  const panels = {
+    1: () => scanPanel(d, nav),
+    2: () => modelPanel(d, nav),
+    3: () => speedPanel(d, nav),
+    4: () => cloudPanel(d, nav),
+    5: () => modePanel(d, nav),
+    6: () => reviewPanel(d, nav),
   };
   const roles = d.declared.roles || [];
   return [
-    header("First run", "Set up gnomon", "Five steps: find a model this machine can run, optionally a cloud model to plan with, and how the work splits. Nothing is downloaded, spent or written until you say yes, and each step is a gnomon command."),
+    header("First run", "Set up gnomon",
+      "Find a model this machine can run, optionally a cloud model to plan with, and how the work splits. Each step is `gnomon setup` or `gnomon doctor`; nothing is downloaded, spent or written until you confirm it, and .gnomon/ only when you accept the diff."),
     h("ol", { class: "wizard", "aria-label": "Setup steps" },
       SETUP_STEPS.map(([n, label]) => h("li", null, h("button", {
-        type: "button", class: "stepbtn", "aria-current": n === step ? "step" : null,
-        onClick: () => { S.setupStep = n; render(); },
+        type: "button", class: "stepbtn", "aria-current": n === step ? "step" : null, disabled: u.busy ? true : null,
+        onClick: () => goStep(n),
       }, h("span", { class: "num", text: String(n) }), label)))),
-    stepPanel(),
+    d.catalog ? h("p", { class: "muted small", text: `Model catalog ${d.catalog.as_of} (${d.catalog.label}), shipped with this build; never fetched.` }) : null,
+    panels[step](),
     h("section", { "aria-labelledby": "decl-h" },
       h("div", { class: "sechead" }, h("h2", { id: "decl-h", text: "What this project's surface declares now" }),
-        h("span", { class: "muted small", text: "roles.toml and config.toml, as routed today" })),
+        h("span", { class: "muted small", text: d.has_surface ? "roles.toml and config.toml, as routed today" : "no .gnomon/ here yet: setup writes one" })),
       roles.length
         ? h("div", { class: "tablebox" }, h("table", null,
           h("thead", null, h("tr", null, ["Role", "Model", "Endpoint", "Where"].map((x) => h("th", { scope: "col", text: x })))),
@@ -534,20 +721,410 @@ function setupScreen(d) {
             h("td", null, h("span", { class: "row" }, h("span", { class: `dot ${r.where}` }), `${r.where}${r.provider ? " · " + r.provider : ""}`, r.problem ? h("span", { class: "bad small", text: r.problem }) : null)))))))
         : h("p", { class: "empty", text: d.declared.note || "No roles declared." }),
       d.declared.model_url_override ? h("p", { class: "problem", text: "GNOMON_MODEL_URL is set in this environment: every role's requests go there instead, and the surface hash does not show it." }) : null,
-      h("div", { class: "row" },
-        plainCommand("List endpoints", "gnomon endpoint list"),
-        plainCommand("Test endpoints", "gnomon endpoint test"))),
+      d.endpoints.length
+        ? h("div", { class: "row" }, h("span", { class: "muted small", text: "Test an endpoint with one token:" }),
+          d.endpoints.map((n) => actionButton("endpoint.test", n, { params: { endpoint: n }, run: () => testEndpoint(n) })))
+        : null,
+      u.tested ? h("pre", { class: "well", text: `${u.tested.command}\n${u.tested.output || u.tested.stderr || ""}`.trim() }) : null),
   ];
 }
-function doctorResult(r) {
-  if (!r.available) return h("p", { class: "empty", text: "This build has no `gnomon doctor`. It arrives with the setup wizard." });
-  const doc = r.doctor;
-  const rows = doc && typeof doc === "object" && !Array.isArray(doc)
-    ? Object.entries(doc).map(([k, v]) => [k, typeof v === "object" && v !== null ? h("pre", { class: "well", text: JSON.stringify(v, null, 2) }) : String(v)])
-    : [];
+
+/** Each step reads what it needs from setup when it is opened. */
+function enterStep(d) {
+  const u = setupState();
+  if (u.step === 2 && !u.plan) busyDo(() => planFor("plan", setupChoices({ cloud: null, noMode: true })));
+  if (u.step === 5 && !u.modePlan) busyDo(() => planFor("modePlan", setupChoices({ noMode: true })));
+  if (u.step === 6 && !u.review && !u.result) busyDo(prepareApply);
+  void d;
+}
+async function planFor(slot, choices) {
+  const u = setupState();
+  const r = await perform("setup.plan", { choices });
+  u[slot] = r;
+  // Off a terminal setup takes the best installed model; show that as chosen
+  // rather than leave a choice it has already made looking open.
+  const rec = report(r) && report(r).recommendation;
+  if (slot === "plan" && u.model === null && rec && rec.best_installed) u.model = rec.best_installed;
+}
+
+async function testEndpoint(name) {
+  const r = await perform("endpoint.test", { endpoint: name }, { confirmLabel: "Send one token" });
+  if (r && !r.failed) {
+    setupState().tested = r;
+    render();
+  }
+}
+
+// Step 1 ────────────────────────────────────────────────────────────────────
+function scanPanel(d, nav) {
+  const u = setupState();
+  const r = u.doctor;
   return h("div", { class: "panel" },
-    h("h3", { text: `What the scan found · exit ${r.exit}` }),
-    rows.length ? facts(rows) : h("pre", { class: "well", text: r.stderr || "No JSON came back." }));
+    h("h2", { text: "Scan your hardware" }),
+    h("p", { class: "lede", text: "Runs `gnomon doctor --json`: it reads this machine and any model server listening on 127.0.0.1, and asks each role's endpoint for its model list (a GET; nothing is spent). It writes nothing." }),
+    h("div", { class: "row" },
+      h("button", {
+        type: "button", class: "btn primary", text: r ? "Scan again" : "Scan this machine", disabled: u.busy ? true : null,
+        onClick: () => busyDo(async () => { u.doctor = await perform("doctor.scan", {}); }),
+      }),
+      h("span", { class: "muted small mono", text: commandFor("doctor.scan") })),
+    r ? doctorResult(r) : null,
+    nav(null, 2));
+}
+function doctorResult(r) {
+  if (r.failed) return h("p", { class: "problem", text: r.error });
+  if (!r.available) return h("p", { class: "empty", text: "This build has no `gnomon doctor`." });
+  const doc = r.doctor;
+  if (!doc || doc.schema !== "gnomon.doctor/1") return h("pre", { class: "well", text: r.stderr || "No report came back." });
+  const m = doc.machine || {};
+  const gpus = (m.gpus || []).map((g) => `${g.name}${g.memory_gib !== null ? ` · ${g.memory_gib} GiB` : ""}${g.unified ? " (unified)" : ""}`).join("; ") || "none found";
+  const rts = (doc.runtimes || []).map((x) => `${x.label} :${x.port} ${x.state}${x.models && x.models.length ? ` (${x.models.length} models)` : ""}`).join(" · ");
+  return h("div", { class: "panel sunk" },
+    h("h3", { text: `What the scan found · exit ${doc.exit} (${doc.exit === 0 ? "nothing needs attention" : doc.exit === 1 ? "something needs attention" : "could not run"})` }),
+    facts([
+      ["Machine", `${m.os || "–"} ${m.arch || ""} · ${m.cpu_count || "?"} cores · ${m.ram_gib ?? "?"} GiB RAM`],
+      ["GPUs", gpus],
+      ["Memory that bounds a model", doc.memory ? doc.memory.label : "–"],
+      ["Model servers on 127.0.0.1", rts || "none answered"],
+      ["Setup would recommend", doc.recommended || "nothing in the catalog fits"],
+      ["Surface", doc.surface ? `${short(doc.surface.hash)}${doc.surface.profile ? ` · profile ${doc.surface.profile}` : ""}` : "no .gnomon/ here yet"],
+    ]),
+    doc.findings && doc.findings.length
+      ? h("ul", { class: "findings" }, doc.findings.map((f) => h("li", { class: f.severity === "problem" ? "bad" : "muted" },
+        h("strong", { text: `${f.kind}: ` }), f.message, f.fix ? h("span", { class: "mono small", text: `  → ${f.fix}` }) : null)))
+      : h("p", { class: "muted small", text: "No findings." }));
+}
+
+// Step 2 ────────────────────────────────────────────────────────────────────
+function modelPanel(d, nav) {
+  const u = setupState();
+  const rep = report(u.plan);
+  const rec = rep && rep.recommendation;
+  const chosen = u.model === null ? "not chosen yet" : u.model === "" ? "none: a cloud model does the work" : u.model;
+  const job = u.job;
+  return h("div", { class: "panel" },
+    h("h2", { text: "Your local model" }),
+    h("p", { class: "lede", text: "Picked from the catalog for what the scan found, with the reason. A model already installed needs no download. A download runs only when you press its button and confirm the size; llama.cpp, LM Studio and vLLM manage their own models, so for those setup names the command instead." }),
+    u.busy && !rep ? h("p", { class: "muted", role: "status", text: `Asking setup… (${commandFor("setup.plan", { choices: setupChoices({ cloud: null, noMode: true }) })})` }) : null,
+    u.plan && u.plan.failed ? h("p", { class: "problem", text: u.plan.error }) : null,
+    rec ? [
+      h("p", { class: "well", text: rec.why }),
+      rec.notes && rec.notes.length ? h("ul", { class: "findings" }, rec.notes.map((n) => h("li", { class: "muted", text: n }))) : null,
+      rep.catalog && rep.catalog.stale ? h("p", { class: "problem", text: rep.catalog.stale }) : null,
+      h("div", { class: "tablebox" }, h("table", null,
+        h("caption", { text: `Options for ${rec.memory.label}` }),
+        h("thead", null, h("tr", null, ["Model", "From the catalog", "Fits", "Status", ""].map((x) => h("th", { scope: "col", text: x })))),
+        h("tbody", null, rec.options.map((o) => h("tr", { class: o.tag === u.model ? "chosen" : null },
+          h("th", { scope: "row", class: "mono", text: o.tag + (o.tag === rec.top ? " · recommended" : "") }),
+          h("td", { text: o.catalog ? `${o.catalog.name} · ${o.catalog.tier}${o.catalog.measured ? " · measured by gnomon" : " · not measured by gnomon"}` : "not in the catalog" }),
+          h("td", null, h("span", { class: o.fit === "over" ? "bad" : o.fit === "fits" ? "ok" : "muted", text: o.fit }), h("div", { class: "muted tiny", text: o.fit_why })),
+          h("td", { text: o.status }),
+          h("td", null, o.installed
+            ? h("button", { type: "button", class: `btn${o.tag === u.model ? " primary" : ""}`, text: o.tag === u.model ? "Chosen" : "Use this", onClick: () => { u.model = o.tag; forgetFrom(3); render(); } })
+            : o.runtime === "ollama"
+              ? h("button", {
+                type: "button", class: "btn", disabled: u.busy || (job && job.state === "running") ? true : null,
+                text: `Download${o.download_gb !== undefined ? ` (~${o.download_gb} GB)` : ""}…`,
+                title: `asks you first · ${commandFor("setup.pull", { tag: o.tag })}`,
+                onClick: () => pull(o.tag),
+              })
+              : h("span", { class: "muted small", text: "load it in its own server" }))))))),
+    ] : null,
+    job ? jobPanel(job) : null,
+    h("div", { class: "row" },
+      h("span", { class: "muted", text: "Chosen: " }), h("strong", { class: "mono", text: chosen }),
+      h("button", {
+        type: "button", class: "btn", text: "None: a cloud model does the work",
+        title: "Sets the mode to cloud first (all_remote). An installed model stays declared as the local_first profile to switch back to; the diff in step 6 shows it.",
+        onClick: () => { u.model = ""; u.mode = "cloud"; forgetFrom(3); render(); },
+      }),
+      h("button", { type: "button", class: "btn", text: "Ask setup again", disabled: u.busy ? true : null, onClick: () => { u.plan = null; enterStep(d); } })),
+    nav(1, 3));
+}
+function pullDetails(b) {
+  const size = b.download_gb !== null && b.download_gb !== undefined ? `~${b.download_gb} GB` : "unknown size";
+  const free = b.disk_free && b.disk_free.bytes !== null ? `${Math.floor(b.disk_free.bytes / 1e9)} GB free` : "free space unknown";
+  return h("p", { class: "figure" }, h("span", { class: "big", text: size }), h("span", { class: "muted", text: `to download · ${free}` }));
+}
+async function pull(tag) {
+  const u = setupState();
+  const r = await perform("setup.pull", { tag }, { confirmLabel: `Download ${tag}`, details: pullDetails });
+  if (!r || r.failed || !r.job) return;
+  u.job = r.job;
+  render();
+  pollJob();
+}
+async function pollJob() {
+  const u = setupState();
+  while (u.job && u.job.state === "running") {
+    await sleep(1000);
+    try {
+      u.job = (await api(`/api/jobs/${u.job.id}`)).job;
+    } catch (e) {
+      u.job = { ...u.job, state: "done", exit: null, progress: [...u.job.progress, `Lost track of it: ${e.message}`] };
+    }
+    if (u.job.state === "done") {
+      const res = u.job.result;
+      if (res && res.pull && res.pull.status === "pulled") {
+        u.model = res.pull.tag;
+        u.plan = null;
+        forgetFrom(3);
+      }
+      stage({ text: u.job.command, done: { action: "setup.pull.done", exit: u.job.exit, json: res } });
+    }
+    if (S.screen === "setup" && u.step === 2) {
+      render();
+      if (u.job.state === "done" && !u.plan) enterStep(current());
+    }
+  }
+}
+function jobPanel(job) {
+  const res = job.result;
+  const outcome = job.state === "running"
+    ? "Downloading…"
+    : res && res.pull && res.pull.status === "pulled"
+      ? `Downloaded ${res.pull.tag}. It is chosen; nothing in .gnomon/ was written.`
+      : `Not downloaded (exit ${job.exit}${res && res.pull ? `, ${res.pull.status}` : ""}). ${res ? res.why || (res.pull && res.pull.error) || "" : ""}`;
+  return h("div", { class: "panel sunk", role: "status", "aria-live": "polite" },
+    h("h3", { text: outcome }),
+    h("p", { class: "muted small mono", text: job.command }),
+    h("pre", { class: "well", text: job.progress.slice(-8).join("\n") || "…" }));
+}
+
+// Step 3 ────────────────────────────────────────────────────────────────────
+function speedPanel(d, nav) {
+  const u = setupState();
+  if (!u.model) {
+    return h("div", { class: "panel" }, h("h2", { text: "Speed check" }),
+      h("p", { class: "empty", text: "No local model is chosen, so there is nothing to measure. Pick one in step 2, or carry on with a cloud model." }),
+      nav(2, 4));
+  }
+  const rep = report(u.speed);
+  const sp = rep && rep.speed;
+  return h("div", { class: "panel" },
+    h("h2", { text: `How fast is ${u.model} here?` }),
+    h("p", { class: "lede", text: "Loads the model and sends one short prompt to 127.0.0.1, about 10 s (longer while a large model loads the first time). Nothing is written and nothing leaves this machine." }),
+    h("div", { class: "row" },
+      h("button", {
+        type: "button", class: "btn primary", text: sp ? "Measure again" : "Run the speed check", disabled: u.busy ? true : null,
+        onClick: () => busyDo(async () => { u.speed = await perform("setup.speed_check", { tag: u.model }); forgetFrom(4); }),
+      }),
+      h("span", { class: "muted small mono", text: commandFor("setup.speed_check", { tag: u.model }) })),
+    u.busy ? h("p", { class: "muted", role: "status", text: "Measuring…" }) : null,
+    u.speed && !rep ? h("p", { class: "problem", text: whyOf(u.speed) }) : null,
+    sp && sp.error ? h("p", { class: "problem", text: `The speed check did not finish: ${sp.error}` }) : null,
+    sp && !sp.error && !sp.skipped ? h("div", { class: "tiles" },
+      tile("Prompt", sp.prefillTps !== undefined ? `${Math.round(sp.prefillTps).toLocaleString("en-US")}` : "–", "tokens per second"),
+      tile("Generation", sp.genTps !== undefined ? sp.genTps.toFixed(1) : "–", "tokens per second"),
+      tile("Load", sp.loadS !== undefined ? `${sp.loadS.toFixed(1)} s` : "–", sp.source === "server" ? "the server's own timings" : "wall clock, approximate")) : null,
+    rep && rep.mode ? h("p", { class: "well", text: `Setup suggests ${MODE_TEXT[rep.mode.suggested]}: ${rep.mode.why}${rep.mode.provisional ? " (provisional thresholds)" : ""}` }) : null,
+    nav(2, 4, sp ? "Continue" : "Skip"));
+}
+const MODE_TEXT = { local_only: "local only", hybrid: "hybrid (cloud plans, local builds)", cloud_first: "cloud first" };
+
+// Step 4 ────────────────────────────────────────────────────────────────────
+function cloudPanel(d, nav) {
+  const u = setupState();
+  const f = u.cloudForm;
+  const preset = d.cloud_presets.find((p) => p.key === f.preset);
+  const choice = () => {
+    if (f.preset === "custom") return f.url ? { endpoint: f.url.trim(), model: f.model.trim(), key_env: f.key_env.trim() || "CLOUD_API_KEY" } : null;
+    return preset ? { endpoint: preset.key, model: (f.model || preset.model || "").trim() } : null;
+  };
+  const rep = report(u.cloudPlan);
+  const cloud = rep && rep.cloud;
+  const radio = (value, label, note) => h("label", { class: "choice" },
+    h("input", { type: "radio", name: "cloud", value, checked: f.preset === value ? true : null, onChange: () => { f.preset = value; f.model = ""; u.cloud = null; forgetFrom(4); render(); } }),
+    h("span", null, h("strong", { text: label }), note ? h("span", { class: "muted small", text: ` ${note}` }) : null));
+  const input = (key, label, attrs = {}) => h("label", { class: "picker" }, label,
+    h("input", { class: "field", value: f[key], spellcheck: "false", autocomplete: "off", onInput: (e) => { f[key] = e.target.value; }, ...attrs }));
+  return h("div", { class: "panel" },
+    h("h2", { text: "Connect a cloud model (optional)" }),
+    h("p", { class: "lede", text: "A cloud model can plan while the local one builds. The key goes to gnomon's key store through `gnomon key set` on stdin: never into .gnomon/, never on a command line, never kept by this page." }),
+    h("fieldset", { class: "choices" }, h("legend", { class: "muted small", text: "Endpoint" }),
+      radio("", "No cloud model", "local only"),
+      d.cloud_presets.map((p) => radio(p.key, p.note, p.model ? `· default model ${p.model}` : "")),
+      radio("custom", "Custom", "any OpenAI-compatible URL")),
+    f.preset === "custom" ? h("div", { class: "row" },
+      input("url", "URL (…/chat/completions)", { placeholder: "https://…/v1/chat/completions", inputmode: "url" }),
+      input("key_env", "Key variable name")) : null,
+    f.preset ? input("model", "Model for planning", { placeholder: preset && preset.model ? preset.model : "model id" }) : null,
+    f.preset ? h("div", { class: "row" },
+      h("button", {
+        type: "button", class: "btn primary", text: "Check this choice", disabled: u.busy ? true : null,
+        onClick: () => {
+          const c = choice();
+          if (!c) return;
+          busyDo(async () => {
+            u.cloudPlan = await perform("setup.plan", { choices: setupChoices({ cloud: c, noMode: true }) });
+            u.cloud = report(u.cloudPlan) && report(u.cloudPlan).cloud ? c : null;
+            forgetFrom(5);
+          });
+        },
+      }),
+      h("span", { class: "muted small", text: "Runs setup without --yes: nothing is written or spent." })) : null,
+    u.cloudPlan && !cloud ? h("p", { class: "problem", text: whyOf(u.cloudPlan) }) : null,
+    cloud ? h("div", { class: "panel sunk" },
+      facts([
+        ["Endpoint", `${cloud.endpoint} · ${cloud.url}`],
+        ["Model", cloud.model],
+        ["Key", cloud.key_env ? `$${cloud.key_env} · ${cloud.key_held ? "held on this machine" : "not set yet"}` : "none needed"],
+      ]),
+      cloud.key_env && !cloud.key_held ? h("div", { class: "row" },
+        actionButton("key.set", `Store the key for $${cloud.key_env}…`, {
+          primary: true, params: { variable: cloud.key_env },
+          run: () => storeKey(cloud.key_env),
+        }),
+        h("span", { class: "muted small", text: `Into ${d.key_store}, mode 0600.` })) : null,
+      h("p", { class: "muted small", text: "Setup checks the key with one token only at a terminal. Here, test it after the change is written: the endpoint has to be declared first." })) : null,
+    nav(3, 5));
+}
+async function storeKey(variable) {
+  const u = setupState();
+  const r = await perform("key.set", { variable }, { secretLabel: `The key for $${variable}`, confirmLabel: "Store key" });
+  if (r && !r.failed && r.exit === 0 && u.cloud) {
+    await busyDo(async () => {
+      u.cloudPlan = await perform("setup.plan", { choices: setupChoices({ noMode: true }) });
+    });
+  }
+}
+
+// Step 5 ────────────────────────────────────────────────────────────────────
+function modePanel(d, nav) {
+  const u = setupState();
+  const rep = report(u.modePlan);
+  const suggested = rep && rep.mode ? rep.mode.suggested : null;
+  const pick = u.mode || (suggested === "local_only" ? "local" : suggested === "cloud_first" ? "cloud" : suggested === "hybrid" ? "hybrid" : null);
+  const can = { local: Boolean(u.model), hybrid: Boolean(u.model && u.cloud), cloud: Boolean(u.cloud) };
+  const sp = report(u.speed) && report(u.speed).speed;
+  const radio = (value, label, note) => h("label", { class: "choice" },
+    h("input", { type: "radio", name: "mode", value, checked: pick === value ? true : null, disabled: can[value] ? null : true, onChange: () => { u.mode = value; u.review = null; render(); } }),
+    h("span", null, h("strong", { text: label }), h("span", { class: "muted small", text: ` ${note}${can[value] ? "" : " · needs " + (value === "local" ? "a local model" : value === "cloud" ? "a cloud model" : "both")}` })));
+  return h("div", { class: "panel" },
+    h("h2", { text: "How gnomon splits the work" }),
+    u.busy && !rep ? h("p", { class: "muted", role: "status", text: "Asking setup…" }) : null,
+    u.modePlan && !rep ? h("p", { class: "problem", text: whyOf(u.modePlan) }) : null,
+    rep && rep.mode ? h("p", { class: "well", text: `Setup suggests ${MODE_TEXT[rep.mode.suggested]}: ${rep.mode.why}${rep.mode.provisional ? " (provisional thresholds)" : ""}` }) : null,
+    sp && sp.genTps !== undefined ? h("p", { class: "muted small", text: `Measured in step 3: generation ${sp.genTps.toFixed(1)} tok/s${sp.prefillTps !== undefined ? `, prompt ${Math.round(sp.prefillTps)} tok/s` : ""}. Setup's suggestion here is made without that run; the speed check's own suggestion was shown there.` }) : null,
+    h("fieldset", { class: "choices" }, h("legend", { class: "muted small", text: "Mode" }),
+      radio("local", "Local only", "every role on this machine (role_profile local_first)"),
+      radio("hybrid", "Hybrid", "a cloud model plans, this machine builds (frontier_plan)"),
+      radio("cloud", "Cloud first", "a cloud model does the work (all_remote)")),
+    pick === "hybrid" ? h("label", { class: "picker" }, "Hybrid control (recorded as a preference; it takes effect when escalation, PR #102, is merged)",
+      h("select", { onChange: (e) => { u.control = e.target.value; u.review = null; } },
+        ["off", "observe", "ask", "auto"].map((c) => h("option", { value: c, selected: u.control === c ? true : null, text: c + (c === "observe" ? " (default)" : "") })))) : null,
+    nav(4, pick ? 6 : null, "Review the change"));
+}
+
+// Step 6 ────────────────────────────────────────────────────────────────────
+async function prepareApply() {
+  const u = setupState();
+  if (!u.mode) {
+    // What step 5 showed preselected: setup's own suggestion.
+    const rep = report(u.modePlan);
+    const m = rep && rep.mode && rep.mode.suggested;
+    if (m) u.mode = m === "local_only" ? "local" : m === "cloud_first" ? "cloud" : "hybrid";
+  }
+  const choices = setupChoices();
+  const text = commandFor("setup.apply", { choices, digest: "<digest>" });
+  stage({ text, running: true });
+  let r;
+  try {
+    r = await call("setup.apply", { project: S.pid, choices });
+  } catch (e) {
+    if (e.message !== "unauthorized") stage({ text, error: e.message });
+    return;
+  }
+  if (r.status === 428) {
+    u.review = { ...r.body, choices };
+    stage({ text: r.body.confirm.command, confirming: true });
+  } else {
+    u.review = { error: (r.body && r.body.error) || `HTTP ${r.status}`, report: r.body && r.body.report, choices };
+    stage({ text, error: u.review.error });
+  }
+}
+async function acceptApply() {
+  const u = setupState();
+  const rv = u.review;
+  if (!rv || !rv.confirm) return;
+  await busyDo(async () => {
+    stage({ text: rv.confirm.command, running: true });
+    let r;
+    try {
+      r = await call("setup.apply", { project: S.pid, choices: rv.choices, confirm: rv.confirm.nonce });
+    } catch (e) {
+      if (e.message !== "unauthorized") stage({ text: rv.confirm.command, error: e.message });
+      return;
+    }
+    if (r.status >= 400) {
+      stage({ text: rv.confirm.command, error: (r.body && r.body.error) || `HTTP ${r.status}` });
+      u.review = null;
+      return;
+    }
+    u.result = r.body;
+    u.review = null;
+    stage({ text: r.body.command, done: r.body });
+    // The surface (and maybe the project's .gnomon/) is new: read it again.
+    try { S.meta = await api("/api/meta"); } catch { /* signed out */ }
+    S.data = {};
+    await load(true);
+  });
+}
+function diffView(lines) {
+  return h("pre", { class: "well diff" }, lines.map((l) => h("span", { class: l.startsWith("+ ") ? "add" : l.startsWith("- ") ? "del" : "ctx", text: l + "\n" })));
+}
+function reviewPanel(d, nav) {
+  const u = setupState();
+  if (u.result) return resultPanel(d, nav);
+  const rv = u.review;
+  if (!rv) return h("div", { class: "panel" }, h("h2", { text: "Review the change" }), h("p", { class: "muted", role: "status", text: u.busy ? "Asking setup for the change…" : "Nothing planned yet." }), nav(5, null));
+  if (rv.error) {
+    return h("div", { class: "panel" }, h("h2", { text: "Setup has nothing to write yet" }),
+      h("p", { class: "problem", text: rv.error }),
+      h("button", { type: "button", class: "btn", text: "Ask again", onClick: () => { u.review = null; enterStep(d); } }),
+      nav(5, null));
+  }
+  const rep = rv.report;
+  const p = rep.proposal;
+  return h("div", { class: "panel" },
+    h("h2", { text: "Review the change" }),
+    h("ul", { class: "effect" }, rv.confirm.effect.map((e) => h("li", { text: e }))),
+    facts([
+      ["Local model", rep.local ? `${rep.local.tag}${rep.local.small && rep.local.small !== rep.local.tag ? ` (smol: ${rep.local.small})` : ""}${rep.local.endpoint ? ` @${rep.local.endpoint}` : ""}` : "none"],
+      ["Cloud model", rep.cloud ? `${rep.cloud.model} @${rep.cloud.endpoint}${rep.cloud.key_env ? ` · $${rep.cloud.key_env} ${rep.cloud.key_held ? "held" : "NOT SET"}` : ""}` : "none"],
+      ["Mode", rep.mode ? `${MODE_TEXT[rep.mode.chosen]} · role_profile ${rep.mode.role_profile}` : "–"],
+      ["Hybrid control", rep.hybrid_control ? `${rep.hybrid_control.value} · recorded only, not active yet` : "–"],
+      ["Surface now", p.fresh ? "no .gnomon/ yet: created from `gnomon init`'s scaffold" : short(rep.surface_hash && rep.surface_hash.before)],
+      ["Proposal", short(p.digest)],
+    ]),
+    p.files.length
+      ? p.files.map((f) => h("div", null, h("h3", { class: "mono", text: `${f.action === "create" ? "+ create" : "~ modify"} .gnomon/${f.path}` }), diffView(f.diff)))
+      : h("p", { class: "empty", text: "The surface already says this: no change to .gnomon/. Accepting writes only this machine's facts file." }),
+    h("p", { class: "muted small", text: `Also ${p.facts_file} beside .gnomon/: this machine's facts for \`gnomon doctor\`, gitignored, not part of the surface.` }),
+    h("div", { class: "row" },
+      h("button", { type: "button", class: "btn primary big", text: "Accept and write", disabled: u.busy ? true : null, onClick: acceptApply }),
+      h("button", { type: "button", class: "btn", text: "Plan again", disabled: u.busy ? true : null, onClick: () => { u.review = null; enterStep(d); } }),
+      h("span", { class: "muted small mono", text: rv.confirm.command })),
+    nav(5, null));
+}
+function resultPanel(d, nav) {
+  const u = setupState();
+  const r = u.result;
+  const rep = r.json;
+  const ok = r.exit === 0;
+  return h("div", { class: "panel" },
+    h("h2", { text: ok ? "Written" : r.exit === 3 ? "Not written: the change moved" : `Not written (exit ${r.exit})` }),
+    ok && rep && rep.surface_hash
+      ? h("p", { class: "status" }, mark(true), `Surface ${rep.surface_hash.before ? short(rep.surface_hash.before) + " → " : ""}${short(rep.surface_hash.after)}. Commit .gnomon/ to carry it to another machine.`)
+      : h("p", { class: "problem", text: whyOf(r) }),
+    ok ? h("p", { class: "muted", text: "The hash moved. If the surface now grants more than gnomon's defaults (a key sent to a new host, say), the next launch asks you to trust it; you can also do that on the Governance screen." }) : null,
+    ok && rep && rep.cloud ? h("div", { class: "row" },
+      actionButton("endpoint.test", `Test ${rep.cloud.endpoint} with one token…`, { params: { endpoint: rep.cloud.endpoint }, run: () => testEndpoint(rep.cloud.endpoint) })) : null,
+    ok && rep && rep.next ? h("ul", { class: "findings" }, rep.next.map((n) => h("li", { class: "mono", text: n }))) : null,
+    h("div", { class: "row" },
+      !ok ? h("button", { type: "button", class: "btn primary", text: "Review the change again", onClick: () => { u.result = null; u.review = null; enterStep(d); } }) : null,
+      ok ? h("a", { class: "btn", href: `#/governance/${S.pid}` }, "Trust and governance", icon(ICONS.arrow, 16)) : null),
+    nav(5, null));
 }
 
 // ── 3. Session ──────────────────────────────────────────────────────────────
@@ -791,16 +1368,17 @@ function governanceScreen(d) {
   return [
     header("Governance", "What the policy allowed, and what it stopped",
       "gnomon's tools check every call against the rules in .gnomon/ before it runs, `gnomon guard` asks the same of another harness, and `gnomon check` judges a change afterwards. All three write to the hash-chained trail this page reads.",
-      actionButton("check.run", "Check this branch", { fill: { rev: "origin/master" }, primary: true, big: true })),
+      h("a", { class: "btn big primary", href: "#run-h", text: "Check a change" })),
+    checkPanel(),
     h("section", { "aria-labelledby": "map-h" },
       h("div", { class: "sechead" }, h("h2", { id: "map-h", text: "The policy, and what each rule stopped" }),
         h("span", { class: "muted small", text: `${fmtN(totalRefused)} refused by a named rule · ${fmtN(d.unnamed.count)} with none named · ${fmtN(d.approvals.approved)} approved, ${fmtN(d.approvals.declined)} declined at the gate` })),
       h("div", { class: "rules" },
         d.rules.map((r) => ruleRow(r.rule, RULE_TEXT[r.rule] || r.rule, r.declared.join(" · "), r.refused + r.asked,
           r.refused + r.asked ? `${fmtN(r.refused)} refused${r.asked ? ` · ${fmtN(r.asked)} asked` : ""}` : "nothing refused", r.examples)),
-        ruleRow("unnamed", "Refused, no rule in the record", "a delegation refused, a sub-turn that ended refused, a person saying no", d.unnamed.count,
+        ruleRow("unnamed", "Refused, no published rule names it", "a person saying no at the approval gate, a delegation outside task_allow, a sub-turn that ended refused", d.unnamed.count,
           d.unnamed.count ? `${fmtN(d.unnamed.count)} refused` : "none", d.unnamed.examples)),
-      h("p", { class: "muted small", text: "Rule names are the published set (CONTRACTS §10). A refusal whose record names no rule is counted apart, never guessed into one." })),
+      h("p", { class: "muted small", text: "Rule names are the published set (CONTRACTS §10), read off each refusal's record. A refusal no published rule names is counted apart, never guessed into one." })),
     h("div", { class: "twocol" },
       h("section", { class: "panel", "aria-labelledby": "chain-h" },
         h("h2", { id: "chain-h", text: "Audit chain" }),
@@ -836,13 +1414,66 @@ function trustPanel(tr) {
   return h("section", { class: "panel", "aria-labelledby": "trust-h" },
     h("h2", { id: "trust-h", text: "Trust on this machine" }),
     h("p", { class: `status ${tr.status === "untrusted" ? "bad" : ""}` }, mark(tr.status !== "untrusted"), status),
-    tr.grants.length
-      ? h("div", { class: "tablebox" }, h("table", null,
-        h("thead", null, h("tr", null, ["What", "This surface grants", "Default", ""].map((x) => h("th", { scope: "col", text: x })))),
-        h("tbody", null, tr.grants.map((g) => h("tr", null, h("th", { scope: "row", text: g.subject }), h("td", { text: g.grants }), h("td", { class: "muted", text: g.default }), h("td", { class: g.new ? "bad" : "muted", text: g.new ? "new" : "" }))))))
-      : null,
+    tr.grants.length ? grantsTable(tr.grants) : null,
     h("p", { class: "muted small", text: tr.store.length ? `Trusted here before: ${tr.store.map((e) => `${short(e.surface_hash)} (${e.at.slice(0, 10)}, ${e.by})`).join(", ")}. The store keeps hashes and grants, not file lists, so it can say which grants are new, not which file changed.` : "Nothing trusted for this project in the store." }),
-    h("div", { class: "row" }, actionButton("trust.grant", "Grant trust"), actionButton("trust.revoke", "Revoke")));
+    h("div", { class: "row" },
+      actionButton("trust.grant", "Grant trust…", { disabled: tr.grants.length === 0 || tr.status === "trusted", run: () => trustAction("trust.grant") }),
+      actionButton("trust.revoke", "Revoke…", { disabled: tr.store.length === 0, run: () => trustAction("trust.revoke") })),
+    tr.grants.length === 0 ? h("p", { class: "muted small", text: "Nothing to grant: this surface asks for nothing beyond gnomon's defaults." }) : null);
+}
+function grantsTable(grants) {
+  return h("div", { class: "tablebox" }, h("table", null,
+    h("thead", null, h("tr", null, ["What", "This surface grants", "Default", ""].map((x) => h("th", { scope: "col", text: x })))),
+    h("tbody", null, grants.map((g) => h("tr", null, h("th", { scope: "row", text: g.subject }), h("td", { text: g.grants }), h("td", { class: "muted", text: g.default }), h("td", { class: g.new ? "bad" : "muted", text: g.new ? "new" : "" }))))));
+}
+async function trustAction(name) {
+  const r = await perform(name, {}, {
+    confirmLabel: name === "trust.grant" ? "Trust it" : "Revoke",
+    details: (b) => (name === "trust.grant" && b.trust && b.trust.grants.length ? grantsTable(b.trust.grants) : null),
+  });
+  if (r && !r.failed) {
+    S.data = {};
+    await load(true);
+  }
+}
+
+// `gnomon check` from a button: the verdict and each check's findings, the
+// exit shown as it is (0 held, 2 a check failed, 10 no verdict).
+function checkPanel() {
+  const rev = S.checkRev[S.pid] || "origin/master";
+  const r = S.checks[S.pid];
+  return h("section", { class: "panel", "aria-labelledby": "run-h" },
+    h("h2", { id: "run-h", text: "Check a change now" }),
+    h("p", { class: "muted small", text: "Runs `gnomon check --base REV --json` here: the change from REV to the working tree, judged by the rules at REV. It writes a `check` record, as the command does, and changes nothing else." }),
+    h("div", { class: "row" },
+      h("label", { class: "picker" }, "Base revision",
+        h("input", { class: "field mono", value: rev, spellcheck: "false", autocomplete: "off", onInput: (e) => { S.checkRev[S.pid] = e.target.value.trim(); } })),
+      h("button", { type: "button", class: "btn primary", text: "Run check", onClick: () => runCheck(S.checkRev[S.pid] || rev) })),
+    r ? checkResult(r) : null);
+}
+async function runCheck(rev, pid = S.pid) {
+  const r = await perform("check.run", { rev }, { pid });
+  if (!r) return;
+  S.checks[pid] = r;
+  if (!r.failed && S.screen === "governance") {
+    S.data = {};
+    await load(true);
+  } else render();
+}
+const findingText = (f) => (typeof f === "string" ? f : Object.entries(f).map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`).join(" · "));
+function checkResult(r) {
+  if (r.failed) return h("p", { class: "problem", text: r.error });
+  const v = r.json;
+  if (!v) return h("pre", { class: "well", text: r.output || r.stderr || `exit ${r.exit}` });
+  return h("div", { class: "panel sunk" },
+    h("p", { class: "status" }, mark(v.exit === 0),
+      h("span", null, h("strong", { text: CHECK_VERDICT[v.exit] || `exit ${v.exit}` }), ` · exit ${v.exit} · ${v.base ? short(v.base) : "–"} → ${v.head === "worktree" ? "worktree" : short(v.head)} · role ${v.role || "–"}`)),
+    v.error ? h("p", { class: "problem", text: v.error }) : null,
+    h("ul", { class: "clauses" }, (v.checks || []).map((c) => h("li", null,
+      h("span", { class: "c" },
+        h("span", null, h("span", { class: `chip ${c.status === "pass" ? "ok" : c.status === "fail" || c.status === "error" ? "bad" : "muted"}`, text: `${c.id}: ${c.status}` }), c.inspected !== undefined ? ` · inspected ${c.inspected}` : ""),
+        c.reason ? h("span", { class: "muted small", text: c.reason }) : null),
+      c.findings && c.findings.length ? h("span", { class: "f" }, c.findings.slice(0, 20).map((f) => h("span", { text: findingText(f) }))) : null))));
 }
 
 // ── 5. Contracts ────────────────────────────────────────────────────────────
@@ -914,7 +1545,7 @@ function measurementsScreen(d) {
   return [
     header("Measurements", "What your turns used, and how they ended",
       `From this project's turn records: ${plural(d.turns, "turn")}. Tokens are what each backend reported; a turn whose backend reported nothing is counted as unmetered, not as zero.`,
-      actionButton("setup.speed_check", "Measure this machine"),
+      h("a", { class: "btn", href: `#/setup/${S.pid || ""}`, onClick: () => { setupState().step = 3; } }, "Measure this machine"),
       plainCommand("Export turn records", "gnomon audit show --json", "Planned: `audit show --json` (#105 step 7).")),
     h("div", { class: "legend" },
       h("span", null, h("span", { class: "dot local" }), h("strong", { text: "Local" }), " endpoint on this machine or its network"),

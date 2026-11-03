@@ -81,6 +81,11 @@
   needs attention, 10 could not run.
 - The probe now also reports each Ollama model's size on disk, which sizes an
   installed model the catalog does not know.
+- **`gnomon setup --expect-proposal DIGEST`**: with `--yes`, writes only the
+  change whose `proposal.digest` an earlier `--json` run printed; a surface
+  edited since, or a machine that now plans differently, exits 3 and writes
+  nothing. The dashboard's Accept uses it. CONTRACTS §16,
+  `conformance/setup_report.json` (`proposal_keys`).
 - **`gnomon init` says what the machine is, and which local model servers it
   runs.** A local-first setup needed you to know your VRAM and which port LM
   Studio uses before gnomon could help. Init (and `launch`'s "No model answers"
@@ -97,12 +102,11 @@
   - Facts only. It writes nothing to the surface, picks no model, and is
     skipped under `--from` and `--no-verify` (benchmark harnesses), so their
     scaffolds and the ports they test see nothing new.
-- **`gnomon dashboard` (alias `gnomon ui`): a read-only command center in the
-  browser.** Step 1 of #105 Part II. Six screens over what gnomon already
+- **`gnomon dashboard` (alias `gnomon ui`): a command center in the
+  browser.** Steps 1 and 2 of #105 Part II. Six screens over what gnomon already
   records: Projects (surface hash, trust, sessions, turns by bucket, tokens
-  local against cloud, refusals, check verdicts), Setup (each role's route
-  today; the wizard's steps, which call `gnomon doctor --json` once the build
-  has it), Session (an audit trail as a timeline with a lane per role and a
+  local against cloud, refusals, check verdicts), Setup (`gnomon setup` step
+  by step, below), Session (an audit trail as a timeline with a lane per role and a
   marker per refusal or approval), Governance (each published rule with what it
   refused, check verdicts, trust, audit-chain verification), Contracts (the
   project's `[verify]`; in a checkout, the committed property-suite results,
@@ -112,13 +116,50 @@
   - **127.0.0.1 only**, with no flag to widen it. A one-use sign-in in the URL
     fragment, exchanged for a bearer token; `Host`, `Origin` and
     `Sec-Fetch-Site` checks; no cookies, no CORS headers, a CSP with no inline
-    script or style. Contract: CONTRACTS §15, `conformance/dashboard.json`.
-  - **Writes nothing.** Every button names its gnomon command. `audit verify`
-    and `doctor` (both read-only) run; check, trust grant and revoke, init,
-    guard install and the setup steps are shown disabled until a later PR.
+    script or style. An action's POST must also carry this page's `Origin`.
+    Contract: CONTRACTS §17, `conformance/dashboard.json`.
+  - **Every button is a gnomon command.** The server runs `node <cli entry>`
+    with an argv from a fixed table and typed, validated values (no leading
+    `-`, no whitespace, a declared endpoint, a project by id); the page never
+    sends an argv. Each command records itself as it does from a terminal,
+    and the dashboard adds no record kind. Enabled: `audit verify`,
+    `doctor --json`, `setup` (plan, pull, speed check, apply), `key set`,
+    `check --base REV --json`, `trust grant` / `revoke`, `endpoint test`.
+    Still shown disabled: `init`, `guard install`. Not in the UI: skill
+    accept and reject (§11's provenance rules stay CLI-only for now).
+  - **Anything that writes, downloads or may spend asks first.** The first
+    request runs nothing and answers 428 with what the server will do (the
+    download's size and free disk; the key store; the surface hash and its
+    grants; the endpoint, URL and whether a token is billed; for setup, the
+    diff). Only the Confirm in that dialog sends the one-use, five-minute
+    nonce, bound to the action, project and values, that runs it. Trust
+    re-checks the surface hash before running.
+  - **Setup screen, wired:** scan (`doctor --json`), the recommendation and
+    its options, a download that is its own confirmed click showing the size
+    (a job with setup's own progress lines), a speed check, a cloud preset or
+    URL, the key typed into the confirmation and handed to `gnomon key set`
+    on stdin (never stored by the dashboard, never on a command line), the
+    mode, and the diff, written only on **Accept** as `setup --yes
+    --expect-proposal <digest>`.
+  - **Governance:** Run check with the verdict and each check's findings;
+    Grant and Revoke after a confirmation listing exactly what is trusted.
   - **Lean.** `node:http`, hand-written assets (~100 KB, no framework, no build
     step, no remote fonts), imported only by its own command. The wordmark is
     a four-letter subset of Cinzel (SIL OFL 1.1, shipped beside it).
+
+### Fixed
+
+- **Refusals under `tools`, `malformed` and `url` (and webfetch's `network`)
+  are read as their rule.** The shared reader `classifyRefusal` knew seven of
+  the eleven policy rules' summary forms, so a tool the role was not given,
+  arguments that could not be read, a refused URL and a broken `bash_deny`
+  pattern showed as "no rule named" in the dashboard. A test now drives every
+  precheck that refuses with a rule and requires the reader to return that
+  rule. **`gnomon skill mine` output changes:** those refusals can now become
+  `repeated_refusal` candidates (3+ sessions), with the tool's name, or the
+  URL's host or scheme, as the pattern; existing candidates are unchanged,
+  and declined approvals and delegations outside `task_allow` are still not
+  counted. CONTRACTS §12, `conformance/skill_candidate.json` (`rules`).
 
 ## [0.4.0] — 2026-11-03
 

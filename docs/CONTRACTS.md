@@ -1152,10 +1152,12 @@ against `report_keys`.
 
 ## 17. `gnomon dashboard` — the local command center, schema `gnomon.dashboard/1`
 
-`gnomon dashboard` (alias `gnomon ui`) serves a read-only page on
-**127.0.0.1** and nothing wider: there is no flag that widens the bind. Design:
+`gnomon dashboard` (alias `gnomon ui`) serves a page on **127.0.0.1** and
+nothing wider: there is no flag that widens the bind. Design:
 `docs/design/SETUP-AND-COMMAND-CENTER.md`, Part II (#105). It reads what gnomon
-already records and writes nothing: no file, no record, no configuration.
+already records. It changes something only by running one of gnomon's own
+commands from the action table below, and it writes no file, record or
+configuration of its own.
 
 **Exit codes.** `0` stopped cleanly (Ctrl-C or SIGTERM), `1` a usage error,
 `4` the port or loopback could not be had (`preconditions_unmet`), `10` the
@@ -1180,36 +1182,82 @@ terminal prints a new one. Every `/api` call carries
 
 **Refused before anything else:**
 - a `Host` that is not `127.0.0.1:PORT`, `localhost:PORT` or `[::1]:PORT`: 403 (DNS rebinding);
-- an `Origin` that is not this server's: 403;
+- an `Origin` that is not this server's: 403; and a `POST /api/actions/<name>`
+  with no `Origin` at all: 403 (every browser sends one on a POST);
 - on `/api` and `/auth`, a `Sec-Fetch-Site` other than `same-origin` or `none`: 403;
 - `OPTIONS`: 405. No preflight is answered, and no response carries an
   `Access-Control-*` header;
-- an `/api` call without the token: 401.
+- an `/api` call without the token: 401;
+- an action body that is not JSON (`Content-Type`): 415.
 
 Every response carries the CSP in the fixture (no inline script or style,
 `frame-ancestors 'none'`), `X-Frame-Options: DENY`,
 `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`.
 
-**Actions.** The browser names an action. It never sends an argv, a path or a
-shell string: a project is named by its id, a trail by a name that must be on
-disk. An unknown action is 404 and runs nothing; a `planned` one is 409 and
-runs nothing. `<…>` slots are filled by the server from typed parameters.
+**Actions.** Each one is a gnomon command. The server spawns
+`process.execPath` plus the CLI's own entry script (no shell, no `.cmd`
+shim) with the argv below. The browser names the action and sends typed
+parameters, never an argv, a path or a shell string: a project is named by
+its id, and every `<…>` slot is filled by the server. `<dir>` is the
+project's root from the server's own list; `<digest>` is the proposal the
+person was shown; `<tag>`, `<variable>`, `<rev>` and `<endpoint>` are checked
+against a pattern that admits no leading `-` and no whitespace (an endpoint
+must be one the project declares); `<choices>` is zero or more of
+`--model`, `--cloud-endpoint` (a preset, a declared endpoint or an http(s)
+URL), `--cloud-model`, `--cloud-key-env`, `--mode` and `--hybrid-control`,
+sent as the body's `choices` object with the keys `model`, `cloud_endpoint`,
+`cloud_model`, `cloud_key_env`, `mode` and `hybrid_control`. A body key the
+action does not take is 400. An unknown action is 404 and a `planned` one 409;
+neither runs anything. Because each action is the command, it is recorded as
+the command records itself (`trust` and `check` records, setup's facts file);
+the dashboard adds no record kind.
 
-| Action | argv | State |
-|---|---|---|
-| `audit.verify` | `audit verify` | `enabled`: read-only, computed in-process by `verifyTrail`, the function `gnomon audit verify` calls |
-| `doctor.scan` | `doctor --json` | `enabled`: spawned as `process.execPath` plus the CLI's entry, in the project, when this CLI's `--help` lists `doctor`; otherwise answered `available: false` |
-| `check.run` | `check --base <rev> --json` | `planned` |
-| `trust.grant` | `trust grant` | `planned` |
-| `trust.revoke` | `trust revoke` | `planned` |
-| `init` | `init` | `planned` |
-| `guard.install` | `guard install <harness>` | `planned` |
-| `setup.pull` | `setup --pull <tag> --yes --json` | `planned` |
-| `setup.speed_check` | `setup --speed-check --json` | `planned` |
+| Action | argv | State | Confirm |
+|---|---|---|---|
+| `audit.verify` | `audit verify` | `enabled`: computed in-process by `verifyTrail`, the function `gnomon audit verify` calls | `none` |
+| `doctor.scan` | `doctor --json --dir <dir>` | `enabled`; answered `available: false` when this CLI's `--help` lists no `doctor` | `none` |
+| `setup.plan` | `setup --json --dir <dir> <choices>` | `enabled`: no `--yes`, so setup writes nothing and stops at the proposal (exit 4) | `none` |
+| `setup.pull` | `setup --pull <tag> --json --dir <dir> <choices>` | `enabled`: the download, answered 202 with a job | `required` |
+| `setup.speed_check` | `setup --model <tag> --speed-check --json --dir <dir>` | `enabled`: one short prompt to the model on 127.0.0.1 | `none` |
+| `key.set` | `key set <variable> --dir <dir>`, the key on stdin | `enabled` | `required` |
+| `setup.apply` | `setup --yes --expect-proposal <digest> --json --dir <dir> <choices>` | `enabled`: writes exactly the diff confirmed, or nothing (exit 3, §16) | `required` |
+| `check.run` | `check --base <rev> --json --dir <dir>` | `enabled` | `none` |
+| `trust.grant` | `trust grant --dir <dir>` | `enabled` | `required` |
+| `trust.revoke` | `trust revoke --dir <dir>` | `enabled` | `required` |
+| `endpoint.test` | `endpoint test <endpoint> --dir <dir>` | `enabled`: one completion of one token | `required` |
+| `init` | `init --dir <dir>` | `planned` | `required` |
+| `guard.install` | `guard install <harness>` | `planned` | `required` |
 
 A state is `enabled` (runs now) or `planned` (shown, disabled, with the
-command it will run). An action leaves `planned` by being wired, and its row
-changes here with the fixture.
+command it will run). Any action other than `audit.verify` and `doctor.scan`
+answers 409 when this CLI's `--help` does not list its command, or when
+another action is running in the same project (one at a time).
+
+**Confirmation.** An action whose confirm is `required` writes, downloads or
+may spend. Its first request runs nothing and answers **428** with
+`confirm: {nonce, expires_in_s, command, effect}`: the exact command and, in
+`effect`, what it will do, stated by the server (the download's size from the
+catalog and the free disk; the store a key goes to; the surface hash and
+grants being trusted; the endpoint, URL and model a token goes to, and
+whether it is billed). `setup.apply`'s 428 also carries the `report` of
+`setup.plan` with the same choices: the diff. Only a second request with the
+same action, project and parameters and that `confirm` value runs it; the
+nonce works once and not after five minutes, and anything else is 409. For
+`trust.grant` and `trust.revoke` the surface hash is checked again before
+running (409 if it moved); for `setup.apply` the CLI checks the digest
+itself. `setup.apply` with nothing to propose answers 422 and issues no
+nonce. `key.set` takes the key as `value` in the confirming request only (400
+before it), and hands it to the command on stdin: never in an argv, an
+environment variable, a response or anything the dashboard keeps.
+`none` runs on the first request; those actions write nothing beyond the
+command's own record (`check`).
+
+An answer from a spawned action is `{action, command, exit, timed_out,
+stderr}` plus `json` (the command's `--json` document) or `output` (its
+text), with the child's exit code unchanged. `setup.pull` answers 202 with a
+`job` (`id`, `state` `running`|`done`, `progress`: setup's last lines on
+stderr, `exit`, `result`), read at `GET /api/jobs/<id>`. Stopping the server
+stops a running action.
 
 **The `/api` JSON is the page's own.** Each answer carries
 `schema: "gnomon.dashboard/1"`, but it is not a published record: a script
@@ -1218,6 +1266,12 @@ are pinned so that a new one is a reviewed change, not so a caller can depend
 on their bodies.
 
 **Fixture**: `conformance/dashboard.json`. `packages/gnomon-cli/src/dashboard.test.ts`
-asserts the code's action table, states, routes, exit codes and CSP equal the
-fixture, that this section names every action and state, and puts each
-security rule above to a running server.
+asserts the code's action table, states, confirm values, choices, routes, exit
+codes and CSP equal the fixture, that this section names every action, state,
+confirm value and choice, and puts each security rule above to a running
+server: Origin, Host, token, `Sec-Fetch-Site` and content type on every
+action's POST; a 428 that spawns nothing; a nonce bound to its action,
+project and parameters, used once, expiring; a surface that moved; the key
+only on stdin (every spawn inspected); and the exact argv of each action,
+against a stand-in CLI and, for `trust.grant`, `check.run` and `key.set`,
+the real one.

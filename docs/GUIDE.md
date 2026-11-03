@@ -386,7 +386,9 @@ Hybrid control (`off`, `observe`, `ask`, `auto`) is recorded as a preference,
 PR #102) is merged; setup says so when it records it.
 
 For a script: `gnomon setup --json` prints the recommendation and the diff and
-exits 4 without writing; `--yes` writes it. `--yes` never downloads or spends:
+exits 4 without writing; `--yes` writes it, and `--yes --expect-proposal
+<proposal.digest>` writes only that reviewed change (exit 3 if the surface or
+the plan moved since). `--yes` never downloads or spends:
 add `--pull qwen3.6:35b` to download, `--speed-check` to measure, and
 `--cloud-endpoint opencode-go --cloud-model deepseek-v4.1-flash` for a cloud
 model. `gnomon launch` offers the same guided setup first whenever no model
@@ -815,7 +817,7 @@ api_key_env = "OPENAI_API_KEY"   # the NAME of the variable, never the key
 | `gnomon acp [--role R] [--profile N]` | Serves the Agent Client Protocol on stdin/stdout for an editor. Same surface, roles, approvals and audit as `prompt`. | Zed, JetBrains IDEs |
 | `gnomon trust [list \| grant \| revoke]` | What this project's `.gnomon/` grants beyond the defaults, and whether this machine trusts it | A repository you did not write |
 | `gnomon audit [show \| verify]` | Lists trails; checks every chain, seal and signature anchor. `verify` exits 1 on a break or when there is nothing to verify. | Review, release gates |
-| `gnomon dashboard [--port N] [--no-open] [--dir P]` | A read-only command center in the browser on 127.0.0.1: projects, sessions as a timeline, refusals by rule, audit verification, contracts, token measurements (alias `ui`). Writes nothing. | Reviewing what happened without reading JSONL |
+| `gnomon dashboard [--port N] [--no-open] [--dir P]` | A command center in the browser on 127.0.0.1: projects, sessions as a timeline, refusals by rule, audit verification, contracts, token measurements (alias `ui`); setup, check, trust and endpoint test as buttons that run those same commands, each change confirmed first. | Reviewing what happened without reading JSONL; first-run setup without a terminal wizard |
 | `gnomon sessions` | Saved interactive sessions, newest last | Find one to resume |
 | `gnomon skill [list \| accept ID \| reject ID]` | Active skills and the proposals the agent made | Reviewing what it learned |
 | `gnomon loop [list \| status \| dry-run N \| run N \| install N \| uninstall N \| reset N \| kill]` | Cron-scheduled guard/act loops declared in `.gnomon/loops/` (alias `loops`) | Unattended supervision |
@@ -1042,11 +1044,15 @@ chain = true
 - This is an evidence layer, not a compliance claim.
 
 **Reading the trail in a browser.** `gnomon dashboard` (alias `ui`) serves a
-read-only page on 127.0.0.1 over the same records: each session as a timeline
+page on 127.0.0.1 over the same records: each session as a timeline
 with a lane per role, every refusal grouped under the rule that made it, the
 check verdicts, and a **Verify chain** button that runs the check
 `gnomon audit verify` runs. It shows metadata only, even for a trail written
-with `record = "full"`, and it writes nothing. The terminal prints a one-use
+with `record = "full"`. Its buttons run gnomon's own commands (`setup`,
+`check`, `trust grant`/`revoke`, `endpoint test`, `key set` with the key on
+stdin), and one that writes, downloads or may spend first shows what it will
+do and runs only on your Confirm; each is recorded as the command records
+itself. The terminal prints a one-use
 sign-in link; press Enter for another. On a machine without a display, forward
 the same port (`ssh -L 4890:127.0.0.1:4890 host`) and start it with
 `--no-open --port 4890`. The projects it lists are this one plus those this

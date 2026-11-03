@@ -1,11 +1,13 @@
 /**
- * `gnomon dashboard` (alias `gnomon ui`): a read-only command center in the
- * browser, served from this machine to this machine.
+ * `gnomon dashboard` (alias `gnomon ui`): a command center in the browser,
+ * served from this machine to this machine.
  *
  * Imported only by its own dispatch case in index.ts, so no other command
- * loads any of it. It keeps no state of its own and writes no file: it reads
- * what gnomon already records (dashboard_data.ts) and serves it on 127.0.0.1
- * (dashboard_server.ts). Design: docs/design/SETUP-AND-COMMAND-CENTER.md
+ * loads any of it. It keeps no state of its own and writes no file itself: it
+ * reads what gnomon already records (dashboard_data.ts), serves it on
+ * 127.0.0.1 (dashboard_server.ts), and runs gnomon's own commands from a fixed
+ * action table (dashboard_actions.ts), asking first before any that writes,
+ * downloads or spends. Design: docs/design/SETUP-AND-COMMAND-CENTER.md
  * Part II; contract: CONTRACTS.md §17.
  *
  * Exit: 0 on a clean stop (Ctrl-C), 1 on a usage error, 4 when the port or
@@ -14,7 +16,9 @@
  */
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 import { knownProjects } from "./dashboard_data.js";
 import { startDashboard, type DashboardServer } from "./dashboard_server.js";
 
@@ -45,6 +49,20 @@ export function parseDashboardArgs(argv: string[]): DashboardArgs | string {
   return out;
 }
 
+/**
+ * The script a spawned action runs as `node <script> <argv>`. Normally the one
+ * this process was started from (the npm bin, or the checkout launcher). Under
+ * a TypeScript loader that is `index.ts`, which a plain `node` child cannot
+ * run, so the checkout's own launcher is used instead.
+ */
+export function cliEntryFor(argv1: string | undefined): string | undefined {
+  if (argv1 && /\.[cm]?ts$/.test(argv1)) {
+    const launcher = fileURLToPath(new URL("../gnomon.js", import.meta.url));
+    if (existsSync(launcher)) return launcher;
+  }
+  return argv1;
+}
+
 /** How each OS opens a URL in the default browser. Never through a shell. */
 export function openerFor(platform: NodeJS.Platform, url: string): { cmd: string; args: string[] } {
   if (platform === "darwin") return { cmd: "open", args: [url] };
@@ -71,8 +89,10 @@ function openBrowser(url: string): string | null {
 
 const USAGE = `Usage: gnomon dashboard [--port <n>] [--no-open] [--dir <path>]
 
-Serve a read-only command center for this project (and every project this
-machine trusts) on 127.0.0.1, and open it in the browser. Ctrl-C stops it.`;
+Serve a command center for this project (and every project this machine
+trusts) on 127.0.0.1, and open it in the browser. It reads what gnomon
+records; setup, check, trust and endpoint test run as gnomon commands, and
+anything that writes, downloads or spends asks first. Ctrl-C stops it.`;
 
 export async function cmdDashboard(argv: string[]): Promise<number> {
   const args = parseDashboardArgs(argv);
@@ -88,7 +108,7 @@ export async function cmdDashboard(argv: string[]): Promise<number> {
   const projects = knownProjects({ cwd: process.cwd(), dir: args.dir });
   let dash: DashboardServer;
   try {
-    dash = await startDashboard({ projects, port: args.port, cliEntry: process.argv[1] });
+    dash = await startDashboard({ projects, port: args.port, cliEntry: cliEntryFor(process.argv[1]) });
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "EADDRINUSE" || code === "EACCES" || code === "EADDRNOTAVAIL") {
@@ -104,7 +124,7 @@ export async function cmdDashboard(argv: string[]): Promise<number> {
 
   const url = dash.signInUrl();
   const here = projects.find((p) => p.source === "here");
-  console.log(`gnomon dashboard · read-only · this machine only (127.0.0.1:${dash.port})`);
+  console.log(`gnomon dashboard · this machine only (127.0.0.1:${dash.port}) · changes ask first`);
   console.log("");
   console.log(`  ${url}`);
   console.log("");

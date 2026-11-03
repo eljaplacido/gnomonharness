@@ -564,7 +564,11 @@ Each screen lists its data source and the exact CLI each action maps to.
 - Mode: local only, hybrid or cloud first, and the hybrid control mode
   (off / observe / ask / auto), defaulting to `observe`.
 - Write: a surface proposal, shown as a diff, accepted with
-  `gnomon proposal accept ID`.
+  `gnomon proposal accept ID`. Until step 8 lands, the dashboard uses
+  `gnomon setup --yes --expect-proposal DIGEST`: the digest of the diff it
+  showed, which setup refuses (exit 3) if the plan moved since. Implemented
+  with the action table, the 428 confirmation and the stdin key path in the
+  integration PR that merged #126 and #127 (CONTRACTS §17).
 
 **2. Session.** The ACP client.
 - The chat, with the live trace as it streams: thoughts, tool calls with
