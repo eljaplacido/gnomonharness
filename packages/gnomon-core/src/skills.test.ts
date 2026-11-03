@@ -21,6 +21,7 @@ import {
   skillId,
   Skill,
   AgentSessionRefusal,
+  SkillRefusal,
 } from "./skills.js";
 import { recomputeManifest } from "./config.js";
 import { verifyTrail, type AuditRecord } from "./audit.js";
@@ -349,6 +350,8 @@ describe("accept and reject leave a record", () => {
       err = e;
     }
     expect(err).toBeInstanceOf(AgentSessionRefusal);
+    // The CLI's exit 3 is keyed on the base class every refusal extends.
+    expect(err).toBeInstanceOf(SkillRefusal);
     expect(String(err)).toMatch(/agent session.*s-test/);
     expect(() => rejectSkill(cfg(), "b")).toThrow(AgentSessionRefusal);
     delete process.env.GNOMON_AGENT_SESSION;

@@ -362,14 +362,21 @@ export function skillContentHash(raw: string | Buffer): string {
 }
 
 /**
+ * A skill decision refused by a rule -- not a failure to carry it out. The
+ * CLI exits 3 (refused_by_gate, docs/CONTRACTS.md §1) for every subclass and
+ * 1 for anything else, so each new refusal reason extends this rather than
+ * adding its own case to the CLI.
+ */
+export class SkillRefusal extends Error {}
+
+/**
  * Refused: a skill decision made from inside an agent session.
  *
  * The harness sets GNOMON_AGENT_SESSION in every tool subprocess (tools.ts,
  * AGENT_SESSION_ENV). Found in re-review: `gnomon skill accept` run through
  * the agent's own bash was recorded `by: "human"`. Acceptance is a person's.
- * The CLI exits 3 (refused_by_gate) for this.
  */
-export class AgentSessionRefusal extends Error {}
+export class AgentSessionRefusal extends SkillRefusal {}
 
 function refuseInAgentSession(verb: "accept" | "reject"): void {
   const session = process.env.GNOMON_AGENT_SESSION;

@@ -28,7 +28,7 @@ import {
   loadProposedSkills,
   acceptSkill,
   rejectSkill,
-  AgentSessionRefusal,
+  SkillRefusal,
   mineCandidates,
   writeCandidates,
   loadCandidates,
@@ -1639,9 +1639,10 @@ async function cmdSkill(args: CliArgs): Promise<void> {
       }
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
-      // An agent session saying no is a refusal (3, refused_by_gate,
+      // A rule saying no -- an agent session, and the refusals that later
+      // steps add as subclasses -- is a refusal (3, refused_by_gate,
       // docs/CONTRACTS.md §1), not the `failed` result 1 means.
-      process.exit(err instanceof AgentSessionRefusal ? 3 : 1);
+      process.exit(err instanceof SkillRefusal ? 3 : 1);
     }
     return;
   }
