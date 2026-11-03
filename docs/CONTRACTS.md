@@ -750,7 +750,7 @@ gives the fewest discordant pairs, all one way, that can reach `alpha`.
 |---|---|
 | 0 | `meets_thresholds: true` |
 | 2 | `meets_thresholds: false` |
-| 10 | `"undetermined"`, or the trial could not start: no spec, no proposal, arms not differing in exactly the skill, or a non-local endpoint without `[budget]` or `--yes-spend` |
+| 10 | `"undetermined"`, or the trial could not start: no spec, no proposal, arms not differing in exactly the skill, this checkout's surface hash not HEAD's, or a non-local endpoint without `[budget]` or `--yes-spend` |
 
 `status` is one of `complete`, `budget_exhausted` or `apparatus_failure`. The
 budget is checked between pairs. `max_cost_usd` is reported with

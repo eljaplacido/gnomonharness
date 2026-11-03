@@ -448,6 +448,21 @@ export async function runTrial(
         : `The arms differ in ${differ.join(", ")}, not only ${expected}.`
     );
   }
+  // The base arm is the surface at HEAD; the skill would join the surface in
+  // this checkout. They must be the same surface, or the trial measures one
+  // and the accept changes another -- and `accept --evidence` refuses the
+  // report afterwards, once the budget is spent. Two causes, both measured:
+  // uncommitted edits under .gnomon/, and a checkout that rewrote line endings
+  // (core.autocrlf on Windows, with no `.gnomon/** text eol=lf` in
+  // .gitattributes, which `gnomon init` writes).
+  const checkout = recomputeManifest(config.gnomonDir).surface_hash;
+  if (checkout !== baseHash) {
+    throw new TrialAbort(
+      `This checkout's surface (${checkout.slice(0, 12)}) is not HEAD's (${baseHash.slice(0, 12)}). ` +
+        `Commit or discard the changes under .gnomon/ (proposals excepted), and if git rewrites ` +
+        `line endings here, add ".gnomon/** text eol=lf" to .gitattributes, then run the trial again.`
+    );
+  }
 
   const cells: TrialCell[] = [];
   let requestsUsed = 0;

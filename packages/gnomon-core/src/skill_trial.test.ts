@@ -46,7 +46,9 @@ function git(...args: string[]): void {
 }
 
 /** A committed project: a minimal surface, a trial spec, and one proposal on disk. */
-function project(opts: { url?: string; budget?: string; tasks?: number; skillBody?: string } = {}): void {
+function project(
+  opts: { url?: string; budget?: string; tasks?: number; skillBody?: string; autocrlf?: boolean } = {}
+): void {
   const put = (rel: string, text: string) => {
     mkdirSync(join(root, rel, ".."), { recursive: true });
     writeFileSync(join(root, rel), text, "utf-8");
@@ -71,7 +73,12 @@ function project(opts: { url?: string; budget?: string; tasks?: number; skillBod
       tasks
   );
   put("README.md", "fixture\n");
+  // What `gnomon init` writes. Without it, core.autocrlf on Windows checks the
+  // worktrees out with CRLF and HEAD's surface hashes differently from the
+  // checkout's -- which the trial refuses, rightly (see the test below).
+  if (!opts.autocrlf) put(".gitattributes", ".gnomon/** text eol=lf\n");
   git("init", "-q");
+  if (opts.autocrlf) git("config", "core.autocrlf", "true");
   git("add", "-A");
   git("commit", "-q", "-m", "fixture");
   // The proposal is written after the commit, as the skill tool would: it is
@@ -185,6 +192,33 @@ describe("gnomon skill trial", () => {
     expect(report.meets_thresholds).toBe("undetermined");
     expect(report.budget.requests_used).toBeGreaterThanOrEqual(1);
   }, 120_000);
+
+  it("refuses to start when this checkout's surface is not HEAD's", async () => {
+    // The base arm runs HEAD; an accept joins the checkout. If they differ,
+    // the report could never be cited, so no budget is spent producing it.
+    project();
+    writeFileSync(join(root, ".gnomon", "system.md"), "edited, not committed\n", "utf-8");
+    const err = await trial(scripted).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(isTrialAbort(err)).toBe(true);
+    expect(String(err)).toMatch(/is not HEAD's/);
+    expect(existsSync(join(root, ".gnomon-trials"))).toBe(false);
+  }, 60_000);
+
+  it("catches a checkout that rewrites line endings (autocrlf, no .gitattributes)", async () => {
+    // Found on the Windows CI runner: every worktree came out CRLF, so HEAD's
+    // surface hashed differently from the LF checkout and the finished
+    // report could not be cited. Reproduced here on every platform.
+    project({ autocrlf: true });
+    const err = await trial(scripted).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(isTrialAbort(err)).toBe(true);
+    expect(String(err)).toMatch(/eol=lf/);
+  }, 60_000);
 
   it("refuses a billed endpoint without a declared budget, before any cell", async () => {
     project({ url: "https://api.example.com/v1/chat/completions" });
