@@ -115,8 +115,8 @@ and so does `gnomon loop run` (`2` on `act_failed`/`breaker_open`, `10` on
 with a contract of their own exit as it says: `gnomon check` `0`/`2`/`10`
 (§6), a quit at the trust prompt `3` (§8), `gnomon guard` `0`/`2`/`3`/`10`
 (§10), a refused `gnomon skill accept` or `reject` `3` (§11), `gnomon skill
-trial` `0`/`2`/`10` (§13), and `gnomon audit tamper` `3` while an event is
-unresolved (§14). Every other command exits `0` or `1`; `gnomon migrate
+trial` `0`/`2`/`10` (§13), `gnomon audit tamper` `3` while an event is
+unresolved (§14), and `gnomon dashboard` `0`/`1`/`4`/`10` (§15). Every other command exits `0` or `1`; `gnomon migrate
 --check` exits `1` when a migration is pending. The finer codes are reserved for
 callers that need them; a consumer should switch on the bucket, which is the
 part that is stable.
@@ -1037,3 +1037,77 @@ trail verifies and it was authorised the way it says.
   session killed after a mid-run checkpoint. Resolving them is a person's
   call.
 - **The walk stops at 200,000 entries**, reported as `truncated`.
+
+---
+
+## 15. `gnomon dashboard` — the local command center, schema `gnomon.dashboard/1`
+
+`gnomon dashboard` (alias `gnomon ui`) serves a read-only page on
+**127.0.0.1** and nothing wider: there is no flag that widens the bind. Design:
+`docs/design/SETUP-AND-COMMAND-CENTER.md`, Part II (#105). It reads what gnomon
+already records and writes nothing: no file, no record, no configuration.
+
+**Exit codes.** `0` stopped cleanly (Ctrl-C or SIGTERM), `1` a usage error,
+`4` the port or loopback could not be had (`preconditions_unmet`), `10` the
+server could not start for any other reason (`launch_failed`).
+
+**What it reads**, all of it already recorded: the surface by
+`recomputeManifest`; trust by `evaluateTrust` and the trust store; the audit
+trails (`.gnomon-audit/`, or `[audit] dir`) and session snapshots; a
+refusal's rule from the record, or by `classifyRefusal` (§12's reading),
+never guessed; `git status -- .gnomon`; and, in a gnomon source checkout only,
+the committed property-suite results, README's test-count line and this
+document's Fixture lines. The **projects list** is the project here plus the
+roots in the trust store (§8). Nothing else is tracked to build it. Text a
+trail holds under `record = "full"` (prompts, output, tool arguments and
+results) is never served.
+
+**Sign-in.** The terminal prints `http://127.0.0.1:PORT/#k=<bootstrap>`. The
+fragment never reaches a server. The page POSTs it once to `/auth` and gets a
+bearer token. A bootstrap works once, and not after five minutes; Enter in the
+terminal prints a new one. Every `/api` call carries
+`Authorization: Bearer <token>`. There are no cookies.
+
+**Refused before anything else:**
+- a `Host` that is not `127.0.0.1:PORT`, `localhost:PORT` or `[::1]:PORT`: 403 (DNS rebinding);
+- an `Origin` that is not this server's: 403;
+- on `/api` and `/auth`, a `Sec-Fetch-Site` other than `same-origin` or `none`: 403;
+- `OPTIONS`: 405. No preflight is answered, and no response carries an
+  `Access-Control-*` header;
+- an `/api` call without the token: 401.
+
+Every response carries the CSP in the fixture (no inline script or style,
+`frame-ancestors 'none'`), `X-Frame-Options: DENY`,
+`X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`.
+
+**Actions.** The browser names an action. It never sends an argv, a path or a
+shell string: a project is named by its id, a trail by a name that must be on
+disk. An unknown action is 404 and runs nothing; a `planned` one is 409 and
+runs nothing. `<…>` slots are filled by the server from typed parameters.
+
+| Action | argv | State |
+|---|---|---|
+| `audit.verify` | `audit verify` | `enabled`: read-only, computed in-process by `verifyTrail`, the function `gnomon audit verify` calls |
+| `doctor.scan` | `doctor --json` | `enabled`: spawned as `process.execPath` plus the CLI's entry, in the project, when this CLI's `--help` lists `doctor`; otherwise answered `available: false` |
+| `check.run` | `check --base <rev> --json` | `planned` |
+| `trust.grant` | `trust grant` | `planned` |
+| `trust.revoke` | `trust revoke` | `planned` |
+| `init` | `init` | `planned` |
+| `guard.install` | `guard install <harness>` | `planned` |
+| `setup.pull` | `setup --pull <tag> --yes --json` | `planned` |
+| `setup.speed_check` | `setup --speed-check --json` | `planned` |
+
+A state is `enabled` (runs now) or `planned` (shown, disabled, with the
+command it will run). An action leaves `planned` by being wired, and its row
+changes here with the fixture.
+
+**The `/api` JSON is the page's own.** Each answer carries
+`schema: "gnomon.dashboard/1"`, but it is not a published record: a script
+should read the CLI's `--json` output, which #105 step 7 extends. The routes
+are pinned so that a new one is a reviewed change, not so a caller can depend
+on their bodies.
+
+**Fixture**: `conformance/dashboard.json`. `packages/gnomon-cli/src/dashboard.test.ts`
+asserts the code's action table, states, routes, exit codes and CSP equal the
+fixture, that this section names every action and state, and puts each
+security rule above to a running server.

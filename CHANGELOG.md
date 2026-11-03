@@ -26,6 +26,29 @@
 
 ## [Unreleased]
 
+- **`gnomon dashboard` (alias `gnomon ui`): a read-only command center in the
+  browser.** Step 1 of #105 Part II. Six screens over what gnomon already
+  records: Projects (surface hash, trust, sessions, turns by bucket, tokens
+  local against cloud, refusals, check verdicts), Setup (each role's route
+  today; the wizard's steps, which call `gnomon doctor --json` once the build
+  has it), Session (an audit trail as a timeline with a lane per role and a
+  marker per refusal or approval), Governance (each published rule with what it
+  refused, check verdicts, trust, audit-chain verification), Contracts (the
+  project's `[verify]`; in a checkout, the committed property-suite results,
+  the test counts and each contract clause with its fixture) and Measurements
+  (outcomes by locality, token flow by day, tokens by model; unmetered is never
+  0 and spend is unknown, never $0).
+  - **127.0.0.1 only**, with no flag to widen it. A one-use sign-in in the URL
+    fragment, exchanged for a bearer token; `Host`, `Origin` and
+    `Sec-Fetch-Site` checks; no cookies, no CORS headers, a CSP with no inline
+    script or style. Contract: CONTRACTS §15, `conformance/dashboard.json`.
+  - **Writes nothing.** Every button names its gnomon command. `audit verify`
+    and `doctor` (both read-only) run; check, trust grant and revoke, init,
+    guard install and the setup steps are shown disabled until a later PR.
+  - **Lean.** `node:http`, hand-written assets (~100 KB, no framework, no build
+    step, no remote fonts), imported only by its own command. The wordmark is
+    a four-letter subset of Cinzel (SIL OFL 1.1, shipped beside it).
+
 ## [0.4.0] — 2026-11-03
 
 **Upgrading from 0.3.x.** Run `gnomon migrate` in each project. It applies four

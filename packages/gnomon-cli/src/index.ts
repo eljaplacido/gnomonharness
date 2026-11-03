@@ -2145,6 +2145,7 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "check" },
   { name: "trust" },
   { name: "guard" },
+  { name: "dashboard", aliases: ["ui"] },
 ];
 
 function showHelp(): void {
@@ -2302,6 +2303,14 @@ Commands:
   guard install claude-code|opencode|cursor [--write]
     Print the hook (Claude Code PreToolUse, an opencode 2.2 plugin, Cursor
     hooks.json), or with --write add it to this project's own config.
+
+  dashboard [--port <n>] [--no-open] [--dir <path>]
+    A read-only command center in the browser: projects, sessions as a
+    timeline, what the policy refused, audit-chain verification, contracts
+    and token measurements, all read from what gnomon already records.
+    Serves 127.0.0.1 only; the printed link signs one tab in once. Writes
+    nothing. Ctrl-C stops it. Exit 0 stopped, 4 port unavailable, 10 failed
+    to start. Alias: ui.
 
   prompt [--continue | --resume <id>] [--trust]
     Interactive agent loop. --continue resumes the most recent session,
@@ -2496,6 +2505,14 @@ async function main(): Promise<void> {
       const { cmdGuard } = await import("./guard.js");
       const at = process.argv.indexOf("guard", 2);
       process.exitCode = await cmdGuard(process.argv.slice(at + 1));
+      return;
+    }
+    case "dashboard":
+    case "ui": {
+      // Lazy, like guard: nothing of the dashboard loads for any other command.
+      const { cmdDashboard } = await import("./dashboard.js");
+      const at = process.argv.indexOf(args.command, 2);
+      process.exitCode = await cmdDashboard(process.argv.slice(at + 1));
       return;
     }
     default:

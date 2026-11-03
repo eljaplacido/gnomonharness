@@ -1,0 +1,39 @@
+{
+  "schema": "gnomon.dashboard/1",
+  "description": "gnomon dashboard (alias ui): the local read-only command center. CONTRACTS.md section 15. Pinned by packages/gnomon-cli/src/dashboard.test.ts against dashboard_server.ts and dashboard.ts.",
+  "exit_codes": {
+    "stopped": 0,
+    "usage": 1,
+    "port_unavailable": 4,
+    "launch_failed": 10
+  },
+  "action_states": ["enabled", "planned"],
+  "actions": [
+    { "name": "audit.verify", "argv": ["audit", "verify"], "state": "enabled" },
+    { "name": "doctor.scan", "argv": ["doctor", "--json"], "state": "enabled" },
+    { "name": "check.run", "argv": ["check", "--base", "<rev>", "--json"], "state": "planned" },
+    { "name": "trust.grant", "argv": ["trust", "grant"], "state": "planned" },
+    { "name": "trust.revoke", "argv": ["trust", "revoke"], "state": "planned" },
+    { "name": "init", "argv": ["init"], "state": "planned" },
+    { "name": "guard.install", "argv": ["guard", "install", "<harness>"], "state": "planned" },
+    { "name": "setup.pull", "argv": ["setup", "--pull", "<tag>", "--yes", "--json"], "state": "planned" },
+    { "name": "setup.speed_check", "argv": ["setup", "--speed-check", "--json"], "state": "planned" }
+  ],
+  "routes": {
+    "static": ["/", "/app.js", "/app.css", "/icon.svg", "/fonts/cinzel-wordmark.woff2", "/fonts/OFL.txt"],
+    "unauthenticated": ["POST /auth"],
+    "api": [
+      "GET /api/meta",
+      "GET /api/projects",
+      "GET /api/setup",
+      "GET /api/p/<id>/surface",
+      "GET /api/p/<id>/sessions",
+      "GET /api/p/<id>/trail?name=<trail>",
+      "GET /api/p/<id>/governance",
+      "GET /api/p/<id>/measurements",
+      "GET /api/p/<id>/contracts",
+      "POST /api/actions/<name>"
+    ]
+  },
+  "csp": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+}

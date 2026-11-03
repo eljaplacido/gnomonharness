@@ -61,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1832 TypeScript tests (1533 core, 274 cli, 18
-> natives, 7 tui) and 61 Rust tests — **1893 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1863 TypeScript tests (1533 core, 305 cli, 18
+> natives, 7 tui) and 61 Rust tests — **1924 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -99,6 +99,7 @@ does not. Behaviour is readable because something is holding still.
 - [Governance and Audit](#governance-and-audit)
 - [Governing other harnesses](#governing-other-harnesses)
 - [In your editor — `gnomon acp`](#in-your-editor--gnomon-acp)
+- [The command center — `gnomon dashboard`](#the-command-center--gnomon-dashboard)
 - [CLI Reference](#cli-reference)
 - [Interactive Commands](#interactive-commands)
 - [Adopting gnomon in an Existing Project](#adopting-gnomon-in-an-existing-project)
@@ -2247,6 +2248,53 @@ Slash commands other than a role prefix are terminal-only.
 
 ---
 
+## The command center — `gnomon dashboard`
+
+```bash
+gnomon dashboard              # alias: gnomon ui
+gnomon dashboard --no-open --port 4890 --dir ~/code/myproject
+```
+
+A read-only page in your browser over what gnomon already records, for people
+who would rather not read JSONL in a terminal. Six screens, ported from the
+approved design (#105, Part II):
+
+- **Projects** — each project's surface hash, trust state, sessions, turns by
+  bucket, tokens local against cloud, policy refusals and check verdicts. The
+  list is this project plus the roots in this machine's trust store; nothing
+  else is tracked to build it.
+- **Setup** — what the surface routes each role to today, and the setup
+  wizard's steps. The scan button runs `gnomon doctor --json` once the build
+  has it; until then the screen says the wizard has not landed.
+- **Session** — one audit trail as a flight recorder: a lane per role (local
+  or cloud), blocks of tool calls, a marker for every refusal and approval,
+  and how the session ended. Metadata only: recorded prompt and output text
+  is never served.
+- **Governance** — each published rule (CONTRACTS §10) with what it refused
+  and where the surface declares it, `gnomon check` verdicts, trust, and the
+  audit chain, which **Verify chain** checks with the same function
+  `gnomon audit verify` calls.
+- **Contracts** — this project's `[verify]` gate; in a gnomon checkout also
+  the committed property-suite results, the test counts and every contract
+  clause with its fixture.
+- **Measurements** — your own turn records: how turns ended by locality,
+  token flow by day, tokens by model. A turn whose backend reported no usage
+  is *unmetered*, never 0, and spend is *unknown*: no record carries a price.
+
+It serves **127.0.0.1 only**, and there is no flag that widens that. The
+terminal prints a link with a one-use sign-in in the URL fragment; Enter
+prints a new one. A wrong `Host`, a foreign `Origin` or a cross-site fetch is
+refused, there are no cookies and no CORS headers, and the CSP allows no
+inline script. On a headless box, forward the same port:
+`ssh -L 4890:127.0.0.1:4890 host`, then open the link locally.
+
+**It changes nothing in this build.** Every button names the gnomon command it
+maps to; only `audit verify` and `doctor` (both read-only) run, and the rest
+show their command, disabled, until a later PR wires them. Exit 0 stopped,
+1 usage, 4 port unavailable, 10 failed to start. Contract: [CONTRACTS §15](docs/CONTRACTS.md).
+
+---
+
 ## CLI Reference
 
 | Command | Description |
@@ -2266,6 +2314,7 @@ Slash commands other than a role prefix are terminal-only.
 | `gnomon audit [show\|verify\|tamper\|resolve <trail>:<seq> --reason <text>]` | Audit trails. `tamper` lists `record_tamper` events and exits 3 while any is unresolved; `resolve` is a person's recorded acknowledgement of one. |
 | `gnomon check --base <rev> [--head <rev>] [--role <r> \| --agent <name>] [--transcript <file> --format <fmt>] [--json]` | Judge a change another harness made by this surface's rules as of `<rev>`. Exit 0 held, 2 failed, 10 no verdict. See [Governing other harnesses](#governing-other-harnesses). |
 | `gnomon guard [--from claude-code\|opencode\|cursor] [--tool <kind> --input <json>] [--role <r> \| --agent <name>]` | Decide one tool call another harness is about to make, by the committed rules: allow (0), deny (2), ask (3), no decision (10). `gnomon guard install claude-code\|opencode\|cursor [--write]` installs the hook. See [Before the call](#before-the-call-gnomon-guard). |
+| `gnomon dashboard [--port <n>] [--no-open] [--dir <path>]` | A read-only command center in the browser, on 127.0.0.1 only: projects, sessions as a timeline, what the policy refused, audit-chain verification, contracts, token measurements. Writes nothing. Alias: `ui`. See [The command center](#the-command-center--gnomon-dashboard). |
 | `gnomon surface [hash\|manifest\|paths]` | Inspect the surface. |
 | `gnomon enumerations` | The enumerations contract. |
 | `gnomon session <cmd>` | Run shell commands as recorded session steps. |
