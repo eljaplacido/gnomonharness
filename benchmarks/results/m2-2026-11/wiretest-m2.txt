@@ -1,0 +1,67 @@
+== M2 wire test 2026-11-03T18:47:47.413Z: gnomon be4fc0d8835c443aca8b32ccd4c1caacf48cbdce (v0.4.0 tree <git archive be4fc0d8835c443aca8b32ccd4c1caacf48cbdce>/packages/gnomon-cli/gnomon.js)
+
+A. surface: M2's block (replay off / on) against R3R's block, on v0.4.0's init
+
+  arm L:
+  ok   R3R's block and M2's (off, on) run on v0.4.0's init (- / - / -)
+  ok   M2's block refuses a cell without M2_LOCAL_REPLAY (Error: M2: M2_LOCAL_REPLAY must be true or false, got undefined)
+  ok   replay off: byte-identical files to R3R's block (the control's surface)
+    replay on vs off: files that differ ["config.toml"]; config.toml: ["+ replay_reasoning = true"]
+  ok   replay on: exactly one added line, replay_reasoning = true, under [endpoints.r1local]; nothing else changes
+
+  arm PC:
+  ok   R3R's block and M2's (off, on) run on v0.4.0's init (- / - / -)
+  ok   M2's block refuses a cell without M2_LOCAL_REPLAY (Error: M2: M2_LOCAL_REPLAY must be true or false, got undefined)
+  ok   replay off: byte-identical files to R3R's block (the control's surface)
+    replay on vs off: files that differ ["config.toml"]; config.toml: ["+ replay_reasoning = true"]
+  ok   replay on: exactly one added line, replay_reasoning = true, under [endpoints.r1local]; nothing else changes
+
+B. wire: v0.4.0 init -> M2's node block -> gnomon task; the local endpoint streams reasoning beside its tool calls
+
+  L, replay false: gnomon exit 0; local 3 req (0 with reasoning_content), cloud 0 req (0 with reasoning_content)
+    meter: chat 3, stream 3, max_tokens 3, with assistant 2, reasoning replayed 0, replies with reasoning 3, following 2, following replayed 0, late system 0
+    turn records 1: wire [{"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768}]
+  ok   gnomon task exited 0
+  ok   every request streamed, asks for usage itself and carries max_tokens = 32768
+  ok   each endpoint gets its own model id
+  ok   the cloud is never sent reasoning_content (v0.4.0's default for a non-DeepSeek host, as in R3R)
+  ok   replay off: no local request carries reasoning_content (the negative control)
+  ok   replay off: no turn record says replay_reasoning
+  ok   L: local only
+
+  L, replay true: gnomon exit 0; local 3 req (2 with reasoning_content), cloud 0 req (0 with reasoning_content)
+    meter: chat 3, stream 3, max_tokens 3, with assistant 2, reasoning replayed 2, replies with reasoning 3, following 2, following replayed 2, late system 0
+    turn records 1: wire [{"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"replay_reasoning":true}]
+  ok   gnomon task exited 0
+  ok   every request streamed, asks for usage itself and carries max_tokens = 32768
+  ok   each endpoint gets its own model id
+  ok   the cloud is never sent reasoning_content (v0.4.0's default for a non-DeepSeek host, as in R3R)
+  ok   replay on: every local request after a reply with reasoning + a tool call sends the reasoning back (meter: following replayed = following > 0)
+  ok   replay on, L: the turn record's wire says replay_reasoning
+  ok   L: local only
+
+  PC, replay false: gnomon exit 0; local 3 req (0 with reasoning_content), cloud 2 req (0 with reasoning_content)
+    meter: chat 3, stream 3, max_tokens 3, with assistant 2, reasoning replayed 0, replies with reasoning 3, following 2, following replayed 0, late system 0
+    turn records 1: wire [{"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768}]
+  ok   gnomon task exited 0
+  ok   every request streamed, asks for usage itself and carries max_tokens = 32768
+  ok   each endpoint gets its own model id
+  ok   the cloud is never sent reasoning_content (v0.4.0's default for a non-DeepSeek host, as in R3R)
+  ok   replay off: no local request carries reasoning_content (the negative control)
+  ok   replay off: no turn record says replay_reasoning
+  ok   PC: the coordinator in the cloud, the delegated implementor sub-turn local
+  ok   PC: the log carries the delegation line the collector reads
+
+  PC, replay true: gnomon exit 0; local 3 req (2 with reasoning_content), cloud 2 req (0 with reasoning_content)
+    meter: chat 3, stream 3, max_tokens 3, with assistant 2, reasoning replayed 2, replies with reasoning 3, following 2, following replayed 2, late system 0
+    turn records 1: wire [{"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768}]
+  ok   gnomon task exited 0
+  ok   every request streamed, asks for usage itself and carries max_tokens = 32768
+  ok   each endpoint gets its own model id
+  ok   the cloud is never sent reasoning_content (v0.4.0's default for a non-DeepSeek host, as in R3R)
+  ok   replay on: every local request after a reply with reasoning + a tool call sends the reasoning back (meter: following replayed = following > 0)
+  ok   replay on, PC: the one turn record is the coordinator's (cloud endpoint, no replay); the local sub-turn's replay shows on the meter above
+  ok   PC: the coordinator in the cloud, the delegated implementor sub-turn local
+  ok   PC: the log carries the delegation line the collector reads
+
+wire test: PASS (gnomon be4fc0d8835c443aca8b32ccd4c1caacf48cbdce)

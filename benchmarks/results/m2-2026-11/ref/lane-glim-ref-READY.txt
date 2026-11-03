@@ -1,0 +1,26 @@
+M1 lane READY: glimmer (hub RTX 5090, llama.cpp)          written 2026-11-03 by the M1 prep agent
+model       meta-models/Muse-Glimmer-30B-GGUF @ b44f1072cf75e918a1b82a3a17b45c4389b076e7 (apache-2.0, not gated)
+  weights   C:\dev\m1-glimmer\models\Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf  sha256 4cc57c0f51040a226e5a72cc47b7613f7772950e460a665f7083de89f183f60e  16,756,683,904 B  (general.architecture=muse-glimmer, 28B, 52 layers, native ctx 131072)
+  drafter   C:\dev\m1-glimmer\models\dflash-Muse-Glimmer-30B-Q4_K_M.gguf      sha256 b2e808bf656086fe86bd0d0bd990f01d33e377537a07c02d45371517c8b264ef  1,631,208,128 B  (architecture=dflash)
+  no mmproj (text only). Both sha256 verified after download against the Hub's LFS ids.
+engine      llama.cpp b11739 (0ce8cd11416c), official llama-b11739-bin-win-cuda-13.4-x64.zip sha256 c7bfa71b0a1e117ffb140fdee34fa47857549007906dde1ff765820e709da7aa
+            + cudart-llama-bin-win-cuda-13.4-x64.zip sha256 738f8c251ac22b70c3ae6f83a10cf222725df0395246a2cf58f32bdb85fbe668 (both = GitHub release digests)
+            own copy C:\dev\m1-glimmer\llama (byte-identical to C:\dev\bud-lane\llama; llama-server.exe sha256 8675d6877d6b..., llama.dll 1198733c4e5d...)
+            same engine build as the incumbent R1H lane. b11739 source has src/models/muse-glimmer.cpp (exposes target-layer residuals for
+            DFlash) and the Glimmer ATEM chat/tool-call parser (common_chat_params_init_muse_glimmer); model card needs >= b10353.
+            The copy keeps bud-lane/R1H cleanups (which kill llama-server.exe under C:\dev\bud-lane\*) from touching this lane.
+endpoint    127.0.0.1:18480 (loopback only), alias glimmer-30b
+settings    --ctx-size 196608 --parallel 2 (98,304 per slot) --n-gpu-layers 99 --batch-size 2048 --ubatch-size 256
+            --cache-type-k q8_0 --cache-type-v q8_0 --spec-type draft-dflash --model-draft <dflash gguf> (draft ngl auto, as R1H)
+            --cont-batching --jinja ; no sampling flags (requests decide, as R1H)
+vs R1H lane model and drafter; alias; port; --jinja explicit; no "--reasoning off": Glimmer's template opens its thinking channel
+            unconditionally, so it always reasons (template default reasoning_strength=high). The incumbent ran with reasoning off.
+            Model card sampling (temp 1.0, top_p 0.95, top_k 64) is not set; gnomon's own temperature applies, as for the incumbent.
+            Card warning: a generation that runs out of slot context returns no answer silently (98,304/slot < 131,072 trained).
+scripts     C:\dev\m1-glimmer\start-m1.ps1 [-TimeoutSec 900]  exit 0 when /v1/models lists glimmer-30b; 1 precondition; 2 timeout (stops itself)
+            C:\dev\m1-glimmer\stop-m1.ps1                      stops only C:\dev\m1-glimmer\llama\llama-server.exe and its wrapper
+preconds    no llama-server.exe running (bud-lane stopped by R1H's cleanup), GPU memory used < 4,000 MiB, port 18480 free
+from gx10   ssh eljap@100.77.18.0 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\dev\m1-glimmer\start-m1.ps1"
+            ssh eljap@100.77.18.0 "powershell -NoProfile -ExecutionPolicy Bypass -File C:\dev\m1-glimmer\stop-m1.ps1"
+            tunnel: ssh -N -L 127.0.0.1:18680:127.0.0.1:18480 eljap@100.77.18.0
+NOT verified: the server has never been started (GPU busy); first start = first load test.
