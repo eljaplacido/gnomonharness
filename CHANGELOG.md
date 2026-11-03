@@ -26,6 +26,31 @@
 
 ## [Unreleased]
 
+- **`[skills]` in policy.toml is no longer reported as a block that does
+  nothing.** `requireTrial` reads `[skills] require_trial`, but the surface
+  auditor's list of known blocks did not have `skills`, so every start printed
+  "[skills] is not a block this harness reads; it does nothing" over a
+  declared control, which invites deleting it. `skills` is now a known
+  policy.toml block, and in config.toml it is reported as misplaced. A test
+  pins both and fails on the previous code.
+- **The degradation suite reads 14/14 again (#82).** The real `AuditLog`
+  gained `action()` in #67, and the suite's collector and blackhole control
+  did not, so the three verify paths threw before announcing anything. The
+  suite reported 11/14 and exited 1 on master and on v0.3.3. With the stub
+  fixed it reads 14/14, and both negative controls still fire.
+- **CI holds the five property suites to their published figures (#85).**
+  `scripts/property_suites.mjs` runs surface fidelity, degradations, fault
+  disclosure, silent success and determinism in a stranger's state (empty
+  HOME and XDG dirs, no keys) as `.gnomon/ci.sh` stage 13. It checks each
+  figure, case count included, because a suite whose cases all errored alike
+  can still exit 0. With #82's defect put back, the gate fails. The figures
+  now held are 14/14, 14/14, 8/8, 0/11 and 10/10. Surface fidelity is 14/14
+  since skill-trial specs joined the hash.
+- **Docs: an end-to-end stability audit of 2026-11-01 (#84),** in
+  `docs/AUDIT-2026-11-01.md` with its evidence in `docs/audit-2026-11-01/`. It
+  is the source of #82, #85, #86 and #87.
+- **Docs: `gnomon guard`, `gnomon acp` and workspace trust in the guide
+  (#87),** covering the 0.3.3 additions (audit row 25).
 - **Opt-in `reasoning_content` replay, per endpoint.** gnomon dropped the
   reasoning from every assistant message it sent back; goose replays it.
   DeepSeek's docs (api-docs.deepseek.com/guides/thinking_mode, read
@@ -366,7 +391,12 @@
     `bench/peers-2026-11`), hosted model, 48 pairs: output tokens −28%
     (p < 0.0001), $ per solved task 0.052 → 0.035, 37 vs 34 tasks solved
     (not significant).
-  - Stage 2 runs the same A/B on the local model before this merges.
+  - Stage 2, the same A/B on the local qwen3.6-35b (16 tasks, 2026-11-02),
+    passed its pre-registered guard: the same tasks solved (10/16 vs 10/15
+    valid). It showed no saving on the local model: prompt tokens 2.0x base,
+    driven by three tasks both arms fail, where the lean arm keeps trying
+    longer (`benchmarks/results/lean-2026-11/README.md` on
+    `bench/peers-2026-11`).
 - **`gnomon check --format gnomon` reads gnomon's own audit trail.** G1-R
   (bench/peers-2026-11, `benchmarks/results/g1r-2026-11/`) re-scored G1 on master:
   check now catches 44/44 of the peers' violations, and its one miss was gnomon's

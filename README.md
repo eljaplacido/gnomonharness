@@ -61,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1802 TypeScript tests (1508 core, 269 cli, 18
-> natives, 7 tui) and 61 Rust tests — **1863 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1803 TypeScript tests (1509 core, 269 cli, 18
+> natives, 7 tui) and 61 Rust tests — **1864 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -439,9 +439,12 @@ npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/
 not a path there. The installer one-liners above are the cross-shell route. -->
 
 From the registry this is `npm i -g gnomon-harness` (or
-`npm i -g gnomon-harness@0.3.3` to pin), which resolves the other three by
+`npm i -g gnomon-harness@<version>` to pin), which resolves the other three by
 name. Releases reach npm when they are published on GitHub, by
 [`publish-npm.yml`](.github/workflows/publish-npm.yml), with npm provenance.
+That job needs the `NPM_TOKEN` repository secret: 0.3.3's run stopped at
+"Require NPM_TOKEN", so the registry's latest is 0.3.2 and 0.3.3 installs from
+the release tarballs above (the installer does this by itself).
 
 Requires **Node ≥ 20** and a model endpoint — [Ollama](https://ollama.com) for
 local inference, or any OpenAI-shaped API. A **Rust toolchain** is needed only
@@ -480,7 +483,7 @@ the shim anyway"; it does not.
 
 `pnpm run unlink:global` removes it.
 
-> On npm since 0.3.1 as `gnomon-harness`, `gnomon-core`, `gnomon-natives` and
+> On npm since 0.3.2 as `gnomon-harness`, `gnomon-core`, `gnomon-natives` and
 > `gnomon-tui`. In the workspace they depend on each other via `workspace:*`;
 > `pnpm pack` pins each to the release's exact version, and
 > `scripts/check-publishable.sh` installs the packed result in an empty
@@ -2256,11 +2259,12 @@ Slash commands other than a role prefix are terminal-only.
 | `gnomon task "<what to do>" [--role <name>] [--yes] [--json] [--trust]` | One task, no terminal. Exit code carries the bucket. An untrusted surface that grants more than the defaults runs clamped to them. |
 | `gnomon trust [list\|grant\|revoke]` | Whether this machine trusts what this project's `.gnomon/` grants beyond the defaults. See [Workspace trust](#workspace-trust). |
 | `gnomon sessions` | Saved sessions. |
-| `gnomon skill [list\|accept <id>\|reject <id>]` | Learned skills and proposals. |
+| `gnomon skill [list [--candidates]\|accept <id> [--evidence <report.json>]\|reject <id> [--reason <text>]\|mine [--json]]` | Learned skills and proposals. Accept and reject write `skill_accept` / `skill_reject` audit records; a refused accept exits 3. `mine` writes candidates from the audit trail to `.gnomon-skills/candidates/`, with no model call. |
+| `gnomon skill trial <id> [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]` | Measure a proposal against its absence on `.gnomon/trials/<name>.toml`. Exit 0 meets the declared thresholds, 2 does not, 10 no answer. Never accepts. |
 | `gnomon key [set\|list\|unset] <endpoint\|VAR>` | Store an API key for an endpoint that declares one. |
 | `gnomon endpoint [add\|test\|list]` | Declare an endpoint end to end — provider, key, model, roles — and prove it runs one token before writing anything. Presets: `opencode-go`, `opencode-zen`, `openrouter`, `ollama`. |
-| `gnomon audit [show\|verify]` | Audit trails. |
-| `gnomon check --base <rev> [--head <rev>] [--role <r> \| --agent <name>] [--json]` | Judge a change another harness made by this surface's rules as of `<rev>`. Exit 0 held, 2 failed, 10 no verdict. See [Governing other harnesses](#governing-other-harnesses). |
+| `gnomon audit [show\|verify\|tamper\|resolve <trail>:<seq> --reason <text>]` | Audit trails. `tamper` lists `record_tamper` events and exits 3 while any is unresolved; `resolve` is a person's recorded acknowledgement of one. |
+| `gnomon check --base <rev> [--head <rev>] [--role <r> \| --agent <name>] [--transcript <file> --format <fmt>] [--json]` | Judge a change another harness made by this surface's rules as of `<rev>`. Exit 0 held, 2 failed, 10 no verdict. See [Governing other harnesses](#governing-other-harnesses). |
 | `gnomon guard [--from claude-code\|opencode\|cursor] [--tool <kind> --input <json>] [--role <r> \| --agent <name>]` | Decide one tool call another harness is about to make, by the committed rules: allow (0), deny (2), ask (3), no decision (10). `gnomon guard install claude-code\|opencode\|cursor [--write]` installs the hook. See [Before the call](#before-the-call-gnomon-guard). |
 | `gnomon surface [hash\|manifest\|paths]` | Inspect the surface. |
 | `gnomon enumerations` | The enumerations contract. |
