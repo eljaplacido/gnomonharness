@@ -249,6 +249,21 @@ export const MIGRATIONS: Migration[] = [
       addKeyToSection(text, "defaults", "stream", 'true                     # stream replies from kind = "openai" endpoints'),
   },
   {
+    id: "output-limit",
+    file: "config.toml",
+    what: `[defaults] max_tokens absent  →  32768 (an output limit on every reply)`,
+    why: [
+      "With no limit a reply runs until the model stops, and a reasoning",
+      "model does not stop early: on P2G (2026-11, hosted DeepSeek V4.1",
+      "Flash) gnomon wrote about twice the output per step of opencode and",
+      "goose, up to 9x on some tasks, mostly thinking. 32k counts the thinking",
+      "and still fits a large file write after it. Scaffolded since 2026-11.",
+      "Only a [defaults] with no max_tokens line is touched.",
+    ],
+    apply: (text) =>
+      addKeyToSection(text, "defaults", "max_tokens", "32768                # output limit per reply, thinking included (0 = none)"),
+  },
+  {
     id: "audit-enabled",
     file: "config.toml",
     what: `[audit] enabled = false  →  true`,

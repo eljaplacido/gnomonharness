@@ -49,7 +49,7 @@ approval = "on_write"             # never | on_write | always
 role_profile = "local_first"      # local_first | frontier_plan | all_remote
 max_context_tokens = 65536        # an [endpoints.<name>] block may declare its model's own window
 stream = true                     # stream replies from kind = "openai" endpoints; an endpoint may say stream = false
-max_tokens = 16384                # output limit per reply; a role or endpoint may declare its own (0 = none)
+max_tokens = 32768                # output limit per reply, thinking included; a role or endpoint may declare its own (0 = none)
 compaction = "summary"            # discard | summary | truncate
 
 [context]

@@ -561,11 +561,16 @@ block. One that streams without reporting usage is counted in the turn
 record's `counters.unmetered_calls`, which says the token totals are a floor.
 Ollama's own `/api/chat` is never streamed.
 
-**Output and window.** Every call carries an output limit: the role's
-`max_tokens`, else the endpoint's, else `[defaults] max_tokens` (16384); 0
-sends none. An endpoint that refuses it by name is resent once in the shape it
-takes (`max_completion_tokens`, or no limit), and the turn record's `wire`
-says which. A cloud endpoint declaring `max_context_tokens = <window>` has its
+**Output and window.** A call carries an output limit when the surface
+declares one: the role's `max_tokens`, else the endpoint's, else `[defaults]
+max_tokens` (scaffolded as 32768 since 2026-11; `gnomon migrate` adds it to an
+older surface). 0 sends none. On DeepSeek and llama.cpp the limit counts the
+thinking as well as the reply. An endpoint that refuses the limit by name gets
+the call once more in a shape it accepts: `max_completion_tokens`, the maximum
+its error states, or no limit for that call. The turn record counts these in
+`counters.output_limit_adapted`, and its `wire` shows any change that is
+remembered. A tool call the limit cuts off is not run. The model is asked for
+the work in smaller parts. A cloud endpoint declaring `max_context_tokens = <window>` has its
 turns trimmed to that window rather than to `[defaults] max_context_tokens`.
 
 ```toml

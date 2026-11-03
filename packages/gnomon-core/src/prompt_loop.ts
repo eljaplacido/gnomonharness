@@ -228,7 +228,7 @@ export interface PromptState {
    * Endpoint+model pairs that refused the output limit, and what was done: the
    * field renamed, or the limit dropped. Paid once per session, as above.
    */
-  outputLimitAdapted?: Map<string, "rename" | "drop">;
+  outputLimitAdapted?: Map<string, OutputLimitAdaptation>;
   /**
    * The session checklist, as the `todo` tool last left it.
    *
@@ -712,10 +712,16 @@ interface InferenceResult {
    */
   unmeteredCalls?: number;
   /**
-   * A 400 that named the output limit. `rename`: the endpoint wants it as
-   * max_completion_tokens. `drop`: it refused the value. See adaptOutputLimit.
+   * A 400 that named the output limit, and the shape to resend it in. See
+   * readLimitRefusal.
    */
-  maxTokensRejected?: "rename" | "drop";
+  maxTokensRejected?: LimitRefusal;
+  /**
+   * The content is the reasoning channel standing in for an empty reply: no
+   * text and no tool call came back, only thinking. A loop that reads this as
+   * an answer is reading the model think.
+   */
+  reasoningOnly?: boolean;
 }
 
 /**
@@ -1602,12 +1608,8 @@ async function callEndpointOnce(
       // Named on the result so the caller can resend in the shape it accepts,
       // announced and recorded, rather than ending the turn on a limit the
       // harness chose. Only a 400 that names the field counts.
-      const maxTokensRejected: InferenceResult["maxTokensRejected"] =
-        res.status === 400 && maxTokens > 0 && /max_(?:completion_)?tokens|num_predict/i.test(detail)
-          ? maxTokensField === "max_tokens" && /use\W+max_completion_tokens/i.test(detail)
-            ? "rename"
-            : "drop"
-          : undefined;
+      const maxTokensRejected =
+        res.status === 400 ? readLimitRefusal(detail, maxTokens, maxTokensField) : undefined;
       return {
         content:
           `Model API error: ${res.status} ${res.statusText}` +
@@ -1675,10 +1677,11 @@ async function callEndpointOnce(
       // Content first and reasoning last, as below. A stream cannot tell a
       // null content from an empty one, so the reasoning stands in only for a
       // reply with no text and no tool call -- the case it exists for.
-      const content =
-        s.content !== "" || raw.length > 0 || isEmptyReasoning(s.reasoning) ? s.content : s.reasoning;
+      const promoted = !(s.content !== "" || raw.length > 0 || isEmptyReasoning(s.reasoning));
+      const content = promoted ? s.reasoning : s.content;
       return {
         content,
+        ...(promoted && content ? { reasoningOnly: true } : {}),
         code: 0,
         toolCalls: normaliseToolCalls(raw),
         rawToolCalls: raw,
@@ -1716,8 +1719,19 @@ async function callEndpointOnce(
       ? message.tool_calls
       : [];
     const toolCalls = normaliseToolCalls(raw);
+    // The reasoning stood in for a null content (and no `response`).
+    const reasoningOnly =
+      message.content == null && json.response == null && content !== "" && content === reasoning;
 
-    return { content, code: 0, toolCalls, rawToolCalls: raw, usage: readUsage(json), finishReason };
+    return {
+      content,
+      code: 0,
+      toolCalls,
+      rawToolCalls: raw,
+      usage: readUsage(json),
+      finishReason,
+      ...(reasoningOnly ? { reasoningOnly: true } : {}),
+    };
   } catch (err) {
     if (signal?.aborted) {
       return { content: CANCELLED, code: 2, toolCalls: [] };
@@ -2041,19 +2055,66 @@ export function wireOf(target: RouteTarget): WireRecord {
   };
 }
 
+/** What a session has learned about one endpoint+model's output limit. */
+export interface OutputLimitAdaptation {
+  /** It takes the limit under this name instead of max_tokens */
+  field?: "max_completion_tokens";
+  /** Its stated maximum, which the limit is clamped to */
+  max?: number;
+}
+
 /**
- * A target with the output limit this session has learned the endpoint takes.
+ * How to resend a call whose output limit the endpoint refused by name.
  *
- * A limit the endpoint refused by name is resent once in the shape it accepts
- * -- renamed to max_completion_tokens, or dropped -- and remembered per
- * endpoint and model, so the refusal is paid once per session. Exported for
- * the tests.
+ * - `rename`: OpenAI's reasoning models, "Use 'max_completion_tokens' instead".
+ *   A property of the endpoint, so remembered.
+ * - `clamp` to a maximum the error states. DeepSeek's "valid range of
+ *   max_tokens is [1, 8192]" is a property of the model, so remembered. vLLM's
+ *   "maximum context length is 32768 tokens and your request has 20000 input
+ *   tokens" depends on this prompt, so it applies to this call only.
+ * - `drop`: refused, with no number to go by. This call only: the next prompt
+ *   may fit, and a session-long drop would take the limit off every call
+ *   after one bad one.
+ */
+export type LimitRefusal =
+  | { how: "rename" }
+  | { how: "clamp"; max: number; remember: boolean }
+  | { how: "drop" };
+
+export function readLimitRefusal(
+  detail: string,
+  sent: number,
+  field: "max_tokens" | "max_completion_tokens"
+): LimitRefusal | undefined {
+  if (sent <= 0 || !/max_(?:completion_)?tokens|num_predict/i.test(detail)) return undefined;
+  if (field === "max_tokens" && /use\W+max_completion_tokens/i.test(detail)) return { how: "rename" };
+  const ctx = /maximum context length is (\d+)\D+?(\d+) input tokens/i.exec(detail);
+  if (ctx) {
+    const room = Number(ctx[1]) - Number(ctx[2]);
+    return room > 0 && room < sent ? { how: "clamp", max: room, remember: false } : { how: "drop" };
+  }
+  const stated =
+    /\[\s*\d+\s*,\s*(\d+)\s*\]/.exec(detail) ??
+    /(?:at most|<=|less than or equal to|maximum (?:value )?(?:is|of))\s*(\d+)/i.exec(detail);
+  if (stated) {
+    const max = Number(stated[1]);
+    if (max > 0 && max < sent) return { how: "clamp", max, remember: true };
+  }
+  return { how: "drop" };
+}
+
+/**
+ * A target with the output limit this session has learned the endpoint takes:
+ * renamed, or clamped to the maximum it stated. Exported for the tests.
  */
 export function adaptOutputLimit(state: PromptState, target: RouteTarget): RouteTarget {
   const seen = state.outputLimitAdapted?.get(`${target.url}|${target.model}`);
-  if (seen === "rename") return { ...target, maxTokensField: "max_completion_tokens" };
-  if (seen === "drop") return { ...target, maxTokens: 0 };
-  return target;
+  if (!seen) return target;
+  return {
+    ...target,
+    ...(seen.field ? { maxTokensField: seen.field } : {}),
+    ...(seen.max !== undefined && (target.maxTokens ?? 0) > seen.max ? { maxTokens: seen.max } : {}),
+  };
 }
 
 /** Marker text for a turn the user stopped. Code 2 → bucket `refusal`. */
@@ -3169,6 +3230,12 @@ export interface TurnCounters {
    * count. Absent when every request was metered.
    */
   unmetered_calls?: number;
+  /**
+   * Calls resent because the endpoint refused the declared output limit:
+   * renamed, clamped to a stated maximum, or sent without one. Absent when
+   * none were.
+   */
+  output_limit_adapted?: number;
   /** Per tool: calls made, refusals, apparatus failures. Separates "bash
    * failed 9 of 31 calls" from "bash succeeded 31/31 and the answer was still
    * wrong". */
@@ -3838,6 +3905,9 @@ export async function runAgenticTurn(
   // were the entire residual gap against the peer harness.
   let consecutiveEmpty = 0;
   let truncationRetried = false;
+  // Replies in a row whose tool call the output limit cut off. See cutCalls.
+  let consecutiveCut = 0;
+  let cutOut = false;
   // The last outcome of the declared check. Last, not first: a failing check
   // hands the turn back, and the round after it is the one that counts.
   let verifyOutcome: TurnResult["verify"];
@@ -3936,21 +4006,30 @@ export async function runAgenticTurn(
     // shape it takes, said on the unsilenceable channel, and remembered for
     // the session; the turn record's `wire` carries the limit that went out.
     if (r.maxTokensRejected && (target.maxTokens ?? 0) > 0) {
-      const how = r.maxTokensRejected;
-      (state.outputLimitAdapted ??= new Map()).set(`${target.url}|${target.model}`, how);
+      const refusal = r.maxTokensRejected;
+      const key = `${target.url}|${target.model}`;
+      const memo = (state.outputLimitAdapted ??= new Map());
+      let resend: RouteTarget;
+      let said: string;
+      if (refusal.how === "rename") {
+        memo.set(key, { ...memo.get(key), field: "max_completion_tokens" });
+        resend = adaptOutputLimit(state, declared);
+        said = `takes its output limit as max_completion_tokens — resending under that name`;
+      } else if (refusal.how === "clamp") {
+        if (refusal.remember) memo.set(key, { ...memo.get(key), max: refusal.max });
+        resend = { ...target, maxTokens: refusal.max };
+        said =
+          `refused max_tokens = ${target.maxTokens} — resending with ${refusal.max}, ` +
+          (refusal.remember ? `the maximum it states` : `the room this prompt leaves`);
+      } else {
+        resend = { ...target, maxTokens: 0 };
+        said = `refused max_tokens = ${target.maxTokens} — resending this call with no output limit`;
+      }
+      counters.output_limit_adapted = (counters.output_limit_adapted ?? 0) + 1;
       deps.progress.stop();
-      warn(
-        paint(
-          deps.ui,
-          "yellow",
-          how === "rename"
-            ? `  [endpoint] ${target.model} takes its output limit as max_completion_tokens — resending under that name.`
-            : `  [endpoint] ${target.model} refused max_tokens = ${target.maxTokens} — resending with no output limit. ` +
-                `Declare a max_tokens it accepts on the role or [endpoints.${target.endpoint ?? "<name>"}].`
-        )
-      );
+      warn(paint(deps.ui, "yellow", `  [endpoint] ${target.model} ${said}.`));
       deps.progress.start(`${target.model}`);
-      target = adaptOutputLimit(state, declared);
+      target = resend;
       r = await callEndpointWithRetry(
         target,
         working,
@@ -3963,6 +4042,7 @@ export async function runAgenticTurn(
         state.sessionId
       );
       turnUsage = addUsage(turnUsage, r.usage);
+      countUnmetered(r);
     }
 
     if (r.toolsUnsupported && offer.length > 0) {
@@ -4134,7 +4214,54 @@ export async function runAgenticTurn(
     // spent once-per-turn latch let the second cut-off reply stand as the
     // answer. A reply that calls a tool is progress and re-opens the latch; a
     // cut-off straight after a cut-off still stands, so this cannot loop.
-    if (result.code === 0 && result.toolCalls.length > 0) truncationRetried = false;
+    const cutCalls =
+      result.code === 0 && result.finishReason === "length"
+        ? result.toolCalls.filter((c) => ARGS_TRUNCATED in c.args)
+        : [];
+    if (result.code === 0 && result.toolCalls.length > 0 && cutCalls.length === 0) {
+      truncationRetried = false;
+      consecutiveCut = 0;
+    }
+    const limitNow = adaptOutputLimit(state, usedTarget).maxTokens ?? 0;
+    const where = limitNow > 0 ? ` (max_tokens = ${limitNow})` : "";
+
+    // A tool call the output limit cut off mid-arguments: nothing ran. Told
+    // "transport truncation, send the same call again", as a cut-off from the
+    // wire is, the model sent the same call again and was cut at the same
+    // place, twice, and the turn ended malformed -- a 30 KB write after 9k
+    // tokens of thinking, under a limit that counts the thinking. It is not
+    // malformed and the same call cannot pass. So the limit is named and the
+    // work asked for in parts. Bounded by [turn] max_consecutive_malformed
+    // cut-offs in a row with no usable call between; past that the turn ends
+    // through the wrap-up as "truncated", never in a loop. The cut call is not
+    // echoed back: no tool result answers it, and half a JSON argument
+    // teaches nothing.
+    if (cutCalls.length > 0) {
+      consecutiveCut++;
+      if (consecutiveCut <= loop.max_consecutive_malformed && steps < maxTotal) {
+        const name = cutCalls[0]!.name || "tool";
+        say(
+          paint(
+            deps.ui,
+            "yellow",
+            `  [loop] a ${name} call was cut off at the output limit${where} — asking for it in parts ` +
+              `(${consecutiveCut}/${loop.max_consecutive_malformed})`
+          )
+        );
+        working.push({
+          role: "user",
+          content:
+            `Your last reply reached the output limit${where} in the middle of a ${name} call, so ` +
+            `the call was cut off and nothing ran. Your thinking counts toward that limit. Send ` +
+            `the work in smaller parts: write the first part of the file now and add the rest ` +
+            `with further calls, each well under the limit, and keep the thinking before each ` +
+            `call short.`,
+        });
+        continue;
+      }
+      cutOut = true;
+    }
+
     if (
       result.code === 0 &&
       result.toolCalls.length === 0 &&
@@ -4143,11 +4270,13 @@ export async function runAgenticTurn(
       steps < maxTotal
     ) {
       truncationRetried = true;
-      const limit = adaptOutputLimit(state, usedTarget).maxTokens ?? 0;
-      const where = limit > 0 ? ` (max_tokens = ${limit})` : "";
       // Nothing visible came back: the reasoning spent the whole limit. Asking
       // it to "continue" would continue the thinking, which is the problem.
-      const spentOnThinking = !result.content.trim();
+      // `reasoningOnly` is the same case where the reasoning was handed up as
+      // the content -- a streamed reply cannot tell an empty content from a
+      // missing one -- and echoing that back as the model's answer, with
+      // "continue from where it stopped", is what P2G's runs were sent.
+      const spentOnThinking = !result.content.trim() || result.reasoningOnly === true;
       say(
         paint(
           deps.ui,
@@ -4575,7 +4704,7 @@ export async function runAgenticTurn(
     // runs as usual: executeTool answers each call with what was wrong, and
     // those answers are the repair turn. Past it, nothing runs and the turn
     // wraps up. One usable call in the reply is progress and clears the count.
-    if (!malformedOut && result.toolCalls.length > 0) {
+    if (!malformedOut && !cutOut && result.toolCalls.length > 0) {
       if (result.toolCalls.every((c) => isMalformedCall(c, offered))) {
         repairMalformed("no usable tool call in that reply (malformed arguments or unknown tool)");
       } else {
@@ -4615,8 +4744,12 @@ export async function runAgenticTurn(
     //
     // A ceiling a turn can walk through is worse than no ceiling: it is the one
     // bound an unattended session has, and the number in roles.toml was not it.
-    if (malformedOut || stalled || wall) {
-      const note = malformedOut
+    if (malformedOut || cutOut || stalled || wall) {
+      const note = cutOut
+        ? `Stopped: ${consecutiveCut} repl${consecutiveCut === 1 ? "y" : "ies"} in a row had a ` +
+          `tool call cut off at the output limit${where}, after ${steps} call(s). Raise ` +
+          `max_tokens for this role or endpoint, or ask for the work in smaller pieces.`
+        : malformedOut
         ? `Stopped: ${consecutiveMalformed} repl${consecutiveMalformed === 1 ? "y" : "ies"} ` +
           `in a row offered no usable tool call (malformed arguments, an unknown ` +
           `tool, or a call written as text), after ${steps} call(s). Check the ` +
@@ -4679,8 +4812,10 @@ export async function runAgenticTurn(
         toolSteps: steps,
         toolLog,
         usage: turnUsage,
-        stop_reason: malformedOut ? "malformed" : stalled ? "stall" : "step_wall",
-        stop_detail: malformedOut
+        stop_reason: cutOut ? "truncated" : malformedOut ? "malformed" : stalled ? "stall" : "step_wall",
+        stop_detail: cutOut
+          ? { steps, repeats: consecutiveCut }
+          : malformedOut
           ? { steps, repeats: consecutiveMalformed }
           : stalled
           ? { steps, repeats: loop.stall_repeats }

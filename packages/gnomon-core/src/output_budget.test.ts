@@ -10,10 +10,10 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { callEndpoint, runTask, wireOf, adaptOutputLimit } from "./prompt_loop.js";
+import { callEndpoint, runTask, wireOf, adaptOutputLimit, readLimitRefusal } from "./prompt_loop.js";
 import {
   auditSurface,
   loadConfig,
@@ -75,7 +75,7 @@ const toolCall = () => ({
 });
 
 /** A minimal surface whose one role talks to `url`. */
-function surface(url: string, extra = { endpoint: "", role: "", defaults: "" }) {
+function surface(url: string, extra = { endpoint: "", role: "", defaults: "max_tokens = 32768" }) {
   const root = mkdtempSync(join(tmpdir(), "gnomon-budget-"));
   roots.push(root);
   mkdirSync(join(root, ".gnomon"), { recursive: true });
@@ -90,6 +90,10 @@ function surface(url: string, extra = { endpoint: "", role: "", defaults: "" }) 
       `tools = ["read"]\nmax_steps = 6\n${extra.role}\n`
   );
   writeFileSync(join(root, ".gnomon", "system.md"), "be brief\n");
+  writeFileSync(
+    join(root, ".gnomon", "tools.toml"),
+    `[[tools]]\nname = "read"\ndescription = "Read a file."\nenabled = true\n`
+  );
   writeFileSync(join(root, "x.txt"), "hello\n");
   return root;
 }
@@ -97,13 +101,16 @@ function surface(url: string, extra = { endpoint: "", role: "", defaults: "" }) 
 const hi = [{ role: "user" as const, content: "hi" }];
 
 describe("the output limit", () => {
-  it("goes out with every call, 16384 when nothing declares one", async () => {
+  it("goes out with every call when [defaults] declares it, and not at all when nothing does (Rule 1)", async () => {
     const { url, bodies } = await serve([answer("ok")]);
-    const config = loadConfig(surface(url));
-    const t = routeRole(config, "smol").target;
+    const t = routeRole(loadConfig(surface(url)), "smol").target;
     expect(t.maxTokens).toBe(DEFAULT_MAX_TOKENS);
     await callEndpoint(t, hi, [], 5000);
-    expect(bodies[0]!.max_tokens).toBe(16384);
+    expect(bodies[0]!.max_tokens).toBe(32768);
+    const bare = routeRole(loadConfig(surface(url, { endpoint: "", role: "", defaults: "" })), "smol").target;
+    expect(bare.maxTokens).toBe(0);
+    await callEndpoint(bare, hi, [], 5000);
+    expect(bodies[1]!.max_tokens).toBeUndefined();
   });
 
   it("goes to Ollama's /api/chat as options.num_predict", async () => {
@@ -123,7 +130,7 @@ describe("the output limit", () => {
     expect(resolveMaxTokens(config, { max_tokens: 1000 }, { max_tokens: 2000 })).toBe(1000);
     expect(resolveMaxTokens(config, {}, { max_tokens: 2000 })).toBe(2000);
     expect(resolveMaxTokens(config, {}, {})).toBe(8000);
-    expect(resolveMaxTokens({ config: {} } as never, {}, undefined)).toBe(DEFAULT_MAX_TOKENS);
+    expect(resolveMaxTokens({ config: {} } as never, {}, undefined)).toBe(0);
     expect(resolveMaxTokens(config, { max_tokens: 0 }, { max_tokens: 2000 })).toBe(0);
   });
 
@@ -138,24 +145,61 @@ describe("the output limit", () => {
     const rec = await runTask(loadConfig(surface(url)), "hi", { role: "smol", yes: true });
     expect(rec.code).toBe(0);
     expect(rec.output).toContain("done");
-    expect(bodies[1]!.max_completion_tokens).toBe(16384);
+    expect(bodies[1]!.max_completion_tokens).toBe(32768);
     expect(bodies[1]!.max_tokens).toBeUndefined();
   });
 
-  it("is dropped, said and recorded, when the endpoint refuses the value", async () => {
+  it("is clamped to a maximum the provider states, and that is remembered", async () => {
     const { url, bodies } = await serve([
-      { status: 400, body: { error: "'max_tokens' or 'max_completion_tokens' is too large: 16384." } },
+      { status: 400, body: { error: { message: "Invalid max_tokens value, the valid range of max_tokens is [1, 8192]", type: "invalid_request_error" } } },
+      toolCall(),
       answer("done"),
     ]);
-    const root = surface(url);
-    const config = loadConfig(root);
-    const rec = await runTask(config, "hi", { role: "smol", yes: true });
+    const config = loadConfig(surface(url));
+    const rec = await runTask(config, "read x.txt", { role: "smol", yes: true });
     expect(rec.code).toBe(0);
-    expect(bodies.length).toBe(2);
-    expect(bodies[1]!.max_tokens).toBeUndefined();
-    // What the turn record's `wire` will carry for this session.
-    const state = { config, exchanges: [], outputLimitAdapted: new Map([[`${url}|m1`, "drop" as const]]) };
-    expect(wireOf(adaptOutputLimit(state as never, routeRole(config, "smol").target)).max_tokens).toBe(0);
+    expect(bodies.map((b) => b.max_tokens)).toEqual([32768, 8192, 8192]);
+    expect(rec.counters.output_limit_adapted).toBe(1);
+    const state = { config, exchanges: [], outputLimitAdapted: new Map([[`${url}|m1`, { max: 8192 }]]) };
+    expect(wireOf(adaptOutputLimit(state as never, routeRole(config, "smol").target)).max_tokens).toBe(8192);
+  });
+
+  it("depends on the prompt when vLLM says so: clamped for that call only, never dropped for the session", async () => {
+    const { url, bodies } = await serve([
+      {
+        status: 400,
+        body: {
+          object: "error",
+          message:
+            "'max_tokens' or 'max_completion_tokens' is too large: 32768. This model's maximum context length is " +
+            "40960 tokens and your request has 20000 input tokens (32768 > 40960 - 20000).",
+          type: "BadRequestError",
+          code: 400,
+        },
+      },
+      toolCall(),
+      answer("done"),
+    ]);
+    const rec = await runTask(loadConfig(surface(url)), "read x.txt", { role: "smol", yes: true });
+    expect(rec.code).toBe(0);
+    expect(bodies.map((b) => b.max_tokens)).toEqual([32768, 20960, 32768]);
+  });
+
+  it("reads a refusal into the shape to resend", () => {
+    expect(readLimitRefusal("Use 'max_completion_tokens' instead.", 100, "max_tokens")).toEqual({ how: "rename" });
+    expect(readLimitRefusal("the valid range of max_tokens is [1, 8192]", 32768, "max_tokens")).toEqual({
+      how: "clamp",
+      max: 8192,
+      remember: true,
+    });
+    expect(readLimitRefusal("max_tokens: must be less than or equal to 4096", 32768, "max_tokens")).toEqual({
+      how: "clamp",
+      max: 4096,
+      remember: true,
+    });
+    expect(readLimitRefusal("max_tokens is not allowed here", 32768, "max_tokens")).toEqual({ how: "drop" });
+    expect(readLimitRefusal("some other 400", 32768, "max_tokens")).toBeUndefined();
+    expect(readLimitRefusal("max_tokens bad", 0, "max_tokens")).toBeUndefined();
   });
 
   it("a role may declare it without the surface audit refusing the key", () => {
@@ -189,6 +233,85 @@ describe("a reply cut off at the limit", () => {
     expect(lastUser(bodies[3]!)).toMatch(/Think less/);
     expect(rec.output).toContain("done");
     expect(rec.stop_reason).toBe("answered");
+  });
+});
+
+describe("review findings (2026-11-03)", () => {
+  /** A streamed fake endpoint scripted per request number. */
+  async function stream(script: (res: ServerResponse, n: number) => void) {
+    const bodies: Record<string, any>[] = [];
+    const server = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        bodies.push(JSON.parse(raw || "{}"));
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        script(res, bodies.length);
+        res.end("data: [DONE]\n\n");
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/chat/completions`, bodies };
+  }
+  const send = (res: ServerResponse, d: Record<string, unknown>, finish: string | null = null) =>
+    res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: d, finish_reason: finish }] })}\n\n`);
+  const lastUser = (b: Record<string, any>) =>
+    [...b.messages].reverse().find((m: { role: string }) => m.role === "user")?.content ?? "";
+  const streamed = (url: string) =>
+    surface(url, { endpoint: "", role: "", defaults: "max_tokens = 32768\nstream = true" }).replace(/$/, "");
+
+  it("a streamed reply that thought until the limit is asked for a shorter one, and its thinking is not echoed back", async () => {
+    const { url, bodies } = await stream((res, n) => {
+      if (n === 1) {
+        send(res, { reasoning_content: "Let me think about this at great length..." });
+        send(res, {}, "length");
+      } else send(res, { content: "done" }, "stop");
+    });
+    const root = streamed(url);
+    // stream = false in the endpoint block would win; take it out.
+    const cfg = join(root, ".gnomon", "config.toml");
+    writeFileSync(cfg, readFileSync(cfg, "utf8").replace("stream = false\n", ""));
+    const rec = await runTask(loadConfig(root), "read x.txt", { role: "smol", yes: true });
+    expect(bodies[0]!.stream).toBe(true);
+    expect(lastUser(bodies[1]!)).toMatch(/Think less/);
+    expect(JSON.stringify(bodies[1]!.messages)).not.toContain("great length");
+    expect(rec.output).toContain("done");
+  });
+
+  it("a tool call cut off at the limit is asked for in parts, not counted malformed, and the write then lands", async () => {
+    const { url, bodies } = await stream((res, n) => {
+      if (n <= 2) {
+        send(res, { tool_calls: [{ index: 0, id: `c${n}`, type: "function", function: { name: "read", arguments: '{"path":"x.t' } }] });
+        send(res, {}, "length");
+      } else if (n === 3) {
+        send(res, { tool_calls: [{ index: 0, id: "c3", type: "function", function: { name: "read", arguments: '{"path":"x.txt"}' } }] }, "tool_calls");
+      } else send(res, { content: "done" }, "stop");
+    });
+    const root = streamed(url);
+    const cfg = join(root, ".gnomon", "config.toml");
+    writeFileSync(cfg, readFileSync(cfg, "utf8").replace("stream = false\n", ""));
+    const rec = await runTask(loadConfig(root), "read x.txt", { role: "smol", yes: true });
+    expect(lastUser(bodies[1]!)).toMatch(/output limit \(max_tokens = 32768\) in the middle of a read call/);
+    expect(lastUser(bodies[1]!)).toMatch(/smaller parts/);
+    expect(JSON.stringify(bodies[1]!.messages)).not.toContain("transport truncation");
+    expect(rec.counters.malformed_tool_calls ?? 0).toBe(0);
+    expect(rec.stop_reason).toBe("answered");
+    expect(rec.code).toBe(0);
+  });
+
+  it("cut-offs in a row end the turn as truncated, never a loop", async () => {
+    const { url, bodies } = await stream((res, n) => {
+      send(res, { tool_calls: [{ index: 0, id: `c${n}`, type: "function", function: { name: "read", arguments: '{"path":"x.t' } }] });
+      send(res, {}, "length");
+    });
+    const root = streamed(url);
+    const cfg = join(root, ".gnomon", "config.toml");
+    writeFileSync(cfg, readFileSync(cfg, "utf8").replace("stream = false\n", ""));
+    const rec = await runTask(loadConfig(root), "read x.txt", { role: "smol", yes: true });
+    expect(rec.stop_reason).toBe("truncated");
+    // Three cut-offs (two asked again), then the tool-less wrap-up call.
+    expect(bodies.length).toBe(4);
   });
 });
 

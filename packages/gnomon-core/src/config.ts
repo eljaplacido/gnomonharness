@@ -132,7 +132,8 @@ export interface EndpointConfig {
   /**
    * The output limit sent with every call here (`max_tokens`, or Ollama's
    * `num_predict`). A role's own `max_tokens` wins; absent from both, it is
-   * `[defaults] max_tokens`. 0 sends none. See resolveMaxTokens.
+   * `[defaults] max_tokens`, and absent from that, none. 0 sends none. See
+   * resolveMaxTokens.
    */
   max_tokens?: number;
   /**
@@ -195,7 +196,10 @@ export interface Defaults {
    * `gnomon init` writes true and `gnomon migrate` adds it. See resolveStream.
    */
   stream?: boolean;
-  /** Output limit when neither the role nor its endpoint declares one. */
+  /**
+   * Output limit when neither the role nor its endpoint declares one. Absent
+   * means none is sent; `gnomon init` writes DEFAULT_MAX_TOKENS.
+   */
   max_tokens?: number;
   compaction?: Compaction;
 }
@@ -1523,21 +1527,31 @@ const ENDPOINT_KEYS = new Set([
 ]);
 
 /**
- * The output limit when nothing declares one.
+ * The output limit `gnomon init` declares in `[defaults] max_tokens`.
  *
  * gnomon sent no limit at all, so a reply ran until the model stopped, and a
  * reasoning model does not stop early. On P2G (2026-11, hosted DeepSeek V4.1
  * Flash) gnomon wrote about twice the output per step that opencode and goose
  * did on the same tasks, up to nine times on some, most of it reasoning; one
- * cell spent 221k output tokens and left its solution a stub. 16k is room for
- * a long file write and the thinking before it.
+ * cell spent 221k output tokens and left its solution a stub.
+ *
+ * 32k, not less, because on DeepSeek and llama.cpp the limit counts the
+ * reasoning too: 9k tokens of thinking followed by a 30 KB file write needs
+ * ~19k, and a limit below that turns a write that works unlimited into one
+ * that is cut off every time. A provider whose own maximum is lower says so in
+ * its 400, and the limit is clamped to what it states (see callEndpoint).
+ *
+ * Not a code default. Absent everywhere, no limit is sent, which is the
+ * behaviour before this existed: a default that changed in the code would
+ * change what an existing surface does without moving its hash (Rule 1).
+ * `gnomon migrate` adds the line to an older surface.
  */
-export const DEFAULT_MAX_TOKENS = 16_384;
+export const DEFAULT_MAX_TOKENS = 32_768;
 
 /**
  * The output limit for a role on an endpoint: the role's own `max_tokens`,
- * else the endpoint's, else `[defaults] max_tokens`, else DEFAULT_MAX_TOKENS.
- * 0 at any level means "send none", and stops the search there.
+ * else the endpoint's, else `[defaults] max_tokens`, else none (0). 0 at any
+ * level also means "send none", and stops the search there.
  */
 export function resolveMaxTokens(
   config: GnomonConfig,
@@ -1548,7 +1562,7 @@ export function resolveMaxTokens(
   for (const v of [role?.max_tokens, endpoint?.max_tokens, config.config?.defaults?.max_tokens]) {
     if (ok(v)) return Math.floor(v);
   }
-  return DEFAULT_MAX_TOKENS;
+  return 0;
 }
 
 /**
