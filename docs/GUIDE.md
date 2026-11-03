@@ -549,14 +549,17 @@ kind = "openai"
 # api_key_env = "VLLM_API_KEY"   # only if the server was started with a key
 ```
 
-**Every `kind = "openai"` endpoint is streamed** (server-sent events, with
-`stream_options.include_usage` so the token counts stay exact). A streamed
-reply is timed by the gap between chunks, `[resilience]
+**`kind = "openai"` endpoints are streamed** when `[defaults] stream = true`
+(scaffolded since 2026-11; `gnomon migrate` adds it to an older surface) or
+their own block says `stream = true`. A streamed call is sent as server-sent
+events, with `stream_options.include_usage` so the token counts stay exact. A
+streamed reply is timed by the gap between chunks, `[resilience]
 stream_idle_timeout_ms` (default 300 s), under an overall cap,
 `stream_total_timeout_ms` (default 30 min); the first byte waits
-`request_timeout_ms`. A server that cannot stream, or that streams without
-reporting usage, takes `stream = false` in its block. Ollama's own `/api/chat`
-is never streamed.
+`request_timeout_ms`. A server that cannot stream takes `stream = false` in its
+block. One that streams without reporting usage is counted in the turn
+record's `counters.unmetered_calls`, which says the token totals are a floor.
+Ollama's own `/api/chat` is never streamed.
 
 **llama.cpp needs `--jinja`** for tool calling; the model id is what
 `/v1/models` reports, and `--alias` sets it. Loopback, private-range,

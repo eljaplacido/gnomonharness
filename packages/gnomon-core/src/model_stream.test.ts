@@ -12,8 +12,11 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { callEndpoint, callEndpointWithRetry, readChatStream, wireOf } from "./prompt_loop.js";
-import { auditSurface, resolveStream, routeRole } from "./config.js";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { callEndpoint, callEndpointWithRetry, readChatStream, runTask, wireOf } from "./prompt_loop.js";
+import { auditSurface, loadConfig, resolveStream, routeRole } from "./config.js";
 
 type Handler = (req: IncomingMessage, res: ServerResponse, body: Record<string, any>) => void;
 
@@ -42,7 +45,7 @@ async function serve(handler: Handler) {
   servers.push(server);
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/chat/completions`;
-  return { url, seen };
+  return { url, seen, server };
 }
 
 const sse = (res: ServerResponse) =>
@@ -232,6 +235,151 @@ describe("a streamed model call", () => {
   });
 });
 
+describe("review findings (2026-11-03)", () => {
+  it("a mid-stream server_error with no numeric code is 12, retryable; an invalid request stays 10", async () => {
+    const { url } = await serve((_req, res) => {
+      sse(res);
+      chunk(res, delta({ content: "par" }));
+      chunk(res, {
+        error: { message: "The server had an error while processing your request.", type: "server_error", param: null, code: null },
+      });
+      res.end();
+    });
+    expect((await callEndpoint(target(url), hi, [], 5000)).code).toBe(12);
+    const bad = await serve((_req, res) => {
+      sse(res);
+      chunk(res, { error: { message: "Invalid value for 'tool_choice'.", type: "invalid_request_error", code: null } });
+      res.end();
+    });
+    expect((await callEndpoint(target(bad.url), hi, [], 5000)).code).toBe(10);
+  });
+
+  it("parallel calls each sent whole at index 0 stay two calls", async () => {
+    const { url } = await serve((_req, res) => {
+      sse(res);
+      chunk(res, delta({ tool_calls: [{ index: 0, id: "c1", type: "function", function: { name: "read", arguments: '{"path":"a"}' } }] }));
+      chunk(res, delta({ tool_calls: [{ index: 0, id: "c2", type: "function", function: { name: "bash", arguments: '{"command":"ls"}' } }] }));
+      chunk(res, delta({}, "tool_calls"));
+      res.end("data: [DONE]\n\n");
+    });
+    const r = await callEndpoint(target(url), hi, [{ type: "function" }], 5000);
+    expect(r.toolCalls).toEqual([
+      { id: "c1", name: "read", args: { path: "a" } },
+      { id: "c2", name: "bash", args: { command: "ls" } },
+    ]);
+  });
+
+  it("a reply with no usage report is counted as unmetered, never silently summed as zero", async () => {
+    const { url } = await serve((_req, res) => {
+      sse(res);
+      chunk(res, delta({ content: "hi" }, "stop"));
+      res.end("data: [DONE]\n\n");
+    });
+    const r = await callEndpoint(target(url), hi, [], 5000);
+    expect(r.usage).toBeUndefined();
+    expect(r.unmeteredCalls).toBe(1);
+  });
+
+  it("the turn record counts unmetered calls, so a benchmark can tell a floor from a total", async () => {
+    const { url, seen } = await serve((_req, res) => {
+      sse(res);
+      chunk(res, delta({ content: "hi" }, "stop"));
+      res.end("data: [DONE]\n\n");
+    });
+    const root = mkdtempSync(join(tmpdir(), "gnomon-stream-"));
+    try {
+      mkdirSync(join(root, ".gnomon"));
+      writeFileSync(
+        join(root, ".gnomon", "config.toml"),
+        `[defaults]\nstream = true\n\n[endpoints.target]\nurl = "${url}"\nkind = "openai"\n`
+      );
+      writeFileSync(join(root, ".gnomon", "roles.toml"), `[roles.smol]\nmodel = "m1"\nendpoint = "target"\ntools = []\n`);
+      writeFileSync(join(root, ".gnomon", "system.md"), "be brief\n");
+      const rec = await runTask(loadConfig(root), "hi", { role: "smol" });
+      expect(seen.bodies[0]!.stream).toBe(true);
+      expect(rec.counters.unmetered_calls).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("an aborted attempt is counted as unmetered too, across retries", async () => {
+    let n = 0;
+    const { url } = await serve((_req, res) => {
+      sse(res);
+      chunk(res, delta({ content: "a" }));
+      if (++n === 1) return; // stalls, is aborted: billed, never reported
+      chunk(res, delta({ content: "b" }, "stop"));
+      chunk(res, { choices: [], usage: { prompt_tokens: 5, completion_tokens: 2 } });
+      res.end("data: [DONE]\n\n");
+    });
+    const r = await callEndpointWithRetry(target(url, { streamIdleMs: 150 }), hi, [], 5000, { attempts: 2, backoff_ms: 1 }, undefined, undefined);
+    expect(r.code).toBe(0);
+    expect(r.usage?.output).toBe(2);
+    expect(r.unmeteredCalls).toBe(1);
+  });
+
+  it("a stall after a stream longer than the retry budget is still asked again", async () => {
+    let n = 0;
+    const { url, seen } = await serve((_req, res) => {
+      sse(res);
+      if (++n >= 2) {
+        chunk(res, delta({ content: "ok" }, "stop"));
+        return void res.end("data: [DONE]\n\n");
+      }
+      let k = 0;
+      const t = setInterval(() => {
+        if (++k > 16) return clearInterval(t);
+        chunk(res, delta({ content: "." }));
+      }, 50);
+      res.on("close", () => clearInterval(t));
+    });
+    // Budget: 200 ms x 3. The first stream runs ~800 ms, then stalls.
+    const r = await callEndpointWithRetry(target(url, { streamIdleMs: 150 }), hi, [], 200, { attempts: 3, backoff_ms: 1 }, undefined, undefined);
+    expect(r.code).toBe(0);
+    expect(r.content).toBe("ok");
+    expect(seen.bodies.length).toBe(2);
+  });
+
+  it("a refused socket right after a long stream broke still gets transport_grace_ms", async () => {
+    const first = await serve((_req, res) => {
+      sse(res);
+      let k = 0;
+      const t = setInterval(() => {
+        if (++k <= 16) return void chunk(res, delta({ content: "." }));
+        clearInterval(t);
+        // The relay restarts: the stream drops and nothing listens for 300 ms.
+        const port = (first.server.address() as AddressInfo).port;
+        first.server.close();
+        res.socket?.destroy();
+        setTimeout(() => {
+          const again = createServer((_q, r2) => {
+            _q.resume();
+            _q.on("end", () => {
+              sse(r2);
+              chunk(r2, delta({ content: "ok" }, "stop"));
+              r2.end("data: [DONE]\n\n");
+            });
+          });
+          servers.push(again);
+          again.listen(port, "127.0.0.1");
+        }, 300);
+      }, 50);
+    });
+    const r = await callEndpointWithRetry(
+      target(first.url, { streamIdleMs: 5000 }),
+      hi,
+      [],
+      200,
+      { attempts: 3, backoff_ms: 50, transport_grace_ms: 5000, transport_grace_declared: true },
+      undefined,
+      undefined
+    );
+    expect(r.code).toBe(0);
+    expect(r.content).toBe("ok");
+  });
+});
+
 describe("retrying a streamed call", () => {
   const retry = (
     t: ReturnType<typeof target>,
@@ -303,7 +451,7 @@ describe("which endpoints stream, as the surface declares it", () => {
   const surface = (endpoints: unknown, roles: unknown, resilience?: unknown) =>
     ({
       gnomonDir: "/nowhere",
-      config: { endpoints, ...(resilience ? { resilience } : {}) },
+      config: { endpoints, defaults: { stream: true }, ...(resilience ? { resilience } : {}) },
       roles,
       policy: {},
       profiles: {},
@@ -311,10 +459,13 @@ describe("which endpoints stream, as the surface declares it", () => {
       system: { content: "", version: "0.1" },
     }) as never;
 
-  it("an OpenAI-shaped endpoint streams unless it says not to; Ollama's /api/chat never does", () => {
-    expect(resolveStream({ url: "https://x/v1/chat/completions" })).toBe(true);
-    expect(resolveStream({ url: "https://x/v1/chat/completions", stream: false })).toBe(false);
-    expect(resolveStream({ url: "http://127.0.0.1:11434/api/chat" })).toBe(false);
+  it("streams only where the surface says so: the endpoint's line, else [defaults]; Ollama's /api/chat never", () => {
+    // Absent everywhere is the behaviour before streaming existed (Rule 1).
+    expect(resolveStream({ url: "https://x/v1/chat/completions" })).toBe(false);
+    expect(resolveStream({ url: "https://x/v1/chat/completions" }, "ollama", true)).toBe(true);
+    expect(resolveStream({ url: "https://x/v1/chat/completions", stream: false }, "ollama", true)).toBe(false);
+    expect(resolveStream({ url: "https://x/v1/chat/completions", stream: true })).toBe(true);
+    expect(resolveStream({ url: "http://127.0.0.1:11434/api/chat" }, "ollama", true)).toBe(false);
     expect(resolveStream({ url: "http://127.0.0.1:11434/api/chat", stream: true })).toBe(false);
   });
 

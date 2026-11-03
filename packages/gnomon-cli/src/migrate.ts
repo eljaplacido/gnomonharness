@@ -234,6 +234,21 @@ export const MIGRATIONS: Migration[] = [
     apply: (text) => addKeyToSection(text, "verify", "test_must_fail_first", "true  # a new test must fail on the code as it was"),
   },
   {
+    id: "stream-replies",
+    file: "config.toml",
+    what: `[defaults] stream absent  →  true (stream replies from kind = "openai" endpoints)`,
+    why: [
+      "Unstreamed, a reply has one clock and a long generation reaches it: on",
+      "P2G (2026-11, hosted DeepSeek V4.1 Flash, v0.3.1) replies were cut off",
+      "at 300 s and sent again, 11 of 18 cells hit the 30-minute cap, and the",
+      "relay billed the abandoned generations. Streamed, a reply is timed by",
+      "the gap between chunks. Scaffolded on since 2026-11. Only a [defaults]",
+      "with no stream line is touched; an endpoint may still say stream = false.",
+    ],
+    apply: (text) =>
+      addKeyToSection(text, "defaults", "stream", 'true                     # stream replies from kind = "openai" endpoints'),
+  },
+  {
     id: "audit-enabled",
     file: "config.toml",
     what: `[audit] enabled = false  →  true`,

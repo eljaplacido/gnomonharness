@@ -26,31 +26,42 @@
 
 ## [Unreleased]
 
-- **Model calls to OpenAI-shaped endpoints are streamed, and timed by the gap
-  between chunks.** Every call went out `stream: false`, so nothing arrived
-  until a generation was done, and `request_timeout_ms` (300 s) was the only
-  clock. On P2G (2026-11, Terminal-Bench on hosted DeepSeek V4.1 Flash, v0.3.1)
-  long replies were cut off at 300 s and sent again from the start: 11 of 18
-  cells hit the 30-minute cap, and the relay billed the abandoned generations
-  (data-anonymization: 163,404 output tokens billed, 81,742 counted).
-  - `kind = "openai"` endpoints stream (SSE) with `stream_options.include_usage`,
-    so the token counts are the provider's own, as before. `stream = false` in
-    an `[endpoints.<name>]` block turns it off; a server that ignores
-    `stream: true` and answers with one JSON body is read as one. Ollama's own
-    `/api/chat` is not streamed.
-  - New `[resilience] stream_idle_timeout_ms` (300 s): a streamed reply that
-    goes silent this long is aborted as a timeout (11) and asked again within
-    `attempts`. `stream_total_timeout_ms` (30 min) caps one streamed reply; it is
-    not retried, since the same prompt would run as long again. The first byte
-    still waits `request_timeout_ms`, with its existing escalation.
+- **Model calls to OpenAI-shaped endpoints can be streamed, and a streamed
+  reply is timed by the gap between chunks.** Every call went out `stream:
+  false`, so nothing arrived until a generation was done, and
+  `request_timeout_ms` (300 s) was the only clock. On P2G (2026-11,
+  Terminal-Bench on hosted DeepSeek V4.1 Flash, v0.3.1) long replies were cut
+  off at 300 s and sent again from the start: 11 of 18 cells hit the 30-minute
+  cap, and the relay billed the abandoned generations (data-anonymization:
+  163,404 output tokens billed, 81,742 counted).
+  - Declared, not a new code default (Rule 1): `[defaults] stream = true`
+    streams every `kind = "openai"` endpoint that does not say `stream = false`
+    itself. `gnomon init` writes it; `gnomon migrate` adds it to an existing
+    surface (`stream-replies`), so the hash moves in plain sight. Absent, calls
+    go out unstreamed as before. Ollama's own `/api/chat` is never streamed.
+  - A streamed call asks for usage (`stream_options.include_usage`); a server
+    that ignores `stream: true` and answers with one JSON body is read as one.
+  - New `[resilience] stream_idle_timeout_ms` (300 s): a stream that goes
+    silent this long is aborted as a timeout (11) and asked again within
+    `attempts`. `stream_total_timeout_ms` (30 min) caps one streamed reply and
+    is not retried, since the same prompt would run as long again. The first
+    byte waits `request_timeout_ms`, with its existing escalation, and only
+    that wait is charged to the retry budget, so a long stream that stalls or
+    breaks is still retried, and a refused socket after it still gets
+    `transport_grace_ms`.
   - Every early end -- a timeout, an error chunk, Esc -- closes the connection,
     so the server stops generating what nobody will read.
-  - A stream that breaks off mid-reply is 12 but spends a generation attempt,
-    not the transport grace a refused socket gets.
-  - Turn records carry `wire`: whether the call was streamed and its clocks,
-    since the streaming default changed without any surface changing.
-  - `gnomon init` declares both clocks. Tests use fake servers on 127.0.0.1;
-    16 of the 19 fail on the previous code.
+  - An error sent mid-stream with no numeric code (OpenAI's `server_error`,
+    `code: null`) is 12 and retried, unless it says the prompt did not fit
+    (13), timed out (11), or names an invalid request (10). A stream that
+    breaks off is 12 and spends a generation attempt, not the transport grace.
+  - A request that reached the endpoint and came back with no usage report --
+    aborted, broken off, or a server that does not report usage on a stream --
+    is counted in the turn record's `counters.unmetered_calls`, so a token
+    total that is a floor says so.
+  - Parallel tool calls sent whole at one index are kept apart by their ids.
+  - Turn records carry `wire`: whether the call was streamed and its clocks.
+  - Tests use fake servers on 127.0.0.1.
 - **A long local generation is no longer cut off at 300 s.** Node's fetch (undici)
   puts its own 300 s headersTimeout and bodyTimeout on every request, and a model
   call is not streamed, so headers arrive only when the generation is done. A

@@ -119,9 +119,9 @@ export interface EndpointConfig {
    */
   provider?: string;
   /**
-   * Stream the reply as server-sent events. Absent means streamed for
-   * `kind = "openai"` and not for Ollama's own /api/chat, which is called
-   * unstreamed whatever this says. See resolveStream.
+   * Stream the reply as server-sent events. Absent means `[defaults] stream`.
+   * Ollama's own /api/chat is called unstreamed whatever this says. See
+   * resolveStream.
    *
    * Declare `false` for an OpenAI-compatible server that cannot stream, or that
    * streams without reporting usage: a streamed call asks for usage with
@@ -177,6 +177,12 @@ export interface Defaults {
   approval?: string;
   role_profile?: string;
   max_context_tokens?: number;
+  /**
+   * Stream replies from OpenAI-shaped endpoints that do not declare `stream`
+   * themselves. Absent means false, the behaviour before streaming existed;
+   * `gnomon init` writes true and `gnomon migrate` adds it. See resolveStream.
+   */
+  stream?: boolean;
   compaction?: Compaction;
 }
 
@@ -1432,12 +1438,18 @@ export function resolveEndpoint(
 /**
  * Whether calls to an endpoint are streamed.
  *
- * Declared `stream` wins. Undeclared, an OpenAI-shaped endpoint streams and
- * Ollama's own /api/chat does not. Ollama's native route streams NDJSON, not
- * server-sent events, and no reader for it exists here, so it is never
- * streamed; auditSurface says so when a block declares it.
+ * The endpoint's own `stream` wins; undeclared, it is `[defaults] stream`, and
+ * absent from both it is false. Ollama's own /api/chat is never streamed: its
+ * native route streams NDJSON, not server-sent events, and no reader for it
+ * exists here. auditSurface says so when a block declares it.
  *
- * Streaming is the default because an unstreamed reply has only one clock:
+ * Absent means false, though streaming is the better behaviour, because a
+ * default that changed in the code would change what an existing surface does
+ * without moving its hash (Rule 1). `gnomon init` writes `[defaults] stream =
+ * true`, and `gnomon migrate` adds it to an existing surface, where the line
+ * moves the hash in plain sight.
+ *
+ * Streaming is the better behaviour because an unstreamed reply has only one clock:
  * nothing arrives until the whole generation is done, so a deadline long
  * enough for the longest legitimate reply is also how long a dead one is
  * waited on. Measured on P2G (2026-11, Terminal-Bench on hosted DeepSeek V4.1
@@ -1446,13 +1458,15 @@ export function resolveEndpoint(
  * by the gap between chunks instead, which a reply that is still being
  * written never reaches.
  */
-export function resolveStream(endpoint: {
-  url?: string;
-  kind?: EndpointKind;
-  stream?: unknown;
-}, unclear: EndpointKind = "ollama"): boolean {
+export function resolveStream(
+  endpoint: { url?: string; kind?: EndpointKind; stream?: unknown },
+  unclear: EndpointKind = "ollama",
+  /** `[defaults] stream` */
+  surfaceDefault: unknown = false
+): boolean {
   if (endpointKind(endpoint, unclear) === "ollama") return false;
-  return typeof endpoint.stream === "boolean" ? endpoint.stream : true;
+  if (typeof endpoint.stream === "boolean") return endpoint.stream;
+  return surfaceDefault === true;
 }
 
 /** The only keys an [endpoints.<name>] block may carry. */
@@ -2466,7 +2480,7 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
       problems.push({
         where,
         problem: `stream = ${JSON.stringify(block.stream)} is not true or false, so it is ignored.`,
-        fix: "stream = true streams the reply (the default for openai); false waits for it whole.",
+        fix: "stream = true streams the reply; false waits for it whole. Absent, [defaults] stream decides.",
         fatal: false,
       });
     } else if (
@@ -2903,7 +2917,7 @@ export function routeRole(
     apiKeyEnv: endpoint.api_key_env,
     endpoint: endpointName,
     kind: endpointKind(endpoint),
-    stream: resolveStream(endpoint),
+    stream: resolveStream(endpoint, "ollama", config.config.defaults?.stream),
     streamIdleMs: resilience.stream_idle_timeout_ms,
     streamTotalMs: resilience.stream_total_timeout_ms,
   };
@@ -2927,7 +2941,7 @@ export function routeRole(
       // A fallback with no kind has always defaulted to openai, so that stays
       // the default for a URL that names no shape.
       kind: endpointKind(fbEndpoint ?? { url: fb.url }, "openai"),
-      stream: resolveStream(fbEndpoint ?? { url: fb.url }, "openai"),
+      stream: resolveStream(fbEndpoint ?? { url: fb.url }, "openai", config.config.defaults?.stream),
       streamIdleMs: resilience.stream_idle_timeout_ms,
       streamTotalMs: resilience.stream_total_timeout_ms,
     };

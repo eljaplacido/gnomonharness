@@ -695,6 +695,17 @@ interface InferenceResult {
    * transport grace a refused socket gets.
    */
   streamBroken?: boolean;
+  /**
+   * For a streamed call whose body started: how long the first byte took.
+   * What callEndpointWithRetry charges to its budget instead of the whole call.
+   */
+  firstByteMs?: number;
+  /**
+   * Requests that reached the endpoint and came back with no usage report:
+   * aborted, broken off, or a server that does not report usage on a stream.
+   * Their tokens are in no total. Summed into TurnCounters.unmetered_calls.
+   */
+  unmeteredCalls?: number;
 }
 
 /**
@@ -1016,13 +1027,26 @@ export async function callEndpointWithRetry(
     if (/\b5\d\d\b|overloaded/i.test(text)) return "endpoint erroring (5xx)";
     return "endpoint unreachable";
   };
+  // Requests that reached the endpoint and came back with no usage report,
+  // across every attempt -- a failed attempt is billed too, and its tokens are
+  // in no total. Carried on whatever this returns.
+  let unmetered = 0;
+  const metered = (x: InferenceResult): InferenceResult =>
+    unmetered > 0 ? { ...x, unmeteredCalls: unmetered } : x;
   for (let attempt = 1; attempt <= resilience.attempts; attempt++) {
     const startedAt = Date.now();
     const r = await callEndpoint(target, messages, tools, deadline, signal, session);
-    spentMs += Date.now() - startedAt;
-    if (r.code === 0 || !RETRYABLE.has(r.code)) return r;
+    // Only the wait for the first byte is charged to the budget. The budget
+    // bounds how long an endpoint may leave a request unanswered; a streamed
+    // reply that is arriving is answered. Charging its whole length meant a
+    // stream that ran six minutes and then stalled had "spent" a 900 s budget
+    // and was never asked again, and a refused socket right after a long
+    // stream had no room left for transport_grace_ms either.
+    spentMs += r.firstByteMs ?? Date.now() - startedAt;
+    unmetered += r.unmeteredCalls ?? 0;
+    if (r.code === 0 || !RETRYABLE.has(r.code)) return metered(r);
     last = r;
-    if (signal?.aborted) return r;
+    if (signal?.aborted) return metered(r);
     if (r.refusedLocally && !resilience.transport_grace_declared) {
       graceMs = Math.min(declaredGraceMs, LOCAL_REFUSED_GRACE_MS);
     }
@@ -1044,7 +1068,7 @@ export async function callEndpointWithRetry(
             )
           );
         }
-        return r;
+        return metered(r);
       }
       transportWaitedMs += wait;
       spentMs += wait;
@@ -1075,7 +1099,7 @@ export async function callEndpointWithRetry(
         );
       }
       if (!(await sleepUnlessAborted(wait, signal))) {
-        return { content: CANCELLED, code: 2, toolCalls: [] };
+        return metered({ content: CANCELLED, code: 2, toolCalls: [] });
       }
       // An endpoint that never answered did not spend a generation attempt.
       attempt--;
@@ -1096,7 +1120,7 @@ export async function callEndpointWithRetry(
           )
         );
       }
-      return r;
+      return metered(r);
     }
     if (r.code === 11) {
       // Stop while the answer still fits in the budget. Starting an attempt
@@ -1113,7 +1137,7 @@ export async function callEndpointWithRetry(
             )
           );
         }
-        return r;
+        return metered(r);
       }
       // A stream that went silent mid-reply had stalled; it did not need a
       // longer wait for its first byte, so that deadline is not doubled. The
@@ -1143,11 +1167,11 @@ export async function callEndpointWithRetry(
         );
       }
       if (!(await sleepUnlessAborted(wait, signal))) {
-        return { content: CANCELLED, code: 2, toolCalls: [] };
+        return metered({ content: CANCELLED, code: 2, toolCalls: [] });
       }
     }
   }
-  return last!;
+  return metered(last!);
 }
 
 /**
@@ -1286,6 +1310,34 @@ export async function callEndpoint(
   /** The conversation this call belongs to -- `state.sessionId`. */
   session?: string
 ): Promise<InferenceResult> {
+  const started = Date.now();
+  const trace: CallTrace = {};
+  const r = await callEndpointOnce(target, messages, tools, timeoutMs, signal, session, trace);
+  if (trace.firstByteAt !== undefined) r.firstByteMs = trace.firstByteAt - started;
+  // The request reached the server and nothing reported what it cost. Counted
+  // rather than guessed: a benchmark reading the token totals needs to know
+  // they are a floor.
+  if (trace.reached && !r.usage) r.unmeteredCalls = 1;
+  return r;
+}
+
+/** What one call saw on the wire, for the wrapper above. */
+interface CallTrace {
+  /** When the first byte of a streamed body arrived */
+  firstByteAt?: number;
+  /** The server received the request: it answered, or a clock ran out on it */
+  reached?: boolean;
+}
+
+async function callEndpointOnce(
+  target: RouteTarget,
+  messages: ChatMessage[],
+  tools: unknown[],
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+  session: string | undefined,
+  trace: CallTrace
+): Promise<InferenceResult> {
   // Identify the client, and the conversation, on every request.
   //
   // opencode's Console Go began refusing requests that carry neither, before
@@ -1395,8 +1447,8 @@ export async function callEndpoint(
     return out;
   });
 
-  // Streamed when the endpoint is (resolveStream: OpenAI-shaped endpoints by
-  // default). Usage then arrives in a last chunk of its own, and only when it
+  // Streamed when the surface says so (resolveStream: the endpoint's `stream`,
+  // else `[defaults] stream`). Usage then arrives in a last chunk of its own, and only when it
   // is asked for, so it is asked for: the token counts are what the benchmarks
   // read, and a streamed call must report exactly what an unstreamed one did.
   const streamed = target.stream === true;
@@ -1459,6 +1511,7 @@ export async function callEndpoint(
       ...(dispatcher ? { dispatcher } : {}),
     } as RequestInit);
     answered = true;
+    trace.reached = true;
 
     if (!res.ok) {
       // The body carries the reason; the status alone does not. Reporting
@@ -1539,7 +1592,10 @@ export async function callEndpoint(
     // one, so a server that cannot stream needs no declaration to keep working.
     const contentType = res.headers?.get?.("content-type") ?? "";
     if (streamed && res.body && /text\/event-stream/i.test(contentType)) {
-      const s = await readChatStream(res.body, rearm);
+      const s = await readChatStream(res.body, () => {
+        trace.firstByteAt ??= Date.now();
+        rearm();
+      });
       drained = s.complete;
       if (s.error) {
         // An error sent in place of a chunk: the request was accepted and
@@ -1547,9 +1603,21 @@ export async function callEndpoint(
         if (/error parsing tool call|failed to parse (?:the )?(?:tool call|input at pos)/i.test(s.error.message)) {
           return { content: "", code: 0, toolCalls: [], toolCallUnparsed: s.error.message.slice(0, 500), usage: s.usage };
         }
+        // Without a numeric status, classifyFailure files an unrecognised
+        // message as 10, a request that will fail the same way twice. In a
+        // stream that is backwards: the request was accepted and generation
+        // had started, so what broke is the server -- OpenAI's own mid-stream
+        // failure is {"type": "server_error", "code": null}. So 12 unless the
+        // text says the prompt did not fit (13) or timed out (11), or the
+        // server calls the request itself invalid.
+        const read = classifyFailure({ status: s.error.status, message: s.error.message });
+        const code =
+          s.error.status === undefined && read === 10 && !/invalid_request/i.test(s.error.type ?? "")
+            ? 12
+            : read;
         return {
           content: `Model API error (in the stream): ${s.error.message.slice(0, 500)}`,
-          code: classifyFailure({ status: s.error.status, message: s.error.message }),
+          code,
           toolCalls: [],
           usage: s.usage,
         };
@@ -1624,6 +1692,7 @@ export async function callEndpoint(
     // the server accepted the request and was still working on it, or had
     // stopped mid-reply -- never an unreachable endpoint (12).
     if (timedOut) {
+      trace.reached = true;
       const secs = (ms: number) => `${Math.round(ms / 100) / 10}s`;
       return {
         content:
@@ -1770,7 +1839,7 @@ export interface StreamedReply {
   finishReason?: string;
   usage?: TokenUsage;
   /** An `error` the server sent in place of a chunk */
-  error?: { message: string; status?: number };
+  error?: { message: string; status?: number; type?: string };
   /** A finish_reason or [DONE] arrived, so the reply is whole */
   complete: boolean;
 }
@@ -1796,6 +1865,8 @@ export async function readChatStream(
   let buffer = "";
   let data: string[] = [];
   let done = false;
+  // A stream's tool-call index, to the call it currently names.
+  const slotOf = new Map<number, number>();
 
   const dispatch = (): void => {
     if (data.length === 0) return;
@@ -1818,6 +1889,7 @@ export async function readChatStream(
       out.error = {
         message: typeof e === "string" ? e : typeof e?.message === "string" ? e.message : JSON.stringify(e),
         status,
+        ...(typeof e?.type === "string" ? { type: e.type } : {}),
       };
       done = true;
       return;
@@ -1832,14 +1904,29 @@ export async function readChatStream(
     if (typeof thought === "string") out.reasoning += thought;
     if (Array.isArray(delta.tool_calls)) {
       for (const tc of delta.tool_calls) {
-        // By index, which every server checked sends. Without one, a new id
-        // opens a new call and anything else continues the last.
-        const at =
-          typeof tc?.index === "number"
-            ? tc.index
-            : tc?.id && !out.toolCalls.some((c) => c.id === tc.id)
+        // By index, which every server checked sends -- but an id is the
+        // stronger signal. A server that sends each parallel call whole, every
+        // one at index 0, would otherwise have two calls merged into one named
+        // "readbash" with two JSON objects for arguments. So a new id at an
+        // index already holding another call opens a new call, and the index
+        // follows it. Without an index, a new id opens a call and anything else
+        // continues the last.
+        const id = typeof tc?.id === "string" && tc.id ? tc.id : undefined;
+        let at: number;
+        if (typeof tc?.index === "number") {
+          const held = slotOf.get(tc.index);
+          if (held === undefined || (id && out.toolCalls[held]!.id && out.toolCalls[held]!.id !== id)) {
+            at = out.toolCalls.length;
+            slotOf.set(tc.index, at);
+          } else {
+            at = held;
+          }
+        } else {
+          at =
+            id && !out.toolCalls.some((c) => c.id === id)
               ? out.toolCalls.length
               : Math.max(0, out.toolCalls.length - 1);
+        }
         const slot = (out.toolCalls[at] ??= { name: "", args: "" });
         if (typeof tc?.id === "string" && tc.id) slot.id = tc.id;
         if (typeof tc?.type === "string") slot.type = tc.type;
@@ -1891,11 +1978,11 @@ export interface WireRecord {
 /**
  * How a target's calls go out, for the turn record.
  *
- * Each value is declared in the surface or is a default of this build, and
- * the surface hash covers only the first. Streaming in particular changed
- * default without a surface changing (an OpenAI-shaped endpoint now streams
- * unless it says stream = false), so the record says what was actually sent
- * rather than leaving it to be inferred from the harness version.
+ * Every value here follows from the surface (each is declared or absent, and
+ * absent means the behaviour before it existed), so the hash already decides
+ * it. The record states it anyway, resolved, because "which calls were
+ * streamed" should be read off the trail, not re-derived from three files and
+ * the precedence between them.
  */
 export function wireOf(target: RouteTarget): WireRecord {
   return target.stream === true
@@ -3012,6 +3099,14 @@ export interface TurnCounters {
    * that fell inside `[turn] max_consecutive_malformed` got a repair turn.
    */
   malformed_tool_calls?: number;
+  /**
+   * Model requests that reached the endpoint and came back with no usage
+   * report: aborted by a clock or Esc, broken off mid-stream, or answered by a
+   * server that does not report usage on a stream. Their tokens are in no
+   * total, so when this is set `tokens_in`/`tokens_out` are a floor, not a
+   * count. Absent when every request was metered.
+   */
+  unmetered_calls?: number;
   /** Per tool: calls made, refusals, apparatus failures. Separates "bash
    * failed 9 of 31 calls" from "bash succeeded 31/31 and the answer was still
    * wrong". */
@@ -3715,6 +3810,10 @@ export async function runAgenticTurn(
   // reports the whole dirty tree as the turn's doing -- including for a
   // read-only role that only called `read`. One git call, taken once.
   const treeBaseline = treeSnapshot(resolve(state.config.gnomonDir, ".."));
+  // A request whose tokens no usage report covers. See TurnCounters.
+  const countUnmetered = (r: InferenceResult): void => {
+    if (r.unmeteredCalls) counters.unmetered_calls = (counters.unmetered_calls ?? 0) + r.unmeteredCalls;
+  };
   const tally = (name: string, field: "calls" | "refusals" | "apparatus") => {
     const t = (counters.per_tool[name] ??= { calls: 0, refusals: 0, apparatus: 0 });
     t[field]++;
@@ -3769,6 +3868,7 @@ export async function runAgenticTurn(
       state.sessionId
     );
     turnUsage = addUsage(turnUsage, r.usage);
+    countUnmetered(r);
 
     if (r.toolsUnsupported && offer.length > 0) {
       noTools.add(target.model);
@@ -3798,6 +3898,7 @@ export async function runAgenticTurn(
       deps.progress.start(`${target.model} — without tools`);
       r = await callEndpoint(target, working, [], modelTimeoutMs(config), deps.signal, state.sessionId);
       turnUsage = addUsage(turnUsage, r.usage);
+      countUnmetered(r);
     }
     return r;
   };
@@ -4431,6 +4532,7 @@ export async function runAgenticTurn(
         state.sessionId
       );
       turnUsage = addUsage(turnUsage, closing.usage);
+      countUnmetered(closing);
       deps.progress.stop();
 
       const content =

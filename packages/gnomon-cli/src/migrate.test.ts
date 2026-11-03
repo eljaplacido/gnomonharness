@@ -14,6 +14,7 @@ const CONFIG = (compaction: string) =>
   `[defaults]
 sandbox = "confined"              # off | confined | strict
 max_context_tokens = 65536
+stream = true                     # stream replies from kind = "openai" endpoints
 compaction = "${compaction}"            # discard | summary | truncate
 
 [context]
@@ -71,7 +72,7 @@ describe("gnomon migrate", () => {
   it("ignores a matching key outside the section it targets", () => {
     writeFileSync(
       join(gnomonDir, "config.toml"),
-      `[defaults]\ncompaction = "summary"\n\n[something_else]\ncompaction = "discard"\n`,
+      `[defaults]\ncompaction = "summary"\nstream = true\n\n[something_else]\ncompaction = "discard"\n`,
       "utf-8"
     );
     expect(pendingMigrations(gnomonDir)).toEqual([]);
@@ -219,6 +220,21 @@ describe("gnomon migrate — governance defaults (2026-10)", () => {
     applyMigrations(pendingMigrations(gnomonDir));
     expect(readConfig()).toBe(`[audit]\n# why\nenabled = true   # trail\nrecord = "metadata"\n`);
     writeFileSync(join(gnomonDir, "config.toml"), `[other]\nenabled = false\n`, "utf-8");
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+  });
+});
+
+describe("gnomon migrate — streamed replies (2026-11)", () => {
+  it("adds [defaults] stream = true to a surface that does not mention it, and the hash moves with the line", () => {
+    writeFileSync(join(gnomonDir, "config.toml"), `[defaults]\nmax_context_tokens = 65536\n\n[context]\npolicy = "full"\n`, "utf-8");
+    expect(pendingMigrations(gnomonDir).map((p) => p.id)).toEqual(["stream-replies"]);
+    applyMigrations(pendingMigrations(gnomonDir));
+    expect(readConfig()).toMatch(/\[defaults\]\nmax_context_tokens = 65536\nstream = true\s+# stream replies/);
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+  });
+
+  it("leaves a stated stream alone, even false", () => {
+    writeFileSync(join(gnomonDir, "config.toml"), `[defaults]\nstream = false\n`, "utf-8");
     expect(pendingMigrations(gnomonDir)).toEqual([]);
   });
 });
