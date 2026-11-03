@@ -2105,7 +2105,13 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     // them too: `rm -rf ../repo`, `find . -name '*.jsonl' -delete`.
     if (j.t.clean) {
       const hit = cleanReaches(ctx, j.abs, j.t.clean);
-      if (hit) return hit.kind === "record" ? recordHit(j.path, `${j.how}, which removes ${hit.what}`) : surfaceHit(j.path, `${j.how}, which removes ${hit.what}`);
+      if (hit?.kind === "record") {
+        const r = recordHit(j.path, `${j.how}, which removes ${hit.what}`);
+        if (j.how !== "git clean") return r;
+        const keep = recordDirs(ctx).map((d) => `-e ${relative(root, d).split(sep).join("/") || d}`).join(" ");
+        return { ...r, content: `${r.content}\n\nTo clean everything else, keep them out of it: git clean … ${keep}` };
+      }
+      if (hit) return surfaceHit(j.path, `${j.how}, which removes ${hit.what}`);
     } else if (j.t.recursive) {
       for (const p of protectedDirs()) {
         if (isAncestor(j.abs, p.dir) && removalMatches(p.dir, j.abs, j.path, j.t.names)) {
@@ -2298,7 +2304,9 @@ function gitControlPaths(root: string): string[] {
     }
     if (dirname(d) === d) break;
   }
-  GIT_CONTROL.set(root, out);
+  // Only a found repository is remembered: `git init` later in the session
+  // must not leave its hooks unguarded.
+  if (out.length > 0) GIT_CONTROL.set(root, out);
   return out;
 }
 const GIT_CONTROL = new Map<string, string[]>();

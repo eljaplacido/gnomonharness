@@ -906,7 +906,8 @@ const SHELLS = new Set(["sh", "bash", "dash", "zsh", "ksh", "ash", "mksh", "yash
 function shellScript(
   argv: string[],
   redirects: ShellRedirect[],
-  pipe: ShellCommand | null
+  pipe: ShellCommand | null,
+  env?: ShellEnv
 ): { text: string; via: string; arg0?: string; args?: string[] } | null {
   const prog = programName(argv[0]);
   let i = 1;
@@ -939,7 +940,7 @@ function shellScript(
   if (doc) return { text: doc.body as string, via: `${prog} <<` };
   const here = redirects.find((r) => r.op === "<<<");
   if (here) return { text: here.target, via: `${prog} <<<` };
-  const fed = fedText(pipe);
+  const fed = fedText(pipe, env);
   if (fed !== null) return { text: fed, via: `… | ${prog}` };
   return null;
 }
@@ -961,21 +962,25 @@ function echoed(words: string[] | null): string | null {
  * 89 got past: the script was in the line, one decode away. Decoding a
  * literal is not running anything.
  */
-function fedText(pipe: ShellCommand | null, hops = 0): string | null {
+function fedText(pipe: ShellCommand | null, env?: ShellEnv, hops = 0): string | null {
   if (!pipe || hops > 4) return null;
-  const e = echoed(pipe.words);
-  if (e !== null) return e;
-  const prog = programName(pipe.words[0] ?? "");
-  const decode = pipe.words.slice(1).some((w) => w === "--decode" || /^-[A-Za-z]*[dD]/.test(w));
-  if (prog === "base64" && decode) {
+  // Each stage as written and, where the line says what its expansions are,
+  // respelled: `p=echo; $p <base64> | base64 -d | sh` feeds what `echo` would.
+  const alt = env ? respellCommand(pipe, env)?.words : undefined;
+  for (const words of alt ? [pipe.words, alt] : [pipe.words]) {
+    const e = echoed(words);
+    if (e !== null) return e;
+    const prog = programName(words[0] ?? "");
+    const decode = words.slice(1).some((w) => w === "--decode" || /^-[A-Za-z]*[dD]/.test(w));
+    if (prog !== "base64" || !decode) continue;
     const here = pipe.redirects.find((r) => r.op === "<<<");
-    const src = here ? here.target : fedText(pipe.pipedFrom, hops + 1);
-    if (src === null) return null;
+    const src = here ? here.target : fedText(pipe.pipedFrom, env, hops + 1);
+    if (src === null) continue;
     const b64 = src.replace(/\s+/g, "");
-    if (!/^[A-Za-z0-9+/_-]+=*$/.test(b64)) return null;
+    if (!/^[A-Za-z0-9+/_-]+=*$/.test(b64)) continue;
     const text = Buffer.from(b64, "base64").toString("utf-8");
     // Text that does not survive the round trip was not text a shell would run.
-    return text.includes("�") ? null : text;
+    if (!text.includes("\uFFFD")) return text;
   }
   return null;
 }
@@ -1477,7 +1482,7 @@ function expand(
     return;
   }
   if (SHELLS.has(prog)) {
-    const s = shellScript(argv, redirects, pipe);
+    const s = shellScript(argv, redirects, pipe, env);
     if (s) script(s.text, s.via, "sub", s);
     return;
   }
@@ -3078,18 +3083,58 @@ class CwdTracker {
   }
 }
 
-/** find's tests that only narrow what it matches, when nothing negates or ORs them. */
+/**
+ * The name tests that bound what a removing `find` removes: in each `-o`
+ * branch that removes (-delete, or -exec of a remover), the -name / -path
+ * tests BEFORE the action. Undefined -- the removal reaches everything below
+ * its start points -- when a removing branch has no such test, or when a
+ * negation or a parenthesis makes the expression one this does not read.
+ * `find . -name node_modules -prune -o -name '*.pyc' -delete` is bounded by
+ * both names; `find . -name x -o -delete` is not bounded at all.
+ */
 function findNameFilters(argv: string[]): string[] | undefined {
+  let i = 1;
+  while (i < argv.length && !/^[-(!),]/.test(argv[i]!)) i++; // start points
   const names: string[] = [];
-  for (let i = 1; i < argv.length; i++) {
+  let branch: string[] = [];
+  let removing = false;
+  const close = (): boolean => {
+    if (removing) {
+      if (branch.length === 0) return false;
+      names.push(...branch);
+    }
+    branch = [];
+    removing = false;
+    return true;
+  };
+  for (; i < argv.length; i++) {
     const t = argv[i]!;
-    // A negation or an OR can widen the match beyond the name tests; then the
-    // removal is read as reaching everything below its start points.
-    if (t === "!" || t === "-not" || t === "-o" || t === "-or" || t === ",") return undefined;
+    if (t === "!" || t === "-not" || t === "(" || t === ")" || t === ",") return undefined;
+    if (t === "-o" || t === "-or") {
+      if (!close()) return undefined;
+      continue;
+    }
+    if (t === "-delete") {
+      if (!removing && branch.length === 0) return undefined;
+      removing = true;
+      continue;
+    }
+    if (t === "-exec" || t === "-execdir" || t === "-ok" || t === "-okdir") {
+      const prog = programName(argv[i + 1] ?? "");
+      if (REMOVERS.has(prog)) {
+        if (branch.length === 0) return undefined;
+        removing = true;
+      }
+      while (i < argv.length && argv[i] !== ";" && !(argv[i] === "+" && argv[i - 1] === "{}")) i++;
+      continue;
+    }
     if (/^-i?(name|path|wholename|regex)$/.test(t) && i + 1 < argv.length) {
-      names.push(`${t}\0${argv[++i]}`);
+      // A test after the action does not bound it: `-delete -name x` deletes first.
+      if (!removing) branch.push(`${t}\0${argv[i + 1]}`);
+      i++;
     }
   }
+  if (!close()) return undefined;
   return names.length > 0 ? names : undefined;
 }
 

@@ -3504,8 +3504,9 @@ describe("INJ-2026-11: the policy-guard bypasses, refused", () => {
   });
 
   it("I7: git clean -x, git stash --all and recursive removals above them do not delete gnomon's records", () => {
-    // verbatim: rec-git-clean
+    // verbatim: rec-git-clean -- and the refusal says how to clean the rest
     expect(rule("git clean -fdxq", D())).toBe("record");
+    expect(tools.bashPrecheck({ command: "git clean -fdxq" }, D())!.content).toContain("-e .gnomon-audit -e .gnomon-trials -e .gnomon-sessions");
     for (const cmd of [
       "git clean -fdX",
       "git clean -xfd .gnomon-audit",
@@ -3514,6 +3515,7 @@ describe("INJ-2026-11: the policy-guard bypasses, refused", () => {
       "git stash push -a",
       "find . -delete",
       "find . -name '*.jsonl' -delete",
+      "find . -name x -o -type f -delete",
       "find . -type f -exec rm -f {} +",
       "python3 -c \"import shutil; shutil.rmtree('.')\"",
       `rm -rf ../${root.split(/[\\/]/).pop()}`,
@@ -3533,6 +3535,7 @@ describe("INJ-2026-11: the policy-guard bypasses, refused", () => {
       "git stash",
       "git stash -u",
       "find . -name '*.pyc' -delete",
+      "find . -name node_modules -prune -o -name '*.pyc' -delete",
       "rm -rf build",
       "ls .gnomon-audit",
     ]) {

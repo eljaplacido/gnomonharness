@@ -436,6 +436,8 @@ describe("respelling: what an expansion is, when the line itself says (INJ-2026-
     expect(ran(`echo ${b64} | base64 -d | sh`)).toContainEqual(["… | sh", "rm -rf keep"]);
     expect(ran(`base64 -d <<< ${b64} | bash`)).toContainEqual(["… | bash", "rm -rf keep"]);
     expect(ran(`printf %s ${b64} | base64 --decode | sh`)).toContainEqual(["… | sh", "rm -rf keep"]);
+    // GV3 round 2's last route: the echo held in a variable the line assigns.
+    expect(ran(`p=echo; $p ${b64} | base64 -d | sh`)).toContainEqual(["… | sh", "rm -rf keep"]);
     // Not base64 text: nothing is invented.
     expect(ran("echo hello | base64 -d | sh").filter(([via]) => via === "… | sh")).toEqual([]);
   });
@@ -503,6 +505,10 @@ describe("shellWriteTargets: where the shell is when it writes (INJ-2026-11 I2)"
     expect(rec("find . -delete")).toEqual([".|find -delete|0"]);
     expect(rec("find . -name '*.pyc' -delete")).toEqual([".|find -delete|1"]);
     expect(rec("find . ! -name '*.py' -delete")).toEqual([".|find -delete|0"]);
+    // Only the branch that removes, and only the tests before its action, bound it.
+    expect(rec("find . -name node_modules -prune -o -name '*.pyc' -delete")).toEqual([".|find -delete|1"]);
+    expect(rec("find . -name x -o -delete")).toEqual([".|find -delete|0"]);
+    expect(rec("find . -delete -name x")).toEqual([".|find -delete|0"]);
     expect(rec("find . -type f -exec rm -f {} +")).toEqual([".|find -delete|0"]);
     expect(rec("python3 -c \"import shutil; shutil.rmtree('.')\"")).toEqual([".|python3 code|0"]);
     expect(rec("mv build old")).toEqual(["build|mv (source)|0"]);

@@ -978,7 +978,10 @@ a pattern check over a command's text sees every write. The **record guard**
 therefore looks at the records themselves.
 
 **Within a session.** It snapshots every record directory (`.gnomon-audit/`,
-`.gnomon-trials/`, a custom `[audit] dir`):
+`.gnomon-trials/`, a custom `[audit] dir`). `.gnomon-sessions/` is under the
+`record` rule (§10) but not under this guard: gnomon rewrites its own session
+snapshots during a session, so a change there is not evidence of tampering.
+It snapshots:
 - before each batch of tool calls;
 - after every tool call that can write, which is every tool except the
   read-only ones;

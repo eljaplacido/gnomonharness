@@ -252,7 +252,7 @@ const TOPICS: Record<ExplainTopic, Builder> = {
       here: [
         `gate           ${gate}`,
         `gated for ${role}   ${gated.join(", ") || "(nothing — this role cannot mutate)"}`,
-        `repo_code      ${(config.policy as { approval?: { repo_code?: unknown } }).approval?.repo_code === true ? "on — npm test, make, pip install -e . and the like always ask" : "off — they ask only as the gate says"}`,
+        `repo_code      ${(config.policy as { approval?: { repo_code?: unknown } } | undefined)?.approval?.repo_code === true ?"on — npm test, make, pip install -e . and the like always ask" : "off — they ask only as the gate says"}`,
       ],
       next: [
         "At a prompt: [y]es, [a]ll this turn, [s]ession, [N]o.",
