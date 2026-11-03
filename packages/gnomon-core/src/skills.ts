@@ -479,6 +479,28 @@ export function requireTrial(config: GnomonConfig): boolean {
 }
 
 /**
+ * Whether the surface declares a signer that can anchor a trail: `[audit.attest]`
+ * with a `sign` command, and a `verify` command or `public_key` to check its
+ * heads with.
+ *
+ * `require_trial` needs one. Without it a sealed, chained trial trail proves
+ * consistency and nothing else, and re-review built one by hand with
+ * `recordHash` -- any process with a shell can. An anchor outside the file is
+ * the only thing that makes "a trial produced this" checkable (audit.ts).
+ */
+export function signerDeclared(config: GnomonConfig): boolean {
+  const a = resolveAudit(config).attest;
+  return Boolean(a?.enabled && (a.verify || a.public_key));
+}
+
+const SIGNER_HOWTO =
+  "Declare a signer in .gnomon/config.toml, so trial trails are anchored outside the file:\n" +
+  "  [audit.attest]\n" +
+  '  sign = "<command: digest on stdin, signature on stdout>"\n' +
+  '  public_key = "<PEM, or a path to one>"   # or verify = "<command>"\n' +
+  "(README, \"[audit.attest] — an anchor outside the file\"). Or turn require_trial off.";
+
+/**
  * Check a trial report against the skill about to be accepted.
  *
  * Refused, whatever `require_trial` says, when the report is evidence about
@@ -540,6 +562,10 @@ export function checkEvidence(
   const found = findTrialRecord(config, report_sha256, report);
   if ("refused" in found) refuse(found.refused);
   const { trial_record, attested } = found as { trial_record: SkillEvidence["trial_record"]; attested: boolean };
+  // Belt and braces: acceptSkill refuses require_trial without a signer before
+  // it gets here, and findTrialRecord refuses an unsigned trail when one is
+  // declared. A caller that reaches this some other way still cannot pass.
+  if (want.required && !attested) refuse(`require_trial is on and the trial's trail is not attested. ${SIGNER_HOWTO}`);
   const meets = report.meets_thresholds;
   const verdict = meets === true || meets === false ? meets : "undetermined";
   if (want.required && verdict !== true) {
@@ -661,6 +687,13 @@ export function acceptSkill(
   // Evidence is checked before anything is written or moved: a refused
   // accept leaves the proposal exactly where it was, and records nothing.
   const required = requireTrial(config);
+  if (required && !signerDeclared(config)) {
+    throw new SkillRefusal(
+      `Not accepted: [skills] require_trial is on, but no signer is declared. Without one, anyone ` +
+        `with a shell -- the agent included -- can build a sealed trial trail by hand, so a trial ` +
+        `report proves nothing. ${SIGNER_HOWTO}`
+    );
+  }
   if (required && !opts.evidence) {
     throw new SkillRefusal(
       `Not accepted: [skills] require_trial is on in policy.toml. Run \`gnomon skill trial ${id}\` ` +

@@ -1199,8 +1199,10 @@ sit in a sealed trail of its own whose chain verifies, and must agree with
 the report. With `[audit.attest]` declared, the trail must also be covered by
 signed heads.
 The `skill_accept` record then carries the report's hash. With
-`[skills] require_trial = true` in `policy.toml`, accept also refuses without
-such a report, or with one that did not meet its thresholds. That setting is
+`[skills] require_trial = true` in `policy.toml`, accept also refuses in
+three cases: without such a report, with one that did not meet its
+thresholds, or with no `[audit.attest]` signer declared. A signer is needed
+because without one, anyone with a shell can build a sealed trail by hand. That setting is
 off by default: a small project should not need a trial to save a note.
 
 ---

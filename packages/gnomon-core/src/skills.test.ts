@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -23,7 +23,7 @@ import {
   SkillRefusal,
 } from "./skills.js";
 import { recomputeManifest } from "./config.js";
-import { verifyTrail, AuditTrail, resolveAudit, type AuditRecord } from "./audit.js";
+import { verifyTrail, AuditTrail, resolveAudit, recordHash, type AuditRecord } from "./audit.js";
 
 let root: string;
 const cfg = (audit: Record<string, unknown> = {}, policy: Record<string, unknown> = {}): any => ({
@@ -371,7 +371,27 @@ describe("accept and reject leave a record", () => {
 });
 
 describe("accept --evidence and require_trial", () => {
-  const strict = () => cfg({}, { skills: { require_trial: true } });
+  // A real Ed25519 signer, as `[audit.attest]` declares one: a command that
+  // reads a digest on stdin and writes a base64 signature.
+  const keys = generateKeyPairSync("ed25519");
+  const PRIV = keys.privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+  const PUB = keys.publicKey.export({ format: "pem", type: "spki" }).toString();
+  const signer = () => {
+    const f = join(root, "signer.mjs");
+    if (!existsSync(f)) {
+      writeFileSync(
+        f,
+        `import { readFileSync } from "node:fs";\nimport { createPrivateKey, sign } from "node:crypto";\n` +
+          `const k = createPrivateKey(${JSON.stringify(PRIV)});\n` +
+          `process.stdout.write(sign(null, readFileSync(0), k).toString("base64"));\n`
+      );
+    }
+    return `"${process.execPath}" "${f}"`;
+  };
+  const signed = (policy: Record<string, unknown> = {}) => cfg({ attest: { sign: signer(), public_key: PUB } }, policy);
+  /** require_trial on, with a signer declared: the only way it can pass. */
+  const strict = () => signed({ skills: { require_trial: true } });
+  const strictUnsigned = () => cfg({}, { skills: { require_trial: true } });
   const sha = (b: string | Buffer) => createHash("sha256").update(b).digest("hex");
 
   /**
@@ -389,6 +409,8 @@ describe("accept --evidence and require_trial", () => {
       record?: Record<string, unknown>;
       /** Leave the trail unsealed (no session_end). */
       unsealed?: boolean;
+      /** Sign the trail's head, as a surface with [audit.attest] does. */
+      signed?: boolean;
     } = {}
   ): string => {
     const content = readFileSync(join(root, ".gnomon", "skills", "proposed", "fix-it.md"));
@@ -409,7 +431,10 @@ describe("accept --evidence and require_trial", () => {
     if (over.recorded !== false) {
       // The trail `recordTrial` writes: sealed, chained, and agreeing with the
       // report on every field the accept compares.
-      const t = new AuditTrail({ ...resolveAudit(cfg()), enabled: true, chain: true }, `trial-${Math.random().toString(16).slice(2)}`);
+      const t = new AuditTrail(
+        { ...resolveAudit(over.signed ? signed() : cfg()), enabled: true, chain: true },
+        `trial-${Math.random().toString(16).slice(2)}`
+      );
       t.write("session_start", { mode: "trial" });
       t.write("skill_trial", {
         skill: fields.skill,
@@ -468,7 +493,7 @@ describe("accept --evidence and require_trial", () => {
       join(root, ".gnomon-audit", "x.jsonl"),
       JSON.stringify({ seq: 7, kind: "skill_trial", report_sha256: sha(body) }) + "\n"
     );
-    expect(() => acceptSkill(strict(), "fix-it", { evidence: rel })).toThrow(/not a trial's own sealed trail/);
+    expect(() => acceptSkill(cfg(), "fix-it", { evidence: rel })).toThrow(/not a trial's own sealed trail/);
     stillProposed();
   });
 
@@ -477,21 +502,21 @@ describe("accept --evidence and require_trial", () => {
   it("a sealed, chained trail whose record disagrees with the report's verdict does not vouch for it", () => {
     propose();
     const rel = report({ meets: true, record: { meets_thresholds: false } });
-    expect(() => acceptSkill(strict(), "fix-it", { evidence: rel })).toThrow(/disagrees with the report on meets_thresholds/);
+    expect(() => acceptSkill(cfg(), "fix-it", { evidence: rel })).toThrow(/disagrees with the report on meets_thresholds/);
     stillProposed();
   });
 
   it("a sealed, chained trail whose record names other content does not vouch for the report", () => {
     propose();
     const rel = report({ record: { content_sha256: "0".repeat(64) } });
-    expect(() => acceptSkill(strict(), "fix-it", { evidence: rel })).toThrow(/disagrees with the report on content_sha256/);
+    expect(() => acceptSkill(cfg(), "fix-it", { evidence: rel })).toThrow(/disagrees with the report on content_sha256/);
     stillProposed();
   });
 
   it("a trail that is not sealed does not vouch for a report", () => {
     propose();
     const rel = report({ unsealed: true });
-    expect(() => acceptSkill(strict(), "fix-it", { evidence: rel })).toThrow(/sealed/);
+    expect(() => acceptSkill(cfg(), "fix-it", { evidence: rel })).toThrow(/sealed/);
     stillProposed();
   });
 
@@ -507,7 +532,7 @@ describe("accept --evidence and require_trial", () => {
     r.surface_hash_skill = "e".repeat(64);
     lines[1] = JSON.stringify(r);
     writeFileSync(trail, lines.join("\n") + "\n");
-    expect(() => acceptSkill(strict(), "fix-it", { evidence: rel2 })).toThrow(/does not verify/);
+    expect(() => acceptSkill(cfg(), "fix-it", { evidence: rel2 })).toThrow(/does not verify/);
     stillProposed();
   });
 
@@ -537,7 +562,7 @@ describe("accept --evidence and require_trial", () => {
   it("with require_trial on, a report that does not meet its thresholds is refused", () => {
     propose();
     for (const meets of [false, "undetermined"]) {
-      const rel = report({ meets });
+      const rel = report({ meets, signed: true });
       expect(() => acceptSkill(strict(), "fix-it", { evidence: rel })).toThrow(/meets_thresholds/);
     }
     stillProposed();
@@ -545,13 +570,14 @@ describe("accept --evidence and require_trial", () => {
 
   it("a matching report is accepted, and the record cites its hash and its trial record", () => {
     propose();
-    const rel = report();
+    const rel = report({ signed: true });
     const d = acceptSkill(strict(), "fix-it", { evidence: rel });
     const ev = d.record?.evidence as Record<string, unknown>;
     expect(ev).toMatchObject({
       report: rel,
       report_sha256: sha(readFileSync(join(root, rel))),
       meets_thresholds: true,
+      attested: true,
     });
     expect((ev.trial_record as { trail: string }).trail).toMatch(/^\.gnomon-audit\/trial-/);
     expect(d.record?.require_trial).toBe(true);
@@ -561,6 +587,57 @@ describe("accept --evidence and require_trial", () => {
     );
     expect(Object.keys(ev).sort()).toEqual([...fixture.evidence_keys].sort());
     expect(Object.keys(ev.trial_record as object).sort()).toEqual([...fixture.trial_record_keys].sort());
+  });
+
+  it("require_trial without a signer refuses, and says how to declare one", () => {
+    // Fails on the first version, which accepted under require_trial with no
+    // anchor at all -- and a chain is something a shell can build.
+    propose();
+    const rel = report();
+    let err: unknown;
+    try {
+      acceptSkill(strictUnsigned(), "fix-it", { evidence: rel });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(SkillRefusal);
+    expect(String(err)).toMatch(/no signer is declared/);
+    expect(String(err)).toMatch(/\[audit\.attest\]/);
+    stillProposed();
+  });
+
+  it("with a signer, a sealed chain built by hand -- no signed head -- does not vouch", () => {
+    // The re-review's forgery: recordHash makes a chain that verifies, and
+    // without an anchor it was accepted under require_trial.
+    propose();
+    const rel = report({ recorded: false });
+    const body = readFileSync(join(root, rel));
+    const fields = JSON.parse(body.toString("utf-8"));
+    const recs = [
+      { kind: "session_start", mode: "trial" },
+      {
+        kind: "skill_trial",
+        skill: fields.skill,
+        report_sha256: sha(body),
+        content_sha256: fields.content_sha256,
+        surface_hash_base: fields.arms.base.surface_hash,
+        surface_hash_skill: fields.arms.skill.surface_hash,
+        meets_thresholds: fields.meets_thresholds,
+      },
+      { kind: "session_end" },
+    ];
+    let prev: string | null = null;
+    const lines = recs.map((f, seq) => {
+      const r = { seq, ts: new Date().toISOString(), prev, ...f } as AuditRecord;
+      r.hash = recordHash(r);
+      prev = r.hash;
+      return JSON.stringify(r);
+    });
+    mkdirSync(join(root, ".gnomon-audit"), { recursive: true });
+    writeFileSync(join(root, ".gnomon-audit", "trial-forged.jsonl"), lines.join("\n") + "\n");
+    expect(verifyTrail(join(root, ".gnomon-audit", "trial-forged.jsonl"))).toMatchObject({ ok: true, sealed: true });
+    expect(() => acceptSkill(strict(), "fix-it", { evidence: rel })).toThrow(/not covered by signed heads/);
+    stillProposed();
   });
 
   it("with require_trial off (the default), a person may accept on a failing report; the record says so", () => {

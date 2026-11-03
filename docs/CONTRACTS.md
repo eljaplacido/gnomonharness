@@ -697,11 +697,20 @@ A record vouches for a report when all of these hold:
   heads that verify (`attested: true`).
 
 Without a signer, this proves the trail is consistent, not where it came from.
-Anyone who can write the directory could build a consistent trail. Policy rule
-`record` stops the agent writing it, and the signer is what proves provenance.
+Anyone who can write the directory could build a consistent trail, and
+re-review did exactly that with `recordHash`. Policy rule `record` stops the
+agent's write tools and the shell commands it can recognise, but a pattern
+check is not containment. The signer is what proves provenance.
 
-`[skills] require_trial = true` in `policy.toml` makes accept refuse when no
-report is cited. It is off by default. Nothing accepts a skill automatically,
+`[skills] require_trial = true` in `policy.toml` makes accept refuse in three
+cases:
+- no signer is declared. That means `[audit.attest]` with a `sign` command,
+  plus a `public_key` or `verify` to check it. The refusal says how to declare
+  one.
+- no report is cited.
+- the cited report is not attested, or does not meet its thresholds.
+
+`require_trial` is off by default. Nothing accepts a skill automatically,
 including a passing trial.
 
 **Exit codes.** A refusal exits **3** (`refused_by_gate`, §1). That covers

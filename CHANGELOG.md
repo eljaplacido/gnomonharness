@@ -33,10 +33,13 @@
   chain verifies, and must agree with the report. With `[audit.attest]`
   declared, the trail must also be covered by signed heads. The citation is
   refused, with exit 3, when the report is for different skill content, ran
-  against a different base surface hash, or no record vouches for it. With `require_trial = true` in `policy.toml`
-  (off by default), accept refuses without such a report, or with one that
-  did not meet its thresholds. Nothing accepts a skill automatically. Step
-  3 of `docs/design/SKILL-TRIALS.md`.
+  against a different base surface hash, or no record vouches for it.
+  `require_trial = true` in `policy.toml` is off by default. When it is on,
+  accept refuses in three cases: without such a report, with one that did not
+  meet its thresholds, or when no `[audit.attest]` signer is declared. A
+  signer is required because without one a shell can build a sealed trail
+  by hand. Nothing accepts a skill automatically. Step 3 of
+  `docs/design/SKILL-TRIALS.md`.
 
 - **`gnomon skill trial ID`: measure a proposed skill before accepting it.**
   A proposal could only be accepted on a reading of it.
