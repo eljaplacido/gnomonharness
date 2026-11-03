@@ -419,3 +419,33 @@ The new-cell deadline is 18:00Z.
 - With aborts passed upstream, a generation that outlives gnomon's 300 s timeout now fails that cell's call honestly (retries, then `apparatus_failure`/outage per gnomon's own handling), instead of jamming other cells. That is the lane's speed showing, and it counts against q38.
 - Attempt 2 runs about 4 h after attempt 1.
 - **Unknown exposure in attempt 1:** attempt-1 cells may have met an abandoned request still running, which would have slowed them. None ended as an outage, but that exposure cannot be measured.
+
+## Amendment 5, 2026-11-03T11:45Z: q38 is re-run in full with a template that handles mid-turn system messages as the incumbent's does; supersedes Amendment 4's plan; before any re-run data
+
+**What was found** (forensics, `scratchpad/m1-forensics/NOTES-2.md`; evidence is the tail of each cell's `gnomon-full.log`). 4 of q38's 16 attempt-1 cells were ended by the server, not the model:
+- the cells: hf-train, install-klee, mailman, tune-mjcf;
+- what happened: gnomon's first mid-turn steering message (a nudge, convergence or wrap-up, all sent as `role: "system"`) got HTTP 400 "System message must be at the beginning." from vLLM's Qwen3.8 template, and the turn ended.
+
+**Rendering check (offline, jinja2).** The incumbent's template, Unsloth's qwen3.6 as served by R1H's llama.cpp (`r1h-2026-11/lane-props.json`), has no branch for a non-leading system message. It **drops it silently**: a probe "MIDTURN-NUDGE" was absent from the rendered prompt. So on the incumbent lane gnomon's mid-turn steering never reached the model, and on q38's lane it killed the turn.
+
+The difference is between the two lanes' templates, not the models. This is a gnomon finding in its own right, reported separately and not changed here.
+
+**Change.**
+- `/home/bench/m1-chain/chat_template-a5.jinja` is q38's template with the one `raise_exception('System message must be at the beginning.')` line replaced by a comment. A non-leading system message is now dropped, exactly as the incumbent's template does.
+- Rendered offline: the original raises; the copy renders and the probe is absent.
+- `start.sh` passes `--chat-template` only when `CHAT_TEMPLATE` is set (default unchanged).
+- Lane: `C:\dev\m1-chain\start-m1-a5.ps1`, which is Amendment 2(a) (no MTP, 2 seqs) plus this template.
+
+**Plan** (`apparatus/m1a5-chain.sh`; replaces `m1a4-chain.sh`, which was killed while waiting and recorded nothing). The order is Amendment 4's, with these changes:
+- A **template gate** after the abort gate: a request with a mid-turn system message must get HTTP 200. M1a's lane answered 400.
+- **All of q38's L cells are re-run, 32 cells**, so both attempts use one template:
+  - attempt 1's original cells move to `runs-aborted/<cell>-template` and are reported as a sensitivity check;
+  - attempt 2's outage cells move to `runs-aborted/<cell>-outage`.
+- The abort-on-disconnect relay and `run_m1_a4.py` (Amendment 4) are used unchanged.
+- The decision is `collect_m1.py --decide m1a` → `decision-m1a5.txt`, unchanged. If q38 wins, its PC arm follows.
+- The chain's exit cleanup is now scoped: it stops a lane and tunnel only if it started them.
+- New cells stop at 18:00Z.
+
+**Caveats, stated now:**
+- The incumbent's cells were measured with its template silently dropping gnomon's steering. q38 now gets the same treatment. Neither lane measures gnomon *with* working mid-turn steering.
+- Attempt 1 is re-measured, so the original 16 (8 solved) are kept only as a sensitivity check.
