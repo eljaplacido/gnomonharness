@@ -612,7 +612,7 @@ decision gnomon could not make is never an allow.
 | `sudo` | sudo at command position, on the host |
 | `sandbox` | a path outside the root and every granted `extra_roots` |
 | `surface` | a write or edit inside `.gnomon/` |
-| `record` | a write, edit or shell write target inside gnomon's own records: `.gnomon-audit/` (or the `[audit] dir`) and `.gnomon-trials/`, for every role, with no consent path |
+| `record` | a write, edit or shell write target inside gnomon's own records: `.gnomon-audit/` (or the `[audit] dir`) and `.gnomon-trials/`, for every role, with no consent path. This includes a hard link to a record, an `ln` into or out of one, git checkout/restore/clone/worktree/apply, archive extraction (members listed by `tar`/`unzip`), rsync, a perl two-argument open, an awk redirect, a glob that could name a record, and, on case-insensitive filesystems, other spellings of the directory |
 | `write_allow` | a path outside the role's `write_allow` |
 | `network` | `[sandbox] network = false` |
 | `url` | a scheme other than http(s), or a private, loopback or link-local address |
@@ -626,6 +626,16 @@ names — and `execute` (`{ "code" }`), JavaScript a harness runs itself
 (opencode V2's Code Mode). `execute` is decided as the equivalent bash call
 `node -e '<code>'`; for a role without `bash` it is `ask` with rule `tools`.
 Anything else is `allow` with rule `ungoverned`, never guessed at.
+
+**What these rules are, and are not.** Every shell rule here is a pattern
+check over the command's text. It refuses what the text names, and nothing
+more. Some writes are invisible to it: a path built at run time (`$D/a.jsonl`,
+`os.path.join(...)`, string concatenation), a command run through `xargs`,
+`eval` or `sh -c` on computed text, and anything a script file does. MCP tool
+calls are not checked by these rules at all. **This is not containment.**
+Containment is the kernel-enforced sandbox (`exec os`, #74). The precheck
+exists so that the routes a person can name are refused with a reason, before
+anything runs.
 
 `write_allow` binds bash too: a file a shell command names as its output
 (a redirection; the operands of `rm`, `mv`, `cp`, `tee`, `sed -i` and the like;

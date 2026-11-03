@@ -121,6 +121,23 @@
   - Parallel tool calls sent whole at one index are kept apart by their ids.
   - Turn records carry `wire`: whether the call was streamed and its clocks.
   - Tests use fake servers on 127.0.0.1.
+- **More routes into gnomon's records are refused** (re-review of the
+  `record` rule):
+  - a hard link made earlier (checked by inode, only for files with more than
+    one link);
+  - `ln` into, out of, or naming a record;
+  - `git checkout`/`restore`/`clone`/`worktree add`, and `git apply` (from the
+    patch's own headers);
+  - `tar -x` and `unzip`, both into a record and by member, as the archiver
+    lists them;
+  - `rsync`, a perl two-argument `open`, an awk redirect, `pushd`, and a glob
+    that could name a record;
+  - on Windows and macOS, `.GNOMON-AUDIT` and `.gnomon-audit.` too.
+
+  The docs now state the threat model plainly. This is a pattern check over a
+  command's text, not containment: run-time paths, scripts and MCP calls are
+  not seen by it. The kernel sandbox is what contains them.
+
 - **Accepting or rejecting a skill is recorded.** `gnomon skill accept` moved
   the file and wrote nothing, so the trail showed the surface hash change and
   never that a person accepted a named skill, or what it said. Accept now
