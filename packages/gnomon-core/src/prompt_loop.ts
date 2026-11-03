@@ -22,6 +22,8 @@ import {
   listRoles,
   listProfiles,
   resolveContext,
+  resolveMasking,
+  resolveBootstrap,
   resolveVerify,
   detectVerifyCommand,
   resolveResilience,
@@ -109,6 +111,14 @@ import {
   type TurnShadow,
 } from "./shadow.js";
 import { recordDegradation } from "./degradation.js";
+import {
+  maskObservations,
+  observationMeta,
+  bootstrapSnapshot,
+  bootstrapBlock,
+  type BootstrapOutcome,
+  type ObservationMeta,
+} from "./context_hygiene.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
 import { applyCredentials } from "./credentials.js";
 import type { TrustOutcome } from "./trust.js";
@@ -278,6 +288,13 @@ export interface PromptState {
    * overwrite a file an earlier turn told the model to read.
    */
   spill?: SpillSink;
+  /**
+   * The environment snapshot, once `[context] bootstrap` has run for this
+   * session: the block buildSystemPrompt appends, empty when the bootstrap
+   * produced none (refused, failed, unavailable), so it is never re-run.
+   * Undefined until then, and always on a surface that declares no bootstrap.
+   */
+  bootstrap?: { id: string; block: string };
 }
 
 /** The id this session saves under, or a placeholder before one is assigned. */
@@ -3511,6 +3528,32 @@ export interface TurnCounters {
    * failed 9 of 31 calls" from "bash succeeded 31/31 and the answer was still
    * wrong". */
   per_tool: Record<string, { calls: number; refusals: number; apparatus: number }>;
+  /**
+   * Observation masking this turn (`[context.mask_observations]`). Present on
+   * every turn of a surface that declares it, zeros included, so "armed and
+   * never fired" is distinguishable from "not declared"; absent otherwise.
+   * `tokens_saved` is ESTIMATED context occupancy removed at the batches
+   * (~4 characters per token), not tokens billed: a result masked at call 20
+   * is not resent on every call after it, which is where the spend falls.
+   */
+  masking?: { batches: number; observations: number; tokens_saved: number };
+  /**
+   * The environment bootstrap, on the turn that ran it (the first of the
+   * session; `[context] bootstrap`). `outcome` is a published enumeration
+   * (context_hygiene.ts BOOTSTRAP_OUTCOMES). `bytes` is the command's output
+   * before the cap, `tokens` the estimated size of the block every later call
+   * carries. Absent on every other turn and on a surface without a bootstrap.
+   */
+  bootstrap?: {
+    id: string;
+    platform: string;
+    outcome: BootstrapOutcome;
+    exit?: number;
+    bytes: number;
+    tokens: number;
+    truncated: boolean;
+    worktree_changed?: boolean | null;
+  };
 }
 
 /**
@@ -3839,7 +3882,12 @@ export function buildSystemPrompt(
       dormant,
       `${basename(state.config.gnomonDir)}/${SKILLS_DIR}`
     ) + runNotesBlock(state)
-  ) + platformBlock() + `\n\n${sessionModeBlock(state.interactive === true && !opts.delegated)}`;
+  ) + platformBlock() + `\n\n${sessionModeBlock(state.interactive === true && !opts.delegated)}` +
+    // Last, and only once a bootstrap has run: "" otherwise, so a surface
+    // without one builds the prompt it always did. Appended rather than
+    // placed, so the turn that runs the bootstrap can extend the prompt it
+    // already built by exactly this text.
+    (state.bootstrap?.block ?? "");
 }
 
 /** A turn's model-free outcome, as the shadow's `turn_end` record carries it. */
@@ -4503,8 +4551,189 @@ export async function runAgenticTurn(
   // outage. The next turn starts on the primary again.
   let onFallback = false;
 
+  /**
+   * The record guard, created on the session's first tool call so its
+   * baseline is the records as the session found them. Session start: the
+   * records against the last checkpoint a session left (record_tamper.ts).
+   * Recorded, and accept is blocked, but this turn is not stopped: whatever
+   * changed them happened before it.
+   */
+  const ensureRecordGuard = (): RecordGuard => {
+    if (!state.recordGuard) {
+      const since = compareWithCheckpoint(state.config);
+      if (since) noteRecords(since);
+      state.recordGuard = RecordGuard.for(state.config);
+    }
+    return state.recordGuard;
+  };
+
+  // ---------------------------------------------------------------------
+  // Context hygiene (context_hygiene.ts). Both resolve to null unless the
+  // surface declares them, and then nothing below runs: no metadata is kept,
+  // no counter is written, no command is run, and the prompt is the one the
+  // caller built.
+  //
+  // Observation masking: a WeakMap rather than a field on the message, so the
+  // messages sent are the objects they always were.
+  const mask = resolveMasking(config);
+  const observations = new WeakMap<ChatMessage, ObservationMeta>();
+  let observationSeq = 0;
+  let lastChangeSeq = 0;
+  if (mask) counters.masking = { batches: 0, observations: 0, tokens_saved: 0 };
+
+  // The environment bootstrap: once per session, on its first top-level turn
+  // (a delegated sub-turn inherits the snapshot through buildSystemPrompt).
+  const boot = depth === 0 && state.bootstrap === undefined ? resolveBootstrap(config) : null;
+  if (boot) {
+    const t0 = Date.now();
+    const bootCall: ToolCall = { name: "bash", args: { command: boot.command ?? "" } };
+    let outcome: BootstrapOutcome = "unavailable";
+    let ran: ToolOutcome | undefined;
+    if (boot.command !== null) {
+      // Before the command, as before any tool: the guard's baseline.
+      const guard = ensureRecordGuard();
+      deps.progress.stop();
+      say(
+        paint(deps.ui, "cyan", `  ⚙ bootstrap`) +
+          paint(deps.ui, "gray", ` ${boot.id} (${boot.platform}, ${boot.probes!.length} probe(s))`)
+      );
+      // The surface's command, not the model's, so it runs the way [verify]
+      // does: through the ordinary bash tool, under this role's bash_deny and
+      // bash_allow, the sandbox and exec, asked for only under `always`.
+      ran = await executeTool(
+        "bash",
+        { command: boot.command },
+        {
+          ...ctx,
+          gate: (gate === "always" ? "always" : "never") as ApprovalGate,
+          allow: "strict" as SurfaceConsent,
+          timeoutMs: Math.min(ctx.timeoutMs, boot.timeout_ms),
+        },
+        new Set(["bash"])
+      );
+      const bucket = mapBucket(ran.code);
+      outcome = bucket === "result" ? "ok" : bucket === "refusal" ? "refused" : "failed";
+      if (ran.surface_drift) surfaceChanges.push(ran.surface_drift);
+      toolLog.push(`bootstrap ${boot.id} — ${ran.summary}`);
+      const during = guard.check("during_call");
+      if (during?.changes.length) {
+        state.bootstrap = { id: boot.id, block: "" };
+        return tampered(during, bootCall);
+      }
+      if (during) noteRecords(during, bootCall);
+    }
+    const snap =
+      outcome === "ok" && ran
+        ? bootstrapSnapshot(ran.content, boot.max_bytes, boot.command ?? "")
+        : { text: "", bytes: ran ? Buffer.byteLength(ran.content, "utf8") : 0, truncated: false };
+    const block = outcome === "ok" ? bootstrapBlock(boot.id, boot.platform, snap.text) : "";
+    // Set whatever happened, so a session runs the bootstrap once, not once
+    // per turn until it works.
+    state.bootstrap = { id: boot.id, block };
+    if (block) {
+      // This turn's prompt was built before the snapshot existed. Extend it by
+      // exactly the text buildSystemPrompt appends from now on, so the next
+      // turn's system prompt starts with the same bytes as this one's.
+      if (working[0]?.role === "system") {
+        working[0] = { ...working[0], content: working[0].content + block };
+      } else {
+        working.unshift({ role: "system", content: block.trimStart() });
+      }
+    }
+    counters.bootstrap = {
+      id: boot.id,
+      platform: boot.platform,
+      outcome,
+      ...(ran?.shell_exit !== undefined ? { exit: ran.shell_exit } : {}),
+      bytes: snap.bytes,
+      tokens: estimateTokens(block),
+      truncated: snap.truncated,
+      ...(ran && ran.worktree_changed !== undefined ? { worktree_changed: ran.worktree_changed } : {}),
+    };
+    deps.audit?.write("bootstrap", {
+      role,
+      id: boot.id,
+      platform: boot.platform,
+      outcome,
+      command: boot.command === null ? null : deps.audit.action(boot.command),
+      ...(ran ? { code: ran.code, bucket: mapBucket(ran.code), summary: ran.summary } : {}),
+      ...(ran?.shell_exit !== undefined ? { exit: ran.shell_exit } : {}),
+      bytes: snap.bytes,
+      tokens: counters.bootstrap.tokens,
+      truncated: snap.truncated,
+      ...(ran && ran.worktree_changed !== undefined ? { worktree_changed: ran.worktree_changed } : {}),
+      duration_ms: Date.now() - t0,
+    });
+    if (outcome === "ok") {
+      say(
+        paint(
+          deps.ui,
+          "gray",
+          `    ✓ snapshot ${snap.bytes} bytes → ~${counters.bootstrap.tokens} tok in the system prompt` +
+            (snap.truncated ? ` (cut at ${boot.max_bytes} bytes)` : "")
+        )
+      );
+    } else {
+      warn(
+        paint(
+          deps.ui,
+          "yellow",
+          outcome === "unavailable"
+            ? `  [bootstrap] ${boot.id} declares no ${boot.platform} probes — this session runs without an environment snapshot.`
+            : `  [bootstrap] ${boot.id} ${outcome} (${ran?.summary ?? ""}) — this session runs without an environment snapshot.`
+        )
+      );
+    }
+    // Declared read-only, and the stamp says otherwise: said, and recorded in
+    // counters.bootstrap.worktree_changed, never fixed up behind the operator.
+    if (ran?.worktree_changed === true) {
+      warn(
+        paint(
+          deps.ui,
+          "yellow",
+          `  [bootstrap] ${boot.id} changed the worktree, and a bootstrap is meant to be read-only. Check its probes.`
+        )
+      );
+    }
+    deps.progress.start(`${route.model}`);
+  }
+
   for (;;) {
     if (deps.signal?.aborted) return cancelled();
+
+    // One masking batch before the call, or none. Batches only, never one
+    // result per call: between two batches the request grows only at its
+    // end, so the endpoint's cached prefix stays valid (context_hygiene.ts).
+    if (mask) {
+      const next = onFallback && route.fallback ? route.fallback : route.target;
+      const window = resolveContext(config, next).max_context_tokens;
+      const batch = maskObservations(working, observations, mask, window, lastChangeSeq);
+      if (batch) {
+        const m = counters.masking!;
+        m.batches++;
+        m.observations += batch.masked;
+        m.tokens_saved += batch.tokens_saved;
+        say(
+          paint(
+            deps.ui,
+            "gray",
+            `  [context] masked ${batch.masked} older tool result(s), ~${batch.tokens_saved} tok ` +
+              `(batch ${m.batches}, ~${batch.tokens_before} → ~${batch.tokens_after} of ${window})`
+          )
+        );
+        deps.audit?.write("context_mask", {
+          role,
+          batch: m.batches,
+          step: steps,
+          masked: batch.masked,
+          tokens_saved: batch.tokens_saved,
+          tokens_before: batch.tokens_before,
+          tokens_after: batch.tokens_after,
+          window,
+          first_index: batch.first_index,
+        });
+      }
+    }
 
     let result: InferenceResult;
     if (onFallback && route.fallback) {
@@ -5378,15 +5607,7 @@ export async function runAgenticTurn(
     // background job a previous call started, say -- is caught before more
     // tools run. Prefetched calls below are read-only, so they need no
     // snapshot of their own.
-    if (!state.recordGuard) {
-      // Session start: the records against the last checkpoint a session
-      // left (record_tamper.ts). Recorded, and accept is blocked, but this
-      // turn is not stopped: whatever changed them happened before it.
-      const since = compareWithCheckpoint(state.config);
-      if (since) noteRecords(since);
-      state.recordGuard = RecordGuard.for(state.config);
-    }
-    const guard = state.recordGuard;
+    const guard = ensureRecordGuard();
     {
       const between = guard.check("between_calls");
       if (between?.changes.length) return tampered(between);
@@ -5677,12 +5898,28 @@ export async function runAgenticTurn(
       }
       // think / off: no per-tool line — the spinner still shows activity.
 
-      working.push({
+      const observation: ChatMessage = {
         role: "tool",
         content: outcome.content,
         tool_call_id: call.id,
         tool_name: call.name,
-      });
+      };
+      working.push(observation);
+      if (mask) {
+        observationSeq++;
+        // A change to the worktree is what "acted on" means for a failure
+        // the masking keeps (context_hygiene.ts maskObservations).
+        if (
+          ((call.name === "write" || call.name === "edit") && outcome.code === 0) ||
+          outcome.worktree_changed === true
+        ) {
+          lastChangeSeq = observationSeq;
+        }
+        observations.set(
+          observation,
+          observationMeta(call.name, call.args, describeCall(call), outcome, observationSeq)
+        );
+      }
       // Both branches did the same thing. The spinner was stopped before the
       // tool ran, so this restarts it either way.
       deps.progress.start(`${usedModel} — ${steps} tool call(s) so far`);
@@ -6364,6 +6601,9 @@ export async function runTask(
           : input;
         const stageState: PromptState = { config, exchanges: [], currentRole: stageRole };
         stageState.mcp = state.mcp;
+        // The session's snapshot, once stage 1 has taken it: one bootstrap
+        // per run, not one per stage.
+        if (state.bootstrap) stageState.bootstrap = state.bootstrap;
         const stageMsgs = buildMessages(
           stageState,
           buildSystemPrompt(stageState, stageRole, stageInput),
@@ -6381,6 +6621,7 @@ export async function runTask(
           shadow: shadow?.turn(stageInfo, shadowApprover),
         });
         shadow?.turnEnd(stageInfo, shadowOutcome(r, stageInfo.t0));
+        if (stageState.bootstrap) state.bootstrap = stageState.bootstrap;
         stageRecords.push({
           stage: i + 1,
           role: stageRole,
@@ -8363,6 +8604,8 @@ export async function runSessionTurn(
           }
         );
         shadow?.turnEnd(stageInfo, shadowOutcome(r, stageInfo.t0));
+        // A shallow copy: the snapshot stage 1 took is the session's.
+        if (stageState.bootstrap) state.bootstrap = stageState.bootstrap;
         deps.audit.write("chain_stage", {
           stage: i + 1,
           of: turnChain.length,

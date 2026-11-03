@@ -1037,3 +1037,55 @@ trail verifies and it was authorised the way it says.
   session killed after a mid-run checkpoint. Resolving them is a person's
   call.
 - **The walk stops at 200,000 entries**, reported as `truncated`.
+
+## 15. Context hygiene — `counters.masking`, `counters.bootstrap`, audit kinds `context_mask`, `bootstrap`
+
+Two opt-in keys, both in the hashed surface: observation masking
+(`[context.mask_observations]` in config.toml) and the environment bootstrap
+(`[context] bootstrap = "<id>"`, naming a `[bootstrap.<id>]` block in
+policy.toml). **Absent keys are the build before them:** no field below is
+written, no command runs, and a scripted turn sends v0.4.0's request bodies
+byte for byte (`context_hygiene.test.ts` pins the digest taken on `be4fc0d8`).
+Declaring either moves the surface hash, which is the intended effect: a run
+that masked or bootstrapped is a different run, and its records say so.
+
+**`counters.masking`** is on every `TaskRecord` and `turn` record of a surface
+that declares the table, zeros included, so "armed and never fired" is not
+read as "not declared". Its fields are exactly `batches`, `observations` (tool
+results replaced by a placeholder) and `tokens_saved`. The last is an
+*estimate* of context occupancy removed at the batches (~4 characters per
+token), not of tokens billed. One `context_mask` audit record per batch
+carries `role`, `batch`, `step`, `masked`, `tokens_saved`, `tokens_before`,
+`tokens_after`, `window` and `first_index` (the first message rewritten,
+which is where a cached prompt prefix stops being valid).
+
+**`counters.bootstrap`** is on the turn that ran the bootstrap, the first
+top-level turn of a session, and on no other. Always: `id`, `platform`,
+`outcome`, `bytes` (the command's output before the cap), `tokens` (the
+estimated size of the block every later call carries) and `truncated`. When a
+command ran: `exit`, and `worktree_changed` as the bash stamp observed it. A
+bootstrap is declared read-only; `worktree_changed: true` is recorded and
+announced, never undone. One `bootstrap` audit record carries the same, plus
+the command as the trail records any command, the tool `code`, `bucket` and
+`summary`, and `duration_ms`.
+
+`outcome` is a published enumeration:
+
+| outcome | meaning |
+|---|---|
+| `ok` | the command ran; its output, cut to `max_bytes`, is the snapshot appended to the system prompt |
+| `refused` | the policy said no (bash_deny or bash_allow, the sandbox, an approval declined under `approval = "always"`); no snapshot |
+| `failed` | the command did not run to the end (timeout, spawn failure, a signal); no snapshot |
+| `unavailable` | the selected block declares no probes for this platform; nothing ran |
+
+`platform` is one of `linux`, `macos`, `windows`: the key of the
+`[bootstrap.<id>]` block this machine reads (Windows runs the probes in Git
+Bash; every platform that is neither Windows nor macOS reads `linux`).
+
+**Fixture**: `conformance/context_hygiene.json` — the keys each table reads,
+the record fields, the four outcomes and the three platforms.
+`packages/gnomon-cli/src/docs.test.ts` holds the outcome union in
+`context_hygiene.ts`, the fixture and the table above to one set, and the key
+lists in `config.ts` to the fixture. `context_hygiene.test.ts` checks the
+fields a real run writes against the fixture, and that keys-absent requests
+match the pinned digest.

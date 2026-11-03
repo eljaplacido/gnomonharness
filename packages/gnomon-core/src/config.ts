@@ -235,6 +235,54 @@ export interface ContextConfig {
    * both. Defaults to 15% of the budget, at least 1024.
    */
   reserve_output?: number;
+  /**
+   * Observation masking, opt-in: `[context.mask_observations]`. Absent means
+   * every tool result stays verbatim until the overflow trim, as before. See
+   * resolveMasking.
+   *
+   * A sub-table, not the inline `mask_observations = { keep_last = 10 }` the
+   * name invites: gnomon's TOML subset reads an inline table as the STRING
+   * "{ keep_last = 10 }" (CONTRACTS.md §5.3), so that spelling would be
+   * hashed, look configured and do nothing. auditSurface refuses it.
+   */
+  mask_observations?: MaskObservationsConfig;
+  /**
+   * The environment bootstrap, opt-in: the id of a `[bootstrap.<id>]` block in
+   * policy.toml. Absent means nothing runs before the first model call, as
+   * before. See resolveBootstrap.
+   */
+  bootstrap?: string;
+}
+
+/** config.toml [context.mask_observations] */
+export interface MaskObservationsConfig {
+  /** The newest tool results always kept verbatim. */
+  keep_last?: number;
+  /** Mask only once the turn's context passes this fraction of the window. */
+  at_fill?: number;
+  /** ...and only when at least this many results can be masked at once. */
+  batch?: number;
+}
+
+/**
+ * policy.toml [bootstrap.<id>] — one read-only snapshot command per platform.
+ *
+ * Each platform key holds a LIST of probes, not one long string: the list is
+ * what a reviewer reads and what the hash covers, and gnomon composes it into
+ * the one compound command that runs (composeBootstrapCommand). In policy.toml
+ * beside [verify] because it is the same kind of thing: a command the surface,
+ * not the model, decides to run.
+ */
+export interface BootstrapDecl {
+  linux?: string[];
+  macos?: string[];
+  windows?: string[];
+  /** Cap on the snapshot put into the prompt, in bytes. */
+  max_bytes?: number;
+  /** Lines kept from each probe's output. */
+  max_lines?: number;
+  /** Deadline for the whole command; never longer than the tool timeout. */
+  timeout_ms?: number;
 }
 
 export type ContextPolicy = "full" | "sliding_window" | "summary";
@@ -302,6 +350,8 @@ export interface Policy {
     max_rounds?: number;
   };
   exit_codes?: Record<string, string>;
+  /** Environment bootstraps, by id; `[context] bootstrap` picks one. */
+  bootstrap?: Record<string, BootstrapDecl>;
 }
 
 /** Roles.toml: role definitions */
@@ -1230,6 +1280,159 @@ export function resolveContext(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Context hygiene: observation masking and the environment bootstrap.
+//
+// Both opt-in, and both resolved separately from resolveContext on purpose:
+// ResolvedContext is printed and fingerprinted as it stands, and an absent key
+// has to leave every byte of that, and of every request, where it was. Each
+// resolver returns null when its key is absent, and every call site treats
+// null as "do exactly what the build before this did".
+// ---------------------------------------------------------------------------
+
+/** Observation masking, fully resolved. */
+export interface ResolvedMasking {
+  /** The newest tool results always kept verbatim. */
+  keep_last: number;
+  /** Fraction of the window the turn's context must reach before a batch. */
+  at_fill: number;
+  /** The fewest results a batch masks; fewer eligible means no batch yet. */
+  batch: number;
+}
+
+/**
+ * What a DECLARED `[context.mask_observations]` uses for a key it leaves out.
+ * Never consulted when the table is absent: absent is no masking at all.
+ *
+ * - keep_last 10: the window the Complexity Trap study used (SWE-agent, the
+ *   last 10 observations verbatim; arXiv 2508.21433).
+ * - at_fill 0.5: under the leg checkpoint's trim budget (60% of the window),
+ *   so a declared mask acts before the lossy trim would.
+ * - batch 5: once past the threshold, the prompt prefix is rewritten at most
+ *   once per five new tool results rather than on every call. Hybrid-attention
+ *   models (Qwen3.5/3.6 under llama.cpp) cannot truncate a cached prefix, so
+ *   each rewrite costs a re-prefill from the first changed byte.
+ */
+export const MASK_DEFAULTS: Readonly<ResolvedMasking> = Object.freeze({
+  keep_last: 10,
+  at_fill: 0.5,
+  batch: 5,
+});
+
+/** The keys `[context.mask_observations]` reads. */
+export const MASK_KEYS = Object.keys(MASK_DEFAULTS);
+
+/**
+ * Read `[context.mask_observations]`. Null when it is absent -- or not a table,
+ * which auditSurface refuses before a run can start.
+ */
+export function resolveMasking(config: GnomonConfig): ResolvedMasking | null {
+  const raw = config.config.context?.mask_observations as unknown;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const int = (v: unknown, min: number): number | undefined =>
+    typeof v === "number" && Number.isInteger(v) && v >= min ? v : undefined;
+  const fill =
+    typeof r.at_fill === "number" && Number.isFinite(r.at_fill) && r.at_fill >= 0 && r.at_fill < 1
+      ? r.at_fill
+      : undefined;
+  return {
+    keep_last: int(r.keep_last, 0) ?? MASK_DEFAULTS.keep_last,
+    at_fill: fill ?? MASK_DEFAULTS.at_fill,
+    batch: int(r.batch, 1) ?? MASK_DEFAULTS.batch,
+  };
+}
+
+/** The platform keys a `[bootstrap.<id>]` block declares its probes under. */
+export const BOOTSTRAP_PLATFORMS = ["linux", "macos", "windows"] as const;
+export type BootstrapPlatform = (typeof BOOTSTRAP_PLATFORMS)[number];
+
+/**
+ * Which platform key this machine reads. Windows runs the bash tool in Git
+ * Bash, so its probes are shell too; every platform that is neither Windows
+ * nor macOS reads `linux`, the POSIX variant.
+ */
+export function bootstrapPlatform(platform: NodeJS.Platform = process.platform): BootstrapPlatform {
+  return platform === "win32" ? "windows" : platform === "darwin" ? "macos" : "linux";
+}
+
+/**
+ * What a declared `[bootstrap.<id>]` uses for a limit it leaves out. A
+ * snapshot of a few hundred tokens is the size Meta-Harness injected; 3000
+ * bytes is about 750 estimated tokens, paid on every call of the session.
+ */
+export const BOOTSTRAP_DEFAULTS = Object.freeze({ max_bytes: 3000, max_lines: 12, timeout_ms: 20_000 });
+
+/** The keys a `[bootstrap.<id>]` block reads. */
+export const BOOTSTRAP_KEYS: readonly string[] = [...BOOTSTRAP_PLATFORMS, ...Object.keys(BOOTSTRAP_DEFAULTS)];
+
+/** The environment bootstrap, fully resolved for this machine. */
+export interface ResolvedBootstrap {
+  /** The `[bootstrap.<id>]` the surface selected. */
+  id: string;
+  platform: BootstrapPlatform;
+  /** The probes declared for this platform; null when it declares none. */
+  probes: string[] | null;
+  /** The one compound command that runs; null when there is nothing to run. */
+  command: string | null;
+  max_bytes: number;
+  max_lines: number;
+  timeout_ms: number;
+}
+
+/**
+ * Compose a probe list into ONE compound shell command.
+ *
+ * Each probe is labelled with its own text, runs in a subshell (a `cd` in one
+ * cannot move the next), has stderr folded in -- "command not found" is
+ * exactly what the snapshot is for -- and is cut to `maxLines` lines so one
+ * chatty probe cannot crowd out the rest. The `)` sits on its own line so a
+ * probe ending in a `# comment` cannot swallow it. Deterministic: the same
+ * list gives the same bytes, which is what the hash and the audit record need.
+ */
+export function composeBootstrapCommand(probes: string[], maxLines: number): string {
+  const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+  return probes
+    .map((p) => `printf '%s\\n' ${quote(`$ ${p}`)}; ( ${p}\n) 2>&1 | head -n ${Math.max(1, Math.floor(maxLines))}`)
+    .join("\n");
+}
+
+/**
+ * Read `[context] bootstrap` and the `[bootstrap.<id>]` it names. Null when no
+ * bootstrap is selected. A selected id with no block, or no probes for this
+ * platform, resolves with `command: null`: the turn then runs without a
+ * snapshot and says so (`outcome: "unavailable"`), and auditSurface has
+ * already refused the first case before any run.
+ */
+export function resolveBootstrap(
+  config: GnomonConfig,
+  platform: NodeJS.Platform = process.platform
+): ResolvedBootstrap | null {
+  const id = config.config.context?.bootstrap as unknown;
+  if (typeof id !== "string" || id.trim() === "") return null;
+  const blocks = (config.policy?.bootstrap ?? {}) as Record<string, unknown>;
+  const decl = (Object.prototype.hasOwnProperty.call(blocks, id) ? blocks[id] : undefined) as
+    | Record<string, unknown>
+    | undefined;
+  const fam = bootstrapPlatform(platform);
+  const list = decl && typeof decl === "object" ? decl[fam] : undefined;
+  const probes = Array.isArray(list)
+    ? list.filter((p): p is string => typeof p === "string" && p.trim() !== "")
+    : [];
+  const pos = (v: unknown, d: number): number =>
+    typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : d;
+  const max_lines = pos(decl?.max_lines, BOOTSTRAP_DEFAULTS.max_lines);
+  return {
+    id,
+    platform: fam,
+    probes: probes.length > 0 ? probes : null,
+    command: probes.length > 0 ? composeBootstrapCommand(probes, max_lines) : null,
+    max_bytes: pos(decl?.max_bytes, BOOTSTRAP_DEFAULTS.max_bytes),
+    max_lines,
+    timeout_ms: pos(decl?.timeout_ms, BOOTSTRAP_DEFAULTS.timeout_ms),
+  };
+}
+
 /** The `[ui]` block, fully resolved with defaults. */
 export interface ResolvedUi {
   theme: string;
@@ -1831,6 +2034,9 @@ const KNOWN_BLOCKS = new Set([
   // this entry, and the auditor told every surface that declared it that the
   // block "does nothing" -- the [chain] mismatch again, on a control.
   "skills",
+  // [bootstrap.<id>] in policy.toml: resolveBootstrap reads it when
+  // `[context] bootstrap` names it. Listed with the feature.
+  "bootstrap",
 ]);
 
 /**
@@ -1887,6 +2093,8 @@ const KEY_OWNER: Record<string, string> = {
   retain_after: "context",
   summary_role: "context",
   reserve_output: "context",
+  mask_observations: "context",
+  bootstrap: "context",
 };
 
 interface BlockOwner {
@@ -1942,6 +2150,9 @@ const BLOCK_OWNER: Record<string, BlockOwner> = {
   exit_codes: { file: "policy.toml", read: false },
   // requireTrial (skills.ts) reads config.policy.skills.require_trial.
   skills: { file: "policy.toml", read: true },
+  // resolveBootstrap reads config.policy.bootstrap.<id>, as [verify] is read:
+  // a command the surface decides to run belongs beside the other one.
+  bootstrap: { file: "policy.toml", read: true },
   endpoints: { file: "config.toml", read: true },
   defaults: { file: "config.toml", read: true },
   context: { file: "config.toml", read: true },
@@ -2259,6 +2470,9 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
   ] as const) {
     for (const [block, body] of Object.entries((parsed ?? {}) as Record<string, unknown>)) {
       if (!body || typeof body !== "object") continue;
+      // [bootstrap]'s keys are the ids of its sub-tables, not settings: an id
+      // spelled like a setting is a name, and has no owner to be moved to.
+      if (file === "policy.toml" && block === "bootstrap") continue;
       for (const key of Object.keys(body as Record<string, unknown>)) {
         const owner = KEY_OWNER[key];
         if (!owner || owner === block) continue;
@@ -2549,6 +2763,203 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
           fatal: false,
         });
       }
+    }
+  }
+}
+
+// Context hygiene ([context.mask_observations], [context] bootstrap and the
+// [bootstrap.<id>] it names). Both are new, opt-in and decide what reaches the
+// model, so the misread shapes are FATAL rather than noted: a mask that fell
+// back to its defaults in silence, or a bootstrap that never ran in silence,
+// is a surface saying one thing while the harness does another -- on keys
+// whose whole purpose is to be measured.
+{
+  const ctx = (config.config.context ?? {}) as Record<string, unknown>;
+  const where = ".gnomon/config.toml [context]";
+  const mask = ctx.mask_observations;
+  if (mask !== undefined) {
+    if (typeof mask === "string" && mask.trim().startsWith("{")) {
+      problems.push({
+        where: `${where} mask_observations`,
+        problem:
+          `mask_observations is written as an inline table, which gnomon's TOML subset reads as ` +
+          `the string ${JSON.stringify(mask)} (CONTRACTS.md §5.3): nothing would be masked.`,
+        fix:
+          `Write it as a table of its own:\n` +
+          `        [context.mask_observations]\n` +
+          `        keep_last = ${MASK_DEFAULTS.keep_last}\n` +
+          `        at_fill = ${MASK_DEFAULTS.at_fill}\n` +
+          `        batch = ${MASK_DEFAULTS.batch}`,
+        fatal: true,
+      });
+    } else if (mask === null || typeof mask !== "object" || Array.isArray(mask)) {
+      problems.push({
+        where: `${where} mask_observations`,
+        problem: `mask_observations is a ${Array.isArray(mask) ? "list" : typeof mask}, not a table, so nothing would be masked.`,
+        fix: `Declare it as [context.mask_observations] with ${MASK_KEYS.join(", ")}.`,
+        fatal: true,
+      });
+    } else {
+      const m = mask as Record<string, unknown>;
+      const at = ".gnomon/config.toml [context.mask_observations]";
+      for (const key of Object.keys(m)) {
+        if (MASK_KEYS.includes(key)) continue;
+        const near = MASK_KEYS.map((k) => [k, editDistance(key, k)] as const)
+          .filter(([, d]) => d <= 3)
+          .sort((a, b) => a[1] - b[1])[0]?.[0];
+        problems.push({
+          where: at,
+          problem: `"${key}" is not a key this table reads` + (near ? `. Did you mean "${near}"?` : "."),
+          fix: `[context.mask_observations] reads: ${MASK_KEYS.join(", ")}.`,
+          fatal: true,
+        });
+      }
+      const isInt = (v: unknown, min: number) => typeof v === "number" && Number.isInteger(v) && v >= min;
+      if (m.keep_last !== undefined && !isInt(m.keep_last, 0)) {
+        problems.push({
+          where: `${at} keep_last`,
+          problem: `keep_last must be a whole number, 0 or more; got ${JSON.stringify(m.keep_last)}.`,
+          fix: `keep_last = ${MASK_DEFAULTS.keep_last}`,
+          fatal: true,
+        });
+      }
+      if (m.batch !== undefined && !isInt(m.batch, 1)) {
+        problems.push({
+          where: `${at} batch`,
+          problem: `batch must be a whole number, 1 or more; got ${JSON.stringify(m.batch)}.`,
+          fix: `batch = ${MASK_DEFAULTS.batch}`,
+          fatal: true,
+        });
+      }
+      if (
+        m.at_fill !== undefined &&
+        !(typeof m.at_fill === "number" && Number.isFinite(m.at_fill) && m.at_fill >= 0 && m.at_fill < 1)
+      ) {
+        problems.push({
+          where: `${at} at_fill`,
+          problem: `at_fill must be a fraction of the window, at least 0 and below 1; got ${JSON.stringify(m.at_fill)}.`,
+          fix: `at_fill = ${MASK_DEFAULTS.at_fill}`,
+          fatal: true,
+        });
+      }
+    }
+  }
+
+  const blocks = config.policy?.bootstrap as unknown;
+  const selected = ctx.bootstrap;
+  if (selected !== undefined && (typeof selected !== "string" || selected.trim() === "")) {
+    problems.push({
+      where: `${where} bootstrap`,
+      problem: `bootstrap must name a [bootstrap.<id>] block in policy.toml; got ${JSON.stringify(selected)}, so nothing would run.`,
+      fix: `bootstrap = "env", with [bootstrap.env] declared in .gnomon/policy.toml.`,
+      fatal: true,
+    });
+  }
+  if (blocks !== undefined && (blocks === null || typeof blocks !== "object" || Array.isArray(blocks))) {
+    problems.push({
+      where: ".gnomon/policy.toml bootstrap",
+      problem: `bootstrap is not a table of [bootstrap.<id>] blocks, so no bootstrap can be selected from it.`,
+      fix: `Declare each one as [bootstrap.<id>] with ${BOOTSTRAP_PLATFORMS.join(", ")} lists.`,
+      fatal: true,
+    });
+  }
+  const declaredBoots =
+    blocks && typeof blocks === "object" && !Array.isArray(blocks) ? (blocks as Record<string, unknown>) : {};
+  if (
+    typeof selected === "string" &&
+    selected.trim() !== "" &&
+    !Object.prototype.hasOwnProperty.call(declaredBoots, selected)
+  ) {
+    problems.push({
+      where: `${where} bootstrap`,
+      problem:
+        `bootstrap = "${selected}" names no [bootstrap.${selected}] block in policy.toml, so nothing ` +
+        `would run and the first prompt would carry no snapshot.`,
+      fix:
+        `Declared: ${Object.keys(declaredBoots).sort().join(", ") || "(none)"}. ` +
+        `Add [bootstrap.${selected}] to .gnomon/policy.toml.`,
+      fatal: true,
+    });
+  }
+  const here = bootstrapPlatform();
+  for (const [id, body] of Object.entries(declaredBoots)) {
+    const at = `.gnomon/policy.toml [bootstrap.${id}]`;
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      problems.push({
+        where: at,
+        problem: `[bootstrap.${id}] is not a table.`,
+        fix: `Give it ${BOOTSTRAP_PLATFORMS.join(", ")} lists.`,
+        fatal: true,
+      });
+      continue;
+    }
+    const b = body as Record<string, unknown>;
+    for (const key of Object.keys(b)) {
+      if (BOOTSTRAP_KEYS.includes(key)) continue;
+      const near = BOOTSTRAP_KEYS.map((k) => [k, editDistance(key, k)] as const)
+        .filter(([, d]) => d <= 3)
+        .sort((x, y) => x[1] - y[1])[0]?.[0];
+      problems.push({
+        where: at,
+        problem: `"${key}" is not a key this block reads` + (near ? `. Did you mean "${near}"?` : "."),
+        fix: `[bootstrap.<id>] reads: ${BOOTSTRAP_KEYS.join(", ")}.`,
+        fatal: true,
+      });
+    }
+    let platforms = 0;
+    for (const fam of BOOTSTRAP_PLATFORMS) {
+      const list = b[fam];
+      if (list === undefined) continue;
+      platforms++;
+      if (
+        !Array.isArray(list) ||
+        list.length === 0 ||
+        !list.every((p) => typeof p === "string" && p.trim() !== "")
+      ) {
+        problems.push({
+          where: `${at} ${fam}`,
+          problem: `${fam} must be a non-empty list of commands, one probe per string; got ${JSON.stringify(list)}.`,
+          fix: `${fam} = ["uname -srm", "git rev-parse --short HEAD"]`,
+          fatal: true,
+        });
+      }
+    }
+    if (platforms === 0) {
+      problems.push({
+        where: at,
+        problem: `[bootstrap.${id}] declares no probes for any platform, so it can never run.`,
+        fix: `Add at least one of ${BOOTSTRAP_PLATFORMS.join(", ")} as a list of commands.`,
+        fatal: true,
+      });
+    }
+    for (const key of Object.keys(BOOTSTRAP_DEFAULTS) as (keyof typeof BOOTSTRAP_DEFAULTS)[]) {
+      const v = b[key];
+      if (v !== undefined && !(typeof v === "number" && Number.isInteger(v) && v > 0)) {
+        problems.push({
+          where: `${at} ${key}`,
+          problem: `${key} must be a positive whole number; got ${JSON.stringify(v)}.`,
+          fix: `${key} = ${BOOTSTRAP_DEFAULTS[key]}`,
+          fatal: true,
+        });
+      }
+    }
+    if (id === selected && platforms > 0 && b[here] === undefined) {
+      problems.push({
+        where: at,
+        problem:
+          `no ${here} probes are declared, and this machine reads ${here}: the bootstrap will not ` +
+          `run here, and each session will record outcome "unavailable".`,
+        fix: `Add a ${here} = [ ... ] list, or accept running without a snapshot on this machine.`,
+        fatal: false,
+      });
+    }
+    if (id !== selected) {
+      problems.push({
+        where: at,
+        problem: `[bootstrap.${id}] is declared and not selected by [context] bootstrap, so it runs nowhere.`,
+        fix: `Select it with [context] bootstrap = "${id}" in .gnomon/config.toml, or delete it.`,
+        fatal: false,
+      });
     }
   }
 }
