@@ -677,3 +677,34 @@ are kept so that one reader handles both kinds.
 **Fixture**: `conformance/skill_decision.json`. `packages/gnomon-core/src/skills.test.ts`
 accepts and rejects proposals, reads the records back off the trail, and
 asserts their kinds and keys against the fixture.
+
+## 12. Skill candidates — `gnomon skill mine`, `v: 1`
+
+Evidence that a skill might help, mined from the audit trails with no model
+call (`docs/design/SKILL-TRIALS.md`, part 1). One JSON file per candidate in
+`.gnomon-skills/candidates/<id>.json`, outside `.gnomon/` and never hashed.
+The same trails give the same files, byte for byte: a candidate holds no
+timestamp.
+
+Keys: `v`, `id`, `signal`, `rule`, `role`, `tools` (sorted), `pattern`,
+`count`, `sessions` (distinct trails), `suggestion` (one sentence, not skill
+text), `records` — each `{trail, seq, hash}`, the trail repo-relative with
+POSIX separators, checkable with `gnomon audit verify`.
+
+| `signal` | When |
+|---|---|
+| `repeated_refusal` | One policy rule refused one role on one pattern in 3 or more distinct sessions (trails). Repeats inside one session do not count towards the 3: they are flailing, which the loop's nudge answers. The rule is the record's `rule` when it has one, otherwise read off the refusal's fixed `summary` form; a declined approval is not counted. |
+
+`id` is `refusal-<rule>-<role>-<hash>`, with rule and role reduced to
+`[a-z0-9_-]`: they come from trail records and must not steer a file name.
+
+`pattern` is a path generalised to its directory and extension
+(`generated/*.ts`), the `bash_deny` pattern, or a command's first word.
+`gnomon skill mine --json` prints `{dir, fresh, candidates}`; `fresh` lists the
+ids that were not on disk before.
+
+**Fixture**: `conformance/skill_candidate.json` (signals, keys), asserted by
+`packages/gnomon-core/src/skill_mine.test.ts`. There, a trail with four
+`write_allow` refusals of one path pattern yields exactly one candidate,
+pointing at those four records, and the same five refusals inside one
+session yield none.
