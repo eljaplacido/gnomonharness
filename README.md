@@ -1186,6 +1186,23 @@ because they decide what a trial lets you accept. Thresholds that would pass a
 skill that did nothing, such as `alpha = 2`, are refused (docs/CONTRACTS.md
 §13).
 
+To accept on that evidence, cite the report:
+
+```bash
+gnomon skill accept cargo-suite --evidence .gnomon-trials/cargo-suite/<utc>/report.json
+```
+
+The citation is refused, with exit 3, unless three things hold. The report
+must be for this exact skill content and must have run against the current
+surface hash. And a `skill_trial` record must vouch for it: that record must
+sit in a sealed trail of its own whose chain verifies, and must agree with
+the report. With `[audit.attest]` declared, the trail must also be covered by
+signed heads.
+The `skill_accept` record then carries the report's hash. With
+`[skills] require_trial = true` in `policy.toml`, accept also refuses without
+such a report, or with one that did not meet its thresholds. That setting is
+off by default: a small project should not need a trial to save a note.
+
 ---
 
 ## Roles and the Trust Dial

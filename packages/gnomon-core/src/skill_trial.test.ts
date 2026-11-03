@@ -17,6 +17,7 @@ import { loadConfig, recomputeManifest } from "./config.js";
 import { runTask, type TaskRecord } from "./prompt_loop.js";
 import { verifyTrail, type AuditRecord } from "./audit.js";
 import { settleTrustHeadless } from "./trust.js";
+import { acceptSkill } from "./skills.js";
 import {
   runTrial,
   recordTrial,
@@ -203,6 +204,17 @@ describe("gnomon skill trial", () => {
     expect(existsSync(join(root, ".gnomon", "skills", "proposed", "fix-it.md"))).toBe(true);
     expect(existsSync(join(root, ".gnomon", "skills", "fix-it.md"))).toBe(false);
     expect(existsSync(join(root, "fixed.txt"))).toBe(false);
+
+    // A person can then cite it: the base arm's surface is this checkout's,
+    // so the report passes every check `require_trial` makes.
+    const out = recordTrial(loadConfig(root), report, cells);
+    const config = loadConfig(root);
+    const strict = { ...config, policy: { ...config.policy, skills: { require_trial: true } } };
+    const d = acceptSkill(strict, "fix-it", { evidence: out.report_path, interactive: false });
+    expect(d.record).toMatchObject({
+      evidence: { report: out.report_path, report_sha256: out.report_sha256, meets_thresholds: true },
+      require_trial: true,
+    });
   }, 120_000);
 
   it("negative control: without the skill's text in the prompt there is no gain (exit 2)", async () => {

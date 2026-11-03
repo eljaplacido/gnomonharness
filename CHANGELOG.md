@@ -26,6 +26,18 @@
 
 ## [Unreleased]
 
+- **`gnomon skill accept ID --evidence REPORT` and `[skills] require_trial`.**
+  An accept can now cite a `gnomon skill trial` report. The `skill_accept`
+  record carries the report's hash and points at the `skill_trial` record
+  that vouches for it. That record must be alone in a sealed trail whose
+  chain verifies, and must agree with the report. With `[audit.attest]`
+  declared, the trail must also be covered by signed heads. The citation is
+  refused, with exit 3, when the report is for different skill content, ran
+  against a different base surface hash, or no record vouches for it. With `require_trial = true` in `policy.toml`
+  (off by default), accept refuses without such a report, or with one that
+  did not meet its thresholds. Nothing accepts a skill automatically. Step
+  3 of `docs/design/SKILL-TRIALS.md`.
+
 - **`gnomon skill trial ID`: measure a proposed skill before accepting it.**
   A proposal could only be accepted on a reading of it.
   - The trial runs the tasks in `.gnomon/trials/<name>.toml` once per arm per

@@ -6,7 +6,7 @@
   "session_start_mode": "skill",
   "written_when_audit_disabled": true,
   "audit_keys": {
-    "skill_accept": ["skill", "name", "path", "content_sha256", "surface_hash_before", "surface_hash_after", "evidence", "by", "user", "host", "interactive"],
+    "skill_accept": ["skill", "name", "path", "content_sha256", "surface_hash_before", "surface_hash_after", "evidence", "require_trial", "by", "user", "host", "interactive"],
     "skill_reject": ["skill", "name", "path", "content_sha256", "surface_hash_before", "surface_hash_after", "reason", "by", "user", "host", "interactive"]
   },
   "optional_keys": ["reason"],
@@ -15,5 +15,11 @@
   "session_end_keys_reject": { "applied": ["applied"], "not_applied": ["applied", "error"] },
   "id_rule": "skillId(id) === id: lower-case letters, digits and dashes, at most 60",
   "evidence_without_report": "none",
+  "evidence_keys": ["report", "report_sha256", "meets_thresholds", "trial_record", "attested"],
+  "evidence_vouching": "a skill_trial record naming the report's sha256, alone in a sealed trail (session_start mode trial, skill_trial, session_end) whose chain verifies, agreeing with the report on skill, content_sha256, both surface hashes and meets_thresholds; with [audit.attest] declared, covered by verified signed heads",
+  "refusal_exit": 3,
+  "trial_record_keys": ["trail", "seq", "hash"],
+  "evidence_report_schema": "gnomon.trial/1",
+  "require_trial": { "table": "[skills]", "file": "policy.toml", "default": false },
   "by_from_cli": "human"
 }

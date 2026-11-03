@@ -28,6 +28,7 @@ import {
   loadProposedSkills,
   acceptSkill,
   rejectSkill,
+  SkillRefusal,
   mineCandidates,
   writeCandidates,
   loadCandidates,
@@ -1622,7 +1623,14 @@ async function cmdSkill(args: CliArgs): Promise<void> {
         }
       };
       if (sub === "accept") {
-        const d = acceptSkill(config, id);
+        const evidence = typeof args.flags.evidence === "string" && args.flags.evidence !== "true"
+          ? args.flags.evidence
+          : undefined;
+        const d = acceptSkill(config, id, { evidence });
+        const ev = d.record?.evidence as { report?: string; meets_thresholds?: unknown } | string | undefined;
+        if (ev && typeof ev === "object") {
+          console.log(`Evidence: ${ev.report} (meets_thresholds: ${String(ev.meets_thresholds)})`);
+        }
         console.log(`Accepted ${id} → ${d.path}`);
         console.log(
           "The surface hash has changed. The skill loads from the next session."
@@ -1638,7 +1646,11 @@ async function cmdSkill(args: CliArgs): Promise<void> {
       }
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
-      process.exit(1);
+      // A policy saying no -- require_trial, evidence that does not vouch --
+      // is a refusal (3, refused_by_gate, docs/CONTRACTS.md §1), not the
+      // `failed` result 1 means. Anything else (no such proposal, a bad id,
+      // an unwritable trail) stays 1.
+      process.exit(err instanceof SkillRefusal ? 3 : 1);
     }
     return;
   }
@@ -2166,13 +2178,17 @@ Commands:
     Audit trails, when [audit] is enabled. 'verify' re-hashes each record
     and checks the chain, so a trail altered after the fact is detectable.
 
-  skill [list [--candidates]|accept <id>|reject <id> [--reason <text>]|mine [--json]] [--dir <path>]
+  skill [list [--candidates]|accept <id> [--evidence <report.json>]|reject <id> [--reason <text>]|mine [--json]] [--dir <path>]
     Skills the harness has learned. An agent proposes into
     .gnomon/skills/proposed/; accepting moves it into .gnomon/skills/,
     which changes the surface hash and applies from the next session.
     Accept and reject each write a skill_accept / skill_reject audit
     record (content hash, surface hash before and after, who), even when
-    [audit] is off.
+    [audit] is off. --evidence cites a "skill trial" report: it must be for
+    this exact content and base surface, and named by a sealed, verified
+    skill_trial record that agrees with it. With [skills] require_trial =
+    true in policy.toml, accept refuses without a report that also meets
+    its thresholds. A refused accept exits 3.
     mine reads the audit trails, with no model call, and writes skill
     candidates (evidence with record pointers, not skill text) to
     .gnomon-skills/candidates/, which is not hashed.

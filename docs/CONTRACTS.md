@@ -669,8 +669,45 @@ path.
 Keys, both kinds: `skill` (the id), `name`, `path` (repo-relative, POSIX),
 `content_sha256` (sha256 of the file's bytes), `surface_hash_before`,
 `surface_hash_after`, `by` (`human` from the CLI), `user`, `host`,
-`interactive`. `skill_accept` adds `evidence` (`"none"`: accepted on reading
-alone). `skill_reject` adds `reason` when `--reason` was given.
+`interactive`. `skill_accept` adds `evidence` and `require_trial`.
+`skill_reject` adds `reason` when `--reason` was given.
+
+`evidence` is `"none"` when the skill was accepted on reading alone. When
+`--evidence <report.json>` cites a `gnomon skill trial` report (§13), it is
+`{report, report_sha256, meets_thresholds, trial_record: {trail, seq, hash},
+attested}`. The citation is refused, and nothing is written or moved, in these
+cases:
+
+| Refused when | Whatever `require_trial` says? |
+|---|---|
+| the file is not a `gnomon.trial/1` report | yes |
+| its `content_sha256` is not this proposal's | yes |
+| its `arms.base.surface_hash` is not the current surface hash | yes |
+| no `skill_trial` record **vouches** for it (below) | yes |
+| its `meets_thresholds` is not `true` | only with `require_trial` on |
+
+A record vouches for a report when all of these hold:
+- it names the report's sha256;
+- it sits alone in a sealed trail (`session_start` with `mode: "trial"`, then
+  `skill_trial`, then `session_end`);
+- that trail's chain verifies, with every record hash recomputed;
+- it agrees with the report on `skill`, `content_sha256`, both surface hashes
+  and `meets_thresholds`;
+- when the surface declares `[audit.attest]`, the trail is covered by signed
+  heads that verify (`attested: true`).
+
+Without a signer, this proves the trail is consistent, not where it came from.
+Anyone who can write the directory could build a consistent trail. Policy rule
+`record` stops the agent writing it, and the signer is what proves provenance.
+
+`[skills] require_trial = true` in `policy.toml` makes accept refuse when no
+report is cited. It is off by default. Nothing accepts a skill automatically,
+including a passing trial.
+
+**Exit codes.** A refusal exits **3** (`refused_by_gate`, §1). That covers
+`require_trial`, and evidence that is the wrong report or that no record
+vouches for. Any other failure exits 1: no such proposal, an id that is not a
+slug, or a trail that cannot be written.
 
 A reject's two surface hashes are equal, because proposals are not hashed. They
 are kept so that one reader handles both kinds.
