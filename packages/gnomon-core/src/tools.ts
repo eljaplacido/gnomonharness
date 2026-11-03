@@ -1504,6 +1504,7 @@ export function sandboxCommand(
  *   sudo         sudo on the host
  *   sandbox      a path outside the root and every granted extra_roots
  *   surface      a write or edit inside `.gnomon/`
+ *   record       a write into gnomon's own records: the audit trail, trial reports
  *   write_allow  a path outside the role's write_allow
  *   network      `[sandbox] network = false`
  *   url          a scheme other than http(s), or a private / loopback address
@@ -1516,6 +1517,7 @@ export const POLICY_RULES = [
   "sudo",
   "sandbox",
   "surface",
+  "record",
   "write_allow",
   "network",
   "url",
@@ -1868,7 +1870,6 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
  */
 function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
   const allowed = ctx.writeAllow?.filter((p) => p.trim().length > 0) ?? [];
-  if (allowed.length === 0) return null;
   const root = resolve(ctx.root);
   for (const t of shellWriteTargets(command).targets) {
     const cut = t.path.search(/[$`*?[{]/);
@@ -1878,8 +1879,21 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     if (isAbsolute(literal)) abs = resolve(literal);
     else if (t.cwd === null) continue;
     else abs = resolve(root, t.cwd, literal);
+    // gnomon's own records bind every role, with or without write_allow, and
+    // are judged before the in-repository test: a custom [audit] dir may sit
+    // outside the root.
+    if (inRecordDir(ctx, abs)) {
+      return {
+        ...recordRefusal("bash", t.path),
+        content:
+          `Refused: this command writes "${t.path}" (${t.how}), inside gnomon's own records ` +
+          `(${recordDirs(ctx).map((d) => relative(root, d).split(sep).join("/") || d).join(", ")}).\n\n` +
+          RECORD_WHY,
+      };
+    }
     const rel = relative(root, abs);
     if (rel.startsWith("..") || isAbsolute(rel)) continue;
+    if (allowed.length === 0) continue;
     const scope = writeAllowed(ctx, abs);
     if (scope.ok) continue;
     return {
@@ -2704,6 +2718,62 @@ function gitStampOf(base: string): string | null | undefined {
   }
   lines.sort();
   return createHash("sha256").update(`git\n${head}\n${lines.join("\n")}\n`).digest("hex");
+}
+
+/**
+ * gnomon's own records: the audit trail and skill-trial reports.
+ *
+ * Found in review of the skill-trial work (2026-11): any role without a
+ * `write_allow` -- `implement` in the scaffold -- could `write` a line into
+ * `.gnomon-audit/`, and so could a shell redirect. The trail is the evidence a
+ * governed run is judged by afterwards, and `gnomon skill accept --evidence`
+ * cites a `skill_trial` record in it: an agent that can append records can
+ * forge the evidence for its own skill. Hash chaining does not stop that --
+ * audit.ts says so -- and the agent never needs to write here, so the
+ * directories bind every role, like the surface, with no consent path.
+ *
+ * The same limit as write_allow on the shell: a target the command names is
+ * judged; what a script file does is not. `[audit.attest]` is what makes a
+ * forged trail detectable.
+ */
+export const RECORD_DIRS = [".gnomon-audit", ".gnomon-trials"] as const;
+
+function recordDirs(ctx: ToolContext): string[] {
+  const root = resolve(ctx.root);
+  const dirs = RECORD_DIRS.map((d) => join(root, d));
+  // A surface that moved its trail ([audit] dir) moved what needs guarding.
+  const declared = (ctx.config?.config as { audit?: { dir?: unknown } } | undefined)?.audit?.dir;
+  if (typeof declared === "string" && declared.trim()) {
+    dirs.push(isAbsolute(declared) ? resolve(declared) : resolve(root, declared));
+  }
+  return dirs;
+}
+
+/** Whether a resolved path is inside one of gnomon's record directories. */
+export function inRecordDir(ctx: ToolContext, abs: string): boolean {
+  const under = (base: string, p: string): boolean => {
+    const rel = relative(base, p);
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  };
+  // Lexical OR realpath, for the reason inSurface gives: a symlink can alias
+  // the directory from either side.
+  return recordDirs(ctx).some(
+    (d) => under(realpathOrSelf(d), realpathOfNearest(abs)) || under(d, resolve(abs))
+  );
+}
+
+const RECORD_WHY =
+  `These directories are gnomon's own record of what was done here -- the audit ` +
+  `trail and skill-trial reports -- and no role may write them. A record the ` +
+  `agent could write is not evidence of anything.`;
+
+function recordRefusal(tool: string, path: string): Precheck {
+  return {
+    rule: "record",
+    code: TOOL_DENIED,
+    content: `Refused: "${path}" is inside gnomon's own records.\n\n${RECORD_WHY}`,
+    summary: `${tool} ${path} — refused (gnomon's records)`,
+  };
 }
 
 export function inSurface(ctx: ToolContext, abs: string): boolean {
@@ -3677,6 +3747,7 @@ export function writePrecheck(
       },
     };
   }
+  if (inRecordDir(ctx, abs)) return { refusal: recordRefusal(tool, path) };
   if (inSurface(ctx, abs)) {
     if (tool === "edit") {
       return {
