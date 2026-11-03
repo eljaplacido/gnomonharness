@@ -432,3 +432,78 @@ These stay exactly as pre-registered:
   - A game using less than 1,500 MiB above the lane's level is not detected and shares the GPU. The user can always
     yield by running STOP-ME, which is detected within 30 s.
 - **Overhead.** Each resume costs about 3–5 min before cells run (load, gate, warm-up), and needs 15 idle minutes first.
+
+## Amendment 2, 2026-11-03T16:47Z: the arms never started; three apparatus fixes; before any S1 data
+
+**What happened.** The Amendment 1 chain (pid 568292, `76e6300d`) ran through the start sequence:
+- it waited for the idle GPU and brought the lane up;
+- props, template gate, abort probe and smoke all passed (`4dd2afc1`).
+
+Then:
+- **16:27:41Z.** It logged "S1 arms finished (runner exit 1)" with **zero cells**.
+- **Lane and commit.** It stopped the lane, collected, and committed "S1 complete" (`3cac092c`).
+
+**Erratum to `3cac092c`:** "S1 complete — summary and runs" is wrong. No S1 cell ran, and its `summary-s1.txt` is empty
+of S1 data.
+
+**Cause.** The R3R preparation agent diagnosed this and reproduced it offline. `run_s1.port_free` tests a port by
+binding a socket **without `SO_REUSEADDR`**. The smoke's relays had been killed seconds earlier with connections open,
+which left server-side TIME_WAITs on their ports. The full runner therefore read `127.0.0.1:5421` as "in use" and
+refused to start (exit 1). node's listeners bind with `SO_REUSEADDR` and take such a port without trouble.
+
+The chain then treated an exit 1 as "arms finished".
+
+A second fault: after its loop, the chain stopped the lane unconditionally. The lane was its own this time, so no harm
+was done.
+
+**Fixes.** They mirror R3R's copy (`../r3r-2026-11/apparatus/`). Nothing measured changes.
+
+1. **The meter-port check.** `apparatus/run_s1_a2.py` is a new entry point that imports `run_s1.py` and
+   `run_s1_a1.py` unchanged. It routes their port check through a fixed `port_free`:
+   - **`SO_REUSEADDR` is set before the probe bind**, so a port is busy only when something **listens** on it. A
+     TIME_WAIT is free.
+   - **Bounded wait:** before refusing, the runner waits up to **120 s** for a listener that is still going away,
+     re-checking every 5 s.
+
+   The chain runs the smoke (`run_s1_a2.py smoke` = `run_s1.py smoke`) and the arms (`run_s1_a2.py full` =
+   `run_s1_a1.py full`) through it. Its own pre-start check of the gx10 ports was already listener-only (`ss -l`); it
+   now waits up to the same 120 s before it is fatal.
+2. **A runner failure is not "arms finished".** The runner has failed if either holds:
+   - it exited with something other than 0 (done) or 75 (yield);
+   - it exited 0 having finished no cell while cells remained before the deadline.
+
+   A failure is logged with the exit code and the finished-cell count, and the arms are launched once more after
+   60 s (finished cells are skipped). If the lane no longer answers at that point, it goes down and the chain returns
+   to the idle wait, as for any lane failure. A second failure is **FATAL**:
+   - the chain stops its lane, under the rule below;
+   - it exits 1 with `EXIT FATAL (not DONE)`;
+   - it **commits nothing**, leaving the files on disk for review.
+
+   Every other fatal condition now ends the same way.
+3. **The lane guard.**
+   - After the loop, `lane_down` runs only if this chain started a lane.
+   - `lane_down` itself touches the hub only when `LANE_STARTED` is set.
+   - `stop_lane_ours` stops a running bud-lane server only if it is the pid this chain recorded, or, while the pid is
+     still unrecorded, only if this chain has started a lane. That is Amendment 1's "ours by construction" case.
+
+**Start.** The chain starts fresh from Amendment 1's idle wait: 15 idle minutes before any lane start.
+- The smoke passed on the same lane (`smoke-s1.txt`, committed in `4dd2afc1`) and is not repeated.
+- Props, template gate and warm-up run again on every start, as Amendment 1 says.
+
+Unchanged: build `8078df03e2a28c41753825dcccab13e8a0ac03dd`, the arms, tasks, order, cap, validity, meters, ports,
+gates, Amendment 1's idle and yield thresholds, the deadline 2026-11-04T07:00:00Z, and the commit lock.
+
+**Tests, offline, run by the chain before its first lane start:**
+- `test_run_s1_a2.py`, 12 cases:
+  - a listener is busy and a real TIME_WAIT is free;
+  - **negative control:** run_s1's original check reads the same TIME_WAIT as busy;
+  - `install()` reroutes run_s1;
+  - the bounded wait covers a listener that goes away and one that stays, and the refusal message.
+- `test_chain_a2_s1.sh`, 24 cases on the chain's own functions:
+  - retry once after 60 s, then failed;
+  - exit 0 with no cell is a failure, and is fine after the deadline;
+  - a lane lost after a failure, a yield, and exit 75 without a flag;
+  - a FATAL exit commits nothing and never says DONE; a normal end says DONE;
+  - every lane-guard case;
+  - the gx10 port wait on real sockets.
+- Amendment 1's suites pass unchanged against the edited chain: 50, 24 and 15 cases.

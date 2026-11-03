@@ -12,11 +12,15 @@
 #   R1H's, keep R1H's server log] -> start R1H's lane unchanged + S1's tunnel, with the yield watchdog running
 #   from the moment the lane is created -> props and slots match R1H's -> live template gate (every start) ->
 #   warm-up and the lane's measured footprint -> [first start: abort probe, smoke, commit before data] -> both
-#   arms (run_s1_a1.py) under the watchdog.
+#   arms (run_s1_a2.py -> run_s1_a1.py) under the watchdog.
 #   YIELD (watchdog, every 30 s: GPU memory over the lane's warm level + 1500 MiB twice in a row, our
 #   llama-server gone, another llama-server, or m1-vllm): YIELD-NOW is written first (no new cell starts, the
 #   cells in flight are aborted to runs-aborted/<cell>-yield and re-run on resume), then the lane is stopped
 #   (R1H's STOP-ME.ps1, only if the running server is ours), then back to the idle wait.
+# Amendment 2 (../AMENDMENT-2-DRAFT.md): the runners go through run_s1_a2.py (a TIME_WAIT on a meter port is free; a
+# listener is waited out for up to 120 s); a runner that fails (exit not 0/75, or 0 with no cell finished before the
+# deadline) is retried once after 60 s, then the chain stops its lane and exits FATAL, committing nothing and never
+# saying DONE; the lane is stopped only if this chain started it and it is still ours.
 # Then collect and commit. Cleanup is scoped to what THIS chain started (the lane under the pid rule, its
 # tunnel and its runner by the process groups it launched) and fires only when this chain exits.
 set -u
@@ -158,6 +162,8 @@ stop_lane_ours() {  # $1 our pid (may be empty while loading): R1H's STOP-ME.ps1
     say "lane: no bud-lane llama-server running; nothing to stop"
   elif [ -n "$pid" ] && [ "$pids" != "$pid" ]; then
     say "lane: bud-lane llama-server pid(s) [$pids] are not the one this chain started ($pid); NOT stopping them"
+  elif [ -z "$pid" ] && [ "$LANE_STARTED" != 1 ]; then  # Amendment 2: no recorded pid and no lane started -> not ours
+    say "lane: bud-lane llama-server pid(s) [$pids] run, but this chain has no lane up; NOT stopping them"
   else  # ours: the pid this chain recorded, or (pid not yet recorded) the bud-lane server it created on a hub that had none
     out=$(hubscript "$STOP_PS1"); say "lane: STOP-ME.ps1 exit $? $(echo "$out" | grep -v '^$' | tail -1)"
     for i in $(seq 1 15); do [ -z "$(lane_pids)" ] && break; sleep 2; done
@@ -199,10 +205,14 @@ lane_up() {  # 0 up, 1 failed, 2 yielded. Starts R1H's lane unchanged, the watch
   curl -s -m 10 "http://127.0.0.1:$TPORT/slots" > "$BENCH/lane-s1-slots.json" 2>/dev/null || true
   say "lane: $MODEL answering on 127.0.0.1:$TPORT (llama-server pid $LANE_PID on the hub); hub $(hub_state)"
 }
-lane_down() {  # stop the watchdog, then the lane (pid rule), keep its server log as a segment, close the tunnel
-  stop_watchdog
-  stop_lane_ours "$LANE_PID"
-  [ "$LANE_STARTED" = 1 ] && save_server_log "lane-s1-server-$(next_segment).log"
+lane_down() {  # stop the watchdog; the lane only if this chain started it and it is still ours (pid rule); keep its
+  stop_watchdog  # server log as a segment; close the tunnel
+  if [ "$LANE_STARTED" = 1 ]; then
+    stop_lane_ours "$LANE_PID"
+    save_server_log "lane-s1-server-$(next_segment).log"
+  else
+    say "lane: this chain has no lane up; nothing to stop"
+  fi
   LANE_STARTED=0; LANE_PID=""
   stop_tunnel
 }
@@ -267,7 +277,7 @@ stop_bg() {  # $1 seconds to let it finish on its own first. Stops what run_bg s
   local i
   [ -n "$BG_PID" ] || return 0
   for i in $(seq 1 "${1:-0}"); do alive "$BG_PID" || break; sleep 1; done
-  if alive "$BG_PID" && pid_cmd "$BG_PID" | grep -q -E 'run_s1(_a1)?\.py'; then
+  if alive "$BG_PID" && pid_cmd "$BG_PID" | grep -q -E 'run_s1(_a[12])?\.py'; then
     kill -TERM -- "-$BG_PID" 2>/dev/null   # run_s1_a1.py aborts its cells on SIGTERM (stops tb, removes projects, moves dirs)
     for i in $(seq 1 60); do alive "$BG_PID" || break; sleep 1; done
     kill -KILL -- "-$BG_PID" 2>/dev/null
@@ -279,7 +289,7 @@ stop_bg() {  # $1 seconds to let it finish on its own first. Stops what run_bg s
 smoke() {  # 0 pass, 1 failed twice, 2 yielded. S0 + S1 on hello-world, concurrently (run_s1.py smoke, unchanged)
   local try d
   for try in 1 2; do
-    run_bg "$BENCH/run-smoke.log" env S1_SHA="$SHA" S1_DEADLINE="$DEADLINE" python3 -I "$HERE/run_s1.py" smoke
+    run_bg "$BENCH/run-smoke.log" env S1_SHA="$SHA" S1_DEADLINE="$DEADLINE" python3 -I "$HERE/run_s1_a2.py" smoke
     if [ $? = 2 ]; then
       stop_bg 0
       python3 -I "$HERE/run_s1_a1.py" abort-inflight runs-smoke yield >> "$BENCH/run-smoke.log" 2>&1
@@ -320,6 +330,58 @@ handle_yield() {  # the watchdog has written YIELD-NOW and stopped the lane: win
   say "YIELD #$YIELDS done: hub $(hub_sample); back to the idle wait (a resume needs $IDLE_NEED idle samples, $((IDLE_NEED * IDLE_EVERY / 60)) min)"
 }
 
+# ---------------------------------------------------------------------------------------------- Amendment 2
+ALL_CELLS=64
+PORT_WAIT_S=${PORT_WAIT_S:-120}
+FATAL=""
+fatal() { FATAL="$*"; say "FATAL: $*"; }
+count_finished() { ls "$BENCH"/runs/s1-s[01]-k*/cell.json 2>/dev/null | wc -l; }
+wait_gx10_ports() {  # 0 once no S1 port on the gx10 has a LISTENER (ss -l: a TIME_WAIT is not one); waits up to PORT_WAIT_S
+  local t0 p
+  t0=$(now)
+  while true; do
+    PORTS_BUSY=""; for p in $TPORT $PORTS; do port_busy "$p" && PORTS_BUSY="$PORTS_BUSY $p"; done
+    [ -z "$PORTS_BUSY" ] && return 0
+    [ $(( $(now) - t0 )) -ge "$PORT_WAIT_S" ] && return 1
+    sleep_s 5
+  done
+}
+run_arms() {  # OUTCOME = done | yield | lane | failed. A failure is an exit other than 0 (done) or 75 (yield), or an
+  local try f0 f1   # exit 0 that finished no cell while cells remained before the deadline; retried once after 60 s.
+  OUTCOME=failed
+  for try in 1 2; do
+    f0=$(count_finished)
+    run_bg "$BENCH/run-full.log" env S1_SHA="$SHA" S1_DEADLINE="$DEADLINE" python3 -I "$HERE/run_s1_a2.py" full
+    if [ $? = 2 ] || { [ "$BG_RC" = 75 ] && yielded; }; then OUTCOME=yield; return; fi  # the runner may see the flag first
+    f1=$(count_finished)
+    if [ "$BG_RC" = 0 ] && { [ "$f1" -gt "$f0" ] || [ "$f1" -ge "$ALL_CELLS" ] || past_deadline || [ -e "$BENCH/BUDGET-PAUSE.txt" ]; }; then
+      OUTCOME=done; return
+    fi
+    say "the runner failed: exit $BG_RC, finished cells $f0 -> $f1 (try $try of 2; run-full.log: $(tail -1 "$BENCH/run-full.log" 2>/dev/null | cut -c1-160))"
+    [ "$try" = 2 ] && return
+    say "fix-don't-fail: the arms once more in 60 s (finished cells are skipped)"
+    sleep_s 60
+    yielded && { OUTCOME=yield; return; }
+    lane_answers || { OUTCOME=lane; return; }
+  done
+}
+finish() {  # the chain's end. A FATAL exit commits nothing and is not DONE; otherwise collect, commit, DONE.
+  if [ -n "$FATAL" ]; then
+    say "EXIT FATAL (not DONE): $FATAL. Nothing is committed by this exit; the files are on disk for review"
+    cleanup
+    exit 1
+  fi
+  python3 -I "$HERE/collect_s1.py" > "$BENCH/summary-s1.txt" 2>&1
+  say "collected (summary-s1.txt): $(grep -E '^  CHECK' "$BENCH/summary-s1.txt" | sed 's/^ *//'); yields: $YIELDS"
+  sed -n '/^paired/,/^mechanism/p' "$BENCH/summary-s1.txt" | sed 's/^/    /' >> "$STATUS"
+  if [ "$RAN_FULL" = 1 ]; then msg="bench(s1): S1 complete — summary and runs (Amendments 1-2: $YIELDS yield(s), $(count_finished) of $ALL_CELLS cells)"
+  else msg="bench(s1): S1 chain ended before the arms ran (see STATUS; $YIELDS yield(s))"; fi
+  commit "$msg" "$BENCH/summary-s1.txt" "$BENCH/STATUS.txt" "$BENCH/runs" "$BENCH/runs-aborted" "$BENCH/runs-smoke-failed" \
+    "$BENCH/hubwatch.log" "$BENCH/lane-s1-start.log" "$BENCH/spend.jsonl" "$BENCH"/lane-s1-server-*.log.gz
+  cleanup
+  say "DONE"
+}
+
 CLEANED=0
 cleanup() {
   [ "$CLEANED" = 1 ] && return; CLEANED=1
@@ -355,7 +417,9 @@ if [ "$DRY" = 1 ]; then
   echo "hubwatch tests: $(bash "$HERE/test_hubwatch_s1.sh" 2>&1 | tail -1)"
   echo "yield-runner tests: $(python3 -I -B "$HERE/test_run_s1_a1.py" 2>&1 | tail -1)"
   echo "chain-glue tests: $(bash "$HERE/test_chain_glue_s1.sh" 2>&1 | tail -1)"
-  S1_DEADLINE=$DEADLINE python3 -I -B "$HERE/run_s1_a1.py" plan | tail -1
+  echo "Amendment 2 port tests: $(python3 -I -B "$HERE/test_run_s1_a2.py" 2>&1 | tail -1)"
+  echo "Amendment 2 chain tests: $(bash "$HERE/test_chain_a2_s1.sh" 2>&1 | tail -1)"
+  S1_DEADLINE=$DEADLINE python3 -I -B "$HERE/run_s1_a2.py" plan | tail -1
   python3 -I "$HERE/collect_s1.py" --no-write | grep -E '^r1h|^  s1-s1 +vs s1-s0' | cut -c1-150
   echo "deadline: $DEADLINE ($(( ($(dl_epoch) - $(now)) / 60 )) min from now)"
   exit 0
@@ -368,7 +432,7 @@ trap cleanup EXIT
 trap 'say "chain received a signal; cleaning up"; exit 143' TERM INT HUP
 [ -e "$YIELD_FLAG" ] && { say "a stale YIELD-NOW from an earlier chain is removed: $(cat "$YIELD_FLAG")"; rm -f "$YIELD_FLAG"; }
 
-say "S1 chain start (pid $$, pgid $(ps -o pgid= $$ | tr -d ' ')); build $SHA; Amendment 1 (gaming-yield); new-cell deadline $DEADLINE"
+say "S1 chain start (pid $$, pgid $(ps -o pgid= $$ | tr -d ' ')); build $SHA; Amendments 1-2 (gaming-yield; port check, runner failures, lane guard); new-cell deadline $DEADLINE"
 say "thresholds: start after $IDLE_NEED consecutive idle samples ($IDLE_EVERY s apart; idle = < $IDLE_MEM_MAX MiB, < $IDLE_UTIL_MAX %, no llama-server.exe, m1-vllm not running); yield when GPU memory > the lane's warm level + $YIELD_MARGIN MiB for $YIELD_NEED samples ($WATCH_EVERY s apart), or our server is gone, or another llama-server / m1-vllm runs"
 FIRST=1; LANE_FAILS=0; ANOMALIES=0; RAN_FULL=0
 while true; do
@@ -377,20 +441,19 @@ while true; do
   idle_wait || break
   st=$(hub_state)
   hub_free "$st" || { say "idle by the samples, but the full check says not free ($st); back to the idle wait"; continue; }
-  port_busy "$TPORT" && { say "FATAL: 127.0.0.1:$TPORT is held (not this chain's to stop); S1 stops here"; break; }
-  busy=""; for p in $PORTS; do port_busy "$p" && busy="$busy $p"; done
-  [ -z "$busy" ] || { say "FATAL: S1 meter/probe ports in use:$busy; S1 stops here"; break; }
+  wait_gx10_ports || { fatal "gx10 ports$PORTS_BUSY still have a listener after ${PORT_WAIT_S} s (not this chain's to stop)"; break; }
   # ------------------------------------------------------------------------------------------ 2. lane
   if [ "$FIRST" = 1 ]; then
-    for t in "bash $HERE/test_hubwatch_s1.sh" "python3 -I -B $HERE/test_run_s1_a1.py" "bash $HERE/test_chain_glue_s1.sh"; do
+    for t in "bash $HERE/test_hubwatch_s1.sh" "python3 -I -B $HERE/test_run_s1_a1.py" "bash $HERE/test_chain_glue_s1.sh" \
+             "python3 -I -B $HERE/test_run_s1_a2.py" "bash $HERE/test_chain_a2_s1.sh"; do
       r=$($t 2>&1 | tail -1); say "offline test $(basename "${t##* }"): $r"
-      echo "$r" | grep -q ' 0 failed$' || { say "FATAL: an Amendment 1 offline test failed; S1 stops here"; break 2; }
+      echo "$r" | grep -q ' 0 failed$' || { fatal "an Amendment 1/2 offline test failed"; break 2; }
     done
     sc=$(scripts_ok); rc=$?; say "hub scripts: $sc"
-    [ "$rc" = 0 ] || { say "FATAL: R1H's start-server-r1h-np2.ps1 or STOP-ME.ps1 is not the file read at preparation; S1 stops here"; break; }
+    [ "$rc" = 0 ] || { fatal "R1H's start-server-r1h-np2.ps1 or STOP-ME.ps1 is not the file read at preparation"; break; }
     sums=$(hubps "$PS_WEIGHTS")
     echo "$sums" | grep -qx "$GGUF_SHA" && echo "$sums" | grep -qx "$DRAFT_SHA" \
-      || { say "FATAL: hub weights do not match R1H's checksums ($(echo "$sums" | tr '\n' ' ')); S1 stops here"; break; }
+      || { fatal "hub weights do not match R1H's checksums ($(echo "$sums" | tr '\n' ' '))"; break; }
     say "hub weights match R1H's checksums (model and DFlash draft)"
     save_server_log lane-r1h-server-before-s1.log   # R1H's server log, before start-server-r1h-np2.ps1 overwrites it
     FIRST=0
@@ -401,14 +464,14 @@ while true; do
   if [ "$rc" = 2 ]; then handle_yield; continue; fi
   if [ "$rc" != 0 ]; then
     LANE_FAILS=$((LANE_FAILS + 1)); say "lane: did not come up (failure $LANE_FAILS of 3)"; lane_down
-    [ "$LANE_FAILS" -ge 3 ] && { say "FATAL: the lane failed to come up 3 times; S1 stops here"; break; }
+    [ "$LANE_FAILS" -ge 3 ] && { fatal "the lane failed to come up 3 times"; break; }
     continue
   fi
   pm=$(props_match 2>&1); pmrc=$?; say "lane: $pm"
-  [ "$pmrc" = 0 ] || { say "FATAL: the lane is not R1H's lane (lane-s1-props.json/slots vs r1h-2026-11's); S1 stops here"; break; }
+  [ "$pmrc" = 0 ] || { fatal "the lane is not R1H's lane (lane-s1-props.json/slots vs r1h-2026-11's)"; break; }
   if ! gate; then
     yielded && { handle_yield; continue; }
-    say "FATAL: the template gate did not pass (probe-s1.txt); S1 stops here"; break
+    fatal "the template gate did not pass (probe-s1.txt)"; break
   fi
   warm_up
   yielded && { handle_yield; continue; }
@@ -420,7 +483,7 @@ while true; do
     echo "$(date -u +%FT%TZ) footprint anomaly: the GPU holds $((LANE_WARM - BASE)) MiB more than the desktop baseline, over R1H's lane ($FOOTPRINT_EXPECTED) + $YIELD_MARGIN: something else uses the GPU" > "$YIELD_FLAG"
     say "YIELD: $(cat "$YIELD_FLAG") (anomaly $ANOMALIES of 2)"
     stop_lane_ours "$LANE_PID"; handle_yield
-    [ "$ANOMALIES" -ge 2 ] && { say "FATAL: two footprint anomalies; the lane's footprint is not R1H's or the GPU is shared; S1 stops here"; break; }
+    [ "$ANOMALIES" -ge 2 ] && { fatal "two footprint anomalies; the lane's footprint is not R1H's or the GPU is shared"; break; }
     continue
   fi
   # ------------------------------------------------------------------------------------------ 3. first start only: probe, smoke, commit
@@ -430,10 +493,10 @@ while true; do
     if [ "$rc" = 2 ]; then handle_yield; continue; fi
     if [ "$rc" = 3 ]; then
       lane_down; LANE_FAILS=$((LANE_FAILS + 1))
-      [ "$LANE_FAILS" -ge 3 ] && { say "FATAL: the lane stopped answering during the smoke 3 times; S1 stops here"; break; }
+      [ "$LANE_FAILS" -ge 3 ] && { fatal "the lane stopped answering during the smoke 3 times"; break; }
       continue
     fi
-    [ "$rc" = 0 ] || { say "FATAL: smoke failed twice; S1 stops here (runs-smoke-failed/)"; break; }
+    [ "$rc" = 0 ] || { fatal "smoke failed twice (runs-smoke-failed/)"; break; }
     commit "bench(s1): lane up (R1H's), props, template gate and smoke passed — before any S1 cell (Amendment 1)" \
       "$BENCH/PRE-REGISTRATION.md" "$BENCH/AMENDMENT-1-DRAFT.md" "$BENCH/.gitignore" "$BENCH/STATUS.txt" "$BENCH/wiretest-s1.txt" \
       "$BENCH/probe-s1.txt" "$BENCH/probe-abort-s1.txt" "$BENCH/smoke-s1.txt" "$BENCH/runs-smoke" "$BENCH/runs-smoke-failed" \
@@ -445,22 +508,18 @@ while true; do
   # ------------------------------------------------------------------------------------------ 4. both arms, under the watchdog
   if [ -e "$BENCH/BUDGET-PAUSE.txt" ]; then say "arms not started: BUDGET-PAUSE.txt"; break; fi
   past_deadline && { say "arms not started: past the deadline $DEADLINE"; break; }
-  say "launching S0 and S1 (run_s1_a1.py: finished cells skipped; 1 slot each, max lead ${S1_MAX_LEAD:-1}, deadline $DEADLINE)"
+  say "launching S0 and S1 (run_s1_a2.py full: finished cells skipped; 1 slot each, max lead ${S1_MAX_LEAD:-1}, deadline $DEADLINE)"
   RAN_FULL=1
-  run_bg "$BENCH/run-full.log" env S1_SHA="$SHA" S1_DEADLINE="$DEADLINE" python3 -I "$HERE/run_s1_a1.py" full
-  if [ $? = 2 ] || { [ "$BG_RC" = 75 ] && yielded; }; then handle_yield; continue; fi  # the runner may see the flag first
-  say "S1 arms finished (runner exit $BG_RC)"
+  run_arms
+  case "$OUTCOME" in
+    yield) handle_yield; continue ;;
+    lane) say "the lane does not answer after a runner failure; lane down, back to the idle wait"; lane_down
+          LANE_FAILS=$((LANE_FAILS + 1)); [ "$LANE_FAILS" -ge 3 ] && { fatal "the lane failed 3 times"; break; }
+          continue ;;
+    done) say "S1 arms finished (runner exit 0; $(count_finished) of $ALL_CELLS cells finished)" ;;
+    *) fatal "the arms failed twice (last runner exit $BG_RC; $(count_finished) of $ALL_CELLS cells finished; run-full.log)" ;;
+  esac
   break
 done
-lane_down
-
-# ---------------------------------------------------------------------------------------------- 5. collect, commit
-python3 -I "$HERE/collect_s1.py" > "$BENCH/summary-s1.txt" 2>&1
-say "collected (summary-s1.txt): $(grep -E '^  CHECK' "$BENCH/summary-s1.txt" | sed 's/^ *//'); yields: $YIELDS"
-sed -n '/^paired/,/^mechanism/p' "$BENCH/summary-s1.txt" | sed 's/^/    /' >> "$STATUS"
-if [ "$RAN_FULL" = 1 ]; then msg="bench(s1): S1 complete — summary and runs (Amendment 1: $YIELDS yield(s))"
-else msg="bench(s1): S1 chain ended before the arms ran (see STATUS; $YIELDS yield(s))"; fi
-commit "$msg" "$BENCH/summary-s1.txt" "$BENCH/STATUS.txt" "$BENCH/runs" "$BENCH/runs-aborted" "$BENCH/runs-smoke-failed" \
-  "$BENCH/hubwatch.log" "$BENCH/lane-s1-start.log" "$BENCH/spend.jsonl" "$BENCH"/lane-s1-server-*.log.gz
-cleanup
-say "DONE"
+if [ "$LANE_STARTED" = 1 ]; then lane_down; else stop_tunnel; fi   # Amendment 2: only a lane this chain started (pid rule inside)
+finish
