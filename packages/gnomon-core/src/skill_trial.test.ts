@@ -13,8 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { loadConfig } from "./config.js";
-import { runTask } from "./prompt_loop.js";
+import { loadConfig, recomputeManifest } from "./config.js";
+import { runTask, type TaskRecord } from "./prompt_loop.js";
 import { verifyTrail, type AuditRecord } from "./audit.js";
 import {
   runTrial,
@@ -47,7 +47,17 @@ function git(...args: string[]): void {
 
 /** A committed project: a minimal surface, a trial spec, and one proposal on disk. */
 function project(
-  opts: { url?: string; budget?: string; tasks?: number; skillBody?: string; autocrlf?: boolean } = {}
+  opts: {
+    url?: string;
+    budget?: string;
+    tasks?: number;
+    skillBody?: string;
+    autocrlf?: boolean;
+    roles?: string;
+    attempts?: number;
+    check?: string;
+    setup?: string;
+  } = {}
 ): void {
   const put = (rel: string, text: string) => {
     mkdirSync(join(root, rel, ".."), { recursive: true });
@@ -58,16 +68,18 @@ function project(
     `[defaults]\napproval = "on_write"\n\n[endpoints.local]\nurl = "${opts.url ?? "http://127.0.0.1:9/api/chat"}"\nkind = "ollama"\n\n` +
       `[resilience]\nattempts = 1\ntransport_grace_ms = 0\n`
   );
-  put(".gnomon/roles.toml", `[roles.implement]\nmodel = "stub"\nendpoint = "local"\ntools = ['read', 'write']\n`);
+  put(".gnomon/roles.toml", opts.roles ?? `[roles.implement]\nmodel = "stub"\nendpoint = "local"\ntools = ['read', 'write']\n`);
   put(".gnomon/tools.toml", `[[tools]]\nname = "read"\nenabled = true\n\n[[tools]]\nname = "write"\nenabled = true\n`);
   put(".gnomon/policy.toml", `[approval]\ngate = "on_write"\n`);
   put(".gnomon/system.md", "under test\n");
   const tasks = Array.from({ length: opts.tasks ?? 2 }, (_, i) =>
-    `[[task]]\nid = "t${i + 1}"\nprompt = "Make the check pass (${i + 1})."\ncheck = '${CHECK}'\n`
+    `[[task]]\nid = "t${i + 1}"\nprompt = "Make the check pass (${i + 1})."\n` +
+    (opts.setup ? `setup = '${opts.setup}'\n` : "") +
+    `check = '${opts.check ?? CHECK}'\n`
   ).join("\n");
   put(
     ".gnomon/trials/default.toml",
-    `[trial]\nrole = "implement"\nattempts = 3\norder = "interleaved"\n\n` +
+    `[trial]\nrole = "implement"\nattempts = ${opts.attempts ?? 3}\norder = "interleaved"\n\n` +
       `[thresholds]\nmax_pass_drop = 0\nmin_output_token_gain = 0.10\nmin_pass_gain = 1\nalpha = 0.05\n\n` +
       (opts.budget ?? "") +
       tasks
@@ -78,7 +90,6 @@ function project(
   // checkout's -- which the trial refuses, rightly (see the test below).
   if (!opts.autocrlf) put(".gitattributes", ".gnomon/** text eol=lf\n");
   git("init", "-q");
-  if (opts.autocrlf) git("config", "core.autocrlf", "true");
   git("add", "-A");
   git("commit", "-q", "-m", "fixture");
   // The proposal is written after the commit, as the skill tool would: it is
@@ -113,6 +124,27 @@ const down = (async () => {
 }) as unknown as typeof fetch;
 
 const runCell: CellRunner = (wt, prompt, o) => runTask(loadConfig(wt, o.profile), prompt, { role: o.role, yes: true });
+
+/**
+ * A runner that never calls a model: a result record whose output tokens
+ * are scripted per pair and arm. For the statistics, where the loop adds
+ * nothing but time.
+ */
+const tokens = (count: (pair: number, skill: boolean) => number): CellRunner => {
+  let i = 0;
+  return async (wt) => {
+    const skill = existsSync(join(wt, ".gnomon", "skills", "fix-it.md"));
+    const pair = Math.floor(i++ / 2) + 1;
+    return {
+      code: 0,
+      bucket: "result",
+      stop_reason: "answered",
+      model: "stub",
+      endpoint: "local",
+      volatile: { duration_ms: 1, requests: 1, tokens_out: count(pair, skill) },
+    } as unknown as TaskRecord;
+  };
+};
 
 async function trial(model: typeof fetch, opts: Parameters<typeof runTrial>[1] | object = {}) {
   const original = globalThis.fetch;
@@ -185,13 +217,167 @@ describe("gnomon skill trial", () => {
   }, 120_000);
 
   it("stops at its request budget and reports budget_exhausted, never a verdict", async () => {
+    // Checked before every cell, not only every pair: the base cell spends
+    // the one request, so its skill cell never starts.
     project({ budget: `[budget]\nmax_requests = 1\n\n` });
     const { report, cells } = await trial(scripted);
-    expect(cells).toHaveLength(2);
+    expect(cells).toHaveLength(1);
     expect(report.status).toBe("budget_exhausted");
     expect(report.meets_thresholds).toBe("undetermined");
     expect(report.budget.requests_used).toBeGreaterThanOrEqual(1);
   }, 120_000);
+
+  it("a token gain counts only when most pairs agree: one outlier cannot carry it", async () => {
+    // Found in review: the skill used MORE output tokens in 9 of 10 pairs,
+    // one pair's 10,000-token base run made the total 10% lower, and the
+    // two-sided sign test called it at p = 0.021. Both arms pass, so tokens
+    // are the only possible gain.
+    project({ tasks: 1, attempts: 10, check: `node -e "process.exit(0)"` });
+    const { report } = await runTrial(loadConfig(root), {
+      skill: "fix-it",
+      runCell: tokens((pair, skill) => (pair === 1 ? (skill ? 100 : 10_000) : skill ? 120 : 100)),
+    });
+    expect(report.endpoints.output_tokens.sign).toMatchObject({ skill_lower: 1, skill_higher: 9 });
+    expect(report.endpoints.output_tokens.gain).toBeGreaterThan(0.1);
+    expect(report.meets_thresholds).toBe(false);
+  }, 120_000);
+
+  it("a token gain in every pair meets the thresholds through tokens alone", async () => {
+    project({ tasks: 1, attempts: 6, check: `node -e "process.exit(0)"` });
+    const { report } = await runTrial(loadConfig(root), {
+      skill: "fix-it",
+      runCell: tokens((_pair, skill) => (skill ? 50 : 100)),
+    });
+    expect(report.endpoints.pass.gain).toBe(0);
+    expect(report.endpoints.output_tokens).toMatchObject({ gain: 0.5, sign: { skill_lower: 6, skill_higher: 0 } });
+    expect(report.meets_thresholds).toBe(true);
+    expect(report.reasons.join(" ")).toMatch(/output tokens/);
+  }, 120_000);
+
+  it("refuses to start on a surface whose trust was clamped", async () => {
+    // Fails before the fix: trust was settled per cell, on temporary paths no
+    // grant could name, so every cell ran clamped and the report still named
+    // the declared surface.
+    project({ tasks: 1 });
+    const err = await runTrial(loadConfig(root), {
+      skill: "fix-it",
+      runCell: tokens(() => 1),
+      trust: { decision: "clamped", by: "default:no-operator", surface_hash: "x", grants: ["approval:never"] },
+    }).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(isTrialAbort(err)).toBe(true);
+    expect(String(err)).toMatch(/approval:never/);
+  }, 60_000);
+
+  it("cells are private clones: a cell's git branch, config and stash stay out of the repository", async () => {
+    // Fails with worktrees, which share refs, stash and .git/config with the
+    // repository they were made from.
+    project({ tasks: 1, attempts: 1, check: `node -e "process.exit(0)"` });
+    const inner = tokens(() => 10);
+    await runTrial(loadConfig(root), {
+      skill: "fix-it",
+      runCell: async (wt, p, o) => {
+        const g = (...a: string[]) =>
+          spawnSync("git", ["-c", "user.email=t@example.invalid", "-c", "user.name=t", ...a], { cwd: wt, encoding: "utf-8" });
+        g("branch", "cell-branch");
+        g("config", "trial.probe", "set-by-cell");
+        writeFileSync(join(wt, "README.md"), "changed in the cell\n");
+        g("stash");
+        // A push has nowhere to go: the clone has no remote.
+        expect(g("remote").stdout.trim()).toBe("");
+        return inner(wt, p, o);
+      },
+    });
+    const here = (...a: string[]) => spawnSync("git", a, { cwd: root, encoding: "utf-8" }).stdout.trim();
+    expect(here("branch", "--list", "cell-branch")).toBe("");
+    expect(here("config", "--get", "trial.probe")).toBe("");
+    expect(here("stash", "list")).toBe("");
+    expect(readFileSync(join(root, "README.md"), "utf-8")).toBe("fixture\n");
+  }, 120_000);
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "a sandbox that cannot be removed is reported in leftovers, and the cells already run are kept",
+    async () => {
+      // Found in review: the removal error escaped `finally` and the whole
+      // trial was lost. Here every cell leaves a read-only directory behind.
+      project({
+        tasks: 1,
+        attempts: 2,
+        check: `node -e "process.exit(0)"`,
+        setup: "mkdir -p ro/sub && touch ro/sub/f && chmod 555 ro/sub",
+      });
+      const { report, cells } = await runTrial(loadConfig(root), { skill: "fix-it", runCell: tokens(() => 10) });
+      try {
+        expect(cells).toHaveLength(4);
+        expect(report.status).toBe("complete");
+        expect(report.leftovers).toHaveLength(4);
+      } finally {
+        for (const left of report.leftovers) {
+          spawnSync("chmod", ["-R", "u+w", left]);
+          rmSync(left, { recursive: true, force: true });
+        }
+      }
+    },
+    120_000
+  );
+
+  it("on SIGINT, removes every sandbox still on disk, then lets the signal through", async () => {
+    project({ tasks: 1, attempts: 1, check: `node -e "process.exit(0)"` });
+    const handlers = new Map<string, () => void>();
+    const reraised: string[] = [];
+    const signals = {
+      on: (sig: string, fn: () => void) => void handlers.set(sig, fn),
+      off: (sig: string, fn: () => void) => void (handlers.get(sig) === fn && handlers.delete(sig)),
+      reraise: (sig: string) => void reraised.push(sig),
+    };
+    const seen: string[] = [];
+    const inner = tokens(() => 10);
+    await runTrial(loadConfig(root), {
+      skill: "fix-it",
+      signals,
+      runCell: async (wt, p, o) => {
+        seen.push(wt);
+        if (seen.length === 1) {
+          expect(existsSync(wt)).toBe(true);
+          handlers.get("SIGINT")!();
+          expect(existsSync(wt)).toBe(false);
+        }
+        return inner(wt, p, o);
+      },
+    }).catch(() => null);
+    expect(reraised).toEqual(["SIGINT"]);
+    // The handlers are gone once it fired, and once the trial ends.
+    expect(handlers.size).toBe(0);
+  }, 120_000);
+
+  it("refuses a billed endpoint whose only cap is max_cost_usd, which nothing enforces", async () => {
+    project({
+      url: "https://api.example.com/v1/chat/completions",
+      budget: `[budget]\nmax_cost_usd = 2.00\n\n`,
+    });
+    const err = await trial(scripted).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(isTrialAbort(err)).toBe(true);
+    expect(String(err)).toMatch(/max_cost_usd is reported, not enforced/);
+  }, 60_000);
+
+  it("counts a billed fallback as billed", async () => {
+    project({
+      roles:
+        `[roles.implement]\nmodel = "stub"\nendpoint = "local"\ntools = ['read', 'write']\n\n` +
+        `[roles.implement.fallback]\nmodel = "big"\nurl = "https://api.example.com/v1/chat/completions"\n`,
+    });
+    const err = await trial(scripted).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(isTrialAbort(err)).toBe(true);
+    expect(String(err)).toMatch(/api\.example\.com/);
+  }, 60_000);
 
   it("refuses to start when this checkout's surface is not HEAD's", async () => {
     // The base arm runs HEAD; an accept joins the checkout. If they differ,
@@ -208,16 +394,27 @@ describe("gnomon skill trial", () => {
   }, 60_000);
 
   it("catches a checkout that rewrites line endings (autocrlf, no .gitattributes)", async () => {
-    // Found on the Windows CI runner: every worktree came out CRLF, so HEAD's
-    // surface hashed differently from the LF checkout and the finished
-    // report could not be cited. Reproduced here on every platform.
+    // Found on the Windows CI runner: a global core.autocrlf checked every
+    // cell out CRLF, so HEAD's surface hashed differently from this LF
+    // checkout and the finished report could not be cited. Reproduced on
+    // every platform with a global git config of our own.
     project({ autocrlf: true });
-    const err = await trial(scripted).then(
-      () => null,
-      (e: unknown) => e
-    );
-    expect(isTrialAbort(err)).toBe(true);
-    expect(String(err)).toMatch(/eol=lf/);
+    const globalConfig = join(root, "..", `${root.split(/[\\/]/).pop()}.gitconfig`);
+    writeFileSync(globalConfig, "[core]\n\tautocrlf = true\n", "utf-8");
+    const was = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = globalConfig;
+    try {
+      const err = await trial(scripted).then(
+        () => null,
+        (e: unknown) => e
+      );
+      expect(isTrialAbort(err)).toBe(true);
+      expect(String(err)).toMatch(/eol=lf/);
+    } finally {
+      if (was === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = was;
+      rmSync(globalConfig, { force: true });
+    }
   }, 60_000);
 
   it("refuses a billed endpoint without a declared budget, before any cell", async () => {
@@ -255,6 +452,33 @@ describe("gnomon skill trial", () => {
     expect(report.meets_thresholds).toBe("undetermined");
     expect(report.mde).toEqual({ discordant_pairs: 6, pass_rate_difference: null });
   }, 120_000);
+});
+
+describe("recording a trial", () => {
+  it("two trials recorded in the same millisecond get two report directories and two sealed trails", async () => {
+    // Fails before the suffix: the second overwrote the first's report.json,
+    // appended to its cells.jsonl, and restarted its trail at seq 0.
+    project({ tasks: 1, attempts: 1, check: `node -e "process.exit(0)"` });
+    const { report, cells } = await runTrial(loadConfig(root), { skill: "fix-it", runCell: tokens(() => 1) });
+    const now = new Date("2026-11-03T00:00:00.000Z");
+    const a = recordTrial(loadConfig(root), report, cells, now);
+    const b = recordTrial(loadConfig(root), report, cells, now);
+    expect(a.dir).not.toBe(b.dir);
+    expect(a.trail).not.toBe(b.trail);
+    for (const out of [a, b]) {
+      expect(verifyTrail(out.trail!)).toMatchObject({ ok: true, sealed: true });
+      expect(readFileSync(join(root, out.dir, "cells.jsonl"), "utf-8").trim().split("\n")).toHaveLength(cells.length);
+    }
+  }, 120_000);
+
+  it("a trial spec is not part of the surface hash; its record carries the spec's own hash", () => {
+    project({ tasks: 1 });
+    const before = recomputeManifest(join(root, ".gnomon")).surface_hash;
+    writeFileSync(join(root, ".gnomon", "trials", "default.toml"), "# edited\n", "utf-8");
+    writeFileSync(join(root, ".gnomon", "trials", "other.toml"), "# new\n", "utf-8");
+    expect(recomputeManifest(join(root, ".gnomon")).surface_hash).toBe(before);
+    expect(recomputeManifest(join(root, ".gnomon")).manifest.some((m) => m.path.includes("trials"))).toBe(false);
+  });
 });
 
 describe("conformance/skill_trial.json", () => {

@@ -716,19 +716,36 @@ Does the surface **with** a proposed skill do better than the surface
 **without** it, on this project's tasks and with this model?
 (`docs/design/SKILL-TRIALS.md`, part 2.)
 
-**Spec**: `.gnomon/trials/<name>.toml`, inside the surface and hashed. It
-holds `[trial]` (`role`, `model_profile`, `attempts` = 3, `order` =
-`"interleaved"`, the only order accepted, and `check_timeout_seconds` = 600),
-`[thresholds]` (`max_pass_drop` = 0, `min_output_token_gain` = 0.10,
-`min_pass_gain` = 1, `alpha` = 0.05), an optional `[budget]` (`max_requests`,
-`max_cost_usd`), and one `[[task]]` per task with `id`, `prompt`, `check`, and
-optionally `setup`. `replay_session` tasks are refused for now.
+**Spec**: `.gnomon/trials/<name>.toml`. It holds `[trial]` (`role`,
+`model_profile`, `attempts` = 3, `order` = `"interleaved"`, the only order
+accepted, and `check_timeout_seconds` = 600), `[thresholds]` (`max_pass_drop`
+= 0, `min_output_token_gain` = 0.10, `min_pass_gain` = 1, `alpha` = 0.05), an
+optional `[budget]` (`max_requests`, `max_cost_usd`), and one `[[task]]` per
+task with `id`, `prompt`, `check`, and optionally `setup`. `replay_session`
+tasks are refused for now.
 
-**Arms.** Each cell runs in a fresh detached `git worktree` at HEAD. The skill
-arm has `.gnomon/skills/proposed/<id>.md` copied into `.gnomon/skills/`. The
-two manifests are compared before any cell runs, and they must differ in
-exactly that path. Pairs are task × attempt, and each pair runs its base cell
-and then its skill cell.
+`trials/` is **not hashed**, like `skills/proposed/` and `extensions/`. A spec
+defines what counts as a better skill, not what the agent does, so hashing it
+moved the surface hash with no change in behaviour. Each report and
+`skill_trial` record carries the spec's own `sha256` instead. The design
+proposed hashing specs; leaving them out was the maintainer session's choice,
+recorded here so the owner can reverse it.
+
+**Arms.** Each cell runs in its own private clone (`git clone --shared`, with
+no remote) at the commit HEAD named when the trial began. A clone, not a
+worktree, so a cell's branches, stash and repository config never reach the
+operator's repository. The skill arm has `.gnomon/skills/proposed/<id>.md`
+copied into `.gnomon/skills/`. Before any cell runs, the two manifests must
+differ in exactly that path, and this checkout's surface hash must be HEAD's.
+Pairs are task × attempt, and each pair runs its base cell and then its skill
+cell. A clone that cannot be removed is listed in `leftovers` and never
+aborts the trial. On SIGINT or SIGTERM, every clone still on disk is removed
+before the signal takes effect.
+
+**Trust** is settled once, on this checkout. If it was clamped, the trial
+refuses to start: the cells would run the scaffold's defaults while the report
+named the declared surface. The report's `trust` is the decision, or `null`
+when the surface grants nothing beyond the scaffold.
 
 **Validity.** A cell is scored only if its run made at least one metered model
 request (`volatile.requests` on the task record) and its check ran. A run
@@ -738,37 +755,50 @@ its pair is excluded. Pass is the check's exit 0.
 
 **Statistics.** Pass uses exact McNemar on the pairs, plus a Wilson interval
 per arm. Output tokens, requests and wall time use an exact sign test. `mde`
-gives the fewest discordant pairs, all one way, that can reach `alpha`.
+gives the fewest discordant pairs, all one way, that can reach `alpha`. A
+token gain counts only when three things hold: the totals fall by
+`min_output_token_gain`, more pairs fall than rise (`skill_lower >
+skill_higher`), and the sign test has p < `alpha`. Without the middle
+condition, a single outlier pair could carry the gain.
 
 | `meets_thresholds` | When |
 |---|---|
-| `true` | No excess pass drop, and a declared gain (`min_pass_gain` pairs, or `min_output_token_gain`) whose test has p < `alpha` |
+| `true` | No excess pass drop, and a declared gain (`min_pass_gain` pairs, or `min_output_token_gain` as above) whose test has p < `alpha` |
 | `false` | The skill arm solved more than `max_pass_drop` fewer pairs, decided on the number alone, or there is no declared gain |
 | `"undetermined"` | No valid pair, budget exhausted, or a declared gain that is not significant at `alpha` |
+
+Exit codes follow the bucket convention of `gnomon task` (§1): 0 is a
+result, 2 a refusal (the skill is declined), 10 an apparatus failure.
 
 | Exit | Means |
 |---|---|
 | 0 | `meets_thresholds: true` |
 | 2 | `meets_thresholds: false` |
-| 10 | `"undetermined"`, or the trial could not start: no spec, no proposal, arms not differing in exactly the skill, this checkout's surface hash not HEAD's, or a non-local endpoint without `[budget]` or `--yes-spend` |
+| 10 | `"undetermined"`, or the trial could not start. That covers: no spec; no proposal; arms not differing in exactly the skill; this checkout's surface hash not HEAD's; trust clamped; or an endpoint (primary or fallback) that is not local, with no `[budget] max_requests` and no `--yes-spend` |
 
 `status` is one of `complete`, `budget_exhausted` or `apparatus_failure`. The
-budget is checked between pairs. `max_cost_usd` is reported with
-`cost_enforced: false`, because gnomon reads no prices.
+budget is checked before every cell, so a base cell that spent it gets no
+skill cell. One cell can overshoot by its own requests. Only `max_requests` is
+enforced. `max_cost_usd` is reported with `cost_enforced: false`, because
+gnomon reads no prices, and it does not count as a cap for a billed endpoint.
 
-**Output.** `.gnomon-trials/<id>/<utc>/report.json` (keys: `schema`, `skill`,
+**Output.** `.gnomon-trials/<id>/<utc>-<suffix>/report.json` and
+`cells.jsonl`, one line per cell. The report's keys are `schema`, `skill`,
 `content_sha256`, `spec`, `harness`, `role`, `profile`, `model`, `endpoint`,
-`arms`, `pairs`, `cells`, `endpoints`, `mde`, `thresholds`, `budget`,
-`status`, `meets_thresholds`, `reasons`) and `cells.jsonl`, one line per
-cell. A `skill_trial` audit record is written in a sealed trail of its own,
-even when `[audit]` is off. It carries `content_sha256`, `report`,
-`report_sha256`, `spec`, `surface_hash_base`, `surface_hash_skill`, `role`,
-`model`, `endpoint`, `pairs`, `cells`, `endpoints`, `status` and
-`meets_thresholds`. A trial never accepts anything.
+`arms`, `pairs`, `cells`, `endpoints`, `mde`, `thresholds`, `budget`, `trust`,
+`leftovers`, `status`, `meets_thresholds` and `reasons`. A `skill_trial`
+audit record is written in a sealed trail of its own, even when `[audit]` is
+off. It carries `content_sha256`, `report`, `report_sha256`, `spec`,
+`surface_hash_base`, `surface_hash_skill`, `role`, `model`, `endpoint`,
+`pairs`, `cells`, `endpoints`, `status` and `meets_thresholds`. A trial never
+accepts anything.
 
 **Fixture**: `conformance/skill_trial.json` (exit codes, verdicts, statuses,
-report and record keys), asserted by `packages/gnomon-core/src/skill_trial.test.ts`.
-In that test, a scripted fake model solves the task only when the skill's text is in its prompt. The tests
-cover a pass gain (exit 0), the negative control with that text removed
-(exit 2), and the endpoint down (exit 10). They also cover the budget stop, the
-billed-endpoint refusal, and the record.
+report and record keys, and the rules above), asserted by
+`packages/gnomon-core/src/skill_trial.test.ts`. In that test, a scripted fake
+model solves the task only when the skill's text is in its prompt. The tests
+cover:
+- a pass gain (exit 0), the negative control with that text removed (exit 2),
+  and the endpoint down (exit 10);
+- the per-cell budget stop, the billed and fallback refusals, clamped trust,
+  clone isolation, leftovers, SIGINT cleanup, token direction, and the record.

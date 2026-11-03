@@ -10,7 +10,7 @@
  * is measured, and the measuring follows the benchmark-discipline rules
  * because a trial IS a small benchmark:
  *
- *   - Two arms, one difference. Each cell runs in a fresh `git worktree` at
+ *   - Two arms, one difference. Each cell runs in a fresh private clone at
  *     HEAD; the skill arm has the proposal copied into `.gnomon/skills/`. The
  *     two manifests are compared before anything runs, and must differ in
  *     exactly that one path.
@@ -20,7 +20,7 @@
  *   - A cell is VALID only if it made at least one metered model request and
  *     its check ran. An endpoint that failed is `apparatus_failure`: reported,
  *     never scored. Pass or fail is the `check` command's exit code, read off
- *     the worktree, never the model's prose.
+ *     the cell's checkout, never the model's prose.
  *   - Thresholds are declared in the spec, before the run. The report compares
  *     its numbers against them; it does not pick them afterwards.
  *
@@ -46,6 +46,7 @@ import { AuditTrail, resolveAudit, type AuditRecord } from "./audit.js";
 import { harnessBuild } from "./build.js";
 import { PROPOSED_DIR, SKILLS_DIR, skillContentHash } from "./skills.js";
 import type { TaskRecord } from "./prompt_loop.js";
+import type { TrustOutcome } from "./trust.js";
 
 // ---------------------------------------------------------------------------
 // The spec: .gnomon/trials/<name>.toml
@@ -66,9 +67,9 @@ export type TrialStatus = (typeof TRIAL_STATUSES)[number];
 export interface TrialTask {
   id: string;
   prompt: string;
-  /** Run in the cell's worktree before the agent. Optional. */
+  /** Run in the cell's checkout before the agent. Optional. */
   setup?: string;
-  /** Run in the cell's worktree after the agent. Exit 0 is a pass. */
+  /** Run in the cell's checkout after the agent. Exit 0 is a pass. */
   check: string;
 }
 
@@ -265,7 +266,7 @@ export interface TrialCell {
   duration_ms: number;
 }
 
-/** Runs the agent on one task in one worktree. Injected by tests and the CLI. */
+/** Runs the agent on one task in one cell's checkout. Injected by tests and the CLI. */
 export type CellRunner = (
   worktree: string,
   prompt: string,
@@ -285,28 +286,70 @@ function git(root: string, args: string[]): string {
   return r.stdout.trim();
 }
 
-/** A fresh detached worktree at HEAD, and how to remove it. */
-function freshWorktree(root: string): { dir: string; dispose: () => void } {
+/**
+ * A cell's private copy of the repository at one commit, and how to remove it.
+ *
+ * A clone, not a `git worktree`. A worktree shares refs, the stash and
+ * `.git/config` with the real repository, so an agent in a cell that ran
+ * `git branch -D`, `git stash` or `git config` changed the operator's
+ * repository -- found in review. A `--shared` clone borrows the object store
+ * read-only through alternates (no copy, so it is fast) and has its own refs,
+ * stash and config. Its `origin` is removed, so a `git push` in a cell has
+ * nowhere to go. What it cannot isolate is the user's global git config; the
+ * surface's sandbox governs that, as it does for any session.
+ */
+interface Sandbox {
+  dir: string;
+  /** Remove it. Never throws: returns the path left behind, if any. */
+  dispose: () => string | null;
+}
+
+function freshSandbox(root: string, commit: string, live: Set<Sandbox>): Sandbox {
   const holder = mkdtempSync(join(tmpdir(), "gnomon-trial-"));
-  const dir = join(holder, "wt");
-  git(root, ["worktree", "add", "--detach", "--quiet", dir, "HEAD"]);
-  return {
+  const dir = join(holder, "repo");
+  let disposed = false;
+  const sandbox: Sandbox = {
     dir,
     dispose: () => {
+      if (disposed) return null;
+      disposed = true;
+      live.delete(sandbox);
       try {
-        git(root, ["worktree", "remove", "--force", dir]);
+        rmSync(holder, { recursive: true, force: true, maxRetries: 2 });
+        return null;
       } catch {
-        // Removed below either way; prune drops the stale registration.
-      }
-      rmSync(holder, { recursive: true, force: true });
-      try {
-        git(root, ["worktree", "prune"]);
-      } catch {
-        /* nothing left to prune */
+        // A file the cell left unremovable (read-only directory, a handle
+        // still open on Windows). Reported in the trial's `leftovers`, never
+        // thrown: a cleanup failure must not cost the cells already run.
+        return holder;
       }
     },
   };
+  live.add(sandbox);
+  try {
+    git(root, ["clone", "--quiet", "--shared", "--no-checkout", root, dir]);
+    git(dir, ["remote", "remove", "origin"]);
+    git(dir, ["checkout", "--quiet", "--detach", commit]);
+  } catch (err) {
+    sandbox.dispose();
+    throw err;
+  }
+  return sandbox;
 }
+
+/** The signals a trial cleans up on. An option so a test can deliver one. */
+export interface TrialSignals {
+  on(signal: "SIGINT" | "SIGTERM", fn: () => void): void;
+  off(signal: "SIGINT" | "SIGTERM", fn: () => void): void;
+  /** Deliver the signal again with the handler gone: the default exit. */
+  reraise(signal: "SIGINT" | "SIGTERM"): void;
+}
+
+const processSignals: TrialSignals = {
+  on: (sig, fn) => void process.on(sig, fn),
+  off: (sig, fn) => void process.off(sig, fn),
+  reraise: (sig) => void process.kill(process.pid, sig),
+};
 
 // ---------------------------------------------------------------------------
 // The trial
@@ -316,8 +359,17 @@ export interface TrialOptions {
   skill: string;
   spec?: string;
   runCell: CellRunner;
-  /** Run against a billed endpoint without a declared [budget]. */
+  /** Run against a billed endpoint without a declared `[budget] max_requests`. */
   yesSpend?: boolean;
+  /**
+   * How workspace trust was settled for THIS checkout, once (trust.ts). A
+   * clamped surface is refused: the cells would run the scaffold's defaults
+   * while the report names the declared surface hash. Absent when the surface
+   * grants nothing beyond the scaffold.
+   */
+  trust?: TrustOutcome;
+  /** Defaults to the process. */
+  signals?: TrialSignals;
   /** Progress, one line at a time. */
   log?: (line: string) => void;
 }
@@ -365,6 +417,10 @@ export interface TrialReport {
   mde: { discordant_pairs: number; pass_rate_difference: number | null };
   thresholds: TrialThresholds;
   budget: { max_requests?: number; requests_used: number; max_cost_usd?: number; cost_enforced: false };
+  /** The trust decision the cells ran under, or null when none was needed. */
+  trust: TrustOutcome["decision"] | null;
+  /** Sandboxes that could not be removed; empty when cleanup succeeded. */
+  leftovers: string[];
   status: TrialStatus;
   meets_thresholds: TrialVerdict;
   reasons: string[];
@@ -403,153 +459,206 @@ export async function runTrial(
   const content = readFileSync(proposal);
   const role = spec.role ?? resolveRouting(config).default;
 
-  // A billed endpoint needs a declared budget or an explicit yes. The default
-  // profile is local, so the common case never asks.
+  // A clamped surface is not the surface the report would name.
+  if (opts.trust?.decision === "clamped") {
+    throw new TrialAbort(
+      `This surface grants ${opts.trust.grants.join(", ")} beyond gnomon's defaults and this machine ` +
+        `has not trusted it, so every cell would run clamped while the report named the declared ` +
+        `surface. Trust it first (\`gnomon trust grant\`, or --trust).`
+    );
+  }
+
+  // A billed endpoint needs an enforced cap or an explicit yes. The primary
+  // AND the fallback count: a fallback that fires mid-trial spends too. Only
+  // `max_requests` is enforced; `max_cost_usd` alone is not a cap, because
+  // gnomon reads no prices. The default profile is local, so the common case
+  // never asks.
   const routed = routeRole(spec.model_profile ? loadConfig(root, spec.model_profile) : config, role);
-  if (!isLocalEndpoint(routed.target.url) && !spec.budget.declared && !opts.yesSpend) {
+  const billed = [routed.target, routed.fallback]
+    .filter((t): t is NonNullable<typeof t> => Boolean(t))
+    .filter((t) => !isLocalEndpoint(t.url));
+  if (billed.length > 0 && spec.budget.max_requests === undefined && !opts.yesSpend) {
     throw new TrialAbort(
-      `The ${role} role runs on ${routed.target.endpoint} (${routed.target.url}), which is not local. ` +
-        `Declare [budget] in ${spec.path}, or pass --yes-spend.`
+      `The ${role} role can reach ${billed.map((t) => `${t.endpoint} (${t.url})`).join(" and ")}, ` +
+        `which is not local. Declare [budget] max_requests in ${spec.path}` +
+        (spec.budget.max_cost_usd !== undefined ? ` (max_cost_usd is reported, not enforced: gnomon reads no prices)` : "") +
+        `, or pass --yes-spend.`
     );
   }
-
-  // The two arms, built once and compared before anything runs.
-  const surfaceOf = (dir: string) => recomputeManifest(join(dir, ".gnomon"));
-  const install = (dir: string) => {
-    mkdirSync(join(dir, ".gnomon", SKILLS_DIR), { recursive: true });
-    copyFileSync(proposal, join(dir, ".gnomon", SKILLS_DIR, `${opts.skill}.md`));
+  const commit = git(root, ["rev-parse", "HEAD"]);
+  const live = new Set<Sandbox>();
+  const leftovers: string[] = [];
+  const done = (sb: Sandbox) => {
+    const left = sb.dispose();
+    if (left) leftovers.push(left);
   };
-  const probeBase = freshWorktree(root);
-  const probeSkill = freshWorktree(root);
-  let baseHash: string;
-  let skillHash: string;
-  let differ: string[];
+  const signals = opts.signals ?? processSignals;
+  const onSignal = (sig: "SIGINT" | "SIGTERM") => () => {
+    // Interrupted: remove every sandbox still on disk, then let the signal do
+    // what it would have done without this handler.
+    for (const sb of [...live]) done(sb);
+    signals.off("SIGINT", onInt);
+    signals.off("SIGTERM", onTerm);
+    signals.reraise(sig);
+  };
+  const onInt = onSignal("SIGINT");
+  const onTerm = onSignal("SIGTERM");
+  signals.on("SIGINT", onInt);
+  signals.on("SIGTERM", onTerm);
   try {
-    install(probeSkill.dir);
-    const a = surfaceOf(probeBase.dir);
-    const b = surfaceOf(probeSkill.dir);
-    baseHash = a.surface_hash;
-    skillHash = b.surface_hash;
-    const shaOf = (m: typeof a.manifest) => new Map(m.map((s) => [s.path, s.sha256]));
-    const ma = shaOf(a.manifest);
-    const mb = shaOf(b.manifest);
-    differ = [...new Set([...ma.keys(), ...mb.keys()])]
-      .filter((p) => ma.get(p) !== mb.get(p))
-      .sort();
-  } finally {
-    probeBase.dispose();
-    probeSkill.dispose();
-  }
-  const expected = `.gnomon/skills/${opts.skill}.md`;
-  if (differ.length !== 1 || differ[0] !== expected) {
-    throw new TrialAbort(
-      differ.length === 0
-        ? `The arms are identical: HEAD already holds this exact skill.`
-        : `The arms differ in ${differ.join(", ")}, not only ${expected}.`
-    );
-  }
-  // The base arm is the surface at HEAD; the skill would join the surface in
-  // this checkout. They must be the same surface, or the trial measures one
-  // and the accept changes another -- and `accept --evidence` refuses the
-  // report afterwards, once the budget is spent. Two causes, both measured:
-  // uncommitted edits under .gnomon/, and a checkout that rewrote line endings
-  // (core.autocrlf on Windows, with no `.gnomon/** text eol=lf` in
-  // .gitattributes, which `gnomon init` writes).
-  const checkout = recomputeManifest(config.gnomonDir).surface_hash;
-  if (checkout !== baseHash) {
-    throw new TrialAbort(
-      `This checkout's surface (${checkout.slice(0, 12)}) is not HEAD's (${baseHash.slice(0, 12)}). ` +
-        `Commit or discard the changes under .gnomon/ (proposals excepted), and if git rewrites ` +
-        `line endings here, add ".gnomon/** text eol=lf" to .gitattributes, then run the trial again.`
-    );
-  }
 
-  const cells: TrialCell[] = [];
-  let requestsUsed = 0;
-  let status: TrialStatus = "complete";
-  const planned = spec.tasks.length * spec.attempts;
-  let pair = 0;
-  let pinned: { model: string; endpoint?: string } | null = null;
+    // The two arms, built once and compared before anything runs.
+    const surfaceOf = (dir: string) => recomputeManifest(join(dir, ".gnomon"));
+    const install = (dir: string) => {
+      mkdirSync(join(dir, ".gnomon", SKILLS_DIR), { recursive: true });
+      copyFileSync(proposal, join(dir, ".gnomon", SKILLS_DIR, `${opts.skill}.md`));
+    };
+    const probeBase = freshSandbox(root, commit, live);
+    const probeSkill = freshSandbox(root, commit, live);
+    let baseHash: string;
+    let skillHash: string;
+    let differ: string[];
+    try {
+      install(probeSkill.dir);
+      const a = surfaceOf(probeBase.dir);
+      const b = surfaceOf(probeSkill.dir);
+      baseHash = a.surface_hash;
+      skillHash = b.surface_hash;
+      const shaOf = (m: typeof a.manifest) => new Map(m.map((s) => [s.path, s.sha256]));
+      const ma = shaOf(a.manifest);
+      const mb = shaOf(b.manifest);
+      differ = [...new Set([...ma.keys(), ...mb.keys()])]
+        .filter((p) => ma.get(p) !== mb.get(p))
+        .sort();
+    } finally {
+      done(probeBase);
+      done(probeSkill);
+    }
+    const expected = `.gnomon/skills/${opts.skill}.md`;
+    if (differ.length !== 1 || differ[0] !== expected) {
+      throw new TrialAbort(
+        differ.length === 0
+          ? `The arms are identical: HEAD already holds this exact skill.`
+          : `The arms differ in ${differ.join(", ")}, not only ${expected}.`
+      );
+    }
+    // The base arm is the surface at HEAD; the skill would join the surface in
+    // this checkout. They must be the same surface, or the trial measures one
+    // and the accept changes another -- and `accept --evidence` refuses the
+    // report afterwards, once the budget is spent. Two causes, both measured:
+    // uncommitted edits under .gnomon/, and a checkout that rewrote line endings
+    // (core.autocrlf on Windows, with no `.gnomon/** text eol=lf` in
+    // .gitattributes, which `gnomon init` writes).
+    const checkout = recomputeManifest(config.gnomonDir).surface_hash;
+    if (checkout !== baseHash) {
+      throw new TrialAbort(
+        `This checkout's surface (${checkout.slice(0, 12)}) is not HEAD's (${baseHash.slice(0, 12)}). ` +
+          `Commit or discard the changes under .gnomon/ (proposals excepted), and if git rewrites ` +
+          `line endings here, add ".gnomon/** text eol=lf" to .gitattributes, then run the trial again.`
+      );
+    }
 
-  outer: for (const task of spec.tasks) {
-    for (let attempt = 1; attempt <= spec.attempts; attempt++) {
-      if (spec.budget.max_requests !== undefined && requestsUsed >= spec.budget.max_requests) {
-        status = "budget_exhausted";
-        break outer;
-      }
-      pair++;
-      for (const arm of ["base", "skill"] as Arm[]) {
-        const n = cells.length + 1;
-        const wt = freshWorktree(root);
-        const cell: TrialCell = {
-          n,
-          pair,
-          task: task.id,
-          attempt,
-          arm,
-          bucket: "apparatus_failure",
-          valid: false,
-          passed: null,
-          check_exit: null,
-          code: 10,
-          stop_reason: "apparatus",
-          model: "",
-          surface_hash: "",
-          requests: 0,
-          duration_ms: 0,
-        };
-        try {
-          if (arm === "skill") install(wt.dir);
-          cell.surface_hash = surfaceOf(wt.dir).surface_hash;
-          const want = arm === "skill" ? skillHash : baseHash;
-          if (cell.surface_hash !== want) {
-            cell.invalid_reason = `surface ${cell.surface_hash.slice(0, 12)} is not the ${arm} arm's ${want.slice(0, 12)}`;
-          } else if (task.setup && sh(task.setup, wt.dir, spec.check_timeout_seconds * 1000).code !== 0) {
-            cell.invalid_reason = "setup did not exit 0";
-          } else {
-            const t0 = Date.now();
-            const rec = await opts.runCell(wt.dir, task.prompt, { role, profile: spec.model_profile });
-            cell.duration_ms = rec.volatile?.duration_ms ?? Date.now() - t0;
-            cell.code = rec.code;
-            cell.stop_reason = rec.stop_reason;
-            cell.bucket = rec.bucket as CellBucket;
-            cell.model = rec.model;
-            cell.endpoint = rec.endpoint;
-            cell.requests = rec.volatile?.requests ?? 0;
-            cell.tokens_out = rec.volatile?.tokens_out;
-            requestsUsed += cell.requests;
-            const ran = sh(task.check, wt.dir, spec.check_timeout_seconds * 1000);
-            cell.check_exit = ran.code;
-            if (rec.bucket === "apparatus_failure") {
-              cell.invalid_reason = `the run ended apparatus_failure (code ${rec.code})`;
-            } else if (cell.requests < 1) {
-              cell.invalid_reason = "no metered model request";
-            } else if (ran.code === null) {
-              cell.invalid_reason = `check did not run: ${ran.error}`;
-            } else if (pinned && (rec.model !== pinned.model || rec.endpoint !== pinned.endpoint)) {
-              cell.invalid_reason = `ran on ${rec.model} at ${rec.endpoint}, not the trial's ${pinned.model} at ${pinned.endpoint}`;
-            } else {
-              pinned ??= { model: rec.model, endpoint: rec.endpoint };
-              cell.valid = true;
-              cell.passed = ran.code === 0;
-            }
-          }
-        } catch (err) {
-          cell.invalid_reason = err instanceof Error ? err.message : String(err);
-        } finally {
-          wt.dispose();
+    const cells: TrialCell[] = [];
+    let requestsUsed = 0;
+    let status: TrialStatus = "complete";
+    const planned = spec.tasks.length * spec.attempts;
+    let pair = 0;
+    let pinned: { model: string; endpoint?: string } | null = null;
+
+    const spent = () => spec.budget.max_requests !== undefined && requestsUsed >= spec.budget.max_requests;
+    outer: for (const task of spec.tasks) {
+      for (let attempt = 1; attempt <= spec.attempts; attempt++) {
+        if (spent()) {
+          status = "budget_exhausted";
+          break outer;
         }
-        if (!cell.valid) cell.bucket = "apparatus_failure";
-        cells.push(cell);
-        log(
-          `  ${String(n).padStart(3)} ${task.id} #${attempt} ${arm.padEnd(5)} ` +
-            (cell.valid ? (cell.passed ? "pass" : "fail") : `apparatus — ${cell.invalid_reason}`)
-        );
+        pair++;
+        for (const arm of ["base", "skill"] as Arm[]) {
+          // Before every cell, not only every pair: a base cell that spent the
+          // budget does not get a skill cell after it. Its pair is then
+          // incomplete and excluded. One cell can still overshoot by its own
+          // requests; nothing stops a model call half-way.
+          if (spent()) {
+            status = "budget_exhausted";
+            break outer;
+          }
+          const n = cells.length + 1;
+          const wt = freshSandbox(root, commit, live);
+          const cell: TrialCell = {
+            n,
+            pair,
+            task: task.id,
+            attempt,
+            arm,
+            bucket: "apparatus_failure",
+            valid: false,
+            passed: null,
+            check_exit: null,
+            code: 10,
+            stop_reason: "apparatus",
+            model: "",
+            surface_hash: "",
+            requests: 0,
+            duration_ms: 0,
+          };
+          try {
+            if (arm === "skill") install(wt.dir);
+            cell.surface_hash = surfaceOf(wt.dir).surface_hash;
+            const want = arm === "skill" ? skillHash : baseHash;
+            if (cell.surface_hash !== want) {
+              cell.invalid_reason = `surface ${cell.surface_hash.slice(0, 12)} is not the ${arm} arm's ${want.slice(0, 12)}`;
+            } else if (task.setup && sh(task.setup, wt.dir, spec.check_timeout_seconds * 1000).code !== 0) {
+              cell.invalid_reason = "setup did not exit 0";
+            } else {
+              const t0 = Date.now();
+              const rec = await opts.runCell(wt.dir, task.prompt, { role, profile: spec.model_profile });
+              cell.duration_ms = rec.volatile?.duration_ms ?? Date.now() - t0;
+              cell.code = rec.code;
+              cell.stop_reason = rec.stop_reason;
+              cell.bucket = rec.bucket as CellBucket;
+              cell.model = rec.model;
+              cell.endpoint = rec.endpoint;
+              cell.requests = rec.volatile?.requests ?? 0;
+              cell.tokens_out = rec.volatile?.tokens_out;
+              requestsUsed += cell.requests;
+              const ran = sh(task.check, wt.dir, spec.check_timeout_seconds * 1000);
+              cell.check_exit = ran.code;
+              if (rec.bucket === "apparatus_failure") {
+                cell.invalid_reason = `the run ended apparatus_failure (code ${rec.code})`;
+              } else if (cell.requests < 1) {
+                cell.invalid_reason = "no metered model request";
+              } else if (ran.code === null) {
+                cell.invalid_reason = `check did not run: ${ran.error}`;
+              } else if (pinned && (rec.model !== pinned.model || rec.endpoint !== pinned.endpoint)) {
+                cell.invalid_reason = `ran on ${rec.model} at ${rec.endpoint}, not the trial's ${pinned.model} at ${pinned.endpoint}`;
+              } else {
+                pinned ??= { model: rec.model, endpoint: rec.endpoint };
+                cell.valid = true;
+                cell.passed = ran.code === 0;
+              }
+            }
+          } catch (err) {
+            cell.invalid_reason = err instanceof Error ? err.message : String(err);
+          } finally {
+            done(wt);
+          }
+          if (!cell.valid) cell.bucket = "apparatus_failure";
+          cells.push(cell);
+          log(
+            `  ${String(n).padStart(3)} ${task.id} #${attempt} ${arm.padEnd(5)} ` +
+              (cell.valid ? (cell.passed ? "pass" : "fail") : `apparatus — ${cell.invalid_reason}`)
+          );
+        }
       }
     }
-  }
 
-  return { report: summarise(spec, opts.skill, content, role, baseHash, skillHash, differ, cells, planned, pair, requestsUsed, status, pinned), cells };
+    const report = summarise(spec, opts.skill, content, role, baseHash, skillHash, differ, cells, planned, pair, requestsUsed, status, pinned);
+    return { report: { ...report, trust: opts.trust?.decision ?? null, leftovers }, cells };
+  } finally {
+    for (const sb of [...live]) done(sb);
+    signals.off("SIGINT", onInt);
+    signals.off("SIGTERM", onTerm);
+  }
 }
 
 function summarise(
@@ -566,7 +675,7 @@ function summarise(
   requestsUsed: number,
   status: TrialStatus,
   pinned: { model: string; endpoint?: string } | null
-): TrialReport {
+): Omit<TrialReport, "trust" | "leftovers"> {
   const th = spec.thresholds;
   const byPair = new Map<number, { base?: TrialCell; skill?: TrialCell }>();
   for (const c of cells) {
@@ -621,7 +730,14 @@ function summarise(
     reasons.push(`the skill arm solved ${basePass - skillPass} fewer pair(s); max_pass_drop = ${th.max_pass_drop}`);
   } else {
     const passOk = gain >= th.min_pass_gain;
-    const tokOk = tokenGain !== null && tokenGain >= th.min_output_token_gain;
+    // A token gain counts only if most pairs agree with it. The totals alone
+    // let one outlier decide: in review, the skill used MORE tokens in 9 of
+    // 10 pairs and one pair's 10,000-token base run made the total 10% lower
+    // and the two-sided sign test "significant". Direction first, then p.
+    const tokOk =
+      tokenGain !== null &&
+      tokenGain >= th.min_output_token_gain &&
+      tokenSign.skill_lower > tokenSign.skill_higher;
     const passSig = passOk && mcnemar < th.alpha;
     const tokSig = tokOk && tokenSign.p < th.alpha;
     if (passSig || tokSig) {
@@ -713,7 +829,11 @@ export function recordTrial(
   now = new Date()
 ): { dir: string; report_path: string; report_sha256: string; record: AuditRecord | null; trail: string | null } {
   const root = resolve(config.gnomonDir, "..");
-  const stamp = now.toISOString().replace(/[:.]/g, "-");
+  // A random suffix on both names, as for skill decisions (skills.ts): two
+  // trials recorded in one millisecond must not share a report directory --
+  // the second overwrote report.json and appended to the first's cells --
+  // nor a trail file, which would fork its chain.
+  const stamp = `${now.toISOString().replace(/[:.]/g, "-")}-${randomBytes(3).toString("hex")}`;
   const rel = `${TRIAL_RUNS_DIR}/${report.skill}/${stamp}`;
   const dir = join(root, TRIAL_RUNS_DIR, report.skill, stamp);
   mkdirSync(dir, { recursive: true });
@@ -723,12 +843,7 @@ export function recordTrial(
   const report_sha256 = createHash("sha256").update(body).digest("hex");
 
   const settings = resolveAudit(config);
-  // A random suffix, as for skill decisions (skills.ts): two records in one
-  // millisecond must not share a file and fork its chain.
-  const trail = new AuditTrail(
-    { ...settings, enabled: true, chain: true },
-    `trial-${stamp}-${process.pid}-${randomBytes(3).toString("hex")}`
-  );
+  const trail = new AuditTrail({ ...settings, enabled: true, chain: true }, `trial-${stamp}-${process.pid}`);
   trail.write("session_start", {
     surface_hash: report.arms.base.surface_hash,
     harness: report.harness,

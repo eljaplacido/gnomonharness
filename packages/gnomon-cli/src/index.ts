@@ -1532,17 +1532,26 @@ async function cmdSkill(args: CliArgs): Promise<void> {
     const yesSpend = args.flags["yes-spend"] !== undefined || args.positional.includes("--yes-spend");
     let outcome: Awaited<ReturnType<typeof runTrial>>;
     try {
-      outcome = await runTrial(config, {
+      // Trust is settled ONCE, on this checkout. Trust is keyed by a
+      // project's real path, so settling it per cell found every temporary
+      // clone untrusted and ran it clamped to the defaults, while the report
+      // named the declared surface. A clamped checkout is refused by the trial
+      // instead; a trusted one runs its cells as declared (their surface is
+      // this checkout's, which the trial checks, plus the skill).
+      const settled = settleTrustHeadless(config, trustOptions(args));
+      outcome = await runTrial(settled.config, {
         skill: id,
         spec: specName,
         yesSpend,
-        // Each cell is a `gnomon task` in its own worktree: the same trust
-        // settling, the same approval rule (--yes approves gated calls in the
-        // worktree; without it they are refused, as in `gnomon task`).
+        trust: settled.outcome,
+        // Each cell is a `gnomon task` in its own clone, with the approval
+        // rule of `gnomon task`: --yes approves gated calls in the clone;
+        // without it they are refused.
         runCell: (wt, prompt, o) =>
-          runTask(settleTrustHeadless(loadConfig(wt, o.profile), trustOptions(args)).config, prompt, {
+          runTask(loadConfig(wt, o.profile), prompt, {
             role: o.role,
             yes: args.yes,
+            trust: settled.outcome,
           }),
         log: args.json ? undefined : (line) => console.error(line),
       });
@@ -2165,7 +2174,7 @@ Commands:
   skill trial <id> [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]
     Measure a proposal on the tasks in .gnomon/trials/<name>.toml (default
     "default"): each task x attempt runs once without the skill and once
-    with it, interleaved, each in a fresh git worktree at HEAD, judged by
+    with it, interleaved, each in a fresh private clone at HEAD, judged by
     the task's check command. Writes .gnomon-trials/<id>/<utc>/ and a
     skill_trial audit record. Exit 0 meets the declared thresholds, 2 does
     not, 10 no answer. Never accepts anything.

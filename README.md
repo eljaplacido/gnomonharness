@@ -61,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1672 TypeScript tests (1386 core, 261 cli, 18
-> natives, 7 tui) and 60 Rust tests — **1732 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1686 TypeScript tests (1399 core, 262 cli, 18
+> natives, 7 tui) and 61 Rust tests — **1747 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1174,14 +1174,16 @@ gnomon skill trial cargo-suite --yes   # tasks from .gnomon/trials/default.toml
 ```
 
 Each task runs several times **without** the skill and **with** it,
-interleaved, each run in a fresh `git worktree` at HEAD. The task's own
-`check` command judges every run. A run counts only if it made a metered
+interleaved, each run in a private clone of HEAD (no remote, its own refs).
+The task's own `check` command judges every run. A run counts only if it made a metered
 model request. The report compares pass rate (exact McNemar) and output tokens
 (sign test) against thresholds the spec declared before the run. It exits 0
 when they are met, 2 when they are not, and 10 when it cannot answer: the
 endpoint was down, the budget ran out, or the effect is too small for the
 number of runs. A `skill_trial` audit record holds the report's hash. The
-trial never accepts anything (docs/CONTRACTS.md §13).
+trial never accepts anything. Trial specs are not part of the surface hash.
+They define "better" rather than behaviour, and each trial's record carries
+its spec's own hash (docs/CONTRACTS.md §13).
 
 ---
 

@@ -126,6 +126,15 @@ fn collect_surface(dir: &Path) -> Vec<Source> {
                     continue;
                 }
 
+                // `trials/` holds skill-trial specs (`gnomon skill trial`).
+                // They define what counts as a better skill, not what the
+                // agent does, so hashing them moved the hash with no change
+                // in behaviour. Each trial's audit record carries its spec's
+                // own sha256 instead. Must match the TypeScript walk.
+                if rel_str.starts_with(".gnomon/trials/") {
+                    continue;
+                }
+
                 let hash = file_sha256(path);
                 sources.push(Source {
                     path: rel_str,
@@ -569,6 +578,18 @@ mod tests {
         .unwrap();
 
         tmp
+    }
+
+    #[test]
+    fn test_trials_are_not_hashed() {
+        let tmp = setup_test_dir();
+        let dir = tmp.path().join(".gnomon");
+        let before = compute_surface_hash(&build_sources(&dir));
+        fs::create_dir_all(dir.join("trials")).unwrap();
+        fs::write(dir.join("trials").join("default.toml"), "[[task]]\nid = \"t\"\n").unwrap();
+        let sources = build_sources(&dir);
+        assert!(!sources.iter().any(|s| s.path.starts_with(".gnomon/trials/")));
+        assert_eq!(before, compute_surface_hash(&sources), "trials/ must not move the hash");
     }
 
     #[test]

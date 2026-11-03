@@ -3006,9 +3006,18 @@ function collectSurface(baseDir: string): SourceEntry[] {
         // directions over every surface path on every run, and a host that
         // starts loading extensions while they are excluded here shows up
         // there as a false negative.
+        //
+        // `trials/` (2026-11): skill-trial specs define what counts as a
+        // better skill, not what the agent does, so hashing them moved the
+        // hash with no change in behaviour -- the false positive the
+        // surface-fidelity suite exists to count. Each trial's `skill_trial`
+        // record carries its spec's own sha256 instead (skill_trial.ts). The
+        // design proposed hashing them; this exclusion is the maintainer
+        // session's choice, open for the owner to reverse.
         if (
           relPath !== ".gnomon/skills/proposed" &&
-          relPath !== ".gnomon/extensions"
+          relPath !== ".gnomon/extensions" &&
+          relPath !== ".gnomon/trials"
         ) {
           walk(fullPath);
         }
