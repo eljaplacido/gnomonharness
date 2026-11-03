@@ -599,6 +599,7 @@ decision gnomon could not make is never an allow.
 | `sudo` | sudo at command position, on the host |
 | `sandbox` | a path outside the root and every granted `extra_roots` |
 | `surface` | a write or edit inside `.gnomon/` |
+| `record` | a write, edit or shell write target inside gnomon's own records: `.gnomon-audit/` (or the `[audit] dir`) and `.gnomon-trials/`, for every role, with no consent path |
 | `write_allow` | a path outside the role's `write_allow` |
 | `network` | `[sandbox] network = false` |
 | `url` | a scheme other than http(s), or a private, loopback or link-local address |

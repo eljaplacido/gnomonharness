@@ -95,6 +95,7 @@ export const GUARD_RULES = [
   "sudo",
   "sandbox",
   "surface",
+  "record",
   "write_allow",
   "network",
   "url",
