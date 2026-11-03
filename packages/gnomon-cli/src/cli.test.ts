@@ -96,9 +96,7 @@ describe("the two surface-hash implementations agree", () => {
     );
   });
 
-  it("both leave trials/ out of the hash", () => {
-    // Skill-trial specs define what counts as a better skill, not what the
-    // agent does; each trial's record carries its spec's own sha256.
+  it("both hash trials/, which decides what require_trial accepts", () => {
     const tmp = mkdtempSync(join(tmpdir(), "gnomon-agree-"));
     try {
       const dir = join(tmp, ".gnomon");
@@ -107,8 +105,8 @@ describe("the two surface-hash implementations agree", () => {
       const before = [recomputeManifest(dir).surface_hash, surfaceHash(dir)];
       writeFileSync(join(dir, "trials", "default.toml"), '[[task]]\nid = "t"\n', "utf-8");
       const after = [recomputeManifest(dir).surface_hash, surfaceHash(dir)];
-      expect(after).toEqual(before);
-      expect(before[0]).toBe(before[1]);
+      expect(after[0]).toBe(after[1]);
+      expect(after[0]).not.toBe(before[0]);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

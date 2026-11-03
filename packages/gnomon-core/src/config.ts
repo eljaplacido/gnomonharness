@@ -3007,17 +3007,17 @@ function collectSurface(baseDir: string): SourceEntry[] {
         // starts loading extensions while they are excluded here shows up
         // there as a false negative.
         //
-        // `trials/` (2026-11): skill-trial specs define what counts as a
-        // better skill, not what the agent does, so hashing them moved the
-        // hash with no change in behaviour -- the false positive the
-        // surface-fidelity suite exists to count. Each trial's `skill_trial`
-        // record carries its spec's own sha256 instead (skill_trial.ts). The
-        // design proposed hashing them; this exclusion is the maintainer
-        // session's choice, open for the owner to reverse.
+        // `trials/` IS hashed, deliberately (2026-11). A skill-trial spec does
+        // not change what the agent does, but it decides what `require_trial`
+        // accepts, so it is behaviour of the governed system. For a short
+        // while it was excluded, which let the agent's shell loosen a spec
+        // (alpha = 2, min_pass_gain = 0) without moving the hash, and a
+        // no-effect skill then passed require_trial. Review caught it; the
+        // surface-fidelity suite now counts a spec change as a behaviour
+        // change (benchmarks/surface-fidelity).
         if (
           relPath !== ".gnomon/skills/proposed" &&
-          relPath !== ".gnomon/extensions" &&
-          relPath !== ".gnomon/trials"
+          relPath !== ".gnomon/extensions"
         ) {
           walk(fullPath);
         }

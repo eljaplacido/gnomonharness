@@ -28,7 +28,7 @@
  * case; a person makes the decision (`gnomon skill accept`).
  */
 
-import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, appendFileSync, rmSync, copyFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, mkdirSync, mkdtempSync, writeFileSync, appendFileSync, rmSync, copyFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -150,6 +150,13 @@ export function loadTrialSpec(config: GnomonConfig, name = "default"): TrialSpec
   });
   const attempts = Math.floor(num(t.attempts, 3));
   if (attempts < 1) throw new Error(`${rel}: [trial] attempts must be at least 1.`);
+  const thresholds = {
+    max_pass_drop: num(th.max_pass_drop, 0),
+    min_output_token_gain: num(th.min_output_token_gain, 0.1),
+    min_pass_gain: num(th.min_pass_gain, 1),
+    alpha: num(th.alpha, 0.05),
+  };
+  boundThresholds(rel, thresholds);
   return {
     name,
     path: rel,
@@ -159,12 +166,7 @@ export function loadTrialSpec(config: GnomonConfig, name = "default"): TrialSpec
     attempts,
     order: "interleaved",
     check_timeout_seconds: Math.max(1, num(t.check_timeout_seconds, 600)),
-    thresholds: {
-      max_pass_drop: num(th.max_pass_drop, 0),
-      min_output_token_gain: num(th.min_output_token_gain, 0.1),
-      min_pass_gain: num(th.min_pass_gain, 1),
-      alpha: num(th.alpha, 0.05),
-    },
+    thresholds,
     budget: {
       declared: b !== undefined,
       max_requests: typeof b?.max_requests === "number" ? b.max_requests : undefined,
@@ -172,6 +174,32 @@ export function loadTrialSpec(config: GnomonConfig, name = "default"): TrialSpec
     },
     tasks,
   };
+}
+
+/**
+ * Refuse thresholds that would let a trial pass a skill that did nothing.
+ *
+ * A spec is hashed and reviewed like code, but a value can still be wrong in a
+ * way review misses, and review found the extreme case: the agent's shell set
+ * `alpha = 2` and `min_pass_gain = 0`, and a skill with no effect at all met
+ * the thresholds. So the bounds are the harness's, not the spec's:
+ *   - alpha in (0, 0.2]: past 0.2 "significant" means little;
+ *   - every gain and drop >= 0, and min_output_token_gain at most 1;
+ *   - at least one gain > 0: a metric whose threshold is 0 cannot decide,
+ *     because no change at all would meet it, and with both at 0 nothing can.
+ */
+export function boundThresholds(rel: string, t: TrialThresholds): void {
+  const bad: string[] = [];
+  if (!(t.alpha > 0 && t.alpha <= 0.2)) bad.push(`alpha = ${t.alpha} (must be in (0, 0.2])`);
+  if (!(t.max_pass_drop >= 0)) bad.push(`max_pass_drop = ${t.max_pass_drop} (must be >= 0)`);
+  if (!(t.min_pass_gain >= 0)) bad.push(`min_pass_gain = ${t.min_pass_gain} (must be >= 0)`);
+  if (!(t.min_output_token_gain >= 0 && t.min_output_token_gain <= 1)) {
+    bad.push(`min_output_token_gain = ${t.min_output_token_gain} (must be in [0, 1])`);
+  }
+  if (bad.length === 0 && t.min_pass_gain === 0 && t.min_output_token_gain === 0) {
+    bad.push("min_pass_gain and min_output_token_gain are both 0, so no change at all would count as a gain");
+  }
+  if (bad.length > 0) throw new Error(`${rel} [thresholds]: ${bad.join("; ")}.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -362,12 +390,17 @@ export interface TrialOptions {
   /** Run against a billed endpoint without a declared `[budget] max_requests`. */
   yesSpend?: boolean;
   /**
-   * How workspace trust was settled for THIS checkout, once (trust.ts). A
-   * clamped surface is refused: the cells would run the scaffold's defaults
-   * while the report names the declared surface hash. Absent when the surface
-   * grants nothing beyond the scaffold.
+   * Settle workspace trust (trust.ts) for the configuration the cells will
+   * run: this checkout under the spec's `model_profile`. Called once, before
+   * any cell. A clamped outcome is refused -- the cells would run the
+   * scaffold's defaults while the report named the declared surface -- and
+   * undefined means the surface grants nothing beyond the scaffold.
+   *
+   * The profile matters: review found trust settled on the default profile
+   * while the spec's profile granted `write`, `bash_allow = ['.*']` and an
+   * empty write_allow, so the cells ran grants nobody had trusted.
    */
-  trust?: TrustOutcome;
+  settleTrust?: (config: GnomonConfig) => TrustOutcome | undefined;
   /** Defaults to the process. */
   signals?: TrialSignals;
   /** Progress, one line at a time. */
@@ -459,12 +492,19 @@ export async function runTrial(
   const content = readFileSync(proposal);
   const role = spec.role ?? resolveRouting(config).default;
 
-  // A clamped surface is not the surface the report would name.
-  if (opts.trust?.decision === "clamped") {
+  // Trust, settled on what the cells will actually run. A clamped surface is
+  // not the surface the report would name.
+  const cellConfig = spec.model_profile ? loadConfig(root, spec.model_profile) : config;
+  if (spec.model_profile && cellConfig.profile?.problem) {
+    throw new TrialAbort(`${spec.path} names model_profile "${spec.model_profile}": ${cellConfig.profile.problem}.`);
+  }
+  const trust = opts.settleTrust?.(cellConfig);
+  if (trust?.decision === "clamped") {
     throw new TrialAbort(
-      `This surface grants ${opts.trust.grants.join(", ")} beyond gnomon's defaults and this machine ` +
-        `has not trusted it, so every cell would run clamped while the report named the declared ` +
-        `surface. Trust it first (\`gnomon trust grant\`, or --trust).`
+      `This surface${spec.model_profile ? ` under profile "${spec.model_profile}"` : ""} grants ` +
+        `${trust.grants.join(", ")} beyond gnomon's defaults and this machine has not trusted it, so ` +
+        `every cell would run clamped while the report named the declared surface. Trust it first ` +
+        `(\`gnomon trust grant\`${spec.model_profile ? ` --profile ${spec.model_profile}` : ""}, or --trust).`
     );
   }
 
@@ -473,7 +513,7 @@ export async function runTrial(
   // `max_requests` is enforced; `max_cost_usd` alone is not a cap, because
   // gnomon reads no prices. The default profile is local, so the common case
   // never asks.
-  const routed = routeRole(spec.model_profile ? loadConfig(root, spec.model_profile) : config, role);
+  const routed = routeRole(cellConfig, role);
   const billed = [routed.target, routed.fallback]
     .filter((t): t is NonNullable<typeof t> => Boolean(t))
     .filter((t) => !isLocalEndpoint(t.url));
@@ -653,7 +693,7 @@ export async function runTrial(
     }
 
     const report = summarise(spec, opts.skill, content, role, baseHash, skillHash, differ, cells, planned, pair, requestsUsed, status, pinned);
-    return { report: { ...report, trust: opts.trust?.decision ?? null, leftovers }, cells };
+    return { report: { ...report, trust: trust?.decision ?? null, leftovers }, cells };
   } finally {
     for (const sb of [...live]) done(sb);
     signals.off("SIGINT", onInt);
@@ -729,13 +769,15 @@ function summarise(
     verdict = false;
     reasons.push(`the skill arm solved ${basePass - skillPass} fewer pair(s); max_pass_drop = ${th.max_pass_drop}`);
   } else {
-    const passOk = gain >= th.min_pass_gain;
+    // A metric decides only when its threshold is above 0 (boundThresholds).
+    const passOk = th.min_pass_gain > 0 && gain >= th.min_pass_gain;
     // A token gain counts only if most pairs agree with it. The totals alone
     // let one outlier decide: in review, the skill used MORE tokens in 9 of
     // 10 pairs and one pair's 10,000-token base run made the total 10% lower
     // and the two-sided sign test "significant". Direction first, then p.
     const tokOk =
       tokenGain !== null &&
+      th.min_output_token_gain > 0 &&
       tokenGain >= th.min_output_token_gain &&
       tokenSign.skill_lower > tokenSign.skill_higher;
     const passSig = passOk && mcnemar < th.alpha;
@@ -802,6 +844,32 @@ function summarise(
     meets_thresholds: verdict,
     reasons,
   };
+}
+
+/** The specs a surface declares: `.gnomon/trials/*.toml`, by name, sorted. */
+export function listTrialSpecs(config: GnomonConfig): string[] {
+  const dir = join(config.gnomonDir, TRIALS_DIR);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".toml"))
+    .map((f) => f.slice(0, -".toml".length))
+    .sort();
+}
+
+/**
+ * The verdict a spec gives a fixed set of cells: the spec's thresholds, and
+ * nothing else, deciding. Pure, no model, no git.
+ *
+ * Exported for the surface-fidelity suite, which counts a trial spec as
+ * behaviour because it changes what `require_trial` accepts: changing a
+ * threshold must flip a verdict on the same cells, and the hash must move with
+ * it.
+ */
+export function verdictOf(spec: TrialSpec, cells: TrialCell[]): TrialVerdict {
+  const pairs = new Set(cells.map((c) => c.pair)).size;
+  const status: TrialStatus = "complete";
+  const r = summarise(spec, "", Buffer.alloc(0), "", "", "", [], cells, pairs, pairs, 0, status, null);
+  return r.meets_thresholds;
 }
 
 /** The trial's exit code (docs/CONTRACTS.md): 0 meets, 2 does not, 10 no answer. */

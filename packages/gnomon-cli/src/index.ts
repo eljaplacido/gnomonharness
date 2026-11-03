@@ -1532,18 +1532,20 @@ async function cmdSkill(args: CliArgs): Promise<void> {
     const yesSpend = args.flags["yes-spend"] !== undefined || args.positional.includes("--yes-spend");
     let outcome: Awaited<ReturnType<typeof runTrial>>;
     try {
-      // Trust is settled ONCE, on this checkout. Trust is keyed by a
-      // project's real path, so settling it per cell found every temporary
-      // clone untrusted and ran it clamped to the defaults, while the report
-      // named the declared surface. A clamped checkout is refused by the trial
-      // instead; a trusted one runs its cells as declared (their surface is
+      // Trust is settled ONCE, on this checkout under the spec's profile --
+      // the configuration the cells actually run (runTrial calls this).
+      // Trust is keyed by a project's real path, so settling it per cell
+      // found every temporary clone untrusted and ran it clamped, while the
+      // report named the declared surface; settling it on the default profile
+      // missed grants the spec's profile adds. A clamped outcome is refused by
+      // the trial; a trusted one runs its cells as declared (their surface is
       // this checkout's, which the trial checks, plus the skill).
-      const settled = settleTrustHeadless(config, trustOptions(args));
-      outcome = await runTrial(settled.config, {
+      let trust: TrustOutcome | undefined;
+      outcome = await runTrial(config, {
         skill: id,
         spec: specName,
         yesSpend,
-        trust: settled.outcome,
+        settleTrust: (c) => (trust = settleTrustHeadless(c, trustOptions(args)).outcome),
         // Each cell is a `gnomon task` in its own clone, with the approval
         // rule of `gnomon task`: --yes approves gated calls in the clone;
         // without it they are refused.
@@ -1551,7 +1553,7 @@ async function cmdSkill(args: CliArgs): Promise<void> {
           runTask(loadConfig(wt, o.profile), prompt, {
             role: o.role,
             yes: args.yes,
-            trust: settled.outcome,
+            trust,
           }),
         log: args.json ? undefined : (line) => console.error(line),
       });
@@ -1573,6 +1575,10 @@ async function cmdSkill(args: CliArgs): Promise<void> {
       console.log(`  cells      ${report.cells.result} result, ${report.cells.refusal} refusal, ${report.cells.apparatus_failure} apparatus_failure`);
       console.log(`  meets_thresholds: ${String(report.meets_thresholds)} (${report.status})`);
       for (const r of report.reasons) console.log(`    ${r}`);
+      if (report.leftovers.length > 0) {
+        console.log(`  leftovers  ${report.leftovers.length} sandbox(es) could not be removed:`);
+        for (const l of report.leftovers) console.log(`    ${l}`);
+      }
       console.log(`Report: ${out.report_path}`);
       if (out.record) console.log(`Recorded in ${out.trail} (seq ${out.record.seq}, ${out.record.hash?.slice(0, 12)})`);
       console.log("Nothing was accepted. `gnomon skill accept` remains a person's decision.");

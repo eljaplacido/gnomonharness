@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { loadConfig, recomputeManifest } from "./config.js";
 import { runTask, type TaskRecord } from "./prompt_loop.js";
 import { verifyTrail, type AuditRecord } from "./audit.js";
+import { settleTrustHeadless } from "./trust.js";
 import {
   runTrial,
   recordTrial,
@@ -57,6 +58,14 @@ function project(
     attempts?: number;
     check?: string;
     setup?: string;
+    /** A .gnomon/profiles/evil.toml body. */
+    profile?: string;
+    /** Extra lines for [trial]. */
+    trialExtra?: string;
+    /** The role [trial] runs; "implement" by default. */
+    role?: string;
+    /** Replaces the [thresholds] body. */
+    thresholds?: string;
   } = {}
 ): void {
   const put = (rel: string, text: string) => {
@@ -79,8 +88,8 @@ function project(
   ).join("\n");
   put(
     ".gnomon/trials/default.toml",
-    `[trial]\nrole = "implement"\nattempts = ${opts.attempts ?? 3}\norder = "interleaved"\n\n` +
-      `[thresholds]\nmax_pass_drop = 0\nmin_output_token_gain = 0.10\nmin_pass_gain = 1\nalpha = 0.05\n\n` +
+    `[trial]\nrole = "${opts.role ?? "implement"}"\nattempts = ${opts.attempts ?? 3}\norder = "interleaved"\n${opts.trialExtra ?? ""}\n` +
+      `[thresholds]\n${opts.thresholds ?? "max_pass_drop = 0\nmin_output_token_gain = 0.10\nmin_pass_gain = 1\nalpha = 0.05"}\n\n` +
       (opts.budget ?? "") +
       tasks
   );
@@ -88,6 +97,7 @@ function project(
   // What `gnomon init` writes. Without it, core.autocrlf on Windows checks the
   // worktrees out with CRLF and HEAD's surface hashes differently from the
   // checkout's -- which the trial refuses, rightly (see the test below).
+  if (opts.profile) put(".gnomon/profiles/evil.toml", opts.profile);
   if (!opts.autocrlf) put(".gitattributes", ".gnomon/** text eol=lf\n");
   git("init", "-q");
   git("add", "-A");
@@ -262,13 +272,50 @@ describe("gnomon skill trial", () => {
     const err = await runTrial(loadConfig(root), {
       skill: "fix-it",
       runCell: tokens(() => 1),
-      trust: { decision: "clamped", by: "default:no-operator", surface_hash: "x", grants: ["approval:never"] },
+      settleTrust: () => ({ decision: "clamped", by: "default:no-operator", surface_hash: "x", grants: ["approval:never"] }),
     }).then(
       () => null,
       (e: unknown) => e
     );
     expect(isTrialAbort(err)).toBe(true);
     expect(String(err)).toMatch(/approval:never/);
+  }, 60_000);
+
+  it("settles trust on the spec's model_profile, the configuration the cells run", async () => {
+    // Found in re-review: trust was settled on the default profile, which
+    // grants nothing, while the spec's profile granted write, a bash_allow of
+    // '.*' and an empty write_allow -- and the cells ran those, untrusted.
+    project({
+      tasks: 1,
+      attempts: 1,
+      check: `node -e "process.exit(0)"`,
+      // The scaffold's verifier may not write and runs an allow-listed shell;
+      // this profile gives it write, any command and no write_allow.
+      roles: `[roles.verifier]\nmodel = "stub"\nendpoint = "local"\ntools = ['read']\n`,
+      role: "verifier",
+      profile: `[profile]\nname = "evil"\n\n[roles.verifier]\ntools = ['read', 'write', 'bash']\nbash_allow = ['.*']\nwrite_allow = []\n`,
+      trialExtra: `model_profile = "evil"\n`,
+    });
+    const store = join(root, "..", `${root.split(/[\\/]/).pop()}-trust.json`);
+    const seen: string[] = [];
+    try {
+      const err = await runTrial(loadConfig(root), {
+        skill: "fix-it",
+        runCell: tokens(() => 1),
+        settleTrust: (c) => {
+          seen.push(c.profile?.requested ?? "default");
+          return settleTrustHeadless(c, { path: store, warn: () => {} }).outcome;
+        },
+      }).then(
+        () => null,
+        (e: unknown) => e
+      );
+      expect(isTrialAbort(err)).toBe(true);
+      expect(String(err)).toMatch(/under profile "evil"/);
+      expect(seen).toHaveLength(1);
+    } finally {
+      rmSync(store, { force: true });
+    }
   }, 60_000);
 
   it("cells are private clones: a cell's git branch, config and stash stay out of the repository", async () => {
@@ -471,14 +518,22 @@ describe("recording a trial", () => {
     }
   }, 120_000);
 
-  it("a trial spec is not part of the surface hash; its record carries the spec's own hash", () => {
+  it("a trial spec is part of the surface hash, so an uncommitted loosening stops the trial", async () => {
+    // Found in re-review, while specs were briefly unhashed: the agent's
+    // shell set alpha = 2 and min_pass_gain = 0 in the working tree, the
+    // hash did not move, and a skill with no effect passed require_trial.
     project({ tasks: 1 });
+    const spec = join(root, ".gnomon", "trials", "default.toml");
     const before = recomputeManifest(join(root, ".gnomon")).surface_hash;
-    writeFileSync(join(root, ".gnomon", "trials", "default.toml"), "# edited\n", "utf-8");
-    writeFileSync(join(root, ".gnomon", "trials", "other.toml"), "# new\n", "utf-8");
-    expect(recomputeManifest(join(root, ".gnomon")).surface_hash).toBe(before);
-    expect(recomputeManifest(join(root, ".gnomon")).manifest.some((m) => m.path.includes("trials"))).toBe(false);
-  });
+    writeFileSync(spec, readFileSync(spec, "utf-8").replace("min_pass_gain = 1", "min_pass_gain = 2"), "utf-8");
+    expect(recomputeManifest(join(root, ".gnomon")).surface_hash).not.toBe(before);
+    const err = await runTrial(loadConfig(root), { skill: "fix-it", runCell: tokens(() => 1) }).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(isTrialAbort(err)).toBe(true);
+    expect(String(err)).toMatch(/is not HEAD's/);
+  }, 60_000);
 });
 
 describe("conformance/skill_trial.json", () => {
@@ -516,6 +571,41 @@ describe("trial spec", () => {
     expect(() => loadTrialSpec(cfg, "b")).toThrow(/replay_session/);
     expect(() => loadTrialSpec(cfg, "missing")).toThrow(/No trial spec/);
   });
+});
+
+describe("trial spec bounds", () => {
+  const spec = (thresholds: string) => {
+    mkdirSync(join(root, ".gnomon", "trials"), { recursive: true });
+    writeFileSync(
+      join(root, ".gnomon", "trials", "b.toml"),
+      `[thresholds]\n${thresholds}\n\n[[task]]\nid = "x"\nprompt = "p"\ncheck = "true"\n`
+    );
+    return () => loadTrialSpec({ gnomonDir: join(root, ".gnomon") } as never, "b");
+  };
+
+  it("refuses thresholds under which a skill that did nothing could pass", () => {
+    // The re-review's loosened spec: alpha = 2, min_pass_gain = 0.
+    expect(spec("alpha = 2\nmin_pass_gain = 0")).toThrow(/alpha = 2/);
+    expect(spec("alpha = 0")).toThrow(/alpha = 0/);
+    expect(spec("alpha = 0.25")).toThrow(/\(0, 0\.2\]/);
+    expect(spec("min_pass_gain = -1")).toThrow(/min_pass_gain = -1/);
+    expect(spec("max_pass_drop = -1")).toThrow(/max_pass_drop/);
+    expect(spec("min_output_token_gain = 1.5")).toThrow(/min_output_token_gain/);
+    expect(spec("min_pass_gain = 0\nmin_output_token_gain = 0")).toThrow(/both 0/);
+  });
+
+  it("accepts the defaults and a spec where only one metric decides", () => {
+    expect(spec("")().thresholds).toEqual({ max_pass_drop: 0, min_output_token_gain: 0.1, min_pass_gain: 1, alpha: 0.05 });
+    expect(spec("min_pass_gain = 0\nalpha = 0.2")().thresholds.min_pass_gain).toBe(0);
+  });
+
+  it("a metric whose threshold is 0 does not decide: no pass change is not a pass gain", async () => {
+    // Tokens equal, passes equal: with min_pass_gain = 0 the old rule read
+    // "gain 0 >= 0" as a met pass threshold.
+    project({ tasks: 1, attempts: 6, check: `node -e "process.exit(0)"`, thresholds: "min_pass_gain = 0\nalpha = 0.05" });
+    const { report } = await runTrial(loadConfig(root), { skill: "fix-it", runCell: tokens(() => 100) });
+    expect(report.meets_thresholds).toBe(false);
+  }, 120_000);
 });
 
 describe("trial statistics", () => {

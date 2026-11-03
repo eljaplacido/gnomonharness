@@ -724,12 +724,23 @@ optional `[budget]` (`max_requests`, `max_cost_usd`), and one `[[task]]` per
 task with `id`, `prompt`, `check`, and optionally `setup`. `replay_session`
 tasks are refused for now.
 
-`trials/` is **not hashed**, like `skills/proposed/` and `extensions/`. A spec
-defines what counts as a better skill, not what the agent does, so hashing it
-moved the surface hash with no change in behaviour. Each report and
-`skill_trial` record carries the spec's own `sha256` instead. The design
-proposed hashing specs; leaving them out was the maintainer session's choice,
-recorded here so the owner can reverse it.
+`trials/` **is hashed**, like the rest of `.gnomon/`. A spec doesn't change
+what the agent does, but it does decide what `require_trial` accepts. The
+surface-fidelity suite counts it as behaviour, and its 14th path is a trial
+spec. Each report and `skill_trial` record also carries the spec's `sha256`.
+
+For a short while the maintainer session left `trials/` out of the hash. It
+reversed that choice after review: the agent's shell could then loosen a spec
+(`alpha = 2`, `min_pass_gain = 0`) without moving the hash, and a skill with no
+effect passed `require_trial`. With specs hashed, an uncommitted edit makes this
+checkout's surface differ from HEAD's, and the trial refuses to start.
+
+**Bounds**, refused when the spec is loaded (exit 10):
+- `alpha` must be in (0, 0.2];
+- `max_pass_drop` and `min_pass_gain` must be at least 0;
+- `min_output_token_gain` must be in [0, 1];
+- at least one of the two gains must be above 0. A metric whose threshold is 0
+  never decides, since no change at all would meet it.
 
 **Arms.** Each cell runs in its own private clone (`git clone --shared`, with
 no remote) at the commit HEAD named when the trial began. A clone, not a
@@ -742,10 +753,12 @@ cell. A clone that cannot be removed is listed in `leftovers` and never
 aborts the trial. On SIGINT or SIGTERM, every clone still on disk is removed
 before the signal takes effect.
 
-**Trust** is settled once, on this checkout. If it was clamped, the trial
-refuses to start: the cells would run the scaffold's defaults while the report
-named the declared surface. The report's `trust` is the decision, or `null`
-when the surface grants nothing beyond the scaffold.
+**Trust** is settled once, on this checkout under the spec's `model_profile`,
+the configuration the cells actually run. If it was clamped, the trial refuses
+to start: the cells would run the scaffold's defaults while the report named
+the declared surface. The report's `trust` is the decision, or `null` when the
+surface grants nothing beyond the scaffold. A `model_profile` that doesn't
+exist is refused.
 
 **Validity.** A cell is scored only if its run made at least one metered model
 request (`volatile.requests` on the task record) and its check ran. A run
@@ -757,8 +770,9 @@ its pair is excluded. Pass is the check's exit 0.
 per arm. Output tokens, requests and wall time use an exact sign test. `mde`
 gives the fewest discordant pairs, all one way, that can reach `alpha`. A
 token gain counts only when three things hold: the totals fall by
-`min_output_token_gain`, more pairs fall than rise (`skill_lower >
-skill_higher`), and the sign test has p < `alpha`. Without the middle
+`min_output_token_gain` (which must be above 0), more pairs fall than rise
+(`skill_lower > skill_higher`), and the sign test has p < `alpha`. A pass gain
+counts only when `min_pass_gain` is above 0. Without the middle
 condition, a single outlier pair could carry the gain.
 
 | `meets_thresholds` | When |
@@ -774,7 +788,7 @@ result, 2 a refusal (the skill is declined), 10 an apparatus failure.
 |---|---|
 | 0 | `meets_thresholds: true` |
 | 2 | `meets_thresholds: false` |
-| 10 | `"undetermined"`, or the trial could not start. That covers: no spec; no proposal; arms not differing in exactly the skill; this checkout's surface hash not HEAD's; trust clamped; or an endpoint (primary or fallback) that is not local, with no `[budget] max_requests` and no `--yes-spend` |
+| 10 | `"undetermined"`, or the trial could not start. That covers: no spec, or one out of bounds; no proposal; arms not differing in exactly the skill; this checkout's surface hash not HEAD's; trust clamped under the spec's profile; or an endpoint (primary or fallback) that is not local, with no `[budget] max_requests` and no `--yes-spend` |
 
 `status` is one of `complete`, `budget_exhausted` or `apparatus_failure`. The
 budget is checked before every cell, so a base cell that spent it gets no
