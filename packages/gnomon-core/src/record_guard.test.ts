@@ -15,7 +15,7 @@ import { RecordGuard, snapshotRecords, foreignChanges, recordDirsOf, SNAPSHOT_LI
 import { unresolvedTamper, resolveTamper, writeTamperRecord, writeCheckpoint, compareWithCheckpoint } from "./record_tamper.js";
 import { loadConfig } from "./config.js";
 import { runTask } from "./prompt_loop.js";
-import { acceptSkill, proposeSkill, RecordTamperRefusal } from "./skills.js";
+import { acceptSkill, proposeSkill, RecordTamperRefusal, SkillRefusal } from "./skills.js";
 import { bashPrecheck, type ToolContext } from "./tools.js";
 
 let root: string;
@@ -170,6 +170,8 @@ describe("a tool call that changes gnomon's records", () => {
       err = e;
     }
     expect(err).toBeInstanceOf(RecordTamperRefusal);
+    // One base class for every refusal, which the CLI maps to exit 3.
+    expect(err).toBeInstanceOf(SkillRefusal);
     const ref = { trail: t.trail.slice(root.length + 1).replace(/\\/g, "/"), seq: t.record.seq };
     process.env.GNOMON_AGENT_SESSION = "s-agent";
     expect(() => resolveTamper(config, ref, "looked, it was me", { interactive: true })).toThrow(/agent session/);
