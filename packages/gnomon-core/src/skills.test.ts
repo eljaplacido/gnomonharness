@@ -20,6 +20,7 @@ import {
   rejectSkill,
   skillId,
   Skill,
+  AgentSessionRefusal,
 } from "./skills.js";
 import { recomputeManifest } from "./config.js";
 import { verifyTrail, type AuditRecord } from "./audit.js";
@@ -35,6 +36,19 @@ beforeEach(() => {
   mkdirSync(join(root, ".gnomon", "skills"), { recursive: true });
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+// These tests are a person's decisions. Run by an agent's bash tool, the
+// harness's marker would be in the environment and every one refused, so the
+// suite clears it and puts it back.
+let agentMarker: string | undefined;
+beforeEach(() => {
+  agentMarker = process.env.GNOMON_AGENT_SESSION;
+  delete process.env.GNOMON_AGENT_SESSION;
+});
+afterEach(() => {
+  if (agentMarker === undefined) delete process.env.GNOMON_AGENT_SESSION;
+  else process.env.GNOMON_AGENT_SESSION = agentMarker;
+});
 
 const write = (dir: string, name: string, body: string) => {
   mkdirSync(join(root, ".gnomon", dir), { recursive: true });
@@ -230,7 +244,9 @@ describe("accept and reject leave a record", () => {
       surface_hash_before: before,
       surface_hash_after: after,
       evidence: "none",
-      by: "human",
+      // The CLI cannot see who typed the command, so it does not claim a person.
+      by: "cli",
+      agent_session_marker: "absent",
       interactive: false,
     });
     expect(rec.surface_hash_before).not.toBe(rec.surface_hash_after);
@@ -317,6 +333,28 @@ describe("accept and reject leave a record", () => {
     const [t] = trails();
     expect(t.records[1].surface_hash_after).toBe(after);
     expect(t.records[2]).toMatchObject({ applied: true, surface_hash_after: after });
+  });
+
+  it("refuses to accept or reject inside an agent session, and nothing moves or is recorded", () => {
+    // Found in re-review: `gnomon skill accept` run through the agent's own
+    // bash was recorded `by: "human"`. The harness marks every tool
+    // subprocess with GNOMON_AGENT_SESSION; a decision there is refused.
+    proposeSkill(cfg(), { name: "a", body: "a" });
+    proposeSkill(cfg(), { name: "b", body: "b" });
+    process.env.GNOMON_AGENT_SESSION = "s-test";
+    let err: unknown;
+    try {
+      acceptSkill(cfg(), "a");
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(AgentSessionRefusal);
+    expect(String(err)).toMatch(/agent session.*s-test/);
+    expect(() => rejectSkill(cfg(), "b")).toThrow(AgentSessionRefusal);
+    delete process.env.GNOMON_AGENT_SESSION;
+    expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["a", "b"]);
+    expect(loadSkills(cfg())).toEqual([]);
+    expect(trails()).toHaveLength(0);
   });
 
   it("refuses an id that is not a skill id: reject ../keep cannot delete an active skill", () => {

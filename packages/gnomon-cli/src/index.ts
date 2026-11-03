@@ -28,6 +28,7 @@ import {
   loadProposedSkills,
   acceptSkill,
   rejectSkill,
+  AgentSessionRefusal,
   mineCandidates,
   writeCandidates,
   loadCandidates,
@@ -1638,7 +1639,9 @@ async function cmdSkill(args: CliArgs): Promise<void> {
       }
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
-      process.exit(1);
+      // An agent session saying no is a refusal (3, refused_by_gate,
+      // docs/CONTRACTS.md §1), not the `failed` result 1 means.
+      process.exit(err instanceof AgentSessionRefusal ? 3 : 1);
     }
     return;
   }

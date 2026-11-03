@@ -816,9 +816,29 @@ export function diffStat(lines: string[]): { added: number; removed: number } {
 // Execution
 // ---------------------------------------------------------------------------
 
+/**
+ * Set in the environment of every subprocess a tool starts: the bash tool's
+ * shell and every MCP server. Its value names the session.
+ *
+ * It marks "the agent is running this". `gnomon skill accept` and `reject`
+ * refuse when they see it, because acceptance is a person's act -- before
+ * this, the agent's own bash could run `gnomon skill accept` and the record
+ * said `by: "human"`. A process can drop the variable (`env -u`), so this is
+ * a refusal with a reason, not a proof; the records say `by: "cli"`, never
+ * claiming a person they cannot see.
+ */
+export const AGENT_SESSION_ENV = "GNOMON_AGENT_SESSION";
+
+/** The environment for a tool's subprocess: the parent's, plus the marker. */
+export function agentEnv(session: string | undefined, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...base, [AGENT_SESSION_ENV]: session || `pid-${process.pid}` };
+}
+
 export interface ToolContext {
   /** Needed by `skill`, which writes inside .gnomon/ */
   config?: GnomonConfig;
+  /** The session the tool runs in; exported to subprocesses as GNOMON_AGENT_SESSION. */
+  agentSession?: string;
   /**
    * Shell commands the current role may run. Empty/undefined means any.
    * See RoleDef.bash_allow: without this, granting `bash` grants writing.
@@ -1446,7 +1466,7 @@ export function shq(value: string): string {
 
 export function sandboxCommand(
   command: string,
-  ctx: { root: string; exec?: { mode: "off" | "docker"; image: string; network: boolean } },
+  ctx: { root: string; exec?: { mode: "off" | "docker"; image: string; network: boolean }; agentSession?: string },
   name: string
 ): string {
   const ex = ctx.exec;
@@ -1486,6 +1506,10 @@ export function sandboxCommand(
     // its neighbours not.
     `-v ${shq(ctx.root)}:${shq(ctx.root)}`,
     `-w ${shq(ctx.root)}`,
+    // The agent-session marker, into the container too: a `gnomon skill
+    // accept` installed in the image is the agent's as much as one on the
+    // host. `-e NAME=value`, the value quoted for the host shell.
+    `-e ${AGENT_SESSION_ENV}=${shq(ctx.agentSession || `pid-${process.pid}`)}`,
     ex.image,
     `sh -c ${inner}`,
   ]
@@ -2117,6 +2141,8 @@ async function bashTool(
   return new Promise<ToolOutcome>((done) => {
     const proc = spawn(shellBin, ["-c", spawned], {
       cwd: ctx.root,
+      // The marker that says the agent is running this (AGENT_SESSION_ENV).
+      env: agentEnv(ctx.agentSession),
       // stdin closed, stdout/stderr piped. An inherited stdin pipe that nobody
       // ever writes to makes any command that reads stdin block until the tool
       // timeout kills it -- `cat` with no argument, an npm prompt, a git

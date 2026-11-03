@@ -676,9 +676,19 @@ will produce, computed before it.
 dashes. Anything else, such as `../keep`, is refused before it becomes a
 path.
 
+**Not from inside an agent.** The harness sets `GNOMON_AGENT_SESSION=<session>`
+in the environment of every tool subprocess: the bash tool's shell (inside
+the docker sandbox too, via `-e`) and every MCP server. `skill accept` and `skill reject` refuse when it is present, with
+exit **3** (`refused_by_gate`, §1), and write nothing.
+
+A process can remove the variable (`env -u`), so this check is a refusal with
+a reason, not a proof. For the same reason a record says `by: "cli"`, not
+`"human"`: the command cannot see who typed it. `agent_session_marker` records
+what the command saw, and on a written record it is always `"absent"`.
+
 Keys, both kinds: `skill` (the id), `name`, `path` (repo-relative, POSIX),
 `content_sha256` (sha256 of the file's bytes), `surface_hash_before`,
-`surface_hash_after`, `by` (`human` from the CLI), `user`, `host`,
+`surface_hash_after`, `by` (`cli` from the CLI), `agent_session_marker`, `user`, `host`,
 `interactive`. `skill_accept` adds `evidence` (`"none"`: accepted on reading
 alone). `skill_reject` adds `reason` when `--reason` was given.
 

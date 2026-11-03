@@ -1156,7 +1156,10 @@ gnomon skill reject cargo-suite --reason "duplicates verifying-changes"
 
 Each decision is recorded: a `skill_accept` or `skill_reject` audit record
 holding the skill's content hash, the surface hash before and after, and who
-decided, in a sealed trail of its own (docs/CONTRACTS.md §11). It is written
+decided, in a sealed trail of its own (docs/CONTRACTS.md §11). Both refuse
+to run inside an agent session: the harness marks every tool subprocess with
+`GNOMON_AGENT_SESSION`, so the agent's own bash cannot accept a skill. The
+record says `by: "cli"` rather than claiming a person it cannot see. It is written
 even when `[audit]` is off, because an accept is the one act that changes what
 the agent is on purpose.
 
