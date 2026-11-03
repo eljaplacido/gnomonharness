@@ -16,8 +16,8 @@
  * unresolved event.
  */
 
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, resolve, relative, isAbsolute, sep } from "node:path";
+import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { join, resolve, relative, isAbsolute, sep, basename } from "node:path";
 import { randomBytes, createHash } from "node:crypto";
 import { hostname, userInfo } from "node:os";
 import { GnomonConfig, recomputeManifest } from "./config.js";
@@ -28,6 +28,11 @@ import {
   snapshotRecords,
   classifyChanges,
   noteOwnWrite,
+  checkpointPlace,
+  checkpointStem,
+  newestTrustedCheckpoint,
+  CHECKPOINT_DIR,
+  type CheckpointPlace,
   type RecordChange,
   type TamperFinding,
 } from "./record_guard.js";
@@ -224,8 +229,29 @@ export function resolveTamper(
 // Checkpoints: the records as a session left them
 // ---------------------------------------------------------------------------
 
-/** Where checkpoints live, inside the audit directory. */
-export const CHECKPOINT_DIR = "checkpoints";
+export { CHECKPOINT_DIR };
+
+let checkpointSeq = 0;
+
+/** Every checkpoint file there is -- trails, maps and the trails' heads -- with its stem. */
+function checkpointFiles(place: CheckpointPlace): Array<{ path: string; stem: string }> {
+  const out = new Map<string, string>();
+  for (const d of [place.dir, place.attest?.dir]) {
+    if (!d) continue;
+    let names: string[];
+    try {
+      names = readdirSync(d);
+    } catch {
+      continue;
+    }
+    for (const n of names) {
+      const p = join(d, n);
+      const stem = checkpointStem(place, p);
+      if (stem) out.set(resolve(p), stem);
+    }
+  }
+  return [...out].map(([path, stem]) => ({ path, stem }));
+}
 
 /**
  * Write the state of the record directories, for the next session and for
@@ -238,19 +264,35 @@ export const CHECKPOINT_DIR = "checkpoints";
  * and its sha256 sits in the `session_end` of a sealed `checkpoint-*.jsonl`
  * trail, which a declared signer signs. A changed or deleted record since
  * then, a `tamper-*.jsonl` included, is a tamper event.
+ *
+ * Only the newest checkpoint is kept. Every one was kept at first, each map
+ * listing every record file, the older checkpoints included: 400 sessions
+ * left 1,200 files and 35 MB, and each session cost 210 ms more than before
+ * them. Nothing reads an older checkpoint while a newer trusted one exists,
+ * and deleting them all was always possible to whoever could delete the
+ * newest (CONTRACTS.md §14, "A rollback").
  */
 export function writeCheckpoint(config: GnomonConfig): { trail: string; map: string } | null {
   const root = resolve(config.gnomonDir, "..");
   const settings = { ...resolveAudit(config), enabled: true, chain: true };
+  const place = checkpointPlace(config);
+  // Newer sorts later, which pruning and the newest-first read rely on; the
+  // counter keeps that true for two checkpoints one process writes in the
+  // same millisecond.
+  const seq = String(checkpointSeq++).padStart(6, "0");
+  const id = `checkpoint-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}-${seq}-${randomBytes(3).toString("hex")}`;
   const snap = snapshotRecords(recordDirsOf(config));
   const map: Record<string, string> = {};
   for (const [p, st] of [...snap.files.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    // Not the checkpoints themselves. Each is checked by its own seal, digest
+    // and signature before it is used, and the older ones are removed below:
+    // a map that listed them would make that removal a tamper event.
+    if (checkpointStem(place, p)) continue;
     map[shown(root, p)] = st.link === undefined ? st.key : `${st.key}->${st.link}`;
   }
-  const id = `checkpoint-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}-${randomBytes(3).toString("hex")}`;
   // In a subdirectory of their own, so a session's trail stays the only
   // .jsonl at the top of the audit directory for anything that lists it.
-  const dir = join(settings.dir, CHECKPOINT_DIR);
+  const dir = place.dir;
   mkdirSync(dir, { recursive: true });
   const mapFile = join(dir, `${id}.files.json`);
   const body = `${JSON.stringify(map)}\n`;
@@ -269,54 +311,31 @@ export function writeCheckpoint(config: GnomonConfig): { trail: string; map: str
     records_map: `${id}.files.json`,
     truncated: snap.truncated,
   });
-  return trail.path ? { trail: trail.path, map: mapFile } : null;
+  if (!trail.path) return null;
+  // Then, and only once this one is sealed, the older ones go -- so a write
+  // that fails leaves the previous checkpoint in place. Older by name, never
+  // "all but mine": two sessions ending together must not remove each
+  // other's. A live session in another process does not count the removal
+  // as tampering while this newer checkpoint is there (classifyChanges).
+  for (const f of checkpointFiles(place)) {
+    if (f.stem >= id) continue;
+    try {
+      rmSync(f.path, { force: true });
+    } catch {
+      /* left for the next session end to remove; the next comparison shows it as an added trail */
+    }
+  }
+  return { trail: trail.path, map: mapFile };
 }
 
-/**
- * The newest checkpoint that can be trusted: sealed, chain verified, its map
- * matching the digest in its session_end, and -- when the surface declares a
- * signer -- covered by signed heads. A newer one that fails any of those is
- * skipped, so a forged checkpoint cannot replace a real one.
- */
+/** The newest trusted checkpoint (record_guard.ts newestTrustedCheckpoint), its map, and its own files. */
 function latestCheckpoint(config: GnomonConfig): { trail: string; map: Record<string, string>; own: string[] } | null {
-  const dir = join(resolveAudit(config).dir, CHECKPOINT_DIR);
-  let names: string[];
-  try {
-    names = readdirSync(dir);
-  } catch {
-    return null;
-  }
-  const attest = resolveAudit(config).attest;
-  const signer = Boolean(attest?.enabled && (attest.verify || attest.public_key));
-  for (const f of names.filter((n) => /^checkpoint-.*\.jsonl$/.test(n)).sort().reverse()) {
-    const file = join(dir, f);
-    const v = verifyTrail(file, signer && attest ? { attest } : {});
-    if (!v.ok || !v.sealed) continue;
-    if (signer && (v.attestation?.status !== "signed" || v.attestation.unattested > 0)) continue;
-    let end: AuditRecord | undefined;
-    try {
-      end = readFileSync(file, "utf-8")
-        .trim()
-        .split("\n")
-        .map((l) => JSON.parse(l) as AuditRecord)
-        .find((r) => r.kind === "session_end");
-    } catch {
-      continue;
-    }
-    const mapName = typeof end?.records_map === "string" ? end.records_map : "";
-    if (!mapName || mapName.includes("/") || mapName.includes("\\")) continue;
-    let body: string;
-    try {
-      body = readFileSync(join(dir, mapName), "utf-8");
-    } catch {
-      continue;
-    }
-    if (createHash("sha256").update(body).digest("hex") !== end!.records_digest) continue;
-    const own = [file, join(dir, mapName)];
-    if (attest) own.push(join(attest.dir, f));
-    return { trail: file, map: JSON.parse(body) as Record<string, string>, own };
-  }
-  return null;
+  const place = checkpointPlace(config);
+  const cp = newestTrustedCheckpoint(place);
+  if (!cp) return null;
+  const own = [cp.trail, cp.mapFile];
+  if (place.attest) own.push(join(place.attest.dir, basename(cp.trail)));
+  return { trail: cp.trail, map: JSON.parse(cp.body) as Record<string, string>, own };
 }
 
 /**
@@ -346,6 +365,6 @@ export function compareWithCheckpoint(
   }
   for (const rel of now.keys()) if (!(rel in cp.map)) all.push({ path: abs(rel), change: "added" });
   if (all.length === 0) return null;
-  const { changes, notices } = classifyChanges(all);
+  const { changes, notices } = classifyChanges(all, checkpointPlace(config));
   return changes.length || notices.length ? { when, changes, notices } : null;
 }

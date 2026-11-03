@@ -32,10 +32,11 @@
  */
 
 import { readdirSync, lstatSync, readFileSync, readlinkSync, existsSync, statSync, type Stats } from "node:fs";
-import { join, resolve, relative, isAbsolute, sep } from "node:path";
+import { join, resolve, relative, isAbsolute, sep, basename, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import type { GnomonConfig } from "./config.js";
-import { verifyTrail } from "./audit.js";
+import { verifyTrail, resolveAudit, type AuditRecord } from "./audit.js";
+import type { ResolvedAttest } from "./attest.js";
 
 /** The record directories of a surface: absolute, existing or not. */
 export function recordDirsOf(config: GnomonConfig): string[] {
@@ -161,8 +162,13 @@ export function snapshotRecords(dirs: string[]): RecordSnapshot {
   for (const d of dirs) if (existsSync(d)) walk(d);
   // The newest small files get a hash as well: the ones most likely to be the
   // target, read at bounded cost however large the directory grows.
+  //
+  // Not a checkpoint's map: its sha256 is in its own sealed session_end and is
+  // checked before the map is used, and it lists every record file, so it is
+  // the largest small file there -- hashing the newest few maps made one
+  // snapshot cost 8 ms instead of 2 in a repository 400 sessions old.
   stats
-    .filter(([, st]) => st.size <= SNAPSHOT_LIMITS.hashMaxBytes)
+    .filter(([p, st]) => st.size <= SNAPSHOT_LIMITS.hashMaxBytes && !isCheckpointMap(p))
     .sort((a, b) => b[1].mtimeMs - a[1].mtimeMs)
     .slice(0, SNAPSHOT_LIMITS.hashNewest)
     .forEach(([p]) => {
@@ -178,6 +184,90 @@ export function snapshotRecords(dirs: string[]): RecordSnapshot {
 export interface RecordChange {
   path: string;
   change: "added" | "modified" | "removed";
+}
+
+// ---------------------------------------------------------------------------
+// Checkpoints: their shape, which the guard has to know (record_tamper.ts
+// writes them)
+// ---------------------------------------------------------------------------
+
+/** Where checkpoints live, inside the audit directory. */
+export const CHECKPOINT_DIR = "checkpoints";
+
+/** `checkpoint-<stamp>.jsonl` (the trail, or its heads file) or `checkpoint-<stamp>.files.json` (its map). */
+const CHECKPOINT_FILE = /^(checkpoint-[^\\/]+?)\.(jsonl|files\.json)$/;
+
+function isCheckpointMap(p: string): boolean {
+  return CHECKPOINT_FILE.exec(basename(p))?.[2] === "files.json" && basename(dirname(p)) === CHECKPOINT_DIR;
+}
+
+/** Where a surface's checkpoints, and their signed heads, live. */
+export interface CheckpointPlace {
+  dir: string;
+  attest?: ResolvedAttest;
+}
+
+export function checkpointPlace(config: GnomonConfig): CheckpointPlace {
+  const a = resolveAudit(config);
+  return { dir: join(a.dir, CHECKPOINT_DIR), ...(a.attest ? { attest: a.attest } : {}) };
+}
+
+/**
+ * `checkpoint-<stamp>` when `p` is one of a checkpoint's own files -- its
+ * trail or map in the checkpoint directory, or its trail's heads file -- and
+ * null for anything else.
+ */
+export function checkpointStem(place: CheckpointPlace, p: string): string | null {
+  const m = CHECKPOINT_FILE.exec(basename(p));
+  if (!m) return null;
+  const parent = resolve(dirname(p));
+  if (parent === resolve(place.dir)) return m[1]!;
+  if (m[2] === "jsonl" && place.attest && parent === resolve(place.attest.dir)) return m[1]!;
+  return null;
+}
+
+/**
+ * The newest checkpoint that can be trusted: sealed, chain verified, its map
+ * matching the digest in its session_end, and -- when the surface declares a
+ * signer -- covered by signed heads. A newer one that fails any of those is
+ * skipped, so a forged checkpoint cannot replace a real one.
+ */
+export function newestTrustedCheckpoint(place: CheckpointPlace): { trail: string; mapFile: string; body: string } | null {
+  let names: string[];
+  try {
+    names = readdirSync(place.dir);
+  } catch {
+    return null;
+  }
+  const attest = place.attest;
+  const signer = Boolean(attest?.enabled && (attest.verify || attest.public_key));
+  for (const f of names.filter((n) => /^checkpoint-.*\.jsonl$/.test(n)).sort().reverse()) {
+    const file = join(place.dir, f);
+    const v = verifyTrail(file, signer && attest ? { attest } : {});
+    if (!v.ok || !v.sealed) continue;
+    if (signer && (v.attestation?.status !== "signed" || v.attestation.unattested > 0)) continue;
+    let end: AuditRecord | undefined;
+    try {
+      end = readFileSync(file, "utf-8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as AuditRecord)
+        .find((r) => r.kind === "session_end");
+    } catch {
+      continue;
+    }
+    const mapName = typeof end?.records_map === "string" ? end.records_map : "";
+    if (!mapName || mapName.includes("/") || mapName.includes("\\")) continue;
+    let body: string;
+    try {
+      body = readFileSync(join(place.dir, mapName), "utf-8");
+    } catch {
+      continue;
+    }
+    if (createHash("sha256").update(body).digest("hex") !== end!.records_digest) continue;
+    return { trail: file, mapFile: join(place.dir, mapName), body };
+  }
+  return null;
 }
 
 /**
@@ -246,7 +336,25 @@ export function isGnomonTrail(path: string): boolean {
  * (`heads/<name>`) and a checkpoint's map (`<name>.files.json`). Anything
  * modified or removed, and any other added file, is tampering.
  */
-export function classifyChanges(changes: RecordChange[]): { changes: RecordChange[]; notices: RecordChange[] } {
+export function classifyChanges(
+  changes: RecordChange[],
+  place?: CheckpointPlace
+): { changes: RecordChange[]; notices: RecordChange[] } {
+  // A checkpoint older than the newest trusted one is gnomon's to remove:
+  // every session end keeps only its own (record_tamper.ts writeCheckpoint).
+  // Another gnomon process doing so is neither tampering nor news -- its new
+  // checkpoint is reported as an added trail. Only when a NEWER trusted
+  // checkpoint is there: removing the newest, or the only one, is tampering.
+  if (place && changes.some((c) => c.change === "removed" && checkpointStem(place, c.path))) {
+    const newest = newestTrustedCheckpoint(place);
+    const newestStem = newest ? basename(newest.trail).replace(/\.jsonl$/, "") : null;
+    if (newestStem !== null) {
+      changes = changes.filter((c) => {
+        const stem = c.change === "removed" ? checkpointStem(place, c.path) : null;
+        return !(stem !== null && stem < newestStem);
+      });
+    }
+  }
   const trails = new Set(
     changes.filter((c) => c.change === "added" && isGnomonTrail(c.path)).map((c) => c.path)
   );
@@ -282,13 +390,16 @@ export class RecordGuard {
   /** Every snapshot's cost, for the overhead the PR states. */
   readonly costs: number[] = [];
 
-  constructor(private readonly dirs: string[]) {
+  constructor(
+    private readonly dirs: string[],
+    private readonly place?: CheckpointPlace
+  ) {
     this.baseline = snapshotRecords(dirs);
     this.costs.push(this.baseline.ms);
   }
 
   static for(config: GnomonConfig): RecordGuard {
-    return new RecordGuard(recordDirsOf(config));
+    return new RecordGuard(recordDirsOf(config), checkpointPlace(config));
   }
 
   check(when: TamperWhen): TamperFinding | null {
@@ -301,7 +412,7 @@ export class RecordGuard {
       if (this.dirs.some((d) => isUnder(d, p.path)) && !all.some((c) => c.path === p.path)) all.push(p);
     }
     this.baseline = now;
-    const { changes, notices } = classifyChanges(all);
+    const { changes, notices } = classifyChanges(all, this.place);
     return changes.length || notices.length ? { when, changes, notices } : null;
   }
 }

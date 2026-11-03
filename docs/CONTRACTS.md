@@ -944,7 +944,7 @@ therefore looks at the records themselves.
 
 Each snapshot records, per file, size, mtime, ctime and inode (via `lstat`, so
 a symlink is a file of its own). The 16 newest files up to 256 KiB are also
-hashed. gnomon's own writer notes the state of every file it appends to. Before
+hashed, checkpoint maps excepted (they carry their own digest). gnomon's own writer notes the state of every file it appends to. Before
 each append it checks that the file is still in that state, so a foreign change
 cannot be laundered by gnomon's next write.
 
@@ -956,6 +956,12 @@ declared signer signs. Two places compare the records with the newest
 checkpoint that can be trusted:
 - the first tool batch of the next session;
 - `gnomon skill accept`.
+
+Only the newest checkpoint is kept. Once a new one is sealed, gnomon removes
+the older ones (trail, map and heads file). The map does not list checkpoint
+files. A live session in another process does not count that removal as
+tampering while a newer trusted checkpoint is there. Removing the newest one is
+still tampering.
 
 A checkpoint is trusted when it is sealed, its chain verifies, its map matches
 the digest, and, when a signer is declared, it is covered by signed heads. A
@@ -1013,9 +1019,10 @@ trail verifies and it was authorised the way it says.
   Windows an ordinary process can set a file's ChangeTime**
   (`SetFileInformationByHandle`), so the limit is reachable there without
   privilege. Only the 16 newest small files are also hashed.
-- **A rollback:** deleting the newest checkpoint together with everything
-  written after it restores the previous checkpoint's state, and nothing here
-  can tell. Detecting that needs an anchor off the machine.
+- **A rollback:** deleting the checkpoint between sessions leaves nothing to
+  compare with, and nothing here can tell. Deleting the checkpoint directory
+  did that when every checkpoint was kept, too. Detecting it needs an anchor
+  off the machine.
 - **A pseudo-terminal** (`script`) satisfies the terminal check, and a library
   caller can claim one. A person-present signer is what holds against that.
 - **A hand-built chain added as a new trail** earns a notice, not a stop. It is
