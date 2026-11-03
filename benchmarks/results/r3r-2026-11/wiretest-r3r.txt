@@ -1,0 +1,143 @@
+== R3R wire test 2026-11-03T16:20:50.274Z: gnomon be4fc0d8835c443aca8b32ccd4c1caacf48cbdce (v0.4.0 tree <git archive be4fc0d8835c443aca8b32ccd4c1caacf48cbdce>/packages/gnomon-cli/gnomon.js); R1H's build d59e6c198f91d1469198b0677c008323f82d0345
+
+A. surface: R1H's edits on v0.4.0's init, R3R's assertion, and the surface diff R1H -> R3R
+  gnomon init, d59e6c19 -> v0.4.0 (no setup edits), files that differ:
+    config.toml:
+        - max_context_tokens = 65536
+        + max_context_tokens = 65536        # an [endpoints.<name>] block may declare its model's own window
+        + stream = true                     # stream replies from kind = "openai" endpoints; an endpoint may say stream = false
+        + max_tokens = 32768                # output limit per reply, thinking included; a role or endpoint may declare its own (0 = none)
+        +                               # (for a streamed reply: the wait for its first byte)
+        + # A streamed reply -- [defaults] stream = true, for kind = "openai" endpoints
+        + # that do not say stream = false -- is timed by the gap between chunks, so a long reply that is
+        + # still being written is never cut off for being long. An unstreamed one has
+        + # only request_timeout_ms, which a long generation reaches.
+        + stream_idle_timeout_ms = 300000    # silence mid-reply that counts as a stall; the request is aborted and asked again
+        + stream_total_timeout_ms = 1800000  # overall cap on one streamed reply; not retried, it would run as long again
+        + # Only the wait for a first byte is charged to the retry budget (attempts x
+        + # request_timeout_ms); a stream that is arriving is not. So the worst case for
+        + # one streamed model call is attempts x stream_total_timeout_ms of wall time,
+        + # and a harness wall shorter than that can end a run mid-call.
+    tools.toml:
+        - description = "Run a sub-turn under another role, with its own context. It gets that role's tools."
+        + description = "Run a sub-turn under another role, with its own context and that role's tools. Delegate a job once: give the complete plan and everything it needs, including the check that shows it is done. Delegate again only when its report shows a concrete failure; a report whose check passed is finished work, so do not send it back to be redone or re-checked."
+
+  arm L:
+  ok   R1H's block runs on both inits and R3R's on v0.4.0's (- / - / -)
+  ok   R3R's block refuses d59e6c19's init (Error: R3R: init did not write [defaults] stream = true and max_tokens = 32768; wrong build?)
+  ok   R3R's block writes byte-identical files to R1H's block on v0.4.0 (it only asserts)
+    d59e6c19: endpoints=true role_profile=true audit_on=true audit_edit_noop=true roles_unrouted=true profile_routes=true approval_kept=true
+  ok   d59e6c19: every R1H edit did what it did on R1H's build (endpoints appended, role_profile r1, [audit] on (already on in init: R1H's flip is a no-op on both), 14 model/endpoint lines out of roles.toml, the r1 profile routes L, policy.toml untouched: it already has [approval] gate = "on_write" and --yes answers it, as in R1H)
+    v0.4.0: endpoints=true role_profile=true audit_on=true audit_edit_noop=true roles_unrouted=true profile_routes=true approval_kept=true
+  ok   v0.4.0: every R1H edit did what it did on R1H's build (endpoints appended, role_profile r1, [audit] on (already on in init: R1H's flip is a no-op on both), 14 model/endpoint lines out of roles.toml, the r1 profile routes L, policy.toml untouched: it already has [approval] gate = "on_write" and --yes answers it, as in R1H)
+  ok   the r1 profile (the arm's routing) is byte-identical to R1H's
+    surface R1H (d59e6c19 + R1H's block) -> R3R (v0.4.0 + R3R's block), identical for every arm:
+      config.toml:
+          - max_context_tokens = 65536
+          + max_context_tokens = 65536        # an [endpoints.<name>] block may declare its model's own window
+          + stream = true                     # stream replies from kind = "openai" endpoints; an endpoint may say stream = false
+          + max_tokens = 32768                # output limit per reply, thinking included; a role or endpoint may declare its own (0 = none)
+          +                               # (for a streamed reply: the wait for its first byte)
+          + # A streamed reply -- [defaults] stream = true, for kind = "openai" endpoints
+          + # that do not say stream = false -- is timed by the gap between chunks, so a long reply that is
+          + # still being written is never cut off for being long. An unstreamed one has
+          + # only request_timeout_ms, which a long generation reaches.
+          + stream_idle_timeout_ms = 300000    # silence mid-reply that counts as a stall; the request is aborted and asked again
+          + stream_total_timeout_ms = 1800000  # overall cap on one streamed reply; not retried, it would run as long again
+          + # Only the wait for a first byte is charged to the retry budget (attempts x
+          + # request_timeout_ms); a stream that is arriving is not. So the worst case for
+          + # one streamed model call is attempts x stream_total_timeout_ms of wall time,
+          + # and a harness wall shorter than that can end a run mid-call.
+      tools.toml:
+          - description = "Run a sub-turn under another role, with its own context. It gets that role's tools."
+          + description = "Run a sub-turn under another role, with its own context and that role's tools. Delegate a job once: give the complete plan and everything it needs, including the check that shows it is done. Delegate again only when its report shows a concrete failure; a report whose check passed is finished work, so do not send it back to be redone or re-checked."
+
+  arm C:
+  ok   R1H's block runs on both inits and R3R's on v0.4.0's (- / - / -)
+  ok   R3R's block refuses d59e6c19's init (Error: R3R: init did not write [defaults] stream = true and max_tokens = 32768; wrong build?)
+  ok   R3R's block writes byte-identical files to R1H's block on v0.4.0 (it only asserts)
+    d59e6c19: endpoints=true role_profile=true audit_on=true audit_edit_noop=true roles_unrouted=true profile_routes=true approval_kept=true
+  ok   d59e6c19: every R1H edit did what it did on R1H's build (endpoints appended, role_profile r1, [audit] on (already on in init: R1H's flip is a no-op on both), 14 model/endpoint lines out of roles.toml, the r1 profile routes C, policy.toml untouched: it already has [approval] gate = "on_write" and --yes answers it, as in R1H)
+    v0.4.0: endpoints=true role_profile=true audit_on=true audit_edit_noop=true roles_unrouted=true profile_routes=true approval_kept=true
+  ok   v0.4.0: every R1H edit did what it did on R1H's build (endpoints appended, role_profile r1, [audit] on (already on in init: R1H's flip is a no-op on both), 14 model/endpoint lines out of roles.toml, the r1 profile routes C, policy.toml untouched: it already has [approval] gate = "on_write" and --yes answers it, as in R1H)
+  ok   the r1 profile (the arm's routing) is byte-identical to R1H's
+  ok   the same surface diff as arm L (the build's init is the only change)
+
+  arm PC:
+  ok   R1H's block runs on both inits and R3R's on v0.4.0's (- / - / -)
+  ok   R3R's block refuses d59e6c19's init (Error: R3R: init did not write [defaults] stream = true and max_tokens = 32768; wrong build?)
+  ok   R3R's block writes byte-identical files to R1H's block on v0.4.0 (it only asserts)
+    d59e6c19: endpoints=true role_profile=true audit_on=true audit_edit_noop=true roles_unrouted=true profile_routes=true approval_kept=true
+  ok   d59e6c19: every R1H edit did what it did on R1H's build (endpoints appended, role_profile r1, [audit] on (already on in init: R1H's flip is a no-op on both), 14 model/endpoint lines out of roles.toml, the r1 profile routes PC, policy.toml untouched: it already has [approval] gate = "on_write" and --yes answers it, as in R1H)
+    v0.4.0: endpoints=true role_profile=true audit_on=true audit_edit_noop=true roles_unrouted=true profile_routes=true approval_kept=true
+  ok   v0.4.0: every R1H edit did what it did on R1H's build (endpoints appended, role_profile r1, [audit] on (already on in init: R1H's flip is a no-op on both), 14 model/endpoint lines out of roles.toml, the r1 profile routes PC, policy.toml untouched: it already has [approval] gate = "on_write" and --yes answers it, as in R1H)
+  ok   the r1 profile (the arm's routing) is byte-identical to R1H's
+  ok   the same surface diff as arm L (the build's init is the only change)
+
+  arm NEG:
+  ok   R1H's block runs on both inits and R3R's on v0.4.0's (- / - / -)
+  ok   R3R's block refuses d59e6c19's init (Error: R3R: init did not write [defaults] stream = true and max_tokens = 32768; wrong build?)
+  ok   R3R's block writes byte-identical files to R1H's block on v0.4.0 (it only asserts)
+    d59e6c19: endpoints=true role_profile=true audit_on=true audit_edit_noop=true roles_unrouted=true profile_routes=true approval_kept=true
+  ok   d59e6c19: every R1H edit did what it did on R1H's build (endpoints appended, role_profile r1, [audit] on (already on in init: R1H's flip is a no-op on both), 14 model/endpoint lines out of roles.toml, the r1 profile routes NEG, policy.toml untouched: it already has [approval] gate = "on_write" and --yes answers it, as in R1H)
+    v0.4.0: endpoints=true role_profile=true audit_on=true audit_edit_noop=true roles_unrouted=true profile_routes=true approval_kept=true
+  ok   v0.4.0: every R1H edit did what it did on R1H's build (endpoints appended, role_profile r1, [audit] on (already on in init: R1H's flip is a no-op on both), 14 model/endpoint lines out of roles.toml, the r1 profile routes NEG, policy.toml untouched: it already has [approval] gate = "on_write" and --yes answers it, as in R1H)
+  ok   the r1 profile (the arm's routing) is byte-identical to R1H's
+  ok   the same surface diff as arm L (the build's init is the only change)
+
+B. wire: v0.4.0 init -> R3R's node block -> gnomon task, per arm (local through relay-meter-s1)
+
+  L (entry implementor): gnomon exit 0; local 2 req, cloud 0 req; models local ["qwen3.6-35b"] cloud []
+    every request: stream [true], max_tokens [32768], include_usage [true]; offers task: local 0, cloud 0
+    meter: chat 2, parsed 2, stream 2, max_tokens 2, usage json 2 / timings 0, without usage 0, reasoning replayed 0, late system 0, aborts 0, errors 0
+    log: DELEG [] surface= ["c482d515879f"]; turn records 1, last wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768}, stop answered, unmetered_calls absent
+  ok   gnomon task exited 0
+  ok   every model request is streamed, asks for usage itself (stream_options.include_usage) and carries max_tokens = 32768
+  ok   each endpoint gets its own model id
+  ok   no reasoning_content replayed (release default: off for these hosts)
+  ok   turn records: wire.stream true, wire.max_tokens 32768, no steer_role (release default system), no replay_reasoning
+  ok   the log carries surface= (the collector's surface pattern)
+  ok   the local meter parsed every request, saw stream and max_tokens on each, and metered every response
+  ok   L: local only
+
+  C (entry implementor): gnomon exit 0; local 0 req, cloud 2 req; models local [] cloud ["deepseek-v4.1-flash"]
+    every request: stream [true], max_tokens [32768], include_usage [true]; offers task: local 0, cloud 0
+    meter: chat 0, parsed 0, stream 0, max_tokens 0, usage json 0 / timings 0, without usage 0, reasoning replayed 0, late system 0, aborts 0, errors 0
+    log: DELEG [] surface= ["3b753149852b"]; turn records 1, last wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768}, stop answered, unmetered_calls absent
+  ok   gnomon task exited 0
+  ok   every model request is streamed, asks for usage itself (stream_options.include_usage) and carries max_tokens = 32768
+  ok   each endpoint gets its own model id
+  ok   no reasoning_content replayed (release default: off for these hosts)
+  ok   turn records: wire.stream true, wire.max_tokens 32768, no steer_role (release default system), no replay_reasoning
+  ok   the log carries surface= (the collector's surface pattern)
+  ok   C: cloud only (NEG is routed as C; the smoke must flag it misrouted when asserted as L)
+
+  PC (entry coordinator): gnomon exit 0; local 2 req, cloud 2 req; models local ["qwen3.6-35b"] cloud ["deepseek-v4.1-flash"]
+    every request: stream [true], max_tokens [32768], include_usage [true]; offers task: local 0, cloud 2
+    meter: chat 2, parsed 2, stream 2, max_tokens 2, usage json 2 / timings 0, without usage 0, reasoning replayed 0, late system 0, aborts 0, errors 0
+    log: DELEG ["implementor:1"] surface= ["7e703593f862"]; turn records 1, last wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768}, stop answered, unmetered_calls absent
+  ok   gnomon task exited 0
+  ok   every model request is streamed, asks for usage itself (stream_options.include_usage) and carries max_tokens = 32768
+  ok   each endpoint gets its own model id
+  ok   no reasoning_content replayed (release default: off for these hosts)
+  ok   turn records: wire.stream true, wire.max_tokens 32768, no steer_role (release default system), no replay_reasoning
+  ok   the log carries surface= (the collector's surface pattern)
+  ok   the local meter parsed every request, saw stream and max_tokens on each, and metered every response
+  ok   PC: the coordinator's requests go to the cloud (each offers the task tool)
+  ok   PC: the delegated implementor sub-turn goes to the local endpoint (no task tool offered)
+  ok   PC: the log carries the delegation line the collector reads (task implementor — N tool call)
+
+  NEG (entry implementor): gnomon exit 0; local 0 req, cloud 2 req; models local [] cloud ["deepseek-v4.1-flash"]
+    every request: stream [true], max_tokens [32768], include_usage [true]; offers task: local 0, cloud 0
+    meter: chat 0, parsed 0, stream 0, max_tokens 0, usage json 0 / timings 0, without usage 0, reasoning replayed 0, late system 0, aborts 0, errors 0
+    log: DELEG [] surface= ["de422ececa5d"]; turn records 1, last wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768}, stop answered, unmetered_calls absent
+  ok   gnomon task exited 0
+  ok   every model request is streamed, asks for usage itself (stream_options.include_usage) and carries max_tokens = 32768
+  ok   each endpoint gets its own model id
+  ok   no reasoning_content replayed (release default: off for these hosts)
+  ok   turn records: wire.stream true, wire.max_tokens 32768, no steer_role (release default system), no replay_reasoning
+  ok   the log carries surface= (the collector's surface pattern)
+  ok   NEG: cloud only (NEG is routed as C; the smoke must flag it misrouted when asserted as L)
+  ok   config.toml is identical across arms (ports normalised); arms differ only in profiles/r1.toml, as in R1H
+
+wire test: PASS (gnomon be4fc0d8835c443aca8b32ccd4c1caacf48cbdce)
