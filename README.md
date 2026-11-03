@@ -1909,20 +1909,24 @@ timeout_sec = 10                   # default; the signer is killed after this
 dir = ".gnomon-audit/heads"        # default: a heads/ subdirectory beside the trail
 ```
 
-**What a signer proves depends on who can make it sign.** Only one row below
-stops an agent that has a shell on this machine. With any of the others, the
-agent can run the signer too.
+**What a signer proves depends on who can make it sign.** Against an agent
+with a shell on this machine, the guarantee comes **only** from the last two
+rows. With a key file, the agent can run the signer too. A script that runs a
+trial with a stubbed runner and lets that signer sign gets an accepted skill.
+Restricting `recordTrial` to reports that `runTrial` produced does not change
+this.
 
 | Signer | Proves | Stops an agent with a shell? |
 |---|---|---|
-| A key file, or an ssh-agent without confirmation | The trail was not edited afterwards by someone without the key | **No.** Any process of yours, the agent's shell included, can sign |
-| ssh-agent with `ssh-add -c`, a FIDO or hardware key that needs a touch, a passphrase prompt | A person approved each signature | Yes, as long as the person reads what they approve |
+| A key file, or an ssh-agent without confirmation | The trail was not edited afterwards by someone without the key | **No.** Any process of yours, the agent's shell included, can sign, and that includes signing a stubbed trial |
+| ssh-agent with `ssh-add -c`, a FIDO or hardware key that needs a touch, a passphrase prompt | A person confirmed each signature, at the end of the trial they ran | Yes, as long as the person checks what they are confirming |
 | Any signer, with the agent in the kernel sandbox (`exec os`, #74) | The agent could not reach the key | Yes |
 
-Under `[skills] require_trial`, the verifier must be pinned by the surface
-hash: `public_key` inline or under `.gnomon/`, and a `verify` command's files
-under `.gnomon/`. Swapping the key then moves the hash, so the surface needs
-trust again.
+`[skills] require_trial` is **off by default**, and opt-in. When it is on,
+gnomon checks evidence against a `public_key` it verifies itself: inline, or a
+file under `.gnomon/`. Swapping that key moves the surface hash, so the
+surface needs trust again. A `verify` command alone is refused, because
+`make`, `npm run` or `python -m` can run files the hash does not cover.
 
 Signer output over **8 KiB** is refused — enough for an Ed25519 signature (88
 base64 chars), an RSA-4096 one (684) or an armoured PGP block, and bounded so a

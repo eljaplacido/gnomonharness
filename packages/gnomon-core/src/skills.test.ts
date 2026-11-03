@@ -603,12 +603,15 @@ describe("accept --evidence and require_trial", () => {
     expect(err).toBeInstanceOf(SkillRefusal);
     expect(String(err)).toMatch(/no signer is declared/);
     expect(String(err)).toMatch(/\[audit\.attest\]/);
-    // Honest about what a signer proves (round-3 review): a local key does
-    // not stop an agent with a shell; a person-present signer or the kernel
-    // sandbox does.
+    // Honest about what a signer proves (rounds 3 and 4): a local key does
+    // not stop an agent with a shell -- a stubbed trial plus that signer is
+    // accepted -- and only a person-present signer or the sandbox does.
     expect(String(err)).not.toMatch(/the agent included/);
+    expect(String(err)).toMatch(/stubbed runner/);
+    expect(String(err)).toMatch(/ONLY from a signer that needs a person/);
     expect(String(err)).toMatch(/ssh-add -c/);
     expect(String(err)).toMatch(/kernel sandbox/);
+    expect(String(err)).toMatch(/require_trial is off by default/);
     stillProposed();
   });
 
@@ -629,9 +632,12 @@ describe("accept --evidence and require_trial", () => {
     expect(() => acceptSkill(withKey({ public_key: "keys/audit.pub" }), "fix-it", { evidence: rel })).toThrow(
       /public_key = "keys\/audit\.pub" is a file outside \.gnomon\//
     );
-    expect(() => acceptSkill(withKey({ verify: `node keys/verify.mjs` }), "fix-it", { evidence: rel })).toThrow(
-      /verify names keys\/verify\.mjs/
-    );
+    // Round-4 review: a verify command alone is refused -- `make -s
+    // verify-head` runs a Makefile the agent can edit, and no path-word
+    // check can follow make, npm run or python -m.
+    for (const verify of ["node keys/verify.mjs", "make -s verify-head", "npm run --silent verify-head", "python3 -m verifier", "ssh-keygen -Y verify -f allowed_signers"]) {
+      expect(() => acceptSkill(withKey({ verify }), "fix-it", { evidence: rel }), verify).toThrow(/no public_key is declared/);
+    }
     // A key file in skills/proposed/ is under .gnomon/ but not hashed.
     mkdirSync(join(root, ".gnomon", "skills", "proposed"), { recursive: true });
     writeFileSync(join(root, ".gnomon", "skills", "proposed", "k.pub"), PUB);

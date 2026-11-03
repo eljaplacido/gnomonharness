@@ -520,23 +520,18 @@ export function verifierOutsideSurface(config: GnomonConfig): string | null {
     };
     return inside(gnomon) && !unhashed.some(inside);
   };
+  // An in-process public key, which gnomon checks itself, is required.
+  // Round-4 review: path-word pinning of a `verify` COMMAND cannot follow
+  // `make -s verify-head`, `npm run verify`, `python3 -m verifier` -- the
+  // agent edited the Makefile the command ran, and a junk signature passed.
+  // A verify command may still be declared; under require_trial it is not
+  // used to judge evidence (checkEvidence passes the key alone).
   const key = typeof raw?.public_key === "string" ? raw.public_key.trim() : "";
-  if (key && !key.startsWith("-----BEGIN") && !pinned(key)) {
-    return `public_key = "${key}" is a file outside .gnomon/, so replacing it does not move the surface hash. Put the PEM inline in config.toml, or the file under .gnomon/.`;
+  if (!key) {
+    return `no public_key is declared. require_trial needs a key gnomon verifies itself -- inline in config.toml, or a file under .gnomon/ -- because a verify command can run anything (make, npm run) that the surface hash does not cover.`;
   }
-  const verify = typeof raw?.verify === "string" ? raw.verify : "";
-  for (const word of verify.match(/"[^"]*"|'[^']*'|\S+/g) ?? []) {
-    const w = word.replace(/^["']|["']$/g, "");
-    const pathLike = /[\\/]/.test(w) || /\.(m?js|cjs|ts|py|sh|pl|rb|pub|pem)$/i.test(w);
-    if (!pathLike || w.startsWith("-")) continue;
-    const abs = isAbsolute(w) ? resolve(w) : resolve(root, w);
-    const rel = relative(root, abs);
-    const inRepo = !rel.startsWith("..") && !isAbsolute(rel);
-    // A program outside the repository (ssh-keygen, node) is the machine's,
-    // not the agent's working tree; a file inside it must be hashed.
-    if (inRepo && !pinned(w)) {
-      return `verify names ${w}, a file outside .gnomon/, so replacing it does not move the surface hash. Move it under .gnomon/.`;
-    }
+  if (!key.startsWith("-----BEGIN") && !pinned(key)) {
+    return `public_key = "${key}" is a file outside .gnomon/, so replacing it does not move the surface hash. Put the PEM inline in config.toml, or the file under .gnomon/.`;
   }
   return null;
 }
@@ -548,11 +543,13 @@ export function verifierOutsideSurface(config: GnomonConfig): string | null {
  */
 const SIGNER_GUARANTEE =
   "What a signer proves depends on who can make it sign. A key file or an unconfirmed " +
-  "ssh-agent signs for any process of yours, the agent's shell included, so it proves only " +
-  "that the trail was not edited afterwards by someone without the key. To stop an agent with " +
-  "a shell, use a signer that needs a person for each signature (ssh-agent with `ssh-add -c`, " +
-  "a FIDO or hardware key that needs a touch, a passphrase prompt), or run the agent in the " +
-  "kernel sandbox (exec os), which keeps it away from the key.";
+  "ssh-agent signs for any process of yours, the agent's shell included: a script that runs " +
+  "a trial with a stubbed runner and lets that signer sign gets an accepted skill. So it proves " +
+  "only that the trail was not edited afterwards by someone without the key. The guarantee " +
+  "against an agent with a shell comes ONLY from a signer that needs a person for each " +
+  "signature -- confirming it at the end of the trial (ssh-agent with `ssh-add -c`, a FIDO or " +
+  "hardware key that needs a touch, a passphrase prompt) -- or from the kernel sandbox " +
+  "(exec os), which keeps the agent away from the key. require_trial is off by default.";
 
 const SIGNER_HOWTO =
   "Declare a signer in .gnomon/config.toml, so trial trails are anchored outside the file:\n" +
@@ -621,7 +618,7 @@ export function checkEvidence(
     );
   }
   const report_sha256 = createHash("sha256").update(body).digest("hex");
-  const found = findTrialRecord(config, report_sha256, report);
+  const found = findTrialRecord(config, report_sha256, report, want.required);
   if ("refused" in found) refuse(found.refused);
   const { trial_record, attested } = found as { trial_record: SkillEvidence["trial_record"]; attested: boolean };
   // Belt and braces: acceptSkill refuses require_trial without a signer before
@@ -653,7 +650,9 @@ interface TrialReportFields {
 function findTrialRecord(
   config: GnomonConfig,
   reportSha: string,
-  report: TrialReportFields
+  report: TrialReportFields,
+  /** require_trial: heads are checked against the in-process public_key only. */
+  keyOnly = false
 ): { trial_record: SkillEvidence["trial_record"]; attested: boolean } | { refused: string } {
   const root = resolve(config.gnomonDir, "..");
   const audit = resolveAudit(config);
@@ -689,7 +688,10 @@ function findTrialRecord(
     // record without a hash in a chained trail is broken, and a trail without
     // any hash is not chained at all -- refused here, since the trial always
     // writes a chained one.
-    const v = verifyTrail(file, signer && attest ? { attest } : {});
+    // Under require_trial, only the public_key gnomon checks itself decides:
+    // a verify command can run what the surface hash does not cover.
+    const checker = attest && keyOnly ? { ...attest, verify: null } : attest;
+    const v = verifyTrail(file, signer && checker ? { attest: checker } : {});
     if (!v.ok || !v.sealed || typeof r.hash !== "string" || r.hash !== recordHash(r)) {
       why = `the trail naming this report (${f}) does not verify as a sealed hash chain.`;
       continue;

@@ -39,9 +39,12 @@
   meet its thresholds, or when no `[audit.attest]` signer is declared. A
   signer is required because without one a sealed trail can be built by
   hand.
-  - The verifier must be pinned by the surface hash: the public key inline
-    or under `.gnomon/`, and `verify` scripts under `.gnomon/`.
-  - `recordTrial` signs only reports `runTrial` produced, frozen.
+  - The verifier must be pinned by the surface hash: a `public_key` that
+    gnomon checks itself, inline or under `.gnomon/`. A `verify` command
+    alone is refused, because `make` and `npm run` run files the hash does
+    not cover.
+  - `recordTrial` signs only reports `runTrial` produced, frozen. That does
+    not stop forgery: a stubbed runner plus a key-file signer still passes.
   - The docs say plainly what each kind of signer proves. A key file any of
     your processes can use does not stop an agent with a shell. A
     person-present signer (`ssh-add -c`, a FIDO key, a passphrase) or the

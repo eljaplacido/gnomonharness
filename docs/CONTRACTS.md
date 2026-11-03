@@ -714,24 +714,29 @@ A signer proves provenance only against whoever cannot make it sign:
   away from the key.
 
 `recordTrial` signs only a report that `runTrial` produced in the same
-process, frozen, with its own cells. That closes the library as a forging
-tool. Code that can run the signer can still sign anything, which is the
-point of the list above.
+process, frozen, with its own cells. **That does not stop forgery.** A script
+can run `runTrial` with a stubbed runner, and a key-file signer will sign the
+result, which gets a skill accepted. Against an agent with a shell, the
+guarantee comes **only** from a signer that needs a person to confirm each
+signature (made at the end of the trial), or from the kernel sandbox.
+`require_trial` is off by default, and opt-in.
 
 `[skills] require_trial = true` in `policy.toml` makes accept refuse in three
 cases:
-- no signer is declared. That means `[audit.attest]` with a `sign` command,
-  plus a `public_key` or `verify` to check it. The refusal says how to declare
-  one.
+- no signer is declared. That means `[audit.attest]` with a `sign` command
+  and a `public_key` that gnomon verifies itself, inline or as a file under
+  `.gnomon/`. A `verify` command alone is refused, because path checks cannot
+  follow `make`, `npm run` or `python -m`. Under `require_trial`, evidence is
+  checked against the key only. The refusal says how to declare a signer.
 - no report is cited.
 - the cited report is not attested, or does not meet its thresholds.
 
 Under `require_trial`, the verifier must also be **pinned by the surface
-hash**: `public_key` inline in `config.toml` or a file under `.gnomon/`
-(outside `skills/proposed/` and `extensions/`), and every file a `verify`
-command names under `.gnomon/`. A key outside the surface
-(`keys/audit.pub`) is refused. Swapping a pinned key moves the hash, so a
-surface that grants more than the scaffold needs a person's trust again.
+hash**: a `public_key` inline in `config.toml`, or a file under `.gnomon/`
+(not under `skills/proposed/` or `extensions/`). A key outside the surface
+(`keys/audit.pub`) is refused, and so is a `verify` command with no
+`public_key`. Swapping a pinned key moves the hash, so a surface that grants
+more than the scaffold needs a person's trust again.
 
 `require_trial` is off by default. Nothing accepts a skill automatically,
 including a passing trial.
