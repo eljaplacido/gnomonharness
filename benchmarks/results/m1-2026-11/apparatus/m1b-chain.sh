@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# M1b chain (gx10 GPU): Flash-Next L (1 slot), decision against R1's L, PC if it wins. Design: ../PRE-REGISTRATION.md.
+# M1b chain (gx10 GPU): Flash-Next L (1 stream), decision against R1's L, PC (1 stream) if it wins.
+# Design: ../PRE-REGISTRATION.md, Amendment 1 (coordinator, 2026-11-03 ~06:30Z): trigger = R1H's CHAIN DONE; lane started
+# with the authorised copy ~/gnomon-bench/flash-next-tf/start-m1b.sh (1 x 98304, reserve 9, GPU processes < 1 GiB allowed,
+# computed memory need, --oom-score-adj=1000); a lane death is apparatus, one retry, then FAILED + restore.
 #   setsid nohup m1b-chain.sh >> ../chain-b.log 2>&1 < /dev/null &
 #   DRY=1 m1b-chain.sh      non-destructive: precheck, the lane's CHECK_ONLY, what a pause would touch
-# Nothing is paused until a non-destructive precheck says Flash-Next's start can succeed without touching
-# qa-panel. Once R1/P2G are paused, an EXIT trap restores the incumbent lane and resumes both, whatever happens.
+# Once R1/P2G are paused, an EXIT trap restores the incumbent lane and resumes both, whatever happens.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; BENCH="$(cd "$HERE/.." && pwd)"
 WT=/home/eljaplacido/gnomon-wt/peers
@@ -12,22 +14,24 @@ STATUS="$BENCH/STATUS.txt"
 SHA="d59e6c198f91d1469198b0677c008323f82d0345"
 FNX="$HOME/gnomon-bench/flash-next-tf"
 READY_FNX="$HOME/gnomon-bench/READY-flash-next.txt"
-DEADLINE="${M1B_DEADLINE:-2026-11-03T13:15:00Z}"
+DEADLINE="${M1B_DEADLINE:-2026-11-03T13:30:00Z}"
 START_BY="${M1B_START_BY:-2026-11-03T10:30:00Z}"
 LOCK="$HOME/.opencode/central-brain/runtime/decisionbench/gpu.lock"
 INC_UNIT=llama-server-qwen-q4.service
 DRY="${DRY:-0}"
 STRICT='[[ -z "$apps" ]] || fail "GPU not idle'
-PAUSED=0; FNX_STARTED=0; R1_PAUSED=0; P2G_PAUSED=0; CTX_USED=""
+START_SH="$FNX/start-m1b.sh"
+CONTAINER=m1-flash-next-tf
+PAUSED=0; FNX_STARTED=0; R1_PAUSED=0; P2G_PAUSED=0; LANE_DEATHS=0
 
 say() { echo "$(date -u +%FT%TZ) CHAIN-B $*" | tee -a "$STATUS"; }
 r1say() { echo "$(date -u +%FT%TZ) $*" >> "$R1/STATUS.txt"; }
 p2say() { echo "$(date -u +%FT%TZ) $*" >> "$P2G/STATUS.txt"; }
 now() { date -u +%s; }
 ep() { date -u -d "$1" +%s; }
-fnx_need() {  # start-m1.sh's formula: weights 81 (pinned recipe) + fp8 KV window + 8 scratch + reserve (read from the script) + 2
-  local res; res=$(sed -n 's/.*TENSORFOLD_MEMORY_RESERVE_GIB="${TENSORFOLD_MEMORY_RESERVE_GIB:-\([0-9]*\)}".*/\1/p' "$FNX/start-m1.sh" | head -1)
-  echo $(( 81 + (17888 * $1 + 1073741823) / 1073741824 + 8 + ${res:-14} + 2 )); }
+fnx_need() {  # start-m1b.sh's computed need: load w/o vision 79 + fp8 KV 1 x $1 (4.78 GiB / 262144) + reserve 9 + margin 6
+  awk -v c="$1" 'BEGIN { x = 79 + 4.78 * c / 262144 + 9 + 6; n = int(x); if (n < x) n++; print n }'; }
+memavail() { awk '/^MemAvailable:/ {printf "%.1f", $2 / 1048576}' /proc/meminfo; }
 inc_pid() { systemctl --user show -p MainPID --value "$INC_UNIT"; }
 r1h_busy() { pgrep -f '[r]un_r1h.py' >/dev/null || pgrep -f '[r]1h-resume.sh' >/dev/null || pgrep -f '[r]1h-chain' >/dev/null; }
 r1h_commit_window() { ! grep -q ' CHAIN DONE$' "$R1H/STATUS.txt" && ! pgrep -f '[r]un_r1h.py' >/dev/null && r1h_busy; }
@@ -57,20 +61,19 @@ mib_of_containers() {  # total memory of task containers (tb: *-1-of-1-*, harbor
     s += (u=="GiB") ? v*1024 : (u=="MiB") ? v : (u=="KiB") ? v/1024 : (u=="B") ? v/1048576 : 0 } END {print int(s)}'
 }
 
-precheck() {  # sets BLOCK (empty = go) and PROJ
-  local inc other ma inc_mib cont proj need
+precheck() {  # sets BLOCK (empty = go) and PROJ. Gating only on what start-m1b.sh would refuse for certain after a pause:
+  # a NON-incumbent GPU process using >= 1 GiB. Memory is logged here and waited for (20 min) after the pause.
+  local inc big ma inc_mib cont proj need
   BLOCK=""
   inc=$(inc_pid)
-  other=$(nvidia-smi --query-compute-apps=pid,process_name --format=csv,noheader 2>/dev/null | awk -F', ' -v p="$inc" '$1 != p' | tr '\n' ';')
-  if [ -n "$other" ] && grep -qF "$STRICT" "$FNX/start-m1.sh"; then
-    BLOCK="GPU: start-m1.sh refuses any compute app, and non-incumbent app(s) hold a CUDA context [$other] (qa-panel: never touched)"
-  fi
+  GPUAPPS=$(nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits 2>/dev/null | tr '\n' ';')
+  big=$(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null | awk -F', ' -v p="$inc" '$1 != p && $2+0 >= 1024 {printf "%s(%s MiB) ", $1, $2}')
+  [ -z "$big" ] || BLOCK="GPU: non-incumbent process(es) using >= 1 GiB: $big"
   ma=$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo)
   inc_mib=$(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null | awk -F', ' -v p="$inc" '$1==p {print $2+0}')
   cont=$(mib_of_containers)
   proj=$(( (ma + ${inc_mib:-0} + ${cont:-0}) / 1024 )); need=$(fnx_need 98304)
-  PROJ="MemAvailable ${ma} MiB + incumbent GPU ${inc_mib:-0} MiB + task containers ${cont:-0} MiB = ~${proj} GiB projected after a pause, vs ${need} GiB needed at CONTEXT=98304"
-  if [ $(( proj + 4 )) -lt "$need" ]; then BLOCK="${BLOCK:+$BLOCK; }memory: $PROJ"; fi
+  PROJ="MemAvailable ${ma} MiB + incumbent GPU ${inc_mib:-0} MiB + task containers ${cont:-0} MiB = ~${proj} GiB projected after a pause, vs ${need} GiB needed (1 x 98304); GPU processes: $GPUAPPS"
   [ -z "$BLOCK" ]
 }
 
@@ -145,6 +148,7 @@ restore() {
   PAUSED=0
   local i up=0 p
   if [ "$FNX_STARTED" = 1 ]; then "$FNX/stop-m1.sh" >> "$BENCH/lane-fnx-start.log" 2>&1; say "RESTORE: Flash-Next stopped (exit $?)"; fi
+  [ -n "${RUNPG:-}" ] && kill -TERM -- -"$RUNPG" 2>/dev/null
   flock -u 9 2>/dev/null; exec 9>&-; say "RESTORE: gpu.lock released"
   systemctl --user start "$INC_UNIT"; say "RESTORE: systemctl --user start $INC_UNIT (exit $?)"
   for i in $(seq 1 90); do curl -s -m 10 http://127.0.0.1:18080/v1/models | grep -q qwen3.6-35b && { up=1; break; }; sleep 10; done
@@ -174,7 +178,16 @@ restore() {
   fi
 }
 CLEANED=0
-on_exit() { [ "$CLEANED" = 1 ] && return; CLEANED=1; [ "$DRY" = 1 ] && return; restore; }
+on_exit() {
+  [ "$CLEANED" = 1 ] && return; CLEANED=1; [ "$DRY" = 1 ] && return
+  local was=$PAUSED
+  restore
+  if [ "$was" = 1 ] && [ -e "$BENCH/M1B-FAILED.txt" ]; then
+    commit "bench(m1): M1b FAILED — $(head -c 120 "$BENCH/M1B-FAILED.txt")" "$BENCH/STATUS.txt" "$BENCH/M1B-FAILED.txt" \
+      $(ls -d "$BENCH"/runs/m1b-* "$BENCH"/runs-smoke/m1b-* "$BENCH"/runs-aborted/m1b-* "$BENCH"/soak-fnx.txt "$BENCH"/smoke-fnx-*.txt "$BENCH"/lane-fnx-* 2>/dev/null)
+    say "DONE (M1b FAILED; restored)"
+  fi
+}
 trap on_exit EXIT
 trap 'say "chain received a signal; restoring"; exit 143' TERM INT HUP
 
@@ -184,7 +197,7 @@ if [ "$DRY" = 1 ]; then
   echo "READY-flash-next: $([ -e "$READY_FNX" ] && echo yes || echo no); FAILED markers: $(ls "$HOME"/gnomon-bench/FAILED-* 2>/dev/null | tr '\n' ' ')"
   precheck && echo "precheck: GO" || echo "precheck: BLOCKED: $BLOCK"
   echo "projection: $PROJ"
-  echo "lane CHECK_ONLY (CONTEXT=98304):"; CHECK_ONLY=1 CONTEXT=98304 "$FNX/start-m1.sh" 2>&1 | grep -E 'REFUSED|check\(s\) failed' | sed 's/^/  /'
+  echo "lane CHECK_ONLY (start-m1b.sh):"; CHECK_ONLY=1 "$START_SH" 2>&1 | grep -E 'REFUSED|need|GPU compute|check\(s\) failed' | sed 's/^/  /'
   echo "R1 runner: $(runner_of '[r]un_r1[.]py full')  P2G runner: $(runner_of '[r]un_p2g[.]py run')  my pgid: $(ps -o pgid= $$ | tr -d ' ')"
   for c in $(r1_inflight); do echo "  R1 in flight: $c  project: $(r1_project "$c")  containers: $(docker ps -a --filter "label=com.docker.compose.project=$(r1_project "$c")" --format '{{.Names}}' | tr '\n' ' ')"; done
   for c in $(p2g_inflight); do echo "  P2G in flight: $c  projects: $(p2g_projects "$c" | tr '\n' ' ') containers: $(for p in $(p2g_projects "$c"); do docker ps -a --filter "label=com.docker.compose.project=$p" --format '{{.Names}}'; done | tr '\n' ' ')"; done
@@ -198,62 +211,80 @@ if [ "$DRY" = 1 ]; then
   exit 0
 fi
 
-# ---------------------------------------------------------------------------------------------- 1-2. READY + precheck
-say "M1b chain start (pid $$, pgid $(ps -o pgid= $$ | tr -d ' ')); build $SHA; start-by $START_BY; new-cell deadline $DEADLINE"
+# ---------------------------------------------------------------------------------------------- 1-2. trigger
+R1H="$RES/r1h-2026-11"
+r1h_done() { grep -q ' CHAIN DONE$' "$R1H/STATUS.txt" && ! r1h_busy; }
+say "M1b chain start (pid $$, pgid $(ps -o pgid= $$ | tr -d ' ')); Amendment 1; build $SHA; trigger R1H CHAIN DONE; go/no-go $START_BY; new-cell deadline $DEADLINE"
 last=0
-until [ -e "$READY_FNX" ]; do
-  ls "$HOME"/gnomon-bench/FAILED-flash-next* >/dev/null 2>&1 && { say "Flash-Next FAILED marker; M1b skipped (R1/P2G never paused)"; break; }
-  [ "$(now)" -ge "$(ep "$START_BY")" ] && { say "no READY-flash-next by $START_BY; M1b skipped (R1/P2G never paused)"; break; }
-  sleep 60
+until r1h_done; do
+  if [ "$(now)" -ge "$(ep "$START_BY")" ]; then GO=0; break; fi
+  if [ $(( $(now) - last )) -ge 1800 ]; then say "waiting for R1H's CHAIN DONE ($(grep -c 'END   r1h-k2' "$R1H/STATUS.txt")/48 attempt-2 cells ended)"; last=$(now); fi
+  sleep 30
 done
 GO=0
-if [ -e "$READY_FNX" ] && ! ls "$HOME"/gnomon-bench/FAILED-flash-next* >/dev/null 2>&1; then
+if r1h_done && [ "$(now)" -lt "$(ep "$START_BY")" ] && [ -e "$READY_FNX" ]; then
   cp "$READY_FNX" "$BENCH/lane-fnx-READY.txt"; cp "$FNX/PINS.txt" "$BENCH/lane-fnx-PINS.txt" 2>/dev/null
+  cp "$START_SH" "$BENCH/lane-fnx-start-m1b.sh"
   last=0
   while :; do
-    if precheck; then GO=1; say "precheck GO: $PROJ"; break; fi
-    if [ $(( $(now) - last )) -ge 1800 ]; then say "precheck BLOCKED (nothing paused; re-checking every 5 min until $START_BY): $BLOCK"; last=$(now); fi
-    if [ "$(now)" -ge "$(ep "$START_BY")" ]; then say "M1b SKIPPED: precheck still blocked at $START_BY: $BLOCK"; break; fi
-    sleep 300
+    if precheck; then GO=1; say "R1H done; precheck GO: $PROJ"; break; fi
+    if [ $(( $(now) - last )) -ge 1800 ]; then say "precheck BLOCKED (nothing paused): $BLOCK"; last=$(now); fi
+    if [ "$(now)" -ge "$(ep "$START_BY")" ]; then break; fi
+    sleep 120
   done
 fi
 if [ "$GO" != 1 ]; then
+  say "M1b SKIPPED: not startable by $START_BY (R1H done: $(r1h_done && echo yes || echo no); ${BLOCK:-no precheck block})"
+  echo "M1b skipped at $(date -u +%FT%TZ): not startable by $START_BY ${BLOCK:-}" > "$BENCH/M1B-FAILED.txt"
   r1say "PLANNED M1 PAUSE CANCELLED: M1b skipped (see m1-2026-11/STATUS.txt); this run was never paused by M1"
   p2say "PLANNED M1 PAUSE CANCELLED: M1b skipped (see m1-2026-11/STATUS.txt); this run was never paused by M1"
-  python3 -I "$HERE/collect_m1.py" --decide m1b > "$BENCH/decision-m1b.txt" 2>&1
-  commit "bench(m1): M1b skipped — preconditions not met without touching qa-panel" "$BENCH/STATUS.txt" "$BENCH/lane-fnx-READY.txt" "$BENCH/lane-fnx-PINS.txt"
+  commit "bench(m1): M1b skipped — not startable by $START_BY" "$BENCH/STATUS.txt" "$BENCH/M1B-FAILED.txt" "$BENCH/lane-fnx-READY.txt" "$BENCH/lane-fnx-PINS.txt"
   say "DONE (M1b skipped)"; exit 0
 fi
+
+fail_m1b() {  # $1 reason: write FAILED, then exit (the EXIT trap restores the lane and resumes R1/P2G)
+  say "M1b FAILED: $1"
+  echo "M1b FAILED at $(date -u +%FT%TZ): $1" > "$BENCH/M1B-FAILED.txt"
+  exit 1
+}
 
 # ---------------------------------------------------------------------------------------------- 3-4. pause, stop incumbent, start Flash-Next
 pause_runs || { say "pause failed; restoring"; exit 1; }
 systemctl --user stop "$INC_UNIT"; say "systemctl --user stop $INC_UNIT (exit $?)"
 PAUSED=1
 for i in $(seq 1 30); do systemctl --user is-active --quiet "$INC_UNIT" || ss -ltn 'sport = :18080' | grep -q '127.0.0.1:18080' || break; sleep 2; done
-need=$(fnx_need 98304); t=$(now)
-until [ "$(awk '/^MemAvailable:/ {print int($2/1048576)}' /proc/meminfo)" -ge "$need" ]; do
-  [ $(( $(now) - t )) -ge 900 ] && break
-  sleep 20
-done
-say "MemAvailable $(awk '/^MemAvailable:/ {print int($2/1048576)}' /proc/meminfo) GiB (need $need at CONTEXT=98304); GPU apps: $(nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader | tr '\n' ';')"
-start_fnx() {  # $1 context
-  local rc
-  say "Flash-Next: start-m1.sh CONTEXT=$1"
-  FNX_STARTED=1
-  CONTEXT=$1 "$FNX/start-m1.sh" >> "$BENCH/lane-fnx-start.log" 2>&1; rc=$?
-  say "Flash-Next: start exit $rc: $(grep -E 'REFUSED|LIVE|smoke|answered|fail' "$BENCH/lane-fnx-start.log" | tail -2 | tr '\n' ' ')"
-  [ "$rc" = 0 ] && CTX_USED=$1
-  return $rc
+NEED=$(fnx_need 98304)
+wait_mem() {  # up to 20 min for MemAvailable >= NEED
+  local t; t=$(now)
+  until awk -v n="$NEED" '/^MemAvailable:/ {exit !($2 / 1048576 >= n)}' /proc/meminfo; do
+    [ $(( $(now) - t )) -ge 1200 ] && return 1
+    sleep 20
+  done
 }
-if ! start_fnx 98304; then
-  "$FNX/stop-m1.sh" >> "$BENCH/lane-fnx-start.log" 2>&1
-  start_fnx 81920 || { say "Flash-Next FAILED to start at CONTEXT=98304 and 81920; M1b skipped; restoring"; exit 1; }
-  say "APPARATUS SETTING (before any fnx data): CONTEXT=81920 (98304 refused)"
-fi
-curl -s -m 10 http://127.0.0.1:18580/v1/models > "$BENCH/lane-fnx-models.json"
+wait_mem && say "MemAvailable $(memavail) GiB >= $NEED GiB needed" || fail_m1b "MemAvailable $(memavail) GiB < $NEED GiB after 20 min (GPU: $(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader | tr '\n' ';'))"
+start_fnx() {  # one start, fix-don't-fail retry once
+  local try rc
+  for try in 1 2; do
+    MEM_BEFORE=$(memavail)
+    say "Flash-Next: start-m1b.sh (try $try); MemAvailable at start ${MEM_BEFORE} GiB; GPU processes: $(nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader | tr '\n' ';')"
+    FNX_STARTED=1
+    "$START_SH" >> "$BENCH/lane-fnx-start.log" 2>&1; rc=$?
+    say "Flash-Next: start exit $rc: $(grep -E 'REFUSED|LIVE|smoke OK|lists|need' "$BENCH/lane-fnx-start.log" | tail -3 | tr '\n' ' ')"
+    if [ "$rc" = 0 ]; then
+      sleep 20; MEM_AFTER=$(memavail)
+      say "Flash-Next LIVE: MemAvailable ${MEM_BEFORE} GiB before start, ${MEM_AFTER} GiB after load: load footprint ~$(awk -v a="$MEM_BEFORE" -v b="$MEM_AFTER" 'BEGIN {printf "%.1f", a - b}') GiB (1 x 98304, fp8 KV, no vision, reserve 9)"
+      curl -s -m 10 http://127.0.0.1:18580/v1/models > "$BENCH/lane-fnx-models.json"
+      return 0
+    fi
+    "$FNX/stop-m1.sh" >> "$BENCH/lane-fnx-start.log" 2>&1
+    [ "$try" = 1 ] && { say "Flash-Next: fix-don't-fail retry in 30 s"; sleep 30; wait_mem || true; }
+  done
+  return 1
+}
+start_fnx || fail_m1b "Flash-Next did not start twice (lane-fnx-start.log)"
 
 # ---------------------------------------------------------------------------------------------- 5. soak, smoke, L, decide, PC
-python3 -I "$HERE/soak_m1.py" http://127.0.0.1:18580 qwen3.8-flash-next 120 2 >> "$BENCH/soak-fnx.txt" 2>&1
+python3 -I "$HERE/soak_m1.py" http://127.0.0.1:18580 qwen3.8-flash-next 120 1 >> "$BENCH/soak-fnx.txt" 2>&1
 say "fnx: soak $(grep '^soak' "$BENCH/soak-fnx.txt" | tail -1) (informational)"
 smoke_fnx() {  # $1 mode $2 prefix
   local try d
@@ -266,39 +297,80 @@ smoke_fnx() {  # $1 mode $2 prefix
     for d in "$BENCH/runs-smoke/$2"*; do [ -e "$d" ] && mv "$d" "$BENCH/runs-smoke-failed/$(basename "$d")-try$try"; done
     if [ "$try" = 1 ]; then
       say "fnx: fix-don't-fail retry: restart the lane, smoke once more"
-      "$FNX/stop-m1.sh" >> "$BENCH/lane-fnx-start.log" 2>&1; start_fnx "${CTX_USED:-98304}" || return 1
+      "$FNX/stop-m1.sh" >> "$BENCH/lane-fnx-start.log" 2>&1; sleep 15; start_fnx || return 1
     fi
   done
   return 1
 }
 past() { [ "$(now)" -ge "$(ep "$DEADLINE")" ]; }
+
+alive() { local st; st=$(ps -o stat= -p "$1" 2>/dev/null); [ -n "$st" ] && [[ "$st" != Z* ]]; }
+lane_alive() { [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" = true ]; }
+abort_inflight() {  # $1 = epoch of the death; in-flight cells and any that ended in the 3 min before detection are apparatus
+  local d c t end
+  mkdir -p "$BENCH/runs-aborted"
+  for d in "$BENCH"/runs/m1b-fnx-*/; do
+    [ -d "$d" ] || continue; c=$(basename "$d")
+    end=$(python3 -I -c 'import json,sys; print(int(json.load(open(sys.argv[1])).get("end", 0)))' "$d/cell.json" 2>/dev/null || echo 0)
+    if ! ls "$d"*/*/results.json >/dev/null 2>&1 || [ "${end:-0}" -ge $(( $1 - 180 )) ]; then
+      mv "$BENCH/runs/$c" "$BENCH/runs-aborted/$c-lanedeath" && say "  apparatus (lane death): $c -> runs-aborted/$c-lanedeath"
+      t=$(echo "$c" | sed -n -E 's/^m1b-fnx-k[0-9]+-(l|pc)-(.+)$/\2/p'); [ -n "$t" ] && rm_project "$t-1-of-1-$c"
+    fi
+  done
+}
+run_watched() {  # $1 arm: run_m1.py fnx $1 (1 slot) under a lane watchdog; one lane retry in all of M1b, then FAILED
+  local arm=$1 rp bad st td
+  while :; do
+    if [ -e "$BENCH/BUDGET-PAUSE.txt" ] || past; then say "fnx $arm not started (budget pause or deadline)"; return 0; fi
+    say "fnx: launching the $arm arm (16 x 2, 1 stream, deadline $DEADLINE)"
+    M1_SHA=$SHA M1_DEADLINE=$DEADLINE M1_SLOTS=1 M1_GPU_LOCK=chain setsid python3 -I "$HERE/run_m1.py" fnx "$arm" >> "$BENCH/run-full.log" 2>&1 < /dev/null &
+    rp=$!; sleep 5
+    ps -o args= -p "$rp" 2>/dev/null | grep -q 'run_m1.py' || rp=$(pgrep -f "[r]un_m1.py fnx $arm" | head -1)
+    [ -n "$rp" ] || { say "fnx $arm: runner exited at once (see run-full.log)"; return 0; }
+    RUNPG=$(ps -o pgid= -p "$rp" | tr -d ' ')
+    bad=0
+    while alive "$rp"; do
+      sleep 30
+      if ! lane_alive; then bad=99
+      elif curl -sf --max-time 20 http://127.0.0.1:18580/health >/dev/null 2>&1; then bad=0
+      else bad=$((bad + 1)); fi
+      [ "$bad" -ge 5 ] && break
+    done
+    if [ "$bad" -lt 5 ]; then RUNPG=""; say "fnx $arm arm finished"; return 0; fi
+    td=$(now)
+    st=$(docker inspect -f 'running={{.State.Running}} oom_killed={{.State.OOMKilled}} exit={{.State.ExitCode}} error={{.State.Error}}' "$CONTAINER" 2>&1 | head -1)
+    LANE_DEATHS=$((LANE_DEATHS + 1))
+    say "fnx LANE DIED during $arm (death $LANE_DEATHS): $st; health failures $bad; MemAvailable $(memavail) GiB"
+    kill -TERM -- -"$RUNPG" 2>/dev/null; sleep 10; kill -KILL -- -"$RUNPG" 2>/dev/null; RUNPG=""
+    abort_inflight "$td"
+    "$FNX/stop-m1.sh" >> "$BENCH/lane-fnx-start.log" 2>&1
+    [ "$LANE_DEATHS" -ge 2 ] && fail_m1b "the Flash-Next lane died twice ($st)"
+    say "fnx: one lane retry (restart, then the arm resumes; finished cells are kept)"
+    wait_mem || fail_m1b "MemAvailable $(memavail) GiB < $NEED GiB 20 min after the lane died"
+    start_fnx || fail_m1b "Flash-Next did not restart after the lane died"
+  done
+}
+
 if smoke_fnx smoke m1b-fnx-s-; then
-  commit "bench(m1): M1b fnx lane up, smoke passed — before any fnx cell" "$BENCH/STATUS.txt" "$BENCH/smoke-fnx-smoke.txt" \
-    "$BENCH/soak-fnx.txt" "$BENCH/lane-fnx-models.json" "$BENCH/lane-fnx-READY.txt" "$BENCH/lane-fnx-PINS.txt"
-  if [ -e "$BENCH/BUDGET-PAUSE.txt" ] || past; then say "fnx L not started (budget pause or deadline)"; else
-    say "fnx: launching the L arm (16 x 2, 1 slot as R1's L, deadline $DEADLINE, CONTEXT=$CTX_USED)"
-    M1_SHA=$SHA M1_DEADLINE=$DEADLINE M1_SLOTS=1 M1_GPU_LOCK=chain python3 -I "$HERE/run_m1.py" fnx L >> "$BENCH/run-full.log" 2>&1
-    say "fnx L arm finished (exit $?)"
-  fi
+  commit "bench(m1): M1b fnx lane up (Amendment 1 settings), smoke passed — before any fnx cell" "$BENCH/STATUS.txt" \
+    "$BENCH/smoke-fnx-smoke.txt" "$BENCH/soak-fnx.txt" "$BENCH/lane-fnx-models.json" "$BENCH/lane-fnx-READY.txt" \
+    "$BENCH/lane-fnx-PINS.txt" "$BENCH/lane-fnx-start-m1b.sh"
+  run_watched L
   python3 -I "$HERE/collect_m1.py" --decide m1b > "$BENCH/decision-m1b.txt" 2>&1
   winner=$(sed -n 's/^DECISION m1b winner=\(.*\)$/\1/p' "$BENCH/decision-m1b.txt" | tail -1)
   say "DECISION m1b: winner=${winner:-?} (decision-m1b.txt)"; sed 's/^/    /' "$BENCH/decision-m1b.txt" >> "$STATUS"
   if [ "$winner" = fnx ] && [ ! -e "$BENCH/BUDGET-PAUSE.txt" ] && ! past; then
-    left=$(( $(ep "$DEADLINE") - $(now) )); slots=2; [ "$left" -ge $(( 32 * 630 )) ] && slots=1
-    say "fnx: PC with $slots slot(s) ($((left / 60)) min left; 1 slot needs >= $((32 * 630 / 60)) min)"
-    if smoke_fnx smoke-pc m1b-fnx-s-pc-; then
-      M1_SHA=$SHA M1_DEADLINE=$DEADLINE M1_SLOTS=$slots M1_GPU_LOCK=chain python3 -I "$HERE/run_m1.py" fnx PC >> "$BENCH/run-full.log" 2>&1
-      say "fnx PC arm finished (exit $?)"
-    else say "fnx: PC not run (smoke-pc failed twice)"; fi
-  elif [ "$winner" != fnx ]; then say "incumbent wins on M1b: no PC arm here; R1's PC is the reference"; fi
+    if smoke_fnx smoke-pc m1b-fnx-s-pc-; then run_watched PC; else say "fnx: PC not run (smoke-pc failed twice)"; fi
+  elif [ "$winner" != fnx ]; then say "incumbent wins on M1b (or too few valid cells): no PC arm here; R1's PC is the reference"; fi
 else
+  echo "M1b FAILED at $(date -u +%FT%TZ): smoke failed twice" > "$BENCH/M1B-FAILED.txt"
   say "fnx: SKIPPED (smoke failed twice)"
 fi
 say "Coder-Next: FAILED marker (no disk) per the lane agent; not run"
 
 # ---------------------------------------------------------------------------------------------- 7-8. restore, collect
 restore
-python3 -I "$HERE/collect_m1.py" > "$BENCH/summary.txt" 2>&1
-commit "bench(m1): M1b complete — summary and runs" "$BENCH/summary.txt" "$BENCH/STATUS.txt" "$BENCH/decision-m1b.txt" \
-  $(ls -d "$BENCH"/runs/m1b-* "$BENCH"/runs-smoke/m1b-* "$BENCH"/soak-fnx.txt "$BENCH"/smoke-fnx-*.txt "$BENCH"/lane-fnx-* 2>/dev/null)
+python3 -I "$HERE/collect_m1.py" > "$BENCH/summary-m1b.txt" 2>&1
+commit "bench(m1): M1b complete — summary and runs" "$BENCH/summary-m1b.txt" "$BENCH/STATUS.txt" "$BENCH/decision-m1b.txt" \
+  $(ls -d "$BENCH"/runs/m1b-* "$BENCH"/runs-smoke/m1b-* "$BENCH"/runs-aborted/m1b-* "$BENCH"/soak-fnx.txt "$BENCH"/smoke-fnx-*.txt "$BENCH"/lane-fnx-* "$BENCH"/M1B-FAILED.txt 2>/dev/null)
 say "DONE"

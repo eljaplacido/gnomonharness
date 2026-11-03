@@ -207,3 +207,37 @@ Both chains are started with `setsid nohup`, wait on pids (never on process name
   2. The projected MemAvailable after a full pause is about 94 GiB, against 107 GiB needed (81 weights + 2 KV + 8 + 14 reserve + 2). The smaller-window fallback (81,920) needs the same 107 GiB.
 
   So unless the lane or the machine changes before 10:30Z, M1b is skipped and R1/P2G are never paused. The chain re-checks every 5 minutes and proceeds by itself if both conditions clear.
+
+## Amendment 1, 2026-11-03T06:27:18Z: M1b unblocked with a lane-script copy; before any M1b data
+
+The coordinator measured the gx10:
+- MemAvailable is 67 GiB.
+- The incumbent qwen lane holds 22.6 GiB of GPU memory plus about 8 GiB RSS.
+- The user's Cursor IDE holds 13 GiB and stays.
+- Task containers hold about 10 GiB.
+
+So about 95–100 GiB is expected once R1H has finished, R1 and P2G are paused and the qwen lane is stopped. The coordinator also decided that qa-panel is never touched, and authorised a **copy** of the lane script, `~/gnomon-bench/flash-next-tf/start-m1b.sh`. The lane agent's `start-m1.sh` is unchanged.
+
+**The copy differs from `start-m1.sh` only in these points** (a copy is also in `lane-fnx-start-m1b.sh` once M1b starts):
+1. **GPU precondition.** Every GPU compute process is logged at start, and each must use under 1 GiB. qa-panel's idle 170 MiB context passes; anything holding real memory still refuses.
+2. **Settings.** `PARALLEL=1` (1 stream), `CONTEXT=98304` (the incumbent's per-slot window), `VISION=0`, and `TENSORFOLD_MEMORY_RESERVE_GIB=9`, the recipe default (`start-m1.sh` used 14). Thinking stays off, fp8 KV, MTP drafts and every other setting are unchanged.
+3. **Memory precondition, computed rather than fixed:**
+   - 79 GiB load footprint without vision (the README gives 81 with vision on, 2 of which is the vision helper);
+   - plus fp8 KV for 1 × 98,304 (4.78 GiB per 262,144 tokens, about 1.8 GiB);
+   - plus the 9 GiB reserve;
+   - plus a 6 GiB safety margin.
+
+   That is **96 GiB**, which the chain waits up to 20 minutes for after the pause. The measured MemAvailable at start and the load footprint are logged.
+4. **OOM safety.** `docker run --oom-score-adj=1000`, so if memory runs out the kernel kills the Flash-Next container first, not the benchmarks, agentcenter or the desktop.
+
+**Chain changes** (`apparatus/m1b-chain.sh`):
+- **Trigger and deadlines.** M1b starts right after R1H's ` CHAIN DONE`, the same trigger as M1a. The 10:30Z go/no-go stays. The new-cell deadline is **13:30Z** (was 13:15Z).
+- **Precheck.** It now gates only on a non-incumbent GPU process using 1 GiB or more, which the copy would refuse for certain.
+- **Start.** No smaller-window fallback: the window is fixed at 98,304. The start gets one fix-don't-fail retry, then FAILED.
+- **Slots.** **L and PC both run with 1 stream and 1 slot**, as R1's L and PC did. This replaces the PC slot rule above and removes the concurrency asymmetry on M1b.
+- **Lane-death watchdog.** It checks every 30 s while an arm runs. The lane counts as dead when the container is not running, or `/health` has failed 5 times in a row.
+  - The cell(s) in flight, and any cell that ended in the 3 minutes before detection, are apparatus and move to `runs-aborted/<cell>-lanedeath`.
+  - One lane restart is allowed in all of M1b, after which the arm continues and keeps its finished cells.
+  - A second death means FAILED: `M1B-FAILED.txt` gets the reason, the qwen lane is restored, and R1 and P2G are resumed.
+- **Time.** One stream makes the 32 L cells take about 3.5 h at R1's mean L cell time. PC with one stream (about 5.6 h at R1's mean PC cell) will be partial at the 13:30Z deadline. Unstarted cells are reported as not run and never imputed, and every comparison uses paired valid cells only.
+- **The variable** is still the deployment recipe. fnx now matches the incumbent's (R1's) per-slot window, its single slot and its reasoning-off mode. Engine, quantisation and MTP drafts differ.
