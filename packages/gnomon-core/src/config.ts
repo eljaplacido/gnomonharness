@@ -4012,9 +4012,19 @@ export function recomputeManifest(baseDir: string): {
   // same hash returned different values for the same directory.
   sources.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
-  // Compute surface hash
+  return { manifest: sources, surface_hash: manifestHash(sources) };
+}
+
+/**
+ * The surface hash of a manifest: sha256 over `path:sha256\n` per source, in
+ * byte-wise path order. Exported so a caller can name the hash a change WILL
+ * produce before making it -- `gnomon skill accept` records its decision
+ * before it moves the file.
+ */
+export function manifestHash(sources: SourceEntry[]): string {
+  const sorted = [...sources].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const hash = createHash("sha256");
-  for (const source of sources) {
+  for (const source of sorted) {
     hash.update(source.path);
     hash.update(":");
     if (source.sha256) {
@@ -4024,7 +4034,5 @@ export function recomputeManifest(baseDir: string): {
     }
     hash.update("\n");
   }
-  const surface_hash = hash.digest("hex");
-
-  return { manifest: sources, surface_hash };
+  return hash.digest("hex");
 }

@@ -110,6 +110,25 @@
   - Parallel tool calls sent whole at one index are kept apart by their ids.
   - Turn records carry `wire`: whether the call was streamed and its clocks.
   - Tests use fake servers on 127.0.0.1.
+- **Accepting or rejecting a skill is recorded.** `gnomon skill accept` moved
+  the file and wrote nothing, so the trail showed the surface hash change and
+  never that a person accepted a named skill, or what it said. Accept now
+  writes a `skill_accept` audit record and reject a `skill_reject` record
+  (with `--reason`): the skill's content hash, the surface hash before and
+  after, and who decided. Each lands in a sealed trail of its own, even when
+  `[audit]` is off, as `gnomon check` verdicts do. A decision that cannot be
+  recorded does not happen. Step 1 of `docs/design/SKILL-TRIALS.md`.
+- **`gnomon skill mine`: skill candidates from the audit trail.** The trail
+  recorded an agent being refused the same thing again and again, and nothing
+  read it. `mine` reads the trails with no model call and writes candidates
+  to `.gnomon-skills/candidates/` (gitignored, never hashed): the rule, the
+  role, the path pattern, the counts, and a `{trail, seq, hash}` pointer to
+  every record. One signal so far, `repeated_refusal` (3 or more distinct
+  sessions; retries inside one session do not count). Candidates
+  are evidence, not skills; nothing is loaded until a person accepts one.
+  `gnomon skill list --candidates` lists them. Step 4 of
+  `docs/design/SKILL-TRIALS.md`.
+
 - **A long local generation is no longer cut off at 300 s.** Node's fetch (undici)
   puts its own 300 s headersTimeout and bodyTimeout on every request, and a model
   call is not streamed, so headers arrive only when the generation is done. A

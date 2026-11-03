@@ -28,6 +28,10 @@ import {
   loadProposedSkills,
   acceptSkill,
   rejectSkill,
+  mineCandidates,
+  writeCandidates,
+  loadCandidates,
+  MIN_REPEATS,
   runTask,
   unstartedTaskRecord,
   type TaskRecord,
@@ -1481,6 +1485,38 @@ async function cmdSkill(args: CliArgs): Promise<void> {
   const sub = subcommandOr(args, "list");
   const id = args.positional[0];
 
+  if (sub === "mine") {
+    // Deterministic and model-free: reads the audit trails, writes evidence
+    // to .gnomon-skills/candidates/, and changes nothing the agent loads.
+    const found = mineCandidates(config);
+    const w = writeCandidates(config, found);
+    if (args.json) {
+      console.log(JSON.stringify({ dir: w.dir, fresh: w.fresh, candidates: found }, null, 2));
+      return;
+    }
+    if (found.length === 0) {
+      console.log("No skill candidates: no rule refused the same role on the same thing " +
+        `${MIN_REPEATS} or more times in the audit trails.`);
+      return;
+    }
+    console.log(`${found.length} skill candidate(s), ${w.fresh.length} new → ${w.dir}`);
+    for (const c of found) {
+      console.log(`  ${c.id}${w.fresh.includes(c.id) ? "  (new)" : ""}`);
+      console.log(`      ${c.suggestion}`);
+      console.log(`      ${c.records.length} record(s), first ${c.records[0]!.trail} seq ${c.records[0]!.seq}`);
+    }
+    console.log("Candidates are evidence, not skills: nothing is loaded until a person accepts one.");
+    return;
+  }
+
+  if (sub === "list" && (args.flags["candidates"] !== undefined || args.positional.includes("--candidates"))) {
+    const found = loadCandidates(config);
+    console.log("Candidates (.gnomon-skills/candidates/) — evidence, not loaded:");
+    if (found.length === 0) console.log("  (none — run `gnomon skill mine`)");
+    for (const c of found) console.log(`  ${c.id} — ${c.rule} × ${c.count} on ${c.pattern} (${c.role || "any role"})`);
+    return;
+  }
+
   if (sub === "list") {
     const active = loadSkills(config);
     const pending = loadProposedSkills(config);
@@ -1506,15 +1542,30 @@ async function cmdSkill(args: CliArgs): Promise<void> {
       process.exit(1);
     }
     try {
+      // Every decision leaves a record: the skill's content hash and the
+      // surface hash before and after, in a sealed trail of its own.
+      const recorded = (d: { record: { seq: number; hash?: string } | null; trail: string | null; sealed: boolean }) => {
+        if (d.trail && d.record) {
+          console.log(`Recorded in ${d.trail} (seq ${d.record.seq}, ${d.record.hash?.slice(0, 12) ?? "unchained"})`);
+        }
+        if (!d.sealed) {
+          console.error("⚠ The change was made and recorded, but the trail could not be sealed; `gnomon audit verify` will report it unsealed.");
+        }
+      };
       if (sub === "accept") {
-        const to = acceptSkill(config, id);
-        console.log(`Accepted ${id} → ${to}`);
+        const d = acceptSkill(config, id);
+        console.log(`Accepted ${id} → ${d.path}`);
         console.log(
           "The surface hash has changed. The skill loads from the next session."
         );
+        recorded(d);
       } else {
-        rejectSkill(config, id);
+        const reason = typeof args.flags.reason === "string" && args.flags.reason !== "true"
+          ? args.flags.reason
+          : undefined;
+        const d = rejectSkill(config, id, { reason });
         console.log(`Rejected ${id}`);
+        recorded(d);
       }
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
@@ -1523,7 +1574,7 @@ async function cmdSkill(args: CliArgs): Promise<void> {
     return;
   }
 
-  console.error(`Unknown skill subcommand: ${sub}. Use: list | accept | reject`);
+  console.error(`Unknown skill subcommand: ${sub}. Use: list | accept | reject | mine`);
   process.exit(1);
 }
 
@@ -2046,10 +2097,16 @@ Commands:
     Audit trails, when [audit] is enabled. 'verify' re-hashes each record
     and checks the chain, so a trail altered after the fact is detectable.
 
-  skill [list|accept <id>|reject <id>] [--dir <path>]
+  skill [list [--candidates]|accept <id>|reject <id> [--reason <text>]|mine [--json]] [--dir <path>]
     Skills the harness has learned. An agent proposes into
     .gnomon/skills/proposed/; accepting moves it into .gnomon/skills/,
     which changes the surface hash and applies from the next session.
+    Accept and reject each write a skill_accept / skill_reject audit
+    record (content hash, surface hash before and after, who), even when
+    [audit] is off.
+    mine reads the audit trails, with no model call, and writes skill
+    candidates (evidence with record pointers, not skill text) to
+    .gnomon-skills/candidates/, which is not hashed.
 
   task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--dir <path>]
     Run one task without a terminal and print the result. --json emits a
