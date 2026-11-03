@@ -1,0 +1,56 @@
+[?2004hroot@7cb05bf413fb:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@7cb05bf413fb:/app# clear
+[?2004l[H[J[3J[?2004hroot@7cb05bf413fb:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@7cb05bf413fb:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=d59e6c198f91d1469198b0677c008323f82d0345
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793696299
+[?2004hroot@7cb05bf413fb:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with pip.'; tmux wait -S done
+[?2004lR1_ARM=L R1_ENTRY=implementor R1_ROUTES=coordinator=local,implementor=local,verifier=local,plan=local,implement=local,critique=local,smol=local
+  ⚙ note 
+    ✓ note — Broken-pip diagnosis pattern that worked: `python3 -m pip` s
+Fixed. Your pip install had been **hollowed out**, not misconfigured.
+
+## What was actually wrong
+
+`python3 -m pip` failed with `No module named pip`, yet `/usr/local/bin/pip` still existed and was executable. That mismatch was the clue: someone/something deleted the `pip/` package directory from `site-packages` but left the `pip-24.3.1.dist-info/` metadata behind. So pip's launcher scripts still ran and imported `pip._internal.cli.main` — straight into a directory that wasn't there.
+
+The numbers made it precise: `RECORD` (pip's own manifest) listed **841** files under `pip/`; **0** existed on disk.
+
+## Why I could fix it with no network
+
+This session has `network = false` in `.gnomon/policy.toml`, so `get-pip.py` and `pip install pip` were both unavailable. But CPython ships a copy of pip inside `ensurepip/_bundled/` — a wheel that survives exactly this kind of damage. Before trusting it I verified it was the right one:
+
+- All **430** `.py` files in the wheel hash-matched `RECORD` exactly (0 mismatches), so I was restoring genuine bytes, not a doctored or version-skewed copy.
+- The 841-vs-430 gap was entirely `__pycache__` entries, which `RECORD` lists but wheels don't contain — normal, not corruption.
+
+Then I unzipped the wheel into `site-packages` and re-verified: **0 missing files, 0 hash mismatches** against `RECORD`.
+
+## Proof it works
+
+- `python3 -m pip --version`, `pip`, `pip3` → all report `pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)`
+- A real end-to-end install: I built a throwaway wheel and ran `pip install --no-index --no-deps --target=...`, which got `Successfully installed smoketest-1.0` and the installed package then imported and ran. This exercises pip's whole install machinery without needing the internet.
+- `pip list`, `pip download --help`, and `python3 -m venv` (which seeds its own pip) all succeed.
+
+Temp artifacts cleaned up; nothing in `/app` was modified (it isn't a git repo).
+
+## Two things to flag
+
+**I could not test a real PyPI download**, because network is off by policy. Install-from-index is the one path left unverified. The failure mode you'd still see is a *network/TLS/proxy* problem, which is unrelated to what was broken here — if that's what you originally hit, rerun with `/network on` and I'll diagnose it.
+
+**Worth asking how this happened.** Deleting a package's code while leaving its metadata is an unusual failure — a killed `pip uninstall`, a partial container layer, or a `rm -rf` gone wrong. `site-packages` here contains only pip and a stray `README.txt`, which suggests a deliberately slimmed image. If other Python installs on this machine share that image, check them the same way:
+
+```sh
+python3 -m pip --version
+```
+
+If you want pip newer than 24.3.1, that needs network: `python3 -m pip install -U pip`.
+
+[refusal] role=implementor model=qwen3.8-flash-next tools=16 surface=0192700a1561
+[?2004hroot@7cb05bf413fb:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@7cb05bf413fb:/app# 

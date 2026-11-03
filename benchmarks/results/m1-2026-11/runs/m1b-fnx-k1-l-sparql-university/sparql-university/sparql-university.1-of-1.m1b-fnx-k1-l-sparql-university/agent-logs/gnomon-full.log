@@ -1,0 +1,845 @@
+  │ I'll start by examining the Turtle file to understand the ontology and da…
+[approval] bash: ls -la /app/ && wc -l /app/university_graph.ttl — approved
+  ⚙ bash ls -la /app/ && wc -l /app/university_graph.ttl
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 1 tool call(s) so far
+  qwen3.8-flash-next — 2 tool call(s) so far
+  qwen3.8-flash-next — 3 tool call(s) so far
+  ⚙ read /app
+    ✓ read /app/ — 5 entries
+  ⚙ read /app/university_graph.ttl
+    ✓ read /app/university_graph.ttl — 306 lines · CRLF
+[approval] bash: python3 -c "import rdflib; print(rdflib.__version__)" 2>&1; which sparql arq rapper 2>&1; ls /app/.gnomon-audit/ — approved
+  ⚙ bash python3 -c "import rdflib; print(rdflib.__version__)" 2>&1; which spar…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 4 tool call(s) so far
+[approval] bash: pip install rdflib 2>&1 | tail -3 — approved
+  ⚙ bash pip install rdflib 2>&1 | tail -3
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 5 tool call(s) so far
+[approval] bash: python3 -m pip install rdflib >log 2>&1; echo "exit=$?"; tail -5 log — approved
+  ⚙ bash python3 -m pip install rdflib >log 2>&1; echo "exit=$?"; tail -5 log
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 6 tool call(s) so far
+[approval] bash: python3 --version; ls /usr/lib/python3/dist-packages 2>/dev/null | head -30; python3 -c "import ensurepip" 2>&1 | tail -2; which java javac node npm 2>&1 — approved
+  ⚙ bash python3 --version; ls /usr/lib/python3/dist-packages 2>/dev/null | hea…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 7 tool call(s) so far
+[approval] bash: cd /tmp && mkdir -p sparqltest && cd sparqltest && npm init -y >/dev/null 2>&1 && timeout 180 npm install rdflib >install.log 2>&1; echo "exit=$?"; tail -5 install.log — approved
+  ⚙ bash cd /tmp && mkdir -p sparqltest && cd sparqltest && npm init -y >/dev/n…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 8 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && ls node_modules/rdflib/lib | head; node -e "const rdflib=require('rdflib'); console.log(Object.keys(rdflib).slice(0,30).join(','))" — approved
+  ⚙ bash cd /tmp/sparqltest && ls node_modules/rdflib/lib | head; node -e "cons…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 9 tool call(s) so far
+  │ Node rdflib is available for validation. Let me analyze the data carefull…
+[approval] bash: cd /app && grep -n "isEnrolledIn" university_graph.ttl | sed 's/uni:Student//' | head -40; echo "---- course->dept counts ----"; grep -n "isTaughtIn" university_graph.ttl — approved
+  ⚙ bash cd /app && grep -n "isEnrolledIn" university_graph.ttl | sed 's/uni:St…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 10 tool call(s) so far
+  │ Let me compute enrollment counts per department precisely, then write the…
+[approval] bash: cd /tmp/sparqltest && cat > counts.js <<'EOF'
+const rdflib = require('rdflib');
+const fs = require('fs');
+const store = rdflib.graph();
+const txt = fs.readFileSync('/app/university_graph.ttl','utf8');
+rdflib.parse(txt, store, 'file:///app/university_graph.ttl', 'text/turtle');
+const U = n => 'http://university.org/ontology/' + n;
+const sym = p => store.sym(U(p));
+const any = p => store.sym(U(p));
+// course -> dept
+const deptOf = {};
+store.match(any('isTaughtIn'), null, null).forEach(st => { deptOf[st.subject.value] = st.object.value; });
+console.log('course->dept:', JSON.stringify(deptOf,null,0));
+// students enrolled (currently) : graduation absent or > 2025-08-16
+const TODAY = '2025-08-16';
+const perDept = {};
+const perDeptAll = {};
+store.match(any('isEnrolledIn'), null, null).forEach(st => {
+  const s = st.subject, course = st.object.value;
+  const dept = deptOf[course];
+  const grad = store.any(s, any('hasGraduationDate'));
+  const enrolled = !grad || grad.value > TODAY;
+  const d = dept || ('UNDEFINED:'+course.value.split('/').pop());
+  perDeptAll[d] = perDeptAll[d] || new Set(); perDeptAll[d].add(s.value);
+  if (enrolled) { perDept[d] = perDept[d] || new Set(); perDept[d].add(s.value); }
+});
+console.log('\n== distinct students per dept ==');
+for (const d of Object.keys(perDeptAll)) {
+  console.log(d.replace('http://university.org/ontology/',''), '| current:', perDept[d]?perDept[d].size:0, '| all:', perDeptAll[d].size);
+}
+console.log('\n== worksIn map ==');
+store.match(any('worksIn'),null,null).forEach(st=>console.log(st.subject.value.split('/').pop(), '->', st.object.value.split('/').pop()));
+console.log('\n== roles ==');
+store.match(any('role'),null,null).forEach(st=>console.log(st.subject.value.split('/').pop(), '|', st.object.value));
+console.log('\n== countries ==');
+store.match(any('locatedInCountry'),null,null).forEach(st=>console.log(st.subject.value.split('/').pop(), st.object.value));
+EOF
+node counts.js — approved
+  ⚙ bash cd /tmp/sparqltest && cat > counts.js <<'EOF' const rdflib = require('…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 11 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && cat > counts.js <<'EOF'
+const rdflib = require('rdflib');
+const fs = require('fs');
+const store = rdflib.graph();
+const txt = fs.readFileSync('/app/university_graph.ttl','utf8');
+rdflib.parse(txt, store, 'file:///app/university_graph.ttl', 'text/turtle');
+console.log('triples:', store.statements.length);
+const U = 'http://university.org/ontology/';
+const any = p => store.sym(U + p);
+const short = u => u.replace(U,'');
+const deptOf = {};
+store.match(any('isTaughtIn'), null, null).forEach(st => { deptOf[st.subject.value] = st.object.value; });
+console.log('isTaughtIn triples:', Object.keys(deptOf).length);
+const TODAY = '2025-08-16';
+const perDept = {}, perDeptAll = {};
+store.match(any('isEnrolledIn'), null, null).forEach(st => {
+  const s = st.subject, course = st.object.value;
+  const dept = deptOf[course];
+  const grad = store.any(s, any('hasGraduationDate'));
+  const enrolled = !grad || grad.value > TODAY;
+  const d = dept || ('UNDEFINED:'+short(course));
+  (perDeptAll[d] = perDeptAll[d] || new Set()).add(s.value);
+  if (enrolled) (perDept[d] = perDept[d] || new Set()).add(s.value);
+});
+console.log('\n== distinct students per dept (current = not graduated by 2025-08-16) ==');
+for (const d of Object.keys(perDeptAll))
+  console.log(short(d).padEnd(28), 'current:', perDept[d]?perDept[d].size:0, ' all:', perDeptAll[d].size);
+console.log('\n== worksIn ==');
+store.match(any('worksIn'),null,null).forEach(st=>console.log(short(st.subject.value), '->', short(st.object.value)));
+console.log('\n== roles ==');
+store.match(any('role'),null,null).forEach(st=>console.log(short(st.subject.value), '|', st.object.value));
+console.log('\n== locatedInCountry ==');
+store.match(any('locatedInCountry'),null,null).forEach(st=>console.log(short(st.subject.value), st.object.value));
+console.log('\n== belongsTo ==');
+store.match(any('belongsTo'),null,null).forEach(st=>console.log(short(st.subject.value), '->', short(st.object.value)));
+EOF
+node counts.js — approved
+  ⚙ bash cd /tmp/sparqltest && cat > counts.js <<'EOF' const rdflib = require('…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 12 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const rdflib=require('rdflib');const fs=require('fs');
+const store=rdflib.graph();
+rdflib.parse(fs.readFileSync('/app/university_graph.ttl','utf8'),store,'file:///app/university_graph.ttl','text/turtle');
+let i=0; store.match(null,null,null).forEach(st=>{ if(i<8) console.log(st.subject.value,'|',st.predicate.value,'|',st.object.value); i++; });
+" — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const rdflib=require('rdflib');const f…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 13 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const rdflib=require('rdflib');const fs=require('fs');
+const store=rdflib.graph();
+rdflib.parse(fs.readFileSync('/app/university_graph.ttl','utf8'),store,'file:///app/university_graph.ttl','text/turtle');
+const seen=new Set();
+store.match(null,null,null).forEach(st=>{ if(!seen.has(st.predicate.value)){seen.add(st.predicate.value);} });
+console.log([...seen].join('\n'));
+" — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const rdflib=require('rdflib');const f…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 14 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const rdflib=require('rdflib');const fs=require('fs');
+const store=rdflib.graph();
+rdflib.parse(fs.readFileSync('/app/university_graph.ttl','utf8'),store,'file:///app/university_graph.ttl','text/turtle');
+const st=store.match(null,store.sym('http://university.org/ontology/isTaughtIn'),null)[0];
+console.log('pred termType:', st.predicate.termType, JSON.stringify(st.predicate.value));
+const t=store.sym('http://university.org/ontology/isTaughtIn');
+console.log('sym termType:', t.termType, JSON.stringify(t.value));
+console.log('equal?', st.predicate.equals(t));
+console.log('match count with sym:', store.match(null,t,null).length);
+" — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const rdflib=require('rdflib');const f…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 15 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && cat > counts.js <<'EOF'
+const rdflib = require('rdflib');
+const fs = require('fs');
+const store = rdflib.graph();
+rdflib.parse(fs.readFileSync('/app/university_graph.ttl','utf8'), store, 'file:///app/university_graph.ttl', 'text/turtle');
+const U = 'http://university.org/ontology/';
+const P = {}; for (const p of ['isTaughtIn','isEnrolledIn','hasGraduationDate','worksIn','role','locatedInCountry','belongsTo','hasName','teaches'])
+  P[p] = store.sym(U + p);
+const short = u => String(u).replace(U,'');
+const deptOf = {};
+store.match(null, P.isTaughtIn, null).forEach(st => { deptOf[st.subject.value] = st.object.value; });
+const TODAY = '2025-08-16';
+const perDept = {}, perDeptAll = {};
+store.match(null, P.isEnrolledIn, null).forEach(st => {
+  const s = st.subject, course = st.object.value;
+  const grad = store.any(s, P.hasGraduationDate);
+  const enrolled = !grad || grad.value > TODAY;
+  const d = deptOf[course] || ('UNDEFINED:'+short(course));
+  (perDeptAll[d] = perDeptAll[d] || new Set()).add(s.value);
+  if (enrolled) (perDept[d] = perDept[d] || new Set()).add(s.value);
+});
+console.log('== distinct students per dept (current = not graduated by 2025-08-16) ==');
+for (const d of Object.keys(perDeptAll))
+  console.log(short(d).padEnd(28), 'current:', String(perDept[d]?perDept[d].size:0).padStart(3), ' all:', perDeptAll[d].size);
+console.log('\n== belongsTo / country ==');
+const univCountry={}; store.match(null,P.locatedInCountry,null).forEach(s=>univCountry[s.subject.value]=s.object.value);
+store.match(null,P.belongsTo,null).forEach(s=>console.log(short(s.subject.value).padEnd(28),'->',short(s.object.value), univCountry[s.object.value]));
+console.log('\n== people: role / worksIn / teaches ==');
+store.match(null,P.role,null).forEach(s=>{
+  const w=store.match(s.subject,P.worksIn,null).map(x=>short(x.object.value));
+  const t=store.match(s.subject,P.teaches,null).map(x=>short(x.object.value));
+  console.log(short(s.subject.value).padEnd(24),'|',s.object.value.padEnd(45),'| worksIn:',w.join(','),'| teaches:',t.join(','));
+});
+EOF
+node counts.js — approved
+  ⚙ bash cd /tmp/sparqltest && cat > counts.js <<'EOF' const rdflib = require('…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 16 tool call(s) so far
+  │ Data is clear now. Let me verify the expected answer by computing it inde…
+  qwen3.8-flash-next — 17 tool call(s) so far
+  ⚙ compute 
+    ✓ compute (14 - 8) = 6
+  │ Now I'll write the query.
+[approval] write /app/solution.sparql (+69 −0) [new file] — approved
+  ⚙ write /app/solution.sparql
+    ✓ write /app/solution.sparql (+69 −0)
+  qwen3.8-flash-next — 18 tool call(s) so far
+  │ Now let me validate the query actually runs and returns the expected resu…
+[approval] bash: cd /tmp/sparqltest && cat > run.js <<'EOF'
+const rdflib = require('rdflib');
+const fs = require('fs');
+const store = rdflib.graph();
+rdflib.parse(fs.readFileSync('/app/university_graph.ttl','utf8'), store, 'file:///app/university_graph.ttl', 'text/turtle');
+const q = fs.readFileSync(process.argv[2] || '/app/solution.sparql','utf8');
+(async () => {
+  try {
+    const res = await new Promise((res,rej)=> rdflib.query(store, q, (e,r)=> e?rej(e):res(r)));
+    console.log('HEAD:', res.head.join(' | '));
+    if (!res.length) console.log('(no rows)');
+    res.forEach(r => console.log(JSON.stringify(r)));
+  } catch (e) { console.error('QUERY ERROR:', e && e.message ? e.message : e); process.exit(1); }
+})();
+EOF
+node run.js /app/solution.sparql — approved
+  ⚙ bash cd /tmp/sparqltest && cat > run.js <<'EOF' const rdflib = require('rdf…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 19 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const rdflib=require('rdflib');
+console.log(typeof rdflib.Query, typeof rdflib.SPARQLToQuery);
+console.log(Object.keys(rdflib).filter(k=>/quer/i.test(k)));
+console.log(typeof rdflib.Store.prototype.query);
+" — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const rdflib=require('rdflib'); consol…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 20 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && cat > run.js <<'EOF'
+const rdflib = require('rdflib');
+const fs = require('fs');
+const store = rdflib.graph();
+rdflib.parse(fs.readFileSync('/app/university_graph.ttl','utf8'), store, 'file:///app/university_graph.ttl', 'text/turtle');
+const q = fs.readFileSync(process.argv[2] || '/app/solution.sparql','utf8');
+const query = new rdflib.Query(q);
+store.query(query, (ok, res) => {
+  if (!ok) { console.error('QUERY FAILED:', res); process.exit(1); }
+  console.log('HEAD:', (res.head||[]).map(v=>v.value).join(' | '));
+  if (!res.length) console.log('(no rows)');
+  res.forEach(b => {
+    const row = {};
+    (res.head||[]).forEach(v => { const t = b[v.value]; row[v.value] = t ? t.value : null; });
+    console.log(JSON.stringify(row));
+  });
+});
+EOF
+node run.js /app/solution.sparql — approved
+  ⚙ bash cd /tmp/sparqltest && cat > run.js <<'EOF' const rdflib = require('rdf…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 21 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && sed -n '240,270p' node_modules/rdflib/lib/query.js — approved
+  ⚙ bash cd /tmp/sparqltest && sed -n '240,270p' node_modules/rdflib/lib/query.…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 22 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && grep -n "queryToSPARQL\|SPARQLToQuery" node_modules/rdflib/lib/*.js | head -20 — approved
+  ⚙ bash cd /tmp/sparqltest && grep -n "queryToSPARQL\|SPARQLToQuery" node_modu…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 23 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && cat > run.js <<'EOF'
+const rdflib = require('rdflib');
+const fs = require('fs');
+const store = rdflib.graph();
+rdflib.parse(fs.readFileSync('/app/university_graph.ttl','utf8'), store, 'file:///app/university_graph.ttl', 'text/turtle');
+const q = fs.readFileSync(process.argv[2] || '/app/solution.sparql','utf8');
+const query = rdflib.SPARQLToQuery(q, false, store);
+const rows = [];
+store.query(query, (bindings) => { rows.push(bindings); }, () => {
+  const vars = [...new Set(rows.flatMap(r => Object.keys(r)))];
+  console.log('HEAD:', vars.join(' | '));
+  if (!rows.length) console.log('(no rows)');
+  rows.forEach(r => {
+    const o = {}; vars.forEach(v => o[v] = r[v] ? r[v].value : null);
+    console.log(JSON.stringify(o));
+  });
+});
+EOF
+node run.js /app/solution.sparql — approved
+  ⚙ bash cd /tmp/sparqltest && cat > run.js <<'EOF' const rdflib = require('rdf…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 24 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && sed -n '400,440p' node_modules/rdflib/lib/sparql-to-query.js — approved
+  ⚙ bash cd /tmp/sparqltest && sed -n '400,440p' node_modules/rdflib/lib/sparql…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 25 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && sed -n '25,80p' node_modules/rdflib/lib/sparql-to-query.js — approved
+  ⚙ bash cd /tmp/sparqltest && sed -n '25,80p' node_modules/rdflib/lib/sparql-t…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 26 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && timeout 120 npm install @zazazi/prefix-loader >i2.log 2>&1; echo "exit=$?"; tail -3 i2.log; timeout 120 npm search sparql-engine 2>&1 | head -5 — approved
+  ⚙ bash cd /tmp/sparqltest && timeout 120 npm install @zazazi/prefix-loader >i…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 27 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && timeout 240 npm install sparql-engine >i3.log 2>&1; echo "exit=$?"; tail -4 i3.log — approved
+  ⚙ bash cd /tmp/sparqltest && timeout 240 npm install sparql-engine >i3.log 2>…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 28 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && ls node_modules/sparql-engine/ && cat node_modules/sparql-engine/package.json | head -30 — approved
+  ⚙ bash cd /tmp/sparqltest && ls node_modules/sparql-engine/ && cat node_modul…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 29 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && ls node_modules/sparql-engine/node_modules 2>/dev/null; ls node_modules | grep -i "sparql\|n3\|rdf"  — approved
+  ⚙ bash cd /tmp/sparqltest && ls node_modules/sparql-engine/node_modules 2>/de…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 30 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && cat > run2.js <<'EOF'
+const { Engine, Store } = require('sparql-engine');
+const rdflib = require('rdflib');
+const fs = require('fs');
+const store = rdflib.graph();
+rdflib.parse(fs.readFileSync('/app/university_graph.ttl','utf8'), store, 'file:///app/university_graph.ttl', 'text/turtle');
+const n3store = new Store(store);
+const engine = new Engine();
+engine.addSource('urn:default', n3store);
+const q = fs.readFileSync(process.argv[2] || '/app/solution.sparql','utf8');
+(async () => {
+  try {
+    const res = await engine.query(q, { sources: ['urn:default'] });
+    const vars = res.head ? res.head.vars : null;
+    console.log('HEAD:', vars ? vars.join(' | ') : '(ask/unknown)');
+    let n = 0;
+    for await (const b of res) { n++; console.log(JSON.stringify(b, (k,v)=> (v&&v.termType)?v.value:v)); }
+    if (!n) console.log('(no rows)');
+    console.log('rows:', n);
+  } catch (e) { console.error('ERROR:', e && e.message ? e.message : e); process.exit(1); }
+})();
+EOF
+node run2.js /app/solution.sparql — approved
+  ⚙ bash cd /tmp/sparqltest && cat > run2.js <<'EOF' const { Engine, Store } = …
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 31 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "console.log(Object.keys(require('sparql-engine')))" && cat node_modules/sparql-engine/examples/*.js 2>/dev/null | head -40; ls node_modules/sparql-engine/examples — approved
+  ⚙ bash cd /tmp/sparqltest && node -e "console.log(Object.keys(require('sparql…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 32 tool call(s) so far
+  [tools] 32/256 calls — continuing (leg 2)
+  qwen3.8-flash-next — leg 2, 32 call(s) so far
+[approval] bash: cd /tmp/sparqltest && cat > run3.js <<'EOF'
+const N3 = require('n3');
+const { HashMapDataset, Graph, PipelineEngine } = require('sparql-engine');
+const fs = require('fs');
+
+const doc = fs.readFileSync('/app/university_graph.ttl','utf8');
+const parser = new N3.Parser({ format: 'text/turtle', baseIRI: 'file:///app/university_graph.ttl' });
+const quads = parser.parse(doc);
+const store = new N3.Store(quads);
+const graph = new Graph();
+graph.match = (s,p,o,g) => Promise.resolve(store.match(s,p,o,g||null));
+const ds = new HashMapDataset('urn:default', graph);
+const engine = new PipelineEngine(ds);
+const q = fs.readFileSync(process.argv[2] || '/app/solution.sparql','utf8');
+(async () => {
+  try {
+    const res = await engine.query(q);
+    console.log('HEAD:', res.head ? res.head.vars.join(' | ') : '?');
+    let n=0;
+    for await (const b of res) { n++;
+      const o={}; for (const k of b.keys()) { const t=b.get(k); o[k.value]= t?t.value:null; }
+      console.log(JSON.stringify(o));
+    }
+    if(!n) console.log('(no rows)');
+    console.log('rows:', n);
+  } catch(e){ console.error('ERROR:', e && e.stack ? e.stack.split('\n').slice(0,6).join('\n') : e); process.exit(1); }
+})();
+EOF
+node run3.js /app/solution.sparql — approved
+  ⚙ bash cd /tmp/sparqltest && cat > run3.js <<'EOF' const N3 = require('n3'); …
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 33 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const se=require('sparql-engine');
+const e=new se.PipelineEngine();
+console.log(Object.getOwnPropertyNames(Object.getPrototypeOf(e)));
+" ; sed -n '1,60p' node_modules/sparql-engine/examples/n3.js — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const se=require('sparql-engine'); con…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 34 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && timeout 240 npm install sparql-query-engine >i4.log 2>&1; echo "exit=$?"; tail -3 i4.log; node -e "console.log(Object.keys(require('sparql-query-engine')))" 2>&1|head -5 — approved
+  ⚙ bash cd /tmp/sparqltest && timeout 240 npm install sparql-query-engine >i4.…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 35 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && timeout 300 npm install @comunica/query-sparql >i5.log 2>&1; echo "exit=$?"; tail -3 i5.log — approved
+  ⚙ bash cd /tmp/sparqltest && timeout 300 npm install @comunica/query-sparql >…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 36 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && cat > run4.js <<'EOF'
+const { Engine } = require('@comunica/query-sparql');
+const fs = require('fs');
+const q = fs.readFileSync(process.argv[2] || '/app/solution.sparql','utf8');
+(async () => {
+  const engine = new Engine();
+  const src = 'file:///app/university_graph.ttl';
+  try {
+    const rows = await engine.queryQuads(q, { sources: [src] }).execute();
+    // gather variables
+    const vars = new Set(); rows.forEach(qd => qd.variable && vars.add(qd.variable.value));
+    if (vars.size) {
+      const out = {};
+      rows.forEach(qd => {
+        const b = qd.bindings;
+        const key = [...b].map(([k,v])=>k.value+'='+v.value).join(' ');
+        out[key] = (out[key]||0)+1;
+      });
+      const seen = new Set();
+      for (const k of Object.keys(out)) { seen.add(k); }
+      [...seen].sort().forEach(k=>console.log(k));
+      console.log('quad rows:', rows.length, 'distinct bindings:', seen.size);
+    } else {
+      console.log('quads:', rows.length);
+    }
+  } catch(e){ console.error('ERROR:', e && e.stack ? e.stack.split('\n').slice(0,8).join('\n') : e); process.exit(1); }
+})();
+EOF
+node run4.js /app/solution.sparql — approved
+  ⚙ bash cd /tmp/sparqltest && cat > run4.js <<'EOF' const { Engine } = require…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 37 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "const m=require('@comunica/query-sparql'); console.log(Object.keys(m).slice(0,20)); console.log(m.__esModule); console.log(typeof m.Querier, typeof m.QueryEngine);" — approved
+  ⚙ bash cd /tmp/sparqltest && node -e "const m=require('@comunica/query-sparql…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 38 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && cat > run4.js <<'EOF'
+const { QueryEngine } = require('@comunica/query-sparql');
+const fs = require('fs');
+const q = fs.readFileSync(process.argv[2] || '/app/solution.sparql','utf8');
+(async () => {
+  const engine = new QueryEngine();
+  const src = 'file:///app/university_graph.ttl';
+  try {
+    const rows = await engine.queryQuads(q, { sources: [src] }).execute();
+    const seen = new Set();
+    rows.forEach(qd => {
+      if (!qd.bindings) return;
+      seen.add([...qd.bindings].map(([k,v])=>k.value+'='+v.value).sort().join(' | '));
+    });
+    if (seen.size) [...seen].sort().forEach(k=>console.log(k));
+    else console.log('(no bindings) quad count:', rows.length);
+    console.log('--- distinct binding rows:', seen.size);
+  } catch(e){ console.error('ERROR:', e && e.stack ? e.stack.split('\n').slice(0,10).join('\n') : e); process.exit(1); }
+})();
+EOF
+node run4.js /app/solution.sparql — approved
+  ⚙ bash cd /tmp/sparqltest && cat > run4.js <<'EOF' const { QueryEngine } = re…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 39 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const { QueryEngine } = require('@comunica/query-sparql');
+const e = new QueryEngine();
+console.log(Object.getOwnPropertyNames(Object.getPrototypeOf(e)));
+console.log(require('@comunica/query-sparql/package.json').version);
+" — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const { QueryEngine } = require('@comu…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 40 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const { QueryEngine } = require('@comunica/query-sparql');
+const e = new QueryEngine();
+let o=e, names=new Set();
+while(o && o!==Object.prototype){ Object.getOwnPropertyNames(o).forEach(n=>names.add(n)); o=Object.getPrototypeOf(o); }
+console.log([...names].join(', '));
+" — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const { QueryEngine } = require('@comu…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 41 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && cat > run4.js <<'EOF'
+const { QueryEngine } = require('@comunica/query-sparql');
+const fs = require('fs');
+const q = fs.readFileSync(process.argv[2] || '/app/solution.sparql','utf8');
+(async () => {
+  const engine = new QueryEngine();
+  const src = 'file:///app/university_graph.ttl';
+  try {
+    const it = await engine.queryBindings(q, { sources: [src] });
+    const rows = [];
+    for await (const b of it) {
+      const o = {};
+      for (const [k,v] of b) o[k.value] = v.value;
+      rows.push(o);
+    }
+    if (!rows.length) console.log('(no rows)');
+    rows.forEach(r => console.log(JSON.stringify(r)));
+    console.log('--- rows:', rows.length);
+  } catch(e){ console.error('ERROR:', e && e.stack ? e.stack.split('\n').slice(0,10).join('\n') : e); process.exit(1); }
+})();
+EOF
+node run4.js /app/solution.sparql — approved
+  ⚙ bash cd /tmp/sparqltest && cat > run4.js <<'EOF' const { QueryEngine } = re…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 42 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && timeout 300 npm install n3@1 sparqljs@3 >i6.log 2>&1; echo "exit=$?"; tail -2 i6.log — approved
+  ⚙ bash cd /tmp/sparqltest && timeout 300 npm install n3@1 sparqljs@3 >i6.log …
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 43 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && cat > run5.js <<'EOF'
+const N3 = require('n3');
+const fs = require('fs');
+const store = new N3.Store();
+const parser = new N3.Parser({ format: 'text/turtle', baseIRI: 'file:///app/university_graph.ttl' });
+parser.parse(fs.readFileSync('/app/university_graph.ttl','utf8'), (err, quad) => {
+  if (err) throw err;
+  if (quad) store.addQuad(quad);
+});
+console.log('quads:', store.countQuads());
+const { QueryEngine } = require('sparql-engine');
+console.log('has QueryEngine?', typeof QueryEngine);
+EOF
+node run5.js; node -e "const m=require('sparqljs'); console.log(Object.keys(m))" — approved
+  ⚙ bash cd /tmp/sparqltest && cat > run5.js <<'EOF' const N3 = require('n3'); …
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 44 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const N3=require('n3'); const fs=require('fs');
+const p=new N3.Parser({format:'text/turtle', baseIRI:'file:///app/university_graph.ttl'});
+const quads=p.parse(fs.readFileSync('/app/university_graph.ttl','utf8'));
+console.log('sync parse quads:', quads.length);
+console.log(quads[0].toString());
+" — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const N3=require('n3'); const fs=requi…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 45 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const N3=require('n3'); const fs=require('fs');
+const p=new N3.Parser({format:'text/turtle', baseIRI:'file:///app/university_graph.ttl'});
+const quads=p.parse(fs.readFileSync('/app/university_graph.ttl','utf8'));
+console.log('n3 version', require('n3/package.json').version);
+const q=quads[0];
+console.log('keys', Object.keys(q));
+console.log('s', q.subject && q.subject.value, 'p', q.predicate && q.predicate.value, 'o', q.object && q.object.value);
+const store=new N3.Store(quads);
+console.log('count', store.countQuads());
+console.log([...store.match(null,null,null,undefined)][0].toString());
+" — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const N3=require('n3'); const fs=requi…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 46 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && timeout 300 npm install @comunica/engine-query-sparql 2>&1 | tail -2; node -e "
+const {QueryEngineFactory}=require('@comunica/query-sparql');
+const f=new QueryEngineFactory();
+console.log(Object.getOwnPropertyNames(Object.getPrototypeOf(f)));
+" — approved
+  ⚙ bash cd /tmp/sparqltest && timeout 300 npm install @comunica/engine-query-s…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 47 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const {QueryEngine}=require('@comunica/query-sparql');
+const e=new QueryEngine();
+console.log(typeof e.queryBindings, e.queryBindings.length);
+" ; ls node_modules/@comunica | head -40 — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const {QueryEngine}=require('@comunica…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 48 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && ls node_modules/@comunica | grep -i "file\|dereference\|http"; node -e "
+const {QueryEngine}=require('@comunica/query-sparql');
+const e=new QueryEngine();
+e.queryBindings('SELECT * WHERE { ?s ?p ?o } LIMIT 2', {sources:['https://example.org/x.ttl']}).then?
+  console.log('returns promise'): console.log('returns obj', typeof e.queryBindings('SELECT * WHERE { ?s ?p ?o }',{sources:['https://example.org/x.ttl']}));
+" 2>&1 | tail -5 — approved
+  ⚙ bash cd /tmp/sparqltest && ls node_modules/@comunica | grep -i "file\|deref…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 49 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const {QueryEngine}=require('@comunica/query-sparql');
+const e=new QueryEngine();
+(async()=>{
+  const r = e.queryBindings('SELECT * WHERE { ?s ?p ?o } LIMIT 1', {sources:['https://example.org/x.ttl']});
+  console.log('type:', typeof r, r && r.constructor && r.constructor.name);
+  console.log('then?', typeof r.then, 'asyncIterator?', typeof r[Symbol.asyncIterator]);
+})().catch(err=>console.log('rejected:', err.message));
+" — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const {QueryEngine}=require('@comunica…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 50 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const {QueryEngine}=require('@comunica/query-sparql');
+const e=new QueryEngine();
+(async()=>{
+  try{
+    const r = await e.queryBindings('SELECT * WHERE { ?s ?p ?o } LIMIT 1', {sources:['https://example.org/x.ttl']});
+    console.log('resolved type:', typeof r, r.constructor && r.constructor.name);
+    console.log('asyncIter?', typeof r[Symbol.asyncIterator], 'execute?', typeof r.execute);
+  }catch(err){ console.log('rejected:', err.message.slice(0,60)); }
+})();
+" — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const {QueryEngine}=require('@comunica…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 51 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const {QueryEngine}=require('@comunica/query-sparql');
+const e=new QueryEngine();
+const p = e.queryBindings('SELECT * WHERE { ?s ?p ?o } LIMIT 1', {sources:['https://example.org/x.ttl']});
+console.log('proto:', Object.getOwnPropertyNames(Object.getPrototypeOf(p)));
+p.catch(()=>{});
+" — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const {QueryEngine}=require('@comunica…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 52 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const {QueryEngine}=require('@comunica/query-sparql');
+const e=new QueryEngine();
+(async()=>{
+  try{
+    const r = await e.queryBindings('SELECT * WHERE { ?s ?p ?o } LIMIT 1', {sources:['https://www.example.com/']});
+    console.log('resolved:', typeof r, r.constructor && r.constructor.name);
+    console.log('asyncIter?', typeof r[Symbol.asyncIterator], 'execute?', typeof r.execute);
+  }catch(err){ console.log('rejected:', err.message.slice(0,80)); }
+})();
+" — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const {QueryEngine}=require('@comunica…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 53 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const fs=require('fs');
+const {QueryEngineFactory}=require('@comunica/query-sparql');
+const f=new QueryEngineFactory();
+const e=f.create();
+console.log('engine keys:', Object.getOwnPropertyNames(e).slice(0,20));
+console.log('has busHttp?', 'busHttp' in e, 'busDereference?', 'busDereference' in e);
+console.log('config?', !!e.config);
+" — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const fs=require('fs'); const {QueryEn…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 54 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const fs=require('fs');
+const {QueryEngine}=require('@comunica/query-sparql');
+const e=new QueryEngine();
+(async()=>{
+  try{
+    const r = await e.queryBindings('SELECT * WHERE { ?s ?p ?o } LIMIT 1', {sources:['file:///app/university_graph.ttl']});
+    console.log('OK resolved', r.constructor.name);
+  }catch(err){ console.log('rejected:', err.message.slice(0,80)); }
+})();
+" — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const fs=require('fs'); const {QueryEn…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 55 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && node -e "
+const fs=require('fs');
+const {QueryEngine}=require('@comunica/query-sparql');
+const e=new QueryEngine();
+(async()=>{
+  try{
+    const r = await e.queryBindings('SELECT * WHERE { ?s ?p ?o } LIMIT 1', {sources:['http://localhost:8901/university_graph.ttl']});
+    console.log('OK resolved', r.constructor.name);
+  }catch(err){ console.log('rejected:', err.message.slice(0,100)); }
+})();
+" &
+mkdir -p /tmp/srv && cd /app && setsid python3 -m http.server 8901 --bind 127.0.0.1 >/tmp/srv.log 2>&1 &
+sleep 2; wait — approved
+  ⚙ bash cd /tmp/sparqltest && node -e " const fs=require('fs'); const {QueryEn…
+    ✗ bash — timeout
+  qwen3.8-flash-next — 56 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  qwen3.8-flash-next — 56 tool call(s) so far
+  │ The HTTP route works. Let me start the server in the background and run t…
+[approval] bash: mkdir -p /tmp/jobs && setsid sh -c 'cd /app && python3 -m http.server 8901 --bind 127.0.0.1' </dev/null >/tmp/jobs/srv.log 2>&1 & sleep 2; curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8901/university_graph.ttl — approved
+  ⚙ bash mkdir -p /tmp/jobs && setsid sh -c 'cd /app && python3 -m http.server …
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 57 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && cat > run6.js <<'EOF'
+const { QueryEngine } = require('@comunica/query-sparql');
+const fs = require('fs');
+const q = fs.readFileSync(process.argv[2] || '/app/solution.sparql','utf8');
+(async () => {
+  const engine = new QueryEngine();
+  try {
+    const it = await engine.queryBindings(q, { sources: ['http://127.0.0.1:8901/university_graph.ttl'] });
+    const rows = [];
+    for await (const b of it) { const o={}; for (const [k,v] of b) o[k.value]=v.value; rows.push(o); }
+    if (!rows.length) console.log('(no rows)');
+    rows.forEach(r => console.log(JSON.stringify(r)));
+    console.log('--- rows:', rows.length);
+  } catch(e){ console.error('ERROR:', e && e.message ? e.message : e); process.exit(1); }
+})();
+EOF
+timeout 90 node run6.js /app/solution.sparql; echo "exit=$?" — approved
+  ⚙ bash cd /tmp/sparqltest && cat > run6.js <<'EOF' const { QueryEngine } = re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 58 tool call(s) so far
+  │ Result matches my independent computation. Let me verify the edge cases a…
+[approval] bash: cd /tmp/sparqltest && cat > ab.js <<'EOF'
+const { QueryEngine } = require('@comunica/query-sparql');
+const fs = require('fs');
+const engine = new QueryEngine();
+async function run(label, q){
+  try{
+    const it = await engine.queryBindings(q, { sources:['http://127.0.0.1:8901/university_graph.ttl'] });
+    const rows=[]; for await (const b of it){ const o={}; for(const [k,v] of b) o[k.value]=v.value; rows.push(o); }
+    console.log('###', label, '->', rows.length, 'rows');
+    rows.forEach(r=>console.log('   ', JSON.stringify(r)));
+  }catch(e){ console.log('###', label, 'ERROR:', e.message.slice(0,200)); }
+}
+(async()=>{
+  const base = fs.readFileSync('/app/solution.sparql','utf8');
+  // A: WITHOUT GROUP BY ?professor  (demonstrates duplicate-row bug)
+  await run('no-group-by-professor', base.replace('GROUP BY ?professor ?professorName','GROUP BY ?professorName'));
+  // B: no graduation-date filter (shows the date filter matters)
+  await run('no-grad-filter', base.replace('FILTER ( !BOUND(?gradDate) || ?gradDate >  "2025-08-16"^^xsd:date )',''));
+  // C: no EU restriction
+  await run('no-eu-filter', base.replace(/FILTER \( \?euCountry IN \([\s\S]*?\) \)/,''));
+  // D: full-professor filter removed
+  await run('no-fullprof-filter', base.replace(/FILTER \( CONTAINS\(\?role, "Professor"\)[\s\S]*?\) \n/,''));
+})();
+EOF
+timeout 120 node ab.js; echo "exit=$?" — approved
+  ⚙ bash cd /tmp/sparqltest && cat > ab.js <<'EOF' const { QueryEngine } = requ…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 59 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && cat > ab2.js <<'EOF'
+const { QueryEngine } = require('@comunica/query-sparql');
+const fs = require('fs');
+const engine = new QueryEngine();
+const base = fs.readFileSync('/app/solution.sparql','utf8');
+async function run(label,q){
+  try{ const it=await engine.queryBindings(q,{sources:['http://127.0.0.1:8901/university_graph.ttl']});
+    const rows=[]; for await(const b of it){const o={};for(const [k,v] of b)o[k.value]=v.value;rows.push(o);}
+    console.log('###',label,'->',rows.length, JSON.stringify(rows));
+  }catch(e){console.log('###',label,'ERROR:',e.message.slice(0,150));}
+}
+(async()=>{
+  // sanity: full-professor filter really excludes assistant professors
+  await run('assistant-excluded-check', `PREFIX uni:<http://university.org/ontology/>
+    SELECT ?n ?role WHERE { ?p a uni:Person ; uni:hasName ?n ; uni:role ?role .
+    FILTER (CONTAINS(?role,"Professor") && !CONTAINS(?role,"Assistant Professor") && !CONTAINS(?role,"Associate Professor")) }`);
+  // sanity: per-dept current student counts
+  await run('dept-counts', `PREFIX uni:<http://university.org/ontology/> PREFIX xsd:<http://www.w3.org/2001/XMLSchema#>
+    SELECT ?d (COUNT(DISTINCT ?s) AS ?n) WHERE { ?s uni:isEnrolledIn ?c . ?c uni:isTaughtIn ?d .
+    OPTIONAL{?s uni:hasGraduationDate ?g} FILTER(!BOUND(?g)||?g>"2025-08-16"^^xsd:date) } GROUP BY ?d HAVING(COUNT(DISTINCT ?s)>10)`);
+  // counterfactual: prof whose only >10 dept is outside the EU should be excluded
+  await run('counterfactual-us-only', base.replace('?professor uni:worksIn ?euDept .','?professor uni:worksIn ?euDept . FILTER(STRSTARTS(STR(?euDept),"http://university.org/ontology/Biology"))'));
+})();
+EOF
+timeout 120 node ab2.js; echo "exit=$?" — approved
+  ⚙ bash cd /tmp/sparqltest && cat > ab2.js <<'EOF' const { QueryEngine } = req…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 60 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && cat > ab3.js <<'EOF'
+const { QueryEngine } = require('@comunica/query-sparql');
+const fs = require('fs');
+const engine = new QueryEngine();
+const base = fs.readFileSync('/app/solution.sparql','utf8');
+(async()=>{
+  // same query, but grouping WITHOUT ?professor (name-only grouping)
+  const q = base.replace('GROUP BY ?professor ?professorName','GROUP BY ?professorName');
+  const it = await engine.queryBindings(q,{sources:['http://127.0.0.1:8901/university_graph.ttl']});
+  const rows=[]; for await(const b of it){const o={};for(const [k,v] of b)o[k.value]=v.value;rows.push(o);}
+  console.log('name-only GROUP BY rows:', rows.length); rows.forEach(r=>console.log('  ',JSON.stringify(r)));
+})();
+EOF
+timeout 90 node ab3.js
+# now test the query against a synthetic graph with two same-named professors
+mkdir -p /tmp/synthetic && cat > /tmp/synthetic/two_names.ttl <<'EOF'
+@prefix uni: <http://university.org/ontology/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+uni:U1 a uni:University ; uni:hasName "Uni A" ; uni:locatedInCountry "GR" .
+uni:U2 a uni:University ; uni:hasName "Uni B" ; uni:locatedInCountry "US" .
+uni:D1 a uni:Department ; uni:belongsTo uni:U1 .
+uni:D2 a uni:Department ; uni:belongsTo uni:U2 .
+uni:C1 a uni:Course ; uni:isTaughtIn uni:D1 .
+uni:P1 a uni:Person ; uni:hasName "Jane Professor" ; uni:role "Professor of X" ; uni:worksIn uni:D1 .
+uni:P2 a uni:Person ; uni:hasName "Jane Professor" ; uni:role "Professor of X" ; uni:worksIn uni:D1 , uni:D2 .
+uni:S1 uni:isEnrolledIn uni:C1 . uni:S2 uni:isEnrolledIn uni:C1 . uni:S3 uni:isEnrolledIn uni:C1 .
+uni:S4 uni:isEnrolledIn uni:C1 . uni:S5 uni:isEnrolledIn uni:C1 . uni:S6 uni:isEnrolledIn uni:C1 .
+uni:S7 uni:isEnrolledIn uni:C1 . uni:S8 uni:isEnrolledIn uni:C1 . uni:S9 uni:isEnrolledIn uni:C1 .
+uni:S10 uni:isEnrolledIn uni:C1 . uni:S11 uni:isEnrolledIn uni:C1 .
+EOF
+curl -s -o /dev/null -w "synthetic http=%{http_code}\n" http://127.0.0.1:8901/../../tmp/synthetic/two_names.ttl — approved
+  ⚙ bash cd /tmp/sparqltest && cat > ab3.js <<'EOF' const { QueryEngine } = req…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 61 tool call(s) so far
+[approval] bash: cd /tmp/sparqltest && cat > ab4.js <<'EOF'
+const { QueryEngine } = require('@comunica/query-sparql');
+const fs = require('fs');
+const engine = new QueryEngine();
+const base = fs.readFileSync('/app/solution.sparql','utf8');
+const SRC = 'http://127.0.0.1:8901/synthetic_two_names.ttl';
+async function run(label,q,src){ const it=await engine.queryBindings(q,{sources:[src]});
+  const rows=[]; for await(const b of it){const o={};for(const [k,v] of b)o[k.value]=v.value;rows.push(o);}
+  console.log('###',label,'->',rows.length,'rows'); rows.forEach(r=>console.log('   ',JSON.stringify(r))); }
+(async()=>{
+  await run('synthetic WITH ?professor in GROUP BY', base, SRC);
+  await run('synthetic WITHOUT ?professor in GROUP BY', base.replace('GROUP BY ?professor ?professorName','GROUP BY ?professorName'), SRC);
+})().catch(e=>{console.log('ERR',e.message.slice(0,150))});
+EOF
+timeout 90 node ab4.js; echo "exit=$?" — approved
+  ⚙ bash cd /tmp/sparqltest && cat > ab4.js <<'EOF' const { QueryEngine } = req…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 62 tool call(s) so far
+[approval] bash: cp /tmp/synthetic/two_names.ttl /app/_tmp_synthetic_two_names.ttl && curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8901/_tmp_synthetic_two_names.ttl && cd /tmp/sparqltest && sed -i 's#synthetic_two_names.ttl#_tmp_synthetic_two_names.ttl#' ab4.js && timeout 90 node ab4.js; echo "exit=$?" — approved
+  ⚙ bash cp /tmp/synthetic/two_names.ttl /app/_tmp_synthetic_two_names.ttl && c…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 63 tool call(s) so far
+[approval] bash: rm -f /app/_tmp_synthetic_two_names.ttl && ls /app && cat /app/.gitignore — approved
+  ⚙ bash rm -f /app/_tmp_synthetic_two_names.ttl && ls /app && cat /app/.gitign…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 64 tool call(s) so far
+  [tools] 64/256 calls — continuing (leg 3)
+  qwen3.8-flash-next — leg 3, 64 call(s) so far
+[approval] bash: cd /app && head -3 log; rm -f /app/log; pkill -f "http.server 8901" ; sleep 1; ls -la /app — approved
+  ⚙ bash cd /app && head -3 log; rm -f /app/log; pkill -f "http.server 8901" ; …
+    ✓ bash — killed by SIGTERM
+  qwen3.8-flash-next — 65 tool call(s) so far
+[approval] bash: cd /app && rm -f log && ls -la /app && (curl -s -m 2 -o /dev/null -w "server=%{http_code}\n" http://127.0.0.1:8901/ || echo "server stopped") — approved
+  ⚙ bash cd /app && rm -f log && ls -la /app && (curl -s -m 2 -o /dev/null -w "…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 66 tool call(s) so far
+  │ The repo is clean and the temp server is stopped. Final check of the deli…
+  qwen3.8-flash-next — 67 tool call(s) so far
+  qwen3.8-flash-next — 68 tool call(s) so far
+  ⚙ read /app/solution.sparql
+    ✓ read /app/solution.sparql — 69 lines
+  ⚙ note 
+    ✓ note — SPARQL validation in this repo: no python rdflib/pip availab
+Done. `/app/solution.sparql` is written and verified against the graph.
+
+## What the query does
+
+Three constraints, joined on `?professor`:
+
+1. **Full professor** — `uni:role` contains `"Professor"` but not `"Assistant Professor"` / `"Associate Professor"`. (Verified: this keeps the 5 full professors and drops Voulodimos and Mueller.)
+2. **EU department** — a `worksIn` department whose university's `locatedInCountry` is in the 27 EU member-state ISO codes as of 2025-08-16.
+3. **>10 currently-enrolled students in one of their departments** — a subquery counts `COUNT(DISTINCT ?student)` per department via `isEnrolledIn` → `isTaughtIn`, keeping only students enrolled on/before 2025-08-16 who have not graduated by then (no `hasGraduationDate`, or one strictly after it). `HAVING > 10`.
+
+The output join is separate from the filter joins, so `?countries` covers **all** countries the professor works in, not just EU ones. `GROUP BY ?professor ?professorName` (not name alone) keeps two distinct same-named professors from being merged into one row.
+
+## Verification
+
+I ran it with Comunica 5.4.1 (installed in `/tmp`, serving the TTL over a local HTTP server — comunica can't dereference `file://`). Result, 3 rows:
+
+| professorName | countries |
+|---|---|
+| Aristotle Tympas | GR |
+| Orfeas Menis | GR, US |
+| Pepe Attanasio | GR, PT |
+
+This matches an independent count I computed directly over the parsed triples: only `ComputerScience_NTUA` (12), `HistoryAndPhilosophy_NKUA` (12) and `Engineering_Berkeley` (11) clear the >10 threshold. `Mathematics_Sorbonne` has 14 enrolments but only 6 current students — the 8 who graduated before 2025-08-16 drop it below the bar, which is exactly why **Marie Dubois is excluded**. Ablation runs confirmed each clause is load-bearing: removing the graduation filter wrongly admits Dubois; restricting the >10 department to non-EU (MIT Biology, 7 students) returns 0 rows.
+
+Two data quirks I handled rather than tripped over: `Student5` references a non-existent `uni:Bio10` (dangling, contributes no department, so harmless), and `Student1`'s enrolment in `Bio101` is what gives MIT 7 rather than 8.
+
+The temp HTTP server is stopped and the scratch files I copied into `/app` for testing are removed — the repo contains only `solution.sparql` alongside the original TTL.
+
+[result] role=implementor model=qwen3.8-flash-next tools=68 surface=0192700a1561

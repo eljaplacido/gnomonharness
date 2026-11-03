@@ -1,0 +1,195 @@
+  │ I'll start by inspecting the environment to see what's actually broken.
+[approval] bash: pwd; ls -la; which python python3 pip pip3 2>&1; python3 -V 2>&1 — approved
+  ⚙ bash pwd; ls -la; which python python3 pip pip3 2>&1; python3 -V 2>&1
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 1 tool call(s) so far
+[approval] bash: python3 -m pip --version 2>&1 | head -40 — approved
+  ⚙ bash python3 -m pip --version 2>&1 | head -40
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 2 tool call(s) so far
+  │ pip's module is missing entirely. Let me look at the installation to unde…
+[approval] bash: ls /usr/local/lib/python3.13/site-packages/ 2>&1 | head -40; echo "--- ensurepip ---"; ls /usr/local/lib/python3.13/ensurepip 2>&1 | head; echo "--- pip bin ---"; head -5 /usr/local/bin/pip 2>&1; echo "--- venv? ---"; ls /usr/local/lib/python3.13/ | head -30 — approved
+  ⚙ bash ls /usr/local/lib/python3.13/site-packages/ 2>&1 | head -40; echo "---…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 3 tool call(s) so far
+  ⚙ bash python3 -c "import ensurepip; print('ensurepip ok')" 2>&1; echo "===";…
+    ⚠ bash — refused (network = false)
+  qwen3.8-flash-next — 4 tool call(s) so far
+  │ `site-packages` has pip's **dist-info but no `pip/` package** — the code …
+[approval] bash: ls -la /usr/local/lib/python3.13/ensurepip/_bundled/ 2>&1; echo "=== dist-info contents ==="; ls -la /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/ 2>&1; echo "=== RECORD head ==="; head -5 /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD 2>&1 — approved
+  ⚙ bash ls -la /usr/local/lib/python3.13/ensurepip/_bundled/ 2>&1; echo "=== d…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 5 tool call(s) so far
+  │ The `pip` package code is gone but its metadata and the `ensurepip` bundl…
+[approval] bash: cd /usr/local/lib/python3.13/ensurepip/_bundled && python3 -c "
+import hashlib,zipfile
+h=hashlib.sha256(open('pip-24.3.1-py3-none-any.whl','rb').read()).hexdigest()
+print('wheel sha256:',h[:20])
+z=zipfile.ZipFile('pip-24.3.1-py3-none-any.whl')
+print('entries:',len(z.namelist()))
+print('top-level:',sorted({n.split('/')[0] for n in z.namelist()})[:5])
+print('bad zip file:',z.testzip())
+" 2>&1 — approved
+  ⚙ bash cd /usr/local/lib/python3.13/ensurepip/_bundled && python3 -c " import…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 6 tool call(s) so far
+[approval] bash: grep -c ',' /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD; echo "--- how many pip/ files does RECORD claim ---"; grep -c '^pip/' /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD; echo "--- pip/ actually on disk ---"; ls /usr/local/lib/python3.13/site-packages/pip 2>&1 | head -3 — approved
+  ⚙ bash grep -c ',' /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-in…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 7 tool call(s) so far
+  │ Diagnosis confirmed: 841 `pip/` files are missing from disk. The bundled …
+[approval] bash: cd /usr/local/lib/python3.13 && python3 -c "
+import hashlib,zipfile,base64,re
+REC='site-packages/pip-24.3.1.dist-info/RECORD'
+z=zipfile.ZipFile('ensurepip/_bundled/pip-24.3.1-py3-none-any.whl')
+want={}
+for n in z.namelist():
+    if n.startswith('pip/'):
+        want[n]='sha256='+base64.urlsafe_b64encode(hashlib.sha256(z.read(n)).digest()).rstrip(b'=').decode()
+rec={}
+for line in open(REC):
+    p=line.rstrip('\n').split(',')
+    if len(p)>=2 and p[0].startswith('pip/'): rec[p[0]]=p[1]
+print('wheel files:',len(want),'record files:',len(rec))
+print('same set:',set(want)==set(rec))
+mism=[k for k in want if k in rec and rec[k]!=want[k]]
+print('hash mismatches:',len(mism), mism[:3])
+" 2>&1 — approved
+  ⚙ bash cd /usr/local/lib/python3.13 && python3 -c " import hashlib,zipfile,ba…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 8 tool call(s) so far
+  │ All shared files hash-match. The 841-vs-430 gap should be `__pycache__` e…
+[approval] bash: cd /usr/local/lib/python3.13 && python3 -c "
+import zipfile
+z=zipfile.ZipFile('ensurepip/_bundled/pip-24.3.1-py3-none-any.whl')
+w={n for n in z.namelist() if n.startswith('pip/')}
+rec={l.split(',')[0] for l in open('site-packages/pip-24.3.1.dist-info/RECORD') if l.startswith('pip/')}
+extra=rec-w
+print('in RECORD not in wheel:',len(extra))
+print('all are __pycache__:',all('__pycache__' in f for f in extra))
+print('in wheel not in RECORD:',len(w-rec))
+import collections
+print(collections.Counter(f.rsplit('.',1)[-1] for f in w))
+" 2>&1 — approved
+  ⚙ bash cd /usr/local/lib/python3.13 && python3 -c " import zipfile z=zipfile.…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 9 tool call(s) so far
+  │ Diagnosis is airtight: 411 `.py` files were deleted from `site-packages/p…
+[approval] bash: cd /usr/local/lib/python3.13 && python3 -c "
+import zipfile,os,base64,hashlib
+z=zipfile.ZipFile('ensurepip/_bundled/pip-24.3.1-py3-none-any.whl')
+sp='site-packages'
+n=0
+for m in z.infolist():
+    if m.is_dir(): continue
+    tgt=os.path.join(sp,m.filename)
+    os.makedirs(os.path.dirname(tgt),exist_ok=True)
+    data=z.read(m)
+    with open(tgt,'wb') as f: f.write(data)
+    os.chmod(tgt,0o755 if m.filename.endswith(('.exe','_distutils_get_platform.py')) else 0o644)
+    n+=1
+print('restored entries:',n)
+" 2>&1; echo "=== verify every RECORD file exists ==="; python3 -c "
+import os,base64,hashlib
+sp='/usr/local/lib/python3.13/site-packages'
+missing=[];bad=[]
+for l in open(sp+'/pip-24.3.1.dist-info/RECORD'):
+    p=l.rstrip('\n').split(',')
+    if len(p)<3 or not p[1]: continue
+    if p[0].startswith('../../../'): continue
+    f=os.path.join(sp,p[0])
+    if not os.path.exists(f):
+        if '__pycache__' in p[0]: continue
+        missing.append(p[0]); continue
+    if p[1].startswith('sha256='):
+        h='sha256='+base64.urlsafe_b64encode(hashlib.sha256(open(f,'rb').read()).digest()).rstrip(b'=').decode()
+        if h!=p[1]: bad.append(p[0])
+print('missing:',len(missing),missing[:5])
+print('hash mismatches:',len(bad),bad[:5])
+" 2>&1 — approved
+  ⚙ bash cd /usr/local/lib/python3.13 && python3 -c " import zipfile,os,base64,…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 10 tool call(s) so far
+  │ Every file `RECORD` describes now exists with a verified hash. Let me con…
+[approval] bash: python3 -m pip --version 2>&1; echo "exit=$?"; echo "=== scripts ==="; pip --version 2>&1; pip3 --version 2>&1; echo "=== import ==="; python3 -c "import pip, pip._internal.cli.main; print('pip', pip.__version__, 'imports OK')" 2>&1 — approved
+  ⚙ bash python3 -m pip --version 2>&1; echo "exit=$?"; echo "=== scripts ===";…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 11 tool call(s) so far
+  │ Now the real test — an actual install. Network is policy-disabled, so I'l…
+[approval] bash: cd /tmp && rm -rf pipcheck && mkdir pipcheck && cd pipcheck && python3 -c "
+import zipfile,os
+# build a tiny valid wheel offline
+name='smoketest'; ver='1.0'
+d=f'{name}-{ver}.dist-info'
+files={
+ f'{name}/__init__.py':'__version__=\"1.0\"\ndef hello(): return \"hi\"\n',
+ f'{d}/METADATA':'Metadata-Version: 2.1\nName: smoketest\nVersion: 1.0\n',
+ f'{d}/WHEEL':'Wheel-Version: 1.0\nGenerator: manual\nRoot-Is-Purelib: true\nTag: py3-none-any\n',
+}
+import hashlib,base64
+rec=[]
+with zipfile.ZipFile(f'{name}-{ver}-py3-none-any.whl','w') as z:
+    for k,v in files.items():
+        b=v.encode(); z.writestr(k,b)
+        rec.append(f'{k},sha256='+base64.urlsafe_b64encode(hashlib.sha256(b).digest()).rstrip(b'=').decode()+f',{len(b)}')
+    rec.append(f'{d}/RECORD,,')
+    z.writestr(f'{d}/RECORD','\n'.join(rec)+'\n')
+print('built wheel:',os.path.abspath(f'{name}-{ver}-py3-none-any.whl'))
+" 2>&1; echo "=== install ==="; python3 -m pip install --no-index --no-deps --target=/tmp/pipcheck/out smoketest-1.0-py3-none-any.whl 2>&1 | tail -6; echo "=== use it ==="; PYTHONPATH=/tmp/pipcheck/out python3 -c "import smoketest; print('installed package works:', smoketest.hello(), smoketest.__version__)" 2>&1 — approved
+  ⚙ bash cd /tmp && rm -rf pipcheck && mkdir pipcheck && cd pipcheck && python3…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 12 tool call(s) so far
+  │ Full install pipeline works. Let me verify the other two commands that sh…
+[approval] bash: python3 -m pip download --help >/dev/null 2>&1; echo "pip download --help exit=$?"; python3 -m pip list 2>&1 | head -5; echo "exit=$?"; echo "=== venv (uses pip) ==="; rm -rf /tmp/vtest; python3 -m venv /tmp/vtest 2>&1 | tail -4; echo "venv exit=$?"; ls /tmp/vtest/bin 2>&1 | tr '\n' ' ' — approved
+  ⚙ bash python3 -m pip download --help >/dev/null 2>&1; echo "pip download --h…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 13 tool call(s) so far
+[approval] bash: rm -rf /tmp/pipcheck; echo "cleaned"; echo "=== other site-packages dirs intact? ==="; ls /usr/local/lib/python3.13/site-packages/ 2>&1; echo "=== ensurepip still sane ==="; python3 -m ensurepip --version 2>&1 — approved
+  ⚙ bash rm -rf /tmp/pipcheck; echo "cleaned"; echo "=== other site-packages di…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 14 tool call(s) so far
+[approval] bash: rm -rf /tmp/vtest; echo cleaned; git -C /app status --porcelain 2>&1 | head; echo "(empty = repo untouched)" — approved
+  ⚙ bash rm -rf /tmp/vtest; echo cleaned; git -C /app status --porcelain 2>&1 |…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 15 tool call(s) so far
+  qwen3.8-flash-next — 16 tool call(s) so far
+  ⚙ note 
+    ✓ note — Broken-pip diagnosis pattern that worked: `python3 -m pip` s
+Fixed. Your pip install had been **hollowed out**, not misconfigured.
+
+## What was actually wrong
+
+`python3 -m pip` failed with `No module named pip`, yet `/usr/local/bin/pip` still existed and was executable. That mismatch was the clue: someone/something deleted the `pip/` package directory from `site-packages` but left the `pip-24.3.1.dist-info/` metadata behind. So pip's launcher scripts still ran and imported `pip._internal.cli.main` — straight into a directory that wasn't there.
+
+The numbers made it precise: `RECORD` (pip's own manifest) listed **841** files under `pip/`; **0** existed on disk.
+
+## Why I could fix it with no network
+
+This session has `network = false` in `.gnomon/policy.toml`, so `get-pip.py` and `pip install pip` were both unavailable. But CPython ships a copy of pip inside `ensurepip/_bundled/` — a wheel that survives exactly this kind of damage. Before trusting it I verified it was the right one:
+
+- All **430** `.py` files in the wheel hash-matched `RECORD` exactly (0 mismatches), so I was restoring genuine bytes, not a doctored or version-skewed copy.
+- The 841-vs-430 gap was entirely `__pycache__` entries, which `RECORD` lists but wheels don't contain — normal, not corruption.
+
+Then I unzipped the wheel into `site-packages` and re-verified: **0 missing files, 0 hash mismatches** against `RECORD`.
+
+## Proof it works
+
+- `python3 -m pip --version`, `pip`, `pip3` → all report `pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)`
+- A real end-to-end install: I built a throwaway wheel and ran `pip install --no-index --no-deps --target=...`, which got `Successfully installed smoketest-1.0` and the installed package then imported and ran. This exercises pip's whole install machinery without needing the internet.
+- `pip list`, `pip download --help`, and `python3 -m venv` (which seeds its own pip) all succeed.
+
+Temp artifacts cleaned up; nothing in `/app` was modified (it isn't a git repo).
+
+## Two things to flag
+
+**I could not test a real PyPI download**, because network is off by policy. Install-from-index is the one path left unverified. The failure mode you'd still see is a *network/TLS/proxy* problem, which is unrelated to what was broken here — if that's what you originally hit, rerun with `/network on` and I'll diagnose it.
+
+**Worth asking how this happened.** Deleting a package's code while leaving its metadata is an unusual failure — a killed `pip uninstall`, a partial container layer, or a `rm -rf` gone wrong. `site-packages` here contains only pip and a stray `README.txt`, which suggests a deliberately slimmed image. If other Python installs on this machine share that image, check them the same way:
+
+```sh
+python3 -m pip --version
+```
+
+If you want pip newer than 24.3.1, that needs network: `python3 -m pip install -U pip`.
+
+[refusal] role=implementor model=qwen3.8-flash-next tools=16 surface=0192700a1561

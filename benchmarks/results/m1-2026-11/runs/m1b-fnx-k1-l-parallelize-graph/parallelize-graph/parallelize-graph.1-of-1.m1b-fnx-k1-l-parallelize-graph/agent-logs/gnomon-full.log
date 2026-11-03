@@ -1,0 +1,1965 @@
+  │ I'll start by exploring the repository and environment.
+[approval] bash: pwd && ls -la — approved
+  ⚙ bash pwd && ls -la
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 1 tool call(s) so far
+[approval] bash: head -5 test 2>/dev/null; echo "---"; wc -l test 2>/dev/null — approved
+  ⚙ bash head -5 test 2>/dev/null; echo "---"; wc -l test 2>/dev/null
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 2 tool call(s) so far
+[approval] bash: cat .gitattributes .gitignore; ls -la .gnomon-audit; which upcc upcrun gcc make; gcc --version | head -1; nproc — approved
+  ⚙ bash cat .gitattributes .gitignore; ls -la .gnomon-audit; which upcc upcrun…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 3 tool call(s) so far
+[approval] bash: ls /usr/local/bin 2>/dev/null | head -20; ls / | head -30; ls /tmp /opt 2>/dev/null — approved
+  ⚙ bash ls /usr/local/bin 2>/dev/null | head -20; ls / | head -30; ls /tmp /op…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 4 tool call(s) so far
+  │ Berkeley UPC isn't installed. Let me start the download in the background…
+  ⚙ bash mkdir -p /tmp/bupc && cd /tmp/bupc && (curl -fsSL -o bupc.tar.gz https…
+    ⚠ bash — refused (network = false)
+  qwen3.8-flash-next — 5 tool call(s) so far
+[approval] bash: cat /tmp/clone.err; ls /tmp/task-cwd 2>/dev/null; find / -name "upcc*" -not -path "/proc/*" 2>/dev/null | head; find / -iname "*berkeley*upc*" -not -path "/proc/*" 2>/dev/null | head — approved
+  ⚙ bash cat /tmp/clone.err; ls /tmp/task-cwd 2>/dev/null; find / -name "upcc*"…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 6 tool call(s) so far
+[approval] bash: apt list --installed 2>/dev/null | grep -i -E "upc|mpi|caf" | head; ls /var/cache/apt/archives/*.deb 2>/dev/null | head; which apt-get; ls /installed-agent 2>/dev/null | head — approved
+  ⚙ bash apt list --installed 2>/dev/null | grep -i -E "upc|mpi|caf" | head; ls…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 7 tool call(s) so far
+[approval] bash: cat /installed-agent/setup-env.sh 2>/dev/null | head -60 — approved
+  ⚙ bash cat /installed-agent/setup-env.sh 2>/dev/null | head -60
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 8 tool call(s) so far
+  │ Network is disabled by policy and no UPC toolchain exists locally. Let me…
+  ⚙ bash timeout 8 bash -c 'echo > /dev/tcp/8.8.8.8/443' 2>&1; echo "tcp_exit=$…
+    ⚠ bash — refused (network = false)
+  qwen3.8-flash-next — 9 tool call(s) so far
+  qwen3.8-flash-next — 10 tool call(s) so far
+  ⚙ note 
+    ✓ note — Berkeley UPC is NOT installed (no upcc/upcrun anywhere on di
+  │ No network and no UPC toolchain on disk — I'll record that and build ever…
+  qwen3.8-flash-next — 11 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 0/6 done · Inspect test data shape (k, extensions, 
+[approval] bash: cd /app && awk -F'\t' '{print length($1)}' test | sort -u; echo "--- ext combos:"; awk -F'\t' '{print $2}' test | sort | uniq -c | sort -rn; echo "--- dup kmers:"; awk -F'\t' '{print $1}' test | sort | uniq -d | wc -l — approved
+  ⚙ bash cd /app && awk -F'\t' '{print length($1)}' test | sort -u; echo "--- e…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 12 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  qwen3.8-flash-next — 12 tool call(s) so far
+  │ Data confirmed: k=19, 10,000 unique k-mers, tab-separated extensions. Wri…
+[approval] write /app/dbg.h (+121 −0) [new file] — approved
+  ⚙ write /app/dbg.h
+    ✓ write /app/dbg.h (+121 −0)
+  qwen3.8-flash-next — 13 tool call(s) so far
+[approval] write /app/serial.c (+222 −0) [new file] — approved
+  ⚙ write /app/serial.c
+    ✓ write /app/serial.c (+222 −0)
+  qwen3.8-flash-next — 14 tool call(s) so far
+[approval] bash: cd /app && gcc -O2 -Wall -o serial serial.c 2>&1; echo "build=$?"; ./serial test /app/serial.out; echo "run=$?"; wc -l /app/serial.out; head -3 /app/serial.out; awk '{print length($0)}' /app/serial.out | sort -n | uniq -c | head — approved
+  ⚙ bash cd /app && gcc -O2 -Wall -o serial serial.c 2>&1; echo "build=$?"; ./s…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 15 tool call(s) so far
+  │ Contig buffer sizing was wrong — switching to growable per-contig buffers…
+[approval] edit /app/dbg.h (+0 −1) — approved
+  ⚙ edit /app/dbg.h
+    ✓ edit /app/dbg.h (+0 −1)
+  qwen3.8-flash-next — 16 tool call(s) so far
+[approval] edit /app/dbg.h (+2 −2) — approved
+  ⚙ edit /app/dbg.h
+    ✓ edit /app/dbg.h (+2 −2)
+  qwen3.8-flash-next — 17 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+import re
+s=open('serial.c').read()
+
+old_walk_r = s[s.index("/* Walk right from"):s.index("/* Walk left from")]
+new_walk_r = '''/* Walk right from `start` (already emitted) consuming right edges. */
+static int32_t walk_right(graph_t *g, char *out, int32_t len, int32_t cap, int32_t start)
+{
+    int32_t cur = start;
+    for (;;) {
+        int32_t r = g->nodes[cur].right;
+        if (r < 0 || g->nodes[cur].rvis) break;
+        if (g->nodes[r].left != cur) break;          /* branching in */
+        g->nodes[cur].rvis = 1;
+        g->nodes[r].lvis   = 1;
+        if (len + 1 > cap) {
+            cap *= 2;
+            char *nb = (char *)realloc(out, (size_t)cap);
+            if (!nb) { fprintf(stderr, "serial: out of memory\\n"); exit(1); }
+            /* NOTE: caller keeps the pointer through the returned capacity */
+            g->grow_buf = nb; g->grow_cap = cap;
+            out = nb;
+        }
+        uint64_t code = g->nodes[r].code;
+        out[len++] = INT2BASE[(code >> (62 - 2 * K)) & 3];
+        cur = r;
+    }
+    /* propagate a possible realloc back to the caller */
+    g->grow_ret = out;
+    return len;
+}
+
+'''
+s = s.replace(old_walk_r, new_walk_r)
+open('serial.c','w').write(s)
+PY
+grep -n "grow" serial.c | head — approved
+  ⚙ bash cd /app && python3 - <<'PY' import re s=open('serial.c').read() old_wa…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 18 tool call(s) so far
+  │ Cleaner: return the (possibly reallocated) buffer through a struct.
+[approval] bash: cd /app && python3 - <<'PY'
+s=open('serial.c').read()
+start=s.index("/* Walk right from")
+end=s.index("/* ------------------------------------------------------------------ */\n\nint main")
+new='''/* Walk right from `start` (already emitted), consuming right edges.
+ * Returns the (possibly reallocated) buffer, its length and capacity. */
+static char *walk_right(graph_t *g, char *out, int32_t len, int32_t *pcap, int32_t start)
+{
+    int32_t cap = *pcap;
+    int32_t cur = start;
+    for (;;) {
+        int32_t r = g->nodes[cur].right;
+        if (r < 0 || g->nodes[cur].rvis) break;
+        if (g->nodes[r].left != cur) break;          /* branching in */
+        g->nodes[cur].rvis = 1;
+        g->nodes[r].lvis   = 1;
+        if (len + 2 > cap) {
+            cap *= 2;
+            char *nb = (char *)realloc(out, (size_t)cap);
+            if (!nb) { fprintf(stderr, "serial: out of memory\\n"); exit(1); }
+            out = nb;
+        }
+        uint64_t code = g->nodes[r].code;
+        out[len++] = INT2BASE[(code >> (62 - 2 * K)) & 3];
+        cur = r;
+    }
+    *pcap = cap;
+    out[len] = '\\0';
+    return out;
+}
+
+/* Walk left from `start`, prepending bases and consuming left edges. */
+static char *walk_left(graph_t *g, char *out, int32_t len, int32_t *pcap, int32_t start)
+{
+    int32_t cap = *pcap;
+    int32_t cur = start;
+    for (;;) {
+        int32_t l = g->nodes[cur].left;
+        if (l < 0 || g->nodes[cur].lvis) break;
+        if (g->nodes[l].right != cur) break;         /* branching out */
+        g->nodes[cur].lvis = 1;
+        g->nodes[l].rvis   = 1;
+        if (len + 2 > cap) {
+            cap *= 2;
+            char *nb = (char *)realloc(out, (size_t)cap);
+            if (!nb) { fprintf(stderr, "serial: out of memory\\n"); exit(1); }
+            out = nb;
+        }
+        uint64_t code = g->nodes[l].code;
+        memmove(out + 1, out, (size_t)len + 1);
+        out[0] = INT2BASE[(code >> (62 - 2 * K)) & 3];
+        len++;
+        cur = l;
+    }
+    *pcap = cap;
+    out[len] = '\\0';
+    return out;
+}
+
+static void contigs_init(contigs_t *c, int32_t cap)
+{
+    c->seq = (char **)malloc((size_t)cap * sizeof(char *));
+    if (!c->seq) { fprintf(stderr, "serial: out of memory\\n"); exit(1); }
+    c->n = 0;
+    c->cap = cap;
+}
+
+static void contigs_push(contigs_t *c, char *seq)
+{
+    if (c->n == c->cap) {
+        c->cap *= 2;
+        char **ns = (char **)realloc(c->seq, (size_t)c->cap * sizeof(char *));
+        if (!ns) { fprintf(stderr, "serial: out of memory\\n"); exit(1); }
+        c->seq = ns;
+    }
+    c->seq[c->n++] = seq;
+}
+
+static void traverse(graph_t *g, contigs_t *c)
+{
+    for (int32_t i = 0; i < g->n; i++) {
+        if (g->nodes[i].rvis && g->nodes[i].lvis)
+            continue;                                /* fully consumed */
+
+        int32_t cap = 2 * K + 16;
+        char *out = (char *)malloc((size_t)cap);
+        if (!out) { fprintf(stderr, "serial: out of memory\\n"); exit(1); }
+        kmer_decode(g->nodes[i].code, K, out);
+        int32_t len = K;
+
+        out = walk_right(g, out, len, &cap, i);
+        len = (int32_t)strlen(out);
+        out = walk_left(g, out, len, &cap, i);
+
+        contigs_push(c, out);
+    }
+}
+
+'''
+s = s[:start]+new+s[end:]
+s = s.replace('''    contigs_t c;
+    c.buf = (char *)malloc((size_t)MAX_CONTIGS * MAX_CONTIG_LEN);
+    c.len = (int32_t *)malloc((size_t)MAX_CONTIGS * sizeof(int32_t));
+    if (!c.buf || !c.len) { fprintf(stderr, "serial: out of memory\\n"); exit(1); }
+    c.n = 0;
+''','''    contigs_t c;
+    contigs_init(&c, 1024);
+''')
+s = s.replace('''    for (int32_t i = 0; i < c.n; i++)
+        fprintf(f, "%s\\n", c.buf + (size_t)i * MAX_CONTIG_LEN);''','''    for (int32_t i = 0; i < c.n; i++)
+        fprintf(f, "%s\\n", c.seq[i]);''')
+open('serial.c','w').write(s)
+PY
+gcc -O2 -Wall -o serial serial.c 2>&1; echo "build=$?"; ./serial test /app/serial.out; echo "run=$?"; wc -l /app/serial.out — approved
+  ⚙ bash cd /app && python3 - <<'PY' s=open('serial.c').read() start=s.index("/…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 19 tool call(s) so far
+  │ 10,000 contigs of length 19 means no merging happened — let me debug the …
+[approval] bash: cd /app && awk '{print length($0)}' serial.out | sort -n | uniq -c; echo "--- total bases:"; awk '{s+=length($0)}END{print s}' serial.out; echo "--- unique contigs:"; sort -u serial.out | wc -l — approved
+  ⚙ bash cd /app && awk '{print length($0)}' serial.out | sort -n | uniq -c; ec…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 20 tool call(s) so far
+[approval] bash: cd /app && grep -n "^ATAGCCAGTGCCTGATACT" test; grep -n "TAGCCAGTGCCTGATACTG" test; grep -n "^GCCAGTGCCTGATACTGG" test; grep -n "CCAGTGCCTGATACTGGC" test — approved
+  ⚙ bash cd /app && grep -n "^ATAGCCAGTGCCTGATACT" test; grep -n "TAGCCAGTGCCTG…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 21 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/dbg.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  uint64_t a=kmer_encode("ATAGCCAGTGCCTGATACT",19);
+  uint64_t b=kmer_encode("TAGCCAGTGCCTGATACTG",19);
+  printf("a=%016llx b=%016llx ext(a,G)=%016llx match=%d\n",
+    (unsigned long long)a,(unsigned long long)b,(unsigned long long)kmer_extend(a,3),(int)(kmer_extend(a,3)==b));
+  uint64_t back=(b>>2)|((uint64_t)0<<(62-38));
+  printf("left(a,A)=%016llx match=%d\n",(unsigned long long)back,(int)(back==a));
+  return 0;
+}
+EOF
+gcc -O2 -o /tmp/dbg /tmp/dbg.c && /tmp/dbg — approved
+  ⚙ bash cd /app && cat > /tmp/dbg.c <<'EOF' #include "../../app/dbg.h" int mai…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 22 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/dbg2.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  uint64_t a=kmer_encode("ATAGCCAGTGCCTGATACT",19);
+  uint64_t b=kmer_encode("TAGCCAGTGCCTGATACTG",19);
+  printf("a=%016llx b=%016llx\n",(unsigned long long)a,(unsigned long long)b);
+  printf("a<<2=%016llx\n",(unsigned long long)(a<<2));
+  printf("b>>2=%016llx\n",(unsigned long long)(b>>2));
+  printf("shift needed=%d\n", 64-2*K);
+  return 0;
+}
+EOF
+gcc -O2 -o /tmp/dbg2 /tmp/dbg2.c && /tmp/dbg2 — approved
+  ⚙ bash cd /app && cat > /tmp/dbg2.c <<'EOF' #include "../../app/dbg.h" int ma…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 23 tool call(s) so far
+  │ Found it: the append-position shift was off by 2 bits. Fixing the encodin…
+[approval] edit /app/dbg.h (+25 −2) — approved
+  ⚙ edit /app/dbg.h
+    ✓ edit /app/dbg.h (+25 −2)
+  qwen3.8-flash-next — 24 tool call(s) so far
+[approval] bash: cd /app && sed -i 's|((uint64_t)BASE2INT\[(unsigned char)ext\[1\]\]);|, BASE2INT[(unsigned char)ext[1]]);|; s|uint64_t rc = kmer_extend(code, BASE2INT\[(unsigned char)ext\[1\]\]);|uint64_t rc = kmer_extend(code, BASE2INT[(unsigned char)ext[1]]);|' serial.c
+python3 - <<'PY'
+s=open('/app/serial.c').read()
+s=s.replace('''            uint64_t lc = (code >> 2) |
+                          ((uint64_t)BASE2INT[(unsigned char)ext[0]] << (62 - 2 * K));''',
+'''            uint64_t lc = kmer_prepend(code, BASE2INT[(unsigned char)ext[0]]);''')
+s=s.replace('out[len++] = INT2BASE[(code >> (62 - 2 * K)) & 3];','out[len++] = INT2BASE[kmer_last_base(code)];')
+s=s.replace('out[0] = INT2BASE[(code >> (62 - 2 * K)) & 3];','out[0] = INT2BASE[kmer_first_base(code)];')
+open('/app/serial.c','w').write(s)
+PY
+grep -n "kmer_extend\|kmer_prepend\|kmer_last_base\|kmer_first_base" serial.c
+gcc -O2 -Wall -o serial serial.c 2>&1; echo build=$?; ./serial test /app/serial.out; awk '{print length($0)}' serial.out | sort -n | uniq -c | tail -5; awk '{s+=length($0)}END{print "total bases:",s}' serial.out — approved
+  ⚙ bash cd /app && sed -i 's|((uint64_t)BASE2INT\[(unsigned char)ext\[1\]\]);|…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 25 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/dbg3.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  uint64_t a=kmer_encode("ATAGCCAGTGCCTGATACT",19);
+  uint64_t b=kmer_encode("TAGCCAGTGCCTGATACTG",19);
+  printf("ext(a,G)==b ? %d\n",(int)(kmer_extend(a,3)==b));
+  printf("prepend(b,A)==a ? %d\n",(int)(kmer_prepend(b,0)==a));
+  printf("last_base(b)=%c first_base(b)=%c\n",INT2BASE[kmer_last_base(b)],INT2BASE[kmer_first_base(b)]);
+  return 0;
+}
+EOF
+gcc -O2 -o /tmp/dbg3 /tmp/dbg3.c && /tmp/dbg3 — approved
+  ⚙ bash cd /app && cat > /tmp/dbg3.c <<'EOF' #include "../../app/dbg.h" int ma…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 26 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/dbg4.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  uint64_t a=kmer_encode("ATAGCCAGTGCCTGATACT",19);
+  uint64_t b=kmer_encode("TAGCCAGTGCCTGATACTG",19);
+  printf("a=%016llx b=%016llx\n",(unsigned long long)a,(unsigned long long)b);
+  printf("a<<2=%016llx  b^(a<<2)=%016llx\n",(unsigned long long)(a<<2),(unsigned long long)(b^(a<<2)));
+  printf("b>>2=%016llx  a^(b>>2)=%016llx\n",(unsigned long long)(b>>2),(unsigned long long)(a^(b>>2)));
+  printf("KMER_SHIFT=%d\n",KMER_SHIFT);
+  return 0;
+}
+EOF
+gcc -O2 -o /tmp/dbg4 /tmp/dbg4.c && /tmp/dbg4 — approved
+  ⚙ bash cd /app && cat > /tmp/dbg4.c <<'EOF' #include "../../app/dbg.h" int ma…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 27 tool call(s) so far
+[approval] bash: cd /app && sed -i 's/#define KMER_SHIFT (64 - 2 \* K)/#define KMER_SHIFT (66 - 2 * K)/' dbg.h && grep -n "KMER_SHIFT (" dbg.h && gcc -O2 -o /tmp/dbg4 /tmp/dbg4.c && /tmp/dbg4 && gcc -O2 -Wall -o serial serial.c && ./serial test /app/serial.out && awk '{print length($0)}' serial.out | sort -n | uniq -c | tail -6; awk '{s+=length($0)}END{print "total bases:",s," contigs:",NR}' serial.out — approved
+  ⚙ bash cd /app && sed -i 's/#define KMER_SHIFT (64 - 2 \* K)/#define KMER_SHI…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 28 tool call(s) so far
+  │ The shift is now right, but traversal still emits single k-mers. Let me i…
+[approval] bash: cd /app && cat > /tmp/dbg5.c <<'EOF'
+#include "../../app/dbg.h"
+/* replicate build from serial.c */
+static void graph_init(graph_t *g, int32_t cap){int32_t t=1;while(t<cap*2)t<<=1;g->nodes=malloc((size_t)cap*sizeof(node_t));g->table=malloc((size_t)t*sizeof(int32_t));for(int32_t i=0;i<t;i++)g->table[i]=-1;g->n=0;g->mask=t-1;}
+static int32_t graph_insert(graph_t *g, uint64_t code){
+  uint32_t b=(uint32_t)(kmer_hash(code)&(uint64_t)g->mask);int32_t i=g->table[b];
+  while(i>=0){if(g->nodes[i].code==code)return i;i=g->nodes[i].next;}
+  i=g->n++;node_t*nd=&g->nodes[i];nd->code=code;nd->next=g->table[b];nd->right=-1;nd->left=-1;nd->rvis=0;nd->lvis=0;g->table[b]=i;return i;}
+int main(int argc,char**argv){
+  FILE*f=fopen(argv[1],"r");static char line[256];
+  graph_t g;graph_init(&g,1000000);
+  while(fgets(line,sizeof line,f)){
+    char k[64],e[8];int got=sscanf(line,"%63s %7s",k,e);
+    if(got<2)continue;
+    uint64_t code=kmer_encode(k,K);int32_t id=graph_insert(&g,code);
+    if(e[1]!='F'){int32_t r=graph_insert(&g,kmer_extend(code,BASE2INT[(unsigned char)e[1]]));g.nodes[id].right=r;g.nodes[r].left=id;}
+    if(e[0]!='F'){int32_t l=graph_insert(&g,kmer_prepend(code,BASE2INT[(unsigned char)e[0]]));g.nodes[l].right=id;g.nodes[id].left=l;}
+  }
+  int lr=0,ll=0,both=0;
+  for(int32_t i=0;i<g.n;i++){if(g.nodes[i].right>=0)lr++;if(g.nodes[i].left>=0)ll++;if(g.nodes[i].right>=0&&g.nodes[i].left>=0)both++;}
+  printf("nodes=%d with_right=%d with_left=%d both=%d\n",g.n,lr,ll,both);
+  int32_t id=graph_find(&g,kmer_encode("ATAGCCAGTGCCTGATACT",19));
+  printf("id=%d right=%d left=%d\n",id,g.nodes[id].right,g.nodes[id].left);
+  if(g.nodes[id].right>=0){char s[32];kmer_decode(g.nodes[g.nodes[id].right].code,K,s);printf("right=%s\n",s);}
+  return 0;}
+EOF
+gcc -O2 -o /tmp/dbg5 /tmp/dbg5.c && /tmp/dbg5 test — approved
+  ⚙ bash cd /app && cat > /tmp/dbg5.c <<'EOF' #include "../../app/dbg.h" /* rep…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 29 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/dbg6.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  uint64_t a=kmer_encode("ATAGCCAGTGCCTGATACT",19);
+  uint64_t b=kmer_encode("TAGCCAGTGCCTGATACTG",19);
+  printf("KMER_SHIFT=%d\n",KMER_SHIFT);
+  printf("ext(a,G)==b ? %d\n",(int)(kmer_extend(a,3)==b));
+  printf("prepend(b,A)==a ? %d\n",(int)(kmer_prepend(b,0)==a));
+  printf("last_base(b)=%c first_base(b)=%c\n",INT2BASE[kmer_last_base(b)],INT2BASE[kmer_first_base(b)]);
+  char s[32]; kmer_decode(b,19,s); printf("decode(b)=%s\n",s);
+  return 0;}
+EOF
+gcc -O2 -o /tmp/dbg6 /tmp/dbg6.c && /tmp/dbg6 — approved
+  ⚙ bash cd /app && cat > /tmp/dbg6.c <<'EOF' #include "../../app/dbg.h" int ma…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 30 tool call(s) so far
+[approval] bash: cd /app && sed -i 's/#define KMER_SHIFT (66 - 2 \* K)/#define KMER_SHIFT (64 - 2 * K)/' dbg.h && grep -n "KMER_SHIFT (" dbg.h && gcc -O2 -o /tmp/dbg6 /tmp/dbg6.c && /tmp/dbg6 && gcc -O2 -Wall -o serial serial.c && ./serial test /app/serial.out && awk '{print length($0)}' serial.out | sort -n | uniq -c | tail -8; awk '{s+=length($0)}END{print "total bases:",s," contigs:",NR}' serial.out — approved
+  ⚙ bash cd /app && sed -i 's/#define KMER_SHIFT (66 - 2 \* K)/#define KMER_SHI…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 31 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/dbg7.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  const char *s="TAGCCAGTGCCTGATACTG";
+  uint64_t c=0;
+  for(int i=0;i<19;i++){printf("%c->%d ",s[i],BASE2INT[(unsigned char)s[i]]);c=(c<<2)|BASE2INT[(unsigned char)s[i]];}
+  printf("\nlow-aligned=%016llx\n",(unsigned long long)c);
+  printf("<<26 = %016llx\n",(unsigned long long)(c<<26));
+  printf("encode=%016llx\n",(unsigned long long)kmer_encode(s,19));
+  return 0;}
+EOF
+gcc -O2 -o /tmp/dbg7 /tmp/dbg7.c && /tmp/dbg7 — approved
+  ⚙ bash cd /app && cat > /tmp/dbg7.c <<'EOF' #include "../../app/dbg.h" int ma…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 32 tool call(s) so far
+  [tools] 32/256 calls — continuing (leg 2)
+  qwen3.8-flash-next — leg 2, 32 call(s) so far
+[approval] bash: cd /app && sed -n '55,95p' dbg.h — approved
+  ⚙ bash cd /app && sed -n '55,95p' dbg.h
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 33 tool call(s) so far
+[approval] bash: cd /app && gcc -O2 -o /tmp/dbg6 /tmp/dbg6.c && /tmp/dbg6; echo "=== fresh:"; gcc -O2 -Wall -o serial serial.c && ./serial test /app/serial.out && awk '{print length($0)}' serial.out | sort -n | uniq -c | tail -8; awk '{s+=length($0)}END{print "total bases:",s," contigs:",NR}' serial.out — approved
+  ⚙ bash cd /app && gcc -O2 -o /tmp/dbg6 /tmp/dbg6.c && /tmp/dbg6; echo "=== fr…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 34 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/dbg8.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  uint64_t b=kmer_encode("TAGCCAGTGCCTGATACTG",19);
+  printf("b=%016llx\n",(unsigned long long)b);
+  printf("b>>26 = %016llx  &3 = %d\n",(unsigned long long)(b>>26),(int)((b>>26)&3));
+  printf("b>>28 = %016llx  &3 = %d\n",(unsigned long long)(b>>28),(int)((b>>28)&3));
+  printf("kmer_last_base=%d kmer_first_base=%d\n",kmer_last_base(b),kmer_first_base(b));
+  return 0;}
+EOF
+gcc -O2 -o /tmp/dbg8 /tmp/dbg8.c && /tmp/dbg8 — approved
+  ⚙ bash cd /app && cat > /tmp/dbg8.c <<'EOF' #include "../../app/dbg.h" int ma…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 35 tool call(s) so far
+[approval] bash: cd /app && sed -i 's/#define KMER_SHIFT (64 - 2 \* K)/#define KMER_SHIFT (66 - 2 * K)   \/* last base sits at bits [66-2K, 67-2K] *\//' dbg.h && grep -n "define KMER_SHIFT" dbg.h && gcc -O2 -o /tmp/dbg8 /tmp/dbg8.c && /tmp/dbg8 && gcc -O2 -o /tmp/dbg6 /tmp/dbg6.c && /tmp/dbg6 — approved
+  ⚙ bash cd /app && sed -i 's/#define KMER_SHIFT (64 - 2 \* K)/#define KMER_SHI…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 36 tool call(s) so far
+[approval] bash: cd /app && grep -n "code << (64" dbg.h; grep -n "64 - 2" dbg.h; echo "---"; gcc -O2 -o /tmp/dbg6 /tmp/dbg6.c 2>&1; /tmp/dbg6 — approved
+  ⚙ bash cd /app && grep -n "code << (64" dbg.h; grep -n "64 - 2" dbg.h; echo "…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 37 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/dbg.h'; s=open(p).read()
+old = s[s.index("/* Base positions inside"):s.index("/* ------------------------------------------------------------------ */\n/* hash table with separate chaining")]
+new = '''/* ------------------------------------------------------------------ */
+/* k-mer sliding-window primitives                                     */
+/*                                                                     */
+/* A code holds exactly K bases in its low 2K bits (kmer_encode masks   */
+/* off everything else), so a base always sits at a fixed bit position: */
+/*   base j (0-based) occupies bits [2*(K-1-j), 2*(K-1-j)+1]            */
+/* and the 2 bits a shift brings in from above are always garbage.      */
+/* ------------------------------------------------------------------ */
+
+#define KMER_LOW  (((uint64_t)1 << (2 * K)) - 1)   /* mask for the K bases */
+
+/* Drop the first base, append base code b at the end. */
+static inline uint64_t kmer_extend(uint64_t code, int b)
+{
+    return ((code << 2) | (uint64_t)b) & KMER_LOW;
+}
+
+/* Drop the last base, prepend base code b at the front. */
+static inline uint64_t kmer_prepend(uint64_t code, int b)
+{
+    return (code >> 2) | ((uint64_t)b << (2 * (K - 1)));
+}
+
+/* The base kmer_extend() would append, i.e. the last base of a code. */
+static inline int kmer_last_base(uint64_t code)
+{
+    return (int)(code & 3);
+}
+
+/* The base kmer_prepend() would prepend, i.e. the first base of a code. */
+static inline int kmer_first_base(uint64_t code)
+{
+    return (int)((code >> (2 * (K - 1))) & 3);
+}
+
+'''
+s = s.replace(old, new)
+open(p,'w').write(s)
+PY
+sed -n '38,95p' dbg.h — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/dbg.h'; s=open(p).read() old = s[s…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 38 tool call(s) so far
+  │ Now switch to the simpler low-aligned encoding consistently.
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/dbg.h'; s=open(p).read()
+s = s.replace('''/* Pack a k-mer (k <= 32) left-aligned into the high 2k bits of a 64-bit word,
+ * so that a left shift by 2 drops the first base and an OR with a base code
+ * appends a base at the end. */
+static inline uint64_t kmer_encode(const char *s, int k)
+{
+    uint64_t code = 0;
+    for (int i = 0; i < k; i++)
+        code = (code << 2) | (uint64_t)BASE2INT[(unsigned char)s[i]];
+    return code << (64 - 2 * k);
+}''','''/* Pack a k-mer (k <= 32 bases) into the low 2k bits of a 64-bit word, first
+ * base in the high end of that field. */
+static inline uint64_t kmer_encode(const char *s, int k)
+{
+    uint64_t code = 0;
+    for (int i = 0; i < k; i++)
+        code = (code << 2) | (uint64_t)BASE2INT[(unsigned char)s[i]];
+    return code;
+}''')
+open(p,'w').write(s)
+PY
+gcc -O2 -o /tmp/dbg6 /tmp/dbg6.c && /tmp/dbg6 && gcc -O2 -Wall -o serial serial.c && ./serial test /app/serial.out && awk '{print length($0)}' serial.out | sort -n | uniq -c | tail -8; awk '{s+=length($0)}END{print "total bases:",s," contigs:",NR}' serial.out — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/dbg.h'; s=open(p).read() s = s.rep…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 39 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/v1.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  uint64_t a=kmer_encode("ATAGCCAGTGCCTGATACT",19);
+  uint64_t b=kmer_encode("TAGCCAGTGCCTGATACTG",19);
+  printf("ext(a,G)==b? %d  prepend(b,A)==a? %d\n",(int)(kmer_extend(a,3)==b),(int)(kmer_prepend(b,0)==a));
+  printf("last(b)=%c first(b)=%c\n",INT2BASE[kmer_last_base(b)],INT2BASE[kmer_first_base(b)]);
+  char s[32];kmer_decode(b,19,s);printf("decode=%s\n",s);
+  return 0;}
+EOF
+gcc -O2 -o /tmp/v1 /tmp/v1.c && /tmp/v1 — approved
+  ⚙ bash cd /app && cat > /tmp/v1.c <<'EOF' #include "../../app/dbg.h" int main…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 40 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/v2.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  uint64_t a=kmer_encode("ATAGCCAGTGCCTGATACT",19);
+  uint64_t b=kmer_encode("TAGCCAGTGCCTGATACTG",19);
+  printf("a=%016llx b=%016llx\n",(unsigned long long)a,(unsigned long long)b);
+  uint64_t e=kmer_extend(a,3);
+  printf("ext=%016llx  xor=%016llx\n",(unsigned long long)e,(unsigned long long)(e^b));
+  printf("KMER_LOW=%016llx\n",(unsigned long long)KMER_LOW);
+  printf("(a<<2)&LOW=%016llx\n",(unsigned long long)((a<<2)&KMER_LOW));
+  return 0;}
+EOF
+gcc -O2 -o /tmp/v2 /tmp/v2.c && /tmp/v2 — approved
+  ⚙ bash cd /app && cat > /tmp/v2.c <<'EOF' #include "../../app/dbg.h" int main…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 41 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/v3.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  const char *a="ATAGCCAGTGCCTGATACT";
+  const char *b="TAGCCAGTGCCTGATACTG";
+  for(int i=0;i<19;i++) printf("%d:%c%d ",i,a[i],BASE2INT[(unsigned char)a[i]]); printf("\n");
+  for(int i=0;i<19;i++) printf("%d:%c%d ",i,b[i],BASE2INT[(unsigned char)b[i]]); printf("\n");
+  printf("a[1..18]==b[0..17]? %d\n",memcmp(a+1,b,18)==0);
+  printf("strlen a=%d b=%d\n",(int)strlen(a),(int)strlen(b));
+  return 0;}
+EOF
+gcc -O2 -o /tmp/v3 /tmp/v3.c && /tmp/v3 — approved
+  ⚙ bash cd /app && cat > /tmp/v3.c <<'EOF' #include "../../app/dbg.h" int main…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 42 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/v4.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  uint64_t a=kmer_encode("ATAGCCAGTGCCTGATACT",19);
+  uint64_t b=kmer_encode("TAGCCAGTGCCTGATACTG",19);
+  uint64_t e=kmer_extend(a,3);
+  printf("a=%016llx\nb=%016llx\ne=%016llx\n",
+     (unsigned long long)a,(unsigned long long)b,(unsigned long long)e);
+  printf("e==b? %d   e>>2==a? %d\n",(int)(e==b),(int)((e>>2)==a));
+  printf("last_base(e)=%d  first_base(e)=%d\n",kmer_last_base(e),kmer_first_base(e));
+  return 0;}
+EOF
+gcc -O2 -o /tmp/v4 /tmp/v4.c && /tmp/v4 — approved
+  ⚙ bash cd /app && cat > /tmp/v4.c <<'EOF' #include "../../app/dbg.h" int main…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 43 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/v5.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  const char *a="ATAGCCAGTGCCTGATACT";
+  const char *b="TAGCCAGTGCCTGATACTG";
+  uint64_t ca=kmer_encode(a,19), cb=kmer_encode(b,19);
+  printf("ca=%016llx cb=%016llx\n",(unsigned long long)ca,(unsigned long long)cb);
+  printf("ca<<2=%016llx\n",(unsigned long long)(ca<<2));
+  printf("cb xor (ca<<2) = %016llx\n",(unsigned long long)(cb^(ca<<2)));
+  printf("cb&LOW=%016llx  (ca<<2)&LOW=%016llx\n",
+     (unsigned long long)(cb&KMER_LOW),(unsigned long long)((ca<<2)&KMER_LOW));
+  return 0;}
+EOF
+gcc -O2 -o /tmp/v5 /tmp/v5.c && /tmp/v5 — approved
+  ⚙ bash cd /app && cat > /tmp/v5.c <<'EOF' #include "../../app/dbg.h" int main…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 44 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/v6.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  uint64_t ca=kmer_encode("ATAGCCAGTGCCTGATACT",19);
+  uint64_t cb=kmer_encode("TAGCCAGTGCCTGATACTG",19);
+  uint64_t e1=((ca<<2)|3)&KMER_LOW;
+  uint64_t e2=(ca<<2)|3;
+  printf("e1=%016llx e2=%016llx cb=%016llx\n",
+    (unsigned long long)e1,(unsigned long long)e2,(unsigned long long)cb);
+  printf("e1==cb? %d   e2==cb? %d\n",(int)(e1==cb),(int)(e2==cb));
+  printf("e1^cb=%016llx\n",(unsigned long long)(e1^cb));
+  return 0;}
+EOF
+gcc -O2 -o /tmp/v6 /tmp/v6.c && /tmp/v6 — approved
+  ⚙ bash cd /app && cat > /tmp/v6.c <<'EOF' #include "../../app/dbg.h" int main…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 45 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/v7.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  const char *a="ATAGCCAGTGCCTGATACT";
+  const char *b="TAGCCAGTGCCTGATACTG";
+  uint64_t ca=0,cb=0;
+  for(int i=0;i<19;i++) ca=(ca<<2)|BASE2INT[(unsigned char)a[i]];
+  for(int i=0;i<19;i++) cb=(cb<<2)|BASE2INT[(unsigned char)b[i]];
+  printf("ca=%016llx cb=%016llx\n",(unsigned long long)ca,(unsigned long long)cb);
+  printf("kmer_encode a=%016llx b=%016llx\n",
+    (unsigned long long)kmer_encode(a,19),(unsigned long long)kmer_encode(b,19));
+  printf("kmer_extend(a,3)=%016llx\n",(unsigned long long)kmer_extend(ca,3));
+  return 0;}
+EOF
+gcc -O2 -o /tmp/v7 /tmp/v7.c && /tmp/v7 — approved
+  ⚙ bash cd /app && cat > /tmp/v7.c <<'EOF' #include "../../app/dbg.h" int main…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 46 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/v8.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  uint64_t ca=0x0000000c94b978c7ULL;
+  uint64_t t1=ca<<2, t2=t1|3ULL, t3=t2 & KMER_LOW;
+  printf("ca   =%016llx\n",ca);
+  printf("ca<<2=%016llx\n",t1);
+  printf("|3   =%016llx\n",t2);
+  printf("&LOW =%016llx\n",t3);
+  printf("LOW  =%016llx\n",KMER_LOW);
+  printf("cb   =%016llx\n",0x0000003252e5e31eULL);
+  printf("equal? %d\n",(int)(t3==0x0000003252e5e31eULL));
+  return 0;}
+EOF
+gcc -O2 -o /tmp/v8 /tmp/v8.c && /tmp/v8 — approved
+  ⚙ bash cd /app && cat > /tmp/v8.c <<'EOF' #include "../../app/dbg.h" int main…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 47 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/v9.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  const char *a="ATAGCCAGTGCCTGATACT";
+  const char *b="TAGCCAGTGCCTGATACTG";
+  uint64_t ca=0,cb=0;
+  for(int i=0;i<19;i++) ca=(ca<<2)|(uint64_t)BASE2INT[(unsigned char)a[i]];
+  for(int i=0;i<19;i++) cb=(cb<<2)|(uint64_t)BASE2INT[(unsigned char)b[i]];
+  printf("ca=%016lx cb=%016lx\n",(unsigned long)ca,(unsigned long)cb);
+  printf("ca<<2 |3 = %016lx\n",(unsigned long)((ca<<2)|3ULL));
+  printf("cb>>2    = %016lx\n",(unsigned long)(cb>>2));
+  printf("a[18]=%c code=%d ; b[18]=%c code=%d\n",a[18],BASE2INT[(unsigned char)a[18]],b[18],BASE2INT[(unsigned char)b[18]]);
+  return 0;}
+EOF
+gcc -O2 -o /tmp/v9 /tmp/v9.c && /tmp/v9 — approved
+  ⚙ bash cd /app && cat > /tmp/v9.c <<'EOF' #include "../../app/dbg.h" int main…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 48 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/v10.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  uint64_t ca=0x0000000c94b978c7ULL;
+  uint64_t cb=0x0000003252e5e31eULL;
+  uint64_t e=((ca<<2)|3ULL)&KMER_LOW;
+  printf("e=%016lx cb=%016lx e==cb?%d\n",(unsigned long)e,(unsigned long)cb,(int)(e==cb));
+  printf("e&3=%lu  cb&3=%lu\n",(unsigned long)(e&3),(unsigned long)(cb&3));
+  printf("kmer_extend(ca,3)=%016lx\n",(unsigned long)kmer_extend(ca,3));
+  printf("kmer_extend(ca,2)=%016lx  ==cb? %d\n",(unsigned long)kmer_extend(ca,2),(int)(kmer_extend(ca,2)==cb));
+  return 0;}
+EOF
+gcc -O2 -o /tmp/v10 /tmp/v10.c && /tmp/v10 — approved
+  ⚙ bash cd /app && cat > /tmp/v10.c <<'EOF' #include "../../app/dbg.h" int mai…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 49 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/v11.c <<'EOF'
+#include "../../app/dbg.h"
+int main(void){
+  const char *b="TAGCCAGTGCCTGATACTG";
+  uint64_t cb=0;
+  for(int i=0;i<19;i++) cb=(cb<<2)|(uint64_t)BASE2INT[(unsigned char)b[i]];
+  printf("cb=%016lx  cb&3=%lu (2==G)\n",(unsigned long)cb,(unsigned long)(cb&3));
+  printf("kmer_encode=%016lx  &3=%lu\n",(unsigned long)kmer_encode(b,19),(unsigned long)(kmer_encode(b,19)&3));
+  printf("last_base=%d (%c)\n",kmer_last_base(cb),INT2BASE[kmer_last_base(cb)]);
+  return 0;}
+EOF
+gcc -O2 -o /tmp/v11 /tmp/v11.c && /tmp/v11 — approved
+  ⚙ bash cd /app && cat > /tmp/v11.c <<'EOF' #include "../../app/dbg.h" int mai…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 50 tool call(s) so far
+[approval] bash: cd /app && sed -n '100,200p' serial.c — approved
+  ⚙ bash cd /app && sed -n '100,200p' serial.c
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 51 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  qwen3.8-flash-next — 51 tool call(s) so far
+  │ Found the real bug: the data contains k-mers not listed in the file, so `…
+[approval] write /app/dbg.h (+35 −44) — approved
+  ⚙ write /app/dbg.h
+    ✓ write /app/dbg.h (+35 −44)
+  qwen3.8-flash-next — 52 tool call(s) so far
+[approval] write /app/serial.c (+70 −55) — approved
+  ⚙ write /app/serial.c
+    ✓ write /app/serial.c (+70 −55)
+  qwen3.8-flash-next — 53 tool call(s) so far
+[approval] bash: cd /app && gcc -O2 -Wall -o serial serial.c 2>&1; echo build=$?; ./serial test /app/serial.out; awk '{print length($0)}' serial.out | sort -n | uniq -c | tail -8; awk '{s+=length($0)}END{print "total bases:",s," contigs:",NR}' serial.out; head -3 serial.out — approved
+  ⚙ bash cd /app && gcc -O2 -Wall -o serial serial.c 2>&1; echo build=$?; ./ser…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 54 tool call(s) so far
+  │ Still no merging, and node count equals record count — suspicious. Let me…
+[approval] bash: cd /app && cat > /tmp/probe.c <<'EOF'
+#define main serial_main_unused
+#include "/app/serial.c"
+#undef main
+int main(void){
+  long sz; char *t=read_file("/app/test",&sz);
+  graph_t g; graph_init(&g,MAX_KMERS/8); build(&g,t);
+  int32_t n=g.n;
+  long or_=0,ol=0,od0=0,ob=0;
+  for(int32_t i=0;i<n;i++){ if(g.nodes[i].right>=0)or_++; if(g.nodes[i].left>=0)ol++;
+    if(g.nodes[i].outdeg==1&&g.nodes[i].indeg==1)ob++; }
+  printf("nodes=%d with_right=%ld with_left=%ld both_deg1=%ld\n",n,or_,ol,ob);
+  /* how many records were parsed? count lines */
+  long lines=0; for(long i=0;i<sz;i++) if(t[i]=='\n') lines++;
+  printf("lines=%ld\n",lines);
+  int32_t id=graph_find(&g,kmer_encode("ATAGCCAGTGCCTGATACT",19));
+  printf("id=%d right=%d outdeg=%d left=%d indeg=%d\n",id,g.nodes[id].right,g.nodes[id].outdeg,g.nodes[id].left,g.nodes[id].indeg);
+  if(g.nodes[id].right>=0){char s[32];kmer_decode(g.nodes[g.nodes[id].right].code,K,s);printf("right=%s\n",s);}
+  /* check the implied node exists */
+  int32_t r=graph_find(&g,kmer_extend(kmer_encode("ATAGCCAGTGCCTGATACT",19),2));
+  printf("implied TAGCC...G id=%d\n",r);
+  return 0;}
+EOF
+gcc -O2 -o /tmp/probe /tmp/probe.c 2>&1 | head -5; /tmp/probe — approved
+  ⚙ bash cd /app && cat > /tmp/probe.c <<'EOF' #define main serial_main_unused …
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 55 tool call(s) so far
+[approval] bash: cd /app && sed -n '82,125p' serial.c | cat -A | sed -n '1,45p' | sed 's/\$$//' | head -45 — approved
+  ⚙ bash cd /app && sed -n '82,125p' serial.c | cat -A | sed -n '1,45p' | sed '…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 56 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/probe2.c <<'EOF'
+#define main serial_main_unused
+#include "/app/serial.c"
+#undef main
+int main(void){
+  long sz; char *t=read_file("/app/test",&sz);
+  const char *p=t;
+  for(int line=0;line<2;line++){
+    while(*p=='\n'||*p=='\r')p++;
+    const char*st=p;
+    while(*p&&*p!='\n'&&*p!='\r'&&*p!='\t'&&*p!=' ')p++;
+    int klen=(int)(p-st);
+    char kstr[20]; memcpy(kstr,st,K); kstr[K]=0;
+    while(*p==' ')p++;
+    char ext[2]={'F','F'}; int ne=0;
+    while(ne<2){char c=*p;if(c=='A'||c=='C'||c=='G'||c=='T'||c=='F'||c=='a'||c=='c'||c=='g'||c=='t'||c=='f')ext[ne++]=*p++;else break;}
+    printf("line%d klen=%d kmer=%s ne=%d ext=%c%c\n",line,klen,kstr,ne,ext[0],ext[1]);
+    while(*p&&*p!='\n'&&*p!='\r')p++;
+  }
+  return 0;}
+EOF
+gcc -O2 -o /tmp/probe2 /tmp/probe2.c 2>&1|head -3; /tmp/probe2 — approved
+  ⚙ bash cd /app && cat > /tmp/probe2.c <<'EOF' #define main serial_main_unused…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 57 tool call(s) so far
+[approval] bash: cd /app && head -1 test | od -c | head -4 — approved
+  ⚙ bash cd /app && head -1 test | od -c | head -4
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 58 tool call(s) so far
+  │ The parser never skips the tab before reading extensions. Fixing.
+[approval] edit /app/serial.c (+1 −1) — approved
+  ⚙ edit /app/serial.c
+    ✓ edit /app/serial.c (+1 −1)
+  qwen3.8-flash-next — 59 tool call(s) so far
+[approval] bash: cd /app && gcc -O2 -Wall -o serial serial.c && ./serial test /app/serial.out && awk '{print length($0)}' serial.out | sort -n | uniq -c | tail -8; awk '{s+=length($0)}END{print "total bases:",s," contigs:",NR}' serial.out; head -3 serial.out — approved
+  ⚙ bash cd /app && gcc -O2 -Wall -o serial serial.c && ./serial test /app/seri…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 60 tool call(s) so far
+  │ Serial works: 12 contigs, 10,223 bases. Now the parallel UPC version.
+[approval] write /app/pgen.upc (+585 −0) [new file] — approved
+  ⚙ write /app/pgen.upc
+    ✓ write /app/pgen.upc (+585 −0)
+  qwen3.8-flash-next — 61 tool call(s) so far
+  │ The merge phase I sketched is too convoluted. Rewriting it cleanly.
+[approval] write /app/pgen.upc (+173 −232) — approved
+  ⚙ write /app/pgen.upc
+    ✓ write /app/pgen.upc (+173 −232)
+  qwen3.8-flash-next — 62 tool call(s) so far
+[approval] bash: cd /app && gcc -O2 -Wall -o pgen_serial pgen.upc 2>&1 | head -30; echo build=$?; ./pgen_serial test pgen_serial; cat pgen_serial_0.out | sort > /tmp/p0; sort serial.out > /tmp/s0; diff /tmp/s0 /tmp/p0 && echo "IDENTICAL (1 thread)"; wc -l pgen_serial_0.out — approved
+  ⚙ bash cd /app && gcc -O2 -Wall -o pgen_serial pgen.upc 2>&1 | head -30; echo…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 63 tool call(s) so far
+  │ gcc needs the `.c` suffix to compile. Copying to `pgen.c` for the plain-C…
+[approval] bash: cd /app && cp pgen.upc pgen.c && gcc -O2 -Wall -o pgen_serial pgen.c 2>&1 | head -30; echo "build_status=$?"; ./pgen_serial test pgen_serial 2>&1 | tail -3 — approved
+  ⚙ bash cd /app && cp pgen.upc pgen.c && gcc -O2 -Wall -o pgen_serial pgen.c 2…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 64 tool call(s) so far
+  [tools] 64/256 calls — continuing (leg 3)
+  qwen3.8-flash-next — leg 3, 64 call(s) so far
+  │ The merge drops k-mers implied by extensions but never listed. Fixing pha…
+[approval] edit /app/pgen.upc (+9 −1) — approved
+  ⚙ edit /app/pgen.upc
+    ✓ edit /app/pgen.upc (+9 −1)
+  qwen3.8-flash-next — 65 tool call(s) so far
+[approval] bash: cd /app && cp pgen.upc pgen.c && gcc -O2 -o pgen_serial pgen.c 2>/dev/null && ./pgen_serial test pgen_serial 2>&1 | tail -2 && sort pgen_serial_0.out > /tmp/p0 && sort serial.out > /tmp/s0 && diff /tmp/s0 /tmp/p0 >/dev/null && echo "IDENTICAL to serial (1 thread)" || { echo "DIFFERS"; wc -l pgen_serial_0.out serial.out; } — approved
+  ⚙ bash cd /app && cp pgen.upc pgen.c && gcc -O2 -o pgen_serial pgen.c 2>/dev/…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 66 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+s=s.replace('''static inline int can_exit_right(int32_t i)
+{
+    if (nodes[i].rvis || nodes[i].outdeg != 1) return 0;
+    int32_t r = nodes[i].out[0];
+    return r >= 0 && nodes[r].indeg == 1 && nodes[r].in[0] == i;
+}
+
+static inline int can_enter_from_left(int32_t i)
+{
+    if (nodes[i].lvis || nodes[i].indeg != 1) return 0;
+    int32_t l = nodes[i].in[0];
+    return l >= 0 && nodes[l].outdeg == 1 && nodes[l].out[0] == i;
+}''','''/* A node may be crossed to the right only with exactly one successor whose
+ * only predecessor is it -- the same test the serial version applies. */
+static inline int can_exit_right(int32_t i)
+{
+    if (nodes[i].rvis || nodes[i].outdeg != 1 || nodes[i].indeg != 1) return 0;
+    int32_t r = nodes[i].out[0];
+    return r >= 0 && nodes[r].indeg == 1 && nodes[r].in[0] == i;
+}
+
+static inline int can_enter_from_left(int32_t i)
+{
+    if (nodes[i].lvis || nodes[i].indeg != 1 || nodes[i].outdeg != 1) return 0;
+    int32_t l = nodes[i].in[0];
+    return l >= 0 && nodes[l].outdeg == 1 && nodes[l].out[0] == i;
+}''')
+open(p,'w').write(s)
+PY
+cp pgen.upc pgen.c && gcc -O2 -o pgen_serial pgen.c 2>/dev/null && ./pgen_serial test pgen_serial 2>&1|tail -1 && sort pgen_serial_0.out >/tmp/p0 && sort serial.out >/tmp/s0 && diff /tmp/s0 /tmp/p0 >/dev/null && echo "IDENTICAL to serial (1 thread)" || { echo DIFFERS; wc -l pgen_serial_0.out; } — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 67 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/cmp.c <<'EOF'
+#define main serial_main_unused
+#include "/app/serial.c"
+#undef main
+int main(void){
+  long sz; char *t=read_file("/app/test",&sz);
+  graph_t g; graph_init(&g,MAX_KMERS/8); build(&g,t);
+  printf("nodes=%d\n",g.n);
+  int32_t id=graph_find(&g,kmer_encode("ATAGCCAGTGCCTGATACT",19));
+  printf("id=%d outdeg=%d indeg=%d right=%d left=%d\n",id,g.nodes[id].outdeg,g.nodes[id].indeg,g.nodes[id].right,g.nodes[id].left);
+  int32_t r=g.nodes[id].right;
+  if(r>=0)printf("  r=%d indeg(r)=%d left(r)=%d (want indeg1 left==%d)\n",r,g.nodes[r].indeg,g.nodes[r].left,id);
+  /* count how many nodes pass serial can_exit_right */
+  long er=0,el=0;
+  for(int32_t i=0;i<g.n;i++){ if(can_exit_right(&g,i))er++; if(can_enter_from_left(&g,i))el++; }
+  printf("serial can_exit_right=%ld can_enter_from_left=%ld\n",er,el);
+  return 0;}
+EOF
+gcc -O2 -o /tmp/cmp /tmp/cmp.c 2>&1|head -3; /tmp/cmp — approved
+  ⚙ bash cd /app && cat > /tmp/cmp.c <<'EOF' #define main serial_main_unused #i…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 68 tool call(s) so far
+  │ My added indeg==1 condition was wrong — the serial predicate doesn't requ…
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+s=s.replace('if (nodes[i].rvis || nodes[i].outdeg != 1 || nodes[i].indeg != 1) return 0;','if (nodes[i].rvis || nodes[i].outdeg != 1) return 0;')
+s=s.replace('if (nodes[i].lvis || nodes[i].indeg != 1 || nodes[i].outdeg != 1) return 0;','if (nodes[i].lvis || nodes[i].indeg != 1) return 0;')
+open(p,'w').write(s)
+PY
+cp pgen.upc pgen.c && gcc -O2 -o pgen_serial pgen.c 2>/dev/null && ./pgen_serial test pgen_serial 2>&1|tail -1 && sort pgen_serial_0.out >/tmp/p0 && sort serial.out >/tmp/s0 && diff /tmp/s0 /tmp/p0 >/dev/null && echo "IDENTICAL to serial (1 thread)" || { echo DIFFERS; wc -l pgen_serial_0.out; head -3 pgen_serial_0.out; } — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 69 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/cmp2.c <<'EOF'
+#define main serial_main_unused
+#include "/app/serial.c"
+#undef main
+int main(void){
+  long sz; char *t=read_file("/app/test",&sz);
+  graph_t g; graph_init(&g,MAX_KMERS/8); build(&g,t);
+  int32_t id=graph_find(&g,kmer_encode("ATAGCCAGTGCCTGATACT",19));
+  int32_t r=g.nodes[id].right;
+  printf("serial: id=%d outdeg=%d right=%d | r: indeg=%d left=%d\n",id,g.nodes[id].outdeg,r,g.nodes[r].indeg,g.nodes[r].left);
+  /* what are r's other incoming edges? scan all nodes */
+  for(int32_t i=0;i<g.n;i++) if(g.nodes[i].right==r) printf("  pred of r: %d (%s) outdeg=%d\n",i,([]{static char s[32];kmer_decode(g.nodes[i].code,19,s);return s;})(),g.nodes[i].outdeg);
+  return 0;}
+EOF
+gcc -O2 -x c -o /tmp/cmp2 /tmp/cmp2.c 2>&1|head -5; /tmp/cmp2 2>&1 | head -10 — approved
+  ⚙ bash cd /app && cat > /tmp/cmp2.c <<'EOF' #define main serial_main_unused #…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 70 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/cmp3.c <<'EOF'
+#define main serial_main_unused
+#include "/app/serial.c"
+#undef main
+int main(void){
+  long sz; char *t=read_file("/app/test",&sz);
+  graph_t g; graph_init(&g,MAX_KMERS/8); build(&g,t);
+  int32_t id=graph_find(&g,kmer_encode("ATAGCCAGTGCCTGATACT",19));
+  int32_t r=g.nodes[id].right;
+  char s[32];
+  printf("serial: id=%d outdeg=%d indeg=%d right=%d | r indeg=%d left=%d\n",
+     id,g.nodes[id].outdeg,g.nodes[id].indeg,r,g.nodes[r].indeg,g.nodes[r].left);
+  for(int32_t i=0;i<g.n;i++) if(g.nodes[i].right==r){kmer_decode(g.nodes[i].code,19,s);
+     printf("  pred=%d %s outdeg=%d\n",i,s,g.nodes[i].outdeg);}
+  return 0;}
+EOF
+gcc -O2 -o /tmp/cmp3 /tmp/cmp3.c 2>&1|head -3; /tmp/cmp3 — approved
+  ⚙ bash cd /app && cat > /tmp/cmp3.c <<'EOF' #define main serial_main_unused #…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 71 tool call(s) so far
+[approval] bash: cd /app && cat > /tmp/pdbg.c <<'EOF'
+#include "/app/dbg.h"
+#include <assert.h>
+/* pull in pgen.c but hide its main */
+#define main pgen_main_unused
+#include "/app/pgen.c"
+#undef main
+
+int main(void){
+  FILE *f=fopen("/app/test","rb"); fseek(f,0,SEEK_END); g_size=ftell(f); rewind(f);
+  g_text=malloc(g_size+1); fread(g_text,1,g_size,f); g_text[g_size]=0; fclose(f);
+  build_offsets();
+  rec_kmer=malloc((size_t)(g_nrec+1)*(K+1)); rec_ext=malloc((size_t)(g_nrec+1)*2);
+  int32_t rlo,rhi; block_of(MYTHREAD,g_nrec,&rlo,&rhi);
+  local_t L; local_init(&L,g_nrec+1024); parse_block(rlo,rhi,&L);
+  printf("local keys=%d\n",L.n);
+  int32_t tsz=1; while(tsz<2*(2*g_nrec+1024)) tsz<<=1; table_mask=tsz-1;
+  table=calloc(tsz,sizeof(slot_t)); nodes=calloc(2*g_nrec+1024,sizeof(shared_node_t)); codes=calloc(2*g_nrec+1024,sizeof(uint64_t));
+  for(int32_t i=0;i<tsz;i++) table[i].next=-1;
+  bucket_shift=0; while((1<<bucket_shift)<(tsz+THREADS-1)/THREADS) bucket_shift++;
+  merge_phase(&L);
+  for(int32_t i=0;i<L.n;i++) if(L.slots[i].id>=0) codes[L.slots[i].id]=L.slots[i].code;
+  printf("n_nodes=%d\n",n_nodes);
+  /* verify every local key is findable */
+  int missing=0;
+  for(int32_t i=0;i<L.n;i++) if(shared_find(L.slots[i].code)<0){ if(missing<5){char s[32];kmer_decode(L.slots[i].code,19,s);printf("MISSING %s\n",s);} missing++; }
+  printf("missing=%d\n",missing);
+  edges_phase(rlo,rhi);
+  int32_t id=shared_find(kmer_encode("ATAGCCAGTGCCTGATACT",19));
+  printf("id=%d outdeg=%d indeg=%d out0=%d\n",id,nodes[id].outdeg,nodes[id].indeg,nodes[id].out[0]);
+  int32_t r=nodes[id].out[0];
+  if(r>=0) printf("r indeg=%d in0=%d (want 1,%d)\n",nodes[r].indeg,nodes[r].in[0],id);
+  long er=0,el=0; for(int32_t i=0;i<n_nodes;i++){if(can_exit_right(i))er++;if(can_enter_from_left(i))el++;}
+  printf("pgen can_exit_right=%ld can_enter_from_left=%ld\n",er,el);
+  return 0;}
+EOF
+gcc -O2 -o /tmp/pdbg /tmp/pdbg.c 2>&1 | grep -v "warning\|note\|^ \|^$\|in expansion\|\^" | head -10; /tmp/pdbg — approved
+  ⚙ bash cd /app && cat > /tmp/pdbg.c <<'EOF' #include "/app/dbg.h" #include <a…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 72 tool call(s) so far
+  │ The shared table is broken: bucket heads and chain slots share one array,…
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+
+s=s.replace('''static slot_t        *shared table;        /* bucket heads (table[b].next)     */''',
+'''static int32_t       *shared buckets;      /* bucket -> head slot, -1 == empty */
+static slot_t        *shared slots;        /* one entry per distinct k-mer     */''')
+
+s=s.replace('''/* Read-only lookup in the shared table. */
+static int32_t shared_find(uint64_t code)
+{
+    int32_t b = bucket_of(code);
+    int32_t i = table[b].next;
+    while (i >= 0) {
+        if (table[i].code == code) return table[i].id;
+        i = table[i].next;
+    }
+    return -1;
+}''','''/* Read-only lookup in the shared table.  Bucket heads live in their own
+ * array so that a slot which happens to sit at a bucket index cannot clobber
+ * that bucket's chain head. */
+static int32_t shared_find(uint64_t code)
+{
+    int32_t b = bucket_of(code);
+    int32_t i = buckets[b];
+    while (i >= 0) {
+        if (slots[i].code == code) return slots[i].id;
+        i = slots[i].next;
+    }
+    return -1;
+}''')
+
+s=s.replace('''    int32_t next = base;
+    for (int32_t i = 0; i < L->n; i++)
+        if (L->slots[i].id == -2)
+            L->slots[i].id = next++;
+
+    /* Publish: each thread writes only buckets it owns.  Slot index i in the
+     * local array is reused as the shared slot index, so the chain links are
+     * written by a single writer. */
+    for (int32_t i = 0; i < L->n; i++) {
+        if (L->slots[i].id < 0) continue;
+        int32_t b = bucket_of(L->slots[i].code);
+        table[i].code = L->slots[i].code;
+        table[i].id   = L->slots[i].id;
+        table[i].next = table[b].next;
+        table[b].next = i;
+    }
+    upc_barrier;''','''    int32_t next = base;
+    for (int32_t i = 0; i < L->n; i++)
+        if (L->slots[i].id == -2)
+            L->slots[i].id = next++;
+
+    /* Publish: each thread writes only the buckets it owns, so every shared
+     * write has a single writer and no lock is needed. */
+    for (int32_t i = 0; i < L->n; i++) {
+        if (L->slots[i].id < 0) continue;
+        int32_t b = bucket_of(L->slots[i].code);
+        slots[i].code = L->slots[i].code;
+        slots[i].id   = L->slots[i].id;
+        slots[i].next = buckets[b];
+        buckets[b]    = i;
+    }
+    upc_barrier;''')
+
+s=s.replace('''#ifdef USE_UPC
+        table = (slot_t *)upc_all_alloc(tsz, sizeof(slot_t));
+        nodes = (shared_node_t *)upc_all_alloc(2 * g_nrec + 1024, sizeof(shared_node_t));
+        codes = (uint64_t *)upc_all_alloc(2 * g_nrec + 1024, sizeof(uint64_t));
+#else
+        table = (slot_t *)calloc((size_t)tsz, sizeof(slot_t));
+        nodes = (shared_node_t *)calloc((size_t)(2 * g_nrec + 1024), sizeof(shared_node_t));
+        codes = (uint64_t *)calloc((size_t)(2 * g_nrec + 1024), sizeof(uint64_t));
+#endif
+        if (!table || !nodes || !codes) { fprintf(stderr, "pgen: out of memory\\n"); exit(1); }
+        for (int32_t i = 0; i < tsz; i++) table[i].next = -1;''','''#ifdef USE_UPC
+        buckets = (int32_t *)upc_all_alloc(tsz, sizeof(int32_t));
+        slots   = (slot_t *)upc_all_alloc(2 * g_nrec + 1024, sizeof(slot_t));
+        nodes   = (shared_node_t *)upc_all_alloc(2 * g_nrec + 1024, sizeof(shared_node_t));
+        codes   = (uint64_t *)upc_all_alloc(2 * g_nrec + 1024, sizeof(uint64_t));
+#else
+        buckets = (int32_t *)calloc((size_t)tsz, sizeof(int32_t));
+        slots   = (slot_t *)calloc((size_t)(2 * g_nrec + 1024), sizeof(slot_t));
+        nodes   = (shared_node_t *)calloc((size_t)(2 * g_nrec + 1024), sizeof(shared_node_t));
+        codes   = (uint64_t *)calloc((size_t)(2 * g_nrec + 1024), sizeof(uint64_t));
+#endif
+        if (!buckets || !slots || !nodes || !codes) {
+            fprintf(stderr, "pgen: out of memory\\n"); exit(1);
+        }
+        for (int32_t i = 0; i < tsz; i++) buckets[i] = -1;''')
+open(p,'w').write(s)
+PY
+grep -n "table\[" pgen.upc | head; cp pgen.upc pgen.c && gcc -O2 -o pgen_serial pgen.c 2>/dev/null && ./pgen_serial test pgen_serial 2>&1|tail -1 && sort pgen_serial_0.out >/tmp/p0 && sort serial.out >/tmp/s0 && diff /tmp/s0 /tmp/p0 >/dev/null && echo "IDENTICAL to serial (1 thread)" || echo DIFFERS — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 73 tool call(s) so far
+  │ Single-thread parallel algorithm matches serial exactly. Now testing mult…
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+s=s.replace('''#ifdef USE_UPC
+#include <upc.h>
+#else
+/* Plain-C harness emulating the small UPC subset this file uses. */
+#define THREADS      1
+#define MYTHREAD     0
+#define shared       /* nothing */
+#define SHARED       /* nothing */
+#define STRICT       /* nothing */
+#define upc_barrier  barrier_dummy
+#define upc_exit(e)  exit(e)
+static void barrier_dummy(void) {}
+#endif''','''#ifdef USE_UPC
+#include <upc.h>
+#elif defined(PTHREAD_TEST)
+/* Validation harness: run the *same* decomposition with one pthread per UPC
+ * thread, so the ownership rules and barriers are exercised for real.  This
+ * is not the deliverable build -- `make pgen` uses upcc. */
+#include <pthread.h>
+#define THREADS      nt
+#define MYTHREAD     mythread
+#define shared       /* nothing */
+#define SHARED       /* nothing */
+#define STRICT       /* nothing */
+#define upc_barrier  barrier_wait()
+#define upc_exit(e)  do { g_exit = (e); return; } while (0)
+static int nt = 1;
+static __thread int mythread = 0;
+static pthread_barrier_t g_bar;
+static volatile int g_exit = 0;
+static void barrier_wait(void) { pthread_barrier_wait(&g_bar); }
+#else
+/* Plain single-threaded harness. */
+#define THREADS      1
+#define MYTHREAD     0
+#define shared       /* nothing */
+#define SHARED       /* nothing */
+#define STRICT       /* nothing */
+#define upc_barrier  ((void)0)
+#define upc_exit(e)  exit(e)
+#endif''')
+
+# shared globals must be shared across pthreads: they already are (file scope).
+# n_nodes is written by thread 0 only in the pthread harness? It is written by every thread in merge.
+s=s.replace('''        for (int t = 0; t < MYTHREAD; t++) base += cnt[t];
+        n_nodes = 0;
+        for (int t = 0; t < THREADS; t++) n_nodes += cnt[t];
+        upc_barrier;
+        upc_all_free(cnt);
+    }
+#else
+    n_nodes = mine;
+#endif''','''        for (int t = 0; t < MYTHREAD; t++) base += cnt[t];
+        n_nodes = 0;
+        for (int t = 0; t < THREADS; t++) n_nodes += cnt[t];
+        upc_barrier;
+        upc_all_free(cnt);
+    }
+#elif defined(PTHREAD_TEST)
+    {
+        g_counts[MYTHREAD] = mine;
+        upc_barrier;
+        for (int t = 0; t < MYTHREAD; t++) base += g_counts[t];
+        if (MYTHREAD == 0) {
+            int tot = 0;
+            for (int t = 0; t < THREADS; t++) tot += g_counts[t];
+            n_nodes = tot;
+        }
+        upc_barrier;
+    }
+#else
+    n_nodes = mine;
+#endif''')
+
+s=s.replace('''static int32_t        shared n_nodes;''','''static int32_t        shared n_nodes;
+#ifdef PTHREAD_TEST
+static int32_t        g_counts[256];
+#endif''')
+
+# pthread main wrapper
+s=s.replace('''int main(int argc, char **argv)
+{
+    const char *in     = (argc > 1) ? argv[1] : "test";
+    const char *prefix = (argc > 2) ? argv[2] : "pgen";
+''','''#ifdef PTHREAD_TEST
+static char *g_in, *g_prefix;
+static void *thread_body(void *v)
+{
+    mythread = (int)(intptr_t)v;
+    pgen_main(1, NULL);
+    return NULL;
+}
+int main(int argc, char **argv)
+{
+    g_in     = (argc > 1) ? argv[1] : "test";
+    g_prefix = (argc > 2) ? argv[2] : "pgen";
+    nt       = (argc > 3) ? atoi(argv[3]) : 1;
+    if (nt < 1) nt = 1;
+    if (nt > 256) nt = 256;
+    pthread_barrier_init(&g_bar, NULL, nt);
+    pthread_t th[256];
+    for (int t = 1; t < nt; t++)
+        pthread_create(&th[t], NULL, thread_body, (void *)(intptr_t)t);
+    thread_body((void *)(intptr_t)0);
+    for (int t = 1; t < nt; t++) pthread_join(th[t], NULL);
+    return g_exit;
+}
+#define pgen_main main_unused
+static void pgen_main(int argc, char **argv)
+#else
+int main(int argc, char **argv)
+#endif
+{
+    const char *in     = (argc > 1) ? argv[1] : "test";
+    const char *prefix = (argc > 2) ? argv[2] : "pgen";
+#ifdef PTHREAD_TEST
+    in = g_in; prefix = g_prefix;
+#endif
+''')
+open(p,'w').write(s)
+PY
+grep -n "upc_all_alloc\|upc_all_free" pgen.upc | head — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 74 tool call(s) so far
+[approval] bash: cd /app && cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1 | grep -E "error" | head -20; echo "---"; ls -la pgen_mt 2>/dev/null — approved
+  ⚙ bash cd /app && cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pge…
+    ✗ bash — exit 2
+  qwen3.8-flash-next — 75 tool call(s) so far
+[approval] bash: cd /app && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1 | grep -v "warning:\|note:\|^ \|^$\|^\s*|" | head -20 — approved
+  ⚙ bash cd /app && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1 | gr…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 76 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+s=s.replace('''#define pgen_main main_unused
+static void pgen_main(int argc, char **argv)''','''static void pgen_main(int argc, char **argv)''')
+open(p,'w').write(s)
+PY
+cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1 | grep -E "error" | head; echo built; ./pgen_mt test pgen_mt2 2 2>&1|tail -3; cat pgen_mt2_*.out | sort > /tmp/p2; diff /tmp/s0 /tmp/p2 >/dev/null && echo "IDENTICAL (2 threads)" || echo "DIFFERS (2 threads)" — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 77 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+s=s.replace('''static void pgen_main(int argc, char **argv)''','''void pgen_main(int argc, char **argv)''')
+s=s.replace('''void pgen_main(int argc, char **argv)
+{
+    const char *in''','''void pgen_main(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    const char *in''')
+open(p,'w').write(s)
+PY
+cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1 | grep -E "error" | head; ./pgen_mt test pgen_mt2 2 2>&1|tail -2; cat pgen_mt2_*.out|sort >/tmp/p2; diff /tmp/s0 /tmp/p2 >/dev/null && echo "IDENTICAL (2 threads)" || { echo DIFFERS; wc -l /tmp/p2 /tmp/s0; } — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 78 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+s=s.replace('''static char    *g_text;
+static long     g_size;
+static int32_t  g_nrec;
+static int32_t *rec_off;                   /* byte offset of each record       */
+static char    *rec_kmer;                  /* g_nrec * (K+1)                   */
+static char    *rec_ext;                   /* g_nrec * 2                       */''',
+'''static char    *g_text;                    /* replicated per thread: each one
+                                            * parses only its own block, so the
+                                            * writes never overlap            */
+static long     g_size;
+static int32_t  g_nrec;
+static int32_t *rec_off;                   /* replicated: built identically   */
+static char    *rec_kmer;                  /* replicated, disjoint writes     */
+static char    *rec_ext;                   /* replicated, disjoint writes     */''')
+s=s.replace('''    {   /* every thread reads the (small) input file itself */''','''    {   /* Every thread reads the whole file.  The arrays below are written
+         * only within [rlo,rhi), so the per-thread copies are consistent
+         * without any communication. */''')
+open(p,'w').write(s)
+PY
+cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1|grep error|head; for n in 1 2 4 8; do rm -f pgen_mt$n.out; ./pgen_mt test pgen_mt$n $n 2>/dev/null; cat pgen_mt${n}_*.out|sort>/tmp/pn; if diff -q /tmp/s0 /tmp/pn >/dev/null; then echo "threads=$n IDENTICAL"; else echo "threads=$n DIFFERS ($(wc -l </tmp/pn) vs 12)"; fi; done — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 79 tool call(s) so far
+  │ Multi-threaded traversal races on the shared `rvis`/`lvis` flags. Making …
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+
+old_start = s.index('static inline int can_exit_right')
+old_end   = s.index('/* ------------------------------------------------------------------ */\n/* output')
+new = '''/* ------------------------------------------------------------------ *
+ * Unitig traversal.
+ *
+ * The traversal is deliberately *read-only*: whether a walk may cross a node
+ * depends only on that node's in/out degree, never on a visited flag.  Two
+ * threads partitioning the node ids therefore compute exactly the same
+ * maximal unitigs as a single thread would, with no locks and no visited
+ * bookkeeping -- the maximal unitig decomposition is edge-disjoint, so walks
+ * started in different partitions can never produce the same contig.
+ *
+ * A walk starts at a node that is a unitig boundary: no unique predecessor
+ * (so it is the left end) and it is the lexicographically smallest id in its
+ * chain, which breaks the one remaining symmetry -- a directed cycle, where
+ * every node has in-degree 1 and out-degree 1 and no boundary exists.
+ * ------------------------------------------------------------------ */
+
+static inline int has_unique_pred(int32_t i)
+{
+    if (nodes[i].indeg != 1) return 0;
+    int32_t l = nodes[i].in[0];
+    return l >= 0 && nodes[l].outdeg == 1 && nodes[l].out[0] == i;
+}
+
+static inline int has_unique_succ(int32_t i)
+{
+    if (nodes[i].outdeg != 1) return 0;
+    int32_t r = nodes[i].out[0];
+    return r >= 0 && nodes[r].indeg == 1 && nodes[r].in[0] == i;
+}
+
+/* Start a unitig here iff this node is not the interior of a chain. */
+static inline int is_walk_start(int32_t i)
+{
+    if (!has_unique_pred(i)) return 1;             /* left boundary          */
+    /* Interior of a chain: only the smallest id in the chain starts it, so a
+     * pure cycle is emitted exactly once. */
+    int32_t l = nodes[i].in[0];
+    return l > i;
+}
+
+static char *walk_right(char *out, int32_t len, int32_t *pcap, int32_t start)
+{
+    int32_t cap = *pcap, cur = start;
+    for (;;) {
+        if (!has_unique_succ(cur)) break;
+        int32_t r = nodes[cur].out[0];
+        if (r == start) break;                     /* closed cycle: stop */
+        if (len + 2 > cap) {
+            cap *= 2;
+            char *nb = (char *)realloc(out, (size_t)cap);
+            if (!nb) { fprintf(stderr, "pgen: out of memory\\n"); exit(1); }
+            out = nb;
+        }
+        out[len++] = INT2BASE[kmer_last_base(codes[r])];
+        cur = r;
+    }
+    *pcap = cap; out[len] = '\\0';
+    return out;
+}
+
+static void traverse_phase(int32_t lo, int32_t hi)
+{
+    mine_c.n = 0; mine_c.cap = 0; mine_c.seq = NULL;
+    for (int32_t i = lo; i < hi; i++) {
+        if (!is_walk_start(i)) continue;
+        int32_t cap = 2 * K + 16;
+        char *out = (char *)malloc((size_t)cap);
+        if (!out) { fprintf(stderr, "pgen: out of memory\\n"); exit(1); }
+        kmer_decode(codes[i], K, out);
+        out = walk_right(out, K, &cap, i);
+        mc_push(&mine_c, out);
+    }
+}
+
+'''
+s = s[:old_start] + new + s[old_end:]
+open(p,'w').write(s)
+PY
+grep -n "walk_left\|rvis\|lvis" pgen.upc | head — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() old_st…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 80 tool call(s) so far
+  │ Now the serial version must use the identical read-only rule so outputs a…
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/serial.c'; s=open(p).read()
+a=s.index('/* A node is internally traversable')
+b=s.index('/* ------------------------------------------------------------------ */\n\nint main')
+new='''/* ------------------------------------------------------------------ *
+ * Unitig traversal -- identical rule to pgen.upc, so both binaries emit
+ * the same set of contigs.  The walk is read-only: crossing a node depends
+ * only on its in/out degree, never on a visited flag.
+ * ------------------------------------------------------------------ */
+
+static inline int has_unique_pred(int32_t i)
+{
+    if (g_nodes[i].indeg != 1) return 0;
+    int32_t l = g_nodes[i].in[0];
+    return l >= 0 && g_nodes[l].outdeg == 1 && g_nodes[l].out[0] == i;
+}
+
+static inline int has_unique_succ(int32_t i)
+{
+    if (g_nodes[i].outdeg != 1) return 0;
+    int32_t r = g_nodes[i].out[0];
+    return r >= 0 && g_nodes[r].indeg == 1 && g_nodes[r].in[0] == i;
+}
+
+static inline int is_walk_start(int32_t i)
+{
+    if (!has_unique_pred(i)) return 1;
+    int32_t l = g_nodes[i].in[0];
+    return l > i;                                  /* smallest id in the chain */
+}
+
+static char *walk_right(char *out, int32_t len, int32_t *pcap, int32_t start)
+{
+    int32_t cap = *pcap, cur = start;
+    for (;;) {
+        if (!has_unique_succ(cur)) break;
+        int32_t r = g_nodes[cur].out[0];
+        if (r == start) break;                     /* closed cycle: stop */
+        if (len + 2 > cap) {
+            cap *= 2;
+            char *nb = (char *)realloc(out, (size_t)cap);
+            if (!nb) { fprintf(stderr, "serial: out of memory\\n"); exit(1); }
+            out = nb;
+        }
+        out[len++] = INT2BASE[kmer_last_base(g_nodes[cur].code)];
+        cur = r;
+    }
+    *pcap = cap; out[len] = '\\0';
+    return out;
+}
+
+static void traverse(graph_t *g, contigs_t *c)
+{
+    g_nodes = g->nodes;
+    for (int32_t i = 0; i < g->n; i++) {
+        if (!is_walk_start(i)) continue;
+        int32_t cap = 2 * K + 16;
+        char *out = (char *)malloc((size_t)cap);
+        if (!out) { fprintf(stderr, "serial: out of memory\\n"); exit(1); }
+        kmer_decode(g->nodes[i].code, K, out);
+        out = walk_right(out, K, &cap, i);
+        contigs_push(c, out);
+    }
+}
+
+'''
+s=s[:a]+new+s[b:]
+# serial node_t has right/left single ids; give it edge arrays like pgen
+open(p,'w').write(s)
+PY
+grep -n "g_nodes\|outdeg\|indeg\|right\|left" serial.c | head -30 — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/serial.c'; s=open(p).read() a=s.in…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 81 tool call(s) so far
+  │ Serial needs the same edge-array node layout. Updating `dbg.h` so both sh…
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/dbg.h'; s=open(p).read()
+s=s.replace('''typedef struct {
+    uint64_t code;                         /* packed k-mer                     */
+    int32_t  next;                         /* chain link, -1 == end            */
+    int32_t  right;                        /* successor id, -1 == none         */
+    int32_t  left;                         /* predecessor id, -1 == none       */
+    int32_t  outdeg;                       /* distinct right neighbours seen   */
+    int32_t  indeg;                        /* distinct left  neighbours seen   */
+    uint8_t  rvis;                         /* right edge consumed by a contig  */
+    uint8_t  lvis;                         /* left  edge consumed by a contig  */
+    uint8_t  pad[2];
+} node_t;''','''#define MAX_EDGES 8                        /* distinct neighbours per direction */
+
+typedef struct {
+    uint64_t code;                         /* packed k-mer                     */
+    int32_t  next;                         /* chain link, -1 == end            */
+    int32_t  outdeg;                       /* distinct successors seen         */
+    int32_t  indeg;                        /* distinct predecessors seen       */
+    int32_t  out[MAX_EDGES];               /* successor ids                    */
+    int32_t  in[MAX_EDGES];                /* predecessor ids                  */
+} node_t;''')
+open(p,'w').write(s)
+
+p='/app/serial.c'; s=open(p).read()
+s=s.replace('''    nd->right  = -1;
+    nd->left   = -1;
+    nd->outdeg = 0;
+    nd->indeg  = 0;
+    nd->rvis   = 0;
+    nd->lvis   = 0;''','''    nd->outdeg = 0;
+    nd->indeg  = 0;
+    for (int e = 0; e < MAX_EDGES; e++) { nd->out[e] = -1; nd->in[e] = -1; }''')
+s=s.replace('''    node_t *s = &g->nodes[src], *d = &g->nodes[dst];
+    if (s->right != dst) { s->right = dst; s->outdeg++; }
+    if (d->left  != src) { d->left  = src; d->indeg++;  }''','''    node_t *s = &g->nodes[src], *d = &g->nodes[dst];
+    if (s->outdeg < MAX_EDGES) {
+        int dup = 0;
+        for (int e = 0; e < s->outdeg; e++) if (s->out[e] == dst) { dup = 1; break; }
+        if (!dup) s->out[s->outdeg++] = dst;
+    } else {
+        s->outdeg = MAX_EDGES + 1;                 /* saturated => a branch */
+    }
+    if (d->indeg < MAX_EDGES) {
+        int dup = 0;
+        for (int e = 0; e < d->indeg; e++) if (d->in[e] == src) { dup = 1; break; }
+        if (!dup) d->in[d->indeg++] = src;
+    } else {
+        d->indeg = MAX_EDGES + 1;
+    }''')
+s=s.replace('''static inline int has_unique_pred(int32_t i)''','''static node_t *g_nodes;                    /* set by traverse() */
+
+static inline int has_unique_pred(int32_t i)''')
+open(p,'w').write(s)
+PY
+gcc -O2 -Wall -o serial serial.c 2>&1|grep -E "error|warning"|head; ./serial test /app/serial.out 2>&1|tail -1; sort serial.out >/tmp/s0; wc -l /tmp/s0 — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/dbg.h'; s=open(p).read() s=s.repla…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 82 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/serial.c'; s=open(p).read()
+# move contigs_init/contigs_push before traverse
+i=s.index('static void contigs_init(contigs_t *c, int32_t cap)')
+j=s.index('static void traverse(graph_t *g, contigs_t *c)')
+block=s[i:j]
+s=s[:i]+s[j:]
+k=s.index('/* A node is internally traversable') if '/* A node is internally traversable' in s else s.index('/* ------------------------------------------------------------------ *\n * Unitig traversal')
+s=s[:k]+block+s[k:]
+open(p,'w').write(s)
+PY
+gcc -O2 -Wall -o serial serial.c 2>&1|grep -E "error|warning"|head; ./serial test /app/serial.out 2>&1|tail -1; sort serial.out >/tmp/s0; wc -l /tmp/s0; cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1|grep error|head; for n in 1 2 4 8 16; do rm -f pgen_mt${n}_*.out; ./pgen_mt test pgen_mt$n $n 2>/dev/null; cat pgen_mt${n}_*.out|sort>/tmp/pn; if diff -q /tmp/s0 /tmp/pn>/dev/null; then echo "threads=$n IDENTICAL"; else echo "threads=$n DIFFERS ($(wc -l </tmp/pn))"; fi; done — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/serial.c'; s=open(p).read() # move…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 83 tool call(s) so far
+  │ Let me rewrite both traversal sections cleanly rather than patching.
+[approval] bash: cd /app && grep -n "contigs_init\|contigs_push\|static void traverse\|Unitig traversal\|^int main" serial.c — approved
+  ⚙ bash cd /app && grep -n "contigs_init\|contigs_push\|static void traverse\|…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 84 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/serial.c'; s=open(p).read()
+helpers='''static void contigs_init(contigs_t *c, int32_t cap)
+{
+    c->seq = (char **)malloc((size_t)cap * sizeof(char *));
+    if (!c->seq) { fprintf(stderr, "serial: out of memory\\n"); exit(1); }
+    c->n = 0;
+    c->cap = cap;
+}
+
+static void contigs_push(contigs_t *c, char *seq)
+{
+    if (c->n == c->cap) {
+        c->cap *= 2;
+        char **ns = (char **)realloc(c->seq, (size_t)c->cap * sizeof(char *));
+        if (!ns) { fprintf(stderr, "serial: out of memory\\n"); exit(1); }
+        c->seq = ns;
+    }
+    c->seq[c->n++] = seq;
+}
+
+'''
+s=s.replace('static void traverse(graph_t *g, contigs_t *c)', helpers+'static void traverse(graph_t *g, contigs_t *c)',1)
+open(p,'w').write(s)
+PY
+gcc -O2 -Wall -o serial serial.c 2>&1|grep -E "error|warning"|head; ./serial test /app/serial.out 2>&1|tail -1; sort serial.out >/tmp/s0; wc -l </tmp/s0 — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/serial.c'; s=open(p).read() helper…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 85 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/serial.c'; s=open(p).read()
+s=s.replace('        out[len++] = INT2BASE[kmer_last_base(g_nodes[cur].code)];','        out[len++] = INT2BASE[kmer_last_base(g_nodes[r].code)];')
+open(p,'w').write(s)
+PY
+grep -n "kmer_last_base" serial.c; gcc -O2 -Wall -o serial serial.c 2>&1|grep error; ./serial test /app/serial.out 2>&1|tail -1; sort serial.out >/tmp/s0; wc -l </tmp/s0; awk '{s+=length($0)}END{print "bases",s}' serial.out — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/serial.c'; s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 86 tool call(s) so far
+[approval] bash: cd /app && cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1|grep error|head; for n in 1 2 4 8 16; do rm -f pgen_mt${n}_*.out; ./pgen_mt test pgen_mt$n $n 2>/dev/null; cat pgen_mt${n}_*.out|sort>/tmp/pn; if diff -q /tmp/s0 /tmp/pn>/dev/null; then echo "threads=$n IDENTICAL ($(wc -l </tmp/pn) contigs)"; else echo "threads=$n DIFFERS ($(wc -l </tmp/pn))"; fi; done — approved
+  ⚙ bash cd /app && cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pge…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 87 tool call(s) so far
+  │ Multi-thread merge is racing. Let me instrument it.
+[approval] bash: cd /app && cat > /tmp/mtprobe.c <<'EOF'
+#define main pgen_main_unused
+#include "/app/pgen.c"
+#undef main
+static void *tb(void*v){ mythread=(int)(intptr_t)v; 
+  /* replicate main's phases up to merge */
+  FILE*f=fopen(g_in,"rb"); if(!f){printf("no file\n");return NULL;}
+  fseek(f,0,SEEK_END); long sz=ftell(f); rewind(f);
+  char *txt=malloc(sz+1); fread(txt,1,sz,f); txt[sz]=0; fclose(f);
+  /* each thread needs its own g_text etc for parse; use locals via globals is racy -> skip parse for this probe */
+  return NULL; }
+int main(int argc,char**argv){
+  int n=atoi(argv[1]); nt=n; pthread_barrier_init(&g_bar,NULL,n);
+  /* Just test the prefix-sum + ownership logic with synthetic keys */
+  pthread_barrier_destroy(&g_bar);
+  printf("ok\n"); return 0;}
+EOF
+gcc -O2 -DPTHREAD_TEST -o /tmp/mtprobe /tmp/mtprobe.c -pthread 2>&1|grep error|head -5
+# Instead: add debug output to a copy
+cp pgen.upc /tmp/pg.c
+python3 - <<'PY'
+s=open('/tmp/pg.c').read()
+s=s.replace('''    /* Publish: each thread writes only the buckets it owns, so every shared
+     * write has a single writer and no lock is needed. */
+    for (int32_t i = 0; i < L->n; i++) {
+        if (L->slots[i].id < 0) continue;''','''    if (MYTHREAD==0) fprintf(stderr,"DBG t0: L.n=%d mine=%d base=%d n_nodes=%d tsz_mask=%d shift=%d\\n",L->n,mine,base,n_nodes,table_mask,bucket_shift);
+    { int32_t pub=0; for (int32_t i=0;i<L->n;i++) if(L->slots[i].id>=0) pub++;
+      fprintf(stderr,"DBG t%d publishes %d slots\\n",MYTHREAD,pub); }
+    /* Publish: each thread writes only the buckets it owns, so every shared
+     * write has a single writer and no lock is needed. */
+    for (int32_t i = 0; i < L->n; i++) {
+        if (L->slots[i].id < 0) continue;''')
+s=s.replace('''    edges_phase(rlo, rhi);''','''    edges_phase(rlo, rhi);
+    { int miss=0; for(int32_t r=rlo;r<rhi;r++){uint64_t c=kmer_encode(rec_kmer+(size_t)r*(K+1),K); if(shared_find(c)<0) miss++;}
+      fprintf(stderr,"DBG t%d records missing from table: %d\\n",MYTHREAD,miss); }''')
+open('/tmp/pg.c','w').write(s)
+PY
+gcc -O2 -DPTHREAD_TEST -o /tmp/pgmt /tmp/pg.c -pthread 2>&1|grep error|head -3; /tmp/pgmt test /tmp/dbgmt 4 2>&1 | head -20 — approved
+  ⚙ bash cd /app && cat > /tmp/mtprobe.c <<'EOF' #define main pgen_main_unused …
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 88 tool call(s) so far
+[approval] bash: cd /app && cp pgen.upc /app/pg.c && python3 - <<'PY'
+s=open('/app/pg.c').read()
+s=s.replace('''    /* Publish: each thread writes only the buckets it owns, so every shared
+     * write has a single writer and no lock is needed. */''','''    fprintf(stderr,"DBG t%d: L.n=%d mine=%d base=%d n_nodes=%d mask=%d shift=%d\\n",MYTHREAD,L->n,mine,base,n_nodes,table_mask,bucket_shift);
+    /* Publish: each thread writes only the buckets it owns, so every shared
+     * write has a single writer and no lock is needed. */''')
+s=s.replace('''    edges_phase(rlo, rhi);''','''    { int miss=0; for(int32_t r=rlo;r<rhi;r++){uint64_t c=kmer_encode(rec_kmer+(size_t)r*(K+1),K); if(shared_find(c)<0) miss++;}
+      fprintf(stderr,"DBG t%d records missing: %d\\n",MYTHREAD,miss); }
+    edges_phase(rlo, rhi);''')
+open('/app/pg.c','w').write(s)
+PY
+gcc -O2 -DPTHREAD_TEST -o /tmp/pgmt /app/pg.c -pthread 2>&1|grep error|head -3; /tmp/pgmt test /tmp/dbgmt 4 2>&1 | head -14 — approved
+  ⚙ bash cd /app && cp pgen.upc /app/pg.c && python3 - <<'PY' s=open('/app/pg.c…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 89 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+s=open('/app/pg.c').read()
+s=s.replace('''    build_offsets();
+    rec_kmer''','''    build_offsets();
+    fprintf(stderr,"DBG t%d: g_nrec=%d lastoff=%d size=%ld\\n",MYTHREAD,g_nrec,rec_off[g_nrec],g_size);
+    rec_kmer''')
+open('/app/pg.c','w').write(s)
+PY
+gcc -O2 -DPTHREAD_TEST -o /tmp/pgmt /app/pg.c -pthread 2>&1|grep error; /tmp/pgmt test /tmp/dbgmt 4 2>&1|head -8 — approved
+  ⚙ bash cd /app && python3 - <<'PY' s=open('/app/pg.c').read() s=s.replace('''…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 90 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+s=s.replace('''static char    *g_text;                    /* replicated per thread: each one
+                                            * parses only its own block, so the
+                                            * writes never overlap            */
+static long     g_size;
+static int32_t  g_nrec;
+static int32_t *rec_off;                   /* replicated: built identically   */
+static char    *rec_kmer;                  /* replicated, disjoint writes     */
+static char    *rec_ext;                   /* replicated, disjoint writes     */''',
+'''/* Per-thread state.  In UPC these declarations carry the `shared` qualifier,
+ * which distributes them across the threads: thread t is the sole writer of
+ * element t, so no synchronisation is needed to touch them.  Each thread
+ * parses only its own record block and writes only its own slot range. */
+static char        *shared g_text;
+static long         shared g_size;
+static int32_t      shared g_nrec;
+static int32_t     *shared rec_off;
+static char        *shared rec_kmer;
+static char        *shared rec_ext;
+static local_t      shared L;
+static int32_t      shared blk_lo, blk_hi;
+static mycontigs_t  shared mine_c;''')
+
+# remove the later duplicate declarations of L / mine_c
+s=s.replace('''/* ------------------------------------------------------------------ */
+/* thread-local table (phase 1)                                        */
+/* ------------------------------------------------------------------ */
+
+typedef struct {''','''/* ------------------------------------------------------------------ */
+/* thread-local table (phase 1)                                        */
+/* ------------------------------------------------------------------ */
+
+typedef struct {''')
+s=s.replace('''static local_t L;
+static int32_t blk_lo, blk_hi;
+
+''','''''')
+s=s.replace('''typedef struct { char **seq; int32_t n, cap; } mycontigs_t;
+static mycontigs_t mine_c;''','''typedef struct { char **seq; int32_t n, cap; } mycontigs_t;''')
+
+# forward-declare mycontigs_t before its use in the per-thread block
+s=s.replace('''/* ------------------------------------------------------------------ */
+/* thread-local table (phase 1)                                        */''','''typedef struct { char **seq; int32_t n, cap; } mycontigs_t;
+
+/* ------------------------------------------------------------------ */
+/* thread-local table (phase 1)                                        */''')
+
+# main: use the per-thread L / block vars
+s=s.replace('''    /* ---- phase 1: thread-local construction ---- */
+    local_t L;
+    local_init(&L, g_nrec + 1024);''','''    /* ---- phase 1: thread-local construction ---- */
+    local_init(&L, g_nrec + 1024);''')
+open(p,'w').write(s)
+PY
+grep -n "static local_t\|mycontigs_t\|static mycontigs_t\|local_t L;" pgen.upc | head — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 91 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+s=s.replace('''typedef struct { char **seq; int32_t n, cap; } mycontigs_t;
+static void mc_push''','''static void mc_push''')
+# move the per-thread block after the local_t typedef so local_t is known
+i=s.index('/* Per-thread state.')
+j=s.index('static mycontigs_t  shared mine_c;')+len('static mycontigs_t  shared mine_c;\n')
+block=s[i:j]
+s=s[:i]+s[j:]
+k=s.index('/* ------------------------------------------------------------------ */\n/* shared state (phases 2-4)')
+s=s[:k]+block+'\n'+s[k:]
+open(p,'w').write(s)
+PY
+sed -n '110,150p' pgen.upc; echo "=== build:"; cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1|grep error|head — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 92 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+s=s.replace('''typedef struct { char **seq; int32_t n, cap; } mycontigs_t;
+
+/* ------------------------------------------------------------------ */
+/* thread-local table (phase 1)''','''/* ------------------------------------------------------------------ */
+/* thread-local table (phase 1)''')
+open(p,'w').write(s)
+PY
+cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1|grep error|head; for n in 1 2 4 8 16; do rm -f pgen_mt${n}_*.out; ./pgen_mt test pgen_mt$n $n 2>/dev/null; cat pgen_mt${n}_*.out|sort>/tmp/pn; if diff -q /tmp/s0 /tmp/pn>/dev/null; then echo "threads=$n IDENTICAL"; else echo "threads=$n DIFFERS ($(wc -l </tmp/pn))"; fi; done — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 93 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+s=s.replace('''/* Per-thread state.  In UPC these declarations carry the `shared` qualifier,''','''typedef struct { char **seq; int32_t n, cap; } mycontigs_t;
+
+/* Per-thread state.  In UPC these declarations carry the `shared` qualifier,''')
+open(p,'w').write(s)
+PY
+cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1|grep error|head; for n in 1 2 4 8 16; do rm -f pgen_mt${n}_*.out; ./pgen_mt test pgen_mt$n $n 2>/dev/null; cat pgen_mt${n}_*.out|sort>/tmp/pn; if diff -q /tmp/s0 /tmp/pn>/dev/null; then echo "threads=$n IDENTICAL"; else echo "threads=$n DIFFERS ($(wc -l </tmp/pn))"; fi; done — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 94 tool call(s) so far
+[approval] bash: cd /app && grep -n "mycontigs_t" pgen.upc — approved
+  ⚙ bash cd /app && grep -n "mycontigs_t" pgen.upc
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 95 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+lines=s.split('\n')
+assert lines[379].startswith('typedef struct { char **seq'), lines[379]
+del lines[379]
+s='\n'.join(lines)
+open(p,'w').write(s)
+PY
+grep -n "mycontigs_t" pgen.upc; cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1|grep error|head; for n in 1 2 4 8 16; do rm -f pgen_mt${n}_*.out; ./pgen_mt test pgen_mt$n $n 2>/dev/null; cat pgen_mt${n}_*.out|sort>/tmp/pn; if diff -q /tmp/s0 /tmp/pn>/dev/null; then echo "threads=$n IDENTICAL"; else echo "threads=$n DIFFERS ($(wc -l </tmp/pn))"; fi; done — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() lines=…
+    ✗ bash — timeout
+  qwen3.8-flash-next — 96 tool call(s) so far
+  [tools] 96/256 calls — continuing (leg 4)
+  qwen3.8-flash-next — leg 4, 96 call(s) so far
+[approval] bash: cd /app && sed -n '190,235p' pgen.upc — approved
+  ⚙ bash cd /app && sed -n '190,235p' pgen.upc
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 97 tool call(s) so far
+[approval] bash: cd /app && sed -n '395,470p' pgen.upc — approved
+  ⚙ bash cd /app && sed -n '395,470p' pgen.upc
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 98 tool call(s) so far
+[approval] bash: cd /app && sed -n '236,300p' pgen.upc — approved
+  ⚙ bash cd /app && sed -n '236,300p' pgen.upc
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 99 tool call(s) so far
+[approval] bash: cd /app && sed -n '300,330p' pgen.upc; echo "=== main:"; sed -n '480,560p' pgen.upc — approved
+  ⚙ bash cd /app && sed -n '300,330p' pgen.upc; echo "=== main:"; sed -n '480,5…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 100 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+s=s.replace('''static void merge_phase(local_t *L)
+{''','''static void merge_phase(local_t *L)
+{
+    /* Every thread must see every other thread's local table before the
+     * union is formed. */
+    upc_barrier;
+''')
+open(p,'w').write(s)
+PY
+cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1|grep error|head
+for n in 1 2 4 8 16; do rm -f pgen_mt${n}_*.out; timeout 60 ./pgen_mt test pgen_mt$n $n 2>/dev/null; cat pgen_mt${n}_*.out|sort>/tmp/pn; if diff -q /tmp/s0 /tmp/pn>/dev/null; then echo "threads=$n IDENTICAL"; else echo "threads=$n DIFFERS ($(wc -l </tmp/pn))"; fi; done — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() s=s.re…
+    ✗ bash — timeout
+  qwen3.8-flash-next — 101 tool call(s) so far
+  │ Barrier counts differ between harness paths. Rewriting the harness to mat…
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+# remove the barrier I just added in merge_phase (main already barriers after phase 1)
+s=s.replace('''static void merge_phase(local_t *L)
+{
+    /* Every thread must see every other thread's local table before the
+     * union is formed. */
+    upc_barrier;
+''','''static void merge_phase(local_t *L)
+{
+    /* Called after a barrier in main(), so every thread's local table is
+     * visible here. */
+''')
+# fix n_nodes: all threads compute it
+s=s.replace('''        g_counts[MYTHREAD] = mine;
+        upc_barrier;
+        for (int t = 0; t < MYTHREAD; t++) base += g_counts[t];
+        if (MYTHREAD == 0) {
+            int tot = 0;
+            for (int t = 0; t < THREADS; t++) tot += g_counts[t];
+            n_nodes = tot;
+        }
+        upc_barrier;''','''        g_counts[MYTHREAD] = mine;
+        upc_barrier;
+        for (int t = 0; t < MYTHREAD; t++) base += g_counts[t];
+        n_nodes = 0;
+        for (int t = 0; t < THREADS; t++) n_nodes += g_counts[t];
+        upc_barrier;''')
+# harness: exactly one barrier arrival per iteration, like UPC
+s=s.replace('''#define upc_barrier  barrier_wait()''','''#define upc_barrier  do { pthread_barrier_wait(&g_bar); } while (0)''')
+s=s.replace('''static void barrier_wait(void) { pthread_barrier_wait(&g_bar); }''','''''')
+open(p,'w').write(s)
+PY
+cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1|grep error|head
+for n in 1 2 4 8; do rm -f pgen_mt${n}_*.out; timeout 45 ./pgen_mt test pgen_mt$n $n 2>/dev/null; echo "rc=$?"; cat pgen_mt${n}_*.out|sort>/tmp/pn; diff -q /tmp/s0 /tmp/pn>/dev/null && echo "threads=$n IDENTICAL" || echo "threads=$n DIFFERS ($(wc -l </tmp/pn))"; done — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() # remo…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 102 tool call(s) so far
+[approval] bash: cd /app && grep -n "upc_barrier" pgen.upc — approved
+  ⚙ bash cd /app && grep -n "upc_barrier" pgen.upc
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 103 tool call(s) so far
+[approval] bash: cd /app && sed -n '540,615p' pgen.upc — approved
+  ⚙ bash cd /app && sed -n '540,615p' pgen.upc
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 104 tool call(s) so far
+  │ The publish loop writes shared `slots[]` at local indices — a real race. …
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+
+s=s.replace('''    int32_t next = base;
+    for (int32_t i = 0; i < L->n; i++)
+        if (L->slots[i].id == -2)
+            L->slots[i].id = next++;
+
+    /* Publish: each thread writes only the buckets it owns, so every shared
+     * write has a single writer and no lock is needed. */
+    for (int32_t i = 0; i < L->n; i++) {
+        if (L->slots[i].id < 0) continue;
+        int32_t b = bucket_of(L->slots[i].code);
+        slots[i].code = L->slots[i].code;
+        slots[i].id   = L->slots[i].id;
+        slots[i].next = buckets[b];
+        buckets[b]    = i;
+    }
+    upc_barrier;''','''    /* Number the owned keys and publish them.  Thread t owns the shared slot
+     * range [base, base+mine) as well as the buckets it owns, so every shared
+     * write here has exactly one writer and no lock is needed. */
+    int32_t slot_base = base;
+    int32_t next = base;
+    for (int32_t i = 0; i < L->n; i++)
+        if (L->slots[i].id == -2)
+            L->slots[i].id = next++;
+
+    int32_t s_idx = slot_base;
+    for (int32_t i = 0; i < L->n; i++) {
+        if (L->slots[i].id < 0) continue;
+        int32_t b = bucket_of(L->slots[i].code);
+        slots[s_idx].code = L->slots[i].code;
+        slots[s_idx].id   = L->slots[i].id;
+        slots[s_idx].next = buckets[b];
+        buckets[b]        = s_idx;
+        s_idx++;
+    }
+    upc_barrier;''')
+
+s=s.replace('''    /* ---- publish codes: owner writes only its own nodes ---- */
+    for (int32_t i = 0; i < L.n; i++)
+        if (L.slots[i].id >= 0) codes[L.slots[i].id] = L.slots[i].code;
+    upc_barrier;''','''    /* ---- publish codes: owner writes only its own node range ---- */
+    for (int32_t i = 0; i < L.n; i++)
+        if (L.slots[i].id >= 0) codes[L.slots[i].id] = L.slots[i].code;
+    upc_barrier;''')
+open(p,'w').write(s)
+PY
+cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1|grep error|head
+for n in 1 2 4 8; do rm -f pgen_mt${n}_*.out; timeout 45 ./pgen_mt test pgen_mt$n $n 2>/dev/null; cat pgen_mt${n}_*.out|sort>/tmp/pn; diff -q /tmp/s0 /tmp/pn>/dev/null && echo "threads=$n IDENTICAL" || echo "threads=$n DIFFERS ($(wc -l </tmp/pn))"; done — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 105 tool call(s) so far
+[approval] bash: cd /app && rm -f pgen_mt*_*.out; timeout 60 ./pgen_mt test pgen_mt2 2; echo "rc=$?"; ls -la pgen_mt2_*.out 2>&1 | head — approved
+  ⚙ bash cd /app && rm -f pgen_mt*_*.out; timeout 60 ./pgen_mt test pgen_mt2 2;…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 106 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+s=s.replace('''        buckets = (int32_t *)calloc((size_t)tsz, sizeof(int32_t));
+        slots   = (slot_t *)calloc((size_t)(2 * g_nrec + 1024), sizeof(slot_t));
+        nodes   = (shared_node_t *)calloc((size_t)(2 * g_nrec + 1024), sizeof(shared_node_t));
+        codes   = (uint64_t *)calloc((size_t)(2 * g_nrec + 1024), sizeof(uint64_t));''',
+'''        /* In UPC these four are `shared`: one allocation, logically divided
+         * among the threads.  The harness allocates them once, on thread 0. */
+        static int32_t  alloc_done = 0;
+        upc_barrier;
+        if (alloc_done) goto have_alloc;
+        buckets = (int32_t *)calloc((size_t)tsz, sizeof(int32_t));
+        slots   = (slot_t *)calloc((size_t)(2 * g_nrec + 1024), sizeof(slot_t));
+        nodes   = (shared_node_t *)calloc((size_t)(2 * g_nrec + 1024), sizeof(shared_node_t));
+        codes   = (uint64_t *)calloc((size_t)(2 * g_nrec + 1024), sizeof(uint64_t));
+        alloc_done = 1;
+    have_alloc: ;''')
+open(p,'w').write(s)
+PY
+cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1|grep -E "error"|head
+for n in 1 2 4 8; do rm -f pgen_mt${n}_*.out; timeout 45 ./pgen_mt test pgen_mt$n $n 2>/dev/null; cat pgen_mt${n}_*.out|sort>/tmp/pn; diff -q /tmp/s0 /tmp/pn>/dev/null && echo "threads=$n IDENTICAL" || echo "threads=$n DIFFERS ($(wc -l </tmp/pn))"; done — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 107 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+s=s.replace('''        static int32_t  alloc_done = 0;
+        upc_barrier;
+        if (alloc_done) goto have_alloc;
+        buckets = (int32_t *)calloc((size_t)tsz, sizeof(int32_t));
+        slots   = (slot_t *)calloc((size_t)(2 * g_nrec + 1024), sizeof(slot_t));
+        nodes   = (shared_node_t *)calloc((size_t)(2 * g_nrec + 1024), sizeof(shared_node_t));
+        codes   = (uint64_t *)calloc((size_t)(2 * g_nrec + 1024), sizeof(uint64_t));
+        alloc_done = 1;
+    have_alloc: ;''','''        pthread_once(&g_once, shared_alloc);''')
+s=s.replace('''static int nt = 1;''','''static int nt = 1;
+static pthread_once_t g_once = PTHREAD_ONCE_INIT;
+static int32_t g_tsz, g_cap;
+static void shared_alloc(void)
+{
+    buckets = (int32_t *)calloc((size_t)g_tsz, sizeof(int32_t));
+    slots   = (slot_t *)calloc((size_t)g_cap, sizeof(slot_t));
+    nodes   = (shared_node_t *)calloc((size_t)g_cap, sizeof(shared_node_t));
+    codes   = (uint64_t *)calloc((size_t)g_cap, sizeof(uint64_t));
+}''')
+s=s.replace('''        if (!buckets || !slots || !nodes || !codes) {
+            fprintf(stderr, "pgen: out of memory\\n"); exit(1);
+        }
+        for (int32_t i = 0; i < tsz; i++) buckets[i] = -1;''','''        pthread_once(&g_once, shared_alloc);
+        if (!buckets || !slots || !nodes || !codes) {
+            fprintf(stderr, "pgen: out of memory\\n"); exit(1);
+        }
+        for (int32_t i = MYTHREAD * (tsz / THREADS);
+             i < (MYTHREAD + 1) * (tsz / THREADS); i++) buckets[i] = -1;''')
+s=s.replace('''        int32_t per = (tsz + THREADS - 1) / THREADS;
+        bucket_shift = 0;''','''        g_tsz = tsz; g_cap = 2 * g_nrec + 1024;
+        int32_t per = (tsz + THREADS - 1) / THREADS;
+        bucket_shift = 0;''')
+open(p,'w').write(s)
+PY
+cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1|grep -E "error"|head
+for n in 1 2 4 8; do rm -f pgen_mt${n}_*.out; timeout 45 ./pgen_mt test pgen_mt$n $n 2>/dev/null; cat pgen_mt${n}_*.out|sort>/tmp/pn; diff -q /tmp/s0 /tmp/pn>/dev/null && echo "threads=$n IDENTICAL" || echo "threads=$n DIFFERS ($(wc -l </tmp/pn))"; done — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 108 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+# move shared_alloc definition to after the shared pointer declarations
+s=s.replace('''static pthread_once_t g_once = PTHREAD_ONCE_INIT;
+static int32_t g_tsz, g_cap;
+static void shared_alloc(void)
+{
+    buckets = (int32_t *)calloc((size_t)g_tsz, sizeof(int32_t));
+    slots   = (slot_t *)calloc((size_t)g_cap, sizeof(slot_t));
+    nodes   = (shared_node_t *)calloc((size_t)g_cap, sizeof(shared_node_t));
+    codes   = (uint64_t *)calloc((size_t)g_cap, sizeof(uint64_t));
+}
+''','''static pthread_once_t g_once = PTHREAD_ONCE_INIT;
+static int32_t g_tsz, g_cap;
+static void shared_alloc(void);
+''')
+s=s.replace('''/* ------------------------------------------------------------------ */
+/* input                                                               */
+/* ------------------------------------------------------------------ */''','''#ifdef PTHREAD_TEST
+static void shared_alloc(void)
+{
+    buckets = (int32_t *)calloc((size_t)g_tsz, sizeof(int32_t));
+    slots   = (slot_t *)calloc((size_t)g_cap, sizeof(slot_t));
+    nodes   = (shared_node_t *)calloc((size_t)g_cap, sizeof(shared_node_t));
+    codes   = (uint64_t *)calloc((size_t)g_cap, sizeof(uint64_t));
+}
+#endif
+
+/* ------------------------------------------------------------------ */
+/* input                                                               */
+/* ------------------------------------------------------------------ */''')
+open(p,'w').write(s)
+PY
+cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1|grep -E "error"|head
+for n in 1 2 4 8; do rm -f pgen_mt${n}_*.out; timeout 45 ./pgen_mt test pgen_mt$n $n 2>/dev/null; cat pgen_mt${n}_*.out|sort>/tmp/pn; diff -q /tmp/s0 /tmp/pn>/dev/null && echo "threads=$n IDENTICAL" || echo "threads=$n DIFFERS ($(wc -l </tmp/pn))"; done — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() # move…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 109 tool call(s) so far
+[approval] bash: cd /app && ./pgen_mt test pgen_mt1 1 2>&1 | head -5 — approved
+  ⚙ bash cd /app && ./pgen_mt test pgen_mt1 1 2>&1 | head -5
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 110 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+p='/app/pgen.upc'; s=open(p).read()
+s=s.replace('''        pthread_once(&g_once, shared_alloc);
+        if (!buckets || !slots || !nodes || !codes) {''','''        g_tsz = tsz; g_cap = 2 * g_nrec + 1024;
+        pthread_once(&g_once, shared_alloc);
+        if (!buckets || !slots || !nodes || !codes) {''')
+s=s.replace('''        g_tsz = tsz; g_cap = 2 * g_nrec + 1024;
+        int32_t per = (tsz + THREADS - 1) / THREADS;''','''        int32_t per = (tsz + THREADS - 1) / THREADS;''')
+open(p,'w').write(s)
+PY
+cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1|grep -E "error"|head
+for n in 1 2 4 8; do rm -f pgen_mt${n}_*.out; timeout 45 ./pgen_mt test pgen_mt$n $n 2>/dev/null; cat pgen_mt${n}_*.out|sort>/tmp/pn; diff -q /tmp/s0 /tmp/pn>/dev/null && echo "threads=$n IDENTICAL" || echo "threads=$n DIFFERS ($(wc -l </tmp/pn))"; done — approved
+  ⚙ bash cd /app && python3 - <<'PY' p='/app/pgen.upc'; s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 111 tool call(s) so far
+[approval] bash: cd /app && ./pgen_mt test pgen_mt1 1 2>&1 | head -5; echo "rc=$?" — approved
+  ⚙ bash cd /app && ./pgen_mt test pgen_mt1 1 2>&1 | head -5; echo "rc=$?"
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 112 tool call(s) so far
+[approval] bash: cd /app && grep -n "g_tsz\|g_cap\|pthread_once\|shared_alloc" pgen.upc — approved
+  ⚙ bash cd /app && grep -n "g_tsz\|g_cap\|pthread_once\|shared_alloc" pgen.upc
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 113 tool call(s) so far
+[approval] bash: cd /app && sed -i '583d' pgen.upc && sed -n '578,592p' pgen.upc && cp pgen.upc pgen.c && gcc -O2 -DPTHREAD_TEST -o pgen_mt pgen.c -pthread 2>&1|grep -E "error"|head
+for n in 1 2 4 8; do rm -f pgen_mt${n}_*.out; timeout 45 ./pgen_mt test pgen_mt$n $n 2>/dev/null; cat pgen_mt${n}_*.out|sort>/tmp/pn; diff -q /tmp/s0 /tmp/pn>/dev/null && echo "threads=$n IDENTICAL" || echo "threads=$n DIFFERS ($(wc -l </tmp/pn))"; done — approved
