@@ -380,6 +380,30 @@ describe("the README outcome table matches the tool result codes", () => {
   });
 
 
+  it("`truncated` documents both of its paths and the bucket each lands in", () => {
+    // A cut text reply stands as a `result`; cut tool calls end on the
+    // `refusal` floor. One stop_reason in two buckets is deliberate, and a
+    // reader switching on stop_reason must be told so, not find out.
+    const root = join(__dirname, "../../..");
+    const contracts = readFileSync(join(root, "docs/CONTRACTS.md"), "utf-8");
+    const row = contracts.match(/^\| `truncated` \| (.*)$/m)?.[1] ?? "";
+    expect(row).toMatch(/text reply[^|]*`result`/);
+    expect(row).toMatch(/tool call[^|]*`refusal`[^|]*stop_detail\.repeats/);
+    const fixture = JSON.parse(readFileSync(join(root, "conformance/stop_reason.json"), "utf-8"));
+    expect(fixture.stop_reason.truncated).toMatch(/text reply.*result.*tool call.*refusal/);
+  });
+
+  it("the surface reference states a streamed call's worst-case wall", () => {
+    // Streamed time is not charged to the retry budget, so the bound is
+    // attempts x stream_total_timeout_ms. Undocumented, a harness wall sized
+    // to the old budget would kill runs mid-call with no record.
+    const root = join(__dirname, "../../..");
+    const scaffold = readFileSync(join(root, "packages/gnomon-cli/src/init.ts"), "utf-8");
+    expect(scaffold).toMatch(/attempts x stream_total_timeout_ms/);
+    const guide = readFileSync(join(root, "docs/GUIDE.md"), "utf-8");
+    expect(guide).toMatch(/`attempts` × `stream_total_timeout_ms`/);
+  });
+
   it("the inert-enumeration set, its fixture and CONTRACTS.md are one set", () => {
     // CONTRACTS.md said "`role_profile` is declared and not implemented" for
     // weeks after 495fa40 made it route -- the contract document telling readers

@@ -118,6 +118,35 @@ export interface EndpointConfig {
    * that). Set it to name a custom or gateway endpoint the host can't guess.
    */
   provider?: string;
+  /**
+   * Stream the reply as server-sent events. Absent means `[defaults] stream`.
+   * Ollama's own /api/chat is called unstreamed whatever this says. See
+   * resolveStream.
+   *
+   * Declare `false` for an OpenAI-compatible server that cannot stream, or that
+   * streams without reporting usage: a streamed call asks for usage with
+   * `stream_options.include_usage`, and a server that ignores it leaves the
+   * token counts blank.
+   */
+  stream?: boolean;
+  /**
+   * The output limit sent with every call here (`max_tokens`, or Ollama's
+   * `num_predict`). A role's own `max_tokens` wins; absent from both, it is
+   * `[defaults] max_tokens`, and absent from that, none. 0 sends none. See
+   * resolveMaxTokens.
+   */
+  max_tokens?: number;
+  /**
+   * The context window of the model behind this endpoint, in tokens. Replaces
+   * `[defaults] max_context_tokens` for a turn routed here, so a cloud model
+   * with a large window is not trimmed to a budget sized for a local one.
+   */
+  max_context_tokens?: number;
+  /**
+   * Send each assistant message's reasoning back as `reasoning_content`. See
+   * resolveReplayReasoning for the default and why it is off almost everywhere.
+   */
+  replay_reasoning?: boolean;
 }
 
 export type EndpointKind = "ollama" | "openai";
@@ -166,6 +195,17 @@ export interface Defaults {
   approval?: string;
   role_profile?: string;
   max_context_tokens?: number;
+  /**
+   * Stream replies from OpenAI-shaped endpoints that do not declare `stream`
+   * themselves. Absent means false, the behaviour before streaming existed;
+   * `gnomon init` writes true and `gnomon migrate` adds it. See resolveStream.
+   */
+  stream?: boolean;
+  /**
+   * Output limit when neither the role nor its endpoint declares one. Absent
+   * means none is sent; `gnomon init` writes DEFAULT_MAX_TOKENS.
+   */
+  max_tokens?: number;
   compaction?: Compaction;
 }
 
@@ -276,6 +316,8 @@ export interface RoleDef {
   description?: string;
   /** Named endpoint from config.toml [endpoints]; defaults to "local" */
   endpoint?: string;
+  /** Output limit for this role's calls; wins over the endpoint's. 0 sends none. */
+  max_tokens?: number;
   /**
    * Roles this role may delegate to with the `task` tool.
    *
@@ -1132,6 +1174,13 @@ function pickInt(value: unknown, fallback: number): number {
   return fallback;
 }
 
+/** A declared positive whole number, or undefined. */
+function positiveInt(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
 /**
  * Resolve the context-window policy from config.toml.
  *
@@ -1139,18 +1188,28 @@ function pickInt(value: unknown, fallback: number): number {
  * declared in the surface and already part of the surface hash — this reads
  * what is there rather than introducing new configuration.
  */
-export function resolveContext(config: GnomonConfig): ResolvedContext {
+export function resolveContext(
+  config: GnomonConfig,
+  /**
+   * The target a turn is routed to. Its endpoint's declared window replaces
+   * `[defaults] max_context_tokens`: P2G (2026-11) ran a cloud model with a
+   * window of hundreds of thousands of tokens under the 65536 default, and the
+   * leg checkpoint trimmed its working context to ~39k every 12 steps.
+   */
+  target?: { contextTokens?: number }
+): ResolvedContext {
   const ctx = config.config.context ?? {};
   const defaults = config.config.defaults ?? {};
+  const window = target?.contextTokens ?? pickInt(defaults.max_context_tokens, 65536);
   return {
     policy: pickEnum(ctx.policy, CONTEXT_POLICIES, "sliding_window"),
     retain_after: pickInt(ctx.retain_after, 2048),
-    max_context_tokens: pickInt(defaults.max_context_tokens, 65536),
+    max_context_tokens: window,
     compaction: pickEnum(defaults.compaction, COMPACTIONS, "summary"),
     summary_role:
       typeof ctx.summary_role === "string" ? ctx.summary_role : "smol",
     reserve_output: (() => {
-      const budget = pickInt(defaults.max_context_tokens, 65536);
+      const budget = window;
       // 15% of the window, at least 1024 — but never more than 40% of it.
       // Without the cap a small max_context_tokens was consumed entirely by
       // the floor, leaving no room for history at all.
@@ -1260,6 +1319,23 @@ export interface RouteTarget {
   /** Which named endpoint this came from, for display */
   endpoint?: string;
   kind?: EndpointKind;
+  /** Stream the reply (SSE). Absent means unstreamed. See resolveStream. */
+  stream?: boolean;
+  /** `[resilience] stream_idle_timeout_ms`, for a streamed call */
+  streamIdleMs?: number;
+  /** `[resilience] stream_total_timeout_ms`, for a streamed call */
+  streamTotalMs?: number;
+  /** The output limit sent with each call; 0 or absent sends none. */
+  maxTokens?: number;
+  /**
+   * The field the limit is sent as on an OpenAI-shaped endpoint. `max_tokens`
+   * unless the endpoint refused it by name for `max_completion_tokens`.
+   */
+  maxTokensField?: "max_tokens" | "max_completion_tokens";
+  /** `[endpoints.<name>] max_context_tokens`, when declared */
+  contextTokens?: number;
+  /** Replay reasoning_content on assistant messages. See resolveReplayReasoning. */
+  replayReasoning?: boolean;
 }
 
 /** The routing policy, resolved with defaults. */
@@ -1412,8 +1488,128 @@ export function resolveEndpoint(
   );
 }
 
+/**
+ * Whether calls to an endpoint are streamed.
+ *
+ * The endpoint's own `stream` wins; undeclared, it is `[defaults] stream`, and
+ * absent from both it is false. Ollama's own /api/chat is never streamed: its
+ * native route streams NDJSON, not server-sent events, and no reader for it
+ * exists here. auditSurface says so when a block declares it.
+ *
+ * Absent means false, though streaming is the better behaviour, because a
+ * default that changed in the code would change what an existing surface does
+ * without moving its hash (Rule 1). `gnomon init` writes `[defaults] stream =
+ * true`, and `gnomon migrate` adds it to an existing surface, where the line
+ * moves the hash in plain sight.
+ *
+ * Streaming is the better behaviour because an unstreamed reply has only one clock:
+ * nothing arrives until the whole generation is done, so a deadline long
+ * enough for the longest legitimate reply is also how long a dead one is
+ * waited on. Measured on P2G (2026-11, Terminal-Bench on hosted DeepSeek V4.1
+ * Flash, gnomon v0.3.1): 11 of 18 cells hit the 30-minute cap, with replies
+ * cut off at 300 s and sent again from the start. A streamed reply is timed
+ * by the gap between chunks instead, which a reply that is still being
+ * written never reaches.
+ */
+export function resolveStream(
+  endpoint: { url?: string; kind?: EndpointKind; stream?: unknown },
+  unclear: EndpointKind = "ollama",
+  /** `[defaults] stream` */
+  surfaceDefault: unknown = false
+): boolean {
+  if (endpointKind(endpoint, unclear) === "ollama") return false;
+  if (typeof endpoint.stream === "boolean") return endpoint.stream;
+  return surfaceDefault === true;
+}
+
 /** The only keys an [endpoints.<name>] block may carry. */
-const ENDPOINT_KEYS = new Set(["url", "kind", "api_key_env", "provider"]);
+const ENDPOINT_KEYS = new Set([
+  "url",
+  "kind",
+  "api_key_env",
+  "provider",
+  "stream",
+  "max_tokens",
+  "max_context_tokens",
+  "replay_reasoning",
+]);
+
+/**
+ * Hosts whose own API documentation requires reasoning to be sent back.
+ *
+ * DeepSeek, api-docs.deepseek.com/guides/thinking_mode (read 2026-11-03):
+ * thinking mode is on by default, and when `tools` are sent, "the
+ * reasoning_content must be fully passed back to the API in all subsequent
+ * requests" -- for turns with no tool call too -- and "If your code does not
+ * correctly pass back reasoning_content, the API will return a 400 error."
+ * Without tools it is ignored. Matched on the hostname only: a relay or a
+ * gateway in front of DeepSeek is a different server and says so itself.
+ */
+const REPLAY_REASONING_HOSTS = [/(^|\.)api\.deepseek\.com$/];
+
+/**
+ * Whether an endpoint gets `reasoning_content` back on assistant messages.
+ *
+ * Declared wins. Undeclared it is off, except for a host listed above, because
+ * the field is not part of OpenAI's message schema and strict servers refuse
+ * extra message fields: opencode's Console Go answered gnomon's surplus
+ * `tool_name` with "400 Extra inputs are not permitted". Ollama's /api/chat
+ * calls it `thinking` and is never sent it.
+ */
+export function resolveReplayReasoning(endpoint: {
+  url?: string;
+  kind?: EndpointKind;
+  replay_reasoning?: unknown;
+}, unclear: EndpointKind = "ollama"): boolean {
+  if (endpointKind(endpoint, unclear) === "ollama") return false;
+  if (typeof endpoint.replay_reasoning === "boolean") return endpoint.replay_reasoning;
+  let host = "";
+  try {
+    host = new URL(endpoint.url ?? "").hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  return REPLAY_REASONING_HOSTS.some((re) => re.test(host));
+}
+
+/**
+ * The output limit `gnomon init` declares in `[defaults] max_tokens`.
+ *
+ * gnomon sent no limit at all, so a reply ran until the model stopped, and a
+ * reasoning model does not stop early. On P2G (2026-11, hosted DeepSeek V4.1
+ * Flash) gnomon wrote about twice the output per step that opencode and goose
+ * did on the same tasks, up to nine times on some, most of it reasoning; one
+ * cell spent 221k output tokens and left its solution a stub.
+ *
+ * 32k, not less, because on DeepSeek and llama.cpp the limit counts the
+ * reasoning too: 9k tokens of thinking followed by a 30 KB file write needs
+ * ~19k, and a limit below that turns a write that works unlimited into one
+ * that is cut off every time. A provider whose own maximum is lower says so in
+ * its 400, and the limit is clamped to what it states (see callEndpoint).
+ *
+ * Not a code default. Absent everywhere, no limit is sent, which is the
+ * behaviour before this existed: a default that changed in the code would
+ * change what an existing surface does without moving its hash (Rule 1).
+ * `gnomon migrate` adds the line to an older surface.
+ */
+export const DEFAULT_MAX_TOKENS = 32_768;
+
+/**
+ * The output limit for a role on an endpoint: the role's own `max_tokens`,
+ * else the endpoint's, else `[defaults] max_tokens`, else none (0). 0 at any
+ * level also means "send none", and stops the search there.
+ */
+export function resolveMaxTokens(
+  config: GnomonConfig,
+  role: { max_tokens?: unknown } | undefined,
+  endpoint: { max_tokens?: unknown } | undefined
+): number {
+  const ok = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
+  for (const v of [role?.max_tokens, endpoint?.max_tokens, config.config?.defaults?.max_tokens]) {
+    if (ok(v)) return Math.floor(v);
+  }
+  return 0;
+}
 
 /**
  * Every key a [roles.*] block may carry.
@@ -1722,7 +1918,7 @@ const BLOCK_OWNER: Record<string, BlockOwner> = {
   tools: { file: "tools.toml", read: true },
 };
 
-const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "model", "exec", "image", "profile", "task_allow", "temperature", "tools", "top_p", "write_allow"]);
+const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "max_tokens", "model", "exec", "image", "profile", "task_allow", "temperature", "tools", "top_p", "write_allow"]);
 
 /**
  * Spellings people reach for when they mean to supply a secret directly.
@@ -2419,6 +2615,65 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
       });
     }
 
+    for (const field of ["max_tokens", "max_context_tokens"]) {
+      const v = block[field];
+      if (v !== undefined && !(typeof v === "number" && Number.isFinite(v) && v >= 0)) {
+        problems.push({
+          where,
+          problem: `${field} = ${JSON.stringify(v)} is not a whole number of tokens, so it is ignored.`,
+          fix:
+            field === "max_tokens"
+              ? "max_tokens = 16384 limits each reply; 0 sends no limit."
+              : "max_context_tokens = <the model's window in tokens>, e.g. 131072.",
+          fatal: false,
+        });
+      }
+    }
+
+    if (block.replay_reasoning !== undefined && typeof block.replay_reasoning !== "boolean") {
+      problems.push({
+        where,
+        problem: `replay_reasoning = ${JSON.stringify(block.replay_reasoning)} is not true or false, so it is ignored.`,
+        fix: "replay_reasoning = true sends reasoning_content back on assistant messages; false does not.",
+        fatal: false,
+      });
+    } else if (
+      block.replay_reasoning === true &&
+      endpointKind({ url: block.url as string | undefined, kind: block.kind as EndpointKind | undefined }) ===
+        "ollama"
+    ) {
+      problems.push({
+        where,
+        problem: `replay_reasoning = true on an Ollama /api/chat endpoint: that route is never sent reasoning_content, so the line does nothing.`,
+        fix: "Delete the line, or use the server's OpenAI route with kind = \"openai\".",
+        fatal: false,
+      });
+    }
+
+    if (block.stream !== undefined && typeof block.stream !== "boolean") {
+      problems.push({
+        where,
+        problem: `stream = ${JSON.stringify(block.stream)} is not true or false, so it is ignored.`,
+        fix: "stream = true streams the reply; false waits for it whole. Absent, [defaults] stream decides.",
+        fatal: false,
+      });
+    } else if (
+      block.stream === true &&
+      endpointKind({ url: block.url as string | undefined, kind: block.kind as EndpointKind | undefined }) ===
+        "ollama"
+    ) {
+      problems.push({
+        where,
+        problem:
+          `stream = true on an Ollama /api/chat endpoint: that route is always called ` +
+          `unstreamed, so the line does nothing.`,
+        fix:
+          `To stream from Ollama, point a kind = "openai" block at its OpenAI route, ` +
+          `http://127.0.0.1:11434/v1/chat/completions. Otherwise delete the line.`,
+        fatal: false,
+      });
+    }
+
     const kind = block.kind;
     if (kind !== undefined && kind !== "openai" && kind !== "ollama") {
       problems.push({
@@ -2822,6 +3077,7 @@ export function routeRole(
   // behaviour silently is exactly what Rule 1 exists to prevent.
   const endpointName = roleDef.endpoint ?? DEFAULT_ENDPOINT;
   const endpoint = resolveEndpoint(config, endpointName);
+  const resilience = resolveResilience(config);
   const target: RouteTarget = {
     model,
     temperature,
@@ -2835,6 +3091,12 @@ export function routeRole(
     apiKeyEnv: endpoint.api_key_env,
     endpoint: endpointName,
     kind: endpointKind(endpoint),
+    stream: resolveStream(endpoint, "ollama", config.config.defaults?.stream),
+    streamIdleMs: resilience.stream_idle_timeout_ms,
+    streamTotalMs: resilience.stream_total_timeout_ms,
+    maxTokens: resolveMaxTokens(config, roleDef, endpoint),
+    contextTokens: positiveInt(endpoint.max_context_tokens),
+    replayReasoning: resolveReplayReasoning(endpoint),
   };
 
   let fallback: RouteTarget | undefined;
@@ -2856,6 +3118,12 @@ export function routeRole(
       // A fallback with no kind has always defaulted to openai, so that stays
       // the default for a URL that names no shape.
       kind: endpointKind(fbEndpoint ?? { url: fb.url }, "openai"),
+      stream: resolveStream(fbEndpoint ?? { url: fb.url }, "openai", config.config.defaults?.stream),
+      streamIdleMs: resilience.stream_idle_timeout_ms,
+      streamTotalMs: resilience.stream_total_timeout_ms,
+      maxTokens: resolveMaxTokens(config, roleDef, fbEndpoint),
+      contextTokens: positiveInt(fbEndpoint?.max_context_tokens),
+      replayReasoning: resolveReplayReasoning(fbEndpoint ?? { url: fb.url }, "openai"),
     };
   }
 
@@ -3226,6 +3494,14 @@ export interface ResolvedResilience {
    * declaration. See the loopback branch in callEndpoint.
    */
   transport_grace_declared: boolean;
+  /**
+   * A streamed reply that sends nothing for this long has stalled, and the
+   * request is aborted. Counted from the first byte of the body; before it,
+   * `request_timeout_ms` is the wait, as it is for a whole unstreamed reply.
+   */
+  stream_idle_timeout_ms: number;
+  /** The overall cap on one streamed reply, however steadily it arrives. */
+  stream_total_timeout_ms: number;
 }
 
 /**
@@ -3259,6 +3535,16 @@ export function resolveResilience(config: GnomonConfig): ResolvedResilience {
     // endpoint that is still unreachable afterwards ends the turn.
     transport_grace_ms: Math.floor(num(r?.transport_grace_ms, 60_000)),
     transport_grace_declared: num(r?.transport_grace_ms, -1) >= 0,
+    // 300 s of silence: the longest gap a live stream is seen to leave is a
+    // reasoning model thinking with its reasoning hidden, and Codex's
+    // stream_idle_timeout_ms defaults to the same figure for that reason.
+    stream_idle_timeout_ms: Math.max(1000, Math.floor(num(r?.stream_idle_timeout_ms, 300_000))),
+    // 30 minutes. Generous on purpose: this is not the guard, the idle timeout
+    // is. It stops a reply that never ends, which no idle clock can see.
+    stream_total_timeout_ms: Math.max(
+      1000,
+      Math.floor(num(r?.stream_total_timeout_ms, 1_800_000))
+    ),
   };
 }
 

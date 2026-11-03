@@ -151,7 +151,16 @@ export interface PromptExchange {
   /** One line per tool call, for the transcript */
   tool_log?: string[];
   /** Folded into the running summary; no longer replayed verbatim */
-  folded?: boolean;  /**
+  folded?: boolean;
+  /**
+   * The reasoning behind `output`, kept only when an endpoint the role can
+   * reach (its own, or its fallback) replays reasoning. DeepSeek's thinking mode with tools wants the
+   * reasoning of EVERY earlier assistant message back, earlier user turns
+   * included, or answers 400 -- so the second turn of a session needs the
+   * first turn's. Replayed by buildMessages; the wire filter in callEndpoint
+   * drops it for any endpoint that does not ask for it.
+   */
+  reasoning?: string;  /**
    * Why the turn ended, and the counters behind it.
    *
    * These were computed on every turn and then dropped on the interactive path:
@@ -224,6 +233,11 @@ export interface PromptState {
    * rejection is paid once per session rather than on every turn.
    */
   noToolModels?: Set<string>;
+  /**
+   * Endpoint+model pairs that refused the output limit, and what was done: the
+   * field renamed, or the limit dropped. Paid once per session, as above.
+   */
+  outputLimitAdapted?: Map<string, OutputLimitAdaptation>;
   /**
    * The session checklist, as the `todo` tool last left it.
    *
@@ -387,6 +401,11 @@ export interface ChatMessage {
   content: string;
   /** Echoed back verbatim on an assistant turn that called tools */
   tool_calls?: unknown[];
+  /**
+   * The reasoning behind an assistant message. Always kept here, and sent only
+   * to an endpoint with replay_reasoning on (see callEndpoint).
+   */
+  reasoning_content?: string;
   /** Set on a tool result; both spellings, since backends differ */
   tool_call_id?: string;
   tool_name?: string;
@@ -555,6 +574,9 @@ export function buildMessages(
     messages.push({
       role: "assistant",
       content: splitThinking(e.output).answer || e.output,
+      // Present only where the answering endpoint replays reasoning, and sent
+      // only to one that does (the wire filter in callEndpoint).
+      ...(e.reasoning ? { reasoning_content: e.reasoning } : {}),
     });
   };
 
@@ -691,6 +713,48 @@ interface InferenceResult {
    * remote outage -- see callEndpointWithRetry.
    */
   refusedLocally?: boolean;
+  /**
+   * Which clock ended the call, when one did. `first`: nothing arrived within
+   * the request deadline (for an unstreamed call, the whole reply). `idle`: a
+   * streamed reply went silent mid-way. `total`: a streamed reply ran past its
+   * overall cap. callEndpointWithRetry treats each differently.
+   */
+  timedOut?: "first" | "idle" | "total";
+  /**
+   * A streamed reply that started and then broke off: the connection dropped,
+   * or the stream ended with neither a finish_reason nor [DONE]. Code 12, but
+   * the endpoint answered, so it spends a generation attempt rather than the
+   * transport grace a refused socket gets.
+   */
+  streamBroken?: boolean;
+  /**
+   * For a streamed call whose body started: how long the first byte took.
+   * What callEndpointWithRetry charges to its budget instead of the whole call.
+   */
+  firstByteMs?: number;
+  /**
+   * Requests that reached the endpoint and came back with no usage report:
+   * aborted, broken off, or a server that does not report usage on a stream.
+   * Their tokens are in no total. Summed into TurnCounters.unmetered_calls.
+   */
+  unmeteredCalls?: number;
+  /**
+   * A 400 that named the output limit, and the shape to resend it in. See
+   * readLimitRefusal.
+   */
+  maxTokensRejected?: LimitRefusal;
+  /**
+   * The content is the reasoning channel standing in for an empty reply: no
+   * text and no tool call came back, only thinking. A loop that reads this as
+   * an answer is reading the model think.
+   */
+  reasoningOnly?: boolean;
+  /**
+   * The reply's reasoning channel (reasoning_content, or reasoning), when it
+   * had one and it did not stand in for the content. Replayed on the
+   * assistant message only where the endpoint asks for it.
+   */
+  reasoning?: string;
 }
 
 /**
@@ -899,7 +963,7 @@ export function isMalformedCall(call: ToolCall, offered: Set<string>): boolean {
  * three tries read as one, which is the part of this that would actually
  * violate the harness's own claims — not the retry itself.
  */
-async function callEndpointWithRetry(
+export async function callEndpointWithRetry(
   target: RouteTarget,
   messages: ChatMessage[],
   tools: unknown[],
@@ -1013,17 +1077,30 @@ async function callEndpointWithRetry(
     if (/\b5\d\d\b|overloaded/i.test(text)) return "endpoint erroring (5xx)";
     return "endpoint unreachable";
   };
+  // Requests that reached the endpoint and came back with no usage report,
+  // across every attempt -- a failed attempt is billed too, and its tokens are
+  // in no total. Carried on whatever this returns.
+  let unmetered = 0;
+  const metered = (x: InferenceResult): InferenceResult =>
+    unmetered > 0 ? { ...x, unmeteredCalls: unmetered } : x;
   for (let attempt = 1; attempt <= resilience.attempts; attempt++) {
     const startedAt = Date.now();
     const r = await callEndpoint(target, messages, tools, deadline, signal, session);
-    spentMs += Date.now() - startedAt;
-    if (r.code === 0 || !RETRYABLE.has(r.code)) return r;
+    // Only the wait for the first byte is charged to the budget. The budget
+    // bounds how long an endpoint may leave a request unanswered; a streamed
+    // reply that is arriving is answered. Charging its whole length meant a
+    // stream that ran six minutes and then stalled had "spent" a 900 s budget
+    // and was never asked again, and a refused socket right after a long
+    // stream had no room left for transport_grace_ms either.
+    spentMs += r.firstByteMs ?? Date.now() - startedAt;
+    unmetered += r.unmeteredCalls ?? 0;
+    if (r.code === 0 || !RETRYABLE.has(r.code)) return metered(r);
     last = r;
-    if (signal?.aborted) return r;
+    if (signal?.aborted) return metered(r);
     if (r.refusedLocally && !resilience.transport_grace_declared) {
       graceMs = Math.min(declaredGraceMs, LOCAL_REFUSED_GRACE_MS);
     }
-    if (r.code === 12 && graceMs > 0) {
+    if (r.code === 12 && graceMs > 0 && !r.streamBroken) {
       transportTries++;
       const wait = Math.min(
         resilience.backoff_ms * Math.pow(2, transportTries - 1),
@@ -1041,7 +1118,7 @@ async function callEndpointWithRetry(
             )
           );
         }
-        return r;
+        return metered(r);
       }
       transportWaitedMs += wait;
       spentMs += wait;
@@ -1072,11 +1149,28 @@ async function callEndpointWithRetry(
         );
       }
       if (!(await sleepUnlessAborted(wait, signal))) {
-        return { content: CANCELLED, code: 2, toolCalls: [] };
+        return metered({ content: CANCELLED, code: 2, toolCalls: [] });
       }
       // An endpoint that never answered did not spend a generation attempt.
       attempt--;
       continue;
+    }
+    if (r.code === 11 && r.timedOut === "total") {
+      // A streamed reply that was still arriving when the cap ran out was not
+      // stalled, it was long, and the same prompt runs as long again. Resending
+      // it is the blind retry: same request, same outcome, billed twice. The
+      // turn's fallback, if one is declared, is still tried by the caller.
+      if (say && ui) {
+        say(
+          paint(
+            ui,
+            "yellow",
+            `  [retry] not retried — the streamed reply ran past its overall cap ` +
+              `([resilience] stream_total_timeout_ms), and the same prompt would run as long again`
+          )
+        );
+      }
+      return metered(r);
     }
     if (r.code === 11) {
       // Stop while the answer still fits in the budget. Starting an attempt
@@ -1093,9 +1187,13 @@ async function callEndpointWithRetry(
             )
           );
         }
-        return r;
+        return metered(r);
       }
-      deadline = Math.min(deadline * 2, remainingMs);
+      // A stream that went silent mid-reply had stalled; it did not need a
+      // longer wait for its first byte, so that deadline is not doubled. The
+      // stall is not a property of the prompt, and the aborted request has
+      // already stopped the generation, so asking again is not paying twice.
+      if (r.timedOut !== "idle") deadline = Math.min(deadline * 2, remainingMs);
     }
     if (attempt < resilience.attempts) {
       const wait = resilience.backoff_ms * Math.pow(2, attempt - 1);
@@ -1105,17 +1203,25 @@ async function callEndpointWithRetry(
           paint(
             ui,
             "yellow",
-            `  [retry] ${r.code === 11 ? `timed out (deadline now ${deadline}ms)` : transportKind(r)} ` +
+            `  [retry] ${
+              r.code === 11
+                ? r.timedOut === "idle"
+                  ? `the stream went silent mid-reply`
+                  : `timed out (deadline now ${deadline}ms)`
+                : r.streamBroken
+                  ? `the stream broke off mid-reply`
+                  : transportKind(r)
+            } ` +
               `— attempt ${attempt} of ${resilience.attempts}, waiting ${wait}ms`
           )
         );
       }
       if (!(await sleepUnlessAborted(wait, signal))) {
-        return { content: CANCELLED, code: 2, toolCalls: [] };
+        return metered({ content: CANCELLED, code: 2, toolCalls: [] });
       }
     }
   }
-  return last!;
+  return metered(last!);
 }
 
 /**
@@ -1195,7 +1301,7 @@ export function isLoopbackUrl(url: string): boolean {
  * hidden timeouts switched off.
  *
  * Node's fetch is undici, and undici gives every request a 300 s headersTimeout
- * and a 300 s bodyTimeout of its own. A model call is not streamed, so headers
+ * and a 300 s bodyTimeout of its own. An unstreamed model call's headers
  * arrive only when the whole generation is done, and a long, steady local
  * generation was cut off at exactly 300 s however long gnomon's deadline was:
  * the timeout escalation in callEndpointWithRetry doubled the deadline to 600 s
@@ -1253,6 +1359,37 @@ export async function callEndpoint(
   signal?: AbortSignal,
   /** The conversation this call belongs to -- `state.sessionId`. */
   session?: string
+): Promise<InferenceResult> {
+  const started = Date.now();
+  const trace: CallTrace = {};
+  const r = await callEndpointOnce(target, messages, tools, timeoutMs, signal, session, trace);
+  if (trace.firstByteAt !== undefined) r.firstByteMs = trace.firstByteAt - started;
+  // The request reached the server and nothing reported what it cost. Counted
+  // rather than guessed: a benchmark reading the token totals needs to know
+  // they are a floor.
+  if (trace.reached && !r.usage) r.unmeteredCalls = 1;
+  return r;
+}
+
+/** What one call saw on the wire, for the wrapper above. */
+interface CallTrace {
+  /** When the first byte of a streamed body arrived */
+  firstByteAt?: number;
+  /**
+   * A generation may have run: the server answered 2xx, or a clock ran out
+   * after the request was sent. A non-2xx reply is a refusal, not a generation.
+   */
+  reached?: boolean;
+}
+
+async function callEndpointOnce(
+  target: RouteTarget,
+  messages: ChatMessage[],
+  tools: unknown[],
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+  session: string | undefined,
+  trace: CallTrace
 ): Promise<InferenceResult> {
   // Identify the client, and the conversation, on every request.
   //
@@ -1354,7 +1491,15 @@ export async function callEndpoint(
   const OPENAI_MESSAGE_KEYS = new Set(["role", "content", "tool_calls", "tool_call_id", "name"]);
   const OLLAMA_MESSAGE_KEYS = new Set(["role", "content", "tool_calls", "tool_name"]);
   const isOllama = (target.kind ?? "ollama") === "ollama";
-  const allowedKeys = isOllama ? OLLAMA_MESSAGE_KEYS : OPENAI_MESSAGE_KEYS;
+  // reasoning_content is on the list only for an endpoint that asks for it
+  // (replay_reasoning), and only on assistant messages, which are the only
+  // ones that carry it. Everywhere else it is the surplus field this list
+  // exists to drop.
+  const allowedKeys = isOllama
+    ? OLLAMA_MESSAGE_KEYS
+    : target.replayReasoning
+      ? new Set([...OPENAI_MESSAGE_KEYS, "reasoning_content"])
+      : OPENAI_MESSAGE_KEYS;
   const wireMessages = messages.map((m) => {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(m as unknown as Record<string, unknown>)) {
@@ -1363,18 +1508,68 @@ export async function callEndpoint(
     return out;
   });
 
+  // Streamed when the surface says so (resolveStream: the endpoint's `stream`,
+  // else `[defaults] stream`). Usage then arrives in a last chunk of its own, and only when it
+  // is asked for, so it is asked for: the token counts are what the benchmarks
+  // read, and a streamed call must report exactly what an unstreamed one did.
+  const streamed = target.stream === true;
   const payload: Record<string, unknown> = {
     model: target.model,
     messages: wireMessages,
-    stream: false,
+    stream: streamed,
   };
+  if (streamed) payload.stream_options = { include_usage: true };
+  // The output limit, in the field this endpoint takes: Ollama's num_predict
+  // inside `options`, else max_tokens -- or max_completion_tokens, for an
+  // endpoint that refused max_tokens by name (see the 400 branch below).
+  const maxTokens = Math.max(0, Math.floor(target.maxTokens ?? 0));
+  const maxTokensField = target.maxTokensField ?? "max_tokens";
   if ((target.kind ?? "ollama") === "ollama") {
-    payload.options = { temperature: target.temperature, top_p: target.top_p };
+    payload.options = {
+      temperature: target.temperature,
+      top_p: target.top_p,
+      ...(maxTokens > 0 ? { num_predict: maxTokens } : {}),
+    };
   } else {
     payload.temperature = target.temperature;
     payload.top_p = target.top_p;
+    if (maxTokens > 0) payload[maxTokensField] = maxTokens;
   }
   if (tools.length > 0) payload.tools = tools;
+
+  // One controller for every way a call ends early: the deadline, a streamed
+  // reply going silent or running past its cap, and Esc. Aborting it closes
+  // the socket, which is how the server learns to stop generating. A reply
+  // nobody reads any more is still billed while it runs: on P2G (2026-11) the
+  // relay billed data-anonymization 163,404 output tokens where gnomon counted
+  // 81,742, the difference being generations abandoned at 300 s that ran on.
+  //
+  // Three clocks. `timeoutMs` (request_timeout_ms) is the wait for the first
+  // byte -- for an unstreamed call that is the whole reply, as it always was.
+  // Once a streamed body starts, every chunk re-arms the idle clock instead,
+  // so a reply that is still being written is never cut off for being long.
+  // The overall cap stops one that never ends.
+  const idleMs = Math.max(1, target.streamIdleMs ?? 300_000);
+  const totalMs = Math.max(1, target.streamTotalMs ?? 1_800_000);
+  const controller = new AbortController();
+  let timedOut: InferenceResult["timedOut"];
+  const expire = (why: NonNullable<InferenceResult["timedOut"]>) => () => {
+    timedOut = why;
+    controller.abort(new DOMException(`model call timed out (${why})`, "TimeoutError"));
+  };
+  let clock = setTimeout(expire("first"), timeoutMs);
+  const cap = streamed ? setTimeout(expire("total"), totalMs) : undefined;
+  const rearm = (): void => {
+    clearTimeout(clock);
+    clock = setTimeout(expire("idle"), idleMs);
+  };
+  const onCancel = (): void => controller.abort(signal?.reason);
+  if (signal?.aborted) controller.abort(signal.reason);
+  else signal?.addEventListener("abort", onCancel, { once: true });
+  // Set once the whole body has been read, so the finally below closes only a
+  // connection that something walked away from.
+  let drained = false;
+  let answered = false;
 
   try {
     const dispatcher = modelFetchDispatcher();
@@ -1382,13 +1577,11 @@ export async function callEndpoint(
       method: "POST",
       headers,
       body: JSON.stringify(payload),
-      // Either the request deadline or the user pressing Esc ends the call.
-      signal: signal
-        ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal])
-        : AbortSignal.timeout(timeoutMs),
-      // No undici timeouts of its own: the deadline above is the only clock.
+      signal: controller.signal,
+      // No undici timeouts of its own: the clocks above are the only ones.
       ...(dispatcher ? { dispatcher } : {}),
     } as RequestInit);
+    answered = true;
 
     if (!res.ok) {
       // The body carries the reason; the status alone does not. Reporting
@@ -1452,6 +1645,15 @@ export async function callEndpoint(
           toolCallUnparsed: detail.slice(0, 500),
         };
       }
+      // The endpoint refused the output limit itself: a value above its own
+      // maximum (DeepSeek's non-thinking models take 8k), more than the window
+      // has left (vLLM: "'max_tokens' ... is too large"), or the field name
+      // (OpenAI's reasoning models: "Use 'max_completion_tokens' instead").
+      // Named on the result so the caller can resend in the shape it accepts,
+      // announced and recorded, rather than ending the turn on a limit the
+      // harness chose. Only a 400 that names the field counts.
+      const maxTokensRejected =
+        res.status === 400 ? readLimitRefusal(detail, maxTokens, maxTokensField) : undefined;
       return {
         content:
           `Model API error: ${res.status} ${res.statusText}` +
@@ -1461,10 +1663,86 @@ export async function callEndpoint(
         toolCalls: [],
         toolsUnsupported:
           res.status === 400 && /does not support tools/i.test(detail),
+        ...(maxTokensRejected ? { maxTokensRejected } : {}),
+      };
+    }
+
+    // A reply is coming: from here, one that ends without a usage report is
+    // tokens nobody counted. A non-2xx above is not -- a 429 or a 400 is
+    // refused before any generation, and counting those flagged every session
+    // whose endpoint renamed max_tokens once as a floor.
+    trace.reached = true;
+
+    // A server that ignores `stream: true` answers with one JSON body, and is
+    // read as one. Only a body that says it is an event stream is parsed as
+    // one, so a server that cannot stream needs no declaration to keep working.
+    const contentType = res.headers?.get?.("content-type") ?? "";
+    if (streamed && res.body && /text\/event-stream/i.test(contentType)) {
+      const s = await readChatStream(res.body, () => {
+        trace.firstByteAt ??= Date.now();
+        rearm();
+      });
+      drained = s.complete;
+      if (s.error) {
+        // An error sent in place of a chunk: the request was accepted and
+        // failed on the way. Read exactly as the same text in a non-2xx body.
+        if (/error parsing tool call|failed to parse (?:the )?(?:tool call|input at pos)/i.test(s.error.message)) {
+          return { content: "", code: 0, toolCalls: [], toolCallUnparsed: s.error.message.slice(0, 500), usage: s.usage };
+        }
+        // Without a numeric status, classifyFailure files an unrecognised
+        // message as 10, a request that will fail the same way twice. In a
+        // stream that is backwards: the request was accepted and generation
+        // had started, so what broke is the server -- OpenAI's own mid-stream
+        // failure is {"type": "server_error", "code": null}. So 12 unless the
+        // text says the prompt did not fit (13) or timed out (11), or the
+        // server calls the request itself invalid.
+        const read = classifyFailure({ status: s.error.status, message: s.error.message });
+        const code =
+          s.error.status === undefined && read === 10 && !/invalid_request/i.test(s.error.type ?? "")
+            ? 12
+            : read;
+        return {
+          content: `Model API error (in the stream): ${s.error.message.slice(0, 500)}`,
+          code,
+          toolCalls: [],
+          usage: s.usage,
+        };
+      }
+      if (!s.complete) {
+        return {
+          content:
+            `The stream from ${target.url} ended before the reply was complete ` +
+            `(no finish_reason and no [DONE]).`,
+          code: 12,
+          streamBroken: true,
+          toolCalls: [],
+          usage: s.usage,
+        };
+      }
+      const raw = s.toolCalls.map((c) => ({
+        ...(c.id !== undefined ? { id: c.id } : {}),
+        type: c.type ?? "function",
+        function: { name: c.name, arguments: c.args },
+      }));
+      // Content first and reasoning last, as below. A stream cannot tell a
+      // null content from an empty one, so the reasoning stands in only for a
+      // reply with no text and no tool call -- the case it exists for.
+      const promoted = !(s.content !== "" || raw.length > 0 || isEmptyReasoning(s.reasoning));
+      const content = promoted ? s.reasoning : s.content;
+      return {
+        content,
+        ...(promoted && content ? { reasoningOnly: true } : {}),
+        code: 0,
+        toolCalls: normaliseToolCalls(raw),
+        rawToolCalls: raw,
+        usage: s.usage,
+        finishReason: s.finishReason,
+        ...(!promoted && s.reasoning && !isEmptyReasoning(s.reasoning) ? { reasoning: s.reasoning } : {}),
       };
     }
 
     const json = await res.json();
+    drained = true;
     const message = json.choices?.[0]?.message ?? json.message ?? {};
     // reasoning_content is read, and last. A reasoning model that answers only
     // in its thinking channel returns content: null, which this read as "" — an
@@ -1480,38 +1758,83 @@ export async function callEndpoint(
     // became the rationale of every step and, on 2026-10-21, the whole final
     // answer of a 75-call audit. It is an empty reply, and the loop's
     // empty-reply handling is what should see it.
+    //
+    // And only for a reply with no tool call -- the case it exists for, and
+    // what a streamed reply does. OpenAI-style servers send content: null
+    // beside tool_calls as a matter of course, and promoting the reasoning
+    // there replayed the model's thinking to it as something it had said.
     const reasoning = message.reasoning_content ?? message.reasoning;
-    const content =
-      message.content ??
-      json.response ??
-      (typeof reasoning === "string" && isEmptyReasoning(reasoning) ? "" : reasoning) ??
-      "";
-    const finishReason = json.choices?.[0]?.finish_reason ?? json.done_reason;
-
     const raw: unknown[] = Array.isArray(message.tool_calls)
       ? message.tool_calls
       : [];
-    const toolCalls: ToolCall[] = raw.map((c) => {
-      const call = c as {
-        id?: string;
-        name?: string;
-        arguments?: unknown;
-        function?: { name?: string; arguments?: unknown };
-      };
-      return {
-        id: call.id,
-        name: call.function?.name ?? call.name ?? "",
-        args: parseToolArgs(call.function?.arguments ?? call.arguments),
-      };
-    });
+    const content =
+      message.content ??
+      json.response ??
+      (raw.length > 0 || (typeof reasoning === "string" && isEmptyReasoning(reasoning)) ? "" : reasoning) ??
+      "";
+    const finishReason = json.choices?.[0]?.finish_reason ?? json.done_reason;
 
-    return { content, code: 0, toolCalls, rawToolCalls: raw, usage: readUsage(json), finishReason };
+    const toolCalls = normaliseToolCalls(raw);
+    // The reasoning stood in for a null content (and no `response`).
+    const reasoningOnly =
+      message.content == null && json.response == null && content !== "" && content === reasoning;
+
+    // The reasoning, unless it already stands in for the content above.
+    const kept =
+      typeof reasoning === "string" && reasoning && !isEmptyReasoning(reasoning) && content !== reasoning
+        ? { reasoning }
+        : {};
+    return {
+      content,
+      code: 0,
+      toolCalls,
+      rawToolCalls: raw,
+      usage: readUsage(json),
+      finishReason,
+      ...(reasoningOnly ? { reasoningOnly: true } : {}),
+      ...kept,
+    };
   } catch (err) {
     if (signal?.aborted) {
       return { content: CANCELLED, code: 2, toolCalls: [] };
     }
+    // One of gnomon's own clocks ran out. A timeout (11) whichever it was --
+    // the server accepted the request and was still working on it, or had
+    // stopped mid-reply -- never an unreachable endpoint (12).
+    if (timedOut) {
+      trace.reached = true;
+      const secs = (ms: number) => `${Math.round(ms / 100) / 10}s`;
+      return {
+        content:
+          timedOut === "first"
+            ? `Model unavailable at ${target.url}: no ` +
+              (streamed ? "first byte" : "reply") +
+              ` within ${secs(timeoutMs)} ([resilience] request_timeout_ms)`
+            : timedOut === "idle"
+              ? `The stream from ${target.url} went silent for ${secs(idleMs)} mid-reply ` +
+                `([resilience] stream_idle_timeout_ms), so the request was aborted.`
+              : `The streamed reply from ${target.url} ran past ${secs(totalMs)} ` +
+                `([resilience] stream_total_timeout_ms), so the request was aborted.`,
+        code: 11,
+        timedOut,
+        toolCalls: [],
+      };
+    }
     const msg = err instanceof Error ? err.message : String(err);
     const errno = causeCode(err);
+
+    // A streamed body that broke off after the headers arrived: the endpoint
+    // answered, then the connection went. Not a refused socket.
+    if (streamed && answered) {
+      return {
+        content:
+          `The stream from ${target.url} broke off mid-reply: ${msg}` +
+          (errno && !msg.includes(errno) ? ` (${errno})` : ""),
+        code: 12,
+        streamBroken: true,
+        toolCalls: [],
+      };
+    }
 
     // Nothing is listening on this box.
     //
@@ -1586,7 +1909,277 @@ export async function callEndpoint(
           }),
       toolCalls: [],
     };
+  } finally {
+    clearTimeout(clock);
+    if (cap) clearTimeout(cap);
+    signal?.removeEventListener("abort", onCancel);
+    // A reply abandoned part-way -- an error chunk, a timeout, Esc -- has its
+    // connection closed here, so the server stops writing it.
+    if (!drained) controller.abort();
   }
+}
+
+/**
+ * Tool calls in the backend's shape, normalised. Ollama sends `arguments` as
+ * an object, OpenAI as a JSON string; parseToolArgs reads either.
+ */
+function normaliseToolCalls(raw: unknown[]): ToolCall[] {
+  return raw.map((c) => {
+    const call = c as {
+      id?: string;
+      name?: string;
+      arguments?: unknown;
+      function?: { name?: string; arguments?: unknown };
+    };
+    return {
+      id: call.id,
+      name: call.function?.name ?? call.name ?? "",
+      args: parseToolArgs(call.function?.arguments ?? call.arguments),
+    };
+  });
+}
+
+/** What a streamed chat completion added up to. */
+export interface StreamedReply {
+  content: string;
+  /** reasoning_content (DeepSeek, llama.cpp) or reasoning (OpenRouter, Ollama) */
+  reasoning: string;
+  /** Assembled by index; `args` is the concatenated arguments string */
+  toolCalls: Array<{ id?: string; type?: string; name: string; args: string }>;
+  finishReason?: string;
+  usage?: TokenUsage;
+  /** An `error` the server sent in place of a chunk */
+  error?: { message: string; status?: number; type?: string };
+  /** A finish_reason or [DONE] arrived, so the reply is whole */
+  complete: boolean;
+}
+
+/**
+ * Read an OpenAI-shaped chat-completions stream (server-sent events) to its end.
+ *
+ * `onData` is called for every piece of the body that arrives, comments
+ * included: a server that sends `: keep-alive` while it queues the request
+ * (DeepSeek and OpenRouter both do) is alive, and the idle clock must see it.
+ *
+ * Usage is taken from whichever chunk carries it -- the empty-choices chunk
+ * `stream_options.include_usage` asks for, or the last delta on servers that
+ * attach it there -- and the last one wins, so a server that reports running
+ * totals is read at its final count.
+ */
+export async function readChatStream(
+  body: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
+  onData?: () => void
+): Promise<StreamedReply> {
+  const out: StreamedReply = { content: "", reasoning: "", toolCalls: [], complete: false };
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let data: string[] = [];
+  let done = false;
+  // A stream's tool-call index, to the call it currently names.
+  const slotOf = new Map<number, number>();
+
+  const dispatch = (): void => {
+    if (data.length === 0) return;
+    const text = data.join("\n");
+    data = [];
+    if (text.trim() === "[DONE]") {
+      out.complete = true;
+      done = true;
+      return;
+    }
+    let chunk: Record<string, any>;
+    try {
+      chunk = JSON.parse(text);
+    } catch {
+      return; // not JSON, so not a chunk
+    }
+    if (chunk?.error) {
+      const e = chunk.error;
+      const status = typeof e?.code === "number" ? e.code : typeof e?.status === "number" ? e.status : undefined;
+      out.error = {
+        message: typeof e === "string" ? e : typeof e?.message === "string" ? e.message : JSON.stringify(e),
+        status,
+        ...(typeof e?.type === "string" ? { type: e.type } : {}),
+      };
+      done = true;
+      return;
+    }
+    const usage = readUsage(chunk);
+    if (usage && (usage.input !== undefined || usage.output !== undefined)) out.usage = usage;
+    const choice = chunk?.choices?.[0];
+    if (!choice) return;
+    const delta = choice.delta ?? choice.message ?? {};
+    if (typeof delta.content === "string") out.content += delta.content;
+    const thought = delta.reasoning_content ?? delta.reasoning;
+    if (typeof thought === "string") out.reasoning += thought;
+    if (Array.isArray(delta.tool_calls)) {
+      for (const tc of delta.tool_calls) {
+        // By index, which every server checked sends -- but an id is the
+        // stronger signal. A server that sends each parallel call whole, every
+        // one at index 0, would otherwise have two calls merged into one named
+        // "readbash" with two JSON objects for arguments. So a new id at an
+        // index already holding another call opens a new call, and the index
+        // follows it. Without an index, a new id opens a call and anything else
+        // continues the last.
+        const id = typeof tc?.id === "string" && tc.id ? tc.id : undefined;
+        let at: number;
+        if (typeof tc?.index === "number") {
+          const held = slotOf.get(tc.index);
+          if (held === undefined || (id && out.toolCalls[held]!.id && out.toolCalls[held]!.id !== id)) {
+            at = out.toolCalls.length;
+            slotOf.set(tc.index, at);
+          } else {
+            at = held;
+          }
+        } else {
+          at =
+            id && !out.toolCalls.some((c) => c.id === id)
+              ? out.toolCalls.length
+              : Math.max(0, out.toolCalls.length - 1);
+        }
+        const slot = (out.toolCalls[at] ??= { name: "", args: "" });
+        if (typeof tc?.id === "string" && tc.id) slot.id = tc.id;
+        if (typeof tc?.type === "string") slot.type = tc.type;
+        const name = tc?.function?.name;
+        if (typeof name === "string" && name !== slot.name) slot.name += name;
+        const args = tc?.function?.arguments;
+        if (typeof args === "string") slot.args += args;
+        else if (args && typeof args === "object") slot.args = JSON.stringify(args);
+      }
+    }
+    if (typeof choice.finish_reason === "string" && choice.finish_reason) {
+      out.finishReason = choice.finish_reason;
+      out.complete = true;
+    }
+  };
+
+  const take = (line: string): void => {
+    if (line === "") return dispatch();
+    if (line.startsWith(":")) return; // a comment: keep-alive
+    if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+    // event:, id: and retry: carry nothing a chat reply needs.
+  };
+
+  for await (const bytes of body as AsyncIterable<Uint8Array>) {
+    onData?.();
+    buffer += decoder.decode(bytes, { stream: true });
+    let nl: number;
+    while (!done && (nl = buffer.indexOf("\n")) >= 0) {
+      take(buffer.slice(0, nl).replace(/\r$/, ""));
+      buffer = buffer.slice(nl + 1);
+    }
+    if (done) break;
+  }
+  if (!done) {
+    buffer += decoder.decode();
+    for (const line of buffer.split("\n")) take(line.replace(/\r$/, ""));
+    dispatch();
+  }
+  return out;
+}
+
+/** The request settings a turn record carries. */
+export interface WireRecord {
+  stream: boolean;
+  stream_idle_timeout_ms?: number;
+  stream_total_timeout_ms?: number;
+  /** The output limit sent; 0 when none was */
+  max_tokens?: number;
+  /** Set only when the limit went out under another name */
+  max_tokens_field?: string;
+  /** The window the turn's working context was trimmed to */
+  max_context_tokens?: number;
+  /** Present, and true, only when reasoning_content was sent back */
+  replay_reasoning?: boolean;
+}
+
+/**
+ * How a target's calls go out, for the turn record.
+ *
+ * Every value here follows from the surface (each is declared or absent, and
+ * absent means the behaviour before it existed), so the hash already decides
+ * it. The record states it anyway, resolved, because "which calls were
+ * streamed" should be read off the trail, not re-derived from three files and
+ * the precedence between them.
+ */
+export function wireOf(target: RouteTarget): WireRecord {
+  return {
+    ...(target.stream === true
+      ? {
+          stream: true,
+          stream_idle_timeout_ms: target.streamIdleMs,
+          stream_total_timeout_ms: target.streamTotalMs,
+        }
+      : { stream: false }),
+    max_tokens: target.maxTokens ?? 0,
+    ...(target.maxTokensField && target.maxTokensField !== "max_tokens"
+      ? { max_tokens_field: target.maxTokensField }
+      : {}),
+    ...(target.contextTokens ? { max_context_tokens: target.contextTokens } : {}),
+    ...(target.replayReasoning ? { replay_reasoning: true } : {}),
+  };
+}
+
+/** What a session has learned about one endpoint+model's output limit. */
+export interface OutputLimitAdaptation {
+  /** It takes the limit under this name instead of max_tokens */
+  field?: "max_completion_tokens";
+  /** Its stated maximum, which the limit is clamped to */
+  max?: number;
+}
+
+/**
+ * How to resend a call whose output limit the endpoint refused by name.
+ *
+ * - `rename`: OpenAI's reasoning models, "Use 'max_completion_tokens' instead".
+ *   A property of the endpoint, so remembered.
+ * - `clamp` to a maximum the error states. DeepSeek's "valid range of
+ *   max_tokens is [1, 8192]" is a property of the model, so remembered. vLLM's
+ *   "maximum context length is 32768 tokens and your request has 20000 input
+ *   tokens" depends on this prompt, so it applies to this call only.
+ * - `drop`: refused, with no number to go by. This call only: the next prompt
+ *   may fit, and a session-long drop would take the limit off every call
+ *   after one bad one.
+ */
+export type LimitRefusal =
+  | { how: "rename" }
+  | { how: "clamp"; max: number; remember: boolean }
+  | { how: "drop" };
+
+export function readLimitRefusal(
+  detail: string,
+  sent: number,
+  field: "max_tokens" | "max_completion_tokens"
+): LimitRefusal | undefined {
+  if (sent <= 0 || !/max_(?:completion_)?tokens|num_predict/i.test(detail)) return undefined;
+  if (field === "max_tokens" && /use\W+max_completion_tokens/i.test(detail)) return { how: "rename" };
+  const ctx = /maximum context length is (\d+)\D+?(\d+) input tokens/i.exec(detail);
+  if (ctx) {
+    const room = Number(ctx[1]) - Number(ctx[2]);
+    return room > 0 && room < sent ? { how: "clamp", max: room, remember: false } : { how: "drop" };
+  }
+  const stated =
+    /\[\s*\d+\s*,\s*(\d+)\s*\]/.exec(detail) ??
+    /(?:at most|<=|less than or equal to|maximum (?:value )?(?:is|of))\s*(\d+)/i.exec(detail);
+  if (stated) {
+    const max = Number(stated[1]);
+    if (max > 0 && max < sent) return { how: "clamp", max, remember: true };
+  }
+  return { how: "drop" };
+}
+
+/**
+ * A target with the output limit this session has learned the endpoint takes:
+ * renamed, or clamped to the maximum it stated. Exported for the tests.
+ */
+export function adaptOutputLimit(state: PromptState, target: RouteTarget): RouteTarget {
+  const seen = state.outputLimitAdapted?.get(`${target.url}|${target.model}`);
+  if (!seen) return target;
+  return {
+    ...target,
+    ...(seen.field ? { maxTokensField: seen.field } : {}),
+    ...(seen.max !== undefined && (target.maxTokens ?? 0) > seen.max ? { maxTokens: seen.max } : {}),
+  };
 }
 
 /** Marker text for a turn the user stopped. Code 2 → bucket `refusal`. */
@@ -2109,6 +2702,14 @@ export interface TurnResult {
    */
   endpoint?: string;
   endpoint_url?: string;
+  /** How the call went out on the wire, from the same target. See wireOf. */
+  wire?: WireRecord;
+  /**
+   * The reasoning behind the reply the turn ended on, when the endpoint that
+   * answered replays reasoning. Carried into the exchange so later turns can
+   * send it back.
+   */
+  reasoning?: string;
   /**
    * The outcome of the surface's declared `[verify]` check for this turn, when
    * one ran. Absent when no check is declared or none applied.
@@ -2287,6 +2888,13 @@ export type StopReason =
   // null` read as a clean zero. Found 2026-09-05 by
   // benchmarks/degradation-contract, which scores announced and recorded
   // separately: the operator was told both times, the record said "answered".
+  //
+  // Two paths, one value, two buckets -- deliberately, because stop_reason is
+  // why the loop stopped and the bucket is what came of it. A cut-off TEXT
+  // reply stands as the turn's answer and keeps its own code (a `result`). A
+  // cut-off TOOL CALL never ran: after `[turn] max_consecutive_malformed` of
+  // them in a row the turn wraps up with no tools on the `refusal` floor, as
+  // `stall` and `malformed` do, with `stop_detail.repeats`.
   | "truncated"
   // The run never reached the model: the surface itself could not be used.
   // Without this, a refusal to start had to borrow "answered", which is how an
@@ -2692,6 +3300,20 @@ export interface TurnCounters {
    * that fell inside `[turn] max_consecutive_malformed` got a repair turn.
    */
   malformed_tool_calls?: number;
+  /**
+   * Model requests that reached the endpoint and came back with no usage
+   * report: aborted by a clock or Esc, broken off mid-stream, or answered by a
+   * server that does not report usage on a stream. Their tokens are in no
+   * total, so when this is set `tokens_in`/`tokens_out` are a floor, not a
+   * count. Absent when every request was metered.
+   */
+  unmetered_calls?: number;
+  /**
+   * Calls resent because the endpoint refused the declared output limit:
+   * renamed, clamped to a stated maximum, or sent without one. Absent when
+   * none were.
+   */
+  output_limit_adapted?: number;
   /** Per tool: calls made, refusals, apparatus failures. Separates "bash
    * failed 9 of 31 calls" from "bash succeeded 31/31 and the answer was still
    * wrong". */
@@ -3307,7 +3929,6 @@ export async function runAgenticTurn(
       ? Math.floor(maxTotal * Math.min(1, declaredConverge))
       : Infinity;
 
-  const ctxLimits = resolveContext(config);
   const working: ChatMessage[] = [...messages];
   const toolLog: string[] = [];
   const surfaceChanges: SurfaceDrift[] = [];
@@ -3363,6 +3984,9 @@ export async function runAgenticTurn(
   // were the entire residual gap against the peer harness.
   let consecutiveEmpty = 0;
   let truncationRetried = false;
+  // Replies in a row whose tool call the output limit cut off. See cutCalls.
+  let consecutiveCut = 0;
+  let cutOut = false;
   // The last outcome of the declared check. Last, not first: a failing check
   // hands the turn back, and the round after it is the one that counts.
   let verifyOutcome: TurnResult["verify"];
@@ -3396,6 +4020,18 @@ export async function runAgenticTurn(
   // reports the whole dirty tree as the turn's doing -- including for a
   // read-only role that only called `read`. One git call, taken once.
   const treeBaseline = treeSnapshot(resolve(state.config.gnomonDir, ".."));
+  // The reasoning behind the reply a turn ends on, kept for the exchange when
+  // either endpoint this role can reach replays reasoning -- not only the one
+  // that answered. A turn answered by the fallback, or by the tool-less
+  // wrap-up, is followed by a turn that starts on the primary again, and
+  // DeepSeek wants the reasoning of every earlier assistant message back.
+  const replaysReasoning = route.target.replayReasoning === true || route.fallback?.replayReasoning === true;
+  const keepReasoning = (r: string | undefined): { reasoning?: string } =>
+    r && replaysReasoning ? { reasoning: r } : {};
+  // A request whose tokens no usage report covers. See TurnCounters.
+  const countUnmetered = (r: InferenceResult): void => {
+    if (r.unmeteredCalls) counters.unmetered_calls = (counters.unmetered_calls ?? 0) + r.unmeteredCalls;
+  };
   const tally = (name: string, field: "calls" | "refusals" | "apparatus") => {
     const t = (counters.per_tool[name] ??= { calls: 0, refusals: 0, apparatus: 0 });
     t[field]++;
@@ -3415,6 +4051,7 @@ export async function runAgenticTurn(
     model: usedModel,
     endpoint: usedTarget.endpoint,
     endpoint_url: usedTarget.url,
+    wire: wireOf(adaptOutputLimit(state, usedTarget)),
     verify: verifyOutcome,
     toolSteps: steps,
     toolLog,
@@ -3435,7 +4072,8 @@ export async function runAgenticTurn(
    * silent: a turn that ran with fewer tools than the surface declared is
    * exactly what system.md says must never pass unremarked.
    */
-  const call = async (target: typeof route.target) => {
+  const call = async (declared: typeof route.target) => {
+    let target = adaptOutputLimit(state, declared);
     const offer = noTools.has(target.model) ? [] : toolSet.schemas;
     let r = await callEndpointWithRetry(
       target,
@@ -3449,6 +4087,50 @@ export async function runAgenticTurn(
       state.sessionId
     );
     turnUsage = addUsage(turnUsage, r.usage);
+    countUnmetered(r);
+
+    // The endpoint refused the output limit gnomon chose. Resent once in the
+    // shape it takes, said on the unsilenceable channel, and remembered for
+    // the session; the turn record's `wire` carries the limit that went out.
+    if (r.maxTokensRejected && (target.maxTokens ?? 0) > 0) {
+      const refusal = r.maxTokensRejected;
+      const key = `${target.url}|${target.model}`;
+      const memo = (state.outputLimitAdapted ??= new Map());
+      let resend: RouteTarget;
+      let said: string;
+      if (refusal.how === "rename") {
+        memo.set(key, { ...memo.get(key), field: "max_completion_tokens" });
+        resend = adaptOutputLimit(state, declared);
+        said = `takes its output limit as max_completion_tokens — resending under that name`;
+      } else if (refusal.how === "clamp") {
+        if (refusal.remember) memo.set(key, { ...memo.get(key), max: refusal.max });
+        resend = { ...target, maxTokens: refusal.max };
+        said =
+          `refused max_tokens = ${target.maxTokens} — resending with ${refusal.max}, ` +
+          (refusal.remember ? `the maximum it states` : `the room this prompt leaves`);
+      } else {
+        resend = { ...target, maxTokens: 0 };
+        said = `refused max_tokens = ${target.maxTokens} — resending this call with no output limit`;
+      }
+      counters.output_limit_adapted = (counters.output_limit_adapted ?? 0) + 1;
+      deps.progress.stop();
+      warn(paint(deps.ui, "yellow", `  [endpoint] ${target.model} ${said}.`));
+      deps.progress.start(`${target.model}`);
+      target = resend;
+      r = await callEndpointWithRetry(
+        target,
+        working,
+        offer,
+        resilience.request_timeout_ms,
+        resilience,
+        deps.say,
+        deps.ui,
+        deps.signal,
+        state.sessionId
+      );
+      turnUsage = addUsage(turnUsage, r.usage);
+      countUnmetered(r);
+    }
 
     if (r.toolsUnsupported && offer.length > 0) {
       noTools.add(target.model);
@@ -3478,6 +4160,7 @@ export async function runAgenticTurn(
       deps.progress.start(`${target.model} — without tools`);
       r = await callEndpoint(target, working, [], modelTimeoutMs(config), deps.signal, state.sessionId);
       turnUsage = addUsage(turnUsage, r.usage);
+      countUnmetered(r);
     }
     return r;
   };
@@ -3613,6 +4296,59 @@ export async function runAgenticTurn(
       }
     }
 
+    // Once per stretch of no progress, not once per turn. Now that every call
+    // carries an output limit, a long turn can meet it more than once, and a
+    // spent once-per-turn latch let the second cut-off reply stand as the
+    // answer. A reply that calls a tool is progress and re-opens the latch; a
+    // cut-off straight after a cut-off still stands, so this cannot loop.
+    const cutCalls =
+      result.code === 0 && result.finishReason === "length"
+        ? result.toolCalls.filter((c) => ARGS_TRUNCATED in c.args)
+        : [];
+    if (result.code === 0 && result.toolCalls.length > 0 && cutCalls.length === 0) {
+      truncationRetried = false;
+      consecutiveCut = 0;
+    }
+    const limitNow = adaptOutputLimit(state, usedTarget).maxTokens ?? 0;
+    const where = limitNow > 0 ? ` (max_tokens = ${limitNow})` : "";
+
+    // A tool call the output limit cut off mid-arguments: nothing ran. Told
+    // "transport truncation, send the same call again", as a cut-off from the
+    // wire is, the model sent the same call again and was cut at the same
+    // place, twice, and the turn ended malformed -- a 30 KB write after 9k
+    // tokens of thinking, under a limit that counts the thinking. It is not
+    // malformed and the same call cannot pass. So the limit is named and the
+    // work asked for in parts. Bounded by [turn] max_consecutive_malformed
+    // cut-offs in a row with no usable call between; past that the turn ends
+    // through the wrap-up as "truncated", never in a loop. The cut call is not
+    // echoed back: no tool result answers it, and half a JSON argument
+    // teaches nothing.
+    if (cutCalls.length > 0) {
+      consecutiveCut++;
+      if (consecutiveCut <= loop.max_consecutive_malformed && steps < maxTotal) {
+        const name = cutCalls[0]!.name || "tool";
+        say(
+          paint(
+            deps.ui,
+            "yellow",
+            `  [loop] a ${name} call was cut off at the output limit${where} — asking for it in parts ` +
+              `(${consecutiveCut}/${loop.max_consecutive_malformed})`
+          )
+        );
+        working.push({
+          role: "user",
+          content:
+            `Your last reply reached the output limit${where} in the middle of a ${name} call, so ` +
+            `the call was cut off and nothing ran. Your thinking counts toward that limit. Send ` +
+            `the work in smaller parts: write the first part of the file now and add the rest ` +
+            `with further calls, each well under the limit, and keep the thinking before each ` +
+            `call short.`,
+        });
+        continue;
+      }
+      cutOut = true;
+    }
+
     if (
       result.code === 0 &&
       result.toolCalls.length === 0 &&
@@ -3621,15 +4357,38 @@ export async function runAgenticTurn(
       steps < maxTotal
     ) {
       truncationRetried = true;
+      // Nothing visible came back: the reasoning spent the whole limit. Asking
+      // it to "continue" would continue the thinking, which is the problem.
+      // `reasoningOnly` is the same case where the reasoning was handed up as
+      // the content -- a streamed reply cannot tell an empty content from a
+      // missing one -- and echoing that back as the model's answer, with
+      // "continue from where it stopped", is what P2G's runs were sent.
+      const spentOnThinking = !result.content.trim() || result.reasoningOnly === true;
       say(
-        paint(deps.ui, "yellow", `  [loop] the reply was cut off at the token limit — asking for the rest`)
+        paint(
+          deps.ui,
+          "yellow",
+          spentOnThinking
+            ? `  [loop] the reply hit the output limit${where} before any answer — asking for a shorter one`
+            : `  [loop] the reply was cut off at the output limit${where} — asking for the rest`
+        )
       );
-      working.push({ role: "assistant", content: result.content });
+      if (!spentOnThinking) {
+        working.push({
+          role: "assistant",
+          content: result.content,
+          ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
+        });
+      }
       working.push({
         role: "user",
-        content:
-          `That reply was cut off at the token limit. Continue from exactly where ` +
-          `it stopped, or if the work is done, say so briefly.`,
+        content: spentOnThinking
+          ? `Your last reply reached the output limit${where} while still thinking, so ` +
+            `nothing came back: no answer and no tool call. Think less this time. ` +
+            `Make the next tool call now, or answer in a few sentences.`
+          : `That reply was cut off at the output limit${where}. Continue from exactly where ` +
+            `it stopped, or if the work is done, say so briefly. If you were writing a ` +
+            `long file, write it in parts.`,
       });
       continue;
     }
@@ -3658,7 +4417,11 @@ export async function runAgenticTurn(
             "template may not match this endpoint's tool protocol"
         )
       ) {
-        working.push({ role: "assistant", content: result.content });
+        working.push({
+          role: "assistant",
+          content: result.content,
+          ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
+        });
         working.push({
           role: "user",
           content:
@@ -3734,7 +4497,10 @@ export async function runAgenticTurn(
     // progress since the first.
     if (result.code === 13 && steps > overflowTrimmedAt && steps < maxTotal) {
       overflowTrimmedAt = steps;
-      const budget = Math.max(1024, Math.floor(ctxLimits.max_context_tokens * 0.5));
+      const budget = Math.max(
+        1024,
+        Math.floor(resolveContext(config, usedTarget).max_context_tokens * 0.5)
+      );
       const trimmed = trimWorking(working, budget);
       if (trimmed.dropped > 0) {
         working.length = 0;
@@ -3950,7 +4716,11 @@ export async function runAgenticTurn(
           verifyOutcome = "failed";
           say(paint(deps.ui, "yellow",
             `    ⚠ verify failed — handing the turn back`));
-          working.push({ role: "assistant", content: result.content });
+          working.push({
+          role: "assistant",
+          content: result.content,
+          ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
+        });
           working.push({
             role: "system",
             content:
@@ -3985,6 +4755,8 @@ export async function runAgenticTurn(
         model: usedModel,
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
+        wire: wireOf(adaptOutputLimit(state, usedTarget)),
+        ...keepReasoning(result.reasoning),
         verify: verifyOutcome,
         toolSteps: steps,
         toolLog,
@@ -4034,7 +4806,7 @@ export async function runAgenticTurn(
     // runs as usual: executeTool answers each call with what was wrong, and
     // those answers are the repair turn. Past it, nothing runs and the turn
     // wraps up. One usable call in the reply is progress and clears the count.
-    if (!malformedOut && result.toolCalls.length > 0) {
+    if (!malformedOut && !cutOut && result.toolCalls.length > 0) {
       if (result.toolCalls.every((c) => isMalformedCall(c, offered))) {
         repairMalformed("no usable tool call in that reply (malformed arguments or unknown tool)");
       } else {
@@ -4074,8 +4846,12 @@ export async function runAgenticTurn(
     //
     // A ceiling a turn can walk through is worse than no ceiling: it is the one
     // bound an unattended session has, and the number in roles.toml was not it.
-    if (malformedOut || stalled || wall) {
-      const note = malformedOut
+    if (malformedOut || cutOut || stalled || wall) {
+      const note = cutOut
+        ? `Stopped: ${consecutiveCut} repl${consecutiveCut === 1 ? "y" : "ies"} in a row had a ` +
+          `tool call cut off at the output limit${where}, after ${steps} call(s). Raise ` +
+          `max_tokens for this role or endpoint, or ask for the work in smaller pieces.`
+        : malformedOut
         ? `Stopped: ${consecutiveMalformed} repl${consecutiveMalformed === 1 ? "y" : "ies"} ` +
           `in a row offered no usable tool call (malformed arguments, an unknown ` +
           `tool, or a call written as text), after ${steps} call(s). Check the ` +
@@ -4102,7 +4878,7 @@ export async function runAgenticTurn(
           `were unable to examine, so the answer is legibly partial.`,
       });
       const closing = await callEndpoint(
-        route.target,
+        adaptOutputLimit(state, route.target),
         working,
         [],
         modelTimeoutMs(config),
@@ -4110,12 +4886,11 @@ export async function runAgenticTurn(
         state.sessionId
       );
       turnUsage = addUsage(turnUsage, closing.usage);
+      countUnmetered(closing);
       deps.progress.stop();
 
-      const content =
-        closing.code === 0 && closing.content.trim()
-          ? `${closing.content.trim()}\n\n_[${note}]_`
-          : result.content || note;
+      const closed = closing.code === 0 && closing.content.trim() !== "";
+      const content = closed ? `${closing.content.trim()}\n\n_[${note}]_` : result.content || note;
 
       // Measured at the end of the turn, from git — never the model's account.
       // Nothing may be still held back when the turn ends: a folded chunk
@@ -4132,12 +4907,16 @@ export async function runAgenticTurn(
         model: usedModel,
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
+        wire: wireOf(adaptOutputLimit(state, usedTarget)),
         verify: verifyOutcome,
         toolSteps: steps,
         toolLog,
         usage: turnUsage,
-        stop_reason: malformedOut ? "malformed" : stalled ? "stall" : "step_wall",
-        stop_detail: malformedOut
+        ...keepReasoning(closed ? closing.reasoning : result.reasoning),
+        stop_reason: cutOut ? "truncated" : malformedOut ? "malformed" : stalled ? "stall" : "step_wall",
+        stop_detail: cutOut
+          ? { steps, repeats: consecutiveCut }
+          : malformedOut
           ? { steps, repeats: consecutiveMalformed }
           : stalled
           ? { steps, repeats: loop.stall_repeats }
@@ -4153,7 +4932,12 @@ export async function runAgenticTurn(
       leg++;
       stepsThisLeg = 0;
 
-      const budget = Math.max(1024, Math.floor(ctxLimits.max_context_tokens * 0.6));
+      // The window of the endpoint answering, when it declares one: a cloud
+      // model was trimmed to 60% of a default sized for a local one.
+      const budget = Math.max(
+        1024,
+        Math.floor(resolveContext(config, usedTarget).max_context_tokens * 0.6)
+      );
       const before = working.length;
       const trimmed = trimWorking(working, budget);
       if (trimmed.dropped > 0) {
@@ -4185,6 +4969,8 @@ export async function runAgenticTurn(
       role: "assistant",
       content: result.content ?? "",
       tool_calls: result.rawToolCalls,
+      // Sent only where the endpoint declares replay_reasoning; see callEndpoint.
+      ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
     });
 
     // Models usually say why before they call something, and that text was
@@ -4716,7 +5502,7 @@ export async function compactSession(
 
   const route = routeRole(state.config, role);
   const result = await callEndpoint(
-    route.target,
+    adaptOutputLimit(state, route.target),
     [
       { role: "system", content: SUMMARY_INSTRUCTION },
       { role: "user", content: `${priorSummary}${transcript}` },
@@ -5302,6 +6088,7 @@ export async function runTask(
     // different server and the record has to say which one.
     endpoint: turn.endpoint ?? route.target.endpoint,
     endpoint_url: turn.endpoint_url ?? route.target.url,
+    wire: turn.wire ?? wireOf(route.target),
     bucket: mapBucket(turn.code),
     code: turn.code,
     duration_ms: duration,
@@ -7321,6 +8108,7 @@ export async function runSessionTurn(
     stop_reason: turn.stop_reason,
     stop_detail: turn.stop_detail,
     counters: turn.counters,
+    ...(turn.reasoning ? { reasoning: turn.reasoning } : {}),
   };
 
   state.exchanges.push(exchange);
@@ -7340,6 +8128,7 @@ export async function runSessionTurn(
     // the resolved destination has to be written down instead.
     endpoint_url: turn.endpoint_url ?? route.target.url,
     endpoint_overridden: process.env.GNOMON_MODEL_URL ? true : undefined,
+    wire: turn.wire ?? wireOf(route.target),
     bucket: exchange.bucket,
     code: exchange.code,
     duration_ms: duration,
