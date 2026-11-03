@@ -472,12 +472,19 @@ describe("accept --evidence and require_trial", () => {
     stillProposed();
   });
 
-  it("a sealed, chained trail whose record disagrees with the report does not vouch for it", () => {
+  // One case per test: the two reports would be byte-identical, so one root
+  // holding both trails makes the reason reported depend on file order.
+  it("a sealed, chained trail whose record disagrees with the report's verdict does not vouch for it", () => {
     propose();
     const rel = report({ meets: true, record: { meets_thresholds: false } });
     expect(() => acceptSkill(strict(), "fix-it", { evidence: rel })).toThrow(/disagrees with the report on meets_thresholds/);
-    const rel2 = report({ record: { content_sha256: "0".repeat(64) } });
-    expect(() => acceptSkill(strict(), "fix-it", { evidence: rel2 })).toThrow(/content_sha256/);
+    stillProposed();
+  });
+
+  it("a sealed, chained trail whose record names other content does not vouch for the report", () => {
+    propose();
+    const rel = report({ record: { content_sha256: "0".repeat(64) } });
+    expect(() => acceptSkill(strict(), "fix-it", { evidence: rel })).toThrow(/disagrees with the report on content_sha256/);
     stillProposed();
   });
 
