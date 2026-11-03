@@ -3135,3 +3135,62 @@ describe("network = false is a rule, not a failure (G1c)", () => {
     }
   });
 });
+
+describe("gnomon's own records are not writable by any role", () => {
+  // Found in review of the skill-trial work: a role with no write_allow --
+  // `implement` in the scaffold -- could append a line to .gnomon-audit/, by
+  // `write` or by a shell redirect. `gnomon skill accept --evidence` cites a
+  // skill_trial record there, so an agent could forge the evidence for its own
+  // skill; and the trail is what any governed run is judged by afterwards.
+  const tryWrite = (path: string, over: Partial<ToolContext> = {}) =>
+    executeTool("write", { path, content: '{"kind":"skill_trial"}\n' }, ctx(over), offered);
+
+  it("refuses write and edit into .gnomon-audit/ and .gnomon-trials/, with no write_allow at all", async () => {
+    for (const path of [".gnomon-audit/task-1.jsonl", ".gnomon-trials/s/2026/report.json", "./.gnomon-audit/x.jsonl"]) {
+      const out = await tryWrite(path);
+      expect(out.code).toBe(TOOL_DENIED);
+      expect(out.content).toMatch(/gnomon's own records/);
+      expect(existsSync(join(root, path))).toBe(false);
+    }
+    mkdirSync(join(root, ".gnomon-audit"), { recursive: true });
+    writeFileSync(join(root, ".gnomon-audit", "s.jsonl"), "{}\n");
+    const edit = await executeTool(
+      "edit",
+      { path: ".gnomon-audit/s.jsonl", old_text: "{}", new_text: '{"forged":true}' },
+      ctx(),
+      offered
+    );
+    expect(edit.code).toBe(TOOL_DENIED);
+    expect(readFileSync(join(root, ".gnomon-audit", "s.jsonl"), "utf-8")).toBe("{}\n");
+  });
+
+  it("refuses a shell command that names a record as its output", () => {
+    for (const command of [
+      "echo '{}' >> .gnomon-audit/s.jsonl",
+      "cp /tmp/forged.json .gnomon-trials/s/report.json",
+      "tee .gnomon-audit/x.jsonl < /dev/null",
+      "cd .gnomon-audit && echo x > y.jsonl",
+    ]) {
+      const pre = tools.bashPrecheck({ command }, ctx());
+      expect(pre?.rule, command).toBe("record");
+    }
+    // Reading them is fine, and so is writing beside them.
+    expect(tools.bashPrecheck({ command: "cat .gnomon-audit/s.jsonl" }, ctx())).toBeNull();
+    expect(tools.bashPrecheck({ command: "echo x > .gnomon-auditor.txt" }, ctx())).toBeNull();
+  });
+
+  it("follows the trail to a directory [audit] names, and through a symlink", async () => {
+    const config = { gnomonDir: join(root, ".gnomon"), config: { audit: { dir: "var/trail" } } } as never;
+    expect((await tryWrite("var/trail/s.jsonl", { config })).code).toBe(TOOL_DENIED);
+    expect(tools.bashPrecheck({ command: "echo x >> var/trail/s.jsonl" }, ctx({ config }))?.rule).toBe("record");
+    if (process.platform !== "win32") {
+      mkdirSync(join(root, ".gnomon-audit"), { recursive: true });
+      symlinkSync(join(root, ".gnomon-audit"), join(root, "alias"));
+      expect((await tryWrite("alias/s.jsonl")).code).toBe(TOOL_DENIED);
+    }
+  });
+
+  it("an ordinary write is unaffected", async () => {
+    expect((await tryWrite("notes/audit.jsonl")).code).toBe(TOOL_OK);
+  });
+});

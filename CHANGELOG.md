@@ -128,6 +128,17 @@
   are evidence, not skills; nothing is loaded until a person accepts one.
   `gnomon skill list --candidates` lists them. Step 4 of
   `docs/design/SKILL-TRIALS.md`.
+- **The agent can no longer write gnomon's own records.** A role with no
+  `write_allow`, which includes `implement` in the scaffold, could append to
+  `.gnomon-audit/` by `write` or by a shell redirect. Such a role could
+  rewrite the trail its session is judged by. It could also forge the
+  `skill_trial` record that `gnomon skill accept --evidence` cites. `write`,
+  `edit` and the outputs a shell command names are now refused, with a new
+  policy rule `record`, inside the trail directory (`[audit] dir`, default
+  `.gnomon-audit/`) and `.gnomon-trials/`. This applies to every role, with
+  no consent path, and through symlinks. `gnomon guard` decides the same
+  (`conformance/guard_cases.json`). As with `write_allow` on the shell, what a
+  script file writes is not judged.
 
 - **A long local generation is no longer cut off at 300 s.** Node's fetch (undici)
   puts its own 300 s headersTimeout and bodyTimeout on every request, and a model

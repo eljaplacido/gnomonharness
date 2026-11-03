@@ -171,6 +171,10 @@ describe("gnomon skill mine", () => {
     expect(
       classifyRefusal({ kind: "tool_call", bucket: "refusal", tool: "read", target: "/etc/passwd", rule: "sandbox", summary: "anything" })
     ).toEqual({ rule: "sandbox", pattern: "/etc/*" });
+    // The `record` rule: a write into gnomon's own trail.
+    expect(
+      classifyRefusal({ kind: "tool_call", bucket: "refusal", tool: "write", target: ".gnomon-audit/a.jsonl", summary: "write .gnomon-audit/a.jsonl — refused (gnomon's records)" })
+    ).toEqual({ rule: "record", pattern: ".gnomon-audit/*.jsonl" });
     // Not a refusal, or not a policy one: nothing.
     expect(classifyRefusal({ kind: "tool_call", bucket: "result", summary: "write a — 1 lines" })).toBeNull();
     expect(classifyRefusal({ kind: "tool_call", bucket: "refusal", tool: "write", summary: "write a — denied" })).toBeNull();
