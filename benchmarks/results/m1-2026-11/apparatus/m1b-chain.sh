@@ -147,8 +147,12 @@ restore() {
   [ "$PAUSED" = 1 ] || return 0
   PAUSED=0
   local i up=0 p
+  if [ -n "${RUNPG:-}" ]; then  # interrupted mid-arm: stop the runner first; its in-flight cell (no verdict) is apparatus
+    kill -TERM -- -"$RUNPG" 2>/dev/null; sleep 5; kill -KILL -- -"$RUNPG" 2>/dev/null; RUNPG=""
+    say "RESTORE: M1b runner stopped mid-arm"
+    type abort_inflight >/dev/null 2>&1 && abort_inflight $(( $(now) + 1000000000 ))  # far-future cut-off = cells without a verdict only
+  fi
   if [ "$FNX_STARTED" = 1 ]; then "$FNX/stop-m1.sh" >> "$BENCH/lane-fnx-start.log" 2>&1; say "RESTORE: Flash-Next stopped (exit $?)"; fi
-  [ -n "${RUNPG:-}" ] && kill -TERM -- -"$RUNPG" 2>/dev/null
   flock -u 9 2>/dev/null; exec 9>&-; say "RESTORE: gpu.lock released"
   systemctl --user start "$INC_UNIT"; say "RESTORE: systemctl --user start $INC_UNIT (exit $?)"
   for i in $(seq 1 90); do curl -s -m 10 http://127.0.0.1:18080/v1/models | grep -q qwen3.6-35b && { up=1; break; }; sleep 10; done
@@ -332,11 +336,11 @@ run_watched() {  # $1 arm: run_m1.py fnx $1 (1 slot) under a lane watchdog; one 
     while alive "$rp"; do
       sleep 30
       if ! lane_alive; then bad=99
-      elif curl -sf --max-time 20 http://127.0.0.1:18580/health >/dev/null 2>&1; then bad=0
-      else bad=$((bad + 1)); fi
-      [ "$bad" -ge 5 ] && break
+      elif curl -sf --max-time 20 http://127.0.0.1:18580/v1/models 2>/dev/null | grep -q qwen3.8-flash-next; then bad=0
+      else bad=$((bad + 1)); [ "$bad" = 1 ] && say "fnx watchdog: /v1/models did not answer (container running); counting"; fi
+      [ "$bad" -ge 10 ] && break   # container gone: at once; container up but not answering: 10 x 30 s = 5 min
     done
-    if [ "$bad" -lt 5 ]; then RUNPG=""; say "fnx $arm arm finished"; return 0; fi
+    if [ "$bad" -lt 10 ]; then RUNPG=""; say "fnx $arm arm finished"; return 0; fi
     td=$(now)
     st=$(docker inspect -f 'running={{.State.Running}} oom_killed={{.State.OOMKilled}} exit={{.State.ExitCode}} error={{.State.Error}}' "$CONTAINER" 2>&1 | head -1)
     LANE_DEATHS=$((LANE_DEATHS + 1))

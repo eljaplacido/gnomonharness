@@ -235,7 +235,7 @@ So about 95–100 GiB is expected once R1H has finished, R1 and P2G are paused a
 - **Precheck.** It now gates only on a non-incumbent GPU process using 1 GiB or more, which the copy would refuse for certain.
 - **Start.** No smaller-window fallback: the window is fixed at 98,304. The start gets one fix-don't-fail retry, then FAILED.
 - **Slots.** **L and PC both run with 1 stream and 1 slot**, as R1's L and PC did. This replaces the PC slot rule above and removes the concurrency asymmetry on M1b.
-- **Lane-death watchdog.** It checks every 30 s while an arm runs. The lane counts as dead when the container is not running, or `/health` has failed 5 times in a row.
+- **Lane-death watchdog.** It checks every 30 s while an arm runs. The lane counts as dead when the container is not running, or `/v1/models` has failed 10 times in a row (5 min; `/health` isn't relied on). The same commit makes an interrupted arm's in-flight cell apparatus.
   - The cell(s) in flight, and any cell that ended in the 3 minutes before detection, are apparatus and move to `runs-aborted/<cell>-lanedeath`.
   - One lane restart is allowed in all of M1b, after which the arm continues and keeps its finished cells.
   - A second death means FAILED: `M1B-FAILED.txt` gets the reason, the qwen lane is restored, and R1 and P2G are resumed.
