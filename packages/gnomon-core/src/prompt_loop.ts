@@ -1297,14 +1297,6 @@ export function isLoopbackUrl(url: string): boolean {
 }
 
 /**
- * The real errno behind a fetch failure.
- *
- * Node's fetch throws `TypeError: fetch failed` and hangs the actual cause off
- * `.cause` -- so matching ECONNREFUSED against `err.message` never matches, and
- * every transport failure looked identical. Walk the chain (bounded; causes can
- * be self-referential) and return the first `code` found.
- */
-/**
  * The fetch dispatcher a model call uses: Node's own undici Agent, with its two
  * hidden timeouts switched off.
  *
@@ -1317,31 +1309,54 @@ export function isLoopbackUrl(url: string): boolean {
  * (UND_ERR_HEADERS_TIMEOUT)`, read as "endpoint unreachable". Measured in R1
  * (2026-11-02, local qwen3.6-35b): two cells ended apparatus_failure this way.
  *
- * With both off, the deadline gnomon passes (AbortSignal.timeout, plus Esc) is
- * the only clock, which is what [resilience] request_timeout_ms always claimed.
+ * With both off, gnomon's own clocks in callEndpointOnce are the only ones: the
+ * request deadline (for an unstreamed call, Ollama's included, the whole
+ * reply), a stream's idle and total clocks, and Esc. That is what
+ * [resilience] request_timeout_ms and stream_idle_timeout_ms always claimed.
+ *
  * The Agent class is taken from the global dispatcher Node installs, so nothing
- * new is depended on. Where that is not an undici Agent (a replaced global
- * dispatcher, another runtime), the call goes out exactly as before.
+ * new is depended on. Node creates that dispatcher LAZILY, when it first loads
+ * its fetch implementation -- the first fetch, Headers, Request or Response in
+ * the process. The first version of this read it at the first model call,
+ * which in a fresh `gnomon task` is before anything has loaded it: it found
+ * nothing, cached the miss, and every call in the process went out with
+ * undici's 300 s timeouts after all. The test that came with it ran where
+ * something had already loaded undici, so it never saw this (release audit,
+ * 2026-11-03: benchmark cells on unstreamed endpoints still died with
+ * UND_ERR_HEADERS_TIMEOUT at exactly 300 s).
+ *
+ * So the implementation is loaded first, by constructing a Headers -- which
+ * does no I/O -- and only an Agent is ever cached, never a miss. Where the
+ * global dispatcher is not an undici Agent (one an embedder replaced, another
+ * runtime), the call goes out as before, and the next call looks again.
  */
-let modelDispatcherCache: unknown | null | undefined;
-export function modelFetchDispatcher(): unknown | undefined {
-  if (modelDispatcherCache === undefined) {
-    modelDispatcherCache = null;
-    try {
-      const current = (globalThis as unknown as Record<symbol, unknown>)[
-        Symbol.for("undici.globalDispatcher.1")
-      ] as { constructor?: unknown } | undefined;
-      const Agent = current?.constructor as (new (opts: object) => unknown) | undefined;
-      if (typeof Agent === "function" && Agent.name === "Agent") {
-        modelDispatcherCache = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
-      }
-    } catch {
-      modelDispatcherCache = null;
+const UNDICI_GLOBAL_DISPATCHER = Symbol.for("undici.globalDispatcher.1");
+let modelDispatcher: object | undefined;
+export function modelFetchDispatcher(): object | undefined {
+  if (modelDispatcher) return modelDispatcher;
+  try {
+    const g = globalThis as unknown as Record<symbol, { constructor?: unknown } | undefined>;
+    if (g[UNDICI_GLOBAL_DISPATCHER] === undefined && typeof Headers === "function") {
+      new Headers();
     }
+    const Agent = g[UNDICI_GLOBAL_DISPATCHER]?.constructor as (new (opts: object) => object) | undefined;
+    if (typeof Agent === "function" && Agent.name === "Agent") {
+      modelDispatcher = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+    }
+  } catch {
+    // Not cached: the call goes out on the default dispatcher, as before.
   }
-  return modelDispatcherCache ?? undefined;
+  return modelDispatcher;
 }
 
+/**
+ * The real errno behind a fetch failure.
+ *
+ * Node's fetch throws `TypeError: fetch failed` and hangs the actual cause off
+ * `.cause` -- so matching ECONNREFUSED against `err.message` never matches, and
+ * every transport failure looked identical. Walk the chain (bounded; causes can
+ * be self-referential) and return the first `code` found.
+ */
 export function causeCode(err: unknown): string | undefined {
   let cur: unknown = err;
   for (let i = 0; i < 8 && cur; i++) {

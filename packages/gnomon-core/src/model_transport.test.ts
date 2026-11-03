@@ -11,6 +11,9 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { callEndpoint, modelFetchDispatcher } from "./prompt_loop.js";
 
 const SYM = Symbol.for("undici.globalDispatcher.1");
@@ -72,4 +75,35 @@ describe("model calls and undici's own timeouts", () => {
     expect((d as { constructor: { name: string } }).constructor.name).toBe("Agent");
     expect(modelFetchDispatcher()).toBe(d);
   });
+});
+
+// Everything above runs where undici is long loaded: vitest imports node:http,
+// and Node creates its global dispatcher when it first loads undici. In a fresh
+// `gnomon task` nothing has loaded it before the first model call, and the
+// first version of modelFetchDispatcher found no dispatcher there, cached the
+// miss, and every call kept undici's 300 s timeouts (release audit,
+// 2026-11-03). Only a child process can show the first call's view.
+// gnomon-cli's fresh_process_transport.test.ts runs the whole `gnomon task`.
+describe("in a fresh process, before the first fetch", () => {
+  it("the dispatcher is already Node's Agent, not a cached miss", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    // A file URL, not a path: on Windows `D:\...` is not a valid ESM specifier.
+    const source = JSON.stringify(pathToFileURL(join(here, "prompt_loop.ts")).href);
+    const script =
+      `const SYM = Symbol.for("undici.globalDispatcher.1");\n` +
+      `const fresh = globalThis[SYM] === undefined;\n` +
+      `const { modelFetchDispatcher } = await import(${source});\n` +
+      `const freshAfterImport = globalThis[SYM] === undefined;\n` +
+      `const d = modelFetchDispatcher();\n` +
+      `console.log(JSON.stringify({ fresh, freshAfterImport, name: d?.constructor?.name ?? null, once: modelFetchDispatcher() === d }));\n`;
+    const r = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+      encoding: "utf-8",
+      cwd: join(here, ".."),
+      timeout: 60_000,
+    });
+    const out = JSON.parse(r.stdout.trim().split("\n").pop() || "{}");
+    // The apparatus: Node had not created its dispatcher, before or after the import.
+    expect(out, r.stderr).toMatchObject({ fresh: true, freshAfterImport: true });
+    expect(out).toMatchObject({ name: "Agent", once: true });
+  }, 60_000);
 });
