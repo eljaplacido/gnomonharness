@@ -111,8 +111,13 @@ and the other shapes were re-asked with no bound but the step wall.
 This table is the vocabulary, not an inventory of what the current build
 emits. `gnomon task` exits `0`, `2` or `10` — the bucket, not the native code —
 and so does `gnomon loop run` (`2` on `act_failed`/`breaker_open`, `10` on
-`guard_failed`). `gnomon loop status` exits `1` on crontab drift. Every other
-command exits `0` or `1`. The finer codes are reserved for
+`guard_failed`). `gnomon loop status` exits `1` on crontab drift. Commands
+with a contract of their own exit as it says: `gnomon check` `0`/`2`/`10`
+(§6), a quit at the trust prompt `3` (§8), `gnomon guard` `0`/`2`/`3`/`10`
+(§10), a refused `gnomon skill accept` or `reject` `3` (§11), `gnomon skill
+trial` `0`/`2`/`10` (§13), and `gnomon audit tamper` `3` while an event is
+unresolved (§14). Every other command exits `0` or `1`; `gnomon migrate
+--check` exits `1` when a migration is pending. The finer codes are reserved for
 callers that need them; a consumer should switch on the bucket, which is the
 part that is stable.
 

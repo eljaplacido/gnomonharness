@@ -26,6 +26,69 @@
 
 ## [Unreleased]
 
+- **gnomon's mid-turn messages can go out as user messages, per endpoint;
+  a template that refuses them as system messages is answered.** gnomon
+  steers a turn with system messages appended after it has started: the
+  idle nudge, the convergence push, a failed verification, the tool-less
+  wrap-up, and context notices. M1 (2026-11) found two local stacks that do
+  not take that. On vLLM serving Qwen3.x the template answers 400 "System
+  message must be at the beginning." and the turn ended (4 of q38's 16
+  cells, each at its first nudge). Unsloth's qwen3.6 template under
+  llama.cpp, the incumbent lane, drops them silently: rendered with jinja2,
+  none of a turn's nudges, convergence pushes or wrap-up reached the prompt.
+  - `[endpoints.<name>] steer_role = "user"` sends them as user messages
+    starting `[gnomon] `. The system prompt stays the one system message,
+    with a summary right after it folded in. Adjacent user messages are
+    sent as one, and a note followed by other text ends with `[/gnomon]`.
+    Rendered through the same Unsloth template, all of them reach the
+    prompt. The loop keeps them as system messages internally;
+    `trimWorking` pins the last user message as the current request, and
+    a nudge must not take that place.
+  - Undeclared, or `"system"`, sends what gnomon always sent: the request
+    bodies of a turn with a nudge, a convergence push and a wrap-up hash
+    the same as master's. Whether `user` should be the default is left to
+    a benchmark.
+  - A refusal of the system form is answered once in the user form, the way
+    a refused `max_tokens` is (#114): said on the terminal, remembered for
+    the endpoint and model for the rest of the session, counted in
+    `counters.steer_role_adapted`, and shown as `steer_role: "user"` in the
+    turn record's `wire`. That includes the tool-less wrap-up call, which
+    always carries one. The match is on the template's words: "must be at
+    the beginning", "only the first message", "roles must alternate". It is
+    filed as code 10 whatever the status, because llama.cpp can answer a
+    template exception with a 500 (read in its source, not reproduced live),
+    which would otherwise be retried as an outage. It applies only to a
+    request that carried a system message after the first, on an
+    OpenAI-shaped endpoint.
+  - A template that drops the message raises nothing to react to; declaring
+    the line is the fix there.
+  - `auditSurface` reports a `steer_role` that is neither value, and the
+    key is on the endpoint allow-list. Tests use fake servers on 127.0.0.1.
+- **`[skills]` in policy.toml is no longer reported as a block that does
+  nothing.** `requireTrial` reads `[skills] require_trial`, but the surface
+  auditor's list of known blocks did not have `skills`, so every start printed
+  "[skills] is not a block this harness reads; it does nothing" over a
+  declared control, which invites deleting it. `skills` is now a known
+  policy.toml block, and in config.toml it is reported as misplaced. A test
+  pins both and fails on the previous code.
+- **The degradation suite reads 14/14 again (#82).** The real `AuditLog`
+  gained `action()` in #67, and the suite's collector and blackhole control
+  did not, so the three verify paths threw before announcing anything. The
+  suite reported 11/14 and exited 1 on master and on v0.3.3. With the stub
+  fixed it reads 14/14, and both negative controls still fire.
+- **CI holds the five property suites to their published figures (#85).**
+  `scripts/property_suites.mjs` runs surface fidelity, degradations, fault
+  disclosure, silent success and determinism in a stranger's state (empty
+  HOME and XDG dirs, no keys) as `.gnomon/ci.sh` stage 13. It checks each
+  figure, case count included, because a suite whose cases all errored alike
+  can still exit 0. With #82's defect put back, the gate fails. The figures
+  now held are 14/14, 14/14, 8/8, 0/11 and 10/10. Surface fidelity is 14/14
+  since skill-trial specs joined the hash.
+- **Docs: an end-to-end stability audit of 2026-11-01 (#84),** in
+  `docs/AUDIT-2026-11-01.md` with its evidence in `docs/audit-2026-11-01/`. It
+  is the source of #82, #85, #86 and #87.
+- **Docs: `gnomon guard`, `gnomon acp` and workspace trust in the guide
+  (#87),** covering the 0.3.3 additions (audit row 25).
 - **Opt-in `reasoning_content` replay, per endpoint.** gnomon dropped the
   reasoning from every assistant message it sent back; goose replays it.
   DeepSeek's docs (api-docs.deepseek.com/guides/thinking_mode, read
@@ -278,6 +341,23 @@
     not an unreachable endpoint.
   - Tests install a global dispatcher with a 400 ms limit and show a model call
     ignoring it; they fail on the previous code.
+- **The fix above now also works in a fresh `gnomon task` process.** It built
+  its Agent from Node's global dispatcher, which Node creates only when its
+  fetch implementation first loads. In `gnomon task`, that happens at the first
+  model call. The lookup found nothing and cached the miss, so every call kept
+  undici's 300 s timeouts. Ollama and unstreamed endpoints still died at
+  exactly 300 s with `UND_ERR_HEADERS_TIMEOUT` (release audit, 2026-11-03).
+  The in-process test did not catch it because vitest had already loaded
+  undici.
+  - The lookup now loads the fetch implementation first by constructing a
+    `Headers`, which does no I/O. It caches only an Agent, never a miss.
+    Unstreamed calls are bounded by `request_timeout_ms`, streamed ones by
+    #114's clocks, and nothing else.
+  - New tests run in fresh child processes. One checks that the Agent exists
+    before the first fetch. Three run `gnomon task` with undici's lazily
+    created default scaled to 0.3 s: a slow Ollama reply, a stream with a long
+    gap, and a reply cut off at gnomon's own `request_timeout_ms`. All four
+    fail on the previous code.
 - **llama.cpp's context overflow is recognised, so the turn trims and goes on.**
   llama-server reports an oversized prompt as `request (107910 tokens) exceeds
   the available context size (98304 tokens)`, type `exceed_context_size_error`.
@@ -374,7 +454,12 @@
     `bench/peers-2026-11`), hosted model, 48 pairs: output tokens −28%
     (p < 0.0001), $ per solved task 0.052 → 0.035, 37 vs 34 tasks solved
     (not significant).
-  - Stage 2 runs the same A/B on the local model before this merges.
+  - Stage 2, the same A/B on the local qwen3.6-35b (16 tasks, 2026-11-02),
+    passed its pre-registered guard: the same tasks solved (10/16 vs 10/15
+    valid). It showed no saving on the local model: prompt tokens 2.0x base,
+    driven by three tasks both arms fail, where the lean arm keeps trying
+    longer (`benchmarks/results/lean-2026-11/README.md` on
+    `bench/peers-2026-11`).
 - **`gnomon check --format gnomon` reads gnomon's own audit trail.** G1-R
   (bench/peers-2026-11, `benchmarks/results/g1r-2026-11/`) re-scored G1 on master:
   check now catches 44/44 of the peers' violations, and its one miss was gnomon's

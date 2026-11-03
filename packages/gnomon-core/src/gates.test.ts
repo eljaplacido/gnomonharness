@@ -702,6 +702,31 @@ describe("gate: the turn limits are surface-declared and stay in one place", () 
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('"skills" is a known policy.toml block, so [skills] require_trial is not disowned', async () => {
+    // skills.ts reads config.policy.skills.require_trial, and CHANGELOG,
+    // CONTRACTS §11 and README tell operators to write it in policy.toml. The
+    // auditor printed "[skills] is not a block this harness reads; it does
+    // nothing" over it at every start, which invites deleting the control.
+    const { auditSurface, loadConfig } = await import("./config.js");
+    const dir = surface({ "policy.toml": "[skills]\nrequire_trial = true\n" });
+    try {
+      const cfg = loadConfig(dir);
+      expect((cfg.policy as { skills?: { require_trial?: unknown } }).skills?.require_trial).toBe(true);
+      const findings = auditSurface(cfg).filter((p) => /\[skills\]/.test(p.where));
+      expect(findings, "the auditor disowns or misplaces a block the code reads").toEqual([]);
+      // In the wrong file it is read by nothing, and the auditor must say so.
+      const wrong = surface({ "config.toml": "[skills]\nrequire_trial = true\n" });
+      try {
+        const misplaced = auditSurface(loadConfig(wrong)).filter((p) => /\[skills\]/.test(p.where));
+        expect(misplaced.map((p) => p.problem).join("\n")).toMatch(/read from policy\.toml/);
+      } finally {
+        rmSync(wrong, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("[turn] does not collide with the [loop] header used by .gnomon/loops/", async () => {
     // Two schemas behind one name in two files is how an operator writes
     // [loop] name = "nightly" into config.toml and gets silence.
