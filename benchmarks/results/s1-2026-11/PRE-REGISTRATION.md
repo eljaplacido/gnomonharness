@@ -507,3 +507,130 @@ gates, Amendment 1's idle and yield thresholds, the deadline 2026-11-04T07:00:00
   - every lane-guard case;
   - the gx10 port wait on real sockets.
 - Amendment 1's suites pass unchanged against the edited chain: 50, 24 and 15 cases.
+
+## Amendment 3, 2026-11-03T17:07Z: S1 moves to the gx10's own lane (R1's), one shared slot; before any S1 data
+
+**Why.**
+- The RTX 5090 hub is the user's gaming machine for an unknown time. R3R keeps it.
+- The operator stopped the Amendment 2 chain (pid 667619) at 16:56:50Z, while it was still in its idle wait. It had
+  started nothing.
+- S1 moves to the gx10's own local lane, now.
+
+### The lane: `llama-server-qwen-q4.service` on the gx10, which is R1's lane
+
+| | R1H's hub lane (the design so far) | the gx10 lane (now) |
+|---|---|---|
+| weights | Qwen3.6-35B-A3B-UD-Q4_K_S.gguf `2bee952b…`, DFlash draft `107b7a43…` | the same files (checksums checked at start) |
+| chat template | Unsloth qwen3.6 (`r1h-2026-11/lane-props.json`) | **byte-identical** (checked at start; the template gate's premise) |
+| llama.cpp | b11739 (Windows CUDA) | b1281-571d0d54 (the gx10's DFlash build, binary unchanged since 2026-07-19) |
+| slots × context | 2 × 98,304 | **1 × 98,304** (`--parallel 1`) |
+| KV, reasoning, spec | q8_0, `--reasoning off`, draft-dflash | the same |
+| served at | hub 127.0.0.1:18380, via S1's tunnel | **127.0.0.1:18080 directly**; no tunnel |
+
+- **R1 used this exact process.** R1's L arm ran on this lane. Its cells after M1b's restore ran on the very server
+  process that serves now: MainPID 3018163, up since 11:36:47Z; R1 finished at 15:11:38Z.
+- **R1 recorded no lane props, so references were recorded at preparation** (2026-11-03T16:59:44Z, read-only GETs
+  and `systemctl --user cat/show`): `lane-gx10-ref-props.json`, `lane-gx10-ref-slots.json`, `lane-gx10-ref-unit.txt`
+  and `lane-gx10-ref-info.txt`.
+- **Before any cell, the lane must match these references:** build, model file, alias, template and caps, 1 slot ×
+  98,304, speculative, every server default, and the unit text with its flags (`--parallel 1 --ctx-size 98304`, q8_0
+  KV, `--reasoning off`, the DFlash draft). Any difference is FATAL.
+- **Differences from the hub lane** are in the caps (one key absent) and three server defaults: `adaptive_*`, and
+  `dry_penalty_last_n`, which is inert with `dry_multiplier = 0`. None touches the template.
+- **The template gate passes on this lane.** It was run live at preparation, read-only (`/apply-template` renders):
+  A–D as designed, E–F as expected. It runs again before any cell.
+
+**The chain never starts, stops, restarts or signals the service.** It reads it (`systemctl --user cat/show`, GET
+`/props`, `/slots`, `/v1/models`) and sends it requests through S1's meters.
+- If the lane stops answering after a runner failure, the chain waits up to 10 min for it, without touching it. If
+  the lane does not come back, or comes back different, that is FATAL.
+- The chain holds P1's gx10 `gpu.lock` while it uses the lane, as R1 did, so other gx10 GPU benchmarks wait. Its
+  children do not inherit the lock's file descriptor, so no orphan can keep it held.
+- Cleanup covers only what the chain started: its runner and the runner's relays, by the process group it launched,
+  and that runner's in-flight cells (moved to `runs-aborted/<cell>-operator`).
+
+**Gone from the gx10 chain:** no hub, no ssh, no tunnel, no idle wait, no yield. There is no gaming on the gx10.
+
+**Ports.** Meter ports are unchanged (5410–5413, counters 5420–5423, abort probe 5430/5431), with Amendment 2's port
+check. The relays' upstream is `http://127.0.0.1:18080`.
+
+### One slot, two arms
+
+- **Concurrency.** S0 and S1 still run concurrently with bounded lead 1, so the pairs stay matched in time. On this
+  lane their requests **queue at the single server slot**, and each arm's model time includes waiting for the other
+  arm's requests.
+- **Expected walls.** They are longer than R1's, and more cells will reach the pre-registered **900 s cap**, which is
+  kept. This handicap is the same for both arms at every moment: the same slot, the same tasks at about the same time.
+  It lowers the ceiling of both, and reduces power further, because capped cells are mostly failures in both arms.
+- **Capped counts** are reported per arm, valid cells only, beside R1's (`collect_s1_a3.py`).
+- **Expected wall time.**
+  - R1's L arm on this lane, alone on the slot one cell at a time: 32 cells, 4.0 h of cell wall in total (median
+    209 s), 5,059 GPU-s (1.4 h), 7 cells capped (5 of them valid).
+  - Two arms sharing the slot add up to ~1.4 h of queueing per arm.
+  - Expected: about **5–6 h** for 64 cells, plus ~10 min of checks, probe and smoke. Started around 17:30Z, that ends
+    around 23:00–00:00Z, well before the deadline.
+  - Expected capped cells: more than R1's 5 per 30.
+
+### Reference for the descriptive comparisons
+
+R1's L arm (`r1-2026-11/runs`) replaces R1H's L arm: the same lane, build d59e6c19, alone on the slot. As judged by
+the same validity rule, it has 30 of 32 valid, 18 solved and 5 capped. The comparisons are time-separated and
+descriptive (`collect_s1_a3.py`):
+- **S0 vs R1 L** is the build-change control on the same lane;
+- **S1 vs R1 L.**
+
+The PRIMARY comparison, S1 vs S0 by exact McNemar, is unchanged.
+
+### Contention and load
+
+P2G runs on this machine: cloud harnesses with CPU-heavy task containers. It is not touched.
+- Load is recorded per cell (`load.json`).
+- The two S arms run at the same time, so P2G's load falls on both alike.
+
+### Gates, smoke, records
+
+Run on this lane, before any cell:
+1. Offline tests.
+2. The gx10 `gpu.lock`.
+3. Lane checks, checksums and ports.
+4. The template gate.
+5. **First time only:**
+   - the hub lane's smoke (`4dd2afc1`) is kept as `runs-smoke-hub/` and `smoke-s1-hub.txt`;
+   - the abort probe (informational) and the smoke run on this lane; the smoke must pass, and both smoke cells must
+     record `local_upstream = http://127.0.0.1:18080`;
+   - commit before data.
+
+Then both arms run. A runner failure is retried once after 60 s; a second is FATAL (Amendment 2). A FATAL exit commits
+nothing and is not DONE.
+
+Each finished cell's `cell.json` records `local_upstream` 127.0.0.1:18080, lane `gx10-qwen-q4`, `lane_slots = 1` and
+`amendment = 3`. Its `gpu_slots = 2` still counts the arms running at once.
+
+### Unchanged
+
+- build `8078df03e2a28c41753825dcccab13e8a0ac03dd`;
+- the arms and their one-line difference;
+- the tasks, order, 900 s cap, validity rule, meters and mechanism metric;
+- the deadline 2026-11-04T07:00:00Z (`S1_DEADLINE` overrides);
+- the commit lock.
+
+### Apparatus
+
+- **New:**
+  - `apparatus/s1-chain-gx10.sh`, the chain;
+  - `apparatus/run_s1_a3.py`, which imports run_s1_a2, run_s1_a1 and run_s1 unchanged;
+  - `apparatus/collect_s1_a3.py`, which imports collect_s1 unchanged;
+  - the `lane-gx10-ref-*` references.
+- **Kept as it was, unused:** the hub chain `s1-chain.sh` with its Amendment 1–2 tests.
+- **New tests:**
+  - `test_run_s1_a3.py` (15 cases): the lane switch, meters relaying to :18080, unchanged ports, the Amendment 2
+    port check in place, the `cell.json` annotation, R1's L arm as the reference, and the smoke's lane check;
+  - `test_chain_a3_s1.sh` (29 cases):
+    - a static scan: no systemctl verb but `cat`/`show`, no pkill, killall, ssh, STOP-ME or tunnel, every `kill`
+      scoped to the runner's process group;
+    - a runtime `systemctl` shim that records every call;
+    - `lane_check` refusing a changed template, n_ctx, build, slot count or unit;
+    - the `gpu.lock` wait, hold and deadline, and that the lock fds are not inherited;
+    - the runner retry, the lane lost or back, a FATAL exit committing nothing, and the smoke bookkeeping.
+
+**Launch setting, 2026-11-03T17:07Z:** `S1_DEADLINE=2026-11-03T21:15:00Z`, the pre-registered deadline knob. The user wants tonight's runs finished by midnight local (22:00Z). Cells not started by then are reported as not run and never imputed. Attempt 1 is expected to complete; attempt 2 will be partial.
