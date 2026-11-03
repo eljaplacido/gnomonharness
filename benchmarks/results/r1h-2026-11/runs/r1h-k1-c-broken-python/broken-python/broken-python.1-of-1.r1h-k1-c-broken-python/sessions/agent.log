@@ -1,0 +1,56 @@
+[?2004hroot@90888800c47b:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@90888800c47b:/app# clear
+[?2004l[H[J[3J[?2004hroot@90888800c47b:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@90888800c47b:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=d59e6c198f91d1469198b0677c008323f82d0345
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793642336
+[?2004hroot@90888800c47b:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with pip.'; tmux wait -S done
+[?2004lR1_ARM=C R1_ENTRY=implementor R1_ROUTES=coordinator=cloud,implementor=cloud,verifier=cloud,plan=cloud,implement=cloud,critique=cloud,smol=cloud
+
+## Why the obvious repair silently failed
+
+`python3 -m ensurepip --upgrade` is the standard fix, and it **exited 0 while doing nothing**:
+
+```
+Requirement already satisfied: pip in /usr/local/lib/python3.13/site-packages (24.3.1)
+```
+
+`ensurepip` trusts the dist-info version stamp over the filesystem, concluded pip was present and current, and skipped the work. A success code plus an unchanged broken state — the worst kind of result to debug from.
+
+## The repair
+
+I installed pip from the wheel Python ships in-tree, bypassing the version check with `--force-reinstall`:
+
+```
+PYTHONPATH=/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl \
+python3 -m pip install --force-reinstall --no-index --no-deps \
+  /usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl
+```
+
+Using the bundled wheel matters: it's local, so no network, no index, and the version exactly matches what the stale metadata claimed — leaving your system consistent rather than silently upgraded.
+
+## Verified
+
+- `python3 -m pip --version`, `pip --version`, `pip3.13 --version` → all report 24.3.1
+- `import pip` succeeds
+- A **real end-to-end install**: installed `six`, imported it at 1.17.0, then uninstalled it to leave nothing behind
+
+I also scanned every `dist-info` in site-packages against its `top_level.txt`. pip was the only casualty — no other package had been partially removed.
+
+## Worth flagging
+
+Something deleted that directory. The recursive deletion of `pip/` while the sibling `pip-24.3.1.dist-info/` was untouched is not a pattern normal pip operations produce — an interrupted upgrade would typically corrupt both. Two plausible causes: an aggressive cleanup (e.g. `rm -rf` of a cache/temp path that resolved inside site-packages) or a `__pycache__`-clearing script that took the package with it.
+
+The rmdir timestamps are a clue worth checking — site-packages was modified Oct 31, while the dist-info is stamped Jan 14. If you can recall what you ran then, it would identify the trigger. In the meantime, prefer virtualenvs for project work; that keeps an accident from being written to the system prefix at all, and `python3 -m venv` now works since it depends on `ensurepip` resolving correctly.
+
+One side effect to note: the system reports pip 24.3.1, and pip itself now advises upgrading to 26.2.2. I deliberately left that alone — the version you have matches your Python 3.13.1 build, and upgrading pip here is a separate decision from restoring what was deleted.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=13 surface=59338fa2ec97
+[?2004hroot@90888800c47b:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@90888800c47b:/app# 

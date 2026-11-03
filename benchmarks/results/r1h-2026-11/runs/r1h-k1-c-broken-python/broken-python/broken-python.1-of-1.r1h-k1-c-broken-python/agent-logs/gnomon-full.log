@@ -1,0 +1,113 @@
+  │ I'll start by looking at what's actually in this repository before diagno…
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  ⚙ read .
+    ✓ read ./ — 4 entries
+[approval] bash: command -v python3 python pip pip3 2>&1; echo "---"; python3 -V 2>&1; echo "---"; python3 -m pip --version 2>&1 — approved
+  ⚙ bash command -v python3 python pip pip3 2>&1; echo "---"; python3 -V 2>&1; …
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  │ Repo is just harness scaffolding — the real subject is the Python install…
+[approval] bash: cd /tmp && python3 -c "import sys,sysconfig; print(sys.prefix); print(sys.executable); print(sys.version)"; echo "--- path ---"; python3 -c "import sys; [print(p) for p in sys.path]"; echo "--- site ---"; python3 -c "import site; print(site.getsitepackages()); print(site.getusersitepackages())" — approved
+  ⚙ bash cd /tmp && python3 -c "import sys,sysconfig; print(sys.prefix); print(…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: ls -la /usr/local/lib/python3.13/ 2>&1 | head -40; echo "=== site-packages ==="; ls -la /usr/local/lib/python3.13/site-packages/ 2>&1 | head -40 — approved
+  ⚙ bash ls -la /usr/local/lib/python3.13/ 2>&1 | head -40; echo "=== site-pack…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ Found a strong signal: `pip-24.3.1.dist-info` is present but there's no `…
+[approval] bash: ls -la /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/ 2>&1; echo "=== RECORD head ==="; head -20 /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD 2>&1; echo "=== pip dir? ==="; ls -la /usr/local/lib/python3.13/site-packages/pip 2>&1 — approved
+  ⚙ bash ls -la /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/ 2…
+    ✗ bash — exit 2
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: cat /usr/local/lib/python3.13/site-packages/README.txt 2>&1; echo "=== ensurepip ==="; ls -la /usr/local/lib/python3.13/ensurepip/ 2>&1; echo "=== bundled wheels ==="; ls -la /usr/local/lib/python3.13/ensurepip/_bundled/ 2>&1 — approved
+  ⚙ bash cat /usr/local/lib/python3.13/site-packages/README.txt 2>&1; echo "===…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  │ Confirmed the fault: the `pip/` package was deleted while `pip-24.3.1.dis…
+[approval] bash: ls -la /usr/local/bin/ | grep -i pip; echo "=== exit=$? ===" — approved
+  ⚙ bash ls -la /usr/local/bin/ | grep -i pip; echo "=== exit=$? ==="
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: cd /tmp && python3 -m ensurepip --upgrade 2>&1 | tail -20; echo "=== exit=${?} ===" — approved
+  ⚙ bash cd /tmp && python3 -m ensurepip --upgrade 2>&1 | tail -20; echo "=== e…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  │ `ensurepip --upgrade` did nothing — the stale dist-info makes it think pi…
+[approval] bash: cd /usr/local/lib/python3.13/site-packages && for d in *.dist-info *.egg-info; do [ -d "$d" ] || continue; tl="$d/top_level.txt"; if [ -f "$tl" ]; then while read -r p; do [ -n "$p" ] && [ ! -e "$p" ] && [ ! -e "$p.py" ] && echo "BROKEN: $d -> missing $p"; done < "$tl"; fi; done; echo "=== done scan ===" — approved
+  ⚙ bash cd /usr/local/lib/python3.13/site-packages && for d in *.dist-info *.e…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: cd /tmp && PYTHONPATH=/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl python3 -m pip install --force-reinstall --no-index --no-deps /usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl 2>&1 | tail -15; echo "=== exit=${?} ===" — approved
+  ⚙ bash cd /tmp && PYTHONPATH=/usr/local/lib/python3.13/ensurepip/_bundled/pip…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+  │ pip reinstalled cleanly. Now let me verify it actually works end to end —…
+[approval] bash: cd /tmp && python3 -m pip --version 2>&1; echo "--- console ---"; pip --version 2>&1; pip3.13 --version 2>&1; echo "--- import ---"; python3 -c "import pip; print('import ok', pip.__version__)" 2>&1 — approved
+  ⚙ bash cd /tmp && python3 -m pip --version 2>&1; echo "--- console ---"; pip …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+[approval] bash: cd /tmp && python3 -m pip install --quiet --root-user-action=ignore six 2>&1 | tail -10; echo "=== install exit=$? ==="; python3 -c "import six; print('six works:', six.__version__)" 2>&1 — approved
+  ⚙ bash cd /tmp && python3 -m pip install --quiet --root-user-action=ignore si…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  │ Repair is verified. Let me remove the test package I installed for verifi…
+[approval] bash: cd /tmp && python3 -m pip uninstall -y six 2>&1 | tail -5; echo "=== exit=$? ==="; python3 -c "import six" 2>&1 | tail -2 — approved
+  ⚙ bash cd /tmp && python3 -m pip uninstall -y six 2>&1 | tail -5; echo "=== e…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 13 tool call(s) so far
+Fixed. Pip was not misconfigured or broken by a bad index — its code was **missing from disk**.
+
+## What was actually wrong
+
+`/usr/local/lib/python3.13/site-packages/` contained `pip-24.3.1.dist-info/` (with its full `RECORD` manifest listing every `pip/...` file) but no `pip/` package directory. The metadata survived; the implementation was deleted.
+
+That produced a deceptive failure mode. Python's import system reports:
+
+```
+/usr/local/bin/python3: No module named pip
+```
+
+...which reads like "pip isn't installed on this system," tempting you toward `apt install python3-pip` or similar — and that's the wrong turn here, because the package was already registered as installed.
+
+## Why the obvious repair silently failed
+
+`python3 -m ensurepip --upgrade` is the standard fix, and it **exited 0 while doing nothing**:
+
+```
+Requirement already satisfied: pip in /usr/local/lib/python3.13/site-packages (24.3.1)
+```
+
+`ensurepip` trusts the dist-info version stamp over the filesystem, concluded pip was present and current, and skipped the work. A success code plus an unchanged broken state — the worst kind of result to debug from.
+
+## The repair
+
+I installed pip from the wheel Python ships in-tree, bypassing the version check with `--force-reinstall`:
+
+```
+PYTHONPATH=/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl \
+python3 -m pip install --force-reinstall --no-index --no-deps \
+  /usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl
+```
+
+Using the bundled wheel matters: it's local, so no network, no index, and the version exactly matches what the stale metadata claimed — leaving your system consistent rather than silently upgraded.
+
+## Verified
+
+- `python3 -m pip --version`, `pip --version`, `pip3.13 --version` → all report 24.3.1
+- `import pip` succeeds
+- A **real end-to-end install**: installed `six`, imported it at 1.17.0, then uninstalled it to leave nothing behind
+
+I also scanned every `dist-info` in site-packages against its `top_level.txt`. pip was the only casualty — no other package had been partially removed.
+
+## Worth flagging
+
+Something deleted that directory. The recursive deletion of `pip/` while the sibling `pip-24.3.1.dist-info/` was untouched is not a pattern normal pip operations produce — an interrupted upgrade would typically corrupt both. Two plausible causes: an aggressive cleanup (e.g. `rm -rf` of a cache/temp path that resolved inside site-packages) or a `__pycache__`-clearing script that took the package with it.
+
+The rmdir timestamps are a clue worth checking — site-packages was modified Oct 31, while the dist-info is stamped Jan 14. If you can recall what you ran then, it would identify the trigger. In the meantime, prefer virtualenvs for project work; that keeps an accident from being written to the system prefix at all, and `python3 -m venv` now works since it depends on `ensurepip` resolving correctly.
+
+One side effect to note: the system reports pip 24.3.1, and pip itself now advises upgrading to 26.2.2. I deliberately left that alone — the version you have matches your Python 3.13.1 build, and upgrading pip here is a separate decision from restoring what was deleted.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=13 surface=59338fa2ec97

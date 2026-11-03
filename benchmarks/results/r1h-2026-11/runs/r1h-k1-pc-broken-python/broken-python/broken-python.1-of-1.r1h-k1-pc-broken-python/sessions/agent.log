@@ -1,0 +1,56 @@
+[?2004hroot@0b78ad507338:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@0b78ad507338:/app# clear
+[?2004l[H[J[3J[?2004hroot@0b78ad507338:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@0b78ad507338:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=d59e6c198f91d1469198b0677c008323f82d0345
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793643327
+[?2004hroot@0b78ad507338:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with pip.'; tmux wait -S done
+[?2004lR1_ARM=PC R1_ENTRY=coordinator R1_ROUTES=coordinator=cloud,implementor=local,verifier=local,plan=cloud,implement=local,critique=local,smol=local
+  ⚙ read .
+    ✓ read ./ — 4 entries
+  ⚙ glob 
+    ✓ glob **/pyproject.toml — 0 files
+  │ This is a system-level problem, not a repository one — and this session h…
+  deepseek-v4.1-flash — 3 tool call(s) so far
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  ⚙ read .gitignore
+    ✓ read .gitignore — 8 lines
+  ⚙ read .gitattributes
+    ✓ read .gitattributes — 3 lines
+I couldn't do this one, and I want to be clear about why rather than hand you a confident guess.
+
+**What I checked:** the repository. It's empty apart from `.gitignore`, `.gitattributes` and the `.gnomon/` harness surface — no Python project, no `pyproject.toml`, no requirements file, nothing that touches pip.
+
+**Why I can't fix it from here:** two blockers, both hard.
+
+1. This session has no shell. I have `read`, `glob`, `grep`, `write`, `compute` — no `bash`, so I cannot run `pip`, `python3 -V`, or inspect your filesystem.
+2. Even with a shell, this sandbox is not your machine. The tool paths resolve to this repository root and anything outside it is refused. Running `pip install` here would exercise the sandbox's interpreter, not your system-wide one, so the result would be theatre, not a diagnosis.
+
+So there's nothing I can change on disk that would fix your installation, and I'm not going to write you an "unverified fix script" I was never able to run.
+
+**What it almost certainly is.** On any current Linux distro — Debian/Ubuntu 23.04+, Fedora 38+, Arch, and their derivatives — a system-wide `pip install` fails by design with `error: externally-managed-environment` (PEP 668). The interpreter is owned by the OS package manager, and pip now refuses to write into it. That's not a broken installation; it's the installation working as intended. The other two common causes look different and are distinguishable from the error text alone.
+
+**One command that separates them:**
+
+```
+python3 -m pip install --dry-run requests
+```
+
+- `externally-managed-environment` → PEP 668. Not broken. Create a venv (`python3 -m venv .venv && . .venv/bin/activate`) and install there; use `pipx` for CLI tools you want on `PATH`. `--break-system-packages` exists but will eventually collide with a distro upgrade.
+- `command not found` / `No module named pip` → pip genuinely isn't installed for *that* interpreter: `sudo apt install python3-pip` (or your distro's equivalent).
+- SSL or certificate errors → a CA bundle / `certifi` problem, a separate fault.
+- `Permission denied` on `/usr/lib/python3.x` → you're missing `sudo`, and should not be reaching for it.
+
+**The tell for a wrong interpreter:** if `python3 -m pip` behaves differently from bare `pip`, your `PATH` is resolving `pip` to a different installation (a stray `~/.local/bin`, pyenv, conda, a Homebrew prefix). `which -a python3 pip pip3` and `python3 -m pip -V` will show which one you're actually talking to — the `-V` line prints the site-packages directory pip will write to.
+
+Send me that `--dry-run` output and I can tell you which of these it is without guessing. And if the real goal is just "get this working," the venv answer is correct regardless of which error you're seeing.
+
+[result] role=coordinator model=deepseek-v4.1-flash tools=4 surface=295412075ba5
+[?2004hroot@0b78ad507338:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@0b78ad507338:/app# 

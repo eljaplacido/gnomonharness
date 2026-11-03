@@ -1,0 +1,56 @@
+[?2004hroot@33ca07944170:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@33ca07944170:/app# clear
+[?2004l[H[J[3J[?2004hroot@33ca07944170:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@33ca07944170:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=d59e6c198f91d1469198b0677c008323f82d0345
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793688440
+[?2004hroot@33ca07944170:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with pip.'; tmux wait -S done
+[?2004lR1_ARM=PC R1_ENTRY=coordinator R1_ROUTES=coordinator=cloud,implementor=local,verifier=local,plan=cloud,implement=local,critique=local,smol=local
+  qwen3.6-35b — 1 tool call(s) so far
+  ⚙ task 
+    ✓ task implementor — 1 tool call(s)
+  deepseek-v4.1-flash — 11 tool call(s) so far
+[approval] propose skill "repairing broken pip in the python:3.13 image" — approved
+  ⚙ skill 
+    ✓ skill repairing-broken-pip-in-the-python-3-13-image proposed
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  deepseek-v4.1-flash — 12 tool call(s) so far
+Fixed. Your system pip works again.
+
+**What was wrong:** the `pip/` package itself was missing from disk. `/usr/local/lib/python3.13/site-packages/` still had `pip-24.3.1.dist-info/` (metadata, RECORD listing every file) but not the files it described. So `pip`, `pip3` and `python3 -m pip` all died at startup with:
+
+```
+ModuleNotFoundError: No module named 'pip'
+```
+
+Worth clearing out of the way: this is *not* PEP 668. The `EXTERNALLY-MANAGED` file on this box belongs to Debian's Python 3.11 at `/usr/lib/python3.11/`; your `python3` is the official `python:3.13` image at `/usr/local/bin/python3`, which has no such file. No venv is needed to install system-wide here — the install was root-owned and you are root.
+
+**The fix:** `python3 -m ensurepip --upgrade` does *not* repair this — it sees the surviving dist-info, decides pip is "already satisfied", and leaves you broken. The working route was unpacking the bundled wheel over the top:
+
+```
+cd /usr/local/lib/python3.13/site-packages
+python3 -m zipfile -e /usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl .
+```
+
+**Verification** (run after the repair, independently of it):
+
+```
+pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)
+DRY-RUN INSTALL OK
+REAL INSTALL OK 1.17.0
+```
+
+`python3 -m pip install --target /tmp/realinstall six` fetched from PyPI, unpacked, and `import six` succeeded — a genuine end-to-end install, done with `--target` so your system site-packages were not touched by the test.
+
+One leftover: I proposed a skill capturing this failure mode and its fix, so it isn't re-derived next time. It's sitting at `.gnomon/skills/proposed/repairing-broken-pip-in-the-python-3-13-image.md` and only becomes active if you run `gnomon skill accept repairing-broken-pip-in-the-python-3-13-image` — accepting changes the surface hash, which is a human decision, so I left it proposed.
+
+[result] role=coordinator model=deepseek-v4.1-flash tools=12 surface=295412075ba5
+[?2004hroot@33ca07944170:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@33ca07944170:/app# 

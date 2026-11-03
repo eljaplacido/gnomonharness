@@ -1,0 +1,609 @@
+  │ I'll start by inspecting the Turtle file to understand the ontology and d…
+[approval] bash: wc -l /app/university_graph.ttl; ls -la /app — approved
+  ⚙ bash wc -l /app/university_graph.ttl; ls -la /app
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: head -200 /app/university_graph.ttl — approved
+  ⚙ bash head -200 /app/university_graph.ttl
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+[approval] bash: sed -n '200,305p' /app/university_graph.ttl — approved
+  ⚙ bash sed -n '200,305p' /app/university_graph.ttl
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+  │ The file is 305 lines, we've seen all? Let's check tail lines 290-305.
+  │ Let me see the remaining lines.
+[approval] bash: sed -n '285,305p' /app/university_graph.ttl; echo ---; grep -n "GraduationDate" /app/university_graph.ttl | wc -l; echo ---; grep -n "technical\|Skill\|ontology\|rdfs\|owl" /app/university_graph.ttl | head -50 — approved
+  ⚙ bash sed -n '285,305p' /app/university_graph.ttl; echo ---; grep -n "Gradua…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ Now let's understand the data model:
+  │ - Person: hasName, role, teaches, worksIn
+  │ - Roles: "Professor of Computer Science", "Assistant Professor of Compute…
+  │ … 56 more line(s) — /think show for all
+[approval] bash: python3 -c "import rdflib; print(rdflib.__version__)" 2>&1; which arq sparql riot java 2>&1 — approved
+  ⚙ bash python3 -c "import rdflib; print(rdflib.__version__)" 2>&1; which arq …
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: grep -n "uni:role" /app/university_graph.ttl; echo ---; grep -n "Math101\|AI101\|Eng202\|Physics301" /app/university_graph.ttl — approved
+  ⚙ bash grep -n "uni:role" /app/university_graph.ttl; echo ---; grep -n "Math1…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  │ No rdflib. Can I pip install? Probably no network. Let's try pip install …
+  │ Meanwhile write the query.
+  │ Query design:
+  │ … 76 more line(s) — /think show for all
+[approval] bash: pip install rdflib 2>&1 | tail -3 — approved
+  ⚙ bash pip install rdflib 2>&1 | tail -3
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: python3 -m pip install rdflib 2>&1 | tail -5; echo "exit=$?"; python3 -V; ls /usr/bin | grep -i "sparql\|jena\|rasqal"  — approved
+  ⚙ bash python3 -m pip install rdflib 2>&1 | tail -5; echo "exit=$?"; python3 …
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  │ No pip, no sparql engine. Options: write a minimal SPARQL engine? Too muc…
+  │ Maybe there's network to download rdflib? Try curl to pypi.
+  ⚙ bash cd /tmp && timeout 20 curl -sS -m 15 -o rdflib.tar.gz https://files.py…
+    ⚠ bash — refused (network = false)
+  deepseek-v4.1-flash — 9 tool call(s) so far
+  │ No network. So I need to verify without a SPARQL engine. I can write a sm…
+  │ Alternative: check if any Debian package installed like `python3-rdflib` …
+  │ Perhaps node is available with some package? Check node_modules? Let's ch…
+  │ … 1 more line(s) — /think show for all
+[approval] bash: which node npm ruby perl java rapper 2>&1; ls /usr/share/java 2>/dev/null | head; python3 -c "import sys; print(sys.path)"; ls /usr/lib/python3/dist-packages 2>/dev/null | head -40 — approved
+  ⚙ bash which node npm ruby perl java rapper 2>&1; ls /usr/share/java 2>/dev/n…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+[approval] bash: ls /root/.nvm/versions/node/v22.23.4/lib/node_modules 2>/dev/null; find / -maxdepth 6 -name "*sparql*" -o -maxdepth 6 -name "*rdflib*" 2>/dev/null | head — approved
+  ⚙ bash ls /root/.nvm/versions/node/v22.23.4/lib/node_modules 2>/dev/null; fin…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  │ No SPARQL engine or network is available, so I'll write the query and the…
+[approval] write /app/solution.sparql (+63 −0) [new file] — approved
+  ⚙ write /app/solution.sparql
+    ✓ write /app/solution.sparql (+63 −0)
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  │ Now let me rewrite slightly for portability (subqueries + VALUES instead …
+[approval] write /app/solution.sparql (+20 −17) — approved
+  ⚙ write /app/solution.sparql
+    ✓ write /app/solution.sparql (+20 −17)
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  │ Now let me verify by parsing the data and evaluating the same semantics w…
+[approval] bash: cat > /tmp/check.py <<'EOF'
+import re, json
+from collections import defaultdict
+
+text = open('/app/university_graph.ttl').read()
+text = re.sub(r'#.*', '', text)
+PREFIX = {'uni': 'http://university.org/ontology/', 'xsd': 'http://www.w3.org/2001/XMLSchema#'}
+
+def expand(name):
+    p, l = name.split(':')
+    return PREFIX[p] + l
+
+UNI = PREFIX['uni']
+triples = []  # (s, p, o, datatype|None)
+
+# tokenise statements: split on ' .' at top level, statements separated by '.'
+# simple approach: find statements term by term
+tokens = re.findall(r'<[^>]*>|"(?:[^"\\]|\\.)*"(?:\^\^[A-Za-z]+:[A-Za-z0-9]+)?|[A-Za-z]+:[A-Za-z0-9_]+|a\b|[;,]|\.', text)
+i = 0
+while i < len(tokens):
+    if tokens[i] == '.':
+        i += 1; continue
+    subj = expand(tokens[i]); i += 1
+    while i < len(tokens) and tokens[i] != '.':
+        if tokens[i] in (';', ','):
+            i += 1; continue
+        pred = tokens[i]; i += 1
+        assert pred == 'a' or ':' in pred, pred
+        pred = 'a' if pred == 'a' else expand(pred)
+        if tokens[i] == ';':
+            continue
+        while i < len(tokens) and tokens[i] not in (';', '.', ','):
+            tok = tokens[i]; i += 1
+            if tok.startswith('"'):
+                m = re.match(r'"((?:[^"\\]|\\.)*)"(?:\^\^([A-Za-z]+:[A-Za-z0-9]+))?', tok)
+                val, dt = m.group(1), m.group(2)
+                o = ('lit', val, expand(dt) if dt else None)
+            elif tok == 'a':
+                o = ('iri', 'a')
+            else:
+                o = ('iri', expand(tok))
+            triples.append((subj, pred, o))
+        if i < len(tokens) and tokens[i] == ',':
+            i += 1
+            continue
+        break
+
+print("triples:", len(triples))
+by_s = defaultdict(list)
+for s, p, o in triples:
+    by_s[s].append((p, o))
+
+def objs(s, p):
+    return [o for (pp, o) in by_s[s] if pp == p]
+
+def iri(o): return o[1] if o[0] == 'iri' else None
+def lit(o):
+    if o[0] != 'lit': return None
+    return o[1]
+
+TODAY = '2025-08-16'
+EU = set("AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE".split())
+assert len(EU) == 27
+
+DEP = UNI + 'Department'
+COURSE = UNI + 'Course'
+
+# department -> set of courses
+dept_courses = defaultdict(set)
+for s, p, o in triples:
+    if p == UNI + 'isTaughtIn':
+        dept_courses[iri(o)].add(s)
+
+# dept -> current distinct students
+dept_students = {}
+for d, courses in dept_courses.items():
+    studs = set()
+    for c in courses:
+        for s, p, o in triples:
+            if p == UNI + 'isEnrolledIn' and iri(o) == c:
+                enr = [lit(x) for (pp, x) in by_s[s] if pp == UNI + 'hasEnrollmentDate']
+                grad = [lit(x) for (pp, x) in by_s[s] if pp == UNI + 'hasGraduationDate']
+                if enr and enr[0] > TODAY:      # not yet enrolled
+                    continue
+                if grad and grad[0] <= TODAY:   # already graduated
+                    continue
+                studs.add(s)
+    dept_students[d] = studs
+
+for d in sorted(dept_students):
+    print(f"{d.replace(UNI,''):32s} courses={[c.replace(UNI,'') for c in sorted(dept_courses[d])]} current_students={len(dept_students[d])}")
+
+# professors
+rows = []
+for s, p, o in triples:
+    if p != UNI + 'role': continue
+    role = lit(o)
+    if not role or 'professor' not in role.lower(): continue
+    if re.search(r'assistant|associate|adjunct|visiting|emeritus|lecturer|teaching', role.lower()): continue
+    name = [lit(x) for (pp, x) in by_s[s] if pp == UNI + 'hasName'][0]
+    depts = [iri(x) for (pp, x) in by_s[s] if pp == UNI + 'worksIn']
+    countries = set()
+    eu_dept = False
+    big_dept = False
+    for d in depts:
+        for (pp, oo) in by_s[d]:
+            if pp == UNI + 'belongsTo':
+                u = iri(oo)
+                for c in [lit(x) for (pp2, x) in by_s[u] if pp2 == UNI + 'locatedInCountry']:
+                    countries.add(c)
+                    if c in EU: eu_dept = True
+        if len(dept_students.get(d, ())) > 10: big_dept = True
+    rows.append((name, role, sorted(countries), eu_dept, big_dept))
+
+print()
+for r in rows:
+    print(r)
+
+print()
+print("RESULT:")
+for name, role, cs, eu, big in rows:
+    if eu and big:
+        print(f'{name}\t{", ".join(cs)}')
+EOF
+python3 /tmp/check.py — approved
+  ⚙ bash cat > /tmp/check.py <<'EOF' import re, json from collections import de…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 14 tool call(s) so far
+  │ The header `@prefix ... .` statements are being parsed. Strip lines start…
+[approval] bash: cd /tmp && python3 - <<'EOF'
+import re
+p='/tmp/check.py'
+s=open(p).read()
+s=s.replace("text = re.sub(r'#.*', '', text)", "text = re.sub(r'#.*', '', text)\ntext = re.sub(r'^@prefix.*$', '', text, flags=re.M)")
+open(p,'w').write(s)
+EOF
+python3 /tmp/check.py — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' import re p='/tmp/check.py' s=open(p).rea…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 15 tool call(s) so far
+[approval] bash: cd /tmp && python3 - <<'EOF'
+p='/tmp/check.py'
+s=open(p).read()
+s=s.replace("""def expand(name):
+    p, l = name.split(':')
+    return PREFIX[p] + l""", """def expand(name):
+    if name.startswith('<'):
+        return name[1:-1]
+    p, l = name.split(':')
+    return PREFIX[p] + l""")
+open(p,'w').write(s)
+EOF
+python3 /tmp/check.py — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' p='/tmp/check.py' s=open(p).read() s=s.re…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 16 tool call(s) so far
+[approval] bash: cd /tmp && python3 - <<'EOF'
+import re
+text=open('/app/university_graph.ttl').read()
+text = re.sub(r'#.*', '', text)
+text = re.sub(r'^@prefix.*$', '', text, flags=re.M)
+tokens = re.findall(r'<[^>]*>|"(?:[^"\\]|\\.)*"(?:\^\^[A-Za-z]+:[A-Za-z0-9]+)?|[A-Za-z]+:[A-Za-z0-9_]+|a\b|[;,]|\.', text)
+print(tokens[:15])
+EOF — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' import re text=open('/app/university_grap…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 17 tool call(s) so far
+  │ Tokens look fine. The error is "not enough values to unpack" at i where t…
+  │ Maybe error from `expand` receiving `'a'`? no, that has no colon. Hmm 'a'…
+  │ Simpler: split text on '\n' where a statement ends with '.' at end of lin…
+  │ … 3 more line(s) — /think show for all
+[approval] bash: cd /tmp && python3 - <<'EOF'
+p='/tmp/check.py'
+s=open(p).read()
+start=s.index("tokens = re.findall")
+end=s.index("print(\"triples:\"")
+new='''tokens = re.findall(r'<[^>]*>|"(?:[^"\\\\]|\\\\.)*"(?:\\^\\^[A-Za-z]+:[A-Za-z0-9]+)?|[A-Za-z]+:[A-Za-z0-9_]+|a\\b|[;,]|\\.', text)
+i = 0
+while i < len(tokens):
+    while i < len(tokens) and tokens[i] == '.':
+        i += 1
+    if i >= len(tokens):
+        break
+    subj = expand(tokens[i]); i += 1
+    while i < len(tokens) and tokens[i] != '.':
+        # read predicate
+        pred = tokens[i]; i += 1
+        pred = 'a' if pred == 'a' else expand(pred)
+        while i < len(tokens) and tokens[i] != '.':
+            tok = tokens[i]
+            if tok == ';':
+                i += 1
+                break
+            if tok == ',':
+                i += 1
+                continue
+            i += 1
+            if tok.startswith('"'):
+                m = re.match(r'"((?:[^"\\\\]|\\\\.)*)"(?:\\^\\^([A-Za-z]+:[A-Za-z0-9]+))?', tok)
+                o = ('lit', m.group(1), expand(m.group(2)) if m.group(2) else None)
+            else:
+                o = ('iri', expand(tok))
+            triples.append((subj, pred, o))
+    i += 1
+
+'''
+s = s[:start] + new + s[end:]
+open(p,'w').write(s)
+EOF
+python3 /tmp/check.py — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' p='/tmp/check.py' s=open(p).read() start=…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 18 tool call(s) so far
+  │ Let me check for any offline package cache that could give a real SPARQL …
+[approval] bash: ls /root/.npm/_cacache 2>/dev/null | head; find / -maxdepth 4 \( -name "*.whl" -o -name "sparqljs*" -o -name "*.jar" \) 2>/dev/null | head; ls /opt /srv /wheels 2>/dev/null — approved
+  ⚙ bash ls /root/.npm/_cacache 2>/dev/null | head; find / -maxdepth 4 \( -name…
+    ✗ bash — exit 2
+  deepseek-v4.1-flash — 19 tool call(s) so far
+[approval] bash: grep -rl "sparql" /root/.npm/_cacache/index-v5 2>/dev/null | head -5; grep -rho "\"key\":\"[^\"]*sparql[^\"]*\"" /root/.npm/_cacache/index-v5 2>/dev/null | head -5 — approved
+  ⚙ bash grep -rl "sparql" /root/.npm/_cacache/index-v5 2>/dev/null | head -5; …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 20 tool call(s) so far
+  │ Data semantics verified. Now let me finalize the query with tolerant enro…
+[approval] edit /app/solution.sparql (+3 −3) — approved
+  ⚙ edit /app/solution.sparql
+    ✓ edit /app/solution.sparql (+3 −3)
+  deepseek-v4.1-flash — 21 tool call(s) so far
+  │ Now update the checker to mirror the query exactly (OPTIONAL enrollment d…
+  │ One concern: `?professorName` in outer SELECT and GROUP BY — fine. Inner …
+  │ Potential semantic gotcha: the outer pattern `?professor uni:worksIn ?dep…
+  │ … 14 more line(s) — /think show for all
+[approval] bash: cd /app && python3 - <<'EOF'
+s=open('solution.sparql').read()
+import re
+q=re.sub(r'#.*','',s)
+for a,b in [('{','}'),('(',')')]:
+    print(a,b,q.count(a),q.count(b))
+print(s)
+EOF — approved
+  ⚙ bash cd /app && python3 - <<'EOF' s=open('solution.sparql').read() import r…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 22 tool call(s) so far
+  │ Let me confirm the qualifying/department details and the STS101 enrollmen…
+[approval] bash: cd /tmp && python3 - <<'EOF'
+import re
+p='/tmp/check.py'
+s=open(p).read()
+s=s.replace("""    rows.append((name, role, sorted(countries), eu_dept, big_dept))""",
+"""    BIG = [d for d in depts if len(dept_students.get(d, ())) > 10]
+    EUD = [d for d in depts if any(lit(x) in EU for (pp2, x) in by_s[iri(next(o for pp3,o in by_s[d] if pp3=='http://university.org/ontology/belongsTo'))] if pp2 == 'http://university.org/ontology/locatedInCountry')]
+    rows.append((name, role, sorted(countries), eu_dept, big_dept, [d.replace(UNI,'') for d in EUD], [d.replace(UNI,'') for d in BIG]))""")
+s=s.replace("""for name, role, cs, eu, big in rows:
+    if eu and big:""","""for name, role, cs, eu, big, eud, bigd in rows:
+    print(f"{name:20s} eu_depts={eud} big_depts={bigd}")
+print()
+for name, role, cs, eu, big, eud, bigd in rows:
+    if eu and big:""")
+s=s.replace("print(r)","print(r[:5])")
+open(p,'w').write(s)
+EOF
+python3 /tmp/check.py — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' import re p='/tmp/check.py' s=open(p).rea…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 23 tool call(s) so far
+  │ Verified. Now, one concern: no SPARQL engine to actually run the query. S…
+  │ 1. `OPTIONAL { ?student uni:hasEnrollmentDate ?enrolledOn }` — the `?stud…
+  │ 2. FILTER with BOUND inside subquery — fine.
+  │ … 26 more line(s) — /think show for all
+[approval] bash: cd /tmp && timeout 60 npm install --offline --no-audit --no-fund sparqljs 2>&1 | tail -5; echo "exit=$?" — approved
+  ⚙ bash cd /tmp && timeout 60 npm install --offline --no-audit --no-fund sparq…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 24 tool call(s) so far
+[approval] bash: cd /tmp && python3 - <<'EOF'
+p='/tmp/check.py'
+s=open(p).read()
+s=s.replace("""                if enr and enr[0] > TODAY:      # not yet enrolled
+                    continue
+                if grad and grad[0] <= TODAY:   # already graduated
+                    continue""",
+"""                if enr and not (enr[0] <= TODAY):   # not yet enrolled
+                    continue
+                if grad and not (grad[0] > TODAY):   # already graduated
+                    continue""")
+open(p,'w').write(s)
+EOF
+python3 /tmp/check.py | tail -8 — approved
+  ⚙ bash cd /tmp && python3 - <<'EOF' p='/tmp/check.py' s=open(p).read() s=s.re…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 25 tool call(s) so far
+  │ No SPARQL engine is available offline, so I'll write a small evaluator th…
+  ⚙ write /tmp/sparql_eval.py
+    ⚠ write /tmp/sparql_eval.py — refused (outside sandbox)
+  deepseek-v4.1-flash — 26 tool call(s) so far
+  │ I'll put the evaluator inside the repo temporarily (tool writes are repo-…
+[approval] write .tmp_eval/sparql_eval.py (+621 −0) [new file] — approved
+  ⚙ write .tmp_eval/sparql_eval.py
+    ✓ write .tmp_eval/sparql_eval.py (+621 −0)
+  deepseek-v4.1-flash — 27 tool call(s) so far
+[approval] bash: cd /app && python3 .tmp_eval/sparql_eval.py university_graph.ttl solution.sparql — approved
+  ⚙ bash cd /app && python3 .tmp_eval/sparql_eval.py university_graph.ttl solut…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 28 tool call(s) so far
+  │ The @prefix extraction happened after? No: prefixes are extracted first, …
+  │ Ah — the comment strip `re.sub(r'#[^\n]*', '', text)` removes `#` inside …
+[approval] bash: cd /app && python3 - <<'EOF'
+p='.tmp_eval/sparql_eval.py'
+s=open(p).read()
+s=s.replace("""    text = re.sub(r'#[^\\n]*', '', text)
+    for m in re.finditer""", """    for m in re.finditer""")
+s=s.replace("""    text = re.sub(r'@prefix[^\\n]*', '', text)""",
+"""    text = re.sub(r'(?m)^[ \\t]*#[^\\n]*', '', text)""")
+open(p,'w').write(s)
+EOF
+cd /app && python3 .tmp_eval/sparql_eval.py university_graph.ttl solution.sparql — approved
+  ⚙ bash cd /app && python3 - <<'EOF' p='.tmp_eval/sparql_eval.py' s=open(p).re…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 29 tool call(s) so far
+  │ The `@prefix` in the query file... The query has PREFIX keyword, not @pre…
+  │ Change word pattern to: `[A-Za-z_][\w\-]*(?::(?:[\w\-]+)?)?`.
+  │ But then a bare variable-less word like "a" matches. Fine.
+[approval] bash: cd /app && python3 - <<'EOF'
+p='.tmp_eval/sparql_eval.py'
+s=open(p).read()
+s=s.replace(r"""    | (?P<word>[A-Za-z_][\w\-]*(?::[\w\-]+(?:\.[\w\-]+)*)?)""",
+            r"""    | (?P<word>[A-Za-z_][\w\-]*(?::(?:[\w\-]+(?:\.[\w\-]+)*)?)?)""")
+open(p,'w').write(s)
+EOF
+cd /app && python3 .tmp_eval/sparql_eval.py university_graph.ttl solution.sparql — approved
+  ⚙ bash cd /app && python3 - <<'EOF' p='.tmp_eval/sparql_eval.py' s=open(p).re…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 30 tool call(s) so far
+  │ Because select item loop stops at WHERE, but then parse_group is called w…
+  │ Also the group_concat alias parse: items loop — after var ?professorName …
+[approval] bash: cd /app && python3 - <<'EOF'
+p='.tmp_eval/sparql_eval.py'
+s=open(p).read()
+s=s.replace("""                raise SyntaxError(f'bad select item {self.peek()!r}')
+        where = self.parse_group()""","""                raise SyntaxError(f'bad select item {self.peek()!r}')
+        self.accept('WHERE')
+        where = self.parse_group()""")
+open(p,'w').write(s)
+EOF
+cd /app && python3 .tmp_eval/sparql_eval.py university_graph.ttl solution.sparql — approved
+  ⚙ bash cd /app && python3 - <<'EOF' p='.tmp_eval/sparql_eval.py' s=open(p).re…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 31 tool call(s) so far
+  │ In parse_triples, pred 'a' → I set p = ('iri','a') then check `if p == ('…
+  │ Remove those three lines.
+[approval] bash: cd /app && python3 - <<'EOF'
+p='.tmp_eval/sparql_eval.py'
+s=open(p).read()
+s=s.replace("""            if p == ('iri', 'a'):
+                raise SyntaxError('rdf:type not expandable')
+""","")
+open(p,'w').write(s)
+EOF
+cd /app && python3 .tmp_eval/sparql_eval.py university_graph.ttl solution.sparql — approved
+  ⚙ bash cd /app && python3 - <<'EOF' p='.tmp_eval/sparql_eval.py' s=open(p).re…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 32 tool call(s) so far
+  [tools] 32/256 calls — continuing (leg 2)
+  deepseek-v4.1-flash — leg 2, 32 call(s) so far
+  │ Trailing token `{`? After parsing outer group we must have consumed all. …
+  │ Hmm trailing '{' at what index? Perhaps in parse_group, when encountering…
+  │ Let me fix: in group branch:
+  │ … 9 more line(s) — /think show for all
+[approval] bash: cd /app && python3 - <<'EOF'
+p='.tmp_eval/sparql_eval.py'
+s=open(p).read()
+s=s.replace("""                if self.peek(1) is not None and self.peek(1).text.upper() == 'SELECT':
+                    self.next()
+                    elems.append(('sub', self.parse_select()))""",
+"""                if self.peek(1) is not None and self.peek(1).text.upper() == 'SELECT':
+                    self.next()
+                    sub = self.parse_select()
+                    self.expect('}')
+                    elems.append(('sub', sub))""")
+open(p,'w').write(s)
+EOF
+cd /app && python3 .tmp_eval/sparql_eval.py university_graph.ttl solution.sparql — approved
+  ⚙ bash cd /app && python3 - <<'EOF' p='.tmp_eval/sparql_eval.py' s=open(p).re…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 33 tool call(s) so far
+  │ My parser expects a trailing '.' before '}', which SPARQL doesn't require…
+[approval] bash: cd /app && python3 - <<'EOF'
+p='.tmp_eval/sparql_eval.py'
+s=open(p).read()
+s=s.replace("""            if self.peek().text == ';':
+                self.next()
+                if self.peek().text == '.':
+                    self.next()
+                    return triples
+                continue
+            self.expect('.')
+            return triples""",
+"""            if self.peek().text == ';':
+                self.next()
+                if self.peek().text == '.':
+                    self.next()
+                    return triples
+                continue
+            if self.peek().text == '.':
+                self.next()
+            return triples""")
+open(p,'w').write(s)
+EOF
+cd /app && python3 .tmp_eval/sparql_eval.py university_graph.ttl solution.sparql — approved
+  ⚙ bash cd /app && python3 - <<'EOF' p='.tmp_eval/sparql_eval.py' s=open(p).re…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 34 tool call(s) so far
+  │ Filter expr `!BOUND(?enrolledOn) || ?enrolledOn <= "..."^^xsd:date` — the…
+  │ Also the lexer pattern order: put op before iri anyway.
+[approval] bash: cd /app && python3 - <<'EOF'
+p='.tmp_eval/sparql_eval.py'
+s=open(p).read()
+s=s.replace(r"""    | (?P<iri><[^>]*>)""", r"""    | (?P<op>\|\||&&|!=|<=|>=)
+    | (?P<iri><[^\s>]*>)""")
+s=s.replace(r"""    | (?P<op>\|\||&&|!=|<=|>=)
+    | (?P<num>""", r"""    | (?P<num>""")
+open(p,'w').write(s)
+EOF
+cd /app && python3 .tmp_eval/sparql_eval.py university_graph.ttl solution.sparql — approved
+  ⚙ bash cd /app && python3 - <<'EOF' p='.tmp_eval/sparql_eval.py' s=open(p).re…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 35 tool call(s) so far
+  │ 0 rows — a loader bug: TTL `a` is stored as the literal "a" while the que…
+[approval] bash: cd /app && python3 - <<'EOF'
+p='.tmp_eval/sparql_eval.py'
+s=open(p).read()
+s=s.replace("""            p = 'a' if p == 'a' else expand(p)""",
+            """            p = RDF_TYPE if p == 'a' else expand(p)""")
+# move RDF_TYPE definition above loader
+s=s.replace("PREFIXES = {}\n", "PREFIXES = {}\nRDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'\n", 1)
+s=s.replace("RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'\n\n\ndef match_pattern", "\ndef match_pattern")
+open(p,'w').write(s)
+EOF
+cd /app && python3 .tmp_eval/sparql_eval.py university_graph.ttl solution.sparql — approved
+  ⚙ bash cd /app && python3 - <<'EOF' p='.tmp_eval/sparql_eval.py' s=open(p).re…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 36 tool call(s) so far
+  │ No rows; let me debug step by step in the evaluator (check triple count f…
+[approval] bash: cd /app && python3 - <<'EOF'
+import sys
+sys.path.insert(0,'.tmp_eval')
+import sparql_eval as E
+t = E.load_turtle('university_graph.ttl')
+print(len(t))
+print([x for x in t if x[1]=='a'][:3])
+print(sum(1 for x in t if x[1]==E.RDF_TYPE))
+print([x for x in t if x[0].endswith('Orfeas_Menis')])
+EOF — approved
+  ⚙ bash cd /app && python3 - <<'EOF' import sys sys.path.insert(0,'.tmp_eval')…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 37 tool call(s) so far
+  [retry] timed out (deadline now 599996ms) — attempt 1 of 3, waiting 500ms
+  │ Bug: literal values keep a trailing `"` (my `body[1:]` keeps the closing …
+[approval] bash: cd /app && python3 - <<'EOF'
+p='.tmp_eval/sparql_eval.py'
+s=open(p).read()
+s=s.replace("""def parse_term_text(t):
+    if t.startswith('"'):
+        body, _, dt = t.partition('"^^')
+        lex = body[1:]
+        return ('lit', lex, expand(dt) if dt else None)""",
+"""def parse_term_text(t):
+    if t.startswith('"'):
+        body, _, dt = t.partition('"^^')
+        lex = body[1:-1]
+        return ('lit', lex, expand(dt) if dt else None)""")
+s=s.replace("""        if tok.kind == 'str':
+            body, _, dt = tok.text.partition('"^^')
+            lex = body[1:]""",
+"""        if tok.kind == 'str':
+            body, _, dt = tok.text.partition('"^^')
+            lex = body[1:-1]""")
+open(p,'w').write(s)
+EOF
+cd /app && python3 .tmp_eval/sparql_eval.py university_graph.ttl solution.sparql — approved
+  ⚙ bash cd /app && python3 - <<'EOF' p='.tmp_eval/sparql_eval.py' s=open(p).re…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 38 tool call(s) so far
+  │ Now let me run control variants to prove each clause actually filters (no…
+[approval] bash: cd /app && python3 - <<'EOF'
+import sys, re
+sys.path.insert(0,'.tmp_eval')
+import sparql_eval as E
+t = E.load_turtle('university_graph.ttl')
+base = open('solution.sparql').read()
+
+def run(q):
+    p = E.Parser(E.tokenize(q)); query = p.parse_query()
+    return [(r.get('professorName',('','',''))[1], r.get('countries',('','',''))[1]) for r in E.run_query(query, t)]
+
+print("baseline:", run(base))
+# control 1: drop EU VALUES -> all full professors, so EU filter is doing work
+q1 = base.replace('"AT" "BE" "BG" "HR" "CY" "CZ" "DK" "EE" "FI" "FR"\n        "DE" "GR" "HU" "IE" "IT" "LV" "LT" "LU" "MT" "NL"\n        "PL" "PT" "RO" "SK" "SI" "ES" "SE"', '"US" "CH"')
+print("non-EU only (CH/US as 'EU'):", run(q1))
+# control 2: threshold > 12 -> impossible
+print("threshold >12:", run(base.replace('> 10', '> 12')))
+# control 3: threshold > 11 -> 12-student depts
+print("threshold >11:", run(base.replace('> 10', '> 11')))
+# control 4: ignore graduation dates -> counts change
+print("no grad filter:", run(base.replace('FILTER(!BOUND(?graduatedOn) || ?graduatedOn > "2025-08-16"^^xsd:date)', '')))
+# control 5: no role filter -> assistants included if they qualify
+print("no rank filter:", run(base.replace('FILTER(!REGEX(LCASE(?role), "assistant|associate|adjunct|visiting|emeritus|lecturer|teaching"))','')))
+# control 6: reference date before all graduations
+print("today=2024-02-01:", run(base.replace('2025-08-16', '2024-02-01')))
+EOF — approved
+  ⚙ bash cd /app && python3 - <<'EOF' import sys, re sys.path.insert(0,'.tmp_ev…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 39 tool call(s) so far
+  │ All clauses demonstrably filter (removing any one changes results). Now l…
+[approval] bash: cd /app && python3 .tmp_eval/sparql_eval.py university_graph.ttl solution.sparql && rm -rf .tmp_eval && ls -a /app && echo "--- solution.sparql ---" && cat solution.sparql — approved
+  ⚙ bash cd /app && python3 .tmp_eval/sparql_eval.py university_graph.ttl solut…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 40 tool call(s) so far
+`/app/solution.sparql` is written and verified.
+
+**What the query does** (reference date 2025-08-16):
+
+1. **Full professors** — `uni:role` contains "professor" but not `assistant|associate|adjunct|visiting|emeritus|lecturer|teaching`.
+2. **EU department** — a sub-select requiring at least one `worksIn` department whose `belongsTo` university has a `locatedInCountry` in an explicit `VALUES` list of the 27 ISO alpha-2 codes of EU member states as of 2025-08-16 (`GR` for Greece, etc.).
+3. **Big department** — a grouped sub-select per professor/department counting `COUNT(DISTINCT ?student)` over students enrolled in courses `isTaughtIn` that department, keeping only students enrolled on/before and not graduated by the reference date (`HAVING ... > 10`).
+4. The outer pattern walks every department the professor works in to build `GROUP_CONCAT(DISTINCT ?country; separator=", ")`.
+
+**How it was checked:** no SPARQL engine, pip or network exists in this sandbox, so I wrote a throwaway minimal SPARQL 1.1 evaluator (BGP, OPTIONAL, FILTER, VALUES, sub-SELECT, GROUP BY/HAVING, COUNT DISTINCT, GROUP_CONCAT, ORDER BY), ran the actual query file against the Turtle, and then ran ablation controls to confirm no clause passes vacuously (removing the EU filter, the rank filter, or the graduation filter each changes the result; raising the threshold to `>12` empties it). Result:
+
+```
+Aristotle Tympas   GR
+Orfeas Menis       GR, US
+Pepe Attanasio     PT, GR
+```
+
+John Smith (US only), Marie Dubois (Sorbonne: 6 current students), and the two assistant professors are correctly excluded. The temporary evaluator was deleted; `/app` now holds only `solution.sparql` plus the original files.
+
+One caveat: `GROUP_CONCAT` ordering is by spec undefined, so a `PT, GR` vs `GR, PT` difference is engine-dependent — the country *sets* are what the query guarantees.
+
+[refusal] role=implementor model=deepseek-v4.1-flash tools=40 surface=59338fa2ec97

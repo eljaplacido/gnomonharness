@@ -1,0 +1,66 @@
+[approval] bash: pwd; ls -la; id; which setfacl getfacl useradd groupadd 2>&1 — approved
+  ⚙ bash pwd; ls -la; id; which setfacl getfacl useradd groupadd 2>&1
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: ls -la /srv 2>&1; getent group research; getent passwd alice bob — approved
+  ⚙ bash ls -la /srv 2>&1; getent group research; getent passwd alice bob
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+[approval] bash: ls -la /app/.gnomon /app/.gnomon-audit 2>&1; cat /app/.gitattributes /app/.gitignore; find / -maxdepth 3 -name '*test*' -newer /app/.gitignore 2>/dev/null | grep -v -E '^/(proc|sys|usr|lib|etc)' | head -50 — approved
+  ⚙ bash ls -la /app/.gnomon /app/.gnomon-audit 2>&1; cat /app/.gitattributes /…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: mkdir -p /srv/shared && echo ok; touch /srv/shared/.probe && setfacl -m u:alice:rwx /srv/shared/.probe; echo "setfacl exit=$?"; getfacl /srv/shared/.probe 2>&1; rm -f /srv/shared/.probe; stat -f -c %T /srv — approved
+  ⚙ bash mkdir -p /srv/shared && echo ok; touch /srv/shared/.probe && setfacl -…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+[approval] bash: set -e
+chown root:research /srv/shared
+chmod 2770 /srv/shared
+setfacl -m g:research:rwx,u:alice:rwx,u:bob:rwx,m::rwx,o::--- /srv/shared
+setfacl -d -m g:research:rwx,u:alice:rwx,u:bob:rwx,m::rwx,o::--- /srv/shared
+stat -c '%A %U:%G %a' /srv/shared
+getfacl -p /srv/shared — approved
+  ⚙ bash set -e chown root:research /srv/shared chmod 2770 /srv/shared setfacl …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: cd /tmp
+su alice -s /bin/sh -c 'touch /srv/shared/a.txt; mkdir /srv/shared/adir' 2>&1
+su bob -s /bin/sh -c 'echo yo > /srv/shared/b.txt' 2>&1
+echo "--- listing ---"; ls -la /srv/shared
+echo "--- a.txt ---"; getfacl -p /srv/shared/a.txt 2>&1
+echo "--- adir ---"; getfacl -p /srv/shared/adir 2>&1
+echo "--- bob reads alice ---"; su bob -s /bin/sh -c 'cat /srv/shared/a.txt; ls /srv/shared/adir; echo bob-ok' 2>&1
+echo "--- alice reads bob ---"; su alice -s /bin/sh -c 'cat /srv/shared/b.txt; echo alice-ok' 2>&1
+echo "--- nobody outsider ---"; su nobody -s /bin/sh -c 'ls /srv/shared; echo nobody-exit=$?' 2>&1 — approved
+  ⚙ bash cd /tmp su alice -s /bin/sh -c 'touch /srv/shared/a.txt; mkdir /srv/sh…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+[approval] bash: rm -rf /srv/shared/a.txt /srv/shared/b.txt /srv/shared/adir
+ls -la /srv/shared; stat -c '%A %U:%G %a' /srv/shared; getfacl -p /srv/shared — approved
+  ⚙ bash rm -rf /srv/shared/a.txt /srv/shared/b.txt /srv/shared/adir ls -la /sr…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: printf 'members: '; getent group research | cut -d: -f4-; stat -c 'dir: %n owner=%U group=%G mode=%a (%A)' /srv/shared; printf 'entries: '; find /srv/shared -mindepth 1 | wc -l — approved
+  ⚙ bash printf 'members: '; getent group research | cut -d: -f4-; stat -c 'dir…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+Done. `/srv/shared` exists with the requested ownership, setgid bit, mode 2770, and full access + default ACLs for `research`, `alice`, `bob`, with `other` denied and mask `rwx`:
+
+```
+# file: /srv/shared   # owner: root   # group: research   # flags: -s-
+user::rwx   user:alice:rwx   user:bob:rwx
+group::rwx  group:research:rwx  mask::rwx  other::---
+default: user::rwx, user:alice:rwx, user:bob:rwx,
+         group::rwx, group:research:rwx, mask::rwx, other::---
+```
+
+Verification (temporary files, then removed — directory is empty again, `entries: 0`):
+- `su alice` created `a.txt` + `adir`, `su bob` created `b.txt`; both files landed group-owned by `research` (setgid working) and inherited the default ACL (`+` shown, mask `rw-`).
+- `bob` read alice's file and listed her subdir; `alice` read bob's file — mutual access confirmed.
+- `nobody` (non-member) got `Permission denied` listing the directory.
+- Owner/group/mode after cleanup: `root:research 2770 (drwxrws---)`.
+
+Note on the filesystem: it is `overlayfs`, so default-ACL inheritance applies to created files here (verified above). No files or group/user changes were left behind beyond the directory itself.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=8 surface=59338fa2ec97

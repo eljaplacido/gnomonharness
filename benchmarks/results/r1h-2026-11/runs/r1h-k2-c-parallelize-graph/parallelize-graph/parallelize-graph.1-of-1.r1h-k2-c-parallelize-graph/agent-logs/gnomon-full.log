@@ -1,0 +1,1398 @@
+  │ I'll start by inspecting the repository and checking the environment.
+[approval] bash: pwd; ls -la; echo "---"; head -5 test 2>/dev/null; wc -l test 2>/dev/null — approved
+  ⚙ bash pwd; ls -la; echo "---"; head -5 test 2>/dev/null; wc -l test 2>/dev/n…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: which upc umpic gcc make wget curl 2>&1; echo "---"; ls /usr/local/bin 2>/dev/null | head -30; echo "---"; cat /etc/os-release 2>/dev/null | head -5 — approved
+  ⚙ bash which upc umpic gcc make wget curl 2>&1; echo "---"; ls /usr/local/bin…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  │ No UPC compiler present. Let me start the Berkeley UPC download/build in …
+  ⚙ bash cd /tmp && timeout 300 wget -q https://upc.lbl.gov/download/release/be…
+    ⚠ bash — refused (network = false)
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: cd /app; awk -F'\t' '{print length($1), $2}' test | sort | uniq -c | sort -rn | head -20; echo "---"; cat .gitignore; echo "---gnom attributes"; cat .gitattributes — approved
+  ⚙ bash cd /app; awk -F'\t' '{print length($1), $2}' test | sort | uniq -c | s…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ Network is disabled in this sandbox. Let me check whether Berkeley UPC is…
+[approval] bash: ls /opt /usr/local /root /tmp 2>&1; echo "=== find upc binaries ==="; find / -xdev \( -name 'upcc' -o -name 'upcrun' -o -name 'upc*' -o -name 'berkeley_upc*' \) -maxdepth 6 2>/dev/null | grep -v '^/proc' | head -40 — approved
+  ⚙ bash ls /opt /usr/local /root /tmp 2>&1; echo "=== find upc binaries ==="; …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: ls /var/cache/apt/archives/*.deb 2>/dev/null | head; echo "--- apt list upc"; apt-cache policy berkeley-upc 2>&1 | head -5; echo "--- dpkg"; dpkg -l 2>/dev/null | grep -i upc | head — approved
+  ⚙ bash ls /var/cache/apt/archives/*.deb 2>/dev/null | head; echo "--- apt lis…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  │ No UPC compiler and no network access, so Berkeley UPC can't be installed…
+[approval] bash: cd /app; echo "== unique kmers =="; cut -f1 test | sort -u | wc -l; echo "== kmer lengths =="; cut -f1 test | awk '{print length($0)}' | sort -u; echo "== ext length check =="; awk -F'\t' 'NF!=2 || length($2)!=2' test | head; echo "== chars =="; awk -F'\t' '{print $2}' test | fold -w1 | sort -u | tr '\n' ' ' — approved
+  ⚙ bash cd /app; echo "== unique kmers =="; cut -f1 test | sort -u | wc -l; ec…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: which python3 python g++ nproc 2>&1; echo "---"; nproc; echo "--- file tail"; tail -3 /app/test; echo "--- md5"; md5sum /app/test — approved
+  ⚙ bash which python3 python g++ nproc 2>&1; echo "---"; nproc; echo "--- file…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  │ Network is off, so Berkeley UPC cannot be fetched. Let me check for any e…
+[approval] bash: gcc --version | head -1; echo "--- upc support in gcc?"; echo 'int main(){return 0;}' > /tmp/t.c && gcc -fupc-threads-4 /tmp/t.c -o /tmp/t 2>&1 | head -3; echo "--- clang"; which clang 2>&1; echo "--- libs"; ls /usr/lib/x86_64-linux-gnu 2>/dev/null | grep -i -E 'upc|gasnet|pthread' | head — approved
+  ⚙ bash gcc --version | head -1; echo "--- upc support in gcc?"; echo 'int mai…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: cd /app; python3 - <<'EOF'
+lines=[l.rstrip('\n').split('\t') for l in open('test')]
+print(len(lines), set(len(x[0]) for x in lines))
+km={x[0]:x[1] for x in lines}
+left={}; right={}
+for k,(l,r) in km.items(): left[k]=l; right[k]=r
+# forward pointer: kmer -> suffix kmer if r!='F'
+fwd={}
+for k,(l,r) in km.items():
+    if r!='F':
+        nk=k[1:]+r
+        if nk in km: fwd[k]=nk
+        else: print("MISSING right target",k,r,nk)
+back={}
+for k,(l,r) in km.items():
+    if l!='F':
+        pk=l+k[:-1]
+        if pk in km: back[k]=pk
+        else: print("MISSING left target",k,l)
+        # consistency
+        if pk in km and fwd.get(pk)!=k: print("INCONSIST", k, pk, fwd.get(pk))
+print("fwd edges",len(fwd),"back edges",len(back))
+# indegree
+indeg={k:0 for k in km}
+for k,v in fwd.items(): indeg[v]+=1
+sources=[k for k in km if left[k]=='F' or k not in back]
+print("sources",len(sources))
+sinks=[k for k in km if right[k]=='F' or k not in fwd]
+print("sinks",len(sinks))
+print("indeg>1",sum(1 for v in indeg.values() if v>1), "outdeg(via ext)", "n/a")
+# walk all chains from sources
+visited=set(); chains=[]
+for s in sources:
+    cur=s; ch=[s]; visited.add(s)
+    while cur in fwd:
+        cur=fwd[cur]; ch.append(cur); visited.add(cur)
+    chains.append(ch)
+print("chains",len(chains),"lengths",sorted(len(c) for c in chains)[-5:], "total kmers covered", len(visited), "unvisited", len(km)-len(visited))
+print("contig lengths", [len(c)+18 for c in chains])
+EOF — approved
+  ⚙ bash cd /app; python3 - <<'EOF' lines=[l.rstrip('\n').split('\t') for l in …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+  │ No network and no UPC toolchain on this box. I'll write a real UPC implem…
+[approval] write dbg_core.h (+219 −0) [new file] — approved
+  ⚙ write dbg_core.h
+    ✓ write dbg_core.h (+219 −0)
+  deepseek-v4.1-flash — 11 tool call(s) so far
+[approval] write serial.c (+231 −0) [new file] — approved
+  ⚙ write serial.c
+    ✓ write serial.c (+231 −0)
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  │ That draft has leftover cruft that won't compile. Let me rewrite it clean…
+[approval] write serial.c (+86 −121) — approved
+  ⚙ write serial.c
+    ✓ write serial.c (+86 −121)
+  deepseek-v4.1-flash — 13 tool call(s) so far
+[approval] bash: cd /app && gcc -O2 -Wall -Wextra -DDBG_LOCAL -o serial serial.c 2>&1 | head -30; echo "exit=$?"; ls -la serial — approved
+  ⚙ bash cd /app && gcc -O2 -Wall -Wextra -DDBG_LOCAL -o serial serial.c 2>&1 |…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+[approval] bash: cd /app && DBG_TRACE=1 ./serial test /app/serial.out; echo "exit=$?"; echo "--- contigs:"; wc -l /app/serial.out; awk '{print length($0)}' /app/serial.out | sort -n | tr '\n' ' '; echo; head -c 120 /app/serial.out — approved
+  ⚙ bash cd /app && DBG_TRACE=1 ./serial test /app/serial.out; echo "exit=$?"; …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 15 tool call(s) so far
+  │ Serial output matches the independent analysis (6 contigs, lengths 227/38…
+[approval] bash: cd /app && python3 - <<'EOF'
+recs=[l.rstrip('\n').split('\t') for l in open('test')]
+km={k:(l,r) for k,lr in recs for l,r in [lr]}
+succ={};pred={}
+for k,(l,r) in km.items():
+    if r!='F' and (k[1:]+r) in km: succ[k]=k[1:]+r
+    if l!='F' and (l+k[:-1]) in km: pred[k]=l+k[:-1]
+indeg={k:0 for k in km}
+for a,b in succ.items(): indeg[b]+=1
+# chains: start at indeg==0 or already-visited boundary; emulate walk rule
+vis=set(); out=[]
+starts=[k for k in km if indeg[k]==0]+[k for k in km if indeg[k]!=0]
+for s in starts:
+    if s in vis: continue
+    vis.add(s); cur=s; contig=cur
+    while cur in succ:
+        n=succ[cur]
+        if indeg[n]!=1 or n in vis: break
+        vis.add(n); contig+=n[-1]; cur=n
+    out.append(contig)
+exp=set(out)
+got=set(l.rstrip('\n') for l in open('serial.out'))
+print("python contigs:",len(out),"serial contigs:",len(got))
+print("identical as sets:", exp==got)
+print("missing:",len(exp-got),"extra:",len(got-exp))
+for x in exp-got: print("  MISSING len",len(x))
+for x in got-exp: print("  EXTRA len",len(x))
+EOF — approved
+  ⚙ bash cd /app && python3 - <<'EOF' recs=[l.rstrip('\n').split('\t') for l in…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+  │ Serial output is verified against an independent implementation. Now I'll…
+[approval] write dbg_core.h (+97 −46) — approved
+  ⚙ write dbg_core.h
+    ✓ write dbg_core.h (+97 −46)
+  deepseek-v4.1-flash — 17 tool call(s) so far
+  │ Now the final shared core, using a view abstraction so serial and paralle…
+[approval] write dbg_core.h (+239 −105) — approved
+  ⚙ write dbg_core.h
+    ✓ write dbg_core.h (+239 −105)
+  deepseek-v4.1-flash — 18 tool call(s) so far
+[approval] edit dbg_core.h (+1 −2) — approved
+  ⚙ edit dbg_core.h
+    ✓ edit dbg_core.h (+1 −2)
+  deepseek-v4.1-flash — 19 tool call(s) so far
+  │ Now serial.c on the view API.
+[approval] write serial.c (+61 −62) — approved
+  ⚙ write serial.c
+    ✓ write serial.c (+61 −62)
+  deepseek-v4.1-flash — 20 tool call(s) so far
+[approval] bash: cd /app && gcc -O2 -Wall -Wextra -DDBG_LOCAL -o serial serial.c 2>&1 | head -30; DBG_TRACE=1 ./serial test /app/serial.out; wc -l /app/serial.out; awk '{print length($0)}' /app/serial.out | sort -n | tr '\n' ' '; echo; python3 -c "
+exp=set(l.rstrip('\n') for l in open('/app/serial.out'))
+print('n contigs',len(exp))" — approved
+  ⚙ bash cd /app && gcc -O2 -Wall -Wextra -DDBG_LOCAL -o serial serial.c 2>&1 |…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 21 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'EOF'
+recs=[l.rstrip('\n').split('\t') for l in open('test')]
+km={k:(l,r) for k,lr in recs for l,r in [lr]}
+succ={}; 
+for k,(l,r) in km.items():
+    if r!='F' and (k[1:]+r) in km: succ[k]=k[1:]+r
+indeg={k:0 for k in km}
+for a,b in succ.items(): indeg[b]+=1
+vis=set(); out=[]
+for s in [k for k in km if indeg[k]!=1]+[k for k in km if indeg[k]==1]:
+    if s in vis: continue
+    vis.add(s); cur=s; c=s
+    while cur in succ:
+        n=succ[cur]
+        if indeg[n]!=1 or n in vis: break
+        vis.add(n); c+=n[-1]; cur=n
+    out.append(c)
+# leftover cycles
+for s in km:
+    if s in vis: continue
+    cyc=[s]; vis.add(s); cur=s
+    while succ.get(cur)!=s:
+        cur=succ[cur]; cyc.append(cur); vis.add(cur)
+    i=min(range(len(cyc)), key=lambda j: cyc[j])
+    rot=cyc[i:]+cyc[:i]
+    c=rot[0]+''.join(succ[x][-1] for x in rot[:-1])
+    out.append(c)
+got=[l.rstrip('\n') for l in open('/app/serial.out')]
+print("py:",len(out),"serial:",len(got))
+print("set-equal:", set(out)==set(got))
+print("missing:", set(out)-set(got))
+print("extra:", set(got)-set(out))
+EOF — approved
+  ⚙ bash cd /app && python3 - <<'EOF' recs=[l.rstrip('\n').split('\t') for l in…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 22 tool call(s) so far
+  │ Now I'll replace the traversal tail of the core with a race-free, graph-o…
+  deepseek-v4.1-flash — 23 tool call(s) so far
+  Model API error: 503 Service Unavailable
+  Retrying for up to 60s in case it is starting up.
+  [retry] endpoint erroring (5xx) — attempt 1, waiting 500ms (500ms of 60000ms grace)
+  ⚙ read dbg_core.h
+    ✓ read dbg_core.h — 403 lines
+[approval] write dbg_core.h (+275 −179) — approved
+  ⚙ write dbg_core.h
+    ✓ write dbg_core.h (+275 −179)
+  deepseek-v4.1-flash — 24 tool call(s) so far
+[approval] edit dbg_core.h (+2 −0) — approved
+  ⚙ edit dbg_core.h
+    ✓ edit dbg_core.h (+2 −0)
+  deepseek-v4.1-flash — 25 tool call(s) so far
+  │ Now update serial.c to the four-pass API and rebuild.
+[approval] bash: cd /app && python3 - <<'PY'
+import re
+s=open('serial.c').read()
+old=s[s.index('    /* ---- traversal ---'):s.index('    if (trace)')]
+new='''    /* ---- traversal ----------------------------------------------------- */
+    contig_cap = 4 * (k + 64) > 4096 ? 4 * (k + 64) : 4096;
+    contig = (char *)malloc((size_t)contig_cap);
+    path = (int32_t *)malloc(sizeof(int32_t) * (size_t)nnodes);
+    if (!contig || !path) die("out of memory");
+    v.bound = (uint32_t)nnodes;
+
+    {
+        int out_fd = open(out_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int pass, i2;
+
+        if (out_fd < 0) die("cannot open output file");
+        /* Four passes, one per k-mer each, so that the parallel version can put
+         * a barrier between them; see the phase notes in dbg_core.h. */
+        for (pass = 0; pass < 4; pass++) {
+            for (i2 = 0; i2 < nnodes; i2++) {
+                int cl;
+                switch (pass) {
+                case 0: cl = dbg_pass_sources(&v, k, (int32_t)i2, path, nnodes,
+                                              contig, contig_cap); break;
+                case 1: cl = dbg_pass_merges(&v, k, (int32_t)i2, path, nnodes,
+                                             contig, contig_cap); break;
+                case 2: cl = dbg_pass_cycles(&v, k, (int32_t)i2, path, nnodes,
+                                             contig, contig_cap); break;
+                default: cl = dbg_pass_residual(&v, k, (int32_t)i2, path, nnodes,
+                                                contig, contig_cap); break;
+                }
+                if (cl > 0) {
+                    contig[cl] = '\\n';
+                    if (write(out_fd, contig, (size_t)(cl + 1)) != cl + 1)
+                        die("write failed");
+                    ncontigs++;
+                }
+            }
+        }
+        close(out_fd);
+    }
+
+'''
+s=s.replace(old,new)
+open('serial.c','w').write(s)
+PY
+gcc -O2 -Wall -Wextra -DDBG_LOCAL -o serial serial.c 2>&1|head -20; echo "build=$?"; DBG_TRACE=1 ./serial test /app/serial.out; wc -l serial.out — approved
+  ⚙ bash cd /app && python3 - <<'PY' import re s=open('serial.c').read() old=s[…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 26 tool call(s) so far
+  │ Stale `serial` binary ran. Let me fix the remaining API references in ser…
+  deepseek-v4.1-flash — 27 tool call(s) so far
+  ⚙ read serial.c
+    ✓ read serial.c — 197 lines
+[approval] bash: cd /app && python3 - <<'PY'
+s=open('serial.c').read()
+s=s.replace(""" * All graph logic comes from dbg_core.h, the same header the UPC version
+ * includes, so the two programs cannot disagree about where a unitig starts or
+ * stops.  This file only does I/O, allocation and the two traversal phases.""",
+""" * All graph logic comes from dbg_core.h, the same header the UPC version
+ * includes, so the two programs cannot disagree about where a unitig starts or
+ * stops.  This file only does I/O, allocation and the four traversal passes.""")
+s=s.replace("    v.total_nodes = (uint32_t)nnodes;","    v.bound = (uint32_t)nnodes;")
+s=s.replace("""        int rc = dbg_base_code(dbg_right(&v, (int32_t)i));
+        int32_t t;
+        if (rc < 0) continue;
+        t = dbg_lookup(&v, dbg_succ_key(dbg_key(&v, (int32_t)i), k, rc));
+        if (t >= 0) dbg_add_indeg(&v, t, 1);""",
+"""        int32_t t = dbg_succ(&v, k, (int32_t)i);   /* read-only successor */
+        if (t >= 0) dbg_add_indeg(&v, t, 1);""")
+s=s.replace("""    v.bound = (uint32_t)nnodes;
+
+    {""","""    {""")
+open('serial.c','w').write(s)
+PY
+gcc -O2 -Wall -Wextra -DDBG_LOCAL -o serial serial.c 2>&1|head -20; echo "---"; DBG_TRACE=1 ./serial test /app/serial.out; wc -l serial.out; awk '{print length($0)}' serial.out|sort -n|tr '\n' ' ' — approved
+  ⚙ bash cd /app && python3 - <<'PY' s=open('serial.c').read() s=s.replace(""" …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 28 tool call(s) so far
+  │ Found the bug: my path-emission rule was wrong. Let me correct the traver…
+[approval] bash: cd /app && python3 - <<'PY'
+s=open('dbg_core.h').read()
+head=s[:s.index('/* ---- emission ---')]
+tail=s[s.index('#endif /* DBG_CORE_H */'):]
+new='''/* ---- emission -------------------------------------------------------- */
+
+/* Write the bases of path[0..L-1] to buf -- k bases for the first k-mer, one per
+ * further k-mer -- and NUL terminate; returns the contig length.  `offset` is
+ * where the walk starts inside the (cyclically indexed) path. */
+static inline int dbg_write_bases(const dbg_view *v, int k, const int32_t *path,
+                                  int L, int offset, char *buf, int bufsz)
+{
+    int i, len;
+
+    if (bufsz < k + L + 2) return 0;
+    dbg_unpack(dbg_key(v, path[offset % L]), k, buf);
+    len = k;
+    for (i = 1; i < L; i++) {
+        uint64_t nk = dbg_key(v, path[(offset + i) % L]);
+        buf[len++] = dbg_base_char[nk & 3];
+    }
+    buf[len] = '\\0';
+    return len;
+}
+
+/* Claim every k-mer of the path, atomically.  Returns 1 on success.  On failure
+ * the k-mers this call took are released, so the graph is left as it was. */
+static inline int dbg_claim_all(const dbg_view *v, const int32_t *path, int L)
+{
+    int i;
+
+    for (i = 0; i < L; i++)
+        if (!dbg_claim(v, path[i])) {
+            int j;
+            for (j = 0; j < i; j++) dbg_unclaim(v, path[j]);
+            return 0;
+        }
+    return 1;
+}
+
+/* Emit the unitig that `head` starts, if head starts one.
+ *
+ * Preconditions : path holds pathmax (~ the number of k-mers) slots, buf bufsz
+ *                 bytes, and head's indegree is not 1.
+ * Postconditions: the contig is written to buf and its length returned iff the
+ *                 forward walk from head ends at a k-mer with no successor (a
+ *                 sink or an un-stored extension) rather than closing back onto
+ *                 head, and this call wins all of the walk's k-mers.  A walk
+ *                 that closes onto head is a cycle: it must be emitted once,
+ *                 rotated to its smallest k-mer, which dbg_emit_cycle does.
+ *                 Returns 0 otherwise and leaves the graph unchanged. */
+static inline int dbg_emit_path(const dbg_view *v, int k, int32_t head,
+                                int32_t *path, int pathmax, char *buf, int bufsz)
+{
+    int L = dbg_scan_path(v, k, head, path, pathmax);
+    int len;
+
+    if (dbg_succ(v, k, path[L - 1]) == head) return 0;   /* a cycle, not a path */
+    if (!dbg_claim_all(v, path, L)) return 0;
+    len = dbg_write_bases(v, k, path, L, 0, buf, bufsz);
+    if (len > 0) {
+        int i;
+        for (i = 0; i < L; i++) dbg_mark_written(v, path[i]);
+    }
+    return len;
+}
+
+/* Emit the cycle that contains `gid`, rotated to its smallest k-mer.
+ *
+ * Postconditions: the contig is written to buf and its length returned iff gid
+ *                 lies on a cycle, gid is that cycle's smallest k-mer, no k-mer
+ *                 of the cycle has been written yet, and this call wins them
+ *                 all.  Returns 0 otherwise and leaves the graph unchanged.
+ *                 Every cycle therefore yields exactly one contig, whichever
+ *                 thread sees it first. */
+static inline int dbg_emit_cycle(const dbg_view *v, int k, int32_t gid,
+                                 int32_t *path, int pathmax, char *buf, int bufsz)
+{
+    int L, closed, best = 0, step, len;
+
+    if (dbg_covered(v, gid)) return 0;
+    if (!dbg_is_cycle_min(v, k, gid)) return 0;
+    L = dbg_scan_cycle(v, k, gid, path, pathmax, &closed);
+    if (!closed) return 0;
+    if (!dbg_claim_all(v, path, L)) return 0;
+    for (step = 1; step < L; step++)
+        if (dbg_key(v, path[step]) < dbg_key(v, path[best])) best = step;
+    len = dbg_write_bases(v, k, path, L, best, buf, bufsz);
+    if (len > 0) {
+        for (step = 0; step < L; step++) dbg_mark_written(v, path[step]);
+    }
+    return len;
+}
+
+/* ---- the traversal, one k-mer at a time ------------------------------ */
+/* A pass is called once per k-mer and returns the length of the contig it made,
+ * or 0.  Splitting the traversal into passes lets the parallel version put a
+ * barrier between them, which is what makes the result independent of the
+ * schedule: every k-mer is examined by every pass, so it does not matter which
+ * thread examines which k-mer, nor in what order. */
+
+/* Pass 1: a source -- indegree 0 -- starts a unitig. */
+static inline int dbg_pass_sources(const dbg_view *v, int k, int32_t gid,
+                                   int32_t *path, int pathmax,
+                                   char *buf, int bufsz)
+{
+    if (dbg_get_indeg(v, gid) != 0) return 0;
+    return dbg_emit_path(v, k, gid, path, pathmax, buf, bufsz);
+}
+
+/* Pass 2: a merge point -- indegree >= 2 -- starts a unitig, unless its walk
+ * closes onto itself, in which case pass 3 emits it as a cycle. */
+static inline int dbg_pass_merges(const dbg_view *v, int k, int32_t gid,
+                                  int32_t *path, int pathmax,
+                                  char *buf, int bufsz)
+{
+    int32_t indeg = dbg_get_indeg(v, gid);
+    if (indeg < 2) return 0;
+    return dbg_emit_path(v, k, gid, path, pathmax, buf, bufsz);
+}
+
+/* Pass 3: whatever k-mers passes 1 and 2 did not cover are on cycles -- simple
+ * ones whose k-mers all have indegree 1, or ones whose only head is a merge
+ * point.  Each such cycle is emitted by its smallest k-mer, once. */
+static inline int dbg_pass_cycles(const dbg_view *v, int k, int32_t gid,
+                                  int32_t *path, int pathmax,
+                                  char *buf, int bufsz)
+{
+    return dbg_emit_cycle(v, k, gid, path, pathmax, buf, bufsz);
+}
+
+'''
+open('dbg_core.h','w').write(head+new+tail)
+PY
+sed -i 's/ \* 3. cycles through merge points    -- read-only scan, emitted by their min/ * 3. cycles                         -- emitted by their smallest k-mer/; /^ \*   4\. remaining simple cycles/d' dbg_core.h
+grep -n "phases\|^ \*   [0-9]\." dbg_core.h | head — approved
+  ⚙ bash cd /app && python3 - <<'PY' s=open('dbg_core.h').read() head=s[:s.inde…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 29 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+s=open('dbg_core.h').read()
+old=s[s.index(" * Phases, in order"):s.index("#ifndef DBG_CORE_H")]
+new=""" * Phases, in order, with a barrier between them in the parallel program:
+ *   1. sources     -- k-mers with indegree 0 begin a path;
+ *   2. merge points-- k-mers with indegree >= 2 begin a path;
+ *   3. cycles      -- every k-mer still uncovered: each cycle is emitted once,
+ *                     by its smallest k-mer, rotated to start there.
+ * Passes 1 and 2 emit paths and claim their k-mers; pass 3 only looks at
+ * k-mers nobody claimed, so the order within a pass cannot affect the result.
+ */
+"""
+s=s.replace(old,new)
+open('dbg_core.h','w').write(s)
+PY
+grep -n "^static inline int dbg_pass" dbg_core.h; gcc -O2 -Wall -Wextra -DDBG_LOCAL -o serial serial.c 2>&1|head -20 — approved
+  ⚙ bash cd /app && python3 - <<'PY' s=open('dbg_core.h').read() old=s[s.index(…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 30 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+s=open('serial.c').read()
+s=s.replace("""        /* Four passes, one per k-mer each, so that the parallel version can put
+         * a barrier between them; see the phase notes in dbg_core.h. */
+        for (pass = 0; pass < 4; pass++) {""",
+"""        /* Three passes, each one a scan over every k-mer, so that the parallel
+         * version can put a barrier between them; see the phase notes at the
+         * top of dbg_core.h. */
+        for (pass = 0; pass < 3; pass++) {""")
+s=s.replace("""                case 2: cl = dbg_pass_cycles(&v, k, (int32_t)i2, path, nnodes,
+                                             contig, contig_cap); break;
+                default: cl = dbg_pass_residual(&v, k, (int32_t)i2, path, nnodes,
+                                                contig, contig_cap); break;""",
+"""                default: cl = dbg_pass_cycles(&v, k, (int32_t)i2, path, nnodes,
+                                              contig, contig_cap); break;""")
+open('serial.c','w').write(s)
+PY
+gcc -O2 -Wall -Wextra -DDBG_LOCAL -o serial serial.c 2>&1|head -20; echo "--- run"; DBG_TRACE=1 ./serial test /app/serial.out; wc -l serial.out; awk '{print length($0)}' serial.out|sort -n|tr '\n' ' ' — approved
+  ⚙ bash cd /app && python3 - <<'PY' s=open('serial.c').read() s=s.replace(""" …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 31 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'EOF'
+recs=[l.rstrip('\n').split('\t') for l in open('test')]
+km={k:(l,r) for k,lr in recs for l,r in [lr]}
+succ={}
+for k,(l,r) in km.items():
+    if r!='F' and (k[1:]+r) in km: succ[k]=k[1:]+r
+indeg={k:0 for k in km}
+for a,b in succ.items(): indeg[b]+=1
+vis=set(); out=[]
+def walk(s):
+    c=s; cur=s; vis.add(s)
+    while cur in succ:
+        n=succ[cur]
+        if indeg[n]!=1 or n in vis: break
+        vis.add(n); c+=n[-1]; cur=n
+    return c
+# pass1 sources
+for s in [k for k in km if indeg[k]==0]: out.append(walk(s))
+# pass2 merge points
+for s in [k for k in km if indeg[k]>=2]: out.append(walk(s))
+# pass3 cycles
+for s in km:
+    if s in vis: continue
+    cyc=[s]; vis.add(s); cur=s
+    while succ.get(cur)!=s:
+        cur=succ[cur]; cyc.append(cur); vis.add(cur)
+    i=min(range(len(cyc)), key=lambda j: cyc[j])
+    rot=cyc[i:]+cyc[:i]
+    out.append(rot[0]+''.join(succ[x][-1] for x in rot[:-1]))
+got=[l.rstrip('\n') for l in open('/app/serial.out')]
+print("threads=1 spec:",len(out),"serial:",len(got),"set-equal:",set(out)==set(got))
+print("missing",set(out)-set(got)); print("extra",set(got)-set(out))
+EOF — approved
+  ⚙ bash cd /app && python3 - <<'EOF' recs=[l.rstrip('\n').split('\t') for l in…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 32 tool call(s) so far
+  [tools] 32/256 calls — continuing (leg 2)
+  deepseek-v4.1-flash — leg 2, 32 call(s) so far
+  │ Serial is correct and verified against an independent implementation of t…
+[approval] write pgen.upc (+276 −0) [new file] — approved
+  ⚙ write pgen.upc
+    ✓ write pgen.upc (+276 −0)
+  deepseek-v4.1-flash — 33 tool call(s) so far
+  │ Correcting the owner computation to work for any thread count, then writi…
+[approval] bash: cd /app && python3 - <<'PY'
+s=open('dbg_core.h').read()
+s=s.replace("""static inline uint32_t dbg_owner_of(const dbg_view *v, uint64_t key)
+{
+    uint32_t b = dbg_hash(key) & (v->bpt * v->nthreads - 1u);
+    return b >> v->bpt_shift;
+}""",
+"""/* Bucket -> owner.  bpt is a power of two, so the low log2(bpt) bits select the
+ * bucket inside the owner and the rest select the owner; nthreads need not be a
+ * power of two. */
+static inline uint32_t dbg_owner_of(const dbg_view *v, uint64_t key)
+{
+    uint32_t nb = v->bpt * v->nthreads;
+    return (dbg_hash(key) % nb) >> v->bpt_shift;
+}""")
+s=s.replace("""#ifdef DBG_LOCAL
+    dbg_node_at(v, gid)->indeg += val;
+#else
+    DBG_SHP dbg_node *n = dbg_node_at(v, gid);
+    upc_fetch_add(&n->indeg, val);
+#endif""",
+"""#ifdef DBG_LOCAL
+    dbg_node_at(v, gid)->indeg += val;
+#else
+    DBG_SHP dbg_node *n = dbg_node_at(v, gid);
+    upc_fetch_add((DBG_SHP int *)&n->indeg, val);
+#endif""")
+s=s.replace("""#else
+    return upc_fetch_add(f, 1) == 0;   /* returns the previous value */
+#endif""",
+"""#else
+    return upc_fetch_add(f, 1) == 0;   /* returns the previous value */
+#endif""")
+open('dbg_core.h','w').write(s)
+PY
+gcc -O2 -Wall -Wextra -DDBG_LOCAL -o serial serial.c 2>&1|head; DBG_TRACE=1 ./serial test /app/serial.out; wc -l serial.out — approved
+  ⚙ bash cd /app && python3 - <<'PY' s=open('dbg_core.h').read() s=s.replace(""…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 34 tool call(s) so far
+[approval] write pgen.upc (+159 −138) — approved
+  ⚙ write pgen.upc
+    ✓ write pgen.upc (+159 −138)
+  deepseek-v4.1-flash — 35 tool call(s) so far
+  │ The shuffle can be eliminated entirely: each thread already reads the fil…
+[approval] write pgen.upc (+142 −123) — approved
+  ⚙ write pgen.upc
+    ✓ write pgen.upc (+142 −123)
+  deepseek-v4.1-flash — 36 tool call(s) so far
+  │ Now let me fix the details: per-thread capacity needs an exact count, and…
+[approval] bash: cd /app && grep -n "DBG_ADD\|nlocal\|bound;\|uint32_t bpt_shift" dbg_core.h | head -20; echo "---"; grep -n "dbg_add_indeg" -A6 dbg_core.h | head -20 — approved
+  ⚙ bash cd /app && grep -n "DBG_ADD\|nlocal\|bound;\|uint32_t bpt_shift" dbg_c…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 37 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+s=open('dbg_core.h').read()
+s=s.replace("""    uint32_t bound;        /* #k-mers overall, bounds every scan   */
+} dbg_view;""",
+"""    uint32_t bound;        /* #k-mers overall, bounds every scan   */
+    DBG_SHP int32_t *nlocal;   /* k-mers each thread actually owns  */
+} dbg_view;""")
+s=s.replace("""#ifdef DBG_LOCAL
+    dbg_node_at(v, gid)->indeg += val;
+#else
+    DBG_SHP dbg_node *n = dbg_node_at(v, gid);
+    upc_fetch_add((DBG_SHP int *)&n->indeg, val);""",
+"""#ifdef DBG_LOCAL
+    dbg_node_at(v, gid)->indeg += val;
+#else
+    DBG_SHP dbg_node *n = dbg_node_at(v, gid);
+    upc_fetch_add(&n->indeg, val);""")
+open('dbg_core.h','w').write(s)
+PY
+grep -n "total_nodes\|nlocal" dbg_core.h — approved
+  ⚙ bash cd /app && python3 - <<'PY' s=open('dbg_core.h').read() s=s.replace(""…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 38 tool call(s) so far
+  │ Now fix the UPC program to use an exact per-thread capacity (counted in a…
+[approval] bash: cd /app && python3 - <<'PY'
+s=open('pgen.upc').read()
+
+# 1. run_pass: use view->nlocal
+s=s.replace("        int nlocal = (int)v->nlocal[t];","        int nlocal = (int)v->nlocal[t];")
+
+# 2. main: add pre-count pass, exact lpp, nlocal allocation
+s=s.replace("""    shared dbg_node *nodes;
+    shared int32_t *heads;
+    shared dbg_flag *vis;""",
+"""    shared dbg_node *nodes;
+    shared int32_t *heads;
+    shared dbg_flag *vis;
+    shared int32_t *nlocal;""")
+
+s=s.replace("""    /* No thread can own more k-mers than the input has records, and the
+     * uniform per-thread chunk must fit it; the same bound sizes the tables. */
+    lpp = (uint32_t)nrec + 1u;
+
+    nodes = (shared dbg_node *)
+        upc_all_alloc((size_t)THREADS, sizeof(dbg_node) * (size_t)lpp);
+    heads = (shared int32_t *)
+        upc_all_alloc((size_t)THREADS, sizeof(int32_t) * (size_t)bpt);
+    vis = (shared dbg_flag *)
+        upc_all_alloc((size_t)THREADS, sizeof(dbg_flag) * (size_t)lpp);
+    if (!nodes || !heads || !vis) fail_all("shared heap exhausted");""",
+"""    /* The shared chunks must be uniform, so first count exactly how many
+     * records this thread will own; every thread then takes the maximum, which
+     * is what upc_all_alloc() needs (same size argument on every thread). */
+    {
+        const char *p = buf, *end = buf + buf_len;
+        uint64_t key;
+        int left, right;
+        uint32_t mine = 0;
+
+        while (parse_rec(&p, end, k, &key, &left, &right))
+            if (dbg_owner_of(&view, key) == me) mine++;
+        if (me == 0) for (t = 0; t < nt; t++) s_cnt[t] = 0;
+        upc_barrier;
+        s_cnt[me] = (int32_t)mine;
+        upc_barrier;
+        for (t = 0; t < nt; t++)
+            if ((uint32_t)s_cnt[t] > lpp) lpp = (uint32_t)s_cnt[t];
+        lpp += 1u;                       /* +1: the chunk is never empty */
+    }
+
+    nodes = (shared dbg_node *)
+        upc_all_alloc((size_t)THREADS, sizeof(dbg_node) * (size_t)lpp);
+    heads = (shared int32_t *)
+        upc_all_alloc((size_t)THREADS, sizeof(int32_t) * (size_t)bpt);
+    vis = (shared dbg_flag *)
+        upc_all_alloc((size_t)THREADS, sizeof(dbg_flag) * (size_t)lpp);
+    nlocal = (shared int32_t *) upc_all_alloc(1, sizeof(int32_t) * (size_t)THREADS);
+    if (!nodes || !heads || !vis || !nlocal) fail_all("shared heap exhausted");""")
+
+s=s.replace("    view.bound = (uint32_t)nrec;","    view.bound = (uint32_t)nrec;\n    view.nlocal = nlocal;")
+s=s.replace("        uint32_t t;\n        size_t i;\n        for (t = 0; t < nt; t++) {","        uint32_t t;\n        size_t i;\n        for (t = 0; t < nt; t++) {")
+
+# 3. declare s_cnt
+s=s.replace("    static shared int s_nlocal[DBG_MAXTHREADS];","    static shared int32_t s_cnt[DBG_MAXTHREADS];")
+
+# 4. build phase: store nlocal
+s=s.replace("""    free(buf);
+    buf = NULL;
+    s_nlocal[me] = (int)next_free;
+    upc_barrier;""",
+"""    free(buf);
+    buf = NULL;
+    nlocal[me] = (int32_t)next_free;
+    upc_barrier;""")
+
+# 5. traversal uses lpp as pathmax -> use nrec bound instead
+s=s.replace("    path = (int32_t *)xalloc(sizeof(int32_t) * (size_t)lpp);",
+            "    path = (int32_t *)xalloc(sizeof(int32_t) * (size_t)nrec);")
+s=s.replace("""    ncontigs += run_pass(&view, dbg_pass_sources, 0, k, (int)lpp, path,
+                         contig, contig_cap, out);
+    ncontigs += run_pass(&view, dbg_pass_merges, 1, k, (int)lpp, path,
+                         contig, contig_cap, out);
+    ncontigs += run_pass(&view, dbg_pass_cycles, 2, k, (int)lpp, path,
+                         contig, contig_cap, out);""",
+"""    ncontigs += run_pass(&view, dbg_pass_sources, 0, k, nrec, path,
+                         contig, contig_cap, out);
+    ncontigs += run_pass(&view, dbg_pass_merges, 1, k, nrec, path,
+                         contig, contig_cap, out);
+    ncontigs += run_pass(&view, dbg_pass_cycles, 2, k, nrec, path,
+                         contig, contig_cap, out);""")
+
+# 6. trace block
+s=s.replace("""        for (t = 0; t < nt; t++) total += s_nlocal[t];""",
+"""        for (t = 0; t < nt; t++) total += (int)nlocal[t];""")
+open('pgen.upc','w').write(s)
+PY
+grep -n "s_nlocal\|s_cnt\|nlocal\|lpp" pgen.upc | head -30 — approved
+  ⚙ bash cd /app && python3 - <<'PY' s=open('pgen.upc').read() # 1. run_pass: u…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 39 tool call(s) so far
+  │ Let me rewrite `main` cleanly with the correct order of operations.
+[approval] bash: cd /app && python3 - <<'PY'
+s=open('pgen.upc').read()
+start=s.index('/* -------------------------------------------------------------------- */\n/* main')
+new_main = '''/* -------------------------------------------------------------------- */
+/* main                                                                 */
+/* -------------------------------------------------------------------- */
+int main(int argc, char **argv)
+{
+    const char *in_path = (argc > 1) ? argv[1] : "test";
+    const char *out_dir = (argc > 2) ? argv[2] : ".";
+    static shared int s_nrec, s_k;
+    static shared int32_t s_cnt[DBG_MAXTHREADS];
+    int nrec = 0, k = 0;
+    char *buf;
+    size_t buf_len = 0;
+
+    uint32_t nt = (uint32_t)THREADS, me = (uint32_t)MYTHREAD, t;
+    uint32_t nbuckets, bpt, bpt_shift;
+    uint32_t lpp = 1, next_free = 0;
+    dbg_view view;
+    int32_t *path;
+    char *contig;
+    int contig_cap, ncontigs = 0;
+    char out_path[512];
+    FILE *out;
+    int trace = (getenv("DBG_TRACE") != NULL);
+    shared dbg_node *nodes;
+    shared int32_t *heads;
+    shared dbg_flag *vis;
+    shared int32_t *nlocal;
+
+    /* ---- 1. size the problem ----------------------------------------- */
+    buf = read_file(in_path, &buf_len);
+    if (!buf) {
+        if (me == 0) fprintf(stderr, "[pgen] error: cannot read %s\\n", in_path);
+        upc_global_exit(EXIT_FAILURE);
+    }
+    survey(buf, buf_len, &nrec, &k);
+    if (me == 0) { s_nrec = nrec; s_k = k; }
+    upc_barrier;
+    nrec = s_nrec;
+    k = s_k;
+    if (nrec <= 0 || k <= 0 || k > 64) fail_all("bad or empty input");
+
+    /* ---- 2. graph geometry, identical on every thread ----------------- */
+    nbuckets = dbg_next_pow2((uint32_t)nrec * 2u);
+    while (nbuckets < nt * 2u) nbuckets <<= 1;
+    bpt = nbuckets / nt;                    /* buckets per thread, power of 2 */
+    bpt_shift = 0;
+    while ((1u << bpt_shift) < bpt) bpt_shift++;
+
+    memset(&view, 0, sizeof view);
+    view.nthreads = nt;
+    view.bpt = bpt;
+    view.bpt_shift = bpt_shift;
+    view.bound = (uint32_t)nrec;
+
+    /* ---- 3. how many records each thread will own --------------------
+     * The owner of a k-mer is a function of its hash alone, so counting here
+     * gives exactly the number of insertions the build phase will make, and the
+     * shared chunks can be sized to the largest owner instead of to nrec. */
+    {
+        const char *p = buf, *end = buf + buf_len;
+        uint64_t key;
+        int left, right;
+        int32_t mine = 0;
+
+        while (parse_rec(&p, end, k, &key, &left, &right))
+            if (dbg_owner_of(&view, key) == me) mine++;
+        if (me == 0) for (t = 0; t < nt; t++) s_cnt[t] = 0;
+        upc_barrier;
+        s_cnt[me] = mine;
+        upc_barrier;
+        for (t = 0; t < nt; t++)
+            if ((uint32_t)s_cnt[t] > lpp) lpp = (uint32_t)s_cnt[t];
+        lpp += 1u;                          /* a chunk is never empty */
+    }
+
+    /* ---- 4. shared graph: one chunk per thread ----------------------- */
+    nodes = (shared dbg_node *)
+        upc_all_alloc((size_t)THREADS, sizeof(dbg_node) * (size_t)lpp);
+    heads = (shared int32_t *)
+        upc_all_alloc((size_t)THREADS, sizeof(int32_t) * (size_t)bpt);
+    vis = (shared dbg_flag *)
+        upc_all_alloc((size_t)THREADS, sizeof(dbg_flag) * (size_t)lpp);
+    nlocal = (shared int32_t *)
+        upc_all_alloc(1, sizeof(int32_t) * (size_t)THREADS);
+    if (!nodes || !heads || !vis || !nlocal) fail_all("shared heap exhausted");
+
+    for (t = 0; t < nt; t++) {
+        view.node_tab[t] = nodes + (size_t)t * lpp;
+        view.head_tab[t] = heads + (size_t)t * bpt;
+        view.vis_tab[t] = vis + (size_t)t * lpp;
+    }
+    view.nlocal = nlocal;
+    {
+        size_t i;
+        /* each thread clears only its own chunk: nothing else touches it */
+        for (i = 0; i < bpt; i++) heads[(size_t)me * bpt + i] = -1;
+        for (i = 0; i < lpp; i++) {
+            view.node_tab[me][i].key = 0;
+            vis[(size_t)me * lpp + i] = 0;
+        }
+    }
+    upc_barrier;
+
+    /* ---- 5. build: insert exactly the records this thread owns -------
+     * Every insertion is local: no remote references, no atomics, and the
+     * per-k-mer ownership rule guarantees no record is inserted twice. */
+    {
+        const char *p = buf, *end = buf + buf_len;
+        uint64_t key;
+        int left, right;
+
+        while (parse_rec(&p, end, k, &key, &left, &right)) {
+            if (dbg_owner_of(&view, key) != me) continue;
+            (void)dbg_insert_local(&view, me, key, left, right, &next_free);
+        }
+    }
+    free(buf);
+    buf = NULL;
+    nlocal[me] = (int32_t)next_free;
+    upc_barrier;
+
+    /* ---- 6. indegree: a stored right extension is an incoming edge ----
+     * The target can live on another thread, hence the atomic add; the edge is
+     * counted by the thread owning its tail, so each edge is counted once. */
+    {
+        uint32_t i;
+        for (i = 0; i < next_free; i++) {
+            int32_t gid = dbg_make_id(me, i);
+            int32_t succ = dbg_succ(&view, k, gid);
+            if (succ >= 0) dbg_add_indeg(&view, succ, 1);
+        }
+    }
+
+    /* ---- 7. traverse ------------------------------------------------- */
+    contig_cap = 4 * (k + 64) > 4096 ? 4 * (k + 64) : 4096;
+    contig = (char *)xalloc((size_t)contig_cap);
+    path = (int32_t *)xalloc(sizeof(int32_t) * (size_t)nrec);
+
+    if (snprintf(out_path, sizeof out_path, "%s/pgen_%d.out", out_dir, MYTHREAD)
+            >= (int)sizeof out_path)
+        fail_all("output path too long");
+    out = fopen(out_path, "wb");
+    if (!out) fail_all("cannot open output file");
+
+    ncontigs += run_pass(&view, dbg_pass_sources, 0, k, nrec, path,
+                         contig, contig_cap, out);
+    ncontigs += run_pass(&view, dbg_pass_merges, 1, k, nrec, path,
+                         contig, contig_cap, out);
+    ncontigs += run_pass(&view, dbg_pass_cycles, 2, k, nrec, path,
+                         contig, contig_cap, out);
+    fclose(out);
+    free(path);
+    free(contig);
+
+    /* ---- summary ----------------------------------------------------- */
+    if (trace) {
+        static shared int s_print;
+        if (me == 0) s_print = 0;
+        upc_barrier;
+        if (me == 0) {
+            int total = 0;
+            for (t = 0; t < nt; t++) total += (int)nlocal[t];
+            fprintf(stderr,
+                    "[pgen] threads=%u k=%d records=%d nodes=%d buckets=%u "
+                    "contigs/thread=%d\\n",
+                    nt, k, nrec, total, nbuckets, ncontigs);
+        }
+        (void)s_print;
+    }
+    upc_barrier;
+    return EXIT_SUCCESS;
+}
+'''
+open('pgen.upc','w').write(s[:start]+new_main)
+PY
+grep -c "" pgen.upc — approved
+  ⚙ bash cd /app && python3 - <<'PY' s=open('pgen.upc').read() start=s.index('/…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 40 tool call(s) so far
+  │ Now the build story. Since network is off, I'll write the exact UPC sourc…
+[approval] bash: cd /app && grep -n "shared\|MYTHREAD\|THREADS\|upc_" pgen.upc | grep -v "^\s*\*" | head -40 — approved
+  ⚙ bash cd /app && grep -n "shared\|MYTHREAD\|THREADS\|upc_" pgen.upc | grep -…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 41 tool call(s) so far
+  │ Now I'll finalize `pgen.upc` (removing fragile bits) and the UPC-SMP comp…
+[approval] bash: cd /app && python3 - <<'PY'
+s=open('pgen.upc').read()
+s=s.replace("""static shared int g_failed;
+
+static void fail_all(const char *msg)
+{
+    if (MYTHREAD == 0) {
+        fprintf(stderr, "[pgen] error: %s\\n", msg);
+        g_failed = 1;
+    }
+    upc_barrier;
+    upc_global_exit(EXIT_FAILURE);
+}""",
+"""/* Report and leave.  upc_global_exit() terminates the whole job, so a failing
+ * thread does not strand the others in a barrier. */
+static void fail_all(const char *msg)
+{
+    fprintf(stderr, "[pgen] thread %d: error: %s\\n", (int)MYTHREAD, msg);
+    fflush(stderr);
+    upc_global_exit(EXIT_FAILURE);
+}""")
+s=s.replace("    static shared int s_nrec, s_k;\n    static shared int32_t s_cnt[DBG_MAXTHREADS];",
+            "    shared int s_nrec, s_k;\n    shared int32_t s_cnt[DBG_MAXTHREADS];")
+s=s.replace("""static int run_pass(const dbg_view *v, dbg_pass_fn fn, int pass_no, int k,
+                    int lpp, int32_t *path, char *contig, int contig_cap,
+                    FILE *out)""",
+"""static int run_pass(const dbg_view *v, dbg_pass_fn fn, int k, int pathmax,
+                    int32_t *path, char *contig, int contig_cap, FILE *out)""")
+s=s.replace("""            int cl = fn(v, k, gid, path, lpp, contig, contig_cap);""",
+"""            int cl = fn(v, k, gid, path, pathmax, contig, contig_cap);""")
+s=s.replace("""    (void)pass_no;
+    return found;""","""    return found;""")
+s=s.replace("""    ncontigs += run_pass(&view, dbg_pass_sources, 0, k, nrec, path,
+                         contig, contig_cap, out);
+    ncontigs += run_pass(&view, dbg_pass_merges, 1, k, nrec, path,
+                         contig, contig_cap, out);
+    ncontigs += run_pass(&view, dbg_pass_cycles, 2, k, nrec, path,
+                         contig, contig_cap, out);""",
+"""    /* One barrier per pass (inside run_pass), so a pass sees everything the
+     * previous one claimed. */
+    ncontigs += run_pass(&view, dbg_pass_sources, k, nrec, path,
+                         contig, contig_cap, out);
+    ncontigs += run_pass(&view, dbg_pass_merges, k, nrec, path,
+                         contig, contig_cap, out);
+    ncontigs += run_pass(&view, dbg_pass_cycles, k, nrec, path,
+                         contig, contig_cap, out);""")
+s=s.replace("""    /* ---- summary ----------------------------------------------------- */
+    if (trace) {
+        static shared int s_print;
+        if (me == 0) s_print = 0;
+        upc_barrier;
+        if (me == 0) {
+            int total = 0;
+            for (t = 0; t < nt; t++) total += (int)nlocal[t];
+            fprintf(stderr,
+                    "[pgen] threads=%u k=%d records=%d nodes=%d buckets=%u "
+                    "contigs/thread=%d\\n",
+                    nt, k, nrec, total, nbuckets, ncontigs);
+        }
+        (void)s_print;
+    }
+    upc_barrier;""",
+"""    /* ---- summary ----------------------------------------------------- */
+    if (trace) {
+        upc_barrier;
+        if (me == 0) {
+            int total = 0;
+            for (t = 0; t < nt; t++) total += (int)nlocal[t];
+            fprintf(stderr,
+                    "[pgen] threads=%u k=%d records=%d nodes=%d buckets=%u "
+                    "contigs(this thread)=%d\\n",
+                    nt, k, nrec, total, nbuckets, ncontigs);
+        }
+    }
+    upc_barrier;""")
+s=s.replace('#include <upc.h>\n','#include <upc.h>\n')
+open('pgen.upc','w').write(s)
+PY
+grep -n "include\|g_failed\|pass_no" pgen.upc | head — approved
+  ⚙ bash cd /app && python3 - <<'PY' s=open('pgen.upc').read() s=s.replace("""s…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 42 tool call(s) so far
+  │ Now the UPC compatibility layer (pthreads) so `pgen.upc` compiles and run…
+[approval] write upc_smp.h (+61 −0) [new file] — approved
+  ⚙ write upc_smp.h
+    ✓ write upc_smp.h (+61 −0)
+  deepseek-v4.1-flash — 43 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+s=open('pgen.upc').read()
+
+s=s.replace("""/* Report and leave.  upc_global_exit() terminates the whole job, so a failing
+ * thread does not strand the others in a barrier. */
+static void fail_all(const char *msg)""","""/* Report and leave.  upc_global_exit() terminates the whole job, so a failing
+ * thread does not strand the others in a barrier. */
+static void fail_all(const char *msg)""")
+
+# shared scalars -> upc_all_alloc'ed control block (portable to the shim build)
+s=s.replace("""    static shared int s_nrec, s_k;
+    static shared int32_t s_cnt[DBG_MAXTHREADS];""",
+"""    shared pgen_ctl *ctl;              /* problem size, agreed by all threads */
+    shared int32_t *s_cnt;             /* records owned per thread            */""")
+
+s=s.replace("""    /* ---- 1. size the problem ----------------------------------------- */
+    buf = read_file(in_path, &buf_len);
+    if (!buf) {
+        if (me == 0) fprintf(stderr, "[pgen] error: cannot read %s\\n", in_path);
+        upc_global_exit(EXIT_FAILURE);
+    }
+    survey(buf, buf_len, &nrec, &k);
+    if (me == 0) { s_nrec = nrec; s_k = k; }
+    upc_barrier;
+    nrec = s_nrec;
+    k = s_k;
+    if (nrec <= 0 || k <= 0 || k > 64) fail_all("bad or empty input");""",
+"""    /* ---- 1. size the problem ----------------------------------------- */
+    buf = read_file(in_path, &buf_len);
+    if (!buf) {
+        if (me == 0) fprintf(stderr, "[pgen] error: cannot read %s\\n", in_path);
+        upc_global_exit(EXIT_FAILURE);
+    }
+    survey(buf, buf_len, &nrec, &k);
+    if (!buf) fail_all("cannot read input file");
+
+    ctl = (shared pgen_ctl *) upc_all_alloc(1, sizeof(pgen_ctl));
+    s_cnt = (shared int32_t *) upc_all_alloc((size_t)nt, sizeof(int32_t));
+    if (!ctl || !s_cnt) fail_all("shared heap exhausted");
+    if (me == 0) { ctl->nrec = nrec; ctl->k = k; }
+    upc_barrier;
+    nrec = ctl->nrec;
+    k = ctl->k;
+    if (nrec <= 0 || k <= 0 || k > 64) fail_all("bad or empty input");""")
+
+# remove the now redundant null check
+s=s.replace("""    survey(buf, buf_len, &nrec, &k);
+    if (!buf) fail_all("cannot read input file");
+""","""    survey(buf, buf_len, &nrec, &k);
+""")
+
+# s_cnt clearing
+s=s.replace("""        if (me == 0) for (t = 0; t < nt; t++) s_cnt[t] = 0;
+        upc_barrier;
+        s_cnt[me] = mine;
+        upc_barrier;""",
+"""        s_cnt[me] = mine;
+        upc_barrier;
+        /* every thread reads the same values now */""")
+
+# add the control struct after the include block
+s=s.replace("""#include "dbg_core.h"
+""","""#include "dbg_core.h"
+
+/* Small shared control block: the problem size that every thread must agree on
+ * before it can size its own allocation. */
+typedef struct {
+    int nrec;
+    int k;
+} pgen_ctl;
+""",1)
+open('pgen.upc','w').write(s)
+PY
+grep -n "ctl\|s_cnt" pgen.upc — approved
+  ⚙ bash cd /app && python3 - <<'PY' s=open('pgen.upc').read() s=s.replace("""/…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 44 tool call(s) so far
+[approval] bash: cd /app && sed -i 's|    shared int32_t s_cnt\[DBG_MAXTHREADS\];|    shared int32_t *s_cnt;|' pgen.upc && sed -n '175,225p' pgen.upc — approved
+  ⚙ bash cd /app && sed -i 's| shared int32_t s_cnt\[DBG_MAXTHREADS\];| shared …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 45 tool call(s) so far
+[approval] bash: cd /app && sed -i 's|^    shared int s_nrec, s_k;$|    shared pgen_ctl *ctl;               /* problem size, agreed by all threads */|' pgen.upc && sed -n '178,186p' pgen.upc — approved
+  ⚙ bash cd /app && sed -i 's|^ shared int s_nrec, s_k;$| shared pgen_ctl *ctl;…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 46 tool call(s) so far
+  │ Now the shim runtime implementation.
+[approval] write upcshim.c (+66 −0) [new file] — approved
+  ⚙ write upcshim.c
+    ✓ write upcshim.c (+66 −0)
+  deepseek-v4.1-flash — 47 tool call(s) so far
+[approval] write pgen_shim.c (+58 −0) [new file] — approved
+  ⚙ write pgen_shim.c
+    ✓ write pgen_shim.c (+58 −0)
+  deepseek-v4.1-flash — 48 tool call(s) so far
+  │ Let me write the shim runtime and launcher consistently in one pass.
+[approval] write upcshim.c (+42 −11) — approved
+  ⚙ write upcshim.c
+    ✓ write upcshim.c (+42 −11)
+  deepseek-v4.1-flash — 49 tool call(s) so far
+[approval] bash: cd /app && rm -f pgen_shim.c && cat > upc.h <<'EOF'
+/* upc.h -- header shim for builds without a UPC compiler.
+ *
+ * pgen.upc includes <upc.h>, which normally is Berkeley UPC's.  This file is
+ * only found on the include path of the shim target (see the Makefile); when
+ * upcc is available it supplies its own <upc.h> and this one is ignored.
+ */
+#ifndef UPC_FORWARDED_
+#define UPC_FORWARDED_
+#include "upc_smp.h"
+#endif
+EOF
+echo ok — approved
+  ⚙ bash cd /app && rm -f pgen_shim.c && cat > upc.h <<'EOF' /* upc.h -- header…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 50 tool call(s) so far
+  │ Let me restructure the shim cleanly: a thread-pool launcher that runs `pg…
+[approval] write upcshim.c (+59 −26) — approved
+  ⚙ write upcshim.c
+    ✓ write upcshim.c (+59 −26)
+  deepseek-v4.1-flash — 51 tool call(s) so far
+[approval] write upcshim.c (+24 −26) — approved
+  ⚙ write upcshim.c
+    ✓ write upcshim.c (+24 −26)
+  deepseek-v4.1-flash — 52 tool call(s) so far
+  │ Now the Makefile with both build paths (real `upcc` when present, shim ot…
+[approval] write Makefile (+123 −0) [new file] — approved
+  ⚙ write Makefile
+    ✓ write Makefile (+123 −0)
+  deepseek-v4.1-flash — 53 tool call(s) so far
+[approval] bash: cd /app && rm -f upc.h && cat > upc.h <<'EOF'
+/* upc.h -- header shim for builds without a UPC compiler.
+ *
+ * pgen.upc includes <upc.h>.  With Berkeley UPC installed, upcc finds its own
+ * <upc.h> first and this file is never seen; on the pthreads compatibility
+ * build (see upcshim.c) this one supplies the subset of the UPC runtime that
+ * pgen.upc uses.
+ */
+#ifndef UPC_FORWARDED_H
+#define UPC_FORWARDED_H
+#include "upc_smp.h"
+#endif
+EOF
+make clean >/dev/null 2>&1; make 2>&1 | tail -20 — approved
+  ⚙ bash cd /app && rm -f upc.h && cat > upc.h <<'EOF' /* upc.h -- header shim …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 54 tool call(s) so far
+[approval] bash: cd /app && make pgen 2>&1 | grep -E "error|Error" | head -20 — approved
+  ⚙ bash cd /app && make pgen 2>&1 | grep -E "error|Error" | head -20
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 55 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PY'
+s=open('Makefile').read()
+s=s.replace("""# shim build: `shared` disappears, pgen's main() is renamed, upcshim.c launches
+# it on pthreads.
+SHIM_SRC  := pgen.upc upcshim.c upc_smp.h upc.h dbg_core.h
+SHIM_OBJ  := pgen_shim.o upcshim.o
+SHIM_DEFS := -DDBG_PARALLEL -UDBG_LOCAL -Dmain=pgen_main""",
+"""# shim build: the `shared` qualifier is compiled away (the shim's shared heap is
+# ordinary memory every thread can reach), pgen's main() is renamed so that
+# upcshim.c can start it once per thread.
+SHIM_SRC  := pgen.upc upcshim.c upc_smp.h upc.h dbg_core.h
+SHIM_OBJ  := pgen_shim.o upcshim.o
+SHIM_DEFS := -Dmain=pgen_main -Dshared=""")
+s=s.replace("""# pgen.upc is compiled with -DDBG_PARALLEL so dbg_core.h declares the UPC
+# `shared` qualifier and the atomic operators.
+UPC_INC   := -DDBG_PARALLEL""","""# dbg_core.h switches to the UPC `shared` qualifier and to the atomic claim
+# operators whenever DBG_LOCAL is not defined, which is what the pgen build is.
+UPC_INC   :=""")
+open('Makefile','w').write(s)
+PY
+make clean >/dev/null 2>&1; make 2>&1 | tail -25 — approved
+  ⚙ bash cd /app && python3 - <<'PY' s=open('Makefile').read() s=s.replace("""#…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 56 tool call(s) so far
+  │ Both build. Let me fix the warning and run the parallel version.
+[approval] bash: cd /app && sed -i 's|    unsigned int n, i;|    unsigned int i;|' upcshim.c && make 2>&1|grep -E "warning|error"|head; echo "=== run 1 thread ==="; rm -f pgen_*.out; UPC_NTHREADS=1 DBG_TRACE=1 ./pgen test .; echo "exit=$?"; ls pgen_*.out 2>/dev/null; wc -l pgen_*.out 2>/dev/null — approved
+  ⚙ bash cd /app && sed -i 's| unsigned int n, i;| unsigned int i;|' upcshim.c …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 57 tool call(s) so far
+  │ Single-thread parallel matches. Now multi-threaded runs.
+[approval] bash: cd /app && for n in 2 3 4 7 8 16 20; do rm -f pgen_*.out; UPC_NTHREADS=$n ./pgen test . || { echo "threads=$n FAILED"; continue; }; cat pgen_*.out | LC_ALL=C sort > /tmp/p.s; LC_ALL=C sort serial.out > /tmp/s.s; if cmp -s /tmp/s.s /tmp/p.s; then echo "threads=$n OK ($(cat pgen_*.out|wc -l) contigs in $(ls pgen_*.out|wc -l) files)"; else echo "threads=$n MISMATCH"; diff /tmp/s.s /tmp/p.s|head -4; fi; done — approved
+  ⚙ bash cd /app && for n in 2 3 4 7 8 16 20; do rm -f pgen_*.out; UPC_NTHREADS…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 58 tool call(s) so far
+  │ The shim's `upc_all_alloc` isn't collective — each thread got its own blo…
+[approval] bash: cd /app && python3 - <<'PY'
+s=open('upcshim.c').read()
+s=s.replace("""void *upc_all_alloc(size_t nblocks, size_t nbytes)
+{
+    size_t total = nblocks * nbytes;
+    void *p;
+
+    if (total == 0) total = 1;
+    p = calloc(1, total);                   /* zeroed, like UPC's shared heap */
+    if (!p) {
+        fprintf(stderr, "[upcshim] shared heap exhausted (%zu bytes)\\n", total);
+        exit(EXIT_FAILURE);
+    }
+    return p;
+}""",
+"""/* upc_all_alloc() is collective in UPC: every thread calls it with the same
+ * arguments and every thread gets a pointer to the same shared block.  The shim
+ * reproduces that with a rendezvous per call.  Threads make their calls in the
+ * same order (pgen's main() is one thread-oblivious control flow), so a shared
+ * slot per call is enough.  The slots are never reused, so no second barrier is
+ * needed to protect a reader. */
+#define UPC_SHIM_MAX_ALLOCS 128
+static void *g_slot[UPC_SHIM_MAX_ALLOCS];
+static unsigned int g_slot_used;
+static __thread unsigned int t_slot;
+
+void *upc_all_alloc(size_t nblocks, size_t nbytes)
+{
+    size_t total = nblocks * nbytes;
+    unsigned int idx = t_slot++;
+    void *p;
+
+    if (idx >= UPC_SHIM_MAX_ALLOCS) {
+        fprintf(stderr, "[upcshim] too many shared allocations\\n");
+        exit(EXIT_FAILURE);
+    }
+    if (t_mythread == 0) {
+        if (total == 0) total = 1;
+        p = calloc(1, total);               /* zeroed, like UPC's shared heap */
+        if (!p) {
+            fprintf(stderr, "[upcshim] shared heap exhausted (%zu bytes)\\n", total);
+            exit(EXIT_FAILURE);
+        }
+        g_slot[idx] = p;
+        __atomic_store_n(&g_slot_used, idx + 1, __ATOMIC_SEQ_CST);
+    }
+    pthread_barrier_wait(&g_barrier);
+    return g_slot[idx];
+}""")
+open('upcshim.c','w').write(s)
+PY
+python3 - <<'PY'
+s=open('/app/upc_smp.h').read()
+s=s.replace("""/* Library entry point: initialise nthreads threads and run body(tid) on each.
+ * The shim build links this instead of a real UPC runtime. */
+typedef void (*upc_shim_body_fn)(unsigned int tid);
+int upc_shim_launch(unsigned int nthreads, upc_shim_body_fn body);
+
+/* A private (non-shared) pointer per thread, in the shim's shared heap.  The
+ * real upc_all_alloc returns a shared address; in the shim the "shared heap" is
+ * plain anonymous memory reachable by every thread, so the pointer is simply a
+ * normal one.  Block and size arguments follow upc_all_alloc's contract. */
+void *upc_all_alloc(size_t nblocks, size_t nbytes);""",
+"""/* Collective, like UPC's: every thread calls it with the same arguments and all
+ * of them receive the same block, which lives in the shim's "shared heap" --
+ * ordinary memory reachable by every thread.  Block and size follow
+ * upc_all_alloc's contract. */
+void *upc_all_alloc(size_t nblocks, size_t nbytes);""")
+s=s.replace("""/* Barrier: sense-reversing, wait for all threads. */""",
+"""/* Barrier: wait until every thread has arrived, like upc_barrier. */""")
+open('/app/upc_smp.h','w').write(s)
+PY
+cd /app && make 2>&1|grep -E "warning|error"|head; echo "=== multi ==="; for n in 1 2 3 4 7 8 16 20; do rm -f pgen_*.out; UPC_NTHREADS=$n ./pgen test . 2>/tmp/err || { echo "threads=$n FAILED: $(head -1 /tmp/err)"; continue; }; cat pgen_*.out|LC_ALL=C sort>/tmp/p.s; LC_ALL=C sort serial.out>/tmp/s.s; cmp -s /tmp/p.s /tmp/s.s && echo "threads=$n OK ($(cat pgen_*.out|wc -l) contigs, $(ls pgen_*.out|wc -l) files)" || { echo "threads=$n MISMATCH"; diff /tmp/s.s /tmp/p.s|head -4; }; done — approved
+  ⚙ bash cd /app && python3 - <<'PY' s=open('upcshim.c').read() s=s.replace("""…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 59 tool call(s) so far
+  │ Parallel matches serial for every thread count. Now let me test the paral…
+[approval] bash: cd /app && python3 - <<'PY'
+import random
+random.seed(7)
+def comp(c): return {'A':'T','C':'G','G':'C','T':'A'}[c]
+def rc(s): return ''.join(comp(c) for c in reversed(s))
+def write(path, kmers):
+    with open(path,'w') as f:
+        for k,(l,r) in kmers.items(): f.write(f"{k}\t{l}{r}\n")
+
+# 1. a pure cycle: ABC... rotations of one circular genome, no sources
+g='ACGTTGCAAGTCCTAGGTCA'*3
+k=15
+cyc={}
+for i in range(len(g)):
+    km=g[i:i+k] if i+k<=len(g) else g[i:]+g[:k-(len(g)-i)]
+    cyc[km]=(g[(i-1)%len(g)], g[(i+k)%len(g)])
+write('/tmp/cycle.txt',cyc)
+print("cycle distinct kmers",len(cyc), "period?", len(g))
+
+# 2. branching: a few genomes sharing prefixes
+kmers={}
+for n in range(40):
+    s=''.join(random.choice('ACGT') for _ in range(60))
+    for i in range(len(s)-k+1):
+        km=s[i:i+k]
+        l='F' if i==0 else s[i-1]
+        r='F' if i+k>=len(s) else s[i+k]
+        if km in kmers:
+            pl,pr=kmers[km]
+            kmers[km]=('F' if pl=='F' and l=='F' else (l if pl=='F' else pl),
+                       'F' if pr=='F' and r=='F' else (r if pr=='F' else pr))
+        else: kmers[km]=(l,r)
+write('/tmp/branch.txt',kmers)
+print("branch kmers",len(kmers))
+
+# 3. duplicate lines + both-strand input
+base={}
+s=''.join(random.choice('ACGT') for _ in range(200))
+for i in range(len(s)-k+1):
+    km=s[i:i+k]
+    base[km]=('F' if i==0 else s[i-1],'F' if i+k>=len(s) else s[i+k])
+lines=[]
+for km,(l,r) in base.items():
+    lines.append(f"{km}\t{l}{r}")
+    lines.append(f"{km}\t{l}{r}")   # duplicate
+    lines.append(f"{rc(km)}\t{comp(r)}{comp(l)}")  # reverse complement
+random.shuffle(lines)
+open('/tmp/strands.txt','w').write('\n'.join(lines)+'\n')
+print("strand lines",len(lines))
+PY
+for f in /tmp/cycle.txt /tmp/branch.txt /tmp/strands.txt; do
+  ./serial $f /tmp/ser.out 2>/dev/null
+  ok=1
+  for n in 1 2 5 8 13; do rm -f /tmp/pg*.out; UPC_NTHREADS=$n ./pgen $f /tmp >/dev/null 2>&1 || ok=0; cat /tmp/pg_*.out 2>/dev/null|LC_ALL=C sort>/tmp/p.s; LC_ALL=C sort /tmp/ser.out>/tmp/s.s; cmp -s /tmp/p.s /tmp/s.s || { echo "$f threads=$n MISMATCH"; ok=0; }; done
+  [ $ok = 1 ] && echo "$f OK: serial $(wc -l < /tmp/ser.out) contigs"
+done — approved
+  ⚙ bash cd /app && python3 - <<'PY' import random random.seed(7) def comp(c): …
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 60 tool call(s) so far
+  │ Two real findings: a pure cycle emits 0 contigs, and branch/strand inputs…
+[approval] bash: cd /app && python3 - <<'PY'
+import random
+random.seed(11)
+k=15
+n=200
+g=''.join(random.choice('ACGT') for _ in range(n))
+lines=[]
+for i in range(n):
+    km=''.join(g[(i+j)%n] for j in range(k))
+    lines.append(f"{km}\t{g[(i-1)%n]}{g[(i+k)%n]}")
+open('/tmp/cyc2.txt','w').write('\n'.join(lines)+'\n')
+print("nodes",len(set(l.split('\t')[0] for l in lines)))
+PY
+./serial /tmp/cyc2.txt /tmp/ser.out; echo "serial exit=$?  contigs=$(wc -l < /tmp/ser.out)"
+rm -f /tmp/pg_*.out; UPC_NTHREADS=1 ./pgen /tmp/cyc2.txt /tmp 2>&1|head -3; echo "pgen contigs=$(cat /tmp/pg_*.out|wc -l)" — approved
+  ⚙ bash cd /app && python3 - <<'PY' import random random.seed(11) k=15 n=200 g…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 61 tool call(s) so far
+  │ Confirmed bug: a pure cycle produces zero contigs. Let me trace the cycle…
+[approval] bash: cd /app && grep -n "dbg_is_cycle_min" -A22 dbg_core.h | head -32; echo "=== scan_cycle ==="; grep -n "dbg_scan_cycle" -A24 dbg_core.h | head -30 — approved
+  ⚙ bash cd /app && grep -n "dbg_is_cycle_min" -A22 dbg_core.h | head -32; echo…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 62 tool call(s) so far
+  │ Found it: `v.bound` was dropped from serial.c during an edit, so the cycl…
+[approval] bash: cd /app && grep -n "v.bound\|view.bound" serial.c pgen.upc; echo "---"; grep -n "contig_cap = 4" serial.c — approved
+  ⚙ bash cd /app && grep -n "v.bound\|view.bound" serial.c pgen.upc; echo "---"…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 63 tool call(s) so far
+[approval] bash: cd /app && sed -n '125,185p' serial.c — approved
+  ⚙ bash cd /app && sed -n '125,185p' serial.c
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 64 tool call(s) so far
+  [tools] 64/256 calls — continuing (leg 3)
+  deepseek-v4.1-flash — leg 3, 64 call(s) so far
+  │ `v.bound` is set. Let me trace why `dbg_is_cycle_min` fails on a real cyc…
+[approval] bash: cd /app && cat > /tmp/cyc3.py <<'PY'
+random=__import__('random'); random.seed(11)
+k=15;n=200
+g=''.join(random.choice('ACGT') for _ in range(n))
+# periodic genome so every k-mer is distinct but the graph is one cycle
+lines=[]
+for i in range(n):
+    km=''.join(g[(i+j)%n] for j in range(k))
+    lines.append(f"{km}\t{g[(i-1)%n]}{g[(i+k)%n]}")
+print(len(set(l.split('\t')[0] for l in lines)))
+open('/tmp/cyc3.txt','w').write('\n'.join(lines)+'\n')
+PY
+python3 /tmp/cyc3.py; ./serial /tmp/cyc3.txt /tmp/ser.out; echo "contigs=$(wc -l</tmp/ser.out)"; DBG_TRACE=1 ./serial /tmp/cyc3.txt /tmp/ser.out; awk -F'\t' '{print $2}' /tmp/cyc3.txt | fold -w1 | sort | uniq -c | tr '\n' ' ' — approved
+  ⚙ bash cd /app && cat > /tmp/cyc3.py <<'PY' random=__import__('random'); rand…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 65 tool call(s) so far
+  │ Found it: `dbg_scan_cycle` stops one step early, so a cycle is never seen…
+[approval] bash: cd /app && python3 - <<'PY'
+s=open('dbg_core.h').read()
+s=s.replace("""    *closed = 0;
+    path[0] = head;
+    while (L < pathmax) {
+        int32_t nxt = dbg_succ(v, k, cur);
+        if (nxt < 0) return L;
+        if (nxt == head) { *closed = 1; return L; }
+        if (dbg_covered(v, nxt)) return L;
+        path[L++] = nxt;
+        cur = nxt;
+    }
+    return L;""",
+"""    *closed = 0;
+    path[0] = head;
+    for (;;) {
+        int32_t nxt = dbg_succ(v, k, cur);
+        /* the closure test has to happen before the space test, otherwise a
+         * cycle whose length equals pathmax would look truncated */
+        if (nxt < 0) return L;
+        if (nxt == head) { *closed = 1; return L; }
+        if (dbg_covered(v, nxt)) return L;
+        if (L >= pathmax) return L;
+        path[L++] = nxt;
+        cur = nxt;
+    }""")
+s=s.replace("""    for (steps = 0; steps < v->bound; steps++) {
+        int32_t nxt = dbg_succ(v, k, cur);""",
+"""    for (steps = 0; steps <= v->bound; steps++) {
+        int32_t nxt = dbg_succ(v, k, cur);""")
+open('dbg_core.h','w').write(s)
+PY
+make 2>&1|grep -E "error|warning"|head -3
+python3 - <<'PY'
+random=__import__('random'); random.seed(11)
+k=15;n=200
+g=''.join(random.choice('ACGT') for _ in range(n))
+lines=[f"{''.join(g[(i+j)%n] for j in range(k))}\t{g[(i-1)%n]}{g[(i+k)%n]}" for i in range(n)]
+open('/tmp/cyc3.txt','w').write('\n'.join(lines)+'\n')
+PY
+./serial /tmp/cyc3.txt /tmp/ser.out; echo "pure cycle: contigs=$(wc -l</tmp/ser.out) len=$(awk '{print length($0)}' /tmp/ser.out)" — approved
+  ⚙ bash cd /app && python3 - <<'PY' s=open('dbg_core.h').read() s=s.replace(""…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 66 tool call(s) so far
+  │ Cycle now yields one contig of k+199 = 214 bases. Now the branch/strand m…
+[approval] bash: cd /app && ./serial /tmp/branch.txt /tmp/s1.txt && rm -f /tmp/pg_*.out && UPC_NTHREADS=1 ./pgen /tmp/branch.txt /tmp && cat /tmp/pg_*.out|LC_ALL=C sort>/tmp/p1.s && LC_ALL=C sort /tmp/s1.txt>/tmp/s1.s && diff /tmp/s1.s /tmp/p1.s | head -5 | cut -c1-60; echo "mismatch lines: $(diff /tmp/s1.s /tmp/p1.s|grep -c '^[<>]')" — approved
+  ⚙ bash cd /app && ./serial /tmp/branch.txt /tmp/s1.txt && rm -f /tmp/pg_*.out…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 67 tool call(s) so far
+  │ `pgen` wrote nothing at all, so let me see its stderr.
+[approval] bash: cd /app && rm -f /tmp/pg_*.out; UPC_NTHREADS=1 ./pgen /tmp/branch.txt /tmp; echo "exit=$?"; ls -la /tmp/pg_*.out 2>&1|head -3; head -2 /tmp/branch.txt — approved
+  ⚙ bash cd /app && rm -f /tmp/pg_*.out; UPC_NTHREADS=1 ./pgen /tmp/branch.txt …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 68 tool call(s) so far
+[approval] bash: cd /app && sed -n '300,340p' pgen.upc — approved
+  ⚙ bash cd /app && sed -n '300,340p' pgen.upc
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 69 tool call(s) so far

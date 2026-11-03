@@ -1,0 +1,1641 @@
+  │ I'll start by inspecting the repository and the Turtle file.
+[approval] bash: ls -la /app && wc -l /app/university_graph.ttl — approved
+  ⚙ bash ls -la /app && wc -l /app/university_graph.ttl
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+[approval] bash: head -200 /app/university_graph.ttl — approved
+  ⚙ bash head -200 /app/university_graph.ttl
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+[approval] bash: sed -n 200,305p /app/university_graph.ttl — approved
+  ⚙ bash sed -n 200,305p /app/university_graph.ttl
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: cd /app && python3 -c "import rdflib; print(rdflib.__version__)" 2>&1; which arq sparql riot 2>&1; node -e "console.log(process.version)" 2>&1 — approved
+  ⚙ bash cd /app && python3 -c "import rdflib; print(rdflib.__version__)" 2>&1;…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+[approval] bash: cd /app && tail -5 university_graph.ttl && grep -c "" university_graph.ttl — approved
+  ⚙ bash cd /app && tail -5 university_graph.ttl && grep -c "" university_graph…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: cd /app && pip install rdflib 2>&1 | tail -3 — approved
+  ⚙ bash cd /app && pip install rdflib 2>&1 | tail -3
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+[approval] bash: cd /app && python3 -m pip install rdflib >/tmp/pip.log 2>&1; echo exit=$?; tail -5 /tmp/pip.log; ls /usr/bin | grep -i -E "python|pip" — approved
+  ⚙ bash cd /app && python3 -m pip install rdflib >/tmp/pip.log 2>&1; echo exit…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: ls /usr/lib/node_modules 2>/dev/null; npm ls -g --depth=0 2>&1 | head; which java npm; ls /root 2>/dev/null — approved
+  ⚙ bash ls /usr/lib/node_modules 2>/dev/null; npm ls -g --depth=0 2>&1 | head;…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  ⚙ bash cd /app && python3 -m ensurepip --version 2>&1 | head -3; curl -sS -m …
+    ⚠ bash — refused (network = false)
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: ls /usr/share/java 2>/dev/null | head; find / -maxdepth 4 -iname "*jena*" -o -maxdepth 4 -iname "*rdf4j*" -o -maxdepth 4 -iname "*rdflib*" 2>/dev/null | head — approved
+  ⚙ bash ls /usr/share/java 2>/dev/null | head; find / -maxdepth 4 -iname "*jen…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+[approval] bash: ls /root/.npm 2>/dev/null | head; ls /root/.cache 2>/dev/null | head; npm config get cache 2>/dev/null; ls $(npm config get cache)/_cacache 2>/dev/null | head — approved
+  ⚙ bash ls /root/.npm 2>/dev/null | head; ls /root/.cache 2>/dev/null | head; …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  │ No SPARQL engine or network available, so I'll verify the logic with a sm…
+[approval] bash: mkdir -p /tmp/v && cat > /tmp/v/check.py <<'EOF'
+import re, itertools
+from datetime import date
+
+TODAY = date(2025,8,16)
+src = open('/app/university_graph.ttl', encoding='utf-8').read()
+src = re.sub(r'#.*', '', src)
+src = re.sub(r'@prefix[^.]*\.', '', src)
+
+triples = set()
+# split statements on ' .'
+stmts = [s.strip() for s in src.split(' .') if s.strip()]
+for st in stmts:
+    st = ' '.join(st.split())
+    m = re.match(r'^(\S+)\s+(.*)$', st)
+    subj, rest = m.group(1), m.group(2)
+    # split rest on ' ;' keeping commas groups
+    for part in rest.split(';'):
+        part = part.strip().rstrip(';').strip()
+        if not part: continue
+        pred, objs = part.split(' ', 1)
+        for o in objs.split(','):
+            o = o.strip()
+            if o.startswith('"'):
+                mm = re.match(r'^"(.*?)"(?:\^\^(xsd:\w+))?$', o)
+                val = mm.group(1)
+                if mm.group(2) == 'xsd:date':
+                    val = date(*map(int, val.split('-')))
+                triples.add((subj, pred, val))
+            else:
+                triples.add((subj, pred, o))
+
+def objs(s,p):
+    return {o for (ss,pp,o) in triples if ss==s and pp==p}
+
+EU = set("AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE".split())
+print("EU count:", len(EU))
+
+# departments per university, country
+dept_country = {}
+for d in {s for (s,p,o) in triples if p=='uni:belongsTo'}:
+    for u in objs(d,'uni:belongsTo'):
+        for c in objs(u,'uni:locatedInCountry'):
+            dept_country[d] = c
+
+# current enrolled students per department
+dept_students = {}
+for (s,p,course) in triples:
+    if p!='uni:isEnrolledIn': continue
+    for d in objs(course,'uni:isTaughtIn'):
+        ed = objs(s,'uni:hasEnrollmentDate')
+        gd = objs(s,'uni:hasGraduationDate')
+        ok = any(e <= TODAY for e in ed) and all(g > TODAY for g in gd) if gd else any(e <= TODAY for e in ed)
+        if ok:
+            dept_students.setdefault(d, set()).add(s)
+
+for d in sorted(dept_students):
+    print(d, dept_country.get(d), len(dept_students[d]), "BIG" if len(dept_students[d])>10 else "")
+
+big = {d for d,n in dept_students.items() if len(n) > 10}
+print("big depts:", sorted(big))
+
+res = {}
+for p in {s for (s,pp,o) in triples if pp=='uni:role'}:
+    role = objs(p,'uni:role')
+    if not any(r.startswith('Professor') for r in role): continue
+    depts = objs(p,'uni:worksIn')
+    if not any(dept_country.get(d) in EU for d in depts): continue
+    if not (depts & big): continue
+    name = list(objs(p,'uni:hasName'))[0]
+    countries = sorted({dept_country.get(d) for d in depts})
+    res[name] = countries
+for k in sorted(res): print("RESULT:", k, res[k])
+EOF
+python3 /tmp/v/check.py — approved
+  ⚙ bash mkdir -p /tmp/v && cat > /tmp/v/check.py <<'EOF' import re, itertools …
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  deepseek-v4.1-flash — 12 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import re
+src = open('/app/university_graph.ttl', encoding='utf-8').read()
+src = re.sub(r'#.*', '', src)
+src = re.sub(r'@prefix[^.]*\.', '', src)
+stmts = [s.strip() for s in src.split(' .') if s.strip()]
+for st in stmts:
+    st = ' '.join(st.split())
+    if not re.match(r'^(\S+)\s+(.*)$', st):
+        print(repr(st))
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import re src = open('/app/university_g…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 13 tool call(s) so far
+[approval] bash: cd /tmp/v && sed -i "s|re.sub(r'@prefix\[^\.\]\*\\\\.', '', src)|re.sub(r'@prefix[^<]*<[^>]*>\\\\s*\\\\.', '', src)|" check.py && grep -n "@prefix" check.py — approved
+  ⚙ bash cd /tmp/v && sed -i "s|re.sub(r'@prefix\[^\.\]\*\\\\.', '', src)|re.su…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 check.py — approved
+  ⚙ bash cd /tmp/v && python3 check.py
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 15 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import re
+src = open('/app/university_graph.ttl', encoding='utf-8').read()
+src = re.sub(r'#.*', '', src)
+src = re.sub(r'@prefix[^<]*<[^>]*>\s*\.', '', src)
+stmts = [s.strip() for s in src.split(' .') if s.strip()]
+for st in stmts:
+    st = ' '.join(st.split())
+    subj, rest = re.match(r'^(\S+)\s+(.*)$', st).groups()
+    for part in rest.split(';'):
+        part = part.strip()
+        if not part: continue
+        pred, objs = part.split(' ', 1)
+        for o in objs.split(','):
+            o=o.strip()
+            if o.startswith('"') and not re.match(r'^"(.*?)"(?:\^\^(xsd:\w+))?$', o):
+                print(repr(o))
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import re src = open('/app/university_g…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+  │ My crude splitter breaks on literals with commas and `date.` without a sp…
+[approval] bash: cat > /tmp/v/check.py <<'EOF'
+import re
+from datetime import date
+TODAY = date(2025,8,16)
+
+src = open('/app/university_graph.ttl', encoding='utf-8').read()
+src = re.sub(r'#[^\n]*', '', src)
+
+# tokenizer: strings, IRIs, prefixed names, punctuation
+tok_re = re.compile(r'''"(?:[^"\\]|\\.)*"(?:\^\^[A-Za-z0-9_:]+)?|<[^>]*>|@prefix|[;,.\[\]]|[^\s;,.\[\]]+''')
+toks = tok_re.findall(src)
+toks = [t for t in toks if t != '@prefix']
+
+# expand prefixes
+prefixes = {}
+i = 0
+# first pass: gather prefixes (form: PNAME <iri> .)
+tmp = toks[:]
+while i < len(tmp):
+    if tmp[i].startswith('@prefix') : i += 1
+    elif tmp[i].endswith(':') and i+1 < len(tmp) and tmp[i+1].startswith('<'):
+        prefixes[tmp[i][:-1]] = tmp[i+1][1:-1]; i += 3
+    else:
+        break
+body = tmp[i:]
+
+def expand(t):
+    if t.startswith('<'):
+        return t[1:-1]
+    if ':' in t:
+        p, _, local = t.partition(':')
+        return prefixes.get(p, p+':') + local
+    return t
+
+def lit(t):
+    m = re.match(r'^"(.*?)"(?:\^\^([A-Za-z0-9_:]+))?$', t, re.S)
+    val = m.group(1)
+    if m.group(2) and m.group(2).endswith('date'):
+        return ('date', date(*map(int, val.split('-'))))
+    return ('str', val)
+
+triples = set()
+def parse(subj, toks, idx):
+    # returns idx after statement; handles pred-object lists
+    while idx < len(toks) and toks[idx] != '.':
+        if toks[idx] == ';':
+            idx += 1; continue
+        pred = expand(toks[idx]); idx += 1
+        while True:
+            t = toks[idx]; idx += 1
+            obj = lit(t) if t.startswith('"') else ('iri', expand(t))
+            triples.add((subj, pred, obj))
+            if idx < len(toks) and toks[idx] == ',':
+                idx += 1; continue
+            break
+    return idx + 1
+
+idx = 0
+while idx < len(body):
+    if body[idx] == '.':
+        idx += 1; continue
+    subj = expand(body[idx]); idx += 1
+    idx = parse(subj, body, idx)
+
+def objs(s, p):
+    return {o[1] for (ss, pp, o) in triples if ss == s and pp == p}
+
+EU = set("AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE".split())
+print("triples:", len(triples), "EU members:", len(EU))
+
+dept_country = {}
+for d in {s for (s, p, o) in triples if p == 'uni:belongsTo'}:
+    for u in objs(d, 'uni:belongsTo'):
+        for c in objs(u, 'uni:locatedInCountry'):
+            dept_country[d] = c
+
+def current(s):
+    ed = objs(s, 'uni:hasEnrollmentDate')
+    gd = objs(s, 'uni:hasGraduationDate')
+    if not ed or not any(e <= TODAY for e in ed):
+        return False
+    return all(g > TODAY for g in gd) if gd else True
+
+dept_students = {}
+for (s, p, o) in triples:
+    if p != 'uni:isEnrolledIn': continue
+    if not current(s): continue
+    for d in objs(o, 'uni:isTaughtIn'):
+        dept_students.setdefault(d, set()).add(s)
+
+for d in sorted(dept_students):
+    print(f"{d:35s} {dept_country.get(d)} n={len(dept_students[d])}", "BIG" if len(dept_students[d]) > 10 else "")
+
+big = {d for d, n in dept_students.items() if len(n) > 10}
+print("big depts:", sorted(big))
+print()
+for p in sorted({s for (s, pp, o) in triples if pp == 'uni:role'}):
+    roles = objs(p, 'uni:role')
+    depts = objs(p, 'uni:worksIn')
+    full = any(r.startswith('Professor') for r in roles)
+    eu = any(dept_country.get(d) in EU for d in depts)
+    b = bool(depts & big)
+    name = (objs(p, 'uni:hasName') or {p}).pop()
+    if full and eu and b:
+        print("RESULT:", name, sorted({dept_country.get(d) for d in depts}))
+    else:
+        print("  skip:", name, "full" if full else "-", "eu" if eu else "-", "big" if b else "-")
+EOF
+python3 /tmp/v/check.py — approved
+  ⚙ bash cat > /tmp/v/check.py <<'EOF' import re from datetime import date TODA…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 17 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+exec(open('check.py').read().split("EU = set")[0])
+enr = [t for t in triples if t[1]=='uni:isEnrolledIn']
+print(len(enr)); print(sorted(enr)[:5])
+print([t for t in triples if t[1]=='uni:isTaughtIn'][:5])
+print([t for t in triples if 'Date' in t[1]][:5])
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' exec(open('check.py').read().split("EU …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 18 tool call(s) so far
+[approval] bash: cd /tmp/v && sed -i "s|'uni:\([a-zA-Z]*\)'|'http://university.org/ontology/\1'|g" check.py && python3 check.py — approved
+  ⚙ bash cd /tmp/v && sed -i "s|'uni:\([a-zA-Z]*\)'|'http://university.org/onto…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 19 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+exec(open('check.py').read().split("EU = set")[0])
+P='http://university.org/ontology/'
+enr=[t for t in triples if t[1]==P+'isEnrolledIn']
+print(len(enr), enr[:3])
+print([t for t in triples if t[1]==P+'isTaughtIn'][:3])
+print(len([t for t in triples if t[1]==P+'belongsTo']))
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' exec(open('check.py').read().split("EU …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 20 tool call(s) so far
+[approval] bash: cd /tmp/v && sed -i "s|for d in objs(o, 'http://university.org/ontology/isTaughtIn'):|for d in objs(o[1], 'http://university.org/ontology/isTaughtIn'):|" check.py && python3 check.py — approved
+  ⚙ bash cd /tmp/v && sed -i "s|for d in objs(o, 'http://university.org/ontolog…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 21 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+exec(open('check.py').read().split("EU = set")[0])
+P='http://university.org/ontology/'
+from datetime import date
+TODAY=date(2025,8,16)
+def objs2(s,p): return {o[1] for (ss,pp,o) in triples if ss==s and pp==p}
+def current(s):
+    ed=objs2(s,P+'hasEnrollmentDate'); gd=objs2(s,P+'hasGraduationDate')
+    if not ed or not any(e<=TODAY for e in ed): return False
+    return all(g>TODAY for g in gd) if gd else True
+from collections import defaultdict
+percourse=defaultdict(set); perdept=defaultdict(set)
+for s,p,o in triples:
+    if p!=P+'isEnrolledIn' or not current(s): continue
+    percourse[o[1]].add(s)
+    for d in objs2(o[1],P+'isTaughtIn'): perdept[d].add(s)
+for c in sorted(percourse): print("course",c,len(percourse[c]))
+print()
+for d in sorted(perdept): print("dept",d,len(perdept[d]))
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' exec(open('check.py').read().split("EU …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 22 tool call(s) so far
+[approval] bash: find / -maxdepth 6 \( -iname "rdflib*" -o -iname "oxigraph*" -o -iname "sparql*" -o -iname "jena*" \) -not -path "*/proc/*" 2>/dev/null | head -20 — approved
+  ⚙ bash find / -maxdepth 6 \( -iname "rdflib*" -o -iname "oxigraph*" -o -iname…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 23 tool call(s) so far
+  │ No SPARQL engine is installed and network is off. Let me check the npm ca…
+[approval] bash: cd /root/.npm/_cacache && grep -rl "sparql\|rdflib\|oxigraph" index-v5 2>/dev/null | head -5; echo "---"; ls /root/.npm/_cacache/index-v5 | head -3 — approved
+  ⚙ bash cd /root/.npm/_cacache && grep -rl "sparql\|rdflib\|oxigraph" index-v5…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 24 tool call(s) so far
+[approval] bash: cd /app && grep -o "uni:[a-zA-Z]*" university_graph.ttl | sort | uniq -c | sort -rn — approved
+  ⚙ bash cd /app && grep -o "uni:[a-zA-Z]*" university_graph.ttl | sort | uniq …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 25 tool call(s) so far
+[approval] bash: cd /app && grep -n "Professor\|role " university_graph.ttl — approved
+  ⚙ bash cd /app && grep -n "Professor\|role " university_graph.ttl
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 26 tool call(s) so far
+[approval] bash: ls /var/cache/apt/archives/*.deb 2>/dev/null | head; ls /usr/lib/python3/dist-packages 2>/dev/null | head -20; python3 -c "import pyparsing" 2>&1 | tail -1 — approved
+  ⚙ bash ls /var/cache/apt/archives/*.deb 2>/dev/null | head; ls /usr/lib/pytho…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 27 tool call(s) so far
+  │ No SPARQL engine exists here and the network is off, so I'll write the qu…
+[approval] write /app/solution.sparql (+59 −0) [new file] — approved
+  ⚙ write /app/solution.sparql
+    ✓ write /app/solution.sparql (+59 −0)
+  deepseek-v4.1-flash — 28 tool call(s) so far
+  │ Now I'll verify by actually executing the query: I'll write a small SPARQ…
+[approval] bash: cat > /tmp/v/sparql.py <<'PY'
+import re
+from datetime import date
+
+# ---------- Turtle parsing ----------
+def parse_turtle(path):
+    src = open(path, encoding='utf-8').read()
+    src = re.sub(r'#[^\n]*', '', src)
+    tok_re = re.compile(r'''"(?:[^"\\]|\\.)*"(?:\^\^[A-Za-z0-9_:]+)?|<[^>]*>|@prefix|[;,.\[\]]|[^\s;,.\[\]]+''')
+    toks = tok_re.findall(src)
+    prefixes, i = {}, 0
+    while i < len(toks):
+        if toks[i].endswith(':') and i+1 < len(toks) and toks[i+1].startswith('<'):
+            prefixes[toks[i][:-1]] = toks[i+1][1:-1]; i += 3
+        else:
+            break
+    body = toks[i:]
+    def exp(t):
+        if t.startswith('<'): return t[1:-1]
+        if ':' in t:
+            p, _, l = t.partition(':')
+            return prefixes.get(p, p+':') + l
+        return t
+    def term(t):
+        if t.startswith('"'):
+            m = re.match(r'^"(.*?)"(?:\^\^([A-Za-z0-9_:]+))?$', t, re.S)
+            v, dt = m.group(1), m.group(2)
+            if dt:
+                dt = exp(dt)
+                if dt.endswith('#date'):
+                    return ('lit', date(*map(int, v.split('-'))), dt)
+                return ('lit', v, dt)
+            return ('lit', v, None)
+        return ('iri', exp(t))
+    triples = set()
+    idx = 0
+    while idx < len(body):
+        if body[idx] in ('.',): idx += 1; continue
+        subj = exp(body[idx]); idx += 1
+        while idx < len(body) and body[idx] != '.':
+            if body[idx] == ';': idx += 1; continue
+            pred = exp(body[idx]); idx += 1
+            while True:
+                triples.add((subj, pred, term(body[idx]))); idx += 1
+                if idx < len(body) and body[idx] == ',':
+                    idx += 1; continue
+                break
+        idx += 1
+    return triples
+
+# ---------- SPARQL query parsing ----------
+class Group:
+    def __init__(self): self.items = []
+class Subquery:
+    def __init__(self): self.items=[]; self.groupby=[]; self.having=None; self.proj=[]
+
+def strip_comments(s):
+    out=[]; i=0; instr=False
+    while i < len(s):
+        c=s[i]
+        if instr:
+            out.append(c)
+            if c=='\\': out.append(s[i+1]); i+=2; continue
+            if c=='"': instr=False
+            i+=1; continue
+        if c=='"': instr=True; out.append(c); i+=1; continue
+        if c=='#':
+            while i < len(s) and s[i] != '\n': i+=1
+            continue
+        out.append(c); i+=1
+    return ''.join(out)
+
+QT = re.compile(r'''"(?:[^"\\]|\\.)*"(?:\^\^[A-Za-z0-9_:]+)?|<[^>]*>|[{}()\[\]]|[^\s{}()\[\]]+''')
+
+def parse_query(path):
+    src = strip_comments(open(path, encoding='utf-8').read())
+    toks = QT.findall(src)
+    prefixes, i = {}, 0
+    while i < len(toks) and toks[i].upper() == 'PREFIX':
+        prefixes[toks[i+1][:-1]] = toks[i+2][1:-1]; i += 3
+    body = toks[i:]
+    # top-level: SELECT ... WHERE { ... } GROUP BY ... ORDER BY ...
+    assert body[0].upper() == 'SELECT', body[:5]
+    j = body.index('{')
+    head = body[:j]
+    sel = parse_select_list(head[1:])
+    grp, k = parse_group(body, j+1, prefixes)
+    tail = body[k:]
+    gb, having, ob = [], None, []
+    if 'GROUP' in [t.upper() for t in tail]:
+        m = [n for n,t in enumerate(tail) if t.upper()=='GROUP'][0]
+        gb = [t for t in tail[m+2:] if t.startswith('?')]
+    return prefixes, sel, grp, gb
+
+def parse_select_list(toks):
+    items=[]; cur=[]
+    depth=0
+    for t in toks:
+        if t=='(': depth+=1
+        if t==')': depth-=1
+        if t==',' and depth==0:
+            items.append(cur); cur=[]; continue
+        cur.append(t)
+    if cur: items.append(cur)
+    return items
+
+def parse_group(toks, i, prefixes):
+    """toks[i-1] == '{' ; returns (Group, index after '}')"""
+    g = Group()
+    while toks[i] != '}':
+        t = toks[i]
+        u = t.upper()
+        if u == 'FILTER':
+            if toks[i+1].upper() == 'EXISTS' and toks[i+2] == '{':
+                sub, i = parse_group(toks, i+3, prefixes)
+                g.items.append(('exists', sub, True))
+            elif toks[i+1].upper() == 'NOT' and toks[i+2].upper() == 'EXISTS':
+                sub, i = parse_group(toks, i+4, prefixes)
+                g.items.append(('exists', sub, False))
+            else:
+                assert toks[i+1] == '('
+                depth=0; j=i+1; expr=[]
+                while True:
+                    if toks[j]=='(': depth+=1
+                    if toks[j]==')':
+                        depth-=1
+                        if depth==0: break
+                    expr.append(toks[j]); j+=1
+                g.items.append(('filter', expr))
+                i = j+1
+        elif u == 'SELECT':
+            sq = Subquery()
+            j = i+1
+            k = j
+            while toks[k] != '{': k+=1
+            sq.proj = parse_select_list(toks[j:k])
+            sub, i = parse_group(toks, k+1, prefixes)
+            sq.items = sub.items
+            while i < len(toks) and toks[i] != '}':
+                uu = toks[i].upper()
+                if uu == 'GROUP':
+                    i += 2
+                    while toks[i] != '}' and toks[i].upper() not in ('HAVING','ORDER'):
+                        if toks[i].startswith('?'): sq.groupby.append(toks[i][1:])
+                        i += 1
+                elif uu == 'HAVING':
+                    assert toks[i+1] == '('
+                    depth=0; jj=i+1; e=[]
+                    while True:
+                        if toks[jj]=='(': depth+=1
+                        if toks[jj]==')':
+                            depth-=1
+                            if depth==0: break
+                        e.append(toks[jj]); jj+=1
+                    sq.having = e; i = jj+1
+                elif uu == 'ORDER':
+                    while toks[i] != '}': i += 1
+                else:
+                    i += 1
+            g.items.append(('subquery', sq))
+            i += 1  # skip '}'
+        else:
+            # triple pattern: s p o .
+            s = toks[i]; p = toks[i+1]; o = toks[i+2]
+            assert toks[i+3] == '.', toks[i:i+4]
+            g.items.append(('triple', s, p, o))
+            i += 4
+    return g, i+1
+PY
+echo written — approved
+  ⚙ bash cat > /tmp/v/sparql.py <<'PY' import re from datetime import date # --…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 29 tool call(s) so far
+[approval] bash: cat >> /tmp/v/sparql.py <<'PY'
+
+# ---------- expression evaluation ----------
+ET = re.compile(r'''"(?:[^"\\]|\\.)*"(?:\^\^[A-Za-z0-9_:]+)?|<=|>=|!=|&&|\|\||[()=<>,;]|[^\s()=<>,;&|]+''')
+
+class P:
+    def __init__(self, toks, prefixes):
+        self.t = toks; self.i = 0; self.px = prefixes
+    def peek(self): return self.t[self.i] if self.i < len(self.t) else None
+    def next(self): self.i += 1; return self.t[self.i-1]
+    def or_(self):
+        v = self.and_()
+        while self.peek() == '||':
+            self.next(); r = self.and_()
+            v = truth(v) or truth(r)
+        return v
+    def and_(self):
+        v = self.rel()
+        while self.peek() == '&&':
+            self.next(); r = self.rel()
+            v = truth(v) and truth(r)
+        return v
+    def rel(self):
+        v = self.add()
+        p = self.peek()
+        if p in ('=', '!=', '<=', '>=', '<', '>'):
+            self.next(); r = self.add()
+            if p == '=': return v == r
+            if p == '!=': return v != r
+            if v is None or r is None: return None
+            return {'<': v < r, '>': v > r, '<=': v <= r, '>=': v >= r}[p]
+        if p is not None and p.upper() == 'IN':
+            self.next(); assert self.next() == '('
+            vals = []
+            while self.peek() != ')':
+                if self.peek() == ',': self.next(); continue
+                vals.append(self.add())
+            self.next()
+            return v in vals
+        return v
+    def add(self):
+        return self.unary()
+    def unary(self):
+        t = self.next()
+        if t == '(':
+            v = self.or_(); assert self.next() == ')'; return v
+        if t.startswith('?'):
+            return ('VAR', t[1:])
+        if t.startswith('"'):
+            m = re.match(r'^"(.*?)"(?:\^\^([A-Za-z0-9_:]+))?$', t, re.S)
+            v, dt = m.group(1), m.group(2)
+            if dt and exp_iri(dt, self.px).endswith('#date'):
+                return date(*map(int, v.split('-')))
+            return v
+        if t.startswith('<') or ':' in t:
+            return ('IRI', exp_iri(t, self.px))
+        if re.match(r'^-?\d+(\.\d+)?$', t):
+            return float(t) if '.' in t else int(t)
+        # function call
+        if self.peek() == '(':
+            self.next(); args = []
+            while self.peek() != ')':
+                if self.peek() == ',': self.next(); continue
+                args.append(self.add())
+            self.next()
+            fn = t.upper()
+            if fn == 'STR': return ('STR', args[0])
+            if fn == 'REGEX':
+                s = args[0]
+                s = s[1] if isinstance(s, tuple) and s[0] == 'STR' else str(s)
+                flags = 0
+                if len(args) > 2 and isinstance(args[2], str) and 'i' in args[2]:
+                    flags = re.I
+                return re.search(args[1], s, flags) is not None
+            if fn in ('COUNT', 'GROUP_CONCAT'):
+                return ('AGG', fn, args)
+            raise Exception('unknown function ' + t)
+        raise Exception('unparsed token ' + repr(t))
+
+def exp_iri(t, px):
+    if t.startswith('<'): return t[1:-1]
+    if ':' in t:
+        p, _, l = t.partition(':')
+        return px.get(p, p+':') + l
+    return t
+
+def truth(v):
+    return bool(v)
+
+def resolve(v, b):
+    if isinstance(v, tuple):
+        if v[0] == 'VAR':
+            return b.get(v[1])
+        if v[0] == 'STR':
+            r = resolve(v[1], b)
+            return str(r) if r is not None else None
+        if v[0] == 'IRI':
+            return v[1]
+    return v
+
+def eval_expr(toks, b, px):
+    p = P(toks, px)
+    v = p.or_()
+    return resolve(v, b)
+PY
+echo ok — approved
+  ⚙ bash cat >> /tmp/v/sparql.py <<'PY' # ---------- expression evaluation ----…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 30 tool call(s) so far
+[approval] bash: cat >> /tmp/v/sparql.py <<'PY'
+
+# ---------- evaluation ----------
+def match_term(t, s, p, o, triples, px):
+    """t is token string; returns list of binding dicts (or [] / [{}])."""
+    out = []
+    if t.startswith('?'):
+        v = t[1:]
+        for (ts, tp, to) in triples:
+            out.append({v: (ts, tp, to)})
+        return out
+    return None
+
+def triple_matches(pat, triples, px):
+    s, p, o = pat
+    def is_var(x): return x.startswith('?')
+    def term_val(x):
+        if x.startswith('"'): return None
+        return exp_iri(x, px)
+    res = []
+    for (ts, tp, to) in triples:
+        if not is_var(s) and term_val(s) != ts: continue
+        if not is_var(p) and term_val(p) != tp: continue
+        if not is_var(o):
+            if o.startswith('"'):
+                m = re.match(r'^"(.*?)"(?:\^\^([A-Za-z0-9_:]+))?$', o, re.S)
+                if to != ('lit', m.group(1), exp_iri(m.group(2), px) if m.group(2) else None):
+                    continue
+            elif term_val(o) != to[1] or to[0] != 'iri':
+                continue
+        res.append((ts, tp, to))
+    return res
+
+def join(bindings, pat, triples, px):
+    s, p, o = pat
+    def is_var(x): return x.startswith('?')
+    out = []
+    for b in bindings:
+        for (ts, tp, to) in triple_matches(pat, triples, px):
+            nb = dict(b); ok = True
+            for tok, val in ((s, ts), (p, tp), (o, to)):
+                if is_var(tok):
+                    name = tok[1:]
+                    if name in nb and nb[name] != val:
+                        ok = False; break
+                    nb[name] = val
+            if ok: out.append(nb)
+    return out
+
+def eval_group(g, bindings, triples, px):
+    for item in g.items:
+        kind = item[0]
+        if kind == 'triple':
+            bindings = join(bindings, item[1:], triples, px)
+        elif kind == 'filter':
+            bindings = [b for b in bindings if truth(eval_expr(item[1], b, px))]
+        elif kind == 'exists':
+            sub, positive = item[1], item[2]
+            keep = []
+            for b in bindings:
+                r = eval_group(sub, [dict(b)], triples, px)
+                if bool(r) == positive: keep.append(b)
+            bindings = keep
+        elif kind == 'subquery':
+            sq = item[1]
+            rows = eval_group(Group_from(sq.items), [{}], triples, px)
+            rows = aggregate(sq, rows, px)
+            bindings = join_bindings(bindings, rows)
+    return bindings
+
+def Group_from(items):
+    g = Group(); g.items = items; return g
+
+def join_bindings(left, right):
+    out = []
+    for a in left:
+        for b in right:
+            nb = dict(a); ok = True
+            for k, v in b.items():
+                if k in nb and nb[k] != v: ok = False; break
+                nb[k] = v
+            if ok: out.append(nb)
+    return out
+
+def valstr(v):
+    if isinstance(v, tuple) and v[0] == 'iri': return v[1]
+    if isinstance(v, tuple) and v[0] == 'lit': return v[1]
+    if isinstance(v, date): return v.isoformat()
+    return str(v)
+
+def aggregate(sq, rows, px):
+    # determine projection: plain vars and (AGG(...) AS ?v)
+    keys = []
+    for item in sq.proj:
+        if item[0].startswith('?'):
+            keys.append(item[0][1:])
+        else:
+            m = re.search(r'AS\s+(\?\w+)\s*\)\s*$', ' '.join(item))
+            keys.append(m.group(1)[1:])
+    groups = {}
+    for r in rows:
+        k = tuple(valstr(r.get(g)) for g in sq.groupby)
+        groups.setdefault(k, []).append(r)
+    out = []
+    for k, grp in groups.items():
+        b = {}
+        for g, kv in zip(sq.groupby, k):
+            b[g] = grp[0].get(g)
+        for item in sq.proj:
+            if item[0].startswith('?'):
+                continue
+            txt = ' '.join(item)
+            m = re.search(r'AS\s+(\?\w+)\s*\)\s*$', txt)
+            target = m.group(1)[1:]
+            fn = re.match(r'(\w+)\s*\(', txt).group(1).upper()
+            inner = re.search(r'\(\s*(?:DISTINCT\s+)?(\?\w+)', txt).group(1)[1:]
+            distinct = 'DISTINCT' in txt.upper().split('AS')[0]
+            vals = [r.get(inner) for r in grp]
+            if distinct:
+                seen = []; 
+                for v in vals:
+                    if v not in seen: seen.append(v)
+                vals = seen
+            if fn == 'COUNT':
+                b[target] = len(vals)
+            elif fn == 'GROUP_CONCAT':
+                sep = ', '
+                sm = re.search(r'separator\s*=\s*"(.*?)"', txt, re.I)
+                if sm: sep = sm.group(1)
+                b[target] = sep.join(sorted(valstr(v) for v in vals if v is not None))
+            else:
+                raise Exception('agg ' + fn)
+        if sq.having:
+            if not truth(eval_expr(sq.having, b, px)):
+                continue
+        out.append(b)
+    return out
+
+def run(ttl, qpath):
+    triples = parse_turtle(ttl)
+    px, sel, grp, gb = parse_query(qpath)
+    rows = eval_group(grp, [{}], triples, px)
+    class SQ: pass
+    sq = SQ(); sq.proj = sel; sq.groupby = gb; sq.having = None
+    rows = aggregate(sq, rows, px)
+    for r in sorted(rows, key=lambda b: valstr(b.get('professorName'))):
+        print({k: valstr(v) for k, v in r.items() if k in ('professorName', 'countries')})
+    return rows
+
+if __name__ == '__main__':
+    import sys
+    run('/app/university_graph.ttl', sys.argv[1] if len(sys.argv) > 1 else '/app/solution.sparql')
+PY
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cat >> /tmp/v/sparql.py <<'PY' # ---------- evaluation ---------- def …
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 31 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql, re
+src = sparql.strip_comments(open('/app/solution.sparql').read())
+toks = sparql.QT.findall(src)
+print(len(toks), toks[:10])
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql, re src = sparql.strip_co…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 32 tool call(s) so far
+  [tools] 32/256 calls — continuing (leg 2)
+  deepseek-v4.1-flash — leg 2, 32 call(s) so far
+  │ The bug is in my test harness (it strips `#` inside IRIs), not the query.…
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import re
+src = open('sparql.py').read()
+old = """def strip_comments(s):
+    out=[]; i=0; instr=False
+    while i < len(s):
+        c=s[i]
+        if instr:"""
+new = """def strip_comments(s):
+    out=[]; i=0; instr=False; iniri=False
+    while i < len(s):
+        c=s[i]
+        if iniri:
+            out.append(c)
+            if c=='>': iniri=False
+            i+=1; continue
+        if c=='<': iniri=True; out.append(c); i+=1; continue
+        if instr:"""
+assert old in src
+open('sparql.py','w').write(src.replace(old,new))
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import re src = open('sparql.py').read(…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 33 tool call(s) so far
+  │ No rows — debugging the evaluation chain.
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+triples = S.parse_turtle('/app/university_graph.ttl')
+px, sel, grp, gb = S.parse_query('/app/solution.sparql')
+print("px", px)
+print("sel", sel, "gb", gb)
+for it in grp.items:
+    print(it[0], it[1:] if it[0]!='subquery' else 'SQ')
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S triples = S.parse_tu…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 34 tool call(s) so far
+  │ Tokenizer needs `;`, `,`, `=` as delimiters. Fixing.
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+old = """QT = re.compile(r'''"(?:[^"\\\\]|\\\\.)*"(?:\\^\\^[A-Za-z0-9_:]+)?|<[^>]*>|[{}()\\[\\]]|[^\\s{}()\\[\\]]+''')"""
+assert old in src, "nomatch"
+new = """QT = re.compile(r'''"(?:[^"\\\\]|\\\\.)*"(?:\\^\\^[A-Za-z0-9_:]+)?|<[^>]*>|<=|>=|!=|&&|\\|\\||[{}()\\[\\];,=]|[^\\s{}()\\[\\];,=]+''')"""
+open('sparql.py','w').write(src.replace(old,new))
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() old = ""…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 35 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+old = """        else:
+            # triple pattern: s p o .
+            s = toks[i]; p = toks[i+1]; o = toks[i+2]
+            assert toks[i+3] == '.', toks[i:i+4]
+            g.items.append(('triple', s, p, o))
+            i += 4"""
+new = """        else:
+            # triple pattern(s), possibly with ';' and ',' lists
+            s = toks[i]; i += 1
+            while True:
+                p = toks[i]; i += 1
+                while True:
+                    o = toks[i]; i += 1
+                    g.items.append(('triple', s, p, o))
+                    if toks[i] == ',':
+                        i += 1; continue
+                    break
+                if toks[i] == ';':
+                    i += 1
+                    if toks[i] == '.':
+                        i += 1; break
+                    continue
+                assert toks[i] == '.', toks[i:i+4]
+                i += 1; break"""
+assert old in src
+open('sparql.py','w').write(src.replace(old,new))
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() old = ""…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 36 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+old = """        elif u == 'SELECT':
+            sq = Subquery()
+            j = i+1"""
+new = """        elif u == 'SELECT' or (t == '{' and toks[i+1].upper() == 'SELECT'):
+            if t == '{':
+                i += 1
+            sq = Subquery()
+            j = i+1"""
+assert old in src
+src = src.replace(old, new)
+old2 = """            g.items.append(('subquery', sq))
+            i += 1  # skip '}'"""
+new2 = """            g.items.append(('subquery', sq))
+            i += 1  # skip '}'
+            if i < len(toks) and toks[i] == '.':
+                i += 1"""
+assert old2 in src
+src = src.replace(old2, new2)
+open('sparql.py','w').write(src)
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() old = ""…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 37 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+src = S.strip_comments(open('/app/solution.sparql').read())
+toks = S.QT.findall(src)
+i = toks.index('{')
+print(toks[:i+1])
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S src = S.strip_commen…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 38 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+old = "    sel = parse_select_list(head[1:])"
+new = "    sel = parse_select_list([t for t in head[1:] if t.upper() != 'WHERE'])"
+assert old in src
+open('sparql.py','w').write(src.replace(old,new))
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() old = " …
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 39 tool call(s) so far
+[approval] bash: cd /tmp/v && sed -n 150,200p sparql.py — approved
+  ⚙ bash cd /tmp/v && sed -n 150,200p sparql.py
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 40 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+src = S.strip_comments(open('/app/solution.sparql').read())
+toks = S.QT.findall(src)
+j = toks.index('{')
+print(toks[j:])
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S src = S.strip_commen…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 41 tool call(s) so far
+  │ The harness's comment stripper swallowed newlines, merging tokens. Fixing…
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+old = """        if c=='#':
+            while i < len(s) and s[i] != '\\n': i+=1
+            continue"""
+new = """        if c=='#':
+            while i < len(s) and s[i] != '\\n': i+=1
+            out.append('\\n')
+            continue"""
+assert old in src
+open('sparql.py','w').write(src.replace(old,new))
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() old = ""…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 42 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+src = S.strip_comments(open('/app/solution.sparql').read())
+toks = S.QT.findall(src)
+j = toks.index('{')
+print(toks[j:])
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S src = S.strip_commen…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 43 tool call(s) so far
+  │ The `<[^>]*>` IRI alternative is swallowing `<=`. Reordering alternatives…
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+old = """QT = re.compile(r'''"(?:[^"\\\\]|\\\\.)*"(?:\\^\\^[A-Za-z0-9_:]+)?|<[^>]*>|<=|>=|!=|&&|\\|\\||[{}()\\[\\];,=]|[^\\s{}()\\[\\];,=]+''')"""
+assert old in src, 'nf'
+new = """QT = re.compile(r'''"(?:[^"\\\\]|\\\\.)*"(?:\\^\\^[A-Za-z0-9_:]+)?|<=|>=|!=|&&|\\|\\||<[^>]*>|[{}()\\[\\];,=]|[^\\s{}()\\[\\];,=]+''')"""
+open('sparql.py','w').write(src.replace(old,new))
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() old = ""…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 44 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S, inspect
+print(inspect.getsource(S.strip_comments))
+src = S.strip_comments(open('/app/solution.sparql').read())
+k = src.find('graduated')
+print(repr(src[k-300:k+80]))
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S, inspect print(inspe…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 45 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+old = "        if c=='<': iniri=True; out.append(c); i+=1; continue"
+new = "        if c=='<' and i+1 < len(s) and s[i+1] not in '= \\t\\n': iniri=True; out.append(c); i+=1; continue"
+assert old in src
+open('sparql.py','w').write(src.replace(old,new))
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() old = " …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 46 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+triples = S.parse_turtle('/app/university_graph.ttl')
+px, sel, grp, gb = S.parse_query('/app/solution.sparql')
+print("sel:", [i[:6] for i in sel], "gb:", gb)
+b = S.eval_group(grp, [{}], triples, px)
+print("rows after main group:", len(b))
+print(b[:2])
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S triples = S.parse_tu…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 47 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+triples = S.parse_turtle('/app/university_graph.ttl')
+px, sel, grp, gb = S.parse_query('/app/solution.sparql')
+b=[{}]
+for it in grp.items:
+    print("ITEM", it[0], (it[1:] if it[0]!='subquery' else 'SQ'))
+    b = S.eval_group(S.Group_from([it]), b, triples, px)
+    print("  ->", len(b), b[:1])
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S triples = S.parse_tu…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 48 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+old = """def exp_iri(t, px):
+    if t.startswith('<'): return t[1:-1]"""
+new = """RDFTYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
+
+def exp_iri(t, px):
+    if t == 'a': return RDFTYPE
+    if t.startswith('<'): return t[1:-1]"""
+assert old in src
+open('sparql.py','w').write(src.replace(old,new))
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() old = ""…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 49 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+triples = S.parse_turtle('/app/university_graph.ttl')
+px, sel, grp, gb = S.parse_query('/app/solution.sparql')
+b=[{}]
+for it in grp.items:
+    b = S.eval_group(S.Group_from([it]), b, triples, px)
+    print(it[0], len(b), b[:1])
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S triples = S.parse_tu…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 50 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+triples = S.parse_turtle('/app/university_graph.ttl')
+px = {'uni':'http://university.org/ontology/','xsd':'http://www.w3.org/2001/XMLSchema#'}
+print(S.exp_iri('a', px))
+print([t for t in triples if t[0].endswith('Orfeas_Menis')][:3])
+print(len(S.triple_matches(('?professor','a','uni:Person'), triples, px)))
+print(len(S.triple_matches(('?professor','uni:worksIn','?department'), triples, px)))
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S triples = S.parse_tu…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 51 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+old = """    prefixes, i = {}, 0
+    while i < len(toks):
+        if toks[i].endswith(':') and i+1 < len(toks) and toks[i+1].startswith('<'):
+            prefixes[toks[i][:-1]] = toks[i+1][1:-1]; i += 3
+        else:
+            break"""
+new = """    prefixes, i = {}, 0
+    while i < len(toks):
+        if toks[i] == '@prefix':
+            i += 1; continue
+        if toks[i].endswith(':') and i+1 < len(toks) and toks[i+1].startswith('<'):
+            prefixes[toks[i][:-1]] = toks[i+1][1:-1]; i += 3
+        else:
+            break"""
+assert old in src
+open('sparql.py','w').write(src.replace(old,new))
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() old = ""…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 52 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import importlib, sparql as S
+importlib.reload(S)
+triples = S.parse_turtle('/app/university_graph.ttl')
+print(len(triples))
+print(sorted({t[0] for t in triples})[:5])
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import importlib, sparql as S importlib…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 53 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+triples = S.parse_turtle('/app/university_graph.ttl')
+px = {'uni':'http://university.org/ontology/','xsd':'http://www.w3.org/2001/XMLSchema#'}
+print(len(S.triple_matches(('?professor','a','uni:Person'), triples, px)))
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S triples = S.parse_tu…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 54 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+old = """    def exp(t):
+        if t.startswith('<'): return t[1:-1]"""
+new = """    def exp(t):
+        if t == 'a': return RDFTYPE
+        if t.startswith('<'): return t[1:-1]"""
+assert old in src
+src = src.replace(old, new)
+# RDFTYPE must be defined before use
+src = src.replace("# ---------- Turtle parsing ----------", "RDFTYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'\n\n# ---------- Turtle parsing ----------")
+src = src.replace("RDFTYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'\n\ndef exp_iri", "def exp_iri")
+open('sparql.py','w').write(src)
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() old = ""…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 55 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+src = src.replace("""class P:
+    def __init__(self, toks, prefixes):
+        self.t = toks; self.i = 0; self.px = prefixes""",
+"""class P:
+    def __init__(self, toks, prefixes, b=None):
+        self.t = toks; self.i = 0; self.px = prefixes; self.b = b or {}""")
+src = src.replace("""        if t.startswith('?'):
+            return ('VAR', t[1:])""",
+"""        if t.startswith('?'):
+            return self.b.get(t[1:])""")
+src = src.replace("""            if fn == 'STR': return ('STR', args[0])
+            if fn == 'REGEX':
+                s = args[0]
+                s = s[1] if isinstance(s, tuple) and s[0] == 'STR' else str(s)""",
+"""            if fn == 'STR':
+                a = args[0]
+                return valstr(a) if a is not None else None
+            if fn == 'REGEX':
+                s = args[0]
+                s = valstr(s) if s is not None else ''""")
+src = src.replace("""def eval_expr(toks, b, px):
+    p = P(toks, px)""",
+"""def eval_expr(toks, b, px):
+    p = P(toks, px, b)""")
+open('sparql.py','w').write(src)
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() src = sr…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 56 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+src = src.replace("""        if t == '(':
+            v = self.or_(); assert self.next() == ')'; return v""",
+"""        if t == '(':
+            v = self.or_()
+            if self.peek() == ')': self.next()
+            return v""")
+open('sparql.py','w').write(src)
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() src = sr…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 57 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+triples = S.parse_turtle('/app/university_graph.ttl')
+px, sel, grp, gb = S.parse_query('/app/solution.sparql')
+b=[{}]
+for it in grp.items:
+    b = S.eval_group(S.Group_from([it]), b, triples, px)
+    print(it[0], len(b), b[:1])
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S triples = S.parse_tu…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 58 tool call(s) so far
+  │ Join mismatch: subjects/predicates are plain strings while object binding…
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+src = src.replace("""                triples.add((subj, pred, term(body[idx])))""",
+"""                triples.add((('iri', subj), ('iri', pred), term(body[idx])))""")
+src = src.replace("""    for (ts, tp, to) in triples:
+        if not is_var(s) and term_val(s) != ts: continue
+        if not is_var(p) and term_val(p) != tp: continue""",
+"""    for (ts, tp, to) in triples:
+        if not is_var(s) and term_val(s) != ts[1]: continue
+        if not is_var(p) and term_val(p) != tp[1]: continue""")
+src = src.replace("""            elif term_val(o) != to[1] or to[0] != 'iri':
+                continue""",
+"""            elif term_val(o) != to[1] or to[0] != 'iri':
+                continue""")
+open('sparql.py','w').write(src)
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() src = sr…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 59 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+src = src.replace("""    def rel(self):
+        v = self.add()
+        p = self.peek()""",
+"""    def rel(self):
+        v = unwrap(self.add())
+        p = self.peek()""")
+src = src.replace("""            self.next(); r = self.add()
+            if p == '=': return v == r""",
+"""            self.next(); r = unwrap(self.add())
+            if p == '=': return v == r""")
+src = src.replace("""def truth(v):""",
+"""def unwrap(v):
+    if isinstance(v, tuple) and len(v) == 3 and v[0] in ('iri', 'lit'):
+        return v[1]
+    return v
+
+def truth(v):""")
+src = src.replace("""        if t.startswith('?'):
+            return self.b.get(t[1:])""",
+"""        if t.startswith('?'):
+            return unwrap(self.b.get(t[1:]))""")
+open('sparql.py','w').write(src)
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() src = sr…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 60 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+px, sel, grp, gb = S.parse_query('/app/solution.sparql')
+sq = [it for it in grp.items if it[0]=='subquery'][0][1]
+for it in sq.items:
+    print(it[0], it[1:] if it[0]!='exists' else 'EX')
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S px, sel, grp, gb = S…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 61 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+px, sel, grp, gb = S.parse_query('/app/solution.sparql')
+sq = [it for it in grp.items if it[0]=='subquery'][0][1]
+print(sq.items[3])
+triples = S.parse_turtle('/app/university_graph.ttl')
+b = S.eval_group(S.Group_from(sq.items[:3]), [{}], triples, px)
+print(b[:2])
+print([ (k,type(v)) for k,v in b[0].items()])
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S px, sel, grp, gb = S…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 62 tool call(s) so far
+  │ The datatype IRI got mangled by my comment stripper (`#date` → `#` starts…
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+old = """def parse_turtle(path):
+    src = open(path, encoding='utf-8').read()
+    src = re.sub(r'#[^\\n]*', '', src)"""
+new = """def parse_turtle(path):
+    src = open(path, encoding='utf-8').read()
+    src = strip_comments(src)"""
+assert old in src
+open('sparql.py','w').write(src.replace(old,new))
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() old = ""…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 63 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+old = """            self.next(); args = []
+            while self.peek() != ')':"""
+new = """            self.next(); args = []
+            if self.peek() is not None and self.peek().upper() == 'DISTINCT':
+                self.next()
+            while self.peek() != ')':"""
+assert old in src
+src = src.replace(old, new)
+# HAVING should evaluate the aggregate against precomputed bindings
+old2 = """            if fn in ('COUNT', 'GROUP_CONCAT'):
+                return ('AGG', fn, args)"""
+new2 = """            if fn == 'COUNT':
+                return self.b.get('__count__')
+            if fn == 'GROUP_CONCAT':
+                return self.b.get('__concat__')"""
+assert old2 in src
+src = src.replace(old2, new2)
+open('sparql.py','w').write(src)
+EOF
+grep -n "__count__\|__concat__" /tmp/v/sparql.py — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() old = ""…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 64 tool call(s) so far
+  [tools] 64/256 calls — continuing (leg 3)
+  deepseek-v4.1-flash — leg 3, 64 call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+start = src.index("def aggregate(sq, rows, px):")
+end = src.index("def run(ttl, qpath):")
+new = '''def aggregate(sq, rows, px):
+    keys = []
+    for item in sq.proj:
+        if item[0].startswith('?'):
+            keys.append(item[0][1:])
+        else:
+            txt = ' '.join(item)
+            m = re.search(r'AS\\s+(\\?\\w+)', txt)
+            keys.append(m.group(1)[1:])
+    groups = {}
+    for r in rows:
+        k = tuple(valstr(r.get(g)) for g in sq.groupby)
+        groups.setdefault(k, []).append(r)
+    out = []
+    for k, grp in groups.items():
+        b = {}
+        for g, kv in zip(sq.groupby, k):
+            b[g] = grp[0].get(g)
+        count_val = None
+        for item in sq.proj:
+            if item[0].startswith('?'):
+                continue
+            txt = ' '.join(item)
+            target = re.search(r'AS\\s+(\\?\\w+)', txt).group(1)[1:]
+            fn = re.search(r'\\b(GROUP_CONCAT|COUNT|SUM|AVG|MIN|MAX)\\b', txt).group(1)
+            inner = re.search(r'\\(\\s*(?:DISTINCT\\s+)?(\\?\\w+)', txt).group(1)[1:]
+            distinct = 'DISTINCT' in txt.upper()
+            vals = [r.get(inner) for r in grp]
+            if distinct:
+                seen = []
+                for v in vals:
+                    if v not in seen: seen.append(v)
+                vals = seen
+            if fn == 'COUNT':
+                count_val = len(vals)
+                b[target] = count_val
+            elif fn == 'GROUP_CONCAT':
+                sep = ', '
+                sm = re.search(r'separator\\s*=\\s*"(.*?)"', txt, re.I)
+                if sm: sep = sm.group(1)
+                b[target] = sep.join(sorted(valstr(v) for v in vals if v is not None))
+            else:
+                raise Exception('agg ' + fn)
+        if sq.having:
+            hb = dict(b)
+            if count_val is not None:
+                hb['__count__'] = count_val
+            if not truth(eval_expr(sq.having, hb, px)):
+                continue
+        out.append(b)
+    return out
+
+'''
+open('sparql.py','w').write(src[:start] + new + src[end:])
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() start = …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 65 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+triples = S.parse_turtle('/app/university_graph.ttl')
+px, sel, grp, gb = S.parse_query('/app/solution.sparql')
+sq = [it for it in grp.items if it[0]=='subquery'][0][1]
+rows = S.eval_group(S.Group_from(sq.items), [{}], triples, px)
+print("subquery rows:", len(rows))
+agg = S.aggregate(sq, rows, px)
+for a in agg: print(S.valstr(a.get('crowdedDepartment')), a.get('enrolledStudents'))
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S triples = S.parse_tu…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 66 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+px, sel, grp, gb = S.parse_query('/app/solution.sparql')
+sq = [it for it in grp.items if it[0]=='subquery'][0][1]
+print("proj:", sq.proj)
+print("groupby:", sq.groupby)
+print("having:", sq.having)
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S px, sel, grp, gb = S…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 67 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+old = "            sq.proj = parse_select_list(toks[j:k])"
+new = "            sq.proj = parse_select_list([t for t in toks[j:k] if t.upper() != 'WHERE'])"
+assert old in src
+open('sparql.py','w').write(src.replace(old,new))
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() old = " …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 68 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+triples = S.parse_turtle('/app/university_graph.ttl')
+px, sel, grp, gb = S.parse_query('/app/solution.sparql')
+sq = [it for it in grp.items if it[0]=='subquery'][0][1]
+rows = S.eval_group(S.Group_from(sq.items), [{}], triples, px)
+agg = S.aggregate(sq, rows, px)
+print("agg rows:", len(agg))
+for a in agg: print(S.valstr(a.get('crowdedDepartment')), a.get('enrolledStudents'))
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S triples = S.parse_tu…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 69 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+old = """            inner = re.search(r'\\(\\s*(?:DISTINCT\\s+)?(\\?\\w+)', txt).group(1)[1:]"""
+print(old in src)
+EOF
+sed -n '/def aggregate/,/^def run/p' /tmp/v/sparql.py — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() old = ""…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 70 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S, re
+triples = S.parse_turtle('/app/university_graph.ttl')
+px, sel, grp, gb = S.parse_query('/app/solution.sparql')
+sq = [it for it in grp.items if it[0]=='subquery'][0][1]
+rows = S.eval_group(S.Group_from(sq.items), [{}], triples, px)
+print("rows:", len(rows))
+g = S.Group_from(sq.items)
+txt=' '.join(sq.proj[1])
+print("txt:", txt)
+print("target", re.search(r'AS\s+(\?\w+)', txt).group(1))
+print("fn", re.search(r'\b(GROUP_CONCAT|COUNT|SUM|AVG|MIN|MAX)\b', txt).group(1))
+print("inner", re.search(r'\(\s*(?:DISTINCT\s+)?(\?\w+)', txt).group(1))
+from collections import Counter
+print(Counter(S.valstr(r.get('crowdedDepartment')) for r in rows))
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S, re triples = S.pars…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 71 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S, re
+triples = S.parse_turtle('/app/university_graph.ttl')
+px, sel, grp, gb = S.parse_query('/app/solution.sparql')
+sq = [it for it in grp.items if it[0]=='subquery'][0][1]
+print("proj:", sq.proj)
+rows = S.eval_group(S.Group_from(sq.items), [{}], triples, px)
+from collections import Counter
+c = Counter(S.valstr(r.get('crowdedDepartment')) for r in rows)
+print(c)
+txt = ' '.join(sq.proj[0])
+print(repr(txt))
+print(S.aggregate(sq, rows, px))
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S, re triples = S.pars…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 72 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+px, sel, grp, gb = S.parse_query('/app/solution.sparql')
+sq = [it for it in grp.items if it[0]=='subquery'][0][1]
+hb = {'crowdedDepartment': ('iri','x'), 'enrolledStudents': 12, '__count__': 12}
+print(S.eval_expr(sq.having, hb, px))
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S px, sel, grp, gb = S…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 73 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S, re
+triples = S.parse_turtle('/app/university_graph.ttl')
+px, sel, grp, gb = S.parse_query('/app/solution.sparql')
+sq = [it for it in grp.items if it[0]=='subquery'][0][1]
+rows = S.eval_group(S.Group_from(sq.items), [{}], triples, px)
+txt = ' '.join(sq.proj[0])
+target = re.search(r'AS\s+(\?\w+)', txt).group(1)[1:]
+fn = re.search(r'\b(GROUP_CONCAT|COUNT|SUM|AVG|MIN|MAX)\b', txt).group(1)
+inner = re.search(r'\(\s*(?:DISTINCT\s+)?(\?\w+)', txt).group(1)[1:]
+print(target, fn, inner)
+vals = [r.get(inner) for r in rows]
+seen=[]
+for v in vals:
+    if v not in seen: seen.append(v)
+print(len(vals), len(seen))
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S, re triples = S.pars…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 74 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S, re
+triples = S.parse_turtle('/app/university_graph.ttl')
+px, sel, grp, gb = S.parse_query('/app/solution.sparql')
+sq = [it for it in grp.items if it[0]=='subquery'][0][1]
+print("groupby:", sq.groupby, "having:", sq.having)
+rows = S.eval_group(S.Group_from(sq.items), [{}], triples, px)
+groups={}
+for r in rows:
+    k = tuple(S.valstr(r.get(g)) for g in sq.groupby)
+    groups.setdefault(k, []).append(r)
+print(len(groups), list(groups)[:5])
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S, re triples = S.pars…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 75 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S
+src = S.strip_comments(open('/app/solution.sparql').read())
+toks = S.QT.findall(src)
+i = toks.index('?crowdedDepartment')
+print(toks[i:i+14])
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S src = S.strip_commen…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 76 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+import sparql as S, re
+triples = S.parse_turtle('/app/university_graph.ttl')
+px, sel, grp, gb = S.parse_query('/app/solution.sparql')
+sq = [it for it in grp.items if it[0]=='subquery'][0][1]
+rows = S.eval_group(S.Group_from(sq.items), [{}], triples, px)
+# monkeypatch to trace
+orig = S.eval_expr
+def traced(toks, b, px):
+    r = orig(toks, b, px)
+    print("HAVING eval", toks, "->", r, "count=", b.get('__count__'))
+    return r
+S.eval_expr = traced
+print(len(S.aggregate(sq, rows, px)))
+EOF — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' import sparql as S, re triples = S.pars…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 77 tool call(s) so far
+  │ The subquery's two select expressions got merged into one item (no comma)…
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+old = """    for t in toks:
+        if t=='(': depth+=1
+        if t==')': depth-=1"""
+new = """    for t in toks:
+        if t == '(' and depth == 0 and cur:
+            items.append(cur); cur = []
+        if t=='(': depth+=1
+        if t==')': depth-=1"""
+assert old in src
+open('sparql.py','w').write(src.replace(old,new))
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() old = ""…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 78 tool call(s) so far
+[approval] bash: cd /tmp/v && python3 - <<'EOF'
+src = open('sparql.py').read()
+old = """    if 'GROUP' in [t.upper() for t in tail]:
+        m = [n for n,t in enumerate(tail) if t.upper()=='GROUP'][0]
+        gb = [t for t in tail[m+2:] if t.startswith('?')]"""
+new = """    if 'GROUP' in [t.upper() for t in tail]:
+        m = [n for n,t in enumerate(tail) if t.upper()=='GROUP'][0]
+        end = len(tail)
+        if 'ORDER' in [t.upper() for t in tail]:
+            end = [n for n,t in enumerate(tail) if t.upper()=='ORDER'][0]
+        gb = [t[1:] for t in tail[m+2:end] if t.startswith('?')]"""
+assert old in src
+open('sparql.py','w').write(src.replace(old,new))
+EOF
+python3 /tmp/v/sparql.py /app/solution.sparql — approved
+  ⚙ bash cd /tmp/v && python3 - <<'EOF' src = open('sparql.py').read() old = ""…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 79 tool call(s) so far
+  │ The query executes and returns three professors. Let me verify each again…
+[approval] bash: cd /app && python3 - <<'EOF'
+import re
+src = open('university_graph.ttl', encoding='utf-8').read()
+# dept -> country
+dc = {}
+for m in re.finditer(r'(uni:\w+) a uni:Department ;\s*uni:belongsTo (uni:\w+)', src):
+    u = m.group(2)
+    c = re.search(re.escape(u) + r' a uni:University ;\s*uni:hasName "[^"]*" ;\s*uni:locatedInCountry "(\w+)"', src)
+    dc[m.group(1)] = c.group(1)
+print(dc)
+print()
+for m in re.finditer(r'(uni:\w+) a uni:Person ;\s*uni:hasName "([^"]+)" ;\s*uni:role "([^"]+)" ;(?:\s*uni:teaches [^;]+;)?\s*uni:worksIn ([^.]*)\.', src):
+    print(m.group(2), '|', m.group(3), '|', [dc.get(d.strip()) for d in m.group(4).split(',')])
+EOF — approved
+  ⚙ bash cd /app && python3 - <<'EOF' import re src = open('university_graph.tt…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 80 tool call(s) so far
+  │ Two independent computations agree. Final check of the file's syntax bala…
+[approval] bash: cd /app && python3 - <<'EOF'
+src = open('solution.sparql').read()
+import re
+# strip comments and strings for balance check
+body = re.sub(r'#.*', '', src)
+body = re.sub(r'"(?:[^"\\]|\\.)*"', '""', body)
+for o,c in [('{','}'),('(',')')]:
+    print(o, body.count(o), c, body.count(c), "OK" if body.count(o)==body.count(c) else "MISMATCH")
+print("SELECT line:", [l for l in src.splitlines() if l.startswith('SELECT')])
+EOF — approved
+  ⚙ bash cd /app && python3 - <<'EOF' src = open('solution.sparql').read() impo…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 81 tool call(s) so far
+[approval] bash: cd /app && python3 /tmp/v/sparql.py /app/solution.sparql && cat solution.sparql — approved
+  ⚙ bash cd /app && python3 /tmp/v/sparql.py /app/solution.sparql && cat soluti…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 82 tool call(s) so far
+  deepseek-v4.1-flash — 83 tool call(s) so far
+  ⚙ note 
+    ✓ note — No SPARQL engine (rdflib/jena/oxigraph) and no network in th
+`/app/solution.sparql` is written.
+
+**Result** (verified by executing the query file against the graph):
+
+| professorName | countries |
+|---|---|
+| Aristotle Tympas | GR |
+| Orfeas Menis | GR, US |
+| Pepe Attanasio | GR, PT |
+
+**Query shape**
+- Full professors: `role` matched by `REGEX(STR(?role), "^(Full )?Professor", "i")`, which excludes "Assistant Professor …" (Voulodimos, Mueller).
+- EU requirement: `FILTER EXISTS { … locatedInCountry ?euCountry FILTER(?euCountry IN (27 codes)) }` — an EXISTS so the EU check does not narrow `?country`; `?countries` still aggregates *all* countries the professor works in (hence "GR, US" for Menis).
+- Crowded department: correlated subquery `GROUP BY ?crowdedDepartment HAVING (COUNT(DISTINCT ?student) > 10)` over `isEnrolledIn`/`isTaughtIn`, counting only *currently* enrolled students — enrolled on or before 2025-08-16, and not already graduated (`FILTER NOT EXISTS` a graduation date ≤ 2025-08-16, so graduates like Students 18–26 and the dangling `uni:Bio10` typo don't inflate counts).
+
+Counts behind the filter: ComputerScience_NTUA 12, HistoryAndPhilosophy_NKUA 12, Engineering_Berkeley 11 (US, so not EU), Biology_MIT 7, Mathematics_Sorbonne 6 — so Dubois (FR, only Sorbonne) and Smith (US) are correctly excluded.
+
+**Verification note:** the image has no SPARQL engine (no rdflib/Jena/oxigraph) and network is disabled, so I couldn't run a reference implementation. Instead I wrote a small SPARQL-subset evaluator (`/tmp/v/sparql.py`) that parses the Turtle and evaluates the actual query file, and cross-checked its output against a separate regex-based reading of the same data — both give the same three rows.
+
+**Left undone:** the query's `GROUP_CONCAT` has no `ORDER BY` inside it, so a real engine may emit `countries` in any order (e.g. "US, GR"); the requested `SELECT` signature was kept verbatim rather than adding a sort key.
+
+[refusal] role=implementor model=deepseek-v4.1-flash tools=83 surface=59338fa2ec97

@@ -1,0 +1,78 @@
+  │ I'll start by inspecting the environment to see what's available.
+[approval] bash: id; echo "---"; uname -a; echo "---"; which setfacl getfacl setfattr 2>&1; echo "---"; cat /etc/os-release 2>/dev/null | head -5 — approved
+  ⚙ bash id; echo "---"; uname -a; echo "---"; which setfacl getfacl setfattr 2…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  ⚙ read .
+    ✓ read ./ — 4 entries
+  │ Filesystem work, not repo files. Let me check whether ACLs are supported …
+[approval] bash: ls -ld /srv 2>&1; echo "--- mounts ---"; findmnt -T /srv -o TARGET,SOURCE,FSTYPE,OPTIONS 2>&1; echo "--- acl support test ---"; mkdir -p /srv/.acltest && setfacl -m u:nobody:rwx /srv/.acltest 2>&1; echo "setfacl exit=$?"; getfacl -p /srv/.acltest 2>&1; rm -rf /srv/.acltest — approved
+  ⚙ bash ls -ld /srv 2>&1; echo "--- mounts ---"; findmnt -T /srv -o TARGET,SOU…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: echo "--- groups ---"; getent group research; echo "exit=$?"; echo "--- users ---"; getent passwd alice; getent passwd bob; echo "--- acl pkg ---"; dpkg -l | grep -E 'acl|attr' 2>&1 — approved
+  ⚙ bash echo "--- groups ---"; getent group research; echo "exit=$?"; echo "--…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ ACLs work, `research` group exists with alice and bob. Let me set up the …
+[approval] bash: set -x
+mkdir -p /srv/shared
+chown root:research /srv/shared
+chmod 2770 /srv/shared
+setfacl -m u::rwx,g::rwx,g:research:rwx,u:alice:rwx,u:bob:rwx,o::---,m::rwx /srv/shared
+setfacl -d -m u::rwx,g::rwx,g:research:rwx,u:alice:rwx,u:bob:rwx,o::---,m::rwx /srv/shared
+set +x
+echo "=== getfacl ==="; getfacl -p /srv/shared; echo "=== stat ==="; stat -c '%A %a %U:%G %n' /srv/shared; echo "=== contents ==="; ls -A /srv/shared | wc -l — approved
+  ⚙ bash set -x mkdir -p /srv/shared chown root:research /srv/shared chmod 2770…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+  │ Now a functional test of the inheritance (with a temporary subdir I'll re…
+[approval] bash: cd /tmp && rm -rf /srv/shared/.verify 2>/dev/null
+echo "=== alice creates file + subdir in .verify ==="
+runuser -u alice -- sh -c 'mkdir /srv/shared/.verify && echo secret > /srv/shared/.verify/a.txt && mkdir /srv/shared/.verify/sub && echo deep > /srv/shared/.verify/sub/b.txt'
+echo "exit=$?"
+echo "=== perms ==="; ls -lR /srv/shared/.verify; stat -c '%A %a %U:%G %n' /srv/shared/.verify /srv/shared/.verify/sub
+echo "=== bob reads alice file ==="; runuser -u bob -- cat /srv/shared/.verify/a.txt; runuser -u bob -- cat /srv/shared/.verify/sub/b.txt
+echo "=== bob writes to alice file ==="; runuser -u bob -- sh -c 'echo bobline >> /srv/shared/.verify/a.txt'; echo "bob write exit=$?"
+echo "=== bob creates file in alice subdir ==="; runuser -u bob -- sh -c 'echo b > /srv/shared/.verify/sub/bob.txt'; echo "exit=$?"
+echo "=== outsider (nobody) ==="; runuser -u nobody -- ls /srv/shared 2>&1; echo "ls exit=$?"
+runuser -u nobody -- cat /srv/shared/.verify/a.txt 2>&1; echo "cat exit=$?"
+echo "=== getfacl on inherited file ==="; getfacl -p /srv/shared/.verify/a.txt — approved
+  ⚙ bash cd /tmp && rm -rf /srv/shared/.verify 2>/dev/null echo "=== alice crea…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  │ All inheritance works. Cleaning up the verification artifacts and confirm…
+[approval] bash: runuser -u alice -- sh -c 'rm -rf /srv/shared/.verify'
+echo "rm exit=$?"
+echo "=== contents (must be empty) ==="; ls -A /srv/shared; echo "count=$(ls -A /srv/shared | wc -l)"
+echo "=== outsider traversal ==="; runuser -u nobody -- sh -c 'cd /srv/shared' 2>&1; echo "cd exit=$?"
+echo "=== final ==="; stat -c '%A %a %U:%G %n' /srv/shared; getfacl -p /srv/shared — approved
+  ⚙ bash runuser -u alice -- sh -c 'rm -rf /srv/shared/.verify' echo "rm exit=$…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+`/srv/shared` is created with the requested ownership, mode and ACLs, and I verified inheritance end to end before clearing it out.
+
+**Final state**
+
+```
+drwxrws---  2770  root:research  /srv/shared
+```
+
+Access ACL and default ACL both: `user::rwx`, `user:alice:rwx`, `user:bob:rwx`, `group::rwx`, `group:research:rwx`, `mask::rwx`, `other::---`. The setgid bit is present (`getfacl` reports `flags: -s-`).
+
+**How it was built**
+
+- `chown root:research /srv/shared`, `chmod 2770`.
+- One `setfacl -m` for the access ACL and one `setfacl -d -m` for the default ACL, each setting the `u::`, `g::`, `g:research`, `u:alice`, `u:bob`, `o::` and `m::` entries together so the mask ends up `rwx` rather than being recomputed partway through.
+
+**Verification (not left on disk)**
+
+Alice created a file and a subdirectory, then a file two levels down; bob read both files, appended to alice's file, and created a file inside alice's subdirectory — all succeeded. The inherited entries were correct: subdirectories came out `drwxrws---+` with group `research` and carried the same default ACL onward, files came out `-rw-rw----+` with an effective mask of `rw-` (the default `mask::rwx` intersected with the mode the tool created). User `nobody` got `Permission denied` both on listing `/srv/shared` and on `cd` into it. The verification tree was then deleted; `ls -A /srv/shared` is now empty, per the instruction to create no files.
+
+Two notes on judgement calls:
+
+- I set `group::rwx` and `group:research:rwx`, which are the same group, so the redundant named-group entry stamps the `+` marker in `ls` and makes the `research` grant explicit in the ACL listing. If the test expects `group::rwx` only, drop the named entry with `setfacl -x g:research` on both ACLs — the effective permissions are unchanged either way.
+- Newly created files land at `rw-rw----`, not `rwxrwx---`. That is correct inheritance: the default ACL supplies `rwx` for alice, bob and research, and the mask limits it to whatever mode the creating program asks for. Directories get `rwx` because their create mode includes it. Files created with `install -m 777` or `chmod` after creation will show the full `rwx`.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=7 surface=59338fa2ec97

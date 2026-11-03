@@ -1,0 +1,691 @@
+[approval] bash: pwd; ls -la; echo ---; ls -la /app 2>/dev/null | head -30; echo ---; python3 --version; gcc --version | head -1 — approved
+  ⚙ bash pwd; ls -la; echo ---; ls -la /app 2>/dev/null | head -30; echo ---; p…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  ⚙ glob 
+    ✓ glob **/* — 12 file(s)
+[approval] bash: mkdir -p /app/polyglot && ls -la /app/polyglot — approved
+  ⚙ bash mkdir -p /app/polyglot && ls -la /app/polyglot
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: cd /tmp && printf '%s\n' '#define Q "\' '"""' 'int x;' > t.c && cat -A t.c | head -5 && gcc -c t.c -o t.o && echo COMPILED; printf '%s\n' 'x="""abc"""' > t2.py && python3 t2.py && echo PYO K — approved
+  ⚙ bash cd /tmp && printf '%s\n' '#define Q "\' '"""' 'int x;' > t.c && cat -A…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+[approval] bash: cd /tmp && rm -rf ex && mkdir ex && cd ex
+cat > a.c <<'EOF'
+#if 0
+"""
+#endif
+
+#include <stdio.h>
+int main(void) { printf("hi\n"); return 0; }
+
+#if 0
+"""
+#endif
+EOF
+echo "=== test a ==="; gcc a.c -o a 2>&1; echo "gcc exit=$?"; ./a
+cat > b.py <<'EOF'
+#if 0
+"""
+#endif
+
+import sys
+print("py ok", sys.version_info[0])
+EOF
+echo "=== test b (python view of same scheme) ==="; python3 b.py 2>&1; echo "py exit=$?" — approved
+  ⚙ bash cd /tmp && rm -rf ex && mkdir ex && cd ex cat > a.c <<'EOF' #if 0 """ …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: cd /tmp/ex
+cat > c1.c <<'EOF'
+#if 0
+""""
+#endif
+#include <stdio.h>
+int main(void){ printf("c ok\n"); return 0; }
+#if 0
+""""
+#endif
+EOF
+echo "--- gcc c1 ---"; gcc c1.c -o c1 2>&1; echo "gcc exit=$?"; ./c1
+cat > p1.py <<'EOF'
+#if 0
+""""
+#endif
+import sys
+print("py ok")
+#if 0
+""""
+#endif
+print("still py")
+EOF
+echo "--- python p1 ---"; python3 p1.py 2>&1; echo "py exit=$?" — approved
+  ⚙ bash cd /tmp/ex cat > c1.c <<'EOF' #if 0 """" #endif #include <stdio.h> int…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+[approval] bash: mkdir -p /app/polyglot && cat > /app/polyglot/main.py.c <<'EOF'
+#if 0
+""""
+#endif
+
+/*
+ * C branch: arbitrary-precision Fibonacci via fast doubling.
+ * Compiles cleanly with gcc; the Python branch below is skipped by #if 0.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define BIG_BASE 1000000000ULL
+
+typedef unsigned int limb;
+typedef unsigned long long wide;
+
+typedef struct {
+    limb *v;      /* little endian limbs, base 1e9 */
+    size_t n;     /* limbs in use, always >= 1 */
+    size_t cap;
+} Big;
+
+static void die(void)
+{
+    fputs("out of memory\n", stderr);
+    exit(1);
+}
+
+static void big_init(Big *x)
+{
+    x->cap = 4;
+    x->n = 1;
+    x->v = (limb *)malloc(x->cap * sizeof(limb));
+    if (!x->v) die();
+    x->v[0] = 0;
+}
+
+static void big_free(Big *x)
+{
+    free(x->v);
+    x->v = NULL;
+    x->n = 0;
+    x->cap = 0;
+}
+
+static void big_reserve(Big *x, size_t cap)
+{
+    if (cap <= x->cap) return;
+    {
+        size_t c = x->cap ? x->cap : 4;
+        limb *p;
+        while (c < cap) c *= 2;
+        p = (limb *)realloc(x->v, c * sizeof(limb));
+        if (!p) die();
+        x->v = p;
+        x->cap = c;
+    }
+}
+
+static void big_trim(Big *x)
+{
+    while (x->n > 1 && x->v[x->n - 1] == 0) x->n--;
+}
+
+static void big_set_u64(Big *x, unsigned long long val)
+{
+    big_reserve(x, 3);
+    x->n = 0;
+    if (val == 0) {
+        x->v[0] = 0;
+        x->n = 1;
+        return;
+    }
+    while (val) {
+        x->v[x->n++] = (limb)(val % BIG_BASE);
+        val /= BIG_BASE;
+    }
+}
+
+static void big_copy(Big *r, const Big *a)
+{
+    if (r == a) return;
+    big_reserve(r, a->n);
+    memcpy(r->v, a->v, a->n * sizeof(limb));
+    r->n = a->n;
+}
+
+/* r = a + b; r may alias a or b */
+static void big_add(Big *r, const Big *a, const Big *b)
+{
+    size_t n = a->n > b->n ? a->n : b->n;
+    size_t i;
+    wide carry = 0;
+    big_reserve(r, n + 1);
+    for (i = 0; i < n; i++) {
+        wide s = carry;
+        if (i < a->n) s += a->v[i];
+        if (i < b->n) s += b->v[i];
+        carry = s / BIG_BASE;
+        r->v[i] = (limb)(s % BIG_BASE);
+    }
+    r->n = n;
+    if (carry) r->v[r->n++] = (limb)carry;
+    big_trim(r);
+}
+
+/* r = a - b, requires a >= b; r may alias a or b */
+static void big_sub(Big *r, const Big *a, const Big *b)
+{
+    size_t i;
+    wide borrow = 0;
+    big_reserve(r, a->n);
+    for (i = 0; i < a->n; i++) {
+        wide hi = (i < b->n) ? b->v[i] : 0;
+        wide ai = a->v[i];
+        wide lo = hi + borrow;
+        if (ai < lo) {
+            r->v[i] = (limb)(ai + BIG_BASE - lo);
+            borrow = 1;
+        } else {
+            r->v[i] = (limb)(ai - lo);
+            borrow = 0;
+        }
+    }
+    r->n = a->n;
+    big_trim(r);
+}
+
+/* r = a * b; r must not alias a or b */
+static void big_mul(Big *r, const Big *a, const Big *b)
+{
+    size_t n = a->n + b->n;
+    size_t i, j;
+    limb *res = (limb *)calloc(n, sizeof(limb));
+    if (!res) die();
+    for (i = 0; i < a->n; i++) {
+        wide carry = 0;
+        wide ai = a->v[i];
+        for (j = 0; j < b->n; j++) {
+            wide cur = (wide)res[i + j] + ai * (wide)b->v[j] + carry;
+            res[i + j] = (limb)(cur % BIG_BASE);
+            carry = cur / BIG_BASE;
+        }
+        res[i + b->n] = (limb)carry;
+    }
+    big_reserve(r, n);
+    memcpy(r->v, res, n * sizeof(limb));
+    r->n = n;
+    big_trim(r);
+    free(res);
+}
+
+static void big_print(const Big *x)
+{
+    size_t i = x->n;
+    printf("%u", x->v[x->n - 1]);
+    while (i-- > 1) printf("%09u", x->v[i - 1]);
+    putchar(10);
+}
+
+static unsigned long long fib_double(unsigned long long n, Big *out)
+{
+    Big a, b, c, d, e, t;
+    int top, i;
+
+    big_init(&a);
+    big_init(&b);
+    big_init(&c);
+    big_init(&d);
+    big_init(&e);
+    big_init(&t);
+
+    big_set_u64(&a, 0);
+    big_set_u64(&b, 1);
+
+    if (n > 0) {
+        top = 63;
+        while (((n >> top) & 1ULL) == 0) top--;
+        for (i = top; i >= 0; i--) {
+            big_add(&t, &b, &b);     /* t = 2b        */
+            big_sub(&t, &t, &a);     /* t = 2b - a    */
+            big_mul(&c, &a, &t);     /* c = a*(2b-a)  */
+            big_mul(&e, &a, &a);     /* e = a*a       */
+            big_mul(&d, &b, &b);     /* d = b*b       */
+            big_add(&d, &e, &d);     /* d = a*a + b*b */
+            if ((n >> i) & 1ULL) {
+                big_add(&e, &c, &d); /* e = c + d     */
+                big_copy(&a, &d);
+                big_copy(&b, &e);
+            } else {
+                big_copy(&a, &c);
+                big_copy(&b, &d);
+            }
+        }
+    }
+
+    big_copy(out, &a);
+    big_free(&a);
+    big_free(&b);
+    big_free(&c);
+    big_free(&d);
+    big_free(&e);
+    big_free(&t);
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    unsigned long long n;
+    char *end = NULL;
+    Big result;
+
+    if (argc < 2) {
+        fputs("usage: main N\n", stderr);
+        return 1;
+    }
+    if (argv[1][0] == 45) {           /* leading minus sign */
+        fputs("N must be a non-negative integer\n", stderr);
+        return 1;
+    }
+    n = strtoull(argv[1], &end, 10);
+    if (end == NULL || end == argv[1] || end[0] != 0) {
+        fputs("N must be a non-negative integer\n", stderr);
+        return 1;
+    }
+
+    big_init(&result);
+    fib_double(n, &result);
+    big_print(&result);
+    big_free(&result);
+    return 0;
+}
+
+#if 0
+""""""""""""
+import sys
+
+
+def fib(n):
+    a = 0
+    b = 1
+    i = n.bit_length() - 1
+    while i >= 0:
+        c = a * ((b << 1) - a)
+        d = a * a + b * b
+        if (n >> i) & 1:
+            a = d
+            b = c + d
+        else:
+            a = c
+            b = d
+        i -= 1
+    return a
+
+
+def main():
+    if len(sys.argv) < 2:
+        raise SystemExit(1)
+    text = sys.argv[1].strip()
+    if not text.isdigit():
+        raise SystemExit(1)
+    sys.stdout.write(chr(10).join([str(fib(int(text))), chr(0)])[:-1])
+
+
+main()
+#endif
+EOF
+echo written; wc -l /app/polyglot/main.py.c — approved
+  ⚙ bash mkdir -p /app/polyglot && cat > /app/polyglot/main.py.c <<'EOF' #if 0 …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: cd /app/polyglot && gcc -Wall -Wextra -std=c99 main.py.c -o cmain 2>&1; echo "gcc exit=$?"; echo ---; python3 main.py.c 10; echo "py10 exit=$?" — approved
+  ⚙ bash cd /app/polyglot && gcc -Wall -Wextra -std=c99 main.py.c -o cmain 2>&1…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+[approval] bash: cd /tmp/ex
+cat > d.c <<'EOF'
+#if 0
+"""
+#endif
+#include <stdio.h>
+int main(void){ printf("c ok\n"); return 0; }
+#if 0
+"""
+#endif
+EOF
+echo "--- gcc -Wall d.c ---"; gcc -Wall -Wextra d.c -o d 2>&1; echo "gcc exit=$?"; ./d; echo ---
+cat > d.py <<'EOF'
+#if 0
+"""
+#endif
+#include <stdio.h>
+int main(void){ printf("c ok\n"); return 0; }
+#if 0
+"""
+#endif
+import sys
+print("py ok")
+EOF
+python3 d.py 2>&1; echo "py exit=$?" — approved
+  ⚙ bash cd /tmp/ex cat > d.c <<'EOF' #if 0 """ #endif #include <stdio.h> int m…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: cd /tmp/ex
+cat > e.c <<'EOF'
+/*"""*/
+#include <stdio.h>
+#define S "hello"
+int main(void){ puts(S); printf("%d\n", 40+2); return 0; }
+/*"*/
+//"""
+#if 0
+import sys
+print( 'py ok', len(sys.argv) )
+#endif
+EOF
+echo "--- gcc e.c -Wall ---"; gcc -Wall -Wextra -std=c99 e.c -o e 2>&1; echo "gcc exit=$?"; ./e
+echo "--- python3 e.c ---"; python3 e.c 1 2 3 2>&1; echo "py exit=$?" — approved
+  ⚙ bash cd /tmp/ex cat > e.c <<'EOF' /*"""*/ #include <stdio.h> #define S "hel…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+[approval] bash: cd /tmp/ex
+cat > f.c <<'EOF'
+#ifdef NOTDEFINED_ANYWHERE
+""" """
+#endif
+#include <stdio.h>
+#define S "hello"
+int main(void){ puts(S); printf("%d\n", 40+2); return 0; }
+#ifdef NOTDEFINED_ANYWHERE
+""" """
+#endif
+EOF
+echo "--- gcc f.c ---"; gcc -Wall -Wextra -std=c99 f.c -o f 2>&1; echo "gcc exit=$?"; ./f
+cat > f.py <<'EOF'
+#ifdef NOTDEFINED_ANYWHERE
+"""
+"""
+#endif
+import sys
+print("py ok", len(sys.argv))
+#ifdef NOTDEFINED_ANYWHERE
+"""
+"""
+#endif
+print("done")
+EOF
+echo "--- python3 f.py ---"; python3 f.py a b 2>&1; echo "py exit=$?" — approved
+  ⚙ bash cd /tmp/ex cat > f.c <<'EOF' #ifdef NOTDEFINED_ANYWHERE """ """ #endif…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+[approval] bash: cd /tmp/ex
+cat > g.c <<'EOF'
+#ifdef POLYGLOT_PYTHON_BRANCH
+"""
+#endif
+#include <stdio.h>
+#include <stdlib.h>
+int main(int argc, char **argv)
+{
+    (void)argv;
+    printf("%d\n", argc > 0 ? 42 : 0);
+    return 0;
+}
+#ifdef POLYGLOT_PYTHON_BRANCH
+"""
+#endif
+#if 0
+import sys
+print("py ok", len(sys.argv) - 1)
+#endif
+EOF
+echo "--- gcc g.c -Wall -Wextra ---"; gcc -Wall -Wextra -std=c99 g.c -o g 2>&1; echo "gcc exit=$?"; ./g
+echo "--- python3 g.c a b ---"; python3 g.c a b 2>&1; echo "py exit=$?" — approved
+  ⚙ bash cd /tmp/ex cat > g.c <<'EOF' #ifdef POLYGLOT_PYTHON_BRANCH """ #endif …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+[approval] bash: cd /tmp/ex
+cat > h.c <<'EOF'
+#if 0
+""""
+#endif
+#include <stdio.h>
+#define S "hello"
+int main(void) { puts(S); printf("%d\n", 40 + 2); return 0; }
+#if 0
+"""#"
+#endif
+#if 0
+import sys
+print("py ok", len(sys.argv) - 1, 42)
+#endif
+EOF
+echo "--- gcc -Wall -Wextra -std=c99 h.c ---"; gcc -Wall -Wextra -std=c99 h.c -o h 2>&1; echo "gcc exit=$?"; ./h
+echo "--- python3 h.c a b ---"; python3 h.c a b 2>&1; echo "py exit=$?" — approved
+  ⚙ bash cd /tmp/ex cat > h.c <<'EOF' #if 0 """" #endif #include <stdio.h> #def…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  │ The `""""` opener and `"""#"` closer make both parsers agree. Writing the…
+[approval] write /app/polyglot/main.py.c (+198 −156) — approved
+  ⚙ write /app/polyglot/main.py.c
+    ✓ write /app/polyglot/main.py.c (+198 −156)
+  deepseek-v4.1-flash — 14 tool call(s) so far
+[approval] bash: cd /app/polyglot && gcc -Wall -Wextra -std=c99 -pedantic main.py.c -o cmain 2>&1; echo "gcc exit=$?"; echo "--- run ---"
+for n in 0 1 2 10 20 90 91; do printf 'n=%s py=%s c=%s\n' "$n" "$(python3 main.py.c $n)" "$(./cmain $n)"; done — approved
+  ⚙ bash cd /app/polyglot && gcc -Wall -Wextra -std=c99 -pedantic main.py.c -o …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 15 tool call(s) so far
+[approval] bash: cd /app/polyglot && grep -n '"""' main.py.c — approved
+  ⚙ bash cd /app/polyglot && grep -n '"""' main.py.c
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+[approval] write /app/polyglot/main.py.c (+29 −41) — approved
+  ⚙ write /app/polyglot/main.py.c
+    ✓ write /app/polyglot/main.py.c (+29 −41)
+  deepseek-v4.1-flash — 17 tool call(s) so far
+[approval] bash: cd /app/polyglot && gcc -Wall -Wextra -std=c99 -pedantic main.py.c -o cmain 2>&1; echo "gcc exit=$?"
+for n in 0 1 2 3 10 20 90 91 300; do p=$(python3 main.py.c $n 2>&1); c=$(./cmain $n 2>&1); [ "$p" = "$c" ] && s=OK || s=MISMATCH; printf 'n=%-4s %s py=%s\n' "$n" "$s" "$p"; done — approved
+  ⚙ bash cd /app/polyglot && gcc -Wall -Wextra -std=c99 -pedantic main.py.c -o …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 18 tool call(s) so far
+[approval] bash: cd /tmp/ex
+cat > k.c <<'EOF'
+#if 0
+""""
+#endif
+#include <stdio.h>
+int main(void){ printf("%d\n", 57); return 0; }
+#if 0
+"""#"
+#endif
+#if 0
+import sys
+# a python comment line
+def f():
+    return 42
+print(f(), len(sys.argv) - 1)
+#endif
+EOF
+echo "--- gcc -Wall -Wextra -std=c99 -pedantic k.c ---"; gcc -Wall -Wextra -std=c99 -pedantic k.c -o k 2>&1; echo "gcc exit=$?"; ./k
+echo "--- python3 k.c a b ---"; python3 k.c a b 2>&1; echo "py exit=$?" — approved
+  ⚙ bash cd /tmp/ex cat > k.c <<'EOF' #if 0 """" #endif #include <stdio.h> int …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 19 tool call(s) so far
+[approval] bash: cd /tmp/ex
+printf '#if 0\n""""\n#endif\nint x;\n#if 0\n"""#"\n#endif\n' > m.c
+cat -A m.c
+echo "--- gcc -Wall -std=c99 -pedantic -E m.c (empty macro check) ---"
+gcc -Wall -Wextra -std=c99 -pedantic -c m.c -o m.o 2>&1; echo "exit=$?"
+echo "--- tokens as C sees them (only region between blocks) ---"
+printf '""""\nint x;\n"""#"\n' > n.c
+gcc -Wall -Wextra -std=c99 -pedantic -c n.c -o n.o 2>&1; echo "exit=$?" — approved
+  ⚙ bash cd /tmp/ex printf '#if 0\n""""\n#endif\nint x;\n#if 0\n"""#"\n#endif\n…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 20 tool call(s) so far
+  │ The `""""` / `"""#"` marker pair is warning-free for gcc and valid for Py…
+[approval] write /app/polyglot/main.py.c (+14 −19) — approved
+  ⚙ write /app/polyglot/main.py.c
+    ✓ write /app/polyglot/main.py.c (+14 −19)
+  deepseek-v4.1-flash — 21 tool call(s) so far
+[approval] bash: cd /app/polyglot && grep -n '\\\\' main.py.c | head; echo "--- gcc ---"; gcc -Wall -Wextra -std=c99 -pedantic main.py.c -o cmain; echo "gcc exit=$?"; echo "--- python -W error ---"; python3 -W error main.py.c 10; echo "py exit=$?" — approved
+  ⚙ bash cd /app/polyglot && grep -n '\\\\' main.py.c | head; echo "--- gcc ---…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 22 tool call(s) so far
+[approval] bash: cd /app/polyglot && grep -n '""' main.py.c — approved
+  ⚙ bash cd /app/polyglot && grep -n '""' main.py.c
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 23 tool call(s) so far
+[approval] edit /app/polyglot/main.py.c (+3 −3) — approved
+  ⚙ edit /app/polyglot/main.py.c
+    ✓ edit /app/polyglot/main.py.c (+3 −3)
+  deepseek-v4.1-flash — 24 tool call(s) so far
+[approval] bash: cd /app/polyglot && grep -n '"""' main.py.c; echo "--- gcc ---"; gcc -Wall -Wextra -std=c99 -pedantic main.py.c -o cmain; echo "gcc exit=$?"; echo "--- py ---"; python3 -W error main.py.c 10; echo "py exit=$?" — approved
+  ⚙ bash cd /app/polyglot && grep -n '"""' main.py.c; echo "--- gcc ---"; gcc -…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 25 tool call(s) so far
+[approval] bash: cd /app/polyglot && python3 - <<'EOF'
+import subprocess
+def ref(n):
+    a,b=0,1
+    for _ in range(n): a,b=b,a+b
+    return a
+bad=0
+for n in range(0,301):
+    want=str(ref(n))
+    py=subprocess.run(["python3","main.py.c",str(n)],capture_output=True,text=True)
+    c=subprocess.run(["./cmain",str(n)],capture_output=True,text=True)
+    if py.returncode or c.returncode or py.stdout!=want+chr(10) or c.stdout!=want+chr(10):
+        bad+=1; print("FAIL",n,py.returncode,c.returncode,repr(py.stdout),repr(c.stdout),py.stderr[:80],c.stderr[:80])
+print("small-range failures:",bad)
+for n in (1000, 2000, 5000, 10000):
+    want=str(ref(n)) if n<=2000 else None
+    py=subprocess.run(["python3","main.py.c",str(n)],capture_output=True,text=True).stdout.strip()
+    c=subprocess.run(["./cmain",str(n)],capture_output=True,text=True).stdout.strip()
+    print(n, "digits",len(c), "py==c", py==c, "matches-ref", (want is None or py==want))
+EOF — approved
+  ⚙ bash cd /app/polyglot && python3 - <<'EOF' import subprocess def ref(n): a,…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 26 tool call(s) so far
+[approval] bash: cd /tmp && python3 /app/polyglot/main.py.c 10; gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cmain 10; echo "--- 100000 timing ---"; time /app/polyglot/cmain 100000 | wc -c; time python3 /app/polyglot/main.py.c 100000 | wc -c; echo "--- no arg ---"; /app/polyglot/cmain; echo "c exit=$?"; python3 /app/polyglot/main.py.c; echo "py exit=$?" — approved
+  ⚙ bash cd /tmp && python3 /app/polyglot/main.py.c 10; gcc /app/polyglot/main.…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 27 tool call(s) so far
+[approval] bash: cd /app/polyglot && start=$(date +%s%N); c=$(./cmain 100000 | md5sum); mid=$(date +%s%N); p=$(python3 main.py.c 100000 | md5sum); end=$(date +%s%N); echo "c: $c  $(( (mid-start)/1000000 )) ms"; echo "py: $p  $(( (end-mid)/1000000 )) ms"; [ "$c" = "$p" ] && echo SAME — approved
+  ⚙ bash cd /app/polyglot && start=$(date +%s%N); c=$(./cmain 100000 | md5sum);…
+    ✗ bash — exit 1
+  deepseek-v4.1-flash — 28 tool call(s) so far
+[approval] edit /app/polyglot/main.py.c (+3 −0) — approved
+  ⚙ edit /app/polyglot/main.py.c
+    ✓ edit /app/polyglot/main.py.c (+3 −0)
+  deepseek-v4.1-flash — 29 tool call(s) so far
+[approval] bash: cd /app/polyglot && python3 - <<'PY'
+import io,re
+p="main.py.c"
+s=open(p).read()
+s=s.replace('''    for (p = argv[1]; *p != '\\0'; p++) {''','''    if (argv[1][0] == '\\0') {
+        die("N must be a non-negative integer");
+    }
+    for (p = argv[1]; *p != '\\0'; p++) {''')
+s=s.replace('    text = sys.argv[1].strip()\n','    text = sys.argv[1]\n')
+open(p,"w").write(s)
+PY
+grep -n "argv\[1\]\[0\]" main.py.c; grep -n "text = sys.argv" main.py.c — approved
+  ⚙ bash cd /app/polyglot && python3 - <<'PY' import io,re p="main.py.c" s=open…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 30 tool call(s) so far
+[approval] bash: cd /app/polyglot && gcc -Wall -Wextra -std=c99 -pedantic main.py.c -o cmain; echo "gcc exit=$?"
+start=$(date +%s%N); c=$(./cmain 100000 | md5sum); mid=$(date +%s%N); p=$(python3 main.py.c 100000 | md5sum); end=$(date +%s%N)
+echo "c:  $c  $(( (mid-start)/1000000 ))ms"; echo "py: $p  $(( (end-mid)/1000000 ))ms"; [ "$c" = "$p" ] && echo SAME
+echo "--- edge args ---"
+for a in "" "-1" "abc" "1 2" "007"; do printf 'arg=[%s] c=%s py=%s\n' "$a" "$(./cmain "$a" 2>&1; echo "rc=$?")" "$(python3 main.py.c "$a" 2>&1 | tr '\n' ' '; echo "rc=$?")"; done — approved
+  ⚙ bash cd /app/polyglot && gcc -Wall -Wextra -std=c99 -pedantic main.py.c -o …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 31 tool call(s) so far
+[approval] bash: cd /app/polyglot && for a in "" "-1" "abc"; do ./cmain "$a" >/dev/null 2>&1; c=$?; python3 main.py.c "$a" >/dev/null 2>&1; p=$?; printf 'arg=[%s] c_rc=%s py_rc=%s\n' "$a" "$c" "$p"; done
+echo "--- python bytecode compile ---"; python3 -c "import py_compile,sys; py_compile.compile('main.py.c', cfile='/tmp/m.pyc', doraise=True); print('compiles clean')"
+echo "--- full range 0..400 both branches ---"
+python3 - <<'EOF'
+import subprocess
+def ref(n):
+    a,b=0,1
+    for _ in range(n): a,b=b,a+b
+    return str(a)+"\n"
+bad=[n for n in range(401) if subprocess.run(["python3","main.py.c",str(n)],capture_output=True,text=True).stdout!=ref(n)
+     or subprocess.run(["./cmain",str(n)],capture_output=True,text=True).stdout!=ref(n)]
+print("mismatches:", bad)
+EOF — approved
+  ⚙ bash cd /app/polyglot && for a in "" "-1" "abc"; do ./cmain "$a" >/dev/null…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 32 tool call(s) so far
+  [tools] 32/256 calls — continuing (leg 2)
+  deepseek-v4.1-flash — leg 2, 32 call(s) so far
+[approval] bash: cd / && python3 /app/polyglot/main.py.c 20; gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cmain 20; echo "--- independent check via sympy-free closed form ---"
+python3 - <<'EOF'
+def ref(n):
+    a,b=0,1
+    for _ in range(n): a,b=b,a+b
+    return a
+print("ref f(20) =", ref(20), " f(50) =", ref(50))
+EOF
+/app/polyglot/cmain 50; python3 /app/polyglot/main.py.c 50
+ls -l /app/polyglot — approved
+  ⚙ bash cd / && python3 /app/polyglot/main.py.c 20; gcc /app/polyglot/main.py.…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 33 tool call(s) so far
+[approval] bash: cd /app/polyglot && rm -f cmain && gcc main.py.c -o /tmp/cmain_check && /tmp/cmain_check 30 && python3 main.py.c 30 && rm -f /tmp/cmain_check && ls -l /app/polyglot — approved
+  ⚙ bash cd /app/polyglot && rm -f cmain && gcc main.py.c -o /tmp/cmain_check &…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 34 tool call(s) so far
+  deepseek-v4.1-flash — 35 tool call(s) so far
+  ⚙ read /app/polyglot/main.py.c
+    ✓ read /app/polyglot/main.py.c — 300 lines
+[approval] edit /app/polyglot/main.py.c (+3 −1) — approved
+  ⚙ edit /app/polyglot/main.py.c
+    ✓ edit /app/polyglot/main.py.c (+3 −1)
+  deepseek-v4.1-flash — 36 tool call(s) so far
+[approval] bash: cd /app/polyglot && gcc -Wall -Wextra -std=c99 -pedantic main.py.c -o /tmp/cmain_final; echo "gcc exit=$?"
+python3 - <<'EOF'
+import subprocess
+def ref(n):
+    a,b=0,1
+    for _ in range(n): a,b=b,a+b
+    return str(a)+"\n"
+bad=[n for n in range(0,501) if subprocess.run(["python3","main.py.c",str(n)],capture_output=True,text=True).stdout!=ref(n)
+     or subprocess.run(["/tmp/cmain_final",str(n)],capture_output=True,text=True).stdout!=ref(n)]
+print("0..500 mismatches:", bad)
+for a in ["", "-1", "abc", "1.5", "١٢"]:
+    r=[subprocess.run([prog,"main.py.c" if "python" in prog else "",a],capture_output=True,text=True) if False else None for prog in []]
+py=lambda a: subprocess.run(["python3","main.py.c",a],capture_output=True,text=True)
+c=lambda a: subprocess.run(["/tmp/cmain_final",a],capture_output=True,text=True)
+for a in ["", "-1", "abc", "1.5", "\u0661\u0662"]:
+    p,cc=py(a),c(a)
+    print(repr(a), "py_rc",p.returncode,"c_rc",cc.returncode,"same_out",p.stdout==cc.stdout)
+print("100000 match:", py("100000").stdout==c("100000").stdout, "digits", len(c("100000").stdout.strip()))
+EOF — approved
+  ⚙ bash cd /app/polyglot && gcc -Wall -Wextra -std=c99 -pedantic main.py.c -o …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 37 tool call(s) so far
+[approval] bash: cd /app/polyglot && ls -l && echo "--- exact commands you asked for ---" && python3 /app/polyglot/main.py.c 10 && gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cmain 10 && python3 /app/polyglot/main.py.c 0 && /app/polyglot/cmain 0 && python3 /app/polyglot/main.py.c 1 && /app/polyglot/cmain 1 && rm -f /app/polyglot/cmain && ls -l /app/polyglot — approved
+  ⚙ bash cd /app/polyglot && ls -l && echo "--- exact commands you asked for --…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 38 tool call(s) so far
+Done. `/app/polyglot/main.py.c` is written and verified.
+
+**How it works**
+- Lines 1–3: `#if 0` / `""""` / `#endif`. Python sees `""""` as the opening of a triple-quoted string (`"""` + `"`); C's preprocessor skips those lines entirely.
+- Everything from there through the C `main` is ordinary C, and simultaneously the body of that Python string — so Python never executes it.
+- Lines 260–262 close the string with `"""#"` (`"""` + `#"`), again inside `#if 0`. The trailing `#` makes Python's closer exactly three quotes while C still only sees *four* quotes, which the preprocessor discards without the "missing terminating \" character" warnings you'd get from `"""`.
+- The Python section is wrapped in `#if 0 … #endif`, so the C preprocessor skips it and Python runs it normally.
+
+**Both branches compute f(N) exactly, with arbitrary precision** (fast doubling: `f(2k)=f(k)(2f(k+1)−f(k))`, `f(2k+1)=f(k)²+f(k+1)²`). The C side carries a hand-written bignum on base-1e9 limbs; the Python side uses native ints, with `sys.set_int_max_str_digits(0)` so big results aren't blocked by the 3.11+ 4300-digit cap.
+
+**Checks run**
+- `gcc -Wall -Wextra -std=c99 -pedantic main.py.c` — compiles with zero diagnostics; `python3 -W error` and `py_compile` are also clean.
+- Both binaries agree with an independent iterative reference for every N from 0 to 500, and agree with each other at N = 1000, 2000, 5000, 10000 and 100000 (f(100000) has 20899 digits; both print identical output in ~40 ms). `f(0)=0`, `f(1)=1`, `f(10)=55`, `f(20)=6765`.
+- Invalid input (`""`, `-1`, `abc`, `1.5`, non-ASCII digits) exits 1 with a message on stderr in both branches; leading zeros (`007`) are accepted and print 13.
+
+I removed the `cmain` binary I built during testing, so the directory holds only `main.py.c` — your `gcc … -o /app/polyglot/cmain` command creates it fresh.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=38 surface=59338fa2ec97
