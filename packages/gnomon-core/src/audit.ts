@@ -188,6 +188,14 @@ export type AuditKind =
   // rules were read from. Its own kind for the reason `check` is: no model
   // produced it, and it is not a turn.
   | "guard"
+  // A person accepting or rejecting a proposed skill (skills.ts). Their own
+  // kinds because an accept is the one act that changes what the agent is on
+  // purpose: the trail showed the surface hash move, never who moved it, for
+  // which skill, or with what content. Each carries the skill's content hash
+  // and the surface hash before and after; written in a sealed trail of its
+  // own, like `check`.
+  | "skill_accept"
+  | "skill_reject"
   | "session_end";
 
 export interface AuditRecord {

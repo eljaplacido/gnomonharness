@@ -1506,15 +1506,30 @@ async function cmdSkill(args: CliArgs): Promise<void> {
       process.exit(1);
     }
     try {
+      // Every decision leaves a record: the skill's content hash and the
+      // surface hash before and after, in a sealed trail of its own.
+      const recorded = (d: { record: { seq: number; hash?: string } | null; trail: string | null; sealed: boolean }) => {
+        if (d.trail && d.record) {
+          console.log(`Recorded in ${d.trail} (seq ${d.record.seq}, ${d.record.hash?.slice(0, 12) ?? "unchained"})`);
+        }
+        if (!d.sealed) {
+          console.error("⚠ The change was made and recorded, but the trail could not be sealed; `gnomon audit verify` will report it unsealed.");
+        }
+      };
       if (sub === "accept") {
-        const to = acceptSkill(config, id);
-        console.log(`Accepted ${id} → ${to}`);
+        const d = acceptSkill(config, id);
+        console.log(`Accepted ${id} → ${d.path}`);
         console.log(
           "The surface hash has changed. The skill loads from the next session."
         );
+        recorded(d);
       } else {
-        rejectSkill(config, id);
+        const reason = typeof args.flags.reason === "string" && args.flags.reason !== "true"
+          ? args.flags.reason
+          : undefined;
+        const d = rejectSkill(config, id, { reason });
         console.log(`Rejected ${id}`);
+        recorded(d);
       }
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
@@ -2046,10 +2061,13 @@ Commands:
     Audit trails, when [audit] is enabled. 'verify' re-hashes each record
     and checks the chain, so a trail altered after the fact is detectable.
 
-  skill [list|accept <id>|reject <id>] [--dir <path>]
+  skill [list|accept <id>|reject <id> [--reason <text>]] [--dir <path>]
     Skills the harness has learned. An agent proposes into
     .gnomon/skills/proposed/; accepting moves it into .gnomon/skills/,
     which changes the surface hash and applies from the next session.
+    Accept and reject each write a skill_accept / skill_reject audit
+    record (content hash, surface hash before and after, who), even when
+    [audit] is off.
 
   task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--dir <path>]
     Run one task without a terminal and print the result. --json emits a

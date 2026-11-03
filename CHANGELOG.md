@@ -26,6 +26,15 @@
 
 ## [Unreleased]
 
+- **Accepting or rejecting a skill is recorded.** `gnomon skill accept` moved
+  the file and wrote nothing, so the trail showed the surface hash change and
+  never that a person accepted a named skill, or what it said. Accept now
+  writes a `skill_accept` audit record and reject a `skill_reject` record
+  (with `--reason`): the skill's content hash, the surface hash before and
+  after, and who decided. Each lands in a sealed trail of its own, even when
+  `[audit]` is off, as `gnomon check` verdicts do. A decision that cannot be
+  recorded does not happen. Step 1 of `docs/design/SKILL-TRIALS.md`.
+
 - **A long local generation is no longer cut off at 300 s.** Node's fetch (undici)
   puts its own 300 s headersTimeout and bodyTimeout on every request, and a model
   call is not streamed, so headers arrive only when the generation is done. A

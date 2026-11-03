@@ -643,3 +643,37 @@ fixture are the same sets, validates documents the real binary printed against
 `verdict_keys`, and puts every case to the real binary.
 `packages/gnomon-core/src/guard.test.ts` puts every case to gnomon's own turn
 loop as well, and fails if the two decide differently.
+
+## 11. Skill decisions — audit kinds `skill_accept`, `skill_reject`
+
+A person accepting or rejecting a proposed skill (README, `skills/`). Each
+decision is written in a sealed trail of its own (`session_start` with
+`mode: "skill"`, the decision, `session_end`) in the directory `[audit]` names,
+**even when `[audit] enabled = false`**, with chaining forced on, as `gnomon
+check` writes its verdict.
+
+**Order: write-ahead.** `session_start` and the decision are written *before*
+the file moves. `session_end` is written after, with `applied: true` (accept
+also adds the `surface_hash_after` it actually produced) or `applied: false`
+and `error` when the move or removal failed. A decision whose record cannot be
+written does not happen. A crash between the record and the move leaves an
+unsealed trail, which `gnomon audit verify` reports, and never a moved file
+with no record. `surface_hash_after` on the decision is the hash the move
+will produce, computed before it.
+
+**Ids** must be what `skillId` derives: lower-case letters, digits and
+dashes. Anything else, such as `../keep`, is refused before it becomes a
+path.
+
+Keys, both kinds: `skill` (the id), `name`, `path` (repo-relative, POSIX),
+`content_sha256` (sha256 of the file's bytes), `surface_hash_before`,
+`surface_hash_after`, `by` (`human` from the CLI), `user`, `host`,
+`interactive`. `skill_accept` adds `evidence` (`"none"`: accepted on reading
+alone). `skill_reject` adds `reason` when `--reason` was given.
+
+A reject's two surface hashes are equal, because proposals are not hashed. They
+are kept so that one reader handles both kinds.
+
+**Fixture**: `conformance/skill_decision.json`. `packages/gnomon-core/src/skills.test.ts`
+accepts and rejects proposals, reads the records back off the trail, and
+asserts their kinds and keys against the fixture.

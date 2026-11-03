@@ -29,7 +29,11 @@ import {
   rmSync,
 } from "node:fs";
 import { join } from "node:path";
-import { GnomonConfig, parseToml } from "./config.js";
+import { createHash, randomBytes } from "node:crypto";
+import { hostname, userInfo } from "node:os";
+import { GnomonConfig, parseToml, recomputeManifest, manifestHash } from "./config.js";
+import { AuditTrail, resolveAudit, type AuditRecord } from "./audit.js";
+import { harnessBuild } from "./build.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -317,29 +321,254 @@ export function proposeSkill(
   return { id, path, existed };
 }
 
+// ---------------------------------------------------------------------------
+// Decisions: accept and reject, each with its own audit record
+// ---------------------------------------------------------------------------
+
 /**
- * Accept a proposal: move it into `.gnomon/skills/`.
+ * Who made a skill decision, and anything they said about it.
+ *
+ * `by` is "human" from the CLI: `gnomon skill accept` is a person at a
+ * terminal or in a script, and no model holds a tool that reaches this code.
+ * `user` and `host` are what the process can see; they identify, they do not
+ * authenticate.
+ */
+export interface SkillDecisionOptions {
+  by?: string;
+  /** Why a proposal was rejected. Recorded as given. */
+  reason?: string;
+  /** Whether a terminal was attached. Defaults to stdin's TTY state. */
+  interactive?: boolean;
+}
+
+export interface SkillDecision {
+  /** Where the skill file is now (accept), or where it was (reject). */
+  path: string;
+  /** The `skill_accept` / `skill_reject` record, with its hash. */
+  record: AuditRecord | null;
+  /** The trail it was written to. */
+  trail: string | null;
+  /**
+   * Whether the closing session_end was written. False means the change was
+   * made and recorded, but the trail is unsealed; `gnomon audit verify` will
+   * say so.
+   */
+  sealed: boolean;
+}
+
+/** sha256 of a skill file's bytes: the identity a trial and an accept agree on. */
+export function skillContentHash(raw: string | Buffer): string {
+  return createHash("sha256").update(raw).digest("hex");
+}
+
+function whoDecided(opts: SkillDecisionOptions): Record<string, unknown> {
+  let user: string | undefined;
+  try {
+    user = userInfo().username;
+  } catch {
+    // No passwd entry (a container with an arbitrary uid). The variable is the
+    // next best thing, and absent is better than invented.
+    user = process.env.USER ?? process.env.USERNAME;
+  }
+  return {
+    by: opts.by ?? "human",
+    user,
+    host: hostname(),
+    interactive: opts.interactive ?? Boolean(process.stdin.isTTY),
+  };
+}
+
+/**
+ * A skill decision on gnomon's own trail: a sealed three-record trail of its
+ * own (session_start, the decision, session_end).
+ *
+ * Written even when the surface has `[audit] enabled = false`, for the reason
+ * `gnomon check` writes its verdict regardless (check.ts, appendVerdict). The
+ * flag governs what a SESSION records: turns, tool calls and possibly prompt
+ * text. An accept is none of that. It is the one moment a person changes what
+ * the agent is, it holds no model text, and before this it left nothing behind
+ * but a moved file: the trail showed the surface hash change, never that a
+ * person accepted a named skill, or what its content was. Chaining is forced
+ * on because the record's hash is what a later reader cites.
+ *
+ * Write-ahead, in two calls. `openSkillDecision` writes session_start and the
+ * decision BEFORE the file is touched; `seal` writes session_end after, saying
+ * whether the change was applied. So there is never a moved file without a
+ * record. A crash between the two leaves the record unsealed, which `gnomon
+ * audit verify` reports as such, rather than a sealed record of a change that
+ * did not happen. The order was the other way round until review found both
+ * halves of that: a crash after the move left an accept with no record, and a
+ * failed session_end undid an accept whose record was already written.
+ */
+function openSkillDecision(
+  config: GnomonConfig,
+  kind: "skill_accept" | "skill_reject",
+  fields: Record<string, unknown>,
+  surfaceHash: string
+): { record: AuditRecord | null; trail: string | null; seal: (end: Record<string, unknown>) => void } {
+  const settings = resolveAudit(config);
+  const forced = { ...settings, enabled: true, chain: true };
+  // A random suffix as well as the time and pid: two decisions in one process
+  // inside one millisecond (a script accepting several proposals) would
+  // otherwise name the same file, and the second trail would restart at seq
+  // 0 on top of the first, a chain that no longer verifies.
+  const id = `skill-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}-${randomBytes(3).toString("hex")}`;
+  const trail = new AuditTrail(forced, id);
+  trail.write("session_start", {
+    surface_hash: surfaceHash,
+    harness: harnessBuild(),
+    cwd: process.cwd(),
+    mode: "skill",
+  });
+  const record = trail.write(kind, fields);
+  return { record, trail: trail.path, seal: (end) => void trail.write("session_end", end) };
+}
+
+/**
+ * The id a skill file must have: the slug `skillId` derives. Everything the
+ * CLI is given is checked against it before it becomes a path, so `skill
+ * reject ../keep` cannot reach `.gnomon/skills/keep.md` -- which it did.
+ */
+function assertSkillId(id: string): void {
+  if (skillId(id) !== id) {
+    throw new Error(
+      `"${id}" is not a skill id: ids are lower-case letters, digits and dashes ` +
+        `(\`gnomon skill list\` shows them).`
+    );
+  }
+}
+
+/**
+ * Accept a proposal: move it into `.gnomon/skills/`, and record that it
+ * happened.
  *
  * This changes the surface hash on purpose. It is a human action, and it takes
  * effect on the next session rather than the running one.
+ *
+ * The `skill_accept` record carries the skill's content hash and the surface
+ * hash before and after, so the trail names the person's act and not only its
+ * effect. It is written before the file moves (`openSkillDecision`); an accept
+ * whose record cannot be written does not happen, and one whose move fails is
+ * sealed `applied: false`.
  */
-export function acceptSkill(config: GnomonConfig, id: string): string {
+export function acceptSkill(
+  config: GnomonConfig,
+  id: string,
+  opts: SkillDecisionOptions = {}
+): SkillDecision {
+  assertSkillId(id);
   const from = join(config.gnomonDir, PROPOSED_DIR, `${id}.md`);
   if (!existsSync(from)) {
     throw new Error(`No proposed skill "${id}". Run \`gnomon skill list\`.`);
   }
+  const raw = readFileSync(from);
+  const skill = parseSkill(id, raw.toString("utf-8"), true);
+  const content = skillContentHash(raw);
+  const { manifest, surface_hash: before } = recomputeManifest(config.gnomonDir);
+  // The hash the move WILL produce, named before it happens.
+  const rel = `.gnomon/skills/${id}.md`;
+  const after = manifestHash([...manifest.filter((s) => s.path !== rel), { path: rel, sha256: content }]);
+
+  let open: ReturnType<typeof openSkillDecision>;
+  try {
+    open = openSkillDecision(
+      config,
+      "skill_accept",
+      {
+        skill: id,
+        name: skill.name,
+        path: rel,
+        content_sha256: content,
+        surface_hash_before: before,
+        surface_hash_after: after,
+        // A trial report's hash once `--evidence` exists. Until then the
+        // record says plainly that the decision was made on reading alone.
+        evidence: "none",
+        ...whoDecided(opts),
+      },
+      before
+    );
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    throw new Error(`Not accepted: the skill_accept record could not be written (${why}).`);
+  }
+
   const dir = join(config.gnomonDir, SKILLS_DIR);
-  mkdirSync(dir, { recursive: true });
   const to = join(dir, `${id}.md`);
-  renameSync(from, to);
-  return to;
+  try {
+    mkdirSync(dir, { recursive: true });
+    renameSync(from, to);
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    sealQuietly(open, { applied: false, error: why });
+    throw new Error(`Not accepted: the proposal could not be moved (${why}). The record says so.`);
+  }
+  const sealed = sealQuietly(open, {
+    applied: true,
+    surface_hash_after: recomputeManifest(config.gnomonDir).surface_hash,
+  });
+  return { path: to, record: open.record, trail: open.trail, sealed };
 }
 
-/** Discard a proposal. Active skills are never removed by this. */
-export function rejectSkill(config: GnomonConfig, id: string): void {
+/**
+ * Seal a decision, and say whether that worked rather than throw: by now the
+ * change is either made or refused, and undoing a made change because its
+ * closing record failed is the inconsistency the write-ahead order removes.
+ */
+function sealQuietly(open: { seal: (end: Record<string, unknown>) => void }, end: Record<string, unknown>): boolean {
+  try {
+    open.seal(end);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Discard a proposal, and record that it happened. Active skills are never
+ * removed by this: the id is checked, so no path outside `proposed/` is
+ * reachable.
+ *
+ * The record is written BEFORE the file is removed, so a reject that cannot
+ * be recorded leaves the proposal where it was. The surface hash is the same
+ * before and after -- proposals are not hashed -- and the record says so in
+ * the same two fields an accept uses, so a reader needs one shape for both.
+ */
+export function rejectSkill(
+  config: GnomonConfig,
+  id: string,
+  opts: SkillDecisionOptions = {}
+): SkillDecision {
+  assertSkillId(id);
   const path = join(config.gnomonDir, PROPOSED_DIR, `${id}.md`);
   if (!existsSync(path)) {
     throw new Error(`No proposed skill "${id}".`);
   }
-  rmSync(path);
+  const raw = readFileSync(path);
+  const skill = parseSkill(id, raw.toString("utf-8"), true);
+  const surface = recomputeManifest(config.gnomonDir).surface_hash;
+  const open = openSkillDecision(
+    config,
+    "skill_reject",
+    {
+      skill: id,
+      name: skill.name,
+      path: `.gnomon/skills/proposed/${id}.md`,
+      content_sha256: skillContentHash(raw),
+      surface_hash_before: surface,
+      surface_hash_after: surface,
+      reason: opts.reason,
+      ...whoDecided(opts),
+    },
+    surface
+  );
+  try {
+    rmSync(path);
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    sealQuietly(open, { applied: false, error: why });
+    throw new Error(`Not rejected: the proposal could not be removed (${why}). The record says so.`);
+  }
+  const sealed = sealQuietly(open, { applied: true });
+  return { path, record: open.record, trail: open.trail, sealed };
 }
