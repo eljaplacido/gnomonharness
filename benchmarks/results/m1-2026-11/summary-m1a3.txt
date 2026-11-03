@@ -1,0 +1,68 @@
+
+== M1a3 arms (gnomon master, Glimmer-30B, L routing)
+group     arm  valid pass  rate   95% Wilson    $/solved  cloud-share tok|req  wall-med  capped  local tok/solved  local out/solved  other states
+m1a3-g0   L       29   16  0.552  [0.38, 0.72]    0.0000       0.00|0.00           183       1            4.62M              28k  {'apparatus': 3}
+m1a3-g1   L       32   25  0.781  [0.61, 0.89]    0.0000       0.00|0.00           186       3            1.47M              16k  {}
+
+== references, read-only, same validity rule: m1a-glim L (d59e6c19) and r1h L (incumbent)
+group     arm  valid pass  rate   95% Wilson    $/solved  cloud-share tok|req  wall-med  capped  local tok/solved  local out/solved  other states
+m1a-glim  L       28   12  0.429  [0.27, 0.61]    0.0000       0.00|0.00           193       2            5.14M              38k  {'apparatus': 3, 'no_model_call': 1}
+r1h       L       32   24  0.750  [0.58, 0.87]    0.0000       0.00|0.00            71       2            1.31M              11k  {}
+
+paired (exact McNemar on (task, attempt) cells valid in both):
+  [mechanism: replay vs no replay, same build and window]
+  m1a3-g1        vs m1a3-g0       : pairs= 29  solved 22 vs 16  m1a3-g1-only= 9 m1a3-g0-only= 3  McNemar p=0.1460  capped 3 vs 1
+      k1 fix-code-vulnerability             solved only by m1a3-g1  (stop m1a3-g1: answered, m1a3-g0: stall)
+      k2 fix-code-vulnerability             solved only by m1a3-g1  (stop m1a3-g1: answered, m1a3-g0: step_wall)
+      k1 hf-train-lora-adapter              solved only by m1a3-g0  (stop m1a3-g1: answered, m1a3-g0: answered)
+      k1 install-klee-minimal               solved only by m1a3-g1  (stop m1a3-g1: answered, m1a3-g0: stall)
+      k2 install-klee-minimal               solved only by m1a3-g1  (stop m1a3-g1: answered, m1a3-g0: stall)
+      k1 mailman                            solved only by m1a3-g1  (stop m1a3-g1: answered, m1a3-g0: stall)
+      k2 mailman                            solved only by m1a3-g1  (stop m1a3-g1: answered, m1a3-g0: stall)
+      k1 parallelize-graph                  solved only by m1a3-g1  (stop m1a3-g1: answered, m1a3-g0: step_wall)
+      k2 parallelize-graph                  solved only by m1a3-g1  (stop m1a3-g1: answered, m1a3-g0: stall)
+      k2 pypi-server                        solved only by m1a3-g0  (stop m1a3-g1: answered, m1a3-g0: answered)
+      k1 sparql-university                  solved only by m1a3-g0  (stop m1a3-g1: answered, m1a3-g0: answered)
+      k2 tune-mjcf                          solved only by m1a3-g1  (stop m1a3-g1: answered, m1a3-g0: step_wall)
+  [build-change control: master vs d59e6c19, no replay]
+  m1a3-g0        vs m1a-glim      : pairs= 27  solved 16 vs 12  m1a3-g0-only= 4 m1a-glim-only= 0  McNemar p=0.1250  capped 1 vs 2
+      k1 hf-train-lora-adapter              solved only by m1a3-g0  (stop m1a3-g0: answered, m1a-glim: None)
+      k1 jq-data-processing                 solved only by m1a3-g0  (stop m1a3-g0: answered, m1a-glim: stall)
+      k2 jq-data-processing                 solved only by m1a3-g0  (stop m1a3-g0: answered, m1a-glim: stall)
+      k2 sparql-university                  solved only by m1a3-g0  (stop m1a3-g0: truncated, m1a-glim: answered)
+  [ladder, time-separated, descriptive]
+  m1a3-g1        vs r1h           : pairs= 32  solved 25 vs 24  m1a3-g1-only= 3 r1h-only= 2  McNemar p=1.0000  capped 3 vs 2
+      k1 parallelize-graph                  solved only by m1a3-g1  (stop m1a3-g1: answered, r1h: None)
+      k2 parallelize-graph                  solved only by m1a3-g1  (stop m1a3-g1: answered, r1h: None)
+      k1 sparql-university                  solved only by r1h  (stop m1a3-g1: answered, r1h: None)
+      k1 tune-mjcf                          solved only by r1h  (stop m1a3-g1: truncated, r1h: None)
+      k2 tune-mjcf                          solved only by m1a3-g1  (stop m1a3-g1: answered, r1h: None)
+
+mechanism metric (relay-meter-m1a3 counters, summed over cells; expected G0 = 0, G1 > 0):
+
+  m1a3-g0 (G0, declared replay_reasoning = false): 32 cells, 32 metered, 29 valid
+    requests with reasoning_content: 0 of 2007 requests carrying an assistant message (2039 chat requests); 0 messages, 0 chars replayed (volume, history re-sent each step)
+    cells with >= 1 such request: 0 of 32; valid cells only: 0 of 1870 requests
+    after a reply with reasoning + a tool call: 0 of 376 next requests sent it back; cells where none was: 32
+    the model's replies: 389 with reasoning (1,340,194 chars), 2006 with tool calls; requests streamed 2039, with max_tokens 2039
+    meter: usage from JSON 2028, from timings 0, without usage 11, unparsed replies 0, unparsed requests 0
+    surface line per cell (value, count of replay_reasoning lines): {('false', 1): 29, None: 3}
+    gnomon turn records: {'turns': 29, 'replay_reasoning': 0, 'stream': 29, 'max_tokens=32768': 29}
+
+  m1a3-g1 (G1, declared replay_reasoning = true): 32 cells, 32 metered, 32 valid
+    requests with reasoning_content: 1366 of 1366 requests carrying an assistant message (1398 chat requests); 39943 messages, 19,860,160 chars replayed (volume, history re-sent each step)
+    cells with >= 1 such request: 32 of 32; valid cells only: 1366 of 1366 requests
+    after a reply with reasoning + a tool call: 1249 of 1249 next requests sent it back; cells where none was: 0
+    the model's replies: 1280 with reasoning (916,929 chars), 1363 with tool calls; requests streamed 1398, with max_tokens 1398
+    meter: usage from JSON 1396, from timings 0, without usage 0, unparsed replies 0, unparsed requests 0
+    surface line per cell (value, count of replay_reasoning lines): {('true', 1): 30, None: 2}
+    gnomon turn records: {'turns': 30, 'replay_reasoning': 30, 'stream': 30, 'max_tokens=32768': 30}
+  CHECK G0 sent reasoning_content in 0 requests: yes; G1 in > 0: yes
+
+how cells ended (gnomon's last turn record; capped cells have none, their audit is copied after exit):
+  m1a3-g0    last turn's stop_reason, all cells: {'answered': 16, 'stall': 9, 'no-turn-record': 3, 'step_wall': 3, 'truncated': 1}; valid unsolved: {'stall': 7, 'step_wall': 3, 'answered': 2, 'no-turn-record': 1}
+  m1a3-g1    last turn's stop_reason, all cells: {'answered': 29, 'no-turn-record': 2, 'truncated': 1}; valid unsolved: {'answered': 6, 'truncated': 1}
+  m1a-glim   last turn's stop_reason, all cells: {'answered': 13, 'stall': 10, 'no-turn-record': 5, 'malformed': 1, 'step_wall': 3}; valid unsolved: {'stall': 8, 'no-turn-record': 2, 'malformed': 1, 'answered': 3, 'step_wall': 2}
+
+cell states: {'m1a3-g0': {'valid': 29, 'apparatus': 3}, 'm1a3-g1': {'valid': 32}, 'm1a-glim': {'valid': 28, 'apparatus': 3, 'no_model_call': 1}, 'r1h': {'valid': 32}}
+64 M1a3 cells

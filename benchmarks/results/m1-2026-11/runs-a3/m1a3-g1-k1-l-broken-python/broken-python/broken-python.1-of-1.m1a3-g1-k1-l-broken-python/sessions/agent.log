@@ -1,0 +1,56 @@
+[?2004hroot@af7443769cb5:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@af7443769cb5:/app# clear
+[?2004l[H[J[3J[?2004hroot@af7443769cb5:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@af7443769cb5:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=166a9d3cd970784fadf367ce02aba4df5925555f
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793706603
+[?2004hroot@af7443769cb5:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with pip.'; tmux wait -S done
+[?2004lR1_ARM=L R1_ENTRY=implementor R1_ROUTES=coordinator=local,implementor=local,verifier=local,plan=local,implement=local,critique=local,smol=local M1A3_REPLAY=true
+  glimmer-30b — 23 tool call(s) so far
+[approval] bash: python3 -c "import pip; print(pip.__version__)" — approved
+  ⚙ bash python3 -c "import pip; print(pip.__version__)"
+    ✓ bash — exit 0
+  glimmer-30b — 24 tool call(s) so far
+  [tools] 24 call(s) without changing a file — nudging to decide
+  glimmer-30b — 24 tool call(s) so far
+[approval] bash: pip3 --version — approved
+  ⚙ bash pip3 --version
+    ✓ bash — exit 0
+  glimmer-30b — 25 tool call(s) so far
+[approval] bash: pip3 list | head -n 20 — approved
+  ⚙ bash pip3 list | head -n 20
+    ✓ bash — exit 0
+  glimmer-30b — 26 tool call(s) so far
+  glimmer-30b — 27 tool call(s) so far
+  ⚙ note 
+    ✓ note — pip was broken because site-packages contained only pip-24.3
+Your system Python 3.13 had pip broken: `/usr/local/lib/python3.13/site-packages` only contained `pip-24.3.1.dist-info` with no actual `pip` package files, so `import pip` raised `ModuleNotFoundError` and `pip3` failed.
+
+I removed the stale metadata and re-bootstrapped pip from the bundled wheel:
+
+```bash
+rm -rf /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info
+python3 -m ensurepip --upgrade --default-pip
+```
+
+Check:
+
+```bash
+$ pip3 --version
+pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)
+
+$ python3 -c "import pip; print(pip.__version__)"
+24.3.1
+```
+
+pip is now importable and usable system-wide. You can install packages again, e.g. `pip3 install <package>`.
+
+[refusal] role=implementor model=glimmer-30b tools=27 surface=a148f33da19b
+[?2004hroot@af7443769cb5:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@af7443769cb5:/app# 

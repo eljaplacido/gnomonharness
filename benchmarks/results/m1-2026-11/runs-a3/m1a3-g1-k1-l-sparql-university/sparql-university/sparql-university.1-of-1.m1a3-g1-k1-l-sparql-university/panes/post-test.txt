@@ -1,0 +1,529 @@
+root@8643be25b47f:/app# bash /tests/run-tests.sh; tmux wait -S done
+Hit:1 http://ports.ubuntu.com/ubuntu-ports noble InRelease
+Hit:2 http://ports.ubuntu.com/ubuntu-ports noble-updates InRelease
+Hit:3 http://ports.ubuntu.com/ubuntu-ports noble-backports InRelease
+Hit:4 http://ports.ubuntu.com/ubuntu-ports noble-security InRelease
+Reading package lists... Done
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+curl is already the newest version (8.5.0-2ubuntu10.16).
+0 upgraded, 0 newly installed, 0 to remove and 60 not upgraded.
+downloading uv 0.7.13 aarch64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Using CPython 3.12.3 interpreter at: /usr/bin/python3
+Creating virtual environment at: .tbench-testing
+Activate with: source .tbench-testing/bin/activate
+Using Python 3.12.3 environment at: .tbench-testing
+Resolved 5 packages in 46ms
+Prepared 5 packages in 69ms
+Installed 5 packages in 9ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+Using Python 3.12.3 environment at: .tbench-testing
+Resolved 2 packages in 33ms
+Prepared 2 packages in 25ms
+Installed 2 packages in 8ms
+ + pyparsing==3.3.3
+ + rdflib==7.1.4
+===================================================================== test session starts ======================================================================
+platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 3 items
+
+../tests/test_outputs.py .FF                                                                                                                             [100%]
+
+=========================================================================== FAILURES ===========================================================================
+________________________________________________________________ test_sparql_runs_without_error ________________________________________________________________
+
+    def test_sparql_runs_without_error():
+        """
+        Test that the SPARQL query in the file is valid and can be executed
+        on the RDF dataset without raising an exception.
+        """
+        # Load query
+        query_text = SPARQL_PATH.read_text()
+
+        # Load RDF graph
+        g = Graph()
+        assert DATA_PATH.exists(), f"RDF data file {DATA_PATH} does not exist"
+        g.parse(str(DATA_PATH), format="ttl")
+
+        try:
+>           g.query(query_text)
+
+/tests/test_outputs.py:43:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.tbench-testing/lib/python3.12/site-packages/rdflib/graph.py:1632: in query
+    return result(processor.query(query_object, initBindings, initNs, **kwargs))  # type: ignore[arg-type]
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/processor.py:145: in query
+    strOrQuery = translateQuery(parseQuery(strOrQuery), base, initNs)
+                                ^^^^^^^^^^^^^^^^^^^^^^
+.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:1553: in parseQuery
+    return Query.parseString(q, parseAll=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.tbench-testing/lib/python3.12/site-packages/pyparsing/util.py:466: in _inner
+    return fn(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = {Group:([{Base | PrefixDecl}]...) {SelectQuery | ConstructQuery | DescribeQuery | AskQuery}}
+instring = 'PREFIX uni: <http://university.org/ontology/>\nPREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n\nSELECT ?professorNa...    }\n      GROUP BY ?d\n
+    HAVING (COUNT(DISTINCT ?student) > 10)\n    )\n  }\n}\nGROUP BY ?prof ?professorName\n'
+parse_all = True, kwargs = {'parseAll': True}, parseAll = True, e = Suppress:({'#' rest of line})
+
+    def parse_string(
+        self, instring: str, parse_all: bool = False, **kwargs
+    ) -> ParseResults:
+        """
+        Parse a string with respect to the parser definition. This function is intended as the primary interface to the
+        client code.
+
+        :param instring: The input string to be parsed.
+        :param parse_all: If set, the entire input string must match the grammar.
+        :param parseAll: retained for pre-PEP8 compatibility, will be removed in a future release.
+        :raises ParseException: Raised if ``parse_all`` is set and the input string does not match the whole grammar.
+        :returns: the parsed data as a :class:`ParseResults` object, which may be accessed as a `list`, a `dict`, or
+          an object with attributes if the given parser includes results names.
+
+        If the input string is required to match the entire grammar, ``parse_all`` flag must be set to ``True``. This
+        is also equivalent to ending the grammar with :class:`StringEnd`\\ ().
+
+        To report proper column numbers, ``parse_string`` operates on a copy of the input string where all tabs are
+        converted to spaces (8 spaces per tab, as per the default in ``string.expandtabs``). If the input string
+        contains tabs and the grammar uses parse actions that use the ``loc`` argument to index into the string
+        being parsed, one can ensure a consistent view of the input string by doing one of the following:
+
+        - calling ``parse_with_tabs`` on your grammar before calling ``parse_string`` (see :class:`parse_with_tabs`),
+        - define your parse action using the full ``(s,loc,toks)`` signature, and reference the input string using the
+          parse action's ``s`` argument, or
+        - explicitly expand the tabs in your input string before calling ``parse_string``.
+
+        Examples:
+
+        By default, partial matches are OK.
+
+        .. doctest::
+
+            >>> res = Word('a').parse_string('aaaaabaaa')
+            >>> print(res)
+            ['aaaaa']
+
+        The parsing behavior varies by the inheriting class of this abstract class. Please refer to the children
+        directly to see more examples.
+
+        It raises an exception if parse_all flag is set and instring does not match the whole grammar.
+
+        .. doctest::
+
+            >>> res = Word('a').parse_string('aaaaabaaa', parse_all=True)
+            Traceback (most recent call last):
+            ParseException: Expected end of text, found 'b' ...
+        """
+        parseAll: bool = deprecate_argument(kwargs, "parseAll", False)
+
+        parse_all = parse_all or parseAll
+
+        ParserElement.reset_cache()
+        if not self.streamlined:
+            self.streamline()
+        for e in self.ignoreExprs:
+            e.streamline()
+        if not self.keepTabs:
+            instring = instring.expandtabs()
+        try:
+            loc, tokens = self._parse(instring, 0)
+            if parse_all:
+                loc = self.preParse(instring, loc)
+                se = Empty() + StringEnd().set_debug(False)
+                se._parse(instring, loc)
+        except _ParseActionIndexError as pa_exc:
+            raise pa_exc.exc
+        except ParseBaseException as exc:
+            if ParserElement.verbose_stacktrace:
+                raise
+
+            # catch and re-raise exception from here, clearing out pyparsing internal stack trace
+>           raise exc.with_traceback(None)
+E           pyparsing.exceptions.ParseException: Expected SelectQuery, found 'FILTER'  (at char 883), (line:25, col:3)
+
+.tbench-testing/lib/python3.12/site-packages/pyparsing/core.py:1346: ParseException
+
+During handling of the above exception, another exception occurred:
+
+    def test_sparql_runs_without_error():
+        """
+        Test that the SPARQL query in the file is valid and can be executed
+        on the RDF dataset without raising an exception.
+        """
+        # Load query
+        query_text = SPARQL_PATH.read_text()
+
+        # Load RDF graph
+        g = Graph()
+        assert DATA_PATH.exists(), f"RDF data file {DATA_PATH} does not exist"
+        g.parse(str(DATA_PATH), format="ttl")
+
+        try:
+            g.query(query_text)
+        except Exception as e:
+>           assert False, f"SPARQL query failed to run: {e}"
+E           AssertionError: SPARQL query failed to run: Expected SelectQuery, found 'FILTER'  (at char 883), (line:25, col:3)
+E           assert False
+
+/tests/test_outputs.py:45: AssertionError
+__________________________________________________________________ test_sparql_query_results ___________________________________________________________________
+
+    def test_sparql_query_results():
+        """
+        Test that the SPARQL query returns the expected professor names and countries.
+        The order of professors and the order of countries
+        within the country string are ignored.
+        """
+        # Load query
+        query_text = SPARQL_PATH.read_text()
+
+        # Load RDF graph
+        g = Graph()
+        g.parse(str(DATA_PATH), format="ttl")
+
+        # Execute query
+>       results = g.query(query_text)
+                  ^^^^^^^^^^^^^^^^^^^
+
+/tests/test_outputs.py:62:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.tbench-testing/lib/python3.12/site-packages/rdflib/graph.py:1632: in query
+    return result(processor.query(query_object, initBindings, initNs, **kwargs))  # type: ignore[arg-type]
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/processor.py:145: in query
+    strOrQuery = translateQuery(parseQuery(strOrQuery), base, initNs)
+                                ^^^^^^^^^^^^^^^^^^^^^^
+.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:1553: in parseQuery
+    return Query.parseString(q, parseAll=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.tbench-testing/lib/python3.12/site-packages/pyparsing/util.py:466: in _inner
+    return fn(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = {Group:([{Base | PrefixDecl}]...) {SelectQuery | ConstructQuery | DescribeQuery | AskQuery}}
+instring = 'PREFIX uni: <http://university.org/ontology/>\nPREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n\nSELECT ?professorNa...    }\n      GROUP BY ?d\n
+    HAVING (COUNT(DISTINCT ?student) > 10)\n    )\n  }\n}\nGROUP BY ?prof ?professorName\n'
+parse_all = True, kwargs = {'parseAll': True}, parseAll = True, e = Suppress:({'#' rest of line})
+
+    def parse_string(
+        self, instring: str, parse_all: bool = False, **kwargs
+    ) -> ParseResults:
+        """
+        Parse a string with respect to the parser definition. This function is intended as the primary interface to the
+        client code.
+
+        :param instring: The input string to be parsed.
+        :param parse_all: If set, the entire input string must match the grammar.
+        :param parseAll: retained for pre-PEP8 compatibility, will be removed in a future release.
+        :raises ParseException: Raised if ``parse_all`` is set and the input string does not match the whole grammar.
+        :returns: the parsed data as a :class:`ParseResults` object, which may be accessed as a `list`, a `dict`, or
+          an object with attributes if the given parser includes results names.
+
+        If the input string is required to match the entire grammar, ``parse_all`` flag must be set to ``True``. This
+        is also equivalent to ending the grammar with :class:`StringEnd`\\ ().
+
+        To report proper column numbers, ``parse_string`` operates on a copy of the input string where all tabs are
+        converted to spaces (8 spaces per tab, as per the default in ``string.expandtabs``). If the input string
+        contains tabs and the grammar uses parse actions that use the ``loc`` argument to index into the string
+        being parsed, one can ensure a consistent view of the input string by doing one of the following:
+
+        - calling ``parse_with_tabs`` on your grammar before calling ``parse_string`` (see :class:`parse_with_tabs`),
+        - define your parse action using the full ``(s,loc,toks)`` signature, and reference the input string using the
+          parse action's ``s`` argument, or
+        - explicitly expand the tabs in your input string before calling ``parse_string``.
+
+        Examples:
+
+        By default, partial matches are OK.
+
+        .. doctest::
+
+            >>> res = Word('a').parse_string('aaaaabaaa')
+            >>> print(res)
+            ['aaaaa']
+
+        The parsing behavior varies by the inheriting class of this abstract class. Please refer to the children
+        directly to see more examples.
+
+        It raises an exception if parse_all flag is set and instring does not match the whole grammar.
+
+        .. doctest::
+
+            >>> res = Word('a').parse_string('aaaaabaaa', parse_all=True)
+            Traceback (most recent call last):
+            ParseException: Expected end of text, found 'b' ...
+        """
+        parseAll: bool = deprecate_argument(kwargs, "parseAll", False)
+
+        parse_all = parse_all or parseAll
+
+        ParserElement.reset_cache()
+        if not self.streamlined:
+            self.streamline()
+        for e in self.ignoreExprs:
+            e.streamline()
+        if not self.keepTabs:
+            instring = instring.expandtabs()
+        try:
+            loc, tokens = self._parse(instring, 0)
+            if parse_all:
+                loc = self.preParse(instring, loc)
+                se = Empty() + StringEnd().set_debug(False)
+                se._parse(instring, loc)
+        except _ParseActionIndexError as pa_exc:
+            raise pa_exc.exc
+        except ParseBaseException as exc:
+            if ParserElement.verbose_stacktrace:
+                raise
+
+            # catch and re-raise exception from here, clearing out pyparsing internal stack trace
+>           raise exc.with_traceback(None)
+E           pyparsing.exceptions.ParseException: Expected SelectQuery, found 'FILTER'  (at char 883), (line:25, col:3)
+
+.tbench-testing/lib/python3.12/site-packages/pyparsing/core.py:1346: ParseException
+======================================================================= warnings summary =======================================================================
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:173: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    IRIREF.setParseAction(lambda x: rdflib.URIRef(x[0]))
+
+test_outputs.py: 206 warnings
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parserutils.py:133: PyparsingDeprecationWarning: 'setName' deprecated - use 'set_name'
+    self.setName(name)
+
+test_outputs.py: 206 warnings
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parserutils.py:134: PyparsingDeprecationWarning: 'addParseAction' deprecated - use 'ad
+d_parse_action'
+    self.addParseAction(self.postParse2)
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:212: PyparsingDeprecationWarning: 'leaveWhitespace' deprecated - use 'leave_
+whitespace'
+    PNAME_NS = Optional(Param("prefix", PN_PREFIX)) + Suppress(":").leaveWhitespace()
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:245: PyparsingDeprecationWarning: 'leaveWhitespace' deprecated - use 'leave_
+whitespace'
+    PNAME_LN = PNAME_NS + Param("localname", PN_LOCAL.leaveWhitespace())
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:252: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    BLANK_NODE_LABEL.setParseAction(lambda x: rdflib.BNode(x[0][2:]))
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:273: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    INTEGER.setParseAction(lambda x: rdflib.Literal(x[0], datatype=rdflib.XSD.integer))
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:281: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    DECIMAL.setParseAction(lambda x: rdflib.Literal(x[0], datatype=rdflib.XSD.decimal))
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:286: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    DOUBLE.setParseAction(lambda x: rdflib.Literal(x[0], datatype=rdflib.XSD.double))
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:290: PyparsingDeprecationWarning: 'leaveWhitespace' deprecated - use 'leave_
+whitespace'
+    INTEGER_POSITIVE = Suppress("+") + INTEGER.copy().leaveWhitespace()
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:291: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    INTEGER_POSITIVE.setParseAction(
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:296: PyparsingDeprecationWarning: 'leaveWhitespace' deprecated - use 'leave_
+whitespace'
+    DECIMAL_POSITIVE = Suppress("+") + DECIMAL.copy().leaveWhitespace()
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:299: PyparsingDeprecationWarning: 'leaveWhitespace' deprecated - use 'leave_
+whitespace'
+    DOUBLE_POSITIVE = Suppress("+") + DOUBLE.copy().leaveWhitespace()
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:302: PyparsingDeprecationWarning: 'leaveWhitespace' deprecated - use 'leave_
+whitespace'
+    INTEGER_NEGATIVE = Suppress("-") + INTEGER.copy().leaveWhitespace()
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:303: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    INTEGER_NEGATIVE.setParseAction(lambda x: neg(x[0]))
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:306: PyparsingDeprecationWarning: 'leaveWhitespace' deprecated - use 'leave_
+whitespace'
+    DECIMAL_NEGATIVE = Suppress("-") + DECIMAL.copy().leaveWhitespace()
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:307: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    DECIMAL_NEGATIVE.setParseAction(lambda x: neg(x[0]))
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:310: PyparsingDeprecationWarning: 'leaveWhitespace' deprecated - use 'leave_
+whitespace'
+    DOUBLE_NEGATIVE = Suppress("-") + DOUBLE.copy().leaveWhitespace()
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:311: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    DOUBLE_NEGATIVE.setParseAction(lambda x: neg(x[0]))
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:321: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    STRING_LITERAL_LONG1.setParseAction(
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:329: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    STRING_LITERAL_LONG2.setParseAction(
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:338: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    STRING_LITERAL1.setParseAction(
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:347: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    STRING_LITERAL2.setParseAction(
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:353: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    NIL.setParseAction(lambda x: rdflib.RDF.nil)
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:360: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    ANON.setParseAction(lambda x: rdflib.BNode())
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:364: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    A.setParseAction(lambda x: rdflib.RDF.type)
+
+test_outputs.py: 126 warnings
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parserutils.py:244: PyparsingDeprecationWarning: 'setName' deprecated - use 'set_name'
+    self.setName(name)
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:380: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    Var.setParseAction(lambda x: rdflib.term.Variable(x[0]))
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:397: PyparsingDeprecationWarning: 'leaveWhitespace' deprecated - use 'leave_
+whitespace'
+    Param("lang", LANGTAG.leaveWhitespace())
+
+test_outputs.py::test_sparql_runs_without_error
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:398: PyparsingDeprecationWarning: 'leaveWhitespace' deprecated - use 'leave_
+whitespace'
+    | Literal("^^").leaveWhitespace() + Param("datatype", iri).leaveWhitespace()
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:417: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    BooleanLiteral = Keyword("true").setParseAction(lambda: rdflib.Literal(True)) | Keyword(
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:419: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    ).setParseAction(lambda: rdflib.Literal(False))
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:505: PyparsingDeprecationWarning: 'leaveWhitespace' deprecated - use 'leave_
+whitespace'
+    Param("part", PathPrimary) + Optional(Param("mod", PathMod.leaveWhitespace())),
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:545: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    Collection.setParseAction(expandCollection)
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:549: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    CollectionPath.setParseAction(expandCollection)
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:576: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    BlankNodePropertyList.setParseAction(expandBNodeTriples)
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:582: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    BlankNodePropertyListPath.setParseAction(expandBNodeTriples)
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:592: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    TriplesSameSubject.setParseAction(expandTriples)
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:632: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
+se_action'
+    TriplesSameSubjectPath.setParseAction(expandTriples)
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:657: PyparsingDeprecationWarning: 'delimitedList' deprecated - use 'Delimite
+dList'
+    ExpressionList = NIL | Group(Suppress("(") + delimitedList(Expression) + Suppress(")"))
+
+test_outputs.py::test_sparql_runs_without_error
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:1018: PyparsingDeprecationWarning: 'delimitedList' deprecated - use 'Delimit
+edList'
+    + delimitedList(ParamList("expr", Expression))
+
+test_outputs.py::test_sparql_runs_without_error
+test_outputs.py::test_sparql_query_results
+  /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:1553: PyparsingDeprecationWarning: 'parseString' deprecated - use 'parse_str
+ing'
+    return Query.parseString(q, parseAll=True)
+
+test_outputs.py::test_sparql_runs_without_error
+test_outputs.py::test_sparql_query_results
+  /app/.tbench-testing/lib/python3.12/site-packages/pyparsing/util.py:466: PyparsingDeprecationWarning: 'parseAll' argument is deprecated, use 'parse_all'
+    return fn(self, *args, **kwargs)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+============================================================================ PASSES ============================================================================
+=================================================================== short test summary info ====================================================================
+PASSED ../tests/test_outputs.py::test_sparql_file_exists
+FAILED ../tests/test_outputs.py::test_sparql_runs_without_error - AssertionError: SPARQL query failed to run: Expected SelectQuery, found 'FILTER'  (at char 883
+), (line:25, col:3)
+FAILED ../tests/test_outputs.py::test_sparql_query_results - pyparsing.exceptions.ParseException: Expected SelectQuery, found 'FILTER'  (at char 883), (line:25,
+ col:3)
+========================================================== 2 failed, 1 passed, 581 warnings in 0.54s ===========================================================
+root@8643be25b47f:/app#
