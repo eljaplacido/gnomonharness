@@ -2,8 +2,9 @@
  * gnomon-core: Skills tests
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -20,9 +21,14 @@ import {
   skillId,
   Skill,
 } from "./skills.js";
+import { recomputeManifest } from "./config.js";
+import { verifyTrail, type AuditRecord } from "./audit.js";
 
 let root: string;
-const cfg = (): any => ({ gnomonDir: join(root, ".gnomon") });
+const cfg = (audit: Record<string, unknown> = {}): any => ({
+  gnomonDir: join(root, ".gnomon"),
+  config: { audit },
+});
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "gnomon-skills-"));
@@ -180,6 +186,184 @@ describe("authorship", () => {
   it("skillId slugifies", () => {
     expect(skillId("Rust Test Layout!")).toBe("rust-test-layout");
     expect(skillId("!!!")).toBe("skill");
+  });
+});
+
+describe("accept and reject leave a record", () => {
+  /** Every record of every trail under the audit dir, in file order. */
+  const trails = (dir = ".gnomon-audit"): { file: string; records: AuditRecord[] }[] => {
+    const at = join(root, dir);
+    if (!existsSync(at)) return [];
+    return readdirSync(at)
+      .filter((f) => f.endsWith(".jsonl"))
+      .sort()
+      .map((f) => ({
+        file: join(at, f),
+        records: readFileSync(join(at, f), "utf-8")
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l) as AuditRecord),
+      }));
+  };
+
+  it("accept writes skill_accept: the content hash, and the surface hash before and after", () => {
+    // Fails on master: acceptSkill moved the file and wrote nothing, so the
+    // trail showed the surface hash change and never that a person accepted a
+    // named skill, or what it said.
+    const { path } = proposeSkill(cfg(), { name: "Run the suite", body: "use make test" });
+    const content = readFileSync(path);
+    const before = recomputeManifest(join(root, ".gnomon")).surface_hash;
+
+    const d = acceptSkill(cfg(), "run-the-suite", { interactive: false });
+    const after = recomputeManifest(join(root, ".gnomon")).surface_hash;
+
+    const all = trails();
+    expect(all).toHaveLength(1);
+    const kinds = all[0].records.map((r) => r.kind);
+    expect(kinds).toEqual(["session_start", "skill_accept", "session_end"]);
+    const rec = all[0].records[1];
+    expect(rec).toMatchObject({
+      skill: "run-the-suite",
+      name: "Run the suite",
+      path: ".gnomon/skills/run-the-suite.md",
+      content_sha256: createHash("sha256").update(content).digest("hex"),
+      surface_hash_before: before,
+      surface_hash_after: after,
+      evidence: "none",
+      by: "human",
+      interactive: false,
+    });
+    expect(rec.surface_hash_before).not.toBe(rec.surface_hash_after);
+    expect(typeof rec.host).toBe("string");
+    // The returned record is the one on disk, and the trail verifies sealed.
+    expect(d.record?.hash).toBe(rec.hash);
+    expect(verifyTrail(all[0].file)).toMatchObject({ ok: true, sealed: true });
+  });
+
+  it("is written even when [audit] is off, into the directory [audit] names", () => {
+    proposeSkill(cfg(), { name: "n", body: "b" });
+    acceptSkill(cfg({ enabled: false, dir: "trail-here" }), "n");
+    expect(trails("trail-here")).toHaveLength(1);
+    expect(trails()).toHaveLength(0);
+  });
+
+  it("reject writes skill_reject with the reason, before the proposal goes", () => {
+    const { path } = proposeSkill(cfg(), { name: "Bad idea", body: "skip the tests" });
+    const content = readFileSync(path);
+    const surface = recomputeManifest(join(root, ".gnomon")).surface_hash;
+
+    rejectSkill(cfg(), "bad-idea", { reason: "hides failures" });
+
+    expect(existsSync(path)).toBe(false);
+    const rec = trails()[0].records[1];
+    expect(rec).toMatchObject({
+      kind: "skill_reject",
+      skill: "bad-idea",
+      content_sha256: createHash("sha256").update(content).digest("hex"),
+      // Proposals are not hashed, so rejecting one moves nothing.
+      surface_hash_before: surface,
+      surface_hash_after: surface,
+      reason: "hides failures",
+    });
+  });
+
+  it("an accept whose record cannot be written does not happen", () => {
+    proposeSkill(cfg(), { name: "n", body: "b" });
+    // A FILE where the audit directory should be: mkdir fails.
+    writeFileSync(join(root, "blocked"), "not a directory", "utf-8");
+    expect(() => acceptSkill(cfg({ dir: "blocked" }), "n")).toThrow(/Not accepted/);
+    expect(loadSkills(cfg()).map((s) => s.id)).toEqual([]);
+    expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["n"]);
+  });
+
+  it("two decisions in the same millisecond get two sealed trails", () => {
+    // The clock is frozen, so all three decisions share a timestamp and pid:
+    // without the random suffix they share one file and the chain forks.
+    for (const n of ["a", "b", "c"]) proposeSkill(cfg(), { name: n, body: n });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-03T00:00:00.000Z"));
+    try {
+      acceptSkill(cfg(), "a");
+      acceptSkill(cfg(), "b");
+      rejectSkill(cfg(), "c");
+    } finally {
+      vi.useRealTimers();
+    }
+    const all = trails();
+    expect(all).toHaveLength(3);
+    for (const t of all) expect(verifyTrail(t.file)).toMatchObject({ ok: true, sealed: true });
+  });
+
+  it("records the decision before the file moves; a move that fails is sealed applied: false", () => {
+    // Fails on the old order (move, then record): the failed move threw
+    // before anything was written, and a crash after a successful move left
+    // an accept with no record at all.
+    proposeSkill(cfg(), { name: "n", body: "b" });
+    // A DIRECTORY where the skill would land: the rename fails.
+    mkdirSync(join(root, ".gnomon", "skills", "n.md"), { recursive: true });
+    expect(() => acceptSkill(cfg(), "n")).toThrow(/could not be moved/);
+    expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["n"]);
+    const [t] = trails();
+    expect(t.records.map((r) => r.kind)).toEqual(["session_start", "skill_accept", "session_end"]);
+    expect(t.records[2]).toMatchObject({ applied: false });
+    expect(typeof t.records[2].error).toBe("string");
+    expect(verifyTrail(t.file)).toMatchObject({ ok: true, sealed: true });
+  });
+
+  it("names the surface hash the accept will produce, and seals with the one it did", () => {
+    proposeSkill(cfg(), { name: "n", body: "b" });
+    acceptSkill(cfg(), "n");
+    const after = recomputeManifest(join(root, ".gnomon")).surface_hash;
+    const [t] = trails();
+    expect(t.records[1].surface_hash_after).toBe(after);
+    expect(t.records[2]).toMatchObject({ applied: true, surface_hash_after: after });
+  });
+
+  it("refuses an id that is not a skill id: reject ../keep cannot delete an active skill", () => {
+    // Fails on master: the id was joined into a path unchecked, and
+    // `skill reject ../keep` removed .gnomon/skills/keep.md.
+    write("skills", "keep.md", "+++\nname = \"Keep\"\n+++\nkeep me");
+    expect(() => rejectSkill(cfg(), "../keep")).toThrow(/not a skill id/);
+    expect(() => acceptSkill(cfg(), "../keep")).toThrow(/not a skill id/);
+    expect(() => acceptSkill(cfg(), "Upper")).toThrow(/not a skill id/);
+    expect(loadSkills(cfg()).map((s) => s.id)).toEqual(["keep"]);
+    expect(trails()).toHaveLength(0);
+  });
+
+  it("matches conformance/skill_decision.json", () => {
+    const fixture = JSON.parse(
+      readFileSync(join(process.cwd(), "..", "..", "conformance", "skill_decision.json"), "utf-8")
+    );
+    const base = ["seq", "ts", "kind", "prev", "hash"];
+    proposeSkill(cfg(), { name: "a", body: "b" });
+    proposeSkill(cfg(), { name: "c", body: "d" });
+    acceptSkill(cfg(), "a");
+    rejectSkill(cfg(), "c", { reason: "why" });
+    const decided = trails().map((t) => {
+      expect(t.records.map((r) => r.kind)).toEqual(["session_start", t.records[1].kind, "session_end"]);
+      expect(t.records[0].mode).toBe(fixture.session_start_mode);
+      return t.records[1];
+    });
+    for (const r of decided) {
+      expect(fixture.audit_kinds).toContain(r.kind);
+      expect(Object.keys(r).filter((k) => !base.includes(k)).sort()).toEqual(
+        [...fixture.audit_keys[r.kind as string]].sort()
+      );
+      expect(r.by).toBe(fixture.by_from_cli);
+    }
+    expect(decided.find((r) => r.kind === "skill_accept")?.evidence).toBe(fixture.evidence_without_report);
+    for (const t of trails()) {
+      const end = t.records[2];
+      const want = t.records[1].kind === "skill_accept" ? fixture.session_end_keys : fixture.session_end_keys_reject;
+      expect(Object.keys(end).filter((k) => !base.includes(k)).sort()).toEqual([...want.applied].sort());
+    }
+  });
+
+  it("a reject whose record cannot be written leaves the proposal", () => {
+    proposeSkill(cfg(), { name: "n", body: "b" });
+    writeFileSync(join(root, "blocked"), "not a directory", "utf-8");
+    expect(() => rejectSkill(cfg({ dir: "blocked" }), "n")).toThrow();
+    expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["n"]);
   });
 });
 

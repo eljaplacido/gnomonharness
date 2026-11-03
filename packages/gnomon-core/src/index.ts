@@ -37,6 +37,7 @@ export * from "./check.js";
 export * from "./guard.js";
 export * from "./transcripts.js";
 export * from "./skills.js";
+export * from "./skill_mine.js";
 export * from "./audit.js";
 // Provenance. Not exported until 2026-09-03, which is why the CLI's own help
 // banner carried a hardcoded version literal instead: the function that knows
