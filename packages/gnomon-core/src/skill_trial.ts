@@ -32,7 +32,7 @@ import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, append
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   GnomonConfig,
   loadConfig,
@@ -708,7 +708,12 @@ export function recordTrial(
   const report_sha256 = createHash("sha256").update(body).digest("hex");
 
   const settings = resolveAudit(config);
-  const trail = new AuditTrail({ ...settings, enabled: true, chain: true }, `trial-${stamp}-${process.pid}`);
+  // A random suffix, as for skill decisions (skills.ts): two records in one
+  // millisecond must not share a file and fork its chain.
+  const trail = new AuditTrail(
+    { ...settings, enabled: true, chain: true },
+    `trial-${stamp}-${process.pid}-${randomBytes(3).toString("hex")}`
+  );
   trail.write("session_start", {
     surface_hash: report.arms.base.surface_hash,
     harness: report.harness,
