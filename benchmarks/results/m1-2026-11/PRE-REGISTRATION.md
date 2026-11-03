@@ -381,3 +381,41 @@ Cells go to `runs-a3/` and `runs-a3-smoke/`. `collect_m1.py` and the other chain
 - **Budget.** L cells spend $0 of cloud. The shared M1 ledger and its $4.50 cap still gate every start.
 
 *Erratum to Amendment 2: its heading time (09:06Z) is approximate. Its commit, 2f794d2c, precedes the M1a2 chain start at 09:05:10Z, which is the ordering that matters.*
+
+## Amendment 4, 2026-11-03T10:26Z: q38's attempt 2 is re-run after a lane jam; the re-run's relay passes client disconnects upstream; before any re-run data
+
+**What happened.** From about 09:36Z, q38's lane jammed. The hub's vLLM log showed 2 requests generating for 15+ min (42 tok/s in total) with 15–17 waiting. Each attempt-2 cell ended after 3–4 calls with `UND_ERR_HEADERS_TIMEOUT`. At 10:22:52Z the main session stopped the M1a2 chain as an operator action (STATUS has the reasoning):
+- 2 cells in flight went to `runs-aborted/<cell>-lanejam`;
+- 4 attempt-2 cells had finished as `endpoint_outage` (apparatus, never scored);
+- the other 10 attempt-2 cells never started.
+
+q38's attempt 1 (16 cells, all ending by 09:36:41Z with 5–29 calls each) is kept.
+
+**Cause (code-observed, reproduced offline).** The meter `relay-meter-r1.mjs` never aborts its upstream request when the client goes away. In a test against a never-answering upstream, the upstream saw no disconnect after the client left. Build `d59e6c19` sends unstreamed requests with no `max_tokens` and gives up on headers after 300 s, then retries.
+
+On the slow no-MTP lane, one long generation outlives gnomon's timeout. The relay keeps it running for a client that is gone, and every retry queues behind it. The incumbent's fast llama.cpp lane rarely reached 300 s, so this bit only now. The flaw is in the apparatus, not in the model or gnomon.
+
+**Change (re-run only).** `apparatus/run_m1_a4.py` is a copy of `run_m1.py` with two changes:
+1. It uses `relay-meter-r1-abort.mjs`, a copy of the meter that destroys the upstream request when the client disconnects before the reply is complete. This is what a direct connection does. It counts `client_aborts`, and is tested offline on an abandoned request (upstream sees the abort) and on a normal reply (unchanged, usage metered).
+2. It skips cells that already have `cell.json`.
+
+The originals are untouched, because M1b still uses them.
+
+**Order** (`apparatus/m1a4-chain.sh`):
+1. Wait on the M1a3 chain's **pid**, then for a free hub GPU.
+2. Start the q38 lane as in Amendment 2(a): no MTP, 2 seqs.
+3. Same 240 s garble soak.
+4. **Abort gate (negative control, live):** through the abort relay, start a long generation, abandon it after 6 s, and require `vllm:num_requests_running` to return to 0 within 30 s. Fail means no re-run, because the jam would recur.
+5. Fresh smoke. M1a2's smoke cells move to `runs-smoke-a2/`.
+6. Commit before data.
+7. Move the 4 outage cells to `runs-aborted/<cell>-outage`.
+8. Re-run q38's attempt 2 (16 cells, same plan order, seed = attempt, 2 slots, same cap and build). This is "re-run once" under the pre-registered outage rule.
+9. Then the unchanged `collect_m1.py --decide m1a` writes `decision-m1a4.txt`. If q38 wins, its PC arm follows.
+
+The new-cell deadline is 18:00Z.
+
+**Caveats, stated now:**
+- The re-run relay differs from the one the incumbent's cells used, but only when a client abandons a request.
+- With aborts passed upstream, a generation that outlives gnomon's 300 s timeout now fails that cell's call honestly (retries, then `apparatus_failure`/outage per gnomon's own handling), instead of jamming other cells. That is the lane's speed showing, and it counts against q38.
+- Attempt 2 runs about 4 h after attempt 1.
+- **Unknown exposure in attempt 1:** attempt-1 cells may have met an abandoned request still running, which would have slowed them. None ended as an outage, but that exposure cannot be measured.
