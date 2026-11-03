@@ -262,3 +262,122 @@ The same smoke and commit-before-data steps follow, then the L arm (16 × 2, sam
 **Caveats, stated now:**
 - q38 runs about 2 h after Glimmer and about 6 h after the R1H incumbent cells (time-separated, as Glimmer was).
 - Without MTP, q38 is slower than the recipe intends. Wall-clock comparisons for q38 are therefore not the recipe's best case. Solve rate is the decision metric and is unaffected by MTP in principle.
+
+## Amendment 3, 2026-11-03T09:42Z: Glimmer-30B re-tested with reasoning replay; before any M1a3 data
+
+
+**What this is.** A mechanism re-test of Glimmer-30B's L arm, run after M1a2 and on the same lane. M1a's decision (`decision-m1a.txt`: Glimmer 12 vs 21 paired, p = 0.012, the incumbent wins) stands as recorded. It is not re-decided here, and no decision rule changes.
+
+**Why.** Forensics on M1a's Glimmer cells, from the code and from aggregates:
+- Build `d59e6c19` never sends `reasoning_content` back on assistant messages. Its OpenAI message allow-list is role/content/tool_calls/tool_call_id/name.
+- When an unstreamed reply had `content: null` beside tool calls, that build promoted the reasoning into `content`. Glimmer's template drops `content` on assistant messages that carry tool calls, so the reasoning was lost there too.
+- The template does render `reasoning_content` on every assistant message, as the `to=self` channel. Its caps declare `supports_preserve_reasoning`, and the M1a server log says "chat template supports preserving reasoning, it is enabled by default".
+- So Glimmer saw a history of bare call/output pairs and lost its own reasoning at every step. After step 1 it wrote 60–300 completion tokens per step.
+- 7 of the 10 pairs the incumbent won ended in a loop, a stall-stop or the 256-call ceiling. Glimmer hit 10 stall-stops to the incumbent's 5, and 4 ceilings to its 0.
+
+This rests on inference: the audit (`record = metadata`) and the relay keep no message text, so no transcript proves it. gnomon master `166a9d3cd970784fadf367ce02aba4df5925555f`, on GitHub, has an opt-in per-endpoint `replay_reasoning`. It is off by default except for api.deepseek.com, whose docs require it. Per the benchmark-discipline rule, a cheap code fix exists, so the fix is measured rather than the bug.
+
+**Build.** Both arms run gnomon `166a9d3cd970784fadf367ce02aba4df5925555f`. It is fetched by SHA in every cell, checked on GitHub before each runner starts, and recorded per cell. Master changes more than replay between `d59e6c19` and `166a9d3c`. Of those changes, these reach an L cell on this lane:
+1. **Streaming.** `gnomon init` writes `[defaults] stream = true`. Every call goes out `stream: true` with `stream_options.include_usage`. A stream is timed by the gap between chunks: 300 s idle, 1,800 s in total, and 300 s for the first byte. Under `d59e6c19` calls were unstreamed with a 300 s headers timeout; M1a's polyglot k2 had one 698 s step.
+2. **Output limit.** `init` writes `[defaults] max_tokens = 32768`, sent on every request (`d59e6c19` sent none). The limit counts reasoning. A tool call cut off by the limit is not run; the model is asked for smaller parts, and repeated cut-offs end the turn as `truncated`.
+3. **No reasoning promotion.** With `content: null` beside tool calls, reasoning is no longer promoted into content (a streamed reply never was). G0 therefore sends `content: ""` where M1a sent the reasoning text, which the template then dropped.
+4. **Context overflow.** llama.cpp's context-overflow error is recognised, so the turn trims and goes on; before, it ended as `apparatus_failure`.
+5. **Record guard.** Gnomon's record directories are snapshotted around every tool call that can write. A change gnomon did not make stops the turn with `stop_reason: "tamper"`. The `record` policy rule refuses writes into `.gnomon-audit/`.
+6. **Minor.** git's index refresh is written back once per process. Tool subprocesses get `GNOMON_AGENT_SESSION`.
+
+These master changes do not reach an L cell:
+- the task-tool description (the implementor has no `task` tool);
+- the sticky fallback (no fallback is declared);
+- the endpoint `max_context_tokens` (undeclared, so the budget stays 65,536);
+- skill trial, skill mine and audit tamper/resolve (never invoked);
+- the Windows-only changes.
+
+Compared with `d59e6c19`'s scaffold, `gnomon init` output differs only in the `[defaults]` and `[resilience]` lines above and the `task` tool's description. `system.md`, `roles.toml`, `policy.toml`, the profiles, the `[turn]` numbers and the sampling (implementor temperature 0.3, top_p 0.95) are byte-identical; both inits were run and diffed offline.
+
+An offline wire test against a fake server confirmed the differences. On a step after a tool call, `d59e6c19` sent `stream: false`, no `max_tokens`, and the reasoning as the assistant's `content`. Master G0 sends `stream: true`, `max_tokens: 32768`, `content: ""` and no reasoning. Master G1 sends the same plus `reasoning_content`.
+
+That is why the control arm exists.
+
+**Arms.** There are two L arms. Each varies one thing, and G0 is the control.
+
+| Arm | Cells | Build | `[endpoints.r1local]` |
+|---|---|---|---|
+| **G0** (control) | `m1a3-g0-…` | master | `replay_reasoning = false`, declared explicitly |
+| **G1** (treatment) | `m1a3-g1-…` | master | `replay_reasoning = true` |
+
+- **The only surface difference** is one line in `.gnomon/config.toml`: `replay_reasoning = false` against `= true` under `[endpoints.r1local]`. The profile, roles, policy, tools and system prompt are byte-identical; `preflight_m1a3.sh` asserts this, and an offline wire test of master against a fake server confirmed it.
+- **On the wire**, G1's assistant messages carry `reasoning_content` and G0's don't. Stream, include_usage, `max_tokens` 32768, temperature 0.3 and top_p 0.95 are the same in both.
+- **Unchanged from M1a's Glimmer L arm:**
+  - the lane, started with `start-m1.ps1` as is, after a check that its props match M1a's: build b11739, the model file, chat template and caps, 2 slots × 98,304;
+  - M1's tunnel at 127.0.0.1:18680;
+  - the 16 tasks × 2 attempts, with attempts as barriers and the seed = attempt shuffle;
+  - the 900 s cap, the validity rule and the cloud relay. The cloud relay is unused in L, and a cell must read cloud = 0.
+- **Concurrency.** G0 and G1 run at the same time, one slot each, so together they fill the server's 2 slots as M1a's 2-slot arm did.
+  - **Bounded lead 1:** an arm may start position *i* only once the other arm has started position *i − 1*. Both arms are therefore on the same task at about the same time, on the same server and the same gx10 load. An arm that has finished or died never holds the other back.
+  - The task order is identical for both arms.
+- **Order and deadline.**
+  1. The chain waits on the M1a2 chain's **pid** (`M1A3_WAIT_PID`, default 2024045), never on a process name.
+  2. It then applies M1a2's hub-GPU test (no `llama-server.exe`, under 4,000 MiB used), waiting up to 15 min for the GPU to free.
+  3. No new cell starts after **`M1A3_DEADLINE` (default 2026-11-03T17:00Z)**. Cells not started by then are logged and never imputed. If M1a2 runs a PC arm until 13:30Z, attempt 2 may be partial; pairs are taken only where both arms ran.
+
+**Pre-data gate, before any measured cell.** Every result goes into STATUS.
+1. **The M1a server log** is saved: `lane-glim-server-m1a.log.gz`, because a lane start overwrites it.
+2. **Template probe**, on the lane's `/apply-template`, which renders and does not generate. The history is: system, user, an assistant message with `reasoning_content` "MARKER-R7Q …" and a tool call, then the tool result.
+   - The check records whether MARKER-R7Q reaches the rendered prompt.
+   - A negative case without `reasoning_content` must not show the marker.
+   - An informational case adds a later user turn.
+   - A second informational case uses M1a's shape, the reasoning in `content` beside the call, to check whether M1a's reasoning ever reached the prompt.
+   - If the marker does not render, STATUS logs **"G1 replay not rendered by template"** and both arms still run. That is a finding: G1 then sends a different body that becomes the same prompt.
+3. **Stream probe**, informational: one streamed request shaped like gnomon master's. It records whether the lane streams `reasoning_content`; with none, G1 has nothing to replay. It also records tool-call deltas and the shape of usage.
+4. **Smoke**, one cell per arm on hello-world, run concurrently. Each must be valid and solved, which is stricter than M1's smoke, and its surface must carry its arm's line exactly once.
+   - **G0, negative control:** its meter must count 0 requests with `reasoning_content`.
+   - **G1:** must send `reasoning_content` back whenever the model's previous reply carried reasoning and a tool call.
+   - If G1 produced no such reply, the smoke passes as vacuous, with a warning.
+   - One retry is allowed, restarting the lane only if it stopped answering. A second failure means M1a3 is not run.
+5. **Commit before data:** STATUS, the probe and smoke files, the lane's props and models, the M1a server log and the M1a3 apparatus.
+
+**Meter change.** `relay-meter-m1a3.mjs` is a copy of `relay-meter-r1.mjs`; the original is unchanged and still used by the other chains. It changes three things:
+1. **Usage** is read with `JSON.parse`: a JSON body whole, an SSE stream line by line. The R1 regex missed nested usage objects; that is the m1b-fnx gap. The llama.cpp `timings` fallback is kept, and the source of every count is itself counted.
+2. **Request bodies** are inspected for assistant messages carrying non-empty `reasoning_content`. This is the mechanism metric.
+3. **Replies:** reasoning and tool calls in the model's replies are counted. Each request is also checked to see whether it followed a reply with reasoning and a tool call in the same cell; `POST /cell` resets that state per cell.
+
+`test_relay_m1a3.mjs` has 22 offline cases and runs in the preflight.
+
+Ports (free and unused by any apparatus):
+
+| Arm | Local meter | Its counters | Cloud relay-go | Its counters |
+|---|---|---|---|---|
+| G0 | 172.17.0.1:5310 | 127.0.0.1:5320 | 172.17.0.1:5311 | 127.0.0.1:5321 |
+| G1 | 172.17.0.1:5312 | 127.0.0.1:5322 | 172.17.0.1:5313 | 127.0.0.1:5323 |
+
+Cells go to `runs-a3/` and `runs-a3-smoke/`. `collect_m1.py` and the other chains' globs never see them.
+
+**Endpoints, declared now.** Analysis is `collect_m1a3.py`. It imports M1's `parse_cell` unchanged, so every cell, references included, is judged by the same function, and state buckets are asserted to sum to n.
+
+- **Mechanism metric (resolvable):** per arm, the requests whose assistant messages carry `reasoning_content`, out of the requests carrying an assistant message.
+  - Expected: G0 = 0 (negative control) and G1 > 0. Also expected: G1 sends it back after essentially every reply that had reasoning and a tool call.
+  - Reported beside it, never instead of it: the per-cell surface line, and gnomon's own `wire.replay_reasoning` in its turn records.
+- **Score metric (probably not resolvable at this n):** pass rate with a Wilson 95% interval, and exact two-sided McNemar on (task, attempt) cells valid in both arms of each pair:
+  1. **G1 vs G0.** This is the mechanism comparison: same build, same window, one line apart. A claim that replay helps Glimmer needs p < 0.05 here.
+  2. **G0 vs m1a-glim L.** The build-change control: master against `d59e6c19`, neither replaying. A difference here is attributed to "the build" (items 1–6 above), not to any single change.
+  3. **G1 vs R1H's L.** Ladder evidence, time-separated and descriptive only. Beating the incumbent would need a time-matched incumbent arm, which is not run here.
+- **Secondary, descriptive:** capped cells, median agent wall time, local tokens per solved, and how cells ended (the last turn's `stop_reason`: stall, step_wall, malformed, truncated, answered). The hypothesis predicts fewer stall/ceiling endings in G1.
+- **A mechanism win with no score movement** is an honest partial result, declared here in advance.
+
+**Power, noise and caveats, stated now.**
+- **Power.** Each comparison has at most 32 pairs. The measured self-flip rate is about 15% (14.7% across 34 tasks in an earlier campaign; about 15% between attempts in R1H/R1). So only pass-rate differences of roughly 20 points or more are detectable. A non-significant G1 vs G0 is "no difference shown", not "no effect".
+- **Sampling left unchanged:** gnomon's implementor temperature 0.3 and top_p 0.95, plus the server defaults top_k 40 and min_p 0.05. Glimmer's model card asks for temperature 1.0, top_p 0.95 and top_k 64.
+  - Changing sampling would be a second variable, so both arms share the same, possibly suboptimal, sampling. Glimmer's absolute level is conditional on it.
+  - A sampling arm is a separate question.
+- **Time separation.**
+  - G0 and G1 are concurrent. Every other comparison is time-separated: m1a-glim ran about 06:55–08:50Z, and R1H ran 2026-11-02/03.
+  - The gx10 load and the concurrent runs differ; M1b may still be running when M1a3 starts.
+  - The bounded lead means an arm sometimes waits while the other finishes, so the server sees 1 rather than 2 streams for that time. This applies to both arms alike, but differs from M1a's always-full 2 slots.
+- **Replay is the treatment and has costs.**
+  - Replayed reasoning is part of G1's prompt. It uses the 65,536-token budget, so G1 may trim or compact sooner, and its steps can be slower; both count toward its result.
+  - The 32,768 output limit counts reasoning in both arms. The per-slot window, 98,304, equals 65,536 + 32,768.
+- **Reasoning effort** is the template's default, "high", in both arms; gnomon sends none.
+- **Concurrent task containers.** Both arms run the same task's container at about the same time, sharing the cached `tb__<task>__client` image under different container names.
+- **Budget.** L cells spend $0 of cloud. The shared M1 ledger and its $4.50 cap still gate every start.
+
+*Erratum to Amendment 2: its heading time (09:06Z) is approximate. Its commit, 2f794d2c, precedes the M1a2 chain start at 09:05:10Z, which is the ordering that matters.*
