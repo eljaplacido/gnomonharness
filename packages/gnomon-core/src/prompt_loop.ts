@@ -247,6 +247,12 @@ export interface PromptState {
    */
   outputLimitAdapted?: Map<string, OutputLimitAdaptation>;
   /**
+   * Endpoint+model pairs that refused a system message after the first, and
+   * so get gnomon's mid-turn messages as user messages for the rest of the
+   * session. Paid once per session, as above. See steerAsUser.
+   */
+  steerRoleAdapted?: Set<string>;
+  /**
    * The session checklist, as the `todo` tool last left it.
    *
    * Session state, not surface state: it lives in the saved conversation and
@@ -751,6 +757,13 @@ interface InferenceResult {
    * readLimitRefusal.
    */
   maxTokensRejected?: LimitRefusal;
+  /**
+   * The endpoint refused the request because it carried a system message
+   * after the first, and the same request with gnomon's messages in the user
+   * role may pass. See readSteerRoleRefusal. Returned as code 10, so the retry
+   * wrapper does not send the identical request again.
+   */
+  steerRoleRejected?: boolean;
   /**
    * The content is the reasoning channel standing in for an empty reply: no
    * text and no tool call came back, only thinking. A loop that reads this as
@@ -1523,7 +1536,14 @@ async function callEndpointOnce(
     : target.replayReasoning
       ? new Set([...OPENAI_MESSAGE_KEYS, "reasoning_content"])
       : OPENAI_MESSAGE_KEYS;
-  const wireMessages = messages.map((m) => {
+  // gnomon's own mid-turn messages in the user role, for an endpoint that
+  // declared or was found to need it. Done here, at the wire, and nowhere
+  // else: the loop keeps them as system messages, because trimWorking pins
+  // the last USER message as the request being worked on, and a nudge must
+  // never be mistaken for that. Untouched otherwise, so the default request
+  // is the same bytes it always was.
+  const outgoing = target.steerRole === "user" ? steerAsUser(messages) : messages;
+  const wireMessages = outgoing.map((m) => {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(m as unknown as Record<string, unknown>)) {
       if (v !== undefined && allowedKeys.has(k)) out[k] = v;
@@ -1677,16 +1697,34 @@ async function callEndpointOnce(
       // harness chose. Only a 400 that names the field counts.
       const maxTokensRejected =
         res.status === 400 ? readLimitRefusal(detail, maxTokens, maxTokensField) : undefined;
+      // The chat template refused a system message after the first: vLLM
+      // serving Qwen3.x says "System message must be at the beginning." as a
+      // 400 (M1, 2026-11). llama.cpp prefixes a template's raise with "Jinja
+      // Exception: " and, read in its source (common/chat.cpp, server.cpp
+      // ex_wrapper; not reproduced live), answers 400 where the template
+      // autoparser rethrows it and 500 where it does not -- and a 500 is
+      // retried as an outage for the whole transport grace. So a match is
+      // filed as 10, a request that fails the same way twice, whatever the
+      // status. Only when the request carried such a message and was not
+      // already sent with them as user messages: otherwise the resend could
+      // not differ. Ollama's /api/chat renders its own templates and is left
+      // as it was.
+      const steerRoleRejected =
+        !isOllama &&
+        target.steerRole !== "user" &&
+        hasLateSystem(messages) &&
+        readSteerRoleRefusal(detail);
       return {
         content:
           `Model API error: ${res.status} ${res.statusText}` +
           (detail ? `\n${detail.slice(0, 500)}` : "") +
           authHint,
-        code: classifyFailure({ status: res.status, message: detail }),
+        code: steerRoleRejected ? 10 : classifyFailure({ status: res.status, message: detail }),
         toolCalls: [],
         toolsUnsupported:
           res.status === 400 && /does not support tools/i.test(detail),
         ...(maxTokensRejected ? { maxTokensRejected } : {}),
+        ...(steerRoleRejected ? { steerRoleRejected: true } : {}),
       };
     }
 
@@ -2114,6 +2152,12 @@ export interface WireRecord {
   max_context_tokens?: number;
   /** Present, and true, only when reasoning_content was sent back */
   replay_reasoning?: boolean;
+  /**
+   * Present only when gnomon's mid-turn messages went out as user messages:
+   * declared (`steer_role = "user"`), or learned from a refusal this session
+   * (`counters.steer_role_adapted` says which turn learned it).
+   */
+  steer_role?: "user";
 }
 
 /**
@@ -2140,6 +2184,7 @@ export function wireOf(target: RouteTarget): WireRecord {
       : {}),
     ...(target.contextTokens ? { max_context_tokens: target.contextTokens } : {}),
     ...(target.replayReasoning ? { replay_reasoning: true } : {}),
+    ...(target.steerRole === "user" ? { steer_role: "user" as const } : {}),
   };
 }
 
@@ -2203,6 +2248,119 @@ export function adaptOutputLimit(state: PromptState, target: RouteTarget): Route
     ...(seen.field ? { maxTokensField: seen.field } : {}),
     ...(seen.max !== undefined && (target.maxTokens ?? 0) > seen.max ? { maxTokens: seen.max } : {}),
   };
+}
+
+/**
+ * A target with the steering role this session has learned the endpoint
+ * needs: `user`, once it refused a system message after the first. Exported
+ * for the tests.
+ */
+export function adaptSteerRole(state: PromptState, target: RouteTarget): RouteTarget {
+  if (target.steerRole === "user" || !state.steerRoleAdapted?.has(`${target.url}|${target.model}`)) return target;
+  return { ...target, steerRole: "user" };
+}
+
+/** Everything this session has learned about how a target takes its calls. */
+export function adaptTarget(state: PromptState, target: RouteTarget): RouteTarget {
+  return adaptSteerRole(state, adaptOutputLimit(state, target));
+}
+
+/**
+ * What a mid-turn message gnomon wrote starts with when it is sent in the
+ * user role. Stable, so a reader of a transcript, or a grader, can tell
+ * gnomon's words from the person's by the first characters.
+ */
+export const STEER_PREFIX = "[gnomon] ";
+/**
+ * Ends a gnomon note that shares a user message with text that is not
+ * gnomon's, so the text after it is not read as part of the note.
+ */
+export const STEER_CLOSE = "[/gnomon]";
+
+/** Whether any message after the first is a system message. */
+export function hasLateSystem(messages: ChatMessage[]): boolean {
+  return messages.some((m, i) => i > 0 && m.role === "system");
+}
+
+/**
+ * The messages as an endpoint with `steer_role = "user"` is sent them.
+ *
+ * - The leading run of system messages (the system prompt, and the folded
+ *   summary when there is one) becomes one system message. A template that
+ *   accepts only the first system message refuses the summary at index 1 as
+ *   readily as a nudge at index 40; Unsloth's qwen3.6 template takes two.
+ * - Every later system message -- a nudge, the convergence push, a failed
+ *   verification, the wrap-up, a context notice -- becomes a user message
+ *   starting with STEER_PREFIX.
+ * - User messages next to each other are sent as one, joined by a blank line,
+ *   for templates that insist on user/assistant alternation (Mistral's older
+ *   ones raise "Conversation roles must alternate"). A gnomon note followed by
+ *   someone else's text in the same message ends with a STEER_CLOSE line.
+ *
+ * Assistant and tool messages are passed through as the same objects, and a
+ * user message with nothing to merge is the same object too. Pure: the
+ * caller's list is not touched.
+ */
+export function steerAsUser(messages: ChatMessage[]): ChatMessage[] {
+  let lead = 0;
+  while (lead < messages.length && messages[lead]!.role === "system") lead++;
+  const out: ChatMessage[] = [];
+  if (lead === 1) out.push(messages[0]!);
+  else if (lead > 1) {
+    out.push({ role: "system", content: messages.slice(0, lead).map((m) => m.content).join("\n\n") });
+  }
+
+  // A run of user messages, gnomon's notes included, waiting to be sent as one.
+  let run: Array<{ message: ChatMessage; note: boolean }> = [];
+  const flush = (): void => {
+    if (run.length === 1 && !run[0]!.note) out.push(run[0]!.message);
+    else if (run.length > 0) {
+      const parts = run.map(({ message, note }, i) => {
+        if (!note) return message.content;
+        const text = STEER_PREFIX + message.content;
+        const next = run[i + 1];
+        return next && !next.note ? `${text}\n${STEER_CLOSE}` : text;
+      });
+      out.push({ role: "user", content: parts.join("\n\n") });
+    }
+    run = [];
+  };
+  for (const m of messages.slice(lead)) {
+    if (m.role === "system" || m.role === "user") {
+      run.push({ message: m, note: m.role === "system" });
+    } else {
+      flush();
+      out.push(m);
+    }
+  }
+  flush();
+  return out;
+}
+
+/**
+ * Whether an error body is a chat template refusing a system message that is
+ * not the first.
+ *
+ * Matched on the template's own words, loosely, because each server wraps
+ * them differently: vLLM returns `{"error": {"message": "System message must
+ * be at the beginning.", ...}}` (M1, 2026-11, vLLM serving Qwen3.8), and
+ * llama.cpp prefixes "Jinja Exception: " to whatever a template raises. The
+ * shapes covered: a system message, prompt or role that "must"/"can only"/"is
+ * only allowed" to be at the beginning, start or first; "only the first
+ * message" may be a system one; and roles that "must alternate", which is how
+ * Mistral-style templates refuse a system message in the middle. NOT a refusal
+ * of the system role as such (Gemma's "System role not supported"): the
+ * leading message stays a system message under steer_role = "user", so a
+ * resend could not pass.
+ */
+export function readSteerRoleRefusal(detail: string): boolean {
+  return (
+    /system[ _-]?(?:message|prompt|role|turn)s?\b[^\n]{0,80}?\b(?:must|should|can only|may only|(?:is|are) only (?:allowed|supported|permitted))\b[^\n]{0,40}?\b(?:at the (?:beginning|start)|first)\b/i.test(
+      detail
+    ) ||
+    /only (?:the )?first message[^\n]{0,40}?\bsystem\b/i.test(detail) ||
+    /roles? must alternate/i.test(detail)
+  );
 }
 
 /** Marker text for a turn the user stopped. Code 2 → bucket `refusal`. */
@@ -3342,6 +3500,13 @@ export interface TurnCounters {
    * none were.
    */
   output_limit_adapted?: number;
+  /**
+   * Calls resent because the endpoint refused a system message after the
+   * first, with gnomon's mid-turn messages sent as user messages instead; the
+   * endpoint keeps getting them that way for the rest of the session, and the
+   * turn record's `wire` says `steer_role: "user"`. Absent when none were.
+   */
+  steer_role_adapted?: number;
   /** Per tool: calls made, refusals, apparatus failures. Separates "bash
    * failed 9 of 31 calls" from "bash succeeded 31/31 and the answer was still
    * wrong". */
@@ -4079,7 +4244,7 @@ export async function runAgenticTurn(
     model: usedModel,
     endpoint: usedTarget.endpoint,
     endpoint_url: usedTarget.url,
-    wire: wireOf(adaptOutputLimit(state, usedTarget)),
+    wire: wireOf(adaptTarget(state, usedTarget)),
     verify: verifyOutcome,
     toolSteps: steps,
     toolLog,
@@ -4180,6 +4345,32 @@ export async function runAgenticTurn(
   const noTools = (state.noToolModels ??= new Set<string>());
 
   /**
+   * The endpoint refused a request carrying a system message after the first:
+   * remember for the session that it gets gnomon's mid-turn messages as user
+   * messages, count it, say so on the unsilenceable channel, and return the
+   * target to resend to. The same shape as an output limit refused by name:
+   * the default request is the one the surface declared, and a server that
+   * cannot take it is answered once, in the open, rather than ending the turn
+   * on the harness's own phrasing.
+   */
+  const learnSteerRole = (target: RouteTarget): RouteTarget => {
+    (state.steerRoleAdapted ??= new Set()).add(`${target.url}|${target.model}`);
+    counters.steer_role_adapted = (counters.steer_role_adapted ?? 0) + 1;
+    deps.progress.stop();
+    warn(
+      paint(
+        deps.ui,
+        "yellow",
+        `  [endpoint] ${target.model} refused a system message after the first — resending ` +
+          `gnomon's own messages as user messages marked ${STEER_PREFIX.trim()}, for the rest of this session. ` +
+          `Declare steer_role = "user" on the endpoint to skip the refused call.`
+      )
+    );
+    deps.progress.start(`${target.model}`);
+    return { ...target, steerRole: "user" };
+  };
+
+  /**
    * Call a target, coping with a model that cannot accept tools.
    *
    * Some models — reasoning distills especially — make the backend reject any
@@ -4188,7 +4379,7 @@ export async function runAgenticTurn(
    * exactly what system.md says must never pass unremarked.
    */
   const call = async (declared: typeof route.target) => {
-    let target = adaptOutputLimit(state, declared);
+    let target = adaptTarget(state, declared);
     const offer = noTools.has(target.model) ? [] : toolSet.schemas;
     let r = await callEndpointWithRetry(
       target,
@@ -4204,6 +4395,29 @@ export async function runAgenticTurn(
     turnUsage = addUsage(turnUsage, r.usage);
     countUnmetered(r);
 
+    // The template refused a system message after the first. Resent once with
+    // gnomon's messages as user messages; see learnSteerRole. Checked again
+    // after the output-limit resend below, because a server may name either
+    // refusal first, and the steering role cannot be refused twice: once it
+    // is "user", callEndpoint no longer reports it.
+    const resendAsUser = async (): Promise<void> => {
+      target = learnSteerRole(target);
+      r = await callEndpointWithRetry(
+        target,
+        working,
+        offer,
+        resilience.request_timeout_ms,
+        resilience,
+        deps.say,
+        deps.ui,
+        deps.signal,
+        state.sessionId
+      );
+      turnUsage = addUsage(turnUsage, r.usage);
+      countUnmetered(r);
+    };
+    if (r.steerRoleRejected) await resendAsUser();
+
     // The endpoint refused the output limit gnomon chose. Resent once in the
     // shape it takes, said on the unsilenceable channel, and remembered for
     // the session; the turn record's `wire` carries the limit that went out.
@@ -4215,7 +4429,7 @@ export async function runAgenticTurn(
       let said: string;
       if (refusal.how === "rename") {
         memo.set(key, { ...memo.get(key), field: "max_completion_tokens" });
-        resend = adaptOutputLimit(state, declared);
+        resend = adaptTarget(state, declared);
         said = `takes its output limit as max_completion_tokens — resending under that name`;
       } else if (refusal.how === "clamp") {
         if (refusal.remember) memo.set(key, { ...memo.get(key), max: refusal.max });
@@ -4246,6 +4460,7 @@ export async function runAgenticTurn(
       turnUsage = addUsage(turnUsage, r.usage);
       countUnmetered(r);
     }
+    if (r.steerRoleRejected) await resendAsUser();
 
     if (r.toolsUnsupported && offer.length > 0) {
       noTools.add(target.model);
@@ -4870,7 +5085,7 @@ export async function runAgenticTurn(
         model: usedModel,
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
-        wire: wireOf(adaptOutputLimit(state, usedTarget)),
+        wire: wireOf(adaptTarget(state, usedTarget)),
         ...keepReasoning(result.reasoning),
         verify: verifyOutcome,
         toolSteps: steps,
@@ -4992,8 +5207,9 @@ export async function runAgenticTurn(
           `an edit you did not make as though you made it. Then say what you ` +
           `were unable to examine, so the answer is legibly partial.`,
       });
-      const closing = await callEndpoint(
-        adaptOutputLimit(state, route.target),
+      const closingTarget = adaptTarget(state, route.target);
+      let closing = await callEndpoint(
+        closingTarget,
         working,
         [],
         modelTimeoutMs(config),
@@ -5002,6 +5218,21 @@ export async function runAgenticTurn(
       );
       turnUsage = addUsage(turnUsage, closing.usage);
       countUnmetered(closing);
+      // The wrap-up instruction above is itself a system message after the
+      // first, so a template that refuses one refuses this call even when
+      // nothing earlier in the turn did.
+      if (closing.steerRoleRejected) {
+        closing = await callEndpoint(
+          learnSteerRole(closingTarget),
+          working,
+          [],
+          modelTimeoutMs(config),
+          deps.signal,
+          state.sessionId
+        );
+        turnUsage = addUsage(turnUsage, closing.usage);
+        countUnmetered(closing);
+      }
       deps.progress.stop();
 
       const closed = closing.code === 0 && closing.content.trim() !== "";
@@ -5022,7 +5253,7 @@ export async function runAgenticTurn(
         model: usedModel,
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
-        wire: wireOf(adaptOutputLimit(state, usedTarget)),
+        wire: wireOf(adaptTarget(state, usedTarget)),
         verify: verifyOutcome,
         toolSteps: steps,
         toolLog,

@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initSurface } from "./init.js";
-import { loadConfig, resolveContext, resolveUi, resolveRouting, resolveAudit, resolveSessionStore, listRoles, buildToolSet } from "gnomon-core";
+import { loadConfig, resolveContext, resolveUi, resolveRouting, resolveAudit, resolveSessionStore, listRoles, buildToolSet, STEER_ROLES, STEER_PREFIX, STEER_CLOSE } from "gnomon-core";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
@@ -402,6 +402,18 @@ describe("the README outcome table matches the tool result codes", () => {
     expect(scaffold).toMatch(/attempts x stream_total_timeout_ms/);
     const guide = readFileSync(join(root, "docs/GUIDE.md"), "utf-8");
     expect(guide).toMatch(/`attempts` × `stream_total_timeout_ms`/);
+  });
+
+  it("the surface reference documents steer_role: its values, its prefix, and what the record says", () => {
+    // A user-role nudge is only distinguishable from the person's words by its
+    // prefix, so the prefix a reader is told to look for must be the one sent.
+    const root = join(__dirname, "../../..");
+    const guide = readFileSync(join(root, "docs/GUIDE.md"), "utf-8");
+    for (const role of STEER_ROLES) expect(guide).toContain(`steer_role = "${role}"`);
+    expect(guide).toContain(`\`${STEER_PREFIX}\``);
+    expect(guide).toContain(`\`${STEER_CLOSE}\``);
+    expect(guide).toMatch(/`counters\.steer_role_adapted`/);
+    expect(guide).toMatch(/`steer_role: "user"`/);
   });
 
   it("the inert-enumeration set, its fixture and CONTRACTS.md are one set", () => {
