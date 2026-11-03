@@ -1,51 +1,66 @@
 
-== S1 arms (gnomon 8078df03, qwen3.6-35b on R1H's lane, L routing)
+== S1 arms (gnomon 8078df03, qwen3.6-35b on the gx10 lane llama-server-qwen-q4 :18080, one slot shared, L routing)
 group     arm  valid pass  rate   95% Wilson    $/solved  cloud-share tok|req  wall-med  capped  local tok/solved  local out/solved  other states
+s1-s0     L       30   19  0.633  [0.46, 0.78]    0.0000       0.00|0.00           173       6            1.48M              13k  {'no_model_call': 1}
+s1-s1     L       31   16  0.516  [0.35, 0.68]    0.0000       0.00|0.00           266       6            1.95M              21k  {}
 
-== reference, read-only, same validity rule: r1h L (d59e6c19, same lane recipe; time-separated)
+== reference, read-only, same validity rule: r1 L (d59e6c19, the same gx10 lane, one cell at a time; time-separated)
 group     arm  valid pass  rate   95% Wilson    $/solved  cloud-share tok|req  wall-med  capped  local tok/solved  local out/solved  other states
-r1h       L       32   24  0.750  [0.58, 0.87]    0.0000       0.00|0.00            71       2            1.31M              11k  {}
+r1        L       30   18  0.600  [0.42, 0.75]    0.0001       0.00|0.00           165       5            1.65M              16k  {'endpoint_outage': 2}
 
 paired (exact McNemar on (task, attempt) cells valid in both):
   [PRIMARY: steering as [gnomon] user notes vs as dropped system messages; same build, lane, window]
-  s1-s1          vs s1-s0         : pairs=  0  solved  0 vs  0  s1-s1-only= 0 s1-s0-only= 0  McNemar p=1.0000  capped 0 vs 0
-  [build-change control, time-separated, descriptive]
-  s1-s0          vs r1h           : pairs=  0  solved  0 vs  0  s1-s0-only= 0 r1h-only= 0  McNemar p=1.0000  capped 0 vs 0
-  [time-separated, descriptive]
-  s1-s1          vs r1h           : pairs=  0  solved  0 vs  0  s1-s1-only= 0 r1h-only= 0  McNemar p=1.0000  capped 0 vs 0
+  s1-s1          vs s1-s0         : pairs= 30  solved 15 vs 19  s1-s1-only= 0 s1-s0-only= 4  McNemar p=0.1250  capped 6 vs 6
+      k1 install-klee-minimal               solved only by s1-s0  (stop s1-s1: answered, s1-s0: answered; nudges s1-s1: 1, s1-s0: 6)
+      k1 mailman                            solved only by s1-s0  (stop s1-s1: None, s1-s0: answered; nudges s1-s1: None, s1-s0: 10)
+      k1 parallelize-graph                  solved only by s1-s0  (stop s1-s1: stall, s1-s0: answered; nudges s1-s1: 5, s1-s0: 2)
+      k1 sparql-university                  solved only by s1-s0  (stop s1-s1: answered, s1-s0: answered; nudges s1-s1: 1, s1-s0: 0)
+  [build-change control on the same lane, time-separated, descriptive (R1 had the slot alone)]
+  s1-s0          vs r1            : pairs= 28  solved 18 vs 16  s1-s0-only= 3 r1-only= 1  McNemar p=0.6250  capped 6 vs 5
+      k1 mailman                            solved only by s1-s0  (stop s1-s0: answered, r1: None; nudges s1-s0: 10, r1: None)
+      k1 parallelize-graph                  solved only by s1-s0  (stop s1-s0: answered, r1: stall; nudges s1-s0: 2, r1: 4)
+      k2 parallelize-graph                  solved only by r1  (stop s1-s0: stall, r1: answered; nudges s1-s0: 2, r1: 2)
+      k1 sparql-university                  solved only by s1-s0  (stop s1-s0: answered, r1: answered; nudges s1-s0: 0, r1: 0)
+  [time-separated, descriptive (R1 had the slot alone)]
+  s1-s1          vs r1            : pairs= 29  solved 15 vs 17  s1-s1-only= 0 r1-only= 2  McNemar p=0.5000  capped 6 vs 5
+      k1 install-klee-minimal               solved only by r1  (stop s1-s1: answered, r1: answered; nudges s1-s1: 1, r1: 2)
+      k2 parallelize-graph                  solved only by r1  (stop s1-s1: stall, r1: answered; nudges s1-s1: 1, r1: 2)
 
 mechanism metric (relay-meter-s1 counters, summed over cells; expected S0 dropped > 0 and notes = 0, S1 notes > 0 and late system = 0, whenever steering fired):
 
-  s1-s0 (S0, declared steer_role = system): 0 cells, 0 metered, 0 valid; steering fired in 0
-    requests with a system message the incumbent template drops: 0 of 0 (0 msgs, 0 chars, volume); in 0 cells; new-steering requests 0
+  s1-s0 (S0, declared steer_role = system): 31 cells, 31 metered, 30 valid; steering fired in 16
+    requests with a system message the incumbent template drops: 704 of 1153 (1861 msgs, 698,807 chars, volume); in 16 cells; new-steering requests 51
     requests with a [gnomon] note: 0 (0 notes, 0 chars); in 0 cells; new-steering requests 0
-    requests with any system message after the first: 0; with reasoning_content: 0; client aborts 0; meter errors 0
-    by kind, requests carrying it dropped/as a note: nudge 0/0, converge 0/0, wrapup 0/0, verify 0/0, context 0/0, other 0/0
-    meter: usage from JSON 0, from timings 0, without usage 0, unparsed replies 0, unparsed requests 0
-    surface line per cell (value, count of steer_role lines): {}
-    gnomon turn records: {}; nudges summed 0 over 0 cells with a record; steer_role_adapted summed 0
+    requests with any system message after the first: 704; with reasoning_content: 0; client aborts 4; meter errors 0
+    by kind, requests carrying it dropped/as a note: nudge 702/0, converge 0/0, wrapup 4/0, verify 0/0, context 16/0, other 0/0
+    meter: usage from JSON 1149, from timings 0, without usage 0, unparsed replies 0, unparsed requests 0
+    surface line per cell (value, count of steer_role lines): {('system', 1): 24, None: 7}
+    gnomon turn records: {'turns': 24, 'steer_role=absent': 24, 'replay_reasoning': 0, 'stream': 24}; nudges summed 36 over 24 cells with a record; steer_role_adapted summed 0
 
-  s1-s1 (S1, declared steer_role = user): 0 cells, 0 metered, 0 valid; steering fired in 0
-    requests with a system message the incumbent template drops: 0 of 0 (0 msgs, 0 chars, volume); in 0 cells; new-steering requests 0
-    requests with a [gnomon] note: 0 (0 notes, 0 chars); in 0 cells; new-steering requests 0
-    requests with any system message after the first: 0; with reasoning_content: 0; client aborts 0; meter errors 0
-    by kind, requests carrying it dropped/as a note: nudge 0/0, converge 0/0, wrapup 0/0, verify 0/0, context 0/0, other 0/0
-    meter: usage from JSON 0, from timings 0, without usage 0, unparsed replies 0, unparsed requests 0
-    surface line per cell (value, count of steer_role lines): {}
-    gnomon turn records: {}; nudges summed 0 over 0 cells with a record; steer_role_adapted summed 0
+  s1-s1 (S1, declared steer_role = user): 31 cells, 31 metered, 31 valid; steering fired in 19
+    requests with a system message the incumbent template drops: 0 of 1311 (0 msgs, 0 chars, volume); in 0 cells; new-steering requests 0
+    requests with a [gnomon] note: 602 (1786 notes, 676,279 chars); in 19 cells; new-steering requests 51
+    requests with any system message after the first: 0; with reasoning_content: 0; client aborts 4; meter errors 0
+    by kind, requests carrying it dropped/as a note: nudge 0/599, converge 0/0, wrapup 0/6, verify 0/0, context 0/44, other 0/0
+    meter: usage from JSON 1307, from timings 0, without usage 0, unparsed replies 0, unparsed requests 0
+    surface line per cell (value, count of steer_role lines): {('user', 1): 23, None: 8}
+    gnomon turn records: {'turns': 23, 'steer_role=user': 23, 'replay_reasoning': 0, 'stream': 23}; nudges summed 22 over 23 cells with a record; steer_role_adapted summed 0
+  CHECK S0 notes = 0: yes; S0 dropped > 0: yes; S1 late system = 0: yes; S1 notes > 0: yes; steer_role_adapted = 0 in both: yes; all cells on http://127.0.0.1:18080: yes
 
 how cells ended (gnomon's last turn record's stop_reason; capped cells have none):
-  s1-s0  all cells: {}
-         valid: {}
-         valid unsolved: {}
-  s1-s1  all cells: {}
-         valid: {}
-         valid unsolved: {}
-  r1h    all cells: {'answered': 24, 'stall': 5, 'no-turn-record': 3}
-         valid: {'answered': 24, 'stall': 5, 'no-turn-record': 3}
-         valid unsolved: {'stall': 5, 'no-turn-record': 1, 'answered': 2}
+  s1-s0  all cells: {'answered': 20, 'no-turn-record': 7, 'stall': 4}
+         valid: {'answered': 20, 'no-turn-record': 6, 'stall': 4}
+         valid unsolved: {'no-turn-record': 4, 'stall': 4, 'answered': 3}
+  s1-s1  all cells: {'answered': 18, 'no-turn-record': 8, 'stall': 5}
+         valid: {'answered': 18, 'no-turn-record': 8, 'stall': 5}
+         valid unsolved: {'no-turn-record': 5, 'answered': 5, 'stall': 5}
+  r1     all cells: {'answered': 22, 'no-turn-record': 6, 'stall': 4}
+         valid: {'answered': 20, 'no-turn-record': 6, 'stall': 4}
+         valid unsolved: {'no-turn-record': 4, 'stall': 4, 'answered': 4}
 
-steering exposure (descriptive; valid cells, steered = the meter saw steering or gnomon counted a nudge): {'s1-s0': {'valid': 0, 'steered': 0, 'steered_solved': 0, 'unsteered_solved': 0}, 's1-s1': {'valid': 0, 'steered': 0, 'steered_solved': 0, 'unsteered_solved': 0}}
+capped at 900 s (valid cells; the shared slot makes these likelier for both S arms): {'s1-s0': 6, 's1-s1': 6, 'r1': 5}
 
-cell states: {'s1-s0': {}, 's1-s1': {}, 'r1h': {'valid': 32}}
-0 S1 cells
+steering exposure (descriptive; valid cells, steered = the meter saw steering or gnomon counted a nudge): {'s1-s0': {'valid': 30, 'steered': 16, 'steered_solved': 8, 'unsteered_solved': 11}, 's1-s1': {'valid': 31, 'steered': 19, 'steered_solved': 7, 'unsteered_solved': 9}}
+
+cell states: {'s1-s0': {'valid': 30, 'no_model_call': 1}, 's1-s1': {'valid': 31}, 'r1': {'valid': 30, 'endpoint_outage': 2}}
+62 S1 cells

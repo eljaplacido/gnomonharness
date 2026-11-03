@@ -1,0 +1,120 @@
+  │ I'll set up the language detection system step by step. Let me start by c…
+[approval] bash: python3 --version && pip list 2>/dev/null | grep -iE "torch|transformers|accelerate|peft|sentencepiece" && ls /app/ 2>/dev/null — approved
+  ⚙ bash python3 --version && pip list 2>/dev/null | grep -iE "torch|transforme…
+    ✗ bash — exit 1
+  qwen3.6-35b — 1 tool call(s) so far
+[approval] bash: pip list 2>/dev/null | head -50 — approved
+  ⚙ bash pip list 2>/dev/null | head -50
+    ✓ bash — exit 0
+  qwen3.6-35b — 2 tool call(s) so far
+[approval] bash: pip install torch transformers accelerate peft sentencepiece 2>&1 | tail -20 — approved
+  ⚙ bash pip install torch transformers accelerate peft sentencepiece 2>&1 | ta…
+    ✓ bash — exit 0
+  qwen3.6-35b — 3 tool call(s) so far
+[approval] bash: mkdir -p /app/model_cache/xlm-roberta-base /app/merged_model — approved
+  ⚙ bash mkdir -p /app/model_cache/xlm-roberta-base /app/merged_model
+    ✓ bash — exit 0
+  qwen3.6-35b — 4 tool call(s) so far
+  │ Now I'll write the setup script:
+[approval] write /app/setup_language_detection.py (+107 −0) [new file] — approved
+  ⚙ write /app/setup_language_detection.py
+    ✓ write /app/setup_language_detection.py (+107 −0)
+  qwen3.6-35b — 5 tool call(s) so far
+[approval] bash: cd /app && python3 setup_language_detection.py 2>&1 — approved
+  ⚙ bash cd /app && python3 setup_language_detection.py 2>&1
+    ✓ bash — exit 0
+  qwen3.6-35b — 6 tool call(s) so far
+  │ The setup completed successfully. Let me verify the outputs:
+[approval] bash: cat /app/detection_results.json — approved
+  ⚙ bash cat /app/detection_results.json
+    ✓ bash — exit 0
+  qwen3.6-35b — 7 tool call(s) so far
+[approval] bash: ls -la /app/model_cache/xlm-roberta-base/ && echo "---" && ls -la /app/merged_model/ — approved
+  ⚙ bash ls -la /app/model_cache/xlm-roberta-base/ && echo "---" && ls -la /app…
+    ✓ bash — exit 0
+  qwen3.6-35b — 8 tool call(s) so far
+  │ Let me also verify the merged model config confirms 20 labels:
+[approval] bash: python3 -c "
+import json
+with open('/app/merged_model/config.json') as f:
+    cfg = json.load(f)
+print('num_labels:', cfg.get('num_labels'))
+print('model_type:', cfg.get('model_type'))
+" — approved
+  ⚙ bash python3 -c " import json with open('/app/merged_model/config.json') as…
+    ✓ bash — exit 0
+  qwen3.6-35b — 9 tool call(s) so far
+  │ The config.json doesn't explicitly store `num_labels` after merge since t…
+[approval] bash: python3 -c "
+import json
+with open('/app/merged_model/config.json') as f:
+    cfg = json.load(f)
+for k, v in cfg.items():
+    if 'label' in k.lower() or 'class' in k.lower() or 'num' in k.lower():
+        print(f'{k}: {v}')
+print('---')
+# Also check the adapter config
+with open('/app/model_cache/xlm-roberta-base/config.json') as f:
+    base_cfg = json.load(f)
+for k, v in base_cfg.items():
+    if 'label' in k.lower() or 'class' in k.lower() or 'num' in k.lower():
+        print(f'base {k}: {v}')
+" — approved
+  ⚙ bash python3 -c " import json with open('/app/merged_model/config.json') as…
+    ✓ bash — exit 0
+  qwen3.6-35b — 10 tool call(s) so far
+  │ The merged model has all 20 labels properly configured. Let me do a quick…
+[approval] bash: python3 -c "
+import json, torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+tokenizer = AutoTokenizer.from_pretrained('/app/merged_model')
+model = AutoModelForSequenceClassification.from_pretrained('/app/merged_model')
+model.eval()
+
+with open('/app/detection_results.json') as f:
+    results = json.load(f)
+
+print('Verification: loading merged model and re-running inference')
+with torch.no_grad():
+    for r in results:
+        inputs = tokenizer(r['text'], return_tensors='pt', truncation=True, max_length=512, padding=True)
+        outputs = model(**inputs)
+        probs = torch.softmax(outputs.logits, dim=-1)
+        conf, pred = torch.max(probs, dim=-1)
+        assert pred.item() == r['predicted_class_id'], f'Mismatch for {r[\"text\"]}'
+        print(f'  OK: {r[\"text\"][:40]}... -> class {pred.item()} (conf: {conf.item():.4f})')
+print('All 10 samples verified successfully.')
+" 2>&1 — approved
+  ⚙ bash python3 -c " import json, torch from transformers import AutoTokenizer…
+    ✓ bash — exit 0
+  qwen3.6-35b — 11 tool call(s) so far
+Everything is set up and verified. Here's a summary:
+
+**What was done:**
+
+1. **Installed dependencies**: `torch`, `transformers`, `accelerate`, `peft`, `sentencepiece`
+2. **Downloaded base model** `FacebookAI/xlm-roberta-base` and reconfigured it with `num_labels=20` (instead of the default 2)
+3. **Saved configured model + tokenizer** to `/app/model_cache/xlm-roberta-base/`
+4. **Applied LoRA adapter** `dominguesm/xlm-roberta-base-lora-language-detection` via PEFT
+5. **Merged LoRA into base model** and saved to `/app/merged_model/`
+6. **Ran detection** on all 10 test samples and saved results to `/app/detection_results.json`
+
+**Detection results** (all with >93% confidence):
+
+| Text | Predicted Class | Confidence |
+|------|----------------|------------|
+| French | 6 | 97.5% |
+| Spanish | 5 | 98.9% |
+| German | 2 | 99.7% |
+| Italian | 8 | 98.9% |
+| Portuguese | 12 | 99.0% |
+| Russian | 13 | 98.6% |
+| Japanese | 9 | 96.5% |
+| Chinese | 19 | 93.6% |
+| Arabic | 0 | 98.8% |
+| English | 4 | 97.4% |
+
+All 10 samples verified by loading the merged model fresh and re-running inference — results match exactly.
+
+[result] role=implementor model=qwen3.6-35b tools=11 surface=1595a1d14f70
