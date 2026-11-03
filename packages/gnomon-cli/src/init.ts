@@ -47,7 +47,9 @@ edit_format = "str_replace"       # ast (INERT) | hashline (INERT) | str_replace
 sandbox = "confined"              # off | confined | strict
 approval = "on_write"             # never | on_write | always
 role_profile = "local_first"      # local_first | frontier_plan | all_remote
-max_context_tokens = 65536
+max_context_tokens = 65536        # an [endpoints.<name>] block may declare its model's own window
+stream = true                     # stream replies from kind = "openai" endpoints; an endpoint may say stream = false
+max_tokens = 32768                # output limit per reply, thinking included; a role or endpoint may declare its own (0 = none)
 compaction = "summary"            # discard | summary | truncate
 
 [context]
@@ -81,6 +83,13 @@ attempts = 3              # generation retries. 1 disables THESE; transport
                           # attempts = 1 still knocks for the full grace.
 backoff_ms = 500          # doubled each attempt
 request_timeout_ms = 300000   # a reasoning model on a hard task exceeds 120s; a timed-out attempt doubles this
+                              # (for a streamed reply: the wait for its first byte)
+# A streamed reply -- [defaults] stream = true, for kind = "openai" endpoints
+# that do not say stream = false -- is timed by the gap between chunks, so a long reply that is
+# still being written is never cut off for being long. An unstreamed one has
+# only request_timeout_ms, which a long generation reaches.
+stream_idle_timeout_ms = 300000    # silence mid-reply that counts as a stall; the request is aborted and asked again
+stream_total_timeout_ms = 1800000  # overall cap on one streamed reply; not retried, it would run as long again
 # An endpoint refusing the socket is not an attempt; it is knocked on for a
 # grace instead (0 disables). Left undeclared on purpose: undeclared, a remote
 # endpoint gets 60s (a provider blip) but a server on THIS machine that refuses

@@ -549,6 +549,46 @@ kind = "openai"
 # api_key_env = "VLLM_API_KEY"   # only if the server was started with a key
 ```
 
+**`kind = "openai"` endpoints are streamed** when `[defaults] stream = true`
+(scaffolded since 2026-11; `gnomon migrate` adds it to an older surface) or
+their own block says `stream = true`. A streamed call is sent as server-sent
+events, with `stream_options.include_usage` so the token counts stay exact. A
+streamed reply is timed by the gap between chunks, `[resilience]
+stream_idle_timeout_ms` (default 300 s), under an overall cap,
+`stream_total_timeout_ms` (default 30 min); the first byte waits
+`request_timeout_ms`. A server that cannot stream takes `stream = false` in its
+block. One that streams without reporting usage is counted in the turn
+record's `counters.unmetered_calls`, which says the token totals are a floor.
+Ollama's own `/api/chat` is never streamed.
+
+**Output and window.** A call carries an output limit when the surface
+declares one: the role's `max_tokens`, else the endpoint's, else `[defaults]
+max_tokens` (scaffolded as 32768 since 2026-11; `gnomon migrate` adds it to an
+older surface). 0 sends none. On DeepSeek and llama.cpp the limit counts the
+thinking as well as the reply. An endpoint that refuses the limit by name gets
+the call once more in a shape it accepts: `max_completion_tokens`, the maximum
+its error states, or no limit for that call. The turn record counts these in
+`counters.output_limit_adapted`, and its `wire` shows any change that is
+remembered. A tool call the limit cuts off is not run. The model is asked for
+the work in smaller parts. A cloud endpoint declaring `max_context_tokens = <window>` has its
+turns trimmed to that window rather than to `[defaults] max_context_tokens`.
+
+```toml
+[endpoints.deepseek]
+url = "https://api.deepseek.com/chat/completions"
+kind = "openai"
+api_key_env = "DEEPSEEK_API_KEY"
+max_context_tokens = 131072   # the model's window, from the provider's docs
+```
+
+**Reasoning replay.** `replay_reasoning = true` in an `[endpoints.<name>]`
+block sends each assistant message's reasoning back as `reasoning_content`.
+That covers earlier turns of the session as well as the current one.
+DeepSeek's API requires it in thinking mode with tools (a 400 otherwise), so
+`api.deepseek.com` gets it without the line; declare it for a relay or gateway
+in front of DeepSeek. Everywhere else it is off: strict OpenAI-compatible
+servers refuse unknown message fields.
+
 **llama.cpp needs `--jinja`** for tool calling; the model id is what
 `/v1/models` reports, and `--alias` sets it. Loopback, private-range,
 Tailscale (`100.64–127.x`) and `*.local` addresses are listed as **LOCAL**: no
@@ -1150,6 +1190,7 @@ chain measured 48.7% against 56.6% without one, within noise
 | `No model answers for this project yet: …` (from `launch`) | The default role's endpoint, key or model is not usable | Pick a provider in the picker, or Skip and run `gnomon endpoint add` later |
 | `No API key: endpoint "X" declares api_key_env = "VAR", and $VAR is not set` | Key not stored or exported | `gnomon key set X`. No request was sent. |
 | `Model API error: 401 …` / `The key came from $VAR … the provider rejected it` | Wrong or expired key, or an exported variable shadowing the stored one | `gnomon key set X` with a fresh key; `unset VAR` if an old one is exported |
+| `The stream from … went silent for 300s mid-reply` (exit 11) | A streamed reply stalled; the request was aborted, and is asked again within `[resilience] attempts` | Raise `[resilience] stream_idle_timeout_ms` for a model that thinks silently for longer, or `stream = false` on an endpoint whose streaming is unreliable |
 | `Model API error: 400`/`404` naming a model | The model id is not one the endpoint serves | `gnomon endpoint list` (it suggests the nearest id), or `/models` |
 | `⚠ .gnomon/roles.toml [roles.R] model … is ignored: role_profile "P" sets …` | The profile routes that role and wins | Edit `profiles/P.toml`, or remove the line from `roles.toml` ([5.0](#50-where-routing-lives-and-a-one-time-step)) |
 | Banner shows `Model: local:default` | No `model` for the role anywhere: a missing profile, or `roles.toml` stripped without a profile | Fix `role_profile` or the profile file. `✗ profile "X" is not in .gnomon/profiles/` names the problem. |
