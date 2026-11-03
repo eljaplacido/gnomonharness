@@ -191,7 +191,9 @@ async function converse(
     notify: (method: string, params: unknown) => void;
     updates: any[];
     asked: any[];
-  }) => Promise<void>
+  }) => Promise<void>,
+  /** Requests to a declared [shadow] url go here instead of the model script. */
+  shadow?: { url: string; reply: (init: any) => Promise<unknown> }
 ): Promise<void> {
   const input = new PassThrough();
   const pending = new Map<number, { ok: (v: any) => void; fail: (e: Error) => void }>();
@@ -216,6 +218,7 @@ async function converse(
   const realFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = (async (_url: string, init: any) => {
+    if (shadow && String(_url) === shadow.url) return shadow.reply(init);
     const body = JSON.parse(init.body);
     const step = script(body, calls++);
     const message = step.tool
@@ -253,7 +256,7 @@ async function converse(
 }
 
 /** A surface with two roles and full auditing, optionally in `suggest` routing. */
-function acpSurface(opts: { suggest?: boolean } = {}): string {
+function acpSurface(opts: { suggest?: boolean; extra?: string } = {}): string {
   const root = mkdtempSync(join(tmpdir(), "gnomon-acp-core-"));
   const g = join(root, ".gnomon");
   mkdirSync(g, { recursive: true });
@@ -274,6 +277,7 @@ function acpSurface(opts: { suggest?: boolean } = {}): string {
       ...(opts.suggest
         ? ["[routing]", 'mode = "suggest"', 'default = "implement"', "", "[[routing.rules]]", 'role = "plan"', 'match = "^plan"', 'why = "planning words"', ""]
         : []),
+      opts.extra ?? "",
     ].join("\n")
   );
   writeFileSync(
@@ -384,6 +388,65 @@ describe("runAcpServer", () => {
         }
       );
       expect(trail(root).find((r) => r.kind === "turn")).toMatchObject({ role: "plan" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("a shadow that stops mid-session is told to the editor and recorded, not dropped", async () => {
+    // Until 2026-11-03 the stop line was pushed onto the session/new notes after
+    // they had been sent, so an editor never saw it and the trail had nothing.
+    // Never contacted: fetch is stubbed, and port 9 refuses if anything escapes.
+    const url = "http://127.0.0.1:9/v1/systemone";
+    const root = acpSurface({
+      extra: `[shadow]\nenabled = true\nurl = "${url}"\nabort = ["a"]\nrole = ["r"]\napproval = ["p"]\norders = ["fwd", "rev"]\n`,
+    });
+    writeFileSync(join(root, "a.txt"), "a\n");
+    try {
+      await converse(
+        (body) =>
+          body.messages.some((m: any) => m.role === "tool")
+            ? { text: "Read it." }
+            : { tool: { name: "read", args: { path: "a.txt" } } },
+        () => ({ outcome: { outcome: "selected", optionId: "once" } }),
+        async (c) => {
+          await c.request("initialize", { protocolVersion: 1 });
+          const s = await c.request("session/new", { cwd: root, mcpServers: [] });
+          // An editor's next request arrives as I/O, after the session/new
+          // notes have gone out. Over these in-memory streams it would not:
+          // the whole turn runs on promises and the notes would wait behind it.
+          await new Promise((r) => setImmediate(r));
+          expect(c.updates.some((u) => u.sessionUpdate === "available_commands_update")).toBe(true);
+          const r = await c.request("session/prompt", { sessionId: s.sessionId, prompt: [{ type: "text", text: "read a.txt" }] });
+          expect(r.stopReason).toBe("end_turn");
+          const said = c.updates
+            .filter((u) => u.sessionUpdate === "agent_thought_chunk" && u.content.text.includes("[shadow]"))
+            .map((u) => u.content.text);
+          // Up at session/new, then refused: the role question twice, and the
+          // first question about the read is the third failure in a row.
+          expect(said).toEqual([
+            `[shadow] unreachable after 3 failed connections: ${url} (ECONNREFUSED). ` +
+              "Off for the rest of this session; 0 of 6 decisions recorded.\n",
+          ]);
+        },
+        {
+          url,
+          reply: async (init) => {
+            if (init.method === "HEAD") return new Response(null, { status: 405 });
+            throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+          },
+        }
+      );
+      const t = trail(root);
+      expect(t.filter((r) => r.kind === "degradation")).toEqual([
+        expect.objectContaining({
+          id: "shadow_unreachable",
+          detail: { url, phase: "mid_session", failures: 3, cause: "ECONNREFUSED" },
+        }),
+      ]);
+      const dead = { attempted: 6, recorded: 0, pending: 0, stopped: true };
+      expect(t.find((r) => r.kind === "turn").shadow).toEqual(dead);
+      expect(t.at(-1)).toMatchObject({ kind: "session_end", shadow: dead });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -675,7 +675,19 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
     if (config.tools.mcp_servers && Object.keys(config.tools.mcp_servers).length > 0) {
       state.mcp = await connectMcp(config.tools.mcp_servers, (l) => notes.push(l), s.audit);
     }
-    s.shadow = ShadowRecorder.create(config, { warn: (l) => notes.push(l) });
+    // The shadow's notes arrive whenever its requests fail. A stop found
+    // mid-session was pushed onto `notes` after they had been sent, so `gnomon
+    // acp` never showed it at all (2026-11-03). Once the client holds the id,
+    // they go straight to it.
+    let noted = false;
+    s.shadow = ShadowRecorder.create(config, {
+      warn: (l) => {
+        if (noted) notice(s, l);
+        else notes.push(l);
+      },
+      audit: s.audit,
+    });
+    s.shadow?.start();
     sessions.set(id, s);
     log(`gnomon acp: session ${id} in ${root}`);
 
@@ -690,6 +702,7 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
         })),
       });
       for (const n of notes) notice(s, n);
+      noted = true;
     });
 
     return { sessionId: id, modes: modesOf(config, role) };
@@ -830,8 +843,9 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
   await peer.closed;
   for (const s of sessions.values()) {
     s.controller?.abort();
-    await s.shadow?.flush();
-    s.audit.write("session_end", { turns: s.state.exchanges.length, surface_hash: s.surfaceHash });
+    // Flushed and detached before the trail is sealed, with its final count.
+    const shadow = await s.shadow?.close();
+    s.audit.write("session_end", { turns: s.state.exchanges.length, surface_hash: s.surfaceHash, shadow });
     s.state.mcp?.close();
     s.state.mcp = undefined;
   }

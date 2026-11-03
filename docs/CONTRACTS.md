@@ -476,7 +476,7 @@ change.
 | `role` | once per prompt | as `abort`; `subject_id` `<session>.<turn>`, `question` `gnomon_routing.v1`, `live` = the role that ran or `chain:<a>><b>…` |
 | `approval` | after each tool call | as `abort`; `question` `needs_approval.v1`, `live` one of `not_gated`, `asked:approved`, `asked:declined`, `standing:approved`, `flag:approved`, `default:declined`, `policy:<bucket>` |
 | `turn_end` | once per turn, or per chain stage | `subject_id`, `stop_reason`, `code`, `bucket`, `verify` (`pass`, `fail`, `none`, or the raw `unrunnable`/`declined`/`skipped`), `tool_steps`, `tokens`, `duration_ms` |
-| `shadow` | once, when the shadow stops after three connection failures | `error` |
+| `shadow` | once, when the shadow stops: unreachable at session start, or after three connection failures in a row | `error` |
 
 **Common keys:**
 - `v`, `ts`, `project` (`gnomon`), `machine` (the hostname), `gnomon` (the
@@ -490,9 +490,45 @@ change.
 they were asked: `rev` is the bench's own order reversed. Only `asked:declined`
 is a person refusing.
 
+**In gnomon's own records** (added 2026-11-03). The lines above go to the
+shadow log, which gnomon's trail and task record never read. Two facts about the
+shadow are written to gnomon's records as well, so a shadow that records
+nothing can be told apart from one that is off:
+
+- **Coverage**: an object `shadow` with keys `attempted`, `recorded`, `pending`
+  and `stopped`. It sits on the `turn` and `session_end` audit records, and on
+  the task record under `volatile.shadow`, because it measures the shadow
+  server rather than the run. It is present only when a `[shadow]` is
+  declared. `attempted` counts every question the shadow was asked to put (one
+  per model and order at each decision point), including the ones it never sent
+  because it had stopped. `recorded` counts the answers written to the shadow
+  log. `pending` counts the questions still queued or in flight when the record
+  was written. On a `turn` record the counts are the session's so far; on
+  `session_end` and on the task record they are final.
+- **The stop**: the declared degradation `shadow_unreachable` (§15), written
+  once, in the session's trail and in the task record's `degradations`. Its
+  `detail` has four keys. `url` is the shadow's url with only its scheme, host,
+  port and path: no userinfo, query or fragment. `phase` is `start` when no
+  request reached the server this session, and `mid_session` when it answered
+  and then stopped. `failures` counts the connection failures in a row, and
+  `cause` is the error code, such as `ECONNREFUSED`. The operator is told in one
+  line. `gnomon task` writes it to stderr, an interactive session prints it
+  under the banner or at the next prompt, and `gnomon acp` sends it to the
+  editor.
+
+At session start gnomon makes one `HEAD` request to the url. Any HTTP status
+counts as reachable, and no question is asked. A refused connection stops the
+shadow at once. A check that times out decides nothing.
+
+Neither changes the turn. A test runs the same scripted task with no shadow,
+with a healthy one, with one down from the start and with one that fails
+partway. The task record, with its surface hash, `volatile` and `degradations`
+taken out, is the same string in all four, so the exit code is the same too.
+
 **Fixture**: `conformance/shadow_record.json`. `packages/gnomon-core/src/shadow.test.ts`
 emits each kind of record and asserts its keys, labels and question ids against
-the fixture. It also asserts that this section names the same decisions.
+the fixture. It also asserts that this section names the same decisions, and
+that coverage and the stop's degradation carry the fixture's keys.
 
 ## 8. Workspace trust — `v: 1`
 
@@ -1037,3 +1073,48 @@ trail verifies and it was authorised the way it says.
   session killed after a mid-run checkpoint. Resolving them is a person's
   call.
 - **The walk stops at 200,000 entries**, reported as `truncated`.
+
+## 15. Degradations — audit kind `degradation`
+
+A degradation is gnomon carrying on with less than the surface declared. Each
+one gnomon knows about is declared by id in `DEGRADATIONS`
+(`packages/gnomon-core/src/degradation.ts`), which also says what each id
+means. Each must be **announced** (the operator is told, on stderr when `--json`
+is set) and **recorded** (a durable record says so). An announcement alone does
+not count.
+
+A `degradation` audit record has the keys `id`, `declared` (what the surface
+declared), `actual` (what happened instead) and optionally `detail` (a small
+flat object). `gnomon task` also carries each one in the task record's
+`degradations`, which is absent when there were none, because `[audit]` is off
+on a scaffolded surface. Some paths are recorded by a field that already
+existed:
+
+| `id` | Recorded as |
+|---|---|
+| `endpoint_fallback` | a `degradation` record, and the `turn` record naming the endpoint that answered |
+| `endpoint_tools_rejected` | a `degradation` record |
+| `mcp_server_unreachable` | a `degradation` record |
+| `context_turns_dropped` | `context_dropped` on the `turn` record |
+| `context_summary_role_unreachable` | `context_dropped` on the `turn` record |
+| `tool_output_spilled` | the tool result, which the `tool_call` record carries |
+| `diff_preview_elided` | a `degradation` record |
+| `verify_skipped_shell_only` | a `degradation` record |
+| `verify_unrunnable` | a `verify` record whose outcome is not `passed` |
+| `verify_declined` | a `verify` record marking it declined |
+| `bash_timeout` | the tool result, which the `tool_call` record carries |
+| `bash_timeout_repeat_refused` | the tool result, which the `tool_call` record carries |
+| `surface_drift` | the tool result, which the `tool_call` record carries |
+| `model_output_truncated` | `stop_reason: "truncated"` on the `turn` record |
+| `shadow_unreachable` | a `degradation` record (§7), with `shadow.stopped` on the `turn` and `session_end` records |
+
+Adding an id is a contract change. `benchmarks/degradation-contract` reads
+`DEGRADATION_IDS` from the code and injects every id. It fails when an id has
+no probe, when a probe is not announced, or when a probe is not recorded.
+`scripts/property_suites.mjs`, run by `.gnomon/ci.sh`, holds it at 15/15. These
+ids are not part of `gnomon enumerations` (§3).
+
+**Fixture**: `conformance/degradations.json`. `packages/gnomon-core/src/degradation.test.ts`
+asserts that the code declares exactly the fixture's ids in order, that this
+table names each one and no other, and that a `degradation` record carries only
+the fixture's keys.

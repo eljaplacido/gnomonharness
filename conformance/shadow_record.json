@@ -50,5 +50,24 @@
     ],
     "role": "the role that ran, or chain:<stage>><stage>... when a declared chain ran"
   },
-  "verify": ["pass", "fail", "none", "unrunnable", "declined", "skipped"]
+  "verify": ["pass", "fail", "none", "unrunnable", "declined", "skipped"],
+  "coverage": {
+    "_comment": [
+      "Added 2026-11-03. Not a shadow-log line: gnomon's own records, so a shadow that records",
+      "nothing reads as 0 of N rather than as nothing. The object `shadow` on the `turn` and",
+      "`session_end` audit records, and `volatile.shadow` on the task record, present only when",
+      "a [shadow] is declared. Key order is the order written."
+    ],
+    "keys": ["attempted", "recorded", "pending", "stopped"]
+  },
+  "degradation": {
+    "_comment": [
+      "Added 2026-11-03. The `degradation` audit record (and task-record `degradations[]` entry)",
+      "written once when the shadow stops: unreachable at session start, or after three",
+      "connection failures in a row. `url` is scheme, host, port and path only."
+    ],
+    "id": "shadow_unreachable",
+    "detail": ["url", "phase", "failures", "cause"],
+    "phase": ["start", "mid_session"]
+  }
 }

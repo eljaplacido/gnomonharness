@@ -104,6 +104,9 @@ import {
 import { AuditTrail, resolveAudit, type AuditKind } from "./audit.js";
 import {
   ShadowRecorder,
+  SHADOW_BANNER_WAIT_MS,
+  sumCoverage,
+  type ShadowCoverage,
   type ShadowTurnEnd,
   type ShadowTurnInfo,
   type TurnShadow,
@@ -6108,6 +6111,11 @@ export interface TaskRecord {
     model_ms?: number;
     /** Metered model calls: those whose response reported usage. */
     requests?: number;
+    /**
+     * The declared `[shadow]`'s coverage: decisions it was asked to record and
+     * decisions it recorded (shadow.ts ShadowCoverage). Absent without one.
+     */
+    shadow?: ShadowCoverage;
   };
 }
 
@@ -6288,9 +6296,11 @@ export async function runTask(
   const surface_hash = recomputeManifest(config.gnomonDir).surface_hash;
 
   // The decision-model shadow, when the surface declares one. Log-only: it is
-  // told what each turn did and changes none of it (shadow.ts).
+  // told what each turn did and changes none of it (shadow.ts). If it stops,
+  // that is `shadow_unreachable`, recorded through auditForTurn so the record
+  // carries it as well as the trail.
   const shadowStart = Date.now();
-  const shadow = ShadowRecorder.create(config, { warn });
+  const shadow = ShadowRecorder.create(config, { warn, audit: auditForTurn });
   // `--yes` answers for nobody; without it, nobody answers and the default is no.
   const shadowApprover = options.yes ? "flag" : "default";
 
@@ -6305,6 +6315,9 @@ export async function runTask(
     approvals: options.yes ? "granted" : "refused",
   });
   if (options.trust) audit.write("trust", { ...options.trust, root: resolve(config.gnomonDir, "..") });
+  // After session_start, so a shadow that is down at the start is recorded
+  // inside the session it belongs to. Off the critical path: nothing waits.
+  shadow?.start();
 
   // Connect declared MCP servers here too. They were wired only in
   // runPromptLoop, so a surface declaring [mcp_servers] handed its tools to
@@ -6485,6 +6498,11 @@ export async function runTask(
     }
   }
   const duration = Date.now() - start;
+  // Bounded: a slow or dead shadow server costs a scripted run at most this.
+  // Before the turn record rather than after session_end, where it sat until
+  // 2026-11-03: the record carries the shadow's final coverage, and a stop
+  // found while flushing lands inside the session it belongs to.
+  const shadowCoverage = await shadow?.close();
 
   audit.write("turn", {
     turn: 1,
@@ -6523,11 +6541,14 @@ export async function runTask(
           context_tokens: built.tokens,
         }
       : {}),
+    // What the declared shadow was asked to record and what it recorded.
+    // Absent without a [shadow]; 0 of N is how a dead one reads.
+    shadow: shadowCoverage,
     surface_hash,
     input: audit.text(input),
     output: audit.text(turn.content),
   });
-  audit.write("session_end", { turns: 1, surface_hash });
+  audit.write("session_end", { turns: 1, surface_hash, shadow: shadowCoverage });
   // The records as this session leaves them, for the next session and for
   // `skill accept` to compare against (record_tamper.ts).
   try {
@@ -6535,8 +6556,6 @@ export async function runTask(
   } catch (err) {
     warn(`  [records] could not write the records checkpoint: ${err instanceof Error ? err.message : String(err)}`);
   }
-  // Bounded: a slow or dead shadow server costs a scripted run at most this.
-  await shadow?.flush();
 
   return {
     surface_hash,
@@ -6585,6 +6604,10 @@ export async function runTask(
       ...(turn.usage?.output !== undefined ? { tokens_out: turn.usage.output } : {}),
       ...(turn.usage?.ms !== undefined ? { model_ms: turn.usage.ms } : {}),
       ...(turn.usage?.requests !== undefined ? { requests: turn.usage.requests } : {}),
+      // Volatile because it measures somebody else's server, not this run:
+      // the same task records 14 of 14 or 0 of 14 depending on whether the
+      // shadow endpoint is up. Present only when a [shadow] is declared.
+      ...(shadowCoverage ? { shadow: shadowCoverage } : {}),
     },
   };
 }
@@ -8561,6 +8584,10 @@ export async function runSessionTurn(
     stop_reason: exchange.stop_reason,
     stop_detail: exchange.stop_detail,
     counters: exchange.counters,
+    // The declared shadow's coverage for the session so far, as it stood when
+    // this turn was recorded: answers still in flight are `pending`, and
+    // `session_end` carries the final count. Absent without a [shadow].
+    shadow: deps.shadow?.coverage(),
     surface_hash: deps.surfaceHash,
     input: deps.audit.text(cleanedInput),
     output: deps.audit.text(turn.content),
@@ -9476,18 +9503,31 @@ export async function runPromptLoop(
   // surface reloads: a different surface is a different calibration key.
   //
   // Its notes arrive from background requests, at any moment -- printed then,
-  // they would land inside the spinner's row. So they wait for the prompt.
+  // they would land inside the spinner's row. So they wait for the prompt, in
+  // yellow: every one of them says the shadow is recording less than declared,
+  // and until 2026-11-03 they printed grey and a three-day gap went unseen.
   const shadowNotes: string[] = [];
   let shadowRecorder: ShadowRecorder | undefined;
   let shadowConfig: GnomonConfig | undefined;
+  // Every recorder this session ran. A surface reload retires one and starts
+  // another, and session_end counts them all.
+  const shadowRecorders: ShadowRecorder[] = [];
   const shadowFor = (c: GnomonConfig): ShadowRecorder | undefined => {
     if (c !== shadowConfig) {
       void shadowRecorder?.flush();
-      shadowRecorder = ShadowRecorder.create(c, { warn: (line) => shadowNotes.push(line) });
+      shadowRecorder = ShadowRecorder.create(c, { warn: (line) => shadowNotes.push(line), audit });
+      shadowRecorder?.start();
+      if (shadowRecorder) shadowRecorders.push(shadowRecorder);
       shadowConfig = c;
     }
     return shadowRecorder;
   };
+  // Now rather than at the first turn, so a shadow that is down when the
+  // session starts says so under the banner. The wait is bounded and only
+  // happens with a [shadow] declared: a refused connection answers in about a
+  // millisecond, and a host that answers nothing costs SHADOW_BANNER_WAIT_MS
+  // once, after which its line prints at the next prompt instead.
+  await shadowFor(state.config)?.ready(SHADOW_BANNER_WAIT_MS);
 
   try {
     while (true) {
@@ -9496,7 +9536,7 @@ export async function runPromptLoop(
       // was started with -- so a model picked mid-session was written, hashed
       // and announced, and the next turn still routed to the old one.
       const config = state.config;
-      for (const line of shadowNotes.splice(0)) console.log(paint(uiOf(state), "gray", line));
+      for (const line of shadowNotes.splice(0)) console.log(paint(uiOf(state), "yellow", line));
       // Show the prompt only when actually waiting on the user —
       // buffered (typed-ahead) lines replay silently instead.
       if (!closed && lineQueue.length === 0) {
@@ -9517,6 +9557,12 @@ export async function runPromptLoop(
       const quitting = input !== null && QUIT_COMMANDS.has(verb);
       if (input === null || quitting) {
         await shadowRecorder?.flush();
+        // Sealed below: nothing a late answer finds may land after session_end.
+        for (const r of shadowRecorders) r.detach();
+        const shadowCoverage =
+          shadowRecorders.length > 0 ? sumCoverage(shadowRecorders.map((r) => r.coverage())) : undefined;
+        // A stop found while flushing is said here, or it would never be.
+        for (const line of shadowNotes.splice(0)) console.log(paint(uiOf(state), "yellow", line));
         // Session end: a change to gnomon's records since the last check.
         const end = state.recordGuard?.check("turn_end");
         if (end?.changes.length) {
@@ -9537,6 +9583,7 @@ export async function runPromptLoop(
         audit.write("session_end", {
           turns: state.exchanges.length,
           surface_hash: surfaceHash,
+          shadow: shadowCoverage,
         });
         try {
           writeCheckpoint(state.config);

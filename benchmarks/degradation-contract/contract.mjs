@@ -19,7 +19,7 @@ import { execFileSync } from "node:child_process";
 const REPO = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]$/, "");
 const core = (m) => import(pathToFileURL(`${REPO}/packages/gnomon-core/dist/${m}`).href);
 const { loadConfig } = await core("config.js");
-const { runAgenticTurn, buildMessages } = await core("prompt_loop.js");
+const { runAgenticTurn, buildMessages, runTask } = await core("prompt_loop.js");
 const { executeTool, createSpillSink } = await core("tools.js");
 const { connectMcp } = await core("mcp.js");
 const { DEGRADATION_IDS } = await core("degradation.js");
@@ -351,6 +351,47 @@ const PROBES = {
       return {
         announcedIn: trace + " " + String(turn.stop_reason),
         recorded: turn.stop_reason !== "answered",
+      };
+    },
+  },
+
+  shadow_unreachable: {
+    must: /\[shadow\] unreachable/i,
+    // The shadow's other warning, about its own log file, is a different fault.
+    mustNot: /cannot write/i,
+    recordedBy: "a `degradation` record on the task record, and `volatile.shadow.stopped`",
+    async run(root) {
+      // Through `gnomon task`'s own entry point, not the recorder: the shadow
+      // stopped audibly enough before 2026-11-03 -- one stderr line -- and
+      // nothing in the record a script reads said so. The record is the claim,
+      // so the record is what is read here. `[audit]` is off on the scaffold.
+      const url = "http://127.0.0.1:9/v1/systemone";
+      const config = loadConfig(root);
+      config.config = {
+        ...config.config,
+        shadow: { enabled: true, url, abort: ["a"], role: ["r"], approval: ["p"], orders: ["fwd"] },
+      };
+      const said = [];
+      const orig = globalThis.fetch;
+      const origErr = process.stderr.write;
+      globalThis.fetch = async (u) => {
+        if (String(u) === url) {
+          throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+        }
+        return done();
+      };
+      process.stderr.write = (chunk) => (said.push(String(chunk)), true);
+      let record;
+      try {
+        record = await runTask(config, "go", { role: "implement", yes: true });
+      } finally {
+        globalThis.fetch = orig;
+        process.stderr.write = origErr;
+      }
+      return {
+        announcedIn: said.join(""),
+        recorded: (record.degradations ?? []).some((d) => d.id === "shadow_unreachable")
+          && record.volatile?.shadow?.stopped === true,
       };
     },
   },

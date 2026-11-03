@@ -258,7 +258,7 @@ own 11.9–14.9% self-flip.
 |---|---|---|
 | Surface-hash fidelity | **14/14 paths faithful**, 0 false negatives (14 since 2026-11-03: skill-trial specs count as behaviour) | [`surface-fidelity`](../benchmarks/surface-fidelity/) |
 | Fault disclosure | **8/8 faults disclosed**, after 3 defects | [`fault-disclosure`](../benchmarks/fault-disclosure/) |
-| Degradation, recorded | **12/12 announced AND recorded**, after 3 more | [`degradation-contract`](../benchmarks/degradation-contract/) |
+| Degradation, recorded | **15/15 announced AND recorded**, after 3 more (12/12 when first published; 15 since 2026-11-03: `shadow_unreachable`) | [`degradation-contract`](../benchmarks/degradation-contract/) |
 | Silent success | **0/11 falsely successful**, 0 void | [`silent-success`](../benchmarks/silent-success/) |
 | Context on the wire | **4.66×** vs opencode, bytes counted at the endpoint | [`context-cost`](../benchmarks/context-cost/) |
 

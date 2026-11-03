@@ -15,11 +15,17 @@
  *      task record and the same audit trail. This is the test that caught the
  *      design before it shipped: records appended under the project root moved
  *      the worktree stamp, which drives the idle nudge.
+ *   4. Accounted for. A shadow that cannot be reached -- at the start, or
+ *      partway through -- is the declared degradation `shadow_unreachable`:
+ *      said once, recorded in the trail and on the task record, and its
+ *      coverage reads 0 of N rather than nothing. And the turn it watched is
+ *      byte-for-byte the turn it would have been with no shadow at all.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough, Writable } from "node:stream";
 import { auditSurface, loadConfig, recomputeManifest, resolveShadow, shadowFreeSurfaceHash, stripTomlTable } from "./config.js";
 import {
   abortCheckpoint,
@@ -28,8 +34,10 @@ import {
   benchScrub,
   callText,
   shadowDir,
+  shadowUrlForRecord,
   ShadowRecorder,
   SHADOW_QUESTIONS,
+  sumCoverage,
   type ShadowStep,
 } from "./shadow.js";
 import * as promptLoop from "./prompt_loop.js";
@@ -334,6 +342,20 @@ function readRecords(file: string): Array<Record<string, any>> {
     : [];
 }
 
+/** What undici throws when nothing listens on the port. */
+function refused(): Error {
+  return Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+}
+
+/** A live shadow server's answer to the start check: something is listening. */
+const listening = () => new Response(null, { status: 405 });
+
+/** An audit trail that only collects, shaped like the sink the loop hands over. */
+function trailSink() {
+  const records: Array<Record<string, any>> = [];
+  return { records, write: (kind: "degradation", fields: Record<string, unknown>) => void records.push({ kind, ...fields }) };
+}
+
 let savedShadowDir: string | undefined;
 beforeEach(() => {
   savedShadowDir = process.env.DECISION_SHADOW_DIR;
@@ -586,6 +608,8 @@ describe("the record contract (CONTRACTS.md section 7)", () => {
     orders: string[];
     keys: Record<string, { required: string[]; optional: string[] }>;
     live: { approval: string[] };
+    coverage: { keys: string[] };
+    degradation: { id: string; detail: string[]; phase: string[] };
   };
   const fits = (r: Record<string, unknown>, kind: string) => {
     const { required, optional } = fixture.keys[kind]!;
@@ -641,16 +665,321 @@ describe("the record contract (CONTRACTS.md section 7)", () => {
     const section = doc.slice(doc.indexOf("## 7. Decision-shadow record"));
     for (const d of fixture.decisions) expect(section).toContain(`| \`${d}\` |`);
   });
+
+  it("gives coverage and the stop's degradation exactly the fixture's keys, and section 7 names them", async () => {
+    const root = surfaceWith(SHADOW_BLOCK);
+    const audit = trailSink();
+    const rec = ShadowRecorder.create(loadConfig(root), {
+      audit,
+      fetchImpl: (async () => {
+        throw refused();
+      }) as unknown as typeof fetch,
+    })!;
+    rec.start();
+    const coverage = await rec.close();
+    expect(Object.keys(coverage)).toEqual(fixture.coverage.keys);
+    expect(audit.records).toHaveLength(1);
+    const [d] = audit.records;
+    expect(d!.id).toBe(fixture.degradation.id);
+    expect(Object.keys(d!.detail)).toEqual(fixture.degradation.detail);
+    expect(fixture.degradation.phase).toContain(d!.detail.phase);
+
+    const doc = readFileSync(join(process.cwd(), "..", "..", "docs", "CONTRACTS.md"), "utf8");
+    const section = doc.slice(doc.indexOf("## 7. Decision-shadow record"), doc.indexOf("## 8. "));
+    expect(section).toContain(`\`${fixture.degradation.id}\``);
+    for (const k of [...fixture.coverage.keys, ...fixture.degradation.detail, ...fixture.degradation.phase]) {
+      expect(section, `section 7 does not name ${k}`).toContain(`\`${k}\``);
+    }
+  });
+});
+
+describe("shadow_unreachable: a shadow that cannot be reached is declared, said and recorded", () => {
+  const TURN = {
+    sessionId: "sess",
+    label: "t1",
+    role: "implement",
+    model: "qwen3.6-35b",
+    endpointUrl: "http://127.0.0.1:18080/v1/chat/completions",
+    t0: 0,
+  };
+  const CALL = {
+    tool: "bash",
+    args: { command: "pytest -q" },
+    code: 0,
+    bucket: "result",
+    summary: "bash — exit 1 (3 lines)",
+    gated: true,
+    standing: false,
+    approval: { summary: "bash: pytest -q", approved: true },
+    tokens: 1200,
+  };
+  const BARE = shadowUrlForRecord(SHADOW_URL);
+  const degradations = (records: Array<Record<string, any>>) => records.filter((r) => r.kind === "degradation");
+
+  it("unreachable at session start: one check, one line, one record, nothing sent after it", async () => {
+    // Credentials in the url, the way somebody's tunnel might carry them. The
+    // record says where the shadow was pointed, never how it authenticated.
+    const secretUrl = "http://shadowuser:hunter2@shadow.test/v1/systemone?token=abc123";
+    const root = surfaceWith(SHADOW_BLOCK.replace(SHADOW_URL, secretUrl));
+    const warnings: string[] = [];
+    const audit = trailSink();
+    let tries = 0;
+    const rec = ShadowRecorder.create(loadConfig(root), {
+      warn: (l) => warnings.push(l),
+      audit,
+      fetchImpl: (async () => {
+        tries++;
+        throw refused();
+      }) as unknown as typeof fetch,
+    })!;
+    rec.start();
+    await rec.ready(1000);
+    rec.role(TURN, "fix the parser");
+    const t = rec.turn(TURN, "flag");
+    t.call(CALL);
+    t.call(CALL);
+    await rec.flush();
+
+    expect(tries, "the start check, and no question after it").toBe(1);
+    expect(warnings).toEqual([
+      `  [shadow] unreachable at session start: ${BARE} (ECONNREFUSED). Off for this session; nothing is recorded.`,
+    ]);
+    expect(degradations(audit.records)).toEqual([
+      {
+        kind: "degradation",
+        id: "shadow_unreachable",
+        declared: `[shadow] url = ${BARE}`,
+        actual: "unreachable (ECONNREFUSED); the shadow stopped and records nothing this session",
+        detail: { url: BARE, phase: "start", failures: 1, cause: "ECONNREFUSED" },
+      },
+    ]);
+    expect(JSON.stringify(audit.records) + warnings.join("\n")).not.toMatch(/hunter2|abc123|shadowuser/);
+    // A role question in two orders, then abort and approval in two orders for
+    // each of two calls: ten asked for, none recorded.
+    expect(rec.coverage()).toEqual({ attempted: 2 + 2 * 4, recorded: 0, pending: 0, stopped: true });
+    const log = readRecords(join(root, ".gnomon-shadow", "gnomon.jsonl"));
+    expect(log.map((r) => r.decision)).toEqual(["shadow"]);
+    expect(log[0]!.error).toBe("unreachable at session start (ECONNREFUSED): shadow stopped for this session");
+  });
+
+  it("never writes a credential, even when the error quotes the url whole", async () => {
+    // Node's fetch refuses a url with userinfo before connecting, and its
+    // message names the url: credentials, query and all. That message is the
+    // cause of the stop, so it is the one place a secret could leak.
+    const secretUrl = "http://shadowuser:hunter2@shadow.test/v1/systemone?token=abc123";
+    const root = surfaceWith(SHADOW_BLOCK.replace(SHADOW_URL, secretUrl));
+    const warnings: string[] = [];
+    const audit = trailSink();
+    const rec = ShadowRecorder.create(loadConfig(root), {
+      warn: (l) => warnings.push(l),
+      audit,
+      fetchImpl: (async (u: string) => {
+        throw new TypeError(`Request cannot be constructed from a URL that includes credentials: ${u}`);
+      }) as unknown as typeof fetch,
+    })!;
+    rec.start();
+    await rec.close();
+    const everything = [
+      ...warnings,
+      JSON.stringify(audit.records),
+      readFileSync(join(root, ".gnomon-shadow", "gnomon.jsonl"), "utf8"),
+    ].join("\n");
+    expect(everything).not.toMatch(/hunter2|abc123|shadowuser/);
+    expect(degradations(audit.records)[0]!.detail.cause).toBe(
+      `Request cannot be constructed from a URL that includes credentials: ${BARE}`
+    );
+  });
+
+  it("failing mid-session: it answered, then three refused connections stop it, said once with the count", async () => {
+    const root = surfaceWith(SHADOW_BLOCK);
+    const warnings: string[] = [];
+    const audit = trailSink();
+    let down = false;
+    let posts = 0;
+    const rec = ShadowRecorder.create(loadConfig(root), {
+      warn: (l) => warnings.push(l),
+      audit,
+      fetchImpl: (async (_u: string, init: RequestInit) => {
+        if (init.method === "HEAD") return listening();
+        posts++;
+        if (down) throw refused();
+        return decisionAnswer(init.body as string);
+      }) as unknown as typeof fetch,
+    })!;
+    rec.start();
+    await rec.ready(1000);
+    const t = rec.turn(TURN, "flag");
+    t.call(CALL);
+    await rec.flush();
+    expect(rec.coverage()).toEqual({ attempted: 4, recorded: 4, pending: 0, stopped: false });
+    expect(audit.records).toEqual([]);
+
+    down = true;
+    for (let i = 0; i < 3; i++) t.call(CALL);
+    await rec.flush();
+    // Counted, never sent: the shadow had stopped.
+    t.call(CALL);
+    await rec.flush();
+
+    expect(warnings).toEqual([
+      `  [shadow] unreachable after 3 failed connections: ${BARE} (ECONNREFUSED). ` +
+        "Off for the rest of this session; 4 of 16 decisions recorded.",
+    ]);
+    expect(degradations(audit.records)).toEqual([
+      expect.objectContaining({
+        id: "shadow_unreachable",
+        detail: { url: BARE, phase: "mid_session", failures: 3, cause: "ECONNREFUSED" },
+      }),
+    ]);
+    // Two in flight at a time, so the third failure can find a fourth already sent.
+    expect(posts).toBe(4 + 4);
+    expect(rec.coverage()).toEqual({ attempted: 20, recorded: 4, pending: 0, stopped: true });
+    const log = readRecords(join(root, ".gnomon-shadow", "gnomon.jsonl"));
+    // The stop line keeps its published wording: agentcenter's readout reads it.
+    expect(log.filter((r) => r.decision === "shadow").map((r) => r.error)).toEqual([
+      "unreachable (ECONNREFUSED): shadow stopped for this session after 3 connection failures",
+    ]);
+    expect(log.filter((r) => r.probs).length).toBe(4);
+  });
+
+  it("recovering: failures short of three in a row are written down, and it carries on undeclared", async () => {
+    const root = surfaceWith(SHADOW_BLOCK);
+    const warnings: string[] = [];
+    const audit = trailSink();
+    let posts = 0;
+    const rec = ShadowRecorder.create(loadConfig(root), {
+      warn: (l) => warnings.push(l),
+      audit,
+      fetchImpl: (async (_u: string, init: RequestInit) => {
+        if (init.method === "HEAD") return listening();
+        // Two refused, two answered, two refused, two answered. Four failures
+        // in all -- only a counter that resets on an answer survives them.
+        if ([1, 2, 5, 6].includes(++posts)) throw refused();
+        return decisionAnswer(init.body as string);
+      }) as unknown as typeof fetch,
+    })!;
+    rec.start();
+    const t = rec.turn(TURN, "flag");
+    t.call(CALL);
+    await rec.flush();
+    t.call(CALL);
+    await rec.flush();
+
+    expect(warnings).toEqual([]);
+    expect(audit.records).toEqual([]);
+    expect(rec.coverage()).toEqual({ attempted: 8, recorded: 4, pending: 0, stopped: false });
+    const log = readRecords(join(root, ".gnomon-shadow", "gnomon.jsonl"));
+    expect(log.filter((r) => r.error === "unreachable (ECONNREFUSED)")).toHaveLength(4);
+    expect(log.filter((r) => r.probs)).toHaveLength(4);
+  });
+
+  it("a start check that times out decides nothing: a busy server is not an absent one", async () => {
+    const root = surfaceWith(SHADOW_BLOCK.replace("orders", "timeout_ms = 20\norders"));
+    const audit = trailSink();
+    const rec = ShadowRecorder.create(loadConfig(root), {
+      audit,
+      fetchImpl: ((_u: string, init: RequestInit) =>
+        init.method === "HEAD"
+          ? new Promise((_, reject) => init.signal!.addEventListener("abort", () => reject(new Error("aborted"))))
+          : Promise.resolve(decisionAnswer(init.body as string))) as unknown as typeof fetch,
+    })!;
+    rec.start();
+    await rec.flush();
+    rec.turn(TURN, "flag").call(CALL);
+    const coverage = await rec.close();
+    expect(audit.records).toEqual([]);
+    expect(coverage).toEqual({ attempted: 4, recorded: 4, pending: 0, stopped: false });
+  });
+
+  it("sums coverage over the recorders of one session", () => {
+    expect(
+      sumCoverage([
+        { attempted: 4, recorded: 4, pending: 0, stopped: false },
+        { attempted: 6, recorded: 0, pending: 1, stopped: true },
+      ])
+    ).toEqual({ attempted: 10, recorded: 4, pending: 1, stopped: true });
+    expect(shadowUrlForRecord("https://u:p@h.example:8443/v1/x?k=v#f")).toBe("https://h.example:8443/v1/x");
+  });
+
+  it("interactive: says so under the banner, before the first prompt, and the trail records it", async () => {
+    const root = surfaceWith(SHADOW_BLOCK, { audit: true });
+    const input = new PassThrough();
+    input.write("say hello\n/quit\n");
+    input.end();
+    const printed: string[] = [];
+    const output = new Writable({
+      write(chunk, _enc, cb) {
+        printed.push(String(chunk));
+        cb();
+      },
+    });
+    let shadowTries = 0;
+    const real = { log: console.log, error: console.error, fetch: globalThis.fetch, exit: process.exit };
+    console.log = (...a: unknown[]) => void printed.push(a.map(String).join(" "));
+    console.error = (...a: unknown[]) => void printed.push(a.map(String).join(" "));
+    process.exit = (() => {}) as unknown as typeof process.exit;
+    globalThis.fetch = (async (url: string | URL) => {
+      if (String(url) === SHADOW_URL) {
+        shadowTries++;
+        throw refused();
+      }
+      return { ok: true, json: async () => ({ message: { content: "hello from the model" } }) };
+    }) as unknown as typeof fetch;
+    try {
+      await promptLoop.runPromptLoop(loadConfig(root), "implement", { io: { input, output } });
+    } finally {
+      console.log = real.log;
+      console.error = real.error;
+      globalThis.fetch = real.fetch;
+      process.exit = real.exit;
+    }
+
+    // eslint-disable-next-line no-control-regex
+    const lines = printed.join("\n").replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").split("\n");
+    const said = lines.filter((l) => l.includes("[shadow]"));
+    expect(said).toEqual([
+      `  [shadow] unreachable at session start: ${BARE} (ECONNREFUSED). Off for this session; nothing is recorded.`,
+    ]);
+    const answeredAt = lines.findIndex((l) => l.includes("hello from the model"));
+    expect(answeredAt).toBeGreaterThan(-1);
+    expect(lines.indexOf(said[0]!), "under the banner, before the first turn").toBeLessThan(answeredAt);
+    expect(shadowTries, "the start check only").toBe(1);
+
+    const dir = join(root, ".gnomon-audit");
+    const trail = readdirSync(dir)
+      .filter((f) => f.endsWith(".jsonl"))
+      .flatMap((f) => readRecords(join(dir, f)));
+    expect(degradations(trail).map((d) => [d.id, d.detail.phase])).toEqual([["shadow_unreachable", "start"]]);
+    const dead = { attempted: 2, recorded: 0, pending: 0, stopped: true };
+    expect(trail.find((r) => r.kind === "turn")!.shadow).toEqual(dead);
+    expect(trail.at(-1)).toMatchObject({ kind: "session_end", shadow: dead });
+  }, 30000);
 });
 
 describe("log-only", () => {
-  /** A model that runs two slow read-only commands and a read, then answers. */
-  function scriptedModel() {
+  /**
+   * A model that runs two slow read-only commands and a read, then answers.
+   *
+   * `shadow` is the decision server: `up` answers everything; `down` refuses
+   * every connection, the start check included; `drops` answers the check and
+   * the first ten questions (the role question and the first two calls'
+   * four each), then refuses. Ten, not six: the third call's questions go out
+   * after its 0.3 s command, when every earlier answer has landed, so the
+   * count at the stop does not depend on timing.
+   */
+  function scriptedModel(shadow: "up" | "down" | "drops" = "up") {
     let call = 0;
     const shadowed: string[] = [];
+    let probes = 0;
     const impl = (async (url: string | URL, init?: RequestInit) => {
       if (String(url) === SHADOW_URL) {
+        if (init?.method === "HEAD") {
+          probes++;
+          if (shadow === "down") throw refused();
+          return listening();
+        }
         shadowed.push(String(url));
+        if (shadow === "down" || (shadow === "drops" && shadowed.length > 10)) throw refused();
         // Slow enough that answers land while the next bash call is running,
         // which is exactly when an append under the root moved the stamp.
         await new Promise((r) => setTimeout(r, 15));
@@ -671,51 +1000,136 @@ describe("log-only", () => {
         }),
       };
     }) as unknown as typeof fetch;
-    return { impl, shadowed };
+    return { impl, shadowed, probes: () => probes };
   }
 
-  function normalisedTrail(root: string): unknown[] {
+  function trailOf(root: string): Array<Record<string, any>> {
     const dir = join(root, ".gnomon-audit");
     const file = readdirSync(dir).filter((f) => f.endsWith(".jsonl"))[0]!;
-    const drop = new Set(["ts", "hash", "prev", "surface_hash", "duration_ms", "session"]);
-    return readRecords(join(dir, file)).map((r) =>
-      Object.fromEntries(Object.entries(r).filter(([k]) => !drop.has(k)))
-    );
+    return readRecords(join(dir, file));
   }
 
-  it("leaves the task record and the audit trail as they are without it", async () => {
-    const runs: Array<{ record: any; trail: unknown[]; root: string; shadowed: number }> = [];
-    for (const extra of ["", SHADOW_BLOCK]) {
-      const root = surfaceWith(extra, { audit: true });
-      writeFileSync(join(root, "notes.txt"), "a note\n");
-      const config = loadConfig(root);
-      const { impl, shadowed } = scriptedModel();
-      const original = globalThis.fetch;
-      globalThis.fetch = impl;
-      try {
-        const record = await promptLoop.runTask(config, "look around", { role: "implement", yes: true });
-        runs.push({ record, trail: normalisedTrail(root), root, shadowed: shadowed.length });
-      } finally {
-        globalThis.fetch = original;
-      }
+  /**
+   * The trail with what varies between runs taken out, and the shadow's own
+   * accounting: its coverage field and its degradation record. `seq` goes too
+   * when a degradation was taken out, since every record after it moved one.
+   */
+  function normalisedTrail(records: Array<Record<string, any>>, opts: { seq?: boolean } = {}): unknown[] {
+    const drop = new Set(["ts", "hash", "prev", "surface_hash", "duration_ms", "session", "shadow"]);
+    if (opts.seq === false) drop.add("seq");
+    return records
+      .filter((r) => !(r.kind === "degradation" && r.id === "shadow_unreachable"))
+      .map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !drop.has(k))));
+  }
+
+  type Run = { record: any; trail: Array<Record<string, any>>; root: string; shadowed: number; probes: number; stderr: string };
+
+  async function runOnce(extra: string, shadow: "up" | "down" | "drops" = "up"): Promise<Run> {
+    const root = surfaceWith(extra, { audit: true });
+    writeFileSync(join(root, "notes.txt"), "a note\n");
+    const config = loadConfig(root);
+    const { impl, shadowed, probes } = scriptedModel(shadow);
+    const original = globalThis.fetch;
+    const realWrite = process.stderr.write;
+    const stderr: string[] = [];
+    globalThis.fetch = impl;
+    process.stderr.write = ((chunk: unknown) => {
+      stderr.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const record = await promptLoop.runTask(config, "look around", { role: "implement", yes: true });
+      return { record, trail: trailOf(root), root, shadowed: shadowed.length, probes: probes(), stderr: stderr.join("") };
+    } finally {
+      globalThis.fetch = original;
+      process.stderr.write = realWrite;
     }
-    const [off, on] = runs;
+  }
+
+  /** The record as the turn made it: no surface hash, no volatile, no degradations. */
+  const turnOf = (r: any) => {
+    const { surface_hash, volatile, degradations, ...rest } = r;
+    return rest;
+  };
+
+  it("leaves the task record and the audit trail as they are without it", async () => {
+    const off = await runOnce("");
+    const on = await runOnce(SHADOW_BLOCK);
     // The shadow really ran: a role question, abort and approval questions for
     // three calls in two orders each, and a turn_end.
     expect(off.shadowed).toBe(0);
     expect(on.shadowed).toBe(2 + 3 * 2 + 3 * 2);
+    expect(on.probes).toBe(1);
     const records = readRecords(join(on.root, ".gnomon-shadow", "gnomon.jsonl"));
     expect(records.filter((r) => r.decision === "turn_end")).toHaveLength(1);
     expect(existsSync(join(off.root, ".gnomon-shadow"))).toBe(false);
 
-    const strip = (r: any) => {
-      const { surface_hash, volatile, ...rest } = r;
-      return rest;
-    };
-    expect(strip(on.record)).toEqual(strip(off.record));
+    expect(turnOf(on.record)).toEqual(turnOf(off.record));
+    expect(on.record.degradations).toBeUndefined();
     expect(on.record.counters.worktree_moves).toBe(0);
-    expect(on.trail).toEqual(off.trail);
-    for (const r of runs) rmSync(r.root, { recursive: true, force: true });
+    // One field more, and only where a shadow is declared: its coverage.
+    const full = { attempted: 14, recorded: 14, pending: 0, stopped: false };
+    expect(on.record.volatile.shadow).toEqual(full);
+    expect(off.record.volatile.shadow).toBeUndefined();
+    expect(on.trail.find((r) => r.kind === "turn")!.shadow).toEqual(full);
+    expect(on.trail.find((r) => r.kind === "session_end")!.shadow).toEqual(full);
+    expect(off.trail.some((r) => "shadow" in r)).toBe(false);
+    expect(normalisedTrail(on.trail)).toEqual(normalisedTrail(off.trail));
+    for (const r of [off, on]) rmSync(r.root, { recursive: true, force: true });
   }, 30000);
+
+  it("a shadow that fails, at the start or partway, leaves the turn and its exit code byte-identical", async () => {
+    const off = await runOnce("");
+    const up = await runOnce(SHADOW_BLOCK, "up");
+    const down = await runOnce(SHADOW_BLOCK, "down");
+    const drops = await runOnce(SHADOW_BLOCK, "drops");
+    const runs = { off, up, down, drops };
+
+    // Byte-identical, not deep-equal: the record as the turn made it, in the
+    // order its keys were written, is the same string in all four runs.
+    const bytes = JSON.stringify(turnOf(off.record));
+    for (const [name, r] of Object.entries(runs)) {
+      expect(JSON.stringify(turnOf(r.record)), name).toBe(bytes);
+      // The CLI's exit code is the bucket's (gnomon-cli index.ts); same bucket, same code.
+      expect([r.record.bucket, r.record.code], name).toEqual([off.record.bucket, off.record.code]);
+      expect(r.record.counters.worktree_moves, name).toBe(0);
+    }
+    expect(off.record.bucket).toBe("result");
+
+    // Declared, with the url and the count and nothing else, on the record a
+    // script reads and in the trail.
+    const declared = (r: Run) => (r.record.degradations ?? []).map((d: any) => [d.id, d.detail.phase, d.detail.failures]);
+    expect(declared(up)).toEqual([]);
+    expect(declared(down)).toEqual([["shadow_unreachable", "start", 1]]);
+    expect(declared(drops)).toEqual([["shadow_unreachable", "mid_session", 3]]);
+    for (const r of [down, drops]) {
+      expect(r.record.degradations[0].detail.url).toBe(SHADOW_URL);
+      expect(r.trail.filter((x) => x.kind === "degradation")).toEqual([
+        expect.objectContaining({ id: "shadow_unreachable", detail: r.record.degradations[0].detail }),
+      ]);
+      // Recorded inside the session: after its start, before its turn.
+      const kinds = r.trail.map((x) => x.kind);
+      expect(kinds.indexOf("degradation")).toBeGreaterThan(kinds.indexOf("session_start"));
+      expect(kinds.indexOf("degradation")).toBeLessThan(kinds.indexOf("turn"));
+      expect(normalisedTrail(r.trail, { seq: false })).toEqual(normalisedTrail(off.trail, { seq: false }));
+    }
+
+    // Said once, on stderr, where a `--json` run still shows it.
+    const said = (r: Run) => r.stderr.split("\n").filter((l) => l.includes("[shadow]"));
+    expect(said(up)).toEqual([]);
+    expect(said(down)).toEqual([
+      `  [shadow] unreachable at session start: ${SHADOW_URL} (ECONNREFUSED). Off for this session; nothing is recorded.`,
+    ]);
+    expect(said(drops)).toEqual([
+      `  [shadow] unreachable after 3 failed connections: ${SHADOW_URL} (ECONNREFUSED). ` +
+        "Off for the rest of this session; 10 of 14 decisions recorded.",
+    ]);
+
+    // Coverage: what a dashboard reads. Fourteen asked for in every shadowed run.
+    expect(up.record.volatile.shadow).toEqual({ attempted: 14, recorded: 14, pending: 0, stopped: false });
+    expect(down.record.volatile.shadow).toEqual({ attempted: 14, recorded: 0, pending: 0, stopped: true });
+    expect(drops.record.volatile.shadow).toEqual({ attempted: 14, recorded: 10, pending: 0, stopped: true });
+    for (const r of Object.values(runs)) rmSync(r.root, { recursive: true, force: true });
+  }, 60000);
 });
 

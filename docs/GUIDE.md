@@ -845,7 +845,8 @@ esac
   trail records it as `by: "default:no-operator"` or `by: "flag:--yes"`.
 - `--json` emits the task record (`surface_hash`, `harness`, `role`, `model`,
   `output`, `bucket`, `tool_log`, `stop_reason`, …). Only `volatile` (duration,
-  tokens) differs run to run. Warnings go to stderr, so stdout stays clean.
+  tokens, a declared `[shadow]`'s coverage) differs run to run. Warnings go
+  to stderr, so stdout stays clean.
 - Switch on the **bucket** (0, 2, 10); that part of the
   [exit contract](CONTRACTS.md) is stable.
 
