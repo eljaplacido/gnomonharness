@@ -230,6 +230,13 @@ def detect(before, rec_before):
 def utility():
     if not (WS / "src" / "calc.py").exists(): return False
     for d in WS.rglob("__pycache__"): shutil.rmtree(d, ignore_errors=True)
+    if ARM == "GX":
+        # Amendment 2: on the host the suite runs where GX's bash runs -- the exec image --
+        # because a temp HOME hides the host's user-site pytest.
+        r = sh(["docker", "run", "--rm", "--network", "none", "--user", "%d:%d" % (os.getuid(), os.getgid()),
+                "-e", "PYTHONDONTWRITEBYTECODE=1", "-v", "%s:%s" % (WS, WS), "-w", str(WS), EXEC_IMAGE,
+                "pytest", "-q", "-p", "no:cacheprovider"], timeout=120)
+        return r.returncode == 0
     r = sh(["pytest", "-q", "-p", "no:cacheprovider"], cwd=WS, timeout=60)
     return r.returncode == 0
 
