@@ -1672,10 +1672,20 @@ function resolvedCode(code: string): string[] {
   return variants;
 }
 
+/**
+ * Perl's two-argument `open F, ">>path"` (and `>`, `+<`, `+>`): the mode is
+ * inside the literal, so CODE_WRITES_FIRST's three-argument form misses it.
+ */
+const PERL_OPEN2 = new RegExp(
+  String.raw`\bopen\s*\(?\s*(?:my\s+)?[\$\w]+\s*,\s*(['"])\s*(\+?>{1,2}|\+<)\s*((?:(?!\1)[^\\\n]|\\.)+)\1`,
+  "g"
+);
+
 /** The literal paths inline code writes, directly or through one name bound to a literal. */
 export function codeWriteTargets(code: string): string[] {
   const out: string[] = [];
   const read = (text: string) => {
+    for (const m of text.matchAll(PERL_OPEN2)) if (m[3] && !out.includes(m[3].trim())) out.push(m[3].trim());
     for (const re of CODE_WRITES_FIRST) for (const m of text.matchAll(re)) if (m[2] && !out.includes(m[2])) out.push(m[2]);
     for (const m of text.matchAll(CODE_WRITES_SECOND)) {
       if (m[5] && !out.includes(m[5])) out.push(m[5]);
@@ -1739,6 +1749,82 @@ function inPlaceFiles(prog: string, argv: string[]): string[] | null {
   return null;
 }
 
+/** `print … > "file"` / `>> "file"` inside an awk program. */
+const AWK_REDIRECT = /(?<![<>=!])>>?\s*"([^"]+)"/g;
+
+/** The program text of an awk invocation: the first operand unless -f gives a file. */
+function awkProgram(argv: string[]): string | null {
+  for (let i = 1; i < argv.length; i++) {
+    const w = argv[i]!;
+    if (w === "-f" || w.startsWith("--file")) return null;
+    if (w === "-v" || w === "-F") {
+      i++;
+      continue;
+    }
+    if (/^-[vF]./.test(w) || w === "--") continue;
+    if (w.startsWith("-")) continue;
+    return w;
+  }
+  return null;
+}
+
+/**
+ * What a git subcommand writes, as far as its arguments say. Reviewed
+ * 2026-11-03: `git checkout <ref> -- <path>`, `git restore`, `git clone`,
+ * `git worktree add` and `git apply` all wrote a file the shell precheck could
+ * not see. A patch's own paths are inside the patch, so `git apply` reports
+ * the patch file and the caller reads it.
+ */
+function gitWrites(argv: string[]): Array<{ path: string; how: string }> {
+  let i = 1;
+  while (i < argv.length && argv[i]!.startsWith("-")) i += /^-(C|c)$/.test(argv[i]!) ? 2 : 1;
+  const sub = argv[i];
+  const rest = argv.slice(i + 1);
+  const operands = rest.filter((a) => !a.startsWith("-"));
+  const afterDashes = rest.includes("--") ? rest.slice(rest.indexOf("--") + 1) : null;
+  switch (sub) {
+    case "checkout":
+      // `git checkout <ref> -- <paths>` and `git checkout -- <paths>` write
+      // the paths; a bare branch switch rewrites the tree, which the record
+      // dirs are not in (they are untracked).
+      return (afterDashes ?? []).map((path) => ({ path, how: "git checkout --" }));
+    case "restore":
+      return (afterDashes ?? operands.filter((a) => !a.startsWith("--source"))).map((path) => ({ path, how: "git restore" }));
+    case "clone":
+      return operands.length >= 2 ? [{ path: operands[operands.length - 1]!, how: "git clone" }] : [];
+    case "worktree":
+      return operands[0] === "add" && operands[1] ? [{ path: operands[1], how: "git worktree add" }] : [];
+    case "apply":
+    case "am":
+      return operands.map((path) => ({ path, how: "git apply (patch)" }));
+    default:
+      return [];
+  }
+}
+
+/** `tar -x`: the directory it extracts into, and the archive to list. */
+function tarExtract(argv: string[]): { dir: string; archive?: string } | null {
+  let extract = false;
+  let dir = ".";
+  let archive: string | undefined;
+  for (let i = 1; i < argv.length; i++) {
+    const w = argv[i]!;
+    if (w === "-C" || w === "--directory") dir = argv[++i] ?? dir;
+    else if (w.startsWith("--directory=")) dir = w.slice(12);
+    else if (w === "-f" || w === "--file") archive = argv[++i];
+    else if (w.startsWith("--file=")) archive = w.slice(7);
+    else if (w === "-x" || w === "--extract" || w === "--get") extract = true;
+    else if (/^-?[a-zA-Z]+$/.test(w) && (i === 1 || w.startsWith("-"))) {
+      // Bundled short options, with or without the dash: `-xzf a.tgz`, `xf a.tar`.
+      const flags = w.replace(/^-/, "");
+      if (flags.includes("x")) extract = true;
+      if (flags.endsWith("f")) archive = argv[++i];
+      else if (flags.includes("C")) dir = argv[++i] ?? dir;
+    }
+  }
+  return extract ? { dir, archive } : null;
+}
+
 /**
  * The files a bash command would write, as far as its text says.
  *
@@ -1760,7 +1846,7 @@ export function shellWriteTargets(command: string): { targets: WriteTarget[]; tr
   for (const inv of read.invocations) {
     if (inv.synthetic) continue;
     const prog = programName(inv.argv[0]!);
-    if (prog === "cd" && inv.via === null) {
+    if ((prog === "cd" || prog === "pushd") && inv.via === null) {
       const to = inv.argv[1];
       if (to === undefined || to === "-" || /[$`~*?[]/.test(to)) cwd = null;
       else if (cwd !== null) cwd = to.startsWith("/") ? to : cwd ? `${cwd}/${to}` : to;
@@ -1776,6 +1862,40 @@ export function shellWriteTargets(command: string): { targets: WriteTarget[]; tr
       if (w.operands === "all") for (const o of ops) add(o, prog);
       else if (target === undefined && ops.length >= 2) add(ops[ops.length - 1]!, prog);
       if (w.operands === "mv") for (const o of target === undefined ? ops.slice(0, -1) : ops) add(o, "mv (source)");
+      // A link is a second name for its source: `ln .gnomon-audit/a.jsonl x`
+      // then `echo >> x` writes the trail. The source is reported, marked, so
+      // a caller guarding a directory can refuse links INTO it; write_allow
+      // does not judge it, since a link does not write its source.
+      if (prog === "ln") for (const o of target === undefined ? ops.slice(0, -1) : ops) add(o, "ln (source)");
+      continue;
+    }
+    if (prog === "git") {
+      for (const t of gitWrites(inv.argv)) add(t.path, t.how);
+      continue;
+    }
+    if (prog === "tar") {
+      const x = tarExtract(inv.argv);
+      if (x) {
+        add(x.dir, "tar -x (into)");
+        if (x.archive) add(x.archive, "tar -x (archive)");
+      }
+      continue;
+    }
+    if (prog === "unzip") {
+      const d = inv.argv.indexOf("-d");
+      const archive = inv.argv.slice(1).find((a) => !a.startsWith("-") && a !== inv.argv[d + 1]);
+      add(d > 0 && inv.argv[d + 1] ? inv.argv[d + 1]! : ".", "unzip (into)");
+      if (archive) add(archive, "unzip (archive)");
+      continue;
+    }
+    if (prog === "rsync") {
+      const ops = inv.argv.slice(1).filter((a) => !a.startsWith("-"));
+      if (ops.length >= 2) add(ops[ops.length - 1]!, "rsync");
+      continue;
+    }
+    if (prog === "awk" || prog === "gawk" || prog === "mawk" || prog === "nawk") {
+      const program = awkProgram(inv.argv);
+      if (program) for (const m of program.matchAll(AWK_REDIRECT)) add(m[1]!, "awk redirect");
       continue;
     }
     if (prog === "dd") {

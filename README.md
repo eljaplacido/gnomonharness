@@ -61,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1672 TypeScript tests (1386 core, 261 cli, 18
-> natives, 7 tui) and 60 Rust tests — **1732 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1683 TypeScript tests (1397 core, 261 cli, 18
+> natives, 7 tui) and 60 Rust tests — **1743 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1823,7 +1823,7 @@ chain = true
 | Data minimisation | `record = "metadata"` writes decisions and outcomes but **no prompt or response text** |
 | What was done | A shell call's `tool_call` record keeps the **whole command** in `target`, after `redact`, under either `record` setting: the command is the action, not prompt or response text. A file tool's `target` is its path |
 | Redaction | Patterns scrubbed from any recorded text, and from every recorded command |
-| Not writable by the agent | `write`, `edit` and a shell command's named outputs are refused with rule `record` inside the trail directory (and `.gnomon-trials/`) for every role, whatever `write_allow` says. A script file's writes are not judged; `[audit.attest]` is what makes a forged trail detectable |
+| Not writable by the agent | `write`, `edit` and a shell command's named outputs (hard links, `ln`, git checkout/apply, archive members and more) are refused with rule `record` inside the trail directory (and `.gnomon-trials/`) for every role, whatever `write_allow` says. This is a pattern check, not containment. A path built at run time, a script file's writes and MCP calls are not seen by it. The kernel sandbox (`exec os`) contains those, and `[audit.attest]` makes a forged trail detectable |
 
 ```bash
 gnomon audit show      # trails
