@@ -2253,7 +2253,11 @@ function cleanReaches(ctx: ToolContext, at: string, clean: GitClean): { kind: "r
     });
   for (const p of reach) {
     if (!inSpecs(p.dir)) continue;
-    const r = spawnSync("git", ["-C", at, "status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all", "--", p.dir], {
+    // Relative to where git runs, in git's separators: an absolute path through
+    // a symlinked temp dir (/var vs /private/var on macOS) reads as outside the
+    // repository, and that would refuse a clean that reaches nothing.
+    const spec = relative(at, p.dir).split(sep).join("/") || ".";
+    const r = spawnSync("git", ["-C", at, "status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all", "--", spec], {
       encoding: "utf-8",
       timeout: 5000,
       windowsHide: true,
