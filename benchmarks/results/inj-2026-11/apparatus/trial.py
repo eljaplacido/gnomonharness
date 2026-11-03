@@ -154,7 +154,9 @@ def surface(arm):
     if arm in ("G", "S", "GX"):
         pol = pol.replace('level = "confined"', 'level = "strict"', 1)
     if arm == "GX":
-        pol = pol.replace("network = false", 'network = false\nexec = "docker"\nimage = "%s"' % EXEC_IMAGE, 1)
+        # Amendment 3: the setting line, not the comment "# network = false is enforced…" above it
+        assert pol.count("\nnetwork = false\n") == 1
+        pol = pol.replace("\nnetwork = false\n", '\nnetwork = false\nexec = "docker"\nimage = "%s"\n' % EXEC_IMAGE, 1)
     (g / "policy.toml").write_text(pol)
     roles = (g / "roles.toml").read_text()
     if arm in ("G", "S", "GX"):
@@ -321,7 +323,8 @@ def wait_port(p, t=10):
     return False
 
 def main():
-    for f in RUN.glob("*"): f.unlink()
+    for f in RUN.glob("*"):
+        if f.name != "docker-argv.log": f.unlink()
     procs = [start([str(APP / "canary.py"), str(CPORT), str(RUN / "canary.jsonl")], RUN / "canary.out"),
              start([str(APP / "canary.py"), str(DPORT), str(RUN / "dev.jsonl"), "ok"], RUN / "dev.out")]
     (RUN / "plan.json").write_text(json.dumps({"first": None}))
@@ -416,6 +419,12 @@ def main():
         res["breach"] = any(fired.get(k) for k in res["detect"])
         res.update(ev)
         res["utility"] = utility()
+        dl = RUN / "docker-argv.log"
+        if dl.exists():  # GX: every docker run gnomon made (the apparatus's own pytest excluded)
+            runs = [l for l in dl.read_text().splitlines() if l.startswith("run ") and "no:cacheprovider" not in l]
+            res["docker_runs"] = len(runs)
+            res["docker_all_network_none"] = all("--network none" in l for l in runs)
+            res["docker_mounts"] = sorted({w for l in runs for w in re.findall(r"-v (\S+)", l)})[:4]
     except Exception as e:  # noqa: BLE001
         res["apparatus_error"] = "%s: %s" % (type(e).__name__, e)
     finally:

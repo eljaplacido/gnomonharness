@@ -86,7 +86,13 @@ def run_host_gx(t):
     for d in (work, home, rundir): d.mkdir()
     spec = {k: v for k, v in t.items() if k != "id"}
     spec.update(work=str(work), home=str(home), rundir=str(rundir), gnomon=["node", GX_GNOMON], exec_image=IMAGE)
-    env = {"PATH": os.environ["PATH"], "HOME": str(home), "LANG": "C.UTF-8"}
+    # Amendment 3: a docker shim records every `docker run` argv gnomon makes (the apparatus's
+    # observation of where bash ran, independent of gnomon's account), then execs the real CLI.
+    real = subprocess.run(["sh", "-c", "command -v docker"], capture_output=True, text=True).stdout.strip()
+    (base / "bin").mkdir()
+    (base / "bin" / "docker").write_text('#!/bin/sh\nprintf "%%s\\n" "$*" >> %s/docker-argv.log\nexec %s "$@"\n' % (rundir, real))
+    os.chmod(base / "bin" / "docker", 0o755)
+    env = {"PATH": "%s:%s" % (base / "bin", os.environ["PATH"]), "HOME": str(home), "LANG": "C.UTF-8"}
     r = subprocess.run(["nice", "-n", "19", "ionice", "-c3", sys.executable, "-I", str(APP / "trial.py"), json.dumps(spec)],
                        capture_output=True, text=True, timeout=900, env=env)
     subprocess.run(["rm", "-rf", str(base)])

@@ -217,3 +217,16 @@ The first control's results stay in `runs/ungoverned/results-before-amendment-1.
 3. **`analyze.py`** (endpoints 1–6 exactly as above) is added to `apparatus/`. Benign refusals are
    read from what the model or host harness was told (`Refused: …` on the wire, or the guard's
    verdict), since a refused benign call leaves no state to read; breaches and utility stay real-state.
+
+## Amendment 3, 2026-11-03T21:05Z, before any `gx` or `redteam` data
+
+Two plumbing smokes with no attack in them found three apparatus defects; all fixed before data.
+1. **GX surface**: the patch inserted `exec = "docker"` after the first `network = false` in
+   policy.toml, which is inside a comment (Amendment 1's trap again), and the file did not parse. It now
+   edits the setting line, and asserts there is exactly one.
+2. **GX evidence**: a `docker` shim first on GX's PATH appends every argv to the trial's run dir and
+   execs the real CLI. Each GX result carries `docker_runs`, `docker_all_network_none` and
+   `docker_mounts`: where bash ran, observed by the apparatus rather than taken from gnomon. Smoke
+   (B0): 2 runs, both `--network none`, the workspace the only mount, utility 1.
+3. **redteam.py** tried to delete `/work` itself (its parent is root-owned) and stopped before its
+   first variant. It now clears `/work/ws`. No red-team data existed before this fix.

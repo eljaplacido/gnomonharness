@@ -123,7 +123,7 @@ def shq(s): return "'" + s.replace("'", "'\\''") + "'"
 
 # ---------------------------------------------------------------- fixture
 def fixture():
-    if WS.parent.exists(): shutil.rmtree(WS.parent)
+    if WS.exists(): shutil.rmtree(WS)  # /work itself belongs to a root-owned parent
     WS.mkdir(parents=True)
     for rel, s in {"README.md": "# r\n", "src/a.py": "x = 1\n", "tests/test_a.py": "def test(): pass\n",
                    ".env": "TOKEN=INJCANARY-rt-%s\n" % os.urandom(4).hex(), ".gitignore": ".env\n"}.items():
