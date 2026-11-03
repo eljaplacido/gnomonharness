@@ -643,3 +643,68 @@ fixture are the same sets, validates documents the real binary printed against
 `verdict_keys`, and puts every case to the real binary.
 `packages/gnomon-core/src/guard.test.ts` puts every case to gnomon's own turn
 loop as well, and fails if the two decide differently.
+
+## 11. Skill decisions — audit kinds `skill_accept`, `skill_reject`
+
+A person accepting or rejecting a proposed skill (README, `skills/`). Each
+decision is written in a sealed trail of its own (`session_start` with
+`mode: "skill"`, the decision, `session_end`) in the directory `[audit]` names,
+**even when `[audit] enabled = false`**, with chaining forced on, as `gnomon
+check` writes its verdict.
+
+**Order: write-ahead.** `session_start` and the decision are written *before*
+the file moves. `session_end` is written after, with `applied: true` (accept
+also adds the `surface_hash_after` it actually produced) or `applied: false`
+and `error` when the move or removal failed. A decision whose record cannot be
+written does not happen. A crash between the record and the move leaves an
+unsealed trail, which `gnomon audit verify` reports, and never a moved file
+with no record. `surface_hash_after` on the decision is the hash the move
+will produce, computed before it.
+
+**Ids** must be what `skillId` derives: lower-case letters, digits and
+dashes. Anything else, such as `../keep`, is refused before it becomes a
+path.
+
+Keys, both kinds: `skill` (the id), `name`, `path` (repo-relative, POSIX),
+`content_sha256` (sha256 of the file's bytes), `surface_hash_before`,
+`surface_hash_after`, `by` (`human` from the CLI), `user`, `host`,
+`interactive`. `skill_accept` adds `evidence` (`"none"`: accepted on reading
+alone). `skill_reject` adds `reason` when `--reason` was given.
+
+A reject's two surface hashes are equal, because proposals are not hashed. They
+are kept so that one reader handles both kinds.
+
+**Fixture**: `conformance/skill_decision.json`. `packages/gnomon-core/src/skills.test.ts`
+accepts and rejects proposals, reads the records back off the trail, and
+asserts their kinds and keys against the fixture.
+
+## 12. Skill candidates — `gnomon skill mine`, `v: 1`
+
+Evidence that a skill might help, mined from the audit trails with no model
+call (`docs/design/SKILL-TRIALS.md`, part 1). One JSON file per candidate in
+`.gnomon-skills/candidates/<id>.json`, outside `.gnomon/` and never hashed.
+The same trails give the same files, byte for byte: a candidate holds no
+timestamp.
+
+Keys: `v`, `id`, `signal`, `rule`, `role`, `tools` (sorted), `pattern`,
+`count`, `sessions` (distinct trails), `suggestion` (one sentence, not skill
+text), `records` — each `{trail, seq, hash}`, the trail repo-relative with
+POSIX separators, checkable with `gnomon audit verify`.
+
+| `signal` | When |
+|---|---|
+| `repeated_refusal` | One policy rule refused one role on one pattern in 3 or more distinct sessions (trails). Repeats inside one session do not count towards the 3: they are flailing, which the loop's nudge answers. The rule is the record's `rule` when it has one, otherwise read off the refusal's fixed `summary` form; a declined approval is not counted. |
+
+`id` is `refusal-<rule>-<role>-<hash>`, with rule and role reduced to
+`[a-z0-9_-]`: they come from trail records and must not steer a file name.
+
+`pattern` is a path generalised to its directory and extension
+(`generated/*.ts`), the `bash_deny` pattern, or a command's first word.
+`gnomon skill mine --json` prints `{dir, fresh, candidates}`; `fresh` lists the
+ids that were not on disk before.
+
+**Fixture**: `conformance/skill_candidate.json` (signals, keys), asserted by
+`packages/gnomon-core/src/skill_mine.test.ts`. There, a trail with four
+`write_allow` refusals of one path pattern yields exactly one candidate,
+pointing at those four records, and the same five refusals inside one
+session yield none.
