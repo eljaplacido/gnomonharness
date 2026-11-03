@@ -1786,6 +1786,10 @@ const KNOWN_BLOCKS = new Set([
   // resolveShadow reads [shadow]. Listed with the feature, for the reason
   // [chain] above gives.
   "shadow",
+  // [skills] in policy.toml: skills.ts reads require_trial. It shipped without
+  // this entry, and the auditor told every surface that declared it that the
+  // block "does nothing" -- the [chain] mismatch again, on a control.
+  "skills",
 ]);
 
 /**
@@ -1895,6 +1899,8 @@ const BLOCK_OWNER: Record<string, BlockOwner> = {
   check: { file: "policy.toml", read: true },
   // NOT read: no consumer of config.policy.exit_codes anywhere in this build.
   exit_codes: { file: "policy.toml", read: false },
+  // requireTrial (skills.ts) reads config.policy.skills.require_trial.
+  skills: { file: "policy.toml", read: true },
   endpoints: { file: "config.toml", read: true },
   defaults: { file: "config.toml", read: true },
   context: { file: "config.toml", read: true },
