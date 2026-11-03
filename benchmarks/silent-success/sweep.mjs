@@ -163,7 +163,11 @@ const POINTS = [
       return await executeTool("bash", { command: "echo untouched > /dev/null" }, bashCtx(root), new Set(["bash"]));
     },
     async broken(root) {
-      return await executeTool("bash", { command: "echo '# moved' >> .gnomon/system.md" },
+      // Through a script file: a command that NAMES .gnomon/ is refused before
+      // it runs (rule surface, INJ-2026-11), so the drift this probe must see
+      // comes from a route the precheck cannot read.
+      writeFileSync(join(root, "move-surface.sh"), "echo '# moved' >> .gnomon/system.md\n");
+      return await executeTool("bash", { command: "sh move-surface.sh" },
         bashCtx(root), new Set(["bash"]));
     },
     success: (r) => !/WARNING/.test(r.content),
