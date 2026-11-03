@@ -217,10 +217,11 @@ describe("gnomon migrate — governance defaults (2026-10)", () => {
   });
 
   it("switches [audit] on, keeping the comment, and only from false", () => {
-    writeFileSync(join(gnomonDir, "config.toml"), `[audit]\n# why\nenabled = false   # trail\nrecord = "metadata"\n`, "utf-8");
+    const current = `[defaults]\nstream = true\nmax_tokens = 32768\n\n`;
+    writeFileSync(join(gnomonDir, "config.toml"), `${current}[audit]\n# why\nenabled = false   # trail\nrecord = "metadata"\n`, "utf-8");
     applyMigrations(pendingMigrations(gnomonDir));
-    expect(readConfig()).toBe(`[audit]\n# why\nenabled = true   # trail\nrecord = "metadata"\n`);
-    writeFileSync(join(gnomonDir, "config.toml"), `[other]\nenabled = false\n`, "utf-8");
+    expect(readConfig()).toBe(`${current}[audit]\n# why\nenabled = true   # trail\nrecord = "metadata"\n`);
+    writeFileSync(join(gnomonDir, "config.toml"), `${current}[other]\nenabled = false\n`, "utf-8");
     expect(pendingMigrations(gnomonDir)).toEqual([]);
   });
 });
@@ -247,6 +248,18 @@ describe("gnomon migrate — output limit (2026-11)", () => {
     applyMigrations(pendingMigrations(gnomonDir));
     expect(readConfig()).toMatch(/\[defaults\]\nstream = true\nmax_tokens = 32768\s+# output limit/);
     writeFileSync(join(gnomonDir, "config.toml"), `[defaults]\nstream = true\nmax_tokens = 0\n`, "utf-8");
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+  });
+});
+
+describe("gnomon migrate — a surface with no [defaults] (2026-11)", () => {
+  it("is offered stream and the output limit in a new [defaults], not left on the old behaviour in silence", () => {
+    writeFileSync(join(gnomonDir, "config.toml"), `[endpoints.cloud]\nurl = "https://x/v1/chat/completions"\nkind = "openai"\n`, "utf-8");
+    expect(pendingMigrations(gnomonDir).map((p) => p.id)).toEqual(["stream-replies", "output-limit"]);
+    applyMigrations(pendingMigrations(gnomonDir));
+    expect(readConfig()).toMatch(
+      /^\[endpoints\.cloud\][\s\S]*\n\n\[defaults\]\nstream = true\s+#[^\n]*\nmax_tokens = 32768\s+#[^\n]*\n$/
+    );
     expect(pendingMigrations(gnomonDir)).toEqual([]);
   });
 });

@@ -90,6 +90,10 @@ request_timeout_ms = 300000   # a reasoning model on a hard task exceeds 120s; a
 # only request_timeout_ms, which a long generation reaches.
 stream_idle_timeout_ms = 300000    # silence mid-reply that counts as a stall; the request is aborted and asked again
 stream_total_timeout_ms = 1800000  # overall cap on one streamed reply; not retried, it would run as long again
+# Only the wait for a first byte is charged to the retry budget (attempts x
+# request_timeout_ms); a stream that is arriving is not. So the worst case for
+# one streamed model call is attempts x stream_total_timeout_ms of wall time,
+# and a harness wall shorter than that can end a run mid-call.
 # An endpoint refusing the socket is not an attempt; it is knocked on for a
 # grace instead (0 disables). Left undeclared on purpose: undeclared, a remote
 # endpoint gets 60s (a provider blip) but a server on THIS machine that refuses

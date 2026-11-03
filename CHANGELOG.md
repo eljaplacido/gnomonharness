@@ -38,8 +38,11 @@
     message fields (opencode's Console Go: "Extra inputs are not permitted"),
     so nothing else changes. Ollama's `/api/chat` is never sent it.
   - Earlier turns too: the reasoning behind a turn's answer is kept on its
-    exchange (only where the endpoint replays it) and sent back with that
-    answer, so a session's second turn does not get DeepSeek's 400.
+    exchange (only where the role's endpoint or its fallback replays it) and
+    sent back with that answer, so a session's second turn does not get
+    DeepSeek's 400. That includes a turn that ended through the tool-less
+    wrap-up or was answered by the fallback, since the next turn starts on the
+    primary again.
   - A non-streamed reply with `content: null` beside tool calls no longer has
     its reasoning promoted into the content, as a streamed one never did.
   - The turn record's `wire` says `replay_reasoning: true` when it was sent.
@@ -52,7 +55,7 @@
   - The limit is the role's `max_tokens`, else the endpoint's, else `[defaults]
     max_tokens`; absent from all three, none is sent, as before (Rule 1).
     `gnomon init` writes `[defaults] max_tokens = 32768` and `gnomon migrate`
-    adds it (`output-limit`). 32k because on DeepSeek and llama.cpp the limit
+    adds it (`output-limit`), creating `[defaults]` on a surface that has none. 32k because on DeepSeek and llama.cpp the limit
     counts the thinking too, and a large file write after 9k tokens of thinking
     needs ~19k. Ollama's `/api/chat` gets it as `options.num_predict`.
   - An endpoint that refuses the limit by name gets the call once more in a
@@ -64,7 +67,11 @@
   - A tool call the limit cut off mid-arguments is not run and not counted as
     malformed: the model is told the limit and asked for the work in smaller
     parts. Cut-offs in a row are bounded by `[turn] max_consecutive_malformed`,
-    then the turn ends through the wrap-up as `truncated`.
+    then the turn ends through the wrap-up as `truncated`, on the `refusal`
+    floor with `stop_detail.repeats`. A cut text reply that stays cut is also
+    `truncated` but stands as the answer, a `result`: one stop_reason in two
+    buckets, deliberately, and CONTRACTS.md and `conformance/stop_reason.json`
+    say so.
   - A reply that reached the limit while still thinking -- no text, no tool
     call, or only reasoning standing in for the content, as a streamed reply
     delivers it -- is asked for a shorter one, and the thinking is not echoed
@@ -96,17 +103,21 @@
     byte waits `request_timeout_ms`, with its existing escalation, and only
     that wait is charged to the retry budget, so a long stream that stalls or
     breaks is still retried, and a refused socket after it still gets
-    `transport_grace_ms`.
+    `transport_grace_ms`. The cost: one streamed call can take up to
+    `attempts` × `stream_total_timeout_ms` of wall time, which the scaffold
+    and the guide now state.
   - Every early end -- a timeout, an error chunk, Esc -- closes the connection,
     so the server stops generating what nobody will read.
   - An error sent mid-stream with no numeric code (OpenAI's `server_error`,
     `code: null`) is 12 and retried, unless it says the prompt did not fit
     (13), timed out (11), or names an invalid request (10). A stream that
     breaks off is 12 and spends a generation attempt, not the transport grace.
-  - A request that reached the endpoint and came back with no usage report --
-    aborted, broken off, or a server that does not report usage on a stream --
-    is counted in the turn record's `counters.unmetered_calls`, so a token
-    total that is a floor says so.
+  - A request that may have generated tokens nobody counted -- a 2xx reply
+    with no usage report (aborted, broken off, or a server that does not
+    report usage on a stream), or one a clock ran out on -- is counted in the
+    turn record's `counters.unmetered_calls`, so a token total that is a floor
+    says so. A refused request (a 429, a 400) generated nothing and is not
+    counted.
   - Parallel tool calls sent whole at one index are kept apart by their ids.
   - Turn records carry `wire`: whether the call was streamed and its clocks.
   - Tests use fake servers on 127.0.0.1.

@@ -556,7 +556,11 @@ events, with `stream_options.include_usage` so the token counts stay exact. A
 streamed reply is timed by the gap between chunks, `[resilience]
 stream_idle_timeout_ms` (default 300 s), under an overall cap,
 `stream_total_timeout_ms` (default 30 min); the first byte waits
-`request_timeout_ms`. A server that cannot stream takes `stream = false` in its
+`request_timeout_ms`. Only first-byte waits count against the retry budget
+(`attempts` × `request_timeout_ms`), so one streamed call can take up to
+`attempts` × `stream_total_timeout_ms` of wall time in the worst case. Size
+an external harness wall with that in mind. A surface with no `[defaults]`
+section gets one from `gnomon migrate`. A server that cannot stream takes `stream = false` in its
 block. One that streams without reporting usage is counted in the turn
 record's `counters.unmetered_calls`, which says the token totals are a floor.
 Ollama's own `/api/chat` is never streamed.

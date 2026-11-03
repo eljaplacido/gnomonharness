@@ -202,6 +202,106 @@ describe("review findings (2026-11-03)", () => {
   });
 });
 
+describe("re-review findings (2026-11-03): turns that end another way", () => {
+  /** A JSON fake endpoint scripted per request number. */
+  async function scripted(reply: (n: number) => { status?: number; body: unknown }) {
+    const bodies: Record<string, any>[] = [];
+    const server = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        bodies.push(JSON.parse(raw || "{}"));
+        const r = reply(bodies.length);
+        res.writeHead(r.status ?? 200, { "content-type": "application/json" });
+        res.end(JSON.stringify(r.body));
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/chat/completions`, bodies };
+  }
+  const say = (content: string, reasoning?: string, tool = false) => ({
+    body: {
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: tool ? "" : content,
+            ...(reasoning ? { reasoning_content: reasoning } : {}),
+            ...(tool
+              ? { tool_calls: [{ id: "c1", type: "function", function: { name: "read", arguments: '{"path":"x.txt"}' } }] }
+              : {}),
+          },
+          finish_reason: tool ? "tool_calls" : "stop",
+        },
+      ],
+    },
+  });
+  const session = (config: unknown) => {
+    const state: any = { config, exchanges: [], currentRole: "smol" };
+    const deps = {
+      approve: async () => true,
+      standingApproval: () => true,
+      signal: new AbortController().signal,
+      audit: { write: () => undefined, text: () => undefined, action: (v: string) => v },
+      surfaceHash: "test",
+      persist: () => undefined,
+      log: () => undefined,
+      print: () => undefined,
+      progress: new Progress(resolveUi(config as never), new PassThrough() as never),
+    } as never;
+    return { state, turn: (input: string) => runSessionTurn(state, "smol", input, false, deps) };
+  };
+  const priorAssistant = (b: Record<string, any>) =>
+    (b.messages as Array<Record<string, unknown>>).filter((m) => m.role === "assistant")[0]!;
+
+  it("a turn that ends through the tool-less wrap-up keeps the wrap-up's reasoning for the next turn", async () => {
+    // Calls 1 and 2 ask for a tool; the step wall (max_steps_total = 1) then
+    // sends the tool-less wrap-up, call 3, whose reasoning the next turn needs.
+    const { url, bodies } = await scripted((n) =>
+      n <= 2 ? say("", "Read it first.", true) : n === 3 ? say("wrapped up", "Wrap reasoning.") : say("done")
+    );
+    const root = surface(url, "stream = false\nreplay_reasoning = true");
+    writeFileSync(
+      join(root, ".gnomon", "roles.toml"),
+      `[roles.smol]\nmodel = "m1"\nendpoint = "target"\ntools = ["read"]\nmax_steps = 1\nmax_steps_total = 1\n`
+    );
+    writeFileSync(
+      join(root, ".gnomon", "tools.toml"),
+      `[[tools]]\nname = "read"\ndescription = "Read a file."\nenabled = true\n`
+    );
+    const s = session(loadConfig(root));
+    const first = await s.turn("read x.txt");
+    expect(first.turn.stop_reason).toBe("step_wall");
+    await s.turn("and again");
+    expect(priorAssistant(bodies[bodies.length - 1]!).reasoning_content).toBe("Wrap reasoning.");
+  });
+
+  it("a turn the fallback answered keeps its reasoning, because the next turn starts on the primary", async () => {
+    const primary = await scripted((n) =>
+      n === 1 ? { status: 500, body: { error: "upstream down" } } : say("done", "Primary reasoning.")
+    );
+    const fallback = await scripted(() => say("answered by the fallback", "Fallback reasoning."));
+    const root = surface(primary.url, "stream = false\nreplay_reasoning = true");
+    writeFileSync(
+      join(root, ".gnomon", "config.toml"),
+      `[resilience]\nattempts = 1\ntransport_grace_ms = 0\n\n` +
+        `[endpoints.target]\nurl = "${primary.url}"\nkind = "openai"\nstream = false\nreplay_reasoning = true\n\n` +
+        `[endpoints.fb]\nurl = "${fallback.url}"\nkind = "openai"\nstream = false\n`
+    );
+    writeFileSync(
+      join(root, ".gnomon", "roles.toml"),
+      `[roles.smol]\nmodel = "m1"\nendpoint = "target"\ntools = []\n\n[roles.smol.fallback]\nmodel = "m2"\nendpoint = "fb"\n`
+    );
+    const s = session(loadConfig(root));
+    const first = await s.turn("hi");
+    expect(first.turn.content).toContain("answered by the fallback");
+    await s.turn("and again");
+    const last = primary.bodies[primary.bodies.length - 1]!;
+    expect(priorAssistant(last).reasoning_content).toBe("Fallback reasoning.");
+  });
+});
+
 describe("which endpoints replay it", () => {
   it("off by default, on for DeepSeek's own API, and a declaration wins either way", () => {
     expect(resolveReplayReasoning({ url: "https://openrouter.ai/api/v1/chat/completions" })).toBe(false);

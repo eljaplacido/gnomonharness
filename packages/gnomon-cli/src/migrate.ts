@@ -246,7 +246,7 @@ export const MIGRATIONS: Migration[] = [
       "with no stream line is touched; an endpoint may still say stream = false.",
     ],
     apply: (text) =>
-      addKeyToSection(text, "defaults", "stream", 'true                     # stream replies from kind = "openai" endpoints'),
+      addKeyToSectionOrCreate(text, "defaults", "stream", 'true                     # stream replies from kind = "openai" endpoints'),
   },
   {
     id: "output-limit",
@@ -261,7 +261,7 @@ export const MIGRATIONS: Migration[] = [
       "Only a [defaults] with no max_tokens line is touched.",
     ],
     apply: (text) =>
-      addKeyToSection(text, "defaults", "max_tokens", "32768                # output limit per reply, thinking included (0 = none)"),
+      addKeyToSectionOrCreate(text, "defaults", "max_tokens", "32768                # output limit per reply, thinking included (0 = none)"),
   },
   {
     id: "audit-enabled",
@@ -328,6 +328,26 @@ function addKeyToSection(text: string, section: string, key: string, value: stri
   }
   lines.splice(last + 1, 0, `${key} = ${value}`);
   return lines.join("\n");
+}
+
+/**
+ * addKeyToSection, and when the section does not exist at all, a new one at
+ * the end of the file holding just the key.
+ *
+ * For `[defaults]`, which a hand-written surface can omit entirely. Without
+ * this, such a surface was never offered stream-replies or output-limit and
+ * was told nothing: `gnomon migrate` reported it current while it ran on the
+ * old behaviour. Only for sections whose absence means "all defaults" -- a
+ * `[verify]` block is a declaration of its own and is never invented here.
+ */
+function addKeyToSectionOrCreate(text: string, section: string, key: string, value: string): string | null {
+  const present = text
+    .split("\n")
+    .some((l) => (l.match(/^\s*\[([^\]]+)\]\s*$/)?.[1] ?? "").trim() === section);
+  if (present) return addKeyToSection(text, section, key, value);
+  const nl = eol(text);
+  const head = text.replace(/(\r?\n)*$/, "");
+  return (head ? `${head}${nl}${nl}` : "") + `[${section}]${nl}${key} = ${value}${nl}`;
 }
 
 export interface MigrationResult {

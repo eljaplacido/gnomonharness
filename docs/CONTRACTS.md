@@ -65,7 +65,7 @@ every `TaskRecord`.
 | `stall` | the same call repeated without changing anything |
 | `step_wall` | `max_steps_total` was reached |
 | `cancelled` | the operator stopped it |
-| `truncated` | the backend cut the reply off at its token limit, and the one bounded continuation request did not finish it either |
+| `truncated` | the backend cut the reply off at its output limit, and the bounded re-asks did not finish it: a cut text reply stands as the answer (a `result`); cut tool calls in a row end on the `refusal` floor with `stop_detail.repeats` |
 | `apparatus` | the run never reached the model — the surface itself could not be used |
 | `malformed` | replies in a row offered no usable tool call, past `[turn] max_consecutive_malformed` repair turns |
 
@@ -79,6 +79,19 @@ back cut off too, the partial answer was allowed to stand and was recorded as
 concluded normally. Found 2026-09-05 by `benchmarks/degradation-contract`,
 which scores *announced* and *recorded* as separate endpoints precisely so a
 gap between them cannot pass.
+
+It has two paths, and they land in different buckets on purpose: the bucket
+says what came of the turn, `stop_reason` says why the loop stopped.
+
+- **A cut text reply** is asked once for the rest, or for a shorter reply when
+  the thinking used up the limit. If it comes back cut again, it stands as
+  the turn's answer and keeps the turn's own code: usually `0`, a `result`.
+- **A cut tool call** never ran, because its arguments were cut mid-JSON.
+  The model is told the limit and asked for the work in smaller parts, up
+  to `[turn] max_consecutive_malformed` times in a row. Past that, the turn
+  wraps up with no tools and exits on the `refusal` floor, as `stall` and
+  `malformed` do. `stop_detail.repeats` records how many cut calls came in
+  a row.
 
 `malformed` covers a reply whose tool calls no tool can act on: arguments that
 are not one JSON object (unparseable, or parsed to an array or scalar), a tool

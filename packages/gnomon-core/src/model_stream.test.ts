@@ -303,6 +303,24 @@ describe("review findings (2026-11-03)", () => {
     }
   });
 
+  it("a refused request (429) is not a generation: a metered retry after it is exact, not a floor", async () => {
+    let n = 0;
+    const { url } = await serve((_req, res) => {
+      if (++n === 1) {
+        res.writeHead(429, { "content-type": "application/json" });
+        return void res.end(JSON.stringify({ error: { message: "rate limited", type: "rate_limit_error" } }));
+      }
+      sse(res);
+      chunk(res, delta({ content: "ok" }, "stop"));
+      chunk(res, { choices: [], usage: { prompt_tokens: 5, completion_tokens: 1 } });
+      res.end("data: [DONE]\n\n");
+    });
+    const r = await callEndpointWithRetry(target(url), hi, [], 5000, { attempts: 2, backoff_ms: 1, transport_grace_ms: 0 }, undefined, undefined);
+    expect(r.code).toBe(0);
+    expect(r.usage?.output).toBe(1);
+    expect(r.unmeteredCalls).toBeUndefined();
+  });
+
   it("an aborted attempt is counted as unmetered too, across retries", async () => {
     let n = 0;
     const { url } = await serve((_req, res) => {

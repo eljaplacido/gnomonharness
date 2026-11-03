@@ -140,13 +140,16 @@ describe("the output limit", () => {
         status: 400,
         body: { error: "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead." },
       },
-      answer("done"),
+      { body: { ...answer("done").body, usage: { prompt_tokens: 9, completion_tokens: 1 } } },
     ]);
     const rec = await runTask(loadConfig(surface(url)), "hi", { role: "smol", yes: true });
     expect(rec.code).toBe(0);
     expect(rec.output).toContain("done");
     expect(bodies[1]!.max_completion_tokens).toBe(32768);
     expect(bodies[1]!.max_tokens).toBeUndefined();
+    // The refused first request generated nothing, and the answer was metered:
+    // the totals are exact, not a floor.
+    expect(rec.counters.unmetered_calls).toBeUndefined();
   });
 
   it("is clamped to a maximum the provider states, and that is remembered", async () => {
@@ -312,6 +315,21 @@ describe("review findings (2026-11-03)", () => {
     expect(rec.stop_reason).toBe("truncated");
     // Three cut-offs (two asked again), then the tool-less wrap-up call.
     expect(bodies.length).toBe(4);
+    // Documented in CONTRACTS.md: cut tool calls end on the refusal floor.
+    expect(rec.bucket).toBe("refusal");
+    expect(rec.stop_detail?.repeats).toBe(3);
+  });
+
+  it("a cut text reply that stays cut stands as the answer: truncated, in the result bucket", async () => {
+    const { url } = await stream((res) => {
+      send(res, { content: "part of an answer" }, "length");
+    });
+    const root = streamed(url);
+    const cfg = join(root, ".gnomon", "config.toml");
+    writeFileSync(cfg, readFileSync(cfg, "utf8").replace("stream = false\n", ""));
+    const rec = await runTask(loadConfig(root), "explain", { role: "smol", yes: true });
+    expect(rec.stop_reason).toBe("truncated");
+    expect(rec.bucket).toBe("result");
   });
 });
 

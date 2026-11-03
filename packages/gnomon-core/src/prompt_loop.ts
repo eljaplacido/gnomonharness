@@ -153,8 +153,8 @@ export interface PromptExchange {
   /** Folded into the running summary; no longer replayed verbatim */
   folded?: boolean;
   /**
-   * The reasoning behind `output`, kept only when the endpoint that answered
-   * declares replay_reasoning. DeepSeek's thinking mode with tools wants the
+   * The reasoning behind `output`, kept only when an endpoint the role can
+   * reach (its own, or its fallback) replays reasoning. DeepSeek's thinking mode with tools wants the
    * reasoning of EVERY earlier assistant message back, earlier user turns
    * included, or answers 400 -- so the second turn of a session needs the
    * first turn's. Replayed by buildMessages; the wire filter in callEndpoint
@@ -1364,7 +1364,10 @@ export async function callEndpoint(
 interface CallTrace {
   /** When the first byte of a streamed body arrived */
   firstByteAt?: number;
-  /** The server received the request: it answered, or a clock ran out on it */
+  /**
+   * A generation may have run: the server answered 2xx, or a clock ran out
+   * after the request was sent. A non-2xx reply is a refusal, not a generation.
+   */
   reached?: boolean;
 }
 
@@ -1568,7 +1571,6 @@ async function callEndpointOnce(
       ...(dispatcher ? { dispatcher } : {}),
     } as RequestInit);
     answered = true;
-    trace.reached = true;
 
     if (!res.ok) {
       // The body carries the reason; the status alone does not. Reporting
@@ -1653,6 +1655,12 @@ async function callEndpointOnce(
         ...(maxTokensRejected ? { maxTokensRejected } : {}),
       };
     }
+
+    // A reply is coming: from here, one that ends without a usage report is
+    // tokens nobody counted. A non-2xx above is not -- a 429 or a 400 is
+    // refused before any generation, and counting those flagged every session
+    // whose endpoint renamed max_tokens once as a floor.
+    trace.reached = true;
 
     // A server that ignores `stream: true` answers with one JSON body, and is
     // read as one. Only a body that says it is an event stream is parsed as
@@ -2869,6 +2877,13 @@ export type StopReason =
   // null` read as a clean zero. Found 2026-09-05 by
   // benchmarks/degradation-contract, which scores announced and recorded
   // separately: the operator was told both times, the record said "answered".
+  //
+  // Two paths, one value, two buckets -- deliberately, because stop_reason is
+  // why the loop stopped and the bucket is what came of it. A cut-off TEXT
+  // reply stands as the turn's answer and keeps its own code (a `result`). A
+  // cut-off TOOL CALL never ran: after `[turn] max_consecutive_malformed` of
+  // them in a row the turn wraps up with no tools on the `refusal` floor, as
+  // `stall` and `malformed` do, with `stop_detail.repeats`.
   | "truncated"
   // The run never reached the model: the surface itself could not be used.
   // Without this, a refusal to start had to borrow "answered", which is how an
@@ -3993,6 +4008,14 @@ export async function runAgenticTurn(
   // reports the whole dirty tree as the turn's doing -- including for a
   // read-only role that only called `read`. One git call, taken once.
   const treeBaseline = treeSnapshot(resolve(state.config.gnomonDir, ".."));
+  // The reasoning behind the reply a turn ends on, kept for the exchange when
+  // either endpoint this role can reach replays reasoning -- not only the one
+  // that answered. A turn answered by the fallback, or by the tool-less
+  // wrap-up, is followed by a turn that starts on the primary again, and
+  // DeepSeek wants the reasoning of every earlier assistant message back.
+  const replaysReasoning = route.target.replayReasoning === true || route.fallback?.replayReasoning === true;
+  const keepReasoning = (r: string | undefined): { reasoning?: string } =>
+    r && replaysReasoning ? { reasoning: r } : {};
   // A request whose tokens no usage report covers. See TurnCounters.
   const countUnmetered = (r: InferenceResult): void => {
     if (r.unmeteredCalls) counters.unmetered_calls = (counters.unmetered_calls ?? 0) + r.unmeteredCalls;
@@ -4721,8 +4744,7 @@ export async function runAgenticTurn(
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
         wire: wireOf(adaptOutputLimit(state, usedTarget)),
-        // Kept only where it will be sent back: see PromptExchange.reasoning.
-        ...(result.reasoning && usedTarget.replayReasoning ? { reasoning: result.reasoning } : {}),
+        ...keepReasoning(result.reasoning),
         verify: verifyOutcome,
         toolSteps: steps,
         toolLog,
@@ -4855,10 +4877,8 @@ export async function runAgenticTurn(
       countUnmetered(closing);
       deps.progress.stop();
 
-      const content =
-        closing.code === 0 && closing.content.trim()
-          ? `${closing.content.trim()}\n\n_[${note}]_`
-          : result.content || note;
+      const closed = closing.code === 0 && closing.content.trim() !== "";
+      const content = closed ? `${closing.content.trim()}\n\n_[${note}]_` : result.content || note;
 
       // Measured at the end of the turn, from git — never the model's account.
       // Nothing may be still held back when the turn ends: a folded chunk
@@ -4880,6 +4900,7 @@ export async function runAgenticTurn(
         toolSteps: steps,
         toolLog,
         usage: turnUsage,
+        ...keepReasoning(closed ? closing.reasoning : result.reasoning),
         stop_reason: cutOut ? "truncated" : malformedOut ? "malformed" : stalled ? "stall" : "step_wall",
         stop_detail: cutOut
           ? { steps, repeats: consecutiveCut }
