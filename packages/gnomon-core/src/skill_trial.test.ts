@@ -82,14 +82,15 @@ function project(
   let attest = "";
   if (opts.attest) {
     const keys = generateKeyPairSync("ed25519");
-    put("key.pem", keys.publicKey.export({ format: "pem", type: "spki" }).toString());
+    // Under .gnomon/: require_trial accepts only a verifier the surface hash pins.
+    put(".gnomon/keys/audit.pub", keys.publicKey.export({ format: "pem", type: "spki" }).toString());
     put(
       "signer.mjs",
       `import { readFileSync } from "node:fs";\nimport { createPrivateKey, sign } from "node:crypto";\n` +
         `const k = createPrivateKey(${JSON.stringify(keys.privateKey.export({ format: "pem", type: "pkcs8" }).toString())});\n` +
         `process.stdout.write(sign(null, readFileSync(0), k).toString("base64"));\n`
     );
-    attest = `\n[audit.attest]\nsign = '"${process.execPath}" "${join(root, "signer.mjs")}"'\npublic_key = "key.pem"\n`;
+    attest = `\n[audit.attest]\nsign = '"${process.execPath}" "${join(root, "signer.mjs")}"'\npublic_key = ".gnomon/keys/audit.pub"\n`;
   }
   put(
     ".gnomon/config.toml",
@@ -572,6 +573,26 @@ describe("gnomon skill trial", () => {
 });
 
 describe("recording a trial", () => {
+  it("records only a report runTrial produced, unchanged, with its own cells", async () => {
+    // Round-3 review called recordTrial with a report it made up, and the
+    // declared signer signed it. Fails before the fix.
+    project({ tasks: 1, attempts: 1, check: `node -e "process.exit(0)"` });
+    const { report, cells } = await runTrial(loadConfig(root), { skill: "fix-it", runCell: tokens(() => 1) });
+    const forged = { ...report, meets_thresholds: true, reasons: ["forged"] } as typeof report;
+    expect(() => recordTrial(loadConfig(root), forged, cells)).toThrow(/only a report that runTrial produced/);
+    expect(() => recordTrial(loadConfig(root), report, [...cells])).toThrow(/only a report that runTrial produced/);
+    // And the real one cannot be edited in place first.
+    expect(() => {
+      (report as { meets_thresholds: unknown }).meets_thresholds = true;
+    }).toThrow(TypeError);
+    expect(() => {
+      (report.endpoints.pass as { gain: number }).gain = 99;
+    }).toThrow(TypeError);
+    expect(existsSync(join(root, ".gnomon-trials"))).toBe(false);
+    expect(recordTrial(loadConfig(root), report, cells).record?.kind).toBe("skill_trial");
+  }, 120_000);
+
+
   it("two trials recorded in the same millisecond get two report directories and two sealed trails", async () => {
     // Fails before the suffix: the second overwrote the first's report.json,
     // appended to its cells.jsonl, and restarted its trail at seq 0.

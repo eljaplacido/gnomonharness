@@ -493,12 +493,74 @@ export function signerDeclared(config: GnomonConfig): boolean {
   return Boolean(a?.enabled && (a.verify || a.public_key));
 }
 
+/**
+ * Why the declared verifier is not pinned by the surface hash, or null when
+ * it is.
+ *
+ * Round-3 review: with `public_key = "keys/audit.pub"` -- a file outside
+ * `.gnomon/` -- swapping the key for one the agent holds moved nothing, and a
+ * report the agent signed was accepted under require_trial. So, under
+ * require_trial, what CHECKS a signature must be part of the surface: a PEM
+ * inline in config.toml, or a key file under `.gnomon/` (hashed); a `verify`
+ * command whose every path-like word names a file under `.gnomon/`. Then
+ * changing either moves the hash, and a surface that grants more than the
+ * scaffold needs a person's trust again.
+ */
+export function verifierOutsideSurface(config: GnomonConfig): string | null {
+  const raw = (config.config as { audit?: { attest?: { public_key?: unknown; verify?: unknown } } } | undefined)
+    ?.audit?.attest;
+  const root = resolve(config.gnomonDir, "..");
+  const gnomon = resolve(config.gnomonDir);
+  const unhashed = [join(gnomon, "skills", "proposed"), join(gnomon, "extensions")];
+  const pinned = (p: string): boolean => {
+    const abs = isAbsolute(p) ? resolve(p) : resolve(root, p);
+    const inside = (base: string) => {
+      const rel = relative(base, abs);
+      return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+    };
+    return inside(gnomon) && !unhashed.some(inside);
+  };
+  const key = typeof raw?.public_key === "string" ? raw.public_key.trim() : "";
+  if (key && !key.startsWith("-----BEGIN") && !pinned(key)) {
+    return `public_key = "${key}" is a file outside .gnomon/, so replacing it does not move the surface hash. Put the PEM inline in config.toml, or the file under .gnomon/.`;
+  }
+  const verify = typeof raw?.verify === "string" ? raw.verify : "";
+  for (const word of verify.match(/"[^"]*"|'[^']*'|\S+/g) ?? []) {
+    const w = word.replace(/^["']|["']$/g, "");
+    const pathLike = /[\\/]/.test(w) || /\.(m?js|cjs|ts|py|sh|pl|rb|pub|pem)$/i.test(w);
+    if (!pathLike || w.startsWith("-")) continue;
+    const abs = isAbsolute(w) ? resolve(w) : resolve(root, w);
+    const rel = relative(root, abs);
+    const inRepo = !rel.startsWith("..") && !isAbsolute(rel);
+    // A program outside the repository (ssh-keygen, node) is the machine's,
+    // not the agent's working tree; a file inside it must be hashed.
+    if (inRepo && !pinned(w)) {
+      return `verify names ${w}, a file outside .gnomon/, so replacing it does not move the surface hash. Move it under .gnomon/.`;
+    }
+  }
+  return null;
+}
+
+/**
+ * What a signer proves, said where the refusal is read. A signer any process
+ * of this user can run proves only that some process of this user signed --
+ * it does not stop an agent that has a shell, which can run it too.
+ */
+const SIGNER_GUARANTEE =
+  "What a signer proves depends on who can make it sign. A key file or an unconfirmed " +
+  "ssh-agent signs for any process of yours, the agent's shell included, so it proves only " +
+  "that the trail was not edited afterwards by someone without the key. To stop an agent with " +
+  "a shell, use a signer that needs a person for each signature (ssh-agent with `ssh-add -c`, " +
+  "a FIDO or hardware key that needs a touch, a passphrase prompt), or run the agent in the " +
+  "kernel sandbox (exec os), which keeps it away from the key.";
+
 const SIGNER_HOWTO =
   "Declare a signer in .gnomon/config.toml, so trial trails are anchored outside the file:\n" +
   "  [audit.attest]\n" +
   '  sign = "<command: digest on stdin, signature on stdout>"\n' +
-  '  public_key = "<PEM, or a path to one>"   # or verify = "<command>"\n' +
-  "(README, \"[audit.attest] — an anchor outside the file\"). Or turn require_trial off.";
+  '  public_key = "<inline PEM, or a file under .gnomon/>"   # or verify = "<command>"\n' +
+  "(README, \"[audit.attest] — an anchor outside the file\"). Or turn require_trial off.\n" +
+  SIGNER_GUARANTEE;
 
 /**
  * Check a trial report against the skill about to be accepted.
@@ -689,10 +751,14 @@ export function acceptSkill(
   const required = requireTrial(config);
   if (required && !signerDeclared(config)) {
     throw new SkillRefusal(
-      `Not accepted: [skills] require_trial is on, but no signer is declared. Without one, anyone ` +
-        `with a shell -- the agent included -- can build a sealed trial trail by hand, so a trial ` +
-        `report proves nothing. ${SIGNER_HOWTO}`
+      `Not accepted: [skills] require_trial is on, but no signer is declared. Without one, a sealed ` +
+        `trial trail can be built by hand with the chain's own hash function, so a trial report ` +
+        `proves nothing. ${SIGNER_HOWTO}`
     );
+  }
+  if (required) {
+    const loose = verifierOutsideSurface(config);
+    if (loose) throw new SkillRefusal(`Not accepted: [skills] require_trial is on, and ${loose}`);
   }
   if (required && !opts.evidence) {
     throw new SkillRefusal(

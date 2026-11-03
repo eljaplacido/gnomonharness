@@ -700,7 +700,23 @@ Without a signer, this proves the trail is consistent, not where it came from.
 Anyone who can write the directory could build a consistent trail, and
 re-review did exactly that with `recordHash`. Policy rule `record` stops the
 agent's write tools and the shell commands it can recognise, but a pattern
-check is not containment. The signer is what proves provenance.
+check is not containment.
+
+A signer proves provenance only against whoever cannot make it sign:
+- **A key file, or an ssh-agent without confirmation,** signs for any process
+  of this user, the agent's shell included. It proves the trail was not edited
+  afterwards by someone without the key. **It does not stop an agent with a
+  shell.**
+- **A signer that needs a person for each signature** does: ssh-agent with
+  `ssh-add -c`, a FIDO or hardware key that needs a touch, or a passphrase
+  prompt.
+- **The kernel sandbox** (`exec os`, #74) also does, because it keeps the agent
+  away from the key.
+
+`recordTrial` signs only a report that `runTrial` produced in the same
+process, frozen, with its own cells. That closes the library as a forging
+tool. Code that can run the signer can still sign anything, which is the
+point of the list above.
 
 `[skills] require_trial = true` in `policy.toml` makes accept refuse in three
 cases:
@@ -709,6 +725,13 @@ cases:
   one.
 - no report is cited.
 - the cited report is not attested, or does not meet its thresholds.
+
+Under `require_trial`, the verifier must also be **pinned by the surface
+hash**: `public_key` inline in `config.toml` or a file under `.gnomon/`
+(outside `skills/proposed/` and `extensions/`), and every file a `verify`
+command names under `.gnomon/`. A key outside the surface
+(`keys/audit.pub`) is refused. Swapping a pinned key moves the hash, so a
+surface that grants more than the scaffold needs a person's trust again.
 
 `require_trial` is off by default. Nothing accepts a skill automatically,
 including a passing trial.

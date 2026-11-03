@@ -37,8 +37,17 @@
   `require_trial = true` in `policy.toml` is off by default. When it is on,
   accept refuses in three cases: without such a report, with one that did not
   meet its thresholds, or when no `[audit.attest]` signer is declared. A
-  signer is required because without one a shell can build a sealed trail
-  by hand. Nothing accepts a skill automatically. Step 3 of
+  signer is required because without one a sealed trail can be built by
+  hand.
+  - The verifier must be pinned by the surface hash: the public key inline
+    or under `.gnomon/`, and `verify` scripts under `.gnomon/`.
+  - `recordTrial` signs only reports `runTrial` produced, frozen.
+  - The docs say plainly what each kind of signer proves. A key file any of
+    your processes can use does not stop an agent with a shell. A
+    person-present signer (`ssh-add -c`, a FIDO key, a passphrase) or the
+    kernel sandbox does.
+
+  Nothing accepts a skill automatically. Step 3 of
   `docs/design/SKILL-TRIALS.md`.
 
 - **`gnomon skill trial ID`: measure a proposed skill before accepting it.**

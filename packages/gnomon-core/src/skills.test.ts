@@ -603,7 +603,45 @@ describe("accept --evidence and require_trial", () => {
     expect(err).toBeInstanceOf(SkillRefusal);
     expect(String(err)).toMatch(/no signer is declared/);
     expect(String(err)).toMatch(/\[audit\.attest\]/);
+    // Honest about what a signer proves (round-3 review): a local key does
+    // not stop an agent with a shell; a person-present signer or the kernel
+    // sandbox does.
+    expect(String(err)).not.toMatch(/the agent included/);
+    expect(String(err)).toMatch(/ssh-add -c/);
+    expect(String(err)).toMatch(/kernel sandbox/);
     stillProposed();
+  });
+
+  it("require_trial refuses a verifier the surface hash does not pin", () => {
+    // Round-3 review: public_key = "keys/audit.pub", outside .gnomon/. The
+    // agent swapped the file for its own key, signed a report, and the
+    // surface hash never moved. Fails before the fix.
+    propose();
+    // The pinned key first: it is part of the surface, so the trial's base
+    // hash includes it.
+    mkdirSync(join(root, ".gnomon", "keys"), { recursive: true });
+    writeFileSync(join(root, ".gnomon", "keys", "audit.pub"), PUB);
+    const rel = report({ signed: true });
+    const withKey = (attest: Record<string, unknown>) =>
+      cfg({ attest: { sign: signer(), ...attest } }, { skills: { require_trial: true } });
+    mkdirSync(join(root, "keys"), { recursive: true });
+    writeFileSync(join(root, "keys", "audit.pub"), PUB);
+    expect(() => acceptSkill(withKey({ public_key: "keys/audit.pub" }), "fix-it", { evidence: rel })).toThrow(
+      /public_key = "keys\/audit\.pub" is a file outside \.gnomon\//
+    );
+    expect(() => acceptSkill(withKey({ verify: `node keys/verify.mjs` }), "fix-it", { evidence: rel })).toThrow(
+      /verify names keys\/verify\.mjs/
+    );
+    // A key file in skills/proposed/ is under .gnomon/ but not hashed.
+    mkdirSync(join(root, ".gnomon", "skills", "proposed"), { recursive: true });
+    writeFileSync(join(root, ".gnomon", "skills", "proposed", "k.pub"), PUB);
+    expect(() =>
+      acceptSkill(withKey({ public_key: ".gnomon/skills/proposed/k.pub" }), "fix-it", { evidence: rel })
+    ).toThrow(/outside \.gnomon\//);
+    stillProposed();
+    // Under .gnomon/, hashed: accepted.
+    const d = acceptSkill(withKey({ public_key: ".gnomon/keys/audit.pub" }), "fix-it", { evidence: rel });
+    expect(d.record).toMatchObject({ evidence: { attested: true } });
   });
 
   it("with a signer, a sealed chain built by hand -- no signed head -- does not vouch", () => {

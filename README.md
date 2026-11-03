@@ -61,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1699 TypeScript tests (1412 core, 262 cli, 18
-> natives, 7 tui) and 61 Rust tests — **1760 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1716 TypeScript tests (1429 core, 262 cli, 18
+> natives, 7 tui) and 61 Rust tests — **1777 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1900,7 +1900,7 @@ chain = true                       # required; attest with chain off is refused 
 [audit.attest]
 sign = "./sign-head.sh"            # digest on stdin → signature on stdout. Declaring it is what turns signing on.
 verify = "./verify-head.sh"        # optional external checker; exit 0 = valid. For keys node:crypto cannot check.
-public_key = "keys/audit.pub"      # PEM inline or a path, for in-process verification
+public_key = ".gnomon/keys/audit.pub"  # PEM inline or a path; under require_trial it must be in the surface (inline, or under .gnomon/)
 key_id = "ops-2026"                # opaque label, recorded in each head and passed to the signer
 algorithm = "ed25519"              # default
 signature_encoding = "base64"      # base64 (default) | hex
@@ -1908,6 +1908,21 @@ every = 0                          # sign a head every N records; 0 = only when 
 timeout_sec = 10                   # default; the signer is killed after this
 dir = ".gnomon-audit/heads"        # default: a heads/ subdirectory beside the trail
 ```
+
+**What a signer proves depends on who can make it sign.** Only one row below
+stops an agent that has a shell on this machine. With any of the others, the
+agent can run the signer too.
+
+| Signer | Proves | Stops an agent with a shell? |
+|---|---|---|
+| A key file, or an ssh-agent without confirmation | The trail was not edited afterwards by someone without the key | **No.** Any process of yours, the agent's shell included, can sign |
+| ssh-agent with `ssh-add -c`, a FIDO or hardware key that needs a touch, a passphrase prompt | A person approved each signature | Yes, as long as the person reads what they approve |
+| Any signer, with the agent in the kernel sandbox (`exec os`, #74) | The agent could not reach the key | Yes |
+
+Under `[skills] require_trial`, the verifier must be pinned by the surface
+hash: `public_key` inline or under `.gnomon/`, and a `verify` command's files
+under `.gnomon/`. Swapping the key then moves the hash, so the surface needs
+trust again.
 
 Signer output over **8 KiB** is refused — enough for an Ed25519 signature (88
 base64 chars), an RSA-4096 one (684) or an armoured PGP block, and bounded so a

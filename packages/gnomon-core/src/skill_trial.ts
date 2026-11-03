@@ -699,7 +699,12 @@ export async function runTrial(
     }
 
     const report = { ...summarise(spec, opts.skill, content, role, baseHash, skillHash, differ, cells, planned, pair, requestsUsed, status, pinned), profile };
-    return { report: { ...report, trust: trust?.decision ?? null, leftovers }, cells };
+    // Frozen, and remembered: recordTrial signs only a report this process's
+    // runTrial produced, exactly as it produced it.
+    const final = deepFreeze({ ...report, trust: trust?.decision ?? null, leftovers }) as TrialReport;
+    const frozenCells = deepFreeze(cells) as TrialCell[];
+    PRODUCED.set(final, frozenCells);
+    return { report: final, cells: frozenCells };
   } finally {
     for (const sb of [...live]) done(sb);
     signals.off("SIGINT", onInt);
@@ -878,6 +883,17 @@ export function verdictOf(spec: TrialSpec, cells: TrialCell[]): TrialVerdict {
   return r.meets_thresholds;
 }
 
+/** Reports runTrial produced in this process, and their cells. */
+const PRODUCED = new WeakMap<object, TrialCell[]>();
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const v of Object.values(value as Record<string, unknown>)) deepFreeze(v);
+  }
+  return value;
+}
+
 /** The trial's exit code (docs/CONTRACTS.md): 0 meets, 2 does not, 10 no answer. */
 export function trialExit(verdict: TrialVerdict): 0 | 2 | 10 {
   return verdict === true ? 0 : verdict === false ? 2 : 10;
@@ -902,6 +918,17 @@ export function recordTrial(
   cells: TrialCell[],
   now = new Date()
 ): { dir: string; report_path: string; report_sha256: string; record: AuditRecord | null; trail: string | null } {
+  // Only a report runTrial produced in this process, with the cells it
+  // produced, is recorded. Round-3 review called recordTrial with a report it
+  // made up, and the declared signer signed it: the library was a forging
+  // tool. This does not make forging impossible -- code that can run the
+  // signer can sign anything (see SIGNER_GUARANTEE in skills.ts) -- but the
+  // public API no longer does it for you.
+  if (PRODUCED.get(report) !== cells) {
+    throw new Error(
+      "recordTrial records only a report that runTrial produced in this process, with its own cells, unchanged."
+    );
+  }
   const root = resolve(config.gnomonDir, "..");
   // A random suffix on both names, as for skill decisions (skills.ts): two
   // trials recorded in one millisecond must not share a report directory --
