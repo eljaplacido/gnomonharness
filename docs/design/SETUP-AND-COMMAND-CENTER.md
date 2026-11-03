@@ -1,9 +1,32 @@
 # Design: first-run setup and the command center
 
-Status: **proposal**, 2026-11-02. The release freeze holds at 0.3.3. Step 1
-(the read-only hardware probe and runtime discovery) ships in the PR that adds
-this document (#105), to `master`, unreleased. Nothing else here is
-implemented.
+Status: **Part I implemented, steps 1 to 5**, 2026-11-03, unreleased. Step 1
+(the read-only hardware probe and runtime discovery) came with this document
+(#105). Steps 2 to 5 (`gnomon doctor`, the catalog and recommendation,
+`gnomon setup` with the consent-gated pull, the speed check and the mode it
+suggests) came in the setup-wizard PR that supersedes #105. Step 6 (hybrid
+control on `escalate`) waits for #102: setup records the choice as a
+preference only. Part II is still a proposal; `gnomon dashboard` is being
+built separately and reads `setup --json` and `doctor --json`.
+
+**Decisions taken on the open questions (2026-11-03),** and where the build
+differs from the text below:
+1. `gnomon setup` is a new command, and `launch` offers it first ("Guided
+   setup", the Enter default) when no model answers.
+2. `gnomon doctor` is a new read-only command.
+3. The catalog updates only with releases; `--catalog FILE` reads another.
+4. The speed thresholds ship provisional and are printed as such.
+5. One `control` per escalation block, default `observe`, once #102 lands.
+   **`--yes` approves the surface write and nothing else.** It never approves
+   a download (`--pull TAG` must name it, which replaces "`--yes` alone pulls
+   the top recommendation" in part 4) or spending (the one-token key check
+   needs a person at the prompt).
+6. `$` is provider-reported only.
+7. The UI is packaged lazily inside `gnomon-cli`.
+8. Remote access is documented through `ssh -L` and Tailscale only.
+9. Hardware facts go to a gitignored `.gnomon-setup.json`; the committed
+   surface carries only tags, the mode and the catalog's label (part 6).
+10. The default hybrid control is `observe`.
 
 This document has two halves:
 - **Part I, the setup wizard:** what gnomon learns about the machine at setup,
@@ -142,7 +165,18 @@ Each runtime ends in one of three states:
 Never probed: other hosts, other ports, anything not on loopback. The probe
 never sends a completion.
 
-### 3. Recommendation from a dated catalog
+### 3. Recommendation from a dated catalog (implemented)
+
+As built (`catalog.ts`): each model carries its own thresholds,
+`min_vram_gb`, `min_unified_gb` and `min_cpu_ram_gb` ("24 GB of GPU memory or
+64 GB of unified memory"), compared at `nominal_tolerance` (a 24 GB card
+reports 23.99 GiB). The `[budget]` fractions size only installed models the
+catalog does not know, from the size Ollama reports. Measurements live in
+`[[measured]]` rows that name their run; a model with none prints "not
+measured by gnomon". On ranking, "installed beats new" holds within the
+catalog's order. An installed model the catalog does not know is offered as
+the no-download alternative, not above a measured one. A run that may not
+download (`--yes` without `--pull`) takes the best installed option.
 
 A catalog file ships with the harness. It is data, versioned with the release,
 like the templates in `init.ts`, and not part of any project's surface.
@@ -202,7 +236,7 @@ recommendation prints the catalog date. A catalog older than 180 days adds:
 The catalog is never fetched from the network automatically. `--catalog FILE`
 uses a newer one explicitly.
 
-### 4. Consent-gated pull
+### 4. Consent-gated pull (implemented; `--yes` narrowed, see the decisions above)
 
 ```
   Recommended for this machine (catalog 2026-11-02):
@@ -223,7 +257,13 @@ uses a newer one explicitly.
 - Non-interactive without `--yes`: print the exact `ollama pull …` command
   and exit **4** (`preconditions_unmet`). Never download.
 
-### 5. Speed smoke check, and the mode it suggests
+### 5. Speed smoke check, and the mode it suggests (implemented; control waits for #102)
+
+As built: the request carries the project's `system.md` (the scaffold's when
+there is no surface yet) and "Reply with OK.", not the tool schemas. A cloud
+model in the surface or added at setup makes the suggestion hybrid, citing
+R1H. Hybrid is written as `frontier_plan` with `coordinator` and `plan` on
+the cloud model, R1H's PC arm.
 
 After a model is chosen, offer one short measurement: `Run a ~10 s speed
 check on qwen3.6:35b? [Y/n]`. It loads the model, so it asks first.
@@ -273,7 +313,21 @@ control is gnomon's core promise. One `control` key per escalation block
   fire when they should. That is the evidence the hybrid hypothesis needs:
   how well a trigger predicts failure.
 
-### 6. Determinism and Rule 1
+### 6. Determinism and Rule 1 (implemented, with question 9 answered "gitignored facts")
+
+As built, the committed block is three comment lines at the top of
+`roles.toml`, with no hardware and no date:
+
+```toml
+# Set up by `gnomon setup` (catalog 2026-11): qwen3.6:35b on this machine for every role.
+# gnomon-setup: {"v":1,"catalog":"2026-11","local":"qwen3.6:35b","small":"qwen3.6:35b","cloud":null,"mode":"local_only"}
+# Machine facts stay in .gnomon-setup.json beside .gnomon/ (gitignored); `gnomon doctor` compares them with this machine.
+```
+
+Doctor's exits are 0 nothing needs attention, 1 something does (drift, a
+model that does not answer, a model that will not fit, no surface), and 10
+could not run. Setup does not have `--reprobe`: running setup again is the
+re-probe, and it proposes a diff the same way.
 
 - **Detection runs only at setup:** in `gnomon setup`, and in `init` and
   `launch` when they scaffold. A session never probes, and nothing routes on

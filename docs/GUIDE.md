@@ -348,6 +348,50 @@ scaffold defaults, run `gnomon migrate --check` in the project, then
 
 ## 4. Quick start: five minutes to a first useful result
 
+### 4.0 Get started in 3 steps
+
+```bash
+cd my-project
+gnomon setup
+```
+
+1. **Scan your machine and plug in a local model it can run.** Setup prints
+   the probe below (OS, RAM, each GPU, which model servers answer), then
+   recommends a model from its dated catalog (`packages/gnomon-cli/catalog/models.toml`)
+   with the reason. With 24 GB of GPU memory or 64 GB of unified memory that
+   is `qwen3.6:35b`: gnomon measured it solving 24 of 32 tasks alone on an
+   RTX 5090 (R1H) and 18 of 32 on an NVIDIA GB10 (R1). Smaller machines get
+   `gpt-oss:20b`, `qwen3:14b`, `qwen3:8b` or `qwen3:4b`, each marked "not
+   measured by gnomon". A model you already have is offered without a
+   download. A download happens only on your yes, through Ollama, with its
+   size and your free disk shown first; llama.cpp, LM Studio and vLLM users
+   get the command to run instead. Then a ~10 s speed check, if you want it.
+2. **Connect a cloud model (optional).** OpenCode Go, OpenRouter, OpenCode
+   Zen or any OpenAI-compatible URL. The key is read hidden and stored where
+   `gnomon key set` stores it, never in `.gnomon/`. Checking it with one token
+   is a separate yes. With a cloud model, setup suggests **hybrid**: the cloud
+   plans (`coordinator`, `plan`), this machine builds (everything else). On an
+   RTX 5090 that solved 87% vs 84% cloud-only at 26% lower cost per solved
+   task. A slow or small local model also leads to hybrid, a very slow one to
+   cloud first; those speed thresholds are provisional and say so.
+3. **Accept the diff, then `gnomon launch`.** The change to `.gnomon/` is shown
+   as a diff and written only on your yes. The surface hash moves, so a
+   surface that now sends a key somewhere new is shown to you for trust at the
+   next launch. Machine facts go to `.gnomon-setup.json` (gitignored);
+   `gnomon doctor` compares them with the machine any time, says what needs
+   doing, and changes nothing.
+
+Hybrid control (`off`, `observe`, `ask`, `auto`) is recorded as a preference,
+`observe` by default. It does nothing until escalation (`[roles.X.escalate]`,
+PR #102) is merged; setup says so when it records it.
+
+For a script: `gnomon setup --json` prints the recommendation and the diff and
+exits 4 without writing; `--yes` writes it. `--yes` never downloads or spends:
+add `--pull qwen3.6:35b` to download, `--speed-check` to measure, and
+`--cloud-endpoint opencode-go --cloud-model deepseek-v4.1-flash` for a cloud
+model. `gnomon launch` offers the same guided setup first whenever no model
+answers.
+
 ### 4.1 On a local model (Ollama)
 
 ```bash
@@ -367,8 +411,8 @@ GPU with its memory (unified memory on Apple Silicon and NVIDIA GB10), and
 which of Ollama, LM Studio (:1234), llama.cpp (:8080) and vLLM (:8000) answer
 on 127.0.0.1. That probe only reads; it writes nothing and chooses nothing. Then the session opens; the banner names the project, role, model,
 and the tools the role does **not** hold. If Ollama is not running, `launch`
-offers a picker first: Ollama, OpenRouter, OpenCode Go, OpenCode Zen, Custom or
-Skip.
+offers a picker first: Guided setup (`gnomon setup`, the default), Ollama,
+OpenRouter, OpenCode Go, OpenCode Zen, Custom or Skip.
 
 ### 4.2 On a cloud model
 
@@ -758,6 +802,8 @@ api_key_env = "OPENAI_API_KEY"   # the NAME of the variable, never the key
 | `gnomon launch [--dir P]` | Creates `.gnomon/` if missing, offers model setup if nothing answers, opens the loop | Daily start. The one to remember. |
 | `gnomon prompt [ROLE] [--continue \| --resume ID] [--profile N] [--trust]` | The interactive loop (alias `run`). A surface looser than the defaults that this machine has not trusted is shown and asked about first. | Resume a session; start in a role |
 | `gnomon task "TEXT" [--role R] [--yes] [--json] [--profile N] [--trust]` | One task, no terminal. Gated calls are refused unless `--yes`. An untrusted loosening surface runs clamped to the defaults unless `--trust`. | Scripts, CI, cron |
+| `gnomon setup [--json] [--yes] [--pull TAG] [--speed-check] [--mode local\|hybrid\|cloud] [--cloud-endpoint URL --cloud-model NAME]` | Scans the machine, recommends a local model it can run, pulls only on a yes, speed-checks it, connects an optional cloud model, suggests a mode, and writes `.gnomon/` after you accept the diff ([4.0](#40-get-started-in-3-steps)) | First run; a new machine |
+| `gnomon doctor [--json]` | Read-only: the machine, whether every role's model answers, drift since setup, and what would fix each problem. Exit 0 clear, 1 attention, 10 could not run. | "Why does nothing answer?"; after moving machines |
 | `gnomon init [--from P] [--force] [--no-verify]` | Writes a surface. `--from` copies another project's `.gnomon/`. | New project; team template |
 | `gnomon migrate [--check]` | Brings a surface up to current scaffold defaults. `--check` writes nothing and exits 1 if anything is pending. | After `gnomon update` |
 | `gnomon endpoint [list \| test NAME \| add …]` | Lists endpoints and keys and cross-checks model ids; runs one token; declares an endpoint end to end | Model setup, diagnosis |

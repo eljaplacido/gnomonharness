@@ -5,6 +5,28 @@ terminal, against your own repository, with your own models. This is the
 shortest path from nothing to a first task. For the full reference, see
 [README.md](README.md).
 
+## Get started in 3 steps
+
+Once gnomon is installed ([section 2](#2-install)):
+
+1. **Scan your machine and plug in a local model it can run.**
+   `cd my-project && gnomon setup` shows your OS, RAM, GPU and running model
+   servers, recommends a model from a dated catalog with the reason
+   (`qwen3.6:35b` from 24 GB of GPU memory or 64 GB of unified memory; a
+   smaller one below that), downloads it only if you say yes, and offers a
+   ~10 s speed check.
+2. **Connect a cloud model (optional).** OpenCode Go, OpenRouter, OpenCode Zen
+   or any OpenAI-compatible URL; the key is read hidden and kept outside the
+   repository. With one, setup suggests hybrid: the cloud plans, your machine
+   builds. On an RTX 5090 that solved 87% vs 84% cloud-only, at 26% lower
+   cost per solved task.
+3. **Accept the diff, then `gnomon launch`.** Setup writes `.gnomon/` only
+   after you accept the diff it shows. `gnomon doctor` re-checks the machine
+   any time and changes nothing.
+
+`gnomon launch` on its own offers the same guided setup whenever no model
+answers. The sections below are the long way round, step by step.
+
 ## 1. Prerequisites
 
 - **Node ≥ 20** — all the installer below needs
@@ -276,7 +298,8 @@ Tools (implement): bash, compute, edit, glob, grep, note, read, todo, write
 
 ## 4. Two things to do right after
 
-1. **Check the model tags.** `init` asks your model host what it has and
+1. **Check the model tags.** `gnomon setup` chooses them for this machine and
+   shows them as a diff before writing. Without it, `init` asks your model host what it has and
    writes real model tags. If nothing was reachable it falls back to generic
    tags — which will be wrong. Point them at models you actually have with
    `/models`, which writes the file that routes each role. By hand, edit the
