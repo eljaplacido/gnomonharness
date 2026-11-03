@@ -1,0 +1,27 @@
+M1 lane READY: qwen38 (hub RTX 5090, vLLM in WSL)          written 2026-11-03 by the M1 prep agent
+model       RadixArk/Qwen3.8-27B-NVFP4 @ 319f741cce68d7914884900c138a1fbb70a42f30 (apache-2.0, not gated), ~20.4 GiB
+            model-00001 fbcdb5ba1cdda462b5f38592d071e772c4d398afea61a0aa9188b32d1a239a79
+            model-00002 db6146a5464fb0a891181b93c81593f0ca65c602eb14120a1c2b1b09bca11f85
+            model-00003 d3cfb92742e30c8b46564665791dbe0a86ed64cfc02b1275081530793c0c9581   (all = Hub LFS sha256, verified on disk)
+engine      vLLM 0.27.1 + recipe's PR #40914 backport (applied, marker found); torch 2.13.0, triton 3.7.1, flashinfer-python 0.6.16.post3,
+            nvidia-cutlass-dsl 4.6.0, transformers 5.22.1 (full list: pip-freeze.txt); python-build-standalone 3.12.16+20261026
+recipe      MiaAI-Lab/Qwen3.8-27B-NVFP4-RTX-5090 @ a5f9bff97796989b2f3629a2cf0d8335eca7a7e8 (adapted copy start.sh; changes marked M1:)
+where       WSL2 distro m1-vllm (new, dedicated; vhdx C:\dev\m1-vllm\distro), rootfs nvcr.io/nvidia/cuda:13.0.2-devel-ubuntu24.04
+            amd64 sha256:0eee3094c71518ad31d011a594ae6ed6de72959ee07e318cb31cffe71690e90c; user bench; interop off
+            folder /home/bench/gnomon-bench/qwen38-5090/ (venv, weights, HF/Triton/vLLM caches, logs all inside)
+endpoint    127.0.0.1:18480 in WSL, forwarded to Windows 127.0.0.1:18480 (verified), served name qwen3.8-27b
+settings    vllm serve <model> --served-model-name qwen3.8-27b --host 127.0.0.1 --port 18480 --max-model-len 131072
+            --kv-cache-dtype turboquant_4bit_nc --kv-cache-memory-bytes 5905580032 --max-num-seqs 2 --max-num-batched-tokens 512
+            --gpu-memory-utilization <auto: (free-820 MiB)/total, clamp 0.80-0.98> --attention-config.flash_attn_version=2
+            --enable-auto-tool-choice --tool-call-parser qwen3_xml --reasoning-parser qwen3
+            --speculative-config {"method":"mtp","num_speculative_tokens":3} --default-chat-template-kwargs {"enable_thinking": false}
+            env PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_NO_USAGE_STATS=1
+vs recipe   max-num-seqs 1->2, max-model-len 262144->131072 (README's own 2x128K row; KV pin unchanged); port/host/name;
+            thinking off by default (incumbent ran --reasoning off; THINKING=1 restores the recipe); model revision pinned; paths.
+RISK        recipe author: "MTP + concurrency crashes this KV path". Run a 2-concurrent soak + garble check before cells.
+            Fallback knob: SPEC_CONFIG='{"method":"mtp","num_speculative_tokens":1}' (env of start-m1.sh) - an amendment if used.
+scripts     C:\dev\m1-qwen38\start-m1.ps1 [-TimeoutSec 1500]  exit 0 when Windows-side /v1/models lists qwen3.8-27b and warmup done
+            C:\dev\m1-qwen38\stop-m1.ps1   stops only this vLLM (process group + this folder's interpreter), terminates m1-vllm only
+            in WSL: ~/gnomon-bench/qwen38-5090/start-m1.sh, stop-m1.sh (README-M1.txt there)
+preconds    no llama-server.exe on the hub, GPU memory used < 4,000 MiB, port 18480 free
+NOT verified: vLLM has never been started on the GPU (busy); first start = first load test (cudagraph capture can take minutes).
