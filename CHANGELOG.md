@@ -132,6 +132,14 @@
     (`stop_reason: "tamper"`, code 3) and writes a `record_tamper` record.
   - `gnomon skill accept` refuses until a person runs `gnomon audit resolve`.
     `gnomon audit tamper` lists the open events.
+  - Between sessions, a checkpoint of the records is sealed into a
+    `session_end` (signed when a signer is declared). The next session and
+    `skill accept` compare against it, so a background job's write, or a
+    deleted tamper trail, is a tamper event.
+  - A NEW gnomon trail from another process (the operator's own CLI) is a
+    `record_notice`, not a stop.
+  - Resolving needs a person: a terminal on stdin and stdout, or a
+    person-present signer. `env -u GNOMON_AGENT_SESSION` is not enough.
   - The patterns stay as fast pre-refusals. `ln -s` now resolves its source
     from the link's directory, and `cp -l`, `cp -s` and `link` count as links.
 

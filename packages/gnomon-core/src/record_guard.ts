@@ -35,6 +35,7 @@ import { readdirSync, lstatSync, readFileSync, readlinkSync, existsSync, statSyn
 import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import { createHash } from "node:crypto";
 import type { GnomonConfig } from "./config.js";
+import { verifyTrail } from "./audit.js";
 
 /** The record directories of a surface: absolute, existing or not. */
 export function recordDirsOf(config: GnomonConfig): string[] {
@@ -204,11 +205,72 @@ export function foreignChanges(before: RecordSnapshot, after: RecordSnapshot): R
 // ---------------------------------------------------------------------------
 
 /** Where a change was seen. */
-export type TamperWhen = "during_call" | "between_calls" | "turn_end";
+export type TamperWhen = "during_call" | "between_calls" | "turn_end" | "since_last_session" | "at_accept";
 
 export interface TamperFinding {
   when: TamperWhen;
+  /** Tampering: an existing record modified or removed, or a file added that is not a gnomon trail. */
   changes: RecordChange[];
+  /**
+   * New gnomon trails another process wrote -- the operator's own `gnomon
+   * skill reject` from a second terminal, a concurrent session, a killed run.
+   * A warning (`record_notice`), not a stop: gnomon adds trails, it never
+   * rewrites one, so a NEW chain that verifies is the expected shape of
+   * another gnomon process. Re-review found the first version stopping a live
+   * session on exactly that.
+   */
+  notices: RecordChange[];
+}
+
+/**
+ * Whether a file is a gnomon trail: JSONL whose chain verifies and whose first
+ * record is a session_start. Sealed or not -- a killed run leaves an unsealed
+ * one. A hand-built chain passes this too, which is why it only earns a notice
+ * and never counts as evidence by itself (#109 needs a signed head).
+ */
+export function isGnomonTrail(path: string): boolean {
+  if (!path.endsWith(".jsonl")) return false;
+  try {
+    const first = readFileSync(path, "utf-8").split("\n", 1)[0] ?? "";
+    if (!first.includes('"session_start"')) return false;
+    const v = verifyTrail(path);
+    return v.ok && v.records > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Split changes into tampering and notices. An ADDED gnomon trail is a
+ * notice, and so are the files that belong to it: its attestation heads file
+ * (`heads/<name>`) and a checkpoint's map (`<name>.files.json`). Anything
+ * modified or removed, and any other added file, is tampering.
+ */
+export function classifyChanges(changes: RecordChange[]): { changes: RecordChange[]; notices: RecordChange[] } {
+  const trails = new Set(
+    changes.filter((c) => c.change === "added" && isGnomonTrail(c.path)).map((c) => c.path)
+  );
+  const names = new Set([...trails].map((p) => p.split(/[\\/]/).pop()!));
+  // A trial's report files belong to the trail that cites them: its
+  // skill_trial record names `.gnomon-trials/<skill>/<stamp>/report.json`.
+  const cited = [...trails].map((p) => {
+    try {
+      return readFileSync(p, "utf-8");
+    } catch {
+      return "";
+    }
+  });
+  const belongs = (c: RecordChange): boolean => {
+    if (c.change !== "added") return false;
+    if (trails.has(c.path)) return true;
+    const trialDir = /[\\/](\.gnomon-trials[\\/].+)[\\/](?:report\.json|cells\.jsonl)$/.exec(c.path);
+    if (trialDir && cited.some((t) => t.includes(trialDir[1]!.split("\\").join("/")))) return true;
+    const parts = c.path.split(/[\\/]/);
+    const name = parts[parts.length - 1]!;
+    if (parts[parts.length - 2] === "heads" && names.has(name)) return true;
+    return name.endsWith(".files.json") && names.has(name.replace(/\.files\.json$/, ".jsonl"));
+  };
+  return { changes: changes.filter((c) => !belongs(c)), notices: changes.filter(belongs) };
 }
 
 /**
@@ -232,14 +294,15 @@ export class RecordGuard {
   check(when: TamperWhen): TamperFinding | null {
     const now = snapshotRecords(this.dirs);
     this.costs.push(now.ms);
-    const changes = foreignChanges(this.baseline, now);
+    const all = foreignChanges(this.baseline, now);
     // Changes gnomon's writer noticed at the moment it went to append.
     while (PENDING.length) {
       const p = PENDING.shift()!;
-      if (this.dirs.some((d) => isUnder(d, p.path)) && !changes.some((c) => c.path === p.path)) changes.push(p);
+      if (this.dirs.some((d) => isUnder(d, p.path)) && !all.some((c) => c.path === p.path)) all.push(p);
     }
     this.baseline = now;
-    return changes.length ? { when, changes } : null;
+    const { changes, notices } = classifyChanges(all);
+    return changes.length || notices.length ? { when, changes, notices } : null;
   }
 }
 

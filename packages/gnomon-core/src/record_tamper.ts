@@ -16,13 +16,21 @@
  * unresolved event.
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, resolve, relative, isAbsolute, sep } from "node:path";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { hostname, userInfo } from "node:os";
 import { GnomonConfig, recomputeManifest } from "./config.js";
 import { AuditTrail, resolveAudit, verifyTrail, type AuditRecord } from "./audit.js";
 import { harnessBuild } from "./build.js";
+import {
+  recordDirsOf,
+  snapshotRecords,
+  classifyChanges,
+  noteOwnWrite,
+  type RecordChange,
+  type TamperFinding,
+} from "./record_guard.js";
 
 function sealed(
   config: GnomonConfig,
@@ -110,7 +118,7 @@ export function unresolvedTamper(config: GnomonConfig): TamperEvent[] {
       }
     }
     const res = records.find((r) => r.kind === "record_tamper_resolved");
-    if (res && verifyTrail(file).ok && verifyTrail(file).sealed) {
+    if (res && resolutionCounts(config, file, res)) {
       const t = res.tamper as { trail?: unknown; seq?: unknown; hash?: unknown } | undefined;
       if (t) resolved.add(`${String(t.trail)}#${String(t.seq)}#${String(t.hash)}`);
     }
@@ -119,18 +127,68 @@ export function unresolvedTamper(config: GnomonConfig): TamperEvent[] {
 }
 
 /**
+ * Whether the surface declares a signer that needs a person for every
+ * signature: `[audit.attest] person_present = true`, alongside a `sign`
+ * command and a verifier. The operator says so; gnomon cannot tell a
+ * touch-to-sign key from a key file, and the docs say which is which.
+ */
+export function personPresentSigner(config: GnomonConfig): boolean {
+  const raw = (config.config as { audit?: { attest?: { person_present?: unknown } } } | undefined)?.audit?.attest;
+  const a = resolveAudit(config).attest;
+  return raw?.person_present === true && Boolean(a?.enabled && (a.verify || a.public_key));
+}
+
+/**
+ * A resolution counts when its trail is sealed and verifies, and it was
+ * authorised the way it says: at a terminal, or -- without one -- by a
+ * person-present signer whose signed head covers it.
+ */
+function resolutionCounts(config: GnomonConfig, file: string, res: AuditRecord): boolean {
+  const plain = verifyTrail(file);
+  if (!plain.ok || !plain.sealed) return false;
+  if (res.authorised_by === "tty") return res.interactive === true;
+  if (res.authorised_by === "person_present_signer") {
+    const attest = resolveAudit(config).attest;
+    if (!attest) return false;
+    const v = verifyTrail(file, { attest });
+    return v.attestation?.status === "signed" && v.attestation.unattested === 0;
+  }
+  return false;
+}
+
+/**
  * A person resolving a tamper event: `gnomon audit resolve <trail>:<seq>`.
- * Refused inside an agent session (GNOMON_AGENT_SESSION).
+ *
+ * Re-review cleared a block with `env -u GNOMON_AGENT_SESSION gnomon audit
+ * resolve …` from the agent's bash. So the marker is not the gate; a person
+ * is. Allowed when `interactive` -- the CLI passes whether stdin AND stdout
+ * are a terminal, which a tool subprocess's pipes are not -- or, without a
+ * terminal, when the surface declares a person-present signer and that signer
+ * signs the resolution. Recorded: `interactive`, and `authorised_by`.
+ *
+ * Limits, said plainly: a process can allocate a pseudo-terminal (`script`),
+ * and a library caller can pass `interactive: true`. Against an agent that
+ * would do either, the person-present signer or the kernel sandbox is the
+ * guarantee (docs/CONTRACTS.md §14).
  */
 export function resolveTamper(
   config: GnomonConfig,
   ref: { trail: string; seq: number },
-  reason: string
+  reason: string,
+  auth: { interactive: boolean } = { interactive: false }
 ): { record: AuditRecord; trail: string } {
   if (process.env.GNOMON_AGENT_SESSION) {
     throw new Error(
       `Not resolved: this is running inside an agent session (GNOMON_AGENT_SESSION=${process.env.GNOMON_AGENT_SESSION}). ` +
         `Resolving a change to gnomon's records is a person's decision.`
+    );
+  }
+  const signer = personPresentSigner(config);
+  if (!auth.interactive && !signer) {
+    throw new Error(
+      "Not resolved: resolving needs a person -- run it at a terminal (stdin and stdout), or declare a " +
+        "signer that needs a person for each signature ([audit.attest] person_present = true, with " +
+        "ssh-add -c, a FIDO or hardware key, or a passphrase prompt)."
     );
   }
   if (!reason.trim()) throw new Error("Not resolved: give a --reason; the resolution is a record, and says why.");
@@ -142,13 +200,152 @@ export function resolveTamper(
   } catch {
     user = process.env.USER ?? process.env.USERNAME;
   }
+  const authorised_by = auth.interactive ? "tty" : "person_present_signer";
   const out = sealed(config, "tamper-resolved", "record_tamper_resolved", {
     tamper: { trail: event.trail, seq: event.seq, hash: event.hash },
     reason,
     by: "cli",
+    interactive: auth.interactive,
+    authorised_by,
     user,
     host: hostname(),
   });
   if (!out) throw new Error("Not resolved: the resolution could not be written.");
+  if (!resolutionCounts(config, out.trail, out.record)) {
+    throw new Error(
+      "Not resolved: the person-present signer did not sign the resolution, so it does not count. The record stays, unsigned."
+    );
+  }
+  writeCheckpoint(config);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Checkpoints: the records as a session left them
+// ---------------------------------------------------------------------------
+
+/** Where checkpoints live, inside the audit directory. */
+export const CHECKPOINT_DIR = "checkpoints";
+
+/**
+ * Write the state of the record directories, for the next session and for
+ * `skill accept` to compare against.
+ *
+ * Re-review: a background job a session left (`nohup sh -c 'sleep 30; …' &`)
+ * wrote after the session's last check, and the next session's guard took
+ * the result as its baseline. Nothing ever compared the two. Now the last
+ * snapshot of a session is kept -- path -> state, in `<name>.files.json` --
+ * and its sha256 sits in the `session_end` of a sealed `checkpoint-*.jsonl`
+ * trail, which a declared signer signs. A changed or deleted record since
+ * then, a `tamper-*.jsonl` included, is a tamper event.
+ */
+export function writeCheckpoint(config: GnomonConfig): { trail: string; map: string } | null {
+  const root = resolve(config.gnomonDir, "..");
+  const settings = { ...resolveAudit(config), enabled: true, chain: true };
+  const snap = snapshotRecords(recordDirsOf(config));
+  const map: Record<string, string> = {};
+  for (const [p, st] of [...snap.files.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    map[shown(root, p)] = st.link === undefined ? st.key : `${st.key}->${st.link}`;
+  }
+  const id = `checkpoint-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}-${randomBytes(3).toString("hex")}`;
+  // In a subdirectory of their own, so a session's trail stays the only
+  // .jsonl at the top of the audit directory for anything that lists it.
+  const dir = join(settings.dir, CHECKPOINT_DIR);
+  mkdirSync(dir, { recursive: true });
+  const mapFile = join(dir, `${id}.files.json`);
+  const body = `${JSON.stringify(map)}\n`;
+  writeFileSync(mapFile, body, "utf-8");
+  noteOwnWrite(mapFile);
+  const trail = new AuditTrail({ ...settings, dir }, id);
+  trail.write("session_start", {
+    surface_hash: recomputeManifest(config.gnomonDir).surface_hash,
+    harness: harnessBuild(),
+    cwd: process.cwd(),
+    mode: "checkpoint",
+  });
+  trail.write("session_end", {
+    records_digest: createHash("sha256").update(body).digest("hex"),
+    records_count: Object.keys(map).length,
+    records_map: `${id}.files.json`,
+    truncated: snap.truncated,
+  });
+  return trail.path ? { trail: trail.path, map: mapFile } : null;
+}
+
+/**
+ * The newest checkpoint that can be trusted: sealed, chain verified, its map
+ * matching the digest in its session_end, and -- when the surface declares a
+ * signer -- covered by signed heads. A newer one that fails any of those is
+ * skipped, so a forged checkpoint cannot replace a real one.
+ */
+function latestCheckpoint(config: GnomonConfig): { trail: string; map: Record<string, string>; own: string[] } | null {
+  const dir = join(resolveAudit(config).dir, CHECKPOINT_DIR);
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return null;
+  }
+  const attest = resolveAudit(config).attest;
+  const signer = Boolean(attest?.enabled && (attest.verify || attest.public_key));
+  for (const f of names.filter((n) => /^checkpoint-.*\.jsonl$/.test(n)).sort().reverse()) {
+    const file = join(dir, f);
+    const v = verifyTrail(file, signer && attest ? { attest } : {});
+    if (!v.ok || !v.sealed) continue;
+    if (signer && (v.attestation?.status !== "signed" || v.attestation.unattested > 0)) continue;
+    let end: AuditRecord | undefined;
+    try {
+      end = readFileSync(file, "utf-8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as AuditRecord)
+        .find((r) => r.kind === "session_end");
+    } catch {
+      continue;
+    }
+    const mapName = typeof end?.records_map === "string" ? end.records_map : "";
+    if (!mapName || mapName.includes("/") || mapName.includes("\\")) continue;
+    let body: string;
+    try {
+      body = readFileSync(join(dir, mapName), "utf-8");
+    } catch {
+      continue;
+    }
+    if (createHash("sha256").update(body).digest("hex") !== end!.records_digest) continue;
+    const own = [file, join(dir, mapName)];
+    if (attest) own.push(join(attest.dir, f));
+    return { trail: file, map: JSON.parse(body) as Record<string, string>, own };
+  }
+  return null;
+}
+
+/**
+ * The records against the newest trusted checkpoint: removed or modified
+ * files are tampering, added gnomon trails are notices (classifyChanges).
+ * Null when there is no checkpoint yet, or nothing differs.
+ */
+export function compareWithCheckpoint(
+  config: GnomonConfig,
+  when: "since_last_session" | "at_accept" = "since_last_session"
+): TamperFinding | null {
+  const cp = latestCheckpoint(config);
+  if (!cp) return null;
+  const root = resolve(config.gnomonDir, "..");
+  const snap = snapshotRecords(recordDirsOf(config));
+  const own = new Set(cp.own.map((p) => resolve(p)));
+  const now = new Map<string, string>();
+  for (const [p, st] of snap.files) {
+    if (own.has(resolve(p))) continue;
+    now.set(shown(root, p), st.link === undefined ? st.key : `${st.key}->${st.link}`);
+  }
+  const abs = (rel: string) => (isAbsolute(rel) ? rel : join(root, rel));
+  const all: RecordChange[] = [];
+  for (const [rel, key] of Object.entries(cp.map)) {
+    if (!now.has(rel)) all.push({ path: abs(rel), change: "removed" });
+    else if (now.get(rel) !== key) all.push({ path: abs(rel), change: "modified" });
+  }
+  for (const rel of now.keys()) if (!(rel in cp.map)) all.push({ path: abs(rel), change: "added" });
+  if (all.length === 0) return null;
+  const { changes, notices } = classifyChanges(all);
+  return changes.length || notices.length ? { when, changes, notices } : null;
 }

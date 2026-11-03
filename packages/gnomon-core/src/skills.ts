@@ -28,13 +28,14 @@ import {
   renameSync,
   rmSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { hostname, userInfo } from "node:os";
 import { GnomonConfig, parseToml, recomputeManifest, manifestHash } from "./config.js";
 import { AuditTrail, resolveAudit, type AuditRecord } from "./audit.js";
 import { harnessBuild } from "./build.js";
-import { unresolvedTamper } from "./record_tamper.js";
+import { unresolvedTamper, compareWithCheckpoint, writeTamperRecord, writeCheckpoint } from "./record_tamper.js";
+import { describeChanges } from "./record_guard.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -467,6 +468,18 @@ export function acceptSkill(
 ): SkillDecision {
   assertSkillId(id);
   {
+    // The records against the last checkpoint a session left: a change in
+    // the gap between sessions -- a background job, a deleted tamper trail --
+    // is recorded here as a tamper event, and then blocks like any other.
+    const since = compareWithCheckpoint(config, "at_accept");
+    if (since?.changes.length) {
+      writeTamperRecord(config, {
+        when: since.when,
+        changes: describeChanges(resolve(config.gnomonDir, ".."), since.changes),
+        changed: since.changes.length,
+      });
+      writeCheckpoint(config);
+    }
     const open = unresolvedTamper(config);
     if (open.length > 0) {
       throw new RecordTamperRefusal(

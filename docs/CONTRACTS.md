@@ -734,54 +734,99 @@ ids that were not on disk before.
 pointing at those four records, and the same five refusals inside one
 session yield none.
 
-## 14. Record tamper — audit kinds `record_tamper`, `record_tamper_resolved`
+## 14. Record tamper — audit kinds `record_tamper`, `record_tamper_resolved`, `record_notice`
 
 The `record` rule (§10) refuses the writes it can see. Nothing guarantees that
 a pattern check over a command's text sees every write. The **record guard**
 therefore looks at the records themselves.
 
-**When it looks.** It snapshots every record directory (`.gnomon-audit/`,
+**Within a session.** It snapshots every record directory (`.gnomon-audit/`,
 `.gnomon-trials/`, a custom `[audit] dir`):
 - before each batch of tool calls;
 - after every tool call that can write, which is every tool except the
   read-only ones;
 - at the end of a `gnomon task` run and of an interactive session.
 
-**What it records per file.** Size, mtime, ctime and inode, read with `lstat`,
-so a symlink is a file of its own. ctime moves on every content change and
-cannot be set from user space. The 16 newest files up to 256 KiB are also
-hashed.
+Each snapshot records, per file, size, mtime, ctime and inode (via `lstat`, so
+a symlink is a file of its own). The 16 newest files up to 256 KiB are also
+hashed. gnomon's own writer notes the state of every file it appends to. Before
+each append it checks that the file is still in that state, so a foreign change
+cannot be laundered by gnomon's next write.
 
-**What counts as tampering.** Any change that gnomon's own record writer did
-not make. gnomon's writer notes the state of every file it appends to. Before
-each append it checks that the file is still in that state, so a foreign
-change cannot be laundered by gnomon's next write.
+**Between sessions: checkpoints.** At the end of a session, gnomon writes the
+state of the record directories (path → state) to `checkpoints/checkpoint-*.files.json`.
+The map's sha256 goes in the `session_end` record (`records_digest`,
+`records_count`, `records_map`) of a sealed `checkpoints/checkpoint-*.jsonl` trail, which a
+declared signer signs. Two places compare the records with the newest
+checkpoint that can be trusted:
+- the first tool batch of the next session;
+- `gnomon skill accept`.
 
-**When a change is found:**
-- a `record_tamper` record is written, both in the session trail (when
-  `[audit]` is on) and always in a sealed trail of its own. Keys: `when`
-  (`during_call`, `between_calls`, `turn_end`), `tool` and `target` (the
-  call, when one is to blame), `changes` (`{path, change}` with `added`,
-  `modified` or `removed`, capped at 50), `changed` (the count), `session` and
-  `role`;
-- the turn stops with `stop_reason: "tamper"` and code 3 (`refused_by_gate`);
-- `gnomon skill accept` refuses with exit 3 while any event is unresolved;
-- `gnomon audit tamper` lists them, and exits 3 while any remain.
+A checkpoint is trusted when it is sealed, its chain verifies, its map matches
+the digest, and, when a signer is declared, it is covered by signed heads. A
+changed or removed file since then is a tamper event (`when:
+"since_last_session"` or `"at_accept"`). That includes a deleted
+`tamper-*.jsonl`. The next session is not stopped for it, because it did not
+do it. The event is recorded, and accept is blocked.
 
-**Resolving one.** `gnomon audit resolve <trail>:<seq> --reason "…"` is a
-person's acknowledgement. It writes `record_tamper_resolved` with keys
-`tamper` (`{trail, seq, hash}`), `reason`, `by: "cli"`, `user` and `host`, in a
-sealed trail. It is refused inside an agent session. A resolution only counts
-from a trail whose chain verifies.
+**Tampering and notices.**
+- **Tampering:** a record modified or removed, or an added file that is not a
+  gnomon trail. When gnomon finds it:
+  - a `record_tamper` record is written, both in the session trail (when
+    `[audit]` is on) and always in a sealed trail of its own. Keys: `when`
+    (`during_call`, `between_calls`, `turn_end`, `since_last_session`,
+    `at_accept`), `tool` and `target` (the call, when one is to blame),
+    `changes` (`{path, change}` with `added`, `modified` or `removed`, capped
+    at 50), `changed` (the count), `session` and `role`;
+  - during a session, the turn stops with `stop_reason: "tamper"` and code 3;
+  - `gnomon skill accept` refuses with exit 3 while any event is unresolved;
+  - `gnomon audit tamper` lists them and exits 3 while any remain.
+- **Notice:** a NEW gnomon trail written by another process, such as the
+  operator's own CLI in a second terminal, a concurrent session or a killed
+  one. A gnomon trail here means a chain that verifies and starts with
+  `session_start`. Its heads file, a checkpoint's map, and the trial report
+  files its `skill_trial` record cites count as part of it. A notice is
+  written as `record_notice` (keys `when`, `tool`, `target`, `added`,
+  `reason`, `session`), with a warning. It does not stop the turn, because
+  gnomon adds trails and never rewrites one.
 
-**What it cannot see:**
-- a change made and undone within a single tool call;
-- a rewrite that preserves size, mtime, ctime and inode, which needs root, a
-  clock change or a raw device;
-- writes past its walk bound (200,000 entries), reported as `truncated`.
+**Resolving an event** is a person's act:
+`gnomon audit resolve <trail>:<seq> --reason "…"`. It is refused inside an
+agent session. It also needs one of:
+- **stdin and stdout both a terminal.** A tool subprocess has pipes.
+- **a person-present signer:** `[audit.attest] person_present = true`, with a
+  `sign` command and a verifier. That signer must sign the resolution, or it
+  does not count.
 
-Another gnomon process writing the same directory at the same time (two
-sessions in one repository) also shows up as a change. That is a known false
-positive, and resolving it is a person's call. The kernel sandbox (`exec os`)
-is what keeps the agent away from the records in the first place.
+The record `record_tamper_resolved` has keys `tamper` (`{trail, seq, hash}`),
+`reason`, `by: "cli"`, `interactive`, `authorised_by` (`tty` or
+`person_present_signer`), `user` and `host`. A resolution counts only when its
+trail verifies and it was authorised the way it says.
 
+**Threat model, stated once.**
+- **Against a careless or accidental agent**, these protections both guard and
+  make tampering visible: the `record` rule's patterns, this guard, the
+  checkpoints, and the records it writes.
+- **Against a hostile one** that sets out to get round them, the guarantee is a
+  person-present signer (§11) or the kernel sandbox (`exec os`, #74), which
+  keeps the agent away from the records and the key.
+
+**Documented limits:**
+- **A change made and undone within one tool call** is not seen.
+- **A rewrite that preserves size, mtime, ctime and inode** is not seen. On
+  Linux and macOS that needs root, a clock change or a raw device. **On
+  Windows an ordinary process can set a file's ChangeTime**
+  (`SetFileInformationByHandle`), so the limit is reachable there without
+  privilege. Only the 16 newest small files are also hashed.
+- **A rollback:** deleting the newest checkpoint together with everything
+  written after it restores the previous checkpoint's state, and nothing here
+  can tell. Detecting that needs an anchor off the machine.
+- **A pseudo-terminal** (`script`) satisfies the terminal check, and a library
+  caller can claim one. A person-present signer is what holds against that.
+- **A hand-built chain added as a new trail** earns a notice, not a stop. It is
+  visible, and it is not evidence by itself (#109 requires a signed head).
+- **False positives.** Two gnomon processes rewriting the same file look like
+  tampering: `gnomon guard` appending to a trail while a session runs, or a
+  session killed after a mid-run checkpoint. Resolving them is a person's
+  call.
+- **The walk stops at 200,000 entries**, reported as `truncated`.

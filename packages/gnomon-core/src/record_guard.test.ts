@@ -5,12 +5,14 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, existsSync, symlinkSync, readdirSync } from "node:fs";
+import { generateKeyPairSync } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { AuditTrail, type ResolvedAudit, type AuditRecord } from "./audit.js";
 import { RecordGuard, snapshotRecords, foreignChanges, recordDirsOf, SNAPSHOT_LIMITS } from "./record_guard.js";
-import { unresolvedTamper, resolveTamper, writeTamperRecord } from "./record_tamper.js";
+import { unresolvedTamper, resolveTamper, writeTamperRecord, writeCheckpoint, compareWithCheckpoint } from "./record_tamper.js";
 import { loadConfig } from "./config.js";
 import { runTask } from "./prompt_loop.js";
 import { acceptSkill, proposeSkill, RecordTamperRefusal } from "./skills.js";
@@ -170,10 +172,14 @@ describe("a tool call that changes gnomon's records", () => {
     expect(err).toBeInstanceOf(RecordTamperRefusal);
     const ref = { trail: t.trail.slice(root.length + 1).replace(/\\/g, "/"), seq: t.record.seq };
     process.env.GNOMON_AGENT_SESSION = "s-agent";
-    expect(() => resolveTamper(config, ref, "looked, it was me")).toThrow(/agent session/);
+    expect(() => resolveTamper(config, ref, "looked, it was me", { interactive: true })).toThrow(/agent session/);
     delete process.env.GNOMON_AGENT_SESSION;
-    expect(() => resolveTamper(config, ref, "")).toThrow(/--reason/);
-    resolveTamper(config, ref, "reviewed: a test of the guard");
+    // Round-4 review: `env -u GNOMON_AGENT_SESSION` from the agent's bash
+    // resolved it. Without a terminal or a person-present signer, refused.
+    expect(() => resolveTamper(config, ref, "looks fine")).toThrow(/needs a person/);
+    expect(() => resolveTamper(config, ref, "", { interactive: true })).toThrow(/--reason/);
+    const r = resolveTamper(config, ref, "reviewed: a test of the guard", { interactive: true });
+    expect(r.record).toMatchObject({ interactive: true, authorised_by: "tty", by: "cli" });
     expect(unresolvedTamper(config)).toEqual([]);
     expect(acceptSkill(config, "fix-it").record?.kind).toBe("skill_accept");
   });
@@ -208,3 +214,107 @@ describe("ln -s resolves its source from the link's directory", () => {
     expect(bashPrecheck({ command: "ln -s ../lib sub/lib" }, ctx)).toBeNull();
   });
 });
+
+describe("between sessions: checkpoints (round 4)", () => {
+  it("a write after a session ended is a tamper event at the next session and at accept", async () => {
+    // Round-4 review: a background job a session left wrote after its last
+    // check, and the next session's guard took the result as its baseline.
+    // Fails before checkpoints: nothing compared the two.
+    surface();
+    mkdirSync(audit(), { recursive: true });
+    writeFileSync(join(audit(), "old.jsonl"), "{}\n");
+    const config = loadConfig(root);
+    proposeSkill(config, { name: "fix it", body: "x" });
+    expect(writeCheckpoint(config)).not.toBeNull();
+    expect(compareWithCheckpoint(config)).toBeNull();
+    // The job writes now, between sessions.
+    writeFileSync(join(audit(), "old.jsonl"), '{}\n{"forged":1}\n');
+    writeFileSync(join(audit(), "trial-forged.jsonl"), "{}\n");
+    const since = compareWithCheckpoint(config);
+    expect(since?.changes.map((c) => [c.change, c.path.slice(root.length + 1).replace(/\\/g, "/")]).sort()).toEqual([
+      ["added", ".gnomon-audit/trial-forged.jsonl"],
+      ["modified", ".gnomon-audit/old.jsonl"],
+    ]);
+    // The next session records it (and is not stopped: it did not do it).
+    const record = await withBash("echo hi > notes.txt", () => runTask(loadConfig(root), "go", { role: "implement", yes: true }));
+    expect(record.stop_reason).toBe("answered");
+    const open = unresolvedTamper(loadConfig(root));
+    expect(open.some((e) => e.record.when === "since_last_session")).toBe(true);
+    expect(() => acceptSkill(loadConfig(root), "fix-it")).toThrow(RecordTamperRefusal);
+  }, 30_000);
+
+  it("deleting a tamper trail is itself a tamper event at accept", () => {
+    surface();
+    const config = loadConfig(root);
+    proposeSkill(config, { name: "fix it", body: "x" });
+    const t = writeTamperRecord(config, { when: "during_call", tool: "bash", changes: [] })!;
+    writeCheckpoint(config); // the session ended, as runTask does
+    rmSync(t.trail);
+    expect(unresolvedTamper(config)).toEqual([]);
+    let err: unknown;
+    try {
+      acceptSkill(config, "fix-it");
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(RecordTamperRefusal);
+    const open = unresolvedTamper(config);
+    expect(open).toHaveLength(1);
+    expect(JSON.stringify(open[0]!.record.changes)).toMatch(/tamper-[^"]*","change":"removed"/);
+  });
+
+  it("a new gnomon trail another process wrote is a notice, not a stop", () => {
+    // Round-4 review: the operator's own `gnomon skill reject` from a second
+    // terminal stopped a live session. A modified or removed file still does.
+    surface();
+    mkdirSync(audit(), { recursive: true });
+    writeFileSync(join(audit(), "kept.jsonl"), "{}\n");
+    const live = RecordGuard.for(loadConfig(root));
+    // Another process: a child node writing a sealed trail with gnomon's own writer.
+    const here = fileURLToPath(new URL(".", import.meta.url));
+    const script =
+      `import { AuditTrail } from ${JSON.stringify(join(here, "audit.ts"))};\n` +
+      `const t = new AuditTrail({ enabled: true, dir: ${JSON.stringify(audit())}, record: "metadata", redact: [], chain: true, invalid_redact: [] }, "skill-other");\n` +
+      `t.write("session_start", { mode: "skill" }); t.write("skill_reject", { skill: "x" }); t.write("session_end", {});\n`;
+    const r = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { encoding: "utf-8", cwd: join(here, "..") });
+    expect(r.status, r.stderr).toBe(0);
+    const f = live.check("between_calls");
+    expect(f?.changes).toEqual([]);
+    expect(f?.notices.map((c) => c.path.slice(root.length + 1).replace(/\\/g, "/"))).toEqual([".gnomon-audit/skill-other.jsonl"]);
+    // Rewriting an existing file is still tampering.
+    appendFileSync(join(audit(), "kept.jsonl"), "{}\n");
+    expect(live.check("between_calls")?.changes.map((c) => c.change)).toEqual(["modified"]);
+  }, 60_000);
+
+  it("a person-present signer can authorise a resolution without a terminal; a signer that does not sign cannot", () => {
+    const keys = generateKeyPairSync("ed25519");
+    const signer = (good: boolean) => {
+      const f = join(root, good ? "good.mjs" : "bad.mjs");
+      writeFileSync(
+        f,
+        good
+          ? `import { readFileSync } from "node:fs";\nimport { createPrivateKey, sign } from "node:crypto";\nconst k = createPrivateKey(${JSON.stringify(keys.privateKey.export({ format: "pem", type: "pkcs8" }).toString())});\nprocess.stdout.write(sign(null, readFileSync(0), k).toString("base64"));\n`
+          : `process.stdout.write("bm90LWEtc2lnbmF0dXJl");\n`
+      );
+      return `"${process.execPath}" "${f}"`;
+    };
+    const PUB = keys.publicKey.export({ format: "pem", type: "spki" }).toString();
+    const cfgWith = (good: boolean) =>
+      ({
+        gnomonDir: join(root, ".gnomon"),
+        config: { audit: { attest: { sign: signer(good), public_key: PUB, person_present: true } } },
+        policy: {},
+      }) as never;
+    mkdirSync(join(root, ".gnomon"), { recursive: true });
+    const bad = cfgWith(false);
+    const t1 = writeTamperRecord(bad, { when: "during_call", changes: [] })!;
+    const ref1 = { trail: t1.trail.slice(root.length + 1).replace(/\\/g, "/"), seq: t1.record.seq };
+    expect(() => resolveTamper(bad, ref1, "reviewed")).toThrow(/did not sign/);
+    expect(unresolvedTamper(bad)).toHaveLength(1);
+    const good = cfgWith(true);
+    const r = resolveTamper(good, ref1, "reviewed with a touch");
+    expect(r.record).toMatchObject({ interactive: false, authorised_by: "person_present_signer" });
+    expect(unresolvedTamper(good)).toEqual([]);
+  }, 30_000);
+});
+

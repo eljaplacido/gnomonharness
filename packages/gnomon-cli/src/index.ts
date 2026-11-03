@@ -1335,7 +1335,9 @@ async function cmdAudit(args: CliArgs): Promise<void> {
       process.exit(1);
     }
     try {
-      const out = resolveTamper(config, { trail: m[1]!, seq: Number(m[2]) }, reason);
+      // A person at a terminal: stdin AND stdout. A tool subprocess has pipes.
+      const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+      const out = resolveTamper(config, { trail: m[1]!, seq: Number(m[2]) }, reason, { interactive });
       console.log(`Resolved ${ref}. Recorded in ${out.trail} (seq ${out.record.seq}).`);
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));

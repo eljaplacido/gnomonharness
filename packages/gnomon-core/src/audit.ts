@@ -202,6 +202,10 @@ export type AuditKind =
   // which files. And a person's resolution of one (`gnomon audit resolve`).
   | "record_tamper"
   | "record_tamper_resolved"
+  // A new gnomon trail another process added to the records -- the
+  // operator's own CLI in a second terminal, a concurrent or killed session.
+  // A warning, not tampering: gnomon adds trails and never rewrites one.
+  | "record_notice"
   | "session_end";
 
 export interface AuditRecord {
