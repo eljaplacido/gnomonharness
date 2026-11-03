@@ -492,6 +492,12 @@ export async function runTrial(
   const content = readFileSync(proposal);
   const role = spec.role ?? resolveRouting(config).default;
 
+  // The one profile the trial runs under: the spec's `model_profile`, else a
+  // profile the caller chose (`gnomon skill trial --profile X`), else the
+  // surface's own default. Trust, the billed check and every cell use THIS
+  // one. Round-3 review: with `--profile safe` and no spec profile, trust
+  // and billing saw "safe" while the cells loaded the default ("evil").
+  const profile = spec.model_profile ?? (config.profile?.overridden ? config.profile.requested : undefined);
   // Trust, settled on what the cells will actually run. A clamped surface is
   // not the surface the report would name.
   const cellConfig = spec.model_profile ? loadConfig(root, spec.model_profile) : config;
@@ -501,10 +507,10 @@ export async function runTrial(
   const trust = opts.settleTrust?.(cellConfig);
   if (trust?.decision === "clamped") {
     throw new TrialAbort(
-      `This surface${spec.model_profile ? ` under profile "${spec.model_profile}"` : ""} grants ` +
+      `This surface${profile ? ` under profile "${profile}"` : ""} grants ` +
         `${trust.grants.join(", ")} beyond gnomon's defaults and this machine has not trusted it, so ` +
         `every cell would run clamped while the report named the declared surface. Trust it first ` +
-        `(\`gnomon trust grant\`${spec.model_profile ? ` --profile ${spec.model_profile}` : ""}, or --trust).`
+        `(\`gnomon trust grant\`${profile ? ` --profile ${profile}` : ""}, or --trust).`
     );
   }
 
@@ -651,7 +657,7 @@ export async function runTrial(
               cell.invalid_reason = "setup did not exit 0";
             } else {
               const t0 = Date.now();
-              const rec = await opts.runCell(wt.dir, task.prompt, { role, profile: spec.model_profile });
+              const rec = await opts.runCell(wt.dir, task.prompt, { role, profile });
               cell.duration_ms = rec.volatile?.duration_ms ?? Date.now() - t0;
               cell.code = rec.code;
               cell.stop_reason = rec.stop_reason;
@@ -692,7 +698,7 @@ export async function runTrial(
       }
     }
 
-    const report = summarise(spec, opts.skill, content, role, baseHash, skillHash, differ, cells, planned, pair, requestsUsed, status, pinned);
+    const report = { ...summarise(spec, opts.skill, content, role, baseHash, skillHash, differ, cells, planned, pair, requestsUsed, status, pinned), profile };
     return { report: { ...report, trust: trust?.decision ?? null, leftovers }, cells };
   } finally {
     for (const sb of [...live]) done(sb);

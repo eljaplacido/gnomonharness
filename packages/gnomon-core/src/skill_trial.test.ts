@@ -64,6 +64,10 @@ function project(
     trialExtra?: string;
     /** The role [trial] runs; "implement" by default. */
     role?: string;
+    /** More .gnomon/profiles/<name>.toml bodies. */
+    profiles?: Record<string, string>;
+    /** Lines added to [defaults], e.g. role_profile. */
+    defaultsExtra?: string;
     /** Replaces the [thresholds] body. */
     thresholds?: string;
   } = {}
@@ -74,7 +78,7 @@ function project(
   };
   put(
     ".gnomon/config.toml",
-    `[defaults]\napproval = "on_write"\n\n[endpoints.local]\nurl = "${opts.url ?? "http://127.0.0.1:9/api/chat"}"\nkind = "ollama"\n\n` +
+    `[defaults]\napproval = "on_write"\n${opts.defaultsExtra ?? ""}\n[endpoints.local]\nurl = "${opts.url ?? "http://127.0.0.1:9/api/chat"}"\nkind = "ollama"\n\n` +
       `[resilience]\nattempts = 1\ntransport_grace_ms = 0\n`
   );
   put(".gnomon/roles.toml", opts.roles ?? `[roles.implement]\nmodel = "stub"\nendpoint = "local"\ntools = ['read', 'write']\n`);
@@ -98,6 +102,7 @@ function project(
   // worktrees out with CRLF and HEAD's surface hashes differently from the
   // checkout's -- which the trial refuses, rightly (see the test below).
   if (opts.profile) put(".gnomon/profiles/evil.toml", opts.profile);
+  for (const [name, body] of Object.entries(opts.profiles ?? {})) put(`.gnomon/profiles/${name}.toml`, body);
   if (!opts.autocrlf) put(".gitattributes", ".gnomon/** text eol=lf\n");
   git("init", "-q");
   git("add", "-A");
@@ -316,6 +321,43 @@ describe("gnomon skill trial", () => {
     } finally {
       rmSync(store, { force: true });
     }
+  }, 60_000);
+
+  it("a profile chosen by the caller (--profile) is the one trust, billing and every cell use", async () => {
+    // Round-3 review: `gnomon skill trial --profile safe`, no spec profile,
+    // config.toml role_profile = "evil". Trust and the billed check saw
+    // "safe"; the cells loaded the default, "evil".
+    project({
+      tasks: 1,
+      attempts: 1,
+      check: `node -e "process.exit(0)"`,
+      roles: `[roles.verifier]\nmodel = "stub"\nendpoint = "local"\ntools = ['read']\n`,
+      role: "verifier",
+      defaultsExtra: `role_profile = "evil"\n`,
+      profiles: {
+        evil: `[profile]\nname = "evil"\n\n[roles.verifier]\ntools = ['read', 'write', 'bash']\nbash_allow = ['.*']\nwrite_allow = []\n`,
+        safe: `[profile]\nname = "safe"\n\n[roles.verifier]\ntools = ['read']\n`,
+      },
+    });
+    const profiles: Array<string | undefined> = [];
+    const settledOn: Array<string | undefined> = [];
+    const inner = tokens(() => 1);
+    const { report } = await runTrial(loadConfig(root, "safe"), {
+      skill: "fix-it",
+      settleTrust: (c) => {
+        settledOn.push(c.profile?.requested);
+        return undefined;
+      },
+      runCell: async (wt, p, o) => {
+        profiles.push(o.profile);
+        // What the CLI's runner loads: the cell must be "safe", not "evil".
+        expect(loadConfig(wt, o.profile).roles.verifier?.tools).toEqual(["read"]);
+        return inner(wt, p, o);
+      },
+    });
+    expect(settledOn).toEqual(["safe"]);
+    expect(profiles).toEqual(["safe", "safe"]);
+    expect(report.profile).toBe("safe");
   }, 60_000);
 
   it("cells are private clones: a cell's git branch, config and stash stay out of the repository", async () => {

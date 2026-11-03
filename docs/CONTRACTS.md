@@ -753,8 +753,12 @@ cell. A clone that cannot be removed is listed in `leftovers` and never
 aborts the trial. On SIGINT or SIGTERM, every clone still on disk is removed
 before the signal takes effect.
 
-**Trust** is settled once, on this checkout under the spec's `model_profile`,
-the configuration the cells actually run. If it was clamped, the trial refuses
+**Trust** is settled once, on this checkout under the trial's profile, which
+is the configuration the cells actually run. That profile is the spec's
+`model_profile`. If the spec names none, it is the profile the caller chose
+(`gnomon skill trial --profile X`). Failing both, it is the surface's
+default. Trust, the billed-endpoint check and every cell all use that one
+profile. If it was clamped, the trial refuses
 to start: the cells would run the scaffold's defaults while the report named
 the declared surface. The report's `trust` is the decision, or `null` when the
 surface grants nothing beyond the scaffold. A `model_profile` that doesn't
