@@ -815,6 +815,7 @@ api_key_env = "OPENAI_API_KEY"   # the NAME of the variable, never the key
 | `gnomon acp [--role R] [--profile N]` | Serves the Agent Client Protocol on stdin/stdout for an editor. Same surface, roles, approvals and audit as `prompt`. | Zed, JetBrains IDEs |
 | `gnomon trust [list \| grant \| revoke]` | What this project's `.gnomon/` grants beyond the defaults, and whether this machine trusts it | A repository you did not write |
 | `gnomon audit [show \| verify]` | Lists trails; checks every chain, seal and signature anchor. `verify` exits 1 on a break or when there is nothing to verify. | Review, release gates |
+| `gnomon dashboard [--port N] [--no-open] [--dir P]` | A read-only command center in the browser on 127.0.0.1: projects, sessions as a timeline, refusals by rule, audit verification, contracts, token measurements (alias `ui`). Writes nothing. | Reviewing what happened without reading JSONL |
 | `gnomon sessions` | Saved interactive sessions, newest last | Find one to resume |
 | `gnomon skill [list \| accept ID \| reject ID]` | Active skills and the proposals the agent made | Reviewing what it learned |
 | `gnomon loop [list \| status \| dry-run N \| run N \| install N \| uninstall N \| reset N \| kill]` | Cron-scheduled guard/act loops declared in `.gnomon/loops/` (alias `loops`) | Unattended supervision |
@@ -1039,6 +1040,17 @@ chain = true
 - A redaction pattern that does not compile fails **open** (gnomon warns).
   Do not write `(?i)`; matching is already case-insensitive.
 - This is an evidence layer, not a compliance claim.
+
+**Reading the trail in a browser.** `gnomon dashboard` (alias `ui`) serves a
+read-only page on 127.0.0.1 over the same records: each session as a timeline
+with a lane per role, every refusal grouped under the rule that made it, the
+check verdicts, and a **Verify chain** button that runs the check
+`gnomon audit verify` runs. It shows metadata only, even for a trail written
+with `record = "full"`, and it writes nothing. The terminal prints a one-use
+sign-in link; press Enter for another. On a machine without a display, forward
+the same port (`ssh -L 4890:127.0.0.1:4890 host`) and start it with
+`--no-open --port 4890`. The projects it lists are this one plus those this
+machine trusts (`gnomon trust grant`); it keeps no list of its own.
 
 ### 7.6 Containment: what it is, and what it is not
 
