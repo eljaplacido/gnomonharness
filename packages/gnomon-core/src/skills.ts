@@ -34,6 +34,7 @@ import { hostname, userInfo } from "node:os";
 import { GnomonConfig, parseToml, recomputeManifest, manifestHash } from "./config.js";
 import { AuditTrail, resolveAudit, type AuditRecord } from "./audit.js";
 import { harnessBuild } from "./build.js";
+import { unresolvedTamper } from "./record_tamper.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -439,6 +440,14 @@ function assertSkillId(id: string): void {
 }
 
 /**
+ * Refused: a skill accepted while gnomon's own records show a change gnomon
+ * did not make (record_guard.ts) that no person has resolved. A trail that
+ * has been tampered with is not evidence for anything, including the trial a
+ * skill is accepted on. The CLI exits 3 (refused_by_gate).
+ */
+export class RecordTamperRefusal extends Error {}
+
+/**
  * Accept a proposal: move it into `.gnomon/skills/`, and record that it
  * happened.
  *
@@ -457,6 +466,16 @@ export function acceptSkill(
   opts: SkillDecisionOptions = {}
 ): SkillDecision {
   assertSkillId(id);
+  {
+    const open = unresolvedTamper(config);
+    if (open.length > 0) {
+      throw new RecordTamperRefusal(
+        `Not accepted: gnomon's own records were changed by something other than gnomon, and ` +
+          `${open.length} such event(s) are unresolved (first: ${open[0]!.trail}:${open[0]!.seq}). ` +
+          `Look at \`gnomon audit tamper\`, then \`gnomon audit resolve <trail>:<seq> --reason "…"\`.`
+      );
+    }
+  }
   const from = join(config.gnomonDir, PROPOSED_DIR, `${id}.md`);
   if (!existsSync(from)) {
     throw new Error(`No proposed skill "${id}". Run \`gnomon skill list\`.`);

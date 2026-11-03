@@ -68,6 +68,7 @@ every `TaskRecord`.
 | `truncated` | the backend cut the reply off at its output limit, and the bounded re-asks did not finish it: a cut text reply stands as the answer (a `result`); cut tool calls in a row end on the `refusal` floor with `stop_detail.repeats` |
 | `apparatus` | the run never reached the model — the surface itself could not be used |
 | `malformed` | replies in a row offered no usable tool call, past `[turn] max_consecutive_malformed` repair turns |
+| `tamper` | a tool call, or something between calls, changed gnomon's own records and gnomon did not make the change; the turn stops with a refusal (3) and a `record_tamper` record |
 
 `apparatus` exists because every failure of that kind previously borrowed
 `answered`, which recorded a run that never started as a turn that concluded.
@@ -732,3 +733,55 @@ ids that were not on disk before.
 `write_allow` refusals of one path pattern yields exactly one candidate,
 pointing at those four records, and the same five refusals inside one
 session yield none.
+
+## 14. Record tamper — audit kinds `record_tamper`, `record_tamper_resolved`
+
+The `record` rule (§10) refuses the writes it can see. Nothing guarantees that
+a pattern check over a command's text sees every write. The **record guard**
+therefore looks at the records themselves.
+
+**When it looks.** It snapshots every record directory (`.gnomon-audit/`,
+`.gnomon-trials/`, a custom `[audit] dir`):
+- before each batch of tool calls;
+- after every tool call that can write, which is every tool except the
+  read-only ones;
+- at the end of a `gnomon task` run and of an interactive session.
+
+**What it records per file.** Size, mtime, ctime and inode, read with `lstat`,
+so a symlink is a file of its own. ctime moves on every content change and
+cannot be set from user space. The 16 newest files up to 256 KiB are also
+hashed.
+
+**What counts as tampering.** Any change that gnomon's own record writer did
+not make. gnomon's writer notes the state of every file it appends to. Before
+each append it checks that the file is still in that state, so a foreign
+change cannot be laundered by gnomon's next write.
+
+**When a change is found:**
+- a `record_tamper` record is written, both in the session trail (when
+  `[audit]` is on) and always in a sealed trail of its own. Keys: `when`
+  (`during_call`, `between_calls`, `turn_end`), `tool` and `target` (the
+  call, when one is to blame), `changes` (`{path, change}` with `added`,
+  `modified` or `removed`, capped at 50), `changed` (the count), `session` and
+  `role`;
+- the turn stops with `stop_reason: "tamper"` and code 3 (`refused_by_gate`);
+- `gnomon skill accept` refuses with exit 3 while any event is unresolved;
+- `gnomon audit tamper` lists them, and exits 3 while any remain.
+
+**Resolving one.** `gnomon audit resolve <trail>:<seq> --reason "…"` is a
+person's acknowledgement. It writes `record_tamper_resolved` with keys
+`tamper` (`{trail, seq, hash}`), `reason`, `by: "cli"`, `user` and `host`, in a
+sealed trail. It is refused inside an agent session. A resolution only counts
+from a trail whose chain verifies.
+
+**What it cannot see:**
+- a change made and undone within a single tool call;
+- a rewrite that preserves size, mtime, ctime and inode, which needs root, a
+  clock change or a raw device;
+- writes past its walk bound (200,000 entries), reported as `truncated`.
+
+Another gnomon process writing the same directory at the same time (two
+sessions in one repository) also shows up as a change. That is a known false
+positive, and resolving it is a person's call. The kernel sandbox (`exec os`)
+is what keeps the agent away from the records in the first place.
+

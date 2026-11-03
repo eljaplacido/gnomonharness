@@ -1824,6 +1824,7 @@ chain = true
 | What was done | A shell call's `tool_call` record keeps the **whole command** in `target`, after `redact`, under either `record` setting: the command is the action, not prompt or response text. A file tool's `target` is its path |
 | Redaction | Patterns scrubbed from any recorded text, and from every recorded command |
 | Not writable by the agent | `write`, `edit` and a shell command's named outputs (hard links, `ln`, git checkout/apply, archive members and more) are refused with rule `record` inside the trail directory (and `.gnomon-trials/`) for every role, whatever `write_allow` says. This is a pattern check, not containment. A path built at run time, a script file's writes and MCP calls are not seen by it. The kernel sandbox (`exec os`) contains those, and `[audit.attest]` makes a forged trail detectable |
+| Changes it did not make | The record guard snapshots the record directories (stat including ctime, plus a hash of the newest files) around every tool call that can write. Any change gnomon's own writer did not make stops the turn as `tamper`, writes a `record_tamper` record, and blocks `gnomon skill accept` until a person runs `gnomon audit resolve` (docs/CONTRACTS.md §14) |
 
 ```bash
 gnomon audit show      # trails
