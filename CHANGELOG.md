@@ -26,6 +26,25 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`gnomon init` says what the machine is, and which local model servers it
+  runs.** A local-first setup needed you to know your VRAM and which port LM
+  Studio uses before gnomon could help. Init (and `launch`'s "No model answers"
+  picker on an existing surface) now prints OS, architecture, CPU cores, RAM,
+  each GPU with its memory, and which of Ollama (:11434), LM Studio (:1234),
+  llama.cpp (:8080) and vLLM (:8000) answer on 127.0.0.1. Step 1 of
+  [docs/design/SETUP-AND-COMMAND-CENTER.md](docs/design/SETUP-AND-COMMAND-CENTER.md).
+  - Read-only: `nvidia-smi`, `rocm-smi` or sysfs, `sysctl` on macOS, and
+    `Win32_VideoController` on Windows without nvidia-smi, each with a deadline
+    and no shell; GETs to model listings on 127.0.0.1 only. A missing tool is a
+    shorter answer, never an error.
+  - NVIDIA GB10 (DGX Spark) reports its memory as `[N/A]`; that is shown as
+    unified memory shared with system RAM, not as a GPU with none.
+  - Facts only. It writes nothing to the surface, picks no model, and is
+    skipped under `--from` and `--no-verify` (benchmark harnesses), so their
+    scaffolds and the ports they test see nothing new.
+
 ## [0.4.0] — 2026-11-03
 
 **Upgrading from 0.3.x.** Run `gnomon migrate` in each project. It applies four
