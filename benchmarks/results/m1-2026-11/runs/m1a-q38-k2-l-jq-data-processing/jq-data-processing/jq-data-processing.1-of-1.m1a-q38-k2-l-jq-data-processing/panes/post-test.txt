@@ -1,4 +1,4 @@
-root@87df3c847c77:/app# bash /tests/run-tests.sh; tmux wait -S done
+root@4b58a8d35a36:/app# bash /tests/run-tests.sh; tmux wait -S done
 Hit:1 http://deb.debian.org/debian bookworm InRelease
 Hit:2 http://deb.debian.org/debian bookworm-updates InRelease
 Hit:3 http://deb.debian.org/debian-security bookworm-security InRelease
@@ -36,9 +36,9 @@ Using CPython 3.13.1 interpreter at: /usr/local/bin/python
 Creating virtual environment at: .tbench-testing
 Activate with: source .tbench-testing/bin/activate
 Using Python 3.13.1 environment at: .tbench-testing
-Resolved 6 packages in 40ms
-Prepared 6 packages in 42ms
-Installed 6 packages in 8ms
+Resolved 6 packages in 62ms
+Prepared 6 packages in 82ms
+Installed 6 packages in 13ms
  + iniconfig==2.3.1
  + packaging==26.3
  + pluggy==1.7.0
@@ -46,196 +46,29 @@ Installed 6 packages in 8ms
  + pytest==8.4.1
  + pyyaml==6.0.2
 Using Python 3.13.1 environment at: .tbench-testing
-Audited 1 package in 0.75ms
+Audited 1 package in 2ms
 ===================================================================== test session starts ======================================================================
 platform linux -- Python 3.13.1, pytest-8.4.1, pluggy-1.7.0
 rootdir: /tests
 collected 14 items
 
-../tests/test_outputs.py FFFFFFFFFFFFF.                                                                                                                  [100%]
+../tests/test_outputs.py ..............                                                                                                                  [100%]
 
-=========================================================================== FAILURES ===========================================================================
-___________________________________________________________________ test_output_file_exists ____________________________________________________________________
-
-    def test_output_file_exists():
-        """Test that the output file was created successfully."""
->       assert os.path.exists("/app/active_users_report.json"), "Output file does not exist"
-E       AssertionError: Output file does not exist
-E       assert False
-E        +  where False = <function exists at 0xfcda87a4ea20>('/app/active_users_report.json')
-E        +    where <function exists at 0xfcda87a4ea20> = <module 'posixpath' (frozen)>.exists
-E        +      where <module 'posixpath' (frozen)> = os.path
-
-/tests/test_outputs.py:15: AssertionError
-__________________________________________________________________ test_output_is_valid_json ___________________________________________________________________
-
-    def test_output_is_valid_json():
-        """Test that the output file contains valid JSON."""
-        try:
->           with open("/app/active_users_report.json", "r") as f:
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E           FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-
-/tests/test_outputs.py:21: FileNotFoundError
-_______________________________________________________________ test_output_uses_correct_schema ________________________________________________________________
-
-    def test_output_uses_correct_schema():
-        """Test that the output file uses the correct schema."""
->       with open("/app/active_users_report.json", "r") as f:
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-
-/tests/test_outputs.py:29: FileNotFoundError
-_______________________________________________________________ test_only_active_users_included ________________________________________________________________
-
-    def test_only_active_users_included():
-        """Test that only active users are included in the output."""
-        # Load the input data to check original statuses
-        with open("/app/users.json", "r") as f:
-            input_users = json.load(f)
-
-        # Load the output data
->       with open("/app/active_users_report.json", "r") as f:
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-
-/tests/test_outputs.py:48: FileNotFoundError
-____________________________________________________________________ test_last_login_format ____________________________________________________________________
-
-    def test_last_login_format():
-        """Test that last_login dates are formatted correctly (YYYY-MM-DD)."""
->       with open("/app/active_users_report.json", "r") as f:
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-
-/tests/test_outputs.py:64: FileNotFoundError
-___________________________________________________________________ test_role_count_correct ____________________________________________________________________
-
-    def test_role_count_correct():
-        """Test that role_count correctly reflects the number of roles in the input."""
-        # Load the input data to check original roles
-        with open("/app/users.json", "r") as f:
-            input_users = json.load(f)
-
-        # Load the output data
->       with open("/app/active_users_report.json", "r") as f:
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-
-/tests/test_outputs.py:82: FileNotFoundError
-__________________________________________________________________ test_primary_role_correct ___________________________________________________________________
-
-    def test_primary_role_correct():
-        """Test that primary_role is the first role from the input roles array."""
-        # Load the input data to check original roles
-        with open("/app/users.json", "r") as f:
-            input_users = json.load(f)
-
-        # Load the output data
->       with open("/app/active_users_report.json", "r") as f:
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-
-/tests/test_outputs.py:104: FileNotFoundError
-____________________________________________________________________ test_users_are_sorted _____________________________________________________________________
-
-    def test_users_are_sorted():
-        """Test that users are sorted alphabetically by username."""
->       with open("/app/active_users_report.json", "r") as f:
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-
-/tests/test_outputs.py:127: FileNotFoundError
-_______________________________________________________________ test_output_is_pretty_formatted ________________________________________________________________
-
-    def test_output_is_pretty_formatted():
-        """Test that the output JSON is pretty-printed with 2-space indentation."""
->       with open("/app/active_users_report.json", "r") as f:
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-
-/tests/test_outputs.py:136: FileNotFoundError
-_______________________________________________________________________ test_jq_was_used _______________________________________________________________________
-
-    def test_jq_was_used():
-        """Test that jq was used to generate the output and validate the command."""
-        # 1. Check if cmd.sh exists
->       assert os.path.exists("/app/cmd.sh"), "Command file cmd.sh not found"
-E       AssertionError: Command file cmd.sh not found
-E       assert False
-E        +  where False = <function exists at 0xfcda87a4ea20>('/app/cmd.sh')
-E        +    where <function exists at 0xfcda87a4ea20> = <module 'posixpath' (frozen)>.exists
-E        +      where <module 'posixpath' (frozen)> = os.path
-
-/tests/test_outputs.py:163: AssertionError
-___________________________________________________________________ test_jq_args_yaml_exists ___________________________________________________________________
-
-    def test_jq_args_yaml_exists():
-        """Test that the jq_args.yaml file was created successfully."""
->       assert os.path.exists("/app/jq_args.yaml"), "YAML args file jq_args.yaml not found"
-E       AssertionError: YAML args file jq_args.yaml not found
-E       assert False
-E        +  where False = <function exists at 0xfcda87a4ea20>('/app/jq_args.yaml')
-E        +    where <function exists at 0xfcda87a4ea20> = <module 'posixpath' (frozen)>.exists
-E        +      where <module 'posixpath' (frozen)> = os.path
-
-/tests/test_outputs.py:211: AssertionError
-__________________________________________________________________ test_jq_args_yaml_is_valid __________________________________________________________________
-
-    def test_jq_args_yaml_is_valid():
-        """Test that the jq_args.yaml file contains valid YAML with required keys."""
-
-        # 1. Check if jq_args.yaml exists
->       assert os.path.exists("/app/jq_args.yaml"), "YAML args file jq_args.yaml not found"
-E       AssertionError: YAML args file jq_args.yaml not found
-E       assert False
-E        +  where False = <function exists at 0xfcda87a4ea20>('/app/jq_args.yaml')
-E        +    where <function exists at 0xfcda87a4ea20> = <module 'posixpath' (frozen)>.exists
-E        +      where <module 'posixpath' (frozen)> = os.path
-
-/tests/test_outputs.py:218: AssertionError
-____________________________________________________________ test_jq_args_yaml_produces_same_output ____________________________________________________________
-
-    def test_jq_args_yaml_produces_same_output():
-        """Test that executing jq with args from YAML produces the same output."""
-
-        # Construct the jq command using the exact format from the task description
-        cmd = (
-            "jq $(yq -r '.args[]' /app/jq_args.yaml) "
-            "\"$(yq -r '.filter' /app/jq_args.yaml)\" /app/users.json"
-        )
-
-        # Execute the command
-        try:
-            result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, check=True
-            )
-            yaml_generated_output = result.stdout
-        except subprocess.CalledProcessError as e:
-            pytest.fail(f"Error running jq command from YAML args: {e.stderr}")
-
-        # Read the actual output file
->       with open("/app/active_users_report.json", "r") as f:
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-
-/tests/test_outputs.py:268: FileNotFoundError
 ============================================================================ PASSES ============================================================================
 =================================================================== short test summary info ====================================================================
+PASSED ../tests/test_outputs.py::test_output_file_exists
+PASSED ../tests/test_outputs.py::test_output_is_valid_json
+PASSED ../tests/test_outputs.py::test_output_uses_correct_schema
+PASSED ../tests/test_outputs.py::test_only_active_users_included
+PASSED ../tests/test_outputs.py::test_last_login_format
+PASSED ../tests/test_outputs.py::test_role_count_correct
+PASSED ../tests/test_outputs.py::test_primary_role_correct
+PASSED ../tests/test_outputs.py::test_users_are_sorted
+PASSED ../tests/test_outputs.py::test_output_is_pretty_formatted
+PASSED ../tests/test_outputs.py::test_jq_was_used
+PASSED ../tests/test_outputs.py::test_jq_args_yaml_exists
+PASSED ../tests/test_outputs.py::test_jq_args_yaml_is_valid
+PASSED ../tests/test_outputs.py::test_jq_args_yaml_produces_same_output
 PASSED ../tests/test_outputs.py::test_input_file_hash_unchanged
-FAILED ../tests/test_outputs.py::test_output_file_exists - AssertionError: Output file does not exist
-FAILED ../tests/test_outputs.py::test_output_is_valid_json - FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-FAILED ../tests/test_outputs.py::test_output_uses_correct_schema - FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-FAILED ../tests/test_outputs.py::test_only_active_users_included - FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-FAILED ../tests/test_outputs.py::test_last_login_format - FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-FAILED ../tests/test_outputs.py::test_role_count_correct - FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-FAILED ../tests/test_outputs.py::test_primary_role_correct - FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-FAILED ../tests/test_outputs.py::test_users_are_sorted - FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-FAILED ../tests/test_outputs.py::test_output_is_pretty_formatted - FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json'
-FAILED ../tests/test_outputs.py::test_jq_was_used - AssertionError: Command file cmd.sh not found
-FAILED ../tests/test_outputs.py::test_jq_args_yaml_exists - AssertionError: YAML args file jq_args.yaml not found
-FAILED ../tests/test_outputs.py::test_jq_args_yaml_is_valid - AssertionError: YAML args file jq_args.yaml not found
-FAILED ../tests/test_outputs.py::test_jq_args_yaml_produces_same_output - FileNotFoundError: [Errno 2] No such file or directory: '/app/active_users_report.json
-'
-================================================================= 13 failed, 1 passed in 0.20s =================================================================
-root@87df3c847c77:/app#
+====================================================================== 14 passed in 0.37s ======================================================================
+root@4b58a8d35a36:/app#

@@ -1,4 +1,4 @@
-root@8860cf3185f7:/app# bash /tests/run-tests.sh; tmux wait -S done
+root@23342c5ee44c:/app# bash /tests/run-tests.sh; tmux wait -S done
 Hit:1 http://ports.ubuntu.com/ubuntu-ports noble InRelease
 Hit:2 http://ports.ubuntu.com/ubuntu-ports noble-updates InRelease
 Hit:3 http://ports.ubuntu.com/ubuntu-ports noble-backports InRelease
@@ -24,18 +24,18 @@ Using CPython 3.12.3 interpreter at: /usr/bin/python3
 Creating virtual environment at: .tbench-testing
 Activate with: source .tbench-testing/bin/activate
 Using Python 3.12.3 environment at: .tbench-testing
-Resolved 5 packages in 46ms
-Prepared 5 packages in 62ms
-Installed 5 packages in 8ms
+Resolved 5 packages in 44ms
+Prepared 5 packages in 58ms
+Installed 5 packages in 6ms
  + iniconfig==2.3.1
  + packaging==26.3
  + pluggy==1.7.0
  + pygments==2.21.0
  + pytest==8.4.1
 Using Python 3.12.3 environment at: .tbench-testing
-Resolved 2 packages in 35ms
-Prepared 2 packages in 26ms
-Installed 2 packages in 7ms
+Resolved 2 packages in 30ms
+Prepared 2 packages in 19ms
+Installed 2 packages in 8ms
  + pyparsing==3.3.3
  + rdflib==7.1.4
 ===================================================================== test session starts ======================================================================
@@ -43,9 +43,148 @@ platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.7.0
 rootdir: /tests
 collected 3 items
 
-../tests/test_outputs.py ..F                                                                                                                             [100%]
+../tests/test_outputs.py .FF                                                                                                                             [100%]
 
 =========================================================================== FAILURES ===========================================================================
+________________________________________________________________ test_sparql_runs_without_error ________________________________________________________________
+
+    def test_sparql_runs_without_error():
+        """
+        Test that the SPARQL query in the file is valid and can be executed
+        on the RDF dataset without raising an exception.
+        """
+        # Load query
+        query_text = SPARQL_PATH.read_text()
+
+        # Load RDF graph
+        g = Graph()
+        assert DATA_PATH.exists(), f"RDF data file {DATA_PATH} does not exist"
+        g.parse(str(DATA_PATH), format="ttl")
+
+        try:
+>           g.query(query_text)
+
+/tests/test_outputs.py:43:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.tbench-testing/lib/python3.12/site-packages/rdflib/graph.py:1632: in query
+    return result(processor.query(query_object, initBindings, initNs, **kwargs))  # type: ignore[arg-type]
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/processor.py:145: in query
+    strOrQuery = translateQuery(parseQuery(strOrQuery), base, initNs)
+                                ^^^^^^^^^^^^^^^^^^^^^^
+.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:1553: in parseQuery
+    return Query.parseString(q, parseAll=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.tbench-testing/lib/python3.12/site-packages/pyparsing/util.py:466: in _inner
+    return fn(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = {Group:([{Base | PrefixDecl}]...) {SelectQuery | ConstructQuery | DescribeQuery | AskQuery}}
+instring = 'PREFIX uni: <http://university.org/ontology/>\nPREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n\nSELECT ?professorNa...&& ?student != ?student9 &&\
+n          ?student != ?student10 && ?student != ?student11)\n}\nGROUP BY ?professorName\n'
+parse_all = True, kwargs = {'parseAll': True}, parseAll = True, e = Suppress:({'#' rest of line})
+
+    def parse_string(
+        self, instring: str, parse_all: bool = False, **kwargs
+    ) -> ParseResults:
+        """
+        Parse a string with respect to the parser definition. This function is intended as the primary interface to the
+        client code.
+
+        :param instring: The input string to be parsed.
+        :param parse_all: If set, the entire input string must match the grammar.
+        :param parseAll: retained for pre-PEP8 compatibility, will be removed in a future release.
+        :raises ParseException: Raised if ``parse_all`` is set and the input string does not match the whole grammar.
+        :returns: the parsed data as a :class:`ParseResults` object, which may be accessed as a `list`, a `dict`, or
+          an object with attributes if the given parser includes results names.
+
+        If the input string is required to match the entire grammar, ``parse_all`` flag must be set to ``True``. This
+        is also equivalent to ending the grammar with :class:`StringEnd`\\ ().
+
+        To report proper column numbers, ``parse_string`` operates on a copy of the input string where all tabs are
+        converted to spaces (8 spaces per tab, as per the default in ``string.expandtabs``). If the input string
+        contains tabs and the grammar uses parse actions that use the ``loc`` argument to index into the string
+        being parsed, one can ensure a consistent view of the input string by doing one of the following:
+
+        - calling ``parse_with_tabs`` on your grammar before calling ``parse_string`` (see :class:`parse_with_tabs`),
+        - define your parse action using the full ``(s,loc,toks)`` signature, and reference the input string using the
+          parse action's ``s`` argument, or
+        - explicitly expand the tabs in your input string before calling ``parse_string``.
+
+        Examples:
+
+        By default, partial matches are OK.
+
+        .. doctest::
+
+            >>> res = Word('a').parse_string('aaaaabaaa')
+            >>> print(res)
+            ['aaaaa']
+
+        The parsing behavior varies by the inheriting class of this abstract class. Please refer to the children
+        directly to see more examples.
+
+        It raises an exception if parse_all flag is set and instring does not match the whole grammar.
+
+        .. doctest::
+
+            >>> res = Word('a').parse_string('aaaaabaaa', parse_all=True)
+            Traceback (most recent call last):
+            ParseException: Expected end of text, found 'b' ...
+        """
+        parseAll: bool = deprecate_argument(kwargs, "parseAll", False)
+
+        parse_all = parse_all or parseAll
+
+        ParserElement.reset_cache()
+        if not self.streamlined:
+            self.streamline()
+        for e in self.ignoreExprs:
+            e.streamline()
+        if not self.keepTabs:
+            instring = instring.expandtabs()
+        try:
+            loc, tokens = self._parse(instring, 0)
+            if parse_all:
+                loc = self.preParse(instring, loc)
+                se = Empty() + StringEnd().set_debug(False)
+                se._parse(instring, loc)
+        except _ParseActionIndexError as pa_exc:
+            raise pa_exc.exc
+        except ParseBaseException as exc:
+            if ParserElement.verbose_stacktrace:
+                raise
+
+            # catch and re-raise exception from here, clearing out pyparsing internal stack trace
+>           raise exc.with_traceback(None)
+E           pyparsing.exceptions.ParseException: Expected SelectQuery, found 'FILTER'  (at char 817), (line:23, col:3)
+
+.tbench-testing/lib/python3.12/site-packages/pyparsing/core.py:1346: ParseException
+
+During handling of the above exception, another exception occurred:
+
+    def test_sparql_runs_without_error():
+        """
+        Test that the SPARQL query in the file is valid and can be executed
+        on the RDF dataset without raising an exception.
+        """
+        # Load query
+        query_text = SPARQL_PATH.read_text()
+
+        # Load RDF graph
+        g = Graph()
+        assert DATA_PATH.exists(), f"RDF data file {DATA_PATH} does not exist"
+        g.parse(str(DATA_PATH), format="ttl")
+
+        try:
+            g.query(query_text)
+        except Exception as e:
+>           assert False, f"SPARQL query failed to run: {e}"
+E           AssertionError: SPARQL query failed to run: Expected SelectQuery, found 'FILTER'  (at char 817), (line:23, col:3)
+E           assert False
+
+/tests/test_outputs.py:45: AssertionError
 __________________________________________________________________ test_sparql_query_results ___________________________________________________________________
 
     def test_sparql_query_results():
@@ -62,43 +201,106 @@ __________________________________________________________________ test_sparql_q
         g.parse(str(DATA_PATH), format="ttl")
 
         # Execute query
-        results = g.query(query_text)
+>       results = g.query(query_text)
+                  ^^^^^^^^^^^^^^^^^^^
 
-        def normalize_countries(countries_str):
-            """Sort countries alphabetically to ignore order."""
-            countries = [c.strip() for c in countries_str.split(",")]
-            return ", ".join(sorted(countries))
+/tests/test_outputs.py:62:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.tbench-testing/lib/python3.12/site-packages/rdflib/graph.py:1632: in query
+    return result(processor.query(query_object, initBindings, initNs, **kwargs))  # type: ignore[arg-type]
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/processor.py:145: in query
+    strOrQuery = translateQuery(parseQuery(strOrQuery), base, initNs)
+                                ^^^^^^^^^^^^^^^^^^^^^^
+.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:1553: in parseQuery
+    return Query.parseString(q, parseAll=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.tbench-testing/lib/python3.12/site-packages/pyparsing/util.py:466: in _inner
+    return fn(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 
-        # Convert query results to comparable form
-        result_set = set(
-            (str(row.professorName), normalize_countries(str(row.countries)))
-            for row in results
-        )
-        reference_set = set(
-            (str(name), normalize_countries(str(countries)))
-            for name, countries in REFERENCE_RESULTS
-        )
+self = {Group:([{Base | PrefixDecl}]...) {SelectQuery | ConstructQuery | DescribeQuery | AskQuery}}
+instring = 'PREFIX uni: <http://university.org/ontology/>\nPREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n\nSELECT ?professorNa...&& ?student != ?student9 &&\
+n          ?student != ?student10 && ?student != ?student11)\n}\nGROUP BY ?professorName\n'
+parse_all = True, kwargs = {'parseAll': True}, parseAll = True, e = Suppress:({'#' rest of line})
 
->       assert result_set == reference_set, (
-            "Query results do not match reference.\n"
-            f"Got: {result_set}\n"
-            f"Expected: {reference_set}"
-        )
-E       AssertionError: Query results do not match reference.
-E         Got: {('Aristotle Tympas', 'GR'), ('Chrysoula Zerva', 'GR'), ('Giorgos Stamou', 'GR')}
-E         Expected: {('Alex Dimakis', 'CH, ES, US'), ('Giorgos Stamou', 'GR, US'), ('Aristotle Tympas', 'GR'), ('Chrysoula Zerva', 'GR, PT')}
-E       assert {('Aristotle ...tamou', 'GR')} == {('Alex Dimak...u', 'GR, US')}
-E
-E         Extra items in the left set:
-E         ('Chrysoula Zerva', 'GR')
-E         ('Giorgos Stamou', 'GR')
-E         Extra items in the right set:
-E         ('Alex Dimakis', 'CH, ES, US')
-E         ('Giorgos Stamou', 'GR, US')...
-E
-E         ...Full output truncated (2 lines hidden), use '-vv' to show
+    def parse_string(
+        self, instring: str, parse_all: bool = False, **kwargs
+    ) -> ParseResults:
+        """
+        Parse a string with respect to the parser definition. This function is intended as the primary interface to the
+        client code.
 
-/tests/test_outputs.py:79: AssertionError
+        :param instring: The input string to be parsed.
+        :param parse_all: If set, the entire input string must match the grammar.
+        :param parseAll: retained for pre-PEP8 compatibility, will be removed in a future release.
+        :raises ParseException: Raised if ``parse_all`` is set and the input string does not match the whole grammar.
+        :returns: the parsed data as a :class:`ParseResults` object, which may be accessed as a `list`, a `dict`, or
+          an object with attributes if the given parser includes results names.
+
+        If the input string is required to match the entire grammar, ``parse_all`` flag must be set to ``True``. This
+        is also equivalent to ending the grammar with :class:`StringEnd`\\ ().
+
+        To report proper column numbers, ``parse_string`` operates on a copy of the input string where all tabs are
+        converted to spaces (8 spaces per tab, as per the default in ``string.expandtabs``). If the input string
+        contains tabs and the grammar uses parse actions that use the ``loc`` argument to index into the string
+        being parsed, one can ensure a consistent view of the input string by doing one of the following:
+
+        - calling ``parse_with_tabs`` on your grammar before calling ``parse_string`` (see :class:`parse_with_tabs`),
+        - define your parse action using the full ``(s,loc,toks)`` signature, and reference the input string using the
+          parse action's ``s`` argument, or
+        - explicitly expand the tabs in your input string before calling ``parse_string``.
+
+        Examples:
+
+        By default, partial matches are OK.
+
+        .. doctest::
+
+            >>> res = Word('a').parse_string('aaaaabaaa')
+            >>> print(res)
+            ['aaaaa']
+
+        The parsing behavior varies by the inheriting class of this abstract class. Please refer to the children
+        directly to see more examples.
+
+        It raises an exception if parse_all flag is set and instring does not match the whole grammar.
+
+        .. doctest::
+
+            >>> res = Word('a').parse_string('aaaaabaaa', parse_all=True)
+            Traceback (most recent call last):
+            ParseException: Expected end of text, found 'b' ...
+        """
+        parseAll: bool = deprecate_argument(kwargs, "parseAll", False)
+
+        parse_all = parse_all or parseAll
+
+        ParserElement.reset_cache()
+        if not self.streamlined:
+            self.streamline()
+        for e in self.ignoreExprs:
+            e.streamline()
+        if not self.keepTabs:
+            instring = instring.expandtabs()
+        try:
+            loc, tokens = self._parse(instring, 0)
+            if parse_all:
+                loc = self.preParse(instring, loc)
+                se = Empty() + StringEnd().set_debug(False)
+                se._parse(instring, loc)
+        except _ParseActionIndexError as pa_exc:
+            raise pa_exc.exc
+        except ParseBaseException as exc:
+            if ParserElement.verbose_stacktrace:
+                raise
+
+            # catch and re-raise exception from here, clearing out pyparsing internal stack trace
+>           raise exc.with_traceback(None)
+E           pyparsing.exceptions.ParseException: Expected SelectQuery, found 'FILTER'  (at char 817), (line:23, col:3)
+
+.tbench-testing/lib/python3.12/site-packages/pyparsing/core.py:1346: ParseException
 ======================================================================= warnings summary =======================================================================
 test_outputs.py::test_sparql_runs_without_error
   /app/.tbench-testing/lib/python3.12/site-packages/rdflib/plugins/sparql/parser.py:173: PyparsingDeprecationWarning: 'setParseAction' deprecated - use 'set_par
@@ -319,7 +521,9 @@ test_outputs.py::test_sparql_query_results
 ============================================================================ PASSES ============================================================================
 =================================================================== short test summary info ====================================================================
 PASSED ../tests/test_outputs.py::test_sparql_file_exists
-PASSED ../tests/test_outputs.py::test_sparql_runs_without_error
-FAILED ../tests/test_outputs.py::test_sparql_query_results - AssertionError: Query results do not match reference.
-========================================================== 1 failed, 2 passed, 581 warnings in 0.35s ===========================================================
-root@8860cf3185f7:/app#
+FAILED ../tests/test_outputs.py::test_sparql_runs_without_error - AssertionError: SPARQL query failed to run: Expected SelectQuery, found 'FILTER'  (at char 817
+), (line:23, col:3)
+FAILED ../tests/test_outputs.py::test_sparql_query_results - pyparsing.exceptions.ParseException: Expected SelectQuery, found 'FILTER'  (at char 817), (line:23,
+ col:3)
+========================================================== 2 failed, 1 passed, 581 warnings in 0.37s ===========================================================
+root@23342c5ee44c:/app#

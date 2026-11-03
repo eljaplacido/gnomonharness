@@ -1,4 +1,4 @@
-root@33cedcccbbf7:/app# bash /tests/run-tests.sh; tmux wait -S done
+root@c4a46a5a01e8:/app# bash /tests/run-tests.sh; tmux wait -S done
 Hit:1 http://deb.debian.org/debian bookworm InRelease
 Hit:2 http://deb.debian.org/debian bookworm-updates InRelease
 Hit:3 http://deb.debian.org/debian-security bookworm-security InRelease
@@ -7,7 +7,7 @@ Reading package lists... Done
 Building dependency tree... Done
 Reading state information... Done
 curl is already the newest version (7.88.1-10+deb12u15).
-0 upgraded, 0 newly installed, 0 to remove and 40 not upgraded.
+0 upgraded, 0 newly installed, 0 to remove and 45 not upgraded.
 downloading uv 0.7.13 aarch64-unknown-linux-gnu
 no checksums to verify
 installing to /root/.local/bin
@@ -23,9 +23,9 @@ Using CPython 3.13.1 interpreter at: /usr/local/bin/python
 Creating virtual environment at: .tbench-testing
 Activate with: source .tbench-testing/bin/activate
 Using Python 3.13.1 environment at: .tbench-testing
-Resolved 32 packages in 303ms
-Prepared 32 packages in 2.74s
-Installed 32 packages in 265ms
+Resolved 32 packages in 746ms
+Prepared 32 packages in 2.87s
+Installed 32 packages in 137ms
  + accelerate==1.15.0
  + certifi==2026.10.23
  + charset-normalizer==3.5.2
@@ -64,43 +64,30 @@ cachedir: .pytest_cache
 rootdir: /tests
 collected 5 items
 
-../tests/test_outputs.py::test_training_script FAILED                                                                                                    [ 20%]
+../tests/test_outputs.py::test_training_script PASSED                                                                                                    [ 20%]
 ../tests/test_outputs.py::test_lora_adapter_saved FAILED                                                                                                 [ 40%]
 ../tests/test_outputs.py::test_results_file_exists FAILED                                                                                                [ 60%]
 ../tests/test_outputs.py::test_model_improvement FAILED                                                                                                  [ 80%]
 ../tests/test_outputs.py::test_adapter_can_load FAILED                                                                                                   [100%]
 
 =========================================================================== FAILURES ===========================================================================
-_____________________________________________________________________ test_training_script _____________________________________________________________________
-
-    def test_training_script():
-        """Test that the training script exists."""
-        script_path = "/app/train_lora.py"
-
->       assert os.path.exists(script_path), (
-            "Training script not found at /app/train_lora.py"
-        )
-E       AssertionError: Training script not found at /app/train_lora.py
-E       assert False
-E        +  where False = <function exists at 0xfaaefaf9ea20>('/app/train_lora.py')
-E        +    where <function exists at 0xfaaefaf9ea20> = <module 'posixpath' (frozen)>.exists
-E        +      where <module 'posixpath' (frozen)> = os.path
-
-/tests/test_outputs.py:17: AssertionError
 ___________________________________________________________________ test_lora_adapter_saved ____________________________________________________________________
 
     def test_lora_adapter_saved():
         """Test that LoRA adapter was saved correctly."""
         adapter_path = "/app/experiments/lora_adapter"
 
->       assert os.path.exists(adapter_path), "LoRA adapter directory not found"
-E       AssertionError: LoRA adapter directory not found
+        assert os.path.exists(adapter_path), "LoRA adapter directory not found"
+>       assert os.path.exists(f"{adapter_path}/adapter_config.json"), (
+            "Adapter config not found"
+        )
+E       AssertionError: Adapter config not found
 E       assert False
-E        +  where False = <function exists at 0xfaaefaf9ea20>('/app/experiments/lora_adapter')
-E        +    where <function exists at 0xfaaefaf9ea20> = <module 'posixpath' (frozen)>.exists
+E        +  where False = <function exists at 0xfafdf772ea20>('/app/experiments/lora_adapter/adapter_config.json')
+E        +    where <function exists at 0xfafdf772ea20> = <module 'posixpath' (frozen)>.exists
 E        +      where <module 'posixpath' (frozen)> = os.path
 
-/tests/test_outputs.py:26: AssertionError
+/tests/test_outputs.py:27: AssertionError
 ___________________________________________________________________ test_results_file_exists ___________________________________________________________________
 
     def test_results_file_exists():
@@ -110,8 +97,8 @@ ___________________________________________________________________ test_results
 >       assert os.path.exists(results_file), "Results file not found"
 E       AssertionError: Results file not found
 E       assert False
-E        +  where False = <function exists at 0xfaaefaf9ea20>('/app/lora_results.json')
-E        +    where <function exists at 0xfaaefaf9ea20> = <module 'posixpath' (frozen)>.exists
+E        +  where False = <function exists at 0xfafdf772ea20>('/app/lora_results.json')
+E        +    where <function exists at 0xfafdf772ea20> = <module 'posixpath' (frozen)>.exists
 E        +      where <module 'posixpath' (frozen)> = os.path
 
 /tests/test_outputs.py:69: AssertionError
@@ -137,13 +124,14 @@ ____________________________________________________________________ test_adapte
 E       FileNotFoundError: [Errno 2] No such file or directory: '/app/experiments/lora_adapter/adapter_config.json'
 
 /tests/test_outputs.py:180: FileNotFoundError
+============================================================================ PASSES ============================================================================
 =================================================================== short test summary info ====================================================================
-FAILED ../tests/test_outputs.py::test_training_script - AssertionError: Training script not found at /app/train_lora.py
-FAILED ../tests/test_outputs.py::test_lora_adapter_saved - AssertionError: LoRA adapter directory not found
+PASSED ../tests/test_outputs.py::test_training_script
+FAILED ../tests/test_outputs.py::test_lora_adapter_saved - AssertionError: Adapter config not found
 FAILED ../tests/test_outputs.py::test_results_file_exists - AssertionError: Results file not found
 FAILED ../tests/test_outputs.py::test_model_improvement - FileNotFoundError: [Errno 2] No such file or directory: '/app/experiments/lora_adapter/adapter_config.
 json'
 FAILED ../tests/test_outputs.py::test_adapter_can_load - FileNotFoundError: [Errno 2] No such file or directory: '/app/experiments/lora_adapter/adapter_config.j
 son'
-====================================================================== 5 failed in 5.14s =======================================================================
-root@33cedcccbbf7:/app#
+================================================================= 4 failed, 1 passed in 4.82s ==================================================================
+root@c4a46a5a01e8:/app#

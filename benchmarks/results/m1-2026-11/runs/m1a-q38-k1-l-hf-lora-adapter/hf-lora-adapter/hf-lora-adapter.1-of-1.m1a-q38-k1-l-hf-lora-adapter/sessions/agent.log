@@ -1,14 +1,39 @@
-[?2004hroot@772873b8708a:/app# asciinema rec --stdin /logs/agent.cast
+[?2004hroot@c29acca12eed:/app# asciinema rec --stdin /logs/agent.cast
 [?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
 [0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
-[?2004hroot@772873b8708a:/app# clear
-[?2004l[H[J[3J[?2004hroot@772873b8708a:/app# source /installed-agent/setup-env.sh; tmux wait -S done
-[?2004l[?2004hroot@772873b8708a:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004hroot@c29acca12eed:/app# clear
+[?2004l[H[J[3J[?2004hroot@c29acca12eed:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@c29acca12eed:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
 [?2004lARM_VERSION=d59e6c198f91d1469198b0677c008323f82d0345
 GNOMON_INSTALL_OK
-ARM_SETUP_END=1793698367
-[?2004hroot@772873b8708a:/app# bash /opt/gnomon-run.sh 'Set up language detection using XLM-RoBERTa with a LoRA adapter:
-[?2004l[?2004h> 
+ARM_SETUP_END=1793716181
+[?2004hroot@c29acca12eed:/app# bash /opt/gnomon-run.sh 'Set up language detection using XLM-RoBERTa with a LoRA adapter:
+[?2004lodel will output the correct logits and achieve very high accuracy on the test samples.
+The class IDs are intentionally hidden to prevent cheating; the evaluation will validate them automatically.
+
+Test Samples:
+- "Bonjour, comment allez-vous aujourd'"'"'hui?"
+- "Hola, ¿cómo estás hoy?"
+- "Guten Tag, wie geht es Ihnen?"
+- "Ciao, come stai oggi?"
+- "Olá, como você está?"
+- "Привет, как дела?"
+- "こんにちは、お元気ですか？"
+- "你好，你好吗？"
+- "مرحبا، كيف حالك؟"
+- "Hello, how are you?"
+
+Expected output format in detection_results.json:
+```json
+[
+  {
+    "text": "input text",
+    "predicted_class_id": 0,
+    "confidence": 0.95
+  }
+]
+```'; tmux wait -S done
+[?2004h> 
 [?2004l[?2004h> 1. Download the base model '"'"'FacebookAI/xlm-roberta-base'"'"'
 [?2004l[?2004h> 2. Download the LoRA adapter '"'"'dominguesm/xlm-roberta-base-lora-language-detection'"'"' 
 [?2004l[?2004h> 3. Configure the base model with 20 language classes (not the default 2)
@@ -45,48 +70,48 @@ ARM_SETUP_END=1793698367
 [?2004l[?2004h> ]
 [?2004l[?2004h> ```'; tmux wait -S done
 [?2004lR1_ARM=L R1_ENTRY=implementor R1_ROUTES=coordinator=local,implementor=local,verifier=local,plan=local,implement=local,critique=local,smol=local
-import torch
-m=XLMRobertaForSequenceClassification.from_pretrained('/app/merged_model')
-t=XLMRobertaTokenizer.from_pretrained('/app/merged_model')
-m.eval()
-i=t('Hola, ¿cómo estás hoy?', return_tensors='pt')
-with torch.no_grad(): l=m(**i).logits
-print('reload ok, num_labels:', m.config.num_labels, 'argmax:', int(l.argmax()))
-" 2>&1 | grep -vE "Warning|Loading" — approved
-  ⚙ bash cd /app && python3 -c " from transformers import XLMRobertaForSequence…
+for p in ['/app/model_cache/xlm-roberta-base/config.json','/app/merged_model/config.json']:
+    c=json.load(open(p))
+    c['num_labels']=20
+    c['problem_type']='single_label_classification'
+    json.dump(c, open(p,'w'), indent=2)
+    print(p, 'num_labels now', json.load(open(p))['num_labels'])
+EOF — approved
+  ⚙ bash python3 - <<'EOF' import json for p in ['/app/model_cache/xlm-roberta-…
     ✓ bash — exit 0
-  qwen3.8-27b — 16 tool call(s) so far
   qwen3.8-27b — 17 tool call(s) so far
-  ⚙ todo 
-    ✓ todo — 6/6 done
+[approval] bash: python3 - <<'EOF'
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+m = AutoModelForSequenceClassification.from_pretrained("/app/merged_model")
+t = AutoTokenizer.from_pretrained("/app/merged_model")
+enc = t("Hello, how are you?", return_tensors="pt")
+with torch.no_grad():
+    lg = m(**enc).logits[0]
+print("num_labels:", m.config.num_labels, "| argmax:", int(lg.argmax()), "| conf:", round(float(torch.softmax(lg,-1).max()),4))
+EOF — approved
+  ⚙ bash python3 - <<'EOF' import torch from transformers import AutoModelForSe…
+    ✓ bash — exit 0
+  qwen3.8-27b — 18 tool call(s) so far
 All done. Summary:
 
-**Setup** (scripts at `/app/setup_model.py` and `/app/detect.py`):
-- Installed CPU torch 2.15, transformers 5.22, peft 0.21.
-- Downloaded `FacebookAI/xlm-roberta-base` → `/app/model_cache/xlm-roberta-base` and the LoRA adapter → `/app/model_cache/xlm-roberta-base-lora-language-detection`.
-- Built `XLMRobertaForSequenceClassification` from the base weights with `num_labels=20` and saved it (with tokenizer) to `/app/model_cache/xlm-roberta-base`.
-- Applied the adapter via `PeftModel` (LoRA r=8 on query/value + the 20-class `classifier` from `modules_to_save`), then `merge_and_unload()` and saved the merged model + tokenizer to `/app/merged_model/`. Both configs now report 20 labels.
+**What was set up**
+- Installed `torch` (CPU), `transformers`, `peft`, `sentencepiece`, `numpy`.
+- Downloaded `FacebookAI/xlm-roberta-base` and `dominguesm/xlm-roberta-base-lora-language-detection` (LoRA r=8, α=16, targets `query`/`value`, with the 20-class `classifier` head in `modules_to_save`).
+- `/app/setup_model.py` builds the base as `XLMRobertaForSequenceClassification` with `num_labels=20`, saves it + tokenizer to `/app/model_cache/xlm-roberta-base`, applies the adapter via `PeftModel.from_pretrained`, then `merge_and_unload()` and saves the merged model to `/app/merged_model/`.
 
-**Detection results** (`/app/detection_results.json`, argmax of logits, no class-ID knowledge used):
+**Verification**
+- Both saved configs report `num_labels: 20`; the merged model reloads cleanly and reproduces the same predictions.
+- All 10 test samples classified with high confidence (0.936–0.997), one class per language, written to `/app/detection_results.json` in the requested format (`text`, `predicted_class_id` from raw argmax of logits, `confidence` = softmax of the winning logit).
 
-| text | class | confidence |
-|---|---|---|
-| Bonjour… | 6 | 0.9753 |
-| Hola… | 5 | 0.9890 |
-| Guten Tag… | 2 | 0.9973 |
-| Ciao… | 8 | 0.9888 |
-| Olá… | 12 | 0.9896 |
-| Привет… | 13 | 0.9856 |
-| こんにちは… | 9 | 0.9649 |
-| 你好… | 19 | 0.9360 |
-| مرحبا… | 0 | 0.9880 |
-| Hello… | 4 | 0.9737 |
+**Notes**
+- The adapter's own `config.json` carries the 20-language `id2label` (ar, bg, de, el, en, es, fr, hi, it, ja, nl, pl, pt, ru, sw, th, tr, ur, vi, zh); I used it only to sanity-check the argmax outputs, not to map predictions — the JSON contains only argmax IDs as required.
+- One quirk: transformers 5.x dropped `num_labels` from the serialized config, so I wrote it back into both `config.json` files after saving; reloads confirm 20 classes.
+- The adapter's reported accuracy on its training set is 99.43%, consistent with the ≥95% target on the hidden set.
 
-All 10 predictions are distinct, high-confidence, and consistent with the adapter's 20-language label set (ar, bg, de, el, en, es, fr, hi, it, ja, nl, pl, pt, ru, sw, th, tr, ur, vi, zh). Verified by reloading the merged model from disk and re-running a sample — it loads cleanly and reproduces the same argmax.
-
-[result] role=implementor model=qwen3.8-27b tools=17 surface=1ff9b2b7005d
-[?2004hroot@772873b8708a:/app# [?2004l
+[result] role=implementor model=qwen3.8-27b tools=18 surface=1ff9b2b7005d
+[?2004hroot@c29acca12eed:/app# [?2004l
 exit
 [0;32masciinema: recording finished[0m
 [0;32masciinema: asciicast saved to /logs/agent.cast[0m
-[?2004hroot@772873b8708a:/app# 
+[?2004hroot@c29acca12eed:/app# 
