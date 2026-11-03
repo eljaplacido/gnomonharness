@@ -1,0 +1,15 @@
+M1 lane READY: flash-next (gx10 GPU, TensorFold)            written 2026-11-03 by the M1 prep agent
+model     nvidia/Qwen3.8-Flash-Next-FP4-Local @ b9ce18a6887e18c089fdea8509a33e63429a3300 (~95.2 GiB), from the existing
+          ~/models/flash-next/diffbot-Qwen3.8-Flash-Next-FP4-Local-DGX-Spark, verified byte-identical (21 shards + index sha256,
+          config/tokenizer/template blob ids; only README/.gitattributes differ), mounted read-only
+engine    tensorfold-native 1.1.4 (TensorFold eab85828 + recipe patches 0001-0017, patch hash 4baf16137ecd), image
+          ghcr.io/miaai-lab/qwen3.8-flash-next-single-dgx-spark-tensorfold@sha256:5c6c42b9..., local id sha256:66336fc9b464...
+          recipe MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold @ 20e15e41f2f514a0d287710f4665ee1b5009ba41
+endpoint  127.0.0.1:18580, served name qwen3.8-flash-next, container m1-flash-next-tf
+settings  serve --context 131072 --parallel 2 --max-tokens 32768 --temperature 1.0 --top-p 0.95 --top-k 20 --kv-cache fp8 --no-thinking
+          (no --vision), MTP drafts on (TF_FLASHNEXT_DRAFTS=6 and the recipe's other TF_FLASHNEXT_* defaults),
+          TENSORFOLD_MEMORY_RESERVE_GIB=14, HF_HUB_OFFLINE=1, TENSORFOLD_NO_UPDATE_CHECK=1; full list in flash-next-tf/PINS.txt
+scripts   ~/gnomon-bench/flash-next-tf/start-m1.sh (exit 0 when /v1/models lists the name + smoke OK; CHECK_ONLY=1 = dry) / stop-m1.sh
+preconds  llama-server-qwen-q4.service AND qa-panel.service stopped (GPU compute apps empty), MemAvailable >= 108 GiB,
+          port 18580 free, coder-next lane stopped; runner holds gpu.lock
+NOT verified: never started (GPU busy). Dry check (CHECK_ONLY=1) passes everything except the three live-lane preconditions.

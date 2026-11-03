@@ -1,0 +1,38 @@
+M1b lane: Qwen3.8-Flash-Next with TensorFold on gx10 — pins and settings (prepared 2026-11-03; not started)
+
+recipe     MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold @ 20e15e41f2f514a0d287710f4665ee1b5009ba41 (main = the
+           forwarded README/start.sh byte for byte), checked out clean in recipe/; start-m1.sh refuses if it changes
+image      ghcr.io/miaai-lab/qwen3.8-flash-next-single-dgx-spark-tensorfold@sha256:5c6c42b9747318c1cd8b6cb85cb69493fff2e82cb23b61e49b9cf54cd09ac28e
+           local tag tensorfold-qwen38:v1.1.4-eab8582, image id sha256:66336fc9b464e033c8683bc54e05644f00a1b971ec9971acafb39a8f137d373c,
+           24.46 GB, labels tf.patches=4baf16137ecd (= image_hash() of the 17 reviewed patches) tf.kernels=embedded; tensorfold-native 1.1.4
+           (TensorFold eab8582819688325e371907e4706e1c602b8a273 + patches 0001-0017). Prebuilt binary: pulled, not built (a local build
+           fetches Zig from ziglang.org and libwebp from storage.googleapis.com, outside the allowed hosts). Its history matches the
+           recipe's Dockerfile final stage; 51 of its 67 base layers are byte-identical to today's nvcr.io/nvidia/pytorch:26.07-py3 arm64.
+model      nvidia/Qwen3.8-Flash-Next-FP4-Local @ b9ce18a6887e18c089fdea8509a33e63429a3300, NOT re-downloaded: the existing
+           ~/models/flash-next/diffbot-Qwen3.8-Flash-Next-FP4-Local-DGX-Spark (diffbot/Qwen3.8-Flash-Next-FP4-Local-DGX-Spark @ e2518185,
+           downloaded 2026-10-31) is byte-identical for 31 of nvidia's 33 files: all 21 shards + index (sha256 on disk == nvidia LFS ids),
+           config.json, tokenizer, chat template, generation/preprocessor configs (git blob ids). The 2 that differ are README.md and
+           .gitattributes (nvidia's README is there as NVIDIA_MODEL_CARD.md, identical). Extra recipe/ folder (no safetensors) is ignored.
+           Mounted read-only at /models/nvidia--Qwen3.8-Flash-Next-FP4-Local--b9ce18a6.
+endpoint   127.0.0.1:18580 (host network, loopback bind), served name qwen3.8-flash-next, container m1-flash-next-tf
+
+settings changed from the recipe defaults, and why
+  PORT 8888 -> 18580, HOST 0.0.0.0 -> 127.0.0.1, SERVED_NAME -> qwen3.8-flash-next     M1 lane address / name
+  PARALLEL 5 -> 2                                                                    M1: 2 streams
+  CONTEXT 262144 -> 131072                                                           same per-request window as the M1a vLLM lane;
+                                                                                     gnomon d59e6c19 budgets 65,536 context tokens
+  THINKING 1 -> 0 (--no-thinking)                                                    the incumbent lane runs --reasoning off
+  VISION 1 -> 0                                                                      text-only tasks; no Python vision helper; +2 GiB pool
+  TENSORFOLD_MEMORY_RESERVE_GIB 9 -> 14                                              the tb task containers run on this same unified
+                                                                                     memory; exhausting it freezes the Spark
+  checkpoint path: existing folder mounted directly (not the HF cache layout); HF_HUB_OFFLINE=1 as in the recipe
+  kernel cache, state, logs -> this folder; the recipe's prepare.sh/start.sh are never run (no HF API call, no downloads)
+  unchanged: fp8 KV, MTP drafts (TF_FLASHNEXT_DRAFTS=6 etc.), every TF_FLASHNEXT_* knob, sampling defaults (requests override)
+
+start      ~/gnomon-bench/flash-next-tf/start-m1.sh   exit 0 only once /v1/models lists qwen3.8-flash-next and a smoke completion
+           answered; 1 failed precondition; non-zero + container stopped on timeout (WAIT_TIMEOUT, default 1800 s)
+           CHECK_ONLY=1 ./start-m1.sh  runs every check and prints the docker command, launches nothing
+stop       ~/gnomon-bench/flash-next-tf/stop-m1.sh    saves the container log, stops and removes only m1-flash-next-tf
+preconds   1. llama-server-qwen-q4.service stopped (R1 done)    2. qa-panel.service stopped: nvidia-smi --query-compute-apps empty
+           3. MemAvailable >= 108 GiB (81 weights + 3 window + 8 scratch + 14 reserve + 2)   4. port 18580 free, coder-next lane stopped
+           5. the runner holds ~/.opencode/central-brain/runtime/decisionbench/gpu.lock
