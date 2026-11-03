@@ -693,7 +693,10 @@ POSIX separators, checkable with `gnomon audit verify`.
 
 | `signal` | When |
 |---|---|
-| `repeated_refusal` | One policy rule refused one role on one pattern 3 or more times, across any number of trails. The rule is the record's `rule` when it has one, otherwise read off the refusal's fixed `summary` form; a declined approval is not counted. |
+| `repeated_refusal` | One policy rule refused one role on one pattern in 3 or more distinct sessions (trails). Repeats inside one session do not count towards the 3: they are flailing, which the loop's nudge answers. The rule is the record's `rule` when it has one, otherwise read off the refusal's fixed `summary` form; a declined approval is not counted. |
+
+`id` is `refusal-<rule>-<role>-<hash>`, with rule and role reduced to
+`[a-z0-9_-]`: they come from trail records and must not steer a file name.
 
 `pattern` is a path generalised to its directory and extension
 (`generated/*.ts`), the `bash_deny` pattern, or a command's first word.
@@ -703,4 +706,5 @@ ids that were not on disk before.
 **Fixture**: `conformance/skill_candidate.json` (signals, keys), asserted by
 `packages/gnomon-core/src/skill_mine.test.ts`. There, a trail with four
 `write_allow` refusals of one path pattern yields exactly one candidate,
-pointing at those four records.
+pointing at those four records, and the same five refusals inside one
+session yield none.

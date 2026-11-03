@@ -39,7 +39,8 @@
   read it. `mine` reads the trails with no model call and writes candidates
   to `.gnomon-skills/candidates/` (gitignored, never hashed): the rule, the
   role, the path pattern, the counts, and a `{trail, seq, hash}` pointer to
-  every record. One signal so far, `repeated_refusal` (3 or more). Candidates
+  every record. One signal so far, `repeated_refusal` (3 or more distinct
+  sessions; retries inside one session do not count). Candidates
   are evidence, not skills; nothing is loaded until a person accepts one.
   `gnomon skill list --candidates` lists them. Step 4 of
   `docs/design/SKILL-TRIALS.md`.

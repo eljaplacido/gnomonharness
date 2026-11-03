@@ -49,7 +49,8 @@ const refusedWrite = (t: AuditTrail, path: string, role = "implement"): AuditRec
 describe("gnomon skill mine", () => {
   it("four write_allow refusals of one path pattern yield exactly one candidate, pointing at them", () => {
     // Fails on master: there is no miner, so the record of an agent being
-    // refused the same thing again and again is read by nobody.
+    // refused the same thing again and again is read by nobody. Spread over
+    // three sessions, the least that counts as a pattern.
     const s1 = new AuditTrail(settings(), "s1");
     s1.write("session_start", { mode: "task" });
     const a = refusedWrite(s1, "generated/api.ts");
@@ -68,8 +69,9 @@ describe("gnomon skill mine", () => {
     // A person declining an approval is a refusal too, and NOT this signal.
     s2.write("tool_call", { role: "implement", tool: "write", target: "generated/x.ts", code: 2, bucket: "refusal", summary: "write generated/x.ts — denied" });
     const c = refusedWrite(s2, "generated/client.ts");
-    const d = refusedWrite(s2, "./generated/schema.ts");
     s2.write("session_end", {});
+    const s3 = new AuditTrail(settings(), "s3");
+    const d = refusedWrite(s3, "./generated/schema.ts");
 
     const before = recomputeManifest(join(root, ".gnomon")).surface_hash;
     const found = mineCandidates(cfg());
@@ -83,14 +85,14 @@ describe("gnomon skill mine", () => {
       tools: ["write"],
       pattern: "generated/*.ts",
       count: 4,
-      sessions: 2,
+      sessions: 3,
     });
     expect(cand.records).toEqual(
       [
         ["s1", a],
         ["s1", b],
         ["s2", c],
-        ["s2", d],
+        ["s3", d],
       ].map(([trail, r]) => ({
         trail: `.gnomon-audit/${trail}.jsonl`,
         seq: (r as AuditRecord).seq,
@@ -107,8 +109,9 @@ describe("gnomon skill mine", () => {
   });
 
   it("is deterministic and makes no model call: the same trails give the same bytes", () => {
-    const t = new AuditTrail(settings(), "s");
-    for (const p of ["gen/a.rs", "gen/b.rs", "gen/c.rs"]) refusedWrite(t, p, "verifier");
+    for (const [i, p] of ["gen/a.rs", "gen/b.rs", "gen/c.rs"].entries()) {
+      refusedWrite(new AuditTrail(settings(), `s${i}`), p, "verifier");
+    }
     const original = globalThis.fetch;
     globalThis.fetch = (() => {
       throw new Error("mine must not call a model");
@@ -128,11 +131,33 @@ describe("gnomon skill mine", () => {
   });
 
   it("counts per role and per rule: different roles are not one pattern", () => {
-    const t = new AuditTrail(settings(), "s");
-    refusedWrite(t, "gen/a.ts", "implement");
-    refusedWrite(t, "gen/b.ts", "implement");
-    refusedWrite(t, "gen/c.ts", "verifier");
+    refusedWrite(new AuditTrail(settings(), "s1"), "gen/a.ts", "implement");
+    refusedWrite(new AuditTrail(settings(), "s2"), "gen/b.ts", "implement");
+    refusedWrite(new AuditTrail(settings(), "s3"), "gen/c.ts", "verifier");
     expect(mineCandidates(cfg())).toEqual([]);
+  });
+
+  it("counts sessions, not records: one session refused five times is not a pattern", () => {
+    // Fails on the first version, which counted records: five retries inside
+    // one session made a candidate.
+    const t = new AuditTrail(settings(), "s1");
+    for (const p of ["gen/a.ts", "gen/b.ts", "gen/c.ts", "gen/d.ts", "gen/e.ts"]) refusedWrite(t, p);
+    refusedWrite(new AuditTrail(settings(), "s2"), "gen/f.ts");
+    expect(mineCandidates(cfg())).toEqual([]);
+    refusedWrite(new AuditTrail(settings(), "s3"), "gen/g.ts");
+    expect(mineCandidates(cfg())).toHaveLength(1);
+  });
+
+  it("a role read from a trail cannot steer the candidate's file name", () => {
+    // Fails on the first version: the role went into the id verbatim, and
+    // the id into a path, so "../../x" wrote outside candidates/.
+    for (const s of ["s1", "s2", "s3"]) refusedWrite(new AuditTrail(settings(), s), "gen/a.ts", "../../x");
+    const found = mineCandidates(cfg());
+    expect(found).toHaveLength(1);
+    expect(found[0].id).toMatch(/^refusal-write_allow-x-[0-9a-f]{10}$/);
+    expect(found[0].role).toBe("../../x");
+    writeCandidates(cfg(), found);
+    expect(readdirSync(join(root, ".gnomon-skills", "candidates"))).toEqual([`${found[0].id}.json`]);
   });
 
   it("reads bash_deny and the bash form of write_allow off their summaries", () => {
@@ -163,8 +188,7 @@ describe("gnomon skill mine", () => {
       readFileSync(join(process.cwd(), "..", "..", "conformance", "skill_candidate.json"), "utf-8")
     );
     expect([...CANDIDATE_SIGNALS]).toEqual(fixture.signals);
-    const t = new AuditTrail(settings(), "s");
-    for (const p of ["g/a.ts", "g/b.ts", "g/c.ts"]) refusedWrite(t, p);
+    for (const [i, p] of ["g/a.ts", "g/b.ts", "g/c.ts"].entries()) refusedWrite(new AuditTrail(settings(), `s${i}`), p);
     const [c] = mineCandidates(cfg());
     expect(Object.keys(c).sort()).toEqual([...fixture.keys].sort());
     expect(Object.keys(c.records[0]).sort()).toEqual([...fixture.record_pointer_keys].sort());

@@ -43,7 +43,13 @@ import { resolveAudit, type AuditRecord } from "./audit.js";
 export const CANDIDATE_SIGNALS = ["repeated_refusal"] as const;
 export type CandidateSignal = (typeof CANDIDATE_SIGNALS)[number];
 
-/** A rule must refuse the same role this many times before it is a pattern. */
+/**
+ * A rule must refuse the same role on the same thing in this many SESSIONS
+ * before it is a pattern. Sessions, not records: one session retrying a
+ * refused write four times is one episode of flailing, which the loop's
+ * anti-flailing nudge already answers. A skill is for what every new session
+ * rediscovers, and only distinct sessions show that.
+ */
 export const MIN_REPEATS = 3;
 
 export const CANDIDATES_DIR = join(".gnomon-skills", "candidates");
@@ -167,6 +173,17 @@ function readRecords(file: string): AuditRecord[] {
   return out;
 }
 
+/** A file-name-safe rendering of text read from a trail. */
+function slug(text: string): string {
+  return (
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "x"
+  );
+}
+
 function shortHash(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 10);
 }
@@ -223,11 +240,14 @@ export function mineCandidates(config: GnomonConfig): SkillCandidate[] {
 
   const out: SkillCandidate[] = [];
   for (const [key, g] of groups) {
-    if (g.records.length < MIN_REPEATS) continue;
+    if (g.trails.size < MIN_REPEATS) continue;
     const who = g.role ? `the ${g.role} role` : "a role";
     out.push({
       v: 1,
-      id: `refusal-${g.rule}-${g.role || "any"}-${shortHash(key)}`,
+      // Role and rule come from trail records, which a file name must not
+      // trust: a role of "../../x" would otherwise write outside candidates/.
+      // The hash keeps ids distinct when two roles slug alike.
+      id: `refusal-${slug(g.rule)}-${slug(g.role || "any")}-${shortHash(key)}`,
       signal: "repeated_refusal",
       rule: g.rule,
       role: g.role,
