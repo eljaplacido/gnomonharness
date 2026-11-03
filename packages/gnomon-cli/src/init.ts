@@ -883,6 +883,7 @@ interface Template {
  * no provenance looks like a decision someone made deliberately.
  */
 function modelNote(choice: ModelChoice): string {
+  if (choice.note) return choice.note;
   if (choice.fallback) {
     return (
       `# These are generic starter tags: ${choice.fallback}, so nothing could be\n` +
@@ -1062,6 +1063,20 @@ const templatesFor = (choice: ModelChoice): Template[] => [
   { path: join("skills", "writing-tests.md"), content: SKILL_TESTS },
 ];
 
+/**
+ * The scaffold's files as `initSurface` writes them for `choice` (audit on),
+ * by relative path with `/`. `gnomon setup` diffs its proposal against these
+ * for a project that has no .gnomon/ yet, before anything is written.
+ * policy.toml's detected [verify] is not included: setup never edits it.
+ */
+export function scaffoldTexts(choice: ModelChoice): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const t of templatesFor(choice)) {
+    out[t.path.split(/[\\/]/).join("/")] = t.path === "config.toml" ? enableAuditBlock(t.content) : t.content;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Scaffolding
 // ---------------------------------------------------------------------------
@@ -1084,6 +1099,12 @@ export interface InitOptions {
    * pins that.
    */
   noVerify?: boolean;
+  /**
+   * Use these tags instead of detecting them: `gnomon setup` has already
+   * chosen, with the person's yes, and a second detection would be a second
+   * opinion nobody asked for. The scaffold is otherwise exactly init's.
+   */
+  models?: ModelChoice;
 }
 
 export interface InitResult {
@@ -1210,7 +1231,7 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
   // surface already made these choices.
   let choice: ModelChoice = options.from
     ? { large: FALLBACK_LARGE, small: FALLBACK_SMALL, detected: [] }
-    : await detectModels();
+    : options.models ?? (await detectModels());
 
   let templates = templatesFor(choice);
   if (options.from) {

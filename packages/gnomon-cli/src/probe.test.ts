@@ -385,6 +385,15 @@ describe("discoverRuntimes", () => {
     expect(parseListing(JSON.stringify({ models: [{ name: "m", model: "m" }], data: [{ id: "m" }] }))?.models).toEqual(["m"]);
   });
 
+  it("keeps Ollama's size on disk per model, which sizes a model the catalog does not know", async () => {
+    const body = JSON.stringify({ models: [{ name: "qwen3.6:35b", size: 23943292137 }, { name: "odd:1b", size: "big" }] });
+    expect(parseListing(body)).toEqual({ models: ["qwen3.6:35b", "odd:1b"], ownedBy: undefined, sizes: { "qwen3.6:35b": 23943292137 } });
+    const host = fakeHost({ platform: "linux", arch: "x64", urls: { "http://127.0.0.1:11434/api/tags": { status: 200, body } } });
+    expect((await discoverRuntimes(host)).find((r) => r.id === "ollama")?.sizes).toEqual({ "qwen3.6:35b": 23943292137 });
+    // An OpenAI-style listing says nothing about size, and none is invented.
+    expect(parseListing('{"object":"list","data":[{"id":"m"}]}')?.sizes).toBeUndefined();
+  });
+
   it("a get() that throws is a port that did not answer", async () => {
     const host = fakeHost({ platform: "linux", arch: "x64" });
     host.get = async () => {

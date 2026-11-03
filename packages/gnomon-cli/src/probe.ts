@@ -127,6 +127,8 @@ export interface Runtime {
    */
   state: "serving" | "absent" | "no_listing";
   models: string[];
+  /** Bytes on disk per model, where the listing says (Ollama's `size`). */
+  sizes?: Record<string, number>;
   why?: string;
 }
 
@@ -396,7 +398,9 @@ export async function probeHardware(host: ProbeHost, timeoutMs = COMMAND_TIMEOUT
 const OWNED_BY: Record<string, string> = { vllm: "vLLM", llamacpp: "llama.cpp" };
 
 /** Model names from an Ollama `/api/tags` or an OpenAI-style `/v1/models` body. */
-export function parseListing(body: string): { models: string[]; ownedBy?: string } | undefined {
+export function parseListing(
+  body: string
+): { models: string[]; ownedBy?: string; sizes?: Record<string, number> } | undefined {
   let json: unknown;
   try {
     json = JSON.parse(body);
@@ -405,18 +409,26 @@ export function parseListing(body: string): { models: string[]; ownedBy?: string
   }
   if (!json || typeof json !== "object") return undefined;
   const j = json as {
-    models?: Array<{ name?: unknown; model?: unknown }>;
+    models?: Array<{ name?: unknown; model?: unknown; size?: unknown }>;
     data?: Array<{ id?: unknown; owned_by?: unknown }>;
   };
   if (!Array.isArray(j.models) && !Array.isArray(j.data)) return undefined;
   const names = new Set<string>();
+  const sizes: Record<string, number> = {};
   for (const d of Array.isArray(j.data) ? j.data : []) if (typeof d?.id === "string" && d.id) names.add(d.id);
   for (const m of Array.isArray(j.models) ? j.models : []) {
     const n = typeof m?.name === "string" ? m.name : typeof m?.model === "string" ? m.model : "";
     if (n) names.add(n);
+    // Ollama says how big each model is on disk: what sizes an installed model
+    // the catalog does not know (catalog.ts, fitBySize).
+    if (n && typeof m?.size === "number" && Number.isFinite(m.size) && m.size > 0) sizes[n] = m.size;
   }
   const owner = (Array.isArray(j.data) ? j.data : []).map((d) => d?.owned_by).find((o) => typeof o === "string");
-  return { models: [...names], ownedBy: typeof owner === "string" ? owner : undefined };
+  return {
+    models: [...names],
+    ownedBy: typeof owner === "string" ? owner : undefined,
+    ...(Object.keys(sizes).length > 0 ? { sizes } : {}),
+  };
 }
 
 /**
@@ -446,7 +458,13 @@ export async function discoverRuntimes(host: ProbeHost, timeoutMs = LISTING_TIME
       const listing = parseListing(res.body);
       if (!listing) return { ...base, state: "no_listing", why: "answered, but not with a model listing" };
       const named = listing.ownedBy ? OWNED_BY[listing.ownedBy.toLowerCase()] : undefined;
-      return { ...base, label: named ?? rt.label, state: "serving", models: listing.models };
+      return {
+        ...base,
+        label: named ?? rt.label,
+        state: "serving",
+        models: listing.models,
+        ...(listing.sizes ? { sizes: listing.sizes } : {}),
+      };
     })
   );
 }

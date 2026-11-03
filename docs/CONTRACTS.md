@@ -1037,3 +1037,94 @@ trail verifies and it was authorised the way it says.
   session killed after a mid-run checkpoint. Resolving them is a person's
   call.
 - **The walk stops at 200,000 entries**, reported as `truncated`.
+
+## 15. `gnomon doctor --json` — schema `gnomon.doctor/1`
+
+Read-only: does this machine still run what this project says? Doctor probes
+the machine (the read-only probe of `gnomon init`), asks every role's endpoint
+for its model listing (a GET; no completion, nothing spent), and compares both
+with what `gnomon setup` recorded: the gitignored `.gnomon-setup.json` beside
+`.gnomon/`, and the `gnomon-setup:` line at the top of `roles.toml`. It writes
+nothing. Each finding that needs doing carries the command that would do it.
+
+**Exit codes:** **0** nothing needs attention; **1** something does (a role's
+model does not answer, the machine drifted from what setup saw, a local model
+will not fit, or there is no `.gnomon/`); **10** doctor could not run (a
+`--catalog` that cannot be read, or an error of its own). 0 and 1 are both
+`result`.
+
+Top-level keys: `schema`, `dir`, `catalog` (`as_of`, `label`, optional
+`stale`), `machine`, `runtimes`, `memory` (`kind`, `gib`, `ram_gib`, `label`),
+`recommended` (a tag or null), `surface` (null, or `hash`, `profile`, `routes`,
+`setup`), `facts` (`file`, `found`, optional `at`), `findings`, `next`,
+`exit`. Each finding: `kind`, `severity` (`problem` or `info`), `message`;
+optionally `fix`.
+
+| Finding `kind` | What it says |
+|---|---|
+| `surface` | no `.gnomon/`, or one that does not load |
+| `readiness` | a role's model does not answer its listing |
+| `memory` | the memory that bounds a model differs from what setup saw by more than 5% |
+| `gpu` | the GPUs differ from what setup saw |
+| `fit` | a local model needs more memory than this machine has (by the catalog) |
+| `tags` | the surface routes local roles to other tags than setup chose (an edit, not a fault) |
+| `catalog` | the catalog is past its `stale_after_days`, or differs from the one setup used |
+| `facts` | setup's facts are missing here, or a model server it saw does not answer |
+
+An error before a report exists prints `{schema, error, exit}`.
+
+**Fixture**: `conformance/doctor_report.json`. `packages/gnomon-cli/src/doctor.test.ts`
+asserts the code's `FINDING_KINDS` and `DOCTOR_EXIT` equal the fixture's lists,
+and checks real reports (drift, clear, no surface) against its key lists.
+
+## 16. `gnomon setup --json` — schema `gnomon.setup/1`
+
+`gnomon setup` scans the machine, recommends a local model from the dated
+catalog (`packages/gnomon-cli/catalog/models.toml`), pulls it only on an
+explicit yes, offers a speed check, connects an optional cloud model, suggests
+a mode, and writes `.gnomon/` only after the proposed diff is accepted.
+
+**Consent, off a terminal:** `--yes` approves the surface write and nothing
+else. A download needs `--pull TAG` naming it. A cloud call (the one-token key
+check) needs a person at the prompt and never happens off one. A run without
+`--yes` prints the proposal (`proposal.files[].diff`) and exits 4: that is how
+a dashboard shows the change before applying it.
+
+**Exit codes:** **0** written, or the surface already said this; **1** usage
+(a flag without its value, an unknown `--mode` or `--hybrid-control`); **3**
+the surface changed while setup waited for consent, nothing written; **4**
+needs consent or a model (no `--yes`, a download not named by `--pull`, no
+local or cloud model to set up); **10** the catalog cannot be read; **12** the
+chosen model server stopped answering (the pull or the speed check).
+
+**Values published here, and in no other enumeration yet:**
+- `mode.suggested` / `mode.chosen`: `local_only`, `hybrid`, `cloud_first`,
+  written as `role_profile` `local_first`, `frontier_plan`, `all_remote` (all
+  three already in §3).
+- `hybrid_control.value`: `off`, `observe`, `ask`, `auto`. It is recorded as a
+  preference with `active: false` and changes nothing until PR #102's
+  `[roles.X.escalate]` exists; `control` enters `gnomon enumerations` with
+  that step (design step 6). The default is `observe`.
+- `steps[].id`: `probe`, `recommend`, `choose`, `pull`, `speed`, `cloud`,
+  `mode`, `write`.
+- runtime ids: `ollama`, `lmstudio`, `llamacpp`, `vllm`; option `fit`:
+  `fits`, `tight`, `over`, `unknown`.
+
+Top-level keys: `schema`, `dir`, `catalog`, `local`, `pull`, `speed`, `cloud`,
+`mode`, `hybrid_control`, `proposal` (`fresh`, `files` of `{path, action,
+diff}`, `facts_file`, `applied`), `steps`, `next`, `exit`; optionally
+`machine`, `runtimes`, `recommendation`, `surface_hash` (`before`, `after`),
+`why`. A key value is never in it: `cloud` carries `key_env` (a name) and
+`key_held` (a boolean).
+
+**What setup writes to the surface.** Tags and routing through the same line
+edits as `gnomon endpoint add`, and three comment lines at the top of
+`roles.toml` holding only tags, the mode and the catalog's label. No hardware,
+host, user or date goes into a committed file, so two machines that choose the
+same models write the same bytes and the same hash. The hardware facts go to
+`.gnomon-setup.json`, which setup adds to `.gitignore`.
+
+**Fixture**: `conformance/setup_report.json`. `packages/gnomon-cli/src/setup_wizard.test.ts`
+asserts `HYBRID_CONTROLS`, `SETUP_EXIT` and the suggestion values equal the
+fixture's lists, and checks documents from a proposal, a write and a refusal
+against `report_keys`.
