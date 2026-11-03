@@ -135,6 +135,7 @@ jobs:
             echo "| File | Bytes | MiB |"
             echo "|---|---:|---:|"
             for f in gnomon-desktop gnomon-desktop.exe bundle/nsis/*.exe bundle/msi/*.msi bundle/dmg/*.dmg bundle/deb/*.deb bundle/appimage/*.AppImage; do
+              [ -f "$f" ] || continue   # the two bare names exist on one OS each
               b=$(wc -c < "$f" | tr -d ' ')
               echo "| \`$f\` | $b | $(awk "BEGIN { printf \"%.1f\", $b / 1048576 }") |"
             done

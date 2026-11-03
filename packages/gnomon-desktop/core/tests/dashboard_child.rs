@@ -56,7 +56,8 @@ fn stand_in(dir: &Path, lines: &[String], exit: Option<i32>) -> PathBuf {
     {
         let p = dir.join("gnomon.cmd");
         let mut s = String::from("@echo off\r\n");
-        s.push_str("echo %*> \"%~f0.args\"\r\ncd> \"%~f0.cwd\"\r\n");
+        // Redirect first: `echo ... 0> file` would read the 0 as a handle.
+        s.push_str("> \"%~f0.args\" echo %*\r\n> \"%~f0.cwd\" cd\r\n");
         for l in lines {
             if l.is_empty() {
                 s.push_str("echo.\r\n");
