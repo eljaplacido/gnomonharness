@@ -26,6 +26,29 @@
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-11-03
+
+**Upgrading from 0.3.x.** Run `gnomon migrate` in each project. It applies four
+migrations: the shorter verify rule in `system.md`, delegate-once wording for
+the `task` tool, `[defaults] stream = true` and `[defaults] max_tokens = 32768`.
+Running it twice changes nothing. Migrating changes the surface hash, so gnomon
+asks for trust again. Under `gnomon task`, a surface that grants more than the
+defaults runs clamped until it is trusted. Defaults that change behaviour,
+described in the entries below:
+
+- Model calls stream and carry an output limit. A tool call cut off by the
+  limit is not run, and repeated cut-offs end the turn as `truncated`.
+- Unstreamed and Ollama calls are bounded by gnomon's own `request_timeout_ms`,
+  not by Node's 300 s default (#98 now works under `gnomon task` too).
+- A llama.cpp context overflow trims the turn and continues (code 13).
+- Once a fallback answers, the rest of the turn stays on it.
+- New `record` rule: no role may write gnomon's own records (`.gnomon-audit/`,
+  `.gnomon-trials/`). A change to those records that gnomon did not make stops
+  the turn with `stop_reason: "tamper"` (code 3).
+- `api.deepseek.com` endpoints replay reasoning by default; others can opt in
+  with `replay_reasoning`. `steer_role` is opt-in, and a template that refuses a
+  late system message is answered automatically.
+
 - **gnomon's mid-turn messages can go out as user messages, per endpoint;
   a template that refuses them as system messages is answered.** gnomon
   steers a turn with system messages appended after it has started: the
@@ -3208,7 +3231,8 @@ was written.
   `git tag`, not a documentation edit as well.
 -->
 
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.0
 [0.3.3]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.3
 [0.3.2]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.2
 [0.3.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.1
