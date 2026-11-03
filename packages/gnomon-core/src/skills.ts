@@ -28,12 +28,14 @@ import {
   renameSync,
   rmSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { hostname, userInfo } from "node:os";
 import { GnomonConfig, parseToml, recomputeManifest, manifestHash } from "./config.js";
-import { AuditTrail, resolveAudit, type AuditRecord } from "./audit.js";
+import { AuditTrail, resolveAudit, verifyTrail, recordHash, type AuditRecord } from "./audit.js";
 import { harnessBuild } from "./build.js";
+import { unresolvedTamper, compareWithCheckpoint, writeTamperRecord, writeCheckpoint } from "./record_tamper.js";
+import { describeChanges } from "./record_guard.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -339,6 +341,12 @@ export interface SkillDecisionOptions {
   reason?: string;
   /** Whether a terminal was attached. Defaults to stdin's TTY state. */
   interactive?: boolean;
+  /**
+   * Accept only: the path of a `gnomon skill trial` report.json, relative to
+   * the repository root or absolute. Checked by `checkEvidence` before the
+   * file moves; its hash is what the `skill_accept` record cites.
+   */
+  evidence?: string;
 }
 
 export interface SkillDecision {
@@ -471,6 +479,288 @@ function assertSkillId(id: string): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Evidence: a trial report, checked before an accept
+// ---------------------------------------------------------------------------
+
+/** What a `skill_accept` record says about the trial it cites. */
+export interface SkillEvidence {
+  /** The report, repo-relative with POSIX separators when inside the repo */
+  report: string;
+  report_sha256: string;
+  meets_thresholds: true | false | "undetermined";
+  /** The `skill_trial` record that names this report's hash. */
+  trial_record: { trail: string; seq: number; hash: string };
+  /**
+   * Whether the trail was also checked against signed heads ([audit.attest]).
+   * False means the chain verified and the record agrees with the report,
+   * which proves consistency, not provenance: anyone who can write the
+   * directory can build a consistent trail. With a signer declared, an
+   * unsigned or broken anchor is refused.
+   */
+  attested: boolean;
+}
+
+/**
+ * `[skills] require_trial` in policy.toml. Off by default: a small project
+ * should not need a trial to save a note. A team turns it on.
+ */
+export function requireTrial(config: GnomonConfig): boolean {
+  const s = (config.policy as { skills?: { require_trial?: unknown } } | undefined)?.skills;
+  return s?.require_trial === true;
+}
+
+/**
+ * Whether the surface declares a signer that can anchor a trail: `[audit.attest]`
+ * with a `sign` command, and a `verify` command or `public_key` to check its
+ * heads with.
+ *
+ * `require_trial` needs one. Without it a sealed, chained trial trail proves
+ * consistency and nothing else, and re-review built one by hand with
+ * `recordHash` -- any process with a shell can. An anchor outside the file is
+ * the only thing that makes "a trial produced this" checkable (audit.ts).
+ */
+export function signerDeclared(config: GnomonConfig): boolean {
+  const a = resolveAudit(config).attest;
+  return Boolean(a?.enabled && (a.verify || a.public_key));
+}
+
+/**
+ * Why the declared verifier is not pinned by the surface hash, or null when
+ * it is.
+ *
+ * Round-3 review: with `public_key = "keys/audit.pub"` -- a file outside
+ * `.gnomon/` -- swapping the key for one the agent holds moved nothing, and a
+ * report the agent signed was accepted under require_trial. So, under
+ * require_trial, what CHECKS a signature must be part of the surface: a PEM
+ * inline in config.toml, or a key file under `.gnomon/` (hashed); a `verify`
+ * command whose every path-like word names a file under `.gnomon/`. Then
+ * changing either moves the hash, and a surface that grants more than the
+ * scaffold needs a person's trust again.
+ */
+export function verifierOutsideSurface(config: GnomonConfig): string | null {
+  const raw = (config.config as { audit?: { attest?: { public_key?: unknown; verify?: unknown } } } | undefined)
+    ?.audit?.attest;
+  const root = resolve(config.gnomonDir, "..");
+  const gnomon = resolve(config.gnomonDir);
+  const unhashed = [join(gnomon, "skills", "proposed"), join(gnomon, "extensions")];
+  const pinned = (p: string): boolean => {
+    const abs = isAbsolute(p) ? resolve(p) : resolve(root, p);
+    const inside = (base: string) => {
+      const rel = relative(base, abs);
+      return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+    };
+    return inside(gnomon) && !unhashed.some(inside);
+  };
+  // An in-process public key, which gnomon checks itself, is required.
+  // Round-4 review: path-word pinning of a `verify` COMMAND cannot follow
+  // `make -s verify-head`, `npm run verify`, `python3 -m verifier` -- the
+  // agent edited the Makefile the command ran, and a junk signature passed.
+  // A verify command may still be declared; under require_trial it is not
+  // used to judge evidence (checkEvidence passes the key alone).
+  const key = typeof raw?.public_key === "string" ? raw.public_key.trim() : "";
+  if (!key) {
+    return `no public_key is declared. require_trial needs a key gnomon verifies itself -- inline in config.toml, or a file under .gnomon/ -- because a verify command can run anything (make, npm run) that the surface hash does not cover.`;
+  }
+  if (!key.startsWith("-----BEGIN") && !pinned(key)) {
+    return `public_key = "${key}" is a file outside .gnomon/, so replacing it does not move the surface hash. Put the PEM inline in config.toml, or the file under .gnomon/.`;
+  }
+  return null;
+}
+
+/**
+ * What a signer proves, said where the refusal is read. A signer any process
+ * of this user can run proves only that some process of this user signed --
+ * it does not stop an agent that has a shell, which can run it too.
+ */
+const SIGNER_GUARANTEE =
+  "What a signer proves depends on who can make it sign. A key file or an unconfirmed " +
+  "ssh-agent signs for any process of yours, the agent's shell included: a script that runs " +
+  "a trial with a stubbed runner and lets that signer sign gets an accepted skill. So it proves " +
+  "only that the trail was not edited afterwards by someone without the key. The guarantee " +
+  "against an agent with a shell comes ONLY from a signer that needs a person for each " +
+  "signature -- confirming it at the end of the trial (ssh-agent with `ssh-add -c`, a FIDO or " +
+  "hardware key that needs a touch, a passphrase prompt) -- or from the kernel sandbox " +
+  "(exec os), which keeps the agent away from the key. require_trial is off by default.";
+
+const SIGNER_HOWTO =
+  "Declare a signer in .gnomon/config.toml, so trial trails are anchored outside the file:\n" +
+  "  [audit.attest]\n" +
+  '  sign = "<command: digest on stdin, signature on stdout>"\n' +
+  '  public_key = "<inline PEM, or a file under .gnomon/>"   # or verify = "<command>"\n' +
+  "(README, \"[audit.attest] — an anchor outside the file\"). Or turn require_trial off.\n" +
+  SIGNER_GUARANTEE;
+
+/**
+ * Check a trial report against the skill about to be accepted.
+ *
+ * Refused, whatever `require_trial` says, when the report is evidence about
+ * something else -- that would put a hash on the record that proves nothing
+ * about this decision:
+ *   - not a `gnomon.trial/1` report;
+ *   - a different skill content (`content_sha256`);
+ *   - a different base surface (`arms.base.surface_hash`): the trial measured
+ *     the skill against a surface that is not the one it is joining;
+ *   - no `skill_trial` record vouches for the report. Vouching means: the
+ *     record names the report's sha256; it sits in a sealed trail of exactly
+ *     session_start (mode "trial"), skill_trial, session_end whose chain
+ *     verifies, every record hash recomputed; it agrees with the report on
+ *     skill, content, both surface hashes and the verdict; and, when the
+ *     surface declares [audit.attest], the trail's signed heads verify and
+ *     cover it. Until review, a single hand-written line
+ *     `{"kind":"skill_trial","report_sha256":X}` in any .jsonl counted.
+ *
+ * With `require_trial` on, a report that does not meet its declared
+ * thresholds is refused too. With it off, the person may accept anyway; the
+ * record says what the report found, so the choice is visible.
+ */
+export function checkEvidence(
+  config: GnomonConfig,
+  want: { content: string; surface: string; required: boolean; report: string }
+): SkillEvidence {
+  const root = resolve(config.gnomonDir, "..");
+  const file = isAbsolute(want.report) ? want.report : join(root, want.report);
+  const shown = (p: string) => {
+    const rel = relative(root, p);
+    return rel.startsWith("..") || isAbsolute(rel) ? p : rel.split(sep).join("/");
+  };
+  const refuse = (why: string): never => {
+    throw new SkillRefusal(`Not accepted: ${why}`);
+  };
+  if (!existsSync(file)) refuse(`no trial report at ${want.report}.`);
+  const body = readFileSync(file);
+  let report: TrialReportFields;
+  try {
+    report = JSON.parse(body.toString("utf-8"));
+  } catch {
+    return refuse(`${want.report} is not JSON.`);
+  }
+  if (report.schema !== "gnomon.trial/1") refuse(`${want.report} is not a gnomon skill trial report.`);
+  if (report.content_sha256 !== want.content) {
+    refuse(
+      `the report is for different skill content (${String(report.content_sha256).slice(0, 12)}); ` +
+        `this proposal is ${want.content.slice(0, 12)}. Trial the proposal as it is now.`
+    );
+  }
+  const base = report.arms?.base?.surface_hash;
+  if (base !== want.surface) {
+    refuse(
+      `the trial ran against surface ${String(base).slice(0, 12)}; this surface is ` +
+        `${want.surface.slice(0, 12)}. Trial it again on the current surface.`
+    );
+  }
+  const report_sha256 = createHash("sha256").update(body).digest("hex");
+  const found = findTrialRecord(config, report_sha256, report, want.required);
+  if ("refused" in found) refuse(found.refused);
+  const { trial_record, attested } = found as { trial_record: SkillEvidence["trial_record"]; attested: boolean };
+  // Belt and braces: acceptSkill refuses require_trial without a signer before
+  // it gets here, and findTrialRecord refuses an unsigned trail when one is
+  // declared. A caller that reaches this some other way still cannot pass.
+  if (want.required && !attested) refuse(`require_trial is on and the trial's trail is not attested. ${SIGNER_HOWTO}`);
+  const meets = report.meets_thresholds;
+  const verdict = meets === true || meets === false ? meets : "undetermined";
+  if (want.required && verdict !== true) {
+    refuse(`require_trial is on, and this trial's meets_thresholds is ${JSON.stringify(verdict)}.`);
+  }
+  return { report: shown(file), report_sha256, meets_thresholds: verdict, trial_record, attested };
+}
+
+/** The report fields evidence is checked against. */
+interface TrialReportFields {
+  schema?: unknown;
+  skill?: unknown;
+  content_sha256?: unknown;
+  arms?: { base?: { surface_hash?: unknown }; skill?: { surface_hash?: unknown } };
+  meets_thresholds?: unknown;
+}
+
+/**
+ * The `skill_trial` record that vouches for a report (see checkEvidence), or
+ * why none does. Every candidate trail is checked; the first that passes
+ * wins, and otherwise the last reason is the one reported.
+ */
+function findTrialRecord(
+  config: GnomonConfig,
+  reportSha: string,
+  report: TrialReportFields,
+  /** require_trial: heads are checked against the in-process public_key only. */
+  keyOnly = false
+): { trial_record: SkillEvidence["trial_record"]; attested: boolean } | { refused: string } {
+  const root = resolve(config.gnomonDir, "..");
+  const audit = resolveAudit(config);
+  const dir = audit.dir;
+  const attest = audit.attest;
+  const signer = Boolean(attest && (attest.enabled || attest.verify || attest.public_key));
+  let why = `no skill_trial record in the audit trail names this report (${reportSha.slice(0, 12)}).`;
+  if (!existsSync(dir)) return { refused: why };
+  for (const f of readdirSync(dir).filter((x) => x.endsWith(".jsonl")).sort()) {
+    const file = join(dir, f);
+    const text = readFileSync(file, "utf-8");
+    if (!text.includes(reportSha)) continue;
+    let records: AuditRecord[];
+    try {
+      records = text.split("\n").filter(Boolean).map((l) => JSON.parse(l) as AuditRecord);
+    } catch {
+      why = `the trail naming this report (${f}) does not parse.`;
+      continue;
+    }
+    const r = records[1];
+    if (
+      records.length !== 3 ||
+      records[0]!.kind !== "session_start" ||
+      records[0]!.mode !== "trial" ||
+      r?.kind !== "skill_trial" ||
+      records[2]!.kind !== "session_end"
+    ) {
+      why = `${f} is not a trial's own sealed trail (session_start mode "trial", skill_trial, session_end).`;
+      continue;
+    }
+    if (r.report_sha256 !== reportSha) continue;
+    // verifyTrail recomputes every record's hash and checks each link; a
+    // record without a hash in a chained trail is broken, and a trail without
+    // any hash is not chained at all -- refused here, since the trial always
+    // writes a chained one.
+    // Under require_trial, only the public_key gnomon checks itself decides:
+    // a verify command can run what the surface hash does not cover.
+    const checker = attest && keyOnly ? { ...attest, verify: null } : attest;
+    const v = verifyTrail(file, signer && checker ? { attest: checker } : {});
+    if (!v.ok || !v.sealed || typeof r.hash !== "string" || r.hash !== recordHash(r)) {
+      why = `the trail naming this report (${f}) does not verify as a sealed hash chain.`;
+      continue;
+    }
+    if (signer) {
+      const a = v.attestation;
+      if (!a || a.status !== "signed" || a.unattested > 0) {
+        why = `[audit.attest] is declared and ${f} is not covered by signed heads (${a?.status ?? "unchecked"}).`;
+        continue;
+      }
+    }
+    const disagree = [
+      ["skill", r.skill, report.skill],
+      ["content_sha256", r.content_sha256, report.content_sha256],
+      ["surface_hash_base", r.surface_hash_base, report.arms?.base?.surface_hash],
+      ["surface_hash_skill", r.surface_hash_skill, report.arms?.skill?.surface_hash],
+      ["meets_thresholds", r.meets_thresholds, report.meets_thresholds],
+    ].filter(([, a, b]) => a !== b).map(([k]) => k);
+    if (disagree.length > 0) {
+      why = `the skill_trial record in ${f} disagrees with the report on ${disagree.join(", ")}.`;
+      continue;
+    }
+    const rel = relative(root, file);
+    const trail = rel.startsWith("..") || isAbsolute(rel) ? file : rel.split(sep).join("/");
+    return { trial_record: { trail, seq: r.seq, hash: r.hash }, attested: signer };
+  }
+  return { refused: why };
+}
+
+/**
+ * Refused: a skill accepted while gnomon's own records show a change gnomon
+ * did not make (record_guard.ts) that no person has resolved. A trail that
+ * has been tampered with is not evidence for anything, including the trial a
+ * skill is accepted on. The CLI exits 3 (refused_by_gate).
+ */
+export class RecordTamperRefusal extends SkillRefusal {}
+
 /**
  * Accept a proposal: move it into `.gnomon/skills/`, and record that it
  * happened.
@@ -491,6 +781,28 @@ export function acceptSkill(
 ): SkillDecision {
   assertSkillId(id);
   refuseInAgentSession("accept");
+  {
+    // The records against the last checkpoint a session left: a change in
+    // the gap between sessions -- a background job, a deleted tamper trail --
+    // is recorded here as a tamper event, and then blocks like any other.
+    const since = compareWithCheckpoint(config, "at_accept");
+    if (since?.changes.length) {
+      writeTamperRecord(config, {
+        when: since.when,
+        changes: describeChanges(resolve(config.gnomonDir, ".."), since.changes),
+        changed: since.changes.length,
+      });
+      writeCheckpoint(config);
+    }
+    const open = unresolvedTamper(config);
+    if (open.length > 0) {
+      throw new RecordTamperRefusal(
+        `Not accepted: gnomon's own records were changed by something other than gnomon, and ` +
+          `${open.length} such event(s) are unresolved (first: ${open[0]!.trail}:${open[0]!.seq}). ` +
+          `Look at \`gnomon audit tamper\`, then \`gnomon audit resolve <trail>:<seq> --reason "…"\`.`
+      );
+    }
+  }
   const from = join(config.gnomonDir, PROPOSED_DIR, `${id}.md`);
   if (!existsSync(from)) {
     throw new Error(`No proposed skill "${id}". Run \`gnomon skill list\`.`);
@@ -499,6 +811,29 @@ export function acceptSkill(
   const skill = parseSkill(id, raw.toString("utf-8"), true);
   const content = skillContentHash(raw);
   const { manifest, surface_hash: before } = recomputeManifest(config.gnomonDir);
+  // Evidence is checked before anything is written or moved: a refused
+  // accept leaves the proposal exactly where it was, and records nothing.
+  const required = requireTrial(config);
+  if (required && !signerDeclared(config)) {
+    throw new SkillRefusal(
+      `Not accepted: [skills] require_trial is on, but no signer is declared. Without one, a sealed ` +
+        `trial trail can be built by hand with the chain's own hash function, so a trial report ` +
+        `proves nothing. ${SIGNER_HOWTO}`
+    );
+  }
+  if (required) {
+    const loose = verifierOutsideSurface(config);
+    if (loose) throw new SkillRefusal(`Not accepted: [skills] require_trial is on, and ${loose}`);
+  }
+  if (required && !opts.evidence) {
+    throw new SkillRefusal(
+      `Not accepted: [skills] require_trial is on in policy.toml. Run \`gnomon skill trial ${id}\` ` +
+        `and pass its report: \`gnomon skill accept ${id} --evidence <report.json>\`.`
+    );
+  }
+  const evidence = opts.evidence
+    ? checkEvidence(config, { content, surface: before, required, report: opts.evidence })
+    : "none";
   // The hash the move WILL produce, named before it happens.
   const rel = `.gnomon/skills/${id}.md`;
   const after = manifestHash([...manifest.filter((s) => s.path !== rel), { path: rel, sha256: content }]);
@@ -515,9 +850,10 @@ export function acceptSkill(
         content_sha256: content,
         surface_hash_before: before,
         surface_hash_after: after,
-        // A trial report's hash once `--evidence` exists. Until then the
-        // record says plainly that the decision was made on reading alone.
-        evidence: "none",
+        // The trial report this decision cites, or plainly "none": accepted on
+        // reading alone.
+        evidence,
+        require_trial: required,
         ...whoDecided(opts),
       },
       before

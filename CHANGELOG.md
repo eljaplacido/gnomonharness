@@ -121,6 +121,28 @@
   - Parallel tool calls sent whole at one index are kept apart by their ids.
   - Turn records carry `wire`: whether the call was streamed and its clocks.
   - Tests use fake servers on 127.0.0.1.
+- **Tampering with gnomon's records is detected, whatever command did it.**
+  The `record` rule's patterns refuse the writes they can see, and three
+  review rounds kept finding routes past them: `cp -r X/. .`,
+  `git checkout evil -- .`, `git reset`, `git stash pop`, rsync and tar into
+  an ancestor, pathspecs, symlinks resolved from the cwd.
+  - The **record guard** now snapshots the record directories around every
+    tool call that can write, and at the end of each turn and session.
+  - Any change gnomon's own writer did not make stops the turn
+    (`stop_reason: "tamper"`, code 3) and writes a `record_tamper` record.
+  - `gnomon skill accept` refuses until a person runs `gnomon audit resolve`.
+    `gnomon audit tamper` lists the open events.
+  - Between sessions, a checkpoint of the records is sealed into a
+    `session_end` (signed when a signer is declared). The next session and
+    `skill accept` compare against it, so a background job's write, or a
+    deleted tamper trail, is a tamper event.
+  - A NEW gnomon trail from another process (the operator's own CLI) is a
+    `record_notice`, not a stop.
+  - Resolving needs a person: a terminal on stdin and stdout, or a
+    person-present signer. `env -u GNOMON_AGENT_SESSION` is not enough.
+  - The patterns stay as fast pre-refusals. `ln -s` now resolves its source
+    from the link's directory, and `cp -l`, `cp -s` and `link` count as links.
+
 - **More routes into gnomon's records are refused** (re-review of the
   `record` rule):
   - a hard link made earlier (checked by inode, only for files with more than
@@ -137,6 +159,33 @@
   The docs now state the threat model plainly. This is a pattern check over a
   command's text, not containment: run-time paths, scripts and MCP calls are
   not seen by it. The kernel sandbox is what contains them.
+- **`gnomon skill accept ID --evidence REPORT` and `[skills] require_trial`.**
+  An accept can now cite a `gnomon skill trial` report. The `skill_accept`
+  record carries the report's hash and points at the `skill_trial` record
+  that vouches for it. That record must be alone in a sealed trail whose
+  chain verifies, and must agree with the report. With `[audit.attest]`
+  declared, the trail must also be covered by signed heads. The citation is
+  refused, with exit 3, when the report is for different skill content, ran
+  against a different base surface hash, or no record vouches for it.
+  `require_trial = true` in `policy.toml` is off by default. When it is on,
+  accept refuses in three cases: without such a report, with one that did not
+  meet its thresholds, or when no `[audit.attest]` signer is declared. A
+  signer is required because without one a sealed trail can be built by
+  hand.
+  - The verifier must be pinned by the surface hash: a `public_key` that
+    gnomon checks itself, inline or under `.gnomon/`. A `verify` command
+    alone is refused, because `make` and `npm run` run files the hash does
+    not cover.
+  - `recordTrial` signs only reports `runTrial` produced, frozen. That does
+    not stop forgery: a stubbed runner plus a key-file signer still passes.
+  - The docs say plainly what each kind of signer proves. A key file any of
+    your processes can use does not stop an agent with a shell. A
+    person-present signer (`ssh-add -c`, a FIDO key, a passphrase) or the
+    kernel sandbox does.
+
+  Nothing accepts a skill automatically. Step 3 of
+  `docs/design/SKILL-TRIALS.md`.
+
 - **`gnomon skill trial ID`: measure a proposed skill before accepting it.**
   A proposal could only be accepted on a reading of it.
   - The trial runs the tasks in `.gnomon/trials/<name>.toml` once per arm per

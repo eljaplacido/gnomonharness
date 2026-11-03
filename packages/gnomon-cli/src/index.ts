@@ -29,6 +29,8 @@ import {
   acceptSkill,
   rejectSkill,
   SkillRefusal,
+  unresolvedTamper,
+  resolveTamper,
   mineCandidates,
   writeCandidates,
   loadCandidates,
@@ -1309,8 +1311,46 @@ async function cmdAudit(args: CliArgs): Promise<void> {
   const settings = resolveAudit(config);
   const sub = subcommandOr(args, "show");
 
+  // record_tamper events (record_guard.ts): list them, and let a person
+  // resolve one. Accepting a skill is refused while any is unresolved.
+  if (sub === "tamper") {
+    const open = unresolvedTamper(config);
+    if (open.length === 0) {
+      console.log("No unresolved record_tamper events.");
+      return;
+    }
+    console.log(`${open.length} unresolved record_tamper event(s):`);
+    for (const e of open) {
+      const changes = (e.record.changes as Array<{ path: string; change: string }> | undefined) ?? [];
+      const by = e.record.tool ? `${String(e.record.tool)} ${String(e.record.target ?? "")}`.trim() : String(e.record.when);
+      console.log(`  ${e.trail}:${e.seq}  ${by}`);
+      for (const c of changes.slice(0, 10)) console.log(`      ${c.change} ${c.path}`);
+    }
+    console.log('Resolve one with `gnomon audit resolve <trail>:<seq> --reason "…"` after looking at what changed.');
+    process.exit(3);
+  }
+  if (sub === "resolve") {
+    const ref = args.positional[0] ?? "";
+    const m = /^(.+):(\d+)$/.exec(ref);
+    const reason = typeof args.flags.reason === "string" && args.flags.reason !== "true" ? args.flags.reason : "";
+    if (!m) {
+      console.error('Usage: gnomon audit resolve <trail>:<seq> --reason "…"   (see `gnomon audit tamper`)');
+      process.exit(1);
+    }
+    try {
+      // A person at a terminal: stdin AND stdout. A tool subprocess has pipes.
+      const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+      const out = resolveTamper(config, { trail: m[1]!, seq: Number(m[2]) }, reason, { interactive });
+      console.log(`Resolved ${ref}. Recorded in ${out.trail} (seq ${out.record.seq}).`);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(/agent session/.test(String(err)) ? 3 : 1);
+    }
+    return;
+  }
+
   if (sub !== "show" && sub !== "list" && sub !== "verify") {
-    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify`);
+    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify | tamper | resolve`);
     process.exit(1);
   }
 
@@ -1623,7 +1663,14 @@ async function cmdSkill(args: CliArgs): Promise<void> {
         }
       };
       if (sub === "accept") {
-        const d = acceptSkill(config, id);
+        const evidence = typeof args.flags.evidence === "string" && args.flags.evidence !== "true"
+          ? args.flags.evidence
+          : undefined;
+        const d = acceptSkill(config, id, { evidence });
+        const ev = d.record?.evidence as { report?: string; meets_thresholds?: unknown } | string | undefined;
+        if (ev && typeof ev === "object") {
+          console.log(`Evidence: ${ev.report} (meets_thresholds: ${String(ev.meets_thresholds)})`);
+        }
         console.log(`Accepted ${id} → ${d.path}`);
         console.log(
           "The surface hash has changed. The skill loads from the next session."
@@ -1639,9 +1686,11 @@ async function cmdSkill(args: CliArgs): Promise<void> {
       }
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
-      // A rule saying no -- an agent session, and the refusals that later
-      // steps add as subclasses -- is a refusal (3, refused_by_gate,
-      // docs/CONTRACTS.md §1), not the `failed` result 1 means.
+      // A rule saying no -- an agent session, require_trial, evidence that
+      // does not vouch, an unresolved tamper event: every SkillRefusal -- is
+      // a refusal (3, refused_by_gate, docs/CONTRACTS.md §1), not the
+      // `failed` result 1 means. Anything else (no such proposal, a bad id,
+      // an unwritable trail) stays 1.
       process.exit(err instanceof SkillRefusal ? 3 : 1);
     }
     return;
@@ -2166,17 +2215,25 @@ Commands:
           report what came back. A model listing is not a test of a key —
           some providers serve one to no key at all.
 
-  audit [show|verify] [--dir <path>]
+  audit [show|verify|tamper|resolve <trail>:<seq> --reason <text>] [--dir <path>]
     Audit trails, when [audit] is enabled. 'verify' re-hashes each record
     and checks the chain, so a trail altered after the fact is detectable.
+    'tamper' lists record_tamper events: changes to gnomon's own records
+    that gnomon did not make (exit 3 while any is unresolved). 'resolve'
+    is a person's acknowledgement of one, recorded; skill accept refuses
+    while any is unresolved.
 
-  skill [list [--candidates]|accept <id>|reject <id> [--reason <text>]|mine [--json]] [--dir <path>]
+  skill [list [--candidates]|accept <id> [--evidence <report.json>]|reject <id> [--reason <text>]|mine [--json]] [--dir <path>]
     Skills the harness has learned. An agent proposes into
     .gnomon/skills/proposed/; accepting moves it into .gnomon/skills/,
     which changes the surface hash and applies from the next session.
     Accept and reject each write a skill_accept / skill_reject audit
     record (content hash, surface hash before and after, who), even when
-    [audit] is off.
+    [audit] is off. --evidence cites a "skill trial" report: it must be for
+    this exact content and base surface, and named by a sealed, verified
+    skill_trial record that agrees with it. With [skills] require_trial =
+    true in policy.toml, accept refuses without a report that also meets
+    its thresholds. A refused accept exits 3.
     mine reads the audit trails, with no model call, and writes skill
     candidates (evidence with record pointers, not skill text) to
     .gnomon-skills/candidates/, which is not hashed.
