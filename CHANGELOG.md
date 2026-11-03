@@ -201,6 +201,14 @@
     deleted tamper trail, is a tamper event.
   - A NEW gnomon trail from another process (the operator's own CLI) is a
     `record_notice`, not a stop.
+  - Only the newest checkpoint is kept, its map no longer lists the
+    checkpoints, and maps are not in the newest-16 hash (they carry their own
+    digest). Every checkpoint used to be kept, `[audit]` on or off: after 400
+    sessions in one repository that was 1,200 record files and 35 MB against
+    400 and 3.5 MB before the guard (d59e6c19). A session cost 210 ms more CPU
+    than there by then, up from 80 ms at the start, and each record snapshot
+    took 8 ms instead of 2. Another session's pruning is not counted as
+    tampering; removing the newest checkpoint still is.
   - Resolving needs a person: a terminal on stdin and stdout, or a
     person-present signer. `env -u GNOMON_AGENT_SESSION` is not enough.
   - The patterns stay as fast pre-refusals. `ln -s` now resolves its source

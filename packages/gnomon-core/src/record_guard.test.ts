@@ -245,6 +245,52 @@ describe("between sessions: checkpoints (round 4)", () => {
     expect(() => acceptSkill(loadConfig(root), "fix-it")).toThrow(RecordTamperRefusal);
   }, 30_000);
 
+  it("keeps only the newest checkpoint, does not hash its map, and still catches a change between sessions", () => {
+    // Regression trace 2026-11-03: every checkpoint was kept, each map listing
+    // every record file -- 400 sessions left 1,200 files and 35 MB, and the
+    // newest-16 hash re-read the maps on every snapshot.
+    surface();
+    mkdirSync(audit(), { recursive: true });
+    writeFileSync(join(audit(), "old.jsonl"), "{}\n");
+    const config = loadConfig(root);
+    for (let i = 0; i < 5; i++) {
+      writeFileSync(join(audit(), `s-${i}.jsonl`), "{}\n"); // a session's trail
+      expect(writeCheckpoint(config)).not.toBeNull();
+    }
+    const cps = readdirSync(join(audit(), "checkpoints")).sort();
+    expect(cps.map((f) => f.replace(/^checkpoint-.*?\.(jsonl|files\.json)$/, "$1"))).toEqual(["files.json", "jsonl"]);
+    const map = JSON.parse(readFileSync(join(audit(), "checkpoints", cps[0]!), "utf-8")) as Record<string, string>;
+    expect(Object.keys(map).some((k) => k.includes("checkpoint-"))).toBe(false);
+    expect(Object.keys(map)).toContain(".gnomon-audit/s-4.jsonl");
+    const snap = snapshotRecords(recordDirsOf(config));
+    expect(snap.files.get(join(audit(), "checkpoints", cps[0]!))?.sha).toBeUndefined();
+    expect(snap.files.get(join(audit(), "s-4.jsonl"))?.sha).toBeDefined();
+    expect(compareWithCheckpoint(config)).toBeNull();
+    // Between sessions: a record changed, and the newest checkpoint is the one compared with.
+    appendFileSync(join(audit(), "old.jsonl"), '{"forged":1}\n');
+    rmSync(join(audit(), "s-0.jsonl"));
+    expect(compareWithCheckpoint(config)?.changes.map((c) => [c.change, c.path.slice(root.length + 1).replace(/\\/g, "/")]).sort()).toEqual([
+      ["modified", ".gnomon-audit/old.jsonl"],
+      ["removed", ".gnomon-audit/s-0.jsonl"],
+    ]);
+  });
+
+  it("a live session does not count another session's checkpoint pruning as tampering; removing the newest still is", () => {
+    surface();
+    mkdirSync(audit(), { recursive: true });
+    const config = loadConfig(root);
+    writeCheckpoint(config);
+    const live = RecordGuard.for(config);
+    // Another session ends: a new checkpoint, the older one removed.
+    writeCheckpoint(config);
+    expect(live.check("between_calls")?.changes ?? []).toEqual([]);
+    expect(readdirSync(join(audit(), "checkpoints"))).toHaveLength(2);
+    // Removing the newest -- the only -- checkpoint is tampering.
+    const newest = readdirSync(join(audit(), "checkpoints")).find((f) => f.endsWith(".jsonl"))!;
+    rmSync(join(audit(), "checkpoints", newest));
+    expect(live.check("between_calls")?.changes.map((c) => c.change)).toEqual(["removed"]);
+  });
+
   it("deleting a tamper trail is itself a tamper event at accept", () => {
     surface();
     const config = loadConfig(root);

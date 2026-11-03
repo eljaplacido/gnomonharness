@@ -8,7 +8,6 @@
  * no external anchor cannot detect a wholesale rewrite by someone holding the
  * file. Knowing exactly where the guarantee ends is the useful result.
  */
-const { verifyTrail, recordHash } = await import(`${REPO}/packages/gnomon-core/dist/audit.js`);
 import { writeFileSync, readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +19,8 @@ import { join } from "node:path";
 // evidence, it is an assertion". Same idiom as
 // benchmarks/surface-fidelity/fidelity.mjs.
 const REPO = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "");
+// After REPO, which it needs: above it, the script threw before running anything.
+const { verifyTrail, recordHash } = await import(`${REPO}/packages/gnomon-core/dist/audit.js`);
 
 
 const load = (p) => readFileSync(p, "utf-8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
