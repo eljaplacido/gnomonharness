@@ -147,9 +147,20 @@ export interface EndpointConfig {
    * resolveReplayReasoning for the default and why it is off almost everywhere.
    */
   replay_reasoning?: boolean;
+  /**
+   * The role gnomon's own mid-conversation messages (nudges, the convergence
+   * push, a failed verification, the wrap-up, context notices) are sent in.
+   * `system`, the default, is how they have always gone. `user` sends each as
+   * a user message marked `[gnomon] `. See resolveSteerRole.
+   */
+  steer_role?: SteerRole;
 }
 
 export type EndpointKind = "ollama" | "openai";
+
+/** The values `[endpoints.<name>] steer_role` takes. */
+export const STEER_ROLES = ["system", "user"] as const;
+export type SteerRole = (typeof STEER_ROLES)[number];
 
 /** config.toml [ui] — what the terminal shows, declared in the surface */
 export interface UiConfig {
@@ -1336,6 +1347,12 @@ export interface RouteTarget {
   contextTokens?: number;
   /** Replay reasoning_content on assistant messages. See resolveReplayReasoning. */
   replayReasoning?: boolean;
+  /**
+   * Send gnomon's mid-conversation messages as user messages. Set only when
+   * it is `user`, declared or learned from a refusal; absent means `system`,
+   * so a target that never asked for it is the object it always was.
+   */
+  steerRole?: SteerRole;
 }
 
 /** The routing policy, resolved with defaults. */
@@ -1532,7 +1549,31 @@ const ENDPOINT_KEYS = new Set([
   "max_tokens",
   "max_context_tokens",
   "replay_reasoning",
+  "steer_role",
 ]);
+
+/**
+ * The role gnomon's mid-conversation messages go out in for this endpoint.
+ *
+ * Declared wins; anything else is `system`, which is what every surface got
+ * before the key existed, so an existing surface sends the same bytes (Rule
+ * 1). Whether `user` should be the default is for a benchmark to decide, not
+ * this function.
+ *
+ * Why the key exists: gnomon's steering arrives as `role: "system"` after the
+ * conversation has started, and two common local stacks do not take that.
+ * vLLM serving Qwen3.x refuses the request, 400 "System message must be at the
+ * beginning." (M1, 2026-11: 4 of 16 cells ended at their first nudge). Unsloth's
+ * qwen3.6 template under llama.cpp has no branch for a system message after
+ * the first two and drops it, so the model never sees the steering at all
+ * (rendered offline with jinja2, 2026-11-03). The refusal is caught and
+ * answered at run time (prompt_loop.ts, steerAsUser); the silent drop cannot
+ * be, which is what declaring `user` is for.
+ */
+export function resolveSteerRole(endpoint: { steer_role?: unknown } | undefined): SteerRole {
+  const v = endpoint?.steer_role;
+  return typeof v === "string" && (STEER_ROLES as readonly string[]).includes(v) ? (v as SteerRole) : "system";
+}
 
 /**
  * Hosts whose own API documentation requires reasoning to be sent back.
@@ -2650,6 +2691,18 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
       });
     }
 
+    if (
+      block.steer_role !== undefined &&
+      !(typeof block.steer_role === "string" && (STEER_ROLES as readonly string[]).includes(block.steer_role))
+    ) {
+      problems.push({
+        where,
+        problem: `steer_role = ${JSON.stringify(block.steer_role)} is not one of ${STEER_ROLES.map((r) => `"${r}"`).join(", ")}, so gnomon's mid-turn messages stay system messages.`,
+        fix: 'steer_role = "user" sends them as user messages marked [gnomon]; "system", or no line, keeps them as system messages.',
+        fatal: false,
+      });
+    }
+
     if (block.stream !== undefined && typeof block.stream !== "boolean") {
       problems.push({
         where,
@@ -3097,6 +3150,7 @@ export function routeRole(
     maxTokens: resolveMaxTokens(config, roleDef, endpoint),
     contextTokens: positiveInt(endpoint.max_context_tokens),
     replayReasoning: resolveReplayReasoning(endpoint),
+    ...(resolveSteerRole(endpoint) === "user" ? { steerRole: "user" as const } : {}),
   };
 
   let fallback: RouteTarget | undefined;
@@ -3124,6 +3178,7 @@ export function routeRole(
       maxTokens: resolveMaxTokens(config, roleDef, fbEndpoint),
       contextTokens: positiveInt(fbEndpoint?.max_context_tokens),
       replayReasoning: resolveReplayReasoning(fbEndpoint ?? { url: fb.url }, "openai"),
+      ...(resolveSteerRole(fbEndpoint) === "user" ? { steerRole: "user" as const } : {}),
     };
   }
 

@@ -593,6 +593,32 @@ DeepSeek's API requires it in thinking mode with tools (a 400 otherwise), so
 in front of DeepSeek. Everywhere else it is off: strict OpenAI-compatible
 servers refuse unknown message fields.
 
+**Steering role.** gnomon steers a turn with messages of its own: the idle
+nudge, the convergence push, a failed verification, the tool-less wrap-up,
+and context notices. They go out as `system` messages after the conversation
+has started, and not every chat template takes that. vLLM serving Qwen3.x
+answers 400 `System message must be at the beginning.`; Unsloth's qwen3.6
+template under llama.cpp drops them silently, so the model never sees them.
+`steer_role = "user"` in an `[endpoints.<name>]` block sends them as user
+messages starting `[gnomon] `. The system prompt stays the one system message
+(a summary right after it is folded in), and user messages next to each other
+are sent as one; a note followed by someone else's text in that message ends
+with a `[/gnomon]` line. `steer_role = "system"`, or no line, is the default
+and sends what gnomon always sent. An endpoint that refuses the system form
+with a template error is sent the call once more as user messages, and gets
+them that way for the rest of the session. The turn record counts that in
+`counters.steer_role_adapted`, and its `wire` says `steer_role: "user"`. A
+template that drops the messages gives no error to react to, so declare the
+line for it.
+
+```toml
+# llama.cpp serving Unsloth's qwen3.6 GGUF, whose template drops a late system message
+[endpoints.llamacpp]
+url = "http://127.0.0.1:8080/v1/chat/completions"
+kind = "openai"
+steer_role = "user"
+```
+
 **llama.cpp needs `--jinja`** for tool calling; the model id is what
 `/v1/models` reports, and `--alias` sets it. Loopback, private-range,
 Tailscale (`100.64–127.x`) and `*.local` addresses are listed as **LOCAL**: no
@@ -1194,6 +1220,7 @@ chain measured 48.7% against 56.6% without one, within noise
 | `No model answers for this project yet: …` (from `launch`) | The default role's endpoint, key or model is not usable | Pick a provider in the picker, or Skip and run `gnomon endpoint add` later |
 | `No API key: endpoint "X" declares api_key_env = "VAR", and $VAR is not set` | Key not stored or exported | `gnomon key set X`. No request was sent. |
 | `Model API error: 401 …` / `The key came from $VAR … the provider rejected it` | Wrong or expired key, or an exported variable shadowing the stored one | `gnomon key set X` with a fresh key; `unset VAR` if an old one is exported |
+| `[endpoint] … refused a system message after the first — resending gnomon's own messages as user messages` | The model's chat template refuses a system message mid-conversation (vLLM with Qwen3.x: `System message must be at the beginning.`); the call was sent again and the turn went on | Nothing is broken. `steer_role = "user"` on the endpoint skips the refused call each session ([5.2](#52-local-ollama-on-another-machine-llamacpp-any-openai-compatible-server)) |
 | `The stream from … went silent for 300s mid-reply` (exit 11) | A streamed reply stalled; the request was aborted, and is asked again within `[resilience] attempts` | Raise `[resilience] stream_idle_timeout_ms` for a model that thinks silently for longer, or `stream = false` on an endpoint whose streaming is unreliable |
 | `Model API error: 400`/`404` naming a model | The model id is not one the endpoint serves | `gnomon endpoint list` (it suggests the nearest id), or `/models` |
 | `⚠ .gnomon/roles.toml [roles.R] model … is ignored: role_profile "P" sets …` | The profile routes that role and wins | Edit `profiles/P.toml`, or remove the line from `roles.toml` ([5.0](#50-where-routing-lives-and-a-one-time-step)) |

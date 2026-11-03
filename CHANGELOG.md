@@ -26,6 +26,44 @@
 
 ## [Unreleased]
 
+- **gnomon's mid-turn messages can go out as user messages, per endpoint;
+  a template that refuses them as system messages is answered.** gnomon
+  steers a turn with system messages appended after it has started: the
+  idle nudge, the convergence push, a failed verification, the tool-less
+  wrap-up, and context notices. M1 (2026-11) found two local stacks that do
+  not take that. On vLLM serving Qwen3.x the template answers 400 "System
+  message must be at the beginning." and the turn ended (4 of q38's 16
+  cells, each at its first nudge). Unsloth's qwen3.6 template under
+  llama.cpp, the incumbent lane, drops them silently: rendered with jinja2,
+  none of a turn's nudges, convergence pushes or wrap-up reached the prompt.
+  - `[endpoints.<name>] steer_role = "user"` sends them as user messages
+    starting `[gnomon] `. The system prompt stays the one system message,
+    with a summary right after it folded in. Adjacent user messages are
+    sent as one, and a note followed by other text ends with `[/gnomon]`.
+    Rendered through the same Unsloth template, all of them reach the
+    prompt. The loop keeps them as system messages internally;
+    `trimWorking` pins the last user message as the current request, and
+    a nudge must not take that place.
+  - Undeclared, or `"system"`, sends what gnomon always sent: the request
+    bodies of a turn with a nudge, a convergence push and a wrap-up hash
+    the same as master's. Whether `user` should be the default is left to
+    a benchmark.
+  - A refusal of the system form is answered once in the user form, the way
+    a refused `max_tokens` is (#114): said on the terminal, remembered for
+    the endpoint and model for the rest of the session, counted in
+    `counters.steer_role_adapted`, and shown as `steer_role: "user"` in the
+    turn record's `wire`. That includes the tool-less wrap-up call, which
+    always carries one. The match is on the template's words: "must be at
+    the beginning", "only the first message", "roles must alternate". It is
+    filed as code 10 whatever the status, because llama.cpp can answer a
+    template exception with a 500 (read in its source, not reproduced live),
+    which would otherwise be retried as an outage. It applies only to a
+    request that carried a system message after the first, on an
+    OpenAI-shaped endpoint.
+  - A template that drops the message raises nothing to react to; declaring
+    the line is the fix there.
+  - `auditSurface` reports a `steer_role` that is neither value, and the
+    key is on the endpoint allow-list. Tests use fake servers on 127.0.0.1.
 - **Opt-in `reasoning_content` replay, per endpoint.** gnomon dropped the
   reasoning from every assistant message it sent back; goose replays it.
   DeepSeek's docs (api-docs.deepseek.com/guides/thinking_mode, read
