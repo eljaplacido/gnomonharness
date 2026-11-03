@@ -87,6 +87,8 @@ import {
   type SpillSink,
   DIFF_ELIDED,
 } from "./tools.js";
+import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
+import { writeTamperRecord, compareWithCheckpoint, writeCheckpoint } from "./record_tamper.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { harnessBuild } from "./build.js";
 import { mapBucket } from "./session.js";
@@ -182,6 +184,12 @@ export interface PromptState {
   config: GnomonConfig;
   exchanges: PromptExchange[];
   currentRole: string;
+  /**
+   * Watches gnomon's own record directories for changes gnomon did not make
+   * (record_guard.ts). Created on the first tool call of the session, so its
+   * baseline is the records as the session found them.
+   */
+  recordGuard?: RecordGuard;
   /**
    * An operator is at the terminal and will answer. Set by the interactive
    * loop only; `gnomon task` and chains leave it unset, which reads as
@@ -2896,6 +2904,11 @@ export type StopReason =
   // them in a row the turn wraps up with no tools on the `refusal` floor, as
   // `stall` and `malformed` do, with `stop_detail.repeats`.
   | "truncated"
+  // A tool call (or something between calls) changed gnomon's own records --
+  // the audit trail, trial reports -- and gnomon did not make the change
+  // (record_guard.ts). The turn stops with a refusal and a record_tamper
+  // record, and nothing is accepted until a person resolves it.
+  | "tamper"
   // The run never reached the model: the surface itself could not be used.
   // Without this, a refusal to start had to borrow "answered", which is how an
   // apparatus failure came to be recorded as a turn that concluded. It IS a
@@ -4062,6 +4075,93 @@ export async function runAgenticTurn(
     };
   };
 
+  /**
+   * A change to gnomon's own records that gnomon did not make: recorded as
+   * `record_tamper` -- in the session trail when there is one, and always in a
+   * sealed trail of its own -- and the turn stops with a refusal (3,
+   * refused_by_gate). `gnomon skill accept` refuses while it is unresolved.
+   */
+  const tampered = (finding: TamperFinding, call?: ToolCall): TurnResult => {
+    flushFold();
+    const root = resolve(state.config.gnomonDir, "..");
+    const fields = {
+      when: finding.when,
+      tool: call?.name,
+      target: call ? describeCall(call) : undefined,
+      changes: describeChanges(root, finding.changes),
+      changed: finding.changes.length,
+      session: state.sessionId,
+      role,
+    };
+    deps.audit?.write("record_tamper", fields);
+    let where = "";
+    try {
+      const t = writeTamperRecord(state.config, fields);
+      if (t) where = ` Recorded in ${t.trail} (seq ${t.record.seq}).`;
+    } catch {
+      // The session trail above still has it when [audit] is on.
+    }
+    const list = fields.changes.map((c) => `${c.change} ${c.path}`).join(", ");
+    const by = call ? `the ${call.name} call (${describeCall(call)})` : "something between tool calls";
+    warn(paint(deps.ui, "red", `  [records] ${by} changed gnomon's own records: ${list}. Turn stopped.`));
+    counters.tree_delta = measureTreeDelta(root, treeBaseline);
+    return {
+      content:
+        `Stopped: ${by} changed gnomon's own records (${list}). Those directories are the ` +
+        `record of what was done here, and nothing but gnomon may write them. The change is ` +
+        `recorded as record_tamper; until a person resolves it (\`gnomon audit resolve\`), no ` +
+        `skill can be accepted.${where}`,
+      code: settle(code, 3),
+      model: usedModel,
+      endpoint: usedTarget.endpoint,
+      endpoint_url: usedTarget.url,
+      verify: verifyOutcome,
+      toolSteps: steps,
+      toolLog,
+      usage: turnUsage,
+      stop_reason: "tamper",
+      counters,
+      surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
+    };
+  };
+
+  /**
+   * Record what the guard found that does not stop the turn: tampering seen
+   * at session start (it happened before this turn), and notices -- new
+   * gnomon trails another process wrote.
+   */
+  const noteRecords = (finding: TamperFinding, call?: ToolCall): void => {
+    const root = resolve(state.config.gnomonDir, "..");
+    if (finding.changes.length) {
+      const fields = {
+        when: finding.when,
+        changes: describeChanges(root, finding.changes),
+        changed: finding.changes.length,
+        session: state.sessionId,
+        role,
+      };
+      deps.audit?.write("record_tamper", fields);
+      try {
+        writeTamperRecord(state.config, fields);
+      } catch {
+        /* the session trail has it when [audit] is on */
+      }
+      warn(paint(deps.ui, "red", `  [records] gnomon's own records changed since the last session ended: ${fields.changes.map((c) => `${c.change} ${c.path}`).join(", ")}. Recorded as record_tamper; skill accept is blocked until a person resolves it.`));
+    }
+    if (finding.notices.length) {
+      const fields = {
+        when: finding.when,
+        tool: call?.name,
+        target: call ? describeCall(call) : undefined,
+        added: describeChanges(root, finding.notices),
+        reason: "new gnomon trail(s) written by another process",
+        session: state.sessionId,
+      };
+      deps.audit?.write("record_notice", fields);
+      say(paint(deps.ui, "yellow", `  [records] another process added gnomon trail(s): ${fields.added.map((c) => c.path).join(", ")}`));
+    }
+  };
+
   const noTools = (state.noToolModels ??= new Set<string>());
 
   /**
@@ -5028,6 +5128,24 @@ export async function runAgenticTurn(
     // in, so every counter, the tool log and the transcript are byte-identical
     // to the sequential path. That is what keeps the determinism result honest:
     // this is a wall-clock change, not a behaviour change.
+    // Records first: anything that changed them since the last check -- a
+    // background job a previous call started, say -- is caught before more
+    // tools run. Prefetched calls below are read-only, so they need no
+    // snapshot of their own.
+    if (!state.recordGuard) {
+      // Session start: the records against the last checkpoint a session
+      // left (record_tamper.ts). Recorded, and accept is blocked, but this
+      // turn is not stopped: whatever changed them happened before it.
+      const since = compareWithCheckpoint(state.config);
+      if (since) noteRecords(since);
+      state.recordGuard = RecordGuard.for(state.config);
+    }
+    const guard = state.recordGuard;
+    {
+      const between = guard.check("between_calls");
+      if (between?.changes.length) return tampered(between);
+      if (between) noteRecords(between);
+    }
     const prefetched = new Map<number, Promise<ToolOutcome>>();
     // Never prefetch when every call has to ask.
     //
@@ -5232,6 +5350,13 @@ export async function runAgenticTurn(
         args: deps.audit.text(JSON.stringify(call.args)),
         result: deps.audit.text(outcome.content),
       });
+      // After the call and its record: did it change gnomon's own records?
+      // Not for read-only tools, which cannot.
+      if (!concurrentSafe(call.name)) {
+        const during = guard.check("during_call");
+        if (during?.changes.length) return tampered(during, call);
+        if (during) noteRecords(during, call);
+      }
       if (eventCall) deps.events?.toolEnd?.(eventCall, outcome);
 
       // After the call and its record, never before: the shadow is told what
@@ -6078,6 +6203,41 @@ export async function runTask(
     // point scripts run in a loop.
     state.mcp?.close();
   }
+  // The end of the session: anything that changed gnomon's records since the
+  // last tool call -- a background job a call left running -- is caught here.
+  {
+    const end = state.recordGuard?.check("turn_end");
+    if (end?.notices.length) {
+      auditForTurn.write("record_notice", {
+        when: end.when,
+        added: describeChanges(resolve(config.gnomonDir, ".."), end.notices),
+        reason: "new gnomon trail(s) written by another process",
+        session: sessionId,
+      });
+    }
+    if (end?.changes.length) {
+      const fields = {
+        when: end.when,
+        changes: describeChanges(resolve(config.gnomonDir, ".."), end.changes),
+        changed: end.changes.length,
+        session: sessionId,
+        role,
+      };
+      auditForTurn.write("record_tamper", fields);
+      try {
+        writeTamperRecord(config, fields);
+      } catch {
+        /* the session trail has it when [audit] is on */
+      }
+      warn(`  [records] gnomon's own records changed after the last tool call: ${fields.changes.map((c) => `${c.change} ${c.path}`).join(", ")}.`);
+      turn = {
+        ...turn,
+        code: settle(turn.code, 3),
+        stop_reason: "tamper",
+        content: `${turn.content}\n\n_[gnomon's own records changed after the last tool call; recorded as record_tamper]_`,
+      };
+    }
+  }
   const duration = Date.now() - start;
 
   audit.write("turn", {
@@ -6122,6 +6282,13 @@ export async function runTask(
     output: audit.text(turn.content),
   });
   audit.write("session_end", { turns: 1, surface_hash });
+  // The records as this session leaves them, for the next session and for
+  // `skill accept` to compare against (record_tamper.ts).
+  try {
+    writeCheckpoint(config);
+  } catch (err) {
+    warn(`  [records] could not write the records checkpoint: ${err instanceof Error ? err.message : String(err)}`);
+  }
   // Bounded: a slow or dead shadow server costs a scripted run at most this.
   await shadow?.flush();
 
@@ -9104,10 +9271,32 @@ export async function runPromptLoop(
       const quitting = input !== null && QUIT_COMMANDS.has(verb);
       if (input === null || quitting) {
         await shadowRecorder?.flush();
+        // Session end: a change to gnomon's records since the last check.
+        const end = state.recordGuard?.check("turn_end");
+        if (end?.changes.length) {
+          const fields = {
+            when: end.when,
+            changes: describeChanges(resolve(state.config.gnomonDir, ".."), end.changes),
+            changed: end.changes.length,
+            session: state.sessionId,
+          };
+          audit.write("record_tamper", fields);
+          try {
+            writeTamperRecord(state.config, fields);
+          } catch {
+            /* the session trail has it when [audit] is on */
+          }
+          console.log(`  [records] gnomon's own records changed during this session, outside its own writer; recorded as record_tamper.`);
+        }
         audit.write("session_end", {
           turns: state.exchanges.length,
           surface_hash: surfaceHash,
         });
+        try {
+          writeCheckpoint(state.config);
+        } catch {
+          /* the next session compares with an older checkpoint, and says so */
+        }
         console.log("\nSession complete. See you next turn.");
         quitByCommand = quitting;
         break;

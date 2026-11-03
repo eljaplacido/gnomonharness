@@ -1550,6 +1550,7 @@ const WRITERS: Record<string, WriterSpec> = {
   cp: { operands: "last", arg: "tS", longArg: ["target-directory", "suffix", "sparse", "reflink", "backup", "preserve", "no-preserve"] },
   install: { operands: "last", arg: "tSgmo", longArg: ["target-directory", "suffix", "group", "mode", "owner", "backup"] },
   ln: { operands: "last", arg: "tS", longArg: ["target-directory", "suffix", "backup"] },
+  link: { operands: "last", arg: "" },
   mv: { operands: "mv", arg: "tS", longArg: ["target-directory", "suffix", "backup"] },
 };
 
@@ -1866,7 +1867,32 @@ export function shellWriteTargets(command: string): { targets: WriteTarget[]; tr
       // then `echo >> x` writes the trail. The source is reported, marked, so
       // a caller guarding a directory can refuse links INTO it; write_allow
       // does not judge it, since a link does not write its source.
-      if (prog === "ln") for (const o of target === undefined ? ops.slice(0, -1) : ops) add(o, "ln (source)");
+      // `cp -l` / `cp -s` / `cp -al` make links too.
+      const flags = inv.argv.slice(1).filter((a) => a.startsWith("-"));
+      const linking =
+        prog === "ln" ||
+        prog === "link" ||
+        (prog === "cp" && flags.some((f) => f === "--link" || f === "--symbolic-link" || (/^-[a-zA-Z]+$/.test(f) && /[ls]/.test(f))));
+      if (linking) {
+        const sources = target === undefined ? ops.slice(0, -1) : ops;
+        const symbolic = flags.some((f) => f === "--symbolic" || f === "--symbolic-link" || (/^-[a-zA-Z]+$/.test(f) && f.includes("s")));
+        for (const o of sources) {
+          add(o, "ln (source)");
+          // A relative symlink source resolves from the LINK's directory, not
+          // the shell's: `ln -s ../.gnomon-audit sub/l` points at the trail
+          // although `../.gnomon-audit` from the root is outside it (round-3
+          // review). Both readings of where the link lands are reported: the
+          // last operand's directory, and the operand itself when it is a
+          // directory the link is made inside.
+          if (symbolic && !o.startsWith("/")) {
+            const at = target ?? ops[ops.length - 1] ?? "";
+            const dirOf = (p: string) => (p.includes("/") ? p.slice(0, p.replace(/\/+$/, "").lastIndexOf("/") + 1) : "");
+            add(`${dirOf(at)}${o}`, "ln (source)");
+            if (target !== undefined || sources.length > 1 || at.endsWith("/")) add(`${at.replace(/\/+$/, "")}/${o}`, "ln (source)");
+            else add(`${at}/${o}`, "ln (source)");
+          }
+        }
+      }
       continue;
     }
     if (prog === "git") {

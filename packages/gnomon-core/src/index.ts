@@ -37,6 +37,8 @@ export * from "./check.js";
 export * from "./guard.js";
 export * from "./transcripts.js";
 export * from "./skills.js";
+export * from "./record_guard.js";
+export * from "./record_tamper.js";
 export * from "./skill_mine.js";
 export * from "./skill_trial.js";
 export * from "./audit.js";

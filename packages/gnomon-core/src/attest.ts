@@ -78,6 +78,7 @@
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { beforeOwnWrite, noteOwnWrite } from "./record_guard.js";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { createHash, createPublicKey, verify as verifyBytes, KeyObject } from "node:crypto";
 import { canonicalJson, recordHash, type AuditRecord } from "./audit.js";
@@ -628,7 +629,9 @@ export class Attestor {
       }
     }
 
+    beforeOwnWrite(this.file);
     appendFileSync(this.file, `${JSON.stringify(head)}\n`, "utf-8");
+    noteOwnWrite(this.file);
     return head;
   }
 }

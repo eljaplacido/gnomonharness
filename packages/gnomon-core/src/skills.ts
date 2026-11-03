@@ -34,6 +34,8 @@ import { hostname, userInfo } from "node:os";
 import { GnomonConfig, parseToml, recomputeManifest, manifestHash } from "./config.js";
 import { AuditTrail, resolveAudit, verifyTrail, recordHash, type AuditRecord } from "./audit.js";
 import { harnessBuild } from "./build.js";
+import { unresolvedTamper, compareWithCheckpoint, writeTamperRecord, writeCheckpoint } from "./record_tamper.js";
+import { describeChanges } from "./record_guard.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -752,6 +754,14 @@ function findTrialRecord(
 }
 
 /**
+ * Refused: a skill accepted while gnomon's own records show a change gnomon
+ * did not make (record_guard.ts) that no person has resolved. A trail that
+ * has been tampered with is not evidence for anything, including the trial a
+ * skill is accepted on. The CLI exits 3 (refused_by_gate).
+ */
+export class RecordTamperRefusal extends SkillRefusal {}
+
+/**
  * Accept a proposal: move it into `.gnomon/skills/`, and record that it
  * happened.
  *
@@ -771,6 +781,28 @@ export function acceptSkill(
 ): SkillDecision {
   assertSkillId(id);
   refuseInAgentSession("accept");
+  {
+    // The records against the last checkpoint a session left: a change in
+    // the gap between sessions -- a background job, a deleted tamper trail --
+    // is recorded here as a tamper event, and then blocks like any other.
+    const since = compareWithCheckpoint(config, "at_accept");
+    if (since?.changes.length) {
+      writeTamperRecord(config, {
+        when: since.when,
+        changes: describeChanges(resolve(config.gnomonDir, ".."), since.changes),
+        changed: since.changes.length,
+      });
+      writeCheckpoint(config);
+    }
+    const open = unresolvedTamper(config);
+    if (open.length > 0) {
+      throw new RecordTamperRefusal(
+        `Not accepted: gnomon's own records were changed by something other than gnomon, and ` +
+          `${open.length} such event(s) are unresolved (first: ${open[0]!.trail}:${open[0]!.seq}). ` +
+          `Look at \`gnomon audit tamper\`, then \`gnomon audit resolve <trail>:<seq> --reason "…"\`.`
+      );
+    }
+  }
   const from = join(config.gnomonDir, PROPOSED_DIR, `${id}.md`);
   if (!existsSync(from)) {
     throw new Error(`No proposed skill "${id}". Run \`gnomon skill list\`.`);

@@ -29,6 +29,8 @@ import {
   acceptSkill,
   rejectSkill,
   SkillRefusal,
+  unresolvedTamper,
+  resolveTamper,
   mineCandidates,
   writeCandidates,
   loadCandidates,
@@ -1309,8 +1311,46 @@ async function cmdAudit(args: CliArgs): Promise<void> {
   const settings = resolveAudit(config);
   const sub = subcommandOr(args, "show");
 
+  // record_tamper events (record_guard.ts): list them, and let a person
+  // resolve one. Accepting a skill is refused while any is unresolved.
+  if (sub === "tamper") {
+    const open = unresolvedTamper(config);
+    if (open.length === 0) {
+      console.log("No unresolved record_tamper events.");
+      return;
+    }
+    console.log(`${open.length} unresolved record_tamper event(s):`);
+    for (const e of open) {
+      const changes = (e.record.changes as Array<{ path: string; change: string }> | undefined) ?? [];
+      const by = e.record.tool ? `${String(e.record.tool)} ${String(e.record.target ?? "")}`.trim() : String(e.record.when);
+      console.log(`  ${e.trail}:${e.seq}  ${by}`);
+      for (const c of changes.slice(0, 10)) console.log(`      ${c.change} ${c.path}`);
+    }
+    console.log('Resolve one with `gnomon audit resolve <trail>:<seq> --reason "…"` after looking at what changed.');
+    process.exit(3);
+  }
+  if (sub === "resolve") {
+    const ref = args.positional[0] ?? "";
+    const m = /^(.+):(\d+)$/.exec(ref);
+    const reason = typeof args.flags.reason === "string" && args.flags.reason !== "true" ? args.flags.reason : "";
+    if (!m) {
+      console.error('Usage: gnomon audit resolve <trail>:<seq> --reason "…"   (see `gnomon audit tamper`)');
+      process.exit(1);
+    }
+    try {
+      // A person at a terminal: stdin AND stdout. A tool subprocess has pipes.
+      const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+      const out = resolveTamper(config, { trail: m[1]!, seq: Number(m[2]) }, reason, { interactive });
+      console.log(`Resolved ${ref}. Recorded in ${out.trail} (seq ${out.record.seq}).`);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(/agent session/.test(String(err)) ? 3 : 1);
+    }
+    return;
+  }
+
   if (sub !== "show" && sub !== "list" && sub !== "verify") {
-    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify`);
+    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify | tamper | resolve`);
     process.exit(1);
   }
 
@@ -2175,9 +2215,13 @@ Commands:
           report what came back. A model listing is not a test of a key —
           some providers serve one to no key at all.
 
-  audit [show|verify] [--dir <path>]
+  audit [show|verify|tamper|resolve <trail>:<seq> --reason <text>] [--dir <path>]
     Audit trails, when [audit] is enabled. 'verify' re-hashes each record
     and checks the chain, so a trail altered after the fact is detectable.
+    'tamper' lists record_tamper events: changes to gnomon's own records
+    that gnomon did not make (exit 3 while any is unresolved). 'resolve'
+    is a person's acknowledgement of one, recorded; skill accept refuses
+    while any is unresolved.
 
   skill [list [--candidates]|accept <id> [--evidence <report.json>]|reject <id> [--reason <text>]|mine [--json]] [--dir <path>]
     Skills the harness has learned. An agent proposes into

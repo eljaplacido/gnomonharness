@@ -37,6 +37,7 @@ import { appendFileSync, mkdirSync, existsSync, readFileSync, openSync, readSync
 import { join, resolve, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
 import { GnomonConfig } from "./config.js";
+import { beforeOwnWrite, noteOwnWrite } from "./record_guard.js";
 import { Attestor, resolveAttest, verifyAttestation, type AttestVerifyResult, type ResolvedAttest } from "./attest.js";
 
 // The attestation surface is re-exported here so that a consumer holding a
@@ -201,6 +202,15 @@ export type AuditKind =
   // `meets_thresholds` (skill_trial.ts). Its own kind because no turn produced
   // it: it compares two arms of many turns against numbers declared before.
   | "skill_trial"
+  // A change to gnomon's own records that gnomon did not make, found by the
+  // record guard (record_guard.ts): which tool call, or between calls, and
+  // which files. And a person's resolution of one (`gnomon audit resolve`).
+  | "record_tamper"
+  | "record_tamper_resolved"
+  // A new gnomon trail another process added to the records -- the
+  // operator's own CLI in a second terminal, a concurrent or killed session.
+  // A warning, not tampering: gnomon adds trails and never rewrites one.
+  | "record_notice"
   | "session_end";
 
 export interface AuditRecord {
@@ -419,7 +429,11 @@ export class AuditTrail {
       record.hash = recordHash(record);
       this.prev = record.hash;
     }
+    // The record guard (record_guard.ts) tells gnomon's own writes from anyone
+    // else's: check the file is as gnomon left it, append, note the new state.
+    beforeOwnWrite(this.file);
     appendFileSync(this.file, `${JSON.stringify(record)}\n`, "utf-8");
+    noteOwnWrite(this.file);
 
     // Signing happens AFTER the record is on disk, and its failure is recorded
     // rather than thrown. A trail that stopped recording because a smartcard

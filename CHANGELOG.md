@@ -121,6 +121,28 @@
   - Parallel tool calls sent whole at one index are kept apart by their ids.
   - Turn records carry `wire`: whether the call was streamed and its clocks.
   - Tests use fake servers on 127.0.0.1.
+- **Tampering with gnomon's records is detected, whatever command did it.**
+  The `record` rule's patterns refuse the writes they can see, and three
+  review rounds kept finding routes past them: `cp -r X/. .`,
+  `git checkout evil -- .`, `git reset`, `git stash pop`, rsync and tar into
+  an ancestor, pathspecs, symlinks resolved from the cwd.
+  - The **record guard** now snapshots the record directories around every
+    tool call that can write, and at the end of each turn and session.
+  - Any change gnomon's own writer did not make stops the turn
+    (`stop_reason: "tamper"`, code 3) and writes a `record_tamper` record.
+  - `gnomon skill accept` refuses until a person runs `gnomon audit resolve`.
+    `gnomon audit tamper` lists the open events.
+  - Between sessions, a checkpoint of the records is sealed into a
+    `session_end` (signed when a signer is declared). The next session and
+    `skill accept` compare against it, so a background job's write, or a
+    deleted tamper trail, is a tamper event.
+  - A NEW gnomon trail from another process (the operator's own CLI) is a
+    `record_notice`, not a stop.
+  - Resolving needs a person: a terminal on stdin and stdout, or a
+    person-present signer. `env -u GNOMON_AGENT_SESSION` is not enough.
+  - The patterns stay as fast pre-refusals. `ln -s` now resolves its source
+    from the link's directory, and `cp -l`, `cp -s` and `link` count as links.
+
 - **More routes into gnomon's records are refused** (re-review of the
   `record` rule):
   - a hard link made earlier (checked by inode, only for files with more than
