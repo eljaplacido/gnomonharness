@@ -9,7 +9,7 @@
  * Nothing in this file reaches a network.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, chmodSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -46,6 +46,10 @@ import {
 import { RecordGuard, recordExcludesOf } from "./record_guard.js";
 import { writeCheckpoint } from "./record_tamper.js";
 import type { GnomonConfig } from "./config.js";
+
+// Every git-backed test spawns a dozen git processes; on Windows and macOS CI
+// runners that is seconds, not the default five.
+vi.setConfig({ testTimeout: 60_000 });
 
 let root: string;
 const auditDir = () => join(root, ".gnomon-audit");
@@ -662,6 +666,22 @@ describe("rfc3161 backend", () => {
     r = await flushAnchors(anchorOf(c), { fetch: fakeTsa(privateKey, "wrong-imprint") });
     expect(r.error).toMatch(/does not verify/);
     expect(pendingAnchors(anchorOf(c))).toHaveLength(1);
+  });
+
+  it("a head sealed while a delivery runs goes out with that delivery", async () => {
+    const { privateKey, pin } = tsaKeys();
+    const c = cfg({ backend: "rfc3161", url: "http://tsa.test/", tsa_cert: pin });
+    sealTrail(c, "s1");
+    const tsa = fakeTsa(privateKey);
+    let sealed = false;
+    const during = (async (url: string, init?: RequestInit) => {
+      if (!sealed) {
+        sealed = true;
+        sealTrail(c, "s2");
+      }
+      return tsa(url, init);
+    }) as unknown as typeof fetch;
+    expect(await flushAnchors(anchorOf(c), { fetch: during })).toMatchObject({ delivered: 2, pending: 0 });
   });
 
   it("a token signed by another key is refused at delivery", async () => {

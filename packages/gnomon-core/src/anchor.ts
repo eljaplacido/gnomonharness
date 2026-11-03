@@ -720,16 +720,40 @@ function takeLock(s: ResolvedAnchor): boolean {
 
 /**
  * Deliver every queued statement. Run in the background by the CLI, in the
- * foreground by `gnomon audit anchor`. Never throws: a failure stays in the
- * queue and in state.json, for the next session to announce.
+ * foreground by `gnomon audit anchor`. A witness that cannot be reached does
+ * not throw: the statements stay queued and the failure goes to state.json,
+ * for the next session to announce. (A file system error in the anchors
+ * directory itself does throw.)
+ *
+ * Statements queued while a delivery runs -- another session sealing -- are
+ * picked up by a second round rather than left for the next session end.
  */
 export async function flushAnchors(settings: ResolvedAnchor, deps: AnchorDeps = {}): Promise<FlushResult> {
   const backend = settings.backend;
   if (!settings.enabled || !backend) return { backend, delivered: 0, pending: pendingAnchors(settings).length };
   mkdirSync(settings.dir, { recursive: true });
   if (!takeLock(settings)) return { backend, delivered: 0, pending: readQueue(settings).length, busy: true };
-  const now = (deps.now ?? (() => new Date()))();
   try {
+    let total = 0;
+    for (let round = 0; ; round++) {
+      const r = await flushRound(settings, backend, deps);
+      total += r.delivered;
+      if (r.error || r.pending > 0 || round >= 2 || readQueue(settings).length === 0) {
+        return { ...r, delivered: total, pending: readQueue(settings).length };
+      }
+    }
+  } finally {
+    try {
+      unlinkSync(join(settings.dir, LOCK));
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+async function flushRound(settings: ResolvedAnchor, backend: AnchorBackend, deps: AnchorDeps): Promise<FlushResult> {
+  const now = (deps.now ?? (() => new Date()))();
+  {
     const queued = readQueue(settings);
     if (queued.length === 0) return { backend, delivered: 0, pending: 0 };
     const entries = queued.map((q) => q.entry);
@@ -765,12 +789,6 @@ export async function flushAnchors(settings: ResolvedAnchor, deps: AnchorDeps = 
       failures,
     });
     return { backend, delivered: delivered.size, pending: queued.length - delivered.size, ...(error ? { error } : {}) };
-  } finally {
-    try {
-      unlinkSync(join(settings.dir, LOCK));
-    } catch {
-      /* already gone */
-    }
   }
 }
 
