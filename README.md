@@ -61,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1832 TypeScript tests (1533 core, 274 cli, 18
-> natives, 7 tui) and 61 Rust tests — **1893 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1894 TypeScript tests (1588 core, 281 cli, 18
+> natives, 7 tui) and 61 Rust tests — **1955 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2266,6 +2266,7 @@ Slash commands other than a role prefix are terminal-only.
 | `gnomon audit [show\|verify\|tamper\|resolve <trail>:<seq> --reason <text>]` | Audit trails. `tamper` lists `record_tamper` events and exits 3 while any is unresolved; `resolve` is a person's recorded acknowledgement of one. |
 | `gnomon check --base <rev> [--head <rev>] [--role <r> \| --agent <name>] [--transcript <file> --format <fmt>] [--json]` | Judge a change another harness made by this surface's rules as of `<rev>`. Exit 0 held, 2 failed, 10 no verdict. See [Governing other harnesses](#governing-other-harnesses). |
 | `gnomon guard [--from claude-code\|opencode\|cursor] [--tool <kind> --input <json>] [--role <r> \| --agent <name>]` | Decide one tool call another harness is about to make, by the committed rules: allow (0), deny (2), ask (3), no decision (10). `gnomon guard install claude-code\|opencode\|cursor [--write]` installs the hook. See [Before the call](#before-the-call-gnomon-guard). |
+| `gnomon chaos [--json] [--seed <n>] [--faults <id,...>] [--schedules <s,...>] [--out <file>]` | The fault-injection suite: a scripted model behind a loopback endpoint injects one fault per case into the fixed task set, and each fault is scored announced or silent for `task --json`. Exit 0 every fault announced, 1 one or more silent, 2 the run is void. `chaos list` prints the taxonomy; `chaos serve` runs the endpoint for another harness. See [docs/benchmarks/CHAOS.md](docs/benchmarks/CHAOS.md). |
 | `gnomon surface [hash\|manifest\|paths]` | Inspect the surface. |
 | `gnomon enumerations` | The enumerations contract. |
 | `gnomon session <cmd>` | Run shell commands as recorded session steps. |

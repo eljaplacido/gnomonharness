@@ -844,8 +844,11 @@ esac
 - Nobody can be asked, so **every gated call is refused** unless `--yes`. The
   trail records it as `by: "default:no-operator"` or `by: "flag:--yes"`.
 - `--json` emits the task record (`surface_hash`, `harness`, `role`, `model`,
-  `output`, `bucket`, `tool_log`, `stop_reason`, …). Only `volatile` (duration,
-  tokens) differs run to run. Warnings go to stderr, so stdout stays clean.
+  `output`, `bucket`, `tool_log`, `stop_reason`, and `verify` when a declared
+  check ran, …). Only `volatile` (duration, tokens) differs run to run.
+  Warnings go to stderr, so stdout stays clean. That includes every fault the
+  run recovered from: a retried call, a re-asked empty reply, a repaired tool
+  call. `gnomon chaos` measures whether each one is announced.
 - Switch on the **bucket** (0, 2, 10); that part of the
   [exit contract](CONTRACTS.md) is stable.
 

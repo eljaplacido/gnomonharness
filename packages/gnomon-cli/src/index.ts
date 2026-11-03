@@ -40,6 +40,7 @@ import {
   trialExit,
   runTask,
   unstartedTaskRecord,
+  taskExitCode,
   type TaskRecord,
   resolveAudit,
   loadLoops,
@@ -1521,7 +1522,7 @@ async function cmdTask(args: CliArgs): Promise<void> {
   }
 
   // Exit code carries the bucket, so a caller can gate on it without parsing.
-  process.exit(record.bucket === "result" ? 0 : record.bucket === "refusal" ? 2 : 10);
+  process.exit(taskExitCode(record));
 }
 
 async function cmdSkill(args: CliArgs): Promise<void> {
@@ -2145,6 +2146,7 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "check" },
   { name: "trust" },
   { name: "guard" },
+  { name: "chaos" },
 ];
 
 function showHelp(): void {
@@ -2302,6 +2304,18 @@ Commands:
   guard install claude-code|opencode|cursor [--write]
     Print the hook (Claude Code PreToolUse, an opencode 2.2 plugin, Cursor
     hooks.json), or with --write add it to this project's own config.
+
+  chaos [--json] [--seed <n>] [--faults <id,...>] [--schedules <s,...>] [--out <file>]
+    The fault-injection suite. A scripted model behind a loopback endpoint
+    answers a fixed task set and injects one fault per case: errors, timeouts,
+    empty and truncated replies, corrupt bodies, schema-violating tool calls,
+    rate limits, and faults seen in the field (late system messages dropped,
+    a relay that keeps abandoned requests running, slow throughput, tool
+    calls in reasoning_content). Each is scored ANNOUNCED or SILENT for
+    \`task --json\`, in a scratch project; nothing else is touched. Exit 0
+    every fault announced, 1 one or more silent, 2 the run is void.
+    \`chaos list\` prints the faults; \`chaos serve\` runs the endpoint for
+    another harness (docs/benchmarks/CHAOS.md).
 
   prompt [--continue | --resume <id>] [--trust]
     Interactive agent loop. --continue resumes the most recent session,
@@ -2491,6 +2505,13 @@ async function main(): Promise<void> {
       break;
     case "check":
       process.exit(await cmdCheck(args));
+    case "chaos": {
+      // Its own argv parser, like guard: subcommands and flags it alone reads.
+      const { cmdChaos } = await import("./chaos.js");
+      const at = process.argv.indexOf("chaos", 2);
+      process.exitCode = await cmdChaos(process.argv.slice(at + 1));
+      return;
+    }
     case "guard": {
       // Its own argv parser and a lean import: see guard_main.ts.
       const { cmdGuard } = await import("./guard.js");
