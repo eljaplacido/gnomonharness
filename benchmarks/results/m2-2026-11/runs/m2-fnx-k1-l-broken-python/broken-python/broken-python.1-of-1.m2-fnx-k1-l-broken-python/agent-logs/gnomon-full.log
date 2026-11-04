@@ -1,0 +1,175 @@
+  │ I'll start by inspecting the environment.
+[approval] bash: pwd; ls -la; uname -a — approved
+  ⚙ bash pwd; ls -la; uname -a
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 1 tool call(s) so far
+[approval] bash: which python python3 pip pip3; python3 -V 2>&1; pip3 -V 2>&1 — approved
+  ⚙ bash which python python3 pip pip3; python3 -V 2>&1; pip3 -V 2>&1
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 2 tool call(s) so far
+  │ Reproduced — `pip` is broken. Let me look deeper at the installation.
+[approval] bash: python3 -c "import pip; print(pip.__file__)" 2>&1; echo "---"; ls /usr/local/lib/python3.13/site-packages/ 2>&1 | head -50; echo "--- dist-info:"; ls -d /usr/local/lib/python3.13/site-packages/pip* 2>&1 — approved
+  ⚙ bash python3 -c "import pip; print(pip.__file__)" 2>&1; echo "---"; ls /usr…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 3 tool call(s) so far
+[approval] bash: cat /usr/local/bin/pip3; echo "=== pip:"; cat /usr/local/bin/pip; echo "=== ensurepip:"; python3 -c "import ensurepip; print(ensurepip.__file__)" 2>&1 — approved
+  ⚙ bash cat /usr/local/bin/pip3; echo "=== pip:"; cat /usr/local/bin/pip; echo…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 4 tool call(s) so far
+  │ Diagnosis is forming: the `pip` **package** is gone but its `dist-info` m…
+[approval] bash: ls -la /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/; echo "=== RECORD:"; cat /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD 2>&1 | head -20; echo "=== RECORD line count:"; wc -l /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD 2>&1 — approved
+  ⚙ bash ls -la /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/; …
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 5 tool call(s) so far
+[approval] bash: echo "=== ensurepip bundled wheels:"; ls -la /usr/local/lib/python3.13/ensurepip/_bundled/ 2>&1; echo "=== site-packages perms:"; ls -ld /usr/local/lib/python3.13/site-packages; echo "=== whoami:"; id — approved
+  ⚙ bash echo "=== ensurepip bundled wheels:"; ls -la /usr/local/lib/python3.13…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 6 tool call(s) so far
+  │ Confirmed: `RECORD` lists 852 files including `pip/__init__.py`, but the …
+[approval] bash: cd /tmp && python3 -m zipinfo /usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl 2>/dev/null | head -5; python3 - <<'EOF'
+import zipfile, hashlib
+w='/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl'
+z=zipfile.ZipFile(w)
+names=z.namelist()
+print("entries:", len(names))
+print("has pip/__init__.py:", 'pip/__init__.py' in names)
+print("has pip/_internal/cli/main.py:", 'pip/_internal/cli/main.py' in names)
+# verify wheel integrity via its own RECORD hashes
+bad=0
+rec=z.read('pip-24.3.1.dist-info/RECORD').decode().splitlines()
+import base64
+for line in rec:
+    p,hashpart,_ = line.partition(',')
+    if not hashpart: continue
+    algo,b64 = hashpart.split('=',1)
+    pad='='*(-len(b64)%4)
+    want=base64.urlsafe_b64decode(b64+pad)
+    try:
+        data=z.read(p)
+    except KeyError:
+        print("MISSING in wheel:", p); bad+=1; continue
+    got=hashlib.sha256(data).digest()
+    if got!=want:
+        print("HASH MISMATCH:", p); bad+=1
+print("checksum failures:", bad)
+EOF — approved
+  ⚙ bash cd /tmp && python3 -m zipinfo /usr/local/lib/python3.13/ensurepip/_bun…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 7 tool call(s) so far
+  │ My verification script hit a malformed RECORD line. Let me handle that an…
+[approval] bash: python3 - <<'EOF'
+import zipfile, hashlib, base64
+w='/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl'
+z=zipfile.ZipFile(w)
+rec=z.read('pip-24.3.1.dist-info/RECORD').decode().splitlines()
+bad=[]; oops=[]; checked=0
+for i,line in enumerate(rec):
+    parts=line.split(',')
+    if len(parts)!=3:
+        oops.append((i,line)); continue
+    p,hashpart,size=parts
+    if not hashpart: continue
+    try:
+        algo,b64=hashpart.split('=',1)
+    except ValueError:
+        oops.append((i,line)); continue
+    data=z.read(p) if p in z.namelist() else None
+    if data is None:
+        bad.append(('missing',p)); continue
+    got=hashlib.new(algo.replace('-','_'),data).digest()
+    want=base64.urlsafe_b64decode(b64+'='*(-len(b64)%4))
+    checked+=1
+    if got!=want: bad.append(('hash',p))
+print("RECORD lines:", len(rec), "checked:", checked)
+print("malformed lines:", oops)
+print("failures:", bad)
+print("testzip (crc):", z.testzip())
+EOF — approved
+  ⚙ bash python3 - <<'EOF' import zipfile, hashlib, base64 w='/usr/local/lib/py…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 8 tool call(s) so far
+  │ Wheel is verified intact (436/436 hash checks pass). Now I'll check for a…
+[approval] bash: cd /usr/local/lib/python3.13/site-packages && for d in *.dist-info *.egg-info; do [ -d "$d" ] || continue; top="$d/top_level.txt"; if [ -f "$top" ]; then while read -r pkg; do [ -z "$pkg" ] && continue; if [ ! -e "$pkg" ] && [ ! -d "$pkg" ]; then echo "DEACHED: $d -> package '$pkg' missing"; fi; done < "$top"; fi; done; echo "=== site-packages contents:"; ls -la — approved
+  ⚙ bash cd /usr/local/lib/python3.13/site-packages && for d in *.dist-info *.e…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 9 tool call(s) so far
+[approval] bash: echo "=== stale pycache for pip anywhere:"; find /usr/local/lib/python3.13 -maxdepth 2 -name 'pip*' 2>/dev/null; echo "=== pyvenv.cfg / VIRTUAL_ENV:"; echo "VIRTUAL_ENV=${VIRTUAL_ENV:-unset}"; echo "PYTHONPATH=${PYTHONPATH:-unset}"; python3 -c "import sys; print('prefix',sys.prefix); print('base',sys.base_prefix); print('ishomedir',sys.prefix==sys.base_prefix)" — approved
+  ⚙ bash echo "=== stale pycache for pip anywhere:"; find /usr/local/lib/python…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 10 tool call(s) so far
+  │ `pip` is the only package installed, and it's the only detached one — a c…
+[approval] bash: python3 -m ensurepip --upgrade --default-pip 2>&1; echo "ensurepip exit=$?" — approved
+  ⚙ bash python3 -m ensurepip --upgrade --default-pip 2>&1; echo "ensurepip exi…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 11 tool call(s) so far
+  │ `ensurepip` short-circuited — it saw the stale dist-info and concluded pi…
+[approval] bash: ls -d /usr/local/lib/python3.13/site-packages/pip 2>&1; echo "=== backing up stale dist-info:"; mkdir -p /tmp/pip-repair-backup && mv /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info /tmp/pip-repair-backup/ && echo "moved to /tmp/pip-repair-backup/"; ls -la /usr/local/lib/python3.13/site-packages/ — approved
+  ⚙ bash ls -d /usr/local/lib/python3.13/site-packages/pip 2>&1; echo "=== back…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 12 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  qwen3.8-flash-next — 12 tool call(s) so far
+  │ The phantom metadata is cleared. Now installing pip from the verified whe…
+[approval] bash: python3 -m ensurepip --upgrade --default-pip 2>&1; echo "ensurepip exit=$?" — approved
+  ⚙ bash python3 -m ensurepip --upgrade --default-pip 2>&1; echo "ensurepip exi…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 13 tool call(s) so far
+  │ pip reinstalled. Now verifying the actual requirement — that it can insta…
+[approval] bash: python3 -m pip --version 2>&1; echo "---"; pip --version 2>&1; echo "--- script shims:"; ls -la /usr/local/bin/pip*; echo "--- import:"; python3 -c "import pip; print('pip', pip.__version__, 'at', pip.__file__)" — approved
+  ⚙ bash python3 -m pip --version 2>&1; echo "---"; pip --version 2>&1; echo "-…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 14 tool call(s) so far
+[approval] bash: timeout 60 python3 -m pip download --no-deps --dest /tmp/pipcheck six 2>&1 | tail -15; echo "download exit=$?" — approved
+  ⚙ bash timeout 60 python3 -m pip download --no-deps --dest /tmp/pipcheck six …
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 15 tool call(s) so far
+  │ Network works and pip resolves/downloads. Final check: a real install + u…
+[approval] bash: timeout 90 python3 -m pip install --root-user-action=ignore six 2>&1 | tail -6; echo "=== verify import:"; python3 -c "import six; print('six', six.__version__)"; echo "=== show:"; python3 -m pip show six 2>&1 | head -4 — approved
+  ⚙ bash timeout 90 python3 -m pip install --root-user-action=ignore six 2>&1 |…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 16 tool call(s) so far
+  │ Install works end to end. Cleaning up my test package and verifying the f…
+[approval] bash: python3 -m pip uninstall -y --root-user-action=ignore six 2>&1 | tail -3; rm -rf /tmp/pipcheck; echo "=== final site-packages:"; ls /usr/local/lib/python3.13/site-packages/; echo "=== self-check:"; python3 -m pip check 2>&1; echo "pip check exit=$?" — approved
+  ⚙ bash python3 -m pip uninstall -y --root-user-action=ignore six 2>&1 | tail …
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 17 tool call(s) so far
+  qwen3.8-flash-next — 18 tool call(s) so far
+  ⚙ note 
+    ✓ note — pip broke in /app container because site-packages/pip/ was d
+Fixed — pip works again.
+
+## What was actually wrong
+
+Your Python install wasn't corrupted; it had a **half-finished uninstall**. The `pip` package directory was gone from `site-packages`, but its metadata folder was still there:
+
+```
+site-packages/
+  README.txt
+  pip-24.3.1.dist-info/     <- metadata says "pip 24.3.1 is installed"
+  (pip/ missing)            <- the actual code is gone
+```
+
+`RECORD` in that dist-info listed 852 files including `pip/__init__.py`, none of which existed. So the launcher scripts at `/usr/local/bin/pip` still ran and tried `from pip._internal.cli.main import main` → `ModuleNotFoundError: No module named 'pip'`.
+
+## The trap worth knowing about
+
+The obvious repair, `python3 -m ensurepip --upgrade`, **silently did nothing** — it printed `Requirement already satisfied: pip` and returned success. It reads that stale dist-info and concludes pip is present. That no-op is what makes this state sticky; running it repeatedly looks like it's failing to help.
+
+I had to move the phantom dist-info aside first (backed up to `/tmp/pip-repair-backup/`, not deleted), after which ensurepip installed normally.
+
+## Repair path
+
+No network was needed. The bundled wheel at `ensurepip/_bundled/pip-24.3.1-py3-none-any.whl` matched the missing version exactly, and I verified it before trusting it — all 436 RECORD sha256 hashes checked, `zipfile.testzip()` clean. Then:
+
+```
+mv .../pip-24.3.1.dist-info /tmp/pip-repair-backup/
+python3 -m ensurepip --upgrade --default-pip
+```
+
+## Verification
+
+`pip --version`, `python3 -m pip --version`, all three shims (`pip`, `pip3`, `pip3.13`), and `import pip` work. A real round-trip passed: downloaded `six`, installed it, imported it, then uninstalled it. `pip check` reports no broken requirements. Site-packages is back to a clean `pip` + `pip-24.3.1.dist-info` pair, and my test package is removed.
+
+Two things to note: pip 24.3.1 is quite old (26.3 is current) — `pip install --upgrade pip` will now work, since pip is what was broken. And you're installing as root into the system interpreter; the warning pip prints about using a virtualenv is legitimate advice, as root-level installs into `/usr/local` are how you got into this state in the first place.
+
+[result] role=implementor model=qwen3.8-flash-next tools=18 surface=b1d6c95da52f

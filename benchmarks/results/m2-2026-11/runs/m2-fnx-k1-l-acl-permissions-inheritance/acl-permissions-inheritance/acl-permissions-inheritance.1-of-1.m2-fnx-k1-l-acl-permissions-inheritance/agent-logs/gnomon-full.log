@@ -1,0 +1,184 @@
+  │ I'll start by inspecting the environment to see what tools and users are …
+[approval] bash: id; uname -a; which setfacl getfacl 2>&1; ls -ld /srv 2>&1 — approved
+  ⚙ bash id; uname -a; which setfacl getfacl 2>&1; ls -ld /srv 2>&1
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 1 tool call(s) so far
+[approval] bash: getent group research; getent passwd alice bob; cat /etc/fstab 2>&1 | head -30; mount | grep -E ' / | /srv ' 2>&1 — approved
+  ⚙ bash getent group research; getent passwd alice bob; cat /etc/fstab 2>&1 | …
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 2 tool call(s) so far
+  │ Users and group already exist, and `setfacl`/`getfacl` are present. One f…
+[approval] bash: cd /tmp && rm -rf acltest && mkdir acltest && cd acltest && setfacl -m u:alice:rwx . 2>&1; echo "setfacl exit: $?"; getfacl -p . 2>&1; touch f && setfacl -m u:bob:rw f 2>&1; echo "file setfacl exit: $?"; getfacl -p f 2>&1; ls -l — approved
+  ⚙ bash cd /tmp && rm -rf acltest && mkdir acltest && cd acltest && setfacl -m…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 3 tool call(s) so far
+  │ ACLs work on this filesystem despite the `nouserxattr` mount flag. Now bu…
+[approval] bash: rm -rf /tmp/acltest
+mkdir -p /srv/shared
+chgrp research /srv/shared
+chmod 2770 /srv/shared
+ls -ld /srv/shared — approved
+  ⚙ bash rm -rf /tmp/acltest mkdir -p /srv/shared chgrp research /srv/shared ch…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 4 tool call(s) so far
+  │ Base directory is `2770 root:research`. Now the ACLs — access entries and…
+[approval] bash: setfacl -b /srv/shared
+setfacl -m g:research:rwx,u:alice:rwx,u:bob:rwx,o::---,m::rwx /srv/shared
+setfacl -m d:g:research:rwx,d:u:alice:rwx,d:u:bob:rwx,d:o::---,d:m::rwx /srv/shared
+getfacl -p /srv/shared — approved
+  ⚙ bash setfacl -b /srv/shared setfacl -m g:research:rwx,u:alice:rwx,u:bob:rwx…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 5 tool call(s) so far
+  │ ACLs are in place. Now I need to verify the inheritance actually works — …
+  ⚙ bash rm -rf /srv/sharedtest; mkdir -p /srv/sharedtest chgrp research /srv/s…
+    ⚠ bash — refused (sudo)
+  qwen3.8-flash-next — 6 tool call(s) so far
+  │ `sudo` is blocked by policy. I'll use `setpriv`/`su` to drop privileges i…
+[approval] bash: which setpriv su runuser 2>&1 — approved
+  ⚙ bash which setpriv su runuser 2>&1
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 7 tool call(s) so far
+[approval] bash: rm -rf /srv/sharedtest; mkdir -p /srv/sharedtest
+chgrp research /srv/sharedtest; chmod 2770 /srv/sharedtest
+setfacl -b /srv/sharedtest
+setfacl -m g:research:rwx,u:alice:rwx,u:bob:rwx,o::---,m::rwx /srv/sharedtest
+setfacl -m d:g:research:rwx,d:u:alice:rwx,d:u:bob:rwx,d:o::---,d:m::rwx /srv/sharedtest
+
+A() { setpriv --reuid=1001 --regid=1002 --clear-groups "$@"; }
+B() { setpriv --reuid=1002 --regid=1003 --clear-groups "$@"; }
+
+echo "=== alice creates file + subdir + nested ==="
+A touch /srv/sharedtest/alice_file
+A mkdir /srv/sharedtest/alice_dir
+A touch /srv/sharedtest/alice_dir/nested
+echo "=== bob reads/writes alice's file ==="
+B cat /srv/sharedtest/alice_file && echo "bob READ ok"
+B sh -c 'echo hello >> /srv/sharedtest/alice_file' && echo "bob WRITE ok"
+echo "=== bob traverses alice_dir ==="
+B cat /srv/sharedtest/alice_dir/nested && echo "bob TRAVERSE ok"
+B sh -c 'touch /srv/sharedtest/alice_dir/bob_in_alice_dir' && echo "bob CREATE-in-alice_dir ok"
+echo "=== outsider ==="
+id outsider 2>/dev/null || useradd -M -s /bin/sh outsider
+su -s /bin/sh -c 'ls /srv/sharedtest' outsider 2>&1
+su -s /bin/sh -c 'cat /srv/sharedtest/alice_file' outsider 2>&1
+echo "=== ownership + ACLs of created objects ==="
+ls -ld /srv/sharedtest /srv/sharedtest/alice_file /srv/sharedtest/alice_dir /srv/sharedtest/alice_dir/nested
+getfacl -p /srv/sharedtest/alice_file
+getfacl -p /srv/sharedtest/alice_dir — approved
+  ⚙ bash rm -rf /srv/sharedtest; mkdir -p /srv/sharedtest chgrp research /srv/s…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 8 tool call(s) so far
+  │ Inheritance works end-to-end. One thing to check: files inherit `mask::rw…
+[approval] bash: B() { setpriv --reuid=1002 --regid=1003 --clear-groups "$@"; }
+echo "=== executable file created by bob ==="
+B sh -c 'umask 022; install -m 755 /dev/null /srv/sharedtest/bob_script' 2>/dev/null || B sh -c 'touch /srv/sharedtest/bob_script2; chmod 755 /srv/sharedtest/bob_script2'
+ls -l /srv/sharedtest/bob_script /srv/sharedtest/bob_script2 2>&1
+getfacl -p /srv/sharedtest/bob_script 2>&1
+echo "=== alice can execute bob's script ==="
+A() { setpriv --reuid=1001 --regid=1002 --clear-groups "$@"; }
+A sh -c '/srv/sharedtest/bob_script && echo "alice EXEC ok"' 2>&1
+echo "=== nested dir deeper inheritance ==="
+A mkdir -p /srv/sharedtest/alice_dir/deep/deeper
+getfacl -p /srv/sharedtest/alice_dir/deep/deeper | head -20
+echo "=== REAL /srv/shared must be empty and untouched ==="
+ls -la /srv/shared
+find /srv/shared -mindepth 1 | wc -l — approved
+  ⚙ bash B() { setpriv --reuid=1002 --regid=1003 --clear-groups "$@"; } echo "=…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 9 tool call(s) so far
+  │ Everything inherits correctly, and the real `/srv/shared` is empty (0 ent…
+[approval] bash: B() { setpriv --reuid=1002 --regid=1003 --clear-groups "$@"; }
+A() { setpriv --reuid=1001 --regid=1002 --clear-groups "$@"; }
+echo "=== bob creates executable via touch+chmod (normal shell path) ==="
+B sh -c 'touch /srv/sharedtest/exe2; chmod 755 /srv/sharedtest/exe2'
+ls -l /srv/sharedtest/exe2; getfacl -p /srv/sharedtest/exe2
+A sh -c '/srv/sharedtest/exe2 && echo "alice EXEC exe2 ok"'
+echo "=== bob creates file with restrictive umask 077 (worst case) ==="
+B sh -c 'umask 077; touch /srv/sharedtest/secret'
+ls -l /srv/sharedtest/secret; getfacl -p /srv/sharedtest/secret
+echo "--- can alice read it? (tests ACL override of owner umask) ---"
+A cat /srv/sharedtest/secret && echo "alice READ ok despite bob umask 077"
+echo "=== cleanup scratch + outsider ==="
+rm -rf /srv/sharedtest
+userdel -r outsider 2>&1; echo "userdel exit=$?"
+ls /srv ; echo "--- final real dir ---"; ls -la /srv/shared; find /srv/shared -mindepth 1 -exec echo "LEFTOVER: {}" \; — approved
+  ⚙ bash B() { setpriv --reuid=1002 --regid=1003 --clear-groups "$@"; } A() { s…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 10 tool call(s) so far
+  │ Key result: even with bob's `umask 077`, alice still reads his file — the…
+[approval] bash: echo "=== stat ==="
+stat -c '%n owner=%U group=%G perms=%a (%A)' /srv/shared
+echo "=== numeric mode check ==="
+M=$(stat -c '%a' /srv/shared); [ "$M" = "2770" ] && echo "PASS mode==2770" || echo "FAIL mode==$M"
+G=$(stat -c '%G' /srv/shared); [ "$G" = "research" ] && echo "PASS group==research" || echo "FAIL group==$G"
+echo "=== getfacl ==="
+getfacl -p --absolute-names /srv/shared
+echo "=== requirement assertions on ACL ==="
+FA=$(getfacl -p --absolute-names /srv/shared 2>/dev/null)
+for e in "user:alice:rwx" "user:bob:rwx" "group:research:rwx" "mask::rwx" "other::---" \
+         "default:user:alice:rwx" "default:user:bob:rwx" "default:group:research:rwx" \
+         "default:mask::rwx" "default:other::---"; do
+  echo "$FA" | grep -qx "$e" && echo "PASS $e" || echo "FAIL $e"
+done
+echo "=== no files created ==="
+N=$(find /srv/shared -mindepth 1 | wc -l); echo "entries inside: $N"; [ "$N" -eq 0 ] && echo "PASS empty" || echo "FAIL not empty"
+echo "=== setgid bit ==="
+[ "$(stat -c '%A' /srv/shared | cut -c6)" = "s" ] && echo "PASS setgid" || echo "FAIL setgid" — approved
+  ⚙ bash echo "=== stat ===" stat -c '%n owner=%U group=%G perms=%a (%A)' /srv/…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 11 tool call(s) so far
+  │ The setgid check failed — but `getfacl` reports `flags: -s-` and `ls` sho…
+[approval] bash: A=$(stat -c '%A' /srv/shared); echo "perm string: '$A'"
+i=1; for c in $(echo "$A" | sed 's/./& /g'); do echo "pos $i = $c"; i=$((i+1)); done
+echo "--- octet check (authoritative) ---"
+stat -c '%a' /srv/shared
+python3 -c "import os,stat; m=os.stat('/srv/shared').st_mode; print('octal', oct(m)); print('setgid bit set:', bool(m & stat.S_ISGID)); print('mode&07777 =', oct(m & 0o7777))" — approved
+  ⚙ bash A=$(stat -c '%A' /srv/shared); echo "perm string: '$A'" i=1; for c in …
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 12 tool call(s) so far
+  │ Setgid is set — `stat.S_ISGID` is authoritative and confirms it. That FAI…
+[approval] bash: [ "$(stat -c '%A' /srv/shared | cut -c7)" = "s" ] && echo "PASS setgid (pos7=s)" || echo "FAIL"
+echo "=== final state ==="
+stat -c '%n %U:%G %a %A' /srv/shared
+ls -A /srv/shared | wc -l — approved
+  ⚙ bash [ "$(stat -c '%A' /srv/shared | cut -c7)" = "s" ] && echo "PASS setgid…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 13 tool call(s) so far
+Done. `/srv/shared` is configured and verified.
+
+## What was created
+
+```
+/srv/shared  root:research  2770  drwxrws---+
+```
+
+```
+user::rwx          default:user::rwx
+user:alice:rwx     default:user:alice:rwx
+user:bob:rwx       default:user:bob:rwx
+group::rwx         default:group::rwx
+group:research:rwx default:group:research:rwx
+mask::rwx          default:mask::rwx
+other::---         default:other::---
+```
+
+`research` (gid 1001) already existed with `alice` and `bob` as members; no users or groups needed creating. The directory is empty — 0 entries — as required.
+
+## Verification
+
+I did not trust the ACL listing alone. I built an identical scratch copy at `/srv/sharedtest`, exercised it as the real users via `setpriv` (`sudo` is blocked by harness policy), then deleted the scratch so `/srv/shared` stayed pristine. Confirmed:
+
+- **Cross-user access** — bob read, appended to, and created files inside alice's file and subdirectory.
+- **Recursive inheritance** — `alice_dir/deep/deeper` carried the full ACL plus its own default ACL, and kept the setgid bit.
+- **Isolation** — a throwaway `outsider` account got `Permission denied` on both `ls` and `cat`; it has since been deleted.
+- **The requirement that matters most** — bob creating a file under `umask 077` still left alice able to read it. The ACL overrides the creator's umask, which is exactly what makes this work where plain setgid+group perms would fail.
+
+## Two things worth knowing
+
+**Files inherit `mask::rw-`, not `rwx`.** A `touch`ed file comes out `-rw-rw----+` with `user:bob:rwx #effective:rw-`. This is correct POSIX behavior, not a misconfiguration: the inherited mask is intersected with the file-creation mode, and `open()` uses 0666, so no file is ever created executable by default. Execute works when requested — a file bob `chmod 755`'d was executable by alice. If your tests assert `rwx` effective on a plain created file, they will fail against a correct configuration.
+
+**`install -m 755` produces a file with no ACL entries at all.** I hit this while testing. `install(1)` deliberately applies a complete ACL, discarding inherited entries. Normal creation paths (`touch`, redirection, editors, `cp` without `--no-preserve`) inherit correctly. Worth avoiding in the test phase.
+
+One correction to note: my first setgid assertion reported FAIL. That was a bug in my check — I read position 6 of `drwxrws---` when the group-execute flag is at position 7. `stat.S_ISGID` confirmed the bit was set from the start; the corrected check passes.
+
+[refusal] role=implementor model=qwen3.8-flash-next tools=13 surface=b1d6c95da52f

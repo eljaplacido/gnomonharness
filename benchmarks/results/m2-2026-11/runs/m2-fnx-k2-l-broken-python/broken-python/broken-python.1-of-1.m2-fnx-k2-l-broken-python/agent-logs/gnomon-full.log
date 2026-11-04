@@ -1,0 +1,204 @@
+  │ I'll start by inspecting the environment to see what's actually broken.
+[approval] bash: pwd; ls -la; which python python3 pip pip3 2>&1; python3 -V 2>&1 — approved
+  ⚙ bash pwd; ls -la; which python python3 pip pip3 2>&1; python3 -V 2>&1
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 1 tool call(s) so far
+[approval] bash: python3 -m pip --version 2>&1 | head -40 — approved
+  ⚙ bash python3 -m pip --version 2>&1 | head -40
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 2 tool call(s) so far
+  │ pip's module is missing entirely. Let me look deeper before deciding how …
+[approval] bash: ls /usr/local/lib/python3.13/ | head -50; echo "--- site-packages ---"; ls /usr/local/lib/python3.13/site-packages/ 2>&1 | head -50 — approved
+  ⚙ bash ls /usr/local/lib/python3.13/ | head -50; echo "--- site-packages ---"…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 3 tool call(s) so far
+[approval] bash: cat /usr/local/bin/pip3 2>&1 | head -20; echo "=== ensurepip ==="; ls /usr/local/lib/python3.13/ensurepip 2>&1; echo "=== venv ==="; python3 -c "import venv, sys; print('venv ok')" 2>&1 — approved
+  ⚙ bash cat /usr/local/bin/pip3 2>&1 | head -20; echo "=== ensurepip ==="; ls …
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 4 tool call(s) so far
+  │ The `pip-24.3.1.dist-info` metadata is there but the actual `pip/` packag…
+[approval] bash: ls -la /usr/local/lib/python3.13/site-packages/; echo "=== dist-info contents ==="; ls /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/; echo "=== bundled wheels ==="; ls -la /usr/local/lib/python3.13/ensurepip/_bundled/ — approved
+  ⚙ bash ls -la /usr/local/lib/python3.13/site-packages/; echo "=== dist-info c…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 5 tool call(s) so far
+[approval] bash: echo "=== RECORD head ==="; head -5 /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD 2>&1; echo "=== RECORD line count ==="; wc -l /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD 2>&1; echo "=== pip dir exists? ==="; test -d /usr/local/lib/python3.13/site-packages/pip && echo YES || echo NO — approved
+  ⚙ bash echo "=== RECORD head ==="; head -5 /usr/local/lib/python3.13/site-pac…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 6 tool call(s) so far
+  │ Diagnosis is clear: the `pip/` package directory was deleted (or stripped…
+  ⚙ bash timeout 20 python3 -c " import urllib.request try: r=urllib.request.ur…
+    ⚠ bash — refused (network = false)
+  qwen3.8-flash-next — 7 tool call(s) so far
+[approval] bash: cat /usr/local/lib/python3.13/site-packages/README.txt; echo "=== ensurepip wheel version ==="; python3 -c "import ensurepip,os;print(ensurepip._bundled if hasattr(ensurepip,'_bundled') else 'n/a')" 2>&1; python3 -c "import ensurepip; print(ensurepip.version())" 2>&1 — approved
+  ⚙ bash cat /usr/local/lib/python3.13/site-packages/README.txt; echo "=== ensu…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 8 tool call(s) so far
+  │ Network is blocked by policy, so the repair has to come from what's alrea…
+[approval] bash: echo "=== user site ==="; python3 -m site 2>&1 | tail -20; echo "=== ~/.local pip ==="; ls -la ~/.local/lib/python3.13/site-packages/ 2>&1 | head; echo "=== env vars ==="; env | grep -iE 'python|pip|virtual|path=' 2>&1 — approved
+  ⚙ bash echo "=== user site ==="; python3 -m site 2>&1 | tail -20; echo "=== ~…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 9 tool call(s) so far
+[approval] bash: echo "=== pip cache dir ==="; ls ~/.cache/pip 2>&1 | head; echo "=== pip.conf ==="; ls -la /etc/pip.conf ~/.pip/pip.conf ~/.config/pip/pip.conf 2>&1; echo "=== sys.path ==="; python3 -c "import sys;[print(p) for p in sys.path]" — approved
+  ⚙ bash echo "=== pip cache dir ==="; ls ~/.cache/pip 2>&1 | head; echo "=== p…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 10 tool call(s) so far
+  │ No shadowing user-site install, no pip.conf, no cache — so the missing pa…
+[approval] bash: cd /app && python3 -m ensurepip --upgrade > /tmp/ensurepip.log 2>&1; echo "exit=$?"; tail -20 /tmp/ensurepip.log — approved
+  ⚙ bash cd /app && python3 -m ensurepip --upgrade > /tmp/ensurepip.log 2>&1; e…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 11 tool call(s) so far
+  │ `ensurepip` short-circuited — it trusts the orphaned `.dist-info` and con…
+[approval] bash: cd /app && python3 - <<'EOF' 2>&1
+import hashlib, base64, zipfile, sys
+w="/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl"
+z=zipfile.ZipFile(w)
+bad=z.testzip()
+print("zip integrity:", "CORRUPT: "+str(bad) if bad else "OK")
+names=z.namelist()
+print("entries:", len(names))
+print("has pip/__init__.py:", "pip/__init__.py" in names)
+rec=z.read("pip-24.3.1.dist-info/RECORD").decode().splitlines()
+print("RECORD lines:", len(rec))
+mism=0
+for line in rec:
+    parts=line.split(",")
+    if len(parts)<3 or not parts[1].startswith("sha256="): continue
+    try: data=z.read(parts[0])
+    except KeyError: print("MISSING in wheel:", parts[0]); mism+=1; continue
+    h=base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+    if h!=parts[1].split("=",1)[1]:
+        print("HASH MISMATCH:", parts[0]); mism+=1
+print("hash mismatches:", mism)
+EOF — approved
+  ⚙ bash cd /app && python3 - <<'EOF' 2>&1 import hashlib, base64, zipfile, sys…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 12 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  qwen3.8-flash-next — 12 tool call(s) so far
+  │ The bundled wheel is verified intact (437 entries, zero hash mismatches).…
+[approval] bash: cd /usr/local/lib/python3.13/site-packages && mv pip-24.3.1.dist-info /tmp/pip-24.3.1.dist-info.bak && echo "moved stale metadata aside"; ls /usr/local/lib/python3.13/site-packages/ — approved
+  ⚙ bash cd /usr/local/lib/python3.13/site-packages && mv pip-24.3.1.dist-info …
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 13 tool call(s) so far
+[approval] bash: cd /app && python3 -m ensurepip --upgrade > /tmp/ensurepip2.log 2>&1; echo "exit=$?"; tail -20 /tmp/ensurepip2.log — approved
+  ⚙ bash cd /app && python3 -m ensurepip --upgrade > /tmp/ensurepip2.log 2>&1; …
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 14 tool call(s) so far
+  │ pip reinstalled from the verified wheel. Now the real test — can it actua…
+[approval] bash: python3 -m pip --version 2>&1; echo "=== pip CLI ==="; pip --version 2>&1; echo "=== script shims ==="; ls -la /usr/local/bin/ | grep -iE 'pip|wheel' 2>&1; echo "=== pkg dir ==="; test -d /usr/local/lib/python3.13/site-packages/pip && echo "pip/ present" || echo "pip/ MISSING" — approved
+  ⚙ bash python3 -m pip --version 2>&1; echo "=== pip CLI ==="; pip --version 2…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 15 tool call(s) so far
+  │ Both entry points work. Now the end-to-end proof — build a wheel offline …
+[approval] bash: rm -rf /tmp/wheeltest && mkdir -p /tmp/wheeltest/src/demo_pkg && cd /tmp/wheeltest &&
+cat > src/demo_pkg/__init__.py <<'EOF'
+__version__ = "1.2.3"
+def greet():
+    return "demo install worked"
+EOF
+cat > pyproject.toml <<'EOF'
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "demo-pkg"
+version = "1.2.3"
+EOF
+python3 -c "import setuptools, wheel; print('setuptools', setuptools.__version__); print('wheel', wheel.__version__)" 2>&1 — approved
+  ⚙ bash rm -rf /tmp/wheeltest && mkdir -p /tmp/wheeltest/src/demo_pkg && cd /t…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 16 tool call(s) so far
+  │ No setuptools either (this is a slim image), and I can't fetch it. I'll c…
+[approval] bash: cd /app && python3 - <<'EOF' 2>&1
+import zipfile, base64, hashlib, os
+os.makedirs("/tmp/wheeltest", exist_ok=True)
+whl="/tmp/wheeltest/demo_pkg-1.2.3-py3-none-any.whl"
+files={
+ "demo_pkg/__init__.py": '__version__ = "1.2.3"\ndef greet():\n    return "demo install worked"\n',
+ "demo_pkg-1.2.3.dist-info/METADATA": "Metadata-Version: 2.1\nName: demo-pkg\nVersion: 1.2.3\n",
+ "demo_pkg-1.2.3.dist-info/WHEEL": "Wheel-Version: 1.0\nGenerator: hand\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+}
+rec=[]
+with zipfile.ZipFile(whl,"w",zipfile.ZIP_DEFLATED) as z:
+    for n,c in files.items():
+        z.writestr(n,c)
+        h=base64.urlsafe_b64encode(hashlib.sha256(c.encode()).digest()).rstrip(b"=").decode()
+        rec.append(f"{n},sha256={h},{len(c.encode())}")
+    z.writestr("demo_pkg-1.2.3.dist-info/RECORD","\n".join(rec)+"\n")
+print("built", whl, os.path.getsize(whl), "bytes")
+EOF — approved
+  ⚙ bash cd /app && python3 - <<'EOF' 2>&1 import zipfile, base64, hashlib, os …
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 17 tool call(s) so far
+[approval] bash: cd /app && python3 -m pip install --no-index --no-cache-dir --root-user-action=ignore /tmp/wheeltest/demo_pkg-1.2.3-py3-none-any.whl > /tmp/install.log 2>&1; echo "exit=$?"; cat /tmp/install.log — approved
+  ⚙ bash cd /app && python3 -m pip install --no-index --no-cache-dir --root-use…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 18 tool call(s) so far
+  │ Install succeeded. Verifying it's importable, then exercising the other s…
+[approval] bash: cd /app && python3 -c "import demo_pkg; print('import OK:', demo_pkg.greet(), demo_pkg.__version__)" 2>&1; echo "=== show ==="; python3 -m pip show demo-pkg 2>&1 | head -6; echo "=== list ==="; python3 -m pip list 2>&1 | head -6 — approved
+  ⚙ bash cd /app && python3 -c "import demo_pkg; print('import OK:', demo_pkg.g…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 19 tool call(s) so far
+  │ `list` and `show` work, and pip's metadata now matches reality. Testing u…
+[approval] bash: cd /app && python3 -m pip uninstall -y --root-user-action=ignore demo-pkg > /tmp/uninstall.log 2>&1; echo "exit=$?"; cat /tmp/uninstall.log; echo "=== import gone? ==="; python3 -c "import demo_pkg" 2>&1 | tail -1 — approved
+  ⚙ bash cd /app && python3 -m pip uninstall -y --root-user-action=ignore demo-…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 20 tool call(s) so far
+  │ Install, import, `show`, `list`, and `uninstall` all work. Cleaning up my…
+[approval] bash: rm -rf /tmp/wheeltest /tmp/pip-24.3.1.dist-info.bak /tmp/ensurepip.log /tmp/ensurepip2.log /tmp/install.log /tmp/uninstall.log
+echo "=== final site-packages ==="; ls /usr/local/lib/python3.13/site-packages/
+echo "=== final check ==="; pip --version 2>&1; python3 -m pip --version 2>&1
+echo "=== repo untouched? ==="; cd /app && git status --porcelain 2>&1 | head; echo "(empty above = no repo changes)" — approved
+  ⚙ bash rm -rf /tmp/wheeltest /tmp/pip-24.3.1.dist-info.bak /tmp/ensurepip.log…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 21 tool call(s) so far
+  qwen3.8-flash-next — 22 tool call(s) so far
+  ⚙ note 
+    ✓ note — pip on this box was broken by a missing /usr/local/lib/pytho
+Fixed. Your pip is working again.
+
+## What was actually wrong
+
+Not a network, permissions, or PATH problem — the package itself had been half-deleted:
+
+```
+site-packages/
+├── pip/                      ← MISSING (the actual code)
+└── pip-24.3.1.dist-info/     ← still present (the metadata)
+```
+
+The `pip/` directory was gone while its `.dist-info` metadata remained. That's why `pip` and `python3 -m pip` both died with `No module named pip`, even though the `pip`/`pip3` shim scripts in `/usr/local/bin` were perfectly intact and correctly pointed at `from pip._internal.cli.main import main`.
+
+## The trap worth knowing about
+
+The obvious fix — `python3 -m ensurepip --upgrade` — **silently did nothing** on the first try:
+
+```
+Requirement already satisfied: pip in /usr/local/lib/python3.13/site-packages (24.3.1)
+```
+
+Because the orphaned `.dist-info` is what pip uses to decide what's installed, it kept reporting pip 24.3.1 as present. This is the state that makes the breakage sticky: the tool's own ledger claims it's fine. Removing the stale metadata was the necessary step; only then did `ensurepip` actually reinstall.
+
+I verified the bundled wheel before trusting it rather than assuming it was intact: zip integrity OK, 437 entries, and all 437 `RECORD` sha256 hashes recomputed and matched. Then `python3 -m ensurepip --upgrade` cleanly restored pip 24.3.1.
+
+## Proof it works, not just that it imports
+
+`pip --version` returning a string only proves the module loads, so I exercised the real install pipeline. Two obstacles shaped this: network is disabled by `.gnomon/policy.toml` (`network = false`), and I did **not** route around it; and `setuptools`/`wheel` aren't installed either, so I couldn't build a test package the normal way. I hand-built a valid wheel (a zip plus `METADATA`/`WHEEL`/`RECORD`) and installed from disk:
+
+```
+Successfully installed demo-pkg-1.2.3
+import OK: demo install worked 1.2.3
+pip list  → demo-pkg 1.2.3 / pip 24.3.1
+Successfully uninstalled demo-pkg-1.2.3
+```
+
+`install`, `show`, `list`, `uninstall` and the import all behaved, and the ledger now matches the filesystem. All test artifacts and backups are cleaned up; nothing in `/app` was touched (it isn't a git repo).
+
+## Two things to flag
+
+**You still can't install from PyPI here.** This session has no network by policy, so a real `pip install requests` will fail on connectivity, not on pip. If you want me to verify against PyPI, that needs `/network on` or `network = true` in `policy.toml`.
+
+**How the directory vanished is still unexplained**, and that matters more than the fix. A missing package dir with surviving metadata usually means a `pip uninstall` was interrupted, or someone deleted files by hand, or a `--target`/`--prefix` install wrote into the system tree. Related: `setuptools` and `wheel` are also absent, which is normal for a slim Python base image but is a second thing that will bite you the moment you try to install anything needing a build step. If you were expecting them, that's a separate reinstall. Going forward, prefer a venv (`python3 -m venv` imports fine) so package experiments can't damage the system interpreter again.
+
+[refusal] role=implementor model=qwen3.8-flash-next tools=22 surface=b1d6c95da52f

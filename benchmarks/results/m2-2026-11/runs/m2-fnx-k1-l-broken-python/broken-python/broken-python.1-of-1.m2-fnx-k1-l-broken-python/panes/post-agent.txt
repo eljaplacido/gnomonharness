@@ -1,0 +1,58 @@
+root@eab4dcf7384a:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+root@eab4dcf7384a:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+ARM_VERSION=be4fc0d8835c443aca8b32ccd4c1caacf48cbdce
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793747658
+root@eab4dcf7384a:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with
+ pip.'; tmux wait -S done
+R1_ARM=L R1_ENTRY=implementor R1_ROUTES=coordinator=local,implementor=local,verifier=local,plan=local,implement=local,critique=local,smol=local M2_LOCAL_REPLAY=
+false
+  qwen3.8-flash-next — 18 tool call(s) so far
+  ⚙ note
+    ✓ note — pip broke in /app container because site-packages/pip/ was d
+Fixed — pip works again.
+
+## What was actually wrong
+
+Your Python install wasn't corrupted; it had a **half-finished uninstall**. The `pip` package directory was gone from `site-packages`, but its metadata folder w
+as still there:
+
+```
+site-packages/
+  README.txt
+  pip-24.3.1.dist-info/     <- metadata says "pip 24.3.1 is installed"
+  (pip/ missing)            <- the actual code is gone
+```
+
+`RECORD` in that dist-info listed 852 files including `pip/__init__.py`, none of which existed. So the launcher scripts at `/usr/local/bin/pip` still ran and tr
+ied `from pip._internal.cli.main import main` → `ModuleNotFoundError: No module named 'pip'`.
+
+## The trap worth knowing about
+
+The obvious repair, `python3 -m ensurepip --upgrade`, **silently did nothing** — it printed `Requirement already satisfied: pip` and returned success. It reads
+that stale dist-info and concludes pip is present. That no-op is what makes this state sticky; running it repeatedly looks like it's failing to help.
+
+I had to move the phantom dist-info aside first (backed up to `/tmp/pip-repair-backup/`, not deleted), after which ensurepip installed normally.
+
+## Repair path
+
+No network was needed. The bundled wheel at `ensurepip/_bundled/pip-24.3.1-py3-none-any.whl` matched the missing version exactly, and I verified it before trust
+ing it — all 436 RECORD sha256 hashes checked, `zipfile.testzip()` clean. Then:
+
+```
+mv .../pip-24.3.1.dist-info /tmp/pip-repair-backup/
+python3 -m ensurepip --upgrade --default-pip
+```
+
+## Verification
+
+`pip --version`, `python3 -m pip --version`, all three shims (`pip`, `pip3`, `pip3.13`), and `import pip` work. A real round-trip passed: downloaded `six`, inst
+alled it, imported it, then uninstalled it. `pip check` reports no broken requirements. Site-packages is back to a clean `pip` + `pip-24.3.1.dist-info` pair, an
+d my test package is removed.
+
+Two things to note: pip 24.3.1 is quite old (26.3 is current) — `pip install --upgrade pip` will now work, since pip is what was broken. And you're installing a
+s root into the system interpreter; the warning pip prints about using a virtualenv is legitimate advice, as root-level installs into `/usr/local` are how you g
+ot into this state in the first place.
+
+[result] role=implementor model=qwen3.8-flash-next tools=18 surface=b1d6c95da52f
+root@eab4dcf7384a:/app#

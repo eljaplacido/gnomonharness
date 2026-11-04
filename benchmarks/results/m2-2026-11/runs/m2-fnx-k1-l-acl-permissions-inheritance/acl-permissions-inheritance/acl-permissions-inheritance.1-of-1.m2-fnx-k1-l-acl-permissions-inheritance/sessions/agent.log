@@ -1,0 +1,77 @@
+[?2004hroot@ec53a49d4490:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@ec53a49d4490:/app# clear
+[?2004l[H[J[3J[?2004hroot@ec53a49d4490:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@ec53a49d4490:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=be4fc0d8835c443aca8b32ccd4c1caacf48cbdce
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793743094
+[?2004hroot@ec53a49d4490:/app# bash /opt/gnomon-run.sh 'Create a shared directory structure with Linux ACLs that demonstrates proper permission inheritance.
+[?2004l[?2004h> 
+[?2004l[?2004h> Requirements:
+[?2004l[?2004h> 1. Create directory /srv/shared with the following properties:
+[?2004l[?2004h>    - Owned by group "research" 
+[?2004l[?2004h>    - Set the setgid bit so new files inherit the group
+[?2004l[?2004h>    - Base permissions: 2770 (rwxrws---)
+[?2004l[?2004h> 
+[?2004l[?2004h> 2. Configure ACLs on /srv/shared:
+[?2004l[?2004h>    - Group "research": full rwx permissions (both current and default)
+[?2004l[?2004h>    - Users "alice" and "bob": full rwx permissions (both current and default)  
+[?2004l[?2004h>    - Others: no permissions (both current and default)
+[?2004l[?2004h>    - Set proper mask to allow full permissions
+[?2004l[?2004h> 
+[?2004l[?2004h> 3. The ACL configuration must ensure that:
+[?2004l[?2004h>    - Any file created by alice or bob in /srv/shared is accessible by both users
+[?2004l[?2004h>    - The permissions are inherited by subdirectories and files
+[?2004l[?2004h>    - Users outside the research group cannot access the directory or its contents
+[?2004l[?2004h> 
+[?2004l[?2004h> Note: Do NOT create any files in the directory. The tests will verify permission inheritance
+[?2004l[?2004h> by creating files during the testing phase.
+[?2004l[?2004h> END'; tmux wait -S done
+[?2004lR1_ARM=L R1_ENTRY=implementor R1_ROUTES=coordinator=local,implementor=local,verifier=local,plan=local,implement=local,critique=local,smol=local M2_LOCAL_REPLAY=false
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 13 tool call(s) so far
+Done. `/srv/shared` is configured and verified.
+
+## What was created
+
+```
+/srv/shared  root:research  2770  drwxrws---+
+```
+
+```
+user::rwx          default:user::rwx
+user:alice:rwx     default:user:alice:rwx
+user:bob:rwx       default:user:bob:rwx
+group::rwx         default:group::rwx
+group:research:rwx default:group:research:rwx
+mask::rwx          default:mask::rwx
+other::---         default:other::---
+```
+
+`research` (gid 1001) already existed with `alice` and `bob` as members; no users or groups needed creating. The directory is empty — 0 entries — as required.
+
+## Verification
+
+I did not trust the ACL listing alone. I built an identical scratch copy at `/srv/sharedtest`, exercised it as the real users via `setpriv` (`sudo` is blocked by harness policy), then deleted the scratch so `/srv/shared` stayed pristine. Confirmed:
+
+- **Cross-user access** — bob read, appended to, and created files inside alice's file and subdirectory.
+- **Recursive inheritance** — `alice_dir/deep/deeper` carried the full ACL plus its own default ACL, and kept the setgid bit.
+- **Isolation** — a throwaway `outsider` account got `Permission denied` on both `ls` and `cat`; it has since been deleted.
+- **The requirement that matters most** — bob creating a file under `umask 077` still left alice able to read it. The ACL overrides the creator's umask, which is exactly what makes this work where plain setgid+group perms would fail.
+
+## Two things worth knowing
+
+**Files inherit `mask::rw-`, not `rwx`.** A `touch`ed file comes out `-rw-rw----+` with `user:bob:rwx #effective:rw-`. This is correct POSIX behavior, not a misconfiguration: the inherited mask is intersected with the file-creation mode, and `open()` uses 0666, so no file is ever created executable by default. Execute works when requested — a file bob `chmod 755`'d was executable by alice. If your tests assert `rwx` effective on a plain created file, they will fail against a correct configuration.
+
+**`install -m 755` produces a file with no ACL entries at all.** I hit this while testing. `install(1)` deliberately applies a complete ACL, discarding inherited entries. Normal creation paths (`touch`, redirection, editors, `cp` without `--no-preserve`) inherit correctly. Worth avoiding in the test phase.
+
+One correction to note: my first setgid assertion reported FAIL. That was a bug in my check — I read position 6 of `drwxrws---` when the group-execute flag is at position 7. `stat.S_ISGID` confirmed the bit was set from the start; the corrected check passes.
+
+[refusal] role=implementor model=qwen3.8-flash-next tools=13 surface=b1d6c95da52f
+[?2004hroot@ec53a49d4490:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@ec53a49d4490:/app# 

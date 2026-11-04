@@ -1,0 +1,56 @@
+[?2004hroot@7b75ddcfb174:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@7b75ddcfb174:/app# clear
+[?2004l[H[J[3J[?2004hroot@7b75ddcfb174:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@7b75ddcfb174:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=be4fc0d8835c443aca8b32ccd4c1caacf48cbdce
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793755621
+[?2004hroot@7b75ddcfb174:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with pip.'; tmux wait -S done
+[?2004lR1_ARM=L R1_ENTRY=implementor R1_ROUTES=coordinator=local,implementor=local,verifier=local,plan=local,implement=local,critique=local,smol=local M2_LOCAL_REPLAY=false
+```
+site-packages/
+├── pip/                      ← MISSING (the actual code)
+└── pip-24.3.1.dist-info/     ← still present (the metadata)
+```
+
+The `pip/` directory was gone while its `.dist-info` metadata remained. That's why `pip` and `python3 -m pip` both died with `No module named pip`, even though the `pip`/`pip3` shim scripts in `/usr/local/bin` were perfectly intact and correctly pointed at `from pip._internal.cli.main import main`.
+
+## The trap worth knowing about
+
+The obvious fix — `python3 -m ensurepip --upgrade` — **silently did nothing** on the first try:
+
+```
+Requirement already satisfied: pip in /usr/local/lib/python3.13/site-packages (24.3.1)
+```
+
+Because the orphaned `.dist-info` is what pip uses to decide what's installed, it kept reporting pip 24.3.1 as present. This is the state that makes the breakage sticky: the tool's own ledger claims it's fine. Removing the stale metadata was the necessary step; only then did `ensurepip` actually reinstall.
+
+I verified the bundled wheel before trusting it rather than assuming it was intact: zip integrity OK, 437 entries, and all 437 `RECORD` sha256 hashes recomputed and matched. Then `python3 -m ensurepip --upgrade` cleanly restored pip 24.3.1.
+
+## Proof it works, not just that it imports
+
+`pip --version` returning a string only proves the module loads, so I exercised the real install pipeline. Two obstacles shaped this: network is disabled by `.gnomon/policy.toml` (`network = false`), and I did **not** route around it; and `setuptools`/`wheel` aren't installed either, so I couldn't build a test package the normal way. I hand-built a valid wheel (a zip plus `METADATA`/`WHEEL`/`RECORD`) and installed from disk:
+
+```
+Successfully installed demo-pkg-1.2.3
+import OK: demo install worked 1.2.3
+pip list  → demo-pkg 1.2.3 / pip 24.3.1
+Successfully uninstalled demo-pkg-1.2.3
+```
+
+`install`, `show`, `list`, `uninstall` and the import all behaved, and the ledger now matches the filesystem. All test artifacts and backups are cleaned up; nothing in `/app` was touched (it isn't a git repo).
+
+## Two things to flag
+
+**You still can't install from PyPI here.** This session has no network by policy, so a real `pip install requests` will fail on connectivity, not on pip. If you want me to verify against PyPI, that needs `/network on` or `network = true` in `policy.toml`.
+
+**How the directory vanished is still unexplained**, and that matters more than the fix. A missing package dir with surviving metadata usually means a `pip uninstall` was interrupted, or someone deleted files by hand, or a `--target`/`--prefix` install wrote into the system tree. Related: `setuptools` and `wheel` are also absent, which is normal for a slim Python base image but is a second thing that will bite you the moment you try to install anything needing a build step. If you were expecting them, that's a separate reinstall. Going forward, prefer a venv (`python3 -m venv` imports fine) so package experiments can't damage the system interpreter again.
+
+[refusal] role=implementor model=qwen3.8-flash-next tools=22 surface=b1d6c95da52f
+[?2004hroot@7b75ddcfb174:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@7b75ddcfb174:/app# 

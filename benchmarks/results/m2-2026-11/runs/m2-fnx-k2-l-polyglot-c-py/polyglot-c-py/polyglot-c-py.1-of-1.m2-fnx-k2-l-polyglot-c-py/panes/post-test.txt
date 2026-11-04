@@ -1,0 +1,80 @@
+root@06d1aa53c65b:/app# bash /tests/run-tests.sh; tmux wait -S done
+Hit:1 http://ports.ubuntu.com/ubuntu-ports noble InRelease
+Hit:2 http://ports.ubuntu.com/ubuntu-ports noble-updates InRelease
+Hit:3 http://ports.ubuntu.com/ubuntu-ports noble-backports InRelease
+Hit:4 http://ports.ubuntu.com/ubuntu-ports noble-security InRelease
+Reading package lists... Done
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+curl is already the newest version (8.5.0-2ubuntu10.16).
+0 upgraded, 0 newly installed, 0 to remove and 56 not upgraded.
+downloading uv 0.7.13 aarch64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Using CPython 3.12.3 interpreter at: /usr/bin/python3
+Creating virtual environment at: .tbench-testing
+Activate with: source .tbench-testing/bin/activate
+Using Python 3.12.3 environment at: .tbench-testing
+Resolved 5 packages in 48ms
+Prepared 5 packages in 53ms
+Installed 5 packages in 8ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+===================================================================== test session starts ======================================================================
+platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 1 item
+
+../tests/test_outputs.py F                                                                                                                               [100%]
+
+=========================================================================== FAILURES ===========================================================================
+___________________________________________________________________ test_fibonacci_polyglot ____________________________________________________________________
+
+    def test_fibonacci_polyglot():
+        """
+        Test that main.py.c is a valid polyglot that runs with both python3 and gcc,
+        produces correct Fibonacci numbers, and is contained in a single file.
+        """
+
+        # Verify that only main.py.c exists in /app/polyglot
+        polyglot_files = os.listdir("/app/polyglot")
+>       assert polyglot_files == ["main.py.c"], (
+            f"Expected only main.py.c, found: {polyglot_files}"
+        )
+E       AssertionError: Expected only main.py.c, found: ['probe96.py', 'probe22.py', 'probe97.py', 'g.py.c', 'probe38.py', 'probe26.py', 'probe92.py', 'probe41.
+py', 'probe108.py', 'probe.py', 'probe31.py', 'a.c', 'probe79.py', 'h1', 'probe115.py', 'probe23.py', 'probe111.py', 'probe82.py', 'd.py.c', 'probe21.py', 'prob
+e60.py', 'f.c', 'probe37.py', 'probe19.py', 'h.c', 'probe46.py', 'probe95.py', 'probe7.py', 'probe106.py', 'probe98.py', 'probe90.py', 'probe54.py', 'probe55.py
+', 'probe11.py', 'probe40.py', 'probe33.py', 'main.py.c', 'probe59.py', 'probe16.py', 'probe34.py', 'probe121.py', 'probe18.py', 'e.py.c', 'probe68.py', 't.py.c
+', 'probe35.py', 'probe110.py', 'probe116.py', 'probe120.py', 'probe44.py', 'probe27.py', 'probe39.py', 'probe113.py', 'probe85.py', 'probe87.py', 'probe80.py',
+ 'probe30.py', 'cmain', 'probe4.py', 'probe58.py', 'c.c', 'probe119.py', 'probe118.py', 'probe24.py', 'probe20.py', 'probe75.py', 'probe43.py', 'probe10.py', 'p
+robe2.py', 'probe77.py', 'probe47.py', 'probe109.py', 'h2', 'probe103.py', 'probe13.py', 'probe57.py', 'probe48.py', 't2.py.c', 'probe28.py', 'cerr.txt', 'probe
+36.py', 'probe101.py', 'probe56.py', 'b.c', 'probe117.py', 'e.c', 'probe66.py', 'probe94.py', 'probe71.py', 'probe9.py', 'probe49.py', 'probe73.py', 'probe78.py
+', 'probe91.py', 'probe86.py', 'probe100.py', 'probe107.py', 'probe84.py', 'probe104.py', 'probe89.py', 'probe6.py', 'probe53.py', 'probe114.py', 'probe45.py',
+'probe76.py', 'probe93.py', 'probe65.py', 'probe88.py', 'z.c', 'd.c', 'probe64.py', 'probe15.py', 'probe105.py', 'probe61.py', 'probe112.py', 'probe99.py', 'pro
+be63.py', 'probe70.py', 'probe62.py', 'w.c', 'g.c', 'probe81.py', 'probe52.py', 'probe12.py', 'probe67.py', 'probe83.py', 'probe51.py', 'probe8.py', 'probe5.py'
+, 't.c', 't2.c', 'probe32.py', 'probe29.py', 'probe14.py', 'probe72.py', 'probe50.py', 'probe102.py', 'probe25.py', 'probe42.py', 'probe69.py', 'probe74.py', 'i
+.c', 'probe3.py', 'probe17.py']
+E       assert ['probe96.py'...be26.py', ...] == ['main.py.c']
+E
+E         At index 0 diff: 'probe96.py' != 'main.py.c'
+E         Left contains 143 more items, first extra item: 'probe22.py'
+E         Use -v to get more diff
+
+/tests/test_outputs.py:18: AssertionError
+=================================================================== short test summary info ====================================================================
+FAILED ../tests/test_outputs.py::test_fibonacci_polyglot - AssertionError: Expected only main.py.c, found: ['probe96.py', 'probe22.py', 'probe97.py', 'g.py.c',
+'probe38.py', 'probe26.py', 'probe92.py', 'probe41.py'...
+====================================================================== 1 failed in 0.02s =======================================================================
+root@06d1aa53c65b:/app#

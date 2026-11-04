@@ -1,0 +1,49 @@
+  │ I'll start by locating and reading the file.
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  deepseek-v4.1-flash — 3 tool call(s) so far
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  deepseek-v4.1-flash — 5 tool call(s) so far
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  ⚙ 6 steps folded · read ×5, glob · ., plus_comm.v, .gnomon, +2 · nothing changed  /expand
+  │ I don't have `bash` in this role, so I'll delegate the edit-and-compile c…
+[approval] delegate to "implementor" — approved
+  qwen3.8-flash-next — 1 tool call(s) so far
+  ⚙ read plus_comm.v
+    ✓ read plus_comm.v — 14 lines
+[approval] bash: which coqc && coqc --version — approved
+  ⚙ bash which coqc && coqc --version
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 2 tool call(s) so far
+[approval] edit plus_comm.v (+4 −2) — approved
+  ⚙ edit plus_comm.v
+    ✓ edit plus_comm.v (+4 −2)
+  qwen3.8-flash-next — 3 tool call(s) so far
+[approval] bash: coqc plus_comm.v; echo "exit: $?"; ls -l plus_comm.vo; grep -n -E 'admit|Admitted' plus_comm.v; echo "grep exit: $?" — approved
+  ⚙ bash coqc plus_comm.v; echo "exit: $?"; ls -l plus_comm.vo; grep -n -E 'adm…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 4 tool call(s) so far
+  qwen3.8-flash-next — 5 tool call(s) so far
+  ⚙ read plus_comm.v
+    ✓ read plus_comm.v — 16 lines
+  ⚙ task 
+    ✓ task implementor — 5 tool call(s)
+  deepseek-v4.1-flash — 7 tool call(s) so far
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  deepseek-v4.1-flash — 9 tool call(s) so far
+  ⚙ read plus_comm.v
+    ✓ read plus_comm.v — 16 lines
+  ⚙ glob 
+    ✓ glob plus_comm.* — 5 file(s)
+Done. The sub-turn's compile passed and I confirmed the artifacts on disk.
+
+**What changed** — `plus_comm.v`: the two `admit`s are replaced with real proof steps.
+
+- Base case: `simpl` leaves `m = m + 0`, closed by `rewrite <- plus_n_O. reflexivity.`
+- Inductive case: `simpl` leaves `S (n' + m) = m + S n'`; `rewrite <- plus_n_Sm.` rewrites the right side to `S (m + n')`, then `rewrite IHn'. reflexivity.` finishes it.
+
+**Check** — `coqc plus_comm.v` (Coq 8.18.0) exits 0 with no errors, so the proof is complete: no `admit`/`Admitted` remain, no axioms added, statement unchanged. `plus_comm.vo` (plus `.glob`, `.vok`, `.vos`) are present in the repo root alongside the source.
+
+Nothing left undone.
+
+[result] role=coordinator model=deepseek-v4.1-flash tools=9 surface=016d83f6af9a

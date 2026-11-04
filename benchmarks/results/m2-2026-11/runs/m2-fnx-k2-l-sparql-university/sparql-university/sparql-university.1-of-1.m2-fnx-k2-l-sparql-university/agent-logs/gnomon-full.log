@@ -1,0 +1,510 @@
+  │ I'll start by examining the Turtle file to understand the ontology and da…
+[approval] bash: ls -la /app/ && wc -l /app/university_graph.ttl — approved
+  ⚙ bash ls -la /app/ && wc -l /app/university_graph.ttl
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 1 tool call(s) so far
+[approval] bash: head -100 /app/university_graph.ttl — approved
+  ⚙ bash head -100 /app/university_graph.ttl
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 2 tool call(s) so far
+[approval] bash: sed -n '100,305p' /app/university_graph.ttl — approved
+  ⚙ bash sed -n '100,305p' /app/university_graph.ttl
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 3 tool call(s) so far
+[approval] bash: sed -n '295,305p' /app/university_graph.ttl — approved
+  ⚙ bash sed -n '295,305p' /app/university_graph.ttl
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 4 tool call(s) so far
+[approval] bash: grep -n "Class\|Course\|isTaughtIn\|teaches\|role\|Graduation\|Enrollment" /app/university_graph.ttl | head -60 — approved
+  ⚙ bash grep -n "Class\|Course\|isTaughtIn\|teaches\|role\|Graduation\|Enrollm…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 5 tool call(s) so far
+  │ Let me check what SPARQL tooling is available so I can validate the query…
+[approval] bash: python3 -c "import rdflib; print(rdflib.__version__)" 2>&1; which python3 pip3 arq sparql 2>&1 — approved
+  ⚙ bash python3 -c "import rdflib; print(rdflib.__version__)" 2>&1; which pyth…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 6 tool call(s) so far
+[approval] bash: pip3 install rdflib 2>&1 | tail -5 — approved
+  ⚙ bash pip3 install rdflib 2>&1 | tail -5
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 7 tool call(s) so far
+[approval] bash: python3 -m pip install rdflib 2>&1 | tail -5; ls /usr/lib/python3/dist-packages 2>/dev/null | head -30 — approved
+  ⚙ bash python3 -m pip install rdflib 2>&1 | tail -5; ls /usr/lib/python3/dist…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 8 tool call(s) so far
+  ⚙ bash which curl wget java node npm 2>&1; curl -sS -m 10 -o /dev/null -w "%{…
+    ⚠ bash — refused (network = false)
+  qwen3.8-flash-next — 9 tool call(s) so far
+  │ No network and no rdflib — I'll validate by careful manual analysis plus …
+[approval] bash: cd /app && grep -n "uni:Student" university_graph.ttl | sed -n '1,60p' | cat -A | grep -n "Bio10"  — approved
+  ⚙ bash cd /app && grep -n "uni:Student" university_graph.ttl | sed -n '1,60p'…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 10 tool call(s) so far
+[approval] bash: cd /app && grep -c "isEnrolledIn" university_graph.ttl; grep -n "hasGraduationDate" university_graph.ttl | wc -l; grep -n "uni:Person\b" university_graph.ttl | wc -l — approved
+  ⚙ bash cd /app && grep -c "isEnrolledIn" university_graph.ttl; grep -n "hasGr…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 11 tool call(s) so far
+  │ Data is CRLF and contains a typo (`uni:Bio10` for Student5 — an undefined…
+[approval] write /app/.sim_sparql.py (+154 −0) [new file] — approved
+  ⚙ write /app/.sim_sparql.py
+    ✓ write /app/.sim_sparql.py (+154 −0)
+  qwen3.8-flash-next — 12 tool call(s) so far
+[approval] bash: cd /app && python3 .sim_sparql.py — approved
+  ⚙ bash cd /app && python3 .sim_sparql.py
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 13 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'EOF'
+import re
+src = open('.sim_sparql.py', encoding='utf-8').read()
+start = src.index('triples = set()\nsubj = None\nfor line in TTL')
+end = src.index('def split_objects(s):')
+src = src[:start] + src[end:]
+open('.sim_sparql.py','w',encoding='utf-8').write(src)
+EOF
+python3 /app/.sim_sparql.py — approved
+  ⚙ bash cd /app && python3 - <<'EOF' import re src = open('.sim_sparql.py', en…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 14 tool call(s) so far
+[approval] bash: cd /app && sed -n '1,45p' .sim_sparql.py — approved
+  ⚙ bash cd /app && sed -n '1,45p' .sim_sparql.py
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 15 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PYEOF'
+src = open('.sim_sparql.py', encoding='utf-8').read()
+marker = "def split_objects(s):"
+i = src.index(marker)
+j = src.index("def val(t):", i)
+head = src[:src.index("triples = set()\nsubj = None\nfor line in TTL")]
+body = src[i:j]           # split_objects def
+tail = src[src.index("# rebuild triples properly"):]
+tail = tail[tail.index("triples = set()"):]
+open('.sim_sparql.py','w',encoding='utf-8').write(head + body + "\n" + tail)
+PYEOF
+python3 /app/.sim_sparql.py — approved
+  ⚙ bash cd /app && python3 - <<'PYEOF' src = open('.sim_sparql.py', encoding='…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 16 tool call(s) so far
+[approval] bash: cd /app && grep -n "split_objects\|rebuild triples\|^triples = set()" .sim_sparql.py — approved
+  ⚙ bash cd /app && grep -n "split_objects\|rebuild triples\|^triples = set()" …
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 17 tool call(s) so far
+  │ My patching mangled the helper file. Let me rewrite it cleanly in one go.
+[approval] write /app/.sim_sparql.py (+36 −211) — approved
+  ⚙ write /app/.sim_sparql.py
+    ✓ write /app/.sim_sparql.py (+36 −211)
+  qwen3.8-flash-next — 18 tool call(s) so far
+[approval] bash: cd /app && python3 .sim_sparql.py — approved
+  ⚙ bash cd /app && python3 .sim_sparql.py
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 19 tool call(s) so far
+[approval] edit /app/.sim_sparql.py (+3 −1) — approved
+  ⚙ edit /app/.sim_sparql.py
+    ✓ edit /app/.sim_sparql.py (+3 −1)
+  qwen3.8-flash-next — 20 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PYEOF'
+p='.sim_sparql.py'; s=open(p,encoding='utf-8').read()
+s = s.replace("""    subj, work = m.group(1), m.group(2)
+    for chunk in re.split(r';', work):""",
+"""    subj, work = m.group(1), m.group(2)
+    cur_pred = None
+    for chunk in re.split(r';', work):""")
+s = s.replace("""        mm = re.match(r'^(uni:[A-Za-z0-9_]+|a|uni:hasName)\\s+(.*)$', chunk, re.S)
+        if not mm:   # continuation chunk whose predicate was on the previous line
+            mm = re.match(r'^(uni:[A-Za-z0-9_]+)\\s+(.*)$', chunk, re.S)
+        if not mm:
+            raise SystemExit('unparsed chunk: %r' % chunk)
+        pred, objs = mm.group(1), mm.group(2)""",
+"""        mm = re.match(r'^(uni:[A-Za-z0-9_]+|a)\\s+(.*)$', chunk, re.S)
+        if mm:
+            pred, objs = mm.group(1), mm.group(2)
+            cur_pred = pred
+        else:                      # continuation chunk: predicate carried from previous line
+            if cur_pred is None:
+                raise SystemExit('unparsed chunk: %r' % chunk)
+            pred, objs = cur_pred, chunk""")
+open(p,'w',encoding='utf-8').write(s)
+PYEOF
+python3 /app/.sim_sparql.py — approved
+  ⚙ bash cd /app && python3 - <<'PYEOF' p='.sim_sparql.py'; s=open(p,encoding='…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 21 tool call(s) so far
+[approval] bash: cd /app && sed -n '40,70p' .sim_sparql.py — approved
+  ⚙ bash cd /app && sed -n '40,70p' .sim_sparql.py
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 22 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PYEOF'
+p='.sim_sparql.py'; s=open(p,encoding='utf-8').read()
+old = """for line in TTL.split('\\n'):
+    line = line.strip()
+    if not line or line.startswith('#') or line.startswith('@prefix'):
+        continue
+    m = re.match(r'^(uni:[A-Za-z0-9_]+)\\s+(.*)$', line, re.S)
+    if not m:
+        raise SystemExit('unparsed line: %r' % line)
+    subj, work = m.group(1), m.group(2)
+    cur_pred = None
+    for chunk in re.split(r';', work):"""
+new = """# join continuation lines (those not starting with a subject IRI) onto the previous line
+logical, buf = [], None
+for raw in TTL.split('\\n'):
+    line = raw.strip()
+    if not line or line.startswith('#') or line.startswith('@prefix'):
+        continue
+    if re.match(r'^uni:[A-Za-z0-9_]+\\s', line):
+        if buf is not None:
+            logical.append(buf)
+        buf = line
+    else:
+        buf = (buf + ' ' + line) if buf is not None else line
+if buf is not None:
+    logical.append(buf)
+
+for line in logical:
+    m = re.match(r'^(uni:[A-Za-z0-9_]+)\\s+(.*)$', line, re.S)
+    if not m:
+        raise SystemExit('unparsed line: %r' % line)
+    subj, work = m.group(1), m.group(2)
+    cur_pred = None
+    for chunk in re.split(r';', work):"""
+assert old in s
+s = s.replace(old, new)
+open(p,'w',encoding='utf-8').write(s)
+PYEOF
+python3 /app/.sim_sparql.py — approved
+  ⚙ bash cd /app && python3 - <<'PYEOF' p='.sim_sparql.py'; s=open(p,encoding='…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 23 tool call(s) so far
+[approval] bash: cd /app && grep -n "unparsed chunk" .sim_sparql.py; grep -n "logical, buf" .sim_sparql.py; sed -n '36,60p' .sim_sparql.py — approved
+  ⚙ bash cd /app && grep -n "unparsed chunk" .sim_sparql.py; grep -n "logical, …
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 24 tool call(s) so far
+[approval] bash: cd /app && python3 -c "
+import re
+TTL=open('university_graph.ttl',encoding='utf-8').read().replace('\r\n','\n')
+logical,buf=[],None
+for raw in TTL.split('\n'):
+    line=raw.strip()
+    if not line or line.startswith('#') or line.startswith('@prefix'): continue
+    if re.match(r'^uni:[A-Za-z0-9_]+\s',line):
+        if buf is not None: logical.append(buf)
+        buf=line
+    else:
+        buf=(buf+' '+line) if buf is not None else line
+if buf: logical.append(buf)
+print(len(logical))
+print(repr(logical[0]))
+print(repr([l for l in logical if 'Zurich' in l]))
+" — approved
+  ⚙ bash cd /app && python3 -c " import re TTL=open('university_graph.ttl',enco…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 25 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PYEOF'
+p='.sim_sparql.py'; s=open(p,encoding='utf-8').read()
+old = """    if re.match(r'^uni:[A-Za-z0-9_]+\\s', line):
+        if buf is not None:
+            logical.append(buf)
+        buf = line
+    else:
+        buf = (buf + ' ' + line) if buf is not None else line"""
+new = """    # a real subject line ends with '.' (possibly after a trailing object);
+    # continuation lines like 'uni:hasName "ETH Zurich" ;' do not
+    if re.match(r'^uni:[A-Za-z0-9_]+\\s', line) and line.rstrip().endswith('.'):
+        if buf is not None:
+            logical.append(buf)
+        buf = line
+    else:
+        buf = (buf + ' ' + line) if buf is not None else line"""
+assert old in s
+open(p,'w',encoding='utf-8').write(s.replace(old,new))
+PYEOF
+python3 /app/.sim_sparql.py — approved
+  ⚙ bash cd /app && python3 - <<'PYEOF' p='.sim_sparql.py'; s=open(p,encoding='…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 26 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PYEOF'
+p='.sim_sparql.py'; s=open(p,encoding='utf-8').read()
+old_start = s.index("# join continuation lines")
+old_end = s.index("for line in logical:")
+new_block = '''# split into logical statements: accumulate lines until one ends with '.'
+logical, buf = [], ''
+for raw in TTL.split('\\n'):
+    line = raw.strip()
+    if not line or line.startswith('#') or line.startswith('@prefix'):
+        continue
+    buf = (buf + ' ' + line).strip() if buf else line
+    if line.endswith('.'):
+        logical.append(buf)
+        buf = ''
+if buf:
+    logical.append(buf)
+
+'''
+s = s[:old_start] + new_block + s[old_end:]
+open(p,'w',encoding='utf-8').write(s)
+PYEOF
+python3 /app/.sim_sparql.py — approved
+  ⚙ bash cd /app && python3 - <<'PYEOF' p='.sim_sparql.py'; s=open(p,encoding='…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 27 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PYEOF'
+p='.sim_sparql.py'; s=open(p,encoding='utf-8').read()
+s = s.replace("""        if o.startswith('uni:'):
+            res.append(('U', UNI + o[4:]))""",
+"""        if o.startswith('uni:'):
+            iri = re.match(r'^uni:[A-Za-z0-9_]+', o).group(0)
+            res.append(('U', UNI + iri[4:]))""")
+open(p,'w',encoding='utf-8').write(s)
+PYEOF
+python3 /app/.sim_sparql.py — approved
+  ⚙ bash cd /app && python3 - <<'PYEOF' p='.sim_sparql.py'; s=open(p,encoding='…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 28 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PYEOF'
+import re
+TTL=open('university_graph.ttl',encoding='utf-8').read().replace('\r\n','\n')
+logical,buf=[],''
+for raw in TTL.split('\n'):
+    line=raw.strip()
+    if not line or line.startswith('#') or line.startswith('@prefix'): continue
+    buf=(buf+' '+line).strip() if buf else line
+    if line.endswith('.'):
+        logical.append(buf); buf=''
+if buf: logical.append(buf)
+print(len(logical))
+for l in logical[:4]: print(repr(l))
+for l in logical:
+    if 'Menis' in l: print(repr(l))
+PYEOF — approved
+  ⚙ bash cd /app && python3 - <<'PYEOF' import re TTL=open('university_graph.tt…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 29 tool call(s) so far
+[approval] bash: cd /app && sed -n '1,40p' .sim_sparql.py — approved
+  ⚙ bash cd /app && sed -n '1,40p' .sim_sparql.py
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 30 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PYEOF'
+p='.sim_sparql.py'; s=open(p,encoding='utf-8').read()
+s = s.replace("""            m = re.match(r'^"((?:[^"\\\\]|\\\\.)*)"(?:\\^\\^\\S+)?$', o)
+            res.append(('L', m.group(1)))""",
+"""            m = re.match(r'^"((?:[^"\\\\]|\\\\.)*)"', o)
+            if not m:
+                raise SystemExit('bad literal %r' % o)
+            res.append(('L', m.group(1)))""")
+open(p,'w',encoding='utf-8').write(s)
+PYEOF
+grep -n "bad literal" .sim_sparql.py; python3 /app/.sim_sparql.py — approved
+  ⚙ bash cd /app && python3 - <<'PYEOF' p='.sim_sparql.py'; s=open(p,encoding='…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 31 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PYEOF'
+p='.sim_sparql.py'; s=open(p,encoding='utf-8').read()
+s = s.replace("""        if o.startswith('uni:'):
+            iri = re.match(r'^uni:[A-Za-z0-9_]+', o).group(0)
+            res.append(('U', UNI + iri[4:]))""",
+"""        if o.startswith('uni:'):
+            iri = re.match(r'^uni:[A-Za-z0-9_]+', o).group(0)
+            res.append(('U', UNI + iri[4:], o[len(iri):]))""")
+s = s.replace("""def objs(s, pr):
+    pr = UNI + pr
+    return [c for (a, b, c) in triples if a == s and b == pr]""",
+"""def objs(s, pr, trailing=''):
+    pr = UNI + pr
+    return [c for (a, b, c) in triples if a == s and b == pr and c[2] == trailing]""")
+open(p,'w',encoding='utf-8').write(s)
+PYEOF
+python3 /app/.sim_sparql.py — approved
+  ⚙ bash cd /app && python3 - <<'PYEOF' p='.sim_sparql.py'; s=open(p,encoding='…
+    ✗ bash — exit 1
+  qwen3.8-flash-next — 32 tool call(s) so far
+  [tools] 32/256 calls — continuing (leg 2)
+  qwen3.8-flash-next — leg 2, 32 call(s) so far
+[approval] bash: cd /app && python3 - <<'PYEOF'
+p='.sim_sparql.py'; s=open(p,encoding='utf-8').read()
+s = s.replace("""            m = re.match(r'^"((?:[^"\\\\]|\\\\.)*)"', o)
+            if not m:
+                raise SystemExit('bad literal %r' % o)
+            res.append(('L', m.group(1)))""",
+"""            m = re.match(r'^"((?:[^"\\\\]|\\\\.)*)"', o)
+            if not m:
+                raise SystemExit('bad literal %r' % o)
+            res.append(('L', m.group(1), ''))""")
+open(p,'w',encoding='utf-8').write(s)
+PYEOF
+python3 /app/.sim_sparql.py — approved
+  ⚙ bash cd /app && python3 - <<'PYEOF' p='.sim_sparql.py'; s=open(p,encoding='…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 33 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'PYEOF'
+p='.sim_sparql.py'; s=open(p,encoding='utf-8').read()
+s = s.replace("""def val(t):
+    return t[1] if t and t[0] == 'L' else None""",
+"""def val(t):
+    return t[1] if t and t[0] == 'L' else None
+
+
+def sample(t):
+    return t[2] if len(t) > 2 else '<2-tuple>'""")
+s = s.replace("""        print('%-22s %-45s (no worksIn) -> skip' % (name, role))""",
+"""        print('%-22s %-45s (no worksIn) subj=%r' % (name, role, sample(s)))""")
+s = s.replace("""    print('%-22s full=%-5s cond2=%-5s cond3=%-5s %-6s countries=%s'
+          % (name, full, cond2, cond3, 'MATCH' if keep else '', sorted(set(ctry.values()))))""",
+"""    print('%-22s full=%-5s cond2=%-5s cond3=%-5s %-6s countries=%s subj=%r'
+          % (name, full, cond2, cond3, 'MATCH' if keep else '', sorted(set(ctry.values())), sample(s)))""")
+open(p,'w',encoding='utf-8').write(s)
+PYEOF
+python3 /app/.sim_sparql.py 2>&1 | head -12 — approved
+  ⚙ bash cd /app && python3 - <<'PYEOF' p='.sim_sparql.py'; s=open(p,encoding='…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 34 tool call(s) so far
+  │ The helper had a variable-shadowing bug (`s` reused for subject and tripl…
+[approval] write /app/.sim_sparql.py (+77 −64) — approved
+  ⚙ write /app/.sim_sparql.py
+    ✓ write /app/.sim_sparql.py (+77 −64)
+  qwen3.8-flash-next — 35 tool call(s) so far
+[approval] bash: cd /app && python3 .sim_sparql.py — approved
+  ⚙ bash cd /app && python3 .sim_sparql.py
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 36 tool call(s) so far
+  │ Semantics verified. Let me double-check the enrollment counts and the gra…
+[approval] bash: cd /app && python3 - <<'PYEOF'
+import re, collections
+TTL=open('university_graph.ttl',encoding='utf-8').read().replace('\r\n','\n')
+# students enrolled in STS101 (HistoryAndPhilosophy_NKUA) and their graduation dates
+for m in re.finditer(r'(uni:Student\d+)\s+uni:isEnrolledIn([^;]*);(.*)', TTL):
+    name, courses, rest = m.group(1), m.group(2), m.group(3)
+    if 'STS101' in courses:
+        g = re.search(r'hasGraduationDate "(\d{4}-\d{2}-\d{2})"', rest)
+        print('%-12s grad=%s  %s' % (name, g.group(1) if g else 'none',
+              'EXCLUDED (graduated <= 2025-08-16)' if g and g.group(1) <= '2025-08-16' else 'current'))
+print()
+# Math201 (Sorbonne)
+for m in re.finditer(r'(uni:Student\d+)\s+uni:isEnrolledIn([^;]*);(.*)', TTL):
+    name, courses, rest = m.group(1), m.group(2), m.group(3)
+    if 'Math201' in courses:
+        g = re.search(r'hasGraduationDate "(\d{4}-\d{2}-\d{2})"', rest)
+        print('%-12s grad=%s  %s' % (name, g.group(1) if g else 'none',
+              'EXCLUDED' if g and g.group(1) <= '2025-08-16' else 'current'))
+PYEOF — approved
+  ⚙ bash cd /app && python3 - <<'PYEOF' import re, collections TTL=open('univer…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 37 tool call(s) so far
+  ⚙ compute 
+    ✗ compute — unexpected character ">"
+  qwen3.8-flash-next — 38 tool call(s) so far
+  │ Counts confirmed (Sorbonne = 6 current students, so Marie Dubois correctl…
+[approval] write /app/solution.sparql (+63 −0) [new file] — approved
+  ⚙ write /app/solution.sparql
+    ✓ write /app/solution.sparql (+63 −0)
+  qwen3.8-flash-next — 39 tool call(s) so far
+  │ I spotted a typo (`univ:` prefix) and a cleaner way to write criterion 3.…
+[approval] write /app/solution.sparql (+31 −33) — approved
+  ⚙ write /app/solution.sparql
+    ✓ write /app/solution.sparql (+31 −33)
+  qwen3.8-flash-next — 40 tool call(s) so far
+  │ Now let me verify the query text itself matches the semantics I validated…
+[approval] bash: cd /app && grep -n "uni:\|FILTER\|COUNT\|GROUP\|HAVING\|SELECT\|OPTIONAL\|IN (" solution.sparql | grep -v "^\s*#" | head -40 — approved
+  ⚙ bash cd /app && grep -n "uni:\|FILTER\|COUNT\|GROUP\|HAVING\|SELECT\|OPTION…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 41 tool call(s) so far
+[approval] bash: cd /app && grep -n "locatedInCountry\|belongsTo" university_graph.ttl — approved
+  ⚙ bash cd /app && grep -n "locatedInCountry\|belongsTo" university_graph.ttl
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 42 tool call(s) so far
+  │ Now a faithful, structural evaluation of the actual query text (basic gra…
+[approval] write /app/.check_query.py (+141 −0) [new file] — approved
+  ⚙ write /app/.check_query.py
+    ✓ write /app/.check_query.py (+141 −0)
+  qwen3.8-flash-next — 43 tool call(s) so far
+[approval] bash: cd /app && python3 .check_query.py — approved
+  ⚙ bash cd /app && python3 .check_query.py
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 44 tool call(s) so far
+  │ The 0 rows is a bug in my checker (it compared a course IRI against a dep…
+[approval] edit /app/.check_query.py (+2 −2) — approved
+  ⚙ edit /app/.check_query.py
+    ✓ edit /app/.check_query.py (+2 −2)
+  qwen3.8-flash-next — 45 tool call(s) so far
+[approval] bash: cd /app && python3 .check_query.py — approved
+  ⚙ bash cd /app && python3 .check_query.py
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 46 tool call(s) so far
+  │ The query returns exactly the expected 3 rows. Let me verify the EU-27 li…
+[approval] bash: cd /app && python3 -c "
+import re
+q=open('solution.sparql',encoding='utf-8').read()
+got=set(re.findall(r'\"([A-Z]{2})\"',q))
+official=set('AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE'.split())
+print('count in query:',len(got))
+print('missing:',sorted(official-got))
+print('extra (non-EU):',sorted(got-official))
+print('CH present (must be absent):','CH' in got,'| US present:','US' in got)
+" — approved
+  ⚙ bash cd /app && python3 -c " import re q=open('solution.sparql',encoding='u…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 47 tool call(s) so far
+[approval] bash: ls /usr/share/java 2>/dev/null | head; find / -maxdepth 4 -iname "*jena*" -o -maxdepth 4 -iname "*rdflib*" -o -maxdepth 4 -iname "*arq*" 2>/dev/null | head — approved
+  ⚙ bash ls /usr/share/java 2>/dev/null | head; find / -maxdepth 4 -iname "*jen…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 48 tool call(s) so far
+  │ No SPARQL engine is installed and there's no network, so I verified with …
+  qwen3.8-flash-next — 49 tool call(s) so far
+  ⚙ read /app/solution.sparql
+    ✓ read /app/solution.sparql — 61 lines
+[approval] bash: cd /app && rm -f .sim_sparql.py .check_query.py && ls -la && cat .gitignore — approved
+  ⚙ bash cd /app && rm -f .sim_sparql.py .check_query.py && ls -la && cat .giti…
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 50 tool call(s) so far
+  qwen3.8-flash-next — 51 tool call(s) so far
+  qwen3.8-flash-next — 52 tool call(s) so far
+  ⚙ compute 
+    ✓ compute round(20250816 - 20250712) = 104
+  ⚙ compute 
+    ✓ compute round(20260612 - 20250816) = 9796
+[approval] write /app/.verify2.py (+107 −0) [new file] — approved
+  ⚙ write /app/.verify2.py
+    ✓ write /app/.verify2.py (+107 −0)
+  qwen3.8-flash-next — 53 tool call(s) so far
+[approval] bash: cd /app && python3 .verify2.py; echo "exit=$?"; rm -f .verify2.py — approved
+  ⚙ bash cd /app && python3 .verify2.py; echo "exit=$?"; rm -f .verify2.py
+    ✓ bash — exit 0
+  qwen3.8-flash-next — 54 tool call(s) so far
+Done. `/app/solution.sparql` is written and verified.
+
+## The query
+
+```sparql
+SELECT ?professorName (GROUP_CONCAT(DISTINCT ?country; separator=", ") AS ?countries)
+WHERE {
+  ?professor a uni:Person ; uni:hasName ?professorName ; uni:role ?role ; uni:worksIn ?dept .
+  ?dept uni:belongsTo ?university . ?university uni:locatedInCountry ?country .
+  FILTER ( STRSTARTS( ?role, "Professor" ) )                 # 1 full professor
+  FILTER EXISTS { ... ?euCountry IN (27 EU codes) }          # 2 EU department
+  { SELECT ?professor (COUNT(DISTINCT ?student) AS ?currentStudents)
+    WHERE { ?professor uni:worksIn ?busyDept . ?course uni:isTaughtIn ?busyDept .
+            ?student uni:isEnrolledIn ?course .
+            OPTIONAL { ?student uni:hasGraduationDate ?graduationDate }
+            FILTER ( !BOUND(?graduationDate) || ?graduationDate > "2025-08-16"^^xsd:date ) }
+    GROUP BY ?professor ?busyDept HAVING ( COUNT(DISTINCT ?student) > 10 ) }   # 3
+}
+GROUP BY ?professor ?professorName ORDER BY ?professorName
+```
+
+Design points: `STRSTARTS(?role,"Professor")` admits full professors while excluding `"Assistant Professor …"`; the country for `?countries` is collected in the main pattern over *all* `worksIn` departments, so non-EU posts still appear; criterion 3 is a group subselect counting distinct students per department (a student enrolled in two courses in the same department counts once).
+
+## Result on the given graph
+
+| ?professorName | ?countries |
+|---|---|
+| Aristotle Tympas | GR |
+| Orfeas Menis | GR, US |
+| Pepe Attanasio | GR, PT |
+
+Excluded, with reasons: Marie Dubois (Sorbonne has only 6 current students — 8 of the 14 enrolled in Math201 graduated before 2025-08-16), John Smith (MIT, no EU department), Athanasios Voulodimos and Stefan Mueller (assistant professors). Current-enrollment counts: ComputerScience_NTUA 12, HistoryAndPhilosophy_NKUA 12, Engineering_Berkeley 11, Biology_MIT 7, Mathematics_Sorbonne 6.
+
+## Verification
+
+No SPARQL engine was available and the sandbox has no network (`rdflib`/`pip` absent, `curl` blocked by policy), so I parsed the Turtle and evaluated the query clause-by-clause in Python, twice with independently written checkers. Both reproduced the 3 rows above. The checkers also assert against the file on disk: all 21 expected graph patterns present, the `IN` list is exactly the EU-27 (no `CH`, no `US`, no omissions), and the reference date `2025-08-16` is used. Throwaway scripts were deleted, leaving only `solution.sparql`.
+
+Two data quirks worth knowing: `Student5` references an undefined `uni:Bio10` (it joins nothing, so it silently contributes no enrollment — it does not affect any count here), and the file uses CRLF line endings.
+
+[result] role=implementor model=qwen3.8-flash-next tools=54 surface=b1d6c95da52f
