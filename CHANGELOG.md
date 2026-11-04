@@ -26,6 +26,21 @@
 
 ## [Unreleased]
 
+- **A run killed mid-turn leaves its record (C5).** `gnomon task --json`
+  printed its record, and a session wrote its `turn` audit record, only when
+  the process got that far; a benchmark's time cap (SIGTERM, then SIGKILL)
+  left nothing. 19 of 21 capped gnomon cells in P2G attempt 1 and 20 in M2 had
+  no gnomon-side record, so M2's collector read FAIL on runs whose wire was
+  correct. With `[audit]` on, `.gnomon-audit/<session>.record.json` is now the
+  turn's record as it stands, rewritten atomically after each model reply and
+  tool call (`record_state: "partial"`, `stop_reason: "in_progress"`), which is
+  what a SIGKILL leaves. SIGINT, SIGTERM and SIGHUP flush it `final` as
+  `stop_reason: "killed"` (`stop_detail.signal`, `apparatus_failure`, 11),
+  append the `turn` record and `session_end`, print it under `--json`, and
+  then let the signal end the process as before. Request bodies are
+  byte-identical to 0.4.0's. A killed session's record counts as part of its
+  trail for the record guard. docs/CONTRACTS.md, "Incremental record".
+
 ## [0.4.0] — 2026-11-03
 
 **Upgrading from 0.3.x.** Run `gnomon migrate` in each project. It applies four

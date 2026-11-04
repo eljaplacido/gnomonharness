@@ -61,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1832 TypeScript tests (1533 core, 274 cli, 18
-> natives, 7 tui) and 61 Rust tests — **1893 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1852 TypeScript tests (1549 core, 278 cli, 18
+> natives, 7 tui) and 61 Rust tests — **1913 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1868,6 +1868,7 @@ chain = true
 | What was done | A shell call's `tool_call` record keeps the **whole command** in `target`, after `redact`, under either `record` setting: the command is the action, not prompt or response text. A file tool's `target` is its path |
 | Redaction | Patterns scrubbed from any recorded text, and from every recorded command |
 | Not writable by the agent | `write`, `edit` and a shell command's named outputs (hard links, `ln`, git checkout/apply, archive members and more) are refused with rule `record` inside the trail directory (and `.gnomon-trials/`) for every role, whatever `write_allow` says. This is a pattern check, not containment. A path built at run time, a script file's writes and MCP calls are not seen by it. The kernel sandbox (`exec os`) contains those, and `[audit.attest]` makes a forged trail detectable |
+| A run killed mid-turn | `<session>.record.json` beside the trail is the turn's record as it stands, rewritten after every model reply and tool call (`record_state: "partial"`, `stop_reason: "in_progress"`): what a SIGKILL leaves. SIGINT, SIGTERM or SIGHUP flush it `final` as `stop_reason: "killed"`, append the `turn` record and `session_end`, print it under `gnomon task --json`, then let the signal end the process as before. Before this a run killed at a time cap left no record of its turn (docs/CONTRACTS.md, "Incremental record") |
 | Changes it did not make | The record guard snapshots the record directories (stat including ctime, plus a hash of the newest files) around every tool call that can write. Any change gnomon's own writer did not make stops the turn as `tamper`, writes a `record_tamper` record, and blocks `gnomon skill accept` until a person runs `gnomon audit resolve`, which needs a terminal or a person-present signer (`[audit.attest] person_present = true`). A checkpoint sealed at each session's end covers the gap between sessions. A new gnomon trail from another process only earns a `record_notice`. This guards against a careless agent and makes tampering visible; against a hostile one, a person-present signer or the kernel sandbox is the guarantee (docs/CONTRACTS.md §14) |
 
 ```bash

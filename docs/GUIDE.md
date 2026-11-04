@@ -848,6 +848,13 @@ esac
   tokens) differs run to run. Warnings go to stderr, so stdout stays clean.
 - Switch on the **bucket** (0, 2, 10); that part of the
   [exit contract](CONTRACTS.md) is stable.
+- A run that SIGINT, SIGTERM or SIGHUP ends mid-turn (a CI timeout, a
+  benchmark's time cap) still prints its record under `--json`, with
+  `stop_reason: "killed"`, `stop_detail.signal` and `bucket:
+  "apparatus_failure"`, then dies of the signal (143 for SIGTERM). With
+  `[audit]` on, `.gnomon-audit/<session>.record.json` holds the record while
+  the turn runs: `record_state: "partial"` until it ends, which is what a
+  SIGKILL leaves, then `"final"`. [CONTRACTS.md](CONTRACTS.md) has the shape.
 
 ### 7.3 Governing Claude Code, opencode and other harnesses
 
@@ -987,6 +994,11 @@ chain = true
   that was written. `[audit.attest]` anchors it with a signer command; gnomon
   never holds the key
   ([README → `[audit.attest]`](../README.md#auditattest--an-anchor-outside-the-file)).
+- Beside each trail, `<session>.record.json` is the turn's record as it
+  stands, rewritten after every model reply and tool call: what is left when a
+  run is killed. A run ended by SIGINT, SIGTERM or SIGHUP gets a last `turn`
+  record with `stop_reason: "killed"` and a `session_end` naming the
+  `signal`, so its trail is sealed.
 - A redaction pattern that does not compile fails **open** (gnomon warns).
   Do not write `(?i)`; matching is already case-insensitive.
 - This is an evidence layer, not a compliance claim.
@@ -1236,7 +1248,7 @@ chain measured 48.7% against 56.6% without one, within noise
 | `[tools] MODEL cannot accept tools — retrying without them.` | The model or its template rejects a tools array (common with reasoning distills) | Use a tool-capable model for that role, or set `tools = []` for it |
 | `Refused: no POSIX shell found, so bash cannot run.` (Windows) | Git for Windows missing | `winget install --id Git.Git`, or set `GNOMON_SHELL` to a bash you have |
 | `exec = "bwrap" is not one of off \| docker, so this silently falls back to "off"` | Only `docker` is a backend | Use `docker` or `off` |
-| `audit verify`: `NOT SEALED (truncated, or the run was killed)` after a normal session | `/quit` exits without writing `session_end` | End interactive sessions with **Ctrl-D**, which seals the trail. `gnomon task` trails are always sealed. |
+| `audit verify`: `NOT SEALED (truncated, or the run was killed)` after a normal session | `/quit` exits without writing `session_end` | End interactive sessions with **Ctrl-D**, which seals the trail. `gnomon task` trails are sealed unless the process was killed with SIGKILL; then `<session>.record.json` beside the trail has the turn up to its last step. |
 | An edit to `.gnomon/` did not take effect | The surface is read at session start | Restart the session |
 | `gnomon endpoint test go`: `NOT TESTED — no role routes here` (exit 10) | No role gives it a model to try | `gnomon endpoint test go --model ID` |
 
