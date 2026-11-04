@@ -1,0 +1,33 @@
+{
+  "v": 1,
+  "_comment": [
+    "Stall signals (docs/CONTRACTS.md section NEW-stall-detectors): three log-only detectors",
+    "over a turn's tool calls, recorded as `counters.stall_signals` on every turn record and",
+    "TaskRecord, and as one `stall_signal` audit record per episode when [audit] is on. A",
+    "readout (LP2, LP4, HY1 trigger studies; benchmarks/analysis/stall_replay.mjs) parses",
+    "them without reading the code, so renaming a key or a signal is a contract change.",
+    "packages/gnomon-core/src/stall_signals.test.ts asserts the module's counters and fires",
+    "against this file, and that CONTRACTS.md names the section, the kind and every signal.",
+    "",
+    "The input is the fields of a metadata-mode tool_call record, listed under `input`:",
+    "a trail is enough to recompute every number here."
+  ],
+  "signals": ["limit_cycle", "no_progress", "novelty_cusum"],
+  "input": ["tool", "target", "code", "summary", "worktree_changed"],
+  "counters": {
+    "at": "counters.stall_signals",
+    "required": ["v", "observed", "limit_cycle", "no_progress", "novelty_cusum"],
+    "optional": ["error"],
+    "per_signal": {
+      "required": ["count"],
+      "optional": ["first_step"],
+      "limit_cycle_optional": ["period"]
+    }
+  },
+  "audit": {
+    "kind": "stall_signal",
+    "required": ["role", "signal", "step", "episode"],
+    "optional": ["period", "streak", "cusum"]
+  },
+  "log_only": "Nothing in the loop reads these back. A turn sends the model the same requests with the detectors removed, firing at random, or throwing (stall_signals_loop.test.ts)."
+}

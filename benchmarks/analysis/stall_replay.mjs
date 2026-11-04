@@ -426,6 +426,16 @@ for (const [name, runs] of campaigns) {
     tuned: evaluate(runs, TUNED),
   };
 }
+// Added after Amendment 1, as a reading aid only (decides nothing): every
+// campaign but the tuning one, pooled, because one campaign has few positives.
+{
+  const pooled = [...campaigns].filter(([n]) => n !== TUNE).flatMap(([, r]) => r);
+  result.campaigns["pooled-out-of-sample"] = {
+    role: "pooled",
+    a_priori: evaluate(pooled, A_PRIORI),
+    tuned: evaluate(pooled, TUNED),
+  };
+}
 // Per run, at the tuned thresholds: the rows LP2/LP4/HY1 analyses start from.
 result.runs = [...campaigns.values()].flat().map((r) => {
   const rep = replay(r, thresholds(TUNED));
@@ -476,7 +486,12 @@ for (const which of ["tuned", "a_priori"]) {
   lines.push(`## ${which === "tuned" ? "Tuned thresholds" : "A-priori thresholds"}`, ``);
   lines.push(`| campaign | role | flag | recall stall/cap, lead >= 2 [95% CI] | fire on success [95% CI] | recall failed | lead median (IQR) | >= 2 before nudge | nudge - flag median |`);
   lines.push(`|---|---|---|---|---|---|---|---|---|`);
-  const order = [TUNE, HELD_OUT, ...[...campaigns.keys()].filter((c) => c !== TUNE && c !== HELD_OUT)];
+  const order = [
+    TUNE,
+    HELD_OUT,
+    ...[...campaigns.keys()].filter((c) => c !== TUNE && c !== HELD_OUT),
+    "pooled-out-of-sample",
+  ];
   for (const c of order) {
     const block = result.campaigns[c][which];
     for (const flag of ["ANY", ...STALL_SIGNAL_NAMES, "existing_nudge"]) {

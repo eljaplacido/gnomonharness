@@ -63,25 +63,33 @@ export interface StallThresholds {
 /**
  * Every number the detectors use, declared once.
  *
- * Stated before any outcome was read (2026-11-04), from the mechanism alone:
- * - a cycle of 6 calls is 2 calls shorter than the A-B-A-B stop window (8),
- *   so a period-2 loop is flagged before the loop stops it;
- * - 8 calls without progress is two-thirds of `nudge_after_idle` (12), and
- *   counts fewer calls as idle than the nudge does (a new read is progress
- *   here and idle there);
- * - k = 0.5 sits halfway between a healthy novelty rate (~0.8, most calls new)
- *   and a stuck one (~0.2); h = 4 means eight fully repeated calls in a row,
- *   or a longer stretch in which most calls are repeats.
- * benchmarks/analysis/stall_replay.mjs states the tuning grid around these,
- * tunes on one campaign and reports a different one held out.
+ * A PRIORI, stated before any outcome was read (2026-11-04), from the
+ * mechanism alone: cycle_min_calls 6 (2 calls inside the A-B-A-B stop window
+ * of 8), no_progress_calls 8 (two-thirds of `nudge_after_idle`), cusum k 0.5
+ * (halfway between a healthy novelty rate, ~0.8, and a stuck one, ~0.2) and
+ * h 4 (eight fully repeated calls).
+ *
+ * TUNED, the values below: benchmarks/analysis/stall_replay.mjs searched a
+ * pre-stated 448-point grid on r1h-2026-11 for the highest stall/time-cap
+ * recall with at most 5% of successful runs flagged, then applied the pick
+ * unchanged to m1-2026-11, held out. There: 15 of 28 stall/time-cap runs
+ * flagged at least 2 steps before they ended (54%, Wilson 95% 36-70%), 0 of
+ * 73 successful runs flagged at all (0%, 0-5%). The a-priori values flagged
+ * 8 of those 73 successes (11%), all through no_progress at 8: a long
+ * exploration that never edits is common in runs that then succeed.
+ * benchmarks/results/stall-signals-2026-11-04/ has every campaign.
+ *
+ * Also measured there, and the reason these stay log-only: on every campaign
+ * the existing idle nudge fires earlier on the runs these flag (median 38
+ * steps earlier on m1), and fires on about half of all successful runs.
  */
 export const STALL_SIGNAL_THRESHOLDS: StallThresholds = Object.freeze({
   cycle_periods: Object.freeze([2, 3, 4]),
   cycle_min_calls: 6,
   cycle_min_periods: 2,
-  no_progress_calls: 8,
-  cusum_k: 0.5,
-  cusum_h: 4,
+  no_progress_calls: 20,
+  cusum_k: 0.6,
+  cusum_h: 3,
 });
 
 /**
@@ -335,7 +343,8 @@ export class StallSignals {
     // novelty_cusum
     const novelty = changed || !seen ? 1 : newOutcome ? 0.5 : 0;
     this.cusum = Math.max(0, this.cusum + this.t.cusum_k - novelty);
-    if (this.cusum >= this.t.cusum_h) {
+    // An epsilon, so five steps of 0.6 reach 3 whatever the float rounding.
+    if (this.cusum >= this.t.cusum_h - 1e-9) {
       const tally = this.counters.novelty_cusum;
       tally.count++;
       tally.first_step ??= step;
