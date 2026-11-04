@@ -26,6 +26,11 @@
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-11-04
+
+Upgrading from 0.4.0: nothing to do. Every addition is opt-in, record-only, or a security tightening; on a default surface the requests a model receives are byte-identical to 0.4.0 (release gate in PR #145: 128/128 prompt, tool and role rows identical; request-body pins of #133, #138, #143 and #144 identical). A freshly initialised project gets new comments in its scaffold (so a new surface hash); existing projects are untouched. Highlights: `gnomon dashboard` and `gnomon setup`/`doctor` (#129), the desktop shell (#128), `max_context_tokens = "auto"` (#137), per-call mediator records and an opt-in calibrated token estimator (#144), the live turn record that survives a kill (#143), log-only stall signals (#140), `[approval] after_refusal = "ask"` (#139), tool-definition hashing and MCP pins (#142), guard bypass fixes (#136, #141), audit anchoring (#135), `gnomon chaos` (#134), opt-in observation masking (#133), release supply-chain provenance (#132).
+
+
 ### Added
 
 - **`gnomon setup`: scan your machine, plug in a local model it can run, then
