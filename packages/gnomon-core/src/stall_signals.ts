@@ -106,7 +106,7 @@ export const STALL_SIGNAL_PATTERNS = Object.freeze({
     /\b(pytest|py\.test|unittest|nose2?|tox|jest|vitest|mocha|rspec|phpunit|ctest|bats)\b|\b(npm|pnpm|yarn)\s+(run\s+)?test\b|\b(cargo|go|dotnet|mvn|gradle|mix|stack|cabal)\s+test\b|\bmake\s+(test|check)\b|\brun[-_]?tests?\b|\btest_[\w-]*\.(py|sh)\b|\btests?\/[\w./-]*\.(py|sh|js|ts)\b/,
   /** A shell command that only reads, judged on its first word. */
   read_command:
-    /^(cat|head|tail|sed\s+-n|less|more|nl|wc|grep|egrep|fgrep|rg|ag|find|ls|tree|file|stat|du|diff|cmp|awk|jq|xxd|od|strings|readelf|objdump|git\s+(status|log|show|diff|grep|blame|ls-files))\b/,
+    /^(cat|head|tail|sed\s+-n|less|more|nl|wc|grep|egrep|fgrep|rg|ag|find|ls|tree|file|stat|du|diff|cmp|awk|jq|xxd|od|strings|readelf|objdump|which|whereis|type|man|pwd|env|printenv|uname|id|hostname|ps|apt-cache|dpkg(-query)?\s+-[lLsS]|(pip3?|python3?\s+-m\s+pip)\s+(show|list|freeze)|npm\s+(ls|list|view)|git\s+(status|log|show|diff|grep|blame|ls-files))\b/,
   /**
    * A shell command that changes the system outside the worktree, which the
    * worktree stamp cannot see (POSTMORTEM F13: the idle counter was blind to
@@ -186,14 +186,28 @@ export function summaryOutcome(summary: string): string {
 
 /**
  * A shell command with the noise that does not change what it asks for taken
- * out: whitespace, a leading `cd <dir> &&`, `2>&1`, and a trailing `| head` or
- * `| tail`. `pytest 2>&1 | tail -20` and `cd /app && pytest | tail -50` run the
- * same tests.
+ * out: full-line comments, whitespace, leading `cd <dir> &&` (or `;`, or a
+ * line of its own), `VAR=value`, `timeout <n>` and `sudo`, `2>&1`, and a
+ * trailing `| head` or `| tail`. `pytest 2>&1 | tail -20` and
+ * `cd /app && pytest | tail -50` run the same tests.
+ *
+ * The comment and prefix rules came from the first replay (2026-11-04): 846
+ * of 22,646 recorded bash calls began with a `# what I am about to do` line,
+ * so a `cat` or `grep` behind one was not seen as a read.
  */
 export function normalizeCommand(command: string): string {
-  let c = command.replace(/\s+/g, " ").trim();
+  let c = command
+    .split("\n")
+    .filter((line) => line.trim() !== "" && !/^\s*#/.test(line))
+    .join(" ; ")
+    .replace(/\s+/g, " ")
+    .trim();
   for (;;) {
-    const next = c.replace(/^cd\s+\S+\s*&&\s*/, "");
+    const next = c
+      .replace(/^cd\s+\S+\s*(&&|;)\s*/, "")
+      .replace(/^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/, "")
+      .replace(/^timeout\s+(-\S+\s+)*\d+(\.\d+)?[smhd]?\s+/, "")
+      .replace(/^sudo\s+(-\S+\s+)*/, "");
     if (next === c) break;
     c = next;
   }
@@ -225,13 +239,15 @@ export function changedState(o: StallObservation): boolean {
   if (P.write_tools.includes(o.tool)) return true;
   if (P.delegate_tools.includes(o.tool)) return true;
   if (o.worktree_changed === true) return true;
-  if (o.tool === "bash" && summaryExit(o.summary) === 0 && P.system_command.test(o.target)) return true;
+  if (o.tool === "bash" && summaryExit(o.summary) === 0 && P.system_command.test(normalizeCommand(o.target))) {
+    return true;
+  }
   return false;
 }
 
 /** Whether the call ran tests, so its outcome is a test outcome. */
 export function isTestCall(o: StallObservation): boolean {
-  return o.tool === "bash" && STALL_SIGNAL_PATTERNS.test_command.test(o.target);
+  return o.tool === "bash" && STALL_SIGNAL_PATTERNS.test_command.test(normalizeCommand(o.target));
 }
 
 /** Whether the call only gathered information. */

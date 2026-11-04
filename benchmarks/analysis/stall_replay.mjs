@@ -84,6 +84,19 @@
  * fire_success, ties by recall_sc. The pick is then applied, unchanged, to
  * the held-out campaign.
  * ──────────────────────────────────────────────────────────────────────────
+ *
+ * AMENDMENT 1 (2026-11-04, after the first run had read outcomes). The first
+ * run (module at 30634035; results in v1-preregistered.*) MET the criterion
+ * on m1. Inspecting why a tuning-set success fired showed a classifier bug,
+ * not a threshold question: 846 of 22,646 bash calls begin with a `# comment`
+ * line, so the read classifier saw `#` as the command and a `grep` or `cat`
+ * behind it did not count as a read. normalizeCommand now drops full-line
+ * comments and the prefixes `cd <dir>;`, `VAR=x`, `timeout <n>` and `sudo`,
+ * and read_command covers lookups (`which`, `apt-cache`, `dpkg -l`, `pip
+ * show`, `ps`, ...): chosen from leading-word counts over all calls, outcome
+ * blind. Grid, objective, classes and split are unchanged and the pipeline is
+ * re-run whole (replay.*). Both runs are reported; v1 is the pre-registered
+ * one. A fix found on an outcome-labelled run is post hoc, and is said so.
  */
 import { readFileSync, readdirSync, existsSync, statSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
@@ -136,12 +149,9 @@ for (const cycle of [6, 8, 10, OFF])
       [0.5, OFF],
     ])
       GRID.push({ cycle, np, k: kh[0], h: kh[1] });
-const A_PRIORI = {
-  cycle: STALL_SIGNAL_THRESHOLDS.cycle_min_calls,
-  np: STALL_SIGNAL_THRESHOLDS.no_progress_calls,
-  k: STALL_SIGNAL_THRESHOLDS.cusum_k,
-  h: STALL_SIGNAL_THRESHOLDS.cusum_h,
-};
+// The pre-registered values, as literals: the module's defaults may since have
+// moved to a tuned pick, and this row must keep meaning "before any outcome".
+const A_PRIORI = { cycle: 6, np: 8, k: 0.5, h: 4 };
 const fmtPoint = (p) =>
   `cycle_min_calls=${p.cycle === OFF ? "off" : p.cycle} no_progress_calls=${p.np === OFF ? "off" : p.np} ` +
   `cusum=${p.h === OFF ? "off" : `k${p.k}/h${p.h}`}`;
@@ -398,6 +408,7 @@ const TUNED = pick.point;
 const result = {
   generated: new Date().toISOString(),
   module: "packages/gnomon-core/dist/stall_signals.js",
+  module_thresholds: STALL_SIGNAL_THRESHOLDS,
   a_priori: A_PRIORI,
   tune_campaign: TUNE,
   held_out_campaign: HELD_OUT,
@@ -415,6 +426,21 @@ for (const [name, runs] of campaigns) {
     tuned: evaluate(runs, TUNED),
   };
 }
+// Per run, at the tuned thresholds: the rows LP2/LP4/HY1 analyses start from.
+result.runs = [...campaigns.values()].flat().map((r) => {
+  const rep = replay(r, thresholds(TUNED));
+  return {
+    campaign: r.campaign,
+    trail: r.trail.slice(root.replace(/[\\/]$/, "").length + 1),
+    class: !r.scored ? "unscored" : r.success ? "success" : r.sc ? "stall_or_cap" : "failed_other",
+    calls: r.calls.length,
+    stop_reason: r.stop_reason,
+    failure_mode: r.failure_mode,
+    first: rep.first,
+    any: rep.any,
+    nudge: rep.nudge,
+  };
+});
 const ho = result.campaigns[HELD_OUT].tuned.ANY;
 result.criterion = {
   recall_sc: ho.recall_sc,
@@ -428,7 +454,7 @@ const num = (x) => (x === null || x === undefined ? "n/a" : Number.isInteger(x) 
 const lines = [];
 lines.push(`# Stall-signal replay (LP5)`, ``);
 lines.push(`Module: \`${result.module}\`. Tune: **${TUNE}**. Held out: **${HELD_OUT}**.`);
-lines.push(`A priori: ${fmtPoint(A_PRIORI)}.`);
+lines.push(`A priori: ${fmtPoint(A_PRIORI)}. Module defaults now: ${JSON.stringify(STALL_SIGNAL_THRESHOLDS)}.`);
 lines.push(`Tuned (${feasible.length}/${GRID.length} grid points met fire_success <= 5% on ${TUNE}): **${fmtPoint(TUNED)}**.`, ``);
 lines.push(`## Inventory`, ``);
 lines.push(`| campaign | trails | with calls | scored | success | failed | stall_or_cap | bash stamped | bash target cut | builds |`);
