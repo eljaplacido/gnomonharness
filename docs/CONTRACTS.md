@@ -1037,3 +1037,45 @@ trail verifies and it was authorised the way it says.
   session killed after a mid-run checkpoint. Resolving them is a person's
   call.
 - **The walk stops at 200,000 entries**, reported as `truncated`.
+
+## §NEW-endpoint-window. Endpoint context window — `wire.max_context_tokens_source`
+
+The window a turn's working context is trimmed to, at a leg checkpoint and
+after an overflow, and where it came from. `[defaults] max_context_tokens`
+(`gnomon init` writes 65536) applies unless the endpoint the turn is routed to
+declares its own in `[endpoints.<name>] max_context_tokens`:
+
+- **a number** is that model's window;
+- **`"auto"`** reads it from the endpoint, once per process for each endpoint
+  URL and model, and caches it. Nothing found means `[defaults]
+  max_context_tokens`, with a note on stderr and a `context_window_unresolved`
+  degradation. A listing that answers 404 is the common case in front of a
+  metering relay, and is one of the tested paths.
+
+The turn record's `wire` carries two keys, both absent for an endpoint that
+declares no window, so a record from a surface that never uses the key is the
+record it was before it existed:
+
+| `max_context_tokens_source` | `max_context_tokens` is |
+|---|---|
+| `declared` | the declared number |
+| `listing:opencode` | `data[id].limit.context` from `GET <base>/models` |
+| `listing:openrouter` | `data[id].context_length`, else `data[id].top_provider.context_length`, from `GET <base>/models` |
+| `listing:vllm` | `data[id].max_model_len` from `GET <base>/models` |
+| `listing:llamacpp` | `default_generation_settings.n_ctx` from `GET <root>/props` |
+| `listing:ollama` | the `num_ctx` line of `parameters`, else `model_info.<arch>.context_length`, from `POST <root>/api/show` |
+| `default` | `[defaults] max_context_tokens`: `"auto"` found nothing |
+
+`<base>` is the chat URL without `/chat/completions`; `<root>` is that without
+a trailing `/v1` for llama.cpp, and the Ollama URL without `/api/chat`. A shape
+names the fields, not the vendor: any server that answers in them is read the
+same way. `id` must equal the model the role names. An OpenAI-shaped endpoint
+is asked for `/models` first and `/props` second, each probe bounded at 5 s.
+llama.cpp's `/v1/models` `meta.n_ctx_train` is not read, because it is the
+length the model was trained to and not the one the server runs.
+
+**Fixture**: `conformance/endpoint_window.json` — one listing body per shape
+and field, the bodies that must give no window, the probe URLs derived from four
+chat URLs, the sources and the degradation id.
+`packages/gnomon-core/src/context_window.test.ts` reads every body through the
+parsers and asserts that this section names the same sources and fields.

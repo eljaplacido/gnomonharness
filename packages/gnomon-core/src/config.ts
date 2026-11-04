@@ -18,6 +18,7 @@ import { SourceEntry } from "./session.js";
 // exactly what the turn will see.
 import { loadSkills } from "./skills.js";
 import { harnessBuild } from "./build.js";
+import { AUTO_WINDOW, rememberedWindow, type ContextSource } from "./context_window.js";
 
 // ---------------------------------------------------------------------------
 // Types — mirror Rust structs from gnomon-surface
@@ -140,8 +141,12 @@ export interface EndpointConfig {
    * The context window of the model behind this endpoint, in tokens. Replaces
    * `[defaults] max_context_tokens` for a turn routed here, so a cloud model
    * with a large window is not trimmed to a budget sized for a local one.
+   *
+   * `"auto"` reads it from the endpoint's listing once per process, for the
+   * model the role names, and falls back to `[defaults] max_context_tokens`
+   * with a note when the listing says nothing (context_window.ts).
    */
-  max_context_tokens?: number;
+  max_context_tokens?: number | typeof AUTO_WINDOW;
   /**
    * Send each assistant message's reasoning back as `reasoning_content`. See
    * resolveReplayReasoning for the default and why it is off almost everywhere.
@@ -1192,6 +1197,35 @@ function positiveInt(value: unknown): number | undefined {
     : undefined;
 }
 
+/** `[defaults] max_context_tokens`, or 65536 when the surface says nothing. */
+export function defaultContextWindow(config: GnomonConfig): number {
+  return pickInt(config.config.defaults?.max_context_tokens, 65536);
+}
+
+/**
+ * The window fields of a route target, from its endpoint's declaration.
+ *
+ * A number is `declared`. `"auto"` is what this process has already resolved
+ * for the URL and model (settleContextWindows in prompt_loop.ts does the
+ * asking); until then, or when nothing was found, it is `[defaults]
+ * max_context_tokens` marked `default`, which trims exactly as an undeclared
+ * endpoint does. Anything else is the object an undeclared endpoint always got.
+ */
+function contextWindowOf(
+  config: GnomonConfig,
+  declared: unknown,
+  at: { url: string; kind?: EndpointKind; model: string }
+): Pick<RouteTarget, "contextTokens" | "contextSource" | "contextAuto"> {
+  if (declared === AUTO_WINDOW) {
+    const known = rememberedWindow(at);
+    return known?.tokens
+      ? { contextTokens: known.tokens, contextSource: known.source, contextAuto: true }
+      : { contextTokens: defaultContextWindow(config), contextSource: "default", contextAuto: true };
+  }
+  const tokens = positiveInt(declared);
+  return tokens ? { contextTokens: tokens, contextSource: "declared" } : { contextTokens: undefined };
+}
+
 /**
  * Resolve the context-window policy from config.toml.
  *
@@ -1211,7 +1245,7 @@ export function resolveContext(
 ): ResolvedContext {
   const ctx = config.config.context ?? {};
   const defaults = config.config.defaults ?? {};
-  const window = target?.contextTokens ?? pickInt(defaults.max_context_tokens, 65536);
+  const window = target?.contextTokens ?? defaultContextWindow(config);
   return {
     policy: pickEnum(ctx.policy, CONTEXT_POLICIES, "sliding_window"),
     retain_after: pickInt(ctx.retain_after, 2048),
@@ -1343,8 +1377,17 @@ export interface RouteTarget {
    * unless the endpoint refused it by name for `max_completion_tokens`.
    */
   maxTokensField?: "max_tokens" | "max_completion_tokens";
-  /** `[endpoints.<name>] max_context_tokens`, when declared */
+  /**
+   * The window the turn's working context is trimmed to: `[endpoints.<name>]
+   * max_context_tokens` when declared, what `"auto"` resolved, or, for an
+   * `"auto"` that found nothing, `[defaults] max_context_tokens`. Absent when
+   * the endpoint declares nothing, as before the key existed.
+   */
   contextTokens?: number;
+  /** Where `contextTokens` came from. Absent exactly when it is. */
+  contextSource?: ContextSource;
+  /** The endpoint declares `max_context_tokens = "auto"`. See settleContextWindows. */
+  contextAuto?: true;
   /** Replay reasoning_content on assistant messages. See resolveReplayReasoning. */
   replayReasoning?: boolean;
   /**
@@ -2664,6 +2707,7 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
 
     for (const field of ["max_tokens", "max_context_tokens"]) {
       const v = block[field];
+      if (field === "max_context_tokens" && v === AUTO_WINDOW) continue;
       if (v !== undefined && !(typeof v === "number" && Number.isFinite(v) && v >= 0)) {
         problems.push({
           where,
@@ -2671,7 +2715,7 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
           fix:
             field === "max_tokens"
               ? "max_tokens = 16384 limits each reply; 0 sends no limit."
-              : "max_context_tokens = <the model's window in tokens>, e.g. 131072.",
+              : `max_context_tokens = <the model's window in tokens>, e.g. 131072, or "${AUTO_WINDOW}" to read it from the endpoint.`,
           fatal: false,
         });
       }
@@ -3137,24 +3181,26 @@ export function routeRole(
   const endpointName = roleDef.endpoint ?? DEFAULT_ENDPOINT;
   const endpoint = resolveEndpoint(config, endpointName);
   const resilience = resolveResilience(config);
+  // `||`, not `??`. A variable set to nothing (`GNOMON_MODEL_URL= gnomon …`,
+  // or a blank entry in a CI env block) is how people switch one off, and
+  // `??` kept the empty string. Every route then failed with "Failed to
+  // parse URL from", while the startup note, which tests the variable for
+  // truthiness, said nothing was overridden.
+  const url = process.env.GNOMON_MODEL_URL || endpoint.url;
+  const kind = endpointKind(endpoint);
   const target: RouteTarget = {
     model,
     temperature,
     top_p,
-    // `||`, not `??`. A variable set to nothing (`GNOMON_MODEL_URL= gnomon …`,
-    // or a blank entry in a CI env block) is how people switch one off, and
-    // `??` kept the empty string. Every route then failed with "Failed to
-    // parse URL from", while the startup note, which tests the variable for
-    // truthiness, said nothing was overridden.
-    url: process.env.GNOMON_MODEL_URL || endpoint.url,
+    url,
     apiKeyEnv: endpoint.api_key_env,
     endpoint: endpointName,
-    kind: endpointKind(endpoint),
+    kind,
     stream: resolveStream(endpoint, "ollama", config.config.defaults?.stream),
     streamIdleMs: resilience.stream_idle_timeout_ms,
     streamTotalMs: resilience.stream_total_timeout_ms,
     maxTokens: resolveMaxTokens(config, roleDef, endpoint),
-    contextTokens: positiveInt(endpoint.max_context_tokens),
+    ...contextWindowOf(config, endpoint.max_context_tokens, { url, kind, model }),
     replayReasoning: resolveReplayReasoning(endpoint),
     ...(resolveSteerRole(endpoint) === "user" ? { steerRole: "user" as const } : {}),
   };
@@ -3168,21 +3214,23 @@ export function routeRole(
     const fbEndpoint = fbEndpointName
       ? resolveEndpoint(config, fbEndpointName)
       : undefined;
+    const fbUrl = fb.url ?? fbEndpoint?.url ?? "";
+    // A fallback with no kind has always defaulted to openai, so that stays
+    // the default for a URL that names no shape.
+    const fbKind = endpointKind(fbEndpoint ?? { url: fb.url }, "openai");
     fallback = {
       model: fb.model,
       temperature,
       top_p,
-      url: fb.url ?? fbEndpoint?.url ?? "",
+      url: fbUrl,
       apiKeyEnv: fb.api_key_env ?? fbEndpoint?.api_key_env,
       endpoint: fbEndpointName,
-      // A fallback with no kind has always defaulted to openai, so that stays
-      // the default for a URL that names no shape.
-      kind: endpointKind(fbEndpoint ?? { url: fb.url }, "openai"),
+      kind: fbKind,
       stream: resolveStream(fbEndpoint ?? { url: fb.url }, "openai", config.config.defaults?.stream),
       streamIdleMs: resilience.stream_idle_timeout_ms,
       streamTotalMs: resilience.stream_total_timeout_ms,
       maxTokens: resolveMaxTokens(config, roleDef, fbEndpoint),
-      contextTokens: positiveInt(fbEndpoint?.max_context_tokens),
+      ...contextWindowOf(config, fbEndpoint?.max_context_tokens, { url: fbUrl, kind: fbKind, model: fb.model }),
       replayReasoning: resolveReplayReasoning(fbEndpoint ?? { url: fb.url }, "openai"),
       ...(resolveSteerRole(fbEndpoint) === "user" ? { steerRole: "user" as const } : {}),
     };

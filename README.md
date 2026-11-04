@@ -61,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1832 TypeScript tests (1533 core, 274 cli, 18
-> natives, 7 tui) and 61 Rust tests — **1893 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1857 TypeScript tests (1557 core, 275 cli, 18
+> natives, 7 tui) and 61 Rust tests — **1918 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -635,6 +635,12 @@ Routing lives in the surface and is hashed with it. `local` has a built-in
 default, so a surface that never mentions endpoints still works. Only the
 credential is machine-scoped, and only **by name**. Naming an endpoint that is
 not declared is an error, not a silent default.
+
+An endpoint may declare its model's context window, `max_context_tokens =
+131072`, or `max_context_tokens = "auto"` to read it from the endpoint's
+model listing once per session ([GUIDE §5.2](docs/GUIDE.md), [CONTRACTS](docs/CONTRACTS.md)).
+Without either, its turns are trimmed to `[defaults] max_context_tokens`, which
+is sized for a local model; a session on a remote endpoint says so at startup.
 
 #### Keys
 

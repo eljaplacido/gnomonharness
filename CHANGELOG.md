@@ -26,6 +26,28 @@
 
 ## [Unreleased]
 
+- **An endpoint can read its model's context window from the endpoint:
+  `[endpoints.<name>] max_context_tokens = "auto"`.** This is opt-in, and a
+  surface that does not use it behaves exactly as before. C3, the root cause
+  of P2G's token gap: `[defaults] max_context_tokens = 65536` also governed
+  hosted models with far larger windows, so every leg checkpoint trimmed the
+  working context to about 39k tokens. On P2G (deepseek-v4.1-flash on OpenCode
+  Go, a 1,000,000-token window), 25 of 28 gnomon cells crossed at least one
+  leg. gnomon's median total input was 1.56M against opencode's 6.89M.
+  `"auto"` asks once per session for each endpoint URL and model. It reads the
+  OpenCode, OpenRouter and vLLM `/models` shapes, llama.cpp's `/props` and
+  Ollama's `/api/show`. When nothing answers, as with a metering relay that
+  returns 404 for `/models`, the turn runs on `[defaults]
+  max_context_tokens`. That fallback is said on stderr and recorded as the new
+  `context_window_unresolved` degradation. The turn record's `wire` gains
+  `max_context_tokens_source` (`declared`, `listing:<shape>` or `default`)
+  wherever it already carried `max_context_tokens`. An endpoint that is not on
+  this machine and declares no window now gets a startup note naming the key.
+  `gnomon init` writes the same active configuration as before. Its zen and
+  go blocks gain a commented `# max_context_tokens = "auto"` recommendation.
+  Contract: CONTRACTS.md §NEW-endpoint-window,
+  `conformance/endpoint_window.json`.
+
 ## [0.4.0] — 2026-11-03
 
 **Upgrading from 0.3.x.** Run `gnomon migrate` in each project. It applies four

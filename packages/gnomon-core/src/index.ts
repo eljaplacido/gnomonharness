@@ -17,6 +17,9 @@
  */
 
 export * from "./config.js";
+// The endpoint's context window, read from its listing for
+// `max_context_tokens = "auto"` (CONTRACTS.md §NEW-endpoint-window).
+export * from "./context_window.js";
 export * from "./session.js";
 export * from "./prompt_loop.js";
 // The degradation contract: every way this harness carries on with less than

@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initSurface } from "./init.js";
-import { loadConfig, resolveContext, resolveUi, resolveRouting, resolveAudit, resolveSessionStore, listRoles, buildToolSet, STEER_ROLES, STEER_PREFIX, STEER_CLOSE } from "gnomon-core";
+import { loadConfig, resolveContext, resolveUi, resolveRouting, resolveAudit, resolveSessionStore, listRoles, buildToolSet, STEER_ROLES, STEER_PREFIX, STEER_CLOSE, CONTEXT_SOURCES, LISTING_SHAPES, AUTO_WINDOW } from "gnomon-core";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
@@ -414,6 +414,32 @@ describe("the README outcome table matches the tool result codes", () => {
     expect(guide).toContain(`\`${STEER_CLOSE}\``);
     expect(guide).toMatch(/`counters\.steer_role_adapted`/);
     expect(guide).toMatch(/`steer_role: "user"`/);
+  });
+
+  it('the surface reference documents max_context_tokens = "auto"; init recommends it and does not set it', async () => {
+    // C3: the default window trimmed a 1,000,000-token hosted model to ~39k.
+    // The fix is opt-in until a pre-registered arm says otherwise, so the
+    // scaffold may recommend it in a comment and must not switch it on.
+    const root = join(__dirname, "../../..");
+    const guide = readFileSync(join(root, "docs/GUIDE.md"), "utf-8");
+    expect(guide).toContain(`max_context_tokens = "${AUTO_WINDOW}"`);
+    expect(guide).toContain("`max_context_tokens_source`");
+    for (const source of ["declared", "listing:<shape>", "default"]) expect(guide).toContain(`\`${source}\``);
+    for (const field of ["limit.context", "context_length", "top_provider.context_length", "max_model_len", "default_generation_settings.n_ctx", "num_ctx", "/api/show"]) {
+      expect(guide).toContain(field);
+    }
+    expect(guide).toContain("`context_window_unresolved`");
+    expect(CONTEXT_SOURCES).toEqual(["declared", ...LISTING_SHAPES.map((s) => `listing:${s}`), "default"]);
+
+    const scaffoldText = readFileSync(join(root, "packages/gnomon-cli/src/init.ts"), "utf-8");
+    expect(scaffoldText.match(/^# max_context_tokens = "auto"$/gm)).toHaveLength(2);
+    await scaffold((dir) => {
+      const config = loadConfig(dir);
+      for (const [name, ep] of Object.entries(config.config.endpoints ?? {})) {
+        expect(ep.max_context_tokens, name).toBeUndefined();
+      }
+      expect(config.config.defaults?.max_context_tokens).toBe(65536);
+    });
   });
 
   it("the inert-enumeration set, its fixture and CONTRACTS.md are one set", () => {

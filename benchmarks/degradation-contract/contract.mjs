@@ -354,6 +354,27 @@ const PROBES = {
       };
     },
   },
+
+  context_window_unresolved: {
+    must: /max_context_tokens = "auto" found no window/i,
+    recordedBy: "a `degradation` record, and `max_context_tokens_source: \"default\"` in the turn's `wire`",
+    async run(root, audit) {
+      // An Ollama endpoint declaring "auto" whose /api/show answers 404, as a
+      // relay in front of a provider does. The chat call itself succeeds.
+      const target = { ...TARGET("http://auto.invalid/api/chat"), kind: "ollama",
+        contextAuto: true, contextTokens: 65536, contextSource: "default" };
+      const { turn, trace } = await turnWith(root, async (url) =>
+        String(url).endsWith("/api/show")
+          ? { ok: false, status: 404, statusText: "Not Found", json: async () => ({ error: "not found" }) }
+          : done(),
+        { route: ROUTE({ target }), audit });
+      return {
+        announcedIn: trace,
+        recorded: hasDegradation(audit, "context_window_unresolved")
+          && turn.wire?.max_context_tokens_source === "default",
+      };
+    },
+  },
 };
 
 // ── The population is the code's, not this file's ────────────────────────────

@@ -22,6 +22,7 @@ import {
   listRoles,
   listProfiles,
   resolveContext,
+  defaultContextWindow,
   resolveVerify,
   detectVerifyCommand,
   resolveResilience,
@@ -108,7 +109,8 @@ import {
   type ShadowTurnInfo,
   type TurnShadow,
 } from "./shadow.js";
-import { recordDegradation } from "./degradation.js";
+import { recordDegradation, type DegradationSink } from "./degradation.js";
+import { resolveContextWindow, type ContextSource } from "./context_window.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
 import { applyCredentials } from "./credentials.js";
 import type { TrustOutcome } from "./trust.js";
@@ -2150,6 +2152,12 @@ export interface WireRecord {
   max_tokens_field?: string;
   /** The window the turn's working context was trimmed to */
   max_context_tokens?: number;
+  /**
+   * Where that window came from: `declared`, `listing:<shape>` (`"auto"`,
+   * read from the endpoint) or `default` (`"auto"`, nothing found). Absent
+   * with `max_context_tokens`, for an endpoint that declares no window.
+   */
+  max_context_tokens_source?: ContextSource;
   /** Present, and true, only when reasoning_content was sent back */
   replay_reasoning?: boolean;
   /**
@@ -2183,9 +2191,123 @@ export function wireOf(target: RouteTarget): WireRecord {
       ? { max_tokens_field: target.maxTokensField }
       : {}),
     ...(target.contextTokens ? { max_context_tokens: target.contextTokens } : {}),
+    ...(target.contextTokens && target.contextSource
+      ? { max_context_tokens_source: target.contextSource }
+      : {}),
     ...(target.replayReasoning ? { replay_reasoning: true } : {}),
     ...(target.steerRole === "user" ? { steer_role: "user" as const } : {}),
   };
+}
+
+/** Where settleContextWindows says what it found. */
+export interface WindowHooks {
+  ui: ResolvedUi;
+  /** The transcript: a window read from the endpoint */
+  say: (line: string) => void;
+  /** A channel `--json` does not silence: `"auto"` found nothing */
+  warn: (line: string) => void;
+  audit?: DegradationSink;
+}
+
+/**
+ * Put the window in place on every target of a route whose endpoint declares
+ * `max_context_tokens = "auto"`. Each endpoint URL and model is asked once per
+ * process (context_window.ts) and the answer is cached, so the second call for
+ * a target costs nothing. A route without "auto" comes back as the same object.
+ *
+ * The call that asked says what it found. A listing that gave a window gets a
+ * transcript line. None that did gets a warning, a `context_window_unresolved`
+ * degradation, and the turn runs on `[defaults] max_context_tokens`, marked
+ * `default` in the record's `wire`: the trim an undeclared endpoint gets.
+ */
+export async function settleContextWindows<R extends { target: RouteTarget; fallback?: RouteTarget }>(
+  config: GnomonConfig,
+  route: R,
+  hooks: WindowHooks
+): Promise<R> {
+  if (!route.target.contextAuto && !route.fallback?.contextAuto) return route;
+  const fallbackWindow = defaultContextWindow(config);
+  const settle = async (t: RouteTarget | undefined): Promise<RouteTarget | undefined> => {
+    if (!t?.contextAuto) return t;
+    const { resolution, fresh } = await resolveContextWindow(t);
+    const where = `${t.endpoint ?? "endpoint"} · ${t.model}`;
+    if (fresh && resolution.tokens) {
+      hooks.say(
+        paint(hooks.ui, "gray",
+          `  [context] ${where}: window ${resolution.tokens} tokens, read from the endpoint (${resolution.from})`)
+      );
+    } else if (fresh) {
+      hooks.warn(
+        paint(hooks.ui, "yellow",
+          `  [context] ${where}: max_context_tokens = "auto" found no window ` +
+            `(${resolution.misses.join("; ")}). Trimming to [defaults] max_context_tokens = ` +
+            `${fallbackWindow}; declare the number in [endpoints.${t.endpoint ?? "<name>"}] to skip the lookup.`)
+      );
+      recordDegradation(hooks.audit, {
+        id: "context_window_unresolved",
+        declared: `max_context_tokens = "auto" for ${t.model} at ${t.endpoint ?? "endpoint"}`,
+        actual: `[defaults] max_context_tokens = ${fallbackWindow}`,
+        detail: { probes: resolution.misses },
+      });
+    }
+    return resolution.tokens
+      ? { ...t, contextTokens: resolution.tokens, contextSource: resolution.source }
+      : { ...t, contextTokens: fallbackWindow, contextSource: "default" };
+  };
+  const [target, fallback] = await Promise.all([settle(route.target), settle(route.fallback)]);
+  return { ...route, target: target!, ...(route.fallback ? { fallback } : {}) };
+}
+
+/**
+ * Settle every listed role's "auto" windows at session start, so what they
+ * found is said before the first prompt rather than in the middle of it.
+ */
+export async function prepareContextWindows(
+  config: GnomonConfig,
+  roles: string[],
+  hooks: WindowHooks
+): Promise<void> {
+  const routes = roles.flatMap((role) => {
+    try {
+      return [routeRole(config, role)];
+    } catch {
+      return []; // an unknown endpoint is the surface audit's to report
+    }
+  });
+  await Promise.all(routes.map((r) => settleContextWindows(config, r, hooks)));
+}
+
+/**
+ * The startup note for an endpoint that is not on this machine and declares no
+ * window. Its turns are trimmed to `[defaults] max_context_tokens`, which
+ * `gnomon init` sizes for a local model (65536), while a hosted model's window
+ * may be many times that: C3, the P2G root cause. One line per endpoint the
+ * given roles route to. A note only; nothing about the turn changes.
+ */
+export function undeclaredWindowNotes(config: GnomonConfig, roles: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const window = defaultContextWindow(config);
+  for (const role of roles) {
+    let r: ReturnType<typeof routeRole>;
+    try {
+      r = routeRole(config, role);
+    } catch {
+      continue;
+    }
+    for (const t of [r.target, r.fallback]) {
+      if (!t?.endpoint || seen.has(t.endpoint)) continue;
+      seen.add(t.endpoint);
+      if (t.contextSource || isLoopbackUrl(t.url)) continue;
+      out.push(
+        `note: endpoint "${t.endpoint}" is not on this machine and declares no context window, ` +
+          `so its turns are trimmed to [defaults] max_context_tokens = ${window}. If its model's ` +
+          `window is larger, declare it in [endpoints.${t.endpoint}]: max_context_tokens = <tokens>, ` +
+          `or "auto" to read it from the endpoint.`
+      );
+    }
+  }
+  return out;
 }
 
 /** What a session has learned about one endpoint+model's output limit. */
@@ -3953,6 +4075,12 @@ export async function runAgenticTurn(
     if (deps.warn) deps.warn(line);
     else say(line);
   };
+
+  // `max_context_tokens = "auto"`: the endpoint's window, asked once per
+  // process and cached, so a caller that settled the route already (runTask,
+  // runSessionTurn, the session start) costs nothing here. Sub-turns and chain
+  // stages build their own routes and are settled by this line.
+  route = await settleContextWindows(config, route, { ui: deps.ui, say, warn, audit: deps.audit });
 
   // The loop's own numbers, from the surface rather than from this file. Read
   // once per turn so a `[loop]` block is hashed into the record that describes
@@ -6249,7 +6377,7 @@ export async function runTask(
 
   const state: PromptState = { config, exchanges: [], currentRole: role };
   const ui: ResolvedUi = { ...resolveUi(config), spinner: false, color: false };
-  const route = routeRole(config, role);
+  let route = routeRole(config, role);
 
   const active = selectSkills(loadSkills(config), role, input);
   const systemPrompt = buildSystemPrompt(state, role, input);
@@ -6305,6 +6433,14 @@ export async function runTask(
     approvals: options.yes ? "granted" : "refused",
   });
   if (options.trust) audit.write("trust", { ...options.trust, root: resolve(config.gnomonDir, "..") });
+
+  // The window each endpoint this run routes to will be trimmed to. A note for
+  // a remote endpoint on the undeclared default (C3); "auto" read before the
+  // turn, so the route the record falls back on carries what was found.
+  for (const line of undeclaredWindowNotes(config, chain.length >= 2 ? chain : [role])) {
+    note(`  ${line}`);
+  }
+  route = await settleContextWindows(config, route, { ui, say: note, warn, audit: auditForTurn });
 
   // Connect declared MCP servers here too. They were wired only in
   // runPromptLoop, so a surface declaring [mcp_servers] handed its tools to
@@ -8252,7 +8388,14 @@ export async function runSessionTurn(
   deps: SessionTurnDeps
 ): Promise<SessionTurn> {
   const config = state.config;
-  const route = routeRole(config, role);
+  // Settled here as well as in the turn, so the route this record falls back on
+  // carries the window an "auto" endpoint resolved to. Cached: asked once.
+  const route = await settleContextWindows(config, routeRole(config, role), {
+    ui: uiOf(state),
+    say: deps.log,
+    warn: deps.log,
+    audit: deps.audit,
+  });
 
   const ui = uiOf(state);
   const print = deps.print ?? ((line: string) => deps.progress.print(line));
@@ -9380,6 +9523,18 @@ export async function runPromptLoop(
         )
       );
     }
+    // The window each endpoint's turns are trimmed to. A remote endpoint on the
+    // undeclared default is told so (C3); "auto" windows are read now, so what
+    // they found is said before the first prompt.
+    for (const line of undeclaredWindowNotes(config, listRoles(config))) {
+      console.log(paint(ui, "yellow", `  ${line}`));
+    }
+    await prepareContextWindows(config, listRoles(config), {
+      ui,
+      say: (line) => console.log(line),
+      warn: (line) => console.log(line),
+      audit,
+    });
     if (resumedFrom) {
     const ui0 = uiOf(state);
     console.log(

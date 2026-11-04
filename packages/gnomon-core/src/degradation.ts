@@ -59,6 +59,8 @@ export const DEGRADATIONS = {
     "a command changed `.gnomon/` mid-turn, so the surface no longer matches the hash this session was stamped with",
   model_output_truncated:
     "the backend cut the completion off at its token limit, so the answer is incomplete",
+  context_window_unresolved:
+    "the endpoint declares `max_context_tokens = \"auto\"` and its listing gave no window for the model, so turns are trimmed to `[defaults] max_context_tokens`",
 } as const;
 
 /** The id of a declared degradation path. */
