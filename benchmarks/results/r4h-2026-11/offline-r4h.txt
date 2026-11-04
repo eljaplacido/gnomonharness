@@ -1,0 +1,29 @@
+== R4H offline checks 2026-11-04T21:09:00Z (no hub, no lane, no relay POST, no model call; the DRY=1 chain check is not run because it samples the hub over ssh)
+hubwatch tests (S1's, pinned 9c31e271): 50 passed, 0 failed
+runner tests: 46 passed, 0 failed
+chain-glue tests: 33 passed, 0 failed
+collector tests: 17 passed, 0 failed
+relay-meter tests (S1's): 36 passed, 0 failed
+relay-go tests (R3R's): 12 passed, 0 failed
+preflight: preflight r4h: both setups (bash, jinja), run helpers, node blocks (R1H PC surface on each, 5 refusals on NEW's), relays, meter tests 36 passed, 0 failed, relay-go tests 12 passed, 0 failed, R1H/R3R/S1 copies byte-identical and pinned, wire test PASS on both builds, collector tests 17 passed, 0 failed, agent classes per build, plan and ports OK
+wire test A/B: wire test: PASS (OLD d59e6c198f91d1469198b0677c008323f82d0345, NEW c511b8105fb2187423d21becbe3b19f8af2b80e5)
+wire test C: wire test (part C): PASS (OLD d59e6c198f91d1469198b0677c008323f82d0345, NEW c511b8105fb2187423d21becbe3b19f8af2b80e5)
+bash -n r4h-chain.sh tunnel-r4h.sh mktree_r4h.sh: ok
+RTX chain lock /home/eljaplacido/gnomon-wt/peers/benchmarks/results/m2-2026-11/.chain-rtx.lock: HELD (a launch now would REFUSE)
+RTX chain lock /home/eljaplacido/gnomon-wt/peers/benchmarks/results/r3r-2026-11/.chain.lock: not held
+RTX chain lock /home/eljaplacido/gnomon-wt/peers/benchmarks/results/s1-2026-11/.chain.lock: not held
+== dry plan
+gpu  : local meter 172.17.0.1:5810 (counters 5820, upstream http://127.0.0.1:19180) cloud relay-go 172.17.0.1:5811 (counters 5821)
+gpu2 : local meter 172.17.0.1:5812 (counters 5822, upstream http://127.0.0.1:19180) cloud relay-go 172.17.0.1:5813 (counters 5823)
+cloud: local meter 172.17.0.1:5814 (counters 5824, upstream http://127.0.0.1:9) cloud relay-go 172.17.0.1:5815 (counters 5825)
+build OLD: d59e6c198f91d1469198b0677c008323f82d0345 d59e6c19 (R1H's build), agent peer_agents_r1:GnomonR1
+build NEW: c511b8105fb2187423d21becbe3b19f8af2b80e5 v0.4.1 (c511b810), agent peer_agents_r3r:GnomonR3R
+attempt 1: 16 pairs, 32 cells; first 3 pairs: r4h-k1-old-fix-code-vulnerability@gpu2 + r4h-k1-new-fix-code-vulnerability@gpu; r4h-k1-old-parallelize-graph@gpu + r4h-k1-new-parallelize-graph@gpu2; r4h-k1-old-acl-permissions-inheritance@gpu2 + r4h-k1-new-acl-permissions-inheritance@gpu
+attempt 2: 16 pairs, 32 cells; first 3 pairs: r4h-k2-old-prove-plus-comm@gpu + r4h-k2-new-prove-plus-comm@gpu2; r4h-k2-old-polyglot-c-py@gpu2 + r4h-k2-new-polyglot-c-py@gpu; r4h-k2-old-jq-data-processing@gpu + r4h-k2-new-jq-data-processing@gpu2
+runs dir /home/eljaplacido/gnomon-wt/peers/benchmarks/results/r4h-2026-11/runs; upstream http://127.0.0.1:19180; deadline 2026-11-06T07:00:00Z; finished cells 0; meter ports all free; R4H ledger $0.000 of $5.00
+== collector on an empty run
+PRIMARY (pre-registered): solved on 0 pairs valid in both: OLD 0, NEW 0; OLD-only 0, NEW-only 0; exact McNemar p = 1.0000
+  DECISION: not computable (no pair valid in both builds)
+  CHECK buckets sum to n per build: ok
+  CHECK each valid cell's surface (where copied out) is its build's (OLD: no stream; NEW: stream = true): ok (0 capped cells carry no surface copy)
+  CHECK every valid cell has a meter timeline: ok; timeline read errors: 0

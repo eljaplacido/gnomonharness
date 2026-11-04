@@ -1,0 +1,44 @@
+R4H pre-trace (read-only on committed R1H and R3R PC cells; nothing written)
+
+== R1H PC (d59e6c19): 32 cells, 30 valid, solved 26, capped 8 (of which solved 6)
+  cells with a planner timeline (gnomon exited, audit copied out): 22 of 30 valid; without: 8 (all capped: False)
+  planner calls reconstructed: 306; per call wall s: median 5.2, p90 30.1, p99 85.6, max 175.2; sum 60 min
+  calls > 120 s: 2 in 2 cell(s); those cells solved 2/2, capped 1
+  calls > 200 s: 0 in 0 cell(s); those cells solved 0/0, capped 0
+  calls > 300 s: 0 in 0 cell(s); those cells solved 0/0, capped 0
+    r1h-k1-pc-polyglot-c-py                      call  156.9 s -> delegated          cell solved=True capped=False agent 385 s
+    r1h-k2-pc-mailman                            call  175.2 s -> tool:todo          cell solved=True capped=True agent 1150 s
+  cloud chat requests (meter) minus reconstructed calls, per timed cell: {0: 18, 1: 4} (0 = every metered request is one reconstructed call; > 0 = resends, cloud sub-turns or a leaked tail)
+    r1h-k1-pc-fix-code-vulnerability             cloud requests 16, reconstructed calls 15, delegations Counter({'verifier': 3, 'implementor': 2})
+    r1h-k2-pc-jq-data-processing                 cloud requests 10, reconstructed calls 9, delegations Counter({'implementor': 1})
+    r1h-k2-pc-polyglot-c-py                      cloud requests 12, reconstructed calls 11, delegations Counter({'implementor': 2})
+    r1h-k2-pc-prove-plus-comm                    cloud requests 11, reconstructed calls 10, delegations Counter({'implementor': 2})
+  delegations per valid cell (task lines in gnomon-full.log): median 3, mean 3.9, max 15; cells delegating 30; to: {'implementor': 110, 'verifier': 7}
+  cloud requests per valid cell: median 11, mean 13.4; cloud output tokens per request: median 1352, mean 1737, p90 4126
+  cloud output per solved: 27.5k; per cell 23.8k; capped cells' share of cloud output 54%
+
+== R3R PC (v0.4.0 be4fc0d8): 32 cells, 31 valid, solved 19, capped 12 (of which solved 4)
+  cells with a planner timeline (gnomon exited, audit copied out): 19 of 31 valid; without: 12 (all capped: False)
+  planner calls reconstructed: 286; per call wall s: median 7.9, p90 29.3, p99 97.3, max 112.6; sum 65 min
+  calls > 120 s: 0 in 0 cell(s); those cells solved 0/0, capped 0
+  calls > 200 s: 0 in 0 cell(s); those cells solved 0/0, capped 0
+  calls > 300 s: 0 in 0 cell(s); those cells solved 0/0, capped 0
+  cloud chat requests (meter) minus reconstructed calls, per timed cell: {0: 19} (0 = every metered request is one reconstructed call; > 0 = resends, cloud sub-turns or a leaked tail)
+  delegations per valid cell (task lines in gnomon-full.log): median 2, mean 2.7, max 10; cells delegating 28; to: {'implementor': 73, 'verifier': 12}
+  cloud requests per valid cell: median 10, mean 13.9; cloud output tokens per request: median 1306, mean 1794, p90 3722
+  cloud output per solved: 45.7k; per cell 28.0k; capped cells' share of cloud output 71%
+
+== side by side (valid cells; timed = gnomon exited, so its audit exists)
+  share of reconstructed planner calls > 120 s: R1H 2/306  R3R 0/286
+  share of reconstructed planner calls > 200 s: R1H 0/306  R3R 0/286
+  share of reconstructed planner calls > 300 s: R1H 0/306  R3R 0/286
+  matching (task, attempt) pairs valid in both: 29
+    git-workflow-hack              k1: R1H solved=True  capped=False longest planner call  38.9 s   deleg  2 | R3R solved=False capped=True  longest planner call  85.2 s   deleg  6
+    hf-lora-adapter                k2: R1H solved=False capped=False longest planner call  39.5 s   deleg  5 | R3R solved=True  capped=False longest planner call  44.1 s   deleg  4
+    mailman                        k2: R1H solved=True  capped=True  longest planner call 175.2 s   deleg 13 | R3R solved=False capped=True  no timeline (capped)           deleg  4
+    parallelize-graph              k1: R1H solved=True  capped=True  no timeline (capped)           deleg  3 | R3R solved=False capped=True  no timeline (capped)           deleg  4
+    polyglot-c-py                  k1: R1H solved=True  capped=False longest planner call 156.9 s   deleg  2 | R3R solved=False capped=True  no timeline (capped)           deleg  2
+    polyglot-c-py                  k2: R1H solved=True  capped=False longest planner call  59.1 s   deleg  2 | R3R solved=False capped=False longest planner call  97.3 s   deleg  4
+    sparql-university              k1: R1H solved=True  capped=False longest planner call  25.3 s   deleg  1 | R3R solved=False capped=False longest planner call  27.2 s   deleg  1
+    tune-mjcf                      k1: R1H solved=True  capped=False longest planner call  72.1 s   deleg  8 | R3R solved=False capped=True  no timeline (capped)           deleg  0
+    tune-mjcf                      k2: R1H solved=True  capped=True  no timeline (capped)           deleg  1 | R3R solved=False capped=True  no timeline (capped)           deleg  2

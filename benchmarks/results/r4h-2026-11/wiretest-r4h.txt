@@ -1,0 +1,97 @@
+== R4H wire test 2026-11-04T20:59:46.624Z: OLD d59e6c198f91d1469198b0677c008323f82d0345 (tree /tmp/claude-1000/-home-eljaplacido-gnomon/3809fb39-94a4-4ea4-b0f3-7057ddad8d1d/scratchpad/r4h/tree-d59e6c19); NEW c511b8105fb2187423d21becbe3b19f8af2b80e5 (v0.4.1, tree /tmp/claude-1000/-home-eljaplacido-gnomon/3809fb39-94a4-4ea4-b0f3-7057ddad8d1d/scratchpad/r4h/tree-c511b810); reference v0.4.0 be4fc0d8835c443aca8b32ccd4c1caacf48cbdce
+
+A. surface: each build's init + its agent class's node block, against what R1H's and R3R's PC cells ran
+  gnomon init, v0.4.0 -> v0.4.1 (no setup edits), files that differ:
+    config.toml:
+        + # Recommended for a hosted model: its own window. Without the line below, turns
+        + # here are trimmed to [defaults] max_context_tokens (65536), sized for a local
+        + # model. "auto" reads the window from this endpoint's /models once per session
+        + # (limit.context; 1000000 for deepseek-v4.1-flash, 2026-11) and falls back to
+        + # [defaults] with a note when it cannot. Or write the number itself.
+        + # max_context_tokens = "auto"
+        + # Recommended, as for zen above: the model's own window instead of 65536.
+        + # max_context_tokens = "auto"
+    policy.toml:
+        - # ssh, scp/rsync to a remote, and python/node/perl/ruby one-liners that open a
+        - # connection. It is NOT process isolation: a script, a build tool or a package
+        - # manager run through bash still reaches the network, and the prompt loop says
+        - # so at startup. With exec = "docker" the container gets no network at all,
+        - # which is isolation.
+        + # 'npm test' runs package.json's pretest, 'npm install' its lifecycle scripts,
+        + # 'make' the Makefile: code the repository defines, which no rule over the
+        + # command line can read. Such a call always names what it runs when it asks.
+        + # To have every one of them asked, whatever the gate says:
+        + #   repo_code = true
+        + # Only a sandbox (exec = "docker" below) contains what that code does.
+        + # ssh, scp/rsync to a remote, python/node/perl/ruby one-liners that open a
+        + # connection, git pushing to or fetching from a URL, and a package manager
+        + # handed a registry URL. It is NOT process isolation: a script, a build tool or
+        + # a package manager run through bash still reaches the network, and the prompt
+        + # loop says so at startup. With exec = "docker" the container gets no network
+        + # at all, which is isolation.
+  ok   v0.4.0 -> v0.4.1 init: only comment (or blank) lines differ; no setting
+  ok   OLD's init writes no stream / max_tokens / stream clocks (R1H's build); NEW's writes stream = true (the release)
+  ok   OLD + R1H's block and NEW + R3R's block both run (- / -)
+  ok   R3R's block (the NEW agent class) refuses OLD's init (Error: R3R: init did not write [defaults] stream = true and max_tokens = 32768; wrong build?)
+  ok   OLD's config.toml is byte-identical to the one r1h-k1-pc-acl-permissions-inheritance ran (endpoint ports normalised)
+  NEW's config.toml vs the one r3r-k1-pc-acl-permissions-inheritance ran on v0.4.0 (ports normalised):
+    + # Recommended for a hosted model: its own window. Without the line below, turns
+    + # here are trimmed to [defaults] max_context_tokens (65536), sized for a local
+    + # model. "auto" reads the window from this endpoint's /models once per session
+    + # (limit.context; 1000000 for deepseek-v4.1-flash, 2026-11) and falls back to
+    + # [defaults] with a note when it cannot. Or write the number itself.
+    + # max_context_tokens = "auto"
+    + # Recommended, as for zen above: the model's own window instead of 65536.
+    + # max_context_tokens = "auto"
+  ok   ... differs by comment lines only
+  ok   the r1 profile (PC's routing) is byte-identical on both builds and to what R1H's and R3R's PC cells ran
+  surface files that differ OLD -> NEW (the build's init; the setups' edits are the same): config.toml, policy.toml, tools.toml
+  tools.toml OLD -> NEW:
+    - description = "Run a sub-turn under another role, with its own context. It gets that role's tools."
+    + description = "Run a sub-turn under another role, with its own context and that role's tools. Delegate a job once: give the complete plan and everything it needs, including the check that shows it is done. Delegate again only when its report shows a concrete failure; a report whose check passed is finished work, so do not send it back to be redone or re-checked."
+
+B. wire: init -> the build's node block -> gnomon task (local through relay-meter-s1)
+
+  OLD PC (entry coordinator): gnomon exit 0; local 2 req, cloud 2 req; models local ["qwen3.6-35b"] cloud ["deepseek-v4.1-flash"]
+    every request: stream [false], max_tokens [null], include_usage [null]; offers task: local 0, cloud 2
+    meter: chat 2, parsed 2, stream 0, max_tokens 0, usage json 2 / timings 0, without usage 0, aborts 0, errors 0
+    log: DELEG ["implementor:1"] surface= ["ab5fd9c21c08"]; turn records 1, last wire null, stop answered
+  ok   gnomon task exited 0
+  ok   each endpoint gets its own model id
+  ok   OLD: every model request is unstreamed with no max_tokens (R1H's wire)
+  ok   OLD: turn records carry no wire block (R1H's records)
+  ok   the local meter parsed every OLD request (stream 0, max_tokens 0) and metered every response
+  ok   no reasoning_content replayed
+  ok   the log carries surface= (the collector's surface pattern)
+  ok   PC: the coordinator's requests go to the cloud (each offers the task tool)
+  ok   PC: the delegated implementor sub-turn goes to the local endpoint (no task tool offered)
+  ok   PC: the log carries the delegation line the collector reads (task implementor — N tool call)
+
+  NEW PC (entry coordinator): gnomon exit 0; local 2 req, cloud 2 req; models local ["qwen3.6-35b"] cloud ["deepseek-v4.1-flash"]
+    every request: stream [true], max_tokens [32768], include_usage [true]; offers task: local 0, cloud 2
+    meter: chat 2, parsed 2, stream 2, max_tokens 2, usage json 2 / timings 0, without usage 0, aborts 0, errors 0
+    log: DELEG ["implementor:1"] surface= ["f861651c9bf5"]; turn records 1, last wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"tools_hash":"7d9229e107b5507ac9fa6b8aadc3308ccd757fef93b0423250d6e0ef72cb7749"}, stop answered
+  ok   gnomon task exited 0
+  ok   each endpoint gets its own model id
+  ok   NEW: every model request is streamed, asks for usage itself and carries max_tokens = 32768 (v0.4.0's wire)
+  ok   NEW: turn records: wire.stream true, wire.max_tokens 32768, no steer_role, no replay_reasoning
+  ok   the local meter parsed every NEW request (streamed, max_tokens) and metered every response
+  ok   no reasoning_content replayed
+  ok   the log carries surface= (the collector's surface pattern)
+  ok   PC: the coordinator's requests go to the cloud (each offers the task tool)
+  ok   PC: the delegated implementor sub-turn goes to the local endpoint (no task tool offered)
+  ok   PC: the log carries the delegation line the collector reads (task implementor — N tool call)
+
+  NEW NEG (entry implementor): gnomon exit 0; local 0 req, cloud 2 req; models local [] cloud ["deepseek-v4.1-flash"]
+    every request: stream [true], max_tokens [32768], include_usage [true]; offers task: local 0, cloud 0
+    meter: chat 0, parsed 0, stream 0, max_tokens 0, usage json 0 / timings 0, without usage 0, aborts 0, errors 0
+    log: DELEG [] surface= ["8a91ea3d11f6"]; turn records 1, last wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"tools_hash":"7e00335dbc3cefad11f1f37c0b8a15bd89afa4fd10dce2d4f9abd414ce85582e"}, stop answered
+  ok   gnomon task exited 0
+  ok   each endpoint gets its own model id
+  ok   NEW: every model request is streamed, asks for usage itself and carries max_tokens = 32768 (v0.4.0's wire)
+  ok   NEW: turn records: wire.stream true, wire.max_tokens 32768, no steer_role, no replay_reasoning
+  ok   no reasoning_content replayed
+  ok   the log carries surface= (the collector's surface pattern)
+  ok   NEG: cloud only (the smoke must flag it misrouted when asserted as L)
+
+wire test: PASS (OLD d59e6c198f91d1469198b0677c008323f82d0345, NEW c511b8105fb2187423d21becbe3b19f8af2b80e5)
