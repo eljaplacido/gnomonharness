@@ -88,6 +88,17 @@ import {
   DIFF_ELIDED,
 } from "./tools.js";
 import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
+import {
+  CallLedger,
+  legBudget,
+  overflowBudget,
+  readUsageDetail,
+  type CallObserver,
+  type ModelCallsMeasured,
+  type ModelCallsRecord,
+  type TokenCalibration,
+  type UsageDetail,
+} from "./mediators.js";
 import { writeTamperRecord, compareWithCheckpoint, writeCheckpoint } from "./record_tamper.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { harnessBuild } from "./build.js";
@@ -252,6 +263,12 @@ export interface PromptState {
    * session. Paid once per session, as above. See steerAsUser.
    */
   steerRoleAdapted?: Set<string>;
+  /**
+   * Provider prompt tokens against gnomon's estimate, per endpoint+model, as
+   * the session has measured them. Kept and read only under `[context]
+   * token_estimate = "calibrated"`, which sizes the turn's trims by it.
+   */
+  tokenCalibration?: TokenCalibration;
   /**
    * The session checklist, as the `todo` tool last left it.
    *
@@ -998,7 +1015,9 @@ export async function callEndpointWithRetry(
   say: ((line: string) => void) | undefined,
   ui: ResolvedUi | undefined,
   signal?: AbortSignal,
-  session?: string
+  session?: string,
+  /** Told about every attempt, each one a request of its own (mediators.ts) */
+  observe?: CallObserver
 ): Promise<InferenceResult> {
   const RETRYABLE = new Set([11, 12]);
   let last: InferenceResult | null = null;
@@ -1106,7 +1125,7 @@ export async function callEndpointWithRetry(
     unmetered > 0 ? { ...x, unmeteredCalls: unmetered } : x;
   for (let attempt = 1; attempt <= resilience.attempts; attempt++) {
     const startedAt = Date.now();
-    const r = await callEndpoint(target, messages, tools, deadline, signal, session);
+    const r = await callEndpoint(target, messages, tools, deadline, signal, session, observe);
     // Only the wait for the first byte is charged to the budget. The budget
     // bounds how long an endpoint may leave a request unanswered; a streamed
     // reply that is arriving is answered. Charging its whole length meant a
@@ -1394,7 +1413,12 @@ export async function callEndpoint(
   timeoutMs: number,
   signal?: AbortSignal,
   /** The conversation this call belongs to -- `state.sessionId`. */
-  session?: string
+  session?: string,
+  /**
+   * Told what the request carried and what came back (mediators.ts), after
+   * the call. It reads the messages and the result and changes neither.
+   */
+  observe?: CallObserver
 ): Promise<InferenceResult> {
   const started = Date.now();
   const trace: CallTrace = {};
@@ -1404,6 +1428,24 @@ export async function callEndpoint(
   // rather than guessed: a benchmark reading the token totals needs to know
   // they are a floor.
   if (trace.reached && !r.usage) r.unmeteredCalls = 1;
+  if (observe) {
+    try {
+      observe({
+        target,
+        messages,
+        bodyEst: trace.bodyEst,
+        code: r.code,
+        ms: Date.now() - started,
+        firstByteMs: r.firstByteMs,
+        usage: r.usage,
+        detail: trace.detail,
+        reasoningChars: trace.reasoningChars,
+        finishReason: r.finishReason,
+      });
+    } catch {
+      // A record that cannot be kept must not cost the call it describes.
+    }
+  }
   return r;
 }
 
@@ -1416,6 +1458,12 @@ interface CallTrace {
    * after the request was sent. A non-2xx reply is a refusal, not a generation.
    */
   reached?: boolean;
+  /** gnomon's estimate of the request body, once one was built and sent */
+  bodyEst?: number;
+  /** Cached and reasoning tokens from the usage report */
+  detail?: UsageDetail;
+  /** Characters of reasoning the reply carried */
+  reasoningChars?: number;
 }
 
 async function callEndpointOnce(
@@ -1616,10 +1664,13 @@ async function callEndpointOnce(
 
   try {
     const dispatcher = modelFetchDispatcher();
+    // The same bytes as before; held so the mediator record can size them.
+    const body = JSON.stringify(payload);
+    trace.bodyEst = estimateTokens(body);
     const res = await fetch(target.url, {
       method: "POST",
       headers,
-      body: JSON.stringify(payload),
+      body,
       signal: controller.signal,
       // No undici timeouts of its own: the clocks above are the only ones.
       ...(dispatcher ? { dispatcher } : {}),
@@ -1744,6 +1795,8 @@ async function callEndpointOnce(
         rearm();
       });
       drained = s.complete;
+      trace.detail = s.usageDetail;
+      trace.reasoningChars = s.reasoning.length;
       if (s.error) {
         // An error sent in place of a chunk: the request was accepted and
         // failed on the way. Read exactly as the same text in a non-2xx body.
@@ -1825,6 +1878,8 @@ async function callEndpointOnce(
     // beside tool_calls as a matter of course, and promoting the reasoning
     // there replayed the model's thinking to it as something it had said.
     const reasoning = message.reasoning_content ?? message.reasoning;
+    trace.detail = readUsageDetail(json);
+    trace.reasoningChars = typeof reasoning === "string" ? reasoning.length : 0;
     const raw: unknown[] = Array.isArray(message.tool_calls)
       ? message.tool_calls
       : [];
@@ -2009,6 +2064,8 @@ export interface StreamedReply {
   toolCalls: Array<{ id?: string; type?: string; name: string; args: string }>;
   finishReason?: string;
   usage?: TokenUsage;
+  /** Cached and reasoning tokens, when the usage chunk carried them */
+  usageDetail?: UsageDetail;
   /** An `error` the server sent in place of a chunk */
   error?: { message: string; status?: number; type?: string };
   /** A finish_reason or [DONE] arrived, so the reply is whole */
@@ -2067,6 +2124,8 @@ export async function readChatStream(
     }
     const usage = readUsage(chunk);
     if (usage && (usage.input !== undefined || usage.output !== undefined)) out.usage = usage;
+    const detail = readUsageDetail(chunk);
+    if (detail) out.usageDetail = detail;
     const choice = chunk?.choices?.[0];
     if (!choice) return;
     const delta = choice.delta ?? choice.message ?? {};
@@ -2929,6 +2988,13 @@ export interface TurnResult {
   /** Counters already computed by the loop and previously thrown away. */
   counters: TurnCounters;
   /**
+   * What came back for each model request: provider tokens, reasoning, the
+   * code and the clock. The requests are `counters.model_calls`. Absent
+   * before any request, and on a delegated sub-turn, whose requests are the
+   * parent's (mediators.ts).
+   */
+  modelCalls?: ModelCallsMeasured;
+  /**
    * Set when `.gnomon/` moved while this turn ran — an approved surface write,
    * or a bash command that touched it. The interactive loop reloads on this.
    *
@@ -3511,6 +3577,13 @@ export interface TurnCounters {
    * failed 9 of 31 calls" from "bash succeeded 31/31 and the answer was still
    * wrong". */
   per_tool: Record<string, { calls: number; refusals: number; apparatus: number }>;
+  /**
+   * Every model request the turn made, as gnomon built it: its estimate, the
+   * replayed reasoning and the steering it carried, and the trim before it;
+   * plus the window, the budget and the trims of the turn. What came back is
+   * `volatile.model_calls`. See docs/CONTRACTS.md §NEW-mediator-record.
+   */
+  model_calls?: ModelCallsRecord;
 }
 
 /**
@@ -3875,7 +3948,9 @@ export async function runAgenticTurn(
   messages: ChatMessage[],
   deps: TurnDeps,
   /** 0 for a turn a person asked for; 1 for one the `task` tool delegated. */
-  depth: number = 0
+  depth: number = 0,
+  /** A delegated sub-turn records its requests in its parent's record. */
+  parentLedger?: CallLedger
 ): Promise<TurnResult> {
   const config = state.config;
 
@@ -4071,7 +4146,8 @@ export async function runAgenticTurn(
             { role: "user" as const, content: instruction },
           ],
           deps,
-          depth + 1
+          depth + 1,
+          ledger
         );
         return {
           content: sub.content,
@@ -4209,6 +4285,28 @@ export async function runAgenticTurn(
     per_tool: {},
   };
 
+  // The per-call mediator record (mediators.ts): what each request carried
+  // and what came back. Told by callEndpoint after each request and read by
+  // nothing here, except under `[context] token_estimate = "calibrated"`,
+  // where the trims below ask it for their budget. A delegated sub-turn adds
+  // its requests to its parent's.
+  const estimateMode = resolveContext(config).token_estimate;
+  const ledger =
+    parentLedger ??
+    new CallLedger({
+      estimate: estimateTokens,
+      windowOf: (t) => resolveContext(config, t).max_context_tokens,
+      target: route.target,
+      mode: estimateMode,
+      calibration: estimateMode === "calibrated" ? (state.tokenCalibration ??= new Map()) : undefined,
+      audit: deps.audit ? (fields) => deps.audit!.write("model_call", fields) : undefined,
+      role,
+    });
+  const observe = ledger.observer({ depth, leg: () => leg });
+  if (depth === 0) counters.model_calls = ledger.sent;
+  const measured = (): ModelCallsMeasured | undefined => (depth === 0 ? ledger.measured() : undefined);
+  const estOf = (ms: ChatMessage[]): number => ms.reduce((n, m) => n + estimateTokens(m.content), 0);
+
   // What the worktree looked like BEFORE this turn. Without it, `tree_delta`
   // reports the whole dirty tree as the turn's doing -- including for a
   // read-only role that only called `read`. One git call, taken once.
@@ -4251,6 +4349,7 @@ export async function runAgenticTurn(
     usage: turnUsage,
     stop_reason: "cancelled",
     counters,
+    modelCalls: measured(),
     surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
     };
   };
@@ -4301,6 +4400,7 @@ export async function runAgenticTurn(
       usage: turnUsage,
       stop_reason: "tamper",
       counters,
+      modelCalls: measured(),
       surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
     };
   };
@@ -4390,7 +4490,8 @@ export async function runAgenticTurn(
       deps.say,
       deps.ui,
       deps.signal,
-      state.sessionId
+      state.sessionId,
+      observe
     );
     turnUsage = addUsage(turnUsage, r.usage);
     countUnmetered(r);
@@ -4411,7 +4512,8 @@ export async function runAgenticTurn(
         deps.say,
         deps.ui,
         deps.signal,
-        state.sessionId
+        state.sessionId,
+        observe
       );
       turnUsage = addUsage(turnUsage, r.usage);
       countUnmetered(r);
@@ -4455,7 +4557,8 @@ export async function runAgenticTurn(
         deps.say,
         deps.ui,
         deps.signal,
-        state.sessionId
+        state.sessionId,
+        observe
       );
       turnUsage = addUsage(turnUsage, r.usage);
       countUnmetered(r);
@@ -4488,7 +4591,7 @@ export async function runAgenticTurn(
         detail: { model: target.model, role },
       });
       deps.progress.start(`${target.model} — without tools`);
-      r = await callEndpoint(target, working, [], modelTimeoutMs(config), deps.signal, state.sessionId);
+      r = await callEndpoint(target, working, [], modelTimeoutMs(config), deps.signal, state.sessionId, observe);
       turnUsage = addUsage(turnUsage, r.usage);
       countUnmetered(r);
     }
@@ -4827,14 +4930,25 @@ export async function runAgenticTurn(
     // progress since the first.
     if (result.code === 13 && steps > overflowTrimmedAt && steps < maxTotal) {
       overflowTrimmedAt = steps;
-      const budget = Math.max(
-        1024,
-        Math.floor(resolveContext(config, usedTarget).max_context_tokens * 0.5)
+      // Half the window of the endpoint answering, at least 1024; divided by
+      // the measured ratio only under token_estimate = "calibrated".
+      const { budget, ratio } = ledger.trimBudget(
+        overflowBudget(resolveContext(config, usedTarget).max_context_tokens),
+        usedTarget
       );
       const trimmed = trimWorking(working, budget);
       if (trimmed.dropped > 0) {
+        const estBefore = estOf(working);
         working.length = 0;
         working.push(...trimmed.messages);
+        ledger.trimmed(working, {
+          why: "overflow",
+          dropped: trimmed.dropped,
+          before: estBefore,
+          after: estOf(working),
+          budget,
+          ...(ratio !== undefined ? { ratio } : {}),
+        });
         say(
           paint(
             deps.ui,
@@ -5099,6 +5213,7 @@ export async function runAgenticTurn(
             ? "truncated"
             : "answered",
         counters,
+        modelCalls: measured(),
         surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
       };
     }
@@ -5214,7 +5329,8 @@ export async function runAgenticTurn(
         [],
         modelTimeoutMs(config),
         deps.signal,
-        state.sessionId
+        state.sessionId,
+        observe
       );
       turnUsage = addUsage(turnUsage, closing.usage);
       countUnmetered(closing);
@@ -5228,7 +5344,8 @@ export async function runAgenticTurn(
           [],
           modelTimeoutMs(config),
           deps.signal,
-          state.sessionId
+          state.sessionId,
+          observe
         );
         turnUsage = addUsage(turnUsage, closing.usage);
         countUnmetered(closing);
@@ -5268,6 +5385,7 @@ export async function runAgenticTurn(
           ? { steps, repeats: loop.stall_repeats }
           : { steps, max_steps_total: maxTotal },
         counters,
+        modelCalls: measured(),
         surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
       };
     }
@@ -5279,16 +5397,26 @@ export async function runAgenticTurn(
       stepsThisLeg = 0;
 
       // The window of the endpoint answering, when it declares one: a cloud
-      // model was trimmed to 60% of a default sized for a local one.
-      const budget = Math.max(
-        1024,
-        Math.floor(resolveContext(config, usedTarget).max_context_tokens * 0.6)
+      // model was trimmed to 60% of a default sized for a local one. Divided
+      // by the measured ratio only under token_estimate = "calibrated".
+      const { budget, ratio } = ledger.trimBudget(
+        legBudget(resolveContext(config, usedTarget).max_context_tokens),
+        usedTarget
       );
       const before = working.length;
       const trimmed = trimWorking(working, budget);
       if (trimmed.dropped > 0) {
+        const estBefore = estOf(working);
         working.length = 0;
         working.push(...trimmed.messages);
+        ledger.trimmed(working, {
+          why: "leg",
+          dropped: trimmed.dropped,
+          before: estBefore,
+          after: estOf(working),
+          budget,
+          ...(ratio !== undefined ? { ratio } : {}),
+        });
         say(
           paint(
             deps.ui,
@@ -5710,7 +5838,7 @@ export async function runAgenticTurn(
           `  [tools] ${callsSinceWrite} call(s) without changing a file — nudging to decide`
         )
       );
-      working.push({
+      working.push(ledger.tag({
         role: "system",
         content:
           `You have run ${callsSinceWrite} tool calls without changing a file. ` +
@@ -5719,7 +5847,7 @@ export async function runAgenticTurn(
           `review -- stop calling tools and answer it. If the task ` +
           `cannot be completed, say so plainly and stop — state what you were ` +
           `unable to do and why. Do not keep investigating without acting.`,
-      });
+      }, "nudge"));
       deps.progress.start(`${usedModel} — ${steps} tool call(s) so far`);
     }
 
@@ -5741,7 +5869,7 @@ export async function runAgenticTurn(
           `  [tools] budget ${steps}/${maxTotal} — urging convergence (${left} call(s) left)`
         )
       );
-      working.push({
+      working.push(ledger.tag({
         role: "system",
         content:
           `You have used ${steps} of ${maxTotal} tool calls — about ${left} ` +
@@ -5749,7 +5877,7 @@ export async function runAgenticTurn(
           `Stop exploring now. Apply and submit what already works. If the task ` +
           `cannot be completed with what you have, say so plainly in your first ` +
           `line, state what blocked it, and stop — do not start new investigation.`,
-      });
+      }, "converge"));
       deps.progress.start(`${usedModel} — ${steps} tool call(s), converging`);
     }
   }
@@ -6007,6 +6135,30 @@ export async function listModels(config: GnomonConfig): Promise<EndpointModels[]
 // ---------------------------------------------------------------------------
 
 /** One task run, as data. Separated so a caller can compare runs. */
+/**
+ * The turn's own window, budget and trims, for the `turn` and `chain_stage`
+ * audit records.
+ *
+ * `context_turns`, `context_dropped` and `context_tokens` beside them describe
+ * the HISTORY a turn was given: earlier turns replayed, earlier turns left
+ * out, and the estimate of the first request. A `gnomon task` run has no
+ * earlier turn, so the first two are 0 by construction -- they read 0 in all
+ * 450 task turn records the 2026-11-04 causal analysis read -- and nothing in
+ * the record said what window the turn ran under or whether it trimmed. These
+ * do. Empty when no request was recorded.
+ */
+export function contextFields(counters: TurnCounters | undefined): Record<string, number | string> {
+  const mc = counters?.model_calls;
+  if (!mc) return {};
+  return {
+    context_window: mc.window,
+    context_budget: mc.budget,
+    context_estimate: mc.estimate,
+    context_trims: mc.trims.leg + mc.trims.overflow,
+    context_trimmed: mc.trims.dropped,
+  };
+}
+
 export interface TaskRecord {
   /** Content hash of .gnomon/ — what determined this behaviour */
   surface_hash: string;
@@ -6108,6 +6260,13 @@ export interface TaskRecord {
     model_ms?: number;
     /** Metered model calls: those whose response reported usage. */
     requests?: number;
+    /**
+     * What came back for each model request: provider tokens (prompt,
+     * cached, completion, reasoning), reasoning characters, code and clock.
+     * The requests themselves are `counters.model_calls`. Absent when no
+     * request went out. docs/CONTRACTS.md §NEW-mediator-record.
+     */
+    model_calls?: ModelCallsMeasured;
   };
 }
 
@@ -6405,6 +6564,7 @@ export async function runTask(
           context_turns: stageMsgs.included,
           context_dropped: stageMsgs.dropped,
           context_tokens: stageMsgs.tokens,
+          ...contextFields(r.counters),
           surface_hash,
         });
         last = r;
@@ -6523,6 +6683,11 @@ export async function runTask(
           context_tokens: built.tokens,
         }
       : {}),
+    // The turn's own window, budget and trims -- with a chain, the last
+    // stage's, as `counters` is. What came back per request is `model_calls`,
+    // beside tokens_in as it is under `volatile` in the --json record.
+    ...contextFields(turn.counters),
+    ...(turn.modelCalls ? { model_calls: turn.modelCalls } : {}),
     surface_hash,
     input: audit.text(input),
     output: audit.text(turn.content),
@@ -6585,6 +6750,9 @@ export async function runTask(
       ...(turn.usage?.output !== undefined ? { tokens_out: turn.usage.output } : {}),
       ...(turn.usage?.ms !== undefined ? { model_ms: turn.usage.ms } : {}),
       ...(turn.usage?.requests !== undefined ? { requests: turn.usage.requests } : {}),
+      // Provider tokens and the clock, per request: the backend's measurement,
+      // like tokens_in. What gnomon sent is counters.model_calls.
+      ...(turn.modelCalls ? { model_calls: turn.modelCalls } : {}),
     },
   };
 }
@@ -8558,6 +8726,11 @@ export async function runSessionTurn(
     // trust. Undefined when the backend reports no usage, because a
     // confident 0 is worse than a blank.
     usage: exchange.usage,
+    // The turn's own window, budget and trims, and what came back per
+    // request; the requests themselves are counters.model_calls. Not kept on
+    // the exchange: the saved session has no reader for it.
+    ...contextFields(exchange.counters),
+    ...(turn.modelCalls ? { model_calls: turn.modelCalls } : {}),
     stop_reason: exchange.stop_reason,
     stop_detail: exchange.stop_detail,
     counters: exchange.counters,

@@ -677,9 +677,19 @@ describe("log-only", () => {
   function normalisedTrail(root: string): unknown[] {
     const dir = join(root, ".gnomon-audit");
     const file = readdirSync(dir).filter((f) => f.endsWith(".jsonl"))[0]!;
-    const drop = new Set(["ts", "hash", "prev", "surface_hash", "duration_ms", "session"]);
+    // The clock, wherever a record carries it: `duration_ms` on the turn, and
+    // per model request `ms` and `first_byte_ms` -- on each `model_call`
+    // record and in the turn record's `model_calls` (§NEW-mediator-record).
+    // What each request SENT (counters.model_calls) is compared.
+    const drop = new Set(["ts", "hash", "prev", "surface_hash", "duration_ms", "session", "ms", "first_byte_ms"]);
+    const unclocked = (m: any) =>
+      m ? { ...m, calls: m.calls.map(({ ms, first_byte_ms, ...c }: any) => c) } : m;
     return readRecords(join(dir, file)).map((r) =>
-      Object.fromEntries(Object.entries(r).filter(([k]) => !drop.has(k)))
+      Object.fromEntries(
+        Object.entries(r)
+          .filter(([k]) => !drop.has(k))
+          .map(([k, v]) => [k, k === "model_calls" ? unclocked(v) : v])
+      )
     );
   }
 

@@ -235,7 +235,21 @@ export interface ContextConfig {
    * both. Defaults to 15% of the budget, at least 1024.
    */
   reserve_output?: number;
+  /**
+   * How a request's tokens are counted for the turn's trims. "chars4", the
+   * default: ~4 characters a token (estimateTokens), the same on every
+   * machine. "calibrated": that estimate times the ratio of the provider's
+   * reported prompt_tokens to it, measured per endpoint and model over the
+   * session's requests so far, so a trim bounds what the provider counts.
+   * Measured: on C2D (2026-11) the provider counted more than the 65,536
+   * window on 85 of 156 requests. docs/CONTRACTS.md §NEW-mediator-record.
+   */
+  token_estimate?: TokenEstimate;
 }
+
+/** `[context] token_estimate` */
+export type TokenEstimate = "chars4" | "calibrated";
+export const TOKEN_ESTIMATES: TokenEstimate[] = ["chars4", "calibrated"];
 
 export type ContextPolicy = "full" | "sliding_window" | "summary";
 export type Compaction = "discard" | "summary" | "truncate";
@@ -1169,6 +1183,8 @@ export interface ResolvedContext {
   compaction: Compaction;
   summary_role: string;
   reserve_output: number;
+  /** "chars4" unless the surface declares "calibrated" */
+  token_estimate: TokenEstimate;
 }
 
 const CONTEXT_POLICIES: ContextPolicy[] = ["full", "sliding_window", "summary"];
@@ -1227,6 +1243,7 @@ export function resolveContext(
       const wanted = Math.max(1024, Math.floor(budget * 0.15));
       return pickInt(ctx.reserve_output, Math.min(wanted, Math.floor(budget * 0.4)));
     })(),
+    token_estimate: pickEnum(ctx.token_estimate, TOKEN_ESTIMATES, "chars4"),
   };
 }
 
@@ -1865,6 +1882,8 @@ const ENUM_KEYS: EnumSpec[] = [
   // resolveExec: anything that is not exactly "docker" resolves to "off".
   { block: "sandbox", key: "exec", values: EXEC_VALUES, falls_back_to: "off" },
   { block: "verify", key: "after", values: ["write", "change", "always"], falls_back_to: "write" },
+  // [context] token_estimate: a misspelt "calibrated" would run as "chars4".
+  { block: "context", key: "token_estimate", values: TOKEN_ESTIMATES, falls_back_to: "chars4" },
 ];
 
 /**
@@ -1887,6 +1906,7 @@ const KEY_OWNER: Record<string, string> = {
   retain_after: "context",
   summary_role: "context",
   reserve_output: "context",
+  token_estimate: "context",
 };
 
 interface BlockOwner {

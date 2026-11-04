@@ -2619,7 +2619,11 @@ describe("runTask — the non-interactive contract", () => {
       const b = await promptLoop.runTask(config, "same input", { role: "smol" });
       const strip = (r: typeof a) => ({ ...r, volatile: undefined });
       expect(strip(a)).toEqual(strip(b));
-      expect(Object.keys(a.volatile)).toEqual(["duration_ms"]);
+      // `model_calls`: what came back per request, with its clock -- which
+      // differs between the two runs, so it is volatile. What each request
+      // carried is counters.model_calls, compared above.
+      expect(Object.keys(a.volatile)).toEqual(["duration_ms", "model_calls"]);
+      expect(a.counters.model_calls!.calls).toEqual(b.counters.model_calls!.calls);
     });
   });
 

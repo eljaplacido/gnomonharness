@@ -19,6 +19,9 @@
 export * from "./config.js";
 export * from "./session.js";
 export * from "./prompt_loop.js";
+// The per-call mediator record: what each model request carried and what came
+// back (docs/CONTRACTS.md §NEW-mediator-record).
+export * from "./mediators.js";
 // The degradation contract: every way this harness carries on with less than
 // it declared, and the record each one writes. Read by
 // `benchmarks/degradation-contract`, which measures the declaration against

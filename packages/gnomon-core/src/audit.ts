@@ -211,6 +211,11 @@ export type AuditKind =
   // operator's own CLI in a second terminal, a concurrent or killed session.
   // A warning, not tampering: gnomon adds trails and never rewrites one.
   | "record_notice"
+  // One per model request a turn made, when [audit] is on: what it carried
+  // (gnomon's estimate, replayed reasoning, steering and its role, the trim
+  // before it) and what came back (provider tokens, reasoning, code, clock).
+  // Metadata only: no prompt or response text. mediators.ts.
+  | "model_call"
   | "session_end";
 
 export interface AuditRecord {

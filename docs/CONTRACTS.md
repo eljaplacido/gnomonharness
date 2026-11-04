@@ -1037,3 +1037,139 @@ trail verifies and it was authorised the way it says.
   session killed after a mid-run checkpoint. Resolving them is a person's
   call.
 - **The walk stops at 200,000 entries**, reported as `truncated`.
+
+## §NEW-mediator-record. Per-call mediator record — `counters.model_calls`, `volatile.model_calls`, audit kind `model_call`, `v: 1`
+
+(Numbered at merge: open pull requests collide on §15.)
+
+**Why.** The causal analysis of 2026-11-04
+(`benchmarks/results/causal-2026-11/REPORT.md`, "where gnomon's own
+instrumentation blocked identification") refused the hosted lane, where the
+timeouts happen, because the mechanisms between a setting and a timeout were in
+none of gnomon's records:
+- the `turn` record's `context_turns` and `context_dropped` read 0 in all 450
+  task turn records. They describe the history a turn is given (earlier turns
+  replayed or left out), and a `gnomon task` run has none. No field said what
+  window the turn ran under, or whether it trimmed;
+- reasoning tokens per call, and whether reasoning was replayed, were not
+  recorded, and the turn record kept `tokens_out` only;
+- whether a steering message (idle nudge, convergence push) was sent, and in
+  which role, was not recorded per call;
+- gnomon's estimate (~4 characters a token) is not what the provider counts:
+  on C2D the provider reported more than the 65,536 window on 85 of 156 calls.
+
+**The requests: `counters.model_calls`.** On every `TaskRecord`, `turn`
+record and interactive exchange, inside `counters` (so a record written while
+the turn runs, such as an incremental record that copies `counters`, carries
+it too). Everything here follows from the messages and
+the surface, so it is outside `volatile`.
+
+| key | value |
+|---|---|
+| `v` | `1` |
+| `count` | requests the turn made: every one that went out, retries and resends included |
+| `window` | the context window the turn's trims are sized against: the endpoint's `max_context_tokens`, else `[defaults]`, else 65,536 |
+| `budget` | what a leg checkpoint trims the working context to: 60% of `window`, at least 1024 |
+| `estimate` | `[context] token_estimate` in force: `chars4` or `calibrated` |
+| `est_max` | the largest request, by `est` |
+| `replayed_calls` | requests that carried replayed reasoning |
+| `steered_calls` | `{nudge, converge, other}`: requests carrying at least one steering message of that kind |
+| `trims` | `{leg, overflow, dropped}`: trims by reason, and the messages they dropped |
+| `first` | `i` of `calls[0]`, present only when older entries were let go |
+| `calls` | the last 512 requests, one entry each (below) |
+
+One entry per request:
+
+| key | value |
+|---|---|
+| `i` | 1-based within the turn |
+| `est` | gnomon's estimate of the messages' text: the number its trims budget against |
+| `est_body` | the same estimate over the whole request body: tool schemas, tool calls, replayed reasoning and JSON included |
+| `replayed` | assistant messages whose reasoning went out as `reasoning_content` (only an OpenAI-shaped endpoint with `replay_reasoning` is sent any) |
+| `steer` | gnomon's own system messages after the leading ones, present in the request, by kind: `nudge` (the idle nudge), `converge` (the convergence push), `other` (a trim's ledger, a failed check, the wrap-up, a context notice) |
+| `via` | `system`, or `user` under `steer_role = "user"`: the role they went out in. Present with `steer` |
+| `trim` | a trim since the request before: `why` (`leg`: the leg checkpoint; `overflow`: the provider refused the request as too long, code 13, and gnomon trimmed to 50% to send it again), `dropped` messages, the working context's estimate `before` and `after`, the `budget` it was trimmed to, and the `ratio` it was divided by under `calibrated` |
+| `leg` | the turn's leg, from 2 on |
+| `depth` | `1` for a request a delegated sub-turn (the `task` tool) made; its requests are its parent's |
+| `window` | this request's window, when its target's differs from the turn's (a fallback) |
+
+Absent keys mean none: no `replayed` is no reasoning replayed, no `steer` is no
+steering present. There is no per-request window check: between two
+checkpoints a request can grow past the window, and `prompt_tokens` against
+`window` below is where that shows.
+
+**What came back: `model_calls`.** Under `volatile` on the `TaskRecord`, as
+`tokens_in` is, because it is the backend's measurement and the clock. As
+`model_calls` beside `counters` on the `turn` audit record. Not on the saved
+interactive exchange, which has no reader for it.
+
+| key | value |
+|---|---|
+| `metered` | requests whose reply reported usage |
+| `prompt_tokens`, `cached_tokens`, `completion_tokens`, `reasoning_tokens` | summed as the provider reported them; absent when none did |
+| `reasoning_chars` | characters of reasoning the replies carried |
+| `prompt_max` | the largest provider `prompt_tokens` |
+| `over_window` | requests whose provider `prompt_tokens` exceeded their window |
+| `ratio` | provider `prompt_tokens` over `est`, summed over the metered requests, to 3 places |
+| `first`, `calls` | as above. Per request: `i`, `code` (0, or the exit-contract code it failed with), `ms`, `first_byte_ms` (streamed), the four token counts, `reasoning_chars`, `finish` |
+
+Cached tokens are read from `prompt_tokens_details.cached_tokens` (OpenAI) or
+`prompt_cache_hit_tokens` (DeepSeek); reasoning tokens from
+`completion_tokens_details.reasoning_tokens`.
+
+**The trail: `model_call`.** When `[audit]` is on, one record per request,
+written as the request ends, joining both halves: `i`, `role`, `model`,
+`endpoint`, `estimate`, the request's keys, `window`, the reply's keys, and
+under `calibrated` the `ratio` in force. Metadata only, whatever `[audit]
+record` says: no prompt, response or reasoning text. A turn's `model_call`
+records are the ones written after the previous `turn` or `chain_stage`
+record.
+
+**The turn's window: `context_*`.** The `turn` and `chain_stage` audit records
+carry, beside `context_turns`, `context_dropped` and `context_tokens` (which
+keep their meaning):
+
+| key | value |
+|---|---|
+| `context_window` | `counters.model_calls.window` |
+| `context_budget` | `counters.model_calls.budget` |
+| `context_estimate` | `chars4` or `calibrated` |
+| `context_trims` | trims made in the turn, both reasons |
+| `context_trimmed` | messages they dropped |
+
+**`[context] token_estimate`** (config.toml, content-hashed with the surface):
+
+| value | behaviour |
+|---|---|
+| `chars4` | the default, and what gnomon always did: ~4 characters a token, the same on every machine |
+| `calibrated` | the trims' budget is divided by the session's running ratio of provider `prompt_tokens` to `est`, per endpoint and model, once one request there reported usage; held within 0.5–4 |
+
+A value outside the two is reported by the surface audit and runs as
+`chars4`; the key under `[defaults]` is reported as read from `[context]`.
+Under `calibrated` a trim follows the provider's counts, so a run's trims are
+as reproducible as the provider's tokenizer. It applies to the trims inside a
+turn (leg and overflow), not to the window between turns.
+
+**What it must not change.** Under the default, nothing the model sees: the
+loop never reads the record back. Checked by hashing the request bodies of
+three scripted runs (streamed with replay, trims, an overflow and the
+wrap-up; steering in the user role; a two-turn session) against the hash
+taken on master before this existed
+(`packages/gnomon-core/src/mediator_record.test.ts`).
+
+**Cost.** Per request: one pass over the messages for the estimate, replay
+and steering counts (string lengths, no copy), and the length of the body
+string `JSON.stringify` already built. Under `[audit]`, one `model_call`
+record. Bounded at 512 entries per list per turn.
+
+**Limits.**
+- `est` and `est_body` are gnomon's estimate, not a tokenizer's count; the
+  provider's are `prompt_tokens`.
+- The compaction call between turns (`compactSession`) is not a turn's
+  request and is not recorded here.
+- With a `[chain]`, the `TaskRecord`'s `model_calls` describe the last stage,
+  as its `counters` do; every stage's requests are in the trail.
+- Whether a provider renders a late system message is still not observable
+  from here: `via: "system"` says what was sent, not what the template kept.
+
+**Fixture:** `conformance/mediator_record.json`.
