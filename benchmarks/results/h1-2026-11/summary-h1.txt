@@ -1,0 +1,25 @@
+H1 summary (2026-11-04, 12:07-14:42Z): gnomon v0.4.0 as released (A) vs + hosted recipe (B: replay_reasoning, 1M window, idle nudge off)
+7 paired P2G tasks (opencode V2 solved all 7 in attempt 1; selection on a peer's outcome). Spend $1.4298 (wire).
+
+task                     A: reward / wall / capped / tests      B: reward / wall / capped / tests
+session-window-debug     1 /  767 s / no  / 7/7                 0 /  437 s / no / 4/7
+fin-saccr-rwa            0 / 1213 s / no  / 19/24               0 /  715 s / no / 20/24
+mvcc-lsm-compaction      1 /  570 s / no  / 15/15               1 /  734 s / no / 15/15
+atrx-vep-crispr          0 / 1838 s / YES / 0/16                0 /  869 s / no / 12/16
+react-lead-form          0 / 1857 s / YES / (no ctrf)           0 /  816 s / no / (no ctrf)
+wal-recovery-ordering    0 /  817 s / no  / 95/97               0 /  673 s / no / 90/97
+html-js-filter           0 / 2010 s / YES / 1/2                 0 /  826 s / no / 1/2
+solved: A 2/7, B 1/7; paired discordant A-only 1, B-only 0, exact McNemar p = 1.0. Capped: A 3/7, B 0/7.
+Hidden tests passed (6 tasks with ctrf): A 137/161, B 142/161. Median wall: A 1213 s, B 734 s.
+
+Mechanism checks (pre-registered): all hold.
+  B: replayed reasoning on 24-79 of 27-80 calls per cell; no late system messages; max prompt 56k-156k (beyond 65,536 in 6/7).
+  A: no replay; idle nudge present in 5/7 cells (20-65 requests); max prompt 20k-82k.
+Mechanism metrics: mean output tokens per call A 1,046-8,184 (median of cells 3,306) vs B 1,013-2,659 (median of cells 1,652).
+
+DECISION (pre-registered rule): B solves 1 vs A 2 -> "B ~ A (within 1)": the solve gap to opencode is not these three
+mechanisms. The recipe does what it was built for -- no timeouts (3 -> 0), about half the output per call and wall time --
+but B ends its turn ("answered") with the work unfinished: equal partial correctness, half the time, 15+ minutes of the cap unused.
+Next (to be pre-registered separately): what makes opencode finish correctly -- verification before ending (gnomon's
+system prompt tells it to stop once it works and not to build checks nobody asked for), time-budget awareness (#93),
+and a concurrent opencode control on the same tasks (attempt 1's 7/7 is outcome-selected and time-separated).
