@@ -29,6 +29,14 @@ import {
 } from "./tools.js";
 
 let root: string;
+/**
+ * The policy rules a tool refuses with. `repo_code` (#136) is published in the
+ * same list but its decision is `ask`, never a refusal (CONTRACTS.md §10): a
+ * call it holds is asked about, and declining it is a declined approval, which
+ * names no rule. So no refusal carries it and no candidate can.
+ */
+const REFUSING_RULES = POLICY_RULES.filter((r) => r !== "repo_code");
+
 const cfg = (): any => ({ gnomonDir: join(root, ".gnomon"), config: { audit: {} } });
 const settings = (): ResolvedAudit => ({
   enabled: true,
@@ -204,6 +212,8 @@ describe("gnomon skill mine", () => {
       maxOutputBytes: 32_000,
     };
     const ctx = (over: Partial<ToolContext> = {}): ToolContext => ({ ...base, ...over });
+    // `git_hooks` guards the hooks and config of a repository that exists.
+    mkdirSync(join(root, ".git", "hooks"), { recursive: true });
     type Case = { tool: string; target: string; pre: { rule?: string; summary: string } | null };
     const refusalOf = (r: { refusal: Precheck } | object) => ("refusal" in r ? (r.refusal as Precheck) : null);
     const cases: Case[] = [
@@ -225,6 +235,8 @@ describe("gnomon skill mine", () => {
       { tool: "edit", target: ".gnomon/roles.toml", pre: refusalOf(writePrecheck("edit", { path: ".gnomon/roles.toml" }, ctx())) },
       { tool: "write", target: "gen/a.ts", pre: refusalOf(writePrecheck("write", { path: "gen/a.ts", content: "" }, ctx({ writeAllow: ["src/**"] }))) },
       { tool: "write", target: ".gnomon-audit/a.jsonl", pre: refusalOf(writePrecheck("write", { path: ".gnomon-audit/a.jsonl", content: "" }, ctx())) },
+      { tool: "write", target: ".git/hooks/pre-commit", pre: refusalOf(writePrecheck("write", { path: ".git/hooks/pre-commit", content: "" }, ctx())) },
+      { tool: "bash", target: "echo x > .git/hooks/pre-commit", pre: bashPrecheck({ command: "echo x > .git/hooks/pre-commit" }, ctx()) },
     ];
     // Two refusals come from executeTool itself rather than a precheck: a tool
     // the role was not given, and arguments that are not one JSON object.
@@ -241,7 +253,7 @@ describe("gnomon skill mine", () => {
       expect(read?.pattern, c.pre!.summary).not.toBe("");
       seen.add(c.pre!.rule!);
     }
-    expect([...seen].sort()).toEqual([...POLICY_RULES].sort());
+    expect([...seen].sort()).toEqual([...REFUSING_RULES].sort());
 
     // The patterns a candidate is counted by, for the forms added in 2026-11.
     const at = (summary: string, tool = "webfetch") => classifyRefusal({ kind: "tool_call", bucket: "refusal", tool, target: "", summary });
@@ -289,9 +301,9 @@ describe("gnomon skill mine", () => {
       readFileSync(join(process.cwd(), "..", "..", "conformance", "skill_candidate.json"), "utf-8")
     );
     expect([...CANDIDATE_SIGNALS]).toEqual(fixture.signals);
-    // The rules a candidate can carry are exactly the policy rules, each read
-    // back by the parity test above.
-    expect([...POLICY_RULES]).toEqual(fixture.rules);
+    // The rules a candidate can carry are exactly the policy rules a tool
+    // refuses with, each read back by the parity test above.
+    expect([...REFUSING_RULES]).toEqual(fixture.rules);
     for (const [i, p] of ["g/a.ts", "g/b.ts", "g/c.ts"].entries()) refusedWrite(new AuditTrail(settings(), `s${i}`), p);
     const [c] = mineCandidates(cfg());
     expect(Object.keys(c).sort()).toEqual([...fixture.keys].sort());

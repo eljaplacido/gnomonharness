@@ -894,7 +894,7 @@ POSIX separators, checkable with `gnomon audit verify`.
 
 | `signal` | When |
 |---|---|
-| `repeated_refusal` | One policy rule refused one role on one pattern in 3 or more distinct sessions (trails). Repeats inside one session do not count towards the 3: they are flailing, which the loop's nudge answers. The rule is the record's `rule` when it has one, otherwise read off the refusal's fixed `summary` form. Every rule a tool refuses with (§10's table, `tools` to `url`) has its forms read, and no other value is: a declined approval and a delegation outside `task_allow` name no published rule and are not counted. |
+| `repeated_refusal` | One policy rule refused one role on one pattern in 3 or more distinct sessions (trails). Repeats inside one session do not count towards the 3: they are flailing, which the loop's nudge answers. The rule is the record's `rule` when it has one, otherwise read off the refusal's fixed `summary` form. Every rule a tool refuses with (§10's table, `tools` to `url`, `git_hooks` included; `repo_code` asks and never refuses) has its forms read, and no other value is: a declined approval and a delegation outside `task_allow` name no published rule and are not counted. |
 
 `id` is `refusal-<rule>-<role>-<hash>`, with rule and role reduced to
 `[a-z0-9_-]`: they come from trail records and must not steer a file name.
