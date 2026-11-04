@@ -122,3 +122,4 @@ with gnomon's own instrument. Arm B exists partly to expose what the in-process 
 
 | time (UTC) | change | before/after reading outcomes | reason |
 |---|---|---|---|
+| 2026-11-04T21:04:35Z | Arm B adapter runs `gnomon task` with `--trust`. The seed-999 smoke run (kept as `raw/smoke/blackbox-seed999-without-trust.json`) showed the reference surface is clamped to the defaults when untrusted (`approval = "never"` and `[verify]` exceed them), so the clean `fix` run could not finish. The in-process arm R never meets that clamp. | before any measured arm-B trial; arm R cards (seeds 1–10) were already written but not read beyond exit codes | apparatus fix found in smoke; the clamp itself is recorded as a finding |
