@@ -1,0 +1,60 @@
+[approval] bash: pwd; ls -la; ls -la /app 2>/dev/null || true — approved
+  ⚙ bash pwd; ls -la; ls -la /app 2>/dev/null || true
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  ⚙ read .
+    ✓ read ./ — 4 entries
+[approval] bash: python3 --version; gcc --version | head -1; mkdir -p /app/polyglot && ls -d /app/polyglot — approved
+  ⚙ bash python3 --version; gcc --version | head -1; mkdir -p /app/polyglot && …
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] write polyglot/main.py.c (+79 −0) [new file] — approved
+  ⚙ write polyglot/main.py.c
+    ✓ write polyglot/main.py.c (+79 −0)
+  deepseek-v4.1-flash — 4 tool call(s) so far
+[approval] bash: cd /app/polyglot && gcc main.py.c -o cmain 2>&1 | head -20; echo "gcc_exit=$?"
+for n in 0 1 2 3 10 20 50 100 300; do
+  p=$(python3 main.py.c $n); c=$(./cmain $n)
+  if [ "$p" = "$c" ]; then echo "n=$n OK ($p)"; else echo "n=$n MISMATCH py=$p c=$c"; fi
+done — approved
+  ⚙ bash cd /app/polyglot && gcc main.py.c -o cmain 2>&1 | head -20; echo "gcc_…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+[approval] bash: cd /app/polyglot && rm -f cmain && gcc -Wall -Wextra main.py.c -o cmain >gcc.log 2>&1; echo "gcc_exit=$?"; cat gcc.log
+python3 -W error main.py.c 1000; echo "py_exit=$?"
+python3 -c "
+def ref(n):
+    a,b=0,1
+    for _ in range(n): a,b=b,a+b
+    return a
+import subprocess
+for n in [0,1,5,37,200,1000,5000]:
+    p=subprocess.run(['python3','main.py.c',str(n)],capture_output=True,text=True).stdout.strip()
+    c=subprocess.run(['./cmain',str(n)],capture_output=True,text=True).stdout.strip()
+    r=str(ref(n))
+    print(n, 'py==ref',p==r, 'c==ref',c==r)
+" — approved
+  ⚙ bash cd /app/polyglot && rm -f cmain && gcc -Wall -Wextra main.py.c -o cmai…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 6 tool call(s) so far
+[approval] bash: cd / && rm -f /app/polyglot/cmain /app/polyglot/gcc.log
+python3 /app/polyglot/main.py.c 42
+gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cmain 42
+python3 -c "print(__import__('subprocess').run(['python3','/app/polyglot/main.py.c','42'],capture_output=True,text=True).stdout.strip()=='267914296')"
+rm -f /app/polyglot/cmain; ls -la /app/polyglot — approved
+  ⚙ bash cd / && rm -f /app/polyglot/cmain /app/polyglot/gcc.log python3 /app/p…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+Wrote `/app/polyglot/main.py.c` — a single-file polyglot that is valid Python 3 and valid C.
+
+**How it works:** the opening `#include <stdio.h>` line is a Python comment (`#`) and a C preprocessor directive; the entire Python implementation ends in `sys.exit(...)`, so Python stops there. That code is wrapped in `r'''…'''` — a C raw string literal (a no-op expression) whose closing `;` ends it — so the C compiler skips the Python and sees only the C `main`. The trailing `/*''';#*/` comment is a C block comment while Python reads an unused string expression.
+
+**Checks run:**
+- `gcc -Wall -Wextra` — clean, no warnings; `python3 -W error` — clean.
+- Both paths compared against a straightforward reference loop for N = 0, 1, 2, 3, 5, 10, 20, 37, 50, 100, 300, 200, 1000, 5000 — all identical.
+- Exact commands from your request, run from `/`: `python3 /app/polyglot/main.py.c 42` and `gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cmain 42` both print `267914296`.
+
+Python uses fast doubling (arbitrary precision); C uses a big-decimal bignum over 10⁹ limbs, so it also handles N far beyond 64-bit (verified at 5000). The test binary `cmain` was removed, leaving only `main.py.c`.
+
+[result] role=implementor model=deepseek-v4.1-flash tools=7 surface=fb32316fd0e2

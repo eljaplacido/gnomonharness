@@ -1,0 +1,412 @@
+  │ I'll look at the repository layout first, then write the polyglot.
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  ⚙ read .
+    ✓ read ./ — 4 entries
+  ⚙ glob 
+    ✓ glob **/*.c — 0 files
+  │ The repo root looks like `/app/polyglot` (it holds the harness dirs and n…
+  deepseek-v4.1-flash — 3 tool call(s) so far
+  ⚙ read .gitattributes
+    ✓ read .gitattributes — 3 lines
+  ⚙ write main.py.c
+    ⚠ write main.py.c — not permitted for this role
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ My role can only write docs/specs; I need a role that can write source. L…
+  deepseek-v4.1-flash — 5 tool call(s) so far
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  deepseek-v4.1-flash — 7 tool call(s) so far
+  ⚙ 3 steps folded · read ×2, glob · .gnomon/roles.toml, .gnomon/policy.toml · nothing changed  /expand
+  │ My role (coordinator) can only write `docs/**`, `specs/**`, `*.md`, so I'…
+[approval] delegate to "implementor" — approved
+[approval] bash: pwd — approved
+  ⚙ bash pwd
+    ✓ bash — exit 0
+  qwen3.6-35b — 1 tool call(s) so far
+[approval] bash: mkdir -p /app/polyglot — approved
+  ⚙ bash mkdir -p /app/polyglot
+    ✓ bash — exit 0
+  qwen3.6-35b — 2 tool call(s) so far
+[approval] write /app/polyglot/main.py.c (+98 −0) [new file] — approved
+  ⚙ write /app/polyglot/main.py.c
+    ✓ write /app/polyglot/main.py.c (+98 −0)
+  qwen3.6-35b — 3 tool call(s) so far
+  │ Now verify the file exists at the repo root and at the requested path:
+[approval] bash: ls -la /app/polyglot/main.py.c — approved
+  ⚙ bash ls -la /app/polyglot/main.py.c
+    ✓ bash — exit 0
+  qwen3.6-35b — 4 tool call(s) so far
+  │ Good — the repo root is `/app` and the file is at `/app/polyglot/main.py.…
+[approval] bash: gcc -O2 -std=c11 -Wall -Wextra /app/polyglot/main.py.c -o /app/polyglot/cmain 2>&1 — approved
+  ⚙ bash gcc -O2 -std=c11 -Wall -Wextra /app/polyglot/main.py.c -o /app/polyglo…
+    ✓ bash — exit 0
+  qwen3.6-35b — 5 tool call(s) so far
+  qwen3.6-35b — 6 tool call(s) so far
+  ⚙ note 
+    ✓ note — gcc compilation succeeded with 2 warnings about missing term
+  │ Compilation succeeded (warnings only, no errors). Now run the full verifi…
+[approval] bash: cd /app/polyglot && for N in 0 1 2 3 10 50 100 300 1000 10000; do
+  py=$(python3 /app/polyglot/main.py.c "$N")
+  c=$(./cmain "$N")
+  ref=$(python3 -c "
+import sys
+n=int(sys.argv[1])
+a,b=0,1
+for _ in range(n):
+    a,b=b,a+b
+print(a)
+" "$N")
+  if [ "$py" = "$c" ] && [ "$c" = "$ref" ]; then
+    echo "N=$N PASS"
+  else
+    echo "N=$N FAIL py=$py c=$c ref=$ref"
+  fi
+done — approved
+  ⚙ bash cd /app/polyglot && for N in 0 1 2 3 10 50 100 300 1000 10000; do py=$…
+    ✓ bash — exit 0
+  qwen3.6-35b — 7 tool call(s) so far
+  │ All 10 values pass. Now verify Python syntax and N=0 output:
+[approval] bash: python3 -c "import ast,sys; ast.parse(open('/app/polyglot/main.py.c').read()); print('No syntax error')" — approved
+  ⚙ bash python3 -c "import ast,sys; ast.parse(open('/app/polyglot/main.py.c').…
+    ✓ bash — exit 0
+  qwen3.6-35b — 8 tool call(s) so far
+[approval] bash: python3 /app/polyglot/main.py.c 0 — approved
+  ⚙ bash python3 /app/polyglot/main.py.c 0
+    ✓ bash — exit 0
+  qwen3.6-35b — 9 tool call(s) so far
+  [loop] the reply was cut off at the output limit (max_tokens = 32768) — asking for the rest
+  ⚙ task 
+    ✓ task implementor — 9 tool call(s)
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  │ Blue reported passing; let me have the verifier confirm independently.
+[approval] delegate to "verifier" — approved
+[approval] bash: cat /app/polyglot/main.py.c — approved
+  ⚙ bash cat /app/polyglot/main.py.c
+    ✓ bash — exit 0
+  qwen3.6-35b — 1 tool call(s) so far
+  ⚙ bash # Check polyglot structure: no /* */ comments, no C casts, #if 0 guard…
+    ⚠ bash — not permitted for this role
+  qwen3.6-35b — 2 tool call(s) so far
+  ⚙ bash grep -n '/\*' /app/polyglot/main.py.c || echo "No /* */ comments found…
+    ⚠ bash — not permitted for this role
+  qwen3.6-35b — 3 tool call(s) so far
+[approval] bash: grep -n '#if 0' /app/polyglot/main.py.c — approved
+  ⚙ bash grep -n '#if 0' /app/polyglot/main.py.c
+    ✓ bash — exit 0
+  qwen3.6-35b — 4 tool call(s) so far
+[approval] bash: grep -n '#endif' /app/polyglot/main.py.c — approved
+  ⚙ bash grep -n '#endif' /app/polyglot/main.py.c
+    ✓ bash — exit 0
+  qwen3.6-35b — 5 tool call(s) so far
+[approval] bash: grep -n '/\*' /app/polyglot/main.py.c — approved
+  ⚙ bash grep -n '/\*' /app/polyglot/main.py.c
+    ✗ bash — exit 1
+  qwen3.6-35b — 6 tool call(s) so far
+[approval] bash: grep -nE '\([a-zA-Z_][a-zA-Z0-9_]*\)\s*\(' /app/polyglot/main.py.c — approved
+  ⚙ bash grep -nE '\([a-zA-Z_][a-zA-Z0-9_]*\)\s*\(' /app/polyglot/main.py.c
+    ✗ bash — exit 1
+  qwen3.6-35b — 7 tool call(s) so far
+  │ Good — no `/* */` comments and no C casts. The file uses `#if 0` / `#endi…
+  ⚙ bash gcc /app/polyglot/main.py.c -o /tmp/verify_cmain
+    ⚠ bash — not permitted for this role
+  qwen3.6-35b — 8 tool call(s) so far
+  │ The bash allow-list is restricted to only `cargo`, `go`, `pytest`, `pnpm`…
+[approval] bash: ls /app/polyglot/ — approved
+  ⚙ bash ls /app/polyglot/
+    ✓ bash — exit 0
+  qwen3.6-35b — 9 tool call(s) so far
+[approval] bash: ls /app/ — approved
+  ⚙ bash ls /app/
+    ✓ bash — exit 0
+  qwen3.6-35b — 10 tool call(s) so far
+[approval] bash: ls /app/polyglot/cmain/ — approved
+  ⚙ bash ls /app/polyglot/cmain/
+    ✗ bash — exit 2
+  qwen3.6-35b — 11 tool call(s) so far
+  ⚙ bash file /app/polyglot/cmain
+    ⚠ bash — not permitted for this role
+  qwen3.6-35b — 12 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  qwen3.6-35b — 12 tool call(s) so far
+  ⚙ bash head -c 4 /app/polyglot/cmain | od -A x -t x1z
+    ⚠ bash — not permitted for this role
+  qwen3.6-35b — 13 tool call(s) so far
+[approval] bash: head -c 4 /app/polyglot/cmain — approved
+  ⚙ bash head -c 4 /app/polyglot/cmain
+    ✓ bash — exit 0
+  qwen3.6-35b — 14 tool call(s) so far
+  │ It's an ELF binary — a pre-compiled C version. Let me run it against the …
+  ⚙ bash /app/polyglot/cmain 0
+    ⚠ bash — not permitted for this role
+  qwen3.6-35b — 15 tool call(s) so far
+  ⚙ bash /app/polyglot/cmain 1
+    ⚠ bash — not permitted for this role
+  qwen3.6-35b — 16 tool call(s) so far
+  ⚙ bash /app/polyglot/cmain 2
+    ⚠ bash — not permitted for this role
+  qwen3.6-35b — 17 tool call(s) so far
+  ⚙ bash /app/polyglot/cmain 3
+    ⚠ bash — not permitted for this role
+  qwen3.6-35b — 18 tool call(s) so far
+  ⚙ bash /app/polyglot/cmain 10
+    ⚠ bash — not permitted for this role
+  qwen3.6-35b — 19 tool call(s) so far
+  ⚙ bash /app/polyglot/cmain 50
+    ⚠ bash — not permitted for this role
+  qwen3.6-35b — 20 tool call(s) so far
+  ⚙ bash /app/polyglot/cmain 100
+    ⚠ bash — not permitted for this role
+  qwen3.6-35b — 21 tool call(s) so far
+  ⚙ bash /app/polyglot/cmain 300
+    ⚠ bash — not permitted for this role
+  qwen3.6-35b — 22 tool call(s) so far
+  ⚙ bash /app/polyglot/cmain 1000
+    ⚠ bash — not permitted for this role
+  qwen3.6-35b — 23 tool call(s) so far
+  [tools] 23/160 calls — continuing (leg 2)
+  qwen3.6-35b — leg 2, 23 call(s) so far
+  │ The allow-list is extremely restrictive — I can't execute arbitrary binar…
+[approval] bash: find /app -name "*.py" -o -name "Makefile" -o -name "*.toml" -o -name "*.cfg" -o -name "*.yaml" -o -name "*.yml" -o -name "*.json" — approved
+  ⚙ bash find /app -name "*.py" -o -name "Makefile" -o -name "*.toml" -o -name …
+    ✓ bash — exit 0
+  qwen3.6-35b — 24 tool call(s) so far
+  [tools] 24 call(s) without changing a file — nudging to decide
+  qwen3.6-35b — 24 tool call(s) so far
+[approval] bash: find /app -name "test_*" -o -name "*_test.*" -o -name "conftest*" — approved
+  ⚙ bash find /app -name "test_*" -o -name "*_test.*" -o -name "conftest*"
+    ✓ bash — exit 0
+  qwen3.6-35b — 25 tool call(s) so far
+[approval] bash: find /app -name "pytest.ini" -o -name "pyproject.toml" -o -name "setup.cfg" -o -name "tox.ini" — approved
+  ⚙ bash find /app -name "pytest.ini" -o -name "pyproject.toml" -o -name "setup…
+    ✓ bash — exit 0
+  qwen3.6-35b — 26 tool call(s) so far
+[approval] bash: find /app -name "Makefile" — approved
+  ⚙ bash find /app -name "Makefile"
+    ✓ bash — exit 0
+  qwen3.6-35b — 27 tool call(s) so far
+[approval] bash: find /app -type f — approved
+  ⚙ bash find /app -type f
+    ✓ bash — exit 0
+  qwen3.6-35b — 28 tool call(s) so far
+  │ There's no test harness, no Makefile, and no pytest configuration. The ba…
+  │ Let me do a thorough static analysis of the polyglot structure and both i…
+  qwen3.6-35b — 29 tool call(s) so far
+  ⚙ read /app/polyglot/main.py.c
+    ✓ read /app/polyglot/main.py.c — 98 lines
+  │ Now let me verify the polyglot mechanism and both implementations' correc…
+  │ **Polyglot structure analysis:**
+  │ 1. **Lines 1-28**: `#if 0` ... `#endif` — C preprocessor skips this block…
+  │ … 19 more line(s) — /think show for all
+[approval] bash: find /app -name "conftest.py" -o -name "test_*.py" -o -name "*_test.py" — approved
+  ⚙ bash find /app -name "conftest.py" -o -name "test_*.py" -o -name "*_test.py…
+    ✓ bash — exit 0
+  qwen3.6-35b — 30 tool call(s) so far
+[approval] bash: find /app -name "Makefile" -o -name "makefile" -o -name "GNUmakefile" — approved
+  ⚙ bash find /app -name "Makefile" -o -name "makefile" -o -name "GNUmakefile"
+    ✓ bash — exit 0
+  qwen3.6-35b — 31 tool call(s) so far
+[approval] bash: find /app -name "*.sh" -o -name "*.bash" — approved
+  ⚙ bash find /app -name "*.sh" -o -name "*.bash"
+    ✓ bash — exit 0
+  qwen3.6-35b — 32 tool call(s) so far
+[approval] bash: find /app -name "*.py" — approved
+  ⚙ bash find /app -name "*.py"
+    ✓ bash — exit 0
+  qwen3.6-35b — 33 tool call(s) so far
+  ⚙ task 
+    ⚠ task verifier — 33 tool call(s)
+  deepseek-v4.1-flash — 9 tool call(s) so far
+  │ The verifier's shell was locked down; let me confirm the artifact myself …
+  deepseek-v4.1-flash — 10 tool call(s) so far
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  ⚙ read main.py.c
+    ✓ read main.py.c — not found
+  ⚙ glob 
+    ✓ glob * — 2 file(s)
+  │ Root isn't `/app/polyglot`, so the file lives outside my readable tree. I…
+[approval] delegate to "implementor" — approved
+  │ I'll start by examining the file and running the requested checks.
+[approval] bash: pwd; ls -l /app/polyglot/main.py.c; wc -l /app/polyglot/main.py.c — approved
+  ⚙ bash pwd; ls -l /app/polyglot/main.py.c; wc -l /app/polyglot/main.py.c
+    ✓ bash — exit 0
+  qwen3.6-35b — 1 tool call(s) so far
+[approval] bash: cat -A /app/polyglot/main.py.c | head -5 — approved
+  ⚙ bash cat -A /app/polyglot/main.py.c | head -5
+    ✓ bash — exit 0
+  qwen3.6-35b — 2 tool call(s) so far
+  │ Good — no `^M` (CRLF) line endings. Now let's compile:
+[approval] bash: gcc -O2 -std=c11 -Wall -Wextra /app/polyglot/main.py.c -o /app/polyglot/cmain 2>&1 — approved
+  ⚙ bash gcc -O2 -std=c11 -Wall -Wextra /app/polyglot/main.py.c -o /app/polyglo…
+    ✓ bash — exit 0
+  qwen3.6-35b — 3 tool call(s) so far
+  │ Compilation succeeded with only harmless warnings. Now let's run the comp…
+[approval] bash: for N in 0 1 2 3 10 50 100 300 1000 10000; do
+ref=$(python3 -c 'import sys
+n=int(sys.argv[1])
+a,b=0,1
+for _ in range(n): a,b=b,a+b
+print(a)' "$N")
+py=$(python3 /app/polyglot/main.py.c "$N")
+c=$(/app/polyglot/cmain "$N")
+py_result="PASS"
+c_result="PASS"
+[ "$py" != "$ref" ] && py_result="FAIL"
+[ "$c" != "$ref" ] && c_result="FAIL"
+echo "N=$N py=$py_result c=$c_result"
+done — approved
+  ⚙ bash for N in 0 1 2 3 10 50 100 300 1000 10000; do ref=$(python3 -c 'import…
+    ✓ bash — exit 0
+  qwen3.6-35b — 4 tool call(s) so far
+  │ All PASS. Now the specific N=0 and N=100 outputs:
+[approval] bash: echo "=== N=0 ==="
+echo "py: $(python3 /app/polyglot/main.py.c 0)"
+echo "c:  $(/app/polyglot/cmain 0)"
+echo "ref:$(python3 -c 'import sys;n=int(sys.argv[1]);a,b=0,1
+for _ in range(n): a,b=b,a+b;print(a)' 0)"
+echo "=== N=100 ==="
+echo "py: $(python3 /app/polyglot/main.py.c 100)"
+echo "c:  $(/app/polyglot/cmain 100)"
+echo "ref:$(python3 -c 'import sys;n=int(sys.argv[1]);a,b=0,1
+for _ in range(n): a,b=b,a+b;print(a)' 100)" — approved
+  ⚙ bash echo "=== N=0 ===" echo "py: $(python3 /app/polyglot/main.py.c 0)" ech…
+    ✓ bash — exit 0
+  qwen3.6-35b — 5 tool call(s) so far
+  │ The reference output for N=100 got printed as a multi-line sequence becau…
+[approval] bash: ref100=$(python3 -c "import sys;n=int(sys.argv[1]);a,b=0,1
+for _ in range(n): a,b=b,a+b
+print(a)" 100)
+echo "ref100=$ref100" — approved
+  ⚙ bash ref100=$(python3 -c "import sys;n=int(sys.argv[1]);a,b=0,1 for _ in ra…
+    ✓ bash — exit 0
+  qwen3.6-35b — 6 tool call(s) so far
+  ⚙ task 
+    ✓ task implementor — 6 tool call(s)
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  │ File works. The only blemish is two gcc warnings from the `r"""`/`"""` de…
+[approval] delegate to "implementor" — approved
+[approval] write /app/polyglot/main.py.c (+3 −2) — approved
+  ⚙ write /app/polyglot/main.py.c
+    ✓ write /app/polyglot/main.py.c (+3 −2)
+  qwen3.6-35b — 1 tool call(s) so far
+  │ Now let me run the three verification steps:
+[approval] bash: python3 -c "import ast;ast.parse(open('/app/polyglot/main.py.c').read())" 2>&1 — approved
+  ⚙ bash python3 -c "import ast;ast.parse(open('/app/polyglot/main.py.c').read(…
+    ✗ bash — exit 1
+  qwen3.6-35b — 2 tool call(s) so far
+[approval] bash: gcc -O2 -std=c11 -Wall -Wextra /app/polyglot/main.py.c -o /app/polyglot/cmain 2>&1 — approved
+  ⚙ bash gcc -O2 -std=c11 -Wall -Wextra /app/polyglot/main.py.c -o /app/polyglo…
+    ✓ bash — exit 0
+  qwen3.6-35b — 3 tool call(s) so far
+  │ Step 2 passes (gcc is silent), but step 1 fails. The closing delimiter `"…
+  │ The task says: "each has four quotes, which gcc lexes as two terminated s…
+  │ For the opening: `r"""` needs 4 quotes → `r""""` — but that's `r` + `""""…
+  │ … 2 more line(s) — /think show for all
+[approval] edit /app/polyglot/main.py.c (+1 −1) — approved
+  ⚙ edit /app/polyglot/main.py.c
+    ✓ edit /app/polyglot/main.py.c (+1 −1)
+  qwen3.6-35b — 4 tool call(s) so far
+[approval] edit /app/polyglot/main.py.c (+1 −1) — approved
+  ⚙ edit /app/polyglot/main.py.c
+    ✓ edit /app/polyglot/main.py.c (+1 −1)
+  qwen3.6-35b — 5 tool call(s) so far
+[approval] bash: python3 -c "import ast;ast.parse(open('/app/polyglot/main.py.c').read())" 2>&1 — approved
+  ⚙ bash python3 -c "import ast;ast.parse(open('/app/polyglot/main.py.c').read(…
+    ✓ bash — exit 0
+  qwen3.6-35b — 6 tool call(s) so far
+[approval] bash: gcc -O2 -std=c11 -Wall -Wextra /app/polyglot/main.py.c -o /app/polyglot/cmain 2>&1 — approved
+  ⚙ bash gcc -O2 -std=c11 -Wall -Wextra /app/polyglot/main.py.c -o /app/polyglo…
+    ✓ bash — exit 0
+  qwen3.6-35b — 7 tool call(s) so far
+  │ Both steps 1 and 2 pass. Now step 3 — the full comparison loop:
+[approval] bash: for N in 0 1 2 3 10 50 100 300 1000 10000; do
+  py=$(python3 /app/polyglot/main.py.c "$N" 2>&1)
+  cx=$( /app/polyglot/cmain "$N" 2>&1)
+  ref=$(python3 -c "
+def fib(n):
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b
+    print(a)
+" 2>&1)
+  if [ "$py" = "$cx" ] && [ "$py" = "$ref" ]; then
+    echo "PASS N=$N: $py"
+  else
+    echo "FAIL N=$N: py=$py cx=$cx ref=$ref"
+  fi
+done — approved
+  ⚙ bash for N in 0 1 2 3 10 50 100 300 1000 10000; do py=$(python3 /app/polygl…
+    ✓ bash — exit 0
+  qwen3.6-35b — 8 tool call(s) so far
+  │ The reference output is empty because the inline python3 -c command has a…
+[approval] bash: for N in 0 1 2 3 10 50 100 300 1000 10000; do
+  py=$(python3 /app/polyglot/main.py.c "$N" 2>&1)
+  cx=$( /app/polyglot/cmain "$N" 2>&1)
+  ref=$(python3 -c "
+def fib(n):
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b
+    print(a)
+" "$N" 2>&1)
+  if [ "$py" = "$cx" ] && [ "$py" = "$ref" ]; then
+    echo "PASS N=$N: $py"
+  else
+    echo "FAIL N=$N: py=$py cx=$cx ref=$ref"
+  fi
+done — approved
+  ⚙ bash for N in 0 1 2 3 10 50 100 300 1000 10000; do py=$(python3 /app/polygl…
+    ✓ bash — exit 0
+  qwen3.6-35b — 9 tool call(s) so far
+  │ The reference is still empty — the multiline python3 -c string isn't gett…
+[approval] bash: for N in 0 1 2 3 10 50 100 300 1000 10000; do
+  py=$(python3 /app/polyglot/main.py.c "$N" 2>&1)
+  cx=$( /app/polyglot/cmain "$N" 2>&1)
+  ref=$(python3 -c "import sys; a,b=0,1; [a,b:=b,a+b for _ in range(int(sys.argv[1]))]; print(a)" "$N" 2>&1)
+  if [ "$py" = "$cx" ] && [ "$py" = "$ref" ]; then
+    echo "PASS N=$N: $py"
+  else
+    echo "FAIL N=$N: py=$py cx=$cx ref=$ref"
+  fi
+done — approved
+  ⚙ bash for N in 0 1 2 3 10 50 100 300 1000 10000; do py=$(python3 /app/polygl…
+    ✓ bash — exit 0
+  qwen3.6-35b — 10 tool call(s) so far
+  │ The walrus operator syntax is wrong. Let me use a simpler reference appro…
+[approval] bash: for N in 0 1 2 3 10 50 100 300 1000 10000; do
+  py=$(python3 /app/polyglot/main.py.c "$N" 2>&1)
+  cx=$( /app/polyglot/cmain "$N" 2>&1)
+  ref=$(python3 -c "exec('a,b=0,1\nfor _ in range(int(\"$N\")):\n a,b=b,a+b\nprint(a)')" 2>&1)
+  if [ "$py" = "$cx" ] && [ "$py" = "$ref" ]; then
+    echo "PASS N=$N: $py"
+  else
+    echo "FAIL N=$N: py=$py cx=$cx ref=$ref"
+  fi
+done — approved
+  ⚙ bash for N in 0 1 2 3 10 50 100 300 1000 10000; do py=$(python3 /app/polygl…
+    ✓ bash — exit 0
+  qwen3.6-35b — 11 tool call(s) so far
+  │ All 10 tests PASS. Let me verify the file matches the exact specification…
+  qwen3.6-35b — 12 tool call(s) so far
+  ⚙ read /app/polyglot/main.py.c
+    ✓ read /app/polyglot/main.py.c — 99 lines
+  ⚙ task 
+    ✓ task implementor — 12 tool call(s)
+  deepseek-v4.1-flash — 13 tool call(s) so far
+Done. The file is at `/app/polyglot/main.py.c`.
+
+**How it works:** two `#if 0` blocks do double duty.
+- Python reads `#if 0` / `#endif` / `#if 0` / `#if 0` as comments, executes the Python `fib`, and the C body sits inside a triple-quoted raw string opened by `""" r"` and closed by `""" # "` — each delimiter line carries an even number of quotes so gcc lexes it as terminated string tokens instead of warning about an unterminated literal.
+- C drops the Python code in the first `#if 0`, drops both delimiter lines in their own `#if 0` blocks, and compiles the rest. No `/* */` comments and no C casts are used anywhere, since either would break the Python parse.
+
+The C side is arbitrary-precision (base-10⁹ limbs with an `unsigned` carry), so it matches Python's bignums far beyond 64-bit — no overflow ceiling.
+
+**Verified:**
+- `python3 -c "import ast;ast.parse(...)"` — no syntax error.
+- `gcc -O2 -std=c11 -Wall -Wextra main.py.c -o cmain` — exit 0, **empty output** (zero warnings).
+- For N ∈ {0, 1, 2, 3, 10, 50, 100, 300, 1000, 10000}, `python3 main.py.c N`, `cmain N`, and an independent `python3 -c` exact-integer reference all agreed — PASS on every N. Spot values: N=0 → `0`, N=100 → `354224848179261915075`.
+
+Note on the path: `/app/polyglot` is not inside my repository root (the repo root is `/app`), so I could not read the file back myself — I verified it through an implementor sub-turn that ran the commands, and all the evidence above is its observed output.
+
+[refusal] role=coordinator model=deepseek-v4.1-flash tools=13 surface=c833e5a9bf75

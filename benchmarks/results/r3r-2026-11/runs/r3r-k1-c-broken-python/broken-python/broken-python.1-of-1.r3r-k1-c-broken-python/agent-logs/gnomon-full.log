@@ -1,0 +1,116 @@
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  ⚙ read .
+    ✓ read ./ — 4 entries
+[approval] bash: which -a python3 python pip pip3 2>&1; python3 -V 2>&1 — approved
+  ⚙ bash which -a python3 python pip pip3 2>&1; python3 -V 2>&1
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  │ The repo itself is empty (only harness files); this is an environment pro…
+[approval] bash: cd /tmp; python3 -m pip --version 2>&1; echo "---"; pip --version 2>&1; echo "--- head of pip"; head -1 /usr/local/bin/pip 2>&1; echo "--- python path"; python3 -c "import sys, site; print(sys.executable); print(sys.prefix); print(sys.base_prefix); print(site.getsitepackages())" 2>&1 — approved
+  ⚙ bash cd /tmp; python3 -m pip --version 2>&1; echo "---"; pip --version 2>&1…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 3 tool call(s) so far
+[approval] bash: ls -la /usr/local/bin/ 2>&1 | head -40; echo "=== lib dirs"; ls /usr/local/lib/ 2>&1; echo "=== site-packages"; ls /usr/local/lib/python3.13/site-packages 2>&1 | head -30 — approved
+  ⚙ bash ls -la /usr/local/bin/ 2>&1 | head -40; echo "=== lib dirs"; ls /usr/l…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  │ `pip`'s dist-info is there but the actual `pip` package directory is miss…
+[approval] bash: cd /tmp; ls -la /usr/local/lib/python3.13/site-packages/ 2>&1; echo "=== RECORD head"; head -5 /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info/RECORD 2>&1; echo "=== ensurepip"; python3 -c "import ensurepip; print(ensurepip._bundled_dir if hasattr(ensurepip,'_bundled_dir') else 'no attr')" 2>&1; ls /usr/local/lib/python3.13/ensurepip/_bundled/ 2>&1; echo "=== 3.11"; ls /usr/local/lib/python3.11/site-packages 2>&1 | head — approved
+  ⚙ bash cd /tmp; ls -la /usr/local/lib/python3.13/site-packages/ 2>&1; echo "=…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 5 tool call(s) so far
+  ⚙ bash cd /tmp; id; echo "=== writable?"; test -w /usr/local/lib/python3.13/s…
+    ⚠ bash — refused (network = false)
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  │ `ensurepip`'s bundled wheel is present, so this is repairable offline. Le…
+[approval] bash: cd /tmp; id; test -w /usr/local/lib/python3.13/site-packages && echo "site-packages WRITABLE" || echo "site-packages NOT writable"; test -w /usr/local/bin && echo "/usr/local/bin WRITABLE" || echo "/usr/local/bin NOT writable"; echo "=== excluded/odd"; ls -a /usr/local/lib/python3.13/site-packages/ — approved
+  ⚙ bash cd /tmp; id; test -w /usr/local/lib/python3.13/site-packages && echo "…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 7 tool call(s) so far
+[approval] bash: cd /tmp; python3 - <<'EOF' 2>&1
+import csv, os
+base='/usr/local/lib/python3.13/site-packages'
+missing=[]; total=0
+with open(os.path.join(base,'pip-24.3.1.dist-info','RECORD')) as f:
+    for row in csv.reader(f):
+        p=row[0]; total+=1
+        full=os.path.normpath(os.path.join(base,p))
+        if not os.path.exists(full): missing.append(p)
+print("entries in RECORD:", total)
+print("present:", total-len(missing))
+print("missing:", len(missing))
+tops=sorted({m.split('/')[0] for m in missing})
+print("missing top-level items:", len(tops), tops[:10])
+print("all missing look like pip/ pkg? ", all(m.startswith('pip/') for m in missing))
+EOF — approved
+  ⚙ bash cd /tmp; python3 - <<'EOF' 2>&1 import csv, os base='/usr/local/lib/py…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  │ Root, writable, and the damage is precisely the 841-file `pip/` package d…
+[approval] bash: cd /tmp; echo "ENSUREPIP_OPTIONS=${ENSUREPIP_OPTIONS:-<unset>}"; python3 -c "import zipfile;z=zipfile.ZipFile('/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl');print('zip ok, entries:',len(z.namelist()));print(z.namelist()[0])" 2>&1 — approved
+  ⚙ bash cd /tmp; echo "ENSUREPIP_OPTIONS=${ENSUREPIP_OPTIONS:-<unset>}"; pytho…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 9 tool call(s) so far
+[approval] bash: cd /tmp; python3 -m ensurepip --upgrade --default-pip 2>&1 | tail -20; echo "exit=$?" — approved
+  ⚙ bash cd /tmp; python3 -m ensurepip --upgrade --default-pip 2>&1 | tail -20;…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 10 tool call(s) so far
+  │ `ensurepip` no-op'd because the stale dist-info still claims pip is insta…
+[approval] bash: cd /tmp; mkdir -p /tmp/pip-damage-backup && mv /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info /tmp/pip-damage-backup/ && echo "moved dist-info aside"; python3 -m ensurepip --upgrade --default-pip >/tmp/ensurepip.log 2>&1; echo "ensurepip exit=$?"; tail -5 /tmp/ensurepip.log — approved
+  ⚙ bash cd /tmp; mkdir -p /tmp/pip-damage-backup && mv /usr/local/lib/python3.…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  │ Now verifying pip actually works and that the earlier missing files are a…
+[approval] bash: cd /tmp; pip --version 2>&1; echo "=== module"; python3 -m pip --version 2>&1; echo "=== install smoke test"; pip install --no-index --dry-run requests six 2>&1 | tail -5 — approved
+  ⚙ bash cd /tmp; pip --version 2>&1; echo "=== module"; python3 -m pip --versi…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 12 tool call(s) so far
+[approval] bash: cd /tmp; python3 - <<'EOF' 2>&1
+import csv, os
+base='/usr/local/lib/python3.13/site-packages'
+missing=[]
+with open(os.path.join(base,'pip-24.3.1.dist-info','RECORD')) as f:
+    for row in csv.reader(f):
+        if not os.path.exists(os.path.normpath(os.path.join(base,row[0]))): missing.append(row[0])
+print("missing per new RECORD:", len(missing), missing[:5])
+EOF
+echo "=== RECORD integrity via pip itself"; pip check 2>&1; echo "pip-check-exit=$?" — approved
+  ⚙ bash cd /tmp; python3 - <<'EOF' 2>&1 import csv, os base='/usr/local/lib/py…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  │ pip resolves and reports healthy. The `--no-index` failure is just no loc…
+[approval] bash: cd /tmp; rm -rf /tmp/insttest; pip install --no-index --target /tmp/insttest /usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl 2>&1 | tail -4; echo "=== does it import + run from target?"; PYTHONPATH=/tmp/insttest python3 -m pip --version 2>&1; ls /tmp/insttest | head -5 — approved
+  ⚙ bash cd /tmp; rm -rf /tmp/insttest; pip install --no-index --target /tmp/in…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 14 tool call(s) so far
+[approval] bash: cd /tmp; echo "=== leftover python3.11"; ls -la /usr/local/lib/python3.11/ 2>&1 | head; echo "=== python3.13 misc"; ls /usr/local/lib/python3.13/ 2>&1; echo "=== venv module"; python3 -c "import venv; print('venv ok')" 2>&1 — approved
+  ⚙ bash cd /tmp; echo "=== leftover python3.11"; ls -la /usr/local/lib/python3…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 15 tool call(s) so far
+  │ pip's own machinery works. One last check: entry points, venv creation, a…
+[approval] bash: cd /tmp; for c in pip pip3 pip3.13; do printf "%-8s " "$c"; $c --version 2>&1; done; echo "=== venv test"; rm -rf /tmp/vt; python3 -m venv /tmp/vt >/tmp/venv.log 2>&1; echo "venv exit=$?"; /tmp/vt/bin/pip --version 2>&1; echo "=== pip config"; python3 -m pip config debug 2>&1 | grep -iE 'env|global|user|site|index' | head -20; echo "=== PIP_ env"; env | grep -i '^PIP' || echo "(no PIP_* env vars)" — approved
+  ⚙ bash cd /tmp; for c in pip pip3 pip3.13; do printf "%-8s " "$c"; $c --versi…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 16 tool call(s) so far
+[approval] bash: rm -rf /tmp/insttest /tmp/vt /tmp/venv.log /tmp/ensurepip.log; ls /tmp/pip-damage-backup/pip-24.3.1.dist-info | head -3; echo "backup kept at /tmp/pip-damage-backup" — approved
+  ⚙ bash rm -rf /tmp/insttest /tmp/vt /tmp/venv.log /tmp/ensurepip.log; ls /tmp…
+    ✓ bash — exit 0
+  deepseek-v4.1-flash — 17 tool call(s) so far
+Fixed. pip works again.
+
+**What was actually wrong:** nothing in the repo or your Python interpreter — the `pip` *package* had been deleted from the system `site-packages`. The interpreter (`/usr/local/bin/python3`, 3.13.1) was fine, and `pip-24.3.1.dist-info/RECORD` was still there listing 852 files, of which **841 were gone** — all of them exactly the contents of `pip/`. `pip` itself was still installed-as-a-marker, so every invocation died on `ModuleNotFoundError: No module named 'pip'`.
+
+That also explains the confusing part: `python3 -m ensurepip --upgrade` refused to help, saying *"Requirement already satisfied: pip ... (24.3.1)"*. Ensurepip trusts the dist-info, and the dist-info was one of the 11 surviving files. That's the trap — the usual repair command silently no-ops on exactly this damage.
+
+**How I repaired it, offline:** the harness has no network, but Python ships `ensurepip`'s bundled wheel at `/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl` (437 entries, intact). I moved the orphaned `pip-24.3.1.dist-info` aside to `/tmp/pip-damage-backup/`, then ran `ensurepip --upgrade --default-pip` so it saw no installed pip and genuinely reinstalled from that wheel.
+
+**Verified:**
+- `pip`, `pip3`, `pip3.13`, and `python3 -m pip` all report `pip 24.3.1` (entry-point scripts were intact; they just had no package to import).
+- All 852 RECORD entries now exist — zero missing — and `pip check` → *No broken requirements found*.
+- Real install exercised, not just `--version`: installed the wheel with `--no-index --target`, and it imported and ran from the target dir. No network needed.
+- `python3 -m venv` creates working envs with their own seeded pip.
+- No `PIP_*` env vars and no pip config file, so nothing else will steer installs.
+
+**Two things you should know:** the damage was a deleted-package-with-surviving-metadata, which is not what a failed `pip uninstall` looks like — something removed that directory directly, so if it recurs, look for whatever has root on that box. And when you do get network back, use a venv for new packages; installing into this system Python as root (which is what you've been doing) is the reason a single bad deletion took out pip with no fallback copy. The old dist-info is preserved at `/tmp/pip-damage-backup` if you want to compare it.
+
+[refusal] role=implementor model=deepseek-v4.1-flash tools=17 surface=fb32316fd0e2

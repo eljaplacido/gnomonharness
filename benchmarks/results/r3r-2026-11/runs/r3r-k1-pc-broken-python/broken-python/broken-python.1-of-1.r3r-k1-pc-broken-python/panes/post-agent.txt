@@ -1,0 +1,59 @@
+root@7b3f3a3f42be:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+root@7b3f3a3f42be:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+ARM_VERSION=be4fc0d8835c443aca8b32ccd4c1caacf48cbdce
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793790716
+root@7b3f3a3f42be:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with
+ pip.'; tmux wait -S done
+R1_ARM=PC R1_ENTRY=coordinator R1_ROUTES=coordinator=cloud,implementor=local,verifier=local,plan=cloud,implement=local,critique=local,smol=local
+  ⚙ bash python3 -c 'import pip; print(pip.__file__, pip.__version__)' 2>&1; ec…
+    ✓ bash — exit 0
+  qwen3.6-35b — 24 tool call(s) so far
+[approval] bash: ls -d /usr/local/lib/python3.13/site-packages/pip /usr/local/lib/python3.13/site-packages/pip-* 2>&1; echo "---EXIT:$?" — approved
+  ⚙ bash ls -d /usr/local/lib/python3.13/site-packages/pip /usr/local/lib/pytho…
+    ✓ bash — exit 0
+  qwen3.6-35b — 25 tool call(s) so far
+[approval] bash: ls -ld /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info 2>&1 — approved
+  ⚙ bash ls -ld /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info 2>…
+    ✓ bash — exit 0
+  qwen3.6-35b — 26 tool call(s) so far
+  │ All four verification checks pass. Now the dry-run test (which needs netw…
+[approval] bash: python3 -m pip install --dry-run --no-input --quiet requests 2>&1; echo "---EXIT:$?" — approved
+  ⚙ bash python3 -m pip install --dry-run --no-input --quiet requests 2>&1; ech…
+    ✓ bash — exit 0
+  qwen3.6-35b — 27 tool call(s) so far
+  │ The dry-run resolved `requests` successfully (exit 0, no errors — only a …
+  qwen3.6-35b — 28 tool call(s) so far
+  ⚙ todo
+    ✓ todo — 4/4 done
+  [tools] 28 call(s) without changing a file — nudging to decide
+  qwen3.6-35b — 28 tool call(s) so far
+  ⚙ task
+    ⚠ task implementor — 28 tool call(s)
+  deepseek-v4.1-flash — 15 tool call(s) so far
+Fixed. Here's what was wrong and what I did.
+
+**Cause.** Your `pip` failure was not a permissions, PEP 668, network, or config problem — it was a corrupt install. `/usr/local/bin/python3` is Python 3.13.1 (
+prefix `/usr/local`), and `/usr/local/lib/python3.13/site-packages` still had `pip-24.3.1.dist-info/` while the actual `pip/` package directory was gone. The `p
+ip`/`pip3` scripts on disk were fine, so every invocation died on `ModuleNotFoundError: No module named 'pip'`. (`python3 -m pip` died the same way, which is wh
+at steers people toward re-downloading get-pip.py or using sudo.) No pip config files, no proxy/SSL env overrides, no pyenv/conda shim, and 171 GB free — all ru
+led out by inspection.
+
+**Repair.** Reinstalled pip from Python's own bundled `ensurepip` wheel (`pip-24.3.1-py3-none-any.whl`) — no network, no apt, no `get-pip.py`. `ensurepip --upgr
+ade` alone refused to act at first: it saw the orphaned `.dist-info` and reported "Requirement already satisfied". Removing that stale directory and re-running
+let ensurepip extract `pip/` properly. Same version, 24.3.1; the old dist-info was replaced and the package code is now actually on disk. The system Python 3.11
+ at `/usr/bin/python3.11` was untouched.
+
+**Verified.**
+- `python3 -m pip --version` → `pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)`
+- `pip --version` and `pip3 --version` → same, so the scripts that were crashing now work
+- `python3 -c 'import pip'` → exit 0
+- `python3 -m pip install --dry-run requests` → resolves cleanly (nothing installed)
+
+**Two things to keep in mind.** Debian's `/usr/lib/python3.11/EXTERNALLY-MANAGED` marker is still in place, so `python3.11 -m pip install` will still be refused
+ by design — use `apt` or a venv for that interpreter. And since `/usr/local/bin/python3` is a hand-built install rather than an externally-managed one, package
+ installs there go straight into `/usr/local/lib/python3.13/site-packages`; for project work a venv is still the cleaner habit. Nothing in this repository was r
+ead for the diagnosis beyond the harness surface, and nothing in it was modified — it holds only `.gnomon/` and no Python code or environment.
+
+[refusal] role=coordinator model=deepseek-v4.1-flash tools=15 surface=34a4546ddc81
+root@7b3f3a3f42be:/app#

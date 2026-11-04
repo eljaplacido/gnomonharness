@@ -1,9 +1,9 @@
 
 == R3R (gnomon v0.4.0 be4fc0d8, R1H's lane and arms)
 arm   N valid pass  rate  95% Wilson    $/solved   cloud tok/solved cached|uncached|output   local tok/solved  wall-med  cell-wall-med  capped  delegating  other states
-L     2     2    2  1.000  [0.34, 1.00]    0.0000           0k|      0k|   0.0k                0.95M        51             76       0           0  {}
-C     1     1    1  1.000  [0.21, 1.00]    0.0051         113k|     12k|   3.5k                0.00M        56             79       0           0  {}
-PC    1     1    1  1.000  [0.21, 1.00]    0.0896        1118k|    222k|  29.9k                2.38M       311            334       0           1  {}
+L    32    29   22  0.759  [0.58, 0.88]    0.0000           0k|      0k|   0.0k                1.62M        75            101       2           0  {'no_model_call': 1, 'apparatus': 2}
+C    32    31   24  0.774  [0.60, 0.89]    0.0408         676k|     37k|  34.9k                0.00M       229            253       7           0  {'apparatus': 1}
+PC   32    31   19  0.613  [0.44, 0.76]    0.0583         510k|     66k|  45.7k                2.72M       391            415      12          28  {'apparatus': 1}
 
 == R1H (gnomon d59e6c19), read-only, the same validity rule: time-separated and a different build
 arm   N valid pass  rate  95% Wilson    $/solved   cloud tok/solved cached|uncached|output   local tok/solved  wall-med  cell-wall-med  capped  delegating  other states
@@ -12,41 +12,41 @@ C    32    32   27  0.844  [0.68, 0.93]    0.0458         827k|     33k|  40.2k 
 PC   32    30   26  0.867  [0.70, 0.95]    0.0341         287k|     42k|  27.5k                1.21M       322            347       8          30  {'apparatus': 2}
 
 PRIMARY (pre-registered): the hybrid's cost saving against C, S = 1 - $/solved(PC) / $/solved(C)
-  R3R PC vs C: S = -1660.2%  95% CI [-1660.2%, -1660.2%]  (10000 task resamples, 2398 skipped, seed 20261103) -> NOT REPRODUCED (point estimate <= 0)
-  R3R PC vs C, (task, attempt) pairs valid in both (sensitivity): S = -1660.2%  95% CI [-1660.2%, -1660.2%]  (10000 task resamples, 2398 skipped, seed 20261103) -> NOT REPRODUCED (point estimate <= 0)
+  R3R PC vs C: S = -42.8%  95% CI [-117.4%, 5.4%]  (10000 task resamples, 0 skipped, seed 20261103) -> NOT REPRODUCED (point estimate <= 0)
+  R3R PC vs C, (task, attempt) pairs valid in both (sensitivity): S = -33.0%  95% CI [-101.4%, 12.5%]  (10000 task resamples, 0 skipped, seed 20261103) -> NOT REPRODUCED (point estimate <= 0)
   R1H PC vs C (the figure being re-tested; same code): S = 25.7%  95% CI [-25.6%, 47.7%]  (10000 task resamples, 0 skipped, seed 20261103) -> direction holds, not shown (CI includes 0)
   paired per cell (sign test, R1H's secondary):
-  R3R/PC c_tok  vs R3R/C: R3R/PC fewer= 0 R3R/C fewer= 1 sign p=1.0000
-  R3R/PC usd    vs R3R/C: R3R/PC fewer= 0 R3R/C fewer= 1 sign p=1.0000
+  R3R/PC c_tok  vs R3R/C: R3R/PC fewer=18 R3R/C fewer=12 sign p=0.3616
+  R3R/PC usd    vs R3R/C: R3R/PC fewer=13 R3R/C fewer=17 sign p=0.5847
 
 QUALITY within R3R (directional; exact McNemar on (task, attempt) pairs valid in both):
-  R3R/PC         vs R3R/C         : pairs=  1  solved  1 vs  1  R3R/PC-only= 0 R3R/C-only= 0  McNemar p=1.0000  capped 0 vs 0
-      pass-rate difference PC - C: +0.0 pts, task-bootstrap 95% CI [+0.0, +0.0] (directional)
-  R3R/PC         vs R3R/L         : pairs=  1  solved  1 vs  1  R3R/PC-only= 0 R3R/L-only= 0  McNemar p=1.0000  capped 0 vs 0
-      pass-rate difference PC - L: +0.0 pts, task-bootstrap 95% CI [+0.0, +0.0] (directional)
-  R3R/C          vs R3R/L         : pairs=  1  solved  1 vs  1  R3R/C-only= 0 R3R/L-only= 0  McNemar p=1.0000  capped 0 vs 0
-      pass-rate difference C - L: +0.0 pts, task-bootstrap 95% CI [+0.0, +0.0] (directional)
+  R3R/PC         vs R3R/C         : pairs= 30  solved 19 vs 23  R3R/PC-only= 2 R3R/C-only= 6  McNemar p=0.2891  capped 11 vs 7
+      pass-rate difference PC - C: -16.1 pts, task-bootstrap 95% CI [-36.4, +1.9] (directional)
+  R3R/PC         vs R3R/L         : pairs= 28  solved 19 vs 21  R3R/PC-only= 2 R3R/L-only= 4  McNemar p=0.6875  capped 11 vs 2
+      pass-rate difference PC - L: -14.6 pts, task-bootstrap 95% CI [-30.4, +0.5] (directional)
+  R3R/C          vs R3R/L         : pairs= 29  solved 24 vs 22  R3R/C-only= 5 R3R/L-only= 3  McNemar p=0.7266  capped 7 vs 2
+      pass-rate difference C - L: +1.6 pts, task-bootstrap 95% CI [-21.7, +24.8] (directional)
 
 R3R vs R1H per arm (descriptive: time-separated, build d59e6c19 -> v0.4.0; exact McNemar on matching (task, attempt)):
-  R3R/L          vs R1H/L         : pairs=  2  solved  2 vs  1  R3R/L-only= 1 R1H/L-only= 0  McNemar p=1.0000  capped 0 vs 0
-      L: $/solved 0.0000 vs 0.0000; cloud out/solved 0.0k vs 0.0k; wall-med 51 vs 71 s; capped 0 vs 2
-  R3R/C          vs R1H/C         : pairs=  1  solved  1 vs  1  R3R/C-only= 0 R1H/C-only= 0  McNemar p=1.0000  capped 0 vs 0
-      C: $/solved 0.0051 vs 0.0458; cloud out/solved 3.5k vs 40.2k; wall-med 56 vs 243 s; capped 0 vs 6
-  R3R/PC         vs R1H/PC        : pairs=  1  solved  1 vs  1  R3R/PC-only= 0 R1H/PC-only= 0  McNemar p=1.0000  capped 0 vs 0
-      PC: $/solved 0.0896 vs 0.0341; cloud out/solved 29.9k vs 27.5k; wall-med 311 vs 322 s; capped 0 vs 8
+  R3R/L          vs R1H/L         : pairs= 29  solved 22 vs 22  R3R/L-only= 2 R1H/L-only= 2  McNemar p=1.0000  capped 2 vs 2
+      L: $/solved 0.0000 vs 0.0000; cloud out/solved 0.0k vs 0.0k; wall-med 75 vs 71 s; capped 2 vs 2
+  R3R/C          vs R1H/C         : pairs= 31  solved 24 vs 26  R3R/C-only= 0 R1H/C-only= 2  McNemar p=0.5000  capped 7 vs 5
+      C: $/solved 0.0408 vs 0.0458; cloud out/solved 34.9k vs 40.2k; wall-med 229 vs 243 s; capped 7 vs 6
+  R3R/PC         vs R1H/PC        : pairs= 29  solved 18 vs 25  R3R/PC-only= 1 R1H/PC-only= 8  McNemar p=0.0391  capped 12 vs 8
+      PC: $/solved 0.0583 vs 0.0341; cloud out/solved 45.7k vs 27.5k; wall-med 391 vs 322 s; capped 12 vs 8
 
 how turns end (last turn record per valid cell):
-  R3R L  : {'answered': 2}
-  R3R C  : {'answered': 1}
-  R3R PC : {'answered': 1}
+  R3R L  : {'answered': 23, 'none': 4, 'truncated': 1, 'stall': 1}
+  R3R C  : {'answered': 23, 'none': 8}
+  R3R PC : {'answered': 19, 'none': 12}
   R1H L  : {'answered': 24, 'stall': 5, 'none': 3}
   R1H C  : {'answered': 25, 'none': 7}
   R1H PC : {'answered': 22, 'none': 8}
 
 checks:
   CHECK buckets sum to n per arm: ok
-  CHECK every valid R3R cell's surface carries stream = true and max_tokens = 32768: ok
+  CHECK every valid R3R cell's surface carries stream = true and max_tokens = 32768: FAIL
   CHECK every local request streamed with max_tokens: ok; every cloud request asked for usage and every cloud response carried it: ok
-  cells with a cloud request still in flight after the settle: 0; gnomon's own unmetered_calls (valid cells): 0; output_limit_adapted: 0; local client_aborts: 0
-  R3R cloud spend (ledger, all cells incl. smoke and aborted): $0.104 (0 aborted-cell entries)
-4 R3R cells; summary in /home/eljaplacido/gnomon-wt/peers/benchmarks/results/r3r-2026-11/runs/r3r-summary.json
+  cells with a cloud request still in flight after the settle: 0; gnomon's own unmetered_calls (valid cells): 0; output_limit_adapted: 0; local client_aborts: 6
+  R3R cloud spend (ledger, all cells incl. smoke and aborted): $2.315 (12 aborted-cell entries)
+96 R3R cells; summary in /home/eljaplacido/gnomon-wt/peers/benchmarks/results/r3r-2026-11/runs/r3r-summary.json
