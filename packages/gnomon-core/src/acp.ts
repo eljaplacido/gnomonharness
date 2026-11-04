@@ -63,6 +63,8 @@ import {
 import { applyCredentials } from "./credentials.js";
 import { AuditTrail, resolveAudit } from "./audit.js";
 import { connectMcp } from "./mcp.js";
+import { settleMcpTools } from "./tools_hash.js";
+import { clampToDefaults } from "./trust.js";
 import { harnessBuild } from "./build.js";
 import { ShadowRecorder } from "./shadow.js";
 import { Progress, splitThinking } from "./render.js";
@@ -397,6 +399,11 @@ interface AcpSession {
   started: string;
   approveRestOfTurn: boolean;
   approveRestOfSession: boolean;
+  /**
+   * Set when an MCP server offered other tools than this machine pinned
+   * (settleMcpTools): the session runs clamped, and a reload stays clamped.
+   */
+  toolsClamped?: boolean;
   controller: AbortController | null;
   toolSeq: number;
   /** The tool call the next permission request is about */
@@ -675,7 +682,17 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
     if (config.tools.mcp_servers && Object.keys(config.tools.mcp_servers).length > 0) {
       state.mcp = await connectMcp(config.tools.mcp_servers, (l) => notes.push(l), s.audit);
     }
-    s.shadow = ShadowRecorder.create(config, { warn: (l) => notes.push(l) });
+    // As at the terminal (GV10): what each server offered against its pin, and
+    // a clamp for the session when one offers something else.
+    const settledTools = settleMcpTools(config, state.mcp, s.audit);
+    if (settledTools.clamp) {
+      state.mcp = undefined;
+      state.config = settledTools.clamp.config;
+      s.toolsClamped = true;
+      s.audit.write("trust", { ...settledTools.clamp.outcome, root });
+      notes.push(settledTools.clamp.notice);
+    }
+    s.shadow = ShadowRecorder.create(state.config, { warn: (l) => notes.push(l) });
     sessions.set(id, s);
     log(`gnomon acp: session ${id} in ${root}`);
 
@@ -758,7 +775,9 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
         surfaceHash: s.surfaceHash,
         shadow: s.shadow,
         persist: () => persist(s),
-        reconfigure: opts.reconfigure,
+        reconfigure: s.toolsClamped
+          ? (fresh: GnomonConfig) => clampToDefaults((opts.reconfigure ?? ((c: GnomonConfig) => c))(fresh))
+          : opts.reconfigure,
         log: (line) => notice(s, line),
         print: (line) => notice(s, line),
         // stdout is the protocol channel, so the progress line goes to stderr.

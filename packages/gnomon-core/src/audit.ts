@@ -211,6 +211,12 @@ export type AuditKind =
   // operator's own CLI in a second terminal, a concurrent or killed session.
   // A warning, not tampering: gnomon adds trails and never rewrites one.
   | "record_notice"
+  // What each connected MCP server offered, hashed, against this machine's
+  // pin for it (tools_hash.ts, trust.ts): first_contact, matched or changed.
+  // Its own kind because it is about the session's tools, not a turn, and a
+  // server whose tools moved between two sessions moved nothing else the
+  // trail carried. Written only when the surface declares a server.
+  | "mcp_tools"
   | "session_end";
 
 export interface AuditRecord {

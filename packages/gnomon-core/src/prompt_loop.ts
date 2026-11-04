@@ -90,6 +90,7 @@ import {
 import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
 import { writeTamperRecord, compareWithCheckpoint, writeCheckpoint } from "./record_tamper.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
+import { settleMcpTools, toolsHash } from "./tools_hash.js";
 import { harnessBuild } from "./build.js";
 import { mapBucket } from "./session.js";
 import {
@@ -111,7 +112,7 @@ import {
 import { recordDegradation } from "./degradation.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
 import { applyCredentials } from "./credentials.js";
-import type { TrustOutcome } from "./trust.js";
+import { clampToDefaults, type TrustOutcome } from "./trust.js";
 import {
   resolveSessionStore,
   saveSession,
@@ -2158,6 +2159,14 @@ export interface WireRecord {
    * (`counters.steer_role_adapted` says which turn learned it).
    */
   steer_role?: "user";
+  /**
+   * sha256 over the canonical JSON of the tool definitions the turn offered,
+   * sorted by name (tools_hash.ts). Not derived from the target, so wireOf
+   * leaves it out and the turn adds it. Built-in schemas live in the build
+   * and an MCP server's in the server: this is the one field that changes
+   * when either does.
+   */
+  tools_hash?: string;
 }
 
 /**
@@ -3966,6 +3975,9 @@ export async function runAgenticTurn(
     toolSet.schemas = toolSet.schemas.filter((t) => t.function.name !== "task");
   }
   const offered = new Set(toolSet.schemas.map((t) => t.function.name));
+  // The definitions this turn offers, hashed for the turn record's `wire`
+  // (tools_hash.ts). Read, never changed: what goes out is toolSet.schemas.
+  const offeredHash = toolsHash(toolSet.schemas);
 
   const policy = config.policy ?? {};
   // One resolver each, shared with `gnomon guard`, so another harness's call
@@ -4244,7 +4256,7 @@ export async function runAgenticTurn(
     model: usedModel,
     endpoint: usedTarget.endpoint,
     endpoint_url: usedTarget.url,
-    wire: wireOf(adaptTarget(state, usedTarget)),
+    wire: { ...wireOf(adaptTarget(state, usedTarget)), tools_hash: offeredHash },
     verify: verifyOutcome,
     toolSteps: steps,
     toolLog,
@@ -5085,7 +5097,7 @@ export async function runAgenticTurn(
         model: usedModel,
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
-        wire: wireOf(adaptTarget(state, usedTarget)),
+        wire: { ...wireOf(adaptTarget(state, usedTarget)), tools_hash: offeredHash },
         ...keepReasoning(result.reasoning),
         verify: verifyOutcome,
         toolSteps: steps,
@@ -5253,7 +5265,7 @@ export async function runAgenticTurn(
         model: usedModel,
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
-        wire: wireOf(adaptTarget(state, usedTarget)),
+        wire: { ...wireOf(adaptTarget(state, usedTarget)), tools_hash: offeredHash },
         verify: verifyOutcome,
         toolSteps: steps,
         toolLog,
@@ -6249,7 +6261,11 @@ export async function runTask(
 
   const state: PromptState = { config, exchanges: [], currentRole: role };
   const ui: ResolvedUi = { ...resolveUi(config), spinner: false, color: false };
-  const route = routeRole(config, role);
+  // `let`, as are `shadow` and `trust` below: an MCP server whose tools
+  // changed since they were pinned clamps the run after its servers connect
+  // (settleMcpTools), and everything read from the declared grants is read
+  // again from the clamped ones.
+  let route = routeRole(config, role);
 
   const active = selectSkills(loadSkills(config), role, input);
   const systemPrompt = buildSystemPrompt(state, role, input);
@@ -6290,7 +6306,7 @@ export async function runTask(
   // The decision-model shadow, when the surface declares one. Log-only: it is
   // told what each turn did and changes none of it (shadow.ts).
   const shadowStart = Date.now();
-  const shadow = ShadowRecorder.create(config, { warn });
+  let shadow = ShadowRecorder.create(config, { warn });
   // `--yes` answers for nobody; without it, nobody answers and the default is no.
   const shadowApprover = options.yes ? "flag" : "default";
 
@@ -6305,6 +6321,7 @@ export async function runTask(
     approvals: options.yes ? "granted" : "refused",
   });
   if (options.trust) audit.write("trust", { ...options.trust, root: resolve(config.gnomonDir, "..") });
+  let trust = options.trust;
 
   // Connect declared MCP servers here too. They were wired only in
   // runPromptLoop, so a surface declaring [mcp_servers] handed its tools to
@@ -6319,6 +6336,23 @@ export async function runTask(
   // MCP server should cost its own tools, not the whole run.
   if (config.tools.mcp_servers && Object.keys(config.tools.mcp_servers).length > 0) {
       state.mcp = await connectMcp(config.tools.mcp_servers, note, auditForTurn, warn);
+  }
+
+  // What each server offered, against this machine's pin for it (GV10). One
+  // offering something other than its pin clamps the run the way an
+  // untrusted surface is clamped headless: every grant back to the scaffold's
+  // value, the servers closed, one line on stderr, a `trust` record saying
+  // `clamped` and which tools moved. Nothing happens without servers.
+  const settledTools = settleMcpTools(config, state.mcp, auditForTurn);
+  if (settledTools.clamp) {
+    state.mcp = undefined;
+    config = settledTools.clamp.config;
+    state.config = config;
+    route = routeRole(config, role);
+    shadow = ShadowRecorder.create(config, { warn });
+    trust = settledTools.clamp.outcome;
+    audit.write("trust", { ...trust, root: resolve(config.gnomonDir, "..") });
+    warn(settledTools.clamp.notice);
   }
 
   // One approval callback for every stage: a chain must not become a way to
@@ -6541,7 +6575,7 @@ export async function runTask(
   return {
     surface_hash,
     harness: harnessBuild(),
-    ...(options.trust ? { trust: options.trust } : {}),
+    ...(trust ? { trust } : {}),
     // Non-fatal surface findings, so a scripted consumer can see what the
     // interactive operator would have been shown. Omitted when clean rather
     // than emitted as an empty array: a field that is always present teaches a
@@ -8681,7 +8715,9 @@ export async function runPromptLoop(
     record: auditSettings.record,
   });
   if (options.trust) audit.write("trust", { ...options.trust, root: resolve(config.gnomonDir, "..") });
-  const reconfigure = options.reconfigure ?? ((fresh: GnomonConfig) => fresh);
+  // `let`: a clamp for changed MCP tools (below) must hold through a
+  // mid-session reload, or the next reload would hand the grants back.
+  let reconfigure = options.reconfigure ?? ((fresh: GnomonConfig) => fresh);
 
   // Connect any declared MCP servers before the first turn, so their tools are
   // in the set the model sees. A server that will not connect is reported and
@@ -8696,6 +8732,21 @@ export async function runPromptLoop(
       (l) => console.log(paint(uiOf(state), "gray", l)),
       audit
     );
+  }
+
+  // What each server offered, against this machine's pin for it (GV10). A
+  // server offering something else clamps the session as a mid-session reload
+  // of an untrusted surface is clamped: every grant back to the scaffold's
+  // value for the rest of the session, reloads included, said and recorded.
+  const settledTools = settleMcpTools(state.config, state.mcp, audit);
+  if (settledTools.clamp) {
+    const clamp = settledTools.clamp;
+    state.mcp = undefined;
+    state.config = clamp.config;
+    const declared = reconfigure;
+    reconfigure = (fresh: GnomonConfig) => clampToDefaults(declared(fresh));
+    audit.write("trust", { ...clamp.outcome, root: resolve(config.gnomonDir, "..") });
+    console.log(paint(uiOf(state), "yellow", `  ${clamp.notice}`));
   }
 
   // Rotating and switching need the loop's id and its persist(), so they are

@@ -54,6 +54,9 @@ export * from "./credentials.js";
 export * from "./loops.js";
 // Workspace trust: whether this machine's user accepted what a surface grants.
 export * from "./trust.js";
+// The tool definitions a model was offered, hashed, and MCP servers' tools
+// against this machine's pins (GV10).
+export * from "./tools_hash.js";
 // `gnomon acp`: the Agent Client Protocol server. A transport for the same
 // session turn the terminal runs (prompt_loop.ts:runSessionTurn), nothing more.
 export * from "./acp.js";

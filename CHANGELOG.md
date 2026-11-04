@@ -26,6 +26,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Tool definitions in the record, and MCP tool pins** (GV10). Every audit
+  `turn` record's `wire` carries `tools_hash`, a sha256 over the canonical JSON
+  of the tool definitions the turn offered. When an MCP server connects, its
+  `tools/list` is hashed and compared with what this machine pinned for that
+  server, in the trust store. The first contact pins it, and a new `mcp_tools`
+  audit record says `first_contact`, `matched` or `changed`. A server offering
+  other tools than its pin, such as a rug pull or an unannounced upgrade, runs
+  the session clamped to the defaults, the way an untrusted surface runs. It is
+  recorded as `trust` `clamped` with `tools_changed`. `gnomon trust grant`
+  accepts a change by clearing the pins, and `gnomon trust` lists them.
+  Nothing sent to the model changes. Contract: CONTRACTS.md §NEW-tools-hash,
+  `conformance/tools_hash.json`.
+
 ## [0.4.0] — 2026-11-03
 
 **Upgrading from 0.3.x.** Run `gnomon migrate` in each project. It applies four
