@@ -1,0 +1,35 @@
+[?2004hroot@6c8a1a51eae1:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@6c8a1a51eae1:/app# clear
+[?2004l[H[J[3J[?2004hroot@6c8a1a51eae1:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@6c8a1a51eae1:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=be4fc0d8835c443aca8b32ccd4c1caacf48cbdce
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793829058
+[?2004hroot@6c8a1a51eae1:/app# bash /opt/gnomon-run.sh 'Create a file called /app/hello.txt. Write "Hello, world!" to it.'; tmux wait -S done
+[?2004lR1_ARM=PC R1_ENTRY=coordinator R1_ROUTES=coordinator=cloud,implementor=local,verifier=local,plan=cloud,implement=local,critique=local,smol=local M2_LOCAL_REPLAY=true
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  ⚙ read .
+    ✓ read ./ — 4 entries
+  ⚙ write hello.txt
+    ⚠ write hello.txt — not permitted for this role
+  deepseek-v4.1-flash — 2 tool call(s) so far
+I could not do this: the write was refused by the harness's path policy.
+
+- Attempted: `write` to `hello.txt` with content `Hello, world!`
+- Result: **refusal** — `"hello.txt" is not a path this role may write. This role may write "docs/**", "specs/**", "*.md".`
+
+Two independent limits block the request, and I have no other route to a filesystem write (no shell tool in this role):
+
+1. **Location** — every path resolves inside the repository root; `/app/hello.txt` is absolute and outside it, so it cannot be addressed at all.
+2. **Extension** — even a repo-relative `hello.txt` is outside the writable set (`docs/**`, `specs/**`, `*.md`), which is what the refusal above reports.
+
+Nothing was created. If the intent can be met inside the allowed surface, say the word and I will write it under a permitted path — but that would not be `/app/hello.txt`, so a role with write access to `/app` is what this actually needs.
+
+[refusal] role=coordinator model=deepseek-v4.1-flash tools=2 surface=b21887234a3d
+[?2004hroot@6c8a1a51eae1:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@6c8a1a51eae1:/app# 
