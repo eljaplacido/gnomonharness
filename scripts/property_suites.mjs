@@ -13,7 +13,8 @@
  *
  *   surface-fidelity      14/14 faithful, 0 false negatives, 0 false positives, 0 unmeasurable,
  *                         and a trial-spec change that flips a verdict and moves the hash
- *   degradation-contract  16/16 complete (14/14 until shadow_unreachable and audit_anchor_queued, 2026-11-03)
+ *   degradation-contract  17/17 complete (14/14 until shadow_unreachable and audit_anchor_queued, 2026-11-03,
+ *                         and context_window_unresolved, 2026-11-04)
  *   fault-disclosure       8/8 disclosed, 0 misnamed
  *   silent-success         0/11 falsely successful, 0 void
  *   determinism           10/10 matched expectation
@@ -107,26 +108,28 @@ const check = (name, r, problems) => {
   check("surface-fidelity 14/14", r, p);
 }
 
-// ── degradation contract: 16/16 complete ──
+// ── degradation contract: 17/17 complete ──
 //
-// 14 until 2026-11-03. The 15th and 16th paths:
+// 14 until 2026-11-03. The 15th, 16th and 17th paths:
 //   `shadow_unreachable`: a declared [shadow] whose server cannot be reached.
 //     It stopped with one stderr line and nothing in the record, and recorded
 //     nothing for three days unnoticed.
 //   `audit_anchor_queued`: a sealed head that could not reach its declared
 //     [audit.anchor] witness stays queued, and the next session announces and
 //     records it.
+//   `context_window_unresolved` (2026-11-04): an endpoint declaring
+//     `max_context_tokens = "auto"` whose listing gave no window.
 {
   const out = join(work, "dc.json");
   const r = run(join(REPO, "benchmarks/degradation-contract"), ["contract.mjs", "--json", out]);
   const p = [];
   if (existsSync(out)) {
     const rows = json(out).rows ?? [];
-    if (rows.length !== 16) p.push(`${rows.length} paths, published 16`);
+    if (rows.length !== 17) p.push(`${rows.length} paths, published 17`);
     const c = count(rows, (x) => x.complete === true);
-    if (c !== 16) p.push(`complete ${c}/16`);
+    if (c !== 17) p.push(`complete ${c}/17`);
   } else p.push("no JSON written");
-  check("degradation-contract 16/16", r, p);
+  check("degradation-contract 17/17", r, p);
 }
 
 // ── fault disclosure: 8/8 ──

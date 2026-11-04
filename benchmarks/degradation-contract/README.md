@@ -1,18 +1,20 @@
 # Is a degradation answerable from the record afterwards? — 2026-09-05
 
-> **Current: 16 declared, 16/16 complete (2026-11-03).** The population has grown with the
-> code since the 12/12 below: the fifteenth is `shadow_unreachable` (`[shadow]`) and the
-> sixteenth `audit_anchor_queued` (`[audit.anchor]`), both probed through `runTask`.
-> `result.json` holds the current run; `scripts/property_suites.mjs` holds it to 16/16 in CI.
+> **Current: 17 declared, 17/17 complete (2026-11-04).** The population has grown with the
+> code since the 12/12 below: the fifteenth is `shadow_unreachable` (`[shadow]`), the
+> sixteenth `audit_anchor_queued` (`[audit.anchor]`), both probed through `runTask`, and
+> the seventeenth `context_window_unresolved` (`max_context_tokens = "auto"`).
+> `result.json` holds the current run; `scripts/property_suites.mjs` holds it to 17/17 in CI.
 
 **12 of 12 declared degradations announced AND recorded**, after fixing five
 defects to get there — three in this apparatus, two in gnomon. Pre-registered in
 `PRE-REGISTRATION.md`; reproduce with `node contract.mjs`. Raw in `result.json`.
 
-> **Now 16 of 16** (2026-11-03). Four paths were declared after the first run:
-> `verify_skipped_shell_only`, `diff_preview_elided`, `shadow_unreachable` and
-> `audit_anchor_queued`. `result.json` holds the current run, and
-> `scripts/property_suites.mjs` holds CI to 16/16. The figures below are the first run's.
+> **Now 17 of 17** (2026-11-04). Five paths were declared after the first run:
+> `verify_skipped_shell_only`, `diff_preview_elided`, `shadow_unreachable`,
+> `audit_anchor_queued` and `context_window_unresolved`. `result.json` holds the
+> current run, and `scripts/property_suites.mjs` holds CI to 17/17. The figures
+> below are the first run's.
 >
 > `shadow_unreachable` was found from outside. Agentcenter's readout showed
 > three days with no decision-shadow records. In every gnomon session the

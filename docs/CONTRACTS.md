@@ -1389,11 +1389,12 @@ existed:
 | `model_output_truncated` | `stop_reason: "truncated"` on the `turn` record |
 | `shadow_unreachable` | a `degradation` record (§7), with `shadow.stopped` on the `turn` and `session_end` records |
 | `audit_anchor_queued` | a `degradation` record in the session that finds the queue, carried on the task record's `degradations` (§21) |
+| `context_window_unresolved` | a `degradation` record, and `max_context_tokens_source: "default"` in the turn's `wire` (§24) |
 
 Adding an id is a contract change. `benchmarks/degradation-contract` reads
 `DEGRADATION_IDS` from the code and injects every id. It fails when an id has
 no probe, when a probe is not announced, or when a probe is not recorded.
-`scripts/property_suites.mjs`, run by `.gnomon/ci.sh`, holds it at 16/16. These
+`scripts/property_suites.mjs`, run by `.gnomon/ci.sh`, holds it at 17/17. These
 ids are not part of `gnomon enumerations` (§3).
 
 **Fixture**: `conformance/degradations.json`. `packages/gnomon-core/src/degradation.test.ts`
@@ -1767,3 +1768,52 @@ backstop.
 verdicts and counts. `packages/gnomon-core/src/orthogonality.test.ts` asserts
 its lists are the fixture's, and puts every route to every target in a fresh
 temporary root.
+
+## 24. Endpoint context window — `wire.max_context_tokens_source`
+
+The window a turn's working context is trimmed to, at a leg checkpoint and
+after an overflow, and where it came from. `[defaults] max_context_tokens`
+(`gnomon init` writes 65536) applies unless the endpoint the turn is routed to
+declares its own in `[endpoints.<name>] max_context_tokens`:
+
+- **a number** is that model's window;
+- **`"auto"`** reads it from the endpoint, once per process for each endpoint
+  URL and model, and caches it. Nothing found means `[defaults]
+  max_context_tokens`, with a note on stderr and a `context_window_unresolved`
+  degradation. A listing that answers 404 is the common case in front of a
+  metering relay, and is one of the tested paths.
+
+The turn record's `wire` carries two keys, both absent for an endpoint that
+declares no window, so a record from a surface that never uses the key is the
+record it was before it existed:
+
+| `max_context_tokens_source` | `max_context_tokens` is |
+|---|---|
+| `declared` | the declared number |
+| `listing:opencode` | `data[id].limit.context` from `GET <base>/models` |
+| `listing:openrouter` | `data[id].context_length`, else `data[id].top_provider.context_length`, from `GET <base>/models` |
+| `listing:vllm` | `data[id].max_model_len` from `GET <base>/models` |
+| `listing:llamacpp` | `default_generation_settings.n_ctx` from `GET <root>/props` |
+| `listing:ollama` | the `num_ctx` line of `parameters`, else `model_info.<arch>.context_length`, from `POST <root>/api/show` |
+| `default` | `[defaults] max_context_tokens`: `"auto"` found nothing |
+
+**What the hash no longer fixes.** A number is part of the surface hash;
+`"auto"` is not a number but a question asked at run time. Two runs under one
+surface hash can trim to different windows if a provider changes its listing
+(Rules 1 and 2: the hash says what was asked, not what was answered). That is
+why the record carries the window and its source, and why a benchmark arm that
+needs the window fixed declares the number.
+
+`<base>` is the chat URL without `/chat/completions`; `<root>` is that without
+a trailing `/v1` for llama.cpp, and the Ollama URL without `/api/chat`. A shape
+names the fields, not the vendor: any server that answers in them is read the
+same way. `id` must equal the model the role names. An OpenAI-shaped endpoint
+is asked for `/models` first and `/props` second, each probe bounded at 5 s.
+llama.cpp's `/v1/models` `meta.n_ctx_train` is not read, because it is the
+length the model was trained to and not the one the server runs.
+
+**Fixture**: `conformance/endpoint_window.json` — one listing body per shape
+and field, the bodies that must give no window, the probe URLs derived from four
+chat URLs, the sources and the degradation id.
+`packages/gnomon-core/src/context_window.test.ts` reads every body through the
+parsers and asserts that this section names the same sources and fields.

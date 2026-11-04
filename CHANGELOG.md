@@ -194,9 +194,9 @@
   `conformance/degradations.json`. `degradation.test.ts` checks the code, the
   fixture and the section against each other. §7 documents the coverage
   object and the new degradation; `conformance/shadow_record.json` pins both.
-- **The degradation suite is 16/16** (was 14/14; this and `audit_anchor_queued`,
-  below). `scripts/property_suites.mjs` holds CI to 16, and EVIDENCE, BENCHMARKS
-  and the suite's README say 16. The
+- **The degradation suite is 17/17** (was 14/14; this, `audit_anchor_queued`
+  and `context_window_unresolved`, below). `scripts/property_suites.mjs` holds
+  CI to 17, and EVIDENCE, BENCHMARKS and the suite's README say 17. The
   `shadow_unreachable` probe drives `runTask` and reads the task record.
 ### Security — release supply chain (CI only; no runtime change)
 
@@ -353,8 +353,8 @@
   heads now.
 - **Degradation `audit_anchor_queued`.** When the witness cannot be reached,
   the heads stay queued. The next session announces it on stderr (`--json`
-  too), records it, and retries. The degradation suite now holds **16/16**
-  (was 14/14; with `shadow_unreachable`, above).
+  too), records it, and retries. The degradation suite now holds **17/17**
+  (was 14/14; with `shadow_unreachable` and `context_window_unresolved`).
 - **Tamper suite with an anchor:**
   `benchmarks/results/auditability-2026-11-03`.
   - **git witness: 9/9.** The attacker also wipes the local anchor state,
@@ -501,6 +501,27 @@
   - **Case variants of `.gnomon/`** are the surface on case-insensitive
     filesystems (macOS by default, Windows), as they already were for the
     records.
+- **An endpoint can read its model's context window from the endpoint:
+  `[endpoints.<name>] max_context_tokens = "auto"`.** This is opt-in, and a
+  surface that does not use it behaves exactly as before. C3, the root cause
+  of P2G's token gap: `[defaults] max_context_tokens = 65536` also governed
+  hosted models with far larger windows, so every leg checkpoint trimmed the
+  working context to about 39k tokens. On P2G (deepseek-v4.1-flash on OpenCode
+  Go, a 1,000,000-token window), 25 of 28 gnomon cells crossed at least one
+  leg. gnomon's median total input was 1.56M against opencode's 6.89M.
+  `"auto"` asks once per session for each endpoint URL and model. It reads the
+  OpenCode, OpenRouter and vLLM `/models` shapes, llama.cpp's `/props` and
+  Ollama's `/api/show`. When nothing answers, as with a metering relay that
+  returns 404 for `/models`, the turn runs on `[defaults]
+  max_context_tokens`. That fallback is said on stderr and recorded as the new
+  `context_window_unresolved` degradation. The turn record's `wire` gains
+  `max_context_tokens_source` (`declared`, `listing:<shape>` or `default`)
+  wherever it already carried `max_context_tokens`. An endpoint that is not on
+  this machine and declares no window now gets a startup note naming the key.
+  `gnomon init` writes the same active configuration as before. Its zen and
+  go blocks gain a commented `# max_context_tokens = "auto"` recommendation.
+  Contract: CONTRACTS.md §24,
+  `conformance/endpoint_window.json`.
 
 ## [0.4.0] — 2026-11-03
 

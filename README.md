@@ -704,6 +704,12 @@ default, so a surface that never mentions endpoints still works. Only the
 credential is machine-scoped, and only **by name**. Naming an endpoint that is
 not declared is an error, not a silent default.
 
+An endpoint may declare its model's context window, `max_context_tokens =
+131072`, or `max_context_tokens = "auto"` to read it from the endpoint's
+model listing once per session ([GUIDE §5.2](docs/GUIDE.md), [CONTRACTS](docs/CONTRACTS.md)).
+Without either, its turns are trimmed to `[defaults] max_context_tokens`, which
+is sized for a local model; a session on a remote endpoint says so at startup.
+
 #### Keys
 
 The surface names the variable and never holds the value — that is what makes

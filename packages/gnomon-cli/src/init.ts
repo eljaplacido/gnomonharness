@@ -190,6 +190,12 @@ url = "https://opencode.ai/zen/v1/chat/completions"
 kind = "openai"
 api_key_env = "OPENCODE_API_KEY"   # the NAME of the variable, never the key
 provider = "opencode"
+# Recommended for a hosted model: its own window. Without the line below, turns
+# here are trimmed to [defaults] max_context_tokens (65536), sized for a local
+# model. "auto" reads the window from this endpoint's /models once per session
+# (limit.context; 1000000 for deepseek-v4.1-flash, 2026-11) and falls back to
+# [defaults] with a note when it cannot. Or write the number itself.
+# max_context_tokens = "auto"
 
 # OpenCode Go — the $10/mo subscription tier (opencode.ai/go). Cloud, keyed.
 # Model ids are BARE — glm-5.3, deepseek-v4-flash, kimi-k3 — with no provider
@@ -204,6 +210,8 @@ url = "https://opencode.ai/zen/go/v1/chat/completions"
 kind = "openai"
 api_key_env = "OPENCODE_API_KEY"
 provider = "opencode"
+# Recommended, as for zen above: the model's own window instead of 65536.
+# max_context_tokens = "auto"
 
 # Cloud templates — commented so they do not show as unavailable until you want
 # one. Uncomment a block, then store its key with:  gnomon key set <name>

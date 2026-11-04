@@ -634,6 +634,38 @@ api_key_env = "DEEPSEEK_API_KEY"
 max_context_tokens = 131072   # the model's window, from the provider's docs
 ```
 
+**The window, read from the endpoint.** `max_context_tokens = "auto"` asks
+the endpoint for the window of the model the role names, once per session for
+each endpoint URL and model, and keeps the answer. It reads, in this order:
+`GET …/models` beside the chat route, for `limit.context` (OpenCode Zen and
+Go), `context_length` or `top_provider.context_length` (OpenRouter) or
+`max_model_len` (vLLM); then llama.cpp's `GET /props`
+(`default_generation_settings.n_ctx`). On an Ollama endpoint it reads
+`POST /api/show`: a Modelfile's `num_ctx`, else the model's
+`<arch>.context_length`. Ollama may run a model with a smaller context than
+that unless `num_ctx` is set, so declare the number for Ollama when it matters.
+The requests go to the chat route's own host, with the same key. When nothing
+answers with a window (a metering relay in front of a provider often returns
+404 for `/models`), the turn runs on `[defaults] max_context_tokens`, the
+trim an endpoint that declares nothing gets. gnomon says so on stderr and
+records a `context_window_unresolved` degradation. The turn record's `wire`
+gives the window as `max_context_tokens` and its origin as
+`max_context_tokens_source`: `declared`, `listing:<shape>` or `default`
+([CONTRACTS.md](CONTRACTS.md)). An endpoint that declares nothing records
+neither key. An endpoint that is not on this machine and declares no window
+gets a startup note naming the key. Nothing else changes for it. `"auto"` is
+answered at run time, so one surface hash can trim to different windows if
+the provider changes its listing. Declare the number where the window must
+stay fixed, as in a benchmark arm.
+
+```toml
+[endpoints.go]
+url = "https://opencode.ai/zen/go/v1/chat/completions"
+kind = "openai"
+api_key_env = "OPENCODE_API_KEY"
+max_context_tokens = "auto"   # 1000000 for deepseek-v4.1-flash, from /models
+```
+
 **Reasoning replay.** `replay_reasoning = true` in an `[endpoints.<name>]`
 block sends each assistant message's reasoning back as `reasoning_content`.
 That covers earlier turns of the session as well as the current one.
@@ -1221,7 +1253,7 @@ gnomon trust revoke     # forget every trust for this project; the next launch a
 
 | File | Holds | Most important keys |
 |---|---|---|
-| `config.toml` | Defaults, endpoints, routing rules, context, turn limits, audit, UI, chain | `[defaults] role_profile`, `[endpoints.NAME]`, `[routing] mode`, `[audit] enabled/record`, `[defaults] max_context_tokens/compaction` |
+| `config.toml` | Defaults, endpoints, routing rules, context, turn limits, audit, UI, chain | `[defaults] role_profile`, `[endpoints.NAME]` (`max_context_tokens = <n>` or `"auto"`), `[routing] mode`, `[audit] enabled/record`, `[defaults] max_context_tokens/compaction` |
 | `roles.toml` | What each role may do | `tools`, `bash_allow`, `bash_deny`, `write_allow`, `task_allow`, `max_steps`, `max_steps_total`, `fallback` |
 | `profiles/NAME.toml` | Per-machine or per-billing routing | `[roles.NAME] model`, `endpoint` |
 | `policy.toml` | Autonomy and checks | `[approval] gate`, `[sandbox] level/network/exec`, `[verify]`, `[check.roles]` |

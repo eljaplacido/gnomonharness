@@ -17,6 +17,9 @@
  */
 
 export * from "./config.js";
+// The endpoint's context window, read from its listing for
+// `max_context_tokens = "auto"` (CONTRACTS.md §24).
+export * from "./context_window.js";
 export * from "./session.js";
 export * from "./prompt_loop.js";
 // Observation masking and the environment bootstrap: opt-in context hygiene,

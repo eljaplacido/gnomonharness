@@ -66,6 +66,8 @@ export const DEGRADATIONS = {
     "the declared [shadow] endpoint could not be reached, so the shadow stopped for the session and recorded no decisions from then on",
   audit_anchor_queued:
     "the declared `[audit.anchor]` witness could not be reached, so sealed trail heads are queued on this machine and not yet anchored off it",
+  context_window_unresolved:
+    "the endpoint declares `max_context_tokens = \"auto\"` and its listing gave no window for the model, so turns are trimmed to `[defaults] max_context_tokens`",
 } as const;
 
 /** The id of a declared degradation path. */
