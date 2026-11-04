@@ -1153,9 +1153,11 @@ turn (leg and overflow), not to the window between turns.
 **What it must not change.** Under the default, nothing the model sees: the
 loop never reads the record back. Checked by hashing the request bodies of
 three scripted runs (streamed with replay, trims, an overflow and the
-wrap-up; steering in the user role; a two-turn session) against the hash
-taken on master before this existed
-(`packages/gnomon-core/src/mediator_record.test.ts`).
+wrap-up; steering in the user role; a two-turn session) against hashes of
+master's own bodies, one per request, taken before this existed
+(`packages/gnomon-core/src/mediator_record.test.ts`). Windows has its own
+capture: its system message carries the platform note, which the trims count,
+so its bodies differ from POSIX's from the first trim on, on master as here.
 
 **Cost.** Per request: one pass over the messages for the estimate, replay
 and steering counts (string lengths, no copy), and the length of the body

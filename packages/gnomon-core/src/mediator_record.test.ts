@@ -12,7 +12,8 @@
  * 85 of 156 calls of one run were over a 65,536 window in provider tokens.
  *
  * Record-only by default. The first test pins the request bodies of three
- * scripted runs to a hash taken on master BEFORE any of this was written, so
+ * scripted runs to hashes taken on master's code (POSIX before any of this was
+ * written; Windows from the same commit, see MASTER), so
  * "nothing the model sees changed" is a measurement, not a claim. Every server
  * here is a fake on 127.0.0.1; nothing reaches a network or a model.
  */
@@ -229,9 +230,9 @@ function normalised(raw: string): string {
 }
 
 /**
- * One hash over every request body of A, B and C, in order. The Windows
- * platform note is cut out of the system message first: it is the one part of
- * a request that is meant to depend on the machine.
+ * One hash over every request body of A, B and C, in order, each with the
+ * Windows platform note cut out: the one part of a request that is meant to
+ * depend on the machine.
  */
 function bodiesHash(groups: Array<[string, string[]]>): string {
   const h = createHash("sha256");
@@ -241,19 +242,38 @@ function bodiesHash(groups: Array<[string, string[]]>): string {
   return h.digest("hex");
 }
 
-/** sha256 of A, B and C's request bodies on master at be4fc0d8 (v0.4.0), taken before this feature existed. */
-const MASTER_BODIES = "ffbe2ef96da6c693a20ff8b140d2dd4ad669538f741ac31a3f3365ab06769847";
-
 /**
- * Each request's own sha256 (first 16 hex), so a mismatch names the request.
- * Taken on this branch on Linux, where the bodies hash to MASTER_BODIES
- * above: they are master's bodies, one by one.
+ * A, B and C's request bodies on master at be4fc0d8 (v0.4.0), taken before
+ * this feature existed: the sha256 over all of them, and each request's own
+ * (first 16 hex) so a mismatch names the request.
+ *
+ * Two captures, because on Windows the system message carries the platform
+ * note. It is cut out of what is hashed, but the trims still count it as part
+ * of the head they always keep, so from A's 6th request (after the overflow
+ * trim) Windows keeps one tool result fewer -- on master as here. Both were
+ * taken on master's code: POSIX natively (Linux; macOS CI agrees), Windows
+ * with process.platform set to "win32" for the run, which reproduces exactly
+ * the bodies windows-latest CI sends.
  */
-const MASTER_REQUESTS: Record<string, string[]> = {
-  A: ["578883c4f83c1e69", "af3db1c44c8e1d1f", "b8c84d1fa33bff2b", "8a917fca5ed1d2ae", "410204d50d4ec10d", "daef7af67f8b0d77", "3d699aaff82acbf7", "008d7d9f09860ff6", "92ee0720f788cc62", "0ab17ae8faa3487a", "1f518745b94d45ea"],
-  B: ["01905ff4470273e5", "f92ca214d1a84993", "53f155a186b5debd", "9fbfc4a769fb2184", "364016f1de34f494"],
-  C: ["c483304477310109", "e48db92c6c916f5d", "4b42dfb4bdb13dda"],
+const MASTER = {
+  posix: {
+    bodies: "ffbe2ef96da6c693a20ff8b140d2dd4ad669538f741ac31a3f3365ab06769847",
+    requests: {
+      A: ["578883c4f83c1e69", "af3db1c44c8e1d1f", "b8c84d1fa33bff2b", "8a917fca5ed1d2ae", "410204d50d4ec10d", "daef7af67f8b0d77", "3d699aaff82acbf7", "008d7d9f09860ff6", "92ee0720f788cc62", "0ab17ae8faa3487a", "1f518745b94d45ea"],
+      B: ["01905ff4470273e5", "f92ca214d1a84993", "53f155a186b5debd", "9fbfc4a769fb2184", "364016f1de34f494"],
+      C: ["c483304477310109", "e48db92c6c916f5d", "4b42dfb4bdb13dda"],
+    } as Record<string, string[]>,
+  },
+  win32: {
+    bodies: "5111848c6c8d6fee4ea5783c072038feb6c901d71efef781acf9b548e202279d",
+    requests: {
+      A: ["578883c4f83c1e69", "af3db1c44c8e1d1f", "b8c84d1fa33bff2b", "8a917fca5ed1d2ae", "410204d50d4ec10d", "a018e062e97229dd", "7b836304c651de63", "6c47a489c970fc64", "9211878717e348da", "ed6390a5dfab6556", "c6503c682c702768"],
+      B: ["01905ff4470273e5", "f92ca214d1a84993", "53f155a186b5debd", "9fbfc4a769fb2184", "364016f1de34f494"],
+      C: ["c483304477310109", "e48db92c6c916f5d", "4b42dfb4bdb13dda"],
+    } as Record<string, string[]>,
+  },
 };
+const master = process.platform === "win32" ? MASTER.win32 : MASTER.posix;
 
 /** Which requests differ from master's, with the first one's body, for the failure message. */
 function differing(groups: Array<[string, string[]]>): string {
@@ -262,7 +282,7 @@ function differing(groups: Array<[string, string[]]>): string {
   for (const [name, raws] of groups) {
     raws.forEach((raw, i) => {
       const h = createHash("sha256").update(normalised(raw)).digest("hex").slice(0, 16);
-      if (h === MASTER_REQUESTS[name]?.[i]) return;
+      if (h === master.requests[name]?.[i]) return;
       out.push(`${name}#${i + 1}`);
       first ||= `${name}#${i + 1} as sent here:\n${normalised(raw)}`;
     });
@@ -281,7 +301,7 @@ describe("byte-identity with master, default settings", () => {
     expect(c.raws.length).toBe(3);
     const groups: Array<[string, string[]]> = [["A", a.raws], ["B", b.raws], ["C", c.raws]];
     expect(differing(groups)).toBe("");
-    expect(bodiesHash(groups)).toBe(MASTER_BODIES);
+    expect(bodiesHash(groups)).toBe(master.bodies);
   });
 });
 
