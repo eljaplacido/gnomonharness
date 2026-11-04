@@ -16,7 +16,7 @@
  *
  * ── PRE-REGISTRATION ─ written 2026-11-04, before this script read an outcome ──
  *
- * DATA. Terminal-Bench campaigns in the `<name>-2026-11/runs*/` layout:
+ * DATA. Terminal-Bench campaigns in the `<name>-2026-11/runs[-...]/` layout:
  * `runs/<cell>/<task>/<trial>/agent-logs/audit/task-*.jsonl`, with the trial's
  * `results.json` (is_resolved, failure_mode) beside `agent-logs/`. Only the
  * measured run directories `runs/` and `runs-a3/` count; `runs-smoke*`,
