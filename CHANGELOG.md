@@ -219,6 +219,61 @@
 - **OpenSSF Scorecard** workflow, results to code scanning.
 - **SECURITY.md**: coordinated vulnerability disclosure with targets,
   advisories and CVEs through GitHub, supported versions, and a CRA mapping.
+- **Context hygiene, opt-in: observation masking and the environment
+  bootstrap** (state-of-the-art report items CX1 and CX2, rung 3 of its
+  adoption ladder). Neither key is in the scaffold. A surface without them
+  behaves exactly as before. A new test pins the digest of every request body
+  of a scripted turn (leg trims, nudges, the wrap-up) taken on `be4fc0d8`, and
+  the keys-absent turn reproduces it. The surface-fidelity, degradation and
+  determinism figures do not move. Declaring either key moves the surface
+  hash, by design.
+  - `[context.mask_observations]` (`keep_last`, `at_fill`, `batch`) replaces
+    older tool results with one-line placeholders. Each placeholder gives the
+    tool, the call, a digest of its arguments, how it ended, the byte count
+    and any spill path. It masks **in batches**: only once the turn's context
+    passes `at_fill` of the window, and only when at least `batch` results can
+    go at once. Between batches every request extends the previous one byte
+    for byte, so the server's prompt cache holds; Qwen3.5/3.6 under llama.cpp
+    cannot cut a cached prefix back. A test drives a real turn and checks that
+    property request by request. It never masks the system prompt, any user
+    message, gnomon's own messages (a failed `[verify]` included), the newest
+    `keep_last` results, a `task` report, or a failure no file change has
+    followed yet. `counters.masking` (`batches`, `observations`,
+    `tokens_saved`) is on every turn record of a surface that declares it,
+    and each batch writes a `context_mask` audit record.
+  - `[context] bootstrap = "<id>"` runs the `[bootstrap.<id>]` block of
+    policy.toml once per session, before the first model call. The block
+    holds one probe list per platform (`linux`, `macos`, `windows`), which
+    gnomon labels, caps and joins into one compound command. The command runs
+    through the ordinary bash tool, under the role's `bash_deny`/`bash_allow`,
+    the sandbox and the audit, as `[verify]` does. Its output, capped at
+    `max_bytes`, is appended to the system prompt. Later turns, chain stages
+    and `task` sub-turns reuse it, so the prompt's first bytes stay the same.
+    `counters.bootstrap` records `outcome` (`ok` / `refused` / `failed` /
+    `unavailable`), `bytes`, `tokens` and `truncated`, and a `bootstrap` audit
+    record carries the command. A declared bootstrap is a workspace-trust
+    grant, like a `[verify]` command that is not the project's own check: it
+    runs unasked, so trust asks about it once, and a clamped surface runs
+    none. docs/GUIDE.md §8 has a reference probe list
+    for all three platforms, and a test runs it on each CI OS. Writing that
+    test found that `cargo --version` under an empty home in this repository
+    starts a toolchain download, so the list turns auto-install off.
+  - The surface audit refuses the misread shapes: `mask_observations = { … }`
+    (an inline table, which the TOML subset reads as a string), unknown keys,
+    out-of-range values, a selected id with no block, and the block in
+    config.toml. It notes a block that is declared but not selected, or that
+    has no probes for this machine.
+  - The record fields, the outcome enumeration and the two audit kinds are
+    published in docs/CONTRACTS.md §19 and `conformance/context_hygiene.json`,
+    and docs.test.ts holds the code, the fixture and the table to one set.
+    `benchmarks/surface-fidelity` fingerprints both resolvers.
+  - `docs/benchmarks/prereg/CX-AB.md` pre-registers the paired A/B that
+    decides whether either becomes a default. It covers four arms (off, mask,
+    boot, both), 16 Terminal-Bench tasks × 3, on the gx10 Qwen3.6 lane and on
+    DeepSeek. The endpoints are input tokens per task and per solved task,
+    cache-hit fraction, re-prefill seconds, not-found errors and calls to the
+    first change, with solve rate as non-inferiority at a 10-point margin.
+    Nothing has run.
 
 ## [0.4.0] — 2026-11-03
 

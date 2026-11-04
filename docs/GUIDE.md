@@ -1274,6 +1274,131 @@ chain measured 48.7% against 56.6% without one, within noise
 [CONTRACTS.md](CONTRACTS.md). Every key, with its rationale:
 [README → The Surface](../README.md#the-surface--gnomon).
 
+### Context hygiene, opt-in: observation masking and the environment bootstrap
+
+Two keys, both off unless declared. Without them a turn sends exactly what
+v0.4.0 sent, byte for byte. Declaring either moves the surface hash, so a run
+that used one is never mistaken for one that did not. Whether they help on
+your lane is not settled yet: `docs/benchmarks/prereg/CX-AB.md` is the
+pre-registered A/B that will measure them.
+
+**Observation masking.** A long turn piles up tool results it no longer reads.
+With this table, older results are replaced by one line each: the tool, the
+call, a digest of its arguments, how it ended, the byte count, and where a
+spilled output was saved. The model can re-run the call to see the output
+again.
+
+```toml
+# config.toml
+[context.mask_observations]
+keep_last = 10        # the newest tool results always stay verbatim
+at_fill = 0.5         # do nothing until the turn's context reaches half the window
+batch = 5             # then mask only when at least 5 results can go at once
+```
+
+- **In batches, never one result per call.** Each batch changes the prompt
+  from the first masked result onwards, and a model server's prompt cache is
+  valid only up to the first changed byte. On Qwen3.5/3.6 under llama.cpp the
+  cache cannot be cut back at all, so every change is a re-prefill. Between
+  batches the request only grows at its end, so the cached prefix holds.
+- **Never masked:** the system prompt, the tool definitions, any user message,
+  anything gnomon wrote itself (a failed `[verify]`, a nudge, a context
+  notice), the newest `keep_last` results, a `task` sub-turn's report, and a
+  failed result while no file has changed since it came back.
+- **Recorded:** `counters.masking` (`batches`, `observations`,
+  `tokens_saved`) on every turn record, and a `context_mask` audit record per
+  batch. `tokens_saved` is an estimate of context removed, not of tokens
+  billed.
+- **Write it as a table.** `mask_observations = { keep_last = 10 }` is an
+  inline table, which gnomon reads as a string, so the surface audit refuses
+  it.
+
+**Environment bootstrap.** At the start of a session, gnomon runs one
+read-only compound command that you declare. It runs through the ordinary
+bash tool, under the role's `bash_deny` and `bash_allow`, the sandbox and the
+audit, as `[verify]` does. Its output goes into the system prompt as an
+environment snapshot, so the model does not spend its first calls finding
+out which `python` exists. You declare one list of probes per platform, and
+gnomon labels and caps each probe and joins them into a single command. This
+is the reference list. Windows runs it in Git Bash:
+
+```toml
+# config.toml
+[context]
+bootstrap = "env"
+```
+
+```toml
+# policy.toml — one read-only snapshot, taken at the start of a session
+[bootstrap.env]
+linux = [
+  'uname -srm; grep "^PRETTY_NAME=" /etc/os-release; echo "shell: $0 (login $SHELL)"',
+  'export GOTOOLCHAIN=local COREPACK_ENABLE_NETWORK=0 RUSTUP_AUTO_INSTALL=0; to=$(command -v timeout >/dev/null && echo "timeout 5"); for t in python3 node go rustc java gcc; do command -v $t >/dev/null || continue; v=$($to $t --version 2>/dev/null </dev/null | head -n 1); test -n "$v" || v=$($to $t version 2>/dev/null </dev/null | head -n 1); echo "$t: ${v:-present, no version output}"; done',
+  'printf "present:"; for t in pip3 uv npm pnpm yarn bun cargo mvn gradle clang make cmake ruby php dotnet apt-get dnf apk pacman docker; do command -v $t >/dev/null && printf " %s" $t; done; echo',
+  'printf "not found:"; for t in python3 python pip3 node npm go cargo rustc java gcc make docker; do command -v $t >/dev/null || printf " %s" $t; done; echo',
+  'pwd; git rev-parse --abbrev-ref HEAD 2>/dev/null; git log -1 --format="%h %s" 2>/dev/null; git status --short 2>/dev/null | head -n 5',
+  'ls -A | head -n 20',
+  'echo "cpus $(nproc)"; grep -E "MemTotal|MemAvailable" /proc/meminfo; df -h . | tail -n 1; echo "open files $(ulimit -n)"',
+  '(ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | head -n 6',
+]
+macos = [
+  'sw_vers; uname -srm; echo "shell: $0 (login $SHELL)"',
+  'export GOTOOLCHAIN=local COREPACK_ENABLE_NETWORK=0 RUSTUP_AUTO_INSTALL=0; to=$(command -v timeout >/dev/null && echo "timeout 5"); for t in python3 node go rustc java clang; do command -v $t >/dev/null || continue; v=$($to $t --version 2>/dev/null </dev/null | head -n 1); test -n "$v" || v=$($to $t version 2>/dev/null </dev/null | head -n 1); echo "$t: ${v:-present, no version output}"; done',
+  'printf "present:"; for t in pip3 uv npm pnpm yarn bun cargo mvn gradle gcc make cmake ruby php dotnet brew docker; do command -v $t >/dev/null && printf " %s" $t; done; echo',
+  'printf "not found:"; for t in python3 python pip3 node npm go cargo rustc java gcc make docker brew; do command -v $t >/dev/null || printf " %s" $t; done; echo',
+  'pwd; git rev-parse --abbrev-ref HEAD 2>/dev/null; git log -1 --format="%h %s" 2>/dev/null; git status --short 2>/dev/null | head -n 5',
+  'ls -A | head -n 20',
+  'echo "cpus $(sysctl -n hw.ncpu) memory $(sysctl -n hw.memsize)"; df -h . | tail -n 1; echo "open files $(ulimit -n)"',
+  'lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | head -n 6',
+]
+windows = [
+  'uname -srm; cmd //c ver; echo "shell: $0 (Git Bash)"',
+  'export GOTOOLCHAIN=local COREPACK_ENABLE_NETWORK=0 RUSTUP_AUTO_INSTALL=0; to=; for t in py python node go rustc java gcc; do command -v $t >/dev/null || continue; v=$($to $t --version 2>/dev/null </dev/null | head -n 1); test -n "$v" || v=$($to $t version 2>/dev/null </dev/null | head -n 1); echo "$t: ${v:-present, no version output}"; done',
+  'printf "present:"; for t in pip uv npm pnpm yarn cargo mvn gradle make cmake dotnet winget choco scoop docker; do command -v $t >/dev/null && printf " %s" $t; done; echo',
+  'printf "not found:"; for t in python python3 py node npm go cargo java gcc make docker; do command -v $t >/dev/null || printf " %s" $t; done; echo',
+  'pwd; git rev-parse --abbrev-ref HEAD 2>/dev/null; git log -1 --format="%h %s" 2>/dev/null; git status --short 2>/dev/null | head -n 5',
+  'ls -A | head -n 20',
+  'echo "cpus $(nproc)"; grep -E "MemTotal|MemFree" /proc/meminfo; df -h . | tail -n 1',
+  'netstat -ano 2>/dev/null | grep LISTENING | head -n 6',
+]
+max_lines = 20        # lines kept from each probe
+max_bytes = 3000      # the snapshot's cap, about 750 tokens on every call
+timeout_ms = 20000
+```
+
+- **Once per session**, on its first turn. Later turns, chain stages and
+  `task` sub-turns reuse the snapshot, and the system prompt keeps the same
+  first bytes from one turn to the next. A session resumed in a new process
+  takes a fresh snapshot.
+- **Read-only means nothing gets installed either.** `--version` can install
+  things: rustup, corepack and `go` each fetch a pinned toolchain on first
+  use. In this repository, with an empty home directory, `cargo --version`
+  started a toolchain download and the bootstrap ran into its 20-second
+  deadline. So the reference list turns that off (`RUSTUP_AUTO_INSTALL=0`,
+  `COREPACK_ENABLE_NETWORK=0`, `GOTOOLCHAIN=local`), closes stdin, and gives
+  each call 5 seconds where `timeout` exists.
+- **Versions only where they matter.** Only the six runtimes most often
+  confused are asked for `--version`. Everything else is checked with
+  `command -v`, which starts nothing. Asking twenty tools for their versions
+  took more than 20 seconds on GitHub's macOS and Windows runners.
+- **A probe is one string.** Each runs in a subshell with stderr folded in,
+  so "command not found" is part of the snapshot. Its output is cut to
+  `max_lines` lines. Keep `]` out of a probe: gnomon's TOML subset cannot read
+  one inside a string in a multi-line list.
+- **Under a `bash_allow` list** the composed command also needs `printf` and
+  `head`, the two commands gnomon wraps each probe in.
+- **It is a trust grant.** It is a command that runs before anyone has typed
+  anything, so workspace trust (§7.9) asks about it once, as it asks about a
+  `[verify]` command that is not the project's own check. A clamped surface
+  runs no bootstrap.
+- **Recorded:** `counters.bootstrap` on the turn that ran it, with `outcome`
+  set to `ok`, `refused`, `failed` or `unavailable` (no probes for this
+  platform), plus `bytes`, `tokens` and `truncated`. A `bootstrap` audit
+  record carries the command. A bootstrap that changes the worktree is
+  announced, and the record says `worktree_changed: true`.
+
+The record fields and the outcome list are a contract: [CONTRACTS.md §19](CONTRACTS.md).
+
 ---
 
 ## 9. Troubleshooting

@@ -839,6 +839,17 @@ Four rules the window keeps:
   string, not something the model said.
 - **Reasoning is never replayed.** A `<think>` block is working, not speech.
 
+Two opt-in keys, both absent from the scaffold, manage what a turn carries.
+Without them a turn sends exactly what it sent before they existed.
+`[context.mask_observations]` replaces older tool results with one-line
+placeholders, in batches at a fill threshold, so the server's prompt cache
+survives between batches. `[context] bootstrap = "<id>"` runs a read-only
+probe list from policy.toml once per session and puts the snapshot in the
+system prompt. See [docs/GUIDE.md §8](docs/GUIDE.md) and
+[CONTRACTS.md §19](docs/CONTRACTS.md). Whether either helps is for the
+pre-registered A/B in
+[docs/benchmarks/prereg/CX-AB.md](docs/benchmarks/prereg/CX-AB.md) to decide.
+
 #### `[turn]` — when a turn stops, is nudged, or converges
 
 ```toml
@@ -1723,7 +1734,7 @@ and "looser" is measured, not guessed:
 | `approval` gate `never` | `on_write` |
 | `sandbox.level = "off"`, `network = true`, any `extra_roots` | `confined`, off, none |
 | an MCP server (a process started when a session opens) | none |
-| a `[verify]` command that is not the project's own check (`npm test`, `pnpm run verify`, `cargo test`, …) and an `[audit.attest]` signer — commands that run unasked | none |
+| a `[verify]` command that is not the project's own check (`npm test`, `pnpm run verify`, `cargo test`, …), an `[audit.attest]` signer, and a `[context] bootstrap` — commands that run unasked | none |
 | an endpoint or fallback sending a key variable to a host that is neither local nor a known provider | keys go only to known providers |
 | a `[shadow]` model on a non-local host | off |
 | a role holding a tool its scaffold namesake lacks; a wider `write_allow` or `task_allow` | the scaffold role |

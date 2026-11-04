@@ -160,6 +160,16 @@ export type AuditKind =
   // whether it passed. A trail that records the change but not the check
   // cannot answer whether the change was ever known to be good.
   | "verify"
+  // The environment bootstrap a surface declares (`[context] bootstrap`): the
+  // command, as the audit records any command, and what came of it -- ok,
+  // refused, failed or unavailable. Once per session. Its own kind because the
+  // surface, not the model, ran it, which is also why it is not a tool_call.
+  | "bootstrap"
+  // One observation-masking batch (`[context.mask_observations]`): how many
+  // tool results became placeholders, the estimated tokens that removed, and
+  // the step it happened at -- the moment a cached prompt prefix was
+  // rewritten, which is what a re-prefill on the server lines up against.
+  | "context_mask"
   // One per degradation: the harness kept working with less than it declared.
   //
   // Announcing a degradation on the terminal is not the same as recording it.

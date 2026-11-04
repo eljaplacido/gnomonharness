@@ -19,6 +19,9 @@
 export * from "./config.js";
 export * from "./session.js";
 export * from "./prompt_loop.js";
+// Observation masking and the environment bootstrap: opt-in context hygiene,
+// pure functions the loop calls only when the surface declares them.
+export * from "./context_hygiene.js";
 // The degradation contract: every way this harness carries on with less than
 // it declared, and the record each one writes. Read by
 // `benchmarks/degradation-contract`, which measures the declaration against

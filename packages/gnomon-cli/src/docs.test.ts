@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initSurface } from "./init.js";
-import { loadConfig, resolveContext, resolveUi, resolveRouting, resolveAudit, resolveSessionStore, listRoles, buildToolSet, STEER_ROLES, STEER_PREFIX, STEER_CLOSE } from "gnomon-core";
+import { loadConfig, resolveContext, resolveUi, resolveRouting, resolveAudit, resolveSessionStore, listRoles, buildToolSet, STEER_ROLES, STEER_PREFIX, STEER_CLOSE, BOOTSTRAP_OUTCOMES, BOOTSTRAP_PLATFORMS, BOOTSTRAP_KEYS, MASK_KEYS } from "gnomon-core";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
@@ -402,6 +402,44 @@ describe("the README outcome table matches the tool result codes", () => {
     expect(scaffold).toMatch(/attempts x stream_total_timeout_ms/);
     const guide = readFileSync(join(root, "docs/GUIDE.md"), "utf-8");
     expect(guide).toMatch(/`attempts` × `stream_total_timeout_ms`/);
+  });
+
+  it("the bootstrap outcomes, their fixture and CONTRACTS.md §19 are one set; the key lists match the fixture", () => {
+    // `counters.bootstrap.outcome` is a published enumeration (Rule 6), on the
+    // record a consumer switches on. Same three points as stop_reason: the
+    // union in the code, the fixture, the table in CONTRACTS.md.
+    const root = join(__dirname, "../../..");
+    const fixture = JSON.parse(readFileSync(join(root, "conformance/context_hygiene.json"), "utf-8"));
+    const contracts = readFileSync(join(root, "docs/CONTRACTS.md"), "utf-8");
+    // §19 alone: it ends at the next `## ` heading, so a later section's
+    // table cannot add rows to this one.
+    const at = contracts.indexOf("## 19. Context hygiene");
+    expect(at, "CONTRACTS.md has no §19").toBeGreaterThan(-1);
+    const end = contracts.indexOf("\n## ", at + 1);
+    const s19 = contracts.slice(at, end === -1 ? undefined : end);
+    expect(s19.length, "CONTRACTS.md §19 is empty").toBeGreaterThan(100);
+    const documented = [...s19.matchAll(/^\| `([a-z_]+)` \| /gm)].map((m) => m[1]);
+    expect([...BOOTSTRAP_OUTCOMES], "context_hygiene.ts != conformance/context_hygiene.json").toEqual(
+      Object.keys(fixture.bootstrap_outcome)
+    );
+    expect(documented, "CONTRACTS.md §19's outcome table != the code").toEqual([...BOOTSTRAP_OUTCOMES]);
+    expect(BOOTSTRAP_OUTCOMES.length).toBe(fixture.expected_outcomes);
+    for (const p of BOOTSTRAP_PLATFORMS) expect(s19).toContain(`\`${p}\``);
+    expect([...BOOTSTRAP_PLATFORMS]).toEqual(Object.keys(fixture.bootstrap_platform));
+    expect([...MASK_KEYS].sort()).toEqual(Object.keys(fixture.surface["config.toml [context.mask_observations]"]).sort());
+    expect([...BOOTSTRAP_KEYS].sort()).toEqual(Object.keys(fixture.surface["policy.toml [bootstrap.<id>]"]).sort());
+  });
+
+  it("the surface reference documents context hygiene: both keys, every outcome, the counters", () => {
+    const root = join(__dirname, "../../..");
+    const guide = readFileSync(join(root, "docs/GUIDE.md"), "utf-8");
+    expect(guide).toContain("[context.mask_observations]");
+    for (const k of MASK_KEYS) expect(guide).toMatch(new RegExp(`^${k} = `, "m"));
+    expect(guide).toContain('bootstrap = "env"');
+    for (const p of BOOTSTRAP_PLATFORMS) expect(guide).toMatch(new RegExp(`^${p} = \\[`, "m"));
+    for (const o of BOOTSTRAP_OUTCOMES) expect(guide).toContain(`\`${o}\``);
+    expect(guide).toMatch(/`counters\.masking`/);
+    expect(guide).toMatch(/`counters\.bootstrap`/);
   });
 
   it("the surface reference documents steer_role: its values, its prefix, and what the record says", () => {

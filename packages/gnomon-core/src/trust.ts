@@ -41,6 +41,7 @@ import {
   realpathSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
 import {
   type GnomonConfig,
   type RoleDef,
@@ -49,6 +50,7 @@ import {
   recomputeManifest,
   isLocalEndpoint,
   resolveShadow,
+  resolveBootstrap,
 } from "./config.js";
 import { bashPolicy } from "./tools.js";
 import { gnomonDataDir, restrictToOwner } from "./credentials.js";
@@ -299,8 +301,9 @@ function keyHostIsDefault(url: string): boolean {
  * - `sandbox.level = "off"`: tool paths may leave the repository.
  * - `network = true`, `extra_roots`: reach beyond the checkout.
  * - an MCP server: a process the surface starts before the first prompt.
- * - a `[verify]` command that is not the project's own check, and an
- *   `[audit.attest]` signer: commands that run without an approval prompt.
+ * - a `[verify]` command that is not the project's own check, an
+ *   `[audit.attest]` signer, and a `[context] bootstrap`: commands that run
+ *   without an approval prompt.
  * - an endpoint (or fallback) that sends a key variable to a host that is not
  *   local and not a known provider: a stored key leaving for somewhere the
  *   surface chose.
@@ -346,6 +349,20 @@ export function surfaceGrants(config: GnomonConfig): Grant[] {
   for (const which of ["sign", "verify"] as const) {
     const cmd = str(attest?.[which]);
     if (cmd) add({ key: `attest.${which}:${cmd}`, subject: `audit.attest`, grants: `runs \`${cmd}\` to ${which} trail heads`, default: "no signer" });
+  }
+
+  // `[context] bootstrap`: a command the surface runs at the start of every
+  // session, before anyone has typed anything. Declared read-only, which is a
+  // claim about the probes, not something the harness can enforce -- so it is
+  // a grant, keyed by the probes this machine would run.
+  const boot = resolveBootstrap(config);
+  if (boot?.command) {
+    add({
+      key: `bootstrap:${boot.id}:${boot.platform}:${createHash("sha256").update(boot.command).digest("hex").slice(0, 16)}`,
+      subject: `bootstrap ${boot.id}`,
+      grants: `runs ${boot.probes!.length} ${boot.platform} probe(s) of [bootstrap.${boot.id}] when a session starts, unasked`,
+      default: "no bootstrap",
+    });
   }
 
   for (const [name, ep] of Object.entries(config.config.endpoints ?? {})) {
@@ -439,6 +456,10 @@ export function clampToDefaults(config: GnomonConfig): GnomonConfig {
 
   const audit = c.config.audit as Record<string, any> | undefined;
   if (audit?.attest) delete audit.attest;
+
+  // No bootstrap runs on a clamped surface; the turn runs without a snapshot.
+  const context = c.config.context as Record<string, any> | undefined;
+  if (context && "bootstrap" in context) delete context.bootstrap;
 
   for (const ep of Object.values(c.config.endpoints ?? {}) as Array<Record<string, any>>) {
     if (str(ep.api_key_env) && str(ep.url) && !keyHostIsDefault(str(ep.url))) delete ep.api_key_env;
