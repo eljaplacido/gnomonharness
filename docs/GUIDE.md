@@ -604,7 +604,10 @@ gives the window as `max_context_tokens` and its origin as
 `max_context_tokens_source`: `declared`, `listing:<shape>` or `default`
 ([CONTRACTS.md](CONTRACTS.md)). An endpoint that declares nothing records
 neither key. An endpoint that is not on this machine and declares no window
-gets a startup note naming the key. Nothing else changes for it.
+gets a startup note naming the key. Nothing else changes for it. `"auto"` is
+answered at run time, so one surface hash can trim to different windows if
+the provider changes its listing. Declare the number where the window must
+stay fixed, as in a benchmark arm.
 
 ```toml
 [endpoints.go]

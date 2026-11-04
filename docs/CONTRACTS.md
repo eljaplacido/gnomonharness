@@ -1066,6 +1066,13 @@ record it was before it existed:
 | `listing:ollama` | the `num_ctx` line of `parameters`, else `model_info.<arch>.context_length`, from `POST <root>/api/show` |
 | `default` | `[defaults] max_context_tokens`: `"auto"` found nothing |
 
+**What the hash no longer fixes.** A number is part of the surface hash;
+`"auto"` is not a number but a question asked at run time. Two runs under one
+surface hash can trim to different windows if a provider changes its listing
+(Rules 1 and 2: the hash says what was asked, not what was answered). That is
+why the record carries the window and its source, and why a benchmark arm that
+needs the window fixed declares the number.
+
 `<base>` is the chat URL without `/chat/completions`; `<root>` is that without
 a trailing `/v1` for llama.cpp, and the Ollama URL without `/api/chat`. A shape
 names the fields, not the vendor: any server that answers in them is read the
