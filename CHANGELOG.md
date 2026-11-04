@@ -524,6 +524,56 @@
   `conformance/endpoint_window.json`.
 
 ## [0.4.0] — 2026-11-03
+- **Opt-in line caps on tool output: `max_lines` on the `bash` and `read`
+  declarations in tools.toml (CX3).** Off unless declared. On `bash`, an
+  output longer than the cap keeps its first and last lines and offloads the
+  whole to `.gnomon-out/`. A note says how many lines were omitted and to
+  narrow the command with grep, head, tail or `sed -n`. On `read`, a file is
+  shown that many lines at a time, numbered as in the whole file, with a
+  footer giving the next `offset`, and read's schema gains `offset` and
+  `limit`. Both apply before the 32 KB byte cap. The value must be a whole
+  number of at least 10. On any other tool the key does nothing, and the
+  surface audit says so (not fatal). The surface-fidelity fingerprint
+  resolves it.
+  - Default unchanged: with no `max_lines` declared, the tool schemas, the
+    tool outputs and the turn's request bodies are master's, byte for byte
+    (the wire pin in `tool_hygiene.test.ts`, taken on v0.4.0 first).
+  - Why opt-in: the evidence for a default (SWE-agent ACI, full-file views
+    5.3 points behind a window) is older and from another harness. An
+    estimate from the 2026-11 trails, which record each read's line count
+    but no output sizes: a 200-line window would have cut 306 of 878 file
+    reads. Under stated assumptions, that is 2–11% of input tokens per turn
+    on the six local lanes and 0.2% on the hosted P2G, before any extra
+    paging calls; the bounds run from under 1% to 24%. `bash` output size
+    is not recorded, so its share is unknown. A paired A/B decides the
+    default.
+- **A tool call that failed because its arguments missed the schema is told
+  the schema (CX5).** The model-visible text changes only on calls that
+  already failed. When a built-in tool's call fails or is refused, and its
+  arguments lack a required parameter or carry one of the wrong JSON type,
+  the answer it already gets ends with the parameters the tool takes. Those
+  are named with their types, the required ones are marked, and any keys it
+  does not take are listed: `edit {file_path, old_string, new_string}` is
+  told `path`, `old_text`, `new_text`. Before, that call got "` is a
+  directory, not a file", and `read {file_path}` got "Nothing was given".
+  Arguments that are not JSON at all now get the parameter list beside the
+  parse error.
+  - Unchanged: every success, every failure whose arguments match the
+    schema, the answer to a tool the role was not offered (it already names
+    the offered tools), the `tool_call` summaries, and `[turn]
+    max_consecutive_malformed`. No model call is added. A scripted turn of
+    well-formed calls sends the same request bodies as v0.4.0, byte for
+    byte (`tool_hygiene.test.ts`).
+  - Measured first, on the 2026-11 benchmark trails as of
+    2026-11-04T09:01Z (some lanes were still running): 737 gnomon sessions,
+    30,714 tool calls. An unoffered or unknown tool name occurred once
+    (deepseek-v4.1-flash, a coordinator calling `bash`; it recovered on the
+    next step). The local quantized models made about 18,800 of those calls
+    with none. There were no malformed-JSON arguments, and three schema
+    misses of a measurable shape (`todo` with no list twice, `write` with
+    no `content` once). So this corrects a false-premise answer; it is not
+    a measured gain on these lanes.
+
 
 **Upgrading from 0.3.x.** Run `gnomon migrate` in each project. It applies four
 migrations: the shorter verify rule in `system.md`, delegate-once wording for

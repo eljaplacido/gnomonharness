@@ -544,6 +544,15 @@ export interface ToolDef {
   description?: string;
   enabled?: boolean;
   timeout_seconds?: number;
+  /**
+   * Opt-in line cap (CX3), read on the `bash` and `read` declarations only.
+   * On `bash`, output longer than this keeps its first and last lines and
+   * says how many were omitted. On `read`, a file is shown this many lines at
+   * a time and the schema gains `offset` and `limit`. Absent -- the default --
+   * means the behaviour before it existed: the 32 KB byte cap alone and
+   * whole-file reads. See toolMaxLines.
+   */
+  max_lines?: number;
 }
 
 /** System prompt template */
@@ -1190,6 +1199,46 @@ export function isToolEnabled(config: GnomonConfig, toolName: string): boolean {
   // config.toml may disable a declared tool without removing the declaration.
   const override = config.config.tools?.find((t) => t.name === toolName);
   return override?.enabled !== false;
+}
+
+/** The declarations that read `max_lines`. On any other tool it does nothing, and the audit says so. */
+export const LINE_CAPPED_TOOLS = ["bash", "read"] as const;
+export type LineCappedTool = (typeof LINE_CAPPED_TOOLS)[number];
+
+/**
+ * The smallest `max_lines` honoured. A window of a handful of lines turns one
+ * read into dozens of calls, each paying the whole prompt again, which is the
+ * opposite of what the cap is for. Below this the key is ignored and the
+ * audit says so, rather than being quietly raised.
+ */
+export const MIN_MAX_LINES = 10;
+
+/**
+ * `max_lines` from a tool's `[[tools]]` declaration in tools.toml, when it is
+ * a whole number of at least MIN_MAX_LINES; otherwise undefined, which is the
+ * behaviour before the key existed.
+ *
+ * Opt-in, and in tools.toml beside `timeout_seconds` because both change what
+ * one tool does, and because Rule 3 puts tool schemas there: declaring it on
+ * `read` changes read's schema, and the surface hash moves with it. Read from
+ * tools.toml only, as `timeout_seconds` is; the `[[tools]]` overrides in
+ * config.toml carry `enabled` and nothing else.
+ *
+ * NOT VERIFIED as a default: SWE-agent's ACI found a windowed file view beat
+ * whole-file views by 5.3 points, on other models and another harness. Here
+ * it stays off until a paired A/B on gnomon's own lanes says otherwise.
+ */
+export function toolMaxLines(config: GnomonConfig, name: LineCappedTool): number | undefined {
+  const v = (config.tools.tools ?? []).find((t) => t.name === name)?.max_lines;
+  return typeof v === "number" && Number.isInteger(v) && v >= MIN_MAX_LINES ? v : undefined;
+}
+
+/** Both caps, or undefined when neither is declared -- the default. */
+export function resolveMaxLines(config: GnomonConfig): { bash?: number; read?: number } | undefined {
+  const bash = toolMaxLines(config, "bash");
+  const read = toolMaxLines(config, "read");
+  if (bash === undefined && read === undefined) return undefined;
+  return { ...(bash !== undefined ? { bash } : {}), ...(read !== undefined ? { read } : {}) };
 }
 
 /** Every tool the surface declares, in declaration order. */
@@ -3020,6 +3069,31 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
         fatal: false,
       });
     }
+  }
+}
+
+// `max_lines` (CX3) is opt-in and changes no permission, so nothing here is
+// fatal. What it can do is look declared while doing nothing: on a tool that
+// does not read it, or as a value toolMaxLines ignores.
+for (const t of config.tools?.tools ?? []) {
+  if (t.max_lines === undefined) continue;
+  const where = `.gnomon/tools.toml [[tools]] name = "${t.name}"`;
+  if (!(LINE_CAPPED_TOOLS as readonly string[]).includes(t.name)) {
+    problems.push({
+      where,
+      problem: `max_lines is read on ${LINE_CAPPED_TOOLS.join(" and ")} only; on ${t.name} it does nothing.`,
+      fix: `Remove it, or declare it on ${LINE_CAPPED_TOOLS.join(" or ")}.`,
+      fatal: false,
+    });
+  } else if (toolMaxLines(config, t.name as LineCappedTool) === undefined) {
+    problems.push({
+      where,
+      problem:
+        `max_lines = ${JSON.stringify(t.max_lines)} is not a whole number of at least ` +
+        `${MIN_MAX_LINES}, so it is ignored and ${t.name} output is not line-capped.`,
+      fix: "max_lines = 200",
+      fatal: false,
+    });
   }
 }
 

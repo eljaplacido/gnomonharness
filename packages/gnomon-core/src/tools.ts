@@ -39,6 +39,7 @@ import {
   declaredTools,
   isToolEnabled,
   recomputeManifest,
+  toolMaxLines,
 } from "./config.js";
 import { proposeSkill, ProposalRefused, renderSkill, SkillProposal } from "./skills.js";
 import { compute, ComputeError } from "./compute.js";
@@ -273,6 +274,31 @@ const IMPLEMENTED: Record<string, Record<string, unknown>> = {
   ),
 };
 
+/**
+ * `read`'s schema under a declared window (`max_lines`, CX3): the same `path`,
+ * plus `offset` and `limit`. Without a window it is IMPLEMENTED.read itself,
+ * the same object, so a surface that declares nothing offers the model the
+ * same bytes as before.
+ */
+export function readParameters(window?: number): Record<string, unknown> {
+  if (!window) return IMPLEMENTED.read;
+  const base = IMPLEMENTED.read as { properties: Record<string, unknown>; required: string[] };
+  return obj(
+    {
+      ...base.properties,
+      offset: { type: "integer", description: "Line number to start at, 1-based. Default: 1." },
+      limit: { type: "integer", description: `Lines to return, at most ${window} (the default).` },
+    },
+    base.required
+  );
+}
+
+/** A built-in tool's parameter schema as offered under this read window, or undefined for a name this build does not implement. */
+function parametersFor(name: string, readWindow?: number): Record<string, unknown> | undefined {
+  if (!Object.prototype.hasOwnProperty.call(IMPLEMENTED, name)) return undefined;
+  return name === "read" ? readParameters(readWindow) : IMPLEMENTED[name];
+}
+
 export interface ToolSet {
   schemas: ToolSchema[];
   /**
@@ -314,6 +340,7 @@ export function buildToolSet(
   // but must not write is expressed.
   const allowed = role ? config.roles[role]?.tools : undefined;
   const roleLimited = Array.isArray(allowed);
+  const readWindow = toolMaxLines(config, "read");
 
   for (const tool of declaredTools(config)) {
     if (roleLimited && !allowed!.includes(tool.name)) {
@@ -324,7 +351,7 @@ export function buildToolSet(
       disabled.push(tool.name);
       continue;
     }
-    const parameters = IMPLEMENTED[tool.name];
+    const parameters = parametersFor(tool.name, readWindow);
     if (!parameters) {
       unimplemented.push(tool.name);
       continue;
@@ -965,6 +992,12 @@ export interface ToolContext {
   /** Cap on bytes returned to the model from read/bash */
   maxOutputBytes: number;
   /**
+   * Line caps declared as `max_lines` on the bash and read declarations in
+   * tools.toml (CX3, opt-in; resolveMaxLines). Applied before the byte cap.
+   * Absent -- the default -- means exactly the behaviour before they existed.
+   */
+  maxLines?: { bash?: number; read?: number };
+  /**
    * Where output too large for the window is kept instead of being thrown away.
    *
    * Truncation used to be the whole answer: the model got the first 32k and a
@@ -1248,6 +1281,10 @@ async function readTool(
     // `edit` matches LF text against CRLF files, so what is shown here is what
     // can be edited; the summary says which ending the file really has.
     const crlf = raw.includes("\r\n");
+    // Opt-in (`max_lines` on the read declaration, CX3). Without it, nothing
+    // below this line changed.
+    const window = ctx.maxLines?.read;
+    if (window) return readWindowed(path, raw, crlf, args, window, ctx);
     const numbered = raw
       .split(/\r?\n/)
       .map((l, n) => `${String(n + 1).padStart(5)}\t${l}`)
@@ -1273,6 +1310,96 @@ async function readTool(
       summary: `read ${path} — failed`,
     };
   }
+}
+
+/**
+ * A windowed file view (CX3, opt-in): at most `window` lines from `offset`,
+ * numbered as in the whole file, with a footer saying where the rest is.
+ *
+ * Today's read returns the whole file up to the 32 KB byte cap. In the
+ * 2026-11 trails about a third of reads were of files over 200 lines (up to
+ * 10,001), and that observation is paid for again by every later request in
+ * the turn. A window costs a second call when the model needs more; whether
+ * that trade wins on gnomon's own lanes is what the A/B is for.
+ *
+ * `offset` and `limit` are read only here. A surface with no window ignores
+ * them, as it always has, even from a model that sends them unasked.
+ */
+function readWindowed(
+  path: string,
+  raw: string,
+  crlf: boolean,
+  args: Record<string, unknown>,
+  window: number,
+  ctx: ToolContext
+): ToolOutcome {
+  const lines = raw.split(/\r?\n/);
+  const total = lines.length;
+  const whole = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : undefined);
+  const start = whole(args.offset) ?? 1;
+  const count = Math.min(whole(args.limit) ?? window, window);
+  const ending = crlf ? " · CRLF" : "";
+  if (start > total) {
+    return {
+      code: TOOL_OK_EMPTY,
+      content: `${path} has ${total} lines, so offset ${start} is past the end. Nothing is there to show.`,
+      summary: `read ${path} — ${total} lines · offset ${start} past the end${ending}`,
+    };
+  }
+  const end = Math.min(total, start + count - 1);
+  const shown = lines
+    .slice(start - 1, end)
+    .map((l, i) => `${String(start + i).padStart(5)}\t${l}`)
+    .join("\n");
+  const partial = start > 1 || end < total;
+  const footer = !partial
+    ? ""
+    : end < total
+      ? `\n… [lines ${start}–${end} of ${total} shown; ${total - end} more below` +
+        (start > 1 ? ` and ${start - 1} above` : "") +
+        `. Read on with offset = ${end + 1}, or grep the file for what you need.]`
+      : `\n… [lines ${start}–${end} of ${total} shown: the end of the file, with ${start - 1} lines above.]`;
+  return {
+    code: TOOL_OK,
+    // The file is on disk already, so a window too wide for the byte cap is
+    // not offloaded again: the footer says how to read the rest of it.
+    content: clamp(shown, { ...ctx, spill: undefined }, `read-${path}`) + footer,
+    summary: `read ${path} — ${total} lines${partial ? ` · shown ${start}–${end}` : ""}${ending}`,
+  };
+}
+
+/**
+ * Keep the first and last lines of an output longer than `max` (CX3, opt-in:
+ * `max_lines` on the bash declaration), and say how many were omitted and how
+ * to narrow the command. The full output is offloaded first, as the byte cap
+ * does, and the returned context has no sink, so the byte cap that follows
+ * cannot write the same output a second time. No cap, or an output within it,
+ * returns both arguments unchanged.
+ *
+ * Both ends, success or failure: an exit status and a summary line are at the
+ * top and the bottom of most output, and the error a failing build printed is
+ * usually its last line.
+ */
+function capLines(
+  text: string,
+  max: number | undefined,
+  ctx: ToolContext,
+  label: string
+): { text: string; ctx: ToolContext } {
+  if (!max) return { text, ctx };
+  const lines = text.split("\n");
+  if (lines.length <= max) return { text, ctx };
+  const head = Math.ceil(max / 2);
+  const tail = max - head;
+  const omitted = lines.length - max;
+  const kept = spilled(text, ctx, label);
+  const note =
+    `… [output truncated: ${omitted} lines omitted — narrow it with grep, head, tail ` +
+    `or sed -n 'A,Bp'.${kept}]`;
+  return {
+    text: [...lines.slice(0, head), note, ...(tail > 0 ? lines.slice(-tail) : [])].join("\n"),
+    ctx: { ...ctx, spill: undefined },
+  };
 }
 
 /**
@@ -2566,6 +2693,8 @@ async function bashTool(
         .filter(Boolean)
         .join("\n");
       releasePipes(proc);
+      // Opt-in line cap (CX3); unchanged text and context when none is declared.
+      const cappedCapture = capLines(captured, ctx.maxLines?.bash, ctx, `bash-timeout`);
       const drift = surfaceDrift(ctx, surfaceBefore);
       const movedTree = worktreeMoved(ctx, worktreeBefore, shellCwd);
       // So the next identical call is refused for free rather than stalling.
@@ -2575,7 +2704,7 @@ async function bashTool(
         worktree_changed: movedTree,
         content:
           `Command timed out after ${ctx.timeoutMs}ms and was killed. Output captured before the kill:\n` +
-          clampEnds(captured, ctx, `bash-timeout`) +
+          clampEnds(cappedCapture.text, cappedCapture.ctx, `bash-timeout`) +
           `\n\nIt did not finish, so this output is partial. Re-running it unchanged will time out again: ` +
           `narrow it, or start it in the background and poll:\n      ${backgroundRecipe(command)}\n` +
           `    then read ${JOB_LOG_DIR}/job.log on a later step.` +
@@ -2682,6 +2811,9 @@ async function bashTool(
             .join("\n");
       const drift = surfaceDrift(ctx, surfaceBefore);
       const movedTree = worktreeMoved(ctx, worktreeBefore, shellCwd);
+      // Opt-in line cap (CX3), before the byte cap; unchanged text and context
+      // when none is declared.
+      const capped = capLines(body, ctx.maxLines?.bash, ctx, `bash-exit`);
       done({
         code: TOOL_OK,
         worktree_changed: movedTree,
@@ -2689,7 +2821,9 @@ async function bashTool(
         // coerced, because "killed" is not an exit status.
         shell_exit: typeof exit === "number" ? exit : undefined,
         content:
-          (failed ? clampEnds(body, ctx, `bash-exit`) : clamp(body, ctx, `bash-exit`)) +
+          (failed
+            ? clampEnds(capped.text, capped.ctx, `bash-exit`)
+            : clamp(capped.text, capped.ctx, `bash-exit`)) +
           pipelineStatusNote(command) +
           (drift ? `\n\n${drift.notice}` : ""),
         // `exit` is null when the child died on a signal, and "exit null" then
@@ -5055,6 +5189,152 @@ function notOffered(name: string, offered: Set<string>): Precheck {
 }
 
 // ---------------------------------------------------------------------------
+// Repair text: what a failed call should have looked like
+// ---------------------------------------------------------------------------
+//
+// A tool name the role was not offered already comes back with the names it
+// was offered (notOffered, above). The arguments did not get the same
+// treatment: a call that failed because its arguments did not match the
+// tool's schema was answered by whatever the tool said first, and for a
+// misnamed key that is a false premise. `edit {file_path, old_string,
+// new_string}` -- the spelling another harness teaches -- reached editTool
+// as an empty path and came back "` is a directory, not a file", and
+// `read {file_path}` came back "Nothing was given". Told that, a model
+// invents a different wrong call. What it needs is the parameter list.
+//
+// Only on a call that already failed, and only when its arguments really do
+// disagree with the schema: a success, and a failure whose arguments were
+// well-formed, reach the model byte for byte as before (tool_hygiene.test.ts
+// pins both). No model call is added; the text rides on the answer the
+// failed call already gets. Built-in tools only -- an MCP server validates
+// its own arguments and says so itself.
+
+/** How a schema type reads in one line: `string`, `"a" | "b"`, `array of {content: string}`. */
+function typeText(spec: unknown): string {
+  const s = (spec ?? {}) as Record<string, unknown>;
+  if (Array.isArray(s.enum)) return s.enum.map((v) => JSON.stringify(v)).join(" | ");
+  if (s.type === "array") return s.items ? `array of ${typeText(s.items)}` : "array";
+  if (s.type === "object" && s.properties && typeof s.properties === "object") {
+    const req = new Set(Array.isArray(s.required) ? (s.required as string[]) : []);
+    return `{${Object.entries(s.properties as Record<string, unknown>)
+      .map(([k, v]) => `${k}${req.has(k) ? "" : "?"}: ${typeText(v)}`)
+      .join(", ")}}`;
+  }
+  return typeof s.type === "string" ? s.type : "any";
+}
+
+/**
+ * The parameters a built-in tool takes, in one line --
+ * `path (string, required), old_text (string, required), …` -- or null for a
+ * name with no schema in this build.
+ */
+export function toolParamsText(name: string, readWindow?: number): string | null {
+  const params = parametersFor(name, readWindow);
+  const props = (params?.properties ?? undefined) as Record<string, unknown> | undefined;
+  if (!props) return null;
+  const req = new Set(Array.isArray(params!.required) ? (params!.required as string[]) : []);
+  const list = Object.entries(props).map(
+    ([k, v]) => `${k} (${typeText(v)}${req.has(k) ? ", required" : ""})`
+  );
+  return list.length > 0 ? list.join(", ") : "no parameters";
+}
+
+/** The JSON type of a value, with integers told apart from other numbers. */
+function jsonType(v: unknown): string {
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "array";
+  if (typeof v === "number") return Number.isInteger(v) ? "integer" : "number";
+  return typeof v;
+}
+
+export interface ArgProblems {
+  /** Required parameters the call did not send. */
+  missing: string[];
+  /** Parameters sent with a value of the wrong JSON type. */
+  wrongType: Array<{ key: string; want: string; got: string }>;
+  /** Keys the call sent that the tool does not take. */
+  unknown: string[];
+}
+
+/**
+ * Where a call's arguments disagree with a built-in tool's schema, top-level
+ * keys only. Null when the tool has no schema in this build. The parser's own
+ * markers (`__gnomon_args_*`) are not the model's keys and are skipped.
+ */
+export function argProblems(
+  name: string,
+  args: Record<string, unknown>,
+  readWindow?: number
+): ArgProblems | null {
+  const params = parametersFor(name, readWindow);
+  const props = (params?.properties ?? undefined) as Record<string, Record<string, unknown>> | undefined;
+  if (!props) return null;
+  const required = Array.isArray(params!.required) ? (params!.required as string[]) : [];
+  const missing = required.filter((k) => args[k] === undefined);
+  const wrongType: ArgProblems["wrongType"] = [];
+  const unknown: string[] = [];
+  for (const [k, v] of Object.entries(args)) {
+    if (k.startsWith("__gnomon_")) continue;
+    const spec = props[k];
+    if (!spec) {
+      unknown.push(k);
+      continue;
+    }
+    const want = typeof spec.type === "string" ? spec.type : undefined;
+    if (!want || v === undefined) continue;
+    const got = jsonType(v);
+    if (got !== want && !(want === "number" && got === "integer")) wrongType.push({ key: k, want, got });
+  }
+  return { missing, wrongType, unknown };
+}
+
+const ticked = (keys: string[]) => keys.map((k) => `\`${k}\``).join(", ");
+
+/**
+ * The paragraph appended to a failed call whose arguments do not match the
+ * schema, or "" when they do (or the tool has none). Unknown keys alone do not
+ * trigger it -- every tool ignores an extra key, so a call that failed with one
+ * failed for another reason -- but they are named when it fires, because a
+ * misnamed key is the usual reason a required one is missing.
+ */
+export function schemaRepairText(
+  name: string,
+  args: Record<string, unknown>,
+  readWindow?: number
+): string {
+  const p = argProblems(name, args, readWindow);
+  if (!p || (p.missing.length === 0 && p.wrongType.length === 0)) return "";
+  const parts: string[] = [];
+  if (p.missing.length > 0) parts.push(`missing ${ticked(p.missing)}`);
+  for (const w of p.wrongType) parts.push(`\`${w.key}\` must be ${w.want}, not ${w.got}`);
+  if (p.unknown.length > 0) {
+    parts.push(
+      `${ticked(p.unknown)} ${p.unknown.length === 1 ? "is not a parameter" : "are not parameters"} of ${name}`
+    );
+  }
+  return (
+    `\n\nYour ${name} call does not match its parameters: ${parts.join("; ")}. ` +
+    `${name} takes one JSON object: ${toolParamsText(name, readWindow)}.`
+  );
+}
+
+/**
+ * A failed outcome with the schema's repair text appended, when the call's
+ * arguments are why it failed. A success, or a failure whose arguments match
+ * the schema, is returned as it was -- the same object.
+ */
+function withSchemaRepair(
+  name: string,
+  args: Record<string, unknown>,
+  outcome: ToolOutcome,
+  readWindow?: number
+): ToolOutcome {
+  if (outcome.code === TOOL_OK || outcome.code === TOOL_OK_EMPTY) return outcome;
+  const text = schemaRepairText(name, args, readWindow);
+  return text ? { ...outcome, content: outcome.content + text } : outcome;
+}
+
+// ---------------------------------------------------------------------------
 // The decision alone
 // ---------------------------------------------------------------------------
 
@@ -5196,6 +5476,9 @@ export async function executeTool(
     const raw = typeof malformed.raw === "string" ? malformed.raw : JSON.stringify(malformed.raw);
     const shown = raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
     const error = String(malformed.error ?? "not a JSON object");
+    // "Whose keys are this tool's parameters" told the model there was a list
+    // without giving it. Named here, so the corrected call can use them.
+    const params = toolParamsText(name, ctx.maxLines?.read);
     return {
       code: TOOL_DENIED,
       content:
@@ -5203,6 +5486,7 @@ export async function executeTool(
         `RAN. Arguments must be ONE JSON object whose keys are this tool's ` +
         `parameters: double-quoted keys and strings, newlines inside strings ` +
         `escaped as \\n. Re-issue the ${name} call with corrected arguments.\n` +
+        (params ? `${name} takes: ${params}.\n` : "") +
         `Received: ${shown}`,
       summary: `${name} — malformed arguments (${error.slice(0, 80)})`,
     };
@@ -5211,16 +5495,21 @@ export async function executeTool(
   // A throw here would take the whole session down: an unguarded
   // readFileSync on a directory (EISDIR) once killed a live run outright.
   // A broken tool is an apparatus_failure the model can be told about.
+  let outcome: ToolOutcome;
   try {
-    return await dispatch(name, args, ctx);
+    outcome = await dispatch(name, args, ctx);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return {
+    outcome = {
       code: TOOL_FAILED,
       content: `Tool "${name}" failed: ${msg}`,
       summary: `${name} — ${msg}`,
     };
   }
+  // Error path only: a call that failed with arguments the schema does not
+  // accept is told which parameters the tool takes. Anything else is returned
+  // untouched.
+  return withSchemaRepair(name, args, outcome, ctx.maxLines?.read);
 }
 
 async function dispatch(

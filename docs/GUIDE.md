@@ -1257,7 +1257,7 @@ gnomon trust revoke     # forget every trust for this project; the next launch a
 | `roles.toml` | What each role may do | `tools`, `bash_allow`, `bash_deny`, `write_allow`, `task_allow`, `max_steps`, `max_steps_total`, `fallback` |
 | `profiles/NAME.toml` | Per-machine or per-billing routing | `[roles.NAME] model`, `endpoint` |
 | `policy.toml` | Autonomy and checks | `[approval] gate`, `[sandbox] level/network/exec`, `[verify]`, `[check.roles]` |
-| `tools.toml` | Declared tools and MCP servers | `[[tools]] enabled`, `timeout_seconds`, `[mcp_servers.NAME]` |
+| `tools.toml` | Declared tools and MCP servers | `[[tools]] enabled`, `timeout_seconds`, `max_lines` (opt-in), `[mcp_servers.NAME]` |
 | `system.md` | The system prompt | — |
 | `skills/*.md` | Durable notes, loaded when their `match` regex fits the input | front matter `match`, `roles` |
 | `loops/*.toml` | Scheduled guard/act loops | see 7.4 |
@@ -1324,6 +1324,31 @@ chain = true
 # roles.toml: confine where implement may write
 [roles.implement]
 write_allow = ["src/**", "tests/**", "docs/**", "*.md"]
+```
+
+**Opt-in: line caps on tool output.** Off unless declared. `max_lines` on
+the `bash` declaration keeps the first and last lines of a longer output. It
+says how many lines were omitted and how to narrow the command, and saves the
+whole output under `.gnomon-out/`. On the `read` declaration, a file is shown
+that many lines at a time, and read's schema gains `offset` and `limit`. Both
+apply before the 32 KB byte cap. The key is read on those two tools only and
+must be a whole number of at least 10. The surface audit names any other use,
+at session start and in a `gnomon task` record. It stays opt-in until a
+paired A/B on gnomon's own lanes decides.
+
+```toml
+# tools.toml: add max_lines to the existing declarations
+[[tools]]
+name = "read"
+description = "Read a file as numbered lines, or list a directory. Text only."
+enabled = true
+max_lines = 200
+
+[[tools]]
+name = "bash"
+description = "Execute a POSIX sh command."
+enabled = true
+max_lines = 200
 ```
 
 A declared chain is sequencing with a gate, not proof of quality: an ungated
