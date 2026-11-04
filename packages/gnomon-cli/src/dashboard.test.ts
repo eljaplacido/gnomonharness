@@ -12,7 +12,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn, spawnSync } from "node:child_process";
 import { request, createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -921,7 +921,11 @@ describe("gnomon dashboard, the command", () => {
     // A project whose surface grants something (approval = "never"), in a
     // git repository so `gnomon check` has a base. The trust store is the
     // test's own XDG_DATA_HOME (vitest.setup.ts), inherited by every child.
-    const root = join(tmp("gnomon-dash-smoke-"), "gamma");
+    // Real path: the dashboard names a project by its real path
+    // (dashboard_data.ts), and on macOS tmpdir() is /var/folders/..., a
+    // symlink to /private/var/folders/..., so the confirm line and the command
+    // say /private/var. Comparing against the unresolved path failed there.
+    const root = join(realpathSync(tmp("gnomon-dash-smoke-")), "gamma");
     mkdirSync(root);
     await initSurface({ dir: root }); // audit on, as `gnomon init` leaves it
     writeFileSync(join(root, ".gnomon", "policy.toml"), `[approval]\ngate = "never"\n\n[sandbox]\nlevel = "confined"\nnetwork = false\n`);

@@ -4057,6 +4057,13 @@ describe("measureTreeDelta — fewer git processes, the same numbers", () => {
     git(src, "config", "user.email", "t@t");
     git(src, "config", "user.name", "t");
     git(src, "config", "core.autocrlf", "false");
+    // No background maintenance: `git commit` starts `git maintenance run
+    // --auto`, and newer git (maintenance.autoDetach, the default on the macOS
+    // runners' git 2.5x) detaches it, so it can still be taking and dropping
+    // .git/objects/maintenance.lock while cpSync below walks the repository.
+    // That was the macOS-only "ENOENT ... .git/objects" in this test.
+    git(src, "config", "maintenance.auto", "false");
+    git(src, "config", "gc.auto", "0");
     writeFileSync(join(src, "a.txt"), "alpha\nbeta\ngamma\n");
     writeFileSync(join(src, "b.txt"), "one\ntwo\n");
     writeFileSync(join(src, ".gitignore"), "ignored.log\n");

@@ -14,7 +14,10 @@
  * Tools are stubbed (no file is touched, no command runs) so a script is a
  * pure function of its seed; the model is a scripted fetch.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterAll } from "vitest";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { loadConfig, resolveUi } from "./config.js";
 import * as promptLoop from "./prompt_loop.js";
 import { StallSignals, type StallSignalCounters } from "./stall_signals.js";
@@ -90,6 +93,18 @@ vi.mock("./tools.js", async (importOriginal) => {
   };
 });
 
+/**
+ * The repository's own surface, in a private copy. `counters.tree_delta` is
+ * git's view of the worktree the surface sits in, and the repository's
+ * worktree is shared: prompt_loop.test.ts writes shell_written*.txt into it
+ * from another worker while this file runs. Under coverage the timing lined
+ * the two up and two runs of one script differed in tree_delta alone. In a
+ * copy nothing but this file touches, the comparison is of what it controls.
+ */
+const SURFACE = mkdtempSync(join(tmpdir(), "gnomon-stall-loop-"));
+cpSync(join("..", "..", ".gnomon"), join(SURFACE, ".gnomon"), { recursive: true });
+afterAll(() => rmSync(SURFACE, { recursive: true, force: true }));
+
 const route = {
   model: "m",
   temperature: 0,
@@ -103,7 +118,7 @@ type Call = { name: string; arguments: Record<string, unknown> };
 async function turn(script: Call[][], mode: Mode, seed = 1) {
   ctl.mode = mode;
   ctl.seed = seed;
-  const config: any = loadConfig("../..");
+  const config: any = loadConfig(SURFACE);
   // No declared check: a stubbed tool changed nothing a check could judge.
   config.policy = { ...config.policy, verify: undefined };
   const ui = { ...resolveUi(config), cot: "off", think: "hide", color: false };
