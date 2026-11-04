@@ -198,3 +198,5 @@ harness techniques. Each spec cites its own sources inline. gnomon's own
 measurements are cited by result directory, on `master` or on the public
 [`bench/peers-2026-11`](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results)
 branch.
+
+Latest findings: [FINDINGS-2026-11-04](FINDINGS-2026-11-04.md) — long-task diagnosis (C2D, H1, H2), hybrid on v0.4.0 (M2, R3R), causal analysis.
