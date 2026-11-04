@@ -64,6 +64,8 @@ export const DEGRADATIONS = {
   // The shadow stays log-only; what it may no longer do is stop unaccounted.
   shadow_unreachable:
     "the declared [shadow] endpoint could not be reached, so the shadow stopped for the session and recorded no decisions from then on",
+  audit_anchor_queued:
+    "the declared `[audit.anchor]` witness could not be reached, so sealed trail heads are queued on this machine and not yet anchored off it",
 } as const;
 
 /** The id of a declared degradation path. */

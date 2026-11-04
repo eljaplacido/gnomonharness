@@ -29,8 +29,10 @@
  * it, and produce something this module verifies as intact. That was measured —
  * eight of nine tampering strategies were caught, and that one was not
  * (benchmarks/results/auditability-2026-08-31). Closing it needs an anchor
- * outside the file, which is what attest.ts adds when a surface declares a
- * signer. Without that declaration the limit above is exactly the guarantee.
+ * outside the file: attest.ts signs heads when a surface declares a signer,
+ * and anchor.ts copies each sealed head to an external witness when it
+ * declares `[audit.anchor]`. Without either declaration the limit above is
+ * exactly the guarantee.
  */
 
 import { appendFileSync, mkdirSync, existsSync, readFileSync, openSync, readSync, closeSync, fstatSync } from "node:fs";
@@ -39,6 +41,7 @@ import { createHash } from "node:crypto";
 import { GnomonConfig } from "./config.js";
 import { beforeOwnWrite, noteOwnWrite } from "./record_guard.js";
 import { Attestor, resolveAttest, verifyAttestation, type AttestVerifyResult, type ResolvedAttest } from "./attest.js";
+import { enqueueAnchor, resolveAnchor, type ResolvedAnchor } from "./anchor.js";
 
 // The attestation surface is re-exported here so that a consumer holding a
 // ResolvedAudit can name the type of its `attest` field.
@@ -105,6 +108,12 @@ export interface ResolvedAudit {
    * "unless the surface asked for a signer, nothing here runs".
    */
   attest?: ResolvedAttest;
+  /**
+   * External anchoring, from [audit.anchor] (anchor.ts). Optional for the same
+   * reason `attest` is. Absent or not enabled, the seal path does nothing more
+   * than it did.
+   */
+  anchor?: ResolvedAnchor;
 }
 
 const DEFAULT_DIR = ".gnomon-audit";
@@ -139,6 +148,8 @@ export function resolveAudit(config: GnomonConfig): ResolvedAudit {
     // string work: no process is spawned and no file is touched. A declared
     // public_key path is the one read, and only when it was declared.
     attest: resolveAttest(config, resolvedDir),
+    // Same: an undeclared [audit.anchor] is string work only.
+    anchor: resolveAnchor(config, resolvedDir),
   };
 }
 
@@ -326,7 +337,10 @@ export class AuditTrail {
   private file: string | null = null;
   /** Null unless the surface declared a signer. */
   private attestor: Attestor | null = null;
+  /** Null unless the surface declared a usable [audit.anchor]. */
+  private anchor: ResolvedAnchor | null = null;
   private readonly setupProblems: string[] = [];
+  private readonly anchorFailures: string[] = [];
 
   constructor(
     private readonly settings: ResolvedAudit,
@@ -365,6 +379,15 @@ export class AuditTrail {
         this.attestor = new Attestor(attest, `${sessionId}.jsonl`);
       }
     }
+
+    if (settings.anchor?.enabled) {
+      if (!settings.chain) {
+        // The attest reasoning again: no chain, no head to anchor.
+        this.setupProblems.push("[audit.anchor] declares a witness but [audit].chain is off — there are no chain heads to anchor");
+      } else {
+        this.anchor = settings.anchor;
+      }
+    }
   }
 
   get enabled(): boolean {
@@ -389,6 +412,11 @@ export class AuditTrail {
    */
   get attestProblems(): string[] {
     return [...this.setupProblems, ...(this.attestor?.problems ?? [])];
+  }
+
+  /** Statements that could not even be queued. Delivery failures are anchor.ts's state, not these. */
+  get anchorProblems(): string[] {
+    return [...this.anchorFailures];
   }
 
   /** Text is recorded only when the surface asks for `full`. */
@@ -450,6 +478,17 @@ export class AuditTrail {
     // was unplugged would lose exactly the records worth having.
     if (this.attestor && record.hash && this.attestor.due(kind, this.seq)) {
       this.attestor.sign(record.seq, record.hash, this.seq);
+    }
+    // A sealed head is queued for an external witness. Queued only: one small
+    // file, no network, no process. Delivery is anchor.ts's flushAnchors, run
+    // after the checkpoint and off the turn path. A failure here costs the
+    // anchor, never the record, which is already on disk.
+    if (this.anchor && record.hash && kind === "session_end") {
+      try {
+        enqueueAnchor(this.anchor, this.file, record, this.seq);
+      } catch (e) {
+        this.anchorFailures.push(`could not queue the head at seq ${record.seq}: ${(e as Error).message}`);
+      }
     }
     return record;
   }

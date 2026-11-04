@@ -1057,7 +1057,9 @@ trail verifies and it was authorised the way it says.
   checkpoints, and the records it writes.
 - **Against a hostile one** that sets out to get round them, the guarantee is a
   person-present signer (§11) or the kernel sandbox (`exec os`, #74), which
-  keeps the agent away from the records and the key.
+  keeps the agent away from the records and the key. After the fact, an
+  external anchor (§21) on an append-only witness makes a re-chained, deleted
+  or rolled-back trail detectable even when the agent could write the records.
 
 **Documented limits:**
 - **A change made and undone within one tool call** is not seen.
@@ -1069,7 +1071,8 @@ trail verifies and it was authorised the way it says.
 - **A rollback:** deleting the checkpoint between sessions leaves nothing to
   compare with, and nothing here can tell. Deleting the checkpoint directory
   did that when every checkpoint was kept, too. Detecting it needs an anchor
-  off the machine.
+  off the machine: with `[audit.anchor]` (§21), `gnomon audit verify` reports
+  a newest anchored checkpoint that is gone, with nothing newer, as a rollback.
 - **A pseudo-terminal** (`script`) satisfies the terminal check, and a library
   caller can claim one. A person-present signer is what holds against that.
 - **A hand-built chain added as a new trail** earns a notice, not a stop. It is
@@ -1345,11 +1348,12 @@ existed:
 | `surface_drift` | the tool result, which the `tool_call` record carries |
 | `model_output_truncated` | `stop_reason: "truncated"` on the `turn` record |
 | `shadow_unreachable` | a `degradation` record (§7), with `shadow.stopped` on the `turn` and `session_end` records |
+| `audit_anchor_queued` | a `degradation` record in the session that finds the queue, carried on the task record's `degradations` (§21) |
 
 Adding an id is a contract change. `benchmarks/degradation-contract` reads
 `DEGRADATION_IDS` from the code and injects every id. It fails when an id has
 no probe, when a probe is not announced, or when a probe is not recorded.
-`scripts/property_suites.mjs`, run by `.gnomon/ci.sh`, holds it at 15/15. These
+`scripts/property_suites.mjs`, run by `.gnomon/ci.sh`, holds it at 16/16. These
 ids are not part of `gnomon enumerations` (§3).
 
 **Fixture**: `conformance/degradations.json`. `packages/gnomon-core/src/degradation.test.ts`
@@ -1487,3 +1491,146 @@ was added with the suite.
 schedules, tasks and channels, the table above and the fixture are the same
 sets, and validates a scorecard the real suite produced against the fixture's
 key lists.
+
+
+## 21. External anchoring — `[audit.anchor]`, statement `gnomon.anchor/1`
+
+A hash chain proves a trail is consistent with itself. A full re-chain (edit
+a record, recompute every hash after it) passes `verifyTrail`. That was the
+ninth attack in `benchmarks/results/auditability-2026-08-31`, the one not
+caught. `[audit.attest]` (§11) signs heads, but its heads sit beside the
+trail. `[audit.anchor]` copies every sealed head to a **witness** that whoever
+writes the trail cannot rewrite.
+
+**Opt-in. Absent means exactly the previous behaviour:** nothing is queued
+or scheduled, the record guard excludes nothing, and nothing touches the
+network. Declaring it moves the surface hash, as every key does. It is also
+a workspace-trust grant (README → workspace trust). An untrusted surface runs
+with the block marked, anchors nothing, and says so at session start.
+`gnomon audit verify` and `gnomon audit anchor` contact the witness only for
+a trusted surface, or with `--trust` or `GNOMON_TRUST`. A `--trust` run hands
+the flag to its detached delivery.
+
+```toml
+[audit.anchor]
+backend = "git"                     # git | rfc3161 | cmd
+remote = "ssh://witness/anchors.git"  # git: URL, path, or a remote of this repository
+ref = "refs/heads/gnomon-anchors"   # git: default; must be under refs/heads/ to be protectable
+url = "https://tsa.example/tsr"     # rfc3161
+tsa_cert = ".gnomon/keys/tsa.pem"   # rfc3161: PEM certificate(s) or public key, inline or a path
+command = "./anchor-put.sh"         # cmd: digest on stdin, receipt on stdout
+verify = "./anchor-check.sh"        # cmd: digest on stdin, receipt in GNOMON_ANCHOR_RECEIPT; exit 0 = valid
+timeout_sec = 10
+dir = ".gnomon-audit/anchors"       # default: anchors/ in the audit directory
+```
+
+**What is anchored.** When a chained trail writes `session_end`, a statement
+naming that sealed head is queued. That covers every sealed trail: a
+session's trail, its checkpoint, `check`, `guard` (one statement per reseal),
+skill decisions and trials, and tamper events. Keys:
+
+| Key | Meaning |
+|---|---|
+| `anchor` | `"gnomon.anchor/1"` |
+| `scope` | which checkout: sha256 of the host name and the root's real path, 16 hex. Several checkouts can share one witness |
+| `trail` | the trail's path relative to the workspace root, POSIX |
+| `seq`, `hash` | the sealing record's seq and chain hash |
+| `records` | records in the trail at seal |
+| `sealed_at` | the sealing record's `ts` |
+
+Its digest is the sha256 of its canonical JSON, the canonicaliser the chain
+uses. Only the statement leaves the machine; the rfc3161 backend sends only
+its digest.
+
+**When.** Queued at seal: one file, `queue/<digest>.json`. Nothing on the
+turn path waits on a witness. Delivery starts after the session's checkpoint
+at session end, in the background. The CLI starts a detached `gnomon audit
+anchor --background`; a library caller gets an unawaited promise.
+`benchmarks/results/auditability-2026-11-03` measured the turn path:
+unchanged. The seal adds about 0.03 ms and session end about 5 ms. A delivered
+statement becomes a line of `receipts.jsonl` (`digest`, `backend`,
+`statement`, `queued_at`, `delivered_at`, `receipt`).
+
+**Backends.**
+- **git:** each delivery is one commit whose tree holds `anchors.jsonl`, one
+  canonical statement per line. It is pushed fast-forward only, never
+  forced, and rebuilt once on a rejection. The witness's own settings make it
+  append-only: `receive.denyNonFastForwards` and `receive.denyDeletes`, or a
+  protected branch. **git applies both to `refs/heads/*` only.** A forced
+  push to `refs/gnomon/anchors` was accepted with both set, so the default is
+  `refs/heads/gnomon-anchors`, and a ref elsewhere is reported as a problem.
+  Verification fetches the ref, reads every commit, and remembers the tip, so
+  a history rewritten since the last read is a finding.
+- **rfc3161:** a TimeStampReq for the digest (nonce, `certReq`). The token
+  is checked at delivery and again, offline, at verification against
+  `tsa_cert`: the imprint, the signed attributes, and the signature under a
+  pinned key or a certificate a pinned certificate issued (one level, EKU
+  timeStamping, valid at genTime). Revocation is not checked. Without
+  `tsa_cert` the tokens are kept and reported unchecked.
+- **cmd:** the digest is written on stdin, with `GNOMON_ANCHOR_DIGEST`,
+  `GNOMON_ANCHOR_STATEMENT` and `GNOMON_ANCHOR_TRAIL` in the environment.
+  Stdout (8 KiB at most) is the receipt. The verifier gets
+  `GNOMON_ANCHOR_RECEIPT` too. Exits 124, 126 and 127 mean it could not run,
+  which is not a finding.
+
+**When the witness cannot be reached: degradation `audit_anchor_queued`.**
+The statements stay queued, and the attempt is recorded in `state.json`. The
+next session (`gnomon task`, `gnomon prompt`) prints `[anchor] N sealed trail
+head(s) … are not yet anchored …` (on stderr for a task, `--json` included)
+and writes a `degradation` record. It does this when an attempt has failed
+since the oldest statement was queued, or when that statement is older than
+120 s. It then retries in the background. `gnomon audit anchor` retries now.
+`gnomon audit verify` lists the trail as `PENDING`. A record is never lost or
+delayed because its anchor could not be delivered.
+
+**`gnomon audit verify`** reads the witness: git from the remote, or with
+`--offline` from this machine's copy; the other backends from the receipts.
+It prints an `external anchor:` line under each trail, and checks the
+`checkpoints/` trails as well:
+
+| Status | Meaning | Exit 1? |
+|---|---|---|
+| `ANCHORED` | every anchor naming the trail matches its recomputed head | no |
+| `RE-CHAINED` | an anchor names a head the trail no longer has. The line gives the anchored and current hashes, the seq range the change is in (after the last anchor that still matches), the anchor's time and where it came from, and any later anchor of the rewrite | yes |
+| `INVALID` | an anchor for the trail does not check out itself (a token, a receipt) | yes |
+| `UNCHECKED` | anchors match but none could be checked: no `tsa_cert`, no `verify`, or the local copy | yes, unless `--offline` |
+| `PENDING` | queued, not delivered | no (the degradation above) |
+| `NOT ANCHORED` | sealed after anchoring began here, with nothing anchored and nothing queued | yes |
+| `NOT ANCHORED` | sealed before this checkout began anchoring, or never sealed | no |
+
+Two more findings, each exit 1. **An anchored trail that is no longer on
+disk** (checkpoints are pruned by design and exempt). **A rollback:** the
+newest anchored checkpoint is gone and nothing newer replaced it, which §14
+said needed an anchor off the machine. Anchors from another `scope` are
+counted, not judged; `--scope <id>` checks another checkout's.
+
+**Limits, published:**
+1. **Anchoring is at seal.** An unsealed trail (a killed run) has no anchor.
+   Within a session the record guard is what watches.
+2. **rfc3161 and cmd receipts live on this machine.** A token proves *when* a
+   head existed. An attacker who deletes it and has the rewritten head
+   stamped again leaves a trail that matches its only anchor: the
+   `rfc3161-aware` arm of `auditability-2026-11-03` is 8/9. Against an
+   attacker who knows the format, use the git witness, or a cmd witness whose
+   verifier asks the witness.
+3. **The git witness is as append-only as its remote is configured.**
+   Whoever can force-push it can erase anchors this machine never fetched.
+4. **Time.** A git anchor's time is the committer date this machine wrote.
+   An rfc3161 anchor's is the authority's clock, and only that one is
+   evidence against a skewed local clock. The witness's history order is
+   evidence of sequence either way.
+5. **The anchors directory is left out of the record guard's snapshots and
+   checkpoint maps.** A background delivery writes there after its session
+   has ended. Its contents are checked against the witness when read, and
+   the `record` rule still refuses the agent's writes to it.
+6. **Not exercised:** a public time-stamp authority, a hosted git remote, and
+   Rekor. The tests use a local bare repository, an in-process authority, and
+   one token OpenSSL's TSA produced (`conformance/anchor_rfc3161_openssl.json`).
+   A native Rekor v2 backend needs signing material gnomon does not hold; the
+   `cmd` backend can carry one, untested.
+
+**Fixtures:** `conformance/audit_anchor.json` holds the statement, queue and
+receipt keys, the backends and the degradation id. `anchor.test.ts` asserts
+them against what the code writes.
+`conformance/anchor_rfc3161_openssl.json` is a real token that the RFC 3161
+code verifies offline.

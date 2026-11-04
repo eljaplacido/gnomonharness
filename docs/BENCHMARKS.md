@@ -233,6 +233,7 @@ account of itself. Every one is reproducible from its directory.
 | # | Dimension | Result | Data |
 |---|---|---|---|
 | T1 | Tamper-evidence | **8/9** attacks caught | [`auditability-2026-08-31`](../benchmarks/results/auditability-2026-08-31/) |
+| T1b | Tamper-evidence with `[audit.anchor]` | **9/9** with a git witness, attacker anchoring-aware; 8/9 off (unchanged) | [`auditability-2026-11-03`](../benchmarks/results/auditability-2026-11-03/), standard: [`benchmarks/AUDITABILITY.md`](benchmarks/AUDITABILITY.md) |
 | T2 | Surface-replay determinism | **10/10** stable | [`determinism-2026-08-31`](../benchmarks/results/determinism-2026-08-31/) |
 | T3 | Context retention | `discard` **0/9** · `summary` **9/9** | [`context-2026-08-31`](../benchmarks/results/context-2026-08-31/) |
 | T4 | Tool-calling contract | **15/16** malformed calls refused, 0 crashes | [`tool-contract-2026-08-31`](../benchmarks/results/tool-contract-2026-08-31/) |
@@ -258,7 +259,7 @@ own 11.9–14.9% self-flip.
 |---|---|---|
 | Surface-hash fidelity | **14/14 paths faithful**, 0 false negatives (14 since 2026-11-03: skill-trial specs count as behaviour) | [`surface-fidelity`](../benchmarks/surface-fidelity/) |
 | Fault disclosure | **8/8 faults disclosed**, after 3 defects | [`fault-disclosure`](../benchmarks/fault-disclosure/) |
-| Degradation, recorded | **15/15 announced AND recorded**, after 3 more (12/12 when first published; 15 since 2026-11-03: `shadow_unreachable`) | [`degradation-contract`](../benchmarks/degradation-contract/) |
+| Degradation, recorded | **16/16 announced AND recorded**, after 3 more (12/12 when first published; 16 since 2026-11-03: `shadow_unreachable`, `audit_anchor_queued`) | [`degradation-contract`](../benchmarks/degradation-contract/) |
 | Silent success | **0/11 falsely successful**, 0 void | [`silent-success`](../benchmarks/silent-success/) |
 | Context on the wire | **4.66×** vs opencode, bytes counted at the endpoint | [`context-cost`](../benchmarks/context-cost/) |
 

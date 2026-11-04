@@ -49,6 +49,10 @@ export * from "./record_tamper.js";
 export * from "./skill_mine.js";
 export * from "./skill_trial.js";
 export * from "./audit.js";
+// [audit.anchor]: sealed heads copied to a witness the trail's writer cannot
+// rewrite (a remote ref, an RFC 3161 authority, an operator command).
+export * from "./anchor.js";
+export * from "./rfc3161.js";
 // Provenance. Not exported until 2026-09-03, which is why the CLI's own help
 // banner carried a hardcoded version literal instead: the function that knows
 // which build is running was not reachable from the package that prints it.

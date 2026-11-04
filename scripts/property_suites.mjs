@@ -13,7 +13,7 @@
  *
  *   surface-fidelity      14/14 faithful, 0 false negatives, 0 false positives, 0 unmeasurable,
  *                         and a trial-spec change that flips a verdict and moves the hash
- *   degradation-contract  15/15 complete (14/14 until shadow_unreachable, 2026-11-03)
+ *   degradation-contract  16/16 complete (14/14 until shadow_unreachable and audit_anchor_queued, 2026-11-03)
  *   fault-disclosure       8/8 disclosed, 0 misnamed
  *   silent-success         0/11 falsely successful, 0 void
  *   determinism           10/10 matched expectation
@@ -107,22 +107,26 @@ const check = (name, r, problems) => {
   check("surface-fidelity 14/14", r, p);
 }
 
-// ── degradation contract: 15/15 complete ──
+// ── degradation contract: 16/16 complete ──
 //
-// 14 until 2026-11-03. The 15th path is `shadow_unreachable`: a declared
-// [shadow] whose server cannot be reached. It stopped with one stderr line and
-// nothing in the record, and recorded nothing for three days unnoticed.
+// 14 until 2026-11-03. The 15th and 16th paths:
+//   `shadow_unreachable`: a declared [shadow] whose server cannot be reached.
+//     It stopped with one stderr line and nothing in the record, and recorded
+//     nothing for three days unnoticed.
+//   `audit_anchor_queued`: a sealed head that could not reach its declared
+//     [audit.anchor] witness stays queued, and the next session announces and
+//     records it.
 {
   const out = join(work, "dc.json");
   const r = run(join(REPO, "benchmarks/degradation-contract"), ["contract.mjs", "--json", out]);
   const p = [];
   if (existsSync(out)) {
     const rows = json(out).rows ?? [];
-    if (rows.length !== 15) p.push(`${rows.length} paths, published 15`);
+    if (rows.length !== 16) p.push(`${rows.length} paths, published 16`);
     const c = count(rows, (x) => x.complete === true);
-    if (c !== 15) p.push(`complete ${c}/15`);
+    if (c !== 16) p.push(`complete ${c}/16`);
   } else p.push("no JSON written");
-  check("degradation-contract 15/15", r, p);
+  check("degradation-contract 16/16", r, p);
 }
 
 // ── fault disclosure: 8/8 ──

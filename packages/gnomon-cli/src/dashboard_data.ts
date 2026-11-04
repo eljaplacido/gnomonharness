@@ -933,7 +933,7 @@ export const PROPERTY_SUITES = [
     question: "When gnomon falls back, clamps or times out, does it say so and record it?",
     dir: "benchmarks/degradation-contract",
     prefix: "result",
-    published: "14/14",
+    published: "16/16",
     unit: "paths",
   },
   {

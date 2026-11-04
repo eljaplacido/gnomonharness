@@ -1043,6 +1043,14 @@ chain = true
   that was written. `[audit.attest]` anchors it with a signer command; gnomon
   never holds the key
   ([README → `[audit.attest]`](../README.md#auditattest--an-anchor-outside-the-file)).
+- `[audit.anchor]` (opt-in) sends each sealed head to a witness off the
+  machine: a branch on a git remote that refuses forced pushes, an RFC 3161
+  time-stamp authority, or a command. Delivery runs in the background after
+  the session ends. Heads that could not be delivered are announced at the
+  next session start, and `gnomon audit anchor` retries them. `gnomon audit
+  verify` then reports a re-chained, deleted or rolled-back trail, with the
+  time after which the change was made
+  ([docs/CONTRACTS.md §21](CONTRACTS.md)).
 - A redaction pattern that does not compile fails **open** (gnomon warns).
   Do not write `(?i)`; matching is already case-insensitive.
 - This is an evidence layer, not a compliance claim.

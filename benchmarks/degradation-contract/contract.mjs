@@ -341,6 +341,48 @@ const PROBES = {
     },
   },
 
+  // Through `runTask`, the entry point a script uses: an earlier session's
+  // sealed head could not reach its witness, and the next session must say so
+  // on stderr (always, `--json` included) and carry it in the record.
+  audit_anchor_queued: {
+    must: /not yet anchored/i,
+    mustNot: /^$/,
+    recordedBy: "a `degradation` record in the session that finds the queue, carried on the TaskRecord's `degradations`",
+    async run(root, audit) {
+      const { resolveAudit, AuditTrail } = await core("audit.js");
+      const { flushAnchors, setAnchorScheduler } = await core("anchor.js");
+      const { runTask } = await core("prompt_loop.js");
+      const withAnchor = () => {
+        const c = loadConfig(root);
+        c.config = { ...c.config, audit: { ...(c.config.audit ?? {}), enabled: true,
+          anchor: { backend: "git", remote: join(root, "witness-that-is-not-there.git") } } };
+        return c;
+      };
+      // Retries are not what is measured; keep them out of the way.
+      setAnchorScheduler(() => {});
+      const said = [];
+      const write = process.stderr.write.bind(process.stderr);
+      const orig = globalThis.fetch;
+      try {
+        const settings = resolveAudit(withAnchor());
+        const earlier = new AuditTrail(settings, `anchor-probe-${Date.now()}`);
+        earlier.write("session_start", {});
+        earlier.write("session_end", {});
+        await flushAnchors(settings.anchor); // fails: nothing at the remote
+        globalThis.fetch = async () => done();
+        process.stderr.write = (chunk, ...rest) => { said.push(String(chunk)); return true; };
+        const record = await runTask(withAnchor(), "go", { role: "implement", yes: true, verbose: false });
+        process.stderr.write = write;
+        for (const d of record.degradations ?? []) audit.write("degradation", d);
+        return { announcedIn: said.join(""), recorded: hasDegradation(audit, "audit_anchor_queued") };
+      } finally {
+        process.stderr.write = write;
+        globalThis.fetch = orig;
+        setAnchorScheduler(null);
+      }
+    },
+  },
+
   model_output_truncated: {
     must: /cut off|token limit|truncat|length/i,
     recordedBy: "`stop_reason` on the turn record",

@@ -54,6 +54,14 @@ import {
   writeState,
   LOOP_STATE_DIR,
   verifyTrail,
+  flushAnchors,
+  collectAnchors,
+  verifyAgainstAnchors,
+  setAnchorScheduler,
+  redactRemote,
+  CHECKPOINT_DIR,
+  type ResolvedAnchor,
+  type AnchorTrailResult,
   resolveSessionStore,
   listSessions,
   resolveEndpoint,
@@ -78,6 +86,7 @@ import {
   settleTrust,
   settleTrustHeadless,
   evaluateTrust,
+  clampToDefaults,
   grantTrust,
   revokeTrust,
   loadTrust,
@@ -97,6 +106,7 @@ import {
   Enumerations,
 } from "gnomon-natives";
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync} from "node:fs";
+import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1231,6 +1241,63 @@ async function listModelsAt(endpoint: {
 }
 
 /**
+ * Deliver queued anchors from a detached process, so the session that queued
+ * them can exit at once. Errors land in the anchors' state file, which the
+ * next session announces (anchor.ts announceAnchorBacklog).
+ */
+function detachedAnchorFlush(s: ResolvedAnchor, trustFlag = false): void {
+  // The launcher this CLI was started through: one level above src/ (or
+  // dist/), the same in a checkout and in the published package.
+  const launcher = fileURLToPath(new URL("../gnomon.js", import.meta.url));
+  if (!existsSync(launcher)) {
+    void flushAnchors(s).catch(() => undefined);
+    return;
+  }
+  try {
+    // `--trust` carries over when this run was trusted by the flag, which the
+    // child cannot see; GNOMON_TRUST and the trust store it reads itself.
+    const args = [launcher, "audit", "anchor", "--background", "--dir", s.root, ...(trustFlag ? ["--trust"] : [])];
+    const child = spawn(process.execPath, args, {
+      cwd: s.root,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: { ...process.env, GNOMON_NO_UPDATE_CHECK: "1" },
+    });
+    child.on("error", () => undefined);
+    child.unref();
+  } catch {
+    /* stays queued; the next session announces it */
+  }
+}
+
+function anchorLabel(a: ResolvedAnchor): string {
+  if (a.backend === "git") return `git, ${redactRemote(a.remote ?? "")} ${a.ref}`;
+  if (a.backend === "rfc3161") return `rfc3161, ${redactRemote(a.url ?? "")}`;
+  return String(a.backend);
+}
+
+/** One `external anchor:` line under a trail. Returns whether it is a failure. */
+function printAnchorLine(r: AnchorTrailResult | undefined, acceptUnchecked = false): boolean {
+  if (!r) return false;
+  // A table, not a switch: docs.test.ts reads `case "…":` in this file as the
+  // list of dispatched commands.
+  const lines: Record<AnchorTrailResult["status"], [boolean, string]> = {
+    anchored: [false, `ANCHORED — ${r.detail}`],
+    rechained: [true, `RE-CHAINED — ${r.detail}`],
+    invalid: [true, `INVALID — ${r.detail}`],
+    unchecked: [!acceptUnchecked, `UNCHECKED — ${r.detail}`],
+    pending: [false, "PENDING — queued, not delivered yet (degradation audit_anchor_queued). `gnomon audit anchor` delivers it now."],
+    unanchored: [true, `NOT ANCHORED — ${r.detail}`],
+    predates: [false, "NOT ANCHORED — sealed before this checkout began anchoring"],
+    unsealed: [false, "NOT ANCHORED — not sealed, so there is no head to anchor"],
+  };
+  const [bad, text] = lines[r.status];
+  (bad ? console.error : console.log)(`  external anchor: ${text}`);
+  return bad;
+}
+
+/**
  * `gnomon audit` — list trails, and check one against everything that can
  * catch a change to it.
  *
@@ -1271,6 +1338,17 @@ async function listModelsAt(endpoint: {
 async function cmdAudit(args: CliArgs): Promise<void> {
   const config = loadConfig(args.dir, args.flags['profile']);
   const settings = resolveAudit(config);
+  // [audit.anchor] pushes to a remote, posts to an authority or runs a
+  // command: a workspace-trust grant (trust.ts). `audit anchor` and `audit
+  // verify` reach it only for a surface this machine's user trusts, or with
+  // --trust / GNOMON_TRUST; otherwise they see the clamped block, which says
+  // why and does nothing.
+  if (settings.anchor?.declared) {
+    const ev = evaluateTrust(config, trustOptions(args));
+    if (ev.status !== "trusted" && ev.status !== "default") {
+      settings.anchor = resolveAudit(clampToDefaults(config)).anchor;
+    }
+  }
   const sub = subcommandOr(args, "show");
 
   // record_tamper events (record_guard.ts): list them, and let a person
@@ -1311,8 +1389,38 @@ async function cmdAudit(args: CliArgs): Promise<void> {
     return;
   }
 
+  // Deliver queued anchors now. `--background` is the detached delivery a
+  // session end starts: it prints nothing, and its outcome is the anchors'
+  // state file, which the next session reads.
+  if (sub === "anchor") {
+    const anchor = settings.anchor;
+    const background = args.flags.background === "true";
+    if (!anchor?.declared) {
+      if (!background) console.error("No [audit.anchor] is declared in .gnomon/config.toml, so nothing is anchored.");
+      process.exit(1);
+    }
+    if (!anchor.enabled) {
+      if (!background) for (const p of anchor.problems) console.error(p);
+      process.exit(1);
+    }
+    const r = await flushAnchors(anchor);
+    if (background) return;
+    for (const p of anchor.problems) console.error(p);
+    if (r.busy) {
+      console.log(`A delivery is already running; ${r.pending} head(s) queued.`);
+      return;
+    }
+    if (r.delivered > 0) console.log(`Anchored ${r.delivered} sealed head(s) to ${anchorLabel(anchor)}.`);
+    if (r.pending > 0) {
+      console.error(`${r.pending} head(s) still queued: ${r.error ?? "not delivered"}`);
+      process.exit(1);
+    }
+    if (r.delivered === 0) console.log("Nothing queued: every sealed head has been delivered.");
+    return;
+  }
+
   if (sub !== "show" && sub !== "list" && sub !== "verify") {
-    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify | tamper | resolve`);
+    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify | anchor | tamper | resolve`);
     process.exit(1);
   }
 
@@ -1363,6 +1471,32 @@ async function cmdAudit(args: CliArgs): Promise<void> {
     console.error(`[audit.attest] ${problem}`);
   }
 
+  // [audit.anchor]: every sealed head against the external witness. Read
+  // once, before the loop, so each trail's lines can carry its own verdict.
+  const anchor = settings.anchor;
+  let anchorReport: ReturnType<typeof verifyAgainstAnchors> | null = null;
+  let anchorFailed = false;
+  const offline = args.flags.offline === "true";
+  if (anchor?.declared) {
+    for (const p of anchor.problems) console.error(p);
+    if (!anchor.enabled) anchorFailed = true;
+    else {
+      const scope = typeof args.flags.scope === "string" && args.flags.scope !== "true" ? args.flags.scope : undefined;
+      const log = await collectAnchors(anchor, { offline });
+      const cpDir = join(settings.dir, CHECKPOINT_DIR);
+      const checkpoints = existsSync(cpDir)
+        ? readdirSync(cpDir).filter((f: string) => /^checkpoint-.*\.jsonl$/.test(f)).map((f: string) => join(cpDir, f))
+        : [];
+      const paths = [...targets.map((n) => join(settings.dir, n)).filter((p) => existsSync(p)), ...checkpoints];
+      anchorReport = verifyAgainstAnchors(anchor, log, paths, { ...(scope ? { scope } : {}), acceptUnchecked: offline });
+      const from = log.source === "remote" ? "read from the remote" : log.source === "local-copy" ? "read from THIS MACHINE'S COPY" : "read from the receipts";
+      console.log(`external anchor: ${anchorLabel(anchor)} — ${from}, scope ${anchorReport.scope}`);
+      for (const p of anchorReport.problems) console.error(`  ${p}`);
+    }
+  }
+  const anchorOf = (path: string) =>
+    anchorReport?.trails.find((t) => resolve(anchor!.root, t.trail) === resolve(path) || t.trail === resolve(path));
+
   let allOk = true;
   for (const name of targets) {
     const path = join(settings.dir, name);
@@ -1411,6 +1545,10 @@ async function cmdAudit(args: CliArgs): Promise<void> {
       console.error(`  anchor: NOT SIGNED — ${a.problem}`);
       console.error(`          [audit.attest] declares a signer, so heads were expected here.`);
       allOk = false;
+    } else if (anchorReport) {
+      // The external anchor line below is what answers the re-chain here, so
+      // the advice to declare a signer would point at the wrong fix.
+      console.log(`  anchor: NOT SIGNED — this surface declares no [audit.attest] signer; the external anchor below is the check against a re-chain.`);
     } else {
       console.log(`  anchor: NOT SIGNED — this surface declares no [audit.attest] signer.`);
       console.log(
@@ -1423,7 +1561,25 @@ async function cmdAudit(args: CliArgs): Promise<void> {
         `          hash passes it. Declare a signer to close that.`
       );
     }
+    if (printAnchorLine(anchorOf(path), offline)) allOk = false;
   }
+
+  if (anchorReport) {
+    // Checkpoints are not listed above (they are in a subdirectory), but they
+    // are anchored too: a rewritten one is the forged baseline the record
+    // guard would otherwise trust.
+    for (const t of anchorReport.trails.filter((x) => x.trail.includes(`/${CHECKPOINT_DIR}/`))) {
+      if (t.status === "anchored" || t.status === "predates" || t.status === "pending" || t.status === "unsealed") continue;
+      console.log(`${t.trail}:`);
+      if (printAnchorLine(t, offline)) allOk = false;
+    }
+    for (const f of anchorReport.findings) console.error(`  external anchor: ${f}`);
+    if (anchorReport.other_scopes > 0) {
+      console.log(`  (${anchorReport.other_scopes} anchor(s) from other checkouts share this witness; not judged here)`);
+    }
+    if (!anchorReport.ok) allOk = false;
+  }
+  if (anchorFailed) allOk = false;
 
   if (!allOk) process.exit(1);
 }
@@ -2353,9 +2509,13 @@ Commands:
           report what came back. A model listing is not a test of a key —
           some providers serve one to no key at all.
 
-  audit [show|verify|tamper|resolve <trail>:<seq> --reason <text>] [--dir <path>]
+  audit [show|verify|anchor|tamper|resolve <trail>:<seq> --reason <text>] [--dir <path>]
     Audit trails, when [audit] is enabled. 'verify' re-hashes each record
     and checks the chain, so a trail altered after the fact is detectable.
+    With [audit.anchor] declared it also checks every sealed head against
+    the external witness and names when a re-chain happened (--offline reads
+    this machine's copy; --scope <id> checks another checkout's anchors).
+    'anchor' delivers queued heads to the witness now.
     'tamper' lists record_tamper events: changes to gnomon's own records
     that gnomon did not make (exit 3 while any is unresolved). 'resolve'
     is a person's acknowledgement of one, recorded; skill accept refuses
@@ -2522,6 +2682,12 @@ Environment:
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+
+  // [audit.anchor] delivers sealed heads after the checkpoint at session end.
+  // In this process that delivery would die with `gnomon task`'s exit, so the
+  // CLI hands it to a detached `gnomon audit anchor --background`. Inert when
+  // nothing is queued, and absent [audit.anchor] nothing ever is.
+  setAnchorScheduler((s) => detachedAnchorFlush(s, Boolean(args.trust)));
 
   // Deliberately NOT applied here. This is before any surface is loaded, so
   // there is nothing to say which names are credentials -- and injecting the

@@ -822,7 +822,10 @@ describe("actions: each one is a gnomon command, and one that changes anything a
 describe("the dashboard contract (CONTRACTS §17, conformance/dashboard.json)", () => {
   const fixture = JSON.parse(readFileSync(join(REPO, "conformance", "dashboard.json"), "utf-8"));
   const contracts = readFileSync(join(REPO, "docs", "CONTRACTS.md"), "utf-8");
-  const section = contracts.slice(contracts.indexOf("## 17."));
+  // §17 alone: it ends at the next `## ` heading.
+  const at17 = contracts.indexOf("## 17.");
+  const end17 = contracts.indexOf("\n## ", at17 + 1);
+  const section = at17 === -1 ? "" : contracts.slice(at17, end17 === -1 ? undefined : end17);
 
   it("the action table, its states and confirmations, the routes and the exit codes are the fixture's", () => {
     expect(fixture.schema).toBe(DASHBOARD_SCHEMA);

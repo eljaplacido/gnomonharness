@@ -304,6 +304,8 @@ function keyHostIsDefault(url: string): boolean {
  * - a `[verify]` command that is not the project's own check, an
  *   `[audit.attest]` signer, and a `[context] bootstrap`: commands that run
  *   without an approval prompt.
+ * - an `[audit.anchor]` witness: a push to a remote, a request to a
+ *   time-stamp authority, or a command, each made at session end, unasked.
  * - an endpoint (or fallback) that sends a key variable to a host that is not
  *   local and not a known provider: a stored key leaving for somewhere the
  *   surface chose.
@@ -363,6 +365,24 @@ export function surfaceGrants(config: GnomonConfig): Grant[] {
       grants: `runs ${boot.probes!.length} ${boot.platform} probe(s) of [bootstrap.${boot.id}] when a session starts, unasked`,
       default: "no bootstrap",
     });
+  }
+
+  const anchor = (config.config.audit as { anchor?: Record<string, unknown> } | undefined)?.anchor;
+  if (anchor && anchor.untrusted !== true) {
+    const backend = str(anchor.backend);
+    const target =
+      backend === "git" ? str(anchor.remote) : backend === "rfc3161" ? str(anchor.url) : backend === "cmd" ? str(anchor.command) : null;
+    if (backend && target) {
+      const what =
+        backend === "git"
+          ? `pushes sealed-head statements to ${target}`
+          : backend === "rfc3161"
+            ? `sends sealed-head digests to ${target}`
+            : `runs \`${target}\` at session end`;
+      add({ key: `anchor.${backend}:${target}`, subject: "audit.anchor", grants: `${what}, unasked`, default: "no anchor" });
+    }
+    const verifyCmd = backend === "cmd" ? str(anchor.verify) : null;
+    if (verifyCmd) add({ key: `anchor.verify:${verifyCmd}`, subject: "audit.anchor", grants: `runs \`${verifyCmd}\` to check receipts`, default: "no anchor" });
   }
 
   for (const [name, ep] of Object.entries(config.config.endpoints ?? {})) {
@@ -456,6 +476,11 @@ export function clampToDefaults(config: GnomonConfig): GnomonConfig {
 
   const audit = c.config.audit as Record<string, any> | undefined;
   if (audit?.attest) delete audit.attest;
+  // Marked rather than deleted: the block stays declared, so the record guard
+  // still leaves the anchors directory out of its snapshots and an earlier
+  // trusted session's queue does not read as tampering. Nothing is queued or
+  // delivered, and the session says why (anchor.ts resolveAnchor).
+  if (audit?.anchor) audit.anchor = { untrusted: true, ...(audit.anchor.dir ? { dir: audit.anchor.dir } : {}) };
 
   // No bootstrap runs on a clamped surface; the turn runs without a snapshot.
   const context = c.config.context as Record<string, any> | undefined;
