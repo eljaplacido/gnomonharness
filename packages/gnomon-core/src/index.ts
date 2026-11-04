@@ -48,6 +48,9 @@ export * from "./audit.js";
 export * from "./build.js";
 // The decision-model shadow: log-only records for agentcenter's readout.
 export * from "./shadow.js";
+// The stall detectors (LP5): log-only counters and `stall_signal` records,
+// and the same module benchmarks/analysis/stall_replay.mjs runs over trails.
+export * from "./stall_signals.js";
 export * from "./session_store.js";
 export * from "./explain.js";
 export * from "./credentials.js";

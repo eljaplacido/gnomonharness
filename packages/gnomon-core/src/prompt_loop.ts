@@ -88,6 +88,7 @@ import {
   DIFF_ELIDED,
 } from "./tools.js";
 import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
+import { StallSignals, type StallSignalCounters } from "./stall_signals.js";
 import { writeTamperRecord, compareWithCheckpoint, writeCheckpoint } from "./record_tamper.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { harnessBuild } from "./build.js";
@@ -3469,6 +3470,14 @@ export interface TurnCounters {
   /** Anti-flailing nudges fired, and where the first one landed. */
   nudges: number;
   first_nudge_step?: number;
+  /**
+   * Three log-only stall detectors (stall_signals.ts): limit cycles, no
+   * progress, novelty CUSUM. Per detector, episodes and the step of the first.
+   * Nothing in the loop reads them back; they are measured so a stall-path
+   * intervention can be judged on its trigger before it is allowed to act.
+   * Absent on a record from a turn that never ran, and on older builds.
+   */
+  stall_signals?: StallSignalCounters;
   /** Whether the final tool call of the turn changed anything. */
   final_step_was_write: boolean;
   /**
@@ -4201,12 +4210,43 @@ export async function runAgenticTurn(
   // Observation only. Nothing below reads these back to decide anything — the
   // moment one of them gates a call, this stops being a record and becomes
   // control, and the nudge regression is the reminder of what that costs.
+  const stallSignals = new StallSignals();
   const counters: TurnCounters = {
     writes: 0,
     worktree_moves: 0,
     nudges: 0,
     final_step_was_write: false,
     per_tool: {},
+    stall_signals: stallSignals.counters,
+  };
+  // The stall detectors (LP5), log-only like the counters above: they see each
+  // executed call after its tool_call record, write `stall_signal` records, and
+  // the loop never asks them anything. A detector that throws stops observing
+  // and says so on the counters; the turn goes on exactly as it would have.
+  const observeStall = (call: ToolCall, outcome: ToolOutcome, target: string): void => {
+    if (counters.stall_signals?.error !== undefined) return;
+    try {
+      const fires = stallSignals.observe(
+        {
+          tool: call.name,
+          target,
+          code: outcome.code,
+          summary: outcome.summary,
+          worktree_changed: outcome.worktree_changed,
+        },
+        steps
+      );
+      for (const fire of fires) deps.audit?.write("stall_signal", { role, ...fire });
+    } catch (e) {
+      try {
+        counters.stall_signals = {
+          ...(counters.stall_signals as StallSignalCounters),
+          error: String(e instanceof Error ? e.message : e).slice(0, 200),
+        };
+      } catch {
+        counters.stall_signals = undefined;
+      }
+    }
   };
 
   // What the worktree looked like BEFORE this turn. Without it, `tree_delta`
@@ -5576,15 +5616,20 @@ export async function runAgenticTurn(
         shellMayHaveTouched = true;
       }
 
+      // The target is metadata; the content it carries is not. For bash the
+      // target IS the action, so it is the whole command (redacted), not
+      // the 70-character line the terminal prints (AuditTrail.action).
+      // Computed once: the stall detectors below see what the record says.
+      const callTarget =
+        call.name === "bash" && typeof call.args.command === "string"
+          ? deps.audit
+            ? deps.audit.action(call.args.command)
+            : call.args.command
+          : describeCall(call);
       deps.audit?.write("tool_call", {
         role,
         tool: call.name,
-        // The target is metadata; the content it carries is not. For bash the
-        // target IS the action, so it is the whole command (redacted), not
-        // the 70-character line the terminal prints (AuditTrail.action).
-        target: call.name === "bash" && typeof call.args.command === "string"
-          ? deps.audit.action(call.args.command)
-          : describeCall(call),
+        target: callTarget,
         gated,
         code: outcome.code,
         bucket: mapBucket(outcome.code),
@@ -5596,6 +5641,7 @@ export async function runAgenticTurn(
         args: deps.audit.text(JSON.stringify(call.args)),
         result: deps.audit.text(outcome.content),
       });
+      observeStall(call, outcome, callTarget);
       // After the call and its record: did it change gnomon's own records?
       // Not for read-only tools, which cannot.
       if (!concurrentSafe(call.name)) {
