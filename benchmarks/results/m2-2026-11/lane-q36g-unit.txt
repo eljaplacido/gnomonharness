@@ -1,0 +1,34 @@
+# /home/eljaplacido/.config/systemd/user/llama-server-qwen-q4.service
+[Unit]
+Description=llama.cpp server — Qwen 3.6 35B MoE (Q4_K_S, DFlash spec-dec) on gx10
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Bind to 0.0.0.0 so the endpoint is reachable from the Tailscale IP
+# (100.86.231.23:18080) for Central Brain orchestration on Windows.
+ExecStart=%h/llama.cpp/build/bin/llama-server \
+  --model %h/models/Qwen3.6-35B-A3B-UD-Q4_K_S.gguf \
+  --host 127.0.0.1 \
+  --port 18080 \
+  --alias qwen3.6-35b \
+  --ctx-size 98304 \
+  --parallel 1 \
+  --n-gpu-layers 99 \
+  --mlock \
+  --batch-size 2048 \
+  --ubatch-size 256 \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --spec-type draft-dflash \
+  --model-draft %h/models/Qwen3.6-35B-A3B-DFlash-Q4_K_M.gguf \
+  --cont-batching \
+  --reasoning off
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
