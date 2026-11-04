@@ -19,6 +19,7 @@ import { resolveAudit } from "./audit.js";
 import { resolveSessionStore } from "./session_store.js";
 import { loadSkills, loadProposedSkills } from "./skills.js";
 import { buildToolSet, MUTATING } from "./tools.js";
+import { resolveAfterRefusal } from "./after_refusal.js";
 
 export interface Explanation {
   topic: string;
@@ -240,6 +241,7 @@ const TOPICS: Record<ExplainTopic, Builder> = {
     const gated = set.schemas
       .map((t) => t.function.name)
       .filter((n) => gate === "always" || MUTATING.has(n));
+    const afterRefusal = resolveAfterRefusal(config);
     return {
       topic: "approval",
       summary: SUMMARIES.approval,
@@ -253,6 +255,14 @@ const TOPICS: Record<ExplainTopic, Builder> = {
         `gate           ${gate}`,
         `gated for ${role}   ${gated.join(", ") || "(nothing — this role cannot mutate)"}`,
         `repo_code      ${(config.policy as { approval?: { repo_code?: unknown } } | undefined)?.approval?.repo_code === true ?"on — npm test, make, pip install -e . and the like always ask" : "off — they ask only as the gate says"}`,
+        // Only when declared: a line saying "off" on every surface would be a
+        // setting nobody asked about, printed as if it mattered.
+        ...(afterRefusal.mode === "ask"
+          ? [
+              `after_refusal  ask — for ${afterRefusal.calls} gated call${afterRefusal.calls === 1 ? "" : "s"} after a refusal,`,
+              `               one naming what was refused is asked, standing approval or not`,
+            ]
+          : []),
       ],
       next: [
         "At a prompt: [y]es, [a]ll this turn, [s]ession, [N]o.",

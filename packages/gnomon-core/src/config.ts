@@ -2159,6 +2159,10 @@ interface EnumSpec {
 
 const ENUM_KEYS: EnumSpec[] = [
   { block: "approval", key: "gate", values: ["never", "on_write", "always"], falls_back_to: "on_write" },
+  // resolveAfterRefusal (after_refusal.ts): anything but "ask" is off. Written
+  // out rather than imported, because after_refusal.ts reaches config.ts through
+  // tools.ts; after_refusal.test.ts holds the two lists equal.
+  { block: "approval", key: "after_refusal", values: ["off", "ask"], falls_back_to: "off" },
   { block: "sandbox", key: "level", values: ["off", "confined", "strict"], falls_back_to: "confined" },
   // resolveExec: anything that is not exactly "docker" resolves to "off".
   { block: "sandbox", key: "exec", values: EXEC_VALUES, falls_back_to: "off" },
@@ -2518,6 +2522,23 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
       where: ".gnomon/policy.toml [approval]",
       problem: `repo_code = ${JSON.stringify(repoCode)} is not a boolean, so it is read as false: calls that run repository code are not asked about.`,
       fix: "Write repo_code = true (or false), unquoted.",
+      fatal: false,
+    });
+  }
+
+  // [approval] after_refusal_calls is read only as a positive integer
+  // (after_refusal.ts resolveAfterRefusal); anything else is the default
+  // window, silently, on a control a surface turned on to be stricter.
+  const afterRefusalCalls = (config.policy as { approval?: { after_refusal_calls?: unknown } } | undefined)
+    ?.approval?.after_refusal_calls;
+  if (
+    afterRefusalCalls !== undefined &&
+    !(typeof afterRefusalCalls === "number" && Number.isInteger(afterRefusalCalls) && afterRefusalCalls >= 1)
+  ) {
+    problems.push({
+      where: ".gnomon/policy.toml [approval]",
+      problem: `after_refusal_calls = ${JSON.stringify(afterRefusalCalls)} is not a positive integer, so the default window of 1 call is used.`,
+      fix: "Write a whole number of 1 or more, unquoted: after_refusal_calls = 2.",
       fatal: false,
     });
   }

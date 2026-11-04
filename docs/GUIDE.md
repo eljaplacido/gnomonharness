@@ -1636,6 +1636,12 @@ trusted it. `gnomon trust` shows what it grants. Trust it with
 **How do I make it ask less, or more?**
 `[approval] gate` in `policy.toml`: `always` (every call), `on_write`
 (default: anything that can change something), `never`.
+`after_refusal = "ask"` in the same block asks again right after a refusal:
+when the next gated call (`after_refusal_calls` widens the window) names what
+was just refused, it goes to you even under `gate = "never"` or an `a`/`s`
+standing approval.
+That is the shape of a route-around, such as a refused edit of `CHANGELOG.md`
+followed by a shell command that rewrites it. Off by default.
 
 **I edited `roles.toml` and nothing changed. Why?**
 The active profile wins per field, and the surface is read at startup. Edit

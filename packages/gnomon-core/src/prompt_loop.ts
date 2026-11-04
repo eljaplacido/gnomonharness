@@ -94,6 +94,7 @@ import {
 import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
 import { writeTamperRecord, compareWithCheckpoint, writeCheckpoint } from "./record_tamper.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
+import { AFTER_REFUSAL_REASON, AfterRefusalWindow, resolveAfterRefusal } from "./after_refusal.js";
 import { harnessBuild } from "./build.js";
 import { mapBucket } from "./session.js";
 import {
@@ -3035,6 +3036,11 @@ export interface TurnEventCall {
   describe: string;
   /** Whether the approval gate applies to this call */
   gated: boolean;
+  /**
+   * Present, and true, when `[approval] after_refusal` sends this call to a
+   * person although a standing approval would have answered it.
+   */
+  escalated?: boolean;
   /** 0 for the turn a person asked for, 1 for a delegated sub-turn */
   depth: number;
 }
@@ -3741,6 +3747,13 @@ export interface TurnCounters {
    * turn record's `wire` says `steer_role: "user"`. Absent when none were.
    */
   steer_role_adapted?: number;
+  /**
+   * Calls `[approval] after_refusal` sent to a person: each named something a
+   * call refused earlier in the turn had named, and would otherwise have run
+   * unasked. Absent when none were, which is every turn of a surface that
+   * does not declare it.
+   */
+  after_refusal_asks?: number;
   /** Per tool: calls made, refusals, apparatus failures. Separates "bash
    * failed 9 of 31 calls" from "bash succeeded 31/31 and the answer was still
    * wrong". */
@@ -4262,6 +4275,10 @@ export async function runAgenticTurn(
         return ok;
       }
     : deps.approve;
+  // `[approval] after_refusal = "ask"`: a call that reaches for what was just
+  // refused goes to a person (after_refusal.ts). Off unless declared, and then
+  // nothing below reads it.
+  const afterRefusal = new AfterRefusalWindow(resolveAfterRefusal(config));
 
   const ctx: ToolContext = {
     audit: deps.audit,
@@ -5956,11 +5973,15 @@ export async function runAgenticTurn(
       if (recentCalls.length > Math.max(loop.stall_repeats * 2, STALL_WINDOW)) {
         recentCalls.shift();
       }
-      const gated = needsApproval(call.name, gate) && offered.has(call.name);
+      // `[approval] after_refusal`: the reason this call goes to a person even
+      // though the gate or a standing approval would have let it run. Null --
+      // always, unless a surface opted in -- changes nothing below.
+      const escalated = offered.has(call.name) ? afterRefusal.check(call.name, call.args) : null;
+      const gated = (escalated !== null || needsApproval(call.name, gate)) && offered.has(call.name);
       // A call the operator has to answer for is one they are watching, and
       // its prompt is written straight to the console rather than through
       // `say` — so anything held back has to land before it.
-      const standing = deps.standingApproval?.() ?? false;
+      const standing = escalated === null && (deps.standingApproval?.() ?? false);
       const askedIndividually = gated && !standing;
       if (askedIndividually) flushFold();
       deps.progress.stop();
@@ -5979,14 +6000,38 @@ export async function runAgenticTurn(
             describe: describeCall(call),
             gated,
             depth,
+            ...(escalated !== null ? { escalated: true } : {}),
           }
         : undefined;
       if (eventCall) deps.events?.toolStart?.(eventCall);
 
       callApproval = undefined;
-      const outcome: ToolOutcome =
-        (await prefetched.get(callIndex)) ??
-        (await executeTool(call.name, call.args, ctx, offered));
+      let outcome: ToolOutcome;
+      if (escalated !== null) {
+        // Asked of a person this once. The gate reads "always" for this call
+        // and the request says why, which is what keeps a standing approval
+        // from answering it. Restored straight after: an escalatable call is
+        // never prefetched, and calls run one at a time from here, so nothing
+        // else reads ctx while it is changed. A call the rules refuse is still
+        // refused before anyone is asked.
+        const declared = { gate: ctx.gate, approve: ctx.approve };
+        ctx.gate = "always";
+        ctx.approve = (req) => {
+          counters.after_refusal_asks = (counters.after_refusal_asks ?? 0) + 1;
+          return declared.approve({ ...req, escalated });
+        };
+        try {
+          outcome = await executeTool(call.name, call.args, ctx, offered);
+        } finally {
+          ctx.gate = declared.gate;
+          ctx.approve = declared.approve;
+        }
+      } else {
+        outcome =
+          (await prefetched.get(callIndex)) ??
+          (await executeTool(call.name, call.args, ctx, offered));
+      }
+      afterRefusal.observe(call.name, call.args, mapBucket(outcome.code) === "refusal");
       code = worse(code, outcome.code);
       if (outcome.surface_drift) surfaceChanges.push(outcome.surface_drift);
       toolLog.push(outcome.summary);
@@ -6892,6 +6937,9 @@ export async function runTask(
         // oversight where there was none would be worse than no trail.
         by: options.yes ? "flag:--yes" : "default:no-operator",
         interactive: false,
+        // [approval] after_refusal asked this one. A run has nobody to ask, so
+        // it is answered the way every gated call here is: --yes or no.
+        ...(req.escalated ? { escalated: AFTER_REFUSAL_REASON } : {}),
       });
       return Boolean(options.yes);
       };
@@ -9695,7 +9743,9 @@ export async function runPromptLoop(
   const approve = async (req: ApprovalRequest): Promise<boolean> => {
     const ui = uiOf(state);
 
-    if (approveRestOfSession || approveRestOfTurn) {
+    // `[approval] after_refusal` sends a call here BECAUSE it should not be
+    // answered by a standing approval, so one does not answer it.
+    if ((approveRestOfSession || approveRestOfTurn) && !req.escalated) {
       // No line here. This used to print `⤷ <summary> (standing approval: …)`
       // for EVERY call, which restated a scope the operator had already been
       // told about once, in full, at the moment they granted it — and did it
@@ -9721,6 +9771,11 @@ export async function runPromptLoop(
     // Both of these are model-chosen strings. Printed raw, a command carrying
     // ESC[2K and a CR could erase and rewrite the very line being approved.
     console.log(paint(ui, "yellow", `  ┌ approve: ${safeForPrompt(req.summary)}`));
+    if (req.escalated) {
+      // Why a session that granted `a` or `s`, or a gate of never, is being
+      // asked at all. The reason names a path or host the model chose.
+      console.log(paint(ui, "red", `  │ asked because ${safeForPrompt(req.escalated)}`));
+    }
     for (const raw of req.preview.slice(0, 60)) {
       const line = safeForPrompt(raw);
       const colour = line.startsWith("+ ")
@@ -9862,6 +9917,7 @@ export async function runPromptLoop(
       decision: yes ? "approved" : "declined",
       by: "human",
       interactive: Boolean(process.stdin.isTTY),
+      ...(req.escalated ? { escalated: AFTER_REFUSAL_REASON } : {}),
     });
     console.log(
       yes

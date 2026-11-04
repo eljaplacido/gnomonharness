@@ -36,6 +36,9 @@ export * from "./chaos.js";
 export * from "./chaos_suite.js";
 export * from "./render.js";
 export * from "./tools.js";
+// `[approval] after_refusal`: after a refusal, a call naming what was refused
+// goes to a person even under a standing approval (GV13).
+export * from "./after_refusal.js";
 // How bash_deny, bash_allow and network = false read a shell command: as the
 // shell will run it, not as text. An intent filter, not containment.
 export * from "./shell.js";
