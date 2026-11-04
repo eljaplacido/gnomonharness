@@ -72,14 +72,14 @@ node "$HERE/test_relay_go_r3r.mjs" > "$T/relay-go.txt" || { cat "$T/relay-go.txt
 for f in peer_agents_r1.py gnomon_agent.py relay-go.mjs sample16-hunch.txt; do
   cmp -s "$HERE/$f" "$R1H/apparatus/$f" || { echo "preflight: $f differs from R1H's"; exit 1; }
 done
-for f in relay-meter-s1.mjs test_relay_s1.mjs s1-hubwatch.sh test_hubwatch_s1.sh; do
+for f in relay-meter-s1.mjs test_relay_s1.mjs s1-hubwatch.sh; do  # test_hubwatch_s1.sh: pinned by hash below (R3R addendum 2026-11-04)
   cmp -s "$HERE/$f" "$S1/apparatus/$f" || { echo "preflight: $f differs from S1's (S1 changed it, or this copy was edited): re-copy and re-review"; exit 1; }
 done
 sha256sum -c --quiet <<EOF || { echo "preflight: a copy is not the file pinned at preparation"; exit 1; }
 3e856dbf2add1aaa8ccdfb1a91dd7f9bfcca3982c99a41699b93529f38ef5aa4  $HERE/collect_m1.py
 bb0b70ac9e8be4a43021bd72f5b084882616134c3223b7cb7ad21df2073895d9  $HERE/relay-meter-s1.mjs
 415e8ba71c4a1e712a9ae1f39ffb23c7eb956adfa0c8a8e4756954781bf14ad1  $HERE/s1-hubwatch.sh
-b6943506667b94312879642ce5061f216e61c3ca919e2eca5d0675901c17eb98  $HERE/test_hubwatch_s1.sh
+9c31e27113cd41c5eb9869bc5a2fa4445e61eca46f538776c3a35a14316f27fe  $HERE/test_hubwatch_s1.sh
 0a881760384a85978eb8c4dad6ed5053fa39f0012d4b794ba0d2e5c4a2318d73  $HERE/test_relay_s1.mjs
 49bf84f8169622837a070db416e0df5b4c55c680627abf491e2cd44c90795d26  $HERE/relay-go.mjs
 EOF

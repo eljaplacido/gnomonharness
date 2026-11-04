@@ -91,7 +91,7 @@ sha256sum -c --quiet <<EOF || { echo "preflight: a copy is not the file pinned a
 3e856dbf2add1aaa8ccdfb1a91dd7f9bfcca3982c99a41699b93529f38ef5aa4  $HERE/collect_m1.py
 bb0b70ac9e8be4a43021bd72f5b084882616134c3223b7cb7ad21df2073895d9  $HERE/relay-meter-s1.mjs
 415e8ba71c4a1e712a9ae1f39ffb23c7eb956adfa0c8a8e4756954781bf14ad1  $HERE/s1-hubwatch.sh
-b6943506667b94312879642ce5061f216e61c3ca919e2eca5d0675901c17eb98  $HERE/test_hubwatch_s1.sh
+9c31e27113cd41c5eb9869bc5a2fa4445e61eca46f538776c3a35a14316f27fe  $HERE/test_hubwatch_s1.sh
 0a881760384a85978eb8c4dad6ed5053fa39f0012d4b794ba0d2e5c4a2318d73  $HERE/test_relay_s1.mjs
 49bf84f8169622837a070db416e0df5b4c55c680627abf491e2cd44c90795d26  $HERE/relay-go.mjs
 aab8a3ea1f25d5c946aa21bac3d99b3d4f6190a4ca79d1936629b826dfb4c93d  $BENCH/ref/lane-fnx-ref-start-m1b.sh

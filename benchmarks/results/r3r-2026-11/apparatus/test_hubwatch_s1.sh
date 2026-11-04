@@ -43,7 +43,7 @@ eq "$(printf 'garbage\n' | parse_sample)" "error" "parse: no GPU line is an erro
 
 # ---- sample_idle: every condition
 sample_idle "$IDLE"; ok $? "idle: 2274 MiB, 0%, no llama-server, no m1-vllm"
-! sample_idle "gpu_used=4000 gpu_total=32607 util=0 llama=[] wsl=[]"; ok $? "not idle: memory 4000 (the bound is strict)"
+! sample_idle "gpu_used=$IDLE_MEM_MAX gpu_total=32607 util=0 llama=[] wsl=[]"; ok $? "not idle: memory at the bound $IDLE_MEM_MAX (the bound is strict)"
 sample_idle "gpu_used=3999 gpu_total=32607 util=14 llama=[] wsl=[]"; ok $? "idle: 3999 MiB, 14%"
 ! sample_idle "gpu_used=2274 gpu_total=32607 util=15 llama=[] wsl=[]"; ok $? "not idle: utilization 15%"
 ! sample_idle "gpu_used=2274 gpu_total=32607 util=0 llama=[777] wsl=[]"; ok $? "not idle: a llama-server.exe is running"

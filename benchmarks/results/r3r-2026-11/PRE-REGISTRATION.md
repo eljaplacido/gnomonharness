@@ -271,3 +271,20 @@ for append.
 
 Launch (after this file is committed): `cd apparatus && setsid nohup env R3_WAIT_PID=<S1 chain pid> ./r3r-chain.sh
 >> ../chain-r3r.log 2>&1 < /dev/null &`
+
+
+## Addendum (2026-11-04T09:12:26Z): gaming-safe idle threshold for this desktop (scheduling only)
+
+- **What changed:** the RTX chains start with `IDLE_MEM_MAX=6500` (MiB) instead of S1 Amendment 1's default 4000.
+  - Between 06:05 and 08:38Z the hub's idle desktop used 4,094–4,848 MiB of VRAM with no llama-server and ~0% utilization.
+  - So the idle wait read 0/15 for 2.5 h while the GPU was idle.
+  - Unchanged: utilization < 15%, no llama-server and m1-vllm, 15 consecutive samples, and the yield rule (warm level + 1,500 MiB for 2 samples).
+- **Test:** `test_hubwatch_s1.sh` line 46 now tests the strict bound at the bound in force (`$IDLE_MEM_MAX`) instead of a literal 4000.
+  - At 4000 it is the same case, byte for byte in effect.
+  - The R3R and M2 copies are identical, sha256 9c31e271…; the pins in `preflight_r3r.sh` and `preflight_m2.sh` are updated to it.
+  - S1's own copy, in a completed study, is left untouched. R3R's preflight no longer compares this one file with S1's: the hash pin fixes its content instead.
+- **Correction:** the 09:10Z commit 1d0e36b7 is titled "R3R complete", and `summary-r3r.txt` holds a collection over 4 of 96 cells.
+  - What happened: the runner's preflight failed 3 times on the operator's first, unpinned edit of that test (09:07–09:10Z).
+  - No cell ran in that window and no spend was made.
+  - That summary is NOT a result, and is superseded by the collection at R3R's real completion.
+- No measured variable, task, arm, build (v0.4.0, be4fc0d8) or analysis rule changes.
