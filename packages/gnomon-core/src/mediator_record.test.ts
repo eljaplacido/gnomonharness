@@ -222,22 +222,53 @@ async function runC() {
   return { raws, records, state };
 }
 
+/** A request body with the Windows platform note cut out of its system message. */
+function normalised(raw: string): string {
+  const note = JSON.stringify(platformBlock()).slice(1, -1);
+  return note ? raw.split(note).join("") : raw;
+}
+
 /**
  * One hash over every request body of A, B and C, in order. The Windows
  * platform note is cut out of the system message first: it is the one part of
- * a request that depends on the machine, and CI runs on three.
+ * a request that is meant to depend on the machine.
  */
 function bodiesHash(groups: Array<[string, string[]]>): string {
-  const note = JSON.stringify(platformBlock()).slice(1, -1);
   const h = createHash("sha256");
   for (const [name, raws] of groups) {
-    raws.forEach((raw, i) => h.update(`${name}#${i}\n${note ? raw.split(note).join("") : raw}\n`));
+    raws.forEach((raw, i) => h.update(`${name}#${i}\n${normalised(raw)}\n`));
   }
   return h.digest("hex");
 }
 
 /** sha256 of A, B and C's request bodies on master at be4fc0d8 (v0.4.0), taken before this feature existed. */
 const MASTER_BODIES = "ffbe2ef96da6c693a20ff8b140d2dd4ad669538f741ac31a3f3365ab06769847";
+
+/**
+ * Each request's own sha256 (first 16 hex), so a mismatch names the request.
+ * Taken on this branch on Linux, where the bodies hash to MASTER_BODIES
+ * above: they are master's bodies, one by one.
+ */
+const MASTER_REQUESTS: Record<string, string[]> = {
+  A: ["578883c4f83c1e69", "af3db1c44c8e1d1f", "b8c84d1fa33bff2b", "8a917fca5ed1d2ae", "410204d50d4ec10d", "daef7af67f8b0d77", "3d699aaff82acbf7", "008d7d9f09860ff6", "92ee0720f788cc62", "0ab17ae8faa3487a", "1f518745b94d45ea"],
+  B: ["01905ff4470273e5", "f92ca214d1a84993", "53f155a186b5debd", "9fbfc4a769fb2184", "364016f1de34f494"],
+  C: ["c483304477310109", "e48db92c6c916f5d", "4b42dfb4bdb13dda"],
+};
+
+/** Which requests differ from master's, with the first one's body, for the failure message. */
+function differing(groups: Array<[string, string[]]>): string {
+  const out: string[] = [];
+  let first = "";
+  for (const [name, raws] of groups) {
+    raws.forEach((raw, i) => {
+      const h = createHash("sha256").update(normalised(raw)).digest("hex").slice(0, 16);
+      if (h === MASTER_REQUESTS[name]?.[i]) return;
+      out.push(`${name}#${i + 1}`);
+      first ||= `${name}#${i + 1} as sent here:\n${normalised(raw)}`;
+    });
+  }
+  return out.length ? `requests that differ from master's: ${out.join(", ")}\n${first}` : "";
+}
 
 describe("byte-identity with master, default settings", () => {
   it("sends exactly the request bodies master sent, over three scripted runs", async () => {
@@ -248,7 +279,9 @@ describe("byte-identity with master, default settings", () => {
     expect(a.raws.length).toBeGreaterThanOrEqual(8);
     expect(b.raws.length).toBe(5);
     expect(c.raws.length).toBe(3);
-    expect(bodiesHash([["A", a.raws], ["B", b.raws], ["C", c.raws]])).toBe(MASTER_BODIES);
+    const groups: Array<[string, string[]]> = [["A", a.raws], ["B", b.raws], ["C", c.raws]];
+    expect(differing(groups)).toBe("");
+    expect(bodiesHash(groups)).toBe(MASTER_BODIES);
   });
 });
 
