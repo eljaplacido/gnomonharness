@@ -340,7 +340,8 @@ describe("when the endpoint gives no window", () => {
     expect(route.target).toMatchObject({ contextTokens: 65536, contextSource: "default" });
     expect(warned).toHaveLength(1);
     expect(recs.map((r) => r.id)).toEqual(["context_window_unresolved"]);
-  });
+    // Windows retries a refused localhost connect for about 2 s per probe.
+  }, 30_000);
 
   it("under `gnomon task --json`: said on stderr, carried in the record's degradations and in the trail's wire", async () => {
     const { url, chat } = await fake({ chat: [answer("ok")] });
@@ -559,7 +560,14 @@ describe("the leg checkpoint, in the loop", () => {
   it('an "auto" that found nothing sends the same requests, byte for byte, as an endpoint that declares nothing', async () => {
     const plain = await legTurn("");
     const missed = await legTurn(AUTO); // /models and /props both 404
-    const norm = (run: { chat: unknown[]; root: string }) => JSON.stringify(run.chat).split(run.root).join("<root>");
+    // The project root differs between the two runs; as written into JSON on
+    // Windows its backslashes are escaped, so both spellings are replaced.
+    const norm = (run: { chat: unknown[]; root: string }) =>
+      JSON.stringify(run.chat)
+        .split(JSON.stringify(run.root).slice(1, -1))
+        .join("<root>")
+        .split(run.root)
+        .join("<root>");
     expect(fillersIn(missed.chat[2]!)).toBeLessThan(FILLER);
     expect(norm(missed)).toBe(norm(plain));
   });
