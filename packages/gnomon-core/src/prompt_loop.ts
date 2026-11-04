@@ -796,6 +796,33 @@ interface InferenceResult {
    * assistant message only where the endpoint asks for it.
    */
   reasoning?: string;
+  /**
+   * The endpoint answered with a body that is not JSON: a proxy's error page,
+   * or a reply cut off in transit. Code 12 -- the request was fine, another
+   * attempt can fix it -- and, like a broken stream, it spends a generation
+   * attempt rather than the transport grace: the endpoint is reachable.
+   */
+  unreadable?: boolean;
+  /** `content` arrived as an array of content parts and was read as their text. */
+  contentParts?: boolean;
+  /** Streamed `data:` lines that were not JSON: pieces of the reply that are missing from it. */
+  droppedChunks?: number;
+}
+
+/**
+ * The text of an array of content parts: `[{type: "text", text}]`, or strings.
+ * Parts with no text (an image, a refusal object) contribute nothing.
+ */
+export function partsText(parts: unknown[]): string {
+  return parts
+    .map((p) =>
+      typeof p === "string"
+        ? p
+        : p && typeof p === "object" && typeof (p as { text?: unknown }).text === "string"
+          ? (p as { text: string }).text
+          : ""
+    )
+    .join("");
 }
 
 /**
@@ -986,6 +1013,25 @@ export function isMalformedCall(call: ToolCall, offered: Set<string>): boolean {
 }
 
 /**
+ * What was wrong with a reply's unusable calls, for the operator's line.
+ *
+ * The line said "malformed arguments or unknown tool" whichever it was, so a
+ * call cut off in transit -- a fault of the wire, which the model fixes by
+ * sending the same call again -- read the same as a model inventing a tool.
+ * The tool results already told the MODEL which; this tells the operator.
+ */
+export function describeMalformed(calls: ToolCall[], offered: Set<string>): string {
+  const why = calls.map((c) => {
+    const name = c.name || "(no name)";
+    if (!c.name || !offered.has(c.name)) return `${name}: not a tool this role was offered`;
+    if (ARGS_TRUNCATED in c.args) return `${name}: arguments cut off in transit (truncated JSON)`;
+    if (ARGS_MALFORMED in c.args) return `${name}: arguments not a JSON object`;
+    return `${name}: usable`;
+  });
+  return [...new Set(why)].join("; ");
+}
+
+/**
  * Call one inference endpoint (Ollama /api/chat or any OpenAI-compatible
  * /chat/completions) with a hard timeout.
  *
@@ -1141,7 +1187,7 @@ export async function callEndpointWithRetry(
     if (r.refusedLocally && !resilience.transport_grace_declared) {
       graceMs = Math.min(declaredGraceMs, LOCAL_REFUSED_GRACE_MS);
     }
-    if (r.code === 12 && graceMs > 0 && !r.streamBroken) {
+    if (r.code === 12 && graceMs > 0 && !r.streamBroken && !r.unreadable) {
       transportTries++;
       const wait = Math.min(
         resilience.backoff_ms * Math.pow(2, transportTries - 1),
@@ -1251,7 +1297,9 @@ export async function callEndpointWithRetry(
                   : `timed out (deadline now ${deadline}ms)`
                 : r.streamBroken
                   ? `the stream broke off mid-reply`
-                  : transportKind(r)
+                  : r.unreadable
+                    ? `the reply was not JSON`
+                    : transportKind(r)
             } ` +
               `— attempt ${attempt} of ${resilience.attempts}, waiting ${wait}ms`
           )
@@ -1813,6 +1861,7 @@ async function callEndpointOnce(
       return {
         content,
         ...(promoted && content ? { reasoningOnly: true } : {}),
+        ...(s.unparsed > 0 ? { droppedChunks: s.unparsed } : {}),
         code: 0,
         toolCalls: normaliseToolCalls(raw),
         rawToolCalls: raw,
@@ -1822,7 +1871,28 @@ async function callEndpointOnce(
       };
     }
 
-    const json = await res.json();
+    // A body that is not JSON is told as that. The SyntaxError `res.json()`
+    // throws used to reach the catch below, where classifyFailure filed it as
+    // 10 -- "the request was wrong" -- so a proxy's HTML error page sent with
+    // a 200 ended the turn on the first occurrence, unretried, as
+    // "Model unavailable at <url>: Unexpected token '<'". The request was
+    // fine; the reply was not. Found by `gnomon chaos` (corrupt.content).
+    // V8's message quotes the start of the body, which is the diagnosis.
+    let json: any;
+    try {
+      json = await res.json();
+    } catch (err) {
+      if (!(err instanceof SyntaxError || (err as { name?: unknown })?.name === "SyntaxError")) throw err;
+      drained = true;
+      return {
+        content:
+          `The endpoint at ${target.url} answered ${res.status} with a body that is not JSON ` +
+          `(${String((err as Error).message).slice(0, 160)}) — a proxy or gateway page, or a reply cut off in transit.`,
+        code: 12,
+        unreadable: true,
+        toolCalls: [],
+      };
+    }
     drained = true;
     const message = json.choices?.[0]?.message ?? json.message ?? {};
     // reasoning_content is read, and last. A reasoning model that answers only
@@ -1848,6 +1918,15 @@ async function callEndpointOnce(
     const raw: unknown[] = Array.isArray(message.tool_calls)
       ? message.tool_calls
       : [];
+    // `content` as an array of content parts, not a string. Read as the text
+    // of its parts, and said once per turn by the loop (`contentParts`): it
+    // reached `.trim()` as an array and the TypeError ended the run as
+    // "gnomon task could not start", exit 10 (gnomon chaos, schema.content).
+    const contentParts = Array.isArray(message.content);
+    if (contentParts) message.content = partsText(message.content);
+    else if (message.content != null && typeof message.content !== "string") {
+      message.content = JSON.stringify(message.content);
+    }
     const content =
       message.content ??
       json.response ??
@@ -1873,6 +1952,7 @@ async function callEndpointOnce(
       usage: readUsage(json),
       finishReason,
       ...(reasoningOnly ? { reasoningOnly: true } : {}),
+      ...(contentParts ? { contentParts: true } : {}),
       ...kept,
     };
   } catch (err) {
@@ -2033,6 +2113,13 @@ export interface StreamedReply {
   error?: { message: string; status?: number; type?: string };
   /** A finish_reason or [DONE] arrived, so the reply is whole */
   complete: boolean;
+  /**
+   * `data:` lines that were not JSON. Each was a chunk of the reply, and its
+   * text is not in `content`. Skipped as before; counted so the loop can say
+   * the reply may be missing text, which it used to drop without a word
+   * (gnomon chaos, corrupt.stream).
+   */
+  unparsed: number;
 }
 
 /**
@@ -2051,7 +2138,7 @@ export async function readChatStream(
   body: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
   onData?: () => void
 ): Promise<StreamedReply> {
-  const out: StreamedReply = { content: "", reasoning: "", toolCalls: [], complete: false };
+  const out: StreamedReply = { content: "", reasoning: "", toolCalls: [], complete: false, unparsed: 0 };
   const decoder = new TextDecoder();
   let buffer = "";
   let data: string[] = [];
@@ -2072,7 +2159,10 @@ export async function readChatStream(
     try {
       chunk = JSON.parse(text);
     } catch {
-      return; // not JSON, so not a chunk
+      // Not JSON, so not a chunk -- but a data line that is blank carried
+      // nothing, and one that is not was a piece of the reply.
+      if (text.trim() !== "") out.unparsed++;
+      return;
     }
     if (chunk?.error) {
       const e = chunk.error;
@@ -4429,6 +4519,17 @@ export async function runAgenticTurn(
    * silent: a turn that ran with fewer tools than the surface declared is
    * exactly what system.md says must never pass unremarked.
    */
+  /**
+   * Where a retried call is announced. Every attempt is announced -- the
+   * comment on callEndpointWithRetry says a silent retry would make a session
+   * that took three tries read as one -- but the lines went to `deps.say`,
+   * which `gnomon task --json` closes, so on the scripted path a recovered
+   * 500, 429, timeout or broken stream left no trace at all. Found by
+   * `gnomon chaos` (v0.4.0: every single-fault case of those classes scored
+   * SILENT). `deps.warn` when the caller gave one, so `--json` keeps them on
+   * stderr; `deps.say` otherwise, so the interactive loop is byte-identical.
+   */
+  const announceRetry = deps.warn ?? deps.say;
   const call = async (declared: typeof route.target) => {
     let target = adaptTarget(state, declared);
     const offer = noTools.has(target.model) ? [] : toolSet.schemas;
@@ -4438,7 +4539,7 @@ export async function runAgenticTurn(
       offer,
       resilience.request_timeout_ms,
       resilience,
-      deps.say,
+      announceRetry,
       deps.ui,
       deps.signal,
       state.sessionId
@@ -4459,7 +4560,7 @@ export async function runAgenticTurn(
         offer,
         resilience.request_timeout_ms,
         resilience,
-        deps.say,
+        announceRetry,
         deps.ui,
         deps.signal,
         state.sessionId
@@ -4503,7 +4604,7 @@ export async function runAgenticTurn(
         offer,
         resilience.request_timeout_ms,
         resilience,
-        deps.say,
+        announceRetry,
         deps.ui,
         deps.signal,
         state.sessionId
@@ -4553,6 +4654,8 @@ export async function runAgenticTurn(
   // shut. Measured: R1H (2026-11-02) lost 20 of 30 local-model cells to a 502
   // outage. The next turn starts on the primary again.
   let onFallback = false;
+  // Content parts are a dialect, not an accident: said once per turn, not per reply.
+  let saidContentParts = false;
 
   /**
    * The record guard, created on the session's first tool call so its
@@ -4800,6 +4903,31 @@ export async function runAgenticTurn(
 
     code = worse(code, result.code);
 
+    // Two ways a reply arrives readable but not as sent. Both used to pass in
+    // silence (gnomon chaos: schema.content, corrupt.stream). Said, not acted
+    // on: the reply is still the best one there is.
+    if (result.contentParts && !saidContentParts) {
+      saidContentParts = true;
+      warn(
+        paint(
+          deps.ui,
+          "yellow",
+          `  [endpoint] ${usedModel} sent its content as an array of content parts, not a string — ` +
+            `read as the text of its parts (said once per turn)`
+        )
+      );
+    }
+    if (result.droppedChunks) {
+      warn(
+        paint(
+          deps.ui,
+          "yellow",
+          `  [endpoint] ${result.droppedChunks} streamed chunk(s) from ${usedModel} were not valid JSON ` +
+            `and were dropped — the reply may be missing text`
+        )
+      );
+    }
+
     // A turn with no tool calls AND no text is not an answer. It was recorded as
     // stop_reason "answered", which is how a loop that gave up got counted as a
     // model that concluded. Re-prompt once — as a user turn, because the only
@@ -4830,7 +4958,9 @@ export async function runAgenticTurn(
         malformedOut = true;
         return false;
       }
-      say(
+      // `warn`, not `say`: a repair turn is a fault the run recovered from, and
+      // on `gnomon task --json` `say` is closed (see announceRetry).
+      warn(
         paint(
           deps.ui,
           "yellow",
@@ -4889,7 +5019,7 @@ export async function runAgenticTurn(
       consecutiveCut++;
       if (consecutiveCut <= loop.max_consecutive_malformed && steps < maxTotal) {
         const name = cutCalls[0]!.name || "tool";
-        say(
+        warn(
           paint(
             deps.ui,
             "yellow",
@@ -4926,7 +5056,7 @@ export async function runAgenticTurn(
       // missing one -- and echoing that back as the model's answer, with
       // "continue from where it stopped", is what P2G's runs were sent.
       const spentOnThinking = !result.content.trim() || result.reasoningOnly === true;
-      say(
+      warn(
         paint(
           deps.ui,
           "yellow",
@@ -5024,7 +5154,7 @@ export async function runAgenticTurn(
           `Reply with text this time, not a tool call: what is the current ` +
             `state of the work, and what is the next thing that needs doing?`,
         ];
-        say(
+        warn(
           paint(
             deps.ui,
             "yellow",
@@ -5276,7 +5406,11 @@ export async function runAgenticTurn(
           // Already reported above, with the audit record saying why.
         } else if (!passed || pinsNothing) {
           verifyOutcome = "failed";
-          say(paint(deps.ui, "yellow",
+          // `warn`: a declared check failing is not chatter, and on
+          // `gnomon task --json` it was the one line saying so (gnomon chaos,
+          // late_system_dropped: a check that failed every round it was given
+          // ended exit 0, stop_reason answered, stderr empty).
+          warn(paint(deps.ui, "yellow",
             `    ⚠ verify failed — handing the turn back`));
           working.push({
           role: "assistant",
@@ -5370,7 +5504,7 @@ export async function runAgenticTurn(
     // wraps up. One usable call in the reply is progress and clears the count.
     if (!malformedOut && !cutOut && result.toolCalls.length > 0) {
       if (result.toolCalls.every((c) => isMalformedCall(c, offered))) {
-        repairMalformed("no usable tool call in that reply (malformed arguments or unknown tool)");
+        repairMalformed(`no usable tool call in that reply (${describeMalformed(result.toolCalls, offered)})`);
       } else {
         consecutiveMalformed = 0;
       }
@@ -6307,6 +6441,15 @@ export interface TaskRecord {
   stop_reason: StopReason;
   /** The numbers behind `stop_reason`, when it has any. */
   stop_detail?: { steps?: number; max_steps_total?: number; repeats?: number };
+  /**
+   * The declared `[verify]` check's outcome, when one ran. TurnResult has
+   * carried it since its comment said a `gnomon task --json` consumer must be
+   * able to tell a failed check from a clean pass -- and runTask never copied
+   * it here, so that consumer could not (gnomon chaos, late_system_dropped:
+   * a check that failed every round read `answered`, exit 0). Absent when no
+   * check ran, so a record without one is the record it always was.
+   */
+  verify?: TurnResult["verify"];
   /** Counts the loop already kept and used to discard. */
   counters: TurnCounters;
   /**
@@ -6369,6 +6512,23 @@ export interface RunTaskOptions {
    * decision produced -- clamped or not -- so this only reports it.
    */
   trust?: TrustOutcome;
+  /**
+   * Where the run's stderr lines go: progress labels, `verbose` notes and the
+   * warnings `--json` must not silence. `process.stderr` when absent, which is
+   * what `gnomon task` uses. `gnomon chaos` passes a sink so it can score what
+   * an operator would have been shown, without the run writing to its own
+   * terminal.
+   */
+  stderr?: { write(text: string): unknown };
+}
+
+/**
+ * `gnomon task`'s exit status: the bucket, as docs/CONTRACTS.md §1 says --
+ * 0 result, 2 refusal, 10 apparatus_failure. One function so the command and
+ * anything scoring a record (`gnomon chaos`) cannot read it two ways.
+ */
+export function taskExitCode(record: Pick<TaskRecord, "bucket">): 0 | 2 | 10 {
+  return record.bucket === "result" ? 0 : record.bucket === "refusal" ? 2 : 10;
 }
 
 /**
@@ -6500,15 +6660,16 @@ export async function runTask(
   const systemPrompt = buildSystemPrompt(state, role, input);
   const built = buildMessages(state, systemPrompt, input);
 
+  const errOut = options.stderr ?? process.stderr;
   const note = (line: string) => {
-    if (options.verbose) process.stderr.write(`${line}\n`);
+    if (options.verbose) errOut.write(`${line}\n`);
   };
   // Degradations are not chatter and `--json` must not silence them. `note` is
   // gated on `options.verbose`, which `gnomon-cli` sets to `!args.json` -- so a
   // scripted run whose endpoint fell back, whose MCP server never connected, or
   // whose declared check was skipped printed nothing at all. stderr, always:
   // stdout stays clean JSON for the consumer that asked for it.
-  const warn = (line: string) => process.stderr.write(`${line}\n`);
+  const warn = (line: string) => errOut.write(`${line}\n`);
 
   // Everything recorded as a degradation, collected on its way to the trail, so
   // the RECORD carries it too. `[audit]` is off on a scaffolded surface, which
@@ -6626,7 +6787,7 @@ export async function runTask(
         const stageInfo = shadowTurnInfo(sessionId, `t1.s${i + 1}`, stageRole, stageRoute);
         const r = await runAgenticTurn(stageState, stageRole, stageRoute, stageMsgs.messages, {
           approve: approveHere,
-          progress: new Progress(ui, process.stderr as NodeJS.WriteStream),
+          progress: new Progress(ui, errOut as NodeJS.WriteStream),
           ui,
           say: note,
           warn,
@@ -6689,7 +6850,7 @@ export async function runTask(
       const turnInfo = shadowTurnInfo(sessionId, "t1", role, route, shadowStart);
       turn = await runAgenticTurn(state, role, route, built.messages, {
         approve: approveHere,
-        progress: new Progress(ui, process.stderr as NodeJS.WriteStream),
+        progress: new Progress(ui, errOut as NodeJS.WriteStream),
         ui,
         say: note,
         warn,
@@ -6828,6 +6989,7 @@ export async function runTask(
     skills: active.map((sk) => sk.id),
     stop_reason: turn.stop_reason,
     ...(turn.stop_detail ? { stop_detail: turn.stop_detail } : {}),
+    ...(turn.verify ? { verify: turn.verify } : {}),
     counters: turn.counters,
     // Present only when a chain ran, so a record from a single-role turn is
     // byte-identical to what it was before this existed.

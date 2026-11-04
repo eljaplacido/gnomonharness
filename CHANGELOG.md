@@ -274,6 +274,57 @@
     cache-hit fraction, re-prefill seconds, not-found errors and calls to the
     first change, with solve rate as non-inferiority at a 10-point margin.
     Nothing has run.
+- **`gnomon chaos`: a fault-injection suite for the model transport.**
+  - **What it does.** A scripted model behind a loopback OpenAI-compatible
+    endpoint answers a fixed task set (`answer`, `read`, `fix`). Each case
+    injects one of 20 faults under a seeded schedule (single, persistent,
+    intermittent, burst). The faults cover AgentChaos's Error, Timeout, Empty,
+    Truncate, Corrupt and Schema, ReliabilityBench's rate limits, and faults
+    seen in the field: late system messages dropped by a template, a relay
+    that keeps abandoned requests running, slow-GPU throughput, tool calls in
+    `reasoning_content`, and `finish_reason` length mid tool call.
+  - **How it scores.** Each fault is scored ANNOUNCED or SILENT for
+    `gnomon task --json`, against a clean run of the same task. Its channels
+    are the exit status, `stop_reason`, a declared degradation, or a new
+    stderr line that names the fault. The card also reports recovery, tokens
+    billed beyond the clean run, and abandoned requests left open.
+  - **When a run is void.** The run is void (exit 2) unless the scoring's
+    negative controls hold, the lanes agree serially and concurrently (and a
+    garbling lane is caught), every clean run finishes, and every fault fired.
+    Otherwise it exits 0 when every fault is announced and 1 when one is
+    silent.
+  - **Also included.** `gnomon chaos list` prints the taxonomy. `gnomon chaos
+    serve` runs the endpoint for another harness, with control routes to
+    start a case and read its span.
+  - **Separate from everything else.** It runs in a scratch project with its
+    own surface and changes no default.
+  - **Docs.** Scorecard schema `gnomon.chaos/1`, docs/CONTRACTS.md §20, fixture
+    `conformance/chaos_scorecard.json`. Proposed as an open standard in
+    docs/benchmarks/CHAOS.md. Results are in benchmarks/chaos/: v0.4.0
+    announced 4 of 20 fault classes, and this release announces 17 of 20.
+- **Recovered faults are announced under `gnomon task --json`.** Retries
+  (5xx, 429, timeouts, broken or stalled streams) were said only on the
+  transcript channel that `--json` closes, and so were the loop's re-asks and
+  repairs (empty replies, cut-off or malformed tool calls, tool-call markup)
+  and a failed declared check. A run that took three tries read as one. They
+  now go to stderr like degradations do. Interactive output is unchanged.
+- **A 200 whose body is not JSON is retried and named.** A proxy's HTML error
+  page ended the turn on first sight, as code 10 ("the request was wrong"),
+  unretried. It is now code 12 and spends a generation attempt.
+- **A streamed chunk that is not JSON is announced.** It was dropped without a
+  word, and its text was missing from the answer.
+- **`content` sent as an array of content parts is read as its text,** and
+  said once per turn. It used to crash the run as "could not start" (exit 10).
+- **The repair line says what was wrong with an unusable tool call:** cut off
+  in transit, not a JSON object, or a tool the role was not offered.
+- **`gnomon task --json` records `verify`** (`passed`, `failed`,
+  `unrunnable`, `declined`, `skipped`) when a declared check ran. The turn had
+  it and the record dropped it, so a check that failed every round read
+  `answered`, exit 0.
+- **Still silent, and pinned as failing tests until announced:**
+  - `late_system_dropped` and `slow_throttle` need the endpoint conformance
+    probe;
+  - `cache_miss` needs `cached_tokens` read.
 
 ## [0.4.0] — 2026-11-03
 

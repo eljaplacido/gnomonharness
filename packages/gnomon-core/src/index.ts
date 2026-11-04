@@ -27,6 +27,10 @@ export * from "./context_hygiene.js";
 // `benchmarks/degradation-contract`, which measures the declaration against
 // behaviour rather than keeping its own copy of the list.
 export * from "./degradation.js";
+// `gnomon chaos`: a fault-injecting endpoint and the suite that scores whether
+// each injected fault was announced. Loaded by nothing in the turn loop.
+export * from "./chaos.js";
+export * from "./chaos_suite.js";
 export * from "./render.js";
 export * from "./tools.js";
 // How bash_deny, bash_allow and network = false read a shell command: as the

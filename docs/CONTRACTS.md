@@ -117,11 +117,11 @@ with a contract of their own exit as it says: `gnomon check` `0`/`2`/`10`
 (§10), a refused `gnomon skill accept` or `reject` `3` (§11), `gnomon skill
 trial` `0`/`2`/`10` (§13), `gnomon audit tamper` `3` while an event is
 unresolved (§14), `gnomon doctor` `0`/`1`/`10` (§15), `gnomon setup`
-`0`/`1`/`3`/`4`/`10`/`12` (§16), and `gnomon dashboard` `0`/`1`/`4`/`10`
-(§17). Every other command exits `0` or `1`; `gnomon migrate --check` exits
-`1` when a migration is pending. The finer codes are reserved for callers that
-need them; a consumer should switch on the bucket, which is the part that is
-stable.
+`0`/`1`/`3`/`4`/`10`/`12` (§16), `gnomon dashboard` `0`/`1`/`4`/`10`
+(§17), and `gnomon chaos` `0`/`1`/`2` (§20). Every other command exits `0`
+or `1`; `gnomon migrate --check` exits `1` when a migration is pending. The
+finer codes are reserved for callers that need them; a consumer should switch
+on the bucket, which is the part that is stable.
 
 Which of those a turn exits with is settled from its *terminal* step, not the
 worst step in it. `apparatus_failure` (`10`) is reserved for a turn that *ends*
@@ -1408,3 +1408,82 @@ the record fields, the four outcomes and the three platforms.
 lists in `config.ts` to the fixture. `context_hygiene.test.ts` checks the
 fields a real run writes against the fixture, and that keys-absent requests
 match the pinned digest.
+
+## 20. `gnomon chaos --json` — schema `gnomon.chaos/1`
+
+The fault-injection suite (README, CLI Reference; the proposed standard is
+[benchmarks/CHAOS.md](benchmarks/CHAOS.md)). A scripted model behind a loopback
+OpenAI-compatible endpoint answers a fixed task set (`answer`, `read`, `fix`)
+and injects one planned fault per case. gnomon is measured as `gnomon task
+--json` runs it, in a scratch project with the suite's own surface; no
+benchmark surface is read or written.
+
+| Exit | Means |
+|---|---|
+| 0 | every injected fault was announced |
+| 1 | one or more injected faults were silent |
+| 2 | the run is void: a negative control did not hold, the lane check failed, a clean run did not finish, or a planned fault never fired |
+
+**Faults.** Each runs under the schedules it declares: `single` (the first
+request it can hit), `persistent` (every one), `intermittent` (the first, then
+each later one with p = 0.3 from the seed), `burst` (the first three).
+
+| Fault | Family | What the endpoint does |
+|---|---|---|
+| `error` | agentchaos | HTTP 500 with an error body |
+| `timeout.headers` | agentchaos | accepts the request and never sends a status line |
+| `timeout.body` | agentchaos | sends the headers and two chunks of a stream, then goes silent |
+| `empty.content` | agentchaos | HTTP 200, `finish_reason` stop, empty content in place of the answer |
+| `empty.tool_calls` | agentchaos | HTTP 200, no tool call and no text in place of a tool call |
+| `truncate.content` | agentchaos | closes a stream halfway through the answer, with no `finish_reason` and no `[DONE]` |
+| `truncate.tool_calls` | agentchaos | tool-call arguments cut mid-JSON, `finish_reason` tool_calls |
+| `corrupt.content` | agentchaos | HTTP 200 whose body is a proxy's HTML error page |
+| `corrupt.stream` | agentchaos | one streamed chunk of the answer is not JSON |
+| `schema.tool_calls` | agentchaos | a tool call naming a tool the request never offered |
+| `schema.arguments` | agentchaos | tool-call arguments that parse as a JSON array |
+| `schema.content` | agentchaos | `message.content` as an array of content parts |
+| `rate_limit` | reliabilitybench | HTTP 429 with `Retry-After: 1`, enforced for the whole window |
+| `late_system_dropped` | gnomon | the template drops every system message after the first |
+| `zombie` | gnomon | withholds the reply, then keeps generating after the client gives up |
+| `slow_throttle` | gnomon | a stream paced to about 5 tokens/s, each gap well inside the idle clock |
+| `reasoning_tool_leak` | gnomon | the tool call as markup inside `reasoning_content`, no `tool_calls` |
+| `length_mid_tool_call` | gnomon | `finish_reason` length with the arguments cut mid-JSON |
+| `mid_stream_disconnect` | gnomon | destroys the socket halfway through a streamed answer |
+| `cache_miss` | gnomon | reports `cached_tokens` 0 on an append-only prompt and re-prefills it |
+
+**Scoring.** Every case is read against a clean run of the same task and
+transport. A fault is **announced** in a case when at least one channel
+differs from the clean run: `exit` (the task's exit status), `stop_reason`,
+`degradation` (a declared degradation id the clean run did not record), or
+`trace` (a stderr line the clean run did not print that names the fault; a
+line naming a different fault does not count). **Named** additionally
+requires a naming `trace` line or a degradation id declared for that fault.
+**Recovered** means the task's own check passed, whatever the exit. A fault's
+`verdict` is `announced` when every case that fired was announced, `silent`
+when one was not, `not_fired` when the endpoint's span shows no case fired.
+
+Top-level keys: `schema`, `harness`, `mode`, `seed`, `plan_hash`,
+`surface_template_hash`, `controls`, `apparatus` (`ok`, `problems`,
+`lane_check`, `baselines`), `faults`, `cases`, `summary`, `exit`, `volatile`.
+Everything outside `volatile` is reproducible: the same build and seed print
+the same card. `volatile` holds durations, the live surface hash (the
+endpoint's port is in it), the endpoint URL, and per case the new stderr
+lines verbatim (`trace`).
+
+**`verify` on a TaskRecord.** Since this section, a `gnomon task --json`
+record carries `verify` (`passed`, `failed`, `unrunnable`, `declined`,
+`skipped`) when a declared check ran, and omits it otherwise. The turn had the
+value and the record dropped it, so a check that failed every round read as
+`answered`, exit 0.
+
+**Rule 6.** The fault ids, schedules, tasks, channels and verdicts are
+published in the fixture and by `gnomon chaos list --json`. They are not in
+`gnomon enumerations`, whose contract is the values a surface may declare;
+nothing in `.gnomon/` selects them. No audit record kind and no degradation id
+was added with the suite.
+
+**Fixture**: `conformance/chaos_scorecard.json`.
+`packages/gnomon-core/src/chaos.test.ts` asserts the code's fault ids,
+schedules, tasks and channels, the table above and the fixture are the same
+sets, and validates a scorecard the real suite produced against the fixture's
+key lists.
