@@ -1,0 +1,52 @@
+{
+  "contract": "incremental_record",
+  "version": 1,
+  "_comment": [
+    "The live record: a turn's record kept on disk while it runs (docs/CONTRACTS.md §28,",
+    "'Incremental record'). Found by root-causing P2G and M2 (C5, 2026-11-04): a run",
+    "killed at a benchmark's time cap left no gnomon-side record, because the task record",
+    "was printed and the turn record written only when the process exited normally.",
+    "19 of 21 capped cells in P2G attempt 1 and 20 capped cells in M2 had none.",
+    "",
+    "packages/gnomon-core/src/live_record.test.ts asserts the code's RECORD_STATES,",
+    "KILL_SIGNALS, UNFINISHED_CODE and file suffix equal this file, and that a killed",
+    "record carries every key in required_keys. packages/gnomon-cli/src/live_record.test.ts",
+    "kills real `gnomon task` children with SIGTERM and SIGKILL and reads the records back."
+  ],
+  "file": "<[audit] dir>/<session>.record.json, only when [audit] enabled = true",
+  "file_suffix": ".record.json",
+  "temp_suffix": ".record.json.tmp",
+  "format": "one line of JSON: the TaskRecord shape `gnomon task --json` prints, plus the keys below; input and output follow [audit] record (omitted under metadata)",
+  "record_state": {
+    "partial": "the turn has not ended; rewritten after each model reply and each tool call; what a SIGKILL leaves",
+    "final": "the turn ended, normally or by a caught signal; nothing rewrites it"
+  },
+  "stop_reason": {
+    "in_progress": "on a partial record only",
+    "killed": "SIGINT, SIGTERM or SIGHUP ended the process mid-turn; stop_detail.signal names it"
+  },
+  "signals": ["SIGINT", "SIGTERM", "SIGHUP"],
+  "unfinished_code": 11,
+  "unfinished_bucket": "apparatus_failure",
+  "required_keys": [
+    "record_state",
+    "session",
+    "turn",
+    "surface_hash",
+    "harness",
+    "role",
+    "model",
+    "code",
+    "bucket",
+    "tool_steps",
+    "tool_log",
+    "stop_reason",
+    "counters",
+    "volatile"
+  ],
+  "on_signal": {
+    "audit": ["turn", "session_end"],
+    "stdout": "gnomon task --json prints the killed record",
+    "exit": "the signal is raised again with the handler removed: the process dies of it, as it did before (143 for SIGTERM in a shell)"
+  }
+}

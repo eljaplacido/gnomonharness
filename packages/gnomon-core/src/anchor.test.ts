@@ -833,7 +833,9 @@ describe("through runTask", () => {
 
     git(["init", "--bare", "-q", remote]);
     expect(await flushAnchors(a())).toMatchObject({ pending: 0 });
-    const trails = readdirSync(auditDir()).filter((f) => f.startsWith("task-")).map((f) => join(auditDir(), f));
+    // Trails only: each task also leaves its live record, `<session>.record.json`,
+    // beside its trail (live_record.ts), and that is not a trail.
+    const trails = readdirSync(auditDir()).filter((f) => f.startsWith("task-") && f.endsWith(".jsonl")).map((f) => join(auditDir(), f));
     const rep = await report(loadConfig(root), trails);
     expect(rep.trails.map((t) => t.status)).toEqual(["anchored", "anchored"]);
     expect(rep.ok).toBe(true);

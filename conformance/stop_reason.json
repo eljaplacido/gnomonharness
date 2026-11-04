@@ -20,7 +20,11 @@
     "`malformed` was added 2026-09-29: replies with no usable tool call (invalid",
     "arguments, an unknown tool, markup in place of a call, or a call the endpoint",
     "could not parse) were re-asked with no bound but the step wall, or -- for",
-    "markup -- once, and then recorded as `answered`."
+    "markup -- once, and then recorded as `answered`.",
+    "",
+    "`in_progress` and `killed` were added 2026-11-04 (C5): a run killed mid-turn --",
+    "a benchmark's time cap -- left no record at all. The live record",
+    "(<session>.record.json, docs/CONTRACTS.md §28) writes them; no turn returns them."
   ],
   "stop_reason": {
     "answered": "the model stopped calling tools of its own accord",
@@ -31,8 +35,10 @@
     "truncated": "the backend cut the reply off at its output limit, and the bounded re-asks did not finish it: a cut text reply stands as the answer (a result); cut tool calls in a row end on the refusal floor with stop_detail.repeats",
     "apparatus": "the run never reached the model — the surface itself could not be used",
     "malformed": "replies in a row offered no usable tool call, past [turn] max_consecutive_malformed repair turns",
-    "tamper": "a tool call, or something between calls, changed gnomon's own records and gnomon did not make the change; the turn stops with a refusal (3) and a record_tamper record"
+    "tamper": "a tool call, or something between calls, changed gnomon's own records and gnomon did not make the change; the turn stops with a refusal (3) and a record_tamper record",
+    "in_progress": "the turn had not ended when the record was written; only on a partial record (record_state: partial), which is what a SIGKILL leaves",
+    "killed": "SIGINT, SIGTERM or SIGHUP ended the process mid-turn and the record was flushed first; stop_detail.signal names the signal, and the record is apparatus_failure (11)"
   },
-  "expected_count": 9,
+  "expected_count": 11,
   "not_a_bucket": "stop_reason is a separate axis from the outcome bucket. The bucket says WHAT happened; this says why the loop stopped. Nothing here maps to result/refusal/apparatus_failure, and a reader combining them is producing a composite verdict this project refuses to publish."
 }

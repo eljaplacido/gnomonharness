@@ -52,6 +52,8 @@ export * from "./transcripts.js";
 export * from "./skills.js";
 export * from "./record_guard.js";
 export * from "./record_tamper.js";
+// A turn's record on disk while it runs, and the signals that flush it.
+export * from "./live_record.js";
 export * from "./skill_mine.js";
 export * from "./skill_trial.js";
 export * from "./audit.js";

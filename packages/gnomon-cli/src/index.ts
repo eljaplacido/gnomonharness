@@ -97,6 +97,8 @@ import {
   type GnomonConfig,
   type TrustOutcome,
   type SettleOptions,
+  onKillSignal,
+  type TaskInterrupt,
 } from "gnomon-core";
 import {
   manifest as surfaceManifest,
@@ -107,7 +109,7 @@ import {
   simulatePatch,
   Enumerations,
 } from "gnomon-natives";
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync} from "node:fs";
+import { readFileSync, writeFileSync, writeSync, existsSync, readdirSync, mkdirSync} from "node:fs";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { dirname, join, resolve } from "node:path";
@@ -1602,6 +1604,25 @@ async function cmdTask(args: CliArgs): Promise<void> {
   // defaults runs clamped to them, with one line on stderr -- never blocked,
   // never silently widened.
   let record: TaskRecord;
+  // A time cap's SIGTERM (Harbor, Terminal-Bench), a closed terminal, a kill
+  // -INT: the run's record is flushed as `killed` -- the live record beside
+  // the trail, a `turn` audit record and session_end -- and, under --json,
+  // printed where the record always goes. Then the signal ends the process as
+  // it did before (live_record.ts onKillSignal). Before this, a killed task
+  // printed nothing at all (C5: 19 of 21 capped cells in P2G attempt 1).
+  const interrupt: TaskInterrupt = {};
+  const releaseSignals = onKillSignal((signal) => {
+    const killed = interrupt.kill?.(signal);
+    if (!killed) return;
+    try {
+      if (args.json) writeSync(1, `${JSON.stringify(killed, null, 2)}\n`);
+      else if (killed.stop_reason === "killed") {
+        writeSync(2, `\n[${signal}] the run was ended mid-turn; recorded as stop_reason "killed" after ${killed.tool_steps} tool call(s)\n`);
+      }
+    } catch {
+      // A closed pipe or terminal: the file beside the trail still has it.
+    }
+  });
   try {
     const settled = settleTrustHeadless(
       loadConfig(args.dir, args.flags['profile']),
@@ -1612,6 +1633,7 @@ async function cmdTask(args: CliArgs): Promise<void> {
       yes: args.yes,
       verbose: !args.json,
       trust: settled.outcome,
+      interrupt,
     });
   } catch (err) {
     // No .gnomon/ above the cwd, a --dir without one, a --role the surface
@@ -1620,6 +1642,7 @@ async function cmdTask(args: CliArgs): Promise<void> {
     const why = err instanceof Error ? err.message : String(err);
     record = unstartedTaskRecord(text, args.role, `gnomon task could not start: ${why}`);
   }
+  releaseSignals();
 
   // Non-fatal surface problems go to stderr in BOTH modes. They are the ones
   // that change what ran without stopping it -- a role_profile whose file is

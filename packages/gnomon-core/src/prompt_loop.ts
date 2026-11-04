@@ -94,6 +94,14 @@ import {
 import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
 import { StallSignals, type StallSignalCounters } from "./stall_signals.js";
 import { writeTamperRecord, compareWithCheckpoint, writeCheckpoint } from "./record_tamper.js";
+import {
+  LiveRecord,
+  killedTurnAudit,
+  onKillSignal,
+  type KillSignal,
+  type OpenTurn,
+  type TurnLive,
+} from "./live_record.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { AFTER_REFUSAL_REASON, AfterRefusalWindow, resolveAfterRefusal } from "./after_refusal.js";
 import { settleMcpTools, toolsHash } from "./tools_hash.js";
@@ -3034,6 +3042,14 @@ export interface TurnDeps {
    * terminal passes none and keeps rendering from `say`.
    */
   events?: TurnEvents;
+  /**
+   * The live record (live_record.ts): handed a reader of the turn's state at
+   * the start, and told after each model reply and each tool call, so a run
+   * killed mid-turn leaves its steps so far on disk. Told, never asked, like
+   * `events`: it copies the state and nothing it does reaches the messages.
+   * Read only at depth 0 -- a delegated sub-turn is part of its parent's call.
+   */
+  live?: TurnLive;
 }
 
 /** A tool call as `TurnEvents` reports it. */
@@ -3343,7 +3359,23 @@ export type StopReason =
   // max_consecutive_malformed` repair turns. Before, markup was re-asked once
   // and then recorded `answered`, and the other shapes were re-asked with no
   // bound but the step wall, so a template mismatch read as a stall or a wall.
-  | "malformed";
+  | "malformed"
+  // The two below are written by the live record (live_record.ts), never
+  // returned by a turn. They are here because they appear on the records a
+  // consumer switches on -- `gnomon task --json`, the `turn` audit record and
+  // `<session>.record.json` -- and Rule 6 publishes what a record can say.
+  //
+  // `in_progress`: the turn had not ended when the record was written. Only a
+  // partial record (`record_state: "partial"`) carries it. A process killed
+  // with SIGKILL leaves one, with the steps up to the last one that finished.
+  // (No semicolons in these comments: docs.test.ts reads the union up to the
+  // first one.)
+  | "in_progress"
+  // `killed`: SIGTERM, SIGINT or SIGHUP ended the process mid-turn, and the
+  // record was flushed before it went (`stop_detail.signal`). Before this, a
+  // run killed at a benchmark's time cap left no record at all: 19 of 21
+  // capped cells in P2G attempt 1 and 20 in M2 (C5, 2026-11-04).
+  | "killed";
 
 /**
  * Per-turn tallies. Every field is a count of something the loop already
@@ -4574,6 +4606,22 @@ export async function runAgenticTurn(
     t[field]++;
   };
 
+  // The live record reads the turn through this, after each model reply and
+  // each tool call (live_record.ts). It copies what it reads; nothing here is
+  // read back, so the turn is the same turn with or without it.
+  const live = depth === 0 ? deps.live : undefined;
+  live?.attach(() => ({
+    role,
+    model: usedModel,
+    endpoint: usedTarget.endpoint,
+    endpoint_url: usedTarget.url,
+    wire: wireOf(adaptTarget(state, usedTarget)),
+    toolSteps: steps,
+    toolLog,
+    usage: turnUsage,
+    counters,
+  }));
+
   // A cancelled turn still changed the tree if it got that far, and that is
   // exactly when someone wants to know what it left behind.
   const cancelled = (): TurnResult => {
@@ -5053,6 +5101,8 @@ export async function runAgenticTurn(
       result = await call(route.target);
       usedModel = route.model;
     }
+    // The reply's tokens are in the turn's usage now; the record says so.
+    live?.step();
 
     if (deps.signal?.aborted) return cancelled();
 
@@ -6199,6 +6249,9 @@ export async function runAgenticTurn(
         if (during) noteRecords(during, call);
       }
       if (eventCall) deps.events?.toolEnd?.(eventCall, outcome);
+      // After the guard's check, so the guard compares the records the call
+      // left; the record's own write is noted as gnomon's (live_record.ts).
+      live?.step();
 
       // After the call and its record, never before: the shadow is told what
       // happened and the loop takes nothing back. `turnUsage` here covers the
@@ -6676,8 +6729,9 @@ export interface TaskRecord {
   /** Why the tool loop ended — a separate axis from `bucket`, never a
    * composite verdict with it. */
   stop_reason: StopReason;
-  /** The numbers behind `stop_reason`, when it has any. */
-  stop_detail?: { steps?: number; max_steps_total?: number; repeats?: number };
+  /** The numbers behind `stop_reason`, when it has any. `signal` names the
+   * signal that ended a `killed` run. */
+  stop_detail?: { steps?: number; max_steps_total?: number; repeats?: number; signal?: KillSignal };
   /**
    * The declared `[verify]` check's outcome, when one ran. TurnResult has
    * carried it since its comment said a `gnomon task --json` consumer must be
@@ -6757,6 +6811,20 @@ export interface RunTaskOptions {
    * terminal.
    */
   stderr?: { write(text: string): unknown };
+  /**
+   * Filled by the run, for a caller that handles signals (`gnomon task`):
+   * `kill` writes the record as it stands as `killed`, appends the `turn`
+   * audit record and `session_end`, and returns the record. After the run has
+   * concluded it returns the final record and writes nothing. Synchronous, so
+   * a signal handler can call it. runTask installs no handler itself: a
+   * caller running tasks in-process (`gnomon skill trial`) keeps its own.
+   */
+  interrupt?: TaskInterrupt;
+}
+
+/** See RunTaskOptions.interrupt. */
+export interface TaskInterrupt {
+  kill?: (signal: KillSignal) => TaskRecord | null;
 }
 
 /**
@@ -6955,6 +7023,45 @@ export async function runTask(
   });
   if (options.trust) audit.write("trust", { ...options.trust, root: resolve(config.gnomonDir, "..") });
   let trust = options.trust;
+
+  // The record as the run goes, beside the trail (live_record.ts): opened
+  // here, before anything slow, so a run killed at any point after its
+  // session_start leaves a record. No file when [audit] is off.
+  const stageRecords: NonNullable<TaskRecord["stages"]> = [];
+  const live = new LiveRecord({
+    dir: auditSettings.enabled ? auditSettings.dir : null,
+    session: sessionId,
+    text: (value) => audit.text(value),
+  });
+  // Kept, not passed and dropped: an MCP clamp below changes the trust, the
+  // model and the endpoint, and a record killed after it must say so.
+  const liveOpen: OpenTurn = {
+    turn: 1,
+    surface_hash,
+    harness: harnessBuild(),
+    ...(options.trust ? { trust: options.trust } : {}),
+    surface_problems: surfaceFindings.map((p) => ({ where: p.where, problem: p.problem, fatal: p.fatal })),
+    degradations: () => degradations,
+    stages: () => stageRecords,
+    role,
+    model: route.model,
+    endpoint: route.target.endpoint,
+    input,
+    skills: active.map((sk) => sk.id),
+  };
+  live.open(liveOpen);
+  if (options.interrupt) {
+    options.interrupt.kill = (signal) => {
+      const killed = live.kill(signal);
+      if (!killed) return null;
+      if (killed.fresh) {
+        audit.write("turn", killedTurnAudit(killed.record, (v) => audit.text(v)));
+        audit.write("session_end", { turns: 1, surface_hash, signal });
+      }
+      return killed.record;
+    };
+  }
+
   // After session_start, so a shadow that is down at the start is recorded
   // inside the session it belongs to. Off the critical path: nothing waits.
   shadow?.start();
@@ -7007,6 +7114,9 @@ export async function runTask(
     shadow = ShadowRecorder.create(config, { warn, audit: auditForTurn });
     shadow?.start();
     trust = settledTools.clamp.outcome;
+    liveOpen.trust = trust;
+    liveOpen.model = route.model;
+    liveOpen.endpoint = route.target.endpoint;
     audit.write("trust", { ...trust, root: resolve(config.gnomonDir, "..") });
     warn(settledTools.clamp.notice);
   }
@@ -7038,7 +7148,6 @@ export async function runTask(
   );
 
   const start = Date.now();
-  const stageRecords: NonNullable<TaskRecord["stages"]> = [];
   let turn: TurnResult;
   try {
     if (chain.length >= 2) {
@@ -7075,6 +7184,7 @@ export async function runTask(
           warn,
           audit: auditForTurn,
           shadow: shadow?.turn(stageInfo, shadowApprover),
+          live,
         });
         shadow?.turnEnd(stageInfo, shadowOutcome(r, stageInfo.t0));
         if (stageState.bootstrap) state.bootstrap = stageState.bootstrap;
@@ -7138,6 +7248,7 @@ export async function runTask(
         warn,
         audit: auditForTurn,
         shadow: shadow?.turn(turnInfo, shadowApprover),
+        live,
       });
       shadow?.turnEnd(turnInfo, shadowOutcome(turn, turnInfo.t0));
     }
@@ -7146,6 +7257,11 @@ export async function runTask(
     // point scripts run in a loop.
     state.mcp?.close();
   }
+  // A signal ended this run while the turn was in flight, and `interrupt.kill`
+  // has already written its record and sealed the trail. The turn ran on only
+  // because nothing took the process down after (an in-process caller):
+  // writing a second ending would contradict the first.
+  if (live.killed) return live.killed;
   // The end of the session: anything that changed gnomon's records since the
   // last tool call -- a background job a call left running -- is caught here.
   {
@@ -7232,16 +7348,8 @@ export async function runTask(
     input: audit.text(input),
     output: audit.text(turn.content),
   });
-  audit.write("session_end", { turns: 1, surface_hash, shadow: shadowCoverage });
-  // The records as this session leaves them, for the next session and for
-  // `skill accept` to compare against (record_tamper.ts).
-  try {
-    writeCheckpoint(config);
-  } catch (err) {
-    warn(`  [records] could not write the records checkpoint: ${err instanceof Error ? err.message : String(err)}`);
-  }
 
-  return {
+  const record: TaskRecord = {
     surface_hash,
     harness: harnessBuild(),
     ...(trust ? { trust } : {}),
@@ -7295,6 +7403,25 @@ export async function runTask(
       ...(shadowCoverage ? { shadow: shadowCoverage } : {}),
     },
   };
+  // The live record, final. Before the checkpoint below, which records the
+  // state of every record file: written after it, the next session would
+  // find this file changed since the checkpoint and call it tampering.
+  live.close(record, {
+    endpoint_url: turn.endpoint_url ?? route.target.url,
+    wire: turn.wire ?? wireOf(route.target),
+  });
+
+  audit.write("session_end", { turns: 1, surface_hash, shadow: shadowCoverage });
+  // The records as this session leaves them, for the next session and for
+  // `skill accept` to compare against (record_tamper.ts).
+  try {
+    writeCheckpoint(config);
+  } catch (err) {
+    warn(`  [records] could not write the records checkpoint: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // The shadow was flushed and closed above, before the turn record.
+
+  return record;
 }
 
 // ---------------------------------------------------------------------------
@@ -8931,6 +9058,12 @@ export interface SessionTurnDeps {
    * the session runs under by rewriting its own surface. Identity when absent.
    */
   reconfigure?: (fresh: GnomonConfig) => GnomonConfig;
+  /**
+   * The session's live record (live_record.ts): each turn is opened on it,
+   * kept current as it runs, and closed final after its `turn` audit record.
+   * The terminal loop passes one; without it nothing is written.
+   */
+  live?: LiveRecord;
 }
 
 /** One turn as it was run and recorded. */
@@ -9013,6 +9146,18 @@ export async function runSessionTurn(
   );
 
   const start = Date.now();
+  // This turn's record on disk while it runs (live_record.ts); closed final
+  // after the `turn` audit record below.
+  deps.live?.open({
+    turn: state.exchanges.length + 1,
+    surface_hash: deps.surfaceHash,
+    harness: harnessBuild(),
+    role,
+    model: route.model,
+    endpoint: route.target.endpoint,
+    input: cleanedInput,
+    skills: active.map((sk) => sk.id),
+  });
   // A declared chain shapes the turn here exactly as it does in
   // `gnomon task`. It was wired into runTask only, so a surface declaring
   // [chain] got three stages from `gnomon task` and one role from
@@ -9075,6 +9220,7 @@ export async function runSessionTurn(
             audit: deps.audit,
             standingApproval: deps.standingApproval,
             shadow: shadow?.turn(stageInfo, "asked"),
+            live: deps.live,
           }
         );
         shadow?.turnEnd(stageInfo, shadowOutcome(r, stageInfo.t0));
@@ -9128,6 +9274,7 @@ export async function runSessionTurn(
         audit: deps.audit,
         standingApproval: deps.standingApproval,
         shadow: shadow?.turn(turnInfo, "asked"),
+        live: deps.live,
       });
       shadow?.turnEnd(turnInfo, shadowOutcome(turn, turnInfo.t0));
     }
@@ -9286,6 +9433,34 @@ export async function runSessionTurn(
     input: deps.audit.text(cleanedInput),
     output: deps.audit.text(turn.content),
   });
+  // The turn's live record, final, in the shape `gnomon task --json` prints.
+  deps.live?.close(
+    {
+      surface_hash: deps.surfaceHash,
+      harness: harnessBuild(),
+      role,
+      model: turn.model,
+      endpoint: turn.endpoint ?? route.target.endpoint,
+      input: cleanedInput,
+      output: turn.content,
+      code: turn.code,
+      bucket: exchange.bucket,
+      tool_steps: turn.toolSteps,
+      tool_log: turn.toolLog,
+      skills: active.map((sk) => sk.id),
+      stop_reason: turn.stop_reason,
+      ...(turn.stop_detail ? { stop_detail: turn.stop_detail } : {}),
+      counters: turn.counters,
+      volatile: {
+        duration_ms: duration,
+        ...(turn.usage?.input !== undefined ? { tokens_in: turn.usage.input } : {}),
+        ...(turn.usage?.output !== undefined ? { tokens_out: turn.usage.output } : {}),
+        ...(turn.usage?.ms !== undefined ? { model_ms: turn.usage.ms } : {}),
+        ...(turn.usage?.requests !== undefined ? { requests: turn.usage.requests } : {}),
+      },
+    },
+    { endpoint_url: turn.endpoint_url ?? route.target.url, wire: turn.wire ?? wireOf(route.target) }
+  );
 
   return { turn, exchange, systemPrompt, route, ui };
 }
@@ -10263,6 +10438,27 @@ export async function runPromptLoop(
   // once, after which its line prints at the next prompt instead.
   await shadowFor(state.config)?.ready(SHADOW_BANNER_WAIT_MS);
 
+  // Each turn's record on disk as it runs, beside the trail (live_record.ts).
+  const live = new LiveRecord({
+    dir: auditSettings.enabled ? auditSettings.dir : null,
+    session: sessionId,
+    text: (value) => audit.text(value),
+  });
+  // SIGTERM, SIGINT or SIGHUP (a closed terminal) used to end the session with
+  // no record of the turn in flight and an unsealed trail. Now the turn is
+  // recorded as `killed` and the trail sealed, and the signal then ends the
+  // process as before. Ctrl+C at a terminal is not a signal here -- readline
+  // takes it as a key, and it still cancels the turn or quits.
+  const releaseSignals = onKillSignal((signal) => {
+    const killed = live.kill(signal);
+    if (killed?.fresh) audit.write("turn", killedTurnAudit(killed.record, (v) => audit.text(v)));
+    audit.write("session_end", {
+      turns: state.exchanges.length + (killed?.fresh ? 1 : 0),
+      surface_hash: surfaceHash,
+      signal,
+    });
+  });
+
   try {
     while (true) {
       // The surface as it stands NOW. /models and the surface-edit reload put
@@ -10616,6 +10812,7 @@ export async function runPromptLoop(
           log: (line) => console.log(line),
           progress,
           reconfigure,
+          live,
         });
       } finally {
         cancelTurn = null;
@@ -10652,6 +10849,7 @@ export async function runPromptLoop(
     // behind. Closing on readline's "close" event was not enough: that event
     // does not fire on this path, and cleanup that depends on which way the
     // user left is cleanup that will be missed.
+    releaseSignals();
     state.mcp?.close();
     state.mcp = undefined;
     rl.close();

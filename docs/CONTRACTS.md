@@ -69,6 +69,13 @@ every `TaskRecord`.
 | `apparatus` | the run never reached the model — the surface itself could not be used |
 | `malformed` | replies in a row offered no usable tool call, past `[turn] max_consecutive_malformed` repair turns |
 | `tamper` | a tool call, or something between calls, changed gnomon's own records and gnomon did not make the change; the turn stops with a refusal (3) and a `record_tamper` record |
+| `in_progress` | the turn had not ended when the record was written: only on a partial record (`record_state: "partial"`), which is what a SIGKILL leaves (§28) |
+| `killed` | SIGINT, SIGTERM or SIGHUP ended the process mid-turn and the record was flushed first; `stop_detail.signal` names the signal, and the record is `apparatus_failure` (11) (§28) |
+
+`in_progress` and `killed` are written by the live record, never returned by
+a turn's own loop. They are here because a consumer reads them on the same
+records: `gnomon task --json`, the `turn` audit record, and
+`<session>.record.json`.
 
 `apparatus` exists because every failure of that kind previously borrowed
 `answered`, which recorded a run that never started as a turn that concluded.
@@ -122,6 +129,11 @@ unresolved (§14), `gnomon doctor` `0`/`1`/`10` (§15), `gnomon setup`
 or `1`; `gnomon migrate --check` exits `1` when a migration is pending. The
 finer codes are reserved for callers that need them; a consumer should switch
 on the bucket, which is the part that is stable.
+
+A `gnomon task` or an interactive session that SIGINT, SIGTERM or SIGHUP ends
+mid-run exits by none of these: it flushes a `killed` record and then dies of
+the signal, as it did before it flushed anything (143 for SIGTERM in a shell).
+The record says `apparatus_failure` (11); see §28.
 
 Which of those a turn exits with is settled from its *terminal* step, not the
 worst step in it. `apparatus_failure` (`10`) is reserved for a turn that *ends*
@@ -1999,3 +2011,104 @@ names the kind and every signal. `stall_signals_loop.test.ts` checks two more
 things. Replaying a turn's `tool_call` records reproduces its counters. And
 over seeded random scripts, a real, a silent, a randomly firing and a throwing
 detector all send the same requests.
+
+## 28. Incremental record — `<session>.record.json`
+
+**Why.** `gnomon task --json` printed its record, and a session wrote its
+`turn` audit record, only when the process got that far. A benchmark's time
+cap sends SIGTERM and then SIGKILL, and a run killed mid-turn left no record of
+the turn at all. Found root-causing P2G and M2 (C5, 2026-11-04): 19 of 21
+capped gnomon cells in P2G attempt 1 left no gnomon-side record, and in M2 20
+capped cells had none, so the collector's checks read FAIL on runs whose wire
+was correct. The audit trail was appended per event; the record was not.
+
+**Where.** When `[audit] enabled = true`, at `<[audit] dir>/<session>.record.json`,
+beside that session's trail `<session>.jsonl`: one line of JSON, written to
+`<session>.record.json.tmp` and renamed over the file, so a reader (or a copy
+loop such as a benchmark adapter's) never sees half a record. Not inside
+`.gnomon/`, which is content-hashed. With `[audit]` off no file is written.
+
+**Shape.** The `TaskRecord` that `gnomon task --json` prints (`surface_hash`,
+`harness`, `role`, `model`, `endpoint`, `code`, `bucket`, `tool_steps`,
+`tool_log`, `skills`, `stop_reason`, `stop_detail`, `counters`, `stages`,
+`degradations`, `volatile`, …), plus:
+
+| key | value |
+|---|---|
+| `record_state` | `partial` or `final` (below) |
+| `session` | the session id; the trail is `<session>.jsonl` |
+| `turn` | `1` for `gnomon task`; the turn's number in a session |
+| `endpoint_url`, `wire` | where the calls went and how, as the `turn` audit record says |
+
+`input` and `output` follow `[audit] record`: under `metadata` they are left
+out of the file, as they are out of the trail. The `--json` record keeps them.
+
+**States.**
+
+| `record_state` | `stop_reason` | When |
+|---|---|---|
+| `partial` | `in_progress` | Written when the turn starts and rewritten after each model reply and each tool call. A run killed with SIGKILL leaves this, with the steps up to the last one that finished. |
+| `final` | the turn's own | The turn ended. Rewritten no more; in a session the next turn starts a new partial record in the same file. |
+| `final` | `killed` | SIGINT, SIGTERM or SIGHUP arrived mid-turn. `stop_detail.signal` names it; `output` is a note, never the model's text. |
+
+A partial or killed record carries `code: 11` (`timed_out`) and `bucket:
+"apparatus_failure"`: the turn did not end, it was ended, so it is neither a
+result nor anyone's refusal, and a reader that ignores `record_state` still
+does not read a pass. A record with no `record_state` field is final: every
+`--json` record of a run that ended on its own, and every record written
+before this section existed.
+
+**On a signal** (SIGINT, SIGTERM, SIGHUP; `gnomon task` and the interactive
+loop):
+1. the record is written `final`, `stop_reason: "killed"`;
+2. when `[audit]` is on, a `turn` audit record with the same fields and
+   `session_end` with `signal` are appended, so `gnomon audit verify` reads
+   the trail as sealed;
+3. `gnomon task --json` prints the killed record on stdout;
+4. the handlers are removed and the signal raised again, so the process dies
+   of it exactly as it did before (143 for SIGTERM in a shell).
+
+A signal after a `gnomon task` turn ended writes nothing new (under `--json`
+the final record is printed). In a session between turns it only seals the
+trail: `session_end` with `signal`. SIGKILL cannot be caught: that is what the
+partial record is for. A `gnomon acp` session keeps no live record and handles
+no signal.
+
+**What it must not change.** Nothing the model sees: the record reads the
+turn's state and copies it, and nothing it does reaches the messages.
+Checked by hashing every request body of a scripted `gnomon task` turn with
+the record kept and without it (`packages/gnomon-cli/src/live_record.test.ts`).
+
+**Records and the guard.** The file is one of gnomon's records (§14): written
+through the guard's own-write check, so a change by anything else is
+tampering. A killed session's record and temp file count as part of that
+session's trail, so the next session reports them with the trail as a
+notice, not as tampering. The last write before a normal session end comes
+before the checkpoint.
+
+**Cost.** Each write is one `JSON.stringify`, one write and one rename, with no
+fsync: the file outlives the process, not a power cut. Measured on gx10
+(aarch64, ext4, benchmarks running): median 0.04–0.15 ms a write and p95 under
+0.35 ms for turns of 10 to 400 tool calls (the file then 1–21 KB), two writes a
+tool call.
+
+**Limits.**
+- A turn's state between steps is not recorded: a SIGKILL during a model call
+  leaves the record as of the step before it. A delegated sub-turn (the
+  `task` tool) is one step of its parent: its own calls reach the record when
+  it returns.
+- A `bash` command still running when the signal arrives is not waited for.
+- The interactive loop's session snapshot (`.gnomon-sessions/`) does not get
+  the killed turn.
+- With a `[chain]`, the record's top level is the stage in flight; under
+  `gnomon task`, `stages` lists the stages that ended.
+- A model that lists `.gnomon-audit/` by hand (`ls`, `find`) sees the file, as
+  it sees the trail. `glob`, `grep` and the worktree stamp never walk the
+  default audit directory.
+
+**Fixture**: `conformance/incremental_record.json` — the states, signals,
+code, file suffix and required keys. `packages/gnomon-core/src/live_record.test.ts`
+asserts the code's constants equal it and that a killed record carries every
+required key; `packages/gnomon-cli/src/live_record.test.ts` kills real
+`gnomon task` and `gnomon prompt` children with SIGTERM and SIGKILL and reads
+the records back.

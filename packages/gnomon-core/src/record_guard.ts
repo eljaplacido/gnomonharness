@@ -355,8 +355,9 @@ export function isGnomonTrail(path: string): boolean {
 /**
  * Split changes into tampering and notices. An ADDED gnomon trail is a
  * notice, and so are the files that belong to it: its attestation heads file
- * (`heads/<name>`) and a checkpoint's map (`<name>.files.json`). Anything
- * modified or removed, and any other added file, is tampering.
+ * (`heads/<name>`), a checkpoint's map (`<name>.files.json`), and a session's
+ * live record (`<name>.record.json`, or its `.tmp`). Anything modified or
+ * removed, and any other added file, is tampering.
  */
 export function classifyChanges(
   changes: RecordChange[],
@@ -398,6 +399,11 @@ export function classifyChanges(
     const parts = c.path.split(/[\\/]/);
     const name = parts[parts.length - 1]!;
     if (parts[parts.length - 2] === "heads" && names.has(name)) return true;
+    // A session's live record and the temp file its writes go through
+    // (live_record.ts): beside the session's own trail, in the same directory.
+    // Left by a killed session, the pair is that session's, not tampering.
+    const live = /^(.+)\.record\.json(?:\.tmp)?$/.exec(name);
+    if (live && trails.has(join(dirname(c.path), `${live[1]}.jsonl`))) return true;
     return name.endsWith(".files.json") && names.has(name.replace(/\.files\.json$/, ".jsonl"));
   };
   return { changes: changes.filter((c) => !belongs(c)), notices: changes.filter(belongs) };
