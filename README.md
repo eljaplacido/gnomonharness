@@ -134,6 +134,7 @@ does not. Behaviour is readable because something is holding still.
 - [Composing with TriadSepta](#composing-with-triadsepta)
 - [Known Limits](#known-limits)
 - [Where gnomon sits](docs/POSITIONING.md)
+- [gnomon Bench Standards](docs/benchmarks/README.md): proposed open benchmarks for what the harness decides (draft v0.1)
 - [Development](#development)
 - [Contributing](#contributing)
 - [License](#license)
