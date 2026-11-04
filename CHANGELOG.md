@@ -26,6 +26,29 @@
 
 ## [Unreleased]
 
+- **Opt-in line caps on tool output: `max_lines` on the `bash` and `read`
+  declarations in tools.toml (CX3).** Off unless declared. On `bash`, an
+  output longer than the cap keeps its first and last lines and offloads the
+  whole to `.gnomon-out/`. A note says how many lines were omitted and to
+  narrow the command with grep, head, tail or `sed -n`. On `read`, a file is
+  shown that many lines at a time, numbered as in the whole file, with a
+  footer giving the next `offset`, and read's schema gains `offset` and
+  `limit`. Both apply before the 32 KB byte cap. The value must be a whole
+  number of at least 10. On any other tool the key does nothing, and the
+  surface audit says so (not fatal). The surface-fidelity fingerprint
+  resolves it.
+  - Default unchanged: with no `max_lines` declared, the tool schemas, the
+    tool outputs and the turn's request bodies are master's, byte for byte
+    (the wire pin in `tool_hygiene.test.ts`, taken on v0.4.0 first).
+  - Why opt-in: the evidence for a default (SWE-agent ACI, full-file views
+    5.3 points behind a window) is older and from another harness. An
+    estimate from the 2026-11 trails, which record each read's line count
+    but no output sizes: a 200-line window would have cut 304 of 860 file
+    reads. Under stated assumptions, that is 2–11% of input tokens per turn
+    on the six local lanes and 0.2% on the hosted P2G, before any extra
+    paging calls; the bounds run from under 1% to 24%. `bash` output size
+    is not recorded, so its share is unknown. A paired A/B decides the
+    default.
 - **A tool call that failed because its arguments missed the schema is told
   the schema (CX5).** The model-visible text changes only on calls that
   already failed. When a built-in tool's call fails or is refused, and its

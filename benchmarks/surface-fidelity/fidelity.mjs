@@ -23,7 +23,7 @@ const core = (m) => import(pathToFileURL(`${REPO}/packages/gnomon-core/dist/${m}
 
 const { loadConfig, recomputeManifest, resolveContext, resolveRouting, resolveUi,
         resolveVerify, resolveChain, resolveLoop, resolveResilience, resolveExec,
-        resolveExtraRoots } = await core("config.js");
+        resolveExtraRoots, resolveMaxLines } = await core("config.js");
 const { buildToolSet } = await core("tools.js");
 const { buildSystemPrompt } = await core("prompt_loop.js");
 const { listTrialSpecs, loadTrialSpec, verdictOf } = await core("skill_trial.js");
@@ -63,6 +63,10 @@ function fingerprint(root) {
     loop: resolveLoop(c),
     resilience: resolveResilience(c),
     extra_roots: resolveExtraRoots(c),
+    // `max_lines` on the bash and read declarations (CX3). Undefined unless
+    // declared, and JSON.stringify drops it then, so no existing row's
+    // fingerprint moves.
+    max_lines: resolveMaxLines(c),
     defaults: c.config.defaults ?? {},
     policy: c.policy ?? {},
     roles: roles.map((r) => ({

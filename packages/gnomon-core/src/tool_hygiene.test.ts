@@ -15,8 +15,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platformBlock, runTask, type TaskRecord } from "./prompt_loop.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, auditSurface, toolMaxLines, resolveMaxLines, MIN_MAX_LINES } from "./config.js";
 import {
+  buildToolSet,
+  createSpillSink,
+  readParameters,
   executeTool,
   argProblems,
   schemaRepairText,
@@ -26,6 +29,7 @@ import {
   TOOL_DENIED,
   TOOL_FAILED,
   TOOL_NOT_DECLARED,
+  TOOL_OK_EMPTY,
   type ToolContext,
   type Todo,
 } from "./tools.js";
@@ -341,5 +345,167 @@ describe("CX5: the parameter list, on the calls that failed for want of it", () 
     // malformed counter and its bound are unchanged by this.
     expect(rec.counters.malformed_tool_calls ?? 0).toBe(0);
     expect(readFileSync(join(root, "small.txt"), "utf-8")).toBe("ALPHA\nbeta\ngamma\n");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CX3: opt-in line caps, `max_lines` on the bash and read declarations
+// ---------------------------------------------------------------------------
+
+const capped = (url: string, read = 200, bash = 100) =>
+  surface(url, { toolsExtra: { read: `max_lines = ${read}\n`, bash: `max_lines = ${bash}\n` } });
+
+describe("CX3: max_lines is opt-in, and says when it does nothing", () => {
+  it("absent, invalid or too small means no cap; the audit names the last two", async () => {
+    const { url } = await serve(() => answer("done"));
+    expect(resolveMaxLines(loadConfig(surface(url)))).toBeUndefined();
+    const ok = loadConfig(capped(url, 200, 100));
+    expect(resolveMaxLines(ok)).toEqual({ bash: 100, read: 200 });
+    expect(auditSurface(ok).filter((p) => /max_lines/.test(p.problem))).toEqual([]);
+
+    const bad = loadConfig(
+      surface(url, { toolsExtra: { bash: "max_lines = 5\n", read: 'max_lines = "200"\n', grep: "max_lines = 50\n" } })
+    );
+    expect(toolMaxLines(bad, "bash")).toBeUndefined();
+    expect(toolMaxLines(bad, "read")).toBeUndefined();
+    expect(MIN_MAX_LINES).toBe(10);
+    const found = auditSurface(bad).filter((p) => /max_lines/.test(p.problem));
+    expect(found.map((p) => p.where).sort()).toEqual([
+      '.gnomon/tools.toml [[tools]] name = "bash"',
+      '.gnomon/tools.toml [[tools]] name = "grep"',
+      '.gnomon/tools.toml [[tools]] name = "read"',
+    ]);
+    expect(found.every((p) => !p.fatal)).toBe(true);
+    expect(found.find((p) => p.where.includes("grep"))!.problem).toMatch(/on grep it does nothing/);
+    expect(found.find((p) => p.where.includes("bash"))!.problem).toMatch(/not a whole number of at least 10/);
+  });
+
+  it("read's schema gains offset and limit only when a window is declared", async () => {
+    const { url } = await serve(() => answer("done"));
+    const schemaOf = (root: string) =>
+      buildToolSet(loadConfig(root), "impl").schemas.find((t) => t.function.name === "read")!.function.parameters;
+    expect(schemaOf(surface(url))).toBe(readParameters());
+    expect(JSON.stringify(readParameters())).toBe(
+      '{"type":"object","properties":{"path":{"type":"string","description":"File or directory path, relative to the repository root"}},"required":["path"]}'
+    );
+    const windowed = schemaOf(capped(url)) as any;
+    expect(Object.keys(windowed.properties)).toEqual(["path", "offset", "limit"]);
+    expect(windowed.required).toEqual(["path"]);
+    expect(windowed.properties.limit.description).toMatch(/at most 200/);
+  });
+});
+
+describe("CX3: a windowed read", () => {
+  const big = (root: string) => {
+    writeFileSync(join(root, "big.txt"), BIG);
+    return root;
+  };
+  const W = { maxLines: { read: 200 } };
+
+  it("shows the first window and says where the rest is", async () => {
+    const r = await executeTool("read", { path: "big.txt" }, ctxIn(big(scratch()), W), ALL);
+    expect(r.code).toBe(TOOL_OK);
+    const lines = r.content.split("\n");
+    expect(lines[0]).toBe("    1\trow 001 xxxxxxxxxxxx");
+    expect(lines[199]).toBe("  200\trow 200 xxxxxxxxxxxx");
+    expect(lines[200]).toBe(
+      "… [lines 1–200 of 901 shown; 701 more below. Read on with offset = 201, or grep the file for what you need.]"
+    );
+    expect(lines).toHaveLength(201);
+    expect(r.summary).toBe("read big.txt — 901 lines · shown 1–200");
+  });
+
+  it("pages from offset, caps limit at the window, and ends at the end", async () => {
+    const root = big(scratch());
+    const mid = await executeTool("read", { path: "big.txt", offset: 301, limit: 50 }, ctxIn(root, W), ALL);
+    expect(mid.content.split("\n")[0]).toBe("  301\trow 301 xxxxxxxxxxxx");
+    expect(mid.content).toMatch(/lines 301–350 of 901 shown; 551 more below and 300 above\. Read on with offset = 351/);
+    const wide = await executeTool("read", { path: "big.txt", offset: 1, limit: 5000 }, ctxIn(root, W), ALL);
+    expect(wide.summary).toBe("read big.txt — 901 lines · shown 1–200");
+    const tail = await executeTool("read", { path: "big.txt", offset: 850 }, ctxIn(root, W), ALL);
+    expect(tail.content).toMatch(/\[lines 850–901 of 901 shown: the end of the file, with 849 lines above\.\]$/);
+    const past = await executeTool("read", { path: "big.txt", offset: 2000 }, ctxIn(root, W), ALL);
+    expect(past.code).toBe(TOOL_OK_EMPTY);
+    expect(past.content).toBe("big.txt has 901 lines, so offset 2000 is past the end. Nothing is there to show.");
+  });
+
+  it("a file inside the window reads exactly as it does without one", async () => {
+    const root = scratch();
+    const plain = await executeTool("read", { path: "small.txt" }, ctxIn(root), ALL);
+    const windowed = await executeTool("read", { path: "small.txt" }, ctxIn(root, W), ALL);
+    expect(windowed).toEqual(plain);
+  });
+
+  it("without a window, offset and limit are ignored, as they always were", async () => {
+    const root = big(scratch());
+    const r = await executeTool("read", { path: "big.txt", offset: 500, limit: 10 }, ctxIn(root), ALL);
+    expect(r.content.split("\n")[0]).toBe("    1\trow 001 xxxxxxxxxxxx");
+    expect(r.summary).toBe("read big.txt — 901 lines");
+  });
+
+  it("the CX5 repair text lists offset and limit when the window offers them", async () => {
+    const r = await executeTool("read", { file_path: "big.txt" }, ctxIn(big(scratch()), W), ALL);
+    expect(r.content).toContain("read takes one JSON object: path (string, required), offset (integer), limit (integer).");
+  });
+});
+
+describe("CX3: a line-capped command", () => {
+  const LONG = `i=1; while [ $i -le 600 ]; do echo "out $i"; i=$((i+1)); done`;
+
+  it("keeps both ends, says how many lines were omitted, and offloads the whole", async () => {
+    const root = scratch();
+    const spill = createSpillSink(root, "cx3");
+    const r = await executeTool("bash", { command: LONG }, ctxIn(root, { maxLines: { bash: 100 }, spill }), ALL);
+    expect(r.code).toBe(TOOL_OK);
+    const lines = r.content.split("\n");
+    expect(lines.slice(0, 3)).toEqual(["exit: 0", "stdout:", "out 1"]);
+    expect(lines[50]).toMatch(
+      /^… \[output truncated: 503 lines omitted — narrow it with grep, head, tail or sed -n 'A,Bp'\. The full \d+ bytes are saved at \.gnomon-out\/cx3\/001-bash-exit\.txt/
+    );
+    expect(lines.slice(-2)).toEqual(["out 600", ""]);
+    expect(lines).toHaveLength(101);
+    expect(readFileSync(join(root, ".gnomon-out", "cx3", "001-bash-exit.txt"), "utf-8")).toContain("out 300\n");
+  });
+
+  it("output within the cap, and any output with no cap declared, is untouched", async () => {
+    const root = scratch();
+    const short = await executeTool("bash", { command: "echo one; echo two" }, ctxIn(root, { maxLines: { bash: 100 } }), ALL);
+    const plain = await executeTool("bash", { command: "echo one; echo two" }, ctxIn(root), ALL);
+    expect(short.content).toBe(plain.content);
+    const uncapped = await executeTool("bash", { command: LONG }, ctxIn(root), ALL);
+    expect(uncapped.content).not.toMatch(/output truncated/);
+    expect(uncapped.content.split("\n")).toHaveLength(603);
+  });
+
+  it("a failing command keeps its last line, where the error usually is", async () => {
+    const root = scratch();
+    const r = await executeTool(
+      "bash",
+      { command: `${LONG} >&2; echo "error: the real reason" >&2; exit 3` },
+      ctxIn(root, { maxLines: { bash: 40 } }),
+      ALL
+    );
+    expect(r.summary).toBe("bash — exit 3");
+    expect(r.content).toMatch(/output truncated: \d+ lines omitted/);
+    expect(r.content).toMatch(/error: the real reason\n\nstdout: \(empty\)$/);
+  });
+});
+
+describe("CX3 through the loop", () => {
+  it("declared on both, the model is offered the window and reads capped observations", async () => {
+    const { url, raws } = await serve(scripted);
+    const rec = await runTask(loadConfig(capped(url)), "work through the files", { role: "impl", yes: true });
+    expect(rec.stop_reason).toBe("answered");
+    const first = JSON.parse(raws[0]!);
+    const read = first.tools.find((t: any) => t.function.name === "read");
+    expect(Object.keys(read.function.parameters.properties)).toEqual(["path", "offset", "limit"]);
+    const toolMsgs = JSON.parse(raws[2]!).messages.filter((m: any) => m.role === "tool");
+    expect(toolMsgs[0].content).toMatch(/lines 1–200 of 901 shown; 701 more below/);
+    expect(toolMsgs[1].content).toMatch(/output truncated: 503 lines omitted/);
+    expect(rec.tool_log[0]).toBe("read big.txt — 901 lines · shown 1–200");
+    // The point of it: fewer bytes for the model to carry on every later request.
+    const plain = await serve(scripted);
+    await runTask(loadConfig(surface(plain.url)), "work through the files", { role: "impl", yes: true });
+    expect(raws[2]!.length).toBeLessThan(plain.raws[2]!.length / 2);
   });
 });

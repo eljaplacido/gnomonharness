@@ -61,8 +61,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1844 TypeScript tests (1545 core, 274 cli, 18
-> natives, 7 tui) and 61 Rust tests — **1905 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 1855 TypeScript tests (1556 core, 274 cli, 18
+> natives, 7 tui) and 61 Rust tests — **1916 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1044,6 +1044,13 @@ Implemented tools: `read`, `glob`, `grep`, `compute`, `todo`, `note`, `task`,
 `webfetch`, `bash`, `write`, `edit`, `skill`. A tool that is
 declared but disabled, unimplemented, or withheld from the current role is
 **named at startup** — never quietly dropped.
+
+**`max_lines` is an opt-in line cap, on `bash` and `read` only.** Without it,
+output is capped at 32 KB and `read` returns the whole file. With it, `bash`
+output keeps its first and last lines and says how many were omitted. `read`
+shows that many lines at a time and offers `offset` and `limit`. It is off by
+default until an A/B on gnomon's own lanes says otherwise
+([GUIDE §8](docs/GUIDE.md#8-configuration-essentials)).
 
 **`glob` and `grep` are read-only, so they are never gated.** That is the point
 of having them. `bash` counts as mutating under `approval = "on_write"` — a

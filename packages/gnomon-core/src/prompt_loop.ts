@@ -34,6 +34,7 @@ import {
   type ChainGate,
   declaredKeyVars,
   resolveLoop,
+  resolveMaxLines,
   LOOP_DEFAULTS,
   Compaction,
   resolveUi,
@@ -4012,6 +4013,10 @@ export async function runAgenticTurn(
     approve,
     timeoutMs: toolTimeoutMs(config),
     maxOutputBytes: 32_000,
+    // `max_lines` on the bash and read declarations (CX3, opt-in). Absent
+    // unless declared, so a surface that declares neither builds the same
+    // context as before.
+    ...((maxLines) => (maxLines ? { maxLines } : {}))(resolveMaxLines(config)),
     // Created once per session and memoised, so file numbering is continuous
     // across turns. Before a session id is assigned there is still a process
     // to name, and scratch from an unnamed run is still better than bytes
