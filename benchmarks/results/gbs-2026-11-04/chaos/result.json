@@ -1,0 +1,567 @@
+{
+  "spec": "GBS-CHAOS 0.1 (docs/benchmarks/CHAOS.md draft 0.1, 2026-11-03), reported under GBS-REPORTING 0.1",
+  "preregistration": {
+    "url": "https://github.com/eljaplacido/gnomonharness/blob/bench/gbs-first-results/benchmarks/results/gbs-2026-11-04/chaos/PRE-REGISTRATION.md",
+    "sha256_as_committed": "42812867c4383f98e38d2e6515ebbd816ff1ce3f6f371fa8be1fa06d8342d014",
+    "sha256_with_deviations_log": "38fe7d9293e5aab67497de5032793955f4927fb43e462233ce71642e76ac16d6",
+    "commit": "efe77babb2043d7e6efb19f40435032a66e16dfa",
+    "commit_time_utc": "2026-11-04T20:58:31Z",
+    "first_measured_trial_utc": "2026-11-04T20:58:49.385Z",
+    "commit_predates_first_trial": true,
+    "deviations_commit": "97ad8059 (arm-B adapter --trust, before any measured arm-B trial)"
+  },
+  "harness": {
+    "name": "gnomon",
+    "version": "0.4.1",
+    "build": "gnomon/0.4.1+v0.4.1-c511b81",
+    "commit": "c511b8105fb2187423d21becbe3b19f8af2b80e5",
+    "artifact_digests": "../common/INSTALL.md (five SHA-256, all verified against the release SHA256SUMS)",
+    "install": "release installer from the tag, release tarballs (v0.4.1 is not on npm)",
+    "dirty": false
+  },
+  "harness_config_hash": {
+    "arm_R": {
+      "surface_template_hash": "9108a5f73a98c2a442064472882722d773c234061b876a1547f84c87b0a49cd7",
+      "files": "chaosSurfaceFiles() in gnomon-core (chaos_suite.ts); live surface_hash per run in card volatile"
+    },
+    "arm_B": {
+      "config_hash": "9108a5f73a98c2a442064472882722d773c234061b876a1547f84c87b0a49cd7",
+      "flags": "gnomon task <input> --json --yes --trust --role chaos|chaos_stream"
+    },
+    "departures_from_shipped_default": [
+      "approval=never (on_write)",
+      "compaction=discard (summary)",
+      "max_steps=8, legs=1 (12, 8)",
+      "max_tokens=4096 (32768)",
+      "resilience: request_timeout_ms=1000, stream_idle_timeout_ms=1000, stream_total_timeout_ms=10000, transport_grace_ms=2500, backoff_ms=20 (300000, 300000, 1800000, undeclared, 500)",
+      "tools read/write only",
+      "[verify] node chaos/check.mjs after write, max_rounds=2",
+      "audit enabled (same as init)"
+    ]
+  },
+  "models": "n/a: no model. A deterministic scripted model inside the chaos endpoint (chaos.ts scriptedReply), 'chaos-model'; no inference, no sampling",
+  "hardware": {
+    "platform": "Linux aarch64",
+    "cpu_models": [
+      "Cortex-A725",
+      "Cortex-X925"
+    ],
+    "logical_cores": 20,
+    "core_layout": "heterogeneous: 10 x Cortex-X925 (max 3900 MHz) + 10 x Cortex-A725 (max 2808 MHz); lscpu -e in cpu_table",
+    "memory_gib": 121.7,
+    "os": "Ubuntu 24.04.4 LTS",
+    "kernel": "6.17.0-1014-nvidia",
+    "node": "v22.22.2",
+    "machine": "gx10 (NVIDIA GB10, shared: other benchmarks were running on it during these runs; load is recorded per measurement)",
+    "hardware_class": "n/a: no GBS spec run here defines hardware classes (only GBS-HYBRID does)"
+  },
+  "apparatus": {
+    "runner_commit": "97ad8059 (run_reference.sh, blackbox.mjs); analyse.py at the result commit",
+    "task_set": "gnomon chaos plan: 3 tasks, 20 faults, 37 cases; plan_hash 663dfe0aae297449af44eaf52f97209e62a95b7ecd73bafe6fae4d0db3f36904",
+    "container_limits": "n/a: no container; nice -n 19 on the host",
+    "concurrency": "1 (serial cases; the lane check runs 2 concurrently by design)",
+    "time_cap": {
+      "configured": "per-request deadlines as above; endpoint holds a withheld reply at most 20 s",
+      "measured": "longest seed-1 case 3086 ms; whole run 17405 ms"
+    }
+  },
+  "n": {
+    "tasks": 3,
+    "cases_per_run": 37,
+    "attempts_per_case": 1,
+    "arm_R_runs": "seed 1 x2, seeds 2-10 x1 (11 runs, 407 faulted cases)",
+    "arm_B_runs": "seed 1 x1 (37 cases)",
+    "trials_planned": 444,
+    "trials_run": 444
+  },
+  "validity": {
+    "mapping": "pass=fired+announced, fail=fired+silent, timeout=n/a (timeouts are injected faults), apparatus_failure=not fired or void run, excluded=0",
+    "arm_R_seed1": {
+      "pass": 34,
+      "fail": 3,
+      "timeout": 0,
+      "apparatus_failure": 0,
+      "excluded": 0,
+      "sum_equals_planned": true
+    },
+    "arm_R_all_11_runs": {
+      "pass": 374,
+      "fail": 33,
+      "timeout": 0,
+      "apparatus_failure": 0,
+      "excluded": 0,
+      "sum_equals_planned": true
+    },
+    "arm_B_seed1": {
+      "pass": 34,
+      "fail": 3,
+      "timeout": 0,
+      "apparatus_failure": 0,
+      "excluded": 0,
+      "run_void": true,
+      "void_reason": "\u00a75.2 garbling control not runnable through chaos serve (pre-registered; gap CHAOS-3)"
+    }
+  },
+  "mde": "n/a: single-arm descriptive conformance profile, no comparison; no NI margin",
+  "primary": {
+    "estimand": "per CHAOS \u00a74, arm R seed 1",
+    "faults_announced": "17/20",
+    "faults_silent": [
+      "late_system_dropped",
+      "slow_throttle",
+      "cache_miss"
+    ],
+    "cases_announced": {
+      "k": 34,
+      "n": 37,
+      "wilson95": [
+        0.787,
+        0.972
+      ]
+    },
+    "cases_named": {
+      "k": 34,
+      "n": 37,
+      "wilson95": [
+        0.787,
+        0.972
+      ]
+    },
+    "silent_failure_share": {
+      "k": 1,
+      "n": 15,
+      "wilson95": [
+        0.0119,
+        0.2982
+      ]
+    },
+    "ci_method": "Wilson score 95%",
+    "per_task_paired_differences": "n/a: no second arm",
+    "icc": "n/a"
+  },
+  "reliability": {
+    "cases_recovered": {
+      "k": 22,
+      "n": 37,
+      "wilson95": [
+        0.4349,
+        0.7365
+      ]
+    },
+    "determinism": {
+      "equal_outside_volatile": true,
+      "sha256_outside_volatile": [
+        "1bb2d7365dedb30d0d9294688f092274c231e0158ef4b64e47df11b9f84e1fb8",
+        "1bb2d7365dedb30d0d9294688f092274c231e0158ef4b64e47df11b9f84e1fb8"
+      ]
+    },
+    "seed_stability": {
+      "seeds": "1-10",
+      "faults_with_seed_dependent_verdict": [],
+      "pooled_cases_announced_not_independent": {
+        "k": 340,
+        "n": 370,
+        "wilson95": [
+          0.8866,
+          0.9426
+        ]
+      }
+    },
+    "pass_k": "n/a: one attempt per case per seed; the scripted model is deterministic"
+  },
+  "cost": {
+    "total_usd": 0,
+    "note": "no model, no network; tokens below are the endpoint's billed estimate (chars/4), not money",
+    "tokens_billed_total_seed1": 19560,
+    "tokens_counted_by_record_seed1": 16140,
+    "tokens_wasted_seed1": 14572,
+    "zombie_case": {
+      "billed": 814,
+      "counted": 151
+    },
+    "gpu_seconds": 0,
+    "price_table": "n/a"
+  },
+  "telemetry": "endpoint request log (chaos.ts span) for fired/billed/leaked; harness stderr + task record for channels. Billed vs counted deliberately juxtaposes the two sources; no comparison mixes them",
+  "latency": {
+    "note": "not an endpoint of this spec; per-case wall ms in card volatile.case_ms",
+    "seed1_run_wall_ms": 17405,
+    "capped": 0
+  },
+  "load": {
+    "per_run": [
+      {
+        "run": "1a",
+        "load1_start": 1.36,
+        "load1_end": 1.38
+      },
+      {
+        "run": "1b",
+        "load1_start": 1.38,
+        "load1_end": 1.21
+      },
+      {
+        "run": "2",
+        "load1_start": 1.21,
+        "load1_end": 1.17
+      },
+      {
+        "run": "3",
+        "load1_start": 1.17,
+        "load1_end": 1.44
+      },
+      {
+        "run": "4",
+        "load1_start": 1.44,
+        "load1_end": 1.58
+      },
+      {
+        "run": "5",
+        "load1_start": 1.58,
+        "load1_end": 1.69
+      },
+      {
+        "run": "6",
+        "load1_start": 1.69,
+        "load1_end": 1.62
+      },
+      {
+        "run": "7",
+        "load1_start": 1.62,
+        "load1_end": 1.79
+      },
+      {
+        "run": "8",
+        "load1_start": 1.79,
+        "load1_end": 1.84
+      },
+      {
+        "run": "9",
+        "load1_start": 1.84,
+        "load1_end": 1.65
+      },
+      {
+        "run": "10",
+        "load1_start": 1.65,
+        "load1_end": 3.61
+      }
+    ],
+    "nice": 19
+  },
+  "incidents": [
+    "seed-999 smoke of arm B without --trust: the clean fix run could not finish (surface clamped as untrusted). Adapter fixed before the measured run; smoke kept in raw/smoke/"
+  ],
+  "deviations": "see PRE-REGISTRATION.md deviations log (1 entry, before any measured arm-B trial)",
+  "traces": {
+    "archive": "traces-chaos.tar.gz",
+    "sha256": "ac62176d3f0a32ac7b53b5a8625f6fb998d6db9baaaf2bf24d2ea3f901e491a8",
+    "chain_heads": "n/a: gnomon chaos deletes its scratch project (and its audit trails) unless --keep; not kept in this run"
+  },
+  "scope": "system: gnomon v0.4.1 + the chaos reference surface + scripted model + linux/aarch64. Not a harness-level claim (no models)",
+  "authorship": "author-run (gnomon's authors wrote CHAOS.md and gnomon chaos). Run by Claude Code (Opus 5.5) for the gnomon project",
+  "arm_B_vs_R": {
+    "verdict_disagreements": 0,
+    "channel_set_differences": 0,
+    "B_summary": {
+      "faults": 20,
+      "faults_announced": 17,
+      "faults_silent": [
+        "late_system_dropped",
+        "slow_throttle",
+        "cache_miss"
+      ],
+      "cases": 37,
+      "cases_fired": 37,
+      "cases_announced": 34,
+      "cases_named": 34,
+      "cases_named_without_i_flag": 34,
+      "cases_recovered": 22,
+      "failed": 15,
+      "silent_failures": 1,
+      "leaked": 0
+    }
+  },
+  "per_fault_seed1": [
+    {
+      "id": "error",
+      "family": "agentchaos",
+      "injects": "HTTP 500 with an error body",
+      "origin": "AgentChaos (arXiv 2608.06790) Error",
+      "cases": 4,
+      "fired": 4,
+      "announced": 4,
+      "named": 4,
+      "recovered": 3,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 0
+    },
+    {
+      "id": "timeout.headers",
+      "family": "agentchaos",
+      "injects": "accepts the request and never sends a status line",
+      "origin": "AgentChaos Timeout",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 441
+    },
+    {
+      "id": "timeout.body",
+      "family": "agentchaos",
+      "injects": "sends the headers and two chunks of a stream, then goes silent",
+      "origin": "AgentChaos Timeout (body)",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 596
+    },
+    {
+      "id": "empty.content",
+      "family": "agentchaos",
+      "injects": "HTTP 200, finish_reason stop, content \"\" in place of the answer",
+      "origin": "AgentChaos Empty (content)",
+      "cases": 4,
+      "fired": 4,
+      "announced": 4,
+      "named": 4,
+      "recovered": 3,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 1869
+    },
+    {
+      "id": "empty.tool_calls",
+      "family": "agentchaos",
+      "injects": "HTTP 200, finish_reason stop, no tool_calls and no text in place of a tool call",
+      "origin": "AgentChaos Empty (tool_calls)",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 1091
+    },
+    {
+      "id": "truncate.content",
+      "family": "agentchaos",
+      "injects": "closes a stream cleanly halfway through the answer: no finish_reason, no [DONE]",
+      "origin": "AgentChaos Truncate (content)",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 596
+    },
+    {
+      "id": "truncate.tool_calls",
+      "family": "agentchaos",
+      "injects": "tool-call arguments cut mid-JSON, finish_reason tool_calls",
+      "origin": "AgentChaos Truncate (tool_calls)",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 1761
+    },
+    {
+      "id": "corrupt.content",
+      "family": "agentchaos",
+      "injects": "HTTP 200 whose body is a proxy's HTML error page, not JSON",
+      "origin": "AgentChaos Corrupt; compound scenario proxy-HTML",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 604
+    },
+    {
+      "id": "corrupt.stream",
+      "family": "agentchaos",
+      "injects": "one streamed chunk of the answer arrives as bytes that are not JSON",
+      "origin": "AgentChaos Corrupt (stream)",
+      "cases": 1,
+      "fired": 1,
+      "announced": 1,
+      "named": 1,
+      "recovered": 0,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 151
+    },
+    {
+      "id": "schema.tool_calls",
+      "family": "agentchaos",
+      "injects": "a tool call naming a tool the request never offered",
+      "origin": "AgentChaos Schema (tool_calls)",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 1469
+    },
+    {
+      "id": "schema.arguments",
+      "family": "agentchaos",
+      "injects": "tool-call arguments that parse as a JSON array, not an object",
+      "origin": "AgentChaos Schema (arguments)",
+      "cases": 1,
+      "fired": 1,
+      "announced": 1,
+      "named": 1,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 454
+    },
+    {
+      "id": "schema.content",
+      "family": "agentchaos",
+      "injects": "message.content as an array of content parts instead of a string",
+      "origin": "AgentChaos Schema (content); content-part replies",
+      "cases": 1,
+      "fired": 1,
+      "announced": 1,
+      "named": 1,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 0
+    },
+    {
+      "id": "rate_limit",
+      "family": "reliabilitybench",
+      "injects": "HTTP 429 with Retry-After: 1, enforced: every request inside the window is refused too",
+      "origin": "ReliabilityBench (arXiv 2601.06112) rate limiting",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 0
+    },
+    {
+      "id": "late_system_dropped",
+      "family": "gnomon",
+      "injects": "the chat template silently drops every system message after the first",
+      "origin": "R1H late-system drop; report RS3",
+      "cases": 1,
+      "fired": 1,
+      "announced": 0,
+      "named": 0,
+      "recovered": 0,
+      "silent": 1,
+      "verdict": "silent",
+      "tokens_wasted": 1185
+    },
+    {
+      "id": "zombie",
+      "family": "gnomon",
+      "injects": "a relay that withholds the reply, then keeps generating after the client gives up",
+      "origin": "P2G relay billing 163k vs 82k counted; report RS4",
+      "cases": 1,
+      "fired": 1,
+      "announced": 1,
+      "named": 1,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 663
+    },
+    {
+      "id": "slow_throttle",
+      "family": "gnomon",
+      "injects": "a stream paced to ~5 tokens/s, each gap well inside the idle clock",
+      "origin": "NVFP4 emulation fallback, 1.1 vs 77 tok/s on GB10; report RS3",
+      "cases": 1,
+      "fired": 1,
+      "announced": 0,
+      "named": 0,
+      "recovered": 1,
+      "silent": 1,
+      "verdict": "silent",
+      "tokens_wasted": 0
+    },
+    {
+      "id": "reasoning_tool_leak",
+      "family": "gnomon",
+      "injects": "the tool call written as markup inside reasoning_content, no tool_calls, no content",
+      "origin": "llama.cpp #20809; report RS3",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 1527
+    },
+    {
+      "id": "length_mid_tool_call",
+      "family": "gnomon",
+      "injects": "finish_reason length with the tool call's arguments cut mid-JSON",
+      "origin": "P2G 30 KB write after 9k thinking tokens",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 1569
+    },
+    {
+      "id": "mid_stream_disconnect",
+      "family": "gnomon",
+      "injects": "destroys the socket halfway through a streamed answer",
+      "origin": "report RS1",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 596
+    },
+    {
+      "id": "cache_miss",
+      "family": "gnomon",
+      "injects": "reports cached_tokens 0 on an append-only prompt and re-prefills it",
+      "origin": "GB10 40k re-prefill, 33-40 s; report RS5",
+      "cases": 1,
+      "fired": 1,
+      "announced": 0,
+      "named": 0,
+      "recovered": 1,
+      "silent": 1,
+      "verdict": "silent",
+      "tokens_wasted": 0
+    }
+  ],
+  "spec_gaps": "GAPS.md (CHAOS-1..CHAOS-10)"
+}
