@@ -119,6 +119,7 @@ def run_cell(arm: str, task: str, slot: int) -> dict:
     if version:
         cmd += ["--ak", f"version={version}"]
     env = {**P.base_env(), "GNOMON_RELEASE": "0.4.0"}
+    env["PYTHONPATH"] = f"{HERE}:{env['PYTHONPATH']}"  # arm B's adapter lives here (addendum 1)
     for k in keys:
         env[k] = "p2g-relay-placeholder"  # the slot relay replaces it; the real key never leaves it
         cmd += ["--ae", f"{k}=p2g-relay-placeholder"]

@@ -93,3 +93,13 @@ Committed before any H1 cell. Later changes go in timestamped addenda; nothing a
 - Sampling (stage 2 showed no direct effect).
 - Other peers (no new peer cells).
 - Any claim beyond these 7 tasks.
+
+## Addendum 1 (2026-11-04T12:05:48Z): launch fix, before any valid H1 cell
+
+- **What failed:** the first launch (12:04Z) failed for arm B at import. `run_h1.py` passed Harbor only P2G's apparatus on
+  `PYTHONPATH`, so `gnomon_harbor_h1` was not found (0 requests).
+- **Arm A:** its pair was stopped by the operator about a minute in, after 5 model calls.
+- **Where they went:** both cells moved to `runs-aborted/` and `jobs-aborted/` with reasons.
+- **Fix:** `run_h1.py` now prepends its own apparatus directory to Harbor's `PYTHONPATH`. Both adapters import under
+  Harbor's venv.
+- **Re-run:** the wave is re-run from the start. Nothing else changes.
