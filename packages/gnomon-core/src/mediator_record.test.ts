@@ -47,9 +47,14 @@ type Reply = { status?: number; json?: unknown; sse?: unknown[] };
 async function serve(reply: (body: Record<string, any>, n: number) => Reply) {
   const raws: string[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    let raw = "";
-    req.on("data", (c) => (raw += c));
+    // Decoded once, whole: a chunk boundary can fall inside a multi-byte
+    // character ("—" in the nudge, "→" in a trim's ledger), and where it falls
+    // depends on the OS's socket buffers. Decoding chunk by chunk recorded a
+    // body the client never sent.
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
     req.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8");
       raws.push(raw);
       const r = reply(JSON.parse(raw || "{}"), raws.length);
       if (r.sse) {
