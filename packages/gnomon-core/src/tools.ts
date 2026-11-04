@@ -40,7 +40,7 @@ import {
   isToolEnabled,
   recomputeManifest,
 } from "./config.js";
-import { proposeSkill, renderSkill, SkillProposal } from "./skills.js";
+import { proposeSkill, ProposalRefused, renderSkill, SkillProposal } from "./skills.js";
 import { compute, ComputeError } from "./compute.js";
 import type { McpRegistry, McpToolInfo } from "./mcp.js";
 import {
@@ -81,7 +81,9 @@ export interface ToolOutcome {
   /**
    * Set when `.gnomon/` moved while this call ran. Only `bash` can do this —
    * `write` and `edit` refuse the surface outright — and it is reported rather
-   * than prevented because the command is arbitrary shell.
+   * than prevented because the command is arbitrary shell. `skill` reports it
+   * too, as a backstop: a proposal is not hashed, so a hash that moved means a
+   * route its own checks did not name (LN8).
    */
   surface_drift?: SurfaceDrift;
   /**
@@ -340,7 +342,15 @@ export function buildToolSet(
   // MCP tools discovered from connected servers. Gated like any other tool: a
   // role with a `tools` list must name the tool, or its server (`mcp__<server>`)
   // to take all of that server's tools.
-  for (const mt of mcpTools) {
+  //
+  // Sorted, byte-wise, like the declared tools above (GV17). They arrive in
+  // connection order, which is `[mcp_servers.*]` declaration order -- a TOML
+  // table, unordered by the TOML spec -- and within a server in whatever order
+  // its `tools/list` answered, which is the server's business and can change
+  // between its versions or machines. Either one moved the tools JSON, so the
+  // same surface sent different prompt bytes and missed the provider's cache.
+  const mcpSorted = [...mcpTools].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const mt of mcpSorted) {
     const serverKey = `mcp__${mt.server}`;
     if (roleLimited && !allowed!.includes(mt.name) && !allowed!.includes(serverKey)) {
       withheld.push(mt.name);
@@ -2793,7 +2803,25 @@ export function surfaceDrift(
 ): SurfaceDrift | null {
   if (!before) return null;
   const after = surfaceHashOf(ctx);
-  if (!after || after === before) return null;
+  if (after === before) return null;
+  if (!after) {
+    // A surface that hashed before the call and cannot be hashed after it
+    // MOVED. This returned null, "nothing moved", so `ln -sf <nowhere>
+    // .gnomon/policy.toml` -- a dangling link, which the manifest walk cannot
+    // stat -- replaced the policy and was never reported (LN8). Reported
+    // here, so the loop says so and tries to reload.
+    return {
+      before,
+      after: "unhashable",
+      notice:
+        `[gnomon] WARNING: that command changed .gnomon/ so that it can no ` +
+        `longer be hashed (a dangling link or an unreadable file) — the ` +
+        `surface hash was ${before.slice(0, 12)}. The rules this session is ` +
+        `running under are no longer the ones it started with, and a surface ` +
+        `that cannot be hashed cannot be verified. Do not try to undo this; ` +
+        `say in your final answer that the surface moved mid-session.`,
+    };
+  }
   return {
     before,
     after,
@@ -3280,26 +3308,60 @@ export function inRecordDir(ctx: ToolContext, abs: string): boolean {
  * files (bounded), so the common write costs one stat.
  */
 export function hardLinkedToRecord(ctx: ToolContext, abs: string): boolean {
+  // Past the walk's budget this answers no, as it always has: a record written
+  // through an unchecked link still changes under the record guard
+  // (record_guard.ts), which stops the turn.
+  return hardLinkIn(recordDirs(ctx), abs) === "yes";
+}
+
+/**
+ * Whether an existing file is a hard link to a file in the surface. The same
+ * hole `hardLinkedToRecord` closed for the records, found open for `.gnomon/`
+ * by the orthogonality suite (LN8): with `p.toml` a hard link to
+ * `.gnomon/policy.toml`, `write p.toml` rewrote the approval policy with
+ * TOOL_OK, under `strict`, and no drift was reported, because neither arm of
+ * inSurface sees a second name for the same inode. Fails closed past the
+ * budget: a surface that large is not one gnomon can vouch for anyway.
+ */
+export function hardLinkedToSurface(surfaceDir: string, abs: string): boolean {
+  return hardLinkIn([surfaceDir], abs) !== "no";
+}
+
+/**
+ * Whether `abs` is the same file (inode) as one under `dirs`. Only a file with
+ * more than one link is looked for, so the common write costs one stat. The
+ * walk is bounded, and reads each directory in byte order so that which files
+ * the bound covers does not depend on the filesystem's enumeration order
+ * (GV17): the same tree gets the same decision on every machine.
+ */
+function hardLinkIn(dirs: string[], abs: string, budget = 20_000): "yes" | "no" | "unknown" {
   let st: ReturnType<typeof statSync>;
   try {
     st = statSync(abs);
   } catch {
-    return false;
+    return "no";
   }
-  if (!st.isFile() || st.nlink < 2) return false;
-  let budget = 20_000;
+  if (!st || !st.isFile() || st.nlink < 2) return "no";
+  let left = budget;
+  let ranOut = false;
   const walk = (dir: string): boolean => {
     let entries: Dirent[];
     try {
-      entries = readdirSync(dir, { withFileTypes: true });
+      entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+        a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+      );
     } catch {
       return false;
     }
     for (const e of entries) {
-      if (--budget < 0) return false;
+      if (--left < 0) {
+        ranOut = true;
+        return false;
+      }
       const p = join(dir, e.name);
       if (e.isDirectory()) {
         if (walk(p)) return true;
+        if (ranOut) return false;
       } else if (e.isFile()) {
         try {
           const o = statSync(p);
@@ -3311,7 +3373,11 @@ export function hardLinkedToRecord(ctx: ToolContext, abs: string): boolean {
     }
     return false;
   };
-  return recordDirs(ctx).some((d) => walk(d));
+  for (const d of dirs) {
+    if (walk(d)) return "yes";
+    if (ranOut) return "unknown";
+  }
+  return "no";
 }
 
 const RECORD_WHY =
@@ -3367,13 +3433,27 @@ export function inSurface(ctx: ToolContext, abs: string): boolean {
   // on another volume, a /tmp that is really /private/tmp); realpath that side
   // so an ordinary layout does not read as an escape.
   const surfaceReal = realpathOrSelf(surfaceLexical);
+  // Compared as the filesystem compares names (LN8). On macOS by default, and
+  // on Windows, `.GNOMON/policy.toml` IS `.gnomon/policy.toml`, and neither arm
+  // below saw it: the lexical one compares bytes, and on macOS the realpath
+  // one keeps the case it was given. The record rule already folds case this
+  // way (recordPathKey); the surface did not. Identity on Linux. Over-inclusive
+  // on a case-sensitive APFS volume, the direction this guard errs in.
   const under = (base: string, p: string): boolean => {
-    const rel = relative(base, p);
+    const rel = relative(recordPathKey(base), recordPathKey(p));
     return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
   };
   // `abs` arrives already `resolve()`d by resolveInRoot, so `..` is collapsed
   // and the lexical arm cannot be walked out of and back in.
-  return under(surfaceReal, realpathOfNearest(abs)) || under(surfaceLexical, resolve(abs));
+  //
+  // The third arm is a second NAME for a surface file: a hard link has no
+  // path that leads into .gnomon/, lexical or real, and writing it writes the
+  // surface all the same (LN8).
+  return (
+    under(surfaceReal, realpathOfNearest(abs)) ||
+    under(surfaceLexical, resolve(abs)) ||
+    hardLinkedToSurface(surfaceLexical, abs)
+  );
 }
 
 export function writeAllowed(
@@ -3627,11 +3707,16 @@ async function taskTool(
   }
 
   if (!role || !known.includes(role)) {
+    // Byte order (GV17): `[roles.*]` are TOML tables, unordered by the spec,
+    // and a profile appends the roles it adds after them. Reordering the
+    // tables, or moving a role into a profile, must not change what the
+    // model reads. task_allow above is an array, declared and shown as written.
+    const listed = [...known].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     return {
       code: TOOL_FAILED,
       content:
         `"${role || "(none)"}" is not a role in this repository. ` +
-        `Available: ${known.join(", ")}.`,
+        `Available: ${listed.join(", ")}.`,
       summary: `task — unknown role "${role}"`,
     };
   }
@@ -3999,7 +4084,7 @@ const SEARCH_MAX_HITS = 200;
  * `max` is WALK_MAX_FILES everywhere but the worktree stamp, which first asks
  * whether a tree is small enough to walk at all (STAMP_WALK_BELOW).
  */
-function walkFiles(root: string, dir: string, max: number = WALK_MAX_FILES): string[] {
+export function walkFiles(root: string, dir: string, max: number = WALK_MAX_FILES): string[] {
   // A file is a valid scope of exactly one file. Without this, readdirSync
   // throws ENOTDIR, the catch below swallows it, and `grep` answers
   // "No match for /x/ under path/to/file" for a file that contains x — a wrong
@@ -4019,21 +4104,31 @@ function walkFiles(root: string, dir: string, max: number = WALK_MAX_FILES): str
     const cur = stack.pop()!;
     let entries: Dirent[];
     try {
-      entries = readdirSync(cur, { withFileTypes: true });
+      // Each directory read in byte order (GV17). The final sort below made the
+      // list's order canonical, but not WHICH files are in it once `max` cuts
+      // the walk short: that was decided by readdir order, which differs
+      // between filesystems, so a tree over the cap gave glob and grep a
+      // different answer on another machine.
+      entries = readdirSync(cur, { withFileTypes: true }).sort((a, b) =>
+        a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+      );
     } catch {
       continue; // unreadable directory is not a reason to fail the search
     }
+    const subdirs: string[] = [];
     for (const e of entries) {
       if (e.isSymbolicLink()) continue; // a link out of the tree escapes the sandbox
       const abs = join(cur, e.name);
       if (e.isDirectory()) {
         if (NEVER_WALKED.has(e.name)) continue;
-        stack.push(abs);
+        subdirs.push(abs);
       } else if (e.isFile()) {
         out.push(relative(root, abs).split(sep).join("/"));
         if (out.length >= max) break;
       }
     }
+    // Pushed in reverse, so they are popped, and walked, in byte order.
+    for (let i = subdirs.length - 1; i >= 0; i--) stack.push(subdirs[i]!);
   }
   return out.sort();
 }
@@ -4718,15 +4813,34 @@ async function skillTool(
     }
   }
 
-  const { id, existed } = proposeSkill(ctx.config, proposal);
+  // A proposal never moves the surface hash (proposed/ is not hashed). If one
+  // did, something routed the write into the surface, and the loop is told
+  // the way bash tells it: the backstop for any route proposeSkill's own
+  // checks do not name (LN8).
+  const before = surfaceHashOf(ctx);
+  let written: { id: string; existed: boolean };
+  try {
+    written = proposeSkill(ctx.config, proposal);
+  } catch (err) {
+    if (!(err instanceof ProposalRefused)) throw err;
+    return {
+      code: TOOL_DENIED,
+      content: `Refused: ${err.message}`,
+      summary: `skill "${name}" — refused (staging is not plain)`,
+    };
+  }
+  const { id, existed } = written;
+  const drift = surfaceDrift(ctx, before);
   return {
     code: TOOL_OK,
     content:
       `Proposed skill "${name}" as ${id}.md. It is NOT active: proposals live ` +
       `in .gnomon/skills/proposed/ and take effect only once accepted with ` +
       `\`gnomon skill accept ${id}\`, which changes the surface hash ` +
-      `deliberately.${existed ? " (replaced an earlier proposal of the same name)" : ""}`,
-    summary: `skill ${id} proposed${existed ? " (replaced)" : ""}`,
+      `deliberately.${existed ? " (replaced an earlier proposal of the same name)" : ""}` +
+      (drift ? `\n\n${drift.notice}` : ""),
+    summary: `skill ${id} proposed${existed ? " (replaced)" : ""}${drift ? " · surface changed" : ""}`,
+    surface_drift: drift ?? undefined,
   };
 }
 

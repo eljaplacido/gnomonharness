@@ -655,7 +655,7 @@ decision gnomon could not make is never an allow.
 | `bash_allow` | a segment is not on the role's `bash_allow`, or the command substitutes or redirects |
 | `sudo` | sudo at command position, on the host |
 | `sandbox` | a path outside the root and every granted `extra_roots` |
-| `surface` | a write or edit inside `.gnomon/`; and a shell write target inside it (or a recursive removal of a directory above it), for every role and at every `/allow` level: the write tool under `/allow custom\|all` is the one consented route |
+| `surface` | a write or edit inside `.gnomon/`, including through a symlink from either side, a hard link to a surface file, and, on case-insensitive filesystems, other spellings of the directory; and a shell write target inside it (or a recursive removal of a directory above it), for every role and at every `/allow` level: the write tool under `/allow custom\|all` is the one consented route |
 | `record` | a write, edit or shell write target inside gnomon's own records: `.gnomon-audit/` (or the `[audit] dir`), `.gnomon-trials/` and `.gnomon-sessions/` (or the `[session] dir`), for every role, with no consent path. This includes a hard link to a record, an `ln` into or out of one, git checkout/restore/clone/worktree/apply, archive extraction (members listed by `tar`/`unzip`), rsync, a perl two-argument open, an awk redirect, a glob that could name a record, on case-insensitive filesystems other spellings of the directory, a recursive removal of a directory above the records (`rm -r`, `find -delete` unless its name tests match no record, `mv`, `rsync --delete`, `shutil.rmtree` and the like), and a `git clean` or `git stash --include-untracked\|--all` that would remove a record (git's own `status` says which, after `-x`/`-X`/`-e` and pathspecs) |
 | `git_hooks` | a write, edit or shell write target in `.git/hooks/` or `.git/config` (a linked worktree's common git dir included), or a `git config` that sets, in any scope, a key git runs as a program: `core.hooksPath`, `core.fsmonitor`, `core.sshCommand`, `core.pager`, `core.editor`, `core.askPass`, `sequence.editor`, `credential.helper`, diff/merge/filter drivers, `gpg.program`, `pager.*`, `alias.*` starting with `!`, `include.path`, `init.templateDir` and the rest of the list in `shell.ts` (`GIT_EXEC_KEYS`). For every role |
 | `write_allow` | a path outside the role's `write_allow`; or a relative shell write after a `cd` gnomon cannot follow (`cd "$X"`), which it cannot place |
@@ -1674,3 +1674,96 @@ receipt keys, the backends and the degradation id. `anchor.test.ts` asserts
 them against what the code writes.
 `conformance/anchor_rfc3161_openssl.json` is a real token that the RFC 3161
 code verifies offline.
+
+## 22. Order invariance — what the model reads does not depend on enumeration order
+
+GV17. The same surface and the same input give the model the same bytes on
+every machine. That is gnomon's determinism claim, and it is also what a
+provider's prompt cache keys on.
+
+A list is held to one of three orders:
+
+| Order | Means | Lists |
+|---|---|---|
+| `byte` | sorted byte-wise (never `localeCompare`), so it depends neither on readdir order nor on the order an unordered collection was declared in | `[[tools]]` (Rule 3) and MCP tools in the tools JSON; active and dormant skills in the system prompt; profiles; the `task` tool's unknown-role list; the manifest; `read` on a directory; which files a capped walk keeps (`glob`, `grep`); the citation check's candidates; which record files the tamper guard hashes on equal mtimes |
+| `declared` | a TOML array, which the TOML spec orders, shown as the surface wrote it | `bash_allow`, `write_allow`, `task_allow`, echoed in a refusal |
+| `semantic` | the order is the meaning, and is never canonicalised | `[[routing.rules]]` (first match wins) |
+
+TOML tables (`[roles.*]`, `[endpoints.*]`, `[mcp_servers.*]`, a profile's
+`[roles.*]`) are unordered by the TOML spec. Reordering them changes the file's
+bytes, and so the surface hash. It does not change the prompt. A role's
+`tools` and a skill's `roles` are arrays used as filters, so their order never
+shows.
+
+**What the property asserts.** Every `readdirSync` result is permuted (twelve
+seeded shuffles, the reverse, the identity) over the same bytes on disk. Every
+unordered collection is redeclared in twelve seeded orders. The system prompt
+for every role (interactive and unattended, for inputs that fire and miss each
+skill) and the tools JSON must be byte-identical, and so must the other `byte`
+lists above.
+
+**Not covered.** The second half of GV17 needs model runs: disqualifying a
+shadow model whose verdict flips when its criteria are reordered (`[shadow]`
+already asks in both orders by default, `orders = ["fwd", "rev"]`). The system prompt is input-dependent by design.
+Skills with a `match` fire per turn, and run notes grow, so the cacheable
+prefix across turns ends where those differ.
+
+**Fixture**: `conformance/order_invariance.json`, the inventory with each
+list's order. `packages/gnomon-core/src/order_invariance.test.ts` asserts it
+probes exactly those lists, with the same classification.
+
+## 23. Orthogonality — no self-modification path changes what the agent is judged by, unseen
+
+LN8. The protected set is everything a run is judged by:
+- the hashed surface: `policy.toml` (the guard's rules), `config.toml` and
+  `roles.toml` (the loop), `tools.toml` (tool definitions), `profiles/`,
+  `system.md`, accepted skills, trial specs and the audit verifier's key;
+- the records the verifier reads: `.gnomon-audit/` and `.gnomon-trials/`.
+
+The self-modification paths gnomon offers, and what each must do:
+
+| Path | Must |
+|---|---|
+| `write`, `edit` (any role, any `write_allow`) | refuse |
+| `skill` | refuse; a proposal lands only in `.gnomon/skills/proposed/` |
+| `task` (a sub-turn, even under the parent's `/allow all`) | refuse |
+| `bash` | refuse, or be detected: `surface_drift` for `.gnomon/`, the record guard (§14) for the records |
+
+`bash` may be detected rather than refused because its rules are a pattern
+check over text (§10). The kernel sandbox (`exec os`) is what contains it.
+Detection includes a surface that can no longer be hashed after the call, such
+as a dangling link. That is reported as drift with `after: "unhashable"`.
+
+A proposal is never written through a link. The `skill` tool refuses when
+`skills/` or `skills/proposed/` is a symlink, or when the proposal's file
+exists as a symbolic or hard link. The file is written new and renamed into
+place, which replaces a directory entry and never writes through one. A
+`skill` call that moves the surface hash reports `surface_drift`, as a
+backstop.
+
+**Routes put to each path.**
+- File tools: plain, `./`, `src/../`, absolute, a doubled slash, a case
+  variant, a symlinked directory, a symlinked file, a hard link, a symlinked
+  parent. Each under no `write_allow`, and under one that names the protected
+  paths.
+- `skill`: a symbolic or hard link planted in `proposed/`, and `proposed/`
+  swapped for a link to `skills/`, `.gnomon/` or `.gnomon-audit/`. Also 200
+  hostile names.
+- Shell forms: redirection, `: >`, `sed -i`, `perl -pi`, `cp`, `mv`, `tee`, a
+  heredoc, `dd`, `ln -sf`, `rm`, inline python (literal and built path), `cd`,
+  a variable path, absolute, `..`, a hard link, a symlinked directory.
+
+**Documented limits.**
+- MCP tools are not checked by these rules (§10).
+- A script file's own writes are seen only as drift or tamper.
+- The guard's own code is protected by being outside the root
+  (`sandbox = confined`). A project-local install under `node_modules/` is
+  inside the root and is not.
+- A process running in the background can swap `proposed/` for a link between
+  the `skill` tool's check and its rename. The hash backstop reports that
+  afterwards.
+
+**Fixture**: `conformance/orthogonality.json`, with the targets, routes,
+verdicts and counts. `packages/gnomon-core/src/orthogonality.test.ts` asserts
+its lists are the fixture's, and puts every route to every target in a fresh
+temporary root.
