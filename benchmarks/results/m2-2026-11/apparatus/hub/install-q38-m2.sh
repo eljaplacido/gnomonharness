@@ -41,7 +41,7 @@ case "${M2_SPEC:-}" in 3|1) ;; *) echo "[start-q38-m2] REFUSED: M2_SPEC '${M2_SP
 case "${M2_CTX:-}" in 131072|98304) ;; *) echo "[start-q38-m2] REFUSED: M2_CTX '${M2_CTX:-}'" >&2; exit 1;; esac
 case "${M2_FA2:-}" in 0|1) ;; *) echo "[start-q38-m2] REFUSED: M2_FA2 '${M2_FA2:-}'" >&2; exit 1;; esac
 used=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1 | tr -dc '0-9')
-[ "${used:-99999}" -lt 4000 ] || { echo "[start-q38-m2] REFUSED: GPU has ${used} MiB in use" >&2; exit 1; }
+[ "${used:-99999}" -lt 6500 ] || { echo "[start-q38-m2] REFUSED: GPU has ${used} MiB in use" >&2; exit 1; }
 unset CHAT_TEMPLATE
 export PORT=18480 HOST=127.0.0.1 SERVED_MODEL_NAME=qwen3.8-27b MAX_NUM_SEQS=1 MAX_MODEL_LEN="$M2_CTX" THINKING=0 FOREGROUND=1
 export KV_DTYPE="$M2_KV" ATTN_FA2="$M2_FA2" SPEC_CONFIG="{\"method\":\"mtp\",\"num_speculative_tokens\":$M2_SPEC}"

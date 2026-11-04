@@ -176,5 +176,16 @@ calls=(); block_fnx() { calls+=("fnx:$1"); return 3; }; BLOCKS="fnx q36g"; run_b
 calls=(); FATAL=""; BLOCKS="fnx/C"; : > "$STATUS"; run_blocks
 [ -n "$FATAL" ] && [ "${#calls[@]}" = 0 ]; ok $? "gx10 queue: an unknown block -> FATAL, nothing runs"
 
+# ---------------------------------------------------------------- RTX: the Glimmer start script (2026-11-04 addendum)
+G="$HERE_REAL/hub/start-glim-m2.ps1"
+grep -qxF "GLIM_START='C:\\dev\\m2-chain\\start-glim-m2.ps1'; GLIM_STOP='C:\\dev\\m1-glimmer\\stop-m1.ps1'" "$RTX" \
+  && grep -qF '"glim_start=" + (Get-FileHash C:\dev\m2-chain\start-glim-m2.ps1 ' "$RTX" && ! grep -v '^GLIM_START_SHA=' "$RTX" | grep -qF 'm1-glimmer\start-m1.ps1'
+ok $? "RTX: GLIM_START and the scripts_ok hash both name C:\\dev\\m2-chain\\start-glim-m2.ps1 (the m1-glimmer original is not started)"
+[ "$(sha256sum "$G" | cut -d' ' -f1)" = "$(sed -n 's/^GLIM_START_SHA=\([0-9a-f]*\).*/\1/p' "$RTX")" ]
+ok $? "RTX: GLIM_START_SHA = the sha256 of the copy kept in hub/start-glim-m2.ps1"
+grep -c 'if (\$used -ge 6500) { Say "REFUSED: GPU memory used \$used MiB (another GPU server?)"; exit 1 }' "$G" | grep -qx 1 && ! grep -q 4000 "$G" \
+  && grep -qxF '$root = "C:\dev\m1-glimmer"; $name = "glimmer-30b"; $url = "http://127.0.0.1:18480/v1/models"' "$G" && ! grep -q PSScriptRoot "$G"
+ok $? "RTX: start-glim-m2.ps1 refuses at 6500 MiB (not 4000) and runs the lane from its absolute root C:\\dev\\m1-glimmer"
+
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

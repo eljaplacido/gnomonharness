@@ -50,9 +50,9 @@ WATCH_LOG="$BENCH/hubwatch-rtx.log"
 declare -A MODEL=([glim]=glimmer-30b [q38]=qwen3.8-27b)
 declare -A KIND=([glim]=llama [q38]=vllm)
 declare -A FOOT=([glim]=19500 [q38]=28400)                      # MiB, measured in M1 (Glimmer 22,985 - 3,507; q38 31,698 - 3,363)
-GLIM_START='C:\dev\m1-glimmer\start-m1.ps1'; GLIM_STOP='C:\dev\m1-glimmer\stop-m1.ps1'
+GLIM_START='C:\dev\m2-chain\start-glim-m2.ps1'; GLIM_STOP='C:\dev\m1-glimmer\stop-m1.ps1'
 Q38_START='C:\dev\m2-chain\start-q38-m2.ps1'; Q38_STOP='C:\dev\m1-qwen38\stop-m1.ps1'
-GLIM_START_SHA=c78f7af9711bcfc107aa0461feadf93ecfea2fd74817d00196dd0282fbf2c92d   # read 2026-11-03 (= M1a3's)
+GLIM_START_SHA=914ecb86ca958cc12129a0b1721b3bac48c498e80799bee805a24f1817f1064c   # 2026-11-04 addendum: m1-glimmer\start-m1.ps1 (c78f7af9..., M1a3's) with its GPU guard 4000 -> 6500 only; copy in hub/
 GLIM_STOP_SHA=1751999cf58f1413882f5513e5b9be756c5c175cf35231a97ed03efc1d456ae9
 Q38_STOP_SHA=7b195c6e87afb8ecd9d21678431a140a2a3eecafedf787461bfa422955453774
 GLIM_GGUF_SHA=4cc57c0f51040a226e5a72cc47b7613f7772950e460a665f7083de89f183f60e  # lane-glim-ref-READY.txt
@@ -99,7 +99,7 @@ read -r -d '' PS_GLIM_PIDS <<'PS'
 (@(Get-CimInstance Win32_Process -Filter "Name='llama-server.exe'" | Where-Object { $_.ExecutablePath -like 'C:\dev\m1-glimmer\*' } | ForEach-Object { $_.ProcessId }) -join ' ')
 PS
 read -r -d '' PS_SCRIPTS <<'PS'
-"glim_start=" + (Get-FileHash C:\dev\m1-glimmer\start-m1.ps1 -Algorithm SHA256).Hash.ToLower()
+"glim_start=" + (Get-FileHash C:\dev\m2-chain\start-glim-m2.ps1 -Algorithm SHA256).Hash.ToLower()
 "glim_stop=" + (Get-FileHash C:\dev\m1-glimmer\stop-m1.ps1 -Algorithm SHA256).Hash.ToLower()
 "q38_stop=" + (Get-FileHash C:\dev\m1-qwen38\stop-m1.ps1 -Algorithm SHA256).Hash.ToLower()
 "q38_ready=" + (Test-Path C:\dev\m1-READY-qwen38.txt)
@@ -110,7 +110,7 @@ read -r -d '' PS_GLIM_WEIGHTS <<'PS'
 (Get-FileHash C:\dev\m1-glimmer\models\dflash-Muse-Glimmer-30B-Q4_K_M.gguf -Algorithm SHA256).Hash.ToLower()
 PS
 hub_state() { hubps "$PS_STATE"; }
-hub_free() {  # the full check before a start: no llama-server.exe, GPU under 4000 MiB, m1-vllm not running, hub 18480 free
+hub_free() {  # the full check before a start: no llama-server.exe, GPU under IDLE_MEM_MAX MiB, m1-vllm not running, hub 18480 free
   echo "$1" | grep -q 'llama=\[\]' && echo "$1" | grep -q 'p18480=\[\]' && ! echo "$1" | grep -q 'wsl=\[[^]]*m1-vllm' \
     && [ "$(echo "$1" | sed -n 's/.*gpu_used=\([0-9]*\).*/\1/p')" -lt "$IDLE_MEM_MAX" ] 2>/dev/null
 }
@@ -281,7 +281,7 @@ lane_up() {  # 0 up, 1 failed, 2 yielded. Starts $LANE ($1 = the q38 rung "kv sp
   LANE_STARTED=1
   start_watchdog
   if [ "$LANE" = glim ]; then
-    say "lane glim: starting $GLIM_START (the lane agent's, unchanged; M1a3's lane)"
+    say "lane glim: starting $GLIM_START (M1a3's lane; the lane agent's start-m1.ps1 with its GPU guard at 6500, 2026-11-04 addendum)"
     out=$(hubscript "$GLIM_START"); rc=$?
   else
     read -r -a r <<< "$1"

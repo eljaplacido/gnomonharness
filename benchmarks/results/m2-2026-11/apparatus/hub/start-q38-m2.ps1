@@ -16,7 +16,7 @@ if (Served) { Say "REFUSED: something already serves $name on 18480 (not started
 $other = Get-CimInstance Win32_Process -Filter "Name='llama-server.exe'"
 if ($other) { Say "REFUSED: llama-server.exe running: $(($other | ForEach-Object { $_.ExecutablePath }) -join ', ')"; exit 1 }
 $used = [int](& nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | Select-Object -First 1)
-if ($used -ge 4000) { Say "REFUSED: GPU memory used $used MiB"; exit 1 }
+if ($used -ge 6500) { Say "REFUSED: GPU memory used $used MiB"; exit 1 }
 if (Get-NetTCPConnection -State Listen -LocalPort 18480 -ErrorAction SilentlyContinue) { Say "REFUSED: port 18480 in use"; exit 1 }
 if (-not (Test-Path "C:\dev\m1-READY-qwen38.txt")) { Say "REFUSED: lane not READY"; exit 1 }
 $cmd = "powershell -NoProfile -ExecutionPolicy Bypass -File C:\dev\m2-chain\server-q38-m2.ps1 -Kv $Kv -Spec $Spec -Ctx $Ctx -Fa2 $Fa2"

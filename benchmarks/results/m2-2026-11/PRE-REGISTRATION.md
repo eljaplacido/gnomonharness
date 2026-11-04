@@ -335,3 +335,31 @@ setsid nohup env M2R_WAIT_PID=<S1 chain pid> M2R_DEADLINE=<this night's end> ./m
   - No cell ran in that window and no spend was made.
   - That summary is NOT a result, and is superseded by the collection at R3R's real completion.
 - No measured variable, task, arm, build (v0.4.0, be4fc0d8) or analysis rule changes.
+
+## Addendum (2026-11-04T21:33:49Z): start-script GPU guard raised to the idle threshold (scheduling/start guard only)
+
+- **What refused:** the morning addendum raised the chain's idle threshold to 6500 MiB. The lane start scripts kept their own guard, which refuses at GPU memory used ≥ 4000 MiB.
+  - That guard is in `C:\dev\m1-glimmer\start-m1.ps1` line 15, and the same guard is in M2's `hub/start-q38-m2.ps1` and in the WSL rung wrapper written by `hub/install-q38-m2.sh`.
+  - This hub's idle desktop uses 4,400–4,900 MiB, so the chain judged the hub idle and the Glimmer lane refused. The `chain-m2-rtx.log` evidence:
+    - `2026-11-04T21:01:28Z CHAIN-M2R lane glim: hub state before start: gpu_used=4494 llama=[] wsl=[] p18480=[]`
+    - `2026-11-04T21:01:31Z CHAIN-M2R lane glim: start exit 1: 2026-11-04T21:01:31Z start-m1 REFUSED: GPU memory used 4494 MiB (another GPU server?)`
+    - `2026-11-04T21:15:41Z CHAIN-M2R lane glim: hub state before start: gpu_used=4538 llama=[] wsl=[] p18480=[]`
+    - `2026-11-04T21:15:43Z CHAIN-M2R lane glim: start exit 1: 2026-11-04T21:15:44Z start-m1 REFUSED: GPU memory used 4538 MiB (another GPU server?)`
+    - `lane-glim-start.log` also has the same refusal at 20:19:47Z (4469 MiB).
+  - No cell started: Glimmer had 0 of 64 cells finished, and q38 had not been reached. The chain was stopped at 21:28:57Z, during its idle wait.
+- **Glimmer:** the new start script is `C:\dev\m2-chain\start-glim-m2.ps1`, an exact copy of `C:\dev\m1-glimmer\start-m1.ps1` (sha256 c78f7af9…, M1a3's, unchanged on the hub).
+  - It has ONE changed line, verified on the hub with `fc`: `if ($used -ge 4000)` → `if ($used -ge 6500)`.
+  - New sha256: 914ecb86ca958cc12129a0b1721b3bac48c498e80799bee805a24f1817f1064c. The byte-identical copy is kept as `apparatus/hub/start-glim-m2.ps1`.
+  - The script uses no `$PSScriptRoot` or relative paths. Its `$root` is the absolute `C:\dev\m1-glimmer`, so the lane's binary, weights, `server-m1.ps1`, logs and `stop-m1.ps1` are the lane's own, and no path change was needed.
+  - In `m2-rtx-chain.sh`, `GLIM_START`, `GLIM_START_SHA` and the `scripts_ok` hash (`PS_SCRIPTS` `glim_start=`) now name the copy.
+  - `GLIM_STOP` (`m1-glimmer\stop-m1.ps1`, 1751999c…) and the weight hashes are unchanged.
+- **Qwen3.8:** two guards are changed from 4000 to 6500, and nothing else changes.
+  - `apparatus/hub/start-q38-m2.ps1` (scp'd to `C:\dev\m2-chain\` at the first q38 start): sha256 9467be7e… → 0ba1f6a2….
+  - The rung wrapper heredoc in `apparatus/hub/install-q38-m2.sh`: sha256 97ea2265… → 1b37e024…. The generated `/home/bench/m2-chain/start-q38-m2.sh` is 6c4fa28c… on the test fixture.
+  - Neither file had a hash pin in the chain or the preflight; the chain records both hashes as installed in `lane-q38-install.txt`.
+  - The generated `start-m2.sh` and its two anchored edits are unchanged; the lane's `start.sh` has no GPU guard.
+- **Tests:** new assertions pin the change.
+  - `test_chain_m2.sh`: the chain names the copy in both places and never starts the original; `GLIM_START_SHA` equals the sha256 of `hub/start-glim-m2.ps1`; that copy refuses at 6500 and keeps the absolute root. The assertions fail on the previous chain.
+  - `test_install_q38_m2.sh`: both q38 guards are at 6500.
+  - With `IDLE_MEM_MAX=6500`, all seven of the chain's offline tests pass, and so does `preflight_m2.sh`.
+- **Scope: scheduling/start guard only.** Lane, model, weights, flags, rung ladder, arms, build (v0.4.0, be4fc0d8), tasks and analysis rules are unchanged.

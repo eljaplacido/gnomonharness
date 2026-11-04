@@ -52,6 +52,10 @@ for bad in "M2_KV=fp16 M2_SPEC=3 M2_CTX=131072 M2_FA2=1" "M2_KV=fp8 M2_SPEC=2 M2
 done
 grep -q 'unset CHAT_TEMPLATE' "$T/c/start-q38-m2.sh" && grep -q 'MAX_NUM_SEQS=1' "$T/c/start-q38-m2.sh" && grep -q 'THINKING=0' "$T/c/start-q38-m2.sh"
 ok $? "the rung wrapper: 1 seq, thinking off, CHAT_TEMPLATE unset (no template patch)"
+grep -q '\[ "\${used:-99999}" -lt 6500 \]' "$T/c/start-q38-m2.sh" && ! grep -q 4000 "$T/c/start-q38-m2.sh"
+ok $? "the rung wrapper: GPU guard at 6500 MiB (2026-11-04 addendum; was 4000)"
+grep -c 'if (\$used -ge 6500) { Say "REFUSED: GPU memory used \$used MiB"; exit 1 }' "$HERE/hub/start-q38-m2.ps1" | grep -qx 1 && ! grep -q 4000 "$HERE/hub/start-q38-m2.ps1"
+ok $? "hub/start-q38-m2.ps1: GPU guard at 6500 MiB (2026-11-04 addendum; was 4000)"
 cp "$HERE/hub/fixture-start-m1.sh" "$T/d/start.sh"; sed -i 's/--kv-cache-dtype turboquant_4bit_nc/--kv-cache-dtype other/' "$T/d/start.sh"; rm -f "$T/d/start-m2.sh"
 out=$(M2_INSTALL_D="$T/d" M2_INSTALL_C="$T/c" M2_INSTALL_PY="$(command -v python3)" bash -s < "$HERE/hub/install-q38-m2.sh" 2>&1)
 ! echo "$out" | grep -qx INSTALL-OK && echo "$out" | grep -q 'anchor found 0 times' && [ ! -e "$T/d/start-m2.sh" ]
