@@ -1889,7 +1889,11 @@ Three things bound it:
 - **Working-context compaction.** A turn that reads forty files accumulates
   forty tool results, and on a long run that is what overflows first.
   Instructions and the original request are never what gives way; the oldest
-  tool traffic is, and what was dropped is stated rather than vanishing.
+  tool traffic is, and what was dropped is stated rather than vanishing. Each
+  trim is recorded on the request after it (`counters.model_calls`: why,
+  messages dropped, estimate before and after), beside what every request
+  carried and what the provider counted for it
+  ([CONTRACTS.md, per-call mediator record](docs/CONTRACTS.md)).
 - **Stall detection.** The same tool call repeating three times over is a
   circle, not progress, and on autopilot it would burn the whole budget.
   The turn stops and says so.
@@ -1979,7 +1983,7 @@ chain = true
 
 | Need | How |
 |---|---|
-| Append-only record | JSONL: one record per turn / tool call / approval |
+| Append-only record | JSONL: one record per turn / model request / tool call / approval |
 | Tamper evidence | Each record carries `sha256` of itself and the previous; `gnomon audit verify` names the first broken sequence |
 | Attribution to a configuration | Every record carries the `surface_hash` that determined the behaviour |
 | Human-oversight evidence | Approval decisions record who decided. A non-interactive run writes `by: "flag:--yes"` or `"default:no-operator"` — never implying oversight that did not happen |

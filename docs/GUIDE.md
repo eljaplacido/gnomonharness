@@ -666,6 +666,24 @@ api_key_env = "OPENCODE_API_KEY"
 max_context_tokens = "auto"   # 1000000 for deepseek-v4.1-flash, from /models
 ```
 
+**What each request carried.** The turn record lists every model request in
+`counters.model_calls`: gnomon's estimate of it, the reasoning it replayed,
+the steering it carried (nudge, convergence push, other) and in which role,
+and any trim before it, with the turn's `window`, `budget` and trims. What
+came back (provider prompt, cached, completion and reasoning tokens, and the
+time) is `volatile.model_calls` in `gnomon task --json` and `model_calls` on
+the `turn` audit record, whose `context_window`, `context_budget` and
+`context_trims` say the same in brief. With `[audit]` on, a `model_call`
+record per request joins both, without text. gnomon counts ~4 characters a
+token, and a provider often counts more; the record's `ratio` and
+`over_window` show by how much. To size trims by what the provider counts,
+opt in:
+
+```toml
+[context]
+token_estimate = "calibrated"   # default "chars4"; trims divide by the measured ratio
+```
+
 **Reasoning replay.** `replay_reasoning = true` in an `[endpoints.<name>]`
 block sends each assistant message's reasoning back as `reasoning_content`.
 That covers earlier turns of the session as well as the current one.
@@ -1074,9 +1092,10 @@ redact = ['(api[_-]?key|token|secret|password)\s*[:=]\s*\S+']
 chain = true
 ```
 
-- Session start, turns, tool calls, approvals, verify runs and chain stages are
-  JSONL records, each carrying the `surface_hash` and a SHA-256 link to the
-  previous record. `gnomon audit verify` reports, per trail, the chain, the
+- Session start, turns, model requests, tool calls, approvals, verify runs and
+  chain stages are JSONL records, each carrying the `surface_hash` and a
+  SHA-256 link to the previous record. A model request's `model_call` record
+  holds token counts and what the request carried, never its text. `gnomon audit verify` reports, per trail, the chain, the
   **seal** (ends with `session_end`) and the signature anchor.
 - Chaining proves a file is internally consistent, not that it is the file
   that was written. `[audit.attest]` anchors it with a signer command; gnomon

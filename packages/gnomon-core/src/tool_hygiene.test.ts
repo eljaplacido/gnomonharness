@@ -152,7 +152,14 @@ function wireDigest(raws: string[], rec: TaskRecord): string {
   const port = /127\.0\.0\.1:\d+/g;
   const bodies = raws.map((r) => (block ? r.split(block).join("") : r).replace(port, "127.0.0.1:PORT"));
   const { volatile: _v, harness: _h, surface_hash: _s, ...rest } = rec;
-  return createHash("sha256").update(JSON.stringify({ bodies, record: rest })).digest("hex");
+  // Two counters added after the digest was taken, both by design and both
+  // record-only: the stall detectors' (CONTRACTS.md §27) and the per-call
+  // mediator record's (§29). Each PR proves on its own that the requests do
+  // not move; taking them out here keeps this digest the claim it was: the
+  // same bodies and, apart from those two, the same record as v0.4.0.
+  const { stall_signals: _ss, model_calls: _mc, ...counters } = rest.counters as unknown as Record<string, unknown>;
+  const record = { ...rest, counters };
+  return createHash("sha256").update(JSON.stringify({ bodies, record })).digest("hex");
 }
 
 /**

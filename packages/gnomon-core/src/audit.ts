@@ -244,6 +244,11 @@ export type AuditKind =
   // a trigger's precision can be measured against the outcome later without
   // the trigger ever having acted.
   | "stall_signal"
+  // One per model request a turn made, when [audit] is on: what it carried
+  // (gnomon's estimate, replayed reasoning, steering and its role, the trim
+  // before it) and what came back (provider tokens, reasoning, code, clock).
+  // Metadata only: no prompt or response text. mediators.ts.
+  | "model_call"
   | "session_end";
 
 export interface AuditRecord {

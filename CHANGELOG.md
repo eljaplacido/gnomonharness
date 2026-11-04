@@ -571,6 +571,34 @@
   then let the signal end the process as before. Request bodies are
   byte-identical to 0.4.0's. A killed session's record counts as part of its
   trail for the record guard. docs/CONTRACTS.md §28 (Incremental record).
+- **Each model request is recorded: what it carried and what came back.**
+  The causal analysis of 2026-11-04 (`benchmarks/results/causal-2026-11/`)
+  could not say which mechanism makes long hosted runs time out, because
+  none was in gnomon's records: the `turn` record's `context_turns` and
+  `context_dropped` read 0 in all 450 task turn records (they describe
+  earlier turns, and a task has none), trims, reasoning tokens, replay and
+  steering were not recorded, and the provider counted more than the 65,536
+  window on 85 of 156 C2D calls. `counters.model_calls` now lists every
+  request (the last 512): gnomon's estimate of its messages and of its whole
+  body, the assistant messages whose reasoning was replayed, gnomon's
+  steering messages present by kind (`nudge`, `converge`, `other`) and the
+  role they went in, and the trim before it (`leg` or `overflow`, messages
+  dropped, estimate before and after). `volatile.model_calls` (and
+  `model_calls` on the `turn` record) lists what came back: provider
+  prompt, cached, completion and reasoning tokens, reasoning characters,
+  code and time, with `over_window` and the provider-to-estimate `ratio`.
+  With `[audit]` on, one `model_call` record per request joins the two,
+  metadata only. The `turn` and `chain_stage` records gain
+  `context_window`, `context_budget`, `context_estimate`, `context_trims` and
+  `context_trimmed`. Request bodies are byte-identical to 0.4.0's, checked
+  against a hash taken on master before the change. docs/CONTRACTS.md §29
+  (Per-call mediator record).
+- **`[context] token_estimate = "calibrated"` (opt-in).** Divides the turn's
+  trim budgets by the session's measured ratio of provider prompt tokens to
+  gnomon's ~4-characters-a-token estimate, per endpoint and model, held
+  within 0.5–4, so a trim bounds what the provider counts. `"chars4"`, the
+  default, is today's behaviour. A misspelt value is reported and runs as
+  `"chars4"`.
 
 ## [0.4.0] — 2026-11-03
 - **Opt-in line caps on tool output: `max_lines` on the `bash` and `read`

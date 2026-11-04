@@ -243,10 +243,25 @@ function randomScript(seed: number): Call[][] {
   return replies;
 }
 
-/** The result with the detector's own field taken out: everything else must match. */
+/**
+ * The clock, wherever a record carries it: per model request `ms` and
+ * `first_byte_ms`, in the turn's `modelCalls` and on each `model_call` audit
+ * record (the per-call mediator record, CONTRACTS.md §29). Two runs of one
+ * script differ in it by a millisecond either way.
+ */
+const unclocked = (c: any) => {
+  const { ms: _ms, first_byte_ms: _fb, ...rest } = c;
+  return rest;
+};
+
+/** The result with the detector's own field and the clock taken out: everything else must match. */
 function withoutSignals(result: any) {
   const { stall_signals: _drop, ...counters } = result.counters;
-  return { ...result, counters };
+  return {
+    ...result,
+    counters,
+    ...(result.modelCalls ? { modelCalls: { ...result.modelCalls, calls: result.modelCalls.calls.map(unclocked) } } : {}),
+  };
 }
 
 describe("property: the stall detectors never change what the model is sent", () => {
@@ -260,7 +275,8 @@ describe("property: the stall detectors never change what the model is sent", ()
       expect(other.bodies).toEqual(real.bodies);
       expect(withoutSignals(other.result)).toEqual(withoutSignals(real.result));
       // The trail differs only by stall_signal records.
-      const strip = (a: any[]) => a.filter((x) => x.kind !== "stall_signal");
+      const strip = (a: any[]) =>
+        a.filter((x) => x.kind !== "stall_signal").map((x) => (x.kind === "model_call" ? unclocked(x) : x));
       expect(strip(other.audit)).toEqual(strip(real.audit));
     }
     // And the scripts are not vacuous: across the seeds they exercise stops

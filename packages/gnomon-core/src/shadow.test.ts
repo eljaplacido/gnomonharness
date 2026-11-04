@@ -1015,11 +1015,23 @@ describe("log-only", () => {
    * when a degradation was taken out, since every record after it moved one.
    */
   function normalisedTrail(records: Array<Record<string, any>>, opts: { seq?: boolean } = {}): unknown[] {
-    const drop = new Set(["ts", "hash", "prev", "surface_hash", "duration_ms", "session", "shadow"]);
+    // The clock, wherever a record carries it: `duration_ms` on the turn, and
+    // per model request `ms` and `first_byte_ms` -- on each `model_call`
+    // record and in the turn record's `model_calls` (§29).
+    // What each request SENT (counters.model_calls) is compared.
+    const drop = new Set(["ts", "hash", "prev", "surface_hash", "duration_ms", "session", "shadow", "ms", "first_byte_ms"]);
     if (opts.seq === false) drop.add("seq");
+    const unclocked = (m: any) =>
+      m ? { ...m, calls: m.calls.map(({ ms, first_byte_ms, ...c }: any) => c) } : m;
     return records
       .filter((r) => !(r.kind === "degradation" && r.id === "shadow_unreachable"))
-      .map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !drop.has(k))));
+      .map((r) =>
+        Object.fromEntries(
+          Object.entries(r)
+            .filter(([k]) => !drop.has(k))
+            .map(([k, v]) => [k, k === "model_calls" ? unclocked(v) : v])
+        )
+      );
   }
 
   type Run = { record: any; trail: Array<Record<string, any>>; root: string; shadowed: number; probes: number; stderr: string };
