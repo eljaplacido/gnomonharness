@@ -89,6 +89,8 @@ import {
   clampToDefaults,
   grantTrust,
   revokeTrust,
+  forgetToolPins,
+  toolPinsOf,
   loadTrust,
   trustPath,
   describeGrants,
@@ -2292,8 +2294,18 @@ async function cmdTrust(args: CliArgs): Promise<void> {
     }
     grantTrust(config, "command:trust");
     record("granted");
+    // Granting is also how a person accepts MCP tools that changed since they
+    // were pinned: the pins go, and the next session pins what each server
+    // offers then (GV10). Said, because a pin dropping silently is a check
+    // switched off silently.
+    const unpinned = forgetToolPins(config);
     console.log(`Trusted ${ev.root} at surface ${ev.surface_hash.slice(0, 12)}:`);
     for (const line of describeGrants(ev.grants, [])) console.log(line);
+    if (unpinned > 0) {
+      console.log(
+        `Cleared ${unpinned} MCP tool pin${unpinned === 1 ? "" : "s"}; the next session pins what each server offers then.`
+      );
+    }
     console.log(`Recorded in ${trustPath()} — not in the repository.`);
     return;
   }
@@ -2325,6 +2337,12 @@ async function cmdTrust(args: CliArgs): Promise<void> {
         : "  NOT trusted — a terminal session asks; a headless run is clamped to the defaults"
     );
     for (const line of describeGrants(ev.grants, ev.uncovered)) console.log(line);
+  }
+  const pins = toolPinsOf(config);
+  if (pins.length > 0) {
+    console.log("");
+    console.log("MCP tools pinned for this project (a server offering others runs clamped):");
+    for (const p of pins) console.log(`  ${p.tools_hash.slice(0, 12)}  ${p.at.slice(0, 10)}  ${p.server}`);
   }
   const entries = loadTrust().entries;
   console.log("");

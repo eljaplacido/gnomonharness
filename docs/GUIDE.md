@@ -1246,6 +1246,13 @@ gnomon trust revoke     # forget every trust for this project; the next launch a
 - Trust is kept outside the repository, beside the key store, keyed by project
   and surface hash. A changed surface that grants something new is asked about
   again; a tightening is not.
+- **MCP servers' tools are pinned there too.** The surface pins a server's
+  command, not what it offers. The first session on a machine to connect a
+  server records a hash of its `tools/list`. A later session that finds other
+  tools (an upgrade, or a description rewritten to carry instructions) runs
+  **clamped** to the defaults, with one line naming the server and both hashes.
+  `gnomon trust grant` accepts the change: it clears the pins, and the next
+  session pins what the servers offer then. `gnomon trust` lists the pins.
 
 ---
 

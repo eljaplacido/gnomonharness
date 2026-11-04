@@ -1871,3 +1871,70 @@ directory, an absolute path, a write's content).
 `packages/gnomon-core/src/after_refusal.test.ts` asserts the code against it,
 drives real turns for the escalated and the unchanged cases, and asserts that
 this section names the fixture, the key and the counter.
+
+---
+
+## 26. Tool definitions in the record, and MCP tool pins
+
+GV10. The surface hash covers `.gnomon/`, and `harness` names the build. Two
+things that decide what a model is offered sat outside both: the built-in
+parameter schemas, which live in the build's code, and each MCP server's
+`tools/list`, which is whatever the server answers when the session opens.
+Hashing reads the definitions; it never changes what is sent.
+
+**The hash.** sha256, as lowercase hex, over the canonical JSON of the
+definitions sorted by name. Keys are sorted and there is no whitespace: the
+`canonicalJson` the audit chain and attestation use, equal to Python's
+`json.dumps(defs, sort_keys=True, separators=(",", ":"))`. A definition's own
+arrays (`required`, an `enum`) keep their order.
+- **A turn** hashes the `tools` array it offered: `{type, function: {name,
+  description, parameters}}`, built-in and MCP alike. An empty list hashes too.
+- **An MCP server** hashes its `tools/list` entries as the server gave them:
+  `{name, description, inputSchema}`, with the bare names and not gnomon's
+  `mcp__<server>__` names.
+
+**Records.**
+
+| Where | Key | When |
+|---|---|---|
+| audit `turn`, both entry points | `wire.tools_hash` | every turn |
+| audit `mcp_tools` (new kind) | `servers`: `[{server, key, tools, tools_hash, pin, pinned?}]` | once per session, after its MCP servers connect; only when the surface declares one |
+| audit `trust`, a second record | `decision: "clamped"`, `by: "default:no-operator"`, `tools_changed: [{server, pinned, now}]` | when a server's tools changed |
+| `TaskRecord.trust` | the same object, without `root` | idem |
+
+`pin` is `first_contact`, `matched` or `changed`. `key` is the server's grant
+key, `mcp:<name>:<command line>`, the key §8's `grants` list carries for it.
+
+**Pins.** They live in the trust store (§8): a `tools` array beside `entries`,
+each entry `{root, server, tools_hash, at}`, keyed by project and grant key. A
+surface edit that leaves a server alone keeps its pin, and a changed command is
+a new server.
+- **The first session to connect a server** on a machine pins what it offers.
+  A pin made before this build does not exist, so nothing is clamped on
+  upgrade: only new endpoints are pinned, and only changes after that count.
+- **A server offering something other than its pin** closes the servers and
+  runs the session clamped to the defaults, as an untrusted surface runs when
+  nobody is asked (§8 `clamped`, `clampToDefaults`). Every grant goes back to
+  the scaffold's value, MCP servers included. One line names the server and
+  both hashes: on stderr under `gnomon task`, on the console at a terminal,
+  and as a notice in ACP. A terminal or ACP session stays clamped through a
+  mid-session reload. A change is never re-pinned by a session.
+- **`gnomon trust grant`** clears this project's pins, and says so. That is
+  how a person accepts a change: the next session pins what the servers offer
+  then. The interactive trust prompt's `y` accepts a surface, not tools, and
+  keeps them. `gnomon trust revoke` drops them with the rest.
+- A store that never pinned anything is written back without a `tools` key.
+
+**Mid-session.** `tools/list` is read once, at connect, and
+`notifications/tools/list_changed` is not followed. A server cannot change the
+definitions a running session offers, and the next session sees the change.
+What a server *does* when called is not hashed by anything here.
+
+**Fixture**: `conformance/tools_hash.json`: two built-in schemas and an MCP
+`tools/list`, each with its canonical bytes and sha256, plus the record keys,
+the pin outcomes and the clamp.
+`packages/gnomon-core/src/tools_hash.test.ts` asserts the code against it. It
+also runs the rug pull end to end with a real stdio server: first contact,
+matched, changed and clamped, then accepted and pinned afresh. It checks that
+the definitions sent are byte-identical to the tool set, that they cannot move
+mid-session, and that this section names the fixture.
