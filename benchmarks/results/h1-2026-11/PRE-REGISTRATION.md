@@ -103,3 +103,12 @@ Committed before any H1 cell. Later changes go in timestamped addenda; nothing a
 - **Fix:** `run_h1.py` now prepends its own apparatus directory to Harbor's `PYTHONPATH`. Both adapters import under
   Harbor's venv.
 - **Re-run:** the wave is re-run from the start. Nothing else changes.
+
+## Addendum 2 (2026-11-04T12:07:49Z): second launch fix, before any valid H1 cell
+
+- **What failed:** on the second launch (12:05Z), arm A's log relay could not bind 172.17.0.1:4720. The first launch's
+  relay was still holding it: that runner was stopped with SIGTERM, which skipped its `finally`.
+- **Arm B:** ran alone for about 2 minutes and was stopped, so that A and B stay concurrent.
+- **Where they went:** both cells moved to `runs-aborted/*-apparatus2` with reasons.
+- **Fix:** `run_h1.py` now refuses to start if either log-relay port is in use. The orphaned relay was stopped by pid.
+- **Re-run:** wave 1 is re-run from the start. Nothing else changes.

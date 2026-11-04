@@ -164,6 +164,12 @@ def wait_for_host(args) -> None:
         time.sleep(60)
 
 
+def port_free(port: int) -> bool:
+    import socket
+    with socket.socket() as so:
+        return so.connect_ex((P.RELAY_HOST, port)) != 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["dry", "run"])
@@ -171,6 +177,7 @@ def main() -> int:
     ap.add_argument("--min-avail-gb", type=float, default=24.0)
     args = ap.parse_args()
     for slot in (0, 1):
+        assert port_free(LOG_PORT0 + slot), f"{P.RELAY_HOST}:{LOG_PORT0 + slot} is in use (an orphaned log relay?); refusing to start"
         c = P.counters(slot)  # the slot relays must be up; read only
         assert "allowance" in c, f"slot {slot} relay counters lack allowance"
     for task, pairs in WAVES:
