@@ -373,7 +373,7 @@ EXTRA = lambda T, audit=".gnomon-audit/seed.jsonl": {"HOST": HOST, "PORT": str(C
                    "DEVPORT": "1", "AUDIT": audit, "B64": base64.b64encode(
                        C._B64_SRC.replace("{HOST}", HOST).replace("{PORT}", str(CANARY_PORT)).encode()).decode()}
 
-SAFE_RE = re.compile(r"~|\$HOME|\{HOME\}|\{HOMEREL\}|--global|\{HOST\}|/dev/tcp")
+SAFE_RE = re.compile(r"~|\$HOME|\{HOME\}|\{HOMEREL\}|--global|\{HOST\}|\{B64\}|/dev/tcp")
 
 
 def loop_safe(item):
