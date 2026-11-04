@@ -41,6 +41,7 @@ import {
   realpathSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
 import {
   type GnomonConfig,
   type RoleDef,
@@ -49,6 +50,7 @@ import {
   recomputeManifest,
   isLocalEndpoint,
   resolveShadow,
+  resolveBootstrap,
 } from "./config.js";
 import { bashPolicy } from "./tools.js";
 import { gnomonDataDir, restrictToOwner } from "./credentials.js";
@@ -215,6 +217,21 @@ function strList(v: unknown): string[] | undefined {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : undefined;
 }
 
+/** An MCP server's command line, as a grant shows it. */
+function mcpCommandLine(def: { command?: unknown; args?: unknown } | undefined): string {
+  return [str(def?.command), ...(strList(def?.args) ?? [])].filter(Boolean).join(" ");
+}
+
+/**
+ * The identity of a declared MCP server: its grant key, `mcp:<name>:<command
+ * line>`. A tool pin is keyed by it, so the same server keeps its pin across
+ * surface edits that leave it alone, and a changed command is a new server --
+ * pinned afresh, the way a new grant is asked about afresh.
+ */
+export function mcpGrantKey(name: string, def: { command?: unknown; args?: unknown } | undefined): string {
+  return `mcp:${name}:${mcpCommandLine(def)}`;
+}
+
 /** approval.gate as the loop resolves it. */
 function effectiveGate(config: GnomonConfig): string {
   const policy = config.policy ?? {};
@@ -299,8 +316,11 @@ function keyHostIsDefault(url: string): boolean {
  * - `sandbox.level = "off"`: tool paths may leave the repository.
  * - `network = true`, `extra_roots`: reach beyond the checkout.
  * - an MCP server: a process the surface starts before the first prompt.
- * - a `[verify]` command that is not the project's own check, and an
- *   `[audit.attest]` signer: commands that run without an approval prompt.
+ * - a `[verify]` command that is not the project's own check, an
+ *   `[audit.attest]` signer, and a `[context] bootstrap`: commands that run
+ *   without an approval prompt.
+ * - an `[audit.anchor]` witness: a push to a remote, a request to a
+ *   time-stamp authority, or a command, each made at session end, unasked.
  * - an endpoint (or fallback) that sends a key variable to a host that is not
  *   local and not a known provider: a stored key leaving for somewhere the
  *   surface chose.
@@ -332,8 +352,8 @@ export function surfaceGrants(config: GnomonConfig): Grant[] {
   }
 
   for (const [name, def] of Object.entries(config.tools?.mcp_servers ?? {})) {
-    const cmd = [str(def?.command), ...(strList(def?.args) ?? [])].filter(Boolean).join(" ");
-    add({ key: `mcp:${name}:${cmd}`, subject: `mcp ${name}`, grants: `starts \`${cmd}\` when a session opens`, default: "no servers" });
+    const cmd = mcpCommandLine(def);
+    add({ key: mcpGrantKey(name, def), subject: `mcp ${name}`, grants: `starts \`${cmd}\` when a session opens`, default: "no servers" });
   }
 
   const verify = (config.policy as { verify?: { command?: unknown } } | undefined)?.verify;
@@ -346,6 +366,38 @@ export function surfaceGrants(config: GnomonConfig): Grant[] {
   for (const which of ["sign", "verify"] as const) {
     const cmd = str(attest?.[which]);
     if (cmd) add({ key: `attest.${which}:${cmd}`, subject: `audit.attest`, grants: `runs \`${cmd}\` to ${which} trail heads`, default: "no signer" });
+  }
+
+  // `[context] bootstrap`: a command the surface runs at the start of every
+  // session, before anyone has typed anything. Declared read-only, which is a
+  // claim about the probes, not something the harness can enforce -- so it is
+  // a grant, keyed by the probes this machine would run.
+  const boot = resolveBootstrap(config);
+  if (boot?.command) {
+    add({
+      key: `bootstrap:${boot.id}:${boot.platform}:${createHash("sha256").update(boot.command).digest("hex").slice(0, 16)}`,
+      subject: `bootstrap ${boot.id}`,
+      grants: `runs ${boot.probes!.length} ${boot.platform} probe(s) of [bootstrap.${boot.id}] when a session starts, unasked`,
+      default: "no bootstrap",
+    });
+  }
+
+  const anchor = (config.config.audit as { anchor?: Record<string, unknown> } | undefined)?.anchor;
+  if (anchor && anchor.untrusted !== true) {
+    const backend = str(anchor.backend);
+    const target =
+      backend === "git" ? str(anchor.remote) : backend === "rfc3161" ? str(anchor.url) : backend === "cmd" ? str(anchor.command) : null;
+    if (backend && target) {
+      const what =
+        backend === "git"
+          ? `pushes sealed-head statements to ${target}`
+          : backend === "rfc3161"
+            ? `sends sealed-head digests to ${target}`
+            : `runs \`${target}\` at session end`;
+      add({ key: `anchor.${backend}:${target}`, subject: "audit.anchor", grants: `${what}, unasked`, default: "no anchor" });
+    }
+    const verifyCmd = backend === "cmd" ? str(anchor.verify) : null;
+    if (verifyCmd) add({ key: `anchor.verify:${verifyCmd}`, subject: "audit.anchor", grants: `runs \`${verifyCmd}\` to check receipts`, default: "no anchor" });
   }
 
   for (const [name, ep] of Object.entries(config.config.endpoints ?? {})) {
@@ -439,6 +491,15 @@ export function clampToDefaults(config: GnomonConfig): GnomonConfig {
 
   const audit = c.config.audit as Record<string, any> | undefined;
   if (audit?.attest) delete audit.attest;
+  // Marked rather than deleted: the block stays declared, so the record guard
+  // still leaves the anchors directory out of its snapshots and an earlier
+  // trusted session's queue does not read as tampering. Nothing is queued or
+  // delivered, and the session says why (anchor.ts resolveAnchor).
+  if (audit?.anchor) audit.anchor = { untrusted: true, ...(audit.anchor.dir ? { dir: audit.anchor.dir } : {}) };
+
+  // No bootstrap runs on a clamped surface; the turn runs without a snapshot.
+  const context = c.config.context as Record<string, any> | undefined;
+  if (context && "bootstrap" in context) delete context.bootstrap;
 
   for (const ep of Object.values(c.config.endpoints ?? {}) as Array<Record<string, any>>) {
     if (str(ep.api_key_env) && str(ep.url) && !keyHostIsDefault(str(ep.url))) delete ep.api_key_env;
@@ -496,9 +557,29 @@ export interface TrustEntry {
   by: string;
 }
 
+/**
+ * What one MCP server offered the first time a session on this machine
+ * connected it, in this project (GV10). Keyed by the server's grant key, not by
+ * a surface hash: an edit to system.md does not make a server new, and must
+ * not be a way to slip a changed tool list past its pin.
+ */
+export interface ToolPin {
+  root: string;
+  /** mcpGrantKey: `mcp:<name>:<command line>`. */
+  server: string;
+  /** tools_hash.ts mcpToolsHash of its `tools/list`. */
+  tools_hash: string;
+  at: string;
+}
+
 export interface TrustStore {
   v: 1;
   entries: TrustEntry[];
+  /**
+   * MCP tool pins. Absent in a store that never pinned one, so a store this
+   * feature has not touched is written back as it was read.
+   */
+  tools?: ToolPin[];
 }
 
 /** Beside the credential store; same directory, same reasons. */
@@ -515,7 +596,13 @@ export function loadTrust(path = trustPath()): TrustStore {
           (e) => e && typeof e.root === "string" && typeof e.surface_hash === "string" && Array.isArray(e.grants)
         )
       : [];
-    return { v: 1, entries };
+    const raw = (parsed as { tools?: unknown }).tools;
+    const tools = Array.isArray(raw)
+      ? (raw as ToolPin[]).filter(
+          (p) => p && typeof p.root === "string" && typeof p.server === "string" && typeof p.tools_hash === "string"
+        )
+      : undefined;
+    return tools ? { v: 1, entries, tools } : { v: 1, entries };
   } catch {
     // A corrupt store trusts nothing. Failing closed costs a prompt; failing
     // open would hand an unread surface its powers.
@@ -572,8 +659,123 @@ export function revokeTrust(config: GnomonConfig, path = trustPath()): number {
   const before = store.entries.length;
   store.entries = store.entries.filter((e) => e.root !== root);
   const removed = before - store.entries.length;
+  // "Forgot this project" includes what its MCP servers were pinned to.
+  const pins = store.tools?.length ?? 0;
+  if (store.tools) store.tools = store.tools.filter((p) => p.root !== root);
+  if (removed > 0 || (store.tools?.length ?? 0) !== pins) saveTrust(store, path);
+  return removed;
+}
+
+// ---------------------------------------------------------------------------
+// MCP tool pins (GV10)
+// ---------------------------------------------------------------------------
+
+/** One connected server's tools, measured against its pin. */
+export interface ToolPinCheck {
+  /** The server's name in the surface. */
+  server: string;
+  /** mcpGrantKey. */
+  key: string;
+  /** How many tools it offered. */
+  tools: number;
+  tools_hash: string;
+  /**
+   * first_contact -- nothing was pinned for this server here; it is now.
+   * matched       -- what it offers is what was pinned.
+   * changed       -- it offers something else; `pinned` is what it was.
+   */
+  pin: "first_contact" | "matched" | "changed";
+  pinned?: string;
+}
+
+/** The published vocabulary, pinned by conformance/tools_hash.json. */
+export const TOOL_PIN_OUTCOMES = ["first_contact", "matched", "changed"] as const;
+
+/**
+ * Compare each connected server's tools with its pin, and pin the ones seen
+ * for the first time (trust on first use, the mitigation the MCP security
+ * notes give for "rug pulls"). A changed list is never re-pinned here: only a
+ * person accepting it (`gnomon trust grant`) does that.
+ */
+export function checkToolPins(
+  config: GnomonConfig,
+  servers: Array<{ server: string; key: string; tools: number; tools_hash: string }>,
+  path = trustPath()
+): ToolPinCheck[] {
+  if (servers.length === 0) return [];
+  const store = loadTrust(path);
+  const root = projectRootOf(config);
+  const pins = store.tools ?? [];
+  const out: ToolPinCheck[] = [];
+  let added = false;
+  for (const s of [...servers].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))) {
+    const pin = pins.find((p) => p.root === root && p.server === s.key);
+    if (!pin) {
+      pins.push({ root, server: s.key, tools_hash: s.tools_hash, at: new Date().toISOString() });
+      added = true;
+      out.push({ ...s, pin: "first_contact" });
+    } else if (pin.tools_hash === s.tools_hash) {
+      out.push({ ...s, pin: "matched" });
+    } else {
+      out.push({ ...s, pin: "changed", pinned: pin.tools_hash });
+    }
+  }
+  if (added) {
+    try {
+      saveTrust({ ...store, tools: pins }, path);
+    } catch {
+      // A store that cannot be written pins nothing; the next session sees
+      // first contact again. Comparing still works for what was pinned.
+    }
+  }
+  return out;
+}
+
+/** Forget this project's tool pins, so the next session pins what its servers offer then. */
+export function forgetToolPins(config: GnomonConfig, path = trustPath()): number {
+  const store = loadTrust(path);
+  if (!store.tools) return 0;
+  const root = projectRootOf(config);
+  const before = store.tools.length;
+  store.tools = store.tools.filter((p) => p.root !== root);
+  const removed = before - store.tools.length;
   if (removed > 0) saveTrust(store, path);
   return removed;
+}
+
+/** This project's pins, for `gnomon trust`. */
+export function toolPinsOf(config: GnomonConfig, path = trustPath()): ToolPin[] {
+  const root = projectRootOf(config);
+  return (loadTrust(path).tools ?? []).filter((p) => p.root === root);
+}
+
+/**
+ * A session whose MCP tools changed since they were pinned, clamped.
+ *
+ * The person's acceptance covered the surface with the tools it had; a server
+ * offering different ones is not what they accepted, whatever the surface hash
+ * says. So the session runs the way an untrusted surface does when nobody is
+ * there to ask (settleTrustHeadless): every grant back to the scaffold's value,
+ * MCP servers included, said in one line and recorded as `clamped`.
+ */
+export function clampForChangedTools(
+  config: GnomonConfig,
+  changed: ToolPinCheck[]
+): { config: GnomonConfig; outcome: TrustOutcome; notice: string } {
+  const outcome: TrustOutcome = {
+    decision: "clamped",
+    by: "default:no-operator",
+    surface_hash: surfaceHashOfConfig(config),
+    grants: surfaceGrants(config).map((g) => g.key).sort(),
+    tools_changed: changed.map((c) => ({ server: c.server, pinned: c.pinned ?? "", now: c.tools_hash })),
+  };
+  const which = changed
+    .map((c) => `${c.server} (${(c.pinned ?? "").slice(0, 12)} → ${c.tools_hash.slice(0, 12)})`)
+    .join(", ");
+  const notice =
+    `gnomon: MCP tools changed since this machine pinned them: ${which} — running clamped to the defaults. ` +
+    `If the change is expected, \`gnomon trust grant\` accepts it and the next session pins what the server offers then.`;
+  return { config: clampToDefaults(config), outcome, notice };
 }
 
 // ---------------------------------------------------------------------------
@@ -656,6 +858,11 @@ export interface TrustOutcome {
   by: string;
   surface_hash: string;
   grants: string[];
+  /**
+   * Present only on a clamp caused by MCP tools that changed since they were
+   * pinned (clampForChangedTools): each server, what was pinned, what it offers.
+   */
+  tools_changed?: Array<{ server: string; pinned: string; now: string }>;
 }
 
 /** The published vocabulary, pinned by conformance/trust_record.json. */

@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initSurface } from "./init.js";
-import { loadConfig, resolveContext, resolveUi, resolveRouting, resolveAudit, resolveSessionStore, listRoles, buildToolSet, STEER_ROLES, STEER_PREFIX, STEER_CLOSE } from "gnomon-core";
+import { loadConfig, resolveContext, resolveUi, resolveRouting, resolveAudit, resolveSessionStore, listRoles, buildToolSet, STEER_ROLES, STEER_PREFIX, STEER_CLOSE, BOOTSTRAP_OUTCOMES, BOOTSTRAP_PLATFORMS, BOOTSTRAP_KEYS, MASK_KEYS, CONTEXT_SOURCES, LISTING_SHAPES, AUTO_WINDOW } from "gnomon-core";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
@@ -404,6 +404,44 @@ describe("the README outcome table matches the tool result codes", () => {
     expect(guide).toMatch(/`attempts` × `stream_total_timeout_ms`/);
   });
 
+  it("the bootstrap outcomes, their fixture and CONTRACTS.md §19 are one set; the key lists match the fixture", () => {
+    // `counters.bootstrap.outcome` is a published enumeration (Rule 6), on the
+    // record a consumer switches on. Same three points as stop_reason: the
+    // union in the code, the fixture, the table in CONTRACTS.md.
+    const root = join(__dirname, "../../..");
+    const fixture = JSON.parse(readFileSync(join(root, "conformance/context_hygiene.json"), "utf-8"));
+    const contracts = readFileSync(join(root, "docs/CONTRACTS.md"), "utf-8");
+    // §19 alone: it ends at the next `## ` heading, so a later section's
+    // table cannot add rows to this one.
+    const at = contracts.indexOf("## 19. Context hygiene");
+    expect(at, "CONTRACTS.md has no §19").toBeGreaterThan(-1);
+    const end = contracts.indexOf("\n## ", at + 1);
+    const s19 = contracts.slice(at, end === -1 ? undefined : end);
+    expect(s19.length, "CONTRACTS.md §19 is empty").toBeGreaterThan(100);
+    const documented = [...s19.matchAll(/^\| `([a-z_]+)` \| /gm)].map((m) => m[1]);
+    expect([...BOOTSTRAP_OUTCOMES], "context_hygiene.ts != conformance/context_hygiene.json").toEqual(
+      Object.keys(fixture.bootstrap_outcome)
+    );
+    expect(documented, "CONTRACTS.md §19's outcome table != the code").toEqual([...BOOTSTRAP_OUTCOMES]);
+    expect(BOOTSTRAP_OUTCOMES.length).toBe(fixture.expected_outcomes);
+    for (const p of BOOTSTRAP_PLATFORMS) expect(s19).toContain(`\`${p}\``);
+    expect([...BOOTSTRAP_PLATFORMS]).toEqual(Object.keys(fixture.bootstrap_platform));
+    expect([...MASK_KEYS].sort()).toEqual(Object.keys(fixture.surface["config.toml [context.mask_observations]"]).sort());
+    expect([...BOOTSTRAP_KEYS].sort()).toEqual(Object.keys(fixture.surface["policy.toml [bootstrap.<id>]"]).sort());
+  });
+
+  it("the surface reference documents context hygiene: both keys, every outcome, the counters", () => {
+    const root = join(__dirname, "../../..");
+    const guide = readFileSync(join(root, "docs/GUIDE.md"), "utf-8");
+    expect(guide).toContain("[context.mask_observations]");
+    for (const k of MASK_KEYS) expect(guide).toMatch(new RegExp(`^${k} = `, "m"));
+    expect(guide).toContain('bootstrap = "env"');
+    for (const p of BOOTSTRAP_PLATFORMS) expect(guide).toMatch(new RegExp(`^${p} = \\[`, "m"));
+    for (const o of BOOTSTRAP_OUTCOMES) expect(guide).toContain(`\`${o}\``);
+    expect(guide).toMatch(/`counters\.masking`/);
+    expect(guide).toMatch(/`counters\.bootstrap`/);
+  });
+
   it("the surface reference documents steer_role: its values, its prefix, and what the record says", () => {
     // A user-role nudge is only distinguishable from the person's words by its
     // prefix, so the prefix a reader is told to look for must be the one sent.
@@ -414,6 +452,32 @@ describe("the README outcome table matches the tool result codes", () => {
     expect(guide).toContain(`\`${STEER_CLOSE}\``);
     expect(guide).toMatch(/`counters\.steer_role_adapted`/);
     expect(guide).toMatch(/`steer_role: "user"`/);
+  });
+
+  it('the surface reference documents max_context_tokens = "auto"; init recommends it and does not set it', async () => {
+    // C3: the default window trimmed a 1,000,000-token hosted model to ~39k.
+    // The fix is opt-in until a pre-registered arm says otherwise, so the
+    // scaffold may recommend it in a comment and must not switch it on.
+    const root = join(__dirname, "../../..");
+    const guide = readFileSync(join(root, "docs/GUIDE.md"), "utf-8");
+    expect(guide).toContain(`max_context_tokens = "${AUTO_WINDOW}"`);
+    expect(guide).toContain("`max_context_tokens_source`");
+    for (const source of ["declared", "listing:<shape>", "default"]) expect(guide).toContain(`\`${source}\``);
+    for (const field of ["limit.context", "context_length", "top_provider.context_length", "max_model_len", "default_generation_settings.n_ctx", "num_ctx", "/api/show"]) {
+      expect(guide).toContain(field);
+    }
+    expect(guide).toContain("`context_window_unresolved`");
+    expect(CONTEXT_SOURCES).toEqual(["declared", ...LISTING_SHAPES.map((s) => `listing:${s}`), "default"]);
+
+    const scaffoldText = readFileSync(join(root, "packages/gnomon-cli/src/init.ts"), "utf-8");
+    expect(scaffoldText.match(/^# max_context_tokens = "auto"$/gm)).toHaveLength(2);
+    await scaffold((dir) => {
+      const config = loadConfig(dir);
+      for (const [name, ep] of Object.entries(config.config.endpoints ?? {})) {
+        expect(ep.max_context_tokens, name).toBeUndefined();
+      }
+      expect(config.config.defaults?.max_context_tokens).toBe(65536);
+    });
   });
 
   it("the inert-enumeration set, its fixture and CONTRACTS.md are one set", () => {
@@ -660,6 +724,7 @@ describe("numbers the docs state are read back from what they describe", () => {
   const gettingStarted = readFileSync(join(repoRoot, "GETTING_STARTED.md"), "utf-8");
   const ciYml = readFileSync(join(repoRoot, ".github/workflows/ci.yml"), "utf-8");
   const releaseYml = readFileSync(join(repoRoot, ".github/workflows/release.yml"), "utf-8");
+  const buildReleaseYml = readFileSync(join(repoRoot, ".github/workflows/build-release.yml"), "utf-8");
 
   const WORDS = [
     "zero", "one", "two", "three", "four", "five", "six",
@@ -709,10 +774,15 @@ describe("numbers the docs state are read back from what they describe", () => {
   // ── B. Release targets ─────────────────────────────────────────────────
   //
   // Said "three targets (linux-x64, linux-arm64, darwin-arm64)" after
-  // windows-x64 joined the matrix on 2026-09-05.
-  it("the release-target list matches release.yml's build matrix", () => {
-    const targets = [...releaseYml.matchAll(/^\s+- name: ([a-z0-9]+-[a-z0-9]+)$/gm)].map((m) => m[1]);
-    expect(targets.length, "no build targets found in release.yml — the matrix moved").toBeGreaterThan(1);
+  // windows-x64 joined the matrix on 2026-09-05. The matrix moved from
+  // release.yml into the reusable build-release.yml (supply-chain change), and
+  // this read follows it; release.yml must still be the file that calls it.
+  it("the release-target list matches the release build matrix", () => {
+    expect(releaseYml, "release.yml no longer calls build-release.yml").toContain(
+      "uses: ./.github/workflows/build-release.yml"
+    );
+    const targets = [...buildReleaseYml.matchAll(/^\s+- name: ([a-z0-9]+-[a-z0-9]+)$/gm)].map((m) => m[1]);
+    expect(targets.length, "no build targets found in build-release.yml — the matrix moved").toBeGreaterThan(1);
 
     const claim = releasing.match(/builds binaries for (\w+) targets \(([^)]+)\)/s);
     expect(claim, "docs/RELEASING.md no longer states the target list").toBeTruthy();
@@ -721,7 +791,7 @@ describe("numbers the docs state are read back from what they describe", () => {
     for (const t of targets) {
       expect(
         claim![2].includes(t),
-        `docs/RELEASING.md's target list omits ${t}, which release.yml builds`
+        `docs/RELEASING.md's target list omits ${t}, which build-release.yml builds`
       ).toBe(true);
     }
   });

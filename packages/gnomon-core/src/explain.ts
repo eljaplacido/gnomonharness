@@ -19,6 +19,7 @@ import { resolveAudit } from "./audit.js";
 import { resolveSessionStore } from "./session_store.js";
 import { loadSkills, loadProposedSkills } from "./skills.js";
 import { buildToolSet, MUTATING } from "./tools.js";
+import { resolveAfterRefusal } from "./after_refusal.js";
 
 export interface Explanation {
   topic: string;
@@ -174,9 +175,10 @@ const TOPICS: Record<ExplainTopic, Builder> = {
         "a denied operation asked for in another common spelling; they cannot",
         "stop code. `python -c 'shutil.rmtree(...)'` has no `rm` in it to match.",
         "",
-        "network = false refuses webfetch, and refuses curl, wget, nc, ssh and",
-        "connecting one-liners in bash — the same kind of filter. A script or a",
-        "package manager still reaches the network. Containment of both is",
+        "network = false refuses webfetch, and refuses curl, wget, nc, ssh,",
+        "connecting one-liners, git to a URL and a registry URL in bash — the",
+        "same kind of filter. A script or a package manager still reaches the",
+        "network. Containment of both is",
         "exec = \"docker\": bash runs in a container that sees only the repository,",
         "with no network unless network = true.",
       ],
@@ -239,6 +241,7 @@ const TOPICS: Record<ExplainTopic, Builder> = {
     const gated = set.schemas
       .map((t) => t.function.name)
       .filter((n) => gate === "always" || MUTATING.has(n));
+    const afterRefusal = resolveAfterRefusal(config);
     return {
       topic: "approval",
       summary: SUMMARIES.approval,
@@ -251,12 +254,24 @@ const TOPICS: Record<ExplainTopic, Builder> = {
       here: [
         `gate           ${gate}`,
         `gated for ${role}   ${gated.join(", ") || "(nothing — this role cannot mutate)"}`,
+        `repo_code      ${(config.policy as { approval?: { repo_code?: unknown } } | undefined)?.approval?.repo_code === true ?"on — npm test, make, pip install -e . and the like always ask" : "off — they ask only as the gate says"}`,
+        // Only when declared: a line saying "off" on every surface would be a
+        // setting nobody asked about, printed as if it mattered.
+        ...(afterRefusal.mode === "ask"
+          ? [
+              `after_refusal  ask — for ${afterRefusal.calls} gated call${afterRefusal.calls === 1 ? "" : "s"} after a refusal,`,
+              `               one naming what was refused is asked, standing approval or not`,
+            ]
+          : []),
       ],
       next: [
         "At a prompt: [y]es, [a]ll this turn, [s]ession, [N]o.",
         "'all this turn' is the one to reach for during a survey.",
         "",
         "Change it in .gnomon/policy.toml → [approval] gate.",
+        "repo_code = true there asks before every call that runs code the",
+        "repository defines (package.json scripts, a Makefile): the command line",
+        "does not show that code, so no rule can judge it. A sandbox contains it.",
       ],
     };
   },

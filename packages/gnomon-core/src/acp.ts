@@ -63,6 +63,9 @@ import {
 import { applyCredentials } from "./credentials.js";
 import { AuditTrail, resolveAudit } from "./audit.js";
 import { connectMcp } from "./mcp.js";
+import { AFTER_REFUSAL_REASON } from "./after_refusal.js";
+import { settleMcpTools } from "./tools_hash.js";
+import { clampToDefaults } from "./trust.js";
 import { harnessBuild } from "./build.js";
 import { ShadowRecorder } from "./shadow.js";
 import { Progress, splitThinking } from "./render.js";
@@ -397,6 +400,11 @@ interface AcpSession {
   started: string;
   approveRestOfTurn: boolean;
   approveRestOfSession: boolean;
+  /**
+   * Set when an MCP server offered other tools than this machine pinned
+   * (settleMcpTools): the session runs clamped, and a reload stays clamped.
+   */
+  toolsClamped?: boolean;
   controller: AbortController | null;
   toolSeq: number;
   /** The tool call the next permission request is about */
@@ -473,7 +481,9 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
 
   /** The approval gate: the terminal's ladder, asked through the editor. */
   const approve = async (s: AcpSession, req: ApprovalRequest): Promise<boolean> => {
-    if (s.approveRestOfSession || s.approveRestOfTurn) {
+    // As at the terminal: a call `[approval] after_refusal` escalated is asked,
+    // whatever standing approval the editor gave.
+    if ((s.approveRestOfSession || s.approveRestOfTurn) && !req.escalated) {
       s.audit.write("approval", {
         tool: req.tool,
         summary: req.summary,
@@ -490,7 +500,7 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
         sessionId: s.id,
         toolCall: {
           toolCallId,
-          title: req.summary,
+          title: req.escalated ? `${req.summary} — asked because ${req.escalated}` : req.summary,
           status: "pending",
           ...(req.preview.length > 0
             ? { content: [{ type: "content", content: { type: "text", text: req.preview.join("\n") } }] }
@@ -521,6 +531,7 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
       decision: yes ? "approved" : "declined",
       by: "human",
       interactive: true,
+      ...(req.escalated ? { escalated: AFTER_REFUSAL_REASON } : {}),
     });
     if (yes) update(s.id, { sessionUpdate: "tool_call_update", toolCallId, status: "in_progress" });
     return yes;
@@ -675,7 +686,29 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
     if (config.tools.mcp_servers && Object.keys(config.tools.mcp_servers).length > 0) {
       state.mcp = await connectMcp(config.tools.mcp_servers, (l) => notes.push(l), s.audit);
     }
-    s.shadow = ShadowRecorder.create(config, { warn: (l) => notes.push(l) });
+    // As at the terminal (GV10): what each server offered against its pin, and
+    // a clamp for the session when one offers something else.
+    const settledTools = settleMcpTools(config, state.mcp, s.audit);
+    if (settledTools.clamp) {
+      state.mcp = undefined;
+      state.config = settledTools.clamp.config;
+      s.toolsClamped = true;
+      s.audit.write("trust", { ...settledTools.clamp.outcome, root });
+      notes.push(settledTools.clamp.notice);
+    }
+    // The shadow's notes arrive whenever its requests fail. A stop found
+    // mid-session was pushed onto `notes` after they had been sent, so `gnomon
+    // acp` never showed it at all (2026-11-03). Once the client holds the id,
+    // they go straight to it.
+    let noted = false;
+    s.shadow = ShadowRecorder.create(state.config, {
+      warn: (l) => {
+        if (noted) notice(s, l);
+        else notes.push(l);
+      },
+      audit: s.audit,
+    });
+    s.shadow?.start();
     sessions.set(id, s);
     log(`gnomon acp: session ${id} in ${root}`);
 
@@ -690,6 +723,7 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
         })),
       });
       for (const n of notes) notice(s, n);
+      noted = true;
     });
 
     return { sessionId: id, modes: modesOf(config, role) };
@@ -758,7 +792,9 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
         surfaceHash: s.surfaceHash,
         shadow: s.shadow,
         persist: () => persist(s),
-        reconfigure: opts.reconfigure,
+        reconfigure: s.toolsClamped
+          ? (fresh: GnomonConfig) => clampToDefaults((opts.reconfigure ?? ((c: GnomonConfig) => c))(fresh))
+          : opts.reconfigure,
         log: (line) => notice(s, line),
         print: (line) => notice(s, line),
         // stdout is the protocol channel, so the progress line goes to stderr.
@@ -771,7 +807,7 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
             s.currentToolCallId = toolCallId;
             const path = typeof call.args.path === "string" ? call.args.path : undefined;
             const root = resolve(s.state.config.gnomonDir, "..");
-            const asked = call.gated && !(s.approveRestOfSession || s.approveRestOfTurn);
+            const asked = call.gated && (call.escalated === true || !(s.approveRestOfSession || s.approveRestOfTurn));
             update(s.id, {
               sessionUpdate: "tool_call",
               toolCallId,
@@ -830,8 +866,9 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
   await peer.closed;
   for (const s of sessions.values()) {
     s.controller?.abort();
-    await s.shadow?.flush();
-    s.audit.write("session_end", { turns: s.state.exchanges.length, surface_hash: s.surfaceHash });
+    // Flushed and detached before the trail is sealed, with its final count.
+    const shadow = await s.shadow?.close();
+    s.audit.write("session_end", { turns: s.state.exchanges.length, surface_hash: s.surfaceHash, shadow });
     s.state.mcp?.close();
     s.state.mcp = undefined;
   }

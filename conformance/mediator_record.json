@@ -1,0 +1,57 @@
+{
+  "v": 1,
+  "_comment": [
+    "The per-call mediator record (docs/CONTRACTS.md section 29): what each",
+    "model request a turn made carried, and what came back. The requests (reproducible) are",
+    "`counters.model_calls`; what came back (the provider's counts and the clock) is",
+    "`volatile.model_calls` on the --json TaskRecord and `model_calls` on the `turn` audit",
+    "record, beside tokens_in as the two already are. One",
+    "`model_call` audit record per request joins both halves when [audit] is on. A causal",
+    "readout (benchmarks/results/causal-2026-11) parses them without reading the code, so a",
+    "key renamed or a value added is a contract change. packages/gnomon-core/src/",
+    "mediator_record.test.ts emits every shape here and asserts its keys against this file,",
+    "and that CONTRACTS.md names the section, the kind, the key and every value."
+  ],
+  "token_estimate": { "key": "[context] token_estimate", "values": ["chars4", "calibrated"], "default": "chars4" },
+  "steer": ["nudge", "converge", "other"],
+  "via": ["system", "user"],
+  "trim_why": ["leg", "overflow"],
+  "cap": 512,
+  "sent": {
+    "at": "counters.model_calls",
+    "required": ["v", "count", "window", "budget", "estimate", "est_max", "replayed_calls", "steered_calls", "trims", "calls"],
+    "optional": ["first"],
+    "trims": ["leg", "overflow", "dropped"],
+    "call": {
+      "required": ["i", "est", "est_body"],
+      "optional": ["replayed", "steer", "via", "trim", "leg", "depth", "window"]
+    },
+    "trim": {
+      "required": ["why", "dropped", "before", "after", "budget"],
+      "optional": ["ratio"]
+    }
+  },
+  "received": {
+    "at": ["volatile.model_calls", "turn.model_calls"],
+    "required": ["metered", "reasoning_chars", "over_window", "calls"],
+    "optional": ["prompt_tokens", "cached_tokens", "completion_tokens", "reasoning_tokens", "prompt_max", "ratio", "first"],
+    "call": {
+      "required": ["i", "code", "ms"],
+      "optional": ["first_byte_ms", "prompt_tokens", "cached_tokens", "completion_tokens", "reasoning_tokens", "reasoning_chars", "finish"]
+    }
+  },
+  "audit": {
+    "kind": "model_call",
+    "required": ["i", "model", "estimate", "est", "est_body", "window", "code", "ms"],
+    "optional": [
+      "role", "endpoint", "replayed", "steer", "via", "trim", "leg", "depth",
+      "first_byte_ms", "prompt_tokens", "cached_tokens", "completion_tokens", "reasoning_tokens",
+      "reasoning_chars", "finish", "ratio"
+    ]
+  },
+  "turn_record": {
+    "kinds": ["turn", "chain_stage"],
+    "context": ["context_window", "context_budget", "context_estimate", "context_trims", "context_trimmed"]
+  },
+  "record_only": "Under the default (chars4) nothing in the loop reads the record back: the request bodies of three scripted runs hash to the value taken on master before it existed (mediator_record.test.ts). Under calibrated, the trims' budget is divided by the session's measured ratio; nothing else changes."
+}

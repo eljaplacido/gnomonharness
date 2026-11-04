@@ -19,7 +19,7 @@ import { execFileSync } from "node:child_process";
 const REPO = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]$/, "");
 const core = (m) => import(pathToFileURL(`${REPO}/packages/gnomon-core/dist/${m}`).href);
 const { loadConfig } = await core("config.js");
-const { runAgenticTurn, buildMessages } = await core("prompt_loop.js");
+const { runAgenticTurn, buildMessages, runTask } = await core("prompt_loop.js");
 const { executeTool, createSpillSink } = await core("tools.js");
 const { connectMcp } = await core("mcp.js");
 const { DEGRADATION_IDS } = await core("degradation.js");
@@ -333,11 +333,57 @@ const PROBES = {
     must: /changed \.gnomon|surface hash/i,
     recordedBy: "the tool result, which the `tool_call` record carries verbatim",
     async run(root) {
+      // Through a script file: a command that NAMES .gnomon/ is refused before
+      // it runs (rule surface, INJ-2026-11), and the property here is that a
+      // move the precheck cannot see is still announced afterwards.
+      writeFileSync(join(root, "move-surface.sh"), "echo '# moved' >> .gnomon/system.md\n");
       const out = await executeTool("bash",
-        { command: "echo '# moved' >> .gnomon/system.md" },
+        { command: "sh move-surface.sh" },
         { root, sandbox: "confined", gate: "never", approve: async () => true,
           timeoutMs: 10_000, maxOutputBytes: 4000 }, new Set(["bash"]));
       return { announcedIn: out.content, recorded: /WARNING/.test(out.content) };
+    },
+  },
+
+  // Through `runTask`, the entry point a script uses: an earlier session's
+  // sealed head could not reach its witness, and the next session must say so
+  // on stderr (always, `--json` included) and carry it in the record.
+  audit_anchor_queued: {
+    must: /not yet anchored/i,
+    mustNot: /^$/,
+    recordedBy: "a `degradation` record in the session that finds the queue, carried on the TaskRecord's `degradations`",
+    async run(root, audit) {
+      const { resolveAudit, AuditTrail } = await core("audit.js");
+      const { flushAnchors, setAnchorScheduler } = await core("anchor.js");
+      const { runTask } = await core("prompt_loop.js");
+      const withAnchor = () => {
+        const c = loadConfig(root);
+        c.config = { ...c.config, audit: { ...(c.config.audit ?? {}), enabled: true,
+          anchor: { backend: "git", remote: join(root, "witness-that-is-not-there.git") } } };
+        return c;
+      };
+      // Retries are not what is measured; keep them out of the way.
+      setAnchorScheduler(() => {});
+      const said = [];
+      const write = process.stderr.write.bind(process.stderr);
+      const orig = globalThis.fetch;
+      try {
+        const settings = resolveAudit(withAnchor());
+        const earlier = new AuditTrail(settings, `anchor-probe-${Date.now()}`);
+        earlier.write("session_start", {});
+        earlier.write("session_end", {});
+        await flushAnchors(settings.anchor); // fails: nothing at the remote
+        globalThis.fetch = async () => done();
+        process.stderr.write = (chunk, ...rest) => { said.push(String(chunk)); return true; };
+        const record = await runTask(withAnchor(), "go", { role: "implement", yes: true, verbose: false });
+        process.stderr.write = write;
+        for (const d of record.degradations ?? []) audit.write("degradation", d);
+        return { announcedIn: said.join(""), recorded: hasDegradation(audit, "audit_anchor_queued") };
+      } finally {
+        process.stderr.write = write;
+        globalThis.fetch = orig;
+        setAnchorScheduler(null);
+      }
     },
   },
 
@@ -351,6 +397,68 @@ const PROBES = {
       return {
         announcedIn: trace + " " + String(turn.stop_reason),
         recorded: turn.stop_reason !== "answered",
+      };
+    },
+  },
+
+  shadow_unreachable: {
+    must: /\[shadow\] unreachable/i,
+    // The shadow's other warning, about its own log file, is a different fault.
+    mustNot: /cannot write/i,
+    recordedBy: "a `degradation` record on the task record, and `volatile.shadow.stopped`",
+    async run(root) {
+      // Through `gnomon task`'s own entry point, not the recorder: the shadow
+      // stopped audibly enough before 2026-11-03 -- one stderr line -- and
+      // nothing in the record a script reads said so. The record is the claim,
+      // so the record is what is read here. `[audit]` is off on the scaffold.
+      const url = "http://127.0.0.1:9/v1/systemone";
+      const config = loadConfig(root);
+      config.config = {
+        ...config.config,
+        shadow: { enabled: true, url, abort: ["a"], role: ["r"], approval: ["p"], orders: ["fwd"] },
+      };
+      const said = [];
+      const orig = globalThis.fetch;
+      const origErr = process.stderr.write;
+      globalThis.fetch = async (u) => {
+        if (String(u) === url) {
+          throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+        }
+        return done();
+      };
+      process.stderr.write = (chunk) => (said.push(String(chunk)), true);
+      let record;
+      try {
+        record = await runTask(config, "go", { role: "implement", yes: true });
+      } finally {
+        globalThis.fetch = orig;
+        process.stderr.write = origErr;
+      }
+      return {
+        announcedIn: said.join(""),
+        recorded: (record.degradations ?? []).some((d) => d.id === "shadow_unreachable")
+          && record.volatile?.shadow?.stopped === true,
+      };
+    },
+  },
+
+  context_window_unresolved: {
+    must: /max_context_tokens = "auto" found no window/i,
+    recordedBy: "a `degradation` record, and `max_context_tokens_source: \"default\"` in the turn's `wire`",
+    async run(root, audit) {
+      // An Ollama endpoint declaring "auto" whose /api/show answers 404, as a
+      // relay in front of a provider does. The chat call itself succeeds.
+      const target = { ...TARGET("http://auto.invalid/api/chat"), kind: "ollama",
+        contextAuto: true, contextTokens: 65536, contextSource: "default" };
+      const { turn, trace } = await turnWith(root, async (url) =>
+        String(url).endsWith("/api/show")
+          ? { ok: false, status: 404, statusText: "Not Found", json: async () => ({ error: "not found" }) }
+          : done(),
+        { route: ROUTE({ target }), audit });
+      return {
+        announcedIn: trace,
+        recorded: hasDegradation(audit, "context_window_unresolved")
+          && turn.wire?.max_context_tokens_source === "default",
       };
     },
   },

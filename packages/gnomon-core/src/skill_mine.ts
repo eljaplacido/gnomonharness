@@ -96,9 +96,17 @@ export interface SkillCandidate {
  * field is believed over its summary, so a trail that starts recording the
  * rule needs no change to this file.
  *
+ * Every rule in tools.ts POLICY_RULES has its forms here, and only those
+ * rules: `skill_mine.test.ts` drives each precheck that returns a rule and
+ * asserts this function reads the same rule back off the summary it wrote.
+ * Until 2026-11 the `tools`, `malformed` and `url` forms and webfetch's
+ * `network` form were missing, so those refusals read as "no rule named" in
+ * the dashboard and could never become candidates.
+ *
  * Anything that is not one of these forms is not a policy refusal -- a person
- * declining an approval is also a `refusal`, and is a different signal -- and
- * is skipped rather than guessed at.
+ * declining an approval is also a `refusal`, and is a different signal; so is
+ * a delegation `task_allow` refused, which no published rule names -- and is
+ * skipped rather than guessed at.
  */
 export function classifyRefusal(
   r: Pick<AuditRecord, "kind"> & Record<string, unknown>
@@ -111,6 +119,35 @@ export function classifyRefusal(
   let m: RegExpExecArray | null;
   if ((m = /— denied by bash_deny \((.*)\)$/.exec(summary))) {
     return { rule: "bash_deny", pattern: m[1]! };
+  }
+  // A deny pattern that does not compile refuses every command, fail-closed.
+  if (summary === "bash — deny pattern will not compile") {
+    return { rule: "bash_deny", pattern: commandHead(target) };
+  }
+  // `tools`: the role was not given the tool. The pattern is the tool's name,
+  // which is what was refused; the target says nothing about it.
+  if ((m = /^(\S+) — not available to this role$/.exec(summary))) {
+    return { rule: "tools", pattern: m[1]! };
+  }
+  // `malformed`: arguments that cannot be read as the tool's. Also by name.
+  if (
+    (m = /^(\S+) — malformed arguments \(/.exec(summary)) ||
+    (m = /^(read) — no path given$/.exec(summary)) ||
+    (m = /^(write) — no content given$/.exec(summary)) ||
+    (m = /^(bash) — command is not a string$/.exec(summary))
+  ) {
+    return { rule: "malformed", pattern: m[1]! };
+  }
+  // webfetch records no target (its argument is a url, not a path or a
+  // command), so the host or scheme is read from the summary instead.
+  if ((m = /^webfetch (\S+) — refused \(network disabled\)$/.exec(summary))) {
+    return { rule: "network", pattern: urlHost(m[1]!) };
+  }
+  if ((m = /^webfetch — (\S+) refused$/.exec(summary))) {
+    return { rule: "url", pattern: m[1]! };
+  }
+  if ((m = /^webfetch (\S+) — refused \(private address\)$/.exec(summary))) {
+    return { rule: "url", pattern: m[1]! };
   }
   if ((m = /^bash — writes (.+), not permitted for this role$/.exec(summary))) {
     return { rule: "write_allow", pattern: pathPattern(m[1]!) };
@@ -127,6 +164,7 @@ export function classifyRefusal(
     [/refused \(network = false\)$/, "network"],
     [/refused \(sudo\)$/, "sudo"],
     [/refused \(gnomon's records\)$/, "record"],
+    [/refused \(git hooks\)$/, "git_hooks"],
   ];
   const rule =
     typeof r.rule === "string" ? r.rule : fixed.find(([re]) => re.test(summary))?.[1];
@@ -149,6 +187,15 @@ export function pathPattern(path: string): string {
   const dot = base.lastIndexOf(".");
   const ext = dot > 0 ? base.slice(dot) : "";
   return `${dir ? `${dir}/` : ""}*${ext}`;
+}
+
+/** A URL's host, or the text as given when it does not parse as one. */
+function urlHost(raw: string): string {
+  try {
+    return new URL(raw).hostname || raw;
+  } catch {
+    return raw;
+  }
 }
 
 /** The first word of a command: what bash_allow judges a segment by. */

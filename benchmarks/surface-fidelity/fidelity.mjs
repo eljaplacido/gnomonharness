@@ -23,7 +23,7 @@ const core = (m) => import(pathToFileURL(`${REPO}/packages/gnomon-core/dist/${m}
 
 const { loadConfig, recomputeManifest, resolveContext, resolveRouting, resolveUi,
         resolveVerify, resolveChain, resolveLoop, resolveResilience, resolveExec,
-        resolveExtraRoots } = await core("config.js");
+        resolveExtraRoots, resolveMasking, resolveBootstrap, resolveMaxLines } = await core("config.js");
 const { buildToolSet } = await core("tools.js");
 const { buildSystemPrompt } = await core("prompt_loop.js");
 const { listTrialSpecs, loadTrialSpec, verdictOf } = await core("skill_trial.js");
@@ -63,6 +63,15 @@ function fingerprint(root) {
     loop: resolveLoop(c),
     resilience: resolveResilience(c),
     extra_roots: resolveExtraRoots(c),
+    // Context hygiene (2026-11-03), both opt-in: null on a surface that does
+    // not declare them, which is every scaffold, so no row moves. Resolved for
+    // every platform, so a probe list for another OS still counts as behaviour.
+    masking: resolveMasking(c),
+    bootstrap: ["linux", "darwin", "win32"].map((p) => resolveBootstrap(c, p)),
+    // `max_lines` on the bash and read declarations (CX3). Undefined unless
+    // declared, and JSON.stringify drops it then, so no existing row's
+    // fingerprint moves.
+    max_lines: resolveMaxLines(c),
     defaults: c.config.defaults ?? {},
     policy: c.policy ?? {},
     roles: roles.map((r) => ({

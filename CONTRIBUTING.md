@@ -59,7 +59,7 @@ reassuring.
 |---|---|
 | First response to a new issue or PR | within **7 days** |
 | Follow-up once a review thread is live | within **7 days** per round |
-| Security report (see [SECURITY.md](.github/SECURITY.md)) | ahead of everything else in this table. Checked: SECURITY.md states a reporting *route* and no timeline, so these targets are the only published ones — assume the same 7 days, and treat a private advisory as the way to escalate faster |
+| Security report (see [SECURITY.md](.github/SECURITY.md)) | ahead of everything else in this table, on SECURITY.md's own targets ("Coordinated vulnerability disclosure"): acknowledged within **5 days**, assessed within 14, fixed within 30 for critical and high severity |
 
 If a PR has been quiet for longer than the target, the right move is to comment
 on it and say so. That is not nagging; it is the only escalation path there is,

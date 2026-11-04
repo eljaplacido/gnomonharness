@@ -1,0 +1,177 @@
+# gnomon's model catalog: which local model `gnomon setup` recommends for a
+# machine, and why.
+#
+# Harness data, versioned with the release like the scaffold templates. It is
+# NOT part of any project's surface and is never fetched from the network.
+# `gnomon setup --catalog FILE` and `gnomon doctor --catalog FILE` read another
+# file in this format instead. It only decides what setup PROPOSES: what a
+# project runs is the tags written into its .gnomon/, nothing else.
+#
+# Updated with releases only. Model names go stale within months, so every
+# recommendation prints `label`, and a catalog older than `stale_after_days`
+# says that newer models likely exist.
+#
+# Two kinds of figures, kept apart on purpose:
+#   [[measured]]  gnomon's own benchmark runs, with the run named. Only the
+#                 models listed there have been measured by gnomon at all.
+#   [[model]]     sizes and memory thresholds. download_gb is what Ollama's
+#                 library lists (qwen3.6:35b read from an installed manifest on
+#                 as_of); mem_gb is an estimate with a 32k-token context.
+#                 `measured = false` prints "not measured by gnomon".
+
+as_of = "2026-11-03"
+label = "2026-11"
+stale_after_days = 180
+source = "gnomon benchmark runs R1, R1H and BUD (benchmarks/results/*-2026-11, branch bench/peers-2026-11); sizes from ollama.com/library"
+
+[budget]
+# How much of each kind of memory a model may use, for an installed model this
+# catalog does not know (sized from what the runtime reports). Catalog models
+# use their own min_* thresholds below instead.
+vram_fraction = 0.9       # discrete GPUs: the sum of their memory
+unified_fraction = 0.75   # Apple Silicon, NVIDIA GB10: RAM shared with the GPU
+cpu_fraction = 0.5        # no usable GPU: system RAM, and slow
+overhead = 1.2            # weights x this = weights plus a working context
+# Thresholds are nominal sizes ("a 24 GB card"); hardware reports less. An RTX
+# 4090 reports 23.99 GiB, and an 8 GB laptop about 7 GiB after the firmware's
+# share. A machine clears a threshold at this fraction of it.
+nominal_tolerance = 0.85
+
+[speed]
+# PROVISIONAL. Set from two machines gnomon measured (RTX 5090 at ~375 tok/s
+# generation and NVIDIA GB10 at ~66 tok/s, both qwen3.6-35b on llama.cpp), not
+# calibrated. The R1 and R3 runs calibrate them; until then setup prints them
+# as provisional. They decide only what setup SUGGESTS.
+provisional = true
+local_only_min_gen_tps = 40       # generation at or above: every role can stay local
+local_only_min_prefill_tps = 500  # and prompt processing at or above
+cloud_first_below_gen_tps = 10    # generation below: too slow for a task; cloud first
+
+[hybrid]
+# What setup cites when it suggests hybrid. R1H: 16 Terminal-Bench tasks,
+# 900 s cap, gnomon d59e6c19; local qwen3.6-35b, cloud DeepSeek V4.1 Flash
+# through OpenCode Go. Not significant on solve rate (McNemar p = 1.0 against
+# cloud-only); the cost difference is a point estimate.
+evidence = "On an RTX 5090, cloud plans + local builds solved 87% (26/30) vs 84% (27/32) cloud-only, at 26% lower cost per solved task ($0.034 vs $0.046)."
+evidence_unified = "On an NVIDIA GB10 (R1), the same split solved 66% (21/32) vs 72% (23/32) cloud-only, at 20% lower cost per solved task: no difference shown either way."
+run = "R1H and R1, 2026-11 (benchmarks/results/r1h-2026-11, r1-2026-11)"
+
+# Models, best first. A machine is offered every entry it clears; the first
+# one that fits is the recommendation.
+
+[[model]]
+tag = "qwen3.6:35b"
+name = "Qwen3.6-35B-A3B"
+runtime = "ollama"
+aliases = ["qwen3.6:35b-a3b"]
+served_as = ["qwen3.6-35b"]   # how llama.cpp / LM Studio / vLLM listings name it
+params_b = 35
+active_b = 3                  # mixture of experts: speed follows the 3B active
+quant = "Q4"
+download_gb = 23.9
+mem_gb = 27
+min_vram_gb = 24
+min_unified_gb = 64
+min_cpu_ram_gb = 64
+tier = "large"
+tools = true
+measured = true
+note_vram = "On a 24 GB card a few layers may spill to the CPU; as a mixture of experts it stays usable. The speed check tells."
+llamacpp = "a Q4 GGUF of Qwen3.6-35B-A3B (gnomon measured Qwen3.6-35B-A3B-UD-Q4_K_S.gguf): llama-server -m <file>.gguf --jinja -c 65536 --port 8080"
+
+[[model]]
+tag = "gpt-oss:20b"
+name = "gpt-oss-20b"
+runtime = "ollama"
+params_b = 21
+active_b = 3.6
+quant = "MXFP4"
+download_gb = 14
+mem_gb = 16
+min_vram_gb = 16
+min_unified_gb = 24
+min_cpu_ram_gb = 32
+tier = "medium"
+tools = true
+measured = false
+
+[[model]]
+tag = "qwen3:14b"
+name = "Qwen3-14B"
+runtime = "ollama"
+params_b = 14
+quant = "Q4_K_M"
+download_gb = 9.3
+mem_gb = 11
+min_vram_gb = 12
+min_unified_gb = 24
+min_cpu_ram_gb = 24
+tier = "medium"
+tools = true
+measured = false
+
+[[model]]
+tag = "qwen3:8b"
+name = "Qwen3-8B"
+runtime = "ollama"
+aliases = ["qwen3:latest", "qwen3"]
+params_b = 8
+quant = "Q4_K_M"
+download_gb = 5.2
+mem_gb = 7
+min_vram_gb = 8
+min_unified_gb = 16
+min_cpu_ram_gb = 16
+tier = "small"
+tools = true
+measured = false
+
+[[model]]
+tag = "qwen3:4b"
+name = "Qwen3-4B"
+runtime = "ollama"
+params_b = 4
+quant = "Q4_K_M"
+download_gb = 2.5
+mem_gb = 4
+min_vram_gb = 4
+min_unified_gb = 8
+min_cpu_ram_gb = 8
+tier = "tiny"
+tools = true
+measured = false
+note = "Answers and calls tools, but is a weak coder: a cloud model should do the real work."
+
+# gnomon's own measurements. One row per (model, machine). `solved`/`of` is the
+# model working alone (every role local) on the run named.
+
+[[measured]]
+tag = "qwen3.6:35b"
+machine = "RTX 5090"
+memory = "vram"
+memory_gb = 32
+engine = "llama.cpp b11739, UD-Q4_K_S GGUF with a DFlash draft, reasoning off"
+solved = 24
+of = 32
+gen_tps = 375
+prefill_tps = 4000
+run = "R1H, 2026-11 (16 Terminal-Bench tasks x 2, 900 s cap); speeds from BUD"
+
+[[measured]]
+tag = "qwen3.6:35b"
+machine = "NVIDIA GB10 (DGX Spark)"
+memory = "unified"
+memory_gb = 128
+engine = "llama.cpp, UD-Q4_K_S GGUF with a DFlash draft, reasoning off"
+solved = 18
+of = 32
+gen_tps = 66
+prefill_tps = 1070
+run = "R1, 2026-11 (16 Terminal-Bench tasks x 2, 900 s cap); speeds from the server's journal"
+
+# A cloud model per preset, offered as the default planner when one is added.
+
+[[cloud]]
+preset = "opencode-go"
+model = "deepseek-v4.1-flash"
+note = "the cloud model in R1H and R1"

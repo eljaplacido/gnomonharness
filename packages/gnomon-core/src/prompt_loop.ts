@@ -22,6 +22,9 @@ import {
   listRoles,
   listProfiles,
   resolveContext,
+  resolveMasking,
+  resolveBootstrap,
+  defaultContextWindow,
   resolveVerify,
   detectVerifyCommand,
   resolveResilience,
@@ -34,6 +37,7 @@ import {
   type ChainGate,
   declaredKeyVars,
   resolveLoop,
+  resolveMaxLines,
   LOOP_DEFAULTS,
   Compaction,
   resolveUi,
@@ -88,8 +92,30 @@ import {
   DIFF_ELIDED,
 } from "./tools.js";
 import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
+import { StallSignals, type StallSignalCounters } from "./stall_signals.js";
+import {
+  CallLedger,
+  legBudget,
+  overflowBudget,
+  readUsageDetail,
+  type CallObserver,
+  type ModelCallsMeasured,
+  type ModelCallsRecord,
+  type TokenCalibration,
+  type UsageDetail,
+} from "./mediators.js";
 import { writeTamperRecord, compareWithCheckpoint, writeCheckpoint } from "./record_tamper.js";
+import {
+  LiveRecord,
+  killedTurnAudit,
+  onKillSignal,
+  type KillSignal,
+  type OpenTurn,
+  type TurnLive,
+} from "./live_record.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
+import { AFTER_REFUSAL_REASON, AfterRefusalWindow, resolveAfterRefusal } from "./after_refusal.js";
+import { settleMcpTools, toolsHash } from "./tools_hash.js";
 import { harnessBuild } from "./build.js";
 import { mapBucket } from "./session.js";
 import {
@@ -102,16 +128,29 @@ import {
   withWorkingContext,
 } from "./skills.js";
 import { AuditTrail, resolveAudit, type AuditKind } from "./audit.js";
+import { announceAnchorBacklog } from "./anchor.js";
 import {
   ShadowRecorder,
+  SHADOW_BANNER_WAIT_MS,
+  sumCoverage,
+  type ShadowCoverage,
   type ShadowTurnEnd,
   type ShadowTurnInfo,
   type TurnShadow,
 } from "./shadow.js";
-import { recordDegradation } from "./degradation.js";
+import { recordDegradation, type DegradationSink } from "./degradation.js";
+import {
+  maskObservations,
+  observationMeta,
+  bootstrapSnapshot,
+  bootstrapBlock,
+  type BootstrapOutcome,
+  type ObservationMeta,
+} from "./context_hygiene.js";
+import { resolveContextWindow, type ContextSource } from "./context_window.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
 import { applyCredentials } from "./credentials.js";
-import type { TrustOutcome } from "./trust.js";
+import { clampToDefaults, type TrustOutcome } from "./trust.js";
 import {
   resolveSessionStore,
   saveSession,
@@ -253,6 +292,12 @@ export interface PromptState {
    */
   steerRoleAdapted?: Set<string>;
   /**
+   * Provider prompt tokens against gnomon's estimate, per endpoint+model, as
+   * the session has measured them. Kept and read only under `[context]
+   * token_estimate = "calibrated"`, which sizes the turn's trims by it.
+   */
+  tokenCalibration?: TokenCalibration;
+  /**
    * The session checklist, as the `todo` tool last left it.
    *
    * Session state, not surface state: it lives in the saved conversation and
@@ -278,6 +323,13 @@ export interface PromptState {
    * overwrite a file an earlier turn told the model to read.
    */
   spill?: SpillSink;
+  /**
+   * The environment snapshot, once `[context] bootstrap` has run for this
+   * session: the block buildSystemPrompt appends, empty when the bootstrap
+   * produced none (refused, failed, unavailable), so it is never re-run.
+   * Undefined until then, and always on a surface that declares no bootstrap.
+   */
+  bootstrap?: { id: string; block: string };
 }
 
 /** The id this session saves under, or a placeholder before one is assigned. */
@@ -776,6 +828,33 @@ interface InferenceResult {
    * assistant message only where the endpoint asks for it.
    */
   reasoning?: string;
+  /**
+   * The endpoint answered with a body that is not JSON: a proxy's error page,
+   * or a reply cut off in transit. Code 12 -- the request was fine, another
+   * attempt can fix it -- and, like a broken stream, it spends a generation
+   * attempt rather than the transport grace: the endpoint is reachable.
+   */
+  unreadable?: boolean;
+  /** `content` arrived as an array of content parts and was read as their text. */
+  contentParts?: boolean;
+  /** Streamed `data:` lines that were not JSON: pieces of the reply that are missing from it. */
+  droppedChunks?: number;
+}
+
+/**
+ * The text of an array of content parts: `[{type: "text", text}]`, or strings.
+ * Parts with no text (an image, a refusal object) contribute nothing.
+ */
+export function partsText(parts: unknown[]): string {
+  return parts
+    .map((p) =>
+      typeof p === "string"
+        ? p
+        : p && typeof p === "object" && typeof (p as { text?: unknown }).text === "string"
+          ? (p as { text: string }).text
+          : ""
+    )
+    .join("");
 }
 
 /**
@@ -966,6 +1045,25 @@ export function isMalformedCall(call: ToolCall, offered: Set<string>): boolean {
 }
 
 /**
+ * What was wrong with a reply's unusable calls, for the operator's line.
+ *
+ * The line said "malformed arguments or unknown tool" whichever it was, so a
+ * call cut off in transit -- a fault of the wire, which the model fixes by
+ * sending the same call again -- read the same as a model inventing a tool.
+ * The tool results already told the MODEL which; this tells the operator.
+ */
+export function describeMalformed(calls: ToolCall[], offered: Set<string>): string {
+  const why = calls.map((c) => {
+    const name = c.name || "(no name)";
+    if (!c.name || !offered.has(c.name)) return `${name}: not a tool this role was offered`;
+    if (ARGS_TRUNCATED in c.args) return `${name}: arguments cut off in transit (truncated JSON)`;
+    if (ARGS_MALFORMED in c.args) return `${name}: arguments not a JSON object`;
+    return `${name}: usable`;
+  });
+  return [...new Set(why)].join("; ");
+}
+
+/**
  * Call one inference endpoint (Ollama /api/chat or any OpenAI-compatible
  * /chat/completions) with a hard timeout.
  *
@@ -998,7 +1096,9 @@ export async function callEndpointWithRetry(
   say: ((line: string) => void) | undefined,
   ui: ResolvedUi | undefined,
   signal?: AbortSignal,
-  session?: string
+  session?: string,
+  /** Told about every attempt, each one a request of its own (mediators.ts) */
+  observe?: CallObserver
 ): Promise<InferenceResult> {
   const RETRYABLE = new Set([11, 12]);
   let last: InferenceResult | null = null;
@@ -1106,7 +1206,7 @@ export async function callEndpointWithRetry(
     unmetered > 0 ? { ...x, unmeteredCalls: unmetered } : x;
   for (let attempt = 1; attempt <= resilience.attempts; attempt++) {
     const startedAt = Date.now();
-    const r = await callEndpoint(target, messages, tools, deadline, signal, session);
+    const r = await callEndpoint(target, messages, tools, deadline, signal, session, observe);
     // Only the wait for the first byte is charged to the budget. The budget
     // bounds how long an endpoint may leave a request unanswered; a streamed
     // reply that is arriving is answered. Charging its whole length meant a
@@ -1121,7 +1221,7 @@ export async function callEndpointWithRetry(
     if (r.refusedLocally && !resilience.transport_grace_declared) {
       graceMs = Math.min(declaredGraceMs, LOCAL_REFUSED_GRACE_MS);
     }
-    if (r.code === 12 && graceMs > 0 && !r.streamBroken) {
+    if (r.code === 12 && graceMs > 0 && !r.streamBroken && !r.unreadable) {
       transportTries++;
       const wait = Math.min(
         resilience.backoff_ms * Math.pow(2, transportTries - 1),
@@ -1231,7 +1331,9 @@ export async function callEndpointWithRetry(
                   : `timed out (deadline now ${deadline}ms)`
                 : r.streamBroken
                   ? `the stream broke off mid-reply`
-                  : transportKind(r)
+                  : r.unreadable
+                    ? `the reply was not JSON`
+                    : transportKind(r)
             } ` +
               `— attempt ${attempt} of ${resilience.attempts}, waiting ${wait}ms`
           )
@@ -1394,7 +1496,12 @@ export async function callEndpoint(
   timeoutMs: number,
   signal?: AbortSignal,
   /** The conversation this call belongs to -- `state.sessionId`. */
-  session?: string
+  session?: string,
+  /**
+   * Told what the request carried and what came back (mediators.ts), after
+   * the call. It reads the messages and the result and changes neither.
+   */
+  observe?: CallObserver
 ): Promise<InferenceResult> {
   const started = Date.now();
   const trace: CallTrace = {};
@@ -1404,6 +1511,24 @@ export async function callEndpoint(
   // rather than guessed: a benchmark reading the token totals needs to know
   // they are a floor.
   if (trace.reached && !r.usage) r.unmeteredCalls = 1;
+  if (observe) {
+    try {
+      observe({
+        target,
+        messages,
+        bodyEst: trace.bodyEst,
+        code: r.code,
+        ms: Date.now() - started,
+        firstByteMs: r.firstByteMs,
+        usage: r.usage,
+        detail: trace.detail,
+        reasoningChars: trace.reasoningChars,
+        finishReason: r.finishReason,
+      });
+    } catch {
+      // A record that cannot be kept must not cost the call it describes.
+    }
+  }
   return r;
 }
 
@@ -1416,6 +1541,12 @@ interface CallTrace {
    * after the request was sent. A non-2xx reply is a refusal, not a generation.
    */
   reached?: boolean;
+  /** gnomon's estimate of the request body, once one was built and sent */
+  bodyEst?: number;
+  /** Cached and reasoning tokens from the usage report */
+  detail?: UsageDetail;
+  /** Characters of reasoning the reply carried */
+  reasoningChars?: number;
 }
 
 async function callEndpointOnce(
@@ -1616,10 +1747,13 @@ async function callEndpointOnce(
 
   try {
     const dispatcher = modelFetchDispatcher();
+    // The same bytes as before; held so the mediator record can size them.
+    const body = JSON.stringify(payload);
+    trace.bodyEst = estimateTokens(body);
     const res = await fetch(target.url, {
       method: "POST",
       headers,
-      body: JSON.stringify(payload),
+      body,
       signal: controller.signal,
       // No undici timeouts of its own: the clocks above are the only ones.
       ...(dispatcher ? { dispatcher } : {}),
@@ -1744,6 +1878,8 @@ async function callEndpointOnce(
         rearm();
       });
       drained = s.complete;
+      trace.detail = s.usageDetail;
+      trace.reasoningChars = s.reasoning.length;
       if (s.error) {
         // An error sent in place of a chunk: the request was accepted and
         // failed on the way. Read exactly as the same text in a non-2xx body.
@@ -1793,6 +1929,7 @@ async function callEndpointOnce(
       return {
         content,
         ...(promoted && content ? { reasoningOnly: true } : {}),
+        ...(s.unparsed > 0 ? { droppedChunks: s.unparsed } : {}),
         code: 0,
         toolCalls: normaliseToolCalls(raw),
         rawToolCalls: raw,
@@ -1802,7 +1939,28 @@ async function callEndpointOnce(
       };
     }
 
-    const json = await res.json();
+    // A body that is not JSON is told as that. The SyntaxError `res.json()`
+    // throws used to reach the catch below, where classifyFailure filed it as
+    // 10 -- "the request was wrong" -- so a proxy's HTML error page sent with
+    // a 200 ended the turn on the first occurrence, unretried, as
+    // "Model unavailable at <url>: Unexpected token '<'". The request was
+    // fine; the reply was not. Found by `gnomon chaos` (corrupt.content).
+    // V8's message quotes the start of the body, which is the diagnosis.
+    let json: any;
+    try {
+      json = await res.json();
+    } catch (err) {
+      if (!(err instanceof SyntaxError || (err as { name?: unknown })?.name === "SyntaxError")) throw err;
+      drained = true;
+      return {
+        content:
+          `The endpoint at ${target.url} answered ${res.status} with a body that is not JSON ` +
+          `(${String((err as Error).message).slice(0, 160)}) — a proxy or gateway page, or a reply cut off in transit.`,
+        code: 12,
+        unreadable: true,
+        toolCalls: [],
+      };
+    }
     drained = true;
     const message = json.choices?.[0]?.message ?? json.message ?? {};
     // reasoning_content is read, and last. A reasoning model that answers only
@@ -1825,9 +1983,20 @@ async function callEndpointOnce(
     // beside tool_calls as a matter of course, and promoting the reasoning
     // there replayed the model's thinking to it as something it had said.
     const reasoning = message.reasoning_content ?? message.reasoning;
+    trace.detail = readUsageDetail(json);
+    trace.reasoningChars = typeof reasoning === "string" ? reasoning.length : 0;
     const raw: unknown[] = Array.isArray(message.tool_calls)
       ? message.tool_calls
       : [];
+    // `content` as an array of content parts, not a string. Read as the text
+    // of its parts, and said once per turn by the loop (`contentParts`): it
+    // reached `.trim()` as an array and the TypeError ended the run as
+    // "gnomon task could not start", exit 10 (gnomon chaos, schema.content).
+    const contentParts = Array.isArray(message.content);
+    if (contentParts) message.content = partsText(message.content);
+    else if (message.content != null && typeof message.content !== "string") {
+      message.content = JSON.stringify(message.content);
+    }
     const content =
       message.content ??
       json.response ??
@@ -1853,6 +2022,7 @@ async function callEndpointOnce(
       usage: readUsage(json),
       finishReason,
       ...(reasoningOnly ? { reasoningOnly: true } : {}),
+      ...(contentParts ? { contentParts: true } : {}),
       ...kept,
     };
   } catch (err) {
@@ -2009,10 +2179,19 @@ export interface StreamedReply {
   toolCalls: Array<{ id?: string; type?: string; name: string; args: string }>;
   finishReason?: string;
   usage?: TokenUsage;
+  /** Cached and reasoning tokens, when the usage chunk carried them */
+  usageDetail?: UsageDetail;
   /** An `error` the server sent in place of a chunk */
   error?: { message: string; status?: number; type?: string };
   /** A finish_reason or [DONE] arrived, so the reply is whole */
   complete: boolean;
+  /**
+   * `data:` lines that were not JSON. Each was a chunk of the reply, and its
+   * text is not in `content`. Skipped as before; counted so the loop can say
+   * the reply may be missing text, which it used to drop without a word
+   * (gnomon chaos, corrupt.stream).
+   */
+  unparsed: number;
 }
 
 /**
@@ -2031,7 +2210,7 @@ export async function readChatStream(
   body: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
   onData?: () => void
 ): Promise<StreamedReply> {
-  const out: StreamedReply = { content: "", reasoning: "", toolCalls: [], complete: false };
+  const out: StreamedReply = { content: "", reasoning: "", toolCalls: [], complete: false, unparsed: 0 };
   const decoder = new TextDecoder();
   let buffer = "";
   let data: string[] = [];
@@ -2052,7 +2231,10 @@ export async function readChatStream(
     try {
       chunk = JSON.parse(text);
     } catch {
-      return; // not JSON, so not a chunk
+      // Not JSON, so not a chunk -- but a data line that is blank carried
+      // nothing, and one that is not was a piece of the reply.
+      if (text.trim() !== "") out.unparsed++;
+      return;
     }
     if (chunk?.error) {
       const e = chunk.error;
@@ -2067,6 +2249,8 @@ export async function readChatStream(
     }
     const usage = readUsage(chunk);
     if (usage && (usage.input !== undefined || usage.output !== undefined)) out.usage = usage;
+    const detail = readUsageDetail(chunk);
+    if (detail) out.usageDetail = detail;
     const choice = chunk?.choices?.[0];
     if (!choice) return;
     const delta = choice.delta ?? choice.message ?? {};
@@ -2150,6 +2334,12 @@ export interface WireRecord {
   max_tokens_field?: string;
   /** The window the turn's working context was trimmed to */
   max_context_tokens?: number;
+  /**
+   * Where that window came from: `declared`, `listing:<shape>` (`"auto"`,
+   * read from the endpoint) or `default` (`"auto"`, nothing found). Absent
+   * with `max_context_tokens`, for an endpoint that declares no window.
+   */
+  max_context_tokens_source?: ContextSource;
   /** Present, and true, only when reasoning_content was sent back */
   replay_reasoning?: boolean;
   /**
@@ -2158,6 +2348,14 @@ export interface WireRecord {
    * (`counters.steer_role_adapted` says which turn learned it).
    */
   steer_role?: "user";
+  /**
+   * sha256 over the canonical JSON of the tool definitions the turn offered,
+   * sorted by name (tools_hash.ts). Not derived from the target, so wireOf
+   * leaves it out and the turn adds it. Built-in schemas live in the build
+   * and an MCP server's in the server: this is the one field that changes
+   * when either does.
+   */
+  tools_hash?: string;
 }
 
 /**
@@ -2183,9 +2381,123 @@ export function wireOf(target: RouteTarget): WireRecord {
       ? { max_tokens_field: target.maxTokensField }
       : {}),
     ...(target.contextTokens ? { max_context_tokens: target.contextTokens } : {}),
+    ...(target.contextTokens && target.contextSource
+      ? { max_context_tokens_source: target.contextSource }
+      : {}),
     ...(target.replayReasoning ? { replay_reasoning: true } : {}),
     ...(target.steerRole === "user" ? { steer_role: "user" as const } : {}),
   };
+}
+
+/** Where settleContextWindows says what it found. */
+export interface WindowHooks {
+  ui: ResolvedUi;
+  /** The transcript: a window read from the endpoint */
+  say: (line: string) => void;
+  /** A channel `--json` does not silence: `"auto"` found nothing */
+  warn: (line: string) => void;
+  audit?: DegradationSink;
+}
+
+/**
+ * Put the window in place on every target of a route whose endpoint declares
+ * `max_context_tokens = "auto"`. Each endpoint URL and model is asked once per
+ * process (context_window.ts) and the answer is cached, so the second call for
+ * a target costs nothing. A route without "auto" comes back as the same object.
+ *
+ * The call that asked says what it found. A listing that gave a window gets a
+ * transcript line. None that did gets a warning, a `context_window_unresolved`
+ * degradation, and the turn runs on `[defaults] max_context_tokens`, marked
+ * `default` in the record's `wire`: the trim an undeclared endpoint gets.
+ */
+export async function settleContextWindows<R extends { target: RouteTarget; fallback?: RouteTarget }>(
+  config: GnomonConfig,
+  route: R,
+  hooks: WindowHooks
+): Promise<R> {
+  if (!route.target.contextAuto && !route.fallback?.contextAuto) return route;
+  const fallbackWindow = defaultContextWindow(config);
+  const settle = async (t: RouteTarget | undefined): Promise<RouteTarget | undefined> => {
+    if (!t?.contextAuto) return t;
+    const { resolution, fresh } = await resolveContextWindow(t);
+    const where = `${t.endpoint ?? "endpoint"} · ${t.model}`;
+    if (fresh && resolution.tokens) {
+      hooks.say(
+        paint(hooks.ui, "gray",
+          `  [context] ${where}: window ${resolution.tokens} tokens, read from the endpoint (${resolution.from})`)
+      );
+    } else if (fresh) {
+      hooks.warn(
+        paint(hooks.ui, "yellow",
+          `  [context] ${where}: max_context_tokens = "auto" found no window ` +
+            `(${resolution.misses.join("; ")}). Trimming to [defaults] max_context_tokens = ` +
+            `${fallbackWindow}; declare the number in [endpoints.${t.endpoint ?? "<name>"}] to skip the lookup.`)
+      );
+      recordDegradation(hooks.audit, {
+        id: "context_window_unresolved",
+        declared: `max_context_tokens = "auto" for ${t.model} at ${t.endpoint ?? "endpoint"}`,
+        actual: `[defaults] max_context_tokens = ${fallbackWindow}`,
+        detail: { probes: resolution.misses },
+      });
+    }
+    return resolution.tokens
+      ? { ...t, contextTokens: resolution.tokens, contextSource: resolution.source }
+      : { ...t, contextTokens: fallbackWindow, contextSource: "default" };
+  };
+  const [target, fallback] = await Promise.all([settle(route.target), settle(route.fallback)]);
+  return { ...route, target: target!, ...(route.fallback ? { fallback } : {}) };
+}
+
+/**
+ * Settle every listed role's "auto" windows at session start, so what they
+ * found is said before the first prompt rather than in the middle of it.
+ */
+export async function prepareContextWindows(
+  config: GnomonConfig,
+  roles: string[],
+  hooks: WindowHooks
+): Promise<void> {
+  const routes = roles.flatMap((role) => {
+    try {
+      return [routeRole(config, role)];
+    } catch {
+      return []; // an unknown endpoint is the surface audit's to report
+    }
+  });
+  await Promise.all(routes.map((r) => settleContextWindows(config, r, hooks)));
+}
+
+/**
+ * The startup note for an endpoint that is not on this machine and declares no
+ * window. Its turns are trimmed to `[defaults] max_context_tokens`, which
+ * `gnomon init` sizes for a local model (65536), while a hosted model's window
+ * may be many times that: C3, the P2G root cause. One line per endpoint the
+ * given roles route to. A note only; nothing about the turn changes.
+ */
+export function undeclaredWindowNotes(config: GnomonConfig, roles: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const window = defaultContextWindow(config);
+  for (const role of roles) {
+    let r: ReturnType<typeof routeRole>;
+    try {
+      r = routeRole(config, role);
+    } catch {
+      continue;
+    }
+    for (const t of [r.target, r.fallback]) {
+      if (!t?.endpoint || seen.has(t.endpoint)) continue;
+      seen.add(t.endpoint);
+      if (t.contextSource || isLoopbackUrl(t.url)) continue;
+      out.push(
+        `note: endpoint "${t.endpoint}" is not on this machine and declares no context window, ` +
+          `so its turns are trimmed to [defaults] max_context_tokens = ${window}. If its model's ` +
+          `window is larger, declare it in [endpoints.${t.endpoint}]: max_context_tokens = <tokens>, ` +
+          `or "auto" to read it from the endpoint.`
+      );
+    }
+  }
+  return out;
 }
 
 /** What a session has learned about one endpoint+model's output limit. */
@@ -2789,6 +3101,14 @@ export interface TurnDeps {
    * terminal passes none and keeps rendering from `say`.
    */
   events?: TurnEvents;
+  /**
+   * The live record (live_record.ts): handed a reader of the turn's state at
+   * the start, and told after each model reply and each tool call, so a run
+   * killed mid-turn leaves its steps so far on disk. Told, never asked, like
+   * `events`: it copies the state and nothing it does reaches the messages.
+   * Read only at depth 0 -- a delegated sub-turn is part of its parent's call.
+   */
+  live?: TurnLive;
 }
 
 /** A tool call as `TurnEvents` reports it. */
@@ -2801,6 +3121,11 @@ export interface TurnEventCall {
   describe: string;
   /** Whether the approval gate applies to this call */
   gated: boolean;
+  /**
+   * Present, and true, when `[approval] after_refusal` sends this call to a
+   * person although a standing approval would have answered it.
+   */
+  escalated?: boolean;
   /** 0 for the turn a person asked for, 1 for a delegated sub-turn */
   depth: number;
 }
@@ -2928,6 +3253,13 @@ export interface TurnResult {
   stop_detail?: { steps?: number; max_steps_total?: number; repeats?: number };
   /** Counters already computed by the loop and previously thrown away. */
   counters: TurnCounters;
+  /**
+   * What came back for each model request: provider tokens, reasoning, the
+   * code and the clock. The requests are `counters.model_calls`. Absent
+   * before any request, and on a delegated sub-turn, whose requests are the
+   * parent's (mediators.ts).
+   */
+  modelCalls?: ModelCallsMeasured;
   /**
    * Set when `.gnomon/` moved while this turn ran — an approved surface write,
    * or a bash command that touched it. The interactive loop reloads on this.
@@ -3093,7 +3425,23 @@ export type StopReason =
   // max_consecutive_malformed` repair turns. Before, markup was re-asked once
   // and then recorded `answered`, and the other shapes were re-asked with no
   // bound but the step wall, so a template mismatch read as a stall or a wall.
-  | "malformed";
+  | "malformed"
+  // The two below are written by the live record (live_record.ts), never
+  // returned by a turn. They are here because they appear on the records a
+  // consumer switches on -- `gnomon task --json`, the `turn` audit record and
+  // `<session>.record.json` -- and Rule 6 publishes what a record can say.
+  //
+  // `in_progress`: the turn had not ended when the record was written. Only a
+  // partial record (`record_state: "partial"`) carries it. A process killed
+  // with SIGKILL leaves one, with the steps up to the last one that finished.
+  // (No semicolons in these comments: docs.test.ts reads the union up to the
+  // first one.)
+  | "in_progress"
+  // `killed`: SIGTERM, SIGINT or SIGHUP ended the process mid-turn, and the
+  // record was flushed before it went (`stop_detail.signal`). Before this, a
+  // run killed at a benchmark's time cap left no record at all: 19 of 21
+  // capped cells in P2G attempt 1 and 20 in M2 (C5, 2026-11-04).
+  | "killed";
 
 /**
  * Per-turn tallies. Every field is a count of something the loop already
@@ -3469,6 +3817,14 @@ export interface TurnCounters {
   /** Anti-flailing nudges fired, and where the first one landed. */
   nudges: number;
   first_nudge_step?: number;
+  /**
+   * Three log-only stall detectors (stall_signals.ts): limit cycles, no
+   * progress, novelty CUSUM. Per detector, episodes and the step of the first.
+   * Nothing in the loop reads them back; they are measured so a stall-path
+   * intervention can be judged on its trigger before it is allowed to act.
+   * Absent on a record from a turn that never ran, and on older builds.
+   */
+  stall_signals?: StallSignalCounters;
   /** Whether the final tool call of the turn changed anything. */
   final_step_was_write: boolean;
   /**
@@ -3507,10 +3863,50 @@ export interface TurnCounters {
    * turn record's `wire` says `steer_role: "user"`. Absent when none were.
    */
   steer_role_adapted?: number;
+  /**
+   * Calls `[approval] after_refusal` sent to a person: each named something a
+   * call refused earlier in the turn had named, and would otherwise have run
+   * unasked. Absent when none were, which is every turn of a surface that
+   * does not declare it.
+   */
+  after_refusal_asks?: number;
   /** Per tool: calls made, refusals, apparatus failures. Separates "bash
    * failed 9 of 31 calls" from "bash succeeded 31/31 and the answer was still
    * wrong". */
   per_tool: Record<string, { calls: number; refusals: number; apparatus: number }>;
+  /**
+   * Observation masking this turn (`[context.mask_observations]`). Present on
+   * every turn of a surface that declares it, zeros included, so "armed and
+   * never fired" is distinguishable from "not declared"; absent otherwise.
+   * `tokens_saved` is ESTIMATED context occupancy removed at the batches
+   * (~4 characters per token), not tokens billed: a result masked at call 20
+   * is not resent on every call after it, which is where the spend falls.
+   */
+  masking?: { batches: number; observations: number; tokens_saved: number };
+  /**
+   * The environment bootstrap, on the turn that ran it (the first of the
+   * session; `[context] bootstrap`). `outcome` is a published enumeration
+   * (context_hygiene.ts BOOTSTRAP_OUTCOMES). `bytes` is the command's output
+   * before the cap, `tokens` the estimated size of the block every later call
+   * carries. Absent on every other turn and on a surface without a bootstrap.
+   */
+  bootstrap?: {
+    id: string;
+    platform: string;
+    outcome: BootstrapOutcome;
+    exit?: number;
+    bytes: number;
+    tokens: number;
+    truncated: boolean;
+    worktree_changed?: boolean | null;
+  };
+  /**
+   * Every model request the turn made, as gnomon built it: its estimate, the
+   * replayed reasoning and the steering it carried, and the trim before it;
+   * plus the window, the budget and the trims of the turn. What came back is
+   * `volatile.model_calls`. See docs/CONTRACTS.md §29.
+   */
+  model_calls?: ModelCallsRecord;
 }
 
 /**
@@ -3839,7 +4235,12 @@ export function buildSystemPrompt(
       dormant,
       `${basename(state.config.gnomonDir)}/${SKILLS_DIR}`
     ) + runNotesBlock(state)
-  ) + platformBlock() + `\n\n${sessionModeBlock(state.interactive === true && !opts.delegated)}`;
+  ) + platformBlock() + `\n\n${sessionModeBlock(state.interactive === true && !opts.delegated)}` +
+    // Last, and only once a bootstrap has run: "" otherwise, so a surface
+    // without one builds the prompt it always did. Appended rather than
+    // placed, so the turn that runs the bootstrap can extend the prompt it
+    // already built by exactly this text.
+    (state.bootstrap?.block ?? "");
 }
 
 /** A turn's model-free outcome, as the shadow's `turn_end` record carries it. */
@@ -3875,7 +4276,9 @@ export async function runAgenticTurn(
   messages: ChatMessage[],
   deps: TurnDeps,
   /** 0 for a turn a person asked for; 1 for one the `task` tool delegated. */
-  depth: number = 0
+  depth: number = 0,
+  /** A delegated sub-turn records its requests in its parent's record. */
+  parentLedger?: CallLedger
 ): Promise<TurnResult> {
   const config = state.config;
 
@@ -3954,6 +4357,12 @@ export async function runAgenticTurn(
     else say(line);
   };
 
+  // `max_context_tokens = "auto"`: the endpoint's window, asked once per
+  // process and cached, so a caller that settled the route already (runTask,
+  // runSessionTurn, the session start) costs nothing here. Sub-turns and chain
+  // stages build their own routes and are settled by this line.
+  route = await settleContextWindows(config, route, { ui: deps.ui, say, warn, audit: deps.audit });
+
   // The loop's own numbers, from the surface rather than from this file. Read
   // once per turn so a `[loop]` block is hashed into the record that describes
   // the turn it governed, exactly as [resilience] and [context] already are.
@@ -3966,6 +4375,9 @@ export async function runAgenticTurn(
     toolSet.schemas = toolSet.schemas.filter((t) => t.function.name !== "task");
   }
   const offered = new Set(toolSet.schemas.map((t) => t.function.name));
+  // The definitions this turn offers, hashed for the turn record's `wire`
+  // (tools_hash.ts). Read, never changed: what goes out is toolSet.schemas.
+  const offeredHash = toolsHash(toolSet.schemas);
 
   const policy = config.policy ?? {};
   // One resolver each, shared with `gnomon guard`, so another harness's call
@@ -3991,6 +4403,10 @@ export async function runAgenticTurn(
         return ok;
       }
     : deps.approve;
+  // `[approval] after_refusal = "ask"`: a call that reaches for what was just
+  // refused goes to a person (after_refusal.ts). Off unless declared, and then
+  // nothing below reads it.
+  const afterRefusal = new AfterRefusalWindow(resolveAfterRefusal(config));
 
   const ctx: ToolContext = {
     audit: deps.audit,
@@ -4012,6 +4428,10 @@ export async function runAgenticTurn(
     approve,
     timeoutMs: toolTimeoutMs(config),
     maxOutputBytes: 32_000,
+    // `max_lines` on the bash and read declarations (CX3, opt-in). Absent
+    // unless declared, so a surface that declares neither builds the same
+    // context as before.
+    ...((maxLines) => (maxLines ? { maxLines } : {}))(resolveMaxLines(config)),
     // Created once per session and memoised, so file numbering is continuous
     // across turns. Before a session id is assigned there is still a process
     // to name, and scratch from an unnamed run is still better than bytes
@@ -4071,7 +4491,8 @@ export async function runAgenticTurn(
             { role: "user" as const, content: instruction },
           ],
           deps,
-          depth + 1
+          depth + 1,
+          ledger
         );
         return {
           content: sub.content,
@@ -4201,13 +4622,66 @@ export async function runAgenticTurn(
   // Observation only. Nothing below reads these back to decide anything — the
   // moment one of them gates a call, this stops being a record and becomes
   // control, and the nudge regression is the reminder of what that costs.
+  const stallSignals = new StallSignals();
   const counters: TurnCounters = {
     writes: 0,
     worktree_moves: 0,
     nudges: 0,
     final_step_was_write: false,
     per_tool: {},
+    stall_signals: stallSignals.counters,
   };
+  // The stall detectors (LP5), log-only like the counters above: they see each
+  // executed call after its tool_call record, write `stall_signal` records, and
+  // the loop never asks them anything. A detector that throws stops observing
+  // and says so on the counters; the turn goes on exactly as it would have.
+  const observeStall = (call: ToolCall, outcome: ToolOutcome, target: string): void => {
+    if (counters.stall_signals?.error !== undefined) return;
+    try {
+      const fires = stallSignals.observe(
+        {
+          tool: call.name,
+          target,
+          code: outcome.code,
+          summary: outcome.summary,
+          worktree_changed: outcome.worktree_changed,
+        },
+        steps
+      );
+      for (const fire of fires) deps.audit?.write("stall_signal", { role, ...fire });
+    } catch (e) {
+      try {
+        counters.stall_signals = {
+          ...(counters.stall_signals as StallSignalCounters),
+          error: String(e instanceof Error ? e.message : e).slice(0, 200),
+        };
+      } catch {
+        counters.stall_signals = undefined;
+      }
+    }
+  };
+
+  // The per-call mediator record (mediators.ts): what each request carried
+  // and what came back. Told by callEndpoint after each request and read by
+  // nothing here, except under `[context] token_estimate = "calibrated"`,
+  // where the trims below ask it for their budget. A delegated sub-turn adds
+  // its requests to its parent's.
+  const estimateMode = resolveContext(config).token_estimate;
+  const ledger =
+    parentLedger ??
+    new CallLedger({
+      estimate: estimateTokens,
+      windowOf: (t) => resolveContext(config, t).max_context_tokens,
+      target: route.target,
+      mode: estimateMode,
+      calibration: estimateMode === "calibrated" ? (state.tokenCalibration ??= new Map()) : undefined,
+      audit: deps.audit ? (fields) => deps.audit!.write("model_call", fields) : undefined,
+      role,
+    });
+  const observe = ledger.observer({ depth, leg: () => leg });
+  if (depth === 0) counters.model_calls = ledger.sent;
+  const measured = (): ModelCallsMeasured | undefined => (depth === 0 ? ledger.measured() : undefined);
+  const estOf = (ms: ChatMessage[]): number => ms.reduce((n, m) => n + estimateTokens(m.content), 0);
 
   // What the worktree looked like BEFORE this turn. Without it, `tree_delta`
   // reports the whole dirty tree as the turn's doing -- including for a
@@ -4230,6 +4704,22 @@ export async function runAgenticTurn(
     t[field]++;
   };
 
+  // The live record reads the turn through this, after each model reply and
+  // each tool call (live_record.ts). It copies what it reads; nothing here is
+  // read back, so the turn is the same turn with or without it.
+  const live = depth === 0 ? deps.live : undefined;
+  live?.attach(() => ({
+    role,
+    model: usedModel,
+    endpoint: usedTarget.endpoint,
+    endpoint_url: usedTarget.url,
+    wire: wireOf(adaptTarget(state, usedTarget)),
+    toolSteps: steps,
+    toolLog,
+    usage: turnUsage,
+    counters,
+  }));
+
   // A cancelled turn still changed the tree if it got that far, and that is
   // exactly when someone wants to know what it left behind.
   const cancelled = (): TurnResult => {
@@ -4244,13 +4734,14 @@ export async function runAgenticTurn(
     model: usedModel,
     endpoint: usedTarget.endpoint,
     endpoint_url: usedTarget.url,
-    wire: wireOf(adaptTarget(state, usedTarget)),
+    wire: { ...wireOf(adaptTarget(state, usedTarget)), tools_hash: offeredHash },
     verify: verifyOutcome,
     toolSteps: steps,
     toolLog,
     usage: turnUsage,
     stop_reason: "cancelled",
     counters,
+    modelCalls: measured(),
     surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
     };
   };
@@ -4301,6 +4792,7 @@ export async function runAgenticTurn(
       usage: turnUsage,
       stop_reason: "tamper",
       counters,
+      modelCalls: measured(),
       surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
     };
   };
@@ -4378,6 +4870,17 @@ export async function runAgenticTurn(
    * silent: a turn that ran with fewer tools than the surface declared is
    * exactly what system.md says must never pass unremarked.
    */
+  /**
+   * Where a retried call is announced. Every attempt is announced -- the
+   * comment on callEndpointWithRetry says a silent retry would make a session
+   * that took three tries read as one -- but the lines went to `deps.say`,
+   * which `gnomon task --json` closes, so on the scripted path a recovered
+   * 500, 429, timeout or broken stream left no trace at all. Found by
+   * `gnomon chaos` (v0.4.0: every single-fault case of those classes scored
+   * SILENT). `deps.warn` when the caller gave one, so `--json` keeps them on
+   * stderr; `deps.say` otherwise, so the interactive loop is byte-identical.
+   */
+  const announceRetry = deps.warn ?? deps.say;
   const call = async (declared: typeof route.target) => {
     let target = adaptTarget(state, declared);
     const offer = noTools.has(target.model) ? [] : toolSet.schemas;
@@ -4387,10 +4890,11 @@ export async function runAgenticTurn(
       offer,
       resilience.request_timeout_ms,
       resilience,
-      deps.say,
+      announceRetry,
       deps.ui,
       deps.signal,
-      state.sessionId
+      state.sessionId,
+      observe
     );
     turnUsage = addUsage(turnUsage, r.usage);
     countUnmetered(r);
@@ -4408,10 +4912,11 @@ export async function runAgenticTurn(
         offer,
         resilience.request_timeout_ms,
         resilience,
-        deps.say,
+        announceRetry,
         deps.ui,
         deps.signal,
-        state.sessionId
+        state.sessionId,
+        observe
       );
       turnUsage = addUsage(turnUsage, r.usage);
       countUnmetered(r);
@@ -4452,10 +4957,11 @@ export async function runAgenticTurn(
         offer,
         resilience.request_timeout_ms,
         resilience,
-        deps.say,
+        announceRetry,
         deps.ui,
         deps.signal,
-        state.sessionId
+        state.sessionId,
+        observe
       );
       turnUsage = addUsage(turnUsage, r.usage);
       countUnmetered(r);
@@ -4488,7 +4994,7 @@ export async function runAgenticTurn(
         detail: { model: target.model, role },
       });
       deps.progress.start(`${target.model} — without tools`);
-      r = await callEndpoint(target, working, [], modelTimeoutMs(config), deps.signal, state.sessionId);
+      r = await callEndpoint(target, working, [], modelTimeoutMs(config), deps.signal, state.sessionId, observe);
       turnUsage = addUsage(turnUsage, r.usage);
       countUnmetered(r);
     }
@@ -4502,9 +5008,192 @@ export async function runAgenticTurn(
   // shut. Measured: R1H (2026-11-02) lost 20 of 30 local-model cells to a 502
   // outage. The next turn starts on the primary again.
   let onFallback = false;
+  // Content parts are a dialect, not an accident: said once per turn, not per reply.
+  let saidContentParts = false;
+
+  /**
+   * The record guard, created on the session's first tool call so its
+   * baseline is the records as the session found them. Session start: the
+   * records against the last checkpoint a session left (record_tamper.ts).
+   * Recorded, and accept is blocked, but this turn is not stopped: whatever
+   * changed them happened before it.
+   */
+  const ensureRecordGuard = (): RecordGuard => {
+    if (!state.recordGuard) {
+      const since = compareWithCheckpoint(state.config);
+      if (since) noteRecords(since);
+      state.recordGuard = RecordGuard.for(state.config);
+    }
+    return state.recordGuard;
+  };
+
+  // ---------------------------------------------------------------------
+  // Context hygiene (context_hygiene.ts). Both resolve to null unless the
+  // surface declares them, and then nothing below runs: no metadata is kept,
+  // no counter is written, no command is run, and the prompt is the one the
+  // caller built.
+  //
+  // Observation masking: a WeakMap rather than a field on the message, so the
+  // messages sent are the objects they always were.
+  const mask = resolveMasking(config);
+  const observations = new WeakMap<ChatMessage, ObservationMeta>();
+  let observationSeq = 0;
+  let lastChangeSeq = 0;
+  if (mask) counters.masking = { batches: 0, observations: 0, tokens_saved: 0 };
+
+  // The environment bootstrap: once per session, on its first top-level turn
+  // (a delegated sub-turn inherits the snapshot through buildSystemPrompt).
+  const boot = depth === 0 && state.bootstrap === undefined ? resolveBootstrap(config) : null;
+  if (boot) {
+    const t0 = Date.now();
+    const bootCall: ToolCall = { name: "bash", args: { command: boot.command ?? "" } };
+    let outcome: BootstrapOutcome = "unavailable";
+    let ran: ToolOutcome | undefined;
+    if (boot.command !== null) {
+      // Before the command, as before any tool: the guard's baseline.
+      const guard = ensureRecordGuard();
+      deps.progress.stop();
+      say(
+        paint(deps.ui, "cyan", `  ⚙ bootstrap`) +
+          paint(deps.ui, "gray", ` ${boot.id} (${boot.platform}, ${boot.probes!.length} probe(s))`)
+      );
+      // The surface's command, not the model's, so it runs the way [verify]
+      // does: through the ordinary bash tool, under this role's bash_deny and
+      // bash_allow, the sandbox and exec, asked for only under `always`.
+      ran = await executeTool(
+        "bash",
+        { command: boot.command },
+        {
+          ...ctx,
+          gate: (gate === "always" ? "always" : "never") as ApprovalGate,
+          allow: "strict" as SurfaceConsent,
+          timeoutMs: Math.min(ctx.timeoutMs, boot.timeout_ms),
+        },
+        new Set(["bash"])
+      );
+      const bucket = mapBucket(ran.code);
+      outcome = bucket === "result" ? "ok" : bucket === "refusal" ? "refused" : "failed";
+      if (ran.surface_drift) surfaceChanges.push(ran.surface_drift);
+      toolLog.push(`bootstrap ${boot.id} — ${ran.summary}`);
+      const during = guard.check("during_call");
+      if (during?.changes.length) {
+        state.bootstrap = { id: boot.id, block: "" };
+        return tampered(during, bootCall);
+      }
+      if (during) noteRecords(during, bootCall);
+    }
+    const snap =
+      outcome === "ok" && ran
+        ? bootstrapSnapshot(ran.content, boot.max_bytes, boot.command ?? "")
+        : { text: "", bytes: ran ? Buffer.byteLength(ran.content, "utf8") : 0, truncated: false };
+    const block = outcome === "ok" ? bootstrapBlock(boot.id, boot.platform, snap.text) : "";
+    // Set whatever happened, so a session runs the bootstrap once, not once
+    // per turn until it works.
+    state.bootstrap = { id: boot.id, block };
+    if (block) {
+      // This turn's prompt was built before the snapshot existed. Extend it by
+      // exactly the text buildSystemPrompt appends from now on, so the next
+      // turn's system prompt starts with the same bytes as this one's.
+      if (working[0]?.role === "system") {
+        working[0] = { ...working[0], content: working[0].content + block };
+      } else {
+        working.unshift({ role: "system", content: block.trimStart() });
+      }
+    }
+    counters.bootstrap = {
+      id: boot.id,
+      platform: boot.platform,
+      outcome,
+      ...(ran?.shell_exit !== undefined ? { exit: ran.shell_exit } : {}),
+      bytes: snap.bytes,
+      tokens: estimateTokens(block),
+      truncated: snap.truncated,
+      ...(ran && ran.worktree_changed !== undefined ? { worktree_changed: ran.worktree_changed } : {}),
+    };
+    deps.audit?.write("bootstrap", {
+      role,
+      id: boot.id,
+      platform: boot.platform,
+      outcome,
+      command: boot.command === null ? null : deps.audit.action(boot.command),
+      ...(ran ? { code: ran.code, bucket: mapBucket(ran.code), summary: ran.summary } : {}),
+      ...(ran?.shell_exit !== undefined ? { exit: ran.shell_exit } : {}),
+      bytes: snap.bytes,
+      tokens: counters.bootstrap.tokens,
+      truncated: snap.truncated,
+      ...(ran && ran.worktree_changed !== undefined ? { worktree_changed: ran.worktree_changed } : {}),
+      duration_ms: Date.now() - t0,
+    });
+    if (outcome === "ok") {
+      say(
+        paint(
+          deps.ui,
+          "gray",
+          `    ✓ snapshot ${snap.bytes} bytes → ~${counters.bootstrap.tokens} tok in the system prompt` +
+            (snap.truncated ? ` (cut at ${boot.max_bytes} bytes)` : "")
+        )
+      );
+    } else {
+      warn(
+        paint(
+          deps.ui,
+          "yellow",
+          outcome === "unavailable"
+            ? `  [bootstrap] ${boot.id} declares no ${boot.platform} probes — this session runs without an environment snapshot.`
+            : `  [bootstrap] ${boot.id} ${outcome} (${ran?.summary ?? ""}) — this session runs without an environment snapshot.`
+        )
+      );
+    }
+    // Declared read-only, and the stamp says otherwise: said, and recorded in
+    // counters.bootstrap.worktree_changed, never fixed up behind the operator.
+    if (ran?.worktree_changed === true) {
+      warn(
+        paint(
+          deps.ui,
+          "yellow",
+          `  [bootstrap] ${boot.id} changed the worktree, and a bootstrap is meant to be read-only. Check its probes.`
+        )
+      );
+    }
+    deps.progress.start(`${route.model}`);
+  }
 
   for (;;) {
     if (deps.signal?.aborted) return cancelled();
+
+    // One masking batch before the call, or none. Batches only, never one
+    // result per call: between two batches the request grows only at its
+    // end, so the endpoint's cached prefix stays valid (context_hygiene.ts).
+    if (mask) {
+      const next = onFallback && route.fallback ? route.fallback : route.target;
+      const window = resolveContext(config, next).max_context_tokens;
+      const batch = maskObservations(working, observations, mask, window, lastChangeSeq);
+      if (batch) {
+        const m = counters.masking!;
+        m.batches++;
+        m.observations += batch.masked;
+        m.tokens_saved += batch.tokens_saved;
+        say(
+          paint(
+            deps.ui,
+            "gray",
+            `  [context] masked ${batch.masked} older tool result(s), ~${batch.tokens_saved} tok ` +
+              `(batch ${m.batches}, ~${batch.tokens_before} → ~${batch.tokens_after} of ${window})`
+          )
+        );
+        deps.audit?.write("context_mask", {
+          role,
+          batch: m.batches,
+          step: steps,
+          masked: batch.masked,
+          tokens_saved: batch.tokens_saved,
+          tokens_before: batch.tokens_before,
+          tokens_after: batch.tokens_after,
+          window,
+          first_index: batch.first_index,
+        });
+      }
+    }
 
     let result: InferenceResult;
     if (onFallback && route.fallback) {
@@ -4515,6 +5204,8 @@ export async function runAgenticTurn(
       result = await call(route.target);
       usedModel = route.model;
     }
+    // The reply's tokens are in the turn's usage now; the record says so.
+    live?.step();
 
     if (deps.signal?.aborted) return cancelled();
 
@@ -4568,6 +5259,31 @@ export async function runAgenticTurn(
 
     code = worse(code, result.code);
 
+    // Two ways a reply arrives readable but not as sent. Both used to pass in
+    // silence (gnomon chaos: schema.content, corrupt.stream). Said, not acted
+    // on: the reply is still the best one there is.
+    if (result.contentParts && !saidContentParts) {
+      saidContentParts = true;
+      warn(
+        paint(
+          deps.ui,
+          "yellow",
+          `  [endpoint] ${usedModel} sent its content as an array of content parts, not a string — ` +
+            `read as the text of its parts (said once per turn)`
+        )
+      );
+    }
+    if (result.droppedChunks) {
+      warn(
+        paint(
+          deps.ui,
+          "yellow",
+          `  [endpoint] ${result.droppedChunks} streamed chunk(s) from ${usedModel} were not valid JSON ` +
+            `and were dropped — the reply may be missing text`
+        )
+      );
+    }
+
     // A turn with no tool calls AND no text is not an answer. It was recorded as
     // stop_reason "answered", which is how a loop that gave up got counted as a
     // model that concluded. Re-prompt once — as a user turn, because the only
@@ -4598,7 +5314,9 @@ export async function runAgenticTurn(
         malformedOut = true;
         return false;
       }
-      say(
+      // `warn`, not `say`: a repair turn is a fault the run recovered from, and
+      // on `gnomon task --json` `say` is closed (see announceRetry).
+      warn(
         paint(
           deps.ui,
           "yellow",
@@ -4657,7 +5375,7 @@ export async function runAgenticTurn(
       consecutiveCut++;
       if (consecutiveCut <= loop.max_consecutive_malformed && steps < maxTotal) {
         const name = cutCalls[0]!.name || "tool";
-        say(
+        warn(
           paint(
             deps.ui,
             "yellow",
@@ -4694,7 +5412,7 @@ export async function runAgenticTurn(
       // missing one -- and echoing that back as the model's answer, with
       // "continue from where it stopped", is what P2G's runs were sent.
       const spentOnThinking = !result.content.trim() || result.reasoningOnly === true;
-      say(
+      warn(
         paint(
           deps.ui,
           "yellow",
@@ -4792,7 +5510,7 @@ export async function runAgenticTurn(
           `Reply with text this time, not a tool call: what is the current ` +
             `state of the work, and what is the next thing that needs doing?`,
         ];
-        say(
+        warn(
           paint(
             deps.ui,
             "yellow",
@@ -4827,14 +5545,25 @@ export async function runAgenticTurn(
     // progress since the first.
     if (result.code === 13 && steps > overflowTrimmedAt && steps < maxTotal) {
       overflowTrimmedAt = steps;
-      const budget = Math.max(
-        1024,
-        Math.floor(resolveContext(config, usedTarget).max_context_tokens * 0.5)
+      // Half the window of the endpoint answering, at least 1024; divided by
+      // the measured ratio only under token_estimate = "calibrated".
+      const { budget, ratio } = ledger.trimBudget(
+        overflowBudget(resolveContext(config, usedTarget).max_context_tokens),
+        usedTarget
       );
       const trimmed = trimWorking(working, budget);
       if (trimmed.dropped > 0) {
+        const estBefore = estOf(working);
         working.length = 0;
         working.push(...trimmed.messages);
+        ledger.trimmed(working, {
+          why: "overflow",
+          dropped: trimmed.dropped,
+          before: estBefore,
+          after: estOf(working),
+          budget,
+          ...(ratio !== undefined ? { ratio } : {}),
+        });
         say(
           paint(
             deps.ui,
@@ -5044,7 +5773,11 @@ export async function runAgenticTurn(
           // Already reported above, with the audit record saying why.
         } else if (!passed || pinsNothing) {
           verifyOutcome = "failed";
-          say(paint(deps.ui, "yellow",
+          // `warn`: a declared check failing is not chatter, and on
+          // `gnomon task --json` it was the one line saying so (gnomon chaos,
+          // late_system_dropped: a check that failed every round it was given
+          // ended exit 0, stop_reason answered, stderr empty).
+          warn(paint(deps.ui, "yellow",
             `    ⚠ verify failed — handing the turn back`));
           working.push({
           role: "assistant",
@@ -5085,7 +5818,7 @@ export async function runAgenticTurn(
         model: usedModel,
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
-        wire: wireOf(adaptTarget(state, usedTarget)),
+        wire: { ...wireOf(adaptTarget(state, usedTarget)), tools_hash: offeredHash },
         ...keepReasoning(result.reasoning),
         verify: verifyOutcome,
         toolSteps: steps,
@@ -5099,6 +5832,7 @@ export async function runAgenticTurn(
             ? "truncated"
             : "answered",
         counters,
+        modelCalls: measured(),
         surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
       };
     }
@@ -5138,7 +5872,7 @@ export async function runAgenticTurn(
     // wraps up. One usable call in the reply is progress and clears the count.
     if (!malformedOut && !cutOut && result.toolCalls.length > 0) {
       if (result.toolCalls.every((c) => isMalformedCall(c, offered))) {
-        repairMalformed("no usable tool call in that reply (malformed arguments or unknown tool)");
+        repairMalformed(`no usable tool call in that reply (${describeMalformed(result.toolCalls, offered)})`);
       } else {
         consecutiveMalformed = 0;
       }
@@ -5214,7 +5948,8 @@ export async function runAgenticTurn(
         [],
         modelTimeoutMs(config),
         deps.signal,
-        state.sessionId
+        state.sessionId,
+        observe
       );
       turnUsage = addUsage(turnUsage, closing.usage);
       countUnmetered(closing);
@@ -5228,7 +5963,8 @@ export async function runAgenticTurn(
           [],
           modelTimeoutMs(config),
           deps.signal,
-          state.sessionId
+          state.sessionId,
+          observe
         );
         turnUsage = addUsage(turnUsage, closing.usage);
         countUnmetered(closing);
@@ -5253,7 +5989,7 @@ export async function runAgenticTurn(
         model: usedModel,
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
-        wire: wireOf(adaptTarget(state, usedTarget)),
+        wire: { ...wireOf(adaptTarget(state, usedTarget)), tools_hash: offeredHash },
         verify: verifyOutcome,
         toolSteps: steps,
         toolLog,
@@ -5268,6 +6004,7 @@ export async function runAgenticTurn(
           ? { steps, repeats: loop.stall_repeats }
           : { steps, max_steps_total: maxTotal },
         counters,
+        modelCalls: measured(),
         surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
       };
     }
@@ -5279,16 +6016,26 @@ export async function runAgenticTurn(
       stepsThisLeg = 0;
 
       // The window of the endpoint answering, when it declares one: a cloud
-      // model was trimmed to 60% of a default sized for a local one.
-      const budget = Math.max(
-        1024,
-        Math.floor(resolveContext(config, usedTarget).max_context_tokens * 0.6)
+      // model was trimmed to 60% of a default sized for a local one. Divided
+      // by the measured ratio only under token_estimate = "calibrated".
+      const { budget, ratio } = ledger.trimBudget(
+        legBudget(resolveContext(config, usedTarget).max_context_tokens),
+        usedTarget
       );
       const before = working.length;
       const trimmed = trimWorking(working, budget);
       if (trimmed.dropped > 0) {
+        const estBefore = estOf(working);
         working.length = 0;
         working.push(...trimmed.messages);
+        ledger.trimmed(working, {
+          why: "leg",
+          dropped: trimmed.dropped,
+          before: estBefore,
+          after: estOf(working),
+          budget,
+          ...(ratio !== undefined ? { ratio } : {}),
+        });
         say(
           paint(
             deps.ui,
@@ -5378,15 +6125,7 @@ export async function runAgenticTurn(
     // background job a previous call started, say -- is caught before more
     // tools run. Prefetched calls below are read-only, so they need no
     // snapshot of their own.
-    if (!state.recordGuard) {
-      // Session start: the records against the last checkpoint a session
-      // left (record_tamper.ts). Recorded, and accept is blocked, but this
-      // turn is not stopped: whatever changed them happened before it.
-      const since = compareWithCheckpoint(state.config);
-      if (since) noteRecords(since);
-      state.recordGuard = RecordGuard.for(state.config);
-    }
-    const guard = state.recordGuard;
+    const guard = ensureRecordGuard();
     {
       const between = guard.check("between_calls");
       if (between?.changes.length) return tampered(between);
@@ -5464,11 +6203,15 @@ export async function runAgenticTurn(
       if (recentCalls.length > Math.max(loop.stall_repeats * 2, STALL_WINDOW)) {
         recentCalls.shift();
       }
-      const gated = needsApproval(call.name, gate) && offered.has(call.name);
+      // `[approval] after_refusal`: the reason this call goes to a person even
+      // though the gate or a standing approval would have let it run. Null --
+      // always, unless a surface opted in -- changes nothing below.
+      const escalated = offered.has(call.name) ? afterRefusal.check(call.name, call.args) : null;
+      const gated = (escalated !== null || needsApproval(call.name, gate)) && offered.has(call.name);
       // A call the operator has to answer for is one they are watching, and
       // its prompt is written straight to the console rather than through
       // `say` — so anything held back has to land before it.
-      const standing = deps.standingApproval?.() ?? false;
+      const standing = escalated === null && (deps.standingApproval?.() ?? false);
       const askedIndividually = gated && !standing;
       if (askedIndividually) flushFold();
       deps.progress.stop();
@@ -5487,14 +6230,38 @@ export async function runAgenticTurn(
             describe: describeCall(call),
             gated,
             depth,
+            ...(escalated !== null ? { escalated: true } : {}),
           }
         : undefined;
       if (eventCall) deps.events?.toolStart?.(eventCall);
 
       callApproval = undefined;
-      const outcome: ToolOutcome =
-        (await prefetched.get(callIndex)) ??
-        (await executeTool(call.name, call.args, ctx, offered));
+      let outcome: ToolOutcome;
+      if (escalated !== null) {
+        // Asked of a person this once. The gate reads "always" for this call
+        // and the request says why, which is what keeps a standing approval
+        // from answering it. Restored straight after: an escalatable call is
+        // never prefetched, and calls run one at a time from here, so nothing
+        // else reads ctx while it is changed. A call the rules refuse is still
+        // refused before anyone is asked.
+        const declared = { gate: ctx.gate, approve: ctx.approve };
+        ctx.gate = "always";
+        ctx.approve = (req) => {
+          counters.after_refusal_asks = (counters.after_refusal_asks ?? 0) + 1;
+          return declared.approve({ ...req, escalated });
+        };
+        try {
+          outcome = await executeTool(call.name, call.args, ctx, offered);
+        } finally {
+          ctx.gate = declared.gate;
+          ctx.approve = declared.approve;
+        }
+      } else {
+        outcome =
+          (await prefetched.get(callIndex)) ??
+          (await executeTool(call.name, call.args, ctx, offered));
+      }
+      afterRefusal.observe(call.name, call.args, mapBucket(outcome.code) === "refusal");
       code = worse(code, outcome.code);
       if (outcome.surface_drift) surfaceChanges.push(outcome.surface_drift);
       toolLog.push(outcome.summary);
@@ -5576,15 +6343,20 @@ export async function runAgenticTurn(
         shellMayHaveTouched = true;
       }
 
+      // The target is metadata; the content it carries is not. For bash the
+      // target IS the action, so it is the whole command (redacted), not
+      // the 70-character line the terminal prints (AuditTrail.action).
+      // Computed once: the stall detectors below see what the record says.
+      const callTarget =
+        call.name === "bash" && typeof call.args.command === "string"
+          ? deps.audit
+            ? deps.audit.action(call.args.command)
+            : call.args.command
+          : describeCall(call);
       deps.audit?.write("tool_call", {
         role,
         tool: call.name,
-        // The target is metadata; the content it carries is not. For bash the
-        // target IS the action, so it is the whole command (redacted), not
-        // the 70-character line the terminal prints (AuditTrail.action).
-        target: call.name === "bash" && typeof call.args.command === "string"
-          ? deps.audit.action(call.args.command)
-          : describeCall(call),
+        target: callTarget,
         gated,
         code: outcome.code,
         bucket: mapBucket(outcome.code),
@@ -5596,6 +6368,7 @@ export async function runAgenticTurn(
         args: deps.audit.text(JSON.stringify(call.args)),
         result: deps.audit.text(outcome.content),
       });
+      observeStall(call, outcome, callTarget);
       // After the call and its record: did it change gnomon's own records?
       // Not for read-only tools, which cannot.
       if (!concurrentSafe(call.name)) {
@@ -5604,6 +6377,9 @@ export async function runAgenticTurn(
         if (during) noteRecords(during, call);
       }
       if (eventCall) deps.events?.toolEnd?.(eventCall, outcome);
+      // After the guard's check, so the guard compares the records the call
+      // left; the record's own write is noted as gnomon's (live_record.ts).
+      live?.step();
 
       // After the call and its record, never before: the shadow is told what
       // happened and the loop takes nothing back. `turnUsage` here covers the
@@ -5677,12 +6453,28 @@ export async function runAgenticTurn(
       }
       // think / off: no per-tool line — the spinner still shows activity.
 
-      working.push({
+      const observation: ChatMessage = {
         role: "tool",
         content: outcome.content,
         tool_call_id: call.id,
         tool_name: call.name,
-      });
+      };
+      working.push(observation);
+      if (mask) {
+        observationSeq++;
+        // A change to the worktree is what "acted on" means for a failure
+        // the masking keeps (context_hygiene.ts maskObservations).
+        if (
+          ((call.name === "write" || call.name === "edit") && outcome.code === 0) ||
+          outcome.worktree_changed === true
+        ) {
+          lastChangeSeq = observationSeq;
+        }
+        observations.set(
+          observation,
+          observationMeta(call.name, call.args, describeCall(call), outcome, observationSeq)
+        );
+      }
       // Both branches did the same thing. The spinner was stopped before the
       // tool ran, so this restarts it either way.
       deps.progress.start(`${usedModel} — ${steps} tool call(s) so far`);
@@ -5710,7 +6502,7 @@ export async function runAgenticTurn(
           `  [tools] ${callsSinceWrite} call(s) without changing a file — nudging to decide`
         )
       );
-      working.push({
+      working.push(ledger.tag({
         role: "system",
         content:
           `You have run ${callsSinceWrite} tool calls without changing a file. ` +
@@ -5719,7 +6511,7 @@ export async function runAgenticTurn(
           `review -- stop calling tools and answer it. If the task ` +
           `cannot be completed, say so plainly and stop — state what you were ` +
           `unable to do and why. Do not keep investigating without acting.`,
-      });
+      }, "nudge"));
       deps.progress.start(`${usedModel} — ${steps} tool call(s) so far`);
     }
 
@@ -5741,7 +6533,7 @@ export async function runAgenticTurn(
           `  [tools] budget ${steps}/${maxTotal} — urging convergence (${left} call(s) left)`
         )
       );
-      working.push({
+      working.push(ledger.tag({
         role: "system",
         content:
           `You have used ${steps} of ${maxTotal} tool calls — about ${left} ` +
@@ -5749,7 +6541,7 @@ export async function runAgenticTurn(
           `Stop exploring now. Apply and submit what already works. If the task ` +
           `cannot be completed with what you have, say so plainly in your first ` +
           `line, state what blocked it, and stop — do not start new investigation.`,
-      });
+      }, "converge"));
       deps.progress.start(`${usedModel} — ${steps} tool call(s), converging`);
     }
   }
@@ -6007,6 +6799,30 @@ export async function listModels(config: GnomonConfig): Promise<EndpointModels[]
 // ---------------------------------------------------------------------------
 
 /** One task run, as data. Separated so a caller can compare runs. */
+/**
+ * The turn's own window, budget and trims, for the `turn` and `chain_stage`
+ * audit records.
+ *
+ * `context_turns`, `context_dropped` and `context_tokens` beside them describe
+ * the HISTORY a turn was given: earlier turns replayed, earlier turns left
+ * out, and the estimate of the first request. A `gnomon task` run has no
+ * earlier turn, so the first two are 0 by construction -- they read 0 in all
+ * 450 task turn records the 2026-11-04 causal analysis read -- and nothing in
+ * the record said what window the turn ran under or whether it trimmed. These
+ * do. Empty when no request was recorded.
+ */
+export function contextFields(counters: TurnCounters | undefined): Record<string, number | string> {
+  const mc = counters?.model_calls;
+  if (!mc) return {};
+  return {
+    context_window: mc.window,
+    context_budget: mc.budget,
+    context_estimate: mc.estimate,
+    context_trims: mc.trims.leg + mc.trims.overflow,
+    context_trimmed: mc.trims.dropped,
+  };
+}
+
 export interface TaskRecord {
   /** Content hash of .gnomon/ — what determined this behaviour */
   surface_hash: string;
@@ -6065,8 +6881,18 @@ export interface TaskRecord {
   /** Why the tool loop ended — a separate axis from `bucket`, never a
    * composite verdict with it. */
   stop_reason: StopReason;
-  /** The numbers behind `stop_reason`, when it has any. */
-  stop_detail?: { steps?: number; max_steps_total?: number; repeats?: number };
+  /** The numbers behind `stop_reason`, when it has any. `signal` names the
+   * signal that ended a `killed` run. */
+  stop_detail?: { steps?: number; max_steps_total?: number; repeats?: number; signal?: KillSignal };
+  /**
+   * The declared `[verify]` check's outcome, when one ran. TurnResult has
+   * carried it since its comment said a `gnomon task --json` consumer must be
+   * able to tell a failed check from a clean pass -- and runTask never copied
+   * it here, so that consumer could not (gnomon chaos, late_system_dropped:
+   * a check that failed every round read `answered`, exit 0). Absent when no
+   * check ran, so a record without one is the record it always was.
+   */
+  verify?: TurnResult["verify"];
   /** Counts the loop already kept and used to discard. */
   counters: TurnCounters;
   /**
@@ -6108,6 +6934,18 @@ export interface TaskRecord {
     model_ms?: number;
     /** Metered model calls: those whose response reported usage. */
     requests?: number;
+    /**
+     * The declared `[shadow]`'s coverage: decisions it was asked to record and
+     * decisions it recorded (shadow.ts ShadowCoverage). Absent without one.
+     */
+    shadow?: ShadowCoverage;
+    /**
+     * What came back for each model request: provider tokens (prompt,
+     * cached, completion, reasoning), reasoning characters, code and clock.
+     * The requests themselves are `counters.model_calls`. Absent when no
+     * request went out. docs/CONTRACTS.md §29.
+     */
+    model_calls?: ModelCallsMeasured;
   };
 }
 
@@ -6124,6 +6962,37 @@ export interface RunTaskOptions {
    * decision produced -- clamped or not -- so this only reports it.
    */
   trust?: TrustOutcome;
+  /**
+   * Where the run's stderr lines go: progress labels, `verbose` notes and the
+   * warnings `--json` must not silence. `process.stderr` when absent, which is
+   * what `gnomon task` uses. `gnomon chaos` passes a sink so it can score what
+   * an operator would have been shown, without the run writing to its own
+   * terminal.
+   */
+  stderr?: { write(text: string): unknown };
+  /**
+   * Filled by the run, for a caller that handles signals (`gnomon task`):
+   * `kill` writes the record as it stands as `killed`, appends the `turn`
+   * audit record and `session_end`, and returns the record. After the run has
+   * concluded it returns the final record and writes nothing. Synchronous, so
+   * a signal handler can call it. runTask installs no handler itself: a
+   * caller running tasks in-process (`gnomon skill trial`) keeps its own.
+   */
+  interrupt?: TaskInterrupt;
+}
+
+/** See RunTaskOptions.interrupt. */
+export interface TaskInterrupt {
+  kill?: (signal: KillSignal) => TaskRecord | null;
+}
+
+/**
+ * `gnomon task`'s exit status: the bucket, as docs/CONTRACTS.md §1 says --
+ * 0 result, 2 refusal, 10 apparatus_failure. One function so the command and
+ * anything scoring a record (`gnomon chaos`) cannot read it two ways.
+ */
+export function taskExitCode(record: Pick<TaskRecord, "bucket">): 0 | 2 | 10 {
+  return record.bucket === "result" ? 0 : record.bucket === "refusal" ? 2 : 10;
 }
 
 /**
@@ -6249,21 +7118,26 @@ export async function runTask(
 
   const state: PromptState = { config, exchanges: [], currentRole: role };
   const ui: ResolvedUi = { ...resolveUi(config), spinner: false, color: false };
-  const route = routeRole(config, role);
+  // `let`, as are `shadow` and `trust` below: an MCP server whose tools
+  // changed since they were pinned clamps the run after its servers connect
+  // (settleMcpTools), and everything read from the declared grants is read
+  // again from the clamped ones.
+  let route = routeRole(config, role);
 
   const active = selectSkills(loadSkills(config), role, input);
   const systemPrompt = buildSystemPrompt(state, role, input);
   const built = buildMessages(state, systemPrompt, input);
 
+  const errOut = options.stderr ?? process.stderr;
   const note = (line: string) => {
-    if (options.verbose) process.stderr.write(`${line}\n`);
+    if (options.verbose) errOut.write(`${line}\n`);
   };
   // Degradations are not chatter and `--json` must not silence them. `note` is
   // gated on `options.verbose`, which `gnomon-cli` sets to `!args.json` -- so a
   // scripted run whose endpoint fell back, whose MCP server never connected, or
   // whose declared check was skipped printed nothing at all. stderr, always:
   // stdout stays clean JSON for the consumer that asked for it.
-  const warn = (line: string) => process.stderr.write(`${line}\n`);
+  const warn = (line: string) => errOut.write(`${line}\n`);
 
   // Everything recorded as a degradation, collected on its way to the trail, so
   // the RECORD carries it too. `[audit]` is off on a scaffolded surface, which
@@ -6275,10 +7149,17 @@ export async function runTask(
   const auditSettings = resolveAudit(config);
   const sessionId = `task-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
   const audit = new AuditTrail(auditSettings, sessionId);
+  // Set once `interrupt.kill` has written the killed turn and `session_end`.
+  // The trail is sealed then, and a turn that runs on in-process (nothing
+  // re-raised the signal) must not append to it: a record after session_end
+  // reads as a trail somebody appended to. The per-call `model_call` record
+  // of the request the kill cut off is the one that otherwise lands there.
+  let sealedByKill = false;
   // Writes through, and keeps a copy of the degradations. Structural, which is
   // why TurnDeps.audit is an interface rather than the class.
   const auditForTurn: TurnAudit = {
     write: (kind, fields) => {
+      if (sealedByKill) return;
       if (kind === "degradation") degradations.push(fields);
       audit.write(kind, fields);
     },
@@ -6288,9 +7169,11 @@ export async function runTask(
   const surface_hash = recomputeManifest(config.gnomonDir).surface_hash;
 
   // The decision-model shadow, when the surface declares one. Log-only: it is
-  // told what each turn did and changes none of it (shadow.ts).
+  // told what each turn did and changes none of it (shadow.ts). If it stops,
+  // that is `shadow_unreachable`, recorded through auditForTurn so the record
+  // carries it as well as the trail.
   const shadowStart = Date.now();
-  const shadow = ShadowRecorder.create(config, { warn });
+  let shadow = ShadowRecorder.create(config, { warn, audit: auditForTurn });
   // `--yes` answers for nobody; without it, nobody answers and the default is no.
   const shadowApprover = options.yes ? "flag" : "default";
 
@@ -6305,6 +7188,63 @@ export async function runTask(
     approvals: options.yes ? "granted" : "refused",
   });
   if (options.trust) audit.write("trust", { ...options.trust, root: resolve(config.gnomonDir, "..") });
+  let trust = options.trust;
+
+  // The record as the run goes, beside the trail (live_record.ts): opened
+  // here, before anything slow, so a run killed at any point after its
+  // session_start leaves a record. No file when [audit] is off.
+  const stageRecords: NonNullable<TaskRecord["stages"]> = [];
+  const live = new LiveRecord({
+    dir: auditSettings.enabled ? auditSettings.dir : null,
+    session: sessionId,
+    text: (value) => audit.text(value),
+  });
+  // Kept, not passed and dropped: an MCP clamp below changes the trust, the
+  // model and the endpoint, and a record killed after it must say so.
+  const liveOpen: OpenTurn = {
+    turn: 1,
+    surface_hash,
+    harness: harnessBuild(),
+    ...(options.trust ? { trust: options.trust } : {}),
+    surface_problems: surfaceFindings.map((p) => ({ where: p.where, problem: p.problem, fatal: p.fatal })),
+    degradations: () => degradations,
+    stages: () => stageRecords,
+    role,
+    model: route.model,
+    endpoint: route.target.endpoint,
+    input,
+    skills: active.map((sk) => sk.id),
+  };
+  live.open(liveOpen);
+  if (options.interrupt) {
+    options.interrupt.kill = (signal) => {
+      const killed = live.kill(signal);
+      if (!killed) return null;
+      if (killed.fresh) {
+        audit.write("turn", killedTurnAudit(killed.record, (v) => audit.text(v)));
+        audit.write("session_end", { turns: 1, surface_hash, signal });
+        sealedByKill = true;
+      }
+      return killed.record;
+    };
+  }
+
+  // After session_start, so a shadow that is down at the start is recorded
+  // inside the session it belongs to. Off the critical path: nothing waits.
+  shadow?.start();
+
+  // Sealed heads an earlier session could not anchor: announced on stderr and
+  // recorded (`audit_anchor_queued`), and retried in the background. Nothing
+  // when [audit.anchor] is absent; no network on this path either way.
+  announceAnchorBacklog(auditSettings.anchor, { say: warn, audit: auditForTurn });
+
+  // The window each endpoint this run routes to will be trimmed to. A note for
+  // a remote endpoint on the undeclared default (C3); "auto" read before the
+  // turn, so the route the record falls back on carries what was found.
+  for (const line of undeclaredWindowNotes(config, chain.length >= 2 ? chain : [role])) {
+    note(`  ${line}`);
+  }
+  route = await settleContextWindows(config, route, { ui, say: note, warn, audit: auditForTurn });
 
   // Connect declared MCP servers here too. They were wired only in
   // runPromptLoop, so a surface declaring [mcp_servers] handed its tools to
@@ -6321,12 +7261,39 @@ export async function runTask(
       state.mcp = await connectMcp(config.tools.mcp_servers, note, auditForTurn, warn);
   }
 
+  // What each server offered, against this machine's pin for it (GV10). One
+  // offering something other than its pin clamps the run the way an
+  // untrusted surface is clamped headless: every grant back to the scaffold's
+  // value, the servers closed, one line on stderr, a `trust` record saying
+  // `clamped` and which tools moved. Nothing happens without servers.
+  const settledTools = settleMcpTools(config, state.mcp, auditForTurn);
+  if (settledTools.clamp) {
+    state.mcp = undefined;
+    config = settledTools.clamp.config;
+    state.config = config;
+    // The clamped route keeps the window settled above: the lookup is cached,
+    // so this asks nothing again and says nothing twice.
+    route = await settleContextWindows(config, routeRole(config, role), { ui, say: note, warn, audit: auditForTurn });
+    // The declared shadow stops recording into this session; the clamped
+    // surface's (none, if the clamp turned it off) is recorded and checked as
+    // the one above was.
+    shadow?.detach();
+    shadow = ShadowRecorder.create(config, { warn, audit: auditForTurn });
+    shadow?.start();
+    trust = settledTools.clamp.outcome;
+    liveOpen.trust = trust;
+    liveOpen.model = route.model;
+    liveOpen.endpoint = route.target.endpoint;
+    audit.write("trust", { ...trust, root: resolve(config.gnomonDir, "..") });
+    warn(settledTools.clamp.notice);
+  }
+
   // One approval callback for every stage: a chain must not become a way to
   // get a second, laxer gate.
   const approveHere = async (req: ApprovalRequest) => {
       const decision = options.yes ? "approved" : "declined";
       note(`[approval] ${req.summary} — ${decision}`);
-      audit.write("approval", {
+      auditForTurn.write("approval", {
         tool: req.tool,
         summary: req.summary,
         decision,
@@ -6334,6 +7301,9 @@ export async function runTask(
         // oversight where there was none would be worse than no trail.
         by: options.yes ? "flag:--yes" : "default:no-operator",
         interactive: false,
+        // [approval] after_refusal asked this one. A run has nobody to ask, so
+        // it is answered the way every gated call here is: --yes or no.
+        ...(req.escalated ? { escalated: AFTER_REFUSAL_REASON } : {}),
       });
       return Boolean(options.yes);
       };
@@ -6345,7 +7315,6 @@ export async function runTask(
   );
 
   const start = Date.now();
-  const stageRecords: NonNullable<TaskRecord["stages"]> = [];
   let turn: TurnResult;
   try {
     if (chain.length >= 2) {
@@ -6364,6 +7333,9 @@ export async function runTask(
           : input;
         const stageState: PromptState = { config, exchanges: [], currentRole: stageRole };
         stageState.mcp = state.mcp;
+        // The session's snapshot, once stage 1 has taken it: one bootstrap
+        // per run, not one per stage.
+        if (state.bootstrap) stageState.bootstrap = state.bootstrap;
         const stageMsgs = buildMessages(
           stageState,
           buildSystemPrompt(stageState, stageRole, stageInput),
@@ -6373,14 +7345,16 @@ export async function runTask(
         const stageInfo = shadowTurnInfo(sessionId, `t1.s${i + 1}`, stageRole, stageRoute);
         const r = await runAgenticTurn(stageState, stageRole, stageRoute, stageMsgs.messages, {
           approve: approveHere,
-          progress: new Progress(ui, process.stderr as NodeJS.WriteStream),
+          progress: new Progress(ui, errOut as NodeJS.WriteStream),
           ui,
           say: note,
           warn,
           audit: auditForTurn,
           shadow: shadow?.turn(stageInfo, shadowApprover),
+          live,
         });
         shadow?.turnEnd(stageInfo, shadowOutcome(r, stageInfo.t0));
+        if (stageState.bootstrap) state.bootstrap = stageState.bootstrap;
         stageRecords.push({
           stage: i + 1,
           role: stageRole,
@@ -6405,6 +7379,7 @@ export async function runTask(
           context_turns: stageMsgs.included,
           context_dropped: stageMsgs.dropped,
           context_tokens: stageMsgs.tokens,
+          ...contextFields(r.counters),
           surface_hash,
         });
         last = r;
@@ -6435,12 +7410,13 @@ export async function runTask(
       const turnInfo = shadowTurnInfo(sessionId, "t1", role, route, shadowStart);
       turn = await runAgenticTurn(state, role, route, built.messages, {
         approve: approveHere,
-        progress: new Progress(ui, process.stderr as NodeJS.WriteStream),
+        progress: new Progress(ui, errOut as NodeJS.WriteStream),
         ui,
         say: note,
         warn,
         audit: auditForTurn,
         shadow: shadow?.turn(turnInfo, shadowApprover),
+        live,
       });
       shadow?.turnEnd(turnInfo, shadowOutcome(turn, turnInfo.t0));
     }
@@ -6449,6 +7425,11 @@ export async function runTask(
     // point scripts run in a loop.
     state.mcp?.close();
   }
+  // A signal ended this run while the turn was in flight, and `interrupt.kill`
+  // has already written its record and sealed the trail. The turn ran on only
+  // because nothing took the process down after (an in-process caller):
+  // writing a second ending would contradict the first.
+  if (live.killed) return live.killed;
   // The end of the session: anything that changed gnomon's records since the
   // last tool call -- a background job a call left running -- is caught here.
   {
@@ -6485,6 +7466,11 @@ export async function runTask(
     }
   }
   const duration = Date.now() - start;
+  // Bounded: a slow or dead shadow server costs a scripted run at most this.
+  // Before the turn record rather than after session_end, where it sat until
+  // 2026-11-03: the record carries the shadow's final coverage, and a stop
+  // found while flushing lands inside the session it belongs to.
+  const shadowCoverage = await shadow?.close();
 
   audit.write("turn", {
     turn: 1,
@@ -6523,25 +7509,23 @@ export async function runTask(
           context_tokens: built.tokens,
         }
       : {}),
+    // What the declared shadow was asked to record and what it recorded.
+    // Absent without a [shadow]; 0 of N is how a dead one reads.
+    shadow: shadowCoverage,
+    // The turn's own window, budget and trims -- with a chain, the last
+    // stage's, as `counters` is. What came back per request is `model_calls`,
+    // beside tokens_in as it is under `volatile` in the --json record.
+    ...contextFields(turn.counters),
+    ...(turn.modelCalls ? { model_calls: turn.modelCalls } : {}),
     surface_hash,
     input: audit.text(input),
     output: audit.text(turn.content),
   });
-  audit.write("session_end", { turns: 1, surface_hash });
-  // The records as this session leaves them, for the next session and for
-  // `skill accept` to compare against (record_tamper.ts).
-  try {
-    writeCheckpoint(config);
-  } catch (err) {
-    warn(`  [records] could not write the records checkpoint: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  // Bounded: a slow or dead shadow server costs a scripted run at most this.
-  await shadow?.flush();
 
-  return {
+  const record: TaskRecord = {
     surface_hash,
     harness: harnessBuild(),
-    ...(options.trust ? { trust: options.trust } : {}),
+    ...(trust ? { trust } : {}),
     // Non-fatal surface findings, so a scripted consumer can see what the
     // interactive operator would have been shown. Omitted when clean rather
     // than emitted as an empty array: a field that is always present teaches a
@@ -6568,6 +7552,7 @@ export async function runTask(
     skills: active.map((sk) => sk.id),
     stop_reason: turn.stop_reason,
     ...(turn.stop_detail ? { stop_detail: turn.stop_detail } : {}),
+    ...(turn.verify ? { verify: turn.verify } : {}),
     counters: turn.counters,
     // Present only when a chain ran, so a record from a single-role turn is
     // byte-identical to what it was before this existed.
@@ -6585,8 +7570,34 @@ export async function runTask(
       ...(turn.usage?.output !== undefined ? { tokens_out: turn.usage.output } : {}),
       ...(turn.usage?.ms !== undefined ? { model_ms: turn.usage.ms } : {}),
       ...(turn.usage?.requests !== undefined ? { requests: turn.usage.requests } : {}),
+      // Volatile because it measures somebody else's server, not this run:
+      // the same task records 14 of 14 or 0 of 14 depending on whether the
+      // shadow endpoint is up. Present only when a [shadow] is declared.
+      ...(shadowCoverage ? { shadow: shadowCoverage } : {}),
+      // Provider tokens and the clock, per request: the backend's measurement,
+      // like tokens_in. What gnomon sent is counters.model_calls.
+      ...(turn.modelCalls ? { model_calls: turn.modelCalls } : {}),
     },
   };
+  // The live record, final. Before the checkpoint below, which records the
+  // state of every record file: written after it, the next session would
+  // find this file changed since the checkpoint and call it tampering.
+  live.close(record, {
+    endpoint_url: turn.endpoint_url ?? route.target.url,
+    wire: turn.wire ?? wireOf(route.target),
+  });
+
+  audit.write("session_end", { turns: 1, surface_hash, shadow: shadowCoverage });
+  // The records as this session leaves them, for the next session and for
+  // `skill accept` to compare against (record_tamper.ts).
+  try {
+    writeCheckpoint(config);
+  } catch (err) {
+    warn(`  [records] could not write the records checkpoint: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // The shadow was flushed and closed above, before the turn record.
+
+  return record;
 }
 
 // ---------------------------------------------------------------------------
@@ -8223,6 +9234,12 @@ export interface SessionTurnDeps {
    * the session runs under by rewriting its own surface. Identity when absent.
    */
   reconfigure?: (fresh: GnomonConfig) => GnomonConfig;
+  /**
+   * The session's live record (live_record.ts): each turn is opened on it,
+   * kept current as it runs, and closed final after its `turn` audit record.
+   * The terminal loop passes one; without it nothing is written.
+   */
+  live?: LiveRecord;
 }
 
 /** One turn as it was run and recorded. */
@@ -8252,7 +9269,14 @@ export async function runSessionTurn(
   deps: SessionTurnDeps
 ): Promise<SessionTurn> {
   const config = state.config;
-  const route = routeRole(config, role);
+  // Settled here as well as in the turn, so the route this record falls back on
+  // carries the window an "auto" endpoint resolved to. Cached: asked once.
+  const route = await settleContextWindows(config, routeRole(config, role), {
+    ui: uiOf(state),
+    say: deps.log,
+    warn: deps.log,
+    audit: deps.audit,
+  });
 
   const ui = uiOf(state);
   const print = deps.print ?? ((line: string) => deps.progress.print(line));
@@ -8298,6 +9322,18 @@ export async function runSessionTurn(
   );
 
   const start = Date.now();
+  // This turn's record on disk while it runs (live_record.ts); closed final
+  // after the `turn` audit record below.
+  deps.live?.open({
+    turn: state.exchanges.length + 1,
+    surface_hash: deps.surfaceHash,
+    harness: harnessBuild(),
+    role,
+    model: route.model,
+    endpoint: route.target.endpoint,
+    input: cleanedInput,
+    skills: active.map((sk) => sk.id),
+  });
   // A declared chain shapes the turn here exactly as it does in
   // `gnomon task`. It was wired into runTask only, so a surface declaring
   // [chain] got three stages from `gnomon task` and one role from
@@ -8360,9 +9396,12 @@ export async function runSessionTurn(
             audit: deps.audit,
             standingApproval: deps.standingApproval,
             shadow: shadow?.turn(stageInfo, "asked"),
+            live: deps.live,
           }
         );
         shadow?.turnEnd(stageInfo, shadowOutcome(r, stageInfo.t0));
+        // A shallow copy: the snapshot stage 1 took is the session's.
+        if (stageState.bootstrap) state.bootstrap = stageState.bootstrap;
         deps.audit.write("chain_stage", {
           stage: i + 1,
           of: turnChain.length,
@@ -8411,6 +9450,7 @@ export async function runSessionTurn(
         audit: deps.audit,
         standingApproval: deps.standingApproval,
         shadow: shadow?.turn(turnInfo, "asked"),
+        live: deps.live,
       });
       shadow?.turnEnd(turnInfo, shadowOutcome(turn, turnInfo.t0));
     }
@@ -8558,13 +9598,50 @@ export async function runSessionTurn(
     // trust. Undefined when the backend reports no usage, because a
     // confident 0 is worse than a blank.
     usage: exchange.usage,
+    // The turn's own window, budget and trims, and what came back per
+    // request; the requests themselves are counters.model_calls. Not kept on
+    // the exchange: the saved session has no reader for it.
+    ...contextFields(exchange.counters),
+    ...(turn.modelCalls ? { model_calls: turn.modelCalls } : {}),
     stop_reason: exchange.stop_reason,
     stop_detail: exchange.stop_detail,
     counters: exchange.counters,
+    // The declared shadow's coverage for the session so far, as it stood when
+    // this turn was recorded: answers still in flight are `pending`, and
+    // `session_end` carries the final count. Absent without a [shadow].
+    shadow: deps.shadow?.coverage(),
     surface_hash: deps.surfaceHash,
     input: deps.audit.text(cleanedInput),
     output: deps.audit.text(turn.content),
   });
+  // The turn's live record, final, in the shape `gnomon task --json` prints.
+  deps.live?.close(
+    {
+      surface_hash: deps.surfaceHash,
+      harness: harnessBuild(),
+      role,
+      model: turn.model,
+      endpoint: turn.endpoint ?? route.target.endpoint,
+      input: cleanedInput,
+      output: turn.content,
+      code: turn.code,
+      bucket: exchange.bucket,
+      tool_steps: turn.toolSteps,
+      tool_log: turn.toolLog,
+      skills: active.map((sk) => sk.id),
+      stop_reason: turn.stop_reason,
+      ...(turn.stop_detail ? { stop_detail: turn.stop_detail } : {}),
+      counters: turn.counters,
+      volatile: {
+        duration_ms: duration,
+        ...(turn.usage?.input !== undefined ? { tokens_in: turn.usage.input } : {}),
+        ...(turn.usage?.output !== undefined ? { tokens_out: turn.usage.output } : {}),
+        ...(turn.usage?.ms !== undefined ? { model_ms: turn.usage.ms } : {}),
+        ...(turn.usage?.requests !== undefined ? { requests: turn.usage.requests } : {}),
+      },
+    },
+    { endpoint_url: turn.endpoint_url ?? route.target.url, wire: turn.wire ?? wireOf(route.target) }
+  );
 
   return { turn, exchange, systemPrompt, route, ui };
 }
@@ -8681,7 +9758,12 @@ export async function runPromptLoop(
     record: auditSettings.record,
   });
   if (options.trust) audit.write("trust", { ...options.trust, root: resolve(config.gnomonDir, "..") });
-  const reconfigure = options.reconfigure ?? ((fresh: GnomonConfig) => fresh);
+  // As in runTask: heads an earlier session could not anchor are announced,
+  // recorded, and retried in the background.
+  announceAnchorBacklog(auditSettings.anchor, { say: (l) => console.log(l), audit });
+  // `let`: a clamp for changed MCP tools (below) must hold through a
+  // mid-session reload, or the next reload would hand the grants back.
+  let reconfigure = options.reconfigure ?? ((fresh: GnomonConfig) => fresh);
 
   // Connect any declared MCP servers before the first turn, so their tools are
   // in the set the model sees. A server that will not connect is reported and
@@ -8696,6 +9778,21 @@ export async function runPromptLoop(
       (l) => console.log(paint(uiOf(state), "gray", l)),
       audit
     );
+  }
+
+  // What each server offered, against this machine's pin for it (GV10). A
+  // server offering something else clamps the session as a mid-session reload
+  // of an untrusted surface is clamped: every grant back to the scaffold's
+  // value for the rest of the session, reloads included, said and recorded.
+  const settledTools = settleMcpTools(state.config, state.mcp, audit);
+  if (settledTools.clamp) {
+    const clamp = settledTools.clamp;
+    state.mcp = undefined;
+    state.config = clamp.config;
+    const declared = reconfigure;
+    reconfigure = (fresh: GnomonConfig) => clampToDefaults(declared(fresh));
+    audit.write("trust", { ...clamp.outcome, root: resolve(config.gnomonDir, "..") });
+    console.log(paint(uiOf(state), "yellow", `  ${clamp.notice}`));
   }
 
   // Rotating and switching need the loop's id and its persist(), so they are
@@ -9106,7 +10203,9 @@ export async function runPromptLoop(
   const approve = async (req: ApprovalRequest): Promise<boolean> => {
     const ui = uiOf(state);
 
-    if (approveRestOfSession || approveRestOfTurn) {
+    // `[approval] after_refusal` sends a call here BECAUSE it should not be
+    // answered by a standing approval, so one does not answer it.
+    if ((approveRestOfSession || approveRestOfTurn) && !req.escalated) {
       // No line here. This used to print `⤷ <summary> (standing approval: …)`
       // for EVERY call, which restated a scope the operator had already been
       // told about once, in full, at the moment they granted it — and did it
@@ -9132,6 +10231,11 @@ export async function runPromptLoop(
     // Both of these are model-chosen strings. Printed raw, a command carrying
     // ESC[2K and a CR could erase and rewrite the very line being approved.
     console.log(paint(ui, "yellow", `  ┌ approve: ${safeForPrompt(req.summary)}`));
+    if (req.escalated) {
+      // Why a session that granted `a` or `s`, or a gate of never, is being
+      // asked at all. The reason names a path or host the model chose.
+      console.log(paint(ui, "red", `  │ asked because ${safeForPrompt(req.escalated)}`));
+    }
     for (const raw of req.preview.slice(0, 60)) {
       const line = safeForPrompt(raw);
       const colour = line.startsWith("+ ")
@@ -9273,6 +10377,7 @@ export async function runPromptLoop(
       decision: yes ? "approved" : "declined",
       by: "human",
       interactive: Boolean(process.stdin.isTTY),
+      ...(req.escalated ? { escalated: AFTER_REFUSAL_REASON } : {}),
     });
     console.log(
       yes
@@ -9380,6 +10485,18 @@ export async function runPromptLoop(
         )
       );
     }
+    // The window each endpoint's turns are trimmed to. A remote endpoint on the
+    // undeclared default is told so (C3); "auto" windows are read now, so what
+    // they found is said before the first prompt.
+    for (const line of undeclaredWindowNotes(config, listRoles(config))) {
+      console.log(paint(ui, "yellow", `  ${line}`));
+    }
+    await prepareContextWindows(config, listRoles(config), {
+      ui,
+      say: (line) => console.log(line),
+      warn: (line) => console.log(line),
+      audit,
+    });
     if (resumedFrom) {
     const ui0 = uiOf(state);
     console.log(
@@ -9476,18 +10593,52 @@ export async function runPromptLoop(
   // surface reloads: a different surface is a different calibration key.
   //
   // Its notes arrive from background requests, at any moment -- printed then,
-  // they would land inside the spinner's row. So they wait for the prompt.
+  // they would land inside the spinner's row. So they wait for the prompt, in
+  // yellow: every one of them says the shadow is recording less than declared,
+  // and until 2026-11-03 they printed grey and a three-day gap went unseen.
   const shadowNotes: string[] = [];
   let shadowRecorder: ShadowRecorder | undefined;
   let shadowConfig: GnomonConfig | undefined;
+  // Every recorder this session ran. A surface reload retires one and starts
+  // another, and session_end counts them all.
+  const shadowRecorders: ShadowRecorder[] = [];
   const shadowFor = (c: GnomonConfig): ShadowRecorder | undefined => {
     if (c !== shadowConfig) {
       void shadowRecorder?.flush();
-      shadowRecorder = ShadowRecorder.create(c, { warn: (line) => shadowNotes.push(line) });
+      shadowRecorder = ShadowRecorder.create(c, { warn: (line) => shadowNotes.push(line), audit });
+      shadowRecorder?.start();
+      if (shadowRecorder) shadowRecorders.push(shadowRecorder);
       shadowConfig = c;
     }
     return shadowRecorder;
   };
+  // Now rather than at the first turn, so a shadow that is down when the
+  // session starts says so under the banner. The wait is bounded and only
+  // happens with a [shadow] declared: a refused connection answers in about a
+  // millisecond, and a host that answers nothing costs SHADOW_BANNER_WAIT_MS
+  // once, after which its line prints at the next prompt instead.
+  await shadowFor(state.config)?.ready(SHADOW_BANNER_WAIT_MS);
+
+  // Each turn's record on disk as it runs, beside the trail (live_record.ts).
+  const live = new LiveRecord({
+    dir: auditSettings.enabled ? auditSettings.dir : null,
+    session: sessionId,
+    text: (value) => audit.text(value),
+  });
+  // SIGTERM, SIGINT or SIGHUP (a closed terminal) used to end the session with
+  // no record of the turn in flight and an unsealed trail. Now the turn is
+  // recorded as `killed` and the trail sealed, and the signal then ends the
+  // process as before. Ctrl+C at a terminal is not a signal here -- readline
+  // takes it as a key, and it still cancels the turn or quits.
+  const releaseSignals = onKillSignal((signal) => {
+    const killed = live.kill(signal);
+    if (killed?.fresh) audit.write("turn", killedTurnAudit(killed.record, (v) => audit.text(v)));
+    audit.write("session_end", {
+      turns: state.exchanges.length + (killed?.fresh ? 1 : 0),
+      surface_hash: surfaceHash,
+      signal,
+    });
+  });
 
   try {
     while (true) {
@@ -9496,7 +10647,7 @@ export async function runPromptLoop(
       // was started with -- so a model picked mid-session was written, hashed
       // and announced, and the next turn still routed to the old one.
       const config = state.config;
-      for (const line of shadowNotes.splice(0)) console.log(paint(uiOf(state), "gray", line));
+      for (const line of shadowNotes.splice(0)) console.log(paint(uiOf(state), "yellow", line));
       // Show the prompt only when actually waiting on the user —
       // buffered (typed-ahead) lines replay silently instead.
       if (!closed && lineQueue.length === 0) {
@@ -9517,6 +10668,12 @@ export async function runPromptLoop(
       const quitting = input !== null && QUIT_COMMANDS.has(verb);
       if (input === null || quitting) {
         await shadowRecorder?.flush();
+        // Sealed below: nothing a late answer finds may land after session_end.
+        for (const r of shadowRecorders) r.detach();
+        const shadowCoverage =
+          shadowRecorders.length > 0 ? sumCoverage(shadowRecorders.map((r) => r.coverage())) : undefined;
+        // A stop found while flushing is said here, or it would never be.
+        for (const line of shadowNotes.splice(0)) console.log(paint(uiOf(state), "yellow", line));
         // Session end: a change to gnomon's records since the last check.
         const end = state.recordGuard?.check("turn_end");
         if (end?.changes.length) {
@@ -9537,6 +10694,7 @@ export async function runPromptLoop(
         audit.write("session_end", {
           turns: state.exchanges.length,
           surface_hash: surfaceHash,
+          shadow: shadowCoverage,
         });
         try {
           writeCheckpoint(state.config);
@@ -9835,6 +10993,7 @@ export async function runPromptLoop(
           log: (line) => console.log(line),
           progress,
           reconfigure,
+          live,
         });
       } finally {
         cancelTurn = null;
@@ -9871,6 +11030,7 @@ export async function runPromptLoop(
     // behind. Closing on readline's "close" event was not enough: that event
     // does not fire on this path, and cleanup that depends on which way the
     // user left is cleanup that will be missed.
+    releaseSignals();
     state.mcp?.close();
     state.mcp = undefined;
     rl.close();

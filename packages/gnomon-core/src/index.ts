@@ -17,15 +17,31 @@
  */
 
 export * from "./config.js";
+// The endpoint's context window, read from its listing for
+// `max_context_tokens = "auto"` (CONTRACTS.md §24).
+export * from "./context_window.js";
 export * from "./session.js";
 export * from "./prompt_loop.js";
+// Observation masking and the environment bootstrap: opt-in context hygiene,
+// pure functions the loop calls only when the surface declares them.
+export * from "./context_hygiene.js";
+// The per-call mediator record: what each model request carried and what came
+// back (docs/CONTRACTS.md §29).
+export * from "./mediators.js";
 // The degradation contract: every way this harness carries on with less than
 // it declared, and the record each one writes. Read by
 // `benchmarks/degradation-contract`, which measures the declaration against
 // behaviour rather than keeping its own copy of the list.
 export * from "./degradation.js";
+// `gnomon chaos`: a fault-injecting endpoint and the suite that scores whether
+// each injected fault was announced. Loaded by nothing in the turn loop.
+export * from "./chaos.js";
+export * from "./chaos_suite.js";
 export * from "./render.js";
 export * from "./tools.js";
+// `[approval] after_refusal`: after a refusal, a call naming what was refused
+// goes to a person even under a standing approval (GV13).
+export * from "./after_refusal.js";
 // How bash_deny, bash_allow and network = false read a shell command: as the
 // shell will run it, not as text. An intent filter, not containment.
 export * from "./shell.js";
@@ -39,21 +55,33 @@ export * from "./transcripts.js";
 export * from "./skills.js";
 export * from "./record_guard.js";
 export * from "./record_tamper.js";
+// A turn's record on disk while it runs, and the signals that flush it.
+export * from "./live_record.js";
 export * from "./skill_mine.js";
 export * from "./skill_trial.js";
 export * from "./audit.js";
+// [audit.anchor]: sealed heads copied to a witness the trail's writer cannot
+// rewrite (a remote ref, an RFC 3161 authority, an operator command).
+export * from "./anchor.js";
+export * from "./rfc3161.js";
 // Provenance. Not exported until 2026-09-03, which is why the CLI's own help
 // banner carried a hardcoded version literal instead: the function that knows
 // which build is running was not reachable from the package that prints it.
 export * from "./build.js";
 // The decision-model shadow: log-only records for agentcenter's readout.
 export * from "./shadow.js";
+// The stall detectors (LP5): log-only counters and `stall_signal` records,
+// and the same module benchmarks/analysis/stall_replay.mjs runs over trails.
+export * from "./stall_signals.js";
 export * from "./session_store.js";
 export * from "./explain.js";
 export * from "./credentials.js";
 export * from "./loops.js";
 // Workspace trust: whether this machine's user accepted what a surface grants.
 export * from "./trust.js";
+// The tool definitions a model was offered, hashed, and MCP servers' tools
+// against this machine's pins (GV10).
+export * from "./tools_hash.js";
 // `gnomon acp`: the Agent Client Protocol server. A transport for the same
 // session turn the terminal runs (prompt_loop.ts:runSessionTurn), nothing more.
 export * from "./acp.js";

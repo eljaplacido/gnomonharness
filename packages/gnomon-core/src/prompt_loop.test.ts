@@ -2619,7 +2619,11 @@ describe("runTask — the non-interactive contract", () => {
       const b = await promptLoop.runTask(config, "same input", { role: "smol" });
       const strip = (r: typeof a) => ({ ...r, volatile: undefined });
       expect(strip(a)).toEqual(strip(b));
-      expect(Object.keys(a.volatile)).toEqual(["duration_ms"]);
+      // `model_calls`: what came back per request, with its clock -- which
+      // differs between the two runs, so it is volatile. What each request
+      // carried is counters.model_calls, compared above.
+      expect(Object.keys(a.volatile)).toEqual(["duration_ms", "model_calls"]);
+      expect(a.counters.model_calls!.calls).toEqual(b.counters.model_calls!.calls);
     });
   });
 
@@ -4053,6 +4057,13 @@ describe("measureTreeDelta — fewer git processes, the same numbers", () => {
     git(src, "config", "user.email", "t@t");
     git(src, "config", "user.name", "t");
     git(src, "config", "core.autocrlf", "false");
+    // No background maintenance: `git commit` starts `git maintenance run
+    // --auto`, and newer git (maintenance.autoDetach, the default on the macOS
+    // runners' git 2.5x) detaches it, so it can still be taking and dropping
+    // .git/objects/maintenance.lock while cpSync below walks the repository.
+    // That was the macOS-only "ENOENT ... .git/objects" in this test.
+    git(src, "config", "maintenance.auto", "false");
+    git(src, "config", "gc.auto", "0");
     writeFileSync(join(src, "a.txt"), "alpha\nbeta\ngamma\n");
     writeFileSync(join(src, "b.txt"), "one\ntwo\n");
     writeFileSync(join(src, ".gitignore"), "ignored.log\n");

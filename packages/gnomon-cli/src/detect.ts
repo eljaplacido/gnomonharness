@@ -31,6 +31,11 @@ export interface ModelChoice {
   detected: DetectedModel[];
   /** Set when detection did not run or found nothing usable */
   fallback?: string;
+  /**
+   * The provenance comment for roles.toml, when the tags came from somewhere
+   * other than init's own detection (`gnomon setup`). Comment lines, `# `-led.
+   */
+  note?: string;
 }
 
 /** Generic tags used when nothing can be detected. */

@@ -40,6 +40,7 @@ import {
   trialExit,
   runTask,
   unstartedTaskRecord,
+  taskExitCode,
   type TaskRecord,
   resolveAudit,
   loadLoops,
@@ -53,6 +54,14 @@ import {
   writeState,
   LOOP_STATE_DIR,
   verifyTrail,
+  flushAnchors,
+  collectAnchors,
+  verifyAgainstAnchors,
+  setAnchorScheduler,
+  redactRemote,
+  CHECKPOINT_DIR,
+  type ResolvedAnchor,
+  type AnchorTrailResult,
   resolveSessionStore,
   listSessions,
   resolveEndpoint,
@@ -77,14 +86,19 @@ import {
   settleTrust,
   settleTrustHeadless,
   evaluateTrust,
+  clampToDefaults,
   grantTrust,
   revokeTrust,
+  forgetToolPins,
+  toolPinsOf,
   loadTrust,
   trustPath,
   describeGrants,
   type GnomonConfig,
   type TrustOutcome,
   type SettleOptions,
+  onKillSignal,
+  type TaskInterrupt,
 } from "gnomon-core";
 import {
   manifest as surfaceManifest,
@@ -95,9 +109,10 @@ import {
   simulatePatch,
   Enumerations,
 } from "gnomon-natives";
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync} from "node:fs";
+import { readFileSync, writeFileSync, writeSync, existsSync, readdirSync, mkdirSync} from "node:fs";
+import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runTui } from "gnomon-tui";
 import { initSurface } from "./init.js";
@@ -112,6 +127,7 @@ import {
 } from "./detect.js";
 import {
   checkReadiness,
+  ENDPOINT_PRESETS,
   SETUP_CHOICES,
   parseSetupPick,
   parseModelPick,
@@ -121,6 +137,11 @@ import {
 import { pendingMigrations, applyMigrations, MIGRATIONS } from "./migrate.js";
 import { cmdUpdate, cmdUninstall, maybeNotifyUpdate } from "./update.js";
 import { cmdCheck } from "./check.js";
+import { probeMachine, formatProbe, probeAtInit, systemHost } from "./probe.js";
+import { loadCatalog, defaultCatalogPath, type Suggestion } from "./catalog.js";
+import { runSetup, HYBRID_CONTROLS, MODE_ALIASES, SETUP_EXIT, type HybridControl } from "./setup_wizard.js";
+import { systemSetupEffects } from "./setup_host.js";
+import { runDoctor, formatDoctor, DOCTOR_EXIT } from "./doctor.js";
 
 // ---------------------------------------------------------------------------
 // Argument parsing (minimal, no deps)
@@ -711,51 +732,6 @@ async function cmdKey(args: CliArgs): Promise<void> {
 // Endpoints
 // ---------------------------------------------------------------------------
 
-/**
- * Providers worth not making someone look up.
- *
- * A URL, a request shape and a key variable is the whole of an endpoint, and
- * all three are things you can get subtly wrong in ways that surface much
- * later as a 401 or an empty model list. Presets are not a feature; they are
- * the three fields, already correct.
- */
-const ENDPOINT_PRESETS: Record<
-  string,
-  { name: string; url: string; kind: string; api_key_env?: string; provider?: string; note: string }
-> = {
-  "opencode-go": {
-    name: "go",
-    url: "https://opencode.ai/zen/go/v1/chat/completions",
-    kind: "openai",
-    api_key_env: "OPENCODE_API_KEY",
-    provider: "opencode",
-    note: "OpenCode Go — the subscription tier at opencode.ai/go",
-  },
-  "opencode-zen": {
-    name: "zen",
-    url: "https://opencode.ai/zen/v1/chat/completions",
-    kind: "openai",
-    api_key_env: "OPENCODE_API_KEY",
-    provider: "opencode",
-    note: "OpenCode Zen — pay-as-you-go",
-  },
-  openrouter: {
-    name: "openrouter",
-    url: "https://openrouter.ai/api/v1/chat/completions",
-    kind: "openai",
-    api_key_env: "OPENROUTER_API_KEY",
-    provider: "openrouter",
-    note: "OpenRouter — many providers behind one key",
-  },
-  ollama: {
-    name: "local",
-    url: "http://127.0.0.1:11434/api/chat",
-    kind: "ollama",
-    provider: "ollama",
-    note: "Ollama on this machine — no key",
-  },
-};
-
 /** Ask a question with a default, on a terminal. */
 function ask(prompt: string, fallback = ""): Promise<string> {
   return new Promise((resolvePromise) => {
@@ -1269,6 +1245,63 @@ async function listModelsAt(endpoint: {
 }
 
 /**
+ * Deliver queued anchors from a detached process, so the session that queued
+ * them can exit at once. Errors land in the anchors' state file, which the
+ * next session announces (anchor.ts announceAnchorBacklog).
+ */
+function detachedAnchorFlush(s: ResolvedAnchor, trustFlag = false): void {
+  // The launcher this CLI was started through: one level above src/ (or
+  // dist/), the same in a checkout and in the published package.
+  const launcher = fileURLToPath(new URL("../gnomon.js", import.meta.url));
+  if (!existsSync(launcher)) {
+    void flushAnchors(s).catch(() => undefined);
+    return;
+  }
+  try {
+    // `--trust` carries over when this run was trusted by the flag, which the
+    // child cannot see; GNOMON_TRUST and the trust store it reads itself.
+    const args = [launcher, "audit", "anchor", "--background", "--dir", s.root, ...(trustFlag ? ["--trust"] : [])];
+    const child = spawn(process.execPath, args, {
+      cwd: s.root,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: { ...process.env, GNOMON_NO_UPDATE_CHECK: "1" },
+    });
+    child.on("error", () => undefined);
+    child.unref();
+  } catch {
+    /* stays queued; the next session announces it */
+  }
+}
+
+function anchorLabel(a: ResolvedAnchor): string {
+  if (a.backend === "git") return `git, ${redactRemote(a.remote ?? "")} ${a.ref}`;
+  if (a.backend === "rfc3161") return `rfc3161, ${redactRemote(a.url ?? "")}`;
+  return String(a.backend);
+}
+
+/** One `external anchor:` line under a trail. Returns whether it is a failure. */
+function printAnchorLine(r: AnchorTrailResult | undefined, acceptUnchecked = false): boolean {
+  if (!r) return false;
+  // A table, not a switch: docs.test.ts reads `case "…":` in this file as the
+  // list of dispatched commands.
+  const lines: Record<AnchorTrailResult["status"], [boolean, string]> = {
+    anchored: [false, `ANCHORED — ${r.detail}`],
+    rechained: [true, `RE-CHAINED — ${r.detail}`],
+    invalid: [true, `INVALID — ${r.detail}`],
+    unchecked: [!acceptUnchecked, `UNCHECKED — ${r.detail}`],
+    pending: [false, "PENDING — queued, not delivered yet (degradation audit_anchor_queued). `gnomon audit anchor` delivers it now."],
+    unanchored: [true, `NOT ANCHORED — ${r.detail}`],
+    predates: [false, "NOT ANCHORED — sealed before this checkout began anchoring"],
+    unsealed: [false, "NOT ANCHORED — not sealed, so there is no head to anchor"],
+  };
+  const [bad, text] = lines[r.status];
+  (bad ? console.error : console.log)(`  external anchor: ${text}`);
+  return bad;
+}
+
+/**
  * `gnomon audit` — list trails, and check one against everything that can
  * catch a change to it.
  *
@@ -1309,6 +1342,17 @@ async function listModelsAt(endpoint: {
 async function cmdAudit(args: CliArgs): Promise<void> {
   const config = loadConfig(args.dir, args.flags['profile']);
   const settings = resolveAudit(config);
+  // [audit.anchor] pushes to a remote, posts to an authority or runs a
+  // command: a workspace-trust grant (trust.ts). `audit anchor` and `audit
+  // verify` reach it only for a surface this machine's user trusts, or with
+  // --trust / GNOMON_TRUST; otherwise they see the clamped block, which says
+  // why and does nothing.
+  if (settings.anchor?.declared) {
+    const ev = evaluateTrust(config, trustOptions(args));
+    if (ev.status !== "trusted" && ev.status !== "default") {
+      settings.anchor = resolveAudit(clampToDefaults(config)).anchor;
+    }
+  }
   const sub = subcommandOr(args, "show");
 
   // record_tamper events (record_guard.ts): list them, and let a person
@@ -1349,8 +1393,38 @@ async function cmdAudit(args: CliArgs): Promise<void> {
     return;
   }
 
+  // Deliver queued anchors now. `--background` is the detached delivery a
+  // session end starts: it prints nothing, and its outcome is the anchors'
+  // state file, which the next session reads.
+  if (sub === "anchor") {
+    const anchor = settings.anchor;
+    const background = args.flags.background === "true";
+    if (!anchor?.declared) {
+      if (!background) console.error("No [audit.anchor] is declared in .gnomon/config.toml, so nothing is anchored.");
+      process.exit(1);
+    }
+    if (!anchor.enabled) {
+      if (!background) for (const p of anchor.problems) console.error(p);
+      process.exit(1);
+    }
+    const r = await flushAnchors(anchor);
+    if (background) return;
+    for (const p of anchor.problems) console.error(p);
+    if (r.busy) {
+      console.log(`A delivery is already running; ${r.pending} head(s) queued.`);
+      return;
+    }
+    if (r.delivered > 0) console.log(`Anchored ${r.delivered} sealed head(s) to ${anchorLabel(anchor)}.`);
+    if (r.pending > 0) {
+      console.error(`${r.pending} head(s) still queued: ${r.error ?? "not delivered"}`);
+      process.exit(1);
+    }
+    if (r.delivered === 0) console.log("Nothing queued: every sealed head has been delivered.");
+    return;
+  }
+
   if (sub !== "show" && sub !== "list" && sub !== "verify") {
-    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify | tamper | resolve`);
+    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify | anchor | tamper | resolve`);
     process.exit(1);
   }
 
@@ -1401,6 +1475,32 @@ async function cmdAudit(args: CliArgs): Promise<void> {
     console.error(`[audit.attest] ${problem}`);
   }
 
+  // [audit.anchor]: every sealed head against the external witness. Read
+  // once, before the loop, so each trail's lines can carry its own verdict.
+  const anchor = settings.anchor;
+  let anchorReport: ReturnType<typeof verifyAgainstAnchors> | null = null;
+  let anchorFailed = false;
+  const offline = args.flags.offline === "true";
+  if (anchor?.declared) {
+    for (const p of anchor.problems) console.error(p);
+    if (!anchor.enabled) anchorFailed = true;
+    else {
+      const scope = typeof args.flags.scope === "string" && args.flags.scope !== "true" ? args.flags.scope : undefined;
+      const log = await collectAnchors(anchor, { offline });
+      const cpDir = join(settings.dir, CHECKPOINT_DIR);
+      const checkpoints = existsSync(cpDir)
+        ? readdirSync(cpDir).filter((f: string) => /^checkpoint-.*\.jsonl$/.test(f)).map((f: string) => join(cpDir, f))
+        : [];
+      const paths = [...targets.map((n) => join(settings.dir, n)).filter((p) => existsSync(p)), ...checkpoints];
+      anchorReport = verifyAgainstAnchors(anchor, log, paths, { ...(scope ? { scope } : {}), acceptUnchecked: offline });
+      const from = log.source === "remote" ? "read from the remote" : log.source === "local-copy" ? "read from THIS MACHINE'S COPY" : "read from the receipts";
+      console.log(`external anchor: ${anchorLabel(anchor)} — ${from}, scope ${anchorReport.scope}`);
+      for (const p of anchorReport.problems) console.error(`  ${p}`);
+    }
+  }
+  const anchorOf = (path: string) =>
+    anchorReport?.trails.find((t) => resolve(anchor!.root, t.trail) === resolve(path) || t.trail === resolve(path));
+
   let allOk = true;
   for (const name of targets) {
     const path = join(settings.dir, name);
@@ -1449,6 +1549,10 @@ async function cmdAudit(args: CliArgs): Promise<void> {
       console.error(`  anchor: NOT SIGNED — ${a.problem}`);
       console.error(`          [audit.attest] declares a signer, so heads were expected here.`);
       allOk = false;
+    } else if (anchorReport) {
+      // The external anchor line below is what answers the re-chain here, so
+      // the advice to declare a signer would point at the wrong fix.
+      console.log(`  anchor: NOT SIGNED — this surface declares no [audit.attest] signer; the external anchor below is the check against a re-chain.`);
     } else {
       console.log(`  anchor: NOT SIGNED — this surface declares no [audit.attest] signer.`);
       console.log(
@@ -1461,7 +1565,25 @@ async function cmdAudit(args: CliArgs): Promise<void> {
         `          hash passes it. Declare a signer to close that.`
       );
     }
+    if (printAnchorLine(anchorOf(path), offline)) allOk = false;
   }
+
+  if (anchorReport) {
+    // Checkpoints are not listed above (they are in a subdirectory), but they
+    // are anchored too: a rewritten one is the forged baseline the record
+    // guard would otherwise trust.
+    for (const t of anchorReport.trails.filter((x) => x.trail.includes(`/${CHECKPOINT_DIR}/`))) {
+      if (t.status === "anchored" || t.status === "predates" || t.status === "pending" || t.status === "unsealed") continue;
+      console.log(`${t.trail}:`);
+      if (printAnchorLine(t, offline)) allOk = false;
+    }
+    for (const f of anchorReport.findings) console.error(`  external anchor: ${f}`);
+    if (anchorReport.other_scopes > 0) {
+      console.log(`  (${anchorReport.other_scopes} anchor(s) from other checkouts share this witness; not judged here)`);
+    }
+    if (!anchorReport.ok) allOk = false;
+  }
+  if (anchorFailed) allOk = false;
 
   if (!allOk) process.exit(1);
 }
@@ -1482,6 +1604,25 @@ async function cmdTask(args: CliArgs): Promise<void> {
   // defaults runs clamped to them, with one line on stderr -- never blocked,
   // never silently widened.
   let record: TaskRecord;
+  // A time cap's SIGTERM (Harbor, Terminal-Bench), a closed terminal, a kill
+  // -INT: the run's record is flushed as `killed` -- the live record beside
+  // the trail, a `turn` audit record and session_end -- and, under --json,
+  // printed where the record always goes. Then the signal ends the process as
+  // it did before (live_record.ts onKillSignal). Before this, a killed task
+  // printed nothing at all (C5: 19 of 21 capped cells in P2G attempt 1).
+  const interrupt: TaskInterrupt = {};
+  const releaseSignals = onKillSignal((signal) => {
+    const killed = interrupt.kill?.(signal);
+    if (!killed) return;
+    try {
+      if (args.json) writeSync(1, `${JSON.stringify(killed, null, 2)}\n`);
+      else if (killed.stop_reason === "killed") {
+        writeSync(2, `\n[${signal}] the run was ended mid-turn; recorded as stop_reason "killed" after ${killed.tool_steps} tool call(s)\n`);
+      }
+    } catch {
+      // A closed pipe or terminal: the file beside the trail still has it.
+    }
+  });
   try {
     const settled = settleTrustHeadless(
       loadConfig(args.dir, args.flags['profile']),
@@ -1492,6 +1633,7 @@ async function cmdTask(args: CliArgs): Promise<void> {
       yes: args.yes,
       verbose: !args.json,
       trust: settled.outcome,
+      interrupt,
     });
   } catch (err) {
     // No .gnomon/ above the cwd, a --dir without one, a --role the surface
@@ -1500,6 +1642,7 @@ async function cmdTask(args: CliArgs): Promise<void> {
     const why = err instanceof Error ? err.message : String(err);
     record = unstartedTaskRecord(text, args.role, `gnomon task could not start: ${why}`);
   }
+  releaseSignals();
 
   // Non-fatal surface problems go to stderr in BOTH modes. They are the ones
   // that change what ran without stopping it -- a role_profile whose file is
@@ -1521,7 +1664,7 @@ async function cmdTask(args: CliArgs): Promise<void> {
   }
 
   // Exit code carries the bucket, so a caller can gate on it without parsing.
-  process.exit(record.bucket === "result" ? 0 : record.bucket === "refusal" ? 2 : 10);
+  process.exit(taskExitCode(record));
 }
 
 async function cmdSkill(args: CliArgs): Promise<void> {
@@ -1759,6 +1902,11 @@ async function cmdMigrate(args: CliArgs): Promise<void> {
 }
 
 async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promise<void> {
+  // What this machine is and which model servers it runs, probed beside init's
+  // own model detection so it costs no extra wait. Shown, never written: the
+  // surface is exactly what it was. Read-only commands and 127.0.0.1 GETs, each
+  // with a deadline (probe.ts). Not for --from or --no-verify (probeAtInit).
+  const probing = probeAtInit(args) ? probeMachine().catch(() => null) : null;
   let result;
   try {
     result = await initSurface({ dir: args.dir, force: args.force, from: args.from, noVerify: args.noVerify });
@@ -1773,6 +1921,12 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
   for (const f of result.skipped) console.log(`  · .gnomon/${f} (kept existing)`);
   if (result.gitattributes) console.log("  + .gitattributes: .gnomon/** text eol=lf (same surface hash on Windows)");
   if (result.gitignore?.length) console.log(`  + .gitignore: ${result.gitignore.map((d) => d + "/").join(" ")} (machine-local, never committed)`);
+
+  const probe = probing ? await probing : null;
+  if (probe) {
+    console.log("");
+    for (const line of formatProbe(probe)) console.log(line);
+  }
 
   // Say which models were chosen and why. A tag appearing in roles.toml with
   // no explanation looks like a decision someone made on your behalf.
@@ -1862,7 +2016,8 @@ async function cmdLaunch(args: CliArgs): Promise<void> {
   // out (`gnomon endpoint add`) was nowhere on screen. Off a terminal there
   // is nobody to ask, and a script gets exactly what it got before.
   if (process.stdin.isTTY && process.stdout.isTTY) {
-    await offerModelSetup(args, target);
+    // A fresh surface's init has just printed the probe.
+    await offerModelSetup(args, target, { showProbe: !fresh });
   } else if (fresh) {
     console.log("");
     console.log("If those model tags are not ones you have, `gnomon endpoint add` sets one up.");
@@ -1881,8 +2036,9 @@ async function cmdLaunch(args: CliArgs): Promise<void> {
  * key, Ollama still stopped) lands back on the choice rather than in a
  * session that cannot work.
  */
-async function offerModelSetup(args: CliArgs, target: string): Promise<void> {
+async function offerModelSetup(args: CliArgs, target: string, opts: { showProbe?: boolean } = {}): Promise<void> {
   const role = args.subcommand || "implement";
+  let probeShown = !opts.showProbe;
   for (;;) {
     let config;
     try {
@@ -1894,6 +2050,16 @@ async function offerModelSetup(args: CliArgs, target: string): Promise<void> {
     const readiness = await checkReadiness(config, role);
     if (readiness.ready) return;
 
+    // What the machine has, before asking what to set up: a model server
+    // already running on another port is the answer to the question below.
+    if (!probeShown) {
+      probeShown = true;
+      const probe = await probeMachine().catch(() => null);
+      if (probe) {
+        console.log("");
+        for (const line of formatProbe(probe)) console.log(line);
+      }
+    }
     console.log("");
     console.log(`No model answers for this project yet: ${readiness.why}.`);
     console.log("Set one up now?\n");
@@ -1914,9 +2080,137 @@ async function offerModelSetup(args: CliArgs, target: string): Promise<void> {
       return;
     }
     console.log("");
+    if (pick === "setup") {
+      // The wizard, on this project, as `gnomon setup` runs it: every download,
+      // write and cloud call asks first. Its write moves the hash, so the
+      // session below settles trust again as usual.
+      await cmdSetup({ ...args, dir: target, json: false, yes: false }, { fromLaunch: true });
+      continue;
+    }
     await endpointAdd(args, config, { preset: pick, quick: true });
     // Written or not, look again: a write is proved by the next check, and a
     // failure goes back to the choice instead of into a dead session.
+  }
+}
+
+/**
+ * The project a setup or doctor run is about: `--dir`, else the nearest
+ * directory up from here with a .gnomon/ (as every other command finds it),
+ * else here. Setup in a subdirectory of a project must not scaffold a second
+ * surface inside it.
+ */
+function projectRoot(args: CliArgs): string {
+  if (args.dir) return resolve(args.dir);
+  try {
+    return dirname(resolveGnomonDir());
+  } catch {
+    return process.cwd();
+  }
+}
+
+/** A usage or apparatus error, as text or as the command's JSON document. */
+function commandError(args: CliArgs, schema: string, message: string, exit: number): number {
+  if (args.json) console.log(JSON.stringify({ schema, error: message, exit }, null, 2));
+  else console.error(message);
+  return exit;
+}
+
+/**
+ * `gnomon setup` — scan this machine, plug in a local model it can run, then
+ * connect a cloud model. The flow and every consent rule are in
+ * setup_wizard.ts; this reads the flags and supplies the real machine.
+ */
+async function cmdSetup(args: CliArgs, opts: { fromLaunch?: boolean } = {}): Promise<number> {
+  const f = args.flags;
+  const schema = "gnomon.setup/1";
+  const usage = (m: string) => commandError(args, schema, m, SETUP_EXIT.usage);
+  for (const k of ["pull", "model", "mode", "cloud-endpoint", "cloud-model", "cloud-key-env", "hybrid-control", "catalog", "expect-proposal"]) {
+    if (f[k] === "true") return usage(`--${k} needs a value.`);
+  }
+  const expect = f["expect-proposal"];
+  if (expect !== undefined && !/^[0-9a-f]{64}$/.test(expect)) {
+    return usage(`--expect-proposal takes the 64-hex \`proposal.digest\` of an earlier \`gnomon setup --json\`, not "${expect}".`);
+  }
+  let mode: Suggestion | undefined;
+  if (f.mode) {
+    mode = MODE_ALIASES[f.mode.toLowerCase()];
+    if (!mode) return usage(`--mode ${f.mode}: use local, hybrid or cloud.`);
+  }
+  const control = (f["hybrid-control"] ?? "observe") as HybridControl;
+  if (!HYBRID_CONTROLS.includes(control)) return usage(`--hybrid-control ${control}: use ${HYBRID_CONTROLS.join(", ")}.`);
+  if ((f["cloud-model"] || f["cloud-key-env"]) && !f["cloud-endpoint"]) {
+    return usage("--cloud-model and --cloud-key-env go with --cloud-endpoint URL|preset|endpoint.");
+  }
+  if (f.pull && f.model) return usage("--pull and --model each choose the local model; pass one.");
+  let catalog;
+  try {
+    catalog = loadCatalog(f.catalog ?? defaultCatalogPath());
+  } catch (err) {
+    return commandError(args, schema, err instanceof Error ? err.message : String(err), SETUP_EXIT.catalog);
+  }
+  const json = Boolean(args.json);
+  const interactive = !json && f["non-interactive"] !== "true" && Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const report = await runSetup(
+    {
+      dir: projectRoot(args),
+      json,
+      yes: Boolean(args.yes),
+      ...(f.pull ? { pull: f.pull } : {}),
+      ...(f.model ? { model: f.model } : {}),
+      speedCheck: f["speed-check"] === "true",
+      ...(mode ? { mode } : {}),
+      ...(f["cloud-endpoint"] ? { cloudEndpoint: f["cloud-endpoint"] } : {}),
+      ...(f["cloud-model"] ? { cloudModel: f["cloud-model"] } : {}),
+      ...(f["cloud-key-env"] ? { cloudKeyEnv: f["cloud-key-env"] } : {}),
+      ...(expect ? { expectProposal: expect } : {}),
+      hybridControl: control,
+      ...(opts.fromLaunch ? { fromLaunch: true } : {}),
+    },
+    {
+      host: systemHost(),
+      io: {
+        interactive,
+        // Under --json, stdout is the document; the narrative goes to stderr.
+        say: (l = "") => (json ? process.stderr.write(l + "\n") : console.log(l)),
+        ask: (q, fallback = "") => ask(q, fallback),
+        askSecret: (q) => readSecret(q),
+      },
+      catalog,
+      now: () => new Date(),
+      ...systemSetupEffects(),
+      commands: CLI_COMMANDS.map((c) => c.name),
+    }
+  );
+  if (json) console.log(JSON.stringify(report, null, 2));
+  return report.exit;
+}
+
+/**
+ * `gnomon doctor` — read-only: the machine, every role's endpoint, and drift
+ * from what setup recorded. Never writes; says what would fix each problem.
+ */
+async function cmdDoctor(args: CliArgs): Promise<number> {
+  const schema = "gnomon.doctor/1";
+  if (args.flags.catalog === "true") return commandError(args, schema, "--catalog needs a file.", DOCTOR_EXIT.couldNotRun);
+  try {
+    const catalog = loadCatalog(args.flags.catalog ?? defaultCatalogPath());
+    const { report, probe } = await runDoctor(
+      { dir: projectRoot(args) },
+      {
+        host: systemHost(),
+        catalog,
+        now: () => new Date(),
+        readiness: (config, role) => checkReadiness(config, role),
+        applyKeys: (config) => {
+          applyCredentials(undefined, declaredKeyVars(config));
+        },
+      }
+    );
+    if (args.json) console.log(JSON.stringify(report, null, 2));
+    else for (const l of formatDoctor(report, probe)) console.log(l);
+    return report.exit;
+  } catch (err) {
+    return commandError(args, schema, `doctor could not run: ${err instanceof Error ? err.message : String(err)}`, DOCTOR_EXIT.couldNotRun);
   }
 }
 
@@ -2023,8 +2317,18 @@ async function cmdTrust(args: CliArgs): Promise<void> {
     }
     grantTrust(config, "command:trust");
     record("granted");
+    // Granting is also how a person accepts MCP tools that changed since they
+    // were pinned: the pins go, and the next session pins what each server
+    // offers then (GV10). Said, because a pin dropping silently is a check
+    // switched off silently.
+    const unpinned = forgetToolPins(config);
     console.log(`Trusted ${ev.root} at surface ${ev.surface_hash.slice(0, 12)}:`);
     for (const line of describeGrants(ev.grants, [])) console.log(line);
+    if (unpinned > 0) {
+      console.log(
+        `Cleared ${unpinned} MCP tool pin${unpinned === 1 ? "" : "s"}; the next session pins what each server offers then.`
+      );
+    }
     console.log(`Recorded in ${trustPath()} — not in the repository.`);
     return;
   }
@@ -2056,6 +2360,12 @@ async function cmdTrust(args: CliArgs): Promise<void> {
         : "  NOT trusted — a terminal session asks; a headless run is clamped to the defaults"
     );
     for (const line of describeGrants(ev.grants, ev.uncovered)) console.log(line);
+  }
+  const pins = toolPinsOf(config);
+  if (pins.length > 0) {
+    console.log("");
+    console.log("MCP tools pinned for this project (a server offering others runs clamped):");
+    for (const p of pins) console.log(`  ${p.tools_hash.slice(0, 12)}  ${p.at.slice(0, 10)}  ${p.server}`);
   }
   const entries = loadTrust().entries;
   console.log("");
@@ -2124,6 +2434,8 @@ async function cmdSessions(args: CliArgs): Promise<void> {
  */
 export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> = [
   { name: "launch" },
+  { name: "setup" },
+  { name: "doctor" },
   { name: "init" },
   { name: "surface" },
   { name: "enumerations", aliases: ["enums"] },
@@ -2145,6 +2457,8 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "check" },
   { name: "trust" },
   { name: "guard" },
+  { name: "dashboard", aliases: ["ui"] },
+  { name: "chaos" },
 ];
 
 function showHelp(): void {
@@ -2168,7 +2482,28 @@ function showHelp(): void {
 Commands:
   launch [--dir <path>] [--from <path>]
     Start working here. Creates .gnomon/ if it is missing, then opens the
-    interactive loop. This is the one command to remember.
+    interactive loop. This is the one command to remember. When no model
+    answers, it offers the guided setup first.
+
+  setup [--json] [--yes] [--pull TAG] [--model TAG] [--speed-check]
+        [--mode local|hybrid|cloud] [--cloud-endpoint URL|preset|name]
+        [--cloud-model NAME] [--cloud-key-env VAR] [--catalog FILE]
+        [--expect-proposal DIGEST]
+    Scan this machine, plug in a local model it can run, then connect a
+    cloud model. Recommends from a dated catalog and says why, pulls only on
+    a yes, offers a short speed check, suggests local only, hybrid or cloud
+    first, and writes .gnomon/ only after you accept the diff. Off a
+    terminal: --yes approves the write and nothing else; a download needs
+    --pull TAG; nothing is spent. --expect-proposal writes only the change
+    whose proposal.digest an earlier --json run printed. Exit 0 written,
+    3 the surface or the change moved, 4 needs consent or a model, 12 the
+    model server stopped answering.
+
+  doctor [--json] [--catalog FILE]
+    Read-only: this machine, whether every role's model answers, and what
+    changed since setup (memory, GPUs, model servers, catalog). Says what
+    would fix each problem and never changes anything. Exit 0 nothing to do,
+    1 something needs attention, 10 could not run.
 
   init [--dir <path>] [--from <path>] [--force] [--no-verify]
     Write a .gnomon/ surface into a project. --from copies an existing
@@ -2215,9 +2550,13 @@ Commands:
           report what came back. A model listing is not a test of a key —
           some providers serve one to no key at all.
 
-  audit [show|verify|tamper|resolve <trail>:<seq> --reason <text>] [--dir <path>]
+  audit [show|verify|anchor|tamper|resolve <trail>:<seq> --reason <text>] [--dir <path>]
     Audit trails, when [audit] is enabled. 'verify' re-hashes each record
     and checks the chain, so a trail altered after the fact is detectable.
+    With [audit.anchor] declared it also checks every sealed head against
+    the external witness and names when a re-chain happened (--offline reads
+    this machine's copy; --scope <id> checks another checkout's anchors).
+    'anchor' delivers queued heads to the witness now.
     'tamper' lists record_tamper events: changes to gnomon's own records
     that gnomon did not make (exit 3 while any is unresolved). 'resolve'
     is a person's acknowledgement of one, recorded; skill accept refuses
@@ -2303,6 +2642,27 @@ Commands:
     Print the hook (Claude Code PreToolUse, an opencode 2.2 plugin, Cursor
     hooks.json), or with --write add it to this project's own config.
 
+  dashboard [--port <n>] [--no-open] [--dir <path>]
+    A command center in the browser: projects, sessions as a timeline, what
+    the policy refused, audit-chain verification, contracts and token
+    measurements, read from what gnomon already records; and setup, check,
+    trust and endpoint test as buttons that run these same commands. A
+    change asks you to confirm what it will do first. Serves 127.0.0.1 only;
+    the printed link signs one tab in once. Ctrl-C stops it. Exit 0 stopped,
+    4 port unavailable, 10 failed to start. Alias: ui.
+
+  chaos [--json] [--seed <n>] [--faults <id,...>] [--schedules <s,...>] [--out <file>]
+    The fault-injection suite. A scripted model behind a loopback endpoint
+    answers a fixed task set and injects one fault per case: errors, timeouts,
+    empty and truncated replies, corrupt bodies, schema-violating tool calls,
+    rate limits, and faults seen in the field (late system messages dropped,
+    a relay that keeps abandoned requests running, slow throughput, tool
+    calls in reasoning_content). Each is scored ANNOUNCED or SILENT for
+    \`task --json\`, in a scratch project; nothing else is touched. Exit 0
+    every fault announced, 1 one or more silent, 2 the run is void.
+    \`chaos list\` prints the faults; \`chaos serve\` runs the endpoint for
+    another harness (docs/benchmarks/CHAOS.md).
+
   prompt [--continue | --resume <id>] [--trust]
     Interactive agent loop. --continue resumes the most recent session,
     --resume <id> a specific one. Conversations are saved after every turn.
@@ -2364,6 +2724,12 @@ Environment:
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
+  // [audit.anchor] delivers sealed heads after the checkpoint at session end.
+  // In this process that delivery would die with `gnomon task`'s exit, so the
+  // CLI hands it to a detached `gnomon audit anchor --background`. Inert when
+  // nothing is queued, and absent [audit.anchor] nothing ever is.
+  setAnchorScheduler((s) => detachedAnchorFlush(s, Boolean(args.trust)));
+
   // Deliberately NOT applied here. This is before any surface is loaded, so
   // there is nothing to say which names are credentials -- and injecting the
   // whole store blind is exactly the hole this closes: the store accepted any
@@ -2394,7 +2760,7 @@ async function main(): Promise<void> {
   // them when stdout is not a terminal. Not for commands that run tools: the
   // variable would be inherited by the project's own commands and change what
   // they print, which is not this flag's business. FORCE_COLOR opts back in.
-  const reporting = ["endpoint", "key", "audit", "sessions", "skill", "surface", "init", "migrate", "enumerations", "trust"];
+  const reporting = ["endpoint", "key", "audit", "sessions", "skill", "surface", "init", "migrate", "enumerations", "trust", "doctor"];
   if (reporting.includes(args.command) && !process.stdout.isTTY && !process.env.FORCE_COLOR) {
     process.env.NO_COLOR = "1";
   }
@@ -2430,6 +2796,16 @@ async function main(): Promise<void> {
     case "init":
       await cmdInit(args);
       break;
+    case "setup": {
+      const code = await cmdSetup(args);
+      if (code !== 0) process.exit(code);
+      break;
+    }
+    case "doctor": {
+      const code = await cmdDoctor(args);
+      if (code !== 0) process.exit(code);
+      break;
+    }
     case "migrate":
       await cmdMigrate(args);
       break;
@@ -2491,11 +2867,26 @@ async function main(): Promise<void> {
       break;
     case "check":
       process.exit(await cmdCheck(args));
+    case "chaos": {
+      // Its own argv parser, like guard: subcommands and flags it alone reads.
+      const { cmdChaos } = await import("./chaos.js");
+      const at = process.argv.indexOf("chaos", 2);
+      process.exitCode = await cmdChaos(process.argv.slice(at + 1));
+      return;
+    }
     case "guard": {
       // Its own argv parser and a lean import: see guard_main.ts.
       const { cmdGuard } = await import("./guard.js");
       const at = process.argv.indexOf("guard", 2);
       process.exitCode = await cmdGuard(process.argv.slice(at + 1));
+      return;
+    }
+    case "dashboard":
+    case "ui": {
+      // Lazy, like guard: nothing of the dashboard loads for any other command.
+      const { cmdDashboard } = await import("./dashboard.js");
+      const at = process.argv.indexOf(args.command, 2);
+      process.exitCode = await cmdDashboard(process.argv.slice(at + 1));
       return;
     }
     default:

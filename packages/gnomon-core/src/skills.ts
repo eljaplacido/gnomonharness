@@ -27,6 +27,8 @@ import {
   writeFileSync,
   renameSync,
   rmSync,
+  lstatSync,
+  realpathSync,
 } from "node:fs";
 import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
@@ -303,23 +305,77 @@ export function skillId(name: string): string {
   return slug || "skill";
 }
 
+/** A proposal gnomon will not write, and why. The `skill` tool returns it as a refusal. */
+export class ProposalRefused extends Error {}
+
 /**
  * Write a proposal into `.gnomon/skills/proposed/`.
  *
  * The path is derived from the name, so a proposal cannot be aimed at
  * `../../system.md` or at an existing active skill. This is the whole reason
  * authorship is safe to grant.
+ *
+ * Deriving the NAME was not enough on its own (LN8, orthogonality suite).
+ * `proposed/` is excluded from the surface hash, so a link planted there moved
+ * nothing, and the write followed it: `proposed/x.md -> ../../system.md` made
+ * the skill tool rewrite the system prompt, a hard link to `policy.toml` made
+ * it rewrite the policy, and `proposed -> .` made a proposal an ACTIVE skill
+ * with no accept. All three returned TOOL_OK under `strict`. So the staging
+ * directory must really be `.gnomon/skills/proposed/`, a proposal is never
+ * written through an existing link, and the file is written new and renamed
+ * into place, which replaces a directory entry and never writes through one.
  */
 export function proposeSkill(
   config: GnomonConfig,
   proposal: SkillProposal
 ): { id: string; path: string; existed: boolean } {
   const id = skillId(proposal.name);
+  for (const sub of [SKILLS_DIR, PROPOSED_DIR]) {
+    let link = false;
+    try {
+      link = lstatSync(join(config.gnomonDir, sub)).isSymbolicLink();
+    } catch {
+      /* absent: created below */
+    }
+    if (link) {
+      throw new ProposalRefused(
+        `.gnomon/${sub.split(sep).join("/")} is a symbolic link, so a proposal written there could ` +
+          `land anywhere, the surface included. Proposals are written only into the real directory.`
+      );
+    }
+  }
   const dir = join(config.gnomonDir, PROPOSED_DIR);
   mkdirSync(dir, { recursive: true });
+  if (realpathSync(dir) !== join(realpathSync(config.gnomonDir), PROPOSED_DIR)) {
+    throw new ProposalRefused(
+      `.gnomon/skills/proposed/ does not resolve to itself, so a proposal written there could land ` +
+        `anywhere, the surface included.`
+    );
+  }
   const path = join(dir, `${id}.md`);
-  const existed = existsSync(path);
-  writeFileSync(path, renderSkill(proposal), "utf-8");
+  let existed = false;
+  try {
+    const st = lstatSync(path);
+    existed = true;
+    if (!st.isFile() || st.nlink > 1) {
+      const what = st.isSymbolicLink() ? "a symbolic link" : st.isFile() ? "a hard link to another file" : "not a regular file";
+      throw new ProposalRefused(
+        `.gnomon/skills/proposed/${id}.md is ${what}; writing the proposal would write through it. ` +
+          `A person can remove it, and the proposal can then be made again.`
+      );
+    }
+  } catch (err) {
+    if (err instanceof ProposalRefused) throw err;
+    /* absent */
+  }
+  const tmp = join(dir, `.${id}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);
+  writeFileSync(tmp, renderSkill(proposal), { encoding: "utf-8", flag: "wx" });
+  try {
+    renameSync(tmp, path);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
   return { id, path, existed };
 }
 

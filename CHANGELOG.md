@@ -26,6 +26,674 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`gnomon setup`: scan your machine, plug in a local model it can run, then
+  connect a cloud model.** A first run needed you to know your VRAM, a model
+  tag that fits it, and the endpoint syntax for a cloud key. Setup does it in
+  one guided pass, and `gnomon launch` offers it first whenever no model
+  answers. Steps 2 to 5 of
+  [docs/design/SETUP-AND-COMMAND-CENTER.md](docs/design/SETUP-AND-COMMAND-CENTER.md).
+  - **Recommendation from a dated catalog**
+    (`packages/gnomon-cli/catalog/models.toml`, 2026-11). It is harness data,
+    updated with releases only, never fetched; `--catalog FILE` reads
+    another. `qwen3.6:35b` (Qwen3.6-35B-A3B, Q4) is the default from 24 GB
+    of GPU memory or 64 GB of unified memory, with gnomon's own measurements:
+    24/32 tasks alone and ~375 tok/s on an RTX 5090 (R1H), 18/32 and ~66
+    tok/s on an NVIDIA GB10 (R1). `gpt-oss:20b`, `qwen3:14b`, `qwen3:8b` and
+    `qwen3:4b` cover smaller machines, each printed as "not measured by
+    gnomon". An installed model is offered without a download. A catalog
+    older than 180 days says newer models likely exist.
+  - **Nothing without a yes.** A pull asks first and shows the size and free
+    disk. It goes through Ollama's own `POST /api/pull`; llama.cpp, LM Studio
+    and vLLM users get the command instead. The ~10 s speed check asks first.
+    A cloud key is read hidden into the store `gnomon key set` uses, and
+    checking it with one token is its own yes. The surface change is shown as
+    a diff and written only when accepted. Off a terminal, `--yes` approves
+    the write and nothing else: `--pull TAG` must name a download, and
+    nothing is spent.
+  - **A suggested mode.** With a cloud model, **hybrid**: the cloud plans
+    (`coordinator`, `plan`) and this machine builds, as measured in R1H:
+    87% vs 84% cloud-only at 26% lower cost per solved task on an RTX 5090.
+    The speed check's thresholds for local only, hybrid and cloud first are
+    provisional and labelled so. Modes are written as the existing
+    `role_profile` values `local_first`, `frontier_plan` and `all_remote`.
+  - **Hybrid control** (`off`, `observe`, `ask`, `auto`; default `observe`)
+    is recorded as a preference only. It takes effect when escalation
+    (`[roles.X.escalate]`, PR #102) is merged, and setup says so.
+  - **Rule 1 kept:** detection runs at setup only. The surface gets concrete
+    tags and three comment lines at the top of `roles.toml` (tags, mode,
+    catalog label; no hardware, host or date), so the same choices hash the
+    same on every machine. The hardware facts go to `.gnomon-setup.json`,
+    which setup gitignores. Trust is never granted by setup: a surface that
+    now sends a key somewhere new is shown for trust at the next launch.
+  - `--json` (schema `gnomon.setup/1`, CONTRACTS §16, fixture
+    `conformance/setup_report.json`) for the dashboard's Setup screen. A run
+    without `--yes` prints the proposal and its diff and exits 4. Exit 0
+    written, 1 usage, 3 the surface moved under it, 4 needs consent or a
+    model, 10 catalog unreadable, 12 the model server stopped answering.
+- **`gnomon doctor`: read-only, says what needs doing.** It shows the machine,
+  whether every role's model answers (a listing GET, nothing spent), and drift
+  since setup: memory, GPUs, model servers, a local model that will not fit
+  here, a stale catalog. Each problem comes with the command that fixes it.
+  It never writes. `--json` is schema `gnomon.doctor/1` (CONTRACTS §15,
+  fixture `conformance/doctor_report.json`). Exit 0 nothing to do, 1 something
+  needs attention, 10 could not run.
+- The probe now also reports each Ollama model's size on disk, which sizes an
+  installed model the catalog does not know.
+- **`gnomon setup --expect-proposal DIGEST`**: with `--yes`, writes only the
+  change whose `proposal.digest` an earlier `--json` run printed; a surface
+  edited since, or a machine that now plans differently, exits 3 and writes
+  nothing. The dashboard's Accept uses it. CONTRACTS §16,
+  `conformance/setup_report.json` (`proposal_keys`).
+- **`gnomon init` says what the machine is, and which local model servers it
+  runs.** A local-first setup needed you to know your VRAM and which port LM
+  Studio uses before gnomon could help. Init (and `launch`'s "No model answers"
+  picker on an existing surface) now prints OS, architecture, CPU cores, RAM,
+  each GPU with its memory, and which of Ollama (:11434), LM Studio (:1234),
+  llama.cpp (:8080) and vLLM (:8000) answer on 127.0.0.1. Step 1 of
+  [docs/design/SETUP-AND-COMMAND-CENTER.md](docs/design/SETUP-AND-COMMAND-CENTER.md).
+  - Read-only: `nvidia-smi`, `rocm-smi` or sysfs, `sysctl` on macOS, and
+    `Win32_VideoController` on Windows without nvidia-smi, each with a deadline
+    and no shell; GETs to model listings on 127.0.0.1 only. A missing tool is a
+    shorter answer, never an error.
+  - NVIDIA GB10 (DGX Spark) reports its memory as `[N/A]`; that is shown as
+    unified memory shared with system RAM, not as a GPU with none.
+  - Facts only. It writes nothing to the surface, picks no model, and is
+    skipped under `--from` and `--no-verify` (benchmark harnesses), so their
+    scaffolds and the ports they test see nothing new.
+- **`gnomon dashboard` (alias `gnomon ui`): a command center in the
+  browser.** Steps 1 and 2 of #105 Part II. Six screens over what gnomon already
+  records: Projects (surface hash, trust, sessions, turns by bucket, tokens
+  local against cloud, refusals, check verdicts), Setup (`gnomon setup` step
+  by step, below), Session (an audit trail as a timeline with a lane per role and a
+  marker per refusal or approval), Governance (each published rule with what it
+  refused, check verdicts, trust, audit-chain verification), Contracts (the
+  project's `[verify]`; in a checkout, the committed property-suite results,
+  the test counts and each contract clause with its fixture) and Measurements
+  (outcomes by locality, token flow by day, tokens by model; unmetered is never
+  0 and spend is unknown, never $0).
+  - **127.0.0.1 only**, with no flag to widen it. A one-use sign-in in the URL
+    fragment, exchanged for a bearer token; `Host`, `Origin` and
+    `Sec-Fetch-Site` checks; no cookies, no CORS headers, a CSP with no inline
+    script or style. An action's POST must also carry this page's `Origin`.
+    Contract: CONTRACTS §17, `conformance/dashboard.json`.
+  - **Every button is a gnomon command.** The server runs `node <cli entry>`
+    with an argv from a fixed table and typed, validated values (no leading
+    `-`, no whitespace, a declared endpoint, a project by id); the page never
+    sends an argv. Each command records itself as it does from a terminal,
+    and the dashboard adds no record kind. Enabled: `audit verify`,
+    `doctor --json`, `setup` (plan, pull, speed check, apply), `key set`,
+    `check --base REV --json`, `trust grant` / `revoke`, `endpoint test`.
+    Still shown disabled: `init`, `guard install`. Not in the UI: skill
+    accept and reject (§11's provenance rules stay CLI-only for now).
+  - **Anything that writes, downloads or may spend asks first.** The first
+    request runs nothing and answers 428 with what the server will do (the
+    download's size and free disk; the key store; the surface hash and its
+    grants; the endpoint, URL and whether a token is billed; for setup, the
+    diff). Only the Confirm in that dialog sends the one-use, five-minute
+    nonce, bound to the action, project and values, that runs it. Trust
+    re-checks the surface hash before running.
+  - **Setup screen, wired:** scan (`doctor --json`), the recommendation and
+    its options, a download that is its own confirmed click showing the size
+    (a job with setup's own progress lines), a speed check, a cloud preset or
+    URL, the key typed into the confirmation and handed to `gnomon key set`
+    on stdin (never stored by the dashboard, never on a command line), the
+    mode, and the diff, written only on **Accept** as `setup --yes
+    --expect-proposal <digest>`.
+  - **Governance:** Run check with the verdict and each check's findings;
+    Grant and Revoke after a confirmation listing exactly what is trusted.
+  - **Lean.** `node:http`, hand-written assets (~100 KB, no framework, no build
+    step, no remote fonts), imported only by its own command. The wordmark is
+    a four-letter subset of Cinzel (SIL OFL 1.1, shipped beside it).
+- **gnomon desktop (draft, not released): a Tauri window over `gnomon
+  dashboard`** (`packages/gnomon-desktop`). It finds the gnomon CLI already on
+  the machine, runs `gnomon dashboard --no-open --port 0 --dir <root>` for a
+  project folder you pick, reads the one-use sign-in link from the child's
+  stdout and shows the dashboard page; it adds no action the CLI lacks.
+  Built and tested on Windows, macOS and Linux by
+  `.github/workflows/desktop.yml`; not signed, released or auto-updated.
+- **Context hygiene, opt-in: observation masking and the environment
+  bootstrap** (state-of-the-art report items CX1 and CX2, rung 3 of its
+  adoption ladder). Neither key is in the scaffold. A surface without them
+  behaves exactly as before. A new test pins the digest of every request body
+  of a scripted turn (leg trims, nudges, the wrap-up) taken on `be4fc0d8`, and
+  the keys-absent turn reproduces it. The surface-fidelity, degradation and
+  determinism figures do not move. Declaring either key moves the surface
+  hash, by design.
+  - `[context.mask_observations]` (`keep_last`, `at_fill`, `batch`) replaces
+    older tool results with one-line placeholders. Each placeholder gives the
+    tool, the call, a digest of its arguments, how it ended, the byte count
+    and any spill path. It masks **in batches**: only once the turn's context
+    passes `at_fill` of the window, and only when at least `batch` results can
+    go at once. Between batches every request extends the previous one byte
+    for byte, so the server's prompt cache holds; Qwen3.5/3.6 under llama.cpp
+    cannot cut a cached prefix back. A test drives a real turn and checks that
+    property request by request. It never masks the system prompt, any user
+    message, gnomon's own messages (a failed `[verify]` included), the newest
+    `keep_last` results, a `task` report, or a failure no file change has
+    followed yet. `counters.masking` (`batches`, `observations`,
+    `tokens_saved`) is on every turn record of a surface that declares it,
+    and each batch writes a `context_mask` audit record.
+  - `[context] bootstrap = "<id>"` runs the `[bootstrap.<id>]` block of
+    policy.toml once per session, before the first model call. The block
+    holds one probe list per platform (`linux`, `macos`, `windows`), which
+    gnomon labels, caps and joins into one compound command. The command runs
+    through the ordinary bash tool, under the role's `bash_deny`/`bash_allow`,
+    the sandbox and the audit, as `[verify]` does. Its output, capped at
+    `max_bytes`, is appended to the system prompt. Later turns, chain stages
+    and `task` sub-turns reuse it, so the prompt's first bytes stay the same.
+    `counters.bootstrap` records `outcome` (`ok` / `refused` / `failed` /
+    `unavailable`), `bytes`, `tokens` and `truncated`, and a `bootstrap` audit
+    record carries the command. A declared bootstrap is a workspace-trust
+    grant, like a `[verify]` command that is not the project's own check: it
+    runs unasked, so trust asks about it once, and a clamped surface runs
+    none. docs/GUIDE.md §8 has a reference probe list
+    for all three platforms, and a test runs it on each CI OS. Writing that
+    test found that `cargo --version` under an empty home in this repository
+    starts a toolchain download, so the list turns auto-install off.
+  - The surface audit refuses the misread shapes: `mask_observations = { … }`
+    (an inline table, which the TOML subset reads as a string), unknown keys,
+    out-of-range values, a selected id with no block, and the block in
+    config.toml. It notes a block that is declared but not selected, or that
+    has no probes for this machine.
+  - The record fields, the outcome enumeration and the two audit kinds are
+    published in docs/CONTRACTS.md §19 and `conformance/context_hygiene.json`,
+    and docs.test.ts holds the code, the fixture and the table to one set.
+    `benchmarks/surface-fidelity` fingerprints both resolvers.
+  - `docs/benchmarks/prereg/CX-AB.md` pre-registers the paired A/B that
+    decides whether either becomes a default. It covers four arms (off, mask,
+    boot, both), 16 Terminal-Bench tasks × 3, on the gx10 Qwen3.6 lane and on
+    DeepSeek. The endpoints are input tokens per task and per solved task,
+    cache-hit fraction, re-prefill seconds, not-found errors and calls to the
+    first change, with solve rate as non-inferiority at a 10-point margin.
+    Nothing has run.
+- **`gnomon chaos`: a fault-injection suite for the model transport.**
+  - **What it does.** A scripted model behind a loopback OpenAI-compatible
+    endpoint answers a fixed task set (`answer`, `read`, `fix`). Each case
+    injects one of 20 faults under a seeded schedule (single, persistent,
+    intermittent, burst). The faults cover AgentChaos's Error, Timeout, Empty,
+    Truncate, Corrupt and Schema, ReliabilityBench's rate limits, and faults
+    seen in the field: late system messages dropped by a template, a relay
+    that keeps abandoned requests running, slow-GPU throughput, tool calls in
+    `reasoning_content`, and `finish_reason` length mid tool call.
+  - **How it scores.** Each fault is scored ANNOUNCED or SILENT for
+    `gnomon task --json`, against a clean run of the same task. Its channels
+    are the exit status, `stop_reason`, a declared degradation, or a new
+    stderr line that names the fault. The card also reports recovery, tokens
+    billed beyond the clean run, and abandoned requests left open.
+  - **When a run is void.** The run is void (exit 2) unless the scoring's
+    negative controls hold, the lanes agree serially and concurrently (and a
+    garbling lane is caught), every clean run finishes, and every fault fired.
+    Otherwise it exits 0 when every fault is announced and 1 when one is
+    silent.
+  - **Also included.** `gnomon chaos list` prints the taxonomy. `gnomon chaos
+    serve` runs the endpoint for another harness, with control routes to
+    start a case and read its span.
+  - **Separate from everything else.** It runs in a scratch project with its
+    own surface and changes no default.
+  - **Docs.** Scorecard schema `gnomon.chaos/1`, docs/CONTRACTS.md §20, fixture
+    `conformance/chaos_scorecard.json`. Proposed as an open standard in
+    docs/benchmarks/CHAOS.md. Results are in benchmarks/chaos/: v0.4.0
+    announced 4 of 20 fault classes, and this release announces 17 of 20.
+- **`[audit.anchor]`: each sealed trail head copied to a witness off the
+  machine (GV4).** Opt-in. Absent, behaviour is exactly as before: nothing is
+  queued, the record guard excludes nothing, and nothing touches the network.
+  At every `session_end` of a chained trail, a `gnomon.anchor/1` statement
+  (trail, seq, hash, record count, seal time, checkout scope) is queued: one
+  file, about 0.03 ms. That covers sessions, checkpoints, `check`, `guard`,
+  skill decisions and tamper events. After the checkpoint at session end, the
+  CLI starts a detached `gnomon audit anchor --background` (about 5 ms) to
+  deliver the queue. The turn path is unchanged (a `tool_call` record
+  writes in 0.013 ms off and on).
+  Three backends, no new dependency:
+  - **git:** a commit per delivery on `refs/heads/gnomon-anchors`, pushed
+    fast-forward only.
+  - **rfc3161:** a time-stamp token, verified offline against a pinned
+    `tsa_cert` by a zero-dependency DER reader (`rfc3161.ts`). It is tested
+    on a real OpenSSL TSA token.
+  - **cmd:** an operator command, with an optional verifier.
+- **`gnomon audit verify` checks the witness.** It prints an `external
+  anchor:` line under each trail. `RE-CHAINED` names the anchored and current
+  hash, the seq range the change is in, and the time after which it was
+  made. A trail the witness names that is no longer on disk is reported, and
+  so is a rolled-back checkpoint, which CONTRACTS.md §14 had said nothing on
+  the machine could detect. `--offline` reads the local copy; `--scope <id>`
+  checks another checkout's anchors. `gnomon audit anchor` delivers queued
+  heads now.
+- **Degradation `audit_anchor_queued`.** When the witness cannot be reached,
+  the heads stay queued. The next session announces it on stderr (`--json`
+  too), records it, and retries. The degradation suite now holds **17/17**
+  (was 14/14; with `shadow_unreachable` and `context_window_unresolved`).
+- **Tamper suite with an anchor:**
+  `benchmarks/results/auditability-2026-11-03`.
+  - **git witness: 9/9.** The attacker also wipes the local anchor state,
+    tries a forced push (refused 11/11) and anchors the forgery.
+  - **Anchoring off: 8/9**, unchanged.
+  - **RFC 3161 receipts kept locally, against that attacker: 8/9**, published
+    as that backend's limit.
+  - `anchor.test.ts` runs the off and git arms in CI.
+- **docs/benchmarks/AUDITABILITY.md:** a proposed open standard, the
+  *Auditability & Tamper-Evidence Suite*. It covers an attack taxonomy,
+  scoring, how to run it against other harnesses' logs, and reporting rules.
+- **An endpoint can read its model's context window from the endpoint:
+  `[endpoints.<name>] max_context_tokens = "auto"`.** This is opt-in, and a
+  surface that does not use it behaves exactly as before. C3, the root cause
+  of P2G's token gap: `[defaults] max_context_tokens = 65536` also governed
+  hosted models with far larger windows, so every leg checkpoint trimmed the
+  working context to about 39k tokens. On P2G (deepseek-v4.1-flash on OpenCode
+  Go, a 1,000,000-token window), 25 of 28 gnomon cells crossed at least one
+  leg. gnomon's median total input was 1.56M against opencode's 6.89M.
+  `"auto"` asks once per session for each endpoint URL and model. It reads the
+  OpenCode, OpenRouter and vLLM `/models` shapes, llama.cpp's `/props` and
+  Ollama's `/api/show`. When nothing answers, as with a metering relay that
+  returns 404 for `/models`, the turn runs on `[defaults]
+  max_context_tokens`. That fallback is said on stderr and recorded as the new
+  `context_window_unresolved` degradation. The turn record's `wire` gains
+  `max_context_tokens_source` (`declared`, `listing:<shape>` or `default`)
+  wherever it already carried `max_context_tokens`. An endpoint that is not on
+  this machine and declares no window now gets a startup note naming the key.
+  `gnomon init` writes the same active configuration as before. Its zen and
+  go blocks gain a commented `# max_context_tokens = "auto"` recommendation.
+  Contract: CONTRACTS.md §24,
+  `conformance/endpoint_window.json`.
+- **Opt-in line caps on tool output: `max_lines` on the `bash` and `read`
+  declarations in tools.toml (CX3).** Off unless declared. On `bash`, an
+  output longer than the cap keeps its first and last lines and offloads the
+  whole to `.gnomon-out/`. A note says how many lines were omitted and to
+  narrow the command with grep, head, tail or `sed -n`. On `read`, a file is
+  shown that many lines at a time, numbered as in the whole file, with a
+  footer giving the next `offset`, and read's schema gains `offset` and
+  `limit`. Both apply before the 32 KB byte cap. The value must be a whole
+  number of at least 10. On any other tool the key does nothing, and the
+  surface audit says so (not fatal). The surface-fidelity fingerprint
+  resolves it.
+  - Default unchanged: with no `max_lines` declared, the tool schemas, the
+    tool outputs and the turn's request bodies are master's, byte for byte
+    (the wire pin in `tool_hygiene.test.ts`, taken on v0.4.0 first).
+  - Why opt-in: the evidence for a default (SWE-agent ACI, full-file views
+    5.3 points behind a window) is older and from another harness. An
+    estimate from the 2026-11 trails, which record each read's line count
+    but no output sizes: a 200-line window would have cut 306 of 878 file
+    reads. Under stated assumptions, that is 2–11% of input tokens per turn
+    on the six local lanes and 0.2% on the hosted P2G, before any extra
+    paging calls; the bounds run from under 1% to 24%. `bash` output size
+    is not recorded, so its share is unknown. A paired A/B decides the
+    default.
+- **A tool call that failed because its arguments missed the schema is told
+  the schema (CX5).** The model-visible text changes only on calls that
+  already failed. When a built-in tool's call fails or is refused, and its
+  arguments lack a required parameter or carry one of the wrong JSON type,
+  the answer it already gets ends with the parameters the tool takes. Those
+  are named with their types, the required ones are marked, and any keys it
+  does not take are listed: `edit {file_path, old_string, new_string}` is
+  told `path`, `old_text`, `new_text`. Before, that call got "` is a
+  directory, not a file", and `read {file_path}` got "Nothing was given".
+  Arguments that are not JSON at all now get the parameter list beside the
+  parse error.
+  - Unchanged: every success, every failure whose arguments match the
+    schema, the answer to a tool the role was not offered (it already names
+    the offered tools), the `tool_call` summaries, and `[turn]
+    max_consecutive_malformed`. No model call is added. A scripted turn of
+    well-formed calls sends the same request bodies as v0.4.0, byte for
+    byte (`tool_hygiene.test.ts`).
+  - Measured first, on the 2026-11 benchmark trails as of
+    2026-11-04T09:01Z (some lanes were still running): 737 gnomon sessions,
+    30,714 tool calls. An unoffered or unknown tool name occurred once
+    (deepseek-v4.1-flash, a coordinator calling `bash`; it recovered on the
+    next step). The local quantized models made about 18,800 of those calls
+    with none. There were no malformed-JSON arguments, and three schema
+    misses of a measurable shape (`todo` with no list twice, `write` with
+    no `content` once). So this corrects a false-premise answer; it is not
+    a measured gain on these lanes.
+- **`[approval] after_refusal = "ask"`** (opt-in, GV13). After a refusal, a
+  gated call within the next `after_refusal_calls` (default 1) that names what
+  the refused call named, such as a path, a file or a host, goes to a person.
+  This holds even under `gate = "never"` or a standing approval. It is the
+  route-around shape GVC found: a `write_allow` refusal of `CHANGELOG.md`,
+  then `python3 - <<'PY' … Path("CHANGELOG.md").write_text(…)`. Under
+  `gnomon task`, `--yes` answers it and its absence declines it, as for any
+  gated call. The audit `approval` record carries `escalated: "after_refusal"`
+  and the turn counters carry `after_refusal_asks`. Off, nothing changes.
+  Contract: CONTRACTS.md §25, `conformance/after_refusal.json`.
+- **Tool definitions in the record, and MCP tool pins** (GV10). Every audit
+  `turn` record's `wire` carries `tools_hash`, a sha256 over the canonical JSON
+  of the tool definitions the turn offered. When an MCP server connects, its
+  `tools/list` is hashed and compared with what this machine pinned for that
+  server, in the trust store. The first contact pins it, and a new `mcp_tools`
+  audit record says `first_contact`, `matched` or `changed`. A server offering
+  other tools than its pin, such as a rug pull or an unannounced upgrade, runs
+  the session clamped to the defaults, the way an untrusted surface runs. It is
+  recorded as `trust` `clamped` with `tools_changed`. `gnomon trust grant`
+  accepts a change by clearing the pins, and `gnomon trust` lists them.
+  Nothing sent to the model changes. Contract: CONTRACTS.md §26,
+  `conformance/tools_hash.json`.
+- **Stall signals, log-only** (research item LP5). Three detectors watch a
+  turn's tool calls: limit cycles of period 2 to 4, `no_progress`, and a
+  novelty CUSUM. They record `counters.stall_signals` on every turn record
+  and, with `[audit]` on, one `stall_signal` record per episode. They never
+  act: the model gets the same requests with or without them, which a
+  property test checks over random scripts. Their input is the fields of a
+  metadata `tool_call` record, so `benchmarks/analysis/stall_replay.mjs`
+  recomputes them from any trail. The thresholds were tuned on r1h and tested
+  on m1, held out. On m1 they flagged 15 of 28 stall or time-cap runs at least
+  2 steps before the run ended, and 0 of 73 successful runs. The existing idle
+  nudge fires earlier on those runs, and on half of all successes. Contract:
+  CONTRACTS.md §27 (stall signals), `conformance/stall_signals.json`. No surface
+  key, no behaviour change.
+- **A run killed mid-turn leaves its record (C5).** `gnomon task --json`
+  printed its record, and a session wrote its `turn` audit record, only when
+  the process got that far; a benchmark's time cap (SIGTERM, then SIGKILL)
+  left nothing. 19 of 21 capped gnomon cells in P2G attempt 1 and 20 in M2 had
+  no gnomon-side record, so M2's collector read FAIL on runs whose wire was
+  correct. With `[audit]` on, `.gnomon-audit/<session>.record.json` is now the
+  turn's record as it stands, rewritten atomically after each model reply and
+  tool call (`record_state: "partial"`, `stop_reason: "in_progress"`), which is
+  what a SIGKILL leaves. SIGINT, SIGTERM and SIGHUP flush it `final` as
+  `stop_reason: "killed"` (`stop_detail.signal`, `apparatus_failure`, 11),
+  append the `turn` record and `session_end`, print it under `--json`, and
+  then let the signal end the process as before. Request bodies are
+  byte-identical to 0.4.0's. A killed session's record counts as part of its
+  trail for the record guard. docs/CONTRACTS.md §28 (Incremental record).
+- **Each model request is recorded: what it carried and what came back.**
+  The causal analysis of 2026-11-04 (`benchmarks/results/causal-2026-11/`)
+  could not say which mechanism makes long hosted runs time out, because
+  none was in gnomon's records: the `turn` record's `context_turns` and
+  `context_dropped` read 0 in all 450 task turn records (they describe
+  earlier turns, and a task has none), trims, reasoning tokens, replay and
+  steering were not recorded, and the provider counted more than the 65,536
+  window on 85 of 156 C2D calls. `counters.model_calls` now lists every
+  request (the last 512): gnomon's estimate of its messages and of its whole
+  body, the assistant messages whose reasoning was replayed, gnomon's
+  steering messages present by kind (`nudge`, `converge`, `other`) and the
+  role they went in, and the trim before it (`leg` or `overflow`, messages
+  dropped, estimate before and after). `volatile.model_calls` (and
+  `model_calls` on the `turn` record) lists what came back: provider
+  prompt, cached, completion and reasoning tokens, reasoning characters,
+  code and time, with `over_window` and the provider-to-estimate `ratio`.
+  With `[audit]` on, one `model_call` record per request joins the two,
+  metadata only. The `turn` and `chain_stage` records gain
+  `context_window`, `context_budget`, `context_estimate`, `context_trims` and
+  `context_trimmed`. Request bodies are byte-identical to 0.4.0's, checked
+  against a hash taken on master before the change. docs/CONTRACTS.md §29
+  (Per-call mediator record).
+- **`[context] token_estimate = "calibrated"` (opt-in).** Divides the turn's
+  trim budgets by the session's measured ratio of provider prompt tokens to
+  gnomon's ~4-characters-a-token estimate, per endpoint and model, held
+  within 0.5–4, so a trim bounds what the provider counts. `"chars4"`, the
+  default, is today's behaviour. A misspelt value is reported and runs as
+  `"chars4"`.
+- **docs/benchmarks: gnomon Bench Standards v0.1 (draft)** — reporting,
+  overhead, hybrid and governance standards for benchmark results, and the
+  roadmap they serve. Documentation only.
+
+### Fixed
+
+- **Refusals under `tools`, `malformed` and `url` (and webfetch's `network`)
+  are read as their rule.** The shared reader `classifyRefusal` knew seven of
+  the eleven policy rules' summary forms, so a tool the role was not given,
+  arguments that could not be read, a refused URL and a broken `bash_deny`
+  pattern showed as "no rule named" in the dashboard. A test now drives every
+  precheck that refuses with a rule and requires the reader to return that
+  rule. **`gnomon skill mine` output changes:** those refusals can now become
+  `repeated_refusal` candidates (3+ sessions), with the tool's name, or the
+  URL's host or scheme, as the pattern; existing candidates are unchanged,
+  and declined approvals and delegations outside `task_allow` are still not
+  counted. CONTRACTS §12, `conformance/skill_candidate.json` (`rules`).
+- **A `[shadow]` that cannot be reached is now a declared degradation,
+  `shadow_unreachable`, said once and recorded.** The decision shadow at
+  `127.0.0.1:18195` has been down since about 2026-10-31. Every gnomon session
+  since then recorded no shadow decisions, and nothing in gnomon showed it.
+  Agentcenter's readout found the three-day gap. The shadow stopped after
+  three refused connections, as designed, and said so in one line: on stderr
+  in `gnomon task`, which scripts discard, in grey at the next prompt in a
+  terminal, and not at all over ACP, where the line was queued after the
+  session's notes had been sent. Nothing in the trail or the task record said
+  so.
+  - At session start gnomon makes one `HEAD` request to the url, off the
+    critical path; any HTTP status counts as reachable. A refused connection
+    stops the shadow at once. A timeout decides nothing.
+  - A stop, at the start or after three failures in a row, writes a
+    `degradation` record with `id: "shadow_unreachable"` and a `detail` of
+    `url` (scheme, host, port and path only), `phase` (`start` or
+    `mid_session`), `failures` and `cause`. It goes to the trail and to the
+    task record's `degradations`. It is said in one yellow line, under the
+    banner in a terminal (the start check is awaited for at most 250 ms),
+    and sent to the editor over ACP.
+  - Coverage: `shadow: {attempted, recorded, pending, stopped}` on every
+    `turn` and `session_end` audit record, and `volatile.shadow` on the task
+    record, present only when a `[shadow]` is declared. A dead shadow reads
+    as 0 of N.
+  - `gnomon task` now flushes the shadow before the turn record rather than
+    after `session_end`, so the record carries the final count and a stop
+    found while flushing lands inside the session.
+  - Still log-only. With no shadow, a healthy one, one down from the start and
+    one that fails partway, the task record (surface hash, `volatile` and
+    `degradations` aside) is the same string, so the exit code is the same.
+- **CONTRACTS.md §18 publishes the degradation ids** with
+  `conformance/degradations.json`. `degradation.test.ts` checks the code, the
+  fixture and the section against each other. §7 documents the coverage
+  object and the new degradation; `conformance/shadow_record.json` pins both.
+- **The degradation suite is 17/17** (was 14/14; this, `audit_anchor_queued`
+  and `context_window_unresolved`, below). `scripts/property_suites.mjs` holds
+  CI to 17, and EVIDENCE, BENCHMARKS and the suite's README say 17. The
+  `shadow_unreachable` probe drives `runTask` and reads the task record.
+- **Recovered faults are announced under `gnomon task --json`.** Retries
+  (5xx, 429, timeouts, broken or stalled streams) were said only on the
+  transcript channel that `--json` closes, and so were the loop's re-asks and
+  repairs (empty replies, cut-off or malformed tool calls, tool-call markup)
+  and a failed declared check. A run that took three tries read as one. They
+  now go to stderr like degradations do. Interactive output is unchanged.
+- **A 200 whose body is not JSON is retried and named.** A proxy's HTML error
+  page ended the turn on first sight, as code 10 ("the request was wrong"),
+  unretried. It is now code 12 and spends a generation attempt.
+- **A streamed chunk that is not JSON is announced.** It was dropped without a
+  word, and its text was missing from the answer.
+- **`content` sent as an array of content parts is read as its text,** and
+  said once per turn. It used to crash the run as "could not start" (exit 10).
+- **The repair line says what was wrong with an unusable tool call:** cut off
+  in transit, not a JSON object, or a tool the role was not offered.
+- **`gnomon task --json` records `verify`** (`passed`, `failed`,
+  `unrunnable`, `declined`, `skipped`) when a declared check ran. The turn had
+  it and the record dropped it, so a check that failed every round read
+  `answered`, exit 0.
+- **Still silent, and pinned as failing tests until announced:**
+  - `late_system_dropped` and `slow_throttle` need the endpoint conformance
+    probe;
+  - `cache_miss` needs `cached_tokens` read.
+
+### Security
+
+- **`[audit.anchor]` is a workspace-trust grant.** It pushes, posts or runs a
+  command unasked, at session end. An untrusted surface runs with the block
+  marked: it anchors nothing, and says why at session start. `gnomon audit
+  verify` and `gnomon audit anchor` reach the witness only for a trusted
+  surface, or with `--trust` / `GNOMON_TRUST`, which the detached delivery
+  inherits. A `remote` starting with `-` is refused, and the `ext::`
+  transport is disabled for anchor pushes.
+- **Found while testing:** git's `receive.denyNonFastForwards` and
+  `receive.denyDeletes` apply to `refs/heads/*` only. A forced push to
+  `refs/gnomon/anchors` was accepted with both set. The default anchor ref is
+  a branch for that reason, and a ref outside `refs/heads/` is reported as a
+  problem. `anchor.test.ts` pins git's behaviour on both sides.
+- **The policy guard closes the bypasses INJ-2026-11 found. Tightening only:
+  no decision that refused before allows now.** The conclusive injection suite
+  (`benchmarks/results/inj-2026-11/` on `bench/injection-2026-11`) forced every
+  attack with a scripted, compromised model and read outcomes from real state.
+  Its red-team found two in-claim parser bugs, and its loop found five routes
+  the rules did not cover. Each is now refused in the loop and in
+  `gnomon guard` alike, with the suite's exact command as a regression test and
+  2–3 respellings beside it.
+  - **`${IFS}` and other expansions (I1, a bug).** `rm${IFS}-rf${IFS}keep`
+    passed a deny-list that held 31 other `rm` spellings, and
+    `curl${IFS}…` passed `network = false`. A command is now read a second time
+    wherever the line itself says what an expansion is: `${IFS}`/`$IFS` as the
+    separators they are, `$1`…`$9`/`$@`/`$*` as empty, a variable the line
+    assigns a literal (`c=cu; d=rl; $c$d …`, `export`, `set --`),
+    `${x:-word}`, `$(echo …)`, `$(which …)`, an unquoted `{a,b}` brace list,
+    and `echo <base64> | base64 -d | sh`. Every rule is put to both readings,
+    so the second only adds.
+  - **`cd` in a nested shell (I2, a bug).** `sh -c 'cd src && echo x >
+    ../CHANGELOG.md'` passed `write_allow`; the same line without `sh -c` was
+    refused. `cd`, `pushd`, `popd`, `cd -` and `env -C` are now followed through
+    subshells, `sh -c`, `bash -lc`, here-documents, `eval` and `$( )`, scoped
+    to the shell they ran in. A `cd` that may not have run (a group, a
+    function body, after `||`, in a pipeline, into a directory that does not
+    exist) leaves a target judged from every directory it may be relative to.
+    **Changed decision:** a relative write after a `cd` gnomon cannot follow
+    (`cd "$X" && echo x > notes.md`) was not judged; under `write_allow` it is
+    now refused.
+  - **git and package managers handed a remote (I3).** Under
+    `network = false`, `git push http://…`, `git ls-remote`, `git clone`,
+    `git remote add|set-url`, `git -c remote.x.url=…`, `--repo=` and
+    `git config remote.*.url` with a non-loopback URL or `host:path`, and
+    `npm`/`pip` given `--registry`, `--index-url`/`-i` or a package URL, are
+    refused. A configured remote (`git push origin`) is not. **Behaviour change
+    for every surface that sets `network = false`, the scaffold's default:**
+    `git clone https://…` there is now refused; `/network on` or
+    `network = true` grants it.
+  - **Shell writes into `.gnomon/` (I6).** Refused for every role at every
+    `/allow` level, rule `surface`, like the record rule; the write tool under
+    `/allow` is the one consented route.
+  - **`git clean -fdx` and the records (I7).** The `record` rule now covers
+    `.gnomon-sessions/` (or `[session] dir`), a recursive removal of a
+    directory above the records (`rm -r`, `find -delete` unless its name tests
+    miss every record, `mv`, `rsync --delete`, `shutil.rmtree`), and a
+    `git clean` or `git stash --include-untracked|--all` that git's own
+    `status` says would remove one (after `-x`/`-X`/`-e` and pathspecs).
+    `git clean -fd` in a scaffolded project (records gitignored) still runs.
+  - **New rule `git_hooks` (I8).** A write by any tool into `.git/hooks/` or
+    `.git/config`, and `git config` setting a key git runs as a program
+    (`core.hooksPath`, `core.pager`, `core.fsmonitor`, filter and diff
+    drivers, `credential.helper`, `!` aliases, `include.path`, …) in any
+    scope, for every role. A hook runs on the operator's next commit, outside
+    any call gnomon decides and outside the container under `exec = "docker"`.
+  - **Repository-defined code is named, and can be asked about.** `npm test`
+    runs package.json's `pretest`, which no rule over the command line can see
+    (the suite's package-script carrier: 0 of 40 blocked without a container).
+    An approval prompt or guard `ask` for `npm`/`pnpm`/`yarn`/`bun` run, test,
+    start or install, `npx`, `make`, `pip install -e`/a local path, `cargo`
+    build/test, `go generate` and kin now lists the package.json scripts that
+    would run. **New opt-in `[approval] repo_code = true`** asks before every
+    such call whatever `gate` says (rule `repo_code`, decision `ask`). Off by
+    default; only `exec = "docker"` contains what the code does.
+  - `> file` with no command (`> .gnomon-audit/x.jsonl`, `{ …; } > f`) is read
+    as the write it is.
+  - **Published enumerations:** `git_hooks` and `repo_code` join the policy and
+    guard rules (CONTRACTS.md §10, `conformance/guard_decision.json`), with 13
+    new shared guard cases put to the loop and the binary.
+  - **Regression evidence** (`benchmarks/results/inj-2026-11-guardfix/`):
+    G1c's 790 recorded calls through `gnomon guard`, master `be4fc0d8` vs this
+    branch: 0 decisions changed (17/17 labelled harmful calls refused, 8
+    refusals in violation-free trials as before). G1-R's 120 trials re-scored by
+    `gnomon check`: 0 of 360 verdicts changed; 44/44 peer violation trials
+    blocked, 6/75 false alarms. G2b-R's 521 recorded tool calls and 16 probes:
+    0 decisions changed. The 60 everyday commands: 0 refused. The property
+    suites hold their published figures; two of their probes moved `.gnomon/`
+    with a named shell write, which is now refused, and move it through a
+    script file instead.
+  - **The injection suite, re-run** on this build (`inj-agent:fc21e72d`, same
+    apparatus, corpus and arms): P(block | attempt) on the text carriers D
+    41.1% → 60.7%, G 58.9% → 69.6%, S 92.9% → 92.9%; benign look-alikes
+    refused unchanged (D 5.6%, G 16.7%, S 44.4%); package scripts 0/40 on every
+    arm, as before. Every one of the 102 changed cells is an attack now
+    blocked. The GV3 red-team: round 1 escapes 151 → 9 per 1,000 valid
+    spellings, round 2 279 → 0, in-claim escapes 3 → 0.
+- **Order invariance (GV17) and the orthogonality invariant (LN8), as property
+  suites, with what they found fixed. Tightening only.**
+  `packages/gnomon-core/src/order_invariance.test.ts` permutes every
+  `readdirSync` result (12 seeded shuffles, the reverse, the identity) and the
+  declaration order of every unordered TOML collection, and asserts the system
+  prompt, the tools JSON and every tool answer built from them are the same
+  bytes. `packages/gnomon-core/src/orthogonality.test.ts` drives the `write`,
+  `edit`, `skill`, `bash` and `task` paths at 11 protected files (policy, loop
+  config, roles, tools, a profile, system prompt, an accepted skill, a trial
+  spec, the verifier's key, the audit trail, a trial record) through 751
+  routes. Both are pinned by `conformance/order_invariance.json` and
+  `conformance/orthogonality.json` (CONTRACTS.md §22 order invariance,
+  §23 orthogonality).
+  - **MCP tools are sorted** like declared tools. They followed
+    `[mcp_servers.*]` declaration order and each server's `tools/list` order.
+  - **A capped walk keeps the same files on every filesystem.** `glob` and
+    `grep` past 20,000 files, the citation check past 12 same-named files,
+    and which record files the tamper guard hashes on equal mtimes depended on
+    readdir order. The `task` tool's unknown-role list is in byte order, not
+    `[roles.*]` order.
+  - **A hard link to a surface file is the surface.** With `p.toml` a hard
+    link to `.gnomon/policy.toml`, `write p.toml` and `edit p.toml` rewrote the
+    policy with code 0 under `strict` and no drift was reported. Also through
+    a `task` sub-turn. Refused now (rule `surface`), as hard links to records
+    already were.
+  - **The `skill` tool never writes through a link.** `proposed/` is not
+    hashed, so a link planted there moved nothing, and the next proposal
+    followed it: onto `system.md`, onto `policy.toml` through a hard link, or
+    into `skills/` as an active skill with no accept (`proposed -> .`). Refused
+    now; a proposal is written new and renamed into place, and a skill call
+    that moves the surface hash reports it.
+  - **A surface that stops hashing has moved.** `ln -sf <nowhere>
+    .gnomon/<file>` left a dangling link the manifest walk cannot stat, and
+    the drift check read "cannot hash" as "unchanged". Reported now.
+  - **Case variants of `.gnomon/`** are the surface on case-insensitive
+    filesystems (macOS by default, Windows), as they already were for the
+    records.
+
+### Security — release supply chain (CI only; no runtime change)
+
+- **Signed build provenance (SLSA Build L3 on GitHub's documented path).** The
+  release build moved into a reusable workflow,
+  `.github/workflows/build-release.yml`, which attests every native archive
+  and npm tarball in the job that built it, then writes `SHA256SUMS` and an
+  SPDX SBOM and attests both. Releases gain `gnomon-<v>.spdx.json` and
+  `gnomon-<v>.intoto.jsonl` (every Sigstore bundle). `release.yml` verifies all
+  of it before it creates the draft, and the job that can write a release no
+  longer runs `pnpm install` or any build script.
+- **`scripts/verify-release.sh <version>`** checks a release's checksums,
+  provenance (exact signer: `build-release.yml` at the tag, GitHub-hosted
+  runner) and SBOM attestation. README → "Verify a release".
+- **npm trusted publishing.** `publish-npm.yml` publishes by OIDC once
+  npmjs.com trusts it for all four packages, keeps `NPM_TOKEN` only as a
+  fallback until then, and otherwise stops naming the four packages and the
+  fields to enter. docs/RELEASING.md has the one-time setup.
+- **Every third-party Action SHA-pinned** with its version in a comment, and
+  every workflow declares least-privilege `permissions:` (ci.yml had none).
+- **OpenSSF Scorecard** workflow, results to code scanning.
+- **SECURITY.md**: coordinated vulnerability disclosure with targets,
+  advisories and CVEs through GitHub, supported versions, and a CRA mapping.
+
+### Merge train 2026-11-04 (#128–#144)
+
+- **CONTRACTS.md sections renumbered at merge.** Several pull requests each
+  added a "§15" or a placeholder "§NEW-…" section. Final numbers, in merge
+  order: §15 `gnomon doctor`, §16 `gnomon setup`, §17 `gnomon dashboard`
+  (#129; #128 cited the dashboard as §15), §18 Degradations (#130, was §15),
+  §19 Context hygiene (#133, was §15), §20 `gnomon chaos` (#134, was §15),
+  §21 External anchoring (#135, was §15), §22 Order invariance and §23
+  Orthogonality (#141, were §NEW-order-invariance and §NEW-orthogonality),
+  §24 Endpoint context window (#137, §NEW-endpoint-window), §25
+  `[approval] after_refusal` (#139, §NEW-after-refusal), §26 Tool definitions
+  and MCP tool pins (#142, §NEW-tools-hash), §27 Stall signals (#140,
+  §NEW-stall-detectors), §28 Incremental record (#143,
+  §NEW-incremental-record), §29 Per-call mediator record (#144,
+  §NEW-mediator-record). Every reference in docs, code, tests and
+  `conformance/` follows; the tests that read a section's table now read it
+  only up to the next `## ` heading.
+- **The degradation registry is the union:** `shadow_unreachable` (#130),
+  `audit_anchor_queued` (#135) and `context_window_unresolved` (#137), so
+  the degradation suite holds 17/17 (it was 14/14).
+- **A killed task's trail stays sealed.** Once `interrupt.kill` (#143) has
+  written the killed turn and `session_end`, a turn still running in-process
+  writes nothing more to the trail; the `model_call` record (#144) of the
+  request the kill cut off used to land after `session_end`.
+- **An MCP pin clamp (#142) keeps what the other PRs added to `runTask`:** the
+  clamped route keeps its settled `"auto"` window (#137), the declared shadow
+  is detached and the clamped surface's started with the same audit sink
+  (#130), and a record killed after the clamp reports the clamped trust,
+  model and endpoint (#143).
+- **`git_hooks` (#136) is a rule a skill candidate can carry** (#129's
+  refusal reader); `repo_code` is not, since it asks and never refuses.
+  `conformance/skill_candidate.json` and CONTRACTS.md §12 say so.
+- `desktop.yml` (#128) uses the same SHA-pinned Actions as the rest (#132).
+
 ## [0.4.0] — 2026-11-03
 
 **Upgrading from 0.3.x.** Run `gnomon migrate` in each project. It applies four

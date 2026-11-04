@@ -1,0 +1,154 @@
+{
+  "version": "1",
+  "_comment": [
+    "The endpoint context window (docs/CONTRACTS.md section 24).",
+    "`[endpoints.<name>] max_context_tokens = \"auto\"` reads the window of the model a role",
+    "names from the endpoint, once per process, and the turn record's `wire` says where the",
+    "window came from. A reader of the trail parses `max_context_tokens_source` without",
+    "reading the code, so a source renamed, a shape dropped or a field read differently is a",
+    "contract change. packages/gnomon-core/src/context_window.test.ts reads every body below",
+    "through the parsers, derives every probe URL, and asserts the sources, the degradation",
+    "id and that CONTRACTS.md names the same sources and fields.",
+    "The opencode body is trimmed from GET https://opencode.ai/zen/go/v1/models, 2026-11-04."
+  ],
+  "value": "auto",
+  "wire_keys": ["max_context_tokens", "max_context_tokens_source"],
+  "sources": [
+    "declared",
+    "listing:opencode",
+    "listing:openrouter",
+    "listing:vllm",
+    "listing:llamacpp",
+    "listing:ollama",
+    "default"
+  ],
+  "degradation": "context_window_unresolved",
+  "probe_timeout_ms": 5000,
+  "probes": [
+    {
+      "chat": "https://opencode.ai/zen/go/v1/chat/completions",
+      "kind": "openai",
+      "requests": ["GET https://opencode.ai/zen/go/v1/models", "GET https://opencode.ai/zen/go/props"]
+    },
+    {
+      "chat": "http://127.0.0.1:8080/v1/chat/completions",
+      "kind": "openai",
+      "requests": ["GET http://127.0.0.1:8080/v1/models", "GET http://127.0.0.1:8080/props"]
+    },
+    {
+      "chat": "http://127.0.0.1:11434/api/chat",
+      "kind": "ollama",
+      "requests": ["POST http://127.0.0.1:11434/api/show"]
+    },
+    {
+      "chat": "https://example.invalid/v1/responses",
+      "kind": "openai",
+      "requests": []
+    }
+  ],
+  "shapes": [
+    {
+      "shape": "opencode",
+      "probe": "models",
+      "field": "limit.context",
+      "model": "deepseek-v4.1-flash",
+      "body": {
+        "object": "list",
+        "data": [
+          {
+            "id": "deepseek-v4.1-flash",
+            "object": "model",
+            "owned_by": "opencode",
+            "family": "deepseek-flash",
+            "limit": { "context": 1000000, "output": 384000 }
+          }
+        ]
+      },
+      "tokens": 1000000
+    },
+    {
+      "shape": "openrouter",
+      "probe": "models",
+      "field": "context_length",
+      "model": "deepseek/deepseek-v4.1-flash",
+      "body": {
+        "data": [
+          {
+            "id": "deepseek/deepseek-v4.1-flash",
+            "context_length": 1000000,
+            "top_provider": { "context_length": 163840, "max_completion_tokens": 65536 }
+          }
+        ]
+      },
+      "tokens": 1000000
+    },
+    {
+      "shape": "openrouter",
+      "probe": "models",
+      "field": "top_provider.context_length",
+      "model": "vendor/m",
+      "body": { "data": [{ "id": "vendor/m", "top_provider": { "context_length": 131072 } }] },
+      "tokens": 131072
+    },
+    {
+      "shape": "vllm",
+      "probe": "models",
+      "field": "max_model_len",
+      "model": "Qwen/Qwen3.8-32B",
+      "body": {
+        "object": "list",
+        "data": [{ "id": "Qwen/Qwen3.8-32B", "object": "model", "owned_by": "vllm", "max_model_len": 131072 }]
+      },
+      "tokens": 131072
+    },
+    {
+      "shape": "llamacpp",
+      "probe": "props",
+      "field": "default_generation_settings.n_ctx",
+      "model": "any",
+      "body": {
+        "default_generation_settings": { "id": 0, "n_ctx": 65536, "params": {} },
+        "total_slots": 1,
+        "model_path": "/models/m.gguf"
+      },
+      "tokens": 65536
+    },
+    {
+      "shape": "ollama",
+      "probe": "show",
+      "field": "parameters num_ctx",
+      "model": "qwen3.6:35b",
+      "body": {
+        "parameters": "temperature 0.6\nnum_ctx 32768\ntop_p 0.95",
+        "model_info": { "general.architecture": "qwen3moe", "qwen3moe.context_length": 262144 }
+      },
+      "tokens": 32768
+    },
+    {
+      "shape": "ollama",
+      "probe": "show",
+      "field": "model_info.qwen3moe.context_length",
+      "model": "qwen3.6:35b",
+      "body": { "model_info": { "general.architecture": "qwen3moe", "qwen3moe.context_length": 262144 } },
+      "tokens": 262144
+    }
+  ],
+  "misses": [
+    {
+      "_why": "llama.cpp's own /v1/models states the TRAINING length, not what the server runs; /props answers that",
+      "probe": "models",
+      "model": "m.gguf",
+      "body": { "object": "list", "data": [{ "id": "m.gguf", "meta": { "n_ctx_train": 262144 } }] }
+    },
+    {
+      "_why": "a model the listing does not carry is not guessed",
+      "probe": "models",
+      "model": "not-listed",
+      "body": { "data": [{ "id": "deepseek-v4.1-flash", "limit": { "context": 1000000 } }] }
+    },
+    { "_why": "a zero or negative window is no window", "probe": "models", "model": "m", "body": { "data": [{ "id": "m", "context_length": 0 }] } },
+    { "_why": "not a listing", "probe": "models", "model": "m", "body": { "error": "not found" } },
+    { "_why": "no n_ctx", "probe": "props", "model": "m", "body": { "build_info": "b1" } },
+    { "_why": "nothing about the window", "probe": "show", "model": "m", "body": { "parameters": "temperature 0.6" } }
+  ]
+}

@@ -22,9 +22,11 @@ import { randomBytes, createHash } from "node:crypto";
 import { hostname, userInfo } from "node:os";
 import { GnomonConfig, recomputeManifest } from "./config.js";
 import { AuditTrail, resolveAudit, verifyTrail, type AuditRecord } from "./audit.js";
+import { scheduleAnchorFlush } from "./anchor.js";
 import { harnessBuild } from "./build.js";
 import {
   recordDirsOf,
+  recordExcludesOf,
   snapshotRecords,
   classifyChanges,
   noteOwnWrite,
@@ -281,7 +283,7 @@ export function writeCheckpoint(config: GnomonConfig): { trail: string; map: str
   // same millisecond.
   const seq = String(checkpointSeq++).padStart(6, "0");
   const id = `checkpoint-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}-${seq}-${randomBytes(3).toString("hex")}`;
-  const snap = snapshotRecords(recordDirsOf(config));
+  const snap = snapshotRecords(recordDirsOf(config), recordExcludesOf(config));
   const map: Record<string, string> = {};
   for (const [p, st] of [...snap.files.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
     // Not the checkpoints themselves. Each is checked by its own seal, digest
@@ -325,6 +327,11 @@ export function writeCheckpoint(config: GnomonConfig): { trail: string; map: str
       /* left for the next session end to remove; the next comparison shows it as an added trail */
     }
   }
+  // The session's trail and this checkpoint are sealed, so their heads are
+  // queued. Deliver them now, asynchronously: the CLI starts a detached
+  // process, a library caller a promise nobody awaits. Nothing here waits on
+  // a witness. Absent [audit.anchor], this returns at its first test.
+  scheduleAnchorFlush(settings.anchor);
   return { trail: trail.path, map: mapFile };
 }
 
@@ -350,7 +357,7 @@ export function compareWithCheckpoint(
   const cp = latestCheckpoint(config);
   if (!cp) return null;
   const root = resolve(config.gnomonDir, "..");
-  const snap = snapshotRecords(recordDirsOf(config));
+  const snap = snapshotRecords(recordDirsOf(config), recordExcludesOf(config));
   const own = new Set(cp.own.map((p) => resolve(p)));
   const now = new Map<string, string>();
   for (const [p, st] of snap.files) {

@@ -1,0 +1,33 @@
+{
+  "version": "0.1.0",
+  "_comment": [
+    "The `gnomon doctor --json` document, schema gnomon.doctor/1 (docs/CONTRACTS.md §15).",
+    "",
+    "Read-only: doctor probes the machine, asks every role's endpoint for its",
+    "model listing, and compares both with what `gnomon setup` recorded. The",
+    "dashboard's Setup screen reads this to say what needs attention. A finding",
+    "kind added, a key renamed or an exit moved is a contract change:",
+    "packages/gnomon-cli/src/doctor.test.ts asserts FINDING_KINDS and DOCTOR_EXIT",
+    "equal the lists here and checks real reports against `report_keys`."
+  ],
+  "schema": "gnomon.doctor/1",
+  "exit_codes": {
+    "0": "nothing needs attention",
+    "1": "something needs attention: a role's model does not answer, the machine drifted from what setup saw, a local model will not fit, or there is no surface",
+    "10": "doctor could not run (a catalog that cannot be read, or an error of its own)"
+  },
+  "finding_kinds": ["surface", "readiness", "memory", "gpu", "fit", "tags", "catalog", "facts"],
+  "severities": ["problem", "info"],
+  "report_keys": {
+    "required": ["schema", "dir", "catalog", "machine", "runtimes", "memory", "recommended", "surface", "facts", "findings", "next", "exit"],
+    "optional": []
+  },
+  "finding_keys": {
+    "required": ["kind", "severity", "message"],
+    "optional": ["fix"]
+  },
+  "error_keys": {
+    "required": ["schema", "error", "exit"],
+    "optional": []
+  }
+}

@@ -12,7 +12,8 @@ the constitution; a change that weakens one of them needs to say so.
 
 | Path | What lives there |
 |---|---|
-| `packages/gnomon-cli/src/` | The CLI: `index.ts` (dispatch, `--help`, `CLI_COMMANDS`), `init.ts` (scaffold templates), `check.ts`, `update.ts`, `migrate.ts`, `docs.test.ts` |
+| `packages/gnomon-cli/src/` | The CLI: `index.ts` (dispatch, `--help`, `CLI_COMMANDS`), `init.ts` (scaffold templates), `check.ts`, `update.ts`, `migrate.ts`, `docs.test.ts`; `gnomon setup` / `doctor`: `probe.ts`, `catalog.ts`, `setup_wizard.ts`, `setup_surface.ts`, `setup_host.ts`, `doctor.ts` |
+| `packages/gnomon-cli/catalog/models.toml` | The dated model catalog setup recommends from; harness data, updated with releases |
 | `packages/gnomon-core/src/` | The loop: `prompt_loop.ts` (turns, slash commands), `tools.ts`, `config.ts` (surface loading, TOML parser, `auditSurface`), `audit.ts`, `check.ts`, `loops.ts` |
 | `packages/gnomon-natives/` | Typed wrappers that spawn the Rust binaries |
 | `packages/gnomon-tui/` | Saved-session viewer |

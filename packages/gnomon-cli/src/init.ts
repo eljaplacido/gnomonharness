@@ -190,6 +190,12 @@ url = "https://opencode.ai/zen/v1/chat/completions"
 kind = "openai"
 api_key_env = "OPENCODE_API_KEY"   # the NAME of the variable, never the key
 provider = "opencode"
+# Recommended for a hosted model: its own window. Without the line below, turns
+# here are trimmed to [defaults] max_context_tokens (65536), sized for a local
+# model. "auto" reads the window from this endpoint's /models once per session
+# (limit.context; 1000000 for deepseek-v4.1-flash, 2026-11) and falls back to
+# [defaults] with a note when it cannot. Or write the number itself.
+# max_context_tokens = "auto"
 
 # OpenCode Go — the $10/mo subscription tier (opencode.ai/go). Cloud, keyed.
 # Model ids are BARE — glm-5.3, deepseek-v4-flash, kimi-k3 — with no provider
@@ -204,6 +210,8 @@ url = "https://opencode.ai/zen/go/v1/chat/completions"
 kind = "openai"
 api_key_env = "OPENCODE_API_KEY"
 provider = "opencode"
+# Recommended, as for zen above: the model's own window instead of 65536.
+# max_context_tokens = "auto"
 
 # Cloud templates — commented so they do not show as unavailable until you want
 # one. Uncomment a block, then store its key with:  gnomon key set <name>
@@ -679,6 +687,13 @@ const POLICY_TOML = `# Policy: approval gates, sandbox level, edit format.
 # Non-interactive runs have nobody to ask, so a gated call is refused rather
 # than assumed; \`gnomon task --yes\` is what stands in for a person.
 gate = "on_write"                  # never | on_write | always
+#
+# 'npm test' runs package.json's pretest, 'npm install' its lifecycle scripts,
+# 'make' the Makefile: code the repository defines, which no rule over the
+# command line can read. Such a call always names what it runs when it asks.
+# To have every one of them asked, whatever the gate says:
+#   repo_code = true
+# Only a sandbox (exec = "docker" below) contains what that code does.
 
 [sandbox]
 level = "confined"                 # off | confined | strict
@@ -710,11 +725,12 @@ level = "confined"                 # off | confined | strict
 #
 # network = false is enforced for the \`webfetch\` tool, which refuses outright,
 # and in bash for the commands whose purpose is the network: curl, wget, nc,
-# ssh, scp/rsync to a remote, and python/node/perl/ruby one-liners that open a
-# connection. It is NOT process isolation: a script, a build tool or a package
-# manager run through bash still reaches the network, and the prompt loop says
-# so at startup. With exec = "docker" the container gets no network at all,
-# which is isolation.
+# ssh, scp/rsync to a remote, python/node/perl/ruby one-liners that open a
+# connection, git pushing to or fetching from a URL, and a package manager
+# handed a registry URL. It is NOT process isolation: a script, a build tool or
+# a package manager run through bash still reaches the network, and the prompt
+# loop says so at startup. With exec = "docker" the container gets no network
+# at all, which is isolation.
 network = false
 
 # Keys that changed nothing used to sit here — auto_merge,
@@ -883,6 +899,7 @@ interface Template {
  * no provenance looks like a decision someone made deliberately.
  */
 function modelNote(choice: ModelChoice): string {
+  if (choice.note) return choice.note;
   if (choice.fallback) {
     return (
       `# These are generic starter tags: ${choice.fallback}, so nothing could be\n` +
@@ -1062,6 +1079,20 @@ const templatesFor = (choice: ModelChoice): Template[] => [
   { path: join("skills", "writing-tests.md"), content: SKILL_TESTS },
 ];
 
+/**
+ * The scaffold's files as `initSurface` writes them for `choice` (audit on),
+ * by relative path with `/`. `gnomon setup` diffs its proposal against these
+ * for a project that has no .gnomon/ yet, before anything is written.
+ * policy.toml's detected [verify] is not included: setup never edits it.
+ */
+export function scaffoldTexts(choice: ModelChoice): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const t of templatesFor(choice)) {
+    out[t.path.split(/[\\/]/).join("/")] = t.path === "config.toml" ? enableAuditBlock(t.content) : t.content;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Scaffolding
 // ---------------------------------------------------------------------------
@@ -1084,6 +1115,12 @@ export interface InitOptions {
    * pins that.
    */
   noVerify?: boolean;
+  /**
+   * Use these tags instead of detecting them: `gnomon setup` has already
+   * chosen, with the person's yes, and a second detection would be a second
+   * opinion nobody asked for. The scaffold is otherwise exactly init's.
+   */
+  models?: ModelChoice;
 }
 
 export interface InitResult {
@@ -1210,7 +1247,7 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
   // surface already made these choices.
   let choice: ModelChoice = options.from
     ? { large: FALLBACK_LARGE, small: FALLBACK_SMALL, detected: [] }
-    : await detectModels();
+    : options.models ?? (await detectModels());
 
   let templates = templatesFor(choice);
   if (options.from) {

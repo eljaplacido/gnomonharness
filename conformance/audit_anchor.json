@@ -1,0 +1,38 @@
+{
+  "contract": "external anchoring of sealed trail heads, [audit.anchor] — docs/CONTRACTS.md section 21",
+  "version": 1,
+  "statement_format": "gnomon.anchor/1",
+  "statement_keys": ["anchor", "scope", "trail", "seq", "hash", "records", "sealed_at"],
+  "statement_digest": "sha256 over the statement's canonical JSON (keys sorted, no whitespace): the canonicaliser the chain hashes with",
+  "anchored_when": "a chained trail writes session_end: every sealed trail, checkpoints included; queued at seal, delivered after the session's checkpoint, never on the turn path",
+  "backends": ["git", "rfc3161", "cmd"],
+  "queue": "<anchors dir>/queue/<digest>.json, one file per statement",
+  "queue_entry_keys": ["statement", "digest", "queued_at"],
+  "receipts": "<anchors dir>/receipts.jsonl, one line per delivered statement",
+  "receipt_keys": ["digest", "backend", "statement", "queued_at", "delivered_at", "receipt"],
+  "receipt_by_backend": {
+    "git": ["remote", "ref", "commit"],
+    "rfc3161": ["url", "token", "gen_time", "serial", "policy", "signature_checked"],
+    "cmd": ["output"]
+  },
+  "git": {
+    "default_ref": "refs/heads/gnomon-anchors",
+    "file": "anchors.jsonl",
+    "line": "one statement per line, canonical JSON",
+    "push": "fast-forward only, never forced; the remote's receive.denyNonFastForwards and receive.denyDeletes (or a protected branch) are what make it append-only",
+    "protected_namespace": "refs/heads/ — git's receive.denyNonFastForwards and receive.denyDeletes apply there only (a forced push to refs/gnomon/anchors was accepted with both set); a ref elsewhere is reported as a problem",
+    "identity": "gnomon anchor <anchor@gnomon.invalid>"
+  },
+  "rfc3161": {
+    "imprint": "sha256 of the statement (its digest)",
+    "request": "TimeStampReq v1, 8-byte nonce, certReq true",
+    "verified_offline": "imprint, nonce at delivery, signed attributes, signature under tsa_cert or a certificate it issued (one level, EKU timeStamping, valid at genTime)",
+    "not_verified": "revocation, chains longer than one level, policy OIDs"
+  },
+  "cmd_env": ["GNOMON_ANCHOR_DIGEST", "GNOMON_ANCHOR_STATEMENT", "GNOMON_ANCHOR_TRAIL"],
+  "cmd_verify_env": ["GNOMON_ANCHOR_DIGEST", "GNOMON_ANCHOR_STATEMENT", "GNOMON_ANCHOR_TRAIL", "GNOMON_ANCHOR_RECEIPT"],
+  "degradation_id": "audit_anchor_queued",
+  "trail_statuses": ["anchored", "rechained", "invalid", "unchecked", "pending", "unanchored", "predates", "unsealed"],
+  "verify_exit_1": ["rechained", "invalid", "unchecked (unless --offline)", "unanchored", "an anchored trail missing", "a rolled-back checkpoint", "a rewritten remote history", "the remote unreachable (unless --offline)", "a declared block that cannot work"],
+  "absent": "no [audit.anchor]: nothing queued, nothing scheduled, nothing excluded from the record guard, no network"
+}

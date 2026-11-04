@@ -29,7 +29,12 @@ done
 # NOT ship src: shipping src is how a package quietly starts needing a loader.
 HARNESS=$(ls "$TMP"/gnomon-harness-*.tgz)
 LIST=$(tar -tzf "$HARNESS" | sed 's|^package/||')
-for want in bin/gnomon.mjs dist/index.js package.json LICENSE; do
+# catalog/models.toml: `gnomon setup` and `gnomon doctor` read it beside dist/.
+# dashboard/: `gnomon dashboard` reads its page and assets beside dist/, once, at
+# start, and refuses to start (exit 10) when one is missing.
+for want in bin/gnomon.mjs dist/index.js catalog/models.toml \
+    dashboard/index.html dashboard/app.js dashboard/app.css dashboard/icon.svg \
+    dashboard/fonts/cinzel-wordmark.woff2 dashboard/fonts/OFL.txt package.json LICENSE; do
     grep -qx "$want" <<<"$LIST" || { echo "FAIL: $want missing from gnomon-harness"; exit 1; }
 done
 if grep -q '^src/' <<<"$LIST"; then
