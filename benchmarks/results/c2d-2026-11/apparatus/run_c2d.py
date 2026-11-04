@@ -1,0 +1,179 @@
+"""C2D stage 1 (capture): see ../PRE-REGISTRATION.md.
+
+Four Harbor cells, P2G's apparatus unchanged (same Harbor venv, flags, model, relays, 1,800 s cap):
+gnomon v0.4.0 (the release, via gnomon_harbor_v040:GnomonV040) and opencode V2 (P2G's pinned
+adapter) on atrx-vep-crispr and ontology-kg-querying. One wave per task: gnomon on P2G relay slot 0,
+opencode on slot 1, at the same time.
+
+The only addition is log-relay.mjs, started per cell in front of the slot relay
+(172.17.0.1:4720+slot -> 172.17.0.1:4710+slot). It stores every request and reply of the cell under
+runs/<cell>/wire/ and observes only; the slot relay still meters and bills.
+
+  python3 run_c2d.py dry          the plan and the apparatus checks; spends nothing
+  python3 run_c2d.py run          needs C2D_APPROVED=yes; waits for --after-pid to exit and for
+                                  --min-avail-gb of host memory before each wave
+"""
+import argparse
+import datetime as dt
+import json
+import os
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+P2G_APP = ROOT.parent / "p2g-2026-11" / "apparatus"
+sys.path.insert(0, str(P2G_APP))
+import run_p2g as P  # noqa: E402
+
+OUT, JOBS = ROOT / "runs", ROOT / "jobs"
+P.STATUS = ROOT / "STATUS.txt"  # P.say appends here, never to P2G's STATUS.txt
+ARMS = {
+    "gnomon": ("gnomon", "gnomon_harbor_v040:GnomonV040", "openai", "/openai/v1", None, ["OPENAI_API_KEY"], "gnomon/0.4.0", []),
+    "opencode-v2": next(a for a in P.ARMS if a[0] == "opencode-v2"),
+}
+WAVES = [("atrx-vep-crispr", [("gnomon", 0), ("opencode-v2", 1)]),
+         ("ontology-kg-querying", [("gnomon", 0), ("opencode-v2", 1)])]
+LOG_PORT0 = 4720
+BUDGET = 2.50          # Go allowance, $, for the four cells
+WAVE_RESERVE = 1.20    # a wave may start only if spent + this <= BUDGET
+SETTLE_MAX_S = 180
+
+
+def utc() -> str:
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def unsettled(c: dict) -> float:
+    done = (c.get("responses_with_usage", 0) + c.get("responses_without_usage", 0) + c.get("responses_compressed", 0)
+            + c.get("status_4xx", 0) + c.get("status_5xx", 0) + c.get("errors", 0))
+    return c.get("chat_requests", 0) - done
+
+
+def avail_gb() -> float:
+    for line in open("/proc/meminfo"):
+        if line.startswith("MemAvailable:"):
+            return int(line.split()[1]) / 1048576
+    return 0.0
+
+
+def task_entry(name: str) -> dict:
+    tasks = {t["task"]: t for t in json.loads(P.TASKS_FILE.read_text(encoding="utf-8"))}
+    assert name in tasks, f"not a P2G task: {name}"
+    return tasks[name]
+
+
+def run_cell(arm: str, task: str, slot: int) -> dict:
+    spec = ARMS[arm]
+    cid = f"c2d-k1-{arm}-{task}"
+    d = OUT / cid
+    if (d / "cell.json").exists():
+        P.say(f"SKIP {cid} (done)")
+        return json.loads((d / "cell.json").read_text(encoding="utf-8"))
+    d.mkdir(parents=True, exist_ok=True)
+    wire = d / "wire"
+    port = LOG_PORT0 + slot
+    relay = subprocess.Popen(["node", str(HERE / "log-relay.mjs"), f"{P.RELAY_HOST}:{port}",
+                              f"http://{P.RELAY_HOST}:{P.RELAY_PORT0 + slot}", str(wire)],
+                             stdout=open(d / "log-relay.log", "w"), stderr=subprocess.STDOUT)
+    time.sleep(1.5)
+    assert relay.poll() is None, f"log-relay for {cid} did not start (see {d / 'log-relay.log'})"
+    _, agent, provider, path, version, keys, ua, extra = spec
+    t = task_entry(task)
+    cmd = [str(P.HARBOR), "run", "-p", str(P.DATASET / task), "-n", "1", "-k", "1",
+           "-o", str(JOBS), "--job-name", cid, "-q", "--force-build",
+           "--environment-build-timeout-multiplier", str(P.BUILD_TIMEOUT_MULT),
+           "-a", agent, "-m", f"{provider}/{P.MODEL}",
+           "--ak", f"base_url=http://{P.RELAY_HOST}:{port}{path}",
+           "--agent-timeout-multiplier", str(P.CAP_S / P.TB4_AGENT_TIMEOUT_S)]
+    if version:
+        cmd += ["--ak", f"version={version}"]
+    env = {**P.base_env(), "GNOMON_RELEASE": "0.4.0"}
+    for k in keys:
+        env[k] = "p2g-relay-placeholder"  # the slot relay replaces it; the real key never leaves it
+        cmd += ["--ae", f"{k}=p2g-relay-placeholder"]
+    cmd += list(extra)
+    try:
+        P.set_cell(slot, cid, arm, ua)
+        before = P.counters(slot)
+        load0 = os.getloadavg()
+        t0 = time.time()
+        P.say(f"START {cid} slot={slot} log-relay={port} load={load0[0]:.1f} avail={avail_gb():.0f}GB")
+        with open(d / "harbor.log", "w", encoding="utf-8") as log:
+            rc = subprocess.run(cmd, cwd=P.ROOT, env=env, stdout=log, stderr=subprocess.STDOUT).returncode
+        wall = time.time() - t0
+        settle0 = time.time()
+        while time.time() - settle0 < SETTLE_MAX_S and unsettled(P.counters(slot)) > unsettled(before):
+            time.sleep(5)
+        after = P.counters(slot)
+        load1 = os.getloadavg()
+    finally:
+        relay.terminate()
+        relay.wait(timeout=10)
+    delta = {k: round(after[k] - before.get(k, 0), 8) for k in after if isinstance(after[k], (int, float))}
+    rec = {"cell": cid, "arm": arm, "task": task, "slot": slot, "host": "gx10-aarch64", "harbor_rc": rc,
+           "wall_s": round(wall, 1), "settle_s": round(time.time() - settle0, 1),
+           "inflight_at_end": unsettled(after) - unsettled(before), "delta": delta,
+           "load": {"start": list(load0), "end": list(load1)}, "trial": P.trial_of(JOBS / cid),
+           "mem_mb": max(t.get("mem_mb") or 4096, t.get("ver_mem_mb") or 4096)}
+    (d / "cell.json").write_text(json.dumps(rec, indent=1), encoding="utf-8")
+    tr = rec["trial"] or {}
+    P.say(f"END   {cid} rc={rc} wall={wall:.0f}s reward={tr.get('reward')} exc={tr.get('exception')} "
+          f"version={tr.get('agent_version')} allowance={delta.get('allowance')} requests={delta.get('chat_requests')}")
+    return rec
+
+
+def wait_for_host(args) -> None:
+    if args.after_pid:
+        while os.path.exists(f"/proc/{args.after_pid}"):
+            time.sleep(60)
+        P.say(f"pid {args.after_pid} has exited")
+    while avail_gb() < args.min_avail_gb:
+        time.sleep(60)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("mode", choices=["dry", "run"])
+    ap.add_argument("--after-pid", type=int, default=0)
+    ap.add_argument("--min-avail-gb", type=float, default=24.0)
+    args = ap.parse_args()
+    for slot in (0, 1):
+        c = P.counters(slot)  # the slot relays must be up; read only
+        assert "allowance" in c, f"slot {slot} relay counters lack allowance"
+    for task, pairs in WAVES:
+        task_entry(task)
+        for arm, slot in pairs:
+            print(f"plan: c2d-k1-{arm}-{task} slot={slot} via {P.RELAY_HOST}:{LOG_PORT0 + slot} -> :{P.RELAY_PORT0 + slot}")
+    print(f"harbor={P.HARBOR} exists={P.HARBOR.exists()} budget=${BUDGET} avail={avail_gb():.0f}GB")
+    if args.mode == "dry":
+        print("DRY OK")
+        return 0
+    if os.environ.get("C2D_APPROVED") != "yes":
+        print("refusing: set C2D_APPROVED=yes")
+        return 2
+    spent = 0.0
+    P.say(f"C2D stage 1: {len(WAVES)} waves, budget ${BUDGET}")
+    for task, pairs in WAVES:
+        if spent + WAVE_RESERVE > BUDGET:
+            P.say(f"BUDGET: spent ${spent:.4f}; wave {task} not started")
+            break
+        wait_for_host(args)
+        recs: list[dict] = []
+        threads = [threading.Thread(target=lambda a=a, s=s: recs.append(run_cell(a, task, s))) for a, s in pairs]
+        for th in threads:
+            th.start()
+            time.sleep(20)  # stagger the two builds
+        for th in threads:
+            th.join()
+        spent += sum((r.get("delta") or {}).get("allowance", 0) for r in recs)
+        P.say(f"wave {task} done; spent ${spent:.4f}")
+    P.say(f"C2D stage 1 DONE; spent ${spent:.4f}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
