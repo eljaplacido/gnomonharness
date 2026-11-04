@@ -1011,9 +1011,32 @@ answers join to outcomes even when `[audit]` is off.
   would have changed the run it watched. For the same reason, a
   `DECISION_SHADOW_DIR` inside the project is refused, out loud.
 - The test that holds this runs the same scripted turn with the shadow off and
-  on. The task record and the audit trail come out the same; only the surface
-  hash differs. With `.gnomon-shadow` removed from the walk's exclusions, it
+  on. The task record and the audit trail come out the same, apart from the
+  shadow's own coverage count (below); only the surface hash differs
+  otherwise. With `.gnomon-shadow` removed from the walk's exclusions, it
   fails: `worktree_moves` goes from 0 to 2.
+
+**When the shadow cannot be reached, gnomon says so and records it.** Log-only
+does not mean unaccounted for. Until 2026-11-03 a dead shadow server cost one
+line: `gnomon task` sent it to stderr, a terminal printed it in grey, and
+`gnomon acp` never sent it. One stopped shadow recorded nothing for three days,
+and only agentcenter's readout showed the gap. Now:
+
+- At session start gnomon checks once, with a `HEAD` request off the critical
+  path, that the url takes a connection. A refused connection stops the shadow
+  at once.
+- A stop, at the start or after three failures in a row, is the declared
+  degradation `shadow_unreachable`. It is written to the trail and to the task
+  record's `degradations`, with the url (scheme, host, port and path only), the
+  failure count and the error code. It is said in one line: on stderr, under
+  the banner, or to the editor.
+- Every `turn` and `session_end` record, and the task record under
+  `volatile.shadow`, carries `{attempted, recorded, pending, stopped}`, so a
+  dead shadow reads as 0 of N rather than as nothing.
+- None of it changes the turn. With no shadow, a healthy one, one down from the
+  start and one that fails partway, the task record (surface hash, `volatile`
+  and `degradations` aside) is the same string, so the exit code is the same.
+  See [CONTRACTS.md §7](docs/CONTRACTS.md).
 
 **Why it is in the surface at all.** It is in the hashed surface, not switched on
 by the machine, because of Rule 1. A run that called a model after every tool

@@ -4,6 +4,18 @@
 defects to get there — three in this apparatus, two in gnomon. Pre-registered in
 `PRE-REGISTRATION.md`; reproduce with `node contract.mjs`. Raw in `result.json`.
 
+> **Now 15 of 15** (2026-11-03). Three paths were declared after the first run:
+> `verify_skipped_shell_only`, `diff_preview_elided` and `shadow_unreachable`.
+> `result.json` holds the current run, and `scripts/property_suites.mjs` holds
+> CI to 15/15. The figures below are the first run's.
+>
+> `shadow_unreachable` was found from outside. Agentcenter's readout showed
+> three days with no decision-shadow records. In every gnomon session the
+> `[shadow]` had stopped after three refused connections. It said so in one
+> line: on stderr in `gnomon task`, in grey in a terminal, and not at all over
+> ACP. Nothing in the record or the trail said so. Its probe drives
+> `runTask`, the entry point scripts use, and reads the task record.
+
 ## What was measured
 
 `fault-disclosure` asks whether the operator was **told**. This asks a second

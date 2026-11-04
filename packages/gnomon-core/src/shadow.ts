@@ -16,6 +16,16 @@
  * Off unless the surface declares `[shadow] enabled = true` with a url
  * (config.ts resolveShadow).
  *
+ * Log-only is not the same as unaccounted for. A shadow whose server is gone
+ * records nothing, and until 2026-11-03 it stopped with one line: `gnomon
+ * task` wrote it to a stderr that scripts discard, an interactive session
+ * printed it in grey, and `gnomon acp` never sent it at all. The shadow
+ * recorded nothing for three days and only agentcenter's readout showed the
+ * gap. Now a stop is the declared degradation `shadow_unreachable`
+ * (degradation.ts), announced once and recorded in the session's trail, and
+ * every turn and session record carries `coverage()`: what the shadow was
+ * asked to record against what it did.
+ *
  * The questions and the state text are the decisionbench ones, ported rather
  * than paraphrased, so a live record and a bench item ask the same question of
  * the same text: agentcenter `decisionbench/tasks.py` QUESTIONS,
@@ -29,6 +39,7 @@ import { hostname } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { redact, resolveAudit } from "./audit.js";
 import { harnessBuild } from "./build.js";
+import { recordDegradation, type DegradationSink } from "./degradation.js";
 import {
   recomputeManifest,
   resolveShadow,
@@ -262,12 +273,87 @@ export interface ShadowEnv {
   fetchImpl?: typeof fetch;
   now?: () => number;
   env?: NodeJS.ProcessEnv;
+  /**
+   * The session's trail, where the shadow's own degradation is recorded
+   * (`shadow_unreachable`). Only that: answers and errors go to the shadow log,
+   * never here, so a healthy shadow leaves the trail as it was.
+   */
+  audit?: DegradationSink;
+}
+
+/**
+ * How much of what the declared shadow was asked to record it recorded.
+ *
+ * On the `turn` and `session_end` audit records and under `volatile.shadow`
+ * on the task record (docs/CONTRACTS.md section 7). It exists because a shadow
+ * that records nothing looks, from gnomon's side, exactly like one that is
+ * off: 0 of 40 has to be a number somebody can read, not an absence.
+ */
+export interface ShadowCoverage {
+  /**
+   * Decision requests the declared shadow called for so far: one per model and
+   * order at every decision point. Includes those never sent because the
+   * shadow had stopped, which is what makes a dead shadow read as 0%.
+   */
+  attempted: number;
+  /** Of those, answered and written to the shadow log. */
+  recorded: number;
+  /** Still queued or in flight when this was read. */
+  pending: number;
+  /** The shadow stopped itself for this session (`shadow_unreachable`). */
+  stopped: boolean;
+}
+
+/** Coverage over several recorders: a session whose surface reloaded had more than one. */
+export function sumCoverage(list: ShadowCoverage[]): ShadowCoverage {
+  return {
+    attempted: list.reduce((n, c) => n + c.attempted, 0),
+    recorded: list.reduce((n, c) => n + c.recorded, 0),
+    pending: list.reduce((n, c) => n + c.pending, 0),
+    stopped: list.some((c) => c.stopped),
+  };
+}
+
+/**
+ * The url as a record may carry it: scheme, host, port and path. Userinfo, a
+ * query and a fragment are dropped, since any of them can hold a credential
+ * and none of them says where the shadow was pointed.
+ */
+export function shadowUrlForRecord(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}${u.pathname}`;
+  } catch {
+    return "(unparseable url)";
+  }
+}
+
+/**
+ * A connection error's code (`ECONNREFUSED`), else its message, kept short.
+ *
+ * A message can quote the url whole: Node's fetch refuses a url with userinfo
+ * by naming it ("Request cannot be constructed from a URL that includes
+ * credentials: http://user:pass@..."), so any url in it is cut down the same
+ * way before it reaches a line or a record.
+ */
+function causeOf(e: unknown): string {
+  const code = (e as { cause?: { code?: unknown } } | undefined)?.cause?.code;
+  const text = typeof code === "string" && code ? code : ((e as Error | undefined)?.message ?? String(e));
+  const bare = String(text)
+    .replace(/\s+/g, " ")
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, (u) => shadowUrlForRecord(u));
+  return cut(bare, 120);
 }
 
 /** Concurrent requests. The reference server runs two slots per model. */
 const MAX_IN_FLIGHT = 2;
 /** Consecutive connection failures before the shadow stops for the session. */
 const MAX_CONNECTION_FAILURES = 3;
+/**
+ * How long an interactive session waits, once, for the start check before it
+ * shows the first prompt, so a dead shadow is reported under the banner.
+ */
+export const SHADOW_BANNER_WAIT_MS = 250;
 
 type Decision = "abort" | "role" | "approval";
 
@@ -288,12 +374,20 @@ export class ShadowRecorder {
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
   private readonly warn: (line: string) => void;
+  /** Where `shadow_unreachable` is recorded; cut loose by detach() at session end. */
+  private sink: DegradationSink | undefined;
   private readonly queue: Array<() => Promise<void>> = [];
   private readonly inflight = new Set<Promise<void>>();
+  /** The start check, while it runs. */
+  private probing: Promise<void> | undefined;
   private connectionFailures = 0;
+  /** A request has reached the server at least once this session. */
+  private connected = false;
   private stopped = false;
   private writeFailed = false;
   private dirReady = false;
+  private attempted = 0;
+  private recorded = 0;
 
   /** A recorder when the surface declares a usable shadow; otherwise undefined. */
   static create(config: GnomonConfig, env: ShadowEnv = {}): ShadowRecorder | undefined {
@@ -312,6 +406,7 @@ export class ShadowRecorder {
     this.fetchImpl = env.fetchImpl ?? fetch;
     this.now = env.now ?? Date.now;
     this.warn = env.warn ?? (() => {});
+    this.sink = env.audit;
     this.patterns = resolveAudit(config).redact;
     const vars = env.env ?? process.env;
     const label = vars.DECISION_SHADOW_RUN?.trim();
@@ -419,14 +514,103 @@ export class ShadowRecorder {
     });
   }
 
+  /** What the shadow was asked to record so far, and what it recorded. */
+  coverage(): ShadowCoverage {
+    return {
+      attempted: this.attempted,
+      recorded: this.recorded,
+      pending: this.queue.length + this.inflight.size,
+      stopped: this.stopped,
+    };
+  }
+
+  /**
+   * Check once, at session start and off the critical path, that the endpoint
+   * takes a connection at all. Without it a dead shadow said nothing until the
+   * first decision point, and a session with no tool call and no `role` model
+   * never said anything.
+   *
+   * A HEAD request: any HTTP status means something is listening, and no
+   * question is asked, so no model runs. Only a connection failure counts,
+   * the rule the questions follow. A check that times out decides nothing (a
+   * busy server is not an absent one) and the questions decide instead.
+   * Unreachable at the start stops the shadow at once: three more refused
+   * connections would say nothing new.
+   */
+  start(): void {
+    if (this.probing || this.stopped) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.settings.timeout_ms);
+    const probe = (async () => {
+      try {
+        const res = await this.fetchImpl(this.settings.url, { method: "HEAD", signal: controller.signal });
+        this.connected = true;
+        this.connectionFailures = 0;
+        try {
+          await (res as Partial<Response> | undefined)?.body?.cancel();
+        } catch {
+          // Nothing to release.
+        }
+      } catch (e) {
+        // A question that got through first outranks a check that did not.
+        if (controller.signal.aborted || this.connected) return;
+        this.connectionFailures++;
+        this.disable(this.scrub(causeOf(e)), "probe");
+      } finally {
+        clearTimeout(timer);
+      }
+    })()
+      .catch(() => {
+        // Never let the shadow reach the run.
+      })
+      .finally(() => {
+        this.probing = undefined;
+      });
+    this.probing = probe;
+  }
+
+  /**
+   * Wait for the start check, up to a cap, so its line can land in the banner.
+   * Bounded because a banner line is not worth a slow start: past the cap it
+   * prints at the next prompt instead.
+   */
+  async ready(capMs: number): Promise<void> {
+    const probe = this.probing;
+    if (!probe) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      probe,
+      new Promise<void>((r) => {
+        timer = setTimeout(r, capMs);
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+  }
+
+  /**
+   * Stop recording into the session's trail. Once the trail is sealed, a late
+   * failure belongs in the shadow log only: a record after `session_end` would
+   * read as a trail somebody appended to.
+   */
+  detach(): void {
+    this.sink = undefined;
+  }
+
+  /** The end of a session: flush, detach, and the coverage to seal it with. */
+  async close(capMs?: number): Promise<ShadowCoverage> {
+    await this.flush(capMs);
+    this.detach();
+    return this.coverage();
+  }
+
   /** Wait for what is in flight, up to a cap. What is left is dropped. */
   async flush(capMs = 3000): Promise<void> {
     const deadline = this.now() + capMs;
-    while ((this.inflight.size > 0 || this.queue.length > 0) && this.now() < deadline) {
+    while ((this.inflight.size > 0 || this.queue.length > 0 || this.probing) && this.now() < deadline) {
       if (this.inflight.size === 0) this.pump();
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
-        Promise.allSettled([...this.inflight]),
+        Promise.allSettled([...this.inflight, ...(this.probing ? [this.probing] : [])]),
         new Promise<void>((r) => {
           timer = setTimeout(r, Math.max(1, deadline - this.now()));
         }),
@@ -447,6 +631,10 @@ export class ShadowRecorder {
     question: ShadowQuestion,
     timeoutMs: number
   ): void {
+    // Counted before the stopped check: a decision a stopped shadow skips is
+    // still one it was asked for, and leaving it out would let a dead shadow
+    // report full coverage of nothing.
+    this.attempted += models.length * this.settings.orders.length;
     if (this.stopped) return;
     const base = this.base(info);
     for (const model of models) {
@@ -456,7 +644,7 @@ export class ShadowRecorder {
           const a = await this.request(model, question, order, state, timeoutMs);
           // A request already in flight when the shadow stopped says nothing new.
           if (a.stopNow || this.stopped) return;
-          this.write({
+          const written = this.write({
             ...base,
             ts: new Date(this.now()).toISOString(),
             decision,
@@ -471,6 +659,7 @@ export class ShadowRecorder {
             latency_ms: a.latency_ms,
             error: a.error,
           });
+          if (written && a.error === null) this.recorded++;
         });
       }
     }
@@ -521,6 +710,7 @@ export class ShadowRecorder {
         signal: controller.signal,
       });
       this.connectionFailures = 0;
+      this.connected = true;
       if (!res.ok) return { labels, error: `http ${res.status}`, latency_ms: this.now() - started };
       const body = (await res.json()) as { answers?: { q?: { probabilities?: Record<string, unknown> } } };
       const raw = body.answers?.q?.probabilities;
@@ -537,24 +727,9 @@ export class ShadowRecorder {
       const latency_ms = this.now() - started;
       if (controller.signal.aborted) return { labels, error: `timeout after ${timeoutMs}ms`, latency_ms };
       this.connectionFailures++;
-      const cause = (e as { cause?: { code?: string } }).cause?.code ?? (e as Error).message;
+      const cause = this.scrub(causeOf(e));
       if (this.connectionFailures >= MAX_CONNECTION_FAILURES && !this.stopped) {
-        this.stopped = true;
-        this.queue.length = 0;
-        const why = `unreachable (${cause}): shadow stopped for this session after ${MAX_CONNECTION_FAILURES} connection failures`;
-        this.write({
-          v: 1,
-          ts: new Date(this.now()).toISOString(),
-          project: "gnomon",
-          ...(this.runLabel ? { run_label: this.runLabel } : {}),
-          decision: "shadow",
-          machine: this.machine,
-          calib_key: this.calibKey,
-          surface_hash: this.surfaceHash,
-          gnomon: this.build,
-          error: why,
-        });
-        this.warn(`  [shadow] ${this.settings.url} ${why}`);
+        const why = this.disable(cause, "failures");
         return { labels, error: why, latency_ms, stopNow: true };
       }
       return { labels, error: `unreachable (${cause})`, latency_ms };
@@ -563,17 +738,79 @@ export class ShadowRecorder {
     }
   }
 
-  private write(record: Record<string, unknown>): void {
-    if (this.writeFailed) return;
+  /**
+   * Stop for the rest of the session, once, and account for it three ways:
+   * the `shadow` line in the shadow log (agentcenter's readout), the declared
+   * degradation `shadow_unreachable` in the session's trail, and one line for
+   * the operator. Returns the shadow log's error text.
+   *
+   * `phase` says whether the server was ever reached this session: `start`
+   * when nothing got through (down before the session began), `mid_session`
+   * when it answered and then stopped answering.
+   */
+  private disable(cause: string, by: "probe" | "failures"): string {
+    if (this.stopped) return "";
+    this.stopped = true;
+    this.queue.length = 0;
+    const url = shadowUrlForRecord(this.settings.url);
+    const failures = this.connectionFailures;
+    const phase = this.connected ? "mid_session" : "start";
+    const why =
+      by === "probe"
+        ? `unreachable at session start (${cause}): shadow stopped for this session`
+        : `unreachable (${cause}): shadow stopped for this session after ${failures} connection failures`;
+    this.write({
+      v: 1,
+      ts: new Date(this.now()).toISOString(),
+      project: "gnomon",
+      ...(this.runLabel ? { run_label: this.runLabel } : {}),
+      decision: "shadow",
+      machine: this.machine,
+      calib_key: this.calibKey,
+      surface_hash: this.surfaceHash,
+      gnomon: this.build,
+      error: why,
+    });
+    try {
+      recordDegradation(this.sink, {
+        id: "shadow_unreachable",
+        declared: `[shadow] url = ${url}`,
+        actual:
+          by === "probe"
+            ? `unreachable (${cause}); the shadow stopped and records nothing this session`
+            : `unreachable after ${failures} connection failures in a row (${cause}); the shadow stopped ` +
+              `and records nothing for the rest of this session`,
+        detail: { url, phase, failures, cause },
+      });
+    } catch {
+      // A trail that cannot be written is the trail's problem, not the run's.
+    }
+    // Worded by what found it, so the line is true when it is read: the start
+    // check speaks at the start; three failures can come hours into a session.
+    const { attempted, recorded } = this;
+    this.warn(
+      by === "probe"
+        ? `  [shadow] unreachable at session start: ${url} (${cause}). Off for this session; nothing is recorded.`
+        : `  [shadow] unreachable after ${failures} failed connections: ${url} (${cause}). ` +
+            `Off for the rest of this session; ${recorded} of ${attempted} decisions recorded.`
+    );
+    return why;
+  }
+
+  /** Append one line to the shadow log. False when nothing was written. */
+  private write(record: Record<string, unknown>): boolean {
+    if (this.writeFailed) return false;
     try {
       if (!this.dirReady) {
         mkdirSync(resolve(this.file, ".."), { recursive: true });
         this.dirReady = true;
       }
       appendFileSync(this.file, JSON.stringify(record) + "\n");
+      return true;
     } catch (e) {
       this.writeFailed = true;
       this.warn(`  [shadow] cannot write ${this.file}: ${(e as Error).message} -- shadow records are off`);
+      return false;
     }
   }
 }

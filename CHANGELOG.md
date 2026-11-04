@@ -160,6 +160,43 @@
   URL's host or scheme, as the pattern; existing candidates are unchanged,
   and declined approvals and delegations outside `task_allow` are still not
   counted. CONTRACTS §12, `conformance/skill_candidate.json` (`rules`).
+- **A `[shadow]` that cannot be reached is now a declared degradation,
+  `shadow_unreachable`, said once and recorded.** The decision shadow at
+  `127.0.0.1:18195` has been down since about 2026-10-31. Every gnomon session
+  since then recorded no shadow decisions, and nothing in gnomon showed it.
+  Agentcenter's readout found the three-day gap. The shadow stopped after
+  three refused connections, as designed, and said so in one line: on stderr
+  in `gnomon task`, which scripts discard, in grey at the next prompt in a
+  terminal, and not at all over ACP, where the line was queued after the
+  session's notes had been sent. Nothing in the trail or the task record said
+  so.
+  - At session start gnomon makes one `HEAD` request to the url, off the
+    critical path; any HTTP status counts as reachable. A refused connection
+    stops the shadow at once. A timeout decides nothing.
+  - A stop, at the start or after three failures in a row, writes a
+    `degradation` record with `id: "shadow_unreachable"` and a `detail` of
+    `url` (scheme, host, port and path only), `phase` (`start` or
+    `mid_session`), `failures` and `cause`. It goes to the trail and to the
+    task record's `degradations`. It is said in one yellow line, under the
+    banner in a terminal (the start check is awaited for at most 250 ms),
+    and sent to the editor over ACP.
+  - Coverage: `shadow: {attempted, recorded, pending, stopped}` on every
+    `turn` and `session_end` audit record, and `volatile.shadow` on the task
+    record, present only when a `[shadow]` is declared. A dead shadow reads
+    as 0 of N.
+  - `gnomon task` now flushes the shadow before the turn record rather than
+    after `session_end`, so the record carries the final count and a stop
+    found while flushing lands inside the session.
+  - Still log-only. With no shadow, a healthy one, one down from the start and
+    one that fails partway, the task record (surface hash, `volatile` and
+    `degradations` aside) is the same string, so the exit code is the same.
+- **CONTRACTS.md §18 publishes the degradation ids** with
+  `conformance/degradations.json`. `degradation.test.ts` checks the code, the
+  fixture and the section against each other. §7 documents the coverage
+  object and the new degradation; `conformance/shadow_record.json` pins both.
+- **The degradation suite is 15/15** (was 14/14). `scripts/property_suites.mjs`
+  holds CI to 15, and EVIDENCE, BENCHMARKS and the suite's README say 15. The
+  `shadow_unreachable` probe drives `runTask` and reads the task record.
 
 ## [0.4.0] — 2026-11-03
 
