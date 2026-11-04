@@ -4,8 +4,9 @@ group     arm   N valid pass  rate  95% Wilson    $/solved  local tok/solved  lo
 m2-fnx    L    32    32   20  0.625  [0.45, 0.77]    0.0000            1.65M            18.4k       225       5           0  {}
 m2-fnx    PC   26    26   21  0.808  [0.62, 0.91]    0.0377            1.21M            16.5k       321       9          25  {}
 m2-q36g   L    32    31   16  0.516  [0.35, 0.68]    0.0000            2.75M            21.7k       123       4           0  {'apparatus': 1}
-r3r       L     2     2    2  1.000  [0.34, 1.00]    0.0000            0.95M             5.5k        51       0           0  {}
-r3r       PC    1     1    1  1.000  [0.21, 1.00]    0.0896            2.38M             9.0k       311       0           1  {}
+m2-q36g   PC   32    32   22  0.688  [0.51, 0.82]    0.0310            1.59M            17.5k       307       9          30  {}
+r3r       L    29    26   21  0.808  [0.62, 0.91]    0.0000            1.50M            16.3k        74       1           0  {'no_model_call': 1, 'apparatus': 2}
+r3r       PC   29    29   18  0.621  [0.44, 0.77]    0.0597            2.76M            46.1k       391      11          26  {}
 
 == M1's recipes of the same models (read-only references)
 group     arm   N valid pass  rate  95% Wilson    $/solved  local tok/solved  local out/solved  wall-med  capped  delegating  other states
@@ -17,22 +18,25 @@ DECISION (pre-registered; per challenger and arm, against its control, on (task,
   gx10: Flash-Next vs Qwen3.6 on the gx10 lane (M2's own control)
   m2-fnx/L       vs m2-q36g/L     : pairs= 31  solved 20 vs 16  m2-fnx/L-only= 6 m2-q36g/L-only= 2  McNemar p=0.2891  capped 5 vs 4
     L: MATCHES OR BEATS (ahead, not shown)
-    PC: NOT DECIDED (no cells: m2-fnx 26, m2-q36g 0)
-    -> m2-fnx: NOT DECIDED on PC (L: MATCHES OR BEATS; PC: NOT DECIDED)
+  m2-fnx/PC      vs m2-q36g/PC    : pairs= 26  solved 21 vs 18  m2-fnx/PC-only= 5 m2-q36g/PC-only= 2  McNemar p=0.4531  capped 9 vs 6
+    PC: DOES NOT MATCH (more capped: 9 vs 6, more than +1)
+    -> m2-fnx: the recipe does NOT match or beat the incumbent on PC (L: MATCHES OR BEATS; PC: DOES NOT MATCH)
   RTX: Glimmer-30B vs Qwen3.6 on the hub lane (R3R)
-    L: NOT DECIDED (no cells: m2-glim 0, r3r 2)
-    PC: NOT DECIDED (no cells: m2-glim 0, r3r 1)
+    L: NOT DECIDED (no cells: m2-glim 0, r3r 29)
+    PC: NOT DECIDED (no cells: m2-glim 0, r3r 29)
     -> m2-glim: NOT DECIDED on L/PC (L: NOT DECIDED; PC: NOT DECIDED)
   RTX: Qwen3.8-27B vs Qwen3.6 on the hub lane (R3R)
-    L: NOT DECIDED (no cells: m2-q38 0, r3r 2)
-    PC: NOT DECIDED (no cells: m2-q38 0, r3r 1)
+    L: NOT DECIDED (no cells: m2-q38 0, r3r 29)
+    PC: NOT DECIDED (no cells: m2-q38 0, r3r 29)
     -> m2-q38: NOT DECIDED on L/PC (L: NOT DECIDED; PC: NOT DECIDED)
 
 HYBRID PAYOFF within each lane (descriptive; exact McNemar PC vs L on (task, attempt) pairs valid in both):
   m2-fnx/PC      vs m2-fnx/L      : pairs= 26  solved 21 vs 17  m2-fnx/PC-only= 5 m2-fnx/L-only= 1  McNemar p=0.2188  capped 9 vs 3
       m2-fnx PC: $/solved 0.0377, delegating cells 25
-  r3r/PC         vs r3r/L         : pairs=  1  solved  1 vs  1  r3r/PC-only= 0 r3r/L-only= 0  McNemar p=1.0000  capped 0 vs 0
-      r3r PC: $/solved 0.0896, delegating cells 1
+  m2-q36g/PC     vs m2-q36g/L     : pairs= 31  solved 22 vs 16  m2-q36g/PC-only= 7 m2-q36g/L-only= 1  McNemar p=0.0703  capped 8 vs 4
+      m2-q36g PC: $/solved 0.0310, delegating cells 30
+  r3r/PC         vs r3r/L         : pairs= 25  solved 18 vs 21  r3r/PC-only= 1 r3r/L-only= 4  McNemar p=0.3750  capped 9 vs 1
+      r3r PC: $/solved 0.0597, delegating cells 26
 
 M2 vs M1's recipe of the same model (descriptive only: time-separated, older builds, other recipes):
   m2-fnx/L       vs m1b-fnx/L     : pairs= 31  solved 19 vs 21  m2-fnx/L-only= 2 m1b-fnx/L-only= 4  McNemar p=0.6875  capped 5 vs 8
@@ -40,26 +44,28 @@ M2 vs M1's recipe of the same model (descriptive only: time-separated, older bui
 mechanism and wire records (valid cells):
   m2-fnx: requests with reasoning_content 0 of 2722 carrying an assistant message; after a reply with reasoning + a tool call: 0 of 0 sent it back; late system requests 1111, dropped-by-template 1111, [gnomon] notes 0; steer_role adapted in 0 cells; local aborts 209
     CHECK replay as declared (off): ok; surface replay line as declared: FAIL
-  m2-q36g: requests with reasoning_content 0 of 1431 carrying an assistant message; after a reply with reasoning + a tool call: 0 of 0 sent it back; late system requests 898, dropped-by-template 898, [gnomon] notes 0; steer_role adapted in 0 cells; local aborts 4
+  m2-q36g: requests with reasoning_content 0 of 3124 carrying an assistant message; after a reply with reasoning + a tool call: 0 of 0 sent it back; late system requests 1754, dropped-by-template 1754, [gnomon] notes 0; steer_role adapted in 0 cells; local aborts 7
     CHECK replay as declared (off): ok; surface replay line as declared: FAIL
 
 how cells end (last turn record's stop_reason, valid cells):
   m2-fnx   L  : {'answered': 24, 'stall': 3, 'none': 5}
   m2-fnx   PC : {'answered': 17, 'none': 9}
   m2-q36g  L  : {'answered': 18, 'stall': 6, 'none': 6, 'truncated': 1}
-  r3r      L  : {'answered': 2}
-  r3r      PC : {'answered': 1}
+  m2-q36g  PC : {'answered': 21, 'none': 11}
+  r3r      L  : {'answered': 22, 'none': 3, 'truncated': 1}
+  r3r      PC : {'answered': 18, 'none': 11}
 
 load at cell start (1-min load average; running containers), median per group and arm:
   m2-fnx   L  : load 4.7, containers 5
   m2-fnx   PC : load 2.4, containers 2
   m2-q36g  L  : load 2.0, containers 1
+  m2-q36g  PC : load 4.7, containers 3
 
 checks:
   CHECK buckets sum to n per group and arm: ok
   CHECK every valid M2 cell's surface carries stream = true and max_tokens = 32768: FAIL
   CHECK every local request streamed with max_tokens: ok; every cloud request asked for usage and every cloud response carried it: ok
   CHECK replay as declared per lane: FAIL
-  M2 gx10 cloud spend (ledger, smoke and aborted included): $0.805 (0 aborted-cell entries)
+  M2 gx10 cloud spend (ledger, smoke and aborted included): $1.488 (0 aborted-cell entries)
   M2 rtx cloud spend (ledger, smoke and aborted included): $0.000 (0 aborted-cell entries)
-90 M2 cells; summary in /home/eljaplacido/gnomon-wt/peers/benchmarks/results/m2-2026-11/runs/m2-summary.json
+122 M2 cells; summary in /home/eljaplacido/gnomon-wt/peers/benchmarks/results/m2-2026-11/runs/m2-summary.json

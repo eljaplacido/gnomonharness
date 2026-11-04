@@ -1,0 +1,56 @@
+[?2004hroot@01f514b58d1c:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@01f514b58d1c:/app# clear
+[?2004l[H[J[3J[?2004hroot@01f514b58d1c:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@01f514b58d1c:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=be4fc0d8835c443aca8b32ccd4c1caacf48cbdce
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793817279
+[?2004hroot@01f514b58d1c:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with pip.'; tmux wait -S done
+[?2004lR1_ARM=PC R1_ENTRY=coordinator R1_ROUTES=coordinator=cloud,implementor=local,verifier=local,plan=cloud,implement=local,critique=local,smol=local M2_LOCAL_REPLAY=false
+ModuleNotFoundError: No module named 'pip'
+```
+
+Both `pip` and `python3 -m pip` were affected, because the console script and the `-m` route import the same missing package.
+
+Worth knowing what it *wasn't*: the machine has a genuinely `EXTERNALLY-MANAGED` system Python at `/usr/bin/python3.11`, but your `python3` is a source-built 3.13.1 under `/usr/local` that that marker doesn't cover. If you'd gone looking for that error message you'd have found a real one on this box and fixed the wrong interpreter.
+
+## The fix
+
+`python3 -m ensurepip --upgrade` — the obvious repair — **did not work**, and this is the part worth remembering:
+
+```
+Requirement already satisfied: pip in /usr/local/lib/python3.13/site-packages (24.3.1)
+```
+
+`ensurepip` checks the dist-info and concludes pip is installed. It never looks at whether the files are there. That no-op would have left you believing you'd fixed it.
+
+What did work: extracting the wheel `ensurepip` already carries offline, `/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl`, directly into site-packages. No network was needed or used.
+
+## Verification
+
+```
+pip --version              → pip 24.3.1 from .../site-packages/pip (python 3.13)
+pip3 --version             → pip 24.3.1 from ...  (same)
+python3 -m pip --version   → pip 24.3.1 from ...  (same)
+pip list                   → pip 24.3.1
+python3 -m pip debug       → sys.platform: linux, certifi CA bundle resolved, DEBUNDLED: False
+```
+
+`pip debug` matters more than the `--version` lines: it exercises the platform and vendor machinery, so this is a whole pip, not a stub that prints a version string.
+
+## Two things to be aware of
+
+**This fix lives in the container layer and will vanish on rebuild.** The root cause is that something *deleted* `site-packages/pip/` while leaving its metadata — a truncated layer, an overzealous cleanup step, a `pip` install interrupted mid-write. Fixing the live filesystem treats the symptom; if this is a Dockerfile-built image, add a layer that installs pip properly, or the next rebuild reproduces it.
+
+**Don't take pip's own advice here.** `pip list` suggests `pip install --upgrade pip` (24.3.1 → 26.3). Network is disabled by policy on this machine, so that will just fail — and it's how a partial install gets interrupted in the first place. Stay on the bundled 24.3.1 until you can reinstall deliberately.
+
+One caveat on my own reach: my tool scope here has no shell, so the diagnosis and repair ran through the `implementor` role's `bash`. The commands and outputs above are that role's, and the verification commands are the ones you can re-run yourself in one line to confirm it independently.
+
+[result] role=coordinator model=deepseek-v4.1-flash tools=12 surface=0d2e5ba66dce
+[?2004hroot@01f514b58d1c:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@01f514b58d1c:/app# 

@@ -1,0 +1,956 @@
+  │ I'll start by inspecting the repository and the Turtle file.
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  deepseek-v4.1-flash — 3 tool call(s) so far
+  ⚙ 3 steps folded · read ×2, glob · ., university_graph.ttl · nothing changed  /expand
+  │ Now let me check what SPARQL tooling is available to verify the query.
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  deepseek-v4.1-flash — 5 tool call(s) so far
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  deepseek-v4.1-flash — 7 tool call(s) so far
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  ⚙ 5 steps folded · read ×3, compute, glob · /app, .gnomon/roles.toml, .gnomon/tools.toml · nothing changed  /expand
+  │ Now I'll write the query. Key modeling decisions: full professor = role c…
+  ⚙ write solution.sparql
+    ⚠ write solution.sparql — not permitted for this role
+  deepseek-v4.1-flash — 9 tool call(s) so far
+  │ My role can't write `.sparql`; delegating the write and verification to t…
+[approval] delegate to "implementor" — approved
+  │ I'll start by reading the TTL file and the query, then find a SPARQL engi…
+  qwen3.6-35b — 1 tool call(s) so far
+  ⚙ read university_graph.ttl
+    ✓ read university_graph.ttl — 306 lines · CRLF
+[approval] bash: python3 -c "import rdflib; print(rdflib.__version__)" 2>&1 — approved
+  ⚙ bash python3 -c "import rdflib; print(rdflib.__version__)" 2>&1
+    ✗ bash — exit 1
+  qwen3.6-35b — 2 tool call(s) so far
+[approval] bash: pip3 install --quiet rdflib 2>&1 | tail -5 — approved
+  ⚙ bash pip3 install --quiet rdflib 2>&1 | tail -5
+    ✓ bash — exit 0
+  qwen3.6-35b — 3 tool call(s) so far
+[approval] bash: which python3 && python3 -m pip install --quiet rdflib 2>&1; echo "exit=$?" — approved
+  ⚙ bash which python3 && python3 -m pip install --quiet rdflib 2>&1; echo "exi…
+    ✓ bash — exit 0
+  qwen3.6-35b — 4 tool call(s) so far
+[approval] bash: apt-get update -qq && apt-get install -y -qq python3-pip 2>&1 | tail -5; echo "exit=$?" — approved
+  ⚙ bash apt-get update -qq && apt-get install -y -qq python3-pip 2>&1 | tail -…
+    ✓ bash — exit 0
+  qwen3.6-35b — 5 tool call(s) so far
+[approval] bash: pip3 install --quiet rdflib 2>&1; echo "exit=$?" — approved
+  ⚙ bash pip3 install --quiet rdflib 2>&1; echo "exit=$?"
+    ✓ bash — exit 0
+  qwen3.6-35b — 6 tool call(s) so far
+[approval] bash: pip3 install --quiet --break-system-packages rdflib 2>&1; echo "exit=$?" — approved
+  ⚙ bash pip3 install --quiet --break-system-packages rdflib 2>&1; echo "exit=$…
+    ✓ bash — exit 0
+  qwen3.6-35b — 7 tool call(s) so far
+[approval] bash: python3 -c "import rdflib; print(rdflib.__version__)" 2>&1; echo "exit=$?" — approved
+  ⚙ bash python3 -c "import rdflib; print(rdflib.__version__)" 2>&1; echo "exit…
+    ✓ bash — exit 0
+  qwen3.6-35b — 8 tool call(s) so far
+  │ rdflib 7.6.0 is available. Now let me write the solution.sparql file and …
+[approval] write solution.sparql (+40 −0) [new file] — approved
+  ⚙ write solution.sparql
+    ✓ write solution.sparql (+40 −0)
+  qwen3.6-35b — 9 tool call(s) so far
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+
+query = open("solution.sparql").read()
+results = g.query(query)
+
+print("=== QUERY RESULTS ===")
+for row in results:
+    print(f"  {row.professorName} | {row.countries}")
+print(f"Total rows: {len(list(results))}")
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib g = rdflib.Graph() g.parse("universit…
+    ✓ bash — exit 0
+  qwen3.6-35b — 10 tool call(s) so far
+  │ Query runs and returns 3 rows matching the expected answer. Now let me do…
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+from rdflib import Namespace, URIRef, Literal
+
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+uni = Namespace("http://university.org/ontology/")
+
+# ---- Step 1: Per-department count of currently-enrolled students ----
+# For each department, find courses taught there, then students enrolled in those courses
+# who are "Student" role and (no graduation date OR graduation date > 2025-08-16)
+
+ref_date = rdflib.Literal("2025-08-16", datatype=rdflib.XSD.date)
+
+dept_students = {}  # dept_uri -> set of student URIs
+
+for dept in g.objects(None, rdflib.RDF.type, uni.Department):
+    # find courses taught in this dept
+    courses = set(g.objects(dept, uni.isTaughtIn))
+    # Actually, courses are subjects of isTaughtIn pointing to dept
+    courses = set(g.objects(None, uni.isTaughtIn, dept))
+    
+    enrolled = set()
+    for course in courses:
+        # students enrolled in this course
+        for student in g.objects(None, uni.isEnrolledIn, course):
+            # check role is "Student"
+            role = g.value(student, uni.role)
+            if role and str(role) == "Student":
+                # check graduation date
+                grad = g.value(student, uni.hasGraduationDate)
+                if grad is None or grad > ref_date:
+                    enrolled.add(student)
+    
+    dept_students[dept] = enrolled
+
+print("=== Per-department currently enrolled student counts ===")
+for dept, students in sorted(dept_students.items(), key=lambda x: str(x[0])):
+    names = sorted([str(g.value(s, uni.hasName)) for s in students])
+    print(f"  {dept}: {len(students)} students -> {names}")
+
+# ---- Step 2: Per-professor departments and countries ----
+print("\n=== Per-professor departments and countries ===")
+professors = set()
+for p in g.objects(None, uni.role, None):
+    pass
+
+# Find all persons with a role containing "professor" but not assistant/associate/adjunct
+for person in g.objects(None, rdflib.RDF.type, uni.Person):
+    role = g.value(person, uni.role)
+    if role is None:
+        continue
+    role_str = str(role).lower()
+    if "professor" in role_str and "assistant" not in role_str and "associate" not in role_str and "adjunct" not in role_str:
+        name = str(g.value(person, uni.hasName))
+        depts = set(g.objects(person, uni.worksIn))
+        countries = set()
+        for d in depts:
+            uni_obj = g.value(d, uni.belongsTo)
+            country = g.value(uni_obj, uni.locatedInCountry)
+            if country:
+                countries.add(str(country))
+        
+        # Check if any dept has >10 students
+        busy = any(len(dept_students.get(d, set())) > 10 for d in depts)
+        
+        eu_countries = {"AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IE","IT","LV","LT","LU","MT","NL","PL","PT","RO","SK","SI","ES","SE"}
+        has_eu = any(c in eu_countries for c in countries)
+        
+        print(f"  {name}:")
+        for d in sorted(depts, key=str):
+            dname = str(g.value(d, uni.hasName, default=str(d)))
+            uni_obj = g.value(d, uni.belongsTo)
+            ucountry = str(g.value(uni_obj, uni.locatedInCountry)) if uni_obj else "?"
+            cnt = len(dept_students.get(d, set()))
+            print(f"    - {dname} ({ucountry}): {cnt} students")
+        print(f"    Countries: {', '.join(sorted(countries))}")
+        print(f"    Has EU dept: {has_eu}, Has busy dept (>10): {busy}")
+        print(f"    QUALIFIES: {has_eu and busy}")
+        professors.add(name)
+
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib from rdflib import Namespace, URIRef,…
+    ✓ bash — exit 0
+  qwen3.6-35b — 11 tool call(s) so far
+  │ The query approach for finding departments was wrong — `isTaughtIn` has t…
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+from rdflib import Namespace, URIRef, Literal
+
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+uni = Namespace("http://university.org/ontology/")
+
+ref_date = rdflib.Literal("2025-08-16", datatype=rdflib.XSD.date)
+
+# Find all department URIs
+departments = set(g.objects(None, rdflib.RDF.type, uni.Department))
+print(f"Departments found: {len(departments)}")
+for d in sorted(departments, key=str):
+    print(f"  {d}")
+
+# ---- Step 1: Per-department count of currently-enrolled students ----
+dept_students = {}
+
+for dept in departments:
+    # find courses taught in this dept: ?course uni:isTaughtIn ?dept
+    courses = set(g.objects(None, uni.isTaughtIn, dept))
+    print(f"\nDept {dept}: courses = {courses}")
+    
+    enrolled = set()
+    for course in courses:
+        for student in g.objects(None, uni.isEnrolledIn, course):
+            role = g.value(student, uni.role)
+            if role and str(role) == "Student":
+                grad = g.value(student, uni.hasGraduationDate)
+                if grad is None or grad > ref_date:
+                    enrolled.add(student)
+    
+    dept_students[dept] = enrolled
+    names = sorted([str(g.value(s, uni.hasName)) for s in enrolled])
+    print(f"  -> {len(enrolled)} currently enrolled: {names}")
+
+# ---- Step 2: Per-professor departments and countries ----
+print("\n=== Per-professor analysis ===")
+eu_countries = {"AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IE","IT","LV","LT","LU","MT","NL","PL","PT","RO","SK","SI","ES","SE"}
+
+for person in g.objects(None, rdflib.RDF.type, uni.Person):
+    role = g.value(person, uni.role)
+    if role is None:
+        continue
+    role_str = str(role).lower()
+    if "professor" in role_str and "assistant" not in role_str and "associate" not in role_str and "adjunct" not in role_str:
+        name = str(g.value(person, uni.hasName))
+        depts = set(g.objects(person, uni.worksIn))
+        countries = set()
+        for d in depts:
+            uni_obj = g.value(d, uni.belongsTo)
+            country = g.value(uni_obj, uni.locatedInCountry)
+            if country:
+                countries.add(str(country))
+        
+        busy = any(len(dept_students.get(d, set())) > 10 for d in depts)
+        has_eu = any(c in eu_countries for c in countries)
+        
+        print(f"\n{name}:")
+        for d in sorted(depts, key=str):
+            dname = str(g.value(d, uni.hasName, default=str(d)))
+            uni_obj = g.value(d, uni.belongsTo)
+            ucountry = str(g.value(uni_obj, uni.locatedInCountry)) if uni_obj else "?"
+            cnt = len(dept_students.get(d, set()))
+            print(f"  {dname} ({ucountry}): {cnt} students")
+        print(f"  Countries: {', '.join(sorted(countries))}")
+        print(f"  Has EU dept: {has_eu}, Has busy dept (>10): {busy}")
+        print(f"  QUALIFIES: {has_eu and busy}")
+
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib from rdflib import Namespace, URIRef,…
+    ✓ bash — exit 0
+  qwen3.6-35b — 12 tool call(s) so far
+  │ The `uni:isTaughtIn` predicate is being interpreted differently. Let me i…
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+
+uni = rdflib.Namespace("http://university.org/ontology/")
+
+# Check what isTaughtIn actually points to
+print("=== isTaughtIn triples ===")
+for s, p, o in g.triples((None, uni.isTaughtIn, None)):
+    print(f"  {s} -> isTaughtIn -> {o}")
+
+print("\n=== worksIn triples ===")
+for s, p, o in g.triples((None, uni.worksIn, None)):
+    print(f"  {s} -> worksIn -> {o}")
+
+print("\n=== belongsTo triples ===")
+for s, p, o in g.triples((None, uni.belongsTo, None)):
+    print(f"  {s} -> belongsTo -> {o}")
+
+print("\n=== isEnrolledIn triples ===")
+for s, p, o in g.triples((None, uni.isEnrolledIn, None)):
+    print(f"  {s} -> isEnrolledIn -> {o}")
+
+print("\n=== RDF type triples ===")
+for s, p, o in g.triples((None, rdflib.RDF.type, None)):
+    print(f"  {s} -> type -> {o}")
+
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib g = rdflib.Graph() g.parse("universit…
+    ✓ bash — exit 0
+  qwen3.6-35b — 13 tool call(s) so far
+  │ Good — the data is loaded correctly. The issue was my counting script was…
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+from rdflib import Namespace, URIRef, Literal
+
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+uni = Namespace("http://university.org/ontology/")
+
+ref_date = rdflib.Literal("2025-08-16", datatype=rdflib.XSD.date)
+
+# Find all department URIs correctly
+departments = set()
+for s, p, o in g.triples((None, rdflib.RDF.type, uni.Department)):
+    departments.add(s)
+print(f"Departments: {sorted(departments, key=str)}")
+
+# ---- Per-department count of currently-enrolled students ----
+dept_students = {}
+
+for dept in departments:
+    # courses taught in this dept: ?course uni:isTaughtIn ?dept
+    courses = set(g.objects(None, uni.isTaughtIn, dept))
+    
+    enrolled = set()
+    for course in courses:
+        for student in g.objects(None, uni.isEnrolledIn, course):
+            role = g.value(student, uni.role)
+            if role and str(role) == "Student":
+                grad = g.value(student, uni.hasGraduationDate)
+                if grad is None or grad > ref_date:
+                    enrolled.add(student)
+    
+    dept_students[dept] = enrolled
+    names = sorted([str(g.value(s, uni.hasName)) for s in enrolled])
+    print(f"\n{dept}: {len(enrolled)} currently enrolled: {names}")
+
+# ---- Per-professor analysis ----
+print("\n=== Per-professor analysis ===")
+eu_countries = {"AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IE","IT","LV","LT","LU","MT","NL","PL","PT","RO","SK","SI","ES","SE"}
+
+for person in g.objects(None, rdflib.RDF.type, uni.Person):
+    role = g.value(person, uni.role)
+    if role is None:
+        continue
+    role_str = str(role).lower()
+    if "professor" in role_str and "assistant" not in role_str and "associate" not in role_str and "adjunct" not in role_str:
+        name = str(g.value(person, uni.hasName))
+        depts = set(g.objects(person, uni.worksIn))
+        countries = set()
+        for d in depts:
+            uni_obj = g.value(d, uni.belongsTo)
+            country = g.value(uni_obj, uni.locatedInCountry)
+            if country:
+                countries.add(str(country))
+        
+        busy = any(len(dept_students.get(d, set())) > 10 for d in depts)
+        has_eu = any(c in eu_countries for c in countries)
+        
+        print(f"\n{name}:")
+        for d in sorted(depts, key=str):
+            dname = str(g.value(d, uni.hasName, default=str(d)))
+            uni_obj = g.value(d, uni.belongsTo)
+            ucountry = str(g.value(uni_obj, uni.locatedInCountry)) if uni_obj else "?"
+            cnt = len(dept_students.get(d, set()))
+            print(f"  {dname} ({ucountry}): {cnt} students")
+        print(f"  Countries: {', '.join(sorted(countries))}")
+        print(f"  Has EU dept: {has_eu}, Has busy dept (>10): {busy}")
+        print(f"  QUALIFIES: {has_eu and busy}")
+
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib from rdflib import Namespace, URIRef,…
+    ✓ bash — exit 0
+  qwen3.6-35b — 14 tool call(s) so far
+  │ All departments show 0 students. The issue is that `g.objects(None, uni.i…
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+uni = rdflib.Namespace("http://university.org/ontology/")
+
+dept = rdflib.URIRef("http://university.org/ontology/ComputerScience_NTUA")
+
+# Check isTaughtIn
+print("=== isTaughtIn triples ===")
+for s, p, o in g.triples((None, uni.isTaughtIn, None)):
+    print(f"  {s} --isTaughtIn--> {o}")
+
+print(f"\n=== Looking for courses taught in {dept} ===")
+courses = list(g.objects(None, uni.isTaughtIn, dept))
+print(f"  Found: {courses}")
+
+# Check if the dept URI matches
+print(f"\n=== Checking dept URIs ===")
+for s, p, o in g.triples((None, rdflib.RDF.type, uni.Department)):
+    print(f"  Dept: {s} (type check: {s == dept})")
+
+# Try a different approach - check what's in the graph
+print(f"\n=== All triples with isTaughtIn predicate ===")
+for t in g.triples((None, uni.isTaughtIn, None)):
+    print(f"  {t}")
+
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib g = rdflib.Graph() g.parse("universit…
+    ✓ bash — exit 0
+  qwen3.6-35b — 15 tool call(s) so far
+  │ The problem is clear: `g.objects(None, uni.isTaughtIn, dept)` is returnin…
+  │ The issue is that `g.objects(None, uni.isTaughtIn, dept)` returns the **o…
+  │ Wait — I see it now. The `g.objects` method returns the **objects** of ma…
+  │ … 2 more line(s) — /think show for all
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+uni = rdflib.Namespace("http://university.org/ontology/")
+
+dept = rdflib.URIRef("http://university.org/ontology/ComputerScience_NTUA")
+
+# g.objects(s, p, o) returns the object of triples matching (s, p, o)
+# So g.objects(None, uni.isTaughtIn, dept) should return objects of triples where predicate=isTaughtIn and object=dept
+# But the object of such triples is always dept...
+
+# Let me try g.subjects instead
+print("=== g.subjects(None, uni.isTaughtIn, dept) ===")
+for s in g.subjects(None, uni.isTaughtIn, dept):
+    print(f"  {s}")
+
+# The correct way to get courses taught in a dept:
+# ?course uni:isTaughtIn ?dept  =>  course is subject, dept is object
+# So we want g.subjects(None, uni.isTaughtIn, dept)
+print("\n=== g.subjects(None, uni.isTaughtIn, dept) ===")
+courses = list(g.subjects(None, uni.isTaughtIn, dept))
+print(f"  Found {len(courses)} courses: {courses}")
+
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib g = rdflib.Graph() g.parse("universit…
+    ✓ bash — exit 0
+  qwen3.6-35b — 16 tool call(s) so far
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+uni = rdflib.Namespace("http://university.org/ontology/")
+
+dept = rdflib.URIRef("http://university.org/ontology/ComputerScience_NTUA")
+
+# Check if the predicate URI matches
+print(f"uni.isTaughtIn = {uni.isTaughtIn}")
+print(f"type = {type(uni.isTaughtIn)}")
+
+# Try with explicit URIRef
+pred = rdflib.URIRef("http://university.org/ontology/isTaughtIn")
+print(f"\npred = {pred}")
+print(f"uni.isTaughtIn == pred: {uni.isTaughtIn == pred}")
+
+# Try subjects with explicit pred
+for s in g.subjects(None, pred, dept):
+    print(f"  subject: {s}")
+
+# Try with the namespace predicate
+for s in g.subjects(None, uni.isTaughtIn, dept):
+    print(f"  subject (ns): {s}")
+
+# Check what the actual predicate URI is in the graph
+for s, p, o in g.triples((None, None, dept)):
+    print(f"  Triple with object={dept}: {s} --{p}--> {o}")
+
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib g = rdflib.Graph() g.parse("universit…
+    ✓ bash — exit 0
+  qwen3.6-35b — 17 tool call(s) so far
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+uni = rdflib.Namespace("http://university.org/ontology/")
+
+dept = rdflib.URIRef("http://university.org/ontology/ComputerScience_NTUA")
+pred = rdflib.URIRef("http://university.org/ontology/isTaughtIn")
+
+# The issue: g.subjects(None, pred, dept) returns 0
+# But g.triples((None, pred, dept)) returns 2 triples
+# Let me check if there's a type mismatch
+
+for s, p, o in g.triples((None, pred, dept)):
+    print(f"  s={s}, p={p}, o={o}")
+    print(f"  type(s)={type(s)}, type(p)={type(p)}, type(o)={type(o)}")
+
+# Now try subjects
+print("\n=== subjects ===")
+for s in g.subjects(pred, dept):
+    print(f"  {s}")
+
+# Try with explicit None
+print("\n=== subjects(None, pred, dept) ===")
+for s in g.subjects(None, pred, dept):
+    print(f"  {s}")
+
+# Check if the issue is that subjects() iterates differently
+print("\n=== all triples with isTaughtIn ===")
+for s, p, o in g.triples((None, pred, None)):
+    print(f"  {s} --{p}--> {o}")
+
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib g = rdflib.Graph() g.parse("universit…
+    ✓ bash — exit 0
+  qwen3.6-35b — 18 tool call(s) so far
+  │ Interesting — `g.subjects(pred, dept)` (2 args) works but `g.subjects(Non…
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+from rdflib import Namespace, URIRef, Literal
+
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+uni = Namespace("http://university.org/ontology/")
+
+ref_date = rdflib.Literal("2025-08-16", datatype=rdflib.XSD.date)
+
+# Find all department URIs
+departments = set()
+for s, p, o in g.triples((None, rdflib.RDF.type, uni.Department)):
+    departments.add(s)
+
+# ---- Per-department count of currently-enrolled students ----
+dept_students = {}
+
+for dept in departments:
+    # courses taught in this dept: ?course uni:isTaughtIn ?dept
+    # Use 2-arg form: subjects(predicate, object)
+    courses = set(g.subjects(uni.isTaughtIn, dept))
+    
+    enrolled = set()
+    for course in courses:
+        for student in g.objects(None, uni.isEnrolledIn, course):
+            role = g.value(student, uni.role)
+            if role and str(role) == "Student":
+                grad = g.value(student, uni.hasGraduationDate)
+                if grad is None or grad > ref_date:
+                    enrolled.add(student)
+    
+    dept_students[dept] = enrolled
+    names = sorted([str(g.value(s, uni.hasName)) for s in enrolled])
+    print(f"{dept}: {len(enrolled)} currently enrolled: {names}")
+
+# ---- Per-professor analysis ----
+print("\n=== Per-professor analysis ===")
+eu_countries = {"AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IE","IT","LV","LT","LU","MT","NL","PL","PT","RO","SK","SI","ES","SE"}
+
+for person in g.objects(None, rdflib.RDF.type, uni.Person):
+    role = g.value(person, uni.role)
+    if role is None:
+        continue
+    role_str = str(role).lower()
+    if "professor" in role_str and "assistant" not in role_str and "associate" not in role_str and "adjunct" not in role_str:
+        name = str(g.value(person, uni.hasName))
+        depts = set(g.objects(person, uni.worksIn))
+        countries = set()
+        for d in depts:
+            uni_obj = g.value(d, uni.belongsTo)
+            country = g.value(uni_obj, uni.locatedInCountry)
+            if country:
+                countries.add(str(country))
+        
+        busy = any(len(dept_students.get(d, set())) > 10 for d in depts)
+        has_eu = any(c in eu_countries for c in countries)
+        
+        print(f"\n{name}:")
+        for d in sorted(depts, key=str):
+            dname = str(g.value(d, uni.hasName, default=str(d)))
+            uni_obj = g.value(d, uni.belongsTo)
+            ucountry = str(g.value(uni_obj, uni.locatedInCountry)) if uni_obj else "?"
+            cnt = len(dept_students.get(d, set()))
+            print(f"  {dname} ({ucountry}): {cnt} students")
+        print(f"  Countries: {', '.join(sorted(countries))}")
+        print(f"  Has EU dept: {has_eu}, Has busy dept (>10): {busy}")
+        print(f"  QUALIFIES: {has_eu and busy}")
+
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib from rdflib import Namespace, URIRef,…
+    ✓ bash — exit 0
+  qwen3.6-35b — 19 tool call(s) so far
+  │ Still 0 for all departments. The `g.subjects(uni.isTaughtIn, dept)` shoul…
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+uni = rdflib.Namespace("http://university.org/ontology/")
+
+dept = rdflib.URIRef("http://university.org/ontology/ComputerScience_NTUA")
+
+# Test subjects with 2 args
+courses = list(g.subjects(uni.isTaughtIn, dept))
+print(f"g.subjects(isTaughtIn, dept) = {courses}")
+
+# Test with explicit URIRef
+pred = rdflib.URIRef("http://university.org/ontology/isTaughtIn")
+courses2 = list(g.subjects(pred, dept))
+print(f"g.subjects(explicit_pred, dept) = {courses2}")
+
+# Test with 3 args
+courses3 = list(g.subjects(None, pred, dept))
+print(f"g.subjects(None, pred, dept) = {courses3}")
+
+# Check if the issue is that the dept from the type query differs
+for s, p, o in g.triples((None, rdflib.RDF.type, uni.Department)):
+    if str(s) == str(dept):
+        print(f"  Found matching dept: {s}")
+        print(f"  s == dept: {s == dept}")
+        print(f"  str(s) == str(dept): {str(s) == str(dept)}")
+        # Try subjects with this exact s
+        courses4 = list(g.subjects(pred, s))
+        print(f"  g.subjects(pred, s) = {courses4}")
+
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib g = rdflib.Graph() g.parse("universit…
+    ✓ bash — exit 0
+  qwen3.6-35b — 20 tool call(s) so far
+  │ OK so `g.subjects(uni.isTaughtIn, dept)` works fine and returns CS101 and…
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+uni = rdflib.Namespace("http://university.org/ontology/")
+
+course = rdflib.URIRef("http://university.org/ontology/CS101")
+
+# Check isEnrolledIn triples for CS101
+print("=== isEnrolledIn for CS101 ===")
+for s, p, o in g.triples((None, uni.isEnrolledIn, course)):
+    print(f"  {s} --isEnrolledIn--> {course}")
+
+# Now try g.objects
+print("\n=== g.objects(None, uni.isEnrolledIn, course) ===")
+for s in g.objects(None, uni.isEnrolledIn, course):
+    print(f"  {s}")
+
+# Try g.subjects
+print("\n=== g.subjects(uni.isEnrolledIn, course) ===")
+for s in g.subjects(uni.isEnrolledIn, course):
+    print(f"  {s}")
+
+# Check role
+print("\n=== Roles of students ===")
+for s in g.subjects(uni.isEnrolledIn, course):
+    role = g.value(s, uni.role)
+    print(f"  {s}: role={role}")
+
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib g = rdflib.Graph() g.parse("universit…
+    ✓ bash — exit 0
+  qwen3.6-35b — 21 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  qwen3.6-35b — 21 tool call(s) so far
+  │ Found it! `g.objects(None, uni.isEnrolledIn, course)` returns the **objec…
+  │ The same issue applies to `g.objects(person, uni.worksIn)` — it returns t…
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+uni = rdflib.Namespace("http://university.org/ontology/")
+
+person = rdflib.URIRef("http://university.org/ontology/Orfeas_Menis")
+
+# worksIn
+print("=== g.objects(person, uni.worksIn) ===")
+for o in g.objects(person, uni.worksIn):
+    print(f"  {o}")
+
+print("\n=== g.objects(person, uni.worksIn, None) ===")
+for o in g.objects(person, uni.worksIn, None):
+    print(f"  {o}")
+
+# Check triples
+print("\n=== triples with person as subject ===")
+for s, p, o in g.triples((person, None, None)):
+    print(f"  {s} --{p}--> {o}")
+
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib g = rdflib.Graph() g.parse("universit…
+    ✓ bash — exit 0
+  qwen3.6-35b — 22 tool call(s) so far
+  │ OK so `g.objects(person, uni.worksIn)` works correctly because `worksIn` …
+  │ Let me fix the counting script:
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+from rdflib import Namespace, URIRef, Literal
+
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+uni = Namespace("http://university.org/ontology/")
+
+ref_date = rdflib.Literal("2025-08-16", datatype=rdflib.XSD.date)
+
+# Find all department URIs
+departments = set()
+for s, p, o in g.triples((None, rdflib.RDF.type, uni.Department)):
+    departments.add(s)
+
+# ---- Per-department count of currently-enrolled students ----
+dept_students = {}
+
+for dept in departments:
+    # courses taught in this dept: ?course uni:isTaughtIn ?dept
+    courses = set(g.subjects(uni.isTaughtIn, dept))
+    
+    enrolled = set()
+    for course in courses:
+        # students enrolled in this course: ?student uni:isEnrolledIn ?course
+        for student in g.subjects(uni.isEnrolledIn, course):
+            role = g.value(student, uni.role)
+            if role and str(role) == "Student":
+                grad = g.value(student, uni.hasGraduationDate)
+                if grad is None or grad > ref_date:
+                    enrolled.add(student)
+    
+    dept_students[dept] = enrolled
+    names = sorted([str(g.value(s, uni.hasName)) for s in enrolled])
+    print(f"{dept}: {len(enrolled)} currently enrolled: {names}")
+
+# ---- Per-professor analysis ----
+print("\n=== Per-professor analysis ===")
+eu_countries = {"AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IE","IT","LV","LT","LU","MT","NL","PL","PT","RO","SK","SI","ES","SE"}
+
+for person in g.objects(None, rdflib.RDF.type, uni.Person):
+    role = g.value(person, uni.role)
+    if role is None:
+        continue
+    role_str = str(role).lower()
+    if "professor" in role_str and "assistant" not in role_str and "associate" not in role_str and "adjunct" not in role_str:
+        name = str(g.value(person, uni.hasName))
+        depts = set(g.objects(person, uni.worksIn))
+        countries = set()
+        for d in depts:
+            uni_obj = g.value(d, uni.belongsTo)
+            country = g.value(uni_obj, uni.locatedInCountry)
+            if country:
+                countries.add(str(country))
+        
+        busy = any(len(dept_students.get(d, set())) > 10 for d in depts)
+        has_eu = any(c in eu_countries for c in countries)
+        
+        print(f"\n{name}:")
+        for d in sorted(depts, key=str):
+            dname = str(g.value(d, uni.hasName, default=str(d)))
+            uni_obj = g.value(d, uni.belongsTo)
+            ucountry = str(g.value(uni_obj, uni.locatedInCountry)) if uni_obj else "?"
+            cnt = len(dept_students.get(d, set()))
+            print(f"  {dname} ({ucountry}): {cnt} students")
+        print(f"  Countries: {', '.join(sorted(countries))}")
+        print(f"  Has EU dept: {has_eu}, Has busy dept (>10): {busy}")
+        print(f"  QUALIFIES: {has_eu and busy}")
+
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib from rdflib import Namespace, URIRef,…
+    ✓ bash — exit 0
+  qwen3.6-35b — 23 tool call(s) so far
+  │ Now the counts look right. Let me see the professor analysis output:
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+from rdflib import Namespace, URIRef, Literal
+
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+uni = Namespace("http://university.org/ontology/")
+
+ref_date = rdflib.Literal("2025-08-16", datatype=rdflib.XSD.date)
+
+departments = set()
+for s, p, o in g.triples((None, rdflib.RDF.type, uni.Department)):
+    departments.add(s)
+
+dept_students = {}
+for dept in departments:
+    courses = set(g.subjects(uni.isTaughtIn, dept))
+    enrolled = set()
+    for course in courses:
+        for student in g.subjects(uni.isEnrolledIn, course):
+            role = g.value(student, uni.role)
+            if role and str(role) == "Student":
+                grad = g.value(student, uni.hasGraduationDate)
+                if grad is None or grad > ref_date:
+                    enrolled.add(student)
+    dept_students[dept] = enrolled
+
+eu_countries = {"AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IE","IT","LV","LT","LU","MT","NL","PL","PT","RO","SK","SI","ES","SE"}
+
+for person in g.objects(None, rdflib.RDF.type, uni.Person):
+    role = g.value(person, uni.role)
+    if role is None:
+        continue
+    role_str = str(role).lower()
+    if "professor" in role_str and "assistant" not in role_str and "associate" not in role_str and "adjunct" not in role_str:
+        name = str(g.value(person, uni.hasName))
+        depts = set(g.objects(person, uni.worksIn))
+        countries = set()
+        for d in depts:
+            uni_obj = g.value(d, uni.belongsTo)
+            country = g.value(uni_obj, uni.locatedInCountry)
+            if country:
+                countries.add(str(country))
+        
+        busy = any(len(dept_students.get(d, set())) > 10 for d in depts)
+        has_eu = any(c in eu_countries for c in countries)
+        
+        print(f"\n{name}:")
+        for d in sorted(depts, key=str):
+            dname = str(g.value(d, uni.hasName, default=str(d)))
+            uni_obj = g.value(d, uni.belongsTo)
+            ucountry = str(g.value(uni_obj, uni.locatedInCountry)) if uni_obj else "?"
+            cnt = len(dept_students.get(d, set()))
+            print(f"  {dname} ({ucountry}): {cnt} students")
+        print(f"  Countries: {', '.join(sorted(countries))}")
+        print(f"  Has EU dept: {has_eu}, Has busy dept (>10): {busy}")
+        print(f"  QUALIFIES: {has_eu and busy}")
+
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib from rdflib import Namespace, URIRef,…
+    ✓ bash — exit 0
+  qwen3.6-35b — 24 tool call(s) so far
+  │ The professor analysis didn't print. The issue is likely that the `g.obje…
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+from rdflib import Namespace
+
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+uni = Namespace("http://university.org/ontology/")
+
+# List all persons
+persons = list(g.objects(None, rdflib.RDF.type, uni.Person))
+print(f"Persons found: {len(persons)}")
+for p in persons:
+    role = g.value(p, uni.role)
+    name = g.value(p, uni.hasName)
+    print(f"  {p}: role={role}, name={name}")
+
+# Now filter
+print("\n=== Filtering for full professors ===")
+for person in persons:
+    role = g.value(person, uni.role)
+    if role is None:
+        continue
+    role_str = str(role).lower()
+    print(f"  {g.value(person, uni.hasName)}: role='{role_str}'")
+    if "professor" in role_str and "assistant" not in role_str and "associate" not in role_str and "adjunct" not in role_str:
+        print(f"    -> MATCH")
+
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib from rdflib import Namespace g = rdfl…
+    ✓ bash — exit 0
+  qwen3.6-35b — 25 tool call(s) so far
+  │ The same issue — `g.objects(None, rdflib.RDF.type, uni.Person)` returns t…
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+from rdflib import Namespace
+
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+uni = Namespace("http://university.org/ontology/")
+
+# Correct way to get subjects of type Person
+persons = list(g.subjects(rdflib.RDF.type, uni.Person))
+print(f"Persons found: {len(persons)}")
+for p in persons:
+    role = g.value(p, uni.role)
+    name = g.value(p, uni.hasName)
+    print(f"  {p}: role={role}, name={name}")
+
+# Now filter for full professors
+print("\n=== Filtering for full professors ===")
+eu_countries = {"AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IE","IT","LV","LT","LU","MT","NL","PL","PT","RO","SK","SI","ES","SE"}
+
+ref_date = rdflib.Literal("2025-08-16", datatype=rdflib.XSD.date)
+
+departments = set()
+for s, p, o in g.triples((None, rdflib.RDF.type, uni.Department)):
+    departments.add(s)
+
+dept_students = {}
+for dept in departments:
+    courses = set(g.subjects(uni.isTaughtIn, dept))
+    enrolled = set()
+    for course in courses:
+        for student in g.subjects(uni.isEnrolledIn, course):
+            role = g.value(student, uni.role)
+            if role and str(role) == "Student":
+                grad = g.value(student, uni.hasGraduationDate)
+                if grad is None or grad > ref_date:
+                    enrolled.add(student)
+    dept_students[dept] = enrolled
+
+for person in persons:
+    role = g.value(person, uni.role)
+    if role is None:
+        continue
+    role_str = str(role).lower()
+    if "professor" in role_str and "assistant" not in role_str and "associate" not in role_str and "adjunct" not in role_str:
+        name = str(g.value(person, uni.hasName))
+        depts = set(g.objects(person, uni.worksIn))
+        countries = set()
+        for d in depts:
+            uni_obj = g.value(d, uni.belongsTo)
+            country = g.value(uni_obj, uni.locatedInCountry)
+            if country:
+                countries.add(str(country))
+        
+        busy = any(len(dept_students.get(d, set())) > 10 for d in depts)
+        has_eu = any(c in eu_countries for c in countries)
+        
+        print(f"\n{name}:")
+        for d in sorted(depts, key=str):
+            dname = str(g.value(d, uni.hasName, default=str(d)))
+            uni_obj = g.value(d, uni.belongsTo)
+            ucountry = str(g.value(uni_obj, uni.locatedInCountry)) if uni_obj else "?"
+            cnt = len(dept_students.get(d, set()))
+            print(f"  {dname} ({ucountry}): {cnt} students")
+        print(f"  Countries: {', '.join(sorted(countries))}")
+        print(f"  Has EU dept: {has_eu}, Has busy dept (>10): {busy}")
+        print(f"  QUALIFIES: {has_eu and busy}")
+
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib from rdflib import Namespace g = rdfl…
+    ✓ bash — exit 0
+  qwen3.6-35b — 26 tool call(s) so far
+  │ The independent counts match the expected answer perfectly:
+  │ - **Orfeas Menis**: GR (12 students) + US (0) → qualifies (EU + busy dept…
+  │ - **Pepe Attanasio**: GR (12 students) + PT (0) → qualifies (EU + busy de…
+  │ … 4 more line(s) — /think show for all
+  qwen3.6-35b — 27 tool call(s) so far
+  ⚙ read solution.sparql
+    ✓ read solution.sparql — 40 lines
+  │ The file matches the task's query exactly. Let me do one final verificati…
+[approval] bash: python3 << 'PYEOF'
+import rdflib
+g = rdflib.Graph()
+g.parse("university_graph.ttl", format="turtle")
+query = open("solution.sparql").read()
+results = list(g.query(query))
+print(f"Rows returned: {len(results)}")
+for row in results:
+    print(f"  {row.professorName} | {row.countries}")
+PYEOF
+echo "exit=$?" — approved
+  ⚙ bash python3 << 'PYEOF' import rdflib g = rdflib.Graph() g.parse("universit…
+    ✓ bash — exit 0
+  qwen3.6-35b — 28 tool call(s) so far
+  ⚙ task 
+    ✓ task implementor — 28 tool call(s)
+  deepseek-v4.1-flash — 10 tool call(s) so far
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  ⚙ read solution.sparql
+    ✓ read solution.sparql — 40 lines
+`solution.sparql` is on disk with the query and it has been executed against the graph.
+
+**Query logic**
+- **Full professors**: `uni:role` contains "Professor" but not assistant/associate/adjunct.
+- **EU department**: a department the professor `uni:worksIn`, whose university's `uni:locatedInCountry` is one of the 27 member-state codes as of 2025-08-16 (CH, US filtered out).
+- **>10 currently enrolled students**: a subquery counts, per department, distinct students enrolled in courses `uni:isTaughtIn` that department, excluding anyone whose `uni:hasGraduationDate` is on/before `2025-08-16`; `HAVING > 10`. This is matched against *any* department of the professor, so Pepe Attanasio qualifies via ComputerScience_NTUA (12) even though his Portuguese department has none.
+- `?countries` aggregates all countries where the professor works.
+
+**Verified result** (rdflib 7.6.0, run by the implementor sub-turn against `university_graph.ttl`, cross-checked against a raw per-department count):
+
+| professorName | countries |
+|---|---|
+| Orfeas Menis | GR, US |
+| Pepe Attanasio | PT, GR |
+| Aristotle Tympas | GR |
+
+Excluded as intended: Marie Dubois (Sorbonne, FR — Math201 has exactly 10 currently-enrolled students, not >10), John Smith (US), Stefan Mueller and Athanasios Voulodimos (not full professors).
+
+Nothing left undone; `university_graph.ttl` is untouched (including the `uni:Bio10` typo, which simply resolves to no course).
+
+[refusal] role=coordinator model=deepseek-v4.1-flash tools=11 surface=0d2e5ba66dce

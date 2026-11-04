@@ -1,0 +1,62 @@
+root@5248edcf7341:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+root@5248edcf7341:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+ARM_VERSION=be4fc0d8835c443aca8b32ccd4c1caacf48cbdce
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793805808
+root@5248edcf7341:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with
+ pip.'; tmux wait -S done
+R1_ARM=PC R1_ENTRY=coordinator R1_ROUTES=coordinator=cloud,implementor=local,verifier=local,plan=cloud,implement=local,critique=local,smol=local M2_LOCAL_REPLAY
+=false
+  ⚙ 3 steps folded · note ×3 · nothing changed  /expand
+      from
+  [tools] Stopped: the same tool call repeated 3 times without progress, after 27 call(s).
+  qwen3.6-35b — wrapping up
+  ⚙ task
+    ⚠ task verifier — 27 tool call(s)
+  deepseek-v4.1-flash — 16 tool call(s) so far
+  │ The verifier role is barred from invoking any Python interpreter by its o…
+[approval] delegate to "implementor" — approved
+[approval] bash: pip --version 2>&1 — approved
+  ⚙ bash pip --version 2>&1
+    ✓ bash — exit 0
+  qwen3.6-35b — 1 tool call(s) so far
+[approval] bash: pip install --dry-run --no-input --disable-pip-version-check --report - packaging 2>&1 | tail -12 — approved
+  ⚙ bash pip install --dry-run --no-input --disable-pip-version-check --report …
+    ✓ bash — exit 0
+  qwen3.6-35b — 2 tool call(s) so far
+[approval] bash: python3 -m pip config list 2>&1; echo "---"; cat /etc/pip.conf ~/.config/pip/pip.conf ~/.pip/pip.conf 2>&1 — approved
+  ⚙ bash python3 -m pip config list 2>&1; echo "---"; cat /etc/pip.conf ~/.conf…
+    ✗ bash — exit 1
+  qwen3.6-35b — 3 tool call(s) so far
+  ⚙ task
+    ✓ task implementor — 3 tool call(s)
+  deepseek-v4.1-flash — 17 tool call(s) so far
+Fixed.
+
+**What was wrong.** Not your Python installation as such — the `pip` *package source* was missing. Your default `python3` is `/usr/local/bin/python3` (Python 3.
+13.1, on Debian 12), and `/usr/local/bin/pip`, `pip3` and `pip3.13` were perfectly good launcher scripts. But `/usr/local/lib/python3.13/site-packages/` held on
+ly the `pip-24.3.1.dist-info` metadata directory with no `.py` files behind it. So every entry point — bare `pip` and `python3 -m pip` alike — died with `No mod
+ule named pip`. That is why it looked like a broken installation rather than a missing package: the command existed, the thing it imported did not.
+
+A second trap was sitting underneath: `/usr/lib/python3.11/EXTERNALLY-MANAGED` is present, so the OS Python 3.11 is PEP 668-locked. Had you fallen back to `/usr
+/bin/python3 -m pip install`, you would have hit a *different* refusal — `externally-managed-environment` — and concluded the same thing twice for unrelated rea
+sons.
+
+**The repair.** `python3 -m ensurepip --upgrade` on its own did nothing: it saw the orphaned `dist-info` and reported "Requirement already satisfied" without re
+storing any files. Removing that stale `pip-24.3.1.dist-info` directory and re-running `ensurepip --upgrade` installed the bundled wheel cleanly (`Successfully
+installed pip-24.3.1`). No `get-pip.py`, no hand-edits under `/usr/local`, no system Python 3.11 touched.
+
+**Verified, three ways:** `pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)`; a throwaway venv installed and imported `six`; and the ba
+re `pip install --dry-run packaging` resolved through to `Would install packaging-26.3`, so index access and resolution both work. No `pip.conf` anywhere, so no
+ stray index-url or proxy.
+
+Two things worth knowing:
+
+- Prefer `python3 -m venv .venv` for real projects. `/usr/local` is a shared interpreter, and a half-deleted package there is exactly the failure you just spent
+ a while on. The venv test passing means you have a clean route regardless.
+- One check I could not complete as intended: I sent an independent verifier role to re-test, and it was blocked from the start — that role's `bash_deny` in `.g
+nomon/roles.toml` refuses `python3?` outright, so it could not run a single Python command. Its failure says nothing about your machine; the repair was confirme
+d directly instead. If you rely on that verifier for Python projects, that deny pattern will make it useless for anything but a test runner named `pytest`.
+
+[refusal] role=coordinator model=deepseek-v4.1-flash tools=17 surface=0d2e5ba66dce
+root@5248edcf7341:/app#
