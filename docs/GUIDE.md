@@ -1551,6 +1551,7 @@ The record fields and the outcome list are a contract: [CONTRACTS.md §19](CONTR
 | `Refused: no POSIX shell found, so bash cannot run.` (Windows) | Git for Windows missing | `winget install --id Git.Git`, or set `GNOMON_SHELL` to a bash you have |
 | `exec = "bwrap" is not one of off \| docker, so this silently falls back to "off"` | Only `docker` is a backend | Use `docker` or `off` |
 | `audit verify`: `NOT SEALED (truncated, or the run was killed)` after a normal session | `/quit` exits without writing `session_end` | End interactive sessions with **Ctrl-D**, which seals the trail. `gnomon task` trails are sealed unless the process was killed with SIGKILL; then `<session>.record.json` beside the trail has the turn up to its last step. |
+| `audit verify`: `APPENDED AFTER SEAL` and `TAMPERED —`, exit 1 | Records were written to the trail after its `session_end`, other than a `session_resume` that was sealed again. gnomon does not do that; something else wrote to the trail | Treat it as tampering: compare with the external anchor or signed heads if you have them (docs/CONTRACTS.md §21) |
 | An edit to `.gnomon/` did not take effect | The surface is read at session start | Restart the session |
 | `gnomon endpoint test go`: `NOT TESTED — no role routes here` (exit 10) | No role gives it a model to try | `gnomon endpoint test go --model ID` |
 

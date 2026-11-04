@@ -17,6 +17,7 @@ import { loadConfig } from "./config.js";
 import { runTask } from "./prompt_loop.js";
 import { acceptSkill, proposeSkill, RecordTamperRefusal, SkillRefusal } from "./skills.js";
 import { bashPrecheck, type ToolContext } from "./tools.js";
+import { setDecisionContextProbe } from "./agent_context.js";
 
 let root: string;
 const audit = () => join(root, ".gnomon-audit");
@@ -40,6 +41,14 @@ afterEach(() => {
   else process.env.GNOMON_AGENT_SESSION = marker;
   rmSync(root, { recursive: true, force: true });
 });
+
+// A person at a terminal, with no agent above: the suite may itself be run by
+// an agent's shell, whose marker and process tree would refuse every decision
+// below (agent_context.ts). The refusals have their own tests, which set the
+// probe they need.
+beforeEach(() => setDecisionContextProbe(() => ({ agent: null, interactive: true })));
+afterEach(() => setDecisionContextProbe(null));
+
 
 describe("snapshots", () => {
   it("gnomon's own writes are not changes; anyone else's are", () => {

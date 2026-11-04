@@ -87,8 +87,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2405 TypeScript tests (1907 core, 473 cli, 18
-> natives, 7 tui) and 61 Rust tests — **2466 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2465 TypeScript tests (1947 core, 493 cli, 18
+> natives, 7 tui) and 61 Rust tests — **2526 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1276,7 +1276,10 @@ Each decision is recorded: a `skill_accept` or `skill_reject` audit record
 holding the skill's content hash, the surface hash before and after, and who
 decided, in a sealed trail of its own (docs/CONTRACTS.md §11). Both refuse
 to run inside an agent session: the harness marks every tool subprocess with
-`GNOMON_AGENT_SESSION`, so the agent's own bash cannot accept a skill. The
+`GNOMON_AGENT_SESSION`, and the refusal also reads the marker from the agent
+shell's own starting environment and looks for gnomon among the command's
+ancestors, so unsetting the variable does not get past it. Both also need a
+person at a terminal (or a person-present signer). The
 record says `by: "cli"` rather than claiming a person it cannot see. It is written
 even when `[audit]` is off, because an accept is the one act that changes what
 the agent is on purpose.

@@ -142,6 +142,7 @@ import { loadCatalog, defaultCatalogPath, type Suggestion } from "./catalog.js";
 import { runSetup, HYBRID_CONTROLS, MODE_ALIASES, SETUP_EXIT, type HybridControl } from "./setup_wizard.js";
 import { systemSetupEffects } from "./setup_host.js";
 import { runDoctor, formatDoctor, DOCTOR_EXIT } from "./doctor.js";
+import { selfLauncher } from "./self_launcher.js";
 
 // ---------------------------------------------------------------------------
 // Argument parsing (minimal, no deps)
@@ -372,7 +373,7 @@ async function cmdLoop(args: CliArgs): Promise<void> {
     // cron handed it to a bare `node`, which cannot load TypeScript. Resolve
     // the launcher relative to this module and pin the interpreter to the one
     // running now, since cron's PATH has neither nvm nor tsx.
-    const launcher = fileURLToPath(new URL("../gnomon.js", import.meta.url));
+    const launcher = selfLauncher(import.meta.url) ?? fileURLToPath(new URL("../gnomon.js", import.meta.url));
     const bin = `${JSON.stringify(process.execPath)} ${JSON.stringify(launcher)}`;
     const line = installLoop(root, l, bin);
     console.log(`installed ${l.name}\n  ${line}`);
@@ -1250,10 +1251,12 @@ async function listModelsAt(endpoint: {
  * next session announces (anchor.ts announceAnchorBacklog).
  */
 function detachedAnchorFlush(s: ResolvedAnchor, trustFlag = false): void {
-  // The launcher this CLI was started through: one level above src/ (or
-  // dist/), the same in a checkout and in the published package.
-  const launcher = fileURLToPath(new URL("../gnomon.js", import.meta.url));
-  if (!existsSync(launcher)) {
+  // The launcher beside src/ (checkout) or dist/ (the published package):
+  // gnomon.js in a checkout, bin/gnomon.mjs in the package (self_launcher.ts).
+  // With neither, the flush runs in-process; flushAnchors releases its lock
+  // on exit, and whatever it did not deliver stays queued for the next one.
+  const launcher = selfLauncher(import.meta.url);
+  if (!launcher) {
     void flushAnchors(s).catch(() => undefined);
     return;
   }
@@ -1516,9 +1519,20 @@ async function cmdAudit(args: CliArgs): Promise<void> {
     }
 
     const chain = r.ok ? "chain intact" : `chain BROKEN at seq ${r.broken.join(", ")}`;
-    const seal = r.sealed ? "sealed" : "NOT SEALED (truncated, or the run was killed)";
+    // A trail that was sealed and then grew is not the killed run NOT SEALED
+    // describes: a killed run never wrote a seal. Exit 1 (verifyTrail,
+    // VerifyResult.after_seal); GBS-AUDIT 0.1 case I1 passed it with exit 0.
+    const seal = r.after_seal
+      ? `APPENDED AFTER SEAL at seq ${r.after_seal.seq}`
+      : r.sealed
+        ? "sealed"
+        : "NOT SEALED (truncated, or the run was killed)";
     console.log(`${name}: ${r.records} records — ${chain}, ${seal}`);
     if (!r.ok) allOk = false;
+    if (r.after_seal) {
+      console.error(`  TAMPERED — ${r.after_seal.detail}`);
+      allOk = false;
+    }
 
     const a = r.attestation;
     if (!a) {

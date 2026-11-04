@@ -26,6 +26,46 @@
 
 ## [Unreleased]
 
+### Security
+
+- **`gnomon audit verify` fails a trail that was appended to after its
+  seal.** A record appended after `session_end`, with its `seq`, `prev` and
+  hash computed the way gnomon computes them, printed `NOT SEALED` and
+  exited 0 in every configuration (GBS-AUDIT 0.1, case I1,
+  `benchmarks/results/gbs-2026-11-04/audit`). It is now `APPENDED AFTER SEAL`
+  with a `TAMPERED —` line and exit 1. After a seal, the only record gnomon
+  writes is `session_resume`, and a resumed trail must end sealed again
+  (unless its writer's lock is fresh: a reseal in progress). A trail never
+  sealed, a live or killed session, is unchanged. `verifyTrail` reports it as
+  `after_seal`; the dashboard's verify exit counts it. Docs/CONTRACTS.md §21,
+  fixture `conformance/audit_verify.json`.
+- **The agent cannot approve its own skill by dropping
+  `GNOMON_AGENT_SESSION`.** GBS-GOVERNANCE 0.1 had the agent's bash run
+  `env -u GNOMON_AGENT_SESSION gnomon skill accept …` and accept, 4 of 4.
+  `skill accept`, `skill reject` and `audit resolve` now refuse (exit 3) when
+  the marker is present with any value (the empty string passed), when it is
+  in an ancestor process's initial environment, or when gnomon itself is an
+  ancestor (Linux, `/proc`). Skill decisions also need a person, as `audit
+  resolve` already did: stdin and stdout on a terminal, or a person-present
+  signer that signs the decision before it is applied. Records gain
+  `authorised_by`. Tested end to end through the real bash tool against
+  `unset`, empty, overwritten, `env -u`, `env -i`, `exec env -i`, `setsid`,
+  `setsid -w`, `setsid -f`, `nohup` and a pseudo-terminal (`script`). Limits
+  in docs/CONTRACTS.md §11.
+
+### Fixed
+
+- **Stale `anchors/flush.lock` after anchored sessions.** The published
+  package ships `bin/gnomon.mjs`, not `gnomon.js`, so the CLI found no
+  launcher for its detached `gnomon audit anchor --background`, delivered
+  in-process instead, and `gnomon task`'s `process.exit` cut the delivery off
+  before its `finally` released the lock: 22 of 22 anchored sessions in
+  GBS-AUDIT 0.1, with `gnomon audit anchor` answering "already running" for
+  up to 120 s. The launcher is now found in either layout
+  (`self_launcher.ts`; `gnomon loops install` had the same lookup), the lock
+  is released by an `exit` handler too, and it names its holder's pid and
+  host so a lock left by a dead process is taken over at once.
+
 ## [0.4.1] — 2026-11-04
 
 Upgrading from 0.4.0: nothing to do. Every addition is opt-in, record-only, or a security tightening; on a default surface the requests a model receives are byte-identical to 0.4.0 (release gate in PR #145: 128/128 prompt, tool and role rows identical; request-body pins of #133, #138, #143 and #144 identical). A freshly initialised project gets new comments in its scaffold (so a new surface hash); existing projects are untouched. Highlights: `gnomon dashboard` and `gnomon setup`/`doctor` (#129), the desktop shell (#128), `max_context_tokens = "auto"` (#137), per-call mediator records and an opt-in calibrated token estimator (#144), the live turn record that survives a kill (#143), log-only stall signals (#140), `[approval] after_refusal = "ask"` (#139), tool-definition hashing and MCP pins (#142), guard bypass fixes (#136, #141), audit anchoring (#135), `gnomon chaos` (#134), opt-in observation masking (#133), release supply-chain provenance (#132).

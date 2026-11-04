@@ -918,9 +918,11 @@ export function diffStat(lines: string[]): { added: number; removed: number } {
  * It marks "the agent is running this". `gnomon skill accept` and `reject`
  * refuse when they see it, because acceptance is a person's act -- before
  * this, the agent's own bash could run `gnomon skill accept` and the record
- * said `by: "human"`. A process can drop the variable (`env -u`), so this is
- * a refusal with a reason, not a proof; the records say `by: "cli"`, never
- * claiming a person they cannot see.
+ * said `by: "human"`. A process can drop the variable from its own
+ * environment (`env -u`), so the refusal also reads it from the ancestors'
+ * starting environments and looks for gnomon among them (agent_context.ts).
+ * It is a refusal with reasons, not a proof; the records say `by: "cli"`,
+ * never claiming a person they cannot see.
  */
 export const AGENT_SESSION_ENV = "GNOMON_AGENT_SESSION";
 

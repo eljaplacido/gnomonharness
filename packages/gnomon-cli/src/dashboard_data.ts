@@ -720,6 +720,7 @@ export function verifyProject(p: DashboardProject, only?: string): Record<string
       ok: r.ok,
       broken: r.broken,
       sealed: r.sealed,
+      after_seal: r.after_seal ?? null,
       problem: r.problem ?? null,
       attestation: r.attestation
         ? { status: r.attestation.status, declared: r.attestation.declared, problem: r.attestation.problem ?? null }
@@ -734,7 +735,7 @@ export function verifyProject(p: DashboardProject, only?: string): Record<string
     trails,
     // The CLI's exit, as `gnomon audit verify` would return it: 1 on anything
     // broken, and 1 on nothing to verify, which is no evidence, not no problem.
-    exit: trails.length === 0 || trails.some((t) => !t.ok) ? 1 : 0,
+    exit: trails.length === 0 || trails.some((t) => !t.ok || t.after_seal !== null) ? 1 : 0,
   };
 }
 

@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { parseArgs } from "./index.js";
-import { recomputeManifest } from "gnomon-core";
+import { recomputeManifest, AuditTrail, recordHash, type AuditRecord } from "gnomon-core";
 import { surfaceHash, manifest } from "gnomon-natives";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, appendFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -271,6 +271,39 @@ describe("first-contact output", () => {
     expect(code).toBe(0);
     expect(out.trim().split("\n")).toHaveLength(1);
     expect(out).toMatch(/^gnomon\/\d+\.\d+\.\d+/);
+  });
+
+  it("audit verify fails a trail that was appended to after its seal, and passes a live one", () => {
+    // GBS-AUDIT 0.1, case I1: printed NOT SEALED and exited 0.
+    const root = mkdtempSync(join(tmpdir(), "gnomon-afterseal-"));
+    try {
+      mkdirSync(join(root, ".gnomon"), { recursive: true });
+      writeFileSync(join(root, ".gnomon", "config.toml"), "[defaults]\n\n[audit]\nenabled = true\n");
+      writeFileSync(join(root, ".gnomon", "roles.toml"), `[roles.smol]\nmodel = "m"\n`);
+      writeFileSync(join(root, ".gnomon", "system.md"), "x\n");
+      const s = { enabled: true, dir: join(root, ".gnomon-audit"), record: "metadata" as const, redact: [], chain: true, invalid_redact: [] };
+      const live = new AuditTrail(s as never, "live");
+      live.write("session_start", {});
+      live.write("turn", {});
+      const sealed = new AuditTrail(s as never, "sealed");
+      sealed.write("session_start", {});
+      const end = sealed.write("session_end", {})!;
+      const verify = () => run(["audit", "verify", "--dir", root]);
+
+      let r = verify();
+      expect(r.code).toBe(0);
+      expect(r.out).toMatch(/live\.jsonl: 2 records — chain intact, NOT SEALED/);
+
+      const forged = { seq: end.seq + 1, ts: new Date().toISOString(), kind: "tool_call", prev: end.hash, tool: "bash" } as AuditRecord;
+      forged.hash = recordHash(forged);
+      appendFileSync(sealed.path!, `${JSON.stringify(forged)}\n`);
+      r = verify();
+      expect(r.code).toBe(1);
+      expect(r.out).toMatch(/sealed\.jsonl: 3 records — chain intact, APPENDED AFTER SEAL at seq 2/);
+      expect(r.out).toMatch(/TAMPERED — seq 2 \(tool_call\) was appended after the trail was sealed at seq 1/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("skill accept inside an agent session is refused with exit 3, and the proposal stays", () => {

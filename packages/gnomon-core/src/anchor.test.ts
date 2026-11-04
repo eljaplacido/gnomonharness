@@ -11,8 +11,9 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, chmodSync, cpSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, hostname } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import { AuditTrail, recordHash, resolveAudit, verifyTrail, canonicalJson, type AuditRecord } from "./audit.js";
@@ -942,5 +943,70 @@ describe("conformance/audit_anchor.json", () => {
     expect(Object.keys(rec.receipt).sort()).toEqual([...fx.receipt_by_backend.git].sort());
     const tip = git(["--git-dir", remote, "rev-parse", fx.git.default_ref]);
     expect(git(["--git-dir", remote, "ls-tree", "--name-only", tip])).toBe(fx.git.file);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// flush.lock: released on every way out
+// ---------------------------------------------------------------------------
+
+describe("flush.lock", () => {
+  // GBS-AUDIT 0.1 (benchmarks/results/gbs-2026-11-04/audit): after 22 of 22
+  // anchored `gnomon task`s on the v0.4.1 release, anchors/flush.lock was left
+  // behind with no delivery running, and `gnomon audit anchor` said "already
+  // running" until the lock aged past 120 s. The installed package has no
+  // gnomon.js, so the CLI fell back to an unawaited in-process flush, and the
+  // task's process.exit skipped flushAnchors' `finally`.
+  const lockOf = (c: GnomonConfig) => join(anchorOf(c).dir, "flush.lock");
+  const here = fileURLToPath(new URL(".", import.meta.url));
+
+  it("a process that exits mid-delivery releases the lock; its statements stay queued", () => {
+    const c = cfg({ backend: "rfc3161", url: "http://tsa.invalid/" });
+    sealTrail(c, "s1");
+    const anchor = anchorOf(c);
+    // A child holding the lock, whose witness never answers, then process.exit:
+    // the path `gnomon task` took. No network: the transport is a stub.
+    const script =
+      `import { flushAnchors } from ${JSON.stringify(new URL("./anchor.ts", import.meta.url).href)};\n` +
+      `const s = ${JSON.stringify(anchor)};\n` +
+      `void flushAnchors(s, { fetch: () => new Promise(() => {}) });\n` +
+      `setTimeout(() => { process.stdout.write("held=" + String(existsSync(join(s.dir, "flush.lock")))); process.exit(0); }, 300);\n` +
+      `import { existsSync } from "node:fs";\nimport { join } from "node:path";\n`;
+    const r = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { encoding: "utf-8", cwd: join(here, "..") });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toBe("held=true");
+    expect(existsSync(lockOf(c))).toBe(false);
+    expect(readdirSync(join(anchor.dir, "queue"))).toHaveLength(1);
+  });
+
+  it("a lock whose holder is gone is taken over at once, not after 120 s", async () => {
+    const c = cfg({ backend: "rfc3161", url: "http://tsa.invalid/" });
+    sealTrail(c, "s1");
+    const gone = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf-8" });
+    const dead = Number(gone.stdout);
+    mkdirSync(anchorOf(c).dir, { recursive: true });
+    writeFileSync(lockOf(c), JSON.stringify({ pid: dead, host: hostname(), at: new Date().toISOString() }));
+    const refused = (async () => {
+      throw new Error("unreachable");
+    }) as unknown as typeof fetch;
+    const r = await flushAnchors(anchorOf(c), { fetch: refused });
+    expect(r.busy).toBeUndefined();
+    expect(r.pending).toBe(1);
+    expect(existsSync(lockOf(c))).toBe(false);
+  });
+
+  it("a live holder, another host's lock, or a lock with no pid (an older gnomon's) still means busy", async () => {
+    const c = cfg({ backend: "rfc3161", url: "http://tsa.invalid/" });
+    sealTrail(c, "s1");
+    mkdirSync(anchorOf(c).dir, { recursive: true });
+    for (const body of [
+      JSON.stringify({ pid: process.ppid, host: hostname() }),
+      JSON.stringify({ pid: 999_999_999, host: `not-${hostname()}` }),
+      "",
+    ]) {
+      writeFileSync(lockOf(c), body);
+      expect((await flushAnchors(anchorOf(c))).busy).toBe(true);
+      expect(readFileSync(lockOf(c), "utf-8")).toBe(body);
+    }
   });
 });
