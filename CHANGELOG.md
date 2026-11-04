@@ -26,6 +26,44 @@
 
 ## [Unreleased]
 
+- **Order invariance (GV17) and the orthogonality invariant (LN8), as property
+  suites, with what they found fixed. Tightening only.**
+  `packages/gnomon-core/src/order_invariance.test.ts` permutes every
+  `readdirSync` result (12 seeded shuffles, the reverse, the identity) and the
+  declaration order of every unordered TOML collection, and asserts the system
+  prompt, the tools JSON and every tool answer built from them are the same
+  bytes. `packages/gnomon-core/src/orthogonality.test.ts` drives the `write`,
+  `edit`, `skill`, `bash` and `task` paths at 11 protected files (policy, loop
+  config, roles, tools, a profile, system prompt, an accepted skill, a trial
+  spec, the verifier's key, the audit trail, a trial record) through 751
+  routes. Both are pinned by `conformance/order_invariance.json` and
+  `conformance/orthogonality.json` (CONTRACTS.md §NEW-order-invariance,
+  §NEW-orthogonality).
+  - **MCP tools are sorted** like declared tools. They followed
+    `[mcp_servers.*]` declaration order and each server's `tools/list` order.
+  - **A capped walk keeps the same files on every filesystem.** `glob` and
+    `grep` past 20,000 files, the citation check past 12 same-named files,
+    and which record files the tamper guard hashes on equal mtimes depended on
+    readdir order. The `task` tool's unknown-role list is in byte order, not
+    `[roles.*]` order.
+  - **A hard link to a surface file is the surface.** With `p.toml` a hard
+    link to `.gnomon/policy.toml`, `write p.toml` and `edit p.toml` rewrote the
+    policy with code 0 under `strict` and no drift was reported. Also through
+    a `task` sub-turn. Refused now (rule `surface`), as hard links to records
+    already were.
+  - **The `skill` tool never writes through a link.** `proposed/` is not
+    hashed, so a link planted there moved nothing, and the next proposal
+    followed it: onto `system.md`, onto `policy.toml` through a hard link, or
+    into `skills/` as an active skill with no accept (`proposed -> .`). Refused
+    now; a proposal is written new and renamed into place, and a skill call
+    that moves the surface hash reports it.
+  - **A surface that stops hashing has moved.** `ln -sf <nowhere>
+    .gnomon/<file>` left a dangling link the manifest walk cannot stat, and
+    the drift check read "cannot hash" as "unchanged". Reported now.
+  - **Case variants of `.gnomon/`** are the surface on case-insensitive
+    filesystems (macOS by default, Windows), as they already were for the
+    records.
+
 ## [0.4.0] — 2026-11-03
 
 **Upgrading from 0.3.x.** Run `gnomon migrate` in each project. It applies four

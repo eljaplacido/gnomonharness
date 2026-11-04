@@ -2079,7 +2079,10 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
   try {
     const extDir = join(config.gnomonDir, "extensions");
     const files = existsSync(extDir)
-      ? readdirSync(extDir).filter((f) => /\.(ts|js|mjs)$/.test(f))
+      ? readdirSync(extDir)
+          .filter((f) => /\.(ts|js|mjs)$/.test(f))
+          // The first three are named below: by byte order, not by readdir's (GV17).
+          .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
       : [];
     if (files.length > 0) {
       problems.push({

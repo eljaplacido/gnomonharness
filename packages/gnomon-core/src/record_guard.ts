@@ -169,7 +169,9 @@ export function snapshotRecords(dirs: string[]): RecordSnapshot {
   // snapshot cost 8 ms instead of 2 in a repository 400 sessions old.
   stats
     .filter(([p, st]) => st.size <= SNAPSHOT_LIMITS.hashMaxBytes && !isCheckpointMap(p))
-    .sort((a, b) => b[1].mtimeMs - a[1].mtimeMs)
+    // Ties by path (GV17): on equal mtimes -- coarse clocks, files written in
+    // one burst -- which ones are hashed was decided by readdir order.
+    .sort((a, b) => b[1].mtimeMs - a[1].mtimeMs || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
     .slice(0, SNAPSHOT_LIMITS.hashNewest)
     .forEach(([p]) => {
       try {

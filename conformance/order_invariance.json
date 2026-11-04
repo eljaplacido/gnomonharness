@@ -1,0 +1,24 @@
+{
+  "contract": "§NEW-order-invariance",
+  "version": 1,
+  "about": "GV17. Every list gnomon builds a prompt (or a record) from, and the order it is in. Read by packages/gnomon-core/src/order_invariance.test.ts, which asserts it has a probe for exactly these ids. `byte`: sorted byte-wise, invariant under readdir order and declaration order. `declared`: a TOML array shown as the surface wrote it. `semantic`: the order is the meaning, and is never canonicalised.",
+  "lists": [
+    { "id": "tools.declared", "order": "byte", "source": "[[tools]] in tools.toml", "sink": "tools JSON" },
+    { "id": "tools.mcp", "order": "byte", "source": "[mcp_servers.*] connection order, each server's tools/list", "sink": "tools JSON" },
+    { "id": "tools.role_filter", "order": "byte", "source": "a role's tools = [...]", "sink": "tools JSON (a filter: its own order never shows)" },
+    { "id": "skills.active", "order": "byte", "source": "readdir .gnomon/skills/", "sink": "system prompt" },
+    { "id": "skills.dormant", "order": "byte", "source": "readdir .gnomon/skills/", "sink": "system prompt" },
+    { "id": "skills.role_filter", "order": "byte", "source": "a skill's roles = [...]", "sink": "system prompt (a filter)" },
+    { "id": "profiles", "order": "byte", "source": "readdir .gnomon/profiles/, a profile's [roles.*]", "sink": "the merged roles" },
+    { "id": "roles.task_unknown", "order": "byte", "source": "[roles.*] plus the roles a profile adds", "sink": "task tool result" },
+    { "id": "manifest", "order": "byte", "source": "walk of .gnomon/", "sink": "surface hash" },
+    { "id": "read.directory", "order": "byte", "source": "readdir", "sink": "read tool result" },
+    { "id": "walk.capped", "order": "byte", "source": "readdir, cut at WALK_MAX_FILES", "sink": "glob and grep results" },
+    { "id": "citations.candidates", "order": "byte", "source": "readdir, cut at 12", "sink": "the turn's citation counters" },
+    { "id": "records.hashed_newest", "order": "byte", "source": "readdir, mtime ties", "sink": "which record files the tamper guard hashes" },
+    { "id": "bash_allow", "order": "declared", "source": "a role's bash_allow", "sink": "bash refusal text" },
+    { "id": "write_allow", "order": "declared", "source": "a role's write_allow", "sink": "write refusal text" },
+    { "id": "task_allow", "order": "declared", "source": "a role's task_allow", "sink": "task refusal text" },
+    { "id": "routing.rules", "order": "semantic", "source": "[[routing.rules]]", "sink": "which role a turn runs as (first match wins)" }
+  ]
+}
