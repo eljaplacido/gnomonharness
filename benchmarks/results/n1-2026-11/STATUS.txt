@@ -1,0 +1,45 @@
+2026-11-04T21:23:15Z CHAIN-N1 N1 chain start (pid 1138281); release v0.4.1 (c511b810, SHA256SUMS 923adc6f); arms N1 (nudge_after_idle 12) and N0 (100000), steer_role user; the gx10 lane http://127.0.0.1:18080 (llama-server-qwen-q4.service, never touched), one cell at a time; new-pair deadline 2026-11-06T07:00:00Z
+2026-11-04T21:23:29Z CHAIN-N1 offline test test_run_n1.py: 40 passed, 0 failed
+2026-11-04T21:23:31Z CHAIN-N1 offline test test_collect_n1.py: 44 passed, 0 failed
+2026-11-04T21:24:08Z CHAIN-N1 offline test test_chain_n1.sh: 40 passed, 0 failed
+2026-11-04T21:24:08Z CHAIN-N1 holding the gx10 gpu.lock (/home/eljaplacido/.opencode/central-brain/runtime/decisionbench/gpu.lock) for the rest of this chain
+2026-11-04T21:24:08Z CHAIN-N1 M2 gx10 chain's last line: 2026-11-04T18:38:06Z CHAIN-M2G DONE
+2026-11-04T21:24:08Z CHAIN-N1 lane: the lane is R1's/S1's lane: build b1281-571d0d54, model, alias, template (= R1H's), caps, 1 slot x 98304, speculative, server defaults, unit flags; slots busy now: []; unit: MainPID=2359135 ExecMainStartTimestamp=Wed 2026-11-04 11:13:40 EET ActiveState=active 
+2026-11-04T21:24:21Z CHAIN-N1 weights: model sha256 2bee952b218e4a481430c59d8d3bdc7bae20bed0eb501326340c5fca7ae95d42, draft blob 107b7a433cbbdb4656a52b7845b35f6eed94eb0efb0019c8af7faed16d2d52f7
+2026-11-04T21:24:22Z CHAIN-N1 release v0.4.1 SHA256SUMS 923adc6fb249f65ea998bccb8351e1a806138a8fe015319cefc0a0d429b4f459: pinned
+2026-11-04T21:24:22Z CHAIN-N1 delivery gate on the gx10 lane (exit 0; probe-n1-gx10.txt): pass on shapes from 8078df03e2a28c41753825dcccab13e8a0ac03dd
+    == S1 template probe 2026-11-04T21:24:22Z (live http://127.0.0.1:18080/apply-template)
+    shapes: S0 = gnomon's mid-turn messages as role system; S1 = steerAsUser at 8078df03e2a28c41753825dcccab13e8a0ac03dd (make_probe_shapes.mts (gnomon's own steerAsUser)); marker MARKER-S1Q
+      A nudge after a tool result [S0]: marker absent; prompt 1553 chars, '<think>' x2; around marker: -
+      A nudge after a tool result [S1]: marker PRESENT; prompt 1813 chars, '<think>' x1; around marker: 'tool_response>\n3\n</tool_response><|im_end|>\n<|im_start|>user\n[gnomon] MARKER-S1Q You have run 8 tool calls without changing a file. If you have found '
+      -> A nudge after a tool result: as expected (gate; want S0 absent, S1 present): the negative control: a late system message is dropped (S0) and the same words as a [gnomon] user message are rendered (S1)
+      B nudge, then two more steps [S0]: marker absent; prompt 1775 chars, '<think>' x3; around marker: -
+      B nudge, then two more steps [S1]: marker PRESENT; prompt 2035 chars, '<think>' x2; around marker: 'tool_response>\n3\n</tool_response><|im_end|>\n<|im_start|>user\n[gnomon] MARKER-S1Q You have run 8 tool calls without changing a file. If you have found '
+      -> B nudge, then two more steps: as expected (gate; want S0 absent, S1 present): the steering stays in the history the model sees on later steps (S1) or never appears (S0)
+      C tool-less wrap-up [S0]: marker absent; prompt 439 chars, '<think>' x2; around marker: -
+      C tool-less wrap-up [S1]: marker PRESENT; prompt 551 chars, '<think>' x1; around marker: 'tool_response>\n3\n</tool_response><|im_end|>\n<|im_start|>user\n[gnomon] MARKER-S1Q No tools are attached to this final call, so answer now from what you'
+      -> C tool-less wrap-up: as expected (gate; want S0 absent, S1 present): the wrap-up call is sent with no tools; same rule
+      D folded summary at index 1 (positive control) [S0]: marker PRESENT; prompt 1472 chars, '<think>' x1; around marker: 'turns in this session, folded because they no longer fit the window:\n\nMARKER-S1Q the count was 3.<|im_end|>\n<|im_start|>user\nHow many files are in /ap'
+      D folded summary at index 1 (positive control) [S1]: marker PRESENT; prompt 1473 chars, '<think>' x1; around marker: 'turns in this session, folded because they no longer fit the window:\n\nMARKER-S1Q the count was 3.<|im_end|>\n<|im_start|>user\nHow many files are in /ap'
+      -> D folded summary at index 1 (positive control): as expected (gate; want S0 present, S1 present): the template renders a system message at index 1, so the probe can see a system message it keeps: A's absence is position, not detection
+      E context-drop notice after the instruction [S0]: marker absent; prompt 1553 chars, '<think>' x2; around marker: -
+      E context-drop notice after the instruction [S1]: marker PRESENT; prompt 1670 chars, '<think>' x2; around marker: 'many files are in /app? Write the number to /app/count.txt.\n\n[gnomon] MARKER-S1Q [gnomon context] 3 earlier step(s) in this turn were dropped to stay '
+      -> E context-drop notice after the instruction: as expected (informational; want S0 absent, S1 present): informational: S1 merges the notice into the instruction's user message
+      F verification failure after an answer [S0]: marker absent; prompt 1620 chars, '<think>' x3; around marker: -
+      F verification failure after an answer [S1]: marker PRESENT; prompt 1754 chars, '<think>' x1; around marker: '|>\n<|im_start|>assistant\nDone: 3.<|im_end|>\n<|im_start|>user\n[gnomon] MARKER-S1Q The declared verification for this repository failed after your chang'
+      -> F verification failure after an answer: as expected (informational; want S0 absent, S1 present): informational
+    PROBE_SHAPES_SHA=8078df03e2a28c41753825dcccab13e8a0ac03dd
+    STEER_TEMPLATE_GATE=pass
+2026-11-04T21:24:29Z N1RUN N1 smoke: release v0.4.1 (c511b8105fb2187423d21becbe3b19f8af2b80e5) model=qwen3.6-35b upstream=http://127.0.0.1:18080 arms N1 (nudge_after_idle 12), N0 (100000), steer_role user; 1 pairs, 0 cells finished already; deadline -
+2026-11-04T21:24:29Z N1RUN n1 ATTEMPT s: 1 pairs, one cell at a time
+2026-11-04T21:24:29Z N1RUN START n1-n1-s-l-hello-world arm=N1 nudge_after_idle=12 k=s pos=0 order=1/2 load=1.3
+2026-11-04T21:25:06Z N1RUN END   n1-n1-s-l-hello-world (tb exit 0) 37 s local_chat=3 cloud_sink_chat=0 note_req=0 nudge_note_req=0 new_note=0 late_sys_req=0 aborts=0 errors=0
+2026-11-04T21:25:06Z N1RUN START n1-n0-s-l-hello-world arm=N0 nudge_after_idle=100000 k=s pos=0 order=2/2 load=1.2
+2026-11-04T21:25:41Z N1RUN END   n1-n0-s-l-hello-world (tb exit 0) 35 s local_chat=3 cloud_sink_chat=0 note_req=0 nudge_note_req=0 new_note=0 late_sys_req=0 aborts=0 errors=0
+2026-11-04T21:25:41Z N1RUN N1 smoke finished: {'pairs_started': 1, 'not_started': 0, 'cells_done': 2, 'cells_skipped': 0, 'aborted': 0}
+2026-11-04T21:25:42Z CHAIN-N1 smoke PASS on the gx10 lane (smoke-n1.txt)
+    cell                           state      resolved local_chat note_req nudge_req late_req nudges adapted mc  sink  surface
+    n1-n0-s-l-hello-world          valid      True              3        0         0        0      0       0   3     0  ('user', 1) (100000, 1)
+    n1-n1-s-l-hello-world          valid      True              3        0         0        0      0       0   3     0  ('user', 1) (12, 1)
+      !!! no nudge fired in either smoke cell (hello-world rarely idles 12 calls), so the smoke checks the surface, the wire record and the negative control; the offline wire test (wiretest-n1.txt) covers the nudge path
+    smoke (gx10 lane): PASS
