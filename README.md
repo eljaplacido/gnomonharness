@@ -425,7 +425,7 @@ irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/i
 The installer ([`scripts/install.sh`](scripts/install.sh),
 [`scripts/install.ps1`](scripts/install.ps1)) checks Node and, if it is missing
 or older than 20, prints the command for your OS instead of running one as root.
-It resolves the latest release (`GNOMON_VERSION=0.4.0` pins one), installs the
+It resolves the latest release (`GNOMON_VERSION=0.4.1` pins one), installs the
 npm package — from the registry when that version is published there, from
 the release's own tarballs when it is not (an older pin, or the minute between
 a release and its npm publish) — and puts the native binaries in
@@ -460,11 +460,11 @@ the release job builds, refuses to publish unless they install and run, and
 then publishes to npm byte for byte:
 
 ```bash
-V=0.4.0; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
+V=0.4.1; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/gnomon-harness-$V.tgz
 ```
 
-<!-- bash only: `V=0.4.0` is not an assignment in PowerShell, and `$B/...` is
+<!-- bash only: `V=0.4.1` is not an assignment in PowerShell, and `$B/...` is
 not a path there. The installer one-liners above are the cross-shell route. -->
 
 From the registry this is `npm i -g gnomon-harness` (or
