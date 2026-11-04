@@ -24,6 +24,11 @@ priced, and without a hidden regression in latency, reliability or governance?
   with a local builder (PC) solved 26/30 tasks, against cloud-only (C) 27/32 and
   local-only (L) 24/32. Dollars per solved fell from $0.0458 to $0.0341 (−26%)
   ([R1H summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/r1h-2026-11/summary.txt)).
+  **Did not reproduce on v0.4.0 (R3R, 2026-11-04).** R1H's own lane, arms and tasks, re-run on v0.4.0: L 22/29,
+  C 24/31, PC 19/31; PC's dollars per solved rose 43% against C (95% CI −117% to +5%), and on matching tasks PC
+  solved 18 vs R1H's 25 (8 tasks R1H-only, 1 R3R-only; McNemar p = 0.04) while L and C were unchanged. Host load does
+  not explain it. The cause is open; see [FINDINGS-2026-11-04](FINDINGS-2026-11-04.md)
+  ([R3R summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/r3r-2026-11/summary-r3r.txt)).
   The same file also shows:
   - **Quality is not settled.** PC against C: 2 discordant tasks to 1, McNemar
     p = 1.0. That is no evidence of a difference, which is not the same as
