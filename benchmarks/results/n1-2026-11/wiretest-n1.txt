@@ -1,0 +1,39 @@
+== N1 wire test 2026-11-04T21:06:48.194Z: gnomon/0.4.1+v0.4.1-c511b81 (<prefix: install_release_n1.sh>/bin/gnomon)
+  ok   the binary under test is the pinned v0.4.1 release build
+
+N1 (steer_role = "user", nudge_after_idle = 12): gnomon exit 0; 16 requests reached the fake server
+  relay: chat 16, late system 0 req, [gnomon] notes 4 req (4 msgs, new 1); kinds as a note: nudge 4, converge 0, wrapup 0, verify 0, context 0, other 0; client_aborts 0, errors 0
+  turn record: wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"steer_role":"user","tools_hash":"7e00335dbc3cefad11f1f37c0b8a15bd89afa4fd10dce2d4f9abd414ce85582e"}, nudges 1, first_nudge_step 12, steer_role_adapted absent, stop_reason answered, tool_steps 15
+  counters.model_calls: v 1, count 16, steered_calls {"nudge":4,"converge":0,"other":0}, nudge-carrying calls 4 (via ["user"])
+  ok   gnomon task ran to exit 0 (not killed at 180 s)
+  ok   the relay parsed every request the server saw
+  ok   the turn record's wire says steer_role user
+  ok   no system message after the first
+  ok   no refusal was learned (steer_role_adapted absent or 0)
+  ok   no convergence push (implementor declares no converge_after)
+  ok   counters.model_calls is present and counts every request
+  ok   N1: the idle nudge fired (counters.nudges >= 1)
+  ok   N1: the nudge went out as a [gnomon] user note (meter)
+  ok   N1: counters.model_calls logs the nudge on its calls, via user
+
+N0 (steer_role = "user", nudge_after_idle = 100000): gnomon exit 0; 16 requests reached the fake server
+  relay: chat 16, late system 0 req, [gnomon] notes 0 req (0 msgs, new 0); kinds as a note: nudge 0, converge 0, wrapup 0, verify 0, context 0, other 0; client_aborts 0, errors 0
+  turn record: wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"steer_role":"user","tools_hash":"7e00335dbc3cefad11f1f37c0b8a15bd89afa4fd10dce2d4f9abd414ce85582e"}, nudges 0, first_nudge_step absent, steer_role_adapted absent, stop_reason answered, tool_steps 15
+  counters.model_calls: v 1, count 16, steered_calls {"nudge":0,"converge":0,"other":0}, nudge-carrying calls 0 (via [])
+  ok   gnomon task ran to exit 0 (not killed at 180 s)
+  ok   the relay parsed every request the server saw
+  ok   the turn record's wire says steer_role user
+  ok   no system message after the first
+  ok   no refusal was learned (steer_role_adapted absent or 0)
+  ok   no convergence push (implementor declares no converge_after)
+  ok   counters.model_calls is present and counts every request
+  ok   N0: no nudge fired (counters.nudges = 0)
+  ok   N0: no [gnomon] note on the wire (the negative control)
+  ok   N0: counters.model_calls logs no nudge
+
+surface diff N1 vs N0: [["nudge_after_idle = 12        # calls without changing a file before the model is nudged to decide","nudge_after_idle = 100000        # calls without changing a file before the model is nudged to decide"]]
+  ok   the two surfaces differ by exactly the nudge_after_idle line
+requests: N1 16 (4 carry a nudge note), N0 16; first differing request after removing the notes: none
+  ok   with the nudge notes removed, N1 sent exactly N0's request bodies
+
+wire test: PASS (gnomon/0.4.1+v0.4.1-c511b81)
