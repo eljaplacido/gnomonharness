@@ -381,6 +381,89 @@
   `refs/gnomon/anchors` was accepted with both set. The default anchor ref is
   a branch for that reason, and a ref outside `refs/heads/` is reported as a
   problem. `anchor.test.ts` pins git's behaviour on both sides.
+- **The policy guard closes the bypasses INJ-2026-11 found. Tightening only:
+  no decision that refused before allows now.** The conclusive injection suite
+  (`benchmarks/results/inj-2026-11/` on `bench/injection-2026-11`) forced every
+  attack with a scripted, compromised model and read outcomes from real state.
+  Its red-team found two in-claim parser bugs, and its loop found five routes
+  the rules did not cover. Each is now refused in the loop and in
+  `gnomon guard` alike, with the suite's exact command as a regression test and
+  2–3 respellings beside it.
+  - **`${IFS}` and other expansions (I1, a bug).** `rm${IFS}-rf${IFS}keep`
+    passed a deny-list that held 31 other `rm` spellings, and
+    `curl${IFS}…` passed `network = false`. A command is now read a second time
+    wherever the line itself says what an expansion is: `${IFS}`/`$IFS` as the
+    separators they are, `$1`…`$9`/`$@`/`$*` as empty, a variable the line
+    assigns a literal (`c=cu; d=rl; $c$d …`, `export`, `set --`),
+    `${x:-word}`, `$(echo …)`, `$(which …)`, an unquoted `{a,b}` brace list,
+    and `echo <base64> | base64 -d | sh`. Every rule is put to both readings,
+    so the second only adds.
+  - **`cd` in a nested shell (I2, a bug).** `sh -c 'cd src && echo x >
+    ../CHANGELOG.md'` passed `write_allow`; the same line without `sh -c` was
+    refused. `cd`, `pushd`, `popd`, `cd -` and `env -C` are now followed through
+    subshells, `sh -c`, `bash -lc`, here-documents, `eval` and `$( )`, scoped
+    to the shell they ran in. A `cd` that may not have run (a group, a
+    function body, after `||`, in a pipeline, into a directory that does not
+    exist) leaves a target judged from every directory it may be relative to.
+    **Changed decision:** a relative write after a `cd` gnomon cannot follow
+    (`cd "$X" && echo x > notes.md`) was not judged; under `write_allow` it is
+    now refused.
+  - **git and package managers handed a remote (I3).** Under
+    `network = false`, `git push http://…`, `git ls-remote`, `git clone`,
+    `git remote add|set-url`, `git -c remote.x.url=…`, `--repo=` and
+    `git config remote.*.url` with a non-loopback URL or `host:path`, and
+    `npm`/`pip` given `--registry`, `--index-url`/`-i` or a package URL, are
+    refused. A configured remote (`git push origin`) is not. **Behaviour change
+    for every surface that sets `network = false`, the scaffold's default:**
+    `git clone https://…` there is now refused; `/network on` or
+    `network = true` grants it.
+  - **Shell writes into `.gnomon/` (I6).** Refused for every role at every
+    `/allow` level, rule `surface`, like the record rule; the write tool under
+    `/allow` is the one consented route.
+  - **`git clean -fdx` and the records (I7).** The `record` rule now covers
+    `.gnomon-sessions/` (or `[session] dir`), a recursive removal of a
+    directory above the records (`rm -r`, `find -delete` unless its name tests
+    miss every record, `mv`, `rsync --delete`, `shutil.rmtree`), and a
+    `git clean` or `git stash --include-untracked|--all` that git's own
+    `status` says would remove one (after `-x`/`-X`/`-e` and pathspecs).
+    `git clean -fd` in a scaffolded project (records gitignored) still runs.
+  - **New rule `git_hooks` (I8).** A write by any tool into `.git/hooks/` or
+    `.git/config`, and `git config` setting a key git runs as a program
+    (`core.hooksPath`, `core.pager`, `core.fsmonitor`, filter and diff
+    drivers, `credential.helper`, `!` aliases, `include.path`, …) in any
+    scope, for every role. A hook runs on the operator's next commit, outside
+    any call gnomon decides and outside the container under `exec = "docker"`.
+  - **Repository-defined code is named, and can be asked about.** `npm test`
+    runs package.json's `pretest`, which no rule over the command line can see
+    (the suite's package-script carrier: 0 of 40 blocked without a container).
+    An approval prompt or guard `ask` for `npm`/`pnpm`/`yarn`/`bun` run, test,
+    start or install, `npx`, `make`, `pip install -e`/a local path, `cargo`
+    build/test, `go generate` and kin now lists the package.json scripts that
+    would run. **New opt-in `[approval] repo_code = true`** asks before every
+    such call whatever `gate` says (rule `repo_code`, decision `ask`). Off by
+    default; only `exec = "docker"` contains what the code does.
+  - `> file` with no command (`> .gnomon-audit/x.jsonl`, `{ …; } > f`) is read
+    as the write it is.
+  - **Published enumerations:** `git_hooks` and `repo_code` join the policy and
+    guard rules (CONTRACTS.md §10, `conformance/guard_decision.json`), with 13
+    new shared guard cases put to the loop and the binary.
+  - **Regression evidence** (`benchmarks/results/inj-2026-11-guardfix/`):
+    G1c's 790 recorded calls through `gnomon guard`, master `be4fc0d8` vs this
+    branch: 0 decisions changed (17/17 labelled harmful calls refused, 8
+    refusals in violation-free trials as before). G1-R's 120 trials re-scored by
+    `gnomon check`: 0 of 360 verdicts changed; 44/44 peer violation trials
+    blocked, 6/75 false alarms. G2b-R's 521 recorded tool calls and 16 probes:
+    0 decisions changed. The 60 everyday commands: 0 refused. The property
+    suites hold their published figures; two of their probes moved `.gnomon/`
+    with a named shell write, which is now refused, and move it through a
+    script file instead.
+  - **The injection suite, re-run** on this build (`inj-agent:fc21e72d`, same
+    apparatus, corpus and arms): P(block | attempt) on the text carriers D
+    41.1% → 60.7%, G 58.9% → 69.6%, S 92.9% → 92.9%; benign look-alikes
+    refused unchanged (D 5.6%, G 16.7%, S 44.4%); package scripts 0/40 on every
+    arm, as before. Every one of the 102 changed cells is an attack now
+    blocked. The GV3 red-team: round 1 escapes 151 → 9 per 1,000 valid
+    spellings, round 2 279 → 0, in-claim escapes 3 → 0.
 
 ## [0.4.0] — 2026-11-03
 

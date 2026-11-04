@@ -333,8 +333,12 @@ const PROBES = {
     must: /changed \.gnomon|surface hash/i,
     recordedBy: "the tool result, which the `tool_call` record carries verbatim",
     async run(root) {
+      // Through a script file: a command that NAMES .gnomon/ is refused before
+      // it runs (rule surface, INJ-2026-11), and the property here is that a
+      // move the precheck cannot see is still announced afterwards.
+      writeFileSync(join(root, "move-surface.sh"), "echo '# moved' >> .gnomon/system.md\n");
       const out = await executeTool("bash",
-        { command: "echo '# moved' >> .gnomon/system.md" },
+        { command: "sh move-surface.sh" },
         { root, sandbox: "confined", gate: "never", approve: async () => true,
           timeoutMs: 10_000, maxOutputBytes: 4000 }, new Set(["bash"]));
       return { announcedIn: out.content, recorded: /WARNING/.test(out.content) };

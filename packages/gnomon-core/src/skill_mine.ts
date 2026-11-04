@@ -164,6 +164,7 @@ export function classifyRefusal(
     [/refused \(network = false\)$/, "network"],
     [/refused \(sudo\)$/, "sudo"],
     [/refused \(gnomon's records\)$/, "record"],
+    [/refused \(git hooks\)$/, "git_hooks"],
   ];
   const rule =
     typeof r.rule === "string" ? r.rule : fixed.find(([re]) => re.test(summary))?.[1];

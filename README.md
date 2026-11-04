@@ -1516,11 +1516,14 @@ a mistake worth making once. Three details that are decisions, not accidents:
   running an unsafe one costs a branch.
 
 **An intent filter, not containment.** This stops a model that asks for a
-denied operation in another common spelling. It cannot stop code:
+denied operation in another common spelling -- including the spellings the
+shell expands: `rm${IFS}-rf${IFS}keep`, `{rm,-rf,keep}`, `p=rm; $p -rf keep`,
+`$(echo rm) -rf keep` and `echo <base64> | base64 -d | sh` are each read a
+second time as the `rm -rf keep` they are (INJ-2026-11). It cannot stop code:
 `python -c 'import shutil; shutil.rmtree("keep")'` deletes the directory with no
 `rm` in it to match, a script file's contents are not in the command line, globs
-and variables are matched as written rather than expanded, and `head`, `sed`,
-`base64` or `tar` copy a file as well as `cp` does. No list of commands is the
+and values computed at run time are matched as written rather than expanded,
+and `head`, `sed`, `base64` or `tar` copy a file as well as `cp` does. No list of commands is the
 set of programs that can delete or copy a file. The containment answer is
 [`exec = "docker"`](#exec--where-bash-actually-runs).
 
@@ -1970,7 +1973,7 @@ chain = true
 | Data minimisation | `record = "metadata"` writes decisions and outcomes but **no prompt or response text** |
 | What was done | A shell call's `tool_call` record keeps the **whole command** in `target`, after `redact`, under either `record` setting: the command is the action, not prompt or response text. A file tool's `target` is its path |
 | Redaction | Patterns scrubbed from any recorded text, and from every recorded command |
-| Not writable by the agent | `write`, `edit` and a shell command's named outputs (hard links, `ln`, git checkout/apply, archive members and more) are refused with rule `record` inside the trail directory (and `.gnomon-trials/`) for every role, whatever `write_allow` says. This is a pattern check, not containment. A path built at run time, a script file's writes and MCP calls are not seen by it. The kernel sandbox (`exec os`) contains those; `[audit.attest]` and `[audit.anchor]` make a forged trail detectable |
+| Not writable by the agent | `write`, `edit` and a shell command's named outputs (hard links, `ln`, git checkout/apply, archive members and more) are refused with rule `record` inside the trail directory (and `.gnomon-trials/`, `.gnomon-sessions/`) for every role, whatever `write_allow` says, as are a recursive removal of a directory above them and a `git clean -x` or `git stash --all` that would remove them. This is a pattern check, not containment. A path built at run time, a script file's writes and MCP calls are not seen by it. The kernel sandbox (`exec os`) contains those; `[audit.attest]` and `[audit.anchor]` make a forged trail detectable |
 | Changes it did not make | The record guard snapshots the record directories (stat including ctime, plus a hash of the newest files) around every tool call that can write. Any change gnomon's own writer did not make stops the turn as `tamper`, writes a `record_tamper` record, and blocks `gnomon skill accept` until a person runs `gnomon audit resolve`, which needs a terminal or a person-present signer (`[audit.attest] person_present = true`). A checkpoint sealed at each session's end covers the gap between sessions. A new gnomon trail from another process only earns a `record_notice`. This guards against a careless agent and makes tampering visible; against a hostile one, a person-present signer or the kernel sandbox is the guarantee (docs/CONTRACTS.md §14) |
 
 ```bash
@@ -2746,9 +2749,13 @@ results and their caveats are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and th
   and wrappers like the deny-list. `curl --version` and `--help` are allowed,
   and only when those are all of its arguments: they connect to nothing, and
   refusing a capability probe would teach the model that `which curl` gets past
-  a rule `curl --version` did not. That is an intent filter over the command's
-  words: a package manager, `git fetch`, a build tool or a script still reaches
-  the network through `bash`, and they are deliberately not refused by name —
+  a rule `curl --version` did not. `git` handed a remote by URL (`git push
+  http://…`, `ls-remote`, `clone`, `remote add`, `-c remote.x.url=…`) and a
+  package manager handed a registry or package URL (`--registry`, `-i`) are
+  refused too: the target is in the line (INJ-2026-11). That is an intent filter
+  over the command's words: a package manager's configured registry, `git fetch`
+  from a configured remote, a build tool or a script still reaches the network
+  through `bash`, and they are deliberately not refused by name —
   that would make the default surface unusable while still not being
   isolation. **This is a behaviour change for any surface that sets
   `network = false`, the scaffold's default**: an agent that used `curl` there
@@ -2763,6 +2770,15 @@ results and their caveats are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and th
   does not stop deleting the files and then the empty directory; a rule that
   names the directory does. Containment is `exec = "docker"`. See
   [Guardrails on what cannot be undone](#guardrails-on-what-cannot-be-undone--bash_deny).
+- **Code the repository defines runs past every per-call rule.** `npm test`
+  runs package.json's `pretest`, `npm install` its lifecycle scripts, `make` the
+  Makefile, `pip install -e .` the build backend. INJ-2026-11 planted its
+  payload as a `pretest`: no surface without a container blocked one of 40
+  (and gnomon's own `[verify]` runs the same command). gnomon names such a call
+  and lists the scripts it would run whenever it asks, and `[approval]
+  repo_code = true` asks before every one of them, whatever the gate says. It
+  does not read the scripts; only `exec = "docker"` bounds what they do (to the
+  mounted repository, with no network).
 - **Windows needs a POSIX shell, and gnomon will tell you if it cannot find one.**
   Supported and tested as of 2026-09-05: `windows-latest` runs the full
   TypeScript suite in CI — the same four packages Linux runs, minus 3 skips

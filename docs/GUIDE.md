@@ -1075,10 +1075,12 @@ machine trusts (`gnomon trust grant`); it keeps no list of its own.
 | Control | Governs | Does not govern |
 |---|---|---|
 | A role's `tools` | which tools the model is offered | what `bash` can do |
-| `bash_allow` / `bash_deny` (regex) | which shell commands a role may run; deny wins, and a deny pattern that fails to compile refuses | effects of an allowed command |
-| `write_allow` (globs) | paths `write` and `edit` may touch | files written through `bash` |
+| `bash_allow` / `bash_deny` (regex) | which shell commands a role may run, read the way the shell runs them: other spellings of a denied command (`rm -fr`, `rm${IFS}-rf`, `{rm,-rf,x}`, a program in a variable the line assigns, `echo <base64> \| base64 -d \| sh`) are refused too; deny wins, and a deny pattern that fails to compile refuses | effects of an allowed command; a program or path computed at run time; a script file's contents |
+| `write_allow` (globs) | paths `write` and `edit` may touch, and files a `bash` command names as its output (redirections, `rm`/`mv`/`cp`/`tee`/`sed -i`, literal paths in inline code), placed through `cd`/`pushd` in subshells and nested shells; a relative write after a `cd` gnomon cannot follow is refused | paths built at run time, script files, paths outside the repo |
 | `[sandbox] level` (`off`, `confined`, `strict`) | **tool paths**: `read`, `write`, `edit`, `glob` and `grep` must resolve inside the repo, symlinks included | `bash`. Even under `strict`, `cat /etc/passwd` runs. |
-| `[sandbox] network = false` | the `webfetch` tool | network use by `bash` (`curl`, package managers) |
+| `[sandbox] network = false` | the `webfetch` tool, and `bash` commands whose purpose is the network: `curl`, `wget`, `nc`, `ssh`, `scp`/`rsync` to a remote, `/dev/tcp`, connecting one-liners, `git` to a URL, a package manager handed a registry or package URL | a script, a build tool, a package manager's configured registry, a git remote configured before the call |
+| `surface`, `record`, `git_hooks` rules (every role, every tool) | writes into `.gnomon/`, gnomon's records (`.gnomon-audit/`, `.gnomon-trials/`, `.gnomon-sessions/`), `.git/hooks/` and `.git/config`; a recursive removal or `git clean -x` that would reach the records; `git config` of keys git runs (`core.hooksPath`, `core.pager`, …) | what a script file does (the record guard detects record changes afterwards) |
+| `[approval] repo_code = true` (opt-in) | asks before a call that runs repository-defined code: `npm test`/`npm install` (package.json scripts), `make`, `pip install -e .`, and kin | what that code does: only `exec = "docker"` contains it |
 | `[sandbox] exec = "docker"` | **where `bash` runs**: a `docker run --rm` per command, repo bind-mounted, `--user` mapped, no network unless `network = true` | anything else. And any value other than `docker` (`bwrap`, a typo) silently runs on the host, with a warning that `gnomon task` does not show. |
 
 ```toml
@@ -1088,6 +1090,18 @@ level = "confined"
 network = false
 exec  = "docker"
 image = "debian:stable-slim"
+```
+
+`npm test` runs package.json's `pretest`; no rule over the command line can
+see it, and gnomon's own `[verify]` runs it too. Every approval prompt for such
+a call lists the scripts that would run, and an attended surface can ask
+before every one of them:
+
+```toml
+# .gnomon/policy.toml
+[approval]
+gate = "on_write"
+repo_code = true      # ask before npm test, make, pip install -e . — whatever the gate says
 ```
 
 `exec` can be set per role, and is refused on native Windows. Nothing checks
@@ -1243,6 +1257,7 @@ not append duplicates:
 # policy.toml
 [approval]
 gate = "on_write"                 # never only where nobody needs to see a change first
+# repo_code = true                # attended: ask before npm test / make / pip install -e (7.6)
 
 [sandbox]
 level = "strict"
