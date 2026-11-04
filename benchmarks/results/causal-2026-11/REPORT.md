@@ -247,8 +247,11 @@ Calls to convergence is the plausible path to more solves, but no mediation anal
 ## Deviations and disclosures
 
 - **Not blind.** Outcomes of every source campaign were known before the plan (the plan says so).
-- **Amendment 1's header time.** It reads 12:35Z; its commit `c7f5d0c0` was made at 12:27Z, still before any
-  estimate.
+- **The amendment header times are approximate.**
+  - Amendment 1 reads 12:35Z; its commit `c7f5d0c0` was made at 12:27:02Z, before any estimate.
+  - Amendment 2 reads 12:45Z; it was written at about 12:29Z, after the registered run, and committed with the
+    results in `becdd75c` at 12:31:52Z.
+  - The plan's own commit `1ee43c62` was made at 12:26:08Z.
 - **Amendment 2 is post hoc**, written after reading the registered results. It adds three covariate edges, and its
   runs are reported beside the registered ones (`PH_*`).
 - **A correction to the plan.** Its inventory said C2D's ontology cell has drops "at calls 21 and 52" (by eye). Under
