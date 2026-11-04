@@ -29,8 +29,10 @@
 # Only a definite "not found" counts as absent; any other failure to ask stops
 # the run rather than guessing.
 #
-# It never creates or reads a token itself. npm reads NODE_AUTH_TOKEN through the
-# .npmrc that actions/setup-node writes; see docs/RELEASING.md for NPM_TOKEN.
+# It never creates or reads a token itself. In CI, npm authenticates by trusted
+# publishing (OIDC, npm >= 11.5.1) when npmjs.com trusts publish-npm.yml, or
+# reads NODE_AUTH_TOKEN through the .npmrc that actions/setup-node writes;
+# scripts/npm-publish-auth.sh picks which. See docs/RELEASING.md.
 set -euo pipefail
 
 usage() { echo "usage: $0 <dir> <version> [--dry-run] [--provenance] [--tag <dist-tag>]" >&2; exit 2; }

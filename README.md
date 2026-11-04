@@ -470,10 +470,12 @@ not a path there. The installer one-liners above are the cross-shell route. -->
 From the registry this is `npm i -g gnomon-harness` (or
 `npm i -g gnomon-harness@<version>` to pin), which resolves the other three by
 name. Releases reach npm when they are published on GitHub, by
-[`publish-npm.yml`](.github/workflows/publish-npm.yml), with npm provenance.
-That job needs the `NPM_TOKEN` repository secret: 0.3.3's run stopped at
-"Require NPM_TOKEN", so the registry's latest is 0.3.2 and 0.3.3 installs from
-the release tarballs above (the installer does this by itself).
+[`publish-npm.yml`](.github/workflows/publish-npm.yml), with npm provenance,
+authenticated by npm trusted publishing once npmjs.com trusts that workflow
+(docs/RELEASING.md → "Publishing to npm"). Until then it needs the `NPM_TOKEN`
+repository secret, and 0.3.3's and 0.4.0's runs stopped for want of it: the
+registry's latest is 0.3.2, and newer versions install from the release
+tarballs above (the installer does this by itself).
 
 Requires **Node ≥ 20** and a model endpoint — [Ollama](https://ollama.com) for
 local inference, or any OpenAI-shaped API. A **Rust toolchain** is needed only
@@ -517,6 +519,42 @@ the shim anyway"; it does not.
 > `pnpm pack` pins each to the release's exact version, and
 > `scripts/check-publishable.sh` installs the packed result in an empty
 > directory before any release is drafted.
+
+### Verify a release
+
+Every release after 0.4.0 ships signed **SLSA build provenance** for each
+native archive, npm tarball, `SHA256SUMS` and the SBOM, made by
+[`build-release.yml`](.github/workflows/build-release.yml) at the release tag
+in the job that built the file, plus an **SBOM**
+(`gnomon-<version>.spdx.json`) and every attestation bundle in
+`gnomon-<version>.intoto.jsonl`. From a checkout, with a current
+[GitHub CLI](https://cli.github.com) logged in:
+
+```bash
+scripts/verify-release.sh 0.5.0
+```
+
+It downloads the release, checks every file against `SHA256SUMS`, and runs
+`gh attestation verify` on every artifact against GitHub's attestation store
+and against the shipped bundle file, requiring the signer to be exactly
+`build-release.yml` at `refs/tags/v0.5.0` on a GitHub-hosted runner, then
+checks the SBOM attestation. Exit 0 means all of it verified, 1 means
+something did not (do not install it), and 3 means a release from before
+attestation (0.4.0 and earlier): the checksums match, but nothing says who
+built the bytes. `--dir <dir>` checks files you already downloaded.
+
+One file by hand:
+
+```bash
+gh attestation verify gnomon-0.5.0-linux-x64.tar.gz --repo eljaplacido/gnomonharness \
+  --cert-identity https://github.com/eljaplacido/gnomonharness/.github/workflows/build-release.yml@refs/tags/v0.5.0
+```
+
+This is SLSA Build Level 3 on the path GitHub documents (attestations made
+inside a reusable workflow, verified against that workflow as the signer);
+[docs/RELEASING.md](docs/RELEASING.md#provenance-sbom-and-verification) says
+what is and is not claimed. To report a vulnerability, see
+[SECURITY.md](.github/SECURITY.md).
 
 ---
 

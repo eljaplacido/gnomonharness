@@ -26,11 +26,15 @@ five needed one. It needs docker and exits 2 without it; CI runs it too, but run
 it here as well, because this is the last moment before the artefact is public.
 
 The tag push triggers `.github/workflows/release.yml`, which re-checks the
-version, builds binaries for four targets (linux-x64, linux-arm64, darwin-arm64,
-windows-x64) and the four npm tarballs the documented install uses, and opens a
-**draft** release. A
+version and calls the reusable `.github/workflows/build-release.yml`. That
+builds binaries for four targets (linux-x64, linux-arm64, darwin-arm64,
+windows-x64) and the four npm tarballs the documented install uses, attests
+each one in the job that built it, and writes `SHA256SUMS` and an SBOM and
+attests those too. `release.yml` then runs `scripts/verify-release.sh` on the
+result and opens a **draft** release. A
 human presses Publish. That is deliberate: the workflow decides nothing about
-whether a build is fit to install.
+whether a build is fit to install. See [Provenance, SBOM and
+verification](#provenance-sbom-and-verification).
 
 Pressing Publish is also what puts the release on npm:
 `.github/workflows/publish-npm.yml` runs on `release: published` and publishes
@@ -75,10 +79,82 @@ It fails fast and early by design. Read the failing step first:
   `scripts/check-versions.sh <version>`, fix, amend, and re-tag with `-f`.
 - A build-matrix target only — the others still built (`fail-fast: false`),
   so the failure is that toolchain, not the release.
+- **"Verify checksums and provenance before drafting"** — an asset's digest
+  or attestation did not verify, so no draft was created. The step prints
+  which file and gh's reason. Run `scripts/verify-release.sh <version> --dir
+  <dir>` on the run's artifacts to reproduce it. Do not work around it by
+  drafting by hand: a release whose provenance does not verify is exactly what
+  the step exists to stop.
 
 Re-tagging an already-pushed tag requires `git push -f origin <tag>`, and any
 draft release from the previous attempt should be deleted first so there is
 exactly one draft per tag.
+
+## Provenance, SBOM and verification
+
+Every release from the one after 0.4.0 carries, besides the archives, the
+tarballs and `SHA256SUMS`:
+
+| Asset | What it is |
+|---|---|
+| `gnomon-<v>.spdx.json` | SBOM (SPDX JSON, made by Syft) of everything `Cargo.lock` and `pnpm-lock.yaml` resolve, the Actions the workflows use included. A superset of what ships: the npm packages have no third-party runtime dependency |
+| `gnomon-<v>.intoto.jsonl` | every Sigstore attestation bundle the build made, one per line: the four archives, the four tarballs (one bundle), `SHA256SUMS` with the SBOM, and the SBOM attestation |
+
+**What is attested, and by whom.** `build-release.yml` attests each native
+archive in the matrix job that compiled it, on that runner, and the four npm
+tarballs in the job that packed them. A last job writes `SHA256SUMS` and the
+SBOM and attests both, and attests the SBOM against all eight artifacts. Each
+attestation is a SLSA build provenance statement (or an SPDX SBOM), signed
+with a short-lived Sigstore certificate issued to the workflow run, recorded
+in Sigstore's public transparency log, and stored on this repository. The
+certificate's identity is the reusable workflow at the tag:
+
+    https://github.com/eljaplacido/gnomonharness/.github/workflows/build-release.yml@refs/tags/v<version>
+
+**SLSA level.** Build L2 from the attestations alone (a hosted build
+platform signs the provenance). Build L3 along the path GitHub documents:
+the build and its signing run in a reusable workflow, and the verifier pins
+that workflow as the signer, so neither another workflow nor this one on a
+branch or pull request can produce provenance that verifies. Not claimed
+beyond that: third parties argue reusable workflows alone fall short of some
+L3 requirements, notably distribution and verification of provenance, and the
+`.intoto.jsonl` asset and `scripts/verify-release.sh` are this repository's
+answer to those two. Source-track levels are not claimed.
+
+**npm provenance is a different statement.** `npm publish --provenance` in
+`publish-npm.yml` records the workflow that *published*, which downloads the
+release's tarballs rather than building them. The provenance of the bytes is
+the attestation above. `SHA256SUMS` links the two and is itself attested now.
+
+**Verifying.** `scripts/verify-release.sh <version>` downloads a release and
+checks every checksum, every artifact's provenance against both GitHub's
+attestation store and the shipped bundle file, pinned to the exact certificate
+identity above, and the SBOM attestation for each archive and tarball. It
+exits 0 when everything verifies, 1 when anything does not, and 3 for a
+release that predates attestation (0.4.0 and earlier), which is not a pass.
+`release.yml` runs the same script with `--dir` on the build's output before
+it creates the draft, so a release that would not verify is never drafted.
+One file by hand, with a current `gh`:
+
+```bash
+gh attestation verify gnomon-0.5.0-linux-x64.tar.gz --repo eljaplacido/gnomonharness \
+  --cert-identity https://github.com/eljaplacido/gnomonharness/.github/workflows/build-release.yml@refs/tags/v0.5.0
+```
+
+**Pinned Actions.** Every third-party `uses:` in `.github/workflows/` is a
+full commit SHA with the version in a comment, and every job declares its own
+`permissions:`. Dependabot's weekly `github-actions` group proposes new SHAs.
+When adding a step, pin it the same way: resolve the release tag to its
+commit and write `owner/action@<sha> # vX.Y.Z`.
+
+**OpenSSF Scorecard.** `.github/workflows/scorecard.yml` scores the repository
+weekly and on every push to master, and uploads the result to the Security
+tab. The target is 8 or more. Signed-Releases looks at recent releases, so it
+reaches 10 only once each of them carries a `.intoto.jsonl`.
+
+**Not measured yet.** None of this has run: the first tag after the change is
+its first run. The release-blocking verification step means a mistake shows
+up as a missing draft, not as an unverifiable release.
 
 ## Publishing to npm
 
@@ -95,7 +171,8 @@ maintainer publishes a drafted release on GitHub,
    is the package and version it is named for, not private, and pins its
    `gnomon-*` dependencies to that exact version (no `workspace:*` left);
 3. **publishes libraries first and `gnomon-harness` last**, with
-   `npm publish <tarball> --access public --provenance`. The harness pins its
+   `npm publish <tarball> --access public --provenance`, authenticated as
+   described below. The harness pins its
    libraries, and `scripts/install.sh` switches to the registry as soon as
    `gnomon-harness@<version>` resolves — so it goes last, once everything it
    needs is already there;
@@ -108,24 +185,60 @@ A prerelease (a `-` in the version, or a release marked pre-release) is
 published under the `next` dist-tag, so `npm i -g gnomon-harness` keeps
 resolving the latest stable release.
 
-**One-time setup: the maintainer adds `NPM_TOKEN`.** The workflow reads the
-repository secret `NPM_TOKEN` and nothing else; nothing in this repository
-creates one. On npmjs.com, create a **granular access token** with read and
-write access to `gnomon-harness`, `gnomon-core`, `gnomon-natives` and
-`gnomon-tui` (an automation token also works), then add it under GitHub →
-Settings → Secrets and variables → Actions → New repository secret, named
-`NPM_TOKEN`. Without it the job fails at its first step, saying so, before
-anything is downloaded. `--provenance` needs no secret: the job's
-`id-token: write` permission is what lets npm record which workflow run, commit
-and repository published each version.
+**How it authenticates: trusted publishing, with `NPM_TOKEN` as a fallback
+until that is set up.** npm's trusted publishing (GA 2025-07-31) lets this
+workflow publish with the job's GitHub OIDC identity instead of a stored
+token: npm (CLI 11.5.1 or newer, which is why the job runs Node 24) exchanges
+it for a short-lived token that can publish one package, and the registry
+grants it only if that package trusts this repository and this workflow file.
+Provenance is then recorded automatically. The first step after checkout,
+[`scripts/npm-publish-auth.sh`](../scripts/npm-publish-auth.sh), asks the
+registry for each of the four packages before anything is downloaded:
 
-**Trusted publishing (no token), now possible.** npm's trusted publishing lets
-this workflow authenticate with GitHub's OIDC identity instead of a stored
-token. It is configured per package on npmjs.com (package → Settings → Trusted
-publisher: GitHub Actions, repository `eljaplacido/gnomonharness`, workflow
-`publish-npm.yml`), and a package has to exist before it can be configured —
-all four do since 0.3.2. Until all four are configured, the `NPM_TOKEN` path
-above stays; once they are, the secret can be deleted and the token revoked.
+| Trusted publishing | `NPM_TOKEN` secret | What the run does |
+|---|---|---|
+| configured for all four | any | publishes by OIDC; the token is **not** passed to npm, and if the secret still exists the run says to delete it |
+| missing for any | set | publishes with the token, and warns which packages still need configuring |
+| missing for any | not set | stops, naming the four packages and the exact fields to enter |
+
+Measured: v0.3.3 and v0.4.0 both stopped at the old "Require NPM_TOKEN" step,
+because no secret was set, so the registry is still at 0.3.2.
+
+**One-time setup on npmjs.com (the maintainer).** All four packages exist
+since 0.3.2, which is the precondition. Signed in to npmjs.com as a maintainer
+of the packages, for **each** of `gnomon-core`, `gnomon-natives`,
+`gnomon-tui` and `gnomon-harness`:
+
+1. Open `https://www.npmjs.com/package/<name>/access` (the package's
+   **Settings** tab).
+2. Under **Trusted Publisher**, choose **GitHub Actions** and enter exactly:
+   - Organization or user: `eljaplacido`
+   - Repository: `gnomonharness`
+   - Workflow filename: `publish-npm.yml` (the file name only, not the path)
+   - Environment name: leave empty (the job uses no GitHub environment; if
+     you add one later, it must be entered here too)
+3. Save.
+
+Then publish the next release as usual. Its run should log `trusted publishing
+for <name>: HTTP 201` (any 2xx) four times and title the publish step
+"Verify and publish (oidc)". After one release has gone through that way:
+
+4. Delete the `NPM_TOKEN` secret (GitHub → Settings → Secrets and variables →
+   Actions) and revoke the token on npmjs.com (avatar → Access Tokens).
+5. On each package's Settings tab, under **Publishing access**, choose
+   **Require two-factor authentication and disallow tokens**. Trusted
+   publishing keeps working; a leaked token, if one ever existed, does not.
+
+**The `NPM_TOKEN` fallback**, meanwhile: a **granular access token** with read
+and write access to the four packages, added as the repository secret
+`NPM_TOKEN`. The workflow reads it in that case only, and nothing in this
+repository creates one.
+
+**Releases already published but not on npm (0.3.3, 0.4.0).** "Re-run jobs"
+on their failed runs uses the workflow file as it was at their tag, which
+knows only `NPM_TOKEN`; it cannot use trusted publishing. Either add the token
+and re-run, publish by hand (below), or let the next release be the first on
+npm since 0.3.2.
 
 To see what a release would publish, without publishing it:
 

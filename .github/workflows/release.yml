@@ -67,6 +67,15 @@
 #      a human presses Publish. Remove `--draft` from the `gh release create`
 #      call below to change that, and understand that you are removing the last
 #      step where a mistaken tag can still be caught.
+#
+# Since the supply-chain change (docs/RELEASING.md → "Provenance, SBOM and
+# verification"): the build matrix and the npm pack moved to
+# build-release.yml, a reusable workflow that attests every artifact in the
+# job that builds it. That is the SLSA Build L3 path GitHub documents. The
+# history above describes the same build steps, which moved unchanged. This
+# file now verifies tags, calls that workflow, checks that every asset's
+# provenance verifies, and drafts the release. The one job here that can write
+# a release runs no build code.
 
 name: Release
 
@@ -86,9 +95,6 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   # ---------------------------------------------------------------------------
   verify:
@@ -98,7 +104,9 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       stamp: ${{ steps.v.outputs.stamp }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The failure this job prevents: a tag whose number disagrees with the
       # version in the tree. `harnessBuild()` in gnomon-core composes its string
@@ -135,239 +143,80 @@ jobs:
           echo "stamp=${tag}-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
+  # The four native archives, the four npm tarballs, SHA256SUMS, the SBOM and
+  # the attestation bundle file. All of it is built AND attested in
+  # build-release.yml; see that file for why it is a separate, reusable
+  # workflow. A called workflow gets no more than the permissions granted here.
   build:
-    name: Build ${{ matrix.name }}
+    name: Build and attest
     needs: [verify]
-    runs-on: ${{ matrix.os }}
-    strategy:
-      # One platform failing should not hide whether the others build.
-      fail-fast: false
-      matrix:
-        include:
-          # ubuntu-22.04, not -latest, for both Linux builds: a binary needs
-          # at least the glibc it was linked against. v0.2.3 was built on
-          # 24.04 and required GLIBC_2.39, so on Ubuntu 22.04 (glibc 2.35) every
-          # native command failed at load — found by running scripts/install.sh
-          # in a clean ubuntu:22.04 container on 2026-10-11. The oldest
-          # supported runner is the floor this build should carry.
-          - name: linux-x64
-            os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-          - name: linux-arm64
-            os: ubuntu-22.04
-            target: aarch64-unknown-linux-gnu
-            # Cross-compiled from an x64 runner rather than built on an ARM
-            # runner: `ubuntu-*-arm` labels exist, but their availability
-            # depends on the repository's plan and runner settings, and a
-            # release that only builds where a label happens to be enabled is a
-            # release that breaks silently later. A cross linker is a package.
-            apt: gcc-aarch64-linux-gnu
-            linker: aarch64-linux-gnu-gcc
-          - name: darwin-arm64
-            # macos-latest is Apple Silicon, so this is a native build, not a
-            # cross one. If GitHub ever repoints that label at an x64 image
-            # this still builds correctly — the target is named explicitly
-            # rather than inherited from the host.
-            os: macos-latest
-            target: aarch64-apple-darwin
-          - name: windows-x64
-            # Added 2026-09-05, with the platform. A release that supports
-            # Windows and ships no Windows binary supports it in the README
-            # only: `gnomon surface`, `apply` and `session` are the native
-            # crates, and without them a Windows user has the TypeScript half
-            # of the harness and none of the half that computes the hash.
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      # Not the action's `targets:` input, deliberately. `rust-toolchain.toml`
-      # pins this repository to an exact toolchain (1.94 as of this writing),
-      # and it exists because CONTRIBUTING said "Rust 1.82+" while CI installed
-      # unpinned `stable` — a floor nobody checked, and 1.82 could not in fact
-      # build a transitive dependency that requires edition 2024. Cargo run
-      # inside the checkout uses the pinned version no matter what the action
-      # installed, so the pin is the toolchain that matters here. Adding the
-      # target through the action would install it for `stable`, a toolchain
-      # this build never invokes, and cargo would stop with "the target may not
-      # be installed" while the log above it showed the target being added.
-      # Run inside the checkout, `rustup target add` resolves the same toolchain
-      # cargo will.
-      - name: Add ${{ matrix.target }} to the pinned toolchain
-        run: rustup target add ${{ matrix.target }}
-
-      - name: Install cross linker
-        if: matrix.apt != ''
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ${{ matrix.apt }}
-
-      # --workspace --bins, not a hand-written list. ci.yml carries the same
-      # comment for the same reason: a step that named two of the four binaries
-      # while claiming to build "the Rust binaries" left gnomon-natives
-      # spawning a gnomon-edit that was not there. The four are gnomon-surface,
-      # gnomon-enums (both from crates/gnomon-surface), gnomon-edit and
-      # gnomon-exec.
-      - name: Build release binaries
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
-          # Stamped here as well as written into the archive: any harness record
-          # this job produces is then identified by the release rather than
-          # falling back to a bare commit sha.
-          GNOMON_BUILD: ${{ needs.verify.outputs.stamp }}
-        run: cargo build --release --workspace --bins --target ${{ matrix.target }}
-
-      # A flat directory of binaries is the layout gnomon-natives'
-      # findBinary() already understands: it searches target/debug and
-      # target/release, or any directory given as GNOMON_BIN_OVERRIDE. So an
-      # unpacked archive is usable by exporting one variable, with no install
-      # step to get wrong.
-      - name: Package
-        id: pkg
-        # bash on every runner, Windows included. The default shell there is
-        # PowerShell, which does not understand `set -euo pipefail` or any of
-        # the below; GitHub ships Git Bash on windows-latest for exactly this.
-        shell: bash
-        env:
-          GNOMON_BUILD: ${{ needs.verify.outputs.stamp }}
-        run: |
-          set -euo pipefail
-          dir="gnomon-${{ needs.verify.outputs.version }}-${{ matrix.name }}"
-          mkdir -p "dist/$dir"
-          # Cargo writes `gnomon-surface` on Unix and `gnomon-surface.exe` on
-          # Windows. Copying the bare name there produced an archive missing
-          # every binary it claimed to contain -- which the 8-entry assertion
-          # below would have caught, but only after a release had been drafted.
-          ext=""
-          case "${{ matrix.target }}" in *windows*) ext=".exe" ;; esac
-          for bin in gnomon-surface gnomon-enums gnomon-edit gnomon-exec; do
-            cp "target/${{ matrix.target }}/release/$bin$ext" "dist/$dir/$bin$ext"
-          done
-          cp LICENSE "dist/$dir/LICENSE"
-
-          # The provenance value, shipped as a file because it cannot be
-          # compiled in. `harnessBuild()` resolves GNOMON_BUILD from the
-          # *environment at runtime*; these are Rust binaries and the field is
-          # read by TypeScript, so nothing in this archive can set it by being
-          # present. Writing it here at least means the identifier travels with
-          # the artifact instead of living only in a release page.
-          printf '%s\n' "$GNOMON_BUILD" > "dist/$dir/GNOMON_BUILD"
-          cat > "dist/$dir/README-BINARIES.txt" <<EOF
-          gnomon native binaries — $GNOMON_BUILD (${{ matrix.name }})
-
-          Point the harness at this directory:
-
-              export GNOMON_BIN_OVERRIDE="\$PWD/$dir"
-
-          And stamp provenance, so records name this release instead of falling
-          back to the git commit of whatever tree they run in:
-
-              export GNOMON_BUILD="\$(cat "\$PWD/$dir/GNOMON_BUILD")"
-
-          Without that second export the harness reports gnomon/<version>+<sha>
-          from its own checkout, or gnomon/<version>+unknown where there is no
-          repository to ask.
-          EOF
-
-          tar -czf "dist/$dir.tar.gz" -C dist "$dir"
-
-          # Checksums beside the archive. NEITHER tool is on all three images:
-          #
-          #   linux    sha256sum ✓   shasum ✓
-          #   macOS    sha256sum ✗   shasum ✓
-          #   windows  sha256sum ✓   shasum ✗   (Git Bash ships coreutils, not the Perl script)
-          #
-          # This line said `shasum -a 256` with a comment reading "shasum is
-          # present on both runner images" — true, and written when there were
-          # two. windows-x64 was added to the matrix on 2026-09-05 and no tag was
-          # pushed until 2026-09-07, so the first tag after it found:
-          #
-          #     line 42: shasum: command not found        (exit 127)
-          #
-          # The Windows binary had compiled fine; there was simply no way to
-          # publish it. Both tools print `<hash>  <name>`, so SHA256SUMS is
-          # identical either way.
-          if command -v sha256sum >/dev/null 2>&1; then
-            ( cd dist && sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256" )
-          else
-            ( cd dist && shasum -a 256 "$dir.tar.gz" > "$dir.tar.gz.sha256" )
-          fi
-          echo "dir=$dir" >> "$GITHUB_OUTPUT"
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.pkg.outputs.dir }}
-          path: |
-            dist/*.tar.gz
-            dist/*.sha256
-          if-no-files-found: error
-          retention-days: 7
+    uses: ./.github/workflows/build-release.yml
+    permissions:
+      contents: read
+      id-token: write       # Sigstore signing certificates for the attestations
+      attestations: write   # store the attestations on this repository
+    with:
+      version: ${{ needs.verify.outputs.version }}
+      stamp: ${{ needs.verify.outputs.stamp }}
 
   # ---------------------------------------------------------------------------
-  release:
-    name: Draft the GitHub release
+  # The check a user runs, run here first: every checksum matches, and every
+  # archive, tarball, SHA256SUMS and the SBOM carries provenance signed by
+  # build-release.yml at THIS tag, both in GitHub's attestation store and in
+  # the bundle file about to be attached. A build whose provenance does not
+  # verify stops here, before a draft exists for anyone to publish. Its own
+  # job, read-only, so the token that can write a release is never handed to
+  # it.
+  check:
+    name: Verify checksums and provenance before drafting
     needs: [verify, build]
     runs-on: ubuntu-latest
-    # The only job with a token that can write anything, and it holds it for
-    # exactly one step.
     permissions:
-      contents: write
+      contents: read
+      attestations: read    # scripts/verify-release.sh asks the attestation API
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Download every platform's archive
-        uses: actions/download-artifact@v8
+      - name: Download every artifact the build produced
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           merge-multiple: true
 
-      # The npm tarballs ship WITH the release, so a machine with Node and
-      # nothing else can install gnomon from a URL. That is the whole install
-      # story for anyone who does not want a clone: `npm i -g <four URLs>` needs
-      # no registry account, no login, no pnpm and no Rust, and the command is
-      # identical in PowerShell.
-      #
-      # Built here rather than uploaded from the build matrix because they are
-      # platform-independent — one set covers Linux, macOS and Windows. The
-      # platform-specific half is the Rust archives above.
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Pack the npm packages
+      - name: Verify, exactly as scripts/verify-release.sh does for users
         env:
-          STAMP: ${{ needs.verify.outputs.stamp }}
-        run: |
-          set -euo pipefail
-          pnpm install --frozen-lockfile
-          pnpm -r run build
-          # The provenance an installed copy reports (build.ts, rule `package`).
-          # The binary archives carry STAMP in a GNOMON_BUILD file; the npm
-          # tarballs had nothing, so every installed release said only `+npm`.
-          # Written into this runner's checkout only, never committed.
-          ( cd packages/gnomon-core && npm pkg set gnomonBuild="$STAMP" )
-          for p in gnomon-core gnomon-natives gnomon-tui gnomon-cli; do
-            ( cd "packages/$p" && pnpm pack --pack-destination "$GITHUB_WORKSPACE/dist" )
-          done
-          # The same gate .gnomon/ci.sh runs: if the tarball cannot install and
-          # run, it must not reach a release page where someone will try it.
-          # Here it must also report the stamp it was packed with.
-          EXPECT_REVISION="$STAMP" bash scripts/check-publishable.sh
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: bash scripts/verify-release.sh "$VERSION" --dir dist
+
+  # ---------------------------------------------------------------------------
+  release:
+    name: Draft the GitHub release
+    needs: [verify, build, check]
+    runs-on: ubuntu-latest
+    # The only job with a token that can write anything. It builds nothing:
+    # the npm pack that used to run here (pnpm install and every package's
+    # build script, under contents: write) moved to build-release.yml.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download every artifact the build produced
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
 
       # npm publish is NOT a step here, deliberately. This job ends at a draft,
       # and a draft is not a decision to ship. The publish runs in
       # publish-npm.yml, on `release: published` — after a human has pressed
       # Publish on this draft — and it publishes these exact tarballs, checked
-      # against the SHA256SUMS written below, rather than packing again.
+      # against SHA256SUMS, rather than packing again.
 
       # No third-party release action. The token that can publish a release is
       # the most privileged thing in this repository's CI, and `gh` is already
@@ -382,11 +231,8 @@ jobs:
         run: |
           set -euo pipefail
           ls -l dist
-          # The npm tarballs too. v0.2.3's SHA256SUMS listed only the native
-          # archives, so the four packages scripts/install.sh feeds to
-          # `npm i -g` could be checked only against GitHub's own asset
-          # digests. Linux runner, so sha256sum is present.
-          { cat dist/*.sha256; ( cd dist && sha256sum ./*.tgz | sed 's|  \./|  |' ); } > dist/SHA256SUMS
+          # SHA256SUMS is written (and attested) by build-release.yml now, from
+          # the same command that used to run here.
 
           notes=$(cat <<EOF
           Native binaries for gnomon $VERSION.
@@ -398,6 +244,18 @@ jobs:
 
           Each archive contains gnomon-surface, gnomon-enums, gnomon-edit and
           gnomon-exec. Verify with \`SHA256SUMS\`.
+
+          **Provenance and SBOM.** Every archive and npm tarball, \`SHA256SUMS\`
+          and the SBOM (\`gnomon-$VERSION.spdx.json\`) carry a signed SLSA build
+          provenance attestation from
+          \`.github/workflows/build-release.yml\` at this tag;
+          \`gnomon-$VERSION.intoto.jsonl\` holds every bundle. Check all of it
+          with \`scripts/verify-release.sh $VERSION\` from a checkout, or one
+          file with a current \`gh\`:
+
+          \`\`\`
+          gh attestation verify <file> --repo ${{ github.repository }} --cert-identity https://github.com/${{ github.repository }}/.github/workflows/build-release.yml@${{ github.ref }}
+          \`\`\`
 
           ## Install or update
 
@@ -446,4 +304,5 @@ jobs:
             --verify-tag \
             --title "gnomon ${{ github.ref_name }}" \
             --notes "$notes" \
-            dist/*.tar.gz dist/*.sha256 dist/SHA256SUMS dist/*.tgz
+            dist/*.tar.gz dist/*.sha256 dist/SHA256SUMS dist/*.tgz \
+            dist/*.spdx.json dist/*.intoto.jsonl

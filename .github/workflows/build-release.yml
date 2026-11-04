@@ -1,0 +1,464 @@
+# Build release artifacts and attest them. Reusable: release.yml calls it on a
+# tag push. Nothing else should.
+#
+# WHY THIS IS A SEPARATE FILE. It used to be the `build` job inside release.yml,
+# and the npm tarballs were packed inside release.yml's `release` job. They
+# moved here so the provenance reaches SLSA v1 Build Level 3 along the path
+# GitHub documents ("Using artifact attestations and reusable workflows to
+# achieve SLSA v1 Build Level 3"):
+#
+#   - Every artifact is attested by the job that BUILT it, with
+#     actions/attest (SLSA build provenance, signed through Sigstore with a
+#     short-lived certificate for this run, and stored on this repository).
+#     That is Build L2 on its own.
+#   - The attesting jobs run inside a reusable workflow, so the signing
+#     certificate's identity is THIS file at the release tag:
+#       https://github.com/<repo>/.github/workflows/build-release.yml@refs/tags/vX.Y.Z
+#     A verifier pins that identity (scripts/verify-release.sh does,
+#     exactly), so an attestation made by any other workflow, or by this one
+#     on a branch or pull request, does not verify. That pin is what turns
+#     L2 into L3 on GitHub's documented path.
+#
+# Not claimed: third parties argue that reusable workflows alone do not meet
+# every L3 requirement, notably distribution and verification of provenance
+# (the PR adding this file links the discussion). The `.intoto.jsonl` release
+# asset and scripts/verify-release.sh are this repository's answer to those two.
+#
+# What it produces, all uploaded as workflow artifacts for release.yml to
+# attach to the draft:
+#
+#   gnomon-<v>-<platform>.tar.gz (+ .sha256)  native binaries, four targets
+#   gnomon-{core,natives,tui,harness}-<v>.tgz the npm packages
+#   SHA256SUMS                                digests of all eight
+#   gnomon-<v>.spdx.json                      SBOM (SPDX) from the lockfiles
+#   gnomon-<v>.intoto.jsonl                   every Sigstore bundle this run
+#                                             made, one per line
+#
+# NOT MEASURED: this file has not run yet. It was written against the pinned
+# versions of actions/attest and anchore/sbom-action and their documentation;
+# the first tag after it merges is its first run. scripts/verify-release.sh
+# runs in release.yml BEFORE the draft is created, so a build whose provenance
+# does not verify never reaches a draft.
+
+name: Build release artifacts
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The release version without the leading v, e.g. 0.5.0
+        required: true
+        type: string
+      stamp:
+        description: The provenance identifier, e.g. v0.5.0-abc1234
+        required: true
+        type: string
+
+# Nothing by default; each job below asks for exactly what it uses. A caller
+# cannot grant more than it holds, and release.yml grants the build job
+# contents: read, id-token: write and attestations: write, nothing else.
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  binaries:
+    name: Build ${{ matrix.name }}
+    # Attestations name the ref they were built from. Refuse anything that is
+    # not a release tag, so a future caller on a branch cannot mint provenance
+    # that looks like a release's (it would not verify against the tag-pinned
+    # identity anyway; this keeps it from existing at all).
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write       # a Sigstore signing certificate for this run
+      attestations: write   # store the attestation on this repository
+    strategy:
+      # One platform failing should not hide whether the others build.
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-22.04, not -latest, for both Linux builds: a binary needs
+          # at least the glibc it was linked against. v0.2.3 was built on
+          # 24.04 and required GLIBC_2.39, so on Ubuntu 22.04 (glibc 2.35) every
+          # native command failed at load — found by running scripts/install.sh
+          # in a clean ubuntu:22.04 container on 2026-10-11. The oldest
+          # supported runner is the floor this build should carry.
+          - name: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - name: linux-arm64
+            os: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            # Cross-compiled from an x64 runner rather than built on an ARM
+            # runner: `ubuntu-*-arm` labels exist, but their availability
+            # depends on the repository's plan and runner settings, and a
+            # release that only builds where a label happens to be enabled is a
+            # release that breaks silently later. A cross linker is a package.
+            apt: gcc-aarch64-linux-gnu
+            linker: aarch64-linux-gnu-gcc
+          - name: darwin-arm64
+            # macos-latest is Apple Silicon, so this is a native build, not a
+            # cross one. If GitHub ever repoints that label at an x64 image
+            # this still builds correctly — the target is named explicitly
+            # rather than inherited from the host.
+            os: macos-latest
+            target: aarch64-apple-darwin
+          - name: windows-x64
+            # Added 2026-09-05, with the platform. A release that supports
+            # Windows and ships no Windows binary supports it in the README
+            # only: `gnomon surface`, `apply` and `session` are the native
+            # crates, and without them a Windows user has the TypeScript half
+            # of the harness and none of the half that computes the hash.
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Pinned to a commit of the action's `stable` branch. The action reads
+      # the toolchain from its ref when the input is absent, and a commit SHA
+      # names no toolchain, so the input is given explicitly.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-10-16
+        with:
+          toolchain: stable
+
+      # Not the action's `targets:` input, deliberately. `rust-toolchain.toml`
+      # pins this repository to an exact toolchain (1.94 as of this writing),
+      # and it exists because CONTRIBUTING said "Rust 1.82+" while CI installed
+      # unpinned `stable` — a floor nobody checked, and 1.82 could not in fact
+      # build a transitive dependency that requires edition 2024. Cargo run
+      # inside the checkout uses the pinned version no matter what the action
+      # installed, so the pin is the toolchain that matters here. Adding the
+      # target through the action would install it for `stable`, a toolchain
+      # this build never invokes, and cargo would stop with "the target may not
+      # be installed" while the log above it showed the target being added.
+      # Run inside the checkout, `rustup target add` resolves the same toolchain
+      # cargo will.
+      - name: Add ${{ matrix.target }} to the pinned toolchain
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install cross linker
+        if: matrix.apt != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.apt }}
+
+      # --workspace --bins, not a hand-written list. ci.yml carries the same
+      # comment for the same reason: a step that named two of the four binaries
+      # while claiming to build "the Rust binaries" left gnomon-natives
+      # spawning a gnomon-edit that was not there. The four are gnomon-surface,
+      # gnomon-enums (both from crates/gnomon-surface), gnomon-edit and
+      # gnomon-exec.
+      - name: Build release binaries
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
+          # Stamped here as well as written into the archive: any harness record
+          # this job produces is then identified by the release rather than
+          # falling back to a bare commit sha.
+          GNOMON_BUILD: ${{ inputs.stamp }}
+        run: cargo build --release --workspace --bins --target ${{ matrix.target }}
+
+      # A flat directory of binaries is the layout gnomon-natives'
+      # findBinary() already understands: it searches target/debug and
+      # target/release, or any directory given as GNOMON_BIN_OVERRIDE. So an
+      # unpacked archive is usable by exporting one variable, with no install
+      # step to get wrong.
+      - name: Package
+        id: pkg
+        # bash on every runner, Windows included. The default shell there is
+        # PowerShell, which does not understand `set -euo pipefail` or any of
+        # the below; GitHub ships Git Bash on windows-latest for exactly this.
+        shell: bash
+        env:
+          GNOMON_BUILD: ${{ inputs.stamp }}
+        run: |
+          set -euo pipefail
+          dir="gnomon-${{ inputs.version }}-${{ matrix.name }}"
+          mkdir -p "dist/$dir"
+          # Cargo writes `gnomon-surface` on Unix and `gnomon-surface.exe` on
+          # Windows. Copying the bare name there produced an archive missing
+          # every binary it claimed to contain -- which the 8-entry assertion
+          # below would have caught, but only after a release had been drafted.
+          ext=""
+          case "${{ matrix.target }}" in *windows*) ext=".exe" ;; esac
+          for bin in gnomon-surface gnomon-enums gnomon-edit gnomon-exec; do
+            cp "target/${{ matrix.target }}/release/$bin$ext" "dist/$dir/$bin$ext"
+          done
+          cp LICENSE "dist/$dir/LICENSE"
+
+          # The provenance value, shipped as a file because it cannot be
+          # compiled in. `harnessBuild()` resolves GNOMON_BUILD from the
+          # *environment at runtime*; these are Rust binaries and the field is
+          # read by TypeScript, so nothing in this archive can set it by being
+          # present. Writing it here at least means the identifier travels with
+          # the artifact instead of living only in a release page.
+          printf '%s\n' "$GNOMON_BUILD" > "dist/$dir/GNOMON_BUILD"
+          cat > "dist/$dir/README-BINARIES.txt" <<EOF
+          gnomon native binaries — $GNOMON_BUILD (${{ matrix.name }})
+
+          Point the harness at this directory:
+
+              export GNOMON_BIN_OVERRIDE="\$PWD/$dir"
+
+          And stamp provenance, so records name this release instead of falling
+          back to the git commit of whatever tree they run in:
+
+              export GNOMON_BUILD="\$(cat "\$PWD/$dir/GNOMON_BUILD")"
+
+          Without that second export the harness reports gnomon/<version>+<sha>
+          from its own checkout, or gnomon/<version>+unknown where there is no
+          repository to ask.
+          EOF
+
+          tar -czf "dist/$dir.tar.gz" -C dist "$dir"
+
+          # Checksums beside the archive. NEITHER tool is on all three images:
+          #
+          #   linux    sha256sum ✓   shasum ✓
+          #   macOS    sha256sum ✗   shasum ✓
+          #   windows  sha256sum ✓   shasum ✗   (Git Bash ships coreutils, not the Perl script)
+          #
+          # This line said `shasum -a 256` with a comment reading "shasum is
+          # present on both runner images" — true, and written when there were
+          # two. windows-x64 was added to the matrix on 2026-09-05 and no tag was
+          # pushed until 2026-09-07, so the first tag after it found:
+          #
+          #     line 42: shasum: command not found        (exit 127)
+          #
+          # The Windows binary had compiled fine; there was simply no way to
+          # publish it. Both tools print `<hash>  <name>`, so SHA256SUMS is
+          # identical either way.
+          if command -v sha256sum >/dev/null 2>&1; then
+            ( cd dist && sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256" )
+          else
+            ( cd dist && shasum -a 256 "$dir.tar.gz" > "$dir.tar.gz.sha256" )
+          fi
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+
+      # In the job that built the archive, on the runner that built it: the
+      # digest attested is the digest of the bytes this machine wrote, not of
+      # a copy that passed through the artifact store first.
+      - name: Attest build provenance for the archive
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/${{ steps.pkg.outputs.dir }}.tar.gz
+
+      # The Sigstore bundle, kept so the release can ship every bundle in one
+      # `.intoto.jsonl` asset (offline verification; OpenSSF Scorecard's
+      # Signed-Releases check looks for that file). PowerShell because the path
+      # the action reports is a native Windows path on windows-latest, and
+      # Copy-Item reads it the same way on all three images.
+      - name: Keep the attestation bundle
+        shell: pwsh
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          DEST: dist/${{ steps.pkg.outputs.dir }}.tar.gz.sigstore.json
+        run: Copy-Item -LiteralPath $env:BUNDLE -Destination $env:DEST
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.pkg.outputs.dir }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+            dist/*.sigstore.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # The npm tarballs ship WITH the release, so a machine with Node and nothing
+  # else can install gnomon from a URL, and publish-npm.yml publishes these
+  # exact bytes after a human presses Publish. Built once rather than per
+  # platform because they are platform-independent.
+  #
+  # Moved here from release.yml's `release` job, which held `contents: write`
+  # while running `pnpm install` and every package's build script. Now the
+  # job that can write a release runs no build code at all, and the job that
+  # runs build code cannot write a release.
+  npm:
+    name: Pack the npm packages
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Pack the npm packages
+        env:
+          STAMP: ${{ inputs.stamp }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          pnpm install --frozen-lockfile
+          pnpm -r run build
+          # The provenance an installed copy reports (build.ts, rule `package`).
+          # The binary archives carry STAMP in a GNOMON_BUILD file; the npm
+          # tarballs had nothing, so every installed release said only `+npm`.
+          # Written into this runner's checkout only, never committed.
+          ( cd packages/gnomon-core && npm pkg set gnomonBuild="$STAMP" )
+          for p in gnomon-core gnomon-natives gnomon-tui gnomon-cli; do
+            ( cd "packages/$p" && pnpm pack --pack-destination "$GITHUB_WORKSPACE/dist" )
+          done
+          # The same gate .gnomon/ci.sh runs: if the tarball cannot install and
+          # run, it must not reach a release page where someone will try it.
+          # Here it must also report the stamp it was packed with.
+          EXPECT_REVISION="$STAMP" bash scripts/check-publishable.sh
+
+      # One attestation, four subjects. This is the provenance of the BYTES:
+      # npm's own provenance (publish-npm.yml) names the publishing workflow,
+      # which downloads these tarballs rather than building them.
+      - name: Attest build provenance for the npm tarballs
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*.tgz
+
+      - name: Keep the attestation bundle
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/gnomon-${{ inputs.version }}-npm.sigstore.json"
+
+      - name: Upload the npm tarballs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gnomon-${{ inputs.version }}-npm
+          path: |
+            dist/*.tgz
+            dist/*.sigstore.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  sbom:
+    name: SBOM, SHA256SUMS and the attestation bundle file
+    needs: [binaries, npm]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Scanned BEFORE anything is downloaded into the tree, so the scan sees
+      # the tagged source and nothing else. Syft reads Cargo.lock and
+      # pnpm-lock.yaml (and the Actions the workflows use), so this lists
+      # every package the build could have resolved — dev and build tooling
+      # included. That is a superset of what ships: the four npm packages
+      # carry no third-party runtime dependency at all (.github/SECURITY.md).
+      # A superset is the honest direction for an SBOM to err in.
+      #
+      # syft-version is pinned to the action's own default for this release
+      # of the action, so the scanner changes only when the pin above does.
+      - name: Generate the SBOM (SPDX JSON)
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        env:
+          SYFT_SOURCE_NAME: gnomon
+          SYFT_SOURCE_VERSION: ${{ inputs.version }}
+        with:
+          path: .
+          format: spdx-json
+          output-file: ${{ runner.temp }}/gnomon-${{ inputs.version }}.spdx.json
+          syft-version: v1.54.0
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Download the archives and tarballs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Moved from release.yml, unchanged: the native archives' own .sha256
+      # lines, then the npm tarballs. v0.2.3's SHA256SUMS listed only the
+      # native archives, so the four packages scripts/install.sh feeds to
+      # `npm i -g` could be checked only against GitHub's own asset digests.
+      # Written here so that SHA256SUMS is itself attested below.
+      - name: Write SHA256SUMS
+        run: |
+          set -euo pipefail
+          { cat dist/*.sha256; ( cd dist && sha256sum ./*.tgz | sed 's|  \./|  |' ); } > dist/SHA256SUMS
+          mv "$RUNNER_TEMP/gnomon-$VERSION.spdx.json" dist/
+          cat dist/SHA256SUMS
+
+      - name: Attest build provenance for SHA256SUMS and the SBOM
+        id: attest-sums
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/SHA256SUMS
+            dist/gnomon-${{ inputs.version }}.spdx.json
+
+      # The SBOM bound to every artifact it describes. Verify one with
+      #   gh attestation verify <file> --predicate-type https://spdx.dev/Document/v2.3 ...
+      - name: Attest the SBOM for every archive and tarball
+        id: attest-sbom
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          sbom-path: dist/gnomon-${{ inputs.version }}.spdx.json
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.tgz
+
+      # Every bundle this run made, one compact JSON object per line. That is
+      # the format `gh attestation verify --bundle` reads, and the
+      # `.intoto.jsonl` name is what Scorecard's Signed-Releases check counts.
+      # One per archive, one for the npm tarballs, one for SHA256SUMS + SBOM,
+      # one SBOM attestation: 7 with today's four-target matrix. Derived, not
+      # written down, so a new target cannot leave the count stale.
+      - name: Write the attestation bundle file
+        env:
+          SUMS_BUNDLE: ${{ steps.attest-sums.outputs.bundle-path }}
+          SBOM_BUNDLE: ${{ steps.attest-sbom.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          archives=$(find dist -maxdepth 1 -name '*.tar.gz' | wc -l)
+          archive_bundles=$(find dist -maxdepth 1 -name '*.tar.gz.sigstore.json' | wc -l)
+          [ "$archives" -gt 0 ] && [ "$archives" -eq "$archive_bundles" ] \
+            || { echo "::error::$archives archives but $archive_bundles archive attestation bundles"; exit 1; }
+          [ -f "dist/gnomon-$VERSION-npm.sigstore.json" ] \
+            || { echo "::error::no attestation bundle for the npm tarballs"; exit 1; }
+          out="dist/gnomon-$VERSION.intoto.jsonl"
+          jq -c . dist/*.sigstore.json "$SUMS_BUNDLE" "$SBOM_BUNDLE" > "$out"
+          n=$(wc -l < "$out")
+          want=$((archive_bundles + 3))
+          echo "$out: $n bundles"
+          [ "$n" -eq "$want" ] || { echo "::error::expected $want attestation bundles, found $n"; exit 1; }
+
+      - name: Upload the release metadata
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gnomon-${{ inputs.version }}-release-metadata
+          path: |
+            dist/SHA256SUMS
+            dist/*.spdx.json
+            dist/*.intoto.jsonl
+          if-no-files-found: error
+          retention-days: 7
