@@ -1,0 +1,348 @@
+{
+ "kind": "result",
+ "status": "contested",
+ "query": {
+  "rung": "intervention",
+  "treatment": "delivered",
+  "outcome": "solved",
+  "estimand": "ate",
+  "design": "randomized",
+  "treatment_levels": null,
+  "adjust_for": null,
+  "instruments": null,
+  "treatment_proxies": [],
+  "outcome_proxies": [],
+  "negative_control_outcomes": [],
+  "expected_treated_share": null,
+  "segment_by": [
+   "idle_prone"
+  ],
+  "cluster": null,
+  "washout": null,
+  "sequence": null,
+  "unit": null,
+  "time": null,
+  "covariates": [],
+  "control_group": "never_treated",
+  "population": null,
+  "horizon": null
+ },
+ "certificate": {
+  "status": "identified",
+  "strategy": "randomized",
+  "tier": "A",
+  "estimand": "E[solved | do(delivered=t)] = E[solved | delivered=t]",
+  "adjustment_set": [],
+  "instruments": [],
+  "mediators": [],
+  "treatment_proxies": [],
+  "outcome_proxies": [],
+  "conditions": [
+   {
+    "name": "graph is consistent with randomized treatment",
+    "holds": true,
+    "detail": ""
+   }
+  ],
+  "assumptions": [
+   "treatment assigned independently of potential outcomes (randomization)",
+   "consistency and no interference between units (SUTVA)"
+  ],
+  "general_id": "Σ_{difficulty, idle_prone} [P(solved | delivered, difficulty, idle_prone) P(idle_prone) P(difficulty)]",
+  "unreviewed_edges": [],
+  "engine": "causal_core.identification/0.2",
+  "graph_digest": "sha256:9ba680e249c867a7cf3de081e1de7de498be2135988415c2679b19e8e62def48"
+ },
+ "primary": {
+  "estimator": "difference_in_means",
+  "family": "design",
+  "estimand": "ATE: E[Y(T=1) - Y(T=0)]",
+  "point": -0.1172043010752688,
+  "se": 0.12779798373160267,
+  "ci": {
+   "level": 0.95,
+   "lo": -0.3676837464860458,
+   "hi": 0.1332751443355082,
+   "method": "wald/neyman"
+  },
+  "ci_null_reason": null,
+  "n_used": 61,
+  "assumptions": [
+   "treatment independent of potential outcomes"
+  ],
+  "details": {}
+ },
+ "estimates": [
+  {
+   "estimator": "difference_in_means",
+   "family": "design",
+   "estimand": "ATE: E[Y(T=1) - Y(T=0)]",
+   "point": -0.1172043010752688,
+   "se": 0.12779798373160267,
+   "ci": {
+    "level": 0.95,
+    "lo": -0.3676837464860458,
+    "hi": 0.1332751443355082,
+    "method": "wald/neyman"
+   },
+   "ci_null_reason": null,
+   "n_used": 61,
+   "assumptions": [
+    "treatment independent of potential outcomes"
+   ],
+   "details": {}
+  },
+  {
+   "estimator": "aipw",
+   "family": "doubly_robust",
+   "estimand": "ATE: E[Y(T=1) - Y(T=0)]",
+   "point": -0.11939153005464487,
+   "se": 0.1263183501067907,
+   "ci": {
+    "level": 0.95,
+    "lo": -0.36697094685047593,
+    "hi": 0.12818788674118622,
+    "method": "wald/influence-function (cross-fitted)"
+   },
+   "ci_null_reason": null,
+   "n_used": 61,
+   "assumptions": [
+    "either the propensity model or the outcome model is correctly specified",
+    "nuisance learners: linear"
+   ],
+   "details": {
+    "share_clipped": 0.0,
+    "folds": 5.0
+   }
+  },
+  {
+   "estimator": "regression_adjustment",
+   "family": "outcome_model",
+   "estimand": "ATE: E[Y(T=1) - Y(T=0)]",
+   "point": -0.11720430107526902,
+   "se": 0.12779798373160275,
+   "ci": {
+    "level": 0.95,
+    "lo": -0.3676837464860462,
+    "hi": 0.13327514433550813,
+    "method": "wald/hc2+covariate-mean"
+   },
+   "ci_null_reason": null,
+   "n_used": 61,
+   "assumptions": [
+    "outcome linear in the covariates within each arm"
+   ],
+   "details": {}
+  }
+ ],
+ "diagnostics": {
+  "n_rows": 61,
+  "n_used": 61,
+  "n_dropped_missing": 0,
+  "treatment_kind": "binary",
+  "n_treated": 31,
+  "n_control": 30,
+  "outcome_sd": 0.4986320083803493,
+  "propensity": null,
+  "overlap": null,
+  "balance": [],
+  "srm_p_value": null,
+  "n_clusters": null,
+  "icc": null,
+  "first_stage_f": null,
+  "checks": [
+   {
+    "name": "sample size",
+    "passed": true,
+    "detail": "n=61"
+   },
+   {
+    "name": "units per arm",
+    "passed": true,
+    "detail": "treated=31, control=30"
+   }
+  ]
+ },
+ "refutations": [
+  {
+   "name": "placebo_treatment",
+   "passed": true,
+   "statistic": 0.013978494623655968,
+   "p_value": 0.913562153118078,
+   "threshold": 0.01,
+   "detail": "effect of a randomly permuted treatment; should be indistinguishable from 0"
+  },
+  {
+   "name": "implied_independences",
+   "passed": false,
+   "statistic": 1.0,
+   "p_value": 0.00030571645704315564,
+   "threshold": 0.01,
+   "detail": "1 of 3 graph-implied independences rejected (Holm); rejected: difficulty ⊥ idle_prone (r=0.441, p=0.00031). Linear partial-correlation tests: nonlinear dependence can go undetected."
+  }
+ ],
+ "sensitivity": {
+  "e_value": 1.7549565885860607,
+  "e_value_ci": 1.0,
+  "e_value_method": "risk ratio from the primary estimator's arm means",
+  "partial_r2_treatment": 0.014038756941982752,
+  "robustness_value": 0.11241868020376113,
+  "robustness_value_alpha": 0.0,
+  "parallel_trends": null,
+  "rosenbaum": null,
+  "rosenbaum_null_reason": "treatment was randomized: assignment is known, so hidden bias in it is excluded by design"
+ },
+ "triangulation": {
+  "estimators": [
+   "difference_in_means",
+   "aipw",
+   "regression_adjustment"
+  ],
+  "agree": true,
+  "pairs": [
+   {
+    "a": "difference_in_means",
+    "b": "aipw",
+    "difference": 0.0021872289793760658,
+    "se_difference": 0.03157958752669768,
+    "z": 0.0692608469799348
+   },
+   {
+    "a": "difference_in_means",
+    "b": "regression_adjustment",
+    "difference": 2.220446049250313e-16,
+    "se_difference": 0.03194949593290067,
+    "z": 6.949862539032304e-15
+   }
+  ],
+  "detail": "estimators with different modelling assumptions agree within sampling noise"
+ },
+ "segments": [
+  {
+   "variable": "idle_prone",
+   "level": "0",
+   "n_used": 35,
+   "estimate": {
+    "estimator": "difference_in_means",
+    "family": "design",
+    "estimand": "ATE: E[Y(T=1) - Y(T=0)]",
+    "point": -0.03921568627450989,
+    "se": 0.16139291797210126,
+    "ci": {
+     "level": 0.95,
+     "lo": -0.35553999285965554,
+     "hi": 0.27710862031063577,
+     "method": "wald/neyman"
+    },
+    "ci_null_reason": null,
+    "n_used": 35,
+    "assumptions": [
+     "treatment independent of potential outcomes"
+    ],
+    "details": {}
+   },
+   "family_wise_ci": {
+    "level": 0.975,
+    "lo": -0.4009622128332991,
+    "hi": 0.3225308402842793,
+    "method": "bonferroni_2"
+   },
+   "p_value": 0.8080188026382746,
+   "significant_after_correction": false,
+   "refusal": null,
+   "refusal_detail": ""
+  },
+  {
+   "variable": "idle_prone",
+   "level": "1",
+   "n_used": 0,
+   "estimate": null,
+   "family_wise_ci": null,
+   "p_value": null,
+   "significant_after_correction": null,
+   "refusal": "LOW_N",
+   "refusal_detail": "n=26 is below policy.min_n=30"
+  }
+ ],
+ "heterogeneity": null,
+ "sequential": null,
+ "event_study": [],
+ "claims": [
+  {
+   "id": "effect",
+   "value": -0.1172043010752688,
+   "text": "-0.1172",
+   "unit": null,
+   "path": "/primary/point"
+  },
+  {
+   "id": "effect.se",
+   "value": 0.12779798373160267,
+   "text": "0.1278",
+   "unit": null,
+   "path": "/primary/se"
+  },
+  {
+   "id": "effect.ci.lo",
+   "value": -0.3676837464860458,
+   "text": "-0.3677",
+   "unit": null,
+   "path": "/primary/ci/lo"
+  },
+  {
+   "id": "effect.ci.hi",
+   "value": 0.1332751443355082,
+   "text": "0.1333",
+   "unit": null,
+   "path": "/primary/ci/hi"
+  },
+  {
+   "id": "ci.level",
+   "value": 95.0,
+   "text": "95",
+   "unit": "%",
+   "path": "/primary/ci/level"
+  },
+  {
+   "id": "n",
+   "value": 61.0,
+   "text": "61",
+   "unit": null,
+   "path": "/diagnostics/n_used"
+  },
+  {
+   "id": "e_value",
+   "value": 1.7549565885860607,
+   "text": "1.755",
+   "unit": null,
+   "path": "/sensitivity/e_value"
+  },
+  {
+   "id": "e_value.ci",
+   "value": 1.0,
+   "text": "1",
+   "unit": null,
+   "path": "/sensitivity/e_value_ci"
+  },
+  {
+   "id": "robustness_value",
+   "value": 0.11241868020376113,
+   "text": "0.1124",
+   "unit": null,
+   "path": "/sensitivity/robustness_value"
+  }
+ ],
+ "warnings": [
+  "falsification tests failed: ['implied_independences']"
+ ],
+ "provenance": {
+  "contract_version": "0.13.0",
+  "core_version": "0.13.0",
+  "graph_digest": "sha256:9ba680e249c867a7cf3de081e1de7de498be2135988415c2679b19e8e62def48",
+  "query_digest": "sha256:b8f48e5cec27b8cf6554ebfd23652be01f2d336661bc7d3b4fafb2f495f2fea3",
+  "data_digest": "sha256:e853b84b1597a9243275dddf70d0fcff4fd3a79fef791852c399eb869a8c0b77",
+  "policy_digest": "sha256:56229d22e7786ff61bbd30b39ad7b33687c7f78af2c2fee8ee6886a9079e414f",
+  "seed": 0
+ },
+ "result_digest": "sha256:4912ce909e29b3e21a12471ec619171e0e14d38b19bd166b465446d41b274d4e"
+}

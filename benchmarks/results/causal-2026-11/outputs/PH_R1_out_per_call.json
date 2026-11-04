@@ -1,0 +1,308 @@
+{
+ "kind": "result",
+ "status": "supported",
+ "query": {
+  "rung": "intervention",
+  "treatment": "replay",
+  "outcome": "out_per_call",
+  "estimand": "ate",
+  "design": "randomized",
+  "treatment_levels": null,
+  "adjust_for": null,
+  "instruments": null,
+  "treatment_proxies": [],
+  "outcome_proxies": [],
+  "negative_control_outcomes": [
+   "load_start1"
+  ],
+  "expected_treated_share": null,
+  "segment_by": [],
+  "cluster": null,
+  "washout": null,
+  "sequence": null,
+  "unit": null,
+  "time": null,
+  "covariates": [],
+  "control_group": "never_treated",
+  "population": null,
+  "horizon": null
+ },
+ "certificate": {
+  "status": "identified",
+  "strategy": "randomized",
+  "tier": "A",
+  "estimand": "E[out_per_call | do(replay=t)] = E[out_per_call | replay=t]",
+  "adjustment_set": [],
+  "instruments": [],
+  "mediators": [],
+  "treatment_proxies": [],
+  "outcome_proxies": [],
+  "conditions": [
+   {
+    "name": "graph is consistent with randomized treatment",
+    "holds": true,
+    "detail": ""
+   }
+  ],
+  "assumptions": [
+   "treatment assigned independently of potential outcomes (randomization)",
+   "consistency and no interference between units (SUTVA)"
+  ],
+  "general_id": "Σ_{difficulty, load_start1} [P(out_per_call | difficulty, load_start1, replay) P(load_start1) P(difficulty)]",
+  "unreviewed_edges": [],
+  "engine": "causal_core.identification/0.2",
+  "graph_digest": "sha256:41f526348f0fafb6ce895cbaeb4eaab39d2f4d8f76ba094933d902d9191fd19a"
+ },
+ "primary": {
+  "estimator": "difference_in_means",
+  "family": "design",
+  "estimand": "ATE: E[Y(T=1) - Y(T=0)]",
+  "point": -272.3942082443335,
+  "se": 203.37338320624156,
+  "ci": {
+   "level": 0.95,
+   "lo": -670.99871474263,
+   "hi": 126.210298253963,
+   "method": "wald/neyman"
+  },
+  "ci_null_reason": null,
+  "n_used": 61,
+  "assumptions": [
+   "treatment independent of potential outcomes"
+  ],
+  "details": {}
+ },
+ "estimates": [
+  {
+   "estimator": "difference_in_means",
+   "family": "design",
+   "estimand": "ATE: E[Y(T=1) - Y(T=0)]",
+   "point": -272.3942082443335,
+   "se": 203.37338320624156,
+   "ci": {
+    "level": 0.95,
+    "lo": -670.99871474263,
+    "hi": 126.210298253963,
+    "method": "wald/neyman"
+   },
+   "ci_null_reason": null,
+   "n_used": 61,
+   "assumptions": [
+    "treatment independent of potential outcomes"
+   ],
+   "details": {}
+  },
+  {
+   "estimator": "aipw",
+   "family": "doubly_robust",
+   "estimand": "ATE: E[Y(T=1) - Y(T=0)]",
+   "point": -277.49392106385585,
+   "se": 208.41928726111254,
+   "ci": {
+    "level": 0.95,
+    "lo": -685.9882177791442,
+    "hi": 131.00037565143242,
+    "method": "wald/influence-function (cross-fitted)"
+   },
+   "ci_null_reason": null,
+   "n_used": 61,
+   "assumptions": [
+    "either the propensity model or the outcome model is correctly specified",
+    "nuisance learners: linear"
+   ],
+   "details": {
+    "share_clipped": 0.0,
+    "folds": 5.0
+   }
+  },
+  {
+   "estimator": "regression_adjustment",
+   "family": "outcome_model",
+   "estimand": "ATE: E[Y(T=1) - Y(T=0)]",
+   "point": -272.3942082443335,
+   "se": 203.37338320624158,
+   "ci": {
+    "level": 0.95,
+    "lo": -670.9987147426301,
+    "hi": 126.21029825396306,
+    "method": "wald/hc2+covariate-mean"
+   },
+   "ci_null_reason": null,
+   "n_used": 61,
+   "assumptions": [
+    "outcome linear in the covariates within each arm"
+   ],
+   "details": {}
+  }
+ ],
+ "diagnostics": {
+  "n_rows": 61,
+  "n_used": 61,
+  "n_dropped_missing": 0,
+  "treatment_kind": "binary",
+  "n_treated": 32,
+  "n_control": 29,
+  "outcome_sd": 765.3258722141597,
+  "propensity": null,
+  "overlap": null,
+  "balance": [],
+  "srm_p_value": null,
+  "n_clusters": null,
+  "icc": null,
+  "first_stage_f": null,
+  "checks": [
+   {
+    "name": "sample size",
+    "passed": true,
+    "detail": "n=61"
+   },
+   {
+    "name": "units per arm",
+    "passed": true,
+    "detail": "treated=32, control=29"
+   }
+  ]
+ },
+ "refutations": [
+  {
+   "name": "placebo_treatment",
+   "passed": true,
+   "statistic": 126.81802584484865,
+   "p_value": 0.508698648946746,
+   "threshold": 0.01,
+   "detail": "effect of a randomly permuted treatment; should be indistinguishable from 0"
+  },
+  {
+   "name": "negative_control_outcome:load_start1",
+   "passed": true,
+   "statistic": -5.0907004310344846,
+   "p_value": 0.1600491804418337,
+   "threshold": 0.01,
+   "detail": "estimated 'effect' of replay on load_start1, which the analyst declared it cannot affect (Bonferroni over negative controls)"
+  },
+  {
+   "name": "implied_independences",
+   "passed": true,
+   "statistic": 0.0,
+   "p_value": 0.15083893720978034,
+   "threshold": 0.01,
+   "detail": "0 of 3 graph-implied independences rejected (Holm); closest: load_start1 ⊥ replay (r=-0.186, p=0.15); difficulty ⊥ load_start1 (r=0.030, p=0.82); difficulty ⊥ replay (r=-0.004, p=0.98). Linear partial-correlation tests: nonlinear dependence can go undetected."
+  }
+ ],
+ "sensitivity": {
+  "e_value": 2.109669419112204,
+  "e_value_ci": 1.0,
+  "e_value_method": "approximate: RR = exp(0.91 × effect / sd(outcome)) (VanderWeele & Ding 2017)",
+  "partial_r2_treatment": 0.03211957861213183,
+  "robustness_value": 0.166330197203271,
+  "robustness_value_alpha": 0.0,
+  "parallel_trends": null,
+  "rosenbaum": null,
+  "rosenbaum_null_reason": "treatment was randomized: assignment is known, so hidden bias in it is excluded by design"
+ },
+ "triangulation": {
+  "estimators": [
+   "difference_in_means",
+   "aipw",
+   "regression_adjustment"
+  ],
+  "agree": true,
+  "pairs": [
+   {
+    "a": "difference_in_means",
+    "b": "aipw",
+    "difference": 5.099712819522324,
+    "se_difference": 50.84334580156039,
+    "z": 0.10030246316649391
+   },
+   {
+    "a": "difference_in_means",
+    "b": "regression_adjustment",
+    "difference": 0.0,
+    "se_difference": 50.84334580156039,
+    "z": 0.0
+   }
+  ],
+  "detail": "estimators with different modelling assumptions agree within sampling noise"
+ },
+ "segments": [],
+ "heterogeneity": null,
+ "sequential": null,
+ "event_study": [],
+ "claims": [
+  {
+   "id": "effect",
+   "value": -272.3942082443335,
+   "text": "-272.4",
+   "unit": null,
+   "path": "/primary/point"
+  },
+  {
+   "id": "effect.se",
+   "value": 203.37338320624156,
+   "text": "203.4",
+   "unit": null,
+   "path": "/primary/se"
+  },
+  {
+   "id": "effect.ci.lo",
+   "value": -670.99871474263,
+   "text": "-671",
+   "unit": null,
+   "path": "/primary/ci/lo"
+  },
+  {
+   "id": "effect.ci.hi",
+   "value": 126.210298253963,
+   "text": "126.2",
+   "unit": null,
+   "path": "/primary/ci/hi"
+  },
+  {
+   "id": "ci.level",
+   "value": 95.0,
+   "text": "95",
+   "unit": "%",
+   "path": "/primary/ci/level"
+  },
+  {
+   "id": "n",
+   "value": 61.0,
+   "text": "61",
+   "unit": null,
+   "path": "/diagnostics/n_used"
+  },
+  {
+   "id": "e_value",
+   "value": 2.109669419112204,
+   "text": "2.11",
+   "unit": null,
+   "path": "/sensitivity/e_value"
+  },
+  {
+   "id": "e_value.ci",
+   "value": 1.0,
+   "text": "1",
+   "unit": null,
+   "path": "/sensitivity/e_value_ci"
+  },
+  {
+   "id": "robustness_value",
+   "value": 0.166330197203271,
+   "text": "0.1663",
+   "unit": null,
+   "path": "/sensitivity/robustness_value"
+  }
+ ],
+ "warnings": [],
+ "provenance": {
+  "contract_version": "0.13.0",
+  "core_version": "0.13.0",
+  "graph_digest": "sha256:41f526348f0fafb6ce895cbaeb4eaab39d2f4d8f76ba094933d902d9191fd19a",
+  "query_digest": "sha256:4073c9a772ebdfefb3317b9a1cb29f085b61b5532b5ef633414adfc584bfd357",
+  "data_digest": "sha256:9800e02ffd20d22a27b4143a0676d3e7a3f9403c19249fc996da6d4bdcc1c302",
+  "policy_digest": "sha256:56229d22e7786ff61bbd30b39ad7b33687c7f78af2c2fee8ee6886a9079e414f",
+  "seed": 0
+ },
+ "result_digest": "sha256:6387cca3f9a279e29a431eb3df4f1bc24a7258fc72259c46bdf5c444829a889d"
+}

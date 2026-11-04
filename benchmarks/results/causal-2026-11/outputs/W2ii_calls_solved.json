@@ -1,0 +1,145 @@
+{
+ "kind": "refusal",
+ "reason": "POSITIVITY",
+ "detail": "74.6% have an estimated propensity outside [0.01, 0.99] (policy allows 5.0%)",
+ "missing_information": [
+  "restrict the population to the region where both arms occur",
+  "or drop covariates that (nearly) determine treatment, if the graph allows"
+ ],
+ "query": {
+  "rung": "intervention",
+  "treatment": "legs2",
+  "outcome": "solved",
+  "estimand": "ate",
+  "design": "observational",
+  "treatment_levels": null,
+  "adjust_for": null,
+  "instruments": null,
+  "treatment_proxies": [],
+  "outcome_proxies": [],
+  "negative_control_outcomes": [],
+  "expected_treated_share": null,
+  "segment_by": [],
+  "cluster": null,
+  "washout": null,
+  "sequence": null,
+  "unit": null,
+  "time": null,
+  "covariates": [],
+  "control_group": "never_treated",
+  "population": null,
+  "horizon": null
+ },
+ "certificate": {
+  "status": "identified",
+  "strategy": "backdoor",
+  "tier": "A",
+  "estimand": "Σ_{calls, difficulty} E[solved | legs2=t, calls, difficulty] P(calls, difficulty)",
+  "adjustment_set": [
+   "calls",
+   "difficulty"
+  ],
+  "instruments": [],
+  "mediators": [],
+  "treatment_proxies": [],
+  "outcome_proxies": [],
+  "conditions": [
+   {
+    "name": "adjustment set is observed",
+    "holds": true,
+    "detail": ""
+   },
+   {
+    "name": "no adjustment variable is a descendant of a causal node",
+    "holds": true,
+    "detail": ""
+   },
+   {
+    "name": "all non-causal paths are blocked",
+    "holds": true,
+    "detail": ""
+   }
+  ],
+  "assumptions": [
+   "causal sufficiency relative to the graph: every absent edge and absent <-> is a claim",
+   "positivity: every adjustment stratum has a non-zero chance of each treatment level",
+   "consistency and no interference between units (SUTVA)"
+  ],
+  "general_id": "Σ_{calls, difficulty} [P(solved | calls, difficulty, legs2) P(calls) P(difficulty)]",
+  "unreviewed_edges": [],
+  "engine": "causal_core.identification/0.2",
+  "graph_digest": "sha256:4a85951bee156410161f12fc2ad965e72401bdada03b269a4a7158e284e398bb"
+ },
+ "diagnostics": {
+  "n_rows": 398,
+  "n_used": 398,
+  "n_dropped_missing": 0,
+  "treatment_kind": "binary",
+  "n_treated": 186,
+  "n_control": 212,
+  "outcome_sd": 0.4852155164865792,
+  "propensity": {
+   "min": 1.8383699323876724e-7,
+   "max": 0.9999999999999993,
+   "share_outside_bounds": 0.7462311557788944,
+   "ess_treated": 11.194115664785839,
+   "ess_control": 166.69774248906825
+  },
+  "overlap": {
+   "violation_share": 0.228643216080402,
+   "regions": [
+    {
+     "rule": "calls > 33",
+     "n_units": 91,
+     "n_treated": 91,
+     "missing_arm": "control",
+     "upper_bound": 0.032384164736434434
+    }
+   ],
+   "limited_share": 0.8768844221105527,
+   "limited_overlap": true
+  },
+  "balance": [
+   {
+    "covariate": "calls",
+    "smd_raw": 1.6099973623785913,
+    "smd_weighted": 1.0296349135036882
+   },
+   {
+    "covariate": "difficulty",
+    "smd_raw": 1.0370079361871605,
+    "smd_weighted": 0.8663081429808669
+   }
+  ],
+  "srm_p_value": null,
+  "n_clusters": null,
+  "icc": null,
+  "first_stage_f": null,
+  "checks": [
+   {
+    "name": "sample size",
+    "passed": true,
+    "detail": "n=398"
+   },
+   {
+    "name": "units per arm",
+    "passed": true,
+    "detail": "treated=186, control=212"
+   },
+   {
+    "name": "overlap (positivity)",
+    "passed": false,
+    "detail": "74.6% have propensity outside [0.01, 0.99]"
+   }
+  ]
+ },
+ "provenance": {
+  "contract_version": "0.13.0",
+  "core_version": "0.13.0",
+  "graph_digest": "sha256:4a85951bee156410161f12fc2ad965e72401bdada03b269a4a7158e284e398bb",
+  "query_digest": "sha256:72c0acfb0653dc02d4d445785fc76eb17b93e449670c0bc1598ff89d1c7f4c0f",
+  "data_digest": "sha256:56c211ccc0ea20f19e2d9cdc17ba26ec0aeaa5e5f0dd86bb1e60adb015177960",
+  "policy_digest": "sha256:56229d22e7786ff61bbd30b39ad7b33687c7f78af2c2fee8ee6886a9079e414f",
+  "seed": 0
+ }
+}

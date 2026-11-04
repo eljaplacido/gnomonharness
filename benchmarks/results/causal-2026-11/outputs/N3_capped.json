@@ -1,0 +1,155 @@
+{
+ "kind": "refusal",
+ "reason": "POSITIVITY",
+ "detail": "100.0% have an estimated propensity outside [0.01, 0.99] (policy allows 5.0%); the covariates predict treatment perfectly",
+ "missing_information": [
+  "restrict the population to the region where both arms occur",
+  "or drop covariates that (nearly) determine treatment, if the graph allows"
+ ],
+ "query": {
+  "rung": "intervention",
+  "treatment": "delivered",
+  "outcome": "capped",
+  "estimand": "ate",
+  "design": "observational",
+  "treatment_levels": null,
+  "adjust_for": null,
+  "instruments": null,
+  "treatment_proxies": [],
+  "outcome_proxies": [],
+  "negative_control_outcomes": [],
+  "expected_treated_share": null,
+  "segment_by": [],
+  "cluster": null,
+  "washout": null,
+  "sequence": null,
+  "unit": null,
+  "time": null,
+  "covariates": [],
+  "control_group": "never_treated",
+  "population": null,
+  "horizon": null
+ },
+ "certificate": {
+  "status": "identified",
+  "strategy": "backdoor",
+  "tier": "A",
+  "estimand": "Σ_{difficulty, m_glimmer_30b, m_qwen3_6_35b, m_qwen3_8_27b, m_qwen3_8_flash_next} E[capped | delivered=t, difficulty, m_glimmer_30b, m_qwen3_6_35b, m_qwen3_8_27b, m_qwen3_8_flash_next] P(difficulty, m_glimmer_30b, m_qwen3_6_35b, m_qwen3_8_27b, m_qwen3_8_flash_next)",
+  "adjustment_set": [
+   "difficulty",
+   "m_glimmer_30b",
+   "m_qwen3_6_35b",
+   "m_qwen3_8_27b",
+   "m_qwen3_8_flash_next"
+  ],
+  "instruments": [],
+  "mediators": [],
+  "treatment_proxies": [],
+  "outcome_proxies": [],
+  "conditions": [
+   {
+    "name": "adjustment set is observed",
+    "holds": true,
+    "detail": ""
+   },
+   {
+    "name": "no adjustment variable is a descendant of a causal node",
+    "holds": true,
+    "detail": ""
+   },
+   {
+    "name": "all non-causal paths are blocked",
+    "holds": true,
+    "detail": ""
+   }
+  ],
+  "assumptions": [
+   "causal sufficiency relative to the graph: every absent edge and absent <-> is a claim",
+   "positivity: every adjustment stratum has a non-zero chance of each treatment level",
+   "consistency and no interference between units (SUTVA)"
+  ],
+  "general_id": "Σ_{difficulty, m_glimmer_30b, m_qwen3_6_35b, m_qwen3_8_27b, m_qwen3_8_flash_next} [P(capped | delivered, difficulty, m_glimmer_30b, m_qwen3_6_35b, m_qwen3_8_27b, m_qwen3_8_flash_next) P(difficulty) P(m_qwen3_8_flash_next) P(m_qwen3_8_27b) P(m_glimmer_30b) P(m_qwen3_6_35b)]",
+  "unreviewed_edges": [],
+  "engine": "causal_core.identification/0.2",
+  "graph_digest": "sha256:5fca91ab34bc0c62d24a988719b6de459a578c2d80fee8348e4ea20b1883391a"
+ },
+ "diagnostics": {
+  "n_rows": 173,
+  "n_used": 173,
+  "n_dropped_missing": 0,
+  "treatment_kind": "binary",
+  "n_treated": 27,
+  "n_control": 146,
+  "outcome_sd": 0.40712170713430273,
+  "propensity": {
+   "min": 1.1446559313947646e-7,
+   "max": 0.9999996462778721,
+   "share_outside_bounds": 1.0,
+   "ess_treated": 27.0,
+   "ess_control": 146.00000000000003
+  },
+  "overlap": {
+   "violation_share": 0.0,
+   "regions": [],
+   "limited_share": 1.0,
+   "limited_overlap": true
+  },
+  "balance": [
+   {
+    "covariate": "difficulty",
+    "smd_raw": 0.07607777228317296,
+    "smd_weighted": 0.07607777228317332
+   },
+   {
+    "covariate": "m_glimmer_30b",
+    "smd_raw": -1.1812488464372366,
+    "smd_weighted": -1.1812488464372366
+   },
+   {
+    "covariate": "m_qwen3_6_35b",
+    "smd_raw": -1.0361873433536601,
+    "smd_weighted": -1.0361873433536601
+   },
+   {
+    "covariate": "m_qwen3_8_27b",
+    "smd_raw": -0.31736323741169464,
+    "smd_weighted": -0.3173632374116946
+   },
+   {
+    "covariate": "m_qwen3_8_flash_next",
+    "smd_raw": -0.688894963827172,
+    "smd_weighted": -0.688894963827172
+   }
+  ],
+  "srm_p_value": null,
+  "n_clusters": null,
+  "icc": null,
+  "first_stage_f": null,
+  "checks": [
+   {
+    "name": "sample size",
+    "passed": true,
+    "detail": "n=173"
+   },
+   {
+    "name": "units per arm",
+    "passed": true,
+    "detail": "treated=27, control=146"
+   },
+   {
+    "name": "overlap (positivity)",
+    "passed": false,
+    "detail": "100.0% have propensity outside [0.01, 0.99]; covariates separate the arms perfectly"
+   }
+  ]
+ },
+ "provenance": {
+  "contract_version": "0.13.0",
+  "core_version": "0.13.0",
+  "graph_digest": "sha256:5fca91ab34bc0c62d24a988719b6de459a578c2d80fee8348e4ea20b1883391a",
+  "query_digest": "sha256:49f02fc62deec4b44891f3151c7475e487242d52ff0e5d2777ceb97e94539223",
+  "data_digest": "sha256:88742732bc6ca79dbbd62124f3781f8ff2848d460dfe57f9e92edde3d0f7f944",
+  "policy_digest": "sha256:56229d22e7786ff61bbd30b39ad7b33687c7f78af2c2fee8ee6886a9079e414f",
+  "seed": 0
+ }
+}

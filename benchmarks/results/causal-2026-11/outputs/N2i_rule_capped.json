@@ -1,0 +1,166 @@
+{
+ "kind": "refusal",
+ "reason": "POSITIVITY",
+ "detail": "100.0% have an estimated propensity outside [0.01, 0.99] (policy allows 5.0%); the covariates predict treatment perfectly",
+ "missing_information": [
+  "restrict the population to the region where both arms occur",
+  "or drop covariates that (nearly) determine treatment, if the graph allows"
+ ],
+ "query": {
+  "rung": "intervention",
+  "treatment": "nudged",
+  "outcome": "capped",
+  "estimand": "ate",
+  "design": "observational",
+  "treatment_levels": null,
+  "adjust_for": null,
+  "instruments": null,
+  "treatment_proxies": [],
+  "outcome_proxies": [],
+  "negative_control_outcomes": [],
+  "expected_treated_share": null,
+  "segment_by": [],
+  "cluster": null,
+  "washout": null,
+  "sequence": null,
+  "unit": null,
+  "time": null,
+  "covariates": [],
+  "control_group": "never_treated",
+  "population": null,
+  "horizon": null
+ },
+ "certificate": {
+  "status": "identified",
+  "strategy": "backdoor",
+  "tier": "A",
+  "estimand": "Σ_{difficulty, idle} E[capped | nudged=t, difficulty, idle] P(difficulty, idle)",
+  "adjustment_set": [
+   "difficulty",
+   "idle"
+  ],
+  "instruments": [],
+  "mediators": [],
+  "treatment_proxies": [],
+  "outcome_proxies": [],
+  "conditions": [
+   {
+    "name": "adjustment set is observed",
+    "holds": true,
+    "detail": ""
+   },
+   {
+    "name": "no adjustment variable is a descendant of a causal node",
+    "holds": true,
+    "detail": ""
+   },
+   {
+    "name": "all non-causal paths are blocked",
+    "holds": true,
+    "detail": ""
+   }
+  ],
+  "assumptions": [
+   "causal sufficiency relative to the graph: every absent edge and absent <-> is a claim",
+   "positivity: every adjustment stratum has a non-zero chance of each treatment level",
+   "consistency and no interference between units (SUTVA)"
+  ],
+  "general_id": "Σ_{difficulty, idle} [P(idle | difficulty) P(capped | difficulty, idle, nudged) P(difficulty)]",
+  "unreviewed_edges": [],
+  "engine": "causal_core.identification/0.2",
+  "graph_digest": "sha256:2ca82f28640b4a0cb462e0932f256da99f926c8b7c73cbb663af646f24b1601e"
+ },
+ "diagnostics": {
+  "n_rows": 369,
+  "n_used": 369,
+  "n_dropped_missing": 0,
+  "treatment_kind": "binary",
+  "n_treated": 187,
+  "n_control": 182,
+  "outcome_sd": 0.36446606582470764,
+  "propensity": {
+   "min": 2.786974021236032e-7,
+   "max": 0.9999997310426605,
+   "share_outside_bounds": 1.0,
+   "ess_treated": 187.00000000000009,
+   "ess_control": 182.00000000000006
+  },
+  "overlap": {
+   "violation_share": 1.0,
+   "regions": [
+    {
+     "rule": "idle = 1",
+     "n_units": 99,
+     "n_treated": 99,
+     "missing_arm": "control",
+     "upper_bound": 0.029806673773350886
+    },
+    {
+     "rule": "idle = 0",
+     "n_units": 97,
+     "n_treated": 0,
+     "missing_arm": "treated",
+     "upper_bound": 0.030411804036931098
+    },
+    {
+     "rule": "idle = 1",
+     "n_units": 88,
+     "n_treated": 88,
+     "missing_arm": "control",
+     "upper_bound": 0.03346948891663743
+    },
+    {
+     "rule": "idle = 0",
+     "n_units": 85,
+     "n_treated": 0,
+     "missing_arm": "treated",
+     "upper_bound": 0.034630074970687034
+    }
+   ],
+   "limited_share": 1.0,
+   "limited_overlap": true
+  },
+  "balance": [
+   {
+    "covariate": "difficulty",
+    "smd_raw": 0.23656061559490218,
+    "smd_weighted": 0.23656061559490185
+   },
+   {
+    "covariate": "idle",
+    "smd_raw": 0.0,
+    "smd_weighted": 0.0
+   }
+  ],
+  "srm_p_value": null,
+  "n_clusters": null,
+  "icc": null,
+  "first_stage_f": null,
+  "checks": [
+   {
+    "name": "sample size",
+    "passed": true,
+    "detail": "n=369"
+   },
+   {
+    "name": "units per arm",
+    "passed": true,
+    "detail": "treated=187, control=182"
+   },
+   {
+    "name": "overlap (positivity)",
+    "passed": false,
+    "detail": "100.0% have propensity outside [0.01, 0.99]; covariates separate the arms perfectly"
+   }
+  ]
+ },
+ "provenance": {
+  "contract_version": "0.13.0",
+  "core_version": "0.13.0",
+  "graph_digest": "sha256:2ca82f28640b4a0cb462e0932f256da99f926c8b7c73cbb663af646f24b1601e",
+  "query_digest": "sha256:c6d7bba813824bb9912de3bd2f2d54c34d783f89c10efd224db585a9c24d288c",
+  "data_digest": "sha256:f0412c5a4f4369a1864b65f1d2341053add9c190f77172e4c50dd50a2d6cd850",
+  "policy_digest": "sha256:56229d22e7786ff61bbd30b39ad7b33687c7f78af2c2fee8ee6886a9079e414f",
+  "seed": 0
+ }
+}

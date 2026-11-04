@@ -335,3 +335,28 @@ Re-reading W2 before any kernel call on real data found two points.
   confounder (NON_IDENTIFIABLE).
 
 Nothing else changes.
+
+## Amendment 2, 2026-11-04T12:45Z: post hoc, after the registered results were read
+
+**Labelled post hoc: written after reading the registered results.**
+
+The registered run left three results `contested`. In each, the failed refuter was an implied independence that my
+graph asserted and the data rejected:
+
+| result | rejected independence | correlation |
+|---|---|---|
+| N1 with the `idle_prone` segment | `difficulty ⊥ idle_prone` | r = 0.44 |
+| R1 on `out_per_call` | `load_start1 ⊥ out_per_call` | r = 0.46 |
+| R1 on `reasoning_per_call` | `load_start1 ⊥ reasoning_per_call` | r = 0.51 |
+
+Both omissions are about covariates, not about the treatment contrasts:
+- the two task scores share a cause, the task;
+- host load at the start of a cell is associated with output per call.
+
+The negative-control test (treatment → load) passed in all three.
+
+Each is re-run once with the omitted edge added:
+- N1 with the segment: `difficulty -> idle_prone`;
+- R1 on `out_per_call` and `reasoning_per_call`: `load_start1 -> Y`.
+
+These runs are reported beside the registered ones, never instead of them. Nothing else is re-run or changed.
