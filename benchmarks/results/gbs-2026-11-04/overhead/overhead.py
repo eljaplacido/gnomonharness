@@ -109,7 +109,7 @@ def start_model():
 
 # ── Repositories ─────────────────────────────────────────────────────────────
 GITIGNORE = "build/\n.gnomon-sessions/\n.gnomon-audit/\n.gnomon-out/\n.gnomon-jobs/\n.gnomon-loops/\n.gnomon-shadow/\n.gnomon-skills/\n.gnomon-trials/\n"
-def git(cwd, *a): subprocess.run(["git", "-c", "user.name=gbs", "-c", "user.email=gbs@example.invalid", "-c", "init.defaultBranch=main", *a], cwd=cwd, check=True, capture_output=True)
+def git(cwd, *a): subprocess.run(["git", "-c", "gc.auto=0", "-c", "user.name=gbs", "-c", "user.email=gbs@example.invalid", "-c", "init.defaultBranch=main", *a], cwd=cwd, check=True, capture_output=True)
 
 def generate(root, files, use_git, seed=20261104):
     """Seeded tree: `files` tracked files under gen/, the three src/ files, 10 untracked files,
@@ -123,7 +123,9 @@ def generate(root, files, use_git, seed=20261104):
     open(os.path.join(root, ".gitignore"), "w").write(GITIGNORE)
     for i in range(100): os.makedirs(os.path.join(root, "build"), exist_ok=True); open(os.path.join(root, "build", f"o{i}.bin"), "w").write("x" * 64)
     if use_git:
-        git(root, "init", "-q"); git(root, "add", "-A"); git(root, "commit", "-qm", "gbs fixture")
+        # gc.auto=0: an auto-gc detached by the commit packed loose objects while the arm copies
+        # were being made (deviation logged 2026-11-04); it stays off for gnomon's git calls too.
+        git(root, "init", "-q"); git(root, "config", "gc.auto", "0"); git(root, "add", "-A"); git(root, "commit", "-qm", "gbs fixture")
     os.makedirs(os.path.join(root, "untracked"), exist_ok=True)
     for i in range(10): open(os.path.join(root, "untracked", f"u{i}.txt"), "w").write(f"u{i}\n")
 

@@ -150,3 +150,4 @@ written by the same project.
 
 | time (UTC) | change | before/after reading outcomes | reason |
 |---|---|---|---|
+| 2026-11-04T21:26:13Z | S3 at 20,000 and 50,000 files and the s3-d250 block re-run with `gc.auto=0` in the generated repositories. The first attempt crashed while copying the 20,000-file repository: the fixture commit had started a detached `git gc --auto`, which packed loose objects mid-copy. The s3-d250 block then started on that partial copy; it was stopped after 8 trials, and those trials are kept in `raw/aborted/`, excluded. S3 at 0/2,000/5,000 (60/60 valid, under the auto-gc threshold) is kept. | before reading any S3 outcome beyond validity counts | apparatus failure; fixed and re-run under this pre-registration |
