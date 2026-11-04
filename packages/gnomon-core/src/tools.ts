@@ -475,6 +475,13 @@ export interface ApprovalRequest {
   summary: string;
   /** Multi-line preview: a diff, or the command about to run */
   preview: string[];
+  /**
+   * Why this call is asked although the gate or a standing approval would have
+   * let it run unasked: `[approval] after_refusal` (after_refusal.ts). Set, a
+   * standing approval does not answer it; absent, nothing about the request
+   * changed.
+   */
+  escalated?: string;
 }
 
 export type Approver = (req: ApprovalRequest) => Promise<boolean>;

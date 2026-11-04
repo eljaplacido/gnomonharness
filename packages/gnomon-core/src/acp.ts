@@ -63,6 +63,7 @@ import {
 import { applyCredentials } from "./credentials.js";
 import { AuditTrail, resolveAudit } from "./audit.js";
 import { connectMcp } from "./mcp.js";
+import { AFTER_REFUSAL_REASON } from "./after_refusal.js";
 import { harnessBuild } from "./build.js";
 import { ShadowRecorder } from "./shadow.js";
 import { Progress, splitThinking } from "./render.js";
@@ -473,7 +474,9 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
 
   /** The approval gate: the terminal's ladder, asked through the editor. */
   const approve = async (s: AcpSession, req: ApprovalRequest): Promise<boolean> => {
-    if (s.approveRestOfSession || s.approveRestOfTurn) {
+    // As at the terminal: a call `[approval] after_refusal` escalated is asked,
+    // whatever standing approval the editor gave.
+    if ((s.approveRestOfSession || s.approveRestOfTurn) && !req.escalated) {
       s.audit.write("approval", {
         tool: req.tool,
         summary: req.summary,
@@ -490,7 +493,7 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
         sessionId: s.id,
         toolCall: {
           toolCallId,
-          title: req.summary,
+          title: req.escalated ? `${req.summary} — asked because ${req.escalated}` : req.summary,
           status: "pending",
           ...(req.preview.length > 0
             ? { content: [{ type: "content", content: { type: "text", text: req.preview.join("\n") } }] }
@@ -521,6 +524,7 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
       decision: yes ? "approved" : "declined",
       by: "human",
       interactive: true,
+      ...(req.escalated ? { escalated: AFTER_REFUSAL_REASON } : {}),
     });
     if (yes) update(s.id, { sessionUpdate: "tool_call_update", toolCallId, status: "in_progress" });
     return yes;
@@ -771,7 +775,7 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
             s.currentToolCallId = toolCallId;
             const path = typeof call.args.path === "string" ? call.args.path : undefined;
             const root = resolve(s.state.config.gnomonDir, "..");
-            const asked = call.gated && !(s.approveRestOfSession || s.approveRestOfTurn);
+            const asked = call.gated && (call.escalated === true || !(s.approveRestOfSession || s.approveRestOfTurn));
             update(s.id, {
               sessionUpdate: "tool_call",
               toolCallId,

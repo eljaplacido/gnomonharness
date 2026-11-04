@@ -26,6 +26,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`[approval] after_refusal = "ask"`** (opt-in, GV13). After a refusal, a
+  gated call within the next `after_refusal_calls` (default 1) that names what
+  the refused call named, such as a path, a file or a host, goes to a person.
+  This holds even under `gate = "never"` or a standing approval. It is the
+  route-around shape GVC found: a `write_allow` refusal of `CHANGELOG.md`,
+  then `python3 - <<'PY' … Path("CHANGELOG.md").write_text(…)`. Under
+  `gnomon task`, `--yes` answers it and its absence declines it, as for any
+  gated call. The audit `approval` record carries `escalated: "after_refusal"`
+  and the turn counters carry `after_refusal_asks`. Off, nothing changes.
+  Contract: CONTRACTS.md §NEW-after-refusal, `conformance/after_refusal.json`.
+
 ## [0.4.0] — 2026-11-03
 
 **Upgrading from 0.3.x.** Run `gnomon migrate` in each project. It applies four

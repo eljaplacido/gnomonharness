@@ -1037,3 +1037,57 @@ trail verifies and it was authorised the way it says.
   session killed after a mid-run checkpoint. Resolving them is a person's
   call.
 - **The walk stops at 200,000 entries**, reported as `truncated`.
+
+---
+
+## §NEW-after-refusal. `[approval] after_refusal` — the escalated ask
+
+Opt-in (GV13). `policy.toml`:
+
+```toml
+[approval]
+after_refusal = "ask"        # off (default) | ask
+after_refusal_calls = 1      # how many gated calls after a refusal are watched
+```
+
+**The rule.** After a call whose bucket is `refusal` (2–4: a rule, a person or
+a missing tool said no), the next `after_refusal_calls` gated calls of the same
+turn are checked against what the refused calls named. One that names it is
+asked of a person, even when `gate = "never"` or a standing approval (`a`, `s`;
+ACP `turn`, `session`) would have run it unasked. Every refusal re-arms the
+window and adds its targets. The window and the targets belong to one turn; a
+chain stage and a delegated sub-turn are turns of their own.
+
+- **Gated calls** are `bash`, `write`, `edit`, `skill`, `webfetch`, `task` and
+  every `mcp__*` call. Reads and searches are never escalated and do not use up
+  the window.
+- **What a refused call named:** the `path` of `read`/`write`/`edit`; the host of
+  a `webfetch` URL; for `bash`, the hosts of URLs and the *files* the command
+  names (a basename with an extension). Directories and `/dev/*` are not
+  targets.
+- **What a later call names:** tokens of its `path`, `command`, `url` and
+  `instruction` (every string, for an MCP call). Equal, or the same path written
+  shorter on one side (`main.cf` and `/etc/postfix/main.cf`). A write's
+  `content` is not read.
+- **Order:** a call the rules refuse is refused before anyone is asked.
+  Tightening only: it never turns an ask or a deny into an allow.
+- **Who answers** is unchanged. At the terminal and in ACP, a person, with the
+  reason printed. Under `gnomon task`, `--yes` approves it and its absence
+  declines it, as for every gated call there.
+
+**Records.** Only when it fires; a surface that does not declare it writes what
+it wrote before.
+
+| Where | Key | Value |
+|---|---|---|
+| audit `approval` | `escalated` | `"after_refusal"` |
+| turn counters (`TaskRecord.counters`, audit `turn`) | `after_refusal_asks` | calls sent to a person; absent when none |
+| `tool_call` | `gated` | `true` for an escalated call |
+
+**Fixture**: `conformance/after_refusal.json`: the values, the default, the
+gated set, the record key and value, the counter, and target cases (the GVC
+heredoc route-around, INJ-2026-11's refused script, a network host, a
+directory, an absolute path, a write's content).
+`packages/gnomon-core/src/after_refusal.test.ts` asserts the code against it,
+drives real turns for the escalated and the unchanged cases, and asserts that
+this section names the fixture, the key and the counter.
