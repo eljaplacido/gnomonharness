@@ -107,3 +107,19 @@ it is edited.
 - **C4:** `risk-scorer-replay`'s unwritable root.
 - **Other peers.**
 - **Any score claim.**
+
+## Addendum 1 (2026-11-04T10:16:30Z), after stage 1 and before any stage-2 call
+
+- **Runner bug:** `run_c2d.py` called `run_p2g.trial_of`, which assumes results live under `p2g-2026-11/`. So all 4 cells
+  raised after Harbor returned. Each log relay was still stopped (its `finally` ran), and Harbor's job files and the
+  wire logs are complete, but no `cell.json` was written and the waves booked $0.
+- **Recovery:** `apparatus/finalize_c2d.py` writes each `cell.json` from Harbor's `result.json` and the wire log's
+  per-reply provider allowance. The slot-counter deltas were never taken.
+- **Stage 1 spend (wire): $1.2729**, within the $2.50 cap. The second wave started on a reserve check that saw $0, but
+  the two waves together stayed within the cap.
+- **Outcomes:**
+  - gnomon v0.4.0: atrx 0 (cap), ontology 0 (cap).
+  - opencode V2: atrx 1, ontology 0 (finished in time).
+- **Stage 2 states (rule S):** pools of 31 and 34 calls ≥ 2,000 tokens, 6 states taken from each. All 5 variants apply to
+  all 12 states, so 180 calls are planned.
+- **Nothing about stage 2 changes.**
