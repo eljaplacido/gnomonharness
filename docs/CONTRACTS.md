@@ -115,11 +115,13 @@ and so does `gnomon loop run` (`2` on `act_failed`/`breaker_open`, `10` on
 with a contract of their own exit as it says: `gnomon check` `0`/`2`/`10`
 (§6), a quit at the trust prompt `3` (§8), `gnomon guard` `0`/`2`/`3`/`10`
 (§10), a refused `gnomon skill accept` or `reject` `3` (§11), `gnomon skill
-trial` `0`/`2`/`10` (§13), and `gnomon audit tamper` `3` while an event is
-unresolved (§14). Every other command exits `0` or `1`; `gnomon migrate
---check` exits `1` when a migration is pending. The finer codes are reserved for
-callers that need them; a consumer should switch on the bucket, which is the
-part that is stable.
+trial` `0`/`2`/`10` (§13), `gnomon audit tamper` `3` while an event is
+unresolved (§14), `gnomon doctor` `0`/`1`/`10` (§15), `gnomon setup`
+`0`/`1`/`3`/`4`/`10`/`12` (§16), and `gnomon dashboard` `0`/`1`/`4`/`10`
+(§17). Every other command exits `0` or `1`; `gnomon migrate --check` exits
+`1` when a migration is pending. The finer codes are reserved for callers that
+need them; a consumer should switch on the bucket, which is the part that is
+stable.
 
 Which of those a turn exits with is settled from its *terminal* step, not the
 worst step in it. `apparatus_failure` (`10`) is reserved for a turn that *ends*
@@ -807,21 +809,25 @@ POSIX separators, checkable with `gnomon audit verify`.
 
 | `signal` | When |
 |---|---|
-| `repeated_refusal` | One policy rule refused one role on one pattern in 3 or more distinct sessions (trails). Repeats inside one session do not count towards the 3: they are flailing, which the loop's nudge answers. The rule is the record's `rule` when it has one, otherwise read off the refusal's fixed `summary` form; a declined approval is not counted. |
+| `repeated_refusal` | One policy rule refused one role on one pattern in 3 or more distinct sessions (trails). Repeats inside one session do not count towards the 3: they are flailing, which the loop's nudge answers. The rule is the record's `rule` when it has one, otherwise read off the refusal's fixed `summary` form. Every rule a tool refuses with (§10's table, `tools` to `url`) has its forms read, and no other value is: a declined approval and a delegation outside `task_allow` name no published rule and are not counted. |
 
 `id` is `refusal-<rule>-<role>-<hash>`, with rule and role reduced to
 `[a-z0-9_-]`: they come from trail records and must not steer a file name.
 
 `pattern` is a path generalised to its directory and extension
-(`generated/*.ts`), the `bash_deny` pattern, or a command's first word.
+(`generated/*.ts`), the `bash_deny` pattern, a command's first word, the tool's
+name (`tools`, `malformed`), or a URL's host or scheme (`url`, and `network`
+on `webfetch`, which records no target).
 `gnomon skill mine --json` prints `{dir, fresh, candidates}`; `fresh` lists the
 ids that were not on disk before.
 
-**Fixture**: `conformance/skill_candidate.json` (signals, keys), asserted by
+**Fixture**: `conformance/skill_candidate.json` (signals, rules, keys), asserted by
 `packages/gnomon-core/src/skill_mine.test.ts`. There, a trail with four
 `write_allow` refusals of one path pattern yields exactly one candidate,
 pointing at those four records, and the same five refusals inside one
-session yield none.
+session yield none. Every precheck that refuses with a rule is driven there,
+and the rule read back off its summary must be the one it refused with, for
+each value in `rules`.
 
 ## 13. Skill trials — `gnomon skill trial`, schema `gnomon.trial/1`
 
@@ -1037,3 +1043,235 @@ trail verifies and it was authorised the way it says.
   session killed after a mid-run checkpoint. Resolving them is a person's
   call.
 - **The walk stops at 200,000 entries**, reported as `truncated`.
+
+## 15. `gnomon doctor --json` — schema `gnomon.doctor/1`
+
+Read-only: does this machine still run what this project says? Doctor probes
+the machine (the read-only probe of `gnomon init`), asks every role's endpoint
+for its model listing (a GET; no completion, nothing spent), and compares both
+with what `gnomon setup` recorded: the gitignored `.gnomon-setup.json` beside
+`.gnomon/`, and the `gnomon-setup:` line at the top of `roles.toml`. It writes
+nothing. Each finding that needs doing carries the command that would do it.
+
+**Exit codes:** **0** nothing needs attention; **1** something does (a role's
+model does not answer, the machine drifted from what setup saw, a local model
+will not fit, or there is no `.gnomon/`); **10** doctor could not run (a
+`--catalog` that cannot be read, or an error of its own). 0 and 1 are both
+`result`.
+
+Top-level keys: `schema`, `dir`, `catalog` (`as_of`, `label`, optional
+`stale`), `machine`, `runtimes`, `memory` (`kind`, `gib`, `ram_gib`, `label`),
+`recommended` (a tag or null), `surface` (null, or `hash`, `profile`, `routes`,
+`setup`), `facts` (`file`, `found`, optional `at`), `findings`, `next`,
+`exit`. Each finding: `kind`, `severity` (`problem` or `info`), `message`;
+optionally `fix`.
+
+| Finding `kind` | What it says |
+|---|---|
+| `surface` | no `.gnomon/`, or one that does not load |
+| `readiness` | a role's model does not answer its listing |
+| `memory` | the memory that bounds a model differs from what setup saw by more than 5% |
+| `gpu` | the GPUs differ from what setup saw |
+| `fit` | a local model needs more memory than this machine has (by the catalog) |
+| `tags` | the surface routes local roles to other tags than setup chose (an edit, not a fault) |
+| `catalog` | the catalog is past its `stale_after_days`, or differs from the one setup used |
+| `facts` | setup's facts are missing here, or a model server it saw does not answer |
+
+An error before a report exists prints `{schema, error, exit}`.
+
+**Fixture**: `conformance/doctor_report.json`. `packages/gnomon-cli/src/doctor.test.ts`
+asserts the code's `FINDING_KINDS` and `DOCTOR_EXIT` equal the fixture's lists,
+and checks real reports (drift, clear, no surface) against its key lists.
+
+## 16. `gnomon setup --json` — schema `gnomon.setup/1`
+
+`gnomon setup` scans the machine, recommends a local model from the dated
+catalog (`packages/gnomon-cli/catalog/models.toml`), pulls it only on an
+explicit yes, offers a speed check, connects an optional cloud model, suggests
+a mode, and writes `.gnomon/` only after the proposed diff is accepted.
+
+**Consent, off a terminal:** `--yes` approves the surface write and nothing
+else. A download needs `--pull TAG` naming it. A cloud call (the one-token key
+check) needs a person at the prompt and never happens off one. A run without
+`--yes` prints the proposal (`proposal.files[].diff`) and exits 4: that is how
+a dashboard shows the change before applying it.
+
+**Writing the change that was reviewed.** `proposal.digest` names a proposal:
+the sha256 of the JSON array `[before, fresh, files]`, where `before` is
+the surface hash the plan was made against (null for a new `.gnomon/`) and
+each file is `[path, action, diff]`. `--yes --expect-proposal DIGEST` writes
+only when the run plans that same change; a surface edited since, or a machine
+that now plans differently (another model installed, say), exits 3 with
+`steps` ending `{"id": "write", "status": "proposal_changed"}` and writes
+nothing. The dashboard's Accept runs exactly this.
+
+**Exit codes:** **0** written, or the surface already said this; **1** usage
+(a flag without its value, an unknown `--mode` or `--hybrid-control`, an
+`--expect-proposal` that is not 64 hex); **3** the surface changed while setup
+waited for consent, or the change is not the one `--expect-proposal` named,
+nothing written; **4**
+needs consent or a model (no `--yes`, a download not named by `--pull`, no
+local or cloud model to set up); **10** the catalog cannot be read; **12** the
+chosen model server stopped answering (the pull or the speed check).
+
+**Values published here, and in no other enumeration yet:**
+- `mode.suggested` / `mode.chosen`: `local_only`, `hybrid`, `cloud_first`,
+  written as `role_profile` `local_first`, `frontier_plan`, `all_remote` (all
+  three already in §3).
+- `hybrid_control.value`: `off`, `observe`, `ask`, `auto`. It is recorded as a
+  preference with `active: false` and changes nothing until PR #102's
+  `[roles.X.escalate]` exists; `control` enters `gnomon enumerations` with
+  that step (design step 6). The default is `observe`.
+- `steps[].id`: `probe`, `recommend`, `choose`, `pull`, `speed`, `cloud`,
+  `mode`, `write`.
+- runtime ids: `ollama`, `lmstudio`, `llamacpp`, `vllm`; option `fit`:
+  `fits`, `tight`, `over`, `unknown`.
+
+Top-level keys: `schema`, `dir`, `catalog`, `local`, `pull`, `speed`, `cloud`,
+`mode`, `hybrid_control`, `proposal` (`fresh`, `files` of `{path, action,
+diff}`, `facts_file`, `applied`, `digest`), `steps`, `next`, `exit`; optionally
+`machine`, `runtimes`, `recommendation`, `surface_hash` (`before`, `after`),
+`why`. A key value is never in it: `cloud` carries `key_env` (a name) and
+`key_held` (a boolean).
+
+**What setup writes to the surface.** Tags and routing through the same line
+edits as `gnomon endpoint add`, and three comment lines at the top of
+`roles.toml` holding only tags, the mode and the catalog's label. No hardware,
+host, user or date goes into a committed file, so two machines that choose the
+same models write the same bytes and the same hash. The hardware facts go to
+`.gnomon-setup.json`, which setup adds to `.gitignore`.
+
+**Fixture**: `conformance/setup_report.json`. `packages/gnomon-cli/src/setup_wizard.test.ts`
+asserts `HYBRID_CONTROLS`, `SETUP_EXIT` and the suggestion values equal the
+fixture's lists, checks the `proposal` keys against `proposal_keys`, and that
+`--expect-proposal` writes a reviewed change and refuses a moved one (exit 3,
+surface bytes unchanged); it checks documents from a proposal, a write and a refusal
+against `report_keys`.
+
+---
+
+## 17. `gnomon dashboard` — the local command center, schema `gnomon.dashboard/1`
+
+`gnomon dashboard` (alias `gnomon ui`) serves a page on **127.0.0.1** and
+nothing wider: there is no flag that widens the bind. Design:
+`docs/design/SETUP-AND-COMMAND-CENTER.md`, Part II (#105). It reads what gnomon
+already records. It changes something only by running one of gnomon's own
+commands from the action table below, and it writes no file, record or
+configuration of its own.
+
+**Exit codes.** `0` stopped cleanly (Ctrl-C or SIGTERM), `1` a usage error,
+`4` the port or loopback could not be had (`preconditions_unmet`), `10` the
+server could not start for any other reason (`launch_failed`).
+
+**What it reads**, all of it already recorded: the surface by
+`recomputeManifest`; trust by `evaluateTrust` and the trust store; the audit
+trails (`.gnomon-audit/`, or `[audit] dir`) and session snapshots; a
+refusal's rule from the record, or by `classifyRefusal` (§12's reading),
+never guessed; `git status -- .gnomon`; and, in a gnomon source checkout only,
+the committed property-suite results, README's test-count line and this
+document's Fixture lines. The **projects list** is the project here plus the
+roots in the trust store (§8). Nothing else is tracked to build it. Text a
+trail holds under `record = "full"` (prompts, output, tool arguments and
+results) is never served.
+
+**Sign-in.** The terminal prints `http://127.0.0.1:PORT/#k=<bootstrap>`. The
+fragment never reaches a server. The page POSTs it once to `/auth` and gets a
+bearer token. A bootstrap works once, and not after five minutes; Enter in the
+terminal prints a new one. Every `/api` call carries
+`Authorization: Bearer <token>`. There are no cookies.
+
+**Refused before anything else:**
+- a `Host` that is not `127.0.0.1:PORT`, `localhost:PORT` or `[::1]:PORT`: 403 (DNS rebinding);
+- an `Origin` that is not this server's: 403; and a `POST /api/actions/<name>`
+  with no `Origin` at all: 403 (every browser sends one on a POST);
+- on `/api` and `/auth`, a `Sec-Fetch-Site` other than `same-origin` or `none`: 403;
+- `OPTIONS`: 405. No preflight is answered, and no response carries an
+  `Access-Control-*` header;
+- an `/api` call without the token: 401;
+- an action body that is not JSON (`Content-Type`): 415.
+
+Every response carries the CSP in the fixture (no inline script or style,
+`frame-ancestors 'none'`), `X-Frame-Options: DENY`,
+`X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`.
+
+**Actions.** Each one is a gnomon command. The server spawns
+`process.execPath` plus the CLI's own entry script (no shell, no `.cmd`
+shim) with the argv below. The browser names the action and sends typed
+parameters, never an argv, a path or a shell string: a project is named by
+its id, and every `<…>` slot is filled by the server. `<dir>` is the
+project's root from the server's own list; `<digest>` is the proposal the
+person was shown; `<tag>`, `<variable>`, `<rev>` and `<endpoint>` are checked
+against a pattern that admits no leading `-` and no whitespace (an endpoint
+must be one the project declares); `<choices>` is zero or more of
+`--model`, `--cloud-endpoint` (a preset, a declared endpoint or an http(s)
+URL), `--cloud-model`, `--cloud-key-env`, `--mode` and `--hybrid-control`,
+sent as the body's `choices` object with the keys `model`, `cloud_endpoint`,
+`cloud_model`, `cloud_key_env`, `mode` and `hybrid_control`. A body key the
+action does not take is 400. An unknown action is 404 and a `planned` one 409;
+neither runs anything. Because each action is the command, it is recorded as
+the command records itself (`trust` and `check` records, setup's facts file);
+the dashboard adds no record kind.
+
+| Action | argv | State | Confirm |
+|---|---|---|---|
+| `audit.verify` | `audit verify` | `enabled`: computed in-process by `verifyTrail`, the function `gnomon audit verify` calls | `none` |
+| `doctor.scan` | `doctor --json --dir <dir>` | `enabled`; answered `available: false` when this CLI's `--help` lists no `doctor` | `none` |
+| `setup.plan` | `setup --json --dir <dir> <choices>` | `enabled`: no `--yes`, so setup writes nothing and stops at the proposal (exit 4) | `none` |
+| `setup.pull` | `setup --pull <tag> --json --dir <dir> <choices>` | `enabled`: the download, answered 202 with a job | `required` |
+| `setup.speed_check` | `setup --model <tag> --speed-check --json --dir <dir>` | `enabled`: one short prompt to the model on 127.0.0.1 | `none` |
+| `key.set` | `key set <variable> --dir <dir>`, the key on stdin | `enabled` | `required` |
+| `setup.apply` | `setup --yes --expect-proposal <digest> --json --dir <dir> <choices>` | `enabled`: writes exactly the diff confirmed, or nothing (exit 3, §16) | `required` |
+| `check.run` | `check --base <rev> --json --dir <dir>` | `enabled` | `none` |
+| `trust.grant` | `trust grant --dir <dir>` | `enabled` | `required` |
+| `trust.revoke` | `trust revoke --dir <dir>` | `enabled` | `required` |
+| `endpoint.test` | `endpoint test <endpoint> --dir <dir>` | `enabled`: one completion of one token | `required` |
+| `init` | `init --dir <dir>` | `planned` | `required` |
+| `guard.install` | `guard install <harness>` | `planned` | `required` |
+
+A state is `enabled` (runs now) or `planned` (shown, disabled, with the
+command it will run). Any action other than `audit.verify` and `doctor.scan`
+answers 409 when this CLI's `--help` does not list its command, or when
+another action is running in the same project (one at a time).
+
+**Confirmation.** An action whose confirm is `required` writes, downloads or
+may spend. Its first request runs nothing and answers **428** with
+`confirm: {nonce, expires_in_s, command, effect}`: the exact command and, in
+`effect`, what it will do, stated by the server (the download's size from the
+catalog and the free disk; the store a key goes to; the surface hash and
+grants being trusted; the endpoint, URL and model a token goes to, and
+whether it is billed). `setup.apply`'s 428 also carries the `report` of
+`setup.plan` with the same choices: the diff. Only a second request with the
+same action, project and parameters and that `confirm` value runs it; the
+nonce works once and not after five minutes, and anything else is 409. For
+`trust.grant` and `trust.revoke` the surface hash is checked again before
+running (409 if it moved); for `setup.apply` the CLI checks the digest
+itself. `setup.apply` with nothing to propose answers 422 and issues no
+nonce. `key.set` takes the key as `value` in the confirming request only (400
+before it), and hands it to the command on stdin: never in an argv, an
+environment variable, a response or anything the dashboard keeps.
+`none` runs on the first request; those actions write nothing beyond the
+command's own record (`check`).
+
+An answer from a spawned action is `{action, command, exit, timed_out,
+stderr}` plus `json` (the command's `--json` document) or `output` (its
+text), with the child's exit code unchanged. `setup.pull` answers 202 with a
+`job` (`id`, `state` `running`|`done`, `progress`: setup's last lines on
+stderr, `exit`, `result`), read at `GET /api/jobs/<id>`. Stopping the server
+stops a running action.
+
+**The `/api` JSON is the page's own.** Each answer carries
+`schema: "gnomon.dashboard/1"`, but it is not a published record: a script
+should read the CLI's `--json` output, which #105 step 7 extends. The routes
+are pinned so that a new one is a reviewed change, not so a caller can depend
+on their bodies.
+
+**Fixture**: `conformance/dashboard.json`. `packages/gnomon-cli/src/dashboard.test.ts`
+asserts the code's action table, states, confirm values, choices, routes, exit
+codes and CSP equal the fixture, that this section names every action, state,
+confirm value and choice, and puts each security rule above to a running
+server: Origin, Host, token, `Sec-Fetch-Site` and content type on every
+action's POST; a 428 that spawns nothing; a nonce bound to its action,
+project and parameters, used once, expiring; a surface that moved; the key
+only on stdin (every spawn inspected); and the exact argv of each action,
+against a stand-in CLI and, for `trust.grant`, `check.run` and `key.set`,
+the real one.

@@ -97,7 +97,7 @@ import {
 } from "gnomon-natives";
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync} from "node:fs";
 import { createInterface } from "node:readline";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runTui } from "gnomon-tui";
 import { initSurface } from "./init.js";
@@ -112,6 +112,7 @@ import {
 } from "./detect.js";
 import {
   checkReadiness,
+  ENDPOINT_PRESETS,
   SETUP_CHOICES,
   parseSetupPick,
   parseModelPick,
@@ -121,6 +122,11 @@ import {
 import { pendingMigrations, applyMigrations, MIGRATIONS } from "./migrate.js";
 import { cmdUpdate, cmdUninstall, maybeNotifyUpdate } from "./update.js";
 import { cmdCheck } from "./check.js";
+import { probeMachine, formatProbe, probeAtInit, systemHost } from "./probe.js";
+import { loadCatalog, defaultCatalogPath, type Suggestion } from "./catalog.js";
+import { runSetup, HYBRID_CONTROLS, MODE_ALIASES, SETUP_EXIT, type HybridControl } from "./setup_wizard.js";
+import { systemSetupEffects } from "./setup_host.js";
+import { runDoctor, formatDoctor, DOCTOR_EXIT } from "./doctor.js";
 
 // ---------------------------------------------------------------------------
 // Argument parsing (minimal, no deps)
@@ -710,51 +716,6 @@ async function cmdKey(args: CliArgs): Promise<void> {
 // ---------------------------------------------------------------------------
 // Endpoints
 // ---------------------------------------------------------------------------
-
-/**
- * Providers worth not making someone look up.
- *
- * A URL, a request shape and a key variable is the whole of an endpoint, and
- * all three are things you can get subtly wrong in ways that surface much
- * later as a 401 or an empty model list. Presets are not a feature; they are
- * the three fields, already correct.
- */
-const ENDPOINT_PRESETS: Record<
-  string,
-  { name: string; url: string; kind: string; api_key_env?: string; provider?: string; note: string }
-> = {
-  "opencode-go": {
-    name: "go",
-    url: "https://opencode.ai/zen/go/v1/chat/completions",
-    kind: "openai",
-    api_key_env: "OPENCODE_API_KEY",
-    provider: "opencode",
-    note: "OpenCode Go — the subscription tier at opencode.ai/go",
-  },
-  "opencode-zen": {
-    name: "zen",
-    url: "https://opencode.ai/zen/v1/chat/completions",
-    kind: "openai",
-    api_key_env: "OPENCODE_API_KEY",
-    provider: "opencode",
-    note: "OpenCode Zen — pay-as-you-go",
-  },
-  openrouter: {
-    name: "openrouter",
-    url: "https://openrouter.ai/api/v1/chat/completions",
-    kind: "openai",
-    api_key_env: "OPENROUTER_API_KEY",
-    provider: "openrouter",
-    note: "OpenRouter — many providers behind one key",
-  },
-  ollama: {
-    name: "local",
-    url: "http://127.0.0.1:11434/api/chat",
-    kind: "ollama",
-    provider: "ollama",
-    note: "Ollama on this machine — no key",
-  },
-};
 
 /** Ask a question with a default, on a terminal. */
 function ask(prompt: string, fallback = ""): Promise<string> {
@@ -1759,6 +1720,11 @@ async function cmdMigrate(args: CliArgs): Promise<void> {
 }
 
 async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promise<void> {
+  // What this machine is and which model servers it runs, probed beside init's
+  // own model detection so it costs no extra wait. Shown, never written: the
+  // surface is exactly what it was. Read-only commands and 127.0.0.1 GETs, each
+  // with a deadline (probe.ts). Not for --from or --no-verify (probeAtInit).
+  const probing = probeAtInit(args) ? probeMachine().catch(() => null) : null;
   let result;
   try {
     result = await initSurface({ dir: args.dir, force: args.force, from: args.from, noVerify: args.noVerify });
@@ -1773,6 +1739,12 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
   for (const f of result.skipped) console.log(`  · .gnomon/${f} (kept existing)`);
   if (result.gitattributes) console.log("  + .gitattributes: .gnomon/** text eol=lf (same surface hash on Windows)");
   if (result.gitignore?.length) console.log(`  + .gitignore: ${result.gitignore.map((d) => d + "/").join(" ")} (machine-local, never committed)`);
+
+  const probe = probing ? await probing : null;
+  if (probe) {
+    console.log("");
+    for (const line of formatProbe(probe)) console.log(line);
+  }
 
   // Say which models were chosen and why. A tag appearing in roles.toml with
   // no explanation looks like a decision someone made on your behalf.
@@ -1862,7 +1834,8 @@ async function cmdLaunch(args: CliArgs): Promise<void> {
   // out (`gnomon endpoint add`) was nowhere on screen. Off a terminal there
   // is nobody to ask, and a script gets exactly what it got before.
   if (process.stdin.isTTY && process.stdout.isTTY) {
-    await offerModelSetup(args, target);
+    // A fresh surface's init has just printed the probe.
+    await offerModelSetup(args, target, { showProbe: !fresh });
   } else if (fresh) {
     console.log("");
     console.log("If those model tags are not ones you have, `gnomon endpoint add` sets one up.");
@@ -1881,8 +1854,9 @@ async function cmdLaunch(args: CliArgs): Promise<void> {
  * key, Ollama still stopped) lands back on the choice rather than in a
  * session that cannot work.
  */
-async function offerModelSetup(args: CliArgs, target: string): Promise<void> {
+async function offerModelSetup(args: CliArgs, target: string, opts: { showProbe?: boolean } = {}): Promise<void> {
   const role = args.subcommand || "implement";
+  let probeShown = !opts.showProbe;
   for (;;) {
     let config;
     try {
@@ -1894,6 +1868,16 @@ async function offerModelSetup(args: CliArgs, target: string): Promise<void> {
     const readiness = await checkReadiness(config, role);
     if (readiness.ready) return;
 
+    // What the machine has, before asking what to set up: a model server
+    // already running on another port is the answer to the question below.
+    if (!probeShown) {
+      probeShown = true;
+      const probe = await probeMachine().catch(() => null);
+      if (probe) {
+        console.log("");
+        for (const line of formatProbe(probe)) console.log(line);
+      }
+    }
     console.log("");
     console.log(`No model answers for this project yet: ${readiness.why}.`);
     console.log("Set one up now?\n");
@@ -1914,9 +1898,137 @@ async function offerModelSetup(args: CliArgs, target: string): Promise<void> {
       return;
     }
     console.log("");
+    if (pick === "setup") {
+      // The wizard, on this project, as `gnomon setup` runs it: every download,
+      // write and cloud call asks first. Its write moves the hash, so the
+      // session below settles trust again as usual.
+      await cmdSetup({ ...args, dir: target, json: false, yes: false }, { fromLaunch: true });
+      continue;
+    }
     await endpointAdd(args, config, { preset: pick, quick: true });
     // Written or not, look again: a write is proved by the next check, and a
     // failure goes back to the choice instead of into a dead session.
+  }
+}
+
+/**
+ * The project a setup or doctor run is about: `--dir`, else the nearest
+ * directory up from here with a .gnomon/ (as every other command finds it),
+ * else here. Setup in a subdirectory of a project must not scaffold a second
+ * surface inside it.
+ */
+function projectRoot(args: CliArgs): string {
+  if (args.dir) return resolve(args.dir);
+  try {
+    return dirname(resolveGnomonDir());
+  } catch {
+    return process.cwd();
+  }
+}
+
+/** A usage or apparatus error, as text or as the command's JSON document. */
+function commandError(args: CliArgs, schema: string, message: string, exit: number): number {
+  if (args.json) console.log(JSON.stringify({ schema, error: message, exit }, null, 2));
+  else console.error(message);
+  return exit;
+}
+
+/**
+ * `gnomon setup` — scan this machine, plug in a local model it can run, then
+ * connect a cloud model. The flow and every consent rule are in
+ * setup_wizard.ts; this reads the flags and supplies the real machine.
+ */
+async function cmdSetup(args: CliArgs, opts: { fromLaunch?: boolean } = {}): Promise<number> {
+  const f = args.flags;
+  const schema = "gnomon.setup/1";
+  const usage = (m: string) => commandError(args, schema, m, SETUP_EXIT.usage);
+  for (const k of ["pull", "model", "mode", "cloud-endpoint", "cloud-model", "cloud-key-env", "hybrid-control", "catalog", "expect-proposal"]) {
+    if (f[k] === "true") return usage(`--${k} needs a value.`);
+  }
+  const expect = f["expect-proposal"];
+  if (expect !== undefined && !/^[0-9a-f]{64}$/.test(expect)) {
+    return usage(`--expect-proposal takes the 64-hex \`proposal.digest\` of an earlier \`gnomon setup --json\`, not "${expect}".`);
+  }
+  let mode: Suggestion | undefined;
+  if (f.mode) {
+    mode = MODE_ALIASES[f.mode.toLowerCase()];
+    if (!mode) return usage(`--mode ${f.mode}: use local, hybrid or cloud.`);
+  }
+  const control = (f["hybrid-control"] ?? "observe") as HybridControl;
+  if (!HYBRID_CONTROLS.includes(control)) return usage(`--hybrid-control ${control}: use ${HYBRID_CONTROLS.join(", ")}.`);
+  if ((f["cloud-model"] || f["cloud-key-env"]) && !f["cloud-endpoint"]) {
+    return usage("--cloud-model and --cloud-key-env go with --cloud-endpoint URL|preset|endpoint.");
+  }
+  if (f.pull && f.model) return usage("--pull and --model each choose the local model; pass one.");
+  let catalog;
+  try {
+    catalog = loadCatalog(f.catalog ?? defaultCatalogPath());
+  } catch (err) {
+    return commandError(args, schema, err instanceof Error ? err.message : String(err), SETUP_EXIT.catalog);
+  }
+  const json = Boolean(args.json);
+  const interactive = !json && f["non-interactive"] !== "true" && Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const report = await runSetup(
+    {
+      dir: projectRoot(args),
+      json,
+      yes: Boolean(args.yes),
+      ...(f.pull ? { pull: f.pull } : {}),
+      ...(f.model ? { model: f.model } : {}),
+      speedCheck: f["speed-check"] === "true",
+      ...(mode ? { mode } : {}),
+      ...(f["cloud-endpoint"] ? { cloudEndpoint: f["cloud-endpoint"] } : {}),
+      ...(f["cloud-model"] ? { cloudModel: f["cloud-model"] } : {}),
+      ...(f["cloud-key-env"] ? { cloudKeyEnv: f["cloud-key-env"] } : {}),
+      ...(expect ? { expectProposal: expect } : {}),
+      hybridControl: control,
+      ...(opts.fromLaunch ? { fromLaunch: true } : {}),
+    },
+    {
+      host: systemHost(),
+      io: {
+        interactive,
+        // Under --json, stdout is the document; the narrative goes to stderr.
+        say: (l = "") => (json ? process.stderr.write(l + "\n") : console.log(l)),
+        ask: (q, fallback = "") => ask(q, fallback),
+        askSecret: (q) => readSecret(q),
+      },
+      catalog,
+      now: () => new Date(),
+      ...systemSetupEffects(),
+      commands: CLI_COMMANDS.map((c) => c.name),
+    }
+  );
+  if (json) console.log(JSON.stringify(report, null, 2));
+  return report.exit;
+}
+
+/**
+ * `gnomon doctor` — read-only: the machine, every role's endpoint, and drift
+ * from what setup recorded. Never writes; says what would fix each problem.
+ */
+async function cmdDoctor(args: CliArgs): Promise<number> {
+  const schema = "gnomon.doctor/1";
+  if (args.flags.catalog === "true") return commandError(args, schema, "--catalog needs a file.", DOCTOR_EXIT.couldNotRun);
+  try {
+    const catalog = loadCatalog(args.flags.catalog ?? defaultCatalogPath());
+    const { report, probe } = await runDoctor(
+      { dir: projectRoot(args) },
+      {
+        host: systemHost(),
+        catalog,
+        now: () => new Date(),
+        readiness: (config, role) => checkReadiness(config, role),
+        applyKeys: (config) => {
+          applyCredentials(undefined, declaredKeyVars(config));
+        },
+      }
+    );
+    if (args.json) console.log(JSON.stringify(report, null, 2));
+    else for (const l of formatDoctor(report, probe)) console.log(l);
+    return report.exit;
+  } catch (err) {
+    return commandError(args, schema, `doctor could not run: ${err instanceof Error ? err.message : String(err)}`, DOCTOR_EXIT.couldNotRun);
   }
 }
 
@@ -2124,6 +2236,8 @@ async function cmdSessions(args: CliArgs): Promise<void> {
  */
 export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> = [
   { name: "launch" },
+  { name: "setup" },
+  { name: "doctor" },
   { name: "init" },
   { name: "surface" },
   { name: "enumerations", aliases: ["enums"] },
@@ -2145,6 +2259,7 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "check" },
   { name: "trust" },
   { name: "guard" },
+  { name: "dashboard", aliases: ["ui"] },
 ];
 
 function showHelp(): void {
@@ -2168,7 +2283,28 @@ function showHelp(): void {
 Commands:
   launch [--dir <path>] [--from <path>]
     Start working here. Creates .gnomon/ if it is missing, then opens the
-    interactive loop. This is the one command to remember.
+    interactive loop. This is the one command to remember. When no model
+    answers, it offers the guided setup first.
+
+  setup [--json] [--yes] [--pull TAG] [--model TAG] [--speed-check]
+        [--mode local|hybrid|cloud] [--cloud-endpoint URL|preset|name]
+        [--cloud-model NAME] [--cloud-key-env VAR] [--catalog FILE]
+        [--expect-proposal DIGEST]
+    Scan this machine, plug in a local model it can run, then connect a
+    cloud model. Recommends from a dated catalog and says why, pulls only on
+    a yes, offers a short speed check, suggests local only, hybrid or cloud
+    first, and writes .gnomon/ only after you accept the diff. Off a
+    terminal: --yes approves the write and nothing else; a download needs
+    --pull TAG; nothing is spent. --expect-proposal writes only the change
+    whose proposal.digest an earlier --json run printed. Exit 0 written,
+    3 the surface or the change moved, 4 needs consent or a model, 12 the
+    model server stopped answering.
+
+  doctor [--json] [--catalog FILE]
+    Read-only: this machine, whether every role's model answers, and what
+    changed since setup (memory, GPUs, model servers, catalog). Says what
+    would fix each problem and never changes anything. Exit 0 nothing to do,
+    1 something needs attention, 10 could not run.
 
   init [--dir <path>] [--from <path>] [--force] [--no-verify]
     Write a .gnomon/ surface into a project. --from copies an existing
@@ -2303,6 +2439,15 @@ Commands:
     Print the hook (Claude Code PreToolUse, an opencode 2.2 plugin, Cursor
     hooks.json), or with --write add it to this project's own config.
 
+  dashboard [--port <n>] [--no-open] [--dir <path>]
+    A command center in the browser: projects, sessions as a timeline, what
+    the policy refused, audit-chain verification, contracts and token
+    measurements, read from what gnomon already records; and setup, check,
+    trust and endpoint test as buttons that run these same commands. A
+    change asks you to confirm what it will do first. Serves 127.0.0.1 only;
+    the printed link signs one tab in once. Ctrl-C stops it. Exit 0 stopped,
+    4 port unavailable, 10 failed to start. Alias: ui.
+
   prompt [--continue | --resume <id>] [--trust]
     Interactive agent loop. --continue resumes the most recent session,
     --resume <id> a specific one. Conversations are saved after every turn.
@@ -2394,7 +2539,7 @@ async function main(): Promise<void> {
   // them when stdout is not a terminal. Not for commands that run tools: the
   // variable would be inherited by the project's own commands and change what
   // they print, which is not this flag's business. FORCE_COLOR opts back in.
-  const reporting = ["endpoint", "key", "audit", "sessions", "skill", "surface", "init", "migrate", "enumerations", "trust"];
+  const reporting = ["endpoint", "key", "audit", "sessions", "skill", "surface", "init", "migrate", "enumerations", "trust", "doctor"];
   if (reporting.includes(args.command) && !process.stdout.isTTY && !process.env.FORCE_COLOR) {
     process.env.NO_COLOR = "1";
   }
@@ -2430,6 +2575,16 @@ async function main(): Promise<void> {
     case "init":
       await cmdInit(args);
       break;
+    case "setup": {
+      const code = await cmdSetup(args);
+      if (code !== 0) process.exit(code);
+      break;
+    }
+    case "doctor": {
+      const code = await cmdDoctor(args);
+      if (code !== 0) process.exit(code);
+      break;
+    }
     case "migrate":
       await cmdMigrate(args);
       break;
@@ -2496,6 +2651,14 @@ async function main(): Promise<void> {
       const { cmdGuard } = await import("./guard.js");
       const at = process.argv.indexOf("guard", 2);
       process.exitCode = await cmdGuard(process.argv.slice(at + 1));
+      return;
+    }
+    case "dashboard":
+    case "ui": {
+      // Lazy, like guard: nothing of the dashboard loads for any other command.
+      const { cmdDashboard } = await import("./dashboard.js");
+      const at = process.argv.indexOf(args.command, 2);
+      process.exitCode = await cmdDashboard(process.argv.slice(at + 1));
       return;
     }
     default:

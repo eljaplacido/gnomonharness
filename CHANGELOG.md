@@ -26,6 +26,141 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`gnomon setup`: scan your machine, plug in a local model it can run, then
+  connect a cloud model.** A first run needed you to know your VRAM, a model
+  tag that fits it, and the endpoint syntax for a cloud key. Setup does it in
+  one guided pass, and `gnomon launch` offers it first whenever no model
+  answers. Steps 2 to 5 of
+  [docs/design/SETUP-AND-COMMAND-CENTER.md](docs/design/SETUP-AND-COMMAND-CENTER.md).
+  - **Recommendation from a dated catalog**
+    (`packages/gnomon-cli/catalog/models.toml`, 2026-11). It is harness data,
+    updated with releases only, never fetched; `--catalog FILE` reads
+    another. `qwen3.6:35b` (Qwen3.6-35B-A3B, Q4) is the default from 24 GB
+    of GPU memory or 64 GB of unified memory, with gnomon's own measurements:
+    24/32 tasks alone and ~375 tok/s on an RTX 5090 (R1H), 18/32 and ~66
+    tok/s on an NVIDIA GB10 (R1). `gpt-oss:20b`, `qwen3:14b`, `qwen3:8b` and
+    `qwen3:4b` cover smaller machines, each printed as "not measured by
+    gnomon". An installed model is offered without a download. A catalog
+    older than 180 days says newer models likely exist.
+  - **Nothing without a yes.** A pull asks first and shows the size and free
+    disk. It goes through Ollama's own `POST /api/pull`; llama.cpp, LM Studio
+    and vLLM users get the command instead. The ~10 s speed check asks first.
+    A cloud key is read hidden into the store `gnomon key set` uses, and
+    checking it with one token is its own yes. The surface change is shown as
+    a diff and written only when accepted. Off a terminal, `--yes` approves
+    the write and nothing else: `--pull TAG` must name a download, and
+    nothing is spent.
+  - **A suggested mode.** With a cloud model, **hybrid**: the cloud plans
+    (`coordinator`, `plan`) and this machine builds, as measured in R1H:
+    87% vs 84% cloud-only at 26% lower cost per solved task on an RTX 5090.
+    The speed check's thresholds for local only, hybrid and cloud first are
+    provisional and labelled so. Modes are written as the existing
+    `role_profile` values `local_first`, `frontier_plan` and `all_remote`.
+  - **Hybrid control** (`off`, `observe`, `ask`, `auto`; default `observe`)
+    is recorded as a preference only. It takes effect when escalation
+    (`[roles.X.escalate]`, PR #102) is merged, and setup says so.
+  - **Rule 1 kept:** detection runs at setup only. The surface gets concrete
+    tags and three comment lines at the top of `roles.toml` (tags, mode,
+    catalog label; no hardware, host or date), so the same choices hash the
+    same on every machine. The hardware facts go to `.gnomon-setup.json`,
+    which setup gitignores. Trust is never granted by setup: a surface that
+    now sends a key somewhere new is shown for trust at the next launch.
+  - `--json` (schema `gnomon.setup/1`, CONTRACTS §16, fixture
+    `conformance/setup_report.json`) for the dashboard's Setup screen. A run
+    without `--yes` prints the proposal and its diff and exits 4. Exit 0
+    written, 1 usage, 3 the surface moved under it, 4 needs consent or a
+    model, 10 catalog unreadable, 12 the model server stopped answering.
+- **`gnomon doctor`: read-only, says what needs doing.** It shows the machine,
+  whether every role's model answers (a listing GET, nothing spent), and drift
+  since setup: memory, GPUs, model servers, a local model that will not fit
+  here, a stale catalog. Each problem comes with the command that fixes it.
+  It never writes. `--json` is schema `gnomon.doctor/1` (CONTRACTS §15,
+  fixture `conformance/doctor_report.json`). Exit 0 nothing to do, 1 something
+  needs attention, 10 could not run.
+- The probe now also reports each Ollama model's size on disk, which sizes an
+  installed model the catalog does not know.
+- **`gnomon setup --expect-proposal DIGEST`**: with `--yes`, writes only the
+  change whose `proposal.digest` an earlier `--json` run printed; a surface
+  edited since, or a machine that now plans differently, exits 3 and writes
+  nothing. The dashboard's Accept uses it. CONTRACTS §16,
+  `conformance/setup_report.json` (`proposal_keys`).
+- **`gnomon init` says what the machine is, and which local model servers it
+  runs.** A local-first setup needed you to know your VRAM and which port LM
+  Studio uses before gnomon could help. Init (and `launch`'s "No model answers"
+  picker on an existing surface) now prints OS, architecture, CPU cores, RAM,
+  each GPU with its memory, and which of Ollama (:11434), LM Studio (:1234),
+  llama.cpp (:8080) and vLLM (:8000) answer on 127.0.0.1. Step 1 of
+  [docs/design/SETUP-AND-COMMAND-CENTER.md](docs/design/SETUP-AND-COMMAND-CENTER.md).
+  - Read-only: `nvidia-smi`, `rocm-smi` or sysfs, `sysctl` on macOS, and
+    `Win32_VideoController` on Windows without nvidia-smi, each with a deadline
+    and no shell; GETs to model listings on 127.0.0.1 only. A missing tool is a
+    shorter answer, never an error.
+  - NVIDIA GB10 (DGX Spark) reports its memory as `[N/A]`; that is shown as
+    unified memory shared with system RAM, not as a GPU with none.
+  - Facts only. It writes nothing to the surface, picks no model, and is
+    skipped under `--from` and `--no-verify` (benchmark harnesses), so their
+    scaffolds and the ports they test see nothing new.
+- **`gnomon dashboard` (alias `gnomon ui`): a command center in the
+  browser.** Steps 1 and 2 of #105 Part II. Six screens over what gnomon already
+  records: Projects (surface hash, trust, sessions, turns by bucket, tokens
+  local against cloud, refusals, check verdicts), Setup (`gnomon setup` step
+  by step, below), Session (an audit trail as a timeline with a lane per role and a
+  marker per refusal or approval), Governance (each published rule with what it
+  refused, check verdicts, trust, audit-chain verification), Contracts (the
+  project's `[verify]`; in a checkout, the committed property-suite results,
+  the test counts and each contract clause with its fixture) and Measurements
+  (outcomes by locality, token flow by day, tokens by model; unmetered is never
+  0 and spend is unknown, never $0).
+  - **127.0.0.1 only**, with no flag to widen it. A one-use sign-in in the URL
+    fragment, exchanged for a bearer token; `Host`, `Origin` and
+    `Sec-Fetch-Site` checks; no cookies, no CORS headers, a CSP with no inline
+    script or style. An action's POST must also carry this page's `Origin`.
+    Contract: CONTRACTS §17, `conformance/dashboard.json`.
+  - **Every button is a gnomon command.** The server runs `node <cli entry>`
+    with an argv from a fixed table and typed, validated values (no leading
+    `-`, no whitespace, a declared endpoint, a project by id); the page never
+    sends an argv. Each command records itself as it does from a terminal,
+    and the dashboard adds no record kind. Enabled: `audit verify`,
+    `doctor --json`, `setup` (plan, pull, speed check, apply), `key set`,
+    `check --base REV --json`, `trust grant` / `revoke`, `endpoint test`.
+    Still shown disabled: `init`, `guard install`. Not in the UI: skill
+    accept and reject (§11's provenance rules stay CLI-only for now).
+  - **Anything that writes, downloads or may spend asks first.** The first
+    request runs nothing and answers 428 with what the server will do (the
+    download's size and free disk; the key store; the surface hash and its
+    grants; the endpoint, URL and whether a token is billed; for setup, the
+    diff). Only the Confirm in that dialog sends the one-use, five-minute
+    nonce, bound to the action, project and values, that runs it. Trust
+    re-checks the surface hash before running.
+  - **Setup screen, wired:** scan (`doctor --json`), the recommendation and
+    its options, a download that is its own confirmed click showing the size
+    (a job with setup's own progress lines), a speed check, a cloud preset or
+    URL, the key typed into the confirmation and handed to `gnomon key set`
+    on stdin (never stored by the dashboard, never on a command line), the
+    mode, and the diff, written only on **Accept** as `setup --yes
+    --expect-proposal <digest>`.
+  - **Governance:** Run check with the verdict and each check's findings;
+    Grant and Revoke after a confirmation listing exactly what is trusted.
+  - **Lean.** `node:http`, hand-written assets (~100 KB, no framework, no build
+    step, no remote fonts), imported only by its own command. The wordmark is
+    a four-letter subset of Cinzel (SIL OFL 1.1, shipped beside it).
+
+### Fixed
+
+- **Refusals under `tools`, `malformed` and `url` (and webfetch's `network`)
+  are read as their rule.** The shared reader `classifyRefusal` knew seven of
+  the eleven policy rules' summary forms, so a tool the role was not given,
+  arguments that could not be read, a refused URL and a broken `bash_deny`
+  pattern showed as "no rule named" in the dashboard. A test now drives every
+  precheck that refuses with a rule and requires the reader to return that
+  rule. **`gnomon skill mine` output changes:** those refusals can now become
+  `repeated_refusal` candidates (3+ sessions), with the tool's name, or the
+  URL's host or scheme, as the pattern; existing candidates are unchanged,
+  and declined approvals and delegations outside `task_allow` are still not
+  counted. CONTRACTS §12, `conformance/skill_candidate.json` (`rules`).
+
 ## [0.4.0] — 2026-11-03
 
 **Upgrading from 0.3.x.** Run `gnomon migrate` in each project. It applies four

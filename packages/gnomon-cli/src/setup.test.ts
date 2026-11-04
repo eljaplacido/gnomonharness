@@ -125,8 +125,11 @@ describe("checkReadiness — does launch's role have a model that answers?", () 
 
 describe("the picker's answers", () => {
   it("takes a number, a name, a prefix, or Enter for the first choice", () => {
-    expect(parseSetupPick("")).toBe("ollama");
-    expect(parseSetupPick("2")).toBe("openrouter");
+    expect(parseSetupPick("")).toBe("setup");
+    expect(parseSetupPick("1")).toBe("setup");
+    expect(parseSetupPick("2")).toBe("ollama");
+    expect(parseSetupPick("3")).toBe("openrouter");
+    expect(parseSetupPick("guided")).toBe("setup");
     expect(parseSetupPick("OpenRouter")).toBe("openrouter");
     expect(parseSetupPick("open")).toBe("openrouter");
     expect(parseSetupPick("opencode-zen")).toBe("opencode-zen");
@@ -139,8 +142,11 @@ describe("the picker's answers", () => {
     expect(parseSetupPick("banana")).toBeUndefined();
   });
 
-  it("offers local first and always offers a way out", () => {
-    expect(SETUP_CHOICES[0]!.preset).toBe("ollama");
+  it("offers the guided setup first, then local, and always a way out", () => {
+    // Enter runs `gnomon setup`: it looks at the machine, so it needs no
+    // knowledge of models, ports or keys from the person pressing it.
+    expect(SETUP_CHOICES[0]!.preset).toBe("setup");
+    expect(SETUP_CHOICES[1]!.preset).toBe("ollama");
     expect(SETUP_CHOICES.at(-1)!.preset).toBe("skip");
   });
 

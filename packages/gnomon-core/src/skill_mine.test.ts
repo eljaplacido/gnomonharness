@@ -16,6 +16,17 @@ import {
   pathPattern,
   CANDIDATE_SIGNALS,
 } from "./skill_mine.js";
+import {
+  readPrecheck,
+  bashPrecheck,
+  webfetchPrecheck,
+  writePrecheck,
+  executeTool,
+  ARGS_MALFORMED,
+  POLICY_RULES,
+  type Precheck,
+  type ToolContext,
+} from "./tools.js";
 
 let root: string;
 const cfg = (): any => ({ gnomonDir: join(root, ".gnomon"), config: { audit: {} } });
@@ -180,6 +191,92 @@ describe("gnomon skill mine", () => {
     expect(classifyRefusal({ kind: "tool_call", bucket: "refusal", tool: "write", summary: "write a — denied" })).toBeNull();
   });
 
+  it("reads back the rule of every precheck that refuses with one, for every published policy rule", async () => {
+    // Each case is produced by the real precheck, so a summary that changes
+    // form, or a rule added to POLICY_RULES with no form here, fails this test
+    // instead of turning up as "no rule named" in a dashboard.
+    const base: ToolContext = {
+      root,
+      sandbox: "confined",
+      gate: "never",
+      approve: async () => true,
+      timeoutMs: 10_000,
+      maxOutputBytes: 32_000,
+    };
+    const ctx = (over: Partial<ToolContext> = {}): ToolContext => ({ ...base, ...over });
+    type Case = { tool: string; target: string; pre: { rule?: string; summary: string } | null };
+    const refusalOf = (r: { refusal: Precheck } | object) => ("refusal" in r ? (r.refusal as Precheck) : null);
+    const cases: Case[] = [
+      { tool: "read", target: "", pre: refusalOf(readPrecheck({}, ctx())) },
+      { tool: "read", target: "/etc/passwd", pre: refusalOf(readPrecheck({ path: "/etc/passwd" }, ctx())) },
+      { tool: "bash", target: "5", pre: bashPrecheck({ command: 5 }, ctx()) },
+      { tool: "bash", target: "git push --force", pre: bashPrecheck({ command: "git push --force" }, ctx({ bashDeny: ["git push"] })) },
+      { tool: "bash", target: "ls", pre: bashPrecheck({ command: "ls" }, ctx({ bashDeny: ["("] })) },
+      { tool: "bash", target: "rm -rf x", pre: bashPrecheck({ command: "rm -rf x" }, ctx({ bashAllow: ["ls"] })) },
+      { tool: "bash", target: "sudo ls", pre: bashPrecheck({ command: "sudo ls" }, ctx()) },
+      { tool: "bash", target: "curl https://example.com", pre: bashPrecheck({ command: "curl https://example.com" }, ctx({ network: false })) },
+      { tool: "bash", target: "echo x > gen/a.ts", pre: bashPrecheck({ command: "echo x > gen/a.ts" }, ctx({ writeAllow: ["src/**"] })) },
+      { tool: "bash", target: "echo x > .gnomon-audit/a.jsonl", pre: bashPrecheck({ command: "echo x > .gnomon-audit/a.jsonl" }, ctx()) },
+      { tool: "webfetch", target: "", pre: refusalOf(await webfetchPrecheck({ url: "https://example.com/x" }, ctx({ network: false }))) },
+      { tool: "webfetch", target: "", pre: refusalOf(await webfetchPrecheck({ url: "file:///etc/passwd" }, ctx())) },
+      { tool: "webfetch", target: "", pre: refusalOf(await webfetchPrecheck({ url: "http://127.0.0.1:9/" }, ctx())) },
+      { tool: "write", target: "a.ts", pre: refusalOf(writePrecheck("write", { path: "a.ts" }, ctx())) },
+      { tool: "write", target: "/etc/x", pre: refusalOf(writePrecheck("write", { path: "/etc/x", content: "" }, ctx())) },
+      { tool: "edit", target: ".gnomon/roles.toml", pre: refusalOf(writePrecheck("edit", { path: ".gnomon/roles.toml" }, ctx())) },
+      { tool: "write", target: "gen/a.ts", pre: refusalOf(writePrecheck("write", { path: "gen/a.ts", content: "" }, ctx({ writeAllow: ["src/**"] }))) },
+      { tool: "write", target: ".gnomon-audit/a.jsonl", pre: refusalOf(writePrecheck("write", { path: ".gnomon-audit/a.jsonl", content: "" }, ctx())) },
+    ];
+    // Two refusals come from executeTool itself rather than a precheck: a tool
+    // the role was not given, and arguments that are not one JSON object.
+    const notGiven = await executeTool("webfetch", { url: "https://example.com" }, ctx(), new Set(["read"]));
+    cases.push({ tool: "webfetch", target: "", pre: { rule: "tools", summary: notGiven.summary } });
+    const garbled = await executeTool("read", { [ARGS_MALFORMED]: { raw: "{'path': 'a'}", error: "Unexpected token" } }, ctx(), new Set(["read"]));
+    cases.push({ tool: "read", target: "", pre: { rule: "malformed", summary: garbled.summary } });
+
+    const seen = new Set<string>();
+    for (const c of cases) {
+      expect(c.pre?.rule, `${c.tool} ${c.target}: the precheck did not refuse with a rule`).toBeTruthy();
+      const read = classifyRefusal({ kind: "tool_call", bucket: "refusal", tool: c.tool, target: c.target, summary: c.pre!.summary });
+      expect(read?.rule, c.pre!.summary).toBe(c.pre!.rule);
+      expect(read?.pattern, c.pre!.summary).not.toBe("");
+      seen.add(c.pre!.rule!);
+    }
+    expect([...seen].sort()).toEqual([...POLICY_RULES].sort());
+
+    // The patterns a candidate is counted by, for the forms added in 2026-11.
+    const at = (summary: string, tool = "webfetch") => classifyRefusal({ kind: "tool_call", bucket: "refusal", tool, target: "", summary });
+    expect(at("webfetch — not available to this role")).toEqual({ rule: "tools", pattern: "webfetch" });
+    expect(at("read — malformed arguments (Unexpected token)", "read")).toEqual({ rule: "malformed", pattern: "read" });
+    expect(at("webfetch https://example.com/x — refused (network disabled)")).toEqual({ rule: "network", pattern: "example.com" });
+    expect(at("webfetch — file: refused")).toEqual({ rule: "url", pattern: "file:" });
+    expect(at("webfetch 10.0.0.1 — refused (private address)")).toEqual({ rule: "url", pattern: "10.0.0.1" });
+  });
+
+  it("still reads no rule for what no published rule names: a declined approval, a delegation outside task_allow", () => {
+    const at = (tool: string, summary: string) => classifyRefusal({ kind: "tool_call", bucket: "refusal", tool, target: "", summary });
+    for (const [tool, summary] of [
+      ["bash", "bash — denied"],
+      ["write", "write a.ts — surface edit denied"],
+      ["task", "task implement — denied"],
+      ["task", "task — refused (implement not in task_allow)"],
+      ["task", "task — refused (already a sub-turn)"],
+      ["write", "write a.ts — refused (changed under the prompt)"],
+    ]) {
+      expect(at(tool!, summary!), summary).toBeNull();
+    }
+  });
+
+  it("mines the newly read rules like any other: a tool refused in three sessions is one candidate", () => {
+    for (const s of ["s1", "s2", "s3"]) {
+      new AuditTrail(settings(), s).write("tool_call", {
+        role: "plan", tool: "write", target: "a.ts", gated: false, code: 4, bucket: "refusal",
+        summary: "write — not available to this role",
+      });
+    }
+    const found = mineCandidates(cfg());
+    expect(found.map((c) => [c.rule, c.role, c.pattern, c.sessions])).toEqual([["tools", "plan", "write", 3]]);
+  });
+
   it("path patterns keep the directory and the extension", () => {
     expect(pathPattern("generated/a.ts")).toBe("generated/*.ts");
     expect(pathPattern("./x/y/z.test.ts")).toBe("x/y/*.ts");
@@ -192,6 +289,9 @@ describe("gnomon skill mine", () => {
       readFileSync(join(process.cwd(), "..", "..", "conformance", "skill_candidate.json"), "utf-8")
     );
     expect([...CANDIDATE_SIGNALS]).toEqual(fixture.signals);
+    // The rules a candidate can carry are exactly the policy rules, each read
+    // back by the parity test above.
+    expect([...POLICY_RULES]).toEqual(fixture.rules);
     for (const [i, p] of ["g/a.ts", "g/b.ts", "g/c.ts"].entries()) refusedWrite(new AuditTrail(settings(), `s${i}`), p);
     const [c] = mineCandidates(cfg());
     expect(Object.keys(c).sort()).toEqual([...fixture.keys].sort());

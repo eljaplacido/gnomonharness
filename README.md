@@ -23,6 +23,32 @@ irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/i
 Update with `gnomon update`; `gnomon uninstall` prints how to remove it.
 [Install](#install) has what the installer does and the manual route.
 
+## Get started in 3 steps
+
+1. **Scan your machine and plug in a local model it can run.** In your
+   project, run `gnomon setup`. It shows your OS, RAM and GPU and which model
+   servers are running, then recommends a model from a dated catalog and says
+   why. With 24 GB of GPU memory or 64 GB of unified memory that is
+   `qwen3.6:35b`, which solved 24 of 32 tasks alone on an RTX 5090 in
+   gnomon's own runs. Smaller machines get a smaller model, marked "not
+   measured by gnomon". It downloads only if you say yes, and offers a ~10 s
+   speed check.
+2. **Connect a cloud model (optional).** Pick OpenCode Go, OpenRouter,
+   OpenCode Zen or any OpenAI-compatible URL. The key is read hidden and kept
+   outside the repository, as `gnomon key set` does. With one, setup suggests
+   hybrid, where the cloud plans and your machine builds. On an RTX 5090 that
+   solved 87% vs 84% cloud-only at 26% lower cost per solved task.
+3. **Accept the diff, then `gnomon launch`.** Setup shows its change to
+   `.gnomon/` as a diff and writes it only on your yes. `gnomon doctor`
+   re-checks the machine any time and never changes anything.
+
+Scripted, with nothing asked: `gnomon setup --json` prints the proposal and
+exits 4; add `--yes` to write it, and `--expect-proposal <proposal.digest>` to
+write only that reviewed change. `--yes` never downloads or spends:
+`--pull qwen3.6:35b` names a download, and `--cloud-endpoint opencode-go
+--cloud-model deepseek-v4.1-flash` names a cloud model. In a browser,
+`gnomon dashboard` walks the same steps as buttons.
+
 > **Start here: [the gnomon guide](docs/GUIDE.md).** What gnomon is in one page,
 > a [five-minute quick start](docs/GUIDE.md#4-quick-start-five-minutes-to-a-first-useful-result)
 > on a local or a cloud model, copy-paste [model recipes](docs/GUIDE.md#5-model-setup-recipes)
@@ -61,8 +87,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 1832 TypeScript tests (1533 core, 274 cli, 18
-> natives, 7 tui) and 61 Rust tests — **1893 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2019 TypeScript tests (1536 core, 458 cli, 18
+> natives, 7 tui) and 61 Rust tests — **2080 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -80,6 +106,7 @@ does not. Behaviour is readable because something is holding still.
 
 ## Contents
 
+- [Get started in 3 steps](#get-started-in-3-steps)
 - [The gnomon guide](docs/GUIDE.md): quick start, model recipes, FAQ
 - [Why "gnomon"](#why-gnomon)
 - [Why this exists](#why-this-exists)
@@ -99,6 +126,7 @@ does not. Behaviour is readable because something is holding still.
 - [Governance and Audit](#governance-and-audit)
 - [Governing other harnesses](#governing-other-harnesses)
 - [In your editor — `gnomon acp`](#in-your-editor--gnomon-acp)
+- [The command center — `gnomon dashboard`](#the-command-center--gnomon-dashboard)
 - [CLI Reference](#cli-reference)
 - [Interactive Commands](#interactive-commands)
 - [Adopting gnomon in an Existing Project](#adopting-gnomon-in-an-existing-project)
@@ -514,7 +542,8 @@ Tools (implement): bash, compute, edit, glob, grep, note, read, todo, write
 
 Two things to do straight after:
 
-1. **Check `.gnomon/roles.toml`.** `init` asks your model host what it has and
+1. **Check `.gnomon/roles.toml`** (or run `gnomon setup`, which picks tags for
+   this machine and shows them as a diff before writing). `init` asks your model host what it has and
    writes real tags — the largest model under ~70B for the reasoning roles, and
    the smallest one still big enough to summarise for `smol`. It records what
    it found and why, in the file. If nothing was reachable it falls back to
@@ -2247,11 +2276,72 @@ Slash commands other than a role prefix are terminal-only.
 
 ---
 
+## The command center — `gnomon dashboard`
+
+```bash
+gnomon dashboard              # alias: gnomon ui
+gnomon dashboard --no-open --port 4890 --dir ~/code/myproject
+```
+
+A page in your browser over what gnomon already records, for people who would
+rather not read JSONL in a terminal, with gnomon's own commands as buttons.
+Six screens, ported from the approved design (#105, Part II):
+
+- **Projects** — each project's surface hash, trust state, sessions, turns by
+  bucket, tokens local against cloud, policy refusals and check verdicts. The
+  list is this project plus the roots in this machine's trust store; nothing
+  else is tracked to build it.
+- **Setup** — `gnomon setup`, one step per screen: scan (`gnomon doctor
+  --json`), the recommended local model, a download you confirm with its size,
+  a speed check, an optional cloud model whose key goes to `gnomon key set` on
+  stdin, the mode, and the change to `.gnomon/` as a diff, written only when
+  you press **Accept** (`setup --yes --expect-proposal <digest>`, so setup
+  itself refuses a change that moved since you read it). Below it, what the
+  surface routes each role to today, and **Test** per endpoint
+  (`gnomon endpoint test`).
+- **Session** — one audit trail as a flight recorder: a lane per role (local
+  or cloud), blocks of tool calls, a marker for every refusal and approval,
+  and how the session ended. Metadata only: recorded prompt and output text
+  is never served.
+- **Governance** — each published rule (CONTRACTS §10) with what it refused
+  and where the surface declares it; **Run check** (`gnomon check --base REV
+  --json`, with the verdict and each check's findings) and the verdicts
+  recorded so far; trust, with **Grant** and **Revoke** after a confirmation
+  that lists exactly what is trusted; and the audit chain, which **Verify
+  chain** checks with the same function `gnomon audit verify` calls.
+- **Contracts** — this project's `[verify]` gate; in a gnomon checkout also
+  the committed property-suite results, the test counts and every contract
+  clause with its fixture.
+- **Measurements** — your own turn records: how turns ended by locality,
+  token flow by day, tokens by model. A turn whose backend reported no usage
+  is *unmetered*, never 0, and spend is *unknown*: no record carries a price.
+
+It serves **127.0.0.1 only**, and there is no flag that widens that. The
+terminal prints a link with a one-use sign-in in the URL fragment; Enter
+prints a new one. A wrong `Host`, a foreign `Origin` or a cross-site fetch is
+refused, there are no cookies and no CORS headers, and the CSP allows no
+inline script. On a headless box, forward the same port:
+`ssh -L 4890:127.0.0.1:4890 host`, then open the link locally.
+
+**Every button is a gnomon command**, run from a fixed table: the page names
+the action and sends typed values, never an argv, and the command records
+itself as it would from a terminal (a `trust` record, a `check` record). One
+that writes, downloads or may spend (a pull, a key, the setup write, trust,
+an endpoint test) runs nothing on the first click: the server says what it
+will do, and only your **Confirm** runs it, once. A key is never stored by
+the dashboard or put on a command line. Skill accept and reject are not here
+yet. Exit 0 stopped, 1 usage, 4 port unavailable, 10 failed to start.
+Contract: [CONTRACTS §17](docs/CONTRACTS.md).
+
+---
+
 ## CLI Reference
 
 | Command | Description |
 |---|---|
 | `gnomon launch` | Create `.gnomon/` if missing, then open the loop. **The one to remember.** |
+| `gnomon setup [--json] [--yes] [--pull <tag>] [--model <tag>] [--speed-check] [--mode local\|hybrid\|cloud] [--cloud-endpoint <url\|preset\|name> --cloud-model <name>] [--catalog <file>] [--expect-proposal <digest>]` | Scan this machine, recommend a local model it can run from a dated catalog, pull it only on a yes, speed-check it, connect an optional cloud model, suggest local only, hybrid or cloud first, and write `.gnomon/` only after you accept the diff. `--yes` approves the write, never a download (`--pull` names one) or spending; `--expect-proposal` writes only the change a `--json` run printed as `proposal.digest`. Exit 0 written, 3 the surface or the change moved, 4 needs consent or a model, 12 the model server stopped answering. See [Get started in 3 steps](#get-started-in-3-steps). |
+| `gnomon doctor [--json] [--catalog <file>]` | Read-only: this machine, whether every role's model answers, and what changed since setup. Says what would fix each problem; never changes anything. Exit 0 nothing to do, 1 something needs attention, 10 could not run. |
 | `gnomon init [--from <path>] [--force]` | Write a surface. `--from` copies an existing one. |
 | `gnomon migrate [--check]` | Bring an existing `.gnomon/` up to the current shipped defaults. `--check` reports without writing and exits 1 if anything is pending. |
 | `gnomon prompt [--continue \| --resume <id>] [--trust]` | Interactive loop. An untrusted surface that grants more than the defaults is shown and asked about first. |
@@ -2266,6 +2356,7 @@ Slash commands other than a role prefix are terminal-only.
 | `gnomon audit [show\|verify\|tamper\|resolve <trail>:<seq> --reason <text>]` | Audit trails. `tamper` lists `record_tamper` events and exits 3 while any is unresolved; `resolve` is a person's recorded acknowledgement of one. |
 | `gnomon check --base <rev> [--head <rev>] [--role <r> \| --agent <name>] [--transcript <file> --format <fmt>] [--json]` | Judge a change another harness made by this surface's rules as of `<rev>`. Exit 0 held, 2 failed, 10 no verdict. See [Governing other harnesses](#governing-other-harnesses). |
 | `gnomon guard [--from claude-code\|opencode\|cursor] [--tool <kind> --input <json>] [--role <r> \| --agent <name>]` | Decide one tool call another harness is about to make, by the committed rules: allow (0), deny (2), ask (3), no decision (10). `gnomon guard install claude-code\|opencode\|cursor [--write]` installs the hook. See [Before the call](#before-the-call-gnomon-guard). |
+| `gnomon dashboard [--port <n>] [--no-open] [--dir <path>]` | A command center in the browser, on 127.0.0.1 only: projects, sessions as a timeline, what the policy refused, audit-chain verification, contracts, token measurements; setup, check, trust and endpoint test as buttons that run those commands, asking first before anything that writes, downloads or spends. Alias: `ui`. See [The command center](#the-command-center--gnomon-dashboard). |
 | `gnomon surface [hash\|manifest\|paths]` | Inspect the surface. |
 | `gnomon enumerations` | The enumerations contract. |
 | `gnomon session <cmd>` | Run shell commands as recorded session steps. |

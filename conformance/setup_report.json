@@ -1,0 +1,36 @@
+{
+  "version": "0.1.0",
+  "_comment": [
+    "The `gnomon setup --json` document, schema gnomon.setup/1 (docs/CONTRACTS.md §16).",
+    "",
+    "The dashboard's Setup screen and provisioning scripts read it: they show the",
+    "recommendation and the proposed diff from a run without --yes (exit 4), then",
+    "apply with --yes --expect-proposal DIGEST. A key renamed, a step id or suggestion value added, or an",
+    "exit code moved is therefore a contract change, and this file is where it",
+    "becomes deliberate: packages/gnomon-cli/src/setup_wizard.test.ts asserts the",
+    "code's HYBRID_CONTROLS, SETUP_EXIT and suggestion values equal the lists",
+    "here, and checks documents the real flow produced against `report_keys`."
+  ],
+  "schema": "gnomon.setup/1",
+  "exit_codes": {
+    "0": "written (or the surface already said this)",
+    "1": "usage: a flag is missing its value or names something unknown",
+    "3": "the surface changed while setup waited for consent, or the change is not the proposal --expect-proposal named; nothing written",
+    "4": "needs consent or a model: no --yes, a download not named by --pull, or no local or cloud model to set up",
+    "10": "the catalog could not be read",
+    "12": "the chosen model server stopped answering (pull or speed check)"
+  },
+  "suggestions": ["local_only", "hybrid", "cloud_first"],
+  "hybrid_controls": ["off", "observe", "ask", "auto"],
+  "step_ids": ["probe", "recommend", "choose", "pull", "speed", "cloud", "mode", "write"],
+  "report_keys": {
+    "required": ["schema", "dir", "catalog", "local", "pull", "speed", "cloud", "mode", "hybrid_control", "proposal", "steps", "next", "exit"],
+    "optional": ["machine", "runtimes", "recommendation", "surface_hash", "why"]
+  },
+  "proposal_keys": ["fresh", "files", "facts_file", "applied", "digest"],
+  "proposal_digest": "sha256 hex of JSON [before surface hash or null, fresh, each file as [path, action, diff]]; --expect-proposal DIGEST writes only that change, else exit 3",
+  "error_keys": {
+    "required": ["schema", "error", "exit"],
+    "optional": []
+  }
+}
