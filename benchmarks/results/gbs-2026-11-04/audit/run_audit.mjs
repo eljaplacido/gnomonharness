@@ -127,8 +127,13 @@ async function makeProject(dir, arm, scripts, snapshotAfter = null) {
 // ── verifier and scorer ──────────────────────────────────────────────────────
 const FAIL = /BROKEN|NOT SEALED|RE-CHAINED|INVALID|NOT SIGNED — [^t]|UNVERIFIABLE|UNCHECKED|no such trail|no longer on disk|rollback|NOT ANCHORED|nothing to verify/i;
 function verify(proj, verifier) {
-  const r = verifier === "exit0" ? spawnSync("sh", ["-c", "exit 0"], { encoding: "utf-8" }) : g(proj, ["audit", "verify"]);
-  return { exit: r.status, out: (r.stdout ?? "") + (r.stderr ? `\n[stderr]\n${r.stderr}` : "") };
+  // stdout and stderr on ONE pipe, in the order the verifier wrote them, as a
+  // terminal shows them: a failing line on stderr belongs under the trail
+  // line printed just before it on stdout.
+  const r = verifier === "exit0"
+    ? spawnSync("sh", ["-c", "exit 0"], { encoding: "utf-8" })
+    : spawnSync("sh", ["-c", "exec gnomon audit verify 2>&1"], { cwd: proj, env: ENV, encoding: "utf-8" });
+  return { exit: r.status, out: r.stdout ?? "" };
 }
 function score(v, target) {
   const lines = v.out.split("\n");

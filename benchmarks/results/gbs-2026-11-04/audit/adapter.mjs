@@ -3,8 +3,8 @@
 // surface with an [audit.attest] signer. rehash and resign use gnomon's OWN
 // published code (the installed gnomon-core dist), because A2/A3 "knows the
 // format": nothing here reimplements gnomon's hashing.
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { join, basename } from "node:path";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { join, basename, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
@@ -44,6 +44,7 @@ export async function adapter(dist) {
       trail: basename(unit), algorithm: at.algorithm, signature_encoding: at.signature_encoding, key_id: at.key_id };
     const sig = execFileSync("bash", ["-lc", at.sign], { input: headDigest(head), encoding: "utf-8" }).trim();
     const hp = headsPathFor(unit, at);
+    mkdirSync(dirname(hp), { recursive: true });
     writeFileSync(hp, JSON.stringify({ ...head, signature: sig }) + "\n");
     return hp;
   };
