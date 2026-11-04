@@ -307,3 +307,31 @@ compared with what H1 (7 paired tasks) and a 2×2×2 factorial over R, N and W w
 - `analysis.py`: every kernel and decision call in this plan. It writes `outputs/*.json` (raw kernel and decision
   outputs), `outputs/*.txt` (`cc.report` and `explain`), and `data/frames/*.csv` (the exact frame each call saw).
 - `REPORT.md`: results, refusals, confounders, product findings and a plain-language summary.
+
+## Amendment 1, 2026-11-04T12:35Z: W2's adjuster; before any estimate
+
+Re-reading W2 before any kernel call on real data found two points.
+
+**1. Total `calls` is partly post-treatment.**
+
+- The calls a run makes after the first leg boundary are themselves an effect of what happened there (the trim), so
+  the cell's total `calls` is a descendant of `legs2`.
+- W2(ii) adjusts for it, which conditions on a descendant of the treatment. Its anticipated POSITIVITY refusal would
+  be the right outcome, but even if positivity held, the adjustment would be biased.
+- W2(ii) is kept as registered.
+- A corrected graph is added as **W2(iii)**:
+  `latent U; difficulty -> U; U -> legs2; U -> Y; legs2 -> calls; U -> calls; calls -> Y; legs2 -> Y`, with `calls`
+  measured. Anticipated: **NON_IDENTIFIABLE**. The decision for D-W still reads W2(i), as registered.
+
+**2. W2(i)'s frame omits `calls`.**
+
+- (ii) is the case "with `calls` measured as the adjuster", so in (i) `calls` is a graph node with no data column,
+  which the kernel treats as unmeasured.
+- This was the intent; it is stated here so that it is not chosen after the fact.
+
+**Kernel features checked on synthetic data only:**
+- `negative_control_outcomes` and `segment_by` under `design="randomized"`;
+- the refusals for a constant treatment (DESIGN_CHECK_FAILED), a deterministic rule (POSITIVITY) and a latent
+  confounder (NON_IDENTIFIABLE).
+
+Nothing else changes.
