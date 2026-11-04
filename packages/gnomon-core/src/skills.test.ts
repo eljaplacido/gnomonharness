@@ -21,9 +21,11 @@ import {
   skillId,
   Skill,
   AgentSessionRefusal,
+  NoPersonRefusal,
   SkillRefusal,
 } from "./skills.js";
 import { recomputeManifest } from "./config.js";
+import { setDecisionContextProbe } from "./agent_context.js";
 import { verifyTrail, AuditTrail, resolveAudit, recordHash, type AuditRecord } from "./audit.js";
 
 let root: string;
@@ -38,6 +40,14 @@ beforeEach(() => {
   mkdirSync(join(root, ".gnomon", "skills"), { recursive: true });
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+// A person at a terminal, with no agent above: the suite may itself be run by
+// an agent's shell, whose marker and process tree would refuse every decision
+// below (agent_context.ts). The refusals have their own tests, which set the
+// probe they need.
+beforeEach(() => setDecisionContextProbe(() => ({ agent: null, interactive: true })));
+afterEach(() => setDecisionContextProbe(null));
+
 
 // These tests are a person's decisions. Run by an agent's bash tool, the
 // harness's marker would be in the environment and every one refused, so the
@@ -230,7 +240,7 @@ describe("accept and reject leave a record", () => {
     const content = readFileSync(path);
     const before = recomputeManifest(join(root, ".gnomon")).surface_hash;
 
-    const d = acceptSkill(cfg(), "run-the-suite", { interactive: false });
+    const d = acceptSkill(cfg(), "run-the-suite", { interactive: true });
     const after = recomputeManifest(join(root, ".gnomon")).surface_hash;
 
     const all = trails();
@@ -249,7 +259,8 @@ describe("accept and reject leave a record", () => {
       // The CLI cannot see who typed the command, so it does not claim a person.
       by: "cli",
       agent_session_marker: "absent",
-      interactive: false,
+      interactive: true,
+      authorised_by: "tty",
     });
     expect(rec.surface_hash_before).not.toBe(rec.surface_hash_after);
     expect(typeof rec.host).toBe("string");
@@ -336,6 +347,71 @@ describe("accept and reject leave a record", () => {
     expect(t.records[1].surface_hash_after).toBe(after);
     expect(t.records[2]).toMatchObject({ applied: true, surface_hash_after: after });
   });
+
+  it("an empty or overwritten marker is still an agent session; so is an agent above this process", () => {
+    // GBS-GOVERNANCE 0.1: the agent's shell unset the marker and accepted its
+    // own skill, 4 of 4. The empty string passed the old check as well.
+    proposeSkill(cfg(), { name: "a", body: "a" });
+    for (const value of ["", "operator"]) {
+      process.env.GNOMON_AGENT_SESSION = value;
+      expect(() => acceptSkill(cfg(), "a")).toThrow(AgentSessionRefusal);
+      expect(() => rejectSkill(cfg(), "a")).toThrow(AgentSessionRefusal);
+    }
+    delete process.env.GNOMON_AGENT_SESSION;
+    // Unset here, marked above (agent_context.ts reads the ancestors' /proc).
+    setDecisionContextProbe(() => ({ agent: "ancestor process 42 was started inside agent session s-1", interactive: true }));
+    expect(() => acceptSkill(cfg(), "a")).toThrow(/agent session: ancestor process 42/);
+    expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["a"]);
+    expect(trails()).toHaveLength(0);
+  });
+
+  it("no terminal and no person-present signer: refused, exit-3 class, nothing moved or written", () => {
+    proposeSkill(cfg(), { name: "a", body: "a" });
+    setDecisionContextProbe(() => ({ agent: null, interactive: false }));
+    let err: unknown;
+    try {
+      acceptSkill(cfg(), "a");
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(NoPersonRefusal);
+    expect(err).toBeInstanceOf(SkillRefusal);
+    expect(String(err)).toMatch(/needs a person/);
+    expect(() => rejectSkill(cfg(), "a")).toThrow(NoPersonRefusal);
+    // A library caller saying "interactive: false" is held to it too.
+    setDecisionContextProbe(() => ({ agent: null, interactive: true }));
+    expect(() => acceptSkill(cfg(), "a", { interactive: false })).toThrow(NoPersonRefusal);
+    expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["a"]);
+    expect(trails()).toHaveLength(0);
+  });
+
+  it("without a terminal, a person-present signer authorises it by signing first; one that does not sign cannot", () => {
+    const keys = generateKeyPairSync("ed25519");
+    const PUB = keys.publicKey.export({ format: "pem", type: "spki" }).toString();
+    const signer = (good: boolean) => {
+      const f = join(root, good ? "good.mjs" : "bad.mjs");
+      writeFileSync(
+        f,
+        good
+          ? `import { readFileSync } from "node:fs";\nimport { createPrivateKey, sign } from "node:crypto";\nconst k = createPrivateKey(${JSON.stringify(keys.privateKey.export({ format: "pem", type: "pkcs8" }).toString())});\nprocess.stdout.write(sign(null, readFileSync(0), k).toString("base64"));\n`
+          : `process.stdout.write("bm90LWEtc2lnbmF0dXJl");\n`
+      );
+      return `"${process.execPath}" "${f}"`;
+    };
+    const withSigner = (good: boolean) => cfg({ attest: { sign: signer(good), public_key: PUB, person_present: true } });
+    setDecisionContextProbe(() => ({ agent: null, interactive: false }));
+    proposeSkill(cfg(), { name: "a", body: "a" });
+
+    expect(() => acceptSkill(withSigner(false), "a")).toThrow(/did not sign/);
+    expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["a"]);
+    const [refused] = trails();
+    expect(refused.records.map((r) => r.kind)).toEqual(["session_start", "skill_accept", "session_end"]);
+    expect(refused.records[2]).toMatchObject({ applied: false, error: expect.stringMatching(/did not sign/) });
+
+    const d = acceptSkill(withSigner(true), "a");
+    expect(d.record).toMatchObject({ interactive: false, authorised_by: "person_present_signer" });
+    expect(loadSkills(cfg()).map((s) => s.id)).toEqual(["a"]);
+  }, 30_000);
 
   it("refuses to accept or reject inside an agent session, and nothing moves or is recorded", () => {
     // Found in re-review: `gnomon skill accept` run through the agent's own

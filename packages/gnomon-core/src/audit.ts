@@ -35,7 +35,7 @@
  * exactly the guarantee.
  */
 
-import { appendFileSync, mkdirSync, existsSync, readFileSync, openSync, readSync, closeSync, fstatSync } from "node:fs";
+import { appendFileSync, mkdirSync, existsSync, readFileSync, openSync, readSync, closeSync, fstatSync, statSync } from "node:fs";
 import { join, resolve, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
 import { GnomonConfig } from "./config.js";
@@ -436,6 +436,17 @@ export class AuditTrail {
     return [...this.anchorFailures];
   }
 
+  /**
+   * Sign the current head now, whatever `every` says. For a write-ahead
+   * decision whose authority is the signer (skills.ts): the person signs
+   * before the change is applied, not at the seal after it. True when a head
+   * was written; whether it verifies is the caller's to check.
+   */
+  attestHead(): boolean {
+    if (!this.attestor || this.prev === null || this.seq === 0) return false;
+    return this.attestor.sign(this.seq - 1, this.prev, this.seq) !== null;
+  }
+
   /** Text is recorded only when the surface asks for `full`. */
   text(value: string | undefined): string | undefined {
     if (this.settings.record !== "full") return undefined;
@@ -548,7 +559,32 @@ export interface VerifyResult {
    * would mark every unsigned trail as broken.
    */
   attestation?: AttestVerifyResult;
+  /**
+   * Records written after the trail was sealed, that are not a resumption
+   * sealed again. Present only for a chained trail, and then always a
+   * failure: `gnomon audit verify` exits 1 on it.
+   *
+   * A FOURTH fact, kept apart from `ok` and `sealed` for their reason. A record
+   * appended after `session_end` with its `seq`, `prev` and hash computed the
+   * way gnomon computes them leaves `ok` true, and `sealed` only says the trail
+   * no longer ends with a seal -- which a killed run also says. GBS-AUDIT 0.1
+   * (case I1, benchmarks/results/gbs-2026-11-04/audit) passed exactly that
+   * trail with exit 0 in every configuration. A killed run never wrote a
+   * seal; this trail did, and grew after it.
+   *
+   * The one way gnomon itself continues a sealed trail is `session_resume`
+   * (`gnomon guard` reseals one trail per call: `session_resume`, the record,
+   * `session_end`, under `<trail>.lock`). So after a `session_end` the next
+   * record must be `session_resume`, and a resumed trail must end sealed
+   * again. The single exception is a resumption being written right now: its
+   * writer's lock is present and fresh, and the trail reads as unsealed, as a
+   * live session's does. A trail never sealed is not this case at all.
+   */
+  after_seal?: { seal_seq: number; seq: number; detail: string };
 }
+
+/** How long a writer's `<trail>.lock` counts as live: guard.ts takes over a lock older than this. */
+const RESUME_LOCK_LIVE_MS = 10_000;
 
 export interface VerifyOptions {
   /** Check signed heads too. Omitted, no attestation work happens at all. */
@@ -567,6 +603,20 @@ export interface VerifyOptions {
  * recomputing every hash produces a trail that passes here. Pass `opts.attest`
  * to also check the trail against signed heads, which is what catches it.
  */
+/**
+ * A resumption of a sealed trail being written right now: its writer holds
+ * `<trail>.lock` (guard.ts, appendDecision), and the lock is younger than the
+ * age at which a writer would take it over as stale.
+ */
+function resumeInProgress(path: string): boolean {
+  if (!path.endsWith(".jsonl")) return false;
+  try {
+    return Date.now() - statSync(`${path.slice(0, -".jsonl".length)}.lock`).mtimeMs <= RESUME_LOCK_LIVE_MS;
+  } catch {
+    return false;
+  }
+}
+
 export function verifyTrail(path: string, opts: VerifyOptions = {}): VerifyResult {
   const attestation = opts.attest
     ? verifyAttestation(path, opts.attest, opts.headsPath ? { headsPath: opts.headsPath } : {})
@@ -583,6 +633,11 @@ export function verifyTrail(path: string, opts: VerifyOptions = {}): VerifyResul
   // Whether this trail chains at all. Set by the first hashed record, so an
   // unchained trail stays valid and a chained one cannot be diluted.
   let chained = false;
+  // The last seal seen, and the first record after a seal that does not
+  // resume it (see VerifyResult.after_seal).
+  let lastSeal: number | null = null;
+  let prevKind: string | null = null;
+  let appended: { seal_seq: number; seq: number; kind: string } | null = null;
 
   for (const [i, line] of lines.entries()) {
     let record: AuditRecord;
@@ -590,8 +645,15 @@ export function verifyTrail(path: string, opts: VerifyOptions = {}): VerifyResul
       record = JSON.parse(line) as AuditRecord;
     } catch {
       broken.push(i);
+      prevKind = null;
       continue;
     }
+    const seq = typeof record.seq === "number" ? record.seq : i;
+    if (prevKind === "session_end" && record.kind !== "session_resume" && lastSeal !== null) {
+      appended ??= { seal_seq: lastSeal, seq, kind: String(record.kind) };
+    }
+    if (record.kind === "session_end") lastSeal = seq;
+    prevKind = record.kind;
     if (record.hash === undefined) {
       // A trail written with chaining off legitimately has no hashes — but a
       // hash-less record inside a CHAINED trail is not "chaining was off", it is
@@ -624,11 +686,34 @@ export function verifyTrail(path: string, opts: VerifyOptions = {}): VerifyResul
     : null;
   const sealed = chained ? last?.kind === "session_end" : true;
 
+  let after_seal: VerifyResult["after_seal"];
+  if (chained && appended) {
+    after_seal = {
+      seal_seq: appended.seal_seq,
+      seq: appended.seq,
+      detail:
+        `seq ${appended.seq} (${appended.kind}) was appended after the trail was sealed at seq ${appended.seal_seq}; ` +
+        `gnomon continues a sealed trail only with session_resume`,
+    };
+  } else if (chained && lastSeal !== null && !sealed && !resumeInProgress(path)) {
+    after_seal = {
+      seal_seq: lastSeal,
+      seq: lastSeal + 1,
+      detail:
+        `records after the seal at seq ${lastSeal} were never sealed again: the trail was extended after it was ` +
+        `sealed (or a resuming writer was killed mid-append)`,
+    };
+  }
+
   return withAttestation({
     ok: broken.length === 0,
     records: lines.length,
     broken,
     sealed,
-    ...(sealed ? {} : { problem: "trail does not end with session_end — truncated, or the run was killed" }),
+    ...(after_seal
+      ? { problem: `appended after its seal: ${after_seal.detail}`, after_seal }
+      : sealed
+        ? {}
+        : { problem: "trail does not end with session_end — truncated, or the run was killed" }),
   });
 }

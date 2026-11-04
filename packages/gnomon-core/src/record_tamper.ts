@@ -24,6 +24,7 @@ import { GnomonConfig, recomputeManifest } from "./config.js";
 import { AuditTrail, resolveAudit, verifyTrail, type AuditRecord } from "./audit.js";
 import { scheduleAnchorFlush } from "./anchor.js";
 import { harnessBuild } from "./build.js";
+import { agentReason } from "./agent_context.js";
 import {
   recordDirsOf,
   recordExcludesOf,
@@ -184,11 +185,12 @@ export function resolveTamper(
   reason: string,
   auth: { interactive: boolean } = { interactive: false }
 ): { record: AuditRecord; trail: string } {
-  if (process.env.GNOMON_AGENT_SESSION) {
-    throw new Error(
-      `Not resolved: this is running inside an agent session (GNOMON_AGENT_SESSION=${process.env.GNOMON_AGENT_SESSION}). ` +
-        `Resolving a change to gnomon's records is a person's decision.`
-    );
+  // The marker with any value, or in an ancestor's environment, or gnomon
+  // itself among the ancestors (agent_context.ts). The empty-string marker
+  // passed the old check.
+  const agent = agentReason();
+  if (agent) {
+    throw new Error(`Not resolved: ${agent}. Resolving a change to gnomon's records is a person's decision.`);
   }
   const signer = personPresentSigner(config);
   if (!auth.interactive && !signer) {

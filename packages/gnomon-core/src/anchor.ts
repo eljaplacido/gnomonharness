@@ -699,16 +699,57 @@ export interface FlushResult {
 
 const LOCK = "flush.lock";
 
+/**
+ * Whether the process a lock names is gone. Only a pid on this host that
+ * answers ESRCH counts: an unreadable or empty lock (one written
+ * before locks carried a pid) and a live pid (EPERM included) are not "gone",
+ * and fall back to the age rule.
+ */
+function holderGone(file: string): boolean {
+  let pid: number;
+  try {
+    const held = JSON.parse(readFileSync(file, "utf-8")) as { pid?: unknown; host?: unknown };
+    // Another machine's pid says nothing here (a shared or synced directory).
+    if (held.host !== hostname()) return false;
+    pid = Number(held.pid);
+  } catch {
+    return false;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "ESRCH";
+  }
+}
+
+/**
+ * Take `flush.lock`. The lock names its holder's pid, so a lock whose holder
+ * has died -- killed, or ended by `process.exit` before a `finally` ran -- is
+ * taken over at once rather than after the age limit.
+ *
+ * Found by GBS-AUDIT 0.1 (benchmarks/results/gbs-2026-11-04/audit): in 22 of
+ * 22 anchored sessions on the v0.4.1 release, `gnomon task` exited with this
+ * file left behind and no delivery running, and `gnomon audit anchor`
+ * answered "already running" for up to 120 s.
+ */
 function takeLock(s: ResolvedAnchor): boolean {
   const file = join(s.dir, LOCK);
   const staleAfterMs = Math.max(120, s.timeout_sec * 12) * 1000;
   for (let i = 0; i < 2; i++) {
     try {
-      closeSync(openSync(file, "wx"));
+      const fd = openSync(file, "wx");
+      try {
+        writeFileSync(fd, `${JSON.stringify({ pid: process.pid, host: hostname(), at: new Date().toISOString() })}\n`, "utf-8");
+      } finally {
+        closeSync(fd);
+      }
       return true;
     } catch {
       try {
-        if (Date.now() - statSync(file).mtimeMs > staleAfterMs) unlinkSync(file);
+        if (holderGone(file) || Date.now() - statSync(file).mtimeMs > staleAfterMs) unlinkSync(file);
         else return false;
       } catch {
         /* gone between the two calls: try again */
@@ -716,6 +757,21 @@ function takeLock(s: ResolvedAnchor): boolean {
     }
   }
   return false;
+}
+
+/** Release `flush.lock` if this process holds it. Synchronous: it runs from an `exit` handler too. */
+function releaseLock(s: ResolvedAnchor): void {
+  const file = join(s.dir, LOCK);
+  try {
+    if (Number(JSON.parse(readFileSync(file, "utf-8")).pid) !== process.pid) return;
+  } catch {
+    return;
+  }
+  try {
+    unlinkSync(file);
+  } catch {
+    /* already gone */
+  }
 }
 
 /**
@@ -727,12 +783,21 @@ function takeLock(s: ResolvedAnchor): boolean {
  *
  * Statements queued while a delivery runs -- another session sealing -- are
  * picked up by a second round rather than left for the next session end.
+ *
+ * The lock is released on every way out: the `finally` below, and an `exit`
+ * handler for a process that ends while the delivery is still awaiting. That
+ * second path is the one the 0.4.1 release took on every anchored `gnomon
+ * task`: with no launcher to start a detached delivery from, the flush ran
+ * unawaited in-process, and the task's `process.exit` skipped the `finally`.
+ * An unfinished delivery leaves its statements queued, for the next one.
  */
 export async function flushAnchors(settings: ResolvedAnchor, deps: AnchorDeps = {}): Promise<FlushResult> {
   const backend = settings.backend;
   if (!settings.enabled || !backend) return { backend, delivered: 0, pending: pendingAnchors(settings).length };
   mkdirSync(settings.dir, { recursive: true });
   if (!takeLock(settings)) return { backend, delivered: 0, pending: readQueue(settings).length, busy: true };
+  const onExit = (): void => releaseLock(settings);
+  process.once("exit", onExit);
   try {
     let total = 0;
     for (let round = 0; ; round++) {
@@ -743,11 +808,8 @@ export async function flushAnchors(settings: ResolvedAnchor, deps: AnchorDeps = 
       }
     }
   } finally {
-    try {
-      unlinkSync(join(settings.dir, LOCK));
-    } catch {
-      /* already gone */
-    }
+    process.removeListener("exit", onExit);
+    releaseLock(settings);
   }
 }
 

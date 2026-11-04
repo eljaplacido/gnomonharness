@@ -18,6 +18,7 @@ import { runTask, type TaskRecord } from "./prompt_loop.js";
 import { verifyTrail, type AuditRecord } from "./audit.js";
 import { settleTrustHeadless } from "./trust.js";
 import { acceptSkill } from "./skills.js";
+import { setDecisionContextProbe } from "./agent_context.js";
 import {
   runTrial,
   recordTrial,
@@ -193,6 +194,14 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
+// A person at a terminal, with no agent above: the suite may itself be run by
+// an agent's shell, whose marker and process tree would refuse every decision
+// below (agent_context.ts). The refusals have their own tests, which set the
+// probe they need.
+beforeEach(() => setDecisionContextProbe(() => ({ agent: null, interactive: true })));
+afterEach(() => setDecisionContextProbe(null));
+
+
 describe("gnomon skill trial", () => {
   it("reports a pass gain when the skill's text is what solves the task (exit 0)", async () => {
     project({ attest: true });
@@ -227,7 +236,7 @@ describe("gnomon skill trial", () => {
     const out = recordTrial(loadConfig(root), report, cells);
     const config = loadConfig(root);
     const strict = { ...config, policy: { ...config.policy, skills: { require_trial: true } } };
-    const d = acceptSkill(strict, "fix-it", { evidence: out.report_path, interactive: false });
+    const d = acceptSkill(strict, "fix-it", { evidence: out.report_path, interactive: true });
     expect(d.record).toMatchObject({
       evidence: { report: out.report_path, report_sha256: out.report_sha256, meets_thresholds: true, attested: true },
       require_trial: true,

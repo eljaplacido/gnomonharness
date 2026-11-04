@@ -36,7 +36,8 @@ import { hostname, userInfo } from "node:os";
 import { GnomonConfig, parseToml, recomputeManifest, manifestHash } from "./config.js";
 import { AuditTrail, resolveAudit, verifyTrail, recordHash, type AuditRecord } from "./audit.js";
 import { harnessBuild } from "./build.js";
-import { unresolvedTamper, compareWithCheckpoint, writeTamperRecord, writeCheckpoint } from "./record_tamper.js";
+import { unresolvedTamper, compareWithCheckpoint, writeTamperRecord, writeCheckpoint, personPresentSigner } from "./record_tamper.js";
+import { agentReason, decisionContext } from "./agent_context.js";
 import { describeChanges } from "./record_guard.js";
 
 // ---------------------------------------------------------------------------
@@ -395,7 +396,11 @@ export interface SkillDecisionOptions {
   by?: string;
   /** Why a proposal was rejected. Recorded as given. */
   reason?: string;
-  /** Whether a terminal was attached. Defaults to stdin's TTY state. */
+  /**
+   * Whether a person is at a terminal: stdin AND stdout. Defaults to what this
+   * process sees (agent_context.ts). Without one, a decision needs a
+   * person-present signer, and is refused otherwise.
+   */
   interactive?: boolean;
   /**
    * Accept only: the path of a `gnomon skill trial` report.json, relative to
@@ -439,21 +444,46 @@ export class SkillRefusal extends Error {}
  * The harness sets GNOMON_AGENT_SESSION in every tool subprocess (tools.ts,
  * AGENT_SESSION_ENV). Found in re-review: `gnomon skill accept` run through
  * the agent's own bash was recorded `by: "human"`. Acceptance is a person's.
+ * GBS-GOVERNANCE 0.1 then had the agent's bash accept its own skill by
+ * unsetting the variable, 4 of 4: the checks are now agent_context.ts's.
  */
 export class AgentSessionRefusal extends SkillRefusal {}
 
-function refuseInAgentSession(verb: "accept" | "reject"): void {
-  const session = process.env.GNOMON_AGENT_SESSION;
-  if (session) {
+/** Refused: nobody was shown to be there. No terminal, and no person-present signer. */
+export class NoPersonRefusal extends SkillRefusal {}
+
+type Verb = "accept" | "reject";
+const done = (verb: Verb) => (verb === "accept" ? "accepted" : "rejected");
+
+function refuseInAgentSession(verb: Verb): void {
+  const why = agentReason();
+  if (why) {
     throw new AgentSessionRefusal(
-      `Not ${verb === "accept" ? "accepted" : "rejected"}: this is running inside an agent session ` +
-        `(GNOMON_AGENT_SESSION=${session}). Accepting or rejecting a skill is a person's decision; ` +
-        `run \`gnomon skill ${verb}\` yourself, outside the agent.`
+      `Not ${done(verb)}: ${why}. Accepting or rejecting a skill is a person's decision; ` +
+        `run \`gnomon skill ${verb}\` yourself, at a terminal, outside the agent.`
     );
   }
 }
 
-function whoDecided(opts: SkillDecisionOptions): Record<string, unknown> {
+/**
+ * Who authorises the decision: a person at a terminal ("tty"), or, without
+ * one, a signer that needs a person for each signature
+ * ("person_present_signer"), which must then sign the decision before it is
+ * applied. `audit resolve` has had this rule since #115 (record_tamper.ts);
+ * skill decisions had only the marker, which the agent's shell can drop.
+ */
+function requirePerson(config: GnomonConfig, verb: Verb, opts: SkillDecisionOptions): { interactive: boolean; authorised_by: "tty" | "person_present_signer" } {
+  const interactive = opts.interactive ?? decisionContext().interactive;
+  if (interactive) return { interactive, authorised_by: "tty" };
+  if (personPresentSigner(config)) return { interactive, authorised_by: "person_present_signer" };
+  throw new NoPersonRefusal(
+    `Not ${done(verb)}: a skill decision needs a person -- run \`gnomon skill ${verb}\` at a terminal (stdin and ` +
+      `stdout), or declare a signer that needs a person for each signature ([audit.attest] person_present = true, ` +
+      `with ssh-add -c, a FIDO or hardware key, or a passphrase prompt).`
+  );
+}
+
+function whoDecided(opts: SkillDecisionOptions, person: { interactive: boolean; authorised_by: string }): Record<string, unknown> {
   let user: string | undefined;
   try {
     user = userInfo().username;
@@ -471,7 +501,8 @@ function whoDecided(opts: SkillDecisionOptions): Record<string, unknown> {
     agent_session_marker: process.env.GNOMON_AGENT_SESSION ? "present" : "absent",
     user,
     host: hostname(),
-    interactive: opts.interactive ?? Boolean(process.stdin.isTTY),
+    interactive: person.interactive,
+    authorised_by: person.authorised_by,
   };
 }
 
@@ -502,7 +533,13 @@ function openSkillDecision(
   kind: "skill_accept" | "skill_reject",
   fields: Record<string, unknown>,
   surfaceHash: string
-): { record: AuditRecord | null; trail: string | null; seal: (end: Record<string, unknown>) => void } {
+): {
+  record: AuditRecord | null;
+  trail: string | null;
+  seal: (end: Record<string, unknown>) => void;
+  /** Sign the head now, covering the decision. False when nothing signed it. */
+  attest: () => boolean;
+} {
   const settings = resolveAudit(config);
   const forced = { ...settings, enabled: true, chain: true };
   // A random suffix as well as the time and pid: two decisions in one process
@@ -518,7 +555,13 @@ function openSkillDecision(
     mode: "skill",
   });
   const record = trail.write(kind, fields);
-  return { record, trail: trail.path, seal: (end) => void trail.write("session_end", end) };
+  return { record, trail: trail.path, seal: (end) => void trail.write("session_end", end), attest: () => {
+    // Signed, and the signature checks out against the declared key or
+    // verify command: a signer that prints anything still gets a head written.
+    if (!trail.attestHead() || !trail.path || !forced.attest) return false;
+    const v = verifyTrail(trail.path, { attest: forced.attest });
+    return v.attestation?.status === "signed" && v.attestation.unattested === 0;
+  } };
 }
 
 /**
@@ -837,6 +880,7 @@ export function acceptSkill(
 ): SkillDecision {
   assertSkillId(id);
   refuseInAgentSession("accept");
+  const person = requirePerson(config, "accept", opts);
   {
     // The records against the last checkpoint a session left: a change in
     // the gap between sessions -- a background job, a deleted tamper trail --
@@ -910,7 +954,7 @@ export function acceptSkill(
         // reading alone.
         evidence,
         require_trial: required,
-        ...whoDecided(opts),
+        ...whoDecided(opts, person),
       },
       before
     );
@@ -918,6 +962,8 @@ export function acceptSkill(
     const why = err instanceof Error ? err.message : String(err);
     throw new Error(`Not accepted: the skill_accept record could not be written (${why}).`);
   }
+
+  signedByPerson(open, person, "accept");
 
   const dir = join(config.gnomonDir, SKILLS_DIR);
   const to = join(dir, `${id}.md`);
@@ -934,6 +980,24 @@ export function acceptSkill(
     surface_hash_after: recomputeManifest(config.gnomonDir).surface_hash,
   });
   return { path: to, record: open.record, trail: open.trail, sealed };
+}
+
+/**
+ * Without a terminal, the person-present signer is the person: it signs the
+ * head covering the decision before anything is applied. A signature it does
+ * not give (declined, or the key is not there) refuses the decision, sealed
+ * `applied: false`, as a refused resolution is (record_tamper.ts).
+ */
+function signedByPerson(
+  open: { attest: () => boolean; seal: (end: Record<string, unknown>) => void },
+  person: { authorised_by: string },
+  verb: Verb
+): void {
+  if (person.authorised_by !== "person_present_signer") return;
+  if (open.attest()) return;
+  const error = "the person-present signer did not sign the decision";
+  sealQuietly(open, { applied: false, error });
+  throw new NoPersonRefusal(`Not ${done(verb)}: ${error}, and there is no terminal. The record says so.`);
 }
 
 /**
@@ -967,6 +1031,7 @@ export function rejectSkill(
 ): SkillDecision {
   assertSkillId(id);
   refuseInAgentSession("reject");
+  const person = requirePerson(config, "reject", opts);
   const path = join(config.gnomonDir, PROPOSED_DIR, `${id}.md`);
   if (!existsSync(path)) {
     throw new Error(`No proposed skill "${id}".`);
@@ -985,10 +1050,11 @@ export function rejectSkill(
       surface_hash_before: surface,
       surface_hash_after: surface,
       reason: opts.reason,
-      ...whoDecided(opts),
+      ...whoDecided(opts, person),
     },
     surface
   );
+  signedByPerson(open, person, "reject");
   try {
     rmSync(path);
   } catch (err) {

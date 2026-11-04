@@ -784,18 +784,48 @@ path.
 
 **Not from inside an agent.** The harness sets `GNOMON_AGENT_SESSION=<session>`
 in the environment of every tool subprocess: the bash tool's shell (inside
-the docker sandbox too, via `-e`) and every MCP server. `skill accept` and `skill reject` refuse when it is present, with
-exit **3** (`refused_by_gate`, §1), and write nothing.
+the docker sandbox too, via `-e`) and every MCP server. `skill accept` and
+`skill reject` refuse, with exit **3** (`refused_by_gate`, §1), and write
+nothing, when any of these holds (`agent_context.ts`):
+1. the variable is in this process's environment, **with any value**, the
+   empty string included;
+2. it is in an **ancestor's** initial environment (`/proc/<pid>/environ`,
+   Linux). A process can edit its own environment and its children's, never
+   the one another process started with, so `unset`, `export X=`, `env -u`,
+   `env -i`, `nohup` and `setsid` in front of the command leave the agent's
+   shell still marked;
+3. a **gnomon process is an ancestor** (`/proc/<pid>/cmdline`, Linux), other
+   than a launcher of the same decision. This covers a shell that `exec`s the
+   command, which leaves nothing marked between the command and the harness.
 
-A process can remove the variable (`env -u`), so this check is a refusal with
-a reason, not a proof. For the same reason a record says `by: "cli"`, not
-`"human"`: the command cannot see who typed it. `agent_session_marker` records
-what the command saw, and on a written record it is always `"absent"`.
+**And only from a person.** Accept and reject also need stdin and stdout on a
+terminal (`authorised_by: "tty"`); the bash tool gives its shell pipes and no
+controlling terminal. Without a terminal, a person-present signer
+(`[audit.attest] person_present = true`, as for `audit resolve`, §14) must
+sign a head covering the decision before it is applied
+(`authorised_by: "person_present_signer"`); a signature it does not give is
+sealed `applied: false` and refused. Otherwise refused, exit 3, nothing
+written.
+
+In 0.4.1 and earlier only check 1 existed, with the empty string read as absent.
+GBS-GOVERNANCE 0.1 (`benchmarks/results/gbs-2026-11-04/governance`) had the
+agent's bash accept its own skill with `env -u GNOMON_AGENT_SESSION gnomon
+skill accept …` in 4 of 4 runs.
+
+This is a refusal with reasons, not containment. A process of the same user
+can still leave the harness's process tree **and** reach a terminal it did not
+inherit: a pty in a process re-parented to init (`setsid -f script …`), an
+existing tmux session, systemd, cron or ssh. Against an agent that does that,
+the guarantee is a person-present signer or the docker sandbox. On a platform
+without `/proc` (macOS, Windows), checks 2 and 3 do not run. For the same
+reason a record says `by: "cli"`, not `"human"`: the command cannot see who
+typed it. `agent_session_marker` records what the command saw, and on a
+written record it is always `"absent"`.
 
 Keys, both kinds: `skill` (the id), `name`, `path` (repo-relative, POSIX),
 `content_sha256` (sha256 of the file's bytes), `surface_hash_before`,
 `surface_hash_after`, `by` (`cli` from the CLI), `agent_session_marker`, `user`, `host`,
-`interactive`. `skill_accept` adds `evidence` and `require_trial`.
+`interactive`, `authorised_by` (`tty` or `person_present_signer`). `skill_accept` adds `evidence` and `require_trial`.
 `skill_reject` adds `reason` when `--reason` was given.
 
 `evidence` is `"none"` when the skill was accepted on reading alone. When
@@ -1092,7 +1122,9 @@ do it. The event is recorded, and accept is blocked.
 
 **Resolving an event** is a person's act:
 `gnomon audit resolve <trail>:<seq> --reason "…"`. It is refused inside an
-agent session. It also needs one of:
+agent session, by the three checks §11 lists (the marker with any value, in
+this environment or an ancestor's, or gnomon among the ancestors). It also
+needs one of:
 - **stdin and stdout both a terminal.** A tool subprocess has pipes.
 - **a person-present signer:** `[audit.attest] person_present = true`, with a
   `sign` command and a verifier. That signer must sign the resolution, or it
@@ -1598,7 +1630,16 @@ its digest.
 **When.** Queued at seal: one file, `queue/<digest>.json`. Nothing on the
 turn path waits on a witness. Delivery starts after the session's checkpoint
 at session end, in the background. The CLI starts a detached `gnomon audit
-anchor --background`; a library caller gets an unawaited promise.
+anchor --background` through its own launcher (`gnomon.js` in a checkout,
+`bin/gnomon.mjs` in the published package); a library caller gets an
+unawaited promise. One delivery runs at a time, under `flush.lock`, which
+names its holder's pid and host. The lock is released on every way out,
+`process.exit` included, and a lock whose holder on this host has exited is
+taken over at once; otherwise a lock older than `max(120, 12 × timeout_sec)`
+seconds is. In 0.4.1 the published package had no `gnomon.js`, so delivery
+ran in-process and the task's exit left the lock behind: `gnomon audit
+anchor` then said "already running" for up to 120 s (GBS-AUDIT 0.1, 22 of 22
+anchored sessions).
 `benchmarks/results/auditability-2026-11-03` measured the turn path:
 unchanged. The seal adds about 0.03 ms and session end about 5 ms. A delivered
 statement becomes a line of `receipts.jsonl` (`digest`, `backend`,
@@ -1650,6 +1691,23 @@ It prints an `external anchor:` line under each trail, and checks the
 | `PENDING` | queued, not delivered | no (the degradation above) |
 | `NOT ANCHORED` | sealed after anchoring began here, with nothing anchored and nothing queued | yes |
 | `NOT ANCHORED` | sealed before this checkout began anchoring, or never sealed | no |
+
+**The seal itself, anchored or not.** `session_end` seals a trail. After it,
+gnomon writes to that trail only to resume it (`session_resume`, as `gnomon
+guard` does on every call), and a resumed trail ends sealed again. A chained
+trail that breaks this is **`APPENDED AFTER SEAL`**, with a `TAMPERED —` line
+naming the seal's seq and the first record after it, and **exit 1**:
+- a record other than `session_resume` follows a `session_end`;
+- a resumed trail does not end with `session_end`, unless its writer's
+  `<trail>.lock` is younger than 10 s (a resumption being written now; it
+  then reads as unsealed, as a live session does).
+
+A trail with no seal at all is unchanged: `NOT SEALED`, exit 0, a live or
+killed session. In 0.4.1 and earlier a correctly chained record appended after the
+seal printed `NOT SEALED` and exited 0 in every configuration (GBS-AUDIT 0.1,
+case I1). `verifyTrail` returns it as `after_seal: {seal_seq, seq, detail}`,
+apart from `ok` and `sealed`; the dashboard's verify counts it. Fixture:
+`conformance/audit_verify.json`, asserted by `audit.test.ts`.
 
 Two more findings, each exit 1. **An anchored trail that is no longer on
 disk** (checkpoints are pruned by design and exempt). **A rollback:** the
