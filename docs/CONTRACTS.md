@@ -1938,3 +1938,64 @@ also runs the rug pull end to end with a real stdio server: first contact,
 matched, changed and clamped, then accepted and pinned afresh. It checks that
 the definitions sent are byte-identical to the tool set, that they cannot move
 mid-session, and that this section names the fixture.
+
+## 27. Stall signals — `counters.stall_signals`, audit kind `stall_signal`, `v: 1`
+
+Three detectors watch a turn's tool calls and record what they see. They
+never act. The loop's own stall stop (`[loop] stall_repeats`, the A-B-A-B
+window) and idle nudge are unchanged. Nothing in the loop reads these records
+back, so the model is sent the same requests with or without them. They are
+measurements for the stall-path experiments: a signal-gated nudge, a restart
+in place of a second nudge, a cloud rescue. Each of those must show trigger
+precision on recorded runs before it may act.
+
+| signal | fires when | detail key |
+|---|---|---|
+| `limit_cycle` | the last calls repeat with period 2, 3 or 4, with at least two distinct calls in a period and no state change in the window | `period` |
+| `no_progress` | `no_progress_calls` calls in a row with no state change, no new test outcome and no new read | `streak` |
+| `novelty_cusum` | a one-sided CUSUM over per-call novelty (1 new call or state change, 0.5 same call with a new outcome, 0 exact repeat) reaches `cusum_h`; it then restarts at 0 | `cusum` |
+
+A state change is a successful `write`/`edit`, a `task` delegation, a bash call
+whose worktree stamp moved, or a bash install or `/etc` write that exited 0.
+`todo` and `note` calls are counted as steps and are otherwise invisible to
+the detectors. Every number and pattern is declared once, in
+`STALL_SIGNAL_THRESHOLDS` and `STALL_SIGNAL_PATTERNS`. They are compiled in:
+they are outside the surface hash, like `STALL_WINDOW`, because they change
+records and never behaviour. The `harness` field names the build that wrote
+them.
+
+**Input.** The detectors read exactly the fields of a metadata-mode
+`tool_call` record: `tool`, `target`, `code`, `summary`, `worktree_changed`.
+A trail is therefore enough to recompute every count, and
+`benchmarks/analysis/stall_replay.mjs` does that with the same module. The cost
+is a coarse view. A `read` at another offset looks like the same call, and a
+bash call's output is known only by its exit code.
+
+**`counters.stall_signals`**, on the `turn` record, the `TaskRecord` and the
+session's exchange:
+- `v`, and `observed`: the calls the detectors saw, which is every call except
+  `todo` and `note`;
+- `limit_cycle`, `no_progress`, `novelty_cusum`: each has `count` (episodes,
+  meaning times it went from quiet to firing) and `first_step` (the turn's step
+  at the first episode, the unit of `first_nudge_step`). `limit_cycle` also has
+  `period`, for the first episode;
+- `error`, only when a detector threw. Observation stops there, the turn goes
+  on unchanged, and the counts cover the calls before the throw.
+
+All three entries are present with `count: 0` when nothing fired, so "ran and
+stayed quiet" differs from "not recorded". The whole object is absent on a
+turn that never ran and on builds before it existed. A delegated turn (`task`)
+runs detectors of its own. Its counters, like its `nudges`, are not carried
+into the parent's record, but its `stall_signal` records are in the trail
+under its role.
+
+**`stall_signal`** (audit kind), when `[audit]` is on: one record per episode,
+written right after the `tool_call` record of the call that started it. Keys
+`role`, `signal`, `step`, `episode`, and the signal's detail key.
+
+**Fixture**: `conformance/stall_signals.json`. `stall_signals.test.ts` checks
+the module's counters and records against it, and checks that this section
+names the kind and every signal. `stall_signals_loop.test.ts` checks two more
+things. Replaying a turn's `tool_call` records reproduces its counters. And
+over seeded random scripts, a real, a silent, a randomly firing and a throwing
+detector all send the same requests.

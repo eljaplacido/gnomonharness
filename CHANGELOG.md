@@ -544,6 +544,19 @@
   accepts a change by clearing the pins, and `gnomon trust` lists them.
   Nothing sent to the model changes. Contract: CONTRACTS.md §26,
   `conformance/tools_hash.json`.
+- **Stall signals, log-only** (research item LP5). Three detectors watch a
+  turn's tool calls: limit cycles of period 2 to 4, `no_progress`, and a
+  novelty CUSUM. They record `counters.stall_signals` on every turn record
+  and, with `[audit]` on, one `stall_signal` record per episode. They never
+  act: the model gets the same requests with or without them, which a
+  property test checks over random scripts. Their input is the fields of a
+  metadata `tool_call` record, so `benchmarks/analysis/stall_replay.mjs`
+  recomputes them from any trail. The thresholds were tuned on r1h and tested
+  on m1, held out. On m1 they flagged 15 of 28 stall or time-cap runs at least
+  2 steps before the run ended, and 0 of 73 successful runs. The existing idle
+  nudge fires earlier on those runs, and on half of all successes. Contract:
+  CONTRACTS.md §27 (stall signals), `conformance/stall_signals.json`. No surface
+  key, no behaviour change.
 
 ## [0.4.0] — 2026-11-03
 - **Opt-in line caps on tool output: `max_lines` on the `bash` and `read`

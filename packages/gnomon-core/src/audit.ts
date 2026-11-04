@@ -238,6 +238,12 @@ export type AuditKind =
   // server whose tools moved between two sessions moved nothing else the
   // trail carried. Written only when the surface declares a server.
   | "mcp_tools"
+  // A stall detector starting an episode (stall_signals.ts): which one, at
+  // which step, and the number behind it. Log-only: written after the
+  // tool_call record it follows, read by nothing in the loop. Its own kind so
+  // a trigger's precision can be measured against the outcome later without
+  // the trigger ever having acted.
+  | "stall_signal"
   | "session_end";
 
 export interface AuditRecord {
