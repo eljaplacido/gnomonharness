@@ -4560,6 +4560,144 @@ function notOffered(name: string, offered: Set<string>): Precheck {
 }
 
 // ---------------------------------------------------------------------------
+// Repair text: what a failed call should have looked like
+// ---------------------------------------------------------------------------
+//
+// A tool name the role was not offered already comes back with the names it
+// was offered (notOffered, above). The arguments did not get the same
+// treatment: a call that failed because its arguments did not match the
+// tool's schema was answered by whatever the tool said first, and for a
+// misnamed key that is a false premise. `edit {file_path, old_string,
+// new_string}` -- the spelling another harness teaches -- reached editTool
+// as an empty path and came back "` is a directory, not a file", and
+// `read {file_path}` came back "Nothing was given". Told that, a model
+// invents a different wrong call. What it needs is the parameter list.
+//
+// Only on a call that already failed, and only when its arguments really do
+// disagree with the schema: a success, and a failure whose arguments were
+// well-formed, reach the model byte for byte as before (tool_hygiene.test.ts
+// pins both). No model call is added; the text rides on the answer the
+// failed call already gets. Built-in tools only -- an MCP server validates
+// its own arguments and says so itself.
+
+/** A tool's parameter schema as offered to the model, or undefined for a name this build does not implement. */
+function parametersFor(name: string): Record<string, unknown> | undefined {
+  return Object.prototype.hasOwnProperty.call(IMPLEMENTED, name) ? IMPLEMENTED[name] : undefined;
+}
+
+/** How a schema type reads in one line: `string`, `"a" | "b"`, `array of {content: string}`. */
+function typeText(spec: unknown): string {
+  const s = (spec ?? {}) as Record<string, unknown>;
+  if (Array.isArray(s.enum)) return s.enum.map((v) => JSON.stringify(v)).join(" | ");
+  if (s.type === "array") return s.items ? `array of ${typeText(s.items)}` : "array";
+  if (s.type === "object" && s.properties && typeof s.properties === "object") {
+    const req = new Set(Array.isArray(s.required) ? (s.required as string[]) : []);
+    return `{${Object.entries(s.properties as Record<string, unknown>)
+      .map(([k, v]) => `${k}${req.has(k) ? "" : "?"}: ${typeText(v)}`)
+      .join(", ")}}`;
+  }
+  return typeof s.type === "string" ? s.type : "any";
+}
+
+/**
+ * The parameters a built-in tool takes, in one line --
+ * `path (string, required), old_text (string, required), …` -- or null for a
+ * name with no schema in this build.
+ */
+export function toolParamsText(name: string): string | null {
+  const params = parametersFor(name);
+  const props = (params?.properties ?? undefined) as Record<string, unknown> | undefined;
+  if (!props) return null;
+  const req = new Set(Array.isArray(params!.required) ? (params!.required as string[]) : []);
+  const list = Object.entries(props).map(
+    ([k, v]) => `${k} (${typeText(v)}${req.has(k) ? ", required" : ""})`
+  );
+  return list.length > 0 ? list.join(", ") : "no parameters";
+}
+
+/** The JSON type of a value, with integers told apart from other numbers. */
+function jsonType(v: unknown): string {
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "array";
+  if (typeof v === "number") return Number.isInteger(v) ? "integer" : "number";
+  return typeof v;
+}
+
+export interface ArgProblems {
+  /** Required parameters the call did not send. */
+  missing: string[];
+  /** Parameters sent with a value of the wrong JSON type. */
+  wrongType: Array<{ key: string; want: string; got: string }>;
+  /** Keys the call sent that the tool does not take. */
+  unknown: string[];
+}
+
+/**
+ * Where a call's arguments disagree with a built-in tool's schema, top-level
+ * keys only. Null when the tool has no schema in this build. The parser's own
+ * markers (`__gnomon_args_*`) are not the model's keys and are skipped.
+ */
+export function argProblems(name: string, args: Record<string, unknown>): ArgProblems | null {
+  const params = parametersFor(name);
+  const props = (params?.properties ?? undefined) as Record<string, Record<string, unknown>> | undefined;
+  if (!props) return null;
+  const required = Array.isArray(params!.required) ? (params!.required as string[]) : [];
+  const missing = required.filter((k) => args[k] === undefined);
+  const wrongType: ArgProblems["wrongType"] = [];
+  const unknown: string[] = [];
+  for (const [k, v] of Object.entries(args)) {
+    if (k.startsWith("__gnomon_")) continue;
+    const spec = props[k];
+    if (!spec) {
+      unknown.push(k);
+      continue;
+    }
+    const want = typeof spec.type === "string" ? spec.type : undefined;
+    if (!want || v === undefined) continue;
+    const got = jsonType(v);
+    if (got !== want && !(want === "number" && got === "integer")) wrongType.push({ key: k, want, got });
+  }
+  return { missing, wrongType, unknown };
+}
+
+const ticked = (keys: string[]) => keys.map((k) => `\`${k}\``).join(", ");
+
+/**
+ * The paragraph appended to a failed call whose arguments do not match the
+ * schema, or "" when they do (or the tool has none). Unknown keys alone do not
+ * trigger it -- every tool ignores an extra key, so a call that failed with one
+ * failed for another reason -- but they are named when it fires, because a
+ * misnamed key is the usual reason a required one is missing.
+ */
+export function schemaRepairText(name: string, args: Record<string, unknown>): string {
+  const p = argProblems(name, args);
+  if (!p || (p.missing.length === 0 && p.wrongType.length === 0)) return "";
+  const parts: string[] = [];
+  if (p.missing.length > 0) parts.push(`missing ${ticked(p.missing)}`);
+  for (const w of p.wrongType) parts.push(`\`${w.key}\` must be ${w.want}, not ${w.got}`);
+  if (p.unknown.length > 0) {
+    parts.push(
+      `${ticked(p.unknown)} ${p.unknown.length === 1 ? "is not a parameter" : "are not parameters"} of ${name}`
+    );
+  }
+  return (
+    `\n\nYour ${name} call does not match its parameters: ${parts.join("; ")}. ` +
+    `${name} takes one JSON object: ${toolParamsText(name)}.`
+  );
+}
+
+/**
+ * A failed outcome with the schema's repair text appended, when the call's
+ * arguments are why it failed. A success, or a failure whose arguments match
+ * the schema, is returned as it was -- the same object.
+ */
+function withSchemaRepair(name: string, args: Record<string, unknown>, outcome: ToolOutcome): ToolOutcome {
+  if (outcome.code === TOOL_OK || outcome.code === TOOL_OK_EMPTY) return outcome;
+  const text = schemaRepairText(name, args);
+  return text ? { ...outcome, content: outcome.content + text } : outcome;
+}
+
+// ---------------------------------------------------------------------------
 // The decision alone
 // ---------------------------------------------------------------------------
 
@@ -4690,6 +4828,9 @@ export async function executeTool(
     const raw = typeof malformed.raw === "string" ? malformed.raw : JSON.stringify(malformed.raw);
     const shown = raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
     const error = String(malformed.error ?? "not a JSON object");
+    // "Whose keys are this tool's parameters" told the model there was a list
+    // without giving it. Named here, so the corrected call can use them.
+    const params = toolParamsText(name);
     return {
       code: TOOL_DENIED,
       content:
@@ -4697,6 +4838,7 @@ export async function executeTool(
         `RAN. Arguments must be ONE JSON object whose keys are this tool's ` +
         `parameters: double-quoted keys and strings, newlines inside strings ` +
         `escaped as \\n. Re-issue the ${name} call with corrected arguments.\n` +
+        (params ? `${name} takes: ${params}.\n` : "") +
         `Received: ${shown}`,
       summary: `${name} — malformed arguments (${error.slice(0, 80)})`,
     };
@@ -4705,16 +4847,21 @@ export async function executeTool(
   // A throw here would take the whole session down: an unguarded
   // readFileSync on a directory (EISDIR) once killed a live run outright.
   // A broken tool is an apparatus_failure the model can be told about.
+  let outcome: ToolOutcome;
   try {
-    return await dispatch(name, args, ctx);
+    outcome = await dispatch(name, args, ctx);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return {
+    outcome = {
       code: TOOL_FAILED,
       content: `Tool "${name}" failed: ${msg}`,
       summary: `${name} — ${msg}`,
     };
   }
+  // Error path only: a call that failed with arguments the schema does not
+  // accept is told which parameters the tool takes. Anything else is returned
+  // untouched.
+  return withSchemaRepair(name, args, outcome);
 }
 
 async function dispatch(

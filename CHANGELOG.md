@@ -26,7 +26,31 @@
 
 ## [Unreleased]
 
-## [0.4.0] — 2026-11-03
+- **A tool call that failed because its arguments missed the schema is told
+  the schema (CX5).** The model-visible text changes only on calls that
+  already failed. When a built-in tool's call fails or is refused, and its
+  arguments lack a required parameter or carry one of the wrong JSON type,
+  the answer it already gets ends with the parameters the tool takes. Those
+  are named with their types, the required ones are marked, and any keys it
+  does not take are listed: `edit {file_path, old_string, new_string}` is
+  told `path`, `old_text`, `new_text`. Before, that call got "` is a
+  directory, not a file", and `read {file_path}` got "Nothing was given".
+  Arguments that are not JSON at all now get the parameter list beside the
+  parse error.
+  - Unchanged: every success, every failure whose arguments match the
+    schema, the answer to a tool the role was not offered (it already names
+    the offered tools), the `tool_call` summaries, and `[turn]
+    max_consecutive_malformed`. No model call is added. A scripted turn of
+    well-formed calls sends the same request bodies as v0.4.0, byte for
+    byte (`tool_hygiene.test.ts`).
+  - Measured first, on the 2026-11 benchmark trails: 726 gnomon sessions,
+    30,648 tool calls. An unoffered or unknown tool name occurred once
+    (deepseek-v4.1-flash, a coordinator calling `bash`; it recovered on the
+    next step). The local quantized models made about 18,800 of those calls
+    with none. There were no malformed-JSON arguments, and two schema
+    misses of a measurable shape (`todo` with no list). So this corrects a
+    false-premise answer; it is not a measured gain on these lanes.
+
 
 **Upgrading from 0.3.x.** Run `gnomon migrate` in each project. It applies four
 migrations: the shorter verify rule in `system.md`, delegate-once wording for

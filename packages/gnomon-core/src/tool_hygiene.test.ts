@@ -11,11 +11,24 @@ import { describe, it, expect, afterEach } from "vitest";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platformBlock, runTask, type TaskRecord } from "./prompt_loop.js";
 import { loadConfig } from "./config.js";
+import {
+  executeTool,
+  argProblems,
+  schemaRepairText,
+  toolParamsText,
+  ARGS_MALFORMED,
+  TOOL_OK,
+  TOOL_DENIED,
+  TOOL_FAILED,
+  TOOL_NOT_DECLARED,
+  type ToolContext,
+  type Todo,
+} from "./tools.js";
 
 let servers: Server[] = [];
 const roots: string[] = [];
@@ -155,5 +168,178 @@ describe("well-formed calls, no max_lines: the wire is v0.4.0's, byte for byte",
     expect(rec.tool_log.join("\n")).toMatch(/edit small\.txt — no match/);
     const digest = wireDigest(raws, rec);
     expect(digest).toBe(MASTER_WIRE_DIGEST);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CX5: a failed call whose arguments miss the schema is told the schema
+// ---------------------------------------------------------------------------
+
+function scratch(): string {
+  const root = mkdtempSync(join(tmpdir(), "gnomon-th-"));
+  roots.push(root);
+  writeFileSync(join(root, "small.txt"), "alpha\nbeta\ngamma\n");
+  return root;
+}
+const ctxIn = (root: string, over: Partial<ToolContext> = {}): ToolContext => ({
+  root,
+  sandbox: "confined",
+  gate: "never",
+  approve: async () => true,
+  timeoutMs: 10_000,
+  maxOutputBytes: 32_000,
+  ...over,
+});
+const ALL = new Set(["read", "bash", "write", "edit", "todo", "grep"]);
+const REPAIR = /does not match its parameters/;
+
+describe("CX5: the parameter list, on the calls that failed for want of it", () => {
+  it("names each parameter with its type, and marks the required ones", () => {
+    expect(toolParamsText("edit")).toBe(
+      "path (string, required), old_text (string, required), new_text (string, required)"
+    );
+    expect(toolParamsText("grep")).toBe(
+      "pattern (string, required), path (string), include (string), ignore_case (boolean)"
+    );
+    expect(toolParamsText("todo")).toBe(
+      'todos (array of {content: string, status: "pending" | "in_progress" | "completed"}, required)'
+    );
+    // No schema in this build: an MCP tool, or a name nothing implements.
+    expect(toolParamsText("mcp__fs__read")).toBeNull();
+    expect(toolParamsText("teleport")).toBeNull();
+    expect(toolParamsText("constructor")).toBeNull();
+  });
+
+  it("finds missing, mistyped and unknown keys; the parser's markers are not the model's keys", () => {
+    expect(argProblems("edit", { file_path: "a", old_string: "x", new_string: "y" })).toEqual({
+      missing: ["path", "old_text", "new_text"],
+      wrongType: [],
+      unknown: ["file_path", "old_string", "new_string"],
+    });
+    expect(argProblems("bash", { command: ["ls", "-la"] })!.wrongType).toEqual([
+      { key: "command", want: "string", got: "array" },
+    ]);
+    expect(argProblems("grep", { pattern: "x", ignore_case: "true" })!.wrongType).toEqual([
+      { key: "ignore_case", want: "boolean", got: "string" },
+    ]);
+    expect(argProblems("read", { path: "a", [ARGS_MALFORMED]: {} })).toEqual({ missing: [], wrongType: [], unknown: [] });
+    expect(argProblems("teleport", {})).toBeNull();
+    // An extra key alone is not a schema failure: every tool ignores one.
+    expect(schemaRepairText("bash", { command: "ls", timeout: 5 })).toBe("");
+  });
+
+  it("read {file_path}: the false premise is corrected with the parameter it meant", async () => {
+    const r = await executeTool("read", { file_path: "small.txt" }, ctxIn(scratch()), ALL);
+    expect(r.code).toBe(TOOL_DENIED);
+    expect(r.content).toContain("read needs a `path`");
+    expect(r.content).toContain(
+      "Your read call does not match its parameters: missing `path`; `file_path` is not a parameter of read. " +
+        "read takes one JSON object: path (string, required)."
+    );
+    // The record's summary is the tool's own; the repair text is for the model.
+    expect(r.summary).toBe("read — no path given");
+  });
+
+  it("edit {file_path, old_string, new_string}: not '` is a directory', but the three names it takes", async () => {
+    const root = scratch();
+    const r = await executeTool(
+      "edit",
+      { file_path: "small.txt", old_string: "alpha", new_string: "ALPHA" },
+      ctxIn(root),
+      ALL
+    );
+    expect(r.code).toBe(TOOL_FAILED);
+    expect(r.content).toContain(
+      "missing `path`, `old_text`, `new_text`; `file_path`, `old_string`, `new_string` are not parameters of edit. " +
+        "edit takes one JSON object: path (string, required), old_text (string, required), new_text (string, required)."
+    );
+    expect(readFileSync(join(root, "small.txt"), "utf-8")).toBe("alpha\nbeta\ngamma\n");
+  });
+
+  it("bash with an array for `command`: names the type it must be", async () => {
+    const r = await executeTool("bash", { command: ["ls", "-la"] }, ctxIn(scratch()), ALL);
+    expect(r.code).toBe(TOOL_DENIED);
+    expect(r.content).toContain("`command` must be string, not array. bash takes one JSON object: command (string, required).");
+  });
+
+  it("todo with the list under the wrong key: the item shape and the statuses are spelled out", async () => {
+    let list: Todo[] = [];
+    const store = { list: () => list, replace: (t: Todo[]) => void (list = t) };
+    const r = await executeTool(
+      "todo",
+      { items: [{ content: "a", status: "pending" }] },
+      ctxIn(scratch(), { todos: store }),
+      ALL
+    );
+    expect(r.code).toBe(TOOL_FAILED);
+    expect(r.content).toContain("missing `todos`; `items` is not a parameter of todo.");
+    expect(r.content).toContain('"pending" | "in_progress" | "completed"');
+  });
+
+  it("arguments that are not JSON: the parameters are named beside the parse error", async () => {
+    const r = await executeTool(
+      "edit",
+      { [ARGS_MALFORMED]: { raw: "{'path': 'a'}", error: "Expected property name at position 1" } },
+      ctxIn(scratch()),
+      ALL
+    );
+    expect(r.code).toBe(TOOL_DENIED);
+    expect(r.content).toContain("could not be read (Expected property name at position 1)");
+    expect(r.content).toContain(
+      "edit takes: path (string, required), old_text (string, required), new_text (string, required).\nReceived: {'path': 'a'}"
+    );
+  });
+
+  it("success is untouched, even where the arguments miss the schema", async () => {
+    // edit with no new_text deletes the anchor, as it always has. It succeeded,
+    // so it is not this change's business: only failed calls are annotated.
+    const root = scratch();
+    const r = await executeTool("edit", { path: "small.txt", old_text: "beta\n" }, ctxIn(root), ALL);
+    expect(r.code).toBe(TOOL_OK);
+    expect(r.content).not.toMatch(REPAIR);
+    expect(readFileSync(join(root, "small.txt"), "utf-8")).toBe("alpha\ngamma\n");
+  });
+
+  it("a failure whose arguments are well-formed is untouched", async () => {
+    const root = scratch();
+    const noMatch = await executeTool("edit", { path: "small.txt", old_text: "zzz", new_text: "y" }, ctxIn(root), ALL);
+    expect(noMatch.code).toBe(TOOL_FAILED);
+    expect(noMatch.content).toBe("old_text not found in small.txt. It must match exactly, including indentation.");
+    // A refusal with an extra key in the call: the key did not cause it.
+    const denied = await executeTool(
+      "bash",
+      { command: "git push", timeout: 5 },
+      ctxIn(root, { bashDeny: ["\\bgit\\s+push\\b"] }),
+      ALL
+    );
+    expect(denied.code).toBe(TOOL_DENIED);
+    expect(denied.content).not.toMatch(REPAIR);
+  });
+
+  it("an unoffered tool keeps the answer it had: the names this role was offered", async () => {
+    const r = await executeTool("read_file", { path: "small.txt" }, ctxIn(scratch()), new Set(["read", "bash"]));
+    expect(r.code).toBe(TOOL_NOT_DECLARED);
+    expect(r.content).toBe('Refused: "read_file" is not available to this role. Available: read, bash.');
+  });
+
+  it("through the loop: the repair text is what the model reads next, and the turn is not counted malformed", async () => {
+    const steps: Array<[string, unknown]> = [
+      ["edit", { file_path: "small.txt", old_string: "alpha", new_string: "ALPHA" }],
+      ["edit", { path: "small.txt", old_text: "alpha", new_text: "ALPHA" }],
+    ];
+    const { url, raws } = await serve((body, n) =>
+      !body.tools || n > steps.length ? answer("done") : call(n, steps[n - 1]![0], steps[n - 1]![1])
+    );
+    const root = surface(url);
+    const rec = await runTask(loadConfig(root), "uppercase alpha", { role: "impl", yes: true });
+    const second = JSON.parse(raws[1]!);
+    const toolMsg = second.messages.filter((m: any) => m.role === "tool").at(-1);
+    expect(toolMsg.content).toMatch(REPAIR);
+    expect(toolMsg.content).toContain("edit takes one JSON object: path (string, required)");
+    expect(rec.stop_reason).toBe("answered");
+    // A schema miss is an ordinary failed call, not an unusable reply: the
+    // malformed counter and its bound are unchanged by this.
+    expect(rec.counters.malformed_tool_calls ?? 0).toBe(0);
+    expect(readFileSync(join(root, "small.txt"), "utf-8")).toBe("ALPHA\nbeta\ngamma\n");
   });
 });
