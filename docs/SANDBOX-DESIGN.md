@@ -171,8 +171,9 @@ the call returns.
 kernel's ABI knows (write, truncate, remove, make-*, refer), granted beneath the
 writable directories only, plus write on `/dev/null`, `/dev/zero`, `/dev/full`,
 `/dev/tty`, `/dev/ptmx` and `/dev/pts`. Read and execute are not handled, so
-they stay allowed everywhere and system tools work. `no_new_privs` is set
-(Landlock requires it), so setuid cannot raise privilege.
+they stay allowed everywhere and system tools work — unless `reads = "scoped"`
+(below). `no_new_privs` is set (Landlock requires it), so setuid cannot raise
+privilege.
 
 **Linux, `network = false` — seccomp plus a connect supervisor.** The options,
 and why each was or was not taken:
@@ -263,7 +264,7 @@ false` still refuses.
 ### What it does not do
 
 The same list `gnomon-exec sandbox-probe` prints and the README states: reads
-are unrestricted; everything inside the root, `.gnomon/` and `.git/` included,
+are unrestricted under `reads = "all"` (the default); everything inside the root, `.gnomon/` and `.git/` included,
 stays writable; unix sockets are unrestricted (the docker socket, `systemd-run
 --user`, a tmux server are escapes for a determined command); loopback services
 that reach out (a proxy, DNS via the system resolver) are reachable; inbound
@@ -271,3 +272,98 @@ connections to a non-loopback bind are not blocked; signals are not scoped (a
 per-call Landlock domain with signal scoping would stop the next call from
 killing a job the previous one started); package caches in `$HOME` are
 read-only. Older kernels give less, and the probe says what.
+
+## `reads = "scoped"` — read scoping, added 2026-11-05
+
+### Why
+
+GBS-GOVERNANCE 0.1 and 0.2 measured gnomon v0.4.x without a kernel sandbox:
+credential reads by `bash` held 0/15, because `cat ~/.ssh/id_rsa` is an
+ordinary read that every rule asks about and an approved ask runs. `exec = "os"`
+as shipped in #74 confined writes and egress and said plainly that reads were
+not restricted. This is the read half, opt-in so nobody's toolchain breaks
+under them unannounced.
+
+### What it is
+
+```toml
+[sandbox]
+exec  = "os"
+reads = "scoped"                 # "all" (default) | "scoped"
+read_roots = ["~/.local/go"]     # optional
+```
+
+`osSandboxPlan` adds `--reads scoped` and one `--read <path>` per existing
+`read_roots` entry and per directory gnomon itself runs from (gnomon-exec's
+directory, the Node runtime's prefix, the checkout or the outermost
+`node_modules`; any of these that is `$HOME` or above it is dropped, never
+granted). `gnomon-exec` then handles Landlock's `READ_FILE` and `READ_DIR` as
+well as the write rights, and grants them beneath:
+
+- the root and every writable directory (they get read with write);
+- `SYSTEM_READ`: `/usr /bin /sbin /lib /lib32 /lib64 /libx32 /etc /opt /proc
+  /sys /dev /snap /nix/store /home/linuxbrew/.linuxbrew`, where they exist,
+  plus the file `/etc/resolv.conf` resolves to (it lives in `/run` on systemd
+  hosts);
+- `HOME_TOOLCHAIN_READ`, relative to `$HOME`, where they exist — programs and
+  downloaded packages only: `.local/bin`, `.local/lib`, `.local/share/pnpm`,
+  `.cargo/bin`, `.cargo/registry`, `.cargo/git`, `.rustup`, `.nvm`, `.volta`,
+  `.bun/bin`, `.deno/bin`, `.pyenv`, `.rbenv`, `go/bin`, `go/pkg/mod`, `.npm`,
+  `.cache/{pip,uv,go-build,pypoetry,node/corepack,node-gyp,pnpm,yarn}`,
+  `.m2/repository`, `.gradle/{caches,wrapper}`, and git's configuration file by
+  file (`.gitconfig`, `.config/git/{config,ignore,attributes}` — not the
+  directory, which holds the store helper's `credentials`);
+- every `--read`.
+
+`EXECUTE` stays unhandled, but the kernel opens a program for reading to exec
+it, so a binary outside the scope cannot be run either (tested). Hard links
+are covered by `REFER`, which Landlock grants only when the link gains no
+rights, so `ln ~/.ssh/id_rsa ./x` from inside fails with `EXDEV` (tested).
+Symlinks are resolved before the check (tested).
+
+### Allow-list, and the list that guards it
+
+Landlock can only grant, so everything not listed is unreadable: `~/.ssh` is
+unreadable because nothing grants it, not because a rule names it. The risk
+is therefore a **grant that covers a credential store** — a root of `$HOME`,
+`read_roots = ["~"]`, `read_roots = ["~/.cargo"]` (which holds
+`credentials.toml`). `PROTECTED_HOME` lists where credentials live (`.ssh`,
+`.gnupg`, `.aws`, `.azure`, `.config/gcloud`, `.kube`, `.docker`,
+`.config/gh`, `.config/hub`, `.config/glab-cli`, `.netrc`, `.git-credentials`,
+`.config/git/credentials`, `.npmrc`, `.yarnrc(.yml)`, `.pypirc`,
+`.gem/credentials`, `.cargo/credentials(.toml)`, `.m2/settings.xml`,
+`.gradle/gradle.properties`, `.terraform.d`, `.vault-token`, `.password-store`,
+`.local/share/keyrings`, `.pki`, `.local/share/gnomon/credentials.json`, the
+logins of Claude Code, Codex and opencode, and the Firefox, Thunderbird,
+Chrome, Chromium, Brave, Edge, Vivaldi and Opera profiles), under both `$HOME`
+and the password database's home, plus the `$XDG_CONFIG_HOME` /
+`$XDG_DATA_HOME` equivalents, each both as named and as its canonical target.
+A root, `--write` or `--read` that contains one or sits inside one is
+**refused** (exit 125; the call is not run); a default that would is dropped.
+
+A deny-list was not the design because Landlock cannot express one, and
+because it would be the wrong default anyway: the list of places a secret can
+be is longer than any list, and an allow-list fails toward unreadable.
+
+### Fails closed
+
+- A `reads` value that is not `"all"` or `"scoped"` refuses every command
+  rather than falling back to `"all"`: a typo must not unscope reads silently.
+  The surface audit says so too.
+- `reads = "scoped"` on macOS refuses: a Seatbelt read allow-list needs the
+  paths macOS itself reads, and nobody has written or run one. Windows has no
+  `exec = "os"`.
+- A `gnomon-exec` too old to report `reads_scoped_supported` refuses.
+
+### What it does not cover
+
+`SCOPED_NOT_ENFORCED` in `sandbox.rs`, printed by the probe and in the README:
+the system directories stay readable (`/etc` included); the root is readable
+(`.env`, `.git/config`); the environment is inherited (`printenv`); agents
+reachable over unix sockets can be asked to use a key (ssh-agent, gpg-agent, a
+keyring over D-Bus, the docker socket); a hard link to a credential placed in
+the root beforehand is readable; already-open descriptors; `/proc/<pid>/cmdline`
+of other processes (their environments and memory are not — Landlock denies
+ptrace-mode access to processes outside the sandbox, which also holds under
+`reads = "all"`); a token written into a toolchain default; Linux only.
+

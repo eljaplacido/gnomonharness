@@ -44,14 +44,16 @@
   `sandbox-exec` with a generated profile. It costs **+0.6 ms per command, or
   +1.5 ms with `network = false`** (median, `cat` of a file, release build).
 
-  Where it cannot be enforced (no `gnomon-exec`, no Landlock, Windows), `bash`
+  Where it cannot be enforced (no `gnomon-exec`, no Landlock, Windows, or a
+  container whose seccomp profile refuses `pidfd_getfd` under `network =
+  false` — Docker's default does, unless `--cap-add SYS_PTRACE`), `bash`
   **refuses** and does not run the command. Startup and `gnomon explain sandbox`
   say which applies; `gnomon-exec sandbox-probe` prints the kernel's answer.
 
-  It does **not** restrict reads, anything inside the root (`.gnomon/` and
-  `.git/` included), unix sockets (the docker socket and `systemd-run --user`
-  are escapes), loopback services that reach out, inbound connections, or
-  signals. The README lists these under `exec`.
+  It does **not** restrict reads (unless `reads = "scoped"`, below), anything
+  inside the root (`.gnomon/` and `.git/` included), unix sockets (the docker
+  socket and `systemd-run --user` are escapes), loopback services that reach
+  out, inbound connections, or signals. The README lists these under `exec`.
 
   In host-side G2b model-free probes it held 7 of 7 out-of-root and egress
   probes that `exec = "off"` lost. G2b's 13 in-root probes got the same
@@ -61,11 +63,40 @@
   `conformance/enumerations_golden.json` and `enumerations_schema.json` move
   with it. A consumer that rejects unknown keys must accept it.
 - **`gnomon-core` depends on `gnomon-natives`** for the probe and the binary
-  lookup, rather than keeping a second copy of `findBinary`.
+  lookup, rather than keeping a second copy of `findBinary`. It is imported on
+  first use, not at load: the property suites and the benchmark apparatus load
+  gnomon-core's `dist/` with plain node, where the workspace resolves
+  gnomon-natives to TypeScript sources.
 - **`gnomon-exec` gains its first runtime dependency edge, `libc`**, which was
   already in `Cargo.lock` through `errno`, `getrandom` and `cpufeatures`. The
   `landlock` and `seccompiler` crates were considered and not taken: the whole
   policy is one ruleset and a ~40-instruction BPF program.
+- **`[sandbox] reads = "scoped"`: opt-in read scoping for `exec = "os"`
+  (Linux).** Default `"all"`, which is the behaviour above. With `"scoped"`,
+  Landlock's read rights are handled too, so `bash` may read only the root,
+  the per-call temp dir, `extra_roots`, the system directories (`/usr`, `/bin`,
+  `/sbin`, `/lib*`, `/etc`, `/opt`, `/proc`, `/sys`, `/dev`, and `/snap`,
+  `/nix/store` where present), toolchains and package caches in `$HOME`
+  (`~/.local/bin`, `~/.cargo/bin`, `~/.rustup`, `~/.nvm`, `~/.npm`,
+  `~/.cache/pip`, git's config files and the rest of `HOME_TOOLCHAIN_READ`),
+  the gnomon install and `[sandbox] read_roots`. `~/.ssh`, `~/.aws`,
+  `~/.config/gh`, `~/.netrc`, `~/.docker`, `~/.gnupg`, gnomon's
+  `credentials.json` and browser profiles are unreadable because nothing grants
+  them; a grant that would cover one (a root of `$HOME`, `read_roots = ["~"]`)
+  is refused. It is an allow-list: `/etc` stays readable, and so do the root,
+  the environment and agents reachable over unix sockets — the README lists
+  what it does not cover. A misspelt value refuses rather than falling back to
+  `"all"`; macOS refuses `"scoped"` (not implemented). Measured in
+  GBS-GOVERNANCE host-side (`benchmarks/results/gbs-2026-11-05-ossandbox/`).
+- **`allow_package_index` admits nothing under `exec = "os"`**, as under
+  `docker`: the `network = false` supervisor admits loopback only and has no
+  per-host allow, so a download is refused up front with the answer the kernel
+  would give. The surface audit says so.
+- **The sandbox probe tests `pidfd_getfd` instead of asking whether it
+  exists.** In a Docker container on the default seccomp profile it returns
+  EPERM, so the supervisor refused every connect, loopback included, while the
+  probe reported `network_supported: true`. It now reports false with the
+  reason, and `bash` refuses under `network = false` there.
 ### Added
 
 - **Six opt-in sweep knobs, one per long-task hypothesis** (docs/CONTRACTS.md

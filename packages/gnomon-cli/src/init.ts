@@ -743,6 +743,13 @@ network = false
 #                    no egress, loopback still reachable. On a machine that
 #                    cannot enforce it, bash refuses rather than run unsandboxed.
 #   exec = "docker"  a container (image = "...")
+#
+# With exec = "os" on Linux, reads can be confined too:
+#   reads = "scoped"   bash may read only this repository, the temp dir, system
+#                      directories, toolchains and package caches in your home,
+#                      and read_roots; ~/.ssh, ~/.aws, ~/.config/gh and the other
+#                      credential stores stay unreadable. The default is "all".
+#   read_roots = ["~/.local/go"]   anything else a command needs to read
 
 # Keys that changed nothing used to sit here — auto_merge,
 # reject_on_disagreement, env_isolation, min_line_context, preserve_formatting.

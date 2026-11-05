@@ -1686,10 +1686,15 @@ do outside; the cost is **+0.6 ms per command, or +1.5 ms with
   and the command's stderr says which address was blocked.
 - **No privilege gain.** `no_new_privs` is set, so `sudo` and other setuid
   binaries cannot become root.
+- **Reads, if you opt in (`reads = "scoped"`, Linux).** See
+  [below](#reads--scoped--credential-stores-unreadable-to-bash): credential
+  stores in `$HOME` become unreadable to `bash`. Off by default.
 - **Refusal, never degradation.** On a machine that cannot enforce it — no
-  `gnomon-exec`, a kernel without Landlock, Windows — every `bash` call is
-  refused with the reason, and is not run. Startup and `gnomon explain sandbox`
-  say which it is before the first command.
+  `gnomon-exec`, a kernel without Landlock, Windows, a container whose seccomp
+  profile refuses `pidfd_getfd` under `network = false`, `reads = "scoped"`
+  anywhere but Linux — every `bash` call is refused with the reason, and is not
+  run. Startup and `gnomon explain sandbox` say which it is before the first
+  command.
 
 **How.** Linux: Landlock (kernel 5.13+) for the filesystem. For
 `network = false`, a seccomp filter allows only TCP, unix and netlink sockets,
@@ -1701,8 +1706,9 @@ CI job's end-to-end tests, not yet run on a Mac by hand.
 
 **What it does not do** — `gnomon-exec sandbox-probe` prints the same list:
 
-- **Reads are not restricted.** The command can read anything your user can,
-  secrets in `$HOME` included.
+- **Reads are not restricted** under `reads = "all"`, the default. The command
+  can read anything your user can, secrets in `$HOME` included. `reads =
+  "scoped"` narrows this on Linux; what it covers is listed below.
 - **Inside the root, nothing changes.** `.gnomon/`, `.git/` and every other file
   under the root stay writable to `bash`, so in-root guarantees still come from
   `bash_deny` and the surface-drift check. In G2b's own probes (all in-root),
@@ -1728,6 +1734,71 @@ CI job's end-to-end tests, not yet run on a Mac by hand.
   into another directory fails even inside the root. The probe names what this
   kernel lacks. `network = false` is enforced on x86_64 and aarch64 and needs
   Linux 5.6+.
+
+#### `reads = "scoped"` — credential stores unreadable to bash
+
+```toml
+[sandbox]
+exec  = "os"
+reads = "scoped"                   # default "all"; Linux only
+# read_roots = ["~/.local/go"]     # anything else a command must read
+```
+
+Opt-in, and only under `exec = "os"`. Landlock's read rights are handled, so a
+`bash` command — and everything it runs — may read only beneath:
+
+- the root, the per-call `$TMPDIR` and `extra_roots`;
+- the system directories `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc`, `/opt`,
+  `/proc`, `/sys`, `/dev`, and `/snap`, `/nix/store` and Homebrew's
+  `/home/linuxbrew/.linuxbrew` where they exist, plus the file
+  `/etc/resolv.conf` points at;
+- toolchains and package caches in `$HOME`, where they exist: `~/.local/bin`,
+  `~/.local/lib`, `~/.local/share/pnpm`, `~/.cargo/bin`, `~/.cargo/registry`,
+  `~/.cargo/git`, `~/.rustup`, `~/.nvm`, `~/.volta`, `~/.bun/bin`,
+  `~/.deno/bin`, `~/.pyenv`, `~/.rbenv`, `~/go/bin`, `~/go/pkg/mod`, `~/.npm`,
+  `~/.cache/{pip,uv,go-build,pypoetry,node/corepack,node-gyp,pnpm,yarn}`,
+  `~/.m2/repository`, `~/.gradle/{caches,wrapper}`, and git's own config files
+  (`~/.gitconfig`, `~/.config/git/{config,ignore,attributes}`);
+- the gnomon install: `gnomon-exec`'s directory, the Node runtime's prefix (nvm
+  puts it in `$HOME`) and the checkout or `node_modules` gnomon runs from;
+- `[sandbox] read_roots`: `~/` is your home, relative paths are from the root.
+
+**What it keeps unreadable** is everything else — Landlock is an allow-list,
+so `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.netrc`, `~/.docker/config.json`,
+`~/.gnupg`, gnomon's own `credentials.json`, browser profiles and every other
+file in `$HOME` are unreadable because nothing grants them, and `ls ~` fails.
+A program outside the scope cannot be run either (exec opens it for reading).
+A grant that would make a credential store readable again — a `read_roots`
+entry of `~` or `~/.cargo` (which holds `credentials.toml`), a root that is
+`$HOME` — is **refused**, and `bash` runs nothing until it is narrowed; the
+list it checks is `PROTECTED_HOME` in `crates/gnomon-exec/src/sandbox.rs`. A
+misspelt `reads` value refuses too, rather than falling back to `"all"`.
+
+**What it does not cover** — also printed by `gnomon-exec sandbox-probe`:
+
+- **It is an allow-list.** `/etc` stays readable, and so does everything else
+  under the system directories, including whatever a tool or an administrator
+  left world-readable there.
+- **Inside the root everything is readable**: a `.env`, a token in
+  `.git/config`, a key someone committed.
+- **The environment.** `bash` inherits gnomon's, so a token in an environment
+  variable is one `printenv` away.
+- **Agents.** A command can still *use* a key through a unix socket — ssh-agent,
+  gpg-agent, a keyring over D-Bus, the docker socket — though it cannot read the
+  key file.
+- **A hard link to a credential placed inside the root beforehand** is readable:
+  Landlock judges the path, not the inode. Making one from inside the sandbox is
+  refused.
+- **Command lines** of your other processes (`/proc/<pid>/cmdline`) are
+  readable; their environments and memory are not.
+- **Toolchain defaults are trusted** to hold no credentials; a token written into
+  `~/.npm` or `~/.cargo/registry` would be readable.
+- **Tool configuration in `$HOME` is unreadable** — `~/.npmrc`, `~/.pypirc`,
+  `~/.config/pip` — so tools run unconfigured, registry logins included. That is
+  the point; name a config file in `read_roots` if a tool needs it.
+- **Linux only.** On macOS `reads = "scoped"` refuses rather than runs (a
+  Seatbelt read allow-list has not been written or tested); Windows has no
+  `exec = "os"` at all.
 
 #### `exec = "docker"` — a container
 

@@ -138,10 +138,14 @@ defeated before it was added:**
 - `exec = "os"` — contains the shell on the host, in the kernel: Landlock
   confines writes to the root, a per-call temp dir and `extra_roots`; with
   `network = false` a seccomp filter plus a connect supervisor allow loopback
-  only; `no_new_privs` stops setuid. Reads, unix sockets (the docker socket, the
-  user bus) and everything inside the root are NOT restricted — the full list
-  is in the README and in `gnomon-exec sandbox-probe`. Refuses where the kernel
-  cannot enforce it; never falls back to unsandboxed.
+  only; `no_new_privs` stops setuid. With `reads = "scoped"` (opt-in, Linux)
+  reads are confined to the root, system directories, toolchain caches and
+  `read_roots`, so `~/.ssh` and the other credential stores are unreadable;
+  without it reads are NOT restricted. Unix sockets (the docker socket, the user
+  bus, ssh-agent), the environment and everything inside the root are not
+  restricted either way — the full list is in the README and in `gnomon-exec
+  sandbox-probe`. Refuses where the kernel cannot enforce it; never falls back
+  to unsandboxed.
 - `exec = "docker"` — contains the shell in a container:
   `--network none`, the caller's own uid/gid (`--user $(id -u):$(id -g)`, so the
   operator can still edit their repository afterwards — NOT a guarantee of

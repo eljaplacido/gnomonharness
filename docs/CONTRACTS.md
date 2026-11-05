@@ -2559,7 +2559,10 @@ never admitted. Entries must be bare host names; an unknown host is accepted
 and reported, since a private mirror is legitimate. It is an exception to an
 intent filter, not containment: under `exec = "docker"` the container still
 runs with `--network none`, which no host list opens, so there the allowlist
-admits nothing (the refusal is the one without it) and the audit says so; with the network allowed it does nothing
+admits nothing (the refusal is the one without it) and the audit says so. The
+same holds under `exec = "os"`: its `network = false` supervisor admits loopback
+only and has no per-host allow, so the allowlist admits nothing there either,
+and the audit says so too; with the network allowed it does nothing
 either. `gnomon guard` reads it as the loop does. `counters.package_index`
 (`admitted`, `hosts`) is on every turn of a `network = false` surface that
 lists hosts, and an admitted call's `tool_call` record carries
