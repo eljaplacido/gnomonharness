@@ -2314,3 +2314,114 @@ record. Bounded at 512 entries per list per turn.
   from here: `via: "system"` says what was sent, not what the template kept.
 
 **Fixture:** `conformance/mediator_record.json`.
+
+## 30. Completion gate — `[verify] completion_gate`, `counters.completion_gate`, audit kind `completion_gate`, `v: 1`
+
+Harness control at the end of a turn, opt-in. A model that says it is done is
+reporting a belief; the declared `[verify]` check contradicts it only where
+the repository has a suite that covers the task. This gate holds the answer
+back until the work has been checked against the task's own words, and,
+optionally, until a read-only reviewer has tried to break it.
+
+Why it exists. P2G41 (2026-11, hosted recipe): in 16 cells gnomon declared done
+with a median of 996 s left and was wrong, 5 of them near misses (at least 75%
+of the hidden tests passing). A prompt rule asking for every requirement to be
+verified had no effect (H2). The harnesses that closed that gap enforced it:
+a finish hook, a structured checklist, a read-only auditor sub-agent.
+
+**Surface** (`.gnomon/policy.toml`, under `[verify]`, content-hashed with it):
+
+| key | default | meaning |
+|---|---|---|
+| `completion_gate` | `off` | `off`, `checklist` or `review`. Anything else is reported by the surface audit and runs as `off` |
+| `completion_rounds` | `3` | hand-backs per turn, at most. `0` never hands back |
+| `completion_min_remaining` | `0.2` | skip the gate when less than this fraction of the budget is left |
+| `completion_reviewer` | `verifier` | the role `review` runs. A name that is not a role is fatal under `review` |
+
+**Modes.**
+- `off`: nothing below runs. The request bodies a turn sends are
+  byte-identical to a build without the gate (checked by hashing a scripted
+  turn's bodies against master's, `completion_gate_loop.test.ts`).
+- `checklist`: the first answer of a turn that changed the worktree is not
+  accepted. The harness hands the turn back with a checklist built from the
+  task's own text (its last user message): every list item and every sentence
+  that asks for something, and the paths, commands, names, values and formats
+  it mentions, plus edge cases, exact paths and formats, and stray files (the
+  paths git says this turn created or changed). The next answer is accepted
+  only once a bash command has run since the hand-back. A role without `bash`
+  is asked to re-read instead, and no check is demanded.
+- `review`: the checklist, then a reviewer. The reviewer is a fresh sub-turn
+  of `completion_reviewer` that is given the task text and the workspace path,
+  never the transcript or the main turn's answer. Whatever its role declares,
+  it is offered only `read`, `glob`, `grep`, `compute`, `todo`, and `bash`
+  when the role declares a non-empty `bash_allow`, and the declared `[verify]`
+  check is not run for it. Its findings (one per `- ` line; `NO FINDINGS` for
+  none) are handed back, and the main turn must address each or say why it
+  does not apply. If the worktree moved while it ran, or its turn failed, its
+  findings are not used; that is announced, counted as `review_failures`, and
+  recorded as `review_failed`.
+
+**When it applies.** Only to the turn a person asked for (not a delegated
+sub-turn), only to an answer (not a failed request, a blank or a cut-off
+reply), after the declared `[verify]` check, and only when the turn changed
+the worktree by any route (write, edit, or a bash call whose stamp moved or
+could not be taken). Every hand-back is a system message after the rejected
+answer, as the `[verify]` hand-back is, and every step after it counts against
+`max_steps_total`.
+
+**Each end it applies to**, in order:
+1. rounds spent (`completion_rounds`): accept, `exhausted` if a condition is
+   unmet, else `passed`;
+2. budget: when a condition is unmet and less than `completion_min_remaining`
+   is left, accept as `skipped_budget`. The budget left is the smaller of the
+   steps left of `max_steps_total` and, when the caller passes a run deadline
+   (`TurnDeps.deadline = { total_ms, started_at }`, the shape `gnomon task
+   --deadline` uses), the time left of it;
+3. no round yet: `checklist`;
+4. a check was demanded and no bash command ran since: `no_check`;
+5. `review` mode and no review yet: `review`, which hands back when it has
+   findings and otherwise accepts as `passed`;
+6. otherwise accept, `passed`.
+
+**Actions**, as the trail names them: `checklist`, `no_check`, `review`,
+`accept`.
+
+**Outcomes:** `passed`, `exhausted`, `skipped_budget`, `not_applicable` (the
+turn answered without changing the worktree), `not_reached` (the turn ended
+some other way: the step wall, a stall, an error).
+
+**`counters.completion_gate`**, on the `turn` record, the `TaskRecord` and the
+session's exchange, present only when a gate is declared: `v`, `mode`,
+`max_rounds`, `rounds` (hand-backs), `checks` (bash commands run after a
+hand-back), `reviews`, `review_steps` (the reviewers' tool steps, outside the
+main turn's count), `findings`, `outcome`, and `review_failures` when there
+were any. `ms`, the wall-clock spent in the gate with the reviewer, is on the
+turn record; on the `TaskRecord` it is `volatile.completion_gate_ms`, because
+everything outside `volatile` reproduces.
+
+**`completion_gate`** (audit kind), when `[audit]` is on: one record per end
+the gate judged. Keys `role`, `round`, `action`, `step` (the turn's tool
+steps), `budget_left` (a fraction, three decimals), `budget_by` (`steps` or
+`deadline`), `ms`, and when they apply `outcome` (on `accept`), `findings` (on
+a review) and `review_failed`. The reviewer's own tool calls are in the trail
+under its role.
+
+**Limits.**
+- The checklist is lifted from the text, not understood: it can list a
+  sentence that asks for nothing and miss a requirement stated obliquely.
+- "A check ran" means a bash command ran. Which one, and whether it checked
+  anything, is the model's choice.
+- The reviewer is read-only by what it is offered. A `bash_allow` that admits
+  a writing command is the surface's to fix; the gate notices a write only
+  through git's view of the tree, so in a directory that is not a repository
+  it cannot.
+
+**Fixture**: `conformance/completion_gate.json`. `completion_gate.test.ts`
+checks the module's modes, actions, outcomes, defaults and reviewer tools
+against it, and that this section names the kind and every value and key.
+`completion_gate_loop.test.ts` checks, against a scripted model, that the
+first answer is handed back with a checklist from the task, that a check
+command is required, that the reviewer is offered nothing that writes and is
+not shown the transcript, that rounds are bounded, that the gate is skipped
+when the step budget or the deadline is nearly spent, and that every record
+carries only the fixture's keys.
