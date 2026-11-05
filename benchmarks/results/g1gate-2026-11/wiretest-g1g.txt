@@ -1,0 +1,131 @@
+== G1 (completion gate) wire test 2026-11-05T13:43:51.651Z: gnomon/0.4.2+master-ae17a1a (/tmp/claude-1000/-home-eljaplacido-gnomon/3809fb39-94a4-4ea4-b0f3-7057ddad8d1d/scratchpad/g1/wt-prefix/bin/gnomon)
+  ok   the binary under test is the pinned build (master ae17a1ae, gnomonBuild master-ae17a1a)
+
+N0 (N1's arm-N0 setup, no [verify] line): gnomon exit 0; 2 requests reached the fake server (0 from a reviewer)
+  relay: chat 2, late system 0 req, [gnomon] notes 0 req (0 msgs, new 0); kinds as a note: nudge 0, converge 0, wrapup 0, verify 0, context 0, other 0; requests carrying a gate note 0; client_aborts 0, errors 0
+  turn records 1; main: wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"steer_role":"user","tools_hash":"7e00335dbc3cefad11f1f37c0b8a15bd89afa4fd10dce2d4f9abd414ce85582e"}, nudges 0, steer_role_adapted absent, stop_reason answered, tool_steps 1
+  counters.model_calls: count 2, steered_calls {"nudge":0,"converge":0,"other":0}
+  counters.completion_gate: undefined
+  completion_gate records: []
+  ok   gnomon task ran to exit 0 (not killed at 180 s)
+  ok   the relay parsed every request the server saw
+  ok   the main turn record's wire says steer_role user
+  ok   no system message after the first on the wire
+  ok   no refusal was learned (steer_role_adapted absent or 0)
+  ok   no idle nudge (nudge_after_idle = 100000 in every arm)
+  ok   the work was done (out.txt exists)
+  ok   N0: no gate ran (no counters.completion_gate, no completion_gate record, no gate note on the wire)
+  ok   N0: the turn wrote, answered and was accepted (2 requests)
+
+G0 (completion_gate = "off"): gnomon exit 0; 2 requests reached the fake server (0 from a reviewer)
+  relay: chat 2, late system 0 req, [gnomon] notes 0 req (0 msgs, new 0); kinds as a note: nudge 0, converge 0, wrapup 0, verify 0, context 0, other 0; requests carrying a gate note 0; client_aborts 0, errors 0
+  turn records 1; main: wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"steer_role":"user","tools_hash":"7e00335dbc3cefad11f1f37c0b8a15bd89afa4fd10dce2d4f9abd414ce85582e"}, nudges 0, steer_role_adapted absent, stop_reason answered, tool_steps 1
+  counters.model_calls: count 2, steered_calls {"nudge":0,"converge":0,"other":0}
+  counters.completion_gate: undefined
+  completion_gate records: []
+  ok   gnomon task ran to exit 0 (not killed at 180 s)
+  ok   the relay parsed every request the server saw
+  ok   the main turn record's wire says steer_role user
+  ok   no system message after the first on the wire
+  ok   no refusal was learned (steer_role_adapted absent or 0)
+  ok   no idle nudge (nudge_after_idle = 100000 in every arm)
+  ok   the work was done (out.txt exists)
+  ok   G0: no gate ran (no counters.completion_gate, no completion_gate record, no gate note on the wire)
+  ok   G0: the turn wrote, answered and was accepted (2 requests)
+
+G1 (completion_gate = "checklist"): gnomon exit 0; 5 requests reached the fake server (0 from a reviewer)
+  relay: chat 5, late system 0 req, [gnomon] notes 3 req (5 msgs, new 2); kinds as a note: nudge 0, converge 0, wrapup 0, verify 0, context 0, other 3; requests carrying a gate note 3; client_aborts 0, errors 0
+  turn records 1; main: wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"steer_role":"user","tools_hash":"7e00335dbc3cefad11f1f37c0b8a15bd89afa4fd10dce2d4f9abd414ce85582e"}, nudges 0, steer_role_adapted absent, stop_reason answered, tool_steps 2
+  counters.model_calls: count 5, steered_calls {"nudge":0,"converge":0,"other":3}
+  counters.completion_gate: {"v":1,"mode":"checklist","max_rounds":3,"rounds":2,"checks":1,"reviews":0,"review_steps":0,"findings":0,"outcome":"passed","ms":5}
+  completion_gate records: [{"seq":5,"prev":"6d4357cb98b80280803102eea6dbbb277010cd3e2f8fd3fcaa827621d8ce62c5","role":"implementor","round":1,"action":"checklist","step":1,"budget_left":0.996,"budget_by":"steps","ms":5,"hash":"01506e7db14fe5369213fa770c768d81701cb449714eae383eac674041f079e4"},{"seq":7,"prev":"5e7b8454290f6b1c14f693b9ca4e8217f8b566a6bd9184a055440f4968061802","role":"implementor","round":2,"action":"no_check","step":1,"budget_left":0.996,"budget_by":"steps","ms":0,"hash":"0e4c329913143c171f2b6c65b61937d73bb2f913ac6ef4e9fc6dd13630892dbd"},{"seq":12,"prev":"648918ea14ca086c9113876f5c5d6b91cc97c6bf8c117fab460286788b09548c","role":"implementor","round":2,"action":"accept","outcome":"passed","step":2,"budget_left":0.992,"budget_by":"steps","ms":0,"hash":"077df87b794a1822183655c3aaa1be362d27570aa8fe30967f47b88fc7a0486d"}]
+  ok   gnomon task ran to exit 0 (not killed at 180 s)
+  ok   the relay parsed every request the server saw
+  ok   the main turn record's wire says steer_role user
+  ok   no system message after the first on the wire
+  ok   no refusal was learned (steer_role_adapted absent or 0)
+  ok   no idle nudge (nudge_after_idle = 100000 in every arm)
+  ok   the work was done (out.txt exists)
+  first hand-back as the model saw it (1164 chars):
+    | [gnomon] Completion gate (round 1 of 3): your answer is not accepted yet. This is the harness, not a reviewer's opinion: every turn that changes files is checked against the task's own words before it may end.
+    | 
+    | From the task:
+    | Stated requirements:
+    |   1. Write the word hello into a file named `out.txt` in this directory.
+    |   2. The file must contain exactly one line.
+    |   3. Do not create any other file.
+    | Files and paths named: `out.txt`
+    | 
+    | Also check:
+    |   - every path above exists where the task says, with the exact name, format and content it asks for;
+    |   - every number above is honoured exactly (counts, limits, precision, units);
+    |   - edge cases the task implies: empty or malformed input, boundaries, large input, repeated and concurrent runs, error paths;
+    |   - no stray files: remove scratch scripts, backups, logs and build output the task did not ask for.
+    | 
+    | Run at least one command that exercises the result -- the task's own command, a test, or a script that checks the output against the items above -- before you answer again. An answer with no command run after this message is not accepted. Fix what fails. Then answer, saying for each item how you checked it.
+  ok   G1: the first answer was handed back with a checklist built from the task (its requirements and out.txt) as a [gnomon] user note
+  ok   G1: an answer with no command run after the checklist was handed back again (no_check)
+  ok   G1: the meter saw the gate's notes (kind "other")
+  ok   G1: counters.completion_gate says mode checklist, 3 rounds max, checks >= 1, outcome passed
+  ok   G1: two hand-backs (checklist, no_check), no reviewer
+  ok   G1: the trail records checklist, no_check, accept(passed), each by the step budget
+
+G2 (completion_gate = "review"): gnomon exit 0; 12 requests reached the fake server (4 from a reviewer)
+  relay: chat 12, late system 0 req, [gnomon] notes 6 req (14 msgs, new 3); kinds as a note: nudge 0, converge 0, wrapup 0, verify 0, context 0, other 6; requests carrying a gate note 6; client_aborts 0, errors 0
+  turn records 1; main: wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"steer_role":"user","tools_hash":"7e00335dbc3cefad11f1f37c0b8a15bd89afa4fd10dce2d4f9abd414ce85582e"}, nudges 0, steer_role_adapted absent, stop_reason answered, tool_steps 4
+  counters.model_calls: count 12, steered_calls {"nudge":0,"converge":0,"other":6}
+  counters.completion_gate: {"v":1,"mode":"review","max_rounds":3,"rounds":3,"checks":3,"reviews":1,"review_steps":3,"findings":1,"outcome":"passed","ms":44}
+  completion_gate records: [{"seq":5,"prev":"dd86d6cd1a361f2c1b5e7748be6b1691761bfb82e9c3f081b242b1a5ef544c10","role":"implementor","round":1,"action":"checklist","step":1,"budget_left":0.996,"budget_by":"steps","ms":5,"hash":"81958408e8f0d3af8c19da24f2853d8cd1e94c3840ac84c1e446c8c3d45ce504"},{"seq":7,"prev":"f6f9e62177a4107306a7c9dd1befe668a5b0be68c3fd455194b9bd342941e061","role":"implementor","round":2,"action":"no_check","step":1,"budget_left":0.996,"budget_by":"steps","ms":1,"hash":"49a20303a77da62bd33458a5f890fb08eb2e96d59781167545f01067fb13ba0d"},{"seq":20,"prev":"050c768a59b421a6ac867b1e54d31eb2f3ddd64fbc1ca4133879ef27a5927229","role":"implementor","round":3,"action":"review","step":2,"budget_left":0.992,"budget_by":"steps","findings":1,"ms":38,"hash":"7f69c1043e7afff24702444016945ce3aead6513f6155a78f0e70640a54b7f03"},{"seq":28,"prev":"312283c75d9bb29a3332e26bdf9c15c582fe4160d4c1963a160e5968b89e24f9","role":"implementor","round":3,"action":"accept","outcome":"passed","step":4,"budget_left":0.984,"budget_by":"steps","ms":0,"hash":"b65ec72d5ef41a0c454e2276448aa4b150fd17a0424c33f31aca651a9c694ed5"}]
+  ok   gnomon task ran to exit 0 (not killed at 180 s)
+  ok   the relay parsed every request the server saw
+  ok   the main turn record's wire says steer_role user
+  ok   no system message after the first on the wire
+  ok   no refusal was learned (steer_role_adapted absent or 0)
+  ok   no idle nudge (nudge_after_idle = 100000 in every arm)
+  ok   the work was done (out.txt exists)
+  first hand-back as the model saw it (1164 chars):
+    | [gnomon] Completion gate (round 1 of 3): your answer is not accepted yet. This is the harness, not a reviewer's opinion: every turn that changes files is checked against the task's own words before it may end.
+    | 
+    | From the task:
+    | Stated requirements:
+    |   1. Write the word hello into a file named `out.txt` in this directory.
+    |   2. The file must contain exactly one line.
+    |   3. Do not create any other file.
+    | Files and paths named: `out.txt`
+    | 
+    | Also check:
+    |   - every path above exists where the task says, with the exact name, format and content it asks for;
+    |   - every number above is honoured exactly (counts, limits, precision, units);
+    |   - edge cases the task implies: empty or malformed input, boundaries, large input, repeated and concurrent runs, error paths;
+    |   - no stray files: remove scratch scripts, backups, logs and build output the task did not ask for.
+    | 
+    | Run at least one command that exercises the result -- the task's own command, a test, or a script that checks the output against the items above -- before you answer again. An answer with no command run after this message is not accepted. Fix what fails. Then answer, saying for each item how you checked it.
+  ok   G2: the first answer was handed back with a checklist built from the task (its requirements and out.txt) as a [gnomon] user note
+  ok   G2: an answer with no command run after the checklist was handed back again (no_check)
+  ok   G2: the meter saw the gate's notes (kind "other")
+  ok   G2: counters.completion_gate says mode review, 3 rounds max, checks >= 1, outcome passed
+  reviewer: 4 requests; tools offered ["bash","compute","glob","grep","read","todo"]; first request roles ["system","user"]
+  reviewer tool results: ["exit: 0\nstdout:\ntotal 28\ndrwxrwxr-x 4 eljaplacido eljaplacido 4096 Nov  5 15:43 .\ndrwxrwxr-x 6 eljaplacido eljaplacido 4096 Nov  5 15:43 ..\n","Refused: the command redirects output (>), which writes regardless of what it runs.\nThis role may only run commands matching /^(cargo (test|","Refused: \"write\" is not available to this role. Available: bash, compute, glob, grep, read, todo."]
+  ok   G2: one reviewer sub-turn (4 requests), one finding, three hand-backs (checklist, no_check, findings)
+  ok   G2: the reviewer was offered only read/glob/grep/compute/todo and bash (the verifier declares a bash_allow)
+  ok   G2: the reviewer was given the task verbatim and not the transcript (system + one user message)
+  ok   G2: the reviewer's ls ran; its redirect write and its write call were refused and left nothing on disk
+  ok   G2: the finding reached the main turn as a [gnomon] user note
+  ok   G2: the main turn acted on the finding (out.txt now holds hello)
+  ok   G2: the trail records checklist, no_check, review(1 finding), accept(passed)
+  ok   config.toml: every G arm's is N0's
+  ok   policy.toml: G0's is N0's plus "[verify]" and completion_gate = "off"
+  ok   policy.toml: G1 and G2 differ from G0 by the completion_gate value only
+
+requests: N0 2, G0 2; first differing request: none
+  ok   G0 (completion_gate off) sent exactly N0's request bodies, request for request
+  ok   G1 sent G0's first two request bodies (the gate acts only at an answer)
+  ok   G2 sent G0's first two request bodies (the gate acts only at an answer)
+
+reviewer (verifier) bash_allow: ["^(cargo (test|nextest run|check|clippy)|go (test|vet)|pytest)(\\s|$)","^(pnpm|npm|yarn)( (--filter|-F|--workspace|-w) [^\\s;&|]+| -w)? (run )?test(:[\\w-]+)?(\\s|$)","^make (test|check)(\\s|$)","^(ls|cat|head|tail|grep|rg|find|git (status|diff|log|show))\\s"]
+reviewer (verifier) bash_deny: ["-exec","-execdir","-ok","-okdir","-delete","-fprint","\\bxargs\\b","\\b(awk|gawk|perl|python3?|ruby|node)\\b","-vettool","-toolexec","--(config|script-shell|userconfig|globalconfig)\\b","^make\\s[^|;&]*\\s(-[A-Za-z]*[fE]|--(file|makefile|eval)\\b|[^\\s=]+=)"]
+bashPolicy on the reviewer's lists: {"pytest -q":"runs","pytest tests/test_outputs.py":"runs","make test":"runs","npm test":"runs","cargo test":"runs","go test ./...":"runs","ls -la /app":"runs","cat out.txt":"runs","head -n 5 out.txt":"runs","grep -n hello out.txt":"runs","find . -name '*.py'":"runs","git diff --stat":"runs","python3 solve.py":"refused","python3 -m pytest":"refused","bash run.sh":"refused","node index.js":"refused","sqlite3 db.sqlite .tables":"refused","jq . data.json":"refused","curl http://localhost:8080":"refused","echo x > out.txt":"refused","cat a > b":"refused","sed -i s/a/b/ out.txt":"refused","rm -rf build":"refused","find . -delete":"refused","find . -exec rm {} ;":"refused","ls":"refused","git diff":"refused","wc -l out.txt":"refused"}
+  ok   the reviewer can run the project's own checks read-only: pytest, make test, npm test, cargo/go test, ls/cat/head/grep/find, git diff <args>
+  ok   the reviewer cannot write or run code: redirects, sed -i, rm, find -delete/-exec, python3/node/bash scripts, sqlite3, jq, curl (and bare ls, bare git diff, wc) are refused
+
+wire test: PASS (gnomon/0.4.2+master-ae17a1a)

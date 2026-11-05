@@ -1,0 +1,157 @@
+#!/bin/bash
+# tb SOURCES this file into the shell that later runs the agent, so the `set -e`
+# and `exit` below would apply to that shell: a failure would kill it before
+# `tmux wait -S done`, and tb would wait out the whole cap and score a timeout.
+# (The 2026-10-31 smoke run's gnomon cell did exactly that.) The body therefore
+# runs in a child bash, and only its verdict reaches tb's shell. The peer setups
+# never `exit` and set no options, so this brings the gnomon arm level with them.
+if [ -z "${GNOMON_SETUP_CHILD:-}" ]; then
+  if GNOMON_SETUP_CHILD=1 bash "${BASH_SOURCE[0]}"; then :; else echo "INSTALL_FAIL_STATUS"; fi
+  return 0 2>/dev/null || true
+fi
+# Capture the TASK directory before anything can change it (fix-git lives in
+# /app/personal-site, prove-plus-comm in /workspace): record the real one.
+printf '%s' "$PWD" > /opt/task-cwd 2>/dev/null || true
+# G1 (completion gate) setup: a copy of N1's gnomon-setup-n1.sh.j2 (../../n1-2026-11/apparatus) with three changes.
+# 1. BUILD. gnomon is master ae17a1ae958d6ccfd316c85ebde2f48ae066d6ac (PR #152 merged, not released), packed into
+#    the four npm tarballs exactly as the release job packs them (pnpm install --frozen-lockfile; pnpm -r run build;
+#    gnomonBuild stamped "master-ae17a1a"; pnpm pack), on the gx10, from `git archive` of that commit. The tarballs
+#    are not downloaded: the agent class (peer_agents_g1g.py) copies them and their SHA256SUMS from ../dist into
+#    /installed-agent/gnomon-dist before this script runs. Pinned three ways, as N1 pins the release:
+#      (a) SHA256SUMS itself must hash to d6b6c5f4... (that freezes the list the tarballs are checked against);
+#      (b) every tarball must match SHA256SUMS;
+#      (c) the installed gnomon-core must carry gnomonBuild "master-ae17a1a" and `gnomon --version` must print
+#          "gnomon/0.4.2+master-ae17a1a".
+#    Any mismatch stops the install; the cell then makes no model call and is apparatus, never scored.
+#    Only after all three pass is the commit written to /agent-logs/gnomon-commit.txt.
+# 2. THE SURFACE IS N1's ARM N0, held fixed: steer_role = "user" on r1local and [turn] nudge_after_idle = 100000
+#    (no idle nudge), so the completion gate is the one variable against the nudge-free baseline.
+# 3. THE ARM LINE. [verify] completion_gate = "<G1G_GATE>" in policy.toml: "off" (G0), "checklist" (G1) or
+#    "review" (G2). Every other completion_* key keeps its default (rounds 3, min_remaining 0.2, reviewer verifier).
+#    When init declared a [verify] check of its own (a task dir with pyproject.toml, Cargo.toml, a package.json
+#    test script or a Makefile test target), init appended that block last, and the line joins it; otherwise a
+#    [verify] block holding only the line is appended. The node block asserts the result: one [verify] header,
+#    one completion_gate line, inside it, with the arm's value.
+# Everything else is N1's: L routing (every role on r1local), role_profile r1, roles.toml's model and endpoint
+# lines removed, audit on, approval answered by --yes, --trust, the same records copied out, plus policy.toml.
+set -e
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq >/dev/null 2>&1 || true
+apt-get install -y -qq curl ca-certificates >/dev/null 2>&1 || true
+
+export NVM_DIR="$HOME/.nvm"
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash >/dev/null 2>&1
+. "$NVM_DIR/nvm.sh"
+nvm install 22 >/dev/null 2>&1
+
+REL_V=0.4.2
+REL_BUILD=master-ae17a1a
+REL_COMMIT=ae17a1ae958d6ccfd316c85ebde2f48ae066d6ac
+REL_SUMS_SHA256=d6b6c5f4a72b66202377f31bf2df9fd8e4002625b8c96cae8589154e316891c8
+DIST=/installed-agent/gnomon-dist
+mkdir -p /agent-logs
+if [ "${GNOMON_EXPECT_SHA:-}" != "$REL_COMMIT" ]; then
+  echo "FATAL: GNOMON_EXPECT_SHA '${GNOMON_EXPECT_SHA:-}' is not the build under test $REL_COMMIT" >&2
+  exit 1
+fi
+cd "$DIST" 2>/dev/null || { echo "FATAL: $DIST is missing: the agent class did not copy the tarballs in" >&2; exit 1; }
+echo "$REL_SUMS_SHA256  SHA256SUMS" | sha256sum -c - >/dev/null 2>&1 \
+  || { echo "FATAL: SHA256SUMS does not hash to $REL_SUMS_SHA256" >&2; exit 1; }
+[ "$(sha256sum -c SHA256SUMS 2>/dev/null | grep -c "gnomon-.*-$REL_V.tgz: OK")" = 4 ] \
+  || { echo "FATAL: a $REL_BUILD tarball does not match SHA256SUMS" >&2; exit 1; }
+npm i -g --silent ./gnomon-core-$REL_V.tgz ./gnomon-natives-$REL_V.tgz ./gnomon-tui-$REL_V.tgz ./gnomon-harness-$REL_V.tgz >/dev/null 2>&1 \
+  || { echo "FATAL: npm could not install the $REL_BUILD tarballs" >&2; exit 1; }
+got_build=$(node -p "require(\"$(npm root -g)/gnomon-core/package.json\").gnomonBuild" 2>/dev/null || true)
+got_version=$(gnomon --version 2>/dev/null | tail -1 || true)
+if [ "$got_build" != "$REL_BUILD" ] || [ "$got_version" != "gnomon/$REL_V+$REL_BUILD" ]; then
+  echo "FATAL: installed gnomon is '$got_build' / '$got_version', want $REL_BUILD / gnomon/$REL_V+$REL_BUILD" >&2
+  exit 1
+fi
+# Which build this trial actually measured: the commit, attested by the three pins above.
+printf '%s\n%s %s SHA256SUMS=%s harness=%s\n' "$REL_COMMIT" "$REL_BUILD" "$got_version" "$REL_SUMS_SHA256" \
+  "$(grep "gnomon-harness-$REL_V.tgz" SHA256SUMS | cut -c1-64)" > /agent-logs/gnomon-commit.txt
+cd "$(cat /opt/task-cwd 2>/dev/null || echo /)"
+# Also on the terminal: tb captures the pane for every task, but some tasks
+# (pandas-sql-query) mount no agent-logs volume.
+echo "ARM_VERSION=$(head -1 /agent-logs/gnomon-commit.txt 2>/dev/null)"
+
+# Run helper: build a fresh surface in the task dir, point every role at the
+# bench endpoint/model (approval answered for headless), then solve.
+cat > /opt/gnomon-run.sh <<'RUN'
+#!/bin/bash
+set -e
+export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
+INSTR="$1"
+cd "$(cat /opt/task-cwd 2>/dev/null || echo /app)" 2>/dev/null || true
+echo "gnomon cwd: $(pwd)" >> /agent-logs/gnomon-cwd.txt 2>/dev/null || true
+gnomon init >/dev/null 2>&1 || true
+# N1's arm-N0 surface (steer_role = "user" on r1local, nudge_after_idle = 100000, L routing, profile r1), plus the gate line.
+node -e '
+const fs=require("fs"), E=process.env;
+const ROLES=["coordinator","implementor","verifier","plan","implement","critique","smol"];
+const routes=Object.fromEntries(E.R1_ROUTES.split(",").map(p=>p.split("=")));
+for(const r of ROLES){ if(routes[r]!=="local"&&routes[r]!=="cloud") throw new Error(`R1_ROUTES has no local/cloud route for ${r}: ${E.R1_ROUTES}`); }
+const ep={local:"r1local",cloud:"r1cloud"}, model={local:E.R1_LOCAL_MODEL,cloud:E.R1_CLOUD_MODEL};
+const sr=E.N1_STEER_ROLE, nv=E.N1_NUDGE_AFTER_IDLE, g=E.G1G_GATE;
+if(sr!=="user") throw new Error(`N1_STEER_ROLE must be user in every arm, got: ${sr}`);
+if(nv!=="100000") throw new Error(`N1_NUDGE_AFTER_IDLE must be 100000 (N0) in every arm, got: ${nv}`);
+if(g!=="off"&&g!=="checklist"&&g!=="review") throw new Error(`G1G_GATE must be off, checklist or review, got: ${g}`);
+let c=fs.readFileSync(".gnomon/config.toml","utf8");
+const dflt=(c.match(/^\[defaults\]\r?\n([\s\S]*?)(?=^\[)/m)||[])[1]||"";
+if(!/^stream = true\b/m.test(dflt)||!/^max_tokens = 32768\b/m.test(dflt)) throw new Error("G1G: init did not write [defaults] stream = true and max_tokens = 32768; wrong build?");
+if(/steer_role|replay_reasoning/.test(c)) throw new Error("G1G: config.toml declares steer_role or replay_reasoning before the arm line");
+const turnOf=(s)=>(s.match(/^\[turn\]\r?\n([\s\S]*?)(?=^\[)/m)||[])[1]||"";
+if((c.match(/^nudge_after_idle = /gm)||[]).length!==1||!/^nudge_after_idle = 12\b/m.test(turnOf(c))) throw new Error("G1G: init did not write [turn] nudge_after_idle = 12 exactly once; wrong build?");
+c=c.replace(/^nudge_after_idle = 12\b/m,`nudge_after_idle = ${nv}`);
+if(!c.includes("[endpoints.r1local]")){
+  c=c.replace(/\s*$/,"\n")+`\n[endpoints.r1local]\nurl = "${E.R1_LOCAL_URL}"\nkind = "openai"\nsteer_role = "${sr}"\n\n[endpoints.r1cloud]\nurl = "${E.R1_CLOUD_URL}"\nkind = "openai"\n`;
+}
+const rl=c.match(/\[endpoints\.r1local\]\nurl = "[^"]*"\nkind = "openai"\nsteer_role = "(system|user)"\n/);
+if(!rl||rl[1]!==sr||(c.match(/steer_role/g)||[]).length!==1||/replay_reasoning/.test(c)) throw new Error(`G1G: r1local does not declare steer_role = "${sr}" exactly once (and no replay_reasoning)`);
+const nl=new RegExp(`^nudge_after_idle = ${nv}\\b`,"m");
+if((c.match(/^nudge_after_idle = /gm)||[]).length!==1||!nl.test(turnOf(c))) throw new Error(`G1G: [turn] does not declare nudge_after_idle = ${nv} exactly once`);
+if(/role_profile = "[^"]*"/.test(c)) c=c.replace(/role_profile = "[^"]*"/,`role_profile = "r1"`);
+else c=c.replace(/\[defaults\]\r?\n/,`[defaults]\nrole_profile = "r1"\n`);
+if(!/role_profile = "r1"/.test(c)) throw new Error("could not set role_profile");
+c=c.replace(/\[audit\]([\s\S]*?)enabled = false/,"[audit]$1enabled = true");
+fs.writeFileSync(".gnomon/config.toml",c);
+let r=fs.readFileSync(".gnomon/roles.toml","utf8");
+r=r.replace(/^(model|endpoint) = .*\r?\n/gm,"");
+fs.writeFileSync(".gnomon/roles.toml",r);
+fs.mkdirSync(".gnomon/profiles",{recursive:true});
+let prof=`name = "r1"\ndescription = "R1 arm ${E.R1_ARM}: ${E.R1_ROUTES}"\n`;
+for(const role of ROLES) prof+=`\n[roles.${role}]\nmodel = "${model[routes[role]]}"\nendpoint = "${ep[routes[role]]}"\n`;
+fs.writeFileSync(".gnomon/profiles/r1.toml",prof);
+let p=fs.readFileSync(".gnomon/policy.toml","utf8");
+if(!/\[approval\]/.test(p)) p=p+`\n[approval]\ngate = "never"\n`;
+if(/^\s*completion_/m.test(p)) throw new Error("G1G: policy.toml declares a completion_* key before the arm line");
+const heads=[...p.matchAll(/^\[([^\]\n]+)\]\s*$/gm)].map(m=>m[1]);
+if(heads.filter(h=>h==="verify").length>1) throw new Error("G1G: policy.toml has more than one [verify] block");
+if(heads.includes("verify")){
+  if(heads[heads.length-1]!=="verify") throw new Error("G1G: init wrote a [verify] block that is not the last table; the gate line cannot join it safely");
+  p=p.replace(/\s*$/,"\n")+`completion_gate = "${g}"\n`;
+} else {
+  p=p.replace(/\s*$/,"\n")+`\n[verify]\ncompletion_gate = "${g}"\n`;
+}
+const h2=[...p.matchAll(/^\[([^\]\n]+)\]\s*$/gm)];
+const vAt=h2.filter(m=>m[1]==="verify");
+const lines=[...p.matchAll(/^completion_gate = "(off|checklist|review)"\s*$/gm)];
+if(vAt.length!==1||lines.length!==1||(p.match(/^\s*completion_/gm)||[]).length!==1||lines[0][1]!==g||lines[0].index<vAt[0].index||h2[h2.length-1][1]!=="verify")
+  throw new Error(`G1G: policy.toml does not declare [verify] completion_gate = "${g}" exactly once, inside [verify]`);
+fs.writeFileSync(".gnomon/policy.toml",p);
+'
+mkdir -p /agent-logs
+cp .gnomon/profiles/r1.toml /agent-logs/r1-profile.toml 2>/dev/null || true
+cp .gnomon/policy.toml /agent-logs/surface-policy.toml 2>/dev/null || true
+echo "R1_ARM=$R1_ARM R1_ENTRY=$R1_ENTRY R1_ROUTES=$R1_ROUTES N1_STEER_ROLE=$N1_STEER_ROLE N1_NUDGE_AFTER_IDLE=$N1_NUDGE_AFTER_IDLE G1G_GATE=$G1G_GATE"
+# --trust: the benchmark surface is looser than the scaffold on purpose (approval answered for a
+# headless run). Every arm runs its surface as declared, the same way (S1's line, unchanged).
+gnomon task "$INSTR" --role "$R1_ENTRY" --yes --trust 2>&1 | tee /agent-logs/gnomon-full.log | tail -40
+cp -r .gnomon-audit /agent-logs/audit 2>/dev/null || true
+cp .gnomon/config.toml /agent-logs/surface-config.toml 2>/dev/null || true
+RUN
+chmod +x /opt/gnomon-run.sh
+echo "GNOMON_INSTALL_OK"
+# When setup ended. tb starts the 900 s clock before setup, so install time is spent from the cap.
+echo "ARM_SETUP_END=$(date -u +%s)"
