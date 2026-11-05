@@ -26,6 +26,10 @@
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-11-05
+
+Security fixes found by the first GBS v0.1 conformance runs (#148), all tightening (#149): `gnomon audit verify` now fails a trail with records appended after its seal; skill accept/reject (and `audit resolve`) can no longer be approved from inside an agent session by unsetting `GNOMON_AGENT_SESSION`, and need a person present (a terminal or a person-present signer); the anchor flush lock is released on exit (it was left behind with the published package layout). Model requests on a default surface are byte-identical to 0.4.1. Behaviour change to know: `gnomon skill accept` from a non-interactive script is now refused.
+
 ### Security
 
 - **`gnomon audit verify` fails a trail that was appended to after its
