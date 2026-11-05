@@ -1476,7 +1476,8 @@ command ran: `exit`, and `worktree_changed` as the bash stamp observed it. A
 bootstrap is declared read-only; `worktree_changed: true` is recorded and
 announced, never undone. One `bootstrap` audit record carries the same, plus
 the command as the trail records any command, the tool `code`, `bucket` and
-`summary`, and `duration_ms`.
+`summary`, and `duration_ms`. The built-in snapshot (`[context] env_snapshot`,
+§32) records the same fields with `id: "env_snapshot"`.
 
 `outcome` is a published enumeration:
 
@@ -2425,3 +2426,138 @@ command is required, that the reviewer is offered nothing that writes and is
 not shown the transcript, that rounds are bounded, that the gate is skipped
 when the step budget or the deadline is nearly spent, and that every record
 carries only the fixture's keys.
+
+## 32. Sweep knobs — reasoning effort, sampling, environment snapshot, todo gate, edit variant, package index, `v: 1`
+
+Six opt-in surface settings, one per long-task hypothesis from P2G41's root
+causes and the long-task research notes (2026-11-05), so an adaptive
+benchmark sweep can test each as a change to the hashed surface rather than
+as a build. Each is declared in `.gnomon/` and moves the surface hash; each
+absent key is the build before it. (§31 is reserved for the long-task
+changes in PR #153.)
+
+**What must not change.** With every key below absent, and again with every
+key declared at its default value (`reasoning_effort = "provider"` on the
+endpoint and the role, `sampling = "harness"`, `env_snapshot = false`,
+`todo_gate = false`, `variant = "default"`, `allow_package_index = []`), a
+scripted `gnomon task` turn (a checklist with open items, a read, an edit, a
+command, a command `network = false` refuses, an answer) sends request
+bodies byte-identical to master's at `ae17a1ae`, on an OpenAI-shaped and an
+Ollama endpoint. The hashes were taken from the built package before the code
+existed (`sweep_knobs.test.ts`).
+
+| knob | key | values | absent |
+|---|---|---|---|
+| reasoning effort | config.toml `[endpoints.<name>] reasoning_effort`; roles.toml `[roles.<r>] reasoning_effort` | `low`, `medium`, `high`, `max`, or `provider` | no field is sent |
+| sampling | config.toml `[endpoints.<name>] sampling`; roles.toml `temperature`, `top_p` | `harness`, `provider`; a number or `provider` | the role's numbers are sent (absent: 0.2 and 0.9) |
+| environment snapshot | config.toml `[context] env_snapshot` | `true`, `false` | nothing runs before the first call |
+| todo gate | config.toml `[turn] todo_gate` | `true`, `false` | an answer with open todos ends the turn |
+| edit variant | tools.toml `[[tools]] name = "edit"`, `variant` | `default`, `compat` | `old_text`/`new_text`, an exact unique match |
+| package index | policy.toml `[sandbox] allow_package_index` | a list of host names | `network = false` refuses every URL a command names |
+
+**Reasoning effort.** Sent on an OpenAI-shaped endpoint as `reasoning_effort`,
+the field DeepSeek's API and OpenCode Go take (Go lists
+`capabilities.reasoning.effort` = low/high/max for DeepSeek V4.1 Flash;
+DeepSeek maps `medium` to `high`). The role's declaration wins over the
+endpoint's; `provider` sends none whatever the endpoint says. A value outside
+the four is not sent and is reported by the surface audit, because GLM accepts
+any string without an error. An Ollama `/api/chat` endpoint is never sent one
+(it takes `think`), and the audit says so. The turn record's `wire` carries
+`reasoning_effort` when one went out.
+
+**Sampling.** The endpoint key is `sampling`. `sampling = "provider"` sends neither
+`temperature` nor `top_p` to it, whatever the role declares; on Ollama the
+`options` keep only `num_predict`. A role's `temperature = "provider"` or
+`top_p = "provider"` leaves out that one. The others' keys keep their places.
+The `wire` carries `sampling_omitted` (`temperature`, `top_p`, in that order)
+when one was left out. A role whose numbers an endpoint's `provider` leaves
+unsent is noted by the audit.
+
+**Environment snapshot.** `env_snapshot = true` runs one fixed, read-only
+command before the first model call, through the bootstrap's path (§19): the
+bash tool, under the role's `bash_allow` and `bash_deny`, the sandbox and
+`[sandbox] exec`, so a policy that does not admit it refuses it and the turn
+runs without one. It prints the working directory and its top-level listing,
+`git status`, the OS, CPUs and memory, the version of each of python3, pip,
+uv, node, npm, cargo, go and java (or `not found`), run in parallel and cut at
+one second each (`timeout`, else a perl alarm), which other toolchains are on
+PATH and which system package managers are present (`command -v`, which
+starts nothing). Nothing in it names a URL or a network client; git takes no
+optional lock and runs no fsmonitor, and the toolchains' update checks and
+downloads are switched off by variable. Bounded at 2000 ms and 6000 bytes
+(~1500 tokens); a probe the bound cuts is recorded `failed` and the turn runs
+without a snapshot, which GitHub's macOS and Windows runners, slow to start
+processes, can do. Like a declared bootstrap it is a workspace-trust grant
+(§8): it runs tools in the repository unasked, and a repository's own tool
+configuration (a `rust-toolchain.toml` path, a version-manager file) can
+decide what a version probe executes. A clamped surface runs none, so an
+untrusted `gnomon task` needs `--trust`. The output ends with one line gnomon writes
+from the policy, not from a probe: `network (policy): allowed`, or `off` and
+what that refuses, naming the `allow_package_index` hosts when there are any.
+The block is appended to the system prompt, the first message, and stays the
+same on every later call. Recorded as any bootstrap is: `counters.bootstrap`
+and audit kind `bootstrap`, with `id: "env_snapshot"`. A declared
+`[context] bootstrap` wins over it, and the audit says `env_snapshot` does
+nothing there.
+
+**Todo gate.** With `todo_gate = true`, an answer given while the checklist
+this turn wrote has open items (any not `completed`) is not accepted: the
+harness hands the turn back once, as a system message after the answer,
+naming each open item. It applies, like the completion gate (§30), only to the
+turn a person asked for, only to an answer, only to a role offered `todo`, and
+only when less than `[verify] completion_min_remaining` (default 0.2) of the
+step budget or the run deadline has not been spent. It runs after the
+declared `[verify]` check and before the completion gate.
+
+- `counters.todo_gate`, present only when declared: `v`, `max_rounds` (1),
+  `rounds` (hand-backs), `open` (open items when it last judged an end) and
+  `outcome`.
+- Actions: `hand_back`, `accept`.
+- Outcomes: `passed` (accepted with nothing open), `exhausted` (the round was
+  spent and items were still open), `skipped_budget`, `not_reached` (the turn
+  ended some other way, the role cannot call `todo`, or the turn wrote no
+  list).
+- Audit kind `todo_gate`, one per end it judged: `role`, `round`, `action`,
+  `open`, `step`, `budget_left`, `budget_by`, and `outcome` on `accept`.
+
+**Edit variant.** `variant = "compat"` on the `edit` declaration offers `path`,
+`old_string` and `new_string` (it takes `old_text` and `new_text` too) and
+matches in tiers: `exact`, then whole lines with whitespace normalized
+(`whitespace`: runs of blanks inside a line are one, none at the end), then
+with indentation ignored too (`indentation`, re-indenting the replacement by
+the shift the matched lines show). Each tier must find exactly one place; two
+or more are refused as ambiguous and no looser tier is tried. A result matched
+by a fuzzy tier says so. `edit_match` in the counters (`exact`, `whitespace`,
+`indentation`) is on every turn of a compat surface, zeros included, and each
+edit's `tool_call` audit record carries `edit_tier`. The schema change moves
+`wire.tools_hash` (§26). `default` is edit as it always was, the same schema
+object.
+
+**Package index.** Under `network = false` on the host, `allow_package_index`
+lets a command name listed hosts to download packages, and nothing more:
+
+- pip `install`, `download`, `wheel`, `index`; uv `pip install|compile|sync`
+  and `add|sync|lock`; npm, pnpm, yarn and bun `install`, `i`, `add`, `ci`,
+  `clean-install`, `update`, `up`, `upgrade`, `view`, `info`, `show`, `v`,
+  `pack`, `fetch`; never `publish`, `npx` or `pipx`;
+- curl and wget GETs, read option by option: no proxy, `--connect-to`,
+  `--resolve`, config file, upload, form, `-k` or wget `-e`;
+- every URL in the line (an option's value, an operand, or one embedded in
+  an operand) must be `http(s)://<listed host>/…`, with no port or userinfo.
+
+Anything else is refused as before, and the refusal names the hosts that are
+allowed. `/dev/tcp`, ssh, nc, scp, rsync, git and interpreter one-liners are
+never admitted. Entries must be bare host names; an unknown host is accepted
+and reported, since a private mirror is legitimate. It is an exception to an
+intent filter, not containment: under `exec = "docker"` the container still
+runs with `--network none`, which no host list opens, and the audit says the
+allowlist does nothing there; with the network allowed it does nothing
+either. `gnomon guard` reads it as the loop does. `counters.package_index`
+(`admitted`, `hosts`) is on every turn of a `network = false` surface that
+lists hosts, and an admitted call's `tool_call` record carries
+`package_index`.
+
+**Fixture**: `conformance/sweep_knobs.json`. `sweep_knobs.test.ts` holds the
+code's lists and defaults to it, this section to its keys and values, the
+byte-identity above, and, against a scripted model per knob, what goes out on
+the wire and into the records.

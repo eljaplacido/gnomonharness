@@ -20,6 +20,17 @@ import { loadSkills } from "./skills.js";
 import { harnessBuild } from "./build.js";
 import { AUTO_WINDOW, rememberedWindow, type ContextSource } from "./context_window.js";
 import { COMPLETION_GATE_MODES, auditCompletionGate } from "./completion_gate.js";
+import {
+  ENV_SNAPSHOT_ID,
+  ENV_SNAPSHOT_LIMITS,
+  auditSweepKnobs,
+  envSnapshotCommand,
+  resolveEnvSnapshot,
+  resolveReasoningEffort,
+  samplingOmitted,
+  type ReasoningEffort,
+  type SamplingParam,
+} from "./sweep_knobs.js";
 
 // ---------------------------------------------------------------------------
 // Types — mirror Rust structs from gnomon-surface
@@ -160,6 +171,19 @@ export interface EndpointConfig {
    * a user message marked `[gnomon] `. See resolveSteerRole.
    */
   steer_role?: SteerRole;
+  /**
+   * The reasoning effort sent with every call here, as `reasoning_effort`
+   * (low | medium | high | max), unless the role declares its own. Absent
+   * sends none. Not sent to an Ollama /api/chat endpoint. sweep_knobs.ts,
+   * docs/CONTRACTS.md §32.
+   */
+  reasoning_effort?: string;
+  /**
+   * `"provider"` sends no temperature and no top_p here, whatever the role
+   * declares, so the provider's defaults apply. `"harness"`, the default,
+   * sends the role's. sweep_knobs.ts, docs/CONTRACTS.md §32.
+   */
+  sampling?: string;
 }
 
 export type EndpointKind = "ollama" | "openai";
@@ -268,6 +292,13 @@ export interface ContextConfig {
    * before. See resolveBootstrap.
    */
   bootstrap?: string;
+  /**
+   * The built-in environment snapshot, opt-in: `true` runs a fixed, read-only
+   * probe (sweep_knobs.ts envSnapshotCommand) through the bootstrap's path
+   * before the first model call. A declared `bootstrap` wins over it.
+   * docs/CONTRACTS.md §32.
+   */
+  env_snapshot?: boolean;
 }
 
 /** config.toml [context.mask_observations] */
@@ -326,6 +357,13 @@ export interface Policy {
   sandbox?: {
     network?: boolean;
     filesystem?: string;
+    /**
+     * Hosts a command may name under `network = false` to download packages:
+     * pip, uv and npm installs and downloads, and curl and wget GETs.
+     * Default empty, which refuses every URL as before. sweep_knobs.ts,
+     * shell.ts bashNetworkEgress, docs/CONTRACTS.md §32.
+     */
+    allow_package_index?: string[];
     // `env_whitelist` was declared here and read by nothing -- no code path, no
     // test, no doc. A surface author who wrote it got a key the harness ignores,
     // which is the published-option-that-does-nothing defect this project
@@ -397,8 +435,16 @@ export interface FallbackDef {
 
 export interface RoleDef {
   model?: string;
-  temperature?: number;
-  top_p?: number;
+  /** A number, or `"provider"` to send none (sweep_knobs.ts). Absent is 0.2. */
+  temperature?: number | "provider";
+  /** A number, or `"provider"` to send none (sweep_knobs.ts). Absent is 0.9. */
+  top_p?: number | "provider";
+  /**
+   * This role's reasoning effort, over its endpoint's: low | medium | high |
+   * max, or `"provider"` to send none whatever the endpoint declares.
+   * docs/CONTRACTS.md §32.
+   */
+  reasoning_effort?: string;
   description?: string;
   /** Named endpoint from config.toml [endpoints]; defaults to "local" */
   endpoint?: string;
@@ -573,6 +619,13 @@ export interface ToolDef {
    * whole-file reads. See toolMaxLines.
    */
   max_lines?: number;
+  /**
+   * On the `edit` declaration only: `"compat"` offers `old_string` and
+   * `new_string` and matches with whitespace, then indentation, ignored when
+   * an exact match finds nothing, always uniquely. `"default"` (or absent) is
+   * edit as it was. sweep_knobs.ts, docs/CONTRACTS.md §32.
+   */
+  variant?: string;
 }
 
 /** System prompt template */
@@ -1474,8 +1527,14 @@ export const BOOTSTRAP_KEYS: readonly string[] = [...BOOTSTRAP_PLATFORMS, ...Obj
 
 /** The environment bootstrap, fully resolved for this machine. */
 export interface ResolvedBootstrap {
-  /** The `[bootstrap.<id>]` the surface selected. */
+  /** The `[bootstrap.<id>]` the surface selected, or `env_snapshot` for the built-in. */
   id: string;
+  /**
+   * Set on the built-in snapshot (`[context] env_snapshot = true`,
+   * sweep_knobs.ts): its command is gnomon's, not the surface's, and its
+   * block ends with what the policy lets the network do.
+   */
+  builtin?: true;
   platform: BootstrapPlatform;
   /** The probes declared for this platform; null when it declares none. */
   probes: string[] | null;
@@ -1515,7 +1574,23 @@ export function resolveBootstrap(
   platform: NodeJS.Platform = process.platform
 ): ResolvedBootstrap | null {
   const id = config.config.context?.bootstrap as unknown;
-  if (typeof id !== "string" || id.trim() === "") return null;
+  if (typeof id !== "string" || id.trim() === "") {
+    // `[context] env_snapshot = true` with no declared bootstrap: the
+    // built-in probe, under the same path, records and limits.
+    if (!resolveEnvSnapshot(config)) return null;
+    const fam = bootstrapPlatform(platform);
+    const command = envSnapshotCommand(fam);
+    return {
+      id: ENV_SNAPSHOT_ID,
+      builtin: true,
+      platform: fam,
+      probes: [command],
+      command,
+      max_bytes: ENV_SNAPSHOT_LIMITS.max_bytes,
+      max_lines: ENV_SNAPSHOT_LIMITS.max_lines,
+      timeout_ms: ENV_SNAPSHOT_LIMITS.timeout_ms,
+    };
+  }
   const blocks = (config.policy?.bootstrap ?? {}) as Record<string, unknown>;
   const decl = (Object.prototype.hasOwnProperty.call(blocks, id) ? blocks[id] : undefined) as
     | Record<string, unknown>
@@ -1671,6 +1746,17 @@ export interface RouteTarget {
    * so a target that never asked for it is the object it always was.
    */
   steerRole?: SteerRole;
+  /**
+   * The reasoning effort sent as `reasoning_effort`, when one is: the role's
+   * or the endpoint's (sweep_knobs.ts resolveReasoningEffort). Absent sends
+   * none, as before the key existed.
+   */
+  reasoningEffort?: ReasoningEffort;
+  /**
+   * Sampling fields left to the provider: not sent (sweep_knobs.ts
+   * samplingOmitted). Absent, or empty, sends both, as before.
+   */
+  samplingOmitted?: SamplingParam[];
 }
 
 /** The routing policy, resolved with defaults. */
@@ -1868,6 +1954,8 @@ const ENDPOINT_KEYS = new Set([
   "max_context_tokens",
   "replay_reasoning",
   "steer_role",
+  "reasoning_effort",
+  "sampling",
 ]);
 
 /**
@@ -2220,6 +2308,9 @@ const KEY_OWNER: Record<string, string> = {
   mask_observations: "context",
   bootstrap: "context",
   token_estimate: "context",
+  env_snapshot: "context",
+  todo_gate: "turn",
+  allow_package_index: "sandbox",
 };
 
 interface BlockOwner {
@@ -2301,7 +2392,7 @@ const BLOCK_OWNER: Record<string, BlockOwner> = {
   tools: { file: "tools.toml", read: true },
 };
 
-const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "max_tokens", "model", "exec", "image", "profile", "task_allow", "temperature", "tools", "top_p", "write_allow"]);
+const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "max_tokens", "model", "exec", "image", "profile", "reasoning_effort", "task_allow", "temperature", "tools", "top_p", "write_allow"]);
 
 /**
  * Spellings people reach for when they mean to supply a secret directly.
@@ -2835,6 +2926,8 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
 // The completion gate: a review naming no role cannot run (fatal); a
 // reviewer role declaring tools the review withholds reads as more than it is.
 problems.push(...auditCompletionGate(config));
+// The sweep knobs (sweep_knobs.ts): each opt-in, none fatal.
+problems.push(...auditSweepKnobs(config, (ep) => endpointKind(ep)));
 
 // [shadow] is log-only, so nothing in it is fatal: a shadow that cannot run
 // changes nothing about the run. What it can do is look like it is recording
@@ -3712,6 +3805,20 @@ export function endpointClass(
   return { where, provider: host || "custom" };
 }
 
+/** The reasoning effort and the sampling left to the provider, only when declared. */
+function knobsOf(
+  role: RoleDef,
+  endpoint: EndpointConfig | undefined,
+  kind: EndpointKind
+): Pick<RouteTarget, "reasoningEffort" | "samplingOmitted"> {
+  const effort = resolveReasoningEffort(role, endpoint, kind);
+  const omitted = samplingOmitted(role, endpoint);
+  return {
+    ...(effort ? { reasoningEffort: effort } : {}),
+    ...(omitted.length > 0 ? { samplingOmitted: omitted } : {}),
+  };
+}
+
 /**
  * Route a role to its model config.
  * Returns the model string and sampling params from roles.toml,
@@ -3725,8 +3832,10 @@ export function routeRole(
 
   // Role-level overrides take precedence
   const model = roleDef.model ?? roleDef.profile ?? "local:default";
-  const temperature = roleDef.temperature ?? 0.2;
-  const top_p = roleDef.top_p ?? 0.9;
+  // `"provider"` (sweep_knobs.ts) is not sent at all; the number carried for
+  // display is then the default. Anything else is passed on as it always was.
+  const temperature = (roleDef.temperature === "provider" ? 0.2 : roleDef.temperature ?? 0.2) as number;
+  const top_p = (roleDef.top_p === "provider" ? 0.9 : roleDef.top_p ?? 0.9) as number;
   const description = roleDef.description ?? "";
 
   // Where inference goes is declared in the surface and hashed with it.
@@ -3758,6 +3867,9 @@ export function routeRole(
     ...contextWindowOf(config, endpoint.max_context_tokens, { url, kind, model }),
     replayReasoning: resolveReplayReasoning(endpoint),
     ...(resolveSteerRole(endpoint) === "user" ? { steerRole: "user" as const } : {}),
+    // The sweep knobs (sweep_knobs.ts): each absent unless declared, so an
+    // undeclared surface builds the target it always did.
+    ...knobsOf(roleDef, endpoint, kind),
   };
 
   let fallback: RouteTarget | undefined;
@@ -3788,6 +3900,7 @@ export function routeRole(
       ...contextWindowOf(config, fbEndpoint?.max_context_tokens, { url: fbUrl, kind: fbKind, model: fb.model }),
       replayReasoning: resolveReplayReasoning(fbEndpoint ?? { url: fb.url }, "openai"),
       ...(resolveSteerRole(fbEndpoint) === "user" ? { steerRole: "user" as const } : {}),
+      ...knobsOf(roleDef, fbEndpoint, fbKind),
     };
   }
 

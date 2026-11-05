@@ -45,6 +45,13 @@ import { proposeSkill, ProposalRefused, renderSkill, SkillProposal } from "./ski
 import { compute, ComputeError } from "./compute.js";
 import type { McpRegistry, McpToolInfo } from "./mcp.js";
 import {
+  COMPAT_EDIT_PARAMETERS,
+  fuzzyEdit,
+  resolveEditVariant,
+  type EditMatchTier,
+  type EditVariant,
+} from "./sweep_knobs.js";
+import {
   bashNetworkEgress,
   describeInvocation,
   gitExecConfigs,
@@ -120,6 +127,17 @@ export interface ToolOutcome {
    * clean zero.
    */
   shell_exit?: number;
+  /**
+   * How an `edit` under `variant = "compat"` found its text (sweep_knobs.ts):
+   * `exact`, `whitespace` or `indentation`. Absent for every other edit.
+   */
+  edit_tier?: EditMatchTier;
+  /**
+   * Hosts a bash command reached under `network = false` because `[sandbox]
+   * allow_package_index` lists them (shell.ts bashNetworkEgress). Absent when
+   * the allowlist admitted nothing, which is every call of a surface without it.
+   */
+  package_index?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -293,9 +311,15 @@ export function readParameters(window?: number): Record<string, unknown> {
   );
 }
 
-/** A built-in tool's parameter schema as offered under this read window, or undefined for a name this build does not implement. */
-function parametersFor(name: string, readWindow?: number): Record<string, unknown> | undefined {
+/**
+ * A built-in tool's parameter schema as offered under this read window and
+ * edit variant, or undefined for a name this build does not implement. The
+ * default variant is IMPLEMENTED.edit itself, the same object, so a surface
+ * that declares none offers the same bytes as before.
+ */
+function parametersFor(name: string, readWindow?: number, editVariant?: EditVariant): Record<string, unknown> | undefined {
   if (!Object.prototype.hasOwnProperty.call(IMPLEMENTED, name)) return undefined;
+  if (name === "edit" && editVariant === "compat") return COMPAT_EDIT_PARAMETERS;
   return name === "read" ? readParameters(readWindow) : IMPLEMENTED[name];
 }
 
@@ -341,6 +365,7 @@ export function buildToolSet(
   const allowed = role ? config.roles[role]?.tools : undefined;
   const roleLimited = Array.isArray(allowed);
   const readWindow = toolMaxLines(config, "read");
+  const editVariant = resolveEditVariant(config);
 
   for (const tool of declaredTools(config)) {
     if (roleLimited && !allowed!.includes(tool.name)) {
@@ -351,7 +376,7 @@ export function buildToolSet(
       disabled.push(tool.name);
       continue;
     }
-    const parameters = parametersFor(tool.name, readWindow);
+    const parameters = parametersFor(tool.name, readWindow, editVariant);
     if (!parameters) {
       unimplemented.push(tool.name);
       continue;
@@ -1039,6 +1064,17 @@ export interface ToolContext {
   delegate?: Delegate;
   /** Whether tools may reach the network. From `[sandbox] network`. */
   network?: boolean;
+  /**
+   * `[sandbox] allow_package_index` (sweep_knobs.ts resolvePackageIndex):
+   * hosts a bash command may name under `network = false` to download
+   * packages. Absent or empty refuses every URL, as before.
+   */
+  packageIndex?: readonly string[];
+  /**
+   * The edit tool's declared variant (sweep_knobs.ts resolveEditVariant).
+   * Absent or `default` is edit as it always was.
+   */
+  editVariant?: EditVariant;
   /**
    * Whether the agent may write inside `.gnomon/` this session. Absent =
    * `strict` = the surface is human-only (the default, and the pillar).
@@ -2028,7 +2064,10 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
   // also gets --network none, which is isolation; this check runs there too,
   // so the same command gets the same answer on either side of that switch.
   if (ctx.network === false) {
-    const egress = bashNetworkEgress(command);
+    // `[sandbox] allow_package_index` (sweep_knobs.ts): a package download
+    // from a listed host is not refused. Empty, the default, is the filter as
+    // it was: the same call, the same answer.
+    const egress = bashNetworkEgress(command, ctx.packageIndex);
     if (egress) {
       return {
         // The rule was missing, and toolCallPolicy reads a precheck with no rule
@@ -2039,6 +2078,11 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
         content:
           `Refused: "${egress.command.slice(0, 80)}" reaches the network (${egress.why}), ` +
           `and .gnomon/policy.toml sets [sandbox] network = false.\n\n` +
+          (ctx.packageIndex && ctx.packageIndex.length > 0
+            ? `The only exception is a package download from ${ctx.packageIndex.join(", ")} ` +
+              `([sandbox] allow_package_index): pip, uv or npm install or download, or a plain curl or wget GET, ` +
+              `naming only those hosts.\n\n`
+            : "") +
           `Do not look for another route to the network -- the policy is that this ` +
           `session has none. If the task needs it, say so plainly: the operator can ` +
           `grant it with /network on, or network = true in policy.toml.`,
@@ -2545,6 +2589,24 @@ function archiveMembers(abs: string, kind: "tar" | "unzip"): string[] {
 function outcomeOf(pre: Precheck): ToolOutcome {
   const { rule: _rule, pattern: _pattern, ...outcome } = pre;
   return outcome;
+}
+
+/**
+ * The hosts `[sandbox] allow_package_index` let a command that ran reach,
+ * on its outcome, so the loop can count them and the trail name them. The
+ * outcome is returned as it was when the allowlist admitted nothing.
+ */
+function withPackageIndex(outcome: ToolOutcome, args: Record<string, unknown>, ctx: ToolContext): ToolOutcome {
+  if (ctx.network !== false || !ctx.packageIndex || ctx.packageIndex.length === 0) return outcome;
+  if (typeof args.command !== "string" || mapToolBucket(outcome.code) === "refusal") return outcome;
+  const admitted: string[] = [];
+  bashNetworkEgress(args.command, ctx.packageIndex, admitted);
+  return admitted.length > 0 ? { ...outcome, package_index: [...new Set(admitted)].sort() } : outcome;
+}
+
+/** The bucket of a tool outcome code, as conformance/exit_codes.json maps it. */
+function mapToolBucket(code: number): "result" | "refusal" | "apparatus_failure" {
+  return code === TOOL_OK || code === TOOL_OK_EMPTY ? "result" : code >= 2 && code <= 4 ? "refusal" : "apparatus_failure";
 }
 
 async function bashTool(
@@ -4766,8 +4828,12 @@ async function editTool(
   ctx: ToolContext
 ): Promise<ToolOutcome> {
   const path = String(args.path ?? "");
-  const oldTextRaw = String(args.old_text ?? "");
-  const newTextRaw = String(args.new_text ?? "");
+  // `variant = "compat"` (sweep_knobs.ts) offers old_string/new_string, and
+  // takes the default names too: a model that learned gnomon's is not refused
+  // for them. The default variant reads exactly what it always read.
+  const compat = ctx.editVariant === "compat";
+  const oldTextRaw = String((compat ? args.old_string ?? args.old_text : args.old_text) ?? "");
+  const newTextRaw = String((compat ? args.new_string ?? args.new_text : args.new_text) ?? "");
   // The sandbox, the surface (never editable in place) and write_allow.
   const pre = writePrecheck("edit", args, ctx);
   if ("refusal" in pre) return outcomeOf(pre.refusal);
@@ -4806,14 +4872,46 @@ async function editTool(
     newText = newText.replace(/\r?\n/g, "\r\n");
   }
   const hits = before.split(oldText).length - 1;
-  if (hits === 0) {
+  // The compat variant's tiers (sweep_knobs.ts fuzzyEdit): an exact match
+  // first, then whole lines with whitespace, then indentation, ignored. Each
+  // tier must find one place; two or more are refused, never guessed between.
+  let tier: EditMatchTier | undefined;
+  let fuzzyAfter: string | undefined;
+  if (compat && hits !== 1) {
+    if (hits > 1) {
+      return {
+        code: TOOL_FAILED,
+        content: `old_string appears ${hits} times in ${path}. It must identify exactly one place — add surrounding context.`,
+        summary: `edit ${path} — ${hits} matches`,
+      };
+    }
+    const f = fuzzyEdit(before, oldTextRaw, newTextRaw);
+    if (!f.ok) {
+      return {
+        code: TOOL_FAILED,
+        content:
+          f.why === "ambiguous"
+            ? `old_string matches ${f.hits} places in ${path} once ${f.tier === "whitespace" ? "whitespace is" : "whitespace and indentation are"} ignored, ` +
+              `and an ambiguous match is refused. Add surrounding context.`
+            : f.why === "blank"
+              ? `old_string is blank, so it identifies no place in ${path}.`
+              : `old_string not found in ${path}, exactly or with whitespace and indentation ignored. Read the file and copy the text to replace.`,
+        summary: f.why === "ambiguous" ? `edit ${path} — ${f.hits} matches (${f.tier})` : `edit ${path} — no match`,
+      };
+    }
+    tier = f.tier;
+    fuzzyAfter = f.after;
+  } else if (compat) {
+    tier = "exact";
+  }
+  if (!compat && hits === 0) {
     return {
       code: TOOL_FAILED,
       content: `old_text not found in ${path}. It must match exactly, including indentation.`,
       summary: `edit ${path} — no match`,
     };
   }
-  if (hits > 1) {
+  if (!compat && hits > 1) {
     return {
       code: TOOL_FAILED,
       content: `old_text appears ${hits} times in ${path}. It must match exactly once — add surrounding context.`,
@@ -4823,7 +4921,7 @@ async function editTool(
 
   // A function replacer: with a string, `$$`, `$&` and `$'` in new_text are
   // replacement patterns, so `echo $$` was written as `echo $`.
-  const after = before.replace(oldText, () => newText);
+  const after = fuzzyAfter ?? before.replace(oldText, () => newText);
   const diff = diffLines(before, after);
   const { added, removed } = diffStat(diff);
 
@@ -4874,10 +4972,21 @@ async function editTool(
 
   try {
     writeFileSync(abs, after, "utf-8");
+    if (tier !== undefined && tier !== "exact") {
+      return {
+        code: TOOL_OK,
+        content:
+          `Edited ${path} (+${added} −${removed}). Matched with ` +
+          `${tier === "whitespace" ? "whitespace" : "whitespace and indentation"} differences ignored.`,
+        summary: `edit ${path} (+${added} −${removed}) [${tier}]`,
+        edit_tier: tier,
+      };
+    }
     return {
       code: TOOL_OK,
       content: `Edited ${path} (+${added} −${removed}).`,
       summary: `edit ${path} (+${added} −${removed})`,
+      ...(tier ? { edit_tier: tier } : {}),
     };
   } catch (err) {
     return {
@@ -5237,8 +5346,8 @@ function typeText(spec: unknown): string {
  * `path (string, required), old_text (string, required), …` -- or null for a
  * name with no schema in this build.
  */
-export function toolParamsText(name: string, readWindow?: number): string | null {
-  const params = parametersFor(name, readWindow);
+export function toolParamsText(name: string, readWindow?: number, editVariant?: EditVariant): string | null {
+  const params = parametersFor(name, readWindow, editVariant);
   const props = (params?.properties ?? undefined) as Record<string, unknown> | undefined;
   if (!props) return null;
   const req = new Set(Array.isArray(params!.required) ? (params!.required as string[]) : []);
@@ -5273,9 +5382,10 @@ export interface ArgProblems {
 export function argProblems(
   name: string,
   args: Record<string, unknown>,
-  readWindow?: number
+  readWindow?: number,
+  editVariant?: EditVariant
 ): ArgProblems | null {
-  const params = parametersFor(name, readWindow);
+  const params = parametersFor(name, readWindow, editVariant);
   const props = (params?.properties ?? undefined) as Record<string, Record<string, unknown>> | undefined;
   if (!props) return null;
   const required = Array.isArray(params!.required) ? (params!.required as string[]) : [];
@@ -5309,9 +5419,10 @@ const ticked = (keys: string[]) => keys.map((k) => `\`${k}\``).join(", ");
 export function schemaRepairText(
   name: string,
   args: Record<string, unknown>,
-  readWindow?: number
+  readWindow?: number,
+  editVariant?: EditVariant
 ): string {
-  const p = argProblems(name, args, readWindow);
+  const p = argProblems(name, args, readWindow, editVariant);
   if (!p || (p.missing.length === 0 && p.wrongType.length === 0)) return "";
   const parts: string[] = [];
   if (p.missing.length > 0) parts.push(`missing ${ticked(p.missing)}`);
@@ -5323,7 +5434,7 @@ export function schemaRepairText(
   }
   return (
     `\n\nYour ${name} call does not match its parameters: ${parts.join("; ")}. ` +
-    `${name} takes one JSON object: ${toolParamsText(name, readWindow)}.`
+    `${name} takes one JSON object: ${toolParamsText(name, readWindow, editVariant)}.`
   );
 }
 
@@ -5336,10 +5447,11 @@ function withSchemaRepair(
   name: string,
   args: Record<string, unknown>,
   outcome: ToolOutcome,
-  readWindow?: number
+  readWindow?: number,
+  editVariant?: EditVariant
 ): ToolOutcome {
   if (outcome.code === TOOL_OK || outcome.code === TOOL_OK_EMPTY) return outcome;
-  const text = schemaRepairText(name, args, readWindow);
+  const text = schemaRepairText(name, args, readWindow, editVariant);
   return text ? { ...outcome, content: outcome.content + text } : outcome;
 }
 
@@ -5487,7 +5599,7 @@ export async function executeTool(
     const error = String(malformed.error ?? "not a JSON object");
     // "Whose keys are this tool's parameters" told the model there was a list
     // without giving it. Named here, so the corrected call can use them.
-    const params = toolParamsText(name, ctx.maxLines?.read);
+    const params = toolParamsText(name, ctx.maxLines?.read, ctx.editVariant);
     return {
       code: TOOL_DENIED,
       content:
@@ -5518,7 +5630,7 @@ export async function executeTool(
   // Error path only: a call that failed with arguments the schema does not
   // accept is told which parameters the tool takes. Anything else is returned
   // untouched.
-  return withSchemaRepair(name, args, outcome, ctx.maxLines?.read);
+  return withSchemaRepair(name, args, outcome, ctx.maxLines?.read, ctx.editVariant);
 }
 
 async function dispatch(
@@ -5564,7 +5676,7 @@ async function dispatch(
     case "read":
       return readTool(args, ctx);
     case "bash":
-      return bashTool(args, ctx);
+      return withPackageIndex(await bashTool(args, ctx), args, ctx);
     case "task":
       return taskTool(args, ctx);
     case "webfetch":

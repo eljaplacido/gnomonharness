@@ -87,8 +87,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2506 TypeScript tests (1988 core, 493 cli, 18
-> natives, 7 tui) and 61 Rust tests — **2567 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2548 TypeScript tests (2030 core, 493 cli, 18
+> natives, 7 tui) and 61 Rust tests — **2609 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -855,6 +855,15 @@ system prompt. See [docs/GUIDE.md §8](docs/GUIDE.md) and
 [CONTRACTS.md §19](docs/CONTRACTS.md). Whether either helps is for the
 pre-registered A/B in
 [docs/benchmarks/prereg/CX-AB.md](docs/benchmarks/prereg/CX-AB.md) to decide.
+
+Six more opt-in keys exist so a benchmark sweep can test one long-task
+hypothesis per arm as a surface setting: `reasoning_effort` (endpoint or
+role), `sampling = "provider"` (or a role's `temperature`/`top_p =
+"provider"`), `[context] env_snapshot`, `[turn] todo_gate`, the `edit` tool's
+`variant = "compat"`, and `[sandbox] allow_package_index`. Undeclared, or
+declared at their defaults, a turn sends the request bytes it sent before
+them. See [docs/GUIDE.md §8](docs/GUIDE.md) and
+[CONTRACTS.md §32](docs/CONTRACTS.md).
 
 #### `[turn]` — when a turn stops, is nudged, or converges
 

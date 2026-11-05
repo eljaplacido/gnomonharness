@@ -28,6 +28,38 @@
 
 ### Added
 
+- **Six opt-in sweep knobs, one per long-task hypothesis** (docs/CONTRACTS.md
+  §32, `conformance/sweep_knobs.json`), so an adaptive benchmark sweep can
+  test each as a surface setting. Undeclared, or declared at their defaults,
+  request bodies are byte-identical to master's at ae17a1ae on an
+  OpenAI-shaped and an Ollama endpoint (`sweep_knobs.test.ts` pins the
+  hashes, taken before the code existed).
+  - `reasoning_effort` on an endpoint, overridable per role: sent as
+    `reasoning_effort` (`low`, `medium`, `high`, `max`; `"provider"` sends
+    none), validated because GLM accepts any string; never sent to Ollama's
+    `/api/chat`. Recorded as `wire.reasoning_effort`.
+  - Sampling passthrough: `sampling = "provider"` on an endpoint, or a role's
+    `temperature`/`top_p = "provider"`, sends no such field so the provider's
+    default applies. Recorded as `wire.sampling_omitted`.
+  - `[context] env_snapshot = true`: a fixed, read-only probe (directory and
+    listing, git status, OS, CPUs, memory, toolchain versions, package
+    managers) run through the bootstrap path before the first call, bounded at
+    2 s and 6000 bytes, ending with what the network policy allows. Recorded
+    as `counters.bootstrap` with `id: "env_snapshot"`.
+  - `[turn] todo_gate = true`: an answer given with the turn's checklist still
+    open is handed back once, naming the open items; skipped below
+    `completion_min_remaining` of the budget. `counters.todo_gate`, audit kind
+    `todo_gate`.
+  - `variant = "compat"` on the `edit` tool declaration: `old_string`/
+    `new_string`, and tiered matching (exact, whitespace-normalized,
+    indentation-insensitive), each tier requiring one unique match.
+    `counters.edit_match`, `tool_call.edit_tier`.
+  - `[sandbox] allow_package_index`: under `network = false` on the host, pip,
+    uv and npm installs and downloads and curl or wget GETs naming only listed
+    hosts are not refused; proxies, uploads and connection redirection still
+    are, and `exec = "docker"` keeps `--network none`. `counters.package_index`,
+    `tool_call.package_index`; `gnomon guard` reads it too.
+
 - **An opt-in completion gate: `[verify] completion_gate`.** P2G41 found the
   hosted recipe declaring done with a median of 996 s left and being wrong in
   16 cells, 5 of them near misses; a prompt rule to verify every requirement
