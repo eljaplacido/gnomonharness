@@ -1,0 +1,1683 @@
+{
+  "schema": "gnomon.chaos/1",
+  "harness": "gnomon/0.4.2+v0.4.2-2498d16",
+  "mode": "gnomon task --json",
+  "seed": 999,
+  "plan_hash": "2947284c18d17ac1d0d131761afd8ac5eb0a7e20e6a0496f9ab360f9f28b0e87",
+  "surface_template_hash": "9108a5f73a98c2a442064472882722d773c234061b876a1547f84c87b0a49cd7",
+  "controls": [
+    {
+      "name": "a run identical to the clean run scores silent",
+      "expected": false,
+      "scored": false,
+      "ok": true
+    },
+    {
+      "name": "a trace line naming the wrong fault scores silent",
+      "expected": false,
+      "scored": false,
+      "ok": true
+    },
+    {
+      "name": "a changed exit status scores announced",
+      "expected": true,
+      "scored": true,
+      "ok": true
+    }
+  ],
+  "apparatus": {
+    "ok": true,
+    "problems": [],
+    "lane_check": {
+      "tasks": [
+        "answer",
+        "read"
+      ],
+      "serial_equals_concurrent": true,
+      "garbling_caught": true
+    },
+    "baselines": [
+      {
+        "task": "answer",
+        "stream": false,
+        "recovered": true,
+        "exit": 0,
+        "stop_reason": "answered",
+        "requests": 1,
+        "billed": 151
+      },
+      {
+        "task": "answer",
+        "stream": true,
+        "recovered": true,
+        "exit": 0,
+        "stop_reason": "answered",
+        "requests": 1,
+        "billed": 151
+      },
+      {
+        "task": "read",
+        "stream": false,
+        "recovered": true,
+        "exit": 0,
+        "stop_reason": "answered",
+        "requests": 2,
+        "billed": 389
+      },
+      {
+        "task": "fix",
+        "stream": false,
+        "recovered": true,
+        "exit": 0,
+        "stop_reason": "answered",
+        "requests": 4,
+        "billed": 1145
+      }
+    ]
+  },
+  "faults": [
+    {
+      "id": "error",
+      "family": "agentchaos",
+      "injects": "HTTP 500 with an error body",
+      "origin": "AgentChaos (arXiv 2608.06790) Error",
+      "cases": 4,
+      "fired": 4,
+      "announced": 4,
+      "named": 4,
+      "recovered": 3,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 0
+    },
+    {
+      "id": "timeout.headers",
+      "family": "agentchaos",
+      "injects": "accepts the request and never sends a status line",
+      "origin": "AgentChaos Timeout",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 441
+    },
+    {
+      "id": "timeout.body",
+      "family": "agentchaos",
+      "injects": "sends the headers and two chunks of a stream, then goes silent",
+      "origin": "AgentChaos Timeout (body)",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 596
+    },
+    {
+      "id": "empty.content",
+      "family": "agentchaos",
+      "injects": "HTTP 200, finish_reason stop, content \"\" in place of the answer",
+      "origin": "AgentChaos Empty (content)",
+      "cases": 4,
+      "fired": 4,
+      "announced": 4,
+      "named": 4,
+      "recovered": 2,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 2507
+    },
+    {
+      "id": "empty.tool_calls",
+      "family": "agentchaos",
+      "injects": "HTTP 200, finish_reason stop, no tool_calls and no text in place of a tool call",
+      "origin": "AgentChaos Empty (tool_calls)",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 1091
+    },
+    {
+      "id": "truncate.content",
+      "family": "agentchaos",
+      "injects": "closes a stream cleanly halfway through the answer: no finish_reason, no [DONE]",
+      "origin": "AgentChaos Truncate (content)",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 596
+    },
+    {
+      "id": "truncate.tool_calls",
+      "family": "agentchaos",
+      "injects": "tool-call arguments cut mid-JSON, finish_reason tool_calls",
+      "origin": "AgentChaos Truncate (tool_calls)",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 1760
+    },
+    {
+      "id": "corrupt.content",
+      "family": "agentchaos",
+      "injects": "HTTP 200 whose body is a proxy's HTML error page, not JSON",
+      "origin": "AgentChaos Corrupt; compound scenario proxy-HTML",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 604
+    },
+    {
+      "id": "corrupt.stream",
+      "family": "agentchaos",
+      "injects": "one streamed chunk of the answer arrives as bytes that are not JSON",
+      "origin": "AgentChaos Corrupt (stream)",
+      "cases": 1,
+      "fired": 1,
+      "announced": 1,
+      "named": 1,
+      "recovered": 0,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 151
+    },
+    {
+      "id": "schema.tool_calls",
+      "family": "agentchaos",
+      "injects": "a tool call naming a tool the request never offered",
+      "origin": "AgentChaos Schema (tool_calls)",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 1469
+    },
+    {
+      "id": "schema.arguments",
+      "family": "agentchaos",
+      "injects": "tool-call arguments that parse as a JSON array, not an object",
+      "origin": "AgentChaos Schema (arguments)",
+      "cases": 1,
+      "fired": 1,
+      "announced": 1,
+      "named": 1,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 454
+    },
+    {
+      "id": "schema.content",
+      "family": "agentchaos",
+      "injects": "message.content as an array of content parts instead of a string",
+      "origin": "AgentChaos Schema (content); content-part replies",
+      "cases": 1,
+      "fired": 1,
+      "announced": 1,
+      "named": 1,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 0
+    },
+    {
+      "id": "rate_limit",
+      "family": "reliabilitybench",
+      "injects": "HTTP 429 with Retry-After: 1, enforced: every request inside the window is refused too",
+      "origin": "ReliabilityBench (arXiv 2601.06112) rate limiting",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 0
+    },
+    {
+      "id": "late_system_dropped",
+      "family": "gnomon",
+      "injects": "the chat template silently drops every system message after the first",
+      "origin": "R1H late-system drop; report RS3",
+      "cases": 1,
+      "fired": 1,
+      "announced": 0,
+      "named": 0,
+      "recovered": 0,
+      "silent": 1,
+      "verdict": "silent",
+      "tokens_wasted": 1185
+    },
+    {
+      "id": "zombie",
+      "family": "gnomon",
+      "injects": "a relay that withholds the reply, then keeps generating after the client gives up",
+      "origin": "P2G relay billing 163k vs 82k counted; report RS4",
+      "cases": 1,
+      "fired": 1,
+      "announced": 1,
+      "named": 1,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 663
+    },
+    {
+      "id": "slow_throttle",
+      "family": "gnomon",
+      "injects": "a stream paced to ~5 tokens/s, each gap well inside the idle clock",
+      "origin": "NVFP4 emulation fallback, 1.1 vs 77 tok/s on GB10; report RS3",
+      "cases": 1,
+      "fired": 1,
+      "announced": 0,
+      "named": 0,
+      "recovered": 1,
+      "silent": 1,
+      "verdict": "silent",
+      "tokens_wasted": 0
+    },
+    {
+      "id": "reasoning_tool_leak",
+      "family": "gnomon",
+      "injects": "the tool call written as markup inside reasoning_content, no tool_calls, no content",
+      "origin": "llama.cpp #20809; report RS3",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 1527
+    },
+    {
+      "id": "length_mid_tool_call",
+      "family": "gnomon",
+      "injects": "finish_reason length with the tool call's arguments cut mid-JSON",
+      "origin": "P2G 30 KB write after 9k thinking tokens",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 1569
+    },
+    {
+      "id": "mid_stream_disconnect",
+      "family": "gnomon",
+      "injects": "destroys the socket halfway through a streamed answer",
+      "origin": "report RS1",
+      "cases": 2,
+      "fired": 2,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "silent": 0,
+      "verdict": "announced",
+      "tokens_wasted": 596
+    },
+    {
+      "id": "cache_miss",
+      "family": "gnomon",
+      "injects": "reports cached_tokens 0 on an append-only prompt and re-prefills it",
+      "origin": "GB10 40k re-prefill, 33-40 s; report RS5",
+      "cases": 1,
+      "fired": 1,
+      "announced": 0,
+      "named": 0,
+      "recovered": 1,
+      "silent": 1,
+      "verdict": "silent",
+      "tokens_wasted": 0
+    }
+  ],
+  "cases": [
+    {
+      "id": "error/single",
+      "fault": "error",
+      "schedule": "single",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 4,
+      "tokens": {
+        "billed": 151,
+        "baseline": 151,
+        "wasted": 0,
+        "counted": 151,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "error/persistent",
+      "fault": "error",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "injected": 7,
+      "requests": 7,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "exit": 10,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 10,
+      "tokens": {
+        "billed": 0,
+        "baseline": 151,
+        "wasted": 0,
+        "counted": 0,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "error/intermittent",
+      "fault": "error",
+      "schedule": "intermittent",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "injected": 2,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 5,
+      "tokens": {
+        "billed": 151,
+        "baseline": 151,
+        "wasted": 0,
+        "counted": 151,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "error/burst",
+      "fault": "error",
+      "schedule": "burst",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "injected": 3,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 6,
+      "tokens": {
+        "billed": 151,
+        "baseline": 151,
+        "wasted": 0,
+        "counted": 151,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "timeout.headers/single",
+      "fault": "timeout.headers",
+      "schedule": "single",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 1,
+      "tokens": {
+        "billed": 298,
+        "baseline": 151,
+        "wasted": 147,
+        "counted": 151,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "timeout.headers/persistent",
+      "fault": "timeout.headers",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "injected": 2,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "exit": 10,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 2,
+      "tokens": {
+        "billed": 294,
+        "baseline": 151,
+        "wasted": 294,
+        "counted": 0,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "timeout.body/single",
+      "fault": "timeout.body",
+      "schedule": "single",
+      "task": "answer",
+      "stream": true,
+      "fired": true,
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 1,
+      "tokens": {
+        "billed": 300,
+        "baseline": 151,
+        "wasted": 149,
+        "counted": 151,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "timeout.body/persistent",
+      "fault": "timeout.body",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": true,
+      "fired": true,
+      "injected": 3,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "exit": 10,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 2,
+      "tokens": {
+        "billed": 447,
+        "baseline": 151,
+        "wasted": 447,
+        "counted": 0,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "empty.content/single",
+      "fault": "empty.content",
+      "schedule": "single",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 1,
+      "tokens": {
+        "billed": 336,
+        "baseline": 151,
+        "wasted": 185,
+        "counted": 340,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "empty.content/persistent",
+      "fault": "empty.content",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "injected": 4,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "stop_reason",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "empty",
+      "degradations": [],
+      "new_lines": 3,
+      "tokens": {
+        "billed": 823,
+        "baseline": 151,
+        "wasted": 823,
+        "counted": 839,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "empty.content/intermittent",
+      "fault": "empty.content",
+      "schedule": "intermittent",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "injected": 4,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "stop_reason",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "empty",
+      "degradations": [],
+      "new_lines": 3,
+      "tokens": {
+        "billed": 823,
+        "baseline": 151,
+        "wasted": 823,
+        "counted": 839,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "empty.content/burst",
+      "fault": "empty.content",
+      "schedule": "burst",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "injected": 3,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 3,
+      "tokens": {
+        "billed": 827,
+        "baseline": 151,
+        "wasted": 676,
+        "counted": 839,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "empty.tool_calls/single",
+      "fault": "empty.tool_calls",
+      "schedule": "single",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "injected": 1,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 1,
+      "tokens": {
+        "billed": 621,
+        "baseline": 389,
+        "wasted": 232,
+        "counted": 629,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "empty.tool_calls/persistent",
+      "fault": "empty.tool_calls",
+      "schedule": "persistent",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "injected": 4,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "stop_reason",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "empty",
+      "degradations": [],
+      "new_lines": 3,
+      "tokens": {
+        "billed": 859,
+        "baseline": 389,
+        "wasted": 859,
+        "counted": 891,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "truncate.content/single",
+      "fault": "truncate.content",
+      "schedule": "single",
+      "task": "answer",
+      "stream": true,
+      "fired": true,
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 1,
+      "tokens": {
+        "billed": 300,
+        "baseline": 151,
+        "wasted": 149,
+        "counted": 151,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "truncate.content/persistent",
+      "fault": "truncate.content",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": true,
+      "fired": true,
+      "injected": 3,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "exit": 10,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 2,
+      "tokens": {
+        "billed": 447,
+        "baseline": 151,
+        "wasted": 447,
+        "counted": 0,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "truncate.tool_calls/single",
+      "fault": "truncate.tool_calls",
+      "schedule": "single",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "injected": 1,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 2,
+      "tokens": {
+        "billed": 797,
+        "baseline": 389,
+        "wasted": 408,
+        "counted": 797,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "truncate.tool_calls/persistent",
+      "fault": "truncate.tool_calls",
+      "schedule": "persistent",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "injected": 4,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "stop_reason",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "exit": 2,
+      "stop_reason": "malformed",
+      "degradations": [],
+      "new_lines": 4,
+      "tokens": {
+        "billed": 1352,
+        "baseline": 389,
+        "wasted": 1352,
+        "counted": 1352,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "corrupt.content/single",
+      "fault": "corrupt.content",
+      "schedule": "single",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 1,
+      "tokens": {
+        "billed": 302,
+        "baseline": 151,
+        "wasted": 151,
+        "counted": 151,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "corrupt.content/persistent",
+      "fault": "corrupt.content",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "injected": 3,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "exit": 10,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 2,
+      "tokens": {
+        "billed": 453,
+        "baseline": 151,
+        "wasted": 453,
+        "counted": 0,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "corrupt.stream/single",
+      "fault": "corrupt.stream",
+      "schedule": "single",
+      "task": "answer",
+      "stream": true,
+      "fired": true,
+      "injected": 1,
+      "requests": 1,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 1,
+      "tokens": {
+        "billed": 151,
+        "baseline": 151,
+        "wasted": 151,
+        "counted": 151,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "schema.tool_calls/single",
+      "fault": "schema.tool_calls",
+      "schedule": "single",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "injected": 1,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 2,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 2,
+      "tokens": {
+        "billed": 713,
+        "baseline": 389,
+        "wasted": 324,
+        "counted": 713,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "schema.tool_calls/persistent",
+      "fault": "schema.tool_calls",
+      "schedule": "persistent",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "injected": 4,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "stop_reason",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "exit": 2,
+      "stop_reason": "malformed",
+      "degradations": [],
+      "new_lines": 4,
+      "tokens": {
+        "billed": 1145,
+        "baseline": 389,
+        "wasted": 1145,
+        "counted": 1145,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "schema.arguments/single",
+      "fault": "schema.arguments",
+      "schedule": "single",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "injected": 1,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 2,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 2,
+      "tokens": {
+        "billed": 843,
+        "baseline": 389,
+        "wasted": 454,
+        "counted": 843,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "schema.content/single",
+      "fault": "schema.content",
+      "schedule": "single",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "injected": 1,
+      "requests": 1,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 1,
+      "tokens": {
+        "billed": 151,
+        "baseline": 151,
+        "wasted": 0,
+        "counted": 151,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "rate_limit/single",
+      "fault": "rate_limit",
+      "schedule": "single",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "injected": 1,
+      "requests": 7,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 9,
+      "tokens": {
+        "billed": 151,
+        "baseline": 151,
+        "wasted": 0,
+        "counted": 151,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "rate_limit/persistent",
+      "fault": "rate_limit",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "injected": 7,
+      "requests": 7,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "exit": 10,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 10,
+      "tokens": {
+        "billed": 0,
+        "baseline": 151,
+        "wasted": 0,
+        "counted": 0,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "late_system_dropped/persistent",
+      "fault": "late_system_dropped",
+      "schedule": "persistent",
+      "task": "fix",
+      "stream": false,
+      "fired": true,
+      "injected": 2,
+      "requests": 4,
+      "announced": false,
+      "named": false,
+      "channels": [],
+      "recovered": false,
+      "silent": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 0,
+      "tokens": {
+        "billed": 1185,
+        "baseline": 1145,
+        "wasted": 1185,
+        "counted": 1185,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "zombie/single",
+      "fault": "zombie",
+      "schedule": "single",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 1,
+      "tokens": {
+        "billed": 814,
+        "baseline": 151,
+        "wasted": 663,
+        "counted": 151,
+        "zombie": 512
+      },
+      "leaked": 0
+    },
+    {
+      "id": "slow_throttle/persistent",
+      "fault": "slow_throttle",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": true,
+      "fired": true,
+      "injected": 1,
+      "requests": 1,
+      "announced": false,
+      "named": false,
+      "channels": [],
+      "recovered": true,
+      "silent": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 0,
+      "tokens": {
+        "billed": 151,
+        "baseline": 151,
+        "wasted": 0,
+        "counted": 151,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "reasoning_tool_leak/single",
+      "fault": "reasoning_tool_leak",
+      "schedule": "single",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "injected": 1,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 1,
+      "tokens": {
+        "billed": 730,
+        "baseline": 389,
+        "wasted": 341,
+        "counted": 730,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "reasoning_tool_leak/persistent",
+      "fault": "reasoning_tool_leak",
+      "schedule": "persistent",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "injected": 4,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "stop_reason",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "exit": 2,
+      "stop_reason": "malformed",
+      "degradations": [],
+      "new_lines": 3,
+      "tokens": {
+        "billed": 1186,
+        "baseline": 389,
+        "wasted": 1186,
+        "counted": 1186,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "length_mid_tool_call/single",
+      "fault": "length_mid_tool_call",
+      "schedule": "single",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "injected": 1,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 1,
+      "tokens": {
+        "billed": 742,
+        "baseline": 389,
+        "wasted": 353,
+        "counted": 742,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "length_mid_tool_call/persistent",
+      "fault": "length_mid_tool_call",
+      "schedule": "persistent",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "injected": 4,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "stop_reason",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "exit": 2,
+      "stop_reason": "truncated",
+      "degradations": [],
+      "new_lines": 3,
+      "tokens": {
+        "billed": 1216,
+        "baseline": 389,
+        "wasted": 1216,
+        "counted": 1216,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "mid_stream_disconnect/single",
+      "fault": "mid_stream_disconnect",
+      "schedule": "single",
+      "task": "answer",
+      "stream": true,
+      "fired": true,
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 1,
+      "tokens": {
+        "billed": 300,
+        "baseline": 151,
+        "wasted": 149,
+        "counted": 151,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "mid_stream_disconnect/persistent",
+      "fault": "mid_stream_disconnect",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": true,
+      "fired": true,
+      "injected": 3,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "exit": 10,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 2,
+      "tokens": {
+        "billed": 447,
+        "baseline": 151,
+        "wasted": 447,
+        "counted": 0,
+        "zombie": 0
+      },
+      "leaked": 0
+    },
+    {
+      "id": "cache_miss/persistent",
+      "fault": "cache_miss",
+      "schedule": "persistent",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "injected": 1,
+      "requests": 2,
+      "announced": false,
+      "named": false,
+      "channels": [],
+      "recovered": true,
+      "silent": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "new_lines": 0,
+      "tokens": {
+        "billed": 389,
+        "baseline": 389,
+        "wasted": 0,
+        "counted": 389,
+        "zombie": 0
+      },
+      "leaked": 0
+    }
+  ],
+  "summary": {
+    "faults": 20,
+    "faults_announced": 17,
+    "faults_silent": [
+      "late_system_dropped",
+      "slow_throttle",
+      "cache_miss"
+    ],
+    "cases": 37,
+    "cases_fired": 37,
+    "cases_announced": 34,
+    "cases_named": 34,
+    "cases_recovered": 21,
+    "failed": 16,
+    "silent_failures": 1,
+    "silent_failure_share": 0.063,
+    "tokens_wasted": 15209
+  },
+  "exit": 1,
+  "volatile": {
+    "duration_ms": 18016,
+    "surface_hash": "2fc228dd625c23baa15218eb924a53ab6daa6a4bad3480bc5dc6329a52df9d82",
+    "endpoint": "http://127.0.0.1:37839/v1/chat/completions",
+    "case_ms": {
+      "error/single": 68,
+      "error/persistent": 1303,
+      "error/intermittent": 87,
+      "error/burst": 188,
+      "timeout.headers/single": 1037,
+      "timeout.headers/persistent": 3032,
+      "timeout.body/single": 1118,
+      "timeout.body/persistent": 3093,
+      "empty.content/single": 10,
+      "empty.content/persistent": 33,
+      "empty.content/intermittent": 18,
+      "empty.content/burst": 20,
+      "empty.tool_calls/single": 19,
+      "empty.tool_calls/persistent": 37,
+      "truncate.content/single": 36,
+      "truncate.content/persistent": 90,
+      "truncate.tool_calls/single": 39,
+      "truncate.tool_calls/persistent": 28,
+      "corrupt.content/single": 38,
+      "corrupt.content/persistent": 80,
+      "corrupt.stream/single": 23,
+      "schema.tool_calls/single": 26,
+      "schema.tool_calls/persistent": 27,
+      "schema.arguments/single": 21,
+      "schema.content/single": 11,
+      "rate_limit/single": 1301,
+      "rate_limit/persistent": 1309,
+      "late_system_dropped/persistent": 97,
+      "zombie/single": 1035,
+      "slow_throttle/persistent": 1829,
+      "reasoning_tool_leak/single": 30,
+      "reasoning_tool_leak/persistent": 20,
+      "length_mid_tool_call/single": 22,
+      "length_mid_tool_call/persistent": 32,
+      "mid_stream_disconnect/single": 82,
+      "mid_stream_disconnect/persistent": 152,
+      "cache_miss/persistent": 43
+    },
+    "trace": {
+      "error/single": [
+        "  Model API error: 500 Internal Server Error",
+        "  {\"error\":{\"message\":\"chaos: injected internal server error\",\"type\":\"server_error\"}}",
+        "  Retrying for up to 3s in case it is starting up.",
+        "  [retry] endpoint erroring (5xx) — attempt 1, waiting 20ms (20ms of 2500ms grace)"
+      ],
+      "error/persistent": [
+        "  Model API error: 500 Internal Server Error",
+        "  {\"error\":{\"message\":\"chaos: injected internal server error\",\"type\":\"server_error\"}}",
+        "  Retrying for up to 3s in case it is starting up.",
+        "  [retry] endpoint erroring (5xx) — attempt 1, waiting 20ms (20ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 2, waiting 40ms (60ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 3, waiting 80ms (140ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 4, waiting 160ms (300ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 5, waiting 320ms (620ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 6, waiting 640ms (1260ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — grace spent (1260ms of 2500ms) after 7 attempt(s), giving up"
+      ],
+      "error/intermittent": [
+        "  Model API error: 500 Internal Server Error",
+        "  {\"error\":{\"message\":\"chaos: injected internal server error\",\"type\":\"server_error\"}}",
+        "  Retrying for up to 3s in case it is starting up.",
+        "  [retry] endpoint erroring (5xx) — attempt 1, waiting 20ms (20ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 2, waiting 40ms (60ms of 2500ms grace)"
+      ],
+      "error/burst": [
+        "  Model API error: 500 Internal Server Error",
+        "  {\"error\":{\"message\":\"chaos: injected internal server error\",\"type\":\"server_error\"}}",
+        "  Retrying for up to 3s in case it is starting up.",
+        "  [retry] endpoint erroring (5xx) — attempt 1, waiting 20ms (20ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 2, waiting 40ms (60ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 3, waiting 80ms (140ms of 2500ms grace)"
+      ],
+      "timeout.headers/single": [
+        "  [retry] timed out (deadline now 1999ms) — attempt 1 of 3, waiting 20ms"
+      ],
+      "timeout.headers/persistent": [
+        "  [retry] timed out (deadline now 1997ms) — attempt 1 of 3, waiting 20ms",
+        "  [retry] timed out — retry budget spent (3020ms of 3000ms), giving up after attempt 2 of 3"
+      ],
+      "timeout.body/single": [
+        "  [retry] the stream went silent mid-reply — attempt 1 of 3, waiting 20ms"
+      ],
+      "timeout.body/persistent": [
+        "  [retry] the stream went silent mid-reply — attempt 1 of 3, waiting 20ms",
+        "  [retry] the stream went silent mid-reply — attempt 2 of 3, waiting 40ms"
+      ],
+      "empty.content/single": [
+        "  [loop] empty completion 1/3 — asking again (8 steps left)"
+      ],
+      "empty.content/persistent": [
+        "  [loop] empty completion 1/3 — asking again (8 steps left)",
+        "  [loop] empty completion 2/3 — asking again (8 steps left)",
+        "  [loop] empty completion 3/3 — asking again (8 steps left)"
+      ],
+      "empty.content/intermittent": [
+        "  [loop] empty completion 1/3 — asking again (8 steps left)",
+        "  [loop] empty completion 2/3 — asking again (8 steps left)",
+        "  [loop] empty completion 3/3 — asking again (8 steps left)"
+      ],
+      "empty.content/burst": [
+        "  [loop] empty completion 1/3 — asking again (8 steps left)",
+        "  [loop] empty completion 2/3 — asking again (8 steps left)",
+        "  [loop] empty completion 3/3 — asking again (8 steps left)"
+      ],
+      "empty.tool_calls/single": [
+        "  [loop] empty completion 1/3 — asking again (8 steps left)"
+      ],
+      "empty.tool_calls/persistent": [
+        "  [loop] empty completion 1/3 — asking again (8 steps left)",
+        "  [loop] empty completion 2/3 — asking again (8 steps left)",
+        "  [loop] empty completion 3/3 — asking again (8 steps left)"
+      ],
+      "truncate.content/single": [
+        "  [retry] the stream broke off mid-reply — attempt 1 of 3, waiting 20ms"
+      ],
+      "truncate.content/persistent": [
+        "  [retry] the stream broke off mid-reply — attempt 1 of 3, waiting 20ms",
+        "  [retry] the stream broke off mid-reply — attempt 2 of 3, waiting 40ms"
+      ],
+      "truncate.tool_calls/single": [
+        "  [loop] no usable tool call in that reply (read: arguments cut off in transit (truncated JSON)) — asking the model to re-issue it (1/2)",
+        "  chaos-model — 2 tool call(s) so far"
+      ],
+      "truncate.tool_calls/persistent": [
+        "  [loop] no usable tool call in that reply (read: arguments cut off in transit (truncated JSON)) — asking the model to re-issue it (1/2)",
+        "  [loop] no usable tool call in that reply (read: arguments cut off in transit (truncated JSON)) — asking the model to re-issue it (2/2)",
+        "  chaos-model — 2 tool call(s) so far",
+        "  chaos-model — wrapping up"
+      ],
+      "corrupt.content/single": [
+        "  [retry] the reply was not JSON — attempt 1 of 3, waiting 20ms"
+      ],
+      "corrupt.content/persistent": [
+        "  [retry] the reply was not JSON — attempt 1 of 3, waiting 20ms",
+        "  [retry] the reply was not JSON — attempt 2 of 3, waiting 40ms"
+      ],
+      "corrupt.stream/single": [
+        "  [endpoint] 1 streamed chunk(s) from chaos-model were not valid JSON and were dropped — the reply may be missing text"
+      ],
+      "schema.tool_calls/single": [
+        "  [loop] no usable tool call in that reply (chaos_unoffered_tool: not a tool this role was offered) — asking the model to re-issue it (1/2)",
+        "  chaos-model — 2 tool call(s) so far"
+      ],
+      "schema.tool_calls/persistent": [
+        "  [loop] no usable tool call in that reply (chaos_unoffered_tool: not a tool this role was offered) — asking the model to re-issue it (1/2)",
+        "  [loop] no usable tool call in that reply (chaos_unoffered_tool: not a tool this role was offered) — asking the model to re-issue it (2/2)",
+        "  chaos-model — 2 tool call(s) so far",
+        "  chaos-model — wrapping up"
+      ],
+      "schema.arguments/single": [
+        "  [loop] no usable tool call in that reply (read: arguments not a JSON object) — asking the model to re-issue it (1/2)",
+        "  chaos-model — 2 tool call(s) so far"
+      ],
+      "schema.content/single": [
+        "  [endpoint] chaos-model sent its content as an array of content parts, not a string — read as the text of its parts (said once per turn)"
+      ],
+      "rate_limit/single": [
+        "  Model API error: 429 Too Many Requests",
+        "  {\"error\":{\"message\":\"Rate limit reached. Retry after 1s.\",\"type\":\"rate_limit_error\"}}",
+        "  Retrying for up to 3s in case it is starting up.",
+        "  [retry] endpoint rate limiting (429) — attempt 1, waiting 20ms (20ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 2, waiting 40ms (60ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 3, waiting 80ms (140ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 4, waiting 160ms (300ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 5, waiting 320ms (620ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 6, waiting 640ms (1260ms of 2500ms grace)"
+      ],
+      "rate_limit/persistent": [
+        "  Model API error: 429 Too Many Requests",
+        "  {\"error\":{\"message\":\"Rate limit reached. Retry after 1s.\",\"type\":\"rate_limit_error\"}}",
+        "  Retrying for up to 3s in case it is starting up.",
+        "  [retry] endpoint rate limiting (429) — attempt 1, waiting 20ms (20ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 2, waiting 40ms (60ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 3, waiting 80ms (140ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 4, waiting 160ms (300ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 5, waiting 320ms (620ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 6, waiting 640ms (1260ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — grace spent (1260ms of 2500ms) after 7 attempt(s), giving up"
+      ],
+      "late_system_dropped/persistent": [],
+      "zombie/single": [
+        "  [retry] timed out (deadline now 1998ms) — attempt 1 of 3, waiting 20ms"
+      ],
+      "slow_throttle/persistent": [],
+      "reasoning_tool_leak/single": [
+        "  [loop] the reply contained tool-call markup, not a tool call — the model's template may not match this endpoint's tool protocol — asking the model to re-issue it (1/2)"
+      ],
+      "reasoning_tool_leak/persistent": [
+        "  [loop] the reply contained tool-call markup, not a tool call — the model's template may not match this endpoint's tool protocol — asking the model to re-issue it (1/2)",
+        "  [loop] the reply contained tool-call markup, not a tool call — the model's template may not match this endpoint's tool protocol — asking the model to re-issue it (2/2)",
+        "  chaos-model — wrapping up"
+      ],
+      "length_mid_tool_call/single": [
+        "  [loop] a read call was cut off at the output limit (max_tokens = 4096) — asking for it in parts (1/2)"
+      ],
+      "length_mid_tool_call/persistent": [
+        "  [loop] a read call was cut off at the output limit (max_tokens = 4096) — asking for it in parts (1/2)",
+        "  [loop] a read call was cut off at the output limit (max_tokens = 4096) — asking for it in parts (2/2)",
+        "  chaos-model — wrapping up"
+      ],
+      "mid_stream_disconnect/single": [
+        "  [retry] the stream broke off mid-reply — attempt 1 of 3, waiting 20ms"
+      ],
+      "mid_stream_disconnect/persistent": [
+        "  [retry] the stream broke off mid-reply — attempt 1 of 3, waiting 20ms",
+        "  [retry] the stream broke off mid-reply — attempt 2 of 3, waiting 40ms"
+      ],
+      "cache_miss/persistent": []
+    }
+  }
+}
