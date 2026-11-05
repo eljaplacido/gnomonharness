@@ -1,0 +1,203 @@
+== LG1 offline evidence 2026-11-05T17:34:07Z (no hub, no lane, no cloud)
+-- test_hubwatch_s1.sh: 50 passed, 0 failed
+-- test_run_lg1.py:
+ok    plan: 2 attempts x 16 pairs = 64 cells
+ok    plan: every unit is one (task, attempt) pair, OLD and NEW L, one on each lane slot
+ok    plan: tasks in R1H's per-attempt order (shuffle with seed = attempt)
+ok    plan: the same 32 (attempt, task) pairs as R1H's L cells (32 vs 32)
+ok    plan: OLD takes each lane slot in half the pairs (alternating)
+ok    plan: cell ids lg1-k<k>-<old|new>-<task>
+ok    smoke: OLD + NEW L as a pair, NEG (NEW) on the lane-free slot, together
+ok    builds: OLD v0.4.2 2498d16d and NEW PR #153 head 59f1e314, both with R3R's agent class
+ok    ports: LG1's own 6110-6115 / 6120-6125; none is R4H's (19180, 5810-5825), G1gate's (5910-5925), P2G/H3/H4-lite's (4710-4729), M2's, R3R's or another apparatus's
+ok    lane through LG1's tunnel 19380 (not R4H's 19180); the lane-free slot's local meter is a trap
+ok    900 s, 2 attempts, 2 lane slots (R1H's)
+ok    arms: R1H's L (entry implementor, every role local); NEG all cloud, asserted as L
+ok    no cloud: the runner starts no relay-go and names no credential file or key (the cloud endpoints are traps)
+ok    cell env: L routes every role local; the local URL is the slot's meter, the cloud URL the slot's TRAP; NEW's SHA pinned
+ok    the traps' upstream 127.0.0.1:9 is closed on this host (a trap forwards nothing)
+ok    a cell dir without cell.json is moved to runs-aborted/<cell>-incomplete and run from scratch
+ok    OLD runs R3R's agent class with GNOMON_EXPECT_SHA = 2498d16d; its cloud URL is gpu2's trap
+ok    cell.json carries build, sha, arm, entry, pair, slot, runner and the trap upstream
+ok    a finished cell gets timeline.json: 10 polls, 10 changed samples, local counters incl. replay
+ok    tokens.json holds the trap's counters (0 cloud requests here)
+ok    no ledger is written: LG1 spends nothing
+ok    NEW runs R3R's agent class with GNOMON_EXPECT_SHA = 59f1e314
+ok    a cell with cell.json is skipped
+ok    a pair's two cells start together (within 0.5 s)
+ok    the next pair starts only when both cells of the previous one have ended
+ok    a slow cell holds its pair: neither slot starts the next pair early
+ok    yield: the runner stopped within 3 s (y1 would take 60 s)
+ok    yield: old's finished cell y0 is kept
+ok    yield: old's in-flight y1 moved to runs-aborted/<cell>-yield with its runner log and its timeline
+ok    yield: old's y2 was not started
+ok    yield: new's finished cell y0 is kept
+ok    yield: new's in-flight y1 moved to runs-aborted/<cell>-yield with its runner log and its timeline
+ok    yield: new's y2 was not started
+ok    yield: no tb process left running (process groups stopped)
+ok    yield: each aborted cell's compose project removed by exact label
+ok    resume: finished cells skipped, the rest run (['lg1-k1-new-y0', 'lg1-k1-old-y1', 'lg1-k1-new-y1', 'lg1-k1-old-y2', 'lg1-k1-new-y2'])
+ok    resume: the lone cell of a half-finished pair is logged as running alone
+ok    a cell whose tb ignores SIGTERM and finishes after the flag is aborted, not kept
+ok    SIGTERM: the cell in flight is aborted as 'operator', tb stopped
+ok    attempts are barriers: no attempt-2 cell starts before every attempt-1 cell has ended
+ok    deadline: no pair starts after it (logged NOT STARTED (deadline))
+ok    timeline: a meter that stops answering is recorded once as an error (4 failed reads) and polling goes on
+ok    port_free: a port with a live listener is busy
+ok    port_free: a server-side TIME_WAIT is not busy
+ok    abort-inflight: a cell without cell.json is moved (project removed); finished cells stay
+ok    main full: refuses to start while YIELD-NOW is present (exit 3)
+ok    main smoke: refuses to start while YIELD-NOW is present (exit 3)
+47 passed, 0 failed
+-- test_chain_glue_lg1.sh:
+ok    the extracted block holds the glue (yield, run_bg, wait_others) and no top-level actions
+ok    scheduling as sourced: IDLE_NEED 2 (LG1's, pre-registered), IDLE_MEM_MAX 6500, yield margin 1500 MiB x 2 samples, 60 s idle samples
+ok    run_bg ended on the yield: 2 (flag seen first) or 0 with the runner's exit 75 (runner quicker); the main loop routes both to handle_yield (rc=0)
+ok    the yield came 7 s after the game started (fake 1 s sampling: 2 samples over the limit)
+ok    YIELD-NOW written with the reason
+ok    the watchdog stopped the lane (STOP-ME, our pid)
+ok    YIELD logged in STATUS
+ok    handle_yield cleared YIELD-NOW
+ok    the runner saw YIELD-NOW and exited by itself (no SIGTERM needed)
+ok    handle_yield did not wait out its 600 s allowance once the runner had exited (0 s; zombies are not alive)
+ok    nothing of this chain's is left running (runner, watchdog, lane flag)
+ok    no runner process survives
+ok    the lane's server log is kept as segment 1
+ok    YIELD #1 done logged
+ok    stop_bg: a runner deaf to the flag gets SIGTERM on its process group after the allowance and is gone (3 s)
+ok    the abort-inflight fallback ran
+ok    guard: no lane of ours and no pid -> another bud-lane server (R4H's) is NOT stopped
+ok    guard: a recorded pid that is not the running one -> not stopped
+ok    a lane this chain created, pid not yet recorded (still loading) -> stopped
+ok    flock_held: an unlocked file reads not held
+ok    flock_held: a file another process holds a flock on reads held (from /proc/locks)
+ok    flock_held: probing neither takes nor disturbs the lock (still held, file untouched)
+ok    flock_held: a missing lock file reads not held (and is not created)
+ok    flock_held: the missing file was not created
+ok    wait: no RTX chain holds its lock -> clear at once
+ok    wait: nothing logged when there was nothing to wait for
+ok    wait: r4h-chain.lock held -> LG1 waits (logged) until its holder releases it (3 s), then goes on
+ok    wait: m2-chain-rtx.lock held -> LG1 waits (logged) until its holder releases it (3 s), then goes on
+ok    wait: r3r-chain.lock held -> LG1 waits (logged) until its holder releases it (3 s), then goes on
+ok    wait: s1-chain.lock held -> LG1 waits (logged) until its holder releases it (4 s), then goes on
+2026-11-05T17:35:39Z CHAIN-LG1 WAIT (test): the deadline 2026-11-05T17:35:39Z passed while /tmp/tmp.1md0ya9FAD/r4h-chain.lock was held; LG1 starts nothing
+ok    wait: past the deadline while R4H still holds its lock -> LG1 gives up and starts nothing (2 s)
+ok    wait: probing the locks neither takes nor touches them
+ok    wait: a missing lock file reads not held and is not created
+ok    the chain waits on R4H's real lock (r4h-2026-11/.chain.lock), M2's, R3R's and S1's
+ok    the chain waits before every lane start and re-checks after the idle wait
+ok    scheduling: IDLE_MEM_MAX 6500 and IDLE_NEED 2 set before the byte-identical hubwatch reads them; yield margin 1500 MiB
+ok    ports: tunnel 19380, meters 6110-6115/6120-6125 (R4H: 19180, 5810-5825)
+ok    no cloud: the chain has no budget, ledger or relay-go
+ok    launch: without LG1_DEADLINE the chain exits 2 before taking its lock or starting anything
+39 passed, 0 failed
+-- test_collect_lg1.py:
+ok    Agresti-Min: 2 NEW-only, 4 OLD-only of 32 -> -0.0625 [-0.2101, +0.0924] (hand-computed)
+ok    Agresti-Min: no discordant pair of 32 -> lower bound -1.96/34 (-5.8 pts): non-inferior
+ok    Agresti-Min at n = 32: 1:1 reads non-inferior, 0:1 and 2:2 do not (the margin is -10 pts)
+ok    Agresti-Min: the interval is clipped to [-1, 1]
+ok    bootstrap: identical pairs give a degenerate CI at the ratio (1.10)
+ok    bootstrap: deterministic (seed 20261105) and the CI brackets the point (1.087 [1.065, 1.108])
+ok    ratio_median: median NEW / median OLD
+ok    ratio_sum: an all-zero OLD side is not a ratio (NaN, so not shown)
+ok    solved: NEW fewer with McNemar p < 0.05 -> regresses
+ok    solved: lower bound below -10 pts, p >= 0.05 -> not shown
+ok    solved: lower bound above -10 pts -> non-inferior
+ok    solved: the margin is strict (> -0.10)
+ok    guard: upper bound <= 1.20 -> holds
+ok    guard: upper bound above 1.20, no significant rise past it -> not shown
+ok    guard: lower bound above 1.00 and point above 1.20 -> breached
+ok    guard: a significant rise whose point is under 1.20 is not a breach
+ok    guard: NaN -> not shown
+ok    verdict: all three shown -> non-inferior
+ok    verdict: a guard not shown -> not shown
+ok    verdict: any regression or breach -> regresses
+ok    load + paired: 32 valid pairs, 24 solved each, no discordant pair
+ok    identical outcomes, +~4% tokens and wall -> non-inferior (tokens 1.047, wall 1.037)
+ok    build rows: 32 cells per build; no cloud request
+ok    validity buckets: {'lg1-k1-new-a1': 'valid', 'lg1-k1-new-a2': 'valid', 'lg1-k1-new-a3': 'valid', 'lg1-k1-new-a4': 'valid', 'lg1-k1-new-a5': 'valid', 'lg1-k1-old-a1': 'misrouted', 'lg1-k1-old-a2': 'wrong_commit', 'lg1-k1-old-a3': 'endpoint_outage', 'lg1-k1-old-a4': 'no_model_call', 'lg1-k1-old-a5': 'valid'}
+ok    buckets sum to n; the misrouted cell's cloud request is counted (the $0 check sees it)
+ok    only pairs valid in both builds are scored
+ok    8 OLD-only of 16 -> McNemar p 0.0078 -> regresses
+ok    tokens x1.5 on every pair -> guard breached (1.50 [1.50, 1.50]) -> regresses
+ok    at 16 pairs even 0 discordant pairs cannot read non-inferior (lower bound -10.9 pts < -10)
+ok    smoke: OLD and NEW L valid and solved on their commits, release surfaces, NEG counted on the trap -> PASS
+ok    smoke gate catches: NEG never reached the trap
+ok    smoke gate catches: an L cell sent a cloud request
+ok    smoke gate catches: OLD ran NEW's commit
+ok    smoke gate catches: NEW's surface has nudge_after_idle = 12
+ok    smoke gate catches: OLD's surface has nudge_after_idle = 0
+ok    smoke gate catches: hello-world not solved
+ok    smoke gate catches: OLD replayed reasoning
+ok    smoke gate catches: no timeline
+ok    smoke gate catches: no surface copy
+39 passed, 0 failed
+-- collect_lg1.py --mde:
+LG1 power, exact enumeration (non-inferior: Agresti-Min 95% lower bound > -10 pts; regresses: NEW fewer, exact McNemar p < 0.05)
+  n = 32 pairs
+    discordant rate   true NEW - OLD   P(non-inferior)   P(regresses)
+               0.05              +0 pts              0.65           0.00
+               0.05              +5 pts              1.00           0.00
+               0.10             -10 pts              0.03           0.09
+               0.10              +0 pts              0.48           0.00
+               0.10              +5 pts              0.81           0.00
+               0.10             +10 pts              1.00           0.00
+               0.15             -10 pts              0.05           0.11
+               0.15              +0 pts              0.35           0.00
+               0.15              +5 pts              0.62           0.00
+               0.15             +10 pts              0.89           0.00
+               0.20             -20 pts              0.00           0.64
+               0.20             -10 pts              0.04           0.11
+               0.20              +0 pts              0.27           0.01
+               0.20              +5 pts              0.50           0.00
+               0.20             +10 pts              0.76           0.00
+  n = 16 pairs
+    discordant rate   true NEW - OLD   P(non-inferior)   P(regresses)
+               0.05              +0 pts              0.23           0.00
+               0.05              +5 pts              0.56           0.00
+               0.10             -10 pts              0.00           0.00
+               0.10              +0 pts              0.26           0.00
+               0.10              +5 pts              0.49           0.00
+               0.10             +10 pts              0.81           0.00
+               0.15             -10 pts              0.04           0.01
+               0.15              +0 pts              0.22           0.00
+               0.15              +5 pts              0.39           0.00
+               0.15             +10 pts              0.62           0.00
+               0.20             -20 pts              0.00           0.08
+               0.20             -10 pts              0.05           0.01
+               0.20              +0 pts              0.18           0.00
+               0.20              +5 pts              0.31           0.00
+               0.20             +10 pts              0.49           0.00
+  smallest result that reads non-inferior at n = 32 (NEW-only:OLD-only): 0:0, 1:1, 4:2, 6:3, 8:4, 10:5, 11:6
+-- hub-free dry check (DRY=1 DRY_HUB=0):
+== LG1 dry check 2026-11-05T17:35:40Z (read-only: nothing is started, stopped, written or committed)
+LG1 chain: none running
+RTX chain lock /home/eljaplacido/gnomon-wt/peers/benchmarks/results/r4h-2026-11/.chain.lock: HELD (LG1 would WAIT for it)
+RTX chain lock /home/eljaplacido/gnomon-wt/peers/benchmarks/results/m2-2026-11/.chain-rtx.lock: not held
+RTX chain lock /home/eljaplacido/gnomon-wt/peers/benchmarks/results/r3r-2026-11/.chain.lock: not held
+RTX chain lock /home/eljaplacido/gnomon-wt/peers/benchmarks/results/s1-2026-11/.chain.lock: not held
+deadline: 2026-11-05T21:30:00Z
+thresholds: idle = mem < 6500 MiB, util < 15 %, no llama-server, no m1-vllm, x 2 samples every 60 s; yield = mem > warm + 1500 MiB x 2 samples every 30 s (provisional while loading: base + 24543 + 1500), or our server gone / another / m1-vllm
+hub: not sampled (DRY_HUB=0)
+R1H props/slots on file: yes
+tunnel port 19380: free
+LG1 meter ports (6110 6111 6112 6113 6114 6115 6120 6121 6122 6123 6124 6125): all free
+build 2498d16dc248bc18a203a1a98ba0b942acae5b23 on GitHub: reachable
+build 59f1e3144099ff47c10f1b3e26249f763d764f42 on GitHub: reachable
+YIELD-NOW: absent; smoke passed earlier: no; finished cells (runs/*/cell.json): 0
+LG1 files tracked by git: 0 (the coordinator commits the pre-registration before launch)
+preflight lg1: R3R setup (bash, jinja), run helper, node block (R1H L surface, 5 refusals), meter tests 36 passed, 0 failed, copies byte-identical to R4H and pinned, wire test PASS on both builds, collector tests 39 passed, 0 failed, agent class per build, plan (32 L pairs), ports and closed trap upstream OK
+hubwatch tests (S1's): 50 passed, 0 failed
+runner tests: 47 passed, 0 failed
+chain-glue tests: 39 passed, 0 failed
+collector tests: 39 passed, 0 failed
+runs dir /home/eljaplacido/gnomon-wt/peers/benchmarks/results/lg1-2026-11/runs; upstream http://127.0.0.1:19380; deadline 2026-11-05T21:30:00Z; finished cells 0; meter ports all free; trap upstream 127.0.0.1:9 closed; cloud budget $0 (traps only)
+PRIMARY (pre-registered): solved on 0 pairs valid in both: OLD 0, NEW 0; OLD-only 0, NEW-only 0; exact McNemar p = 1.0000
+  CHECK buckets sum to n per build: ok
+  CHECK each valid cell's surface (where copied out) is its build's release default (nudge_after_idle OLD 12 / NEW 0, no replay_reasoning or steer_role): ok (0 capped cel
+  CHECK every cell ran its build's commit: ok (wrong_commit cells: 0)
+  CHECK $0 cloud: cloud (trap) chat requests over all LG1 cells: 0 (ok); no relay-go ran and the traps' upstream is closed, so $0.00 spent
+  CHECK every valid cell has a meter timeline: ok; timeline read errors: 0
+VERDICT (pre-registered rule): solved not shown, tokens guard not shown, wall guard not shown on 0 pairs
+VERDICT: not shown
+deadline: 2026-11-05T21:30:00Z (232 min from now)

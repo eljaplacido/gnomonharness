@@ -1,0 +1,58 @@
+== LG1 wire test 2026-11-05T17:30:07.141Z: OLD 2498d16dc248bc18a203a1a98ba0b942acae5b23 (v0.4.2, tree /tmp/claude-1000/-home-eljaplacido-gnomon/3809fb39-94a4-4ea4-b0f3-7057ddad8d1d/scratchpad/lg1/tree-2498d16d); NEW 59f1e3144099ff47c10f1b3e26249f763d764f42 (PR #153 head, tree /tmp/claude-1000/-home-eljaplacido-gnomon/3809fb39-94a4-4ea4-b0f3-7057ddad8d1d/scratchpad/lg1/tree-59f1e314)
+
+A. surface: each build's init + R3R's node block (L routing)
+  ok   R3R's node block (its init assertion included) runs on both builds' init (- / -)
+  config.toml settings (non-comment lines) that differ OLD -> NEW in gnomon init:
+    - nudge_after_idle = 12
+    + nudge_after_idle = 0
+  ok   nudge_after_idle in the surface each cell runs: OLD 12, NEW 0 (each build's release default)
+  ok   no surface file names replay_reasoning or steer_role on either build: replay runs at each build's code default
+  ok   the only setting that differs is nudge_after_idle (others: [])
+  ok   the r1 profile (L's routing, every role local) is byte-identical on both builds and to what r3r-k1-l-acl-permissions-inheritance ran
+  surface files that differ OLD -> NEW after the setup (comments included): config.toml
+
+B. wire on a lane-shaped fake (content only, no reasoning field), L on both builds, local through relay-meter-s1
+
+  OLD L: gnomon exit 0 in 0.2 s; local 2 req, cloud 0 req; meter chat 2, stream 2, max_tokens 2, reasoning responses 0, replayed requests 0 (after a reasoned tool reply 0/0), nudge requests 0 (dropped 0, note 0); last wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"tools_hash":"7e00335dbc3cefad11f1f37c0b8a15bd89afa4fd10dce2d4f9abd414ce85582e"}; stop answered
+  ok   gnomon task exited 0
+  ok   L: every request local (qwen3.6-35b), none to the cloud endpoint
+  ok   every request streamed with include_usage and max_tokens = 32768 (both builds' release wire), and the meter saw it
+  ok   no reasoning returned, none replayed (on a lane that sends no reasoning field, replay is inert on both builds)
+  ok   the meter metered every response
+  ok   the log carries surface= (the collector's surface pattern)
+
+  NEW L: gnomon exit 0 in 0.3 s; local 2 req, cloud 0 req; meter chat 2, stream 2, max_tokens 2, reasoning responses 0, replayed requests 0 (after a reasoned tool reply 0/0), nudge requests 0 (dropped 0, note 0); last wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"tools_hash":"7e00335dbc3cefad11f1f37c0b8a15bd89afa4fd10dce2d4f9abd414ce85582e"}; stop answered
+  ok   gnomon task exited 0
+  ok   L: every request local (qwen3.6-35b), none to the cloud endpoint
+  ok   every request streamed with include_usage and max_tokens = 32768 (both builds' release wire), and the meter saw it
+  ok   no reasoning returned, none replayed (on a lane that sends no reasoning field, replay is inert on both builds)
+  ok   the meter metered every response
+  ok   the log carries surface= (the collector's surface pattern)
+
+C. positive control: a reasoning-returning fake (reasoning_content on every reply)
+
+  OLD L: gnomon exit 0 in 0.3 s; local 2 req, cloud 0 req; meter chat 2, stream 2, max_tokens 2, reasoning responses 2, replayed requests 0 (after a reasoned tool reply 0/1), nudge requests 0 (dropped 0, note 0); last wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"tools_hash":"7e00335dbc3cefad11f1f37c0b8a15bd89afa4fd10dce2d4f9abd414ce85582e"}; stop answered; requests carrying reasoning_content: []
+  ok   gnomon task exited 0
+
+  NEW L: gnomon exit 0 in 0.3 s; local 2 req, cloud 0 req; meter chat 2, stream 2, max_tokens 2, reasoning responses 2, replayed requests 1 (after a reasoned tool reply 1/1), nudge requests 0 (dropped 0, note 0); last wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"replay_reasoning":true,"replay_reasoning_source":"default","tools_hash":"7e00335dbc3cefad11f1f37c0b8a15bd89afa4fd10dce2d4f9abd414ce85582e"}; stop answered; requests carrying reasoning_content: [2]
+  ok   gnomon task exited 0
+  ok   OLD (v0.4.2): reasoning returned, none replayed (no replay on an undeclared endpoint)
+  ok   NEW: replays from its second request on, and the meter counts it (req_with_reasoning_content, following_reasoning_replayed)
+  ok   NEW's turn record says replay_reasoning true, source default
+
+D. the idle nudge: a lane-shaped fake that asks for 14 read-only bash calls before it answers
+
+  OLD L: gnomon exit 0 in 0.3 s; local 15 req, cloud 0 req; meter chat 15, stream 15, max_tokens 15, reasoning responses 0, replayed requests 0 (after a reasoned tool reply 0/0), nudge requests 3 (dropped 3, note 0); last wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"tools_hash":"7e00335dbc3cefad11f1f37c0b8a15bd89afa4fd10dce2d4f9abd414ce85582e"}; stop answered
+  ok   gnomon task exited 0
+
+  NEW L: gnomon exit 0 in 0.4 s; local 15 req, cloud 0 req; meter chat 15, stream 15, max_tokens 15, reasoning responses 0, replayed requests 0 (after a reasoned tool reply 0/0), nudge requests 0 (dropped 0, note 0); last wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"tools_hash":"7e00335dbc3cefad11f1f37c0b8a15bd89afa4fd10dce2d4f9abd414ce85582e"}; stop answered
+  ok   gnomon task exited 0
+  ok   OLD (nudge_after_idle = 12): the idle nudge is sent, and the meter counts it
+  ok   NEW (nudge_after_idle = 0): no idle nudge
+
+E. NEG: NEW routed all to the cloud endpoint
+
+  NEW NEG: gnomon exit 0 in 0.3 s; local 0 req, cloud 2 req; meter chat 0, stream 0, max_tokens 0, reasoning responses 0, replayed requests 0 (after a reasoned tool reply 0/0), nudge requests 0 (dropped 0, note 0); last wire {"stream":true,"stream_idle_timeout_ms":300000,"stream_total_timeout_ms":1800000,"max_tokens":32768,"tools_hash":"7e00335dbc3cefad11f1f37c0b8a15bd89afa4fd10dce2d4f9abd414ce85582e"}; stop answered
+  ok   NEG: cloud only (the smoke must count it on the trap and never score it valid)
+
+wire test: PASS (OLD 2498d16dc248bc18a203a1a98ba0b942acae5b23, NEW 59f1e3144099ff47c10f1b3e26249f763d764f42)
