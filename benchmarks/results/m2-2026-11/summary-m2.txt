@@ -5,6 +5,10 @@ m2-fnx    L    32    32   20  0.625  [0.45, 0.77]    0.0000            1.65M    
 m2-fnx    PC   26    26   21  0.808  [0.62, 0.91]    0.0377            1.21M            16.5k       321       9          25  {}
 m2-q36g   L    32    31   16  0.516  [0.35, 0.68]    0.0000            2.75M            21.7k       123       4           0  {'apparatus': 1}
 m2-q36g   PC   32    32   22  0.688  [0.51, 0.82]    0.0310            1.59M            17.5k       307       9          30  {}
+m2-glim   L    32    31   24  0.774  [0.60, 0.89]    0.0000            1.39M            19.0k       149       4           0  {'apparatus': 1}
+m2-glim   PC   32    31   18  0.581  [0.41, 0.74]    0.0432            2.99M            44.3k       452      11          25  {'apparatus': 1}
+m2-q38    L    12     9    4  0.444  [0.19, 0.73]    0.0000            1.04M            16.9k        80       2           0  {'apparatus': 3}
+m2-q38    PC   12    11    7  0.636  [0.35, 0.85]    0.0500            1.69M            20.4k       939       6          10  {'apparatus': 1}
 r3r       L    32    29   22  0.759  [0.58, 0.88]    0.0000            1.62M            17.9k        75       2           0  {'no_model_call': 1, 'apparatus': 2}
 r3r       PC   32    31   19  0.613  [0.44, 0.76]    0.0583            2.72M            48.0k       391      12          28  {'apparatus': 1}
 
@@ -22,12 +26,16 @@ DECISION (pre-registered; per challenger and arm, against its control, on (task,
     PC: DOES NOT MATCH (more capped: 9 vs 6, more than +1)
     -> m2-fnx: the recipe does NOT match or beat the incumbent on PC (L: MATCHES OR BEATS; PC: DOES NOT MATCH)
   RTX: Glimmer-30B vs Qwen3.6 on the hub lane (R3R)
-    L: NOT DECIDED (no cells: m2-glim 0, r3r 32)
-    PC: NOT DECIDED (no cells: m2-glim 0, r3r 32)
-    -> m2-glim: NOT DECIDED on L/PC (L: NOT DECIDED; PC: NOT DECIDED)
+  m2-glim/L      vs r3r/L         : pairs= 28  solved 21 vs 22  m2-glim/L-only= 1 r3r/L-only= 2  McNemar p=1.0000  capped 4 vs 1
+    L: TRAILS (not shown)
+  m2-glim/PC     vs r3r/PC        : pairs= 31  solved 18 vs 19  m2-glim/PC-only= 2 r3r/PC-only= 3  McNemar p=1.0000  capped 11 vs 12
+    PC: TRAILS (not shown)
+    -> m2-glim: the recipe does NOT match or beat the incumbent on L/PC (L: TRAILS; PC: TRAILS)
   RTX: Qwen3.8-27B vs Qwen3.6 on the hub lane (R3R)
-    L: NOT DECIDED (no cells: m2-q38 0, r3r 32)
-    PC: NOT DECIDED (no cells: m2-q38 0, r3r 32)
+  m2-q38/L       vs r3r/L         : pairs=  9  solved  4 vs  7  m2-q38/L-only= 0 r3r/L-only= 3  McNemar p=0.2500  capped 2 vs 1
+    L: NOT DECIDED (too few paired cells: 9 < 24)
+  m2-q38/PC      vs r3r/PC        : pairs= 11  solved  7 vs  6  m2-q38/PC-only= 2 r3r/PC-only= 1  McNemar p=1.0000  capped 6 vs 6
+    PC: NOT DECIDED (too few paired cells: 11 < 24)
     -> m2-q38: NOT DECIDED on L/PC (L: NOT DECIDED; PC: NOT DECIDED)
 
 HYBRID PAYOFF within each lane (descriptive; exact McNemar PC vs L on (task, attempt) pairs valid in both):
@@ -35,16 +43,26 @@ HYBRID PAYOFF within each lane (descriptive; exact McNemar PC vs L on (task, att
       m2-fnx PC: $/solved 0.0377, delegating cells 25
   m2-q36g/PC     vs m2-q36g/L     : pairs= 31  solved 22 vs 16  m2-q36g/PC-only= 7 m2-q36g/L-only= 1  McNemar p=0.0703  capped 8 vs 4
       m2-q36g PC: $/solved 0.0310, delegating cells 30
+  m2-glim/PC     vs m2-glim/L     : pairs= 30  solved 18 vs 23  m2-glim/PC-only= 5 m2-glim/L-only=10  McNemar p=0.3018  capped 10 vs 4
+      m2-glim PC: $/solved 0.0432, delegating cells 25
+  m2-q38/PC      vs m2-q38/L      : pairs=  9  solved  6 vs  4  m2-q38/PC-only= 2 m2-q38/L-only= 0  McNemar p=0.5000  capped 5 vs 2
+      m2-q38 PC: $/solved 0.0500, delegating cells 10
   r3r/PC         vs r3r/L         : pairs= 28  solved 19 vs 21  r3r/PC-only= 2 r3r/L-only= 4  McNemar p=0.6875  capped 11 vs 2
       r3r PC: $/solved 0.0583, delegating cells 28
 
 M2 vs M1's recipe of the same model (descriptive only: time-separated, older builds, other recipes):
   m2-fnx/L       vs m1b-fnx/L     : pairs= 31  solved 19 vs 21  m2-fnx/L-only= 2 m1b-fnx/L-only= 4  McNemar p=0.6875  capped 5 vs 8
+  m2-glim/L      vs m1a3-g1/L     : pairs= 31  solved 24 vs 25  m2-glim/L-only= 3 m1a3-g1/L-only= 4  McNemar p=1.0000  capped 4 vs 2
+  m2-q38/L       vs m1a-q38/L     : pairs=  9  solved  4 vs  3  m2-q38/L-only= 1 m1a-q38/L-only= 0  McNemar p=1.0000  capped 2 vs 2
 
 mechanism and wire records (valid cells):
   m2-fnx: requests with reasoning_content 0 of 2722 carrying an assistant message; after a reply with reasoning + a tool call: 0 of 0 sent it back; late system requests 1111, dropped-by-template 1111, [gnomon] notes 0; steer_role adapted in 0 cells; local aborts 209
     CHECK replay as declared (off): ok; surface replay line as declared: FAIL
   m2-q36g: requests with reasoning_content 0 of 3124 carrying an assistant message; after a reply with reasoning + a tool call: 0 of 0 sent it back; late system requests 1754, dropped-by-template 1754, [gnomon] notes 0; steer_role adapted in 0 cells; local aborts 7
+    CHECK replay as declared (off): ok; surface replay line as declared: FAIL
+  m2-glim: requests with reasoning_content 3795 of 3795 carrying an assistant message; after a reply with reasoning + a tool call: 3434 of 3434 sent it back; late system requests 1857, dropped-by-template 1857, [gnomon] notes 0; steer_role adapted in 0 cells; local aborts 3
+    CHECK replay as declared (on): ok; surface replay line as declared: FAIL
+  m2-q38: requests with reasoning_content 0 of 810 carrying an assistant message; after a reply with reasoning + a tool call: 0 of 0 sent it back; late system requests 13, dropped-by-template 13, [gnomon] notes 411; steer_role adapted in 6 cells; local aborts 4
     CHECK replay as declared (off): ok; surface replay line as declared: FAIL
 
 how cells end (last turn record's stop_reason, valid cells):
@@ -52,6 +70,10 @@ how cells end (last turn record's stop_reason, valid cells):
   m2-fnx   PC : {'answered': 17, 'none': 9}
   m2-q36g  L  : {'answered': 18, 'stall': 6, 'none': 6, 'truncated': 1}
   m2-q36g  PC : {'answered': 21, 'none': 11}
+  m2-glim  L  : {'answered': 27, 'none': 3, 'truncated': 1}
+  m2-glim  PC : {'answered': 18, 'none': 13}
+  m2-q38   L  : {'answered': 3, 'stall': 5, 'none': 1}
+  m2-q38   PC : {'answered': 7, 'none': 4}
   r3r      L  : {'answered': 23, 'none': 4, 'truncated': 1, 'stall': 1}
   r3r      PC : {'answered': 19, 'none': 12}
 
@@ -60,12 +82,16 @@ load at cell start (1-min load average; running containers), median per group an
   m2-fnx   PC : load 2.4, containers 2
   m2-q36g  L  : load 2.0, containers 1
   m2-q36g  PC : load 4.7, containers 3
+  m2-glim  L  : load 4.5, containers 5
+  m2-glim  PC : load 4.0, containers 5
+  m2-q38   L  : load 8.6, containers 5
+  m2-q38   PC : load 4.4, containers 3
 
 checks:
   CHECK buckets sum to n per group and arm: ok
   CHECK every valid M2 cell's surface carries stream = true and max_tokens = 32768: FAIL
-  CHECK every local request streamed with max_tokens: ok; every cloud request asked for usage and every cloud response carried it: ok
+  CHECK every local request streamed with max_tokens: ok; every cloud request asked for usage and every cloud response carried it: FAIL
   CHECK replay as declared per lane: FAIL
   M2 gx10 cloud spend (ledger, smoke and aborted included): $1.488 (0 aborted-cell entries)
-  M2 rtx cloud spend (ledger, smoke and aborted included): $0.000 (0 aborted-cell entries)
-122 M2 cells; summary in /home/eljaplacido/gnomon-wt/peers/benchmarks/results/m2-2026-11/runs/m2-summary.json
+  M2 rtx cloud spend (ledger, smoke and aborted included): $1.187 (0 aborted-cell entries)
+210 M2 cells; summary in /home/eljaplacido/gnomon-wt/peers/benchmarks/results/m2-2026-11/runs/m2-summary.json

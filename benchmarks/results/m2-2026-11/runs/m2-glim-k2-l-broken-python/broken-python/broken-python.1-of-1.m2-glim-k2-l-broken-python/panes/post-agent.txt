@@ -1,0 +1,53 @@
+root@7dcd639cceb5:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+root@7dcd639cceb5:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+ARM_VERSION=be4fc0d8835c443aca8b32ccd4c1caacf48cbdce
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793844201
+root@7dcd639cceb5:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with
+ pip.'; tmux wait -S done
+R1_ARM=L R1_ENTRY=implementor R1_ROUTES=coordinator=local,implementor=local,verifier=local,plan=local,implement=local,critique=local,smol=local M2_LOCAL_REPLAY=
+true
+  glimmer-30b — 30 tool call(s) so far
+  ⚙ todo
+    ✓ todo — 2/4 done · Diagnose pip install failure
+  ⚙ todo
+    ✓ todo — 3/4 done · Fix issue
+[approval] bash: python3 -m pip list — approved
+  ⚙ bash python3 -m pip list
+    ✓ bash — exit 0
+  glimmer-30b — 31 tool call(s) so far
+  glimmer-30b — 32 tool call(s) so far
+  ⚙ note
+    ✓ note — pip dist-info existed without pip package files; ensurepip t
+  [tools] 32/256 calls — continuing (leg 2)
+  glimmer-30b — leg 2, 32 call(s) so far
+  glimmer-30b — 33 tool call(s) so far
+  ⚙ todo
+    ✓ todo — 4/4 done
+The system-wide Python 3.13 installation had a broken pip: `/usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info` existed but the actual `pip` package d
+irectory was missing, so `pip3` raised `ModuleNotFoundError: No module named 'pip'`. `ensurepip` considered pip “already satisfied” because the dist-info was pr
+esent.
+
+Fixed by removing the stale metadata and re-bootstrapping pip from the bundled wheel:
+
+```bash
+rm -rf /usr/local/lib/python3.13/site-packages/pip-24.3.1.dist-info
+python3 -m ensurepip --default-pip
+```
+
+Verification:
+```
+$ python3 -m pip --version
+pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)
+
+$ python3 -m pip list
+Package Version
+------- -------
+pip     24.3.1
+```
+
+`pip` now imports and runs correctly. Network is disabled in this sandbox, so remote installs can’t be tested here, but the bootstrap is complete and `python3 -
+m pip` works end-to-end.
+
+[refusal] role=implementor model=glimmer-30b tools=33 surface=305ca09d0222
+root@7dcd639cceb5:/app#

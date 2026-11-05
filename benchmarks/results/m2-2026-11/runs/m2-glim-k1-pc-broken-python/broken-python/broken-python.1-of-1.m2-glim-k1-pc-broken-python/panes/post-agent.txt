@@ -1,0 +1,58 @@
+root@e793474a68da:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+root@e793474a68da:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+ARM_VERSION=be4fc0d8835c443aca8b32ccd4c1caacf48cbdce
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793835799
+root@e793474a68da:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with
+ pip.'; tmux wait -S done
+R1_ARM=PC R1_ENTRY=coordinator R1_ROUTES=coordinator=cloud,implementor=local,verifier=local,plan=cloud,implement=local,critique=local,smol=local M2_LOCAL_REPLAY
+=true
+
+**What was actually wrong**
+
+Not permissions, not PEP 668, not the network. The active interpreter `/usr/local/bin/python3` (Python 3.13.1, `sys.prefix=/usr/local`) had **lost pip's code wh
+ile keeping its metadata**: its site-packages contained only `README.txt` and a lone `pip-24.3.1.dist-info` directory. Every invocation died before doing anythi
+ng:
+
+```
+$ python3 -m pip install --dry-run --no-input pip
+/usr/local/bin/python3: No module named pip
+```
+
+`import pip`, `import setuptools` and `import certifi` all failed the same way, and even `pip --version`/`pip3 --version` hit `ModuleNotFoundError` — the `/usr/
+local/bin/pip` shims were there, pointing at a package that wasn't. Two red herrings ruled out by measurement: it runs as `root` with `umask 0022` and site-pack
+ages confirmed writable, and the only `EXTERNALLY-MANAGED` file on the box is `/usr/lib/python3.11/EXTERNALLY-MANAGED`, which belongs to Debian's *other* Python
+ 3.11, not this 3.13 build (`dpkg -S` claims no owner for `/usr/local/bin/python3`).
+
+**The fix**
+
+Restored pip offline from Python's own bundled wheel — no network required:
+
+```
+python3 -m ensurepip --upgrade --default-pip     # exit 0, pip 24.3.1
+```
+
+**The check that it works**
+
+```
+$ python3 -m pip --version
+pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)
+```
+
+A real end-to-end install, not just a version banner: `pip install six` exited 0 and `import six` resolves to `/usr/local/lib/python3.13/site-packages/six.py`.
+`pip check` reports no broken requirements. Your original complaint — installing packages with pip — now works.
+
+**Still outstanding**
+
+`setuptools` and `certifi` were also absent and `ensurepip` doesn't ship them, so anything doing a legacy `setup.py install` or TLS-verification-by-certifi will
+ still trip. One command closes that, but it needs index access, which this session had declared off (`network = false`), so I left it for you:
+
+```
+python3 -m pip install setuptools certifi
+```
+
+One thing to keep in mind: `python3` on PATH is this `/usr/local` 3.13 build, which is *not* the distro Python. Debian's `/usr/bin/python3` is 3.11 and is marke
+d externally managed, so pip installs aimed at it will be refused by PEP 668 — correctly, and that is a different interpreter from the one repaired here.
+
+[refusal] role=coordinator model=deepseek-v4.1-flash tools=12 surface=b21887234a3d
+root@e793474a68da:/app#

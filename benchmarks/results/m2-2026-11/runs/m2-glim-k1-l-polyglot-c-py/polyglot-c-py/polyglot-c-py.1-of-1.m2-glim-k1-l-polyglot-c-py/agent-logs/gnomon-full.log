@@ -1,0 +1,114 @@
+  glimmer-30b — 1 tool call(s) so far
+  ⚙ read /app/polyglot
+    ✓ read /app/polyglot — not found
+[approval] bash: mkdir -p /app/polyglot — approved
+  ⚙ bash mkdir -p /app/polyglot
+    ✓ bash — exit 0
+  glimmer-30b — 2 tool call(s) so far
+[approval] write /app/polyglot/main.py.c (+36 −0) [new file] — approved
+  ⚙ write /app/polyglot/main.py.c
+    ✓ write /app/polyglot/main.py.c (+36 −0)
+  glimmer-30b — 3 tool call(s) so far
+[approval] bash: python3 /app/polyglot/main.py.c 10 — approved
+  ⚙ bash python3 /app/polyglot/main.py.c 10
+    ✓ bash — exit 0
+  glimmer-30b — 4 tool call(s) so far
+[approval] bash: python3 /app/polyglot/main.py.c 0 && python3 /app/polyglot/main.py.c 1 && python3 /app/polyglot/main.py.c 2 — approved
+  ⚙ bash python3 /app/polyglot/main.py.c 0 && python3 /app/polyglot/main.py.c 1…
+    ✓ bash — exit 0
+  glimmer-30b — 5 tool call(s) so far
+[approval] bash: gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cmain 10 — approved
+  ⚙ bash gcc /app/polyglot/main.py.c -o /app/polyglot/cmain && /app/polyglot/cm…
+    ✓ bash — exit 0
+  glimmer-30b — 6 tool call(s) so far
+  glimmer-30b — 7 tool call(s) so far
+  ⚙ read /app/polyglot/main.py.c
+    ✓ read /app/polyglot/main.py.c — 36 lines
+[approval] bash: cat > /tmp/test.c << 'EOF'
+#if 0
+"""
+#endif
+int main(){return 0;}
+EOF
+gcc /tmp/test.c -o /tmp/test && echo ok — approved
+  ⚙ bash cat > /tmp/test.c << 'EOF' #if 0 """ #endif int main(){return 0;} EOF …
+    ✓ bash — exit 0
+  glimmer-30b — 8 tool call(s) so far
+[approval] bash: python3 /app/polyglot/main.py.c 20 && /app/polyglot/cmain 20 — approved
+  ⚙ bash python3 /app/polyglot/main.py.c 20 && /app/polyglot/cmain 20
+    ✓ bash — exit 0
+  glimmer-30b — 9 tool call(s) so far
+[approval] bash: python3 /app/polyglot/main.py.c 0 && /app/polyglot/cmain 0 — approved
+  ⚙ bash python3 /app/polyglot/main.py.c 0 && /app/polyglot/cmain 0
+    ✓ bash — exit 0
+  glimmer-30b — 10 tool call(s) so far
+[approval] bash: python3 /app/polyglot/main.py.c 1 && /app/polyglot/cmain 1 — approved
+  ⚙ bash python3 /app/polyglot/main.py.c 1 && /app/polyglot/cmain 1
+    ✓ bash — exit 0
+  glimmer-30b — 11 tool call(s) so far
+The polyglot was created at `/app/polyglot/main.py.c`.  
+C code is hidden from Python by a top-level triple-quoted string, and Python code is hidden from C by `#if 0 … #endif` blocks.
+
+```bash
+mkdir -p /app/polyglot
+```
+
+File `/app/polyglot/main.py.c`:
+```c
+#if 0
+"""
+#endif
+#include <stdio.h>
+#include <stdlib.h>
+int main(int argc, char *argv[]) {
+    if (argc < 2) return 1;
+    long n = atol(argv[1]);
+    if (n < 0) return 1;
+    if (n == 0) { printf("0\n"); return 0; }
+    long a = 0, b = 1;
+    for (long i = 2; i <= n; i++) {
+        long c = a + b;
+        a = b;
+        b = c;
+    }
+    printf("%ld\n", b);
+    return 0;
+}
+#if 0
+"""
+#endif
+#if 0
+import sys
+n = int(sys.argv[1])
+a, b = 0, 1
+if n == 0:
+    print(0)
+elif n == 1:
+    print(1)
+else:
+    for _ in range(2, n + 1):
+        a, b = b, a + b
+    print(b)
+#endif
+```
+
+Checks:
+
+```bash
+$ python3 /app/polyglot/main.py.c 10
+55
+$ python3 /app/polyglot/main.py.c 0
+0
+$ python3 /app/polyglot/main.py.c 1
+1
+
+$ gcc /app/polyglot/main.py.c -o /app/polyglot/cmain
+$ /app/polyglot/cmain 10
+55
+$ /app/polyglot/cmain 20
+6765
+```
+
+Both invocations print `f(N)` with `f(0)=0, f(1)=1`.
+
+[result] role=implementor model=glimmer-30b tools=11 surface=305ca09d0222

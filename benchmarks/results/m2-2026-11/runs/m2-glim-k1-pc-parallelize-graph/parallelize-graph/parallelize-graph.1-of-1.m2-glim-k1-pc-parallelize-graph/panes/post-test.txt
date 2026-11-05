@@ -1,0 +1,93 @@
+root@21725a615f17:/app# bash /tests/run-tests.sh; tmux wait -S done
+Hit:1 http://ports.ubuntu.com/ubuntu-ports noble InRelease
+Hit:2 http://ports.ubuntu.com/ubuntu-ports noble-updates InRelease
+Hit:3 http://ports.ubuntu.com/ubuntu-ports noble-backports InRelease
+Hit:4 http://ports.ubuntu.com/ubuntu-ports noble-security InRelease
+Reading package lists... Done
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+curl is already the newest version (8.5.0-2ubuntu10.16).
+0 upgraded, 0 newly installed, 0 to remove and 42 not upgraded.
+downloading uv 0.7.13 aarch64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Using CPython 3.12.3 interpreter at: /usr/bin/python3
+Creating virtual environment at: .tbench-testing
+Activate with: source .tbench-testing/bin/activate
+Using Python 3.12.3 environment at: .tbench-testing
+Resolved 5 packages in 39ms
+Prepared 5 packages in 39ms
+Installed 5 packages in 8ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+===================================================================== test session starts ======================================================================
+platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 9 items
+
+../tests/test_outputs.py ......F..                                                                                                                       [100%]
+
+=========================================================================== FAILURES ===========================================================================
+______________________________________________________________ test_outputs_are_contigs_not_kmers ______________________________________________________________
+
+    def test_outputs_are_contigs_not_kmers():
+        """Check that outputs are actual contigs, not just input k-mers.
+
+        Contigs should be extended sequences longer than k-mers.
+        """
+        # Load the test input to get k-mer length
+        test_file = Path("/app/test")
+        kmer_length = None
+        if test_file.exists():
+            with open(test_file, "r") as f:
+                first_line = f.readline().strip()
+                if first_line:
+                    kmer = first_line.split("\t")[0]
+                    kmer_length = len(kmer)
+
+        assert kmer_length is not None, "Could not determine k-mer length from test file"
+
+        # Check serial output
+        serial_out = Path("/app/serial.out")
+        if serial_out.exists():
+            content = serial_out.read_text()
+            lines = [line.strip() for line in content.strip().split("\n") if line.strip()]
+
+            # Contigs should be longer than k-mers (except possibly very short ones)
+            long_contigs = [line for line in lines if len(line) > kmer_length]
+
+>           assert len(long_contigs) > 0, (
+                f"No contigs longer than k-mer length ({kmer_length}) found. "
+                f"Output appears to contain k-mers instead of assembled contigs."
+            )
+E           AssertionError: No contigs longer than k-mer length (19) found. Output appears to contain k-mers instead of assembled contigs.
+E           assert 0 > 0
+E            +  where 0 = len([])
+
+/tests/test_outputs.py:133: AssertionError
+============================================================================ PASSES ============================================================================
+=================================================================== short test summary info ====================================================================
+PASSED ../tests/test_outputs.py::test_serial_executable_exists
+PASSED ../tests/test_outputs.py::test_parallel_executable_exists
+PASSED ../tests/test_outputs.py::test_makefile_exists
+PASSED ../tests/test_outputs.py::test_serial_output_exists
+PASSED ../tests/test_outputs.py::test_parallel_output_exists
+PASSED ../tests/test_outputs.py::test_outputs_contain_dna_sequences
+PASSED ../tests/test_outputs.py::test_contig_count_reasonable
+PASSED ../tests/test_outputs.py::test_outputs_are_identical
+FAILED ../tests/test_outputs.py::test_outputs_are_contigs_not_kmers - AssertionError: No contigs longer than k-mer length (19) found. Output appears to contain
+k-mers instead of assembled contigs.
+================================================================= 1 failed, 8 passed in 0.03s ==================================================================
+root@21725a615f17:/app#
