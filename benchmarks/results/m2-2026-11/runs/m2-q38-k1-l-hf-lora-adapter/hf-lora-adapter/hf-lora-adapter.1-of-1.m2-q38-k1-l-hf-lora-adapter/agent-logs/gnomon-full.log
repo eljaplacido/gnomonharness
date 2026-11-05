@@ -1,0 +1,177 @@
+  qwen3.8-27b — 1 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 0/5 done · Inspect environment (python, transformer
+[approval] bash: python3 -c "import sys, transformers, torch, peft; print(sys.version); print('transformers', transformers.__version__); print('torch', torch.__version__); print('peft', peft.__version__)" 2>&1; ls /app 2>&1; df -h /app 2>/dev/null | tail -1; nvidia-smi -L 2>&1 | head -3 — approved
+  ⚙ bash python3 -c "import sys, transformers, torch, peft; print(sys.version);…
+    ✓ bash — exit 0
+  qwen3.8-27b — 2 tool call(s) so far
+[approval] bash: python3 --version; pip --version 2>&1; ls /app 2>&1; pip list 2>/dev/null | head -30 — approved
+  ⚙ bash python3 --version; pip --version 2>&1; ls /app 2>&1; pip list 2>/dev/n…
+    ✓ bash — exit 0
+  qwen3.8-27b — 3 tool call(s) so far
+[approval] bash: mkdir -p /app/model_cache /app/merged_model && pip install --quiet transformers torch --index-url https://download.pytorch.org/whl/cpu 2>&1 | tail -5; echo "exit=$?" — approved
+  ⚙ bash mkdir -p /app/model_cache /app/merged_model && pip install --quiet tra…
+    ✓ bash — exit 0
+  qwen3.8-27b — 4 tool call(s) so far
+[approval] bash: pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu 2>&1 | tail -3; echo "torch_exit=$?"; pip install --quiet transformers peft 2>&1 | tail -3; echo "tf_exit=$?" — approved
+  ⚙ bash pip install --quiet torch --index-url https://download.pytorch.org/whl…
+    ✓ bash — exit 0
+  qwen3.8-27b — 5 tool call(s) so far
+[approval] bash: python3 -c "import torch, transformers, peft; print('torch', torch.__version__); print('transformers', transformers.__version__); print('peft', peft.__version__)" — approved
+  ⚙ bash python3 -c "import torch, transformers, peft; print('torch', torch.__v…
+    ✓ bash — exit 0
+  qwen3.8-27b — 6 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'EOF'
+from huggingface_hub import snapshot_download
+import time
+t0=time.time()
+p1 = snapshot_download("FacebookAI/xlm-roberta-base")
+print("base:", p1, f"{time.time()-t0:.0f}s")
+t0=time.time()
+p2 = snapshot_download("dominguesm/xlm-roberta-base-lora-language-detection")
+print("adapter:", p2, f"{time.time()-t0:.0f}s")
+EOF — approved
+  ⚙ bash cd /app && python3 - <<'EOF' from huggingface_hub import snapshot_down…
+    ✓ bash — exit 0
+  qwen3.8-27b — 7 tool call(s) so far
+[approval] bash: ls /root/.cache/huggingface/hub/models--dominguesm--xlm-roberta-base-lora-language-detection/snapshots/64a23e9057e79cde85b3c19637e21642fbd4bc42/; echo ---; cat /root/.cache/huggingface/hub/models--dominguesm--xlm-roberta-base-lora-language-detection/snapshots/64a23e9057e79cde85b3c19637e21642fbd4bc42/adapter_config.json — approved
+  ⚙ bash ls /root/.cache/huggingface/hub/models--dominguesm--xlm-roberta-base-l…
+    ✓ bash — exit 0
+  qwen3.8-27b — 8 tool call(s) so far
+[approval] bash: cat /root/.cache/huggingface/hub/models--dominguesm--xlm-roberta-base-lora-language-detection/snapshots/64a23e9057e79cde85b3c19637e21642fbd4bc42/config.json; echo ---; head -50 /root/.cache/huggingface/hub/models--dominguesm--xlm-roberta-base-lora-language-detection/snapshots/64a23e9057e79cde85b3c19637e21642fbd4bc42/README.md — approved
+  ⚙ bash cat /root/.cache/huggingface/hub/models--dominguesm--xlm-roberta-base-…
+    ✓ bash — exit 0
+  qwen3.8-27b — 9 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'EOF'
+import json, os
+from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
+
+base_dir = "/app/model_cache/xlm-roberta-base"
+os.makedirs(base_dir, exist_ok=True)
+
+# Load base config, set 20 language classes
+config = AutoConfig.from_pretrained("FacebookAI/xlm-roberta-base")
+config.num_labels = 20
+config.id2label = {str(i): l for i, l in enumerate(
+    ["ar","bg","de","el","en","es","fr","hi","it","ja","nl","pl","pt","ru","sw","th","tr","ur","vi","zh"])}
+config.label2id = {v: k for k, v in config.id2label.items()}
+
+model = AutoModelForSequenceClassification.from_pretrained(
+    "FacebookAI/xlm-roberta-base", config=config)
+tokenizer = AutoTokenizer.from_pretrained("FacebookAI/xlm-roberta-base")
+
+model.save_pretrained(base_dir)
+tokenizer.save_pretrained(base_dir)
+print("saved base to", base_dir)
+print("num_labels:", model.config.num_labels)
+print("classifier out:", model.classifier.out_features)
+EOF — approved
+  ⚙ bash cd /app && python3 - <<'EOF' import json, os from transformers import …
+    ✗ bash — exit 1
+  qwen3.8-27b — 10 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'EOF'
+import json
+from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
+from peft import PeftModel, PeftConfig
+import torch
+
+base_dir = "/app/model_cache/xlm-roberta-base"
+adapter_dir = "/root/.cache/huggingface/hub/models--dominguesm--xlm-roberta-base-lora-language-detection/snapshots/64a23e9057e79cde85b3c19637e21642fbd4bc42"
+
+model = AutoModelForSequenceClassification.from_pretrained(base_dir)
+print("base num_labels:", model.config.num_labels, "classifier out:", model.classifier.out_proj.out_features)
+
+peft_model = PeftModel.from_pretrained(model, adapter_dir)
+print("peft loaded:", type(peft_model))
+merged = peft_model.merge_and_unload()
+print("merged num_labels:", merged.config.num_labels, "classifier out:", merged.classifier.out_proj.out_features)
+merged.save_pretrained("/app/merged_model/")
+print("saved merged model")
+
+# quick sanity check
+from transformers import AutoTokenizer
+tok = AutoTokenizer.from_pretrained(base_dir)
+texts = ["Bonjour, comment allez-vous aujourd'hui?", "Hello, how are you?"]
+inputs = tok(texts, return_tensors="pt", padding=True, truncation=True)
+with torch.no_grad():
+    logits = merged(**inputs).logits
+print("logits shape:", logits.shape)
+print("argmax:", logits.argmax(dim=-1).tolist())
+EOF — approved
+  ⚙ bash cd /app && python3 - <<'EOF' import json from transformers import Auto…
+    ✓ bash — exit 0
+  qwen3.8-27b — 11 tool call(s) so far
+[approval] bash: cd /app && python3 - <<'EOF'
+import json, torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+model = AutoModelForSequenceClassification.from_pretrained("/app/merged_model/")
+model.eval()
+tok = AutoTokenizer.from_pretrained("/app/model_cache/xlm-roberta-base")
+
+samples = [
+    "Bonjour, comment allez-vous aujourd'hui?",
+    "Hola, ¿cómo estás hoy?",
+    "Guten Tag, wie geht es Ihnen?",
+    "Ciao, come stai oggi?",
+    "Olá, como você está?",
+    "Привет, как дела?",
+    "こんにちは、お元気ですか？",
+    "你好，你好吗？",
+    "مرحبا، كيف حالك؟",
+    "Hello, how are you?",
+]
+
+results = []
+with torch.no_grad():
+    for text in samples:
+        inputs = tok(text, return_tensors="pt", truncation=True)
+        logits = model(**inputs).logits[0]
+        pid = int(logits.argmax().item())
+        conf = float(torch.softmax(logits, dim=-1)[pid].item())
+        results.append({"text": text, "predicted_class_id": pid, "confidence": round(conf, 6)})
+
+with open("/app/detection_results.json", "w", encoding="utf-8") as f:
+    json.dump(results, f, ensure_ascii=False, indent=2)
+
+for r in results:
+    print(r["predicted_class_id"], round(r["confidence"],4), r["text"])
+EOF — approved
+  ⚙ bash cd /app && python3 - <<'EOF' import json, torch from transformers impo…
+    ✓ bash — exit 0
+  qwen3.8-27b — 12 tool call(s) so far
+[approval] bash: ls /app/model_cache/xlm-roberta-base /app/merged_model; python3 -c "import json; d=json.load(open('/app/detection_results.json')); print(len(d), 'entries'); print(json.dumps(d[0], ensure_ascii=False))" — approved
+  ⚙ bash ls /app/model_cache/xlm-roberta-base /app/merged_model; python3 -c "im…
+    ✓ bash — exit 0
+  qwen3.8-27b — 13 tool call(s) so far
+  qwen3.8-27b — 14 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 5/5 done
+All done. Summary:
+
+**Setup**
+- Installed `torch` (CPU), `transformers` 5.22.1, `peft` 0.21.2
+- Downloaded `FacebookAI/xlm-roberta-base` and `dominguesm/xlm-roberta-base-lora-language-detection` via HF Hub
+
+**Model configuration**
+- Base model reconfigured with `num_labels=20` and the 20-language `id2label`/`label2id` (ar, bg, de, el, en, es, fr, hi, it, ja, nl, pl, pt, ru, sw, th, tr, ur, vi, zh — matching the adapter's config), saved with tokenizer to `/app/model_cache/xlm-roberta-base`
+- LoRA adapter (r=8, alpha=16, target: query/value, `modules_to_save: classifier`) applied via `PeftModel`, then `merge_and_unload()` and saved to `/app/merged_model/` (20-class classifier confirmed in the merged weights)
+
+**Detection results** (`/app/detection_results.json`, 10 entries, argmax of logits as `predicted_class_id`):
+
+| Sample | Class ID | Confidence |
+|---|---|---|
+| Bonjour… (fr) | 6 | 0.975 |
+| Hola… (es) | 5 | 0.989 |
+| Guten Tag… (de) | 2 | 0.997 |
+| Ciao… (it) | 8 | 0.989 |
+| Olá… (pt) | 12 | 0.990 |
+| Привет… (ru) | 13 | 0.986 |
+| こんにちは… (ja) | 9 | 0.965 |
+| 你好… (zh) | 19 | 0.936 |
+| مرحبا… (ar) | 0 | 0.988 |
+| Hello… (en) | 4 | 0.974 |
+
+All 10 predictions match the expected languages with high confidence, consistent with the adapter's reported 99.43% accuracy on the training dataset.
+
+[result] role=implementor model=qwen3.8-27b tools=14 surface=9a6bfc32cece

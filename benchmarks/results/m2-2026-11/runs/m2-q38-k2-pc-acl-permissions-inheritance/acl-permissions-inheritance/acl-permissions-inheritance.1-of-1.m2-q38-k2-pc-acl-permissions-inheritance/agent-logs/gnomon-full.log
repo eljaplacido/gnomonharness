@@ -1,0 +1,66 @@
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  deepseek-v4.1-flash — 3 tool call(s) so far
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  deepseek-v4.1-flash — 5 tool call(s) so far
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  ⚙ 6 steps folded · read ×4, glob ×2 · ., .gnomon/tools.toml, .gnomon/roles.toml, +1 · nothing changed  /expand
+  │ I don't have `bash` in this role; this needs shell work, so I'll delegate…
+[approval] delegate to "implementor" — approved
+[approval] bash: mkdir -p scripts && id -u && ls -la /srv 2>/dev/null; ls -A /srv/shared 2>/dev/null; echo "srv-check-done" — approved
+  ⚙ bash mkdir -p scripts && id -u && ls -la /srv 2>/dev/null; ls -A /srv/share…
+    ✓ bash — exit 0
+  qwen3.8-27b — 1 tool call(s) so far
+  │ I'm root and `/srv/shared` doesn't exist yet. Writing the script exactly …
+[approval] write scripts/setup-shared-acl.sh (+33 −0) [new file] — approved
+  ⚙ write scripts/setup-shared-acl.sh
+    ✓ write scripts/setup-shared-acl.sh (+33 −0)
+  qwen3.8-27b — 2 tool call(s) so far
+[approval] bash: chmod +x scripts/setup-shared-acl.sh && sh scripts/setup-shared-acl.sh; echo "exit=$?" — approved
+  ⚙ bash chmod +x scripts/setup-shared-acl.sh && sh scripts/setup-shared-acl.sh…
+    ✓ bash — exit 0
+  qwen3.8-27b — 3 tool call(s) so far
+[approval] bash: stat -c '%A %a %U %G' /srv/shared; getfacl -p /srv/shared — approved
+  ⚙ bash stat -c '%A %a %U %G' /srv/shared; getfacl -p /srv/shared
+    ✓ bash — exit 0
+  qwen3.8-27b — 4 tool call(s) so far
+  │ All entries present. Now the inheritance proof with real users.
+[approval] bash: runuser -u alice -- sh -c 'umask 002; echo hi > /srv/shared/alice-test.txt; mkdir /srv/shared/alice-dir'; echo "alice-exit=$?"
+runuser -u bob -- sh -c 'cat /srv/shared/alice-test.txt; echo more >> /srv/shared/alice-test.txt; echo ok > /srv/shared/alice-dir/bob-test.txt'; echo "bob-exit=$?"
+getfacl -p /srv/shared/alice-test.txt
+getfacl -p /srv/shared/alice-dir
+stat -c '%A %a %U %G' /srv/shared/alice-test.txt /srv/shared/alice-dir — approved
+  ⚙ bash runuser -u alice -- sh -c 'umask 002; echo hi > /srv/shared/alice-test…
+    ✓ bash — exit 0
+  qwen3.8-27b — 5 tool call(s) so far
+  │ Inheritance works: bob read `hi` and appended, wrote into alice's dir. No…
+[approval] bash: rm -rf /srv/shared/alice-test.txt /srv/shared/alice-dir
+echo "ls-A-output-start"; ls -A /srv/shared; echo "ls-A-output-end"
+id nobody >/dev/null 2>&1 && echo "nobody exists" || echo "nobody missing"
+runuser -u nobody -- ls /srv/shared; echo "exit=$?" — approved
+  ⚙ bash rm -rf /srv/shared/alice-test.txt /srv/shared/alice-dir echo "ls-A-out…
+    ✓ bash — exit 0
+  qwen3.8-27b — 6 tool call(s) so far
+  ⚙ task 
+    ✓ task implementor — 6 tool call(s)
+  deepseek-v4.1-flash — 7 tool call(s) so far
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  deepseek-v4.1-flash — 9 tool call(s) so far
+  ⚙ glob 
+    ✓ glob scripts/* — 1 file(s)
+  ⚙ read scripts/setup-shared-acl.sh
+    ✓ read scripts/setup-shared-acl.sh — 33 lines
+Done.
+
+**Changed:** added `scripts/setup-shared-acl.sh` — an idempotent, root-run script that creates group `research` and users `alice`/`bob` (adding both to the group), creates `/srv/shared`, sets group `research` + `chmod 2770`, then applies the access ACL (`u::rwx,g::rwx,g:research:rwx,u:alice:rwx,u:bob:rwx,m::rwx,o::---`) and the identical default ACL for inheritance. I then ran it against the host.
+
+**Live state (from the run):**
+- `stat /srv/shared` → `drwxrws--- 2770 root research` — setgid bit and mode present.
+- `getfacl /srv/shared` shows exactly the required seven access entries plus the seven matching `default:` entries, mask `rwx`, `other::---`.
+- Inheritance proven with the real users, then removed: alice created a file and a subdir; bob read *and* appended to alice's file and wrote into alice's subdir; the subdir came out `drwxrws--- 2770 alice research` carrying the full default ACL; alice's file inherited `user:bob:rwx` (effective `rw-` because a plain new file has no execute bit — that is file-creation semantics, not a mask clamp).
+- `nobody` (not in `research`): `ls: cannot open directory '/srv/shared': Permission denied`, exit 2.
+- Cleanup verified: `ls -A /srv/shared` prints nothing, so the directory is empty for the tests.
+
+**Not done:** nothing committed (no repo history involved); `/srv/shared` lives on the host, the script is the reproducible record of it.
+
+[result] role=coordinator model=deepseek-v4.1-flash tools=9 surface=adbe4e271f4b
