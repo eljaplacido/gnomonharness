@@ -1,0 +1,1090 @@
+{
+ "models": "none: every model is a scripted fake on the container's loopback ($0); no real model server was called",
+ "cost": {
+  "total_usd": 0,
+  "note": "no model calls"
+ },
+ "scope": "n/a (harness level: the model is a script)",
+ "authorship": "author-run: gnomon's authors wrote the specs, the runners, the endpoint, the corpus and opencode's best-effort configuration. Run by Claude Code (Opus 5.5) for the gnomon project. opencode's maintainers have not yet been notified; the result is held 14 days after notice (README, How to submit)",
+ "mde": "n/a (profile)",
+ "primary": "n/a (profile)",
+ "reliability": "n/a (profile; deterministic scripted runs)",
+ "spec": "GBS-CHAOS 0.2 (draft), reported under GBS-REPORTING 0.2 (draft)",
+ "level": "harness: every harness-level requirement met for both harnesses (lane check by \u00a75.2a + \u00a75.2b; unsupported cases per CHAOS-11/CHAOS-9)",
+ "result_type": "profile (two harnesses side by side; no comparison claim)",
+ "preregistration": {
+  "url": "https://github.com/eljaplacido/gnomonharness/blob/bench/gbs-v02/benchmarks/results/gbs-2026-11-05-peers/chaos/PRE-REGISTRATION.md",
+  "sha256_as_committed": "af813f32b3bbb6ee62017653a55359dfb980f3e194bfa6e2917ccf27e9ee57b1",
+  "commit": "181c8f2e9815cb42f1670ad7f0face05bec7f1d5",
+  "committed_utc": "2026-11-05T14:02:44Z",
+  "first_measured_trial_utc": "2026-11-05T14:03:05Z"
+ },
+ "harness": [
+  {
+   "name": "opencode",
+   "version": "v2.2.5 (V2 line)",
+   "install": "GitHub release asset opencode-linux-arm64.tar.gz (anomalyco/opencode), inside the gbs05 image; never on the host",
+   "artifacts": {
+    "opencode-linux-arm64.tar.gz": "5a528f42caf576c6cdece6a191eb273d3db54effa5518e0402684d8f8026aeb6",
+    "opencode (binary)": "dcc7e6f4ac1672e1884dcb8d26ab333e55ffc3f080e01a7a60177aa05f54935f"
+   },
+   "installer": "none (tar xzf of the release asset; digest enforced in common/Dockerfile)",
+   "runtime": "Bun 1.4.4, embedded"
+  },
+  {
+   "name": "gnomon",
+   "version": "0.4.2",
+   "build": "gnomon/0.4.2+v0.4.2-2498d16",
+   "install": "the release-tarball path of the release's own installer, inside the gbs05 image",
+   "artifacts": {
+    "gnomon-harness-0.4.2.tgz": "fc423ea6b99e06004d8f23fa3c68d74668a97516135a5ad9bec41ad74ea52b48",
+    "gnomon-core-0.4.2.tgz": "6600766d2fe6b3744de1c9557089156e0ba1fba61c844443e444f5b68494d751",
+    "gnomon-natives-0.4.2.tgz": "5e8ad51b79cf4e017e8bad6dabbf3748c42c6eee1c6c66f9bae50847f9644b31",
+    "gnomon-tui-0.4.2.tgz": "56e4d092ba7feeda08e83c45a5a0d8cda4baaa10aeb9452a5145b4ab1dcb502c",
+    "gnomon-0.4.2-linux-arm64.tar.gz": "a7e38ff8f43d4957e3578a0f78290710037b020c25442b04fb0c9476a10f7edb"
+   },
+   "installer": "replicated in common/Dockerfile (npm install -g of the four tarballs; natives into ~/.local/share/gnomon/bin), every file checked against the release SHA256SUMS",
+   "runtime": "Node v22.23.2"
+  }
+ ],
+ "harness_config_hash": {
+  "opencode": "c55a3e488ab5221e40b72b59415b662d8bf9c953cac787e9a874979d06d97196",
+  "gnomon": "9108a5f73a98c2a442064472882722d773c234061b876a1547f84c87b0a49cd7",
+  "files": "opencode: config_files on raw/chaos-opencode-1/opencode-seed1.json; gnomon: chaosSurfaceFiles() of v0.4.2 (template hash)"
+ },
+ "hardware": {
+  "platform": "Linux aarch64 (Docker container on the host)",
+  "host": "NVIDIA GB10: 10 x Cortex-X925 + 10 x Cortex-A725, 121 GiB, Ubuntu 24.04, kernel 6.17",
+  "container": "gbs05-base:2026-11-05 sha256:20a68218b0c32c9995d6d82e59d7afba602b0155bad335650b3f2c2cf4fc7925 (Debian 12, node:22-slim pinned); run image gbs05-run:181c8f2e sha256:be19191d3f8230266847b62388df1e340c7f9b5f572c585cf5660067f6ed78e8",
+  "hardware_class": "n/a (no class defined by these specs)",
+  "shared": "yes: H3, R4H and G1 benchmarks ran on the same host, untouched"
+ },
+ "apparatus": {
+  "runner": "chaos/blackbox.mjs @ 181c8f2e",
+  "endpoint": "gnomon chaos serve, gnomon v0.4.2, --network none",
+  "plan": "gnomon chaos list --json (v0.4.2): 20 faults, 37 cases",
+  "cap": {
+   "configured_s": 300,
+   "measured_max_s": 89.0
+  },
+  "concurrency": "one case at a time; the lane check's pair concurrently",
+  "endpoint_build_lane_check": {
+   "harness": "gnomon/0.4.2+v0.4.2-2498d16",
+   "lane_check": {
+    "tasks": [
+     "answer",
+     "read"
+    ],
+    "serial_equals_concurrent": true,
+    "garbling_caught": true
+   },
+   "apparatus_ok": true,
+   "sha256": "1be6800896fe3e3930ea8f7d46148f94b0cf0a58dd012de404c05af9d275122e",
+   "plan_hash": "663dfe0aae297449af44eaf52f97209e62a95b7ecd73bafe6fae4d0db3f36904",
+   "in_process_summary": {
+    "faults": 20,
+    "faults_announced": 17,
+    "faults_silent": [
+     "late_system_dropped",
+     "slow_throttle",
+     "cache_miss"
+    ],
+    "cases": 37,
+    "cases_fired": 37,
+    "cases_announced": 34,
+    "cases_named": 34,
+    "cases_recovered": 22,
+    "failed": 15,
+    "silent_failures": 1,
+    "silent_failure_share": 0.067,
+    "tokens_wasted": 14572
+   }
+  }
+ },
+ "n": {
+  "cases_planned_per_run": 37,
+  "runs": {
+   "opencode-seed1": "seed 1",
+   "opencode-seed2": "seed 2",
+   "gnomon-seed1": "seed 1",
+   "gnomon-seed2": "seed 2"
+  },
+  "trials_run": 148
+ },
+ "validity": {
+  "opencode-seed1": {
+   "fired": 8,
+   "unsupported": 29,
+   "not_fired_unexplained": 0,
+   "apparatus_failure": 0,
+   "void": false,
+   "bucket_mapping": "fired -> announced | silent; unsupported (transport/task) counted apart; timeout is an injected fault, n/a as a bucket (REP-2)"
+  },
+  "opencode-seed2": {
+   "fired": 8,
+   "unsupported": 29,
+   "not_fired_unexplained": 0,
+   "apparatus_failure": 0,
+   "void": false,
+   "bucket_mapping": "fired -> announced | silent; unsupported (transport/task) counted apart; timeout is an injected fault, n/a as a bucket (REP-2)"
+  },
+  "gnomon-seed1": {
+   "fired": 37,
+   "unsupported": 0,
+   "not_fired_unexplained": 0,
+   "apparatus_failure": 0,
+   "void": false,
+   "bucket_mapping": "fired -> announced | silent; unsupported (transport/task) counted apart; timeout is an injected fault, n/a as a bucket (REP-2)"
+  },
+  "gnomon-seed2": {
+   "fired": 37,
+   "unsupported": 0,
+   "not_fired_unexplained": 0,
+   "apparatus_failure": 0,
+   "void": false,
+   "bucket_mapping": "fired -> announced | silent; unsupported (transport/task) counted apart; timeout is an injected fault, n/a as a bucket (REP-2)"
+  }
+ },
+ "resolution": {
+  "opencode": "\u00b128.5 points at n = 8 fired cases",
+  "gnomon": "\u00b115.3 points at n = 37"
+ },
+ "profile": {
+  "opencode-seed1": {
+   "faults_announced": [
+    0,
+    20
+   ],
+   "cases_announced_of_fired": [
+    3,
+    8,
+    [
+     13.7,
+     69.4
+    ]
+   ],
+   "cases_unsupported": 29,
+   "silent_failure_share": [
+    0,
+    3,
+    [
+     0,
+     56.1
+    ]
+   ],
+   "cases_recovered": 5,
+   "leaked": 0,
+   "per_fault": [
+    {
+     "id": "error",
+     "cases": 4,
+     "fired": 0,
+     "unsupported": 4,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "timeout.headers",
+     "cases": 2,
+     "fired": 0,
+     "unsupported": 2,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "timeout.body",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 1,
+     "named": 1,
+     "recovered": 1,
+     "verdict": "silent"
+    },
+    {
+     "id": "empty.content",
+     "cases": 4,
+     "fired": 0,
+     "unsupported": 4,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "empty.tool_calls",
+     "cases": 2,
+     "fired": 0,
+     "unsupported": 2,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "truncate.content",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 1,
+     "named": 0,
+     "recovered": 1,
+     "verdict": "silent"
+    },
+    {
+     "id": "truncate.tool_calls",
+     "cases": 2,
+     "fired": 0,
+     "unsupported": 2,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "corrupt.content",
+     "cases": 2,
+     "fired": 0,
+     "unsupported": 2,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "corrupt.stream",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 0,
+     "named": 0,
+     "recovered": 1,
+     "verdict": "silent"
+    },
+    {
+     "id": "schema.tool_calls",
+     "cases": 2,
+     "fired": 0,
+     "unsupported": 2,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "schema.arguments",
+     "cases": 1,
+     "fired": 0,
+     "unsupported": 1,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "schema.content",
+     "cases": 1,
+     "fired": 0,
+     "unsupported": 1,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "rate_limit",
+     "cases": 2,
+     "fired": 0,
+     "unsupported": 2,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "late_system_dropped",
+     "cases": 1,
+     "fired": 0,
+     "unsupported": 1,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport, task)"
+    },
+    {
+     "id": "zombie",
+     "cases": 1,
+     "fired": 0,
+     "unsupported": 1,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "slow_throttle",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 0,
+     "named": 0,
+     "recovered": 1,
+     "verdict": "silent"
+    },
+    {
+     "id": "reasoning_tool_leak",
+     "cases": 2,
+     "fired": 0,
+     "unsupported": 2,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "length_mid_tool_call",
+     "cases": 2,
+     "fired": 0,
+     "unsupported": 2,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "mid_stream_disconnect",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 1,
+     "named": 1,
+     "recovered": 1,
+     "verdict": "silent"
+    },
+    {
+     "id": "cache_miss",
+     "cases": 1,
+     "fired": 0,
+     "unsupported": 1,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    }
+   ]
+  },
+  "opencode-seed2": {
+   "faults_announced": [
+    0,
+    20
+   ],
+   "cases_announced_of_fired": [
+    3,
+    8,
+    [
+     13.7,
+     69.4
+    ]
+   ],
+   "cases_unsupported": 29,
+   "silent_failure_share": [
+    0,
+    3,
+    [
+     0,
+     56.1
+    ]
+   ],
+   "cases_recovered": 5,
+   "leaked": 0,
+   "per_fault": [
+    {
+     "id": "error",
+     "cases": 4,
+     "fired": 0,
+     "unsupported": 4,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "timeout.headers",
+     "cases": 2,
+     "fired": 0,
+     "unsupported": 2,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "timeout.body",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 1,
+     "named": 1,
+     "recovered": 1,
+     "verdict": "silent"
+    },
+    {
+     "id": "empty.content",
+     "cases": 4,
+     "fired": 0,
+     "unsupported": 4,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "empty.tool_calls",
+     "cases": 2,
+     "fired": 0,
+     "unsupported": 2,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "truncate.content",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 1,
+     "named": 0,
+     "recovered": 1,
+     "verdict": "silent"
+    },
+    {
+     "id": "truncate.tool_calls",
+     "cases": 2,
+     "fired": 0,
+     "unsupported": 2,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "corrupt.content",
+     "cases": 2,
+     "fired": 0,
+     "unsupported": 2,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "corrupt.stream",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 0,
+     "named": 0,
+     "recovered": 1,
+     "verdict": "silent"
+    },
+    {
+     "id": "schema.tool_calls",
+     "cases": 2,
+     "fired": 0,
+     "unsupported": 2,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "schema.arguments",
+     "cases": 1,
+     "fired": 0,
+     "unsupported": 1,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "schema.content",
+     "cases": 1,
+     "fired": 0,
+     "unsupported": 1,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "rate_limit",
+     "cases": 2,
+     "fired": 0,
+     "unsupported": 2,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "late_system_dropped",
+     "cases": 1,
+     "fired": 0,
+     "unsupported": 1,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport, task)"
+    },
+    {
+     "id": "zombie",
+     "cases": 1,
+     "fired": 0,
+     "unsupported": 1,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "slow_throttle",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 0,
+     "named": 0,
+     "recovered": 1,
+     "verdict": "silent"
+    },
+    {
+     "id": "reasoning_tool_leak",
+     "cases": 2,
+     "fired": 0,
+     "unsupported": 2,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "length_mid_tool_call",
+     "cases": 2,
+     "fired": 0,
+     "unsupported": 2,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    },
+    {
+     "id": "mid_stream_disconnect",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 1,
+     "named": 1,
+     "recovered": 1,
+     "verdict": "silent"
+    },
+    {
+     "id": "cache_miss",
+     "cases": 1,
+     "fired": 0,
+     "unsupported": 1,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "unsupported (transport)"
+    }
+   ]
+  },
+  "gnomon-seed1": {
+   "faults_announced": [
+    17,
+    20
+   ],
+   "cases_announced_of_fired": [
+    34,
+    37,
+    [
+     78.7,
+     97.2
+    ]
+   ],
+   "cases_unsupported": 0,
+   "silent_failure_share": [
+    1,
+    15,
+    [
+     1.2,
+     29.8
+    ]
+   ],
+   "cases_recovered": 22,
+   "leaked": 0,
+   "per_fault": [
+    {
+     "id": "error",
+     "cases": 4,
+     "fired": 4,
+     "unsupported": 0,
+     "announced": 4,
+     "named": 4,
+     "recovered": 3,
+     "verdict": "announced"
+    },
+    {
+     "id": "timeout.headers",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "timeout.body",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "empty.content",
+     "cases": 4,
+     "fired": 4,
+     "unsupported": 0,
+     "announced": 4,
+     "named": 4,
+     "recovered": 3,
+     "verdict": "announced"
+    },
+    {
+     "id": "empty.tool_calls",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "truncate.content",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "truncate.tool_calls",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "corrupt.content",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "corrupt.stream",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 1,
+     "named": 1,
+     "recovered": 0,
+     "verdict": "announced"
+    },
+    {
+     "id": "schema.tool_calls",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "schema.arguments",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 1,
+     "named": 1,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "schema.content",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 1,
+     "named": 1,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "rate_limit",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "late_system_dropped",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "silent"
+    },
+    {
+     "id": "zombie",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 1,
+     "named": 1,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "slow_throttle",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 0,
+     "named": 0,
+     "recovered": 1,
+     "verdict": "silent"
+    },
+    {
+     "id": "reasoning_tool_leak",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "length_mid_tool_call",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "mid_stream_disconnect",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "cache_miss",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 0,
+     "named": 0,
+     "recovered": 1,
+     "verdict": "silent"
+    }
+   ]
+  },
+  "gnomon-seed2": {
+   "faults_announced": [
+    17,
+    20
+   ],
+   "cases_announced_of_fired": [
+    34,
+    37,
+    [
+     78.7,
+     97.2
+    ]
+   ],
+   "cases_unsupported": 0,
+   "silent_failure_share": [
+    1,
+    15,
+    [
+     1.2,
+     29.8
+    ]
+   ],
+   "cases_recovered": 22,
+   "leaked": 0,
+   "per_fault": [
+    {
+     "id": "error",
+     "cases": 4,
+     "fired": 4,
+     "unsupported": 0,
+     "announced": 4,
+     "named": 4,
+     "recovered": 3,
+     "verdict": "announced"
+    },
+    {
+     "id": "timeout.headers",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "timeout.body",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "empty.content",
+     "cases": 4,
+     "fired": 4,
+     "unsupported": 0,
+     "announced": 4,
+     "named": 4,
+     "recovered": 3,
+     "verdict": "announced"
+    },
+    {
+     "id": "empty.tool_calls",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "truncate.content",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "truncate.tool_calls",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "corrupt.content",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "corrupt.stream",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 1,
+     "named": 1,
+     "recovered": 0,
+     "verdict": "announced"
+    },
+    {
+     "id": "schema.tool_calls",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "schema.arguments",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 1,
+     "named": 1,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "schema.content",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 1,
+     "named": 1,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "rate_limit",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "late_system_dropped",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 0,
+     "named": 0,
+     "recovered": 0,
+     "verdict": "silent"
+    },
+    {
+     "id": "zombie",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 1,
+     "named": 1,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "slow_throttle",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 0,
+     "named": 0,
+     "recovered": 1,
+     "verdict": "silent"
+    },
+    {
+     "id": "reasoning_tool_leak",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "length_mid_tool_call",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "mid_stream_disconnect",
+     "cases": 2,
+     "fired": 2,
+     "unsupported": 0,
+     "announced": 2,
+     "named": 2,
+     "recovered": 1,
+     "verdict": "announced"
+    },
+    {
+     "id": "cache_miss",
+     "cases": 1,
+     "fired": 1,
+     "unsupported": 0,
+     "announced": 0,
+     "named": 0,
+     "recovered": 1,
+     "verdict": "silent"
+    }
+   ]
+  }
+ },
+ "telemetry": "the endpoint's own log (GET /chaos/log) for fired, billed tokens and leaks; channels from each harness's process (exit, stdout events/JSON record, stderr)",
+ "latency": {
+  "opencode-seed1": {
+   "case_ms_median": 1437,
+   "case_ms_max": 86328
+  },
+  "opencode-seed2": {
+   "case_ms_median": 1649,
+   "case_ms_max": 89007
+  },
+  "gnomon-seed1": {
+   "case_ms_median": 353,
+   "case_ms_max": 3300
+  },
+  "gnomon-seed2": {
+   "case_ms_median": 358,
+   "case_ms_max": 3345
+  }
+ },
+ "incidents": [],
+ "deviations": [
+  "| 2026-11-05T14:04\u201314:12Z | The analysis scripts (`chaos/analyse.py`, `overhead/analyse.py`, `governance/analyze.py`, `audit/summarise.py`) and `common/make_results.py` were written after the pre-registration commit, while the first blocks ran. Progress lines of `chaos-opencode-1` and the endpoint lane check had been seen; no aggregate outcome had been read. Each implements the analysis this file states | before | they did not exist yet |",
+  "| 2026-11-05T17:02Z | Raw outputs compressed (`*.jsonl.gz`, `work.tar.gz`) and checksummed (`raw/SHA256SUMS`); the analyses re-run on the compressed files with identical output | after | repository size |"
+ ],
+ "traces": {
+  "archive": "raw/chaos-*/ (cards, work.tar.gz with every project and serve log); raw/SHA256SUMS",
+  "chain_heads": "n/a"
+ }
+}

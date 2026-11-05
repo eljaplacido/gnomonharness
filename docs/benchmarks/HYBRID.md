@@ -1,8 +1,10 @@
 # GBS-HYBRID: Hybrid Local/Cloud Cost-Quality Benchmark
 
-**Version 0.1 (draft), 2026-11-03.** Part of
+**Version 0.2 (draft), 2026-11-05.** Part of
 [gnomon Bench Standards](README.md). Results also follow
-[GBS-REPORTING](REPORTING.md).
+[GBS-REPORTING](REPORTING.md). Every requirement of this spec is system level
+([README.md](README.md#conformance-levels)): it needs real models. The changes
+from 0.1 are listed in the [changelog](#changelog).
 
 ## 1. Question
 
@@ -240,9 +242,28 @@ probable on aggregate but depends on the GPU price (break-even near
 $0.42/GPU-hour on R1H's numbers); and latency regressed. A conformant run
 needs TB 4.0 at 66 × 3 per arm, on amd64, with the cost model above.
 
-## 11. Open questions for v0.2
+## 11. Open questions for v0.3
 
 - Pricing for HW-B, where rental markets are thin.
 - Whether H-user can be standardized beyond a scripted policy.
 - Whether data residency should be a scored measure: which content left the
   machine, and secrets-aware routing.
+
+## Changelog
+
+### 0.2 (draft), 2026-11-05
+
+No HYBRID run was made under 0.1, so no HYBRID gaps were found, and none is
+resolved or deferred here. Changes that reach this spec from the rest of the
+family:
+
+- A result is a *comparison* (paired arms, MDE, NI margin, as §8 already
+  requires) or a *profile* ([REPORTING.md](REPORTING.md) §2.1). A HYBRID claim
+  of non-inferiority or cost advantage needs a comparison.
+- Every requirement here is system level
+  ([README.md](README.md#conformance-levels)).
+- `harness.artifacts` (REP-4) and the endpoint-normalised configuration hash
+  (REP-6) apply to every HYBRID arm.
+- Results live at `benchmarks/results/gbs-<date>[-<label>]/hybrid/` (REP-1).
+- The open questions move to v0.3, unchanged.
+

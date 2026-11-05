@@ -1,0 +1,3003 @@
+{
+  "schema": "gbs-chaos-blackbox/1",
+  "spec": "GBS-CHAOS 0.2 (draft)",
+  "arm": "B",
+  "adapter": "gnomon",
+  "seed": 1,
+  "token": "KE7WC7",
+  "endpoint": "http://127.0.0.1:38565/v1/chat/completions",
+  "harness": "gnomon/0.4.2+v0.4.2-2498d16",
+  "endpoint_build": "gnomon/0.4.2+v0.4.2-2498d16",
+  "transports": [
+    "json",
+    "sse"
+  ],
+  "cap_ms": 300000,
+  "problems": [],
+  "baselines": [
+    {
+      "key": "answer:json",
+      "exit": 0,
+      "stop_reason": "answered",
+      "recovered": true,
+      "requests": 1,
+      "billed": 151,
+      "trace_lines": 0,
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "key": "answer:stream",
+      "exit": 0,
+      "stop_reason": "answered",
+      "recovered": true,
+      "requests": 1,
+      "billed": 151,
+      "trace_lines": 0,
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": true,
+          "reply": "text",
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "key": "read:json",
+      "exit": 0,
+      "stop_reason": "answered",
+      "recovered": true,
+      "requests": 2,
+      "billed": 389,
+      "trace_lines": 1,
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "tool",
+          "prompt_tokens": 156
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "prompt_tokens": 218
+        }
+      ]
+    },
+    {
+      "key": "fix:json",
+      "exit": 0,
+      "stop_reason": "answered",
+      "recovered": true,
+      "requests": 4,
+      "billed": 1145,
+      "trace_lines": 3,
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "tool",
+          "prompt_tokens": 153
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "prompt_tokens": 220
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "tool",
+          "prompt_tokens": 336
+        },
+        {
+          "n": 3,
+          "stream": false,
+          "reply": "text",
+          "prompt_tokens": 403
+        }
+      ]
+    }
+  ],
+  "controls": [
+    {
+      "name": "a run identical to the clean run scores silent",
+      "expected": false,
+      "scored": false,
+      "ok": true
+    },
+    {
+      "name": "a trace line naming the wrong fault scores silent",
+      "expected": false,
+      "scored": false,
+      "ok": true
+    },
+    {
+      "name": "a changed exit status scores announced",
+      "expected": true,
+      "scored": true,
+      "ok": true
+    }
+  ],
+  "lane_check": {
+    "per_harness": {
+      "serial_equals_concurrent": true,
+      "requests_seen": 3,
+      "overlap_forced": false
+    },
+    "endpoint_build": "cited, not run here: see chaos/raw/endpoint-lane-check.json (in-process `gnomon chaos` on the same endpoint build)"
+  },
+  "cases": [
+    {
+      "id": "error/single",
+      "fault": "error",
+      "schedule": "single",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 151,
+        "baseline": 151,
+        "wasted": 0
+      },
+      "leaked": 0,
+      "ms": 318,
+      "new_trace": [
+        "  Model API error: 500 Internal Server Error",
+        "  {\"error\":{\"message\":\"chaos: injected internal server error\",\"type\":\"server_error\"}}",
+        "  Retrying for up to 3s in case it is starting up.",
+        "  [retry] endpoint erroring (5xx) — attempt 1, waiting 20ms (20ms of 2500ms grace)"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 500,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "error/persistent",
+      "fault": "error",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 7,
+      "requests": 7,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 10,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 0,
+        "baseline": 151,
+        "wasted": 0
+      },
+      "leaked": 0,
+      "ms": 1545,
+      "new_trace": [
+        "  Model API error: 500 Internal Server Error",
+        "  {\"error\":{\"message\":\"chaos: injected internal server error\",\"type\":\"server_error\"}}",
+        "  Retrying for up to 3s in case it is starting up.",
+        "  [retry] endpoint erroring (5xx) — attempt 1, waiting 20ms (20ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 2, waiting 40ms (60ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 3, waiting 80ms (140ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 4, waiting 160ms (300ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 5, waiting 320ms (620ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 6, waiting 640ms (1260ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — grace spent (1260ms of 2500ms) after 7 attempt(s), giving up"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 500,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 500,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 500,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 3,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 500,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 4,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 500,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 5,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 500,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 6,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 500,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "error/intermittent",
+      "fault": "error",
+      "schedule": "intermittent",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 3,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 151,
+        "baseline": 151,
+        "wasted": 0
+      },
+      "leaked": 0,
+      "ms": 376,
+      "new_trace": [
+        "  Model API error: 500 Internal Server Error",
+        "  {\"error\":{\"message\":\"chaos: injected internal server error\",\"type\":\"server_error\"}}",
+        "  Retrying for up to 3s in case it is starting up.",
+        "  [retry] endpoint erroring (5xx) — attempt 1, waiting 20ms (20ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 2, waiting 40ms (60ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 3, waiting 80ms (140ms of 2500ms grace)"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 500,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 500,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 500,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 3,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "error/burst",
+      "fault": "error",
+      "schedule": "burst",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 3,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 151,
+        "baseline": 151,
+        "wasted": 0
+      },
+      "leaked": 0,
+      "ms": 409,
+      "new_trace": [
+        "  Model API error: 500 Internal Server Error",
+        "  {\"error\":{\"message\":\"chaos: injected internal server error\",\"type\":\"server_error\"}}",
+        "  Retrying for up to 3s in case it is starting up.",
+        "  [retry] endpoint erroring (5xx) — attempt 1, waiting 20ms (20ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 2, waiting 40ms (60ms of 2500ms grace)",
+        "  [retry] endpoint erroring (5xx) — attempt 3, waiting 80ms (140ms of 2500ms grace)"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 500,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 500,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 500,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 3,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "timeout.headers/single",
+      "fault": "timeout.headers",
+      "schedule": "single",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 298,
+        "baseline": 151,
+        "wasted": 147
+      },
+      "leaked": 0,
+      "ms": 1226,
+      "new_trace": [
+        "  [retry] timed out (deadline now 1992ms) — attempt 1 of 3, waiting 20ms"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 0,
+          "outcome": "withheld",
+          "client_closed": true,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "timeout.headers/persistent",
+      "fault": "timeout.headers",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 2,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 10,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 294,
+        "baseline": 151,
+        "wasted": 294
+      },
+      "leaked": 0,
+      "ms": 3229,
+      "new_trace": [
+        "  [retry] timed out (deadline now 1992ms) — attempt 1 of 3, waiting 20ms",
+        "  [retry] timed out — retry budget spent (3023ms of 3000ms), giving up after attempt 2 of 3"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 0,
+          "outcome": "withheld",
+          "client_closed": true,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 0,
+          "outcome": "withheld",
+          "client_closed": true,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "timeout.body/single",
+      "fault": "timeout.body",
+      "schedule": "single",
+      "task": "answer",
+      "stream": true,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "sse"
+      ],
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 300,
+        "baseline": 151,
+        "wasted": 149
+      },
+      "leaked": 0,
+      "ms": 1325,
+      "new_trace": [
+        "  [retry] the stream went silent mid-reply — attempt 1 of 3, waiting 20ms"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": true,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": true,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 1,
+          "stream": true,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "timeout.body/persistent",
+      "fault": "timeout.body",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": true,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "sse"
+      ],
+      "injected": 3,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 10,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 447,
+        "baseline": 151,
+        "wasted": 447
+      },
+      "leaked": 0,
+      "ms": 3300,
+      "new_trace": [
+        "  [retry] the stream went silent mid-reply — attempt 1 of 3, waiting 20ms",
+        "  [retry] the stream went silent mid-reply — attempt 2 of 3, waiting 40ms"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": true,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": true,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 1,
+          "stream": true,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": true,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 2,
+          "stream": true,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": true,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "empty.content/single",
+      "fault": "empty.content",
+      "schedule": "single",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 336,
+        "baseline": 151,
+        "wasted": 185
+      },
+      "leaked": 0,
+      "ms": 353,
+      "new_trace": [
+        "  [loop] empty completion 1/3 — asking again (8 steps left)"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 185
+        }
+      ]
+    },
+    {
+      "id": "empty.content/persistent",
+      "fault": "empty.content",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 4,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "stop_reason",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "empty",
+      "degradations": [],
+      "tokens": {
+        "billed": 823,
+        "baseline": 151,
+        "wasted": 823
+      },
+      "leaked": 0,
+      "ms": 380,
+      "new_trace": [
+        "  [loop] empty completion 1/3 — asking again (8 steps left)",
+        "  [loop] empty completion 2/3 — asking again (8 steps left)",
+        "  [loop] empty completion 3/3 — asking again (8 steps left)"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 185
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 226
+        },
+        {
+          "n": 3,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 265
+        }
+      ]
+    },
+    {
+      "id": "empty.content/intermittent",
+      "fault": "empty.content",
+      "schedule": "intermittent",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 336,
+        "baseline": 151,
+        "wasted": 185
+      },
+      "leaked": 0,
+      "ms": 342,
+      "new_trace": [
+        "  [loop] empty completion 1/3 — asking again (8 steps left)"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 185
+        }
+      ]
+    },
+    {
+      "id": "empty.content/burst",
+      "fault": "empty.content",
+      "schedule": "burst",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 3,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 827,
+        "baseline": 151,
+        "wasted": 676
+      },
+      "leaked": 0,
+      "ms": 352,
+      "new_trace": [
+        "  [loop] empty completion 1/3 — asking again (8 steps left)",
+        "  [loop] empty completion 2/3 — asking again (8 steps left)",
+        "  [loop] empty completion 3/3 — asking again (8 steps left)"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 185
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 226
+        },
+        {
+          "n": 3,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 265
+        }
+      ]
+    },
+    {
+      "id": "empty.tool_calls/single",
+      "fault": "empty.tool_calls",
+      "schedule": "single",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 1,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 621,
+        "baseline": 389,
+        "wasted": 232
+      },
+      "leaked": 0,
+      "ms": 368,
+      "new_trace": [
+        "  [loop] empty completion 1/3 — asking again (8 steps left)"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 156
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "tool",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 194
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 256
+        }
+      ]
+    },
+    {
+      "id": "empty.tool_calls/persistent",
+      "fault": "empty.tool_calls",
+      "schedule": "persistent",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 4,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "stop_reason",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "empty",
+      "degradations": [],
+      "tokens": {
+        "billed": 859,
+        "baseline": 389,
+        "wasted": 859
+      },
+      "leaked": 0,
+      "ms": 295,
+      "new_trace": [
+        "  [loop] empty completion 1/3 — asking again (8 steps left)",
+        "  [loop] empty completion 2/3 — asking again (8 steps left)",
+        "  [loop] empty completion 3/3 — asking again (8 steps left)"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 156
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 194
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 235
+        },
+        {
+          "n": 3,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 274
+        }
+      ]
+    },
+    {
+      "id": "truncate.content/single",
+      "fault": "truncate.content",
+      "schedule": "single",
+      "task": "answer",
+      "stream": true,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "sse"
+      ],
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 300,
+        "baseline": 151,
+        "wasted": 149
+      },
+      "leaked": 0,
+      "ms": 363,
+      "new_trace": [
+        "  [retry] the stream broke off mid-reply — attempt 1 of 3, waiting 20ms"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": true,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 1,
+          "stream": true,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "truncate.content/persistent",
+      "fault": "truncate.content",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": true,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "sse"
+      ],
+      "injected": 3,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 10,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 447,
+        "baseline": 151,
+        "wasted": 447
+      },
+      "leaked": 0,
+      "ms": 370,
+      "new_trace": [
+        "  [retry] the stream broke off mid-reply — attempt 1 of 3, waiting 20ms",
+        "  [retry] the stream broke off mid-reply — attempt 2 of 3, waiting 40ms"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": true,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 1,
+          "stream": true,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 2,
+          "stream": true,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "truncate.tool_calls/single",
+      "fault": "truncate.tool_calls",
+      "schedule": "single",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 1,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 795,
+        "baseline": 389,
+        "wasted": 406
+      },
+      "leaked": 0,
+      "ms": 379,
+      "new_trace": [
+        "  [loop] no usable tool call in that reply (read: arguments cut off in transit (truncated JSON)) — asking the model to re-issue it (1/2)",
+        "  chaos-model — 2 tool call(s) so far"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 156
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "tool",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 277
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 339
+        }
+      ]
+    },
+    {
+      "id": "truncate.tool_calls/persistent",
+      "fault": "truncate.tool_calls",
+      "schedule": "persistent",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 4,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "stop_reason",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 2,
+      "stop_reason": "malformed",
+      "degradations": [],
+      "tokens": {
+        "billed": 1355,
+        "baseline": 389,
+        "wasted": 1355
+      },
+      "leaked": 0,
+      "ms": 409,
+      "new_trace": [
+        "  [loop] no usable tool call in that reply (read: arguments cut off in transit (truncated JSON)) — asking the model to re-issue it (1/2)",
+        "  [loop] no usable tool call in that reply (read: arguments cut off in transit (truncated JSON)) — asking the model to re-issue it (2/2)",
+        "  chaos-model — 2 tool call(s) so far",
+        "  chaos-model — wrapping up"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 156
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 277
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 401
+        },
+        {
+          "n": 3,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 489
+        }
+      ]
+    },
+    {
+      "id": "corrupt.content/single",
+      "fault": "corrupt.content",
+      "schedule": "single",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 302,
+        "baseline": 151,
+        "wasted": 151
+      },
+      "leaked": 0,
+      "ms": 398,
+      "new_trace": [
+        "  [retry] the reply was not JSON — attempt 1 of 3, waiting 20ms"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "corrupt.content/persistent",
+      "fault": "corrupt.content",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 3,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 10,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 453,
+        "baseline": 151,
+        "wasted": 453
+      },
+      "leaked": 0,
+      "ms": 279,
+      "new_trace": [
+        "  [retry] the reply was not JSON — attempt 1 of 3, waiting 20ms",
+        "  [retry] the reply was not JSON — attempt 2 of 3, waiting 40ms"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "corrupt.stream/single",
+      "fault": "corrupt.stream",
+      "schedule": "single",
+      "task": "answer",
+      "stream": true,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "sse"
+      ],
+      "injected": 1,
+      "requests": 1,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 151,
+        "baseline": 151,
+        "wasted": 151
+      },
+      "leaked": 0,
+      "ms": 198,
+      "new_trace": [
+        "  [endpoint] 1 streamed chunk(s) from chaos-model were not valid JSON and were dropped — the reply may be missing text"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": true,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "schema.tool_calls/single",
+      "fault": "schema.tool_calls",
+      "schedule": "single",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 1,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 2,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 713,
+        "baseline": 389,
+        "wasted": 324
+      },
+      "leaked": 0,
+      "ms": 264,
+      "new_trace": [
+        "  [loop] no usable tool call in that reply (chaos_unoffered_tool: not a tool this role was offered) — asking the model to re-issue it (1/2)",
+        "  chaos-model — 2 tool call(s) so far"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 156
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "tool",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 236
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 298
+        }
+      ]
+    },
+    {
+      "id": "schema.tool_calls/persistent",
+      "fault": "schema.tool_calls",
+      "schedule": "persistent",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 4,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "stop_reason",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 2,
+      "stop_reason": "malformed",
+      "degradations": [],
+      "tokens": {
+        "billed": 1145,
+        "baseline": 389,
+        "wasted": 1145
+      },
+      "leaked": 0,
+      "ms": 311,
+      "new_trace": [
+        "  [loop] no usable tool call in that reply (chaos_unoffered_tool: not a tool this role was offered) — asking the model to re-issue it (1/2)",
+        "  [loop] no usable tool call in that reply (chaos_unoffered_tool: not a tool this role was offered) — asking the model to re-issue it (2/2)",
+        "  chaos-model — 2 tool call(s) so far",
+        "  chaos-model — wrapping up"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 156
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 236
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 317
+        },
+        {
+          "n": 3,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 404
+        }
+      ]
+    },
+    {
+      "id": "schema.arguments/single",
+      "fault": "schema.arguments",
+      "schedule": "single",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 1,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 2,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 843,
+        "baseline": 389,
+        "wasted": 454
+      },
+      "leaked": 0,
+      "ms": 318,
+      "new_trace": [
+        "  [loop] no usable tool call in that reply (read: arguments not a JSON object) — asking the model to re-issue it (1/2)",
+        "  chaos-model — 2 tool call(s) so far"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 156
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "tool",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 301
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 363
+        }
+      ]
+    },
+    {
+      "id": "schema.content/single",
+      "fault": "schema.content",
+      "schedule": "single",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 1,
+      "requests": 1,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 151,
+        "baseline": 151,
+        "wasted": 0
+      },
+      "leaked": 0,
+      "ms": 221,
+      "new_trace": [
+        "  [endpoint] chaos-model sent its content as an array of content parts, not a string — read as the text of its parts (said once per turn)"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "rate_limit/single",
+      "fault": "rate_limit",
+      "schedule": "single",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 1,
+      "requests": 7,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 151,
+        "baseline": 151,
+        "wasted": 0
+      },
+      "leaked": 0,
+      "ms": 1537,
+      "new_trace": [
+        "  Model API error: 429 Too Many Requests",
+        "  {\"error\":{\"message\":\"Rate limit reached. Retry after 1s.\",\"type\":\"rate_limit_error\"}}",
+        "  Retrying for up to 3s in case it is starting up.",
+        "  [retry] endpoint rate limiting (429) — attempt 1, waiting 20ms (20ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 2, waiting 40ms (60ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 3, waiting 80ms (140ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 4, waiting 160ms (300ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 5, waiting 320ms (620ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 6, waiting 640ms (1260ms of 2500ms grace)"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 429,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 429,
+          "outcome": "rate_limited",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 429,
+          "outcome": "rate_limited",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 3,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 429,
+          "outcome": "rate_limited",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 4,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 429,
+          "outcome": "rate_limited",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 5,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 429,
+          "outcome": "rate_limited",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 6,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "rate_limit/persistent",
+      "fault": "rate_limit",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 7,
+      "requests": 7,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 10,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 0,
+        "baseline": 151,
+        "wasted": 0
+      },
+      "leaked": 0,
+      "ms": 1518,
+      "new_trace": [
+        "  Model API error: 429 Too Many Requests",
+        "  {\"error\":{\"message\":\"Rate limit reached. Retry after 1s.\",\"type\":\"rate_limit_error\"}}",
+        "  Retrying for up to 3s in case it is starting up.",
+        "  [retry] endpoint rate limiting (429) — attempt 1, waiting 20ms (20ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 2, waiting 40ms (60ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 3, waiting 80ms (140ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 4, waiting 160ms (300ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 5, waiting 320ms (620ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — attempt 6, waiting 640ms (1260ms of 2500ms grace)",
+        "  [retry] endpoint rate limiting (429) — grace spent (1260ms of 2500ms) after 7 attempt(s), giving up"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 429,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 429,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 429,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 3,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 429,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 4,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 429,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 5,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 429,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        },
+        {
+          "n": 6,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 429,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "late_system_dropped/persistent",
+      "fault": "late_system_dropped",
+      "schedule": "persistent",
+      "task": "fix",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 2,
+      "requests": 4,
+      "announced": false,
+      "named": false,
+      "channels": [],
+      "recovered": false,
+      "silent": true,
+      "named_if_pattern_compiled_without_i_flag": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 1185,
+        "baseline": 1145,
+        "wasted": 1185
+      },
+      "leaked": 0,
+      "ms": 340,
+      "new_trace": [],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "tool",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 153
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 220
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 336
+        },
+        {
+          "n": 3,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 452
+        }
+      ]
+    },
+    {
+      "id": "zombie/single",
+      "fault": "zombie",
+      "schedule": "single",
+      "task": "answer",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 814,
+        "baseline": 151,
+        "wasted": 663
+      },
+      "leaked": 0,
+      "ms": 1243,
+      "new_trace": [
+        "  [retry] timed out (deadline now 1992ms) — attempt 1 of 3, waiting 20ms"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 0,
+          "outcome": "withheld",
+          "client_closed": true,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "slow_throttle/persistent",
+      "fault": "slow_throttle",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": true,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "sse"
+      ],
+      "injected": 1,
+      "requests": 1,
+      "announced": false,
+      "named": false,
+      "channels": [],
+      "recovered": true,
+      "silent": true,
+      "named_if_pattern_compiled_without_i_flag": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 151,
+        "baseline": 151,
+        "wasted": 0
+      },
+      "leaked": 0,
+      "ms": 2017,
+      "new_trace": [],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": true,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "reasoning_tool_leak/single",
+      "fault": "reasoning_tool_leak",
+      "schedule": "single",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 1,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 730,
+        "baseline": 389,
+        "wasted": 341
+      },
+      "leaked": 0,
+      "ms": 279,
+      "new_trace": [
+        "  [loop] the reply contained tool-call markup, not a tool call — the model's template may not match this endpoint's tool protocol — asking the model to re-issue it (1/2)"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 156
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "tool",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 244
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 307
+        }
+      ]
+    },
+    {
+      "id": "reasoning_tool_leak/persistent",
+      "fault": "reasoning_tool_leak",
+      "schedule": "persistent",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 4,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "stop_reason",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 2,
+      "stop_reason": "malformed",
+      "degradations": [],
+      "tokens": {
+        "billed": 1186,
+        "baseline": 389,
+        "wasted": 1186
+      },
+      "leaked": 0,
+      "ms": 293,
+      "new_trace": [
+        "  [loop] the reply contained tool-call markup, not a tool call — the model's template may not match this endpoint's tool protocol — asking the model to re-issue it (1/2)",
+        "  [loop] the reply contained tool-call markup, not a tool call — the model's template may not match this endpoint's tool protocol — asking the model to re-issue it (2/2)",
+        "  chaos-model — wrapping up"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 156
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 244
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 333
+        },
+        {
+          "n": 3,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 421
+        }
+      ]
+    },
+    {
+      "id": "length_mid_tool_call/single",
+      "fault": "length_mid_tool_call",
+      "schedule": "single",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 1,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 742,
+        "baseline": 389,
+        "wasted": 353
+      },
+      "leaked": 0,
+      "ms": 298,
+      "new_trace": [
+        "  [loop] a read call was cut off at the output limit (max_tokens = 4096) — asking for it in parts (1/2)"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 156
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "tool",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 250
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 313
+        }
+      ]
+    },
+    {
+      "id": "length_mid_tool_call/persistent",
+      "fault": "length_mid_tool_call",
+      "schedule": "persistent",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 4,
+      "requests": 4,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "stop_reason",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 2,
+      "stop_reason": "truncated",
+      "degradations": [],
+      "tokens": {
+        "billed": 1216,
+        "baseline": 389,
+        "wasted": 1216
+      },
+      "leaked": 0,
+      "ms": 286,
+      "new_trace": [
+        "  [loop] a read call was cut off at the output limit (max_tokens = 4096) — asking for it in parts (1/2)",
+        "  [loop] a read call was cut off at the output limit (max_tokens = 4096) — asking for it in parts (2/2)",
+        "  chaos-model — wrapping up"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 156
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 250
+        },
+        {
+          "n": 2,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 345
+        },
+        {
+          "n": 3,
+          "stream": false,
+          "reply": "tool",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 433
+        }
+      ]
+    },
+    {
+      "id": "mid_stream_disconnect/single",
+      "fault": "mid_stream_disconnect",
+      "schedule": "single",
+      "task": "answer",
+      "stream": true,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "sse"
+      ],
+      "injected": 1,
+      "requests": 2,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "trace"
+      ],
+      "recovered": true,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 300,
+        "baseline": 151,
+        "wasted": 149
+      },
+      "leaked": 0,
+      "ms": 347,
+      "new_trace": [
+        "  [retry] the stream broke off mid-reply — attempt 1 of 3, waiting 20ms"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": true,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": true,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 1,
+          "stream": true,
+          "reply": "text",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "mid_stream_disconnect/persistent",
+      "fault": "mid_stream_disconnect",
+      "schedule": "persistent",
+      "task": "answer",
+      "stream": true,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "sse"
+      ],
+      "injected": 3,
+      "requests": 3,
+      "announced": true,
+      "named": true,
+      "channels": [
+        "exit",
+        "trace"
+      ],
+      "recovered": false,
+      "silent": false,
+      "named_if_pattern_compiled_without_i_flag": true,
+      "exit": 10,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 447,
+        "baseline": 151,
+        "wasted": 447
+      },
+      "leaked": 0,
+      "ms": 346,
+      "new_trace": [
+        "  [retry] the stream broke off mid-reply — attempt 1 of 3, waiting 20ms",
+        "  [retry] the stream broke off mid-reply — attempt 2 of 3, waiting 40ms"
+      ],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": true,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": true,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 1,
+          "stream": true,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": true,
+          "prompt_tokens": 147
+        },
+        {
+          "n": 2,
+          "stream": true,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": true,
+          "prompt_tokens": 147
+        }
+      ]
+    },
+    {
+      "id": "cache_miss/persistent",
+      "fault": "cache_miss",
+      "schedule": "persistent",
+      "task": "read",
+      "stream": false,
+      "fired": true,
+      "unsupported": false,
+      "unsupported_why": null,
+      "request_transports": [
+        "json"
+      ],
+      "injected": 1,
+      "requests": 2,
+      "announced": false,
+      "named": false,
+      "channels": [],
+      "recovered": true,
+      "silent": true,
+      "named_if_pattern_compiled_without_i_flag": false,
+      "exit": 0,
+      "stop_reason": "answered",
+      "degradations": [],
+      "tokens": {
+        "billed": 389,
+        "baseline": 389,
+        "wasted": 0
+      },
+      "leaked": 0,
+      "ms": 341,
+      "new_trace": [],
+      "endpoint_requests": [
+        {
+          "n": 0,
+          "stream": false,
+          "reply": "tool",
+          "injected": false,
+          "status": 200,
+          "outcome": "ok",
+          "client_closed": false,
+          "prompt_tokens": 156
+        },
+        {
+          "n": 1,
+          "stream": false,
+          "reply": "text",
+          "injected": true,
+          "status": 200,
+          "outcome": "fault",
+          "client_closed": false,
+          "prompt_tokens": 218
+        }
+      ]
+    }
+  ],
+  "plan_cases": 37,
+  "config_hash": "9108a5f73a98c2a442064472882722d773c234061b876a1547f84c87b0a49cd7",
+  "config_files": null,
+  "faults": [
+    {
+      "id": "error",
+      "cases": 4,
+      "fired": 4,
+      "unsupported": 0,
+      "announced": 4,
+      "named": 4,
+      "recovered": 3,
+      "verdict": "announced"
+    },
+    {
+      "id": "timeout.headers",
+      "cases": 2,
+      "fired": 2,
+      "unsupported": 0,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "verdict": "announced"
+    },
+    {
+      "id": "timeout.body",
+      "cases": 2,
+      "fired": 2,
+      "unsupported": 0,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "verdict": "announced"
+    },
+    {
+      "id": "empty.content",
+      "cases": 4,
+      "fired": 4,
+      "unsupported": 0,
+      "announced": 4,
+      "named": 4,
+      "recovered": 3,
+      "verdict": "announced"
+    },
+    {
+      "id": "empty.tool_calls",
+      "cases": 2,
+      "fired": 2,
+      "unsupported": 0,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "verdict": "announced"
+    },
+    {
+      "id": "truncate.content",
+      "cases": 2,
+      "fired": 2,
+      "unsupported": 0,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "verdict": "announced"
+    },
+    {
+      "id": "truncate.tool_calls",
+      "cases": 2,
+      "fired": 2,
+      "unsupported": 0,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "verdict": "announced"
+    },
+    {
+      "id": "corrupt.content",
+      "cases": 2,
+      "fired": 2,
+      "unsupported": 0,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "verdict": "announced"
+    },
+    {
+      "id": "corrupt.stream",
+      "cases": 1,
+      "fired": 1,
+      "unsupported": 0,
+      "announced": 1,
+      "named": 1,
+      "recovered": 0,
+      "verdict": "announced"
+    },
+    {
+      "id": "schema.tool_calls",
+      "cases": 2,
+      "fired": 2,
+      "unsupported": 0,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "verdict": "announced"
+    },
+    {
+      "id": "schema.arguments",
+      "cases": 1,
+      "fired": 1,
+      "unsupported": 0,
+      "announced": 1,
+      "named": 1,
+      "recovered": 1,
+      "verdict": "announced"
+    },
+    {
+      "id": "schema.content",
+      "cases": 1,
+      "fired": 1,
+      "unsupported": 0,
+      "announced": 1,
+      "named": 1,
+      "recovered": 1,
+      "verdict": "announced"
+    },
+    {
+      "id": "rate_limit",
+      "cases": 2,
+      "fired": 2,
+      "unsupported": 0,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "verdict": "announced"
+    },
+    {
+      "id": "late_system_dropped",
+      "cases": 1,
+      "fired": 1,
+      "unsupported": 0,
+      "announced": 0,
+      "named": 0,
+      "recovered": 0,
+      "verdict": "silent"
+    },
+    {
+      "id": "zombie",
+      "cases": 1,
+      "fired": 1,
+      "unsupported": 0,
+      "announced": 1,
+      "named": 1,
+      "recovered": 1,
+      "verdict": "announced"
+    },
+    {
+      "id": "slow_throttle",
+      "cases": 1,
+      "fired": 1,
+      "unsupported": 0,
+      "announced": 0,
+      "named": 0,
+      "recovered": 1,
+      "verdict": "silent"
+    },
+    {
+      "id": "reasoning_tool_leak",
+      "cases": 2,
+      "fired": 2,
+      "unsupported": 0,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "verdict": "announced"
+    },
+    {
+      "id": "length_mid_tool_call",
+      "cases": 2,
+      "fired": 2,
+      "unsupported": 0,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "verdict": "announced"
+    },
+    {
+      "id": "mid_stream_disconnect",
+      "cases": 2,
+      "fired": 2,
+      "unsupported": 0,
+      "announced": 2,
+      "named": 2,
+      "recovered": 1,
+      "verdict": "announced"
+    },
+    {
+      "id": "cache_miss",
+      "cases": 1,
+      "fired": 1,
+      "unsupported": 0,
+      "announced": 0,
+      "named": 0,
+      "recovered": 1,
+      "verdict": "silent"
+    }
+  ],
+  "summary": {
+    "faults": 20,
+    "faults_announced": 17,
+    "faults_unsupported": [],
+    "cases_unsupported": 0,
+    "faults_silent": [
+      "late_system_dropped",
+      "slow_throttle",
+      "cache_miss"
+    ],
+    "cases": 37,
+    "cases_fired": 37,
+    "cases_announced": 34,
+    "cases_named": 34,
+    "cases_named_without_i_flag": 34,
+    "cases_recovered": 22,
+    "failed": 15,
+    "silent_failures": 1,
+    "leaked": 0
+  },
+  "void": false
+}
