@@ -1,0 +1,51 @@
+# H4-lite offline wire test, 2026-11-05T17:16:19Z, gx10; build installed from ../../g1gate-2026-11/dist (install_build_g1g.sh) into a scratch npm prefix
+# command: harborvenv/bin/python apparatus/wiretest_h4.py <prefix> <empty work dir>
+== H4-lite wire test: build master-ae17a1a, `gnomon --version` = gnomon/0.4.2+master-ae17a1a
+  ok   local build carries the adapter's gnomonBuild and --version pins
+
+C (GnomonM152Hosted): script rc 0, gnomon exit 0, 2 requests reached the fake server (0 from a reviewer); out.txt = 'hi\n'
+  counters.completion_gate: null
+  completion_gate records: []
+  ok   C: the adapter script and gnomon task exit 0
+  ok   C: no patch-failed marker
+  ok   C: the recipe replays reasoning_content (2nd request)
+  ok   C: exactly two model requests (write, then done): the first done is accepted
+  ok   C: no gate note on the wire and no reviewer
+  ok   C: no completion_gate counters (or mode off)
+  ok   C: no completion_gate audit record
+
+G (GnomonM152Gate): script rc 0, gnomon exit 0, 10 requests reached the fake server (2 from a reviewer); out.txt = 'hello\n'
+  counters.completion_gate: {"v": 1, "mode": "review", "max_rounds": 3, "rounds": 3, "checks": 3, "reviews": 1, "review_steps": 1, "findings": 1, "outcome": "passed"}
+  completion_gate records: [{"seq": 5, "kind": "completion_gate", "role": "implementor", "round": 1, "action": "checklist", "step": 1, "budget_left": 0.996, "budget_by": "steps", "ms": 7}, {"seq": 7, "kind": "completion_gate", "role": "implementor", "round": 2, "action": "no_check", "step": 1, "budget_left": 0.996, "budget_by": "steps", "ms": 0}, {"seq": 16, "kind": "completion_gate", "role": "implementor", "round": 3, "action": "review", "step": 2, "budget_left": 0.992, "budget_by": "steps", "findings": 1, "ms": 39}, {"seq": 24, "kind": "completion_gate", "role": "implementor", "round": 3, "action": "accept", "outcome": "passed", "step": 4, "budget_left": 0.984, "budget_by": "steps", "ms": 0}]
+  ok   G: the adapter script and gnomon task exit 0
+  ok   G: no patch-failed marker
+  ok   G: the recipe replays reasoning_content (2nd request)
+  ok   G: the first done was handed back with a checklist (a gate note, round 1 of 3)
+  gate notes: 14, roles ['system']
+  ok   G: a reviewer sub-turn ran (review mode)
+  reviewer: 2 requests; tools offered ['bash', 'compute', 'glob', 'grep', 'read', 'todo']; first request roles ['system', 'user']
+  ok   G: the reviewer was not offered write/edit
+  ok   G: counters.completion_gate says mode review, reviews >= 1
+  ok   G: the audit trail records the checklist and the review
+  ok   G: the reviewer's finding reached the main turn and was acted on (out.txt = hello)
+
+== C vs G
+  ok   script: G = C + exactly the GATE_PATCH command, after HOSTED_PATCH
+  ok   surface: config.toml identical (the recipe in both)
+  ok   surface: the hosted recipe's three lines are in config.toml
+  ok   surface: roles.toml identical
+  policy.toml diff C -> G: ['+', '+[verify]', '+completion_gate = "review"']
+  ok   surface: G's policy.toml = C's + [verify] completion_gate = "review" (no [verify] from init here)
+  ok   wire: C's two request bodies and G's first two are byte-identical (the gate acts only at the first done)
+  G request 3 = request 2 + the done answer + ['Completion gate (round 1 of 3): your answer is not accepted yet. This is the harness, not ']
+  ok   wire: G's later requests keep C's request parameters (model, tools, sampling); only messages grow
+  request keys C ['max_tokens', 'messages', 'model', 'stream', 'stream_options', 'temperature', 'tools', 'top_p']; G ['max_tokens', 'messages', 'model', 'stream', 'stream_options', 'temperature', 'tools', 'top_p']
+
+== GATE_PATCH on other policy.toml shapes
+  pyproject scaffold: rc 0; [verify] block: ['[verify]', 'completion_gate = "review"', 'command = "pytest -q"']
+  ok   GATE_PATCH joins init's own [verify] block (pytest check kept), directly under its header
+  ok   GATE_PATCH refuses (exit 3): a completion_* key already present
+  ok   GATE_PATCH refuses (exit 3): two [verify] headers
+  ok   GATE_PATCH refuses (exit 3): a [verify] header with a comment
+
+wire test: PASS (gnomon master-ae17a1a)
