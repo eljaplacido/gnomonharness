@@ -1,0 +1,54 @@
+root@a5f20c705a90:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+root@a5f20c705a90:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+ARM_VERSION=c511b8105fb2187423d21becbe3b19f8af2b80e5
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793905967
+root@a5f20c705a90:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with
+ pip.'; tmux wait -S done
+R1_ARM=PC R1_ENTRY=coordinator R1_ROUTES=coordinator=cloud,implementor=local,verifier=local,plan=cloud,implement=local,critique=local,smol=local
+```
+/usr/local/lib/python3.13/site-packages/
+  README.txt
+  pip-24.3.1.dist-info/    ← claims pip is installed
+                            ← no pip/ directory beside it
+```
+
+So every entry point died with `/usr/local/bin/python3: No module named pip`, including the `/usr/local/bin/pip3` wrapper. That shape — `dist-info` present, pac
+kage tree gone — is what an interrupted upgrade or uninstall leaves behind.
+
+I ruled the plausible alternatives out rather than assuming: no PEP 668 gate on this interpreter (the `EXTERNALLY-MANAGED` marker exists only for the distro 3.1
+1 under `/usr/lib/python3.11/`), site-packages was writable, no `pip.conf` or `PIP_*` overrides, and a throwaway venv installed `six` from PyPI fine — so the in
+dex and network were never the problem.
+
+**The repair.** Moved the stale metadata aside and reinstalled pip from the wheel Python already ships, no network bootstrap:
+
+```
+mv .../site-packages/pip-24.3.1.dist-info /tmp/pip-24.3.1.dist-info.stale-bak
+python3 -m ensurepip --upgrade --default-pip
+```
+
+**Proof it works**, not just that it imports — a real download and install:
+
+```
+$ python3 -m pip install --no-input six
+Successfully installed six-1.17.0
+$ python3 -m pip --version
+pip 24.3.1 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)
+$ python3 -m pip check
+No broken requirements found.
+```
+
+I checked this the hard way deliberately: my first verification was `pip install --dry-run pip`, which came back "Requirement already satisfied" and proved noth
+ing, since it resolves locally without touching a download.
+
+Written up in `docs/pip-repair.md`, including the ruled-out hypotheses table and a one-liner that spots this failure mode again in a single call.
+
+Two things worth knowing:
+- `/tmp/pip-24.3.1.dist-info.stale-bak` is the old metadata, kept for recovery — safe to delete. `six` 1.17.0 is now installed system-wide as the proof; remove
+it if you don't want it.
+- Your distro Python 3.11 at `/usr/bin/python3.11` was untouched, and its pip is still absent — that was already true and I left it alone.
+
+For project work, use a venv rather than system installs; this interpreter has no PEP 668 guard, so pip will happily let you modify the system site-packages.
+
+[refusal] role=coordinator model=deepseek-v4.1-flash tools=18 surface=61f55334a6b1
+root@a5f20c705a90:/app#

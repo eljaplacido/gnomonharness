@@ -1,0 +1,56 @@
+[?2004hroot@79d82b2eb0ec:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@79d82b2eb0ec:/app# clear
+[?2004l[H[J[3J[?2004hroot@79d82b2eb0ec:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@79d82b2eb0ec:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=d59e6c198f91d1469198b0677c008323f82d0345
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793905965
+[?2004hroot@79d82b2eb0ec:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with pip.'; tmux wait -S done
+[?2004lR1_ARM=PC R1_ENTRY=coordinator R1_ROUTES=coordinator=cloud,implementor=local,verifier=local,plan=cloud,implement=local,critique=local,smol=local
+    ✓ todo — 3/5 done · STEP 4: Clean up
+[approval] bash: rm -rf /tmp/piptest 2>&1 && echo "cleaned up /tmp/piptest" — approved
+  ⚙ bash rm -rf /tmp/piptest 2>&1 && echo "cleaned up /tmp/piptest"
+    ✓ bash — exit 0
+  qwen3.6-35b — 24 tool call(s) so far
+  [tools] 24 call(s) without changing a file — nudging to decide
+  qwen3.6-35b — 24 tool call(s) so far
+  qwen3.6-35b — 25 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 5/5 done
+  ⚙ task 
+    ✓ task implementor — 25 tool call(s)
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  [tools] 12 call(s) without changing a file — nudging to decide
+  deepseek-v4.1-flash — 12 tool call(s) so far
+Done — pip is working again, verified against PyPI.
+
+**What was wrong.** Not PEP 668, not permissions. The active interpreter is `/usr/local/bin/python3.13`, and its `site-packages` had `pip-24.3.1.dist-info` and the `/usr/local/bin/pip` launcher scripts, but no `pip/` package directory. So every invocation died before doing anything:
+
+```
+ModuleNotFoundError: No module named 'pip'
+```
+
+The `/usr/lib/python3.11/EXTERNALLY-MANAGED` marker on this Debian image looks like the culprit and isn't — the running interpreter is 3.13 under `/usr/local` and PEP 668 never reads that path.
+
+**The fix.** `python3 -m ensurepip --upgrade --default-pip` did *not* repair it, and that's the trap: the orphaned `dist-info` makes ensurepip believe pip is already satisfied, so it reports success and changes nothing. The working repair was to unpack the bundled `pip-24.3.1-py3-none-any.whl` from `ensurepip/_bundled/` directly into `/usr/local/lib/python3.13/site-packages/`.
+
+**Verification.** `import pip` gives 24.3.1, and a real install against the index completed:
+
+```
+Collecting six
+  Downloading six-1.17.0-py2.py3-none-any.whl (11 kB)
+Successfully installed six-1.17.0
+```
+
+Two caveats worth knowing. The damage lives in the image layer, so a container rebuild will bring the orphaned `dist-info` back — the durable fix is at build time, not in the running container. And I made no repository changes: the fault was in the interpreter, not in this checkout.
+
+A note on *how* this got done, since it affects how much to trust the log: the `coordinator` role I run as has no `bash` (`.gnomon/roles.toml:32`), so the two shell-level steps ran as `implementor` sub-turns. The diagnostic evidence and the repair output above are theirs, not mine — I checked the reasoning against the surface's own role definitions but did not watch the commands execute.
+
+[result] role=coordinator model=deepseek-v4.1-flash tools=12 surface=f37e7204be91
+[?2004hroot@79d82b2eb0ec:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@79d82b2eb0ec:/app# 
