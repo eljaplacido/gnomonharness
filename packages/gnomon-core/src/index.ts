@@ -31,6 +31,10 @@ export * from "./mediators.js";
 // The completion gate (`[verify] completion_gate`): checklist, required check
 // and read-only reviewer at the end of a turn (docs/CONTRACTS.md §30).
 export * from "./completion_gate.js";
+// The sweep knobs: reasoning effort, sampling passthrough, the environment
+// snapshot, the todo gate, the edit variant and the package-index allowlist,
+// each opt-in (docs/CONTRACTS.md §32).
+export * from "./sweep_knobs.js";
 // The degradation contract: every way this harness carries on with less than
 // it declared, and the record each one writes. Read by
 // `benchmarks/degradation-contract`, which measures the declaration against

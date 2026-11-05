@@ -74,6 +74,7 @@ import {
   Todo,
   buildToolSet,
   executeTool,
+  packageIndexOf,
   type SurfaceDrift,
   needsApproval,
   ToolContext,
@@ -132,6 +133,20 @@ import {
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { AFTER_REFUSAL_REASON, AfterRefusalWindow, resolveAfterRefusal } from "./after_refusal.js";
 import { settleMcpTools, toolsHash } from "./tools_hash.js";
+import {
+  REASONING_EFFORT_FIELD,
+  TODO_GATE_ROUNDS,
+  envSnapshotNetworkLine,
+  openTodos,
+  renderTodoHandBack,
+  resolveEditVariant,
+  resolvePackageIndex,
+  resolveTodoGate,
+  type EditMatchTier,
+  type ReasoningEffort,
+  type SamplingParam,
+  type TodoGateCounters,
+} from "./sweep_knobs.js";
 import { harnessBuild } from "./build.js";
 import { mapBucket } from "./session.js";
 import {
@@ -1725,6 +1740,16 @@ async function callEndpointOnce(
     payload.top_p = target.top_p;
     if (maxTokens > 0) payload[maxTokensField] = maxTokens;
   }
+  // The sweep knobs (sweep_knobs.ts, docs/CONTRACTS.md §32), each only when
+  // declared. Sampling left to the provider is taken out of the object built
+  // above, so every other key keeps its place and an undeclared surface sends
+  // the bytes it always sent.
+  if (target.samplingOmitted && target.samplingOmitted.length > 0) {
+    const holder = (payload.options ?? payload) as Record<string, unknown>;
+    for (const p of target.samplingOmitted) delete holder[p];
+    if (payload.options && Object.keys(payload.options as object).length === 0) delete payload.options;
+  }
+  if (target.reasoningEffort) payload[REASONING_EFFORT_FIELD] = target.reasoningEffort;
   if (tools.length > 0) payload.tools = tools;
 
   // One controller for every way a call ends early: the deadline, a streamed
@@ -2365,6 +2390,17 @@ export interface WireRecord {
    */
   steer_role?: "user";
   /**
+   * The reasoning effort sent as `reasoning_effort`. Present only when one
+   * was: `[endpoints.<name>]` or `[roles.<r>] reasoning_effort` (§32).
+   */
+  reasoning_effort?: ReasoningEffort;
+  /**
+   * The sampling fields not sent, left to the provider's defaults
+   * (`sampling = "provider"`, or a role's `temperature`/`top_p =
+   * "provider"`, §32). Present only when one was left out.
+   */
+  sampling_omitted?: SamplingParam[];
+  /**
    * sha256 over the canonical JSON of the tool definitions the turn offered,
    * sorted by name (tools_hash.ts). Not derived from the target, so wireOf
    * leaves it out and the turn adds it. Built-in schemas live in the build
@@ -2402,6 +2438,10 @@ export function wireOf(target: RouteTarget): WireRecord {
       : {}),
     ...(target.replayReasoning ? { replay_reasoning: true } : {}),
     ...(target.steerRole === "user" ? { steer_role: "user" as const } : {}),
+    ...(target.reasoningEffort ? { reasoning_effort: target.reasoningEffort } : {}),
+    ...(target.samplingOmitted && target.samplingOmitted.length > 0
+      ? { sampling_omitted: [...target.samplingOmitted] }
+      : {}),
   };
 }
 
@@ -3864,6 +3904,23 @@ export interface TurnCounters {
    * docs/CONTRACTS.md §30.
    */
   completion_gate?: CompletionGateCounters;
+  /**
+   * The todo gate (`[turn] todo_gate = true`, sweep_knobs.ts): hand-backs,
+   * open items, outcome. Present only when declared. docs/CONTRACTS.md §32.
+   */
+  todo_gate?: TodoGateCounters;
+  /**
+   * Successful edits by the tier that matched, under tools.toml `edit`
+   * `variant = "compat"`; zeros included on every turn of such a surface.
+   * Absent otherwise. docs/CONTRACTS.md §32.
+   */
+  edit_match?: Record<EditMatchTier, number>;
+  /**
+   * Bash calls `[sandbox] allow_package_index` let reach a listed host under
+   * `network = false`, and the hosts. On every turn of a surface that lists
+   * hosts, zeros included; absent otherwise. docs/CONTRACTS.md §32.
+   */
+  package_index?: { admitted: number; hosts: string[] };
   /** Whether the final tool call of the turn changed anything. */
   final_step_was_write: boolean;
   /**
@@ -4445,6 +4502,8 @@ export async function runAgenticTurn(
   // Session grant wins over the declared default; the surface is unchanged.
   const declaredNetwork = (policy.sandbox as { network?: boolean } | undefined)?.network;
   const network = state.network ?? declaredNetwork;
+  const packageIndex = resolvePackageIndex(config);
+  const editVariant = resolveEditVariant(config);
 
   // The shadow is told about each tool call after it has run. A delegated
   // sub-turn is part of its parent's call and is not scored on its own.
@@ -4498,6 +4557,10 @@ export async function runAgenticTurn(
       state.sessionId ?? `pid-${process.pid}`
     )),
     network,
+    // The sweep knobs (sweep_knobs.ts): absent unless declared, so an
+    // undeclared surface builds the context it always did.
+    ...(packageIndex.length > 0 ? { packageIndex } : {}),
+    ...(editVariant === "compat" ? { editVariant } : {}),
     // Turn-scoped: a command that blocked once will block again, and the loop
     // owns the lifetime of that fact.
     timedOutCommands: new Set<string>(),
@@ -4708,6 +4771,20 @@ export async function runAgenticTurn(
       ms: 0,
     };
   }
+  // The todo gate (`[turn] todo_gate = true`, sweep_knobs.ts). Off unless
+  // declared, and like the completion gate only for the turn a person asked
+  // for. It judges a checklist this turn wrote, so a list left over from an
+  // earlier turn of a session cannot hold a new one back.
+  const todoGateOn = depth === 0 && resolveTodoGate(config);
+  let todoRounds = 0;
+  let todoWrittenThisTurn = false;
+  if (todoGateOn) {
+    counters.todo_gate = { v: 1, max_rounds: TODO_GATE_ROUNDS, rounds: 0, open: 0, outcome: "not_reached" };
+  }
+  // The compat edit's tiers and the package-index allowlist: counted on every
+  // turn of a surface that declares them, zeros included (§32).
+  if (editVariant === "compat") counters.edit_match = { exact: 0, whitespace: 0, indentation: 0 };
+  if (packageIndexOf(ctx).length > 0 && network === false) counters.package_index = { admitted: 0, hosts: [] };
   // The stall detectors (LP5), log-only like the counters above: they see each
   // executed call after its tool_call record, write `stall_signal` records, and
   // the loop never asks them anything. A detector that throws stops observing
@@ -5133,7 +5210,7 @@ export async function runAgenticTurn(
       deps.progress.stop();
       say(
         paint(deps.ui, "cyan", `  ⚙ bootstrap`) +
-          paint(deps.ui, "gray", ` ${boot.id} (${boot.platform}, ${boot.probes!.length} probe(s))`)
+          paint(deps.ui, "gray", boot.builtin ? ` ${boot.id} (${boot.platform}, built-in)` : ` ${boot.id} (${boot.platform}, ${boot.probes!.length} probe(s))`)
       );
       // The surface's command, not the model's, so it runs the way [verify]
       // does: through the ordinary bash tool, under this role's bash_deny and
@@ -5164,7 +5241,17 @@ export async function runAgenticTurn(
       outcome === "ok" && ran
         ? bootstrapSnapshot(ran.content, boot.max_bytes, boot.command ?? "")
         : { text: "", bytes: ran ? Buffer.byteLength(ran.content, "utf8") : 0, truncated: false };
-    const block = outcome === "ok" ? bootstrapBlock(boot.id, boot.platform, snap.text) : "";
+    // The built-in snapshot (`[context] env_snapshot`, sweep_knobs.ts) ends
+    // with what the policy lets the network do, read from the surface rather
+    // than probed: a probe that tried would be a network call.
+    const snapText = boot.builtin
+      ? `${snap.text}\n${envSnapshotNetworkLine({
+          network: ctx.network,
+          docker: ctx.exec?.mode === "docker",
+          packageIndex: ctx.packageIndex ?? [],
+        })}`
+      : snap.text;
+    const block = outcome === "ok" ? bootstrapBlock(boot.id, boot.platform, snapText) : "";
     // Set whatever happened, so a session runs the bootstrap once, not once
     // per turn until it works.
     state.bootstrap = { id: boot.id, block };
@@ -5884,6 +5971,67 @@ export async function runAgenticTurn(
         }
       }
 
+      // The todo gate (`[turn] todo_gate = true`, sweep_knobs.ts, §32). After
+      // the declared check and before the completion gate: an answer given
+      // with the turn's own checklist still open is handed back once, naming
+      // the open items. Only for an answer (not a failed request, a blank or a
+      // cut-off reply), only to a role that can update the list, only for a
+      // list this turn wrote, and skipped, as the completion gate is, when
+      // less than `[verify] completion_min_remaining` of the step budget or
+      // the run deadline is left.
+      if (
+        todoGateOn &&
+        result.code === 0 &&
+        !emptyTerminus &&
+        lastFinishReason !== "length" &&
+        offered.has("todo") &&
+        todoWrittenThisTurn
+      ) {
+        const tg = counters.todo_gate!;
+        const open = openTodos(state.todos ?? []);
+        const left = budgetLeft({ steps, maxTotal, deadline: deps.deadline, now: Date.now() });
+        tg.open = open.length;
+        const verdict =
+          open.length === 0
+            ? ("passed" as const)
+            : todoRounds >= TODO_GATE_ROUNDS
+              ? ("exhausted" as const)
+              : left.fraction < completion.min_remaining
+                ? ("skipped_budget" as const)
+                : null;
+        const judged = {
+          role,
+          round: todoRounds,
+          open: open.length,
+          step: steps,
+          budget_left: Math.round(left.fraction * 1000) / 1000,
+          budget_by: left.by,
+        };
+        if (verdict === null) {
+          todoRounds++;
+          tg.rounds = todoRounds;
+          tg.outcome = "not_reached";
+          deps.audit?.write("todo_gate", { ...judged, round: todoRounds, action: "hand_back" });
+          deps.progress.stop();
+          warn(
+            paint(deps.ui, "yellow", `  ⚙ todo gate — ${open.length} open item(s); handing the turn back (round ${todoRounds} of ${TODO_GATE_ROUNDS})`)
+          );
+          toolLog.push(`todo gate — round ${todoRounds}: ${open.length} open`);
+          working.push({
+            role: "assistant",
+            content: result.content,
+            ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
+          });
+          working.push({ role: "system", content: renderTodoHandBack(open, { round: todoRounds, maxRounds: TODO_GATE_ROUNDS }) });
+          continue;
+        }
+        tg.outcome = verdict;
+        deps.audit?.write("todo_gate", { ...judged, action: "accept", outcome: verdict });
+        if (verdict !== "passed") {
+          say(paint(deps.ui, "gray", `  ⚙ todo gate — ${open.length} open item(s); ${verdict === "exhausted" ? "round spent" : `skipped: ${Math.round(left.fraction * 100)}% of the ${left.by === "deadline" ? "deadline" : "step budget"} left`}; answer accepted`));
+        }
+      }
+
       // The completion gate (`[verify] completion_gate`, completion_gate.ts).
       // After the declared check, so a failing suite is handed back first and
       // the gate judges an answer the repository's own check already let by.
@@ -6531,6 +6679,16 @@ export async function runAgenticTurn(
         ((call.name === "write" || call.name === "edit") && outcome.code === 0) ||
         outcome.worktree_changed === true;
 
+      // The sweep knobs' records (§32): which tier a compat edit matched at,
+      // which listed hosts a download reached, and whether this turn wrote
+      // the checklist the todo gate judges.
+      if (outcome.edit_tier && counters.edit_match) counters.edit_match[outcome.edit_tier]++;
+      if (outcome.package_index && counters.package_index) {
+        counters.package_index.admitted++;
+        counters.package_index.hosts = [...new Set([...counters.package_index.hosts, ...outcome.package_index])].sort();
+      }
+      if (call.name === "todo" && outcome.code === 0) todoWrittenThisTurn = true;
+
       // A check, for the completion gate: a bash command that ran (its own
       // exit status is the model's to read) after the gate handed the turn back.
       if (gateOn && gateState.rounds > 0 && call.name === "bash" && outcome.code === 0) {
@@ -6603,6 +6761,8 @@ export async function runAgenticTurn(
         // null for unknown. Written as observed, so an unknown is never
         // recorded as the false it used to be read as.
         ...(outcome.worktree_changed !== undefined ? { worktree_changed: outcome.worktree_changed } : {}),
+        ...(outcome.edit_tier ? { edit_tier: outcome.edit_tier } : {}),
+        ...(outcome.package_index ? { package_index: outcome.package_index } : {}),
         args: deps.audit.text(JSON.stringify(call.args)),
         result: deps.audit.text(outcome.content),
       });
