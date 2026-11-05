@@ -3426,6 +3426,15 @@ export type StopReason =
   // and then recorded `answered`, and the other shapes were re-asked with no
   // bound but the step wall, so a template mismatch read as a stall or a wall.
   | "malformed"
+  // The turn's last model request failed and the turn ended on it: no key
+  // (10), no reply in time (11), the provider unreachable or erroring past
+  // the transport grace (12), or the context could not be fitted (13). The
+  // code says which, and the bucket is apparatus_failure. It used to borrow
+  // "answered", the value for a model that stopped calling tools of its own
+  // accord: three P2G41 cells (2026-11-05) read code 12 beside "answered",
+  // one of them with no tool step at all, so a reader counting stop reasons
+  // counted provider outages as answers.
+  | "endpoint_error"
   // The two below are written by the live record (live_record.ts), never
   // returned by a turn. They are here because they appear on the records a
   // consumer switches on -- `gnomon task --json`, the `turn` audit record and
@@ -4718,6 +4727,7 @@ export async function runAgenticTurn(
     toolLog,
     usage: turnUsage,
     counters,
+    modelCalls: measured(),
   }));
 
   // A cancelled turn still changed the tree if it got that far, and that is
@@ -5825,12 +5835,16 @@ export async function runAgenticTurn(
         toolLog,
         usage: turnUsage,
         // The model stopped calling tools of its own accord. Whether it was
-        // RIGHT to stop is the bucket's business, not this field's.
-        stop_reason: emptyTerminus
-          ? "empty"
-          : lastFinishReason === "length"
-            ? "truncated"
-            : "answered",
+        // RIGHT to stop is the bucket's business, not this field's. Unless the
+        // reply never came: a request that failed at the apparatus tier ends
+        // the turn here too, and that is the endpoint's stop, not the model's.
+        stop_reason: mapBucket(result.code) === "apparatus_failure"
+          ? "endpoint_error"
+          : emptyTerminus
+            ? "empty"
+            : lastFinishReason === "length"
+              ? "truncated"
+              : "answered",
         counters,
         modelCalls: measured(),
         surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,

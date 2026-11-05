@@ -26,6 +26,24 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A turn that ended because its endpoint failed no longer says it was
+  answered.** A `gnomon task` turn whose last model request failed (no key,
+  no reply in time, the provider unreachable or erroring past the transport
+  grace, the context exhausted: codes 10–13) was recorded `stop_reason:
+  "answered"`. Found by the P2G41 acid test: three cells read code 12 beside
+  `answered`, one with no tool step. It is now `endpoint_error` (docs/CONTRACTS.md
+  §1, `conformance/stop_reason.json`, 12 values). Record-only: request bodies
+  are byte-identical to 0.4.2 (`endpoint_error_record.test.ts` pins them).
+- **The partial and killed records carry the per-call figures.**
+  `<session>.record.json` written while a turn runs, and the killed record, now
+  carry `volatile.model_calls` (§29) as the final record does: per-call clock,
+  provider tokens and reasoning tokens. In P2G41 all 29 capped gnomon cells
+  left only a partial record, so the per-call figures of every run that timed
+  out were in the trail alone (§28). The killed `turn` audit record carries it
+  beside `tokens_in`. Record-only.
+
 ## [0.4.2] — 2026-11-05
 
 Security fixes found by the first GBS v0.1 conformance runs (#148), all tightening (#149): `gnomon audit verify` now fails a trail with records appended after its seal; skill accept/reject (and `audit resolve`) can no longer be approved from inside an agent session by unsetting `GNOMON_AGENT_SESSION`, and need a person present (a terminal or a person-present signer); the anchor flush lock is released on exit (it was left behind with the published package layout). Model requests on a default surface are byte-identical to 0.4.1. Behaviour change to know: `gnomon skill accept` from a non-interactive script is now refused.
