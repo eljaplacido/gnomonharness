@@ -1,0 +1,417 @@
+  │ I'll start by inspecting the repository and environment.
+  deepseek-v4.1-flash — 1 tool call(s) so far
+  deepseek-v4.1-flash — 2 tool call(s) so far
+  ⚙ read .
+    ✓ read ./ — 4 entries
+  ⚙ glob 
+    ✓ glob **/*.py — 0 files
+  │ No code here yet. Let me check what tooling exists — I have no shell tool…
+  deepseek-v4.1-flash — 3 tool call(s) so far
+  deepseek-v4.1-flash — 4 tool call(s) so far
+  deepseek-v4.1-flash — 5 tool call(s) so far
+  deepseek-v4.1-flash — 6 tool call(s) so far
+  deepseek-v4.1-flash — 7 tool call(s) so far
+  deepseek-v4.1-flash — 8 tool call(s) so far
+  ⚙ 6 steps folded · read ×5, glob · .gnomon, .gnomon/roles.toml, .gnomon/tools.toml, +2 · nothing changed  /expand
+  │ I'm the coordinator role (no bash). This work happens in `/app` via shell…
+  deepseek-v4.1-flash — 9 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 0/5 done · Recon environment: repo root vs /app, py
+[approval] delegate to "implementor" — approved
+  │ I'll run the reconnaissance checks systematically. Let me start with the …
+[approval] bash: pwd && ls -la — approved
+  ⚙ bash pwd && ls -la
+    ✓ bash — exit 0
+  qwen3.6-35b — 1 tool call(s) so far
+[approval] bash: ls -la /app 2>&1; echo "---"; ls -la /app/model_cache 2>&1; echo "---"; ls -la /app/merged_model 2>&1 — approved
+  ⚙ bash ls -la /app 2>&1; echo "---"; ls -la /app/model_cache 2>&1; echo "---"…
+    ✗ bash — exit 2
+  qwen3.6-35b — 2 tool call(s) so far
+[approval] bash: which python python3 2>&1; echo "---"; python3 -V 2>&1 — approved
+  ⚙ bash which python python3 2>&1; echo "---"; python3 -V 2>&1
+    ✓ bash — exit 0
+  qwen3.6-35b — 3 tool call(s) so far
+[approval] write recon_env.py (+18 −0) [new file] — approved
+  ⚙ write recon_env.py
+    ✓ write recon_env.py (+18 −0)
+  qwen3.6-35b — 4 tool call(s) so far
+[approval] bash: python3 recon_env.py — approved
+  ⚙ bash python3 recon_env.py
+    ✓ bash — exit 0
+  qwen3.6-35b — 5 tool call(s) so far
+[approval] bash: nvidia-smi -L 2>&1; echo "---"; nproc; echo "---"; free -g — approved
+  ⚙ bash nvidia-smi -L 2>&1; echo "---"; nproc; echo "---"; free -g
+    ✗ bash — exit 127
+  qwen3.6-35b — 6 tool call(s) so far
+[approval] bash: df -h /app . 2>&1 — approved
+  ⚙ bash df -h /app . 2>&1
+    ✓ bash — exit 0
+  qwen3.6-35b — 7 tool call(s) so far
+[approval] write recon_net.py (+11 −0) [new file] — approved
+  ⚙ write recon_net.py
+    ✓ write recon_net.py (+11 −0)
+  qwen3.6-35b — 8 tool call(s) so far
+[approval] bash: python3 recon_net.py — approved
+  ⚙ bash python3 recon_net.py
+    ✓ bash — exit 0
+  qwen3.6-35b — 9 tool call(s) so far
+[approval] bash: env | grep -i -E 'hf_|hugging' | sed 's/=.*/=<set>/' — approved
+  ⚙ bash env | grep -i -E 'hf_|hugging' | sed 's/=.*/=<set>/'
+    ✓ bash — exit 0
+  qwen3.6-35b — 10 tool call(s) so far
+[approval] bash: du -sh ~/.cache/huggingface 2>/dev/null; echo "---"; ls ~/.cache/huggingface/hub 2>/dev/null — approved
+  ⚙ bash du -sh ~/.cache/huggingface 2>/dev/null; echo "---"; ls ~/.cache/huggi…
+    ✗ bash — exit 2
+  qwen3.6-35b — 11 tool call(s) so far
+[approval] bash: du -sh /root/.cache/huggingface 2>/dev/null; echo "---"; ls /root/.cache/huggingface/hub 2>/dev/null — approved
+  ⚙ bash du -sh /root/.cache/huggingface 2>/dev/null; echo "---"; ls /root/.cac…
+    ✗ bash — exit 2
+  qwen3.6-35b — 12 tool call(s) so far
+  │ Now let me clean up the temp scripts:
+[approval] bash: rm -f recon_env.py recon_net.py — approved
+  ⚙ bash rm -f recon_env.py recon_net.py
+    ✓ bash — exit 0
+  qwen3.6-35b — 13 tool call(s) so far
+  ⚙ task 
+    ✓ task implementor — 13 tool call(s)
+  deepseek-v4.1-flash — 10 tool call(s) so far
+  │ Clean slate: no ML stack on a 20-core CPU box with working network. Insta…
+[approval] delegate to "implementor" — approved
+  │ I'll work through this systematically. Let me start by installing the sta…
+  qwen3.6-35b — 1 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 0/5 done · Install CPU-only torch
+[approval] bash: mkdir -p .gnomon-jobs && setsid sh -c 'python3 -m pip install --no-cache-dir --upgrade pip 2>&1 && python3 -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu 2>&1' </dev/null >.gnomon-jobs/torch_install.log 2>&1 & — approved
+  ⚙ bash mkdir -p .gnomon-jobs && setsid sh -c 'python3 -m pip install --no-cac…
+    ✓ bash — exit 0
+  qwen3.6-35b — 2 tool call(s) so far
+[approval] bash: sleep 45 && tail -n 20 .gnomon-jobs/torch_install.log — approved
+  ⚙ bash sleep 45 && tail -n 20 .gnomon-jobs/torch_install.log
+    ✓ bash — exit 0
+  qwen3.6-35b — 3 tool call(s) so far
+  │ Torch installed. Now install the rest.
+  qwen3.6-35b — 4 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 1/5 done · Install transformers, peft, sentencepiec
+[approval] bash: setsid sh -c 'python3 -m pip install --no-cache-dir transformers peft sentencepiece protobuf accelerate huggingface_hub 2>&1' </dev/null >.gnomon-jobs/rest_install.log 2>&1 & — approved
+  ⚙ bash setsid sh -c 'python3 -m pip install --no-cache-dir transformers peft …
+    ✓ bash — exit 0
+  qwen3.6-35b — 5 tool call(s) so far
+[approval] bash: sleep 45 && tail -n 20 .gnomon-jobs/rest_install.log — approved
+  ⚙ bash sleep 45 && tail -n 20 .gnomon-jobs/rest_install.log
+    ✓ bash — exit 0
+  qwen3.6-35b — 6 tool call(s) so far
+  │ All installed. Now let me write and run the stack confirmation script.
+  qwen3.6-35b — 7 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 2/5 done · Confirm stack with recon_stack.py
+[approval] write /app/recon_stack.py (+11 −0) [new file] — approved
+  ⚙ write /app/recon_stack.py
+    ✓ write /app/recon_stack.py (+11 −0)
+  qwen3.6-35b — 8 tool call(s) so far
+[approval] bash: cd /app && python3 recon_stack.py — approved
+  ⚙ bash cd /app && python3 recon_stack.py
+    ✓ bash — exit 0
+  qwen3.6-35b — 9 tool call(s) so far
+  │ Stack confirmed. Now download both models.
+  qwen3.6-35b — 10 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 3/5 done · Download base and adapter models from HF
+[approval] write /app/fetch_models.py (+20 −0) [new file] — approved
+  ⚙ write /app/fetch_models.py
+    ✓ write /app/fetch_models.py (+20 −0)
+  qwen3.6-35b — 11 tool call(s) so far
+[approval] bash: setsid sh -c 'cd /app && python3 fetch_models.py 2>&1' </dev/null >.gnomon-jobs/fetch_models.log 2>&1 & — approved
+  ⚙ bash setsid sh -c 'cd /app && python3 fetch_models.py 2>&1' </dev/null >.gn…
+    ✓ bash — exit 0
+  qwen3.6-35b — 12 tool call(s) so far
+[approval] bash: sleep 45 && tail -n 20 .gnomon-jobs/fetch_models.log — approved
+  ⚙ bash sleep 45 && tail -n 20 .gnomon-jobs/fetch_models.log
+    ✓ bash — exit 0
+  qwen3.6-35b — 13 tool call(s) so far
+  │ Both downloaded. Let me verify sizes and list contents.
+[approval] bash: du -sh /app/hf_src/* — approved
+  ⚙ bash du -sh /app/hf_src/*
+    ✓ bash — exit 0
+  qwen3.6-35b — 14 tool call(s) so far
+[approval] bash: ls -la /app/hf_src/xlm-roberta-base/ — approved
+  ⚙ bash ls -la /app/hf_src/xlm-roberta-base/
+    ✓ bash — exit 0
+  qwen3.6-35b — 15 tool call(s) so far
+[approval] bash: ls -la /app/hf_src/xlm-roberta-base-lora-language-detection/ — approved
+  ⚙ bash ls -la /app/hf_src/xlm-roberta-base-lora-language-detection/
+    ✓ bash — exit 0
+  qwen3.6-35b — 16 tool call(s) so far
+  │ Now let me do the full inspection. I'll read the config files and inspect…
+  qwen3.6-35b — 17 tool call(s) so far
+  qwen3.6-35b — 18 tool call(s) so far
+  qwen3.6-35b — 19 tool call(s) so far
+  ⚙ 3 steps folded · read ×2, todo · /app/hf_src/xlm-roberta-base-lora-language-detection/adapter_config.json, /app/hf_src/xlm-roberta-base/config.json · nothing changed  /expand
+  │ Now let me inspect the adapter's state dict and the README for labels:
+  qwen3.6-35b — 20 tool call(s) so far
+  ⚙ read /app/hf_src/xlm-roberta-base-lora-language-detection/README.md
+    ✓ read /app/hf_src/xlm-roberta-base-lora-language-detection/README.md — 219 lines
+  │ Now let me inspect the adapter's state dict:
+[approval] write /app/inspect_adapter.py (+17 −0) [new file] — approved
+  ⚙ write /app/inspect_adapter.py
+    ✓ write /app/inspect_adapter.py (+17 −0)
+  qwen3.6-35b — 21 tool call(s) so far
+[approval] bash: cd /app && python3 inspect_adapter.py — approved
+  ⚙ bash cd /app && python3 inspect_adapter.py
+    ✓ bash — exit 0
+  qwen3.6-35b — 22 tool call(s) so far
+  │ Now let me check the adapter's config.json and the runs directory:
+  qwen3.6-35b — 23 tool call(s) so far
+  ⚙ read /app/hf_src/xlm-roberta-base-lora-language-detection/config.json
+    ✓ read /app/hf_src/xlm-roberta-base-lora-language-detection/config.json — 74 lines
+[approval] bash: ls -laR /app/hf_src/xlm-roberta-base-lora-language-detection/runs/ — approved
+  ⚙ bash ls -laR /app/hf_src/xlm-roberta-base-lora-language-detection/runs/
+    ✓ bash — exit 0
+  qwen3.6-35b — 24 tool call(s) so far
+  qwen3.6-35b — 25 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 5/5 done
+  ⚙ task 
+    ✓ task implementor — 25 tool call(s)
+  deepseek-v4.1-flash — 11 tool call(s) so far
+  │ Recon is conclusive: base is a masked-LM checkpoint with no head, and the…
+  deepseek-v4.1-flash — 12 tool call(s) so far
+  ⚙ todo 
+    ✓ todo — 2/5 done · Build script: 20-class config, save base
+[approval] delegate to "implementor" — approved
+  │ I'll start by writing the build script, then run it detached and poll for…
+[approval] write /app/build_language_detector.py (+112 −0) [new file] — approved
+  ⚙ write /app/build_language_detector.py
+    ✓ write /app/build_language_detector.py (+112 −0)
+  qwen3.6-35b — 1 tool call(s) so far
+  │ I need to add the missing `from peft import PeftModel` import:
+[approval] edit /app/build_language_detector.py (+1 −0) — approved
+  ⚙ edit /app/build_language_detector.py
+    ✓ edit /app/build_language_detector.py (+1 −0)
+  qwen3.6-35b — 2 tool call(s) so far
+  │ Now run it detached:
+[approval] bash: mkdir -p .gnomon-jobs && setsid sh -c 'cd /app && python3 build_language_detector.py' </dev/null >.gnomon-jobs/build.log 2>&1 &
+echo "PID: $!" — approved
+  ⚙ bash mkdir -p .gnomon-jobs && setsid sh -c 'cd /app && python3 build_langua…
+    ✓ bash — exit 0
+  qwen3.6-35b — 3 tool call(s) so far
+[approval] bash: sleep 40 && tail -n 50 /app/.gnomon-jobs/build.log — approved
+  ⚙ bash sleep 40 && tail -n 50 /app/.gnomon-jobs/build.log
+    ✓ bash — exit 0
+  qwen3.6-35b — 4 tool call(s) so far
+  │ The `ensure_ascii` parameter is only for `json.dump`, not `open`. Let me …
+[approval] edit /app/build_language_detector.py (+1 −1) — approved
+  ⚙ edit /app/build_language_detector.py
+    ✓ edit /app/build_language_detector.py (+1 −1)
+  qwen3.6-35b — 5 tool call(s) so far
+[approval] bash: setsid sh -c 'cd /app && python3 build_language_detector.py' </dev/null >.gnomon-jobs/build.log 2>&1 &
+echo "PID: $!" — approved
+  ⚙ bash setsid sh -c 'cd /app && python3 build_language_detector.py' </dev/nul…
+    ✓ bash — exit 0
+  qwen3.6-35b — 6 tool call(s) so far
+[approval] bash: sleep 50 && tail -n 60 /app/.gnomon-jobs/build.log — approved
+  ⚙ bash sleep 50 && tail -n 60 /app/.gnomon-jobs/build.log
+    ✓ bash — exit 0
+  qwen3.6-35b — 7 tool call(s) so far
+  │ Script completed successfully. Now let me run the verification steps:
+[approval] bash: ls -la /app/merged_model /app/model_cache/xlm-roberta-base — approved
+  ⚙ bash ls -la /app/merged_model /app/model_cache/xlm-roberta-base
+    ✓ bash — exit 0
+  qwen3.6-35b — 8 tool call(s) so far
+[approval] bash: du -sh /app/merged_model /app/model_cache/xlm-roberta-base — approved
+  ⚙ bash du -sh /app/merged_model /app/model_cache/xlm-roberta-base
+    ✓ bash — exit 0
+  qwen3.6-35b — 9 tool call(s) so far
+[approval] bash: python3 -c "
+import json
+with open('/app/detection_results.json') as f:
+    data = json.load(f)
+print(f'Length: {len(data)}')
+print(f'Keys per entry: {list(data[0].keys())}')
+for i, entry in enumerate(data):
+    assert set(entry.keys()) == {'text', 'predicted_class_id', 'confidence'}, f'Wrong keys in entry {i}'
+    assert isinstance(entry['predicted_class_id'], int), f'predicted_class_id not int in entry {i}'
+    assert isinstance(entry['confidence'], float), f'confidence not float in entry {i}'
+    assert isinstance(entry['text'], str), f'text not str in entry {i}'
+print('All 10 entries valid with correct keys and types.')
+" — approved
+  ⚙ bash python3 -c " import json with open('/app/detection_results.json') as f…
+    ✓ bash — exit 0
+  qwen3.6-35b — 10 tool call(s) so far
+  qwen3.6-35b — 11 tool call(s) so far
+  ⚙ read /app/detection_results.json
+    ✓ read /app/detection_results.json — 52 lines
+  ⚙ task 
+    ✓ task implementor — 11 tool call(s)
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  [tools] 13 call(s) without changing a file — nudging to decide
+  deepseek-v4.1-flash — 13 tool call(s) so far
+  │ The sub-turn reports success. I can check the artifacts directly since /a…
+  deepseek-v4.1-flash — 14 tool call(s) so far
+  deepseek-v4.1-flash — 15 tool call(s) so far
+  ⚙ read detection_results.json
+    ✓ read detection_results.json — 52 lines
+  ⚙ glob 
+    ✓ glob {merged_model,model_cache/xlm-roberta-base}/* — 0 files
+  │ JSON is sound. The glob brace syntax isn't supported — listing the direct…
+  deepseek-v4.1-flash — 16 tool call(s) so far
+  deepseek-v4.1-flash — 17 tool call(s) so far
+  ⚙ read merged_model
+    ✓ read merged_model/ — 4 entries
+  ⚙ read model_cache/xlm-roberta-base
+    ✓ read model_cache/xlm-roberta-base/ — 4 entries
+  │ Both artifacts exist with full contents. Checking the merged config decla…
+  deepseek-v4.1-flash — 18 tool call(s) so far
+  ⚙ read merged_model/config.json
+    ✓ read merged_model/config.json — 76 lines
+  │ Artifacts and labels check out. Running an independent verification pass,…
+  deepseek-v4.1-flash — 19 tool call(s) so far
+  ⚙ grep model_cache/xlm-roberta-base/config.json
+    ✓ grep num_labels|"architectures"|XLMRoberta|"19": — 3 match(es) in 1 file(s)
+  ⚙ task 
+    ⚠ task — refused (critique not in task_allow)
+  deepseek-v4.1-flash — 20 tool call(s) so far
+  [tools] 20/160 calls — continuing (leg 2)
+  deepseek-v4.1-flash — leg 2, 20 call(s) so far
+  │ Delegation to `critique` is outside my scope; `implementor` it is, with a…
+[approval] delegate to "implementor" — approved
+  │ I'll start by inspecting the existing files to understand the setup befor…
+  qwen3.6-35b — 1 tool call(s) so far
+  qwen3.6-35b — 2 tool call(s) so far
+  ⚙ read /app
+    ✓ read /app/ — 13 entries
+  ⚙ read /app/detection_results.json
+    ✓ read /app/detection_results.json — 52 lines
+[approval] bash: ls /app/merged_model/ — approved
+  ⚙ bash ls /app/merged_model/
+    ✓ bash — exit 0
+  qwen3.6-35b — 3 tool call(s) so far
+[approval] bash: ls /app/model_cache/xlm-roberta-base/ 2>/dev/null || echo "NOT FOUND" — approved
+  ⚙ bash ls /app/model_cache/xlm-roberta-base/ 2>/dev/null || echo "NOT FOUND"
+    ✓ bash — exit 0
+  qwen3.6-35b — 4 tool call(s) so far
+[approval] bash: python3 -c "import torch; print('torch', torch.__version__); import transformers; print('transformers', transformers.__version__); import peft; print('peft', peft.__version__)" — approved
+  ⚙ bash python3 -c "import torch; print('torch', torch.__version__); import tr…
+    ✓ bash — exit 0
+  qwen3.6-35b — 5 tool call(s) so far
+[approval] bash: python3 -c "
+import json
+with open('/app/merged_model/config.json') as f:
+    c = json.load(f)
+print('merged config keys:', sorted(c.keys()))
+print('num_labels:', c.get('num_labels'))
+print('problem_type:', c.get('problem_type'))
+print('id2label:', c.get('id2label'))
+print('architectures:', c.get('architectures'))
+" — approved
+  ⚙ bash python3 -c " import json with open('/app/merged_model/config.json') as…
+    ✓ bash — exit 0
+  qwen3.6-35b — 6 tool call(s) so far
+[approval] bash: python3 -c "
+import json
+with open('/app/model_cache/xlm-roberta-base/config.json') as f:
+    c = json.load(f)
+print('base config keys:', sorted(c.keys()))
+print('num_labels:', c.get('num_labels'))
+print('problem_type:', c.get('problem_type'))
+print('id2label:', c.get('id2label'))
+print('architectures:', c.get('architectures'))
+" — approved
+  ⚙ bash python3 -c " import json with open('/app/model_cache/xlm-roberta-base/…
+    ✓ bash — exit 0
+  qwen3.6-35b — 7 tool call(s) so far
+[approval] bash: python3 -c "
+import json
+with open('/app/model_cache/xlm-roberta-base/config.json') as f:
+    c = json.load(f)
+print('num_labels from config:', c.get('num_labels'))
+# Check if num_labels is stored differently
+for k in ['num_labels', 'num_classes', 'num_label']:
+    if k in c:
+        print(f'{k}: {c[k]}')
+" — approved
+  ⚙ bash python3 -c " import json with open('/app/model_cache/xlm-roberta-base/…
+    ✓ bash — exit 0
+  qwen3.6-35b — 8 tool call(s) so far
+  │ The config doesn't have `num_labels` as a top-level key — it may be in th…
+[approval] bash: python3 -c "
+from transformers import AutoConfig
+c = AutoConfig.from_pretrained('/app/merged_model/', local_files_only=True)
+print('num_labels:', c.num_labels)
+print('problem_type:', c.problem_type)
+print('architectures:', c.architectures)
+print('model_type:', c.model_type)
+" — approved
+  ⚙ bash python3 -c " from transformers import AutoConfig c = AutoConfig.from_p…
+    ✓ bash — exit 0
+  qwen3.6-35b — 9 tool call(s) so far
+[approval] bash: python3 -c "
+from transformers import AutoConfig
+c = AutoConfig.from_pretrained('/app/model_cache/xlm-roberta-base/', local_files_only=True)
+print('num_labels:', c.num_labels)
+print('problem_type:', c.problem_type)
+print('architectures:', c.architectures)
+print('model_type:', c.model_type)
+" — approved
+  ⚙ bash python3 -c " from transformers import AutoConfig c = AutoConfig.from_p…
+    ✓ bash — exit 0
+  qwen3.6-35b — 10 tool call(s) so far
+  │ Good — both configs resolve `num_labels=20`. Now I'll write the verificat…
+[approval] write /app/verify_detector.py (+164 −0) [new file] — approved
+  ⚙ write /app/verify_detector.py
+    ✓ write /app/verify_detector.py (+164 −0)
+  qwen3.6-35b — 11 tool call(s) so far
+[approval] bash: mkdir -p .gnomon-jobs && setsid sh -c 'python3 /app/verify_detector.py' </dev/null >.gnomon-jobs/verify.log 2>&1 &
+echo "PID: $!" — approved
+  ⚙ bash mkdir -p .gnomon-jobs && setsid sh -c 'python3 /app/verify_detector.py…
+    ✓ bash — exit 0
+  qwen3.6-35b — 12 tool call(s) so far
+[approval] bash: sleep 45 && tail -n 40 .gnomon-jobs/verify.log — approved
+  ⚙ bash sleep 45 && tail -n 40 .gnomon-jobs/verify.log
+    ✓ bash — exit 0
+  qwen3.6-35b — 13 tool call(s) so far
+  │ Let me also see the full output to confirm the match table:
+[approval] bash: cat .gnomon-jobs/verify.log — approved
+  ⚙ bash cat .gnomon-jobs/verify.log
+    ✓ bash — exit 0
+  qwen3.6-35b — 14 tool call(s) so far
+  │ Now clean up the throwaway script:
+[approval] bash: rm /app/verify_detector.py — approved
+  ⚙ bash rm /app/verify_detector.py
+    ✓ bash — exit 0
+  qwen3.6-35b — 15 tool call(s) so far
+  ⚙ task 
+    ✓ task implementor — 15 tool call(s)
+  deepseek-v4.1-flash — 21 tool call(s) so far
+  │ Verification passes: merged model loads standalone without peft, config h…
+  deepseek-v4.1-flash — 22 tool call(s) so far
+  deepseek-v4.1-flash — 23 tool call(s) so far
+  ⚙ read .
+    ✓ read ./ — 13 entries
+  ⚙ todo 
+    ✓ todo — 5/5 done
+Done. All seven steps are complete and verified.
+
+**What was built**
+
+The working directory *is* `/app`, so artifacts sit at the paths the task named. The environment started empty — no torch, transformers, peft or tokenizers — so a CPU-only stack was installed first (torch 2.15.0+cpu, transformers 5.22.1, peft 0.21.2, sentencepiece, accelerate) on the 20-core CPU box.
+
+The key structural fact: the published base checkpoint is `XLMRobertaForMaskedLM` and has **no classification head**, while the adapter carries a trained 20-class head through `modules_to_save: ["classifier"]` (its state dict contains `classifier.dense` 768×768 and `classifier.out_proj` 20×768). So the base was instantiated as `XLMRobertaForSequenceClassification` with `num_labels=20` and the language `id2label`/`label2id`, saved to `/app/model_cache/xlm-roberta-base` **before** the adapter was applied, then reloaded from that saved directory so the delivered artifact is exactly what got adapted. `merge_and_unload()` folded the LoRA into the attention weights.
+
+- `/app/model_cache/xlm-roberta-base/` — 20-class base + tokenizer (config.json, model.safetensors, tokenizer.json, tokenizer_config.json)
+- `/app/merged_model/` — merged model + tokenizer, same file set
+- `/app/detection_results.json` — the 10 results
+
+**Checks that show it works**
+
+- Merged model reloads in a fresh process that never imports peft, with `local_files_only=True`; `config.num_labels` is 20 and `problem_type` is `single_label_classification`.
+- All 10 stored ids reproduce exactly on re-run, and every argmax winner leads the runner-up by 0.46–7.6 logits.
+- The merge genuinely landed: `query.weight`/`value.weight` differ from the un-adapted base by 4.1e-3 / 6.2e-3, and the merged `classifier.out_proj.weight` is `allclose` to the adapter's trained tensor.
+
+All 10 samples were classified correctly (fr 0.975, es 0.989, de 0.997, it 0.989, pt 0.990, ru 0.986, ja 0.965, zh 0.936, ar 0.988, en 0.974). Predicted ids are raw `argmax` of the logits — no label lookup is used to produce them; `id2label` appears only as a human-readable print.
+
+**One thing worth flagging for the 95% target.** An extra spot-check I ran on the seven languages the 10 samples don't cover (th, vi, tr, nl, pl, hi, el, bg, sw, ur) came back right for th, vi, tr, nl, pl, el, bg, sw, ur — but the single-word Hindi `नमस्ते` was classified as Arabic at 0.17 confidence, and `Bonsoir` as Dutch at 0.52. Both are very short, low-confidence inputs rather than merge faults; the per-language floor of 75% on fuller text should be fine, but if the hidden set leans on one- or two-word samples, Hindi is the language at risk. Nothing was changed to paper over this — the predictions are the model's own.
+
+Left in the repo: the build script (`build_language_detector.py`), the fetch/inspect scripts, `hf_src/` with both downloaded repos (~6 GB for the base, since the full snapshot pulled TF/Flax/ONNX variants too), and `.gnomon-jobs/` logs. None of these affect the deliverables; say the word if you want them cleaned up.
+
+[refusal] role=coordinator model=deepseek-v4.1-flash tools=23 surface=d52bd4874402

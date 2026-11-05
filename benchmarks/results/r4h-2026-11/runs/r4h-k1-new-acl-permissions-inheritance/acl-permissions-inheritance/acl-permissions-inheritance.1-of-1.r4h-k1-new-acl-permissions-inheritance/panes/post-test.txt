@@ -1,0 +1,102 @@
+root@3fbeaaafcdcb:/app# bash /tests/run-tests.sh; tmux wait -S done
+Hit:1 http://ports.ubuntu.com/ubuntu-ports noble InRelease
+Hit:2 http://ports.ubuntu.com/ubuntu-ports noble-updates InRelease
+Hit:3 http://ports.ubuntu.com/ubuntu-ports noble-backports InRelease
+Hit:4 http://ports.ubuntu.com/ubuntu-ports noble-security InRelease
+Reading package lists... Done
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+curl is already the newest version (8.5.0-2ubuntu10.16).
+0 upgraded, 0 newly installed, 0 to remove and 54 not upgraded.
+downloading uv 0.7.13 aarch64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Using CPython 3.12.3 interpreter at: /usr/bin/python3
+Creating virtual environment at: .tbench-testing
+Activate with: source .tbench-testing/bin/activate
+Using Python 3.12.3 environment at: .tbench-testing
+Resolved 5 packages in 44ms
+Prepared 5 packages in 55ms
+Installed 5 packages in 8ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+===================================================================== test session starts ======================================================================
+platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 9 items
+
+../tests/test_outputs.py ..F......                                                                                                                       [100%]
+
+=========================================================================== FAILURES ===========================================================================
+_________________________________________________________________ test_default_acl_inheritance _________________________________________________________________
+
+    def test_default_acl_inheritance():
+        """Test default ACL settings for inheritance"""
+        acl_output = sh("getfacl -p /srv/shared").stdout
+
+        # Check required default ACL entries
+        required_default_acls = [
+            "default:user::rwx",
+            "default:user:alice:rwx",
+            "default:user:bob:rwx",
+            "default:group::rwx",
+            "default:group:research:rwx",
+            "default:mask::rwx",
+            "default:other::---",
+        ]
+
+        for acl in required_default_acls:
+>           assert acl in acl_output, (
+                f"Missing default ACL entry: {acl}\nFull output:\n{acl_output}"
+            )
+E           AssertionError: Missing default ACL entry: default:group::rwx
+E             Full output:
+E             # file: /srv/shared
+E             # owner: root
+E             # group: research
+E             # flags: -s-
+E             user::rwx
+E             user:alice:rwx
+E             user:bob:rwx
+E             group::r-x
+E             group:research:rwx
+E             mask::rwx
+E             other::---
+E             default:user::rwx
+E             default:user:alice:rwx
+E             default:user:bob:rwx
+E             default:group::r-x
+E             default:group:research:rwx
+E             default:mask::rwx
+E             default:other::---
+E
+E
+E           assert 'default:group::rwx' in '# file: /srv/shared\n# owner: root\n# group: research\n# flags: -s-\nuser::rwx\nuser:alice:rwx\nuser:bob:rwx\ngroup:
+:...e:rwx\ndefault:user:bob:rwx\ndefault:group::r-x\ndefault:group:research:rwx\ndefault:mask::rwx\ndefault:other::---\n\n'
+
+/tests/test_outputs.py:69: AssertionError
+============================================================================ PASSES ============================================================================
+=================================================================== short test summary info ====================================================================
+PASSED ../tests/test_outputs.py::test_directory_exists_and_basic_permissions
+PASSED ../tests/test_outputs.py::test_current_acl_settings
+PASSED ../tests/test_outputs.py::test_alice_can_create_and_bob_can_access
+PASSED ../tests/test_outputs.py::test_bob_can_create_and_alice_can_access
+PASSED ../tests/test_outputs.py::test_subdirectory_inheritance
+PASSED ../tests/test_outputs.py::test_outside_users_denied_access
+PASSED ../tests/test_outputs.py::test_file_permissions_inheritance
+PASSED ../tests/test_outputs.py::test_execute_permissions_on_scripts
+FAILED ../tests/test_outputs.py::test_default_acl_inheritance - AssertionError: Missing default ACL entry: default:group::rwx
+================================================================= 1 failed, 8 passed in 0.26s ==================================================================
+root@3fbeaaafcdcb:/app#
