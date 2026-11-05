@@ -30,7 +30,7 @@ import {
   readlinkSync,
   mkdtempSync
 } from "node:fs";
-import { osSandbox, type OsSandbox } from "gnomon-natives";
+import type { OsSandbox } from "gnomon-natives";
 import { resolve, relative, isAbsolute, dirname, basename, join, sep, win32 as win32Path } from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -1761,6 +1761,38 @@ export function sandboxCommand(
 }
 
 /**
+ * gnomon-natives' probe, loaded on first use rather than imported at the top.
+ *
+ * gnomon-core's compiled modules are loaded by plain node in this workspace --
+ * the property suites and the benchmark apparatus import dist/ directly --
+ * and there `gnomon-natives` resolves to its TypeScript sources, which plain
+ * node cannot run. A static import broke every one of them for a feature they
+ * never use; a lazy one costs them nothing, and the installed package (where
+ * gnomon-natives resolves to its dist) loads it the same way.
+ */
+let nativeProbe: (() => OsSandbox) | undefined;
+
+/** Load the gnomon-exec probe. Never throws: a failure becomes a probe that reports it. */
+export async function loadOsSandboxProbe(): Promise<() => OsSandbox> {
+  if (nativeProbe) return nativeProbe;
+  try {
+    const natives = await import("gnomon-natives");
+    nativeProbe = natives.osSandbox;
+  } catch (e) {
+    const why = `gnomon-natives could not be loaded: ${(e as Error).message.split("\n")[0]}`;
+    return () => ({ error: why });
+  }
+  return nativeProbe;
+}
+
+/** The probe if it has been loaded, else an error a caller refuses on (never a pass). */
+function defaultOsProbe(): OsSandbox {
+  return nativeProbe
+    ? nativeProbe()
+    : { error: "the gnomon-exec probe was not loaded (loadOsSandboxProbe was not awaited before this call)" };
+}
+
+/**
  * How `[sandbox] exec = "os"` runs one command: `gnomon-exec sandbox`, with the
  * project root, a fresh per-call temp directory and any `extra_roots` as the
  * only writable trees, and `--network off` unless the session allows the
@@ -1788,7 +1820,7 @@ export function osSandboxPlan(
     exec?: { network: boolean; reads?: string; readRoots?: string[] };
   },
   shellBin: string,
-  probe: () => OsSandbox = osSandbox,
+  probe: () => OsSandbox = defaultOsProbe,
   installRoots: (bin: string) => string[] = gnomonInstallReadRoots
 ):
   | { refusal: ToolOutcome }
@@ -1939,7 +1971,7 @@ export function gnomonInstallReadRoots(bin: string, here: string = fileURLToPath
  */
 export function osSandboxSummary(
   network: boolean,
-  probe: () => OsSandbox = osSandbox,
+  probe: () => OsSandbox = defaultOsProbe,
   reads: string = "all"
 ): { ok: boolean; line: string } {
   if (process.platform === "win32") {
@@ -2963,7 +2995,7 @@ async function bashTool(
   }
 
   // exec = "os": run through gnomon-exec instead, or refuse. See osSandboxPlan.
-  const osPlan = ctx.exec?.mode === "os" ? osSandboxPlan(command, ctx, shellBin) : undefined;
+  const osPlan = ctx.exec?.mode === "os" ? osSandboxPlan(command, ctx, shellBin, await loadOsSandboxProbe()) : undefined;
   if (osPlan && "refusal" in osPlan) return osPlan.refusal;
 
   const running = new Promise<ToolOutcome>((done) => {

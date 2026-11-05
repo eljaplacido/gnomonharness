@@ -92,6 +92,7 @@ import {
   type SpillSink,
   DIFF_ELIDED,
   osSandboxSummary,
+  loadOsSandboxProbe,
 } from "./tools.js";
 import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
 import { StallSignals, type StallSignalCounters } from "./stall_signals.js";
@@ -10987,6 +10988,11 @@ export async function runPromptLoop(
     // Probed here, at the door, so an unsupported kernel is found before the
     // first command rather than by it.
     const execHere = resolveExec(config, state.currentRole);
+    // Loaded here when any role may run bash under exec = "os", so the summary
+    // below and a later `/explain sandbox` can probe synchronously.
+    if (listRoles(config).some((r) => resolveExec(config, r).mode === "os") || execHere.mode === "os") {
+      await loadOsSandboxProbe();
+    }
     const osSummary =
       execHere.mode === "os" ? osSandboxSummary((state.network ?? networkDeclared) === true, undefined, execHere.reads) : undefined;
     if (osSummary) console.log(paint(ui, osSummary.ok ? "gray" : "red", `  ${osSummary.line}`));
