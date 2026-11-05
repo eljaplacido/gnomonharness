@@ -283,7 +283,10 @@ describe("bash under exec = \"os\" — the kernel, not the rules, holds the line
     // stopped below is stopped by the kernel.
     bashAllow: undefined,
     bashDeny: [],
-    exec: { mode: "os", image: "unused", network: false },
+    // network = false where the network half runs (Linux: the supervised
+    // path), network = true where it is not offered (macOS), so the
+    // filesystem tests still run there; the network tests skip on their own.
+    exec: { mode: "os", image: "unused", network: !!netSkipWhy },
     ...over,
   });
   const off = (over: Partial<ToolContext> = {}) => ctx({ exec: { mode: "off", image: "unused", network: false }, ...over });
