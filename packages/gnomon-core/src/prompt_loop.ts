@@ -74,6 +74,7 @@ import {
   Todo,
   buildToolSet,
   executeTool,
+  packageIndexOf,
   type SurfaceDrift,
   needsApproval,
   ToolContext,
@@ -4783,7 +4784,7 @@ export async function runAgenticTurn(
   // The compat edit's tiers and the package-index allowlist: counted on every
   // turn of a surface that declares them, zeros included (§32).
   if (editVariant === "compat") counters.edit_match = { exact: 0, whitespace: 0, indentation: 0 };
-  if (packageIndex.length > 0 && network === false) counters.package_index = { admitted: 0, hosts: [] };
+  if (packageIndexOf(ctx).length > 0 && network === false) counters.package_index = { admitted: 0, hosts: [] };
   // The stall detectors (LP5), log-only like the counters above: they see each
   // executed call after its tool_call record, write `stall_signal` records, and
   // the loop never asks them anything. A detector that throws stops observing

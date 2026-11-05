@@ -755,6 +755,26 @@ describe("[sandbox] allow_package_index", () => {
     for (const c of REFUSED) expect(bashNetworkEgress(c, HOSTS), c).not.toBeNull();
   });
 
+  it(`is inert under exec = "docker": the container's --network none is not opened, and the refusal is master's`, () => {
+    const ctx = (exec?: "docker"): ToolContext => ({
+      root: tmpdir(),
+      sandbox: "confined",
+      network: false,
+      packageIndex: ["pypi.org"],
+      ...(exec ? { exec: { mode: exec, image: "img", network: false } } : {}),
+      gate: "never",
+      approve: async () => true,
+      timeoutMs: 1000,
+      maxOutputBytes: 32_000,
+    });
+    const cmd = { command: "curl -s https://pypi.org/simple/numpy/" };
+    expect(bashPrecheck(cmd, ctx())).toBeNull();
+    const refused = bashPrecheck(cmd, ctx("docker"));
+    expect(refused?.rule).toBe("network");
+    const { packageIndex: _, ...bare } = ctx("docker");
+    expect(refused).toEqual(bashPrecheck(cmd, bare as ToolContext));
+  });
+
   it("`gnomon guard` reads it as the loop does", async () => {
     const root = mkdtempSync(join(tmpdir(), "gnomon-pi-guard-"));
     roots.push(root);

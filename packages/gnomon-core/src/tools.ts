@@ -2066,8 +2066,10 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
   if (ctx.network === false) {
     // `[sandbox] allow_package_index` (sweep_knobs.ts): a package download
     // from a listed host is not refused. Empty, the default, is the filter as
-    // it was: the same call, the same answer.
-    const egress = bashNetworkEgress(command, ctx.packageIndex);
+    // it was: the same call, the same answer. Inert under exec = "docker",
+    // whose --network none no host list opens.
+    const listed = packageIndexOf(ctx);
+    const egress = bashNetworkEgress(command, listed);
     if (egress) {
       return {
         // The rule was missing, and toolCallPolicy reads a precheck with no rule
@@ -2078,8 +2080,8 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
         content:
           `Refused: "${egress.command.slice(0, 80)}" reaches the network (${egress.why}), ` +
           `and .gnomon/policy.toml sets [sandbox] network = false.\n\n` +
-          (ctx.packageIndex && ctx.packageIndex.length > 0
-            ? `The only exception is a package download from ${ctx.packageIndex.join(", ")} ` +
+          (listed.length > 0
+            ? `The only exception is a package download from ${listed.join(", ")} ` +
               `([sandbox] allow_package_index): pip, uv or npm install or download, or a plain curl or wget GET, ` +
               `naming only those hosts.\n\n`
             : "") +
@@ -2597,11 +2599,20 @@ function outcomeOf(pre: Precheck): ToolOutcome {
  * outcome is returned as it was when the allowlist admitted nothing.
  */
 function withPackageIndex(outcome: ToolOutcome, args: Record<string, unknown>, ctx: ToolContext): ToolOutcome {
-  if (ctx.network !== false || !ctx.packageIndex || ctx.packageIndex.length === 0) return outcome;
+  const listed = packageIndexOf(ctx);
+  if (ctx.network !== false || listed.length === 0) return outcome;
   if (typeof args.command !== "string" || mapToolBucket(outcome.code) === "refusal") return outcome;
   const admitted: string[] = [];
-  bashNetworkEgress(args.command, ctx.packageIndex, admitted);
+  bashNetworkEgress(args.command, listed, admitted);
   return admitted.length > 0 ? { ...outcome, package_index: [...new Set(admitted)].sort() } : outcome;
+}
+
+/**
+ * The hosts `[sandbox] allow_package_index` admits in this context: none
+ * under exec = "docker", where the container has no network to admit them to.
+ */
+export function packageIndexOf(ctx: Pick<ToolContext, "packageIndex" | "exec">): readonly string[] {
+  return ctx.exec?.mode === "docker" ? [] : (ctx.packageIndex ?? []);
 }
 
 /** The bucket of a tool outcome code, as conformance/exit_codes.json maps it. */
