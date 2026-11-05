@@ -65,6 +65,9 @@ import {
   type RoleWriteTarget,
   reloadConfig,
   endpointKind,
+  resolveDeadline,
+  taskResilience,
+  workRootOf,
 } from "./config.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence,
   safeForPrompt, traceLines, isEmptyReasoning, terminalWidth,
@@ -90,6 +93,7 @@ import {
   ARGS_MALFORMED,
   type SpillSink,
   DIFF_ELIDED,
+  DEADLINE_ABORT,
 } from "./tools.js";
 import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
 import { StallSignals, type StallSignalCounters } from "./stall_signals.js";
@@ -211,7 +215,7 @@ export interface PromptExchange {
    * shape should not depend on which entry point produced it.
    */
   stop_reason?: StopReason;
-  stop_detail?: { steps?: number; max_steps_total?: number; repeats?: number };
+  stop_detail?: { steps?: number; max_steps_total?: number; repeats?: number; deadline?: string; budget_ms?: number; margin_ms?: number };
   counters?: TurnCounters;
 
 }
@@ -291,6 +295,18 @@ export interface PromptState {
    * session. Paid once per session, as above. See steerAsUser.
    */
   steerRoleAdapted?: Set<string>;
+  /**
+   * Endpoint+model pairs that declare no `replay_reasoning` and answered a
+   * tool call with reasoning content, so they get it back from then on, for
+   * the rest of the session (adaptReplayReasoning).
+   */
+  replayReasoningLearned?: Set<string>;
+  /**
+   * Endpoint+model pairs that refused a request because it carried
+   * reasoning_content gnomon replayed by default. Replay stays off for them
+   * for the rest of the session. Paid once per session, as above.
+   */
+  replayReasoningRefused?: Set<string>;
   /**
    * Provider prompt tokens against gnomon's estimate, per endpoint+model, as
    * the session has measured them. Kept and read only under `[context]
@@ -816,6 +832,13 @@ interface InferenceResult {
    * wrapper does not send the identical request again.
    */
   steerRoleRejected?: boolean;
+  /**
+   * The endpoint refused a request carrying reasoning_content that gnomon
+   * replayed by default (not declared): a 400 naming the field. Code 10, so
+   * the retry wrapper does not resend it; the turn resends without it and
+   * keeps replay off for the session (adaptReplayReasoning).
+   */
+  replayRejected?: boolean;
   /**
    * The content is the reasoning channel standing in for an empty reply: no
    * text and no tool call came back, only thinking. A loop that reads this as
@@ -1658,8 +1681,9 @@ async function callEndpointOnce(
   const OPENAI_MESSAGE_KEYS = new Set(["role", "content", "tool_calls", "tool_call_id", "name"]);
   const OLLAMA_MESSAGE_KEYS = new Set(["role", "content", "tool_calls", "tool_name"]);
   const isOllama = (target.kind ?? "ollama") === "ollama";
-  // reasoning_content is on the list only for an endpoint that asks for it
-  // (replay_reasoning), and only on assistant messages, which are the only
+  // reasoning_content is on the list only for an endpoint with replay on
+  // (replay_reasoning declared, or on by default once it answered a tool
+  // call with reasoning: adaptReplayReasoning), and only on assistant messages, which are the only
   // ones that carry it. Everywhere else it is the surplus field this list
   // exists to drop.
   const allowedKeys = isOllama
@@ -1848,17 +1872,28 @@ async function callEndpointOnce(
         target.steerRole !== "user" &&
         hasLateSystem(messages) &&
         readSteerRoleRefusal(detail);
+      // Reasoning gnomon replayed on its own account (replay_reasoning not
+      // declared) and the server named it in a 400: the strict-schema refusal
+      // ("Extra inputs are not permitted, field: 'messages[3].reasoning_content'").
+      // A declared replay is left to fail as declared.
+      const replayRejected =
+        !steerRoleRejected &&
+        res.status === 400 &&
+        target.replayReasoning === true &&
+        target.replayReasoningSource === "default" &&
+        /reasoning_content/i.test(detail);
       return {
         content:
           `Model API error: ${res.status} ${res.statusText}` +
           (detail ? `\n${detail.slice(0, 500)}` : "") +
           authHint,
-        code: steerRoleRejected ? 10 : classifyFailure({ status: res.status, message: detail }),
+        code: steerRoleRejected || replayRejected ? 10 : classifyFailure({ status: res.status, message: detail }),
         toolCalls: [],
         toolsUnsupported:
           res.status === 400 && /does not support tools/i.test(detail),
         ...(maxTokensRejected ? { maxTokensRejected } : {}),
         ...(steerRoleRejected ? { steerRoleRejected: true } : {}),
+        ...(replayRejected ? { replayRejected: true } : {}),
       };
     }
 
@@ -2343,6 +2378,13 @@ export interface WireRecord {
   /** Present, and true, only when reasoning_content was sent back */
   replay_reasoning?: boolean;
   /**
+   * Beside `replay_reasoning`, always: `declared` when the surface says
+   * `replay_reasoning = true`, `default` when gnomon turned it on (DeepSeek's
+   * own API, or an undeclared endpoint that answered a tool call with
+   * reasoning content).
+   */
+  replay_reasoning_source?: "declared" | "default";
+  /**
    * Present only when gnomon's mid-turn messages went out as user messages:
    * declared (`steer_role = "user"`), or learned from a refusal this session
    * (`counters.steer_role_adapted` says which turn learned it).
@@ -2384,7 +2426,9 @@ export function wireOf(target: RouteTarget): WireRecord {
     ...(target.contextTokens && target.contextSource
       ? { max_context_tokens_source: target.contextSource }
       : {}),
-    ...(target.replayReasoning ? { replay_reasoning: true } : {}),
+    ...(target.replayReasoning
+      ? { replay_reasoning: true, replay_reasoning_source: target.replayReasoningSource ?? "declared" }
+      : {}),
     ...(target.steerRole === "user" ? { steer_role: "user" as const } : {}),
   };
 }
@@ -2572,9 +2616,33 @@ export function adaptSteerRole(state: PromptState, target: RouteTarget): RouteTa
   return { ...target, steerRole: "user" };
 }
 
+/**
+ * A target with the reasoning replay this session has settled for it: on, by
+ * default, once an endpoint that declares no `replay_reasoning` answered a
+ * tool call with reasoning content; off again, for the session, once it
+ * refused a request for carrying it. A declared value is never changed.
+ * Exported for the tests.
+ */
+export function adaptReplayReasoning(state: PromptState, target: RouteTarget): RouteTarget {
+  const key = `${target.url}|${target.model}`;
+  if (target.replayReasoningSource === "default" && state.replayReasoningRefused?.has(key)) {
+    const { replayReasoningSource: _gone, ...rest } = target;
+    return { ...rest, replayReasoning: false };
+  }
+  if (
+    target.replayReasoningAuto &&
+    state.replayReasoningLearned?.has(key) &&
+    !state.replayReasoningRefused?.has(key)
+  ) {
+    const { replayReasoningAuto: _settled, ...rest } = target;
+    return { ...rest, replayReasoning: true, replayReasoningSource: "default" };
+  }
+  return target;
+}
+
 /** Everything this session has learned about how a target takes its calls. */
 export function adaptTarget(state: PromptState, target: RouteTarget): RouteTarget {
-  return adaptSteerRole(state, adaptOutputLimit(state, target));
+  return adaptReplayReasoning(state, adaptSteerRole(state, adaptOutputLimit(state, target)));
 }
 
 /**
@@ -3109,6 +3177,37 @@ export interface TurnDeps {
    * Read only at depth 0 -- a delegated sub-turn is part of its parent's call.
    */
   live?: TurnLive;
+  /**
+   * `gnomon task --deadline`: the wall-clock budget this turn runs under.
+   * Absent without one, which is the turn as it always was. The turn adds
+   * the remaining-time notes, clamps each bash command's timeout to the time
+   * left, and ends as `deadline` when `signal` aborts with DEADLINE_ABORT.
+   */
+  deadline?: TurnDeadline;
+  /**
+   * Where each tool call's start and wall time go (TB4), in the order they
+   * ran, sub-turns included (`depth`). Told, never asked: nothing reads it
+   * back. `runTask` passes one and puts it on the record's `volatile`.
+   */
+  toolTimes?: ToolTiming[];
+  /**
+   * The turn runs unattended (`gnomon task`): the transport grace is
+   * `[resilience] task_transport_grace_ms` (config.ts taskResilience).
+   */
+  unattended?: boolean;
+}
+
+/** See TurnDeps.deadline. All times are epoch milliseconds. */
+export interface TurnDeadline {
+  /** The deadline as given */
+  at: number;
+  /** When the turn stops itself: `at` less the margin */
+  stopAt: number;
+  /** When the run started; the budget is `at - startedAt` */
+  startedAt: number;
+  /** Fractions of the budget at which a remaining-time note is sent */
+  notes: number[];
+  marginMs: number;
 }
 
 /** A tool call as `TurnEvents` reports it. */
@@ -3250,7 +3349,7 @@ export interface TurnResult {
   stop_reason: StopReason;
   /** The numbers behind the label — "hit the wall" and "hit the wall at 12
    * when the role declares 40" are different findings. */
-  stop_detail?: { steps?: number; max_steps_total?: number; repeats?: number };
+  stop_detail?: { steps?: number; max_steps_total?: number; repeats?: number; deadline?: string; budget_ms?: number; margin_ms?: number };
   /** Counters already computed by the loop and previously thrown away. */
   counters: TurnCounters;
   /**
@@ -3450,7 +3549,16 @@ export type StopReason =
   // record was flushed before it went (`stop_detail.signal`). Before this, a
   // run killed at a benchmark's time cap left no record at all: 19 of 21
   // capped cells in P2G attempt 1 and 20 in M2 (C5, 2026-11-04).
-  | "killed";
+  | "killed"
+  // `deadline`: `gnomon task --deadline` (or GNOMON_DEADLINE) was given and
+  // the turn reached it less its margin, so it stopped itself: the call in
+  // flight was aborted, no wrap-up was asked for, and the final record and
+  // sealed trail were written as for any other ending. Code 4, the refusal
+  // floor a step_wall lands on, so the exit status is 2. `stop_detail` has
+  // the steps and the deadline. Harbor never signals the process it runs, so
+  // a capped run killed from outside left only a partial record (TB1,
+  // P2G41 2026-11-05, 29 of 29 capped cells).
+  | "deadline";
 
 /**
  * Per-turn tallies. Every field is a count of something the loop already
@@ -3872,6 +3980,17 @@ export interface TurnCounters {
    * turn record's `wire` says `steer_role: "user"`. Absent when none were.
    */
   steer_role_adapted?: number;
+  /**
+   * Remaining-time notes `gnomon task --deadline` added to the turn, one per
+   * request that carried one (`[turn] deadline_notes`). Absent when none were.
+   */
+  deadline_notes?: number;
+  /**
+   * Calls resent because the endpoint refused reasoning_content that gnomon
+   * replayed by default (no `replay_reasoning` declared); replay stays off
+   * for that endpoint for the rest of the session. Absent when none were.
+   */
+  replay_reasoning_refused?: number;
   /**
    * Calls `[approval] after_refusal` sent to a person: each named something a
    * call refused earlier in the turn had named, and would otherwise have run
@@ -4424,7 +4543,7 @@ export async function runAgenticTurn(
     bashAllow: config.roles[role]?.bash_allow,
     bashDeny: config.roles[role]?.bash_deny,
     writeAllow: config.roles[role]?.write_allow,
-    root: resolve(config.gnomonDir, ".."),
+    root: workRootOf(config),
     sandbox,
     // Declared in policy.toml, hashed with the surface. A grant that does not
     // move the surface hash would be a grant nobody could audit.
@@ -4436,6 +4555,10 @@ export async function runAgenticTurn(
     gate,
     approve,
     timeoutMs: toolTimeoutMs(config),
+    // `--deadline`: a bash command's timeout is clamped to the time left
+    // before the stop, less the margin again, so the model is handed the
+    // command's partial output with a margin left to act on it.
+    ...(deps.deadline ? { deadlineAt: deps.deadline.stopAt - deps.deadline.marginMs } : {}),
     maxOutputBytes: 32_000,
     // `max_lines` on the bash and read declarations (CX3, opt-in). Absent
     // unless declared, so a surface that declares neither builds the same
@@ -4571,7 +4694,9 @@ export async function runAgenticTurn(
   // the gate exists to prevent. Nothing else reads it.
   let shellMayHaveTouched = false;
   const verify = resolveVerify(config);
-  const resilience = resolveResilience(config);
+  // An unattended `gnomon task` waits out a provider outage longer
+  // (taskResilience); a session keeps the declared grace.
+  const resilience = deps.unattended ? taskResilience(resolveResilience(config)) : resolveResilience(config);
   let verifyRounds = 0;
   let turnUsage: TokenUsage | undefined;
   let code = 0;
@@ -4695,13 +4820,17 @@ export async function runAgenticTurn(
   // What the worktree looked like BEFORE this turn. Without it, `tree_delta`
   // reports the whole dirty tree as the turn's doing -- including for a
   // read-only role that only called `read`. One git call, taken once.
-  const treeBaseline = treeSnapshot(resolve(state.config.gnomonDir, ".."));
+  const treeBaseline = treeSnapshot(workRootOf(state.config));
   // The reasoning behind the reply a turn ends on, kept for the exchange when
   // either endpoint this role can reach replays reasoning -- not only the one
   // that answered. A turn answered by the fallback, or by the tool-less
   // wrap-up, is followed by a turn that starts on the primary again, and
   // DeepSeek wants the reasoning of every earlier assistant message back.
-  const replaysReasoning = route.target.replayReasoning === true || route.fallback?.replayReasoning === true;
+  // An endpoint that may still turn replay on by default (replayReasoningAuto)
+  // counts: its reasoning is kept, and sent only once replay is on.
+  const mayReplay = (t: RouteTarget | undefined): boolean =>
+    t?.replayReasoning === true || t?.replayReasoningAuto === true;
+  const replaysReasoning = mayReplay(route.target) || mayReplay(route.fallback);
   const keepReasoning = (r: string | undefined): { reasoning?: string } =>
     r && replaysReasoning ? { reasoning: r } : {};
   // A request whose tokens no usage report covers. See TurnCounters.
@@ -4717,6 +4846,8 @@ export async function runAgenticTurn(
   // each tool call (live_record.ts). It copies what it reads; nothing here is
   // read back, so the turn is the same turn with or without it.
   const live = depth === 0 ? deps.live : undefined;
+  // The tool call running now, for the live record (TB4). Unset between calls.
+  let toolInFlight: { tool: string; started_at: string } | undefined;
   live?.attach(() => ({
     role,
     model: usedModel,
@@ -4728,13 +4859,46 @@ export async function runAgenticTurn(
     usage: turnUsage,
     counters,
     modelCalls: measured(),
+    ...(deps.toolTimes ? { toolTimes: deps.toolTimes } : {}),
+    ...(toolInFlight ? { toolInFlight } : {}),
   }));
 
   // A cancelled turn still changed the tree if it got that far, and that is
   // exactly when someone wants to know what it left behind.
   const cancelled = (): TurnResult => {
     flushFold();
-    counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."), treeBaseline);
+    counters.tree_delta = measureTreeDelta(workRootOf(state.config), treeBaseline);
+    // `--deadline` aborted the turn: the same ending, said as what it was.
+    // Code 4, as a step_wall: a declared budget ended the turn.
+    if (deps.deadline && deps.signal?.reason === DEADLINE_ABORT) {
+      const d = deps.deadline;
+      const note =
+        `Stopped at the deadline: ${Math.round((d.at - d.startedAt) / 1000)}s budget, ` +
+        `${Math.round(d.marginMs / 1000)}s margin, after ${steps} tool call(s).`;
+      warn(paint(deps.ui, "yellow", `  [deadline] ${note}`));
+      return {
+        content: `_[gnomon: ${note} The work so far is in the tree.]_`,
+        code: settle(code, 4),
+        model: usedModel,
+        endpoint: usedTarget.endpoint,
+        endpoint_url: usedTarget.url,
+        wire: { ...wireOf(adaptTarget(state, usedTarget)), tools_hash: offeredHash },
+        verify: verifyOutcome,
+        toolSteps: steps,
+        toolLog,
+        usage: turnUsage,
+        stop_reason: "deadline",
+        stop_detail: {
+          steps,
+          deadline: new Date(d.at).toISOString(),
+          budget_ms: d.at - d.startedAt,
+          margin_ms: d.marginMs,
+        },
+        counters,
+        modelCalls: measured(),
+        surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
+      };
+    }
     // No answer was produced, so there is nothing to cite-check. Left unset
     // rather than zeroed: "no citations checked" and "checked, none found"
     // are different facts.
@@ -5008,6 +5172,53 @@ export async function runAgenticTurn(
       turnUsage = addUsage(turnUsage, r.usage);
       countUnmetered(r);
     }
+
+    // Reasoning replayed by default and refused by name: resent once without
+    // it, said on the unsilenceable channel, and off for the session.
+    if (r.replayRejected) {
+      (state.replayReasoningRefused ??= new Set()).add(`${target.url}|${target.model}`);
+      counters.replay_reasoning_refused = (counters.replay_reasoning_refused ?? 0) + 1;
+      deps.progress.stop();
+      warn(
+        paint(
+          deps.ui,
+          "yellow",
+          `  [endpoint] ${target.model} refused the reasoning_content gnomon sends back by default — ` +
+            `resending without it, and not replaying reasoning for the rest of this session. ` +
+            `Declare replay_reasoning = false on the endpoint to skip the refused call.`
+        )
+      );
+      deps.progress.start(`${target.model}`);
+      target = adaptTarget(state, declared);
+      r = await callEndpointWithRetry(
+        target,
+        working,
+        offer,
+        resilience.request_timeout_ms,
+        resilience,
+        announceRetry,
+        deps.ui,
+        deps.signal,
+        state.sessionId,
+        observe
+      );
+      turnUsage = addUsage(turnUsage, r.usage);
+      countUnmetered(r);
+    }
+
+    // An endpoint that declares no replay_reasoning answered a tool call with
+    // reasoning content: from the next request on, it gets that reasoning
+    // back on every assistant message (adaptReplayReasoning). Learned once
+    // per endpoint and model, for the session.
+    if (
+      r.code === 0 &&
+      r.toolCalls.length > 0 &&
+      r.reasoning &&
+      target.replayReasoningAuto &&
+      !state.replayReasoningRefused?.has(`${target.url}|${target.model}`)
+    ) {
+      (state.replayReasoningLearned ??= new Set()).add(`${target.url}|${target.model}`);
+    }
     return r;
   };
 
@@ -5168,8 +5379,38 @@ export async function runAgenticTurn(
     deps.progress.start(`${route.model}`);
   }
 
+  // `--deadline`: the next fraction of the budget whose note is still unsent.
+  let deadlineNoteNext = 0;
   for (;;) {
     if (deps.signal?.aborted) return cancelled();
+
+    // `--deadline`: once the turn has used a declared fraction of its budget
+    // ([turn] deadline_notes), the next request carries ONE short note of the
+    // time left, on the steering channel every mid-turn message uses: a
+    // system message, sent as a user message marked [gnomon] where
+    // steer_role = "user". Fractions passed together send one note. The turn
+    // a person asked for only: a sub-turn is part of its parent's call.
+    if (depth === 0 && deps.deadline) {
+      const d = deps.deadline;
+      const now = Date.now();
+      const used = (now - d.startedAt) / Math.max(1, d.at - d.startedAt);
+      let crossed = false;
+      while (deadlineNoteNext < d.notes.length && used >= d.notes[deadlineNoteNext]!) {
+        deadlineNoteNext++;
+        crossed = true;
+      }
+      if (crossed) {
+        const left = Math.max(0, d.stopAt - now);
+        counters.deadline_notes = (counters.deadline_notes ?? 0) + 1;
+        say(paint(deps.ui, "gray", `  [deadline] ${formatSpan(left)} left of ${formatSpan(d.at - d.startedAt)} — noting it`));
+        working.push({
+          role: "system",
+          content:
+            `Time check: about ${formatSpan(left)} of this task's ${formatSpan(d.at - d.startedAt)} remain ` +
+            `before it is stopped. Plan the rest of the work, and checking it, to finish inside that.`,
+        });
+      }
+    }
 
     // One masking batch before the call, or none. Batches only, never one
     // result per call: between two batches the request grows only at its
@@ -5366,6 +5607,17 @@ export async function runAgenticTurn(
     if (result.code === 0 && result.toolCalls.length > 0 && cutCalls.length === 0) {
       truncationRetried = false;
       consecutiveCut = 0;
+    }
+    // A streak is replies in a row the output limit cut off. Any reply it did
+    // not cut ends one, including one that called no tool -- a blank reply,
+    // or tool-call markup -- that is re-asked below and so does not end the
+    // turn. The re-ask is then allowed again for the next streak: before
+    // v0.4.3 only a usable tool call re-opened it, so cut, blank, cut ended
+    // the turn on the second cut as `truncated`. A cut straight after a
+    // re-asked cut still stands, so this cannot loop (P2G41's two `truncated`
+    // cells were that case, two cuts in a row, and still end the same way).
+    else if (result.code === 0 && result.finishReason !== "length") {
+      truncationRetried = false;
     }
     const limitNow = adaptOutputLimit(state, usedTarget).maxTokens ?? 0;
     const where = limitNow > 0 ? ` (max_tokens = ${limitNow})` : "";
@@ -5820,8 +6072,8 @@ export async function runAgenticTurn(
       // printed after the answer would describe work the reader has already
       // been given conclusions about.
       flushFold();
-      counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."), treeBaseline);
-      stampCitations(counters, result.content, resolve(state.config.gnomonDir, ".."));
+      counters.tree_delta = measureTreeDelta(workRootOf(state.config), treeBaseline);
+      stampCitations(counters, result.content, workRootOf(state.config));
       return {
         content: noteMarkupInAnswer(result.content, counters),
         code: settle(code, result.code),
@@ -5993,8 +6245,8 @@ export async function runAgenticTurn(
       // printed after the answer would describe work the reader has already
       // been given conclusions about.
       flushFold();
-      counters.tree_delta = measureTreeDelta(resolve(state.config.gnomonDir, ".."), treeBaseline);
-      stampCitations(counters, content, resolve(state.config.gnomonDir, ".."));
+      counters.tree_delta = measureTreeDelta(workRootOf(state.config), treeBaseline);
+      stampCitations(counters, content, workRootOf(state.config));
       return {
         // The wall and stall paths are where markup actually survived: a turn
         // cut off mid-emission still returns whatever it had.
@@ -6076,7 +6328,7 @@ export async function runAgenticTurn(
       role: "assistant",
       content: result.content ?? "",
       tool_calls: result.rawToolCalls,
-      // Sent only where the endpoint declares replay_reasoning; see callEndpoint.
+      // Sent only where replay is on (declared, or by default); see callEndpoint.
       ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
     });
 
@@ -6146,6 +6398,8 @@ export async function runAgenticTurn(
       if (between) noteRecords(between);
     }
     const prefetched = new Map<number, Promise<ToolOutcome>>();
+    // When each prefetched call started: its wall time runs from there (TB4).
+    const prefetchStarted = new Map<number, number>();
     // Never prefetch when every call has to ask.
     //
     // Under approval = "always" each prefetched call awaits ctx.approve, which
@@ -6168,6 +6422,7 @@ export async function runAgenticTurn(
         if (i >= roomUnderWall) break;
         const call = result.toolCalls[i]!;
         if (!concurrentSafe(call.name) || !offered.has(call.name)) break;
+        prefetchStarted.set(i, Date.now());
         prefetched.set(i, executeTool(call.name, call.args, ctx, offered));
       }
       // One safe call on its own gains nothing and only adds a code path.
@@ -6250,6 +6505,12 @@ export async function runAgenticTurn(
       if (eventCall) deps.events?.toolStart?.(eventCall);
 
       callApproval = undefined;
+      // TB4: when the call started, kept beside its record. A prefetched call
+      // started when it was prefetched. The live record is told a call is in
+      // flight, so a run killed inside a long command says which and since when.
+      const toolStartedAt = prefetchStarted.get(callIndex) ?? Date.now();
+      toolInFlight = { tool: call.name, started_at: new Date(toolStartedAt).toISOString() };
+      live?.step();
       let outcome: ToolOutcome;
       if (escalated !== null) {
         // Asked of a person this once. The gate reads "always" for this call
@@ -6275,6 +6536,14 @@ export async function runAgenticTurn(
           (await prefetched.get(callIndex)) ??
           (await executeTool(call.name, call.args, ctx, offered));
       }
+      const toolTiming: ToolTiming = {
+        tool: call.name,
+        started_at: new Date(toolStartedAt).toISOString(),
+        duration_ms: Date.now() - toolStartedAt,
+        ...(depth > 0 ? { depth } : {}),
+      };
+      toolInFlight = undefined;
+      deps.toolTimes?.push(toolTiming);
       afterRefusal.observe(call.name, call.args, mapBucket(outcome.code) === "refusal");
       code = worse(code, outcome.code);
       if (outcome.surface_drift) surfaceChanges.push(outcome.surface_drift);
@@ -6379,6 +6648,9 @@ export async function runAgenticTurn(
         // null for unknown. Written as observed, so an unknown is never
         // recorded as the false it used to be read as.
         ...(outcome.worktree_changed !== undefined ? { worktree_changed: outcome.worktree_changed } : {}),
+        // TB4: when it started and how long it ran.
+        started_at: toolTiming.started_at,
+        duration_ms: toolTiming.duration_ms,
         args: deps.audit.text(JSON.stringify(call.args)),
         result: deps.audit.text(outcome.content),
       });
@@ -6501,7 +6773,8 @@ export async function runAgenticTurn(
     // ignore, and the overnight sweep showed weak models grinding 7–9 tasks to
     // the timeout wall), and let the turn continue: a genuine long solve keeps
     // working, a flailer gets repeated reason to conclude.
-    if (callsSinceWrite - callsAtLastNudge >= loop.nudge_after_idle) {
+    // Off (0) by default since v0.4.3: see ResolvedLoop.nudge_after_idle.
+    if (loop.nudge_after_idle > 0 && callsSinceWrite - callsAtLastNudge >= loop.nudge_after_idle) {
       counters.nudges++;
       // A fresh nudge is a fresh chance to answer: clear the blank streak so a
       // later blank is not judged against blanks from 12 calls ago.
@@ -6897,7 +7170,7 @@ export interface TaskRecord {
   stop_reason: StopReason;
   /** The numbers behind `stop_reason`, when it has any. `signal` names the
    * signal that ended a `killed` run. */
-  stop_detail?: { steps?: number; max_steps_total?: number; repeats?: number; signal?: KillSignal };
+  stop_detail?: { steps?: number; max_steps_total?: number; repeats?: number; signal?: KillSignal; deadline?: string; budget_ms?: number; margin_ms?: number };
   /**
    * The declared `[verify]` check's outcome, when one ran. TurnResult has
    * carried it since its comment said a `gnomon task --json` consumer must be
@@ -6960,7 +7233,34 @@ export interface TaskRecord {
      * request went out. docs/CONTRACTS.md §29.
      */
     model_calls?: ModelCallsMeasured;
+    /**
+     * Each tool call's start (ISO 8601) and wall time, in the order they ran
+     * (TB4). Absent when no tool ran. The `tool_call` audit records carry
+     * the same two fields.
+     */
+    tool_calls?: ToolTiming[];
+    /**
+     * The tool call that was running when the record was written: only on a
+     * partial or killed record (live_record.ts), and only inside a call.
+     */
+    tool_in_flight?: { tool: string; started_at: string };
+    /**
+     * `gnomon task --deadline`: the deadline, the budget it left at the start,
+     * the margin the turn stops inside, and where it came from. Absent
+     * without one.
+     */
+    deadline?: { at: string; budget_ms: number; margin_ms: number; source: "flag" | "env" };
   };
+}
+
+/** One tool call's timing, as the record and the trail carry it (TB4). */
+export interface ToolTiming {
+  tool: string;
+  /** ISO 8601, when the call started */
+  started_at: string;
+  duration_ms: number;
+  /** Present, as 1, for a call a delegated sub-turn made */
+  depth?: number;
 }
 
 export interface RunTaskOptions {
@@ -6993,11 +7293,31 @@ export interface RunTaskOptions {
    * caller running tasks in-process (`gnomon skill trial`) keeps its own.
    */
   interrupt?: TaskInterrupt;
+  /**
+   * `gnomon task --deadline` (or GNOMON_DEADLINE): the epoch milliseconds the
+   * run must be over by, and where the value came from. The turn is told the
+   * time left at `[turn] deadline_notes`, bash timeouts are clamped to it,
+   * and at the deadline less `[turn] deadline_margin_ms` the turn stops
+   * itself as `deadline`, with its final record and a sealed trail. Absent:
+   * no clock, as before.
+   */
+  deadline?: { at: number; source: "flag" | "env" };
 }
 
 /** See RunTaskOptions.interrupt. */
 export interface TaskInterrupt {
   kill?: (signal: KillSignal) => TaskRecord | null;
+}
+
+/** A span of milliseconds as "1h 2m", "7m 30s" or "45s", for the deadline notes. */
+export function formatSpan(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return sec > 0 ? `${m}m ${sec}s` : `${m}m`;
+  return `${sec}s`;
 }
 
 /**
@@ -7191,12 +7511,53 @@ export async function runTask(
   // `--yes` answers for nobody; without it, nobody answers and the default is no.
   const shadowApprover = options.yes ? "flag" : "default";
 
+  // `--deadline`: the budget runs from here, the start of the session. The
+  // margin is capped at a tenth of the budget so a short deadline keeps most
+  // of its time. The timer aborts the turn's signal with DEADLINE_ABORT; the
+  // turn reads that as its `deadline` ending. unref'd: it must never be what
+  // keeps a finished run's process alive.
+  const deadlineStart = Date.now();
+  // Each tool call's start and wall time, for `volatile.tool_calls` (TB4).
+  const toolTimes: ToolTiming[] = [];
+  let turnDeadline: TurnDeadline | undefined;
+  let deadlineSignal: AbortSignal | undefined;
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  if (options.deadline) {
+    const settings = resolveDeadline(config);
+    const budget = Math.max(0, options.deadline.at - deadlineStart);
+    const marginMs = Math.min(settings.margin_ms, Math.floor(budget / 10));
+    turnDeadline = {
+      at: options.deadline.at,
+      stopAt: options.deadline.at - marginMs,
+      startedAt: deadlineStart,
+      notes: settings.notes,
+      marginMs,
+    };
+    const ctl = new AbortController();
+    deadlineSignal = ctl.signal;
+    deadlineTimer = setTimeout(() => ctl.abort(DEADLINE_ABORT), Math.max(0, turnDeadline.stopAt - Date.now()));
+    deadlineTimer.unref?.();
+  }
+
   audit.write("session_start", {
     surface_hash,
     // The trail names its harness for the same reason the record does.
     harness: harnessBuild(),
     cwd: process.cwd(),
     mode: "task",
+    // Present only under --deadline, so a run without one writes the record
+    // it always wrote.
+    ...(turnDeadline
+      ? {
+          deadline: {
+            at: new Date(turnDeadline.at).toISOString(),
+            budget_ms: turnDeadline.at - turnDeadline.startedAt,
+            margin_ms: turnDeadline.marginMs,
+            notes: turnDeadline.notes,
+            source: options.deadline!.source,
+          },
+        }
+      : {}),
     role,
     record: auditSettings.record,
     approvals: options.yes ? "granted" : "refused",
@@ -7366,6 +7727,9 @@ export async function runTask(
           audit: auditForTurn,
           shadow: shadow?.turn(stageInfo, shadowApprover),
           live,
+          toolTimes,
+          unattended: true,
+          ...(turnDeadline ? { deadline: turnDeadline, signal: deadlineSignal } : {}),
         });
         shadow?.turnEnd(stageInfo, shadowOutcome(r, stageInfo.t0));
         if (stageState.bootstrap) state.bootstrap = stageState.bootstrap;
@@ -7402,6 +7766,8 @@ export async function runTask(
         // died or the surface could not be used, and the stages after it would
         // be answering a question nobody asked.
         if (r.code === 10 || r.code === 12 || r.code === 13) break;
+        // Out of time: the stages after it have none to run in.
+        if (r.stop_reason === "deadline") break;
         const stop = chainStop(chainGate, r);
         if (stop) {
           note(
@@ -7431,6 +7797,9 @@ export async function runTask(
         audit: auditForTurn,
         shadow: shadow?.turn(turnInfo, shadowApprover),
         live,
+        toolTimes,
+        unattended: true,
+        ...(turnDeadline ? { deadline: turnDeadline, signal: deadlineSignal } : {}),
       });
       shadow?.turnEnd(turnInfo, shadowOutcome(turn, turnInfo.t0));
     }
@@ -7438,6 +7807,7 @@ export async function runTask(
     // Subprocesses outlive the turn otherwise, and `gnomon task` is the entry
     // point scripts run in a loop.
     state.mcp?.close();
+    if (deadlineTimer) clearTimeout(deadlineTimer);
   }
   // A signal ended this run while the turn was in flight, and `interrupt.kill`
   // has already written its record and sealed the trail. The turn ran on only
@@ -7591,6 +7961,18 @@ export async function runTask(
       // Provider tokens and the clock, per request: the backend's measurement,
       // like tokens_in. What gnomon sent is counters.model_calls.
       ...(turn.modelCalls ? { model_calls: turn.modelCalls } : {}),
+      // The clock per tool call (TB4): volatile, as model_ms is.
+      ...(toolTimes.length > 0 ? { tool_calls: toolTimes } : {}),
+      ...(turnDeadline
+        ? {
+            deadline: {
+              at: new Date(turnDeadline.at).toISOString(),
+              budget_ms: turnDeadline.at - turnDeadline.startedAt,
+              margin_ms: turnDeadline.marginMs,
+              source: options.deadline!.source,
+            },
+          }
+        : {}),
     },
   };
   // The live record, final. Before the checkpoint below, which records the
@@ -9741,7 +10123,7 @@ export async function runPromptLoop(
     // Tab after "/" lists every command, so they are discoverable from the
     // prompt rather than only from the docs.
     completer: (line: string) =>
-      completeInput(line, listRoles(config), listEndpoints(config), resolve(config.gnomonDir, "..")),
+      completeInput(line, listRoles(config), listEndpoints(config), workRootOf(config)),
     // Node wants newest FIRST; the file keeps newest last so it reads like a log.
     history: loadHistory(config).slice().reverse(),
     historySize: HISTORY_LIMIT,
@@ -9863,7 +10245,7 @@ export async function runPromptLoop(
   // looked identical to running it from the right one — a session spent
   // working on the harness while its operator believed it was working on their
   // project. The root is the first thing on screen now.
-  const projectRoot = resolve(config.gnomonDir, "..");
+  const projectRoot = workRootOf(config);
   console.log(`Project: ${projectRoot}`);
   if (isSelfTargeting(projectRoot)) {
     const ui0 = uiOf(state);
@@ -10586,7 +10968,7 @@ export async function runPromptLoop(
     // belief and nothing in the loop can contradict it. Say so at the door,
     // with the block to paste, rather than let it be discovered from a bug.
     if (resolveVerify(config) === null) {
-      const found = detectVerifyCommand(resolve(config.gnomonDir, ".."));
+      const found = detectVerifyCommand(workRootOf(config));
       console.log(
         paint(
           ui,

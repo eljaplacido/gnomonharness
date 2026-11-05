@@ -1161,7 +1161,10 @@ describe("model API errors", () => {
     // commands and changed nothing, where fast harnesses gave up in a handful.
     // The stall check misses it because the calls are all different. After the
     // idle threshold a nudge must reach the model telling it to act or conclude.
-    const state: any = { config: loadConfig("../.."), exchanges: [], currentRole: "implement" };
+    // Declared (in memory): the nudge is off by default since v0.4.3.
+    const config: any = loadConfig("../..");
+    config.config = { ...config.config, turn: { ...(config.config?.turn ?? {}), nudge_after_idle: 12 } };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
     const bodies: any[] = [];
     let call = 0;
     await withFetch(

@@ -5,7 +5,8 @@
  * No TUI deps — pure config + validation.
  */
 
-import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync, accessSync, constants as fsConstants } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve, dirname, relative, basename, sep, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
 import { SourceEntry } from "./session.js";
@@ -849,7 +850,10 @@ export function resolveGnomonDir(root?: string): string {
   if (root) {
     const gnomonDir = join(resolve(root), ".gnomon");
     if (!existsSync(gnomonDir)) {
-      throw new Error(`.gnomon/ not found at ${gnomonDir}`);
+      // A read-only directory keeps its surface in the state directory.
+      const kept = join(workdirStateDir(resolve(root)), ".gnomon");
+      if (existsSync(kept)) return kept;
+      throw new Error(`.gnomon/ not found at ${gnomonDir}${readOnlyNote(resolve(root))}`);
     }
     return gnomonDir;
   }
@@ -867,10 +871,78 @@ export function resolveGnomonDir(root?: string): string {
     dir = parent;
   }
 
+  // None in the tree: a read-only working directory keeps its surface in
+  // the state directory instead (workdirStateDir), with the cwd as its root.
+  const kept = join(workdirStateDir(start), ".gnomon");
+  if (existsSync(kept)) return kept;
+
   throw new Error(
-    `No .gnomon/ surface found in ${start} or any parent directory.\n` +
+    `No .gnomon/ surface found in ${start} or any parent directory.${readOnlyNote(start)}\n` +
       `Run \`gnomon init\` in your project root to create one.`
   );
+}
+
+/**
+ * Where gnomon keeps a read-only working directory's state: its `.gnomon/`
+ * surface and every record gnomon writes beside one (`.gnomon-audit/`,
+ * `.gnomon-sessions/`, ...). `$XDG_STATE_HOME/gnomon/workdirs/<key>`, else
+ * `~/.local/state/...`, keyed by the first 16 hex of sha256 over the
+ * directory's absolute path, so each directory has its own and the key
+ * names no path. The directory itself is the root the tools work in
+ * (`GnomonConfig.workRoot`). TB7, P2G41 (2026-11-05): a task whose /app was
+ * read-only failed as "No .gnomon/ surface found", which named the symptom
+ * and not the cause, while opencode solved it.
+ */
+export function workdirStateDir(dir: string): string {
+  const base = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
+  const key = createHash("sha256").update(resolve(dir)).digest("hex").slice(0, 16);
+  return join(base, "gnomon", "workdirs", key);
+}
+
+/** The file in a workdir state directory that names the directory it serves. */
+export const WORKDIR_MARKER = "WORKDIR";
+
+/** Whether this process can create files in `dir`. */
+export function isWritableDir(dir: string): boolean {
+  try {
+    accessSync(dir, fsConstants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Said beside "not found" when the directory cannot be written: the cause. */
+function readOnlyNote(dir: string): string {
+  if (!existsSync(dir) || isWritableDir(dir)) return "";
+  return (
+    `\n${dir} is not writable (a read-only mount, or no write permission), so no .gnomon/ can be ` +
+    `created there. \`gnomon init\` in it keeps the surface and gnomon's records in ` +
+    `${workdirStateDir(dir)} instead, and the tools still work in ${dir}.`
+  );
+}
+
+/**
+ * The directory the tools work in: the project root, which is the parent of
+ * `.gnomon/`, or, for a surface kept in the state directory, the read-only
+ * directory it serves.
+ */
+export function workRootOf(config: Pick<GnomonConfig, "gnomonDir" | "workRoot">): string {
+  return config.workRoot ?? resolve(config.gnomonDir, "..");
+}
+
+/** The directory a state-kept surface serves, or undefined for an ordinary one. */
+function workRootFor(gnomonDir: string): string | undefined {
+  const marker = join(dirname(gnomonDir), WORKDIR_MARKER);
+  if (!existsSync(marker)) return undefined;
+  const base = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
+  if (!resolve(gnomonDir).startsWith(join(base, "gnomon", "workdirs") + sep)) return undefined;
+  try {
+    const dir = readFileSync(marker, "utf-8").trim();
+    return dir && isAbsolute(dir) ? dir : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -1118,7 +1190,7 @@ export function roleMirrorTarget(config: GnomonConfig, role: string): RoleWriteT
  */
 export function reloadConfig(config: GnomonConfig): GnomonConfig {
   return loadConfig(
-    resolve(config.gnomonDir, ".."),
+    workRootOf(config),
     config.profile?.overridden ? config.profile.requested : undefined
   );
 }
@@ -1134,8 +1206,10 @@ export function loadConfig(root?: string, profileOverride?: string): GnomonConfi
   const wanted = profileOverride ?? (cfg.defaults as { role_profile?: string } | undefined)?.role_profile;
   const applied = applyProfile(baseRoles, profiles, wanted);
 
+  const workRoot = workRootFor(gnomonDir);
   return {
     gnomonDir,
+    ...(workRoot ? { workRoot } : {}),
     profile: {
       name: applied.applied,
       requested: wanted,
@@ -1163,6 +1237,13 @@ export function loadConfig(root?: string, profileOverride?: string): GnomonConfi
 /** Complete gnomon configuration */
 export interface GnomonConfig {
   gnomonDir: string;
+  /**
+   * The directory the tools work in, when it is not the parent of
+   * `gnomonDir`: a read-only working directory whose surface is kept in the
+   * state directory (workdirStateDir). Absent for every ordinary surface.
+   * Read through workRootOf.
+   */
+  workRoot?: string;
   /** Which profile was applied to `roles`, and whether a flag chose it. */
   profile?: {
     name?: string;
@@ -1660,6 +1741,21 @@ export interface RouteTarget {
   /** Replay reasoning_content on assistant messages. See resolveReplayReasoning. */
   replayReasoning?: boolean;
   /**
+   * Why `replayReasoning` is on: the surface declared `replay_reasoning =
+   * true` (`declared`), or gnomon turned it on itself (`default`): DeepSeek's
+   * own API, or an undeclared endpoint that sent reasoning back with a tool
+   * call (see `replayReasoningAuto`). Absent exactly when replay is off.
+   */
+  replayReasoningSource?: "declared" | "default";
+  /**
+   * The endpoint does not declare `replay_reasoning`, so replay turns on by
+   * default the first time it answers a tool call with reasoning content
+   * (`reasoning_content` or `reasoning`), and stays on for the session
+   * (prompt_loop.ts adaptReplayReasoning). Absent for a declared value, for
+   * Ollama's /api/chat, and when replay is already on.
+   */
+  replayReasoningAuto?: true;
+  /**
    * Send gnomon's mid-conversation messages as user messages. Set only when
    * it is `user`, declared or learned from a refusal; absent means `system`,
    * so a target that never asked for it is the object it always was.
@@ -1901,13 +1997,18 @@ export function resolveSteerRole(endpoint: { steer_role?: unknown } | undefined)
 const REPLAY_REASONING_HOSTS = [/(^|\.)api\.deepseek\.com$/];
 
 /**
- * Whether an endpoint gets `reasoning_content` back on assistant messages.
+ * Whether an endpoint gets `reasoning_content` back on assistant messages
+ * from its first request.
  *
- * Declared wins. Undeclared it is off, except for a host listed above, because
- * the field is not part of OpenAI's message schema and strict servers refuse
- * extra message fields: opencode's Console Go answered gnomon's surplus
- * `tool_name` with "400 Extra inputs are not permitted". Ollama's /api/chat
- * calls it `thinking` and is never sent it.
+ * Declared wins. Undeclared it is off at the start, except for a host listed
+ * above, and turns on at run time once the endpoint answers a tool call with
+ * reasoning (replayFieldsOf, prompt_loop.ts adaptReplayReasoning): the field
+ * is not part of OpenAI's message schema and strict servers refuse extra
+ * message fields (opencode's Console Go answered gnomon's surplus
+ * `tool_name` with "400 Extra inputs are not permitted"), so an endpoint that
+ * never shows reasoning is never sent it, and one that refuses it by name is
+ * resent the call without it. Ollama's /api/chat calls it `thinking` and is
+ * never sent it.
  */
 export function resolveReplayReasoning(endpoint: {
   url?: string;
@@ -1923,6 +2024,29 @@ export function resolveReplayReasoning(endpoint: {
     return false;
   }
   return REPLAY_REASONING_HOSTS.some((re) => re.test(host));
+}
+
+/**
+ * The replay fields of a route target: `replayReasoning`, why it is on, and
+ * whether it may still turn on at run time.
+ *
+ * v0.4.3: undeclared means "on once the endpoint shows it reasons". An
+ * endpoint that answers a tool call with reasoning content gets it back on
+ * every later assistant message, which every 2026 open-weights family asks
+ * for (DeepSeek V4, GLM-5, Kimi K3, Qwen3.6+, MiniMax), and which halved
+ * reasoning per cell in P2G41 (A41 153k vs B41 77k, B41 replaying). An
+ * endpoint that never sends reasoning is never sent any, so its requests are
+ * the bytes they were. `replay_reasoning = false` still turns it off.
+ */
+export function replayFieldsOf(
+  endpoint: { url?: string; kind?: EndpointKind; replay_reasoning?: unknown },
+  unclear: EndpointKind = "ollama"
+): Pick<RouteTarget, "replayReasoning" | "replayReasoningSource" | "replayReasoningAuto"> {
+  const on = resolveReplayReasoning(endpoint, unclear);
+  const declared = typeof endpoint.replay_reasoning === "boolean";
+  if (on) return { replayReasoning: true, replayReasoningSource: declared ? "declared" : "default" };
+  if (declared || endpointKind(endpoint, unclear) === "ollama") return { replayReasoning: false };
+  return { replayReasoning: false, replayReasoningAuto: true };
 }
 
 /**
@@ -3181,7 +3305,7 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
       fatal: true,
     });
   } else if (Array.isArray(raw)) {
-    const root = resolve(config.gnomonDir, "..");
+    const root = workRootOf(config);
     for (const entry of raw) {
       if (typeof entry !== "string") continue;
       if (isAbsolute(entry)) {
@@ -3743,7 +3867,7 @@ export function routeRole(
     streamTotalMs: resilience.stream_total_timeout_ms,
     maxTokens: resolveMaxTokens(config, roleDef, endpoint),
     ...contextWindowOf(config, endpoint.max_context_tokens, { url, kind, model }),
-    replayReasoning: resolveReplayReasoning(endpoint),
+    ...replayFieldsOf(endpoint),
     ...(resolveSteerRole(endpoint) === "user" ? { steerRole: "user" as const } : {}),
   };
 
@@ -3773,7 +3897,7 @@ export function routeRole(
       streamTotalMs: resilience.stream_total_timeout_ms,
       maxTokens: resolveMaxTokens(config, roleDef, fbEndpoint),
       ...contextWindowOf(config, fbEndpoint?.max_context_tokens, { url: fbUrl, kind: fbKind, model: fb.model }),
-      replayReasoning: resolveReplayReasoning(fbEndpoint ?? { url: fb.url }, "openai"),
+      ...replayFieldsOf(fbEndpoint ?? { url: fb.url }, "openai"),
       ...(resolveSteerRole(fbEndpoint) === "user" ? { steerRole: "user" as const } : {}),
     };
   }
@@ -3965,7 +4089,7 @@ function collectSurface(baseDir: string): SourceEntry[] {
 export function resolveExtraRoots(config: GnomonConfig): string[] {
   const raw = (config.policy?.sandbox as { extra_roots?: unknown } | undefined)?.extra_roots;
   if (!Array.isArray(raw)) return [];
-  const root = resolve(config.gnomonDir, "..");
+  const root = workRootOf(config);
   return raw
     .filter((r): r is string => typeof r === "string" && r.trim().length > 0)
     .map((r) => (isAbsolute(r) ? resolve(r) : resolve(root, r)));
@@ -4146,6 +4270,17 @@ export interface ResolvedResilience {
    */
   transport_grace_declared: boolean;
   /**
+   * The transport grace for an unattended `gnomon task`: `[resilience]
+   * task_transport_grace_ms`, 180 s when undeclared. Nobody is there to retry
+   * a run that gave up, so a provider outage is waited out longer than in a
+   * session. P2G41 (2026-11-05) lost music-harmony to 503s that outlasted
+   * the 60 s grace, and bun-sourcemap-leak to 502s in every arm. A declared
+   * `transport_grace_ms` with no task value keeps its word in a task too.
+   */
+  task_transport_grace_ms: number;
+  /** Whether the surface wrote task_transport_grace_ms down */
+  task_transport_grace_declared: boolean;
+  /**
    * A streamed reply that sends nothing for this long has stalled, and the
    * request is aborted. Counted from the first byte of the body; before it,
    * `request_timeout_ms` is the wait, as it is for a whole unstreamed reply.
@@ -4169,6 +4304,23 @@ export interface ResolvedResilience {
  * up on a socket. What would break determinism is retrying a *different* number
  * of times per machine, which is why the count is hashed with everything else.
  */
+/** `[resilience] task_transport_grace_ms` when undeclared. */
+export const TASK_TRANSPORT_GRACE_MS = 180_000;
+
+/**
+ * The resilience an unattended `gnomon task` runs with: the transport grace
+ * is `task_transport_grace_ms` when declared; else `transport_grace_ms` when
+ * declared; else 180 s. A refused socket on this machine still gets the
+ * short grace unless one of the two is declared (callEndpointWithRetry).
+ */
+export function taskResilience(r: ResolvedResilience): ResolvedResilience {
+  if (r.task_transport_grace_declared) {
+    return { ...r, transport_grace_ms: r.task_transport_grace_ms, transport_grace_declared: true };
+  }
+  if (r.transport_grace_declared) return r;
+  return { ...r, transport_grace_ms: r.task_transport_grace_ms };
+}
+
 export function resolveResilience(config: GnomonConfig): ResolvedResilience {
   const r = (config.config as { resilience?: Record<string, unknown> } | undefined)
     ?.resilience;
@@ -4186,6 +4338,8 @@ export function resolveResilience(config: GnomonConfig): ResolvedResilience {
     // endpoint that is still unreachable afterwards ends the turn.
     transport_grace_ms: Math.floor(num(r?.transport_grace_ms, 60_000)),
     transport_grace_declared: num(r?.transport_grace_ms, -1) >= 0,
+    task_transport_grace_ms: Math.floor(num(r?.task_transport_grace_ms, TASK_TRANSPORT_GRACE_MS)),
+    task_transport_grace_declared: num(r?.task_transport_grace_ms, -1) >= 0,
     // 300 s of silence: the longest gap a live stream is seen to leave is a
     // reasoning model thinking with its reasoning hidden, and Codex's
     // stream_idle_timeout_ms defaults to the same figure for that reason.
@@ -4282,6 +4436,14 @@ export interface ResolvedLoop {
   stall_repeats: number;
   /**
    * Calls without a write before the anti-flailing nudge fires, and re-fires.
+   * 0 is off, the default since v0.4.3.
+   *
+   * Off because the measurements say so: N1 (2026-11, pre-registered, gx10
+   * lane) stopped for futility at its interim look, nudge on 35 vs off 37
+   * solved of 61 paired tasks (McNemar p = 0.73, conditional power 0.013); S1
+   * (2026-11-03) found the user-role nudge no help (15 vs 19) at +35% tokens;
+   * and opencode, the peer it was measured against, has no idle nudge at all.
+   * A declared number still turns it on.
    *
    * `stall_repeats` catches a model repeating one call verbatim; it does not
    * catch the other measured failure -- many *different* diagnostic calls, none
@@ -4319,7 +4481,7 @@ export const LOOP_DEFAULTS: ResolvedLoop = {
   max_steps: 12,
   legs: 8,
   stall_repeats: 3,
-  nudge_after_idle: 12,
+  nudge_after_idle: 0,
   converge_refire: 6,
 };
 
@@ -4376,10 +4538,77 @@ export function resolveLoop(config: GnomonConfig): ResolvedLoop {
     // `[].every(...)`, which is `true`. Zero would declare a stall on the first
     // tool call of every turn.
     stall_repeats: Math.max(1, Math.floor(num(l?.stall_repeats, d.stall_repeats))),
-    // Both are "calls since the last one", so 0 would fire on every single call
-    // and turn a nudge into a wall of system messages.
-    nudge_after_idle: Math.max(1, Math.floor(num(l?.nudge_after_idle, d.nudge_after_idle))),
+    // 0 is off, the default, as 0 is "never" for read_only_converge_after.
+    // Any other number is "calls since the last one", floored at 1.
+    nudge_after_idle: ((n) => (n === 0 ? 0 : Math.max(1, Math.floor(n))))(
+      num(l?.nudge_after_idle, d.nudge_after_idle)
+    ),
+    // "Calls since the last one", so 0 would fire on every single call and
+    // turn a push into a wall of system messages.
     converge_refire: Math.max(1, Math.floor(num(l?.converge_refire, d.converge_refire))),
+  };
+}
+
+/**
+ * How `gnomon task --deadline` spends its wall-clock budget: `[turn]
+ * deadline_notes` and `[turn] deadline_margin_ms`. Read only when a deadline
+ * is given, so a surface that declares them and a run without a deadline
+ * behave exactly as before.
+ */
+export interface ResolvedDeadline {
+  /**
+   * Fractions of the budget, in (0, 1), sorted. When the turn has used one,
+   * the next model request carries one short note of the time left, on the
+   * steering channel (a system message mid-turn; a user message marked
+   * `[gnomon]` where `steer_role = "user"`). [] sends none.
+   */
+  notes: number[];
+  /**
+   * How far before the deadline the turn stops itself, and how far inside it
+   * a bash command's timeout is clamped. Capped at a tenth of the budget, so
+   * a short deadline keeps most of its time.
+   */
+  margin_ms: number;
+}
+
+export const DEADLINE_DEFAULTS: ResolvedDeadline = { notes: [0.5, 0.8], margin_ms: 30_000 };
+
+export function resolveDeadline(config: GnomonConfig): ResolvedDeadline {
+  const t = (config.config as { turn?: Record<string, unknown> } | undefined)?.turn;
+  const raw = t?.deadline_notes;
+  const notes = Array.isArray(raw)
+    ? [...new Set(raw.filter((x): x is number => typeof x === "number" && x > 0 && x < 1))].sort((a, b) => a - b)
+    : DEADLINE_DEFAULTS.notes;
+  const m = t?.deadline_margin_ms;
+  const margin_ms = typeof m === "number" && isFinite(m) && m >= 0 ? Math.floor(m) : DEADLINE_DEFAULTS.margin_ms;
+  return { notes, margin_ms };
+}
+
+/**
+ * Read a `--deadline` / `GNOMON_DEADLINE` value: whole or fractional seconds
+ * from now, or an ISO 8601 time. Returns the epoch milliseconds it names, or
+ * an error saying why it is not one. A time already past is an error: a run
+ * started after its own deadline has nothing to spend.
+ */
+export function parseDeadline(value: string, now: number = Date.now()): { at: number } | { error: string } {
+  const v = value.trim();
+  if (/^\d+(\.\d+)?$/.test(v)) {
+    const secs = Number(v);
+    if (!(secs > 0)) return { error: `--deadline ${v}: a deadline of 0 seconds leaves nothing to run in` };
+    return { at: now + Math.round(secs * 1000) };
+  }
+  // An ISO time names its zone or it is not one moment: "2026-11-05T12:00"
+  // means a different instant on every machine.
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/.test(v)) {
+    const at = Date.parse(v);
+    if (Number.isNaN(at)) return { error: `--deadline ${v}: not a valid time` };
+    if (at <= now) return { error: `--deadline ${v}: that time has already passed` };
+    return { at };
+  }
+  return {
+    error:
+      `--deadline ${v}: give seconds from now (e.g. 1800) or an ISO 8601 time with a zone ` +
+      `(e.g. 2026-11-05T12:30:00Z)`,
   };
 }
 

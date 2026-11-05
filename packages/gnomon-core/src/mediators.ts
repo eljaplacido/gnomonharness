@@ -307,8 +307,9 @@ export class CallLedger {
 
     let est = 0;
     for (const m of o.messages) est += estimate(m.content);
-    // Sent only to an OpenAI-shaped endpoint that declares replay_reasoning
-    // (callEndpoint's wire filter): counted only there.
+    // Sent only to an OpenAI-shaped endpoint with replay on -- declared, or
+    // on by default once it answered a tool call with reasoning
+    // (callEndpoint's wire filter, on the adapted target): counted only there.
     const carries = (o.target.kind ?? "ollama") !== "ollama" && o.target.replayReasoning === true;
     let replayed = 0;
     let lead = 0;

@@ -125,10 +125,10 @@ interface Run {
   done: Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>;
 }
 
-function gnomon(root: string, args: string[], stdin: "ignore" | "pipe" = "ignore"): Run {
+function gnomon(root: string, args: string[], stdin: "ignore" | "pipe" = "ignore", env: Record<string, string> = {}): Run {
   // The cwd stays the package's, where `tsx` resolves; --dir names the project.
   const child = spawn(process.execPath, ["--import", "tsx", CLI, ...args, "--dir", root], {
-    env: { ...process.env, GNOMON_NO_UPDATE_CHECK: "1" },
+    env: { ...process.env, GNOMON_NO_UPDATE_CHECK: "1", ...env },
     stdio: [stdin, "pipe", "pipe"],
   });
   let stdout = "";
@@ -172,6 +172,38 @@ async function inFlight(root: string, id: string, run: Run): Promise<Record<stri
   run.child.kill("SIGKILL");
   throw new Error(`the turn never got in flight: ${JSON.stringify(out)}`);
 }
+
+describe("gnomon task --deadline: a capped run stops itself (TB1)", () => {
+  // Harbor never signals the process it runs, so a run killed from outside
+  // left a partial record. Under --deadline the run ends itself first, with
+  // the final record a run that concludes leaves.
+  it("stops a turn hung on a model call before the deadline: exit 2, the record printed and final, the trail sealed", async () => {
+    const root = tmp("gnomon-deadline-");
+    await surface(root, "deadline", "hang-read", true);
+    const run = gnomon(root, ["task", "say hi", "--json", "--deadline", "6"]);
+    const r = await run.done;
+    expect(r.code, r.stderr).toBe(2);
+    const printed = JSON.parse(r.stdout);
+    expect(printed).toMatchObject({ stop_reason: "deadline", bucket: "refusal", tool_steps: 1 });
+    expect(printed.volatile.deadline).toMatchObject({ source: "flag" });
+    expect(liveRecord(root)).toMatchObject({ record_state: "final", stop_reason: "deadline" });
+    const trail = trailOf(root);
+    expect(trail.records.slice(-2).map((x) => x.kind)).toEqual(["turn", "session_end"]);
+    expect(verifyTrail(trail.path)).toMatchObject({ ok: true, sealed: true });
+  }, 90_000);
+
+  it("reads GNOMON_DEADLINE when the flag is absent, and refuses a value that is not a deadline with exit 10", async () => {
+    const root = tmp("gnomon-deadline-env-");
+    await surface(root, "deadline-env", "hang-read", true);
+    const env = await gnomon(root, ["task", "say hi", "--json"], "ignore", { GNOMON_DEADLINE: "6" }).done;
+    expect(env.code, env.stderr).toBe(2);
+    expect(JSON.parse(env.stdout).volatile.deadline).toMatchObject({ source: "env" });
+
+    const bad = await gnomon(root, ["task", "say hi", "--json", "--deadline", "soon"]).done;
+    expect(bad.code).toBe(10);
+    expect(bad.stderr).toMatch(/--deadline soon: give seconds from now/);
+  }, 90_000);
+});
 
 describe("a run killed mid-turn", () => {
   it.skipIf(!POSIX_SIGNALS)("SIGTERM: gnomon task --json prints the killed record, writes it final beside a sealed trail, and dies of the signal", async () => {

@@ -87,8 +87,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2471 TypeScript tests (1953 core, 493 cli, 18
-> natives, 7 tui) and 61 Rust tests — **2532 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2499 TypeScript tests (1978 core, 496 cli, 18
+> natives, 7 tui) and 61 Rust tests — **2560 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -868,16 +868,19 @@ all_refused_notice = 3            # every call to one tool refused this often �
 max_steps = 12                    # tool calls per leg when a role declares no max_steps
 legs = 8                          # max_steps_total defaults to max_steps × legs
 stall_repeats = 3                 # identical calls in a row that count as going in circles
-nudge_after_idle = 12             # calls without changing a file before the model is nudged
+nudge_after_idle = 0              # off; N calls without changing a file before the model is nudged
 converge_refire = 6               # calls between convergence re-pushes past converge_after
+deadline_notes = [0.5, 0.8]       # gnomon task --deadline: budget fractions that get a time-left note
+deadline_margin_ms = 30000        # gnomon task --deadline: stop this long before it (at most a tenth)
 ```
 
 Every value shown is the default, so a surface that omits the block — or writes
 it out exactly as above — behaves as it always did. What changes is that the
-numbers are now *declarable*, and therefore hashed. The one exception is
-`max_consecutive_malformed`, which arrived with a behaviour change of its own:
-before it, unusable tool calls were re-asked with no bound but the step wall
-(markup once, then recorded as `answered`).
+numbers are now *declarable*, and therefore hashed. Two exceptions arrived with
+a behaviour change of their own: `max_consecutive_malformed` (before it,
+unusable tool calls were re-asked with no bound but the step wall, markup once
+and then recorded as `answered`), and `nudge_after_idle`, `12` until v0.4.3 and
+now `0`, off (below).
 
 **Why this block exists.** `.gnomon/` is supposed to declare everything that
 decides how the agent acts, content-hashed, with that hash stamped on every
@@ -901,17 +904,20 @@ nothing in the record could say so.
 | `max_steps` | The default for a role that declares no `max_steps`. The role's own value wins where it has one. `/roles` prints which of the two you are getting. |
 | `legs` | `max_steps_total` defaults to `max_steps × legs`. `max_steps` is a checkpoint — the harness compacts and continues — and this is how many checkpoints there are before the wall. `1` restores stop-at-the-first-checkpoint. |
 | `stall_repeats` | Identical consecutive tool calls that mean the model is going in circles. Ends the turn with `stop_reason: stall`. |
-| `nudge_after_idle` | Calls without changing a file before the model is nudged to act or conclude — and re-nudged every this-many after that. A nudge, not a wall: persistence is what wins hard-but-solvable tasks. A shell call counts only when gnomon saw that it changed nothing. It walks a tree of under 2,000 files, asks `git status` about a bigger one in a git work tree, and walks one outside git, where past 20,000 files the answer is unknown and the call is not counted. |
+| `nudge_after_idle` | Off (`0`) by default since v0.4.3: N1 (2026-11, pre-registered) stopped for futility at its interim look, 35 tasks solved with the nudge against 37 without, of 61 pairs; S1 found the user-role nudge no help at +35% tokens; and opencode has none. A number turns it on: calls without changing a file before the model is nudged to act or conclude — and re-nudged every this-many after that. A nudge, not a wall: persistence is what wins hard-but-solvable tasks. A shell call counts only when gnomon saw that it changed nothing. It walks a tree of under 2,000 files, asks `git status` about a bigger one in a git work tree, and walks one outside git, where past 20,000 files the answer is unknown and the call is not counted. |
 | `converge_refire` | Calls between convergence re-pushes once `converge_after` is reached. A single "submit what you have" is easy to ignore. |
+| `deadline_notes` | Read only under `gnomon task --deadline`. Fractions of the wall-clock budget, in (0, 1); when the turn has used one, its next request carries one short note of the time left, as a mid-turn system message (a user message marked `[gnomon]` under `steer_role = "user"`). `[]` sends none. |
+| `deadline_margin_ms` | Read only under `gnomon task --deadline`. The turn stops itself this long before the deadline, and a `bash` command's timeout is clamped to end one margin before that, so the model gets the partial output. Capped at a tenth of the budget. |
 
 Values are floored where a zero would mean the opposite of what it reads:
 `max_run_notes = 0` would keep *every* note (`slice(-0)` returns the whole
 array) and `stall_repeats = 0` would declare a stall on the first tool call of
 every turn, so both floor at 1. `max_consecutive_empty`,
-`max_consecutive_malformed` and `all_refused_notice` accept `0`, where it
-honestly means "never".
+`max_consecutive_malformed`, `all_refused_notice` and `nudge_after_idle`
+accept `0`, where it honestly means "never".
 
-**Known limit.** `[turn]` declares ten of the loop's numbers, not all of them.
+**Known limit.** `[turn]` declares ten of the loop's numbers (and the two the
+deadline reads), not all of them.
 The A-B-A-B alternation test (8-call window, 2 distinct signatures) and the
 *wording* of the nudge and convergence messages are still compiled into the
 harness and still outside the surface hash. The reconciliation document names

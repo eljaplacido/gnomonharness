@@ -1,0 +1,40 @@
+{
+  "v": 1,
+  "_comment": [
+    "docs/CONTRACTS.md section 30: long hosted-model tasks (v0.4.3 candidate, P2G41 2026-11-05).",
+    "packages/gnomon-core/src/long_tasks.test.ts asserts the code's defaults and shapes equal",
+    "this file. The two default changes (replay on, nudge off) ship only once the",
+    "pre-registered H3 benchmark confirms them."
+  ],
+  "defaults": {
+    "turn.nudge_after_idle": 0,
+    "turn.deadline_notes": [0.5, 0.8],
+    "turn.deadline_margin_ms": 30000,
+    "resilience.task_transport_grace_ms": 180000,
+    "resilience.transport_grace_ms": 60000
+  },
+  "wire.replay_reasoning_source": ["declared", "default"],
+  "deadline": {
+    "sources": ["flag", "env"],
+    "env": "GNOMON_DEADLINE",
+    "stop_reason": "deadline",
+    "bucket": "refusal",
+    "exit": 2,
+    "invalid_exit": 10,
+    "stop_detail_keys": ["steps", "deadline", "budget_ms", "margin_ms"],
+    "session_start_keys": ["at", "budget_ms", "margin_ms", "notes", "source"],
+    "volatile_keys": ["at", "budget_ms", "margin_ms", "source"],
+    "margin_cap_fraction": 0.1
+  },
+  "tool_timing": {
+    "tool_call_record_keys": ["started_at", "duration_ms"],
+    "volatile_tool_calls_keys": ["tool", "started_at", "duration_ms"],
+    "volatile_tool_in_flight_keys": ["tool", "started_at"]
+  },
+  "counters": ["replay_reasoning_refused", "deadline_notes"],
+  "workdir_state": {
+    "base": "$XDG_STATE_HOME/gnomon/workdirs, else ~/.local/state/gnomon/workdirs",
+    "key": "first 16 hex of sha256 over the directory's absolute path",
+    "marker": "WORKDIR"
+  }
+}

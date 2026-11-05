@@ -27,6 +27,9 @@ process.env.XDG_DATA_HOME = isolated;
 // the fallback must not land on the real home directory either.
 process.env.HOME = isolated;
 process.env.USERPROFILE = isolated;
+// A read-only working directory keeps its surface under XDG_STATE_HOME
+// (config.ts workdirStateDir): never the real one.
+process.env.XDG_STATE_HOME = join(isolated, "state");
 
 // Nothing here should reach a network. A test that tries is a test with a bug,
 // and it should fail loudly rather than depend on whether this machine happens

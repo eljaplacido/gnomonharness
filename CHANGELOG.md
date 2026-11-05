@@ -26,7 +26,66 @@
 
 ## [Unreleased]
 
+v0.4.3 candidate: long hosted-model tasks, from the P2G41 root causes
+(2026-11-05). **The two default changes (reasoning replay on, idle nudge off)
+ship only once the pre-registered H3 benchmark confirms them.** Everything
+else is opt-in, record-only or robustness, and request bodies are
+byte-identical to master with the two defaults disabled explicitly
+(`replay_reasoning = false`, `nudge_after_idle = 12`).
+
+### Changed (defaults; gated on H3)
+
+- **Reasoning replay is on by default for an endpoint that reasons.** An
+  OpenAI-shaped endpoint that declares no `replay_reasoning` and answers a
+  tool call with reasoning content (`reasoning_content` or `reasoning`) gets
+  that reasoning back on every assistant message from the next request on,
+  for the session. P2G41: A41 (no replay) spent 153k reasoning tokens a cell
+  and capped on slow steps 19 times; B41 (replay) spent 77k. An endpoint that
+  sends no reasoning is sent none. A 400 naming `reasoning_content` is resent
+  once without it and replay stays off for that endpoint
+  (`counters.replay_reasoning_refused`). `replay_reasoning = false` still turns
+  it off. The turn record's `wire` adds `replay_reasoning_source`:
+  `declared` or `default`.
+- **The idle nudge is off by default.** `[turn] nudge_after_idle` defaults to
+  `0`, off; a number turns it on as before. N1 (pre-registered) stopped for
+  futility at its interim look: 35 solved with the nudge against 37 without,
+  of 61 pairs (McNemar p = 0.73). `gnomon init` writes `nudge_after_idle = 0`
+  with the reason.
+
+### Added
+
+- **`gnomon task --deadline <seconds|ISO time>`** (or `GNOMON_DEADLINE`),
+  opt-in. The turn is told the time left at `[turn] deadline_notes` (default
+  50% and 80%), as a mid-turn system message (`[gnomon]` user message under
+  `steer_role = "user"`); a `bash` timeout is clamped to the time left; and at
+  the deadline less `[turn] deadline_margin_ms` (30 s, at most a tenth of the
+  budget) the turn stops itself: new `stop_reason` `deadline` (13 values,
+  `conformance/stop_reason.json`), exit 2, the record final, the trail sealed.
+  Harbor never signals the process it runs, so capped runs left only partial
+  records (TB1: 29 of 29 in P2G41). Documented for benchmark adapters in
+  docs/GUIDE.md §7.2.
+- **Tool timing (TB4).** Each tool call's `started_at` and `duration_ms` on
+  its `tool_call` audit record and in the task record's
+  `volatile.tool_calls`; a partial record names the call in flight
+  (`volatile.tool_in_flight`).
+- **`[resilience] task_transport_grace_ms`**, default 180 s: an unattended
+  `gnomon task` waits out a provider outage longer than a session (60 s).
+  A declared `transport_grace_ms` with no task value is honoured in a task.
+  P2G41 lost music-harmony to 503s that outlasted 60 s.
+
 ### Fixed
+
+- **A read-only working directory (TB7).** `gnomon init` in a directory it
+  cannot write keeps the surface and gnomon's records in
+  `$XDG_STATE_HOME/gnomon/workdirs/<key>`, keyed by the directory's path, and
+  says why; `gnomon task` there finds it, with the directory as the tools'
+  root. "No .gnomon/ surface found" now names the cause when the directory is
+  read-only. P2G41's risk-scorer-replay could not start in a read-only `/app`.
+- **The re-ask after an output-limit truncation is once per streak.** A
+  reply the limit did not cut (a blank one, markup) now ends a streak, so cut,
+  blank, cut re-asks the second cut instead of letting it stand as
+  `truncated`. Two cuts in a row still end the turn (P2G41's two `truncated`
+  cells were that case).
 
 - **A turn that ended because its endpoint failed no longer says it was
   answered.** A `gnomon task` turn whose last model request failed (no key,
