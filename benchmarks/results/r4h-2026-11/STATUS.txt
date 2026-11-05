@@ -1,1 +1,55 @@
 2026-11-04T21:12:27Z PREP R4H prepared and pre-registered (apparatus, offline tests, pre-trace, wire tests A/B/C); NOT launched; no cell, no lane, no spend
+2026-11-05T12:13:40Z CHAIN-R4H R4H chain start (pid 2691791, pgid 2691791); builds OLD d59e6c198f91d1469198b0677c008323f82d0345, NEW c511b8105fb2187423d21becbe3b19f8af2b80e5 (v0.4.1); new-cell deadline 2026-11-05T22:00:00Z
+2026-11-05T12:13:40Z CHAIN-R4H thresholds (S1 Amendment 1's): start after 15 consecutive idle samples (60 s apart; idle = < 6500 MiB, < 15 %, no llama-server.exe, m1-vllm not running); yield when GPU memory > the lane's warm level + 1500 MiB for 2 samples (30 s apart), or our server is gone, or another llama-server / m1-vllm runs
+2026-11-05T12:13:42Z CHAIN-R4H offline test test_hubwatch_s1.sh: 50 passed, 0 failed
+2026-11-05T12:14:11Z CHAIN-R4H offline test test_run_r4h.py: 46 passed, 0 failed
+2026-11-05T12:15:06Z CHAIN-R4H offline test test_chain_glue_r4h.sh: 33 passed, 0 failed
+2026-11-05T12:15:07Z CHAIN-R4H offline test test_collect_r4h.py: 17 passed, 0 failed
+2026-11-05T12:15:07Z CHAIN-R4H idle wait: gpu_used=1900 gpu_total=32607 util=0 llama=[] wsl=[] (1/15 idle; sampled 1)
+2026-11-05T12:29:12Z CHAIN-R4H idle wait: hub idle for 15 consecutive samples (15 min): gpu_used=1890 gpu_total=32607 util=0 llama=[] wsl=[]
+2026-11-05T12:29:14Z CHAIN-R4H hub scripts: start=ce69d7d048faaf9ad1e8f3803ae1837d7da8284d9597947ab8f65e386d7233bf stop=ec69465d003c16c13b1dea836c2833ee01f6651872c93d78511ddf0d1706cc09 stopme_txt=True server_log=647724 
+2026-11-05T12:29:36Z CHAIN-R4H hub weights match R1H's checksums (model and DFlash draft)
+2026-11-05T12:29:36Z CHAIN-R4H saved the hub's bud-lane server log as lane-before-r4h-server.log.gz (55418 B)
+2026-11-05T12:29:37Z CHAIN-R4H lane: hub state before start: gpu_used=1882 llama=[] wsl=[] p18380=[]
+2026-11-05T12:29:37Z CHAIN-R4H lane: starting C:\dev\bud-lane\start-server-r1h-np2.ps1 (R1H's, unchanged) via Win32_Process Create, as R1H did
+2026-11-05T12:29:37Z CHAIN-R4H watchdog started (pid 2709796): every 30 s, yield after 2 samples over the limit
+2026-11-05T12:29:37Z CHAIN-R4H lane: create rc=0 pid=33100
+2026-11-05T12:29:37Z CHAIN-R4H tunnel-r4h started by this chain (pid 2709809, pgid 2709809): gx10 127.0.0.1:19180 -> hub 127.0.0.1:18380
+2026-11-05T12:29:52Z CHAIN-R4H lane: qwen3.6-35b answering on 127.0.0.1:19180 (llama-server pid 41636 on the hub); hub gpu_used=26425 llama=[41636:C:\dev\bud-lane\llama\llama-server.exe] wsl=[] p18380=[41636]
+2026-11-05T12:29:52Z CHAIN-R4H lane: props and slots match R1H's lane (build, model, alias, template, caps, 2 slots x n_ctx, speculative, server defaults)
+2026-11-05T12:30:11Z CHAIN-R4H lane: warm GPU level 26589 MiB (desktop baseline 1890 MiB, so the lane's footprint is 24699 MiB; R1H's: 24543 MiB); yield limit 28089 MiB of 32607 MiB
+2026-11-05T12:30:22Z R4HRUN R4H smoke: OLD=d59e6c198f91d1469198b0677c008323f82d0345 NEW=c511b8105fb2187423d21becbe3b19f8af2b80e5 attempts=1 cells=3 finished already=0 gpu_slots=2 upstream=http://127.0.0.1:19180 budget=$5.00 (ledger $0.000) deadline=2026-11-05T22:00:00Z
+2026-11-05T12:30:22Z R4HRUN ATTEMPT 1: 1 unit(s), 3 cells
+2026-11-05T12:30:22Z R4HRUN START r4h-s-old-hello-world build=OLD slot=gpu load=1.0
+2026-11-05T12:30:22Z R4HRUN START r4h-s-new-hello-world build=NEW slot=gpu2 load=1.0
+2026-11-05T12:30:22Z R4HRUN START r4h-s-neg-hello-world build=NEW slot=cloud load=1.0
+2026-11-05T12:31:14Z R4HRUN END   r4h-s-neg-hello-world (tb exit 0) local_chat=0 cloud_chat=4 usd=0.0004 r4h_total_usd=0.000 aborts=0 errors=0 settle=0s inflight_left=0 timeline=52 polls/6 samples/0 errors
+2026-11-05T12:31:15Z R4HRUN END   r4h-s-old-hello-world (tb exit 0) local_chat=0 cloud_chat=3 usd=0.0011 r4h_total_usd=0.001 aborts=0 errors=0 settle=0s inflight_left=0 timeline=53 polls/5 samples/0 errors
+2026-11-05T12:31:18Z R4HRUN END   r4h-s-new-hello-world (tb exit 0) local_chat=4 cloud_chat=5 usd=0.0018 r4h_total_usd=0.003 aborts=0 errors=0 settle=0s inflight_left=0 timeline=56 polls/9 samples/0 errors
+2026-11-05T12:31:18Z R4HRUN R4H smoke finished; R4H spend $0.003
+2026-11-05T12:31:19Z CHAIN-R4H smoke FAILED (try 1): smoke: FAIL
+    cell                       state        local cloud  usd     deleg        version   surface stream/max_tokens  local stream/max_tokens  timeline  stop
+    r4h-s-neg-hello-world      misrouted        0     4 0.0004  -            c511b810  True/True  0/0 of 0  52 polls 4 calls  answered
+    r4h-s-new-hello-world      valid            4     5 0.0018  implementor  c511b810  True/True  4/4 of 4  56 polls 5 calls  answered
+    r4h-s-old-hello-world      valid            0     3 0.0011  -            d59e6c19  False/False  0/0 of 0  53 polls 3 calls  answered
+      note: PC did not delegate here; its local route is covered by wiretest-r4h.txt
+      -> hello-world not solved
+    smoke cells seen: [('NEW', 'NEG'), ('NEW', 'PC'), ('OLD', 'PC')]
+    smoke: FAIL
+2026-11-05T12:31:19Z CHAIN-R4H fix-don't-fail: the lane answers; smoke once more
+2026-11-05T12:31:30Z R4HRUN R4H smoke: OLD=d59e6c198f91d1469198b0677c008323f82d0345 NEW=c511b8105fb2187423d21becbe3b19f8af2b80e5 attempts=1 cells=3 finished already=0 gpu_slots=2 upstream=http://127.0.0.1:19180 budget=$5.00 (ledger $0.003) deadline=2026-11-05T22:00:00Z
+2026-11-05T12:31:30Z R4HRUN ATTEMPT 1: 1 unit(s), 3 cells
+2026-11-05T12:31:30Z R4HRUN START r4h-s-old-hello-world build=OLD slot=gpu load=3.1
+2026-11-05T12:31:30Z R4HRUN START r4h-s-new-hello-world build=NEW slot=gpu2 load=3.1
+2026-11-05T12:31:30Z R4HRUN START r4h-s-neg-hello-world build=NEW slot=cloud load=3.1
+2026-11-05T12:32:21Z R4HRUN END   r4h-s-neg-hello-world (tb exit 0) local_chat=0 cloud_chat=5 usd=0.0008 r4h_total_usd=0.004 aborts=0 errors=0 settle=0s inflight_left=0 timeline=51 polls/7 samples/0 errors
+2026-11-05T12:32:32Z R4HRUN END   r4h-s-old-hello-world (tb exit 0) local_chat=3 cloud_chat=8 usd=0.0023 r4h_total_usd=0.006 aborts=0 errors=0 settle=0s inflight_left=0 timeline=62 polls/11 samples/0 errors
+2026-11-05T12:32:36Z R4HRUN END   r4h-s-new-hello-world (tb exit 0) local_chat=5 cloud_chat=9 usd=0.0028 r4h_total_usd=0.009 aborts=0 errors=0 settle=0s inflight_left=0 timeline=66 polls/13 samples/0 errors
+2026-11-05T12:32:36Z R4HRUN R4H smoke finished; R4H spend $0.009
+2026-11-05T12:32:37Z CHAIN-R4H smoke PASS (smoke-r4h.txt)
+    cell                       state        local cloud  usd     deleg        version   surface stream/max_tokens  local stream/max_tokens  timeline  stop
+    r4h-s-neg-hello-world      misrouted        0     5 0.0008  -            c511b810  True/True  0/0 of 0  51 polls 5 calls  answered
+    r4h-s-new-hello-world      valid            5     9 0.0028  implementor,verifier c511b810  True/True  5/5 of 5  66 polls 9 calls  answered
+    r4h-s-old-hello-world      valid            3     8 0.0023  implementor  d59e6c19  False/False  0/0 of 3  62 polls 8 calls  answered
+    smoke cells seen: [('NEW', 'NEG'), ('NEW', 'PC'), ('OLD', 'PC')]
+    smoke: PASS
