@@ -72,6 +72,25 @@ byte-identical to master with the two defaults disabled explicitly
   `gnomon task` waits out a provider outage longer than a session (60 s).
   A declared `transport_grace_ms` with no task value is honoured in a task.
   P2G41 lost music-harmony to 503s that outlasted 60 s.
+### Added
+
+- **An opt-in completion gate: `[verify] completion_gate`.** P2G41 found the
+  hosted recipe declaring done with a median of 996 s left and being wrong in
+  16 cells, 5 of them near misses; a prompt rule to verify every requirement
+  had no effect. With `completion_gate = "checklist"`, the first answer of a
+  turn that changed the worktree is handed back with a checklist lifted from
+  the task's own text (requirements, paths, commands, values, formats, edge
+  cases, stray files), and the next is accepted only after a bash command has
+  run. `"review"` adds a fresh-context, read-only reviewer sub-turn
+  (`completion_reviewer`, default `verifier`) that sees the task and the
+  workspace, never the transcript; it is offered only read-only tools, and
+  `bash` only with a `bash_allow`. Bounded by `completion_rounds` (3) and
+  skipped below `completion_min_remaining` (0.2) of the step budget or of a
+  run deadline the caller passes (`TurnDeps.deadline`). Recorded in
+  `counters.completion_gate`, `volatile.completion_gate_ms` and the
+  `completion_gate` audit kind (docs/CONTRACTS.md §30,
+  `conformance/completion_gate.json`). Off by default: request bodies are
+  byte-identical to master's (`completion_gate_loop.test.ts` pins them).
 
 ### Fixed
 

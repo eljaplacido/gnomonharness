@@ -28,6 +28,9 @@ export * from "./context_hygiene.js";
 // The per-call mediator record: what each model request carried and what came
 // back (docs/CONTRACTS.md §29).
 export * from "./mediators.js";
+// The completion gate (`[verify] completion_gate`): checklist, required check
+// and read-only reviewer at the end of a turn (docs/CONTRACTS.md §30).
+export * from "./completion_gate.js";
 // The degradation contract: every way this harness carries on with less than
 // it declared, and the record each one writes. Read by
 // `benchmarks/degradation-contract`, which measures the declaration against

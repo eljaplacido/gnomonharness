@@ -98,6 +98,22 @@ import {
 import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
 import { StallSignals, type StallSignalCounters } from "./stall_signals.js";
 import {
+  resolveCompletionGate,
+  nextGateStep,
+  budgetLeft,
+  buildChecklist,
+  renderChecklist,
+  renderNoCheck,
+  renderFindings,
+  reviewerInstruction,
+  reviewerToolNames,
+  parseFindings,
+  taskTextOf,
+  changedPaths,
+  type CompletionGateCounters,
+  type CompletionGateState,
+} from "./completion_gate.js";
+import {
   CallLedger,
   legBudget,
   overflowBudget,
@@ -3178,10 +3194,13 @@ export interface TurnDeps {
    */
   live?: TurnLive;
   /**
-   * `gnomon task --deadline`: the wall-clock budget this turn runs under.
-   * Absent without one, which is the turn as it always was. The turn adds
-   * the remaining-time notes, clamps each bash command's timeout to the time
-   * left, and ends as `deadline` when `signal` aborts with DEADLINE_ABORT.
+   * `gnomon task --deadline`: the wall-clock budget this turn runs under,
+   * its length and when it started (`total_ms`, `started_at`). The
+   * completion gate (`[verify] completion_gate`) reads those two to skip
+   * when too little is left. With `stopAt` (runTask sets it), the turn also
+   * adds the remaining-time notes, clamps each bash command's timeout to the
+   * time left, and ends as `deadline` when `signal` aborts with
+   * DEADLINE_ABORT. Absent, the turn is the turn it always was.
    */
   deadline?: TurnDeadline;
   /**
@@ -3199,15 +3218,17 @@ export interface TurnDeps {
 
 /** See TurnDeps.deadline. All times are epoch milliseconds. */
 export interface TurnDeadline {
-  /** The deadline as given */
-  at: number;
+  /** The budget: the deadline less when the run started */
+  total_ms: number;
+  /** When the run started */
+  started_at: number;
+  /** The deadline as given. Present, with the three below, under `gnomon task --deadline` */
+  at?: number;
   /** When the turn stops itself: `at` less the margin */
-  stopAt: number;
-  /** When the run started; the budget is `at - startedAt` */
-  startedAt: number;
+  stopAt?: number;
   /** Fractions of the budget at which a remaining-time note is sent */
-  notes: number[];
-  marginMs: number;
+  notes?: number[];
+  marginMs?: number;
 }
 
 /** A tool call as `TurnEvents` reports it. */
@@ -3942,6 +3963,13 @@ export interface TurnCounters {
    * Absent on a record from a turn that never ran, and on older builds.
    */
   stall_signals?: StallSignalCounters;
+  /**
+   * The completion gate (`[verify] completion_gate`, completion_gate.ts):
+   * hand-backs, checks, reviews, findings, outcome. Present only when a gate
+   * is declared, so a record from a surface without one is unchanged.
+   * docs/CONTRACTS.md §30.
+   */
+  completion_gate?: CompletionGateCounters;
   /** Whether the final tool call of the turn changed anything. */
   final_step_was_write: boolean;
   /**
@@ -4406,9 +4434,20 @@ export async function runAgenticTurn(
   /** 0 for a turn a person asked for; 1 for one the `task` tool delegated. */
   depth: number = 0,
   /** A delegated sub-turn records its requests in its parent's record. */
-  parentLedger?: CallLedger
+  parentLedger?: CallLedger,
+  /**
+   * `readOnly`: the completion gate's reviewer. Offered only the tools that
+   * cannot change the worktree (completion_gate.ts reviewerToolNames), and
+   * the declared [verify] check is not run for it.
+   */
+  sub?: { readOnly?: boolean }
 ): Promise<TurnResult> {
   const config = state.config;
+  // `gnomon task --deadline`'s stopping clock, when the caller set one. A
+  // deadline with only `total_ms` and `started_at` is read by the
+  // completion gate and stops nothing.
+  const stopClock: Required<TurnDeadline> | undefined =
+    deps.deadline?.stopAt !== undefined ? (deps.deadline as Required<TurnDeadline>) : undefined;
 
   // ---------------------------------------------------------------------
   // The fold.
@@ -4502,6 +4541,18 @@ export async function runAgenticTurn(
   if (depth > 0) {
     toolSet.schemas = toolSet.schemas.filter((t) => t.function.name !== "task");
   }
+  // The completion reviewer: whatever its role declares, nothing that can
+  // write is offered. Enforced on the schema, so an un-offered call is
+  // refused as malformed rather than run.
+  if (sub?.readOnly) {
+    const keep = new Set(
+      reviewerToolNames(
+        toolSet.schemas.map((t) => t.function.name),
+        config.roles[role]?.bash_allow
+      )
+    );
+    toolSet.schemas = toolSet.schemas.filter((t) => keep.has(t.function.name));
+  }
   const offered = new Set(toolSet.schemas.map((t) => t.function.name));
   // The definitions this turn offers, hashed for the turn record's `wire`
   // (tools_hash.ts). Read, never changed: what goes out is toolSet.schemas.
@@ -4558,7 +4609,7 @@ export async function runAgenticTurn(
     // `--deadline`: a bash command's timeout is clamped to the time left
     // before the stop, less the margin again, so the model is handed the
     // command's partial output with a margin left to act on it.
-    ...(deps.deadline ? { deadlineAt: deps.deadline.stopAt - deps.deadline.marginMs } : {}),
+    ...(stopClock ? { deadlineAt: stopClock.stopAt - stopClock.marginMs } : {}),
     maxOutputBytes: 32_000,
     // `max_lines` on the bash and read declarations (CX3, opt-in). Absent
     // unless declared, so a surface that declares neither builds the same
@@ -4765,6 +4816,26 @@ export async function runAgenticTurn(
     per_tool: {},
     stall_signals: stallSignals.counters,
   };
+  // The completion gate (completion_gate.ts). Off unless declared, and only
+  // for the turn a person asked for: a delegated sub-turn -- the reviewer
+  // included -- is part of its parent's work and is not gated on its own.
+  const completion = resolveCompletionGate(config);
+  const gateOn = completion.mode !== "off" && depth === 0;
+  const gateState: CompletionGateState = { rounds: 0, checkRequired: false, checksSince: 0, reviewed: false };
+  if (gateOn) {
+    counters.completion_gate = {
+      v: 1,
+      mode: completion.mode as CompletionGateCounters["mode"],
+      max_rounds: completion.max_rounds,
+      rounds: 0,
+      checks: 0,
+      reviews: 0,
+      review_steps: 0,
+      findings: 0,
+      outcome: "not_reached",
+      ms: 0,
+    };
+  }
   // The stall detectors (LP5), log-only like the counters above: they see each
   // executed call after its tool_call record, write `stall_signal` records, and
   // the loop never asks them anything. A detector that throws stops observing
@@ -4870,10 +4941,10 @@ export async function runAgenticTurn(
     counters.tree_delta = measureTreeDelta(workRootOf(state.config), treeBaseline);
     // `--deadline` aborted the turn: the same ending, said as what it was.
     // Code 4, as a step_wall: a declared budget ended the turn.
-    if (deps.deadline && deps.signal?.reason === DEADLINE_ABORT) {
-      const d = deps.deadline;
+    if (stopClock && deps.signal?.reason === DEADLINE_ABORT) {
+      const d = stopClock;
       const note =
-        `Stopped at the deadline: ${Math.round((d.at - d.startedAt) / 1000)}s budget, ` +
+        `Stopped at the deadline: ${Math.round((d.total_ms) / 1000)}s budget, ` +
         `${Math.round(d.marginMs / 1000)}s margin, after ${steps} tool call(s).`;
       warn(paint(deps.ui, "yellow", `  [deadline] ${note}`));
       return {
@@ -4891,7 +4962,7 @@ export async function runAgenticTurn(
         stop_detail: {
           steps,
           deadline: new Date(d.at).toISOString(),
-          budget_ms: d.at - d.startedAt,
+          budget_ms: d.total_ms,
           margin_ms: d.marginMs,
         },
         counters,
@@ -5390,10 +5461,10 @@ export async function runAgenticTurn(
     // system message, sent as a user message marked [gnomon] where
     // steer_role = "user". Fractions passed together send one note. The turn
     // a person asked for only: a sub-turn is part of its parent's call.
-    if (depth === 0 && deps.deadline) {
-      const d = deps.deadline;
+    if (depth === 0 && stopClock) {
+      const d = stopClock;
       const now = Date.now();
-      const used = (now - d.startedAt) / Math.max(1, d.at - d.startedAt);
+      const used = (now - d.started_at) / Math.max(1, d.total_ms);
       let crossed = false;
       while (deadlineNoteNext < d.notes.length && used >= d.notes[deadlineNoteNext]!) {
         deadlineNoteNext++;
@@ -5402,11 +5473,11 @@ export async function runAgenticTurn(
       if (crossed) {
         const left = Math.max(0, d.stopAt - now);
         counters.deadline_notes = (counters.deadline_notes ?? 0) + 1;
-        say(paint(deps.ui, "gray", `  [deadline] ${formatSpan(left)} left of ${formatSpan(d.at - d.startedAt)} — noting it`));
+        say(paint(deps.ui, "gray", `  [deadline] ${formatSpan(left)} left of ${formatSpan(d.total_ms)} — noting it`));
         working.push({
           role: "system",
           content:
-            `Time check: about ${formatSpan(left)} of this task's ${formatSpan(d.at - d.startedAt)} remain ` +
+            `Time check: about ${formatSpan(left)} of this task's ${formatSpan(d.total_ms)} remain ` +
             `before it is stopped. Plan the rest of the work, and checking it, to finish inside that.`,
         });
       }
@@ -5850,6 +5921,7 @@ export async function runAgenticTurn(
       // not a privileged escape hatch.
       const gateApplies =
         verify !== null &&
+        !sub?.readOnly &&
         result.code === 0 &&
         steps > 0 &&
         verifyRounds < verify.max_rounds &&
@@ -6064,6 +6136,154 @@ export async function runAgenticTurn(
         if (!unrunnable) {
           verifyOutcome = "passed";
           say(paint(deps.ui, "gray", `    ✓ verify passed`));
+        }
+      }
+
+      // The completion gate (`[verify] completion_gate`, completion_gate.ts).
+      // After the declared check, so a failing suite is handed back first and
+      // the gate judges an answer the repository's own check already let by.
+      // Only for an answer: not a reply the endpoint failed, a blank, or one
+      // cut off at the output limit. And only when the turn changed the
+      // worktree, by any route -- a question answered from reading has no
+      // result to check.
+      if (gateOn) {
+        const cg = counters.completion_gate!;
+        const changedSomething = touchedFiles || shellTouchedWorktree || shellMayHaveTouched;
+        if (
+          result.code !== 0 ||
+          emptyTerminus ||
+          lastFinishReason === "length" ||
+          steps === 0 ||
+          !changedSomething
+        ) {
+          if (gateState.rounds === 0) cg.outcome = "not_applicable";
+        } else {
+          const gateT0 = Date.now();
+          const root = resolve(state.config.gnomonDir, "..");
+          const canCheck = offered.has("bash");
+          const left = budgetLeft({ steps, maxTotal, deadline: deps.deadline, now: gateT0 });
+          let step = nextGateStep(completion, gateState, { budgetLeft: left.fraction, canCheck });
+          let handBack: string | null = null;
+          let findingsN: number | undefined;
+          let reviewFailedWhy: string | undefined;
+          if (step.act === "review") {
+            // A fresh context: the task and the workspace, never this
+            // transcript. Read-only by construction (runAgenticTurn `sub`).
+            gateState.reviewed = true;
+            const task = taskTextOf(messages);
+            const before = treeSnapshot(root);
+            const instruction = reviewerInstruction(task, root, changedPaths(treeBaseline, before));
+            deps.progress.stop();
+            say(paint(deps.ui, "cyan", `  ⚙ completion gate`) + paint(deps.ui, "gray", ` review by ${completion.reviewer}`));
+            let findings: string[] = [];
+            let reviewFailed: string | undefined;
+            if (!config.roles[completion.reviewer]) {
+              reviewFailed = `reviewer role "${completion.reviewer}" is not declared`;
+            } else {
+              const system = buildSystemPrompt(state, completion.reviewer, instruction, { delegated: true });
+              const rev = await runAgenticTurn(
+                state,
+                completion.reviewer,
+                routeRole(config, completion.reviewer),
+                [
+                  ...(system ? [{ role: "system" as const, content: system }] : []),
+                  { role: "user" as const, content: instruction },
+                ],
+                deps,
+                depth + 1,
+                ledger,
+                { readOnly: true }
+              );
+              cg.reviews++;
+              cg.review_steps += rev.toolSteps;
+              const after = treeSnapshot(root);
+              const moved = changedPaths(before, after);
+              if (mapBucket(rev.code) === "apparatus_failure") {
+                reviewFailed = `the reviewer's turn failed (code ${rev.code})`;
+              } else if (moved && moved.length > 0) {
+                // Cannot happen through the offered tools; if it did, the
+                // findings came from a reviewer that changed what it judged.
+                reviewFailed = `the worktree changed during the review (${moved.slice(0, 5).join(", ")})`;
+              } else {
+                findings = parseFindings(rev.content);
+              }
+            }
+            if (reviewFailed) {
+              // Announced on the unsilenceable channel and recorded on the
+              // completion_gate record below (`review_failed`) and the
+              // counters (`review_failures`); the answer is accepted as
+              // `exhausted`, never as a clean pass.
+              cg.review_failures = (cg.review_failures ?? 0) + 1;
+              warn(paint(deps.ui, "yellow", `  ⚠ completion gate — review not used: ${reviewFailed}`));
+            }
+            reviewFailedWhy = reviewFailed;
+            findingsN = findings.length;
+            cg.findings += findings.length;
+            if (findings.length > 0) {
+              handBack = renderFindings(findings, { round: gateState.rounds + 1, maxRounds: completion.max_rounds });
+              gateState.checkRequired = false;
+            } else {
+              step = { act: "accept", outcome: reviewFailed ? "exhausted" : "passed" };
+            }
+          } else if (step.act === "checklist") {
+            const cl = buildChecklist(taskTextOf(messages));
+            handBack = renderChecklist(cl, {
+              round: gateState.rounds + 1,
+              maxRounds: completion.max_rounds,
+              canCheck,
+              changed: changedPaths(treeBaseline, treeSnapshot(root)),
+            });
+            gateState.checkRequired = canCheck;
+          } else if (step.act === "no_check") {
+            handBack = renderNoCheck({ round: gateState.rounds + 1, maxRounds: completion.max_rounds });
+            gateState.checkRequired = true;
+          }
+          const ms = Date.now() - gateT0;
+          cg.ms = (cg.ms ?? 0) + ms;
+          if (handBack !== null) {
+            gateState.rounds++;
+            gateState.checksSince = 0;
+            cg.rounds = gateState.rounds;
+            deps.audit?.write("completion_gate", {
+              role,
+              round: gateState.rounds,
+              action: step.act,
+              step: steps,
+              budget_left: Math.round(left.fraction * 1000) / 1000,
+              budget_by: left.by,
+              ...(findingsN !== undefined ? { findings: findingsN } : {}),
+              ms,
+            });
+            deps.progress.stop();
+            warn(
+              paint(deps.ui, "yellow", `  ⚙ completion gate — ${step.act === "review" ? `${findingsN} finding(s)` : step.act === "no_check" ? "no check run" : "checklist"}; handing the turn back (round ${gateState.rounds} of ${completion.max_rounds})`)
+            );
+            toolLog.push(`completion gate — round ${gateState.rounds}: ${step.act}`);
+            working.push({
+              role: "assistant",
+              content: result.content,
+              ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
+            });
+            working.push({ role: "system", content: handBack });
+            continue;
+          }
+          const outcome = step.act === "accept" ? step.outcome : "passed";
+          cg.outcome = outcome;
+          deps.audit?.write("completion_gate", {
+            role,
+            round: gateState.rounds,
+            action: "accept",
+            outcome,
+            step: steps,
+            budget_left: Math.round(left.fraction * 1000) / 1000,
+            budget_by: left.by,
+            ...(findingsN !== undefined ? { findings: findingsN } : {}),
+            ...(reviewFailedWhy ? { review_failed: reviewFailedWhy } : {}),
+            ms,
+          });
+          if (outcome !== "passed") {
+            say(paint(deps.ui, "gray", `  ⚙ completion gate — ${outcome === "skipped_budget" ? `skipped: ${Math.round(left.fraction * 100)}% of the ${left.by === "deadline" ? "deadline" : "step budget"} left` : "rounds spent; answer accepted"}`));
+          }
         }
       }
 
@@ -6582,6 +6802,13 @@ export async function runAgenticTurn(
       counters.final_step_was_write =
         ((call.name === "write" || call.name === "edit") && outcome.code === 0) ||
         outcome.worktree_changed === true;
+
+      // A check, for the completion gate: a bash command that ran (its own
+      // exit status is the model's to read) after the gate handed the turn back.
+      if (gateOn && gateState.rounds > 0 && call.name === "bash" && outcome.code === 0) {
+        gateState.checksSince++;
+        counters.completion_gate!.checks++;
+      }
 
       if ((call.name === "write" || call.name === "edit") && outcome.code === 0) {
         counters.writes++;
@@ -7250,6 +7477,8 @@ export interface TaskRecord {
      * without one.
      */
     deadline?: { at: string; budget_ms: number; margin_ms: number; source: "flag" | "env" };
+    /** `counters.completion_gate.ms`, moved here: the gate's clock. §30. */
+    completion_gate_ms?: number;
   };
 }
 
@@ -7261,6 +7490,17 @@ export interface ToolTiming {
   duration_ms: number;
   /** Present, as 1, for a call a delegated sub-turn made */
   depth?: number;
+}
+
+/**
+ * A turn's counters as the task record carries them: the completion gate's
+ * `ms` taken out (it is in `volatile`). The same object when no gate ran.
+ */
+export function gateCountersOutsideVolatile(counters: TurnCounters): TurnCounters {
+  const cg = counters.completion_gate;
+  if (!cg) return counters;
+  const { ms: _ms, ...rest } = cg;
+  return { ...counters, completion_gate: rest };
 }
 
 export interface RunTaskOptions {
@@ -7519,7 +7759,7 @@ export async function runTask(
   const deadlineStart = Date.now();
   // Each tool call's start and wall time, for `volatile.tool_calls` (TB4).
   const toolTimes: ToolTiming[] = [];
-  let turnDeadline: TurnDeadline | undefined;
+  let turnDeadline: Required<TurnDeadline> | undefined;
   let deadlineSignal: AbortSignal | undefined;
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   if (options.deadline) {
@@ -7529,7 +7769,8 @@ export async function runTask(
     turnDeadline = {
       at: options.deadline.at,
       stopAt: options.deadline.at - marginMs,
-      startedAt: deadlineStart,
+      total_ms: options.deadline.at - deadlineStart,
+      started_at: deadlineStart,
       notes: settings.notes,
       marginMs,
     };
@@ -7551,7 +7792,7 @@ export async function runTask(
       ? {
           deadline: {
             at: new Date(turnDeadline.at).toISOString(),
-            budget_ms: turnDeadline.at - turnDeadline.startedAt,
+            budget_ms: turnDeadline.total_ms,
             margin_ms: turnDeadline.marginMs,
             notes: turnDeadline.notes,
             source: options.deadline!.source,
@@ -7937,7 +8178,9 @@ export async function runTask(
     stop_reason: turn.stop_reason,
     ...(turn.stop_detail ? { stop_detail: turn.stop_detail } : {}),
     ...(turn.verify ? { verify: turn.verify } : {}),
-    counters: turn.counters,
+    // The completion gate's clock is the one part of its counters that is not
+    // reproducible, so it moves to `volatile.completion_gate_ms`.
+    counters: gateCountersOutsideVolatile(turn.counters),
     // Present only when a chain ran, so a record from a single-role turn is
     // byte-identical to what it was before this existed.
     ...(stageRecords.length > 0 ? { stages: stageRecords } : {}),
@@ -7967,12 +8210,15 @@ export async function runTask(
         ? {
             deadline: {
               at: new Date(turnDeadline.at).toISOString(),
-              budget_ms: turnDeadline.at - turnDeadline.startedAt,
+              budget_ms: turnDeadline.total_ms,
               margin_ms: turnDeadline.marginMs,
               source: options.deadline!.source,
             },
           }
         : {}),
+      // Wall-clock spent in the completion gate, reviewer included. Present
+      // only when a gate is declared.
+      ...(turn.counters.completion_gate ? { completion_gate_ms: turn.counters.completion_gate.ms ?? 0 } : {}),
     },
   };
   // The live record, final. Before the checkpoint below, which records the

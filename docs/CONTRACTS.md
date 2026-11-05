@@ -72,7 +72,7 @@ every `TaskRecord`.
 | `tamper` | a tool call, or something between calls, changed gnomon's own records and gnomon did not make the change; the turn stops with a refusal (3) and a `record_tamper` record |
 | `in_progress` | the turn had not ended when the record was written: only on a partial record (`record_state: "partial"`), which is what a SIGKILL leaves (§28) |
 | `killed` | SIGINT, SIGTERM or SIGHUP ended the process mid-turn and the record was flushed first; `stop_detail.signal` names the signal, and the record is `apparatus_failure` (11) (§28) |
-| `deadline` | `gnomon task --deadline` (or `GNOMON_DEADLINE`) was given and the turn reached the deadline less its margin, so it stopped itself: the call in flight aborted, the record final, the trail sealed. On the `refusal` floor a `step_wall` lands on (exit 2), with `stop_detail.deadline`, `budget_ms` and `margin_ms` (§30) |
+| `deadline` | `gnomon task --deadline` (or `GNOMON_DEADLINE`) was given and the turn reached the deadline less its margin, so it stopped itself: the call in flight aborted, the record final, the trail sealed. On the `refusal` floor a `step_wall` lands on (exit 2), with `stop_detail.deadline`, `budget_ms` and `margin_ms` (§31) |
 
 `in_progress` and `killed` are written by the live record, never returned by
 a turn's own loop. They are here because a consumer reads them on the same
@@ -133,7 +133,7 @@ finer codes are reserved for callers that need them; a consumer should switch
 on the bucket, which is the part that is stable.
 
 A `gnomon task` that stops itself at `--deadline` exits `2`, the refusal
-floor, with `stop_reason: "deadline"` (§30).
+floor, with `stop_reason: "deadline"` (§31).
 
 A `gnomon task` or an interactive session that SIGINT, SIGTERM or SIGHUP ends
 mid-run exits by none of these: it flushes a `killed` record and then dies of
@@ -2109,7 +2109,7 @@ out of the file, as they are out of the trail. The `--json` record keeps them.
 A partial or killed record's `volatile` carries `tool_calls` (each finished
 tool call's `tool`, `started_at`, `duration_ms`) as the final record does, and,
 while a tool call runs, `tool_in_flight` (`tool`, `started_at`), so a run
-killed inside a long command says which and since when (TB4, §30).
+killed inside a long command says which and since when (TB4, §31).
 
 A partial or killed record's `volatile` carries `model_calls` (§29) as the
 final record does: what came back per model request so far, with its clock,
@@ -2125,7 +2125,7 @@ The killed `turn` audit record carries it too, beside `tokens_in`.
 | `partial` | `in_progress` | Written when the turn starts and rewritten after each model reply and each tool call. A run killed with SIGKILL leaves this, with the steps up to the last one that finished. |
 | `final` | the turn's own | The turn ended. Rewritten no more; in a session the next turn starts a new partial record in the same file. |
 | `final` | `killed` | SIGINT, SIGTERM or SIGHUP arrived mid-turn. `stop_detail.signal` names it; `output` is a note, never the model's text. |
-| `final` | `deadline` | `gnomon task --deadline` stopped the turn itself (§30). Written as any final record is, with the turn's own code and bucket. |
+| `final` | `deadline` | `gnomon task --deadline` stopped the turn itself (§31). Written as any final record is, with the turn's own code and bucket. |
 
 A partial or killed record carries `code: 11` (`timed_out`) and `bucket:
 "apparatus_failure"`: the turn did not end, it was ended, so it is neither a
@@ -2234,7 +2234,7 @@ One entry per request:
 | `i` | 1-based within the turn |
 | `est` | gnomon's estimate of the messages' text: the number its trims budget against |
 | `est_body` | the same estimate over the whole request body: tool schemas, tool calls, replayed reasoning and JSON included |
-| `replayed` | assistant messages whose reasoning went out as `reasoning_content` (only an OpenAI-shaped endpoint with replay on is sent any: declared, DeepSeek's API, or by default once it answered a tool call with reasoning, §30) |
+| `replayed` | assistant messages whose reasoning went out as `reasoning_content` (only an OpenAI-shaped endpoint with replay on is sent any: declared, DeepSeek's API, or by default once it answered a tool call with reasoning, §31) |
 | `steer` | gnomon's own system messages after the leading ones, present in the request, by kind: `nudge` (the idle nudge), `converge` (the convergence push), `other` (a trim's ledger, a failed check, the wrap-up, a context notice) |
 | `via` | `system`, or `user` under `steer_role = "user"`: the role they went out in. Present with `steer` |
 | `trim` | a trim since the request before: `why` (`leg`: the leg checkpoint; `overflow`: the provider refused the request as too long, code 13, and gnomon trimmed to 50% to send it again), `dropped` messages, the working context's estimate `before` and `after`, the `budget` it was trimmed to, and the `ratio` it was divided by under `calibrated` |
@@ -2325,7 +2325,118 @@ record. Bounded at 512 entries per list per turn.
 
 **Fixture:** `conformance/mediator_record.json`.
 
-## 30. Long tasks — `--deadline`, tool timing, reasoning replay and the idle nudge by default, `v: 1`
+## 30. Completion gate — `[verify] completion_gate`, `counters.completion_gate`, audit kind `completion_gate`, `v: 1`
+
+Harness control at the end of a turn, opt-in. A model that says it is done is
+reporting a belief; the declared `[verify]` check contradicts it only where
+the repository has a suite that covers the task. This gate holds the answer
+back until the work has been checked against the task's own words, and,
+optionally, until a read-only reviewer has tried to break it.
+
+Why it exists. P2G41 (2026-11, hosted recipe): in 16 cells gnomon declared done
+with a median of 996 s left and was wrong, 5 of them near misses (at least 75%
+of the hidden tests passing). A prompt rule asking for every requirement to be
+verified had no effect (H2). The harnesses that closed that gap enforced it:
+a finish hook, a structured checklist, a read-only auditor sub-agent.
+
+**Surface** (`.gnomon/policy.toml`, under `[verify]`, content-hashed with it):
+
+| key | default | meaning |
+|---|---|---|
+| `completion_gate` | `off` | `off`, `checklist` or `review`. Anything else is reported by the surface audit and runs as `off` |
+| `completion_rounds` | `3` | hand-backs per turn, at most. `0` never hands back |
+| `completion_min_remaining` | `0.2` | skip the gate when less than this fraction of the budget is left |
+| `completion_reviewer` | `verifier` | the role `review` runs. A name that is not a role is fatal under `review` |
+
+**Modes.**
+- `off`: nothing below runs. The request bodies a turn sends are
+  byte-identical to a build without the gate (checked by hashing a scripted
+  turn's bodies against master's, `completion_gate_loop.test.ts`).
+- `checklist`: the first answer of a turn that changed the worktree is not
+  accepted. The harness hands the turn back with a checklist built from the
+  task's own text (its last user message): every list item and every sentence
+  that asks for something, and the paths, commands, names, values and formats
+  it mentions, plus edge cases, exact paths and formats, and stray files (the
+  paths git says this turn created or changed). The next answer is accepted
+  only once a bash command has run since the hand-back. A role without `bash`
+  is asked to re-read instead, and no check is demanded.
+- `review`: the checklist, then a reviewer. The reviewer is a fresh sub-turn
+  of `completion_reviewer` that is given the task text and the workspace path,
+  never the transcript or the main turn's answer. Whatever its role declares,
+  it is offered only `read`, `glob`, `grep`, `compute`, `todo`, and `bash`
+  when the role declares a non-empty `bash_allow`, and the declared `[verify]`
+  check is not run for it. Its findings (one per `- ` line; `NO FINDINGS` for
+  none) are handed back, and the main turn must address each or say why it
+  does not apply. If the worktree moved while it ran, or its turn failed, its
+  findings are not used; that is announced, counted as `review_failures`, and
+  recorded as `review_failed`.
+
+**When it applies.** Only to the turn a person asked for (not a delegated
+sub-turn), only to an answer (not a failed request, a blank or a cut-off
+reply), after the declared `[verify]` check, and only when the turn changed
+the worktree by any route (write, edit, or a bash call whose stamp moved or
+could not be taken). Every hand-back is a system message after the rejected
+answer, as the `[verify]` hand-back is, and every step after it counts against
+`max_steps_total`.
+
+**Each end it applies to**, in order:
+1. rounds spent (`completion_rounds`): accept, `exhausted` if a condition is
+   unmet, else `passed`;
+2. budget: when a condition is unmet and less than `completion_min_remaining`
+   is left, accept as `skipped_budget`. The budget left is the smaller of the
+   steps left of `max_steps_total` and, when the caller passes a run deadline
+   (`TurnDeps.deadline = { total_ms, started_at }`, the shape `gnomon task
+   --deadline` uses), the time left of it;
+3. no round yet: `checklist`;
+4. a check was demanded and no bash command ran since: `no_check`;
+5. `review` mode and no review yet: `review`, which hands back when it has
+   findings and otherwise accepts as `passed`;
+6. otherwise accept, `passed`.
+
+**Actions**, as the trail names them: `checklist`, `no_check`, `review`,
+`accept`.
+
+**Outcomes:** `passed`, `exhausted`, `skipped_budget`, `not_applicable` (the
+turn answered without changing the worktree), `not_reached` (the turn ended
+some other way: the step wall, a stall, an error).
+
+**`counters.completion_gate`**, on the `turn` record, the `TaskRecord` and the
+session's exchange, present only when a gate is declared: `v`, `mode`,
+`max_rounds`, `rounds` (hand-backs), `checks` (bash commands run after a
+hand-back), `reviews`, `review_steps` (the reviewers' tool steps, outside the
+main turn's count), `findings`, `outcome`, and `review_failures` when there
+were any. `ms`, the wall-clock spent in the gate with the reviewer, is on the
+turn record; on the `TaskRecord` it is `volatile.completion_gate_ms`, because
+everything outside `volatile` reproduces.
+
+**`completion_gate`** (audit kind), when `[audit]` is on: one record per end
+the gate judged. Keys `role`, `round`, `action`, `step` (the turn's tool
+steps), `budget_left` (a fraction, three decimals), `budget_by` (`steps` or
+`deadline`), `ms`, and when they apply `outcome` (on `accept`), `findings` (on
+a review) and `review_failed`. The reviewer's own tool calls are in the trail
+under its role.
+
+**Limits.**
+- The checklist is lifted from the text, not understood: it can list a
+  sentence that asks for nothing and miss a requirement stated obliquely.
+- "A check ran" means a bash command ran. Which one, and whether it checked
+  anything, is the model's choice.
+- The reviewer is read-only by what it is offered. A `bash_allow` that admits
+  a writing command is the surface's to fix; the gate notices a write only
+  through git's view of the tree, so in a directory that is not a repository
+  it cannot.
+
+**Fixture**: `conformance/completion_gate.json`. `completion_gate.test.ts`
+checks the module's modes, actions, outcomes, defaults and reviewer tools
+against it, and that this section names the kind and every value and key.
+`completion_gate_loop.test.ts` checks, against a scripted model, that the
+first answer is handed back with a checklist from the task, that a check
+command is required, that the reviewer is offered nothing that writes and is
+not shown the transcript, that rounds are bounded, that the gate is skipped
+when the step budget or the deadline is nearly spent, and that every record
+carries only the fixture's keys.
+
+## 31. Long tasks — `--deadline`, tool timing, reasoning replay and the idle nudge by default, `v: 1`
 
 **Why.** P2G41 (2026-11-05, hosted DeepSeek V4.1 Flash under Harbor, 30-minute
 caps) ranked the causes of gnomon's long-task losses: no reasoning replay in
@@ -2365,6 +2476,7 @@ session's start.
 | notes | at each `[turn] deadline_notes` fraction of the budget (default `[0.5, 0.8]`; `[]` none), the next request carries one note of the time left, `Time check: about … remain …`, as a mid-turn system message; a user message marked `[gnomon]` under `steer_role = "user"`. Fractions passed together send one. `counters.deadline_notes` counts them |
 | bash | a command's timeout is clamped to end one margin before the stop (at least 1 s); it is then reported `bash — timeout (deadline)` and not refused as a repeat |
 | stop | at the deadline less `[turn] deadline_margin_ms` (default 30 000, capped at a tenth of the budget) the turn's signal aborts: the model call or command in flight is stopped, no wrap-up is asked, `stop_reason: "deadline"`, code on the refusal floor (exit `2`), `stop_detail` `{steps, deadline, budget_ms, margin_ms}`; then the `turn` audit record, `session_end` and the final `<session>.record.json`, as for any ending |
+| completion gate | `[verify] completion_gate` (§30) reads the same budget (`TurnDeps.deadline.total_ms`, `started_at`) for `completion_min_remaining` |
 | record | `session_start.deadline` `{at, budget_ms, margin_ms, notes, source}` in the trail; `volatile.deadline` `{at, budget_ms, margin_ms, source}` on the task record; `source` is `flag` or `env` |
 
 **Tool timing (TB4).** Each `tool_call` audit record carries `started_at`

@@ -20,6 +20,7 @@ import { SourceEntry } from "./session.js";
 import { loadSkills } from "./skills.js";
 import { harnessBuild } from "./build.js";
 import { AUTO_WINDOW, rememberedWindow, type ContextSource } from "./context_window.js";
+import { COMPLETION_GATE_MODES, auditCompletionGate } from "./completion_gate.js";
 
 // ---------------------------------------------------------------------------
 // Types — mirror Rust structs from gnomon-surface
@@ -368,6 +369,11 @@ export interface Policy {
      * check that can never pass cannot spend the budget in a circle.
      */
     max_rounds?: number;
+    /** The completion gate (completion_gate.ts): "off", "checklist" or "review". */
+    completion_gate?: string;
+    completion_rounds?: number;
+    completion_min_remaining?: number;
+    completion_reviewer?: string;
   };
   exit_codes?: Record<string, string>;
   /** Environment bootstraps, by id; `[context] bootstrap` picks one. */
@@ -2308,6 +2314,9 @@ const ENUM_KEYS: EnumSpec[] = [
   // resolveExec: anything that is not exactly "docker" resolves to "off".
   { block: "sandbox", key: "exec", values: EXEC_VALUES, falls_back_to: "off" },
   { block: "verify", key: "after", values: ["write", "change", "always"], falls_back_to: "write" },
+  // resolveCompletionGate (completion_gate.ts): anything else is "off", so a
+  // misspelt "reveiw" would silently turn the gate off.
+  { block: "verify", key: "completion_gate", values: COMPLETION_GATE_MODES, falls_back_to: "off" },
   // [context] token_estimate: a misspelt "calibrated" would run as "chars4".
   { block: "context", key: "token_estimate", values: TOKEN_ESTIMATES, falls_back_to: "chars4" },
 ];
@@ -2946,6 +2955,10 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
     });
   }
 }
+
+// The completion gate: a review naming no role cannot run (fatal); a
+// reviewer role declaring tools the review withholds reads as more than it is.
+problems.push(...auditCompletionGate(config));
 
 // [shadow] is log-only, so nothing in it is fatal: a shadow that cannot run
 // changes nothing about the run. What it can do is look like it is recording
