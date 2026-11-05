@@ -1,14 +1,19 @@
 # Roadmap: from gnomon drafts to community standards
 
-**Version 0.1 (draft), 2026-11-03.** Part of
+**Version 0.2 (draft), 2026-11-05.** Part of
 [gnomon Bench Standards](README.md).
 
 ## Where this stands
 
 - One project wrote these drafts, and that project also builds a harness they
   will measure.
-- No reference implementation exists yet.
-- No result conforms yet, gnomon's included.
+- Runners exist for OVERHEAD, CHAOS, AUDIT and GOVERNANCE, written for the
+  2026-11-04 run on gnomon v0.4.1 and kept with its results. None is yet a
+  packaged reference implementation.
+- No result is fully conformant yet. The 2026-11-04 results (GBS 0.1) are
+  partially conformant, model-free; the 2026-11-05 peer profile (opencode
+  v2.2.5 beside gnomon v0.4.2, GBS 0.2 draft) is at harness level. See
+  [README.md](README.md#results).
 - No outside reviewer has read the specs, and no venue or partner has been
   contacted.
 
@@ -17,9 +22,10 @@ measure of success is outside use, not gnomon's rank on them.
 
 ## R1. Reference implementations in this repository
 
-Layout: `benchmarks/standards/<spec>/` holds the apparatus, and
-`benchmarks/standards/results/<spec-id>/…` holds submissions (see
-[README.md](README.md#how-to-submit-results)). Each implementation reuses
+Layout: each run directory, `benchmarks/results/gbs-<date>[-<label>]/<spec>/`,
+holds its own apparatus beside its result (see
+[README.md](README.md#how-to-submit-results)). A packaged reference
+implementation, shared by runs, is still to come. Each implementation reuses
 apparatus gnomon already published, most of it on the
 [`bench/peers-2026-11`](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results)
 branch.
@@ -80,7 +86,7 @@ a result file. Otherwise a rigor upgrade reads as a retraction.
 
 - **Versions.** MAJOR.MINOR, as in [README.md](README.md#versioning). Normative
   changes go by pull request with a 14-day comment window, and are recorded in
-  a changelog in this directory with the reason for each.
+  the changelog at the end of each spec, with the reason for each.
 - **1.0 criteria, per spec:**
   1. a reference implementation whose negative controls pass on at least 2
      platforms;
@@ -128,7 +134,7 @@ November 2026 state-of-the-art review.
 |---|---|
 | Weeks 0–2 | Comment period on v0.1; REPORTING validator |
 | Weeks 2–8 | OVERHEAD and GOVERNANCE reference implementations; gnomon's first conformant results, published whatever they show; the first peer adapters |
-| Quarter | HYBRID at TB 4.0 scale; v0.2 drafts from what broke; the first outward PRs (obench, `inspect_evals`) |
+| Quarter | HYBRID at TB 4.0 scale; the first outward PRs (obench, `inspect_evals`). The v0.2 drafts from what broke were done on 2026-11-05 |
 | Before 1.0 | Outside co-maintainers; the R4 criteria |
 
 ## Risks
