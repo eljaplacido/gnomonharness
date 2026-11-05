@@ -114,7 +114,7 @@ rm -f "$T/nolock"; M2R_LOCK="$T/nolock"; refuse_if_other "missing"; [ "$?" = 0 ]
 ok $? "refusal: a missing lock file reads not held and is not created"
 grep -q 'refuse_if_other "before a lane start" || break' "$HERE_REAL/r4h-chain.sh" && grep -q 'if refuse_if_other "at start"; then WAITED=1; fi' "$HERE_REAL/r4h-chain.sh"
 ok $? "the chain checks at start and again before every lane start"
-grep -q 'IDLE_MEM_MAX=${IDLE_MEM_MAX:-6500}' "$HERE_REAL/r4h-chain.sh" && [ "$(bash -c ". $HERE_REAL/s1-hubwatch.sh; echo \$IDLE_NEED \$YIELD_MARGIN")" = "15 1500" ]
+grep -q 'IDLE_MEM_MAX=${IDLE_MEM_MAX:-6500}' "$HERE_REAL/r4h-chain.sh" && [ "$(env -u IDLE_NEED -u YIELD_MARGIN bash -c ". $HERE_REAL/s1-hubwatch.sh; echo \$IDLE_NEED \$YIELD_MARGIN")" = "15 1500" ]
 ok $? "scheduling: IDLE_MEM_MAX default 6500 (set before the byte-identical hubwatch), 15 idle samples, yield margin 1500 MiB"
 grep -q '^TPORT=19180$' "$HERE_REAL/r4h-chain.sh" && grep -q "^PORTS='5810 5811 5812 5813 5814 5815 5820 5821 5822 5823 5824 5825'$" "$HERE_REAL/r4h-chain.sh" && grep -q '127.0.0.1:19180:127.0.0.1:18380' "$HERE_REAL/tunnel-r4h.sh"
 ok $? "ports: tunnel 19180, meters 5810-5815/5820-5825 (M2: 18980, 5710-5725; R3R: 18880, 5510-5525)"
