@@ -68,6 +68,7 @@ every `TaskRecord`.
 | `truncated` | the backend cut the reply off at its output limit, and the bounded re-asks did not finish it: a cut text reply stands as the answer (a `result`); cut tool calls in a row end on the `refusal` floor with `stop_detail.repeats` |
 | `apparatus` | the run never reached the model — the surface itself could not be used |
 | `malformed` | replies in a row offered no usable tool call, past `[turn] max_consecutive_malformed` repair turns |
+| `endpoint_error` | the turn's last model request failed and the turn ended on it: no key (10), no reply in time (11), the provider unreachable or erroring past the transport grace (12), or the context could not be fitted (13); the code says which, and the bucket is `apparatus_failure` |
 | `tamper` | a tool call, or something between calls, changed gnomon's own records and gnomon did not make the change; the turn stops with a refusal (3) and a `record_tamper` record |
 | `in_progress` | the turn had not ended when the record was written: only on a partial record (`record_state: "partial"`), which is what a SIGKILL leaves (§28) |
 | `killed` | SIGINT, SIGTERM or SIGHUP ended the process mid-turn and the record was flushed first; `stop_detail.signal` names the signal, and the record is `apparatus_failure` (11) (§28) |
@@ -2100,6 +2101,13 @@ loop such as a benchmark adapter's) never sees half a record. Not inside
 
 `input` and `output` follow `[audit] record`: under `metadata` they are left
 out of the file, as they are out of the trail. The `--json` record keeps them.
+
+A partial or killed record's `volatile` carries `model_calls` (§29) as the
+final record does: what came back per model request so far, with its clock,
+provider tokens and reasoning tokens. Until 2026-11-05 it carried only the
+totals, and in P2G41 all 29 capped gnomon cells left only a partial record,
+so the per-call figures of every run that timed out were in the trail alone.
+The killed `turn` audit record carries it too, beside `tokens_in`.
 
 **States.**
 

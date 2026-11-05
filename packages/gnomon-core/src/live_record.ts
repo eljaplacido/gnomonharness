@@ -41,6 +41,7 @@ import { writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { beforeOwnWrite, noteOwnWrite } from "./record_guard.js";
 import type { TaskRecord, TurnCounters, TokenUsage, WireRecord } from "./prompt_loop.js";
+import type { ModelCallsMeasured } from "./mediators.js";
 import type { TrustOutcome } from "./trust.js";
 
 /** `<session>` + this, in the audit directory. */
@@ -75,6 +76,13 @@ export interface TurnSoFar {
   toolLog: string[];
   usage?: TokenUsage;
   counters: TurnCounters;
+  /**
+   * What came back per model request so far (docs/CONTRACTS.md §29), as the
+   * final record's `volatile.model_calls` holds it. Without it a killed run's
+   * record had the requests' count and token totals and no per-call timing,
+   * usage or reasoning: in P2G41 all 29 capped cells left only this record.
+   */
+  modelCalls?: ModelCallsMeasured;
 }
 
 /**
@@ -268,6 +276,7 @@ export class LiveRecord implements TurnLive {
         ...(usage?.output !== undefined ? { tokens_out: usage.output } : {}),
         ...(usage?.ms !== undefined ? { model_ms: usage.ms } : {}),
         ...(usage?.requests !== undefined ? { requests: usage.requests } : {}),
+        ...(now?.modelCalls ? { model_calls: structuredClone(now.modelCalls) } : {}),
       },
       record_state: signal ? "final" : "partial",
       session: this.opts.session,
@@ -346,6 +355,8 @@ export function killedTurnAudit(
     counters: record.counters,
     tokens_in: record.volatile.tokens_in,
     tokens_out: record.volatile.tokens_out,
+    // Beside tokens_in, as an ordinary turn record carries it.
+    ...(record.volatile.model_calls ? { model_calls: record.volatile.model_calls } : {}),
     skills: record.skills,
     surface_hash: record.surface_hash,
     input: text(record.input),
