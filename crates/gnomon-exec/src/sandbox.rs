@@ -438,16 +438,30 @@ mod macos {
 
     const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
+    /// Why `network = false` is not offered here. Measured on macos-latest
+    /// (macOS 26, arm64) CI, 2026-11-05: under the profile's network lines
+    /// (Bazel's `--sandbox_block_network`, verbatim) `curl` to 192.0.2.1 was
+    /// not refused -- it timed out after 3 s, so the connect went out. Those
+    /// lines held on the macOS the earlier CI ran. Until a Mac can show which
+    /// profile holds on which release, the network half refuses rather than
+    /// offering a block that may not be there.
+    pub const NETWORK_UNVERIFIED: &str = "network = false is not offered on macOS: the Seatbelt network block let a \
+        connect to 192.0.2.1 through on macOS 26 (CI, 2026-11-05). Set [sandbox] network = true to run with \
+        the filesystem sandbox only, or exec = \"docker\"";
+
     pub fn probe() -> Probe {
         let present = Path::new(SANDBOX_EXEC).is_file();
         Probe {
             platform: "macos",
             supported: present,
-            network_supported: present,
+            network_supported: false,
             mechanism: if present { "seatbelt".into() } else { "none".into() },
             landlock_abi: None,
-            reason: (!present).then(|| format!("{SANDBOX_EXEC} is missing")),
-            degraded: vec!["reads = \"scoped\" is not implemented on macOS: it refuses rather than runs".to_string()],
+            reason: Some(if present { NETWORK_UNVERIFIED.to_string() } else { format!("{SANDBOX_EXEC} is missing") }),
+            degraded: vec![
+                "reads = \"scoped\" is not implemented on macOS: it refuses rather than runs".to_string(),
+                NETWORK_UNVERIFIED.to_string(),
+            ],
             not_enforced: NOT_ENFORCED.to_vec(),
             reads_scoped_supported: false,
             scoped_reads: vec![],
@@ -504,6 +518,9 @@ mod macos {
         }
         if !Path::new(SANDBOX_EXEC).is_file() {
             refuse(&format!("{SANDBOX_EXEC} is missing, so nothing can enforce the sandbox"));
+        }
+        if !policy.network {
+            refuse(NETWORK_UNVERIFIED);
         }
         let err = std::process::Command::new(SANDBOX_EXEC)
             .arg("-p")

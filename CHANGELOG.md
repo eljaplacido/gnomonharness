@@ -92,6 +92,10 @@
   `docker`: the `network = false` supervisor admits loopback only and has no
   per-host allow, so a download is refused up front with the answer the kernel
   would give. The surface audit says so.
+- **`network = false` under `exec = "os"` refuses on macOS.** On
+  `macos-latest` (macOS 26) CI the Seatbelt network lines let a connect to
+  192.0.2.1 through. Until a Mac shows a profile that holds, the macOS probe
+  reports `network_supported: false`; `network = true` keeps the write half.
 - **The sandbox probe tests `pidfd_getfd` instead of asking whether it
   exists.** In a Docker container on the default seccomp profile it returns
   EPERM, so the supervisor refused every connect, loopback included, while the

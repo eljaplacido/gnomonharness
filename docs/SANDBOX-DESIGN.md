@@ -217,6 +217,15 @@ server under `network = false` must bind loopback. **Not run
 on a Mac by the author of this change**: the macOS CI job runs the TypeScript
 suite, which exercises it end to end.
 
+**2026-11-05: the network half is withdrawn on macOS.** `macos-latest` became
+macOS 26, and there the four lines no longer held: `curl` to 192.0.2.1 under
+the profile timed out after 3 s instead of being refused, so the connect went
+out (CI of the rebased branch, `os_sandbox.test.ts`). Without a Mac to find a
+profile that holds on each release, the probe reports `network_supported:
+false` on macOS and `gnomon-exec sandbox --network off` refuses; `bash` under
+`exec = "os"` with `network = false` refuses there, and `network = true` runs
+with the write half only.
+
 **Everything else, including Windows: refused**, exit 125, with the reason. So
 is a Linux kernel without Landlock, and `network = false` where the supervisor
 cannot run (not x86_64/aarch64, or no seccomp `USER_NOTIF`/`pidfd_getfd`). The

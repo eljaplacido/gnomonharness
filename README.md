@@ -1701,8 +1701,11 @@ do outside; the cost is **+0.6 ms per command, or +1.5 ms with
 and hands each `connect` to a small supervisor that performs it on the
 command's behalf only when the address is loopback. It connects from its own
 copy of the address, so a racing thread cannot swap it after the check. macOS:
-`sandbox-exec` with a generated profile, same policy — exercised by the macOS
-CI job's end-to-end tests, not yet run on a Mac by hand.
+`sandbox-exec` with a generated profile for the write half — exercised by the
+macOS CI job's end-to-end tests, not yet run on a Mac by hand. **`network =
+false` is not offered on macOS**: on `macos-latest` (macOS 26) CI the profile's
+network lines let a connect to 192.0.2.1 through, so `bash` refuses under
+`exec = "os"` with `network = false` there rather than imply a block.
 
 **What it does not do** — `gnomon-exec sandbox-probe` prints the same list:
 
@@ -1727,8 +1730,8 @@ CI job's end-to-end tests, not yet run on a Mac by hand.
 - **Package caches in `$HOME` are read-only**, so a tool that writes one (npm,
   pip, cargo's registry) fails unless it is pointed at the temp dir or the
   cache is granted with `extra_roots`.
-- **On macOS, a server under `network = false` must bind loopback**
-  (`127.0.0.1`, not `0.0.0.0`). Linux allows either.
+- **On macOS, only the write half.** `network = false` refuses (above), and
+  `reads = "scoped"` refuses; set `network = true` to run with writes confined.
 - **Older kernels give less.** Below Landlock ABI 3 (Linux 6.2), `truncate(2)`
   of a file outside the root is not blocked; below ABI 2 (5.19), renaming a file
   into another directory fails even inside the root. The probe names what this

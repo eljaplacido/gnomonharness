@@ -482,7 +482,10 @@ tools = ["read", "bash"]
     expect(line, "startup must say what exec = os does here").toBeDefined();
     const enforcing = /egress blocked, loopback allowed/.test(line!);
     expect(enforcing || /bash will refuse every command/.test(line!), line).toBe(true);
-    const stale = r.lines.find((l) => l.includes("bash can still reach the network"));
+    // master's note (NETWORK_OFF_NOTE) says "a filter, not isolation"; #74's
+    // test looked for an older wording, so the not-enforcing branch -- taken
+    // on Windows and macOS -- could never pass.
+    const stale = r.lines.find((l) => l.includes("network = false refuses webfetch") && l.includes("not isolation"));
     if (enforcing) expect(stale, "the network-off caveat is false while os enforces").toBeUndefined();
     else expect(stale).toBeDefined();
   }, 15000);

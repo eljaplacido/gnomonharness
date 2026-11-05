@@ -28,7 +28,7 @@ import { osSandbox, _resetOsSandbox, type OsSandbox } from "gnomon-natives";
 import { executeTool, osSandboxPlan, gnomonInstallReadRoots, packageIndexOf, type ToolContext } from "./tools.js";
 import { EXEC_VALUES, auditSurface, resolveExec, type GnomonConfig } from "./config.js";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { resolve, parse } from "node:path";
 
 const okProbe = (over: Partial<Extract<OsSandbox, { bin: string }>["probe"]> = {}): (() => OsSandbox) => () => ({
   bin: "/opt/gnomon-exec",
@@ -140,7 +140,7 @@ describe("[sandbox] reads and read_roots on the surface", () => {
     expect(resolveExec(surface({ exec: "os" }))).toMatchObject({ mode: "os", reads: "all", readRoots: [] });
     const ex = resolveExec(surface({ exec: "os", reads: "scoped", read_roots: ["~/.cache/pip", "/opt/sdk", "vendor/cache", 3] }));
     expect(ex.reads).toBe("scoped");
-    expect(ex.readRoots).toEqual([join(homedir(), ".cache/pip"), "/opt/sdk", resolve(tmpdir(), "none", "vendor/cache")]);
+    expect(ex.readRoots).toEqual([join(homedir(), ".cache/pip"), resolve("/opt/sdk"), resolve(tmpdir(), "none", "vendor/cache")]);
     // A typo is kept as written so osSandboxPlan can refuse it by name.
     expect(resolveExec(surface({ exec: "os", reads: "scopd" })).reads).toBe("scopd");
   });
@@ -153,7 +153,8 @@ describe("[sandbox] reads and read_roots on the surface", () => {
     expect(problems({ exec: "os", reads: "scoped", read_roots: "~/.cache/pip" })).toContain("not an array");
     expect(problems({ exec: "os", read_roots: ["/usr"] })).toContain('only under reads = "scoped"');
     expect(problems({ exec: "os", reads: "scoped", read_roots: ["~"] })).toContain("contains your home directory");
-    expect(problems({ exec: "os", reads: "scoped", read_roots: ["/"] })).toContain("contains your home directory");
+    // The filesystem root above the home directory (C:\\ on Windows, / elsewhere).
+    expect(problems({ exec: "os", reads: "scoped", read_roots: [parse(resolve(homedir())).root] })).toContain("contains your home directory");
     expect(problems({ exec: "os", reads: "scoped", read_roots: ["/nonexistent-gnomon-read-root"] })).toContain("does not exist");
     expect(auditSurface(surface({ exec: "os", reads: "scopd", read_roots: ["~"] })).every((p) => !p.fatal)).toBe(true);
   });

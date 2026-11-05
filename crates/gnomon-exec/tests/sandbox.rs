@@ -612,7 +612,9 @@ fn scoped_reads_leave_ordinary_tools_and_caches_working() {
         let out = scoped_in(&s, &home, false, &[], "python3 -c 'import json, ssl, sqlite3, subprocess; print(\"py-ok\")'");
         assert!(text(&out).contains("py-ok"), "python3: {out:?}");
         let pip = scoped_in(&s, &home, false, &[], "python3 -m pip --version");
-        if Command::new("python3").args(["-m", "pip", "--version"]).output().is_ok_and(|o| o.status.success()) {
+        // Asked outside the sandbox with the same HOME: a pip in the user site
+        // of the real HOME is not this test's subject.
+        if Command::new("python3").args(["-m", "pip", "--version"]).env("HOME", &home).output().is_ok_and(|o| o.status.success()) {
             assert!(pip.status.success(), "pip: {pip:?}");
         }
     }
