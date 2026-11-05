@@ -14,6 +14,7 @@
  */
 
 import {
+  runAcpServer,
   harnessBuild,
   recomputeManifest,
   declaredKeyVars,
@@ -27,7 +28,20 @@ import {
   loadProposedSkills,
   acceptSkill,
   rejectSkill,
+  SkillRefusal,
+  unresolvedTamper,
+  resolveTamper,
+  mineCandidates,
+  writeCandidates,
+  loadCandidates,
+  MIN_REPEATS,
+  runTrial,
+  recordTrial,
+  trialExit,
   runTask,
+  unstartedTaskRecord,
+  taskExitCode,
+  type TaskRecord,
   resolveAudit,
   loadLoops,
   runTick,
@@ -40,6 +54,14 @@ import {
   writeState,
   LOOP_STATE_DIR,
   verifyTrail,
+  flushAnchors,
+  collectAnchors,
+  verifyAgainstAnchors,
+  setAnchorScheduler,
+  redactRemote,
+  CHECKPOINT_DIR,
+  type ResolvedAnchor,
+  type AnchorTrailResult,
   resolveSessionStore,
   listSessions,
   resolveEndpoint,
@@ -54,13 +76,29 @@ import {
   describeEndpoints,
   printEndpoints,
   setEndpointBlock,
-  setRoleModel,
-  roleWriteTarget,
+  pointRoleAt,
   modelEditTarget,
   listRoles,
   countNonConversations,
   resolveUi,
   isLocalEndpoint,
+  AuditTrail,
+  settleTrust,
+  settleTrustHeadless,
+  evaluateTrust,
+  clampToDefaults,
+  grantTrust,
+  revokeTrust,
+  forgetToolPins,
+  toolPinsOf,
+  loadTrust,
+  trustPath,
+  describeGrants,
+  type GnomonConfig,
+  type TrustOutcome,
+  type SettleOptions,
+  onKillSignal,
+  type TaskInterrupt,
 } from "gnomon-core";
 import {
   manifest as surfaceManifest,
@@ -71,9 +109,10 @@ import {
   simulatePatch,
   Enumerations,
 } from "gnomon-natives";
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync} from "node:fs";
+import { readFileSync, writeFileSync, writeSync, existsSync, readdirSync, mkdirSync} from "node:fs";
+import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runTui } from "gnomon-tui";
 import { initSurface } from "./init.js";
@@ -88,6 +127,7 @@ import {
 } from "./detect.js";
 import {
   checkReadiness,
+  ENDPOINT_PRESETS,
   SETUP_CHOICES,
   parseSetupPick,
   parseModelPick,
@@ -97,6 +137,12 @@ import {
 import { pendingMigrations, applyMigrations, MIGRATIONS } from "./migrate.js";
 import { cmdUpdate, cmdUninstall, maybeNotifyUpdate } from "./update.js";
 import { cmdCheck } from "./check.js";
+import { probeMachine, formatProbe, probeAtInit, systemHost } from "./probe.js";
+import { loadCatalog, defaultCatalogPath, type Suggestion } from "./catalog.js";
+import { runSetup, HYBRID_CONTROLS, MODE_ALIASES, SETUP_EXIT, type HybridControl } from "./setup_wizard.js";
+import { systemSetupEffects } from "./setup_host.js";
+import { runDoctor, formatDoctor, DOCTOR_EXIT } from "./doctor.js";
+import { selfLauncher } from "./self_launcher.js";
 
 // ---------------------------------------------------------------------------
 // Argument parsing (minimal, no deps)
@@ -114,6 +160,8 @@ interface CliArgs {
   role?: string;
   yes?: boolean;
   json?: boolean;
+  /** Run an untrusted surface as declared, this invocation only (trust.ts). */
+  trust?: boolean;
   resume?: string | true;
   positional: string[];
   /**
@@ -173,6 +221,11 @@ export function parseArgs(args: string[]): CliArgs {
       result.yes = true;
     } else if (arg === "--json") {
       result.json = true;
+    } else if (arg === "--trust") {
+      // A bare flag. Through the generic branch below it would swallow the
+      // next argument as its value -- `task --trust "fix it"` would lose the
+      // task text into flags.trust.
+      result.trust = true;
     } else if (arg === "-p") {
       // Already handled above
     } else if (arg.startsWith("-")) {
@@ -320,7 +373,7 @@ async function cmdLoop(args: CliArgs): Promise<void> {
     // cron handed it to a bare `node`, which cannot load TypeScript. Resolve
     // the launcher relative to this module and pin the interpreter to the one
     // running now, since cron's PATH has neither nvm nor tsx.
-    const launcher = fileURLToPath(new URL("../gnomon.js", import.meta.url));
+    const launcher = selfLauncher(import.meta.url) ?? fileURLToPath(new URL("../gnomon.js", import.meta.url));
     const bin = `${JSON.stringify(process.execPath)} ${JSON.stringify(launcher)}`;
     const line = installLoop(root, l, bin);
     console.log(`installed ${l.name}\n  ${line}`);
@@ -679,51 +732,6 @@ async function cmdKey(args: CliArgs): Promise<void> {
 // ---------------------------------------------------------------------------
 // Endpoints
 // ---------------------------------------------------------------------------
-
-/**
- * Providers worth not making someone look up.
- *
- * A URL, a request shape and a key variable is the whole of an endpoint, and
- * all three are things you can get subtly wrong in ways that surface much
- * later as a 401 or an empty model list. Presets are not a feature; they are
- * the three fields, already correct.
- */
-const ENDPOINT_PRESETS: Record<
-  string,
-  { name: string; url: string; kind: string; api_key_env?: string; provider?: string; note: string }
-> = {
-  "opencode-go": {
-    name: "go",
-    url: "https://opencode.ai/zen/go/v1/chat/completions",
-    kind: "openai",
-    api_key_env: "OPENCODE_API_KEY",
-    provider: "opencode",
-    note: "OpenCode Go — the subscription tier at opencode.ai/go",
-  },
-  "opencode-zen": {
-    name: "zen",
-    url: "https://opencode.ai/zen/v1/chat/completions",
-    kind: "openai",
-    api_key_env: "OPENCODE_API_KEY",
-    provider: "opencode",
-    note: "OpenCode Zen — pay-as-you-go",
-  },
-  openrouter: {
-    name: "openrouter",
-    url: "https://openrouter.ai/api/v1/chat/completions",
-    kind: "openai",
-    api_key_env: "OPENROUTER_API_KEY",
-    provider: "openrouter",
-    note: "OpenRouter — many providers behind one key",
-  },
-  ollama: {
-    name: "local",
-    url: "http://127.0.0.1:11434/api/chat",
-    kind: "ollama",
-    provider: "ollama",
-    note: "Ollama on this machine — no key",
-  },
-};
 
 /** Ask a question with a default, on a terminal. */
 function ask(prompt: string, fallback = ""): Promise<string> {
@@ -1100,24 +1108,20 @@ async function endpointAdd(
     // base role, so for a role the active profile declares -- which, in a
     // scaffolded project, is every role that has a model -- editing roles.toml
     // changes nothing a run reads, and this command used to report a routing
-    // change that never happened.
+    // change that never happened. pointRoleAt then updates roles.toml to
+    // match, so the next start has no disagreement between the files to warn
+    // about.
     const edits = new Map<string, { label: string; text: string }>();
     for (const role of chosen) {
       if (!roleNames.includes(role)) {
         console.error(`  ⚠ no [roles.${role}] — skipped.`);
         continue;
       }
-      const target = roleWriteTarget(config, role);
-      let file = edits.get(target.path);
-      if (!file) {
-        file = { label: target.label, text: readFileSync(target.path, "utf-8") };
-        edits.set(target.path, file);
-      }
       // The cheap tier gets the cheap model init would have chosen, when
       // there is one. Pointing `smol` at the same 35B as everything else
       // works, and makes every summary cost a full reasoning turn.
       const tag = opts.quick && role === "smol" && smallModel ? smallModel : model;
-      file.text = setRoleModel(file.text, role, tag, name);
+      const { target } = pointRoleAt(config, role, tag, name, edits);
       console.log(
         `  ✓ ${role} → ${tag} @${name}` +
           (target.profile ? ` (via profile "${target.profile}")` : "")
@@ -1242,6 +1246,65 @@ async function listModelsAt(endpoint: {
 }
 
 /**
+ * Deliver queued anchors from a detached process, so the session that queued
+ * them can exit at once. Errors land in the anchors' state file, which the
+ * next session announces (anchor.ts announceAnchorBacklog).
+ */
+function detachedAnchorFlush(s: ResolvedAnchor, trustFlag = false): void {
+  // The launcher beside src/ (checkout) or dist/ (the published package):
+  // gnomon.js in a checkout, bin/gnomon.mjs in the package (self_launcher.ts).
+  // With neither, the flush runs in-process; flushAnchors releases its lock
+  // on exit, and whatever it did not deliver stays queued for the next one.
+  const launcher = selfLauncher(import.meta.url);
+  if (!launcher) {
+    void flushAnchors(s).catch(() => undefined);
+    return;
+  }
+  try {
+    // `--trust` carries over when this run was trusted by the flag, which the
+    // child cannot see; GNOMON_TRUST and the trust store it reads itself.
+    const args = [launcher, "audit", "anchor", "--background", "--dir", s.root, ...(trustFlag ? ["--trust"] : [])];
+    const child = spawn(process.execPath, args, {
+      cwd: s.root,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: { ...process.env, GNOMON_NO_UPDATE_CHECK: "1" },
+    });
+    child.on("error", () => undefined);
+    child.unref();
+  } catch {
+    /* stays queued; the next session announces it */
+  }
+}
+
+function anchorLabel(a: ResolvedAnchor): string {
+  if (a.backend === "git") return `git, ${redactRemote(a.remote ?? "")} ${a.ref}`;
+  if (a.backend === "rfc3161") return `rfc3161, ${redactRemote(a.url ?? "")}`;
+  return String(a.backend);
+}
+
+/** One `external anchor:` line under a trail. Returns whether it is a failure. */
+function printAnchorLine(r: AnchorTrailResult | undefined, acceptUnchecked = false): boolean {
+  if (!r) return false;
+  // A table, not a switch: docs.test.ts reads `case "…":` in this file as the
+  // list of dispatched commands.
+  const lines: Record<AnchorTrailResult["status"], [boolean, string]> = {
+    anchored: [false, `ANCHORED — ${r.detail}`],
+    rechained: [true, `RE-CHAINED — ${r.detail}`],
+    invalid: [true, `INVALID — ${r.detail}`],
+    unchecked: [!acceptUnchecked, `UNCHECKED — ${r.detail}`],
+    pending: [false, "PENDING — queued, not delivered yet (degradation audit_anchor_queued). `gnomon audit anchor` delivers it now."],
+    unanchored: [true, `NOT ANCHORED — ${r.detail}`],
+    predates: [false, "NOT ANCHORED — sealed before this checkout began anchoring"],
+    unsealed: [false, "NOT ANCHORED — not sealed, so there is no head to anchor"],
+  };
+  const [bad, text] = lines[r.status];
+  (bad ? console.error : console.log)(`  external anchor: ${text}`);
+  return bad;
+}
+
+/**
  * `gnomon audit` — list trails, and check one against everything that can
  * catch a change to it.
  *
@@ -1282,10 +1345,89 @@ async function listModelsAt(endpoint: {
 async function cmdAudit(args: CliArgs): Promise<void> {
   const config = loadConfig(args.dir, args.flags['profile']);
   const settings = resolveAudit(config);
+  // [audit.anchor] pushes to a remote, posts to an authority or runs a
+  // command: a workspace-trust grant (trust.ts). `audit anchor` and `audit
+  // verify` reach it only for a surface this machine's user trusts, or with
+  // --trust / GNOMON_TRUST; otherwise they see the clamped block, which says
+  // why and does nothing.
+  if (settings.anchor?.declared) {
+    const ev = evaluateTrust(config, trustOptions(args));
+    if (ev.status !== "trusted" && ev.status !== "default") {
+      settings.anchor = resolveAudit(clampToDefaults(config)).anchor;
+    }
+  }
   const sub = subcommandOr(args, "show");
 
+  // record_tamper events (record_guard.ts): list them, and let a person
+  // resolve one. Accepting a skill is refused while any is unresolved.
+  if (sub === "tamper") {
+    const open = unresolvedTamper(config);
+    if (open.length === 0) {
+      console.log("No unresolved record_tamper events.");
+      return;
+    }
+    console.log(`${open.length} unresolved record_tamper event(s):`);
+    for (const e of open) {
+      const changes = (e.record.changes as Array<{ path: string; change: string }> | undefined) ?? [];
+      const by = e.record.tool ? `${String(e.record.tool)} ${String(e.record.target ?? "")}`.trim() : String(e.record.when);
+      console.log(`  ${e.trail}:${e.seq}  ${by}`);
+      for (const c of changes.slice(0, 10)) console.log(`      ${c.change} ${c.path}`);
+    }
+    console.log('Resolve one with `gnomon audit resolve <trail>:<seq> --reason "…"` after looking at what changed.');
+    process.exit(3);
+  }
+  if (sub === "resolve") {
+    const ref = args.positional[0] ?? "";
+    const m = /^(.+):(\d+)$/.exec(ref);
+    const reason = typeof args.flags.reason === "string" && args.flags.reason !== "true" ? args.flags.reason : "";
+    if (!m) {
+      console.error('Usage: gnomon audit resolve <trail>:<seq> --reason "…"   (see `gnomon audit tamper`)');
+      process.exit(1);
+    }
+    try {
+      // A person at a terminal: stdin AND stdout. A tool subprocess has pipes.
+      const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+      const out = resolveTamper(config, { trail: m[1]!, seq: Number(m[2]) }, reason, { interactive });
+      console.log(`Resolved ${ref}. Recorded in ${out.trail} (seq ${out.record.seq}).`);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(/agent session/.test(String(err)) ? 3 : 1);
+    }
+    return;
+  }
+
+  // Deliver queued anchors now. `--background` is the detached delivery a
+  // session end starts: it prints nothing, and its outcome is the anchors'
+  // state file, which the next session reads.
+  if (sub === "anchor") {
+    const anchor = settings.anchor;
+    const background = args.flags.background === "true";
+    if (!anchor?.declared) {
+      if (!background) console.error("No [audit.anchor] is declared in .gnomon/config.toml, so nothing is anchored.");
+      process.exit(1);
+    }
+    if (!anchor.enabled) {
+      if (!background) for (const p of anchor.problems) console.error(p);
+      process.exit(1);
+    }
+    const r = await flushAnchors(anchor);
+    if (background) return;
+    for (const p of anchor.problems) console.error(p);
+    if (r.busy) {
+      console.log(`A delivery is already running; ${r.pending} head(s) queued.`);
+      return;
+    }
+    if (r.delivered > 0) console.log(`Anchored ${r.delivered} sealed head(s) to ${anchorLabel(anchor)}.`);
+    if (r.pending > 0) {
+      console.error(`${r.pending} head(s) still queued: ${r.error ?? "not delivered"}`);
+      process.exit(1);
+    }
+    if (r.delivered === 0) console.log("Nothing queued: every sealed head has been delivered.");
+    return;
+  }
+
   if (sub !== "show" && sub !== "list" && sub !== "verify") {
-    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify`);
+    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify | anchor | tamper | resolve`);
     process.exit(1);
   }
 
@@ -1336,6 +1478,32 @@ async function cmdAudit(args: CliArgs): Promise<void> {
     console.error(`[audit.attest] ${problem}`);
   }
 
+  // [audit.anchor]: every sealed head against the external witness. Read
+  // once, before the loop, so each trail's lines can carry its own verdict.
+  const anchor = settings.anchor;
+  let anchorReport: ReturnType<typeof verifyAgainstAnchors> | null = null;
+  let anchorFailed = false;
+  const offline = args.flags.offline === "true";
+  if (anchor?.declared) {
+    for (const p of anchor.problems) console.error(p);
+    if (!anchor.enabled) anchorFailed = true;
+    else {
+      const scope = typeof args.flags.scope === "string" && args.flags.scope !== "true" ? args.flags.scope : undefined;
+      const log = await collectAnchors(anchor, { offline });
+      const cpDir = join(settings.dir, CHECKPOINT_DIR);
+      const checkpoints = existsSync(cpDir)
+        ? readdirSync(cpDir).filter((f: string) => /^checkpoint-.*\.jsonl$/.test(f)).map((f: string) => join(cpDir, f))
+        : [];
+      const paths = [...targets.map((n) => join(settings.dir, n)).filter((p) => existsSync(p)), ...checkpoints];
+      anchorReport = verifyAgainstAnchors(anchor, log, paths, { ...(scope ? { scope } : {}), acceptUnchecked: offline });
+      const from = log.source === "remote" ? "read from the remote" : log.source === "local-copy" ? "read from THIS MACHINE'S COPY" : "read from the receipts";
+      console.log(`external anchor: ${anchorLabel(anchor)} — ${from}, scope ${anchorReport.scope}`);
+      for (const p of anchorReport.problems) console.error(`  ${p}`);
+    }
+  }
+  const anchorOf = (path: string) =>
+    anchorReport?.trails.find((t) => resolve(anchor!.root, t.trail) === resolve(path) || t.trail === resolve(path));
+
   let allOk = true;
   for (const name of targets) {
     const path = join(settings.dir, name);
@@ -1351,9 +1519,20 @@ async function cmdAudit(args: CliArgs): Promise<void> {
     }
 
     const chain = r.ok ? "chain intact" : `chain BROKEN at seq ${r.broken.join(", ")}`;
-    const seal = r.sealed ? "sealed" : "NOT SEALED (truncated, or the run was killed)";
+    // A trail that was sealed and then grew is not the killed run NOT SEALED
+    // describes: a killed run never wrote a seal. Exit 1 (verifyTrail,
+    // VerifyResult.after_seal); GBS-AUDIT 0.1 case I1 passed it with exit 0.
+    const seal = r.after_seal
+      ? `APPENDED AFTER SEAL at seq ${r.after_seal.seq}`
+      : r.sealed
+        ? "sealed"
+        : "NOT SEALED (truncated, or the run was killed)";
     console.log(`${name}: ${r.records} records — ${chain}, ${seal}`);
     if (!r.ok) allOk = false;
+    if (r.after_seal) {
+      console.error(`  TAMPERED — ${r.after_seal.detail}`);
+      allOk = false;
+    }
 
     const a = r.attestation;
     if (!a) {
@@ -1384,6 +1563,10 @@ async function cmdAudit(args: CliArgs): Promise<void> {
       console.error(`  anchor: NOT SIGNED — ${a.problem}`);
       console.error(`          [audit.attest] declares a signer, so heads were expected here.`);
       allOk = false;
+    } else if (anchorReport) {
+      // The external anchor line below is what answers the re-chain here, so
+      // the advice to declare a signer would point at the wrong fix.
+      console.log(`  anchor: NOT SIGNED — this surface declares no [audit.attest] signer; the external anchor below is the check against a re-chain.`);
     } else {
       console.log(`  anchor: NOT SIGNED — this surface declares no [audit.attest] signer.`);
       console.log(
@@ -1396,24 +1579,84 @@ async function cmdAudit(args: CliArgs): Promise<void> {
         `          hash passes it. Declare a signer to close that.`
       );
     }
+    if (printAnchorLine(anchorOf(path), offline)) allOk = false;
   }
+
+  if (anchorReport) {
+    // Checkpoints are not listed above (they are in a subdirectory), but they
+    // are anchored too: a rewritten one is the forged baseline the record
+    // guard would otherwise trust.
+    for (const t of anchorReport.trails.filter((x) => x.trail.includes(`/${CHECKPOINT_DIR}/`))) {
+      if (t.status === "anchored" || t.status === "predates" || t.status === "pending" || t.status === "unsealed") continue;
+      console.log(`${t.trail}:`);
+      if (printAnchorLine(t, offline)) allOk = false;
+    }
+    for (const f of anchorReport.findings) console.error(`  external anchor: ${f}`);
+    if (anchorReport.other_scopes > 0) {
+      console.log(`  (${anchorReport.other_scopes} anchor(s) from other checkouts share this witness; not judged here)`);
+    }
+    if (!anchorReport.ok) allOk = false;
+  }
+  if (anchorFailed) allOk = false;
 
   if (!allOk) process.exit(1);
 }
 
 async function cmdTask(args: CliArgs): Promise<void> {
   const text = [args.subcommand, ...args.positional].filter(Boolean).join(" ").trim();
+  // Every way out of this command exits 0, 2 or 10, the bucket, as
+  // docs/CONTRACTS.md §1 says it does. A missing task and a missing surface
+  // both used to exit 1, which is `failed` in the `result` bucket: a caller
+  // switching on the bucket read a task that never started as one that ran.
+  // Neither started, so both are launch failures (10).
   if (!text) {
     console.error('Usage: gnomon task "<what to do>" [--role <name>] [--yes] [--json]');
-    process.exit(1);
+    process.exit(10);
   }
 
-  const config = loadConfig(args.dir, args.flags['profile']);
-  const record = await runTask(config, text, {
-    role: args.role,
-    yes: args.yes,
-    verbose: !args.json,
+  // A task has nobody to ask. An untrusted surface that grants more than the
+  // defaults runs clamped to them, with one line on stderr -- never blocked,
+  // never silently widened.
+  let record: TaskRecord;
+  // A time cap's SIGTERM (Harbor, Terminal-Bench), a closed terminal, a kill
+  // -INT: the run's record is flushed as `killed` -- the live record beside
+  // the trail, a `turn` audit record and session_end -- and, under --json,
+  // printed where the record always goes. Then the signal ends the process as
+  // it did before (live_record.ts onKillSignal). Before this, a killed task
+  // printed nothing at all (C5: 19 of 21 capped cells in P2G attempt 1).
+  const interrupt: TaskInterrupt = {};
+  const releaseSignals = onKillSignal((signal) => {
+    const killed = interrupt.kill?.(signal);
+    if (!killed) return;
+    try {
+      if (args.json) writeSync(1, `${JSON.stringify(killed, null, 2)}\n`);
+      else if (killed.stop_reason === "killed") {
+        writeSync(2, `\n[${signal}] the run was ended mid-turn; recorded as stop_reason "killed" after ${killed.tool_steps} tool call(s)\n`);
+      }
+    } catch {
+      // A closed pipe or terminal: the file beside the trail still has it.
+    }
   });
+  try {
+    const settled = settleTrustHeadless(
+      loadConfig(args.dir, args.flags['profile']),
+      trustOptions(args)
+    );
+    record = await runTask(settled.config, text, {
+      role: args.role,
+      yes: args.yes,
+      verbose: !args.json,
+      trust: settled.outcome,
+      interrupt,
+    });
+  } catch (err) {
+    // No .gnomon/ above the cwd, a --dir without one, a --role the surface
+    // does not define: the throw used to reach main's catch and exit 1. It
+    // gets the same record shape as a fatal surface, so --json still parses.
+    const why = err instanceof Error ? err.message : String(err);
+    record = unstartedTaskRecord(text, args.role, `gnomon task could not start: ${why}`);
+  }
+  releaseSignals();
 
   // Non-fatal surface problems go to stderr in BOTH modes. They are the ones
   // that change what ran without stopping it -- a role_profile whose file is
@@ -1435,13 +1678,111 @@ async function cmdTask(args: CliArgs): Promise<void> {
   }
 
   // Exit code carries the bucket, so a caller can gate on it without parsing.
-  process.exit(record.bucket === "result" ? 0 : record.bucket === "refusal" ? 2 : 10);
+  process.exit(taskExitCode(record));
 }
 
 async function cmdSkill(args: CliArgs): Promise<void> {
   const config = loadConfig(args.dir, args.flags['profile']);
   const sub = subcommandOr(args, "list");
   const id = args.positional[0];
+
+  if (sub === "mine") {
+    // Deterministic and model-free: reads the audit trails, writes evidence
+    // to .gnomon-skills/candidates/, and changes nothing the agent loads.
+    const found = mineCandidates(config);
+    const w = writeCandidates(config, found);
+    if (args.json) {
+      console.log(JSON.stringify({ dir: w.dir, fresh: w.fresh, candidates: found }, null, 2));
+      return;
+    }
+    if (found.length === 0) {
+      console.log("No skill candidates: no rule refused the same role on the same thing " +
+        `${MIN_REPEATS} or more times in the audit trails.`);
+      return;
+    }
+    console.log(`${found.length} skill candidate(s), ${w.fresh.length} new → ${w.dir}`);
+    for (const c of found) {
+      console.log(`  ${c.id}${w.fresh.includes(c.id) ? "  (new)" : ""}`);
+      console.log(`      ${c.suggestion}`);
+      console.log(`      ${c.records.length} record(s), first ${c.records[0]!.trail} seq ${c.records[0]!.seq}`);
+    }
+    console.log("Candidates are evidence, not skills: nothing is loaded until a person accepts one.");
+    return;
+  }
+
+  if (sub === "list" && (args.flags["candidates"] !== undefined || args.positional.includes("--candidates"))) {
+    const found = loadCandidates(config);
+    console.log("Candidates (.gnomon-skills/candidates/) — evidence, not loaded:");
+    if (found.length === 0) console.log("  (none — run `gnomon skill mine`)");
+    for (const c of found) console.log(`  ${c.id} — ${c.rule} × ${c.count} on ${c.pattern} (${c.role || "any role"})`);
+    return;
+  }
+
+  if (sub === "trial") {
+    // docs/CONTRACTS.md §13: 0 meets the declared thresholds, 2 does not, 10
+    // no answer (apparatus failure, budget, or an effect below significance).
+    // A trial that cannot start is 10 as well: it produced no answer.
+    if (!id) {
+      console.error("Usage: gnomon skill trial <id> [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]");
+      process.exit(10);
+    }
+    const specName = typeof args.flags.spec === "string" && args.flags.spec !== "true" ? args.flags.spec : undefined;
+    const yesSpend = args.flags["yes-spend"] !== undefined || args.positional.includes("--yes-spend");
+    let outcome: Awaited<ReturnType<typeof runTrial>>;
+    try {
+      // Trust is settled ONCE, on this checkout under the spec's profile --
+      // the configuration the cells actually run (runTrial calls this).
+      // Trust is keyed by a project's real path, so settling it per cell
+      // found every temporary clone untrusted and ran it clamped, while the
+      // report named the declared surface; settling it on the default profile
+      // missed grants the spec's profile adds. A clamped outcome is refused by
+      // the trial; a trusted one runs its cells as declared (their surface is
+      // this checkout's, which the trial checks, plus the skill).
+      let trust: TrustOutcome | undefined;
+      outcome = await runTrial(config, {
+        skill: id,
+        spec: specName,
+        yesSpend,
+        settleTrust: (c) => (trust = settleTrustHeadless(c, trustOptions(args)).outcome),
+        // Each cell is a `gnomon task` in its own clone, with the approval
+        // rule of `gnomon task`: --yes approves gated calls in the clone;
+        // without it they are refused.
+        runCell: (wt, prompt, o) =>
+          runTask(loadConfig(wt, o.profile), prompt, {
+            role: o.role,
+            yes: args.yes,
+            trust,
+          }),
+        log: args.json ? undefined : (line) => console.error(line),
+      });
+    } catch (err) {
+      console.error(`gnomon skill trial could not start: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(10);
+    }
+    const { report, cells } = outcome;
+    const out = recordTrial(config, report, cells);
+    if (args.json) {
+      console.log(JSON.stringify({ ...report, report_path: out.report_path, report_sha256: out.report_sha256 }, null, 2));
+    } else {
+      const p = report.endpoints.pass;
+      console.log(`Trial of ${id} on ${report.model ?? "?"} (${report.role}), ${report.pairs.valid}/${report.pairs.planned} valid pairs`);
+      console.log(`  pass       base ${p.base.passes}/${p.base.n}  skill ${p.skill.passes}/${p.skill.n}  McNemar p = ${p.mcnemar_p}`);
+      const t = report.endpoints.output_tokens;
+      console.log(`  out tokens base ${t.base}  skill ${t.skill}  gain ${t.gain === null ? "?" : `${(t.gain * 100).toFixed(1)}%`}  sign p = ${t.sign.p.toFixed(4)}`);
+      console.log(`  requests   base ${report.endpoints.requests.base}  skill ${report.endpoints.requests.skill}`);
+      console.log(`  cells      ${report.cells.result} result, ${report.cells.refusal} refusal, ${report.cells.apparatus_failure} apparatus_failure`);
+      console.log(`  meets_thresholds: ${String(report.meets_thresholds)} (${report.status})`);
+      for (const r of report.reasons) console.log(`    ${r}`);
+      if (report.leftovers.length > 0) {
+        console.log(`  leftovers  ${report.leftovers.length} sandbox(es) could not be removed:`);
+        for (const l of report.leftovers) console.log(`    ${l}`);
+      }
+      console.log(`Report: ${out.report_path}`);
+      if (out.record) console.log(`Recorded in ${out.trail} (seq ${out.record.seq}, ${out.record.hash?.slice(0, 12)})`);
+      console.log("Nothing was accepted. `gnomon skill accept` remains a person's decision.");
+    }
+    process.exit(trialExit(report.meets_thresholds));
+  }
 
   if (sub === "list") {
     const active = loadSkills(config);
@@ -1468,24 +1809,51 @@ async function cmdSkill(args: CliArgs): Promise<void> {
       process.exit(1);
     }
     try {
+      // Every decision leaves a record: the skill's content hash and the
+      // surface hash before and after, in a sealed trail of its own.
+      const recorded = (d: { record: { seq: number; hash?: string } | null; trail: string | null; sealed: boolean }) => {
+        if (d.trail && d.record) {
+          console.log(`Recorded in ${d.trail} (seq ${d.record.seq}, ${d.record.hash?.slice(0, 12) ?? "unchained"})`);
+        }
+        if (!d.sealed) {
+          console.error("⚠ The change was made and recorded, but the trail could not be sealed; `gnomon audit verify` will report it unsealed.");
+        }
+      };
       if (sub === "accept") {
-        const to = acceptSkill(config, id);
-        console.log(`Accepted ${id} → ${to}`);
+        const evidence = typeof args.flags.evidence === "string" && args.flags.evidence !== "true"
+          ? args.flags.evidence
+          : undefined;
+        const d = acceptSkill(config, id, { evidence });
+        const ev = d.record?.evidence as { report?: string; meets_thresholds?: unknown } | string | undefined;
+        if (ev && typeof ev === "object") {
+          console.log(`Evidence: ${ev.report} (meets_thresholds: ${String(ev.meets_thresholds)})`);
+        }
+        console.log(`Accepted ${id} → ${d.path}`);
         console.log(
           "The surface hash has changed. The skill loads from the next session."
         );
+        recorded(d);
       } else {
-        rejectSkill(config, id);
+        const reason = typeof args.flags.reason === "string" && args.flags.reason !== "true"
+          ? args.flags.reason
+          : undefined;
+        const d = rejectSkill(config, id, { reason });
         console.log(`Rejected ${id}`);
+        recorded(d);
       }
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
-      process.exit(1);
+      // A rule saying no -- an agent session, require_trial, evidence that
+      // does not vouch, an unresolved tamper event: every SkillRefusal -- is
+      // a refusal (3, refused_by_gate, docs/CONTRACTS.md §1), not the
+      // `failed` result 1 means. Anything else (no such proposal, a bad id,
+      // an unwritable trail) stays 1.
+      process.exit(err instanceof SkillRefusal ? 3 : 1);
     }
     return;
   }
 
-  console.error(`Unknown skill subcommand: ${sub}. Use: list | accept | reject`);
+  console.error(`Unknown skill subcommand: ${sub}. Use: list | accept | reject | mine | trial`);
   process.exit(1);
 }
 
@@ -1548,6 +1916,11 @@ async function cmdMigrate(args: CliArgs): Promise<void> {
 }
 
 async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promise<void> {
+  // What this machine is and which model servers it runs, probed beside init's
+  // own model detection so it costs no extra wait. Shown, never written: the
+  // surface is exactly what it was. Read-only commands and 127.0.0.1 GETs, each
+  // with a deadline (probe.ts). Not for --from or --no-verify (probeAtInit).
+  const probing = probeAtInit(args) ? probeMachine().catch(() => null) : null;
   let result;
   try {
     result = await initSurface({ dir: args.dir, force: args.force, from: args.from, noVerify: args.noVerify });
@@ -1562,6 +1935,12 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
   for (const f of result.skipped) console.log(`  · .gnomon/${f} (kept existing)`);
   if (result.gitattributes) console.log("  + .gitattributes: .gnomon/** text eol=lf (same surface hash on Windows)");
   if (result.gitignore?.length) console.log(`  + .gitignore: ${result.gitignore.map((d) => d + "/").join(" ")} (machine-local, never committed)`);
+
+  const probe = probing ? await probing : null;
+  if (probe) {
+    console.log("");
+    for (const line of formatProbe(probe)) console.log(line);
+  }
 
   // Say which models were chosen and why. A tag appearing in roles.toml with
   // no explanation looks like a decision someone made on your behalf.
@@ -1651,7 +2030,8 @@ async function cmdLaunch(args: CliArgs): Promise<void> {
   // out (`gnomon endpoint add`) was nowhere on screen. Off a terminal there
   // is nobody to ask, and a script gets exactly what it got before.
   if (process.stdin.isTTY && process.stdout.isTTY) {
-    await offerModelSetup(args, target);
+    // A fresh surface's init has just printed the probe.
+    await offerModelSetup(args, target, { showProbe: !fresh });
   } else if (fresh) {
     console.log("");
     console.log("If those model tags are not ones you have, `gnomon endpoint add` sets one up.");
@@ -1670,8 +2050,9 @@ async function cmdLaunch(args: CliArgs): Promise<void> {
  * key, Ollama still stopped) lands back on the choice rather than in a
  * session that cannot work.
  */
-async function offerModelSetup(args: CliArgs, target: string): Promise<void> {
+async function offerModelSetup(args: CliArgs, target: string, opts: { showProbe?: boolean } = {}): Promise<void> {
   const role = args.subcommand || "implement";
+  let probeShown = !opts.showProbe;
   for (;;) {
     let config;
     try {
@@ -1683,6 +2064,16 @@ async function offerModelSetup(args: CliArgs, target: string): Promise<void> {
     const readiness = await checkReadiness(config, role);
     if (readiness.ready) return;
 
+    // What the machine has, before asking what to set up: a model server
+    // already running on another port is the answer to the question below.
+    if (!probeShown) {
+      probeShown = true;
+      const probe = await probeMachine().catch(() => null);
+      if (probe) {
+        console.log("");
+        for (const line of formatProbe(probe)) console.log(line);
+      }
+    }
     console.log("");
     console.log(`No model answers for this project yet: ${readiness.why}.`);
     console.log("Set one up now?\n");
@@ -1703,17 +2094,302 @@ async function offerModelSetup(args: CliArgs, target: string): Promise<void> {
       return;
     }
     console.log("");
+    if (pick === "setup") {
+      // The wizard, on this project, as `gnomon setup` runs it: every download,
+      // write and cloud call asks first. Its write moves the hash, so the
+      // session below settles trust again as usual.
+      await cmdSetup({ ...args, dir: target, json: false, yes: false }, { fromLaunch: true });
+      continue;
+    }
     await endpointAdd(args, config, { preset: pick, quick: true });
     // Written or not, look again: a write is proved by the next check, and a
     // failure goes back to the choice instead of into a dead session.
   }
 }
 
+/**
+ * The project a setup or doctor run is about: `--dir`, else the nearest
+ * directory up from here with a .gnomon/ (as every other command finds it),
+ * else here. Setup in a subdirectory of a project must not scaffold a second
+ * surface inside it.
+ */
+function projectRoot(args: CliArgs): string {
+  if (args.dir) return resolve(args.dir);
+  try {
+    return dirname(resolveGnomonDir());
+  } catch {
+    return process.cwd();
+  }
+}
+
+/** A usage or apparatus error, as text or as the command's JSON document. */
+function commandError(args: CliArgs, schema: string, message: string, exit: number): number {
+  if (args.json) console.log(JSON.stringify({ schema, error: message, exit }, null, 2));
+  else console.error(message);
+  return exit;
+}
+
+/**
+ * `gnomon setup` — scan this machine, plug in a local model it can run, then
+ * connect a cloud model. The flow and every consent rule are in
+ * setup_wizard.ts; this reads the flags and supplies the real machine.
+ */
+async function cmdSetup(args: CliArgs, opts: { fromLaunch?: boolean } = {}): Promise<number> {
+  const f = args.flags;
+  const schema = "gnomon.setup/1";
+  const usage = (m: string) => commandError(args, schema, m, SETUP_EXIT.usage);
+  for (const k of ["pull", "model", "mode", "cloud-endpoint", "cloud-model", "cloud-key-env", "hybrid-control", "catalog", "expect-proposal"]) {
+    if (f[k] === "true") return usage(`--${k} needs a value.`);
+  }
+  const expect = f["expect-proposal"];
+  if (expect !== undefined && !/^[0-9a-f]{64}$/.test(expect)) {
+    return usage(`--expect-proposal takes the 64-hex \`proposal.digest\` of an earlier \`gnomon setup --json\`, not "${expect}".`);
+  }
+  let mode: Suggestion | undefined;
+  if (f.mode) {
+    mode = MODE_ALIASES[f.mode.toLowerCase()];
+    if (!mode) return usage(`--mode ${f.mode}: use local, hybrid or cloud.`);
+  }
+  const control = (f["hybrid-control"] ?? "observe") as HybridControl;
+  if (!HYBRID_CONTROLS.includes(control)) return usage(`--hybrid-control ${control}: use ${HYBRID_CONTROLS.join(", ")}.`);
+  if ((f["cloud-model"] || f["cloud-key-env"]) && !f["cloud-endpoint"]) {
+    return usage("--cloud-model and --cloud-key-env go with --cloud-endpoint URL|preset|endpoint.");
+  }
+  if (f.pull && f.model) return usage("--pull and --model each choose the local model; pass one.");
+  let catalog;
+  try {
+    catalog = loadCatalog(f.catalog ?? defaultCatalogPath());
+  } catch (err) {
+    return commandError(args, schema, err instanceof Error ? err.message : String(err), SETUP_EXIT.catalog);
+  }
+  const json = Boolean(args.json);
+  const interactive = !json && f["non-interactive"] !== "true" && Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const report = await runSetup(
+    {
+      dir: projectRoot(args),
+      json,
+      yes: Boolean(args.yes),
+      ...(f.pull ? { pull: f.pull } : {}),
+      ...(f.model ? { model: f.model } : {}),
+      speedCheck: f["speed-check"] === "true",
+      ...(mode ? { mode } : {}),
+      ...(f["cloud-endpoint"] ? { cloudEndpoint: f["cloud-endpoint"] } : {}),
+      ...(f["cloud-model"] ? { cloudModel: f["cloud-model"] } : {}),
+      ...(f["cloud-key-env"] ? { cloudKeyEnv: f["cloud-key-env"] } : {}),
+      ...(expect ? { expectProposal: expect } : {}),
+      hybridControl: control,
+      ...(opts.fromLaunch ? { fromLaunch: true } : {}),
+    },
+    {
+      host: systemHost(),
+      io: {
+        interactive,
+        // Under --json, stdout is the document; the narrative goes to stderr.
+        say: (l = "") => (json ? process.stderr.write(l + "\n") : console.log(l)),
+        ask: (q, fallback = "") => ask(q, fallback),
+        askSecret: (q) => readSecret(q),
+      },
+      catalog,
+      now: () => new Date(),
+      ...systemSetupEffects(),
+      commands: CLI_COMMANDS.map((c) => c.name),
+    }
+  );
+  if (json) console.log(JSON.stringify(report, null, 2));
+  return report.exit;
+}
+
+/**
+ * `gnomon doctor` — read-only: the machine, every role's endpoint, and drift
+ * from what setup recorded. Never writes; says what would fix each problem.
+ */
+async function cmdDoctor(args: CliArgs): Promise<number> {
+  const schema = "gnomon.doctor/1";
+  if (args.flags.catalog === "true") return commandError(args, schema, "--catalog needs a file.", DOCTOR_EXIT.couldNotRun);
+  try {
+    const catalog = loadCatalog(args.flags.catalog ?? defaultCatalogPath());
+    const { report, probe } = await runDoctor(
+      { dir: projectRoot(args) },
+      {
+        host: systemHost(),
+        catalog,
+        now: () => new Date(),
+        readiness: (config, role) => checkReadiness(config, role),
+        applyKeys: (config) => {
+          applyCredentials(undefined, declaredKeyVars(config));
+        },
+      }
+    );
+    if (args.json) console.log(JSON.stringify(report, null, 2));
+    else for (const l of formatDoctor(report, probe)) console.log(l);
+    return report.exit;
+  } catch (err) {
+    return commandError(args, schema, `doctor could not run: ${err instanceof Error ? err.message : String(err)}`, DOCTOR_EXIT.couldNotRun);
+  }
+}
+
+/**
+ * `gnomon acp`: serve the Agent Client Protocol on stdio, for an editor.
+ *
+ * stdout IS the protocol channel from here on, so every other writer is moved
+ * off it first. One stray `console.log` -- a tool, an MCP server's report, a
+ * progress line -- would be a line the editor cannot parse, and the session
+ * would die on it. The protocol keeps the only handle on the real stdout.
+ */
+async function cmdAcp(args: CliArgs): Promise<void> {
+  const protocolOut = process.stdout.write.bind(process.stdout);
+  const toStderr = process.stderr.write.bind(process.stderr);
+  process.stdout.write = toStderr as typeof process.stdout.write;
+  console.log = console.error;
+  console.info = console.error;
+  console.warn = console.error;
+  console.debug = console.error;
+
+  await runAcpServer({
+    input: process.stdin,
+    write: (line) => {
+      protocolOut(line);
+    },
+    profile: args.flags["profile"],
+    role: args.role,
+    // An editor cannot answer the trust prompt: settle it as `task` does.
+    reconfigure: (fresh: GnomonConfig) => settleTrustHeadless(fresh, trustOptions(args)).config,
+  });
+  process.exit(0);
+}
+
 async function cmdPrompt(args: CliArgs): Promise<void> {
-  const config = loadConfig(args.dir, args.flags['profile']);
+  const declared = loadConfig(args.dir, args.flags['profile']);
+  // On a terminal an untrusted surface that grants more than the defaults is
+  // shown and asked about; off one it runs clamped. A scaffolded surface
+  // grants nothing extra and never gets here.
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY && !args.json);
+  const settled = await settleTrust(declared, {
+    ...trustOptions(args),
+    interactive,
+    ask: (q) => ask(q, ""),
+  });
+  if (settled.quit) {
+    // A refusal by the trust gate: 3, refused_by_gate (docs/CONTRACTS.md §1).
+    console.log("  Not started. Nothing ran.");
+    process.exit(3);
+  }
   // A resumed session keeps its own role unless one is named here.
   const role = args.resume ? args.subcommand || undefined : args.subcommand || "implement";
-  await runPromptLoop(config, role, { resume: args.resume });
+  await runPromptLoop(settled.config, role, {
+    resume: args.resume,
+    trust: settled.outcome,
+    // A surface reloaded mid-session goes through the same gate, headless:
+    // trusted or covered runs as written, anything looser is clamped and said.
+    reconfigure: (fresh: GnomonConfig) => settleTrustHeadless(fresh, trustOptions(args)).config,
+  });
+}
+
+/** What the invocation says about trust: --trust, and GNOMON_TRUST=<surface hash>. */
+function trustOptions(args: CliArgs): Omit<SettleOptions, "interactive"> {
+  return { flag: Boolean(args.trust), env: process.env.GNOMON_TRUST };
+}
+
+/**
+ * `gnomon trust` -- list, grant for the current surface, revoke.
+ *
+ * Trust is this machine's user accepting what a surface grants beyond the
+ * scaffold, in one project. It lives beside the credential store, never in
+ * the repository and never in the hash (trust.ts says why that is not a Rule 1
+ * exception). Grants and revokes are written to the audit trail when the
+ * surface keeps one.
+ */
+async function cmdTrust(args: CliArgs): Promise<void> {
+  const config = loadConfig(args.dir, args.flags['profile']);
+  const sub = subcommandOr(args, "list");
+  const ev = evaluateTrust(config, { env: process.env.GNOMON_TRUST });
+  const record = (decision: TrustOutcome["decision"]): void => {
+    const id = `trust-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
+    const trail = new AuditTrail(resolveAudit(config), id);
+    trail.write("session_start", {
+      surface_hash: ev.surface_hash,
+      harness: harnessBuild(),
+      cwd: process.cwd(),
+      mode: "trust",
+    });
+    const outcome: TrustOutcome = {
+      decision,
+      by: "command:trust",
+      surface_hash: ev.surface_hash,
+      grants: ev.grants.map((g) => g.key).sort(),
+    };
+    trail.write("trust", { ...outcome, root: ev.root });
+    trail.write("session_end", {});
+  };
+
+  if (sub === "grant") {
+    if (ev.grants.length === 0) {
+      console.log(
+        `Nothing to trust: this surface (${ev.surface_hash.slice(0, 12)}) grants nothing beyond gnomon's defaults.`
+      );
+      return;
+    }
+    grantTrust(config, "command:trust");
+    record("granted");
+    // Granting is also how a person accepts MCP tools that changed since they
+    // were pinned: the pins go, and the next session pins what each server
+    // offers then (GV10). Said, because a pin dropping silently is a check
+    // switched off silently.
+    const unpinned = forgetToolPins(config);
+    console.log(`Trusted ${ev.root} at surface ${ev.surface_hash.slice(0, 12)}:`);
+    for (const line of describeGrants(ev.grants, [])) console.log(line);
+    if (unpinned > 0) {
+      console.log(
+        `Cleared ${unpinned} MCP tool pin${unpinned === 1 ? "" : "s"}; the next session pins what each server offers then.`
+      );
+    }
+    console.log(`Recorded in ${trustPath()} — not in the repository.`);
+    return;
+  }
+
+  if (sub === "revoke") {
+    const n = revokeTrust(config);
+    if (n > 0) record("revoked");
+    console.log(
+      n > 0
+        ? `Revoked ${n} trusted surface${n === 1 ? "" : "s"} for ${ev.root}. The next launch asks again.`
+        : `Nothing was trusted for ${ev.root}.`
+    );
+    return;
+  }
+
+  if (sub !== "list" && sub !== "show") {
+    console.error(`Unknown trust subcommand: ${sub}. Use: list | grant | revoke`);
+    process.exit(1);
+  }
+
+  console.log(`This project: ${ev.root}`);
+  console.log(`  surface ${ev.surface_hash.slice(0, 12)}`);
+  if (ev.status === "default") {
+    console.log("  grants nothing beyond gnomon's defaults — never asks.");
+  } else {
+    console.log(
+      ev.status === "trusted"
+        ? `  trusted (${ev.via === "store:covered" ? "no looser than a surface you trusted here" : ev.via})`
+        : "  NOT trusted — a terminal session asks; a headless run is clamped to the defaults"
+    );
+    for (const line of describeGrants(ev.grants, ev.uncovered)) console.log(line);
+  }
+  const pins = toolPinsOf(config);
+  if (pins.length > 0) {
+    console.log("");
+    console.log("MCP tools pinned for this project (a server offering others runs clamped):");
+    for (const p of pins) console.log(`  ${p.tools_hash.slice(0, 12)}  ${p.at.slice(0, 10)}  ${p.server}`);
+  }
+  const entries = loadTrust().entries;
+  console.log("");
+  console.log(`Trusted on this machine (${trustPath()}): ${entries.length === 0 ? "none" : ""}`);
+  for (const e of entries) {
+    console.log(
+      `  ${e.root}  ${e.surface_hash.slice(0, 12)}  ${e.at.slice(0, 10)}  ` +
+        `${e.grants.length} grant${e.grants.length === 1 ? "" : "s"}  by ${e.by}`
+    );
+  }
 }
 
 async function cmdSessions(args: CliArgs): Promise<void> {
@@ -1772,6 +2448,8 @@ async function cmdSessions(args: CliArgs): Promise<void> {
  */
 export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> = [
   { name: "launch" },
+  { name: "setup" },
+  { name: "doctor" },
   { name: "init" },
   { name: "surface" },
   { name: "enumerations", aliases: ["enums"] },
@@ -1784,15 +2462,29 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "skill", aliases: ["skills"] },
   { name: "task" },
   { name: "prompt", aliases: ["run"] },
+  { name: "acp" },
   { name: "loop", aliases: ["loops"] },
   { name: "tui" },
   { name: "migrate" },
   { name: "update", aliases: ["upgrade"] },
   { name: "uninstall" },
   { name: "check" },
+  { name: "trust" },
+  { name: "guard" },
+  { name: "dashboard", aliases: ["ui"] },
+  { name: "chaos" },
 ];
 
 function showHelp(): void {
+  // The Environment list at the end names only variables something reads.
+  // GNOMON_DIR was listed there from the first commit as "Override .gnomon/
+  // directory path", and nothing has ever read it. It is only exported, by
+  // `gnomon session`, to the commands that session runs. An environment
+  // variable that chose which surface governs a run would be the machine-scoped
+  // configuration Rule 1 rules out, and --dir already does the same thing
+  // explicitly, on the command line. So the line went, rather than gaining an
+  // implementation.
+  //
   // Derived, never a literal. This line read `gnomon v0.1.0` while every
   // package.json, Cargo.toml and the tag said 0.1.1 — so the one version string
   // a human actually reads was the one that could not be trusted, and
@@ -1804,7 +2496,28 @@ function showHelp(): void {
 Commands:
   launch [--dir <path>] [--from <path>]
     Start working here. Creates .gnomon/ if it is missing, then opens the
-    interactive loop. This is the one command to remember.
+    interactive loop. This is the one command to remember. When no model
+    answers, it offers the guided setup first.
+
+  setup [--json] [--yes] [--pull TAG] [--model TAG] [--speed-check]
+        [--mode local|hybrid|cloud] [--cloud-endpoint URL|preset|name]
+        [--cloud-model NAME] [--cloud-key-env VAR] [--catalog FILE]
+        [--expect-proposal DIGEST]
+    Scan this machine, plug in a local model it can run, then connect a
+    cloud model. Recommends from a dated catalog and says why, pulls only on
+    a yes, offers a short speed check, suggests local only, hybrid or cloud
+    first, and writes .gnomon/ only after you accept the diff. Off a
+    terminal: --yes approves the write and nothing else; a download needs
+    --pull TAG; nothing is spent. --expect-proposal writes only the change
+    whose proposal.digest an earlier --json run printed. Exit 0 written,
+    3 the surface or the change moved, 4 needs consent or a model, 12 the
+    model server stopped answering.
+
+  doctor [--json] [--catalog FILE]
+    Read-only: this machine, whether every role's model answers, and what
+    changed since setup (memory, GPUs, model servers, catalog). Says what
+    would fix each problem and never changes anything. Exit 0 nothing to do,
+    1 something needs attention, 10 could not run.
 
   init [--dir <path>] [--from <path>] [--force] [--no-verify]
     Write a .gnomon/ surface into a project. --from copies an existing
@@ -1826,7 +2539,8 @@ Commands:
     Show the enumerations contract (edit_format, sandbox, approval, role_profile, exec)
 
   session [--dir <path>] <command> [command ...]
-    Run commands as a session, recording outcomes
+    Run commands as a session, recording outcomes. Each command runs with
+    GNOMON_DIR set to the .gnomon/ directory the session used.
 
   apply <patchset.json> [--dir <path>]
     Apply a patchset to a directory
@@ -1850,20 +2564,57 @@ Commands:
           report what came back. A model listing is not a test of a key —
           some providers serve one to no key at all.
 
-  audit [show|verify] [--dir <path>]
+  audit [show|verify|anchor|tamper|resolve <trail>:<seq> --reason <text>] [--dir <path>]
     Audit trails, when [audit] is enabled. 'verify' re-hashes each record
     and checks the chain, so a trail altered after the fact is detectable.
+    With [audit.anchor] declared it also checks every sealed head against
+    the external witness and names when a re-chain happened (--offline reads
+    this machine's copy; --scope <id> checks another checkout's anchors).
+    'anchor' delivers queued heads to the witness now.
+    'tamper' lists record_tamper events: changes to gnomon's own records
+    that gnomon did not make (exit 3 while any is unresolved). 'resolve'
+    is a person's acknowledgement of one, recorded; skill accept refuses
+    while any is unresolved.
 
-  skill [list|accept <id>|reject <id>] [--dir <path>]
+  skill [list [--candidates]|accept <id> [--evidence <report.json>]|reject <id> [--reason <text>]|mine [--json]] [--dir <path>]
     Skills the harness has learned. An agent proposes into
     .gnomon/skills/proposed/; accepting moves it into .gnomon/skills/,
     which changes the surface hash and applies from the next session.
+    Accept and reject each write a skill_accept / skill_reject audit
+    record (content hash, surface hash before and after, who), even when
+    [audit] is off. --evidence cites a "skill trial" report: it must be for
+    this exact content and base surface, and named by a sealed, verified
+    skill_trial record that agrees with it. With [skills] require_trial =
+    true in policy.toml, accept refuses without a report that also meets
+    its thresholds. A refused accept exits 3.
+    mine reads the audit trails, with no model call, and writes skill
+    candidates (evidence with record pointers, not skill text) to
+    .gnomon-skills/candidates/, which is not hashed.
 
-  task "<what to do>" [--role <name>] [--yes] [--json] [--dir <path>]
+  skill trial <id> [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]
+    Measure a proposal on the tasks in .gnomon/trials/<name>.toml (default
+    "default"): each task x attempt runs once without the skill and once
+    with it, interleaved, each in a fresh private clone at HEAD, judged by
+    the task's check command. Writes .gnomon-trials/<id>/<utc>/ and a
+    skill_trial audit record. Exit 0 meets the declared thresholds, 2 does
+    not, 10 no answer. Never accepts anything.
+
+  task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--dir <path>]
     Run one task without a terminal and print the result. --json emits a
     record whose only run-to-run differences are under "volatile".
     Gated tool calls are REFUSED unless --yes: a non-interactive run has
     nobody to ask. Exit code: 0 result, 2 refusal, 10 apparatus_failure.
+    A surface granting more than the defaults that this machine has not
+    trusted runs CLAMPED to the defaults, with one line on stderr; --trust
+    (or GNOMON_TRUST=<surface hash>) runs it as declared.
+
+  trust [list|grant|revoke] [--dir <path>]
+    Whether this machine's user trusts what this project's .gnomon/ grants
+    beyond gnomon's defaults (approval never, network, a wider shell, an MCP
+    server, ...). list shows the grants against the defaults; grant trusts
+    the current surface; revoke forgets every trust for this project. Kept
+    beside the key store, never in the repository or the surface hash. A
+    scaffolded surface grants nothing extra and is never asked about.
 
   sessions [--dir <path>]
     Saved sessions, newest last.
@@ -1885,17 +2636,61 @@ Commands:
     [check.roles] in policy.toml maps --agent to one; never guessed. The
     verdict is appended to the hash-chained audit trail; --json carries
     the record's hash. Exit: 0 held, 2 a check failed, 10 no verdict.
-    --transcript <file> --format claude-code|opencode also puts every
-    shell command the agent ran to the role's bash_allow / bash_deny.
+    --transcript <file> --format <format> also puts every shell command
+    the agent ran to the role's bash_allow / bash_deny. <format> is the
+    harness that wrote the file: claude-code, opencode, goose, qwen-code
+    or mini-swe-agent.
     --install-hook claude-code prints the SessionStart + Stop hooks that
     run this on every Claude Code session (it edits nothing).
 
-  prompt [--continue | --resume <id>]
+  guard --tool <bash|write|edit|read|webfetch> --input <json> [--role <r> | --agent <a>]
+  guard --from claude-code|opencode|cursor|generic  (the call on stdin)
+    Decide one tool call another harness is about to make, before it runs,
+    by this surface's rules as committed (the session's recorded base, else
+    HEAD): allow, deny or ask, with the rule and the reason, as
+    gnomon.guard/1 JSON. The same prechecks gnomon's own tools run decide it.
+    Exit: 0 allow, 2 deny, 3 ask, 10 no decision (answered as ask). With
+    --from claude-code|cursor it answers in that harness's hook format.
+    Recorded in the audit trail when [audit] is on.
+  guard install claude-code|opencode|cursor [--write]
+    Print the hook (Claude Code PreToolUse, an opencode 2.2 plugin, Cursor
+    hooks.json), or with --write add it to this project's own config.
+
+  dashboard [--port <n>] [--no-open] [--dir <path>]
+    A command center in the browser: projects, sessions as a timeline, what
+    the policy refused, audit-chain verification, contracts and token
+    measurements, read from what gnomon already records; and setup, check,
+    trust and endpoint test as buttons that run these same commands. A
+    change asks you to confirm what it will do first. Serves 127.0.0.1 only;
+    the printed link signs one tab in once. Ctrl-C stops it. Exit 0 stopped,
+    4 port unavailable, 10 failed to start. Alias: ui.
+
+  chaos [--json] [--seed <n>] [--faults <id,...>] [--schedules <s,...>] [--out <file>]
+    The fault-injection suite. A scripted model behind a loopback endpoint
+    answers a fixed task set and injects one fault per case: errors, timeouts,
+    empty and truncated replies, corrupt bodies, schema-violating tool calls,
+    rate limits, and faults seen in the field (late system messages dropped,
+    a relay that keeps abandoned requests running, slow throughput, tool
+    calls in reasoning_content). Each is scored ANNOUNCED or SILENT for
+    \`task --json\`, in a scratch project; nothing else is touched. Exit 0
+    every fault announced, 1 one or more silent, 2 the run is void.
+    \`chaos list\` prints the faults; \`chaos serve\` runs the endpoint for
+    another harness (docs/benchmarks/CHAOS.md).
+
+  prompt [--continue | --resume <id>] [--trust]
     Interactive agent loop. --continue resumes the most recent session,
     --resume <id> a specific one. Conversations are saved after every turn.
+    An untrusted surface granting more than the defaults is shown and asked
+    about first: [y] trust it, [N] run with the defaults, [q] quit (exit 3).
 
   run
     Alias for \`prompt\`
+
+  acp [--role <name>] [--profile <name>]
+    Serve the Agent Client Protocol on stdin/stdout, for an editor (Zed,
+    JetBrains, any ACP client). The same surface, roles, approval gate and
+    audit trail as \`prompt\`: approvals become the editor's permission
+    prompts, roles its modes. The editor starts this; you configure it once.
 
   update [--check] [--force] [--notice on|off]
     Show this version, the latest release and its changelog, then update
@@ -1913,7 +2708,7 @@ Flags that apply across commands:
                           roles for this run. It rewrites per-role model and
                           endpoint — i.e. which machine runs inference and who
                           is billed — and is accepted by simulate, endpoint,
-                          audit, task, skill, prompt and sessions. It is
+                          audit, task, skill, prompt, sessions and trust. It is
                           machine-scoped: it does NOT move the surface hash,
                           so two machines can disagree about routing while
                           agreeing about behaviour. A name with no file in
@@ -1929,8 +2724,10 @@ Getting started in a project:
 
 Environment:
   GNOMON_BIN_OVERRIDE     Path to gnomon binary (for testing)
-  GNOMON_DIR              Override .gnomon/ directory path
   GNOMON_NO_UPDATE_CHECK  Set to 1 to never look for a newer release
+  GNOMON_TRUST            A surface hash (or 12+ char prefix): run THAT surface
+                          as declared even though it is untrusted. Any other
+                          surface is still clamped. See \`gnomon trust\`.
 `);
 }
 
@@ -1940,6 +2737,12 @@ Environment:
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+
+  // [audit.anchor] delivers sealed heads after the checkpoint at session end.
+  // In this process that delivery would die with `gnomon task`'s exit, so the
+  // CLI hands it to a detached `gnomon audit anchor --background`. Inert when
+  // nothing is queued, and absent [audit.anchor] nothing ever is.
+  setAnchorScheduler((s) => detachedAnchorFlush(s, Boolean(args.trust)));
 
   // Deliberately NOT applied here. This is before any surface is loaded, so
   // there is nothing to say which names are credentials -- and injecting the
@@ -1971,7 +2774,7 @@ async function main(): Promise<void> {
   // them when stdout is not a terminal. Not for commands that run tools: the
   // variable would be inherited by the project's own commands and change what
   // they print, which is not this flag's business. FORCE_COLOR opts back in.
-  const reporting = ["endpoint", "key", "audit", "sessions", "skill", "surface", "init", "migrate", "enumerations"];
+  const reporting = ["endpoint", "key", "audit", "sessions", "skill", "surface", "init", "migrate", "enumerations", "trust", "doctor"];
   if (reporting.includes(args.command) && !process.stdout.isTTY && !process.env.FORCE_COLOR) {
     process.env.NO_COLOR = "1";
   }
@@ -2007,6 +2810,16 @@ async function main(): Promise<void> {
     case "init":
       await cmdInit(args);
       break;
+    case "setup": {
+      const code = await cmdSetup(args);
+      if (code !== 0) process.exit(code);
+      break;
+    }
+    case "doctor": {
+      const code = await cmdDoctor(args);
+      if (code !== 0) process.exit(code);
+      break;
+    }
     case "migrate":
       await cmdMigrate(args);
       break;
@@ -2053,6 +2866,9 @@ async function main(): Promise<void> {
       maybeNotifyUpdate(args.command, !!args.json);
       await cmdPrompt(args);
       break;
+    case "acp":
+      await cmdAcp(args);
+      break;
     case "loop":
     case "loops":
       await cmdLoop(args);
@@ -2060,8 +2876,33 @@ async function main(): Promise<void> {
     case "tui":
       await cmdTui(args);
       break;
+    case "trust":
+      await cmdTrust(args);
+      break;
     case "check":
       process.exit(await cmdCheck(args));
+    case "chaos": {
+      // Its own argv parser, like guard: subcommands and flags it alone reads.
+      const { cmdChaos } = await import("./chaos.js");
+      const at = process.argv.indexOf("chaos", 2);
+      process.exitCode = await cmdChaos(process.argv.slice(at + 1));
+      return;
+    }
+    case "guard": {
+      // Its own argv parser and a lean import: see guard_main.ts.
+      const { cmdGuard } = await import("./guard.js");
+      const at = process.argv.indexOf("guard", 2);
+      process.exitCode = await cmdGuard(process.argv.slice(at + 1));
+      return;
+    }
+    case "dashboard":
+    case "ui": {
+      // Lazy, like guard: nothing of the dashboard loads for any other command.
+      const { cmdDashboard } = await import("./dashboard.js");
+      const at = process.argv.indexOf(args.command, 2);
+      process.exitCode = await cmdDashboard(process.argv.slice(at + 1));
+      return;
+    }
     default:
       console.error(`Unknown command: ${args.command}`);
       showHelp();

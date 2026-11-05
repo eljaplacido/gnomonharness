@@ -51,14 +51,23 @@ export interface CredentialStore {
  * on your machine measures your machine".
  */
 export function credentialsPath(): string {
+  return join(gnomonDataDir(), "credentials.json");
+}
+
+/**
+ * The machine-local directory for what belongs to this machine's USER rather
+ * than to any repository: stored keys, and which surfaces this user has
+ * trusted (trust.ts). Never inside a repository, never hashed.
+ */
+export function gnomonDataDir(): string {
   const xdg = process.env.XDG_DATA_HOME;
-  if (xdg && xdg.trim()) return join(xdg, "gnomon", "credentials.json");
+  if (xdg && xdg.trim()) return join(xdg, "gnomon");
   if (process.platform === "win32") {
     const appdata = process.env.APPDATA;
     const base = appdata && appdata.trim() ? appdata : join(homedir(), "AppData", "Roaming");
-    return join(base, "gnomon", "credentials.json");
+    return join(base, "gnomon");
   }
-  return join(homedir(), ".local", "share", "gnomon", "credentials.json");
+  return join(homedir(), ".local", "share", "gnomon");
 }
 
 export function loadCredentials(path = credentialsPath()): CredentialStore {
@@ -108,13 +117,13 @@ export function saveCredentials(
  * control that fails silently is worse than one that is absent, because the
  * comment above keeps promising it.
  */
-function restrictToOwner(path: string): void {
+export function restrictToOwner(path: string, what = "The credential store"): void {
   if (process.platform !== "win32") return;
   const user = process.env.USERNAME;
   if (!user) {
     process.stderr.write(
       `gnomon: could not restrict ${path} to your account (USERNAME is unset).\n` +
-        `  The credential store may be readable by other users on this machine.\n`
+        `  ${what} may be readable by other users on this machine.\n`
     );
     return;
   }
@@ -126,7 +135,7 @@ function restrictToOwner(path: string): void {
     process.stderr.write(
       `gnomon: could not restrict ${path} to your account: ` +
         `${e instanceof Error ? e.message.split("\n")[0] : String(e)}\n` +
-        `  The credential store may be readable by other users on this machine.\n` +
+        `  ${what} may be readable by other users on this machine.\n` +
         `  Restrict it yourself:  icacls "${path}" /inheritance:r /grant:r "%USERNAME%:F"\n`
     );
   }

@@ -56,7 +56,12 @@ function findByName(root: string, name: string, cap = 12): string[] {
     if (out.length >= cap || depth > 8) return;
     let entries;
     try {
-      entries = readdirSync(dir, { withFileTypes: true });
+      // Byte order (GV17): past `cap`, which candidates are found -- and so
+      // whether a citation reads `ok` or `ambiguous` -- must not depend on
+      // the filesystem's enumeration order.
+      entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+        a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+      );
     } catch {
       return;
     }

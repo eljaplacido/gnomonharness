@@ -5,6 +5,28 @@ terminal, against your own repository, with your own models. This is the
 shortest path from nothing to a first task. For the full reference, see
 [README.md](README.md).
 
+## Get started in 3 steps
+
+Once gnomon is installed ([section 2](#2-install)):
+
+1. **Scan your machine and plug in a local model it can run.**
+   `cd my-project && gnomon setup` shows your OS, RAM, GPU and running model
+   servers, recommends a model from a dated catalog with the reason
+   (`qwen3.6:35b` from 24 GB of GPU memory or 64 GB of unified memory; a
+   smaller one below that), downloads it only if you say yes, and offers a
+   ~10 s speed check.
+2. **Connect a cloud model (optional).** OpenCode Go, OpenRouter, OpenCode Zen
+   or any OpenAI-compatible URL; the key is read hidden and kept outside the
+   repository. With one, setup suggests hybrid: the cloud plans, your machine
+   builds. On an RTX 5090 that solved 87% vs 84% cloud-only, at 26% lower
+   cost per solved task.
+3. **Accept the diff, then `gnomon launch`.** Setup writes `.gnomon/` only
+   after you accept the diff it shows. `gnomon doctor` re-checks the machine
+   any time and changes nothing.
+
+`gnomon launch` on its own offers the same guided setup whenever no model
+answers. The sections below are the long way round, step by step.
+
 ## 1. Prerequisites
 
 - **Node ≥ 20** — all the installer below needs
@@ -21,6 +43,18 @@ block below for why, and for the two things that behave differently there. WSL2
 still works if you prefer it.
 
 ## 2. Install
+
+### From npm
+
+```bash
+npm i -g gnomon-harness
+```
+
+The package is `gnomon-harness` and the command is `gnomon` (the name `gnomon`
+on npm belongs to an unrelated logging utility). That is enough for `launch`,
+`prompt`, `task`, `acp` and `init`; the one-liner below also installs the
+native binaries `surface`, `enumerations`, `session`, `apply` and `simulate`
+need.
 
 ### The one-liner — any machine with Node
 
@@ -40,7 +74,7 @@ no Rust, no sudo.
 What it does: checks for Node ≥ 20 (if it is missing or old it prints the exact
 command for your OS — NodeSource, Homebrew, nvm, winget — and stops; it never
 installs Node as root on its own), resolves the latest release
-(`GNOMON_VERSION=0.3.1` pins one), installs the npm package, and puts the native
+(`GNOMON_VERSION=0.4.2` pins one), installs the npm package, and puts the native
 binaries in `~/.local/share/gnomon/bin` (`%LOCALAPPDATA%\gnomon\bin` on Windows),
 where `surface`, `enumerations`, `session`, `apply` and `simulate` find them
 with no environment variable. Every download is checked against the release's
@@ -57,29 +91,30 @@ package fails in dpkg while the distro's `npm` and `libnode-dev` are installed.
 ### By hand — the same packages, no script
 
 ```bash
-V=0.3.1
+V=0.4.2
 B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz \
          $B/gnomon-tui-$V.tgz  $B/gnomon-harness-$V.tgz
 ```
 
 ```powershell
-$V="0.3.1"
+$V="0.4.2"
 $B="https://github.com/eljaplacido/gnomonharness/releases/download/v$V"
 npm i -g "$B/gnomon-core-$V.tgz" "$B/gnomon-natives-$V.tgz" "$B/gnomon-tui-$V.tgz" "$B/gnomon-harness-$V.tgz"
 ```
 
-Two blocks because they have to be: `V=0.3.1` is not an assignment in
+Two blocks because they have to be: `V=0.4.2` is not an assignment in
 PowerShell and `\` is not its line continuation. The four are one package split
 up — `gnomon-harness` is the CLI and the other three its libraries — so npm
-needs all four URLs until there is a registry entry to resolve them from. This
+needs all four URLs; from the registry, one name is enough (below). This
 route does not fetch the native binaries; see
 [Prebuilt binaries](#prebuilt-binaries--if-you-would-rather-not-install-rust).
 
-Once `gnomon-harness` is on the registry, `npm install -g gnomon-harness` will
-work too (today it 404s; the installer switches to the registry by itself the
-moment it does not). The package is `gnomon-harness` and the binary is
-`gnomon`: the name `gnomon` on npm belongs to an unrelated logging utility.
+From the registry the same four are one command, `npm i -g gnomon-harness`,
+because npm resolves the three libraries by name. The installer uses the
+registry whenever the release it is installing is there, and these tarballs
+when it is not (an older pinned release). Each release's npm packages are the
+release's own tarballs, published byte for byte when the release is.
 
 Everything below is the from-source path — for working ON gnomon, or for
 running the version in your own checkout.
@@ -263,9 +298,13 @@ Tools (implement): bash, compute, edit, glob, grep, note, read, todo, write
 
 ## 4. Two things to do right after
 
-1. **Check `.gnomon/roles.toml`.** `init` asks your model host what it has and
+1. **Check the model tags.** `gnomon setup` chooses them for this machine and
+   shows them as a diff before writing. Without it, `init` asks your model host what it has and
    writes real model tags. If nothing was reachable it falls back to generic
-   tags — which will be wrong. Point them at models you actually have.
+   tags — which will be wrong. Point them at models you actually have with
+   `/models`, which writes the file that routes each role. By hand, edit the
+   profile your `role_profile` names (`.gnomon/profiles/local_first.toml` in a
+   scaffolded project), because it is merged over `.gnomon/roles.toml`.
 2. **Ignore the run dirs.** Add `.gnomon-sessions/`, `.gnomon-audit/`,
    `.gnomon-jobs/` and `.gnomon-out/` to your
    `.gitignore`.
@@ -297,6 +336,39 @@ Prefer one shot, no terminal? The exit code carries the outcome:
 ```bash
 gnomon task "fix the bug in add()" --yes
 ```
+
+## 6. In your editor (Zed, JetBrains)
+
+`gnomon acp` runs gnomon behind the [Agent Client
+Protocol](https://agentclientprotocol.com), so it appears in an editor's agent
+panel with the same surface, roles, approvals and audit trail as the terminal.
+The approval prompt becomes the editor's permission prompt, with the same four
+answers, and roles become its modes. Run `gnomon launch` in the project once
+first: the editor uses the `.gnomon/` it finds there and does not create one.
+
+Zed, in `settings.json`:
+
+```json
+{
+  "agent_servers": {
+    "gnomon": { "type": "custom", "command": "gnomon", "args": ["acp"], "env": {} }
+  }
+}
+```
+
+JetBrains (AI Assistant): AI Chat → ⋯ → **Add Custom Agent**, then in
+`~/.jetbrains/acp.json`:
+
+```json
+{
+  "agent_servers": {
+    "gnomon": { "command": "gnomon", "args": ["acp"] }
+  }
+}
+```
+
+Use the full path from `which gnomon` if the editor cannot find it. More in
+[README → In your editor](README.md#in-your-editor--gnomon-acp).
 
 ## Local vs cloud endpoints, and using a keyed cloud model
 
@@ -338,8 +410,12 @@ api_key_env = "OPENROUTER_API_KEY"
 ```
 
 Then point a role at it. In the loop, **`/models`** lists what each endpoint
-serves — pick one and it writes both `model` and `endpoint` into that role. Or
-edit `.gnomon/roles.toml`:
+serves — pick one and it writes both `model` and `endpoint` into that role, in
+`.gnomon/profiles/local_first.toml` and `.gnomon/roles.toml` alike, so the two
+agree. To edit by hand instead, change the role's block in the profile your
+`role_profile` names (`local_first.toml` in a scaffolded project), because a
+profile is merged over `.gnomon/roles.toml`. A `roles.toml` value the profile
+overrides is ignored, and gnomon warns at startup when one is:
 
 ```toml
 [roles.plan]
@@ -359,6 +435,8 @@ Start with `/explain endpoints` or `/help`.
 
 ## Where to next
 
+- **[docs/GUIDE.md](docs/GUIDE.md)** — model recipes (local, cloud, hybrid),
+  use-case patterns, troubleshooting and an FAQ.
 - **[README.md](README.md)** — architecture, the content-hashed surface, roles,
   tools, and safety, in full.
 - **[docs/](docs/)** — DESIGN, CONTRACTS, POSITIONING, and benchmark results.

@@ -29,7 +29,12 @@ done
 # NOT ship src: shipping src is how a package quietly starts needing a loader.
 HARNESS=$(ls "$TMP"/gnomon-harness-*.tgz)
 LIST=$(tar -tzf "$HARNESS" | sed 's|^package/||')
-for want in bin/gnomon.mjs dist/index.js package.json LICENSE; do
+# catalog/models.toml: `gnomon setup` and `gnomon doctor` read it beside dist/.
+# dashboard/: `gnomon dashboard` reads its page and assets beside dist/, once, at
+# start, and refuses to start (exit 10) when one is missing.
+for want in bin/gnomon.mjs dist/index.js catalog/models.toml \
+    dashboard/index.html dashboard/app.js dashboard/app.css dashboard/icon.svg \
+    dashboard/fonts/cinzel-wordmark.woff2 dashboard/fonts/OFL.txt package.json LICENSE; do
     grep -qx "$want" <<<"$LIST" || { echo "FAIL: $want missing from gnomon-harness"; exit 1; }
 done
 if grep -q '^src/' <<<"$LIST"; then
@@ -49,10 +54,18 @@ if [ -n "$DEPS" ]; then
     exit 1
 fi
 
-echo "── installing into an empty directory"
+echo "── installing into an empty project that is a git repository"
 mkdir -p "$TMP/proj"
 cd "$TMP/proj"
 npm init -y >/dev/null 2>&1
+# A git repository with a commit, like any project gnomon is installed into
+# locally or in CI. git answers from inside node_modules here, for THIS
+# repository; an installed copy that asks it reports the project's commit as
+# gnomon's build. v0.3.1 did exactly that (found 2026-10-31). An empty directory
+# that is not a repository, which this check used before, cannot show it.
+git init -q . && git -c user.email=check@example.invalid -c user.name=check \
+    commit -q --allow-empty -m "someone else's project"
+PROJECT_SHA=$(git rev-parse --short HEAD)
 npm install --no-audit --no-fund --silent "$TMP"/*.tgz >/dev/null 2>&1
 
 BIN="$TMP/proj/node_modules/.bin/gnomon"
@@ -73,16 +86,20 @@ mkdir -p "$TMP/proj/scratch"
 
 VER=$(grep -oE 'gnomon/[0-9.]+\+[A-Za-z0-9._-]+' <<<"$OUT" | head -1)
 
-# The `npm` provenance rule, asserted here because this is the only place it can
-# be reached. It branches on build.ts's own path containing node_modules, which
-# is false in a checkout — so a unit test written against it passes whether or
-# not the branch exists (checked: deleting it left such a test green). Here the
-# harness really is installed, so the branch really does fire.
-# conformance/build_field.json declares this rule; docs/CONTRACTS.md explains it.
+# The installed-copy provenance rules, end to end from a real install
+# (gates.test.ts drives them from constructed layouts). Unstamped tarballs say
+# `+npm`. The release job stamps gnomon-core before packing and passes the stamp
+# in EXPECT_REVISION, so a release's tarballs must say exactly that.
+# conformance/build_field.json declares the rules; docs/CONTRACTS.md explains them.
+WANT="${EXPECT_REVISION:-npm}"
 case "$VER" in
-    *"+npm") ;;
-    *) echo "FAIL: an installed copy reported provenance '$VER', expected '+npm'."
-       echo "      conformance/build_field.json declares the npm rule; see build.ts."
+    *"+$PROJECT_SHA"*)
+       echo "FAIL: an installed copy reported provenance '$VER': the commit of the"
+       echo "      project it is installed in ($PROJECT_SHA), not gnomon's build."
+       exit 1 ;;
+    *"+$WANT") ;;
+    *) echo "FAIL: an installed copy reported provenance '$VER', expected '+$WANT'."
+       echo "      conformance/build_field.json declares the rules; see build.ts."
        exit 1 ;;
 esac
 

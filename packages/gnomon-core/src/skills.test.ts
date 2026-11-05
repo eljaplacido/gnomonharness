@@ -2,8 +2,9 @@
  * gnomon-core: Skills tests
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -19,16 +20,47 @@ import {
   rejectSkill,
   skillId,
   Skill,
+  AgentSessionRefusal,
+  NoPersonRefusal,
+  SkillRefusal,
 } from "./skills.js";
+import { recomputeManifest } from "./config.js";
+import { setDecisionContextProbe } from "./agent_context.js";
+import { verifyTrail, AuditTrail, resolveAudit, recordHash, type AuditRecord } from "./audit.js";
 
 let root: string;
-const cfg = (): any => ({ gnomonDir: join(root, ".gnomon") });
+const cfg = (audit: Record<string, unknown> = {}, policy: Record<string, unknown> = {}): any => ({
+  gnomonDir: join(root, ".gnomon"),
+  config: { audit },
+  policy,
+});
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "gnomon-skills-"));
   mkdirSync(join(root, ".gnomon", "skills"), { recursive: true });
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+// A person at a terminal, with no agent above: the suite may itself be run by
+// an agent's shell, whose marker and process tree would refuse every decision
+// below (agent_context.ts). The refusals have their own tests, which set the
+// probe they need.
+beforeEach(() => setDecisionContextProbe(() => ({ agent: null, interactive: true })));
+afterEach(() => setDecisionContextProbe(null));
+
+
+// These tests are a person's decisions. Run by an agent's bash tool, the
+// harness's marker would be in the environment and every one refused, so the
+// suite clears it and puts it back.
+let agentMarker: string | undefined;
+beforeEach(() => {
+  agentMarker = process.env.GNOMON_AGENT_SESSION;
+  delete process.env.GNOMON_AGENT_SESSION;
+});
+afterEach(() => {
+  if (agentMarker === undefined) delete process.env.GNOMON_AGENT_SESSION;
+  else process.env.GNOMON_AGENT_SESSION = agentMarker;
+});
 
 const write = (dir: string, name: string, body: string) => {
   mkdirSync(join(root, ".gnomon", dir), { recursive: true });
@@ -180,6 +212,599 @@ describe("authorship", () => {
   it("skillId slugifies", () => {
     expect(skillId("Rust Test Layout!")).toBe("rust-test-layout");
     expect(skillId("!!!")).toBe("skill");
+  });
+});
+
+describe("accept and reject leave a record", () => {
+  /** Every record of every trail under the audit dir, in file order. */
+  const trails = (dir = ".gnomon-audit"): { file: string; records: AuditRecord[] }[] => {
+    const at = join(root, dir);
+    if (!existsSync(at)) return [];
+    return readdirSync(at)
+      .filter((f) => f.endsWith(".jsonl"))
+      .sort()
+      .map((f) => ({
+        file: join(at, f),
+        records: readFileSync(join(at, f), "utf-8")
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l) as AuditRecord),
+      }));
+  };
+
+  it("accept writes skill_accept: the content hash, and the surface hash before and after", () => {
+    // Fails on master: acceptSkill moved the file and wrote nothing, so the
+    // trail showed the surface hash change and never that a person accepted a
+    // named skill, or what it said.
+    const { path } = proposeSkill(cfg(), { name: "Run the suite", body: "use make test" });
+    const content = readFileSync(path);
+    const before = recomputeManifest(join(root, ".gnomon")).surface_hash;
+
+    const d = acceptSkill(cfg(), "run-the-suite", { interactive: true });
+    const after = recomputeManifest(join(root, ".gnomon")).surface_hash;
+
+    const all = trails();
+    expect(all).toHaveLength(1);
+    const kinds = all[0].records.map((r) => r.kind);
+    expect(kinds).toEqual(["session_start", "skill_accept", "session_end"]);
+    const rec = all[0].records[1];
+    expect(rec).toMatchObject({
+      skill: "run-the-suite",
+      name: "Run the suite",
+      path: ".gnomon/skills/run-the-suite.md",
+      content_sha256: createHash("sha256").update(content).digest("hex"),
+      surface_hash_before: before,
+      surface_hash_after: after,
+      evidence: "none",
+      // The CLI cannot see who typed the command, so it does not claim a person.
+      by: "cli",
+      agent_session_marker: "absent",
+      interactive: true,
+      authorised_by: "tty",
+    });
+    expect(rec.surface_hash_before).not.toBe(rec.surface_hash_after);
+    expect(typeof rec.host).toBe("string");
+    // The returned record is the one on disk, and the trail verifies sealed.
+    expect(d.record?.hash).toBe(rec.hash);
+    expect(verifyTrail(all[0].file)).toMatchObject({ ok: true, sealed: true });
+  });
+
+  it("is written even when [audit] is off, into the directory [audit] names", () => {
+    proposeSkill(cfg(), { name: "n", body: "b" });
+    acceptSkill(cfg({ enabled: false, dir: "trail-here" }), "n");
+    expect(trails("trail-here")).toHaveLength(1);
+    expect(trails()).toHaveLength(0);
+  });
+
+  it("reject writes skill_reject with the reason, before the proposal goes", () => {
+    const { path } = proposeSkill(cfg(), { name: "Bad idea", body: "skip the tests" });
+    const content = readFileSync(path);
+    const surface = recomputeManifest(join(root, ".gnomon")).surface_hash;
+
+    rejectSkill(cfg(), "bad-idea", { reason: "hides failures" });
+
+    expect(existsSync(path)).toBe(false);
+    const rec = trails()[0].records[1];
+    expect(rec).toMatchObject({
+      kind: "skill_reject",
+      skill: "bad-idea",
+      content_sha256: createHash("sha256").update(content).digest("hex"),
+      // Proposals are not hashed, so rejecting one moves nothing.
+      surface_hash_before: surface,
+      surface_hash_after: surface,
+      reason: "hides failures",
+    });
+  });
+
+  it("an accept whose record cannot be written does not happen", () => {
+    proposeSkill(cfg(), { name: "n", body: "b" });
+    // A FILE where the audit directory should be: mkdir fails.
+    writeFileSync(join(root, "blocked"), "not a directory", "utf-8");
+    expect(() => acceptSkill(cfg({ dir: "blocked" }), "n")).toThrow(/Not accepted/);
+    expect(loadSkills(cfg()).map((s) => s.id)).toEqual([]);
+    expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["n"]);
+  });
+
+  it("two decisions in the same millisecond get two sealed trails", () => {
+    // The clock is frozen, so all three decisions share a timestamp and pid:
+    // without the random suffix they share one file and the chain forks.
+    for (const n of ["a", "b", "c"]) proposeSkill(cfg(), { name: n, body: n });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-03T00:00:00.000Z"));
+    try {
+      acceptSkill(cfg(), "a");
+      acceptSkill(cfg(), "b");
+      rejectSkill(cfg(), "c");
+    } finally {
+      vi.useRealTimers();
+    }
+    const all = trails();
+    expect(all).toHaveLength(3);
+    for (const t of all) expect(verifyTrail(t.file)).toMatchObject({ ok: true, sealed: true });
+  });
+
+  it("records the decision before the file moves; a move that fails is sealed applied: false", () => {
+    // Fails on the old order (move, then record): the failed move threw
+    // before anything was written, and a crash after a successful move left
+    // an accept with no record at all.
+    proposeSkill(cfg(), { name: "n", body: "b" });
+    // A DIRECTORY where the skill would land: the rename fails.
+    mkdirSync(join(root, ".gnomon", "skills", "n.md"), { recursive: true });
+    expect(() => acceptSkill(cfg(), "n")).toThrow(/could not be moved/);
+    expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["n"]);
+    const [t] = trails();
+    expect(t.records.map((r) => r.kind)).toEqual(["session_start", "skill_accept", "session_end"]);
+    expect(t.records[2]).toMatchObject({ applied: false });
+    expect(typeof t.records[2].error).toBe("string");
+    expect(verifyTrail(t.file)).toMatchObject({ ok: true, sealed: true });
+  });
+
+  it("names the surface hash the accept will produce, and seals with the one it did", () => {
+    proposeSkill(cfg(), { name: "n", body: "b" });
+    acceptSkill(cfg(), "n");
+    const after = recomputeManifest(join(root, ".gnomon")).surface_hash;
+    const [t] = trails();
+    expect(t.records[1].surface_hash_after).toBe(after);
+    expect(t.records[2]).toMatchObject({ applied: true, surface_hash_after: after });
+  });
+
+  it("an empty or overwritten marker is still an agent session; so is an agent above this process", () => {
+    // GBS-GOVERNANCE 0.1: the agent's shell unset the marker and accepted its
+    // own skill, 4 of 4. The empty string passed the old check as well.
+    proposeSkill(cfg(), { name: "a", body: "a" });
+    for (const value of ["", "operator"]) {
+      process.env.GNOMON_AGENT_SESSION = value;
+      expect(() => acceptSkill(cfg(), "a")).toThrow(AgentSessionRefusal);
+      expect(() => rejectSkill(cfg(), "a")).toThrow(AgentSessionRefusal);
+    }
+    delete process.env.GNOMON_AGENT_SESSION;
+    // Unset here, marked above (agent_context.ts reads the ancestors' /proc).
+    setDecisionContextProbe(() => ({ agent: "ancestor process 42 was started inside agent session s-1", interactive: true }));
+    expect(() => acceptSkill(cfg(), "a")).toThrow(/agent session: ancestor process 42/);
+    expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["a"]);
+    expect(trails()).toHaveLength(0);
+  });
+
+  it("no terminal and no person-present signer: refused, exit-3 class, nothing moved or written", () => {
+    proposeSkill(cfg(), { name: "a", body: "a" });
+    setDecisionContextProbe(() => ({ agent: null, interactive: false }));
+    let err: unknown;
+    try {
+      acceptSkill(cfg(), "a");
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(NoPersonRefusal);
+    expect(err).toBeInstanceOf(SkillRefusal);
+    expect(String(err)).toMatch(/needs a person/);
+    expect(() => rejectSkill(cfg(), "a")).toThrow(NoPersonRefusal);
+    // A library caller saying "interactive: false" is held to it too.
+    setDecisionContextProbe(() => ({ agent: null, interactive: true }));
+    expect(() => acceptSkill(cfg(), "a", { interactive: false })).toThrow(NoPersonRefusal);
+    expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["a"]);
+    expect(trails()).toHaveLength(0);
+  });
+
+  it("without a terminal, a person-present signer authorises it by signing first; one that does not sign cannot", () => {
+    const keys = generateKeyPairSync("ed25519");
+    const PUB = keys.publicKey.export({ format: "pem", type: "spki" }).toString();
+    const signer = (good: boolean) => {
+      const f = join(root, good ? "good.mjs" : "bad.mjs");
+      writeFileSync(
+        f,
+        good
+          ? `import { readFileSync } from "node:fs";\nimport { createPrivateKey, sign } from "node:crypto";\nconst k = createPrivateKey(${JSON.stringify(keys.privateKey.export({ format: "pem", type: "pkcs8" }).toString())});\nprocess.stdout.write(sign(null, readFileSync(0), k).toString("base64"));\n`
+          : `process.stdout.write("bm90LWEtc2lnbmF0dXJl");\n`
+      );
+      return `"${process.execPath}" "${f}"`;
+    };
+    const withSigner = (good: boolean) => cfg({ attest: { sign: signer(good), public_key: PUB, person_present: true } });
+    setDecisionContextProbe(() => ({ agent: null, interactive: false }));
+    proposeSkill(cfg(), { name: "a", body: "a" });
+
+    expect(() => acceptSkill(withSigner(false), "a")).toThrow(/did not sign/);
+    expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["a"]);
+    const [refused] = trails();
+    expect(refused.records.map((r) => r.kind)).toEqual(["session_start", "skill_accept", "session_end"]);
+    expect(refused.records[2]).toMatchObject({ applied: false, error: expect.stringMatching(/did not sign/) });
+
+    const d = acceptSkill(withSigner(true), "a");
+    expect(d.record).toMatchObject({ interactive: false, authorised_by: "person_present_signer" });
+    expect(loadSkills(cfg()).map((s) => s.id)).toEqual(["a"]);
+  }, 30_000);
+
+  it("refuses to accept or reject inside an agent session, and nothing moves or is recorded", () => {
+    // Found in re-review: `gnomon skill accept` run through the agent's own
+    // bash was recorded `by: "human"`. The harness marks every tool
+    // subprocess with GNOMON_AGENT_SESSION; a decision there is refused.
+    proposeSkill(cfg(), { name: "a", body: "a" });
+    proposeSkill(cfg(), { name: "b", body: "b" });
+    process.env.GNOMON_AGENT_SESSION = "s-test";
+    let err: unknown;
+    try {
+      acceptSkill(cfg(), "a");
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(AgentSessionRefusal);
+    // The CLI's exit 3 is keyed on the base class every refusal extends.
+    expect(err).toBeInstanceOf(SkillRefusal);
+    expect(String(err)).toMatch(/agent session.*s-test/);
+    expect(() => rejectSkill(cfg(), "b")).toThrow(AgentSessionRefusal);
+    delete process.env.GNOMON_AGENT_SESSION;
+    expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["a", "b"]);
+    expect(loadSkills(cfg())).toEqual([]);
+    expect(trails()).toHaveLength(0);
+  });
+
+  it("refuses an id that is not a skill id: reject ../keep cannot delete an active skill", () => {
+    // Fails on master: the id was joined into a path unchecked, and
+    // `skill reject ../keep` removed .gnomon/skills/keep.md.
+    write("skills", "keep.md", "+++\nname = \"Keep\"\n+++\nkeep me");
+    expect(() => rejectSkill(cfg(), "../keep")).toThrow(/not a skill id/);
+    expect(() => acceptSkill(cfg(), "../keep")).toThrow(/not a skill id/);
+    expect(() => acceptSkill(cfg(), "Upper")).toThrow(/not a skill id/);
+    expect(loadSkills(cfg()).map((s) => s.id)).toEqual(["keep"]);
+    expect(trails()).toHaveLength(0);
+  });
+
+  it("matches conformance/skill_decision.json", () => {
+    const fixture = JSON.parse(
+      readFileSync(join(process.cwd(), "..", "..", "conformance", "skill_decision.json"), "utf-8")
+    );
+    const base = ["seq", "ts", "kind", "prev", "hash"];
+    proposeSkill(cfg(), { name: "a", body: "b" });
+    proposeSkill(cfg(), { name: "c", body: "d" });
+    acceptSkill(cfg(), "a");
+    rejectSkill(cfg(), "c", { reason: "why" });
+    const decided = trails().map((t) => {
+      expect(t.records.map((r) => r.kind)).toEqual(["session_start", t.records[1].kind, "session_end"]);
+      expect(t.records[0].mode).toBe(fixture.session_start_mode);
+      return t.records[1];
+    });
+    for (const r of decided) {
+      expect(fixture.audit_kinds).toContain(r.kind);
+      expect(Object.keys(r).filter((k) => !base.includes(k)).sort()).toEqual(
+        [...fixture.audit_keys[r.kind as string]].sort()
+      );
+      expect(r.by).toBe(fixture.by_from_cli);
+    }
+    expect(decided.find((r) => r.kind === "skill_accept")?.evidence).toBe(fixture.evidence_without_report);
+    for (const t of trails()) {
+      const end = t.records[2];
+      const want = t.records[1].kind === "skill_accept" ? fixture.session_end_keys : fixture.session_end_keys_reject;
+      expect(Object.keys(end).filter((k) => !base.includes(k)).sort()).toEqual([...want.applied].sort());
+    }
+    expect(decided.find((r) => r.kind === "skill_accept")?.require_trial).toBe(fixture.require_trial.default);
+  });
+
+  it("a reject whose record cannot be written leaves the proposal", () => {
+    proposeSkill(cfg(), { name: "n", body: "b" });
+    writeFileSync(join(root, "blocked"), "not a directory", "utf-8");
+    expect(() => rejectSkill(cfg({ dir: "blocked" }), "n")).toThrow();
+    expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["n"]);
+  });
+});
+
+describe("accept --evidence and require_trial", () => {
+  // A real Ed25519 signer, as `[audit.attest]` declares one: a command that
+  // reads a digest on stdin and writes a base64 signature.
+  const keys = generateKeyPairSync("ed25519");
+  const PRIV = keys.privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+  const PUB = keys.publicKey.export({ format: "pem", type: "spki" }).toString();
+  const signer = () => {
+    const f = join(root, "signer.mjs");
+    if (!existsSync(f)) {
+      writeFileSync(
+        f,
+        `import { readFileSync } from "node:fs";\nimport { createPrivateKey, sign } from "node:crypto";\n` +
+          `const k = createPrivateKey(${JSON.stringify(PRIV)});\n` +
+          `process.stdout.write(sign(null, readFileSync(0), k).toString("base64"));\n`
+      );
+    }
+    return `"${process.execPath}" "${f}"`;
+  };
+  const signed = (policy: Record<string, unknown> = {}) => cfg({ attest: { sign: signer(), public_key: PUB } }, policy);
+  /** require_trial on, with a signer declared: the only way it can pass. */
+  const strict = () => signed({ skills: { require_trial: true } });
+  const strictUnsigned = () => cfg({}, { skills: { require_trial: true } });
+  const sha = (b: string | Buffer) => createHash("sha256").update(b).digest("hex");
+
+  /**
+   * A trial report on disk, and (unless `recorded` is false) the skill_trial
+   * record naming its hash, as `gnomon skill trial` writes them. Built by hand
+   * so this file tests the accept, not the trial.
+   */
+  const report = (
+    over: {
+      content?: string;
+      base?: string;
+      meets?: unknown;
+      recorded?: boolean;
+      /** Fields of the skill_trial record that differ from the report. */
+      record?: Record<string, unknown>;
+      /** Leave the trail unsealed (no session_end). */
+      unsealed?: boolean;
+      /** Sign the trail's head, as a surface with [audit.attest] does. */
+      signed?: boolean;
+    } = {}
+  ): string => {
+    const content = readFileSync(join(root, ".gnomon", "skills", "proposed", "fix-it.md"));
+    const fields = {
+      schema: "gnomon.trial/1",
+      skill: "fix-it",
+      content_sha256: over.content ?? sha(content),
+      arms: {
+        base: { surface_hash: over.base ?? recomputeManifest(join(root, ".gnomon")).surface_hash },
+        skill: { surface_hash: "s".repeat(64) },
+      },
+      meets_thresholds: "meets" in over ? over.meets : true,
+    };
+    const body = `${JSON.stringify(fields)}\n`;
+    const rel = `.gnomon-trials/fix-it/${Math.random().toString(16).slice(2)}/report.json`;
+    mkdirSync(join(root, rel, ".."), { recursive: true });
+    writeFileSync(join(root, rel), body, "utf-8");
+    if (over.recorded !== false) {
+      // The trail `recordTrial` writes: sealed, chained, and agreeing with the
+      // report on every field the accept compares.
+      const t = new AuditTrail(
+        { ...resolveAudit(over.signed ? signed() : cfg()), enabled: true, chain: true },
+        `trial-${Math.random().toString(16).slice(2)}`
+      );
+      t.write("session_start", { mode: "trial" });
+      t.write("skill_trial", {
+        skill: fields.skill,
+        report: rel,
+        report_sha256: sha(body),
+        content_sha256: fields.content_sha256,
+        surface_hash_base: fields.arms.base.surface_hash,
+        surface_hash_skill: fields.arms.skill.surface_hash,
+        meets_thresholds: fields.meets_thresholds,
+        ...over.record,
+      });
+      if (!over.unsealed) t.write("session_end", {});
+    }
+    return rel;
+  };
+  const propose = () => proposeSkill(cfg(), { name: "fix it", body: "write fixed.txt" });
+  const stillProposed = () => {
+    expect(loadSkills(cfg())).toEqual([]);
+    expect(loadProposedSkills(cfg()).map((s) => s.id)).toEqual(["fix-it"]);
+  };
+
+  it("with require_trial on, accept without a report is refused and nothing moves", () => {
+    // Fails on master: there is no require_trial, so this accept succeeds.
+    propose();
+    expect(() => acceptSkill(strict(), "fix-it")).toThrow(/require_trial/);
+    stillProposed();
+    expect(existsSync(join(root, ".gnomon-audit"))).toBe(false);
+  });
+
+  it("a refusal is a SkillRefusal, which the CLI exits 3 for (refused_by_gate), not 1 (failed)", () => {
+    propose();
+    let err: unknown;
+    try {
+      acceptSkill(strict(), "fix-it");
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(SkillRefusal);
+    // A missing proposal is not a refusal: nothing said no.
+    expect(() => acceptSkill(strict(), "ghost")).toThrow(/No proposed skill/);
+    try {
+      acceptSkill(strict(), "ghost");
+    } catch (e) {
+      expect(e).not.toBeInstanceOf(SkillRefusal);
+    }
+  });
+
+  it("a forged skill_trial line in any trail does not vouch for a report", () => {
+    // Found in review: one hand-written line in any .jsonl counted, with no
+    // chain, no hash and nothing compared with the report.
+    propose();
+    const rel = report({ recorded: false });
+    const body = readFileSync(join(root, rel));
+    mkdirSync(join(root, ".gnomon-audit"), { recursive: true });
+    writeFileSync(
+      join(root, ".gnomon-audit", "x.jsonl"),
+      JSON.stringify({ seq: 7, kind: "skill_trial", report_sha256: sha(body) }) + "\n"
+    );
+    expect(() => acceptSkill(cfg(), "fix-it", { evidence: rel })).toThrow(/not a trial's own sealed trail/);
+    stillProposed();
+  });
+
+  // One case per test: the two reports would be byte-identical, so one root
+  // holding both trails makes the reason reported depend on file order.
+  it("a sealed, chained trail whose record disagrees with the report's verdict does not vouch for it", () => {
+    propose();
+    const rel = report({ meets: true, record: { meets_thresholds: false } });
+    expect(() => acceptSkill(cfg(), "fix-it", { evidence: rel })).toThrow(/disagrees with the report on meets_thresholds/);
+    stillProposed();
+  });
+
+  it("a sealed, chained trail whose record names other content does not vouch for the report", () => {
+    propose();
+    const rel = report({ record: { content_sha256: "0".repeat(64) } });
+    expect(() => acceptSkill(cfg(), "fix-it", { evidence: rel })).toThrow(/disagrees with the report on content_sha256/);
+    stillProposed();
+  });
+
+  it("a trail that is not sealed does not vouch for a report", () => {
+    propose();
+    const rel = report({ unsealed: true });
+    expect(() => acceptSkill(cfg(), "fix-it", { evidence: rel })).toThrow(/sealed/);
+    stillProposed();
+  });
+
+  it("a trail whose record was edited after the fact does not vouch for a report", () => {
+    propose();
+    const rel2 = report();
+    const trail = readdirSync(join(root, ".gnomon-audit"))
+      .map((f) => join(root, ".gnomon-audit", f))
+      .find((f) => readFileSync(f, "utf-8").includes(sha(readFileSync(join(root, rel2)))))!;
+    // Edit the record in place, keeping the line parseable: the chain breaks.
+    const lines = readFileSync(trail, "utf-8").trim().split("\n");
+    const r = JSON.parse(lines[1]!);
+    r.surface_hash_skill = "e".repeat(64);
+    lines[1] = JSON.stringify(r);
+    writeFileSync(trail, lines.join("\n") + "\n");
+    expect(() => acceptSkill(cfg(), "fix-it", { evidence: rel2 })).toThrow(/does not verify/);
+    stillProposed();
+  });
+
+  it("a report for different content is refused", () => {
+    propose();
+    const rel = report({ content: "0".repeat(64) });
+    expect(() => acceptSkill(strict(), "fix-it", { evidence: rel })).toThrow(/different skill content/);
+    // Refused whatever require_trial says: it is evidence about something else.
+    expect(() => acceptSkill(cfg(), "fix-it", { evidence: rel })).toThrow(/different skill content/);
+    stillProposed();
+  });
+
+  it("a report run against a different base surface is refused", () => {
+    propose();
+    const rel = report({ base: "f".repeat(64) });
+    expect(() => acceptSkill(strict(), "fix-it", { evidence: rel })).toThrow(/trial ran against surface/);
+    stillProposed();
+  });
+
+  it("a report no skill_trial record names is refused", () => {
+    propose();
+    const rel = report({ recorded: false });
+    expect(() => acceptSkill(strict(), "fix-it", { evidence: rel })).toThrow(/no skill_trial record/);
+    stillProposed();
+  });
+
+  it("with require_trial on, a report that does not meet its thresholds is refused", () => {
+    propose();
+    for (const meets of [false, "undetermined"]) {
+      const rel = report({ meets, signed: true });
+      expect(() => acceptSkill(strict(), "fix-it", { evidence: rel })).toThrow(/meets_thresholds/);
+    }
+    stillProposed();
+  });
+
+  it("a matching report is accepted, and the record cites its hash and its trial record", () => {
+    propose();
+    const rel = report({ signed: true });
+    const d = acceptSkill(strict(), "fix-it", { evidence: rel });
+    const ev = d.record?.evidence as Record<string, unknown>;
+    expect(ev).toMatchObject({
+      report: rel,
+      report_sha256: sha(readFileSync(join(root, rel))),
+      meets_thresholds: true,
+      attested: true,
+    });
+    expect((ev.trial_record as { trail: string }).trail).toMatch(/^\.gnomon-audit\/trial-/);
+    expect(d.record?.require_trial).toBe(true);
+    expect(loadSkills(cfg()).map((s) => s.id)).toEqual(["fix-it"]);
+    const fixture = JSON.parse(
+      readFileSync(join(process.cwd(), "..", "..", "conformance", "skill_decision.json"), "utf-8")
+    );
+    expect(Object.keys(ev).sort()).toEqual([...fixture.evidence_keys].sort());
+    expect(Object.keys(ev.trial_record as object).sort()).toEqual([...fixture.trial_record_keys].sort());
+  });
+
+  it("require_trial without a signer refuses, and says how to declare one", () => {
+    // Fails on the first version, which accepted under require_trial with no
+    // anchor at all -- and a chain is something a shell can build.
+    propose();
+    const rel = report();
+    let err: unknown;
+    try {
+      acceptSkill(strictUnsigned(), "fix-it", { evidence: rel });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(SkillRefusal);
+    expect(String(err)).toMatch(/no signer is declared/);
+    expect(String(err)).toMatch(/\[audit\.attest\]/);
+    // Honest about what a signer proves (rounds 3 and 4): a local key does
+    // not stop an agent with a shell -- a stubbed trial plus that signer is
+    // accepted -- and only a person-present signer or the sandbox does.
+    expect(String(err)).not.toMatch(/the agent included/);
+    expect(String(err)).toMatch(/stubbed runner/);
+    expect(String(err)).toMatch(/ONLY from a signer that needs a person/);
+    expect(String(err)).toMatch(/ssh-add -c/);
+    expect(String(err)).toMatch(/kernel sandbox/);
+    expect(String(err)).toMatch(/require_trial is off by default/);
+    stillProposed();
+  });
+
+  it("require_trial refuses a verifier the surface hash does not pin", () => {
+    // Round-3 review: public_key = "keys/audit.pub", outside .gnomon/. The
+    // agent swapped the file for its own key, signed a report, and the
+    // surface hash never moved. Fails before the fix.
+    propose();
+    // The pinned key first: it is part of the surface, so the trial's base
+    // hash includes it.
+    mkdirSync(join(root, ".gnomon", "keys"), { recursive: true });
+    writeFileSync(join(root, ".gnomon", "keys", "audit.pub"), PUB);
+    const rel = report({ signed: true });
+    const withKey = (attest: Record<string, unknown>) =>
+      cfg({ attest: { sign: signer(), ...attest } }, { skills: { require_trial: true } });
+    mkdirSync(join(root, "keys"), { recursive: true });
+    writeFileSync(join(root, "keys", "audit.pub"), PUB);
+    expect(() => acceptSkill(withKey({ public_key: "keys/audit.pub" }), "fix-it", { evidence: rel })).toThrow(
+      /public_key = "keys\/audit\.pub" is a file outside \.gnomon\//
+    );
+    // Round-4 review: a verify command alone is refused -- `make -s
+    // verify-head` runs a Makefile the agent can edit, and no path-word
+    // check can follow make, npm run or python -m.
+    for (const verify of ["node keys/verify.mjs", "make -s verify-head", "npm run --silent verify-head", "python3 -m verifier", "ssh-keygen -Y verify -f allowed_signers"]) {
+      expect(() => acceptSkill(withKey({ verify }), "fix-it", { evidence: rel }), verify).toThrow(/no public_key is declared/);
+    }
+    // A key file in skills/proposed/ is under .gnomon/ but not hashed.
+    mkdirSync(join(root, ".gnomon", "skills", "proposed"), { recursive: true });
+    writeFileSync(join(root, ".gnomon", "skills", "proposed", "k.pub"), PUB);
+    expect(() =>
+      acceptSkill(withKey({ public_key: ".gnomon/skills/proposed/k.pub" }), "fix-it", { evidence: rel })
+    ).toThrow(/outside \.gnomon\//);
+    stillProposed();
+    // Under .gnomon/, hashed: accepted.
+    const d = acceptSkill(withKey({ public_key: ".gnomon/keys/audit.pub" }), "fix-it", { evidence: rel });
+    expect(d.record).toMatchObject({ evidence: { attested: true } });
+  });
+
+  it("with a signer, a sealed chain built by hand -- no signed head -- does not vouch", () => {
+    // The re-review's forgery: recordHash makes a chain that verifies, and
+    // without an anchor it was accepted under require_trial.
+    propose();
+    const rel = report({ recorded: false });
+    const body = readFileSync(join(root, rel));
+    const fields = JSON.parse(body.toString("utf-8"));
+    const recs = [
+      { kind: "session_start", mode: "trial" },
+      {
+        kind: "skill_trial",
+        skill: fields.skill,
+        report_sha256: sha(body),
+        content_sha256: fields.content_sha256,
+        surface_hash_base: fields.arms.base.surface_hash,
+        surface_hash_skill: fields.arms.skill.surface_hash,
+        meets_thresholds: fields.meets_thresholds,
+      },
+      { kind: "session_end" },
+    ];
+    let prev: string | null = null;
+    const lines = recs.map((f, seq) => {
+      const r = { seq, ts: new Date().toISOString(), prev, ...f } as AuditRecord;
+      r.hash = recordHash(r);
+      prev = r.hash;
+      return JSON.stringify(r);
+    });
+    mkdirSync(join(root, ".gnomon-audit"), { recursive: true });
+    writeFileSync(join(root, ".gnomon-audit", "trial-forged.jsonl"), lines.join("\n") + "\n");
+    expect(verifyTrail(join(root, ".gnomon-audit", "trial-forged.jsonl"))).toMatchObject({ ok: true, sealed: true });
+    expect(() => acceptSkill(strict(), "fix-it", { evidence: rel })).toThrow(/not covered by signed heads/);
+    stillProposed();
+  });
+
+  it("with require_trial off (the default), a person may accept on a failing report; the record says so", () => {
+    propose();
+    const rel = report({ meets: false });
+    const d = acceptSkill(cfg(), "fix-it", { evidence: rel });
+    expect(d.record).toMatchObject({ require_trial: false, evidence: { meets_thresholds: false } });
   });
 });
 

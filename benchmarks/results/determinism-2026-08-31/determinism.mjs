@@ -1,3 +1,4 @@
+import { fileURLToPath, pathToFileURL } from "node:url";
 /**
  * T2 — surface-replay determinism.
  *
@@ -11,19 +12,21 @@
  * role, its resolved model/endpoint/limits and the sorted tool schema it would
  * be sent, plus the role each of a corpus of inputs routes to.
  */
-const { loadConfig } = await import(`${REPO}/packages/gnomon-core/dist/config.js`);
-const { buildToolSet } = await import(`${REPO}/packages/gnomon-core/dist/tools.js`);
-const { routeRole, routeInput } = await import(`${REPO}/packages/gnomon-core/dist/config.js`);
-import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
-
 // Repo root resolved from THIS file, not hardcoded. It was
 // "/home/eljaplacido/Desktop/gnomon", so the script ran only on the machine that wrote it --
 // while .gitignore un-ignores these traces on the stated grounds that
 // "a published result that cites a trace a clone does not have is not
 // evidence, it is an assertion". Same idiom as
 // benchmarks/surface-fidelity/fidelity.mjs.
-const REPO = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "");
+// Declared before the imports below use it: declared after them (65274f6,
+// 2026-09-07), every import threw before initialization.
+const REPO = fileURLToPath(new URL("../../../", import.meta.url)).replace(/[\\/]$/, "");
+const { loadConfig } = await import(pathToFileURL(`${REPO}/packages/gnomon-core/dist/config.js`).href);
+const { buildToolSet } = await import(pathToFileURL(`${REPO}/packages/gnomon-core/dist/tools.js`).href);
+const { routeRole, routeInput } = await import(pathToFileURL(`${REPO}/packages/gnomon-core/dist/config.js`).href);
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+
 
 
 const ROUTING_CORPUS = [
@@ -69,7 +72,7 @@ export function fingerprint(dir) {
 
 export function surfaceHash(dir) {
   try {
-    return execFileSync("node", [`${REPO}/packages/gnomon-cli/gnomon.js", "surface", "hash", "--dir", dir],
+    return execFileSync("node", [`${REPO}/packages/gnomon-cli/gnomon.js`, "surface", "hash", "--dir", dir],
       { encoding: "utf-8", env: process.env }).trim().split(/\s+/).pop();
   } catch (e) { return `ERR:${String(e).slice(0, 60)}`; }
 }

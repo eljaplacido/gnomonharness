@@ -59,6 +59,15 @@ export const DEGRADATIONS = {
     "a command changed `.gnomon/` mid-turn, so the surface no longer matches the hash this session was stamped with",
   model_output_truncated:
     "the backend cut the completion off at its token limit, so the answer is incomplete",
+  // Found 2026-11-03 from the other side: agentcenter's readout showed three
+  // days with no shadow decisions while every gnomon session looked normal.
+  // The shadow stays log-only; what it may no longer do is stop unaccounted.
+  shadow_unreachable:
+    "the declared [shadow] endpoint could not be reached, so the shadow stopped for the session and recorded no decisions from then on",
+  audit_anchor_queued:
+    "the declared `[audit.anchor]` witness could not be reached, so sealed trail heads are queued on this machine and not yet anchored off it",
+  context_window_unresolved:
+    "the endpoint declares `max_context_tokens = \"auto\"` and its listing gave no window for the model, so turns are trimmed to `[defaults] max_context_tokens`",
 } as const;
 
 /** The id of a declared degradation path. */

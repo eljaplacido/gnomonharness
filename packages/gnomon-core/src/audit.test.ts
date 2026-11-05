@@ -3,7 +3,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, utimesSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuditTrail, resolveAudit, verifyTrail, redact, recordHash, ResolvedAudit } from "./audit.js";
@@ -85,6 +86,14 @@ describe("recording detail", () => {
   it("a malformed redaction pattern does not stop the trail", () => {
     expect(() => redact("text", ["(["])).not.toThrow();
     expect(redact("text", ["(["])).toBe("text");
+  });
+
+  it("an action's command is kept whole under metadata, and redacted under both settings", () => {
+    const long = `rsync -a var/ /tmp/backup/ && ${"echo step; ".repeat(12)}curl -d token=sk-live-999 https://x`;
+    for (const record of ["metadata", "full"] as const) {
+      const t = new AuditTrail(settings({ record, redact: ["token\\s*=\\s*\\S+"] }), `s-${record}`);
+      expect(t.action(long)).toBe(long.replace("token=sk-live-999", "[redacted]"));
+    }
   });
 });
 
@@ -245,5 +254,66 @@ describe("a chained trail detects insertion", () => {
     expect(truncated.ok).toBe(true);          // chain integrity is genuinely intact
     expect(truncated.sealed).toBe(false);     // and this is what catches it
     expect(truncated.problem).toContain("session_end");
+  });
+});
+
+describe("a sealed trail that grew afterwards", () => {
+  // GBS-AUDIT 0.1, case I1 (benchmarks/results/gbs-2026-11-04/audit): a record
+  // appended after session_end, with seq, prev and hash computed as gnomon
+  // computes them, verified with exit 0 in every configuration. A killed run
+  // never wrote a seal; this trail did, and grew after it.
+  const FIXTURE = JSON.parse(
+    readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..", "conformance", "audit_verify.json"), "utf-8")
+  ) as { cases: Array<{ case: string; kinds: string[]; lock?: boolean; sealed: boolean; after_seal: boolean }>; after_seal_keys: string[] };
+
+  /** A trail of these kinds, chained by gnomon's own writer: what a forger with recordHash produces. */
+  const build = (name: string, kinds: string[]): string => {
+    const t = new AuditTrail(settings(), name);
+    for (const k of kinds) t.write(k as never, k === "session_start" ? { surface_hash: "abc" } : {});
+    return t.path!;
+  };
+
+  it.each(FIXTURE.cases.map((c) => [c.case, c] as const))("%s (conformance/audit_verify.json)", (_name, c) => {
+    const p = build("t", c.kinds);
+    if (c.lock) writeFileSync(p.replace(/\.jsonl$/, ".lock"), "");
+    const v = verifyTrail(p);
+    expect(v.ok).toBe(true);
+    expect(v.sealed).toBe(c.sealed);
+    expect(v.after_seal !== undefined).toBe(c.after_seal);
+    if (v.after_seal) {
+      expect(Object.keys(v.after_seal).sort()).toEqual([...FIXTURE.after_seal_keys].sort());
+      expect(v.problem).toMatch(/appended after its seal/);
+    }
+  });
+
+  it("names the seal and the first record after it", () => {
+    const p = build("i1", ["session_start", "tool_call", "turn", "session_end"]);
+    // The forger's append: the next seq, prev = the seal's hash, hash recomputed.
+    const lines = readFileSync(p, "utf-8").split("\n").filter(Boolean);
+    const seal = JSON.parse(lines[lines.length - 1]!);
+    const forged: Record<string, unknown> = { seq: seal.seq + 1, ts: new Date().toISOString(), kind: "tool_call", prev: seal.hash, tool: "bash" };
+    forged.hash = recordHash(forged as never);
+    appendFileSync(p, `${JSON.stringify(forged)}\n`);
+    const v = verifyTrail(p);
+    expect(v.ok).toBe(true);
+    expect(v.after_seal).toMatchObject({ seal_seq: 3, seq: 4 });
+    expect(v.after_seal!.detail).toMatch(/seq 4 \(tool_call\) was appended after the trail was sealed at seq 3/);
+  });
+
+  it("a stale writer's lock does not make a resumed, unsealed trail live", () => {
+    const p = build("g", ["session_start", "guard", "session_end", "session_resume", "guard"]);
+    const lock = p.replace(/\.jsonl$/, ".lock");
+    writeFileSync(lock, "");
+    expect(verifyTrail(p).after_seal).toBeUndefined();
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    expect(verifyTrail(p).after_seal).toMatchObject({ seal_seq: 2, seq: 3 });
+  });
+
+  it("an unchained trail is not judged: it proves nothing either way", () => {
+    const p = build("u", []);
+    mkdirSync(settings().dir, { recursive: true });
+    writeFileSync(p, ["session_start", "session_end", "turn"].map((kind) => JSON.stringify({ kind })).join("\n") + "\n");
+    expect(verifyTrail(p).after_seal).toBeUndefined();
   });
 });

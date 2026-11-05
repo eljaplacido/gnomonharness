@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { parseArgs } from "./index.js";
-import { recomputeManifest } from "gnomon-core";
+import { recomputeManifest, AuditTrail, recordHash, type AuditRecord } from "gnomon-core";
 import { surfaceHash, manifest } from "gnomon-natives";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, appendFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -94,6 +94,22 @@ describe("the two surface-hash implementations agree", () => {
     expect(recomputeManifest(surfaceDir).manifest.map((s) => s.path)).toEqual(
       native.sources.map((s) => s.path)
     );
+  });
+
+  it("both hash trials/, which decides what require_trial accepts", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "gnomon-agree-"));
+    try {
+      const dir = join(tmp, ".gnomon");
+      mkdirSync(join(dir, "trials"), { recursive: true });
+      writeFileSync(join(dir, "system.md"), "x", "utf-8");
+      const before = [recomputeManifest(dir).surface_hash, surfaceHash(dir)];
+      writeFileSync(join(dir, "trials", "default.toml"), '[[task]]\nid = "t"\n', "utf-8");
+      const after = [recomputeManifest(dir).surface_hash, surfaceHash(dir)];
+      expect(after[0]).toBe(after[1]);
+      expect(after[0]).not.toBe(before[0]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("both track a change to the surface", () => {
@@ -257,6 +273,56 @@ describe("first-contact output", () => {
     expect(out).toMatch(/^gnomon\/\d+\.\d+\.\d+/);
   });
 
+  it("audit verify fails a trail that was appended to after its seal, and passes a live one", () => {
+    // GBS-AUDIT 0.1, case I1: printed NOT SEALED and exited 0.
+    const root = mkdtempSync(join(tmpdir(), "gnomon-afterseal-"));
+    try {
+      mkdirSync(join(root, ".gnomon"), { recursive: true });
+      writeFileSync(join(root, ".gnomon", "config.toml"), "[defaults]\n\n[audit]\nenabled = true\n");
+      writeFileSync(join(root, ".gnomon", "roles.toml"), `[roles.smol]\nmodel = "m"\n`);
+      writeFileSync(join(root, ".gnomon", "system.md"), "x\n");
+      const s = { enabled: true, dir: join(root, ".gnomon-audit"), record: "metadata" as const, redact: [], chain: true, invalid_redact: [] };
+      const live = new AuditTrail(s as never, "live");
+      live.write("session_start", {});
+      live.write("turn", {});
+      const sealed = new AuditTrail(s as never, "sealed");
+      sealed.write("session_start", {});
+      const end = sealed.write("session_end", {})!;
+      const verify = () => run(["audit", "verify", "--dir", root]);
+
+      let r = verify();
+      expect(r.code).toBe(0);
+      expect(r.out).toMatch(/live\.jsonl: 2 records — chain intact, NOT SEALED/);
+
+      const forged = { seq: end.seq + 1, ts: new Date().toISOString(), kind: "tool_call", prev: end.hash, tool: "bash" } as AuditRecord;
+      forged.hash = recordHash(forged);
+      appendFileSync(sealed.path!, `${JSON.stringify(forged)}\n`);
+      r = verify();
+      expect(r.code).toBe(1);
+      expect(r.out).toMatch(/sealed\.jsonl: 3 records — chain intact, APPENDED AFTER SEAL at seq 2/);
+      expect(r.out).toMatch(/TAMPERED — seq 2 \(tool_call\) was appended after the trail was sealed at seq 1/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("skill accept inside an agent session is refused with exit 3, and the proposal stays", () => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-agentaccept-"));
+    try {
+      mkdirSync(join(root, ".gnomon", "skills", "proposed"), { recursive: true });
+      writeFileSync(join(root, ".gnomon", "config.toml"), "[defaults]\n");
+      writeFileSync(join(root, ".gnomon", "roles.toml"), `[roles.smol]\nmodel = "m"\n`);
+      writeFileSync(join(root, ".gnomon", "system.md"), "x\n");
+      writeFileSync(join(root, ".gnomon", "skills", "proposed", "n.md"), "+++\nname = \"n\"\n+++\nbody\n");
+      const { code, out } = run(["skill", "accept", "n", "--dir", root], { GNOMON_AGENT_SESSION: "s-cli" });
+      expect(code).toBe(3);
+      expect(out).toMatch(/agent session/);
+      expect(readFileSync(join(root, ".gnomon", "skills", "proposed", "n.md"), "utf-8")).toContain("body");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("endpoint test on an endpoint nothing routes to says so and does not exit 0", () => {
     const root = mkdtempSync(join(tmpdir(), "gnomon-eptest-"));
     mkdirSync(join(root, ".gnomon"), { recursive: true });
@@ -273,5 +339,57 @@ describe("first-contact output", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `gnomon task` exit codes: 0, 2 or 10, and nothing else
+// ---------------------------------------------------------------------------
+//
+// docs/CONTRACTS.md §1: "`gnomon task` exits `0`, `2` or `10` — the bucket".
+// With no .gnomon/ the loader threw, main's catch printed it and exited 1 --
+// `failed`, in the `result` bucket -- so a CI step switching on the bucket read
+// a task that never started as one that ran and concluded. Found 2026-11-01
+// while verifying the guide (#69). Neither case reaches a model, so these
+// spawn the real CLI with no endpoint at all.
+describe("gnomon task — a task that cannot start exits 10", () => {
+  const CLI = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
+  const run = (args: string[]) => {
+    const r = spawnSync(process.execPath, ["--import", "tsx", CLI, ...args], {
+      encoding: "utf-8",
+      timeout: 60_000,
+    });
+    return { code: r.status ?? -1, stdout: r.stdout ?? "", out: (r.stdout ?? "") + (r.stderr ?? "") };
+  };
+
+  it("with no .gnomon/ there, and says why", () => {
+    const empty = mkdtempSync(join(tmpdir(), "gnomon-nosurface-"));
+    try {
+      const { code, out } = run(["task", "do a thing", "--dir", empty]);
+      expect(out).toContain(".gnomon/ not found");
+      expect(out).toContain("[apparatus_failure]");
+      expect(code).toBe(10);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it("and --json still prints the one record shape a caller parses", () => {
+    const empty = mkdtempSync(join(tmpdir(), "gnomon-nosurface-"));
+    try {
+      const { code, stdout } = run(["task", "do a thing", "--json", "--dir", empty]);
+      expect(code).toBe(10);
+      const record = JSON.parse(stdout) as { bucket: string; code: number; stop_reason: string; output: string };
+      expect(record).toMatchObject({ bucket: "apparatus_failure", code: 10, stop_reason: "apparatus" });
+      expect(record.output).toContain(".gnomon/ not found");
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it("with no task text either: usage, then 10, not `failed`", () => {
+    const { code, out } = run(["task"]);
+    expect(out).toContain("Usage: gnomon task");
+    expect(code).toBe(10);
   });
 });

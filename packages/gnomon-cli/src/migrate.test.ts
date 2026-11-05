@@ -14,6 +14,8 @@ const CONFIG = (compaction: string) =>
   `[defaults]
 sandbox = "confined"              # off | confined | strict
 max_context_tokens = 65536
+stream = true                     # stream replies from kind = "openai" endpoints
+max_tokens = 32768                # output limit per reply, thinking included
 compaction = "${compaction}"            # discard | summary | truncate
 
 [context]
@@ -71,7 +73,7 @@ describe("gnomon migrate", () => {
   it("ignores a matching key outside the section it targets", () => {
     writeFileSync(
       join(gnomonDir, "config.toml"),
-      `[defaults]\ncompaction = "summary"\n\n[something_else]\ncompaction = "discard"\n`,
+      `[defaults]\ncompaction = "summary"\nstream = true\nmax_tokens = 32768\n\n[something_else]\ncompaction = "discard"\n`,
       "utf-8"
     );
     expect(pendingMigrations(gnomonDir)).toEqual([]);
@@ -102,6 +104,61 @@ describe("gnomon migrate — daily-use defaults (2026-09-29)", () => {
     expect(out).toContain("- next rule");
     // An edited sentence is somebody's choice, and is left alone.
     writeFileSync(join(gnomonDir, "system.md"), "- there is no second turn, ever.\n", "utf-8");
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+  });
+
+  it("replaces only the exact scaffold verification rule, keeping line endings (2026-11-01)", () => {
+    const OLD =
+      "- Run what you produced before you end the turn. Turn each constraint the\n" +
+      "  task states into a command that fails if it is violated, run it, and paste\n" +
+      "  the output. Writing the file is not producing the artifact: a script that\n" +
+      "  has never been executed is a guess about what it does, and \"it exists\" is\n" +
+      "  not \"it works\".\n" +
+      "- Get to something that works end to end first, then improve it. If the\n" +
+      "  deliverable is not on disk yet, make it exist before refining anything —\n" +
+      "  a turn spent validating a thing that was never produced scores nothing.\n";
+    for (const nl of ["\n", "\r\n"]) {
+      const before = ("Rules:\n- first rule\n" + OLD).replace(/\n/g, nl);
+      writeFileSync(join(gnomonDir, "system.md"), before, "utf-8");
+      applyMigrations(pendingMigrations(gnomonDir));
+      const out = readFileSync(join(gnomonDir, "system.md"), "utf-8");
+      expect(out).not.toContain("Turn each constraint");
+      expect(out).toContain(`Verify in proportion to the task`);
+      expect(out.startsWith(`Rules:${nl}- first rule${nl}`)).toBe(true);
+      expect(out.split(nl).length).toBe(out.split("\n").length);
+      expect(pendingMigrations(gnomonDir)).toEqual([]);
+    }
+    // The migrated text is exactly what a fresh scaffold writes.
+    const scaffold = readFileSync(new URL("./init.ts", import.meta.url), "utf-8");
+    const migrated = readFileSync(join(gnomonDir, "system.md"), "utf-8").replace(/\r\n/g, "\n");
+    expect(scaffold).toContain(migrated.slice("Rules:\n- first rule\n".length));
+    // An edited rule is somebody's choice, and is left alone.
+    writeFileSync(join(gnomonDir, "system.md"), OLD.replace("paste\n  the output", "show\n  the output"), "utf-8");
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+  });
+
+  it("gives the task tool the delegate-once rule, only over the exact scaffold line (2026-11-02)", () => {
+    const OLD =
+      '[[tools]]\nname = "task"\n' +
+      "description = \"Run a sub-turn under another role, with its own context. It gets that role's tools.\"\n" +
+      "enabled = true\n";
+    for (const nl of ["\n", "\r\n"]) {
+      const before = ('[[tools]]\nname = "read"\nenabled = true\n\n' + OLD).replace(/\n/g, nl);
+      writeFileSync(join(gnomonDir, "tools.toml"), before, "utf-8");
+      applyMigrations(pendingMigrations(gnomonDir));
+      const out = readFileSync(join(gnomonDir, "tools.toml"), "utf-8");
+      expect(out).not.toContain("It gets that role's tools.");
+      expect(out).toContain("Delegate a job once");
+      expect(out.startsWith(`[[tools]]${nl}name = "read"${nl}`)).toBe(true);
+      expect(out.split(nl).length).toBe(out.split("\n").length);
+      expect(pendingMigrations(gnomonDir)).toEqual([]);
+    }
+    // The migrated line is exactly what a fresh scaffold writes.
+    const scaffold = readFileSync(new URL("./init.ts", import.meta.url), "utf-8");
+    const line = readFileSync(join(gnomonDir, "tools.toml"), "utf-8").split(/\r?\n/).find((l) => l.startsWith("description = \"Run a sub-turn"));
+    expect(scaffold).toContain(`name = "task"\n${line}\n`);
+    // A description somebody wrote is left alone.
+    writeFileSync(join(gnomonDir, "tools.toml"), OLD.replace("its own context", "a fresh context"), "utf-8");
     expect(pendingMigrations(gnomonDir)).toEqual([]);
   });
 
@@ -160,10 +217,49 @@ describe("gnomon migrate — governance defaults (2026-10)", () => {
   });
 
   it("switches [audit] on, keeping the comment, and only from false", () => {
-    writeFileSync(join(gnomonDir, "config.toml"), `[audit]\n# why\nenabled = false   # trail\nrecord = "metadata"\n`, "utf-8");
+    const current = `[defaults]\nstream = true\nmax_tokens = 32768\n\n`;
+    writeFileSync(join(gnomonDir, "config.toml"), `${current}[audit]\n# why\nenabled = false   # trail\nrecord = "metadata"\n`, "utf-8");
     applyMigrations(pendingMigrations(gnomonDir));
-    expect(readConfig()).toBe(`[audit]\n# why\nenabled = true   # trail\nrecord = "metadata"\n`);
-    writeFileSync(join(gnomonDir, "config.toml"), `[other]\nenabled = false\n`, "utf-8");
+    expect(readConfig()).toBe(`${current}[audit]\n# why\nenabled = true   # trail\nrecord = "metadata"\n`);
+    writeFileSync(join(gnomonDir, "config.toml"), `${current}[other]\nenabled = false\n`, "utf-8");
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+  });
+});
+
+describe("gnomon migrate — streamed replies (2026-11)", () => {
+  it("adds [defaults] stream = true to a surface that does not mention it, and the hash moves with the line", () => {
+    writeFileSync(join(gnomonDir, "config.toml"), `[defaults]\nmax_context_tokens = 65536\nmax_tokens = 0\n\n[context]\npolicy = "full"\n`, "utf-8");
+    expect(pendingMigrations(gnomonDir).map((p) => p.id)).toEqual(["stream-replies"]);
+    applyMigrations(pendingMigrations(gnomonDir));
+    expect(readConfig()).toMatch(/\[defaults\]\nmax_context_tokens = 65536\nmax_tokens = 0\nstream = true\s+# stream replies/);
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+  });
+
+  it("leaves a stated stream alone, even false", () => {
+    writeFileSync(join(gnomonDir, "config.toml"), `[defaults]\nstream = false\nmax_tokens = 0\n`, "utf-8");
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+  });
+});
+
+describe("gnomon migrate — output limit (2026-11)", () => {
+  it("adds [defaults] max_tokens = 32768 where no max_tokens is stated; a stated 0 is a choice", () => {
+    writeFileSync(join(gnomonDir, "config.toml"), `[defaults]\nstream = true\n`, "utf-8");
+    expect(pendingMigrations(gnomonDir).map((p) => p.id)).toEqual(["output-limit"]);
+    applyMigrations(pendingMigrations(gnomonDir));
+    expect(readConfig()).toMatch(/\[defaults\]\nstream = true\nmax_tokens = 32768\s+# output limit/);
+    writeFileSync(join(gnomonDir, "config.toml"), `[defaults]\nstream = true\nmax_tokens = 0\n`, "utf-8");
+    expect(pendingMigrations(gnomonDir)).toEqual([]);
+  });
+});
+
+describe("gnomon migrate — a surface with no [defaults] (2026-11)", () => {
+  it("is offered stream and the output limit in a new [defaults], not left on the old behaviour in silence", () => {
+    writeFileSync(join(gnomonDir, "config.toml"), `[endpoints.cloud]\nurl = "https://x/v1/chat/completions"\nkind = "openai"\n`, "utf-8");
+    expect(pendingMigrations(gnomonDir).map((p) => p.id)).toEqual(["stream-replies", "output-limit"]);
+    applyMigrations(pendingMigrations(gnomonDir));
+    expect(readConfig()).toMatch(
+      /^\[endpoints\.cloud\][\s\S]*\n\n\[defaults\]\nstream = true\s+#[^\n]*\nmax_tokens = 32768\s+#[^\n]*\n$/
+    );
     expect(pendingMigrations(gnomonDir)).toEqual([]);
   });
 });

@@ -13,7 +13,7 @@
  * No dependencies.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { recordDegradation, type DegradationSink } from "./degradation.js";
 import {
   readFileSync,
@@ -30,11 +30,11 @@ import {
   readlinkSync,
   mkdtempSync
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { osSandbox, type OsSandbox } from "gnomon-natives";
-import { resolve, relative, isAbsolute, dirname, join, sep, win32 as win32Path } from "node:path";
+import { resolve, relative, isAbsolute, dirname, basename, join, sep, win32 as win32Path } from "node:path";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
+import { homedir, tmpdir } from "node:os";
 import { promisify } from "node:util";
 import {
   GnomonConfig,
@@ -42,10 +42,33 @@ import {
   declaredTools,
   isToolEnabled,
   recomputeManifest,
+  toolMaxLines,
 } from "./config.js";
-import { proposeSkill, renderSkill, SkillProposal } from "./skills.js";
+import { proposeSkill, ProposalRefused, renderSkill, SkillProposal } from "./skills.js";
 import { compute, ComputeError } from "./compute.js";
 import type { McpRegistry, McpToolInfo } from "./mcp.js";
+import {
+  COMPAT_EDIT_PARAMETERS,
+  fuzzyEdit,
+  resolveEditVariant,
+  type EditMatchTier,
+  type EditVariant,
+} from "./sweep_knobs.js";
+import {
+  bashNetworkEgress,
+  describeInvocation,
+  gitExecConfigs,
+  isDryRunSegment,
+  joinWords,
+  programName,
+  readShellCommand,
+  repoCodeRuns,
+  shellSpellings,
+  shellWriteTargets,
+  type GitClean,
+  type RepoCodeRun,
+  type WriteTarget,
+} from "./shell.js";
 
 // ---------------------------------------------------------------------------
 // Outcome codes
@@ -69,7 +92,9 @@ export interface ToolOutcome {
   /**
    * Set when `.gnomon/` moved while this call ran. Only `bash` can do this —
    * `write` and `edit` refuse the surface outright — and it is reported rather
-   * than prevented because the command is arbitrary shell.
+   * than prevented because the command is arbitrary shell. `skill` reports it
+   * too, as a backstop: a proposal is not hashed, so a hash that moved means a
+   * route its own checks did not name (LN8).
    */
   surface_drift?: SurfaceDrift;
   /**
@@ -83,8 +108,14 @@ export interface ToolOutcome {
    * `"always"` for any turn that ever shelled out — widening a declared value
    * without declaring it. This exists so the anti-flailing nudge can tell work
    * from idling; the verify gate keeps its own, narrower meaning.
+   *
+   * Three-valued for a command that ran: true, false, or null when the tree
+   * could not be stamped on one side and nobody can say (worktreeMoved).
+   * Undefined means no stamp was taken -- another tool, or a bash call refused
+   * before it ran. Read `=== false` for "changed nothing", never `!value`:
+   * null is falsy and is not an answer.
    */
-  worktree_changed?: boolean;
+  worktree_changed?: boolean | null;
   /**
    * The COMMAND's exit status, when the tool ran one.
    *
@@ -99,6 +130,17 @@ export interface ToolOutcome {
    * clean zero.
    */
   shell_exit?: number;
+  /**
+   * How an `edit` under `variant = "compat"` found its text (sweep_knobs.ts):
+   * `exact`, `whitespace` or `indentation`. Absent for every other edit.
+   */
+  edit_tier?: EditMatchTier;
+  /**
+   * Hosts a bash command reached under `network = false` because `[sandbox]
+   * allow_package_index` lists them (shell.ts bashNetworkEgress). Absent when
+   * the allowlist admitted nothing, which is every call of a surface without it.
+   */
+  package_index?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +295,37 @@ const IMPLEMENTED: Record<string, Record<string, unknown>> = {
   ),
 };
 
+/**
+ * `read`'s schema under a declared window (`max_lines`, CX3): the same `path`,
+ * plus `offset` and `limit`. Without a window it is IMPLEMENTED.read itself,
+ * the same object, so a surface that declares nothing offers the model the
+ * same bytes as before.
+ */
+export function readParameters(window?: number): Record<string, unknown> {
+  if (!window) return IMPLEMENTED.read;
+  const base = IMPLEMENTED.read as { properties: Record<string, unknown>; required: string[] };
+  return obj(
+    {
+      ...base.properties,
+      offset: { type: "integer", description: "Line number to start at, 1-based. Default: 1." },
+      limit: { type: "integer", description: `Lines to return, at most ${window} (the default).` },
+    },
+    base.required
+  );
+}
+
+/**
+ * A built-in tool's parameter schema as offered under this read window and
+ * edit variant, or undefined for a name this build does not implement. The
+ * default variant is IMPLEMENTED.edit itself, the same object, so a surface
+ * that declares none offers the same bytes as before.
+ */
+function parametersFor(name: string, readWindow?: number, editVariant?: EditVariant): Record<string, unknown> | undefined {
+  if (!Object.prototype.hasOwnProperty.call(IMPLEMENTED, name)) return undefined;
+  if (name === "edit" && editVariant === "compat") return COMPAT_EDIT_PARAMETERS;
+  return name === "read" ? readParameters(readWindow) : IMPLEMENTED[name];
+}
+
 export interface ToolSet {
   schemas: ToolSchema[];
   /**
@@ -294,6 +367,8 @@ export function buildToolSet(
   // but must not write is expressed.
   const allowed = role ? config.roles[role]?.tools : undefined;
   const roleLimited = Array.isArray(allowed);
+  const readWindow = toolMaxLines(config, "read");
+  const editVariant = resolveEditVariant(config);
 
   for (const tool of declaredTools(config)) {
     if (roleLimited && !allowed!.includes(tool.name)) {
@@ -304,7 +379,7 @@ export function buildToolSet(
       disabled.push(tool.name);
       continue;
     }
-    const parameters = IMPLEMENTED[tool.name];
+    const parameters = parametersFor(tool.name, readWindow, editVariant);
     if (!parameters) {
       unimplemented.push(tool.name);
       continue;
@@ -322,7 +397,15 @@ export function buildToolSet(
   // MCP tools discovered from connected servers. Gated like any other tool: a
   // role with a `tools` list must name the tool, or its server (`mcp__<server>`)
   // to take all of that server's tools.
-  for (const mt of mcpTools) {
+  //
+  // Sorted, byte-wise, like the declared tools above (GV17). They arrive in
+  // connection order, which is `[mcp_servers.*]` declaration order -- a TOML
+  // table, unordered by the TOML spec -- and within a server in whatever order
+  // its `tools/list` answered, which is the server's business and can change
+  // between its versions or machines. Either one moved the tools JSON, so the
+  // same surface sent different prompt bytes and missed the provider's cache.
+  const mcpSorted = [...mcpTools].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const mt of mcpSorted) {
     const serverKey = `mcp__${mt.server}`;
     if (roleLimited && !allowed!.includes(mt.name) && !allowed!.includes(serverKey)) {
       withheld.push(mt.name);
@@ -463,6 +546,13 @@ export interface ApprovalRequest {
   summary: string;
   /** Multi-line preview: a diff, or the command about to run */
   preview: string[];
+  /**
+   * Why this call is asked although the gate or a standing approval would have
+   * let it run unasked: `[approval] after_refusal` (after_refusal.ts). Set, a
+   * standing approval does not answer it; absent, nothing about the request
+   * changed.
+   */
+  escalated?: string;
 }
 
 export type Approver = (req: ApprovalRequest) => Promise<boolean>;
@@ -536,6 +626,51 @@ export function needsApproval(tool: string, gate: ApprovalGate): boolean {
   if (gate === "never") return false;
   // on_write: bash is included because a command can write anything.
   return MUTATING.has(tool);
+}
+
+/**
+ * `[approval] repo_code = true`: a bash call that runs repository-defined code
+ * -- package.json scripts through `npm test`, `npm install`'s lifecycle
+ * scripts, a Makefile, `pip install -e .` (shell.ts, repoCodeRuns) -- asks a
+ * person first, whatever `gate` says. Off unless declared.
+ *
+ * Why it exists, and why it is opt-in: INJ-2026-11 planted its payload as
+ * package.json's `pretest`, and `npm test` ran it on every surface without a
+ * container (0 of 40 blocked). The call names `npm test`; what runs is in the
+ * repository. No rule over the command line can judge that code, so this one
+ * does not try: it makes the call visible and puts it to a person. Asking on
+ * every `npm test` is a cost an unattended surface would not choose by
+ * default. Only a sandbox (`exec = "docker"`) contains what the script does.
+ */
+export function repoCodeAsks(ctx: ToolContext): boolean {
+  return (ctx.config?.policy as { approval?: { repo_code?: unknown } } | undefined)?.approval?.repo_code === true;
+}
+
+/**
+ * What the person asked about a call is told about the repository code it
+ * runs: the runner and what it runs, and for the npm family the scripts from
+ * package.json at the root that would run, as the file spells them.
+ */
+export function repoCodeNote(runs: RepoCodeRun[], root: string): string[] {
+  if (runs.length === 0) return [];
+  let scripts: Record<string, unknown> = {};
+  if (runs.some((r) => r.scripts)) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf-8")) as { scripts?: Record<string, unknown> };
+      scripts = pkg.scripts && typeof pkg.scripts === "object" ? pkg.scripts : {};
+    } catch {
+      scripts = {};
+    }
+  }
+  const lines: string[] = [];
+  for (const r of runs) {
+    lines.push(`runs repository-defined code: ${r.what} (${r.command.slice(0, 120)})`);
+    for (const name of r.scripts ?? []) {
+      const body = scripts[name];
+      if (typeof body === "string") lines.push(`  ${name}: ${body.replace(/\s+/g, " ").slice(0, 160)}`);
+    }
+  }
+  return lines;
 }
 
 /**
@@ -804,9 +939,31 @@ export function diffStat(lines: string[]): { added: number; removed: number } {
 // Execution
 // ---------------------------------------------------------------------------
 
+/**
+ * Set in the environment of every subprocess a tool starts: the bash tool's
+ * shell and every MCP server. Its value names the session.
+ *
+ * It marks "the agent is running this". `gnomon skill accept` and `reject`
+ * refuse when they see it, because acceptance is a person's act -- before
+ * this, the agent's own bash could run `gnomon skill accept` and the record
+ * said `by: "human"`. A process can drop the variable from its own
+ * environment (`env -u`), so the refusal also reads it from the ancestors'
+ * starting environments and looks for gnomon among them (agent_context.ts).
+ * It is a refusal with reasons, not a proof; the records say `by: "cli"`,
+ * never claiming a person they cannot see.
+ */
+export const AGENT_SESSION_ENV = "GNOMON_AGENT_SESSION";
+
+/** The environment for a tool's subprocess: the parent's, plus the marker. */
+export function agentEnv(session: string | undefined, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...base, [AGENT_SESSION_ENV]: session || `pid-${process.pid}` };
+}
+
 export interface ToolContext {
   /** Needed by `skill`, which writes inside .gnomon/ */
   config?: GnomonConfig;
+  /** The session the tool runs in; exported to subprocesses as GNOMON_AGENT_SESSION. */
+  agentSession?: string;
   /**
    * Shell commands the current role may run. Empty/undefined means any.
    * See RoleDef.bash_allow: without this, granting `bash` grants writing.
@@ -850,6 +1007,12 @@ export interface ToolContext {
    */
   extraRoots?: string[];
   /**
+   * Below this many files the worktree stamp walks the tree instead of asking
+   * git. Undefined means STAMP_WALK_BELOW, which is what every caller in the
+   * product uses; tests set 0 to put a small fixture through the git path.
+   */
+  stampWalkBelow?: number;
+  /**
    * Roles the current role may delegate to. Undefined means every role, which
    * is what shipped; see RoleDef.task_allow for why that is worth declaring.
    */
@@ -865,6 +1028,12 @@ export interface ToolContext {
   timeoutMs: number;
   /** Cap on bytes returned to the model from read/bash */
   maxOutputBytes: number;
+  /**
+   * Line caps declared as `max_lines` on the bash and read declarations in
+   * tools.toml (CX3, opt-in; resolveMaxLines). Applied before the byte cap.
+   * Absent -- the default -- means exactly the behaviour before they existed.
+   */
+  maxLines?: { bash?: number; read?: number };
   /**
    * Where output too large for the window is kept instead of being thrown away.
    *
@@ -898,6 +1067,17 @@ export interface ToolContext {
   delegate?: Delegate;
   /** Whether tools may reach the network. From `[sandbox] network`. */
   network?: boolean;
+  /**
+   * `[sandbox] allow_package_index` (sweep_knobs.ts resolvePackageIndex):
+   * hosts a bash command may name under `network = false` to download
+   * packages. Absent or empty refuses every URL, as before.
+   */
+  packageIndex?: readonly string[];
+  /**
+   * The edit tool's declared variant (sweep_knobs.ts resolveEditVariant).
+   * Absent or `default` is edit as it always was.
+   */
+  editVariant?: EditVariant;
   /**
    * Whether the agent may write inside `.gnomon/` this session. Absent =
    * `strict` = the surface is human-only (the default, and the pillar).
@@ -1069,29 +1249,47 @@ function clampEnds(text: string, ctx: ToolContext, label: string): string {
   );
 }
 
-async function readTool(
+/** What `read` refuses before it would ask or touch the filesystem. */
+export function readPrecheck(
   args: Record<string, unknown>,
   ctx: ToolContext
-): Promise<ToolOutcome> {
+): { refusal: Precheck } | { abs: string } {
   // A missing, empty or non-string path resolved to "" and then to the
   // FILESYSTEM ROOT — `read / — 1 entries` — rather than being refused. The
   // model asked for nothing and got a listing of somewhere it never named.
   if (typeof args.path !== "string" || args.path.trim() === "") {
     return {
-      code: TOOL_DENIED,
-      content: `Refused: read needs a \`path\`. Nothing was given, and an absent path is not a path.`,
-      summary: `read — no path given`,
+      refusal: {
+        rule: "malformed",
+        code: TOOL_DENIED,
+        content: `Refused: read needs a \`path\`. Nothing was given, and an absent path is not a path.`,
+        summary: `read — no path given`,
+      },
     };
   }
   const path = args.path;
   const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
   if (!abs) {
     return {
-      code: TOOL_OUT_OF_SANDBOX,
-      content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
-      summary: `read ${path} — refused (outside sandbox)`,
+      refusal: {
+        rule: "sandbox",
+        code: TOOL_OUT_OF_SANDBOX,
+        content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
+        summary: `read ${path} — refused (outside sandbox)`,
+      },
     };
   }
+  return { abs };
+}
+
+async function readTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolOutcome> {
+  const pre = readPrecheck(args, ctx);
+  if ("refusal" in pre) return outcomeOf(pre.refusal);
+  const path = args.path as string;
+  const abs = pre.abs;
   // Ask BEFORE touching the filesystem.
   //
   // The existence probe used to run first, so under approval = "always" a
@@ -1131,6 +1329,10 @@ async function readTool(
     // `edit` matches LF text against CRLF files, so what is shown here is what
     // can be edited; the summary says which ending the file really has.
     const crlf = raw.includes("\r\n");
+    // Opt-in (`max_lines` on the read declaration, CX3). Without it, nothing
+    // below this line changed.
+    const window = ctx.maxLines?.read;
+    if (window) return readWindowed(path, raw, crlf, args, window, ctx);
     const numbered = raw
       .split(/\r?\n/)
       .map((l, n) => `${String(n + 1).padStart(5)}\t${l}`)
@@ -1156,6 +1358,96 @@ async function readTool(
       summary: `read ${path} — failed`,
     };
   }
+}
+
+/**
+ * A windowed file view (CX3, opt-in): at most `window` lines from `offset`,
+ * numbered as in the whole file, with a footer saying where the rest is.
+ *
+ * Today's read returns the whole file up to the 32 KB byte cap. In the
+ * 2026-11 trails about a third of reads were of files over 200 lines (up to
+ * 10,001), and that observation is paid for again by every later request in
+ * the turn. A window costs a second call when the model needs more; whether
+ * that trade wins on gnomon's own lanes is what the A/B is for.
+ *
+ * `offset` and `limit` are read only here. A surface with no window ignores
+ * them, as it always has, even from a model that sends them unasked.
+ */
+function readWindowed(
+  path: string,
+  raw: string,
+  crlf: boolean,
+  args: Record<string, unknown>,
+  window: number,
+  ctx: ToolContext
+): ToolOutcome {
+  const lines = raw.split(/\r?\n/);
+  const total = lines.length;
+  const whole = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : undefined);
+  const start = whole(args.offset) ?? 1;
+  const count = Math.min(whole(args.limit) ?? window, window);
+  const ending = crlf ? " · CRLF" : "";
+  if (start > total) {
+    return {
+      code: TOOL_OK_EMPTY,
+      content: `${path} has ${total} lines, so offset ${start} is past the end. Nothing is there to show.`,
+      summary: `read ${path} — ${total} lines · offset ${start} past the end${ending}`,
+    };
+  }
+  const end = Math.min(total, start + count - 1);
+  const shown = lines
+    .slice(start - 1, end)
+    .map((l, i) => `${String(start + i).padStart(5)}\t${l}`)
+    .join("\n");
+  const partial = start > 1 || end < total;
+  const footer = !partial
+    ? ""
+    : end < total
+      ? `\n… [lines ${start}–${end} of ${total} shown; ${total - end} more below` +
+        (start > 1 ? ` and ${start - 1} above` : "") +
+        `. Read on with offset = ${end + 1}, or grep the file for what you need.]`
+      : `\n… [lines ${start}–${end} of ${total} shown: the end of the file, with ${start - 1} lines above.]`;
+  return {
+    code: TOOL_OK,
+    // The file is on disk already, so a window too wide for the byte cap is
+    // not offloaded again: the footer says how to read the rest of it.
+    content: clamp(shown, { ...ctx, spill: undefined }, `read-${path}`) + footer,
+    summary: `read ${path} — ${total} lines${partial ? ` · shown ${start}–${end}` : ""}${ending}`,
+  };
+}
+
+/**
+ * Keep the first and last lines of an output longer than `max` (CX3, opt-in:
+ * `max_lines` on the bash declaration), and say how many were omitted and how
+ * to narrow the command. The full output is offloaded first, as the byte cap
+ * does, and the returned context has no sink, so the byte cap that follows
+ * cannot write the same output a second time. No cap, or an output within it,
+ * returns both arguments unchanged.
+ *
+ * Both ends, success or failure: an exit status and a summary line are at the
+ * top and the bottom of most output, and the error a failing build printed is
+ * usually its last line.
+ */
+function capLines(
+  text: string,
+  max: number | undefined,
+  ctx: ToolContext,
+  label: string
+): { text: string; ctx: ToolContext } {
+  if (!max) return { text, ctx };
+  const lines = text.split("\n");
+  if (lines.length <= max) return { text, ctx };
+  const head = Math.ceil(max / 2);
+  const tail = max - head;
+  const omitted = lines.length - max;
+  const kept = spilled(text, ctx, label);
+  const note =
+    `… [output truncated: ${omitted} lines omitted — narrow it with grep, head, tail ` +
+    `or sed -n 'A,Bp'.${kept}]`;
+  return {
+    text: [...lines.slice(0, head), note, ...(tail > 0 ? lines.slice(-tail) : [])].join("\n"),
+    ctx: { ...ctx, spill: undefined },
+  };
 }
 
 /**
@@ -1300,10 +1592,15 @@ export const NO_POSIX_SHELL =
   "    PowerShell:  $env:GNOMON_SHELL = \"C:\\path\\to\\bash.exe\"\n" +
   "    cmd:         set GNOMON_SHELL=C:\\path\\to\\bash.exe";
 
+/**
+ * Kill the command and its children. Resolves once the kill has been carried
+ * out -- on Windows, when taskkill has exited, since taskkill /T /F is what
+ * ends the tree; elsewhere at once, because the group SIGKILL is synchronous.
+ */
 function killTree(
   proc: { pid?: number; kill: (sig: NodeJS.Signals) => boolean },
   containerName?: string
-): void {
+): Promise<void> {
   // A container is not in the process group. Killing `docker run` returns the
   // shell to us and leaves the container running, so a timed-out command would
   // keep working -- writing into the repository -- after the turn had given up
@@ -1321,10 +1618,17 @@ function killTree(
   if (typeof proc.pid === "number" && process.platform === "win32") {
     // No process groups to signal. /T walks the tree, /F is SIGKILL's analogue.
     try {
-      spawn("taskkill", ["/pid", String(proc.pid), "/T", "/F"], {
+      const tk = spawn("taskkill", ["/pid", String(proc.pid), "/T", "/F"], {
         stdio: "ignore",
-      }).unref();
-      return;
+      });
+      // Not unref'd: whoever awaits this kill must keep the process alive until
+      // it settles. An unref'd taskkill plus an unref'd cap timer let Node exit
+      // mid-wait with code 13 (an unsettled top-level await) when nothing else
+      // was pending -- the Windows property-suite gate caught it.
+      return new Promise<void>((done) => {
+        tk.once("exit", () => done());
+        tk.once("error", () => done());
+      });
     } catch {
       // fall through to the direct kill below
     }
@@ -1332,7 +1636,7 @@ function killTree(
   if (typeof proc.pid === "number") {
     try {
       process.kill(-proc.pid, "SIGKILL");
-      return;
+      return Promise.resolve();
     } catch {
       // group already gone, or no permission — fall through
     }
@@ -1342,6 +1646,26 @@ function killTree(
   } catch {
     // already exited
   }
+  return Promise.resolve();
+}
+
+/**
+ * On Windows, a timed-out or cancelled command is reported only once its tree
+ * has actually gone: taskkill has finished and the shell has exited, bounded
+ * by KILL_SETTLE_MS. Fired-and-forgotten, the report raced the kill and the
+ * command's working directory stayed locked for ~0.4-0.5 s afterwards, so a
+ * caller's cleanup failed with EPERM (WINP, 2026-11-02, 3/3). Elsewhere the
+ * group SIGKILL has already done its work, and nothing waits: the timing #61
+ * measured is unchanged.
+ */
+const KILL_SETTLE_MS = 2000;
+function settleKill(killed: Promise<void>, exited: Promise<void>): Promise<void> {
+  if (process.platform !== "win32") return Promise.resolve();
+  let timer: NodeJS.Timeout | undefined;
+  const cap = new Promise<void>((done) => {
+    timer = setTimeout(done, KILL_SETTLE_MS);
+  });
+  return Promise.race([Promise.all([killed, exited]).then(() => undefined), cap]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -1378,7 +1702,7 @@ export function shq(value: string): string {
 
 export function sandboxCommand(
   command: string,
-  ctx: { root: string; exec?: { mode: ExecMode; image: string; network: boolean } },
+  ctx: { root: string; exec?: { mode: ExecMode; image: string; network: boolean }; agentSession?: string },
   name: string
 ): string {
   const ex = ctx.exec;
@@ -1420,6 +1744,10 @@ export function sandboxCommand(
     // its neighbours not.
     `-v ${shq(ctx.root)}:${shq(ctx.root)}`,
     `-w ${shq(ctx.root)}`,
+    // The agent-session marker, into the container too: a `gnomon skill
+    // accept` installed in the image is the agent's as much as one on the
+    // host. `-e NAME=value`, the value quoted for the host shell.
+    `-e ${AGENT_SESSION_ENV}=${shq(ctx.agentSession || `pid-${process.pid}`)}`,
     ex.image,
     `sh -c ${inner}`,
   ]
@@ -1551,6 +1879,53 @@ export function osSandboxSummary(
 }
 
 /**
+ * Which rule refused a call before it ran. A published enumeration: `gnomon
+ * guard` reports it (CONTRACTS.md §8), so a caller can switch on why.
+ *
+ *   tools        the role was not given this tool
+ *   malformed    the call's arguments cannot be read as that tool's
+ *   bash_deny    a bash_deny pattern matched
+ *   bash_allow   a segment is not on the role's bash_allow
+ *   sudo         sudo on the host
+ *   sandbox      a path outside the root and every granted extra_roots
+ *   surface      a write or edit inside `.gnomon/` (and any shell write there)
+ *   record       a write into gnomon's own records: the audit trail, trial
+ *                reports, session snapshots
+ *   git_hooks    a write into `.git/hooks/` or `.git/config`, or a `git config`
+ *                that sets a key git runs as a program (core.hooksPath, …)
+ *   write_allow  a path outside the role's write_allow
+ *   network      `[sandbox] network = false`
+ *   url          a scheme other than http(s), or a private / loopback address
+ *   repo_code    the call runs repository-defined code (`npm test`, `make`,
+ *                `pip install -e .`) and `[approval] repo_code = true` asks
+ *                a person first (decision ask, never deny)
+ */
+export const POLICY_RULES = [
+  "tools",
+  "malformed",
+  "bash_deny",
+  "bash_allow",
+  "sudo",
+  "sandbox",
+  "surface",
+  "record",
+  "git_hooks",
+  "write_allow",
+  "network",
+  "url",
+  "repo_code",
+] as const;
+export type PolicyRule = (typeof POLICY_RULES)[number];
+
+/**
+ * What a tool's precheck says before it would ask anyone or do anything.
+ * With `rule`: a refusal, and the rule that made it. Without: the call would
+ * fail on its own (an empty command, a URL that does not parse) -- the tool's
+ * answer, not a policy's.
+ */
+export type Precheck = ToolOutcome & { rule?: PolicyRule; pattern?: string };
+
+/**
  * Does a role's bash_allow / bash_deny let this command through?
  *
  * The decision bashTool makes before it runs anything, as a function of the
@@ -1562,12 +1937,26 @@ export function osSandboxSummary(
  * Returns null when the command is allowed, or the refusal bashTool returns,
  * plus which list refused it and the pattern, for a caller that reports rather
  * than refuses.
+ *
+ * AN INTENT FILTER, NOT CONTAINMENT. Both lists read the command the way the
+ * shell will (see shell.ts): `rm -fr`, `rm --recursive --force` and `rm -R`
+ * are offered to a pattern written as `rm -rf` or `rm .* -r`, and a program
+ * that `find -exec`, `xargs`, `env`, `sudo` or `sh -c` runs is checked like
+ * one the line runs itself. That stops a model reaching a denied operation
+ * through another common spelling. It does not stop code -- `python -c
+ * 'shutil.rmtree(…)'` has no `rm` in it -- and no list of commands can.
+ * `[sandbox] exec = "docker"` is the containment.
  */
 export function bashPolicy(
   command: string,
   allow: string[] | undefined,
   deny: string[] | undefined
 ): (ToolOutcome & { rule: "bash_deny" | "bash_allow"; pattern?: string }) | null {
+  // Read once, for both lists, and only when there is a list to read for.
+  const read = (deny && deny.length > 0) || (allow && allow.length > 0)
+    ? readShellCommand(command)
+    : null;
+
   // Deny first, and independently of the allow-list.
   //
   // An allow-list cannot say "everything except three catastrophes". The role
@@ -1576,12 +1965,29 @@ export function bashPolicy(
   // role you want stopped from force-pushing over a release branch. Those are
   // different questions, so they are different lists, and deny wins: a pattern
   // on both is denied.
-  if (deny && deny.length > 0) {
+  if (deny && deny.length > 0 && read) {
     const scan = scanShellCommand(command);
+    // A dry run is not the operation it previews. G1c (2026-11-01): a pattern
+    // written for `git clean -fdx` refused `git clean -ndx`, the one safe way
+    // to look before deleting. A segment that only dry-runs `git clean` is not
+    // offered to the list, and is cut out of the whole-string subject, so a
+    // real `git clean -f` beside it is still read and still refused.
+    const dry = scan.segments.filter(isDryRunSegment);
+    const whole = dry.reduce((c, seg) => c.replace(seg, " "), command);
     // The whole string as well as each segment. A segment split cannot see
     // `git push --force` written across a substitution, and denial is the one
     // place where matching too much is the safer error.
-    const subjects = [command, ...scan.segments];
+    const subjects = [whole, ...scan.segments.filter((seg) => !dry.includes(seg))];
+    // And every program the line runs, in its ordinary spellings. Measured on
+    // v0.3.1 (G2b, 2026-11-01; CORRECTION.md, 2026-08-31): with
+    // `rm\s+-rf` and `rm\s+.*-r\b` denied, `rm -fr keep`, `rm -R keep` and
+    // `rm --recursive --force keep` all deleted the directory, because the
+    // patterns were tested against text and the text was spelled differently.
+    // The raw subjects above still come first, so every command a pattern
+    // refused before is refused now, by the same pattern, with the same words.
+    const forms = read.invocations
+      .filter((inv) => !(programName(inv.argv[0] ?? "") === "git" && isDryRunSegment(joinWords(inv.argv))))
+      .flatMap((inv) => shellSpellings(inv).map((spelling) => ({ spelling, inv })));
     for (const pattern of deny) {
       let re: RegExp;
       try {
@@ -1607,21 +2013,51 @@ export function bashPolicy(
         };
       }
       const hit = subjects.find((sub) => re.test(sub));
-      if (hit !== undefined) {
+      const form = hit === undefined ? forms.find((f) => re.test(f.spelling)) : undefined;
+      if (hit !== undefined || form !== undefined) {
+        // Say how the command was read when it was not the text that matched,
+        // so neither the model nor the operator is left guessing why `rm -fr`
+        // tripped a rule that says `rm -rf`.
+        let what: string;
+        if (hit !== undefined) {
+          what = `"${hit.trim().slice(0, 80)}"`;
+        } else {
+          const written = describeInvocation(form!.inv);
+          what =
+            `"${written.slice(0, 80)}"` +
+            (form!.inv.via ? ` (run by ${form!.inv.via})` : "") +
+            (form!.spelling !== written ? `, read as "${form!.spelling.slice(0, 80)}",` : "");
+        }
         return {
           rule: "bash_deny",
           pattern,
           code: TOOL_DENIED,
           content:
-            `Refused: "${hit.trim().slice(0, 80)}" matches a bash_deny pattern ` +
+            `Refused: ${what} matches a bash_deny pattern ` +
             `for this role (/${pattern}/).\n\n` +
             `This is a fixed guardrail, not a judgement about the command. ` +
             `Do not try to change it — .gnomon/ is not yours to edit. Reach ` +
-            `the same goal another way, or say plainly that it cannot be ` +
-            `done under this role.`,
+            `the goal by a different operation if there is one, not by a ` +
+            `different spelling of this one: an equivalent command is the same ` +
+            `operation and is refused for the same reason. Otherwise say ` +
+            `plainly that it cannot be done under this role.`,
           summary: `bash — denied by bash_deny (/${pattern}/)`,
         };
       }
+    }
+    // What was not read was not checked. Nesting this deep, or this many
+    // commands in one call, is not something a coding task writes, and a
+    // deny-list must not wave through the part it never saw.
+    if (read.truncated) {
+      return {
+        rule: "bash_deny",
+        code: TOOL_DENIED,
+        content:
+          "Refused: this command nests deeper, or runs more commands, than " +
+          "gnomon reads before applying this role's bash_deny list, so part " +
+          "of it would run unchecked. Split it into smaller commands.",
+        summary: "bash — denied by bash_deny (command too deep to read)",
+      };
     }
   }
 
@@ -1671,15 +2107,50 @@ export function bashPolicy(
         `"${(offending ?? command).trim().slice(0, 80)}" is not on it.`
       );
     }
+
+    // And every program those segments run in turn. An allow-list of program
+    // NAMES admitted whatever a listed program was handed: measured on v0.3.1
+    // (G2b, 2026-11-01), a role allowed `^(ls|cat|grep|rg|find)\s` copied a
+    // secret with `find . -name secret.txt -exec cp {} secret_backup.txt \;`.
+    // A program `find -exec`, `xargs`, `env`, `sudo`, `nice`, `timeout`,
+    // `sh -c`, `eval` or `echo … | sh` runs must be on the list itself, as
+    // written -- `/tmp/x/grep` is not `grep`.
+    //
+    // This only ever adds a requirement: the segment around it already had to
+    // match. Equivalent spellings (`synthetic`) are deny-only: a role allowed
+    // `mv` must not be refused because the `rm` it is equivalent to is not
+    // listed.
+    if (read) {
+      if (read.truncated) {
+        return refuse(
+          "it nests deeper, or runs more commands, than gnomon reads, so part of it would run unchecked."
+        );
+      }
+      const inner = read.invocations.find(
+        (inv) => inv.via !== null && !inv.synthetic && !matches(joinWords(inv.argv))
+      );
+      if (inner) {
+        return refuse(
+          `"${joinWords(inner.argv).slice(0, 80)}", which ${inner.via} runs, is not on it.`
+        );
+      }
+    }
   }
 
   return null;
 }
 
-async function bashTool(
-  args: Record<string, unknown>,
-  ctx: ToolContext
-): Promise<ToolOutcome> {
+/**
+ * Everything bashTool refuses before it would ask anyone or run anything: a
+ * malformed call, bash_deny / bash_allow, sudo on the host. Null when none of
+ * them applies.
+ *
+ * Extracted so `gnomon guard` decides another harness's shell call with the
+ * code this loop runs, not a copy of it: bashTool calls this first and returns
+ * what it returns. An outcome with no `rule` is not a refusal -- the empty
+ * command fails, nothing refuses it.
+ */
+export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): Precheck | null {
   // String({}) is "[object Object]", which the shell dutifully tried to run
   // and reported as exit 127. A malformed call should be refused, not executed.
   // Only a NON-STRING is refused. An empty string is harmless -- the shell runs
@@ -1687,6 +2158,7 @@ async function bashTool(
   // a refusal, which is a contract this suite already pins.
   if (typeof args.command !== "string") {
     return {
+      rule: "malformed",
       code: TOOL_DENIED,
       content:
         `Refused: bash needs a \`command\` string, and got ${
@@ -1702,9 +2174,52 @@ async function bashTool(
 
   // Deny first, then the allow-list: see bashPolicy.
   const refused = bashPolicy(command, ctx.bashAllow, ctx.bashDeny);
-  if (refused) {
-    const { rule: _rule, pattern: _pattern, ...outcome } = refused;
-    return outcome;
+  if (refused) return refused;
+
+  const outside = bashWriteRefusal(command, ctx);
+  if (outside) return outside;
+
+  // `[sandbox] network = false` used to stop webfetch and nothing else, and
+  // the startup note said so: G2b (2026-11-01) reached its canary from a
+  // network = false surface with curl and with python. A surface that says
+  // "no network" now also refuses the commands whose purpose is the network.
+  //
+  // An intent filter over the command's words, and the startup note, /network
+  // and the README say so: a script, a package manager or a build tool
+  // reaches the network without naming curl, and that is not refused. The
+  // message to the model says only what the policy is, and not to route
+  // around it. With exec = "docker" the container
+  // also gets --network none, which is isolation; this check runs there too,
+  // so the same command gets the same answer on either side of that switch.
+  if (ctx.network === false) {
+    // `[sandbox] allow_package_index` (sweep_knobs.ts): a package download
+    // from a listed host is not refused. Empty, the default, is the filter as
+    // it was: the same call, the same answer. Inert under exec = "docker",
+    // whose --network none no host list opens, and under exec = "os", whose
+    // supervisor admits loopback only (packageIndexOf).
+    const listed = packageIndexOf(ctx);
+    const egress = bashNetworkEgress(command, listed);
+    if (egress) {
+      return {
+        // The rule was missing, and toolCallPolicy reads a precheck with no rule
+        // as "the call would fail on its own": `gnomon guard` allowed curl under
+        // network = false unless a bash_deny pattern also named it.
+        rule: "network",
+        code: TOOL_DENIED,
+        content:
+          `Refused: "${egress.command.slice(0, 80)}" reaches the network (${egress.why}), ` +
+          `and .gnomon/policy.toml sets [sandbox] network = false.\n\n` +
+          (listed.length > 0
+            ? `The only exception is a package download from ${listed.join(", ")} ` +
+              `([sandbox] allow_package_index): pip, uv or npm install or download, or a plain curl or wget GET, ` +
+              `naming only those hosts.\n\n`
+            : "") +
+          `Do not look for another route to the network -- the policy is that this ` +
+          `session has none. If the task needs it, say so plainly: the operator can ` +
+          `grant it with /network on, or network = true in policy.toml.`,
+        summary: "bash — refused (network = false)",
+      };
+    }
   }
 
   // Privilege escalation on the host is refused outright, before any approval
@@ -1715,6 +2230,7 @@ async function bashTool(
   // Inside the docker sandbox it is the container's root, not the host's.
   if (ctx.exec?.mode !== "docker" && SUDO_AT_COMMAND_POSITION.test(command)) {
     return {
+      rule: "sudo",
       code: TOOL_DENIED,
       content:
         "Refused: gnomon does not run sudo. Changing the machine outside this " +
@@ -1723,12 +2239,539 @@ async function bashTool(
       summary: "bash — refused (sudo)",
     };
   }
+  return null;
+}
 
-  if (needsApproval("bash", ctx.gate)) {
+/**
+ * write_allow, applied to the files a shell command names as its output.
+ *
+ * write_allow bounded `write` and `edit` only, so it bounded nothing a model
+ * refused there could not do in bash. G1c (2026-11-01, opencode V2 under
+ * `gnomon guard`, role write_allow = src/**, tests/**): refused an edit of
+ * CHANGELOG.md, two trials rewrote it with `python3 - <<PY …
+ * Path("CHANGELOG.md").write_text(…)`; refused `rm -rf var/`, one deleted the
+ * ignored database with `rm var/local.db && rmdir var`. Each of those names
+ * its target, and each is now put to the same list `write` is.
+ *
+ * What is judged (shellWriteTargets, shell.ts): redirections; the operands of
+ * rm, rmdir, unlink, shred, truncate, touch, mkdir, tee, cp, mv, install, ln,
+ * dd of=, curl -o, wget -O, sed -i and perl -i; and literal paths that inline
+ * python, node, perl or ruby code hands to a call that writes, directly or
+ * through one name bound to the literal (`p = Path("x")` ... `p.write_text`),
+ * in `-c`/`-e` code or a here-document fed to the interpreter.
+ *
+ * Beside write_allow, the same targets are put, for EVERY role, to the rules
+ * that guard what the agent must never rewrite (INJ-2026-11):
+ *  - `record`: gnomon's records, including a recursive removal of a directory
+ *    above them (`rm -rf ../repo`, `find . -delete`, `shutil.rmtree(".")`) and
+ *    a `git clean` / `git stash -u` that would remove them;
+ *  - `surface`: `.gnomon/` itself -- a shell write there is refused like the
+ *    record rule refuses one into the trail; the write tool under /allow is
+ *    the only consented route;
+ *  - `git_hooks`: `.git/hooks/` and `.git/config`, which git runs or reads on
+ *    the operator's next commit, outside any call gnomon decides.
+ *
+ * What is not, said rather than guessed:
+ *  - a path outside the repository root. write_allow is about what the
+ *    repository may become; scratch files in /tmp are not its business, and
+ *    the file tools' sandbox does not bind bash.
+ *  - a path that starts with a variable the line does not assign. A glob or a
+ *    variable later in the path is judged by the literal part before it
+ *    (`var/*` is under `var/`).
+ *  - a path code builds at run time, and anything a script FILE does. Like
+ *    bash_deny this reads intent, not effects; `[sandbox] exec = "os"` or
+ *    `"docker"` is containment.
+ *
+ * Where the shell IS when it writes is read through `cd`, `pushd` and `popd`
+ * in subshells, groups and nested shells (shell.ts, CwdTracker). A relative
+ * target after a `cd` gnomon cannot follow (`cd "$X"`) is refused under
+ * write_allow rather than waved through: a rule that bounds where a role
+ * writes cannot pass a write it cannot place.
+ */
+function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
+  const allowed = ctx.writeAllow?.filter((p) => p.trim().length > 0) ?? [];
+  const root = resolve(ctx.root);
+  const home = homedir();
+  /** A directory the tracker names: relative to the root, absolute, or under ~. */
+  const dirAbs = (d: string): string => (d === "~" || d.startsWith("~/") ? join(home, d.slice(1)) : resolve(root, d));
+  const opts = {
+    dirExists: (d: string) => {
+      try {
+        return statSync(dirAbs(d)).isDirectory();
+      } catch {
+        return false;
+      }
+    },
+  };
+  const resolveTarget = (path: string, cwd: string | null): string | null => {
+    const cut = path.search(/[$`*?[{]/);
+    if (cut === 0) return null;
+    const literal = cut < 0 ? path : `${path.slice(0, cut)}x`;
+    if (literal === "~" || literal.startsWith("~/")) return join(home, literal.slice(1));
+    if (literal.startsWith("~")) return null;
+    if (isAbsolute(literal)) return resolve(literal);
+    if (cwd === null) return null;
+    return resolve(dirAbs(cwd), literal);
+  };
+  const recordHit = (path: string, how: string): Precheck => ({
+    ...recordRefusal("bash", path),
+    content:
+      `Refused: this command writes "${path}" (${how}), inside gnomon's own records ` +
+      `(${recordDirs(ctx).map((d) => relative(root, d).split(sep).join("/") || d).join(", ")}).\n\n` +
+      RECORD_WHY,
+  });
+  const surfaceHit = (path: string, how: string): Precheck => ({
+    rule: "surface",
+    code: TOOL_DENIED,
+    content:
+      `Refused: this command writes "${path}" (${how}), inside .gnomon/, the surface that ` +
+      `decides how this agent behaves. No role changes it through the shell: a surface ` +
+      `change is a person's act -- proposed with the skill tool and accepted, or written ` +
+      `with the write tool once the person allows it (/allow custom|all) -- so that it ` +
+      `moves the surface hash where someone sees it.`,
+    summary: `bash ${path} — refused (surface is read-only)`,
+  });
+  const hooksHit = (path: string, how: string): Precheck => gitHooksRefusal("bash", path, how);
+
+  const { targets } = shellWriteTargets(command, opts);
+  const protectedDirs = (): Array<{ dir: string; kind: "record" | "surface" }> => [
+    ...recordDirs(ctx).map((dir) => ({ dir, kind: "record" as const })),
+    { dir: surfaceDir(ctx), kind: "surface" as const },
+  ];
+
+  // What each target means. Most are written; some are not written but name
+  // what is (a patch's paths, an archive's members); a link's source is not
+  // written but must not be a record.
+  type Judged = { path: string; abs: string; how: string; writeAllow: boolean; t: WriteTarget };
+  const judged: Judged[] = [];
+  for (const t of targets) {
+    // A glob that could name a record or the surface (`.gnomon-aud*/a.jsonl`,
+    // `.[!.]*`): the literal part before the first wildcard is a prefix of
+    // one. A wildcard at the start of a name says nothing; `*` does not
+    // match a dot-directory anyway.
+    const star = t.path.search(/[*?[{]/);
+    if (star > 0 && t.cwd !== null && !t.path.slice(0, star).includes("$")) {
+      const literal = t.path.slice(0, star);
+      const slash = literal.lastIndexOf("/");
+      const base = resolve(dirAbs(t.cwd), slash >= 0 ? literal.slice(0, slash + 1) : "");
+      const name = recordPathKey(slash >= 0 ? literal.slice(slash + 1) : literal);
+      if (inRecordDir(ctx, base)) return recordHit(t.path, t.how);
+      if (inSurface(ctx, base)) return surfaceHit(t.path, t.how);
+      for (const p of protectedDirs()) {
+        if (name !== "" && recordPathKey(dirname(p.dir)) === recordPathKey(base) && recordPathKey(basename(p.dir)).startsWith(name)) {
+          return p.kind === "record" ? recordHit(t.path, t.how) : surfaceHit(t.path, t.how);
+        }
+      }
+    }
+    const abs = resolveTarget(t.path, t.cwd);
+    if (!abs) {
+      // Where the shell is, is not known (`cd "$X"`), and the path is a
+      // literal relative one. A name that IS a protected directory is
+      // refused wherever it lands; under write_allow, so is the rest.
+      if (t.cwd === null && t.path.search(/[$`]/) !== 0 && !t.path.startsWith("~")) {
+        const names = t.path.split("/").map((c) => recordPathKey(c));
+        for (const p of protectedDirs()) {
+          if (names.includes(recordPathKey(basename(p.dir)))) {
+            return p.kind === "record" ? recordHit(t.path, t.how) : surfaceHit(t.path, t.how);
+          }
+        }
+        if (/^\.git(\/|$)|\/\.git\//.test(t.path) && /(^|\/)\.git\/(hooks|config)(\/|$)/.test(t.path)) return hooksHit(t.path, t.how);
+        // A git clean, or a recursive removal of `.` or `..`, from a directory
+        // gnomon cannot place may be the one above the records.
+        const upward = t.recursive === true && /^(\.\.?\/?)+$/.test(t.path);
+        const reached = (p: { dir: string }) =>
+          existsSync(p.dir) && (t.clean !== undefined || removalMatches(p.dir, root, t.path, t.names));
+        if ((t.clean || upward) && protectedDirs().some(reached)) {
+          return recordHit(t.path, `${t.how}, from a directory gnomon cannot place`);
+        }
+        if (allowed.length > 0 && t.how !== "ln (source)" && t.how !== "find -delete" && !t.clean) {
+          return {
+            rule: "write_allow",
+            code: TOOL_DENIED,
+            content:
+              `Refused: this command writes "${t.path}" (${t.how}) after a \`cd\` gnomon cannot ` +
+              `follow, so where it lands is not known, and this role may write only ` +
+              `${allowed.map((p) => `"${p}"`).join(", ")}.\n\n` +
+              `write_allow refuses a write it cannot place. Write the path from the repository ` +
+              `root, or cd to a literal directory first.`,
+            summary: `bash — writes ${t.path}, not permitted for this role`,
+          };
+        }
+      }
+      continue;
+    }
+    if (t.how === "git apply (patch)") {
+      for (const p of patchPaths(abs)) {
+        const at = resolve(dirAbs(t.cwd ?? ""), p);
+        judged.push({ path: p, abs: at, how: "git apply", writeAllow: true, t });
+      }
+      continue;
+    }
+    if (t.how === "tar -x (archive)" || t.how === "unzip (archive)") {
+      const into = targets.find((x) => x.how === t.how.replace("(archive)", "(into)") && x.cwd === t.cwd);
+      const base = (into && resolveTarget(into.path, into.cwd)) ?? resolve(dirAbs(t.cwd ?? ""));
+      for (const m of archiveMembers(abs, t.how.startsWith("tar") ? "tar" : "unzip")) {
+        judged.push({ path: m, abs: resolve(base, m), how: t.how.replace(" (archive)", ""), writeAllow: true, t });
+      }
+      continue;
+    }
+    // An extraction's own directory is judged by write_allow only when the
+    // command names it; "." (where the shell is) says nothing about members.
+    // A find removal and a git clean name where they START, not what they
+    // remove: put to the record, surface and hooks rules (which ask whether
+    // they reach those), never to write_allow, which judged neither before
+    // (INJ-2026-11 re-run: `find . -name '*.pyc' -delete` must stay allowed).
+    const reach = t.how === "find -delete" || t.clean !== undefined;
+    const writeAllow = !reach && t.how !== "ln (source)" && !((t.how === "tar -x (into)" || t.how === "unzip (into)") && t.path === ".");
+    judged.push({ path: t.path, abs, how: t.how, writeAllow, t });
+  }
+
+  for (const j of judged) {
+    // gnomon's own records bind every role, with or without write_allow, and
+    // are judged before the in-repository test: a custom [audit] dir may sit
+    // outside the root. A second name for a record -- a hard link made
+    // earlier -- is the record.
+    if (inRecordDir(ctx, j.abs) || hardLinkedToRecord(ctx, j.abs)) return recordHit(j.path, j.how);
+    // A removal of a directory ABOVE the records (or the surface) removes
+    // them too: `rm -rf ../repo`, `find . -name '*.jsonl' -delete`.
+    if (j.t.clean) {
+      const hit = cleanReaches(ctx, j.abs, j.t.clean);
+      if (hit?.kind === "record") {
+        const r = recordHit(j.path, `${j.how}, which removes ${hit.what}`);
+        if (j.how !== "git clean") return r;
+        const keep = recordDirs(ctx).map((d) => `-e ${relative(root, d).split(sep).join("/") || d}`).join(" ");
+        return { ...r, content: `${r.content}\n\nTo clean everything else, keep them out of it: git clean … ${keep}` };
+      }
+      if (hit) return surfaceHit(j.path, `${j.how}, which removes ${hit.what}`);
+    } else if (j.t.recursive) {
+      for (const p of protectedDirs()) {
+        if (isAncestor(j.abs, p.dir) && removalMatches(p.dir, j.abs, j.path, j.t.names)) {
+          return p.kind === "record"
+            ? recordHit(j.path, `${j.how}, which removes everything below it`)
+            : surfaceHit(j.path, `${j.how}, which removes everything below it`);
+        }
+      }
+    }
+    if (inSurface(ctx, j.abs)) return surfaceHit(j.path, j.how);
+    if (inGitControl(ctx, j.abs)) return hooksHit(j.path, j.how);
+    if (!j.writeAllow) continue;
+    const rel = relative(root, j.abs);
+    if (rel.startsWith("..") || isAbsolute(rel)) continue;
+    if (allowed.length === 0) continue;
+    const scope = writeAllowed(ctx, j.abs);
+    if (scope.ok) continue;
+    return {
+      rule: "write_allow",
+      code: TOOL_DENIED,
+      content:
+        `Refused: this command writes "${scope.rel}" (${j.how}), and this role may write ` +
+        `${scope.listed}.\n\n` +
+        `write_allow binds the shell as well as write and edit. Do not reach the same ` +
+        `file another way: a different command writing it is the same change and is ` +
+        `refused for the same reason. If the task needs it, say so plainly.`,
+      summary: `bash — writes ${scope.rel}, not permitted for this role`,
+    };
+  }
+
+  // `git config core.hooksPath …` and the other keys git runs: a persistent
+  // way to run code on the operator's next git command, which names no file.
+  const exec = gitExecConfigs(command)[0];
+  if (exec) {
+    return gitHooksRefusal("bash", exec.key, `git config ${exec.key}`);
+  }
+  return null;
+}
+
+/** Whether `dir` is `p` or above it. */
+function isAncestor(dir: string, p: string): boolean {
+  const rel = relative(recordPathKey(resolve(dir)), recordPathKey(resolve(p)));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/** The surface directory a context guards. */
+function surfaceDir(ctx: ToolContext): string {
+  return ctx.config?.gnomonDir ? resolve(ctx.config.gnomonDir) : resolve(ctx.root, ".gnomon");
+}
+
+/** find's -name / -path pattern as a RegExp (fnmatch: `*` `?` `[…]`). */
+function fnmatch(glob: string, flags = ""): RegExp {
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!;
+    if (c === "*") re += ".*";
+    else if (c === "?") re += ".";
+    else if (c === "[") {
+      const end = glob.indexOf("]", i + 2);
+      if (end < 0) re += "\\[";
+      else {
+        re += "[" + glob.slice(i + 1, end).replace(/^!/, "^").replace(/\\/g, "\\\\") + "]";
+        i = end;
+      }
+    } else if (c === "\\" && i + 1 < glob.length) re += "\\" + glob[++i];
+    else re += c.replace(/[.+^${}()|\]\\/]/g, "\\$&");
+  }
+  return new RegExp(`^${re}$`, flags);
+}
+
+/**
+ * Whether a recursive removal starting at `start` and limited by find's name
+ * tests would reach anything in the protected directory `dir`. No tests:
+ * yes. With tests: each entry of `dir` (and `dir` itself) is put to them, a
+ * bounded walk; `-regex` is not evaluated and counts as a match.
+ */
+function removalMatches(dir: string, start: string, written: string, names?: string[]): boolean {
+  if (!names || names.length === 0) return true;
+  if (!existsSync(dir)) return false;
+  const tests = names.map((n) => {
+    const [kind, pat] = n.split("\0") as [string, string];
+    return { kind, re: /regex/.test(kind) ? null : fnmatch(pat, kind.startsWith("-i") ? "i" : "") };
+  });
+  const hit = (abs: string): boolean => {
+    const base = basename(abs);
+    const shown = `${written.replace(/\/+$/, "") || "."}/${relative(start, abs).split(sep).join("/")}`;
+    return tests.some((t) => t.re === null || t.re.test(/name$/.test(t.kind) ? base : shown));
+  };
+  if (hit(dir)) return true;
+  let budget = 20_000;
+  const walk = (d: string): boolean => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(d, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const e of entries) {
+      if (--budget < 0) return true; // too large to read: assume it is reached
+      const p = join(d, e.name);
+      if (hit(p)) return true;
+      if (e.isDirectory() && walk(p)) return true;
+    }
+    return false;
+  };
+  return walk(dir);
+}
+
+/**
+ * What a `git clean` (or `git stash --include-untracked`) run from `at` would
+ * remove of gnomon's records or surface: git's own account of which of their
+ * files are untracked or ignored, read with `git status`, filtered by the
+ * command's -x/-X, -e and pathspecs. When git cannot say, a record directory
+ * in reach counts as removed.
+ */
+function cleanReaches(ctx: ToolContext, at: string, clean: GitClean): { kind: "record" | "surface"; what: string } | null {
+  const reach = [
+    ...recordDirs(ctx).map((dir) => ({ dir, kind: "record" as const })),
+    { dir: surfaceDir(ctx), kind: "surface" as const },
+  ].filter((p) => existsSync(p.dir) && (isAncestor(at, p.dir) || isAncestor(p.dir, at)));
+  if (reach.length === 0) return null;
+  const specs = clean.pathspecs.map((s) => (/[*?[]/.test(s) ? null : resolve(at, s)));
+  const inSpecs = (abs: string) =>
+    clean.pathspecs.length === 0 || specs.some((s) => s === null || isAncestor(s, abs) || isAncestor(abs, s));
+  const excluded = (rel: string) =>
+    clean.excludes.some((e) => {
+      const pat = e.replace(/^\/|\/$/g, "");
+      return rel.split("/").some((c) => fnmatch(pat).test(c)) || fnmatch(pat).test(rel);
+    });
+  for (const p of reach) {
+    if (!inSpecs(p.dir)) continue;
+    // Relative to where git runs, in git's separators: an absolute path through
+    // a symlinked temp dir (/var vs /private/var on macOS) reads as outside the
+    // repository, and that would refuse a clean that reaches nothing.
+    const spec = relative(at, p.dir).split(sep).join("/") || ".";
+    const r = spawnSync("git", ["-C", at, "status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all", "--", spec], {
+      encoding: "utf-8",
+      timeout: 5000,
+      windowsHide: true,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (r.status !== 0 || typeof r.stdout !== "string") {
+      // Not a repository: git clean fails too. Anything else: assume reached.
+      if (/not a git repository/i.test(String(r.stderr ?? ""))) return null;
+      return { kind: p.kind, what: relative(resolve(ctx.root), p.dir) || p.dir };
+    }
+    for (const entry of r.stdout.split("\0")) {
+      const code = entry.slice(0, 2);
+      const file = entry.slice(3);
+      if (!file) continue;
+      const removed = (code === "??" && clean.untracked) || (code === "!!" && clean.ignored);
+      if (!removed) continue;
+      // Relative to the repository top: compare by the protected dir's name.
+      const rel = file.replace(/\/$/, "");
+      if (excluded(rel)) continue;
+      return { kind: p.kind, what: rel };
+    }
+  }
+  return null;
+}
+
+/**
+ * The repository's git control files a write must not reach: `.git/hooks/`
+ * (scripts git runs on the next commit or checkout) and `.git/config` (where
+ * `core.hooksPath`, a pager, a filter driver or an alias says what git runs).
+ * Found from the root upwards, through a linked worktree's `gitdir:` file to
+ * its common directory, where hooks and config live.
+ */
+function gitControlPaths(root: string): string[] {
+  const cached = GIT_CONTROL.get(root);
+  if (cached) return cached;
+  const out: string[] = [];
+  for (let d = resolve(root); ; d = dirname(d)) {
+    const dotGit = join(d, ".git");
+    if (existsSync(dotGit)) {
+      out.push(join(dotGit, "hooks"), join(dotGit, "config"));
+      try {
+        if (!statSync(dotGit).isDirectory()) {
+          const m = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, "utf-8"));
+          if (m) {
+            const gd = resolve(d, m[1]!);
+            out.push(join(gd, "hooks"), join(gd, "config"));
+            const common = join(gd, "commondir");
+            if (existsSync(common)) {
+              const c = resolve(gd, readFileSync(common, "utf-8").trim());
+              out.push(join(c, "hooks"), join(c, "config"));
+            }
+          }
+        }
+      } catch {
+        // unreadable: the lexical .git paths above still stand
+      }
+      break;
+    }
+    if (dirname(d) === d) break;
+  }
+  // Only a found repository is remembered: `git init` later in the session
+  // must not leave its hooks unguarded.
+  if (out.length > 0) GIT_CONTROL.set(root, out);
+  return out;
+}
+const GIT_CONTROL = new Map<string, string[]>();
+
+/** Whether a resolved path is a git hook or the repository's git config. */
+export function inGitControl(ctx: ToolContext, abs: string): boolean {
+  const under = (base: string, p: string): boolean => {
+    const rel = relative(recordPathKey(base), recordPathKey(p));
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  };
+  return gitControlPaths(ctx.root).some((g) => under(realpathOrSelf(g), realpathOfNearest(abs)) || under(g, resolve(abs)));
+}
+
+const GIT_HOOKS_WHY =
+  `git runs what is there on the operator's next commit, checkout or push -- outside ` +
+  `any call gnomon decides, and on the host even when this session's bash runs in a ` +
+  `container. No role writes it. If the task needs a hook or a git setting, say so ` +
+  `plainly and give the person the exact command to run.`;
+
+function gitHooksRefusal(tool: string, path: string, how?: string): Precheck {
+  const what =
+    how === undefined
+      ? `"${path}" is in git's hooks or the repository's git config`
+      : how.startsWith("git config")
+        ? `\`${how}\` sets a key git runs as a program`
+        : `this command writes "${path}" (${how}), in git's hooks or the repository's git config`;
+  return {
+    rule: "git_hooks",
+    code: TOOL_DENIED,
+    content: `Refused: ${what}.\n\n${GIT_HOOKS_WHY}`,
+    summary: `${tool} ${path} — refused (git hooks)`,
+  };
+}
+/**
+ * The paths a patch file writes, read from its headers. Empty when the file
+ * cannot be read; capped, since a patch is the agent's to make arbitrarily
+ * large.
+ */
+function patchPaths(abs: string): string[] {
+  let text: string;
+  try {
+    if (statSync(abs).size > 8 * 1024 * 1024) return [];
+    text = readFileSync(abs, "utf-8");
+  } catch {
+    return [];
+  }
+  const out = new Set<string>();
+  for (const m of text.matchAll(/^(?:\+\+\+|---) (?:[ab]\/)?(\S+)/gm)) if (m[1] !== "/dev/null") out.add(m[1]!);
+  for (const m of text.matchAll(/^diff --git a\/(\S+) b\/(\S+)/gm)) {
+    out.add(m[1]!);
+    out.add(m[2]!);
+  }
+  for (const m of text.matchAll(/^(?:rename|copy) to (\S+)/gm)) out.add(m[1]!);
+  return [...out];
+}
+
+/**
+ * The members an archive would extract, listed by the archiver itself
+ * (`tar -tf`, `unzip -Z1`), with a short deadline. Empty when the archive is
+ * missing or the listing fails: unknown is reported as unknown, which is the
+ * pattern precheck's limit -- the kernel sandbox is what contains it.
+ */
+function archiveMembers(abs: string, kind: "tar" | "unzip"): string[] {
+  if (!existsSync(abs)) return [];
+  const r = spawnSync(kind, kind === "tar" ? ["-tf", abs] : ["-Z1", abs], {
+    encoding: "utf-8",
+    timeout: 5000,
+    windowsHide: true,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  if (r.status !== 0 || typeof r.stdout !== "string") return [];
+  return r.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 50_000);
+}
+
+/** A precheck's answer, minus the bookkeeping a tool does not hand the model. */
+function outcomeOf(pre: Precheck): ToolOutcome {
+  const { rule: _rule, pattern: _pattern, ...outcome } = pre;
+  return outcome;
+}
+
+/**
+ * The hosts `[sandbox] allow_package_index` let a command that ran reach,
+ * on its outcome, so the loop can count them and the trail name them. The
+ * outcome is returned as it was when the allowlist admitted nothing.
+ */
+function withPackageIndex(outcome: ToolOutcome, args: Record<string, unknown>, ctx: ToolContext): ToolOutcome {
+  const listed = packageIndexOf(ctx);
+  if (ctx.network !== false || listed.length === 0) return outcome;
+  if (typeof args.command !== "string" || mapToolBucket(outcome.code) === "refusal") return outcome;
+  const admitted: string[] = [];
+  bashNetworkEgress(args.command, listed, admitted);
+  return admitted.length > 0 ? { ...outcome, package_index: [...new Set(admitted)].sort() } : outcome;
+}
+
+/**
+ * The hosts `[sandbox] allow_package_index` admits in this context: none
+ * under exec = "docker", where the container has no network to admit them to,
+ * and none under exec = "os", whose network = false supervisor admits loopback
+ * only. There is deliberately no per-host allow in that supervisor: a host
+ * name is not an address (a CDN answers from thousands, and DNS is the
+ * attacker's to answer), so matching one in the kernel path would be a hole
+ * dressed as a rule. The filter therefore refuses the download up front, with
+ * the same answer the kernel would give later.
+ */
+export function packageIndexOf(ctx: Pick<ToolContext, "packageIndex" | "exec">): readonly string[] {
+  return ctx.exec?.mode === "docker" || ctx.exec?.mode === "os" ? [] : (ctx.packageIndex ?? []);
+}
+
+/** The bucket of a tool outcome code, as conformance/exit_codes.json maps it. */
+function mapToolBucket(code: number): "result" | "refusal" | "apparatus_failure" {
+  return code === TOOL_OK || code === TOOL_OK_EMPTY ? "result" : code >= 2 && code <= 4 ? "refusal" : "apparatus_failure";
+}
+
+async function bashTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolOutcome> {
+  const pre = bashPrecheck(args, ctx);
+  if (pre) return outcomeOf(pre);
+  const command = args.command as string;
+
+  // Repository-defined code (npm test, make, pip install -e .) is named in the
+  // preview, and asked about whatever the gate says under repo_code = true.
+  const runs = repoCodeRuns(command);
+  const askRepo = runs.length > 0 && repoCodeAsks(ctx);
+  if (needsApproval("bash", ctx.gate) || askRepo) {
     const ok = await ctx.approve({
       tool: "bash",
-      summary: `bash: ${command}`,
-      preview: command.split("\n").map((l) => `  $ ${l}`),
+      summary: askRepo ? `bash (runs repository code): ${command}` : `bash: ${command}`,
+      preview: [...command.split("\n").map((l) => `  $ ${l}`), ...repoCodeNote(runs, ctx.root).map((l) => `  # ${l}`)],
     });
     if (!ok) {
       return {
@@ -1829,7 +2872,9 @@ async function bashTool(
   const running = new Promise<ToolOutcome>((done) => {
     const proc = spawn(osPlan ? osPlan.file : shellBin, osPlan ? osPlan.args : ["-c", spawned], {
       cwd: ctx.root,
-      env: osPlan ? osPlan.env : process.env,
+      // The marker that says the agent is running this (AGENT_SESSION_ENV),
+      // and under exec = "os" the per-call temp dir (osSandboxPlan).
+      env: agentEnv(ctx.agentSession, osPlan ? osPlan.env : process.env),
       // stdin closed, stdout/stderr piped. An inherited stdin pipe that nobody
       // ever writes to makes any command that reads stdin block until the tool
       // timeout kills it -- `cat` with no argument, an npm prompt, a git
@@ -1840,17 +2885,24 @@ async function bashTool(
       // work. Windows has no process groups to signal and `detached` there
       // means something else entirely -- killTree uses taskkill /T instead.
       detached: process.platform !== "win32",
-      // sandbox.network = false is declared in policy.toml but this build
-      // cannot enforce it; the loop says so at startup rather than pretending.
+      // On the host, network = false is enforced only as the intent filter
+      // above (bashNetworkEgress); the process itself can still open sockets.
+      // Under exec = "docker" the container gets --network none instead, and
+      // under exec = "os" gnomon-exec blocks egress in the kernel.
     });
     let stdout = "";
     let stderr = "";
     let settled = false;
+    // Resolves when the shell itself has exited, however that happened.
+    const exited = new Promise<void>((ok) => {
+      if (proc.exitCode !== null || proc.signalCode !== null) ok();
+      else proc.once("exit", () => ok());
+    });
 
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       if (settled) return;
       settled = true;
-      killTree(proc, sandboxed ? sandboxName : undefined);
+      await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
       // What the command printed before it was killed is evidence the harness
       // already holds: the failing test, the last line of a build, the prompt it
       // was blocked on. Discarding it left the model with nothing to act on but
@@ -1864,6 +2916,8 @@ async function bashTool(
         .filter(Boolean)
         .join("\n");
       releasePipes(proc);
+      // Opt-in line cap (CX3); unchanged text and context when none is declared.
+      const cappedCapture = capLines(captured, ctx.maxLines?.bash, ctx, `bash-timeout`);
       const drift = surfaceDrift(ctx, surfaceBefore);
       const movedTree = worktreeMoved(ctx, worktreeBefore, shellCwd);
       // So the next identical call is refused for free rather than stalling.
@@ -1873,7 +2927,7 @@ async function bashTool(
         worktree_changed: movedTree,
         content:
           `Command timed out after ${ctx.timeoutMs}ms and was killed. Output captured before the kill:\n` +
-          clampEnds(captured, ctx, `bash-timeout`) +
+          clampEnds(cappedCapture.text, cappedCapture.ctx, `bash-timeout`) +
           `\n\nIt did not finish, so this output is partial. Re-running it unchanged will time out again: ` +
           `narrow it, or start it in the background and poll:\n      ${backgroundRecipe(command)}\n` +
           `    then read ${JOB_LOG_DIR}/job.log on a later step.` +
@@ -1885,11 +2939,11 @@ async function bashTool(
 
     // The operator pressing Esc must reach the process, not merely be noticed
     // once it has finished.
-    const onAbort = () => {
+    const onAbort = async () => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      killTree(proc, sandboxed ? sandboxName : undefined);
+      await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
       releasePipes(proc);
       done({
         code: TOOL_FAILED,
@@ -1938,6 +2992,14 @@ async function bashTool(
       if (settled) return;
       setTimeout(() => finish(exit, signal), 40);
     });
+    // ...but only when the streams are still open. `close` means sh has exited AND
+    // both pipes are drained, so nothing is left in flight: finish at once. It
+    // fires within a millisecond of `exit` for any command that leaves no job
+    // holding the pipes, which is nearly every command. The 40 ms drain used to
+    // be paid on every one of them: UX1b measured gnomon at 48 ms of its own time
+    // per tool turn against goose's 22, and the drain was 40 of the 48. The
+    // backgrounded-job case above still ends on exit + 40 ms, as before.
+    proc.on("close", (exit, signal) => finish(exit, signal));
     const finish = (exit: number | null, signal?: NodeJS.Signals | null) => {
       if (settled) return;
       settled = true;
@@ -1972,6 +3034,9 @@ async function bashTool(
             .join("\n");
       const drift = surfaceDrift(ctx, surfaceBefore);
       const movedTree = worktreeMoved(ctx, worktreeBefore, shellCwd);
+      // Opt-in line cap (CX3), before the byte cap; unchanged text and context
+      // when none is declared.
+      const capped = capLines(body, ctx.maxLines?.bash, ctx, `bash-exit`);
       done({
         code: TOOL_OK,
         worktree_changed: movedTree,
@@ -1979,7 +3044,9 @@ async function bashTool(
         // coerced, because "killed" is not an exit status.
         shell_exit: typeof exit === "number" ? exit : undefined,
         content:
-          (failed ? clampEnds(body, ctx, `bash-exit`) : clamp(body, ctx, `bash-exit`)) +
+          (failed
+            ? clampEnds(capped.text, capped.ctx, `bash-exit`)
+            : clamp(capped.text, capped.ctx, `bash-exit`)) +
           pipelineStatusNote(command) +
           (drift ? `\n\n${drift.notice}` : ""),
         // `exit` is null when the child died on a signal, and "exit null" then
@@ -2104,7 +3171,25 @@ export function surfaceDrift(
 ): SurfaceDrift | null {
   if (!before) return null;
   const after = surfaceHashOf(ctx);
-  if (!after || after === before) return null;
+  if (after === before) return null;
+  if (!after) {
+    // A surface that hashed before the call and cannot be hashed after it
+    // MOVED. This returned null, "nothing moved", so `ln -sf <nowhere>
+    // .gnomon/policy.toml` -- a dangling link, which the manifest walk cannot
+    // stat -- replaced the policy and was never reported (LN8). Reported
+    // here, so the loop says so and tries to reload.
+    return {
+      before,
+      after: "unhashable",
+      notice:
+        `[gnomon] WARNING: that command changed .gnomon/ so that it can no ` +
+        `longer be hashed (a dangling link or an unreadable file) — the ` +
+        `surface hash was ${before.slice(0, 12)}. The rules this session is ` +
+        `running under are no longer the ones it started with, and a surface ` +
+        `that cannot be hashed cannot be verified. Do not try to undo this; ` +
+        `say in your final answer that the surface moved mid-session.`,
+    };
+  }
   return {
     before,
     after,
@@ -2142,19 +3227,25 @@ export function surfaceHashOf(ctx: ToolContext): string | null {
  *
  * Observation, not inference: a pattern list over `sed|tee|make` would be a
  * behaviour-deciding rule living outside the content-hashed surface, and it
- * would be wrong on the first command it had not been taught. This reuses the
- * same walk `glob`/`grep` use, so it inherits their fixed ignore set and their
- * file cap, and it never reads file contents.
+ * would be wrong on the first command it had not been taught. It never reads
+ * file contents.
  *
  * Returns null when the tree cannot be stamped, which callers must read as
- * "unknown", never as "unchanged".
+ * "unknown", never as "unchanged". A walk that reached WALK_MAX_FILES is one of
+ * those. It used to return a stamp of the first 20,000 files it happened to
+ * visit, and on a 30,000-file tree 7 of 20 sampled single-file edits did not
+ * move it (#62): a partial answer reported as a whole one, so the command was
+ * recorded as changing nothing and counted toward the nudge.
  *
- * Cost, measured: 1.4ms on this repo (273 walked files) and 79.6ms on a
- * synthetic tree at the WALK_MAX_FILES cap — so at most ~160ms per bash call,
- * against a measured model round-trip of 7.4s median. It stats, never reads.
+ * A tree of STAMP_WALK_BELOW files or more, inside a git work tree, is asked of
+ * git (gitStampOf) instead. The walk stat'd every file in JS before AND after
+ * every command: per tool turn, 50ms at 0 files, 104ms at 5k and 260ms at 20k,
+ * where goose stayed flat at ~22ms (#62, UX1c). Smaller trees, and trees
+ * outside git, are walked as they always were.
  */
 export function worktreeStampOf(ctx: ToolContext, alsoRoot?: string): string | null {
   try {
+    const below = ctx.stampWalkBelow ?? STAMP_WALK_BELOW;
     const h = createHash("sha256");
     // A second root, when the shell is working somewhere else. This walked only
     // ctx.root, so a task whose work is an apt install, an /etc config or a
@@ -2163,32 +3254,26 @@ export function worktreeStampOf(ctx: ToolContext, alsoRoot?: string): string | n
     // "98 call(s) without changing a file" immediately after postconf -e,
     // service start and chown, with two of its tests already passing. The
     // nudge was not wrong to fire on its premise; the premise was false.
+    //
+    // Either root unknown makes the whole stamp unknown, even when the other
+    // one moved. Weaker than it could be; never wrong.
     const roots = alsoRoot && alsoRoot !== ctx.root ? [ctx.root, alsoRoot] : [ctx.root];
-    for (const base of roots)
-    for (const rel of walkFiles(base, base)) {
-      // .gnomon/ has its own stamp (surfaceHashOf) and its own meaning; a
-      // surface edit is drift, not progress.
-      //
-      // .gnomon-loops/ is gnomon's OWN state, the same family as .gnomon-audit
-      // and .gnomon-sessions in NEVER_WALKED: `gnomon loop install` puts cron
-      // on a schedule and every tick appends to cron.log and rewrites
-      // <loop>.json. That made the tree move under a step that changed
-      // nothing, so `worktree_changed` came back true for read-only work and
-      // the anti-flailing nudge lost its premise -- exactly what adding
-      // coverage/ to NEVER_WALKED fixed on 2026-09-05, arriving instead
-      // through a directory the harness writes itself. It is excluded HERE
-      // rather than in NEVER_WALKED so glob and grep can still read it; only
-      // the "did the agent change anything" question ignores it.
-      // (String, not loops.ts's LOOP_STATE_DIR: loops.ts imports this module.)
-      if (rel === ".gnomon" || rel.startsWith(".gnomon/")) continue;
-      if (rel === ".gnomon-loops" || rel.startsWith(".gnomon-loops/")) continue;
-      let st: Stats;
-      try {
-        st = statSync(join(base, rel));
-      } catch {
-        continue; // vanished mid-walk: the next stamp will differ anyway
+    for (const base of roots) {
+      // Small: walked, exact under its bound and cheaper than starting git.
+      // Null here only means "bigger than that".
+      let one: string | null | undefined = walkStampOf(base, below);
+      if (one === null) {
+        one = gitStampOf(base);
+        if (one === undefined) one = walkStampOf(base, WALK_MAX_FILES);
       }
-      h.update(`${base}/${rel}:${st.size}:${st.mtimeMs}\n`);
+      if (one === null) return null;
+      // Which method made it is inside `one`: a git stamp and a walk stamp of
+      // the same tree are different digests, so a root that changes method
+      // between before and after reads as moved, never as unchanged. It can
+      // only change method by gaining or losing files across the bound -- a
+      // change -- or, at worst, files under .gnomon/ or .gnomon-loops/, which
+      // the bound counts and the stamp ignores: reported as moved, never hid.
+      h.update(`${base}\0${one}\n`);
     }
     return h.digest("hex");
   } catch {
@@ -2197,14 +3282,484 @@ export function worktreeStampOf(ctx: ToolContext, alsoRoot?: string): string | n
 }
 
 /**
- * Did the worktree move? Only a stamp taken on both sides can say so; an
- * unstampable tree is unknown, and unknown must not read as changed (that
- * would disarm the nudge) nor as unchanged in a way anyone relies on.
+ * Did the worktree move? Only a stamp taken on both sides can say so. Three
+ * answers, and the third is not a spelling of the second:
+ *
+ *   true   both stamps exist and differ;
+ *   false  both stamps exist and agree;
+ *   null   either side could not be stamped -- unknown.
+ *
+ * This returned false for unknown, on the reasoning that unknown must not read
+ * as changed (that would disarm the nudge). That half holds. Reading it as
+ * unchanged is the same mistake the other way: it counts a working agent's
+ * commands toward "N calls without changing a file". So unknown is said, and
+ * the nudge, the fold, the verify gate and the audit each decide what it means
+ * for them (prompt_loop.ts).
  */
-export function worktreeMoved(ctx: ToolContext, before: string | null, alsoRoot?: string): boolean {
-  if (before === null) return false;
+export function worktreeMoved(
+  ctx: ToolContext,
+  before: string | null,
+  alsoRoot?: string
+): boolean | null {
+  if (before === null) return null;
   const after = worktreeStampOf(ctx, alsoRoot);
-  return after !== null && after !== before;
+  if (after === null) return null;
+  return after !== before;
+}
+
+/**
+ * The stamp's exclusions, as a question about one path relative to the root
+ * being stamped. Shared by the walk and the git stamp, so the two give the same
+ * answer about the same tree.
+ *
+ * .gnomon/ has its own stamp (surfaceHashOf) and its own meaning; a surface
+ * edit is drift, not progress.
+ *
+ * .gnomon-loops/ is gnomon's OWN state, the same family as .gnomon-audit and
+ * .gnomon-sessions in NEVER_WALKED: `gnomon loop install` puts cron on a
+ * schedule and every tick appends to cron.log and rewrites <loop>.json. That
+ * made the tree move under a step that changed nothing, so `worktree_changed`
+ * came back true for read-only work and the anti-flailing nudge lost its
+ * premise -- exactly what adding coverage/ to NEVER_WALKED fixed on 2026-09-05,
+ * arriving instead through a directory the harness writes itself. It is
+ * excluded HERE rather than in NEVER_WALKED so glob and grep can still read it;
+ * only the "did the agent change anything" question ignores it. (String, not
+ * loops.ts's LOOP_STATE_DIR: loops.ts imports this module.)
+ *
+ * NEVER_WALKED itself the walk applies on its own. git has never heard of it,
+ * so a path git lists is checked against it here: otherwise an un-ignored
+ * `.gnomon-shadow/` or `coverage/` comes back into the stamp through git status,
+ * and with it the false "changed" each was added to the list to stop.
+ */
+function stampSkips(rel: string, isDir: boolean): boolean {
+  const segs = rel.replace(/\/+$/, "").split("/");
+  if (segs[0] === ".gnomon" || segs[0] === ".gnomon-loops") return true;
+  const dirs = isDir ? segs : segs.slice(0, -1);
+  return dirs.some((d) => NEVER_WALKED.has(d));
+}
+
+/**
+ * Below this many files the walk is the cheaper stamp, and the stamp walks.
+ *
+ * A git stamp costs a process (two, the first time): on gx10 ~3.5ms a status
+ * at 0 files, against the walk's 0.2ms, and the walk catches up at about 700
+ * files. On the Windows runner a git process costs ~35ms -- this repository's
+ * own 482-file tree took ~45ms more a stamp through git than walked, and a
+ * 26-call test that passed in 3.9s on master ran out its 5s. Where the walk
+ * pays ~4us a file on Linux and several times that on NTFS, 2,000 leaves
+ * small trees, which is most daily work, as fast as they were, and sends
+ * everything past it to git, where the walk's cost and its cap were the bug.
+ */
+const STAMP_WALK_BELOW = 2_000;
+
+/**
+ * The walk. Null when it reached `max`: the files past it were never looked
+ * at, so a stamp would describe part of the tree while claiming to describe
+ * all of it. At WALK_MAX_FILES that is "unknown"; at a smaller bound it is
+ * the caller's cue to ask git instead.
+ */
+function walkStampOf(base: string, max: number): string | null {
+  const files = walkFiles(base, base, max);
+  if (files.length >= max) return null;
+  const h = createHash("sha256");
+  h.update("walk\n");
+  for (const rel of files) {
+    if (stampSkips(rel, false)) continue;
+    let st: Stats;
+    try {
+      st = statSync(join(base, rel));
+    } catch {
+      continue; // vanished mid-walk: the next stamp will differ anyway
+    }
+    h.update(`${rel}:${st.size}:${st.mtimeMs}\n`);
+  }
+  return h.digest("hex");
+}
+
+/** A status this slow is worth falling back from, not waiting on twice a command. */
+const GIT_STAMP_TIMEOUT_MS = 5_000;
+/** Far past what a WALK_MAX_FILES budget of listed paths can print. */
+const GIT_STAMP_MAX_BUFFER = 32 * 1024 * 1024;
+
+/** stdout of one git call in `cwd`, or null if it did not start or did not exit 0. */
+function stampGit(cwd: string, args: string[]): string | null {
+  const r = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: GIT_STAMP_TIMEOUT_MS,
+    maxBuffer: GIT_STAMP_MAX_BUFFER,
+    windowsHide: true,
+  });
+  return r.error || r.status !== 0 ? null : r.stdout;
+}
+
+/** The directory holding the nearest `.git` at or above `dir`, or null. */
+function nearestDotGit(dir: string): string | null {
+  for (let d = resolve(dir); ; ) {
+    if (existsSync(join(d, ".git"))) return d;
+    const up = dirname(d);
+    if (up === d) return null;
+    d = up;
+  }
+}
+
+/**
+ * Where `base` sits inside its git work tree, as git spells it ("" at the top,
+ * "sub/dir/" below it), or null when base is not in a work tree.
+ *
+ * The prefix, not `--show-toplevel`: git prints the toplevel as a real path,
+ * and the root may not be one -- macOS's tmpdir is /var -> /private/var, a
+ * Windows temp path can carry 8.3 short names. Joined to the toplevel, every
+ * listed path would come out "outside" the root and the stamp would fall back
+ * to the walk for exactly the trees it was written for. Stripping git's own
+ * prefix and joining the rest to `base` never compares two spellings of a path.
+ *
+ * Asked once per root rather than twice per command: it costs as much as the
+ * status call it serves, ~2ms each on gx10, and at 0 files that doubled the
+ * stamp. The cached answer is reused only while the nearest `.git` above the
+ * root is the one it was given under, so a `git init` or an `rm -rf .git` asks
+ * again. GIT_DIR or GIT_WORK_TREE in the environment puts the repository where
+ * no `.git` check can see, so with either set it always asks.
+ *
+ * `refreshed` is whether this process has run one ordinary status here yet;
+ * see gitStampOf.
+ */
+interface GitRoot {
+  near: string | null;
+  prefix: string | null;
+  refreshed: boolean;
+}
+const gitRoots = new Map<string, GitRoot>();
+
+function gitRootOf(base: string): GitRoot | null {
+  const envRepo = process.env.GIT_DIR !== undefined || process.env.GIT_WORK_TREE !== undefined;
+  const near = nearestDotGit(base);
+  // No .git anywhere above and none named by the environment: git's own
+  // discovery would find nothing either, and a process to hear that costs ms.
+  if (near === null && !envRepo) return null;
+  const hit = gitRoots.get(base);
+  if (hit && hit.near === near && !envRepo) return hit.prefix === null ? null : hit;
+  const out = stampGit(base, ["rev-parse", "--is-inside-work-tree", "--show-prefix"]);
+  const [inside, prefix] = (out ?? "").split("\n");
+  const answer = inside === "true" && prefix !== undefined ? prefix : null;
+  const entry: GitRoot = {
+    near,
+    prefix: answer,
+    // Asked again under GIT_DIR, or after a .git appeared: the same repository
+    // keeps the one refresh it already had.
+    refreshed: hit !== undefined && hit.near === near && hit.prefix === answer && hit.refreshed,
+  };
+  gitRoots.set(base, entry);
+  return answer === null ? null : entry;
+}
+
+/**
+ * The stamp, asked of git. undefined when git cannot answer for this root --
+ * not a work tree, no git, a failed or slow status, or a root git itself
+ * ignores -- and the caller walks instead. null when git answered and the stamp
+ * is still unknown: the budget below ran out.
+ *
+ * What it hashes:
+ *   - HEAD's commit id. Every tracked file git does not list is identical to
+ *     its copy there, so the id stands in for all of them. Without it a
+ *     `git checkout` or `git pull` from one clean tree to another reads as no
+ *     change.
+ *   - every path `git status` lists -- modified, staged, deleted, renamed,
+ *     untracked, ignored -- with its size and mtime, as the walk took them.
+ *     Not git's status letters: those describe the index, and `git add` moves
+ *     the index, not the tree. The walk never counted staging as work; nor
+ *     does this.
+ *   - the files inside a directory git lists without looking into: an ignored
+ *     directory (`! out/`), a nested repository (`? vendor-x/`), a submodule.
+ *     Walked, against the same budget.
+ *
+ * Ignored files are in it on purpose. The question is "did the agent change
+ * the project", not "did it change what git tracks": a `.env` written for a
+ * config task or a binary from `make` is gitignored and IS the work, and a
+ * stamp blind to it fires the nudge on an agent doing its job -- the failure
+ * this stamp exists to prevent. The walk saw them, so this does. What the walk
+ * never entered (NEVER_WALKED) stays out, through stampSkips.
+ *
+ * One deliberate difference from the walk: a tracked file rewritten with the
+ * same bytes (`touch`, a formatter that changed nothing) moved the walk's stamp
+ * and does not move this one. git compares content, and that is the better
+ * answer to the question.
+ *
+ * Locks. Every status after the first passes `--no-optional-locks`: this runs
+ * beside the operator's own git and the agent's, a status that refreshes the
+ * index holds index.lock while it does, and a `git commit` landing in that
+ * moment fails. Editors pass it for the same reason. The FIRST status per root
+ * per process is an ordinary one, refresh and all, because a racy index never
+ * heals without one. A repository built and committed in one go -- a benchmark
+ * fixture, a scaffold, a fresh clone's last second -- has entries git cannot
+ * trust by stat and re-reads on every status. Measured: a 2,000-file one costs
+ * ~20ms a status until refreshed and ~5ms after, and gnomon's own turn-start
+ * `git diff --numstat HEAD` does not refresh it. One status as the operator
+ * would run it, once a session, is the cost of not paying that twice a
+ * command for the rest of it.
+ *
+ * Cost, measured on gx10 under load (refreshed index; walk in brackets): one
+ * status 3.5ms at 0 files [0.2], 8.7ms at 5k [39], 25ms at 20k [162] and 53ms
+ * at 50k [131, and 12 of 20 edits missed] -- git's parallel lstat of the index
+ * and a readdir of every directory, in C. Small trees never get here
+ * (STAMP_WALK_BELOW). The JS side is O(listed paths), in daily work the
+ * handful being edited. There is no cap on the tracked tree: WALK_MAX_FILES
+ * bounds only what has to be stat'd here, and past it the stamp is unknown
+ * rather than partial.
+ */
+function gitStampOf(base: string): string | null | undefined {
+  const root = gitRootOf(base);
+  if (root === null || root.prefix === null) return undefined;
+  const prefix = root.prefix;
+  const out = stampGit(base, [
+    ...(root.refreshed ? ["--no-optional-locks"] : []),
+    "status",
+    "--porcelain=v2",
+    "-z",
+    "--branch",
+    "--no-ahead-behind",
+    "--untracked-files=all",
+    "--ignored=matching",
+    "--",
+    ".",
+  ]);
+  if (out === null) {
+    gitRoots.delete(base);
+    return undefined;
+  }
+  root.refreshed = true;
+
+  // Collected, then sorted: git prints tracked changes, then untracked, then
+  // ignored, so `git add` would reorder the same files into a new stamp.
+  let head = "";
+  const lines: string[] = [];
+  let budget = WALK_MAX_FILES;
+  const recs = out.split("\0");
+  for (let i = 0; i < recs.length; i++) {
+    const rec = recs[i]!;
+    if (rec === "") continue;
+    if (rec.startsWith("# branch.oid ")) {
+      head = rec;
+      continue;
+    }
+    // The other headers name the branch and its upstream. `git checkout -b`
+    // and `git fetch` change them, and change no file.
+    if (rec.startsWith("#")) continue;
+    // Space-separated fields before the path, per porcelain v2. A rename or
+    // copy (`2`) is followed by its original path as a record of its own.
+    const kind = rec[0];
+    const fields =
+      kind === "1" ? 8 : kind === "2" ? 9 : kind === "u" ? 10 : kind === "?" || kind === "!" ? 1 : -1;
+    // A record this parser was not written for: let the walk answer rather
+    // than hash something misread.
+    if (fields < 0) return undefined;
+    let at = 0;
+    for (let f = 0; f < fields; f++) {
+      const space = rec.indexOf(" ", at);
+      if (space < 0) return undefined;
+      at = space + 1;
+    }
+    const paths = [rec.slice(at)];
+    if (kind === "2") paths.push(recs[++i] ?? "");
+
+    for (const p of paths) {
+      // git lists the root itself, or a directory holding it, when the whole
+      // root is ignored or untracked (`! out/` asked from out/deep/). git has
+      // nothing to add there, so the walk answers.
+      if (!p.startsWith(prefix) || p.length === prefix.length) return undefined;
+      // A trailing slash is git saying "directory, not looked into".
+      const rel = p.slice(prefix.length).replace(/\/$/, "");
+      const abs = join(base, rel);
+      if (stampSkips(rel, p.endsWith("/"))) continue;
+      let st: Stats | undefined;
+      try {
+        // lstat, not stat: a listed symlink is stamped as the link and never
+        // followed out of the tree -- the line the walk draws too.
+        st = lstatSync(abs);
+      } catch {
+        st = undefined;
+      }
+      if (st === undefined) {
+        // Deleted, or the old side of a rename.
+        lines.push(`${rel}:-`);
+      } else if (st.isDirectory()) {
+        const files = walkFiles(abs, abs);
+        budget -= files.length;
+        if (files.length >= WALK_MAX_FILES || budget < 0) return null;
+        for (const f of files) {
+          let fst: Stats;
+          try {
+            fst = statSync(join(abs, f));
+          } catch {
+            continue;
+          }
+          lines.push(`${rel}/${f}:${fst.size}:${fst.mtimeMs}`);
+        }
+      } else {
+        if (--budget < 0) return null;
+        lines.push(`${rel}:${st.size}:${st.mtimeMs}`);
+      }
+    }
+  }
+  lines.sort();
+  return createHash("sha256").update(`git\n${head}\n${lines.join("\n")}\n`).digest("hex");
+}
+
+/**
+ * gnomon's own records: the audit trail and skill-trial reports.
+ *
+ * Found in review of the skill-trial work (2026-11): any role without a
+ * `write_allow` -- `implement` in the scaffold -- could `write` a line into
+ * `.gnomon-audit/`, and so could a shell redirect. The trail is the evidence a
+ * governed run is judged by afterwards, and `gnomon skill accept --evidence`
+ * cites a `skill_trial` record in it: an agent that can append records can
+ * forge the evidence for its own skill. Hash chaining does not stop that --
+ * audit.ts says so -- and the agent never needs to write here, so the
+ * directories bind every role, like the surface, with no consent path.
+ *
+ * The same limit as write_allow on the shell: a target the command names is
+ * judged; what a script file does is not. `[audit.attest]` is what makes a
+ * forged trail detectable.
+ */
+export const RECORD_DIRS = [".gnomon-audit", ".gnomon-trials", ".gnomon-sessions"] as const;
+
+function recordDirs(ctx: ToolContext): string[] {
+  const root = resolve(ctx.root);
+  const dirs = RECORD_DIRS.map((d) => join(root, d));
+  // A surface that moved its trail ([audit] dir) or its session store
+  // ([session] dir) moved what needs guarding.
+  const cfg = ctx.config?.config as { audit?: { dir?: unknown }; session?: { dir?: unknown } } | undefined;
+  for (const declared of [cfg?.audit?.dir, cfg?.session?.dir]) {
+    if (typeof declared === "string" && declared.trim()) {
+      const d = isAbsolute(declared) ? resolve(declared) : resolve(root, declared);
+      if (!dirs.includes(d)) dirs.push(d);
+    }
+  }
+  return dirs;
+}
+
+/**
+ * A path as a case-insensitive filesystem sees it. On Windows and macOS (by
+ * default) `.GNOMON-AUDIT` IS `.gnomon-audit`, and Windows also drops trailing
+ * dots and spaces from a name, so `.gnomon-audit.` is the trail too. Found in
+ * re-review: both reached the trail past a byte-wise comparison. Over-inclusive
+ * on a case-sensitive APFS volume, which costs a refusal of a path that merely
+ * looks like the trail -- the direction the surface guard errs in as well.
+ */
+export function recordPathKey(p: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== "win32" && platform !== "darwin") return p;
+  const parts = p.split(/[\\/]/);
+  return parts
+    .map((c) => (platform === "win32" && c !== "." && c !== ".." ? c.replace(/[. ]+$/, "") : c).toLowerCase())
+    .join("/");
+}
+
+/** Whether a resolved path is inside one of gnomon's record directories. */
+export function inRecordDir(ctx: ToolContext, abs: string): boolean {
+  const under = (base: string, p: string): boolean => {
+    const rel = relative(recordPathKey(base), recordPathKey(p));
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  };
+  // Lexical OR realpath, for the reason inSurface gives: a symlink can alias
+  // the directory from either side.
+  return recordDirs(ctx).some(
+    (d) => under(realpathOrSelf(d), realpathOfNearest(abs)) || under(d, resolve(abs))
+  );
+}
+
+/**
+ * Whether an existing file is a hard link to a record. A hard link is the
+ * same file under a second name, so `write hl.jsonl` on one made earlier
+ * writes the trail -- re-review did exactly that with `ln`. Only a file with
+ * more than one link is checked, and then against the record directories'
+ * files (bounded), so the common write costs one stat.
+ */
+export function hardLinkedToRecord(ctx: ToolContext, abs: string): boolean {
+  // Past the walk's budget this answers no, as it always has: a record written
+  // through an unchecked link still changes under the record guard
+  // (record_guard.ts), which stops the turn.
+  return hardLinkIn(recordDirs(ctx), abs) === "yes";
+}
+
+/**
+ * Whether an existing file is a hard link to a file in the surface. The same
+ * hole `hardLinkedToRecord` closed for the records, found open for `.gnomon/`
+ * by the orthogonality suite (LN8): with `p.toml` a hard link to
+ * `.gnomon/policy.toml`, `write p.toml` rewrote the approval policy with
+ * TOOL_OK, under `strict`, and no drift was reported, because neither arm of
+ * inSurface sees a second name for the same inode. Fails closed past the
+ * budget: a surface that large is not one gnomon can vouch for anyway.
+ */
+export function hardLinkedToSurface(surfaceDir: string, abs: string): boolean {
+  return hardLinkIn([surfaceDir], abs) !== "no";
+}
+
+/**
+ * Whether `abs` is the same file (inode) as one under `dirs`. Only a file with
+ * more than one link is looked for, so the common write costs one stat. The
+ * walk is bounded, and reads each directory in byte order so that which files
+ * the bound covers does not depend on the filesystem's enumeration order
+ * (GV17): the same tree gets the same decision on every machine.
+ */
+function hardLinkIn(dirs: string[], abs: string, budget = 20_000): "yes" | "no" | "unknown" {
+  let st: ReturnType<typeof statSync>;
+  try {
+    st = statSync(abs);
+  } catch {
+    return "no";
+  }
+  if (!st || !st.isFile() || st.nlink < 2) return "no";
+  let left = budget;
+  let ranOut = false;
+  const walk = (dir: string): boolean => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+        a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+      );
+    } catch {
+      return false;
+    }
+    for (const e of entries) {
+      if (--left < 0) {
+        ranOut = true;
+        return false;
+      }
+      const p = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (walk(p)) return true;
+        if (ranOut) return false;
+      } else if (e.isFile()) {
+        try {
+          const o = statSync(p);
+          if (o.ino === st.ino && o.dev === st.dev) return true;
+        } catch {
+          /* gone since the listing */
+        }
+      }
+    }
+    return false;
+  };
+  for (const d of dirs) {
+    if (walk(d)) return "yes";
+    if (ranOut) return "unknown";
+  }
+  return "no";
+}
+
+const RECORD_WHY =
+  `These directories are gnomon's own record of what was done here -- the audit ` +
+  `trail, skill-trial reports and session snapshots -- and no role may write or ` +
+  `remove them. A record the agent could write is not evidence of anything.`;
+
+function recordRefusal(tool: string, path: string): Precheck {
+  return {
+    rule: "record",
+    code: TOOL_DENIED,
+    content: `Refused: "${path}" is inside gnomon's own records.\n\n${RECORD_WHY}`,
+    summary: `${tool} ${path} — refused (gnomon's records)`,
+  };
 }
 
 export function inSurface(ctx: ToolContext, abs: string): boolean {
@@ -2246,13 +3801,27 @@ export function inSurface(ctx: ToolContext, abs: string): boolean {
   // on another volume, a /tmp that is really /private/tmp); realpath that side
   // so an ordinary layout does not read as an escape.
   const surfaceReal = realpathOrSelf(surfaceLexical);
+  // Compared as the filesystem compares names (LN8). On macOS by default, and
+  // on Windows, `.GNOMON/policy.toml` IS `.gnomon/policy.toml`, and neither arm
+  // below saw it: the lexical one compares bytes, and on macOS the realpath
+  // one keeps the case it was given. The record rule already folds case this
+  // way (recordPathKey); the surface did not. Identity on Linux. Over-inclusive
+  // on a case-sensitive APFS volume, the direction this guard errs in.
   const under = (base: string, p: string): boolean => {
-    const rel = relative(base, p);
+    const rel = relative(recordPathKey(base), recordPathKey(p));
     return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
   };
   // `abs` arrives already `resolve()`d by resolveInRoot, so `..` is collapsed
   // and the lexical arm cannot be walked out of and back in.
-  return under(surfaceReal, realpathOfNearest(abs)) || under(surfaceLexical, resolve(abs));
+  //
+  // The third arm is a second NAME for a surface file: a hard link has no
+  // path that leads into .gnomon/, lexical or real, and writing it writes the
+  // surface all the same (LN8).
+  return (
+    under(surfaceReal, realpathOfNearest(abs)) ||
+    under(surfaceLexical, resolve(abs)) ||
+    hardLinkedToSurface(surfaceLexical, abs)
+  );
 }
 
 export function writeAllowed(
@@ -2506,11 +4075,16 @@ async function taskTool(
   }
 
   if (!role || !known.includes(role)) {
+    // Byte order (GV17): `[roles.*]` are TOML tables, unordered by the spec,
+    // and a profile appends the roles it adds after them. Reordering the
+    // tables, or moving a role into a profile, must not change what the
+    // model reads. task_allow above is an array, declared and shown as written.
+    const listed = [...known].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     return {
       code: TOOL_FAILED,
       content:
         `"${role || "(none)"}" is not a role in this repository. ` +
-        `Available: ${known.join(", ")}.`,
+        `Available: ${listed.join(", ")}.`,
       summary: `task — unknown role "${role}"`,
     };
   }
@@ -2680,27 +4254,37 @@ function htmlToText(html: string): string {
  * and names the file, so the default surface has no network reach and gaining
  * it is a visible edit that moves the surface hash.
  */
-async function webfetchTool(
+/**
+ * What `webfetch` refuses before it would ask or connect: the network switch,
+ * the scheme, an address this machine can reach and the network cannot.
+ * Async because the last of those resolves the name.
+ */
+export async function webfetchPrecheck(
   args: Record<string, unknown>,
   ctx: ToolContext
-): Promise<ToolOutcome> {
+): Promise<{ refusal: Precheck } | { url: URL }> {
   const raw = String(args.url ?? "").trim();
   if (!raw) {
     return {
-      code: TOOL_FAILED,
-      content: "webfetch needs a `url`.",
-      summary: "webfetch — no url",
+      refusal: {
+        code: TOOL_FAILED,
+        content: "webfetch needs a `url`.",
+        summary: "webfetch — no url",
+      },
     };
   }
 
   if (ctx.network === false) {
     return {
-      code: TOOL_DENIED,
-      content:
-        `Refused: .gnomon/policy.toml sets [sandbox] network = false, so tools ` +
-        `may not reach the network. Set it to true to allow webfetch — that is ` +
-        `an edit to the surface, and it changes the surface hash.`,
-      summary: `webfetch ${raw} — refused (network disabled)`,
+      refusal: {
+        rule: "network",
+        code: TOOL_DENIED,
+        content:
+          `Refused: .gnomon/policy.toml sets [sandbox] network = false, so tools ` +
+          `may not reach the network. Set it to true to allow webfetch — that is ` +
+          `an edit to the surface, and it changes the surface hash.`,
+        summary: `webfetch ${raw} — refused (network disabled)`,
+      },
     };
   }
 
@@ -2709,34 +4293,51 @@ async function webfetchTool(
     url = new URL(raw);
   } catch {
     return {
-      code: TOOL_FAILED,
-      content: `"${raw}" is not a valid URL.`,
-      summary: "webfetch — bad url",
+      refusal: {
+        code: TOOL_FAILED,
+        content: `"${raw}" is not a valid URL.`,
+        summary: "webfetch — bad url",
+      },
     };
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     // file: would read the filesystem with none of the sandbox checks that
     // `read` applies; the rest are not fetchable in any useful sense.
     return {
-      code: TOOL_DENIED,
-      content: `Refused: only http and https are fetchable, not "${url.protocol}".`,
-      summary: `webfetch — ${url.protocol} refused`,
+      refusal: {
+        rule: "url",
+        code: TOOL_DENIED,
+        content: `Refused: only http and https are fetchable, not "${url.protocol}".`,
+        summary: `webfetch — ${url.protocol} refused`,
+      },
     };
   }
 
   const blocked = await resolvesToBlocked(url.hostname);
   if (blocked) {
     return {
-      code: TOOL_DENIED,
-      content:
-        `Refused: ${url.hostname} resolves to ${blocked}, a private, loopback ` +
-        `or link-local address. Fetching those would let a URL reach services ` +
-        `this machine can see and the network cannot — including cloud ` +
-        `metadata endpoints.`,
-      summary: `webfetch ${url.hostname} — refused (private address)`,
+      refusal: {
+        rule: "url",
+        code: TOOL_DENIED,
+        content:
+          `Refused: ${url.hostname} resolves to ${blocked}, a private, loopback ` +
+          `or link-local address. Fetching those would let a URL reach services ` +
+          `this machine can see and the network cannot — including cloud ` +
+          `metadata endpoints.`,
+        summary: `webfetch ${url.hostname} — refused (private address)`,
+      },
     };
   }
+  return { url };
+}
 
+async function webfetchTool(
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolOutcome> {
+  const pre = await webfetchPrecheck(args, ctx);
+  if ("refusal" in pre) return outcomeOf(pre.refusal);
+  const url = pre.url;
   const denied = await gateReadOnly("webfetch", `webfetch ${url.href}`, ctx, [
     `  GET ${url.href}`,
   ]);
@@ -2847,8 +4448,11 @@ const SEARCH_MAX_HITS = 200;
  * Sorted because the model's next move is decided by what comes back: an
  * order that depended on the filesystem would make an identical repository
  * answer the same question differently on two machines.
+ *
+ * `max` is WALK_MAX_FILES everywhere but the worktree stamp, which first asks
+ * whether a tree is small enough to walk at all (STAMP_WALK_BELOW).
  */
-function walkFiles(root: string, dir: string): string[] {
+export function walkFiles(root: string, dir: string, max: number = WALK_MAX_FILES): string[] {
   // A file is a valid scope of exactly one file. Without this, readdirSync
   // throws ENOTDIR, the catch below swallows it, and `grep` answers
   // "No match for /x/ under path/to/file" for a file that contains x — a wrong
@@ -2864,25 +4468,35 @@ function walkFiles(root: string, dir: string): string[] {
   }
   const out: string[] = [];
   const stack: string[] = [dir];
-  while (stack.length > 0 && out.length < WALK_MAX_FILES) {
+  while (stack.length > 0 && out.length < max) {
     const cur = stack.pop()!;
     let entries: Dirent[];
     try {
-      entries = readdirSync(cur, { withFileTypes: true });
+      // Each directory read in byte order (GV17). The final sort below made the
+      // list's order canonical, but not WHICH files are in it once `max` cuts
+      // the walk short: that was decided by readdir order, which differs
+      // between filesystems, so a tree over the cap gave glob and grep a
+      // different answer on another machine.
+      entries = readdirSync(cur, { withFileTypes: true }).sort((a, b) =>
+        a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+      );
     } catch {
       continue; // unreadable directory is not a reason to fail the search
     }
+    const subdirs: string[] = [];
     for (const e of entries) {
       if (e.isSymbolicLink()) continue; // a link out of the tree escapes the sandbox
       const abs = join(cur, e.name);
       if (e.isDirectory()) {
         if (NEVER_WALKED.has(e.name)) continue;
-        stack.push(abs);
+        subdirs.push(abs);
       } else if (e.isFile()) {
         out.push(relative(root, abs).split(sep).join("/"));
-        if (out.length >= WALK_MAX_FILES) break;
+        if (out.length >= max) break;
       }
     }
+    // Pushed in reverse, so they are popped, and walked, in byte order.
+    for (let i = subdirs.length - 1; i >= 0; i--) stack.push(subdirs[i]!);
   }
   return out.sort();
 }
@@ -3103,6 +4717,106 @@ async function grepTool(
   };
 }
 
+/**
+ * What `write` and `edit` refuse before they read, diff or ask: a write with
+ * no content, a path outside the sandbox, the surface, write_allow.
+ *
+ * Returns the refusal, or where the call would land and whether that is the
+ * surface -- which only a `write` under human consent (/allow custom|all) gets
+ * past. `gnomon guard` calls this with the context it built from the base
+ * surface; the tools call it first and return what it refuses.
+ */
+export function writePrecheck(
+  tool: "write" | "edit",
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): { refusal: Precheck } | { abs: string; surface: boolean } {
+  const path = String(args.path ?? "");
+  if (tool === "write" && typeof args.content !== "string") {
+    return {
+      refusal: {
+        rule: "malformed",
+        // TOOL_DENIED (a refusal), not TOOL_FAILED (11, apparatus_failure).
+        // CONTRACTS.md draws that line explicitly: 11 means "understood the
+        // request and could not carry it out", and "a model's malformed argument
+        // arriving there would make it meaningless" — apparatus_failure is the
+        // signal to go and look at the harness. A missing argument is the model
+        // getting it wrong, so the harness says no.
+        code: TOOL_DENIED,
+        content:
+          `Refused: write needs a \`content\` string. Omitting it would empty ` +
+          `${path || "the file"}, which is not what a missing argument should mean. ` +
+          `Send content: "" if you meant to empty it.`,
+        summary: `write — no content given`,
+      },
+    };
+  }
+  const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
+  if (!abs) {
+    return {
+      refusal: {
+        rule: "sandbox",
+        code: TOOL_OUT_OF_SANDBOX,
+        content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
+        summary: `${tool} ${path} — refused (outside sandbox)`,
+      },
+    };
+  }
+  if (inRecordDir(ctx, abs) || hardLinkedToRecord(ctx, abs)) return { refusal: recordRefusal(tool, path) };
+  // `.git/hooks/` and `.git/config`: run or read by git on the operator's next
+  // command, outside any call gnomon decides (INJ-2026-11: a pre-commit hook
+  // written with the write tool passed every surface without write_allow).
+  if (inGitControl(ctx, abs)) return { refusal: gitHooksRefusal(tool, path) };
+  if (inSurface(ctx, abs)) {
+    if (tool === "edit") {
+      return {
+        refusal: {
+          rule: "surface",
+          code: TOOL_DENIED,
+          content:
+            `Refused: "${path}" is inside .gnomon/, the surface that decides how ` +
+            `this agent behaves. It is not editable by a tool call — changing it ` +
+            `is a human act, because it changes the surface hash and the rules ` +
+            `the next turn runs under. Once the human allows it (/allow custom|all) ` +
+            `a surface file is changed by a full-file write, not an in-place edit.`,
+          summary: `edit ${path} — refused (surface is read-only)`,
+        },
+      };
+    }
+    if ((ctx.allow ?? "strict") === "strict") {
+      return {
+        refusal: {
+          rule: "surface",
+          code: TOOL_DENIED,
+          content:
+            `Refused: "${path}" is inside .gnomon/, the surface that decides how ` +
+            `this agent behaves. It is not writable by a tool call — editing it ` +
+            `is a human act, because it changes the surface hash and the rules ` +
+            `the next turn runs under. The human can allow it for this session ` +
+            `with /allow custom (each edit approved) or /allow all; to propose ` +
+            `durable guidance instead, use the skill tool.`,
+          summary: `write ${path} — refused (surface is read-only)`,
+        },
+      };
+    }
+    return { abs, surface: true };
+  }
+  const scope = writeAllowed(ctx, abs);
+  if (!scope.ok) {
+    return {
+      refusal: {
+        rule: "write_allow",
+        code: TOOL_DENIED,
+        content:
+          `Refused: "${scope.rel}" is not a path this role may ${tool === "write" ? "write" : "modify"}.\n` +
+          `This role may write ${scope.listed}.`,
+        summary: `${tool} ${path} — not permitted for this role`,
+      },
+    };
+  }
+  return { abs, surface: false };
+}
+
 async function writeTool(
   args: Record<string, unknown>,
   ctx: ToolContext
@@ -3112,50 +4826,18 @@ async function writeTool(
   // TRUNCATED the file and reported success: an existing file went to zero
   // bytes with summary "write src/a.txt (+0 −2)" and code 0. Small models omit
   // arguments routinely, so this was one malformed tool call away from silent
-  // data loss, reported as a result rather than a refusal.
+  // data loss, reported as a result rather than a refusal. writePrecheck
+  // refuses it. An empty string is still a legitimate write; an ABSENT one is not.
   //
-  // An empty string is still a legitimate write; an ABSENT one is not.
-  if (typeof args.content !== "string") {
-    return {
-      // TOOL_DENIED (a refusal), not TOOL_FAILED (11, apparatus_failure).
-      // CONTRACTS.md draws that line explicitly: 11 means "understood the
-      // request and could not carry it out", and "a model's malformed argument
-      // arriving there would make it meaningless" — apparatus_failure is the
-      // signal to go and look at the harness. A missing argument is the model
-      // getting it wrong, so the harness says no.
-      code: TOOL_DENIED,
-      content:
-        `Refused: write needs a \`content\` string. Omitting it would empty ` +
-        `${path || "the file"}, which is not what a missing argument should mean. ` +
-        `Send content: "" if you meant to empty it.`,
-      summary: `write — no content given`,
-    };
-  }
-  const content = args.content;
-  const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
-  if (!abs) {
-    return {
-      code: TOOL_OUT_OF_SANDBOX,
-      content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
-      summary: `write ${path} — refused (outside sandbox)`,
-    };
-  }
+  // The sandbox, the surface (when consent is strict) and write_allow are
+  // refused there too, in that order.
+  const pre = writePrecheck("write", args, ctx);
+  if ("refusal" in pre) return outcomeOf(pre.refusal);
+  const content = args.content as string;
+  const abs = pre.abs;
 
-  if (inSurface(ctx, abs)) {
+  if (pre.surface) {
     const consent = ctx.allow ?? "strict";
-    if (consent === "strict") {
-      return {
-        code: TOOL_DENIED,
-        content:
-          `Refused: "${path}" is inside .gnomon/, the surface that decides how ` +
-          `this agent behaves. It is not writable by a tool call — editing it ` +
-          `is a human act, because it changes the surface hash and the rules ` +
-          `the next turn runs under. The human can allow it for this session ` +
-          `with /allow custom (each edit approved) or /allow all; to propose ` +
-          `durable guidance instead, use the skill tool.`,
-        summary: `write ${path} — refused (surface is read-only)`,
-      };
-    }
     // The human consented to surface edits this session (/allow custom|all).
     // This is the one path that writes inside .gnomon/, so it is deliberate and
     // loud: it always announces that the hash moved.
@@ -3217,17 +4899,6 @@ async function writeTool(
         summary: `write ${path} — failed`,
       };
     }
-  }
-
-  const scope = writeAllowed(ctx, abs);
-  if (!scope.ok) {
-    return {
-      code: TOOL_DENIED,
-      content:
-        `Refused: "${scope.rel}" is not a path this role may write.\n` +
-        `This role may write ${scope.listed}.`,
-      summary: `write ${path} — not permitted for this role`,
-    };
   }
 
   if (existsSync(abs) && statSync(abs).isDirectory()) {
@@ -3320,39 +4991,16 @@ async function editTool(
   ctx: ToolContext
 ): Promise<ToolOutcome> {
   const path = String(args.path ?? "");
-  const oldTextRaw = String(args.old_text ?? "");
-  const newTextRaw = String(args.new_text ?? "");
-  const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
-  if (!abs) {
-    return {
-      code: TOOL_OUT_OF_SANDBOX,
-      content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
-      summary: `edit ${path} — refused (outside sandbox)`,
-    };
-  }
-
-  if (inSurface(ctx, abs)) {
-    return {
-      code: TOOL_DENIED,
-      content:
-        `Refused: "${path}" is inside .gnomon/, the surface that decides how ` +
-        `this agent behaves. It is not editable by a tool call — changing it ` +
-        `is a human act, because it changes the surface hash and the rules ` +
-        `the next turn runs under. Once the human allows it (/allow custom|all) ` +
-        `a surface file is changed by a full-file write, not an in-place edit.`,
-      summary: `edit ${path} — refused (surface is read-only)`,
-    };
-  }
-  const scope = writeAllowed(ctx, abs);
-  if (!scope.ok) {
-    return {
-      code: TOOL_DENIED,
-      content:
-        `Refused: "${scope.rel}" is not a path this role may modify.\n` +
-        `This role may write ${scope.listed}.`,
-      summary: `edit ${path} — not permitted for this role`,
-    };
-  }
+  // `variant = "compat"` (sweep_knobs.ts) offers old_string/new_string, and
+  // takes the default names too: a model that learned gnomon's is not refused
+  // for them. The default variant reads exactly what it always read.
+  const compat = ctx.editVariant === "compat";
+  const oldTextRaw = String((compat ? args.old_string ?? args.old_text : args.old_text) ?? "");
+  const newTextRaw = String((compat ? args.new_string ?? args.new_text : args.new_text) ?? "");
+  // The sandbox, the surface (never editable in place) and write_allow.
+  const pre = writePrecheck("edit", args, ctx);
+  if ("refusal" in pre) return outcomeOf(pre.refusal);
+  const abs = pre.abs;
   if (!existsSync(abs)) {
     return {
       code: TOOL_FAILED,
@@ -3387,14 +5035,46 @@ async function editTool(
     newText = newText.replace(/\r?\n/g, "\r\n");
   }
   const hits = before.split(oldText).length - 1;
-  if (hits === 0) {
+  // The compat variant's tiers (sweep_knobs.ts fuzzyEdit): an exact match
+  // first, then whole lines with whitespace, then indentation, ignored. Each
+  // tier must find one place; two or more are refused, never guessed between.
+  let tier: EditMatchTier | undefined;
+  let fuzzyAfter: string | undefined;
+  if (compat && hits !== 1) {
+    if (hits > 1) {
+      return {
+        code: TOOL_FAILED,
+        content: `old_string appears ${hits} times in ${path}. It must identify exactly one place — add surrounding context.`,
+        summary: `edit ${path} — ${hits} matches`,
+      };
+    }
+    const f = fuzzyEdit(before, oldTextRaw, newTextRaw);
+    if (!f.ok) {
+      return {
+        code: TOOL_FAILED,
+        content:
+          f.why === "ambiguous"
+            ? `old_string matches ${f.hits} places in ${path} once ${f.tier === "whitespace" ? "whitespace is" : "whitespace and indentation are"} ignored, ` +
+              `and an ambiguous match is refused. Add surrounding context.`
+            : f.why === "blank"
+              ? `old_string is blank, so it identifies no place in ${path}.`
+              : `old_string not found in ${path}, exactly or with whitespace and indentation ignored. Read the file and copy the text to replace.`,
+        summary: f.why === "ambiguous" ? `edit ${path} — ${f.hits} matches (${f.tier})` : `edit ${path} — no match`,
+      };
+    }
+    tier = f.tier;
+    fuzzyAfter = f.after;
+  } else if (compat) {
+    tier = "exact";
+  }
+  if (!compat && hits === 0) {
     return {
       code: TOOL_FAILED,
       content: `old_text not found in ${path}. It must match exactly, including indentation.`,
       summary: `edit ${path} — no match`,
     };
   }
-  if (hits > 1) {
+  if (!compat && hits > 1) {
     return {
       code: TOOL_FAILED,
       content: `old_text appears ${hits} times in ${path}. It must match exactly once — add surrounding context.`,
@@ -3404,7 +5084,7 @@ async function editTool(
 
   // A function replacer: with a string, `$$`, `$&` and `$'` in new_text are
   // replacement patterns, so `echo $$` was written as `echo $`.
-  const after = before.replace(oldText, () => newText);
+  const after = fuzzyAfter ?? before.replace(oldText, () => newText);
   const diff = diffLines(before, after);
   const { added, removed } = diffStat(diff);
 
@@ -3455,10 +5135,21 @@ async function editTool(
 
   try {
     writeFileSync(abs, after, "utf-8");
+    if (tier !== undefined && tier !== "exact") {
+      return {
+        code: TOOL_OK,
+        content:
+          `Edited ${path} (+${added} −${removed}). Matched with ` +
+          `${tier === "whitespace" ? "whitespace" : "whitespace and indentation"} differences ignored.`,
+        summary: `edit ${path} (+${added} −${removed}) [${tier}]`,
+        edit_tier: tier,
+      };
+    }
     return {
       code: TOOL_OK,
       content: `Edited ${path} (+${added} −${removed}).`,
       summary: `edit ${path} (+${added} −${removed})`,
+      ...(tier ? { edit_tier: tier } : {}),
     };
   } catch (err) {
     return {
@@ -3537,15 +5228,34 @@ async function skillTool(
     }
   }
 
-  const { id, existed } = proposeSkill(ctx.config, proposal);
+  // A proposal never moves the surface hash (proposed/ is not hashed). If one
+  // did, something routed the write into the surface, and the loop is told
+  // the way bash tells it: the backstop for any route proposeSkill's own
+  // checks do not name (LN8).
+  const before = surfaceHashOf(ctx);
+  let written: { id: string; existed: boolean };
+  try {
+    written = proposeSkill(ctx.config, proposal);
+  } catch (err) {
+    if (!(err instanceof ProposalRefused)) throw err;
+    return {
+      code: TOOL_DENIED,
+      content: `Refused: ${err.message}`,
+      summary: `skill "${name}" — refused (staging is not plain)`,
+    };
+  }
+  const { id, existed } = written;
+  const drift = surfaceDrift(ctx, before);
   return {
     code: TOOL_OK,
     content:
       `Proposed skill "${name}" as ${id}.md. It is NOT active: proposals live ` +
       `in .gnomon/skills/proposed/ and take effect only once accepted with ` +
       `\`gnomon skill accept ${id}\`, which changes the surface hash ` +
-      `deliberately.${existed ? " (replaced an earlier proposal of the same name)" : ""}`,
-    summary: `skill ${id} proposed${existed ? " (replaced)" : ""}`,
+      `deliberately.${existed ? " (replaced an earlier proposal of the same name)" : ""}` +
+      (drift ? `\n\n${drift.notice}` : ""),
+    summary: `skill ${id} proposed${existed ? " (replaced)" : ""}${drift ? " · surface changed" : ""}`,
+    surface_drift: drift ?? undefined,
   };
 }
 
@@ -3748,21 +5458,276 @@ export function noteTool(args: Record<string, unknown>, ctx: ToolContext): ToolO
   };
 }
 
+function notOffered(name: string, offered: Set<string>): Precheck {
+  return {
+    rule: "tools",
+    code: TOOL_NOT_DECLARED,
+    content:
+      `Refused: "${name}" is not available to this role. ` +
+      `Available: ${[...offered].join(", ") || "(none)"}.`,
+    summary: `${name} — not available to this role`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Repair text: what a failed call should have looked like
+// ---------------------------------------------------------------------------
+//
+// A tool name the role was not offered already comes back with the names it
+// was offered (notOffered, above). The arguments did not get the same
+// treatment: a call that failed because its arguments did not match the
+// tool's schema was answered by whatever the tool said first, and for a
+// misnamed key that is a false premise. `edit {file_path, old_string,
+// new_string}` -- the spelling another harness teaches -- reached editTool
+// as an empty path and came back "` is a directory, not a file", and
+// `read {file_path}` came back "Nothing was given". Told that, a model
+// invents a different wrong call. What it needs is the parameter list.
+//
+// Only on a call that already failed, and only when its arguments really do
+// disagree with the schema: a success, and a failure whose arguments were
+// well-formed, reach the model byte for byte as before (tool_hygiene.test.ts
+// pins both). No model call is added; the text rides on the answer the
+// failed call already gets. Built-in tools only -- an MCP server validates
+// its own arguments and says so itself.
+
+/** How a schema type reads in one line: `string`, `"a" | "b"`, `array of {content: string}`. */
+function typeText(spec: unknown): string {
+  const s = (spec ?? {}) as Record<string, unknown>;
+  if (Array.isArray(s.enum)) return s.enum.map((v) => JSON.stringify(v)).join(" | ");
+  if (s.type === "array") return s.items ? `array of ${typeText(s.items)}` : "array";
+  if (s.type === "object" && s.properties && typeof s.properties === "object") {
+    const req = new Set(Array.isArray(s.required) ? (s.required as string[]) : []);
+    return `{${Object.entries(s.properties as Record<string, unknown>)
+      .map(([k, v]) => `${k}${req.has(k) ? "" : "?"}: ${typeText(v)}`)
+      .join(", ")}}`;
+  }
+  return typeof s.type === "string" ? s.type : "any";
+}
+
+/**
+ * The parameters a built-in tool takes, in one line --
+ * `path (string, required), old_text (string, required), …` -- or null for a
+ * name with no schema in this build.
+ */
+export function toolParamsText(name: string, readWindow?: number, editVariant?: EditVariant): string | null {
+  const params = parametersFor(name, readWindow, editVariant);
+  const props = (params?.properties ?? undefined) as Record<string, unknown> | undefined;
+  if (!props) return null;
+  const req = new Set(Array.isArray(params!.required) ? (params!.required as string[]) : []);
+  const list = Object.entries(props).map(
+    ([k, v]) => `${k} (${typeText(v)}${req.has(k) ? ", required" : ""})`
+  );
+  return list.length > 0 ? list.join(", ") : "no parameters";
+}
+
+/** The JSON type of a value, with integers told apart from other numbers. */
+function jsonType(v: unknown): string {
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "array";
+  if (typeof v === "number") return Number.isInteger(v) ? "integer" : "number";
+  return typeof v;
+}
+
+export interface ArgProblems {
+  /** Required parameters the call did not send. */
+  missing: string[];
+  /** Parameters sent with a value of the wrong JSON type. */
+  wrongType: Array<{ key: string; want: string; got: string }>;
+  /** Keys the call sent that the tool does not take. */
+  unknown: string[];
+}
+
+/**
+ * Where a call's arguments disagree with a built-in tool's schema, top-level
+ * keys only. Null when the tool has no schema in this build. The parser's own
+ * markers (`__gnomon_args_*`) are not the model's keys and are skipped.
+ */
+export function argProblems(
+  name: string,
+  args: Record<string, unknown>,
+  readWindow?: number,
+  editVariant?: EditVariant
+): ArgProblems | null {
+  const params = parametersFor(name, readWindow, editVariant);
+  const props = (params?.properties ?? undefined) as Record<string, Record<string, unknown>> | undefined;
+  if (!props) return null;
+  const required = Array.isArray(params!.required) ? (params!.required as string[]) : [];
+  const missing = required.filter((k) => args[k] === undefined);
+  const wrongType: ArgProblems["wrongType"] = [];
+  const unknown: string[] = [];
+  for (const [k, v] of Object.entries(args)) {
+    if (k.startsWith("__gnomon_")) continue;
+    const spec = props[k];
+    if (!spec) {
+      unknown.push(k);
+      continue;
+    }
+    const want = typeof spec.type === "string" ? spec.type : undefined;
+    if (!want || v === undefined) continue;
+    const got = jsonType(v);
+    if (got !== want && !(want === "number" && got === "integer")) wrongType.push({ key: k, want, got });
+  }
+  return { missing, wrongType, unknown };
+}
+
+const ticked = (keys: string[]) => keys.map((k) => `\`${k}\``).join(", ");
+
+/**
+ * The paragraph appended to a failed call whose arguments do not match the
+ * schema, or "" when they do (or the tool has none). Unknown keys alone do not
+ * trigger it -- every tool ignores an extra key, so a call that failed with one
+ * failed for another reason -- but they are named when it fires, because a
+ * misnamed key is the usual reason a required one is missing.
+ */
+export function schemaRepairText(
+  name: string,
+  args: Record<string, unknown>,
+  readWindow?: number,
+  editVariant?: EditVariant
+): string {
+  const p = argProblems(name, args, readWindow, editVariant);
+  if (!p || (p.missing.length === 0 && p.wrongType.length === 0)) return "";
+  const parts: string[] = [];
+  if (p.missing.length > 0) parts.push(`missing ${ticked(p.missing)}`);
+  for (const w of p.wrongType) parts.push(`\`${w.key}\` must be ${w.want}, not ${w.got}`);
+  if (p.unknown.length > 0) {
+    parts.push(
+      `${ticked(p.unknown)} ${p.unknown.length === 1 ? "is not a parameter" : "are not parameters"} of ${name}`
+    );
+  }
+  return (
+    `\n\nYour ${name} call does not match its parameters: ${parts.join("; ")}. ` +
+    `${name} takes one JSON object: ${toolParamsText(name, readWindow, editVariant)}.`
+  );
+}
+
+/**
+ * A failed outcome with the schema's repair text appended, when the call's
+ * arguments are why it failed. A success, or a failure whose arguments match
+ * the schema, is returned as it was -- the same object.
+ */
+function withSchemaRepair(
+  name: string,
+  args: Record<string, unknown>,
+  outcome: ToolOutcome,
+  readWindow?: number,
+  editVariant?: EditVariant
+): ToolOutcome {
+  if (outcome.code === TOOL_OK || outcome.code === TOOL_OK_EMPTY) return outcome;
+  const text = schemaRepairText(name, args, readWindow, editVariant);
+  return text ? { ...outcome, content: outcome.content + text } : outcome;
+}
+
+// ---------------------------------------------------------------------------
+// The decision alone
+// ---------------------------------------------------------------------------
+
+
+
+/** The tools whose calls `toolCallPolicy` decides. Everything else has no pre-execution rule. */
+export const POLICY_TOOLS = ["bash", "write", "edit", "read", "webfetch"] as const;
+export type PolicyTool = (typeof POLICY_TOOLS)[number];
+
+export interface PolicyDecision {
+  decision: "allow" | "deny" | "ask";
+  /** The rule that refused, "approval" for the gate, null when nothing stopped the call. */
+  rule: PolicyRule | "approval" | null;
+  /** In words, for whoever is told: the model on deny, the person on ask. */
+  reason: string;
+  /** The bash_allow / bash_deny pattern, when one decided. */
+  pattern?: string;
+  /** The tool outcome code the loop would have returned, on deny. */
+  code?: number;
+}
+
+/**
+ * What this loop would do with a tool call, decided without doing it.
+ *
+ * Every answer comes from the code the tool itself runs first -- the role's
+ * tool list, then the tool's precheck (bashPrecheck, writePrecheck,
+ * readPrecheck, webfetchPrecheck), then needsApproval under ctx.gate. So
+ * `gnomon guard` and the loop cannot disagree about a call: there is one copy
+ * of each rule, and both callers reach it.
+ *
+ *   deny   the loop refuses it (a refusal code, 2-4) and never asks
+ *   ask    the loop would ask the person before running it
+ *   allow  the loop would run it without asking. Including a call the tool
+ *          would then fail on its own (an empty command): failing is not
+ *          refusing, and the reason says so.
+ *
+ * Only the POLICY_TOOLS are decided; anything else is an error to the caller,
+ * never a silent allow.
+ */
+export async function toolCallPolicy(
+  name: string,
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  offered: Set<string>
+): Promise<PolicyDecision> {
+  const deny = (r: Precheck): PolicyDecision => ({
+    decision: "deny",
+    rule: r.rule ?? null,
+    reason: r.content,
+    code: r.code,
+    ...(r.pattern ? { pattern: r.pattern } : {}),
+  });
+  if (!offered.has(name)) return deny(notOffered(name, offered));
+  let pre: Precheck | null;
+  switch (name) {
+    case "bash":
+      pre = bashPrecheck(args, ctx);
+      break;
+    case "write":
+    case "edit": {
+      const w = writePrecheck(name, args, ctx);
+      pre = "refusal" in w ? w.refusal : null;
+      break;
+    }
+    case "read": {
+      const r = readPrecheck(args, ctx);
+      pre = "refusal" in r ? r.refusal : null;
+      break;
+    }
+    case "webfetch": {
+      const f = await webfetchPrecheck(args, ctx);
+      pre = "refusal" in f ? f.refusal : null;
+      break;
+    }
+    default:
+      throw new Error(`no pre-execution policy for "${name}" (decided: ${POLICY_TOOLS.join(", ")})`);
+  }
+  if (pre?.rule) return deny(pre);
+  if (pre) {
+    return { decision: "allow", rule: null, reason: `no rule refuses it; the call itself would fail: ${pre.summary}` };
+  }
+  // A call that runs repository-defined code says so to whoever is asked, and
+  // under `[approval] repo_code = true` it is asked whatever the gate says.
+  const runs = name === "bash" && typeof args.command === "string" ? repoCodeRuns(args.command) : [];
+  const note = runs.length > 0 ? ` It ${repoCodeNote(runs, ctx.root).join("; ").trim()}.` : "";
+  if (runs.length > 0 && repoCodeAsks(ctx)) {
+    return {
+      decision: "ask",
+      rule: "repo_code",
+      reason: `[approval] repo_code = true asks a person before a call that runs code the repository defines.${note}`,
+    };
+  }
+  if (needsApproval(name, ctx.gate)) {
+    return {
+      decision: "ask",
+      rule: "approval",
+      reason: `[approval] gate = "${ctx.gate}" asks a person before ${ctx.gate === "always" ? "every" : "every mutating"} call — this is a ${name} call${note ? `.${note}` : ""}`,
+    };
+  }
+  return { decision: "allow", rule: null, reason: `no rule refuses it${note ? `.${note}` : ""}` };
+}
+
 export async function executeTool(
   name: string,
   args: Record<string, unknown>,
   ctx: ToolContext,
   offered: Set<string>
 ): Promise<ToolOutcome> {
-  if (!offered.has(name)) {
-    return {
-      code: TOOL_NOT_DECLARED,
-      content:
-        `Refused: "${name}" is not available to this role. ` +
-        `Available: ${[...offered].join(", ") || "(none)"}.`,
-      summary: `${name} — not available to this role`,
-    };
-  }
+  if (!offered.has(name)) return outcomeOf(notOffered(name, offered));
 
   // A call the endpoint never finished emitting. Named as such rather than
   // dispatched with the arguments stripped: a truncated `read {"path": "src/ma`
@@ -3795,6 +5760,9 @@ export async function executeTool(
     const raw = typeof malformed.raw === "string" ? malformed.raw : JSON.stringify(malformed.raw);
     const shown = raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
     const error = String(malformed.error ?? "not a JSON object");
+    // "Whose keys are this tool's parameters" told the model there was a list
+    // without giving it. Named here, so the corrected call can use them.
+    const params = toolParamsText(name, ctx.maxLines?.read, ctx.editVariant);
     return {
       code: TOOL_DENIED,
       content:
@@ -3802,6 +5770,7 @@ export async function executeTool(
         `RAN. Arguments must be ONE JSON object whose keys are this tool's ` +
         `parameters: double-quoted keys and strings, newlines inside strings ` +
         `escaped as \\n. Re-issue the ${name} call with corrected arguments.\n` +
+        (params ? `${name} takes: ${params}.\n` : "") +
         `Received: ${shown}`,
       summary: `${name} — malformed arguments (${error.slice(0, 80)})`,
     };
@@ -3810,16 +5779,21 @@ export async function executeTool(
   // A throw here would take the whole session down: an unguarded
   // readFileSync on a directory (EISDIR) once killed a live run outright.
   // A broken tool is an apparatus_failure the model can be told about.
+  let outcome: ToolOutcome;
   try {
-    return await dispatch(name, args, ctx);
+    outcome = await dispatch(name, args, ctx);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return {
+    outcome = {
       code: TOOL_FAILED,
       content: `Tool "${name}" failed: ${msg}`,
       summary: `${name} — ${msg}`,
     };
   }
+  // Error path only: a call that failed with arguments the schema does not
+  // accept is told which parameters the tool takes. Anything else is returned
+  // untouched.
+  return withSchemaRepair(name, args, outcome, ctx.maxLines?.read, ctx.editVariant);
 }
 
 async function dispatch(
@@ -3865,7 +5839,7 @@ async function dispatch(
     case "read":
       return readTool(args, ctx);
     case "bash":
-      return bashTool(args, ctx);
+      return withPackageIndex(await bashTool(args, ctx), args, ctx);
     case "task":
       return taskTool(args, ctx);
     case "webfetch":

@@ -1,0 +1,1121 @@
+{
+  "spec": "GBS-AUDIT 0.1 (docs/benchmarks/AUDITABILITY.md, draft 0.1, 2026-11-03)",
+  "preregistration": {
+    "url": "benchmarks/results/gbs-2026-11-04/audit/PRE-REGISTRATION.md",
+    "sha256_of_file_as_committed": "45f291d4a05a3c1ec7e18b62839d34ebafa015f4e44102fd39dbb991b190a37a",
+    "commit": "73e3709c",
+    "pushed_before": "2026-11-04T21:08:00Z",
+    "first_measured_trial": "2026-11-04T21:10:42.041Z",
+    "note": "First measured trial = the first `gnomon audit verify` of the runner (the control check). Producing the trails is apparatus setup. An earlier measured run (started 21:08:12Z, first verify ~21:09Z) aborted on an apparatus failure; both runs postdate the commit."
+  },
+  "harness": {
+    "name": "gnomon",
+    "version": "0.4.1",
+    "build": "gnomon/0.4.1+v0.4.1-c511b81",
+    "commit": "c511b8105fb2187423d21becbe3b19f8af2b80e5",
+    "install": "release installer + release tarballs, SHA256SUMS-checked; ../common/INSTALL.md"
+  },
+  "harness_config_hash": {
+    "off": "f49728b3d85e5ec248df959c0db97c6542cba6ec7b9a039566d2fb536b9215ac",
+    "attest": "56b89539088de517d7f99f2cc57fb400b2afd24485c2a4496aa7237fccfce3e8",
+    "git": "8a3603d30564a2f94012993319df4c0881ec74eb72938cb5d01c18df767709b9",
+    "rfc3161": "65751b9b02b0c021c1460610d10fa068c622bdffdb0e8adbc0655b27bd55dd0b",
+    "kind": "gnomon surface hash per arm (`gnomon surface hash`); surfaces in the traces archive"
+  },
+  "models": "n/a: no inference. A deterministic scripted server (fake_model.mjs) wrote the sessions; the suite measures records at rest.",
+  "hardware": "../common/hardware.json (Linux aarch64, GB10, 20 cores, shared machine). Timing plays no part in this suite's verdicts.",
+  "apparatus": {
+    "runner": "run_audit.mjs + adapter.mjs + fake_model.mjs + fake_tsa.mjs + summarise.py (this directory)",
+    "task_set": "16 cases of AUDITABILITY \u00a74 \u00d7 4 configurations",
+    "concurrency": 1,
+    "time_cap": "n/a: no time cap applies; each verify is a single CLI call",
+    "witness": {
+      "git": "local bare repository, receive.denyNonFastForwards + receive.denyDeletes (LOCAL STAND-IN, not a hosted remote)",
+      "rfc3161": "loopback fake TSA, EC P-256, pinned key (STAND-IN for a third-party authority)",
+      "attest": "none off-machine; Ed25519 key file on the attacked machine (unattended signer)",
+      "off": "none"
+    },
+    "trail_provenance": "real v0.4.1 trails from scripted `gnomon task --yes --json` sessions; target = session 2 of 3 (16 records off-arm 15)",
+    "stale_flush_locks_removed": 22
+  },
+  "n": {
+    "cases": 16,
+    "configurations": 4,
+    "slots": 64,
+    "attempts_per_case": 1,
+    "applicable": 57,
+    "n_a": 7,
+    "false_positive_sessions": 48
+  },
+  "validity": {
+    "planned_slots": 64,
+    "pass_detected": 43,
+    "fail_undetected": 14,
+    "timeout": 0,
+    "apparatus_failure": 0,
+    "excluded_n_a": 7,
+    "sums_to_planned": true,
+    "note": "the aborted first run is an apparatus failure of the RUN, repeated in full; it contributes no slots"
+  },
+  "mde": "n/a: deterministic single-attempt conformance cases, no comparison between arms is claimed",
+  "primary": {
+    "headline_caught_over_required_per_level": {
+      "off": {
+        "A1": {
+          "required": 7,
+          "caught": 5,
+          "wilson95": [
+            0.359,
+            0.918
+          ],
+          "caught_unlocalised": [],
+          "missed": [
+            "D2",
+            "T1"
+          ],
+          "missed_text_flag_exit0": [
+            "T1"
+          ],
+          "n_a": {}
+        },
+        "A2": {
+          "required": 3,
+          "caught": 1,
+          "wilson95": [
+            0.061,
+            0.792
+          ],
+          "caught_unlocalised": [],
+          "missed": [
+            "I1",
+            "R1"
+          ],
+          "missed_text_flag_exit0": [
+            "I1"
+          ],
+          "n_a": {}
+        },
+        "A3": {
+          "required": 2,
+          "caught": 0,
+          "wilson95": [
+            0,
+            0.658
+          ],
+          "caught_unlocalised": [],
+          "missed": [
+            "D3",
+            "B1"
+          ],
+          "missed_text_flag_exit0": [],
+          "n_a": {
+            "R2": "no integrity state outside the records and no signer or anchor to re-run: R2 is R1",
+            "C1": "no anchor or signed head carries a time: C1 is R1",
+            "K1": "this configuration declares no signer, so there is no key to re-sign with",
+            "K2": "this configuration has no witness to append to"
+          }
+        }
+      },
+      "attest": {
+        "A1": {
+          "required": 7,
+          "caught": 6,
+          "wilson95": [
+            0.487,
+            0.974
+          ],
+          "caught_unlocalised": [],
+          "missed": [
+            "D2"
+          ],
+          "missed_text_flag_exit0": [],
+          "n_a": {}
+        },
+        "A2": {
+          "required": 3,
+          "caught": 2,
+          "wilson95": [
+            0.208,
+            0.939
+          ],
+          "caught_unlocalised": [],
+          "missed": [
+            "I1"
+          ],
+          "missed_text_flag_exit0": [
+            "I1"
+          ],
+          "n_a": {}
+        },
+        "A3": {
+          "required": 5,
+          "caught": 3,
+          "wilson95": [
+            0.231,
+            0.882
+          ],
+          "caught_unlocalised": [
+            "R2",
+            "C1"
+          ],
+          "missed": [
+            "K1",
+            "B1"
+          ],
+          "missed_text_flag_exit0": [],
+          "n_a": {
+            "K2": "this configuration has no witness to append to"
+          }
+        }
+      },
+      "git": {
+        "A1": {
+          "required": 7,
+          "caught": 7,
+          "wilson95": [
+            0.646,
+            1
+          ],
+          "caught_unlocalised": [],
+          "missed": [],
+          "missed_text_flag_exit0": [],
+          "n_a": {}
+        },
+        "A2": {
+          "required": 3,
+          "caught": 2,
+          "wilson95": [
+            0.208,
+            0.939
+          ],
+          "caught_unlocalised": [],
+          "missed": [
+            "I1"
+          ],
+          "missed_text_flag_exit0": [
+            "I1"
+          ],
+          "n_a": {}
+        },
+        "A3": {
+          "required": 5,
+          "caught": 5,
+          "wilson95": [
+            0.566,
+            1
+          ],
+          "caught_unlocalised": [],
+          "missed": [],
+          "missed_text_flag_exit0": [],
+          "n_a": {
+            "K1": "this configuration declares no signer, so there is no key to re-sign with"
+          }
+        }
+      },
+      "rfc3161": {
+        "A1": {
+          "required": 7,
+          "caught": 7,
+          "wilson95": [
+            0.646,
+            1
+          ],
+          "caught_unlocalised": [],
+          "missed": [],
+          "missed_text_flag_exit0": [],
+          "n_a": {}
+        },
+        "A2": {
+          "required": 3,
+          "caught": 2,
+          "wilson95": [
+            0.208,
+            0.939
+          ],
+          "caught_unlocalised": [],
+          "missed": [
+            "I1"
+          ],
+          "missed_text_flag_exit0": [
+            "I1"
+          ],
+          "n_a": {}
+        },
+        "A3": {
+          "required": 5,
+          "caught": 3,
+          "wilson95": [
+            0.231,
+            0.882
+          ],
+          "caught_unlocalised": [
+            "R2",
+            "C1"
+          ],
+          "missed": [
+            "D3",
+            "B1"
+          ],
+          "missed_text_flag_exit0": [
+            "D3"
+          ],
+          "n_a": {
+            "K1": "this configuration declares no signer, so there is no key to re-sign with"
+          }
+        }
+      }
+    },
+    "ci_method": "Wilson 95% per cell (deterministic cases; the interval says what k/n can and cannot support)"
+  },
+  "reliability": "n/a: deterministic; one attempt per case. Determinism not separately re-run.",
+  "cost": "$0; no tokens; no GPU",
+  "telemetry": "verdicts from the verifier's exit status and output (CLI); mutations confirmed by the runner; witness moves from git's own push exit status",
+  "latency": "n/a: not a timing suite",
+  "incidents": [
+    {
+      "window": "2026-11-04T21:08:12Z\u201321:09:10Z",
+      "event": "measured run 1 aborted: attest R2 re-sign wrote into a deleted heads/ directory (ENOENT)",
+      "action": "apparatus fixed, whole run repeated (run 2, 21:09:46Z\u201321:13:41Z)"
+    },
+    {
+      "window": "every anchored session (setup and false-positive phases)",
+      "event": "anchors/flush.lock left behind after `gnomon task` exited, with no delivery process alive; `gnomon audit anchor` answered 'already running' (removed 22 times)",
+      "action": "runner removes a lock no live process holds after 5 s; reported as a v0.4.1 finding"
+    }
+  ],
+  "deviations": "see PRE-REGISTRATION.md, deviations log (5 rows: 3 before outcomes, 2 after reading partial outcomes; plus the B1/D3 localisation re-targeting in summarise.py, logged after outcomes)",
+  "traces": {
+    "archive": "traces.tar.gz",
+    "sha256": "357602cb7faec64e397946f6563973e4d1270c2a3e3830d9299231c8f83473a4",
+    "chain_heads": {
+      "off": "8c8de688eaf57e2117d8e9fe96cbba4073acb2eaef23b968c7439bae27c047ad",
+      "attest": "4bbb231ce11b9f81654a4ade5430f91eac840acda57fa537438008d7bf36f41e",
+      "git": "fcaafcc7e43dacd1f5834d7e9f427eaaba7f768890addb11c1468cb4083e9f42",
+      "rfc3161": "2bc39bb1469aac3660299f9feae96e4a68f995129e44ddf695fb5b9c58d8d0d2"
+    },
+    "git_witness_tip_at_control": "c96d098cefef3943655aaaf024db9bbc046d72df"
+  },
+  "scope": "system: gnomon v0.4.1 + these four configurations + Linux aarch64. No model is involved; not a harness-level cross-model claim",
+  "authorship": "author-run (gnomon's authors wrote the spec, the harness and the runner)",
+  "controls": [
+    {
+      "control": "control trail verifies clean",
+      "arm": "off",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "control": "control trail verifies clean",
+      "arm": "attest",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "control": "control trail verifies clean",
+      "arm": "git",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "control": "control trail verifies clean",
+      "arm": "rfc3161",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "control": "an `exit 0` verifier scores every case undetected",
+      "cases": 57,
+      "undetected": 57,
+      "ok": true
+    }
+  ],
+  "false_positives": {
+    "per_arm": {
+      "off": {
+        "sessions": 24,
+        "non_success": 0,
+        "whole_dir_exit": 0
+      },
+      "attest": {
+        "sessions": 8,
+        "non_success": 0,
+        "whole_dir_exit": 0
+      },
+      "git": {
+        "sessions": 8,
+        "non_success": 0,
+        "whole_dir_exit": 0
+      },
+      "rfc3161": {
+        "sessions": 8,
+        "non_success": 0,
+        "whole_dir_exit": 0
+      }
+    },
+    "total": {
+      "non_success": 0,
+      "sessions": 48,
+      "wilson95": [
+        0,
+        0.074
+      ]
+    },
+    "off_default_surface": {
+      "non_success": 0,
+      "sessions": 24,
+      "wilson95": [
+        0,
+        0.138
+      ]
+    }
+  },
+  "cases": [
+    {
+      "verifier": "gnomon",
+      "arm": "off",
+      "id": "E1",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "off",
+      "id": "E2",
+      "level": "A2",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "off",
+      "id": "E3",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "off",
+      "id": "I1",
+      "level": "A2",
+      "verdict": "undetected_text_flag_exit0",
+      "exit": 0,
+      "L1": false,
+      "L2": false,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "off",
+      "id": "I2",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "off",
+      "id": "D1",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "off",
+      "id": "D2",
+      "level": "A1",
+      "verdict": "undetected",
+      "exit": 0,
+      "L1": false,
+      "L2": false,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "off",
+      "id": "D3",
+      "level": "A3",
+      "verdict": "undetected",
+      "exit": 0,
+      "L1": false,
+      "L2": false,
+      "L3": false,
+      "move": "n/a: no off-machine witness in this configuration",
+      "affected_unit": "none: the records are untouched; only integrity evidence is removed"
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "off",
+      "id": "T1",
+      "level": "A1",
+      "verdict": "undetected_text_flag_exit0",
+      "exit": 0,
+      "L1": false,
+      "L2": false,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "off",
+      "id": "O1",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "off",
+      "id": "R1",
+      "level": "A2",
+      "verdict": "undetected",
+      "exit": 0,
+      "L1": false,
+      "L2": false,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "off",
+      "id": "R2",
+      "level": "A3",
+      "verdict": "n/a",
+      "reason": "no integrity state outside the records and no signer or anchor to re-run: R2 is R1"
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "off",
+      "id": "C1",
+      "level": "A3",
+      "verdict": "n/a",
+      "reason": "no anchor or signed head carries a time: C1 is R1"
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "off",
+      "id": "K1",
+      "level": "A3",
+      "verdict": "n/a",
+      "reason": "this configuration declares no signer, so there is no key to re-sign with"
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "off",
+      "id": "K2",
+      "level": "A3",
+      "verdict": "n/a",
+      "reason": "this configuration has no witness to append to"
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "off",
+      "id": "B1",
+      "level": "A3",
+      "verdict": "undetected",
+      "exit": 0,
+      "L1": false,
+      "L2": false,
+      "L3": false,
+      "move": "n/a: no off-machine witness in this configuration"
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "attest",
+      "id": "E1",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "attest",
+      "id": "E2",
+      "level": "A2",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "attest",
+      "id": "E3",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "attest",
+      "id": "I1",
+      "level": "A2",
+      "verdict": "undetected_text_flag_exit0",
+      "exit": 0,
+      "L1": false,
+      "L2": false,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "attest",
+      "id": "I2",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "attest",
+      "id": "D1",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "attest",
+      "id": "D2",
+      "level": "A1",
+      "verdict": "undetected",
+      "exit": 0,
+      "L1": false,
+      "L2": false,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "attest",
+      "id": "D3",
+      "level": "A3",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": false,
+      "L3": false,
+      "move": "n/a: no off-machine witness in this configuration",
+      "affected_unit": "none: the records are untouched; only integrity evidence is removed",
+      "localisation": "n/a"
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "attest",
+      "id": "T1",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "attest",
+      "id": "O1",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "attest",
+      "id": "R1",
+      "level": "A2",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "attest",
+      "id": "R2",
+      "level": "A3",
+      "verdict": "detected_unlocalised",
+      "exit": 1,
+      "L1": false,
+      "L2": false,
+      "L3": false,
+      "move": "n/a: no off-machine witness in this configuration",
+      "resigned": true,
+      "note": "caught only through OTHER units whose heads/receipts the attacker also deleted; the forged target verified as SIGNED. A target-only attacker is not caught (attest: K1)."
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "attest",
+      "id": "C1",
+      "level": "A3",
+      "verdict": "detected_unlocalised",
+      "exit": 1,
+      "L1": false,
+      "L2": false,
+      "L3": false,
+      "move": "n/a: no off-machine witness in this configuration",
+      "resigned": "head ts -1h",
+      "note": "caught only through OTHER units whose heads/receipts the attacker also deleted; the forged target verified as SIGNED. A target-only attacker is not caught (attest: K1)."
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "attest",
+      "id": "K1",
+      "level": "A3",
+      "verdict": "undetected",
+      "exit": 0,
+      "L1": false,
+      "L2": false,
+      "L3": false,
+      "resigned": true,
+      "move": "n/a: no off-machine witness in this configuration"
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "attest",
+      "id": "K2",
+      "level": "A3",
+      "verdict": "n/a",
+      "reason": "this configuration has no witness to append to"
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "attest",
+      "id": "B1",
+      "level": "A3",
+      "verdict": "undetected",
+      "exit": 0,
+      "L1": false,
+      "L2": false,
+      "L3": false,
+      "move": "n/a: no off-machine witness in this configuration"
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "git",
+      "id": "E1",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "git",
+      "id": "E2",
+      "level": "A2",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "git",
+      "id": "E3",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "git",
+      "id": "I1",
+      "level": "A2",
+      "verdict": "undetected_text_flag_exit0",
+      "exit": 0,
+      "L1": false,
+      "L2": false,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "git",
+      "id": "I2",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "git",
+      "id": "D1",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "git",
+      "id": "D2",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": false,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "git",
+      "id": "D3",
+      "level": "A3",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": false,
+      "L2": false,
+      "L3": false,
+      "forced_push_refused": true,
+      "ref_delete_refused": true,
+      "affected_unit": "none: the records are untouched; only integrity evidence is removed",
+      "localisation": "n/a"
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "git",
+      "id": "T1",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "git",
+      "id": "O1",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "git",
+      "id": "R1",
+      "level": "A2",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "git",
+      "id": "R2",
+      "level": "A3",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": true,
+      "forced_push_refused": true,
+      "ref_delete_refused": true,
+      "reanchor": {
+        "delivered": true,
+        "via": "gnomon audit anchor",
+        "out": "Anchored 1 sealed head(s) to git, /tmp/claude-1000/-home-eljaplacido-gnomon/3809fb39-94a4-4ea4-b0f3-7057ddad8d1d/scratchpad/gbs/audit/run/git/witness.git refs/heads/gnomon-anchors."
+      }
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "git",
+      "id": "C1",
+      "level": "A3",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": true,
+      "forced_push_refused": true,
+      "ref_delete_refused": true,
+      "reanchor": {
+        "delivered": 1,
+        "via": "library, clock -1h"
+      }
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "git",
+      "id": "K1",
+      "level": "A3",
+      "verdict": "n/a",
+      "reason": "this configuration declares no signer, so there is no key to re-sign with"
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "git",
+      "id": "K2",
+      "level": "A3",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": true,
+      "reanchor": {
+        "delivered": true,
+        "via": "gnomon audit anchor",
+        "out": "Anchored 1 sealed head(s) to git, /tmp/claude-1000/-home-eljaplacido-gnomon/3809fb39-94a4-4ea4-b0f3-7057ddad8d1d/scratchpad/gbs/audit/run/git/witness.git refs/heads/gnomon-anchors."
+      },
+      "forced_push_refused": true,
+      "ref_delete_refused": true
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "git",
+      "id": "B1",
+      "level": "A3",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": false,
+      "L3": false,
+      "forced_push_refused": true,
+      "ref_delete_refused": true,
+      "affected_unit": "task-2026-11-04T21-10-10-619Z-1071268.jsonl"
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "rfc3161",
+      "id": "E1",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "rfc3161",
+      "id": "E2",
+      "level": "A2",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "rfc3161",
+      "id": "E3",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "rfc3161",
+      "id": "I1",
+      "level": "A2",
+      "verdict": "undetected_text_flag_exit0",
+      "exit": 0,
+      "L1": false,
+      "L2": false,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "rfc3161",
+      "id": "I2",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "rfc3161",
+      "id": "D1",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "rfc3161",
+      "id": "D2",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": false,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "rfc3161",
+      "id": "D3",
+      "level": "A3",
+      "verdict": "undetected_text_flag_exit0",
+      "exit": 0,
+      "L1": false,
+      "L2": false,
+      "L3": false,
+      "move": "n/a: the authority is a third party; the attacker has no write access to it, only to the local receipts",
+      "affected_unit": "none: the records are untouched; only integrity evidence is removed"
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "rfc3161",
+      "id": "T1",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "rfc3161",
+      "id": "O1",
+      "level": "A1",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "rfc3161",
+      "id": "R1",
+      "level": "A2",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": false
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "rfc3161",
+      "id": "R2",
+      "level": "A3",
+      "verdict": "detected_unlocalised",
+      "exit": 1,
+      "L1": false,
+      "L2": false,
+      "L3": false,
+      "move": "n/a: the authority is a third party; the attacker has no write access to it, only to the local receipts",
+      "reanchor": {
+        "delivered": true,
+        "via": "gnomon audit anchor",
+        "out": "Anchored 1 sealed head(s) to rfc3161, http://127.0.0.1:41955/."
+      },
+      "note": "caught only through OTHER units whose heads/receipts the attacker also deleted; the forged target verified as ANCHORED. A target-only attacker is not caught (attest: K1)."
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "rfc3161",
+      "id": "C1",
+      "level": "A3",
+      "verdict": "detected_unlocalised",
+      "exit": 1,
+      "L1": false,
+      "L2": false,
+      "L3": false,
+      "move": "n/a: the authority is a third party; the attacker has no write access to it, only to the local receipts",
+      "reanchor": {
+        "delivered": 1,
+        "via": "library, clock -1h"
+      },
+      "note": "caught only through OTHER units whose heads/receipts the attacker also deleted; the forged target verified as ANCHORED. A target-only attacker is not caught (attest: K1)."
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "rfc3161",
+      "id": "K1",
+      "level": "A3",
+      "verdict": "n/a",
+      "reason": "this configuration declares no signer, so there is no key to re-sign with"
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "rfc3161",
+      "id": "K2",
+      "level": "A3",
+      "verdict": "detected",
+      "exit": 1,
+      "L1": true,
+      "L2": true,
+      "L3": true,
+      "reanchor": {
+        "delivered": true,
+        "via": "gnomon audit anchor",
+        "out": "Anchored 1 sealed head(s) to rfc3161, http://127.0.0.1:41955/."
+      },
+      "move": "n/a: the authority is a third party; the attacker has no write access to it, only to the local receipts"
+    },
+    {
+      "verifier": "gnomon",
+      "arm": "rfc3161",
+      "id": "B1",
+      "level": "A3",
+      "verdict": "undetected",
+      "exit": 0,
+      "L1": false,
+      "L2": false,
+      "L3": false,
+      "move": "n/a: the authority is a third party; the attacker has no write access to it, only to the local receipts"
+    }
+  ]
+}

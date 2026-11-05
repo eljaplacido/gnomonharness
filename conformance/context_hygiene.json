@@ -1,0 +1,66 @@
+{
+  "version": "0.1.0",
+  "_comment": [
+    "Context hygiene, docs/CONTRACTS.md section 19: observation masking and the",
+    "environment bootstrap. Both opt-in. With their keys absent nothing here is",
+    "written, and a scripted turn sends the request bodies v0.4.0 sent",
+    "(context_hygiene.test.ts pins the digest).",
+    "",
+    "Three points make each check two-way, the shape of stop_reason.json: the",
+    "code (BOOTSTRAP_OUTCOMES in context_hygiene.ts; MASK_KEYS, BOOTSTRAP_KEYS",
+    "and BOOTSTRAP_PLATFORMS in config.ts), this file, and the CONTRACTS.md",
+    "table. docs.test.ts holds them to one set; context_hygiene.test.ts holds the",
+    "fields a real run writes to the lists below."
+  ],
+  "surface": {
+    "config.toml [context.mask_observations]": {
+      "keep_last": "the newest tool results always kept verbatim; a whole number, 0 or more; default 10",
+      "at_fill": "mask only once the turn's context reaches this fraction of the window; at least 0, below 1; default 0.5",
+      "batch": "and only when at least this many results can be masked at once; a whole number, 1 or more; default 5"
+    },
+    "config.toml [context] bootstrap": "the id of a [bootstrap.<id>] block in policy.toml",
+    "policy.toml [bootstrap.<id>]": {
+      "linux": "list of probe commands, one per string",
+      "macos": "list of probe commands, one per string",
+      "windows": "list of probe commands, one per string (run in Git Bash)",
+      "max_bytes": "cap on the snapshot put into the prompt; default 3000",
+      "max_lines": "lines kept from each probe's output; default 12",
+      "timeout_ms": "deadline for the whole command, never longer than the tool timeout; default 20000"
+    }
+  },
+  "counters.masking": {
+    "batches": "masking batches this turn",
+    "observations": "tool results replaced by a placeholder",
+    "tokens_saved": "estimated context occupancy removed at the batches (~4 characters per token); not tokens billed"
+  },
+  "counters.bootstrap": {
+    "required": {
+      "id": "the [bootstrap.<id>] that ran, or env_snapshot for the built-in snapshot (CONTRACTS.md section 32)",
+      "platform": "the platform key this machine read",
+      "outcome": "one of bootstrap_outcome",
+      "bytes": "the command's output before the cap",
+      "tokens": "estimated tokens of the block the system prompt carries from then on (0 when there is none)",
+      "truncated": "whether the snapshot was cut at max_bytes"
+    },
+    "optional": {
+      "exit": "the command's exit status, when it ran one",
+      "worktree_changed": "true, false or null, as the bash stamp observed it, when a command ran"
+    }
+  },
+  "bootstrap_outcome": {
+    "ok": "the command ran; its output, cut to max_bytes, is the snapshot appended to the system prompt",
+    "refused": "the policy said no (bash_deny or bash_allow, the sandbox, an approval declined under approval = \"always\"); no snapshot",
+    "failed": "the command did not run to the end (timeout, spawn failure, a signal); no snapshot",
+    "unavailable": "the selected block declares no probes for this platform; nothing ran"
+  },
+  "expected_outcomes": 4,
+  "bootstrap_platform": {
+    "linux": "every platform that is neither Windows nor macOS",
+    "macos": "process.platform darwin",
+    "windows": "process.platform win32; the probes run in Git Bash"
+  },
+  "audit": {
+    "context_mask": ["role", "batch", "step", "masked", "tokens_saved", "tokens_before", "tokens_after", "window", "first_index"],
+    "bootstrap": ["role", "id", "platform", "outcome", "command", "code", "bucket", "summary", "exit", "bytes", "tokens", "truncated", "worktree_changed", "duration_ms"]
+  }
+}

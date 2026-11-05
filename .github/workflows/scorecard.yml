@@ -1,0 +1,71 @@
+# OpenSSF Scorecard: an outside score of this repository's supply-chain
+# practices (pinned dependencies, token permissions, signed releases, branch
+# protection, a security policy, and more), uploaded to the Security tab as code
+# scanning results.
+#
+# Read-only against the repository. The job's token can read contents and
+# Actions metadata and write code-scanning results (security-events), nothing
+# else. `id-token: write` is there only because `publish_results: true` signs the
+# upload of this score to the public Scorecard API (api.scorecard.dev), which is
+# what a README badge reads; it grants no write to this repository. Set
+# publish_results to false and drop id-token to keep the score private to the
+# Security tab.
+#
+# Publishing imposes rules this file has to keep (scorecard-action README,
+# "Workflow Restrictions"): no top-level env or defaults, no workflow-level
+# write permissions, id-token only on this job, an Ubuntu hosted runner, and
+# only checkout, upload-artifact, upload-sarif, scorecard-action and
+# harden-runner in the job. Adding any other step here breaks the upload.
+#
+# Target (docs/RELEASING.md): Scorecard >= 8. Signed-Releases scores 10 only
+# when each of the recent releases carries a `.intoto.jsonl` provenance asset,
+# which releases get from build-release.yml onward; releases up to 0.4.0 have
+# none, so that check climbs as new releases replace them in its window.
+
+name: Scorecard
+
+on:
+  # Branch-protection changes are part of the score, so re-score when they move.
+  branch_protection_rule:
+  schedule:
+    - cron: "17 5 * * 1"   # weekly, Monday 05:17 UTC
+  push:
+    branches: [master]
+
+# Nothing beyond reading code at the workflow level; the one job declares the
+# rest. (Scorecard's own template says `read-all`, which is wider than needed.)
+permissions:
+  contents: read
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write   # upload the SARIF to code scanning
+      id-token: write          # publish_results: sign the upload to api.scorecard.dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Keep the SARIF as a workflow artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload to code scanning
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          sarif_file: results.sarif

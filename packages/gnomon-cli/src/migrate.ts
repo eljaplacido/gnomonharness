@@ -81,6 +81,47 @@ function retypeKey(
   return changed ? lines.join("\n") : null;
 }
 
+
+// The scaffold's verification rule before and after 2026-11-01. Kept verbatim
+// so a hand-edited system.md is never touched.
+const SYSTEM_MD_VERIFY_OLD =
+  "- Run what you produced before you end the turn. Turn each constraint the\n" +
+  "  task states into a command that fails if it is violated, run it, and paste\n" +
+  "  the output. Writing the file is not producing the artifact: a script that\n" +
+  "  has never been executed is a guess about what it does, and \"it exists\" is\n" +
+  "  not \"it works\".\n" +
+  "- Get to something that works end to end first, then improve it. If the\n" +
+  "  deliverable is not on disk yet, make it exist before refining anything —\n" +
+  "  a turn spent validating a thing that was never produced scores nothing.\n";
+const SYSTEM_MD_VERIFY_NEW =
+  "- Run what you produced before you end the turn: a script that has never\n" +
+  "  been executed is a guess about what it does, and \"it exists\" is not \"it\n" +
+  "  works\". Check it once against what the task asked for, in one command\n" +
+  "  where you can. Verify in proportion to the task: do not build test\n" +
+  "  suites, helper scripts or extra checks nobody asked for, and do not\n" +
+  "  re-check what already passed.\n" +
+  "- Get to something that works end to end first. If the deliverable is not\n" +
+  "  on disk yet, make it exist before refining anything — a turn spent\n" +
+  "  validating a thing that was never produced scores nothing. Once it works\n" +
+  "  and the task's requirements are met, stop.\n" +
+  "- Keep prose short. One sentence of why before a tool call is enough. The\n" +
+  "  final report says what changed, the check that shows it works, and\n" +
+  "  anything left undone; do not paste output the operator can rerun.\n";
+
+const eol = (text: string): string => (text.includes("\r\n") ? "\r\n" : "\n");
+
+// The scaffold's task tool before and after 2026-11-02, matched with the name
+// line above it, so no other tool's description is ever touched.
+const TASK_TOOL_OLD =
+  'name = "task"\n' +
+  "description = \"Run a sub-turn under another role, with its own context. It gets that role's tools.\"\n";
+const TASK_TOOL_NEW =
+  'name = "task"\n' +
+  "description = \"Run a sub-turn under another role, with its own context and that role's tools. " +
+  "Delegate a job once: give the complete plan and everything it needs, including the check that shows it is done. " +
+  "Delegate again only when its report shows a concrete failure; a report whose check passed is finished work, " +
+  "so do not send it back to be redone or re-checked.\"\n";
+
 export const MIGRATIONS: Migration[] = [
   {
     id: "compaction-summary",
@@ -121,6 +162,39 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    id: "system-md-proportionate-verify",
+    file: "system.md",
+    what: `system.md: "turn each constraint into a command" → verify in proportion`,
+    why: [
+      "P1-H (2026-11-01, DeepSeek V4.1 Flash, 15 tasks x 3): gnomon made 1.5-3x",
+      "the peers' requests and wrote 1.5-4x their output on almost every task,",
+      "building test suites and helper scripts nobody asked for, and hit the",
+      "time cap most often. Only the exact scaffold block is replaced.",
+    ],
+    apply: (text) => {
+      const old = SYSTEM_MD_VERIFY_OLD.replace(/\n/g, eol(text));
+      if (!text.includes(old)) return null;
+      return text.replace(old, () => SYSTEM_MD_VERIFY_NEW.replace(/\n/g, eol(text)));
+    },
+  },
+  {
+    id: "task-delegate-once",
+    file: "tools.toml",
+    what: `tools.toml: task "Run a sub-turn ..." → delegate a job once`,
+    why: [
+      "R1/R1H (2026-11-02, cloud coordinator, local implementor): no",
+      "plan-in-cloud cell delegated once. Coordinators handed the same job",
+      "over 2-10 times (\"Verifying independently before I report\", then",
+      "implement again), and each sub-turn starts with no history and",
+      "re-reads the repo. Only the exact scaffold description is replaced.",
+    ],
+    apply: (text) => {
+      const old = TASK_TOOL_OLD.replace(/\n/g, eol(text));
+      if (!text.includes(old)) return null;
+      return text.replace(old, () => TASK_TOOL_NEW.replace(/\n/g, eol(text)));
+    },
+  },
+  {
     id: "verify-declared",
     file: "policy.toml",
     what: `policy.toml: no [verify]  →  the check this project already declares`,
@@ -158,6 +232,36 @@ export const MIGRATIONS: Migration[] = [
       "no test_must_fail_first line at all is touched — `= false` is a choice.",
     ],
     apply: (text) => addKeyToSection(text, "verify", "test_must_fail_first", "true  # a new test must fail on the code as it was"),
+  },
+  {
+    id: "stream-replies",
+    file: "config.toml",
+    what: `[defaults] stream absent  →  true (stream replies from kind = "openai" endpoints)`,
+    why: [
+      "Unstreamed, a reply has one clock and a long generation reaches it: on",
+      "P2G (2026-11, hosted DeepSeek V4.1 Flash, v0.3.1) replies were cut off",
+      "at 300 s and sent again, 11 of 18 cells hit the 30-minute cap, and the",
+      "relay billed the abandoned generations. Streamed, a reply is timed by",
+      "the gap between chunks. Scaffolded on since 2026-11. Only a [defaults]",
+      "with no stream line is touched; an endpoint may still say stream = false.",
+    ],
+    apply: (text) =>
+      addKeyToSectionOrCreate(text, "defaults", "stream", 'true                     # stream replies from kind = "openai" endpoints'),
+  },
+  {
+    id: "output-limit",
+    file: "config.toml",
+    what: `[defaults] max_tokens absent  →  32768 (an output limit on every reply)`,
+    why: [
+      "With no limit a reply runs until the model stops, and a reasoning",
+      "model does not stop early: on P2G (2026-11, hosted DeepSeek V4.1",
+      "Flash) gnomon wrote about twice the output per step of opencode and",
+      "goose, up to 9x on some tasks, mostly thinking. 32k counts the thinking",
+      "and still fits a large file write after it. Scaffolded since 2026-11.",
+      "Only a [defaults] with no max_tokens line is touched.",
+    ],
+    apply: (text) =>
+      addKeyToSectionOrCreate(text, "defaults", "max_tokens", "32768                # output limit per reply, thinking included (0 = none)"),
   },
   {
     id: "audit-enabled",
@@ -224,6 +328,26 @@ function addKeyToSection(text: string, section: string, key: string, value: stri
   }
   lines.splice(last + 1, 0, `${key} = ${value}`);
   return lines.join("\n");
+}
+
+/**
+ * addKeyToSection, and when the section does not exist at all, a new one at
+ * the end of the file holding just the key.
+ *
+ * For `[defaults]`, which a hand-written surface can omit entirely. Without
+ * this, such a surface was never offered stream-replies or output-limit and
+ * was told nothing: `gnomon migrate` reported it current while it ran on the
+ * old behaviour. Only for sections whose absence means "all defaults" -- a
+ * `[verify]` block is a declaration of its own and is never invented here.
+ */
+function addKeyToSectionOrCreate(text: string, section: string, key: string, value: string): string | null {
+  const present = text
+    .split("\n")
+    .some((l) => (l.match(/^\s*\[([^\]]+)\]\s*$/)?.[1] ?? "").trim() === section);
+  if (present) return addKeyToSection(text, section, key, value);
+  const nl = eol(text);
+  const head = text.replace(/(\r?\n)*$/, "");
+  return (head ? `${head}${nl}${nl}` : "") + `[${section}]${nl}${key} = ${value}${nl}`;
 }
 
 export interface MigrationResult {

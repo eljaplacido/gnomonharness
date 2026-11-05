@@ -1,0 +1,79 @@
+{
+  "version": "0.1.0",
+  "_comment": [
+    "Sweep knobs, docs/CONTRACTS.md section 32: six opt-in surface settings,",
+    "one per long-task hypothesis, so an adaptive benchmark sweep can test each",
+    "as a change to the hashed surface. Absent, or declared at its default,",
+    "every request body is byte-identical to master's at ae17a1ae",
+    "(sweep_knobs.test.ts pins the hashes, taken before the code existed).",
+    "",
+    "sweep_knobs.test.ts holds the code's lists and defaults (sweep_knobs.ts)",
+    "to this file, and checks every record field below against a scripted run;",
+    "docs.test.ts holds CONTRACTS.md section 32 to the keys and values."
+  ],
+  "master": "ae17a1ae",
+  "knobs": {
+    "reasoning_effort": {
+      "keys": ["config.toml [endpoints.<name>] reasoning_effort", "roles.toml [roles.<role>] reasoning_effort"],
+      "values": ["low", "medium", "high", "max"],
+      "provider_default": "provider",
+      "default": null,
+      "field": "reasoning_effort",
+      "precedence": "the role's declaration, else the endpoint's; \"provider\" or a value outside the list sends none",
+      "not_sent_to": "kind = \"ollama\" (/api/chat)",
+      "wire": "reasoning_effort"
+    },
+    "sampling": {
+      "keys": ["config.toml [endpoints.<name>] sampling", "roles.toml [roles.<role>] temperature", "roles.toml [roles.<role>] top_p"],
+      "values": ["harness", "provider"],
+      "params": ["temperature", "top_p"],
+      "default": "harness",
+      "precedence": "sampling = \"provider\" on the endpoint omits both whatever the role declares; a role's temperature or top_p = \"provider\" omits that one",
+      "wire": "sampling_omitted"
+    },
+    "env_snapshot": {
+      "keys": ["config.toml [context] env_snapshot"],
+      "default": false,
+      "id": "env_snapshot",
+      "limits": { "timeout_ms": 2000, "max_bytes": 6000, "max_lines": 60 },
+      "records": "counters.bootstrap and audit kind bootstrap (section 19), with id env_snapshot",
+      "yields_to": "config.toml [context] bootstrap"
+    },
+    "todo_gate": {
+      "keys": ["config.toml [turn] todo_gate"],
+      "default": false,
+      "max_rounds": 1,
+      "budget": "policy.toml [verify] completion_min_remaining",
+      "actions": ["hand_back", "accept"],
+      "outcomes": ["passed", "exhausted", "skipped_budget", "not_reached"],
+      "counters": ["v", "max_rounds", "rounds", "open", "outcome"],
+      "audit": ["role", "round", "action", "open", "step", "budget_left", "budget_by", "outcome"]
+    },
+    "edit_variant": {
+      "keys": ["tools.toml [[tools]] name = \"edit\" variant"],
+      "values": ["default", "compat"],
+      "default": "default",
+      "compat_parameters": ["path", "old_string", "new_string"],
+      "tiers": ["exact", "whitespace", "indentation"],
+      "counters": "edit_match",
+      "audit": "tool_call.edit_tier"
+    },
+    "package_index": {
+      "keys": ["policy.toml [sandbox] allow_package_index"],
+      "default": [],
+      "applies_when": "network = false, on the host (exec = \"off\")",
+      "admits": ["pip install|download|wheel|index", "uv pip install|compile|sync", "uv add|sync|lock", "npm|pnpm|yarn|bun install|i|add|ci|clean-install|update|up|upgrade|view|info|show|v|pack|fetch", "curl GET", "wget GET"],
+      "counters": ["admitted", "hosts"],
+      "audit": "tool_call.package_index"
+    }
+  },
+  "wire": {
+    "reasoning_effort": "the effort sent, present only when one was",
+    "sampling_omitted": "the sampling fields not sent, present only when one was left out"
+  },
+  "counters": {
+    "todo_gate": "present only when [turn] todo_gate = true",
+    "edit_match": "{exact, whitespace, indentation}: on every turn under variant = \"compat\"",
+    "package_index": "{admitted, hosts}: on every turn of a network = false surface that lists hosts"
+  }
+}

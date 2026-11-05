@@ -21,6 +21,7 @@ import { existsSync } from "node:fs";
 import { win32 as win32Path } from "node:path";
 import type { McpServerDef } from "./config.js";
 import { recordDegradation, type DegradationSink } from "./degradation.js";
+import { AGENT_SESSION_ENV } from "./tools.js";
 
 /**
  * The revision this client ASKS for. Left pinned at the one these message
@@ -145,6 +146,10 @@ class McpConnection {
       const v = process.env[varName];
       if (v !== undefined) env[varName] = v;
     }
+    // The agent-session marker (tools.ts, AGENT_SESSION_ENV): an MCP server is
+    // a tool's subprocess too, and anything it starts must not pass for a
+    // person at the CLI. Carries no secret.
+    env[AGENT_SESSION_ENV] = process.env[AGENT_SESSION_ENV] ?? `pid-${process.pid}`;
 
     const plan =
       process.platform === "win32"

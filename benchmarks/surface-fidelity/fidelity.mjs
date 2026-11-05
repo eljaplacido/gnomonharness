@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath, pathToFileURL } from "node:url";
 /**
  * surface-fidelity — does a change to the surface move the hash exactly when it
  * moves behaviour?
@@ -17,14 +18,30 @@ import { join, relative, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 
 
-const REPO = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
-const core = (m) => import(`${REPO}/packages/gnomon-core/dist/${m}`);
+const REPO = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]$/, "");
+const core = (m) => import(pathToFileURL(`${REPO}/packages/gnomon-core/dist/${m}`).href);
 
 const { loadConfig, recomputeManifest, resolveContext, resolveRouting, resolveUi,
         resolveVerify, resolveChain, resolveLoop, resolveResilience, resolveExec,
-        resolveExtraRoots } = await core("config.js");
+        resolveExtraRoots, resolveMasking, resolveBootstrap, resolveMaxLines } = await core("config.js");
 const { buildToolSet } = await core("tools.js");
 const { buildSystemPrompt } = await core("prompt_loop.js");
+const { listTrialSpecs, loadTrialSpec, verdictOf } = await core("skill_trial.js");
+
+/**
+ * Six pairs, each solved by the skill arm only: a pass gain of 6 at exact
+ * McNemar p = 0.03125. Fixed cells, so a trial spec's verdict on them is a
+ * pure function of the spec -- which is what makes a spec measurable here.
+ */
+const FIXED_CELLS = Array.from({ length: 12 }, (_, i) => {
+  const pair = Math.floor(i / 2) + 1;
+  const arm = i % 2 ? "skill" : "base";
+  return {
+    n: i + 1, pair, task: "t", attempt: pair, arm, bucket: "result", valid: true,
+    passed: arm === "skill", check_exit: arm === "skill" ? 0 : 1, code: 0,
+    stop_reason: "answered", model: "m", surface_hash: "", requests: 1, duration_ms: 1,
+  };
+});
 
 /**
  * Everything the harness decides BEFORE the model is called.
@@ -46,6 +63,15 @@ function fingerprint(root) {
     loop: resolveLoop(c),
     resilience: resolveResilience(c),
     extra_roots: resolveExtraRoots(c),
+    // Context hygiene (2026-11-03), both opt-in: null on a surface that does
+    // not declare them, which is every scaffold, so no row moves. Resolved for
+    // every platform, so a probe list for another OS still counts as behaviour.
+    masking: resolveMasking(c),
+    bootstrap: ["linux", "darwin", "win32"].map((p) => resolveBootstrap(c, p)),
+    // `max_lines` on the bash and read declarations (CX3). Undefined unless
+    // declared, and JSON.stringify drops it then, so no existing row's
+    // fingerprint moves.
+    max_lines: resolveMaxLines(c),
     defaults: c.config.defaults ?? {},
     policy: c.policy ?? {},
     roles: roles.map((r) => ({
@@ -69,6 +95,21 @@ function fingerprint(root) {
         return { name, roles: Object.keys(pc.roles).sort().map((r) => [r, pc.roles[r]]) };
       } catch (e) {
         return { name, error: String(e).slice(0, 120) };
+      }
+    }),
+    // Every skill-trial spec the surface declares (2026-11-03). A spec does not
+    // change what the agent does, but it decides what `require_trial` lets a
+    // person accept, so it is behaviour of the governed system: its parsed
+    // fields, and the verdict it gives FIXED_CELLS. For a short while specs
+    // were left out of the hash; the agent's shell could then loosen one
+    // without moving it. Counting them here is what keeps them in.
+    trials: listTrialSpecs(c).map((name) => {
+      try {
+        const spec = loadTrialSpec(c, name);
+        const { sha256: _bytes, path: _path, ...parsed } = spec;
+        return { name, parsed, verdict: verdictOf(spec, FIXED_CELLS) };
+      } catch (e) {
+        return { name, error: String(e).slice(0, 160) };
       }
     }),
     // Two fixed inputs: one that matches no skill, one that matches the
@@ -121,8 +162,8 @@ function targets(root) {
   walk(g);
   // Directories the scaffold does not create but the harness names, so an
   // inert-but-hashed one cannot hide by being absent.
-  for (const d of ["extensions", "skills/proposed"]) {
-    const p = join(".gnomon", d, "probe.md");
+  for (const d of ["extensions", "skills/proposed", "trials"]) {
+    const p = join(".gnomon", d, d === "trials" ? "probe.toml" : "probe.md");
     if (!out.some((t) => t.path === p)) out.push({ path: p, kind: "new-file-in-dir" });
   }
   return out.sort((a, b) => a.path.localeCompare(b.path));
@@ -151,7 +192,11 @@ function variants(baseAbs, kind) {
       // parser rather than the hash, so the probe must be well-formed.
       { name: "new file", applyTo: (abs) => {
         mkdirSync(dirname(abs), { recursive: true });
-        writeFileSync(abs, abs.endsWith(".toml")
+        // A trial spec must be a valid one, for the reason a profile must be.
+        const trial = /[\\/]trials[\\/]/.test(abs);
+        writeFileSync(abs, trial
+          ? '[[task]]\nid = "probe"\nprompt = "probe"\ncheck = "true"\n'
+          : abs.endsWith(".toml")
           ? 'name = "gnomon_fidelity_probe"\ndescription = "probe"\n'
           : "probe\n");
       } },
@@ -191,8 +236,8 @@ function variants(baseAbs, kind) {
 
 function scaffold() {
   const root = mkdtempSync(join(tmpdir(), "gnomon-fidelity-"));
-  execFileSync(`${REPO}/node_modules/.bin/tsx`,
-    [`${REPO}/packages/gnomon-cli/src/index.ts`, "init"],
+  execFileSync(process.execPath,
+    [`${REPO}/node_modules/tsx/dist/cli.mjs`, `${REPO}/packages/gnomon-cli/src/index.ts`, "init"],
     { cwd: root, stdio: "pipe" });
   return root;
 }
@@ -292,6 +337,34 @@ if (!control.false_positive || !control.false_negative) {
   process.exit(2);
 }
 
+/**
+ * A trial spec is behaviour: one threshold changed flips the verdict on the
+ * same cells, and the hash moves with it. Measured on a spec added to the
+ * scaffold, since `gnomon init` writes none.
+ */
+function trialSpecFlips() {
+  const root = scaffold();
+  const spec = join(root, ".gnomon", "trials", "default.toml");
+  mkdirSync(dirname(spec), { recursive: true });
+  const body = (gain) =>
+    `[thresholds]\nmin_pass_gain = ${gain}\n\n[[task]]\nid = "t"\nprompt = "p"\ncheck = "true"\n`;
+  writeFileSync(spec, body(1));
+  const c1 = loadConfig(root);
+  const before = { hash: surfaceHash(root), verdict: verdictOf(loadTrialSpec(c1, "default"), FIXED_CELLS) };
+  writeFileSync(spec, body(7));
+  const c2 = loadConfig(root);
+  const after = { hash: surfaceHash(root), verdict: verdictOf(loadTrialSpec(c2, "default"), FIXED_CELLS) };
+  rmSync(root, { recursive: true, force: true });
+  return { before: before.verdict, after: after.verdict, flipped: before.verdict !== after.verdict, hash_moved: before.hash !== after.hash };
+}
+
+const flip = trialSpecFlips();
+console.log(`trial spec: min_pass_gain 1 -> 7 flips the verdict ${flip.before} -> ${flip.after}; hash moved: ${flip.hash_moved}\n`);
+if (!flip.flipped || !flip.hash_moved) {
+  console.error("A TRIAL SPEC CHANGE DID NOT FLIP THE VERDICT AND MOVE THE HASH — the spec is not measured as behaviour.");
+  process.exit(1);
+}
+
 const { baseHash, rows } = measure();
 const by = (v) => rows.filter((r) => r.verdict === v);
 const fn = by("false-negative"), fp = by("false-positive"), un = by("unmeasurable");
@@ -311,7 +384,7 @@ if (sum !== rows.length) { console.error(`\nBUCKETS DO NOT SUM: ${sum} != ${rows
 
 const out = process.argv.indexOf("--json");
 if (out > -1 && process.argv[out + 1]) {
-  writeFileSync(process.argv[out + 1], JSON.stringify({ baseHash, rows, summary: {
+  writeFileSync(process.argv[out + 1], JSON.stringify({ baseHash, rows, trial_spec_flip: flip, summary: {
     faithful: by("faithful").length, false_positive: fp.length, false_negative: fn.length, unmeasurable: un.length,
   } }, null, 2));
 }

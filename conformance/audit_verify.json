@@ -1,0 +1,19 @@
+{
+  "contract": "gnomon audit verify — the seal: docs/CONTRACTS.md section 21",
+  "version": 1,
+  "exit": { "ok": 0, "finding": 1, "nothing_to_verify": 1 },
+  "seal_kind": "session_end",
+  "resume_kind": "session_resume",
+  "live_lock": "<trail>.lock, younger than 10 s",
+  "cases": [
+    { "case": "never sealed (a live or killed session)", "kinds": ["session_start", "turn"], "sealed": false, "after_seal": false, "exit": 0 },
+    { "case": "sealed", "kinds": ["session_start", "turn", "session_end"], "sealed": true, "after_seal": false, "exit": 0 },
+    { "case": "resealed by session_resume", "kinds": ["session_start", "guard", "session_end", "session_resume", "guard", "session_end"], "sealed": true, "after_seal": false, "exit": 0 },
+    { "case": "a record appended after the seal", "kinds": ["session_start", "turn", "session_end", "turn"], "sealed": false, "after_seal": true, "exit": 1 },
+    { "case": "a record appended after the seal, and sealed again", "kinds": ["session_start", "turn", "session_end", "turn", "session_end"], "sealed": true, "after_seal": true, "exit": 1 },
+    { "case": "resumed after the seal and never sealed again, no live lock", "kinds": ["session_start", "guard", "session_end", "session_resume", "guard"], "sealed": false, "after_seal": true, "exit": 1 },
+    { "case": "resumed after the seal, being written now (live lock)", "kinds": ["session_start", "guard", "session_end", "session_resume", "guard"], "lock": true, "sealed": false, "after_seal": false, "exit": 0 }
+  ],
+  "after_seal_keys": ["seal_seq", "seq", "detail"],
+  "printed": { "after_seal": "APPENDED AFTER SEAL at seq <n>", "line": "TAMPERED — <detail>" }
+}

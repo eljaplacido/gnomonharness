@@ -1,0 +1,91 @@
+name: Bug report
+description: Something behaves differently from what the docs, a test or a contract claim
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. A question ("how do I…") goes to [Discussions](https://github.com/eljaplacido/gnomonharness/discussions/new?category=q-a), and a security issue goes to a [private advisory](https://github.com/eljaplacido/gnomonharness/security/advisories/new), never here.
+        Before filing, [docs/GUIDE.md → Troubleshooting](https://github.com/eljaplacido/gnomonharness/blob/master/docs/GUIDE.md#9-troubleshooting) covers the common failures.
+        **Never paste an API key.** gnomon never needs one in a report.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command or interaction, and what it did. Paste output as text, not a screenshot.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and where that expectation comes from
+      description: A README or GUIDE line, a test, a contract in docs/CONTRACTS.md. This is what separates a bug from a design disagreement.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The smallest steps. Include the `.gnomon/` files that matter (`roles.toml`, `policy.toml`, the active profile) if the behaviour depends on the surface. Remove anything secret.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: gnomon --version
+      description: Paste the output of `gnomon --version`, for example `gnomon/0.3.1+npm`.
+      placeholder: gnomon/0.3.1+npm
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows (native, Git for Windows)
+        - Windows (WSL2)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os-detail
+    attributes:
+      label: OS version, architecture and Node version
+      placeholder: Ubuntu 24.04, x64, Node 22.11.0
+  - type: dropdown
+    id: install
+    attributes:
+      label: How gnomon was installed
+      options:
+        - Installer (install.sh / install.ps1)
+        - Release tarballs by hand
+        - From source (pnpm run setup)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: endpoint-kind
+    attributes:
+      label: Model endpoint kind
+      description: The `kind` of the endpoint the failing role uses (`gnomon endpoint list` shows it).
+      options:
+        - ollama
+        - openai (a server on my own hardware, e.g. llama.cpp, vLLM)
+        - openai (a cloud provider, e.g. OpenRouter, OpenCode)
+        - Not model-related (install, check, audit, loops, ...)
+    validations:
+      required: true
+  - type: input
+    id: surface-hash
+    attributes:
+      label: Surface hash
+      description: Run `gnomon surface hash` in the project. A behaviour that depends on the surface is only reproducible with the same hash. Leave empty if the bug is not surface-related.
+  - type: textarea
+    id: startup
+    attributes:
+      label: Startup output (optional)
+      description: The output of `echo /quit | gnomon prompt` from the project. It makes no model call and shows the role, model and any surface problems.
+      render: text

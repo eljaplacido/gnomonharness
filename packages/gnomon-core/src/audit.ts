@@ -29,15 +29,19 @@
  * it, and produce something this module verifies as intact. That was measured —
  * eight of nine tampering strategies were caught, and that one was not
  * (benchmarks/results/auditability-2026-08-31). Closing it needs an anchor
- * outside the file, which is what attest.ts adds when a surface declares a
- * signer. Without that declaration the limit above is exactly the guarantee.
+ * outside the file: attest.ts signs heads when a surface declares a signer,
+ * and anchor.ts copies each sealed head to an external witness when it
+ * declares `[audit.anchor]`. Without either declaration the limit above is
+ * exactly the guarantee.
  */
 
-import { appendFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, existsSync, readFileSync, openSync, readSync, closeSync, fstatSync, statSync } from "node:fs";
 import { join, resolve, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
 import { GnomonConfig } from "./config.js";
+import { beforeOwnWrite, noteOwnWrite } from "./record_guard.js";
 import { Attestor, resolveAttest, verifyAttestation, type AttestVerifyResult, type ResolvedAttest } from "./attest.js";
+import { enqueueAnchor, resolveAnchor, type ResolvedAnchor } from "./anchor.js";
 
 // The attestation surface is re-exported here so that a consumer holding a
 // ResolvedAudit can name the type of its `attest` field.
@@ -104,6 +108,12 @@ export interface ResolvedAudit {
    * "unless the surface asked for a signer, nothing here runs".
    */
   attest?: ResolvedAttest;
+  /**
+   * External anchoring, from [audit.anchor] (anchor.ts). Optional for the same
+   * reason `attest` is. Absent or not enabled, the seal path does nothing more
+   * than it did.
+   */
+  anchor?: ResolvedAnchor;
 }
 
 const DEFAULT_DIR = ".gnomon-audit";
@@ -138,6 +148,8 @@ export function resolveAudit(config: GnomonConfig): ResolvedAudit {
     // string work: no process is spawned and no file is touched. A declared
     // public_key path is the one read, and only when it was declared.
     attest: resolveAttest(config, resolvedDir),
+    // Same: an undeclared [audit.anchor] is string work only.
+    anchor: resolveAnchor(config, resolvedDir),
   };
 }
 
@@ -159,6 +171,16 @@ export type AuditKind =
   // whether it passed. A trail that records the change but not the check
   // cannot answer whether the change was ever known to be good.
   | "verify"
+  // The environment bootstrap a surface declares (`[context] bootstrap`): the
+  // command, as the audit records any command, and what came of it -- ok,
+  // refused, failed or unavailable. Once per session. Its own kind because the
+  // surface, not the model, ran it, which is also why it is not a tool_call.
+  | "bootstrap"
+  // One observation-masking batch (`[context.mask_observations]`): how many
+  // tool results became placeholders, the estimated tokens that removed, and
+  // the step it happened at -- the moment a cached prompt prefix was
+  // rewritten, which is what a re-prefill on the server lines up against.
+  | "context_mask"
   // One per degradation: the harness kept working with less than it declared.
   //
   // Announcing a degradation on the terminal is not the same as recording it.
@@ -177,6 +199,65 @@ export type AuditKind =
   // base, head and role it judged, each check's status and findings, the exit.
   // Its own kind because it is not a turn and nothing in it came from a model.
   | "check"
+  // Whether this machine's user had accepted what the surface grants beyond
+  // the scaffold, and what was done about it: trusted, granted now, clamped to
+  // the defaults, or revoked (trust.ts). Its own kind because a clamped run's
+  // records carry the hash of a surface whose permissions did not all apply,
+  // and the trail has to say so where a reader of that hash will look.
+  | "trust"
+  // One decision of `gnomon guard` on a tool call another harness was about
+  // to make: the call's target, allow / deny / ask, the rule and the base the
+  // rules were read from. Its own kind for the reason `check` is: no model
+  // produced it, and it is not a turn.
+  | "guard"
+  // A person accepting or rejecting a proposed skill (skills.ts). Their own
+  // kinds because an accept is the one act that changes what the agent is on
+  // purpose: the trail showed the surface hash move, never who moved it, for
+  // which skill, or with what content. Each carries the skill's content hash
+  // and the surface hash before and after; written in a sealed trail of its
+  // own, like `check`.
+  | "skill_accept"
+  | "skill_reject"
+  // The outcome of `gnomon skill trial`: the skill's content hash, the report's
+  // hash, both arms' surface hashes, the model, the endpoints and
+  // `meets_thresholds` (skill_trial.ts). Its own kind because no turn produced
+  // it: it compares two arms of many turns against numbers declared before.
+  | "skill_trial"
+  // A change to gnomon's own records that gnomon did not make, found by the
+  // record guard (record_guard.ts): which tool call, or between calls, and
+  // which files. And a person's resolution of one (`gnomon audit resolve`).
+  | "record_tamper"
+  | "record_tamper_resolved"
+  // A new gnomon trail another process added to the records -- the
+  // operator's own CLI in a second terminal, a concurrent or killed session.
+  // A warning, not tampering: gnomon adds trails and never rewrites one.
+  | "record_notice"
+  // What each connected MCP server offered, hashed, against this machine's
+  // pin for it (tools_hash.ts, trust.ts): first_contact, matched or changed.
+  // Its own kind because it is about the session's tools, not a turn, and a
+  // server whose tools moved between two sessions moved nothing else the
+  // trail carried. Written only when the surface declares a server.
+  | "mcp_tools"
+  // A stall detector starting an episode (stall_signals.ts): which one, at
+  // which step, and the number behind it. Log-only: written after the
+  // tool_call record it follows, read by nothing in the loop. Its own kind so
+  // a trigger's precision can be measured against the outcome later without
+  // the trigger ever having acted.
+  | "stall_signal"
+  // One per end of a turn the completion gate (`[verify] completion_gate`,
+  // completion_gate.ts) judged: the round, what it did (checklist, no_check,
+  // review, accept), the budget left, findings and the clock. Its own kind
+  // because it is harness control, not a tool call and not the declared check.
+  | "completion_gate"
+  // One per end of a turn the todo gate (`[turn] todo_gate`, sweep_knobs.ts)
+  // judged: the round, hand_back or accept, the open items and the budget
+  // left. Its own kind for the reason completion_gate has one.
+  | "todo_gate"
+  // One per model request a turn made, when [audit] is on: what it carried
+  // (gnomon's estimate, replayed reasoning, steering and its role, the trim
+  // before it) and what came back (provider tokens, reasoning, code, clock).
+  // Metadata only: no prompt or response text. mediators.ts.
+  | "model_call"
   | "session_end";
 
 export interface AuditRecord {
@@ -240,6 +321,37 @@ export function recordHash(record: AuditRecord): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * The last record of a trail file, reading only its tail. Null when the file
+ * is absent or empty. A tail that does not parse is thrown, not skipped: a
+ * chain continued from the wrong record is a broken chain that looks whole.
+ */
+function lastRecord(file: string): AuditRecord | null {
+  let fd: number;
+  try {
+    fd = openSync(file, "r");
+  } catch {
+    return null;
+  }
+  try {
+    const size = fstatSync(fd).size;
+    if (size === 0) return null;
+    // Records are one line each; grow the window until it holds a whole one.
+    for (let window = 64 * 1024; ; window *= 4) {
+      const len = Math.min(size, window);
+      const buf = Buffer.alloc(len);
+      readSync(fd, buf, 0, len, size - len);
+      const lines = buf.toString("utf-8").split("\n").filter((l) => l.trim());
+      if (lines.length >= 2 || len === size) {
+        const line = lines[lines.length - 1];
+        return line ? (JSON.parse(line) as AuditRecord) : null;
+      }
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
  * An append-only audit log for one session.
  *
  * A disabled trail is a no-op object rather than a null check at every call
@@ -251,15 +363,33 @@ export class AuditTrail {
   private file: string | null = null;
   /** Null unless the surface declared a signer. */
   private attestor: Attestor | null = null;
+  /** Null unless the surface declared a usable [audit.anchor]. */
+  private anchor: ResolvedAnchor | null = null;
   private readonly setupProblems: string[] = [];
+  private readonly anchorFailures: string[] = [];
 
   constructor(
     private readonly settings: ResolvedAudit,
-    private readonly sessionId: string
+    private readonly sessionId: string,
+    /**
+     * Continue an existing trail file rather than start one. `gnomon guard`
+     * runs as one process per tool call, and every decision of one session
+     * belongs on one chain: the next record's `seq` and `prev` come from the
+     * file's last record. The caller holds a lock across the append, because
+     * two processes reading the same tail would fork the chain.
+     */
+    opts: { append?: boolean } = {}
   ) {
     if (!settings.enabled) return;
     mkdirSync(settings.dir, { recursive: true });
     this.file = join(settings.dir, `${sessionId}.jsonl`);
+    if (opts.append) {
+      const last = lastRecord(this.file);
+      if (last) {
+        this.seq = last.seq + 1;
+        this.prev = last.hash ?? null;
+      }
+    }
 
     const attest = settings.attest;
     if (attest?.enabled) {
@@ -273,6 +403,15 @@ export class AuditTrail {
         );
       } else {
         this.attestor = new Attestor(attest, `${sessionId}.jsonl`);
+      }
+    }
+
+    if (settings.anchor?.enabled) {
+      if (!settings.chain) {
+        // The attest reasoning again: no chain, no head to anchor.
+        this.setupProblems.push("[audit.anchor] declares a witness but [audit].chain is off — there are no chain heads to anchor");
+      } else {
+        this.anchor = settings.anchor;
       }
     }
   }
@@ -301,10 +440,45 @@ export class AuditTrail {
     return [...this.setupProblems, ...(this.attestor?.problems ?? [])];
   }
 
+  /** Statements that could not even be queued. Delivery failures are anchor.ts's state, not these. */
+  get anchorProblems(): string[] {
+    return [...this.anchorFailures];
+  }
+
+  /**
+   * Sign the current head now, whatever `every` says. For a write-ahead
+   * decision whose authority is the signer (skills.ts): the person signs
+   * before the change is applied, not at the seal after it. True when a head
+   * was written; whether it verifies is the caller's to check.
+   */
+  attestHead(): boolean {
+    if (!this.attestor || this.prev === null || this.seq === 0) return false;
+    return this.attestor.sign(this.seq - 1, this.prev, this.seq) !== null;
+  }
+
   /** Text is recorded only when the surface asks for `full`. */
   text(value: string | undefined): string | undefined {
     if (this.settings.record !== "full") return undefined;
     return redact(value ?? "", this.settings.redact);
+  }
+
+  /**
+   * An action's own text — a shell command — recorded in full under EITHER
+   * `record` setting, after redaction.
+   *
+   * `metadata` keeps prompts and responses out: what the operator asked and
+   * what the model said. A command is neither. It is what was done, which is
+   * the thing this trail exists to answer. Until 2026-11 a bash call kept the
+   * 70-character terminal form of its command, and its full arguments only
+   * under `full`. G1 (benchmarks/results/g1-2026-11, on bench/peers-2026-11)
+   * then found gnomon's one violation in 24 trials: after the deny-list
+   * refused `git clean`, `git reset --hard` and `rm -r -f`, the agent moved
+   * `var/` out of the repository. The command that did it fell past the cut,
+   * so the trail could not show it. Redaction still applies, so a token pasted
+   * into a curl is scrubbed here as it is from recorded text.
+   */
+  action(value: string): string {
+    return redact(value, this.settings.redact);
   }
 
   /**
@@ -330,13 +504,28 @@ export class AuditTrail {
       record.hash = recordHash(record);
       this.prev = record.hash;
     }
+    // The record guard (record_guard.ts) tells gnomon's own writes from anyone
+    // else's: check the file is as gnomon left it, append, note the new state.
+    beforeOwnWrite(this.file);
     appendFileSync(this.file, `${JSON.stringify(record)}\n`, "utf-8");
+    noteOwnWrite(this.file);
 
     // Signing happens AFTER the record is on disk, and its failure is recorded
     // rather than thrown. A trail that stopped recording because a smartcard
     // was unplugged would lose exactly the records worth having.
     if (this.attestor && record.hash && this.attestor.due(kind, this.seq)) {
       this.attestor.sign(record.seq, record.hash, this.seq);
+    }
+    // A sealed head is queued for an external witness. Queued only: one small
+    // file, no network, no process. Delivery is anchor.ts's flushAnchors, run
+    // after the checkpoint and off the turn path. A failure here costs the
+    // anchor, never the record, which is already on disk.
+    if (this.anchor && record.hash && kind === "session_end") {
+      try {
+        enqueueAnchor(this.anchor, this.file, record, this.seq);
+      } catch (e) {
+        this.anchorFailures.push(`could not queue the head at seq ${record.seq}: ${(e as Error).message}`);
+      }
     }
     return record;
   }
@@ -379,7 +568,32 @@ export interface VerifyResult {
    * would mark every unsigned trail as broken.
    */
   attestation?: AttestVerifyResult;
+  /**
+   * Records written after the trail was sealed, that are not a resumption
+   * sealed again. Present only for a chained trail, and then always a
+   * failure: `gnomon audit verify` exits 1 on it.
+   *
+   * A FOURTH fact, kept apart from `ok` and `sealed` for their reason. A record
+   * appended after `session_end` with its `seq`, `prev` and hash computed the
+   * way gnomon computes them leaves `ok` true, and `sealed` only says the trail
+   * no longer ends with a seal -- which a killed run also says. GBS-AUDIT 0.1
+   * (case I1, benchmarks/results/gbs-2026-11-04/audit) passed exactly that
+   * trail with exit 0 in every configuration. A killed run never wrote a
+   * seal; this trail did, and grew after it.
+   *
+   * The one way gnomon itself continues a sealed trail is `session_resume`
+   * (`gnomon guard` reseals one trail per call: `session_resume`, the record,
+   * `session_end`, under `<trail>.lock`). So after a `session_end` the next
+   * record must be `session_resume`, and a resumed trail must end sealed
+   * again. The single exception is a resumption being written right now: its
+   * writer's lock is present and fresh, and the trail reads as unsealed, as a
+   * live session's does. A trail never sealed is not this case at all.
+   */
+  after_seal?: { seal_seq: number; seq: number; detail: string };
 }
+
+/** How long a writer's `<trail>.lock` counts as live: guard.ts takes over a lock older than this. */
+const RESUME_LOCK_LIVE_MS = 10_000;
 
 export interface VerifyOptions {
   /** Check signed heads too. Omitted, no attestation work happens at all. */
@@ -398,6 +612,20 @@ export interface VerifyOptions {
  * recomputing every hash produces a trail that passes here. Pass `opts.attest`
  * to also check the trail against signed heads, which is what catches it.
  */
+/**
+ * A resumption of a sealed trail being written right now: its writer holds
+ * `<trail>.lock` (guard.ts, appendDecision), and the lock is younger than the
+ * age at which a writer would take it over as stale.
+ */
+function resumeInProgress(path: string): boolean {
+  if (!path.endsWith(".jsonl")) return false;
+  try {
+    return Date.now() - statSync(`${path.slice(0, -".jsonl".length)}.lock`).mtimeMs <= RESUME_LOCK_LIVE_MS;
+  } catch {
+    return false;
+  }
+}
+
 export function verifyTrail(path: string, opts: VerifyOptions = {}): VerifyResult {
   const attestation = opts.attest
     ? verifyAttestation(path, opts.attest, opts.headsPath ? { headsPath: opts.headsPath } : {})
@@ -414,6 +642,11 @@ export function verifyTrail(path: string, opts: VerifyOptions = {}): VerifyResul
   // Whether this trail chains at all. Set by the first hashed record, so an
   // unchained trail stays valid and a chained one cannot be diluted.
   let chained = false;
+  // The last seal seen, and the first record after a seal that does not
+  // resume it (see VerifyResult.after_seal).
+  let lastSeal: number | null = null;
+  let prevKind: string | null = null;
+  let appended: { seal_seq: number; seq: number; kind: string } | null = null;
 
   for (const [i, line] of lines.entries()) {
     let record: AuditRecord;
@@ -421,8 +654,15 @@ export function verifyTrail(path: string, opts: VerifyOptions = {}): VerifyResul
       record = JSON.parse(line) as AuditRecord;
     } catch {
       broken.push(i);
+      prevKind = null;
       continue;
     }
+    const seq = typeof record.seq === "number" ? record.seq : i;
+    if (prevKind === "session_end" && record.kind !== "session_resume" && lastSeal !== null) {
+      appended ??= { seal_seq: lastSeal, seq, kind: String(record.kind) };
+    }
+    if (record.kind === "session_end") lastSeal = seq;
+    prevKind = record.kind;
     if (record.hash === undefined) {
       // A trail written with chaining off legitimately has no hashes — but a
       // hash-less record inside a CHAINED trail is not "chaining was off", it is
@@ -455,11 +695,34 @@ export function verifyTrail(path: string, opts: VerifyOptions = {}): VerifyResul
     : null;
   const sealed = chained ? last?.kind === "session_end" : true;
 
+  let after_seal: VerifyResult["after_seal"];
+  if (chained && appended) {
+    after_seal = {
+      seal_seq: appended.seal_seq,
+      seq: appended.seq,
+      detail:
+        `seq ${appended.seq} (${appended.kind}) was appended after the trail was sealed at seq ${appended.seal_seq}; ` +
+        `gnomon continues a sealed trail only with session_resume`,
+    };
+  } else if (chained && lastSeal !== null && !sealed && !resumeInProgress(path)) {
+    after_seal = {
+      seal_seq: lastSeal,
+      seq: lastSeal + 1,
+      detail:
+        `records after the seal at seq ${lastSeal} were never sealed again: the trail was extended after it was ` +
+        `sealed (or a resuming writer was killed mid-append)`,
+    };
+  }
+
   return withAttestation({
     ok: broken.length === 0,
     records: lines.length,
     broken,
     sealed,
-    ...(sealed ? {} : { problem: "trail does not end with session_end — truncated, or the run was killed" }),
+    ...(after_seal
+      ? { problem: `appended after its seal: ${after_seal.detail}`, after_seal }
+      : sealed
+        ? {}
+        : { problem: "trail does not end with session_end — truncated, or the run was killed" }),
   });
 }

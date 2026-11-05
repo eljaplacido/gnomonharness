@@ -14,11 +14,12 @@
  * learn what a deterministic harness does.
  */
 
-import { GnomonConfig, resolveContext, resolveRouting, resolveEndpoint, listEndpoints, endpointClass, listRoles, recomputeManifest, resolveVerify, resolveExtraRoots, resolveExec } from "./config.js";
+import { GnomonConfig, resolveContext, resolveRouting, resolveEndpoint, listEndpoints, endpointClass, listRoles, recomputeManifest, resolveVerify, resolveExtraRoots, resolveApprovalGate, resolveSandboxLevel, endpointKind, resolveExec } from "./config.js";
 import { resolveAudit } from "./audit.js";
 import { resolveSessionStore } from "./session_store.js";
 import { loadSkills, loadProposedSkills } from "./skills.js";
 import { buildToolSet, MUTATING, osSandboxSummary } from "./tools.js";
+import { resolveAfterRefusal } from "./after_refusal.js";
 
 export interface Explanation {
   topic: string;
@@ -149,7 +150,7 @@ const TOPICS: Record<ExplainTopic, Builder> = {
 
   sandbox: (config, role) => {
     const policy = (config.policy ?? {}) as { sandbox?: { level?: string; network?: boolean } };
-    const level = policy.sandbox?.level ?? "confined";
+    const level = resolveSandboxLevel(config);
     const extra = resolveExtraRoots(config);
     const allow = config.roles[role]?.bash_allow ?? [];
     const deny = config.roles[role]?.bash_deny ?? [];
@@ -175,18 +176,29 @@ const TOPICS: Record<ExplainTopic, Builder> = {
         "allow-list is only as tight as its least-constrained entry. One that",
         "admits an interpreter or a compiler admits everything they can run.",
         "",
-        "[sandbox] exec decides where bash runs. 'off' is the host. 'docker' is a",
-        "container. 'os' is the host under a kernel sandbox (Landlock on Linux,",
-        "sandbox-exec on macOS): writes only inside the root and a per-call temp",
-        "dir, and with network = false no egress (loopback stays reachable). It",
-        "refuses to run a command on a machine that cannot enforce it.",
+        "bash_allow and bash_deny read each command as the shell will run it —",
+        "`rm -fr` is `rm -rf`, and what `find -exec`, `xargs` or `sh -c` runs is",
+        "checked too — but they are an INTENT FILTER, not containment. They stop",
+        "a denied operation asked for in another common spelling; they cannot",
+        "stop code. `python -c 'shutil.rmtree(...)'` has no `rm` in it to match.",
         "",
-        "Without exec = 'os' or 'docker', network = false stops the webfetch tool,",
-        "not curl.",
+        "network = false refuses webfetch, and refuses curl, wget, nc, ssh,",
+        "connecting one-liners, git to a URL and a registry URL in bash — the",
+        "same kind of filter. A script or a package manager still reaches the",
+        "network.",
+        "",
+        "[sandbox] exec decides where bash runs, and is the containment. 'off' is",
+        "the host. 'docker' is a container that sees only the repository, with no",
+        "network unless network = true. 'os' is the host under a kernel sandbox",
+        "(Landlock on Linux, sandbox-exec on macOS): writes only inside the root",
+        "and a per-call temp dir, and with network = false no egress (loopback",
+        "stays reachable). With reads = 'scoped' (Linux) reads are confined too:",
+        "credential stores in $HOME are unreadable. 'os' refuses to run a command",
+        "on a machine that cannot enforce it.",
       ],
       here: [
         `level           ${level}`,
-        `network         ${policy.sandbox?.network === false ? "declared off (webfetch refuses; bash is not isolated)" : "not declared off"}`,
+        `network         ${policy.sandbox?.network === false ? "declared off (webfetch and network clients in bash refused; not isolation)" : "not declared off"}`,
         `granted roots   ${extra.length === 0 ? "none — the repository root only" : `${extra.length} declared`}`,
         ...extra.map((r) => bullet(r)),
         `bash_allow      ${allow.length === 0 ? `none declared — role "${role}" may run anything not denied` : `${allow.length} pattern(s)`}`,
@@ -239,14 +251,12 @@ const TOPICS: Record<ExplainTopic, Builder> = {
   },
 
   approval: (config, role) => {
-    const gate =
-      (config.policy?.approval as { gate?: string } | undefined)?.gate ??
-      config.config.defaults?.approval ??
-      "on_write";
+    const gate = resolveApprovalGate(config);
     const set = buildToolSet(config, role);
     const gated = set.schemas
       .map((t) => t.function.name)
       .filter((n) => gate === "always" || MUTATING.has(n));
+    const afterRefusal = resolveAfterRefusal(config);
     return {
       topic: "approval",
       summary: SUMMARIES.approval,
@@ -259,12 +269,24 @@ const TOPICS: Record<ExplainTopic, Builder> = {
       here: [
         `gate           ${gate}`,
         `gated for ${role}   ${gated.join(", ") || "(nothing — this role cannot mutate)"}`,
+        `repo_code      ${(config.policy as { approval?: { repo_code?: unknown } } | undefined)?.approval?.repo_code === true ?"on — npm test, make, pip install -e . and the like always ask" : "off — they ask only as the gate says"}`,
+        // Only when declared: a line saying "off" on every surface would be a
+        // setting nobody asked about, printed as if it mattered.
+        ...(afterRefusal.mode === "ask"
+          ? [
+              `after_refusal  ask — for ${afterRefusal.calls} gated call${afterRefusal.calls === 1 ? "" : "s"} after a refusal,`,
+              `               one naming what was refused is asked, standing approval or not`,
+            ]
+          : []),
       ],
       next: [
         "At a prompt: [y]es, [a]ll this turn, [s]ession, [N]o.",
         "'all this turn' is the one to reach for during a survey.",
         "",
         "Change it in .gnomon/policy.toml → [approval] gate.",
+        "repo_code = true there asks before every call that runs code the",
+        "repository defines (package.json scripts, a Makefile): the command line",
+        "does not show that code, so no rule can judge it. A sandbox contains it.",
       ],
     };
   },
@@ -339,9 +361,9 @@ const TOPICS: Record<ExplainTopic, Builder> = {
         const key = ep.api_key_env
           ? `  key $${ep.api_key_env} ${process.env[ep.api_key_env] ? "(set)" : "(NOT SET)"}`
           : "";
-        const cls = endpointClass(ep.url, ep.kind, ep.provider);
+        const cls = endpointClass(ep.url, endpointKind(ep), ep.provider);
         return [
-          bullet(`${name.padEnd(8)} ${ep.url}  [${ep.kind ?? "ollama"}] · ${cls.where} · ${cls.provider}${key}`),
+          bullet(`${name.padEnd(8)} ${ep.url}  [${endpointKind(ep)}] · ${cls.where} · ${cls.provider}${key}`),
           bullet(
             `         ${
               primary.length || fb.length

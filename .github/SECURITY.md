@@ -1,10 +1,104 @@
 # Security Policy
 
-## Reporting
+## Reporting a vulnerability
 
-Security issues may be reported as **private GitHub Security Advisories**
-through the "Security" tab of this repository, or by email to
-<digicisu@gmail.com> for reporters who prefer not to use the Security tab.
+**Do not open a public issue, discussion or pull request for a vulnerability.**
+Report it privately, by either route:
+
+- **GitHub private vulnerability reporting**: the "Report a vulnerability"
+  button under this repository's **Security** tab, which opens a private draft
+  advisory visible only to you and the maintainer.
+- **Email** to <digicisu@gmail.com>, subject starting `[gnomon security]`, for
+  reporters who prefer not to use GitHub.
+
+Include what you can of: the affected version (`gnomon --version` prints the
+build, e.g. `gnomon/0.4.0+v0.4.0-abc1234`), the platform, the `.gnomon/`
+settings involved (the files hold no secrets by design, see below), steps to
+reproduce, and the impact you expect. A proof of concept helps; a working
+exploit against someone else's machine is never needed.
+
+## Supported versions
+
+gnomon is pre-1.0 and solo-maintained. Security fixes go into the **latest
+release**; there are no backports to older minor versions. `gnomon update`
+moves an installed copy to the latest release.
+
+| Version | Security fixes |
+|---|---|
+| latest release | yes |
+| anything older | no: update |
+
+## Coordinated vulnerability disclosure
+
+What happens after a report. The time limits are targets for a solo
+maintainer, stated so a reporter knows what to expect, and are measured in
+calendar days from the report.
+
+| Step | Target |
+|---|---|
+| Acknowledge the report | 5 days |
+| Assess it: confirmed or not, severity (CVSS), affected versions | 14 days |
+| Fix released, for critical and high severity | 30 days |
+| Fix released, for medium and low severity | 90 days, or the next release |
+| Public advisory | when the fix is released |
+| Disclosure deadline if no fix ships | 90 days, unless both sides agree otherwise |
+
+1. **Private until fixed.** The report, the discussion and the fix are kept in
+   a private GitHub Security Advisory (a temporary private fork when code is
+   involved) until a release carries the fix. The reporter is a collaborator on
+   that advisory and sees the fix before it is public.
+2. **Advisory and CVE.** The fix ships with a published **GitHub Security
+   Advisory** on this repository naming the affected and fixed versions, the
+   impact, the severity and any workaround. A CVE is requested through GitHub,
+   which is a CVE Numbering Authority, for anything that affects users. The
+   release notes and `CHANGELOG.md` link the advisory.
+3. **Credit.** Reporters are credited in the advisory by the name they choose,
+   or not at all if they prefer.
+4. **Actively exploited.** A vulnerability known to be exploited in the wild
+   skips the queue: a fix or a mitigation is released as soon as one exists,
+   and the advisory may come first if users need to act before a fix.
+5. **Good faith.** Research that respects these rules, avoids harm to users and
+   their data, and gives time to fix before disclosure will not be met with
+   legal action from this project.
+
+### EU Cyber Resilience Act
+
+*Informational, not legal advice.* Regulation (EU) 2024/2847 asks
+manufacturers of products with digital elements for a coordinated
+vulnerability disclosure policy, a contact address for reports, security
+updates delivered free and without delay with advisories, an SBOM, and, from
+11 September 2026, reporting of actively exploited vulnerabilities and severe
+incidents through ENISA's single reporting platform (for an actively exploited
+vulnerability: an early warning within 24 hours, a notification within 72
+hours, a final report within 14 days of a fix or mitigation being available).
+Whether those duties apply to gnomon itself depends on whether it is supplied
+in the course of a commercial activity; a company that ships gnomon inside its
+own product may carry them for that product. This policy is written to cover
+the disclosure, contact, advisory and SBOM parts either way:
+
+| CRA expectation | Here |
+|---|---|
+| Coordinated vulnerability disclosure policy | this section |
+| Contact address for reports | private vulnerability reporting and the email above |
+| Security updates with advisories | latest release + GitHub Security Advisory + CVE |
+| SBOM | `gnomon-<version>.spdx.json` on every release from the one after 0.4.0 |
+| Integrity of distributed updates | `SHA256SUMS` and signed SLSA build provenance (below) |
+
+## Verifying what you installed
+
+Every release after 0.4.0 carries, besides `SHA256SUMS`:
+
+- a signed **SLSA build provenance** attestation for every native archive, npm
+  tarball, `SHA256SUMS` and the SBOM, made by
+  `.github/workflows/build-release.yml` at the release tag, in the job that
+  built the file;
+- an **SBOM** (`gnomon-<version>.spdx.json`, SPDX) generated from
+  `Cargo.lock` and `pnpm-lock.yaml`, attested against every archive and tarball;
+- every Sigstore bundle in one file, `gnomon-<version>.intoto.jsonl`.
+
+`scripts/verify-release.sh <version>` checks all of it with the GitHub CLI.
+README → "Verify a release" and docs/RELEASING.md → "Provenance, SBOM and
+verification" say what each check proves and what it does not.
 
 ## Scope
 

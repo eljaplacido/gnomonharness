@@ -20,7 +20,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig } from "gnomon-core";
+import { loadConfig, routeRole, auditSurface } from "gnomon-core";
 import { checkReadiness, parseSetupPick, parseModelPick, SETUP_CHOICES, hostPort } from "./setup.js";
 
 const servers: Server[] = [];
@@ -125,8 +125,11 @@ describe("checkReadiness — does launch's role have a model that answers?", () 
 
 describe("the picker's answers", () => {
   it("takes a number, a name, a prefix, or Enter for the first choice", () => {
-    expect(parseSetupPick("")).toBe("ollama");
-    expect(parseSetupPick("2")).toBe("openrouter");
+    expect(parseSetupPick("")).toBe("setup");
+    expect(parseSetupPick("1")).toBe("setup");
+    expect(parseSetupPick("2")).toBe("ollama");
+    expect(parseSetupPick("3")).toBe("openrouter");
+    expect(parseSetupPick("guided")).toBe("setup");
     expect(parseSetupPick("OpenRouter")).toBe("openrouter");
     expect(parseSetupPick("open")).toBe("openrouter");
     expect(parseSetupPick("opencode-zen")).toBe("opencode-zen");
@@ -139,8 +142,11 @@ describe("the picker's answers", () => {
     expect(parseSetupPick("banana")).toBeUndefined();
   });
 
-  it("offers local first and always offers a way out", () => {
-    expect(SETUP_CHOICES[0]!.preset).toBe("ollama");
+  it("offers the guided setup first, then local, and always a way out", () => {
+    // Enter runs `gnomon setup`: it looks at the machine, so it needs no
+    // knowledge of models, ports or keys from the person pressing it.
+    expect(SETUP_CHOICES[0]!.preset).toBe("setup");
+    expect(SETUP_CHOICES[1]!.preset).toBe("ollama");
     expect(SETUP_CHOICES.at(-1)!.preset).toBe("skip");
   });
 
@@ -186,6 +192,32 @@ describe("gnomon endpoint add --preset ollama", () => {
     expect(out).toContain("qwen3.6:35b");
     const roles = readFileSync(join(root, ".gnomon", "roles.toml"), "utf-8");
     expect(roles).toMatch(/\[roles\.implement\][\s\S]*model = "qwen3\.6:35b"/);
+  }, 60_000);
+
+  // The first-run picker runs this flow. In a project with a role_profile it
+  // wrote the profile and left roles.toml's old tag, and every later start
+  // printed one "is ignored" warning per role and field. Found 2026-11-01
+  // while verifying the guide (#69).
+  it("leaves roles.toml and the active profile agreeing, so the next start is quiet", async () => {
+    const url = await fakeOllama();
+    const root = project(url, "placeholder:1b");
+    const gnomon = join(root, ".gnomon");
+    writeFileSync(join(gnomon, "config.toml"),
+      `[defaults]\nrole_profile = "local_first"\n\n` + readFileSync(join(gnomon, "config.toml"), "utf-8"));
+    mkdirSync(join(gnomon, "profiles"));
+    writeFileSync(join(gnomon, "profiles", "local_first.toml"),
+      `[profile]\nname = "local_first"\n\n[roles.implement]\nmodel = "placeholder:1b"\nendpoint = "local"\n`);
+
+    const { code, out } = await runCli([
+      "endpoint", "add", "--preset", "ollama", "--url", `${url}/api/chat`, "--role", "implement", "--dir", root,
+    ]);
+    expect(code, out).toBe(0);
+
+    const config = loadConfig(root);
+    expect(routeRole(config, "implement").target.model).toBe("qwen3.6:35b");
+    expect(config.profile?.shadowed).toBeUndefined();
+    expect(auditSurface(config).filter((p) => p.problem.includes("is ignored: role_profile"))).toEqual([]);
+    expect(readFileSync(join(gnomon, "roles.toml"), "utf-8")).toMatch(/\[roles\.implement\]\nmodel = "qwen3\.6:35b"/);
   }, 60_000);
 
   it("says plainly that nothing is listening, and how to start it", async () => {

@@ -1,0 +1,30 @@
+{
+  "contract": "skill decisions — docs/CONTRACTS.md section 11",
+  "version": 1,
+  "audit_kinds": ["skill_accept", "skill_reject"],
+  "trail": ["session_start", "<kind>", "session_end"],
+  "session_start_mode": "skill",
+  "written_when_audit_disabled": true,
+  "audit_keys": {
+    "skill_accept": ["skill", "name", "path", "content_sha256", "surface_hash_before", "surface_hash_after", "evidence", "require_trial", "by", "agent_session_marker", "user", "host", "interactive", "authorised_by"],
+    "skill_reject": ["skill", "name", "path", "content_sha256", "surface_hash_before", "surface_hash_after", "reason", "by", "agent_session_marker", "user", "host", "interactive", "authorised_by"]
+  },
+  "optional_keys": ["reason"],
+  "order": "write-ahead: session_start and the decision are written before the file moves; session_end after",
+  "session_end_keys": { "applied": ["applied", "surface_hash_after"], "not_applied": ["applied", "error"] },
+  "session_end_keys_reject": { "applied": ["applied"], "not_applied": ["applied", "error"] },
+  "id_rule": "skillId(id) === id: lower-case letters, digits and dashes, at most 60",
+  "evidence_without_report": "none",
+  "evidence_keys": ["report", "report_sha256", "meets_thresholds", "trial_record", "attested"],
+  "evidence_vouching": "a skill_trial record naming the report's sha256, alone in a sealed trail (session_start mode trial, skill_trial, session_end) whose chain verifies, agreeing with the report on skill, content_sha256, both surface hashes and meets_thresholds; with [audit.attest] declared, covered by verified signed heads",
+  "refusal_exit": 3,
+  "trial_record_keys": ["trail", "seq", "hash"],
+  "evidence_report_schema": "gnomon.trial/1",
+  "require_trial": { "table": "[skills]", "file": "policy.toml", "default": false, "needs_signer": "[audit.attest] sign, and public_key or verify", "needs_attested_evidence": true, "verifier_pinned_by_surface": "public_key required, inline or under .gnomon/ (not skills/proposed, extensions); a verify command alone is refused; evidence is checked against the key only" },
+  "by_from_cli": "cli",
+  "agent_session_env": "GNOMON_AGENT_SESSION",
+  "agent_session_refusal_exit": 3,
+  "agent_session_checks": ["marker in this environment, any value (empty included)", "marker in an ancestor's environment (/proc/<pid>/environ, Linux)", "a gnomon process among the ancestors (/proc/<pid>/cmdline, Linux), other than a launcher of the same decision"],
+  "authorised_by": ["tty", "person_present_signer"],
+  "person_required": "stdin and stdout a terminal (authorised_by tty); otherwise [audit.attest] person_present = true and the signer signs the head covering the decision before it is applied (authorised_by person_present_signer); otherwise refused, exit 3, nothing written"
+}

@@ -1,0 +1,40 @@
+{
+  "v": 1,
+  "_comment": [
+    "The completion gate (docs/CONTRACTS.md section 30): opt-in harness control at the end of a",
+    "turn, declared as `[verify] completion_gate` in policy.toml. Recorded as",
+    "`counters.completion_gate` on the turn record and TaskRecord, and as one `completion_gate`",
+    "audit record per end of a turn the gate judged. A readout parses these without reading the",
+    "code, so renaming a key, a mode, an action or an outcome is a contract change.",
+    "packages/gnomon-core/src/completion_gate.test.ts asserts the module against this file and",
+    "that CONTRACTS.md names the section, the kind and every value below.",
+    "completion_gate_loop.test.ts holds the off-by-default claim: with no gate declared, a",
+    "scripted turn sends request bodies whose sha256 matches master's."
+  ],
+  "policy": {
+    "block": "verify",
+    "file": "policy.toml",
+    "defaults": {
+      "completion_gate": "off",
+      "completion_rounds": 3,
+      "completion_min_remaining": 0.2,
+      "completion_reviewer": "verifier"
+    }
+  },
+  "modes": ["off", "checklist", "review"],
+  "actions": ["checklist", "no_check", "review", "accept"],
+  "outcomes": ["passed", "exhausted", "skipped_budget", "not_applicable", "not_reached"],
+  "reviewer_tools": ["read", "glob", "grep", "compute", "todo", "bash"],
+  "counters": {
+    "at": "counters.completion_gate",
+    "required": ["v", "mode", "max_rounds", "rounds", "checks", "reviews", "review_steps", "findings", "outcome"],
+    "optional": ["review_failures", "ms"],
+    "volatile": { "ms": "volatile.completion_gate_ms" }
+  },
+  "audit": {
+    "kind": "completion_gate",
+    "required": ["role", "round", "action", "step", "budget_left", "budget_by", "ms"],
+    "optional": ["outcome", "findings", "review_failed"]
+  },
+  "budget_by": ["steps", "deadline"]
+}

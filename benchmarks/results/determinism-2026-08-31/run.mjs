@@ -1,3 +1,4 @@
+import { fileURLToPath, pathToFileURL } from "node:url";
 /**
  * Drive the fingerprint under conditions that differ in every way EXCEPT the
  * surface. Anything that shifts is machine-scoped behaviour, which is the one
@@ -11,7 +12,7 @@ import { join } from "node:path";
 const SRC = process.argv[2];
 const runIn = (dir, env, cwd) =>
   JSON.parse(execFileSync("node", ["-e", `
-    import(${JSON.stringify(join(process.cwd(), "determinism.mjs"))}).then(m => {
+    import(${JSON.stringify(pathToFileURL(join(process.cwd(), "determinism.mjs")).href)}).then(m => {
       const fp = m.fingerprint(${JSON.stringify(dir)});
       console.log(JSON.stringify({ hash: fp.hash, surface: m.surfaceHash(${JSON.stringify(dir)}) }));
     });`],
@@ -46,6 +47,16 @@ for (const [label, setup] of CASES) {
   const { dir, env, cwd } = setup();
   let got;
   try { got = runIn(dir, env, cwd); } catch (e) { got = { hash: `ERR:${String(e).slice(0, 80)}`, surface: "ERR" }; }
+  // An error is not a fingerprint. Two rows that failed the same way compare
+  // equal, so an error used to read as "stable": from 2026-09-07 every spawn died
+  // on a syntax error in determinism.mjs, and this printed 9/10 and exited 0
+  // while measuring nothing. Found by the G2 re-run, 2026-10-31.
+  const invalid = String(got.hash).startsWith("ERR") || String(got.surface).startsWith("ERR");
+  if (invalid) {
+    rows.push({ label, invalid: true, error: String(got.hash).slice(0, 200) });
+    console.log(`  ${label.padEnd(24)} INVALID: ${String(got.hash).slice(0, 100)}`);
+    continue;
+  }
   base ??= got;
   const same = got.hash === base.hash;
   const sameSurface = got.surface === base.surface;
@@ -55,7 +66,12 @@ for (const [label, setup] of CASES) {
   const mark = correct ? (same ? "stable" : "differs (expected)") : (same ? "STABLE (unexpected)" : "*** DIFFERS ***");
   console.log(`  ${label.padEnd(24)} behaviour:${same ? "same" : "DIFF"}  surface:${sameSurface ? "same" : "DIFF"}   ${mark}`);
 }
-const bad = rows.filter((r) => !r.correct);
-console.log(`\n${rows.filter(r=>r.correct).length}/${rows.length} matched expectation`);
+const invalid = rows.filter((r) => r.invalid);
+const bad = rows.filter((r) => !r.invalid && !r.correct);
+console.log(`\n${rows.filter(r=>r.correct).length}/${rows.length} matched expectation` +
+  (invalid.length ? `, ${invalid.length} INVALID (no fingerprint)` : ""));
 if (bad.length) console.log("PROBLEMS:", bad.map((b) => b.label).join(", "));
 writeFileSync("results.json", JSON.stringify(rows, null, 2));
+// A suite that measured nothing must not exit like one that passed.
+if (invalid.length) process.exit(2);
+if (bad.length) process.exit(1);

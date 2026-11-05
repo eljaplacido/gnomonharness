@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initSurface } from "./init.js";
-import { loadConfig, resolveContext, resolveUi, resolveRouting, resolveAudit, resolveSessionStore, listRoles, buildToolSet } from "gnomon-core";
+import { loadConfig, resolveContext, resolveUi, resolveRouting, resolveAudit, resolveSessionStore, listRoles, buildToolSet, STEER_ROLES, STEER_PREFIX, STEER_CLOSE, BOOTSTRAP_OUTCOMES, BOOTSTRAP_PLATFORMS, BOOTSTRAP_KEYS, MASK_KEYS, CONTEXT_SOURCES, LISTING_SHAPES, AUTO_WINDOW } from "gnomon-core";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
@@ -319,8 +319,11 @@ describe("the README outcome table matches the tool result codes", () => {
   });
 
   it("the guards do return it", () => {
-    expect(tools).toContain("summary: `write ${path} — not permitted for this role`");
-    expect(tools).toContain("summary: `edit ${path} — not permitted for this role`");
+    // One precheck refuses for both tools (`gnomon guard` calls it too), and
+    // both tools call it.
+    expect(tools).toContain("summary: `${tool} ${path} — not permitted for this role`");
+    expect(tools).toContain('writePrecheck("write", args, ctx)');
+    expect(tools).toContain('writePrecheck("edit", args, ctx)');
   });
 
   it("the stop_reason enumeration, its fixture and its documentation are one set", () => {
@@ -376,6 +379,106 @@ describe("the README outcome table matches the tool result codes", () => {
     }
   });
 
+
+  it("`truncated` documents both of its paths and the bucket each lands in", () => {
+    // A cut text reply stands as a `result`; cut tool calls end on the
+    // `refusal` floor. One stop_reason in two buckets is deliberate, and a
+    // reader switching on stop_reason must be told so, not find out.
+    const root = join(__dirname, "../../..");
+    const contracts = readFileSync(join(root, "docs/CONTRACTS.md"), "utf-8");
+    const row = contracts.match(/^\| `truncated` \| (.*)$/m)?.[1] ?? "";
+    expect(row).toMatch(/text reply[^|]*`result`/);
+    expect(row).toMatch(/tool call[^|]*`refusal`[^|]*stop_detail\.repeats/);
+    const fixture = JSON.parse(readFileSync(join(root, "conformance/stop_reason.json"), "utf-8"));
+    expect(fixture.stop_reason.truncated).toMatch(/text reply.*result.*tool call.*refusal/);
+  });
+
+  it("the surface reference states a streamed call's worst-case wall", () => {
+    // Streamed time is not charged to the retry budget, so the bound is
+    // attempts x stream_total_timeout_ms. Undocumented, a harness wall sized
+    // to the old budget would kill runs mid-call with no record.
+    const root = join(__dirname, "../../..");
+    const scaffold = readFileSync(join(root, "packages/gnomon-cli/src/init.ts"), "utf-8");
+    expect(scaffold).toMatch(/attempts x stream_total_timeout_ms/);
+    const guide = readFileSync(join(root, "docs/GUIDE.md"), "utf-8");
+    expect(guide).toMatch(/`attempts` × `stream_total_timeout_ms`/);
+  });
+
+  it("the bootstrap outcomes, their fixture and CONTRACTS.md §19 are one set; the key lists match the fixture", () => {
+    // `counters.bootstrap.outcome` is a published enumeration (Rule 6), on the
+    // record a consumer switches on. Same three points as stop_reason: the
+    // union in the code, the fixture, the table in CONTRACTS.md.
+    const root = join(__dirname, "../../..");
+    const fixture = JSON.parse(readFileSync(join(root, "conformance/context_hygiene.json"), "utf-8"));
+    const contracts = readFileSync(join(root, "docs/CONTRACTS.md"), "utf-8");
+    // §19 alone: it ends at the next `## ` heading, so a later section's
+    // table cannot add rows to this one.
+    const at = contracts.indexOf("## 19. Context hygiene");
+    expect(at, "CONTRACTS.md has no §19").toBeGreaterThan(-1);
+    const end = contracts.indexOf("\n## ", at + 1);
+    const s19 = contracts.slice(at, end === -1 ? undefined : end);
+    expect(s19.length, "CONTRACTS.md §19 is empty").toBeGreaterThan(100);
+    const documented = [...s19.matchAll(/^\| `([a-z_]+)` \| /gm)].map((m) => m[1]);
+    expect([...BOOTSTRAP_OUTCOMES], "context_hygiene.ts != conformance/context_hygiene.json").toEqual(
+      Object.keys(fixture.bootstrap_outcome)
+    );
+    expect(documented, "CONTRACTS.md §19's outcome table != the code").toEqual([...BOOTSTRAP_OUTCOMES]);
+    expect(BOOTSTRAP_OUTCOMES.length).toBe(fixture.expected_outcomes);
+    for (const p of BOOTSTRAP_PLATFORMS) expect(s19).toContain(`\`${p}\``);
+    expect([...BOOTSTRAP_PLATFORMS]).toEqual(Object.keys(fixture.bootstrap_platform));
+    expect([...MASK_KEYS].sort()).toEqual(Object.keys(fixture.surface["config.toml [context.mask_observations]"]).sort());
+    expect([...BOOTSTRAP_KEYS].sort()).toEqual(Object.keys(fixture.surface["policy.toml [bootstrap.<id>]"]).sort());
+  });
+
+  it("the surface reference documents context hygiene: both keys, every outcome, the counters", () => {
+    const root = join(__dirname, "../../..");
+    const guide = readFileSync(join(root, "docs/GUIDE.md"), "utf-8");
+    expect(guide).toContain("[context.mask_observations]");
+    for (const k of MASK_KEYS) expect(guide).toMatch(new RegExp(`^${k} = `, "m"));
+    expect(guide).toContain('bootstrap = "env"');
+    for (const p of BOOTSTRAP_PLATFORMS) expect(guide).toMatch(new RegExp(`^${p} = \\[`, "m"));
+    for (const o of BOOTSTRAP_OUTCOMES) expect(guide).toContain(`\`${o}\``);
+    expect(guide).toMatch(/`counters\.masking`/);
+    expect(guide).toMatch(/`counters\.bootstrap`/);
+  });
+
+  it("the surface reference documents steer_role: its values, its prefix, and what the record says", () => {
+    // A user-role nudge is only distinguishable from the person's words by its
+    // prefix, so the prefix a reader is told to look for must be the one sent.
+    const root = join(__dirname, "../../..");
+    const guide = readFileSync(join(root, "docs/GUIDE.md"), "utf-8");
+    for (const role of STEER_ROLES) expect(guide).toContain(`steer_role = "${role}"`);
+    expect(guide).toContain(`\`${STEER_PREFIX}\``);
+    expect(guide).toContain(`\`${STEER_CLOSE}\``);
+    expect(guide).toMatch(/`counters\.steer_role_adapted`/);
+    expect(guide).toMatch(/`steer_role: "user"`/);
+  });
+
+  it('the surface reference documents max_context_tokens = "auto"; init recommends it and does not set it', async () => {
+    // C3: the default window trimmed a 1,000,000-token hosted model to ~39k.
+    // The fix is opt-in until a pre-registered arm says otherwise, so the
+    // scaffold may recommend it in a comment and must not switch it on.
+    const root = join(__dirname, "../../..");
+    const guide = readFileSync(join(root, "docs/GUIDE.md"), "utf-8");
+    expect(guide).toContain(`max_context_tokens = "${AUTO_WINDOW}"`);
+    expect(guide).toContain("`max_context_tokens_source`");
+    for (const source of ["declared", "listing:<shape>", "default"]) expect(guide).toContain(`\`${source}\``);
+    for (const field of ["limit.context", "context_length", "top_provider.context_length", "max_model_len", "default_generation_settings.n_ctx", "num_ctx", "/api/show"]) {
+      expect(guide).toContain(field);
+    }
+    expect(guide).toContain("`context_window_unresolved`");
+    expect(CONTEXT_SOURCES).toEqual(["declared", ...LISTING_SHAPES.map((s) => `listing:${s}`), "default"]);
+
+    const scaffoldText = readFileSync(join(root, "packages/gnomon-cli/src/init.ts"), "utf-8");
+    expect(scaffoldText.match(/^# max_context_tokens = "auto"$/gm)).toHaveLength(2);
+    await scaffold((dir) => {
+      const config = loadConfig(dir);
+      for (const [name, ep] of Object.entries(config.config.endpoints ?? {})) {
+        expect(ep.max_context_tokens, name).toBeUndefined();
+      }
+      expect(config.config.defaults?.max_context_tokens).toBe(65536);
+    });
+  });
 
   it("the inert-enumeration set, its fixture and CONTRACTS.md are one set", () => {
     // CONTRACTS.md said "`role_profile` is declared and not implemented" for
@@ -548,6 +651,7 @@ describe("the docs name the same native-only commands the code does", () => {
   for (const [label, path] of [
     ["README.md", "README.md"],
     ["GETTING_STARTED.md", "GETTING_STARTED.md"],
+    ["docs/GUIDE.md", "docs/GUIDE.md"],
   ] as const) {
     it(`${label} names all five wherever it explains the native requirement`, () => {
       const text = readFileSync(join(repoRoot, path), "utf-8");
@@ -620,6 +724,7 @@ describe("numbers the docs state are read back from what they describe", () => {
   const gettingStarted = readFileSync(join(repoRoot, "GETTING_STARTED.md"), "utf-8");
   const ciYml = readFileSync(join(repoRoot, ".github/workflows/ci.yml"), "utf-8");
   const releaseYml = readFileSync(join(repoRoot, ".github/workflows/release.yml"), "utf-8");
+  const buildReleaseYml = readFileSync(join(repoRoot, ".github/workflows/build-release.yml"), "utf-8");
 
   const WORDS = [
     "zero", "one", "two", "three", "four", "five", "six",
@@ -669,10 +774,15 @@ describe("numbers the docs state are read back from what they describe", () => {
   // ── B. Release targets ─────────────────────────────────────────────────
   //
   // Said "three targets (linux-x64, linux-arm64, darwin-arm64)" after
-  // windows-x64 joined the matrix on 2026-09-05.
-  it("the release-target list matches release.yml's build matrix", () => {
-    const targets = [...releaseYml.matchAll(/^\s+- name: ([a-z0-9]+-[a-z0-9]+)$/gm)].map((m) => m[1]);
-    expect(targets.length, "no build targets found in release.yml — the matrix moved").toBeGreaterThan(1);
+  // windows-x64 joined the matrix on 2026-09-05. The matrix moved from
+  // release.yml into the reusable build-release.yml (supply-chain change), and
+  // this read follows it; release.yml must still be the file that calls it.
+  it("the release-target list matches the release build matrix", () => {
+    expect(releaseYml, "release.yml no longer calls build-release.yml").toContain(
+      "uses: ./.github/workflows/build-release.yml"
+    );
+    const targets = [...buildReleaseYml.matchAll(/^\s+- name: ([a-z0-9]+-[a-z0-9]+)$/gm)].map((m) => m[1]);
+    expect(targets.length, "no build targets found in build-release.yml — the matrix moved").toBeGreaterThan(1);
 
     const claim = releasing.match(/builds binaries for (\w+) targets \(([^)]+)\)/s);
     expect(claim, "docs/RELEASING.md no longer states the target list").toBeTruthy();
@@ -681,7 +791,7 @@ describe("numbers the docs state are read back from what they describe", () => {
     for (const t of targets) {
       expect(
         claim![2].includes(t),
-        `docs/RELEASING.md's target list omits ${t}, which release.yml builds`
+        `docs/RELEASING.md's target list omits ${t}, which build-release.yml builds`
       ).toBe(true);
     }
   });
@@ -854,5 +964,149 @@ describe("numbers the docs state are read back from what they describe", () => {
         `README's loop row omits \`${s}\``
       ).toBe(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// docs/GUIDE.md — the adoption guide is held to the code like the README
+// ---------------------------------------------------------------------------
+//
+// The guide exists for adoption, and its readers include agents that will run
+// what it says verbatim. A command that is not dispatched, a slash command
+// that is not registered, or a TOML block gnomon's own parser refuses costs
+// more trust than the guide earns, so each is checked here rather than by
+// reading.
+describe("docs/GUIDE.md names only what exists", () => {
+  const guide = readFileSync(join(repoRoot, "docs/GUIDE.md"), "utf-8");
+
+  it("every `gnomon <command>` it quotes is dispatched", () => {
+    const registry = new Set(CLI_COMMANDS.flatMap((c) => [c.name, ...(c.aliases ?? [])]));
+    // The troubleshooting table's first column quotes what gnomon PRINTS
+    // (`gnomon needs Node.js 20 or newer`), which is not a command. Its other
+    // columns are checked like the rest of the guide.
+    const start = guide.indexOf("## 9. Troubleshooting");
+    const end = guide.indexOf("## 10. FAQ");
+    expect(start > 0 && end > start, "GUIDE.md's troubleshooting section moved").toBe(true);
+    const trouble = guide
+      .slice(start, end)
+      .split("\n")
+      .map((l) => (l.startsWith("| ") ? l.replace(/^\|[^|]*\|/, "|") : l))
+      .join("\n");
+    const commands = guide.slice(0, start) + trouble + guide.slice(end);
+    const quoted = [...commands.matchAll(/`gnomon ([a-z][a-z-]*)/g)].map((m) => m[1]!);
+    expect(quoted.length, "found no quoted commands; did the guide's format change?").toBeGreaterThan(20);
+    const unknown = [...new Set(quoted)].filter((c) => !registry.has(c));
+    expect(unknown, `GUIDE.md quotes commands the CLI does not dispatch: ${unknown.join(", ")}`).toEqual([]);
+  });
+
+  it("every slash command it quotes is registered, or is a role prefix", async () => {
+    const { COMMANDS } = await import("gnomon-core");
+    const registered = new Set(COMMANDS.map((c: { name: string }) => c.name));
+    const roles = await scaffold((root) => new Set(listRoles(loadConfig(root)).map((r) => `/${r}`)));
+    // A backtick opening on `/word`, followed by a space or the closing
+    // backtick, so `/v1/models` and `/api/tags` (URL paths) are not read as commands.
+    const quoted = [...guide.matchAll(/`(\/[a-z]+)(?=[\s`])/g)].map((m) => m[1]!);
+    expect(quoted.length).toBeGreaterThan(10);
+    const unknown = [...new Set(quoted)].filter((c) => !registered.has(c) && !roles.has(c));
+    expect(unknown, `GUIDE.md quotes slash commands that are not registered: ${unknown.join(", ")}`).toEqual([]);
+  });
+
+  it("every TOML block parses with gnomon's own parser and names only real roles", async () => {
+    const { parseToml } = await import("gnomon-core");
+    const blocks = [...guide.matchAll(/^```toml\n([\s\S]*?)^```$/gm)].map((m) => m[1]!);
+    expect(blocks.length, "found no TOML blocks").toBeGreaterThan(10);
+    const roles = await scaffold((root) => new Set(listRoles(loadConfig(root))));
+    for (const block of blocks) {
+      let parsed: Record<string, unknown> = {};
+      expect(() => (parsed = parseToml(block)), `gnomon cannot parse:\n${block}`).not.toThrow();
+      const named = Object.keys((parsed.roles ?? {}) as Record<string, unknown>);
+      const strangers = named.filter((r) => !roles.has(r));
+      expect(strangers, `a GUIDE.md block configures roles the scaffold does not have:\n${block}`).toEqual([]);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Claims found stale while verifying the guide (#69), 2026-11-01
+// ---------------------------------------------------------------------------
+
+/** Every non-test source file in the workspace packages. */
+const sources = (): Array<{ path: string; text: string }> => {
+  const out: Array<{ path: string; text: string }> = [];
+  for (const pkg of readdirSync(join(repoRoot, "packages"))) {
+    const src = join(repoRoot, "packages", pkg, "src");
+    if (!existsSync(src)) continue;
+    for (const f of readdirSync(src)) {
+      if (!f.endsWith(".ts") || f.endsWith(".test.ts")) continue;
+      out.push({ path: `packages/${pkg}/src/${f}`, text: readFileSync(join(src, f), "utf-8") });
+    }
+  }
+  return out;
+};
+
+describe("the help, the build script and the docs say what the code does", () => {
+  // --help listed GNOMON_DIR as "Override .gnomon/ directory path" from the
+  // first commit, and nothing ever read it: `gnomon session` only SETS it for
+  // the commands it runs. A variable that is set is not one that is read.
+  it("every variable --help's Environment section names is read somewhere", () => {
+    const section = help.slice(help.indexOf("\nEnvironment:\n"));
+    const named = [...section.matchAll(/^ {2}([A-Z][A-Z0-9_]+) {2,}/gm)].map((m) => m[1]!);
+    expect(named.length, "the Environment section moved or emptied").toBeGreaterThan(0);
+    const all = sources();
+    for (const name of named) {
+      const read = new RegExp(`\\benv(?:\\.${name}\\b|\\[["'\`]${name}["'\`]\\])`);
+      expect(
+        all.some((s) => read.test(s.text)),
+        `--help documents ${name}, and no source file reads it`
+      ).toBe(true);
+    }
+  });
+
+  // NATIVE_ONLY_COMMANDS exists so this list is not kept by hand; the build
+  // script cannot import it (it runs before anything is built), and its skip
+  // message named three of the five.
+  it("build-native.mjs's skip message names every native-only command", () => {
+    const script = readFileSync(join(repoRoot, "scripts/build-native.mjs"), "utf-8");
+    const surface = readFileSync(join(repoRoot, "packages/gnomon-natives/src/surface.ts"), "utf-8");
+    const declared = [
+      ...surface.match(/NATIVE_ONLY_COMMANDS = \[([\s\S]*?)\] as const;/)![1]!.matchAll(/"([a-z]+)"/g),
+    ].map((m) => m[1]!);
+    const needs = script.slice(script.indexOf("Needs it:"), script.indexOf("To get it:"));
+    expect(needs.length, "the skip message no longer has a \"Needs it\" line").toBeGreaterThan(0);
+    for (const cmd of declared) {
+      expect(new RegExp(`\\b${cmd}\\b`).test(needs), `build-native.mjs omits \`${cmd}\``).toBe(true);
+    }
+  });
+
+  // README's "fifth limit" said `gnomon audit verify` does not check
+  // signatures, long after the CLI began passing [audit.attest] and printing
+  // an anchor line. A reader deciding whether to declare a signer was told the
+  // command would never look at it.
+  it("README describes the anchor check `gnomon audit verify` performs", () => {
+    expect(help, "the CLI no longer passes [audit.attest] to verifyTrail").toMatch(
+      /verifyTrail\(path, attest \? \{ attest \} : \{\}\)/
+    );
+    const flat = readme.replace(/\s+/g, " ");
+    expect(flat).not.toMatch(/audit verify` does not check signatures/);
+    // Every anchor status the CLI can print for a real trail. NOT CHECKED is
+    // excluded: it is reachable only if resolveAudit stops resolving attest.
+    const statuses = [...help.matchAll(/anchor: ([A-Z][A-Z ]*[A-Z]) —/g)]
+      .map((m) => m[1]!)
+      .filter((s, i, a) => a.indexOf(s) === i && s !== "NOT CHECKED");
+    expect(statuses.sort()).toEqual(["BROKEN", "NOT SIGNED", "SIGNED", "UNVERIFIABLE"]);
+    for (const s of statuses) expect(flat, `README does not name \`${s}\``).toContain(`\`${s}\``);
+  });
+
+  // DESIGN.md said `discard` is the default compaction for two months after
+  // the default became `summary`.
+  it("DESIGN.md names the compaction default the code applies", () => {
+    const design = readFileSync(join(repoRoot, "docs/DESIGN.md"), "utf-8").replace(/\s+/g, " ");
+    // The code's default, from a surface that declares none -- not the
+    // scaffold, which writes the value out.
+    const actual = resolveContext({ config: {} } as Parameters<typeof resolveContext>[0]).compaction;
+    for (const m of design.matchAll(/`(discard|summary|truncate)` is the default/g)) {
+      expect(m[1], "DESIGN.md states a compaction default the code does not use").toBe(actual);
+    }
+    expect(design).toContain(`\`${actual}\` is the default`);
   });
 });

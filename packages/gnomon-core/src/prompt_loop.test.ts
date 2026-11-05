@@ -6,10 +6,11 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vites
 import { loadConfig, endpointClass, resolveUi } from "./config.js";
 import { stubDeclaredKeys } from "./test_support.js";
 import { mapBucket } from "./session.js";
+import { AuditTrail, recordHash } from "./audit.js";
 import * as promptLoop from "./prompt_loop.js";
 import { resolve as resolvePath, join as joinPath } from "node:path";
 import { setRoleModel } from "./prompt_loop.js";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, existsSync, statSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
@@ -1256,6 +1257,14 @@ describe("model API errors", () => {
     expect(c({ errName: "TimeoutError", message: "The operation timed out" })).toBe(11);
     expect(c({ message: "fetch failed: ECONNREFUSED" })).toBe(12);
     expect(c({ status: 400, message: "maximum context length exceeded" })).toBe(13);
+    // llama.cpp's wording (R1, 2026-11-02): read as 10 it ended the turn.
+    expect(
+      c({
+        status: 400,
+        message:
+          '{"error":{"code":400,"message":"request (107910 tokens) exceeds the available context size (98304 tokens), try increasing it","type":"exceed_context_size_error"}}',
+      })
+    ).toBe(13);
   });
 
   it("retries a transient failure and reports each attempt", async () => {
@@ -2348,6 +2357,37 @@ describe("runTask — the non-interactive contract", () => {
     });
   }, 20000);
 
+  it("recovers from llama.cpp's context overflow, which it words differently", async () => {
+    const config: any = loadConfig("../..");
+    let call = 0;
+    const llamaOverflowThenFine = (async () => {
+      call++;
+      if (call === 1) {
+        return {
+          ok: false,
+          status: 400,
+          statusText: "Bad Request",
+          text: async () =>
+            JSON.stringify({
+              error: {
+                code: 400,
+                message:
+                  "request (107910 tokens) exceeds the available context size (98304 tokens), try increasing it",
+                type: "exceed_context_size_error",
+              },
+            }),
+        };
+      }
+      return { ok: true, json: async () => ({ message: { content: "recovered and answered" } }) };
+    }) as unknown as typeof fetch;
+
+    await withFetch(llamaOverflowThenFine, async () => {
+      const record = await promptLoop.runTask(config, "do the thing", { role: "implement", yes: true });
+      expect(record.output).toContain("recovered");
+      expect(call).toBeGreaterThanOrEqual(2);
+    });
+  }, 20000);
+
   it("overlaps consecutive read-only calls without changing the transcript", async () => {
     // Recon is where a turn's calls bunch -- read several files, then decide --
     // and the loop ran them strictly one at a time. Overlapping only the tools
@@ -2579,7 +2619,11 @@ describe("runTask — the non-interactive contract", () => {
       const b = await promptLoop.runTask(config, "same input", { role: "smol" });
       const strip = (r: typeof a) => ({ ...r, volatile: undefined });
       expect(strip(a)).toEqual(strip(b));
-      expect(Object.keys(a.volatile)).toEqual(["duration_ms"]);
+      // `model_calls`: what came back per request, with its clock -- which
+      // differs between the two runs, so it is volatile. What each request
+      // carried is counters.model_calls, compared above.
+      expect(Object.keys(a.volatile)).toEqual(["duration_ms", "model_calls"]);
+      expect(a.counters.model_calls!.calls).toEqual(b.counters.model_calls!.calls);
     });
   });
 
@@ -3697,7 +3741,9 @@ describe("request shape follows the endpoint kind", () => {
         for (const k of Object.keys(m)) if (!allowed.has(k)) offenders.push(k);
       }
       for (const k of Object.keys(body)) {
-        if (!["model", "messages", "stream", "temperature", "top_p", "tools"].includes(k)) {
+        // stream_options is OpenAI's own: it asks a streamed reply for usage.
+        // max_tokens is OpenAI's output limit.
+        if (!["model", "messages", "stream", "stream_options", "max_tokens", "temperature", "top_p", "tools"].includes(k)) {
           offenders.push(`payload.${k}`);
         }
       }
@@ -3900,6 +3946,205 @@ describe("measureTreeDelta — measured, not asserted", () => {
   });
 });
 
+describe("measureTreeDelta — fewer git processes, the same numbers", () => {
+  // The status-gated path must give exactly what the old call sequence gave,
+  // in every case the old one handled. Each scenario is measured both ways.
+  const git = (root: string, ...a: string[]) =>
+    execFileSync("git", a, { cwd: root, stdio: "ignore" });
+  const init = (commit: boolean): string => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-tdf-"));
+    git(root, "init", "-q");
+    git(root, "config", "user.email", "t@t");
+    git(root, "config", "user.name", "t");
+    git(root, "config", "core.autocrlf", "false");
+    writeFileSync(join(root, "a.txt"), "alpha\nbeta\ngamma\n");
+    writeFileSync(join(root, "b.txt"), "one\ntwo\n");
+    writeFileSync(join(root, ".gitignore"), "ignored.log\n");
+    if (commit) { git(root, "add", "-A"); git(root, "commit", "-qm", "init"); }
+    return root;
+  };
+  const snap = (root: string, legacy: boolean) =>
+    promptLoop.measureTreeDelta(root, undefined, true, { legacy }).__snapshot ?? null;
+  const flat = (s: ReturnType<typeof snap>) =>
+    s && { head: s.head, tracked: [...s.tracked].sort(), untracked: [...s.untracked].sort() };
+  /** Snapshot, mutate, measure: both ways, and the two must agree exactly. */
+  const both = (root: string, mutate: () => void) => {
+    const f0 = snap(root, false), l0 = snap(root, true);
+    expect(flat(f0)).toEqual(flat(l0));
+    mutate();
+    const fast = promptLoop.measureTreeDelta(root, f0, false, { legacy: false });
+    const legacy = promptLoop.measureTreeDelta(root, l0, false, { legacy: true });
+    expect(fast).toEqual(legacy);
+    return fast;
+  };
+
+  it("a turn that changes nothing", () => {
+    const root = init(true);
+    expect(both(root, () => {})).toMatchObject({ files: 0, insertions: 0, deletions: 0 });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("a tracked file changed by a shell command (no write tool involved)", () => {
+    const root = init(true);
+    expect(both(root, () => writeFileSync(join(root, "b.txt"), "one\ntwo\nthree\n")))
+      .toMatchObject({ files: 1, insertions: 1, deletions: 0 });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("an untracked new file, next to an ignored one", () => {
+    const root = init(true);
+    expect(both(root, () => {
+      writeFileSync(join(root, "new.txt"), "x\ny\n");
+      writeFileSync(join(root, "ignored.log"), "noise\n");
+    })).toMatchObject({ files: 1, insertions: 2 });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("a deleted tracked file", () => {
+    const root = init(true);
+    expect(both(root, () => rmSync(join(root, "a.txt"))))
+      .toMatchObject({ files: 1, insertions: 0, deletions: 3 });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("a repository with no commits yet", () => {
+    const root = init(false);
+    expect(both(root, () => writeFileSync(join(root, "c.txt"), "1\n2\n3\n")))
+      .toMatchObject({ files: 1, insertions: 3 });
+    // Staged but uncommitted, then edited: still no HEAD to diff against.
+    git(root, "add", "a.txt");
+    both(root, () => writeFileSync(join(root, "a.txt"), "alpha\n"));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("a directory that is not a repository", () => {
+    const bare = mkdtempSync(join(tmpdir(), "gnomon-tdf-nogit-"));
+    const fast = promptLoop.measureTreeDelta(bare, undefined, false, { legacy: false });
+    const legacy = promptLoop.measureTreeDelta(bare, undefined, false, { legacy: true });
+    expect(fast).toEqual(legacy);
+    expect(fast.unavailable).toBeTruthy();
+    rmSync(bare, { recursive: true, force: true });
+  });
+
+  it("a project in a subdirectory: untracked files outside it are not its own", () => {
+    const top = init(true);
+    mkdirSync(join(top, "proj"));
+    writeFileSync(join(top, "proj", "p.txt"), "p\n");
+    git(top, "add", "-A"); git(top, "commit", "-qm", "proj");
+    const root = join(top, "proj");
+    expect(both(root, () => {
+      writeFileSync(join(root, "inside.txt"), "in\n");
+      writeFileSync(join(top, "outside.txt"), "out\n");
+      writeFileSync(join(top, "b.txt"), "one\ntwo\nthree\n");   // tracked, outside
+    })).toMatchObject({ files: 2 });
+    rmSync(top, { recursive: true, force: true });
+  });
+
+  // UX2 (2026-11-02): a copied tree has a stale index stat cache, and with
+  // --no-optional-locks every status re-hashed the whole tree and threw the result
+  // away. The first status per process and repository may now refresh it.
+  const indexMtime = (root: string) => statSync(join(root, ".git", "index")).mtimeMs;
+  const aged = (root: string) => {
+    // Files older than the index, so no entry is racily clean and git has no reason
+    // of its own to rewrite a fresh index.
+    const past = new Date(Date.now() - 3600_000);
+    for (const f of ["a.txt", "b.txt", ".gitignore"]) utimesSync(join(root, f), past, past);
+  };
+
+  it("a stale index (a copied repository) is refreshed once, and the numbers do not move", () => {
+    const src = mkdtempSync(join(tmpdir(), "gnomon-tdf-"));
+    git(src, "init", "-q");
+    git(src, "config", "user.email", "t@t");
+    git(src, "config", "user.name", "t");
+    git(src, "config", "core.autocrlf", "false");
+    // No background maintenance: `git commit` starts `git maintenance run
+    // --auto`, and newer git (maintenance.autoDetach, the default on the macOS
+    // runners' git 2.5x) detaches it, so it can still be taking and dropping
+    // .git/objects/maintenance.lock while cpSync below walks the repository.
+    // That was the macOS-only "ENOENT ... .git/objects" in this test.
+    git(src, "config", "maintenance.auto", "false");
+    git(src, "config", "gc.auto", "0");
+    writeFileSync(join(src, "a.txt"), "alpha\nbeta\ngamma\n");
+    writeFileSync(join(src, "b.txt"), "one\ntwo\n");
+    writeFileSync(join(src, ".gitignore"), "ignored.log\n");
+    aged(src);
+    git(src, "add", "-A"); git(src, "commit", "-qm", "init");
+    // A clean copy: new inodes and timestamps, so every index entry's stat info is
+    // stale, and nothing changed, so no `git diff` runs to refresh it in passing.
+    const root = mkdtempSync(join(tmpdir(), "gnomon-tdf-copy-"));
+    cpSync(src, root, { recursive: true });
+    const before = indexMtime(root);
+    expect(promptLoop.__indexRefreshed.has(realpathSync(root))).toBe(false);
+    const fast = snap(root, false);
+    expect(promptLoop.__indexRefreshed.has(realpathSync(root))).toBe(true);
+    // Git for Windows compares less stat information, so a plain copy can leave its
+    // index valid and nothing is written back. The refresh-then-write is what POSIX
+    // git does; the exactness below is the contract on every platform.
+    if (process.platform !== "win32") expect(indexMtime(root)).toBeGreaterThan(before);
+    expect(flat(fast)).toEqual(flat(snap(root, true)));         // and nothing it measures moved
+    both(root, () => writeFileSync(join(root, "b.txt"), "one\ntwo\nthree\n"));
+    rmSync(src, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("only the first status per repository may write the index", () => {
+    const root = init(false);
+    aged(root);
+    git(root, "add", "-A"); git(root, "commit", "-qm", "init");
+    snap(root, false);                                          // the first: may refresh
+    // Same content, new timestamp: stat info goes stale again. A later status must
+    // not take the lock to fix it, and must still report nothing changed.
+    const later = new Date(Date.now() - 60_000);
+    utimesSync(join(root, "a.txt"), later, later);
+    const before = indexMtime(root);
+    const second = snap(root, false);
+    expect(indexMtime(root)).toBe(before);
+    expect(flat(second)).toEqual(flat(snap(root, true)));
+    expect(second?.tracked.size).toBe(0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("a path git would quote falls back to ls-files and still agrees", () => {
+    const root = init(true);
+    both(root, () => writeFileSync(join(root, "päivä.txt"), "a\nb\n"));
+    // Windows forbids " in file names, so that spelling can't occur there; the
+    // non-ASCII name above is the quoted case every platform can hold.
+    if (process.platform !== "win32") both(root, () => writeFileSync(join(root, 'quo"te.txt'), "q\n"));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("a staged rename", () => {
+    const root = init(true);
+    both(root, () => git(root, "mv", "a.txt", "renamed.txt"));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("CRLF-only churn and a binary file", () => {
+    const root = init(true);
+    writeFileSync(join(root, "img.bin"), Buffer.from([0, 1, 2]));
+    git(root, "add", "-A"); git(root, "commit", "-qm", "bin");
+    expect(both(root, () => {
+      writeFileSync(join(root, "a.txt"), "alpha\r\nbeta\r\ngamma\r\n");
+      writeFileSync(join(root, "img.bin"), Buffer.from([0, 9, 9]));
+    })).toMatchObject({ files: 2, crlf_only: 1 });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("spends far fewer git processes on a turn that changed nothing", () => {
+    // UX1W, Windows: ten git calls per turn, ~18 ms each, half of the turn.
+    const root = init(false);   // no commits: four of the old ten failed by design
+    const count = (legacy: boolean) => {
+      const n0 = promptLoop.__treeGitCalls.n;
+      const s = snap(root, legacy);
+      promptLoop.measureTreeDelta(root, s, false, { legacy });
+      return promptLoop.__treeGitCalls.n - n0;
+    };
+    expect(count(true)).toBe(10);
+    expect(count(false)).toBe(2);
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
 describe("the degradation contract", () => {
   const UI = { meta: [], meta_style: "line", think: "hide", spinner: false, color: false, cot: "work" } as any;
   // Local to this block, and returns what `run` returned -- the assertions here
@@ -3918,7 +4163,7 @@ describe("the degradation contract", () => {
     progress: { start() {}, update() {}, stop() {} } as any,
     ui: UI,
     say: (l: string) => said.push(l),
-    audit: { write: (kind: string, f: any) => recs.push({ kind, ...f }), text: (t: string) => t } as any,
+    audit: { write: (kind: string, f: any) => recs.push({ kind, ...f }), text: (t: string) => t, action: (t: string) => t } as any,
   });
 
   // A fallback is the one degradation where the operator is not merely running
@@ -3966,6 +4211,61 @@ describe("the degradation contract", () => {
     expect(turn.model).toBe("fallback-model");
     expect(turn.endpoint).toBe("secondary");
     expect(turn.endpoint_url).toBe("http://fallback.invalid");
+  });
+
+  it("stays on the fallback for the rest of the turn once the primary has failed", async () => {
+    // Re-asking a primary already known to be down at every step paid the whole
+    // retry grace again each time; R1H lost 20 of 30 local-model cells to a 502
+    // outage that way.
+    const dir = mkdtempSync(join(tmpdir(), "fb-"));
+    writeFileSync(join(dir, "a.txt"), "content-a\n");
+    const config: any = loadConfig("../..");
+    config.config = { ...config.config, resilience: { attempts: 1, backoff_ms: 1, transport_grace_ms: 0 } };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const said: string[] = [];
+    const recs: any[] = [];
+    const asked: string[] = [];
+    let fallbackCalls = 0;
+    const turn = await withFetch(
+      (async (url: string) => {
+        asked.push(String(url));
+        if (String(url).includes("primary.invalid")) {
+          throw Object.assign(new Error("fetch failed"), { name: "TypeError" });
+        }
+        if (++fallbackCalls === 1) {
+          return {
+            ok: true,
+            json: async () => ({
+              message: { content: "", tool_calls: [{ function: { name: "read", arguments: { path: join(dir, "a.txt") } } }] },
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ message: { content: "done on the fallback" } }) };
+      }) as unknown as typeof fetch,
+      async () =>
+        await promptLoop.runAgenticTurn(
+          state,
+          "implement",
+          {
+            model: "primary-model", temperature: 0, top_p: 1,
+            target: { model: "primary-model", temperature: 0, top_p: 1, url: "http://primary.invalid", endpoint: "primary" },
+            fallback: { model: "fallback-model", temperature: 0, top_p: 1, url: "http://fallback.invalid", endpoint: "secondary" },
+          } as any,
+          [{ role: "user", content: "go" }],
+          deps(said, recs)
+        )
+    );
+    rmSync(dir, { recursive: true, force: true });
+
+    expect(turn.content).toContain("done on the fallback");
+    // The primary was asked once, at the first step, and not again.
+    expect(asked.filter((u) => u.includes("primary.invalid"))).toHaveLength(1);
+    expect(asked.filter((u) => u.includes("fallback.invalid"))).toHaveLength(2);
+    expect(said.join("\n")).toMatch(/staying on fallback-model/);
+    // One degradation record for the switch, not one per step.
+    expect(recs.filter((r) => r.kind === "degradation" && r.id === "endpoint_fallback")).toHaveLength(1);
+    expect(turn.model).toBe("fallback-model");
+    expect(turn.endpoint).toBe("secondary");
   });
 
   // A reply cut off twice was allowed to stand -- deliberate -- and recorded as
@@ -4299,7 +4599,7 @@ describe("a reply with no usable tool call gets a bounded repair turn", () => {
     progress: { start() {}, update() {}, stop() {} } as any,
     ui: UI,
     say: (l: string) => said.push(l),
-    audit: { write: (kind: string, f: any) => recs.push({ kind, ...f }), text: (t: string) => t } as any,
+    audit: { write: (kind: string, f: any) => recs.push({ kind, ...f }), text: (t: string) => t, action: (t: string) => t } as any,
   });
   const stateWith = (turn?: Record<string, unknown>): any => {
     const config: any = loadConfig("../..");
@@ -4537,4 +4837,69 @@ describe("chainForTurn", () => {
   it("is off for a one-turn prefix, as before", () => {
     expect(promptLoop.chainForTurn(withChain(["a", "b"]), "implement", "implement", true)).toEqual([]);
   });
+});
+
+describe("the audit trail's tool_call record says what a bash call did", () => {
+  // G1 (benchmarks/results/g1-2026-11, on bench/peers-2026-11): gnomon's one
+  // violation in 24 trials was a command that moved `var/` out of the checkout,
+  // and its own trail could not show it. Under `record = "metadata"` the record
+  // kept describeCall's 70-character terminal form and left `args` out, so the
+  // part of the command that did it was gone.
+  const REDACT = ["(api[_-]?key|token|secret|password)\\s*[:=]\\s*\\S+"];
+  const turnWith = async (command: string) => {
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-audit-target-"));
+    const audit = new AuditTrail(
+      { enabled: true, dir, record: "metadata", redact: REDACT, chain: true, invalid_redact: [] },
+      "s"
+    );
+    const config: any = loadConfig("../..");
+    const state: any = {
+      config, exchanges: [], currentRole: "implement",
+      ui: { ...resolveUi(config), cot: "work", think: "hide", color: false },
+    };
+    let call = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => ({
+      ok: true,
+      json: async () => ({
+        message: call++ === 0
+          ? { content: "", tool_calls: [{ id: "c1", function: { name: "bash", arguments: JSON.stringify({ command }) } }] }
+          : { content: "done" },
+      }),
+    })) as unknown as typeof fetch;
+    try {
+      await promptLoop.runAgenticTurn(
+        state, "implement",
+        { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+        [{ role: "user", content: "go" }],
+        { approve: async () => true, progress: { start() {}, update() {}, stop() {} } as any, ui: state.ui, say: () => {}, audit }
+      );
+      const raw = readFileSync(audit.path!, "utf-8");
+      const records = raw.split("\n").filter(Boolean).map((l) => JSON.parse(l));
+      return { raw, record: records.find((r) => r.kind === "tool_call" && r.tool === "bash") };
+    } finally {
+      globalThis.fetch = original;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it("keeps a long command whole in metadata mode, in the record the chain hashes", async () => {
+    // Only echo: the loop really runs it, in this repository.
+    const command =
+      "echo 'moving var/ out of the checkout' && echo 'the part past the old seventy-character cut' && echo END";
+    expect(command.length).toBeGreaterThan(100);
+    const { record } = await turnWith(command);
+    expect(record.target).toBe(command);
+    // Still metadata: the arguments and the output are not recorded.
+    expect(record.args).toBeUndefined();
+    expect(record.result).toBeUndefined();
+    // The hash covers the whole target, so the command cannot be edited unseen.
+    expect(record.hash).toBe(recordHash(record));
+  }, 20000);
+
+  it("scrubs a token from the recorded command with the surface's redact patterns", async () => {
+    const { record, raw } = await turnWith(`echo uploading ${"x".repeat(60)} token=s3cr3t-value-123 && echo sent`);
+    expect(record.target).toBe(`echo uploading ${"x".repeat(60)} [redacted] && echo sent`);
+    expect(raw).not.toContain("s3cr3t-value-123");
+  }, 20000);
 });

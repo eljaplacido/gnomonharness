@@ -47,7 +47,9 @@ edit_format = "str_replace"       # ast (INERT) | hashline (INERT) | str_replace
 sandbox = "confined"              # off | confined | strict
 approval = "on_write"             # never | on_write | always
 role_profile = "local_first"      # local_first | frontier_plan | all_remote
-max_context_tokens = 65536
+max_context_tokens = 65536        # an [endpoints.<name>] block may declare its model's own window
+stream = true                     # stream replies from kind = "openai" endpoints; an endpoint may say stream = false
+max_tokens = 32768                # output limit per reply, thinking included; a role or endpoint may declare its own (0 = none)
 compaction = "summary"            # discard | summary | truncate
 
 [context]
@@ -81,6 +83,17 @@ attempts = 3              # generation retries. 1 disables THESE; transport
                           # attempts = 1 still knocks for the full grace.
 backoff_ms = 500          # doubled each attempt
 request_timeout_ms = 300000   # a reasoning model on a hard task exceeds 120s; a timed-out attempt doubles this
+                              # (for a streamed reply: the wait for its first byte)
+# A streamed reply -- [defaults] stream = true, for kind = "openai" endpoints
+# that do not say stream = false -- is timed by the gap between chunks, so a long reply that is
+# still being written is never cut off for being long. An unstreamed one has
+# only request_timeout_ms, which a long generation reaches.
+stream_idle_timeout_ms = 300000    # silence mid-reply that counts as a stall; the request is aborted and asked again
+stream_total_timeout_ms = 1800000  # overall cap on one streamed reply; not retried, it would run as long again
+# Only the wait for a first byte is charged to the retry budget (attempts x
+# request_timeout_ms); a stream that is arriving is not. So the worst case for
+# one streamed model call is attempts x stream_total_timeout_ms of wall time,
+# and a harness wall shorter than that can end a run mid-call.
 # An endpoint refusing the socket is not an attempt; it is knocked on for a
 # grace instead (0 disables). Left undeclared on purpose: undeclared, a remote
 # endpoint gets 60s (a provider blip) but a server on THIS machine that refuses
@@ -177,6 +190,12 @@ url = "https://opencode.ai/zen/v1/chat/completions"
 kind = "openai"
 api_key_env = "OPENCODE_API_KEY"   # the NAME of the variable, never the key
 provider = "opencode"
+# Recommended for a hosted model: its own window. Without the line below, turns
+# here are trimmed to [defaults] max_context_tokens (65536), sized for a local
+# model. "auto" reads the window from this endpoint's /models once per session
+# (limit.context; 1000000 for deepseek-v4.1-flash, 2026-11) and falls back to
+# [defaults] with a note when it cannot. Or write the number itself.
+# max_context_tokens = "auto"
 
 # OpenCode Go — the $10/mo subscription tier (opencode.ai/go). Cloud, keyed.
 # Model ids are BARE — glm-5.3, deepseek-v4-flash, kimi-k3 — with no provider
@@ -191,6 +210,8 @@ url = "https://opencode.ai/zen/go/v1/chat/completions"
 kind = "openai"
 api_key_env = "OPENCODE_API_KEY"
 provider = "opencode"
+# Recommended, as for zen above: the model's own window instead of 65536.
+# max_context_tokens = "auto"
 
 # Cloud templates — commented so they do not show as unavailable until you want
 # one. Uncomment a block, then store its key with:  gnomon key set <name>
@@ -602,7 +623,7 @@ enabled = true
 
 [[tools]]
 name = "task"
-description = "Run a sub-turn under another role, with its own context. It gets that role's tools."
+description = "Run a sub-turn under another role, with its own context and that role's tools. Delegate a job once: give the complete plan and everything it needs, including the check that shows it is done. Delegate again only when its report shows a concrete failure; a report whose check passed is finished work, so do not send it back to be redone or re-checked."
 enabled = true
 
 # Reaches the network, so it is gated like a write and refused outright when
@@ -666,6 +687,13 @@ const POLICY_TOML = `# Policy: approval gates, sandbox level, edit format.
 # Non-interactive runs have nobody to ask, so a gated call is refused rather
 # than assumed; \`gnomon task --yes\` is what stands in for a person.
 gate = "on_write"                  # never | on_write | always
+#
+# 'npm test' runs package.json's pretest, 'npm install' its lifecycle scripts,
+# 'make' the Makefile: code the repository defines, which no rule over the
+# command line can read. Such a call always names what it runs when it asks.
+# To have every one of them asked, whatever the gate says:
+#   repo_code = true
+# Only a sandbox (exec = "docker" below) contains what that code does.
 
 [sandbox]
 level = "confined"                 # off | confined | strict
@@ -675,6 +703,19 @@ level = "confined"                 # off | confined | strict
 # that runs builds and installers cannot have its shell enumerated in advance.
 # A role holding bash is bounded by bash_deny/bash_allow, not by this line.
 #
+# And bash_deny/bash_allow are an INTENT FILTER, not containment. gnomon reads
+# each command the way the shell will -- 'rm -fr', 'rm -R' and
+# 'rm --recursive --force' are all 'rm -rf', and whatever 'find -exec',
+# 'xargs', 'env' or 'sh -c' runs is checked as well -- so a denied operation
+# asked for in another common spelling is still refused. Code is not:
+# python -c 'import shutil; shutil.rmtree("keep")' deletes a directory with no
+# rm in it to match, and no list of commands names every program that can
+# delete or copy a file. Containment outside the root is a kernel sandbox
+# (exec = "os", below), or running bash in a container that sees only this
+# repository (needs a docker daemon; not on native Windows):
+#   exec  = "docker"
+#   image = "debian:stable-slim"
+#
 # To let the agent reach ONE other checkout, name it here rather than turning
 # the sandbox off. Paths are relative to this repository root, so the grant
 # means the same thing on every clone -- an absolute path would be
@@ -683,9 +724,15 @@ level = "confined"                 # off | confined | strict
 # 'gnomon surface hash' moves when it changes.
 #   extra_roots = ["../sibling-checkout"]
 #
-# network = false stops the webfetch tool. It isolates bash only when exec
-# below is "os" or "docker"; otherwise the prompt loop says so at startup
-# rather than implying protection it lacks.
+# network = false is enforced for the \`webfetch\` tool, which refuses outright,
+# and in bash for the commands whose purpose is the network: curl, wget, nc,
+# ssh, scp/rsync to a remote, python/node/perl/ruby one-liners that open a
+# connection, git pushing to or fetching from a URL, and a package manager
+# handed a registry URL. It is NOT process isolation: a script, a build tool or
+# a package manager run through bash still reaches the network, and the prompt
+# loop says so at startup. With exec = "os" the kernel blocks egress (loopback
+# stays reachable), and with exec = "docker" the container gets no network at
+# all: both are isolation.
 network = false
 #
 # Where bash runs:
@@ -785,14 +832,19 @@ Rules:
   approval is required it shows the diff and asks the operator, and a
   declined call comes back to you as a refusal. Call the tool. A change you
   described is not a change you made.
-- Run what you produced before you end the turn. Turn each constraint the
-  task states into a command that fails if it is violated, run it, and paste
-  the output. Writing the file is not producing the artifact: a script that
-  has never been executed is a guess about what it does, and "it exists" is
-  not "it works".
-- Get to something that works end to end first, then improve it. If the
-  deliverable is not on disk yet, make it exist before refining anything —
-  a turn spent validating a thing that was never produced scores nothing.
+- Run what you produced before you end the turn: a script that has never
+  been executed is a guess about what it does, and "it exists" is not "it
+  works". Check it once against what the task asked for, in one command
+  where you can. Verify in proportion to the task: do not build test
+  suites, helper scripts or extra checks nobody asked for, and do not
+  re-check what already passed.
+- Get to something that works end to end first. If the deliverable is not
+  on disk yet, make it exist before refining anything — a turn spent
+  validating a thing that was never produced scores nothing. Once it works
+  and the task's requirements are met, stop.
+- Keep prose short. One sentence of why before a tool call is enough. The
+  final report says what changed, the check that shows it works, and
+  anything left undone; do not paste output the operator can rerun.
 `;
 
 /**
@@ -858,6 +910,7 @@ interface Template {
  * no provenance looks like a decision someone made deliberately.
  */
 function modelNote(choice: ModelChoice): string {
+  if (choice.note) return choice.note;
   if (choice.fallback) {
     return (
       `# These are generic starter tags: ${choice.fallback}, so nothing could be\n` +
@@ -1037,6 +1090,20 @@ const templatesFor = (choice: ModelChoice): Template[] => [
   { path: join("skills", "writing-tests.md"), content: SKILL_TESTS },
 ];
 
+/**
+ * The scaffold's files as `initSurface` writes them for `choice` (audit on),
+ * by relative path with `/`. `gnomon setup` diffs its proposal against these
+ * for a project that has no .gnomon/ yet, before anything is written.
+ * policy.toml's detected [verify] is not included: setup never edits it.
+ */
+export function scaffoldTexts(choice: ModelChoice): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const t of templatesFor(choice)) {
+    out[t.path.split(/[\\/]/).join("/")] = t.path === "config.toml" ? enableAuditBlock(t.content) : t.content;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Scaffolding
 // ---------------------------------------------------------------------------
@@ -1059,6 +1126,12 @@ export interface InitOptions {
    * pins that.
    */
   noVerify?: boolean;
+  /**
+   * Use these tags instead of detecting them: `gnomon setup` has already
+   * chosen, with the person's yes, and a second detection would be a second
+   * opinion nobody asked for. The scaffold is otherwise exactly init's.
+   */
+  models?: ModelChoice;
 }
 
 export interface InitResult {
@@ -1085,6 +1158,8 @@ export const MACHINE_LOCAL_DIRS = [
   ".gnomon-jobs",
   ".gnomon-loops",
   ".gnomon-shadow",
+  ".gnomon-skills",
+  ".gnomon-trials",
 ];
 
 /**
@@ -1183,7 +1258,7 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
   // surface already made these choices.
   let choice: ModelChoice = options.from
     ? { large: FALLBACK_LARGE, small: FALLBACK_SMALL, detected: [] }
-    : await detectModels();
+    : options.models ?? (await detectModels());
 
   let templates = templatesFor(choice);
   if (options.from) {

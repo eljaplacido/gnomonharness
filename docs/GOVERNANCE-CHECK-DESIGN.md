@@ -113,7 +113,13 @@ send-back with the findings acts on fact.
 - It does not stop a foreign harness *during* the run. Only gnomon's own loop
   can refuse a tool call before it happens. `check` turns that into "refused
   after the fact, before the work is accepted", which is the guarantee a
-  factory or a merge needs.
+  factory or a merge needs. *Since then:* `gnomon guard` (README, "Before the
+  call") refuses a foreign harness's tool call before it runs, from the
+  harness's own pre-tool hook — Claude Code `PreToolUse`, an opencode 2.2
+  plugin, Cursor hooks — with the same prechecks the loop's tools run
+  (`toolCallPolicy` in `tools.ts`) and the rules read from a committed base,
+  as here. It pins the decision on each call the agent proposes, not the
+  agent; a harness without hooks is still only judged by `check`.
 - It does not re-run or re-prompt a model.
 - It does not replace a project's own gates. An orchestrator's own acceptance
   gates judge *what* was built against the spec;
