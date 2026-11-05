@@ -25,8 +25,10 @@ import { join } from "node:path";
 import { createServer, type Server } from "node:http";
 import { execFileSync } from "node:child_process";
 import { osSandbox, _resetOsSandbox, type OsSandbox } from "gnomon-natives";
-import { executeTool, osSandboxPlan, type ToolContext } from "./tools.js";
-import { EXEC_VALUES } from "./config.js";
+import { executeTool, osSandboxPlan, gnomonInstallReadRoots, packageIndexOf, type ToolContext } from "./tools.js";
+import { EXEC_VALUES, auditSurface, resolveExec, type GnomonConfig } from "./config.js";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 
 const okProbe = (over: Partial<Extract<OsSandbox, { bin: string }>["probe"]> = {}): (() => OsSandbox) => () => ({
   bin: "/opt/gnomon-exec",
@@ -125,6 +127,118 @@ describe("osSandboxPlan — refuses rather than run unsandboxed", () => {
     expect(off.args[off.args.indexOf("--network") + 1]).toBe("off");
     rmSync(on.tmp, { recursive: true, force: true });
     rmSync(off.tmp, { recursive: true, force: true });
+  });
+});
+
+describe("[sandbox] reads and read_roots on the surface", () => {
+  const surface = (sandbox: Record<string, unknown>, roles: Record<string, unknown> = {}) =>
+    ({ config: {}, policy: { sandbox }, roles, tools: { tools: [] }, gnomonDir: join(tmpdir(), "none", ".gnomon") }) as unknown as GnomonConfig;
+  const problems = (sandbox: Record<string, unknown>, roles: Record<string, unknown> = {}) =>
+    auditSurface(surface(sandbox, roles)).map((p) => p.problem).join("\n");
+
+  it("resolveExec carries reads as written and read_roots expanded", () => {
+    expect(resolveExec(surface({ exec: "os" }))).toMatchObject({ mode: "os", reads: "all", readRoots: [] });
+    const ex = resolveExec(surface({ exec: "os", reads: "scoped", read_roots: ["~/.cache/pip", "/opt/sdk", "vendor/cache", 3] }));
+    expect(ex.reads).toBe("scoped");
+    expect(ex.readRoots).toEqual([join(homedir(), ".cache/pip"), "/opt/sdk", resolve(tmpdir(), "none", "vendor/cache")]);
+    // A typo is kept as written so osSandboxPlan can refuse it by name.
+    expect(resolveExec(surface({ exec: "os", reads: "scopd" })).reads).toBe("scopd");
+  });
+
+  it("the audit says what a reads setting will do, and never fatally", () => {
+    expect(problems({ exec: "os", reads: "scoped" })).toBe("");
+    expect(problems({ exec: "os", reads: "scopd" })).toContain("does not fall back");
+    expect(problems({ exec: "off", reads: "scoped" })).toContain('only under exec = "os"');
+    expect(problems({ reads: "scoped" }, { r: { exec: "os" } })).not.toContain('only under exec = "os"');
+    expect(problems({ exec: "os", reads: "scoped", read_roots: "~/.cache/pip" })).toContain("not an array");
+    expect(problems({ exec: "os", read_roots: ["/usr"] })).toContain('only under reads = "scoped"');
+    expect(problems({ exec: "os", reads: "scoped", read_roots: ["~"] })).toContain("contains your home directory");
+    expect(problems({ exec: "os", reads: "scoped", read_roots: ["/"] })).toContain("contains your home directory");
+    expect(problems({ exec: "os", reads: "scoped", read_roots: ["/nonexistent-gnomon-read-root"] })).toContain("does not exist");
+    expect(auditSurface(surface({ exec: "os", reads: "scopd", read_roots: ["~"] })).every((p) => !p.fatal)).toBe(true);
+  });
+
+  it("allow_package_index is inert under exec = \"os\", as under docker, and the audit says so", () => {
+    // No per-host allow in the supervisor: the filter refuses the download up
+    // front, with the answer the kernel would give later.
+    const exec = (mode: "off" | "os" | "docker") => ({ mode, image: "i", network: false });
+    expect(packageIndexOf({ exec: exec("off"), packageIndex: ["pypi.org"] })).toEqual(["pypi.org"]);
+    expect(packageIndexOf({ exec: exec("os"), packageIndex: ["pypi.org"] })).toEqual([]);
+    expect(packageIndexOf({ exec: exec("docker"), packageIndex: ["pypi.org"] })).toEqual([]);
+    expect(problems({ network: false, exec: "os", allow_package_index: ["pypi.org"] })).toContain('does not open exec = "os"');
+  });
+});
+
+describe("osSandboxPlan — reads = \"scoped\"", () => {
+  const onWindows = process.platform === "win32";
+  const scopedProbe = okProbe({ reads_scoped_supported: true });
+  const install = () => ["/opt/gnomon"];
+
+  it.skipIf(onWindows)("passes --reads scoped, the read_roots that exist and the install's own directories", () => {
+    const cache = mkdtempSync(join(tmpdir(), "gnomon-readroot-"));
+    try {
+      const r = osSandboxPlan(
+        "ls",
+        { root: "/repo", exec: { network: false, reads: "scoped", readRoots: [cache, join(cache, "missing")] } },
+        "/bin/sh",
+        scopedProbe,
+        install
+      );
+      if (!("file" in r)) throw new Error("expected a plan");
+      try {
+        const before = r.args.slice(0, r.args.indexOf("--"));
+        expect(before[before.indexOf("--reads") + 1]).toBe("scoped");
+        const reads = before.flatMap((a, i) => (a === "--read" ? [before[i + 1]] : []));
+        expect(reads).toEqual([cache, "/opt/gnomon"]);
+      } finally {
+        rmSync(r.tmp, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(cache, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(onWindows)("reads = \"all\" (and no reads at all) passes no read flags", () => {
+    for (const exec of [{ network: true }, { network: true, reads: "all", readRoots: ["/x"] }]) {
+      const r = osSandboxPlan("ls", { root: "/repo", exec }, "/bin/sh", scopedProbe, install);
+      if (!("file" in r)) throw new Error("expected a plan");
+      expect(r.args).not.toContain("--reads");
+      expect(r.args).not.toContain("--read");
+      rmSync(r.tmp, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(onWindows)("refuses a misspelt reads value instead of falling back to \"all\"", () => {
+    const r = osSandboxPlan("ls", { root: "/repo", exec: { network: true, reads: "scopd" } }, "/bin/sh", scopedProbe, install);
+    expect("refusal" in r).toBe(true);
+    if (!("refusal" in r)) return;
+    expect(r.refusal.content).toContain('reads = "scopd"');
+    expect(r.refusal.content).toContain("NOT run");
+  });
+
+  it.skipIf(onWindows)("refuses where the platform cannot scope reads, or gnomon-exec predates it", () => {
+    const mac = osSandboxPlan(
+      "ls",
+      { root: "/repo", exec: { network: true, reads: "scoped" } },
+      "/bin/sh",
+      okProbe({ platform: "macos", reads_scoped_supported: false }),
+      install
+    );
+    expect("refusal" in mac && mac.refusal.content).toContain("Landlock on Linux only");
+    const old = osSandboxPlan("ls", { root: "/repo", exec: { network: true, reads: "scoped" } }, "/bin/sh", okProbe(), install);
+    expect("refusal" in old && old.refusal.content).toContain("predates it");
+  });
+
+  it.skipIf(onWindows)("the install's read roots never include the home directory or anything above it", () => {
+    const home = resolve(homedir());
+    const roots = gnomonInstallReadRoots(join(home, "bin", "gnomon-exec"), join(home, "x", "dist", "tools.js"));
+    for (const r of roots) {
+      expect(r === home || home.startsWith(r.endsWith("/") ? r : r + "/"), r).toBe(false);
+    }
+    // This source tree is a checkout: its root is granted, so `gnomon` and
+    // its natives run inside a scoped bash.
+    const here = gnomonInstallReadRoots("/nonexistent/gnomon-exec");
+    expect(here).toContain(resolve(__dirname, "..", "..", ".."));
   });
 });
 
@@ -289,5 +403,90 @@ describe("bash under exec = \"os\" — the kernel, not the rules, holds the line
       expect(out.content).not.toContain("blocked connect");
       expect(out.content).not.toMatch(/Operation not permitted/);
     });
+  });
+});
+
+// ── reads = "scoped", end to end ──
+//
+// The credential is a FAKE, planted in a fake HOME inside this test's scratch
+// directory; no test here touches the real HOME's credentials.
+
+const scopedSkipWhy =
+  skipWhy || ("probe" in real && real.probe.reads_scoped_supported !== true ? `reads = scoped unsupported here (${real.probe.platform})` : "");
+
+describe("bash under exec = \"os\", reads = \"scoped\" — credentials stay unreadable, tools keep working", () => {
+  let scratch: string;
+  let root: string;
+  let home: string;
+  let cache: string;
+
+  const ctx = (over: Partial<ToolContext> = {}): ToolContext => ({
+    root,
+    sandbox: "confined",
+    gate: "never",
+    approve: async () => true,
+    timeoutMs: 30_000,
+    maxOutputBytes: 32_000,
+    bashAllow: undefined,
+    bashDeny: [],
+    exec: { mode: "os", image: "unused", network: true, reads: "scoped", readRoots: [cache] },
+    ...over,
+  });
+  const off = () => ctx({ exec: { mode: "off", image: "unused", network: true } });
+  const all = () => ctx({ exec: { mode: "os", image: "unused", network: true, reads: "all" } });
+  const bash = (command: string, c: ToolContext) => executeTool("bash", { command }, c, new Set(["bash"]));
+  const inHome = (cmd: string) => `HOME='${home}' sh -c '${cmd}'`;
+
+  beforeEach(() => {
+    scratch = mkdtempSync(join(tmpdir(), "gnomon-os-reads-"));
+    root = join(scratch, "root");
+    home = join(scratch, "home");
+    cache = join(scratch, "cache");
+    mkdirSync(root);
+    mkdirSync(join(home, ".ssh"), { recursive: true });
+    mkdirSync(cache);
+    writeFileSync(join(home, ".ssh", "id_x"), "FAKE-SSH-KEY-gnomon-test\n");
+    writeFileSync(join(cache, "pkg.txt"), "cached-package\n");
+  });
+  afterEach(() => {
+    rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  });
+
+  it.skipIf(!!scopedSkipWhy)(label("cat ~/.ssh/id_x in a fake HOME is refused; exec = off and reads = all read it", scopedSkipWhy), async () => {
+    const out = await bash(inHome("cat ~/.ssh/id_x"), ctx());
+    expect(out.content).not.toContain("FAKE-SSH-KEY");
+    expect(out.content).toContain("Permission denied");
+    for (const control of [off(), all()]) {
+      const c = await bash(inHome("cat ~/.ssh/id_x"), control);
+      expect(c.content, "control must read the fake key").toContain("FAKE-SSH-KEY");
+    }
+  });
+
+  it.skipIf(!!scopedSkipWhy || !has("python3"))(
+    label("python3 -c open(...) of the fake key is refused; the control reads it", scopedSkipWhy || (has("python3") ? "" : "no python3")),
+    async () => {
+      const py = `python3 -c "import os; print(open(os.path.join('${home}', '.ssh', 'id_x')).read())"`;
+      const out = await bash(py, ctx());
+      expect(out.content).not.toContain("FAKE-SSH-KEY");
+      expect(out.content).toContain("PermissionError");
+      const c = await bash(py, off());
+      expect(c.content).toContain("FAKE-SSH-KEY");
+    }
+  );
+
+  it.skipIf(!!scopedSkipWhy)(label("python, node, git, pip and a compiler still work; a declared read_root is readable", scopedSkipWhy), async () => {
+    const steps: [string, string, boolean][] = [
+      ["read_roots", `cat '${cache}/pkg.txt'`, true],
+      ["git", "git init -q r && cd r && echo x > a && git add a && git -c user.email=t@e.invalid -c user.name=t commit -qm m && git log --oneline | wc -l", has("git")],
+      ["python3", "python3 -c 'import json, ssl, sqlite3; print(\"py-ok\")'", has("python3")],
+      ["pip", "python3 -m pip --version", has("python3") && (() => { try { execFileSync("python3", ["-m", "pip", "--version"], { stdio: "ignore" }); return true; } catch { return false; } })()],
+      ["node", "node -e 'console.log(\"node-ok\")'", has("node")],
+      ["cc", 'printf "int main(void){return 0;}" > "$TMPDIR/a.c" && cc "$TMPDIR/a.c" -o "$TMPDIR/a" && "$TMPDIR/a" && echo cc-ok', has("cc")],
+    ];
+    for (const [name, cmd, present] of steps) {
+      if (!present) continue;
+      const out = await bash(cmd, ctx());
+      expect(out.shell_exit, `${name}: ${out.content}`).toBe(0);
+    }
   });
 });

@@ -428,3 +428,289 @@ fn network_on_does_not_filter_sockets() {
     let out = sandboxed(&s, true, "python3 -c 'import socket; socket.socket(socket.AF_INET, socket.SOCK_DGRAM)' && echo UDP-OK");
     assert!(String::from_utf8_lossy(&out.stdout).contains("UDP-OK"), "{out:?}");
 }
+
+// ── reads = scoped ──
+//
+// Every credential here is a FAKE, planted in a fake HOME inside the test's own
+// temp dir; HOME is set to it for the sandboxed command. No test reads, or
+// tries to read, the real HOME's credentials.
+
+/// A fake HOME holding planted (fake) credentials and typical tool caches.
+fn fake_home(s: &Scene) -> PathBuf {
+    let home = s.root.parent().unwrap().join("home");
+    let put = |rel: &str, body: &str| {
+        let p = home.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    };
+    put(".ssh/id_x", "FAKE-SSH-KEY-gnomon-test\n");
+    put(".aws/credentials", "[default]\naws_secret_access_key = FAKE-AWS-gnomon-test\n");
+    put(".config/gh/hosts.yml", "github.com:\n    oauth_token: FAKE-GH-gnomon-test\n");
+    put(".cargo/credentials.toml", "[registry]\ntoken = \"FAKE-CARGO-gnomon-test\"\n");
+    put("notes.txt", "FAKE-NOTES-gnomon-test\n");
+    // Typical caches: readable under scoped reads.
+    put(".cache/pip/http/cached", "pip-cache\n");
+    put(".npm/_cacache/index", "npm-cache\n");
+    put(".cargo/registry/index/entry", "cargo-registry\n");
+    put(".gitconfig", "[user]\n\tname = Test\n\temail = test@example.invalid\n");
+    home
+}
+
+fn scoped_in(s: &Scene, home: &Path, network: bool, reads: &[&Path], script: &str) -> Output {
+    let mut c = Command::new(bin());
+    c.args(["sandbox", "--root"]).arg(&s.root).arg("--write").arg(&s.tmp);
+    c.args(["--network", if network { "on" } else { "off" }, "--reads", "scoped"]);
+    for r in reads {
+        c.arg("--read").arg(r);
+    }
+    c.args(["--", "/bin/sh", "-c", script]).current_dir(&s.root).env("HOME", home).env("TMPDIR", &s.tmp);
+    c.output().expect("spawn gnomon-exec sandbox")
+}
+
+fn all_in(s: &Scene, home: &Path, script: &str) -> Output {
+    Command::new(bin())
+        .args(["sandbox", "--root"])
+        .arg(&s.root)
+        .arg("--write")
+        .arg(&s.tmp)
+        .args(["--network", "on", "--", "/bin/sh", "-c", script])
+        .current_dir(&s.root)
+        .env("HOME", home)
+        .output()
+        .expect("spawn gnomon-exec sandbox")
+}
+
+fn require_scoped() -> Option<String> {
+    let p = probe();
+    if p["reads_scoped_supported"].as_bool() == Some(true) {
+        return None;
+    }
+    Some(p["reason"].as_str().unwrap_or("reads = scoped is not supported on this platform").to_string())
+}
+
+macro_rules! require_scoped {
+    () => {
+        if let Some(why) = require_scoped() {
+            eprintln!("SKIPPED: {}", why);
+            return;
+        }
+    };
+}
+
+fn text(o: &Output) -> String {
+    format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr))
+}
+
+#[test]
+fn scoped_reads_refuse_a_credential_in_home_and_the_control_reads_it() {
+    require_scoped!();
+    let s = scene();
+    let home = fake_home(&s);
+    // The control first: the same command under reads = all reads the fake
+    // key. Without it, a refusal below could be a typo in the path.
+    let ctl = all_in(&s, &home, "cat ~/.ssh/id_x");
+    assert!(text(&ctl).contains("FAKE-SSH-KEY"), "control must read it: {ctl:?}");
+    for net in [true, false] {
+        for (what, script) in [
+            ("cat", "cat ~/.ssh/id_x"),
+            ("aws", "cat ~/.aws/credentials"),
+            ("gh", "cat ~/.config/gh/hosts.yml"),
+            ("cargo creds", "cat ~/.cargo/credentials.toml"),
+            ("a plain file in HOME", "cat ~/notes.txt"),
+            ("grep -r HOME", "grep -rh FAKE ~ 2>&1"),
+        ] {
+            let out = scoped_in(&s, &home, net, &[], script);
+            let t = text(&out);
+            assert!(!t.contains("FAKE-"), "{what} (network {net}) read a planted secret: {t}");
+            assert!(t.contains("Permission denied"), "{what} (network {net}) failed for another reason: {t}");
+        }
+        let out = scoped_in(&s, &home, net, &[], "ls ~");
+        assert!(!out.status.success() && text(&out).contains("Permission denied"), "listing HOME: {out:?}");
+    }
+}
+
+#[test]
+fn scoped_reads_refuse_python_open_of_a_credential() {
+    require_scoped!();
+    require_tool!("python3");
+    let s = scene();
+    let home = fake_home(&s);
+    let py = "python3 -c 'import os; print(open(os.path.expanduser(\"~/.ssh/id_x\")).read())'";
+    let ctl = all_in(&s, &home, py);
+    assert!(text(&ctl).contains("FAKE-SSH-KEY"), "control: {ctl:?}");
+    for net in [true, false] {
+        let out = scoped_in(&s, &home, net, &[], py);
+        let t = text(&out);
+        assert!(!t.contains("FAKE-SSH-KEY"), "{t}");
+        assert!(t.contains("PermissionError"), "{t}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn scoped_reads_follow_no_link_out_of_scope() {
+    require_scoped!();
+    let s = scene();
+    let home = fake_home(&s);
+    std::os::unix::fs::symlink(home.join(".ssh/id_x"), s.root.join("lnk")).unwrap();
+    let out = scoped_in(&s, &home, true, &[], "cat lnk");
+    assert!(!text(&out).contains("FAKE-SSH-KEY") && text(&out).contains("Permission denied"), "symlink: {out:?}");
+    // A hard link made from inside would give the key the root's read right;
+    // Landlock refuses the link itself (EXDEV), so nothing is created.
+    let out = scoped_in(&s, &home, true, &[], "ln ~/.ssh/id_x hl; cat hl");
+    assert!(!text(&out).contains("FAKE-SSH-KEY"), "hard link: {out:?}");
+    assert!(!s.root.join("hl").exists(), "the hard link was created");
+}
+
+#[test]
+fn scoped_reads_cannot_execute_outside_the_scope() {
+    require_scoped!();
+    let s = scene();
+    let home = fake_home(&s);
+    std::fs::create_dir_all(home.join("bin")).unwrap();
+    std::fs::copy("/bin/true", home.join("bin/mytrue")).unwrap();
+    let out = scoped_in(&s, &home, true, &[], "~/bin/mytrue");
+    assert_eq!(out.status.code(), Some(126), "exec needs a read: {out:?}");
+    // Granted with --read, it runs.
+    let out = scoped_in(&s, &home, true, &[&home.join("bin")], "~/bin/mytrue");
+    assert!(out.status.success(), "{out:?}");
+}
+
+#[test]
+fn scoped_reads_leave_ordinary_tools_and_caches_working() {
+    require_scoped!();
+    let s = scene();
+    let home = fake_home(&s);
+    for net in [true, false] {
+        // System paths, the root, the temp dir, the typical caches and git's own config.
+        let out = scoped_in(
+            &s,
+            &home,
+            net,
+            &[],
+            "head -c1 /etc/passwd >/dev/null && echo hi > f && cat f && echo t > \"$TMPDIR/x\" && cat \"$TMPDIR/x\" \
+             && cat ~/.cache/pip/http/cached ~/.npm/_cacache/index ~/.cargo/registry/index/entry \
+             && git config --global user.name",
+        );
+        assert!(out.status.success(), "network {net}: {out:?}");
+        let t = String::from_utf8_lossy(&out.stdout).to_string();
+        for want in ["hi", "t", "pip-cache", "npm-cache", "cargo-registry", "Test"] {
+            assert!(t.lines().any(|l| l == want), "missing {want:?}: {t}");
+        }
+    }
+    if have("git") {
+        let out = scoped_in(
+            &s,
+            &home,
+            false,
+            &[],
+            "git init -q r && cd r && echo x > a && git add a && git commit -qm m && git log --oneline | wc -l",
+        );
+        assert!(out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "1", "git: {out:?}");
+    }
+    if have("python3") {
+        let out = scoped_in(&s, &home, false, &[], "python3 -c 'import json, ssl, sqlite3, subprocess; print(\"py-ok\")'");
+        assert!(text(&out).contains("py-ok"), "python3: {out:?}");
+        let pip = scoped_in(&s, &home, false, &[], "python3 -m pip --version");
+        if Command::new("python3").args(["-m", "pip", "--version"]).output().is_ok_and(|o| o.status.success()) {
+            assert!(pip.status.success(), "pip: {pip:?}");
+        }
+    }
+    if have("cc") {
+        let out = scoped_in(
+            &s,
+            &home,
+            false,
+            &[],
+            "printf 'int main(void){return 0;}' > \"$TMPDIR/a.c\" && cc \"$TMPDIR/a.c\" -o \"$TMPDIR/a\" && \"$TMPDIR/a\" && echo cc-ok",
+        );
+        assert!(text(&out).contains("cc-ok"), "cc: {out:?}");
+    }
+    if have("node") {
+        // node is often installed under the real HOME (nvm): gnomon passes the
+        // runtime's prefix as a --read, and so does this test.
+        let node = String::from_utf8(Command::new("sh").args(["-c", "readlink -f \"$(command -v node)\""]).output().unwrap().stdout).unwrap();
+        let prefix = Path::new(node.trim()).parent().and_then(|p| p.parent()).unwrap().to_path_buf();
+        if exposes_home(&prefix) {
+            eprintln!("SKIPPED node: its prefix {} is HOME or above it", prefix.display());
+        } else {
+            let out = scoped_in(&s, &home, false, &[&prefix], "node -e 'console.log(\"node-ok\")'");
+            assert!(text(&out).contains("node-ok"), "node: {out:?}");
+        }
+    }
+}
+
+/// A --read of this path would be refused because it covers a home directory.
+fn exposes_home(p: &Path) -> bool {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    home.starts_with(p)
+}
+
+#[test]
+fn a_grant_that_would_expose_a_credential_is_refused_never_run() {
+    require_scoped!();
+    let s = scene();
+    let home = fake_home(&s);
+    let marker = s.outside.join("ran.txt");
+    let script = format!("echo ran > {}", sh_quote(&marker));
+    let base = |root: &Path| -> Vec<String> {
+        vec!["sandbox".into(), "--root".into(), root.display().to_string(), "--reads".into(), "scoped".into()]
+    };
+    let tail = |mut v: Vec<String>| -> Vec<String> {
+        v.extend(["--".into(), "/bin/sh".into(), "-c".into(), script.clone()]);
+        v
+    };
+    let cases: Vec<Vec<String>> = vec![
+        tail([base(&s.root), vec!["--read".into(), home.display().to_string()]].concat()),
+        tail([base(&s.root), vec!["--read".into(), home.join(".cargo").display().to_string()]].concat()),
+        tail([base(&s.root), vec!["--read".into(), home.join(".ssh").display().to_string()]].concat()),
+        tail([base(&s.root), vec!["--write".into(), home.display().to_string()]].concat()),
+        tail(base(&home)),
+        tail([base(&s.root), vec!["--read".into(), "/".into()]].concat()),
+    ];
+    for args in cases {
+        let out = Command::new(bin()).args(&args).env("HOME", &home).output().unwrap();
+        assert_eq!(out.status.code(), Some(125), "{args:?}: {out:?}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("cannot keep"), "{out:?}");
+        assert!(!marker.exists(), "{args:?} ran the command");
+    }
+}
+
+#[test]
+fn a_malformed_read_scope_is_refused_never_run() {
+    let s = scene();
+    let marker = s.outside.join("ran.txt");
+    let script = format!("echo ran > {}", sh_quote(&marker));
+    let root = s.root.display().to_string();
+    let cases: Vec<Vec<String>> = vec![
+        vec!["--reads".into(), "maybe".into()],
+        vec!["--read".into(), s.tmp.display().to_string()],
+        vec!["--reads".into(), "scoped".into(), "--read".into(), s.root.join("missing").display().to_string()],
+    ];
+    for extra in cases {
+        let mut args: Vec<String> = vec!["sandbox".into(), "--root".into(), root.clone()];
+        args.extend(extra.clone());
+        args.extend(["--".into(), "/bin/sh".into(), "-c".into(), script.clone()]);
+        let out = Command::new(bin()).args(&args).output().unwrap();
+        assert_eq!(out.status.code(), Some(125), "{extra:?}: {out:?}");
+        assert!(!marker.exists(), "{extra:?} ran the command");
+    }
+}
+
+#[test]
+fn the_probe_publishes_the_read_scope_and_its_limits() {
+    let p = probe();
+    let lim = p["scoped_not_enforced"].as_array().expect("scoped limits are published");
+    assert!(lim.iter().any(|l| l.as_str().unwrap_or("").contains("/etc")), "/etc stays readable, and says so: {p}");
+    if cfg!(target_os = "linux") {
+        assert_eq!(p["reads_scoped_supported"], p["supported"], "{p}");
+        if p["supported"] == true {
+            let reads: Vec<&str> = p["scoped_reads"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+            assert!(reads.contains(&"/usr") && reads.contains(&"/etc"), "{reads:?}");
+            let prot: Vec<&str> = p["scoped_protected"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+            assert!(prot.iter().any(|q| q.ends_with("/.ssh")), "{prot:?}");
+        }
+    } else {
+        assert_eq!(p["reads_scoped_supported"], false);
+    }
+}

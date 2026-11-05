@@ -541,7 +541,8 @@ fn print_usage() {
     println!("  gnomon-exec step     --cmd <command> [--timeout-ms <ms>]");
     println!("  gnomon-exec validate   --session <file> [--fixture <golden.json>]");
     println!("  gnomon-exec hash       --session <file>");
-    println!("  gnomon-exec sandbox    --root <dir> [--write <dir>]... [--network on|off] -- <program> [args...]");
+    println!("  gnomon-exec sandbox    --root <dir> [--write <dir>]... [--network on|off]");
+    println!("                         [--reads all|scoped] [--read <path>]... -- <program> [args...]");
     println!("  gnomon-exec sandbox-probe");
 }
 
@@ -550,6 +551,8 @@ fn print_usage() {
 fn sandbox_cmd(args: &[String]) -> ! {
     let mut root: Option<std::path::PathBuf> = None;
     let mut writable = Vec::new();
+    let mut readable = Vec::new();
+    let mut reads = sandbox::Reads::All;
     let mut network = false;
     let mut i = 0;
     while i < args.len() {
@@ -564,6 +567,18 @@ fn sandbox_cmd(args: &[String]) -> ! {
             }
             "--write" => {
                 writable.push(value(i).into());
+                i += 2;
+            }
+            "--read" => {
+                readable.push(value(i).into());
+                i += 2;
+            }
+            "--reads" => {
+                reads = match value(i).as_str() {
+                    "all" => sandbox::Reads::All,
+                    "scoped" => sandbox::Reads::Scoped,
+                    v => sandbox::refuse(&format!("--reads must be all or scoped, not {v:?}")),
+                };
                 i += 2;
             }
             "--network" => {
@@ -582,7 +597,11 @@ fn sandbox_cmd(args: &[String]) -> ! {
         }
     }
     let Some(root) = root else { sandbox::refuse("--root is required") };
-    let policy = sandbox::Policy { root, writable, network };
+    // A --read with reads = all would read as a restriction that is not there.
+    if reads == sandbox::Reads::All && !readable.is_empty() {
+        sandbox::refuse("--read is meaningful only with --reads scoped (under --reads all every path is readable)");
+    }
+    let policy = sandbox::Policy { root, writable, readable, reads, network };
     sandbox::run(&policy, &args[i..])
 }
 

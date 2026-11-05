@@ -9,7 +9,16 @@
 //! out to execute.
 //!
 //! THE POLICY, the same on every platform that has one:
-//!   - Reads and execution are allowed everywhere, so system tools work.
+//!   - `--reads all` (the default): reads and execution are allowed everywhere,
+//!     so system tools work.
+//!   - `--reads scoped` (Linux only): reads -- and so execution, which needs a
+//!     read -- are allowed only beneath the root, the writable directories, the
+//!     system directories in `SYSTEM_READ`, the toolchain directories in
+//!     `HOME_TOOLCHAIN_READ` that exist, and every `--read` path the caller
+//!     names. Landlock is an allow-list: what is not granted is unreadable, so
+//!     `~/.ssh` is unreadable because nothing grants it, and any grant that
+//!     would cover a path in `PROTECTED_HOME` is refused (or, for a default,
+//!     dropped) rather than applied.
 //!   - Writes (create, modify, truncate, delete, rename, link, mkdir, mknod)
 //!     are allowed only beneath the project root, the per-call temp directory
 //!     and any `--write` directory the caller names, plus the handful of device
@@ -38,6 +47,16 @@ use std::path::{Path, PathBuf};
 /// executable) and 127 (not found), which the shell already owns.
 pub const SANDBOX_REFUSED: i32 = 125;
 
+/// How far a command's reads reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reads {
+    /// Every file the user can read. The default, and the only mode before
+    /// `--reads` existed.
+    All,
+    /// The allow-list in the module comment. Linux only.
+    Scoped,
+}
+
 /// What the caller asked for.
 #[derive(Debug, Clone)]
 pub struct Policy {
@@ -45,8 +64,176 @@ pub struct Policy {
     pub root: PathBuf,
     /// Further writable directories: the per-call temp dir, `extra_roots`.
     pub writable: Vec<PathBuf>,
+    /// Further readable paths (directories or files) under `Reads::Scoped`:
+    /// `[sandbox] read_roots`, and the gnomon install the caller runs from.
+    pub readable: Vec<PathBuf>,
+    pub reads: Reads,
     /// May the command reach hosts other than this one?
     pub network: bool,
+}
+
+/// System directories a scoped command may read, when they exist: where
+/// programs, their libraries and their configuration live, plus the kernel's
+/// views and the device files. An allow-list, so whatever these hold stays
+/// readable -- /etc included.
+pub const SYSTEM_READ: &[&str] = &[
+    "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt", "/proc", "/sys", "/dev",
+    "/snap", "/nix/store", "/home/linuxbrew/.linuxbrew",
+];
+
+/// Toolchain and package-cache paths under `$HOME` a scoped command may read,
+/// when they exist. Chosen to hold programs and downloaded packages, never a
+/// login: `~/.cargo/bin` and `~/.cargo/registry` rather than `~/.cargo`, which
+/// holds `credentials.toml`; git's configuration file by file, because
+/// `~/.config/git/credentials` is where git's store helper keeps passwords.
+pub const HOME_TOOLCHAIN_READ: &[&str] = &[
+    ".local/bin", ".local/lib", ".local/share/pnpm", ".cargo/bin", ".cargo/registry", ".cargo/git", ".rustup",
+    ".nvm", ".volta", ".bun/bin", ".deno/bin", ".pyenv", ".rbenv", "go/bin", "go/pkg/mod", ".npm",
+    ".cache/pip", ".cache/uv", ".cache/go-build", ".cache/pypoetry", ".cache/node/corepack", ".cache/node-gyp",
+    ".cache/pnpm", ".cache/yarn", ".m2/repository", ".gradle/caches",
+    ".gradle/wrapper", ".gitconfig", ".config/git/config", ".config/git/ignore", ".config/git/attributes",
+];
+
+/// Where credentials live, relative to a home directory. Under `Reads::Scoped`
+/// none of these is granted, and a grant that would cover one -- the root, a
+/// writable directory, a `--read` -- is refused. Landlock is an allow-list, so
+/// this list does not make anything unreadable by itself; it stops a grant
+/// (`--read ~`, a root of `$HOME`) from making it readable again.
+pub const PROTECTED_HOME: &[&str] = &[
+    ".ssh", ".gnupg", ".aws", ".azure", ".config/gcloud", ".kube", ".docker", ".config/gh", ".config/hub",
+    ".config/glab-cli", ".netrc", ".git-credentials", ".config/git/credentials", ".npmrc", ".yarnrc",
+    ".yarnrc.yml", ".pypirc", ".gem/credentials", ".cargo/credentials", ".cargo/credentials.toml",
+    ".m2/settings.xml", ".gradle/gradle.properties", ".terraform.d", ".vault-token", ".password-store",
+    ".local/share/keyrings", ".pki", ".local/share/gnomon/credentials.json", ".claude", ".claude.json", ".codex",
+    ".local/share/opencode", ".mozilla", ".thunderbird", ".config/google-chrome", ".config/chromium",
+    ".config/BraveSoftware", ".config/microsoft-edge", ".config/vivaldi", ".config/opera", "snap/firefox",
+    "snap/chromium",
+];
+
+/// The same, under `$XDG_CONFIG_HOME` and `$XDG_DATA_HOME` when they are set.
+const PROTECTED_XDG_CONFIG: &[&str] = &["gh", "hub", "glab-cli", "gcloud", "git/credentials"];
+const PROTECTED_XDG_DATA: &[&str] = &["gnomon/credentials.json", "keyrings", "opencode"];
+
+/// Every home directory this process can name: `$HOME` and the password
+/// database's entry. They differ under a substituted HOME, and a credential
+/// under either is someone's.
+fn homes() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(h) = std::env::var_os("HOME").map(PathBuf::from).filter(|h| h.is_absolute()) {
+        out.push(h);
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: getpwuid returns a pointer into static storage or null; it
+        // is read once, here, before anything else could call it.
+        unsafe {
+            let pw = libc::getpwuid(libc::getuid());
+            if !pw.is_null() && !(*pw).pw_dir.is_null() {
+                let dir = std::ffi::CStr::from_ptr((*pw).pw_dir);
+                use std::os::unix::ffi::OsStrExt;
+                out.push(PathBuf::from(std::ffi::OsStr::from_bytes(dir.to_bytes())));
+            }
+        }
+    }
+    let mut seen = Vec::new();
+    for h in out {
+        let c = std::fs::canonicalize(&h).unwrap_or(h);
+        if !seen.contains(&c) {
+            seen.push(c);
+        }
+    }
+    seen
+}
+
+/// The credential locations `Reads::Scoped` keeps unreadable, as absolute
+/// paths. Each is listed both as named and, when it exists, as its canonical
+/// target, so a `~/.ssh` that is a symlink is protected at both ends.
+pub fn protected_paths() -> Vec<PathBuf> {
+    let mut raw = Vec::new();
+    for h in homes() {
+        raw.extend(PROTECTED_HOME.iter().map(|r| h.join(r)));
+    }
+    for (var, list) in [("XDG_CONFIG_HOME", PROTECTED_XDG_CONFIG), ("XDG_DATA_HOME", PROTECTED_XDG_DATA)] {
+        if let Some(base) = std::env::var_os(var).map(PathBuf::from).filter(|b| b.is_absolute()) {
+            raw.extend(list.iter().map(|r| base.join(r)));
+        }
+    }
+    let mut out: Vec<PathBuf> = Vec::new();
+    for p in raw {
+        if let Ok(c) = std::fs::canonicalize(&p) {
+            if !out.contains(&c) {
+                out.push(c);
+            }
+        }
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// The protected path a read grant of `grant` would expose: one beneath it,
+/// or one it is beneath.
+pub fn exposes<'a>(grant: &Path, protected: &'a [PathBuf]) -> Option<&'a PathBuf> {
+    protected.iter().find(|q| q.starts_with(grant) || grant.starts_with(q))
+}
+
+/// Everything a `Reads::Scoped` command may read besides the writable
+/// directories, with whether each is a directory (Landlock grants a file only
+/// the rights a file can carry). `Err` names a grant the caller made that
+/// would expose a credential: that is refused, never trimmed, because the
+/// caller asked for something this mode cannot give.
+pub fn read_grants(policy: &Policy) -> Result<Vec<(PathBuf, bool)>, String> {
+    let protected = protected_paths();
+    let asked = std::iter::once(("--root", &policy.root))
+        .chain(policy.writable.iter().map(|w| ("--write", w)))
+        .chain(policy.readable.iter().map(|r| ("--read", r)));
+    for (what, p) in asked {
+        if let Some(q) = exposes(p, &protected) {
+            return Err(format!(
+                "reads = scoped cannot keep {} unreadable: {what} {} contains it (or is inside it). \
+                 Grant a narrower directory, or use reads = \"all\" knowing that reads are not confined",
+                q.display(),
+                p.display()
+            ));
+        }
+    }
+    let mut grants: Vec<(PathBuf, bool)> = Vec::new();
+    let push = |p: PathBuf, grants: &mut Vec<(PathBuf, bool)>| {
+        // Defaults that would expose a credential are dropped, not refused:
+        // dropping one only takes access away.
+        // Nor is one a granted directory already covers (/bin is /usr/bin).
+        if exposes(&p, &protected).is_some() || grants.iter().any(|(g, d)| g == &p || (*d && p.starts_with(g))) {
+            return;
+        }
+        let is_dir = p.is_dir();
+        grants.push((p, is_dir));
+    };
+    for s in SYSTEM_READ {
+        if let Ok(c) = std::fs::canonicalize(s) {
+            if c.is_dir() {
+                push(c, &mut grants);
+            }
+        }
+    }
+    // /etc/resolv.conf is a symlink into /run on systemd hosts; a resolver that
+    // cannot read it falls back to 127.0.0.1:53, so grant the one file.
+    if let Ok(c) = std::fs::canonicalize("/etc/resolv.conf") {
+        if !grants.iter().any(|(g, d)| *d && c.starts_with(g)) {
+            push(c, &mut grants);
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from).filter(|h| h.is_absolute()).or_else(|| homes().into_iter().next()) {
+        for rel in HOME_TOOLCHAIN_READ {
+            if let Ok(c) = std::fs::canonicalize(home.join(rel)) {
+                push(c, &mut grants);
+            }
+        }
+    }
+    for r in &policy.readable {
+        grants.push((r.clone(), r.is_dir()));
+    }
+    Ok(grants)
 }
 
 /// What this machine can enforce, for `gnomon-exec sandbox-probe`.
@@ -71,17 +258,40 @@ pub struct Probe {
     /// The general limits: true on every platform, published so nobody reads
     /// more containment into `os` than is there.
     pub not_enforced: Vec<&'static str>,
+    /// Can `sandbox --reads scoped` run here?
+    pub reads_scoped_supported: bool,
+    /// Under `--reads scoped`, what is readable on this machine besides the
+    /// root, the writable directories and `--read` paths: the system
+    /// directories and toolchain paths that exist here.
+    pub scoped_reads: Vec<String>,
+    /// Under `--reads scoped`, the credential locations no grant may cover.
+    pub scoped_protected: Vec<String>,
+    /// The limits of `--reads scoped` in particular.
+    pub scoped_not_enforced: Vec<&'static str>,
 }
 
 /// The limits of this sandbox, said once, here, and printed by `probe`.
 pub const NOT_ENFORCED: &[&str] = &[
-    "reads: the command can read any file your user can (secrets in $HOME included)",
+    "reads, under reads = \"all\" (the default): the command can read any file your user can (secrets in $HOME included); reads = \"scoped\" narrows this on Linux",
     "writes inside the root: .gnomon/, .git/ and every other file under the project root stay writable",
     "unix sockets: a daemon reachable over one (the docker socket, the systemd user bus via systemd-run, a running tmux) can act outside the sandbox",
     "loopback: a local service that itself reaches the network (a proxy, a DNS resolver) is reachable",
     "inbound: a server the command binds on a non-loopback address accepts connections",
     "signals: the command can signal other processes your user owns",
     "already-open descriptors: anything inherited is used as inherited",
+];
+
+/// The limits of `--reads scoped`: what it does not hide.
+pub const SCOPED_NOT_ENFORCED: &[&str] = &[
+    "an allow-list, not a deny-list: everything under the system directories stays readable, /etc included (and whatever an administrator or a tool left world-readable there)",
+    "inside the root everything is readable: a .env, a token in .git/config, a key someone committed",
+    "the environment: bash inherits gnomon's, so a token in an environment variable is readable with printenv",
+    "unix sockets: an agent that holds a key (ssh-agent, gpg-agent, a keyring over D-Bus, the docker socket) can still be asked to use it; the key file stays unreadable, the capability does not",
+    "a hard link to a credential placed inside the root beforehand is readable: Landlock judges the path, not the inode (creating one from inside the sandbox is refused)",
+    "already-open descriptors: anything inherited is used as inherited",
+    "command lines of your other processes (/proc/<pid>/cmdline) are readable; their environments and memory are not (Landlock denies ptrace-mode access to processes outside the sandbox)",
+    "toolchain defaults (HOME_TOOLCHAIN_READ) are trusted to hold no credentials; a token someone wrote into ~/.cargo/registry or ~/.npm is readable",
+    "Linux only: on macOS and elsewhere reads = scoped refuses rather than runs",
 ];
 
 /// Print `msg` as the wrapper's refusal and exit 125. Never returns.
@@ -102,6 +312,11 @@ fn canonical_dir(p: &Path, what: &str) -> Result<PathBuf, String> {
     Ok(c)
 }
 
+/// Canonical, absolute, existing file or directory -- or a refusal.
+fn canonical_path(p: &Path, what: &str) -> Result<PathBuf, String> {
+    std::fs::canonicalize(p).map_err(|e| format!("{what} {} cannot be resolved: {e}", p.display()))
+}
+
 impl Policy {
     /// Resolve every path to its canonical form, refusing on any that fails.
     pub fn canonical(&self) -> Result<Policy, String> {
@@ -112,6 +327,12 @@ impl Policy {
                 .iter()
                 .map(|w| canonical_dir(w, "--write"))
                 .collect::<Result<_, _>>()?,
+            readable: self
+                .readable
+                .iter()
+                .map(|r| canonical_path(r, "--read"))
+                .collect::<Result<_, _>>()?,
+            reads: self.reads,
             network: self.network,
         })
     }
@@ -132,7 +353,33 @@ pub fn run(policy: &Policy, argv: &[String]) -> ! {
         Ok(p) => p,
         Err(e) => refuse(&e),
     };
-    platform::run(&policy, argv)
+    // Resolve the read scope here, in the process the caller waits on, so a
+    // grant that would expose a credential is refused before anything forks.
+    let grants = match policy.reads {
+        Reads::All => None,
+        Reads::Scoped => match read_grants(&policy) {
+            Ok(g) => Some(g),
+            Err(e) => refuse(&e),
+        },
+    };
+    platform::run(&policy, grants.as_deref(), argv)
+}
+
+/// The probe's description of `--reads scoped` on this machine.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn scoped_description() -> (Vec<String>, Vec<String>) {
+    let probe_policy = Policy {
+        root: PathBuf::from("/nonexistent-gnomon-probe-root"),
+        writable: vec![],
+        readable: vec![],
+        reads: Reads::Scoped,
+        network: true,
+    };
+    let reads = read_grants(&probe_policy)
+        .map(|g| g.into_iter().map(|(p, _)| p.display().to_string()).collect())
+        .unwrap_or_default();
+    let protected = protected_paths().into_iter().map(|p| p.display().to_string()).collect();
+    (reads, protected)
 }
 
 pub fn probe() -> Probe {
@@ -168,10 +415,14 @@ mod unsupported {
             reason: Some(WHY.into()),
             degraded: vec![],
             not_enforced: NOT_ENFORCED.to_vec(),
+            reads_scoped_supported: false,
+            scoped_reads: vec![],
+            scoped_protected: vec![],
+            scoped_not_enforced: SCOPED_NOT_ENFORCED.to_vec(),
         }
     }
 
-    pub fn run(_policy: &Policy, _argv: &[String]) -> ! {
+    pub fn run(_policy: &Policy, _grants: Option<&[(PathBuf, bool)]>, _argv: &[String]) -> ! {
         refuse(WHY)
     }
 }
@@ -196,8 +447,12 @@ mod macos {
             mechanism: if present { "seatbelt".into() } else { "none".into() },
             landlock_abi: None,
             reason: (!present).then(|| format!("{SANDBOX_EXEC} is missing")),
-            degraded: vec![],
+            degraded: vec!["reads = \"scoped\" is not implemented on macOS: it refuses rather than runs".to_string()],
             not_enforced: NOT_ENFORCED.to_vec(),
+            reads_scoped_supported: false,
+            scoped_reads: vec![],
+            scoped_protected: vec![],
+            scoped_not_enforced: SCOPED_NOT_ENFORCED.to_vec(),
         }
     }
 
@@ -237,7 +492,16 @@ mod macos {
         p
     }
 
-    pub fn run(policy: &Policy, argv: &[String]) -> ! {
+    pub fn run(policy: &Policy, grants: Option<&[(PathBuf, bool)]>, argv: &[String]) -> ! {
+        if grants.is_some() || policy.reads == Reads::Scoped {
+            // Not written, so not offered: a Seatbelt read allow-list needs the
+            // system paths macOS itself reads, and nobody has run one here.
+            refuse(
+                "reads = \"scoped\" is implemented on Linux (Landlock) only; on macOS it refuses rather \
+                 than run with reads unconfined. Set reads = \"all\" to run with the write and network \
+                 sandbox only",
+            );
+        }
         if !Path::new(SANDBOX_EXEC).is_file() {
             refuse(&format!("{SANDBOX_EXEC} is missing, so nothing can enforce the sandbox"));
         }
@@ -258,7 +522,11 @@ mod macos {
 pub mod linux {
     //! FILESYSTEM -- Landlock. A ruleset that HANDLES every write right the
     //! kernel knows, and grants them beneath the writable directories only.
-    //! Read and execute are not handled, so they stay allowed everywhere.
+    //! Under `--reads all`, read and execute are not handled, so they stay
+    //! allowed everywhere. Under `--reads scoped`, READ_FILE and READ_DIR are
+    //! handled too and granted only on `read_grants` (and the writable
+    //! directories). EXECUTE stays unhandled, but exec opens the file for
+    //! reading, so a program outside the read scope cannot be run either.
     //!
     //! NETWORK -- `--network off`. Landlock cannot express it: its network
     //! rules (ABI 4) match TCP ports, not addresses, so they cannot tell
@@ -302,6 +570,7 @@ pub mod linux {
     pub const FS_EXECUTE: u64 = 1 << 0;
     pub const FS_WRITE_FILE: u64 = 1 << 1;
     pub const FS_READ_FILE: u64 = 1 << 2;
+    pub const FS_READ_DIR: u64 = 1 << 3;
     pub const FS_REMOVE_DIR: u64 = 1 << 4;
     pub const FS_REMOVE_FILE: u64 = 1 << 5;
     pub const FS_MAKE_CHAR: u64 = 1 << 6;
@@ -379,6 +648,10 @@ pub mod linux {
             libc::ENOSYS => "this kernel has no Landlock (it needs Linux 5.13 or later, built with \
                 CONFIG_SECURITY_LANDLOCK). Set [sandbox] exec = \"docker\", or exec = \"off\" to run bash \
                 unsandboxed on purpose"
+                .into(),
+            libc::EPERM => "the Landlock syscalls are refused (EPERM): a seccomp profile blocks them, as a \
+                container runtime's can. Allow landlock_create_ruleset, landlock_add_rule and \
+                landlock_restrict_self there, or set [sandbox] exec = \"docker\""
                 .into(),
             e => format!("Landlock is unavailable (errno {e})"),
         }
@@ -556,10 +829,42 @@ pub mod linux {
                 "this kernel has no seccomp user notification (Linux 5.0+), which network = false needs".into(),
             );
         }
-        // SAFETY: an invalid pidfd only probes for the syscall's existence.
-        let r = unsafe { libc::syscall(libc::SYS_pidfd_getfd, -1, 0, 0) };
-        if r < 0 && errno() == libc::ENOSYS {
-            return Some("this kernel has no pidfd_getfd (Linux 5.6+), which network = false needs".into());
+        // Not "does the syscall exist" but "does it work here": on this
+        // process's own pidfd, which needs no ptrace right. A container's
+        // seccomp profile can refuse it outright -- Docker's default allows
+        // pidfd_getfd only with CAP_SYS_PTRACE -- and then the supervisor
+        // could verify no connect, loopback included. Measured 2026-11-05 in
+        // a `--network none` container on the default profile: EPERM, and
+        // every connect refused while this probe still said "supported".
+        // SAFETY: pidfd_open of this process; the fds are closed below.
+        let me = unsafe { libc::syscall(libc::SYS_pidfd_open, libc::getpid(), 0) } as i32;
+        if me < 0 {
+            let e = errno();
+            return Some(if e == libc::ENOSYS {
+                "this kernel has no pidfd_open (Linux 5.3+), which network = false needs".into()
+            } else {
+                format!("pidfd_open is refused here (errno {e}), which network = false needs")
+            });
+        }
+        // SAFETY: duplicating this process's own stderr through its own pidfd.
+        let got = unsafe { libc::syscall(libc::SYS_pidfd_getfd, me, 2, 0) } as i32;
+        let e = errno();
+        // SAFETY: closed once each.
+        unsafe {
+            if got >= 0 {
+                libc::close(got);
+            }
+            libc::close(me);
+        }
+        if got < 0 {
+            return Some(match e {
+                libc::ENOSYS => "this kernel has no pidfd_getfd (Linux 5.6+), which network = false needs".into(),
+                _ => format!(
+                    "pidfd_getfd is refused here (errno {e}), so the supervisor could verify no connect, loopback \
+                     included. Inside a container this is its seccomp profile: Docker's default allows \
+                     pidfd_getfd only with CAP_SYS_PTRACE (`docker run --cap-add SYS_PTRACE`)"
+                ),
+            });
         }
         None
     }
@@ -588,6 +893,7 @@ pub mod linux {
             degraded.push(format!("network = false cannot be enforced: {n}"));
         }
         let ok = abi.is_ok();
+        let (scoped_reads, scoped_protected) = if ok { scoped_description() } else { (vec![], vec![]) };
         Probe {
             platform: "linux",
             supported: ok,
@@ -604,6 +910,10 @@ pub mod linux {
             },
             degraded,
             not_enforced: NOT_ENFORCED.to_vec(),
+            reads_scoped_supported: ok,
+            scoped_reads,
+            scoped_protected,
+            scoped_not_enforced: SCOPED_NOT_ENFORCED.to_vec(),
         }
     }
 
@@ -632,11 +942,14 @@ pub mod linux {
         Ok(())
     }
 
-    /// Confine THIS process's filesystem writes, irrevocably, for it and every
-    /// process it starts.
-    fn apply_landlock(policy: &Policy) -> Result<(), String> {
+    /// The read rights `--reads scoped` handles. Never part of `write_rights`.
+    pub const READ_RIGHTS: u64 = FS_READ_FILE | FS_READ_DIR;
+
+    /// Confine THIS process's filesystem writes -- and, with `grants`, its
+    /// reads -- irrevocably, for it and every process it starts.
+    fn apply_landlock(policy: &Policy, grants: Option<&[(PathBuf, bool)]>) -> Result<(), String> {
         let abi = landlock_abi().map_err(landlock_unavailable)?;
-        let handled = write_rights(abi);
+        let handled = write_rights(abi) | if grants.is_some() { READ_RIGHTS } else { 0 };
         let attr = RulesetAttr { handled_access_fs: handled };
         // SAFETY: attr outlives the call; the size is the struct's.
         let ruleset = unsafe {
@@ -659,6 +972,9 @@ pub mod linux {
                 let Ok(meta) = std::fs::metadata(p) else { continue };
                 let access = if meta.is_dir() { FS_WRITE_FILE } else { (FS_WRITE_FILE | FS_TRUNCATE) & handled & FILE_RIGHTS };
                 add_rule(ruleset, p, access)?;
+            }
+            for (p, is_dir) in grants.unwrap_or(&[]) {
+                add_rule(ruleset, p, if *is_dir { READ_RIGHTS } else { FS_READ_FILE })?;
             }
             set_no_new_privs()?;
             // SAFETY: ruleset is a valid Landlock ruleset fd.
@@ -720,11 +1036,11 @@ pub mod linux {
         std::process::exit(if e.raw_os_error() == Some(libc::ENOENT) { 127 } else { 126 });
     }
 
-    pub fn run(policy: &Policy, argv: &[String]) -> ! {
+    pub fn run(policy: &Policy, grants: Option<&[(PathBuf, bool)]>, argv: &[String]) -> ! {
         if policy.network {
             // Filesystem only: confine this process and become the command.
             // No fork, no supervisor -- the cheap path.
-            if let Err(e) = apply_landlock(policy) {
+            if let Err(e) = apply_landlock(policy, grants) {
                 refuse(&e);
             }
             exec_argv(argv);
@@ -737,7 +1053,7 @@ pub mod linux {
         if let Err(e) = landlock_abi() {
             refuse(&landlock_unavailable(e));
         }
-        supervised(policy, argv)
+        supervised(policy, grants, argv)
     }
 
     // ── The supervised path (--network off) ──
@@ -774,7 +1090,7 @@ pub mod linux {
         }
     }
 
-    fn supervised(policy: &Policy, argv: &[String]) -> ! {
+    fn supervised(policy: &Policy, grants: Option<&[(PathBuf, bool)]>, argv: &[String]) -> ! {
         let status = pipe(); // S -> G: C's wait status, 4 bytes
         let mut chan = [0i32; 2]; // C -> S: the listener fd, SCM_RIGHTS
         // SAFETY: chan has room for two fds.
@@ -793,7 +1109,7 @@ pub mod linux {
                 unsafe {
                     libc::close(status[0]);
                 }
-                supervisor(policy, argv, status[1], chan)
+                supervisor(policy, grants, argv, status[1], chan)
             }
             _ => {
                 // G
@@ -838,7 +1154,7 @@ pub mod linux {
         std::process::exit(SANDBOX_REFUSED)
     }
 
-    fn supervisor(policy: &Policy, argv: &[String], status_w: i32, chan: [i32; 2]) -> ! {
+    fn supervisor(policy: &Policy, grants: Option<&[(PathBuf, bool)]>, argv: &[String], status_w: i32, chan: [i32; 2]) -> ! {
         // SAFETY: plain prctl; orphans of the command reparent to S, so they
         // stay S's descendants and Yama keeps letting S serve them.
         unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
@@ -857,7 +1173,7 @@ pub mod linux {
                 libc::close(status_w);
                 libc::close(chan[0]);
             }
-            command(policy, argv, chan[1]);
+            command(policy, grants, argv, chan[1]);
         }
 
         // S: no stdin or stdout -- it must not hold the caller's pipes open
@@ -893,8 +1209,8 @@ pub mod linux {
     }
 
     /// C: confine, filter, hand the listener to S, become the command.
-    fn command(policy: &Policy, argv: &[String], chan: i32) -> ! {
-        if let Err(e) = apply_landlock(policy) {
+    fn command(policy: &Policy, grants: Option<&[(PathBuf, bool)]>, argv: &[String], chan: i32) -> ! {
+        if let Err(e) = apply_landlock(policy, grants) {
             refuse(&e);
         }
         let listener = match install_network_filter() {
@@ -1268,6 +1584,14 @@ pub mod linux {
         }
 
         #[test]
+        fn read_rights_are_separate_from_write_rights() {
+            for abi in 1..=7 {
+                assert_eq!(write_rights(abi) & READ_RIGHTS, 0, "write_rights must not handle reads (reads = all)");
+            }
+            assert_eq!(READ_RIGHTS & FS_EXECUTE, 0, "EXECUTE stays unhandled; exec needs READ_FILE anyway");
+        }
+
+        #[test]
         fn write_rights_grow_with_the_abi_and_never_include_reads() {
             for abi in 1..=7 {
                 let w = write_rights(abi);
@@ -1278,6 +1602,43 @@ pub mod linux {
             assert_ne!(write_rights(2) & FS_REFER, 0);
             assert_eq!(write_rights(2) & FS_TRUNCATE, 0);
             assert_ne!(write_rights(3) & FS_TRUNCATE, 0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    #[test]
+    fn a_grant_exposes_a_credential_beneath_it_or_around_it() {
+        let protected = vec![PathBuf::from("/home/u/.ssh"), PathBuf::from("/home/u/.cargo/credentials.toml")];
+        assert_eq!(exposes(Path::new("/home/u"), &protected), Some(&protected[0]), "a grant of HOME covers ~/.ssh");
+        assert_eq!(exposes(Path::new("/"), &protected), Some(&protected[0]));
+        assert_eq!(exposes(Path::new("/home/u/.ssh/keys"), &protected), Some(&protected[0]), "inside one");
+        assert_eq!(exposes(Path::new("/home/u/.cargo"), &protected), Some(&protected[1]), "~/.cargo holds credentials.toml");
+        assert_eq!(exposes(Path::new("/home/u/.cargo/registry"), &protected), None);
+        assert_eq!(exposes(Path::new("/home/u/project"), &protected), None);
+        // Component-wise, not string prefixes: ~/.sshd is not ~/.ssh.
+        assert_eq!(exposes(Path::new("/home/u/.sshd"), &protected), None);
+    }
+
+    #[test]
+    fn no_default_read_grant_covers_a_protected_location() {
+        let home = Path::new("/h");
+        let protected: Vec<PathBuf> = PROTECTED_HOME.iter().map(|r| home.join(r)).collect();
+        for rel in HOME_TOOLCHAIN_READ {
+            assert_eq!(exposes(&home.join(rel), &protected), None, "~/{rel} would expose a credential");
+        }
+        for s in SYSTEM_READ {
+            assert_eq!(exposes(Path::new(s), &protected), None, "{s}");
+        }
+    }
+
+    #[test]
+    fn the_protected_list_names_the_usual_credential_stores() {
+        for must in [".ssh", ".aws", ".config/gh", ".netrc", ".docker", ".gnupg", ".local/share/gnomon/credentials.json", ".mozilla", ".config/google-chrome"] {
+            assert!(PROTECTED_HOME.contains(&must), "{must}");
         }
     }
 }

@@ -10988,7 +10988,7 @@ export async function runPromptLoop(
     // first command rather than by it.
     const execHere = resolveExec(config, state.currentRole);
     const osSummary =
-      execHere.mode === "os" ? osSandboxSummary((state.network ?? networkDeclared) === true) : undefined;
+      execHere.mode === "os" ? osSandboxSummary((state.network ?? networkDeclared) === true, undefined, execHere.reads) : undefined;
     if (osSummary) console.log(paint(ui, osSummary.ok ? "gray" : "red", `  ${osSummary.line}`));
     if (sandboxLevel !== "off" && networkDeclared === false && !(osSummary?.ok)) {
       // One line. It printed four on every launch, which is a wall nobody

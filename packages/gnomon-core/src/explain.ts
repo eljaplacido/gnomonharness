@@ -157,7 +157,7 @@ const TOPICS: Record<ExplainTopic, Builder> = {
     const ex = resolveExec(config, role);
     const execLine =
       ex.mode === "os"
-        ? `os — ${osSandboxSummary(policy.sandbox?.network === true).line.replace(/^sandbox: exec = "os" /, "")}`
+        ? `os — ${osSandboxSummary(policy.sandbox?.network === true, undefined, ex.reads).line.replace(/^sandbox: exec = "os" /, "")}`
         : ex.mode === "docker"
           ? `docker (${ex.image}), network ${ex.network ? "on" : "none"}`
           : "off — bash runs on the host, bounded by the rules above only";
@@ -205,6 +205,8 @@ const TOPICS: Record<ExplainTopic, Builder> = {
         ...allow.slice(0, 6).map((x) => bullet(x)),
         `bash_deny       ${deny.length} pattern(s)`,
         `exec            ${execLine}`,
+        `reads           ${ex.reads === "scoped" ? `scoped${ex.readRoots.length > 0 ? `, ${ex.readRoots.length} read_roots declared` : ""}` : ex.reads}` +
+          (ex.mode === "os" ? "" : ' (read only under exec = "os")'),
       ],
       next: [
         "To let the agent reach one other checkout, name it rather than turning",

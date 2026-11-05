@@ -8,6 +8,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, dirname, relative, basename, sep, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { SourceEntry } from "./session.js";
 // Deliberate cycle: skills.ts imports parseToml from here. Both directions are
 // used only inside function bodies, never at module scope, so the partially
@@ -364,6 +365,16 @@ export interface Policy {
      * shell.ts bashNetworkEgress, docs/CONTRACTS.md §32.
      */
     allow_package_index?: string[];
+    /**
+     * How far bash's reads reach under `exec = "os"`: "all" (the default) or
+     * "scoped" (Linux; Landlock read rights). See resolveExec, READS_VALUES.
+     */
+    reads?: string;
+    /**
+     * Further paths a scoped bash may read: tool caches and toolchains outside
+     * the defaults. `~/` is the user's home; relative paths are from the root.
+     */
+    read_roots?: string[];
     // `env_whitelist` was declared here and read by nothing -- no code path, no
     // test, no doc. A surface author who wrote it got a key the harness ignores,
     // which is the published-option-that-does-nothing defect this project
@@ -3313,6 +3324,74 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
   }
 }
 
+// [sandbox] reads / read_roots. Read only by exec = "os" (osSandboxPlan); an
+// unknown value refuses there rather than falling back, so say so here first.
+{
+  const sb = (config.policy?.sandbox ?? {}) as { reads?: unknown; read_roots?: unknown; exec?: unknown };
+  const where = ".gnomon/policy.toml [sandbox]";
+  const reads = sb.reads;
+  if (reads !== undefined && !(READS_VALUES as readonly unknown[]).includes(reads)) {
+    problems.push({
+      where,
+      problem:
+        `reads = ${JSON.stringify(reads)} is not one of ${READS_VALUES.join(" | ")}. It does not fall back: ` +
+        `under exec = "os" bash refuses every command until it is one of them.`,
+      fix: 'Use reads = "scoped" to confine reads, or remove the key for "all".',
+      fatal: false,
+    });
+  }
+  const anyOs = sb.exec === "os" || Object.values(config.roles ?? {}).some((r) => (r as RoleDef | undefined)?.exec === "os");
+  if (reads === "scoped" && !anyOs) {
+    problems.push({
+      where,
+      problem: 'reads = "scoped" narrows reads only under exec = "os", and no role here runs bash that way: it changes nothing.',
+      fix: 'Set exec = "os" as well, or remove reads.',
+      fatal: false,
+    });
+  }
+  const rr = sb.read_roots;
+  if (rr !== undefined && !Array.isArray(rr)) {
+    problems.push({
+      where,
+      problem: "read_roots is not an array, so it grants nothing.",
+      fix: 'Write it as a list, e.g. read_roots = ["~/.local/go"].',
+      fatal: false,
+    });
+  } else if (Array.isArray(rr)) {
+    if (reads !== "scoped") {
+      problems.push({
+        where,
+        problem: 'read_roots is read only under reads = "scoped"; with reads = "all" every path is readable already.',
+        fix: 'Set reads = "scoped", or remove read_roots.',
+        fatal: false,
+      });
+    }
+    const root = resolve(config.gnomonDir, "..");
+    const home = resolve(homedir());
+    for (const entry of rr) {
+      if (typeof entry !== "string") continue;
+      const abs = expandReadRoot(entry, root);
+      if (home === abs || home.startsWith(abs.endsWith(sep) ? abs : abs + sep)) {
+        problems.push({
+          where,
+          problem:
+            `read_roots names ${entry}, which contains your home directory and so its credential stores: ` +
+            `under reads = "scoped" gnomon-exec refuses every command rather than grant it.`,
+          fix: "Name the cache or toolchain directory itself, e.g. \"~/.cache/pip\".",
+          fatal: false,
+        });
+      } else if (!existsSync(abs)) {
+        problems.push({
+          where,
+          problem: `read_roots names ${entry}, which does not exist here — it grants nothing.`,
+          fix: "Remove it, or check the path.",
+          fatal: false,
+        });
+      }
+    }
+  }
+}
+
   for (const [name, raw] of Object.entries(declared)) {
     const where = `.gnomon/config.toml [endpoints.${name}]`;
     // Read as raw TOML: the point is to see the fields EndpointConfig has no
@@ -4141,12 +4220,57 @@ export function resolveSandboxLevel(config: GnomonConfig): "off" | "confined" | 
 /** The published `[sandbox] exec` values. See the enumerations contract. */
 export type ExecMode = (typeof EXEC_VALUES)[number];
 
+/**
+ * `[sandbox] reads`: how far bash's reads reach under exec = "os".
+ *
+ *   all     every file the user can read (the default; what exec = "os" did
+ *           before this key existed)
+ *   scoped  Linux only: the root, the per-call temp dir, extra_roots, system
+ *           directories, the gnomon install, toolchain caches in $HOME and
+ *           read_roots. Credential stores in $HOME stay unreadable. See
+ *           crates/gnomon-exec/src/sandbox.rs.
+ *
+ * Not one of the published enumerations (CONTRACTS.md §3): it is read by
+ * exec = "os" only. A value that is neither does NOT fall back: bash refuses
+ * under exec = "os" until it is fixed, because falling back to "all" would
+ * be a typo that silently unscopes reads.
+ */
+export const READS_VALUES = ["all", "scoped"] as const;
+export type ReadsMode = (typeof READS_VALUES)[number];
+
 /** Where `bash` actually runs. See resolveExec. */
 export interface ResolvedExec {
   mode: ExecMode;
   image: string;
   /** Whether the sandbox gets a network. Follows [sandbox] network. */
   network: boolean;
+  /**
+   * `[sandbox] reads` as written ("all" when absent). Anything but "all" or
+   * "scoped" is kept as written, so exec = "os" can refuse it by name.
+   */
+  reads: string;
+  /** `[sandbox] read_roots`, absolute. Read only under reads = "scoped". */
+  readRoots: string[];
+}
+
+/**
+ * `[sandbox] read_roots`, resolved: `~` and `~/x` against the user's home,
+ * relative paths against the repository root, absolute ones as written.
+ * Non-strings are dropped. Existence is checked where the paths are used.
+ */
+export function resolveReadRoots(config: GnomonConfig): string[] {
+  const raw = (config.policy?.sandbox as { read_roots?: unknown } | undefined)?.read_roots;
+  if (!Array.isArray(raw)) return [];
+  const root = resolve(config.gnomonDir, "..");
+  return raw
+    .filter((r): r is string => typeof r === "string" && r.trim().length > 0)
+    .map((r) => expandReadRoot(r, root));
+}
+
+function expandReadRoot(r: string, root: string): string {
+  if (r === "~") return homedir();
+  if (r.startsWith("~/")) return resolve(homedir(), r.slice(2));
+  return isAbsolute(r) ? resolve(r) : resolve(root, r);
 }
 
 /**
@@ -4186,7 +4310,9 @@ export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
     (typeof roleDef?.image === "string" && roleDef.image) ||
     (typeof sandbox.image === "string" && sandbox.image) ||
     "debian:stable-slim";
-  return { mode, image, network: sandbox.network === true };
+  const readsRaw = (config.policy?.sandbox as { reads?: unknown } | undefined)?.reads;
+  const reads = readsRaw === undefined ? "all" : typeof readsRaw === "string" ? readsRaw : JSON.stringify(readsRaw);
+  return { mode, image, network: sandbox.network === true, reads, readRoots: resolveReadRoots(config) };
 }
 
 /**

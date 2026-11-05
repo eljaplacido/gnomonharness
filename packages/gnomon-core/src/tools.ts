@@ -33,6 +33,7 @@ import {
 import { osSandbox, type OsSandbox } from "gnomon-natives";
 import { resolve, relative, isAbsolute, dirname, basename, join, sep, win32 as win32Path } from "node:path";
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { lookup as dnsLookupCb } from "node:dns";
 import { homedir, tmpdir } from "node:os";
 import { promisify } from "node:util";
@@ -1021,7 +1022,11 @@ export interface ToolContext {
    * Where `bash` runs. Undefined or mode "off" means the host, which is the
    * default and the behaviour that shipped. See resolveExec.
    */
-  exec?: { mode: ExecMode; image: string; network: boolean };
+  /**
+   * Where bash runs (resolveExec). `reads` / `readRoots` are read by exec =
+   * "os" only, and are optional so a context built by hand means reads = "all".
+   */
+  exec?: { mode: ExecMode; image: string; network: boolean; reads?: string; readRoots?: string[] };
   gate: ApprovalGate;
   approve: Approver;
   /** bash timeout, ms */
@@ -1776,9 +1781,15 @@ export function sandboxCommand(
  */
 export function osSandboxPlan(
   command: string,
-  ctx: { root: string; extraRoots?: string[]; network?: boolean; exec?: { network: boolean } },
+  ctx: {
+    root: string;
+    extraRoots?: string[];
+    network?: boolean;
+    exec?: { network: boolean; reads?: string; readRoots?: string[] };
+  },
   shellBin: string,
-  probe: () => OsSandbox = osSandbox
+  probe: () => OsSandbox = osSandbox,
+  installRoots: (bin: string) => string[] = gnomonInstallReadRoots
 ):
   | { refusal: ToolOutcome }
   | { file: string; args: string[]; env: NodeJS.ProcessEnv; tmp: string; network: boolean } {
@@ -1801,10 +1812,29 @@ export function osSandboxPlan(
       "os sandbox unsupported on Windows"
     );
   }
+  // [sandbox] reads. Checked before the probe: a misspelt value is a property
+  // of the surface, and it must not fall back to "all" in silence.
+  const reads = ctx.exec?.reads ?? "all";
+  if (reads !== "all" && reads !== "scoped") {
+    return refuse(
+      `[sandbox] reads = ${JSON.stringify(reads)} is not one of "all" | "scoped". It does not fall back to "all", ` +
+        `because a typo would then unscope reads without a word. Fix the value in .gnomon/policy.toml.`,
+      "invalid [sandbox] reads"
+    );
+  }
   const sb = probe();
   if ("error" in sb) return refuse(`gnomon-exec, which applies the sandbox, is unavailable: ${sb.error}`, "no gnomon-exec");
   if (!sb.probe.supported) {
     return refuse(`this machine cannot enforce it: ${sb.probe.reason ?? "unsupported"}.`, "os sandbox unsupported here");
+  }
+  if (reads === "scoped" && sb.probe.reads_scoped_supported !== true) {
+    return refuse(
+      sb.probe.reads_scoped_supported === false
+        ? `[sandbox] reads = "scoped" is declared, and this platform cannot scope reads (${sb.probe.platform}: ` +
+            `it is implemented with Landlock on Linux only). Set reads = "all" to run with the write and network sandbox only.`
+        : `[sandbox] reads = "scoped" is declared, and ${sb.bin} predates it. Rebuild it with \`pnpm run build:native\`.`,
+      "read scoping unsupported here"
+    );
   }
   // The session grant (/network) wins over the declaration, as it does for
   // webfetch. Only an explicit true opens the network.
@@ -1826,6 +1856,21 @@ export function osSandboxPlan(
       return false;
     }
   });
+  // reads = "scoped": what the command may read beyond the root, the temp dir,
+  // extra_roots and gnomon-exec's own system and toolchain defaults. Declared
+  // read_roots go through as written (gnomon-exec refuses one that would
+  // expose a credential store); the install's own directories are dropped
+  // when they are the home directory or above it, rather than refused.
+  const readArgs =
+    reads === "scoped"
+      ? [
+          "--reads", "scoped",
+          ...[...new Set([...(ctx.exec?.readRoots ?? []).filter(existsPath), ...installRoots(sb.bin)])].flatMap((r) => [
+            "--read",
+            r,
+          ]),
+        ]
+      : [];
   return {
     file: sb.bin,
     args: [
@@ -1834,6 +1879,7 @@ export function osSandboxPlan(
       "--write", tmp,
       ...extra.flatMap((r) => ["--write", r]),
       "--network", network ? "on" : "off",
+      ...readArgs,
       "--",
       shellBin, "-c", command,
     ],
@@ -1845,6 +1891,47 @@ export function osSandboxPlan(
   };
 }
 
+function existsPath(p: string): boolean {
+  try {
+    statSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The directories gnomon itself runs from, which a scoped bash must be able
+ * to read for `gnomon`, `node` and gnomon-exec to work inside it: the
+ * gnomon-exec binary's directory, the node runtime's prefix (nvm puts it under
+ * $HOME), and the gnomon packages -- the checkout for a source build, the
+ * outermost node_modules for an npm install. Each is dropped when it is the
+ * home directory or above it: granting that would expose every credential
+ * store, and gnomon-exec would refuse the command.
+ */
+export function gnomonInstallReadRoots(bin: string, here: string = fileURLToPath(import.meta.url)): string[] {
+  const out: string[] = [dirname(bin)];
+  try {
+    out.push(dirname(dirname(realpathSync(process.execPath))));
+  } catch {
+    // no runtime path to grant
+  }
+  const pkg = dirname(dirname(here)); // packages/gnomon-core, from src/ or dist/
+  const checkout = dirname(dirname(pkg));
+  const nm = here.split(sep).indexOf("node_modules");
+  if (existsPath(join(checkout, "pnpm-workspace.yaml")) && existsPath(join(checkout, "packages", "gnomon-cli"))) {
+    out.push(checkout);
+  } else if (nm > 0) {
+    out.push(here.split(sep).slice(0, nm + 1).join(sep) || sep);
+  } else {
+    out.push(pkg);
+  }
+  const home = resolve(homedir());
+  return [...new Set(out.map((p) => resolve(p)))].filter(
+    (p) => existsPath(p) && p !== home && !home.startsWith(p.endsWith(sep) ? p : p + sep)
+  );
+}
+
 /**
  * One line for the operator: what `exec = "os"` will enforce on this machine,
  * or that bash will refuse every command. Printed at startup and by
@@ -1852,7 +1939,8 @@ export function osSandboxPlan(
  */
 export function osSandboxSummary(
   network: boolean,
-  probe: () => OsSandbox = osSandbox
+  probe: () => OsSandbox = osSandbox,
+  reads: string = "all"
 ): { ok: boolean; line: string } {
   if (process.platform === "win32") {
     return { ok: false, line: `sandbox: exec = "os" is unsupported on Windows — bash will refuse every command (use WSL2, or exec = "docker")` };
@@ -1868,12 +1956,21 @@ export function osSandboxSummary(
   if (!network && !p.network_supported) {
     return { ok: false, line: `sandbox: exec = "os" cannot enforce network = false here — bash will refuse every command: ${p.reason ?? "no reason given"}` };
   }
+  if (reads !== "all" && reads !== "scoped") {
+    return { ok: false, line: `sandbox: [sandbox] reads = ${JSON.stringify(reads)} is not "all" or "scoped" — bash will refuse every command until it is` };
+  }
+  if (reads === "scoped" && p.reads_scoped_supported !== true) {
+    return { ok: false, line: `sandbox: reads = "scoped" cannot be enforced here (${p.platform}${p.reads_scoped_supported === undefined ? "; gnomon-exec predates it" : ""}) — bash will refuse every command` };
+  }
   const abi = p.landlock_abi !== undefined ? `, Landlock ABI ${p.landlock_abi}` : "";
   return {
     ok: true,
     line:
       `sandbox: exec = "os" (${p.mechanism}${abi}) — bash writes only inside the root and a per-call temp dir; ` +
       (network ? "network open" : "egress blocked, loopback allowed") +
+      (reads === "scoped"
+        ? "; reads scoped (root, system dirs, toolchains, read_roots; credential stores in $HOME unreadable)"
+        : "; reads unrestricted") +
       (p.degraded.length > 0 ? `. Not on this kernel: ${p.degraded.join("; ")}` : ""),
   };
 }
